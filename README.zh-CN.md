@@ -14,12 +14,12 @@
 [![DIPY](https://img.shields.io/badge/Microstructure-DIPY-287D8E)](#技术栈)
 [![MRtrix3](https://img.shields.io/badge/Optional-MRtrix3-4C9A8A)](#技术栈)
 [![Agent Skills](https://img.shields.io/badge/Agent_Skills-Install_%2B_Use-576B95)](#agent-skills)
-[![Website](https://img.shields.io/badge/Website-Project_home-334155)](https://chengjinlii.github.io/SlicerDSpace/)
+[![Website](https://img.shields.io/badge/Website-Project_home-334155)](https://neurodmri.github.io/SlicerDSpace/)
 [![License](https://img.shields.io/badge/License-BSD--3--Clause-4D7587)](LICENSE.txt)
 
 [概览](#概览) | [宣传视频](#宣传视频) | [技术栈](#技术栈) | [Agent Skills](#agent-skills) | [安装](#安装) | [快速开始](#快速开始) | [CLI](#命令行) | [文档](#文档) | [引用](#引用) | [English](README.md)
 
-[项目网站](https://chengjinlii.github.io/SlicerDSpace/) | [使用指南](docs/README.zh-CN.md) | [发布状态](#验证与发布状态)
+[项目网站](https://neurodmri.github.io/SlicerDSpace/) | [使用指南](docs/README.zh-CN.md) | [发布状态](#验证与发布状态)
 
 </div>
 
@@ -43,7 +43,7 @@ SlicerDSpace 将无需 T1 加权影像的解剖重建、微结构定量和白质
 </a>
 
 24 秒原速预览 · [观看完整视频（MP4，1 分 12 秒）](docs/site/media/SlicerDSpace_promo_1080p.mp4) ·
-[网页播放器](https://chengjinlii.github.io/SlicerDSpace/#film)
+[网页播放器](https://neurodmri.github.io/SlicerDSpace/#film)
 
 ---
 
@@ -112,7 +112,7 @@ Prompt 直接链接到入口文件 `SKILL.md`。如果要把 Skill 安装进自�
 将下面的 Prompt 直接发给自己的本地 Agent：
 
 ```text
-参考 https://github.com/ChengjinLii/SlicerDSpace/blob/main/.agents/skills/slicerdspace/SKILL.md，
+参考 https://github.com/NeuroDMRI/SlicerDSpace/blob/main/.agents/skills/slicerdspace/SKILL.md，
 帮我把 SlicerDSpace 安装并启用到本机的 3D Slicer 中，
 配置需要的依赖环境，并下载相应模型权重。
 ```
@@ -124,7 +124,7 @@ Agent 会检查可用空间和已有资源，等你选择后再下载，并保�
 **已安装后的使用示例。** 将输入和输出路径替换为本机的实际路径：
 
 ```text
-参考 https://github.com/ChengjinLii/SlicerDSpace/blob/main/.agents/skills/slicerdspace/SKILL.md，
+参考 https://github.com/NeuroDMRI/SlicerDSpace/blob/main/.agents/skills/slicerdspace/SKILL.md，
 使用 SlicerDSpace 对 /path/to/subject 运行 DDParcel 脑区分区、CSD/ACT 纤维追踪和结构连接组构建，结果保存到 /path/to/results。
 先给我查看计划，确认后再运行；完成后汇总输出和 QC 检查结果。
 ```
@@ -143,7 +143,7 @@ Agent 会检查可用空间和已有资源，等你选择后再下载，并保�
 开发测试与科研材料保留在完整仓库中。
 
 ```bash
-git clone --filter=blob:none --no-checkout --depth 1 https://github.com/ChengjinLii/SlicerDSpace.git
+git clone --filter=blob:none --no-checkout --depth 1 https://github.com/NeuroDMRI/SlicerDSpace.git
 cd SlicerDSpace
 git show HEAD:scripts/extension_runtime/runtime_checkout.txt | git sparse-checkout set --no-cone --stdin
 git checkout
@@ -308,7 +308,7 @@ python3 scripts/audit_slicer_extension_metadata.py --json
 [DDSurfer](https://doi.org/10.1002/advs.76596)、
 [DDSeg](https://doi.org/10.1016/j.neuroimage.2021.117934)、
 [DDParcel](https://doi.org/10.1109/TMI.2023.3331691)。
-其他集成方法见[主页参考文献](https://chengjinlii.github.io/SlicerDSpace/#cite)。
+其他集成方法见[主页参考文献](https://neurodmri.github.io/SlicerDSpace/#cite)。
 SlicerDSpace 协议论文仍在准备中。
 
 ---

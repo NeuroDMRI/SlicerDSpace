@@ -161,7 +161,7 @@ offline archive or mirror.
 For a fast clone followed by a targeted model download:
 
 ```bash
-GIT_LFS_SKIP_SMUDGE=1 git clone https://github.com/ChengjinLii/SlicerDSpace.git
+GIT_LFS_SKIP_SMUDGE=1 git clone https://github.com/NeuroDMRI/SlicerDSpace.git
 cd SlicerDSpace
 scripts/download_model_assets.sh --profile core
 ```

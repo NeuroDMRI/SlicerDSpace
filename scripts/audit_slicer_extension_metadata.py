@@ -165,7 +165,7 @@ def audit(repo_root: Path = REPO_ROOT) -> dict[str, Any]:
             findings.append(AuditFinding("cmake:" + key, "error", f"CMake/s4ext mismatch: {key}"))
     for key in ("iconurl", "screenshoturls"):
         for url in s4ext.get(key, [""])[0].split():
-            prefix = "https://raw.githubusercontent.com/ChengjinLii/SlicerDSpace/main/"
+            prefix = "https://raw.githubusercontent.com/NeuroDMRI/SlicerDSpace/main/"
             if not url.startswith(prefix) or not (repo_root / url[len(prefix):]).is_file():
                 findings.append(AuditFinding(key, "error", f"Raw URL has no matching source image: {url}"))
 

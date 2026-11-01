@@ -5,8 +5,8 @@ type: software
 authors:
   - family-names: Li
     given-names: Chengjin
-repository-code: "https://github.com/ChengjinLii/SlicerDSpace"
-url: "https://github.com/ChengjinLii/SlicerDSpace"
+repository-code: "https://github.com/NeuroDMRI/SlicerDSpace"
+url: "https://github.com/NeuroDMRI/SlicerDSpace"
 license: BSD-3-Clause
 version: "0.1.0"
 date-released: "2026-06-24"

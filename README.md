@@ -14,12 +14,12 @@
 [![DIPY](https://img.shields.io/badge/Microstructure-DIPY-287D8E)](#technology-stack)
 [![MRtrix3](https://img.shields.io/badge/Optional-MRtrix3-4C9A8A)](#technology-stack)
 [![Agent Skills](https://img.shields.io/badge/Agent_Skills-Install_%2B_Use-576B95)](#agent-skills)
-[![Website](https://img.shields.io/badge/Website-Project_home-334155)](https://chengjinlii.github.io/SlicerDSpace/)
+[![Website](https://img.shields.io/badge/Website-Project_home-334155)](https://neurodmri.github.io/SlicerDSpace/)
 [![License](https://img.shields.io/badge/License-BSD--3--Clause-4D7587)](LICENSE.txt)
 
 [Overview](#overview) | [Video](#video) | [Technology](#technology-stack) | [Agent Skills](#agent-skills) | [Install](#installation) | [Quick Start](#quick-start) | [CLI](#command-line) | [Documentation](#documentation) | [Citation](#citation) | [中文](README.zh-CN.md)
 
-[Project Website](https://chengjinlii.github.io/SlicerDSpace/) | [User Guides](docs/README.md) | [Release Status](#validation-and-release-status)
+[Project Website](https://neurodmri.github.io/SlicerDSpace/) | [User Guides](docs/README.md) | [Release Status](#validation-and-release-status)
 
 </div>
 
@@ -45,7 +45,7 @@ same scene.
 </a>
 
 24-second preview at normal speed · [Watch the full video (MP4, 1:12)](docs/site/media/SlicerDSpace_promo_1080p.mp4) ·
-[Website player](https://chengjinlii.github.io/SlicerDSpace/#film)
+[Website player](https://neurodmri.github.io/SlicerDSpace/#film)
 
 ---
 
@@ -124,7 +124,7 @@ scripts and templates.
 Copy this prompt into your local Agent:
 
 ```text
-Read https://github.com/ChengjinLii/SlicerDSpace/blob/main/.agents/skills/slicerdspace/SKILL.md.
+Read https://github.com/NeuroDMRI/SlicerDSpace/blob/main/.agents/skills/slicerdspace/SKILL.md.
 Install and enable SlicerDSpace in my local 3D Slicer.
 Set up the required dependencies and download the corresponding model weights.
 ```
@@ -138,7 +138,7 @@ Confirm licenses and restarts when requested.
 **Use an existing installation.** Replace the input and output paths in this example:
 
 ```text
-Read https://github.com/ChengjinLii/SlicerDSpace/blob/main/.agents/skills/slicerdspace/SKILL.md.
+Read https://github.com/NeuroDMRI/SlicerDSpace/blob/main/.agents/skills/slicerdspace/SKILL.md.
 Use SlicerDSpace to run DDParcel brain parcellation, CSD/ACT tractography and structural connectome construction for /path/to/subject; save results to /path/to/results.
 Show me the plan and wait for confirmation before running. Afterwards, summarize the outputs and QC findings.
 ```
@@ -159,7 +159,7 @@ source installation omits the website and historical reports; a full checkout
 retains development tests and research materials.
 
 ```bash
-git clone --filter=blob:none --no-checkout --depth 1 https://github.com/ChengjinLii/SlicerDSpace.git
+git clone --filter=blob:none --no-checkout --depth 1 https://github.com/NeuroDMRI/SlicerDSpace.git
 cd SlicerDSpace
 git show HEAD:scripts/extension_runtime/runtime_checkout.txt | git sparse-checkout set --no-cone --stdin
 git checkout
@@ -335,7 +335,7 @@ Cite the software version through [CITATION.cff](CITATION.cff) and the methods
 used in your analysis: [DDSurfer](https://doi.org/10.1002/advs.76596),
 [DDSeg](https://doi.org/10.1016/j.neuroimage.2021.117934) and
 [DDParcel](https://doi.org/10.1109/TMI.2023.3331691).
-Additional integrated methods are listed in the [website bibliography](https://chengjinlii.github.io/SlicerDSpace/#cite).
+Additional integrated methods are listed in the [website bibliography](https://neurodmri.github.io/SlicerDSpace/#cite).
 The SlicerDSpace protocol manuscript is in preparation.
 
 ---

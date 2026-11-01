@@ -4,7 +4,7 @@
   "build_subdirectory": ".",
   "category": "Diffusion",
   "scm_revision": "main",
-  "scm_url": "https://github.com/ChengjinLii/SlicerDSpace.git",
+  "scm_url": "https://github.com/NeuroDMRI/SlicerDSpace.git",
   "scm_type": "git",
   "enabled": true,
   "tier": 1

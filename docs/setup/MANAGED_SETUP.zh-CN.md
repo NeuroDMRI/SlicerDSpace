@@ -115,7 +115,7 @@ CUDA wheel 的库和工具仅对该 Python 子进程可见，不修改全局 PAT
 
 仓库的完整 Skill 新增 `prepare_in_slicer.py`，供 Agent 导出计划并进入同一 GUI 准备流程，
 保留真实确认弹窗，不自动接受许可或启动患者数据分析。
-见 [Agent 安装参考](https://github.com/ChengjinLii/SlicerDSpace/blob/main/.agents/skills/slicerdspace/references/setup.md)。
+见 [Agent 安装参考](https://github.com/NeuroDMRI/SlicerDSpace/blob/main/.agents/skills/slicerdspace/references/setup.md)。
 
 ---
 

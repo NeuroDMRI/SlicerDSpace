@@ -104,7 +104,7 @@ the latest commit and branch protection with:
 ```bash
 GITHUB_TOKEN=<token> \
   python3 scripts/check_github_ci_status.py \
-  --repository ChengjinLii/SlicerDSpace \
+  --repository NeuroDMRI/SlicerDSpace \
   --ref $(git rev-parse HEAD) \
   --branch main
 ```
@@ -138,7 +138,7 @@ If GitHub CLI is available on a maintainer machine:
 
 ```bash
 gh release create v0.1.0 \
-  --repo ChengjinLii/SlicerDSpace \
+  --repo NeuroDMRI/SlicerDSpace \
   --title "SlicerDSpace v0.1.0" \
   --notes-file docs/release/GITHUB_RELEASE_DRAFT_v0.1.0.md \
   --draft \

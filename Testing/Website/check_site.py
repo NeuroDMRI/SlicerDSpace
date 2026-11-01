@@ -27,7 +27,7 @@ FILM = os.path.join(DOCS, "media", "SlicerDSpace_promo_1080p.mp4")
 SRT = os.path.join(DOCS, "media", "SlicerDSpace.en.srt")
 FILM_BYTES = 24799408
 
-REPO = "https://github.com/ChengjinLii/SlicerDSpace"
+REPO = "https://github.com/NeuroDMRI/SlicerDSpace"
 BLOB = REPO + "/blob/main/"
 ALLOWED_URLS = {
     REPO,
@@ -80,9 +80,9 @@ ALLOWED_URLS = {
     "https://doi.org/10.18112/openneuro.ds004666.v1.0.8",
     "https://doi.org/10.3389/fninf.2014.00008",
     "https://doi.org/10.5281/zenodo.2648292",
-    "https://chengjinlii.github.io/SlicerDSpace/",
-    "https://chengjinlii.github.io/SlicerDSpace/zh.html",
-    "https://chengjinlii.github.io/SlicerDSpace/assets/img/social.jpg",
+    "https://neurodmri.github.io/SlicerDSpace/",
+    "https://neurodmri.github.io/SlicerDSpace/zh.html",
+    "https://neurodmri.github.io/SlicerDSpace/assets/img/social.jpg",
 }
 
 # The reviewed bibliography is the allowlist for scientific/software citations.

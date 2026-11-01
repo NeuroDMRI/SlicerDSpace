@@ -3,7 +3,7 @@
   "@type": "SoftwareSourceCode",
   "name": "SlicerDSpace",
   "description": "3D Slicer workflow for diffusion MRI-derived anatomical reconstruction, connectivity analysis, quality-control review, and provenance capture.",
-  "codeRepository": "https://github.com/ChengjinLii/SlicerDSpace",
+  "codeRepository": "https://github.com/NeuroDMRI/SlicerDSpace",
   "license": "https://spdx.org/licenses/BSD-3-Clause.html",
   "programmingLanguage": [
     "Python",

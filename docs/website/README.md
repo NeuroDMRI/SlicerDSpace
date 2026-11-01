@@ -4,7 +4,7 @@
 
 **Static website assets and maintenance guide**
 
-[Project](../../README.md) | [Website](https://chengjinlii.github.io/SlicerDSpace/) | [Original Notes](UPSTREAM_README.md) | [中文](README.zh-CN.md)
+[Project](../../README.md) | [Website](https://neurodmri.github.io/SlicerDSpace/) | [Original Notes](UPSTREAM_README.md) | [中文](README.zh-CN.md)
 
 </div>
 
@@ -162,7 +162,7 @@ homepage retains the contributor's established theme and original media.
 ## Publishing
 
 The publication source is the root of the dedicated
-[`gh-pages` branch](https://github.com/ChengjinLii/SlicerDSpace/tree/gh-pages).
+[`gh-pages` branch](https://github.com/NeuroDMRI/SlicerDSpace/tree/gh-pages).
 It contains a locally validated snapshot of **only `docs/site/`**, including
 `index.html`, `zh.html` and `.nojekyll`. The software source, internal documents,
 models and independent `paper-latex/` repository are not publication inputs.
@@ -176,7 +176,7 @@ permits only this exact public path, byte count and SHA256, not arbitrary large
 videos or model files. Any replacement needs a separately reviewed update.
 
 The repository owner must first open
-[Settings > Pages](https://github.com/ChengjinLii/SlicerDSpace/settings/pages)
+[Settings > Pages](https://github.com/NeuroDMRI/SlicerDSpace/settings/pages)
 and choose **Source: Deploy from a branch**, **Branch: gh-pages**, **Folder:
 /(root)**, then save. This one-time repository setting is separate from pushing
 the branch. The current repository connection supports content operations but
@@ -193,7 +193,7 @@ dispatched for this branch-based setup. GitHub manages its own Pages build and
 deployment, which can still appear in the Actions interface. Accept publication
 only after the public URL responds successfully and matches the snapshot.
 
-Expected URL: `https://chengjinlii.github.io/SlicerDSpace/`. The canonical URL,
+Expected URL: `https://neurodmri.github.io/SlicerDSpace/`. The canonical URL,
 share tags and 404 home link assume this address. Review the original notes
 before changing it. Do not configure `main /docs`: that would expose documents
 outside the intended public website.

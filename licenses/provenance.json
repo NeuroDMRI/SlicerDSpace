@@ -26,7 +26,7 @@
       "license": "MIT",
       "path": "anatomy/surface/ddsurfer_backend/LICENSE.txt",
       "sha256": "b1df42f0d6aed2fec8d5235202c9ca13d62717448a20d12b51869c5d9f19cf79",
-      "source": "https://github.com/ChengjinLii/DDSurfer/blob/0c399ef8ff8c9931730cab6beaf5796ee61243ca/LICENSE",
+      "source": "https://github.com/NeuroDMRI/DDSurfer/blob/0c399ef8ff8c9931730cab6beaf5796ee61243ca/LICENSE",
       "covers": ["anatomy/surface/ddsurfer_backend"],
       "conditions": "Preserve the MIT copyright/permission notice. Derived conversion and PyTorch3D code retain their separate terms; no weight/template rights are inferred."
     },
@@ -35,7 +35,7 @@
       "license": "BSD-3-Clause",
       "path": "licenses/PyTorch3D.txt",
       "sha256": "6da05663049417a91409fa349bfad5778ed56c9ef68226dde28dffd541481579",
-      "source": "https://github.com/ChengjinLii/DDSurfer/blob/c3b2d40ead82b316f0adec900a23979f629da70b/utils/LICENSE.pytorch3d",
+      "source": "https://github.com/NeuroDMRI/DDSurfer/blob/c3b2d40ead82b316f0adec900a23979f629da70b/utils/LICENSE.pytorch3d",
       "covers": ["anatomy/surface/ddsurfer_backend/utils/mesh.py", "anatomy/surface/ddsurfer_backend/utils/loss.py", "anatomy/surface/ddsurfer_backend/utils/LICENSE.pytorch3d"],
       "conditions": "Preserve Meta copyright, conditions and disclaimer for PyTorch3D-derived mesh and optional training-loss helpers. The covered training helper does not add a production inference dependency."
     },

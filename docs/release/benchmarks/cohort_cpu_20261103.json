@@ -1,0 +1,416 @@
+{
+  "status": "PASS",
+  "scope": "Real-data ROI tensor-fitting pilot, not full-brain or full-pipeline cohort throughput",
+  "input_count": 3,
+  "repeats": 3,
+  "modes": [
+    "subjects",
+    "resources",
+    "adaptive"
+  ],
+  "runs": [
+    {
+      "repeat": 0,
+      "mode": "subjects",
+      "seconds": 3.2656336072832346,
+      "qc_passing_inputs": 3,
+      "inputs_per_minute": 55.11947194521515,
+      "measurement": {
+        "outcome": "completed",
+        "samples": 39,
+        "execution_seconds": 3.26559816673398,
+        "peak_tree_rss_bytes": 488218624,
+        "sampled_cpu_seconds": 4.37,
+        "mean_cpu_cores": 1.3381928139586643,
+        "sampled_io_bytes": 2859008,
+        "interval_seconds": 0.05,
+        "scope": "Sampled owner plus descendants; short-lived processes and between-sample peaks may be missed"
+      },
+      "schedule": {
+        "peak_declared_reservations": {
+          "cpu": 1,
+          "memory_gb": 1,
+          "gpu": 0,
+          "io": 0
+        },
+        "stage_outcomes": {
+          "completed": 3,
+          "failed": 0,
+          "cancelled": 0,
+          "abandoned": 0
+        },
+        "queue_wait_seconds": 0.0007796399295330048,
+        "sampled_cpu_seconds": 0,
+        "max_sampled_single_stage_tree_rss_bytes": 0,
+        "measurement_scope": "Per-stage process-tree samples; single-stage RSS maximum is not simultaneous cohort peak RAM"
+      }
+    },
+    {
+      "repeat": 0,
+      "mode": "resources",
+      "seconds": 2.2679284885525703,
+      "qc_passing_inputs": 3,
+      "inputs_per_minute": 79.36758187418819,
+      "measurement": {
+        "outcome": "completed",
+        "samples": 28,
+        "execution_seconds": 2.2679004725068808,
+        "peak_tree_rss_bytes": 770617344,
+        "sampled_cpu_seconds": 3.93,
+        "mean_cpu_cores": 1.7328802774382228,
+        "sampled_io_bytes": 1474560,
+        "interval_seconds": 0.05,
+        "scope": "Sampled owner plus descendants; short-lived processes and between-sample peaks may be missed"
+      },
+      "schedule": {
+        "peak_declared_reservations": {
+          "cpu": 2,
+          "memory_gb": 1.0,
+          "gpu": 0,
+          "io": 1
+        },
+        "stage_outcomes": {
+          "completed": 9,
+          "failed": 0,
+          "cancelled": 0,
+          "abandoned": 0
+        },
+        "queue_wait_seconds": 0.10640358738601208,
+        "sampled_cpu_seconds": 0,
+        "max_sampled_single_stage_tree_rss_bytes": 0,
+        "measurement_scope": "Per-stage process-tree samples; single-stage RSS maximum is not simultaneous cohort peak RAM"
+      }
+    },
+    {
+      "repeat": 0,
+      "mode": "adaptive",
+      "seconds": 1.8403575364500284,
+      "qc_passing_inputs": 3,
+      "inputs_per_minute": 97.80708174087322,
+      "measurement": {
+        "outcome": "completed",
+        "samples": 22,
+        "execution_seconds": 1.8403341323137283,
+        "peak_tree_rss_bytes": 967716864,
+        "sampled_cpu_seconds": 4.329999999999999,
+        "mean_cpu_cores": 2.3528336099250526,
+        "sampled_io_bytes": 1638400,
+        "interval_seconds": 0.05,
+        "scope": "Sampled owner plus descendants; short-lived processes and between-sample peaks may be missed"
+      },
+      "schedule": {
+        "peak_declared_reservations": {
+          "cpu": 2,
+          "memory_gb": 1.0,
+          "gpu": 0,
+          "io": 1
+        },
+        "stage_outcomes": {
+          "completed": 9,
+          "failed": 0,
+          "cancelled": 0,
+          "abandoned": 0
+        },
+        "queue_wait_seconds": 1.1806340962648392,
+        "sampled_cpu_seconds": 0.92,
+        "max_sampled_single_stage_tree_rss_bytes": 249307136,
+        "measurement_scope": "Per-stage process-tree samples; single-stage RSS maximum is not simultaneous cohort peak RAM"
+      }
+    },
+    {
+      "repeat": 1,
+      "mode": "resources",
+      "seconds": 2.2364050801843405,
+      "qc_passing_inputs": 3,
+      "inputs_per_minute": 80.48631332261287,
+      "measurement": {
+        "outcome": "completed",
+        "samples": 26,
+        "execution_seconds": 2.2363818008452654,
+        "peak_tree_rss_bytes": 746606592,
+        "sampled_cpu_seconds": 3.88,
+        "mean_cpu_cores": 1.7349452577969964,
+        "sampled_io_bytes": 1474560,
+        "interval_seconds": 0.05,
+        "scope": "Sampled owner plus descendants; short-lived processes and between-sample peaks may be missed"
+      },
+      "schedule": {
+        "peak_declared_reservations": {
+          "cpu": 2,
+          "memory_gb": 1.0,
+          "gpu": 0,
+          "io": 1
+        },
+        "stage_outcomes": {
+          "completed": 9,
+          "failed": 0,
+          "cancelled": 0,
+          "abandoned": 0
+        },
+        "queue_wait_seconds": 0.10663598217070103,
+        "sampled_cpu_seconds": 0,
+        "max_sampled_single_stage_tree_rss_bytes": 0,
+        "measurement_scope": "Per-stage process-tree samples; single-stage RSS maximum is not simultaneous cohort peak RAM"
+      }
+    },
+    {
+      "repeat": 1,
+      "mode": "adaptive",
+      "seconds": 1.797434052452445,
+      "qc_passing_inputs": 3,
+      "inputs_per_minute": 100.14275614418531,
+      "measurement": {
+        "outcome": "completed",
+        "samples": 21,
+        "execution_seconds": 1.797412658110261,
+        "peak_tree_rss_bytes": 1021411328,
+        "sampled_cpu_seconds": 4.5,
+        "mean_cpu_cores": 2.5035987032221905,
+        "sampled_io_bytes": 1531904,
+        "interval_seconds": 0.05,
+        "scope": "Sampled owner plus descendants; short-lived processes and between-sample peaks may be missed"
+      },
+      "schedule": {
+        "peak_declared_reservations": {
+          "cpu": 2,
+          "memory_gb": 1.0,
+          "gpu": 0,
+          "io": 1
+        },
+        "stage_outcomes": {
+          "completed": 9,
+          "failed": 0,
+          "cancelled": 0,
+          "abandoned": 0
+        },
+        "queue_wait_seconds": 0.7163436226546764,
+        "sampled_cpu_seconds": 1.0700000000000003,
+        "max_sampled_single_stage_tree_rss_bytes": 250380288,
+        "measurement_scope": "Per-stage process-tree samples; single-stage RSS maximum is not simultaneous cohort peak RAM"
+      }
+    },
+    {
+      "repeat": 1,
+      "mode": "subjects",
+      "seconds": 3.2895132899284363,
+      "qc_passing_inputs": 3,
+      "inputs_per_minute": 54.71934117156764,
+      "measurement": {
+        "outcome": "completed",
+        "samples": 39,
+        "execution_seconds": 3.289486577734351,
+        "peak_tree_rss_bytes": 478556160,
+        "sampled_cpu_seconds": 4.36,
+        "mean_cpu_cores": 1.325434804784329,
+        "sampled_io_bytes": 1531904,
+        "interval_seconds": 0.05,
+        "scope": "Sampled owner plus descendants; short-lived processes and between-sample peaks may be missed"
+      },
+      "schedule": {
+        "peak_declared_reservations": {
+          "cpu": 1,
+          "memory_gb": 1,
+          "gpu": 0,
+          "io": 0
+        },
+        "stage_outcomes": {
+          "completed": 3,
+          "failed": 0,
+          "cancelled": 0,
+          "abandoned": 0
+        },
+        "queue_wait_seconds": 0.0008540116250514984,
+        "sampled_cpu_seconds": 0,
+        "max_sampled_single_stage_tree_rss_bytes": 0,
+        "measurement_scope": "Per-stage process-tree samples; single-stage RSS maximum is not simultaneous cohort peak RAM"
+      }
+    },
+    {
+      "repeat": 2,
+      "mode": "adaptive",
+      "seconds": 1.6945875640958548,
+      "qc_passing_inputs": 3,
+      "inputs_per_minute": 106.22053637932767,
+      "measurement": {
+        "outcome": "completed",
+        "samples": 20,
+        "execution_seconds": 1.6945641953498125,
+        "peak_tree_rss_bytes": 1036095488,
+        "sampled_cpu_seconds": 4.18,
+        "mean_cpu_cores": 2.466710916866217,
+        "sampled_io_bytes": 1613824,
+        "interval_seconds": 0.05,
+        "scope": "Sampled owner plus descendants; short-lived processes and between-sample peaks may be missed"
+      },
+      "schedule": {
+        "peak_declared_reservations": {
+          "cpu": 2,
+          "memory_gb": 1.0,
+          "gpu": 0,
+          "io": 1
+        },
+        "stage_outcomes": {
+          "completed": 9,
+          "failed": 0,
+          "cancelled": 0,
+          "abandoned": 0
+        },
+        "queue_wait_seconds": 0.9760408625006676,
+        "sampled_cpu_seconds": 0.95,
+        "max_sampled_single_stage_tree_rss_bytes": 249491456,
+        "measurement_scope": "Per-stage process-tree samples; single-stage RSS maximum is not simultaneous cohort peak RAM"
+      }
+    },
+    {
+      "repeat": 2,
+      "mode": "subjects",
+      "seconds": 3.169201124459505,
+      "qc_passing_inputs": 3,
+      "inputs_per_minute": 56.796647776874146,
+      "measurement": {
+        "outcome": "completed",
+        "samples": 36,
+        "execution_seconds": 3.169159883633256,
+        "peak_tree_rss_bytes": 501858304,
+        "sampled_cpu_seconds": 4.220000000000001,
+        "mean_cpu_cores": 1.331583181332593,
+        "sampled_io_bytes": 1343488,
+        "interval_seconds": 0.05,
+        "scope": "Sampled owner plus descendants; short-lived processes and between-sample peaks may be missed"
+      },
+      "schedule": {
+        "peak_declared_reservations": {
+          "cpu": 1,
+          "memory_gb": 1,
+          "gpu": 0,
+          "io": 0
+        },
+        "stage_outcomes": {
+          "completed": 3,
+          "failed": 0,
+          "cancelled": 0,
+          "abandoned": 0
+        },
+        "queue_wait_seconds": 0.0007762275636196136,
+        "sampled_cpu_seconds": 0,
+        "max_sampled_single_stage_tree_rss_bytes": 0,
+        "measurement_scope": "Per-stage process-tree samples; single-stage RSS maximum is not simultaneous cohort peak RAM"
+      }
+    },
+    {
+      "repeat": 2,
+      "mode": "resources",
+      "seconds": 2.2516229562461376,
+      "qc_passing_inputs": 3,
+      "inputs_per_minute": 79.94233648252215,
+      "measurement": {
+        "outcome": "completed",
+        "samples": 27,
+        "execution_seconds": 2.251593552529812,
+        "peak_tree_rss_bytes": 792526848,
+        "sampled_cpu_seconds": 3.8900000000000006,
+        "mean_cpu_cores": 1.727665277611642,
+        "sampled_io_bytes": 1482752,
+        "interval_seconds": 0.05,
+        "scope": "Sampled owner plus descendants; short-lived processes and between-sample peaks may be missed"
+      },
+      "schedule": {
+        "peak_declared_reservations": {
+          "cpu": 2,
+          "memory_gb": 1.0,
+          "gpu": 0,
+          "io": 1
+        },
+        "stage_outcomes": {
+          "completed": 9,
+          "failed": 0,
+          "cancelled": 0,
+          "abandoned": 0
+        },
+        "queue_wait_seconds": 0.10472516342997551,
+        "sampled_cpu_seconds": 0,
+        "max_sampled_single_stage_tree_rss_bytes": 0,
+        "measurement_scope": "Per-stage process-tree samples; single-stage RSS maximum is not simultaneous cohort peak RAM"
+      }
+    }
+  ],
+  "median_seconds": {
+    "subjects": 3.2656336072832346,
+    "resources": 2.2516229562461376,
+    "adaptive": 1.797434052452445
+  },
+  "outputs_identical": true,
+  "checked_outputs": [
+    "13 tensor parameters",
+    "FA",
+    "MD",
+    "affine",
+    "mask",
+    "QC"
+  ],
+  "input_hashes": [
+    {
+      "data.nii.gz": "3522b2a3c227345f9d67f9624d098cab56673c40ad126008118b409a8dc845ce",
+      "bvals": "5e37917530249c5437232944285fbdc48e41d548a741227c7ba9466660bfae08",
+      "bvecs": "c38c02461104fcbb8145411121b0d9cb870b528ae23719412a8dd5170f6b8e71"
+    },
+    {
+      "data.nii.gz": "c4edf12fdfe651200b85d30fc9e25485f5a92b14b407074da90471f40afd28e3",
+      "bvals": "aa3247a2cc39b80ac02286483dcc6fb612ab870fea153f1d8b87369c41bc7807",
+      "bvecs": "770cc56c46ec51438938062a67aad644427c43e337118b05a81d8ac48b5a2102"
+    },
+    {
+      "data.nii.gz": "97fa04a7cb34e58caf4c8c823ec086a1b04fdb05cb9b40b42d825227bba96fa3",
+      "bvals": "26bfc9904dc08251ea36ef831f35e4973a48046c7c62017caa27f0a0e7071eea",
+      "bvecs": "661a494c36f8570fb7e8a43a8937ef117767eb2ba635241c141c9faba217a3f1"
+    }
+  ],
+  "output_hashes": {
+    "0": {
+      "affine.npy": "a1595a6d9dd4c87ac3e824d717b55f47e37999594d1e8064ea0a0e63dc85a111",
+      "fa.npy": "b7643bb7e02d91ed2f43efe208aa04b7abf75cb4a952f7b86afba49d122d5bc4",
+      "mask.npy": "b14c00c23f7674d3326db655563b1cdb26abbe84e625cd44bdf76f44b0e98b0b",
+      "md.npy": "b42bd1f1f5490e476cfe71c3a1e9244418aaa787fa1102064cce1fc9a9942e96",
+      "parameters.npy": "9b027f22d3b42aa1ff49e9892bc9d9d25350d54a3dd0cd51d8f332c4b8583bd2",
+      "qc.json": "25080cc6c8c3a4e4a2bca1534ff906afb134defde4291294316f309127db063e"
+    },
+    "1": {
+      "affine.npy": "a1595a6d9dd4c87ac3e824d717b55f47e37999594d1e8064ea0a0e63dc85a111",
+      "fa.npy": "dc8624a8d2bb46246e0d436bd158830d295b54c09a75b5036e1c0942df6e711f",
+      "mask.npy": "b14c00c23f7674d3326db655563b1cdb26abbe84e625cd44bdf76f44b0e98b0b",
+      "md.npy": "1b3d5923a859a0ebeb17c9a1af19c6e55aa266b008a4e72b4e8a24addc494581",
+      "parameters.npy": "2234c87ed99219d47c7f1c591f5f1c86d4f59c81a96f63fd4571b0ac7f855e77",
+      "qc.json": "25080cc6c8c3a4e4a2bca1534ff906afb134defde4291294316f309127db063e"
+    },
+    "2": {
+      "affine.npy": "a1595a6d9dd4c87ac3e824d717b55f47e37999594d1e8064ea0a0e63dc85a111",
+      "fa.npy": "d945c1cb9f232b65ced8aa7ba869bc84a6aff6c1c7ead283edf6bc4848795921",
+      "mask.npy": "b14c00c23f7674d3326db655563b1cdb26abbe84e625cd44bdf76f44b0e98b0b",
+      "md.npy": "7b4232deb79566964020e5e633b6942918ec4e5f9542a9ecb185a9ea6b6e0cf0",
+      "parameters.npy": "fc6a35566127603081ede803df0e49a880b568fe2258ccbe3f89e68f7c9cdafb",
+      "qc.json": "25080cc6c8c3a4e4a2bca1534ff906afb134defde4291294316f309127db063e"
+    }
+  },
+  "budget": {
+    "cpu": 2,
+    "memory_gb": 4,
+    "io_slots": 1,
+    "numerical_threads": 1
+  },
+  "environment": {
+    "python": "3.13.5 | packaged by Anaconda, Inc. | (main, Jun 12 2025, 16:09:02) [GCC 11.2.0]",
+    "platform": "Linux-5.15.0-164-generic-x86_64-with-glibc2.35",
+    "load_average": [
+      42.51171875,
+      42.47216796875,
+      35.54638671875
+    ]
+  },
+  "cache_scope": "Fresh output folders; OS cache is not cleared; policies rotate across repeats",
+  "source_hashes": {
+    "shared/cohort_schedule.py": "a2b6cd86d96ba8a86942ba2e9427e6f424d6e6b063d5b9089a1a131e18490ab6",
+    "shared/cohort_policy.py": "ead6ab3b07f5c642a3a4782c227f4ee0b790452fe923580a26166dfb3809ea01",
+    "shared/cohort_profile.py": "2ad81f18586e5cd388607496d3f01c7074ee344334f314d57cfd4c9f446350ee",
+    "scripts/benchmark_cohort_cpu.py": "da93a41ca76e87a1bfae8e7f16addc608e480d06022ef6f53c16c401f1803018"
+  }
+}

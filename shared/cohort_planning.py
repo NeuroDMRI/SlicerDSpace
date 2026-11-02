@@ -4,9 +4,10 @@ import math
 from pathlib import Path
 
 
-def available_cohort_resources():
+def available_cohort_resources(fraction=.7):
     from shared.compute_schedule import available_resources
     cpus, memory = available_resources()
+    memory = int(memory / .7 * fraction)
     # Respect common container limits in addition to CPU affinity and host RAM.
     for quota, period in ((Path('/sys/fs/cgroup/cpu.max'), None),
                           (Path('/sys/fs/cgroup/cpu/cpu.cfs_quota_us'),
@@ -22,7 +23,7 @@ def available_cohort_resources():
         try:
             ceiling = int((Path('/sys/fs/cgroup') / limit).read_text())
             used = int((Path('/sys/fs/cgroup') / usage).read_text())
-            free = int(max(0, ceiling - used) * .7)
+            free = int(max(0, ceiling - used) * fraction)
             memory = min(memory, free) if memory else free
         except (OSError, ValueError):
             pass
@@ -69,9 +70,12 @@ def image_size(root):
 
 
 def plan_cohort(subjects, arguments, *, jobs=None, cpu_budget=None, memory_gb=None,
-                stage_cpus=None, stage_memory_gb=None, gpu_slots=1, available=None):
-    cpus, memory = available if available is not None else available_cohort_resources()
-    cpu = cpu_budget if cpu_budget is not None else cpus
+                stage_cpus=None, stage_memory_gb=None, gpu_slots=1, available=None,
+                adaptive=False, resource_fraction=.8, history_path=None):
+    if not math.isfinite(resource_fraction) or not 0 < resource_fraction <= 1:
+        raise ValueError('Resource fraction must be greater than zero and at most one')
+    cpus, memory = available if available is not None else available_cohort_resources(resource_fraction if adaptive else .7)
+    cpu = cpu_budget if cpu_budget is not None else max(1, math.floor(cpus * (resource_fraction if adaptive else 1)))
     ram = memory_gb if memory_gb is not None else memory / 1024**3
     if not math.isfinite(ram) or ram <= 0 or cpu < 1:
         raise ValueError('Available CPU/RAM could not be established; provide --batch-cpus and --batch-memory-gb')
@@ -86,7 +90,7 @@ def plan_cohort(subjects, arguments, *, jobs=None, cpu_budget=None, memory_gb=No
             if count < 0:
                 raise ValueError(flag + ' must not request unbounded workers in resource mode')
             hints.append(count)
-    threads = stage_cpus if stage_cpus is not None else min(cpu, max([min(8, cpu), *hints]))
+    threads = stage_cpus if stage_cpus is not None else min(cpu, max([min(4 if adaptive else 8, cpu), *hints]))
     if threads < 1 or threads > cpu or any(hint > threads for hint in hints):
         raise ValueError('Algorithm thread request or per-stage CPU reservation exceeds the cohort budget')
     if stage_memory_gb is not None and (not math.isfinite(stage_memory_gb) or stage_memory_gb <= 0):
@@ -119,6 +123,8 @@ def plan_cohort(subjects, arguments, *, jobs=None, cpu_budget=None, memory_gb=No
         selected.add('surface_postprocess')
     selected = (selected if selected <= all_stages else all_stages.copy()) or {'native_dti'}
 
+    from shared.cohort_profile import read_history, history_estimate, workload_key
+    history = read_history(history_path) if adaptive else {}
     profiles, inputs, selected_peaks = {}, {}, []
     simple_dti = (_option(arguments, '--microstructure-stages') == 'dti' and
                   not any(flag in arguments for flag in ('--run-free-water', '--run-noddi', '--run-dki')))
@@ -140,6 +146,18 @@ def plan_cohort(subjects, arguments, *, jobs=None, cpu_budget=None, memory_gb=No
         for stage, estimate in estimates.items():
             profile[stage] = dict(cpu=threads if stage not in {'wmql', 'connectome'} else min(2, threads),
                 memory_gb=stage_memory_gb if stage_memory_gb is not None else math.ceil(estimate * 4) / 4)
+            if adaptive and stage_cpus is None and stage in {'wmql', 'connectome', 'wma'}:
+                profile[stage]['cpu'] = 1
+            if adaptive:
+                request = profile[stage]
+                key = workload_key(stage, image['shape'], arguments, request['cpu'],
+                                   stage in {'brain_mask', 'segmentation', 'parcellation', 'surface', 'tractcloud'})
+                feedback = history_estimate(history, key)
+                request.update(io=int(stage in {'registered_dti', 'preprocessing', 'wmql', 'connectome'}),
+                               profile_key=key, duration_seconds=feedback['duration_seconds'] if feedback else 0,
+                               estimate_source='header heuristic' if feedback is None else 'header + measured high-water mark')
+                if feedback and stage_memory_gb is None:
+                    request['memory_gb'] = max(request['memory_gb'], math.ceil(feedback['memory_gb'] * 4) / 4)
         if stage_cpus is not None:
             for request in profile.values():
                 request['cpu'] = threads
@@ -153,8 +171,14 @@ def plan_cohort(subjects, arguments, *, jobs=None, cpu_budget=None, memory_gb=No
     peak = max(selected_peaks, default=stage_memory_gb or min(1, ram))
     capacity = max(1, min(cpu // threads, int(ram // peak)))
     count = jobs if jobs is not None else max(1, min(len(subjects), capacity, 8))
+    if adaptive and jobs is None:
+        # Waiters keep interpreter state: retain RAM headroom and bound the frontier.
+        count = max(1, min(len(subjects), 8, int(max(.5, ram - peak) / .5), max(2, cpu)))
     return dict(cpu_budget=cpu, memory_gb=ram, stage_cpus=threads, stage_memory_gb=peak,
                 gpu_slots=gpu_slots, jobs=count, jobs_automatic=jobs is None,
                 subject_profiles=profiles, input_headers=inputs, selected_stages=sorted(selected),
                 estimation='Header-based conservative heuristic, not measured peak usage',
-                idle_process_headroom='RAM budget uses 70% of available memory by default; automatic jobs capped at 8')
+                idle_process_headroom='Automatic frontier capped at 8; adaptive mode allows 0.5 GiB per waiting interpreter',
+                adaptive=adaptive, resource_fraction=resource_fraction if adaptive else None,
+                history_path=str(history_path) if history_path else None,
+                policy='fair_backfill' if adaptive else 'first_fit', io_slots=2)

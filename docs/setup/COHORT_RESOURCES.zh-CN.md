@@ -10,6 +10,39 @@
 
 ## 使用方式
 
+CPU 密集型队列可使用新的自适应准入模式：
+
+```bash
+"$SLICER" --launch PythonSlicer "$REPO/scripts/run_batch_pipeline.py" \
+  --batch-root /path/to/study --output-root /path/to/results \
+  --scheduler adaptive --resource-budget 80% --subject-limit 20 \
+  --targets microstructure --microstructure-stages dti,noddi,dki --execute
+```
+
+省略 `--subject-limit` 即处理所有合格输入；省略 `--jobs` 自动确定活跃被试窗口。
+窗口最多为 8，并为等待中的解释器预留余量；计算并发由阶段预约决定，不再按最重阶段
+限制整个活跃窗口。默认使用可用 CPU/RAM 的 80%，显式预算可以覆盖；这是预约策略，
+不是操作系统强制使用上限。一般阶段默认最多预约 4 线程，默认 WMA、WMQL 与连接组
+路线为 1 线程，保留用户的明确覆盖。这些是保守初值，不代表实测最优线程数。
+
+被试内仍由现有编排器保证依赖，一次准入一个已到达的计算阶段；不同被试交错运行。
+有历史时长时，回填不得推迟队首的预计启动时间；队首等待达到 120 秒或被越过 8 次后，
+暂停后续回填，等待在运行阶段释放足够资源。不会抢占长任务。时长估计可能超时，
+等待保护仍会阻止持续插队。配准、预处理、WMQL 与连接组阶段另共享 2 个 I/O 准入槽，覆盖整个阶段，
+并非实时磁盘带宽限额。
+
+`schedule_<id>/events.jsonl` 保存阶段进程树 RSS、CPU 时间、I/O 及执行时间采样；
+批记录分开汇总预约与测量。`00_batch_metadata/resource_history.json` 每个工作负载
+最多保留 12 条记录、共 512 个键，`--resource-history` 可另选路径。键包含硬件、
+Python、实现哈希、数值参数、输入维度及线程数。成功记录可用 30% 安全余量提高 RAM
+估计，以 25% 余量估计时长；不会自动降低原始 RAM 估计，也不会自动重试失败的科学计算。
+RSS 求和可能重复计算共享页，也可能漏掉采样间峰值。
+
+`docs/release/benchmarks/cohort_cpu_20261103.json` 是三份真实 ROI 的 WLS 张量拟合
+配对 pilot，验证数值一致性及调度开销，不代表全脑或整条队列工作流加速。
+
+## 兼容模式
+
 默认仍按被试滚动并发。新增 `--scheduler resources` 在计算阶段边界共享资源预约，
 保留各被试自身的依赖、输出、运行记录、缓存与 QC。
 

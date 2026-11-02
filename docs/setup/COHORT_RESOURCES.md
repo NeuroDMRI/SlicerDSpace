@@ -10,6 +10,50 @@
 
 ## Run A Cohort
 
+For CPU-first cohort processing, use the adaptive admission mode:
+
+```bash
+"$SLICER" --launch PythonSlicer "$REPO/scripts/run_batch_pipeline.py" \
+  --batch-root /path/to/study --output-root /path/to/results \
+  --scheduler adaptive --resource-budget 80% --subject-limit 20 \
+  --targets microstructure --microstructure-stages dti,noddi,dki --execute
+```
+
+Omit `--subject-limit` to process every eligible input. Omit `--jobs` to choose
+an active-subject window independently of the heaviest stage; waiting processes
+do not reserve an entire subject's compute budget. The window is capped at eight
+and includes estimated interpreter headroom. Explicit CPU/RAM budgets override
+the automatic fraction. This is a reservation policy, not a system utilisation cap.
+
+Adaptive mode reserves up to four threads per typical stage initially, one for
+the default WMA/WMQL/connectome routes, and honours explicit thread overrides.
+These are conservative admission defaults, not measured optimal thread counts.
+Dependencies remain enforced by each subject's existing orchestrator; at most one
+of its wrapped stages is admitted at a time, with independent subjects interleaved.
+
+Backfilling protects the oldest waiting stage's estimated start when runtime
+feedback is available. After eight bypasses or 120 seconds, the queue drains until
+that stage can start. Long-running stages are not preempted. Estimates can overrun;
+the ageing barrier prevents repeated small-stage bypass from causing starvation.
+Registration, preprocessing, WMQL and connectome stages also share two I/O admission slots. Reservations cover whole
+wrapped stages, rather than instantaneous disk bandwidth.
+
+Every adaptive stage records sampled process-tree RSS, CPU time, I/O and execution
+time in `schedule_<id>/events.jsonl`. The batch manifest summarises reservations and
+measurements separately. `00_batch_metadata/resource_history.json` retains at most
+12 records per workload key and 512 keys. `--resource-history` selects another file.
+Keys include hardware, Python, implementation hashes, numerical arguments, image
+dimensions and threads. Successful observations can raise the heuristic RAM
+reservation with a 30% margin and estimate duration with a 25% margin. They never
+silently lower the initial RAM estimate or retry a failed scientific computation.
+Sampled RSS sums can double-count shared pages and miss between-sample peaks.
+
+The paired pilot in `docs/release/benchmarks/cohort_cpu_20261103.json` uses three
+real-data ROIs and WLS tensor fitting. It verifies numerical outputs and records
+scheduling overhead; it is not a full-workflow or large-cohort speedup estimate.
+
+## Compatibility Mode
+
 The existing subject scheduler remains the default. `--scheduler resources` adds
 shared admission at compute-stage boundaries across active subject processes.
 It preserves each subject's dependencies, manifests, cached outputs and QC.

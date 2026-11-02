@@ -204,6 +204,19 @@ sys.exit(3 if failed else 0)
             with self.assertRaises(SystemExit):
                 batch_cli.main(['--batch-root', tmp, '--scheduler', 'resources', '--max-parallel-models', '2'])
 
+    def test_adaptive_mode_supports_budget_and_subject_selection(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            status, manifest = self.run_fake_batch(Path(tmp), '--scheduler', 'adaptive',
+                '--resource-budget', '80%', '--subject-limit', '2', '--batch-cpus', '2',
+                '--batch-memory-gb', '4', '--batch-stage-memory-gb', '1', jobs=None)
+            self.assertEqual(status, 0)
+            self.assertEqual(len(manifest['results']), 2)
+            self.assertEqual(len(manifest['planned_commands']), 2)
+            self.assertEqual(manifest['subject_limit'], 2)
+            self.assertTrue(any(row['reason'] == 'subject limit' for row in manifest['skipped']))
+            self.assertEqual(manifest['resource_plan']['policy'], 'fair_backfill')
+            self.assertIn('stage_outcomes', manifest['resource_measurements'])
+
     def test_resource_mode_can_omit_jobs_and_all_resource_parameters(self):
         with tempfile.TemporaryDirectory() as tmp, \
              patch('shared.cohort_planning.available_cohort_resources', return_value=(16, 64 * 1024**3)):

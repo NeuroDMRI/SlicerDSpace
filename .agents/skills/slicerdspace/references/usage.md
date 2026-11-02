@@ -9,6 +9,15 @@ independent hand-edited set of commands.
 
 ## Establish The Run
 
+For CPU-heavy cohort requests, consult `docs/setup/COHORT_RESOURCES.md`. The
+implemented `--scheduler adaptive --resource-budget 80%` uses shared stage
+reservations and protected backfilling; `--subject-limit N` optionally selects
+the first N eligible inputs. Leave `--jobs` automatic unless the user asks for a
+specific active-subject window. Preview the plan and obtain execution approval.
+Resource history is local to the batch output metadata by default. Never claim
+that the three-ROI scheduling pilot establishes full-cohort speedup, and do not
+raise memory budgets or retry numerical failures without reviewing the cause.
+
 Find the real Slicer launcher, project/runtime root, authorized input, subject
 ID, writable output root, intended products and any existing run to reuse.
 Inspect the installed CLI's `--help` when its revision differs from the checkout.

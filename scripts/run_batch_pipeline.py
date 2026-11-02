@@ -284,6 +284,16 @@ def _write_manifest(path: Path, payload: dict[str, object]) -> Path:
     return path
 
 
+def _resource_fraction(value):
+    try:
+        number = float(value[:-1]) / 100 if value.endswith('%') else float(value)
+        if not 0 < number <= 1:
+            raise ValueError()
+        return number
+    except ValueError:
+        raise argparse.ArgumentTypeError('Use a fraction in (0,1], or a percentage such as 80%')
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
@@ -299,14 +309,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--batch-root", required=True, type=Path, help="Directory containing one subdirectory per subject.")
     parser.add_argument("--subject-glob", default="*", help="Glob used under --batch-root when --subject-list is omitted.")
     parser.add_argument("--subject-list", type=Path, help="Optional text file listing subject directories or relative IDs.")
+    parser.add_argument('--subject-limit', type=_parse_jobs, help='Process the first N eligible subjects; default: all.')
     parser.add_argument("--output-root", type=Path, help="Batch output root. Each subject writes under <output-root>/<subject-id>.")
     parser.add_argument("--run-name", default="Test1", help="Run name forwarded to each subject. Defaults to Test1.")
     parser.add_argument("--jobs", "--batch-size", dest="jobs", type=_parse_jobs,
                         help="Concurrent subjects; automatic in resource mode, otherwise 1.")
-    parser.add_argument('--scheduler', choices=('subjects', 'resources'), default='subjects',
-                        help='resources adds shared stage admission across active subjects; jobs remains the subject limit.')
-    parser.add_argument('--batch-cpus', type=_parse_jobs, help='Total declared stage CPU budget; default: available CPUs.')
-    parser.add_argument('--batch-memory-gb', type=float, help='Total declared RAM budget in GiB; default: 70%% of available RAM.')
+    parser.add_argument('--scheduler', choices=('subjects', 'resources', 'adaptive'), default='subjects',
+                        help='adaptive adds CPU-first fair backfilling and resource feedback; resources keeps first-fit admission.')
+    parser.add_argument('--resource-budget', type=_resource_fraction, default=.8,
+                        help='Adaptive automatic CPU/RAM budget fraction (default: 80%%); explicit budgets override it.')
+    parser.add_argument('--resource-history', type=Path, help='Adaptive resource profile file; defaults under batch output metadata.')
+    parser.add_argument('--batch-cpus', type=_parse_jobs, help='Declared stage CPU budget; adaptive defaults to --resource-budget of available CPUs.')
+    parser.add_argument('--batch-memory-gb', type=float, help='Declared RAM budget in GiB; adaptive uses --resource-budget, resources uses 70%% of available RAM.')
     parser.add_argument('--batch-stage-cpus', type=_parse_jobs, help='Override automatic per-stage CPU reservations.')
     parser.add_argument('--batch-stage-memory-gb', type=float, help='Override header/model-based stage RAM estimates in GiB.')
     parser.add_argument('--batch-gpu-slots', type=_parse_jobs, default=1,
@@ -336,7 +350,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args, forwarded_args = parser.parse_known_args(argv)
-    if args.scheduler == 'resources':
+    resource_mode = args.scheduler in ('resources', 'adaptive')
+    if resource_mode:
         if int(_command_option(forwarded_args, '--max-parallel-models', '1')) != 1:
             parser.error('Resource scheduling currently requires --max-parallel-models 1 to avoid nested reservations')
 
@@ -362,14 +377,21 @@ def main(argv: list[str] | None = None) -> int:
     log_dir = args.log_dir.expanduser().resolve() if args.log_dir else manifest_path.expanduser().resolve().parent / "logs"
 
     runnable_subjects = [subject for subject in subjects if subject.mode != "missing"]
+    if args.subject_limit is not None:
+        selected = runnable_subjects[:args.subject_limit]
+        skipped.extend(dict(subject_id=subject.subject_id, reason='subject limit')
+                       for subject in runnable_subjects[args.subject_limit:])
+        runnable_subjects = selected
     resource_plan = None
-    if args.scheduler == 'resources':
+    if resource_mode:
         from shared.cohort_planning import plan_cohort
         try:
             resource_plan = plan_cohort(runnable_subjects, forwarded_args, jobs=args.jobs,
                 cpu_budget=args.batch_cpus, memory_gb=args.batch_memory_gb,
                 stage_cpus=args.batch_stage_cpus, stage_memory_gb=args.batch_stage_memory_gb,
-                gpu_slots=args.batch_gpu_slots)
+                gpu_slots=args.batch_gpu_slots, adaptive=args.scheduler == 'adaptive',
+                resource_fraction=args.resource_budget,
+                history_path=args.resource_history or output_base / '00_batch_metadata/resource_history.json')
         except (ValueError, ImportError) as exc:
             parser.error(str(exc))
         args.jobs = resource_plan['jobs']
@@ -415,13 +437,15 @@ def main(argv: list[str] | None = None) -> int:
 
     result_payloads: list[dict[str, object]] = []
     schedule_dir, child_environment = None, None
-    if args.scheduler == 'resources':
+    if resource_mode:
         from shared.cohort_schedule import create_schedule, ENV
         from uuid import uuid4
         try:
             schedule_dir = create_schedule(manifest_path.parent / ('schedule_' + uuid4().hex),
                 **{key: resource_plan[key] for key in ('cpu_budget', 'memory_gb', 'stage_cpus',
-                       'stage_memory_gb', 'gpu_slots', 'subject_profiles')}, planning=resource_plan)
+                       'stage_memory_gb', 'gpu_slots', 'subject_profiles')}, planning=resource_plan,
+                policy=resource_plan['policy'], io_slots=resource_plan['io_slots'],
+                history_path=resource_plan['history_path'] if args.scheduler == 'adaptive' and args.execute else None)
         except (ValueError, ImportError) as exc:
             parser.error(str(exc))
         child_environment = {ENV: str(schedule_dir), 'SLICERDSPACE_STAGE_CPUS': str(resource_plan['stage_cpus'])}
@@ -493,6 +517,7 @@ def main(argv: list[str] | None = None) -> int:
                     'cancelled' if subject_counts.get('cancelled') else 'incomplete' if subject_counts.get('unknown') else
                     'completed_with_blocks' if subject_counts.get('completed_with_blocks') else
                     'completed' if args.execute else 'planned')
+    from shared.cohort_schedule import schedule_summary
     payload: dict[str, object] = {
         "kind": "slicerdsurfer_batch_run",
         "version": 2,
@@ -502,8 +527,10 @@ def main(argv: list[str] | None = None) -> int:
         "execute": bool(args.execute),
         "jobs": args.jobs,
         "scheduler": args.scheduler,
+        "subject_limit": args.subject_limit,
         "resource_schedule": str(schedule_dir) if schedule_dir else None,
         "resource_plan": resource_plan,
+        "resource_measurements": schedule_summary(schedule_dir) if schedule_dir else None,
         "forwarded_args": forwarded_args,
         "arrange_inputs": args.arrange_inputs,
         "subjects": [

@@ -87,6 +87,10 @@ Use `DEPENDENCY_CONFIG` for saved GUI dependency paths. The catalogue also
 links input import, cohort, parameter-experiment, regional and report commands;
 those have their own preview/authorization semantics.
 
+Routine regional analyses use direct `analyze_regions.py` arguments (source run,
+regions, metrics and output directory); JSON requests are optional. See the usage
+guide for the single-subject and cohort forms.
+
 The standalone scripts are generated from `docs/setup/CLI_TEMPLATES.md`, not
 independent implementations of the algorithms. Update that guide and its
 Chinese counterpart first, then run `python scripts/build_skill_shell_templates.py`.

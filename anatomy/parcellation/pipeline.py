@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from shared.cohort_schedule import scheduled_stage
+
 import logging
 import subprocess
 import sys
@@ -176,6 +178,7 @@ def _registered_task_signature(config, weights_dir):
                 inputs={str(path.resolve()): _artifact_record(path)['sha256'] for path in sources})
 
 
+@scheduled_stage('parcellation', gpu=True)
 def run_ddparcel_from_registered_bundle(
     config: DDParcelRegisteredConfig,
     log: Optional[Callable[[str], None]] = None,

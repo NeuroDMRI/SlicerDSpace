@@ -155,7 +155,7 @@ class CliTemplatesTest(unittest.TestCase):
             runner.assert_not_called()
 
     @unittest.skipUnless(importlib.util.find_spec('nibabel') and importlib.util.find_spec('numpy'), 'nibabel/numpy unavailable')
-    def test_regional_recipes_use_exact_catalog_and_request_paths(self):
+    def test_regional_recipes_use_direct_arguments_and_optional_catalog(self):
         from scripts import analyze_regions
         recipes = blocks(GUIDES[0], 'template')
         for name in ('region-inspect', 'region-run'):
@@ -170,11 +170,15 @@ class CliTemplatesTest(unittest.TestCase):
                 if name == 'region-inspect':
                     inspect.assert_called_once()
                     self.assertEqual(inspect.call_args.args[0], Path('/path/to/run_orchestration_manifest.json'))
-                    self.assertEqual(write.call_args.args[0], Path('/path/to/region_catalog.json'))
+                    write.assert_not_called()
                     run.assert_not_called()
                 else:
                     inspect.assert_not_called()
-                    run.assert_called_once_with(request)
+                    run.assert_called_once()
+                    direct = run.call_args.args[0]
+                    self.assertEqual(direct['selected_regions'], ['1024', '2024'])
+                    self.assertEqual(direct['metrics'], ['fa', 'md'])
+                    self.assertEqual(direct['output_dir'], str(Path('/path/to/new_region_results').resolve()))
 
     def test_report_uses_the_route_specific_manifest(self):
         from scripts import generate_subject_report

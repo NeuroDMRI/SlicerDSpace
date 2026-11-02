@@ -34,7 +34,7 @@ class WebsiteWorkflowTests(unittest.TestCase):
 
     def test_both_locales_use_the_new_vector_figure(self):
         for name in ('index.html', 'zh.html'):
-            html = (ROOT / 'docs/site' / name).read_text()
+            html = (ROOT / 'docs/site' / name).read_text(encoding='utf-8')
             section = html.split('id="choose"', 1)[1].split('</section>', 1)[0]
             self.assertIn('assets/img/workflow-overview.svg', section)
             self.assertNotIn('fig-product-map', section)
@@ -52,7 +52,7 @@ class WebsiteWorkflowTests(unittest.TestCase):
             outlines.append(paths)
         self.assertEqual(*outlines)
         for name in ('index.html', 'zh.html'):
-            footer = (ROOT / 'docs/site' / name).read_text().split('<footer', 1)[1]
+            footer = (ROOT / 'docs/site' / name).read_text(encoding='utf-8').split('<footer', 1)[1]
             self.assertNotIn('fans-lab-wordmark', footer)
             self.assertIn("© 2026 Chengjin Li from Fan's Lab.", footer)
 

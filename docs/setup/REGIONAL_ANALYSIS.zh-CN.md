@@ -113,31 +113,55 @@ VTK 保存 RAS-mm 几何，不复制原文件的张量或逐点数组；可用�
 
 ## CLI 与验证
 
-GUI 与 CLI 共用同一后端：
+常规分析直接传参，无需手写请求文件；GUI 与 CLI 共用同一后端：
 
 ```bash
-python scripts/analyze_regions.py --inspect /absolute/run_orchestration_manifest.json \
-  --catalog /absolute/catalog.json
-python scripts/analyze_regions.py --request /absolute/request.json
+python scripts/analyze_regions.py --source-manifest /absolute/run_orchestration_manifest.json \
+  --regions 1024 2024 --metrics fa md --output-dir /absolute/new_region_results
 python scripts/validate_region_analysis.py /absolute/region_analysis_manifest.json \
   --report /absolute/independent_check.json
 ```
 
-请求包含 `source_manifest`、正整数 `selected_labels`、可用的 `metrics`，
-可选来源任务键 `tractogram`、`connectome`，以及 `tract_rule`、独立 `output_dir`。
-也支持分区图/LUT 覆盖与目录读取时的哈希。GUI 会自动生成该请求，无需手写。
+来源运行记录是工作流已经生成的文件，不是额外编写的配置。
+`--regions` 接受标签号或名称，多词名称加引号；支持逗号、空格分隔和重复参数。
+未选择任何分析类型时，默认汇总 FA。只选择组织、皮层、流线或连接组时，不隐式添加标量指标。
+所选指标必须存在于该运行且满足来源 QC 检查。
 
-也可用 `selected_regions` 输入名称/标签号；`target_regions`、`include_regions`、`exclude_regions`
-接受同样的格式。中文别名翻译后从当前图谱/LUT 查询标签，歧义名称不会自动猜测。
-启用组织/皮层统计分别使用 `"tissue": true`、`"surface": true`。
-参见 [A↔B 请求模板](examples/region_pair_request.json)；先用 `--inspect` 确认来源算法任务键。
+| 参数 | 作用 |
+| --- | --- |
+| `--source-manifest RUN [RUN ...]` | 单个或多个运行记录；可重复传入，多个来源时导出队列表 |
+| `--regions NAME_OR_ID [...]` | 待分析脑区的名称或标签号 |
+| `--metrics fa md [...]` | 可用指标键名，例如 `fwf`、`noddi_ndi`、`noddi_odi`、`dki_mk` |
+| `--tissue`、`--surface` | 添加组织构成或匹配的皮层形态统计 |
+| `--tractogram TASK` | 流线来源任务，例如 `tractography.ukf` |
+| `--tract-rule RULE` | `through_any`（默认）、`through_all`、`endpoint_any`、`endpoint_both`、`endpoint_pair` |
+| `--target-regions [...]` | A-B 端点筛选的目标组 |
+| `--include-regions [...]`、`--exclude-regions [...]` | 必经区和排除区 |
+| `--connectome TASK` | 连接组来源任务，例如 `connectome.streamline_count` |
+| `--atlas FILE`、`--lut FILE` | 可选替代图谱和标签名称表 |
+| `--output-dir DIR` | 新输出目录；多来源时为队列结果根目录 |
 
-CLI 可将同一配置应用于多个已完成的被试：
+例如，筛选连接双侧中央前回的 UKF 流线：
 
 ```bash
-python scripts/analyze_regions.py --batch /absolute/region_batch.json
+python scripts/analyze_regions.py --source-manifest /absolute/run_orchestration_manifest.json \
+  --regions 1024 --target-regions 2024 --tractogram tractography.ukf \
+  --tract-rule endpoint_pair --output-dir /absolute/new_region_tracks
 ```
 
+需要查询可用脑区、指标或任务键名时，使用 `--inspect /absolute/run_orchestration_manifest.json`
+直接打印清单；可选 `--catalog /absolute/catalog.json` 保存。
+名称从当前图谱/LUT 解析；歧义名称需指定标签号。
+
+同一组参数可直接应用于多个已完成的被试：
+
+```bash
+python scripts/analyze_regions.py --source-manifest /absolute/subject1/run.json /absolute/subject2/run.json \
+  --regions 1024 2024 --metrics fa md --output-dir /absolute/new_region_cohort
+```
+
+高级保存配置仍可使用 `--request /absolute/request.json` 和 `--batch /absolute/region_batch.json`；
+不要与直接分析参数混用。GUI 自动生成所需请求，无需用户手写。
 [批处理模板](examples/region_batch.json)包含共享 `request`、每被试的 `source_manifest`（可覆盖 atlas/LUT）
 和新输出目录。逐被试执行并导出 `cohort_*.csv` 长表，保留被试 ID、来源和分区哈希；
 所选标签号/名称语义必须一致。个别被试失败时保留失败原因并继续其他被试，CLI 以非零状态退出。

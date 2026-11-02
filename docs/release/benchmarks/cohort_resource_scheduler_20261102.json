@@ -1,0 +1,59 @@
+{
+  "status": "PASS",
+  "scope": "Synthetic sleep-based scheduling fixture; no MRI throughput or algorithm speedup claim",
+  "comparison": "Same declared CPU/RAM/GPU-slot limits; whole-subject versus per-stage reservations",
+  "subjects": 3,
+  "cpu_budget": 2,
+  "memory_gb": 2,
+  "gpu_slots": 1,
+  "runs": [
+    {
+      "repeat": 0,
+      "mode": "subjects",
+      "seconds": 2.2182794101536274
+    },
+    {
+      "repeat": 0,
+      "mode": "stages",
+      "seconds": 1.3687756955623627
+    },
+    {
+      "repeat": 1,
+      "mode": "stages",
+      "seconds": 1.468961127102375
+    },
+    {
+      "repeat": 1,
+      "mode": "subjects",
+      "seconds": 2.1814330648630857
+    },
+    {
+      "repeat": 2,
+      "mode": "subjects",
+      "seconds": 2.0827369410544634
+    },
+    {
+      "repeat": 2,
+      "mode": "stages",
+      "seconds": 1.432128543034196
+    }
+  ],
+  "median_seconds": {
+    "subjects": 2.1814330648630857,
+    "stages": 1.432128543034196
+  },
+  "output_sha256": {
+    "0": "4458a38e73c4cbf6b46304af0927da3205603e140ad51275d021f7baab78dbc2",
+    "1": "d9c50cf64768d929518ba9983939f2c1bc98f8a71ad04bd0fdf01e6170af84e5",
+    "2": "6f6845bbfe8f144893427174366967cbb1290aeb92065379d4bbe8b132beae3f"
+  },
+  "outputs_identical": true,
+  "environment": {
+    "python": "3.13.5 | packaged by Anaconda, Inc. | (main, Jun 12 2025, 16:09:02) [GCC 11.2.0]",
+    "platform": "Linux-5.15.0-164-generic-x86_64-with-glibc2.35"
+  },
+  "source_sha256": {
+    "shared/cohort_schedule.py": "4c338d4986f0a065c0d3bb10d2f69ae965dcbc7e916e5c789263151d09585d2a",
+    "scripts/benchmark_cohort_schedule.py": "2aeb47c98c9e06f25ed7fa24fb8084bafb0b5f7e584cd6642764a4a9f2e1b828"
+  }
+}

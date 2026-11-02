@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from shared.cohort_schedule import scheduled_stage
+
 import ast
 import json
 import hashlib
@@ -499,6 +501,7 @@ def _validate_wmql_config(config: WMQLConfig, backend_status: dict[str, Any]) ->
         raise RuntimeError("WMQL backend is incomplete. Missing: " + ", ".join(backend_status["missing_required"]))
 
 
+@scheduled_stage('wmql')
 def run_wmql_bundle_segmentation(
     config: WMQLConfig,
     *,

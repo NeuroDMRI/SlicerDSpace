@@ -485,6 +485,10 @@ JSON 不展开 `$VARIABLES`。使用新的实验输出目录；所有组合先�
 ```
 
 加 `--execute` 才执行。一个被试的不同组合串行，被试间可以并发。
+跨被试计算阶段的共享准入可使用 `--scheduler resources`；省略资源参数时自动规划，
+可用 `--jobs 3` 指定活跃被试上限。高级资源覆盖见[资源感知队列处理](COHORT_RESOURCES.zh-CN.md)。该模式将被试内部模型并发设为一，
+保留既有运行记录，不常驻模型，也不把多被试合成一个推理批次。
+
 GUI **高级设置 > 实验与批处理** 支持相同请求。被试并发数 `--jobs`
 与单被试模型并发数 `--max-parallel-models` 是两个层级，资源占用可能相乘。
 详见[批量实验](EXPERIMENTS.zh-CN.md)。
@@ -497,37 +501,46 @@ GUI **高级设置 > 实验与批处理** 支持相同请求。被试并发数 `
 上述封装把元数据写到 `$OUTPUTS/<run>/00_run_metadata/<run>_orchestration_manifest.json`。
 多追踪变体和实验各有子运行记录。
 
-<!-- cli-template: region-inspect -->
-```bash
-"$SLICER" --launch PythonSlicer "$REPO/scripts/analyze_regions.py" \
-  --inspect "/path/to/run_orchestration_manifest.json" --catalog "/path/to/region_catalog.json"
-```
-
-从目录清单中选择真实 label ID 和 metric/task key，修改[脑区请求](examples/region_request.json)。
-使用新的输出目录，检查请求后执行：
+直接传入脑区与指标，不需要编写请求文件：
 
 <!-- cli-template: region-run -->
 ```bash
 "$SLICER" --launch PythonSlicer "$REPO/scripts/analyze_regions.py" \
-  --request "/path/to/edited_region_request.json"
+  --source-manifest "/path/to/run_orchestration_manifest.json" \
+  --regions 1024 2024 --metrics fa md \
+  --output-dir "/path/to/new_region_results"
 ```
 
 脑区分析复用适用的参数图、完整流线和矩阵，不重新拟合模型；
 图谱中不存在的脑区、失败或过时来源会被拒绝。
 
-`selected_regions` 接受名称/标签号。[A↔B 模板](examples/region_pair_request.json)
-设置 `target_regions` 和 `tract_rule: "endpoint_pair"`；`include_regions`、`exclude_regions`
-可添加途经/排除区。`tissue: true`、`surface: true` 分别复用已有 DDSeg 和匹配的皮层后处理。
-名称从当前 LUT 查询；有歧义时需指定标签号。
+`--regions` 接受名称或标签号，可用空格、逗号分隔，也可重复传入；多词名称加引号。
+`--tissue`、`--surface` 添加已有 DDSeg 组织构成和皮层形态统计。
+`--tractogram`、`--connectome` 指定记录中的任务键名。
+`--tract-rule endpoint_pair --target-regions ...` 筛选 A-B 流线，
+`--include-regions`、`--exclude-regions` 添加途经和排除区。
+未指定任何分析类型时默认汇总 FA；歧义名称需指定标签号。需要查看脑区、指标及任务键名时：
 
-[脑区批处理模板](examples/region_batch.json)将同一配置应用到多个已完成的被试，并导出 cohort CSV：
+<!-- cli-template: region-inspect -->
+```bash
+"$SLICER" --launch PythonSlicer "$REPO/scripts/analyze_regions.py" \
+  --inspect "/path/to/run_orchestration_manifest.json"
+```
+
+此命令直接打印目录；可选 `--catalog /path/to/catalog.json` 保存文件。
+
+传入多个已完成的单被试运行记录，即可导出队列 CSV：
 
 ```bash
 "$SLICER" --launch PythonSlicer "$REPO/scripts/analyze_regions.py" \
-  --batch "/path/to/edited_region_batch.json"
+  --source-manifest "/path/to/subject1/run.json" "/path/to/subject2/run.json" \
+  --regions 1024 2024 --metrics fa md \
+  --output-dir "/path/to/new_region_cohort"
 ```
 
-完整规则、报告与输出字段见[脑区分析说明](REGIONAL_ANALYSIS.zh-CN.md)。
+JSON 作为可选高级接口保留：`--request` 接受[区域请求](examples/region_request.json)
+或 [A-B 请求](examples/region_pair_request.json)，`--batch` 接受[逐被试覆盖配置](examples/region_batch.json)。
+JSON 模式不与直接分析参数混用。完整参数见[脑区分析说明](REGIONAL_ANALYSIS.zh-CN.md)。
 
 <!-- cli-template: report -->
 ```bash

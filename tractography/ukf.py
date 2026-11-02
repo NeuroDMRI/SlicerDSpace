@@ -1,6 +1,7 @@
 """Invoke the installed official UKFTractography CLI, never a reimplementation."""
 
 from dataclasses import asdict, dataclass, fields
+from shared.cohort_schedule import scheduled_stage
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -484,6 +485,7 @@ def restore_lossless_payload(raw, probe, converted, dwi, mask):
     )
 
 
+@scheduled_stage('ukf')
 def run_ukf(raw, directory, *, options=None, executable=None, converter=None, force=False, log=None):
     from shared.external_process import merged_startup_environment
     from shared.pipeline import build_cli_environment

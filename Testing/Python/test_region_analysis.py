@@ -141,6 +141,45 @@ class RegionAnalysisTest(unittest.TestCase):
         self.assertAlmostEqual(catalog["regions"][0]["volume_mm3"], 18 * 24)
         self.assertEqual(catalog["connectomes"]["connectome.streamline_count"]["atlas"], str(self.atlas))
 
+    def test_direct_cli_and_json_produce_identical_regional_statistics(self):
+        import contextlib
+        import io
+        from scripts import analyze_regions
+
+        run_analysis(self.request('from_json'))
+        with patch.object(analyze_regions.signal, 'signal'), contextlib.redirect_stdout(io.StringIO()):
+            analyze_regions.main(['--source-manifest', str(self.manifest), '--regions', 'Left-Region', '2001',
+                                  '--metrics', 'fa,noddi_ndi', '--lut', str(self.lut),
+                                  '--output-dir', str(self.root / 'from_cli')])
+        for name in ('selected_regions.csv', 'selected_microstructure.csv'):
+            self.assertEqual((self.root / 'from_json' / name).read_bytes(), (self.root / 'from_cli' / name).read_bytes())
+        results = [read_json(self.root / folder / 'selected_microstructure.json') for folder in ('from_json', 'from_cli')]
+        for result in results:
+            result.pop('runtime_seconds')
+        self.assertEqual(*results)
+
+    def test_direct_cli_exports_two_subjects_without_a_batch_json(self):
+        import contextlib
+        import io
+        from scripts import analyze_regions
+
+        parent = read_json(self.manifest)
+        parent['subject_id'] = 'synthetic2'
+        second = self.root / 'parent2.json'
+        write_json(second, parent)
+        output = self.root / 'cli_cohort'
+        with patch.object(analyze_regions.signal, 'signal'), contextlib.redirect_stdout(io.StringIO()):
+            analyze_regions.main(['--source-manifest', str(self.manifest), str(second),
+                                  '--regions', '1001', '2001', '--metrics', 'fa', '--lut', str(self.lut),
+                                  '--output-dir', str(output)])
+        summary = read_json(output / 'regional_batch_manifest.json')
+        self.assertEqual(summary['status'], 'completed')
+        self.assertEqual(summary['completed_subjects'], 2)
+        with (output / 'cohort_selected_microstructure.csv').open() as stream:
+            rows = list(csv.DictReader(stream))
+        self.assertEqual(len(rows), 4)
+        self.assertEqual({row['subject_id'] for row in rows}, {'synthetic', 'synthetic2'})
+
     def test_failed_stale_and_missing_qc_excluded(self):
         self.tasks[1]["status"] = "failed"
         Path(self.tasks[2]["qc_path"]).write_text('{"status":"completed","checks":{"fit":false}}')

@@ -22,6 +22,8 @@ lightweight source checkout or complete development/research repository.
 | --- | --- |
 | [Quick Start](setup/QUICKSTART.md) | Minimal DTI workflow and synthetic installation check |
 | [CLI templates](setup/CLI_TEMPLATES.md) | Copyable routes, explicit tracking/bundle sources, PowerShell, regional analysis and reports |
+| [Python API](setup/PYTHON_API.md) | Checked workflow entry, planning and partial or strict execution |
+| [Cohort resource scheduling](setup/COHORT_RESOURCES.md) | Optional cross-subject compute-stage admission and resource reservations |
 | [Experiments](setup/EXPERIMENTS.md) | Advanced parameter overrides, named variants and cohort concurrency |
 | [Agent skill](../.agents/skills/slicerdspace/SKILL.md) | Installation, input preparation, requested analyses and result review |
 | [Output layout](setup/OUTPUT_LAYOUT.md) | New `03_anatomy` products and read-only compatibility with historical `03_structural` results |

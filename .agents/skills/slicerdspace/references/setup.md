@@ -322,7 +322,11 @@ are distinct evidence.
   compatible runtime. `shared.prebuilt_surface.prepare(...)` verifies the
   recipe, hashes and commands; no personal activation key is bundled.
   User-provided activation and explicit component/data terms approval remain
-  necessary. See `docs/setup/SURFACE_COMPONENTS.md`. The GUI never compiles;
+  necessary. The surface-only GUI preparation discovers existing licenses or offers
+  official registration and import. Save only the selected path; never print,
+  upload or bundle license contents, register on the user's behalf, or reuse the
+  maintainer's key. An invalid explicit path must be corrected, not bypassed.
+  See `docs/setup/SURFACE_COMPONENTS.md`. The GUI never compiles;
   `scripts/setup_surface_runtime.py` defaults to prebuilt, with
   `--build-from-source` an expert opt-in, not an automatic failure fallback.
 - Mac Intel MRtrix requires macOS **14.5+**. The package/installer adaptation has

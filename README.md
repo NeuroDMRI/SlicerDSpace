@@ -44,7 +44,7 @@ same scene.
   <img src="docs/assets/readme/SlicerDSpace_preview.gif" alt="SlicerDSpace animated video preview" width="100%">
 </a>
 
-24-second preview at normal speed · [Watch the full video (MP4, 1:12)](docs/site/media/SlicerDSpace_promo_1080p.mp4) ·
+Complete 48-second preview at 1.5× speed · [Watch the full video (MP4, 1:12)](docs/site/media/SlicerDSpace_promo_1080p.mp4) ·
 [Website player](https://chengjinlii.github.io/SlicerDSpace/#film)
 
 ---

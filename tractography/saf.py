@@ -7,6 +7,8 @@ input validation, backend checks, manifest/QC output, and explicit execution.
 
 from __future__ import annotations
 
+from shared.cohort_schedule import scheduled_stage
+
 import importlib
 import importlib.util
 import json
@@ -479,6 +481,7 @@ def _tractogram_summary(path: Path) -> dict[str, Any]:
     return summary
 
 
+@scheduled_stage('saf')
 def run_saf(config: SAFConfig, *, log: Optional[Callable[[str], None]] = None) -> SAFResult:
     """Prepare or execute Python SAF for one subject.
 

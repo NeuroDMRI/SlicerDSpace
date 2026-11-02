@@ -8,6 +8,8 @@ dependency installation and execution explicit. It prepares a reproducible
 
 from __future__ import annotations
 
+from shared.cohort_schedule import scheduled_stage
+
 import json
 import hashlib
 import os
@@ -363,6 +365,7 @@ def _tractcloud_output_contract_error(output_summary: dict[str, Any]) -> Optiona
     return None
 
 
+@scheduled_stage('tractcloud', gpu=True)
 def run_tractcloud_parcellation(
     config: TractCloudConfig,
     *,

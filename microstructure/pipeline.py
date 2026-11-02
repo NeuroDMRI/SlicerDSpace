@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from shared.cohort_schedule import scheduled_stage
+
 import csv
 import hashlib
 import json
@@ -1099,7 +1101,8 @@ def _noddi_threads(config) -> int:
         available = len(os.sched_getaffinity(0))
     except (AttributeError, OSError):
         available = os.cpu_count() or 1
-    return max(1, min(8, available))
+    budget = int(os.environ.get('SLICERDSPACE_STAGE_CPUS', available))
+    return max(1, min(8, available, budget))
 
 
 def _ensure_amico_rotation_matrices(lmax: int, ndirs: int, log) -> None:
@@ -1704,6 +1707,7 @@ def _run_independent_models(config, log):
     return replace(adjusted, force_recompute=False), schedule
 
 
+@scheduled_stage('microstructure')
 def run_microstructure(
     config: MicrostructureConfig,
     log: Optional[Callable[[str], None]] = None,

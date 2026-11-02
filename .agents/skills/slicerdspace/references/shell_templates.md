@@ -3,7 +3,7 @@
 Generated from `docs/setup/CLI_TEMPLATES.md`; do not edit this catalogue or its generated scripts.
 Regenerate with `python scripts/build_skill_shell_templates.py` from the authorized checkout.
 
-Source SHA-256 (UTF-8, LF): `2ec2f668f9795cb063ee0e3cbaab2bdca45349e364bba52a27f261d3d837137d`.
+Source SHA-256 (UTF-8, LF): `707aa5f7165945b6265a433e865c7964b7cd33954a59c4279c9aa7b74135e9fb`.
 
 ## Contents
 
@@ -449,8 +449,8 @@ Use the maintained [CLI guide](../../../../docs/setup/CLI_TEMPLATES.md) or
 | DICOM, NIfTI, NRRD/NHDR import | `import-dicom`, `import-nifti`, `import-nrrd`; preview with `--dry-run` |
 | Multi-subject scheduling | `cohort`; review RAM/GPU demand before increasing `--jobs` |
 | Named algorithm/parameter comparisons | `experiments`; validate the request before `--execute` |
-| Region/tract/connectome queries | `region-inspect`, `region-run`; use reviewed, QC-eligible run records |
-| Regional cohort summaries | `scripts/analyze_regions.py --batch`; reviewed JSON request |
+| Region/tract/connectome queries | `region-run` takes direct region/metric arguments; `region-inspect` is optional |
+| Regional cohort summaries | `scripts/analyze_regions.py --source-manifest RUN1 RUN2 ...`; optional saved JSON via `--batch` |
 | Result report | `report`; select the exact run manifest |
 
 Regional postprocessing and report commands can write outputs without fitting models; they

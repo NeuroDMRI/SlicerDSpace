@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from shared.cohort_schedule import scheduled_stage
+
 import csv
 import json
 import math
@@ -965,6 +967,7 @@ def _infer_connectome_output_dir(config: ConnectomeConfig) -> Path:
     return default_task_output_dir_for_dependency(config.tractography_path, "connectome")
 
 
+@scheduled_stage('connectome')
 def run_connectome(config: ConnectomeConfig, *, log: Optional[Callable[[str], None]] = None) -> ConnectomeResult:
     """Prepare connectome outputs that explicitly depend on tractography and DDParcel."""
 

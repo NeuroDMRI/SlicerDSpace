@@ -225,40 +225,13 @@ def _environment_config_from_args(
 ) -> EnvironmentDoctorConfig:
     subject_root = args.subject_root.expanduser().resolve()
     layout = subject_layout(subject_root, output_root=output_root)
-    input_dir = subject_root / "input"
-    raw_inputs_known = all((input_dir / name).is_file() for name in ("data.nii.gz", "bvals", "bvecs"))
-    if not raw_inputs_known:
-        from shared.dicom_input import is_dicom_root
-        raw_inputs_known = is_dicom_root(subject_root)
-    mask_targets = {
-        "preprocessing", "segmentation", "parcellation", "surface", "microstructure",
-        "microstructure_freewater", "microstructure_noddi", "microstructure_dki", "tractography",
-    }
-    brain_mask_required = (
-        raw_inputs_known
-        and bool(mask_targets.intersection(targets))
-        and not (input_dir / "nodif_brain_mask.nii.gz").is_file()
-    )
-    preprocessing_generates_mask = args.preprocessing_backend != "dipy" or (
-        args.preprocessing_dipy_denoise_method != "none"
-        or not args.preprocessing_skip_gibbs
-        or not args.preprocessing_skip_motion
-    )
-    if (
-        raw_inputs_known and "preprocessing" in targets
-        and args.brain_mask_backend != "provided" and preprocessing_generates_mask
-    ):
-        subject_id = args.subject_id or subject_root.name
-        final_dwi = layout.preproc / f"{subject_id}_dwi_final.nii.gz"
-        final_mask = layout.preproc / f"{subject_id}_brain_mask_final.nii.gz"
-        final_inputs = (
-            final_dwi, final_mask, layout.preproc / f"{subject_id}_dwi_final.bval",
-            layout.preproc / f"{subject_id}_dwi_final.bvec",
-        )
-        needs_new_mask = args.preprocessing_force or args.no_resume or not all(path.is_file() for path in final_inputs)
-        if not needs_new_mask:
-            needs_new_mask = final_mask.stat().st_mtime_ns < final_dwi.stat().st_mtime_ns
-        brain_mask_required = brain_mask_required or needs_new_mask
+    from shared.environment import run_needs_brain_mask
+    brain_mask_required = run_needs_brain_mask(subject_root, targets=targets,
+        subject_id=args.subject_id, output_root=output_root,
+        preprocessing_backend=args.preprocessing_backend, brain_mask_backend=args.brain_mask_backend,
+        denoise_method=args.preprocessing_dipy_denoise_method,
+        run_gibbs=not args.preprocessing_skip_gibbs, run_motion=not args.preprocessing_skip_motion,
+        force=args.preprocessing_force, resume=not args.no_resume)
     return EnvironmentDoctorConfig(
         targets=targets,
         repo_root=REPO_ROOT,

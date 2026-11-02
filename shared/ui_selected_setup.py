@@ -270,6 +270,10 @@ def prepare_selected_environment(owner, result=None, *, repair=False):
     result = result or owner._run_environment_dependency_check()
     if result is None:
         return False
+    from shared.ui_surface_license import prepare_surface_license
+    result = prepare_surface_license(owner, result)
+    if result is None:
+        return False
     manager = slicer.app.extensionsManagerModel()
     config = owner._environment_dependency_path_kwargs()
     plan = selected_setup_plan(owner, result, repair=repair)

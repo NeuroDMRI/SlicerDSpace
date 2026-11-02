@@ -1,6 +1,8 @@
 """Slicer facade for the manifest-configured, unchanged DDSurfer backend."""
 from __future__ import annotations
 
+from shared.cohort_schedule import scheduled_stage
+
 import json
 import math
 import os
@@ -242,6 +244,7 @@ def _run_shared_raw(config, resources, output_dir, manifest, previous, log):
         raise RuntimeError('Shared surface inputs changed during prediction')
 
 
+@scheduled_stage('surface', gpu=True)
 def run_surface(config: SurfaceConfig, *, log: Optional[Callable[[str], None]] = None) -> SurfaceResult:
     if not config.subject_id.strip() or Path(config.subject_id).name != config.subject_id or config.subject_id in ('.', '..', 'fsaverage'):
         raise ValueError('subject_id must be a nonempty directory name')

@@ -7,6 +7,8 @@ shared corrected DWI under ``outputs/01_preproc``.
 
 from __future__ import annotations
 
+from shared.cohort_schedule import scheduled_stage
+
 import json
 import os
 import shutil
@@ -1082,6 +1084,7 @@ def _detach_linked_backend_outputs(paths: dict[str, Path]) -> None:
             path.unlink()
 
 
+@scheduled_stage('preprocessing', gpu=True)
 def run_dwi_preprocessing(
     config: DwiPreprocessingConfig,
     *,

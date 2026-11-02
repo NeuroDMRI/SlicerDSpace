@@ -131,6 +131,34 @@ class EnvironmentDoctorConfig:
     tractcloud_data_dir: Optional[Path] = None
 
 
+def run_needs_brain_mask(subject_root: Path, *, targets, subject_id: str, output_root=None,
+                         preprocessing_backend='dipy', brain_mask_backend='pnl_cnn',
+                         denoise_method='mppca', run_gibbs=True, run_motion=True,
+                         force=False, resume=True) -> bool:
+    """Common CLI/API mask prerequisite policy, including stale preprocessing outputs."""
+    from shared.io_layout import subject_layout
+    subject_root = subject_root.expanduser().resolve()
+    input_dir = subject_root / 'input'
+    raw = all((input_dir / name).is_file() for name in ('data.nii.gz', 'bvals', 'bvecs'))
+    if not raw:
+        from shared.dicom_input import is_dicom_root
+        raw = is_dicom_root(subject_root)
+    mask_targets = {'preprocessing', 'segmentation', 'parcellation', 'surface', 'microstructure',
+                    'microstructure_freewater', 'microstructure_noddi', 'microstructure_dki', 'tractography'}
+    required = raw and bool(mask_targets.intersection(targets)) and not (input_dir / 'nodif_brain_mask.nii.gz').is_file()
+    generates_mask = preprocessing_backend != 'dipy' or denoise_method != 'none' or run_gibbs or run_motion
+    if raw and 'preprocessing' in targets and brain_mask_backend != 'provided' and generates_mask:
+        layout = subject_layout(subject_root, output_root=output_root)
+        stem = subject_id or subject_root.name
+        dwi, mask = layout.preproc / f'{stem}_dwi_final.nii.gz', layout.preproc / f'{stem}_brain_mask_final.nii.gz'
+        files = (dwi, mask, layout.preproc / f'{stem}_dwi_final.bval', layout.preproc / f'{stem}_dwi_final.bvec')
+        stale = force or not resume or not all(path.is_file() for path in files)
+        if not stale:
+            stale = mask.stat().st_mtime_ns < dwi.stat().st_mtime_ns
+        required = required or stale
+    return bool(required)
+
+
 @dataclass(frozen=True)
 class EnvironmentDoctorResult:
     platform: str

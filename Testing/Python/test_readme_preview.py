@@ -1,4 +1,4 @@
-"""Keep the README animation moderate in size and preserve normal playback."""
+"""Keep the README animation moderate in size and preserve the complete timeline."""
 
 from pathlib import Path
 import tempfile
@@ -10,17 +10,17 @@ from scripts import make_readme_preview as preview
 
 class ReadmePreviewTests(unittest.TestCase):
     def test_defaults_improve_resolution_and_cadence_without_excess(self):
-        self.assertEqual(preview.DEFAULT_WIDTH, 960)
+        self.assertEqual(preview.DEFAULT_WIDTH, 800)
         self.assertEqual(preview.DEFAULT_FPS, 10)
         self.assertEqual(preview.frame_filters(960, 10, 1),
-                         'setpts=PTS/1,fps=10,scale=960:-2:flags=lanczos')
+                         'setpts=(PTS-STARTPTS)/1,fps=10,scale=960:-2:flags=lanczos')
 
-    def test_preview_selects_highlights_at_normal_speed(self):
-        self.assertEqual(sum(end - start for start, end in preview.DEFAULT_SEGMENTS), 24)
-        filters = preview.frame_filters(960, 10, 1, preview.DEFAULT_SEGMENTS)
-        self.assertIn('setpts=N/FRAME_RATE/TB,setpts=PTS/1,fps=10', filters)
-        for start, end in preview.DEFAULT_SEGMENTS:
-            self.assertIn(f'gte(t,{start})*lt(t,{end})', filters)
+    def test_preview_preserves_all_transitions_at_moderate_speed(self):
+        self.assertEqual(preview.DEFAULT_SPEED, 1.5)
+        filters = preview.frame_filters(960, 10, preview.DEFAULT_SPEED)
+        self.assertEqual(filters, 'setpts=(PTS-STARTPTS)/1.5,fps=10,scale=960:-2:flags=lanczos')
+        for removed in ('select=', 'trim=', 'concat=', 'setpts=N/'):
+            self.assertNotIn(removed, filters)
 
     def test_palette_and_animation_are_streamed_in_two_passes(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -37,12 +37,13 @@ class ReadmePreviewTests(unittest.TestCase):
                 Path(command[-1]).write_bytes(b'GIF89a' if command[-1].endswith('.gif') else b'palette')
 
             with patch.object(preview, 'ROOT', root), patch.object(preview.subprocess, 'run', encode), \
-                    patch('sys.argv', ['make_readme_preview', '--ffmpeg', 'ffmpeg', '--gifsicle', '', '--full', '--output', str(target)]), \
+                    patch('sys.argv', ['make_readme_preview', '--ffmpeg', 'ffmpeg', '--gifsicle', '', '--output', str(target)]), \
                     patch('builtins.print'):
                 preview.main()
             self.assertEqual(len(commands), 2)
             self.assertIn('palettegen=max_colors=256:stats_mode=diff', commands[0][commands[0].index('-vf') + 1])
             self.assertNotIn('select=', commands[0][commands[0].index('-vf') + 1])
+            self.assertIn('setpts=(PTS-STARTPTS)/1.5', commands[0][commands[0].index('-vf') + 1])
             self.assertIn('-loop', commands[1])
             self.assertEqual(commands[1][commands[1].index('-loop') + 1], '0')
             self.assertEqual(target.read_bytes(), b'GIF89a')
@@ -57,15 +58,15 @@ class ReadmePreviewTests(unittest.TestCase):
         path = preview.ROOT / 'docs/assets/readme/SlicerDSpace_preview.gif'
         self.assertLess(path.stat().st_size, 20 * 1024 ** 2)
         with Image.open(path) as animation:
-            self.assertEqual(animation.size, (960, 540))
+            self.assertEqual(animation.size, (800, 450))
             self.assertEqual(animation.info.get('loop'), 0)
             durations = []
             for index in range(animation.n_frames):
                 animation.seek(index)
                 animation.load()
                 durations.append(animation.info['duration'])
-            self.assertAlmostEqual(sum(durations) / 1000, 24, delta=.1)
-            self.assertGreaterEqual(durations.count(100), 200)
+            self.assertAlmostEqual(sum(durations) / 1000, 48, delta=.2)
+            self.assertGreaterEqual(durations.count(100), 400)
 
     def test_oversized_render_does_not_replace_previous_preview(self):
         with tempfile.TemporaryDirectory() as folder:

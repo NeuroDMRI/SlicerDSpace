@@ -38,6 +38,17 @@ seven-command backend: it has additional dependencies and a different contract.
 
 ## First Preparation
 
+Select surface postprocessing and click **Prepare selected analysis environment**.
+The plugin looks for a configured file, `FS_LICENSE`/`FREESURFER_LICENSE`,
+`.licenses/freesurfer/license.txt`, `.freesurfer/license.txt` or `license.txt` in your
+home directory, and a license in the selected FreeSurfer installation. An invalid
+explicit path is not silently replaced. If missing, **Get a free license** opens
+official registration; **Import license** selects the file you receive. The plugin
+saves its path without copying, uploading or bundling the private file. Keep it at
+that location for later runs. Cancel does not start installation. This prompt is
+limited to surface postprocessing. Readable text is only a preliminary check;
+the original commands validate activation.
+
 **Check never installs. The GUI preparation route never compiles sources.**
 **Prepare selected analysis environment** prefers a qualified prebuilt bundle,
 checks archive/file hashes, recipe and native library availability, then saves

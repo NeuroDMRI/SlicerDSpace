@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from shared.cohort_schedule import scheduled_stage
+
 import json
 import hashlib
 import logging
@@ -766,6 +768,7 @@ def _convert_nrrd_to_nifti(in_path: Path, out_path: Path) -> None:
     nifti_write(in_path.as_posix(), prefix)
 
 
+@scheduled_stage('native_dti')
 def ensure_native_dti_bundle(
     raw: RawInputBundle,
     fit_method: str = "wls",
@@ -944,6 +947,7 @@ def _write_inverse_transform(forward_path: Path, inverse_path: Path) -> None:
     sitk.WriteTransform(inverse, str(inverse_path))
 
 
+@scheduled_stage('registered_dti')
 def ensure_registered_dti_bundle(
     raw: RawInputBundle,
     atlas_t2: Path,

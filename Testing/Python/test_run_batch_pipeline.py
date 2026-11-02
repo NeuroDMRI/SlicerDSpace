@@ -10,6 +10,7 @@ import json
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 
@@ -58,7 +59,7 @@ print(a.subject_id)
 sys.exit(3 if failed else 0)
 '''
 
-    def run_fake_batch(self, root, *extra):
+    def run_fake_batch(self, root, *extra, jobs=2):
         for subject in ("sub-01", "sub-02", "sub-03"):
             _write_raw_subject(root / "subjects" / subject)
         fake = root / "pipeline.py"
@@ -68,7 +69,7 @@ sys.exit(3 if failed else 0)
             status = batch_cli.main([
                 "--batch-root", str(root / "subjects"), "--output-root", str(root / "outputs"),
                 "--pipeline-script", str(fake), "--python-executable", sys.executable,
-                "--manifest", str(manifest), "--jobs", "2", "--execute",
+                "--manifest", str(manifest), "--execute", *(['--jobs', str(jobs)] if jobs is not None else []),
                 "--event-dir", str(root / "events"), *extra,
             ])
         return status, json.loads(manifest.read_text())
@@ -179,6 +180,39 @@ sys.exit(3 if failed else 0)
 
         self.assertEqual(args.jobs, 3)
         self.assertEqual(forwarded, ["--targets", "microstructure"])
+
+    def test_resource_mode_passes_shared_schedule_without_changing_subject_outputs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            script = ("import sys\nsys.path.insert(0, " + repr(str(REPO_ROOT)) + ")\n" + self.FAKE_PIPELINE)
+            script = script.replace('failed = a.fail_first',
+                'from shared.cohort_schedule import stage_admission\n'
+                "with stage_admission('fixture', gpu=True): time.sleep(.05)\nfailed = a.fail_first")
+            with patch.object(self, 'FAKE_PIPELINE', script):
+                status, manifest = self.run_fake_batch(root, '--scheduler', 'resources', '--batch-cpus', '2',
+                    '--batch-memory-gb', '2', '--batch-stage-cpus', '1', '--batch-stage-memory-gb', '1')
+            self.assertEqual(status, 0)
+            self.assertEqual(manifest['scheduler'], 'resources')
+            schedule = Path(manifest['resource_schedule'])
+            events = [json.loads(line) for line in (schedule / 'events.jsonl').read_text().splitlines()]
+            self.assertEqual(len([row for row in events if row['event'] == 'completed']), 3)
+            self.assertEqual(json.loads((schedule / 'state.json').read_text()), dict(active=[], waiting=[]))
+            self.assertTrue(all(item['status'] == 'process_completed' for item in manifest['results']))
+
+    def test_resource_mode_rejects_nested_model_parallelism(self):
+        with tempfile.TemporaryDirectory() as tmp, contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                batch_cli.main(['--batch-root', tmp, '--scheduler', 'resources', '--max-parallel-models', '2'])
+
+    def test_resource_mode_can_omit_jobs_and_all_resource_parameters(self):
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch('shared.cohort_planning.available_cohort_resources', return_value=(16, 64 * 1024**3)):
+            status, manifest = self.run_fake_batch(Path(tmp), '--scheduler', 'resources', jobs=None)
+            self.assertEqual(status, 0)
+            self.assertEqual(manifest['jobs'], 2)
+            self.assertTrue(manifest['resource_plan']['jobs_automatic'])
+            self.assertTrue(manifest['resource_plan']['input_headers']['sub-01']['estimated'])
+            self.assertIn('subject_profiles', json.loads((Path(manifest['resource_schedule']) / 'config.json').read_text()))
 
     def test_actual_cli_blocked_subject_is_not_a_completed_batch(self):
         from test_input_execution_gate import subject

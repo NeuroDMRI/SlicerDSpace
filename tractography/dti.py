@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from shared.cohort_schedule import scheduled_stage
+
 import json
 import math
 import re
@@ -381,6 +383,7 @@ def _run_dipy_dti_tracking(
     }
 
 
+@scheduled_stage('dti_tracking')
 def run_dti_tracking(config: DTITrackingConfig, *, log: Optional[Callable[[str], None]] = None) -> DTITrackingResult:
     """Prepare or execute DTI tractography outputs and manifests."""
 

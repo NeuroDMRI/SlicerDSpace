@@ -120,6 +120,12 @@ Preview the complete job count. Different subjects may run concurrently;
 variants of one subject run sequentially, with isolated outputs.
 
 The basic `scripts/run_batch_pipeline.py` runs one configuration per subject.
+For resource-aware cross-subject stage admission, use `--scheduler resources`
+with automatic resource estimates; omit `--jobs` for automatic subject concurrency,
+or set a limit such as `--jobs 3`. Keep explicit CPU/RAM and stage overrides for
+shared-host policies or pilot-informed adjustments. See `docs/setup/COHORT_RESOURCES.md` for the CLI
+example and limitations. Keep `--max-parallel-models 1` in this mode; do not
+describe it as resident-model inference or per-device VRAM enforcement.
 The `scripts/run_experiments.py` request format runs explicit named variants.
 Its JSON paths are literal absolute paths, not shell variables. Start with one
 level of concurrency; `--jobs` and `--max-parallel-models` multiply resource use.
@@ -137,6 +143,22 @@ other agents. Existing scenes and sessions stay open unless the user requests
 otherwise.
 
 ## Review And Hand Back
+
+For routine regional analyses, pass options directly instead of asking the user
+to prepare JSON. The source manifest is already produced by the subject workflow:
+
+```bash
+"$SLICER" --launch PythonSlicer "$REPO/scripts/analyze_regions.py" \
+  --source-manifest "/path/to/run_orchestration_manifest.json" \
+  --regions 1024 2024 --metrics fa md --output-dir "/path/to/new_region_results"
+```
+
+Names/IDs, repeated region flags and comma-separated lists are supported. Use
+`--inspect` only when the available names/metric/task keys need checking; it
+prints to the terminal without requiring a catalog file. Add `--tissue`,
+`--surface`, `--tractogram`, `--connectome` or tract-selection options as requested.
+Multiple `--source-manifest` paths use the same choices for cohort export. Keep
+JSON requests optional for saved configurations or subject-specific overrides.
 
 Read the exact child run manifest, not a shared-directory scan or latest filename
 guess. Verify task status, requested products, declared output existence, QC

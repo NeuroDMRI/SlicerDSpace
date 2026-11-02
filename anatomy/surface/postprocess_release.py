@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from shared.cohort_schedule import scheduled_stage
+
 import os
 import shutil
 import subprocess
@@ -296,6 +298,7 @@ def stage_postprocess_inputs(
     return subject_input_dir
 
 
+@scheduled_stage('surface_postprocess')
 def run_ddsurfer_postprocess(
     config: DDSurferPostprocessConfig,
     *,
@@ -436,8 +439,10 @@ def _run_current_postprocess(config, subject_root, native_dir, log):
         for kind in ('white', 'pial'):
             command += [f'--{hemi}-{kind}', native_dir / f'{hemi}.{kind}.obj']
     command += ['--runtime' if backend == 'native' else '--freesurfer-home', home]
-    if config.license_file is not None:
-        command += ['--license-file', config.license_file]
+    from shared.surface_license import resolve_surface_license
+    activation = resolve_surface_license(config.license_file, freesurfer_home=home)
+    if activation is not None:
+        command += ['--license-file', activation]
     if config.sphere_seed is not None:
         command += ['--sphere-seed', str(config.sphere_seed)]
     if brain is not None:

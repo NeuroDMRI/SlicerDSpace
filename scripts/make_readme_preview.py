@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Make a moderately sized, normal-speed animated link to the original promo MP4."""
+"""Make a continuous, moderately accelerated README preview of the complete film."""
 
 import argparse
 import hashlib
@@ -11,26 +11,22 @@ import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_WIDTH = 960
+DEFAULT_WIDTH = 800
 DEFAULT_FPS = 10
-DEFAULT_SEGMENTS = ((12, 18), (28, 34), (46, 52), (56, 62))
+DEFAULT_SPEED = 1.5
 
 
-def frame_filters(width, fps, speed, segments=()):
-    selected = ''
-    if segments:
-        selection = '+'.join(f'gte(t,{start})*lt(t,{end})' for start, end in segments)
-        selected = f"select='{selection}',setpts=N/FRAME_RATE/TB,"
-    return selected + f"setpts=PTS/{speed:g},fps={fps},scale={width}:-2:flags=lanczos"
+def frame_filters(width, fps, speed):
+    return f"setpts=(PTS-STARTPTS)/{speed:g},fps={fps},scale={width}:-2:flags=lanczos"
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ffmpeg", default=shutil.which("ffmpeg"))
-    parser.add_argument("--speed", type=float, default=1.0, help="Playback multiplier; 1 preserves normal speed")
+    parser.add_argument("--speed", type=float, default=DEFAULT_SPEED, help="Playback multiplier; default: 1.5; 1 preserves normal speed")
     parser.add_argument("--width", type=int, default=DEFAULT_WIDTH)
     parser.add_argument("--fps", type=int, default=DEFAULT_FPS)
-    parser.add_argument("--full", action="store_true", help="Include the entire film instead of the 24-second preview")
+    parser.add_argument("--full", action="store_true", help=argparse.SUPPRESS)  # Compatibility: full timeline is now always used.
     parser.add_argument("--gifsicle", default=shutil.which("gifsicle"), help="Optional compressor for the README preview")
     parser.add_argument("--lossy", type=int, default=40, help="Gifsicle compression strength; 0 is lossless")
     parser.add_argument("--max-size-mib", type=float, default=20, help="Reject oversized previews without replacing the existing GIF")
@@ -53,8 +49,7 @@ def main():
     if target == source.resolve():
         parser.error("The preview must not overwrite its source video")
     target.parent.mkdir(parents=True, exist_ok=True)
-    segments = () if args.full else DEFAULT_SEGMENTS
-    frames = frame_filters(args.width, args.fps, args.speed, segments)
+    frames = frame_filters(args.width, args.fps, args.speed)
     common = [args.ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-threads", "4"]
     compressed_output = False
     # A separate palette pass avoids buffering the whole animation in the split graph.
@@ -78,7 +73,7 @@ def main():
         preview.replace(target)
     print(json.dumps(dict(file=str(target), bytes=target.stat().st_size,
                           width=args.width, fps=args.fps, max_colors=256, playback_speed=args.speed,
-                          source_ranges_seconds=segments,
+                          timeline="complete film; no excerpts or removed transitions",
                           compression="gifsicle" if compressed_output else "ffmpeg", lossy=args.lossy if compressed_output else 0,
                           source_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
                           preview_sha256=hashlib.sha256(target.read_bytes()).hexdigest()), indent=2))

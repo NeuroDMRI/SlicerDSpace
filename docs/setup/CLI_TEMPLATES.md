@@ -504,6 +504,13 @@ allows exit code 0 but retains the blocked state in the manifest.
   --targets validation,microstructure --microstructure-stages dti --brain-mask-backend provided
 ```
 
+For shared compute-stage admission across active subjects, select
+`--scheduler resources`. Subject concurrency and stage reservations are planned
+automatically; `--jobs 3` optionally sets the active-subject limit. Advanced resource
+overrides are documented in [cohort resource scheduling](COHORT_RESOURCES.md).
+That mode uses one within-subject model at a time and keeps the existing subject
+manifests. It does not keep models resident or combine subjects into inference batches.
+
 Named variants use [the example request](examples/dti_experiments.json).
 Replace its literal absolute paths; JSON does not expand `$VARIABLES`.
 Use a fresh campaign output path. The runner validates all variants before
@@ -532,40 +539,48 @@ shared output directories. The wrapper above writes metadata under
 `$OUTPUTS/<run>/00_run_metadata/<run>_orchestration_manifest.json`. Multiple
 tracking variants and experiments have their own child records.
 
-<!-- cli-template: region-inspect -->
-```bash
-"$SLICER" --launch PythonSlicer "$REPO/scripts/analyze_regions.py" \
-  --inspect "/path/to/run_orchestration_manifest.json" --catalog "/path/to/region_catalog.json"
-```
-
-Choose label IDs and metric/task keys from that catalog, then edit
-[the regional request](examples/region_request.json). Its output directory must
-be fresh. Run only after reviewing that request:
+Pass the region selection and metrics directly; no request file is needed:
 
 <!-- cli-template: region-run -->
 ```bash
 "$SLICER" --launch PythonSlicer "$REPO/scripts/analyze_regions.py" \
-  --request "/path/to/edited_region_request.json"
+  --source-manifest "/path/to/run_orchestration_manifest.json" \
+  --regions 1024 2024 --metrics fa md \
+  --output-dir "/path/to/new_region_results"
 ```
 
 Regional analysis reuses eligible maps, full tracks and matrices; it does not
 refit models. A region absent from the atlas or a failed/stale source is rejected.
 
-Use `selected_regions` for names or IDs. The [A-B template](examples/region_pair_request.json)
-adds `target_regions` and `tract_rule: "endpoint_pair"`; optional `include_regions` and
-`exclude_regions` add waypoints and exclusions. `tissue: true` and `surface: true`
-reuse completed DDSeg and matching cortical postprocessing. Names resolve against
-the current LUT; ambiguous names require an explicit ID.
+`--regions` accepts names or IDs, separated by spaces/commas, or repeated.
+Quote multiword names. `--tissue` and `--surface` add existing DDSeg tissue composition
+and cortical morphology. `--tractogram` and `--connectome` select recorded task keys.
+Use `--tract-rule endpoint_pair --target-regions ...` for A-B tracks; add
+`--include-regions` and `--exclude-regions` for waypoints/exclusions.
+Without an explicit analysis choice, the default metric is FA. Ambiguous names
+require an explicit ID. To view available labels, metric keys and task keys:
 
-The [regional batch template](examples/region_batch.json) applies one request to
-completed subject manifests and writes cohort CSV tables:
+<!-- cli-template: region-inspect -->
+```bash
+"$SLICER" --launch PythonSlicer "$REPO/scripts/analyze_regions.py" \
+  --inspect "/path/to/run_orchestration_manifest.json"
+```
+
+This prints the catalog; `--catalog /path/to/catalog.json` optionally saves it.
+
+For cohort CSV export, give multiple completed subject manifests:
 
 ```bash
 "$SLICER" --launch PythonSlicer "$REPO/scripts/analyze_regions.py" \
-  --batch "/path/to/edited_region_batch.json"
+  --source-manifest "/path/to/subject1/run.json" "/path/to/subject2/run.json" \
+  --regions 1024 2024 --metrics fa md \
+  --output-dir "/path/to/new_region_cohort"
 ```
 
-See [Regional analysis](REGIONAL_ANALYSIS.md) for the report, selection rules and output schema.
+JSON remains optional: `--request` accepts [a regional request](examples/region_request.json)
+or [A-B request](examples/region_pair_request.json); `--batch` accepts
+[per-subject overrides](examples/region_batch.json). Do not mix JSON modes with direct
+analysis flags. See [Regional analysis](REGIONAL_ANALYSIS.md) for all parameters.
 
 <!-- cli-template: report -->
 ```bash

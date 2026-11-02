@@ -50,6 +50,7 @@ from .orchestrator import (
     plan_subject_products,
     run_subject_products,
 )
+from .api import run_subject_workflow
 
 __all__ = [
     "InputValidationConfig",
@@ -94,6 +95,7 @@ __all__ = [
     "prepare_inputs",
     "run_environment_doctor",
     "run_subject_products",
+    "run_subject_workflow",
     "summarize_environment_doctor",
     "validate_subject_inputs",
     "load_sample_data_registry",

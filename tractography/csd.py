@@ -7,6 +7,8 @@ the same commands when ``execute=True`` and MRtrix3 is available on PATH.
 
 from __future__ import annotations
 
+from shared.cohort_schedule import scheduled_stage
+
 import json
 import subprocess
 import time
@@ -537,6 +539,7 @@ def export_tck_to_trk(tck_path: Path, reference_image_path: Path, trk_path: Path
     return trk
 
 
+@scheduled_stage('csd_act')
 def run_csd_act(config: CSDActConfig, *, log: Optional[Callable[[str], None]] = None) -> CSDActResult:
     _validate_config(config)
     output_dir = config.output_dir.expanduser().resolve()

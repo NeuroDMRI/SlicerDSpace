@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import concurrent.futures
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -196,7 +197,7 @@ def _manifest_identity(path: Path):
         return None
 
 
-def _run_subject(command: list[str], subject: BatchSubject, log_dir: Path) -> SubjectRunResult:
+def _run_subject(command: list[str], subject: BatchSubject, log_dir: Path, *, environment=None) -> SubjectRunResult:
     log_dir.mkdir(parents=True, exist_ok=True)
     safe_id = "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in subject.subject_id)
     stdout_log = log_dir / f"{safe_id}.stdout.log"
@@ -210,7 +211,10 @@ def _run_subject(command: list[str], subject: BatchSubject, log_dir: Path) -> Su
     # output in the batch driver's memory, and logs are readable during a run.
     with stdout_log.open("w", encoding="utf-8") as stdout, stderr_log.open("w", encoding="utf-8") as stderr:
         try:
-            completed = subprocess.run(command, stdout=stdout, stderr=stderr, **text_subprocess_kwargs())
+            options = text_subprocess_kwargs()
+            if environment is not None:
+                options['env'] = {**os.environ, **environment, 'SLICERDSPACE_COHORT_SUBJECT': subject.subject_id}
+            completed = subprocess.run(command, stdout=stdout, stderr=stderr, **options)
         except OSError as exc:
             stderr.write(f"Could not start subject process: {exc}\n")
             completed = subprocess.CompletedProcess(command, 127)
@@ -297,7 +301,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--subject-list", type=Path, help="Optional text file listing subject directories or relative IDs.")
     parser.add_argument("--output-root", type=Path, help="Batch output root. Each subject writes under <output-root>/<subject-id>.")
     parser.add_argument("--run-name", default="Test1", help="Run name forwarded to each subject. Defaults to Test1.")
-    parser.add_argument("--jobs", "--batch-size", dest="jobs", type=_parse_jobs, default=1, help="Concurrent subject count.")
+    parser.add_argument("--jobs", "--batch-size", dest="jobs", type=_parse_jobs,
+                        help="Concurrent subjects; automatic in resource mode, otherwise 1.")
+    parser.add_argument('--scheduler', choices=('subjects', 'resources'), default='subjects',
+                        help='resources adds shared stage admission across active subjects; jobs remains the subject limit.')
+    parser.add_argument('--batch-cpus', type=_parse_jobs, help='Total declared stage CPU budget; default: available CPUs.')
+    parser.add_argument('--batch-memory-gb', type=float, help='Total declared RAM budget in GiB; default: 70%% of available RAM.')
+    parser.add_argument('--batch-stage-cpus', type=_parse_jobs, help='Override automatic per-stage CPU reservations.')
+    parser.add_argument('--batch-stage-memory-gb', type=float, help='Override header/model-based stage RAM estimates in GiB.')
+    parser.add_argument('--batch-gpu-slots', type=_parse_jobs, default=1,
+                        help='Global GPU-capable stage slots, not GPU assignment or VRAM enforcement; default: 1.')
     parser.add_argument("--execute", action="store_true", help="Actually execute each subject. Omit for dry-run planning.")
     parser.add_argument(
         "--arrange-inputs",
@@ -323,6 +336,9 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args, forwarded_args = parser.parse_known_args(argv)
+    if args.scheduler == 'resources':
+        if int(_command_option(forwarded_args, '--max-parallel-models', '1')) != 1:
+            parser.error('Resource scheduling currently requires --max-parallel-models 1 to avoid nested reservations')
 
     try:
         subjects, skipped = discover_subjects(
@@ -346,6 +362,28 @@ def main(argv: list[str] | None = None) -> int:
     log_dir = args.log_dir.expanduser().resolve() if args.log_dir else manifest_path.expanduser().resolve().parent / "logs"
 
     runnable_subjects = [subject for subject in subjects if subject.mode != "missing"]
+    resource_plan = None
+    if args.scheduler == 'resources':
+        from shared.cohort_planning import plan_cohort
+        try:
+            resource_plan = plan_cohort(runnable_subjects, forwarded_args, jobs=args.jobs,
+                cpu_budget=args.batch_cpus, memory_gb=args.batch_memory_gb,
+                stage_cpus=args.batch_stage_cpus, stage_memory_gb=args.batch_stage_memory_gb,
+                gpu_slots=args.batch_gpu_slots)
+        except (ValueError, ImportError) as exc:
+            parser.error(str(exc))
+        args.jobs = resource_plan['jobs']
+        print(f"[Batch] Resource plan: up to {args.jobs} subjects; "
+              f"{resource_plan['cpu_budget']} CPU threads, {resource_plan['memory_gb']:.1f} GiB RAM; "
+              f"{resource_plan['gpu_slots']} GPU-capable stage slot(s).", flush=True)
+        forwarded_args += ['--max-parallel-models', '1']
+        if not _command_option(forwarded_args, '--microstructure-free-water-n-jobs', ''):
+            forwarded_args += ['--microstructure-free-water-n-jobs', '1']
+        for flag in ('--surface-cpu-threads', '--mrtrix-nthreads', '--preprocessing-eddy-threads'):
+            if not _command_option(forwarded_args, flag, ''):
+                forwarded_args += [flag, str(resource_plan['stage_cpus'])]
+    else:
+        args.jobs = args.jobs or 1
     subject_commands = [
         (
             subject,
@@ -376,6 +414,20 @@ def main(argv: list[str] | None = None) -> int:
     ]
 
     result_payloads: list[dict[str, object]] = []
+    schedule_dir, child_environment = None, None
+    if args.scheduler == 'resources':
+        from shared.cohort_schedule import create_schedule, ENV
+        from uuid import uuid4
+        try:
+            schedule_dir = create_schedule(manifest_path.parent / ('schedule_' + uuid4().hex),
+                **{key: resource_plan[key] for key in ('cpu_budget', 'memory_gb', 'stage_cpus',
+                       'stage_memory_gb', 'gpu_slots', 'subject_profiles')}, planning=resource_plan)
+        except (ValueError, ImportError) as exc:
+            parser.error(str(exc))
+        child_environment = {ENV: str(schedule_dir), 'SLICERDSPACE_STAGE_CPUS': str(resource_plan['stage_cpus'])}
+        child_environment.update({key: str(resource_plan['stage_cpus']) for key in (
+            'OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'MKL_NUM_THREADS',
+            'ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS', 'MRTRIX_NTHREADS')})
     failures = 0
     started = time.time()
     if subject_commands:
@@ -388,7 +440,8 @@ def main(argv: list[str] | None = None) -> int:
                     subject, command = next(pending_subjects)
                 except StopIteration:
                     return False
-                future_to_subject[executor.submit(_run_subject, command, subject, log_dir)] = subject
+                kwargs = {'environment': child_environment} if child_environment is not None else {}
+                future_to_subject[executor.submit(_run_subject, command, subject, log_dir, **kwargs)] = subject
                 return True
 
             for _ in range(min(args.jobs, len(subject_commands))):
@@ -448,6 +501,9 @@ def main(argv: list[str] | None = None) -> int:
         "run_name": args.run_name,
         "execute": bool(args.execute),
         "jobs": args.jobs,
+        "scheduler": args.scheduler,
+        "resource_schedule": str(schedule_dir) if schedule_dir else None,
+        "resource_plan": resource_plan,
         "forwarded_args": forwarded_args,
         "arrange_inputs": args.arrange_inputs,
         "subjects": [

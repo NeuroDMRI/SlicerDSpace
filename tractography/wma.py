@@ -7,6 +7,8 @@ running long tractography clustering jobs.
 
 from __future__ import annotations
 
+from shared.cohort_schedule import scheduled_stage
+
 import json
 import os
 import shutil
@@ -719,6 +721,7 @@ def validate_wma_org_inputs(config: WMAOrgAtlasConfig) -> None:
                                'cannot run natively. Run Advanced settings > Windows runtime setup.')
 
 
+@scheduled_stage('wma')
 def run_wma_org_atlas(
     config: WMAOrgAtlasConfig,
     *,

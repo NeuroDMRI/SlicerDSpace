@@ -42,7 +42,7 @@ SlicerDSpace 将无需 T1 加权影像的解剖重建、微结构定量和白质
   <img src="docs/assets/readme/SlicerDSpace_preview.gif" alt="SlicerDSpace 宣传视频动态预览" width="100%">
 </a>
 
-24 秒原速预览 · [观看完整视频（MP4，1 分 12 秒）](docs/site/media/SlicerDSpace_promo_1080p.mp4) ·
+完整 48 秒预览（1.5 倍速） · [观看完整视频（MP4，1 分 12 秒）](docs/site/media/SlicerDSpace_promo_1080p.mp4) ·
 [网页播放器](https://chengjinlii.github.io/SlicerDSpace/#film)
 
 ---

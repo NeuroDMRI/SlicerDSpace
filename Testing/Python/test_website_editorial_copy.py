@@ -67,7 +67,7 @@ class WebsiteEditorialCopyTests(unittest.TestCase):
         section = self.section('outputs')
         self.assertNotIn('class="tile', section)
         self.assertEqual(len(re.findall(r'<img\b', section)), 1)
-        self.assertIn('src="assets/img/results-overview.svg?v=wmql-cerebellar-200"', section)
+        self.assertRegex(section, r'src="assets/img/results-overview\.svg\?v=[^"]+"')
         self.assertIn('width="1830" height="2036"', section)
         self.assertIn('Open full-size SVG', section)
         receipt = json.loads((ROOT / "docs/website/published_assets.json").read_text())

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from shared.cohort_schedule import scheduled_stage
+
 from collections import deque
 from dataclasses import dataclass
 import hashlib
@@ -274,6 +276,7 @@ def _run(command, env, log):
     return "\n".join(tail)
 
 
+@scheduled_stage('brain_mask', gpu=True)
 def generate_brain_mask(dwi_path: Path, bval_path: Path, bvec_path: Path, output_mask_path: Path,
                         *, config: BrainMaskConfig | None = None, force: bool = False,
                         log: Callable[[str], None] | None = None) -> dict[str, Any]:

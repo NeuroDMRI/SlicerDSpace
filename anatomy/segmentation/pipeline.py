@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from shared.cohort_schedule import scheduled_stage
+
 from dataclasses import replace
 from pathlib import Path
 
@@ -75,6 +77,7 @@ def _save_like_mask(data: np.ndarray, mask: OrientedMask, path: Path) -> None:
     nib.save(image, path.as_posix())
 
 
+@scheduled_stage('segmentation', gpu=True)
 def run_ddseg(cfg: DDSegConfig) -> None:
     from shared.environment import resolve_auto_torch_device
     requested_device = cfg.device

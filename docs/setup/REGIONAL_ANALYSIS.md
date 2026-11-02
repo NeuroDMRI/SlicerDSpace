@@ -132,32 +132,57 @@ fit validation or human anatomical approval.** Coverage and anatomical priors st
 
 ## CLI And Verification
 
-The same backend is available outside the GUI:
+Routine analysis uses direct arguments, without a request file:
 
 ```bash
-python scripts/analyze_regions.py --inspect /absolute/run_orchestration_manifest.json \
-  --catalog /absolute/catalog.json
-python scripts/analyze_regions.py --request /absolute/request.json
+python scripts/analyze_regions.py --source-manifest /absolute/run_orchestration_manifest.json \
+  --regions 1024 2024 --metrics fa md --output-dir /absolute/new_region_results
 python scripts/validate_region_analysis.py /absolute/region_analysis_manifest.json \
   --report /absolute/independent_check.json
 ```
 
-A request specifies `source_manifest`, positive integer `selected_labels`,
-available `metrics` keys, optional task keys `tractogram` and `connectome`,
-`tract_rule`, and a fresh `output_dir`. Optional atlas/LUT overrides and catalog
-hashes are supported. The GUI writes this request automatically.
+The source manifest is an existing workflow output, not a new configuration file.
+`--regions` accepts IDs or names, including quoted multiword names, comma-separated
+values and repeated flags. The default metric is FA when no analysis type is
+specified; selecting only tissue, surface, tractography or connectivity does not
+implicitly add scalar metrics. Metrics must be present and QC-eligible in the run.
 
-`selected_regions` also accepts names/IDs; `target_regions`, `include_regions` and `exclude_regions`
-use the same format. Aliases resolve against the current atlas/LUT; ambiguous names require explicit IDs.
-Use `"tissue": true` and `"surface": true` for existing segmentation and cortical products.
-See the [A-B request template](examples/region_pair_request.json).
+| Option | Purpose |
+| --- | --- |
+| `--source-manifest RUN [RUN ...]` | One run, or several runs for cohort export; may be repeated |
+| `--regions NAME_OR_ID [...]` | Selected anatomical regions |
+| `--metrics fa md [...]` | Available scalar metric keys, e.g. `fwf`, `noddi_ndi`, `noddi_odi`, `dki_mk` |
+| `--tissue`, `--surface` | Include tissue composition and matching cortical morphology |
+| `--tractogram TASK` | Source task key, e.g. `tractography.ukf` |
+| `--tract-rule RULE` | `through_any` (default), `through_all`, `endpoint_any`, `endpoint_both`, `endpoint_pair` |
+| `--target-regions [...]` | Target group for A-B endpoint selection |
+| `--include-regions [...]`, `--exclude-regions [...]` | Required waypoints and excluded regions |
+| `--connectome TASK` | Source task key, e.g. `connectome.streamline_count` |
+| `--atlas FILE`, `--lut FILE` | Optional atlas and label-name overrides |
+| `--output-dir DIR` | Fresh result directory, or cohort root with several sources |
 
-Apply a shared request to multiple completed subject runs with:
+For example, select UKF tracks connecting the precentral regions:
 
 ```bash
-python scripts/analyze_regions.py --batch /absolute/region_batch.json
+python scripts/analyze_regions.py --source-manifest /absolute/run_orchestration_manifest.json \
+  --regions 1024 --target-regions 2024 --tractogram tractography.ukf \
+  --tract-rule endpoint_pair --output-dir /absolute/new_region_tracks
 ```
 
+Use `--inspect /absolute/run_orchestration_manifest.json` to print available labels,
+metrics and task keys when needed. `--catalog /absolute/catalog.json` optionally
+saves that inventory. Names resolve against the current LUT; ambiguous names require IDs.
+
+Apply the same options to multiple completed subject runs:
+
+```bash
+python scripts/analyze_regions.py --source-manifest /absolute/subject1/run.json /absolute/subject2/run.json \
+  --regions 1024 2024 --metrics fa md --output-dir /absolute/new_region_cohort
+```
+
+For advanced saved configurations, `--request /absolute/request.json` and
+`--batch /absolute/region_batch.json` remain supported; do not combine these JSON modes
+with direct analysis flags. The GUI creates its request automatically.
 The [batch template](examples/region_batch.json) contains a shared `request`, subject manifests
 (with optional atlas/LUT overrides) and a fresh output directory. Subjects run sequentially without
 refitting. `cohort_*.csv` long tables retain subject IDs, sources and atlas hashes. Selected atlas

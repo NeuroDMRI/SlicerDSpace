@@ -105,7 +105,7 @@ protection, run:
 ```bash
 GITHUB_TOKEN=<token> \
   python3 scripts/check_github_ci_status.py \
-  --repository ChengjinLii/SlicerDSpace \
+  --repository NeuroDMRI/SlicerDSpace \
   --ref $(git rev-parse HEAD) \
   --branch main
 ```

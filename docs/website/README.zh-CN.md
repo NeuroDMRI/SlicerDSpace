@@ -4,7 +4,7 @@
 
 **静态网站素材与维护指南**
 
-[项目](../../README.zh-CN.md) | [网站](https://chengjinlii.github.io/SlicerDSpace/) | [原始记录](UPSTREAM_README.md) | [English](README.md)
+[项目](../../README.zh-CN.md) | [网站](https://neurodmri.github.io/SlicerDSpace/) | [原始记录](UPSTREAM_README.md) | [English](README.md)
 
 </div>
 
@@ -112,14 +112,14 @@ Get started 提供安装路径、输入准备、
 
 ## 发布方式
 
-发布源为独立 [`gh-pages` 分支](https://github.com/ChengjinLii/SlicerDSpace/tree/gh-pages)
+发布源为独立 [`gh-pages` 分支](https://github.com/NeuroDMRI/SlicerDSpace/tree/gh-pages)
 的根目录，仅包含本地检查通过的 **`docs/site/` 快照**，包括 `index.html`、`zh.html`
 和 `.nojekyll`。软件源码、内部文档、模型及独立的 `paper-latex/` 仓库不进入
 发布内容；网站文件也不进入 Slicer 运行包。
 
 发布分支从全新的根提交开始，不恢复旧的软件或论文历史，不要将这个生成分支合并回 `main`。
 
-仓库所有者需先在 [Settings > Pages](https://github.com/ChengjinLii/SlicerDSpace/settings/pages)
+仓库所有者需先在 [Settings > Pages](https://github.com/NeuroDMRI/SlicerDSpace/settings/pages)
 选择 **Source: Deploy from a branch**、**Branch: gh-pages**、**Folder: /(root)**，
 然后保存。这个一次性的仓库设置与推送分支是两个步骤；当前仓库连接支持内容操作，
 未开放 Pages 管理接口。
@@ -132,7 +132,7 @@ Get started 提供安装路径、输入准备、
 GitHub 自身仍会执行 Pages 的构建和部署，可能显示在 Actions 界面。
 以公网地址成功响应且内容与快照一致作为上线依据。
 
-预期地址为 `https://chengjinlii.github.io/SlicerDSpace/`。分享标签、canonical
+预期地址为 `https://neurodmri.github.io/SlicerDSpace/`。分享标签、canonical
 URL 与 404 返回链接沿用该地址。不要设置 `main /docs`，否则会公开发布不属于
 网站的内部文档。更换域名时按原始记录同步更新这些地址。
 

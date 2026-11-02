@@ -28,7 +28,7 @@
       "sha256": "531f481bd677396f8b4c816f0be076a35249f2991cb4d4456b22cbc1b583c510",
       "size_bytes": 29657074,
       "urls": [
-        "https://raw.githubusercontent.com/ChengjinLii/DDSurfer/8a8699c0fda32be7e0a3cbca2903680b9f0c950b/postprocessing/assets/atlas.tar.gz"
+        "https://raw.githubusercontent.com/NeuroDMRI/DDSurfer/8a8699c0fda32be7e0a3cbca2903680b9f0c950b/postprocessing/assets/atlas.tar.gz"
       ],
       "redistribution": "with-notice",
       "license": "FreeSurfer Software License Agreement and included third-party notices",

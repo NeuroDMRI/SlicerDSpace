@@ -150,7 +150,7 @@ only after the final readiness check succeeds.
 For Agent-assisted installation, the complete repository Skill includes
 `prepare_in_slicer.py`: a plan/export and GUI preparation helper that keeps the
 real confirmation dialog. It never starts patient analysis or accepts terms
-automatically. See the [Agent setup reference](https://github.com/ChengjinLii/SlicerDSpace/blob/main/.agents/skills/slicerdspace/references/setup.md).
+automatically. See the [Agent setup reference](https://github.com/NeuroDMRI/SlicerDSpace/blob/main/.agents/skills/slicerdspace/references/setup.md).
 
 ---
 

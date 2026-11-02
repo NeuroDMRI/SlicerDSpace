@@ -387,7 +387,7 @@ async function runViewport(browser, origin, name, width, height, opts) {
     document.querySelectorAll('#film .meta-row a').length === 2 &&
     document.querySelector('#film .meta-row').firstElementChild.matches('span') &&
     document.querySelector('#film .meta-row').children[1].matches('a.source-link') &&
-    document.querySelector('#film .source-link').href === 'https://github.com/ChengjinLii/SlicerDSpace' &&
+    document.querySelector('#film .source-link').href === 'https://github.com/NeuroDMRI/SlicerDSpace' &&
     document.querySelector('#film .source-link').textContent.trim() === 'Source code' &&
     !!document.querySelector('#film .source-link svg[aria-hidden="true"]') &&
     document.querySelector('#film .meta-row span').textContent === 'Diffusion MRI workflows in 3D Slicer.' &&
@@ -700,7 +700,7 @@ async function runSkills(browser, origin) {
       await skills.locator('[data-code]').filter({ has: page.locator('#' + id) }).locator('.copy').click();
       const copied = await page.evaluate(() => navigator.clipboard.readText());
       record(copied === await page.locator('#' + id).textContent() &&
-        copied.includes('https://github.com/ChengjinLii/SlicerDSpace/blob/main/.agents/skills/slicerdspace/SKILL.md'),
+        copied.includes('https://github.com/NeuroDMRI/SlicerDSpace/blob/main/.agents/skills/slicerdspace/SKILL.md'),
         `skills ${width}px: ${id} copies intact with its Skill URL`);
     }
     await skills.screenshot({ path: path.join(OUT, `skills-${width}.png`) });

@@ -30,7 +30,7 @@ class WebsiteLocaleTests(unittest.TestCase):
             self.assertIn('href="index.html"', source)
             self.assertIn('href="zh.html"', source)
             self.assertEqual(source.count('aria-current="page"'), 1)
-            self.assertIn('hreflang="zh-CN" href="https://chengjinlii.github.io/SlicerDSpace/zh.html"', source)
+            self.assertIn('hreflang="zh-CN" href="https://neurodmri.github.io/SlicerDSpace/zh.html"', source)
 
     def test_translations_keep_images_ids_methods_and_references(self):
         english = (SITE / 'index.html').read_text(encoding='utf-8')
@@ -59,7 +59,7 @@ class WebsiteLocaleTests(unittest.TestCase):
 
     def test_canonical_url_uses_the_localized_page(self):
         chinese = (SITE / 'zh.html').read_text(encoding='utf-8')
-        self.assertIn('rel="canonical" href="https://chengjinlii.github.io/SlicerDSpace/zh.html"', chinese)
+        self.assertIn('rel="canonical" href="https://neurodmri.github.io/SlicerDSpace/zh.html"', chinese)
 
     def test_website_generator_is_not_shipped_in_the_extension_runtime(self):
         from scripts.extension_runtime.runtime_resources import runtime_files

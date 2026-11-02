@@ -15,7 +15,7 @@ asset host after redistribution terms are confirmed.
 
 ## Target Layout
 
-- Code repository: `ChengjinLii/SlicerDSpace`
+- Code repository: `NeuroDMRI/SlicerDSpace`
 - Asset repository or record: `ChengjinLii/SlicerDSpace-models`, Hugging Face,
   Zenodo, OSF, Figshare or institutional object storage
 - Source of truth for paths, sizes and checksums:
@@ -62,7 +62,7 @@ python3 scripts/export_model_asset_mirror.py \
 9. Validate from a clean checkout:
 
 ```bash
-GIT_LFS_SKIP_SMUDGE=1 git clone git@github.com:ChengjinLii/SlicerDSpace.git /tmp/slicerdsurfer-url-smoke
+GIT_LFS_SKIP_SMUDGE=1 git clone git@github.com:NeuroDMRI/SlicerDSpace.git /tmp/slicerdsurfer-url-smoke
 cd /tmp/slicerdsurfer-url-smoke
 python3 scripts/download_model_assets.py \
   --profile core \

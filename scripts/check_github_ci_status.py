@@ -17,7 +17,7 @@ from typing import Any
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_REPOSITORY = "ChengjinLii/SlicerDSpace"
+DEFAULT_REPOSITORY = "NeuroDMRI/SlicerDSpace"
 EXPECTED_REQUIRED_CHECK = "CI / fast-checks"
 STALE_REQUIRED_CHECK_TOKENS = (
     "fresh-clone-smoke",

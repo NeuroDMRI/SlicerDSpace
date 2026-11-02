@@ -38,7 +38,7 @@ WMQL 查询、WSL 辅助文件及模型资源清单不会因此删除。
 sparse checkout 的 Git。Bash、Git Bash 或 PowerShell 均可执行：
 
 ```bash
-git clone --filter=blob:none --no-checkout --depth 1 https://github.com/ChengjinLii/SlicerDSpace.git
+git clone --filter=blob:none --no-checkout --depth 1 https://github.com/NeuroDMRI/SlicerDSpace.git
 cd SlicerDSpace
 git show HEAD:scripts/extension_runtime/runtime_checkout.txt | git sparse-checkout set --no-cone --stdin
 git checkout

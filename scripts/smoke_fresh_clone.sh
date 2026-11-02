@@ -16,7 +16,7 @@ if [[ -z "${default_ref}" || "${default_ref}" == "HEAD" ]]; then
   default_ref="$(git -C "${source_repo_root}" rev-parse HEAD 2>/dev/null || true)"
 fi
 
-SMOKE_REPO_URL="${SMOKE_REPO_URL:-${default_repo_url:-https://github.com/ChengjinLii/SlicerDSpace.git}}"
+SMOKE_REPO_URL="${SMOKE_REPO_URL:-${default_repo_url:-https://github.com/NeuroDMRI/SlicerDSpace.git}}"
 SMOKE_REF="${SMOKE_REF:-${default_ref:-main}}"
 SMOKE_ROOT="${SMOKE_ROOT:-/tmp/slicerdsurfer-fresh-clone-smoke}"
 SMOKE_ASSET_PROFILE="${SMOKE_ASSET_PROFILE:-core}"

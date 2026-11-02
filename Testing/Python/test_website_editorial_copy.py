@@ -119,7 +119,7 @@ class WebsiteEditorialCopyTests(unittest.TestCase):
         meta = re.search(r'<p class="meta-row">(.*?)</p>', film, re.S).group(1)
         self.assertEqual(len(re.findall(r'<a\b', meta)), 2)
         self.assertIn('class="source-link"', meta)
-        self.assertIn('https://github.com/ChengjinLii/SlicerDSpace', meta)
+        self.assertIn('https://github.com/NeuroDMRI/SlicerDSpace', meta)
         self.assertIn('Download video', meta)
         self.assertIn('<span>Diffusion MRI workflows in 3D Slicer.</span>', meta)
         self.assertLess(meta.index('Diffusion MRI workflows'), meta.index('Download video'))
@@ -202,7 +202,7 @@ class WebsiteEditorialCopyTests(unittest.TestCase):
         for relative in ('.agents/skills/slicerdspace/SKILL.md',
                          '.agents/skills/slicerdspace/references/usage.md',
                          'docs/setup/CLI_TEMPLATES.md'):
-            self.assertIn('href="https://github.com/ChengjinLii/SlicerDSpace/blob/main/' + relative + '"', section)
+            self.assertIn('href="https://github.com/NeuroDMRI/SlicerDSpace/blob/main/' + relative + '"', section)
             self.assertTrue((ROOT / relative).is_file())
 
     def test_output_heading_and_cli_are_direct_and_visible(self):

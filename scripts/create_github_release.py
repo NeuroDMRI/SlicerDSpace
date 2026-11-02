@@ -23,7 +23,7 @@ from typing import Any
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_REPOSITORY = "ChengjinLii/SlicerDSpace"
+DEFAULT_REPOSITORY = "NeuroDMRI/SlicerDSpace"
 DEFAULT_TAG = "v0.1.0"
 DEFAULT_TITLE = "SlicerDSpace v0.1.0"
 DEFAULT_NOTES = REPO_ROOT / "docs" / "release" / "GITHUB_RELEASE_DRAFT_v0.1.0.md"

@@ -1,14 +1,14 @@
 # SlicerDSpace extension description for Slicer ExtensionsIndex submission.
 # Keep `depends` synchronized with top-level CMakeLists.txt EXTENSION_DEPENDS.
 scm git
-scmurl https://github.com/ChengjinLii/SlicerDSpace.git
+scmurl https://github.com/NeuroDMRI/SlicerDSpace.git
 scmrevision main
 depends SlicerDMRI PyTorch
 build_subdirectory .
-homepage https://github.com/ChengjinLii/SlicerDSpace
+homepage https://github.com/NeuroDMRI/SlicerDSpace
 category Diffusion
 contributors Chengjin Li
 description Integrated diffusion MRI workflows for anatomical reconstruction, tractography, bundle analysis, and structural connectivity.
-iconurl https://raw.githubusercontent.com/ChengjinLii/SlicerDSpace/main/Resources/Icons/SlicerDSpace.png
-screenshoturls https://raw.githubusercontent.com/ChengjinLii/SlicerDSpace/main/docs/images/slicerdds-compact-en.png
+iconurl https://raw.githubusercontent.com/NeuroDMRI/SlicerDSpace/main/Resources/Icons/SlicerDSpace.png
+screenshoturls https://raw.githubusercontent.com/NeuroDMRI/SlicerDSpace/main/docs/images/slicerdds-compact-en.png
 enabled 1

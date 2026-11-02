@@ -6,12 +6,12 @@ project(SlicerDSpace)
 
 #-----------------------------------------------------------------------------
 # Extension meta-information
-set(EXTENSION_HOMEPAGE "https://github.com/ChengjinLii/SlicerDSpace")
+set(EXTENSION_HOMEPAGE "https://github.com/NeuroDMRI/SlicerDSpace")
 set(EXTENSION_CATEGORY "Diffusion")
 set(EXTENSION_CONTRIBUTORS "Chengjin Li")
 set(EXTENSION_DESCRIPTION "Integrated diffusion MRI workflows for anatomical reconstruction, tractography, bundle analysis, and structural connectivity.")
-set(EXTENSION_ICONURL "https://raw.githubusercontent.com/ChengjinLii/SlicerDSpace/main/Resources/Icons/SlicerDSpace.png")
-set(EXTENSION_SCREENSHOTURLS "https://raw.githubusercontent.com/ChengjinLii/SlicerDSpace/main/docs/images/slicerdds-compact-en.png")
+set(EXTENSION_ICONURL "https://raw.githubusercontent.com/NeuroDMRI/SlicerDSpace/main/Resources/Icons/SlicerDSpace.png")
+set(EXTENSION_SCREENSHOTURLS "https://raw.githubusercontent.com/NeuroDMRI/SlicerDSpace/main/docs/images/slicerdds-compact-en.png")
 set(EXTENSION_DEPENDS SlicerDMRI PyTorch)
 
 #-----------------------------------------------------------------------------

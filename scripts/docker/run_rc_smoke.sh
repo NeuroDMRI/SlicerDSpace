@@ -6,7 +6,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 IMAGE_NAME="${IMAGE_NAME:-slicerddsurfer-rc-smoke:ubuntu22.04}"
 DEFAULT_REPO_URL="$(git -C "$REPO_ROOT" remote get-url origin 2>/dev/null || true)"
-REPO_URL="${REPO_URL:-${DEFAULT_REPO_URL:-https://github.com/ChengjinLii/SlicerDSpace.git}}"
+REPO_URL="${REPO_URL:-${DEFAULT_REPO_URL:-https://github.com/NeuroDMRI/SlicerDSpace.git}}"
 REPO_REF="${REPO_REF:-main}"
 HOST_SOFTWARE_ROOT="${HOST_SOFTWARE_ROOT:-/data/chengjin/software}"
 HOST_SLICER_LAUNCHER="${HOST_SLICER_LAUNCHER:-$HOST_SOFTWARE_ROOT/run-slicer.sh}"

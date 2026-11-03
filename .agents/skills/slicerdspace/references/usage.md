@@ -187,3 +187,13 @@ Generate the subject report from the recorded manifest when needed. Return the
 selected methods/source, actual outcome, output/manifest/report/log paths,
 runtime/device and unresolved review items. For failure, report the first
 actionable cause and stop blind retries or method substitution.
+## Optional Batch CPU Calibration
+
+Use the same subject CLI targets and algorithm subsets for batches; do not
+expand a user's selected models into the full pipeline. `--scheduler adaptive`
+supports optional `--autotune` on final preprocessed NIfTI inputs, or reuse of a
+validated `--compute-profile`. Explain the extra calibration cost and confirm it
+before starting. Explicit thread, MK-Curve worker and chunk parameters take
+precedence. Never describe a sampled calibration as full-cohort speedup or a
+globally optimal thread count. See `docs/setup/CLI_TEMPLATES.md` for examples,
+unsupported-input handling and full WMA calibration requirements.

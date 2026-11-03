@@ -16,6 +16,7 @@ from typing import Any, Callable, Optional
 
 from shared.pipeline import RawInputBundle
 from shared.cohort_schedule import scheduled_stage
+from shared.numeric_threads import dki_threads
 
 DKI_METRICS = ("mk", "ak", "rk", "kfa", "mkt", "rtk")
 DKI_FIT_METHODS = ("WLS", "OLS", "MKCURVE", "MKCURVE_MATLAB")
@@ -39,6 +40,10 @@ class DkiConfig:
     display_min_kurtosis: float = 0.0
     display_max_kurtosis: float = 3.0
     dense_metrics: bool = True
+    num_threads: int | None = None
+    mkcurve_workers: int = 1
+    mkcurve_voxels_per_chunk: int = 64
+    mkcurve_chunk_schedule: str = 'dynamic'
 
 
 @dataclass(frozen=True)
@@ -96,6 +101,13 @@ def _validate_options(config: DkiConfig) -> None:
     if not config.subject_id.strip() or config.subject_id != config.raw_input_bundle.subject_id:
         raise ValueError("DKI subject_id must match the input bundle")
     _method(config)
+    for name in ('voxels_per_chunk', 'mkcurve_workers', 'mkcurve_voxels_per_chunk'):
+        if type(getattr(config, name)) is not int or getattr(config, name) < 1:
+            raise ValueError('DKI ' + name + ' must be a positive integer')
+    if config.num_threads is not None and (type(config.num_threads) is not int or config.num_threads < 1):
+        raise ValueError('DKI num_threads must be a positive integer')
+    if config.mkcurve_chunk_schedule not in ('dynamic', 'ordered'):
+        raise ValueError('MK-Curve chunk schedule must be dynamic or ordered')
     for name in ("b0_threshold", "shell_tolerance", "max_bvalue", "display_min_kurtosis", "display_max_kurtosis"):
         if not np.isfinite(getattr(config, name)):
             raise ValueError(f"DKI {name} must be finite")
@@ -291,6 +303,9 @@ def expected_dki_signature(config: DkiConfig) -> dict[str, Any]:
             "b0_threshold": config.b0_threshold, "shell_tolerance": config.shell_tolerance,
             "max_bvalue": config.max_bvalue, "min_directions_per_shell": config.min_directions_per_shell,
             "voxels_per_chunk": config.voxels_per_chunk,
+            "num_threads": config.num_threads, "mkcurve_workers": config.mkcurve_workers,
+            "mkcurve_voxels_per_chunk": config.mkcurve_voxels_per_chunk,
+            "mkcurve_chunk_schedule": config.mkcurve_chunk_schedule,
             "display_bounds": [config.display_min_kurtosis, config.display_max_kurtosis],
             "raw_metric_bounds": None, "smoothing": False, "nrmse_normalization": "fitted_S0",
         },
@@ -525,6 +540,7 @@ def _compute_maps(config: DkiConfig, paths: dict[str, Path], log):
 
 
 @scheduled_stage(lambda config: 'microstructure_mkcurve' if _method(config).startswith('MKCURVE') else 'microstructure_dki')
+@dki_threads
 def run_dki(config: DkiConfig, log: Optional[Callable[[str], None]] = None) -> DkiResult:
     """Fit only eligible acquisitions, with bounded signal chunks and disk-backed maps."""
     paths = dki_output_paths(config.subject_id, config.output_dir)
@@ -553,7 +569,9 @@ def run_dki(config: DkiConfig, log: Optional[Callable[[str], None]] = None) -> D
                 backend_options = {"matlab_executable": config.matlab_executable, "mkcurve_root": config.mkcurve_root}
             else:
                 from microstructure.mkcurve import run_mkcurve
-                backend_options = {"voxels_per_chunk": min(config.voxels_per_chunk, 64)}
+                backend_options = {"voxels_per_chunk": config.mkcurve_voxels_per_chunk,
+                                   "num_workers": config.mkcurve_workers, "worker_threads": config.num_threads,
+                                   "chunk_schedule": config.mkcurve_chunk_schedule}
 
             bundle = config.raw_input_bundle
             mkcurve = run_mkcurve(

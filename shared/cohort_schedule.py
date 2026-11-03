@@ -26,7 +26,8 @@ def mark_reused(stage):
 
 
 def create_schedule(directory, *, cpu_budget, memory_gb, stage_cpus, stage_memory_gb, gpu_slots=1,
-                    subject_profiles=None, planning=None, policy='first_fit', history_path=None, io_slots=2):
+                    subject_profiles=None, planning=None, policy='first_fit', history_path=None, io_slots=2,
+                    ready_order=None):
     import psutil
     values = (cpu_budget, memory_gb, stage_cpus, stage_memory_gb, gpu_slots, io_slots)
     import math
@@ -36,6 +37,20 @@ def create_schedule(directory, *, cpu_budget, memory_gb, stage_cpus, stage_memor
         raise ValueError('A stage reservation exceeds the cohort budget')
     if policy not in ('first_fit', 'fair_backfill'):
         raise ValueError('Unknown cohort admission policy')
+    if any(type(value) is not int for value in (cpu_budget,stage_cpus,gpu_slots,io_slots)):
+        raise ValueError('CPU and slot budgets must be integer counts')
+    if any(isinstance(value,bool) for value in (memory_gb,stage_memory_gb)):
+        raise ValueError('Memory budgets must be numeric, not boolean')
+    ready_order=ready_order or ('mem_thread' if policy=='fair_backfill' else 'fifo')
+    if ready_order not in ('fifo','mem_thread'):
+        raise ValueError('Unknown ready-task ordering')
+    from shared.cohort_resources import validate_request
+    limits=dict(cpu=cpu_budget,memory_gb=memory_gb,gpu=gpu_slots,io=io_slots)
+    selected=(planning or {}).get('selected_stages')
+    for profile in (subject_profiles or {}).values():
+        for stage,request in profile.items():
+            validate_request({'cpu':stage_cpus,'memory_gb':stage_memory_gb,**request},limits,
+                             check_budget=selected is None or stage in selected)
     affinity = sorted(os.sched_getaffinity(0)) if hasattr(os, 'sched_getaffinity') else []
     if affinity and cpu_budget > len(affinity):
         raise ValueError('CPU budget exceeds the process affinity allocation')
@@ -46,6 +61,7 @@ def create_schedule(directory, *, cpu_budget, memory_gb, stage_cpus, stage_memor
                   stage_memory_gb=stage_memory_gb, gpu_slots=gpu_slots,
                   subject_profiles=subject_profiles or {}, planning=planning,
                   policy=policy, history_path=str(history_path) if history_path else None, io_slots=io_slots,
+                  ready_order=ready_order,
                   cpu_affinity=affinity[:int(cpu_budget)],
                   scope='Linux stage CPU affinity; declared RAM/GPU reservations, not cgroup or per-device VRAM limits',
                   parent_pid=os.getpid(), parent_created=psutil.Process().create_time())
@@ -120,23 +136,27 @@ def stage_admission(name, *, gpu=False):
         yield
         return
     folder = Path(selected)
+    import psutil
+    config = json.loads((folder / 'config.json').read_text())
+    parent=dict(pid=config['parent_pid'],created=config['parent_created'])
+    if not _alive(parent):
+        raise InterruptedError('Cohort coordinator exited; no new computation admitted')
     if _inherited_lease(folder):
         yield
         return
-    import psutil
-    config = json.loads((folder / 'config.json').read_text())
     subject = os.environ.get('SLICERDSPACE_COHORT_SUBJECT', '')
-    request = config.get('subject_profiles', {}).get(subject, {}).get(name, {})
+    from shared.cohort_resources import stage_request, validate_request
+    request = stage_request(config,subject,name)
     row = dict(id=uuid4().hex, stage=name, subject=os.environ.get('SLICERDSPACE_COHORT_SUBJECT', ''),
                pid=os.getpid(), created=psutil.Process().create_time(), cpu=request.get('cpu', config['stage_cpus']),
                memory_gb=request.get('memory_gb', config['stage_memory_gb']), gpu=int(gpu), queued_at=time.time())
     row.update(io=request.get('io', 0), duration_seconds=request.get('duration_seconds', 0),
                profile_key=request.get('profile_key'), bypasses=0)
-    import math
-    if any(not math.isfinite(row[key]) or row[key] <= 0 for key in ('cpu', 'memory_gb')):
-        raise ValueError('Invalid stage reservation')
-    if row['cpu'] > config['cpu_budget'] or row['memory_gb'] > config['memory_gb'] or row['io'] > config['io_slots']:
-        raise ValueError(f'{subject}/{name}: stage estimate exceeds the cohort resource budget')
+    row.update(estimate_source=request.get('estimate_source','header heuristic'),
+               history_samples=request.get('history_samples',0),memory_floor_gb=request['memory_floor_gb'])
+    if request.get('calibration'):
+        row['calibration'] = request['calibration']
+    validate_request(row,dict(cpu=config['cpu_budget'],memory_gb=config['memory_gb'],gpu=config['gpu_slots'],io=config['io_slots']))
     admitted, queued = False, False
     began = time.monotonic()
     token, reservation_token, previous = None, None, os.environ.get(LEASE)
@@ -147,6 +167,8 @@ def stage_admission(name, *, gpu=False):
     monitor = None
     try:
         while not admitted:
+            if not _alive(parent):
+                raise InterruptedError('Cohort coordinator exited while waiting for resources')
             with cache_lock(folder / 'lock'):
                 state = json.loads((folder / 'state.json').read_text())
                 for key in ('active', 'waiting'):
@@ -162,7 +184,8 @@ def stage_admission(name, *, gpu=False):
                 # First fitting request: CPU work may pass a GPU waiter, but not an earlier fitting job.
                 if config['policy'] == 'fair_backfill':
                     from shared.cohort_policy import choose_ready
-                    candidate = choose_ready(state['waiting'], state['active'], limits, time.time())
+                    candidate = choose_ready(state['waiting'], state['active'], limits, time.time(),
+                                             ready_order=config.get('ready_order','fifo'))
                 else:
                     candidate = next((item for item in state['waiting']
                                       if all(used[key] + item.get(key, 0) <= limits[key] for key in used)), None)

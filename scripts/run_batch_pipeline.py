@@ -319,6 +319,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument('--resource-budget', type=_resource_fraction, default=.8,
                         help='Adaptive automatic CPU/RAM budget fraction (default: 80%%); explicit budgets override it.')
     parser.add_argument('--resource-history', type=Path, help='Adaptive resource profile file; defaults under batch output metadata.')
+    parser.add_argument('--compute-profile', type=Path, help='Validated thread/worker calibration profile; applied only to selected automatic stages.')
+    parser.add_argument('--autotune', action='store_true', help='Calibrate selected supported CPU models once before adaptive execution; reuse matching profiles.')
+    parser.add_argument('--tuning-max-cpus', type=_parse_jobs, default=4, help='Bounded CPU ceiling per calibration candidate (default: 4).')
     parser.add_argument('--batch-cpus', type=_parse_jobs, help='Declared stage CPU budget; adaptive defaults to --resource-budget of available CPUs.')
     parser.add_argument('--batch-memory-gb', type=float, help='Declared RAM budget in GiB; adaptive uses --resource-budget, resources uses 70%% of available RAM.')
     parser.add_argument('--batch-stage-cpus', type=_parse_jobs, help='Override automatic per-stage CPU reservations.')
@@ -351,6 +354,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args, forwarded_args = parser.parse_known_args(argv)
     resource_mode = args.scheduler in ('resources', 'adaptive')
+    if args.autotune and args.scheduler != 'adaptive':
+        parser.error('--autotune requires --scheduler adaptive')
     if args.scheduler == 'resources':
         if int(_command_option(forwarded_args, '--max-parallel-models', '1')) != 1:
             parser.error('Resource scheduling currently requires --max-parallel-models 1 to avoid nested reservations')
@@ -391,10 +396,33 @@ def main(argv: list[str] | None = None) -> int:
                 stage_cpus=args.batch_stage_cpus, stage_memory_gb=args.batch_stage_memory_gb,
                 gpu_slots=args.batch_gpu_slots, adaptive=args.scheduler == 'adaptive',
                 resource_fraction=args.resource_budget,
-                history_path=args.resource_history or output_base / '00_batch_metadata/resource_history.json')
+                history_path=args.resource_history or output_base / '00_batch_metadata/resource_history.json',
+                tuning_profile=args.compute_profile)
         except (ValueError, ImportError) as exc:
             parser.error(str(exc))
         args.jobs = resource_plan['jobs']
+        if args.autotune and args.execute:
+            profile = args.compute_profile or output_base / '00_batch_metadata/compute_profile.json'
+            supported = sorted(set(resource_plan['selected_stages']) & {'microstructure_dki', 'microstructure_mkcurve', 'wma'})
+            if 'preprocessing' in resource_plan['selected_stages']:
+                print('[Autotune] Calibration needs the final corrected DWI. Retaining declared settings; '
+                      'calibrate the preprocessed inputs before the next batch.', flush=True)
+                supported = []
+            if supported:
+                command = [str(args.python_executable), str(REPO_ROOT / 'scripts/autotune_batch.py'),
+                    '--output', str(profile), '--stages', ','.join(supported),
+                    '--max-cpus', str(min(args.tuning_max_cpus, resource_plan['cpu_budget'])),
+                    '--cpu-budget', str(resource_plan['cpu_budget']), '--memory-gb', str(resource_plan['memory_gb']),
+                    '--jobs', str(args.jobs)]
+                for subject in runnable_subjects[:3]:
+                    command += ['--subject-root', str(subject.subject_root)]
+                command += ['--', *forwarded_args]
+                subprocess.run(command, check=True)
+                resource_plan = plan_cohort(runnable_subjects, forwarded_args, jobs=args.jobs,
+                    cpu_budget=resource_plan['cpu_budget'], memory_gb=resource_plan['memory_gb'],
+                    stage_cpus=args.batch_stage_cpus, stage_memory_gb=args.batch_stage_memory_gb,
+                    gpu_slots=args.batch_gpu_slots, adaptive=True, resource_fraction=args.resource_budget,
+                    history_path=resource_plan['history_path'], tuning_profile=profile)
         print(f"[Batch] Resource plan: up to {args.jobs} subjects; "
               f"{resource_plan['cpu_budget']} CPU threads, {resource_plan['memory_gb']:.1f} GiB RAM; "
               f"{resource_plan['gpu_slots']} GPU-capable stage slot(s).", flush=True)
@@ -417,7 +445,7 @@ def main(argv: list[str] | None = None) -> int:
                 output_root=output_base if args.output_root else None,
                 run_name=args.run_name,
                 execute=bool(args.execute),
-                forwarded_args=list(forwarded_args),
+                forwarded_args=[*forwarded_args, *(resource_plan or {}).get('subject_arguments', {}).get(subject.subject_id, [])],
             ),
         )
         for subject in runnable_subjects
@@ -431,7 +459,7 @@ def main(argv: list[str] | None = None) -> int:
             output_root=output_base if args.output_root else None,
             run_name=args.run_name,
             execute=bool(args.execute),
-            forwarded_args=list(forwarded_args),
+            forwarded_args=[*forwarded_args, *(resource_plan or {}).get('subject_arguments', {}).get(subject.subject_id, [])],
         )
         for subject in runnable_subjects
     ]

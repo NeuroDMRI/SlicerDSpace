@@ -1,7 +1,9 @@
 """Resource-bounded independent subprocesses; no MRML/Qt work in workers."""
 
 from dataclasses import dataclass
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime, timezone
+from graphlib import TopologicalSorter
 import json
 import os
 from pathlib import Path
@@ -19,6 +21,7 @@ class ComputeJob:
     threads: int = 1
     memory_bytes: int = 0
     environment: dict | None = None
+    dependencies: tuple[str, ...] = ()
 
 
 def available_resources():
@@ -76,7 +79,7 @@ def _stop(process):
 
 def run_independent_jobs(jobs, *, directory, max_workers=1, cpu_budget=None,
                          memory_budget=None, log=None):
-    """Jobs must have disjoint outputs and all dependencies already satisfied.
+    """Jobs have disjoint outputs and optional named, acyclic dependencies.
 
     Children inherit the workflow's process group, so Slicer's normal whole-tree
     cancellation still applies. Failures stop remaining children, never publish
@@ -86,6 +89,11 @@ def run_independent_jobs(jobs, *, directory, max_workers=1, cpu_budget=None,
     if (max_workers < 1 or len({job.name for job in jobs}) != len(jobs)
             or any(not re.fullmatch(r'[A-Za-z0-9_-]+', job.name) for job in jobs)):
         raise ValueError('Positive worker count and unique job names are required')
+    by_name = {job.name:job for job in jobs}
+    if any(set(job.dependencies)-by_name.keys() for job in jobs):
+        raise ValueError('Compute dependency is not present in this schedule')
+    graph = TopologicalSorter({job.name:job.dependencies for job in jobs})
+    graph.prepare()
     cpus, memory = available_resources()
     cpus = cpus if cpu_budget is None else cpu_budget
     memory = memory if memory_budget is None else memory_budget
@@ -103,12 +111,15 @@ def run_independent_jobs(jobs, *, directory, max_workers=1, cpu_budget=None,
     report = directory / 'schedule.json'
     start = time.monotonic()
     rows = {job.name: dict(name=job.name, status='queued', threads=job.threads,
-                           memory_bytes=job.memory_bytes, command=list(job.command)) for job in jobs}
+                           memory_bytes=job.memory_bytes, command=list(job.command),
+                           dependencies=list(job.dependencies)) for job in jobs}
     record = dict(kind='independent_model_schedule', status='running', max_workers=max_workers,
                   requested_workers=requested_workers,
                   cpu_budget=cpus, memory_budget=memory, jobs=list(rows.values()),
-                  scope='Independent model subprocess wall time, not an algorithmic speedup')
-    active, waiting, handles = {}, jobs.copy(), []
+                  scope='Model subprocess wall time, not an algorithmic speedup',
+                  readiness='graphlib.TopologicalSorter', completion='concurrent.futures.FIRST_COMPLETED')
+    active, waiting, handles = {}, [], []
+    executor = ThreadPoolExecutor(max_workers=max_workers,thread_name_prefix='model-exit')
     previous_signal = None
     def cancel(_signum, _frame):
         raise InterruptedError('Workflow cancelled')
@@ -116,7 +127,8 @@ def run_independent_jobs(jobs, *, directory, max_workers=1, cpu_budget=None,
         previous_signal = signal.signal(signal.SIGTERM, cancel)
     _save(report, record)
     try:
-        while waiting or active:
+        while graph.is_active():
+            waiting.extend(by_name[name] for name in graph.get_ready())
             for job in waiting.copy():
                 if len(active) >= max_workers:
                     break
@@ -129,7 +141,7 @@ def run_independent_jobs(jobs, *, directory, max_workers=1, cpu_budget=None,
                 environment = os.environ.copy()
                 environment.update(job.environment or {})
                 process = subprocess.Popen(job.command, env=environment, stdout=stream, stderr=subprocess.STDOUT)
-                active[job.name] = job, process, time.monotonic()
+                active[executor.submit(process.wait)] = job, process, time.monotonic()
                 waiting.remove(job)
                 rows[job.name].update(status='running', started_at=datetime.now(timezone.utc).isoformat(),
                                      start_offset_seconds=time.monotonic()-start, pid=process.pid,
@@ -137,21 +149,26 @@ def run_independent_jobs(jobs, *, directory, max_workers=1, cpu_budget=None,
                 if log:
                     log(f'[Compute] Running {job.name} ({job.threads} CPU threads reserved)')
                 _save(report, record)
-            for name, (job, process, began) in list(active.items()):
-                code = process.poll()
-                if code is None:
-                    continue
+            if not active:
+                raise RuntimeError('Ready compute jobs cannot fit the declared resources')
+            done, _ = wait(active,timeout=.25,return_when=FIRST_COMPLETED)
+            failures=[]
+            for future in done:
+                job, process, began = active.pop(future)
+                name, code = job.name, future.result()
                 rows[name].update(status='completed' if code == 0 else 'failed', exit_code=code,
                                   ended_at=datetime.now(timezone.utc).isoformat(),
                                   runtime_seconds=time.monotonic()-began)
-                del active[name]
                 _save(report, record)
                 if code:
-                    raise RuntimeError(f'{name} failed with exit code {code}; see {rows[name]["log"]}')
+                    failures.append((name,code))
+                else:
+                    graph.done(name)
                 if log:
-                    log(f'[Compute] Completed {name}: {rows[name]["runtime_seconds"]:.3f} s')
-            if waiting or active:
-                time.sleep(.1)
+                    log(f'[Compute] {rows[name]["status"]} {name}: {rows[name]["runtime_seconds"]:.3f} s')
+            if failures:
+                name,code=failures[0]
+                raise RuntimeError(f'{name} failed with exit code {code}; see {rows[name]["log"]}')
         record['status'] = 'completed'
         return record
     except BaseException as exc:
@@ -159,12 +176,14 @@ def run_independent_jobs(jobs, *, directory, max_workers=1, cpu_budget=None,
                       error=f'{type(exc).__name__}: {exc}')
         raise
     finally:
-        for name, (_, process, began) in active.items():
+        for job, process, began in active.values():
             if process.poll() is None:
                 _stop(process)
-            rows[name].update(status='cancelled', runtime_seconds=time.monotonic()-began)
-        for job in waiting:
-            rows[job.name]['status'] = 'not_run'
+            rows[job.name].update(status='cancelled', runtime_seconds=time.monotonic()-began)
+        executor.shutdown(wait=True,cancel_futures=True)
+        for row in rows.values():
+            if row['status']=='queued':
+                row['status']='not_run'
         for stream in handles:
             stream.close()
         if previous_signal is not None:

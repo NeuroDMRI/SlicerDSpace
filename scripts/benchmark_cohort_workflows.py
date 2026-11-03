@@ -2,6 +2,7 @@
 """Frozen-source full-volume cohort campaign; never substitutes ROI or duplicate subjects."""
 
 import argparse
+from copy import deepcopy
 import hashlib
 import json
 import os
@@ -17,6 +18,7 @@ sys.path.insert(0, str(ROOT))
 from shared.cohort_telemetry import CohortTelemetry
 
 POLICIES = ('sequential', 'subject', 'stage', 'adaptive')
+ALL_POLICIES = (*POLICIES, 'adaptive_tuned')
 INPUTS = ('data.nii.gz', 'bvals', 'bvecs', 'nodif_brain_mask.nii.gz')
 
 
@@ -71,6 +73,97 @@ def inspect_cohort(root, count):
     if len(rows) < count:
         raise ValueError(f'Only {len(rows)} eligible distinct acquisitions; requested {count}')
     return rows, skipped
+
+
+def select_campaign(source, output, *, policies, routes, reference_policy='subject'):
+    """Select unstarted arms or reuse completed evidence without editing its snapshot."""
+    original = json.loads(source.read_text())
+    if reference_policy not in policies or 'adaptive' not in policies:
+        raise ValueError('Keep the comparison reference and adaptive arms')
+    selected = [deepcopy(row) for row in original['trials']
+                if row['policy'] in policies and row['route'] in routes]
+    if not selected or any(row['status'] not in ('pending','completed') for row in selected):
+        raise ValueError('Only pending or completed trials can be selected; finish active work first')
+    for route in routes:
+        if not any(row['route']==route for row in selected):
+            raise ValueError('Selected route is absent: '+route)
+        for threads in {row['threads'] for row in selected if row['route']==route}:
+            observed = {row['policy'] for row in selected if row['route']==route and row['threads']==threads}
+            if not set(policies) <= observed:
+                raise ValueError('Selected route lacks a required comparison arm')
+    record = deepcopy(original)
+    for key in ('driver_pid','started_at','inputs_unchanged'):
+        record.pop(key, None)
+    record.update(status='prepared', trials=selected, reference_policy=reference_policy,
+                  selected_from=dict(path=str(source.resolve()), sha256=sha(source)),
+                  omitted_trials=[row['id'] for row in original['trials'] if row['id'] not in {x['id'] for x in selected}])
+    record['notes'].append('Priority comparison selected before starting omitted arms; completed measurements and scientific snapshot unchanged')
+    for row in selected:
+        if row['status']=='completed':
+            evidence = Path(row['output'])
+            required = ('independent_qc.json','scientific_fingerprints.json')
+            if any(not (evidence/name).is_file() for name in required):
+                raise ValueError('Completed trial has missing evidence: '+row['id'])
+            row['inherited_evidence'] = {name:sha(evidence/name) for name in required}
+    output.mkdir(parents=True, exist_ok=False)
+    save(output/'campaign.json', record)
+    return output/'campaign.json'
+
+
+def comparison_reference(record, trial):
+    policy = record.get('reference_policy', 'sequential')
+    return next((row for row in record['trials'] if row['route']==trial['route'] and
+                 row['threads']==trial['threads'] and row['policy']==policy and row['status']=='completed'), None)
+
+
+def update_comparisons(record, folder):
+    from scripts.benchmark_cohort_compare import compare_inventories
+    reports = []
+    for trial in record['trials']:
+        reference = comparison_reference(record, trial)
+        if trial['status']!='completed' or not reference:
+            continue
+        left = Path(reference['output'])/'scientific_fingerprints.json'
+        right = Path(trial['output'])/'scientific_fingerprints.json'
+        if not (left.is_file() and right.is_file()):
+            continue
+        baseline, candidate = json.loads(left.read_text()), json.loads(right.read_text())
+        expected = {row['subject'] for row in record['subjects']}
+        subjects_match = set(baseline)==set(candidate)==expected
+        comparisons = {key:compare_inventories(baseline[key], candidate[key]) for key in expected
+                       if key in baseline and key in candidate}
+        trial['comparison_status'] = 'passed' if subjects_match and all(
+            row['status']=='passed' for row in comparisons.values()) else 'failed'
+        # Reused receipts stay immutable; derivative comparisons live in the new campaign.
+        destination = folder/'comparisons'/trial['id']
+        destination.mkdir(parents=True,exist_ok=True)
+        save(destination/'comparison.json',dict(status=trial['comparison_status'],subjects=comparisons,
+             reference=reference['id'],subjects_match=subjects_match))
+        if trial['policy'] not in ('adaptive','adaptive_tuned'):
+            continue
+        accepted = trial.get('qc_status')==reference.get('qc_status')=='passed' and trial['comparison_status']=='passed'
+        before = reference['measurement']['execution_seconds']
+        after = trial['measurement']['execution_seconds']
+        reports.append(dict(route=trial['route'],reference=reference['id'],candidate=trial['id'],
+            status='passed' if accepted else 'pending_acceptance',reference_minutes=before/60,candidate_minutes=after/60,
+            speed_ratio=before/after if accepted else None,
+            reduction_percent=100*(1-after/before) if accepted else None,
+            cpu_budget=record['cpus'],memory_gb=record['memory_gb'],jobs=record['jobs'],
+            effect='scheduling plus runtime selection' if trial['policy']=='adaptive_tuned' else 'matched-configuration scheduling',
+            threads=trial['threads'],subjects=len(expected)))
+    save(folder/'primary_comparison.json',dict(comparisons=reports,
+         scope='Single paired cohort measurement; no confidence interval or generalised speedup claim'))
+    incremental = []
+    for tuned in (row for row in record['trials'] if row['policy']=='adaptive_tuned' and row.get('comparison_status')=='passed'):
+        fixed = next((row for row in record['trials'] if row['policy']=='adaptive'
+                      and row['route']==tuned['route'] and row['threads']==tuned['threads']
+                      and row.get('comparison_status')=='passed' and row.get('qc_status')=='passed'),None)
+        if fixed and tuned.get('qc_status')=='passed':
+            before, after = (row['measurement']['execution_seconds'] for row in (fixed,tuned))
+            incremental.append(dict(reference=fixed['id'],candidate=tuned['id'],route=tuned['route'],
+                speed_ratio=before/after,reduction_percent=100*(1-after/before),
+                effect='Runtime configuration selection with the same latest scheduler and cohort budgets'))
+    save(folder/'configuration_comparison.json',dict(comparisons=incremental))
 
 
 def prepare(args):
@@ -187,6 +280,12 @@ def run(args):
     snapshot = Path(record['snapshot'])
     if any(sha(snapshot/name) != value for name,value in record['source_hashes'].items()):
         raise ValueError('Frozen implementation changed')
+    for trial in record['trials']:
+        if any(sha(Path(trial['output'])/name)!=value for name,value in trial.get('inherited_evidence',{}).items()):
+            raise ValueError('Inherited completed evidence changed')
+        if 'snapshot' in trial and any(sha(Path(trial['snapshot'])/name)!=value
+                                      for name,value in trial['snapshot_hashes'].items()):
+            raise ValueError('Candidate execution snapshot changed')
     for row in record['subjects']:
         if any(signature(Path(row['source'])/name) != value for name,value in row['signatures'].items()):
             raise ValueError('Source inputs changed')
@@ -194,6 +293,7 @@ def run(args):
             for name,value in record['external_asset_hashes'].items()):
         raise ValueError('External launcher/model/atlas/backend changed')
     record.update(status='running', driver_pid=os.getpid(), started_at=time.time())
+    record['execution_harness'] = dict(path=str(Path(__file__).resolve()),sha256=sha(__file__))
     save(path,record)
     deadline = time.monotonic()+args.max_hours*3600
     for trial in record['trials']:
@@ -212,15 +312,23 @@ def run(args):
             inputs.mkdir(parents=True)
             for name in INPUTS:
                 (inputs/name).symlink_to(Path(subject['source'])/name)
-        scheduler = dict(sequential='subjects', subject='subjects', stage='resources', adaptive='adaptive')[trial['policy']]
-        command = [record['launcher'],'--launch','PythonSlicer',str(snapshot/'scripts/run_batch_pipeline.py'),
+        scheduler = dict(sequential='subjects', subject='subjects', stage='resources', adaptive='adaptive', adaptive_tuned='adaptive')[trial['policy']]
+        execution_snapshot=Path(trial.get('snapshot',snapshot))
+        command = [record['launcher'],'--launch','PythonSlicer',str(execution_snapshot/'scripts/run_batch_pipeline.py'),
                    '--batch-root',str(destination/'inputs'),'--output-root',str(destination/'outputs'),
                    '--manifest',str(destination/'batch.json'),'--run-name','benchmark',
                    '--scheduler',scheduler,'--jobs',str(1 if trial['policy']=='sequential' else record['jobs']),
                    '--batch-cpus',str(record['cpus']),'--batch-memory-gb',str(record['memory_gb']),
-                   '--batch-stage-cpus',str(trial['threads']), '--surface-cpu-threads',str(trial['threads']),
+                   '--surface-cpu-threads',str(trial['threads']),
                    '--mrtrix-nthreads',str(trial['threads']), '--resource-history',str(destination/'history.json'),
                    '--execute',*record['common'],*record['routes'][trial['route']]]
+        if trial['policy'] == 'adaptive_tuned':
+            profile = Path(trial['compute_profile'])
+            if not profile.is_file() or sha(profile) != trial['compute_profile_sha256']:
+                raise ValueError('Frozen runtime calibration changed or is missing')
+            command += ['--compute-profile', str(profile)]
+        else:
+            command += ['--batch-stage-cpus', str(trial['threads'])]
         if trial['route'] == 'tracts':
             command += ['--ukf-parameters',json.dumps(dict(numThreads=trial['threads']))]
         environment = {**os.environ, **{key:str(trial['threads']) for key in
@@ -235,7 +343,7 @@ def run(args):
             environment[ENV] = str(create_schedule(destination/'subject_guard', cpu_budget=record['cpus'],
                 memory_gb=record['memory_gb'], stage_cpus=trial['threads'],
                 stage_memory_gb=record['memory_gb']/record['jobs']))
-            command += ['--pipeline-script',str(snapshot/'scripts/benchmark_subject_worker.py')]
+            command += ['--pipeline-script',str(execution_snapshot/'scripts/benchmark_subject_worker.py')]
         trial.update(status='running', command=command, started_at=time.time(), output=str(destination))
         save(path,record)
         with (destination/'stdout.log').open('w') as stdout, (destination/'stderr.log').open('w') as stderr:
@@ -266,7 +374,7 @@ def run(args):
         # Process completion is not scientific acceptance; independent audit follows.
         if trial['status']=='completed':
             from scripts.audit_scientific_outputs import audit_output_root
-            from scripts.benchmark_cohort_compare import scientific_inventory, compare_inventories
+            from scripts.benchmark_cohort_compare import scientific_inventory
             try:
                 audit = audit_output_root(destination/'outputs', require_dti=True,
                     require_tractography=trial['route']=='tracts', min_subjects=len(record['subjects']), run_name='benchmark')
@@ -276,15 +384,8 @@ def run(args):
                 inventories = {row['subject']:scientific_inventory(destination/'outputs'/row['subject'])
                                for row in record['subjects']}
                 save(destination/'scientific_fingerprints.json', inventories)
-                reference = next((row for row in record['trials'] if row['route']==trial['route'] and
-                                  row['policy']=='sequential' and row['threads']==trial['threads'] and row['status']=='completed'), None)
-                if reference:
-                    baseline = json.loads((Path(reference['output'])/'scientific_fingerprints.json').read_text())
-                    comparisons = {key:compare_inventories(baseline[key], value) for key,value in inventories.items()}
-                    save(destination/'comparison.json', comparisons)
-                    trial['comparison_status'] = 'passed' if all(row['status']=='passed' for row in comparisons.values()) else 'failed'
-                else:
-                    trial['comparison_status'] = 'pending_reference'
+                trial['comparison_status'] = 'pending_reference'
+                update_comparisons(record, folder)
             except Exception as exc:
                 trial.update(qc_status='audit_error', audit_error=f'{type(exc).__name__}: {exc}')
         save(path,record)
@@ -292,18 +393,7 @@ def run(args):
             record['status']='failed'
             save(path,record)
             return 2
-    # Rotated repetitions can finish a candidate before their reference arm.
-    from scripts.benchmark_cohort_compare import compare_inventories
-    for trial in record['trials']:
-        reference = next(row for row in record['trials'] if row['route']==trial['route'] and
-                         row['threads']==trial['threads'] and row['policy']=='sequential')
-        left = Path(reference['output'])/'scientific_fingerprints.json'
-        right = Path(trial['output'])/'scientific_fingerprints.json'
-        if left.is_file() and right.is_file():
-            baseline, candidate = json.loads(left.read_text()), json.loads(right.read_text())
-            comparisons = {key:compare_inventories(baseline[key], value) for key,value in candidate.items()}
-            save(Path(trial['output'])/'comparison.json', comparisons)
-            trial['comparison_status'] = 'passed' if all(row['status']=='passed' for row in comparisons.values()) else 'failed'
+    update_comparisons(record, folder)
     record['inputs_unchanged'] = all(sha(Path(row['source'])/name)==value for row in record['subjects']
                                    for name,value in row['sha256'].items())
     record['status']='passed' if record['inputs_unchanged'] and all(row.get('qc_status')=='passed' and row.get('comparison_status')=='passed'
@@ -314,7 +404,7 @@ def run(args):
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action',choices=('prepare','run'))
+    parser.add_argument('action',choices=('prepare','run','select'))
     parser.add_argument('--output',type=Path,required=True)
     parser.add_argument('--dataset-root',type=Path,default=Path('/dataset/nfs_share01/HCP/HCP-YA/3T/Diffusion_Preprocessed'))
     parser.add_argument('--count',type=int,default=12)
@@ -331,7 +421,15 @@ def main():
     parser.add_argument('--wma',type=Path,default=ROOT/'third_party/whitematteranalysis')
     parser.add_argument('--atlas',type=Path,default=ROOT.parent/'SlicerDDSurfer-test/resources/ORG-Atlases')
     parser.add_argument('--ukf-executable',type=Path)
+    parser.add_argument('--from-campaign',type=Path)
+    parser.add_argument('--policies',nargs='+',choices=ALL_POLICIES,default=['subject','adaptive'])
+    parser.add_argument('--reference-policy',choices=POLICIES,default='subject')
     args=parser.parse_args()
+    if args.action=='select':
+        if not args.from_campaign:
+            parser.error('select requires --from-campaign')
+        return select_campaign(args.from_campaign,args.output,policies=args.policies,routes=args.routes,
+                               reference_policy=args.reference_policy) and 0
     return prepare(args) if args.action=='prepare' else run(args)
 
 

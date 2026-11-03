@@ -1,0 +1,58 @@
+{
+  "status": "passed",
+  "checked_at": "2026-11-03T09:38:11.976926+00:00",
+  "latest_release": "1.11.0",
+  "release_published_at": "2026-03-02T20:51:24Z",
+  "sources": [
+    {
+      "ref": "1.11.0",
+      "url": "https://raw.githubusercontent.com/nipy/nipype/1.11.0/nipype/pipeline/plugins/multiproc.py",
+      "sha256": "65215f190d653c25d0d8e37f3a4b74a1fb945aa08dc3d1ebcba89f7c1d7cae95",
+      "selected_methods": {
+        "_prerun_check": "acd9ed05950d1525a82ef627267f2b375f09334a156f31e61e41a4811b8a1ee7",
+        "_check_resources": "41efab07584b8855f1ea05ef97569bf53f27df63685aa4b3a90a00879cf67186",
+        "_sort_jobs": "3ff6c3d8923acec7f896a0ffb8ef19d9db1aef4ddce53afab8f8d8a2bf6d248c"
+      },
+      "sort_contract": "def _sort_jobs(self, jobids, scheduler='tsort'):\n    if scheduler == 'mem_thread':\n        return sorted(jobids, key=lambda item: (self.procs[item].mem_gb, self.procs[item].n_procs))\n    return jobids"
+    },
+    {
+      "ref": "6e28627d3a616b61bcbbe7040f698b0e5a2c5722",
+      "url": "https://raw.githubusercontent.com/nipy/nipype/6e28627d3a616b61bcbbe7040f698b0e5a2c5722/nipype/pipeline/plugins/multiproc.py",
+      "sha256": "65215f190d653c25d0d8e37f3a4b74a1fb945aa08dc3d1ebcba89f7c1d7cae95",
+      "selected_methods": {
+        "_prerun_check": "acd9ed05950d1525a82ef627267f2b375f09334a156f31e61e41a4811b8a1ee7",
+        "_check_resources": "41efab07584b8855f1ea05ef97569bf53f27df63685aa4b3a90a00879cf67186",
+        "_sort_jobs": "3ff6c3d8923acec7f896a0ffb8ef19d9db1aef4ddce53afab8f8d8a2bf6d248c"
+      },
+      "sort_contract": "def _sort_jobs(self, jobids, scheduler='tsort'):\n    if scheduler == 'mem_thread':\n        return sorted(jobids, key=lambda item: (self.procs[item].mem_gb, self.procs[item].n_procs))\n    return jobids"
+    }
+  ],
+  "references": [
+    {
+      "project": "Pydra",
+      "url": "https://nipype.github.io/pydra/tutorial/2-advanced-execution.html",
+      "mechanism": "ConcurrentFutures workers; separate execution from task parameters"
+    },
+    {
+      "project": "Pydra",
+      "url": "https://nipype.github.io/pydra/explanation/hashing-caching.html",
+      "mechanism": "Task input identity, isolated outputs and resumable completed results"
+    },
+    {
+      "project": "Slurm",
+      "url": "https://slurm.schedmd.com/sched_config.html",
+      "mechanism": "Protect the head expected start while backfilling"
+    },
+    {
+      "project": "Python",
+      "url": "https://docs.python.org/3.12/library/graphlib.html",
+      "mechanism": "Directly reused TopologicalSorter for model readiness"
+    },
+    {
+      "project": "Python",
+      "url": "https://docs.python.org/3.12/library/concurrent.futures.html",
+      "mechanism": "Directly reused futures completion notifications"
+    }
+  ],
+  "scope": "Official source audit and selected mechanism adaptation; Nipype/Pydra/Slurm engines are not runtime dependencies; no speedup measurement"
+}

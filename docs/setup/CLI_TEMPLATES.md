@@ -634,6 +634,51 @@ Invoke-DDSurfer -Run 'dti_light' -RouteArgs @(
 
 ---
 
+## Optional CPU Calibration For Selected Batch Tasks
+
+Targets and algorithm selections are identical to the subject CLI. Repeated
+`--targets`, `--microstructure-stages` and `--skip-targets` are resolved by the
+same selector; choosing one model does not schedule the other models. Existing
+valid intermediate products retain their normal cache checks.
+
+```bash
+# DKI only (plus its shared DTI preparation), with bounded measured CPU selection.
+"$SLICER" --launch PythonSlicer "$REPO/scripts/run_batch_pipeline.py" \
+  --batch-root /path/to/preprocessed_subjects --output-root /path/to/results \
+  --scheduler adaptive --jobs 3 --autotune \
+  --targets microstructure --microstructure-stages dki --execute
+
+# MK-Curve only; reuse an existing checked calibration profile.
+"$SLICER" --launch PythonSlicer "$REPO/scripts/run_batch_pipeline.py" \
+  --batch-root /path/to/preprocessed_subjects --output-root /path/to/mkcurve_results \
+  --scheduler adaptive --jobs 3 --compute-profile /path/to/compute_profile.json \
+  --targets microstructure_dki --dki-fit-method MKCURVE --execute
+```
+
+`--autotune` is optional and performs a bounded calibration before the selected
+analysis. Matching hardware/implementation/shape/method profiles are reusable.
+The default search ceiling is four CPUs (`--tuning-max-cpus`). DKI searches
+numerical threads; MK-Curve additionally searches worker counts and voxel block
+sizes. Three rotating repeats follow a warm run. Candidates must match all
+sampled scientific products exactly; gains below 5% retain the reference setting.
+Capacity estimates use the full-input RAM reservation, not just sample RSS.
+This selects among tested configurations, rather than guaranteeing a global
+optimum. Calibration time and its raw trials are recorded separately.
+
+Explicit `--dki-threads`, `--mkcurve-workers`, `--mkcurve-voxels-per-chunk`,
+`--wma-threads` and per-stage reservations take precedence. MK-Curve uses bounded
+completion-driven voxel work and indexed output writes. Worker/thread products
+must fit the reserved CPU count. `--mkcurve-chunk-schedule ordered` retains the
+control path for paired comparisons.
+
+Calibration uses final preprocessed NIfTI inputs; a batch requesting preprocessing
+keeps declared settings until corrected inputs are available. Unsupported or
+unselected stages are not calibrated. Full WMA calibration is available in
+`scripts/autotune_batch.py` when an existing tractogram, WMA root, atlas and Slicer
+launcher are supplied. It reruns the actual module and can be expensive; without
+those inputs WMA retains its declared reservation, rather than triggering upstream
+tracking just for tuning. Dry runs do not perform calibration.
+
 ## Reuse, Cancellation And Help
 
 Matching completed outputs can be reused by default; use a new run/output path

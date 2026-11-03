@@ -59,14 +59,14 @@ class CohortPlanningTests(unittest.TestCase):
                           available=(16, 128 * GIB))
         self.assertEqual(plan['stage_cpus'], 12)
         with self.assertRaises(ValueError):
-            plan_cohort(self.subjects('/unused'), ['--surface-cpu-threads', '12'],
+            plan_cohort(self.subjects('/unused'), ['--targets', 'surface', '--surface-cpu-threads', '12'],
                         stage_cpus=4, available=(16, 128 * GIB))
 
     def test_insufficient_memory_and_unbounded_workers_are_rejected(self):
         with self.assertRaisesRegex(ValueError, 'estimated stage RAM'):
             plan_cohort(self.subjects('/unused'), ['--targets', 'parcellation'], available=(16, 4 * GIB))
         with self.assertRaises(ValueError):
-            plan_cohort(self.subjects('/unused'), ['--microstructure-free-water-n-jobs', '-1'],
+            plan_cohort(self.subjects('/unused'), ['--targets', 'microstructure', '--run-free-water', '--microstructure-free-water-n-jobs', '-1'],
                         available=(16, 128 * GIB))
         with self.assertRaises(ValueError):
             plan_cohort(self.subjects('/unused'), [], stage_memory_gb=float('nan'), available=(16, 128 * GIB))

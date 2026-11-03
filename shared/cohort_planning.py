@@ -77,7 +77,7 @@ def image_size(root):
 
 def plan_cohort(subjects, arguments, *, jobs=None, cpu_budget=None, memory_gb=None,
                 stage_cpus=None, stage_memory_gb=None, gpu_slots=1, available=None,
-                adaptive=False, resource_fraction=.8, history_path=None):
+                adaptive=False, resource_fraction=.8, history_path=None, tuning_profile=None):
     if not math.isfinite(resource_fraction) or not 0 < resource_fraction <= 1:
         raise ValueError('Resource fraction must be greater than zero and at most one')
     cpus, memory = available if available is not None else available_cohort_resources(resource_fraction if adaptive else .7)
@@ -87,63 +87,41 @@ def plan_cohort(subjects, arguments, *, jobs=None, cpu_budget=None, memory_gb=No
         raise ValueError('Available CPU/RAM could not be established; provide --batch-cpus and --batch-memory-gb')
     if (jobs is not None and jobs < 1) or gpu_slots < 1:
         raise ValueError('Subject and GPU-slot limits must be positive')
-    hints = []
-    for flag in ('--surface-cpu-threads', '--mrtrix-nthreads', '--preprocessing-eddy-threads',
-                 '--microstructure-free-water-n-jobs'):
+    from shared.cohort_targets import selected_stages
+    selected = selected_stages(arguments)
+    hints, stage_hints = [], {}
+    for flag, stages in (('--surface-cpu-threads', {'surface'}), ('--mrtrix-nthreads', {'csd_act', 'saf', 'connectome'}),
+                         ('--preprocessing-eddy-threads', {'preprocessing'}),
+                         ('--microstructure-free-water-n-jobs', {'microstructure_freewater'}),
+                         ('--wma-threads', {'wma'}), ('--dki-threads', {'microstructure_dki', 'microstructure_mkcurve'})):
+        if not stages & selected:
+            continue
         value = _option(arguments, flag)
         if value:
             count = int(value)
             if count < 0:
                 raise ValueError(flag + ' must not request unbounded workers in resource mode')
             hints.append(count)
+            for stage in stages & selected:
+                stage_hints[stage] = max(1, count)
+    if 'microstructure_mkcurve' in selected:
+        workers = int(_option(arguments, '--mkcurve-workers', '1'))
+        if workers < 1:
+            raise ValueError('--mkcurve-workers must be positive')
+        needed = workers * stage_hints.get('microstructure_mkcurve', 1)
+        hints.append(needed)
+        stage_hints['microstructure_mkcurve'] = needed
     threads = stage_cpus if stage_cpus is not None else min(cpu, max([min(4 if adaptive else 8, cpu), *hints]))
     if threads < 1 or threads > cpu or any(hint > threads for hint in hints):
         raise ValueError('Algorithm thread request or per-stage CPU reservation exceeds the cohort budget')
     if stage_memory_gb is not None and (not math.isfinite(stage_memory_gb) or stage_memory_gb <= 0):
         raise ValueError('--batch-stage-memory-gb must be finite and positive')
 
-    targets = set(_option(arguments, '--targets').split(',')) - {''}
-    all_stages = {'brain_mask', 'native_dti', 'registered_dti', 'preprocessing', 'segmentation',
-                  'parcellation', 'surface', 'surface_postprocess', 'microstructure', 'csd_act',
-                  'ukf', 'dti_tracking', 'saf', 'wmql', 'wma', 'tractcloud', 'connectome'}
-    selected = set()
-    models = set(','.join(_options(arguments, '--microstructure-stages') or ['dti']).split(','))
-    if 'all' in models:
-        models = {'dti', 'freewater', 'noddi', 'dki'}
-    for model, flag in (('freewater', '--run-free-water'), ('noddi', '--run-noddi'), ('dki', '--run-dki')):
-        if flag in arguments:
-            models.add(model)
-    model_stage = lambda value: 'microstructure_' + ('mkcurve' if value == 'dki' and
-        _option(arguments, '--dki-fit-method', 'WLS').startswith('MKCURVE') else value)
-    leaf_stages = {model_stage(value) for value in models} | {'microstructure_dti'}
-    all_stages.update(leaf_stages)
-    for target in targets:
-        if target == 'tractography':
-            backends = _option(arguments, '--tractography-backend', 'csd_act').split(',')
-            selected.update('dti_tracking' if value == 'dti_det' else value for value in backends)
-        elif target == 'bundles':
-            selected.update(_option(arguments, '--bundle-backend', 'wmql').split(','))
-        elif target == 'microstructure':
-            selected.update(leaf_stages)
-        elif target.startswith('microstructure_'):
-            selected.update(('microstructure_dti', model_stage(target.removeprefix('microstructure_'))))
-        elif target in all_stages:
-            selected.add(target)
-    if not targets or targets - all_stages - {'tractography', 'bundles', 'validation',
-            'microstructure_freewater', 'microstructure_noddi', 'microstructure_dki'}:
-        selected = all_stages.copy()
-    if selected & {'preprocessing', 'segmentation', 'parcellation', 'surface', 'microstructure',
-                   'csd_act', 'ukf', 'dti_tracking', 'saf'} or any(stage.startswith('microstructure_') for stage in selected):
-        selected.update(('brain_mask', 'native_dti'))
-    if selected & {'parcellation', 'surface'}:
-        selected.add('registered_dti')
-    if 'saf' in selected:
-        selected.add('surface_postprocess')
-    selected = (selected if selected <= all_stages else all_stages.copy()) or {'native_dti'}
-
     from shared.cohort_profile import read_history, history_estimate, workload_key
+    from shared.compute_tuning import read_profile, lookup_profile, runtime_arguments
+    tuned_profiles = read_profile(tuning_profile) if adaptive else {}
     history = read_history(history_path) if adaptive else {}
-    profiles, inputs, selected_peaks = {}, {}, []
+    profiles, inputs, selected_peaks, subject_arguments = {}, {}, [], {}
     simple_dti = (_option(arguments, '--microstructure-stages') == 'dti' and
                   not any(flag in arguments for flag in ('--run-free-water', '--run-noddi', '--run-dki')))
     for subject in subjects:
@@ -166,6 +144,7 @@ def plan_cohort(subjects, arguments, *, jobs=None, cpu_budget=None, memory_gb=No
                          microstructure_dki=2+signal+maps,
                          microstructure_mkcurve=2+signal+maps)
         profile = {}
+        tuned_arguments = []
         for stage, estimate in estimates.items():
             profile[stage] = dict(cpu=threads if stage not in {'wmql', 'connectome'} else min(2, threads),
                 memory_gb=stage_memory_gb if stage_memory_gb is not None else math.ceil(estimate * 4) / 4)
@@ -174,9 +153,26 @@ def plan_cohort(subjects, arguments, *, jobs=None, cpu_budget=None, memory_gb=No
                 profile[stage]['cpu'] = 1
                 if stage == 'microstructure_freewater':
                     profile[stage]['cpu'] = max(1, int(_option(arguments, '--microstructure-free-water-n-jobs', '1')))
+            if stage in stage_hints:
+                profile[stage]['cpu'] = stage_hints[stage]
+            flags = ('--wma-threads',) if stage == 'wma' else (
+                ('--dki-threads', '--mkcurve-workers', '--mkcurve-voxels-per-chunk') if stage.endswith('mkcurve')
+                else ('--dki-threads', '--dki-voxels-per-chunk'))
+            if (adaptive and stage in selected and stage_cpus is None and tuned_profiles
+                    and not any(_option(arguments, flag) for flag in flags)):
+                tuned = lookup_profile(tuned_profiles, stage, image['shape'], arguments,
+                    cpu_budget=cpu, memory_gb=ram, jobs=jobs or min(len(subjects), 8) or 1,
+                    memory_floor_gb=profile[stage]['memory_gb'])
+                if tuned:
+                    settings = tuned['settings']
+                    profile[stage]['cpu'] = settings['threads'] * settings['workers']
+                    profile[stage]['calibration'] = tuned
+                    if stage_memory_gb is None:
+                        profile[stage]['memory_gb'] = max(profile[stage]['memory_gb'], math.ceil(tuned['memory_gb'] * 4) / 4)
+                    tuned_arguments += runtime_arguments(stage, settings)
             if adaptive:
                 request = profile[stage]
-                key = workload_key(stage, image['shape'], arguments, request['cpu'],
+                key = workload_key(stage, image['shape'], [*arguments, *tuned_arguments], request['cpu'],
                                    stage in {'brain_mask', 'segmentation', 'parcellation', 'surface', 'tractcloud'})
                 feedback = history_estimate(history, key)
                 request.update(io=int(stage in {'registered_dti', 'preprocessing', 'wmql', 'connectome'}),
@@ -188,12 +184,13 @@ def plan_cohort(subjects, arguments, *, jobs=None, cpu_budget=None, memory_gb=No
             for request in profile.values():
                 request['cpu'] = threads
         peaks = [profile[stage]['memory_gb'] for stage in selected if stage in profile]
-        peak = max(peaks)
+        peak = max(peaks, default=stage_memory_gb or 1)
         if peak > ram:
             raise ValueError(f'{subject.subject_id}: estimated stage RAM {peak:g} GiB exceeds budget {ram:.1f} GiB. '
                              'Review available memory or override reservations after a pilot.')
         selected_peaks.append(peak)
         profiles[subject.subject_id] = profile
+        subject_arguments[subject.subject_id] = tuned_arguments
     peak = max(selected_peaks, default=stage_memory_gb or min(1, ram))
     capacity = max(1, min(cpu // threads, int(ram // peak)))
     count = jobs if jobs is not None else max(1, min(len(subjects), capacity, 8))
@@ -201,8 +198,10 @@ def plan_cohort(subjects, arguments, *, jobs=None, cpu_budget=None, memory_gb=No
         # Waiters keep interpreter state: retain RAM headroom and bound the frontier.
         count = max(1, min(len(subjects), 8, int(max(.5, ram - peak) / .5), max(2, cpu)))
     return dict(cpu_budget=cpu, memory_gb=ram, stage_cpus=threads, stage_memory_gb=peak,
+                memory_reservations_fixed=stage_memory_gb is not None,
                 gpu_slots=gpu_slots, jobs=count, jobs_automatic=jobs is None,
                 subject_profiles=profiles, input_headers=inputs, selected_stages=sorted(selected),
+                subject_arguments=subject_arguments, tuning_profile=str(tuning_profile) if tuning_profile else None,
                 estimation='Header-based conservative heuristic, not measured peak usage',
                 idle_process_headroom='Automatic frontier capped at 8; adaptive mode allows 0.5 GiB per waiting interpreter',
                 adaptive=adaptive, resource_fraction=resource_fraction if adaptive else None,

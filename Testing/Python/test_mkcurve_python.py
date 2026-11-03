@@ -18,6 +18,22 @@ from Testing.Python.test_microstructure_dki import synthetic_case, write_case
 
 
 class MKCurvePythonTests(unittest.TestCase):
+    def test_dynamic_and_ordered_workers_preserve_all_raw_products_exactly(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            paths = write_case(root, synthetic_case(noisy=True))
+            records = [run_mkcurve(*[paths[key] for key in ('dwi', 'bval', 'bvec', 'mask')], root / mode,
+                                   grid=np.arange(100,2200,100.), voxels_per_chunk=2, num_workers=2,
+                                   worker_threads=1, chunk_schedule=mode) for mode in ('ordered','dynamic')]
+            for key in records[0]['maps']:
+                left, right = [nib.load(record['maps'][key]) for record in records]
+                self.assertEqual(left.header.get_data_dtype(), right.header.get_data_dtype())
+                np.testing.assert_array_equal(left.affine, right.affine)
+                np.testing.assert_array_equal(np.asanyarray(left.dataobj), np.asanyarray(right.dataobj))
+            for key in ('curve','original_coefficients','corrected_coefficients'):
+                np.testing.assert_array_equal(*[np.load(record['auxiliary_files'][key]) for record in records])
+            self.assertEqual(records[1]['settings']['max_inflight_chunks'],2)
+
     def test_batched_solver_matches_pivoted_qr_and_falls_back_safely(self):
         case = synthetic_case(noisy=True)
         design = design_matrix(case['bvals'], case['bvecs'])

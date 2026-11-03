@@ -608,3 +608,28 @@ GUI 取消只停止所属任务树；Agent/终端应保留自己启动的进程/
 ```
 
 本页标记的模板由本地回归测试读取并检查参数及路线选择；这不代替每条路线的真实数据验收。
+## 按所选任务进行可选 CPU 校准
+
+Batch 与单被试 CLI 复用同一套目标选择规则，支持重复的 `--targets`、算法子集与
+`--skip-targets`；不会因为选择单个模型就运行完整 pipeline。已有有效中间结果按原凭据复用。
+
+```bash
+"$SLICER" --launch PythonSlicer "$REPO/scripts/run_batch_pipeline.py" \
+  --batch-root /path/to/preprocessed_subjects --output-root /path/to/results \
+  --scheduler adaptive --jobs 3 --autotune \
+  --targets microstructure --microstructure-stages dki --execute
+```
+
+`--autotune` 在所选计算前进行有界校准，默认每个候选最多使用四个 CPU，可由
+`--tuning-max-cpus` 调整。DKI 搜索数值线程数；MK-Curve 另外搜索 worker 数与体素块大小。
+预热后轮换执行三次重复，全部采样科学产物精确一致的候选才可入选，低于 5% 的收益保留基线。
+整批容量估算仍使用完整输入的 RAM 下限。匹配的硬件、实现、维度及方法配置通过
+`--compute-profile /path/to/compute_profile.json` 复用。校准耗时与原始试验单独记录，不当作整批加速率。
+
+用户显式设置的线程、worker、块大小及阶段预约优先。MK-Curve 动态补充完成的体素块，
+按原体素位置写回；worker×线程数不得超过阶段 CPU 预约。`--mkcurve-chunk-schedule ordered`
+保留顺序控制路径。搜索只保证在已测试且通过一致性检查的候选中选择，不保证全局最优。
+
+校准需要最终预处理后的 NIfTI 输入；包含预处理的批次先保留声明配置。WMA 完整模块校准需要
+已有流线、图谱、WMA 后端与 Slicer launcher，可能耗时较长；缺失时保留预约，不为调参额外触发追踪。
+未选算法、没有适配器的算法以及 dry run 均不启动校准。

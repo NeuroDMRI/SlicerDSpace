@@ -122,6 +122,7 @@ class ProductOrchestratorConfig:
     microstructure_dki_fit_method: str = "WLS"
     microstructure_dki_matlab_executable: Optional[Path] = None
     microstructure_dki_mkcurve_root: Optional[Path] = None
+    microstructure_dki_execution: dict = field(default_factory=dict)
     microstructure_free_water_chunk_size: int = 2
     microstructure_free_water_engine: str = "serial"
     microstructure_free_water_n_jobs: Optional[int] = None
@@ -179,6 +180,7 @@ class ProductOrchestratorConfig:
     wma_atlas_dir: Optional[Path] = None
     wma_atlas: str = "org"
     wma_root: Optional[Path] = None
+    wma_num_threads: Optional[int] = None
     slicer_executable: Optional[Path] = None
     wma_use_virtual_x: bool = False
     wma_export_diffusion_measures: bool = False
@@ -1844,6 +1846,7 @@ def _dki_config(config: ProductOrchestratorConfig, inputs: dict[str, Path]):
         matlab_executable=config.microstructure_dki_matlab_executable,
         mkcurve_root=config.microstructure_dki_mkcurve_root,
         force_recompute=not config.resume,
+        **config.microstructure_dki_execution,
     )
 
 
@@ -3239,6 +3242,7 @@ def _parallel_model_products(config, targets, parcellation, log):
         dki_fit_method=config.microstructure_dki_fit_method,
         dki_matlab_executable=config.microstructure_dki_matlab_executable,
         dki_mkcurve_root=config.microstructure_dki_mkcurve_root,
+        dki_execution=config.microstructure_dki_execution,
         free_water_chunk_size=config.microstructure_free_water_chunk_size,
         free_water_engine=config.microstructure_free_water_engine,
         free_water_n_jobs=config.microstructure_free_water_n_jobs,
@@ -4578,6 +4582,7 @@ def _run_subject_products_impl(
                         output_dir=wma_dir,
                         slicer_executable=slicer_executable,
                         wma_root=config.wma_root,
+                        num_threads=config.wma_num_threads,
                         mrtrix_bin_dir=config.mrtrix_bin_dir,
                         use_virtual_x=config.wma_use_virtual_x,
                         export_diffusion_measures=config.wma_export_diffusion_measures,
@@ -4928,6 +4933,8 @@ def _run_subject_products_impl(
         "microstructure_run_noddi": config.microstructure_run_noddi,
         "microstructure_run_dki": config.microstructure_run_dki,
         "microstructure_dki_fit_method": config.microstructure_dki_fit_method,
+        "microstructure_dki_execution": config.microstructure_dki_execution,
+        "wma_num_threads": config.wma_num_threads,
         "microstructure_dki_matlab_executable": str(config.microstructure_dki_matlab_executable) if config.microstructure_dki_matlab_executable else None,
         "microstructure_dki_mkcurve_root": str(config.microstructure_dki_mkcurve_root) if config.microstructure_dki_mkcurve_root else None,
         "microstructure_free_water_chunk_size": config.microstructure_free_water_chunk_size,

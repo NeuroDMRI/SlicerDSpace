@@ -39,7 +39,8 @@ def metric_validity(maps, coefficients_finite, curve_valid, nrmse):
 def inspect_mkcurve_backend(*_legacy_paths):
     """Discover bundled Python code/resources, never require MATLAB."""
     files = [Path(__file__), Path(__file__).with_name("mkcurve_tensor.py"),
-             Path(__file__).with_name("mkcurve_directions.json"), Path(__file__).with_name("mkcurve_inputs.py")]
+             Path(__file__).with_name("mkcurve_directions.json"), Path(__file__).with_name("mkcurve_inputs.py"),
+             Path(__file__).with_name('chunk_dispatch.py')]
     missing = [str(path) for path in files if not path.is_file()]
     libraries = {}
     for key in ("numpy", "scipy", "nibabel"):
@@ -159,9 +160,21 @@ def _fit_chunk(payload, *, reuse_signal_logs=None):
     return original, corrected, curves, detection
 
 
+def _initialize_worker(threads):
+    if threads is None:
+        return
+    import os
+    from threadpoolctl import threadpool_limits
+    global _worker_thread_limit
+    for name in ('OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'MKL_NUM_THREADS'):
+        os.environ[name] = str(threads)
+    _worker_thread_limit = threadpool_limits(limits=threads)
+
+
 def run_mkcurve(dwi_path, bval_path, bvec_path, mask_path, output_dir, *,
                 b0_threshold=50., max_bvalue=3000., voxels_per_chunk=64,
-                threshold=.5, grid=None, log=None, num_workers=1, solver="reference", **legacy):
+                threshold=.5, grid=None, log=None, num_workers=1, solver="reference",
+                worker_threads=None, chunk_schedule='dynamic', **legacy):
     """Scan synthetic b0, identify abnormal curves, refit b0-corrected signals.
 
     Original inputs remain immutable. Raw untruncated maps, validity masks,
@@ -173,8 +186,20 @@ def run_mkcurve(dwi_path, bval_path, bvec_path, mask_path, output_dir, *,
     from microstructure.dki import _signature, _write_json
     from microstructure.mkcurve_inputs import _prepare_inputs
 
-    if voxels_per_chunk < 1 or num_workers < 1 or not np.isfinite(threshold) or not 0 <= threshold <= 1:
+    if (type(voxels_per_chunk) is not int or voxels_per_chunk < 1
+            or type(num_workers) is not int or num_workers < 1
+            or not np.isfinite(threshold) or not 0 <= threshold <= 1):
         raise ValueError("MK-Curve requires a positive chunk size and finite threshold in [0,1]")
+    if worker_threads is not None and (type(worker_threads) is not int or worker_threads < 1):
+        raise ValueError('MK-Curve worker_threads must be a positive integer')
+    if num_workers > 1 and worker_threads is None:
+        worker_threads = 1
+    if chunk_schedule not in ('dynamic', 'ordered'):
+        raise ValueError('MK-Curve chunk schedule must be dynamic or ordered')
+    import os
+    reservation = os.environ.get('SLICERDSPACE_STAGE_CPUS')
+    if reservation and num_workers * (worker_threads or 1) > int(reservation):
+        raise ValueError('MK-Curve workers and threads exceed the stage CPU reservation')
     if solver not in {"reference", "batched"}:
         raise ValueError("MK-Curve solver must be reference or batched")
     if any(value is not None for value in legacy.values()):
@@ -212,33 +237,28 @@ def run_mkcurve(dwi_path, bval_path, bvec_path, mask_path, output_dir, *,
             corrected_coefficients = np.lib.format.open_memmap(root / "corrected_coefficients.npy", mode="w+", dtype="float64", shape=(count, 22))
             results = {}
             try:
+                if worker_threads is not None:
+                    from threadpoolctl import threadpool_limits
+                    handles.enter_context(threadpool_limits(limits=worker_threads))
                 if num_workers > 1:
                     from concurrent.futures import ProcessPoolExecutor
                     import multiprocessing
-                    pool = handles.enter_context(ProcessPoolExecutor(max_workers=num_workers,
-                        mp_context=multiprocessing.get_context("spawn")))
+                    pool = ProcessPoolExecutor(max_workers=num_workers,
+                        mp_context=multiprocessing.get_context("spawn"),
+                        initializer=_initialize_worker, initargs=(worker_threads,))
+                    handles.callback(pool.shutdown, wait=True, cancel_futures=True)
                 else:
                     pool = None
-                pending = {}
-                def submit(start):
+                def payload(start):
                     stop = min(start + voxels_per_chunk, count)
                     chunk_coords = tuple(c[start:stop] for c in coords)
-                    payload = (data[chunk_coords].copy(), design, grid, threshold, solver)
-                    pending[start] = pool.submit(_fit_chunk, payload)
-                if pool:
-                    for start in range(0, min(count, num_workers * voxels_per_chunk), voxels_per_chunk):
-                        submit(start)
-                for start in range(0, count, voxels_per_chunk):
-                    stop = min(start + voxels_per_chunk, count)
+                    return data[chunk_coords].copy(), design, grid, threshold, solver
+                from microstructure.chunk_dispatch import chunk_results
+                completed = 0
+                for start, stop, fitted in chunk_results(count, voxels_per_chunk, num_workers,
+                        payload, _fit_chunk, pool=pool, schedule=chunk_schedule):
                     chunk_coords = tuple(c[start:stop] for c in coords)
-                    if pool:
-                        original, corrected, chunk_curves, detection = pending.pop(start).result()
-                        next_start = start + num_workers * voxels_per_chunk
-                        if next_start < count:
-                            submit(next_start)
-                    else:
-                        original, corrected, chunk_curves, detection = _fit_chunk(
-                            (data[chunk_coords].copy(), design, grid, threshold, solver))
+                    original, corrected, chunk_curves, detection = fitted
                     original_coefficients[start:stop] = original
                     curves[:, start:stop] = chunk_curves
                     corrected_coefficients[start:stop] = corrected
@@ -247,9 +267,10 @@ def run_mkcurve(dwi_path, bval_path, bvec_path, mask_path, output_dir, *,
                             results[key] = np.lib.format.open_memmap(Path(temporary) / f"{key}.npy", mode="w+", dtype=values.dtype, shape=mask.shape)
                             results[key][:] = 0
                         results[key][chunk_coords] = values
+                    completed += stop - start
                     if log:
-                        log(f"[MK-Curve Python] {stop}/{count} voxels; {len(grid)} synthetic b0 samples")
-                    _write_json(progress, {"status": "running", "completed_voxels": stop, "total_voxels": count,
+                        log(f"[MK-Curve Python] {completed}/{count} voxels; {len(grid)} synthetic b0 samples")
+                    _write_json(progress, {"status": "running", "completed_voxels": completed, "total_voxels": count,
                                            "num_workers": num_workers, "solver": solver})
                 paths, summaries = {}, {}
                 for key, values in results.items():
@@ -264,6 +285,8 @@ def run_mkcurve(dwi_path, bval_path, bvec_path, mask_path, output_dir, *,
                 record = {"kind": "mkcurve_python_port", "status": "completed", "backend": backend,
                           "method": "author-style unconstrained WLLS, numerical 256-direction MK, synthetic-b0 correction",
                           "settings": {"threshold": threshold, "solver": solver, "num_workers": num_workers,
+                                       "voxels_per_chunk": voxels_per_chunk, "worker_threads": worker_threads,
+                                       "chunk_schedule": chunk_schedule, "max_inflight_chunks": num_workers,
                                        "grid_policy": "adaptive author integer grid, independent of directory name",
                                        "grid_samples": len(grid), "b0_threshold": b0_threshold, "max_bvalue": max_bvalue},
                           "maps": paths, "inputs": inputs, "preparation": preparation, "signal_repair": repair,

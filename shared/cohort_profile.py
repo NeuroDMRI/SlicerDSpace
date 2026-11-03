@@ -17,8 +17,15 @@ from shared.cache_lock import cache_lock
 @lru_cache(maxsize=1)
 def _implementation():
     root = Path(__file__).resolve().parents[1]
-    sources = ('shared/cohort_profile.py', 'shared/cohort_planning.py', 'microstructure/pipeline.py',
-               'microstructure/dki.py', 'microstructure/mkcurve.py', 'tractography/wma.py')
+    sources = ('shared/cohort_profile.py', 'shared/cohort_planning.py', 'shared/cohort_schedule.py',
+               'shared/cohort_policy.py', 'shared/cohort_resources.py', 'shared/compute_schedule.py',
+               'shared/compute_tuning.py', 'shared/numeric_threads.py', 'shared/cohort_targets.py',
+               'scripts/autotune_batch.py',
+               'microstructure/pipeline.py', 'microstructure/dki.py', 'microstructure/mkcurve.py',
+               'microstructure/mkcurve_tensor.py', 'microstructure/mkcurve_inputs.py', 'microstructure/chunk_dispatch.py',
+               'microstructure/freewater_dispatch.py', 'microstructure/freewater_wls.py',
+               'microstructure/freewater_protocol.py', 'tractography/wma.py',
+               'tractography/wma_registration.py', 'tractography/wma_transform.py')
     result = {name: hashlib.sha256((root / name).read_bytes()).hexdigest() for name in sources}
     for name in ('numpy', 'scipy', 'dipy', 'torch', 'vtk', 'dmri-amico'):
         try:

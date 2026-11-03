@@ -92,6 +92,7 @@ class MicrostructureConfig:
     dki_fit_method: str = "WLS"
     dki_matlab_executable: Path | None = None
     dki_mkcurve_root: Path | None = None
+    dki_execution: dict | None = None
     force_recompute: bool = False
     noddi_directional_average: bool = False
     noddi_b0_threshold: int = 50
@@ -1701,11 +1702,14 @@ def _run_independent_models(config, log):
                 from microstructure.dki import DkiConfig, dki_outputs_current
                 if dki_outputs_current(DkiConfig(adjusted.subject_id,adjusted.raw_input_bundle,
                     adjusted.output_dir/'dki',fit_method=adjusted.dki_fit_method,
-                    matlab_executable=adjusted.dki_matlab_executable,mkcurve_root=adjusted.dki_mkcurve_root)):
+                    matlab_executable=adjusted.dki_matlab_executable,mkcurve_root=adjusted.dki_mkcurve_root,
+                    **(adjusted.dki_execution or {}))):
                     continue
         count = (_noddi_threads(adjusted) if stage == 'noddi' else
                  (1 if adjusted.free_water_engine == 'serial' else adjusted.free_water_n_jobs)
-                 if stage == 'freewater' else 1)
+                 if stage == 'freewater' else
+                 ((adjusted.dki_execution or {}).get('mkcurve_workers', 1) if adjusted.dki_fit_method == 'MKCURVE' else 1)
+                 * ((adjusted.dki_execution or {}).get('num_threads') or 1))
         jobs.append(ComputeJob(stage, (python, str(Path(__file__).with_name('compute_worker.py')),
             '--stage', stage, '--config', str(description)), threads=count, memory_bytes=reserve,
             environment={'OPENBLAS_NUM_THREADS':'1','OMP_NUM_THREADS':'1','MKL_NUM_THREADS':'1'}))
@@ -1760,6 +1764,7 @@ def run_microstructure(
             output_dir=output_dir / "dki", fit_method=config.dki_fit_method,
             matlab_executable=config.dki_matlab_executable, mkcurve_root=config.dki_mkcurve_root,
             force_recompute=config.force_recompute,
+            **(config.dki_execution or {}),
         ), log=log)
     expected_free_water_manifest = _expected_free_water_manifest(config)
     if (

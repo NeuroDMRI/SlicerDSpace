@@ -181,6 +181,10 @@ def _resolve_targets(args: argparse.Namespace) -> tuple[str, ...]:
 
 def resolve_analysis_options(args, *, explicit_dests=()):
     """Pure CLI/GUI experiment validation before any job writes outputs."""
+    for field in ('dki_threads', 'dki_voxels_per_chunk', 'mkcurve_workers', 'mkcurve_voxels_per_chunk', 'wma_threads'):
+        value = getattr(args, field, None)
+        if value is not None and (type(value) is not int or value < 1):
+            raise ValueError('--' + field.replace('_', '-') + ' must be a positive integer')
     microstructure_stages = _resolve_microstructure_stages(args)
     args.run_free_water = 'freewater' in microstructure_stages
     args.run_noddi = 'noddi' in microstructure_stages
@@ -632,6 +636,13 @@ def build_parser() -> argparse.ArgumentParser:
             "defaults to 2."
         ),
     )
+    parser.add_argument('--dki-threads', type=int, help='Numerical threads per DKI/MK-Curve worker; automatic reservation if omitted.')
+    parser.add_argument('--dki-voxels-per-chunk', type=int, default=1024, help='Bounded standard DKI fit block (default: 1024).')
+    parser.add_argument('--mkcurve-workers', type=int, default=1, help='Independent MK-Curve voxel workers (default: 1).')
+    parser.add_argument('--mkcurve-voxels-per-chunk', type=int, default=64, help='MK-Curve voxel block (default: 64).')
+    parser.add_argument('--mkcurve-chunk-schedule', choices=('dynamic', 'ordered'), default='dynamic',
+                        help='Refill voxel work on completion; ordered is retained for controlled comparisons.')
+    parser.add_argument('--wma-threads', type=int, help='WMA author worker count; otherwise use the admitted stage reservation.')
     parser.add_argument(
         "--microstructure-free-water-engine",
         default="serial",
@@ -911,6 +922,10 @@ def main(argv: list[str] | None = None) -> int:
         microstructure_dki_fit_method=args.dki_fit_method,
         microstructure_dki_matlab_executable=args.dki_matlab_executable,
         microstructure_dki_mkcurve_root=args.dki_mkcurve_root,
+        microstructure_dki_execution=dict(num_threads=args.dki_threads,
+            voxels_per_chunk=args.dki_voxels_per_chunk, mkcurve_workers=args.mkcurve_workers,
+            mkcurve_voxels_per_chunk=args.mkcurve_voxels_per_chunk, mkcurve_chunk_schedule=args.mkcurve_chunk_schedule),
+        wma_num_threads=args.wma_threads,
         microstructure_free_water_chunk_size=args.microstructure_free_water_chunk_size,
         microstructure_free_water_engine=args.microstructure_free_water_engine,
         microstructure_free_water_n_jobs=args.microstructure_free_water_n_jobs,

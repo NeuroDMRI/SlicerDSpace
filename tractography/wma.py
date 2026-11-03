@@ -109,7 +109,7 @@ class WMAOrgAtlasConfig:
     mrtrix_bin_dir: Optional[Path] = None
     transform_path: Optional[Path] = None
     registration_mode: str = "rig"
-    num_threads: int = 1
+    num_threads: Optional[int] = None
     use_virtual_x: bool = False
     export_diffusion_measures: bool = False
     fiber_tract_measurements_cli: Optional[Path] = None
@@ -595,11 +595,14 @@ def _wma_output_contract_error(output_summary: dict[str, Any]) -> Optional[str]:
 
 
 def build_wma_org_atlas_command(config: WMAOrgAtlasConfig) -> tuple[str, ...]:
+    if config.num_threads is None:
+        from dataclasses import replace
+        config = replace(config, num_threads=1)
     wma_root = resolve_wma_root(config.wma_root)
     script = _wma_script_path(wma_root)
     if config.registration_mode not in {"rig", "nonrig"}:
         raise ValueError("registration_mode must be 'rig' or 'nonrig'.")
-    if config.num_threads < 1:
+    if type(config.num_threads) is not int or config.num_threads < 1:
         raise ValueError("num_threads must be >= 1.")
     if config.clean_files not in {0, 1, 2}:
         raise ValueError("clean_files must be 0, 1, or 2.")
@@ -729,6 +732,15 @@ def run_wma_org_atlas(
 ) -> WMAOrgAtlasResult:
     """Prepare or execute clustering with the selected WMA atlas."""
 
+    from dataclasses import replace
+    import os
+    threads = config.num_threads or int(os.environ.get('SLICERDSPACE_STAGE_CPUS', '1'))
+    if config.num_threads is not None and (type(config.num_threads) is not int or config.num_threads < 1):
+        raise ValueError('WMA threads must be a positive integer')
+    reservation = os.environ.get('SLICERDSPACE_STAGE_CPUS')
+    if reservation and threads > int(reservation):
+        raise ValueError('WMA worker count exceeds the admitted CPU reservation')
+    config = replace(config, num_threads=threads)
     validate_wma_org_inputs(config)
     wma_root = resolve_wma_root(config.wma_root)
     backend_status = inspect_wma_backend(

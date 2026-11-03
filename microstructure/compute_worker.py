@@ -50,7 +50,7 @@ def run(stage, config):
         run_dki(DkiConfig(subject_id=config.subject_id, raw_input_bundle=config.raw_input_bundle,
             output_dir=config.output_dir/'dki', fit_method=config.dki_fit_method,
             matlab_executable=config.dki_matlab_executable, mkcurve_root=config.dki_mkcurve_root,
-            force_recompute=config.force_recompute), log=print)
+            force_recompute=config.force_recompute, **(config.dki_execution or {})), log=print)
     else:
         raise ValueError('Unknown private scalar stage')
 

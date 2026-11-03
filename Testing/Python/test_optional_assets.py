@@ -156,7 +156,7 @@ class OptionalAssetsTests(unittest.TestCase):
         manifest = load_manifest(ROOT / 'models/external_assets_manifest.json')
         mirror = resolve_asset_plan(manifest, 'mirrorable-inference')
         pnl = resolve_asset_plan(manifest, 'pnl-cnn')
-        template = 'brain_mask/pnl_cnn/IITmean_b0_256.nii.gz'
+        template = 'brain_mask/pnl_cnn_torch/IITmean_b0_256.nii.gz'
         self.assertNotIn(template, mirror.required_paths)
         self.assertIn(template, pnl.required_paths)
         self.assertTrue(any(path.endswith('ORG-RegAtlas-100HCP.zip') for path in mirror.required_paths))
@@ -171,10 +171,62 @@ class OptionalAssetsTests(unittest.TestCase):
     def test_upstream_only_ignores_mirror_and_base_url_overrides(self):
         manifest = load_manifest(ROOT / 'models/external_assets_manifest.json')
         plan = resolve_asset_plan(manifest, 'pnl-cnn')
-        record = plan.asset_records['brain_mask/pnl_cnn/IITmean_b0_256.nii.gz']
+        record = plan.asset_records['brain_mask/pnl_cnn_torch/IITmean_b0_256.nii.gz']
         candidates = _url_candidates_for_asset(manifest, dict(record, mirrors=['https://unauthorized.invalid/template']),
             source_ids=('optional_models_mirror',), base_urls=('https://unauthorized.invalid',), allow_planned_sources=True)
         self.assertEqual(candidates, [('url', record['urls'][0])])
+
+    def test_current_pnl_profiles_select_only_converted_weights(self):
+        manifest = load_manifest(ROOT / 'models/external_assets_manifest.json')
+        for profile in ('pnl-cnn', 'pnl-cnn-weights', 'mirrorable-inference'):
+            plan = resolve_asset_plan(manifest, profile)
+            pnl = [p for p in plan.required_paths if p.startswith('brain_mask/pnl_')]
+            self.assertTrue(any(p.endswith('axial.pt') for p in pnl))
+            self.assertFalse(any(p.endswith('.h5') or p.endswith('CompNetBasicModel.json') for p in pnl))
+            self.assertTrue(all(p.startswith('brain_mask/pnl_cnn_torch/') for p in pnl))
+        legacy = resolve_asset_plan(manifest, 'pnl-cnn-legacy')
+        self.assertEqual(sum(p.endswith('.h5') for p in legacy.required_paths), 3)
+
+    def test_pnl_preparation_download_plan_never_requests_legacy_hdf5(self):
+        from scripts.download_model_assets import AssetPlan
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / 'assets'
+            with patch.object(setup_optional_assets, 'download_asset_plan') as download, \
+                    patch.object(setup_optional_assets, 'verified_resource_directory', side_effect=[None, root / 'brain_mask/pnl_cnn_torch']), \
+                    patch.object(setup_optional_assets, 'verify_asset_plan', return_value={'ok': True}):
+                result = setup_optional_assets.prepare(['pnl-cnn'], asset_root=root, execute=True, accept_terms=True)
+            self.assertEqual(result['external_dependencies']['pnl_mask_model_dir'], str(root / 'brain_mask/pnl_cnn_torch'))
+            plan = download.call_args.args[1]
+            self.assertIsInstance(plan, AssetPlan)
+            self.assertFalse(any(p.endswith('.h5') for p in plan.required_paths))
+            self.assertEqual(sum(p.endswith('.pt') for p in plan.required_paths), 3)
+
+    def test_pnl_prefix_import_selects_torch_without_reading_legacy_hdf5(self):
+        from scripts import import_external_resources as importer
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            prefix, target = root / 'prefix', root / 'assets'
+            models = prefix / 'pnl-models'
+            models.mkdir(parents=True)
+            (models / 'weights.json').write_text('{}')
+            (models / 'axial.pt').write_bytes(b'converted')
+            license = prefix / 'lib/python3.11/site-packages/pnl_brain_mask-0.1.0.dist-info/licenses/LICENSE'
+            license.parent.mkdir(parents=True)
+            license.write_bytes(b'preserved PNL agreement')
+            records = {}
+            for relative, data in (
+                ('brain_mask/pnl_cnn_torch/axial.pt', b'converted'),
+                ('brain_mask/pnl_cnn_torch/LICENSE.txt', b'preserved PNL agreement'),
+                ('brain_mask/pnl_cnn/legacy.h5', b'never acquired'),
+            ):
+                records[relative] = dict(size_bytes=len(data), sha256=hashlib.sha256(data).hexdigest(), redistribution='with-notice')
+            catalog = root / 'catalog.json'
+            catalog.write_text(json.dumps({'asset_records': records}))
+            with patch.object(importer, 'MANIFEST', catalog), patch.object(sys, 'argv',
+                    ['import', '--asset-root', str(target), '--pnl-prefix', str(prefix), '--execute']):
+                importer.main()
+            self.assertEqual((target / 'brain_mask/pnl_cnn_torch/axial.pt').read_bytes(), b'converted')
+            self.assertFalse((target / 'brain_mask/pnl_cnn/legacy.h5').exists())
 
     def test_in_place_optional_export_does_not_delete_assets_or_overwrite_core_index(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -29,7 +29,7 @@ and explicitly apply the lighter preset:
 | Optional surface postprocessing | Licensed native components | Small component runtime; no full FreeSurfer |
 
 PNL and CSD/ACT defaults stay unchanged until explicitly changed. PNL still
-needs TensorFlow/ANTs; CSD/ACT and SAF need MRtrix; MRtrix/FSL preprocessing needs
+needs PyTorch/ANTs; CSD/ACT and SAF need MRtrix; MRtrix/FSL preprocessing needs
 FSL. UKF uses its installed extension. GPU-capable stages retain their device
 preference. Optional methods remain available on demand.
 

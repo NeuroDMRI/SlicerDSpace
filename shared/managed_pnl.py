@@ -1,4 +1,4 @@
-"""Pinned upstream PNL assets and an isolated, author-compatible environment."""
+"""Pinned PyTorch PNL assets, with a separate author-compatible ANTs runtime."""
 
 from pathlib import Path, PurePosixPath
 import shutil
@@ -9,32 +9,26 @@ import urllib.request
 from shared.external_process import external_python_environment
 
 PNL_COMMIT = "d7fe0fd4976c2d5a3489526f75d2a00dae3e1fe1"
-CONVERSION_COMMIT = "cdd433adff3eebc486f2b5648714cbfe93b9422e"
+PNL_TORCH_COMMIT = "8d201a50447ebea8b10a4f252bfd262931603970"
 PNL_TERMS_URL = "https://github.com/pnlbwh/CNN-Diffusion-MRIBrain-Segmentation"
 PNL_MODEL_TERMS_URL = PNL_TERMS_URL + "/releases/tag/v0.3"
 PNL_TEMPLATE_TERMS_URL = "https://www.nitrc.org/frs/?group_id=432"
+PNL_TORCH_URL = "https://github.com/ChengjinLii/PNLBrainMask-Torch"
+PNL_WHEEL = "pnl_brain_mask-0.1.0-py3-none-any.whl"
 ASSETS = {
-    "pnl-source.tar.gz": (
-        f"https://codeload.github.com/pnlbwh/CNN-Diffusion-MRIBrain-Segmentation/tar.gz/{PNL_COMMIT}",
-        "b0737dc24dc5d0145c1819db7a5811777d673784c9ead48054f1724745624721"),
-    "pnl-models.tar.gz": (
-        "https://github.com/pnlbwh/CNN-Diffusion-MRIBrain-Segmentation/releases/download/v0.3/model_folder.tar.gz",
-        "c67210fd59e5bcaf8e0e730bdde9d8f28b817148a74d9586a39c9b6e86df5191"),
+    PNL_WHEEL: (
+        f"https://raw.githubusercontent.com/ChengjinLii/PNLBrainMask-Torch/{PNL_TORCH_COMMIT}/artifacts/{PNL_WHEEL}",
+        "44f16ebe938db2ad4be0a5d4f1fe834b73ffdcdcdc1205c7ba965781a5916dac"),
     "IITmean_b0_256.nii.gz": (
         "https://www.nitrc.org/frs/download.php/11290/IITmean_b0_256.nii.gz",
         "2bb1a7bbe448702033a515e76164df6472828422ecef5cb4f996d91ec126dead"),
-    "conversion.tar.gz": (
-        f"https://codeload.github.com/pnlbwh/conversion/tar.gz/{CONVERSION_COMMIT}",
-        "08e93b798cebd18ae7ea890db2912bd12ded94a3054992a97f9261f2d8d0be93"),
 }
 RESOURCE_HASHES = {
-    "pnl-source/pipeline/dwi_masking.py": "de1180437804dcfdc6c4cdf697bed70c59ab8f5c196cc104be05519a1cb7d961",
-    "pnl-source/LICENSE": "5525714ad257e12031974b608a7ee428f14ae28791c7ccbc0866271b24008d45",
-    "pnl-models/CompNetBasicModel.json": "989fd5a64d9307268441c3525d59b31d59c20db864f0262ef53ad53ec495bdae",
+    "pnl-models/weights.json": "b1af9575253ec94aa5e52b22a14731745e07fac4fb9453c70074e9e2cae48baa",
     "pnl-models/IITmean_b0_256.nii.gz": ASSETS["IITmean_b0_256.nii.gz"][1],
-    "pnl-models/weights-axial-improvement-08.h5": "e11d3c410769c68844109a86eed40ebedc655ea03c14f6f54f4f13749c5ead18",
-    "pnl-models/weights-coronal-improvement-08.h5": "248dcf90752d4e0a2e22a136c5f0ca6d3c9cb9b628d131ce869d9ef6cbea702c",
-    "pnl-models/weights-sagittal-improvement-09.h5": "27aaafddac65617e0653c4da4fd0c650529fcc8150b4efd6b66135070ebc01bc",
+    "pnl-models/axial.pt": "27bf8c38a38dfef44f1bb25ab2d180803d9a5794e5dcdb69c4ab0692f2744287",
+    "pnl-models/coronal.pt": "a11da30afb41d8db1afa7c447ff94260e7421b0e00c4dd1018825408059a2feb",
+    "pnl-models/sagittal.pt": "7dd553b55a4d1d108ddd3e0bad99d6275a4c3a9c833dd469a0ad026d393afdcc",
 }
 
 
@@ -110,63 +104,70 @@ def extract_regular_files(archive, destination):
 
 
 def provision_assets(prefix, cache, *, repair=False, asset_root=None):
-    from shared.managed_runtimes import _run
+    from shared.managed_runtimes import _run, file_hash
+    from shared.optional_assets import verified_resource_directory
     from shared.model_assets import configured_model_assets_root
-    from shared.optional_assets import MANIFEST, verified_resource_directory
-    from scripts.import_external_resources import import_file
-    import json
-    import tempfile
-    archives = {name: verified_download(name, cache) for name in ("pnl-source.tar.gz", "conversion.tar.gz")}
-    extract_regular_files(archives["pnl-source.tar.gz"], prefix / "pnl-source")
-    if verified_resource_directory("pnl-cnn", asset_root=asset_root) is None:
+
+    source = verified_download(PNL_WHEEL, cache)
+    # Installing this package does not install TensorFlow, Keras, h5py or conversion.
+    # Keep a compatible existing Torch build; new managed prefixes use the
+    # CPU build covered by paired validation, not an unqualified CUDA upgrade.
+    python = str(prefix / "bin/python")
+    probe = subprocess.run([python, "-c", "import torch; v=tuple(map(int,torch.__version__.split('+')[0].split('.')[:2])); assert (2,4)<=v<(3,0)"],
+                           capture_output=True, env=pnl_python_environment(python), timeout=60)
+    if probe.returncode:
+        _run([python, "-m", "pip", "install", "torch==2.5.1", "--index-url", "https://download.pytorch.org/whl/cpu"])
+    if repair:
+        _run([python, "-m", "pip", "install", "--force-reinstall", "--no-deps", str(source)])
+    _run([python, "-m", "pip", "install", str(source)])
+    models = prefix / "pnl-models"
+    if models.is_symlink():
+        raise ValueError("PNL model directory cannot be a symlink")
+    models.mkdir(parents=True, exist_ok=True)
+    template = models / "IITmean_b0_256.nii.gz"
+    shared = verified_resource_directory("pnl-cnn", asset_root=asset_root)
+    if shared:
+        for relative, expected in RESOURCE_HASHES.items():
+            target, original = models / Path(relative).name, shared / Path(relative).name
+            if not target.exists() and original.is_file() and file_hash(original) == expected:
+                shutil.copyfile(original, target)
+    # A historical install may already have the authorized IIT template. Its
+    # known hash is sufficient; do not require or download the old HDF5 group.
+    if not template.exists():
         root = configured_model_assets_root(asset_root)
-        records = json.loads(MANIFEST.read_text())["asset_records"]
-        # Use the author's public archive for first acquisition, and the
-        # shared verified files thereafter. IIT is never sourced from a mirror.
-        with tempfile.TemporaryDirectory(prefix="pnl-model-import-", dir=cache) as temporary:
-            staging = Path(temporary)
-            extract_regular_files(verified_download("pnl-models.tar.gz", cache), staging)
-            template = verified_download("IITmean_b0_256.nii.gz", cache)
-            for relative, record in records.items():
-                if not relative.startswith("brain_mask/pnl_cnn/"):
-                    continue
-                name = Path(relative).name
-                source = prefix / "pnl-source/LICENSE" if name == "LICENSE.txt" else (
-                    template if name == "IITmean_b0_256.nii.gz" else staging / name)
-                import_file(source, root / relative, record)
-    # TensorFlow 2.15/Keras 2 matches the reviewed author architecture. CUDA
-    # libraries are user-local wheels; NVIDIA drivers are never installed.
-    _run([str(prefix / "bin/python"), "-m", "pip", "install", *(["--force-reinstall"] if repair else []), "tensorflow[and-cuda]==2.15.1",
-          "scikit-image==0.22.0", "numpy==1.26.4", "nibabel==5.2.1", "pynrrd==1.0.0",
-          str(archives["conversion.tar.gz"])])
+        for folder in ("pnl_cnn_torch", "pnl_cnn"):
+            original = root / "brain_mask" / folder / template.name
+            if original.is_file() and file_hash(original) == ASSETS[template.name][1]:
+                shutil.copyfile(original, template)
+                break
+    _run([str(prefix / "bin/python"), "-m", "pnl_brain_mask", "fetch",
+          "--model-dir", str(models), "--accept-terms",
+          *([] if template.is_file() and file_hash(template) == ASSETS[template.name][1] else ["--template"])])
 
 
 def verify_assets(prefix, *, asset_root=None):
     from shared.managed_runtimes import file_hash
-    from shared.optional_assets import verified_resource_directory
-    source = prefix / "pnl-source"
-    # Keep existing prefix-local receipts and manually configured installs valid.
-    models = (prefix / "pnl-models") if (prefix / "pnl-models").is_dir() else (
-        verified_resource_directory("pnl-cnn", asset_root=asset_root) or prefix / "pnl-models")
-    required = [source / "pipeline/dwi_masking.py", source / "LICENSE",
-                models / "CompNetBasicModel.json", models / "IITmean_b0_256.nii.gz"]
-    for view in ("axial", "coronal", "sagittal"):
-        weights = list(models.glob(f"weights-{view}-improvement-*.h5"))
-        if len(weights) != 1:
-            raise RuntimeError("PNL requires exactly one weight file per view")
-        required.extend(weights)
-    if any(not path.is_file() or path.is_symlink() for path in required):
-        raise RuntimeError("PNL runtime resources are incomplete")
+    import json
+
+    models = prefix / "pnl-models"
     for relative, expected in RESOURCE_HASHES.items():
-        path = models / Path(relative).name if relative.startswith("pnl-models/") else prefix / relative
-        if file_hash(path) != expected:
+        resource = prefix / relative
+        if resource.is_symlink() or not resource.is_file():
+            raise RuntimeError("PNL Torch runtime resources are incomplete: " + relative)
+        if file_hash(resource) != expected:
             raise RuntimeError("PNL resource checksum changed: " + relative)
+    script = prefix / "bin/pnl-brain-mask"
+    if not script.is_file():
+        raise RuntimeError("PNL Torch console entry point is missing")
     probe = Path(__file__).with_name("pnl_runtime_probe.py")
-    subprocess.run([str(prefix / "bin/python"), str(probe), str(models)], check=True,
-                   env=pnl_python_environment(prefix / "bin/python"), timeout=180)
+    result = subprocess.run([str(prefix / "bin/python"), str(probe), str(models)], check=True,
+                            capture_output=True, text=True,
+                            env=pnl_python_environment(prefix / "bin/python"), timeout=180)
+    details = json.loads(result.stdout)
     return {"external_dependencies": {"pnl_mask_python": str(prefix / "bin/python"),
-            "pnl_mask_script": str(required[0]), "pnl_mask_model_dir": str(models),
+            "pnl_mask_script": str(script), "pnl_mask_model_dir": str(models),
             "pnl_mask_ants_bin_dir": str(prefix / "bin")},
-            "pnl_resource_sha256": {relative: file_hash(models / Path(relative).name if relative.startswith("pnl-models/") else prefix / relative)
-                                    for relative in RESOURCE_HASHES},
-            "pnl_source_commit": PNL_COMMIT, "conversion_source_commit": CONVERSION_COMMIT}
+            "pnl_resource_sha256": {**{relative: file_hash(prefix / relative) for relative in RESOURCE_HASHES},
+                                    **{"package/" + name: digest for name, digest in details["package_source_sha256"].items()}},
+            "pnl_source_commit": PNL_COMMIT, "pnl_torch_commit": PNL_TORCH_COMMIT,
+            "pnl_framework": "pytorch", "pnl_runtime_probe": details}

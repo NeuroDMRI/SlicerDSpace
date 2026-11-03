@@ -88,7 +88,7 @@ PNL 模型/模板、TractCloud 推理参考、SynthStrip 权重和 WMA ORG 图�
 | CUDA eddy 2602.0 | 可选 FSL profile，需要 NVIDIA 驱动，不要求安装完整 CUDA Toolkit |
 | DDSurfer / DDSeg / DDParcel 资源 | 已有后台下载，改为按产品选择并使用默认目录 |
 | Python 科学计算包 | 所选解释器、核心版本约束、可用时使用原生 packaging API；官方 PyTorch 辅助器 |
-| PNL diffusion CNN | Linux x86_64；固定官方源码、v0.3 三方向权重、IIT b0 模板、Python 3.11、TensorFlow 2.15.1/Keras 2、ANTs 2.3.0，独立环境 |
+| PNL diffusion CNN | Linux x86_64；固定 PNLBrainMask-Torch 包、转换后的 v0.3 三方向权重、IIT b0 模板、Python 3.11、PyTorch 2.5.1 CPU、ANTs 2.3.0，独立环境 |
 | 可选皮层后处理 | Linux x86_64 [合格预编译运行包](SURFACE_COMPONENTS.zh-CN.md)；已测离线安装，在线发布待完成；个人激活文件独立提供，GUI 不编译源码 |
 | WMA / TractCloud / SynthStrip 非代码资源 | 所选分组下载/导入、校验、ORG 解压及自动保存路径；私有镜像仍需访问权限 |
 | WMA/WMQL/TractCloud 源码 | 固定提交压缩包、安全解压、逐文件哈希、自动发现并保存路径，无需 Git，也不重复实现算法 |

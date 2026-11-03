@@ -98,17 +98,16 @@ FAKE_COMMAND = textwrap.dedent(
     record = {"argv": args, "python": sys.executable}
     if MODE == "pnl_cnn":
         parser = argparse.ArgumentParser()
-        for flag in ("-i", "-f", "-nproc", "-p", "-qc"):
+        parser.add_argument("command", choices=("mask",))
+        for flag in ("--input", "--output", "--model-dir", "--percentile", "--threads", "--device", "--record", "--ants-bin"):
             parser.add_argument(flag, required=True)
         parsed = parser.parse_args(args)
-        assert (parsed.nproc, parsed.p, parsed.qc) == ("1", "99", "0")
-        listing = Path(parsed.i).read_text(encoding="utf-8").splitlines()
-        assert len(listing) == 1
-        source = Path(listing[0])
+        assert parsed.percentile == "99"
+        source = Path(parsed.input)
         assert source.name == "mean_b0.nii.gz"
-        assert Path(parsed.f).is_symlink()
-        record["model_dir"] = str(Path(parsed.f).resolve())
-        record["model_files"] = sorted(p.name for p in Path(parsed.f).iterdir())
+        assert Path(parsed.model_dir).is_symlink()
+        record["model_dir"] = str(Path(parsed.model_dir).resolve())
+        record["model_files"] = sorted(p.name for p in Path(parsed.model_dir).iterdir())
         record["ants"] = {}
         for name in ("antsRegistrationSyNQuick.sh", "antsApplyTransforms", "ImageMath"):
             executable = shutil.which(name)
@@ -117,7 +116,7 @@ FAKE_COMMAND = textwrap.dedent(
                                     capture_output=True, text=True)
             assert result.stdout.strip() == name
             record["ants"][name] = executable
-        candidate = source.with_name("mean_b0_bse-multi_BrainMask.nii.gz")
+        candidate = Path(parsed.output)
     elif MODE == "mrtrix":
         assert len(args) == 6 and args[2] == "-fslgrad" and args[5] == "-force"
         source, candidate = Path(args[0]), Path(args[1])
@@ -177,10 +176,10 @@ def write_fake_mrtrix(bin_dir: Path, *, behavior: str = "valid") -> Path:
 def fake_pnl_config(root: Path) -> BrainMaskConfig:
     models = root / "PNL models with spaces"
     models.mkdir(parents=True)
-    (models / "CompNetBasicModel.json").write_text("{}\n", encoding="ascii")
+    (models / "weights.json").write_text("{}\n", encoding="ascii")
     save_nifti(models / "IITmean_b0_256.nii.gz", np.ones(SHAPE, dtype=np.float32))
     for view in ("sagittal", "coronal", "axial"):
-        (models / f"weights-{view}-improvement-01.h5").write_bytes(b"adapter-only fake weights")
+        (models / f"{view}.pt").write_bytes(b"adapter-only fake weights")
     ants = root / "ANTs tools with spaces"
     ants.mkdir()
     for name in ANTS_COMMANDS:
@@ -189,7 +188,7 @@ def fake_pnl_config(root: Path) -> BrainMaskConfig:
             f"#!{sys.executable}\nfrom pathlib import Path\nprint(Path(__file__).name)\n", encoding="ascii"
         )
         tool.chmod(0o755)
-    script = write_fake_command(root / "PNL scripts with spaces" / "dwi_masking.py", "pnl_cnn")
+    script = write_fake_command(root / "PNL scripts with spaces" / "pnl-brain-mask", "pnl_cnn")
     return BrainMaskConfig(
         brain_mask_device="cpu",
         pnl_mask_python=Path(sys.executable), pnl_mask_script=script,
@@ -287,34 +286,36 @@ class BrainMaskBackendsTest(unittest.TestCase):
         self.assertEqual(set(ANTS_COMMANDS) - inspected["tool_paths"].keys(), set())
         self.assertEqual(self.calls(config.pnl_mask_script), [])
 
-    def test_pnl_requires_exactly_one_weight_file_per_view(self) -> None:
+    def test_pnl_requires_converted_weights_and_rejects_legacy_hdf5(self) -> None:
         config = fake_pnl_config(self.root)
         for view in ("sagittal", "coronal", "axial"):
-            file = config.pnl_mask_model_dir / f"weights-{view}-improvement-01.h5"
+            file = config.pnl_mask_model_dir / f"{view}.pt"
             content = file.read_bytes()
             with self.subTest(view=view, problem="missing"):
                 file.unlink()
                 inspected = inspect_brain_mask_backend(config)
                 self.assertFalse(inspected["available"])
-                self.assertIn(f"exactly one weights-{view}-improvement-*.h5", inspected["missing_required"])
+                self.assertTrue(any(item.startswith(view + ".pt") for item in inspected["missing_required"]))
                 file.write_bytes(content)
-            with self.subTest(view=view, problem="ambiguous"):
-                duplicate = file.with_name(f"weights-{view}-improvement-02.h5")
-                duplicate.write_bytes(content)
+            with self.subTest(view=view, problem="legacy_hdf5"):
+                file.unlink()
+                legacy = file.with_name(f"weights-{view}-improvement-01.h5")
+                legacy.write_bytes(content)
                 inspected = inspect_brain_mask_backend(config)
                 self.assertFalse(inspected["available"])
-                self.assertIn(f"exactly one weights-{view}-improvement-*.h5", inspected["missing_required"])
+                self.assertTrue(any("legacy HDF5" in item for item in inspected["missing_required"]))
                 with patch.object(brain_mask, "_run") as run:
-                    with self.assertRaisesRegex(FileNotFoundError, "exactly one weights"):
+                    with self.assertRaisesRegex(FileNotFoundError, "legacy HDF5"):
                         self.generate(config)
                     run.assert_not_called()
-                duplicate.unlink()
+                legacy.unlink()
+                file.write_bytes(content)
         self.assertTrue(inspect_brain_mask_backend(config)["available"])
 
     def test_pnl_checks_model_template_script_interpreter_and_all_ants_commands(self) -> None:
         config = fake_pnl_config(self.root)
         cases = [
-            (config.pnl_mask_model_dir / "CompNetBasicModel.json", "CompNetBasicModel.json"),
+            (config.pnl_mask_model_dir / "weights.json", "weights.json"),
             (config.pnl_mask_model_dir / "IITmean_b0_256.nii.gz", "IITmean_b0_256.nii.gz"),
             (config.pnl_mask_script, "pnl_mask_script"),
             *[(config.pnl_mask_ants_bin_dir / command, command) for command in ANTS_COMMANDS],
@@ -381,7 +382,7 @@ class BrainMaskBackendsTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Unknown brain mask backend"):
             self.generate(BrainMaskConfig(backend="auto"))
 
-    def test_pnl_official_adapter_interface_output_and_environment(self) -> None:
+    def test_pnl_torch_adapter_interface_output_and_environment(self) -> None:
         config = replace(fake_pnl_config(self.root), threads=3)
         before = self.snapshot()
         logs = []
@@ -392,11 +393,13 @@ class BrainMaskBackendsTest(unittest.TestCase):
         self.assertEqual(command[:2], [str(config.pnl_mask_python), str(Path(brain_mask.__file__).with_name("pnl_mask_runner.py"))])
         self.assertEqual(command[command.index("--script") + 1], str(config.pnl_mask_script))
         upstream = command[command.index("--") + 1:]
-        self.assertEqual(upstream[0::2], ["-i", "-f", "-nproc", "-p", "-qc"])
-        self.assertEqual(upstream[4:], ["-nproc", "1", "-p", "99", "-qc", "0"])
-        self.assertEqual(call["argv"], upstream)
+        self.assertEqual(upstream[0], "mask")
+        self.assertEqual(upstream[upstream.index("--percentile") + 1], "99")
+        self.assertEqual(upstream[upstream.index("--threads") + 1], "3")
+        self.assertEqual(call["argv"], [*upstream, "--device", "cpu", "--record", command[command.index("--record") + 1]])
         self.assertEqual(result["device_execution"]["resolved"], "cpu")
-        self.assertEqual(Path(call["candidate"]).name, "mean_b0_bse-multi_BrainMask.nii.gz")
+        self.assertEqual(Path(call["candidate"]).name, "mask.nii.gz")
+        self.assertEqual(result["device_execution"]["framework"], "pytorch")
         self.assertEqual(call["model_dir"], str(config.pnl_mask_model_dir))
         self.assertEqual(len(call["model_files"]), 5)
         for name in ANTS_COMMANDS:
@@ -582,10 +585,10 @@ class BrainMaskBackendsTest(unittest.TestCase):
         config = fake_pnl_config(self.root)
         previous = self.generate(config)
         files = [
-            config.pnl_mask_model_dir / "CompNetBasicModel.json",
-            config.pnl_mask_model_dir / "weights-sagittal-improvement-01.h5",
-            config.pnl_mask_model_dir / "weights-coronal-improvement-01.h5",
-            config.pnl_mask_model_dir / "weights-axial-improvement-01.h5",
+            config.pnl_mask_model_dir / "weights.json",
+            config.pnl_mask_model_dir / "sagittal.pt",
+            config.pnl_mask_model_dir / "coronal.pt",
+            config.pnl_mask_model_dir / "axial.pt",
             config.pnl_mask_model_dir / "IITmean_b0_256.nii.gz",
             config.pnl_mask_script,
         ]

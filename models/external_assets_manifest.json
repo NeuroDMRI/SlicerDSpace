@@ -6,6 +6,13 @@
     "optional_models_mirror"
   ],
   "asset_sources": {
+    "pnl_torch_release": {
+      "kind": "url",
+      "status": "active",
+      "access": "public",
+      "public": true,
+      "description": "Converted PNL CompNet files from PNLBrainMask-Torch commit 8d201a50447ebea8b10a4f252bfd262931603970. Use each record's pinned URL and SHA256; no legacy HDF5 acquisition."
+    },
     "wma_atlases_mirror": {
       "kind": "url-template",
       "status": "active",
@@ -24,6 +31,53 @@
     }
   },
   "asset_records": {
+    "brain_mask/pnl_cnn_torch/axial.pt": {
+      "sha256": "27bf8c38a38dfef44f1bb25ab2d180803d9a5794e5dcdb69c4ab0692f2744287",
+      "size_bytes": 74989746,
+      "urls": ["https://raw.githubusercontent.com/ChengjinLii/PNLBrainMask-Torch/8d201a50447ebea8b10a4f252bfd262931603970/weights/axial.pt"],
+      "source_ids": ["pnl_torch_release"],
+      "redistribution": "with-notice",
+      "license": "PNL/BWH software and data agreement, modified PyTorch conversion"
+    },
+    "brain_mask/pnl_cnn_torch/coronal.pt": {
+      "sha256": "a11da30afb41d8db1afa7c447ff94260e7421b0e00c4dd1018825408059a2feb",
+      "size_bytes": 75012598,
+      "urls": ["https://raw.githubusercontent.com/ChengjinLii/PNLBrainMask-Torch/8d201a50447ebea8b10a4f252bfd262931603970/weights/coronal.pt"],
+      "source_ids": ["pnl_torch_release"],
+      "redistribution": "with-notice",
+      "license": "PNL/BWH software and data agreement, modified PyTorch conversion"
+    },
+    "brain_mask/pnl_cnn_torch/sagittal.pt": {
+      "sha256": "7dd553b55a4d1d108ddd3e0bad99d6275a4c3a9c833dd469a0ad026d393afdcc",
+      "size_bytes": 75013528,
+      "urls": ["https://raw.githubusercontent.com/ChengjinLii/PNLBrainMask-Torch/8d201a50447ebea8b10a4f252bfd262931603970/weights/sagittal.pt"],
+      "source_ids": ["pnl_torch_release"],
+      "redistribution": "with-notice",
+      "license": "PNL/BWH software and data agreement, modified PyTorch conversion"
+    },
+    "brain_mask/pnl_cnn_torch/weights.json": {
+      "sha256": "b1af9575253ec94aa5e52b22a14731745e07fac4fb9453c70074e9e2cae48baa",
+      "size_bytes": 1529,
+      "urls": ["https://raw.githubusercontent.com/ChengjinLii/PNLBrainMask-Torch/8d201a50447ebea8b10a4f252bfd262931603970/weights/weights.json"],
+      "source_ids": ["pnl_torch_release"],
+      "redistribution": "with-notice"
+    },
+    "brain_mask/pnl_cnn_torch/LICENSE.txt": {
+      "sha256": "2586e5953fa5a9bd8d700c21db9503ed448a57209f6e4f24ec3f8d5381715902",
+      "size_bytes": 11374,
+      "urls": ["https://raw.githubusercontent.com/ChengjinLii/PNLBrainMask-Torch/8d201a50447ebea8b10a4f252bfd262931603970/LICENSE"],
+      "source_ids": ["pnl_torch_release"],
+      "redistribution": "with-notice"
+    },
+    "brain_mask/pnl_cnn_torch/IITmean_b0_256.nii.gz": {
+      "sha256": "2bb1a7bbe448702033a515e76164df6472828422ecef5cb4f996d91ec126dead",
+      "size_bytes": 7830929,
+      "urls": ["https://www.nitrc.org/frs/download.php/11290/IITmean_b0_256.nii.gz"],
+      "source_ids": ["iit_upstream_only"],
+      "redistribution": "upstream-only",
+      "license_url": "https://www.nitrc.org/projects/iit/",
+      "reason": "IIT remains an original-site-only acquisition; the PyTorch port does not mirror the template."
+    },
     "surface/postprocessing/atlas.tar.gz": {
       "sha256": "531f481bd677396f8b4c816f0be076a35249f2991cb4d4456b22cbc1b583c510",
       "size_bytes": 29657074,
@@ -448,6 +502,18 @@
     },
     "pnl-cnn-weights": {
       "required_paths": [
+        "brain_mask/pnl_cnn_torch/axial.pt",
+        "brain_mask/pnl_cnn_torch/coronal.pt",
+        "brain_mask/pnl_cnn_torch/sagittal.pt",
+        "brain_mask/pnl_cnn_torch/weights.json",
+        "brain_mask/pnl_cnn_torch/LICENSE.txt"
+      ],
+      "terms_notice": [
+        "PNLBrainMask-Torch v0.1.0 converted CompNet weights. Preserve the complete PNL/BWH software/data agreement and modified-version attribution. No HDF5 or TensorFlow resources are required."
+      ]
+    },
+    "pnl-cnn-legacy-weights": {
+      "required_paths": [
         "brain_mask/pnl_cnn/CompNetBasicModel.json",
         "brain_mask/pnl_cnn/weights-axial-improvement-08.h5",
         "brain_mask/pnl_cnn/weights-coronal-improvement-08.h5",
@@ -459,15 +525,23 @@
       ]
     },
     "pnl-cnn": {
-      "directory": "brain_mask/pnl_cnn",
+      "directory": "brain_mask/pnl_cnn_torch",
       "include_profiles": [
         "pnl-cnn-weights"
       ],
       "required_paths": [
-        "brain_mask/pnl_cnn/IITmean_b0_256.nii.gz"
+        "brain_mask/pnl_cnn_torch/IITmean_b0_256.nii.gz"
       ],
       "terms_notice": [
         "Includes an upstream-only IIT template for local verification/acquisition. Mirror export is prohibited without separate written permission."
+      ]
+    },
+    "pnl-cnn-legacy": {
+      "directory": "brain_mask/pnl_cnn",
+      "include_profiles": ["pnl-cnn-legacy-weights"],
+      "required_paths": ["brain_mask/pnl_cnn/IITmean_b0_256.nii.gz"],
+      "terms_notice": [
+        "Historical author HDF5 receipts for explicit offline conversion/audit only; not selected by current PNL runtime or optional-resource preparation."
       ]
     },
     "tractcloud": {

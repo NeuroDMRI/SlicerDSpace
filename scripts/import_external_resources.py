@@ -145,10 +145,18 @@ def main():
     root = args.asset_root.expanduser().resolve()
     manifest = json.loads(MANIFEST.read_text())
     mapping = {}
+    pnl_torch = bool(args.pnl_prefix and (args.pnl_prefix / 'pnl-models/weights.json').is_file())
+    pnl_directory = 'brain_mask/pnl_cnn_torch/' if pnl_torch else 'brain_mask/pnl_cnn/'
     for relative in manifest['asset_records']:
         source = None
-        if args.pnl_prefix and relative.startswith('brain_mask/pnl_cnn/'):
-            source = args.pnl_prefix / ('pnl-source/LICENSE' if relative.endswith('/LICENSE.txt') else 'pnl-models/' + Path(relative).name)
+        if args.pnl_prefix and relative.startswith(pnl_directory):
+            if pnl_torch and relative.endswith('/LICENSE.txt'):
+                licenses = list(args.pnl_prefix.glob('lib/python*/site-packages/pnl_brain_mask-*.dist-info/licenses/LICENSE'))
+                if len(licenses) != 1:
+                    parser.error('A single installed PNLBrainMask-Torch license is required for import')
+                source = licenses[0]
+            else:
+                source = args.pnl_prefix / ('pnl-source/LICENSE' if relative.endswith('/LICENSE.txt') else 'pnl-models/' + Path(relative).name)
         elif args.tractcloud_data and relative.startswith('bundles/tractcloud/'):
             source = args.tractcloud_license if relative.endswith('/LICENSE.txt') else args.tractcloud_data / relative.removeprefix('bundles/tractcloud/')
         elif args.synthstrip_model and relative == 'brain_mask/synthstrip/synthstrip.1.pt':

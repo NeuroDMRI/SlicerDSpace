@@ -16,9 +16,56 @@ class ManagedPnlTests(unittest.TestCase):
             root = Path(temp)
             with patch("shared.optional_assets.verified_resource_directory", return_value=root / "shared"), \
                     patch.object(pnl, "verified_download", side_effect=lambda name, cache: cache / name) as download, \
-                    patch.object(pnl, "extract_regular_files"), patch.object(runtime, "_run"):
+                    patch.object(pnl.subprocess, "run", return_value=type("Probe", (), {"returncode": 0})()), \
+                    patch.object(runtime, "_run") as run:
                 pnl.provision_assets(root / "runtime", root / "cache", asset_root=root / "assets")
-            self.assertEqual([call.args[0] for call in download.call_args_list], ["pnl-source.tar.gz", "conversion.tar.gz"])
+            self.assertEqual([call.args[0] for call in download.call_args_list], [pnl.PNL_WHEEL])
+            commands = [call.args[0] for call in run.call_args_list]
+            self.assertTrue(any("pnl_brain_mask" in command for command in commands))
+            self.assertNotIn("tensorflow", repr(commands).lower())
+            self.assertNotIn("conversion.tar.gz", repr(commands))
+
+    def test_compatible_torch_is_preserved_even_on_package_repair(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            with patch.object(pnl, "verified_download", return_value=root / pnl.PNL_WHEEL), \
+                    patch("shared.optional_assets.verified_resource_directory", return_value=None), \
+                    patch.object(pnl.subprocess, "run", return_value=type("Probe", (), {"returncode": 0})()), \
+                    patch.object(runtime, "_run") as run:
+                pnl.provision_assets(root / "prefix", root / "cache", repair=True)
+            commands = [call.args[0] for call in run.call_args_list]
+            self.assertFalse(any("torch==2.5.1" in command for command in commands))
+            reinstall = next(command for command in commands if "--force-reinstall" in command)
+            self.assertIn("--no-deps", reinstall)
+
+    def test_new_environment_uses_reviewed_cpu_torch_without_tensorflow(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            with patch.object(pnl, "verified_download", return_value=root / pnl.PNL_WHEEL), \
+                    patch("shared.optional_assets.verified_resource_directory", return_value=None), \
+                    patch.object(pnl.subprocess, "run", return_value=type("Probe", (), {"returncode": 1})()), \
+                    patch.object(runtime, "_run") as run:
+                pnl.provision_assets(root / "prefix", root / "cache")
+            commands = [call.args[0] for call in run.call_args_list]
+            torch_install = next(command for command in commands if "torch==2.5.1" in command)
+            self.assertEqual(torch_install[-1], "https://download.pytorch.org/whl/cpu")
+
+    def test_shared_converted_weights_are_copied_before_fetch(self):
+        import hashlib
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            shared = root / 'shared'
+            shared.mkdir()
+            content = b'converted state fixture'
+            (shared / 'axial.pt').write_bytes(content)
+            hashes = {'pnl-models/axial.pt': hashlib.sha256(content).hexdigest()}
+            with patch.object(pnl, 'RESOURCE_HASHES', hashes), \
+                    patch.object(pnl, 'verified_download', return_value=root / pnl.PNL_WHEEL), \
+                    patch('shared.optional_assets.verified_resource_directory', return_value=shared), \
+                    patch.object(pnl.subprocess, 'run', return_value=type('Probe', (), {'returncode': 0})()), \
+                    patch.object(runtime, '_run'):
+                pnl.provision_assets(root / 'prefix', root / 'cache', asset_root=root / 'assets')
+            self.assertEqual((root / 'prefix/pnl-models/axial.pt').read_bytes(), content)
 
     def archive(self, root, name, kind=None):
         file = root / "fixture.tar.gz"

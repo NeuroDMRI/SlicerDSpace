@@ -26,7 +26,7 @@
 | 连接组 | Python | 兼容 Python 包 |
 | 可选表面后处理 | 原生组件运行包 | 小型授权组件，无需完整版 FreeSurfer |
 
-默认 PNL 掩膜和 CSD/ACT 追踪不自动改变。PNL 仍需 TensorFlow/ANTs；
+默认 PNL 掩膜和 CSD/ACT 追踪不自动改变。PNL 仍需 PyTorch/ANTs；
 CSD/ACT 和 SAF 仍需 MRtrix；MRtrix/FSL 预处理仍需 FSL；UKF 调用安装的
 UKFTractography 扩展。保留这些算法的按需入口，不将其他方法伪装为等价替代。
 轻量预设不修改 GPU 算法的设备偏好。

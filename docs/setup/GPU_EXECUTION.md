@@ -26,7 +26,7 @@ does not make CUDA available: fix that backend's environment first.
 
 | Route | Policy / implementation |
 | --- | --- |
-| PNL CNN masking | `auto` in external PNL TensorFlow; first visible GPU, memory growth; CPU/CUDA explicit options |
+| PNL CNN masking | `auto` in external PNL PyTorch; first caller-visible CUDA GPU or CPU; explicit CPU/CUDA options |
 | SynthStrip masking | `auto` in FreeSurfer fspython; GPU flag supplied when CUDA is usable; preserves caller visibility |
 | DDSeg | `auto` at GUI, CLI and direct API; tensor inference resolves in its executing Python |
 | DDParcel | `auto`; follows the GUI PyTorch choice, including standalone legacy entrypoints; explicit CUDA cannot silently become CPU |
@@ -78,8 +78,9 @@ CPU-only SynthStrip helper is not used by SlicerDSpace.
 
 ## Compatibility Boundaries
 
-Current [PNL instructions](https://github.com/pnlbwh/CNN-Diffusion-MRIBrain-Segmentation)
-recommend a compatible TensorFlow/CUDA environment and warn about old GPU builds.
+[PNLBrainMask-Torch](https://github.com/ChengjinLii/PNLBrainMask-Torch)
+uses converted PNL weights and PyTorch inference. Managed installation defaults
+to the paired-tested CPU build; an explicit CUDA route needs a compatible PyTorch/CUDA runtime.
 [SynthStrip](https://surfer.nmr.mgh.harvard.edu/docs/synthstrip/) uses FreeSurfer's
 own interpreter by default. For newer GPUs, set optional `synthstrip_python`
 under **Environment and installation > External Runtime Paths** to a

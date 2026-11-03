@@ -61,7 +61,7 @@ inherit Linux QC or timings.
 | DDSeg/DDParcel/DDSurfer native reconstruction | Recorded data/routes and matching models | Native PyTorch/SlicerDMRI candidate with usable mask | Native CPU candidate with usable mask and matching models |
 | DIPY preprocessing, FW, NODDI | Scoped inputs measured | Native Python candidate; compatible DIPY/AMICO | Native Python candidate; architecture-compatible packages |
 | DKI/Python MK-Curve | Specified-subject full-brain checks and timing recorded; invalid voxels excluded | Native numerical candidate; eligible multi-shell data | Native numerical candidate; eligible multi-shell data |
-| PNL CNN mask | External TensorFlow/Keras/ANTs route measured; Linux x86_64 managed setup and CUDA forward/mask checks | **Unavailable in native Windows GUI**; supply a mask or explicitly select MRtrix/WSL | POSIX/ANTs/TensorFlow required; no CUDA, Metal unimplemented; unmeasured here |
+| PNL CNN mask | PyTorch/ANTs route; paired CPU probability/mask checks; Linux x86_64 managed setup | **Unavailable in native Windows GUI**; supply a mask or explicitly select MRtrix/WSL | POSIX/ANTs/PyTorch required; no CUDA, Metal unimplemented; unmeasured here |
 | DIPY median-Otsu mask | Python-only generation and DTI sample route measured | Native Python candidate; no POSIX tool required, unmeasured here | Native Python candidate, unmeasured here |
 | Full FreeSurfer SynthStrip environment | CPU/CUDA measured | **Not native Windows in this wrapper**; full Linux/WSL environment needed | FreeSurfer/Python CPU candidate, unmeasured here |
 | Cortical postprocessing | Verified native components or existing FreeSurfer; offline prebuilt installation tested, publication pending; [setup](SURFACE_COMPONENTS.md) | No qualified native prebuilt bundle; WSL/full-install bridge acceptance pending | Existing native FreeSurfer candidate; no qualified prebuilt bundle |
@@ -80,7 +80,7 @@ inherit Linux QC or timings.
 
 - Preserve existing reviewed native masks on all platforms. No error-triggered silent algorithm substitution.
 - Linux defaults to PNL generation. Fresh Windows configs from the explicit WSL installer default to MRtrix masking; existing defaults are preserved. Without WSL, supply a reviewed mask or explicitly select the Python-only DIPY mask candidate. See [lightweight routes](EXPERIMENTS.md).
-- Auto PyTorch uses CUDA when available, otherwise CPU. **Apple MPS is not implemented/validated**; this is not lack of Mac GPU hardware. PNL does not label unvalidated TensorFlow Metal execution as CUDA.
+- Auto PyTorch uses CUDA when available, otherwise CPU. **Apple MPS is not implemented/validated**; this is not lack of Mac GPU hardware. PNL also selects PyTorch CPU or caller-visible CUDA; MPS is not selected.
 - Windows setup defaults to `-Device auto`, detects the GPU inside WSL and verifies actual PyTorch CUDA allocation. Explicit CUDA errors are not retried on CPU.
 - FSL requires explicit license acceptance. Installers do not change NVIDIA drivers or install replacement Linux display drivers.
 - WSL process-tree cancellation and Windows/macOS scene reintegration require real-host acceptance. Unit/source checks do not prove every Linux descendant stops on Windows cancellation.

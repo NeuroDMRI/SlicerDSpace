@@ -24,7 +24,7 @@
 
 | 环节 | 实际策略 |
 | --- | --- |
-| PNL CNN 掩膜 | 外部 TensorFlow `auto`；优先首个可见 GPU、显存按需增长，可选 CPU/CUDA |
+| PNL CNN 掩膜 | 外部 PyTorch `auto`；优先调用方可见的首个 CUDA GPU，否则 CPU，可显式选择 |
 | SynthStrip 掩膜 | FreeSurfer fspython 内 `auto`；可用时传 GPU 参数，保留调用方 GPU 限制 |
 | DDSeg | GUI、CLI、直接 API 默认 `auto`；在执行推理的环境中判断设备 |
 | DDParcel | 默认 `auto`；继承 GUI 的 PyTorch 选择，旧版独立入口也转发选择；显式 CUDA 不静默变 CPU |
@@ -64,8 +64,8 @@ DDSurfer 的固定上游快照保持不变；插件预先生成并明确传入�
 
 ## 环境边界
 
-[PNL 官方说明](https://github.com/pnlbwh/CNN-Diffusion-MRIBrain-Segmentation)
-要求匹配的 TensorFlow/CUDA，提示旧 GPU 环境存在问题。
+[PNLBrainMask-Torch](https://github.com/ChengjinLii/PNLBrainMask-Torch)
+使用转换后的 PNL 权重与 PyTorch 推理；受管安装默认使用已做配对测试的 CPU 构建，显式 CUDA 路线需要兼容的 PyTorch/CUDA。
 [SynthStrip](https://surfer.nmr.mgh.harvard.edu/docs/synthstrip/) 在本适配器中
 默认使用 FreeSurfer 自带 Python。新 GPU 可在“环境与安装 > 外部运行路径”
 设置 `synthstrip_python`，选择装有兼容 CUDA PyTorch、surfa、NumPy 的独立 Python，

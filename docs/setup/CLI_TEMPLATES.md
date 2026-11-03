@@ -118,7 +118,7 @@ is lossless only within the checked int16 range; the importer refuses overflow.
 ## Masks And Preprocessing
 
 Choose one mask method; these commands generate a mask only if needed. PNL
-needs its configured TensorFlow/ANTs runtime; DIPY needs no weights or external
+needs its configured PyTorch/ANTs runtime; DIPY needs no weights or external
 mask program. MRtrix and SynthStrip retain their own requirements. None is an
 error-triggered fallback for another method.
 

@@ -85,8 +85,8 @@ installations rather than copying a Linux Conda prefix. [Official macOS FSL](htt
 
 CUDA eddy is unavailable on macOS. MRtrix/FSL correction uses the CPU eddy
 executable; Auto PyTorch also currently uses CPU because this plugin has not
-implemented MPS. PNL's TensorFlow Metal plug-in is not a validated acceleration
-route and is not labeled CUDA. [PyTorch MPS](https://docs.pytorch.org/docs/main/notes/mps.html).
+implemented MPS. PNLBrainMask-Torch also uses CPU on macOS; its launcher does
+not select MPS. [PyTorch MPS](https://docs.pytorch.org/docs/main/notes/mps.html).
 
 For the least external dependencies, provide a reviewed native brain mask and
 select DTI with optional DIPY preprocessing. FW/NODDI/DKI/MK-Curve additionally

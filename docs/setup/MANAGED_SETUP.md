@@ -112,7 +112,7 @@ User-local defaults live alongside model assets under `SlicerDSpace/runtimes`.
 | CUDA eddy 2602.0 | Optional FSL profile; NVIDIA driver required; no full CUDA Toolkit installation |
 | DDSurfer / DDSeg / DDParcel assets | Existing background download with profile-specific selection and default directory |
 | Python scientific packages | Selected interpreter, protected Slicer core packages, native packaging API when available; official PyTorch helper |
-| PNL diffusion CNN | Linux x86_64; pinned official source, v0.3 three-view weights, IIT b0 template, Python 3.11, TensorFlow 2.15.1/Keras 2 and ANTs 2.3.0 in a separate prefix |
+| PNL diffusion CNN | Linux x86_64; pinned PNLBrainMask-Torch package, converted v0.3 three-view weights, IIT b0 template, Python 3.11, PyTorch 2.5.1 CPU and ANTs 2.3.0 in a separate prefix |
 | Optional cortical postprocessing | [Qualified prebuilt bundle](SURFACE_COMPONENTS.md), Linux x86_64; offline installation tested. Bundle publication is pending. Personal activation is separate; the GUI never compiles sources |
 | WMA / TractCloud / SynthStrip non-code resources | Selected optional profile download/import, checksums, ORG extraction and automatic path saving; private-mirror authorization still applies |
 | WMA/WMQL/TractCloud sources | Pinned archives, safe extraction, file hashes, automatic discovery/path saving; no Git or duplicated algorithm implementation |

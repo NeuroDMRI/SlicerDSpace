@@ -21,9 +21,9 @@ MINIFORGE_URL = "https://github.com/conda-forge/miniforge/releases/download/26.7
 MINIFORGE_SHA256 = "281b0ac7d550802efc81af633225a5e6116d29ae72f3ab4eae7168c3931a4c05"
 FSL_TERMS_URL = "https://fsl.fmrib.ox.ac.uk/fsl/docs/license.html"
 PROFILES = {
-    "pnl_cnn": {"directory": "pnl-cnn-tf2.15.1", "packages": ("python=3.11", "pip=24.3.1", "ants=2.3.0"),
+    "pnl_cnn": {"directory": "pnl-cnn-torch-v0.1.0", "packages": ("python=3.11", "pip=24.3.1", "ants=2.3.0"),
                 "channels": ("pnlbwh", "conda-forge"),
-                "commands": ("python", "antsRegistrationSyNQuick.sh", "antsRegistration", "antsApplyTransforms", "ImageMath"),
+                "commands": ("python", "antsRegistrationSyNQuick.sh", "antsRegistration", "antsApplyTransforms", "ImageMath", "PrintHeader"),
                 "settings": ()},
     "mrtrix": {"directory": "mrtrix-3.0.8", "packages": ("mrtrix3=3.0.8=h07fc403_0", "python=3.12", "libclang13=22.1.6", "libclang-cpp22.1=22.1.6"),
                "channels": ("https://conda.anaconda.org/mrtrix3", "conda-forge"), "commands": ("mrconvert", "dwi2mask", "dwifslpreproc", "tckgen"),

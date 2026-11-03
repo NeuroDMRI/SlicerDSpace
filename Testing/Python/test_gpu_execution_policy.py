@@ -12,17 +12,11 @@ from unittest.mock import Mock, patch
 
 from shared.brain_mask import BrainMaskConfig, brain_mask_config_from_options
 from shared.environment import resolve_auto_torch_device
-from shared.pnl_mask_runner import select_device as pnl_device, upstream_code as pnl_code
+from shared.pnl_mask_runner import select_device as pnl_device, main as pnl_main
 from shared.synthstrip_mask_runner import select_device as synthstrip_device, upstream_code as synthstrip_code
 
 
 class GPUExecutionPolicyTests(unittest.TestCase):
-    def fake_tf(self, names=()):
-        tf = Mock()
-        tf.__version__ = "test-double"
-        tf.config.list_physical_devices.return_value = [SimpleNamespace(name=name) for name in names]
-        return tf
-
     def fake_torch(self, available):
         torch = Mock()
         torch.__version__ = "test-double"
@@ -33,61 +27,46 @@ class GPUExecutionPolicyTests(unittest.TestCase):
         return torch
 
     def test_pnl_auto_prefers_gpu_and_preserves_caller_visibility(self):
-        tf = self.fake_tf(("GPU:0", "GPU:1"))
-        with patch("shared.pnl_mask_runner.platform.system", return_value="Linux"), patch.dict(os.environ, {"CUDA_VISIBLE_DEVICES": "3,5"}):
-            result = pnl_device("auto", tf)
+        torch = self.fake_torch(True)
+        with patch.dict(os.environ, {"CUDA_VISIBLE_DEVICES": "3,5"}):
+            result = pnl_device("auto", torch)
             self.assertEqual(os.environ["CUDA_VISIBLE_DEVICES"], "3,5")
         self.assertEqual(result["resolved"], "cuda")
-        selected = tf.config.list_physical_devices.return_value[0]
-        tf.config.set_visible_devices.assert_called_once_with([selected], "GPU")
-        tf.config.experimental.set_memory_growth.assert_called_once_with(selected, True)
-        tf.config.set_soft_device_placement.assert_called_once_with(False)
+        self.assertEqual(result["framework"], "pytorch")
+        torch.empty.assert_called_once_with(1, device="cuda:0")
 
     def test_pnl_explicit_cpu_does_not_probe_gpu(self):
-        tf = self.fake_tf(("GPU:0",))
+        torch = self.fake_torch(True)
         with patch.dict(os.environ, {"CUDA_VISIBLE_DEVICES": "1"}):
-            self.assertEqual(pnl_device("cpu", tf)["resolved"], "cpu")
+            self.assertEqual(pnl_device("cpu", torch)["resolved"], "cpu")
             self.assertEqual(os.environ["CUDA_VISIBLE_DEVICES"], "-1")
-        tf.config.list_physical_devices.assert_not_called()
-
-    def test_macos_pnl_does_not_mislabel_tensorflow_metal_as_cuda(self):
-        tf = self.fake_tf(("METAL:0",))
-        with patch("shared.pnl_mask_runner.platform.system", return_value="Darwin"), patch.dict(os.environ):
-            self.assertEqual(pnl_device("auto", tf)["resolved"], "cpu")
-            self.assertEqual(os.environ["CUDA_VISIBLE_DEVICES"], "-1")
-            tf.config.set_visible_devices.assert_called_once_with([], "GPU")
-            with self.assertRaisesRegex(RuntimeError, "Metal is not a validated backend"):
-                pnl_device("cuda", tf)
+        torch.cuda.is_available.assert_not_called()
 
     def test_pnl_no_gpu_auto_uses_cpu_but_explicit_cuda_fails(self):
-        with patch("shared.pnl_mask_runner.platform.system", return_value="Linux"), patch.dict(os.environ):
-            self.assertEqual(pnl_device("auto", self.fake_tf())["resolved"], "cpu")
-            with self.assertRaisesRegex(RuntimeError, "no visible CUDA GPU"):
-                pnl_device("cuda", self.fake_tf())
+        self.assertEqual(pnl_device("auto", self.fake_torch(False))["resolved"], "cpu")
+        with self.assertRaisesRegex(RuntimeError, "no visible CUDA GPU"):
+            pnl_device("cuda", self.fake_torch(False))
 
     def test_pnl_gpu_configuration_errors_do_not_fall_back(self):
-        tf = self.fake_tf(("GPU:0",))
-        tf.config.experimental.set_memory_growth.side_effect = RuntimeError("CUDA initialization failure")
-        with patch("shared.pnl_mask_runner.platform.system", return_value="Linux"), self.assertRaisesRegex(RuntimeError, "CUDA initialization"):
-            pnl_device("auto", tf)
+        torch = self.fake_torch(True)
+        torch.empty.side_effect = RuntimeError("CUDA initialization failure")
+        with self.assertRaisesRegex(RuntimeError, "CUDA initialization"):
+            pnl_device("auto", torch)
 
-    def test_pnl_repairs_only_legacy_selection_and_preserves_source(self):
-        source = ("import os\ntry:\n    DEVICE_ID = 0\n"
-                  "    CUDA_VISIBLE_DEVICES = os.getenv('CUDA_VISIBLE_DEVICES')\n"
-                  "    if int(CUDA_VISIBLE_DEVICES) in DEVICE_ID_LIST: pass\n"
-                  "except:\n    os.environ['CUDA_VISIBLE_DEVICES'] = '-1'\n"
-                  "scientific_value = 42\n")
+    def test_pnl_launcher_executes_standalone_mask_without_source_rewriting(self):
+        import json
         with tempfile.TemporaryDirectory() as temp:
-            file = Path(temp) / "dwi_masking.py"
-            file.write_text(source)
-            code, record = pnl_code(file)
-            namespace = {}
-            with patch.dict(os.environ, {"CUDA_VISIBLE_DEVICES": "GPU-test-uuid"}):
-                exec(code, namespace)
-                self.assertEqual(os.environ["CUDA_VISIBLE_DEVICES"], "GPU-test-uuid")
-            self.assertTrue(record["device_selection_compatibility_fix"])
-            self.assertEqual(namespace["scientific_value"], 42)
-            self.assertEqual(file.read_text(), source)
+            root = Path(temp)
+            script, record = root / "pnl-brain-mask", root / "record.json"
+            script.write_text("# console script fixture; no model inference")
+            with patch("shared.pnl_mask_runner.runpy.run_path") as execute, patch.object(sys, "argv", ["pnl-runner"]), patch.dict(os.environ):
+                pnl_main(["--device", "cpu", "--record", str(record), "--script", str(script),
+                          "--", "mask", "--input", "b0.nii.gz"])
+                self.assertEqual(sys.argv, [str(script), "mask", "--input", "b0.nii.gz",
+                                           "--device", "cpu", "--record", str(record)])
+            execute.assert_called_once_with(str(script), run_name="__main__")
+            self.assertEqual(json.loads(record.read_text())["framework"], "pytorch")
+            self.assertEqual(script.read_text(), "# console script fixture; no model inference")
 
     def test_synthstrip_auto_and_cpu_and_strict_cuda(self):
         for requested, available, expected in (("auto", True, "cuda"), ("auto", False, "cpu"), ("cpu", True, "cpu")):
@@ -171,7 +150,7 @@ class GPUExecutionPolicyTests(unittest.TestCase):
         self.assertEqual(original.call_count, 1)
 
     def test_invalid_devices_are_rejected(self):
-        for select, runtime in ((pnl_device, self.fake_tf()), (synthstrip_device, self.fake_torch(False))):
+        for select, runtime in ((pnl_device, self.fake_torch(False)), (synthstrip_device, self.fake_torch(False))):
             with self.assertRaises(ValueError):
                 select("invalid", runtime)
 

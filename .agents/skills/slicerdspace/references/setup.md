@@ -152,8 +152,9 @@ to submit an analysis.
    and official-extension PyTorch by default; WMQL/DIPY/AMICO use workflow Python.
    Protect bundled NumPy/SciPy/VTK/SimpleITK/PyTorch. Conflicts or unavailable
    wheels must fail visibly, not trigger core upgrades or local compilation.
-5. Keep managed PNL in its separate pinned Python 3.11, TensorFlow 2.15.1/Keras 2,
-   ANTs prefix, not Slicer's shared PyTorch stack. Selected supported external
+5. Prepare PNLBrainMask-Torch with its converted weights and ANTs in the managed
+   Python 3.11 prefix. Reuse a compatible PyTorch there; new prefixes use the
+   paired-tested PyTorch 2.5.1 CPU build. TensorFlow/Keras are not runtime dependencies. Selected supported external
    runtimes use user-local managed prefixes and, when needed, a hash-verified
    pinned Miniforge bootstrap; do not replace unmanaged environments, drivers or
    global shell/CUDA settings.

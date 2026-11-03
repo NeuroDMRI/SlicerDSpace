@@ -27,10 +27,10 @@ from test_preprocessing_pipeline import _write_fake_backend, _write_fake_command
 def _pnl_options(root: Path) -> dict:
     models = root / "pnl models"
     models.mkdir()
-    (models / "CompNetBasicModel.json").write_text("{}")
+    (models / "weights.json").write_text("{}")
     nib.save(nib.Nifti1Image(np.ones((5, 5, 5), np.float32), np.eye(4)), models / "IITmean_b0_256.nii.gz")
     for view in ("sagittal", "coronal", "axial"):
-        (models / f"weights-{view}-improvement-01.h5").write_text("test weights")
+        (models / f"{view}.pt").write_text("test weights")
     ants = root / "ants bin"
     ants.mkdir()
     for tool in ("antsRegistrationSyNQuick.sh", "antsApplyTransforms", "ImageMath"):
@@ -40,12 +40,11 @@ def _pnl_options(root: Path) -> dict:
         "import json, pathlib, sys\n"
         "import nibabel as nib\n"
         "import numpy as np\n"
-        "listing = pathlib.Path(sys.argv[sys.argv.index('-i') + 1])\n"
-        "baseline = pathlib.Path(listing.read_text().strip())\n"
+        "baseline = pathlib.Path(sys.argv[sys.argv.index('--input') + 1])\n"
         "image = nib.load(baseline)\n"
         "mask = np.zeros(image.shape, dtype=np.uint8)\n"
         "mask[1:4, 1:4, 1:4] = 1\n"
-        "output = baseline.with_name('mean_b0_bse-multi_BrainMask.nii.gz')\n"
+        "output = pathlib.Path(sys.argv[sys.argv.index('--output') + 1])\n"
         "nib.save(nib.Nifti1Image(mask, image.affine), output)\n"
         f"with pathlib.Path({str(root / 'pnl_calls.jsonl')!r}).open('a') as stream:\n"
         "    stream.write(json.dumps({'b0_mean': float(image.get_fdata().mean()), 'affine': image.affine.tolist()}) + '\\n')\n"
@@ -53,6 +52,7 @@ def _pnl_options(root: Path) -> dict:
     )
     return {
         "brain_mask_backend": "pnl_cnn",
+        "brain_mask_device": "cpu",
         "pnl_mask_python": Path(sys.executable),
         "pnl_mask_script": script,
         "pnl_mask_model_dir": models,
@@ -293,7 +293,7 @@ class PreprocessingMaskIntegrationTest(unittest.TestCase):
             result = run_dwi_preprocessing(config)
             config.pnl_mask_script.write_text(config.pnl_mask_script.read_text() + "\n# script changed\n")
             self.assertEqual(run_dwi_preprocessing(config).status, "completed")
-            (config.pnl_mask_model_dir / "weights-axial-improvement-01.h5").write_text("different test weights")
+            (config.pnl_mask_model_dir / "axial.pt").write_text("different test weights")
             self.assertEqual(run_dwi_preprocessing(config).status, "completed")
             ants = config.pnl_mask_ants_bin_dir / "ImageMath"
             _write_fake_command(ants, "# tool changed\nraise SystemExit(0)\n")

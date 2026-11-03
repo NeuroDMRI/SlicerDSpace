@@ -89,7 +89,7 @@ def resolve_dwi2mask(explicit_bin_dir: Optional[Path] = None) -> Optional[Path]:
 
 
 def inspect_brain_mask_backend(config: BrainMaskConfig | None = None, *, system: str | None = None) -> dict[str, Any]:
-    """Inspect files/tools only; no TensorFlow import, model download or inference."""
+    """Inspect files/tools only; no framework import, model download or inference."""
     config = config or BrainMaskConfig()
     if config.backend not in BRAIN_MASK_BACKENDS:
         raise ValueError("brain_mask_backend must be one of: " + ", ".join(BRAIN_MASK_BACKENDS))
@@ -103,9 +103,11 @@ def inspect_brain_mask_backend(config: BrainMaskConfig | None = None, *, system:
     if config.backend == "pnl_cnn":
         resources.append(Path(__file__).with_name("pnl_mask_runner.py"))
         # Resolving a venv's Python symlink would select the base interpreter
-        # and lose that environment's TensorFlow and conversion packages.
+        # and lose that environment's installed PNLBrainMask-Torch package.
         python = _path(config.pnl_mask_python, "SLICERDSPACE_PNL_MASK_PYTHON", resolve=False)
         script = _path(config.pnl_mask_script, "SLICERDSPACE_PNL_MASK_SCRIPT")
+        if script is None and python is not None:
+            script = python.parent / "pnl-brain-mask"
         models = _path(config.pnl_mask_model_dir, "SLICERDSPACE_PNL_MASK_MODEL_DIR")
         if models is None:
             from shared.optional_assets import verified_resource_directory
@@ -124,19 +126,18 @@ def inspect_brain_mask_backend(config: BrainMaskConfig | None = None, *, system:
             missing.append("pnl_mask_model_dir")
         else:
             tools["model_dir"] = str(models)
-            for name in ("CompNetBasicModel.json", "IITmean_b0_256.nii.gz"):
+            for name in ("weights.json", "IITmean_b0_256.nii.gz"):
                 file = models / name
                 if not file.is_file():
                     missing.append(name)
                 else:
                     resources.append(file)
             for view in ("sagittal", "coronal", "axial"):
-                weights = sorted(models.glob(f"weights-{view}-improvement-*.h5"))
-                # The official glob(...)[-1] is ambiguous with multiple files.
-                if len(weights) != 1:
-                    missing.append(f"exactly one weights-{view}-improvement-*.h5")
+                weights = models / (view + ".pt")
+                if not weights.is_file():
+                    missing.append(view + ".pt (convert/download PNLBrainMask-Torch weights; legacy HDF5 is not a Torch runtime)")
                 else:
-                    resources.extend(weights)
+                    resources.append(weights)
         search = os.pathsep.join(str(p) for p in (ants, python.parent if python else None) if p)
         search += os.pathsep + os.environ.get("PATH", "")
         for command in ("antsRegistrationSyNQuick.sh", "antsApplyTransforms", "ImageMath"):
@@ -206,6 +207,8 @@ def inspect_brain_mask_backend(config: BrainMaskConfig | None = None, *, system:
             "settings": {"b0_threshold": config.b0_threshold, "threads": config.threads,
                          "pnl_percentile": 99, "pnl_cleanup": "official_fill_holes_no_optional_filter",
                          "device": config.brain_mask_device if config.backend in ("pnl_cnn", "synthstrip") else "cpu",
+                         **({"pnl_framework": "pytorch", "pnl_package": "pnl-brain-mask",
+                             "pnl_inverse_interpolation": "ANTs default linear"} if config.backend == "pnl_cnn" else {}),
                          **settings},
             "note": "File discovery is not runtime/model compatibility or anatomical QC"}
 
@@ -325,8 +328,7 @@ def generate_brain_mask(dwi_path: Path, bval_path: Path, bvec_path: Path, output
     tools = backend["tool_paths"]
     phase_seconds = {"preflight_and_hashing": time.monotonic() - started}
     with tempfile.TemporaryDirectory(prefix="sdds-mask-", dir="/tmp" if os.name == "posix" else None) as directory:
-        # PNL constructs shell commands internally. Safe aliases isolate its
-        # workspace and cleanup from user inputs, including paths with spaces.
+        # Keep all generated baseline/registration intermediates private.
         work = Path(directory)
         baseline = work / "mean_b0.nii.gz"
         phase_started = time.monotonic()
@@ -341,8 +343,6 @@ def generate_brain_mask(dwi_path: Path, bval_path: Path, bvec_path: Path, output
         elif config.backend == "pnl_cnn":
             models = work / "models"
             models.symlink_to(tools["model_dir"], target_is_directory=True)
-            listing = work / "b0_list.txt"
-            listing.write_text(str(baseline) + "\n", encoding="utf-8")
             prepend.append(Path(tools["pnl_mask_python"]).parent)
             if tools.get("ants_bin_dir"):
                 prepend.insert(0, Path(tools["ants_bin_dir"]))
@@ -350,9 +350,11 @@ def generate_brain_mask(dwi_path: Path, bval_path: Path, bvec_path: Path, output
             device_record = work / "pnl_device.json"
             command = [tools["pnl_mask_python"], str(Path(__file__).with_name("pnl_mask_runner.py")),
                        "--device", config.brain_mask_device, "--record", str(device_record),
-                       "--script", tools["pnl_mask_script"], "--", "-i", str(listing),
-                       "-f", str(models), "-nproc", "1", "-p", "99", "-qc", "0"]
-            candidate = work / "mean_b0_bse-multi_BrainMask.nii.gz"
+                       "--script", tools["pnl_mask_script"], "--", "mask", "--input", str(baseline),
+                       "--output", str(candidate), "--model-dir", str(models), "--percentile", "99",
+                       "--threads", str(config.threads)]
+            if tools.get("ants_bin_dir"):
+                command.extend(("--ants-bin", tools["ants_bin_dir"]))
         elif config.backend == "synthstrip":
             env_extra["FREESURFER_HOME"] = tools["freesurfer_home"]
             prepend.append(Path(tools["mri_synthstrip"]).parent)

@@ -93,6 +93,16 @@ class AdaptiveCohortTests(unittest.TestCase):
                 self.assertGreaterEqual(updated['subject_profiles']['A']['connectome']['memory_gb'], 4)
             self.assertEqual(updated['subject_profiles']['A']['connectome']['memory_gb'], 13)
 
+    def test_automatic_frontier_is_budget_bound_not_fixed_at_eight(self):
+        subjects = [SimpleNamespace(subject_id=str(i), subject_root=Path('/absent') / str(i)) for i in range(20)]
+        args = ['--targets', 'microstructure', '--microstructure-stages', 'dti,noddi,dki']
+        plan = plan_cohort(subjects, args, adaptive=True, cpu_budget=40, memory_gb=192)
+        self.assertEqual(plan['jobs'], 20)
+        limited = plan_cohort(subjects, args, adaptive=True, cpu_budget=6, memory_gb=192)
+        self.assertEqual(limited['jobs'], 6)
+        explicit = plan_cohort(subjects, args, adaptive=True, jobs=4, cpu_budget=40, memory_gb=192)
+        self.assertEqual(explicit['jobs'], 4)
+
     def test_malformed_history_is_optional_not_a_workflow_failure(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / 'history.json'

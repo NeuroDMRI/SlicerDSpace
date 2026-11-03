@@ -193,17 +193,17 @@ def plan_cohort(subjects, arguments, *, jobs=None, cpu_budget=None, memory_gb=No
         subject_arguments[subject.subject_id] = tuned_arguments
     peak = max(selected_peaks, default=stage_memory_gb or min(1, ram))
     capacity = max(1, min(cpu // threads, int(ram // peak)))
-    count = jobs if jobs is not None else max(1, min(len(subjects), capacity, 8))
+    count = jobs if jobs is not None else max(1, min(len(subjects), capacity))
     if adaptive and jobs is None:
         # Waiters keep interpreter state: retain RAM headroom and bound the frontier.
-        count = max(1, min(len(subjects), 8, int(max(.5, ram - peak) / .5), max(2, cpu)))
+        count = max(1, min(len(subjects), int(max(.5, ram - peak) / .5), cpu))
     return dict(cpu_budget=cpu, memory_gb=ram, stage_cpus=threads, stage_memory_gb=peak,
                 memory_reservations_fixed=stage_memory_gb is not None,
                 gpu_slots=gpu_slots, jobs=count, jobs_automatic=jobs is None,
                 subject_profiles=profiles, input_headers=inputs, selected_stages=sorted(selected),
                 subject_arguments=subject_arguments, tuning_profile=str(tuning_profile) if tuning_profile else None,
                 estimation='Header-based conservative heuristic, not measured peak usage',
-                idle_process_headroom='Automatic frontier capped at 8; adaptive mode allows 0.5 GiB per waiting interpreter',
+                idle_process_headroom='Frontier bounded by cohort size and CPU/RAM budget; adaptive allows 0.5 GiB per waiting interpreter',
                 adaptive=adaptive, resource_fraction=resource_fraction if adaptive else None,
                 history_path=str(history_path) if history_path else None,
                 policy='fair_backfill' if adaptive else 'first_fit', io_slots=2)

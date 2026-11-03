@@ -21,8 +21,9 @@ For CPU-first cohort processing, use the adaptive admission mode:
 
 Omit `--subject-limit` to process every eligible input. Omit `--jobs` to choose
 an active-subject window independently of the heaviest stage; waiting processes
-do not reserve an entire subject's compute budget. The window is capped at eight
-and includes estimated interpreter headroom. Explicit CPU/RAM budgets override
+do not reserve an entire subject's compute budget. The window is derived from
+cohort size, the CPU budget and estimated interpreter RAM headroom, without a
+fixed four/eight-subject ceiling. Explicit CPU/RAM budgets override
 the automatic fraction. This is a reservation policy, not a system utilisation cap.
 
 Adaptive mode reserves up to four threads per typical stage initially, one for
@@ -71,7 +72,7 @@ It preserves each subject's dependencies, manifests, cached outputs and QC.
 ```
 
 Use prepared subject directories and the normal dependency configuration. Omit
-`--jobs` to choose a conservative subject limit automatically (up to eight).
+`--jobs` to choose a conservative subject limit automatically from the budget.
 CPU affinity/container limits, available RAM, selected methods and DWI header
 dimensions determine the initial plan. No full DWI is loaded for planning.
 Review `resource_plan` in the batch manifest and check a pilot's peak usage. No new service,

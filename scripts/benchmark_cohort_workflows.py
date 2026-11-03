@@ -314,14 +314,47 @@ def run(args):
                 (inputs/name).symlink_to(Path(subject['source'])/name)
         scheduler = dict(sequential='subjects', subject='subjects', stage='resources', adaptive='adaptive', adaptive_tuned='adaptive')[trial['policy']]
         execution_snapshot=Path(trial.get('snapshot',snapshot))
+        automatic = record.get('automatic_jobs', False)
+        whole_cpu, whole_memory = trial['threads'], record['memory_gb'] / (record['jobs'] or 1)
+        jobs = 1 if trial['policy']=='sequential' else record['jobs']
+        if automatic:
+            from types import SimpleNamespace
+            from shared.cohort_planning import plan_cohort, _option
+            arguments = [*record['common'], *record['routes'][trial['route']]]
+            subjects = [SimpleNamespace(subject_id=s['subject'], subject_root=destination/'inputs'/s['subject'])
+                        for s in record['subjects']]
+            plan = plan_cohort(subjects, arguments, adaptive=True, cpu_budget=record['cpus'],
+                               memory_gb=record['memory_gb'], stage_cpus=trial['threads'])
+            models = int(_option(arguments, '--max-parallel-models', '1'))
+            eligible_models = {'microstructure_freewater','microstructure_noddi',
+                               'microstructure_dki','microstructure_mkcurve'} & set(plan['selected_stages'])
+            models = min(models, max(1, len(eligible_models)))
+            peaks = []
+            for profile in plan['subject_profiles'].values():
+                selected = [profile[n]['memory_gb'] for n in plan['selected_stages'] if n in profile]
+                parallel = sorted((profile[n]['memory_gb'] for n in plan['selected_stages']
+                                   if n in profile and n in {'microstructure_freewater','microstructure_noddi',
+                                                             'microstructure_dki','microstructure_mkcurve'}), reverse=True)
+                peaks.append(max([*selected, sum(parallel[:models])]))
+            whole_cpu = min(record['cpus'], trial['threads'] * models)
+            whole_memory = max(peaks)
+            jobs = (max(1, min(len(subjects), record['cpus']//whole_cpu,
+                              int(record['memory_gb']//whole_memory)))
+                    if trial['policy']=='subject' else None)
+            if trial['policy']=='sequential':
+                jobs = 1
+            trial['automatic_admission'] = dict(whole_subject_cpu=whole_cpu, whole_subject_memory_gb=whole_memory,
+                                                jobs_argument=jobs, manual_subject_limit=False)
         command = [record['launcher'],'--launch','PythonSlicer',str(execution_snapshot/'scripts/run_batch_pipeline.py'),
                    '--batch-root',str(destination/'inputs'),'--output-root',str(destination/'outputs'),
                    '--manifest',str(destination/'batch.json'),'--run-name','benchmark',
-                   '--scheduler',scheduler,'--jobs',str(1 if trial['policy']=='sequential' else record['jobs']),
+                   '--scheduler',scheduler,
                    '--batch-cpus',str(record['cpus']),'--batch-memory-gb',str(record['memory_gb']),
                    '--surface-cpu-threads',str(trial['threads']),
                    '--mrtrix-nthreads',str(trial['threads']), '--resource-history',str(destination/'history.json'),
                    '--execute',*record['common'],*record['routes'][trial['route']]]
+        if jobs is not None:
+            command += ['--jobs', str(jobs)]
         if trial['policy'] == 'adaptive_tuned':
             profile = Path(trial['compute_profile'])
             if not profile.is_file() or sha(profile) != trial['compute_profile_sha256']:
@@ -341,8 +374,8 @@ def run(args):
         if trial['policy'] in ('sequential','subject'):
             from shared.cohort_schedule import ENV
             environment[ENV] = str(create_schedule(destination/'subject_guard', cpu_budget=record['cpus'],
-                memory_gb=record['memory_gb'], stage_cpus=trial['threads'],
-                stage_memory_gb=record['memory_gb']/record['jobs']))
+                memory_gb=record['memory_gb'], stage_cpus=whole_cpu,
+                stage_memory_gb=whole_memory))
             command += ['--pipeline-script',str(execution_snapshot/'scripts/benchmark_subject_worker.py')]
         trial.update(status='running', command=command, started_at=time.time(), output=str(destination))
         save(path,record)

@@ -24,6 +24,7 @@ def diffusion_image(path, work_dir):
         raise RuntimeError(f"Insufficient temporary disk space for one-pass DWI decompression ({needed} bytes required)")
     with tempfile.TemporaryDirectory(prefix=".dwi-read-", dir=work_dir) as temporary:
         uncompressed = Path(temporary) / "data.nii"
-        with gzip.open(path, "rb") as source, uncompressed.open("wb") as destination:
+        from shared.cohort_io import io_admission
+        with io_admission('dwi_decompression'), gzip.open(path, "rb") as source, uncompressed.open("wb") as destination:
             shutil.copyfileobj(source, destination, length=1024 * 1024)
         yield nib.load(str(uncompressed), mmap="r", keep_file_open=False)

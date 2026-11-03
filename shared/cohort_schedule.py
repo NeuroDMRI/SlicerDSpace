@@ -16,6 +16,13 @@ from shared.cache_lock import cache_lock
 ENV = 'SLICERDSPACE_COHORT_SCHEDULE'
 LEASE = 'SLICERDSPACE_COHORT_LEASE'
 _inside = ContextVar('cohort_stage_active', default=False)
+_reservation = ContextVar('cohort_stage_reservation', default=None)
+
+
+def mark_reused(stage):
+    row = _reservation.get()
+    if row is not None and row['stage'] == stage:
+        row['cache_hit'] = True
 
 
 def create_schedule(directory, *, cpu_budget, memory_gb, stage_cpus, stage_memory_gb, gpu_slots=1,
@@ -29,6 +36,9 @@ def create_schedule(directory, *, cpu_budget, memory_gb, stage_cpus, stage_memor
         raise ValueError('A stage reservation exceeds the cohort budget')
     if policy not in ('first_fit', 'fair_backfill'):
         raise ValueError('Unknown cohort admission policy')
+    affinity = sorted(os.sched_getaffinity(0)) if hasattr(os, 'sched_getaffinity') else []
+    if affinity and cpu_budget > len(affinity):
+        raise ValueError('CPU budget exceeds the process affinity allocation')
     folder = Path(directory).resolve()
     folder.mkdir(parents=True, exist_ok=False)
     config = dict(kind='cohort_resource_schedule', version=1,
@@ -36,7 +46,8 @@ def create_schedule(directory, *, cpu_budget, memory_gb, stage_cpus, stage_memor
                   stage_memory_gb=stage_memory_gb, gpu_slots=gpu_slots,
                   subject_profiles=subject_profiles or {}, planning=planning,
                   policy=policy, history_path=str(history_path) if history_path else None, io_slots=io_slots,
-                  scope='Declared stage reservations, not OS-enforced CPU/RAM or per-device VRAM limits',
+                  cpu_affinity=affinity[:int(cpu_budget)],
+                  scope='Linux stage CPU affinity; declared RAM/GPU reservations, not cgroup or per-device VRAM limits',
                   parent_pid=os.getpid(), parent_created=psutil.Process().create_time())
     (folder / 'config.json').write_text(json.dumps(config, indent=2) + '\n')
     (folder / 'state.json').write_text(json.dumps(dict(waiting=[], active=[])))
@@ -128,7 +139,7 @@ def stage_admission(name, *, gpu=False):
         raise ValueError(f'{subject}/{name}: stage estimate exceeds the cohort resource budget')
     admitted, queued = False, False
     began = time.monotonic()
-    token, previous = None, os.environ.get(LEASE)
+    token, reservation_token, previous = None, None, os.environ.get(LEASE)
     thread_keys = ('SLICERDSPACE_STAGE_CPUS', 'OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS',
                    'MKL_NUM_THREADS', 'ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS', 'MRTRIX_NTHREADS')
     previous_threads = {key: os.environ.get(key) for key in thread_keys}
@@ -159,6 +170,10 @@ def stage_admission(name, *, gpu=False):
                     for earlier in state['waiting'][:state['waiting'].index(candidate)]:
                         earlier['bypasses'] = earlier.get('bypasses', 0) + 1
                     state['waiting'].remove(candidate)
+                    row.update(candidate)
+                    if config.get('cpu_affinity'):
+                        used_cpus = {cpu for item in state['active'] for cpu in item.get('cpu_affinity', [])}
+                        row['cpu_affinity'] = [cpu for cpu in config['cpu_affinity'] if cpu not in used_cpus][:int(row['cpu'])]
                     row['started_at'] = time.time()
                     state['active'].append(row)
                     admitted = True
@@ -167,6 +182,7 @@ def stage_admission(name, *, gpu=False):
             if not admitted:
                 time.sleep(.05)
         token = _inside.set(True)
+        reservation_token = _reservation.set(row)
         if config['policy'] == 'fair_backfill':
             from shared.cohort_profile import StageMonitor
             monitor = StageMonitor().start()
@@ -177,13 +193,22 @@ def stage_admission(name, *, gpu=False):
             thread_limit = threadpool_limits(limits=row['cpu'])
         except ImportError:
             thread_limit = nullcontext()
-        with thread_limit:
-            yield
+        from shared.cohort_affinity import cpu_placement
+        with thread_limit, cpu_placement(row.get('cpu_affinity')):
+            yield row
         outcome = 'completed'
     finally:
-        measurement = monitor.finish(outcome) if monitor is not None else None
+        measurement = None
+        if monitor is not None:
+            try:
+                measurement = monitor.finish(outcome)
+            except Exception as exc:
+                warnings.warn('Resource measurement failed: ' + str(exc), RuntimeWarning)
+        if measurement is not None:
+            measurement['cache_hit'] = bool(row.get('cache_hit'))
         if token is not None:
             _inside.reset(token)
+            _reservation.reset(reservation_token)
             for key, value in previous_threads.items():
                 if value is None:
                     os.environ.pop(key, None)
@@ -217,9 +242,15 @@ def scheduled_stage(name, *, gpu=False):
             config = kwargs.get('config') or kwargs.get('cfg') or (args[0] if args else None)
             if str(getattr(config, 'device', 'auto')).lower() == 'cpu':
                 requested = False
-            with stage_admission(name, gpu=requested):
+            stage = name(config) if callable(name) else name
+            from shared.cohort_io import gpu_admission
+            with stage_admission(stage, gpu=requested) as reservation, gpu_admission(stage, requested):
                 try:
-                    return function(*args, **kwargs)
+                    result = function(*args, **kwargs)
+                    status = result.get('status') if isinstance(result, dict) else getattr(result, 'status', None)
+                    if reservation is not None and status in ('cached', 'reused'):
+                        reservation['cache_hit'] = True
+                    return result
                 finally:
                     # A finished in-process inference must not retain unused CUDA
                     # allocator blocks while another participant takes the slot.

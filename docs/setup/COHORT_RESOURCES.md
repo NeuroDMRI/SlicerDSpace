@@ -26,10 +26,12 @@ and includes estimated interpreter headroom. Explicit CPU/RAM budgets override
 the automatic fraction. This is a reservation policy, not a system utilisation cap.
 
 Adaptive mode reserves up to four threads per typical stage initially, one for
-the default WMA/WMQL/connectome routes, and honours explicit thread overrides.
+the default DTI-export/serial-Free-water/DKI/MK-Curve/WMA/WMQL/connectome routes,
+and honours explicit thread overrides.
 These are conservative admission defaults, not measured optimal thread counts.
-Dependencies remain enforced by each subject's existing orchestrator; at most one
-of its wrapped stages is admitted at a time, with independent subjects interleaved.
+Dependencies remain enforced by each subject's existing orchestrator. Microstructure
+models acquire individual reservations; adaptive mode supports bounded independent
+model workers with `--max-parallel-models 2` or `3`. The default remains one model.
 
 Backfilling protects the oldest waiting stage's estimated start when runtime
 feedback is available. After eight bypasses or 120 seconds, the queue drains until
@@ -37,13 +39,15 @@ that stage can start. Long-running stages are not preempted. Estimates can overr
 the ageing barrier prevents repeated small-stage bypass from causing starvation.
 Registration, preprocessing, WMQL and connectome stages also share two I/O admission slots. Reservations cover whole
 wrapped stages, rather than instantaneous disk bandwidth.
+DWI decompression has a separate two-permit FIFO gate, released before fitting.
+An overrun runtime estimate never releases a still-running task's reservation.
 
 Every adaptive stage records sampled process-tree RSS, CPU time, I/O and execution
 time in `schedule_<id>/events.jsonl`. The batch manifest summarises reservations and
 measurements separately. `00_batch_metadata/resource_history.json` retains at most
 12 records per workload key and 512 keys. `--resource-history` selects another file.
 Keys include hardware, Python, implementation hashes, numerical arguments, image
-dimensions and threads. Successful observations can raise the heuristic RAM
+dimensions and threads. Successful uncached observations can raise the heuristic RAM
 reservation with a 30% margin and estimate duration with a 25% margin. They never
 silently lower the initial RAM estimate or retry a failed scientific computation.
 Sampled RSS sums can double-count shared pages and miss between-sample peaks.
@@ -86,8 +90,9 @@ Python for process identity and stale-reservation cleanup.
 Covered boundaries include mask generation, shared native/registered DTI,
 preprocessing, anatomical inference and postprocessing, microstructure, tracking,
 bundle extraction and connectome construction. Validation, environment checks and
-report generation are not separately reserved. A grouped microstructure call keeps
-its reservation until it returns; this is not per-voxel or iteration-level batching.
+report generation are not separately reserved. DTI export, Free-water, NODDI and
+DKI/MK-Curve have separate leases; their controller does not retain a parent lease.
+This is task-level admission, not per-voxel or iteration-level batching.
 
 ## Threads And Devices
 
@@ -102,12 +107,16 @@ they fit the total budget. Estimates are conservative heuristics, not measured p
 
 The scheduler sets common numerical/ITK/MRtrix thread defaults for child processes,
 provides surface/MRtrix/eddy defaults and bounds automatic NODDI threads. Explicit
-thread options above the reservation are rejected. Within-subject model concurrency
-is set to one; Free-water parallel workers default to one. To change these thread
+thread options above the reservation are rejected. UKF automatic threads use the
+stage reservation. The compatibility `resources` mode requires one within-subject
+model; `adaptive` also accepts bounded independent model workers. Free-water
+parallel workers default to one. To change these thread
 settings, establish a new reproducibility baseline where appropriate.
 
-Reservations are admission estimates, not OS-enforced CPU or RAM caps. Third-party
-tools can use additional helper threads or memory. GPU slots conservatively count
+On Linux, stages receive disjoint CPU affinity sets and child programs inherit
+them, including native tools that ignore thread variables. Affinity is restored
+after completion or failure. RAM remains a declared reservation, not an OS cap.
+Third-party tools can create helper threads within their CPU set. GPU slots conservatively count
 GPU-capable calls, not measured GPU use or VRAM. This version does not assign GPUs,
 enforce per-device VRAM, keep models resident or merge different subjects into one
 model batch. It does not change precision, seeds, solver definitions or fitting grids.

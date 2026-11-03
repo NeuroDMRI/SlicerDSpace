@@ -351,7 +351,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args, forwarded_args = parser.parse_known_args(argv)
     resource_mode = args.scheduler in ('resources', 'adaptive')
-    if resource_mode:
+    if args.scheduler == 'resources':
         if int(_command_option(forwarded_args, '--max-parallel-models', '1')) != 1:
             parser.error('Resource scheduling currently requires --max-parallel-models 1 to avoid nested reservations')
 
@@ -398,7 +398,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[Batch] Resource plan: up to {args.jobs} subjects; "
               f"{resource_plan['cpu_budget']} CPU threads, {resource_plan['memory_gb']:.1f} GiB RAM; "
               f"{resource_plan['gpu_slots']} GPU-capable stage slot(s).", flush=True)
-        forwarded_args += ['--max-parallel-models', '1']
+        if not _command_option(forwarded_args, '--max-parallel-models', ''):
+            forwarded_args += ['--max-parallel-models', '1']
         if not _command_option(forwarded_args, '--microstructure-free-water-n-jobs', ''):
             forwarded_args += ['--microstructure-free-water-n-jobs', '1']
         for flag in ('--surface-cpu-threads', '--mrtrix-nthreads', '--preprocessing-eddy-threads'):

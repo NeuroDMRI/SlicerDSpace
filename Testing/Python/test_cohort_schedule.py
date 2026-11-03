@@ -111,6 +111,9 @@ class CohortScheduleTests(unittest.TestCase):
                     self.assertLessEqual(sum(item['cpu'] for item in active.values()), 2)
                     self.assertLessEqual(sum(item['memory_gb'] for item in active.values()), 2)
                     self.assertLessEqual(sum(item['gpu'] for item in active.values()), 1)
+                    masks = [set(item['cpu_affinity']) for item in active.values() if item.get('cpu_affinity')]
+                    if masks:
+                        self.assertEqual(len(set.union(*masks)), sum(len(mask) for mask in masks))
                     mixed |= {item['stage'] for item in active.values()} == {'inference', 'fit'}
                 elif row['event'] in ('completed', 'failed', 'abandoned'):
                     active.pop(row['id'], None)

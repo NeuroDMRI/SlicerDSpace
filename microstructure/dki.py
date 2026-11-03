@@ -15,6 +15,7 @@ import time
 from typing import Any, Callable, Optional
 
 from shared.pipeline import RawInputBundle
+from shared.cohort_schedule import scheduled_stage
 
 DKI_METRICS = ("mk", "ak", "rk", "kfa", "mkt", "rtk")
 DKI_FIT_METHODS = ("WLS", "OLS", "MKCURVE", "MKCURVE_MATLAB")
@@ -393,7 +394,8 @@ def _compute_maps(config: DkiConfig, paths: dict[str, Path], log):
         source_path = config.raw_input_bundle.dwi_path.resolve()
         if source_path.name.endswith(".gz"):
             uncompressed = work / "dwi.nii"
-            with gzip.open(source_path, "rb") as source, uncompressed.open("wb") as destination:
+            from shared.cohort_io import io_admission
+            with io_admission('dki_decompression'), gzip.open(source_path, "rb") as source, uncompressed.open("wb") as destination:
                 shutil.copyfileobj(source, destination, length=1024 * 1024)
             input_image = nib.load(str(uncompressed), mmap="r")
         else:
@@ -522,6 +524,7 @@ def _compute_maps(config: DkiConfig, paths: dict[str, Path], log):
     }
 
 
+@scheduled_stage(lambda config: 'microstructure_mkcurve' if _method(config).startswith('MKCURVE') else 'microstructure_dki')
 def run_dki(config: DkiConfig, log: Optional[Callable[[str], None]] = None) -> DkiResult:
     """Fit only eligible acquisitions, with bounded signal chunks and disk-backed maps."""
     paths = dki_output_paths(config.subject_id, config.output_dir)

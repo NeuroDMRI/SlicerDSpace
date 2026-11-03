@@ -510,6 +510,9 @@ automatically; `--jobs 3` optionally sets the active-subject limit. Advanced res
 overrides are documented in [cohort resource scheduling](COHORT_RESOURCES.md).
 That mode uses one within-subject model at a time and keeps the existing subject
 manifests. It does not keep models resident or combine subjects into inference batches.
+`--scheduler adaptive` adds protected backfilling and measured resource feedback;
+it also supports `--max-parallel-models 2` or `3` under the shared model-level
+CPU/RAM admission budget. Start with the default single model and a small cohort.
 
 Named variants use [the example request](examples/dti_experiments.json).
 Replace its literal absolute paths; JSON does not expand `$VARIABLES`.

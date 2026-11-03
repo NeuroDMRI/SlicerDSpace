@@ -549,10 +549,13 @@ def _compute_rd_map(l2_path: Path, l3_path: Path, output_path: Path) -> None:
     nib.save(nib.Nifti1Image(rd, l2_img.affine, l2_img.header), str(output_path))
 
 
+@scheduled_stage('microstructure_dti')
 def _export_dti_scalar_maps(config: MicrostructureConfig, paths: dict[str, Path]) -> None:
     # Selected FW/NODDI/DKI fits may be forced; immutable DTI prerequisites
     # remain reusable when their own source and QC receipts still match.
     if _dti_outputs_current(config, paths):
+        from shared.cohort_schedule import mark_reused
+        mark_reused('microstructure_dti')
         return
     source_before = _dti_source_signature(config)
     native = config.native_bundle
@@ -861,6 +864,7 @@ def _write_noddi_qc(config, paths, *, source_maps=None, validity=None):
     })
 
 
+@scheduled_stage('microstructure_freewater')
 def _compute_free_water_maps(
     *,
     config: MicrostructureConfig,
@@ -1235,6 +1239,7 @@ def _scalar_summary(data: np.ndarray, mask: np.ndarray) -> dict[str, float | int
     }
 
 
+@scheduled_stage('microstructure_noddi')
 def _compute_noddi_maps(
     *,
     config: MicrostructureConfig,
@@ -1667,6 +1672,8 @@ def _run_independent_models(config, log):
     import sys
 
     cpu, _ = available_resources()
+    import os
+    cpu = min(cpu, int(os.environ.get('SLICERDSPACE_STAGE_CPUS', cpu)))
     stages = [stage for stage, enabled in (('freewater', config.run_free_water),
               ('noddi', config.run_noddi), ('dki', config.run_dki)) if enabled]
     threads = min(_noddi_threads(config), max(1, cpu - (len(stages)-1)))
@@ -1703,11 +1710,10 @@ def _run_independent_models(config, log):
             '--stage', stage, '--config', str(description)), threads=count, memory_bytes=reserve,
             environment={'OPENBLAS_NUM_THREADS':'1','OMP_NUM_THREADS':'1','MKL_NUM_THREADS':'1'}))
     schedule = run_independent_jobs(jobs, directory=root,
-                                    max_workers=config.max_parallel_models, log=log)
+                                    max_workers=config.max_parallel_models, cpu_budget=cpu, log=log)
     return replace(adjusted, force_recompute=False), schedule
 
 
-@scheduled_stage('microstructure')
 def run_microstructure(
     config: MicrostructureConfig,
     log: Optional[Callable[[str], None]] = None,

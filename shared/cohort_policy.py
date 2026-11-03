@@ -14,12 +14,13 @@ def reservation_time(head, active, limits, now):
     remaining = list(active)
     if fits(head, remaining, limits):
         return now
-    releases = sorted({max(now, item.get('started_at', now) + item['duration_seconds'])
-                       for item in active if item.get('duration_seconds', 0) > 0})
+    def release(item):
+        end = item.get('started_at', now) + item.get('duration_seconds', 0)
+        return end if item.get('duration_seconds', 0) > 0 and end > now else math.inf
+    releases = sorted({release(item) for item in active if math.isfinite(release(item))})
     for end in releases:
         remaining = [item for item in active
-                     if not item.get('duration_seconds') or
-                     max(now, item.get('started_at', now) + item['duration_seconds']) > end]
+                     if release(item) > end]
         if fits(head, remaining, limits):
             return end
     return math.inf
@@ -42,7 +43,6 @@ def choose_ready(waiting, active, limits, now, *, max_wait=120., max_bypasses=8)
     for row in waiting[1:]:
         if not fits(row, active, limits):
             continue
-        duration = row.get('duration_seconds', 0)
         # Holding this request forever must still permit the protected request.
         hypothetical = dict(row, started_at=now)
         projected = reservation_time(head, [*active, hypothetical], limits, now)

@@ -793,6 +793,8 @@ def _ensure_native_dti_bundle(raw, fit_method, reuse, log):
     expected_manifest = _native_manifest(raw, bundle)
     actual_manifest = _read_manifest(bundle.manifest_path)
     if reuse and actual_manifest == expected_manifest and _native_outputs_complete(bundle):
+        from shared.cohort_schedule import mark_reused
+        mark_reused('native_dti')
         _emit(f"[Shared] Reusing native DTI bundle: {bundle.bundle_dir}", log)
         return bundle
 
@@ -979,6 +981,8 @@ def _ensure_registered_dti_bundle(raw, atlas_t2, fit_method, reuse, log, scalar_
     actual_manifest = _read_manifest(bundle.manifest_path)
     if reuse and actual_manifest == expected_manifest and _registered_outputs_complete(bundle):
         _emit(f"[Shared] Reusing registered DTI bundle: {bundle.bundle_dir}", log)
+        from shared.cohort_schedule import mark_reused
+        mark_reused('registered_dti')
         if not bundle.inverse_transform_path.exists():
             _write_inverse_transform(bundle.transform_path, bundle.inverse_transform_path)
         return bundle

@@ -40,6 +40,12 @@ def _option(arguments, flag, default=''):
     return value
 
 
+def _options(arguments, flag):
+    return [item.split('=', 1)[1] if item.startswith(flag+'=') else arguments[i+1]
+            for i, item in enumerate(arguments)
+            if item.startswith(flag+'=') or (item == flag and i+1 < len(arguments))]
+
+
 def image_size(root):
     """Read dimensions only; never decompress the full DWI or change its files."""
     for directory in (Path(root) / 'input', Path(root)):
@@ -101,21 +107,33 @@ def plan_cohort(subjects, arguments, *, jobs=None, cpu_budget=None, memory_gb=No
                   'parcellation', 'surface', 'surface_postprocess', 'microstructure', 'csd_act',
                   'ukf', 'dti_tracking', 'saf', 'wmql', 'wma', 'tractcloud', 'connectome'}
     selected = set()
+    models = set(','.join(_options(arguments, '--microstructure-stages') or ['dti']).split(','))
+    if 'all' in models:
+        models = {'dti', 'freewater', 'noddi', 'dki'}
+    for model, flag in (('freewater', '--run-free-water'), ('noddi', '--run-noddi'), ('dki', '--run-dki')):
+        if flag in arguments:
+            models.add(model)
+    model_stage = lambda value: 'microstructure_' + ('mkcurve' if value == 'dki' and
+        _option(arguments, '--dki-fit-method', 'WLS').startswith('MKCURVE') else value)
+    leaf_stages = {model_stage(value) for value in models} | {'microstructure_dti'}
+    all_stages.update(leaf_stages)
     for target in targets:
         if target == 'tractography':
             backends = _option(arguments, '--tractography-backend', 'csd_act').split(',')
             selected.update('dti_tracking' if value == 'dti_det' else value for value in backends)
         elif target == 'bundles':
             selected.update(_option(arguments, '--bundle-backend', 'wmql').split(','))
-        elif target.startswith('microstructure'):
-            selected.add('microstructure')
+        elif target == 'microstructure':
+            selected.update(leaf_stages)
+        elif target.startswith('microstructure_'):
+            selected.update(('microstructure_dti', model_stage(target.removeprefix('microstructure_'))))
         elif target in all_stages:
             selected.add(target)
     if not targets or targets - all_stages - {'tractography', 'bundles', 'validation',
             'microstructure_freewater', 'microstructure_noddi', 'microstructure_dki'}:
         selected = all_stages.copy()
     if selected & {'preprocessing', 'segmentation', 'parcellation', 'surface', 'microstructure',
-                   'csd_act', 'ukf', 'dti_tracking', 'saf'}:
+                   'csd_act', 'ukf', 'dti_tracking', 'saf'} or any(stage.startswith('microstructure_') for stage in selected):
         selected.update(('brain_mask', 'native_dti'))
     if selected & {'parcellation', 'surface'}:
         selected.add('registered_dti')
@@ -142,12 +160,20 @@ def plan_cohort(subjects, arguments, *, jobs=None, cpu_budget=None, memory_gb=No
             csd_act=3 + 1.5 * signal + maps, ukf=4 + signal,
             dti_tracking=2 + signal, saf=4 + .5 * signal,
             wmql=8, wma=16, tractcloud=12, connectome=4)
+        estimates.update(microstructure_dti=2+.5*signal,
+                         microstructure_freewater=2+1.5*signal+maps,
+                         microstructure_noddi=2+2*signal+maps,
+                         microstructure_dki=2+signal+maps,
+                         microstructure_mkcurve=2+signal+maps)
         profile = {}
         for stage, estimate in estimates.items():
             profile[stage] = dict(cpu=threads if stage not in {'wmql', 'connectome'} else min(2, threads),
                 memory_gb=stage_memory_gb if stage_memory_gb is not None else math.ceil(estimate * 4) / 4)
-            if adaptive and stage_cpus is None and stage in {'wmql', 'connectome', 'wma'}:
+            if adaptive and stage_cpus is None and stage in {'wmql', 'connectome', 'wma',
+                    'microstructure_dti', 'microstructure_freewater', 'microstructure_dki', 'microstructure_mkcurve'}:
                 profile[stage]['cpu'] = 1
+                if stage == 'microstructure_freewater':
+                    profile[stage]['cpu'] = max(1, int(_option(arguments, '--microstructure-free-water-n-jobs', '1')))
             if adaptive:
                 request = profile[stage]
                 key = workload_key(stage, image['shape'], arguments, request['cpu'],

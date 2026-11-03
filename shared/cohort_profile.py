@@ -54,7 +54,7 @@ def read_history(path):
 
 def history_estimate(history, key):
     rows = history.get('profiles', {}).get(key, [])[-12:]
-    rows = [row for row in rows if row.get('outcome') == 'completed' and row.get('samples', 0) >= 2
+    rows = [row for row in rows if row.get('outcome') == 'completed' and not row.get('cache_hit') and row.get('samples', 0) >= 2
             and all(isinstance(row.get(field), (int, float)) and math.isfinite(row[field]) and row[field] > 0
                     for field in ('peak_tree_rss_bytes', 'execution_seconds'))]
     if not rows:
@@ -93,6 +93,7 @@ class StageMonitor:
         self.start_io = {}
         self.started = time.monotonic()
         self.thread = None
+        self.latest = {}
 
     def sample(self):
         import psutil
@@ -121,6 +122,10 @@ class StageMonitor:
                 continue
         self.peak = max(self.peak, rss)
         self.samples += 1
+        self.latest = dict(rss_bytes=rss, process_count=len(processes),
+                           pids=[process.pid for process in processes],
+                           cpu_seconds=sum(max(0, value-self.start_cpu[key]) for key, value in self.cpu.items()),
+                           io_bytes=sum(max(0, value-self.start_io[key]) for key, value in self.io.items()))
 
     def start(self):
         self.sample()

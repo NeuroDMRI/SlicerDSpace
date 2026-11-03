@@ -1,6 +1,6 @@
 """Invoke the installed official UKFTractography CLI, never a reimplementation."""
 
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, fields, replace
 from shared.cohort_schedule import scheduled_stage
 from datetime import datetime, timezone
 import hashlib
@@ -72,6 +72,12 @@ def parameters(values=None):
             raise ValueError(f"UKF {key} must be in [0,{maximum}]; zero selects author automatic noise")
     if not result.recordFA or not result.recordTensors:
         raise ValueError("UKF output must retain the author-default FA and tensor arrays")
+    if os.environ.get('SLICERDSPACE_COHORT_SCHEDULE'):
+        budget = int(os.environ['SLICERDSPACE_STAGE_CPUS'])
+        if result.numThreads == -1:
+            result = replace(result, numThreads=budget)
+        elif result.numThreads > budget:
+            raise ValueError('UKF thread request exceeds the admitted cohort CPU reservation')
     return result
 
 

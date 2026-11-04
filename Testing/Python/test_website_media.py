@@ -37,7 +37,7 @@ class WebsiteMediaTests(unittest.TestCase):
         self.assertEqual(video.stat().st_size, entry['output_bytes'])
         self.assertEqual(hashlib.sha256(video.read_bytes()).hexdigest(), entry['sha256'])
         self.assertTrue(entry['audio_payload_identical'])
-        self.assertEqual(entry['ssim_frames_checked'], 2160)
+        self.assertEqual(entry['ssim_frames_checked'], 1944)
         self.assertGreaterEqual(entry['complete_frame_ssim'], .99)
         self.assertLess(entry['output_bytes'], entry['source_bytes'])
         self.assertTrue(faststart(video))

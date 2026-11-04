@@ -1,51 +1,47 @@
 1
-00:00:00,800 --> 00:00:04,950
+00:00:00,500 --> 00:00:04,850
 Diffusion MRI records how water moves through the living brain.
 
 2
-00:00:05,000 --> 00:00:11,550
-Mapping anatomy has usually meant a second, T1-weighted scan, registered into diffusion space.
-
-3
-00:00:12,100 --> 00:00:19,250
+00:00:04,900 --> 00:00:12,050
 SlicerDSpace reconstructs anatomy directly from diffusion MRI, without a T1-weighted scan.
 
-4
-00:00:19,300 --> 00:00:24,350
+3
+00:00:12,100 --> 00:00:17,150
 It maps microstructure, from DTI to free water, NODDI and kurtosis.
 
-5
-00:00:24,400 --> 00:00:26,200
+4
+00:00:17,200 --> 00:00:19,000
 Tissue labels.
 
-6
-00:00:28,000 --> 00:00:29,800
+5
+00:00:20,800 --> 00:00:22,600
 Brain regions.
 
-7
-00:00:31,400 --> 00:00:33,350
+6
+00:00:24,200 --> 00:00:26,150
 White and pial surfaces,
 
-8
-00:00:33,400 --> 00:00:35,722
+7
+00:00:26,200 --> 00:00:28,522
 all in native diffusion space.
 
-9
-00:00:37,000 --> 00:00:41,018
+8
+00:00:29,800 --> 00:00:33,818
 Whole-brain tractography, traced in the same native space.
 
-10
-00:00:46,000 --> 00:00:49,224
+9
+00:00:38,800 --> 00:00:42,024
 White-matter bundles, from the same tractogram.
 
-11
-00:00:50,800 --> 00:00:54,531
+10
+00:00:43,600 --> 00:00:47,331
 And structural connectomes, built on the same anatomy.
 
-12
-00:00:55,800 --> 00:01:01,300
+11
+00:00:48,600 --> 00:00:54,100
 One 3D Slicer module, with automatic QC and a record of every run.
 
-13
-00:01:05,400 --> 00:01:11,649
+12
+00:00:58,200 --> 00:01:04,449
 SlicerDSpace. Brain anatomy from diffusion MRI, inside 3D Slicer.

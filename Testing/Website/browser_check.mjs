@@ -357,7 +357,7 @@ async function runViewport(browser, origin, name, width, height, opts) {
   record(advanced && !post.paused, `${tag}: click on the play button starts playback (currentTime ${t0.toFixed(2)} -> ${t1.toFixed(2)})`, JSON.stringify({ t0, t1, ...post }));
   record(post.controls && post.btnHidden, `${tag}: controls shown and play button hidden after start`, JSON.stringify(post));
   const played = await page.locator('#film-video').evaluate(v => ({ duration: v.duration, width: v.videoWidth }));
-  record(Math.abs(played.duration - 72) < 0.05 && played.width === 1920,
+  record(Math.abs(played.duration - 64.8) < 0.05 && played.width === 1920,
     `${tag}: playback retains the complete 1080p film`, JSON.stringify(played));
   await page.screenshot({ path: path.join(OUT, `playing-${width}.png`) });
 

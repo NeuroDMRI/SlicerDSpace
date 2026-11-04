@@ -61,6 +61,17 @@ motion blur (180° shutter, sub-frames averaged in linear light). `poster.jpg`, 
 and `social.jpg` are new frames of this render (§3 table); the note under the transcript names TractCloud as the
 source of the bundles. The film's facts are in `FACTS.md` §9.
 
+Addendum 7, 4 November 2026: the film is a new 64.8 s render (§2, §3, §7; user request: a shorter
+introduction and the new wordmark at the end). The opening keeps only line 1 on diffusion MRI; line 2, the T1-weighted
+card and the registration arrow are removed, so every later line, cue and section is 7.2 s earlier than in the 72.0 s
+render (the opening camera now starts centred, so 4.8–7.0 s differs from the old shot). The last frames show only the wordmark and the last subtitle. The site copy is the CRF 24 encode of the
+45,452,363-byte master (23,356,794 bytes, 1,944 frames, receipt in `published_assets.json`); `media/SlicerDSpace.en.srt`
+has 12 cues. The frames in §3 were not taken again: `poster.jpg` and the `out-*` tiles show the same pictures, now
+7.2 s earlier (poster 35.2 s); `idea.jpg` still shows the removed T1-weighted card and is not on the homepage.
+`social.jpg` (the cover, with the old badge) and the README preview GIF (made from the 72.0 s film) are not changed
+(user choice).
+The §5.3 labels stay historical: the live play button reads “Play film” with no duration.
+
 Date: 2026-10-20 (v2: fixes from the Opus spec review, round 1, listed in §9). Location: `docs/site/` (served) and `docs/website/` (spec and facts) on `main` of `ChengjinLii/SlicerDSpace`; the
 original orphan `gh-pages` branch is kept as tag `archive/gh-pages-20261023`. Facts: [`FACTS.md`](FACTS.md) (cited
 below as `[F<section>]`). The site makes no claim that is not in `FACTS.md`, except in the parts added on 23 October
@@ -132,7 +143,7 @@ docs/site/assets/img/                         icon-64.png, icon-180.png (from R/
                                               figures are rasterised from `paper-latex:docs/figures/*.svg`, which is not served), and twelve result tiles: res-dec.jpg,
                                               res-fw.jpg, res-ndi.jpg, res-mk.jpg, res-mkcurve.jpg, res-tissue.jpg, res-parcel.jpg, res-tr-ukf.jpg,
                                               res-tr-csd.jpg, res-wmql-ukf.jpg, res-tc-ukf.jpg, res-net-sift2.jpg
-docs/site/media/SlicerDSpace_promo_1080p.mp4  copy of P/out/SlicerDSpace_promo_1080p.mp4 (47,767,254 bytes)
+docs/site/media/SlicerDSpace_promo_1080p.mp4  CRF 24 encode of P/out/SlicerDSpace_promo_1080p.mp4 (23,356,794 bytes; Addendum 7)
 docs/site/media/SlicerDSpace.en.srt           copy of P/out/SlicerDSpace.en.srt
 ```
 
@@ -579,10 +590,10 @@ Prints one `PASS name` / `FAIL name - reason` line per check; `SKIP` only where 
 3. `external_urls`: every absolute URL in `docs/site/` (HTML, CSS, JS) is in the §6 set; `<link>`, `<script>`, `<img>`,
    `<source>`, `<video>` and CSS `url()`/`@import` never point to another host, except `<link rel="canonical">` with
    the §6 Pages URL. Inline SVG carries no `xmlns` (or namespace URIs are exempt).
-4. `film_bytes`: `docs/site/media/SlicerDSpace_promo_1080p.mp4` is 47,767,254 bytes and, when `--film` is given, equal in
+4. `film_bytes`: `docs/site/media/SlicerDSpace_promo_1080p.mp4` is 23,356,794 bytes and, when `--film` is given, equal in
    SHA-256 to that file.
 5. `film_faststart`: top-level MP4 boxes: `ftyp` first, `moov` before `mdat` (pure Python box scan).
-6. `film_probe`: with `ffprobe` on PATH: h264 1920×1080 yuv420p, aac, duration 72.0 ± 0.05 s. `SKIP` without ffprobe.
+6. `film_probe`: with `ffprobe` on PATH: h264 1920×1080 yuv420p, aac, duration 64.8 ± 0.05 s. `SKIP` without ffprobe.
 7. `transcript_matches_srt`: the transcript list equals the 13 cue texts of `docs/site/media/SlicerDSpace.en.srt`, in order.
 8. `sizes`: no file in `docs/site/` is over 50 MB; `docs/site/` is under 100 MB in total.
 9. `images`: every `<img>` has non-empty `alt`, integer `width` and `height`; each image file's pixel size matches its
@@ -614,7 +625,7 @@ Serves `docs/site/` from a local HTTP server with Range support (to match GitHub
    byte-range requests for video); no response with status ≥ 400; no request to another host;
 2. `document.documentElement.scrollWidth <= innerWidth`;
 3. every `<img>` is `complete` with `naturalWidth > 0` after scrolling the page through;
-4. the video: `readyState >= 1`, `duration` 72.0 ± 0.05 s, `videoWidth` 1920; `canPlayType` for
+4. the video: `readyState >= 1`, `duration` 64.8 ± 0.05 s, `videoWidth` 1920; `canPlayType` for
    `video/mp4; codecs="avc1.640032, mp4a.40.2"` (High, level 5.0, as ffprobe reports) is not empty;
 5. clicking the play button starts playback (`currentTime` advances within 3 s; muted in the test only) and shows
    `controls`;

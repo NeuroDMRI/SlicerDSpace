@@ -247,9 +247,9 @@ with `python scripts/optimize_website_images.py`; `--check` verifies their bytes
 decoded RGBA pixels, dimensions and asset receipts. Their transfer sizes fall
 from 186,955 to 73,288 bytes and from 267,350 to 81,220 bytes, respectively.
 
-The film retains 1920 x 1080, 30 fps, all 2,160 frames, its original 72-second
+The film retains 1920 x 1080, 30 fps, all 1,944 frames, its original 64.8-second
 duration and the unchanged AAC payload. H.264 CRF 24 with `+faststart` reduces it
-from 47,767,254 to 24,799,408 bytes. The recorded full-frame SSIM is 0.993870.
+from 45,452,363 to 23,356,794 bytes. The recorded full-frame SSIM is 0.993841.
 Retain the master outside the public tree; do not repeatedly recompress the
 website copy. The maintainer-only builder/verifier is:
 

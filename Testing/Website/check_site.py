@@ -25,7 +25,7 @@ PAGE404 = os.path.join(DOCS, "404.html")
 CHINESE = os.path.join(DOCS, "zh.html")
 FILM = os.path.join(DOCS, "media", "SlicerDSpace_promo_1080p.mp4")
 SRT = os.path.join(DOCS, "media", "SlicerDSpace.en.srt")
-FILM_BYTES = 24799408
+FILM_BYTES = 23356794
 
 REPO = "https://github.com/NeuroDMRI/SlicerDSpace"
 BLOB = REPO + "/blob/main/"
@@ -517,8 +517,8 @@ def film_probe():
     if not audio or audio[0].get("codec_name") != "aac":
         problems.append("audio is not aac")
     dur = float(info["format"]["duration"])
-    if abs(dur - 72.0) > 0.05:
-        problems.append("duration %.3f s, need 72.0 +/- 0.05" % dur)
+    if abs(dur - 64.8) > 0.05:
+        problems.append("duration %.3f s, need 64.8 +/- 0.05" % dur)
     return "; ".join(problems) if problems else None
 
 

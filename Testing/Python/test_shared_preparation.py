@@ -168,7 +168,7 @@ class SharedPreparationTests(unittest.TestCase):
     def test_surface_facade_uses_shared_wls_but_not_the_parcellation_atlas(self):
         from anatomy.surface.pipeline import SurfaceConfig, _run_shared_raw
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
+            root = Path(tmp).resolve()  # F4: macOS /var is a symlink to /private/var
             raw = inputs(root)
             atlas = root / 'trained-surface-atlas.nii.gz'
             bundle = pipeline._build_registered_bundle(raw, 'wls', atlas, 'nrrd')

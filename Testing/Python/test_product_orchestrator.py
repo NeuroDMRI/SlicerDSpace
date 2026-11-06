@@ -1021,6 +1021,7 @@ class ProductOrchestratorTest(unittest.TestCase):
                         subject_root=subject_root,
                         targets=("saf",),
                         execute=True,
+                        excluded_targets=("segmentation", "parcellation", "surface_postprocess", "tractography"),
                     )
                 )
 
@@ -1592,7 +1593,7 @@ class ProductOrchestratorTest(unittest.TestCase):
                 resume=True,
             )
             complete_plan = plan_subject_products(config)
-            self.assertEqual({item.target: item.status for item in complete_plan.items}, {"bundles": "skipped", "connectome": "skipped"})
+            self.assertEqual({item.target: item.status for item in complete_plan.items if item.requested}, {"bundles": "skipped", "connectome": "skipped"})
             from shared import run_subject_products
             from shared.result_scene import result_candidates
             result = run_subject_products(config)
@@ -1814,6 +1815,7 @@ class ProductOrchestratorTest(unittest.TestCase):
                         subject_root=subject_root,
                         targets=("saf",),
                         execute=True,
+                        excluded_targets=("segmentation", "parcellation", "surface_postprocess", "tractography"),
                     )
                 )
 

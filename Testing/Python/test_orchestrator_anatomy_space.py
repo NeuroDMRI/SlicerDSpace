@@ -269,7 +269,8 @@ class WorldQCGateTest(unittest.TestCase):
             layout.ddseg.mkdir(parents=True)
             (layout.ddseg / "SegmentationMap_GMWMCSF.nii.gz").write_text("segmentation")
             config = ProductOrchestratorConfig("100307", subject, ("tractography",),
-                execute=True, resume=False, brain_mask_backend="provided")
+                execute=True, resume=False, brain_mask_backend="provided",
+                excluded_targets=("segmentation", "parcellation"))
             plan = plan_subject_products(config, write=False)
             task = next(t for t in plan.items if t.target == "tractography")
             self.assertEqual(task.status, "blocked")
@@ -309,6 +310,7 @@ class WorldQCGateTest(unittest.TestCase):
                     targets=("tractography",),
                     execute=True,
                     resume=True,
+                    excluded_targets=("segmentation", "parcellation"),
                 )
             )
             statuses = {task.name: task.status for task in result.tasks}

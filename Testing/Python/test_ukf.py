@@ -122,7 +122,7 @@ class GeometryTests(unittest.TestCase):
 
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
+        self.root = Path(self.temp.name).resolve()  # F4: macOS /var is a symlink to /private/var
         # Nontrivial orientation/origin detects accidental LPS or voxel-space exports.
         self.affine = np.array([[0, -2, 0, 20], [1.5, 0, 0, -10], [0, 0, 2.5, 3], [0, 0, 0, 1.0]])
         self.dwi = self.root / "data.nii.gz"

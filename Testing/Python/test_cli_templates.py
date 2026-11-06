@@ -185,7 +185,7 @@ class CliTemplatesTest(unittest.TestCase):
         from types import SimpleNamespace
         tokens = argv(blocks(GUIDES[0], 'template')['report'])
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve()  # F4: macOS /var is a symlink to /private/var
             manifest = root / 'outputs/dti/00_run_metadata/dti_orchestration_manifest.json'
             manifest.parent.mkdir(parents=True)
             manifest.write_text('{}')

@@ -484,7 +484,7 @@ def _add_slicer_python_runtime(specs: dict[str, DependencySpec], target: str) ->
         install_group="slicer-runtime",
         notes=(
             "Run this target from 3D Slicer or with Slicer's bin/PythonSlicer executable. "
-            "Do not install the unrelated PyPI package named 'slicer'. Install SlicerDMRI in 3D Slicer as well."
+            "Do not install the unrelated PyPI package named 'slicer'."
         ),
     )
 
@@ -1727,7 +1727,7 @@ def _install_hint(spec: DependencySpec, platform_name: str) -> str:
     if spec.install_group == "slicer-dmri":
         return "Install SlicerDMRI in Slicer and point to the required CLI if this optional export is enabled."
     if spec.install_group == 'ukf':
-        return 'Install UKFTractography and SlicerDMRI through Slicer Extension Manager and restart Slicer. UKF is optional; no automatic algorithm fallback.'
+        return 'Install UKFTractography through Slicer Extension Manager and restart Slicer. UKF is optional; no automatic algorithm fallback.'
     if spec.install_group == "device":
         return "Use CPU, or install a CUDA-capable PyTorch runtime and NVIDIA driver visible to the selected Python/Slicer environment."
     return spec.notes
@@ -2088,26 +2088,29 @@ def _check_spec(spec: DependencySpec, platform_name: str) -> DependencyStatus:
     )
 
 
-_SLICER_CLI_NAMES = ("DWIToDTIEstimation", "DiffusionTensorScalarMeasurements")
+def _teem_info_in_process() -> dict[str, str]:
+    """Load Slicer's Teem library in this interpreter; return version, library path and error text."""
+    try:
+        from shared import teem_dti
+
+        library = teem_dti.load_teem()
+        return {"teem_version": teem_dti.teem_version(library),
+                "library": str(getattr(library, "_slicerdspace_path", "")), "error": ""}
+    except Exception as exc:  # TeemError, ImportError (no numpy), OSError: all mean "not available here"
+        return {"teem_version": "", "library": "", "error": str(exc)}
 
 
-def _find_slicer_clis_in_interpreter(python_path: Path) -> dict[str, tuple[str, str]]:
-    """Run the CLI search in the selected interpreter (C2); return name -> (path, error)."""
+def _teem_info_in_interpreter(python_path: Path) -> dict[str, str]:
+    """Run the Teem check in the selected interpreter (C2), so it answers for that runtime."""
     probe = (
         "import json, sys\n"
         f"sys.path.insert(0, {Path(__file__).resolve().parents[1].as_posix()!r})\n"
-        f"names = {list(_SLICER_CLI_NAMES)!r}\n"
-        "result = {}\n"
         "try:\n"
-        "    from shared.pipeline import resolve_cli_executable\n"
+        "    from shared import teem_dti\n"
+        "    lib = teem_dti.load_teem()\n"
+        "    result = dict(teem_version=teem_dti.teem_version(lib), library=str(getattr(lib, '_slicerdspace_path', '')), error='')\n"
         "except Exception as exc:\n"
-        "    result = {name: ['', str(exc)] for name in names}\n"
-        "else:\n"
-        "    for name in names:\n"
-        "        try:\n"
-        "            result[name] = [resolve_cli_executable(name), '']\n"
-        "        except Exception as exc:\n"
-        "            result[name] = ['', str(exc)]\n"
+        "    result = dict(teem_version='', library='', error=str(exc))\n"
         "print(json.dumps(result))\n"
     )
     try:
@@ -2118,47 +2121,31 @@ def _find_slicer_clis_in_interpreter(python_path: Path) -> dict[str, tuple[str, 
         )
         payload = _parse_json_probe_output(completed.stdout)
     except subprocess.TimeoutExpired as exc:
-        return {name: ("", _probe_timeout_error(exc)) for name in _SLICER_CLI_NAMES}
+        return {"teem_version": "", "library": "", "error": _probe_timeout_error(exc)}
     except (OSError, subprocess.SubprocessError) as exc:
-        return {name: ("", str(exc)) for name in _SLICER_CLI_NAMES}
-    results = {}
-    for name in _SLICER_CLI_NAMES:
-        entry = payload.get(name)
-        found, error = (str(entry[0]), str(entry[1])) if isinstance(entry, list) and len(entry) == 2 else ("", "probe returned no result")
-        results[name] = (found, error)
-    return results
+        return {"teem_version": "", "library": "", "error": str(exc)}
+    if not isinstance(payload, dict):
+        return {"teem_version": "", "library": "", "error": "probe returned no result"}
+    return {name: str(payload.get(name, "")) for name in ("teem_version", "library", "error")}
 
 
-def _slicer_cli_statuses(targets: tuple[str, ...], python_executable: Optional[Path] = None) -> tuple[DependencyStatus, ...]:
-    """Headless counterpart of the GUI loaded-module check: search the Slicer CLI folders.
-
-    The search runs in the selected interpreter (C2); the in-process search is kept when
-    that interpreter is the caller's own.
-    """
-    from shared.pipeline import resolve_cli_executable
-
+def _native_tensor_status(targets: tuple[str, ...], python_executable: Optional[Path] = None, *,
+                          in_process: bool = False) -> DependencyStatus:
+    """The one requirement of the native tensor fit: Slicer core's Teem library loads in the selected Python."""
     selected = interpreter_path(python_executable) if python_executable is not None else None
-    results: dict[str, tuple[str, str]] = {}
-    if selected is not None and selected != interpreter_path(sys.executable):
-        results = _find_slicer_clis_in_interpreter(selected)
+    if not in_process and selected is not None and selected != interpreter_path(sys.executable):
+        info = _teem_info_in_interpreter(selected)
     else:
-        for name in _SLICER_CLI_NAMES:
-            try:
-                results[name] = (resolve_cli_executable(name), "")
-            except (RuntimeError, ImportError, OSError) as exc:  # C7: iterdir can raise PermissionError
-                results[name] = ("", str(exc))
-    statuses = []
-    for name in _SLICER_CLI_NAMES:
-        found, error = results[name]
-        statuses.append(DependencyStatus(
-            key=f"slicer_cli:{name.lower()}", kind="setting", label=f"SlicerDMRI {name} CLI",
-            status="available" if found else "missing", required=True, targets=targets,
-            details={"path": found, "error": error, "check": "Slicer CLI module search",
-                     "python_executable": (selected or Path(sys.executable)).as_posix()},
-            install_group="slicer-dmri",
-            install_hint="" if found else "Install SlicerDMRI in 3D Slicer, or run with Slicer's PythonSlicer so its CLI folders are searched.",
-        ))
-    return tuple(statuses)
+        info = _teem_info_in_process()
+    found = not info["error"] and bool(info["library"])
+    return DependencyStatus(
+        key="native_tensor_fit", kind="setting", label="Native tensor fit (Slicer core Teem)",
+        status="available" if found else "missing", required=True, targets=targets,
+        details={**info, "check": "Teem library load in the selected Python",
+                 "python_executable": (selected or Path(sys.executable)).as_posix()},
+        install_group="slicer-runtime",
+        install_hint="" if found else "Run with Slicer's PythonSlicer",
+    )
 
 
 def run_environment_doctor(config: EnvironmentDoctorConfig, *, _probe_cache=None) -> EnvironmentDoctorResult:
@@ -2196,23 +2183,13 @@ def run_environment_doctor(config: EnvironmentDoctorConfig, *, _probe_cache=None
                 targets=('surface_postprocess',), details={'notes': 'Set the activation file or FS_LICENSE; it is not downloaded or included in the runtime.'},
                 install_group='freesurfer-license', install_hint='Register for your own FreeSurfer activation file and select it in Environment paths, or set FS_LICENSE.'),
         )
-    if config.loaded_slicer_modules is not None:
+    if config.loaded_slicer_modules is not None or config.check_slicer_cli_modules:
         native_targets = tuple(dict.fromkeys(target for spec in specs if spec.key == 'python:slicer.util'
                                              for target in spec.targets))
         if native_targets:
-            available = 'dwitodtiestimation' in config.loaded_slicer_modules
-            statuses += (DependencyStatus(
-                key='slicer_module:dwitodtiestimation', kind='setting', label='SlicerDMRI DWIToDTIEstimation module',
-                status='available' if available else 'missing', required=True, targets=native_targets,
-                details={'loaded_modules': list(config.loaded_slicer_modules), 'check': 'actual current Slicer session'},
-                install_group='slicer-dmri',
-                install_hint='' if available else 'Install or enable SlicerDMRI in Extension Manager, then restart Slicer. Importing slicer.util alone does not load its CLI modules.',
-            ),)
-    if config.check_slicer_cli_modules and config.loaded_slicer_modules is None:
-        native_targets = tuple(dict.fromkeys(target for spec in specs if spec.key == 'python:slicer.util'
-                                             for target in spec.targets))
-        if native_targets:
-            statuses += _slicer_cli_statuses(native_targets, checked_python_path)
+            # GUI session: the interpreter is Slicer's own, so the check runs in process.
+            statuses += (_native_tensor_status(
+                native_targets, checked_python_path, in_process=config.loaded_slicer_modules is not None),)
     if "microstructure_dki" in targets and config.dki_fit_method.upper().startswith("MKCURVE"):
         matlab_reference = config.dki_fit_method.upper() == "MKCURVE_MATLAB"
         if matlab_reference:

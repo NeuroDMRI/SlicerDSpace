@@ -64,7 +64,7 @@ Options:
       --mask <path>           Brain mask on the native DWI grid.
       --input-root <path>     DDParcel file layout or HCP subject tree.
       --output-root <path>    Root for generated DTI intermediates.
-      --slicer-path <path>    Slicer installation used for DMRI CLI modules.
+      --slicer-path <path>    Slicer installation (PythonSlicer and core CLI modules).
       --reference-image <path> Reference atlas/T2 image for registration.
       --python-bin <bin>      Python interpreter for helper conversion scripts.
       --minimal              Only resample the five inference scalar channels.
@@ -200,36 +200,22 @@ resolve_slicer_lib_dir() {
   find "$SLICER_PATH/lib" -maxdepth 1 -type d -name 'Slicer-*' | sort | tail -n 1
 }
 
-resolve_dmri_cli_dir() {
-  local slicer_version_dir=$1
-  find "$SLICER_PATH" -type d -path "*/SlicerDMRI/lib/${slicer_version_dir}/cli-modules" | sort | tail -n 1
-}
-
-resolve_dmri_qt_dir() {
-  local slicer_version_dir=$1
-  find "$SLICER_PATH" -type d -path "*/SlicerDMRI/lib/${slicer_version_dir}/qt-loadable-modules" | sort | tail -n 1
-}
-
 SLICER_LIB_DIR=$(resolve_slicer_lib_dir)
 [[ -n "$SLICER_LIB_DIR" ]] || die "Unable to locate Slicer versioned lib directory under $SLICER_PATH/lib"
 SLICER_VERSION_DIR=$(basename "$SLICER_LIB_DIR")
 
-CLI_MODULES_PATH=$(resolve_dmri_cli_dir "$SLICER_VERSION_DIR")
 CLI_MODULES_PATH2="$SLICER_LIB_DIR/cli-modules"
-DMRI_QT_MODULES_DIR=$(resolve_dmri_qt_dir "$SLICER_VERSION_DIR")
+PYTHONSLICER="$SLICER_PATH/bin/PythonSlicer"
 TEEM_LIB_DIR=$(find "$SLICER_PATH/lib" -maxdepth 1 -type d -name 'Teem-*' | sort | tail -n 1)
 
-[[ -n "$CLI_MODULES_PATH" ]] || die "Unable to locate SlicerDMRI CLI modules under $SLICER_PATH"
 [[ -d "$CLI_MODULES_PATH2" ]] || die "Unable to locate core Slicer CLI modules under $SLICER_LIB_DIR"
 
-[[ -x "$CLI_MODULES_PATH/DWIToDTIEstimation" ]] || die "DWIToDTIEstimation not found under $CLI_MODULES_PATH"
-[[ -x "$CLI_MODULES_PATH/DiffusionTensorScalarMeasurements" ]] || die "DiffusionTensorScalarMeasurements not found under $CLI_MODULES_PATH"
+[[ -x "$PYTHONSLICER" ]] || die "PythonSlicer not found at $PYTHONSLICER (the tensor fit runs in Slicer's Python)"
 [[ -x "$CLI_MODULES_PATH2/BRAINSFit" ]] || die "BRAINSFit not found under $CLI_MODULES_PATH2"
 [[ -x "$CLI_MODULES_PATH2/ResampleScalarVectorDWIVolume" ]] || die "ResampleScalarVectorDWIVolume not found under $CLI_MODULES_PATH2"
 
 prepend_ld_library_path "$SLICER_PATH/lib"
 prepend_ld_library_path "$SLICER_LIB_DIR"
-prepend_ld_library_path "$DMRI_QT_MODULES_DIR"
 prepend_ld_library_path "$TEEM_LIB_DIR"
 prepend_ld_library_path "$SLICER_PATH/lib/Python/lib"
 prepend_ld_library_path "$CLI_MODULES_PATH2"
@@ -240,8 +226,6 @@ if [[ -n "${CONDA_PREFIX:-}" ]]; then
   prepend_ld_library_path "$CONDA_PREFIX/lib"
 fi
 
-DWI_TO_DTI_ESTIMATION=("$SLICER_PATH/Slicer" --launch "$CLI_MODULES_PATH/DWIToDTIEstimation")
-DTI_SCALARS=("$SLICER_PATH/Slicer" --launch "$CLI_MODULES_PATH/DiffusionTensorScalarMeasurements")
 BRAINS_FIT=("$SLICER_PATH/Slicer" --launch "$CLI_MODULES_PATH2/BRAINSFit")
 RESAMPLE_VOLUME=("$SLICER_PATH/Slicer" --launch "$CLI_MODULES_PATH2/ResampleScalarVectorDWIVolume")
 
@@ -252,7 +236,7 @@ log "Reference image: $REFERENCE_IMAGE"
 
 command=("$PYTHON_BIN" "$SCRIPT_DIR/dti.py" --subject "$SUBJECT_ID"
          --output-dir "$OUTPUT_DIR" --dwi "$DWI" --bval "$BVAL" --bvec "$BVEC" --mask "$MASK"
-         --slicer-path "$SLICER_PATH" --dmri-cli "$CLI_MODULES_PATH" --core-cli "$CLI_MODULES_PATH2"
+         --slicer-path "$SLICER_PATH" --core-cli "$CLI_MODULES_PATH2"
          --reference-image "$REFERENCE_IMAGE" --mask-flip "$MASK_FLIP" --jobs "$JOBS")
 [[ "$MINIMAL" -eq 0 ]] || command+=(--minimal)
 "${command[@]}"

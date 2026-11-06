@@ -94,7 +94,7 @@ class CMakeExtensionConfigTest(unittest.TestCase):
             self.assertIn("SlicerDSpace", module_contract)
             self.assertIn("SlicerDSpace.py", module_contract)
             self.assertIn("SlicerDSpace", package_contract)
-            self.assertIn("SlicerDMRI", package_contract)
+            self.assertNotIn("SlicerDMRI", package_contract)  # D9: PyTorch is the only extension dependency
             self.assertIn("PyTorch", package_contract)
             registered = (build / "Testing/Python/CTestTestfile.cmake").read_text(encoding="utf-8")
             for script in (REPO_ROOT / "Testing/Python").glob("test_*.py"):

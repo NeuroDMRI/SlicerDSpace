@@ -45,15 +45,19 @@ def main():
     config = SurfaceConfig(args.subject, subject, root / 'author', input_bundle=raw, execute=True,
         model_assets_dir=args.assets.resolve(), slicer_home=args.slicer_home.resolve(), device='auto')
     binaries = {name: next(args.slicer_home.rglob(filename)) for name, filename in (
-        ('dwitodtiestimation', 'DWIToDTIEstimation'), ('diffusiontensorscalarmeasurements', 'DiffusionTensorScalarMeasurements'),
         ('brainsfit', 'BRAINSFit'), ('resamplescalarvectordwivolume', 'ResampleScalarVectorDWIVolume'))}
+    python_slicer = next(path for path in (args.slicer_home / 'bin/PythonSlicer', args.slicer_home / 'PythonSlicer')
+                         if path.is_file())
     def execute(command, log=None):
-        subprocess.run([str(args.slicer_home / 'Slicer'), '--launch', *command], check=True,
+        # The native tensor fit is a PythonSlicer command; Slicer CLI modules still start through the launcher.
+        launch = [] if Path(command[0]) == python_slicer else [str(args.slicer_home / 'Slicer'), '--launch']
+        subprocess.run([*launch, *command], check=True,
             env=merged_startup_environment(pipeline.build_cli_environment(command[0])))
     started = time.perf_counter()
     author = run_surface(config, log=lambda value: print(value, flush=True))
     author_seconds = time.perf_counter() - started
     with patch.object(pipeline, '_require_slicer'), \
+            patch.object(pipeline, 'resolve_pythonslicer_executable', return_value=str(python_slicer)), \
             patch.object(pipeline, '_get_cli_executable', side_effect=lambda name: str(binaries[name])), \
             patch.object(pipeline, '_run_cli', side_effect=execute):
         started = time.perf_counter()

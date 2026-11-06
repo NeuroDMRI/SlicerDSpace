@@ -474,6 +474,19 @@ def resolve_pythonslicer_executable() -> str:
     raise RuntimeError("Failed to resolve the PythonSlicer executable path.")
 
 
+NATIVE_TENSOR_SCALARS = ("FractionalAnisotropy", "Trace", "MeanDiffusivity",
+                         "MinEigenvalue", "MidEigenvalue", "MaxEigenvalue")
+
+
+def native_tensor_command(pythonslicer, dwi_header, tensor, baseline, enumeration, scalars, receipt=None) -> list[str]:
+    """One ``teem_dti.py estimate`` process: tensor, baseline and the scalar maps (operation, path) together.
+
+    No ``--threads``: the child reads ``SLICERDSPACE_STAGE_CPUS`` (set by the cohort scheduler) itself.
+    """
+    from shared.teem_dti import estimate_command
+    return estimate_command(pythonslicer, dwi_header, tensor, baseline, enumeration, scalars, receipt)
+
+
 def build_cli_environment(cli_executable: str) -> dict[str, str]:
     env = os.environ.copy()
     requested = env.get("OMP_NUM_THREADS", "")
@@ -721,11 +734,12 @@ def _build_native_bundle(raw: RawInputBundle, fit_method: str) -> NativeDTIBundl
 def _native_manifest(raw: RawInputBundle, bundle: NativeDTIBundle) -> dict[str, Any]:
     return {
         "kind": "native_dti_bundle",
-        "version": 3,
+        "version": 4,
         "subject_id": raw.subject_id,
         "fit_method": bundle.fit_method,
         "conversion_implementation": _conversion_implementation(),
         "preparation_implementation": _artifact_record(Path(__file__))['sha256'],
+        "tensor_implementation": _artifact_record(Path(__file__).with_name('teem_dti.py'))['sha256'],
         "source_files": {
             "dwi": _cache_file_signature(raw.dwi_path),
             "bval": _cache_file_signature(raw.bval_path),
@@ -806,22 +820,8 @@ def _ensure_native_dti_bundle(raw, fit_method, reuse, log):
     shutil.copy2(headers[0], bundle.dwi_nhdr_path)
     shutil.copy2(headers[1], bundle.mask_nhdr_path)
 
-    dti_cli = _get_cli_executable("dwitodtiestimation")
-    scalar_cli = _get_cli_executable("diffusiontensorscalarmeasurements")
-    fit_enum = "WLS" if fit_key == "wls" else "LS"
-
-    _run_cli(
-        [
-            dti_cli,
-            "--enumeration",
-            fit_enum,
-            bundle.dwi_nhdr_path.as_posix(),
-            bundle.dti_nrrd_path.as_posix(),
-            bundle.b0_nrrd_path.as_posix(),
-        ],
-        log,
-    )
-
+    receipt_path = bundle.bundle_dir / "native_dti_receipt.json"
+    receipt_path.unlink(missing_ok=True)
     scalar_outputs = [
         ("FractionalAnisotropy", bundle.fa_nrrd_path),
         ("Trace", bundle.trace_nrrd_path),
@@ -830,17 +830,14 @@ def _ensure_native_dti_bundle(raw, fit_method, reuse, log):
         ("MidEigenvalue", bundle.mid_eig_nrrd_path),
         ("MaxEigenvalue", bundle.max_eig_nrrd_path),
     ]
-    for enum_name, output_path in scalar_outputs:
-        _run_cli(
-            [
-                scalar_cli,
-                "--enumeration",
-                enum_name,
-                bundle.dti_nrrd_path.as_posix(),
-                output_path.as_posix(),
-            ],
-            log,
-        )
+    _run_cli(
+        native_tensor_command(
+            resolve_pythonslicer_executable(),
+            bundle.dwi_nhdr_path, bundle.dti_nrrd_path, bundle.b0_nrrd_path,
+            "WLS" if fit_key == "wls" else "LS", scalar_outputs, receipt_path),
+        log,
+    )
+    tensor_receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
 
     shutil.copy2(bundle.trace_nrrd_path, bundle.ddseg_md_nrrd_path)
     shutil.copy2(bundle.max_eig_nrrd_path, bundle.ddseg_e1_nrrd_path)
@@ -864,9 +861,8 @@ def _ensure_native_dti_bundle(raw, fit_method, reuse, log):
         'kind': 'native_dti_timing', 'status': 'completed', 'subject_id': raw.subject_id,
         'runtime_seconds': time.monotonic() - started, 'fit_method': fit_key,
         'source_dwi': str(raw.dwi_path), 'cache_reused': False,
-        'itk_default_threads': build_cli_environment(dti_cli).get('ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS'),
-        'thread_control_scope': 'ITK environment only; not a thread limit on the VTK tensor estimator',
-        'timing_scope': 'Fresh native tensor fitting, six scalar measurements, compatibility copies and NIfTI conversion; excludes registration and later ROI statistics',
+        'tensor_fit': tensor_receipt,
+        'timing_scope': 'Fresh native Teem tensor fit and six scalar maps in one process, compatibility copies and NIfTI conversion; excludes registration and later ROI statistics',
     })
     return bundle
 

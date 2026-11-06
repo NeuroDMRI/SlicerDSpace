@@ -349,7 +349,7 @@ class SharedLogicMixin:
                 output_dir=layout.run_metadata / "environment",
                 python_executable=python_executable,
                 python_path_entries=python_path_entries,
-                loaded_slicer_modules=(tuple(name for name in ('dwitodtiestimation', 'dwiconvert', 'ukftractography')
+                loaded_slicer_modules=(tuple(name for name in ('dwiconvert', 'ukftractography')
                                              if hasattr(slicer.modules, name)) if getattr(slicer, 'app', None) else None),
                 python_environment=python_environment,
                 conda_executable=conda_executable,
@@ -461,7 +461,7 @@ class SharedLogicMixin:
                 output_dir=report_dir,
                 python_executable=python_executable,
                 python_path_entries=python_path_entries,
-                loaded_slicer_modules=(tuple(name for name in ('dwitodtiestimation', 'dwiconvert', 'ukftractography')
+                loaded_slicer_modules=(tuple(name for name in ('dwiconvert', 'ukftractography')
                                              if hasattr(slicer.modules, name)) if getattr(slicer, 'app', None) else None),
                 python_environment=python_environment,
                 conda_executable=conda_executable,

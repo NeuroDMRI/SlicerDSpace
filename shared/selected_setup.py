@@ -5,12 +5,14 @@ from shared.ui_environment_panel import environment_missing_items
 
 
 def build_setup_plan(result, *, installed_extensions=(), loaded_extensions=None, need_dti=False, need_torch=False, need_ukf=False,
-                     brain_mask_backend="pnl_cnn", wma_atlas="org", gpu_available=False, system=None, machine=None,
+                     need_slicerdmri=False, brain_mask_backend="pnl_cnn", wma_atlas="org", gpu_available=False, system=None, machine=None,
                      existing_managed_profiles=(), repair=False, backend_paths=None):
     installed = set(installed_extensions)
-    required_extensions = (["SlicerDMRI"] if need_dti else []) + (["PyTorch"] if need_torch else [])
+    # DTI-based targets use the native Teem tensor fit (Slicer core), so need_dti adds no extension.
+    # SlicerDMRI is needed only where a step still loads its modules (the WMA harden-transform shim).
+    required_extensions = (["SlicerDMRI"] if need_slicerdmri else []) + (["PyTorch"] if need_torch else [])
     if need_ukf:
-        required_extensions.extend(("SlicerDMRI", "UKFTractography"))
+        required_extensions.append("UKFTractography")
     missing = [item for item in environment_missing_items(result) if item.required]
     from shared.backend_sources import SOURCES, source_root, prepare_sources
     from pathlib import Path

@@ -12,7 +12,7 @@ set(EXTENSION_CONTRIBUTORS "Chengjin Li")
 set(EXTENSION_DESCRIPTION "Integrated diffusion MRI workflows for anatomical reconstruction, tractography, bundle analysis, and structural connectivity.")
 set(EXTENSION_ICONURL "https://raw.githubusercontent.com/NeuroDMRI/SlicerDSpace/main/Resources/Icons/SlicerDSpace.png")
 set(EXTENSION_SCREENSHOTURLS "https://raw.githubusercontent.com/NeuroDMRI/SlicerDSpace/main/docs/images/slicerdds-compact-en.png")
-set(EXTENSION_DEPENDS SlicerDMRI PyTorch)
+set(EXTENSION_DEPENDS PyTorch)
 
 #-----------------------------------------------------------------------------
 # Extension dependencies

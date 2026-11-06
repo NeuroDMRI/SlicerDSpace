@@ -103,24 +103,28 @@ class SharedPreparationTests(unittest.TestCase):
             raw = inputs(Path(tmp))
             commands = []
             def execute(command, log=None):
+                # W1: one teem_dti.py process per fit writes the tensor, baseline and six scalar maps.
                 commands.append(command)
-                for target in (command[-2:] if command[0] == 'tensor' else command[-1:]):
+                arguments = command[2:]
+                Path(arguments[arguments.index('--receipt') + 1]).write_text('{"kind": "teem_tensor_estimation"}')
+                for target in [*arguments[-2:], *(item.partition('=')[2] for index, item in enumerate(arguments)
+                                                  if arguments[index - 1] == '--scalar')]:
                     Path(target).write_bytes(b'fixture output')
             def convert(source, target):
                 target.write_bytes(source.read_bytes())
             with patch.object(pipeline, '_require_slicer'), \
-                    patch.object(pipeline, '_get_cli_executable', side_effect=lambda name: 'tensor' if name == 'dwitodtiestimation' else 'scalar'), \
+                    patch.object(pipeline, 'resolve_pythonslicer_executable', return_value='PythonSlicer'), \
                     patch.object(pipeline, '_run_cli', side_effect=execute), \
                     patch.object(pipeline, '_convert_nrrd_to_nifti', side_effect=convert):
                 ls = pipeline.ensure_native_dti_bundle(raw, 'ls')
                 wls = pipeline.ensure_native_dti_bundle(raw, 'wls')
                 self.assertNotEqual(ls.bundle_dir, wls.bundle_dir)
                 pipeline.ensure_native_dti_bundle(raw, 'wls')
-                self.assertEqual(len(commands), 14)
-                self.assertEqual([cmd[2] for cmd in commands if cmd[0] == 'tensor'], ['LS', 'WLS'])
+                self.assertEqual(len(commands), 2)
+                self.assertEqual([cmd[4] for cmd in commands], ['LS', 'WLS'])
                 wls.fa_nrrd_path.write_bytes(b'corrupt output')
                 pipeline.ensure_native_dti_bundle(raw, 'wls')
-                self.assertEqual(len(commands), 21)
+                self.assertEqual(len(commands), 3)
                 self.assertTrue(pipeline._native_outputs_complete(wls))
 
     def test_registration_separates_atlas_grid_and_resampling_format(self):

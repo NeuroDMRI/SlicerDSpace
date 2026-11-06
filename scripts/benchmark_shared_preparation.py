@@ -62,6 +62,8 @@ def run_case(args, source):
     tensor_cli = next(cli.rglob('DWIToDTIEstimation'))
     scalar_cli = tensor_cli.with_name('DiffusionTensorScalarMeasurements')
     launcher = args.slicer_home / 'Slicer'
+    python_slicer = next(path for path in (args.slicer_home / 'bin/PythonSlicer', args.slicer_home / 'PythonSlicer')
+                         if path.is_file())
     author = ROOT / 'anatomy/surface/ddsurfer_backend/preprocessing/conversion/nhdr_write.py'
     references = []
     started = time.perf_counter()
@@ -91,13 +93,12 @@ def run_case(args, source):
     commands = []
     def execute(command, log=None):
         commands.append(command)
-        # Use the same launcher/environment as the reference, without starting a GUI.
+        # The shared tensor fit is one native PythonSlicer command (shared/teem_dti.py), run without a GUI.
         with (output / 'shared_commands.log').open('ab') as stream:
-            subprocess.run([str(launcher), '--launch', *command], check=True,
-                stdout=stream, stderr=subprocess.STDOUT,
+            subprocess.run(command, check=True, stdout=stream, stderr=subprocess.STDOUT,
                 env=merged_startup_environment(pipeline.build_cli_environment(command[0])))
     with patch.object(pipeline, '_require_slicer'), \
-            patch.object(pipeline, '_get_cli_executable', side_effect=lambda key: str(tensor_cli if key == 'dwitodtiestimation' else scalar_cli)), \
+            patch.object(pipeline, 'resolve_pythonslicer_executable', return_value=str(python_slicer)), \
             patch.object(pipeline, '_run_cli', side_effect=execute):
         stamp = time.perf_counter()
         shared = pipeline.ensure_native_dti_bundle(bundle, 'wls')
@@ -114,14 +115,14 @@ def run_case(args, source):
         MidEigenvalue=shared.mid_eig_nrrd_path, MaxEigenvalue=shared.max_eig_nrrd_path)
     comparisons = [{key: compare(paths[key], target) for key, target in mapping.items()} for paths in references]
     sources_unchanged = all(pipeline._cache_file_signature(Path(record['path'])) == record for record in original.values())
-    passed = (sources_unchanged and unchanged and len(commands) == 7 and
+    passed = (sources_unchanged and unchanged and len(commands) == 1 and
               all(item['exact_values'] and item['geometry_equal'] for row in comparisons for item in row.values()))
     return dict(subject=subject, passed=passed, crop_shape=list(data.shape), crop_origin=start.tolist(),
         reference_seconds=reference_seconds, shared_build_seconds=first_seconds, checked_reuse_seconds=reuse_seconds,
-        reference_tensor_calls=2, reference_scalar_calls=12, shared_tensor_calls=1, shared_scalar_calls=6,
+        reference_tensor_calls=2, reference_scalar_calls=12, shared_tensor_calls=1, shared_scalar_calls=0,
         cache_hit_wrote_no_files=unchanged, source_inputs_unchanged=sources_unchanged, comparisons=comparisons,
         limitations=['Native ROI preparation, not whole brain or trained surface inference',
-                     'Shared build also exports six NIfTI maps; references only tensor/scalar CLI calls',
+                     'Shared build is one native Teem process plus six NIfTI exports; references are the SlicerDMRI tensor/scalar CLI calls',
                      'One ordered pair on a shared host; no global speed ratio claimed'])
 
 

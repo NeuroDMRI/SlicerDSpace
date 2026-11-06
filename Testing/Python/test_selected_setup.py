@@ -24,19 +24,23 @@ def result(*items, targets=("validation",), blockers=None):
 
 
 class SelectedSetupTests(unittest.TestCase):
-    def test_importable_slicer_is_not_proof_that_native_dti_module_is_loaded(self):
+    def test_d6_gui_doctor_needs_the_native_tensor_fit_not_the_dmri_module(self):
         spec = DependencySpec(key='python:slicer.util', kind='python', label='slicer.util', required=True,
                               targets=('microstructure',))
         checked = SimpleNamespace(key=spec.key, kind='python', label=spec.label, status='available', required=True,
                                   targets=spec.targets, details={}, install_group='slicer-runtime', install_hint='')
+        from shared.teem_dti import TeemError
+        config = EnvironmentDoctorConfig(targets=('microstructure',), repo_root=Path('.'), loaded_slicer_modules=())
         with patch('shared.environment.build_dependency_specs', return_value=(spec,)), \
                 patch('shared.environment._check_spec', return_value=checked):
-            config = EnvironmentDoctorConfig(targets=('microstructure',), repo_root=Path('.'), loaded_slicer_modules=())
-            report = run_environment_doctor(config)
+            with patch('shared.teem_dti.load_teem', side_effect=TeemError('no Teem')):
+                report = run_environment_doctor(config)
             self.assertEqual(report.blocker_count, 1)
-            self.assertEqual(report.statuses[-1].key, 'slicer_module:dwitodtiestimation')
-            from dataclasses import replace
-            report = run_environment_doctor(replace(config, loaded_slicer_modules=('dwitodtiestimation',)))
+            self.assertEqual(report.statuses[-1].key, 'native_tensor_fit')
+            library = SimpleNamespace(_slicerdspace_path='/slicer/libteem.so')
+            with patch('shared.teem_dti.load_teem', return_value=library), \
+                    patch('shared.teem_dti.teem_version', return_value='1.12.0'):
+                report = run_environment_doctor(config)
             self.assertEqual(report.blocker_count, 0)
     def test_slicer_510_installed_is_not_loaded_and_nonexposed_api_is_not_called(self):
         manager = Mock(spec=('isExtensionInstalled', 'isExtensionEnabled'))
@@ -46,14 +50,24 @@ class SelectedSetupTests(unittest.TestCase):
             installed, loaded = extension_states(manager, SimpleNamespace())
         self.assertEqual(installed, ['SlicerDMRI', 'PyTorch'])
         self.assertEqual(loaded, [])
-        plan = build_setup_plan(result(), need_dti=True, installed_extensions=installed, loaded_extensions=loaded)
+        plan = build_setup_plan(result(), need_slicerdmri=True, installed_extensions=installed, loaded_extensions=loaded)
         self.assertEqual(plan['restart_extensions'], ['SlicerDMRI'])
         with patch('importlib.util.find_spec', return_value=object()):
             _, loaded = extension_states(manager, SimpleNamespace(dwitodtiestimation=object()))
         self.assertEqual(loaded, ['SlicerDMRI', 'PyTorch'])
 
+    def test_d8_slicerdmri_is_needed_only_for_wma(self):
+        missing = result()
+        self.assertEqual(build_setup_plan(missing, need_dti=True)["extensions"], [])
+        self.assertEqual(build_setup_plan(missing, need_dti=True, need_slicerdmri=True)["extensions"], ["SlicerDMRI"])
+        self.assertEqual(build_setup_plan(missing, need_ukf=True)["extensions"], ["UKFTractography"])
+        both = build_setup_plan(missing, need_slicerdmri=True, need_torch=True, need_ukf=True)
+        self.assertEqual(both["extensions"], ["SlicerDMRI", "PyTorch", "UKFTractography"])
+        installed = build_setup_plan(missing, need_dti=True, installed_extensions=("SlicerDMRI",), loaded_extensions=[])
+        self.assertEqual((installed["extensions"], installed["restart_extensions"]), ([], []))
+
     def test_empty_or_ready_routes_do_not_install_unselected_backends(self):
-        plan = build_setup_plan(result(), installed_extensions=("SlicerDMRI", "PyTorch"), need_dti=True,
+        plan = build_setup_plan(result(), installed_extensions=("PyTorch",), need_dti=True, need_torch=True,
                                 system="Linux", machine="x86_64")
         for key in ("extensions", "python_packages", "asset_profiles", "managed_profiles", "manual_items"):
             self.assertEqual(plan[key], [], key)
@@ -68,14 +82,14 @@ class SelectedSetupTests(unittest.TestCase):
                                 system="Linux", machine="x86_64")
         self.assertEqual(plan["managed_profiles"], ["mrtrix", "fsl_cuda", "pnl_cnn"])
         self.assertEqual(plan["asset_profiles"], ["segmentation"])
-        self.assertEqual(plan["extensions"], ["SlicerDMRI", "PyTorch"])
+        self.assertEqual(plan["extensions"], ["PyTorch"])
         self.assertTrue(plan["fsl_license_required"] and plan["pnl_terms_required"])
         self.assertEqual(plan["manual_items"], [])
 
     def test_ukf_is_optional_and_platform_limits_remain_visible(self):
         missing = result(item("brain_mask_backend", "brain_mask", "setting", package=None))
         plan = build_setup_plan(missing, need_ukf=True, system="Windows", machine="AMD64")
-        self.assertEqual(plan["extensions"], ["SlicerDMRI", "UKFTractography"])
+        self.assertEqual(plan["extensions"], ["UKFTractography"])  # D8: UKF alone needs no SlicerDMRI
         self.assertEqual(plan["managed_profiles"], [])
         self.assertEqual(plan["unsupported_profiles"], ["pnl_cnn"])
         self.assertEqual(plan["manual_items"][0]["key"], "brain_mask_backend")
@@ -105,6 +119,17 @@ class SelectedSetupTests(unittest.TestCase):
         slicer = SimpleNamespace(app=SimpleNamespace(extensionsManagerModel=lambda: manager),
                                  modules=SimpleNamespace(), util=SimpleNamespace(infoDisplay=Mock()))
         return patch.dict("sys.modules", {"slicer": slicer}), manager
+
+    def test_d8_widget_plan_asks_for_slicerdmri_only_with_the_wma_target(self):
+        import shared.ui_selected_setup as ui
+        for targets, expected in ((("microstructure", "tractography", "surface"), []), (("wma",), ["SlicerDMRI"])):
+            with self.subTest(targets=targets):
+                owner = self.owner(result(targets=targets))
+                context, manager = self.run_preparation(owner, owner._run_environment_dependency_check.return_value)
+                manager.isExtensionInstalled.return_value = False
+                with context:
+                    plan = ui.selected_setup_plan(owner, owner._run_environment_dependency_check.return_value)
+                self.assertEqual([name for name in plan["extensions"] if name != "PyTorch"], expected)
 
     def test_cancelled_confirmation_has_no_install_or_settings_side_effect(self):
         owner = self.owner(result(item("missing")))
@@ -185,7 +210,7 @@ class SelectedSetupTests(unittest.TestCase):
         self.assertEqual(owner._setStatus.call_args.args[0], "warning")
 
     def test_extension_install_requires_restart_not_false_readiness(self):
-        owner = self.owner(result(targets=("microstructure",)))
+        owner = self.owner(result(targets=("wma",)))
         context, manager = self.run_preparation(owner, owner._run_environment_dependency_check.return_value)
         manager.isExtensionInstalled.return_value = False
         manager.installExtensionFromServer.return_value = True

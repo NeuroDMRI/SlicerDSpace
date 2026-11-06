@@ -29,6 +29,12 @@ def requests_for_report(report, *, asset_root=None, repo_root=None, backend_path
         group = groups.setdefault(python, dict(python=python, imports=[], pythonpath=[], models=[]))
         group['imports'].append(name)
         group['pythonpath'].extend(details.get('pythonpath', ()))
+    for item in getattr(report, 'statuses', ()):
+        # Teem is Slicer's library, so only the interpreter that loaded it gets the Teem self-check.
+        if getattr(item, 'key', '') == 'native_tensor_fit' and item.required and item.status == 'available':
+            python = (item.details or {}).get('python_executable')
+            group = groups.setdefault(python, dict(python=python, imports=[], pythonpath=[], models=[]))
+            group['teem_self_check'] = True
     backend_paths = backend_paths or {}
     if 'wma' in getattr(report, 'targets', ()) and backend_paths.get('wma_root'):
         wma_python = next(((item.details or {}).get('python_executable') for item in report.statuses
@@ -90,6 +96,11 @@ def run_checks(request):
     for name in request.get('imports', ()):
         importlib.import_module(name)
         checks.append('import:' + name)
+    teem_report = None
+    if request.get('teem_self_check'):
+        from shared import teem_dti
+        teem_report = teem_dti.self_check()  # raises TeemError (reported as a failed check) when Teem is unusable
+        checks.append('teem:self_check')
     names = set(request.get('imports', ()))
     with tempfile.TemporaryDirectory(prefix='slicerdspace-selftest-') as temporary:
         folder = Path(temporary)
@@ -185,6 +196,7 @@ def run_checks(request):
                 if not torch.isfinite(output).all():
                     raise RuntimeError('TractCloud produced nonfinite synthetic output')
                 checks.append('tractcloud:load_and_synthetic_forward')
-    return dict(kind='slicerdspace_setup_selftest', status='passed', checks=checks,
+    extra = {} if teem_report is None else dict(teem_self_check=teem_report)
+    return dict(kind='slicerdspace_setup_selftest', status='passed', checks=checks, **extra,
                 elapsed_seconds=time.monotonic() - started,
                 scope='Installation functionality using synthetic inputs; no patient processing or anatomical QC')

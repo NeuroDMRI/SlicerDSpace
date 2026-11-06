@@ -74,6 +74,15 @@
       "source": "https://github.com/zhangfanmark/MK-Curve/blob/9a213e1a5850fe50c998793f31ed852df00242f8/lib/DKI/LICENSE",
       "covers": ["microstructure/mkcurve_tensor.py", "microstructure/mkcurve_directions.json"],
       "conditions": "Keep NYU/University of Antwerp copyright and MPL-2.0 notices; distribute the modified covered source files under MPL-2.0 with the extension. Other files are not automatically relicensed."
+    },
+    {
+      "id": "slicerdmri_tensor_fit",
+      "license": "LicenseRef-3D-Slicer-Contribution-BWH",
+      "path": "licenses/SlicerDMRI.txt",
+      "sha256": "03fc5cd907e5c2004ce199d66318d32a08fa2de2b5b28bee184edda6307d0b86",
+      "source": "https://github.com/SlicerDMRI/SlicerDMRI/blob/a40200bfb9df21a6092b308188175d1e339b5771/License.txt",
+      "covers": ["shared/teem_dti.py"],
+      "conditions": "Preserve the full 3D Slicer Contribution and Software License Agreement and attribution; identify shared/teem_dti.py as a modified Python reimplementation of SlicerDMRI DWIToDTIEstimation, DiffusionTensorScalarMeasurements and vtkTeemEstimateDiffusionTensor, not an upstream release. The plugin calls the Teem library that 3D Slicer ships (LGPL-2.1 with a static-linking exception) and does not redistribute it."
     }
   ]
 }

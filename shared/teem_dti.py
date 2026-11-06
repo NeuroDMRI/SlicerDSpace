@@ -258,7 +258,11 @@ def load_teem():
             _check_context_layout(lib)
             _LIBRARY = lib
             return lib
-        raise TeemError("Slicer's Teem library was not found or not usable:\n  " + "\n  ".join(errors))
+        searched = [str(root) for root in _slicer_roots()]
+        raise TeemError(
+            "Slicer's Teem library was not found or not usable.\n"
+            f"  Searched roots: {', '.join(searched) if searched else '(none)'}\n"
+            f"  File names: {', '.join(_library_file_names())}\n  " + "\n  ".join(errors))
 
 
 def teem_version(lib) -> str:
@@ -432,6 +436,13 @@ def _copy_nrrd_doubles(nrrd_pointer, count: int) -> np.ndarray:
     return np.ctypeslib.as_array(ctypes.cast(data, _DOUBLE_P), shape=(count,)).copy()
 
 
+def plan_slabs(voxels: int, threads: int, slab_voxels: int | None = None) -> list[tuple[int, int]]:
+    """Split ``voxels`` rows into consecutive ``(start, stop)`` slabs, about four per thread, at most 65536 each."""
+    if slab_voxels is None:
+        slab_voxels = max(1, min(65536, -(-voxels // (4 * threads))))
+    return [(start, min(start + slab_voxels, voxels)) for start in range(0, voxels, slab_voxels)]
+
+
 def estimate_tensors(values: np.ndarray, gradients: np.ndarray, max_b: float, method: str = "WLS",
                      shift_negative: bool = False, threads: int | None = None,
                      slab_voxels: int | None = None):
@@ -447,9 +458,7 @@ def estimate_tensors(values: np.ndarray, gradients: np.ndarray, max_b: float, me
     values = np.ascontiguousarray(values)
     voxels = values.shape[0]
     threads = max(1, int(threads or default_threads()))
-    if slab_voxels is None:
-        slab_voxels = max(1, min(65536, -(-voxels // (4 * threads))))
-    bounds = [(start, min(start + slab_voxels, voxels)) for start in range(0, voxels, slab_voxels)]
+    bounds = plan_slabs(voxels, threads, slab_voxels)
     tensors = np.empty((voxels, 7), dtype=np.float64)
     baseline = np.empty(voxels, dtype=np.float64)
     grads = _Gradients(lib, gradients, max_b)
@@ -680,6 +689,20 @@ def self_check() -> dict:
 
 
 # --------------------------------------------------------------------------- command line
+def estimate_command(python, dwi, tensor, baseline, enumeration, scalars=(), receipt=None) -> list[str]:
+    """Command that runs ``estimate`` in one process: tensor, baseline and all ``scalars`` (operation, path).
+
+    ``python`` is Slicer's ``PythonSlicer``. The thread count is not set here; ``default_threads``
+    reads ``SLICERDSPACE_STAGE_CPUS`` in the child process.
+    """
+    command = [str(python), str(Path(__file__).resolve()), "estimate", "--enumeration", str(enumeration)]
+    if receipt is not None:
+        command += ["--receipt", str(receipt)]
+    for operation, path in scalars:
+        command += ["--scalar", f"{operation}={path}"]
+    return command + [str(dwi), str(tensor), str(baseline)]
+
+
 def _parse_outputs(items):
     outputs = []
     for item in items or []:

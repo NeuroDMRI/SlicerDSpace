@@ -13,7 +13,8 @@ from typing import Callable, Optional
 
 from shared.external_process import text_subprocess_kwargs
 from shared.model_assets import model_asset_path
-from shared.pipeline import (RegisteredDTIBundle, build_cli_environment, resolve_cli_executable,
+from shared.pipeline import (RegisteredDTIBundle, build_cli_environment, native_tensor_command,
+                             resolve_cli_executable, resolve_pythonslicer_executable,
                              _artifact_record, _artifacts_current, _save_artifacts,
                              _read_manifest, _write_manifest)
 
@@ -340,37 +341,24 @@ def run_ddparcel(config: DDParcelConfig, log: Optional[Callable[[str], None]] = 
         nhdr_write(dwi.as_posix(), bval.as_posix(), bvec.as_posix(), nrrd_dwi.as_posix())
         nhdr_write(mask.as_posix(), None, None, nrrd_mask.as_posix())
 
-    if not nrrd_b0.exists():
-        cli_exe = resolve_cli_executable("dwitodtiestimation")
-        cmd = [
-            cli_exe,
-            "--enumeration",
-            "WLS",
-            nrrd_dwi.as_posix(),
-            nrrd_dti.as_posix(),
-            nrrd_b0.as_posix(),
-        ]
-        _run_cli(cmd, log)
+    # W2: one teem_dti.py process writes the tensor, the baseline and the six scalar maps (.nhdr: detached data).
+    need_nifti = not nii_mid_eig.exists()
+    if not nrrd_b0.exists() or need_nifti:
+        _run_cli(
+            native_tensor_command(
+                resolve_pythonslicer_executable(), nrrd_dwi, nrrd_dti, nrrd_b0, "WLS",
+                (
+                    ("FractionalAnisotropy", nrrd_fa),
+                    ("Trace", nrrd_trace),
+                    ("MinEigenvalue", nrrd_min_eig),
+                    ("MidEigenvalue", nrrd_mid_eig),
+                    ("MaxEigenvalue", nrrd_max_eig),
+                    ("MeanDiffusivity", nrrd_md),
+                )),
+            log,
+        )
 
-    if not nii_mid_eig.exists():
-        cli_exe = resolve_cli_executable("diffusiontensorscalarmeasurements")
-        for enum_name, output in (
-            ("FractionalAnisotropy", nrrd_fa),
-            ("Trace", nrrd_trace),
-            ("MinEigenvalue", nrrd_min_eig),
-            ("MidEigenvalue", nrrd_mid_eig),
-            ("MaxEigenvalue", nrrd_max_eig),
-            ("MeanDiffusivity", nrrd_md),
-        ):
-            cmd = [
-                cli_exe,
-                "--enumeration",
-                enum_name,
-                nrrd_dti.as_posix(),
-                output.as_posix(),
-            ]
-            _run_cli(cmd, log)
-
+    if need_nifti:
         nifti_write(nrrd_fa.as_posix(), nrrd_fa.as_posix().replace(".nhdr", ""))
         nifti_write(nrrd_trace.as_posix(), nrrd_trace.as_posix().replace(".nhdr", ""))
         nifti_write(nrrd_min_eig.as_posix(), nrrd_min_eig.as_posix().replace(".nhdr", ""))

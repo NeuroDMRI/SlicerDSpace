@@ -35,6 +35,16 @@ def slicer_runtime_roots(home: Path | str) -> tuple[Path, ...]:
     return tuple(dict.fromkeys(path for path in candidates if path.is_dir()))
 
 
+def find_pythonslicer(home: Path | str) -> Optional[Path]:
+    """PythonSlicer of a Slicer install root or macOS .app (Linux bin/, macOS Contents/bin/, Windows bin/*.exe)."""
+    for root in slicer_runtime_roots(home):
+        for relative in ("bin/PythonSlicer", "bin/PythonSlicer.exe", "PythonSlicer", "PythonSlicer.exe",
+                         "MacOS/PythonSlicer"):
+            if (root / relative).is_file():
+                return root / relative
+    return None
+
+
 def startup_environment(extra_env: Optional[Mapping[str, str]] = None) -> dict[str, str]:
     """Return an environment suitable for external tools.
 

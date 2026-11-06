@@ -17,9 +17,7 @@ import check_environment as diagnostic
 def make_slicer(root):
     home = root / 'slicer'
     core = home / 'lib/Slicer-5.10/cli-modules'
-    dmri = home / 'extensions/SlicerDMRI/lib/Slicer-5.10/cli-modules'
-    for path in ([home / 'Slicer'] + [core / name for name in ('BRAINSFit', 'ResampleScalarVectorDWIVolume')]
-                 + [dmri / name for name in ('DWIToDTIEstimation', 'DiffusionTensorScalarMeasurements')]):
+    for path in ([home / 'Slicer', home / 'bin/PythonSlicer'] + [core / name for name in ('BRAINSFit', 'ResampleScalarVectorDWIVolume')]):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text('#!/bin/sh\nexit 0\n')
         path.chmod(0o755)
@@ -201,17 +199,26 @@ class EnvironmentCheckTests(unittest.TestCase):
                     self.assertIn(str(path), self.output.getvalue())
         self.assertEqual(self.report.finish(), 0)
 
-    def test_missing_dmri_and_nonexecutable_modules_have_distinct_fixes(self):
+    def test_missing_pythonslicer_and_nonexecutable_modules_have_distinct_fixes(self):
         with tempfile.TemporaryDirectory() as tmp:
             home = make_slicer(Path(tmp))
-            (home / 'extensions/SlicerDMRI/lib/Slicer-5.10/cli-modules/DWIToDTIEstimation').unlink()
+            (home / 'bin/PythonSlicer').unlink()
             (home / 'lib/Slicer-5.10/cli-modules/BRAINSFit').chmod(0o644)
             with patch.dict(os.environ, {'SLICER_PATH': str(home)}, clear=True):
                 diagnostic.check_slicer(self.report)
         self.assertEqual(self.report.counts['FAIL'], 2)
         self.report.finish()
-        self.assertIn('Extensions Manager', self.output.getvalue())
+        self.assertIn('PythonSlicer', self.output.getvalue())
+        self.assertNotIn('SlicerDMRI', self.output.getvalue())
         self.assertIn('chmod u+x', self.output.getvalue())
+
+    def test_w6_slicer_without_slicerdmri_passes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = make_slicer(Path(tmp))
+            with patch.dict(os.environ, {'SLICER_PATH': str(home)}, clear=True):
+                diagnostic.check_slicer(self.report)
+        self.assertEqual(self.report.finish(), 0)
+        self.assertNotIn('SlicerDMRI', self.output.getvalue())
 
     def test_unreadable_file_is_a_failure_not_a_traceback(self):
         with patch.object(Path, 'is_file', side_effect=PermissionError('permission denied')):

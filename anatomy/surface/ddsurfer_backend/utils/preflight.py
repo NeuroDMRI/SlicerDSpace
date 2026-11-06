@@ -31,26 +31,44 @@ def asset(folder, name):
 
 
 def slicer_files(required=True):
+    """Slicer files the DTI stages run: the launcher, PythonSlicer (native Teem tensor fit) and two core CLIs."""
     selected = os.environ.get('DTI_SLICER_PATH') or os.environ.get('SLICER_PATH')
     found = shutil.which('Slicer') if not selected else None
     home = Path(selected) if selected else (Path(found).parent if found else None)
     if home is None:
         if required:
-            raise FileNotFoundError('Set SLICER_PATH to a Slicer installation with SlicerDMRI')
+            raise FileNotFoundError('Set SLICER_PATH to a Slicer installation')
         return []
+    from preprocessing.dti import pythonslicer
+
     versions = sorted(path for path in (home / 'lib').glob('Slicer-*') if path.is_dir())
-    extensions = sorted(home.glob(f'**/SlicerDMRI/lib/{versions[-1].name}/cli-modules')) if versions else []
     files = [home / 'Slicer']
-    if versions and extensions:
-        files += [extensions[-1] / name for name in ('DWIToDTIEstimation', 'DiffusionTensorScalarMeasurements')]
+    try:
+        files.append(pythonslicer(home))
+    except FileNotFoundError:
+        if required:
+            raise
+    if versions:
         files += [versions[-1] / 'cli-modules' / name for name in ('BRAINSFit', 'ResampleScalarVectorDWIVolume')]
     elif required:
-        raise FileNotFoundError('Slicer core and SlicerDMRI CLI modules are required')
+        raise FileNotFoundError('Slicer core CLI modules are required (no lib/Slicer-* folder)')
     if required:
         for path in files:
             if not path.is_file() or not os.access(path, os.X_OK):
                 raise FileNotFoundError(f'Slicer module missing or not executable: {path}')
     return files
+
+
+def tensor_files(required=True):
+    """The Teem tensor script; it is part of the receipt because it decides the DTI scalars."""
+    from preprocessing.dti import teem_script
+
+    try:
+        return [teem_script()]
+    except FileNotFoundError:
+        if required:
+            raise
+        return []
 
 
 def reference_image():
@@ -134,7 +152,7 @@ def inspect_run(args, files):
     settings = {name: getattr(args, name) for name in (
         'subject', 'data_type', 'device', 'precision', 'predict_mode', 'cpu_threads', 'max_gpu_gib',
         'preprocess_jobs', 'auto_mask', 'mask_threads', 'freesurfer')}
-    tools = slicer_files(required=False)
+    tools = slicer_files(required=False) + tensor_files(required=False)
     if args.freesurfer:
         from postprocessing.environment import check_environment, configured_home
         environment = check_environment(configured_home(args), args.postprocess_hemi,
@@ -209,6 +227,7 @@ def check_runtime(args, files, inspection):
         del model
     if files is not None:
         slicer_files()
+        tensor_files()
         if 'mask' not in files and not mask_is_ready(args, files):
             from preprocessing.brain_mask import synthstrip_environment
             executable, env = synthstrip_environment(args.freesurfer_home, args.mask_threads)

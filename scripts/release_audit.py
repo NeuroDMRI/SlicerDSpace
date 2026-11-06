@@ -319,7 +319,7 @@ def audit_repository(*, large_file_mb: float = 20.0) -> dict[str, object]:
             "scm git",
             "scmurl ",
             "scmrevision ",
-            "depends SlicerDMRI PyTorch",
+            "depends PyTorch",
             "build_subdirectory .",
             "category Diffusion",
             "enabled 1",

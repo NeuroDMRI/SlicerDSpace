@@ -48,7 +48,11 @@ class DDSurferSyncTests(unittest.TestCase):
 
     def test_c4_local_bash_patches_stay_recorded_and_guarded(self):
         record = json.loads((BACKEND_ROOT / 'UPSTREAM.json').read_text())
-        self.assertEqual(set(record['local_patches']), {'preprocessing/dti.sh', 'run_ddsurfer_pipeline.sh'})
+        # R5 (W4-W6): the native tensor fit also patches dti.py, preflight.py and the tests that model the old CLIs.
+        self.assertEqual(set(record['local_patches']), {
+            'preprocessing/dti.sh', 'run_ddsurfer_pipeline.sh', 'preprocessing/dti.py', 'utils/preflight.py',
+            'tests/check_environment.py', 'tests/test_environment_check.py', 'tests/test_inference.py',
+            'tests/test_pipeline_reliability.py', 'tests/test_preprocessing.py'})
         wrapper = (BACKEND_ROOT / 'run_ddsurfer_pipeline.sh').read_text()
         self.assertIn('${ARGS[@]+"${ARGS[@]}"}', wrapper)
         self.assertNotIn(' "${ARGS[@]}"', wrapper)

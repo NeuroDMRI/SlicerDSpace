@@ -13,7 +13,7 @@ from typing import Any
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-REQUIRED_EXTENSION_DEPENDS = ("SlicerDMRI", "PyTorch")
+REQUIRED_EXTENSION_DEPENDS = ("PyTorch",)
 REQUIRED_TOP_LEVEL_FILES = (
     "LICENSE.txt",
     "CITATION.cff",

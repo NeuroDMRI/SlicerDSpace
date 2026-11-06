@@ -1,4 +1,4 @@
-"""Execute DTI stages with unchanged Slicer commands and per-output receipts."""
+"""Execute DTI stages (native Teem tensor fit, unchanged Slicer registration) with per-output receipts."""
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 import os
@@ -14,6 +14,39 @@ from utils.stages import StageCache, subject_lock
 
 ROOT = Path(__file__).resolve().parents[1]
 SCALARS = ('FractionalAnisotropy', 'MinEigenvalue', 'MidEigenvalue', 'MaxEigenvalue', 'MeanDiffusivity')
+# Trace is retained in native space even when atlas inference needs only five maps.
+TENSOR_SCALARS = SCALARS + ('Trace',)
+TEEM_SCRIPT_VARIABLE = 'SLICERDSPACE_TEEM_DTI_SCRIPT'
+
+
+def teem_script():
+    """The shared Teem tensor-fit script: an explicit override, else the copy in this repository."""
+    configured = os.environ.get(TEEM_SCRIPT_VARIABLE)
+    script = Path(configured).expanduser() if configured else ROOT.parents[2] / 'shared/teem_dti.py'
+    if not script.is_file():
+        raise FileNotFoundError(f'Teem tensor script not found: {script} (set {TEEM_SCRIPT_VARIABLE})')
+    return script
+
+
+def pythonslicer(slicer_path):
+    """PythonSlicer of the selected installation (Linux/Windows root, or macOS Contents/MacOS)."""
+    home = Path(slicer_path)
+    for folder in (home / 'bin', home.parent / 'bin', home):
+        for name in ('PythonSlicer', 'PythonSlicer.exe'):
+            if (folder / name).is_file():
+                return folder / name
+    raise FileNotFoundError(f'PythonSlicer not found in the Slicer installation: {home}')
+
+
+def substitute(part, replacements):
+    """Swap a staged output path into one argument, also inside an ``Operation=path`` pair."""
+    text = str(part)
+    if text in replacements:
+        return replacements[text]
+    name, separator, value = text.partition('=')
+    if separator and value in replacements:
+        return f'{name}={replacements[value]}'
+    return text
 
 
 def run(args):
@@ -28,17 +61,22 @@ def run(args):
                         ('KMP_AFFINITY', 'disabled'), ('KMP_BLOCKTIME', '0'), ('OMP_WAIT_POLICY', 'PASSIVE')):
         helper_env.setdefault(name, value)
 
-    def execute(key, command, inputs, outputs, helper=False, link=None):
+    def execute(key, command, inputs, outputs, helper=False, link=None, tool=None):
         def action(staged):
             replacements = dict(zip(map(str, outputs), map(str, staged)))
             if link is not None:
                 (staged[0].parent / link.name).symlink_to(link.resolve())
-            actual = [replacements.get(str(part), str(part)) for part in command]
-            subprocess.run(actual, check=True, env=helper_env if helper else None)
+            actual = [substitute(part, replacements) for part in command]
+            subprocess.run(actual, check=True, env=tool_env if tool else helper_env if helper else None)
         implementation = [Path(__file__), ROOT / 'preprocessing/cache.py', ROOT / 'utils/stages.py']
-        implementation += [Path(command[1])] if helper else [Path(command[0]), Path(command[2])]
+        if tool:
+            implementation += tool
+        else:
+            implementation += [Path(command[1])] if helper else [Path(command[0]), Path(command[2])]
         cache.run(key, list(inputs) + implementation, outputs, action, settings=list(map(str, command)))
 
+    # PythonSlicer builds its own runtime; it must not inherit an outer Python home.
+    tool_env = {name: value for name, value in os.environ.items() if name not in ('PYTHONHOME', 'PYTHONPATH')}
     dwi_header = folder / f'{stem}.nhdr'
     mask_header = folder / f'{stem}-mask.nhdr'
     converter = ROOT / 'preprocessing/conversion/nhdr_write.py'
@@ -49,18 +87,14 @@ def run(args):
     execute('mask.header', [sys.executable, converter, '--nifti', args.mask, '--nhdr', mask_header],
             [args.mask], [mask_header], helper=True, link=args.mask)
     tensor, b0 = (folder / f'{stem}-{kind}.nhdr' for kind in ('dti', 'b0'))
-    execute('tensor', slicer + [args.dmri_cli / 'DWIToDTIEstimation', '--enumeration', 'WLS',
-                               dwi_header, tensor, b0], [dwi_header], [tensor, b0])
     scalars = SCALARS + (() if args.minimal else ('Trace',))
-
-    def scalar(kind):
-        output = folder / f'{stem}-dti-{kind}.nhdr'
-        execute(f'scalar.{kind}', slicer + [args.dmri_cli / 'DiffusionTensorScalarMeasurements',
-                                           '--enumeration', kind, tensor, output], [tensor], [output])
-
-    with ThreadPoolExecutor(max_workers=args.jobs) as pool:
-        # Trace is retained in native space even when atlas inference needs only five maps.
-        list(pool.map(scalar, SCALARS + ('Trace',)))
+    scalar_outputs = [(kind, folder / f'{stem}-dti-{kind}.nhdr') for kind in TENSOR_SCALARS]
+    # One native Teem process fits the tensor and writes every scalar map; the cache hashes the script.
+    python, script = pythonslicer(args.slicer_path), teem_script()
+    execute('tensor', [python, script, 'estimate', '--enumeration', 'WLS']
+            + [item for kind, path in scalar_outputs for item in ('--scalar', f'{kind}={path}')]
+            + [dwi_header, tensor, b0],
+            [dwi_header], [tensor, b0] + [path for _, path in scalar_outputs], tool=[python, script])
     transform = folder / f'{stem}-b0ToAtlasT2.tfm'
     execute('registration', slicer + [args.core_cli / 'BRAINSFit', '--fixedVolume', args.reference_image,
                                      '--movingVolume', b0, '--linearTransform', transform, '--useRigid', '--useAffine'],
@@ -88,8 +122,9 @@ def run(args):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--subject', required=True)
-    for name in ('output-dir', 'dwi', 'bval', 'bvec', 'mask', 'slicer-path', 'dmri-cli', 'core-cli', 'reference-image'):
+    for name in ('output-dir', 'dwi', 'bval', 'bvec', 'mask', 'slicer-path', 'core-cli', 'reference-image'):
         parser.add_argument('--' + name, type=Path, required=True)
+    parser.add_argument('--dmri-cli', type=Path, help='deprecated; the tensor fit no longer uses SlicerDMRI')
     parser.add_argument('--mask-flip', type=int, default=1)
     parser.add_argument('--jobs', type=int, default=1)
     parser.add_argument('--minimal', action='store_true')

@@ -249,6 +249,7 @@ def selected_setup_plan(owner, result, *, repair=False):
     from shared.algorithm_selection import contains_tracking
     return build_setup_plan(result, installed_extensions=installed, loaded_extensions=loaded,
         need_dti=bool(targets & {"segmentation", "parcellation", "surface", "microstructure", "tractography", "wma"}),
+        need_slicerdmri="wma" in targets,
         need_torch=bool(targets & {"segmentation", "parcellation", "surface", "tractcloud"}),
         need_ukf="tractography" in targets and contains_tracking(owner._tractography_backend_text(), "ukf"),
         brain_mask_backend=getattr(owner._parameterNode, "brainMaskBackend", "pnl_cnn"), gpu_available=gpu,

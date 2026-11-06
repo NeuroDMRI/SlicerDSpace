@@ -42,10 +42,8 @@ def make_assets(root):
 def make_slicer(root):
     home = root / 'slicer'
     core = home / 'lib/Slicer-5.2/cli-modules'
-    dmri = home / 'extensions/SlicerDMRI/lib/Slicer-5.2/cli-modules'
-    core.mkdir(parents=True); dmri.mkdir(parents=True)
-    for path in ([home / 'Slicer'] + [core / n for n in ('BRAINSFit', 'ResampleScalarVectorDWIVolume')]
-                 + [dmri / n for n in ('DWIToDTIEstimation', 'DiffusionTensorScalarMeasurements')]):
+    core.mkdir(parents=True); (home / 'bin').mkdir()
+    for path in ([home / 'Slicer', home / 'bin/PythonSlicer'] + [core / n for n in ('BRAINSFit', 'ResampleScalarVectorDWIVolume')]):
         path.write_text('#!/bin/sh\nexit 0\n'); path.chmod(0o755)
     return home
 
@@ -129,7 +127,9 @@ class PreflightTests(unittest.TestCase):
             home = make_slicer(Path(tmp))
             with patch.dict(os.environ, {'DTI_SLICER_PATH': str(home)}):
                 files = slicer_files()
-                self.assertEqual(len(files), 5)
+                # W6: Slicer, PythonSlicer, BRAINSFit, ResampleScalarVectorDWIVolume (no SlicerDMRI CLIs).
+                self.assertEqual(sorted(p.name for p in files),
+                                 ['BRAINSFit', 'PythonSlicer', 'ResampleScalarVectorDWIVolume', 'Slicer'])
                 next(p for p in files if p.name == 'BRAINSFit').chmod(0o644)
                 with self.assertRaisesRegex(FileNotFoundError, 'BRAINSFit'):
                     slicer_files()

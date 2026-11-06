@@ -107,7 +107,6 @@ class SegmentationWidgetMixin:
                 ("DDSeg output", output_dir),
                 ("DDSeg weights", weights_dir),
                 ("Slicer base", slicer_base),
-                ("SlicerDMRI extension", slicer_ext),
             ):
                 if not value:
                     missing.append(label)
@@ -143,7 +142,7 @@ class SegmentationWidgetMixin:
                     output_dir=Path(output_dir).expanduser(),
                     weights_dir=Path(weights_dir).expanduser(),
                     slicer_base=Path(slicer_base).expanduser(),
-                    slicer_ext=Path(slicer_ext).expanduser(),
+                    slicer_ext=Path(slicer_ext).expanduser() if slicer_ext else None,
                     device=device,
                     apply_softmax=apply_softmax,
                 )

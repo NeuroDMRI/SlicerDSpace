@@ -65,6 +65,18 @@ have been obtained under license from The Brigham and Women's Hospital, Inc.
 and are subject to the terms and conditions in [the full WMA/Slicer agreement](licenses/WMA.txt).
 Optional upstream WMA code and atlas assets retain their own distribution terms.
 
+## Native Tensor Fit (SlicerDMRI-derived)
+
+Native tensor fit (`shared/teem_dti.py`) is a modified Python reimplementation of SlicerDMRI
+`DWIToDTIEstimation`, `DiffusionTensorScalarMeasurements` and `vtkTeemEstimateDiffusionTensor`
+(SlicerDMRI commit a40200b: the revision of the Extension Manager build for Slicer 5.10.0 r34045,
+per its installed `.s4ext`; the sources were read from GitHub at that commit), under the
+3D Slicer Contribution and Software License Agreement ([licenses/SlicerDMRI.txt](licenses/SlicerDMRI.txt)).
+It calls the Teem library that 3D Slicer ships (Teem 1.12, LGPL-2.1 with a static-linking exception);
+the plugin does not redistribute Teem.
+
+---
+
 ## Optional WMA Atlas Families
 
 The ORG, East-West WM and NABA atlases are separately selected data resources

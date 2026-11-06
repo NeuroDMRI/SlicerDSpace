@@ -29,7 +29,7 @@ def start_environment_check(owner, on_complete=None, *, on_failure=None):
         return False
     stem = 'check-' + datetime.now().strftime('%Y%m%d-%H%M%S-%f')
     request, result_path = folder / (stem + '-request.json'), folder / (stem + '-result.json')
-    modules = tuple(name for name in ('dwitodtiestimation', 'dwiconvert', 'ukftractography') if hasattr(slicer.modules, name))
+    modules = tuple(name for name in ('dwiconvert', 'ukftractography') if hasattr(slicer.modules, name))
     config = check_config(options, repo_root=owner.logic.module_dir, output_dir=folder, loaded_modules=modules)
     try:
         folder.mkdir(parents=True, exist_ok=True)

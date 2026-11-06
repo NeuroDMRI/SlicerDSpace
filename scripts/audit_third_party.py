@@ -25,6 +25,7 @@ REQUIRED_RECORDS = {
     "mkcurve_dki": "licenses/MK-Curve-DKI-MPL-2.0.txt",
     "wma_preprocessing": "licenses/WMA.txt",
     "freewater_wls": "licenses/DIPY.txt",
+    "slicerdmri_tensor_fit": "licenses/SlicerDMRI.txt",
 }
 
 

@@ -489,6 +489,10 @@ def setup_steps(plan, accepted_licences, *, folder, launcher=None, python_comman
                           commands=[run("setup_surface_runtime.py", *args)]))
     steps.append(dict(id="self_check", title="Test the installation", receipt=None, commands=[],
                       script=str(repo / "scripts" / "check_setup_functionality.py")))
+    from shared.setup_components import unlisted_licences
+    unlisted = unlisted_licences(steps, components)
+    if unlisted:  # S-B8: an install without a listed licence does not run
+        raise PermissionError("No licence is listed for: " + ", ".join(unlisted))
     return steps
 
 

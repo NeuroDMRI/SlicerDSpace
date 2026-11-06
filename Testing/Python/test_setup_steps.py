@@ -113,6 +113,57 @@ class SetupStepsTests(unittest.TestCase):
             self.assertEqual(request["requirements"], [str(root)])
 
 
+class LicenceInventoryTests(unittest.TestCase):
+    """S-B8: every component that the steps install is listed with a licence; the one acceptance covers them all."""
+
+    def base_plan(self):
+        return build_setup_plan(SimpleNamespace(statuses=[]), system="Linux", machine="x86_64")
+
+    def test_s_b8_mrtrix_only_linux_plan_requires_the_mrtrix_licence(self):
+        plan = self.base_plan()
+        plan.update(managed_profiles=["mrtrix"])
+        required = required_licences(plan_components(plan))
+        self.assertEqual(list(required), ["mrtrix"])  # fails before: no licence, so nothing to accept
+        self.assertIn("MRtrix3", required["mrtrix"]["name"])
+        self.assertTrue(required["mrtrix"]["url"].startswith("https://"))
+        with tempfile.TemporaryDirectory() as folder:
+            with self.assertRaisesRegex(PermissionError, "mrtrix"):
+                setup_steps(plan, {}, folder=folder)
+            self.assertEqual(setup_steps(plan, accepted_for(plan), folder=folder)[0]["id"], "managed_runtime")
+
+    def test_s_b8_windows_plan_lists_the_ps1_components_and_their_licences(self):
+        plan = self.base_plan()
+        plan["windows_runtime"] = dict(distribution="Ubuntu", installs_freesurfer=False,
+                                       command=["powershell", "-File", "install_deps_windows.ps1", "-SkipFreeSurfer"])
+        components = plan_components(plan)
+        self.assertEqual(set(required_licences(components)),
+                         {"mrtrix", "fsl", "wmql", "wma", "tractcloud", "tractcloud_data", "optional_resources"})
+        plan["windows_runtime"].update(installs_freesurfer=True, command=["powershell", "-SkipLargeDownloads"])
+        self.assertEqual(set(required_licences(plan_components(plan))),
+                         {"mrtrix", "fsl", "wmql", "wma", "tractcloud", "tractcloud_data", "freesurfer"})
+        for item in components:
+            self.assertTrue(item["licence"]["name"] and item["licence"]["url"], item["id"])
+
+    def test_s_b8_python_packages_model_assets_and_the_dcm2niix_wheel_are_listed(self):
+        plan = self.base_plan()
+        plan.update(python_packages=["numpy>=1", "dcm2niix==1.0.20261029"], asset_profiles=["surface"], core_model_profile_bytes=10)
+        by_id = {item["id"]: item for item in plan_components(plan)}
+        self.assertEqual({key: value["licence"]["id"] for key, value in by_id.items()},
+                         {"python_packages": "pypi_packages", "python:dcm2niix": "dcm2niix", "model_assets": "model_assets"})
+        self.assertTrue(by_id["model_assets"]["licence"]["file"].endswith("MODEL_ASSET_TERMS.md"))
+
+    def test_s_b8_an_install_without_a_listed_licence_does_not_run(self):
+        plan = self.base_plan()
+        plan.update(managed_profiles=["mystery_tool"])
+        with tempfile.TemporaryDirectory() as folder:
+            with self.assertRaisesRegex(PermissionError, "No licence is listed for: managed:mystery_tool"):
+                setup_steps(plan, {}, folder=folder)
+            plan.update(managed_profiles=["mrtrix"])
+            with patch("shared.setup_components.plan_components", return_value=[]):
+                with self.assertRaisesRegex(PermissionError, "step:managed_runtime"):
+                    setup_steps(plan, {}, folder=folder)
+
+
 class LicenceAcceptanceTests(unittest.TestCase):
     def test_accepted_licences_are_in_the_user_config_and_normalized(self):
         self.assertEqual(empty_user_config()["accepted_licences"], {})

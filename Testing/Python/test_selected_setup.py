@@ -24,6 +24,13 @@ def result(*items, targets=("validation",), blockers=None):
                            blocker_count=len(items) if blockers is None else blockers)
 
 
+def accepting_confirm(owner, plan):
+    """Stand-in for the dialog: the user presses "Accept licences and install" (S-B8: the steps need the acceptance)."""
+    from shared.setup_components import accept_licences, plan_components, required_licences
+    accept_licences(required_licences(plan_components(plan)))
+    return True
+
+
 def fake_jobs(started):
     """B7: stand-in for start_setup_job. It records the step and writes the receipt the script would write."""
     def start(widget, title, commands, done):
@@ -170,7 +177,7 @@ class SelectedSetupTests(unittest.TestCase):
         owner = self.owner(result())
         started = []
         context, _ = self.run_preparation(owner, initial)
-        with tempfile.TemporaryDirectory() as temp, context, patch("shared.ui_selected_setup._confirm", return_value=True), \
+        with tempfile.TemporaryDirectory() as temp, context, patch("shared.ui_selected_setup._confirm", side_effect=accepting_confirm), \
                 patch("shared.ui_environment_check.start_environment_check", side_effect=lambda widget, callback, **kwargs: callback(owner._run_environment_dependency_check()) or True), \
                 patch("shared.ui_setup_jobs.start_setup_job", side_effect=fake_jobs(started)), \
                 patch("scripts.setup_python_packages.dcm2niix_pending", return_value=False), \
@@ -235,7 +242,7 @@ class SelectedSetupTests(unittest.TestCase):
             return True
 
         context, _ = self.run_preparation(owner, initial)
-        with tempfile.TemporaryDirectory() as temp, context, patch("shared.ui_selected_setup._confirm", return_value=True), \
+        with tempfile.TemporaryDirectory() as temp, context, patch("shared.ui_selected_setup._confirm", side_effect=accepting_confirm), \
                 patch("shared.ui_setup_jobs.start_setup_job", side_effect=failing), \
                 patch("scripts.setup_python_packages.dcm2niix_pending", return_value=False), \
                 patch("shared.user_config.default_user_config_path", return_value=Path(temp) / "config.json"):
@@ -284,9 +291,8 @@ class SelectedSetupTests(unittest.TestCase):
         owner = self.owner(report)
         context, _ = self.run_preparation(owner, report)
         started = []
-        with tempfile.TemporaryDirectory() as temp, context, patch("shared.ui_selected_setup._confirm", return_value=True) as confirm, \
+        with tempfile.TemporaryDirectory() as temp, context, patch("shared.ui_selected_setup._confirm", side_effect=accepting_confirm) as confirm, \
                 patch("scripts.setup_python_packages.dcm2niix_pending", return_value=True), \
-                patch("shared.setup_resume.accepted_licences", return_value={}), \
                 patch("shared.ui_environment_check.start_environment_check", side_effect=lambda widget, callback, **kwargs: callback(report) or True), \
                 patch("shared.ui_setup_jobs.start_setup_job", side_effect=fake_jobs(started)), \
                 patch("shared.user_config.default_user_config_path", return_value=Path(temp) / "config.json"), \

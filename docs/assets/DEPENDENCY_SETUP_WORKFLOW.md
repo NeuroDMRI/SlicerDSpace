@@ -93,7 +93,7 @@ PythonSlicer scripts/download_model_assets.py \
 Generate an install plan without changing the system:
 
 ```bash
-python3 scripts/install_dependencies.py \
+PythonSlicer scripts/install_dependencies.py \
   --profile core \
   --model-assets-dir /srv/slicerddsurfer/model-assets \
   --output-dir /tmp/slicerdsurfer-install-plan
@@ -102,7 +102,7 @@ python3 scripts/install_dependencies.py \
 Install Python packages into a selected Slicer Python:
 
 ```bash
-python3 scripts/install_dependencies.py \
+PythonSlicer scripts/install_dependencies.py \
   --profile core \
   --python-executable /path/to/Slicer/bin/PythonSlicer \
   --execute

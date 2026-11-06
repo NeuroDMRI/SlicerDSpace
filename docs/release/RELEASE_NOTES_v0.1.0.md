@@ -31,7 +31,7 @@ Checks run locally before tagging:
 
 ```bash
 make test-fast
-python3 scripts/download_model_assets.py --profile core --verify-only
+PythonSlicer scripts/download_model_assets.py --profile core --verify-only
 python3 scripts/audit_slicer_extension_metadata.py --json
 SLICERDSPACE_RELEASE_SUBJECT_ROOT=/data/chengjin/SlicerDDSurfer-test/100307-release-candidate make release-check
 ```

@@ -48,7 +48,7 @@ The tag was created from:
 Recorded validation at tag time:
 
 - `make test-fast`: 207 tests passed.
-- `python3 scripts/download_model_assets.py --profile core --verify-only`:
+- `PythonSlicer scripts/download_model_assets.py --profile core --verify-only`:
   29 core files verified.
 - `python3 scripts/audit_slicer_extension_metadata.py --json`:
   zero errors and zero warnings.

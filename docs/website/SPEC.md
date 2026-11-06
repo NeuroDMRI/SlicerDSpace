@@ -450,7 +450,7 @@ Two columns: text left, `idea.jpg` right.
   4. “Get the model files” — “Read the asset terms, then download only the profile you need to a writable folder
      outside the checkout:”
      ```
-     python3 scripts/download_model_assets.py --profile surface \
+     PythonSlicer scripts/download_model_assets.py --profile surface \
        --asset-root ~/SlicerDDSurfer-model-assets --source url \
        --source-id slicerdsurfer_models_git
      ```

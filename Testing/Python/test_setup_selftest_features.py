@@ -38,17 +38,28 @@ class ToolFixture(unittest.TestCase):
             name = Path(argv[0]).name
             calls.append((name, list(argv[1:]), kwargs.get('env')))
             answer = answers[name]
+            if callable(answer):
+                answer = answer(list(argv[1:]))
             if isinstance(answer, Exception):
                 raise answer
             return answer
         return patch.object(selftest.subprocess, 'run', side_effect=run), calls
 
 
+def mrtrix_script(name):
+    """MRtrix scripts take `-help`; `--help` exits 1 with an argparse error (measured 2026-11-07, MRtrix 3.0.8)."""
+    return lambda args: (result(0, f'{name}: usage ...') if args == ['-help']
+                         else result(1, '', 'Error: unrecognized arguments: --help'))
+
+
 class MrtrixCheckTests(ToolFixture):
-    def good(self):
-        return {'mrconvert': result(0, '== mrconvert 3.0.8 ==\n'),
-                'dwi2response': result(0, 'dwi2response: usage ...'),
-                'dwifslpreproc': result(0, 'dwifslpreproc: usage ...')}
+    def good(self, version='3.0.8'):
+        return {'mrconvert': result(0, f'== mrconvert {version} ==\n'),
+                'dwi2response': mrtrix_script('dwi2response'), 'dwifslpreproc': mrtrix_script('dwifslpreproc')}
+
+    def managed(self):
+        """Treat self.root as the plugin runtime root, so self.mrtrix is a plugin-managed prefix."""
+        return patch('shared.managed_runtimes.runtime_root', return_value=self.root)
 
     def test_all_three_commands_run_through_the_managed_environment(self):
         patcher, calls = self.runner(self.good())
@@ -56,25 +67,45 @@ class MrtrixCheckTests(ToolFixture):
             checks = selftest.check_mrtrix(self.mrtrix, self.fsl, shim_root=self.root / 'shims')
         self.assertEqual(checks, ['mrtrix:mrconvert_version', 'mrtrix:dwi2response_help', 'mrtrix:dwifslpreproc_help'])
         self.assertEqual([(name, args) for name, args, _ in calls],
-                         [('mrconvert', ['--version']), ('dwi2response', ['--help']), ('dwifslpreproc', ['--help'])])
+                         [('mrconvert', ['--version']), ('dwi2response', ['-help']), ('dwifslpreproc', ['-help'])])
         for _, _, env in calls:  # the B3 environment, not the bare process environment
             self.assertEqual(env['FSLOUTPUTTYPE'], 'NIFTI_GZ')
             self.assertIn(str(self.mrtrix), env['PATH'].split(os.pathsep))
 
-    def test_wrong_version_fails(self):
-        for text in ('== mrconvert 3.0.7 ==', '== mrconvert 13.0.8 ==', ''):
+    def test_help_uses_a_single_dash_and_the_old_double_dash_call_fails_the_mock(self):
+        """R-B1: a check that calls `--help` gets MRtrix's exit 1 and must fail."""
+        for name in ('dwi2response', 'dwifslpreproc'):
+            self.assertEqual(mrtrix_script(name)(['--help']).returncode, 1)
+        patcher, calls = self.runner(self.good())
+        with patcher:
+            selftest.check_mrtrix(self.mrtrix, shim_root=self.root / 'shims')
+        self.assertTrue(all(args != ['--help'] for _, args, _ in calls))
+
+    def test_managed_prefix_needs_exactly_the_pinned_version(self):
+        """R-B4: the plugin-managed prefix with 3.0.4 fails."""
+        for text in ('== mrconvert 3.0.4 ==', '== mrconvert 3.0.7 ==', '== mrconvert 13.0.8 ==', ''):
             patcher, _ = self.runner(dict(self.good(), mrconvert=result(0, text)))
-            with patcher, self.assertRaisesRegex(RuntimeError, 'does not report 3.0.8'):
+            with patcher, self.managed(), self.assertRaisesRegex(RuntimeError, 'does not report 3.0.8'):
+                selftest.check_mrtrix(self.mrtrix, shim_root=self.root / 'shims')
+
+    def test_user_set_mrtrix_of_another_3_x_release_passes(self):
+        """R-B4: a working user-set MRtrix 3.0.4 passes; a failed or non-MRtrix banner does not."""
+        patcher, _ = self.runner(self.good('3.0.4'))
+        with patcher:
+            self.assertIn('mrtrix:mrconvert_version', selftest.check_mrtrix(self.mrtrix, shim_root=self.root / 'shims'))
+        for answer in (result(1, '== mrconvert 3.0.4 =='), result(0, 'something else'), result(0, '== mrconvert 2.9 ==')):
+            patcher, _ = self.runner(dict(self.good(), mrconvert=answer))
+            with patcher, self.assertRaisesRegex(RuntimeError, r'does not report 3\.x'):
                 selftest.check_mrtrix(self.mrtrix, shim_root=self.root / 'shims')
 
     def test_a_script_that_cannot_find_python_fails(self):
         patcher, _ = self.runner(dict(self.good(), dwifslpreproc=result(127, '', 'env: python: No such file')))
-        with patcher, self.assertRaisesRegex(RuntimeError, r'dwifslpreproc --help failed \(exit 127\)'):
+        with patcher, self.assertRaisesRegex(RuntimeError, r'dwifslpreproc -help failed \(exit 127\)'):
             selftest.check_mrtrix(self.mrtrix, shim_root=self.root / 'shims')
 
     def test_help_text_without_the_tool_name_fails(self):
         patcher, _ = self.runner(dict(self.good(), dwi2response=result(0, 'something else')))
-        with patcher, self.assertRaisesRegex(RuntimeError, 'dwi2response --help failed'):
+        with patcher, self.assertRaisesRegex(RuntimeError, 'dwi2response -help failed'):
             selftest.check_mrtrix(self.mrtrix, shim_root=self.root / 'shims')
 
     def test_a_missing_binary_is_reported_not_raised_as_oserror(self):
@@ -117,15 +148,17 @@ class FslCheckTests(ToolFixture):
 
 
 class Dcm2niixCheckTests(ToolFixture):
-    def test_version_text_passes_with_exit_0_or_1(self):
-        for code in (0, 1):
+    def test_version_text_passes_with_exit_0_or_3(self):
+        """R-B2: the real dcm2niix exits 3 after `-v` (measured 2026-11-07)."""
+        for code in (0, 3):
             patcher, calls = self.runner({'dcm2niix': result(code, "Chris Rorden's dcm2niiX version v1.0.20261029")})
             with patcher:
                 self.assertEqual(selftest.check_dcm2niix(self.root / 'dcm2niix'), ['dcm2niix:version'])
             self.assertEqual(calls[0][1], ['-v'])
 
     def test_other_output_or_exit_fails(self):
-        for answer in (result(2, 'dcm2niix version 1'), result(0, 'hello'), result(127, '', 'not found')):
+        for answer in (result(1, 'dcm2niix version 1'), result(2, 'dcm2niix version 1'), result(0, 'hello'),
+                       result(127, '', 'not found')):
             patcher, _ = self.runner({'dcm2niix': answer})
             with patcher, self.assertRaisesRegex(RuntimeError, 'did not report a version'):
                 selftest.check_dcm2niix(self.root / 'dcm2niix')
@@ -186,20 +219,20 @@ class NativeMaskCheckTests(unittest.TestCase):
             return model
         return torch, inference, SimpleNamespace(load_model=load_model), calls
 
-    def test_module_absent_on_this_base_skips_cleanly(self):
-        self.assertFalse(selftest.native_mask_module_present())  # W-A is on another branch
-        checks, skipped = selftest.check_native_mask({'model_dir': '/m'})
-        self.assertEqual(checks, [])
-        self.assertEqual(skipped[0]['check'], 'pnl_native_mask')
-        self.assertIn('not present', skipped[0]['reason'])
+    def test_module_absent_is_a_failure_not_a_skip(self):
+        """R-B5: a requested PNL check with shared/pnl_mask_native.py absent fails."""
+        torch, inference, weights, calls = self.modules()
+        with patch.object(selftest, 'native_mask_module_present', return_value=False), \
+                self.assertRaisesRegex(RuntimeError, 'pnl_mask_native.py is not present'):
+            selftest.check_native_mask({'model_dir': '/m'}, torch=torch, inference=inference, weights=weights)
+        self.assertEqual(calls, [])  # nothing ran
 
     def test_three_views_each_run_one_256_slice_on_the_selected_device(self):
         torch, inference, weights, calls = self.modules(resolved='cuda')
         with patch.object(selftest, 'native_mask_module_present', return_value=True):
-            checks, skipped = selftest.check_native_mask({'model_dir': '/m', 'device': 'auto'},
-                                                         torch=torch, inference=inference, weights=weights)
+            checks = selftest.check_native_mask({'model_dir': '/m', 'device': 'auto'},
+                                                torch=torch, inference=inference, weights=weights)
         self.assertEqual(checks, ['pnl_native_mask:sagittal:cuda', 'pnl_native_mask:coronal:cuda', 'pnl_native_mask:axial:cuda'])
-        self.assertEqual(skipped, [])
         self.assertEqual(calls[0], ('device', 'auto'))
         self.assertEqual([c for c in calls if c[0] == 'load'],
                          [('load', '/m', view, 'cuda') for view in ('sagittal', 'coronal', 'axial')])
@@ -222,21 +255,23 @@ class NativeMaskCheckTests(unittest.TestCase):
 
 
 class RunChecksDispatchTests(ToolFixture):
-    def test_request_keys_select_the_feature_checks_and_skips_are_reported(self):
-        answers = {'mrconvert': result(0, 'mrconvert 3.0.8'), 'dwi2response': result(0, 'dwi2response'),
-                   'dwifslpreproc': result(0, 'dwifslpreproc'),
+    def test_request_keys_select_the_feature_checks(self):
+        answers = {'mrconvert': result(0, 'mrconvert 3.0.8'), 'dwi2response': mrtrix_script('dwi2response'),
+                   'dwifslpreproc': mrtrix_script('dwifslpreproc'),
                    **{name: result(1, 'Usage') for name in ('eddy', 'eddy_cpu', 'topup')},
-                   'dcm2niix': result(0, 'dcm2niix version v1')}
+                   'dcm2niix': result(3, 'dcm2niix version v1')}
         patcher, _ = self.runner(answers)
         request = {'mrtrix_bin_dir': str(self.mrtrix), 'fsl_bin_dir': str(self.fsl), 'dcm2niix': str(self.root / 'dcm2niix'),
                    'pnl_native_mask': {'model_dir': '/m'}}
-        with patcher, patch.dict(os.environ, {'SLICERDSPACE_RUNTIME_ROOT': str(self.root / 'rt')}):
+        with patcher, patch.dict(os.environ, {'SLICERDSPACE_RUNTIME_ROOT': str(self.root / 'rt')}), \
+                patch.object(selftest, 'check_native_mask', return_value=['pnl_native_mask:axial:cpu']) as native:
             report = selftest.run_checks(request)
+        native.assert_called_once_with({'model_dir': '/m'})
         self.assertEqual(report['status'], 'passed')
+        self.assertIn('pnl_native_mask:axial:cpu', report['checks'])
         self.assertEqual([c for c in report['checks'] if c.startswith(('mrtrix', 'fsl', 'dcm2niix'))],
                          ['mrtrix:mrconvert_version', 'mrtrix:dwi2response_help', 'mrtrix:dwifslpreproc_help',
                           'fsl:eddy_help', 'fsl:eddy_cpu_help', 'fsl:topup_help', 'dcm2niix:version'])
-        self.assertEqual(report['skipped'][0]['check'], 'pnl_native_mask')
 
     def test_a_failing_feature_fails_the_whole_request(self):
         patcher, _ = self.runner({'mrconvert': result(127, '', 'x')})
@@ -247,6 +282,74 @@ class RunChecksDispatchTests(ToolFixture):
         report = selftest.run_checks({'imports': []})
         self.assertEqual((report['status'], report['checks']), ('passed', []))
         self.assertNotIn('skipped', report)
+
+    def test_requested_native_mask_with_module_absent_fails_the_run(self):
+        """R-B5 through run_checks (no real inference: the module check fails first)."""
+        with patch.object(selftest, 'native_mask_module_present', return_value=False), \
+                self.assertRaisesRegex(RuntimeError, 'not present'):
+            selftest.run_checks({'pnl_native_mask': {'model_dir': '/m'}})
+
+
+def status(key, kind, *, group='', details=None, required=True, state='available'):
+    return SimpleNamespace(key=key, kind=kind, label=key, status=state, required=required, targets=('preprocessing',),
+                           details=details or {}, install_group=group)
+
+
+def tool_report(*items):
+    return SimpleNamespace(statuses=list(items), targets=('preprocessing',))
+
+
+MRTRIX = status('command:dwifslpreproc', 'command', group='mrtrix', details={'resolved': '/opt/mrtrix3/bin/dwifslpreproc'})
+FSL = status('command:eddy', 'command', group='fsl', details={'resolved': '/opt/fsl/bin/eddy'})
+PNL = status('brain_mask_backend', 'setting', details={
+    'backend': 'pnl_cnn', 'tool_paths': {'model_dir': '/models/pnl-cnn', 'pythonslicer': '/slicer/PythonSlicer'},
+    'settings': {'device': 'cuda'}})
+SLICER_NUMPY = status('python:numpy', 'python', details={'import': 'numpy', 'python_executable': '/slicer/PythonSlicer'})
+
+
+class RequestsForReportToolTests(unittest.TestCase):
+    """R-B3: the builder used by the GUI check and the setup self_check step adds the B9 feature checks."""
+
+    def test_report_with_mrtrix_fsl_and_the_pnl_method_gives_all_keys(self):
+        requests = selftest.requests_for_report(tool_report(SLICER_NUMPY, MRTRIX, FSL, PNL),
+                                                backend_paths={'dcm2niix_executable': '/opt/d2n/dcm2niix'})
+        self.assertEqual(len(requests), 1)
+        request = requests[0]
+        self.assertEqual(request['python'], '/slicer/PythonSlicer')
+        self.assertEqual(request['imports'], ['numpy'])
+        self.assertEqual(request['mrtrix_bin_dir'], '/opt/mrtrix3/bin')
+        self.assertEqual(request['fsl_bin_dir'], '/opt/fsl/bin')
+        self.assertEqual(request['dcm2niix'], '/opt/d2n/dcm2niix')
+        self.assertEqual(request['pnl_native_mask'], {'model_dir': '/models/pnl-cnn', 'device': 'cuda'})
+
+    def test_tools_only_report_gets_a_request_for_the_report_interpreter(self):
+        requests = selftest.requests_for_report(tool_report(MRTRIX, FSL))
+        self.assertEqual(len(requests), 1)
+        self.assertIsNone(requests[0]['python'])  # None: the interpreter that ran the environment check
+        self.assertEqual((requests[0]['mrtrix_bin_dir'], requests[0]['fsl_bin_dir']), ('/opt/mrtrix3/bin', '/opt/fsl/bin'))
+        self.assertNotIn('pnl_native_mask', requests[0])
+        self.assertNotIn('dcm2niix', requests[0])
+
+    def test_pnl_check_goes_to_the_pythonslicer_the_backend_reports_when_no_group_is_slicer(self):
+        plain = status('python:numpy', 'python', details={'import': 'numpy', 'python_executable': '/venv/bin/python'})
+        requests = {r['python']: r for r in selftest.requests_for_report(tool_report(plain, PNL))}
+        self.assertNotIn('pnl_native_mask', requests['/venv/bin/python'])
+        self.assertEqual(requests['/slicer/PythonSlicer']['pnl_native_mask']['model_dir'], '/models/pnl-cnn')
+
+    def test_unselected_missing_optional_and_other_backends_add_nothing(self):
+        optional = status('command:tckconvert', 'command', group='mrtrix', required=False,
+                          details={'resolved': '/opt/mrtrix3/bin/tckconvert'})
+        missing = status('command:eddy', 'command', group='fsl', state='missing', details={'resolved': None})
+        other = status('brain_mask_backend', 'setting', details={'backend': 'synthstrip', 'tool_paths': {'model_dir': '/m'}})
+        self.assertEqual(selftest.requests_for_report(tool_report(SLICER_NUMPY, optional, missing, other)),
+                         [dict(python='/slicer/PythonSlicer', imports=['numpy'], pythonpath=[], models=[], devices=['cpu'])])
+
+    def test_dcm2niix_comes_from_the_report_entry_first(self):
+        entry = status('command:dcm2niix', 'command', group='dcm2niix', details={'resolved': '/opt/d2n/dcm2niix'})
+        request = selftest.requests_for_report(tool_report(entry), backend_paths={'packaged_dcm2niix': '/other'})[0]
+        self.assertEqual(request['dcm2niix'], '/opt/d2n/dcm2niix')
+        request = selftest.requests_for_report(tool_report(SLICER_NUMPY), backend_paths={'packaged_dcm2niix': '/pkg/dcm2niix'})[0]
+        self.assertEqual(request['dcm2niix'], '/pkg/dcm2niix')
 
 
 class ScriptTests(ToolFixture):

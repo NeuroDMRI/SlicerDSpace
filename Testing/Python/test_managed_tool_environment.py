@@ -101,6 +101,79 @@ class ShimTests(ToolEnvironmentBase):
         self.assertEqual(entries[0], str(ep.python_shim_folder(python, self.shims)))
 
 
+class ShimWriterTests(ToolEnvironmentBase):
+    def target(self):
+        return self.make_prefix('conda', with_python=True) / 'python'
+
+    def test_a_second_writer_between_write_and_chmod_cannot_break_the_first(self):
+        """R-B6: with one shared python.tmp the second writer's replace made the first writer's chmod raise
+        FileNotFoundError (the first parallel `run_batch_pipeline.py --jobs` run)."""
+        target, state, real_chmod = self.target(), {'racing': False}, os.chmod
+
+        def racing_chmod(path, mode, *args, **kwargs):
+            if not state['racing']:
+                state['racing'] = True
+                ep.python_shim_folder(target, self.shims)  # another job finishes its whole write here
+            return real_chmod(path, mode, *args, **kwargs)
+
+        with patch('os.chmod', racing_chmod):
+            folder = ep.python_shim_folder(target, self.shims)
+        for name in ('python', 'python3'):
+            self.assertTrue(os.access(folder / name, os.X_OK), name)
+            self.assertIn(f'exec {target} "$@"', (folder / name).read_text())
+        self.assertEqual(sorted(path.name for path in folder.iterdir()), ['python', 'python3'])
+
+    def test_a_failed_write_leaves_no_temporary_file(self):
+        target = self.target()
+        with patch('os.replace', side_effect=OSError('disk full')), self.assertRaises(OSError):
+            ep.python_shim_folder(target, self.shims)
+        folder = next(self.shims.iterdir())
+        self.assertEqual(list(folder.iterdir()), [])
+
+    def test_an_identical_shim_is_not_rewritten(self):
+        target = self.target()
+        folder = ep.python_shim_folder(target, self.shims)
+        before = {name: (folder / name).stat().st_ino for name in ('python', 'python3')}
+        with patch('os.replace', side_effect=AssertionError('rewrote an identical shim')):
+            self.assertEqual(ep.python_shim_folder(target, self.shims), folder)
+        self.assertEqual(before, {name: (folder / name).stat().st_ino for name in ('python', 'python3')})
+
+    def test_unwritable_runtime_root_gives_no_shim_and_one_log_line(self):
+        """R-N2: the environment is the same as without a shim."""
+        python = self.target()
+        with patch.object(ep, 'python_shim_folder', side_effect=PermissionError('read-only')), \
+                self.assertLogs(ep.__name__, level='WARNING') as logs:
+            env = self.environment('linux', mrtrix_bin_dir=python.parent)
+        self.assertEqual(len(logs.output), 1)
+        self.assertIn('shim skipped', logs.output[0])
+        self.assertEqual(self.path_entries(env)[0], str(python.parent))
+
+    def test_real_unwritable_shim_root_is_survived(self):
+        python = self.target()
+        blocker = self.root / 'blocker'
+        blocker.write_text('a file where the shim root should be')
+        with self.assertLogs(ep.__name__, level='WARNING'):
+            env = ep.managed_tool_environment(system='linux', shim_root=blocker / 'shims', mrtrix_bin_dir=python.parent)
+        self.assertEqual(self.path_entries(env)[0], str(python.parent))
+
+
+class ShimInterpreterTests(ToolEnvironmentBase):
+    def test_python3_is_preferred_over_python_in_a_bin_dir(self):
+        """R-N5: for the MRtrix bin dir (Linux) and for the FSL bin dir (macOS)."""
+        for system, kwargs in (('linux', 'mrtrix_bin_dir'), ('darwin', 'fsl_bin_dir')):
+            bin_dir = self.make_prefix(f'both-{system}', with_python=True)
+            (bin_dir / 'python3').write_text('#!/bin/sh\n')
+            self.assertEqual(ep.shim_target_python(system=system, **{kwargs: bin_dir}), bin_dir / 'python3')
+
+    def test_python_is_used_when_python3_is_absent_and_fsl_is_searched_after_mrtrix(self):
+        with_python = self.make_prefix('only-python', with_python=True)
+        self.assertEqual(ep.shim_target_python(system='linux', mrtrix_bin_dir=with_python), with_python / 'python')
+        none = self.make_prefix('none', with_python=False)
+        self.assertEqual(ep.shim_target_python(system='linux', mrtrix_bin_dir=none, fsl_bin_dir=with_python),
+                         with_python / 'python')
+        self.assertIsNone(ep.shim_target_python(system='linux', mrtrix_bin_dir=none))
+
+
 class FslEnvironmentTests(ToolEnvironmentBase):
     def test_fsl_keys_are_present_and_output_type_is_fixed(self):
         with patch.dict(os.environ, {'FSLOUTPUTTYPE': 'NIFTI', 'FSLDIR': '/somewhere/else'}):

@@ -132,6 +132,9 @@ def _confirm(owner, plan):
                 _text(owner, "Licence", "许可"), html.escape(licence["url"]), html.escape(licence["name"]),
                 _text(owner, "local file", "本地文件"), local,
                 "" if licence["id"] in pending else _text(owner, " (already accepted)", "（已接受）"))
+        for package in (licence or {}).get("packages", ()):  # S3-2: each package with its licence and link
+            row += '<br>&nbsp;&nbsp;<a href="%s">%s</a>: %s' % (html.escape(package["url"]), html.escape(package["name"]),
+                                                              html.escape(package["license"]))
         rows.append(row)
     if rows:
         components_label = qt.QLabel("<br><br>".join(rows))

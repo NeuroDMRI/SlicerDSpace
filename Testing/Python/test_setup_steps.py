@@ -137,10 +137,10 @@ class LicenceInventoryTests(unittest.TestCase):
                                        command=["powershell", "-File", "install_deps_windows.ps1", "-SkipFreeSurfer"])
         components = plan_components(plan)
         self.assertEqual(set(required_licences(components)),
-                         {"mrtrix", "fsl", "wmql", "wma", "tractcloud", "tractcloud_data", "optional_resources"})
+                         {"mrtrix", "fsl", "wmql", "wma", "tractcloud", "tractcloud_data", "optional_resources", "wsl_pypi_packages"})
         plan["windows_runtime"].update(installs_freesurfer=True, command=["powershell", "-SkipLargeDownloads"])
         self.assertEqual(set(required_licences(plan_components(plan))),
-                         {"mrtrix", "fsl", "wmql", "wma", "tractcloud", "tractcloud_data", "freesurfer"})
+                         {"mrtrix", "fsl", "wmql", "wma", "tractcloud", "tractcloud_data", "freesurfer", "wsl_pypi_packages"})
         for item in components:
             self.assertTrue(item["licence"]["name"] and item["licence"]["url"], item["id"])
 
@@ -151,6 +151,87 @@ class LicenceInventoryTests(unittest.TestCase):
         self.assertEqual({key: value["licence"]["id"] for key, value in by_id.items()},
                          {"python_packages": "pypi_packages", "python:dcm2niix": "dcm2niix", "model_assets": "model_assets"})
         self.assertTrue(by_id["model_assets"]["licence"]["file"].endswith("MODEL_ASSET_TERMS.md"))
+
+    def test_s3_2_the_python_package_group_lists_licence_names_grouped_with_links_and_files(self):
+        """S3-2. Fails before: one generic 'each package states its own terms' entry with no package names."""
+        plan = self.base_plan()
+        plan.update(python_packages=["numpy>=1.26", "SimpleITK", "dipy>=1.10,<1.13", "nibabel>=5.0", "torch>=2.0.0"])
+        licence = {item["id"]: item for item in plan_components(plan)}["python_packages"]["licence"]
+        self.assertIn("BSD-3-Clause: dipy, numpy, torch", licence["name"])
+        self.assertIn("MIT: nibabel", licence["name"])
+        self.assertIn("Apache-2.0: simpleitk", licence["name"])
+        by_name = {item["name"]: item for item in licence["packages"]}
+        self.assertEqual(by_name["numpy"]["url"], "https://pypi.org/project/numpy/")
+        self.assertEqual(by_name["dipy"]["file"], str(REPO / "licenses/DIPY.txt"))  # a local licence file where the repo has one
+        self.assertIsNone(by_name["numpy"]["file"])
+        self.assertEqual(licence["file"], str(REPO / "licenses/provenance.json"))
+
+    def test_s3_2_a_package_without_a_record_uses_installed_metadata_else_says_it_is_not_recorded(self):
+        from email.message import Message
+        from shared.setup_components import package_licence
+        info = Message()
+        info["License-Expression"] = "ISC"
+        with patch("importlib.metadata.metadata", return_value=info):
+            self.assertEqual(package_licence("some-pkg", REPO, records={})[0], "ISC")
+        with patch("importlib.metadata.metadata", side_effect=__import__("importlib.metadata").metadata.PackageNotFoundError):
+            self.assertEqual(package_licence("some-pkg", REPO, records={})[0], "licence not recorded")
+
+    def test_s3_2_a_new_package_or_a_new_licence_changes_the_version_and_needs_acceptance_again(self):
+        from shared.setup_components import packages_licence
+        before = packages_licence("pypi_packages", ["numpy", "scipy"])
+        accepted = {"pypi_packages": dict(id="pypi_packages", version=before["version"], time="t")}
+        self.assertEqual(pending_licences({"pypi_packages": packages_licence("pypi_packages", ["scipy", "numpy>=1"])}, accepted), {})
+        grown = packages_licence("pypi_packages", ["numpy", "scipy", "nibabel"])  # a new package, a new licence name
+        self.assertNotEqual(grown["version"], before["version"])
+        self.assertEqual(set(pending_licences({"pypi_packages": grown}, accepted)), {"pypi_packages"})
+        records = {"numpy": {"license": "Proprietary"}, "scipy": {"license": "BSD-3-Clause"}}  # the same packages, a new licence
+        with patch("shared.setup_components.package_records", return_value=records):
+            changed = packages_licence("pypi_packages", ["numpy", "scipy"])
+        self.assertNotEqual(changed["version"], before["version"])
+        self.assertEqual(set(pending_licences({"pypi_packages": changed}, accepted)), {"pypi_packages"})
+        plan = self.base_plan()
+        plan.update(python_packages=["numpy", "scipy"])
+        with tempfile.TemporaryDirectory() as folder:
+            accepted_now = accepted_for(plan)
+            self.assertEqual(setup_steps(plan, accepted_now, folder=folder)[0]["id"], "python_packages")
+            plan.update(python_packages=["numpy", "scipy", "nibabel"])
+            with self.assertRaisesRegex(PermissionError, "pypi_packages"):
+                setup_steps(plan, accepted_now, folder=folder)
+
+    def test_s3_2_every_package_the_doctor_and_the_backends_can_request_has_a_record(self):
+        from shared.backend_sources import SOURCES
+        from shared.setup_components import package_name, package_records
+        records = package_records()
+        names = {package_name(item) for source in SOURCES.values() for item in source["requirements"]}
+        names |= {"nibabel", "numpy", "dipy", "torch", "torchvision", "simpleitk", "dmri-amico", "trimesh", "rtree", "vtk",
+                  "tract-querier", "whitematteranalysis", "tractcloud"}
+        self.assertEqual(sorted(name for name in names if name not in records), [])
+
+    def test_s3_3_a_windows_only_plan_lists_the_wsl_python_packages_and_requires_their_acceptance(self):
+        """S3-3. Fails before: the Windows plan listed no pip package of install_runtime.sh."""
+        plan = self.base_plan()
+        plan["windows_runtime"] = dict(distribution="Ubuntu", installs_freesurfer=False,
+                                       command=["powershell", "-File", "install_deps_windows.ps1", "-SkipFreeSurfer"])
+        by_id = {item["id"]: item for item in plan_components(plan)}
+        licence = by_id["windows_python_packages"]["licence"]
+        for name in ("numpy", "vtk", "dmri-amico", "torch", "statsmodels"):  # requirements-runtime.txt and the torch installer
+            self.assertIn(name, [item["name"] for item in licence["packages"]])
+        self.assertIn("BSD-3-Clause: ", licence["name"])
+        self.assertIn("wsl_pypi_packages", required_licences(plan_components(plan)))
+        with tempfile.TemporaryDirectory() as folder:
+            with self.assertRaisesRegex(PermissionError, "wsl_pypi_packages"):
+                setup_steps(plan, {key: value for key, value in accepted_for(plan).items() if key != "wsl_pypi_packages"},
+                            folder=folder)
+            self.assertEqual(setup_steps(plan, accepted_for(plan), folder=folder)[0]["id"], "windows_runtime")
+
+    def test_s3_2_the_cli_plan_lists_each_package_with_licence_link_and_file(self):
+        from scripts.setup_selected import describe_components
+        plan = self.base_plan()
+        plan.update(python_packages=["dipy>=1.10", "numpy"])
+        text = "\n".join(describe_components(plan_components(plan), {"pypi_packages": {}}))
+        self.assertIn("Python packages. BSD-3-Clause: dipy, numpy", text)
+        self.assertIn("dipy: BSD-3-Clause | https://pypi.org/project/dipy/ | " + str(REPO / "licenses/DIPY.txt"), text)
+        self.assertIn("numpy: BSD-3-Clause | https://pypi.org/project/numpy/ | no local file", text)
 
     def test_s_b8_an_install_without_a_listed_licence_does_not_run(self):
         plan = self.base_plan()

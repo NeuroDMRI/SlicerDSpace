@@ -70,6 +70,9 @@ def describe_components(components, pending):
             lines.append("    licence: %s%s" % (licence["name"], "" if licence["id"] in pending else " (already accepted)"))
             lines.append("    link: " + licence["url"])
             lines.append("    local file: " + (licence["file"] or "none"))
+            for package in licence.get("packages", ()):  # S3-2: each package with its licence, link and local file
+                lines.append("      %s: %s | %s | %s" % (package["name"], package["license"], package["url"],
+                                                          package["file"] or "no local file"))
     return lines
 
 

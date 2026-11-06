@@ -11,6 +11,7 @@ in [LICENSE.txt](LICENSE.txt). This file documents bundled third-party code, dat
 and reference material that carries different terms, and states honestly
 where asset permissions still need separate review. License texts and their
 pinned sources are recorded in [licenses/provenance.json](licenses/provenance.json).
+The same file lists the licence names of the Python packages that setup installs (`python_packages`); the setup dialog shows them grouped by licence.
 The integrity check is not a legal opinion or a grant of model/template rights.
 
 ---

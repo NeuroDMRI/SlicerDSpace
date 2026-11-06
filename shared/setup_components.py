@@ -5,6 +5,8 @@ file (FSL, MRtrix3, PNL until its file ships) uses the SHA-256 of its URL string
 """
 
 import hashlib
+import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -45,7 +47,6 @@ def _licences():
         "tractcloud_data": dict(name="TractCloud trained model and training data: Slicer/BWH agreement and upstream terms",
                                 url=TRACTCLOUD_DATA_URL, files=("docs/assets/MODEL_ASSET_TERMS.md",)),
         "dcm2niix": dict(name="dcm2niix licence (BSD-style; bundled files carry their own)", url=DCM2NIIX_TERMS_URL, files=()),
-        "pypi_packages": dict(name="PyPI package licences (each package states its own terms)", url=PYPI_URL, files=()),
     }
 
 
@@ -67,9 +68,95 @@ def licence_record(licence_id, root=REPO_ROOT):
                 version=licence_version(licence, root))
 
 
-def _component(component_id, title, size, licence_id=None, root=REPO_ROOT):
+PACKAGE_RECORD_FILE = "licenses/provenance.json"
+WSL_REQUIREMENTS_FILE = "scripts/wsl/requirements-runtime.txt"
+# scripts/wsl/configure_device.py installs PyTorch after the WSL GPU discovery; it is not in the requirements file.
+WSL_EXTRA_PACKAGES = ("torch",)
+
+
+def package_name(requirement):
+    """Canonical package name of a pip requirement or a git URL (S3-2)."""
+    text = str(requirement).strip()
+    if "://" in text or text.startswith("git+"):
+        text = text.rstrip("/").rsplit("/", 1)[-1]
+        text = re.sub(r"\.git$", "", text)
+    match = re.match(r"[A-Za-z0-9][A-Za-z0-9._-]*", text)
+    return re.sub(r"[-_.]+", "-", (match.group(0) if match else text).lower())
+
+
+def package_records(root=REPO_ROOT):
+    """{canonical name: {license, evidence, file?}} from the repo record file licenses/provenance.json."""
+    try:
+        data = json.loads((Path(root) / PACKAGE_RECORD_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return (data.get("python_packages") or {}).get("records") or {}
+
+
+def _installed_licence(name):
+    """Licence name from the installed package metadata, or None (used only for a package with no repo record)."""
+    try:
+        from importlib import metadata
+        info = metadata.metadata(name)
+    except Exception:  # not installed, or unreadable metadata
+        return None
+    expression = (info.get("License-Expression") or "").strip()
+    if expression:
+        return expression
+    classifiers = [item.split("::")[-1].strip() for item in info.get_all("Classifier") or [] if item.startswith("License")]
+    if classifiers:
+        return ", ".join(classifiers)
+    text = (info.get("License") or "").strip()
+    return text if text and len(text) <= 60 and "\n" not in text else None
+
+
+def package_licence(name, root=REPO_ROOT, records=None):
+    """(licence name, link, local licence file or None) of one package: the repo record first, then installed metadata."""
+    records = package_records(root) if records is None else records
+    link = "https://pypi.org/project/%s/" % name
+    record = records.get(name)
+    if record and record.get("license"):
+        local = Path(root) / record["file"] if record.get("file") else None
+        return record["license"], link, str(local) if local and local.is_file() else None
+    return _installed_licence(name) or "licence not recorded", link, None
+
+
+def packages_licence(licence_id, requirements, root=REPO_ROOT):
+    """Licence record of a group of Python packages, grouped by licence name (S3-2).
+
+    The name reads "Python packages. BSD-3-Clause: numpy, scipy; MIT: nibabel". The version is the SHA-256 of the sorted
+    (package, licence) list, so a new package or a new licence needs a new acceptance.
+    """
+    records = package_records(root)
+    entries = {}
+    for requirement in requirements:
+        name = package_name(requirement)
+        licence, link, local = package_licence(name, root, records)
+        entries[name] = dict(name=name, license=licence, url=link, file=local)
+    packages = [entries[name] for name in sorted(entries)]
+    groups = {}
+    for item in packages:
+        groups.setdefault(item["license"], []).append(item["name"])
+    text = "; ".join("%s: %s" % (licence, ", ".join(names)) for licence, names in sorted(groups.items()))
+    digest = hashlib.sha256(json.dumps([[item["name"], item["license"]] for item in packages]).encode("utf-8")).hexdigest()
+    record_file = Path(root) / PACKAGE_RECORD_FILE
+    return dict(id=licence_id, name="Python packages. " + text, url=PYPI_URL,
+                file=str(record_file) if record_file.is_file() else None, version=digest, packages=packages)
+
+
+def wsl_python_packages(root=REPO_ROOT):
+    """Python packages that scripts/wsl/install_runtime.sh installs in WSL: requirements-runtime.txt and PyTorch (S3-3)."""
+    names = []
+    for line in (Path(root) / WSL_REQUIREMENTS_FILE).read_text(encoding="utf-8").splitlines():
+        line = line.split("#", 1)[0].strip()
+        if line and not line.startswith("-"):
+            names.append(package_name(line))
+    return [*names, *WSL_EXTRA_PACKAGES]
+
+
+def _component(component_id, title, size, licence_id=None, root=REPO_ROOT, licence=None):
     return dict(id=component_id, title=title, size_bytes=size,
-                licence=licence_record(licence_id, root) if licence_id else None)
+                licence=licence or (licence_record(licence_id, root) if licence_id else None))
 
 
 def plan_components(plan, root=REPO_ROOT):
@@ -86,7 +173,8 @@ def plan_components(plan, root=REPO_ROOT):
     pinned = [value for value in packages if str(value).lower().replace("_", "-").startswith("dcm2niix")]
     others = [value for value in packages if value not in pinned]
     if others:
-        items.append(_component("python_packages", "Python packages: " + ", ".join(others), None, "pypi_packages", root))
+        items.append(_component("python_packages", "Python packages: " + ", ".join(others), None, root=root,
+                                licence=packages_licence("pypi_packages", others, root)))
     if pinned:
         items.append(_component("python:dcm2niix", "Python package: " + ", ".join(pinned), None, "dcm2niix", root))
     if plan.get("asset_profiles"):
@@ -106,6 +194,9 @@ def plan_components(plan, root=REPO_ROOT):
             items.append(_component("windows_backend:" + name, where + ": algorithm source " + name,
                                     SOURCES[name]["bytes"], name, root))
         items.append(_component("windows_tractcloud_data", where + ": TractCloud model and data", None, "tractcloud_data", root))
+        # S3-3: the pip packages of scripts/wsl/install_runtime.sh (requirements-runtime.txt and the PyTorch installer).
+        items.append(_component("windows_python_packages", where + ": Python packages (requirements-runtime.txt and PyTorch)",
+                                None, root=root, licence=packages_licence("wsl_pypi_packages", wsl_python_packages(root), root)))
         if "-SkipLargeDownloads" not in windows["command"]:
             items.append(_component("windows_org_atlas", where + ": ORG atlases", None, "optional_resources", root))
         if windows.get("installs_freesurfer"):

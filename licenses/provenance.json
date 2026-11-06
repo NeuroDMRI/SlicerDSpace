@@ -93,5 +93,136 @@
       "covers": ["shared/pnl_cnn"],
       "conditions": "Clause (b): print the licence terms, prefaced by the fixed sentence, in every copy and in the user documentation (docs/licenses/pnl_brain_mask.md, THIRD_PARTY_NOTICES.md). Clause (c): keep all attributions and notices. Clause (d): mark modified versions as modified (header comment on each modified Python file; patch list in shared/pnl_cnn/UPSTREAM.json). Model weights and the IIT template are separate assets with their own terms."
     }
-  ]
+  ],
+  "python_packages": {
+    "description": "Licence names of the Python packages that setup installs, shown in the setup licence dialog (S3-2). Keys are canonical package names. The setup licence version is the SHA-256 of the sorted (package, licence) list of the packages in the plan.",
+    "reviewed_date": "2026-11-07",
+    "records": {
+      "numpy": {
+        "license": "BSD-3-Clause",
+        "evidence": "installed metadata, venv13 numpy 2.4.6 (License-Expression also lists bundled 0BSD, MIT, Zlib, CC0-1.0 components)"
+      },
+      "scipy": {
+        "license": "BSD-3-Clause",
+        "evidence": "installed metadata, venv13 scipy 1.17.1 (classifier: BSD License)"
+      },
+      "nibabel": {
+        "license": "MIT",
+        "evidence": "installed metadata, venv13 nibabel 5.4.2"
+      },
+      "dipy": {
+        "license": "BSD-3-Clause",
+        "evidence": "installed metadata, venv13 dipy 1.12.1 (classifier: BSD License)",
+        "file": "licenses/DIPY.txt"
+      },
+      "simpleitk": {
+        "license": "Apache-2.0",
+        "evidence": "installed metadata, venv13 SimpleITK 2.5.5",
+        "file": "licenses/Apache-2.0.txt"
+      },
+      "dmri-amico": {
+        "license": "Proprietary (as stated in the PyPI metadata; read the project terms)",
+        "evidence": "PyPI project JSON, retrieved 2026-11-07, dmri-amico 2.1.1 (classifier: Other/Proprietary License)"
+      },
+      "rtree": {
+        "license": "MIT",
+        "evidence": "uv cache metadata, rtree 1.4.1"
+      },
+      "trimesh": {
+        "license": "MIT",
+        "evidence": "installed metadata, venv13 trimesh 4.12.2"
+      },
+      "vtk": {
+        "license": "BSD-3-Clause",
+        "evidence": "installed metadata, venv13 vtk 9.5.2 (License: BSD)"
+      },
+      "torch": {
+        "license": "BSD-3-Clause",
+        "evidence": "uv cache metadata, torch 2.4.1"
+      },
+      "torchvision": {
+        "license": "BSD-3-Clause",
+        "evidence": "uv cache metadata, torchvision 0.19.1 (License: BSD)"
+      },
+      "h5py": {
+        "license": "BSD-3-Clause",
+        "evidence": "installed metadata, venv13 h5py 3.16.0"
+      },
+      "joblib": {
+        "license": "BSD-3-Clause",
+        "evidence": "installed metadata, venv13 joblib 1.6.0"
+      },
+      "matplotlib": {
+        "license": "PSF-based Matplotlib licence",
+        "evidence": "installed metadata, venv13 matplotlib 3.10.8 (classifier: Python Software Foundation License)"
+      },
+      "pandas": {
+        "license": "BSD-3-Clause",
+        "evidence": "uv cache metadata, pandas 2.3.3"
+      },
+      "pillow": {
+        "license": "MIT-CMU (HPND)",
+        "evidence": "installed metadata, venv13 Pillow 13.0.0 (License-Expression: MIT-CMU)"
+      },
+      "plumbum": {
+        "license": "MIT",
+        "evidence": "PyPI project JSON, retrieved 2026-11-07, plumbum 1.9.0 (classifier: MIT License)"
+      },
+      "pynrrd": {
+        "license": "MIT",
+        "evidence": "installed metadata, venv13 pynrrd 1.1.3"
+      },
+      "scikit-image": {
+        "license": "BSD-3-Clause",
+        "evidence": "uv cache metadata, scikit-image 0.26.0 (classifier: BSD License)"
+      },
+      "scikit-learn": {
+        "license": "BSD-3-Clause",
+        "evidence": "installed metadata, venv13 scikit-learn 1.9.0"
+      },
+      "statsmodels": {
+        "license": "BSD-3-Clause",
+        "evidence": "PyPI project JSON, retrieved 2026-11-07, statsmodels 0.14.4 (classifier: BSD License)"
+      },
+      "xlrd": {
+        "license": "BSD-3-Clause",
+        "evidence": "PyPI project JSON, retrieved 2026-11-07, xlrd 2.0.1 (License: BSD)"
+      },
+      "hatchling": {
+        "license": "MIT",
+        "evidence": "uv cache metadata, hatchling 1.33.0"
+      },
+      "editables": {
+        "license": "MIT",
+        "evidence": "uv cache metadata, editables 0.6"
+      },
+      "setuptools-scm": {
+        "license": "MIT",
+        "evidence": "PyPI project JSON, retrieved 2026-11-07, setuptools-scm 9.2.2 (classifier: MIT License)"
+      },
+      "setuptools": {
+        "license": "MIT",
+        "evidence": "uv cache metadata, setuptools 78.1.0"
+      },
+      "wheel": {
+        "license": "MIT",
+        "evidence": "PyPI project JSON, retrieved 2026-11-07, wheel 0.46.3 (License-Expression: MIT)"
+      },
+      "tract-querier": {
+        "license": "Modified BSD",
+        "evidence": "Repo record: tractography/wmql_queries/official/LICENSE.txt (pinned demianw/tract_querier)",
+        "file": "tractography/wmql_queries/official/LICENSE.txt"
+      },
+      "whitematteranalysis": {
+        "license": "3D Slicer / BWH Contribution and Software License Agreement (BSD style)",
+        "evidence": "Repo record: licenses/WMA.txt",
+        "file": "licenses/WMA.txt"
+      },
+      "tractcloud": {
+        "license": "3D Slicer / BWH Contribution and Software License Agreement (BSD style)",
+        "evidence": "Pinned SlicerDMRI/TractCloud LICENSE (same agreement as licenses/SlicerDMRI.txt)",
+        "file": "licenses/SlicerDMRI.txt"
+      }
+    }
+  }
 }

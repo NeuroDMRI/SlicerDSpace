@@ -261,7 +261,12 @@ class RunSubjectPipelineCliTest(unittest.TestCase):
 
             payload = json.loads(completed.stdout)
             task_names = [task["name"] for task in payload["tasks"]]
-            self.assertEqual(task_names, ["tractography.saf", "bundles.wma", "bundles.tractcloud"])
+            # C1: the closure adds the anatomy, surface and CSD/ACT tracking that SAF/WMA/TractCloud need.
+            self.assertEqual([name for name in task_names if name.split("@")[0] in
+                              {"tractography.saf", "bundles.wma", "bundles.tractcloud"}],
+                             ["tractography.saf@csd_act", "bundles.tractcloud@csd_act", "bundles.wma@ukf"])
+            for added in ("segmentation.ddseg", "parcellation.ddparcel", "surface.ddsurfer_postprocess"):
+                self.assertIn(added, task_names)
 
     def test_cli_expands_bundle_backend_from_product_target(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -289,7 +294,9 @@ class RunSubjectPipelineCliTest(unittest.TestCase):
 
             payload = json.loads(completed.stdout)
             task_names = [task["name"] for task in payload["tasks"]]
-            self.assertEqual(task_names, ["bundles.wmql", "bundles.wma", "bundles.tractcloud"])
+            self.assertEqual([name for name in task_names if name.startswith("bundles.")],
+                             ["bundles.wmql@csd_act", "bundles.tractcloud@csd_act", "bundles.wma@ukf"])
+            self.assertIn("parcellation.ddparcel", task_names)
 
     def test_cli_microstructure_stages_drive_freewater_noddi_gates(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -386,8 +393,10 @@ class RunSubjectPipelineCliTest(unittest.TestCase):
             )
 
             payload = json.loads(completed.stdout)
-            self.assertEqual([task["name"] for task in payload["tasks"]], ["surface.ddsurfer_postprocess"])
-            self.assertEqual(payload["tasks"][0]["status"], "planned")
+            self.assertEqual([task["name"] for task in payload["tasks"]], ["surface.ddsurfer", "surface.ddsurfer_postprocess"])
+            self.assertEqual([task["requested"] for task in payload["tasks"]], [False, True])
+            self.assertEqual(payload["tasks"][0]["required_by"], ["surface_postprocess"])
+            self.assertEqual(payload["tasks"][1]["status"], "planned")
 
     def test_cli_records_surface_postprocess_atlases(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

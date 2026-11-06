@@ -601,12 +601,13 @@ class SharedLogicMixin:
         connectome_backend: str = "python",
         connectome_compress_mrtrix_dense: bool = False,
         preflight_blocked_targets: Optional[dict[str, str]] = None,
+        requested_targets: tuple[str, ...] = (),
     ) -> ProductOrchestratorResult:
         result = run_subject_products(
             ProductOrchestratorConfig(
                 subject_id=subject_id,
                 subject_root=subject_root,
-                targets=targets,
+                targets=tuple(requested_targets) or targets,
                 output_root=output_root,
                 run_name=run_name,
                 tractography_backend=tractography_backend,
@@ -733,12 +734,13 @@ class SharedLogicMixin:
         connectome_backend: str = "python",
         connectome_compress_mrtrix_dense: bool = False,
         preflight_blocked_targets: Optional[dict[str, str]] = None,
+        requested_targets: tuple[str, ...] = (),
     ) -> RunPlanResult:
         plan = plan_subject_products(
             ProductOrchestratorConfig(
                 subject_id=subject_id,
                 subject_root=subject_root,
-                targets=targets,
+                targets=tuple(requested_targets) or targets,
                 output_root=output_root,
                 run_name=run_name,
                 tractography_backend=tractography_backend,

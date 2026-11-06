@@ -130,7 +130,8 @@ def _resolve_microstructure_stages(args: argparse.Namespace) -> tuple[str, ...]:
 
 
 def _infer_subject_id(subject_root: Path) -> str:
-    return subject_root.resolve().name
+    from shared.subject_id import derive_subject_id
+    return derive_subject_id(str(subject_root.resolve()))
 
 
 def _apply_dependency_config(args: argparse.Namespace) -> None:
@@ -141,7 +142,8 @@ def _write_dependency_config(args: argparse.Namespace, path: Path) -> Path:
     return write_dependency_config(args, path)
 
 
-def _resolve_targets(args: argparse.Namespace) -> tuple[str, ...]:
+def _resolve_closure(args: argparse.Namespace):
+    """Selected CLI targets with every prerequisite added (C1/C2), minus --skip-targets."""
     include = list(_split_csv_or_repeat(args.targets))
     exclude = set(_split_csv_or_repeat(args.skip_targets))
 
@@ -165,18 +167,26 @@ def _resolve_targets(args: argparse.Namespace) -> tuple[str, ...]:
         if target not in seen and target not in exclude:
             resolved.append(target)
             seen.add(target)
-    return tuple(
-        target
-        for target in normalize_orchestrator_targets(
-            tuple(resolved),
-            tractography_backend=args.tractography_backend,
-            bundle_backend=args.bundle_backend,
-            microstructure_run_free_water=bool(args.run_free_water),
-            microstructure_run_noddi=bool(args.run_noddi),
-            microstructure_run_dki=bool(getattr(args, "run_dki", False)),
-        )
-        if target not in exclude
-    )
+    from shared.orchestrator import orchestrator_closure
+    return orchestrator_closure(
+        tuple(resolved),
+        tractography_backend=args.tractography_backend,
+        bundle_backend=args.bundle_backend,
+        microstructure_run_free_water=bool(args.run_free_water),
+        microstructure_run_noddi=bool(args.run_noddi),
+        microstructure_run_dki=bool(getattr(args, "run_dki", False)),
+        wma_source_explicit=bool(getattr(args, "bundle_tractography_backend", None)),
+        provided_tractography=tuple(name for name, value in (
+            ("wma", getattr(args, "wma_input_tractography", None)),
+            ("tractcloud", getattr(args, "tractcloud_input_tractography", None)),
+            ("saf", getattr(args, "saf_pregenerated_tractogram", None))) if value),
+        excluded=tuple(exclude),  # K5: the closure never adds or expands a skipped target
+    ), exclude
+
+
+def _resolve_targets(args: argparse.Namespace) -> tuple[str, ...]:
+    closure, exclude = _resolve_closure(args)
+    return closure.targets
 
 
 def resolve_analysis_options(args, *, explicit_dests=()):
@@ -207,9 +217,17 @@ def resolve_analysis_options(args, *, explicit_dests=()):
     parameters(json.loads(args.ukf_parameters))
     if args.wmql_query_preset in CATALOG_PRESETS:
         canonical_wmql_selection(args.wmql_query_selection, args.wmql_query_preset)
-    targets = _resolve_targets(args)
+    closure, exclude = _resolve_closure(args)
+    targets = closure.targets
     if not targets:
         raise ValueError('No targets selected. Use --all or --targets.')
+    # C2/C3: later stages (doctor, config, cohort planner) see the closed algorithm set and provenance.
+    args.closure_tractography_backend = closure.algorithms_text if 'tractography' in targets else args.tractography_backend
+    args.target_required_by = {target: tuple(value) for target, value in closure.required_by.items() if target in targets}
+    args.excluded_targets = tuple(sorted(exclude))
+    # K4: what the user asked for (not the closed set) is what --save-user-config saves.
+    args.requested_targets = tuple(target for target in closure.requested if target in targets)
+    args.closure_algorithm_requesters = {key: tuple(value) for key, value in closure.added_algorithms.items()}
     if args.bundle_tractography_backend:
         if not set(targets).intersection({'bundles', 'wma', 'tractcloud'}):
             raise ValueError('--bundle-tractography-backend requires a bundle target')
@@ -260,7 +278,7 @@ def _environment_config_from_args(
         pnl_mask_model_dir=args.pnl_mask_model_dir,
         pnl_mask_ants_bin_dir=args.pnl_mask_ants_bin_dir,
         synthstrip_python=args.synthstrip_python,
-        tractography_backend=args.tractography_backend,
+        tractography_backend=getattr(args, 'closure_tractography_backend', None) or args.tractography_backend,
         ukf_executable=getattr(args, 'ukf_executable', None),
         dwiconvert_executable=getattr(args, 'dwiconvert_executable', None),
         connectome_backend=args.connectome_backend,
@@ -341,6 +359,11 @@ def _make_sigterm_handler(manifest_path: Path, *, subject_id: str, run_name: str
         sys.exit(143)
 
     return _handle_sigterm
+
+
+def _cli_log(message: str) -> None:
+    """Run log: the closure notice goes to stderr so stdout stays the JSON result for blocked runs (GUI merges both)."""
+    print(message, file=sys.stderr if message.startswith("[Targets]") else sys.stdout)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -462,7 +485,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Abort before execution when any selected target has missing required dependencies.",
     )
     parser.add_argument("--execute", action="store_true", help="Actually execute workflows. Default is dry-run planning only.")
-    parser.add_argument("--no-resume", action="store_true", help="Disable resume/skip of completed outputs.")
+    parser.add_argument("--no-resume", action="store_true", help="Recompute every stage of this run, including prerequisites added automatically.")
     parser.add_argument(
         "--brain-mask-backend",
         default="pnl_cnn",
@@ -820,7 +843,7 @@ def main(argv: list[str] | None = None) -> int:
             args,
             language=args.language or str((user_config or {}).get("ui", {}).get("language") or "en"),
             base_config=user_config,
-            resolved_targets=targets,
+            resolved_targets=getattr(args, "requested_targets", None) or targets,
             resolved_stages=_resolve_microstructure_stages(args),
         )
         written = write_user_config(saved_payload, save_path)
@@ -885,7 +908,7 @@ def main(argv: list[str] | None = None) -> int:
         output_root=output_root,
         targets=targets,
         run_name=args.run_name,
-        tractography_backend=args.tractography_backend,
+        tractography_backend=getattr(args, 'closure_tractography_backend', None) or args.tractography_backend,
         bundle_backend=args.bundle_backend,
         bundle_tractography_backend=args.bundle_tractography_backend,
         ukf_parameters=json.loads(args.ukf_parameters),
@@ -984,6 +1007,9 @@ def main(argv: list[str] | None = None) -> int:
         tractcloud_batch_size=args.tractcloud_batch_size,
         preflight_blocked_targets=preflight_blocked_targets,
         preflight_blocked_by_backend=(getattr(doctor_result, 'tracking_backend_blockers', {}) if doctor_result else {}),
+        target_required_by=dict(getattr(args, 'target_required_by', {}) or {}),
+        excluded_targets=tuple(getattr(args, 'excluded_targets', ()) or ()),
+        closure_algorithm_requesters=dict(getattr(args, 'closure_algorithm_requesters', {}) or {}),
     )
 
     if args.plan:
@@ -1022,7 +1048,7 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     orchestration_started = time.monotonic()
-    result = run_subject_products(config, log=print)
+    result = run_subject_products(config, log=_cli_log)
     orchestration_seconds = time.monotonic() - orchestration_started
     cli_timing = dict(main_wall_seconds=time.monotonic() - cli_started,
                       environment_check_seconds=environment_seconds, orchestration_call_seconds=orchestration_seconds,

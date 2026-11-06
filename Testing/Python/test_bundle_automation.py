@@ -59,7 +59,13 @@ class BundleAutomationTest(unittest.TestCase):
             self.assertEqual(cloud.inputs['input_tractography'], items['tractography'].outputs['tractogram_vtk'])
             self.assertIn('dti-deterministic.vtk', cloud.inputs['input_tractography'])
             self.assertEqual(cloud.dependencies['input_tractography'], 'will_run:tractography.dti_det')
+            # C1: a bundles-only selection now adds DTI tractography itself (and still never takes the old CSD file).
             plan = plan_subject_products(replace(config, targets=('bundles',)))
+            cloud = next(item for item in plan.items if item.target == 'tractcloud')
+            self.assertEqual(cloud.status, 'will_run')
+            self.assertIn('dti-deterministic.vtk', cloud.inputs['input_tractography'])
+            # With tractography skipped on purpose the blocked safety net still applies.
+            plan = plan_subject_products(replace(config, targets=('bundles',), excluded_targets=('tractography',)))
             self.assertEqual(next(item for item in plan.items if item.target == 'tractcloud').status, 'blocked')
 
     def test_legacy_wma_cache_cannot_skip_current_sampling_revalidation(self):

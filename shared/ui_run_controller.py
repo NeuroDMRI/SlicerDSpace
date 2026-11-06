@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
-from shared.orchestrator import normalize_orchestrator_targets
+from shared.orchestrator import normalize_orchestrator_targets, orchestrator_closure
 from shared.topup_parameters import TopupParameters, topup_cli_args, topup_orchestrator_kwargs
 from shared.user_config import canonical_microstructure_stages
 
@@ -71,6 +71,12 @@ class RunSelection:
     wma_atlas: str = "org"
     max_parallel_models: int = 1
     ukf_parameters_text: str = '{}'
+    # Targets the user ticked, before the prerequisite closure; the CLI recomputes the closure
+    # from these so the run manifest can record which targets were added automatically.
+    requested_targets: tuple[str, ...] = ()
+    # Algorithms after the closure (WMA adds UKF). Only used to ship UKF options; the CLI and the
+    # orchestrator get the user's ``tractography_backend`` and recompute the closure with provenance.
+    closure_tractography_backend: str = ""
 
 
 @dataclass(frozen=True)
@@ -208,7 +214,7 @@ def selected_orchestrator_targets(flags: ProductTargetFlags) -> tuple[str, ...]:
     return tuple(targets)
 
 
-def selected_product_targets(
+def selected_closure(
     flags: ProductTargetFlags,
     *,
     tractography_backend: str,
@@ -216,8 +222,12 @@ def selected_product_targets(
     microstructure_freewater: bool,
     microstructure_noddi: bool,
     microstructure_dki: bool = False,
-) -> tuple[str, ...]:
-    """Return normalized product targets after backend expansion."""
+    provided_tractography: tuple[str, ...] = (),
+):
+    """Return the prerequisite closure (C1) of the ticked targets.
+
+    ``provided_tractography`` names targets whose tractogram the user supplied as a file (K2).
+    """
 
     product_targets = ["validation"]
     if flags.preprocessing:
@@ -238,14 +248,38 @@ def selected_product_targets(
         product_targets.append("bundles")
     if flags.connectome:
         product_targets.append("connectome")
-    return normalize_orchestrator_targets(
+    return orchestrator_closure(
         tuple(product_targets),
         tractography_backend=(tractography_backend or "csd_act").strip() or "csd_act",
         bundle_backend=(bundle_backend or "wmql").strip() or "wmql",
         microstructure_run_free_water=microstructure_freewater,
         microstructure_run_noddi=microstructure_noddi,
         microstructure_run_dki=microstructure_dki,
+        provided_tractography=tuple(provided_tractography),
     )
+
+
+def selected_product_targets(
+    flags: ProductTargetFlags,
+    *,
+    tractography_backend: str,
+    bundle_backend: str,
+    microstructure_freewater: bool,
+    microstructure_noddi: bool,
+    microstructure_dki: bool = False,
+    provided_tractography: tuple[str, ...] = (),
+) -> tuple[str, ...]:
+    """Return normalized product targets after backend expansion and prerequisite closure."""
+
+    return selected_closure(
+        flags,
+        tractography_backend=tractography_backend,
+        bundle_backend=bundle_backend,
+        microstructure_freewater=microstructure_freewater,
+        microstructure_noddi=microstructure_noddi,
+        microstructure_dki=microstructure_dki,
+        provided_tractography=provided_tractography,
+    ).targets
 
 
 def selected_environment_targets(product_targets: tuple[str, ...]) -> tuple[str, ...]:
@@ -430,6 +464,7 @@ def build_single_subject_run_kwargs(
         "subject_root": Path(selection.subject_root_text).expanduser(),
         "output_root": Path(selection.output_root_text).expanduser() if selection.output_root_text else None,
         "targets": selection.selected_targets,
+        "requested_targets": selection.requested_targets,
         "run_name": selection.run_name,
         "tractography_backend": selection.tractography_backend,
         "bundle_backend": selection.bundle_backend,
@@ -492,6 +527,7 @@ def build_batch_run_kwargs(selection: RunSelection, *, batch_root: Path) -> dict
         "subject_root": batch_root,
         "output_root": Path(selection.output_root_text).expanduser() if selection.output_root_text else None,
         "targets": selection.selected_targets,
+        "requested_targets": selection.requested_targets,
         "run_name": selection.run_name,
         "tractography_backend": selection.tractography_backend,
         "bundle_backend": selection.bundle_backend,
@@ -785,7 +821,7 @@ def build_background_cli_args(
         "--run-name",
         str(common_run_kwargs["run_name"]),
         "--targets",
-        ",".join(common_run_kwargs["targets"]),
+        ",".join(common_run_kwargs.get("requested_targets") or common_run_kwargs["targets"]),
         "--execute",
         "--print-manifest-only",
         "--preprocessing-backend",
@@ -857,7 +893,7 @@ def build_batch_background_cli_args(
         arrange_inputs,
         "--execute",
         "--targets",
-        ",".join(common_run_kwargs["targets"]),
+        ",".join(common_run_kwargs.get("requested_targets") or common_run_kwargs["targets"]),
         "--preprocessing-backend",
         (preprocessing_backend or "dipy").strip() or "dipy",
         "--brain-mask-backend",
@@ -907,7 +943,7 @@ def _wmql_selection(value, preset='official'):
 
 def _ukf_run_options(selection):
     from shared.algorithm_selection import contains_tracking
-    if not contains_tracking(selection.tractography_backend, 'ukf'):
+    if not contains_tracking(selection.closure_tractography_backend or selection.tractography_backend, 'ukf'):
         return {}
     from tractography.ukf import parameters, resolve_executable
     from dataclasses import asdict
@@ -925,7 +961,7 @@ def _ukf_run_options(selection):
 
 def _append_ukf_args(args, kwargs):
     from shared.algorithm_selection import contains_tracking
-    if contains_tracking(kwargs.get('tractography_backend'), 'ukf'):
+    if contains_tracking(kwargs.get('tractography_backend'), 'ukf') or 'ukf_parameters' in kwargs:
         args.extend(('--ukf-parameters', json.dumps(kwargs.get('ukf_parameters', {}), sort_keys=True)))
         if kwargs.get('ukf_executable'):
             args.extend(('--ukf-executable', str(kwargs['ukf_executable'])))

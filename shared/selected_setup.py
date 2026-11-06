@@ -4,6 +4,9 @@ from shared.managed_runtimes import supported_platform, runtime_root
 from shared.ui_environment_panel import environment_missing_items
 
 
+PNL_UNSUPPORTED_TEXT = "Automatic brain mask is not available on this system yet. Provide a brain mask file (NIfTI)."
+
+
 def build_setup_plan(result, *, installed_extensions=(), loaded_extensions=None, need_dti=False, need_torch=False, need_ukf=False,
                      need_slicerdmri=False, brain_mask_backend="pnl_cnn", wma_atlas="org", gpu_available=False, system=None, machine=None,
                      existing_managed_profiles=(), repair=False, backend_paths=None):
@@ -53,6 +56,7 @@ def build_setup_plan(result, *, installed_extensions=(), loaded_extensions=None,
     supported_managed = [name for name in managed if supported_platform(system, machine, profiles=(name,))]
     unsupported_managed = [name for name in managed if name not in supported_managed]
     platforms_ok = supported_platform(system, machine)
+    unsupported_notes = {"pnl_cnn": PNL_UNSUPPORTED_TEXT} if "pnl_cnn" in unsupported_managed else {}
     covered = {"model-resources", "python", "slicer-runtime", "slicer-dmri", "ukf"}
     from shared.prebuilt_surface import bundle_for_platform
     surface_prebuilt = bundle_for_platform(system, machine)
@@ -140,9 +144,11 @@ def build_setup_plan(result, *, installed_extensions=(), loaded_extensions=None,
             "surface_download_bytes": surface_prebuilt['bytes'] if surface_install else 0,
             "surface_bundle_unavailable": bool(surface_needed and surface_prebuilt and not surface_bundle_available),
             "unsupported_profiles": unsupported_managed,
+            "unsupported_notes": unsupported_notes,
             "manual_items": [{"key": item.key, "label": item.label, "hint":
                               'Windows WMA needs a configured WSL executable bridge; an author Bash checkout alone is not runnable. See docs/setup/WINDOWS.md.'
                               if native_windows and item.install_group == 'wma' and 'atlas' not in item.key
+                              else PNL_UNSUPPORTED_TEXT if item.key == 'brain_mask_backend' and unsupported_notes
                               else item.install_hint}
                              for item in missing if item.install_group not in covered and item.key not in handled_keys],
             "fsl_license_required": any(name.startswith("fsl_") for name in managed) and platforms_ok,

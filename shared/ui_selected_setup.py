@@ -130,12 +130,15 @@ def _confirm(owner, plan):
                    "仅准备当前分析缺少的依赖，复用已有安装；不修改驱动、shell 或算法选择。")]
     parts.append(_text(owner, "First-use downloads may require several GB and network access. Cancellation keeps completed files for retry.",
                        "首次下载可能需要数 GB 空间及网络连接；取消后保留已完成文件供重试。"))
+    if plan.get("also_runs"):
+        parts.append(plan["also_runs"])
     if plan.get("repair"):
         parts.append(_text(owner, "Repair will reinstall selected plugin-managed tools. Existing administrator environments are not changed.",
                            "修复将重新安装所选的插件受管工具，不修改管理员或自行配置的环境。"))
     for key in ("extensions", "restart_extensions", "python_packages", "asset_profiles", "optional_asset_profiles", "managed_profiles", "unsupported_profiles"):
         if plan[key]:
             parts.append(key.replace("_", " ") + ": " + ", ".join(plan[key]))
+    parts.extend(plan.get("unsupported_notes", {}).values())
     from scripts.download_model_assets import _format_bytes
     parts.append(_text(owner, 'Models and resources: ', '模型和资源目录：') + plan['asset_root'])
     if plan.get('managed_profiles'):
@@ -238,7 +241,12 @@ def selected_setup_plan(owner, result, *, repair=False):
     from shared.selected_setup import build_setup_plan
     manager = slicer.app.extensionsManagerModel()
     installed, loaded = extension_states(manager, slicer.modules)
-    targets = set(result.targets)
+    # C2/K1: everything below follows the one closure the doctor and the run use (no second expansion).
+    from shared.target_closure import closure_notice, expand_closure
+    closure = owner._selected_closure()
+    if closure is None:  # no parameter node: the doctor result's targets are already closed
+        closure = expand_closure(result.targets)
+    targets = set(closure.targets)
     gpu = cuda_candidate()
     candidates = list(selected_profiles(owner._parameterNode, gpu))
     if (getattr(owner._parameterNode, "brainMaskBackend", "pnl_cnn") == "pnl_cnn" and
@@ -246,15 +254,20 @@ def selected_setup_plan(owner, result, *, repair=False):
         candidates.append("pnl_cnn")
     config = owner._environment_dependency_path_kwargs()
     existing = configured_profiles(config, candidates) if candidates else ()
-    from shared.algorithm_selection import contains_tracking
-    return build_setup_plan(result, installed_extensions=installed, loaded_extensions=loaded,
+    plan = build_setup_plan(result, installed_extensions=installed, loaded_extensions=loaded,
         need_dti=bool(targets & {"segmentation", "parcellation", "surface", "microstructure", "tractography", "wma"}),
         need_slicerdmri="wma" in targets,
         need_torch=bool(targets & {"segmentation", "parcellation", "surface", "tractcloud"}),
-        need_ukf="tractography" in targets and contains_tracking(owner._tractography_backend_text(), "ukf"),
+        need_ukf="tractography" in targets and "ukf" in closure.tractography_algorithms,
         brain_mask_backend=getattr(owner._parameterNode, "brainMaskBackend", "pnl_cnn"), gpu_available=gpu,
         wma_atlas=getattr(owner._parameterNode, "wmaAtlas", "org"),
         existing_managed_profiles=existing, repair=repair, backend_paths=config)
+    # C4: the result's targets are already closed, so the owner (which knows what was ticked) words the notice.
+    notice = getattr(owner, "_closure_notice_text", None)
+    notice = notice() if callable(notice) else ""
+    plan["also_runs"] = notice if isinstance(notice, str) else closure_notice(closure)
+    plan["closure_targets"] = list(closure.targets)
+    return plan
 
 
 def prepare_selected_environment(owner, result=None, *, repair=False):

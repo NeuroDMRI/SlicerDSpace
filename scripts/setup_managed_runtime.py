@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import platform
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -27,7 +28,8 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         user_config = None
-        if args.execute:
+        # R-N3: the config only serves the MRtrix migration, which exists on macOS (the tarball profile).
+        if args.execute and platform.system() == "Darwin" and "mrtrix" in args.profiles:
             from shared.user_config import load_user_config
             user_config = load_user_config(args.user_config)
         result = provision(args.profiles, root=args.root, conda=args.conda,

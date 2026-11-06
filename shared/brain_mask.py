@@ -369,7 +369,7 @@ def generate_brain_mask(dwi_path: Path, bval_path: Path, bvec_path: Path, output
         else:
             command = [tools["dwi2mask"], str(paths[0]), str(candidate), "-fslgrad", str(paths[2]), str(paths[1]), "-force"]
         env = external_python_environment(env_extra, path_prepend=prepend)
-        if config.backend == "mrtrix":  # dwi2mask is an MRtrix Python script: it needs the managed `python` shim
+        if config.backend == "mrtrix":  # MRtrix 3.0.8 dwi2mask is a binary, so the shim is harmless; one helper builds the PATH
             env = managed_tool_environment(env_extra, mrtrix_bin_dir=Path(tools["dwi2mask"]).parent, path_prepend=prepend)
         if config.backend == "pnl_cnn":
             from shared.managed_pnl import pnl_python_environment

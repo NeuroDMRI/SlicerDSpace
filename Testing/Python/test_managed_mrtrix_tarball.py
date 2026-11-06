@@ -186,6 +186,18 @@ class InstallTests(MrtrixTarballBase):
         fifo.type = tarfile.FIFOTYPE
         self.unsafe([(fifo, None)])
 
+    def test_python_without_a_tar_filter_refuses_to_unpack(self):
+        """R-N1 (guard): no lexical-only fallback; the archive is not opened and nothing is written."""
+        without_filter = SimpleNamespace(open=tarfile.open)  # a tarfile module that has no data_filter
+        destination = Path(self.temp.name) / 'unpacked'
+        destination.mkdir()
+        with patch.object(runtime, 'tarfile', without_filter), self.assertRaisesRegex(RuntimeError, 'no tarfile extraction filter'):
+            runtime._safe_extract(self.source, destination, 'mrtrix3')
+        self.assertEqual(list(destination.iterdir()), [])
+        with patch.object(runtime, 'tarfile', without_filter), self.download(), self.fake_tools():
+            self.assertIn('no tarfile extraction filter', self.provision_failure())
+        self.assertFalse(self.prefix.exists())
+
     def test_links_inside_the_folder_are_allowed(self):
         archive = Path(self.temp.name) / 'links.tar.gz'
         build_tarball(archive, extra=[link('mrtrix3/bin/mrcat', 'mrconvert'), link('mrtrix3/lib/libx', '../bin/mrconvert')])

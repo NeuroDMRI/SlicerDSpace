@@ -30,6 +30,8 @@ class CondaArchitectureTests(unittest.TestCase):
 
     def rosetta(self):
         """Only for tests that exercise the sysctl path itself."""
+        platform_info._apple_silicon_host.cache_clear()  # R-N4: sysctl is cached per process
+        self.addCleanup(platform_info._apple_silicon_host.cache_clear)
         for patcher in apple_silicon_under_rosetta():
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -187,6 +189,48 @@ class CondaArchitectureTests(unittest.TestCase):
             (prefix / 'conda-meta/python.json').write_text(json.dumps(dict(record, subdir='noarch')))
             self.assertEqual(set(runtime.verify_prefix('fsl_cpu', prefix)['command_sha256']),
                              {'eddy', 'eddy_cpu', 'topup'})
+
+
+class GateAndConfigTests(unittest.TestCase):
+    def test_macos_gate_message_names_mrtrix_and_fsl(self):
+        """R-N7: every gated profile (DARWIN_PROFILES = mrtrix, fsl_cpu) is named."""
+        self.assertEqual(runtime.DARWIN_PROFILES, {'mrtrix', 'fsl_cpu'})
+        plan = {'platform_supported': True, 'root': '/nowhere', 'prefixes': {}, 'profiles': [],
+                'fsl_license_required': False}
+        with patch.object(runtime, 'install_plan', return_value=plan), \
+                patch.object(runtime.platform, 'system', return_value='Darwin'), \
+                patch.object(runtime.platform, 'mac_ver', return_value=('14.0', ('', '', ''), '')), \
+                self.assertRaises(RuntimeError) as context:
+            runtime.provision(('mrtrix', 'fsl_cpu'), root=Path('/nowhere'))
+        message = str(context.exception)
+        self.assertIn('14.5', message)
+        self.assertIn('MRtrix', message)
+        self.assertIn('FSL', message)
+
+    def run_script(self, system, profiles):
+        import importlib.util
+        scripts = Path(__file__).resolve().parents[2] / 'scripts'
+        spec = importlib.util.spec_from_file_location('setup_managed_runtime_under_test', scripts / 'setup_managed_runtime.py')
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with patch.object(module.platform, 'system', return_value=system), \
+                patch.object(module, 'provision', return_value={'status': 'completed'}) as provision, \
+                patch('shared.user_config.load_user_config', return_value={'external_dependencies': {}}) as load, \
+                patch.object(module, 'print'):
+            code = module.main(['--profiles', *profiles, '--execute'])
+        return code, load, provision
+
+    def test_user_config_is_read_only_where_the_mrtrix_migration_exists(self):
+        """R-N3 (guard): macOS with the mrtrix profile loads the config; Linux and other profiles do not."""
+        code, load, provision = self.run_script('Darwin', ['mrtrix'])
+        self.assertEqual(code, 0)
+        load.assert_called_once()
+        self.assertEqual(provision.call_args.kwargs['user_config'], {'external_dependencies': {}})
+        for system, profiles in (('Linux', ['mrtrix']), ('Darwin', ['fsl_cpu'])):
+            code, load, provision = self.run_script(system, profiles)
+            self.assertEqual(code, 0)
+            load.assert_not_called()
+            self.assertIsNone(provision.call_args.kwargs['user_config'])
 
 
 if __name__ == '__main__':

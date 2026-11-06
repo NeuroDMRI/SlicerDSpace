@@ -17,7 +17,12 @@ def sysctl(values):
 
 
 class PlatformInfoTests(unittest.TestCase):
+    def setUp(self):
+        platform_info._apple_silicon_host.cache_clear()
+        self.addCleanup(platform_info._apple_silicon_host.cache_clear)
+
     def host(self, system, machine, values=None):
+        platform_info._apple_silicon_host.cache_clear()
         with patch.object(platform_info.platform, "system", return_value=system), \
                 patch.object(platform_info.platform, "machine", return_value=machine), \
                 patch.object(platform_info.subprocess, "run", side_effect=sysctl(values or {})) as run:
@@ -47,6 +52,31 @@ class PlatformInfoTests(unittest.TestCase):
                 patch.object(platform_info.platform, "machine", return_value="x86_64"), \
                 patch.object(platform_info.subprocess, "run", side_effect=OSError("no sysctl")):
             self.assertEqual(platform_info.host_machine(), "x86_64")
+
+
+    def test_sysctl_runs_from_the_system_path_when_it_exists(self):
+        """R-N4: a `sysctl` found through PATH must not answer for the host."""
+        with patch.object(platform_info.os.path, "exists", return_value=True), \
+                patch.object(platform_info.platform, "system", return_value="Darwin"), \
+                patch.object(platform_info.platform, "machine", return_value="x86_64"), \
+                patch.object(platform_info.subprocess, "run", side_effect=sysctl({"sysctl.proc_translated": "1"})) as fixed:
+            platform_info.host_machine()
+        self.assertEqual(fixed.call_args_list[0].args[0], ["/usr/sbin/sysctl", "-n", "sysctl.proc_translated"])
+
+    def test_bare_sysctl_name_is_the_fallback_when_the_system_path_is_absent(self):
+        with patch.object(platform_info.os.path, "exists", return_value=False), \
+                patch.object(platform_info.platform, "system", return_value="Darwin"), \
+                patch.object(platform_info.platform, "machine", return_value="x86_64"), \
+                patch.object(platform_info.subprocess, "run", side_effect=sysctl({"sysctl.proc_translated": "1"})) as bare:
+            self.assertEqual(platform_info.host_machine(), "arm64")
+        self.assertEqual(bare.call_args_list[0].args[0][0], "sysctl")
+
+    def test_host_machine_asks_sysctl_once_per_process(self):
+        with patch.object(platform_info.platform, "system", return_value="Darwin"), \
+                patch.object(platform_info.platform, "machine", return_value="x86_64"), \
+                patch.object(platform_info.subprocess, "run", side_effect=sysctl({"sysctl.proc_translated": "1"})) as run:
+            self.assertEqual([platform_info.host_machine() for _ in range(5)], ["arm64"] * 5)
+        self.assertEqual(run.call_count, 1)  # proc_translated answered; hw.optional.arm64 was never needed
 
 
 if __name__ == "__main__":

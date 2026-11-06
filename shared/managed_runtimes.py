@@ -270,16 +270,17 @@ def _unsafe_member(member, top_level):
 
 
 def _safe_extract(archive, destination, top_level):
+    # R-N1: no lexical-only fallback. Slicer's Python 3.12 has the "data" filter; any other Python refuses.
+    if not hasattr(tarfile, "data_filter"):
+        raise RuntimeError("This Python has no tarfile extraction filter (Python 3.12 or a patched release is needed); "
+                           "the MRtrix3 archive was not unpacked")
     with tarfile.open(archive, "r:gz") as tar:
         members = tar.getmembers()
         for member in members:
             reason = _unsafe_member(member, top_level)
             if reason:
                 raise RuntimeError(f"Unsafe archive member {member.name!r}: {reason}; nothing was unpacked")
-        if hasattr(tarfile, "data_filter"):
-            tar.extractall(destination, members=members, filter="data")
-        else:  # Python without extraction filters: the members were validated above
-            tar.extractall(destination, members=members)
+        tar.extractall(destination, members=members, filter="data")
 
 
 def _download_tarball(info, downloads):
@@ -458,7 +459,7 @@ def provision(profiles, *, root=None, conda=None, accept_fsl_license=False, acce
     if not plan["platform_supported"]:
         raise RuntimeError("No qualified managed package for the selected platform/profile combination")
     if platform.system() == 'Darwin' and platform.mac_ver()[0] and tuple(map(int, platform.mac_ver()[0].split('.')[:2])) < (14, 5):
-        raise RuntimeError('The qualified MRtrix macOS package requires macOS 14.5 or later')
+        raise RuntimeError('The qualified macOS packages (MRtrix3 and FSL) require macOS 14.5 or later')
     if plan["fsl_license_required"] and not accept_fsl_license:
         raise PermissionError("Read and explicitly accept the FSL license before installing: " + FSL_TERMS_URL)
     if "pnl_cnn" in profiles and not accept_pnl_terms:

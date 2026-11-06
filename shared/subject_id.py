@@ -31,7 +31,8 @@ def derive_subject_id(input_text: str) -> str:
             if lowered.endswith(suffix):
                 name = name[: -len(suffix)]
                 break
-    return _UNSAFE.sub("_", name)
+    name = _UNSAFE.sub("_", name)
+    return "" if name in (".", "..") else name  # Q6: again after the suffix strip and sanitising
 
 
 def effective_subject_id(typed_id: str, input_text: str) -> str:

@@ -64,3 +64,14 @@ class InputExecutionGateTests(unittest.TestCase):
                     'sub-gate', root, targets=('validation', 'wma'), execute=True, resume=True,
                     brain_mask_backend='provided'))
             self.assertEqual(next(task for task in result.tasks if task.name == 'bundles.wma').status, 'skipped')
+
+    def test_bad_raw_input_still_blocks_wma_when_the_existing_result_is_not_current(self):
+        # F1: the resume reuse applies only when _wma_complete verifies the existing result.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = subject(Path(tmp))
+            (root / 'input/bvals').write_text('0 1000 1000 inf')
+            with mock.patch('shared.orchestrator._wma_complete', return_value=False):
+                result = run_subject_products(ProductOrchestratorConfig(
+                    'sub-gate', root, targets=('validation', 'wma'), execute=True, resume=True,
+                    brain_mask_backend='provided'))
+            self.assertEqual(next(task for task in result.tasks if task.name == 'bundles.wma').status, 'blocked')

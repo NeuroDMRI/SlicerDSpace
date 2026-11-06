@@ -4608,16 +4608,19 @@ def _run_subject_products_impl(
         wma_summary = _wma_output_summary(wma_dir)
         anatomical_tract_count = int(wma_summary.get("anatomical_tract_count", 0) or 0)
         nonempty_tract_count = int(wma_summary.get("anatomical_tract_nonempty_count", 0) or 0)
-        if bundle_source_invalid or bundle_conversion_error:
-            tasks.append(ProductTaskRecord(name='bundles.wma', status='blocked', reason=bundle_conversion_error or 'selected tractography did not pass current-run QC'))
-        elif ukf_upstream_invalid and config.wma_input_tractography is None:
-            tasks.append(ProductTaskRecord(name='bundles.wma', status='blocked', reason='current UKF run is not QC-valid'))
-        elif config.resume and _wma_complete(
+        wma_resume_complete = bool(config.resume and _wma_complete(
             wma_dir,
             input_tractography=wma_input_tractography,
             atlas_dir=config.wma_atlas_dir,
             atlas_family=config.wma_atlas,
-        ):
+        ))
+        if bundle_source_invalid or bundle_conversion_error:
+            tasks.append(ProductTaskRecord(name='bundles.wma', status='blocked', reason=bundle_conversion_error or 'selected tractography did not pass current-run QC'))
+        elif ukf_upstream_invalid and config.wma_input_tractography is None and not wma_resume_complete:
+            # F1: a complete WMA result stays reusable. _wma_complete checks the path, size and
+            # mtime of its input tractogram against the WMA manifest, so it is not a stale result.
+            tasks.append(ProductTaskRecord(name='bundles.wma', status='blocked', reason='current UKF run is not QC-valid'))
+        elif wma_resume_complete:
             tasks.append(
                 ProductTaskRecord(
                     name="bundles.wma",

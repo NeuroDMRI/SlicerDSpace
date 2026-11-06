@@ -6,6 +6,8 @@ All tests are pure or mocked: no numpy, nibabel or Slicer is needed.
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import sys
 import tempfile
@@ -170,6 +172,20 @@ class C2ConsumersTest(unittest.TestCase):
         self.assertNotIn("UKFTractography", plan["extensions"])
 
 
+class N3SetupPlanFallbackDoesNotExpandTest(unittest.TestCase):
+    def test_n3_fallback_with_the_doctor_shape_adds_no_segmentation_parcellation_or_torch(self) -> None:
+        owner = mock.Mock()
+        owner._selected_closure.return_value = None
+        owner._parameterNode = SimpleNamespace(brainMaskBackend="provided")
+        owner._environment_dependency_path_kwargs.return_value = {}
+        owner._closure_notice_text.return_value = ""
+        result = SimpleNamespace(statuses=(), targets=("validation", "tractography", "wma"), blocker_count=0)
+        plan = _plan_for_setup(owner, result)
+        self.assertNotIn("PyTorch", plan["extensions"])
+        self.assertEqual(plan["asset_profiles"], [])
+        self.assertEqual(plan["closure_targets"], ["validation", "tractography", "wma"])
+
+
 class C2GuiPathKeepsProvenanceTest(unittest.TestCase):
     def test_gui_bundles_all_selection_gives_the_cli_the_user_backend_and_keeps_ukf_variant_minimal(self) -> None:
         from shared import ui_run_controller as controller
@@ -332,6 +348,17 @@ class C6SubjectIdTest(unittest.TestCase):
             folder.mkdir()
             self.assertEqual(derive_subject_id(str(folder)), "M_ller_01__a_")
             self.assertEqual(derive_subject_id(str(Path(tmp) / "a.b-c_d")), "a.b-c_d")
+
+    def test_q6_dot_names_after_the_suffix_strip_give_an_empty_id(self) -> None:
+        from shared.subject_id import derive_subject_id
+        with tempfile.TemporaryDirectory() as tmp:
+            for name in ("..nii.gz", "...nii", ".nii.gz"):
+                path = Path(tmp) / name
+                path.write_text("x")
+                with self.subTest(name=name):
+                    self.assertNotIn(derive_subject_id(str(path)), (".", ".."))
+            self.assertEqual(derive_subject_id(str(Path(tmp) / "..nii.gz")), "")
+            self.assertEqual(derive_subject_id(str(Path(tmp) / "...nii")), "")
 
     def test_typed_id_wins_and_empty_input_gives_empty_id(self) -> None:
         from shared.subject_id import derive_subject_id, effective_subject_id
@@ -547,13 +574,18 @@ class K4SavedDefaultsHoldTheUsersTicksTest(unittest.TestCase):
             self.assertNotIn(name, targets)
 
     def test_k4_cli_save_user_config_saves_only_the_requested_targets(self) -> None:
-        from shared.run_subject_pipeline_cli import build_parser, resolve_analysis_options
-        from shared.user_config import user_config_from_cli_args
-        args = build_parser().parse_args(["--subject-root", "/none/s", "--targets", "connectome", "--save-user-config", "x.json"])
-        targets = resolve_analysis_options(args)
-        self.assertIn("tractography", targets)
-        payload = user_config_from_cli_args(args, resolved_targets=args.requested_targets, resolved_stages=("dti",))
-        self.assertEqual(payload["run_defaults"]["targets"], ["connectome"])
+        from shared import run_subject_pipeline_cli as cli
+        written: list = []
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.object(cli, "write_user_config", side_effect=lambda payload, path: written.append(payload) or path), \
+                mock.patch.object(cli, "_run_environment_doctor_from_args",
+                                  return_value=(SimpleNamespace(to_dict=lambda: {}), {})), \
+                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            code = cli.main(["--subject-root", str(Path(tmp) / "s"), "--targets", "connectome", "--no-user-config",
+                             "--save-user-config", str(Path(tmp) / "x.json"), "--doctor"])
+        self.assertEqual(code, 0)
+        self.assertEqual(len(written), 1)
+        self.assertEqual(written[0]["run_defaults"]["targets"], ["connectome"])
 
 
 class K5SkippedTargetsAreNeverExpandedTest(unittest.TestCase):
@@ -725,6 +757,23 @@ class Q4SafAlgorithmIsRequestedTest(unittest.TestCase):
         # A saf target added by another rule keeps its provenance.
         added = expand_closure(("tractography",), tractography_algorithms=("csd_act",))
         self.assertNotIn("saf", added.targets)
+
+    def test_q4_cli_connectome_with_the_saf_backend_requests_saf(self) -> None:
+        from shared.run_subject_pipeline_cli import _resolve_closure, build_parser
+        args, _ = build_parser().parse_known_args(
+            ["--subject-root", "/none", "--targets", "connectome", "--tractography-backend", "saf"])
+        closure, _exclude = _resolve_closure(args)
+        self.assertIn("tractography", closure.targets)
+        self.assertIn("saf", closure.requested)
+        self.assertEqual(closure.provenance("saf"), {"requested": True, "required_by": []})
+        self.assertNotIn("saf", closure.added)
+        self.assertNotIn("SAF (needed", closure_notice(closure))  # SAF may be named as a requester only
+        self.assertIn("surface_postprocess", closure.targets)
+
+    def test_q4_a_skipped_saf_stays_out(self) -> None:
+        closure = expand_closure(("connectome",), tractography_algorithms=("saf",), excluded=("saf",))
+        self.assertNotIn("saf", closure.targets)
+        self.assertNotIn("saf", closure.requested)
 
 
 class Q5Q6Q7SmallFixesTest(unittest.TestCase):

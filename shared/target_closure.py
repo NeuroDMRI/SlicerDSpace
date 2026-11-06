@@ -188,8 +188,6 @@ def expand_closure(
     requested = {target for target in _expand_selection(
         tuple(t for t in requested_raw if t not in skip), tuple(bundle_backends),
         microstructure_free_water, microstructure_noddi, microstructure_dki) if target not in skip}
-    if "tractography" in requested and "saf" in algorithms and "saf" not in skip:
-        requested.add("saf")  # Q4: picking the SAF tracking algorithm requests the saf target
     selected = set(requested)
     added_algorithms: dict = {}
     provided = frozenset(provided_tractography)
@@ -209,6 +207,11 @@ def expand_closure(
                     selected.add(needed)
                     changed = True
 
+    if "saf" in algorithms and "tractography" in selected and "saf" not in skip:
+        # Q4: picking the SAF tracking algorithm requests the saf target, whether tractography
+        # was ticked or only added by the closure (the user chose the SAF backend by hand).
+        requested.add("saf")
+        selected.add("saf")
     final = tuple(target for target in TARGET_ORDER if target in selected)
     required_by: dict = {}
     for target in final:

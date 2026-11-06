@@ -143,8 +143,8 @@ def run_needs_brain_mask(subject_root: Path, *, targets, subject_id: str, output
     if not raw:
         from shared.dicom_input import is_dicom_root
         raw = is_dicom_root(subject_root)
-    mask_targets = {'preprocessing', 'segmentation', 'parcellation', 'surface', 'microstructure',
-                    'microstructure_freewater', 'microstructure_noddi', 'microstructure_dki', 'tractography'}
+    from shared.target_closure import MASK_TARGETS
+    mask_targets = set(MASK_TARGETS)
     required = raw and bool(mask_targets.intersection(targets)) and not (input_dir / 'nodif_brain_mask.nii.gz').is_file()
     generates_mask = preprocessing_backend != 'dipy' or denoise_method != 'none' or run_gibbs or run_motion
     if raw and 'preprocessing' in targets and brain_mask_backend != 'provided' and generates_mask:

@@ -654,7 +654,7 @@ class SharedWidgetMixin:
             except Exception:
                 continue
             settings.setValue(self._user_settings_key(attribute), value)
-        targets = list(self._selected_product_targets())
+        targets = list(self._requested_product_targets())  # K4: the user's ticks, not the closed set
         stages = list(canonical_microstructure_stages(node.orchestrationMicrostructureStages or "dti"))
         external_dependencies = {
             item["id"]: self._read_environment_path_setting(item["id"]) or None
@@ -2201,7 +2201,19 @@ class SharedWidgetMixin:
             microstructure_freewater=freewater,
             microstructure_noddi=noddi,
             microstructure_dki=self._microstructure_dki_enabled(),
+            provided_tractography=self._provided_tractography(),
         )
+
+    def _provided_tractography(self) -> tuple[str, ...]:
+        """K2: targets whose tractogram file the user supplied (same set the CLI builds).
+
+        The GUI has one input-tractogram parameter, ``wmaInputTractography``; there is none for
+        TractCloud or SAF.
+        """
+        node = self._parameterNode
+        if node and str(getattr(node, "wmaInputTractography", "") or "").strip():
+            return ("wma",)
+        return ()
 
     def _selected_product_targets(self) -> tuple[str, ...]:
         closure = self._selected_closure()

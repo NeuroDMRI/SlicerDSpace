@@ -557,6 +557,7 @@ def orchestrator_closure(
     microstructure_run_dki: bool = False,
     wma_source_explicit: bool = False,
     provided_tractography: tuple[str, ...] = (),
+    excluded: tuple[str, ...] = (),
 ):
     """Return the prerequisite closure (see ``shared.target_closure``) of the selected targets."""
 
@@ -570,6 +571,7 @@ def orchestrator_closure(
         microstructure_dki=microstructure_run_dki,
         wma_source_explicit=wma_source_explicit,
         provided_tractography=provided_tractography,
+        excluded=excluded,
     )
 
 
@@ -939,12 +941,12 @@ def _with_closure(config: ProductOrchestratorConfig) -> ProductOrchestratorConfi
         microstructure_run_dki=config.microstructure_run_dki,
         wma_source_explicit=bool(config.bundle_tractography_backend),
         provided_tractography=_provided_tractography(config),
+        excluded=config.excluded_targets,  # K5: skipped targets are never added or expanded
     )
     from shared.target_closure import provenance_map
     required_by = {target: tuple(value) for target, value in
                    provenance_map(closure, config.target_required_by).items() if target in closure.targets}
-    targets = tuple(target for target in closure.targets if target not in config.excluded_targets)
-    required_by = {target: value for target, value in required_by.items() if target in targets}
+    targets = closure.targets
     backend = config.tractography_backend
     if "tractography" in targets:
         backend = closure.algorithms_text
@@ -963,7 +965,17 @@ def closure_notice_for(config: ProductOrchestratorConfig) -> str:
     ordered = {target: required_by[target] for target in config.targets if target in required_by}
     return closure_notice(Closure(
         targets=tuple(config.targets), tractography_algorithms=algorithms(config.tractography_backend),
-        requested=tuple(t for t in config.targets if t not in ordered), required_by=ordered))
+        requested=tuple(t for t in config.targets if t not in ordered), required_by=ordered,
+        added_algorithms={key: tuple(value) for key, value in config.closure_algorithm_requesters.items()}))
+
+
+def _upstream_reason(selected, upstream: str, missing_text: str) -> str:
+    """Q2: a stage that is already in this run must not be told to "select" it."""
+
+    if upstream in selected:
+        from shared.target_closure import DISPLAY_NAMES
+        return f"{DISPLAY_NAMES.get(upstream, upstream)} is in this run but produced no output (see its task)"
+    return missing_text
 
 
 REGIONAL_STATISTICS_SKIPPED = "skipped_no_parcellation"
@@ -2469,7 +2481,7 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
             if config.resume and _microstructure_freewater_complete(subject_root, config.subject_id, output_root, config=config):
                 add(target, "skipped", "completed Free Water outputs found", "reuse", inputs=analysis_inputs, outputs=freewater_outputs, dependencies={"microstructure": "available" if dti_ready else None})
             elif not dti_ready:
-                add(target, "blocked", "missing Microstructure DTI outputs; select microstructure or provide existing output", "upstream", inputs=raw, outputs=freewater_outputs, dependencies={"microstructure": "missing"}, provides=False)
+                add(target, "blocked", _upstream_reason(selected, "microstructure", "missing Microstructure DTI outputs; select microstructure or provide existing output"), "upstream", inputs=raw, outputs=freewater_outputs, dependencies={"microstructure": "missing"}, provides=False)
             elif not raw_input_block(target, freewater_outputs):
                 add(target, "will_run", "ready to run Microstructure Free Water", "runnable", inputs=analysis_inputs, outputs=freewater_outputs, dependencies={"microstructure": "available" if _microstructure_dti_complete(subject_root, config.subject_id, output_root) else "will_run"})
             continue
@@ -2479,7 +2491,7 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
             if config.resume and _microstructure_noddi_complete(subject_root, config.subject_id, output_root, config=config):
                 add(target, "skipped", "completed NODDI outputs found", "reuse", inputs=analysis_inputs, outputs=noddi_outputs, dependencies={"microstructure": "available" if dti_ready else None})
             elif not dti_ready:
-                add(target, "blocked", "missing Microstructure DTI outputs; select microstructure or provide existing output", "upstream", inputs=raw, outputs=noddi_outputs, dependencies={"microstructure": "missing"}, provides=False)
+                add(target, "blocked", _upstream_reason(selected, "microstructure", "missing Microstructure DTI outputs; select microstructure or provide existing output"), "upstream", inputs=raw, outputs=noddi_outputs, dependencies={"microstructure": "missing"}, provides=False)
             elif not raw_input_block(target, noddi_outputs):
                 add(target, "will_run", "ready to run Microstructure NODDI", "runnable", inputs=analysis_inputs, outputs=noddi_outputs, dependencies={"microstructure": "available" if _microstructure_dti_complete(subject_root, config.subject_id, output_root) else "will_run"})
             continue
@@ -2550,10 +2562,10 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
             elif raw_input_block(target, tractography_outputs):
                 pass
             elif primary_tractography_backend == "csd_act" and not segmentation_ready:
-                add(target, "blocked", "missing DDSeg segmentation; select segmentation or provide existing output", "upstream", inputs=raw, outputs=tractography_outputs, dependencies={"segmentation": "missing"}, provides=False)
+                add(target, "blocked", _upstream_reason(selected, "segmentation", "missing DDSeg segmentation; select segmentation or provide existing output"), "upstream", inputs=raw, outputs=tractography_outputs, dependencies={"segmentation": "missing"}, provides=False)
             elif (primary_tractography_backend == "csd_act" and not config.allow_act_ddseg_only
                   and parcellation is None and not available.get("parcellation", False)):
-                add(target, "blocked", "missing DDParcel anatomical labels for ACT; select parcellation or provide existing output", "upstream", inputs=raw, outputs=tractography_outputs, dependencies={"parcellation": "missing"}, provides=False)
+                add(target, "blocked", _upstream_reason(selected, "parcellation", "missing DDParcel anatomical labels for ACT; select parcellation or provide existing output"), "upstream", inputs=raw, outputs=tractography_outputs, dependencies={"parcellation": "missing"}, provides=False)
             else:
                 add(target, "will_run", f"ready to run tractography backend {config.tractography_backend}", "runnable", inputs=analysis_inputs, outputs=tractography_outputs, dependencies={"segmentation": "available" if segmentation is not None else ("will_run" if available.get("segmentation", False) else None)})
             continue
@@ -2577,9 +2589,9 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
             ):
                 add(target, "skipped", "completed outputs found", "reuse", outputs=wmql_outputs, dependencies={"parcellation": "available", "tractogram": "available"})
             elif not parcellation_ready:
-                add(target, "blocked", "missing parcellation; select parcellation or provide existing output", "upstream", outputs=wmql_outputs, dependencies={"parcellation": "missing"}, provides=False)
+                add(target, "blocked", _upstream_reason(selected, "parcellation", "missing parcellation; select parcellation or provide existing output"), "upstream", outputs=wmql_outputs, dependencies={"parcellation": "missing"}, provides=False)
             elif not tractogram_ready:
-                add(target, "blocked", "missing TRK tractogram; select tractography or provide existing output", "upstream", outputs=wmql_outputs, dependencies={"tractogram": "missing"}, provides=False)
+                add(target, "blocked", _upstream_reason(selected, "tractography", "missing TRK tractogram; select tractography or provide existing output"), "upstream", outputs=wmql_outputs, dependencies={"tractogram": "missing"}, provides=False)
             else:
                 add(target, "will_run", "ready to run WMQL bundles", "runnable", inputs={"tractogram_trk": tractogram_trk, "parcellation": parcellation}, outputs=wmql_outputs, dependencies={"parcellation": "available" if parcellation is not None else "will_run", "tractogram": "available" if tractogram_trk.is_file() else "will_run"})
             continue
@@ -2722,9 +2734,9 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
             ):
                 add(target, "skipped", "completed outputs found", "reuse", outputs=conn_outputs)
             elif not parcellation_ready:
-                add(target, "blocked", "missing parcellation; select parcellation or provide existing output", "upstream", outputs=conn_outputs, dependencies={"parcellation": "missing"}, provides=False)
+                add(target, "blocked", _upstream_reason(selected, "parcellation", "missing parcellation; select parcellation or provide existing output"), "upstream", outputs=conn_outputs, dependencies={"parcellation": "missing"}, provides=False)
             elif not tractogram_ready:
-                add(target, "blocked", "missing tractogram; select tractography or provide existing output", "upstream", outputs=conn_outputs, dependencies={"tractogram": "missing"}, provides=False)
+                add(target, "blocked", _upstream_reason(selected, "tractography", "missing tractogram; select tractography or provide existing output"), "upstream", outputs=conn_outputs, dependencies={"tractogram": "missing"}, provides=False)
             elif primary_tractography_backend != "csd_act" and config.connectome_backend == "mrtrix":
                 add(target, "blocked", "UKF/DTI tractography currently supports python connectome backend only", "configuration", outputs=conn_outputs, provides=False)
             else:
@@ -3945,13 +3957,18 @@ def _run_subject_products_impl(
         micro_outputs = _microstructure_dti_outputs(subject_root, config.subject_id, output_root)
         freewater_outputs = _microstructure_freewater_outputs(subject_root, config.subject_id, output_root)
         noddi_outputs = _microstructure_noddi_outputs(subject_root, config.subject_id, output_root)
-        if config.resume and _microstructure_dti_complete(subject_root, config.subject_id, output_root, fit_method=config.microstructure_fit_method):
+        # K6: when a parcellation is available to this run, outputs without ROI statistics are not complete.
+        roi_statistics_missing = parcellation is not None and not (
+            layout.regional_microstructure / f"{config.subject_id}_ROIWise-Microstructure.json").is_file()
+        if (config.resume and not roi_statistics_missing
+                and _microstructure_dti_complete(subject_root, config.subject_id, output_root, fit_method=config.microstructure_fit_method)):
             outputs = {key: path.as_posix() for key, path in micro_outputs.items() if key != "manifest"}
             tasks.append(
                 ProductTaskRecord(
                     name="microstructure.dti",
                     status="skipped",
                     reason="completed DTI microstructure outputs found",
+                    regional_statistics=regional_statistics_note(parcellation, log),  # K6: keep the C8 status on resume
                     manifest_path=micro_outputs["manifest"],
                     qc_path=micro_outputs["qc"],
                     outputs=outputs,
@@ -5172,9 +5189,10 @@ def run_subject_products(
     """Run products while preserving a failed manifest if any stage raises."""
 
     try:
+        fresh_closure = not config.closure_applied  # Q1: multi-tracking children arrive already closed
         config = _with_closure(config)
         notice = closure_notice_for(config)
-        if notice and config.execute:
+        if fresh_closure and notice and config.execute:
             # Plan-only runs keep stdout as pure JSON, so the notice is written for real runs only.
             _emit("[Targets] " + notice, log)
         _validate_bundle_tractography_source(config)

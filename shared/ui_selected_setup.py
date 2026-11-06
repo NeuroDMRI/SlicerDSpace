@@ -241,10 +241,11 @@ def selected_setup_plan(owner, result, *, repair=False):
     from shared.selected_setup import build_setup_plan
     manager = slicer.app.extensionsManagerModel()
     installed, loaded = extension_states(manager, slicer.modules)
-    # C2: everything below follows the prerequisite closure, never the bare ticked set.
-    from shared.algorithm_selection import algorithms
+    # C2/K1: everything below follows the one closure the doctor and the run use (no second expansion).
     from shared.target_closure import closure_notice, expand_closure
-    closure = expand_closure(result.targets, tractography_algorithms=algorithms(owner._tractography_backend_text()))
+    closure = owner._selected_closure()
+    if closure is None:  # no parameter node: the doctor result's targets are already closed
+        closure = expand_closure(result.targets)
     targets = set(closure.targets)
     gpu = cuda_candidate()
     candidates = list(selected_profiles(owner._parameterNode, gpu))

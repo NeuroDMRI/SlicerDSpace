@@ -14,6 +14,10 @@ Rules (applied until nothing changes):
 * tractcloud                                -> tractography
 * wma                                       -> tractography, with ``ukf`` added to
                                                the tractography algorithms
+* a supplied tractogram file removes the ``tractography`` prerequisite of wma and
+  tractcloud only. SAF keeps it: the tractography stage makes the CSD FOD that SAF
+  needs, and the SAF stage still uses the supplied tractogram (K3).
+* ``excluded`` targets (``--skip-targets``) are never added and never expanded (K5).
 * tractography with csd_act (or saf)        -> segmentation, parcellation
 * tractography with saf                     -> surface_postprocess, saf
 * preprocessing is never added.
@@ -62,6 +66,9 @@ STATIC_REQUIREMENTS = {
     "tractcloud": ("tractography",),
     "wma": ("tractography",),
 }
+
+# Targets whose tractography prerequisite a supplied tractogram file replaces.
+PROVIDED_TRACTOGRAM_TARGETS = ("wma", "tractcloud")
 
 # Algorithms of the tractography target that pull in the ACT anatomy.
 ACT_ALGORITHMS = ("csd_act", "saf")
@@ -135,11 +142,12 @@ def _expand_selection(targets, bundle_backends, free_water, noddi, dki) -> list[
 def requirements(target: str, algorithms: Iterable[str], provided_tractography: Iterable[str] = ()) -> tuple[str, ...]:
     """Targets that ``target`` needs, given the tractography algorithm set.
 
-    ``provided_tractography`` names targets (wma, tractcloud, saf) whose tractogram the user
-    supplies as a file; they do not need the tractography target.
+    ``provided_tractography`` names targets (wma, tractcloud) whose tractogram the user
+    supplies as a file; they do not need the tractography target. ``saf`` is not among
+    them: SAF needs the CSD FOD that only the tractography stage makes (K3).
     """
     needed = list(STATIC_REQUIREMENTS.get(target, ()))
-    if target in set(provided_tractography):
+    if target in set(provided_tractography) and target in PROVIDED_TRACTOGRAM_TARGETS:
         needed = [name for name in needed if name != "tractography"]
     if target == "tractography":
         selected = set(algorithms)
@@ -160,8 +168,12 @@ def expand_closure(
     microstructure_dki: bool = False,
     wma_source_explicit: bool = False,
     provided_tractography: Iterable[str] = (),
+    excluded: Iterable[str] = (),
 ) -> Closure:
     """Return the prerequisite closure of ``targets``.
+
+    ``excluded`` is the skip set: an excluded target is never requested or added, and its
+    own requirements are never expanded (K5).
 
     ``wma_source_explicit`` is True when the user chose the tractography source
     of the bundle targets by hand; the closure then does not add ``ukf``.
@@ -172,12 +184,17 @@ def expand_closure(
     unknown = sorted(set(requested_raw) - set(TARGET_ORDER))
     if unknown:
         raise ValueError(f"Unsupported orchestrator target(s): {', '.join(unknown)}")
-    requested = set(_expand_selection(requested_raw, tuple(bundle_backends),
-                                      microstructure_free_water, microstructure_noddi, microstructure_dki))
+    skip = frozenset(str(t).strip().lower() for t in excluded if str(t).strip())
+    requested = {target for target in _expand_selection(
+        tuple(t for t in requested_raw if t not in skip), tuple(bundle_backends),
+        microstructure_free_water, microstructure_noddi, microstructure_dki) if target not in skip}
+    if "tractography" in requested and "saf" in algorithms and "saf" not in skip:
+        requested.add("saf")  # Q4: picking the SAF tracking algorithm requests the saf target
     selected = set(requested)
     added_algorithms: dict = {}
     provided = frozenset(provided_tractography)
-    if "wma" in requested and "ukf" not in algorithms and not wma_source_explicit and "wma" not in provided:
+    if ("wma" in requested and "ukf" not in algorithms and not wma_source_explicit and "wma" not in provided
+            and "tractography" not in skip):
         # WMA needs a UKF tractogram. When nothing else asked for tracking, run UKF alone
         # instead of the default CSD/ACT as well. (No rule adds wma, so `requested` is final here.)
         others = {"tractography", "bundles", "connectome", "tractcloud", "saf"}
@@ -188,7 +205,7 @@ def expand_closure(
         changed = False
         for target in list(selected):
             for needed in requirements(target, algorithms, provided):
-                if needed not in selected:
+                if needed not in selected and needed not in skip:
                     selected.add(needed)
                     changed = True
 
@@ -196,7 +213,7 @@ def expand_closure(
     required_by: dict = {}
     for target in final:
         for needed in requirements(target, algorithms, provided):
-            if needed not in requested:
+            if needed not in requested and needed in selected:
                 required_by.setdefault(needed, []).append(target)
     ordered = {target: tuple(required_by[target]) for target in final if target in required_by}
     return Closure(targets=final, tractography_algorithms=tuple(algorithms),
@@ -211,17 +228,34 @@ def _requester_label(requester: str, closure: Closure) -> str:
     return DISPLAY_NAMES.get(requester, requester)
 
 
+ALGORITHM_NAMES = {"csd_act": "CSD/ACT", "dti_det": "DTI deterministic", "ukf": "UKF", "saf": "SAF"}
+
+
 def closure_notice(closure: Closure) -> str:
-    """One plain line naming the targets that run automatically, or ``""``."""
-    if not closure.required_by:
-        return ""
+    """One plain line naming the targets and tracking algorithms that run automatically, or ``""``."""
     groups: dict = {}
     for target in closure.added:
         groups.setdefault(closure.required_by[target], []).append(target)
+    added_algorithms = {name: tuple(who) for name, who in closure.added_algorithms.items()
+                        if "tractography" in closure.targets}  # Q3
     parts = []
     for requesters, names in groups.items():
         label = " and ".join(_requester_label(item, closure) for item in requesters)
-        parts.append(", ".join(DISPLAY_NAMES.get(name, name) for name in names) + f" (needed by {label})")
+        shown = []
+        for name in names:
+            if (name == "tractography" and added_algorithms
+                    and set(closure.tractography_algorithms) == set(added_algorithms)
+                    and {who for who in added_algorithms.values()} == {requesters}):
+                shown.append("UKF tractography")  # tractography runs only because of the added algorithm
+                added_algorithms = {}
+            else:
+                shown.append(DISPLAY_NAMES.get(name, name))
+        parts.append(", ".join(shown) + f" (needed by {label})")
+    for algorithm, requesters in added_algorithms.items():
+        label = " and ".join(_requester_label(item, closure) for item in requesters)
+        parts.append(f"{ALGORITHM_NAMES.get(algorithm, algorithm)} tractography (needed by {label})")
+    if not parts:
+        return ""
     return "Also runs automatically: " + "; ".join(parts)
 
 

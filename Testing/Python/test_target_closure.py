@@ -154,6 +154,7 @@ class C2ConsumersTest(unittest.TestCase):
         # The result of a stale caller holds only the ticked target: the plan still follows the closure.
         stale = SimpleNamespace(statuses=report.statuses, targets=("tractography",), blocker_count=report.blocker_count)
         owner = mock.Mock()
+        owner._selected_closure.return_value = expand_closure(("tractography",))
         owner._parameterNode = SimpleNamespace(brainMaskBackend="provided")
         owner._tractography_backend_text.return_value = "csd_act"
         owner._environment_dependency_path_kwargs.return_value = {}
@@ -399,6 +400,359 @@ class C8RegionalStatisticsTest(unittest.TestCase):
                                             previous_run_records={})
             payload = json.loads(path.read_text(encoding="utf-8"))
         self.assertEqual(payload["tasks"][0]["regional_statistics"], "skipped_no_parcellation")
+
+
+# ---------------------------------------------------------------------------------------------
+# Fix round (K1-K6, Q1-Q7)
+# ---------------------------------------------------------------------------------------------
+
+def _widget_method(name, **namespace):
+    """Exercise one SharedWidgetMixin method in isolation (the module needs Slicer and Qt)."""
+    import ast
+    path = REPO_ROOT / "shared" / "module_widget.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    method = next(node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == name)
+    exec(compile(ast.Module(body=[method], type_ignores=[]), str(path), "exec"), namespace)
+    return namespace[name]
+
+
+def _plan_for_setup(owner, report):
+    import shared.ui_selected_setup as ui
+    manager = mock.Mock()
+    manager.isExtensionInstalled.return_value = False
+    fake_slicer = SimpleNamespace(app=SimpleNamespace(extensionsManagerModel=lambda: manager), modules=SimpleNamespace())
+    with mock.patch.dict("sys.modules", {"slicer": fake_slicer}):
+        return ui.selected_setup_plan(owner, report)
+
+
+def _fresh_subject(tmp: str) -> Path:
+    root = Path(tmp) / "s"
+    (root / "input").mkdir(parents=True)
+    for name in ("data.nii.gz", "bvals", "bvecs", "nodif_brain_mask.nii.gz"):
+        (root / "input" / name).write_text("x")
+    return root
+
+
+class K1SetupPlanUsesTheOneClosureTest(unittest.TestCase):
+    def test_k1_wma_alone_with_csd_act_backend_does_not_ask_for_torch_or_anatomy(self) -> None:
+        from shared.algorithm_selection import algorithms
+        closure = expand_closure(("wma",), tractography_algorithms=algorithms("csd_act"))
+        self.assertEqual(closure.targets, ("tractography", "wma"))
+        # The doctor result holds the real closed shape: validation, tractography, wma (algorithms: ukf).
+        doctor = SimpleNamespace(statuses=(), targets=("validation", "tractography", "wma"), blocker_count=0)
+        owner = mock.Mock()
+        owner._selected_closure.return_value = closure
+        owner._parameterNode = SimpleNamespace(brainMaskBackend="provided")
+        owner._tractography_backend_text.return_value = "csd_act"  # the user's own text, not the closed algorithms
+        owner._environment_dependency_path_kwargs.return_value = {}
+        owner._closure_notice_text.return_value = ""
+        plan = _plan_for_setup(owner, doctor)
+        self.assertNotIn("PyTorch", plan["extensions"])
+        self.assertIn("UKFTractography", plan["extensions"])
+        self.assertEqual(plan["asset_profiles"], [])
+        self.assertEqual(plan["closure_targets"], ["tractography", "wma"])
+        for name in ("segmentation", "parcellation"):
+            self.assertNotIn(name, plan["closure_targets"])
+
+
+class K2GuiHonoursASuppliedTractogramTest(unittest.TestCase):
+    def test_k2_controller_closure_with_a_supplied_wma_tractogram_has_no_tractography_or_ukf(self) -> None:
+        from shared import ui_run_controller as controller
+        closure = controller.selected_closure(
+            controller.ProductTargetFlags(bundles=True), tractography_backend="csd_act", bundle_backend="wma",
+            microstructure_freewater=False, microstructure_noddi=False, provided_tractography=("wma",))
+        self.assertEqual(closure.targets, ("validation", "wma"))  # acceptance case wma_ukf with an input file
+        self.assertNotIn("ukf", closure.tractography_algorithms)
+        without = controller.selected_closure(
+            controller.ProductTargetFlags(bundles=True), tractography_backend="csd_act", bundle_backend="wma",
+            microstructure_freewater=False, microstructure_noddi=False)
+        self.assertEqual(without.targets, ("validation", "tractography", "wma"))
+
+    def test_k2_widget_passes_the_wma_input_parameter_to_the_closure(self) -> None:
+        from shared import ui_run_controller as controller
+        provided = _widget_method("_provided_tractography")
+        closure_method = _widget_method("_selected_closure", selected_closure=controller.selected_closure)
+        for text, expected in (("/data/wma_input.vtk", ("wma",)), ("   ", ()), ("", ())):
+            with self.subTest(text=text):
+                node = SimpleNamespace(wmaInputTractography=text)
+                owner = SimpleNamespace(
+                    _parameterNode=node,
+                    _product_target_flags=lambda: controller.ProductTargetFlags(bundles=True),
+                    _tractography_backend_text=lambda: "csd_act", _bundle_backend_text=lambda: "wma",
+                    _microstructure_stage_flags=lambda: (False, False), _microstructure_dki_enabled=lambda: False)
+                owner._provided_tractography = lambda owner=owner: provided(owner)
+                self.assertEqual(provided(owner), expected)
+                targets = closure_method(owner).targets
+                self.assertEqual(targets, ("validation", "wma") if expected else ("validation", "tractography", "wma"))
+
+
+class K3SafKeepsItsFodTest(unittest.TestCase):
+    def test_k3_supplied_saf_tractogram_still_needs_the_tractography_stage(self) -> None:
+        closure = expand_closure(("saf",), provided_tractography=("saf",))
+        self.assertEqual(closure.targets, ("segmentation", "parcellation", "surface", "surface_postprocess",
+                                           "tractography", "saf"))
+        self.assertEqual(closure.tractography_algorithms, ("csd_act",))
+        # WMA and TractCloud keep the shortcut.
+        self.assertEqual(expand_closure(("wma",), provided_tractography=("wma",)).targets, ("wma",))
+        self.assertEqual(expand_closure(("tractcloud",), provided_tractography=("tractcloud",)).targets, ("tractcloud",))
+
+    def test_k3_cli_saf_with_a_pregenerated_tractogram(self) -> None:
+        from shared.run_subject_pipeline_cli import _resolve_targets, build_parser
+        args, _ = build_parser().parse_known_args(
+            ["--subject-root", "/none", "--targets", "saf", "--saf-pregenerated-tractogram", "/none/saf.tck"])
+        targets = _resolve_targets(args)
+        for name in ("tractography", "segmentation", "parcellation", "surface_postprocess"):
+            self.assertIn(name, targets)
+
+    def test_k3_dry_run_plan_reports_saf_will_run_with_the_fod_from_the_tractography_stage(self) -> None:
+        from shared.orchestrator import ProductOrchestratorConfig, plan_subject_products
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _fresh_subject(tmp)
+            tractogram = Path(tmp) / "saf.tck"
+            tractogram.write_text("x")
+            config = ProductOrchestratorConfig(subject_id="s", subject_root=root, targets=("saf",),
+                                               saf_pregenerated_tractogram=tractogram,
+                                               atlas_t2=root / "input" / "data.nii.gz", execute=True)
+            items = {item.target: item for item in plan_subject_products(config, write=False).items}
+        self.assertEqual(items["saf"].status, "will_run", items["saf"].reason)
+        self.assertEqual(items["saf"].dependencies["fod"], "will_run:tractography.csd_act")
+        self.assertNotIn("missing CSD FOD", items["saf"].reason)
+
+
+class K4SavedDefaultsHoldTheUsersTicksTest(unittest.TestCase):
+    def test_k4_gui_saves_the_requested_targets_not_the_closed_set(self) -> None:
+        from shared import ui_run_controller as controller
+        saved: dict = {}
+        node = SimpleNamespace(
+            orchestrationMicrostructureStages="dti", subjectId="s", inputDirectory="", outputDirectory="",
+            orchestrationRunName="r", preprocessingBackend="dipy", ddsegDevice="cpu", device="cpu",
+            orchestrationTractographyBackend="csd_act", orchestrationBundleBackend="wmql",
+            orchestrationSelectStreamlines=1000, autoInstallPythonDependencies=False, connectomeBackend="python")
+        closure = controller.selected_closure(
+            controller.ProductTargetFlags(connectome=True), tractography_backend="csd_act", bundle_backend="wmql",
+            microstructure_freewater=False, microstructure_noddi=False)
+        self.assertIn("tractography", closure.targets)
+        save = _widget_method(
+            "_save_common_user_settings", slicer=SimpleNamespace(app=SimpleNamespace(userSettings=mock.Mock())),
+            canonical_microstructure_stages=lambda text: ("dti",), ENVIRONMENT_DEPENDENCY_PATHS=(),
+            update_user_config=lambda payload: (saved.update(payload) or ({}, Path("/none/config.json"))))
+        owner = SimpleNamespace(
+            _parameterNode=node, _common_user_setting_specs=lambda: (), _user_settings_key=lambda name: name,
+            _requested_product_targets=lambda: closure.requested, _selected_product_targets=lambda: closure.targets,
+            appendLog=lambda text: self.fail(text))
+        save(owner)
+        targets = saved["run_defaults"]["targets"]
+        self.assertIn("connectome", targets)
+        for name in ("segmentation", "parcellation", "tractography"):
+            self.assertNotIn(name, targets)
+
+    def test_k4_cli_save_user_config_saves_only_the_requested_targets(self) -> None:
+        from shared.run_subject_pipeline_cli import build_parser, resolve_analysis_options
+        from shared.user_config import user_config_from_cli_args
+        args = build_parser().parse_args(["--subject-root", "/none/s", "--targets", "connectome", "--save-user-config", "x.json"])
+        targets = resolve_analysis_options(args)
+        self.assertIn("tractography", targets)
+        payload = user_config_from_cli_args(args, resolved_targets=args.requested_targets, resolved_stages=("dti",))
+        self.assertEqual(payload["run_defaults"]["targets"], ["connectome"])
+
+
+class K5SkippedTargetsAreNeverExpandedTest(unittest.TestCase):
+    def test_k5_closure_property_over_every_target_and_every_single_skip(self) -> None:
+        for requested in TARGET_ORDER:
+            for skip in TARGET_ORDER:
+                with self.subTest(requested=requested, skip=skip):
+                    closure = expand_closure((requested,), excluded=(skip,))
+                    self.assertNotIn(skip, closure.targets)
+                    self.assertNotIn(skip, closure.requested)
+                    self.assertNotIn(skip, closure.required_by)
+                    for requesters in closure.required_by.values():
+                        self.assertNotIn(skip, requesters)
+                        self.assertTrue(set(requesters) <= set(closure.targets))
+                    # nothing is in the closure only because the skipped target asked for it
+                    for added in closure.added:
+                        self.assertTrue(closure.required_by[added])
+
+    def test_k5_cli_skip_tractography_leaves_no_target_that_only_tractography_required(self) -> None:
+        from shared.run_subject_pipeline_cli import _resolve_closure, build_parser
+        args, _ = build_parser().parse_known_args(
+            ["--subject-root", "/none", "--targets", "connectome", "--skip-targets", "tractography"])
+        closure, _exclude = _resolve_closure(args)
+        self.assertEqual(closure.targets, ("parcellation", "connectome"))
+        self.assertNotIn("segmentation", closure.targets)
+        self.assertNotIn("tractography", closure.required_by)
+        for requesters in closure.required_by.values():
+            self.assertNotIn("tractography", requesters)
+
+    def test_k5_orchestrator_passes_the_skip_set_into_the_closure(self) -> None:
+        from shared.orchestrator import ProductOrchestratorConfig, _with_closure
+        config = _with_closure(ProductOrchestratorConfig(
+            subject_id="s", subject_root=Path("/none"), targets=("connectome",), excluded_targets=("tractography",)))
+        self.assertEqual(config.targets, ("parcellation", "connectome"))
+        for requesters in config.target_required_by.values():
+            self.assertNotIn("tractography", requesters)
+
+
+class K6ResumeKeepsTheRegionalStatisticsStatusTest(unittest.TestCase):
+    def _run(self, root: Path, lines: list, *, complete: bool, runs: list):
+        from shared import orchestrator
+        config = orchestrator.ProductOrchestratorConfig(
+            subject_id="s", subject_root=root, targets=("microstructure",), execute=True, resume=True)
+
+        def fake_run(_config, log=None):
+            runs.append(1)
+            return SimpleNamespace(**{name: Path(name) for name in (
+                "fa_path", "md_path", "ad_path", "rd_path", "l1_path", "l2_path", "l3_path", "trace_path")},
+                roi_stats_csv_path=None, roi_stats_json_path=None)
+
+        fake_micro = SimpleNamespace(MicrostructureConfig=lambda **kw: SimpleNamespace(**kw), run_microstructure=fake_run)
+        fake_pipeline = SimpleNamespace(
+            ensure_native_dti_bundle=lambda *a, **k: None, find_subject_root=lambda *a, **k: None,
+            resolve_preprocessed_input_bundle=lambda *a, **k: None)
+        passed = SimpleNamespace(report_path=root / "v.json", passed=True, status="passed", error_count=0,
+                                 warning_count=0, messages=())
+        with mock.patch.dict("sys.modules", {"microstructure": fake_micro, "shared.pipeline": fake_pipeline}), \
+                mock.patch.object(orchestrator, "validate_subject_inputs", return_value=passed), \
+                mock.patch.object(orchestrator, "_microstructure_dti_complete", return_value=complete):
+            result = orchestrator.run_subject_products(config, log=lines.append)
+        manifest = json.loads(result.run_manifest_path.read_text(encoding="utf-8"))
+        return {task["name"]: task for task in manifest["tasks"]}
+
+    def test_k6_resume_without_parcellation_keeps_skipped_no_parcellation_and_the_log_line(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _fresh_subject(tmp)
+            runs: list = []
+            first_lines: list = []
+            first = self._run(root, first_lines, complete=False, runs=runs)
+            self.assertEqual(first["microstructure.dti"]["status"], "completed")
+            self.assertEqual(first["microstructure.dti"]["regional_statistics"], "skipped_no_parcellation")
+            lines: list = []
+            second = self._run(root, lines, complete=True, runs=runs)
+        self.assertEqual(len(runs), 1)
+        self.assertEqual(second["microstructure.dti"]["status"], "skipped")
+        self.assertEqual(second["microstructure.dti"]["regional_statistics"], "skipped_no_parcellation")
+        self.assertIn("[Microstructure] Regional statistics skipped: parcellation was not selected", lines)
+
+    def test_k6_resume_with_a_parcellation_now_present_and_no_roi_file_reruns_the_stage(self) -> None:
+        from shared.io_layout import subject_layout
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _fresh_subject(tmp)
+            parcellation = subject_layout(root).anatomy_input_dir("ddparcel") / "s_ddparcel_wmparc_labels.nii.gz"
+            parcellation.parent.mkdir(parents=True, exist_ok=True)
+            parcellation.write_text("x")
+            runs: list = []
+            lines: list = []
+            tasks = self._run(root, lines, complete=True, runs=runs)  # outputs claim to be complete, ROI file is missing
+        self.assertEqual(len(runs), 1)
+        self.assertEqual(tasks["microstructure.dti"]["status"], "completed")
+        self.assertNotIn("regional_statistics", tasks["microstructure.dti"])
+
+
+class Q1NoticeOncePerRunTest(unittest.TestCase):
+    def test_q1_a_config_that_is_already_closed_does_not_repeat_the_notice(self) -> None:
+        from shared import orchestrator
+        config = orchestrator._with_closure(orchestrator.ProductOrchestratorConfig(
+            subject_id="s", subject_root=Path("/none"), targets=("tractography",), execute=True))
+        self.assertTrue(config.closure_applied)
+        lines: list[str] = []
+        with mock.patch.object(orchestrator, "_run_subject_products_impl", return_value="done"):
+            orchestrator.run_subject_products(config, log=lines.append)
+        self.assertEqual([line for line in lines if line.startswith("[Targets]")], [])
+
+    def test_q1_multi_tracking_logs_the_notice_once(self) -> None:
+        from shared import orchestrator
+        lines: list[str] = []
+        config = orchestrator.ProductOrchestratorConfig(
+            subject_id="s", subject_root=Path("/none"), targets=("bundles",), bundle_backend="all",
+            tractography_backend="csd_act", execute=True)
+        children: list = []
+
+        def run_children(parent, log=None):
+            for child in ({"tractography_backend": "csd_act"}, {"tractography_backend": "ukf"}):
+                children.append(orchestrator.run_subject_products(orchestrator.replace(parent, **child), log=log))
+            return "done"
+
+        with mock.patch("shared.multi_tracking.run", side_effect=run_children), \
+                mock.patch.object(orchestrator, "_run_subject_products_impl", return_value="done"):
+            orchestrator.run_subject_products(config, log=lines.append)
+        self.assertEqual(len(children), 2)
+        self.assertEqual(len([line for line in lines if line.startswith("[Targets]")]), 1, lines)
+
+
+class Q2DownstreamReasonTest(unittest.TestCase):
+    def test_q2_a_stage_in_this_run_is_not_told_to_select_itself(self) -> None:
+        from shared.orchestrator import _upstream_reason
+        text = "missing DDSeg segmentation; select segmentation or provide existing output"
+        self.assertEqual(_upstream_reason({"segmentation", "tractography"}, "segmentation", text),
+                         "DDSeg is in this run but produced no output (see its task)")
+        self.assertEqual(_upstream_reason({"tractography"}, "segmentation", text), text)
+
+    def test_q2_plan_names_the_selected_upstream_stage(self) -> None:
+        from shared.orchestrator import ProductOrchestratorConfig, plan_subject_products
+        with tempfile.TemporaryDirectory() as tmp:
+            config = ProductOrchestratorConfig(subject_id="s", subject_root=Path(tmp) / "s", targets=("connectome",),
+                                               execute=True)
+            items = {item.target: item for item in plan_subject_products(config, write=False).items}
+        for item in items.values():
+            self.assertNotIn("select segmentation", item.reason)
+            self.assertNotIn("select parcellation", item.reason)
+            self.assertNotIn("select tractography", item.reason)
+
+
+class Q3NoticeNamesAddedAlgorithmsTest(unittest.TestCase):
+    def test_q3_wma_alone_names_ukf_tractography(self) -> None:
+        self.assertEqual(closure_notice(expand_closure(("wma",))),
+                         "Also runs automatically: UKF tractography (needed by WMA)")
+
+    def test_q3_ukf_added_to_a_requested_tractography_run(self) -> None:
+        self.assertEqual(closure_notice(expand_closure(("wma", "tractography"))),
+                         "Also runs automatically: DDSeg, DDParcel (needed by CSD/ACT tractography); "
+                         "UKF tractography (needed by WMA)")
+
+    def test_q3_run_notice_for_a_closed_config_includes_the_algorithm(self) -> None:
+        from shared.orchestrator import ProductOrchestratorConfig, _with_closure, closure_notice_for
+        config = _with_closure(ProductOrchestratorConfig(subject_id="s", subject_root=Path("/none"), targets=("wma",)))
+        self.assertEqual(closure_notice_for(config), "Also runs automatically: UKF tractography (needed by WMA)")
+
+
+class Q4SafAlgorithmIsRequestedTest(unittest.TestCase):
+    def test_q4_picking_the_saf_algorithm_requests_the_saf_target(self) -> None:
+        closure = expand_closure(("tractography",), tractography_algorithms=("saf",))
+        self.assertIn("saf", closure.requested)
+        self.assertNotIn("saf", closure.required_by)
+        self.assertEqual(closure.provenance("saf"), {"requested": True, "required_by": []})
+        self.assertNotIn("SAF (", closure_notice(closure))
+        self.assertNotIn("SAF,", closure_notice(closure))
+        # A saf target added by another rule keeps its provenance.
+        added = expand_closure(("tractography",), tractography_algorithms=("csd_act",))
+        self.assertNotIn("saf", added.targets)
+
+
+class Q5Q6Q7SmallFixesTest(unittest.TestCase):
+    def test_q5_environment_uses_the_shared_mask_target_list(self) -> None:
+        from shared.environment import run_needs_brain_mask
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _fresh_subject(tmp)
+            (root / "input" / "nodif_brain_mask.nii.gz").unlink()
+            from shared.target_closure import MASK_TARGETS
+            for target in MASK_TARGETS:
+                with self.subTest(target=target):
+                    self.assertTrue(run_needs_brain_mask(root, targets=(target,), subject_id="s", output_root=None,
+                                                         brain_mask_backend="pnl_cnn"))
+
+    def test_q6_cli_subject_id_uses_the_shared_sanitiser(self) -> None:
+        from shared.run_subject_pipeline_cli import _infer_subject_id
+        from shared.subject_id import derive_subject_id
+        with tempfile.TemporaryDirectory() as tmp:
+            odd = Path(tmp) / "pat ient"
+            odd.mkdir()
+            self.assertEqual(_infer_subject_id(odd), "pat_ient")
+        for text in (".", "..", "a/.."):
+            self.assertNotIn(derive_subject_id(text), (".", ".."))
+
+    def test_q7_no_resume_help_names_the_prerequisites(self) -> None:
+        from shared.run_subject_pipeline_cli import build_parser
+        action = next(a for a in build_parser()._actions if "--no-resume" in a.option_strings)
+        self.assertEqual(action.help, "Recompute every stage of this run, including prerequisites added automatically.")
 
 
 if __name__ == "__main__":

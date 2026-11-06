@@ -8,6 +8,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from shared.selected_setup import build_setup_plan
+from shared.target_closure import expand_closure
 from shared.ui_selected_setup import extension_states, prepare_selected_environment
 from shared.environment import DependencySpec, EnvironmentDoctorConfig, run_environment_doctor
 
@@ -100,8 +101,10 @@ class SelectedSetupTests(unittest.TestCase):
         self.assertEqual(plan["managed_profiles"], ["mrtrix"])
         self.assertTrue(plan["repair"])
 
-    def owner(self, report):
+    def owner(self, report, closure=None):
         owner = Mock()
+        # K1: the widget hands out the one closure the doctor and the run use.
+        owner._selected_closure.return_value = closure or expand_closure(report.targets)
         owner._setupJob = owner._pipelineActive = owner._selectedSetupActive = owner._setupRestartRequired = False
         owner._parameterNode = SimpleNamespace(brainMaskBackend="provided")
         owner._onboardingLanguage = "en"
@@ -122,11 +125,13 @@ class SelectedSetupTests(unittest.TestCase):
 
     def test_d8_widget_plan_asks_for_slicerdmri_only_with_the_wma_target(self):
         import shared.ui_selected_setup as ui
-        for targets, expected in ((("microstructure", "tractography", "surface"), []),
-                                  # C2: WMA needs a UKF tractogram, so its closure also needs the UKF extension.
-                                  (("wma",), ["SlicerDMRI", "UKFTractography"])):
-            with self.subTest(targets=targets):
-                owner = self.owner(result(targets=targets))
+        for ticked, doctor_targets, expected in (
+                (("microstructure", "tractography", "surface"), ("microstructure", "tractography", "surface"), []),
+                # C2: WMA needs a UKF tractogram, so its closure also needs the UKF extension.
+                # K1: the doctor result holds the real closed shape (validation, tractography, wma).
+                (("wma",), ("validation", "tractography", "wma"), ["SlicerDMRI", "UKFTractography"])):
+            with self.subTest(targets=ticked):
+                owner = self.owner(result(targets=doctor_targets), closure=expand_closure(ticked))
                 context, manager = self.run_preparation(owner, owner._run_environment_dependency_check.return_value)
                 manager.isExtensionInstalled.return_value = False
                 with context:

@@ -130,7 +130,8 @@ def _resolve_microstructure_stages(args: argparse.Namespace) -> tuple[str, ...]:
 
 
 def _infer_subject_id(subject_root: Path) -> str:
-    return subject_root.resolve().name
+    from shared.subject_id import derive_subject_id
+    return derive_subject_id(str(subject_root.resolve()))
 
 
 def _apply_dependency_config(args: argparse.Namespace) -> None:
@@ -179,12 +180,13 @@ def _resolve_closure(args: argparse.Namespace):
             ("wma", getattr(args, "wma_input_tractography", None)),
             ("tractcloud", getattr(args, "tractcloud_input_tractography", None)),
             ("saf", getattr(args, "saf_pregenerated_tractogram", None))) if value),
+        excluded=tuple(exclude),  # K5: the closure never adds or expands a skipped target
     ), exclude
 
 
 def _resolve_targets(args: argparse.Namespace) -> tuple[str, ...]:
     closure, exclude = _resolve_closure(args)
-    return tuple(target for target in closure.targets if target not in exclude)
+    return closure.targets
 
 
 def resolve_analysis_options(args, *, explicit_dests=()):
@@ -216,13 +218,15 @@ def resolve_analysis_options(args, *, explicit_dests=()):
     if args.wmql_query_preset in CATALOG_PRESETS:
         canonical_wmql_selection(args.wmql_query_selection, args.wmql_query_preset)
     closure, exclude = _resolve_closure(args)
-    targets = tuple(target for target in closure.targets if target not in exclude)
+    targets = closure.targets
     if not targets:
         raise ValueError('No targets selected. Use --all or --targets.')
     # C2/C3: later stages (doctor, config, cohort planner) see the closed algorithm set and provenance.
     args.closure_tractography_backend = closure.algorithms_text if 'tractography' in targets else args.tractography_backend
     args.target_required_by = {target: tuple(value) for target, value in closure.required_by.items() if target in targets}
     args.excluded_targets = tuple(sorted(exclude))
+    # K4: what the user asked for (not the closed set) is what --save-user-config saves.
+    args.requested_targets = tuple(target for target in closure.requested if target in targets)
     args.closure_algorithm_requesters = {key: tuple(value) for key, value in closure.added_algorithms.items()}
     if args.bundle_tractography_backend:
         if not set(targets).intersection({'bundles', 'wma', 'tractcloud'}):
@@ -481,7 +485,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Abort before execution when any selected target has missing required dependencies.",
     )
     parser.add_argument("--execute", action="store_true", help="Actually execute workflows. Default is dry-run planning only.")
-    parser.add_argument("--no-resume", action="store_true", help="Disable resume/skip of completed outputs.")
+    parser.add_argument("--no-resume", action="store_true", help="Recompute every stage of this run, including prerequisites added automatically.")
     parser.add_argument(
         "--brain-mask-backend",
         default="pnl_cnn",
@@ -839,7 +843,7 @@ def main(argv: list[str] | None = None) -> int:
             args,
             language=args.language or str((user_config or {}).get("ui", {}).get("language") or "en"),
             base_config=user_config,
-            resolved_targets=targets,
+            resolved_targets=getattr(args, "requested_targets", None) or targets,
             resolved_stages=_resolve_microstructure_stages(args),
         )
         written = write_user_config(saved_payload, save_path)

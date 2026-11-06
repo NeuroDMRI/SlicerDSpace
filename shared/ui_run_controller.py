@@ -222,8 +222,12 @@ def selected_closure(
     microstructure_freewater: bool,
     microstructure_noddi: bool,
     microstructure_dki: bool = False,
+    provided_tractography: tuple[str, ...] = (),
 ):
-    """Return the prerequisite closure (C1) of the ticked targets."""
+    """Return the prerequisite closure (C1) of the ticked targets.
+
+    ``provided_tractography`` names targets whose tractogram the user supplied as a file (K2).
+    """
 
     product_targets = ["validation"]
     if flags.preprocessing:
@@ -251,6 +255,7 @@ def selected_closure(
         microstructure_run_free_water=microstructure_freewater,
         microstructure_run_noddi=microstructure_noddi,
         microstructure_run_dki=microstructure_dki,
+        provided_tractography=tuple(provided_tractography),
     )
 
 
@@ -262,6 +267,7 @@ def selected_product_targets(
     microstructure_freewater: bool,
     microstructure_noddi: bool,
     microstructure_dki: bool = False,
+    provided_tractography: tuple[str, ...] = (),
 ) -> tuple[str, ...]:
     """Return normalized product targets after backend expansion and prerequisite closure."""
 
@@ -272,6 +278,7 @@ def selected_product_targets(
         microstructure_freewater=microstructure_freewater,
         microstructure_noddi=microstructure_noddi,
         microstructure_dki=microstructure_dki,
+        provided_tractography=provided_tractography,
     ).targets
 
 

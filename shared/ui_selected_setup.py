@@ -158,8 +158,19 @@ def _confirm(owner, plan):
     return accepted
 
 
-def _running_slicer_executable():
-    """Path of the running Slicer (for the Windows installer's -SlicerExecutable), or None."""
+def _running_slicer_executable(owner=None):
+    """Launcher of the running Slicer (for the Windows installer's -SlicerExecutable), or None.
+
+    S-B9: the launcher first (on Windows applicationFilePath is bin\\SlicerApp-real.exe, which the ps1 cannot use to
+    find PythonSlicer), then the running application path.
+    """
+    launcher = getattr(owner, "_slicer_launcher_program", None)
+    try:
+        value = launcher() if callable(launcher) else None
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    except Exception:
+        pass
     try:
         import slicer
         value = slicer.app.applicationFilePath
@@ -204,7 +215,7 @@ def selected_setup_plan(owner, result, *, repair=False):
         brain_mask_backend=getattr(owner._parameterNode, "brainMaskBackend", "pnl_cnn"), gpu_available=gpu,
         wma_atlas=getattr(owner._parameterNode, "wmaAtlas", "org"),
         existing_managed_profiles=existing, repair=repair, backend_paths=config, closure_targets=tuple(closure.targets),
-        slicer_executable=config.get("slicer_executable") or _running_slicer_executable(),
+        slicer_executable=_running_slicer_executable(owner) or config.get("slicer_executable"),
         dcm2niix_missing=dcm2niix_pending())  # S-B3: checked in the running Slicer's own Python
     # C4: the result's targets are already closed, so the owner (which knows what was ticked) words the notice.
     notice = getattr(owner, "_closure_notice_text", None)

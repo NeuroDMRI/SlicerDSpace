@@ -257,6 +257,28 @@ class SelectedSetupTests(unittest.TestCase):
         self.assertTrue(owner._setupRestartRequired)
         self.assertFalse(owner._selectedSetupActive)
 
+    def test_s_b9_slicer_executable_is_the_launcher_then_the_application_path_then_the_configured_one(self):
+        import shared.ui_selected_setup as ui
+        report = result(item("mrtrix", "mrtrix", "path", package=None))
+        app = SimpleNamespace(extensionsManagerModel=lambda: Mock(isExtensionInstalled=Mock(return_value=True)),
+                              applicationFilePath=lambda: "C:/Slicer/bin/SlicerApp-real.exe")
+        slicer = SimpleNamespace(app=app, modules=SimpleNamespace(), util=SimpleNamespace(infoDisplay=Mock()))
+
+        def command_for(launcher, configured):
+            owner = self.owner(report)
+            owner._slicer_launcher_program.return_value = launcher
+            owner._environment_dependency_path_kwargs.return_value = {"slicer_executable": configured} if configured else {}
+            with patch.dict("sys.modules", {"slicer": slicer}), patch("platform.system", return_value="Windows"), \
+                    patch("shared.selected_setup.list_distributions", return_value=self.WSL_UBUNTU):
+                command = ui.selected_setup_plan(owner, report)["windows_runtime"]["command"]
+            return command[command.index("-SlicerExecutable") + 1]
+
+        # fails before S-B9: the configured path (or the app path SlicerApp-real.exe) was used
+        self.assertEqual(command_for("C:/Slicer/Slicer.exe", "D:/old/Slicer.exe"), "C:/Slicer/Slicer.exe")
+        self.assertEqual(command_for("", "D:/old/Slicer.exe"), "C:/Slicer/bin/SlicerApp-real.exe")
+        slicer.app.applicationFilePath = lambda: ""
+        self.assertEqual(command_for("", "D:/old/Slicer.exe"), "D:/old/Slicer.exe")
+
     def test_s_b3_a_missing_dcm2niix_wheel_alone_is_pending_work_in_the_gui(self):
         report = result()
         owner = self.owner(report)

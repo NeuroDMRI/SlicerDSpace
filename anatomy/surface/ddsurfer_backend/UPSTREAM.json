@@ -105,7 +105,7 @@
   },
   "local_patches": {
     "preprocessing/dti.py": "c0345156b02a1707f3256d0b9b37a23cc0d0ab3d18ad2069fd0232e8bb528f9b",
-    "preprocessing/dti.sh": "bfb426dd979ebaf7fb9d5021f57ffb0d20c3797ad2dbb6b7cdefe77ab850004c",
+    "preprocessing/dti.sh": "609333d35580274ece4b4ca8c88e57805791a6745040873a3e3791c311804aa1",
     "run_ddsurfer_pipeline.sh": "ed5deafbc427eb58861f1703535c6cd667bccd494f67afce42fc1eb62debee10",
     "tests/check_environment.py": "3d55cca06c7b4b5bb77a3faf3074f5359676e03172c22da22909d6f6edff7072",
     "tests/test_environment_check.py": "9fa0115167904b78de50fdfa59f6b022762c1c1cbe16665516915863e17f3ac9",

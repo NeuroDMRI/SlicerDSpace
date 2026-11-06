@@ -270,6 +270,115 @@ class RegisteredStageAdmissionTests(unittest.TestCase):
                     pipeline.ensure_registered_dti_bundle(raw, Path(tmp) / "absent.nii.gz")
 
 
+class SurfaceRouteAdmissionTests(unittest.TestCase):
+    """S1: an orchestrator surface run admits native_dti, registered_dti and surface in turn, none inside another."""
+
+    def surface_run(self, *, cohort=True):
+        import json
+        from contextlib import ExitStack, contextmanager
+        from shared import ProductOrchestratorConfig, run_subject_products
+
+        events, depth = [], [0]
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name) / "x"
+        root.mkdir()
+        raw = inputs(root)
+        shutil.copy2(raw.mask_path, raw.mask_path.with_name("nodif_brain_mask.nii.gz"))
+        atlas = Path(tmp.name) / "atlas.nii.gz"
+        atlas.write_bytes(b"atlas")
+        weights, templates = Path(tmp.name) / "weights", Path(tmp.name) / "templates"
+        weights.mkdir()
+        templates.mkdir()
+        (weights / "manifest.json").write_text("{}")
+        files = {hemi: {kind: f"{hemi}.{kind}.pt" for kind in ("white", "pial")} for hemi in ("left", "right")}
+        for hemi in files:
+            for name in files[hemi].values():
+                (weights / name).write_bytes(b"weights")
+            (templates / f"{hemi}.obj").write_bytes(b"template")
+        resources = dict(available=True, missing=[], upstream_commit="test", registration_atlas=str(atlas),
+                         checkpoint_root=str(weights), template_dir=str(templates),
+                         model_config=dict(checkpoint_files=files, templates={h: {"file": f"{h}.obj"} for h in files}))
+
+        @contextmanager
+        def admission(name, *, gpu=False):
+            # Like the real one: a nested admission passes through and is not a new stage.
+            if depth[0]:
+                yield None
+                return
+            depth[0] += 1
+            events.append(("enter", name))
+            try:
+                yield None
+            finally:
+                events.append(("exit", name))
+                depth[0] -= 1
+
+        teem = fake_teem_run([])
+
+        def run_cli(command, log=None):
+            if str(command[0]).endswith("PythonSlicer"):
+                events.append(("cli", "teem"))
+                teem(command, log)
+            elif command[0] == "brainsfit":
+                events.append(("cli", "brainsfit"))
+                Path(command[command.index("--linearTransform") + 1]).write_bytes(b"tfm")
+            else:
+                events.append(("cli", "resample"))
+                Path(command[-1]).write_bytes(b"registered")
+
+        def predict(config, resources, output_dir, subject_dir):
+            events.append(("predict", "surface"))
+            native = output_dir / "pred_results_SlicerDSpace/native" / config.subject_id
+            native.mkdir(parents=True, exist_ok=True)
+
+        patches = [
+            patch.object(pipeline, "_require_slicer"),
+            patch.object(pipeline, "resolve_pythonslicer_executable", return_value="/slicer/bin/PythonSlicer"),
+            patch.object(pipeline, "_get_cli_executable", side_effect=lambda name: name),
+            patch.object(pipeline, "_run_cli", side_effect=run_cli),
+            patch.object(pipeline, "_write_inverse_transform",
+                         side_effect=lambda forward, inverse: inverse.write_bytes(b"inverse")),
+            patch.object(pipeline, "_convert_nrrd_to_nifti",
+                         side_effect=lambda source, target: target.write_bytes(source.read_bytes())),
+            patch("anatomy.surface.inspect_surface_resources", return_value=resources),
+            patch("anatomy.surface.pipeline.inspect_surface_resources", return_value=resources),
+            patch("anatomy.surface.pipeline.runtime_info", return_value={}),
+            patch("anatomy.surface.pipeline._run_registered", side_effect=predict),
+            patch("anatomy.surface.pipeline.native_products", return_value=([], {})),
+            patch("shared.environment.resolve_auto_torch_device", return_value="cpu"),
+        ]
+        if cohort:
+            patches.append(patch("shared.cohort_schedule.stage_admission", admission))
+        with ExitStack() as stack:
+            for item in patches:
+                stack.enter_context(item)
+            result = run_subject_products(ProductOrchestratorConfig(
+                subject_id="x", subject_root=root, targets=("surface",), execute=True, resume=False,
+                surface_atlas_t2=atlas, output_root=Path(tmp.name) / "out"))
+        return result, events
+
+    def test_s1_surface_route_admits_native_then_registered_then_surface(self) -> None:
+        result, events = self.surface_run()
+        self.assertEqual([task.status for task in result.tasks], ["completed"])
+        self.assertEqual([item for item in events if item[0] in ("enter", "exit")],
+                         [("enter", "native_dti"), ("exit", "native_dti"),
+                          ("enter", "registered_dti"), ("exit", "registered_dti"),
+                          ("enter", "surface"), ("exit", "surface")])
+        inside = events[events.index(("enter", "surface")):]
+        self.assertEqual([item for item in inside if item[0] == "cli"], [],
+                         "the inner call inside surface must reuse the cache: no fit, no registration")
+        self.assertIn(("predict", "surface"), inside)
+        self.assertEqual([item for item in events if item == ("cli", "teem")], [("cli", "teem")])
+
+    def test_s1_outside_cohort_mode_the_surface_route_outputs_are_unchanged(self) -> None:
+        result, events = self.surface_run(cohort=False)
+        self.assertEqual([task.status for task in result.tasks], ["completed"])
+        self.assertEqual([item for item in events if item[0] == "cli"],
+                         [("cli", "teem"), ("cli", "brainsfit")] + [("cli", "resample")] * 7)
+        self.assertEqual([item for item in events if item[0] == "predict"], [("predict", "surface")])
+
+
 class DDParcelCompletenessTests(unittest.TestCase):
     """N3: the DDParcel tensor step reruns when any scalar file it needs is missing."""
 

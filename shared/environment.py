@@ -14,7 +14,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
-from shared.external_process import find_pythonslicer, interpreter_path, is_slicer_python, slicer_runtime_roots, text_subprocess_kwargs, python_tool_environment
+from shared.external_process import SLICER_PYTHON_NAMES, find_pythonslicer, interpreter_path, slicer_runtime_roots, text_subprocess_kwargs, python_tool_environment
 from shared.model_assets import model_asset_candidates, model_asset_path_or_none
 
 
@@ -2138,6 +2138,12 @@ def _doctor_pythonslicer(config: "EnvironmentDoctorConfig") -> Optional[Path]:
     configured = config.python_executable
     if configured is not None and Path(configured).name in {"PythonSlicer", "PythonSlicer.exe"}:
         return interpreter_path(configured)
+    # T2: ask the resolver that the fit uses first; it raises outside Slicer, then the search below applies.
+    try:
+        from shared.pipeline import resolve_pythonslicer_executable
+        return interpreter_path(resolve_pythonslicer_executable())
+    except Exception:
+        pass
     launcher = _resolve_path(config.slicer_executable)
     if launcher is None:
         launcher, _ = _env_path_with_source("SLICERDSPACE_SLICER_EXECUTABLE")
@@ -2161,7 +2167,8 @@ def _native_tensor_status(targets: tuple[str, ...], config: Optional["Environmen
     A Slicer process probes itself. Any other process probes the PythonSlicer found from the settings and never
     loads Teem in its own interpreter, so a plain Python with SLICER_HOME set cannot report the fit as available.
     """
-    if in_process or is_slicer_python(sys.executable):
+    # T1: only Slicer's own interpreter name takes the in-process branch, never a path marker such as envs/slicer-x/.
+    if in_process or Path(sys.executable).name.lower() in SLICER_PYTHON_NAMES:
         probed: Optional[Path] = interpreter_path(sys.executable)
         info = _teem_info_in_process()
     else:

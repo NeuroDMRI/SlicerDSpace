@@ -166,9 +166,10 @@ def _raw_command(config, resources, output_dir):
         from shared.pipeline import resolve_launcher_executable
         home = Path(resolve_launcher_executable()).parent
     # N9: a separately deployed backend cannot find shared/teem_dti.py from its own location.
-    teem_script = Path(__file__).resolve().parents[2] / 'shared/teem_dti.py'
-    return command, dict(DTI_SLICER_PATH=str(home), DTI_REFERENCE_IMAGE=resources['registration_atlas'],
-                         SLICERDSPACE_TEEM_DTI_SCRIPT=str(teem_script))
+    env = dict(DTI_SLICER_PATH=str(home), DTI_REFERENCE_IMAGE=resources['registration_atlas'])
+    if not os.environ.get('SLICERDSPACE_TEEM_DTI_SCRIPT'):  # T4: a user value wins
+        env['SLICERDSPACE_TEEM_DTI_SCRIPT'] = str(Path(__file__).resolve().parents[2] / 'shared/teem_dti.py')
+    return command, env
 
 
 def _run_registered(config, resources, output_dir, subject_dir):
@@ -196,12 +197,27 @@ def _run_registered(config, resources, output_dir, subject_dir):
             shutil.rmtree(path, ignore_errors=True)
 
 
-def _run_shared_raw(config, resources, output_dir, manifest, previous, log):
+def uses_shared_raw_route(config):
+    """True when ``run_surface`` takes the shared raw route for a prepared input bundle."""
+    return bool(config.reuse_shared_preprocessing and not config.auto_mask and config.input_bundle is not None)
+
+
+def prepare_shared_registered_bundle(config, resources, log=None):
+    """Obtain the raw bundle and the shared registered bundle (WLS, NRRD scalars, reuse).
+
+    The cohort orchestrator calls this before ``run_surface`` so that ``native_dti`` and ``registered_dti``
+    are admitted as their own stages (S1.2), not inside the ``surface`` admission.
+    """
     from shared.pipeline import ensure_registered_dti_bundle
 
     raw = config.input_bundle or find_subject_root(config.subject_root, config.subject_id)
     registered = ensure_registered_dti_bundle(raw, Path(resources['registration_atlas']),
         fit_method='wls', reuse=True, log=log, scalar_format='nrrd')
+    return raw, registered
+
+
+def _run_shared_raw(config, resources, output_dir, manifest, previous, log):
+    raw, registered = prepare_shared_registered_bundle(config, resources, log)
     paths = [getattr(registered, name) for name in registered.__dataclass_fields__
              if name.endswith('_path')]
     paths += [getattr(raw, name + '_path') for name in ('dwi', 'bval', 'bvec', 'mask')]

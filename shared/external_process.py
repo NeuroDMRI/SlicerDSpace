@@ -174,12 +174,17 @@ def external_python_environment(
     return env
 
 
+# Lowercase file names of Slicer's own interpreter (Linux, macOS, Windows).
+SLICER_PYTHON_NAMES = frozenset({"pythonslicer", "pythonslicer.exe", "python-real", "python-real.exe"})
+
+
 def is_slicer_python(python_executable: Path | str) -> bool:
     """True when the interpreter is Slicer's own (PythonSlicer, python-real or a path inside a Slicer install)."""
     path = Path(python_executable).expanduser().absolute()
     # C9: a virtualenv is never Slicer's Python, even under a folder named like "Slicer-envs".
     in_venv = (path.parent.parent / "pyvenv.cfg").is_file()
-    return path.name in {"PythonSlicer", "python-real"} or (not in_venv and _looks_like_slicer_runtime_path(str(path)))
+    return (path.name.lower() in SLICER_PYTHON_NAMES
+            or (not in_venv and _looks_like_slicer_runtime_path(str(path))))
 
 
 def python_tool_environment(python_executable: Path | str,

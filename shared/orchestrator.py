@@ -3734,6 +3734,11 @@ def _run_subject_products_impl(
             else:
                 _emit("[Orchestrator] Running DDSurfer surface", log)
                 task_started = _start_task_timer("DDSurfer surface", log)
+                from anatomy.surface.pipeline import prepare_shared_registered_bundle, uses_shared_raw_route
+
+                if uses_shared_raw_route(surface_config):
+                    # S1: native_dti and registered_dti get their own admissions, outside the surface one.
+                    prepare_shared_registered_bundle(surface_config, resources, log)
                 result = run_surface(surface_config, log=log)
                 _finish_task_timer("DDSurfer surface", task_started, log)
                 tasks.append(

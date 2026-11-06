@@ -149,8 +149,26 @@ if [[ -z "$SLICER_PATH" ]]; then
   [[ -n "$slicer_executable" ]] || die "Set SLICER_PATH or use --slicer-path to select a Slicer installation"
   SLICER_PATH=$(dirname "$slicer_executable")
 fi
-[[ -x "$SLICER_PATH/Slicer" ]] || die "Slicer executable not found at $SLICER_PATH/Slicer"
+[[ -d "$SLICER_PATH" ]] || die "Slicer installation not found at $SLICER_PATH"
 SLICER_PATH=$(cd "$SLICER_PATH" && pwd)
+
+# T3: SLICER_PATH may be a Linux or Windows root, Slicer.app, Contents or Contents/MacOS.
+# SLICER_ROOT holds lib/ and bin/PythonSlicer; SLICER_LAUNCHER is the Slicer executable.
+case "$SLICER_PATH" in
+  */Contents/MacOS) SLICER_ROOT=${SLICER_PATH%/MacOS} ;;
+  *.app) SLICER_ROOT=$SLICER_PATH/Contents ;;
+  *) SLICER_ROOT=$SLICER_PATH ;;
+esac
+SLICER_LAUNCHER=""
+for candidate in "$SLICER_PATH/Slicer" "$SLICER_PATH/Slicer.exe" "$SLICER_ROOT/MacOS/Slicer" \
+                 "$SLICER_ROOT/Slicer" "$SLICER_ROOT/Slicer.exe"; do
+  if [[ -x "$candidate" ]]; then SLICER_LAUNCHER=$candidate; break; fi
+done
+[[ -n "$SLICER_LAUNCHER" ]] || die "Slicer executable not found under $SLICER_PATH"
+if [[ "${DTI_RESOLVE_SLICER_ONLY:-0}" == 1 ]]; then
+  printf 'root=%s\nlauncher=%s\n' "$SLICER_ROOT" "$SLICER_LAUNCHER"
+  exit 0
+fi
 [[ -f "$REFERENCE_IMAGE" ]] || die "Reference image not found at $REFERENCE_IMAGE"
 command -v "$PYTHON_BIN" >/dev/null 2>&1 || die "Python interpreter not found: $PYTHON_BIN"
 
@@ -197,21 +215,20 @@ prepend_ld_library_path() {
 }
 
 resolve_slicer_lib_dir() {
-  find "$SLICER_PATH/lib" -maxdepth 1 -type d -name 'Slicer-*' | sort | tail -n 1
+  find "$SLICER_ROOT/lib" -maxdepth 1 -type d -name 'Slicer-*' | sort | tail -n 1
 }
 
 SLICER_LIB_DIR=$(resolve_slicer_lib_dir)
-[[ -n "$SLICER_LIB_DIR" ]] || die "Unable to locate Slicer versioned lib directory under $SLICER_PATH/lib"
+[[ -n "$SLICER_LIB_DIR" ]] || die "Unable to locate Slicer versioned lib directory under $SLICER_ROOT/lib"
 SLICER_VERSION_DIR=$(basename "$SLICER_LIB_DIR")
 
 CLI_MODULES_PATH2="$SLICER_LIB_DIR/cli-modules"
-PYTHONSLICER="$SLICER_PATH/bin/PythonSlicer"
-# F2: macOS Slicer.app keeps PythonSlicer in Contents/bin; Windows names it PythonSlicer.exe.
-for candidate in "$SLICER_PATH/bin/PythonSlicer" "$SLICER_PATH/Contents/bin/PythonSlicer" \
-                 "$SLICER_PATH/bin/PythonSlicer.exe"; do
+PYTHONSLICER="$SLICER_ROOT/bin/PythonSlicer"
+# F2/T3: Windows names it PythonSlicer.exe; macOS keeps it in Contents/bin, which SLICER_ROOT already is.
+for candidate in "$SLICER_ROOT/bin/PythonSlicer" "$SLICER_ROOT/bin/PythonSlicer.exe"; do
   if [[ -x "$candidate" ]]; then PYTHONSLICER="$candidate"; break; fi
 done
-TEEM_LIB_DIR=$(find "$SLICER_PATH/lib" -maxdepth 1 -type d -name 'Teem-*' | sort | tail -n 1)
+TEEM_LIB_DIR=$(find "$SLICER_ROOT/lib" -maxdepth 1 -type d -name 'Teem-*' | sort | tail -n 1)
 
 [[ -d "$CLI_MODULES_PATH2" ]] || die "Unable to locate core Slicer CLI modules under $SLICER_LIB_DIR"
 
@@ -219,10 +236,10 @@ TEEM_LIB_DIR=$(find "$SLICER_PATH/lib" -maxdepth 1 -type d -name 'Teem-*' | sort
 [[ -x "$CLI_MODULES_PATH2/BRAINSFit" ]] || die "BRAINSFit not found under $CLI_MODULES_PATH2"
 [[ -x "$CLI_MODULES_PATH2/ResampleScalarVectorDWIVolume" ]] || die "ResampleScalarVectorDWIVolume not found under $CLI_MODULES_PATH2"
 
-prepend_ld_library_path "$SLICER_PATH/lib"
+prepend_ld_library_path "$SLICER_ROOT/lib"
 prepend_ld_library_path "$SLICER_LIB_DIR"
 prepend_ld_library_path "$TEEM_LIB_DIR"
-prepend_ld_library_path "$SLICER_PATH/lib/Python/lib"
+prepend_ld_library_path "$SLICER_ROOT/lib/Python/lib"
 prepend_ld_library_path "$CLI_MODULES_PATH2"
 if [[ -n "${CONDA_EXE:-}" ]]; then
   prepend_ld_library_path "$(dirname "$(dirname "$CONDA_EXE")")/lib"
@@ -231,8 +248,8 @@ if [[ -n "${CONDA_PREFIX:-}" ]]; then
   prepend_ld_library_path "$CONDA_PREFIX/lib"
 fi
 
-BRAINS_FIT=("$SLICER_PATH/Slicer" --launch "$CLI_MODULES_PATH2/BRAINSFit")
-RESAMPLE_VOLUME=("$SLICER_PATH/Slicer" --launch "$CLI_MODULES_PATH2/ResampleScalarVectorDWIVolume")
+BRAINS_FIT=("$SLICER_LAUNCHER" --launch "$CLI_MODULES_PATH2/BRAINSFit")
+RESAMPLE_VOLUME=("$SLICER_LAUNCHER" --launch "$CLI_MODULES_PATH2/ResampleScalarVectorDWIVolume")
 
 log "Starting DTI processing for $SUBJECT_ID"
 log "Raw diffusion input: $DWI_SOURCE"

@@ -1463,6 +1463,7 @@ class ProductOrchestratorTest(unittest.TestCase):
                 generated_models=tuple(surface_dir.glob('*.stl')),
             )
             with mock.patch('anatomy.surface.inspect_surface_resources', return_value=dict(available=True)), \
+                    mock.patch('anatomy.surface.pipeline.prepare_shared_registered_bundle') as shared_bundle, \
                     mock.patch('anatomy.surface.run_surface', return_value=verified_surface) as surface_run:
                 result = run_subject_products(
                     ProductOrchestratorConfig(
@@ -1477,6 +1478,7 @@ class ProductOrchestratorTest(unittest.TestCase):
                 )
             self.assertTrue(surface_run.call_args.args[0].resume)
             self.assertEqual(surface_run.call_args.args[0].precision, 'fp32')
+            shared_bundle.assert_called_once()  # S1: the shared bundles are obtained before run_surface
 
             self.assertEqual(
                 [task.status for task in result.tasks],

@@ -8,7 +8,7 @@ import json
 import nibabel as nib
 import numpy as np
 
-from scripts.benchmark_cohort_compare import product_hash, compare_inventories
+from scripts.benchmark_cohort_compare import product_hash, compare_inventories, scientific_inventory
 from scripts.benchmark_cohort_workflows import inspect_cohort, select_campaign, update_comparisons
 
 
@@ -53,6 +53,35 @@ class CohortCampaignTests(unittest.TestCase):
         self.assertEqual(compare_inventories({}, {})['status'], 'failed')
         self.assertEqual(compare_inventories({'raw':'a'}, {})['status'], 'failed')
         self.assertEqual(compare_inventories({'raw':'a'}, {'raw':'a'})['status'], 'passed')
+
+    def test_empty_wma_cluster_is_compared_but_empty_final_tract_is_rejected(self):
+        import vtk
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root/'04_tractography/bundles/wma/FiberClustering/OutlierRemovedClusters/cluster_00552.vtp'
+            path.parent.mkdir(parents=True)
+            writer = vtk.vtkXMLPolyDataWriter()
+            writer.SetFileName(str(path))
+            writer.SetInputData(vtk.vtkPolyData())
+            self.assertEqual(writer.Write(), 1)
+            before = scientific_inventory(root)
+            self.assertEqual(len(before), 1)
+            self.assertEqual(before, scientific_inventory(root))
+            with self.assertRaisesRegex(ValueError, 'Empty or unreadable'):
+                product_hash(path)
+            final = path.parents[2]/'AnatomicalTracts/T_CST_left.vtp'
+            final.parent.mkdir()
+            final.write_bytes(path.read_bytes())
+            with self.assertRaisesRegex(ValueError, 'Empty or unreadable'):
+                scientific_inventory(root)
+
+    def test_malformed_empty_cluster_is_not_treated_as_a_valid_empty_slot(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp)/'cluster_00001.vtp'
+            for content in (b'truncated-image', b'<?xml version="1.0"?><VTKFile type="PolyData"><PolyData>'):
+                path.write_bytes(content)
+                with self.assertRaisesRegex(ValueError, 'Unreadable|unreadable'):
+                    product_hash(path, allow_empty=True)
 
     def test_sift_weights_ignore_path_comments_but_keep_numeric_order(self):
         with tempfile.TemporaryDirectory() as tmp:

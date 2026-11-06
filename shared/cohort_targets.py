@@ -2,15 +2,14 @@
 
 
 def selected_stages(arguments):
-    from shared.run_subject_pipeline_cli import build_parser, _resolve_targets, _resolve_microstructure_stages
+    from shared.run_subject_pipeline_cli import build_parser, resolve_analysis_options
     from shared.algorithm_selection import algorithms, BUNDLES
+    from shared.user_config import explicit_cli_destinations, coupled_explicit_cli_destinations
     # Parsing only: no environment checks, data conversion, weights or execution.
-    args, _ = build_parser().parse_known_args(['--subject-root', '/__batch_planning__', *arguments])
-    models = _resolve_microstructure_stages(args)
-    args.run_free_water, args.run_noddi, args.run_dki = (model in models for model in ('freewater', 'noddi', 'dki'))
-    if args.bundle_tractography_backend:
-        args.tractography_backend = args.bundle_tractography_backend
-    targets = set(_resolve_targets(args))
+    parser = build_parser()
+    args, _ = parser.parse_known_args(['--subject-root', '/__batch_planning__', *arguments])
+    explicit = coupled_explicit_cli_destinations(explicit_cli_destinations(parser, arguments))
+    targets = set(resolve_analysis_options(args, explicit_dests=explicit))
     stages = set()
     for target in targets:
         if target == 'validation':

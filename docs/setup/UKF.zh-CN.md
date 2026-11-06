@@ -55,8 +55,13 @@ CSD 的目标流线数隐藏且不参与 UKF。作者实现使用 CPU 多线程�
 
 ## 无损输入与结果管理
 
-拟合前检查 DWI 有限值、掩膜内正 b0、梯度长度与方向设计矩阵秩，以及原生网格
-二值掩膜。上述只是必要条件，不能代替采集质量及双张量模型适用性评估。
+拟合前检查 DWI 有限值、梯度长度与方向设计矩阵秩，以及原生网格二值掩膜。
+插件将输入掩膜与平均 b0 信号为有限正值的区域取交集，单独保存为
+`<subject>_ukf_valid_mask.nii.gz`，用于转换、追踪及掩膜重合 QC。
+排除体素的数量、比例和提示写入运行记录及 QC，不修改原始 DWI 或用户提供的掩膜。
+有效掩膜为空或排除比例超过 1% 时停止并要求检查输入；1% 是保守的输入完整性保护线，
+不代表解剖准确性阈值。派生掩膜也参与缓存完整性核验。
+这些检查不能代替采集质量及双张量模型适用性评估。
 
 运行前读取**当前安装版本**的 CLI 参数描述。有些作者构建的 `--xml` 会先完整输出
 XML，再进入空输入读取而返回非零；只在 XML 完整且可解析时接受描述，并记录返回码。
@@ -97,6 +102,11 @@ DWIConvert 自动从 Slicer 发现，完全独立的环境也可指定
 `--dwiconvert-executable` 或 `SLICERDSPACE_DWICONVERT_EXECUTABLE`。调整参数使用
 `--ukf-parameters '{"seedsPerVoxel":2,"numThreads":8}'`，修改与默认值一起记录，
 无需训练或复制 UKF 源码。
+
+如需明确使用本次 CSD/ACT 结果进行 WMA 分类，可指定
+`--tractography-backend csd_act --bundle-tractography-backend csd_act --bundle-backend wma`。
+大批次运行前先用 `--plan` 检查并解决受阻任务；`--doctor` 检查依赖，
+并不保证所有数据路由均已连接。
 
 ---
 

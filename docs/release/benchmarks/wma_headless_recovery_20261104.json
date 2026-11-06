@@ -1,0 +1,36 @@
+{
+  "status": "passed",
+  "scope": "Single real-subject headless WMA recovery correctness check; not cohort performance",
+  "failure": "Slicer Qt xcb could not connect to a display during WMA cluster back-transformation",
+  "automatic_virtual_x": true,
+  "transformed_clusters": 800,
+  "topology_checked_for_all_clusters": true,
+  "maximum_coordinate_error_mm": 3.8146955034790153e-06,
+  "coordinate_tolerance_mm": 0.0005,
+  "sources_unchanged": true,
+  "source_files_checked": 801,
+  "source_inventory_sha256": "f97a338ee83fc360f10a706747a637d8756aed7c1081210d22464f9f50a65ec2",
+  "anatomical_tract_count": 74,
+  "readable_tract_count": 74,
+  "nonempty_tract_count": 74,
+  "major_tract_contract_passed": true,
+  "all_tract_sampling_passed": true,
+  "human_review": "pending",
+  "test": "Testing/Python/wma_headless_transform_smoke.py",
+  "implementation_sha256": {
+    "tractography/wma.py": "9e15b2534996551331d8ea25e1a199aad2870754a3dc712eb26afcdce5a96f2c",
+    "shared/environment.py": "a4530d1885d776f02251e6eab18bcdb74e5e85c52fda27326ff2b9703c1bf02e",
+    "scripts/run_wma_harden_transform.py": "be6858698213f76d26e14526b84a4cc8b2e56420f45b8b3b3394eac13304bf67"
+  },
+  "full_record": "/data/chengjin/SlicerDDSurfer-test/wma-headless-recovery-20261104/verification.json",
+  "full_record_sha256": "6a470c527e038a85577773b79d975a038921f8e4addc0dd84c4f965898fa93bb",
+  "regression_tests": {
+    "ran": 1880,
+    "skipped": 9,
+    "failures": 0,
+    "log": "/data/chengjin/SlicerDDSurfer-test/wma-headless-unittest-20261104-final.log"
+  },
+  "recovery_duration_seconds": 725.5682964455336,
+  "verification_seconds": 39.57466578297317,
+  "transform_conventions_source": "https://slicer.readthedocs.io/en/5.8/developer_guide/modules/transforms.html"
+}

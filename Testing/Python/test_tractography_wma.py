@@ -69,6 +69,8 @@ exit 0
             "wm_separate_clusters_by_hemisphere.py",
             "wm_diffusion_measurements.py",
             "xvfb-run",
+            "Xvfb",
+            "xauth",
         ):
             script = self.wma_bin / script_name
             script.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
@@ -126,6 +128,77 @@ exit 0
         with mock.patch('tractography.wma.subprocess.run') as run:
             self.assertEqual(_resolve_slicer_runtime(self.slicer_executable), self.slicer_executable)
             run.assert_not_called()
+
+    def test_linux_headless_defaults_to_virtual_display(self):
+        from tractography.wma import WMAOrgAtlasConfig, build_wma_org_atlas_command, _use_virtual_x
+        config = WMAOrgAtlasConfig(subject_id='100307', input_tractography=self.tractography,
+            atlas_dir=self.atlas_dir, output_dir=self.output_dir, slicer_executable=self.slicer_executable,
+            wma_root=self.wma_root)
+        with mock.patch('tractography.wma.sys.platform', 'linux'), mock.patch.dict(os.environ, {}, clear=True):
+            self.assertTrue(_use_virtual_x())
+            command = build_wma_org_atlas_command(config)
+            self.assertEqual(command[command.index('-x') + 1], '1')
+
+    def test_existing_display_and_other_platforms_do_not_auto_enable_xvfb(self):
+        from tractography.wma import _use_virtual_x
+        for platform, environment in (
+            ('linux', {'DISPLAY': ':22'}),
+            ('linux', {'SLICERDSPACE_DISPLAY': ':23'}),
+            ('darwin', {}), ('win32', {}),
+        ):
+            with self.subTest(platform=platform, environment=environment), \
+                    mock.patch('tractography.wma.sys.platform', platform), \
+                    mock.patch.dict(os.environ, environment, clear=True):
+                self.assertFalse(_use_virtual_x())
+                self.assertTrue(_use_virtual_x(True))
+
+    def test_headless_preflight_requires_the_complete_virtual_display_tools(self):
+        from tractography.wma import WMAOrgAtlasConfig, inspect_wma_backend, validate_wma_org_inputs
+        config = WMAOrgAtlasConfig(subject_id='100307', input_tractography=self.tractography,
+            atlas_dir=self.atlas_dir, output_dir=self.output_dir, slicer_executable=self.slicer_executable,
+            wma_root=self.wma_root)
+        from tractography.wma import _command_path
+        def without_xvfb(name, root):
+            return None if name == 'Xvfb' else _command_path(name, root)
+        with mock.patch('tractography.wma.sys.platform', 'linux'), \
+                mock.patch.dict(os.environ, {}, clear=True), \
+                mock.patch('tractography.wma._command_path', side_effect=without_xvfb):
+            report = inspect_wma_backend(self.wma_root)
+            self.assertFalse(report['available'])
+            self.assertIn('Xvfb', report['missing_required'])
+            with self.assertRaisesRegex(RuntimeError, 'Missing required command.*Xvfb'):
+                validate_wma_org_inputs(config)
+
+    def test_execution_records_automatically_selected_virtual_display(self):
+        from tractography.wma import WMAOrgAtlasConfig, run_wma_org_atlas
+        config = WMAOrgAtlasConfig(subject_id='100307', input_tractography=self.tractography,
+            atlas_dir=self.atlas_dir, output_dir=self.output_dir, slicer_executable=self.slicer_executable,
+            wma_root=self.wma_root, execute=True)
+        with mock.patch('tractography.wma.sys.platform', 'linux'), \
+                mock.patch.dict(os.environ, {'PATH': os.defpath}, clear=True):
+            result = run_wma_org_atlas(config)
+        record = json.loads(result.manifest_path.read_text())
+        self.assertEqual(result.status, 'completed')
+        self.assertTrue(record['use_virtual_x'])
+        self.assertFalse(record['virtual_x_requested'])
+        command = record['executed_command']
+        self.assertEqual(command[command.index('-x') + 1], '1')
+
+    def test_environment_doctor_checks_headless_tools_only_for_linux_wma(self):
+        from shared.environment import EnvironmentDoctorConfig, build_dependency_specs
+        for platform, environment, targets, required in (
+            ('Linux', {}, ('wma',), True),
+            ('Linux', {'DISPLAY': ':10'}, ('wma',), False),
+            ('Darwin', {}, ('wma',), False),
+            ('Linux', {}, ('connectome',), False),
+        ):
+            with self.subTest(platform=platform, environment=environment, targets=targets), \
+                    mock.patch.dict(os.environ, environment, clear=True):
+                config = EnvironmentDoctorConfig(targets=targets, repo_root=REPO_ROOT, platform_name=platform,
+                                                  slicer_executable=self.slicer_executable)
+                specs = {spec.key: spec for spec in build_dependency_specs(config)}
+                for command in ('xvfb-run', 'Xvfb', 'xauth'):
+                    self.assertEqual('command:' + command in specs, required)
 
     def test_coverage_alone_cannot_hide_sparse_major_tracts(self):
         from tractography.wma import _wma_output_contract_error, REQUIRED_MAJOR_TRACTS

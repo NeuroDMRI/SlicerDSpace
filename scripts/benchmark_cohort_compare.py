@@ -15,10 +15,10 @@ def _array(digest, value):
         digest.update(flat[start:start+1024*1024].tobytes())
 
 
-def product_hash(path):
+def product_hash(path, *, allow_empty=False):
     import numpy as np
     digest = hashlib.sha256()
-    if path.name.endswith(('.nii', '.nii.gz')):
+    if path.name.endswith(('.nii', '.nii.gz', '.mgh', '.mgz')):
         import nibabel as nib
         image = nib.load(path)
         digest.update(str(image.header.get_data_dtype()).encode())
@@ -37,16 +37,24 @@ def product_hash(path):
                 for key in sorted(kind):
                     digest.update(key.encode())
                     _array(digest, kind[key])
-    elif path.suffix in ('.vtk', '.vtp'):
+    elif path.suffix in ('.vtk', '.vtp', '.stl'):
         import vtk
         from vtk.util.numpy_support import vtk_to_numpy
-        reader = vtk.vtkXMLPolyDataReader() if path.suffix == '.vtp' else vtk.vtkPolyDataReader()
+        reader = {'.vtp': vtk.vtkXMLPolyDataReader, '.vtk': vtk.vtkPolyDataReader,
+                  '.stl': vtk.vtkSTLReader}[path.suffix]()
+        errors = []
+        reader.AddObserver(vtk.vtkCommand.ErrorEvent, lambda *_: errors.append(True))
+        if path.suffix == '.vtp' and not reader.CanReadFile(str(path)):
+            raise ValueError('Unreadable polydata: '+str(path))
         reader.SetFileName(str(path))
         reader.Update()
         data = reader.GetOutput()
-        if reader.GetErrorCode() or data.GetNumberOfPoints() == 0:
+        if errors or reader.GetErrorCode() or (data.GetNumberOfPoints() == 0 and not allow_empty):
             raise ValueError('Empty or unreadable polydata: '+str(path))
-        _array(digest, vtk_to_numpy(data.GetPoints().GetData()))
+        if data.GetPoints() is None:
+            digest.update(b'empty-polydata-without-points')
+        else:
+            _array(digest, vtk_to_numpy(data.GetPoints().GetData()))
         for cells in (data.GetVerts(), data.GetLines(), data.GetPolys(), data.GetStrips()):
             _array(digest, vtk_to_numpy(cells.GetOffsetsArray()))
             _array(digest, vtk_to_numpy(cells.GetConnectivityArray()))
@@ -66,17 +74,29 @@ def product_hash(path):
     return digest.hexdigest()
 
 
-def scientific_inventory(root):
-    rows = {}
+def scientific_paths(root):
+    """Select the same delivered arrays, geometry and saved cluster intermediates."""
     for path in sorted(root.rglob('*')):
         relative = path.relative_to(root)
         if not path.is_file() or relative.parts[0] not in ('02_microstructure','03_anatomy','04_tractography'):
             continue
         if any(part.startswith(('.', '_')) or part in ('cache', 'logs') for part in relative.parts):
             continue
-        if path.name.endswith(('.nii','.nii.gz','.npy','.tck','.trk','.vtk','.vtp','.tfm')) or (
+        if path.name.endswith(('.nii','.nii.gz','.mgh','.mgz','.npy','.tck','.trk','.vtk','.vtp','.stl','.tfm')) or (
+                path.suffix in ('.csv', '.tsv') and any('connectome' in part.lower() for part in relative.parts)) or (
                 path.suffix == '.txt' and any(word in path.name.lower() for word in ('sift', 'weight', 'transform'))):
-            rows[str(relative)] = product_hash(path)
+            yield path
+
+
+def scientific_inventory(root):
+    rows = {}
+    for path in scientific_paths(root):
+        relative = path.relative_to(root)
+        # Atlas cluster slots may be legitimately empty after classification,
+        # outlier removal or hemisphere separation. Final-product QC remains strict.
+        cluster = ('FiberClustering' in relative.parts and path.name.startswith('cluster_')
+                   and path.suffix in ('.vtk', '.vtp'))
+        rows[str(relative)] = product_hash(path, allow_empty=cluster)
     if not rows:
         raise ValueError('No scientific arrays or tractograms found: '+str(root))
     return rows
@@ -88,4 +108,4 @@ def compare_inventories(reference, candidate):
     different = sorted(key for key in reference.keys() & candidate.keys() if reference[key] != candidate[key])
     return dict(status='passed' if reference and not (missing or extra or different) else 'failed',
                 product_count=len(reference), missing=missing, extra=extra, different=different,
-                scope='Exact array/dtype/affine, streamline ordering, topology/attributes and weight bytes; excludes logs and intermediate MIF files')
+                scope='Exact array/dtype/affine, streamline ordering, mesh topology/attributes, weights and connectome tables; excludes logs and intermediate MIF files')

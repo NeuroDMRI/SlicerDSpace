@@ -722,7 +722,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--wma-atlas-dir", type=Path, help="Optional directory for the selected WMA atlas.")
     parser.add_argument("--wma-root", type=Path, help="Optional WhiteMatterAnalysis checkout root.")
     parser.add_argument("--slicer-executable", type=Path, help="Slicer executable used by WMA.")
-    parser.add_argument("--wma-use-virtual-x", action="store_true", help="Enable xvfb-run mode for WMA.")
+    parser.add_argument("--wma-use-virtual-x", action="store_true",
+                        help="Request xvfb-run for WMA; selected automatically on headless Linux.")
     parser.add_argument("--wma-export-diffusion-measures", action="store_true", help="Enable WMA diffusion measurements export.")
     parser.add_argument("--fiber-tract-measurements-cli", type=Path, help="Optional SlicerDMRI FiberTractMeasurements CLI for WMA.")
     parser.add_argument("--tractcloud-input-tractography", type=Path, help="Optional VTK/VTP tractography input for TractCloud.")

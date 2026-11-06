@@ -12,7 +12,7 @@ import unittest
 from unittest.mock import patch
 
 from microstructure.chunk_dispatch import chunk_results
-from shared.compute_tuning import candidates, config_id, select_configuration, tuning_key
+from shared.compute_tuning import candidates, config_id, select_configuration, tuning_key, calibration_options
 from shared.cohort_planning import plan_cohort
 from shared.cohort_targets import selected_stages
 from shared.numeric_threads import numerical_threads
@@ -60,6 +60,32 @@ class DynamicChunkTests(unittest.TestCase):
 
 
 class ComputeTuningTests(unittest.TestCase):
+    def test_calibration_uses_production_shell_cutoff_instead_of_hardcoded_3000(self):
+        from microstructure.dki import DkiConfig
+        options=calibration_options('microstructure_mkcurve')
+        self.assertEqual(options['max_bvalue'], DkiConfig.__dataclass_fields__['max_bvalue'].default)
+        self.assertEqual(options['max_bvalue'], 2500.)
+        with patch('shared.cohort_profile.workload_key', side_effect=lambda *args:args) as key:
+            before=tuning_key('microstructure_mkcurve',[8,8,8,288],[])
+            with patch('shared.compute_tuning.calibration_options', return_value={**options,'max_bvalue':3000.}):
+                after=tuning_key('microstructure_mkcurve',[8,8,8,288],[])
+        self.assertNotEqual(before,after)
+
+    def test_mkcurve_calibration_selects_the_actual_production_measurements(self):
+        import numpy as np
+        from scripts.autotune_batch import prepare_sample
+        from Testing.Python.test_microstructure_dki import synthetic_case, write_case
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)/'subject'
+            write_case(root, synthetic_case(noisy=True))
+            sample = Path(tmp)/'sample'
+            record = prepare_sample(root, sample, 'microstructure_mkcurve', 8)
+            bvals = np.loadtxt(sample/'bvals').reshape(-1)
+            self.assertEqual(record['selected_measurements'], 61)
+            self.assertEqual(record['protocol']['max_bvalue'], 2500.)
+            self.assertEqual(bvals.shape, (61,))
+            self.assertLessEqual(bvals.max(), 2500.)
+
     def test_malformed_profiles_do_not_replace_declared_defaults(self):
         from shared.compute_tuning import read_profile, lookup_profile
         with tempfile.TemporaryDirectory() as tmp:

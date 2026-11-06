@@ -12,6 +12,17 @@ GIB = 1024**3
 
 
 class CohortPlanningTests(unittest.TestCase):
+    def test_bundle_source_does_not_erase_explicitly_selected_tracking_stages(self):
+        from shared.cohort_targets import selected_stages
+        stages = selected_stages(['--targets', 'tractography,bundles',
+            '--tractography-backend', 'csd_act,ukf', '--bundle-backend', 'wma',
+            '--bundle-tractography-backend', 'ukf'])
+        self.assertTrue({'csd_act', 'ukf', 'wma', 'segmentation', 'parcellation'} <= stages)
+        stages = selected_stages(['--targets', 'bundles', '--bundle-backend', 'wma',
+            '--bundle-tractography-backend', 'ukf'])
+        self.assertTrue({'ukf', 'wma'} <= stages)
+        self.assertNotIn('csd_act', stages)
+
     def subjects(self, root, count=4):
         return [SimpleNamespace(subject_id=f'sub-{i}', subject_root=Path(root) / f'sub-{i}') for i in range(count)]
 

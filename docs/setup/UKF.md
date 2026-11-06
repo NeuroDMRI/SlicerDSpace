@@ -59,8 +59,15 @@ no implicit shell selection or density/threshold escalation occurs after QC fail
 
 ## Input And Output Integrity
 
-Inputs need finite DWI values, positive in-mask b0 signal, valid b-values/b-vectors,
-a rank-six tensor direction design, and a finite binary mask on the native grid.
+Inputs need finite DWI values, valid b-values/b-vectors, a rank-six tensor
+direction design, and a finite binary mask on the native grid. The adapter
+intersects that mask with voxels having finite, positive mean b0 signal and
+saves `<subject>_ukf_valid_mask.nii.gz` as a separate tracking input. It records
+excluded counts/fractions and warnings in the manifest and QC, without changing
+the source DWI or supplied mask. An empty effective mask or exclusion exceeding
+1% stops execution for input review; this is a conservative input-integrity
+guard, not an anatomical-accuracy threshold. The derived mask is included in
+cache integrity checks and is used for conversion, tracking and overlap QC.
 These checks are necessary, not sufficient evidence of a scientifically suitable
 two-tensor acquisition. Review acquisition quality and model suitability separately.
 
@@ -112,6 +119,11 @@ The GUI resolves the installed extension automatically and forwards its path.
 `SLICERDSPACE_DWICONVERT_EXECUTABLE`. Optional overrides use, for example,
 `--ukf-parameters '{"seedsPerVoxel":2,"numThreads":8}'` and are recorded verbatim
 alongside resolved defaults. No extra training or copying UKF source is required.
+
+To explicitly classify the selected CSD/ACT output instead, use
+`--tractography-backend csd_act --bundle-tractography-backend csd_act --bundle-backend wma`.
+Run `--plan` before a large batch and resolve any blocked tasks; `--doctor`
+checks dependencies but does not establish that every data route is connected.
 
 ---
 

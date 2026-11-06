@@ -17,6 +17,9 @@ import xml.etree.ElementTree as ET
 
 
 REFERENCE = "https://github.com/pnlbwh/ukftractography/blob/2d2b661539700aa825c1949823119601e11e1823/UKFTractography/UKFTractography.xml"
+MASK_POLICY = "native-mask-intersect-positive-mean-b0-v1"
+# A conservative input-integrity guard, not an anatomical-accuracy threshold.
+MAX_EXCLUDED_MASK_FRACTION = 0.01
 
 
 @dataclass(frozen=True)
@@ -122,6 +125,7 @@ def paths(subject, directory):
         qc=directory / "ukf_qc.json",
         manifest=directory / "ukf_manifest.json",
         schema=directory / "ukf_cli.xml",
+        effective_mask=directory / (subject + "_ukf_valid_mask.nii.gz"),
     )
 
 
@@ -151,7 +155,7 @@ def executable_identity(executable):
 def signature(raw, options, executable, converter=None):
     converter = converter or resolve_executable(name="DWIConvert")
     return dict(
-        version=4,
+        version=5,
         subject_id=raw.subject_id,
         parameters=asdict(parameters(options)),
         inputs={
@@ -163,6 +167,8 @@ def signature(raw, options, executable, converter=None):
         protocol="author-module-defaults-with-explicit-overrides",
         shell_policy="all supplied volumes; no implicit shell filtering",
         conversion_policy="official-gradient-geometry-probe-with-lossless-native-payload-v1",
+        mask_policy=MASK_POLICY,
+        max_excluded_mask_fraction=MAX_EXCLUDED_MASK_FRACTION,
     )
 
 
@@ -185,6 +191,10 @@ def current(raw, directory, options=None, executable=None, converter=None):
 
 
 def validate_inputs(raw):
+    return _validated_inputs(raw)[0]
+
+
+def _validated_inputs(raw):
     import nibabel as nib
     import numpy as np
 
@@ -229,15 +239,47 @@ def validate_inputs(raw):
     if not np.isfinite(data).all():
         raise ValueError("UKF DWI contains NaN or Inf; repair the source data before fitting")
     baseline = data[..., ~nonzero].mean(axis=3)
-    if np.any(baseline[mask > 0] <= 0):
-        raise ValueError("UKF brain mask includes voxels without positive b0 signal")
-    return dict(
+    effective = (mask > 0) & np.isfinite(baseline) & (baseline > 0)
+    original_count = int(np.count_nonzero(mask))
+    excluded = original_count - int(effective.sum())
+    excluded_fraction = excluded / original_count
+    if not effective.any() or excluded_fraction > MAX_EXCLUDED_MASK_FRACTION:
+        raise ValueError(
+            f"UKF brain mask has {excluded}/{original_count} voxels without finite positive b0 signal "
+            f"({excluded_fraction:.2%}); exceeds the {MAX_EXCLUDED_MASK_FRACTION:.0%} input-integrity limit. "
+            "Review the DWI and mask; source files are unchanged."
+        )
+    report = dict(
         volumes=len(b),
         b0_volumes=int(np.count_nonzero(~nonzero)),
-        brain_voxels=int(mask.sum()),
+        brain_voxels=original_count,
+        effective_brain_voxels=int(effective.sum()),
+        excluded_nonpositive_b0_voxels=excluded,
+        excluded_mask_fraction=excluded_fraction,
+        mask_policy=MASK_POLICY,
+        max_excluded_mask_fraction=MAX_EXCLUDED_MASK_FRACTION,
+        warnings=([f"UKF excludes {excluded} mask voxels without finite positive mean b0 signal; "
+                   "the source DWI and mask are unchanged."] if excluded else []),
         approximate_shells=np.unique(np.round(b[nonzero] / 100) * 100).tolist(),
         input_coordinate_system="NIfTI RAS+, gradients converted by official DWIConvert",
     )
+    return report, effective
+
+
+def write_effective_mask(raw, effective, target):
+    import nibabel as nib
+    import numpy as np
+
+    target = Path(target)
+    if target.resolve() in {Path(getattr(raw, key)).resolve() for key in
+                            ('dwi_path', 'mask_path', 'bval_path', 'bvec_path')}:
+        raise ValueError('UKF effective mask must not overwrite a source input')
+    source = nib.load(raw.mask_path)
+    header = source.header.copy()
+    header.set_data_dtype(np.uint8)
+    header.set_slope_inter(1, 0)
+    nib.save(source.__class__(effective.astype(np.uint8), source.affine, header), target)
+    return replace(raw, mask_path=target)
 
 
 def output_qc(path, raw, selected=None):
@@ -507,7 +549,7 @@ def run_ukf(raw, directory, *, options=None, executable=None, converter=None, fo
     env = merged_startup_environment(build_cli_environment(str(binary)))
     schema, xml, probe_code = inspect_schema(binary, env)
     build_command(binary, "DWI.nrrd", "Mask.nrrd", "tracts.vtk", selected, schema)
-    inputs = validate_inputs(raw)
+    inputs, effective = _validated_inputs(raw)
     before = signature(raw, options, binary, converter)
     record = dict(
         status="running",
@@ -528,6 +570,13 @@ def run_ukf(raw, directory, *, options=None, executable=None, converter=None, fo
     save()
     products["schema"].write_text(xml, encoding="utf-8")
     try:
+        tracking_raw = write_effective_mask(raw, effective, products["effective_mask"])
+        record["effective_mask"] = dict(path=str(products["effective_mask"]),
+                                        sha256=digest(products["effective_mask"]))
+        save()
+        if log:
+            for warning in inputs['warnings']:
+                log('[UKF] '+warning)
         converter_env = merged_startup_environment(build_cli_environment(str(converter)))
         with tempfile.TemporaryDirectory(prefix=".ukf-", dir=products["manifest"].parent) as temporary:
             work = Path(temporary)
@@ -572,9 +621,11 @@ def run_ukf(raw, directory, *, options=None, executable=None, converter=None, fo
                                 process.kill()
                                 process.wait()
                 if index == 0:
-                    record["conversion"] = restore_lossless_payload(raw, probe, converted_probe, dwi, mask)
+                    record["conversion"] = restore_lossless_payload(tracking_raw, probe, converted_probe, dwi, mask)
                     save()
-            qc = output_qc(tracts, raw, selected)
+            qc = output_qc(tracts, tracking_raw, selected)
+            qc['input_validation'] = inputs
+            qc['effective_mask'] = record['effective_mask']
             if not qc["automatic_qc_passed"]:
                 products["qc"].write_text(json.dumps(qc, indent=2) + "\n", encoding="utf-8")
                 failed = work.with_name(work.name + "-failed.vtk")

@@ -15,7 +15,7 @@ from uuid import uuid4
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from shared.compute_tuning import candidates, config_id, tuning_key, select_configuration, read_profile
+from shared.compute_tuning import candidates, config_id, tuning_key, select_configuration, read_profile, calibration_options
 _active_record = None
 
 
@@ -26,11 +26,12 @@ def save(path, record):
     temporary.replace(path)
 
 
-def prepare_sample(root, destination, stage, sample_voxels):
+def prepare_sample(root, destination, stage, sample_voxels, protocol=None):
     import nibabel as nib
     import numpy as np
     from shared.pipeline import RawInputBundle
     from microstructure.dki import DkiConfig, _load_protocol, _signature
+    protocol = protocol or calibration_options(stage)
     directory = root / 'input' if (root / 'input/data.nii.gz').is_file() else root
     paths = [directory / name for name in ('data.nii.gz', 'bvals', 'bvecs', 'nodif_brain_mask.nii.gz')]
     if not all(path.is_file() for path in paths):
@@ -43,7 +44,8 @@ def prepare_sample(root, destination, stage, sample_voxels):
         from microstructure.mkcurve_inputs import _prepare_inputs
         from microstructure.mkcurve import repair_nonpositive, synthetic_b0_grid
         with tempfile.TemporaryDirectory(prefix='.prepare-', dir=destination) as temporary:
-            prepared, _, _ = _prepare_inputs(*paths, Path(temporary), 50., 3000., allow_nonfinite=True)
+            prepared, _, _ = _prepare_inputs(*paths, Path(temporary), protocol['b0_threshold'],
+                                              protocol['max_bvalue'], allow_nonfinite=True)
             image = nib.load(prepared[0], mmap='c')
             data = image.dataobj.get_unscaled()
             try:
@@ -59,7 +61,7 @@ def prepare_sample(root, destination, stage, sample_voxels):
                     data._mmap.close()
     else:
         bundle = RawInputBundle(root, root.name, directory, *paths)
-        config = DkiConfig(root.name, bundle, destination)
+        config = DkiConfig(root.name, bundle, destination, **protocol)
         image, mask, gtab, selected, _ = _load_protocol(config)
         indices = np.flatnonzero(mask.ravel())
         positions = indices[np.linspace(0, len(indices)-1, min(sample_voxels, len(indices)), dtype=int)]
@@ -84,6 +86,7 @@ def prepare_sample(root, destination, stage, sample_voxels):
         raise RuntimeError('Calibration source changed during preparation')
     record = dict(source=str(root), shape=shape, sampled_voxels=len(values), excluded_samples=int((~valid).sum()),
                   inputs=source, repair=repair, grid_samples=len(grid) if grid is not None else None,
+                  protocol=protocol, selected_measurements=len(bvals),
                   scope='Sampled real signals; full acquisition table and full MK-Curve grid; not a full-volume timing')
     save(destination / 'source.json', record)
     return record
@@ -93,6 +96,7 @@ def probe(request):
     from shared.cohort_profile import StageMonitor
     from scripts.benchmark_cohort_compare import product_hash
     stage, config = request['stage'], request['settings']
+    protocol = request.get('protocol') or calibration_options(stage)
     slots = config['workers'] * config['threads']
     if hasattr(os, 'sched_getaffinity'):
         allocation = sorted(os.sched_getaffinity(0))
@@ -119,13 +123,14 @@ def probe(request):
             run_mkcurve(source/'data.nii', source/'bvals', source/'bvecs', source/'mask.nii.gz', folder,
                         grid=np.loadtxt(source/'grid.txt'), voxels_per_chunk=config['chunk'],
                         num_workers=config['workers'], worker_threads=config['threads'],
+                        b0_threshold=protocol['b0_threshold'], max_bvalue=protocol['max_bvalue'],
                         chunk_schedule=request.get('chunk_schedule', 'dynamic'))
         else:
             from shared.pipeline import RawInputBundle
             from microstructure.dki import DkiConfig, run_dki
             bundle = RawInputBundle(source, 'calibration', source, source/'data.nii', source/'bvals',
                                     source/'bvecs', source/'mask.nii.gz')
-            run_dki(DkiConfig('calibration', bundle, folder, fit_method=request.get('fit_method', 'WLS'),
+            run_dki(DkiConfig('calibration', bundle, folder, **protocol,
                               num_threads=config['threads'], voxels_per_chunk=config['chunk']))
         seconds = time.monotonic() - started
         products = {str(path.relative_to(folder)): product_hash(path) for path in sorted(folder.rglob('*'))
@@ -210,7 +215,7 @@ def main(argv=None):
                     reason='Calibration requires final NIfTI inputs; normalisation/execution remain available without calibration'))
                 continue
             started = time.monotonic()
-            source_record = prepare_sample(root, sample, stage, args.sample_voxels)
+            source_record = prepare_sample(root, sample, stage, args.sample_voxels, calibration_options(stage, forwarded))
             record['preparation_seconds'] += time.monotonic() - started
             prepared.append(dict(input=str(sample), key=key, shape=shape, source=source_record))
         if not prepared:
@@ -224,6 +229,7 @@ def main(argv=None):
                     ident = config_id(config)
                     trial = work / f'{stage}-i{index}-{ident}-r{repeat}'
                     request = dict(stage=stage, settings=config, output=str(trial),
+                                   protocol=calibration_options(stage, forwarded),
                                    fit_method=_option(forwarded, '--dki-fit-method', 'WLS'), **sample)
                     request_path = trial.with_suffix('.request.json')
                     save(request_path, request)

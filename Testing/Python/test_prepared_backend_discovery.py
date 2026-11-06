@@ -223,6 +223,11 @@ class PreparedBackendDiscoveryTest(unittest.TestCase):
 
     def test_wma_posix_cache_is_used_for_inspection_and_command(self):
         prepared = self.source("wma")
+        tools = self.root / 'display-tools'
+        tools.mkdir()
+        for name in ('xvfb-run', 'Xvfb', 'xauth'):
+            (tools / name).touch()
+        self.which.side_effect = lambda name: str(tools / name) if (tools / name).is_file() else None
         for system in ("linux", "darwin"):
             with self.subTest(system=system), mock.patch("tractography.wma.sys.platform", system):
                 status = wma.inspect_wma_backend()
@@ -232,6 +237,7 @@ class PreparedBackendDiscoveryTest(unittest.TestCase):
                     "synthetic", self.root / "input.vtk", self.root / "atlas", self.root / "out",
                     self.root / "Slicer"))
                 self.assertEqual(command[0], (prepared / wma.WMA_APPLY_ORG_SCRIPT).as_posix())
+                self.assertEqual(command[command.index('-x') + 1], '1' if system == 'linux' else '0')
 
     def test_wma_explicit_root_precedes_environment_path_and_cache(self):
         self.source("wma")

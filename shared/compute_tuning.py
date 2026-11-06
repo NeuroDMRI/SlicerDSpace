@@ -25,6 +25,16 @@ def config_id(config):
     return f'w{config["workers"]}-t{config["threads"]}-c{config["chunk"]}'
 
 
+def calibration_options(stage, arguments=()):
+    """Use the numerical protocol of the production DKI/MK-Curve adapter."""
+    from microstructure.dki import DkiConfig
+    from shared.cohort_planning import _option
+    fields = DkiConfig.__dataclass_fields__
+    return dict(fit_method=_option(arguments, '--dki-fit-method',
+                                  'MKCURVE' if stage.endswith('mkcurve') else 'WLS'),
+                **{name: fields[name].default for name in ('b0_threshold', 'max_bvalue', 'shell_tolerance')})
+
+
 def tuning_key(stage, shape, arguments):
     from shared.cohort_planning import _option
     from shared.cohort_profile import workload_key
@@ -34,6 +44,8 @@ def tuning_key(stage, shape, arguments):
         flags = {'--wma-root': '', '--wma-atlas': 'org', '--wma-atlas-dir': ''}
     settings = [value for flag, default in sorted(flags.items())
                 for value in (flag, _option(arguments, flag, default))]
+    if stage != 'wma':
+        settings.extend(['calibration_protocol_v2', json.dumps(calibration_options(stage, arguments), sort_keys=True)])
     return workload_key(stage, list(shape), settings, 1, False)
 
 

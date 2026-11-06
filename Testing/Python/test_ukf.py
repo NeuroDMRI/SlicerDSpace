@@ -201,6 +201,59 @@ class GeometryTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "NaN"):
             ukf.validate_inputs(self.raw)
 
+    def test_isolated_nonpositive_b0_uses_separate_native_mask(self):
+        import nibabel as nib
+        import numpy as np
+
+        data = np.ones((6, 6, 6, 7), np.float32)
+        data[0, 0, 0, 0] = 0
+        data[0, 0, 1, 0] = -1
+        nib.save(nib.Nifti1Image(data, self.affine), self.dwi)
+        before = {p: p.read_bytes() for p in (self.dwi, self.mask)}
+        report, effective = ukf._validated_inputs(self.raw)
+        self.assertEqual(report['excluded_nonpositive_b0_voxels'], 2)
+        self.assertEqual(report['effective_brain_voxels'], 214)
+        self.assertTrue(report['warnings'])
+        output = self.root/'effective.nii.gz'
+        tracking_raw = ukf.write_effective_mask(self.raw, effective, output)
+        image = nib.load(output)
+        self.assertTrue(np.array_equal(np.asanyarray(image.dataobj), effective))
+        self.assertTrue(np.array_equal(image.affine, self.affine))
+        self.assertEqual(image.get_data_dtype(), np.dtype('uint8'))
+        self.assertEqual(tracking_raw.mask_path, output)
+        self.assertEqual(self.raw.mask_path, self.mask)
+        self.assertEqual(before, {p: p.read_bytes() for p in before})
+        with self.assertRaisesRegex(ValueError, 'must not overwrite'):
+            ukf.write_effective_mask(self.raw, effective, self.mask)
+
+    def test_widespread_or_empty_effective_mask_is_rejected(self):
+        import nibabel as nib
+        import numpy as np
+
+        for excluded in (3, 216):
+            with self.subTest(excluded=excluded):
+                data = np.ones((6, 6, 6, 7), np.float32)
+                indices = np.unravel_index(np.arange(excluded), (6, 6, 6))
+                data[(*indices, np.zeros(excluded, dtype=int))] = 0
+                nib.save(nib.Nifti1Image(data, self.affine), self.dwi)
+                with self.assertRaisesRegex(ValueError, 'input-integrity limit'):
+                    ukf.validate_inputs(self.raw)
+
+    def test_zero_signal_outside_source_mask_does_not_change_valid_mask(self):
+        import nibabel as nib
+        import numpy as np
+
+        data = np.ones((6, 6, 6, 7), np.float32)
+        data[0, 0, 0, 0] = 0
+        mask = np.ones((6, 6, 6), np.uint8)
+        mask[0, 0, 0] = 0
+        nib.save(nib.Nifti1Image(data, self.affine), self.dwi)
+        nib.save(nib.Nifti1Image(mask, self.affine), self.mask)
+        report, effective = ukf._validated_inputs(self.raw)
+        self.assertEqual(report['excluded_nonpositive_b0_voxels'], 0)
+        self.assertFalse(report['warnings'])
+        self.assertTrue(np.array_equal(effective, mask))
+
     def test_input_mask_mismatch(self):
         import nibabel as nib
         import numpy as np
@@ -311,7 +364,7 @@ class GeometryTests(unittest.TestCase):
                 ),
             ),
             mock.patch.object(ukf.subprocess, "Popen", side_effect=stage),
-            mock.patch.object(ukf, "restore_lossless_payload", return_value={"policy": "mock conversion"}),
+            mock.patch.object(ukf, "restore_lossless_payload", return_value={"policy": "mock conversion"}) as conversion,
             mock.patch("shared.pipeline.build_cli_environment", return_value={}),
         ):
             if fail_qc:
@@ -319,7 +372,11 @@ class GeometryTests(unittest.TestCase):
                     with self.assertRaisesRegex(RuntimeError, "QC failed"):
                         ukf.run_ukf(self.raw, directory, force=force)
             else:
-                return ukf.run_ukf(self.raw, directory, force=force)
+                result = ukf.run_ukf(self.raw, directory, force=force)
+                if conversion.called:
+                    self.assertEqual(conversion.call_args.args[0].mask_path,
+                                     ukf.paths(self.raw.subject_id, directory)['effective_mask'])
+                return result
 
     def test_mocked_process_lifecycle_cache_and_failure(self):
         directory = self.root / "outputs"
@@ -360,6 +417,48 @@ class GeometryTests(unittest.TestCase):
         first = ukf.signature(self.raw, {}, self.binary, self.converter)
         library.write_text("changed upstream implementation")
         self.assertNotEqual(first, ukf.signature(self.raw, {}, self.binary, self.converter))
+
+    def test_effective_mask_is_recorded_and_protected_by_cache_receipt(self):
+        import nibabel as nib
+        import numpy as np
+
+        data = np.ones((6, 6, 6, 7), np.float32)
+        data[0, 0, 0, 0] = 0
+        nib.save(nib.Nifti1Image(data, self.affine), self.dwi)
+        directory = self.root/'outputs'
+        self.mocked_run(directory)
+        outputs = ukf.paths('test', directory)
+        manifest = json.loads(outputs['manifest'].read_text())
+        qc = json.loads(outputs['qc'].read_text())
+        self.assertEqual(manifest['signature']['mask_policy'], ukf.MASK_POLICY)
+        self.assertIn('effective_mask', manifest['artifacts'])
+        self.assertEqual(qc['input_validation']['excluded_nonpositive_b0_voxels'], 1)
+        self.assertEqual(qc['effective_mask']['sha256'], ukf.digest(outputs['effective_mask']))
+        outputs['effective_mask'].write_bytes(b'truncated')
+        with mock.patch.object(ukf, 'resolve_executable', side_effect=lambda explicit=None, name='UKFTractography':
+                               self.binary if name == 'UKFTractography' else self.converter):
+            self.assertFalse(ukf.current(self.raw, directory))
+
+    def test_independent_audit_recognises_ukf_and_rejects_changed_mask(self):
+        from scripts.audit_scientific_outputs import _audit_tractography
+
+        directory = self.root/'outputs'
+        self.mocked_run(directory)
+        outputs = ukf.paths('test', directory)
+        record = dict(subject_id='test', subject_root=str(self.root),
+            analysis_inputs={key: str(path) for key, path in
+                             dict(dwi=self.dwi, bval=self.bval, bvec=self.bvec, mask=self.mask).items()},
+            tasks=[dict(name='tractography.ukf', status='completed',
+                        outputs={key: str(path) for key, path in outputs.items()},
+                        manifest_path=str(outputs['manifest']), qc_path=str(outputs['qc']))])
+        checks = []
+        self.assertTrue(_audit_tractography(record, checks))
+        self.assertTrue(all(check['passed'] for check in checks), checks)
+        outputs['effective_mask'].write_bytes(b'truncated')
+        checks = []
+        self.assertTrue(_audit_tractography(record, checks))
+        self.assertIn('tractography.ukf.current_artifacts',
+                      {check['name'] for check in checks if not check['passed']})
 
 
 class IntegrationTests(unittest.TestCase):

@@ -1,0 +1,25 @@
+{
+  "status": "passed",
+  "scope": "Synthetic native-grid input-adapter/official-CLI smoke, not cohort performance or anatomical validation",
+  "streamline_count": 1726,
+  "excluded_voxels": 2,
+  "valid_voxels": 1726,
+  "sources_unchanged": true,
+  "cache_current": true,
+  "automatic_qc": {
+    "nonempty_geometry": true,
+    "positive_lengths": true,
+    "native_mask_overlap": true,
+    "requested_tensor_and_fa_arrays": true
+  },
+  "vtk_trk_verified_streamlines": 1726,
+  "implementation_sha256": "ecce4ddcb5efa447442d71e7c5e26786fb4e0bff27af79e0a5cda25752d6f947",
+  "runtime_seconds": 10.331849513575435,
+  "executable": {
+    "path": "/data/chengjin/SlicerDDSurfer/ignore/validation/ukf_domain_20261017/build/lib/Slicer-5.10/cli-modules/UKFTractography",
+    "sha256": "15112908eec3096733c9fe7fa9082648762f1003ec17eaca71c3e25d896975fd",
+    "companion_libraries": {
+      "/data/chengjin/SlicerDDSurfer/ignore/validation/ukf_domain_20261017/build/lib/libUKFBase.so": "6fd6de0bf495dd5167a8368bf88c1e2dc98a370fd8b6b6064b9de3eb3def0439"
+    }
+  }
+}

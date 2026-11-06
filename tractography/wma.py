@@ -315,6 +315,11 @@ def _resolve_runtime_display() -> Optional[str]:
     return None
 
 
+def _use_virtual_x(requested: bool = False) -> bool:
+    """Linux's no-main-window Slicer still needs an X display."""
+    return requested or (sys.platform.startswith('linux') and _resolve_runtime_display() is None)
+
+
 def inspect_wma_backend(
     wma_root: Optional[Path] = None,
     *,
@@ -342,8 +347,10 @@ def inspect_wma_backend(
     optional = list(OPTIONAL_WMA_COMMANDS)
     if require_diffusion_measurements and "wm_diffusion_measurements.py" not in required:
         required.append("wm_diffusion_measurements.py")
-    if require_virtual_x and "xvfb-run" not in required:
-        required.append("xvfb-run")
+    if _use_virtual_x(require_virtual_x):
+        for command in ("xvfb-run", "Xvfb", "xauth"):
+            if command not in required:
+                required.append(command)
     for command_name in required:
         command_path = _command_path(command_name, root)
         status["commands"][command_name] = command_path.as_posix() if command_path else None
@@ -622,7 +629,7 @@ def build_wma_org_atlas_command(config: WMAOrgAtlasConfig) -> tuple[str, ...]:
         "-n",
         str(config.num_threads),
         "-x",
-        "1" if config.use_virtual_x else "0",
+        "1" if _use_virtual_x(config.use_virtual_x) else "0",
         "-c",
         str(config.clean_files),
     ]
@@ -740,7 +747,8 @@ def run_wma_org_atlas(
     reservation = os.environ.get('SLICERDSPACE_STAGE_CPUS')
     if reservation and threads > int(reservation):
         raise ValueError('WMA worker count exceeds the admitted CPU reservation')
-    config = replace(config, num_threads=threads)
+    virtual_x_requested = config.use_virtual_x
+    config = replace(config, num_threads=threads, use_virtual_x=_use_virtual_x(virtual_x_requested))
     validate_wma_org_inputs(config)
     wma_root = resolve_wma_root(config.wma_root)
     backend_status = inspect_wma_backend(
@@ -805,6 +813,7 @@ def run_wma_org_atlas(
                                            "installed": False, "reports": []},
         "num_threads": config.num_threads,
         "use_virtual_x": config.use_virtual_x,
+        "virtual_x_requested": virtual_x_requested,
         "export_diffusion_measures": config.export_diffusion_measures,
         "clean_files": config.clean_files,
         "executed": bool(config.execute),

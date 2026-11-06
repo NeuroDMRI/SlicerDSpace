@@ -1385,6 +1385,15 @@ def build_dependency_specs(config: EnvironmentDoctorConfig) -> tuple[DependencyS
 
         if target == "wma":
             _add_core_python(specs, target)
+            if platform_name == "Linux" and not any(os.environ.get(name) for name in (
+                    "DISPLAY", "SLICERDSPACE_DISPLAY")):
+                from tractography.wma import EXTRA_TOOL_DIRS
+                for command in ("xvfb-run", "Xvfb", "xauth"):
+                    _put(specs, DependencySpec(
+                        key=f"command:{command}", kind="command", label=command,
+                        required=True, targets=(target,), command=command, install_group="wma",
+                        common_paths=EXTRA_TOOL_DIRS,
+                        notes="WMA automatically uses a virtual X display for Slicer on headless Linux."))
             _python(specs, target=target, import_name="vtk", package="vtk",
                     notes="Required by the pipeline host to decode bundle geometry; bundled with Slicer.")
             # The author scripts run in Slicer's Python and `import whitematteranalysis` loads these at import time

@@ -116,6 +116,28 @@ def comparison_reference(record, trial):
                  row['threads']==trial['threads'] and row['policy']==policy and row['status']=='completed'), None)
 
 
+def timing_issues(record, trial):
+    """Do not accept speedups when the recorded CPU-isolation contract failed."""
+    folder = Path(trial['output'])
+    issues = []
+    expected = record.get('cpu_affinity')
+    if expected:
+        paths = [folder/'subject_guard/config.json'] if trial['policy'] in ('subject','sequential') else list(folder.glob('schedule_*/config.json'))
+        if not paths or any(not path.is_file() for path in paths):
+            issues.append('Missing CPU-placement guard record')
+        for path in paths:
+            if path.is_file() and set(json.loads(path.read_text()).get('cpu_affinity', [])) != set(expected):
+                issues.append('Guard CPU set differs from campaign allocation: '+str(path))
+    if trial.get('measurement', {}).get('cpu_affinity_violations'):
+        issues.append('Observed descendant thread escaped the CPU allocation')
+    condition = folder/'timing_conditions.json'
+    if condition.is_file():
+        context = json.loads(condition.read_text())
+        if context.get('performance_valid') is False:
+            issues.extend(context.get('reasons') or ['Recorded timing intervention or resource contention'])
+    return issues
+
+
 def update_comparisons(record, folder):
     from scripts.benchmark_cohort_compare import compare_inventories
     reports = []
@@ -123,8 +145,8 @@ def update_comparisons(record, folder):
         reference = comparison_reference(record, trial)
         if trial['status']!='completed' or not reference:
             continue
-        left = Path(reference['output'])/'scientific_fingerprints.json'
-        right = Path(trial['output'])/'scientific_fingerprints.json'
+        left = Path(reference.get('scientific_fingerprints') or Path(reference['output'])/'scientific_fingerprints.json')
+        right = Path(trial.get('scientific_fingerprints') or Path(trial['output'])/'scientific_fingerprints.json')
         if not (left.is_file() and right.is_file()):
             continue
         baseline, candidate = json.loads(left.read_text()), json.loads(right.read_text())
@@ -141,11 +163,15 @@ def update_comparisons(record, folder):
              reference=reference['id'],subjects_match=subjects_match))
         if trial['policy'] not in ('adaptive','adaptive_tuned'):
             continue
-        accepted = trial.get('qc_status')==reference.get('qc_status')=='passed' and trial['comparison_status']=='passed'
+        isolation_issues = timing_issues(record, reference) + timing_issues(record, trial)
+        trial['timing_issues'] = isolation_issues
+        accepted = (trial.get('qc_status')==reference.get('qc_status')=='passed'
+                    and trial['comparison_status']=='passed' and not isolation_issues)
         before = reference['measurement']['execution_seconds']
         after = trial['measurement']['execution_seconds']
         reports.append(dict(route=trial['route'],reference=reference['id'],candidate=trial['id'],
-            status='passed' if accepted else 'pending_acceptance',reference_minutes=before/60,candidate_minutes=after/60,
+            status='invalid_resource_isolation' if isolation_issues else 'passed' if accepted else 'pending_acceptance',
+            timing_issues=isolation_issues,reference_minutes=before/60,candidate_minutes=after/60,
             speed_ratio=before/after if accepted else None,
             reduction_percent=100*(1-after/before) if accepted else None,
             cpu_budget=record['cpus'],memory_gb=record['memory_gb'],jobs=record['jobs'],
@@ -158,7 +184,8 @@ def update_comparisons(record, folder):
         fixed = next((row for row in record['trials'] if row['policy']=='adaptive'
                       and row['route']==tuned['route'] and row['threads']==tuned['threads']
                       and row.get('comparison_status')=='passed' and row.get('qc_status')=='passed'),None)
-        if fixed and tuned.get('qc_status')=='passed':
+        if (fixed and tuned.get('qc_status')=='passed' and not timing_issues(record, fixed)
+                and not timing_issues(record, tuned)):
             before, after = (row['measurement']['execution_seconds'] for row in (fixed,tuned))
             incremental.append(dict(reference=fixed['id'],candidate=tuned['id'],route=tuned['route'],
                 speed_ratio=before/after,reduction_percent=100*(1-after/before),
@@ -277,6 +304,9 @@ def run(args):
     record = json.loads(path.read_text())
     if record['status'] != 'prepared':
         raise ValueError('Campaign already started; existing evidence must not be overwritten')
+    from shared.cohort_affinity import cpu_allocation, isolated_command, affinity_violations
+    allocation = cpu_allocation(record['cpus'], record.get('cpu_affinity'))
+    isolated_command([sys.executable, '-V'], allocation)  # Check taskset before any trial starts.
     snapshot = Path(record['snapshot'])
     if any(sha(snapshot/name) != value for name,value in record['source_hashes'].items()):
         raise ValueError('Frozen implementation changed')
@@ -369,24 +399,31 @@ def run(args):
         from shared.cohort_schedule import create_schedule
         from shared.cohort_io import GPU_ENV
         guard = create_schedule(destination/'gpu_guard', cpu_budget=record['cpus'], memory_gb=record['memory_gb'],
-                                stage_cpus=trial['threads'], stage_memory_gb=1, gpu_slots=1)
+                                stage_cpus=trial['threads'], stage_memory_gb=1, gpu_slots=1, cpu_affinity=allocation)
         environment[GPU_ENV] = str(guard)
         if trial['policy'] in ('sequential','subject'):
             from shared.cohort_schedule import ENV
             environment[ENV] = str(create_schedule(destination/'subject_guard', cpu_budget=record['cpus'],
                 memory_gb=record['memory_gb'], stage_cpus=whole_cpu,
-                stage_memory_gb=whole_memory))
+                stage_memory_gb=whole_memory, cpu_affinity=allocation))
             command += ['--pipeline-script',str(execution_snapshot/'scripts/benchmark_subject_worker.py')]
-        trial.update(status='running', command=command, started_at=time.time(), output=str(destination))
+        execution_command = isolated_command(command, allocation)
+        trial.update(status='running', command=command, execution_command=execution_command,
+                     started_at=time.time(), output=str(destination))
         save(path,record)
         with (destination/'stdout.log').open('w') as stdout, (destination/'stderr.log').open('w') as stderr:
-            child = subprocess.Popen(command,env=environment,stdout=stdout,stderr=stderr,start_new_session=True)
-            if record['cpu_affinity'] and hasattr(os,'sched_setaffinity'):
-                os.sched_setaffinity(child.pid,record['cpu_affinity'])
+            child = subprocess.Popen(execution_command,env=environment,stdout=stdout,stderr=stderr,start_new_session=True)
             telemetry = CohortTelemetry(destination/'resources.jsonl').start()
             reason = None
+            affinity_checks, placement_errors, last_check = 0, [], 0.
             try:
                 while child.poll() is None:
+                    if time.monotonic()-last_check >= 10:
+                        last_check = time.monotonic()
+                        placement_errors = affinity_violations(child.pid, allocation)
+                        affinity_checks += 1
+                        if placement_errors:
+                            reason = 'cpu_affinity_escape'
                     if time.monotonic() >= deadline:
                         reason = 'time_budget_exhausted'
                     if telemetry.monitor.peak > record['memory_gb']*1024**3:
@@ -402,6 +439,7 @@ def run(args):
                 if child.poll() is None:
                     stop(child)
                 measured = telemetry.finish('completed' if child.returncode == 0 else 'failed')
+                measured.update(cpu_affinity_checks=affinity_checks, cpu_affinity_violations=placement_errors)
             trial.update(status='completed' if child.returncode == 0 and not reason else 'failed',
                          returncode=child.returncode, reason=reason, ended_at=time.time(), measurement=measured)
         # Process completion is not scientific acceptance; independent audit follows.
@@ -430,6 +468,7 @@ def run(args):
     record['inputs_unchanged'] = all(sha(Path(row['source'])/name)==value for row in record['subjects']
                                    for name,value in row['sha256'].items())
     record['status']='passed' if record['inputs_unchanged'] and all(row.get('qc_status')=='passed' and row.get('comparison_status')=='passed'
+                                    and not timing_issues(record, row)
                                     for row in record['trials']) else 'completed_pending_acceptance'
     save(path,record)
     return 0

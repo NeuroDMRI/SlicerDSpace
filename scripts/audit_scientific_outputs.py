@@ -442,6 +442,9 @@ def _audit_tractography(manifest: dict[str, Any], checks: list[dict[str, Any]]) 
     if not outputs:
         task_name = "tractography.csd_act"
         outputs = _task_outputs(manifest, task_name)
+    if not outputs:
+        task_name = "tractography.ukf"
+        outputs = _task_outputs(manifest, task_name)
     path_value = outputs.get("tractogram_trk") or outputs.get("tractogram")
     if not path_value:
         return False
@@ -475,6 +478,25 @@ def _audit_tractography(manifest: dict[str, Any], checks: list[dict[str, Any]]) 
     )
 
     task = _task_entry(manifest, task_name) or {}
+    if task_name == 'tractography.ukf':
+        from shared.pipeline import RawInputBundle
+        from tractography.ukf import current
+
+        try:
+            native_path = Path(str(task['manifest_path']))
+            native = json.loads(native_path.read_text())
+            signature = native['signature']
+            raw_paths = {key: _analysis_input_path(manifest, key) for key in ('dwi', 'bval', 'bvec', 'mask')}
+            root = Path(str(manifest['subject_root']))
+            raw = RawInputBundle(root, manifest['subject_id'], raw_paths['dwi'].parent,
+                                 raw_paths['dwi'], raw_paths['bval'], raw_paths['bvec'], raw_paths['mask'])
+            intact = current(raw, native_path.parent, signature['parameters'],
+                             Path(signature['executable']['path']), Path(signature['converter']['path']))
+            detail = str(native_path)
+        except Exception as exc:
+            intact, detail = False, str(exc)
+        _record_check(checks, 'tractography.ukf.current_artifacts', intact, detail,
+                      'Current input/backend identity and intact tractogram, effective mask and QC artifacts')
     tracking_manifest_value = task.get("manifest_path")
     tracking_manifest_path = Path(str(tracking_manifest_value)) if tracking_manifest_value else None
     if tracking_manifest_path and tracking_manifest_path.is_file():
@@ -512,6 +534,9 @@ def _audit_tractography(manifest: dict[str, Any], checks: list[dict[str, Any]]) 
     qc_path = Path(str(qc_value)) if qc_value else None
     if qc_path and qc_path.is_file():
         qc = json.loads(qc_path.read_text(encoding="utf-8"))
+        if task_name == 'tractography.ukf':
+            _record_check(checks, 'tractography.ukf.automatic_qc', qc.get('automatic_qc_passed') is True,
+                          qc.get('checks'), 'UKF tensor/FA arrays and native-mask geometry QC passed')
         if task_name == "tractography.csd_act":
             scientific_summary = qc.get("scientific_output_summary")
             _record_check(

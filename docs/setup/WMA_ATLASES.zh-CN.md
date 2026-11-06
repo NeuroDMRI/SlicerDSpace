@@ -54,6 +54,12 @@ NABA 使用 `wma-naba`，ORG 使用 `wma`。可用 `--from-directory /path/to/of
 确认计划后将 `--plan` 改为 `--execute`。同一参数还支持 `org` 和 `naba`；
 `--wma-atlas-dir` 可指定所选图谱的已有目录。不同图谱对照使用不同输出和运行名。
 
+Linux 未设置 `DISPLAY` 或 `SLICERDSPACE_DISPLAY` 时，WMA 自动通过 `xvfb-run -a`
+为依赖 Slicer 的回变换提供虚拟显示。预检会在分析前检查 `xvfb-run`、`Xvfb` 和
+`xauth`。已有显示会直接复用；macOS 和原生 Windows 不会自动启用 Xvfb。
+运行记录保存实际选择；无显示的 Linux 批处理无需另外填写 `--wma-use-virtual-x`，
+该参数仍可用于显式请求。
+
 ## 实现与检查
 
 配准、谱聚类、离群剔除、回到原空间与束合并仍调用 WMA。新增适配选择相应目录、

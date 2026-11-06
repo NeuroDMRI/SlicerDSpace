@@ -68,6 +68,13 @@ Review the plan before replacing `--plan` with `--execute`. Select `naba` or
 `org` with the same flag. `--wma-atlas-dir` overrides the managed path for a
 local copy of that selected atlas. Use a separate output/run for each atlas.
 
+On Linux without `DISPLAY` or `SLICERDSPACE_DISPLAY`, WMA automatically uses
+`xvfb-run -a` for the Slicer-based back-transformation. Preflight checks require
+`xvfb-run`, `Xvfb` and `xauth` before analysis starts. An existing display is
+reused; macOS and native Windows do not enable Xvfb automatically. The run
+manifest records the selected mode. `--wma-use-virtual-x` remains an explicit
+request, but is not needed for a headless Linux batch.
+
 ## Implementation And QC
 
 WMA performs registration, spectral clustering, outlier removal, native-space

@@ -27,7 +27,7 @@ def mark_reused(stage):
 
 def create_schedule(directory, *, cpu_budget, memory_gb, stage_cpus, stage_memory_gb, gpu_slots=1,
                     subject_profiles=None, planning=None, policy='first_fit', history_path=None, io_slots=2,
-                    ready_order=None):
+                    ready_order=None, cpu_affinity=None):
     import psutil
     values = (cpu_budget, memory_gb, stage_cpus, stage_memory_gb, gpu_slots, io_slots)
     import math
@@ -51,9 +51,8 @@ def create_schedule(directory, *, cpu_budget, memory_gb, stage_cpus, stage_memor
         for stage,request in profile.items():
             validate_request({'cpu':stage_cpus,'memory_gb':stage_memory_gb,**request},limits,
                              check_budget=selected is None or stage in selected)
-    affinity = sorted(os.sched_getaffinity(0)) if hasattr(os, 'sched_getaffinity') else []
-    if affinity and cpu_budget > len(affinity):
-        raise ValueError('CPU budget exceeds the process affinity allocation')
+    from shared.cohort_affinity import cpu_allocation
+    affinity = cpu_allocation(cpu_budget, cpu_affinity)
     folder = Path(directory).resolve()
     folder.mkdir(parents=True, exist_ok=False)
     config = dict(kind='cohort_resource_schedule', version=1,

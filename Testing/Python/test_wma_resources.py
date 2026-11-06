@@ -1,6 +1,7 @@
 import hashlib
 import io
 import json
+import shutil
 from pathlib import Path
 import tempfile
 import unittest
@@ -17,7 +18,7 @@ from tractography.wma_atlases import atlas_definition
 class WMAResourceTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
-        self.root = Path(self.temp.name)
+        self.root = Path(self.temp.name).resolve()
 
     def tearDown(self):
         self.temp.cleanup()
@@ -78,6 +79,34 @@ class WMAResourceTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'Unsafe'):
             extract_indexed_archive(self.root, definition)
         self.assertFalse((self.root.parent / 'escape').exists())
+
+    def test_f4_symlinked_ancestor_of_the_asset_root_is_allowed(self):
+        # F4: a symlink above the asset root (as /var is on macOS) is the user's folder layout.
+        definition, _ = self.fixture()
+        with tempfile.TemporaryDirectory() as other:
+            link = Path(other) / 'link'
+            link.symlink_to(self.root, target_is_directory=True)
+            self.assertEqual(extract_indexed_archive(link, definition), 1)
+        self.assertEqual((self.root / definition['directory'] / 'NABA-800FC/atlas.p').read_bytes(),
+                         b'test atlas, not a pickle')
+
+    def test_f4_symlink_inside_the_destination_tree_is_still_refused(self):
+        definition, _ = self.fixture()
+        with tempfile.TemporaryDirectory() as outside:
+            (self.root / definition['directory'] / 'NABA-800FC').symlink_to(outside, target_is_directory=True)
+            with self.assertRaisesRegex(ValueError, 'Refusing symlink'):
+                extract_indexed_archive(self.root, definition)
+            self.assertEqual(list(Path(outside).iterdir()), [])
+
+    def test_f4_symlinked_destination_folder_is_still_refused(self):
+        definition, _ = self.fixture()
+        destination = self.root / definition['directory']
+        with tempfile.TemporaryDirectory() as outside:
+            real = Path(outside) / 'naba'
+            shutil.move(str(destination), str(real))
+            destination.symlink_to(real, target_is_directory=True)
+            with self.assertRaisesRegex(ValueError, 'Refusing symlink'):
+                extract_indexed_archive(self.root, definition)
 
     def test_optional_readiness_requires_current_extracted_hashes(self):
         definition, catalog = self.fixture()

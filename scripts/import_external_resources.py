@@ -45,10 +45,29 @@ def import_file(source, destination, expected):
     return 'imported'
 
 
+def _symlink_inside(target, base):
+    """True when ``target`` or a folder between it and ``base`` is a symlink.
+
+    ``base`` is a resolved folder. A symlink at or above ``base`` (for example ``/var`` on
+    macOS) is the user's own folder layout and is not checked.
+    """
+    path = Path(target)
+    while path != base and base in path.parents:
+        if path.is_symlink():
+            return True
+        path = path.parent
+    return False
+
+
 def extract_org(archive, destination):
     """Extract only the pinned atlas root; omit macOS resource-fork metadata."""
     root_name = archive.stem
     records = []
+    destination = Path(destination)
+    # Resolve the folder that holds the destination once: an ancestor symlink (/var on macOS) is
+    # allowed, but the destination itself and everything below it must not be a symlink.
+    anchor = destination.parent.resolve()
+    destination = anchor / destination.name
     with zipfile.ZipFile(archive) as zipped:
         entries = zipped.infolist()
         if len(entries) > 10000 or sum(item.file_size for item in entries) > 4 * 1024**3:
@@ -63,7 +82,7 @@ def extract_org(archive, destination):
             if path.parts[0] != root_name:
                 raise ValueError('Unexpected ORG archive root: ' + item.filename)
             target = destination.joinpath(*path.parts)
-            if any(part.is_symlink() for part in (target, *target.parents)):
+            if _symlink_inside(target, anchor):
                 raise ValueError('Refusing symlink extraction target')
             with zipped.open(item) as stream:
                 expected = hashlib.file_digest(stream, 'sha256').hexdigest()
@@ -84,7 +103,7 @@ def extract_org(archive, destination):
 
 def extract_indexed_archive(root, definition):
     """Reassemble verified mirror parts and extract only the pinned file inventory."""
-    root = Path(root)
+    root = Path(root).resolve()  # resolve the root once: an ancestor symlink (/var on macOS) is allowed
     destination = root / definition["directory"]
     index = json.loads((root / definition["extracted_index"]).read_text(encoding="utf-8"))
     files = {item["path"]: item for item in index["files"]}
@@ -112,7 +131,7 @@ def extract_indexed_archive(root, definition):
                 if item.file_size != record["size_bytes"] or stat.S_ISLNK(item.external_attr >> 16):
                     raise ValueError("Atlas member size/type mismatch: " + item.filename)
                 target = destination.joinpath(*PurePosixPath(item.filename).parts)
-                if any(path.is_symlink() for path in (target, *target.parents)):
+                if _symlink_inside(target, root):
                     raise ValueError("Refusing symlink extraction target")
                 if target.exists():
                     if not target.is_file() or digest(target) != record["sha256"]:

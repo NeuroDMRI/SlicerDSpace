@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from shared.io_layout import default_task_output_dir
-from shared.external_process import external_python_environment, text_subprocess_kwargs
+from shared.external_process import fsl_root_from_bin_dir, managed_tool_environment, text_subprocess_kwargs
 from shared.wsl_bridge import preprocessing_launcher
 from shared.brain_mask import (
     BrainMaskConfig,
@@ -143,14 +143,7 @@ def _command_search_path(config: DwiPreprocessingConfig) -> str:
 def _fsl_root_from_bin_dir(bin_dir: Path) -> Path:
     """Return ``FSLDIR`` for either ``$FSLDIR/bin`` or ``share/fsl/bin``."""
 
-    resolved = bin_dir.expanduser().resolve()
-    if (
-        resolved.name == "bin"
-        and resolved.parent.name == "fsl"
-        and resolved.parent.parent.name == "share"
-    ):
-        return resolved.parent.parent.parent
-    return resolved.parent
+    return fsl_root_from_bin_dir(bin_dir)
 
 
 def _resolve_command(command: str, config: DwiPreprocessingConfig) -> Optional[str]:
@@ -178,16 +171,8 @@ def _resolved_eddy_options(config: DwiPreprocessingConfig) -> str:
 
 
 def _external_command_environment(config: DwiPreprocessingConfig) -> dict[str, str]:
-    path_prepend = [
-        candidate.expanduser().resolve()
-        for candidate in (config.mrtrix_bin_dir, config.fsl_bin_dir)
-        if candidate is not None
-    ]
-    extra_env: dict[str, str] = {}
-    if config.fsl_bin_dir is not None:
-        extra_env["FSLDIR"] = _fsl_root_from_bin_dir(config.fsl_bin_dir).as_posix()
-        extra_env["FSLOUTPUTTYPE"] = os.environ.get("FSLOUTPUTTYPE", "NIFTI_GZ")
-    return external_python_environment(extra_env, path_prepend=path_prepend)
+    # B3: one helper builds the shim, FSLDIR, FSLOUTPUTTYPE and PATH for eddy, topup and dwifslpreproc.
+    return managed_tool_environment(mrtrix_bin_dir=config.mrtrix_bin_dir, fsl_bin_dir=config.fsl_bin_dir)
 
 
 def inspect_preprocessing_backend(config: DwiPreprocessingConfig) -> dict[str, Any]:

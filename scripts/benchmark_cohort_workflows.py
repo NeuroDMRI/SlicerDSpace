@@ -463,8 +463,23 @@ def trial_environment(record, trial, base=None):
     return environment
 
 
-def reap_group(pid):
-    """Kill whatever is left in a finished arm's process group. Returns True when something was left."""
+def process_start_ticks(pid):
+    """Start time of a process in clock ticks (/proc/<pid>/stat field 22); None where /proc is absent."""
+    try:
+        text = Path(f'/proc/{pid}/stat').read_text()
+        return int(text[text.rindex(')')+2:].split()[19])     # fields after the command name start at field 3
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def reap_group(pid, start_ticks=None):
+    """Kill whatever is left in a finished arm's process group. Returns True when something was left.
+
+    H-F3: when the stored start time differs from the live process, the id belongs to another process; do nothing."""
+    if start_ticks is not None:
+        current = process_start_ticks(pid)
+        if current is not None and current != start_ticks:
+            return False
     try:
         os.killpg(pid, 0)
     except (ProcessLookupError, PermissionError):
@@ -682,20 +697,22 @@ def run(args):
         kill_limit = record.get('kill_memory_gb', record['memory_gb'])*1024**3     # H2: separate from the batch budget
         with (destination/'stdout.log').open('w') as stdout, (destination/'stderr.log').open('w') as stderr:
             child = subprocess.Popen(execution_command,env=environment,stdout=stdout,stderr=stderr,start_new_session=True)
-            trial['child_pid'] = child.pid
-            save(path,record)
-            telemetry = CohortTelemetry(destination/'resources.jsonl').start()
-            samplers = []
-            if t3:
-                samplers.append(Sampler(destination/'host_samples.jsonl', HOST_SAMPLE_SECONDS, HostReader(
-                    allocation, tree_cpu_seconds=lambda: telemetry.monitor.latest.get('cpu_seconds'),
-                    data_path=destination, nfs_path=Path(record['subjects'][0]['source']).resolve())).start())
-                if record.get('gpu') is not None:
-                    samplers.append(Sampler(destination/'gpu_samples.jsonl', GPU_SAMPLE_SECONDS, make_gpu_reader(
-                        record['gpu'], lambda: telemetry.monitor.latest.get('pids', []))).start())
+            telemetry, samplers = None, []
             reason = None
             affinity_checks, placement_errors, last_check = 0, [], 0.
             try:
+                # H-F4: everything after Popen sits inside the cleanup, so a failed save cannot leave an unwatched child.
+                trial['child_pid'] = child.pid
+                trial['child_start_ticks'] = process_start_ticks(child.pid)
+                save(path,record)
+                telemetry = CohortTelemetry(destination/'resources.jsonl').start()
+                if t3:
+                    samplers.append(Sampler(destination/'host_samples.jsonl', HOST_SAMPLE_SECONDS, HostReader(
+                        allocation, tree_cpu_seconds=lambda: telemetry.monitor.latest.get('cpu_seconds'),
+                        data_path=destination, nfs_path=Path(record['subjects'][0]['source']).resolve())).start())
+                    if record.get('gpu') is not None:
+                        samplers.append(Sampler(destination/'gpu_samples.jsonl', GPU_SAMPLE_SECONDS, make_gpu_reader(
+                            record['gpu'], lambda: telemetry.monitor.latest.get('pids', []))).start())
                 while child.poll() is None:
                     if time.monotonic()-last_check >= 10:
                         last_check = time.monotonic()
@@ -719,9 +736,9 @@ def run(args):
             finally:
                 if child.poll() is None:
                     stop(child)
-                trial['leftover_processes_killed'] = reap_group(child.pid)
+                trial['leftover_processes_killed'] = reap_group(child.pid, trial.get('child_start_ticks'))
                 trial['samplers'] = [sampler.finish() for sampler in samplers]
-                measured = telemetry.finish('completed' if child.returncode == 0 else 'failed')
+                measured = telemetry.finish('completed' if child.returncode == 0 else 'failed') if telemetry else {}
                 measured.update(cpu_affinity_checks=affinity_checks, cpu_affinity_violations=placement_errors)
             trial.update(status='completed' if child.returncode == 0 and not reason else 'failed',
                          returncode=child.returncode, reason=reason, ended_at=time.time(), measurement=measured)
@@ -757,8 +774,14 @@ def qc(args):
     record = json.loads(path.read_text())
     if record['status'] not in ('completed_qc_deferred', 'failed', 'time_budget_exhausted'):
         raise ValueError('QC runs only on a finished campaign: ' + str(record['status']))
+    folder = args.output.resolve()
     for trial in record['trials']:
         if trial['status'] in ('completed', 'failed') and 'output' in trial and 'subject_outcomes' not in trial:
+            try:
+                Path(trial['output']).resolve().relative_to(folder)
+            except ValueError:
+                trial['qc_skipped'] = 'inherited'      # H-F2: never write into the folder of another campaign
+                continue
             audit_trial(record, trial)
     record['qc_done'] = True
     save(path, record)
@@ -935,7 +958,7 @@ def pair(args, *, topology=None, sampler=sample_window, runner=run_bounded, slee
             try:
                 for trial in json.loads((campaign/'campaign.json').read_text())['trials']:
                     if trial.get('status') == 'running' and trial.get('child_pid'):
-                        reap_group(trial['child_pid'])
+                        reap_group(trial['child_pid'], trial.get('child_start_ticks'))
             except (OSError, ValueError, KeyError):
                 pass
     # Both timed trees have stopped; only now run QC and the comparison.

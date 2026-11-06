@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import os
 from pathlib import Path
 
 
@@ -425,6 +426,8 @@ def _jsonable(value):
 def compare_pair(subject_campaign, adaptive_campaign, output):
     """H8: source_hashes check, QC rules 2-3, metric table; writes `pair_report.json` (never overwrites)."""
     from scripts.benchmark_cohort_harness import trial_metrics
+    if Path(output).exists() or Path(output).is_symlink():
+        raise FileExistsError(f'Report already exists; it is never replaced: {output}')
     records, trials = {}, {}
     for policy, folder in (('subject', subject_campaign), ('adaptive', adaptive_campaign)):
         record = json.loads((Path(folder)/'campaign.json').read_text(encoding='utf-8'))
@@ -470,7 +473,11 @@ def compare_pair(subject_campaign, adaptive_campaign, output):
     report['flagged'] = bool(mismatched) or not hashes_equal or not same_cohort
     path = Path(output)
     temporary = path.with_name(path.name + '.tmp')
-    with temporary.open('x', encoding='utf-8') as stream:
-        stream.write(json.dumps(_jsonable(report), indent=2, allow_nan=False)+'\n')
-    temporary.replace(path)
+    text = json.dumps(_jsonable(report), indent=2, allow_nan=False)+'\n'
+    with temporary.open('x', encoding='utf-8') as stream:      # a stale temporary file stops the run untouched
+        stream.write(text)
+    try:
+        os.link(temporary, path)          # H-F1: raises FileExistsError when the report exists; never replaces
+    finally:
+        temporary.unlink(missing_ok=True)
     return report

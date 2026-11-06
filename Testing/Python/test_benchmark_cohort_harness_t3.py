@@ -3,6 +3,7 @@
 Mocks and tiny synthetic files only; no server, no GPU, no Slicer.
 """
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -13,7 +14,7 @@ import textwrap
 import time
 import types
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 
@@ -443,6 +444,29 @@ class PairTests(unittest.TestCase):
                 child.kill()
         self.assertFalse(workflows.reap_group(child.pid))
 
+    def test_hf3_reap_skips_a_process_with_another_start_time(self):
+        with patch.object(workflows, 'process_start_ticks', return_value=222), patch('os.killpg') as killpg:
+            self.assertFalse(workflows.reap_group(4242, start_ticks=111))
+        killpg.assert_not_called()
+
+    def test_hf3_reap_signals_the_group_when_the_start_time_matches(self):
+        with patch.object(workflows, 'process_start_ticks', return_value=111), patch('os.killpg') as killpg:
+            self.assertTrue(workflows.reap_group(4242, start_ticks=111))
+        self.assertEqual(killpg.call_count, 2)           # existence probe, then SIGKILL
+
+    def test_hf3_reap_without_proc_keeps_the_old_behaviour(self):
+        with patch.object(workflows, 'process_start_ticks', return_value=None), patch('os.killpg') as killpg:
+            self.assertTrue(workflows.reap_group(4242, start_ticks=111))
+        self.assertEqual(killpg.call_count, 2)
+
+    def test_hf3_start_ticks_is_field_22_of_proc_stat(self):
+        fields = ['S'] + [str(n) for n in range(4, 22)] + ['987654'] + ['0'] * 5      # fields 3..22 then more
+        stat = '4242 (my (odd) name) ' + ' '.join(fields)
+        with patch.object(Path, 'read_text', return_value=stat):
+            self.assertEqual(workflows.process_start_ticks(4242), 987654)
+        with patch.object(Path, 'read_text', side_effect=FileNotFoundError):
+            self.assertIsNone(workflows.process_start_ticks(4242))
+
     def test_doctor_output_parsing(self):
         text = 'noise {not json\n' + json.dumps(dict(environment=dict(summary=dict(blocker_count=2))))
         self.assertEqual(harness.doctor_blockers(harness.parse_doctor_output(text)), 2)
@@ -767,6 +791,25 @@ class SubjectCompareTests(unittest.TestCase):
         self.assertIsNone(report['throughput_ratio'])        # the Adaptive arm passed no subject
 
 
+    def test_hf1_existing_report_is_never_replaced(self):
+        """H-F1: fails before the fix (the old code replaced the file)."""
+        for arm in ('subject', 'adaptive'):
+            root = self.base / arm
+            build_subject(root, 's1', 'cpu')
+            (root / 'subject_outcomes.json').write_text(json.dumps(dict(s1=dict(subject='s1', rule1='passed'))))
+            trial = dict(id=f'cpu-{arm}', route='cpu', policy=arm, status='completed', output=str(root),
+                         measurement=dict(execution_seconds=100.0), returncode=0)
+            (root / 'campaign.json').write_text(json.dumps(dict(
+                subjects=[dict(subject='s1')], trials=[trial], source_hashes={}, cpu_affinity=[0])))
+        report = self.base / 'pair_report.json'
+        report.write_text('{"evidence": "keep"}\n')
+        before = report.read_bytes()
+        with self.assertRaises(FileExistsError):
+            compare.compare_pair(self.base / 'subject', self.base / 'adaptive', report)
+        self.assertEqual(report.read_bytes(), before)
+        self.assertFalse((self.base / 'pair_report.json.tmp').exists())
+
+
 FAKE_LAUNCHER = textwrap.dedent("""\
     #!/bin/sh
     echo "$@" > "$FAKE_ARGV"
@@ -859,6 +902,69 @@ class RunTests(unittest.TestCase):
         folder = self.make_campaign(base, 'subject')
         with self.assertRaises(ValueError):
             workflows.qc(types.SimpleNamespace(output=folder))
+
+
+    def test_hf2_qc_skips_an_inherited_trial_and_writes_nothing_outside_the_campaign(self):
+        """H-F2: fails before the fix (qc audited the earlier campaign and wrote into its folder)."""
+        base = Path(self.tmpdir())
+        folder = self.make_campaign(base, 'subject')
+        earlier = base / 'earlier'
+        (earlier / 'outputs/s1').mkdir(parents=True)
+        (earlier / 'independent_qc.json').write_text('{}')
+        (earlier / 'scientific_fingerprints.json').write_text('{}')
+
+        def listing():
+            return {str(p.relative_to(earlier)): hashlib.sha256(p.read_bytes()).hexdigest() if p.is_file() else None
+                    for p in sorted(earlier.rglob('*'))}
+        before = listing()
+        record = json.loads((folder / 'campaign.json').read_text())
+        record.update(status='completed_qc_deferred')
+        record['trials'][0].update(status='completed', output=str(earlier), inherited_evidence=dict(a='1'))
+        workflows.save(folder / 'campaign.json', record)
+        workflows.qc(types.SimpleNamespace(output=folder))
+        self.assertEqual(listing(), before)
+        record = json.loads((folder / 'campaign.json').read_text())
+        self.assertEqual(record['trials'][0]['qc_skipped'], 'inherited')
+        self.assertTrue(record['qc_done'])
+
+    def test_hf2_every_audit_write_stays_under_the_trial_output(self):
+        base = Path(self.tmpdir())
+        output = base / 'trial'
+        (output / 'outputs/s1').mkdir(parents=True)
+        written = []
+        real = workflows.save
+
+        def spy(path, value):
+            written.append(Path(path))
+            return real(path, value)
+        with patch.object(workflows, 'save', side_effect=spy), \
+                patch('scripts.audit_scientific_outputs.audit_output_root', side_effect=RuntimeError('x')), \
+                patch('scripts.benchmark_cohort_compare.scientific_inventory', side_effect=ValueError('x')):
+            workflows.audit_trial(dict(subjects=[dict(subject='s1')]),
+                                  dict(output=str(output), route='hybrid', policy='subject'))
+        self.assertTrue(written)
+        self.assertTrue(all(path.resolve().is_relative_to(output.resolve()) for path in written))
+
+    def test_hf4_post_launch_save_failure_stops_the_child_group(self):
+        """H-F4: fails before the fix (the cleanup never ran when the post-launch save raised)."""
+        real = workflows.save
+
+        def failing_save(path, value):
+            if isinstance(value, dict) and any('child_pid' in row for row in value.get('trials', [])):
+                raise OSError('disk full')
+            return real(path, value)
+        reap = MagicMock(return_value=False)
+        with patch.object(workflows, 'save', side_effect=failing_save), patch.object(workflows, 'reap_group', reap):
+            with self.assertRaises(OSError):
+                self.run_arm('subject')
+        reap.assert_called_once()
+        self.assertIsInstance(reap.call_args[0][0], int)
+
+    def test_hf3_run_stores_the_child_start_ticks(self):
+        with patch.object(workflows, 'process_start_ticks', return_value=12345):
+            code, folder, base = self.run_arm('subject')
+        trial = json.loads((folder / 'campaign.json').read_text())['trials'][0]
+        self.assertEqual(trial['child_start_ticks'], 12345)
 
 
 class MetricTests(unittest.TestCase):

@@ -168,6 +168,108 @@ class DDParcelTensorStepTests(unittest.TestCase):
                                         str(out / "sub-dti.nhdr"), str(out / "sub-b0.nhdr")])
 
 
+class RegisteredStageAdmissionTests(unittest.TestCase):
+    """S1.2: native_dti is admitted as its own stage before registered_dti, which covers registration only."""
+
+    def run_registered(self, *, native_ready=False, cohort=True):
+        from contextlib import contextmanager
+
+        events = []
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        raw = inputs(Path(tmp.name))
+        atlas = Path(tmp.name) / "atlas.nii.gz"
+        atlas.write_bytes(b"atlas")
+
+        @contextmanager
+        def admission(name, *, gpu=False):
+            events.append(("enter", name))
+            try:
+                yield None
+            finally:
+                events.append(("exit", name))
+
+        teem = fake_teem_run([])
+
+        def run_cli(command, log=None):
+            if str(command[0]).endswith("PythonSlicer"):
+                events.append(("cli", "teem"))
+                teem(command, log)
+            elif command[0] == "brainsfit":
+                events.append(("cli", "brainsfit"))
+                Path(command[command.index("--linearTransform") + 1]).write_bytes(b"tfm")
+            else:
+                events.append(("cli", "resample"))
+                Path(command[-1]).write_bytes(b"registered")
+
+        patches = [
+            patch.object(pipeline, "_require_slicer"),
+            patch.object(pipeline, "resolve_pythonslicer_executable", return_value="/slicer/bin/PythonSlicer"),
+            patch.object(pipeline, "_get_cli_executable", side_effect=lambda name: name),
+            patch.object(pipeline, "_run_cli", side_effect=run_cli),
+            patch.object(pipeline, "_write_inverse_transform",
+                         side_effect=lambda forward, inverse: inverse.write_bytes(b"inverse")),
+            patch.object(pipeline, "_convert_nrrd_to_nifti",
+                         side_effect=lambda source, target: target.write_bytes(source.read_bytes())),
+            patch("shared.cohort_schedule.mark_reused", side_effect=lambda stage: events.append(("reused", stage))),
+        ]
+        if cohort:
+            patches.append(patch("shared.cohort_schedule.stage_admission", admission))
+        from contextlib import ExitStack
+        with ExitStack() as stack:
+            for item in patches:
+                stack.enter_context(item)
+            if native_ready:
+                pipeline.ensure_native_dti_bundle(raw, "wls")
+                events.clear()
+            bundle = pipeline.ensure_registered_dti_bundle(raw, atlas, "wls")
+            first = list(events)
+            events.clear()
+            again = pipeline.ensure_registered_dti_bundle(raw, atlas, "wls")
+        self.assertEqual(again, bundle)
+        return bundle, first, list(events)
+
+    def test_s1_2_fresh_native_fit_is_admitted_and_released_before_registered_dti(self) -> None:
+        bundle, events, _ = self.run_registered()
+        self.assertEqual(events[0], ("enter", "native_dti"))
+        self.assertLess(events.index(("exit", "native_dti")), events.index(("enter", "registered_dti")))
+        self.assertLess(events.index(("cli", "teem")), events.index(("exit", "native_dti")))
+        self.assertLess(events.index(("enter", "registered_dti")), events.index(("cli", "brainsfit")))
+        self.assertEqual(events[-1], ("exit", "registered_dti"))
+        self.assertEqual([item for item in events if item[0] == "enter"],
+                         [("enter", "native_dti"), ("enter", "registered_dti")])
+        self.assertTrue(bundle.fa_reg_path.is_file())
+
+    def test_s1_2_a_reused_native_bundle_admits_only_registered_dti_and_marks_the_reuse(self) -> None:
+        _, events, _ = self.run_registered(native_ready=True)
+        self.assertEqual([item for item in events if item[0] == "enter"],
+                         [("enter", "native_dti"), ("enter", "registered_dti")])
+        self.assertNotIn(("cli", "teem"), events)
+        self.assertIn(("reused", "native_dti"), events)
+        self.assertLess(events.index(("exit", "native_dti")), events.index(("enter", "registered_dti")))
+
+    def test_s1_2_a_reused_registered_bundle_is_marked_inside_its_own_admission(self) -> None:
+        _, _, second = self.run_registered()
+        self.assertEqual(second, [("enter", "native_dti"), ("reused", "native_dti"), ("exit", "native_dti"),
+                                  ("enter", "registered_dti"), ("reused", "registered_dti"), ("exit", "registered_dti")])
+
+    def test_s1_2_outside_cohort_mode_the_calls_and_outputs_are_unchanged(self) -> None:
+        bundle, events, second = self.run_registered(cohort=False)
+        self.assertEqual([item for item in events if item[0] == "cli"],
+                         [("cli", "teem"), ("cli", "brainsfit")] + [("cli", "resample")] * 7)
+        self.assertFalse([item for item in events if item[0] in ("enter", "exit")])
+        self.assertEqual([item for item in second if item[0] == "cli"], [])
+        self.assertTrue(bundle.inverse_transform_path.is_file())
+
+    def test_s1_2_a_missing_atlas_fails_before_any_native_work(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            raw = inputs(Path(tmp))
+            with patch.object(pipeline, "ensure_native_dti_bundle",
+                              side_effect=AssertionError("native fit must not start")):
+                with self.assertRaisesRegex(FileNotFoundError, "Atlas T2 not found"):
+                    pipeline.ensure_registered_dti_bundle(raw, Path(tmp) / "absent.nii.gz")
+
+
 class DDParcelCompletenessTests(unittest.TestCase):
     """N3: the DDParcel tensor step reruns when any scalar file it needs is missing."""
 

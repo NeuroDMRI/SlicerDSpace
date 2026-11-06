@@ -943,7 +943,6 @@ def _write_inverse_transform(forward_path: Path, inverse_path: Path) -> None:
     sitk.WriteTransform(inverse, str(inverse_path))
 
 
-@scheduled_stage('registered_dti')
 def ensure_registered_dti_bundle(
     raw: RawInputBundle,
     atlas_t2: Path,
@@ -953,23 +952,32 @@ def ensure_registered_dti_bundle(
     *,
     scalar_format: str = 'nifti',
 ) -> RegisteredDTIBundle:
-    """Create or reuse registered DTI features under cache/registered_dti."""
+    """Create or reuse registered DTI features under cache/registered_dti.
+
+    S1.2: the native bundle comes first and is admitted as its own ``native_dti`` stage (or reused). The
+    ``registered_dti`` admission then covers registration and resampling only. Lock order: the native cache
+    lock is taken and released inside ``ensure_native_dti_bundle`` before the registered cache lock is
+    taken, so no process holds the registered lock while it waits for the native fit.
+    """
     if scalar_format not in ('nifti', 'nrrd'):
         raise ValueError('Registered scalar format must be nifti or nrrd')
     if fit_method.lower() not in ('ls', 'wls'):
         raise ValueError(f'Unsupported fit method: {fit_method}')
     atlas_t2 = atlas_t2.expanduser().resolve()
-    bundle = _build_registered_bundle(raw, fit_method, atlas_t2, scalar_format)
-    with cache_lock(bundle.bundle_dir / '.lock'):
-        return _ensure_registered_dti_bundle(raw, atlas_t2, fit_method, reuse, log, scalar_format)
-
-
-def _ensure_registered_dti_bundle(raw, atlas_t2, fit_method, reuse, log, scalar_format):
-    atlas_t2 = atlas_t2.expanduser().resolve()
     if not atlas_t2.is_file():
         raise FileNotFoundError(f"Atlas T2 not found: {atlas_t2}")
-
     native = ensure_native_dti_bundle(raw, fit_method=fit_method, reuse=True, log=log)
+    return _registered_dti_stage(raw, native, atlas_t2, fit_method, reuse, log, scalar_format)
+
+
+@scheduled_stage('registered_dti')
+def _registered_dti_stage(raw, native, atlas_t2, fit_method, reuse, log, scalar_format):
+    bundle = _build_registered_bundle(raw, fit_method, atlas_t2, scalar_format)
+    with cache_lock(bundle.bundle_dir / '.lock'):
+        return _ensure_registered_dti_bundle(raw, native, atlas_t2, fit_method, reuse, log, scalar_format)
+
+
+def _ensure_registered_dti_bundle(raw, native, atlas_t2, fit_method, reuse, log, scalar_format):
     bundle = _build_registered_bundle(raw, fit_method, atlas_t2, scalar_format)
     expected_manifest = _registered_manifest(raw, native, bundle)
     actual_manifest = _read_manifest(bundle.manifest_path)

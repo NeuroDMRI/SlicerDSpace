@@ -303,6 +303,24 @@ class OptionalAssetsTests(unittest.TestCase):
                 extract_org(archive, root / 'unsafe')
             self.assertFalse((root / 'outside').exists())
 
+    def test_n1_extract_org_refuses_a_symlinked_destination_and_accepts_a_symlinked_ancestor(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            archive = root / 'ORG-800FC-100HCP.zip'
+            with zipfile.ZipFile(archive, 'w') as zipped:
+                zipped.writestr('ORG-800FC-100HCP/atlas.p', b'reference')
+            (root / 'real').mkdir()
+            (root / 'link').symlink_to(root / 'real', target_is_directory=True)
+            # A symlinked ancestor of the destination's parent is allowed.
+            self.assertEqual(len(extract_org(archive, root / 'link/assets')), 1)
+            self.assertEqual((root / 'real/assets/ORG-800FC-100HCP/atlas.p').read_bytes(), b'reference')
+            # The destination folder itself as a symlink is refused, and nothing is written outside.
+            (root / 'outside').mkdir()
+            (root / 'dest').symlink_to(root / 'outside', target_is_directory=True)
+            with self.assertRaisesRegex(ValueError, 'Refusing symlink'):
+                extract_org(archive, root / 'dest')
+            self.assertEqual(list((root / 'outside').iterdir()), [])
+
     def test_shared_directory_requires_all_recorded_files_and_valid_hashes(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp).resolve()

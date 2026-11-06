@@ -4616,9 +4616,12 @@ def _run_subject_products_impl(
         ))
         if bundle_source_invalid or bundle_conversion_error:
             tasks.append(ProductTaskRecord(name='bundles.wma', status='blocked', reason=bundle_conversion_error or 'selected tractography did not pass current-run QC'))
-        elif ukf_upstream_invalid and config.wma_input_tractography is None and not wma_resume_complete:
-            # F1: a complete WMA result stays reusable. _wma_complete checks the path, size and
-            # mtime of its input tractogram against the WMA manifest, so it is not a stale result.
+        elif (ukf_upstream_invalid and config.wma_input_tractography is None
+                and not ('tractography' in input_blocked_targets and wma_resume_complete)):
+            # F1: the block is lifted only when the input gate stopped tractography (the UKF
+            # prerequisite did not run) and the WMA result is complete on resume. A UKF failure
+            # or a stale UKF output keeps WMA blocked, so a WMA result made from an older
+            # tractogram is not reported as skipped.
             tasks.append(ProductTaskRecord(name='bundles.wma', status='blocked', reason='current UKF run is not QC-valid'))
         elif wma_resume_complete:
             tasks.append(

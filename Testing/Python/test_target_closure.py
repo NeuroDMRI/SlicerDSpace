@@ -185,6 +185,26 @@ class N3SetupPlanFallbackDoesNotExpandTest(unittest.TestCase):
         self.assertEqual(plan["asset_profiles"], [])
         self.assertEqual(plan["closure_targets"], ["validation", "tractography", "wma"])
 
+    def test_n3_ukf_fallback_with_a_missing_required_ukf_item_keeps_ukf_in_the_plan(self) -> None:
+        from shared.environment import DependencyStatus
+        owner = mock.Mock()
+        owner._selected_closure.return_value = None
+        owner._parameterNode = SimpleNamespace(brainMaskBackend="provided")
+        owner._environment_dependency_path_kwargs.return_value = {}
+        owner._closure_notice_text.return_value = ""
+        item = DependencyStatus(key="command:UKFTractography", kind="command", label="UKFTractography",
+                                status="missing", required=True, targets=("tractography",), install_group="ukf")
+        result = SimpleNamespace(statuses=(item,), targets=("validation", "tractography", "wma"), blocker_count=1)
+        plan = _plan_for_setup(owner, result)
+        self.assertIn("UKFTractography", plan["extensions"])  # fails at fcb94b5: fallback fixed "csd_act"
+        self.assertNotIn("PyTorch", plan["extensions"])
+        self.assertEqual(plan["asset_profiles"], [])
+        self.assertEqual(plan["closure_targets"], ["validation", "tractography", "wma"])
+        self.assertEqual([entry["key"] for entry in plan["manual_items"]], [])
+        # Guard: no UKF item in the doctor result -> UKF stays out of the fallback plan.
+        plan = _plan_for_setup(owner, SimpleNamespace(statuses=(), targets=result.targets, blocker_count=0))
+        self.assertNotIn("UKFTractography", plan["extensions"])
+
 
 class C2GuiPathKeepsProvenanceTest(unittest.TestCase):
     def test_gui_bundles_all_selection_gives_the_cli_the_user_backend_and_keeps_ukf_variant_minimal(self) -> None:

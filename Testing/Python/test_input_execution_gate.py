@@ -75,3 +75,25 @@ class InputExecutionGateTests(unittest.TestCase):
                     'sub-gate', root, targets=('validation', 'wma'), execute=True, resume=True,
                     brain_mask_backend='provided'))
             self.assertEqual(next(task for task in result.tasks if task.name == 'bundles.wma').status, 'blocked')
+
+    def _wma_task_with_valid_input(self, ukf_patch, ukf_current):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = subject(Path(tmp))
+            with mock.patch('shared.orchestrator._wma_complete', return_value=True), \
+                    mock.patch('shared.orchestrator._ukf_current', return_value=ukf_current), \
+                    mock.patch('tractography.ukf.run_ukf', **ukf_patch):
+                result = run_subject_products(ProductOrchestratorConfig(
+                    'sub-gate', root, targets=('wma',), tractography_backend='ukf', execute=True, resume=True,
+                    brain_mask_backend='provided'))
+            return {task.name: task for task in result.tasks}
+
+    def test_b1_failed_ukf_run_keeps_wma_blocked_even_with_a_complete_wma_result(self):
+        # B1: valid input, UKF raises. The WMA result may come from an older tractogram.
+        tasks = self._wma_task_with_valid_input(dict(side_effect=RuntimeError('ukf crashed')), False)
+        self.assertEqual(tasks['tractography.ukf'].status, 'failed')
+        self.assertEqual(tasks['bundles.wma'].status, 'blocked')
+
+    def test_b1_stale_ukf_output_keeps_wma_blocked_even_with_a_complete_wma_result(self):
+        # B1: valid input, UKF did not run and its output is not current.
+        tasks = self._wma_task_with_valid_input(dict(return_value={'status': 'completed'}), False)
+        self.assertEqual(tasks['bundles.wma'].status, 'blocked')

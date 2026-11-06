@@ -244,11 +244,16 @@ def selected_setup_plan(owner, result, *, repair=False):
     # C2/K1: everything below follows the one closure the doctor and the run use (no second expansion).
     from shared.target_closure import Closure, closure_notice
     closure = owner._selected_closure()
+    fallback_ukf = False
     if closure is None:
         # N3: no parameter node. The doctor result's targets are already closed, so take them
         # as they are (no second expansion); the default algorithm set applies.
         closure = Closure(targets=tuple(result.targets), tractography_algorithms=("csd_act",),
                           requested=tuple(result.targets))
+        # N3-UKF: the algorithms are unknown here, so the doctor result decides. A missing required
+        # UKF dependency item means the doctor checked the UKF route; keep it in the plan.
+        from shared.ui_environment_panel import environment_missing_items
+        fallback_ukf = any(item.required and item.install_group == "ukf" for item in environment_missing_items(result))
     targets = set(closure.targets)
     gpu = cuda_candidate()
     candidates = list(selected_profiles(owner._parameterNode, gpu))
@@ -261,7 +266,7 @@ def selected_setup_plan(owner, result, *, repair=False):
         need_dti=bool(targets & {"segmentation", "parcellation", "surface", "microstructure", "tractography", "wma"}),
         need_slicerdmri="wma" in targets,
         need_torch=bool(targets & {"segmentation", "parcellation", "surface", "tractcloud"}),
-        need_ukf="tractography" in targets and "ukf" in closure.tractography_algorithms,
+        need_ukf="tractography" in targets and ("ukf" in closure.tractography_algorithms or fallback_ukf),
         brain_mask_backend=getattr(owner._parameterNode, "brainMaskBackend", "pnl_cnn"), gpu_available=gpu,
         wma_atlas=getattr(owner._parameterNode, "wmaAtlas", "org"),
         existing_managed_profiles=existing, repair=repair, backend_paths=config)

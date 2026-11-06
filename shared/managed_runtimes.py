@@ -15,11 +15,19 @@ import urllib.request
 
 from shared.external_process import external_python_environment
 from shared.model_assets import default_user_model_assets_root
+from shared.platform_info import host_machine
 
 FSL_CHANNEL = "https://fsl.fmrib.ox.ac.uk/fsldownloads/fslconda/public/"
 MINIFORGE_URL = "https://github.com/conda-forge/miniforge/releases/download/26.7.2-0/Miniforge3-26.7.2-0-Linux-x86_64.sh"
 MINIFORGE_SHA256 = "281b0ac7d550802efc81af633225a5e6116d29ae72f3ab4eae7168c3931a4c05"
+MINIFORGE_MACOS_ARM64 = "Miniforge3-26.7.2-0-MacOSX-arm64.sh"
+MINIFORGE_MACOS_ARM64_SHA256 = "d70bfa2e97afcda96927c9b9ca0e2316cb7750e4ce651c94388267cbe9588711"
+MINIFORGE_BOOTSTRAP = "miniforge-26.7.2-0"
 FSL_TERMS_URL = "https://fsl.fmrib.ox.ac.uk/fsl/docs/license.html"
+# B4: on Darwin only these profiles have a qualified build, on both host architectures.
+DARWIN_PROFILES = frozenset({"mrtrix", "fsl_cpu"})
+# fsl-eddy 2602.0 build string per conda subdir (design fact sheet).
+FSL_EDDY_BUILD = {"linux-64": "hb35a746_0", "osx-64": "h7ffe42b_0", "osx-arm64": "hed4507f_0"}
 PROFILES = {
     "pnl_cnn": {"directory": "pnl-cnn-torch-v0.1.0", "packages": ("python=3.11", "pip=24.3.1", "ants=2.3.0"),
                 "channels": ("pnlbwh", "conda-forge"),
@@ -42,11 +50,23 @@ def runtime_root():
                 default_user_model_assets_root().parent / "runtimes").expanduser().resolve()
 
 
+def conda_subdir(system=None, machine=None):
+    """Expected conda subdir from the OS and the host (not Slicer's) architecture; None when unqualified."""
+    system, machine = system or platform.system(), (machine or host_machine()).lower()
+    if system == 'Linux' and machine in {'x86_64', 'amd64'}:
+        return 'linux-64'
+    if system == 'Darwin' and machine in {'x86_64', 'amd64'}:
+        return 'osx-64'
+    if system == 'Darwin' and machine in {'arm64', 'aarch64'}:
+        return 'osx-arm64'
+    return None
+
+
 def supported_platform(system=None, machine=None, *, profiles=None):
-    system, machine = system or platform.system(), (machine or platform.machine()).lower()
+    system, machine = system or platform.system(), (machine or host_machine()).lower()
     if system == 'Linux' and machine in {'x86_64', 'amd64'}:
         return True
-    if system == 'Darwin' and machine in {'x86_64', 'amd64'} and profiles and set(profiles) <= {'mrtrix'}:
+    if system == 'Darwin' and machine in {'x86_64', 'amd64', 'arm64', 'aarch64'} and profiles and set(profiles) <= DARWIN_PROFILES:
         version = platform.mac_ver()[0]
         return (tuple(map(int, version.split('.')[:2])) >= (14, 5)) if version else platform.system() != 'Darwin'
     return False
@@ -56,11 +76,16 @@ def profile_spec(name):
     spec = dict(PROFILES[name])
     if platform.system() == 'Darwin' and name == 'mrtrix':
         spec['packages'] = ('mrtrix3=3.0.8=hee5d243_0', 'python=3.12')
+    build = FSL_EDDY_BUILD.get(conda_subdir())
+    if name == 'fsl_cpu' and build:
+        spec['packages'] = (f'fsl-eddy=2602.0={build}',) + tuple(spec['packages'][1:])
     return spec
 
 
 def bootstrap_artifact():
     if platform.system() == 'Darwin':
+        if host_machine().lower() in {'arm64', 'aarch64'}:
+            return MINIFORGE_URL.rsplit('/', 1)[0] + '/' + MINIFORGE_MACOS_ARM64, MINIFORGE_MACOS_ARM64_SHA256
         filename = 'Miniforge3-26.7.2-0-MacOSX-x86_64.sh'
         return (MINIFORGE_URL.rsplit('/', 1)[0] + '/' + filename,
                 'b00e7798658f92721a3ae2f6b9832695ffc6baf07758894d726268055359f6c5')
@@ -105,7 +130,8 @@ def install_plan(profiles, root=None):
     base = (root or runtime_root()).expanduser().resolve()
     return {"kind": "slicerdsurfer_runtime_plan", "root": str(base),
             "platform_supported": supported_platform(profiles=selected), "profiles": list(selected),
-            "prefixes": {name: str(base / PROFILES[name]["directory"]) for name in selected},
+            "prefixes": {name: str(base / profile_spec(name)["directory"]) for name in selected},
+            "conda_subdir": conda_subdir(),
             "fsl_license_required": any(name.startswith("fsl_") for name in selected),
             "pnl_terms_required": "pnl_cnn" in selected,
             "fsl_terms_url": FSL_TERMS_URL, "changes_slicer_python": False,
@@ -135,8 +161,11 @@ def verify_prefix(profile, prefix):
     missing = [name for name, path in commands.items() if not path.is_file() or not os.access(path, os.X_OK)]
     if missing:
         raise RuntimeError("Runtime is incomplete: " + ", ".join(missing))
-    installed = {record["name"]: record["version"] for path in (prefix / "conda-meta").glob("*.json")
-                 for record in [json.loads(path.read_text())]}
+    records = [json.loads(path.read_text()) for path in (prefix / "conda-meta").glob("*.json")]
+    expected_subdir = conda_subdir()
+    if any(record.get("subdir") not in {expected_subdir, "noarch"} for record in records):
+        raise RuntimeError(f"Runtime built for another architecture; use Repair (expected {expected_subdir})")
+    installed = {record["name"]: record["version"] for record in records}
     for requested in spec["packages"]:
         name, version, *_ = requested.split("=")
         if not installed.get(name, "").startswith(version + ".") and installed.get(name) != version:
@@ -191,9 +220,9 @@ def verify_prefix(profile, prefix):
             "scientific_validation": "not_inferred_from_installation"}
 
 
-def _run(argv):
+def _run(argv, extra_env=None):
     print("[Runtime setup] " + repr(argv), flush=True)
-    subprocess.run(argv, check=True, env=external_python_environment())
+    subprocess.run(argv, check=True, env=external_python_environment(extra_env))
 
 
 @contextmanager
@@ -208,29 +237,46 @@ def setup_lock(root):
         yield
 
 
+def _path_conda_platform(executable):
+    """Conda platform reported by ``conda info --json``; None when it cannot be read."""
+    try:
+        check = subprocess.run([executable, "info", "--json"], capture_output=True, text=True,
+                               timeout=60, env=external_python_environment())
+        return json.loads(check.stdout).get("platform") if check.returncode == 0 else None
+    except (OSError, subprocess.TimeoutExpired, ValueError, AttributeError):
+        return None
+
+
 def ensure_conda(root, explicit=None):
     if explicit:
         executable = Path(explicit).expanduser()
         if not executable.is_file() or not os.access(executable, os.X_OK):
             raise FileNotFoundError("Configured conda executable is unavailable: " + str(executable))
         return str(executable)
+    subdir = conda_subdir()
+    if subdir is None:
+        raise RuntimeError("No qualified conda architecture for this platform")
     existing = shutil.which("conda")
-    if existing:
+    # B4: a conda of another platform (for example osx-64 under Rosetta on Apple Silicon) would build the wrong packages.
+    if existing and _path_conda_platform(existing) == subdir:
         return existing
-    bootstrap = root / "miniforge-26.7.2-0"
-    marker = root / "miniforge-26.7.2-0.bootstrap.json"
+    name = f"{MINIFORGE_BOOTSTRAP}-{subdir}"
+    bootstrap = root / name
+    marker = root / (name + ".bootstrap.json")
     executable = bootstrap / "bin" / "conda"
     if bootstrap.is_symlink():
         raise ValueError("Managed bootstrap prefix cannot be a symlink")
+    if bootstrap.exists():
+        receipt = json.loads(marker.read_text()) if marker.is_file() else {}
+        if receipt.get("kind") != "slicerdsurfer_miniforge_bootstrap" or receipt.get("prefix") != str(bootstrap):
+            raise RuntimeError("Refusing to repair an unmanaged bootstrap directory: " + str(bootstrap))
+        if receipt.get("subdir") != subdir:
+            raise RuntimeError(f"Managed bootstrap was not built for {subdir}; remove it or use Repair: " + str(bootstrap))
     if executable.is_file():
         check = subprocess.run([str(executable), "--version"], capture_output=True,
                                timeout=30, env=external_python_environment())
         if check.returncode == 0:
             return str(executable)
-    if bootstrap.exists():
-        receipt = json.loads(marker.read_text()) if marker.is_file() else {}
-        if receipt.get("kind") != "slicerdsurfer_miniforge_bootstrap" or receipt.get("prefix") != str(bootstrap):
-            raise RuntimeError("Refusing to repair an unmanaged bootstrap directory: " + str(bootstrap))
     bootstrap_url, bootstrap_sha256 = bootstrap_artifact()
     installer = root / bootstrap_url.rsplit('/', 1)[-1]
     if not installer.is_file() or file_hash(installer) != bootstrap_sha256:
@@ -245,14 +291,14 @@ def ensure_conda(root, explicit=None):
         if file_hash(part) != bootstrap_sha256:
             raise RuntimeError("Miniforge checksum mismatch; downloaded file will not be executed")
         part.replace(installer)
+    record = {"kind": "slicerdsurfer_miniforge_bootstrap", "prefix": str(bootstrap), "subdir": subdir,
+              "url": bootstrap_url, "sha256": bootstrap_sha256}
     # The installer's update mode repairs an interrupted plugin-owned prefix.
-    write_json(marker, {"kind": "slicerdsurfer_miniforge_bootstrap", "prefix": str(bootstrap),
-                        "url": bootstrap_url, "sha256": bootstrap_sha256, "status": "installing"})
+    write_json(marker, dict(record, status="installing"))
     _run(["bash", str(installer), "-b", *( ["-u"] if bootstrap.exists() else []), "-p", str(bootstrap)])
     if not executable.is_file():
         raise RuntimeError("Miniforge did not produce its expected conda executable")
-    write_json(marker, {"kind": "slicerdsurfer_miniforge_bootstrap", "prefix": str(bootstrap),
-                        "url": bootstrap_url, "sha256": bootstrap_sha256, "status": "ready"})
+    write_json(marker, dict(record, status="ready"))
     return str(executable)
 
 
@@ -261,7 +307,7 @@ def configured_profiles(config, candidates, root=None):
     base = (root or runtime_root()).expanduser().resolve()
     selected = []
     for name in candidates:
-        spec = PROFILES[name]
+        spec = profile_spec(name)
         keys = spec["settings"] if name != "pnl_cnn" else ("pnl_mask_python",)
         prefix = base / spec["directory"]
         if not (base / (spec["directory"] + ".json")).is_file():
@@ -324,7 +370,7 @@ def provision(profiles, *, root=None, conda=None, accept_fsl_license=False, acce
                     command.extend(["-c", channel])
                 if repair and action == "install":
                     command.append("--force-reinstall")
-                _run([*command, *spec["packages"]])
+                _run([*command, *spec["packages"]], {"CONDA_SUBDIR": conda_subdir()})
                 if profile == "pnl_cnn":
                     from shared.managed_pnl import provision_assets
                     provision_assets(prefix, base / "downloads", repair=repair, asset_root=asset_root)

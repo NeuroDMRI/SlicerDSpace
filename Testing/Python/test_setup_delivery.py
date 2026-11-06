@@ -173,7 +173,8 @@ class SetupDeliveryTests(unittest.TestCase):
         self.assertEqual(plan['managed_profiles'], ['mrtrix'])
         self.assertEqual(plan['unsupported_profiles'], ['pnl_cnn'])
         from shared.managed_runtimes import bootstrap_artifact, profile_spec
-        with patch('platform.system', return_value='Darwin'), patch('platform.mac_ver', return_value=('14.5', (), '')):
+        with patch('platform.system', return_value='Darwin'), patch('platform.mac_ver', return_value=('14.5', (), '')), \
+                patch('shared.managed_runtimes.host_machine', return_value='x86_64'):
             self.assertIn('MacOSX-x86_64', bootstrap_artifact()[0])
             self.assertIn('mrtrix3=3.0.8=hee5d243_0', profile_spec('mrtrix')['packages'])
 

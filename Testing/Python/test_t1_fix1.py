@@ -443,7 +443,7 @@ class TC7AssetVersionsTest(unittest.TestCase):
 
         manifests = {name: json.loads((REPO_ROOT / name).read_text()) for name in run_record.ASSET_MANIFESTS}
         with patch.object(run_record, "sha256_file", side_effect=AssertionError("must not hash weights")):
-            profiles = run_record.asset_versions(self.manifest())
+            profiles = run_record.asset_versions(self.manifest(model_assets_dir=None))  # managed root
         segmentation = profiles["segmentation"]
         self.assertEqual(segmentation["manifest"], "models/assets_manifest.json")
         self.assertEqual(segmentation["version"], manifests["models/assets_manifest.json"]["version"])

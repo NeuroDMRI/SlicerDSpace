@@ -39,7 +39,8 @@ def variants(config):
                       run_name=normalize_run_name(config.run_name) + "__" + backend, targets=targets,
                       microstructure_run_free_water=config.microstructure_run_free_water if index == 0 else False,
                       microstructure_run_noddi=config.microstructure_run_noddi if index == 0 else False,
-                      microstructure_run_dki=config.microstructure_run_dki if index == 0 else False)
+                      microstructure_run_dki=config.microstructure_run_dki if index == 0 else False,
+                      microstructure_run_ifw=config.microstructure_run_ifw if index == 0 else False)
 
 
 def plan(config, *, write=True):

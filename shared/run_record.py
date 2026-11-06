@@ -175,6 +175,36 @@ def used_asset_profiles(manifest: dict) -> list[str]:
     return sorted(dict.fromkeys(names))
 
 
+def _custom_model_root(manifest: dict) -> Optional[Path]:
+    """The user-supplied model folder (run option or environment variable), or None for the managed root."""
+    import os
+
+    explicit = manifest.get("model_assets_dir") or os.environ.get("SLICERDSPACE_MODEL_ASSETS_DIR")
+    return Path(explicit).expanduser() if explicit else None
+
+
+def _folder_matches_catalog(folder: Path, files: dict) -> bool:
+    """True when the folder holds every catalogued file of the profile with the catalogued SHA-256.
+
+    The digests come from the stored (mtime and size) cache of the model-asset resolver, so a file that an
+    earlier resolve already hashed is not hashed again.
+    """
+    expected = {path: digest for path, digest in files.items() if digest}
+    if not expected:
+        return False
+    try:
+        from shared.model_asset_integrity import cached_sha256_of_file
+        from shared.model_assets import _persist_sha256_cache, _sha256_cache
+
+        cache = _sha256_cache()
+        matched = all((folder / path).is_file() and cached_sha256_of_file(folder / path, cache) == digest
+                      for path, digest in expected.items())
+        _persist_sha256_cache()
+        return matched
+    except (OSError, ImportError):
+        return False
+
+
 def asset_versions(manifest: dict, repo_root: Optional[Path] = None) -> dict:
     """Version and SHA-256 values that the asset manifests already store, per profile that the run used.
 
@@ -192,6 +222,9 @@ def asset_versions(manifest: dict, repo_root: Optional[Path] = None) -> dict:
         paths = [path for child in profile.get("include_profiles", []) for path in paths_of(child, found, seen)]
         return paths + list(profile.get("required_paths", []))
 
+    custom_root = _custom_model_root(manifest)
+    if custom_root is not None:
+        folder = custom_root.as_posix()
     result: dict[str, Any] = {}
     for name in used_asset_profiles(manifest):
         for found in manifests:
@@ -199,6 +232,11 @@ def asset_versions(manifest: dict, repo_root: Optional[Path] = None) -> dict:
                 continue
             files = {path: (found["records"].get(path) or {}).get("sha256")
                      for path in dict.fromkeys(paths_of(name, found, set()))}
+            # T-C7b: a user-supplied model folder is not verified by the resolver. Take the catalog values
+            # only when every catalogued file in that folder has the catalogued SHA-256; else record "unknown".
+            if custom_root is not None and not _folder_matches_catalog(custom_root, files):
+                result[name] = {"manifest": None, "version": "unknown", "folder": folder, "files": {}}
+                break
             entry = {"manifest": found["path"], "version": found["version"], "files": files,
                      "sha256_source": "asset manifest (stored value, not re-hashed at run time)"}
             if found["upstream_commit"] and name.startswith("surface"):
@@ -208,6 +246,52 @@ def asset_versions(manifest: dict, repo_root: Optional[Path] = None) -> dict:
         else:
             result[name] = {"manifest": None, "version": "unknown", "folder": folder, "files": {}}
     return result
+
+
+# Child keys that always differ between tracking variants and say nothing about the settings.
+PER_CHILD_NOISE_KEYS = frozenset({"run_name", "run_plan_path", "run_plan_summary", "previous_run_records",
+                                  "started_at", "input_validation_path", "archived_development_outputs",
+                                  "run_manifest_path"})
+
+
+def merge_child_settings(manifest: dict) -> tuple[dict, list[dict]]:
+    """T-C5b: effective settings of an aggregate manifest (several tracking backends).
+
+    Keys that all readable child manifests hold with the same value go to the top level; the aggregate's own
+    keys win. Keys that differ go to one entry per child (``tracking_backend`` plus the differing keys).
+    ``accepted_licences`` is the union. A manifest without readable children comes back unchanged.
+    """
+    children: list[tuple[Any, dict]] = []
+    for entry in manifest.get("child_runs") or []:
+        try:
+            data = json.loads(Path(entry["manifest_path"]).read_text(encoding="utf-8"))
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+        if isinstance(data, dict):
+            children.append((entry.get("backend"), data))
+    if not children:
+        return manifest, []
+    keys = set().union(*(data.keys() for _, data in children))
+    merged: dict[str, Any] = {}
+    differing: set[str] = set()
+    for key in keys:
+        values = [data.get(key) for _, data in children]
+        if all(value == values[0] for value in values) and all(key in data for _, data in children):
+            merged[key] = values[0]
+        else:
+            differing.add(key)
+    merged.update(manifest)
+    licences = []
+    for source in [manifest] + [data for _, data in children]:
+        for item in source.get("accepted_licences") or []:
+            if item not in licences:
+                licences.append(item)
+    merged["accepted_licences"] = licences
+    per_child = [dict({"tracking_backend": backend},
+                      **{key: data[key] for key in sorted(differing - NON_PARAMETER_KEYS - PER_CHILD_NOISE_KEYS - {"accepted_licences"})
+                         if key in data})
+                 for backend, data in children]
+    return merged, per_child
 
 
 def _assets(manifest: dict) -> dict:
@@ -226,6 +310,10 @@ def build_run_record(manifest_path: Path) -> dict:
     manifest_path = Path(manifest_path)
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     record_path = manifest_path.parent / RUN_RECORD_NAME
+    effective, per_child = merge_child_settings(manifest)
+    parameters = {key: value for key, value in sorted(effective.items()) if key not in NON_PARAMETER_KEYS}
+    if per_child:
+        parameters["per_tracking_backend"] = per_child
     return {
         "kind": RUN_RECORD_KIND,
         "version": RUN_RECORD_VERSION,
@@ -233,12 +321,12 @@ def build_run_record(manifest_path: Path) -> dict:
         "subject_id": manifest.get("subject_id"),
         "run_name": manifest.get("run_name"),
         "run_manifest": {"path": manifest_path.as_posix(), "sha256": sha256_file(manifest_path)},
-        "parameters": {key: value for key, value in sorted(manifest.items()) if key not in NON_PARAMETER_KEYS},
+        "parameters": parameters,
         "software": {"python": sys.version.split()[0], "platform": platform.platform(),
                      "packages": _package_versions()},
-        "assets": _assets(manifest),
+        "assets": _assets(effective),
         # The licence acceptance record belongs to the setup step of T2 (B7); this run records what the manifest holds.
-        "accepted_licences": manifest.get("accepted_licences", []),
+        "accepted_licences": effective.get("accepted_licences", []),
         "qc_summary": _qc_summary(manifest),
         "products": product_inventory(manifest, record_path, _output_root(manifest, manifest_path)),
         "excludes": "run_record.json itself, work folders (" + ", ".join(sorted(EXCLUDED_PATH_PARTS))

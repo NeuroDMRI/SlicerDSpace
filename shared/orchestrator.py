@@ -5315,6 +5315,7 @@ def _run_subject_products_impl(
         "postprocess_atlases": list(config.postprocess_atlases) if config.postprocess_atlases else None,
         "postprocess_force": config.postprocess_force,
         "atlas_t2": atlas_t2.as_posix(),
+        "model_assets_dir": model_assets_dir.as_posix() if model_assets_dir else None,
         "ddseg_device": config.ddseg_device,
         "surface_device": config.surface_device,
         "surface_atlas_t2": config.surface_atlas_t2.expanduser().resolve().as_posix() if config.surface_atlas_t2 else None,

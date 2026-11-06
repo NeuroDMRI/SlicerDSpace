@@ -309,7 +309,7 @@ def model_assets_summary_text(repo_root: Path) -> str:
 
     manifest = repo_root / "models" / "assets_manifest.json"
     default_root = configured_model_assets_root()
-    command = f"python3 scripts/download_model_assets.py --profile core --asset-root {default_root.as_posix()}"
+    command = f"PythonSlicer scripts/download_model_assets.py --profile core --asset-root {default_root.as_posix()}"
     if manifest.is_file():
         status = _model_asset_profiles_status_text(repo_root)
         status_text = f" Current status: {status}." if status else " Click Check status to verify core/all locally."
@@ -359,7 +359,7 @@ def model_assets_provenance_text(repo_root: Path) -> str:
     manifest = repo_root / "models" / "assets_manifest.json"
     terms = doc_path(repo_root, "model_asset_terms")
     lock_command = (
-        "python3 scripts/download_model_assets.py --profile core --verify-only "
+        "PythonSlicer scripts/download_model_assets.py --profile core --verify-only "
         "--asset-root <asset-root> --write-lockfile outputs/00_run_metadata/model_assets_core.lock.json"
     )
     return "\n".join(
@@ -370,7 +370,7 @@ def model_assets_provenance_text(repo_root: Path) -> str:
             "Default profile: core",
             f"Default user asset root: {configured_model_assets_root()}",
             f"Environment override: {MODEL_ASSETS_ENV}",
-            "Verify command: python3 scripts/download_model_assets.py --profile core --asset-root <asset-root> --verify-only",
+            "Verify command: PythonSlicer scripts/download_model_assets.py --profile core --asset-root <asset-root> --verify-only",
             f"Lockfile command: {lock_command}",
             "Release boundary: local verification does not grant public redistribution or DOI-archive rights.",
         ]

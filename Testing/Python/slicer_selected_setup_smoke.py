@@ -72,19 +72,18 @@ def run():
                 if dialog.objectName != "selectedSetupConfirmationDialog" or not dialog.visible:
                     continue
                 try:
+                    # B7: no checkboxes; one "Accept licences and install" action lists FSL and PNL.
                     boxes = slicer.util.findChildren(dialog, className="QCheckBox")
                     buttons = slicer.util.findChildren(dialog, className="QDialogButtonBox")[0]
-                    terms_checks.append(len(boxes) == 2 and not buttons.button(qt.QDialogButtonBox.Ok).enabled)
-                    for box in boxes:
-                        box.checked = True
-                    terms_checks.append(buttons.button(qt.QDialogButtonBox.Ok).enabled)
+                    terms_checks.append(len(boxes) == 0)
+                    terms_checks.append(buttons.button(qt.QDialogButtonBox.Ok).text == "Accept licences and install")
                 finally:
                     dialog.reject()
-        terms_plan = dict(plan, fsl_license_required=True, pnl_terms_required=True)
+        terms_plan = dict(plan, fsl_license_required=True, pnl_terms_required=True, managed_profiles=["fsl_cpu", "pnl_cnn"])
         qt.QTimer.singleShot(200, check_terms_gate)
         assert not setup._confirm(owner, terms_plan)
         assert terms_checks == [True, True], terms_checks
-        records.append("independent_fsl_pnl_terms_gate")
+        records.append("one_accept_licences_and_install_action")
         for name in ("_run_environment_dependency_check", "_update_environment_result_label", "_update_environment_path_status_labels"):
             originals.append((owner, name, getattr(owner, name)))
         owner._run_environment_dependency_check = lambda: ready

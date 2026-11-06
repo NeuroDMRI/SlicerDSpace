@@ -31,8 +31,8 @@ NABA 针对新生儿与成人，不宜笼统称为覆盖所有儿童的图谱。
 并对两套解压索引及各一个分片完成匿名下载和 SHA256 核验；完整解压另通过同字节离线副本验证。
 
 ```bash
-python scripts/setup_optional_assets.py --profiles wma-east-west --asset-root /path/to/models
-python scripts/setup_optional_assets.py --profiles wma-east-west --asset-root /path/to/models \
+PythonSlicer scripts/setup_optional_assets.py --profiles wma-east-west --asset-root /path/to/models
+PythonSlicer scripts/setup_optional_assets.py --profiles wma-east-west --asset-root /path/to/models \
   --execute --accept-terms
 ```
 

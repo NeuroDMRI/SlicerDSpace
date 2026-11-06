@@ -42,8 +42,8 @@ is also checked from the byte-identical offline mirror.
 Preview one resource plan, then prepare it after accepting its terms:
 
 ```bash
-python scripts/setup_optional_assets.py --profiles wma-east-west --asset-root /path/to/models
-python scripts/setup_optional_assets.py --profiles wma-east-west --asset-root /path/to/models \
+PythonSlicer scripts/setup_optional_assets.py --profiles wma-east-west --asset-root /path/to/models
+PythonSlicer scripts/setup_optional_assets.py --profiles wma-east-west --asset-root /path/to/models \
   --execute --accept-terms
 ```
 

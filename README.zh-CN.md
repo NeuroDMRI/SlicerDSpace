@@ -175,7 +175,7 @@ SlicerDMRI、PyTorch 及可选的 UKFTractography 扩展按路线准备。
 需要显式使用 CLI 准备表面模型时：
 
 ```bash
-python3 scripts/download_model_assets.py --profile surface \
+PythonSlicer scripts/download_model_assets.py --profile surface \
   --asset-root ~/SlicerDSpace-model-assets --source url \
   --source-id slicerdsurfer_models_git
 ```

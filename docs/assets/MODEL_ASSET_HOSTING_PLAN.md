@@ -50,7 +50,7 @@ defaults while the downloader changes only the source backend.
    verify:
 
 ```bash
-python3 scripts/download_model_assets.py --profile core --verify-only
+PythonSlicer scripts/download_model_assets.py --profile core --verify-only
 python3 scripts/export_model_asset_mirror.py \
   --profile core \
   --output-dir /tmp/SlicerDSpace-models-v0.1.0
@@ -64,11 +64,11 @@ python3 scripts/export_model_asset_mirror.py \
 ```bash
 GIT_LFS_SKIP_SMUDGE=1 git clone git@github.com:NeuroDMRI/SlicerDSpace.git /tmp/slicerdsurfer-url-smoke
 cd /tmp/slicerdsurfer-url-smoke
-python3 scripts/download_model_assets.py \
+PythonSlicer scripts/download_model_assets.py \
   --profile core \
   --source url \
   --source-id slicerdsurfer_models_git
-python3 scripts/download_model_assets.py --profile core --verify-only
+PythonSlicer scripts/download_model_assets.py --profile core --verify-only
 ```
 
 10. Run the normal release gates:

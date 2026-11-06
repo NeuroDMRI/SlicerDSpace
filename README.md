@@ -191,10 +191,10 @@ offline models and repair are available under **More options**.
 See [managed setup](docs/setup/MANAGED_SETUP.md) and
 [resource terms](docs/assets/MODEL_ASSET_TERMS.md).
 
-For explicit CLI surface-model preparation:
+For explicit CLI surface-model preparation (`PythonSlicer` is Slicer's own Python in the Slicer `bin` folder; no system Python is needed):
 
 ```bash
-python3 scripts/download_model_assets.py --profile surface \
+PythonSlicer scripts/download_model_assets.py --profile surface \
   --asset-root ~/SlicerDSpace-model-assets --source url \
   --source-id slicerdsurfer_models_git
 ```

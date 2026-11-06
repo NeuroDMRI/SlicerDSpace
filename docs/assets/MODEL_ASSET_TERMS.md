@@ -65,7 +65,7 @@ validation assets, maintainers must confirm:
 6. A lockfile generated from the final release checkout:
 
 ```bash
-python3 scripts/download_model_assets.py \
+PythonSlicer scripts/download_model_assets.py \
   --profile core \
   --verify-only \
   --write-lockfile outputs/00_run_metadata/model_assets_core.lock.json

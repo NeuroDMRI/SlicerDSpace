@@ -160,7 +160,8 @@ class ManagedRuntimeTests(unittest.TestCase):
         self.assertEqual(asset_profiles_for_items((SimpleNamespace(targets=("surface", "parcellation")),)), ("surface", "parcellation"))
 
     def test_gui_saves_verified_paths_and_invalidates_environment_cache(self):
-        with tempfile.TemporaryDirectory() as temp:
+        with tempfile.TemporaryDirectory() as temp, \
+                patch.dict("os.environ", {"SLICERDSPACE_USER_CONFIG": str(Path(temp) / "user_config.json")}):
             owner = Mock(_environmentPathLineEdits={"mrtrix_bin_dir": Mock()})
             apply_runtime_result(owner, {"kind": "slicerdsurfer_runtime_setup", "status": "completed",
                                          "external_dependencies": {"mrtrix_bin_dir": temp}})

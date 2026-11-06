@@ -37,10 +37,11 @@ For shared HPC storage:
 /shared/software/SlicerDSpace-model-assets
 ```
 
-Command-line equivalent:
+Command-line equivalent. `PythonSlicer` is Slicer's own Python (`<Slicer>/bin/PythonSlicer`).
+No system Python is needed:
 
 ```bash
-python3 scripts/download_model_assets.py \
+PythonSlicer scripts/download_model_assets.py \
   --profile core \
   --asset-root /shared/software/SlicerDSpace-model-assets \
   --source url \

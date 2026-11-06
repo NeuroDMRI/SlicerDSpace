@@ -137,7 +137,7 @@ python3 scripts/stage_slicer_extension.py \
 - Install SlicerDMRI and PyTorch from Slicer's Extension Manager for routes that need them. (R/README.md:66-67)
 - Model files live outside the checkout; choose a writable directory in Advanced settings > Environment and models. Review the asset terms first. (R/README.md:69-71)
 ```bash
-python3 scripts/download_model_assets.py --profile surface \
+PythonSlicer scripts/download_model_assets.py --profile surface \
   --asset-root ~/SlicerDDSurfer-model-assets --source url \
   --source-id slicerdsurfer_models_git
 ```

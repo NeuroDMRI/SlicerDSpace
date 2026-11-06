@@ -57,7 +57,7 @@
 阅读组件与数据许可后安装离线包：
 
 ```bash
-python scripts/setup_surface_runtime.py --execute --accept-terms \
+PythonSlicer scripts/setup_surface_runtime.py --execute --accept-terms \
   --asset-root /path/to/assets --offline
 ```
 

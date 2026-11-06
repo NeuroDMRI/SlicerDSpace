@@ -25,7 +25,7 @@ To test network access, mirror routing and checksum verification without
 downloading large model weights, use the tiny sentinel profile:
 
 ```bash
-python3 scripts/download_model_assets.py \
+PythonSlicer scripts/download_model_assets.py \
   --profile sentinel \
   --asset-root /tmp/slicerdsurfer-model-sentinel \
   --source url \
@@ -48,7 +48,7 @@ location (e.g. a shared cache on a multi-user cluster) must be explicit --
 callers do not silently trust well-known/guessable shared paths:
 
 ```bash
-python3 scripts/download_model_assets.py \
+PythonSlicer scripts/download_model_assets.py \
   --profile core \
   --asset-root /srv/slicerddsurfer/model-assets
 ```
@@ -96,13 +96,13 @@ not start a download.
 To inspect the resolved profile without downloading anything:
 
 ```bash
-python3 scripts/download_model_assets.py --profile core --print-plan
+PythonSlicer scripts/download_model_assets.py --profile core --print-plan
 ```
 
 To verify an existing checkout without downloading:
 
 ```bash
-python3 scripts/download_model_assets.py --profile core --verify-only
+PythonSlicer scripts/download_model_assets.py --profile core --verify-only
 ```
 
 CLI verification performs size and SHA256 checks. The Slicer UI uses a lighter
@@ -113,7 +113,7 @@ To download from an external mirror while preserving the same repository-local
 paths:
 
 ```bash
-python3 scripts/download_model_assets.py \
+PythonSlicer scripts/download_model_assets.py \
   --profile core \
   --asset-root /srv/slicerddsurfer/model-assets \
   --source url \
@@ -147,7 +147,7 @@ To freeze a release or manuscript-validation asset state, write a lockfile
 after verification:
 
 ```bash
-python3 scripts/download_model_assets.py \
+PythonSlicer scripts/download_model_assets.py \
   --profile core \
   --verify-only \
   --write-lockfile outputs/00_run_metadata/model_assets_core.lock.json
@@ -189,7 +189,7 @@ Examples:
 scripts/download_model_assets.sh --profile core
 
 # Equivalent explicit Python entrypoint
-python3 scripts/download_model_assets.py --profile core --asset-root /srv/slicerddsurfer/model-assets
+PythonSlicer scripts/download_model_assets.py --profile core --asset-root /srv/slicerddsurfer/model-assets
 
 # Only run DDSeg
 scripts/download_model_assets.sh --profile segmentation
@@ -285,11 +285,11 @@ weights/templates through a governed asset source:
 6. Run:
 
 ```bash
-python3 scripts/download_model_assets.py \
+PythonSlicer scripts/download_model_assets.py \
   --profile core \
   --source url \
   --source-id slicerdsurfer_models_git
-python3 scripts/download_model_assets.py --profile core --verify-only
+PythonSlicer scripts/download_model_assets.py --profile core --verify-only
 ```
 
 If a DOI platform stores all files flat rather than preserving directories,
@@ -307,7 +307,7 @@ Required release checks:
 
 1. Run `scripts/download_model_assets.sh --profile core` or the intended
    profile.
-2. Run `python3 scripts/download_model_assets.py --profile <profile>
+2. Run `PythonSlicer scripts/download_model_assets.py --profile <profile>
    --verify-only --write-lockfile <path>`.
 3. Confirm the lockfile has no `exists=false` records and no
    `lfs_pointer=true` records.

@@ -98,7 +98,7 @@ Each wrapper passes an explicit platform profile (`Linux`, `Darwin`, or
 planner directly:
 
 ```bash
-python3 scripts/install_dependencies.py \
+PythonSlicer scripts/install_dependencies.py \
   --all \
   --platform Linux
 ```
@@ -121,7 +121,7 @@ PYTHON_BIN=/path/to/Slicer/bin/PythonSlicer \
 或直接传给安装器：
 
 ```bash
-python3 scripts/install_dependencies.py \
+PythonSlicer scripts/install_dependencies.py \
   --targets microstructure,segmentation \
   --python-executable /path/to/Slicer/bin/PythonSlicer \
   --execute

@@ -253,7 +253,7 @@ already invokes these workers and saves verified settings.
 For selected algorithm sources, plan first (writes only the result report):
 
 ```bash
-python3 /path/to/runtime/scripts/setup_backend_sources.py \
+PythonSlicer /path/to/runtime/scripts/setup_backend_sources.py \
   --profiles wmql --root /user/confirmed/algorithm-sources \
   --result /absolute/source-plan.json
 ```

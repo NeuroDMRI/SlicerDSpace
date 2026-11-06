@@ -27,6 +27,16 @@ def pending_setup():
         return None
 
 
+def accepted_licences():
+    """Licences accepted earlier ({id: {"id", "version", "time"}}); a continuation after a restart asks nothing for them (B7)."""
+    from shared.user_config import load_user_config
+
+    try:
+        return load_user_config()["accepted_licences"]
+    except (OSError, ValueError):
+        return {}
+
+
 def remember_setup(request):
     from shared.managed_runtimes import write_json
 

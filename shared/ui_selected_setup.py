@@ -6,87 +6,16 @@ from pathlib import Path
 
 
 def python_setup_commands(owner, packages, *, requests=None):
-    """Group requests by their selected Python, never mix runtime targets."""
-    import importlib.metadata
-    import os
-    import sys
-    from shared.managed_runtimes import write_json
+    """GUI wrapper of the pure selected_setup.python_package_commands (B7)."""
+    from shared.selected_setup import python_package_commands
     from shared.user_config import default_user_config_path
 
     folder = Path(getattr(owner, "_latestEnvironmentReportDir", None) or default_user_config_path().parent / "setup-logs")
-    folder.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-    script = Path(__file__).resolve().parents[1] / "scripts/setup_python_packages.py"
-    groups = {}
     result = getattr(owner, "_lastEnvironmentResult", None)
-    from shared.python_setup import _packaging_api
-    InvalidRequirement, Requirement, canonicalize = _packaging_api()
-
-    def package_name(value):
-        try:
-            return canonicalize(Requirement(value).name)
-        except InvalidRequirement:
-            return value
-
-    selections = [(item['requirement'], item) for item in requests] if requests is not None else [(package, None) for package in packages]
-    for package, explicit in selections:
-        matches = [explicit] if explicit is not None else [(item.details or {}) for item in getattr(result, "statuses", ())
-                        if item.kind == "python" and any(value and package_name(package) == package_name(value)
-                            for value in ((item.details or {}).get("package"), (item.details or {}).get("install_requirement")))]
-        for details in matches or [{}]:
-            program, prefix = owner._setup_python_command(details.get("python_executable"))
-            group = groups.setdefault((str(program), tuple(prefix)), {"requirements": [], "environment": {}})
-            requirement = details.get("install_requirement") or package
-            try:
-                if Requirement(package).specifier:
-                    requirement = package
-            except InvalidRequirement:
-                pass
-            if requirement == "git+https://github.com/demianw/tract_querier.git":
-                root = owner._environment_dependency_path_kwargs().get("tract_querier_root")
-                if root and (Path(root) / "pyproject.toml").is_file():
-                    requirement = str(root)
-                    group["environment"]["SETUPTOOLS_SCM_PRETEND_VERSION_FOR_TRACT_QUERIER"] = "0+local"
-            if requirement not in group["requirements"]:
-                group["requirements"].append(requirement)
-    loaded = {name for module, names in importlib.metadata.packages_distributions().items()
-              if module in sys.modules for name in names}
-    commands, receipts = [], []
-    for index, ((program, prefix), data) in enumerate(groups.items()):
-        slicer_python = bool(prefix) or Path(program).absolute() == Path(sys.executable).absolute()
-        requirements = data["requirements"]
-        try:
-            if all(not Requirement(value).url for value in requirements):
-                data['environment']['PIP_ONLY_BINARY'] = ':all:'
-        except InvalidRequirement:
-            pass
-        if not slicer_python:
-            from shared.external_process import external_python_environment
-            clean = external_python_environment(path_prepend=[Path(program).parent])
-            overrides = {key: None for key in os.environ if key not in clean}
-            overrides.update(clean)
-            overrides.update(data["environment"])
-            data["environment"] = overrides
-        torch_minimum = None
-        torchvision_required = any(item == "torchvision" or item.startswith(("torchvision>", "torchvision=", "torchvision<"))
-                                   for item in requirements)
-        if slicer_python and (torchvision_required or any(item == "torch" or item.startswith(("torch>", "torch=", "torch<")) for item in requirements)):
-            from packaging.requirements import Requirement
-            from packaging.version import Version
-            minimums = ["2.0.0"]
-            for value in requirements:
-                if value.startswith('torch>='):
-                    minimums.extend(spec.version for spec in Requirement(value).specifier if spec.operator == '>=')
-            torch_minimum = str(max(map(Version, minimums)))
-            requirements = [item for item in requirements if not (item == "torch" or item.startswith(("torch>", "torch=", "torch<")))]
-        request, receipt = (folder / f"python-{stamp}-{index}-{suffix}.json" for suffix in ("request", "result"))
-        write_json(request, {"requirements": requirements, "torch_minimum": torch_minimum,
-                            "torchvision_required": torchvision_required and slicer_python,
-                            "protect_bundled": slicer_python, "loaded_packages": sorted(loaded) if slicer_python else [],
-                            "python_path_entries": [path for path in sys.path if path] if slicer_python else []})
-        commands.append((program, [*prefix, "-u", str(script), "--request", str(request), "--result", str(receipt)], data["environment"]))
-        receipts.append(receipt)
-    return commands, receipts
+    return python_package_commands(
+        packages, requests=requests, python_command=owner._setup_python_command, folder=folder,
+        statuses=getattr(result, "statuses", ()),
+        tract_querier_root=lambda: owner._environment_dependency_path_kwargs().get("tract_querier_root"))
 
 
 def _text(owner, english, chinese):
@@ -119,8 +48,7 @@ def extension_states(manager, modules):
 def _confirm(owner, plan):
     import qt
     import slicer
-    from shared.managed_runtimes import FSL_TERMS_URL
-    from shared.managed_pnl import PNL_TERMS_URL, PNL_MODEL_TERMS_URL, PNL_TEMPLATE_TERMS_URL
+    from shared.managed_pnl import PNL_MODEL_TERMS_URL, PNL_TEMPLATE_TERMS_URL
 
     dialog = qt.QDialog(slicer.util.mainWindow())
     dialog.setObjectName("selectedSetupConfirmationDialog")
@@ -184,54 +112,72 @@ def _confirm(owner, plan):
     scroll.setMaximumHeight(320)
     layout.addWidget(scroll)
     dialog.setMinimumWidth(500)
-    approvals = []
-    if plan.get('surface_build_required') or plan.get('surface_prebuilt_required'):
-        terms = qt.QLabel('<a href="https://surfer.nmr.mgh.harvard.edu/fswiki/FreeSurferSoftwareLicense">FreeSurfer source/data terms</a> | ITK / zlib notices')
-        terms.openExternalLinks = True
-        layout.addWidget(terms)
-        check = qt.QCheckBox(_text(owner, 'I have reviewed the component/data terms and approve installation.',
-                                  '我已阅读组件与数据许可，同意安装。'))
-        approvals.append(check)
-        layout.addWidget(check)
-    if plan.get('backend_profiles'):
-        check = qt.QCheckBox(_text(owner, 'I have reviewed the algorithm source licences above.',
-                                  '我已阅读以上算法源码许可。'))
-        approvals.append(check)
-        layout.addWidget(check)
-    if plan["optional_asset_profiles"]:
-        check = qt.QCheckBox(_text(owner, "I have reviewed the resource terms above; my use complies.",
-                                  "我已阅读以上资源许可，且本次使用符合许可。"))
-        approvals.append(check)
-        layout.addWidget(check)
-    for required, url, caption in (
-        (plan["fsl_license_required"], FSL_TERMS_URL, "FSL"),
-        (plan["pnl_terms_required"], PNL_TERMS_URL, "PNL source, models and IIT template"),
-    ):
-        if required:
-            link = qt.QLabel(f'<a href="{url}">{caption}</a>')
-            link.openExternalLinks = True
-            layout.addWidget(link)
-            if caption.startswith("PNL"):
-                assets = qt.QLabel(f'<a href="{PNL_MODEL_TERMS_URL}">PNL models</a> | '
-                                  f'<a href="{PNL_TEMPLATE_TERMS_URL}">IIT template</a>')
-                assets.openExternalLinks = True
-                layout.addWidget(assets)
-            check = qt.QCheckBox(_text(owner, "I have reviewed the terms and my use complies.", "我已阅读相关条款，且本次使用符合许可。"))
-            approvals.append(check)
-            layout.addWidget(check)
+    # B7: the component list (size, licence name, link, local licence file) and one action.
+    from shared.setup_components import pending_licences, plan_components, required_licences
+    from shared.setup_resume import accepted_licences
+    from scripts.download_model_assets import _format_bytes
+    import html
+    components = plan_components(plan)
+    required = required_licences(components)
+    pending = pending_licences(required, accepted_licences())
+    rows = []
+    for item in components:
+        size = _format_bytes(item["size_bytes"]) if item["size_bytes"] else _text(owner, "size not known", "大小未知")
+        row = "<b>%s</b> (%s)" % (html.escape(item["title"]), size)
+        licence = item["licence"]
+        if licence:
+            local = ('<a href="%s">%s</a>' % (Path(licence["file"]).as_uri(), html.escape(licence["file"]))
+                     if licence["file"] else _text(owner, "none", "无"))
+            row += "<br>%s: <a href=\"%s\">%s</a> | %s: %s%s" % (
+                _text(owner, "Licence", "许可"), html.escape(licence["url"]), html.escape(licence["name"]),
+                _text(owner, "local file", "本地文件"), local,
+                "" if licence["id"] in pending else _text(owner, " (already accepted)", "（已接受）"))
+        rows.append(row)
+    if rows:
+        components_label = qt.QLabel("<br><br>".join(rows))
+        components_label.wordWrap = True
+        components_label.openExternalLinks = True
+        layout.addWidget(components_label)
+    if plan["pnl_terms_required"]:
+        assets = qt.QLabel(f'<a href="{PNL_MODEL_TERMS_URL}">PNL models</a> | '
+                          f'<a href="{PNL_TEMPLATE_TERMS_URL}">IIT template</a>')
+        assets.openExternalLinks = True
+        layout.addWidget(assets)
     buttons = qt.QDialogButtonBox(dialog)
     buttons.setStandardButtons(qt.QDialogButtonBox.Ok | qt.QDialogButtonBox.Cancel)
-    buttons.button(qt.QDialogButtonBox.Ok).setText(_text(owner, "Prepare", "开始准备"))
-    buttons.button(qt.QDialogButtonBox.Ok).enabled = not approvals
-    for check in approvals:
-        check.connect("toggled(bool)", lambda *_: setattr(buttons.button(qt.QDialogButtonBox.Ok),
-                                                          "enabled", all(item.checked for item in approvals)))
+    buttons.button(qt.QDialogButtonBox.Ok).setText(
+        _text(owner, "Accept licences and install", "接受许可并安装") if pending else _text(owner, "Prepare", "开始准备"))
     buttons.connect("accepted()", dialog.accept)
     buttons.connect("rejected()", dialog.reject)
     layout.addWidget(buttons)
     accepted = dialog.exec_() == qt.QDialog.Accepted
     dialog.deleteLater()
+    if accepted and pending:
+        from shared.setup_components import accept_licences
+        accept_licences(pending)  # id, version (SHA-256 of the local licence file) and time, in the user config
     return accepted
+
+
+def _running_slicer_executable(owner=None):
+    """Launcher of the running Slicer (for the Windows installer's -SlicerExecutable), or None.
+
+    S-B9: the launcher first (on Windows applicationFilePath is bin\\SlicerApp-real.exe, which the ps1 cannot use to
+    find PythonSlicer), then the running application path.
+    """
+    launcher = getattr(owner, "_slicer_launcher_program", None)
+    try:
+        value = launcher() if callable(launcher) else None
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    except Exception:
+        pass
+    try:
+        import slicer
+        value = slicer.app.applicationFilePath
+        value = value() if callable(value) else value
+        return str(value) if value else None
+    except Exception:
+        return None
 
 
 def selected_setup_plan(owner, result, *, repair=False):
@@ -262,14 +208,15 @@ def selected_setup_plan(owner, result, *, repair=False):
         candidates.append("pnl_cnn")
     config = owner._environment_dependency_path_kwargs()
     existing = configured_profiles(config, candidates) if candidates else ()
+    from shared.selected_setup import need_flags
+    from scripts.setup_python_packages import dcm2niix_pending
     plan = build_setup_plan(result, installed_extensions=installed, loaded_extensions=loaded,
-        need_dti=bool(targets & {"segmentation", "parcellation", "surface", "microstructure", "tractography", "wma"}),
-        need_slicerdmri="wma" in targets,
-        need_torch=bool(targets & {"segmentation", "parcellation", "surface", "tractcloud"}),
-        need_ukf="tractography" in targets and ("ukf" in closure.tractography_algorithms or fallback_ukf),
+        **need_flags(targets, closure.tractography_algorithms, fallback_ukf=fallback_ukf),
         brain_mask_backend=getattr(owner._parameterNode, "brainMaskBackend", "pnl_cnn"), gpu_available=gpu,
         wma_atlas=getattr(owner._parameterNode, "wmaAtlas", "org"),
-        existing_managed_profiles=existing, repair=repair, backend_paths=config)
+        existing_managed_profiles=existing, repair=repair, backend_paths=config, closure_targets=tuple(closure.targets),
+        slicer_executable=_running_slicer_executable(owner) or config.get("slicer_executable"),
+        dcm2niix_missing=dcm2niix_pending())  # S-B3: checked in the running Slicer's own Python
     # C4: the result's targets are already closed, so the owner (which knows what was ticked) words the notice.
     notice = getattr(owner, "_closure_notice_text", None)
     notice = notice() if callable(notice) else ""
@@ -280,6 +227,8 @@ def selected_setup_plan(owner, result, *, repair=False):
 
 def prepare_selected_environment(owner, result=None, *, repair=False):
     import slicer
+    from shared.selected_setup import complete_step
+    from shared.ui_managed_runtimes import apply_setup_settings
     from shared.managed_runtimes import write_json
     from shared.user_config import default_user_config_path
     from shared.setup_resume import pending_setup
@@ -299,7 +248,8 @@ def prepare_selected_environment(owner, result=None, *, repair=False):
     manager = slicer.app.extensionsManagerModel()
     config = owner._environment_dependency_path_kwargs()
     plan = selected_setup_plan(owner, result, repair=repair)
-    pending_actions = plan.get('surface_build_required', False) or plan.get('surface_prebuilt_required', False) or any(plan[key] for key in (
+    # S-B1: the Windows ps1 step is pending work too; without it the dialog (and the licence acceptance) was skipped.
+    pending_actions = bool((plan.get('windows_runtime') or {}).get('command')) or plan.get('surface_build_required', False) or plan.get('surface_prebuilt_required', False) or any(plan[key] for key in (
         "extensions", "restart_extensions", "python_packages", "asset_profiles", "optional_asset_profiles",
         "managed_profiles", "unsupported_profiles", "manual_items", "backend_profiles"))
     if pending_actions and not _confirm(owner, plan):
@@ -450,161 +400,72 @@ def prepare_selected_environment(owner, result=None, *, repair=False):
         if current and state == "blocked":
             owner._show_environment_results_dialog(current)
 
-    def managed_setup():
-        if not plan["managed_profiles"]:
-            finish()
-            return
-        from shared.ui_setup_jobs import start_setup_job
-        from shared.ui_managed_runtimes import apply_runtime_result
-        script = Path(__file__).resolve().parents[1] / "scripts/setup_managed_runtime.py"
-        receipt = folder / "runtime-result.json"
-        args = ["--launch", "PythonSlicer", "-u", str(script), "--profiles", *plan["managed_profiles"],
-                "--execute", "--result", str(receipt)]
-        if plan["repair"]:
-            args.append("--repair")
-        if plan["fsl_license_required"]:
-            args.append("--accept-fsl-license")
-        if plan["pnl_terms_required"]:
-            args.append("--accept-pnl-terms")
-        asset_root = config.get("model_assets_dir")
-        if asset_root:
-            args.extend(("--asset-root", str(asset_root)))
-        conda = owner._environment_dependency_path_kwargs().get("conda_executable")
-        if conda:
-            args.extend(("--conda", str(conda)))
+    ZH_TITLES = {"backend_sources": "准备算法源码", "python_packages": "安装 Python 依赖", "model_assets": "下载并校验模型资源",
+                 "optional_resources": "准备所选资源", "managed_runtime": "准备外部计算工具",
+                 "windows_runtime": "安装 WSL 运行环境", "surface_runtime": "安装表面处理组件"}
 
-        def done(status, details, _log):
+    def report_step(step, status, details, log_path):
+        """S-N1: the status writes and error dialogs that the owner's install methods made before B7."""
+        if step["id"] == "python_packages":
+            owner._save_python_install_status(tuple(step.get("packages", ())), status, str(log_path))
+            owner._lastEnvironmentResult = owner._lastEnvironmentSignature = None
+            if status == "failed":
+                owner._show_actionable_error(
+                    title="Python dependency installation failed", what="The background installer stopped.",
+                    why="See the recorded pip output and exact command.",
+                    next_step="Open install logs, correct the reported problem, then check dependencies again.",
+                    auto_fix="No external software was installed.", details=str(details) + "\nLog: " + str(log_path))
+            elif status == "cancelled":
+                slicer.util.infoDisplay("Installation stopped. Packages already installed were not rolled back. "
+                                        "Check dependencies before retrying.", parent=owner.parent)
+        elif step["id"] == "model_assets":
+            message = ("Model assets downloaded and checksum-verified." if status == "completed" else
+                       "Download stopped; partial files are retained for retry." if status == "cancelled" else
+                       "Download or checksum verification failed.")
+            owner._set_model_assets_status_text(message + " " + str(step["asset_root"]))
+            owner._lastEnvironmentResult = owner._lastEnvironmentSignature = None
+            if status == "failed":
+                owner._show_actionable_error(
+                    title="Model asset setup failed", what=message,
+                    why="Network, file permissions or checksum validation may have failed.",
+                    next_step="Inspect the install log and retry using the same asset directory.",
+                    auto_fix="Partial downloads are retained; no scientific outputs were modified.",
+                    details=str(details) + "\nLog: " + str(log_path))
+
+    def run_step(index):
+        """B7: one async job per step; the steps come from setup_steps (shared with scripts/setup_selected.py)."""
+        if index >= len(steps) or steps[index]["id"] == "self_check":
+            finish()  # the final environment check and the functional self-check follow in finish()
+            return
+        step = steps[index]
+        from shared.ui_setup_jobs import start_setup_job
+
+        def done(status, details, log_path):
             if status == "completed":
                 try:
-                    apply_runtime_result(owner, json.loads(receipt.read_text()))
+                    settings = complete_step(step)
+                    if settings:
+                        apply_setup_settings(owner, settings)
+                    if step["id"] == "python_packages" and step.get("restart_required"):
+                        owner._setupRestartRequired = True
                 except Exception as exc:
-                    finish("failed", str(exc))
-                    return
-            finish(status, details)
-        start_setup_job(owner, _text(owner, "Prepare external tools", "准备外部计算工具"),
-                        [(owner._slicer_launcher_program(), args, {})], done)
-
-    def surface_setup():
-        if not plan.get('surface_build_required') and not plan.get('surface_prebuilt_required'):
-            managed_setup()
-            return
-        from shared.ui_setup_jobs import start_setup_job
-        from shared.ui_managed_runtimes import apply_runtime_result
-        receipt = folder / 'surface-runtime-result.json'
-        script = Path(__file__).resolve().parents[1] / 'scripts/setup_surface_runtime.py'
-        args = ['--launch', 'PythonSlicer', '-u', str(script), '--execute', '--accept-terms',
-                '--jobs', '4', '--result', str(receipt)]
-        for key, flag in (('model_assets_dir', '--asset-root'), ('postprocess_runtime', '--prefix')):
-            if config.get(key):
-                args += [flag, str(config[key])]
-
-        def done(status, details, _log):
-            if status != 'completed':
-                finish(status, details)
-                return
-            try:
-                apply_runtime_result(owner, json.loads(receipt.read_text()))
-            except Exception as exc:
-                finish('failed', str(exc))
-                return
-            managed_setup()
-
-        start_setup_job(owner, _text(owner, 'Install surface components', '安装表面处理组件'),
-                        [(owner._slicer_launcher_program(), args, {})], done)
-
-    def optional_setup():
-        if not plan["optional_asset_profiles"]:
-            surface_setup()
-            return
-        from shared.ui_setup_jobs import start_setup_job
-        from scripts.setup_optional_assets import PATH_SETTINGS
-        from shared.model_assets import configured_model_assets_root
-        root = configured_model_assets_root(config.get("model_assets_dir"))
-        receipt = folder / "optional-resources-result.json"
-        script = Path(__file__).resolve().parents[1] / "scripts/setup_optional_assets.py"
-        args = ["--launch", "PythonSlicer", "-u", str(script), "--profiles", *plan["optional_asset_profiles"],
-                "--asset-root", str(root), "--execute", "--accept-terms", "--result", str(receipt)]
-
-        def done(status, details, _log):
+                    status, details = "failed", str(exc)
+            report_step(step, status, details, log_path)
             if status != "completed":
                 finish(status, details)
                 return
-            try:
-                record = json.loads(receipt.read_text())
-                if (record.get("kind") != "slicerdsurfer_optional_asset_setup" or record.get("status") != "completed"
-                        or record.get("profiles") != plan["optional_asset_profiles"] or record.get("root") != str(root)):
-                    raise ValueError("Optional resource preparation receipt is incomplete")
-                settings = record["external_dependencies"]
-                allowed = {"model_assets_dir", *(PATH_SETTINGS[name] for name in plan["optional_asset_profiles"] if name in PATH_SETTINGS)}
-                if set(settings) != allowed or any(not Path(value).is_dir() for value in settings.values()):
-                    raise ValueError("Prepared resource paths are unavailable")
-                for key, value in settings.items():
-                    owner._save_environment_path_setting(key, value)
-                    edit = (getattr(owner, "_environmentPathLineEdits", {}) or {}).get(key)
-                    if edit is not None:
-                        edit.setText(value)
-            except Exception as exc:
-                finish("failed", str(exc))
-                return
-            surface_setup()
+            run_step(index + 1)
 
-        start_setup_job(owner, _text(owner, "Prepare selected resources", "准备所选资源"),
-                        [(owner._slicer_launcher_program(), args, {})], done)
-
-    def model_setup(ok=True):
-        if not ok:
-            finish("failed", "Python setup did not complete")
-        elif plan["asset_profiles"]:
-            owner._install_model_assets_from_environment_dialog(profile=tuple(plan["asset_profiles"]),
-                on_complete=lambda success, message: optional_setup() if success else finish("failed", message))
-        else:
-            optional_setup()
-
-    def python_setup():
-        if plan["python_packages"]:
-            owner._install_python_packages_from_environment_dialog(tuple(plan["python_packages"]), on_complete=model_setup,
-                requests=plan['python_requests'])
-        else:
-            model_setup()
-
-    def backend_setup():
-        if not plan['backend_profiles']:
-            python_setup()
-            return
-        from shared.ui_setup_jobs import start_setup_job
-        from shared.backend_sources import SOURCES, verify_source, profile_path
-        script = Path(__file__).resolve().parents[1] / 'scripts/setup_backend_sources.py'
-        receipt = folder / 'backend-sources-result.json'
-        args = ['--launch', 'PythonSlicer', '-u', str(script), '--profiles', *plan['backend_profiles'],
-                '--root', str(plan['backend_root']), '--execute', '--accept-terms', '--result', str(receipt)]
-
-        def done(status, details, _log):
-            if status != 'completed':
-                finish(status, details)
-                return
-            try:
-                record = json.loads(receipt.read_text())
-                expected = {SOURCES[name]['setting']: str(profile_path(name, plan['backend_root']))
-                            for name in plan['backend_profiles']}
-                if record.get('status') != 'completed' or record.get('profiles') != plan['backend_profiles'] or record.get('external_dependencies') != expected:
-                    raise ValueError('Invalid prepared algorithm-source receipt')
-                for name in plan['backend_profiles']:
-                    verify_source(name, Path(expected[SOURCES[name]['setting']]))
-                for key, value in expected.items():
-                    owner._save_environment_path_setting(key, value)
-                    edit = (getattr(owner, '_environmentPathLineEdits', {}) or {}).get(key)
-                    if edit is not None:
-                        edit.setText(value)
-            except Exception as exc:
-                finish('failed', str(exc))
-                return
-            python_setup()
-
-        start_setup_job(owner, _text(owner, 'Prepare algorithm sources', '准备算法源码'),
-                        [(owner._slicer_launcher_program(), args, {})], done)
+        start_setup_job(owner, _text(owner, step["title"], ZH_TITLES.get(step["id"], step["title"])), step["commands"], done)
 
     try:
-        backend_setup()
+        from shared.selected_setup import setup_steps
+        from shared.setup_resume import accepted_licences
+        launcher = (owner._slicer_launcher_program(), ["--launch", "PythonSlicer"])
+        steps = setup_steps(plan, accepted_licences(), folder=folder, launcher=launcher, config=config,
+                            python_command=owner._setup_python_command,
+                            statuses=getattr(getattr(owner, "_lastEnvironmentResult", None), "statuses", ()))
+        run_step(0)
     except Exception as exc:
         finish("failed", str(exc))
         return False

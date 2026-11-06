@@ -176,7 +176,7 @@ class SetupDeliveryTests(unittest.TestCase):
         with patch('platform.system', return_value='Darwin'), patch('platform.mac_ver', return_value=('14.5', (), '')), \
                 patch('shared.managed_runtimes.host_machine', return_value='x86_64'):
             self.assertIn('MacOSX-x86_64', bootstrap_artifact()[0])
-            self.assertIn('mrtrix3=3.0.8=hee5d243_0', profile_spec('mrtrix')['packages'])
+            self.assertEqual(profile_spec('mrtrix')['kind'], 'tarball')  # W-B2: the official macOS tarball, not conda
 
 
 class PrebuiltSurfaceTests(unittest.TestCase):

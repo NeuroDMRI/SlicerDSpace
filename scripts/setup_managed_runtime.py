@@ -22,13 +22,18 @@ def main(argv=None):
     parser.add_argument("--repair", action="store_true", help="Reinstall selected plugin-owned runtimes; never modify an unmanaged prefix")
     parser.add_argument("--accept-fsl-license", action="store_true")
     parser.add_argument("--accept-pnl-terms", action="store_true")
+    parser.add_argument("--user-config", type=Path, help="User config JSON read to keep user-set tool paths during a migration")
     parser.add_argument("--result", type=Path)
     args = parser.parse_args(argv)
     try:
+        user_config = None
+        if args.execute:
+            from shared.user_config import load_user_config
+            user_config = load_user_config(args.user_config)
         result = provision(args.profiles, root=args.root, conda=args.conda,
                            accept_fsl_license=args.accept_fsl_license,
                            accept_pnl_terms=args.accept_pnl_terms, repair=args.repair,
-                           asset_root=args.asset_root) if args.execute else install_plan(args.profiles, args.root)
+                           asset_root=args.asset_root, user_config=user_config) if args.execute else install_plan(args.profiles, args.root)
     except Exception as exc:
         result = {"status": "failed", "error": f"{type(exc).__name__}: {exc}"}
     if args.result:

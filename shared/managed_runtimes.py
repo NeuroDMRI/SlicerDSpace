@@ -8,8 +8,11 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
 import shutil
 import subprocess
+import tarfile
+import tempfile
 import time
 import urllib.request
 
@@ -45,6 +48,15 @@ PROFILES = {
 }
 
 
+# B2: macOS MRtrix3 is the official universal (x86_64 + arm64) tarball, not a conda package.
+MRTRIX_TARBALL = {
+    "url": "https://github.com/MRtrix3/mrtrix3/releases/download/3.0.8/mrtrix3-macos-3.0.8.tar.gz",
+    "filename": "mrtrix3-macos-3.0.8.tar.gz", "size": 64751520, "version": "3.0.8",
+    "sha256": "91fb80ffc9f26136d094e4a5310d051f52db9cb5faa35ad3f3e6156598090c39",
+    "top_level": "mrtrix3", "directory": "mrtrix-3.0.8-macos",
+}
+
+
 def runtime_root():
     return Path(os.environ.get("SLICERDSPACE_RUNTIME_ROOT") or
                 default_user_model_assets_root().parent / "runtimes").expanduser().resolve()
@@ -75,7 +87,8 @@ def supported_platform(system=None, machine=None, *, profiles=None):
 def profile_spec(name):
     spec = dict(PROFILES[name])
     if platform.system() == 'Darwin' and name == 'mrtrix':
-        spec['packages'] = ('mrtrix3=3.0.8=hee5d243_0', 'python=3.12')
+        spec.update(kind='tarball', directory=MRTRIX_TARBALL["directory"], packages=(), channels=(),
+                    tarball=dict(MRTRIX_TARBALL))
     build = FSL_EDDY_BUILD.get(conda_subdir())
     if name == 'fsl_cpu' and build:
         spec['packages'] = (f'fsl-eddy=2602.0={build}',) + tuple(spec['packages'][1:])
@@ -131,6 +144,8 @@ def install_plan(profiles, root=None):
     return {"kind": "slicerdsurfer_runtime_plan", "root": str(base),
             "platform_supported": supported_platform(profiles=selected), "profiles": list(selected),
             "prefixes": {name: str(base / profile_spec(name)["directory"]) for name in selected},
+            "tarballs": {name: {key: profile_spec(name)["tarball"][key] for key in ("url", "size", "sha256")}
+                         for name in selected if profile_spec(name).get("kind") == "tarball"},
             "conda_subdir": conda_subdir(),
             "fsl_license_required": any(name.startswith("fsl_") for name in selected),
             "pnl_terms_required": "pnl_cnn" in selected,
@@ -153,6 +168,15 @@ def write_json(path, payload):
     temp.replace(path)
 
 
+def _tarball_version(prefix, expected):
+    probe = subprocess.run([str(prefix / "bin/mrconvert"), "--version"], capture_output=True, text=True,
+                           timeout=60, env=external_python_environment(path_prepend=[prefix / "bin"]))
+    output = probe.stdout + probe.stderr
+    if probe.returncode != 0 or not re.search(r"(?<![\d.])" + re.escape(expected) + r"(?![\d.])", output):
+        raise RuntimeError(f"mrconvert --version does not report {expected}: {output.strip()[:200]}")
+    return expected
+
+
 def verify_prefix(profile, prefix):
     spec = profile_spec(profile)
     if prefix.is_symlink():
@@ -161,15 +185,19 @@ def verify_prefix(profile, prefix):
     missing = [name for name, path in commands.items() if not path.is_file() or not os.access(path, os.X_OK)]
     if missing:
         raise RuntimeError("Runtime is incomplete: " + ", ".join(missing))
-    records = [json.loads(path.read_text()) for path in (prefix / "conda-meta").glob("*.json")]
-    expected_subdir = conda_subdir()
-    if any(record.get("subdir") not in {expected_subdir, "noarch"} for record in records):
-        raise RuntimeError(f"Runtime built for another architecture; use Repair (expected {expected_subdir})")
-    installed = {record["name"]: record["version"] for record in records}
-    for requested in spec["packages"]:
-        name, version, *_ = requested.split("=")
-        if not installed.get(name, "").startswith(version + ".") and installed.get(name) != version:
-            raise RuntimeError("Runtime package version mismatch: " + requested)
+    if spec.get("kind") == "tarball":
+        # No conda-meta: the pinned version is read from the tool itself.
+        installed = {"mrtrix3": _tarball_version(prefix, spec["tarball"]["version"])}
+    else:
+        records = [json.loads(path.read_text()) for path in (prefix / "conda-meta").glob("*.json")]
+        expected_subdir = conda_subdir()
+        if any(record.get("subdir") not in {expected_subdir, "noarch"} for record in records):
+            raise RuntimeError(f"Runtime built for another architecture; use Repair (expected {expected_subdir})")
+        installed = {record["name"]: record["version"] for record in records}
+        for requested in spec["packages"]:
+            name, version, *_ = requested.split("=")
+            if not installed.get(name, "").startswith(version + ".") and installed.get(name) != version:
+                raise RuntimeError("Runtime package version mismatch: " + requested)
     for name, command in commands.items():
         # ELF library discovery catches incomplete transfers and wrong ABI environments.
         with command.open("rb") as stream:
@@ -218,6 +246,109 @@ def verify_prefix(profile, prefix):
             "command_sha256": {name: file_hash(path) for name, path in commands.items()},
             "package_versions": installed, "functional_checks": functionality,
             "scientific_validation": "not_inferred_from_installation"}
+
+
+def _unsafe_member(member, top_level):
+    """Reason a tar member is refused, or None. Absolute names, '..' and links leaving the folder are unsafe."""
+    from pathlib import PurePosixPath
+    name = PurePosixPath(member.name)
+    if name.is_absolute() or ".." in name.parts or not name.parts or name.parts[0] != top_level:
+        return "path outside " + top_level + "/"
+    if member.issym():
+        link = PurePosixPath(member.linkname)
+        resolved = os.path.normpath(str(name.parent / link))
+        if link.is_absolute() or resolved.startswith("..") or resolved.split("/")[0] != top_level:
+            return "symlink leaves the folder"
+    elif member.islnk():
+        link = PurePosixPath(member.linkname)
+        resolved = os.path.normpath(str(link))
+        if link.is_absolute() or resolved.startswith("..") or resolved.split("/")[0] != top_level:
+            return "hard link leaves the folder"
+    elif not (member.isfile() or member.isdir()):
+        return "special file"
+    return None
+
+
+def _safe_extract(archive, destination, top_level):
+    with tarfile.open(archive, "r:gz") as tar:
+        members = tar.getmembers()
+        for member in members:
+            reason = _unsafe_member(member, top_level)
+            if reason:
+                raise RuntimeError(f"Unsafe archive member {member.name!r}: {reason}; nothing was unpacked")
+        if hasattr(tarfile, "data_filter"):
+            tar.extractall(destination, members=members, filter="data")
+        else:  # Python without extraction filters: the members were validated above
+            tar.extractall(destination, members=members)
+
+
+def _download_tarball(info, downloads):
+    archive = downloads / info["filename"]
+    if archive.is_file() and archive.stat().st_size == info["size"] and file_hash(archive) == info["sha256"]:
+        return archive
+    downloads.mkdir(parents=True, exist_ok=True)
+    part = archive.with_name(archive.name + ".part")
+    print("[Runtime setup] Downloading MRtrix3 " + info["version"], flush=True)
+    with urllib.request.urlopen(info["url"], timeout=60) as response, part.open("wb") as output:
+        count = 0
+        for chunk in iter(lambda: response.read(1024 * 1024), b""):
+            output.write(chunk)
+            count += len(chunk)
+            print(f"[Runtime setup] MRtrix3 download: {count // (1024 * 1024)} MiB", flush=True)
+    if part.stat().st_size != info["size"]:
+        part.unlink()
+        raise RuntimeError("MRtrix3 archive size mismatch; downloaded file will not be unpacked")
+    if file_hash(part) != info["sha256"]:
+        part.unlink()
+        raise RuntimeError("MRtrix3 archive checksum mismatch; downloaded file will not be unpacked")
+    part.replace(archive)
+    return archive
+
+
+def _install_tarball(spec, base, prefix):
+    """Download, verify, unpack safely and rename the single top-level folder to ``prefix``."""
+    info = spec["tarball"]
+    archive = _download_tarball(info, base / "downloads")
+    work = Path(tempfile.mkdtemp(prefix=".mrtrix-unpack-", dir=base))
+    try:
+        _safe_extract(archive, work, info["top_level"])
+        unpacked = work / info["top_level"]
+        if sorted(path.name for path in work.iterdir()) != [info["top_level"]] or unpacked.is_symlink() or not unpacked.is_dir():
+            raise RuntimeError("MRtrix3 archive does not hold exactly one top-level folder " + info["top_level"])
+        if prefix.exists():
+            # SPEC-GAP: B2 does not say what Repair does with a plugin-owned tarball prefix; keep it, do not delete it.
+            prefix.rename(prefix.with_name(prefix.name + f".replaced-{time.time_ns()}"))
+        unpacked.rename(prefix)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def _migration(base, profiles, settings, user_config):
+    """Re-point settings that lie in the old managed conda MRtrix prefix; user-set paths stay. Nothing is deleted."""
+    if "mrtrix" not in profiles or profile_spec("mrtrix").get("kind") != "tarball":
+        return settings, None
+    old_dir = PROFILES["mrtrix"]["directory"]
+    old_prefix, old_receipt = base / old_dir, base / (old_dir + ".json")
+    try:
+        owned = json.loads(old_receipt.read_text()).get("kind") == "slicerdsurfer_managed_runtime"
+    except (OSError, ValueError):
+        owned = False
+    if not owned or not old_prefix.is_dir():
+        return settings, None
+    current = user_config.get("external_dependencies", user_config) if isinstance(user_config, dict) else {}
+    kept, repointed, result = [], [], dict(settings)
+    for key in profile_spec("mrtrix")["settings"]:
+        value = current.get(key)
+        if not value or key not in settings:
+            continue
+        path = Path(value).expanduser().resolve()
+        if path == old_prefix.resolve() or old_prefix.resolve() in path.parents:
+            repointed.append(key)
+        else:
+            kept.append(key)
+            result.pop(key)
+    note = "The old conda MRtrix prefix stays on disk and can be deleted by hand: " + str(old_prefix)
+    return result, {"old_prefix": str(old_prefix), "repointed": repointed, "kept_user_paths": kept, "note": note}
 
 
 def _run(argv, extra_env=None):
@@ -321,7 +452,8 @@ def configured_profiles(config, candidates, root=None):
     return tuple(dict.fromkeys(selected))
 
 
-def provision(profiles, *, root=None, conda=None, accept_fsl_license=False, accept_pnl_terms=False, repair=False, asset_root=None):
+def provision(profiles, *, root=None, conda=None, accept_fsl_license=False, accept_pnl_terms=False, repair=False, asset_root=None,
+              user_config=None):
     plan = install_plan(profiles, root)
     if not plan["platform_supported"]:
         raise RuntimeError("No qualified managed package for the selected platform/profile combination")
@@ -354,6 +486,17 @@ def provision(profiles, *, root=None, conda=None, accept_fsl_license=False, acce
                 if record["command_sha256"] != old.get("command_sha256"):
                     raise RuntimeError("Installed runtime checksum changed; inspect it before reuse")
                 print("[Runtime setup] Reusing verified " + profile, flush=True)
+            elif spec.get("kind") == "tarball":
+                info = spec["tarball"]
+                pending = {"kind": "slicerdsurfer_managed_runtime", "profile": profile, "kind_detail": "tarball",
+                           "status": "installing", "prefix": str(prefix), "url": info["url"], "sha256": info["sha256"],
+                           "host_machine": host_machine(), "repair": bool(repair), "plan": plan}
+                if old.get("status") == "ready":
+                    write_json(base / (spec["directory"] + f".before-repair-{time.time_ns()}.json"), old)
+                write_json(receipt_path, pending)
+                _install_tarball(spec, base, prefix)
+                record = verify_prefix(profile, prefix)
+                write_json(receipt_path, dict(pending, **record, status="ready", completed_at=time.time()))
             else:
                 manager = manager or ensure_conda(base, conda)
                 pending = {"kind": "slicerdsurfer_managed_runtime", "profile": profile,
@@ -390,5 +533,9 @@ def provision(profiles, *, root=None, conda=None, accept_fsl_license=False, acce
                 write_json(receipt_path, dict(pending, **record, status="ready", completed_at=time.time()))
             settings.update(record["external_dependencies"])
             records[profile] = str(receipt_path)
-    return {"kind": "slicerdsurfer_runtime_setup", "status": "completed",
-            "external_dependencies": settings, "receipts": records, "plan": plan}
+    settings, migration = _migration(base, plan["profiles"], settings, user_config) if user_config is not None else (settings, None)
+    result = {"kind": "slicerdsurfer_runtime_setup", "status": "completed",
+              "external_dependencies": settings, "receipts": records, "plan": plan}
+    if migration:
+        result["migration"] = migration
+    return result

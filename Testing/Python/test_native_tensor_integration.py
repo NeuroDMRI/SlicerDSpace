@@ -273,10 +273,12 @@ class RegisteredStageAdmissionTests(unittest.TestCase):
 class SurfaceRouteAdmissionTests(unittest.TestCase):
     """S1: an orchestrator surface run admits native_dti, registered_dti and surface in turn, none inside another."""
 
-    def surface_run(self, *, cohort=True):
+    def surface_run(self, *, cohort=True, fail_registration=False, previous_completed=False, capture=None):
         import json
+        import os
         from contextlib import ExitStack, contextmanager
         from shared import ProductOrchestratorConfig, run_subject_products
+        from shared.io_layout import subject_layout
 
         events, depth = [], [0]
         tmp = tempfile.TemporaryDirectory()
@@ -322,6 +324,8 @@ class SurfaceRouteAdmissionTests(unittest.TestCase):
                 teem(command, log)
             elif command[0] == "brainsfit":
                 events.append(("cli", "brainsfit"))
+                if fail_registration:
+                    raise RuntimeError("registration exploded")
                 Path(command[command.index("--linearTransform") + 1]).write_bytes(b"tfm")
             else:
                 events.append(("cli", "resample"))
@@ -348,14 +352,39 @@ class SurfaceRouteAdmissionTests(unittest.TestCase):
             patch("anatomy.surface.pipeline.native_products", return_value=([], {})),
             patch("shared.environment.resolve_auto_torch_device", return_value="cpu"),
         ]
+        out_root = Path(tmp.name) / "out"
+        self.surface_dir = subject_layout(root, output_root=out_root).ddsurfer
+        if previous_completed:
+            self.surface_dir.mkdir(parents=True)
+            (self.surface_dir / "surface_manifest.json").write_text(json.dumps({"status": "completed"}))
+            (self.surface_dir / "surface_qc.json").write_text(json.dumps({"status": "completed"}))
         if cohort:
             patches.append(patch("shared.cohort_schedule.stage_admission", admission))
+            patches.append(patch.dict(os.environ, {"SLICERDSPACE_COHORT_SCHEDULE": tmp.name}))
+        else:
+            patches.append(patch.dict(os.environ, {"SLICERDSPACE_COHORT_SCHEDULE": ""}))
+        if capture is not None:
+            import anatomy.surface.pipeline as surface_pipeline
+            real_run, real_prepare = surface_pipeline.run_surface, surface_pipeline.prepare_shared_registered_bundle
+            capture["prepare"] = []
+
+            def run_spy(config, **kwargs):
+                capture["config"] = config
+                return real_run(config, **kwargs)
+
+            def prepare_spy(*args, **kwargs):
+                capture["prepare"].append(sys._getframe(1).f_code.co_name)
+                return real_prepare(*args, **kwargs)
+
+            patches.append(patch("shared.orchestrator.run_surface", run_spy, create=True))
+            patches.append(patch("anatomy.surface.run_surface", run_spy))
+            patches.append(patch("anatomy.surface.pipeline.prepare_shared_registered_bundle", prepare_spy))
         with ExitStack() as stack:
             for item in patches:
                 stack.enter_context(item)
             result = run_subject_products(ProductOrchestratorConfig(
                 subject_id="x", subject_root=root, targets=("surface",), execute=True, resume=False,
-                surface_atlas_t2=atlas, output_root=Path(tmp.name) / "out"))
+                surface_atlas_t2=atlas, output_root=out_root))
         return result, events
 
     def test_s1_surface_route_admits_native_then_registered_then_surface(self) -> None:
@@ -371,12 +400,38 @@ class SurfaceRouteAdmissionTests(unittest.TestCase):
         self.assertIn(("predict", "surface"), inside)
         self.assertEqual([item for item in events if item == ("cli", "teem")], [("cli", "teem")])
 
-    def test_s1_outside_cohort_mode_the_surface_route_outputs_are_unchanged(self) -> None:
-        result, events = self.surface_run(cohort=False)
+    def test_r2_outside_cohort_mode_the_orchestrator_does_not_prepare_and_run_surface_gets_the_121345b_config(self) -> None:
+        capture = {}
+        result, events = self.surface_run(cohort=False, capture=capture)
         self.assertEqual([task.status for task in result.tasks], ["completed"])
-        self.assertEqual([item for item in events if item[0] == "cli"],
-                         [("cli", "teem"), ("cli", "brainsfit")] + [("cli", "resample")] * 7)
-        self.assertEqual([item for item in events if item[0] == "predict"], [("predict", "surface")])
+        # Preparation happens only inside run_surface (_run_shared_raw), never from the orchestrator.
+        self.assertEqual(capture["prepare"], ["_run_shared_raw"])
+        config = capture["config"]
+        self.assertTrue(config.reuse_shared_preprocessing)
+        self.assertTrue(config.execute)
+        self.assertFalse(config.resume)
+        self.assertFalse(config.auto_mask)
+        self.assertEqual(config.predict_mode, "all")
+        self.assertIsNotNone(config.input_bundle)
+        self.assertEqual(config.subject_id, "x")
+        self.assertEqual(config.output_dir, self.surface_dir)
+        self.assertFalse([item for item in events if item[0] in ("enter", "exit")])
+
+    def test_r1_a_failed_preparation_writes_failed_records(self) -> None:
+        for cohort in (False, True):
+            for previous in (False, True):
+                with self.subTest(cohort=cohort, previous_completed=previous):
+                    with self.assertRaisesRegex(RuntimeError, "DDSurfer surface execution failed: .*registration exploded"):
+                        self.surface_run(cohort=cohort, fail_registration=True, previous_completed=previous)
+                    manifest = json.loads((self.surface_dir / "surface_manifest.json").read_text())
+                    qc = json.loads((self.surface_dir / "surface_qc.json").read_text())
+                    self.assertEqual(manifest["status"], "failed")
+                    self.assertEqual(manifest["kind"], "ddsurfer_surface")
+                    self.assertEqual(qc["status"], "failed")
+                    self.assertTrue(qc["executed"])
+                    self.assertFalse(qc["automatic_qc_passed"])
+                    self.assertIn("registration exploded", qc["error"])
+                    self.assertIn("elapsed_seconds", qc)
 
 
 class DDParcelCompletenessTests(unittest.TestCase):

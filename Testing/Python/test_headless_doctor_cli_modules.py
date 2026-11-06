@@ -285,6 +285,26 @@ class NativeTensorFitDoctorTests(unittest.TestCase):
                 found = _doctor_pythonslicer(config)
         self.assertEqual(found.resolve(), (trees["A"] / "bin" / "PythonSlicer").resolve())
 
+    def test_r3_the_call_site_resolver_comes_before_a_configured_pythonslicer(self) -> None:
+        from shared.environment import _doctor_pythonslicer
+
+        with tempfile.TemporaryDirectory() as tmp:
+            trees = {}
+            for name in ("A", "B"):
+                root = Path(tmp).resolve() / name
+                (root / "bin").mkdir(parents=True)
+                (root / "lib").mkdir()
+                (root / "bin" / "PythonSlicer").touch()
+                trees[name] = root
+            config = EnvironmentDoctorConfig(targets=("microstructure",), repo_root=Path("."),
+                                             check_slicer_cli_modules=True,
+                                             python_executable=trees["B"] / "bin" / "PythonSlicer")
+            with patch.dict("os.environ", {"SLICER_HOME": trees["A"].as_posix()}), \
+                 patch("shared.pipeline._require_slicer"), \
+                 patch("shared.pipeline.slicer", None):
+                found = _doctor_pythonslicer(config)
+        self.assertEqual(found.resolve(), (trees["A"] / "bin" / "PythonSlicer").resolve())
+
     def test_t2_without_a_resolver_result_the_doctor_search_still_applies(self) -> None:
         from shared.environment import _doctor_pythonslicer
 

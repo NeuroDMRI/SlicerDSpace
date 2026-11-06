@@ -2132,18 +2132,19 @@ def _teem_info_in_interpreter(python_path: Path) -> dict[str, str]:
 def _doctor_pythonslicer(config: "EnvironmentDoctorConfig") -> Optional[Path]:
     """PythonSlicer that the native tensor fit will run in (D1), found from the settings, not from the doctor's Python.
 
-    Order: the configured Python when it is itself a PythonSlicer, the configured Slicer launcher,
-    SLICERDSPACE_SLICER_EXECUTABLE, SLICER_HOME / SLICERDSPACE_SLICER_HOME, then the common install paths.
+    Order: the call-site resolver ``resolve_pythonslicer_executable()`` that the fit uses, the configured Python when
+    it is itself a PythonSlicer, the configured Slicer launcher, SLICERDSPACE_SLICER_EXECUTABLE,
+    SLICER_HOME / SLICERDSPACE_SLICER_HOME, then the common install paths.
     """
-    configured = config.python_executable
-    if configured is not None and Path(configured).name in {"PythonSlicer", "PythonSlicer.exe"}:
-        return interpreter_path(configured)
-    # T2: ask the resolver that the fit uses first; it raises outside Slicer, then the search below applies.
+    # T2/R3: ask the resolver that the fit uses first; it raises outside Slicer, then the search below applies.
     try:
         from shared.pipeline import resolve_pythonslicer_executable
         return interpreter_path(resolve_pythonslicer_executable())
     except Exception:
         pass
+    configured = config.python_executable
+    if configured is not None and Path(configured).name in {"PythonSlicer", "PythonSlicer.exe"}:
+        return interpreter_path(configured)
     launcher = _resolve_path(config.slicer_executable)
     if launcher is None:
         launcher, _ = _env_path_with_source("SLICERDSPACE_SLICER_EXECUTABLE")

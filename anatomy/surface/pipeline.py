@@ -205,8 +205,8 @@ def uses_shared_raw_route(config):
 def prepare_shared_registered_bundle(config, resources, log=None):
     """Obtain the raw bundle and the shared registered bundle (WLS, NRRD scalars, reuse).
 
-    The cohort orchestrator calls this before ``run_surface`` so that ``native_dti`` and ``registered_dti``
-    are admitted as their own stages (S1.2), not inside the ``surface`` admission.
+    The cohort orchestrator calls this before ``run_surface``, and only in cohort mode, so that ``native_dti``
+    and ``registered_dti`` are admitted as their own stages (S1.2), not inside the ``surface`` admission.
     """
     from shared.pipeline import ensure_registered_dti_bundle
 
@@ -263,6 +263,45 @@ def _run_shared_raw(config, resources, output_dir, manifest, previous, log):
         raise RuntimeError('Shared surface inputs changed during prediction')
 
 
+def _surface_records(config, resources, output_dir):
+    """The base manifest and QC records that ``run_surface`` starts from."""
+    manifest = dict(kind='ddsurfer_surface', version=3, subject_id=config.subject_id,
+        subject_root=str(config.subject_root.expanduser().resolve()), output_dir=str(output_dir),
+        input_dwi=str(config.input_bundle.dwi_path) if config.input_bundle is not None else None,
+        predict_mode=config.predict_mode, device=config.device, precision=config.precision,
+        cpu_threads=config.cpu_threads, max_gpu_gib=config.max_gpu_gib,
+        resume=config.resume, auto_mask=config.auto_mask, mask_threads=config.mask_threads,
+        upstream_commit=resources['upstream_commit'], resources=resources,
+        executed=config.execute, status='planned', outputs={})
+    qc = dict(subject_id=config.subject_id, status='planned', executed=False, model_count=0,
+              elapsed_seconds=0., error=None, human_review='pending')
+    return manifest, qc
+
+
+def _mark_surface_failed(manifest, qc, exc, executed):
+    manifest['status'] = 'failed'
+    qc.update(status='failed', executed=executed, error=str(exc), automatic_qc_passed=False)
+
+
+def _write_surface_records(manifest_path, qc_path, manifest, qc, started):
+    qc['elapsed_seconds'] = time.monotonic() - started
+    manifest_path.write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
+    qc_path.write_text(json.dumps(qc, indent=2) + '\n', encoding='utf-8')
+
+
+def record_surface_failure(config, resources, exc, started):
+    """Write the failed surface records for a failure outside ``run_surface`` (R1) and return the error to raise.
+
+    It writes the same files and fields as the failure handler of ``run_surface``.
+    """
+    output_dir = config.output_dir.expanduser().resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    manifest, qc = _surface_records(config, resources, output_dir)
+    _mark_surface_failed(manifest, qc, exc, config.execute)
+    _write_surface_records(output_dir / 'surface_manifest.json', output_dir / 'surface_qc.json', manifest, qc, started)
+    return RuntimeError(f'DDSurfer surface execution failed: {exc}')
+
+
 @scheduled_stage('surface', gpu=True)
 def run_surface(config: SurfaceConfig, *, log: Optional[Callable[[str], None]] = None) -> SurfaceResult:
     if not config.subject_id.strip() or Path(config.subject_id).name != config.subject_id or config.subject_id in ('.', '..', 'fsaverage'):
@@ -281,16 +320,7 @@ def run_surface(config: SurfaceConfig, *, log: Optional[Callable[[str], None]] =
         previous = json.loads(manifest_path.read_text())
     except (OSError, ValueError):
         previous = {}
-    manifest = dict(kind='ddsurfer_surface', version=3, subject_id=config.subject_id,
-        subject_root=str(config.subject_root.expanduser().resolve()), output_dir=str(output_dir),
-        input_dwi=str(config.input_bundle.dwi_path) if config.input_bundle is not None else None,
-        predict_mode=config.predict_mode, device=config.device, precision=config.precision,
-        cpu_threads=config.cpu_threads, max_gpu_gib=config.max_gpu_gib,
-        resume=config.resume, auto_mask=config.auto_mask, mask_threads=config.mask_threads,
-        upstream_commit=resources['upstream_commit'], resources=resources,
-        executed=config.execute, status='planned', outputs={})
-    qc = dict(subject_id=config.subject_id, status='planned', executed=False, model_count=0,
-              elapsed_seconds=0., error=None, human_review='pending')
+    manifest, qc = _surface_records(config, resources, output_dir)
     products = []
     started, failure = time.monotonic(), None
     try:
@@ -373,12 +403,9 @@ def run_surface(config: SurfaceConfig, *, log: Optional[Callable[[str], None]] =
         raise
     except Exception as exc:
         failure = exc
-        manifest['status'] = 'failed'
-        qc.update(status='failed', executed=config.execute, error=str(exc), automatic_qc_passed=False)
+        _mark_surface_failed(manifest, qc, exc, config.execute)
     finally:
-        qc['elapsed_seconds'] = time.monotonic() - started
-        manifest_path.write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
-        qc_path.write_text(json.dumps(qc, indent=2) + '\n', encoding='utf-8')
+        _write_surface_records(manifest_path, qc_path, manifest, qc, started)
     if failure is not None:
         raise RuntimeError(f'DDSurfer surface execution failed: {failure}') from failure
     if log:

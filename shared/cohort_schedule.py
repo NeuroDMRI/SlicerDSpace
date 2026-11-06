@@ -19,6 +19,11 @@ _inside = ContextVar('cohort_stage_active', default=False)
 _reservation = ContextVar('cohort_stage_reservation', default=None)
 
 
+def cohort_active():
+    """True when this process runs under a cohort schedule (the schedule environment variable is set)."""
+    return bool(os.environ.get(ENV))
+
+
 def mark_reused(stage):
     row = _reservation.get()
     if row is not None and row['stage'] == stage:

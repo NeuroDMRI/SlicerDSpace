@@ -3734,11 +3734,18 @@ def _run_subject_products_impl(
             else:
                 _emit("[Orchestrator] Running DDSurfer surface", log)
                 task_started = _start_task_timer("DDSurfer surface", log)
-                from anatomy.surface.pipeline import prepare_shared_registered_bundle, uses_shared_raw_route
+                from anatomy.surface.pipeline import (
+                    prepare_shared_registered_bundle, record_surface_failure, uses_shared_raw_route)
+                from shared.cohort_schedule import cohort_active
 
-                if uses_shared_raw_route(surface_config):
-                    # S1: native_dti and registered_dti get their own admissions, outside the surface one.
-                    prepare_shared_registered_bundle(surface_config, resources, log)
+                # S1 (cohort mode only): native_dti and registered_dti get their own admissions, outside the surface one.
+                # Outside cohort mode the preparation stays inside run_surface (the 121345b path).
+                if cohort_active() and uses_shared_raw_route(surface_config):
+                    prepare_started = time.monotonic()
+                    try:
+                        prepare_shared_registered_bundle(surface_config, resources, log)
+                    except Exception as exc:  # R1: same failed records as run_surface
+                        raise record_surface_failure(surface_config, resources, exc, prepare_started) from exc
                 result = run_surface(surface_config, log=log)
                 _finish_task_timer("DDSurfer surface", task_started, log)
                 tasks.append(

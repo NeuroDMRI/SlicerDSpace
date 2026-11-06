@@ -1478,7 +1478,7 @@ class ProductOrchestratorTest(unittest.TestCase):
                 )
             self.assertTrue(surface_run.call_args.args[0].resume)
             self.assertEqual(surface_run.call_args.args[0].precision, 'fp32')
-            shared_bundle.assert_called_once()  # S1: the shared bundles are obtained before run_surface
+            shared_bundle.assert_not_called()  # R2: outside cohort mode the preparation stays inside run_surface
 
             self.assertEqual(
                 [task.status for task in result.tasks],

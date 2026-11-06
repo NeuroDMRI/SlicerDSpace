@@ -27,6 +27,8 @@ class ScalarQcCacheTest(unittest.TestCase):
             path = root / (attr + ".nii.gz")
             self.save(path, value)
             setattr(native, attr, path)
+        native.dec_nrrd_path = root / "dec.nrrd"  # D6
+        native.dec_nrrd_path.write_bytes(b"dec")
         native.manifest_path = root / "native_manifest.json"
         native.manifest_path.write_text("{}")
         config = SimpleNamespace(subject_id="test", native_bundle=native, raw_input_bundle=SimpleNamespace(mask_path=mask),

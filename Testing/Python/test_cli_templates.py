@@ -59,7 +59,7 @@ def parse_route(code):
 class CliTemplatesTest(unittest.TestCase):
     def test_languages_publish_identical_recipe_arguments(self):
         english, chinese = (blocks(path, 'template') for path in GUIDES)
-        self.assertEqual(len(english), 45)
+        self.assertEqual(len(english), 46)
         self.assertEqual(english.keys(), chinese.keys())
         for name in english:
             with self.subTest(recipe=name):
@@ -83,7 +83,7 @@ class CliTemplatesTest(unittest.TestCase):
                 self.assertFalse(args.no_resume)
                 self.assertNotIn(args.run_name, names)
                 names.add(args.run_name)
-        self.assertEqual(len(names), 37)
+        self.assertEqual(len(names), 38)
 
     def test_bundle_routes_keep_source_and_method_independent(self):
         recipes = blocks(GUIDES[0], 'template')

@@ -76,7 +76,7 @@ def install_advanced_categories(owner):
     layout.insertWidget(2, stack)
     rows = {
         "processing": ("preprocessingBackendComboBox", "brainMaskOptions"),
-        "models": ("orchestrationDkiFitMethodComboBox", "wmqlQueryPresetComboBox", "wmqlQuerySelectionLineEdit", "wmaAtlasComboBox", "wmaInputTractographyPath", "orchestrationSelectStreamlinesSpinBox"),
+        "models": ("orchestrationDkiFitMethodComboBox", "orchestrationIfwEchoTimeLineEdit", "orchestrationIfwT2TissueLineEdit", "orchestrationIfwT2CsfLineEdit", "wmqlQueryPresetComboBox", "wmqlQuerySelectionLineEdit", "wmaAtlasComboBox", "wmaInputTractographyPath", "orchestrationSelectStreamlinesSpinBox"),
         "execution": ("orchestrationRunNameLineEdit", "unifiedTorchDeviceComboBox", "parallelModelsSpinBox"),
     }
     for key, names in rows.items():

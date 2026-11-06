@@ -146,7 +146,7 @@ def sync(owner):
 
 
 def snapshot_selection(owner):
-    from shared.ui_run_controller import RunSelection
+    from shared.ui_run_controller import RunSelection, compress_mrtrix_dense_value
     node = owner._parameterNode
     freewater, noddi = owner._microstructure_stage_flags()
     topup = owner._topup_validation(batch_mode=node.experimentScope == 'cohort')
@@ -161,9 +161,10 @@ def snapshot_selection(owner):
         requested_targets=owner._requested_product_targets(),
         bundle_backend=owner._bundle_backend_text(), microstructure_freewater=freewater, microstructure_noddi=noddi,
         select_streamlines=node.orchestrationSelectStreamlines, ddseg_device=node.ddsegDevice, surface_device=node.device,
-        connectome_backend=node.connectomeBackend, connectome_compress_mrtrix_dense=node.connectomeCompressMrtrixDense,
+        connectome_backend=node.connectomeBackend, connectome_compress_mrtrix_dense=compress_mrtrix_dense_value(node.connectomeCompressMrtrixDenseState),
         preprocessing_backend=node.preprocessingBackend, brain_mask_backend=node.brainMaskBackend,
         brain_mask_device=node.brainMaskDevice, microstructure_dki=owner._microstructure_dki_enabled(),
+        microstructure_ifw=owner._microstructure_ifw_enabled(), ifw_echo_time_ms=owner._ifw_echo_time_ms(),
         dki_fit_method=node.orchestrationDkiFitMethod, wmql_query_preset=node.orchestrationWmqlPreset,
         wma_atlas=getattr(node, "wmaAtlas", "org"),
         wmql_query_selection=node.orchestrationWmqlSelection, max_parallel_models=node.maxParallelModels,

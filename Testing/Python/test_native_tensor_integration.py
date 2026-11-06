@@ -37,6 +37,7 @@ def fake_teem_run(commands):
             Path(arguments[arguments.index("--receipt") + 1]).write_text(json.dumps(FAKE_RECEIPT), encoding="utf-8")
         targets = [item.partition("=")[2] for index, item in enumerate(arguments)
                    if index and arguments[index - 1] == "--scalar"]
+        targets += [arguments[index + 1] for index, item in enumerate(arguments) if item == "--dec"]  # D6
         for target in [*arguments[-2:], *targets]:
             Path(target).write_bytes(b"fixture output")
 

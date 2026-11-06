@@ -103,14 +103,14 @@ class EnvironmentDoctorConfig:
     tractography_backend: str = "csd_act"
     ukf_executable: Optional[Path] = None
     dwiconvert_executable: Optional[Path] = None
-    connectome_backend: str = "python"
+    connectome_backend: str = "auto"
     ddseg_device: str = "auto"
     surface_device: str = "auto"
     tractcloud_device: str = "auto"
     run_free_water: bool = False
     run_noddi: bool = False
     run_dki: bool = False
-    dki_fit_method: str = "WLS"
+    dki_fit_method: str = "MKCURVE"
     dki_matlab_executable: Optional[Path] = None
     dki_mkcurve_root: Optional[Path] = None
     mrtrix_bin_dir: Optional[Path] = None
@@ -1374,7 +1374,9 @@ def build_dependency_specs(config: EnvironmentDoctorConfig) -> tuple[DependencyS
 
         if target == "connectome":
             _add_core_python(specs, target)
-            if config.connectome_backend == "mrtrix":
+            # auto needs MRtrix3 for a .tck source (csd_act, saf); python never does.
+            if config.connectome_backend == "mrtrix" or (
+                    config.connectome_backend == "auto" and config.tractography_backend in ("csd_act", "saf")):
                 _add_mrtrix_commands(specs, target, ("tck2connectome",), config.mrtrix_bin_dir)
 
         if target == "saf":

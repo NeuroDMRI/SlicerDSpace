@@ -110,8 +110,11 @@ def sync_parameter_node_to_ui(widget) -> None:
         ("orchestrationFreeWaterCheckBox", "freewater"),
         ("orchestrationNoddiCheckBox", "noddi"),
         ("orchestrationDkiCheckBox", "dki"),
+        ("orchestrationIfwCheckBox", "ifw"),
     ):
         widget._sync_checkbox(getattr(ui, name, None), stage in stages)
+    widget._sync_line_edit(getattr(ui, "orchestrationIfwEchoTimeLineEdit", None),
+                           str(getattr(node, "orchestrationIfwEchoTimeMs", "") or ""))
     widget._sync_combo_text(
         getattr(ui, "orchestrationDkiFitMethodComboBox", None),
         getattr(node, "orchestrationDkiFitMethod", "WLS") or "WLS",
@@ -125,8 +128,7 @@ def sync_parameter_node_to_ui(widget) -> None:
         getattr(node, "batchArrangeInputs", "none") or "none",
         via_index=False,
     )
-    widget._sync_combo_text(getattr(ui, "connectomeBackendComboBox", None), node.connectomeBackend or "python", via_index=False)
-    widget._sync_checkbox(getattr(ui, "connectomeCompressMrtrixDenseCheckBox", None), bool(node.connectomeCompressMrtrixDense))
+    widget._sync_combo_text(getattr(ui, "connectomeBackendComboBox", None), node.connectomeBackend or "auto", via_index=False)
     widget._sync_combo_text(
         getattr(ui, "unifiedTorchDeviceComboBox", None),
         node.device or node.ddsegDevice or "auto",

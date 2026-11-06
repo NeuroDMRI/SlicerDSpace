@@ -125,7 +125,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--python-executable", default=sys.executable, help="Python executable to check for Python packages.")
     parser.add_argument("--preprocessing-backend", default="mrtrix_fsl", choices=("dipy", "mrtrix_fsl"))
     parser.add_argument("--tractography-backend", default="csd_act", choices=("csd_act", "ukf", "dti_det", "saf"))
-    parser.add_argument("--connectome-backend", default="mrtrix", choices=("python", "mrtrix"))
+    parser.add_argument("--connectome-backend", default="mrtrix", choices=("auto", "python", "mrtrix"))
     parser.add_argument("--ddseg-device", default="auto")
     parser.add_argument("--surface-device", default="auto")
     parser.add_argument("--tractcloud-device", default="auto", choices=("auto", "cpu", "cuda"))

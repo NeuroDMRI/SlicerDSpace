@@ -136,6 +136,9 @@ class RegionalValidityTest(unittest.TestCase):
         json_path = regional / 'test_ROIWise-Microstructure.json'
         csv_path = regional / 'test_ROIWise-Microstructure.csv'
         brain = self.volume('brain', [1, 1, 1, 1])
+        dec = layout.microstructure_dti / 'test-dti-DEC.nrrd'  # D6: the DTI stage is complete only with the DEC map
+        dec.parent.mkdir(parents=True, exist_ok=True)
+        dec.write_bytes(b'dec')
         with patch('shared.orchestrator._resolve_parcellation', return_value=self.roi), \
                 patch('shared.orchestrator._resolve_analysis_inputs', return_value={'mask': brain}), \
                 patch('shared.scalar_qc.scalar_qc_current', return_value=True), \

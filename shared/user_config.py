@@ -31,14 +31,15 @@ RUN_DEFAULTS = {
     "bundle_backend": "wmql",
     "wma_atlas": "org",
     "microstructure_stages": ["dti"],
-    "dki_fit_method": "WLS",
-    "connectome_backend": "python",
+    "dki_fit_method": "MKCURVE",
+    "connectome_backend": "auto",
     "select_streamlines": 1_000_000,
     "auto_install_python_dependencies": True,
 }
 
 
-MICROSTRUCTURE_STAGE_ORDER = ("dti", "freewater", "noddi", "dki")
+MICROSTRUCTURE_ALL_STAGES = ("dti", "freewater", "noddi", "dki")  # "all" does not include iFW
+MICROSTRUCTURE_STAGE_ORDER = MICROSTRUCTURE_ALL_STAGES + ("ifw",)
 
 
 def canonical_microstructure_stages(values: Iterable[str] | str | None) -> tuple[str, ...]:
@@ -53,7 +54,7 @@ def canonical_microstructure_stages(values: Iterable[str] | str | None) -> tuple
         if token.strip()
     }
     if stages & {"all", "full"}:
-        stages.update(MICROSTRUCTURE_STAGE_ORDER)
+        stages.update(MICROSTRUCTURE_ALL_STAGES)
         stages.difference_update(("all", "full"))
     unknown = stages - set(MICROSTRUCTURE_STAGE_ORDER)
     if unknown:
@@ -144,7 +145,7 @@ def normalize_user_config(payload: Mapping[str, Any] | None) -> dict[str, Any]:
         defaults["targets"] = [token.strip() for token in targets.split(",") if token.strip()]
     stages = defaults.get("microstructure_stages")
     defaults["microstructure_stages"] = list(canonical_microstructure_stages(stages))
-    defaults["dki_fit_method"] = str(defaults.get("dki_fit_method") or "WLS").strip().upper()
+    defaults["dki_fit_method"] = str(defaults.get("dki_fit_method") or "MKCURVE").strip().upper()
     return config
 
 
@@ -211,7 +212,7 @@ def user_config_cli_values(config: Mapping[str, Any]) -> dict[str, Any]:
         "bundle_backend": defaults.get("bundle_backend") or RUN_DEFAULTS["bundle_backend"],
         "wma_atlas": defaults.get("wma_atlas") or "org",
         "microstructure_stages": [",".join(defaults.get("microstructure_stages") or RUN_DEFAULTS["microstructure_stages"])],
-        "dki_fit_method": defaults.get("dki_fit_method") or "WLS",
+        "dki_fit_method": defaults.get("dki_fit_method") or "MKCURVE",
         "connectome_backend": defaults.get("connectome_backend") or RUN_DEFAULTS["connectome_backend"],
         "select_streamlines": int(defaults.get("select_streamlines") or RUN_DEFAULTS["select_streamlines"]),
     }
@@ -276,13 +277,15 @@ def user_config_from_cli_args(
     target_set = set(targets)
     stage_set = set(stages)
     if "all" in stage_set:
-        stage_set.update(MICROSTRUCTURE_STAGE_ORDER)
+        stage_set.update(MICROSTRUCTURE_ALL_STAGES)
     if "microstructure_freewater" in target_set:
         stage_set.update(("dti", "freewater"))
     if "microstructure_noddi" in target_set:
         stage_set.update(("dti", "noddi"))
     if "microstructure_dki" in target_set or bool(getattr(args, "run_dki", False)):
         stage_set.update(("dti", "dki"))
+    if "microstructure_ifw" in target_set or bool(getattr(args, "run_ifw", False)):
+        stage_set.update(("dti", "freewater", "ifw"))
     stages = list(canonical_microstructure_stages(stage_set))
     tractography_backend = getattr(args, "tractography_backend", None) or "csd_act"
     if "saf" in target_set:
@@ -325,8 +328,8 @@ def user_config_from_cli_args(
             "bundle_backend": bundle_backend,
             "wma_atlas": getattr(args, "wma_atlas", None) or "org",
             "microstructure_stages": stages or ["dti"],
-            "dki_fit_method": str(getattr(args, "dki_fit_method", None) or "WLS").upper(),
-            "connectome_backend": getattr(args, "connectome_backend", None) or "python",
+            "dki_fit_method": str(getattr(args, "dki_fit_method", None) or "MKCURVE").upper(),
+            "connectome_backend": getattr(args, "connectome_backend", None) or "auto",
             "select_streamlines": int(
                 getattr(args, "select_streamlines", None) or RUN_DEFAULTS["select_streamlines"]
             ),

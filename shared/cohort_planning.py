@@ -178,7 +178,8 @@ def plan_cohort(subjects, arguments, *, jobs=None, cpu_budget=None, memory_gb=No
                          microstructure_freewater=2+1.5*signal+maps,
                          microstructure_noddi=2+2*signal+maps,
                          microstructure_dki=2+signal+maps,
-                         microstructure_mkcurve=2+signal+maps)
+                         microstructure_mkcurve=2+signal+maps,
+                         microstructure_ifw=2+.25*signal+maps)
         profile = {}
         tuned_arguments = []
         for stage, estimate in estimates.items():

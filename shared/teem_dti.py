@@ -560,6 +560,17 @@ def _ijk_to_ras(reader, vtk):
     return matrix
 
 
+def _matrix_to_numpy(matrix, size=4) -> np.ndarray:
+    """A ``vtkMatrix4x4`` as a (size, size) float array (T-C1: the VTK matrix has no array protocol).
+
+    An object that already is array-like (a numpy array or a nested list) passes through unchanged.
+    """
+    if hasattr(matrix, "GetElement"):
+        return np.array([[matrix.GetElement(row, column) for column in range(size)] for row in range(size)],
+                        dtype=np.float64)
+    return np.asarray(matrix, dtype=np.float64).reshape(size, size)
+
+
 def estimate_file(dwi_path, tensor_path, baseline_path, method="WLS", shift_negative=False,
                   threads=None, log=print) -> dict:
     """DWIToDTIEstimation: read a DWI NRRD, write the tensor NRRD and the baseline NRRD."""
@@ -631,6 +642,77 @@ def estimate_file(dwi_path, tensor_path, baseline_path, method="WLS", shift_nega
     return receipt
 
 
+def directional_colour(tensors, measurement_frame, fa) -> np.ndarray:
+    """Direction-encoded colour (DEC) FA map as an (N, 3) uint8 array (T1 design D6, C49).
+
+    ``tensors`` is (N, 9) with the components in the frame that ``measurement_frame`` (3 x 3, M) maps to RAS:
+    D_RAS = M D M^T, the convention Slicer uses when it reads the tensor NRRD. This is exact also when M is
+    not orthogonal. e1 is the unit eigenvector of the largest eigenvalue of D_RAS (numpy ``eigh``). The colour
+    is clip(round(255 * FA * |e1_RAS|), 0, 255) with FA clipped to [0, 1]: R = |x|, G = |y|, B = |z|.
+    """
+    tensors = np.asarray(tensors, dtype=np.float64).reshape(-1, 3, 3)
+    frame = np.asarray(measurement_frame, dtype=np.float64).reshape(3, 3)
+    fa = np.clip(np.nan_to_num(np.asarray(fa, dtype=np.float64).reshape(-1), nan=0.0), 0.0, 1.0)
+    if tensors.shape[0] != fa.shape[0]:
+        raise TeemError("The tensor map and the FA map have different voxel counts")
+    ras = frame @ tensors @ frame.T
+    ras = 0.5 * (ras + np.swapaxes(ras, 1, 2))  # eigh reads one triangle; remove float32 asymmetry first
+    ras = np.nan_to_num(ras, nan=0.0, posinf=0.0, neginf=0.0)
+    _values, vectors = np.linalg.eigh(ras)  # eigenvalues ascend: the last column is e1
+    e1 = np.abs(vectors[:, :, 2])
+    return np.clip(np.round(255.0 * fa[:, None] * e1), 0, 255).astype(np.uint8)
+
+
+def write_dec_nrrd(path, rgb, dims, ijk_to_ras) -> None:
+    """Write a 3-component uchar NRRD (kinds RGB-color + 3 x domain) with the space of the tensor NRRD.
+
+    ``rgb`` is (N, 3) uint8 with x varying fastest; ``dims`` = (nx, ny, nz); ``ijk_to_ras`` is a 4 x 4 matrix.
+    The header uses left-posterior-superior, as the Teem NRRD writer does for the tensor NRRD.
+    """
+    import gzip
+
+    nx, ny, nz = (int(value) for value in dims)
+    rgb = np.ascontiguousarray(rgb, dtype=np.uint8).reshape(nz, ny, nx, 3)
+    lps = np.diag([-1.0, -1.0, 1.0, 1.0]) @ _matrix_to_numpy(ijk_to_ras, 4)
+    directions = " ".join("(" + ",".join(repr(float(value) + 0.0) for value in lps[:3, axis]) + ")" for axis in range(3))
+    origin = "(" + ",".join(repr(float(value) + 0.0) for value in lps[:3, 3]) + ")"
+    header = ("NRRD0004\n# Complete NRRD file format specification at:\n"
+              "# http://teem.sourceforge.net/nrrd/format.html\n"
+              "type: uchar\ndimension: 4\nspace: left-posterior-superior\n"
+              f"sizes: 3 {nx} {ny} {nz}\n"
+              f"space directions: none {directions}\n"
+              "kinds: RGB-color domain domain domain\nendian: little\nencoding: gzip\n"
+              f"space origin: {origin}\n\n")
+    with open(path, "wb") as stream:
+        stream.write(header.encode("ascii"))
+        stream.write(gzip.compress(rgb.tobytes(), compresslevel=6))
+
+
+def dec_file(tensor_path, fa_path, dec_path, log=print) -> dict:
+    """Read the tensor NRRD and the FA NRRD, write the DEC colour FA map beside them."""
+    vtk, vtkTeem, numpy_support, _storage = _vtk_modules()
+    started = time.monotonic()
+    reader = vtkTeem.vtkTeemNRRDReader()
+    reader.SetFileName(str(tensor_path))
+    reader.Update()
+    tensors = reader.GetOutput().GetPointData().GetTensors()
+    if reader.GetReadStatus() or tensors is None:
+        raise TeemError(f"No tensor data in {tensor_path}")
+    fa_reader = vtkTeem.vtkTeemNRRDReader()
+    fa_reader.SetFileName(str(fa_path))
+    fa_reader.Update()
+    fa_scalars = fa_reader.GetOutput().GetPointData().GetScalars()
+    if fa_reader.GetReadStatus() or fa_scalars is None:
+        raise TeemError(f"No FA data in {fa_path}")
+    frame = _matrix_to_numpy(reader.GetMeasurementFrameMatrix(), 3)
+    rgb = directional_colour(numpy_support.vtk_to_numpy(tensors), frame, numpy_support.vtk_to_numpy(fa_scalars))
+    write_dec_nrrd(dec_path, rgb, reader.GetOutput().GetDimensions(), _ijk_to_ras(reader, vtk))
+    seconds = round(time.monotonic() - started, 3)
+    if log:
+        log(f"[TeemDTI] DEC colour FA map in {seconds} s")
+    return dict(kind="teem_dec", voxels=int(rgb.shape[0]), seconds=seconds)
+
+
 def scalar_files(tensor_path, outputs, threads=None, log=print) -> dict:
     """DiffusionTensorScalarMeasurements for several operations from one read of the tensor."""
     vtk, vtkTeem, _numpy_support, _storage = _vtk_modules()
@@ -689,7 +771,7 @@ def self_check() -> dict:
 
 
 # --------------------------------------------------------------------------- command line
-def estimate_command(python, dwi, tensor, baseline, enumeration, scalars=(), receipt=None) -> list[str]:
+def estimate_command(python, dwi, tensor, baseline, enumeration, scalars=(), receipt=None, dec=None) -> list[str]:
     """Command that runs ``estimate`` in one process: tensor, baseline and all ``scalars`` (operation, path).
 
     ``python`` is Slicer's ``PythonSlicer``. The thread count is not set here; ``default_threads``
@@ -698,6 +780,8 @@ def estimate_command(python, dwi, tensor, baseline, enumeration, scalars=(), rec
     command = [str(python), str(Path(__file__).resolve()), "estimate", "--enumeration", str(enumeration)]
     if receipt is not None:
         command += ["--receipt", str(receipt)]
+    if dec is not None:
+        command += ["--dec", str(dec)]
     for operation, path in scalars:
         command += ["--scalar", f"{operation}={path}"]
     return command + [str(dwi), str(tensor), str(baseline)]
@@ -722,6 +806,8 @@ def main(argv=None) -> int:
     estimate.add_argument("--threads", type=int, default=None)
     estimate.add_argument("--scalar", action="append", metavar="OPERATION=PATH")
     estimate.add_argument("--receipt", default=None)
+    estimate.add_argument("--dec", default=None, metavar="PATH",
+                          help="also write the direction-encoded colour FA map (needs --scalar FractionalAnisotropy=...)")
     estimate.add_argument("input_volume")
     estimate.add_argument("output_tensor")
     estimate.add_argument("output_baseline")
@@ -743,6 +829,11 @@ def main(argv=None) -> int:
         outputs = _parse_outputs(args.scalar)
         if outputs:
             receipt["scalars"] = scalar_files(args.output_tensor, outputs, args.threads)
+        if args.dec:
+            fa_path = dict(outputs).get("FractionalAnisotropy")
+            if not fa_path:
+                raise TeemError("--dec needs --scalar FractionalAnisotropy=PATH")
+            receipt["dec"] = dec_file(args.output_tensor, fa_path, args.dec)
         if args.receipt:
             Path(args.receipt).write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
         return 0

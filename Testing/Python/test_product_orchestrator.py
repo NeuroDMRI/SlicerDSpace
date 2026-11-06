@@ -383,7 +383,7 @@ class ProductOrchestratorTest(unittest.TestCase):
             self.assertEqual(manifest["tractography_backend"], "csd_act")
             self.assertFalse(manifest["execute"])
             self.assertEqual(manifest["select_streamlines"], 1000000)
-            self.assertEqual(manifest["connectome_backend"], "python")
+            self.assertEqual(manifest["connectome_backend"], "auto")
 
     def test_preflight_blocked_targets_are_recorded_but_do_not_stop_other_targets(self) -> None:
         from shared import ProductOrchestratorConfig, run_subject_products
@@ -1451,6 +1451,7 @@ class ProductOrchestratorTest(unittest.TestCase):
             micro_dir.mkdir(parents=True)
             for suffix in ("FA", "MD", "AD", "RD", "L1", "L2", "L3", "Trace"):
                 _write_test_volume(micro_dir / f"100307_dti_{suffix}.nii.gz")
+            (micro_dir / "100307-dti-DEC.nrrd").write_bytes(b"dec")  # D6: a completed DTI stage has the DEC map
             (micro_dir / "dti_qc.json").write_text(json.dumps({
                 "status": "completed", "automatic_qc_passed": True, "checks": {"synthetic_fixture": True},
                 "output_artifacts": {str(path.resolve()): _file_signature(path) for path in micro_dir.glob("*.nii.gz")},
@@ -1494,6 +1495,9 @@ class ProductOrchestratorTest(unittest.TestCase):
                         targets=("segmentation", "parcellation", "surface", "microstructure", "tractography", "bundles", "connectome"),
                         run_name=run_name,
                         select_streamlines=1,
+                        # T-B2: the fixture connectome has no backend_used, so it is a python connectome; the
+                        # default auto choice would resolve to MRtrix for this .tck source and re-run it.
+                        connectome_backend="python",
                         execute=True,
                         resume=True,
                     )

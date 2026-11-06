@@ -102,6 +102,7 @@ class NativeDTIBundle:
     mid_eig_nii_path: Path
     max_eig_nii_path: Path
     manifest_path: Path
+    dec_nrrd_path: Path  # D6: direction-encoded colour FA map
 
 
 @dataclass(frozen=True)
@@ -492,13 +493,14 @@ NATIVE_TENSOR_SCALARS = ("FractionalAnisotropy", "Trace", "MeanDiffusivity",
                          "MinEigenvalue", "MidEigenvalue", "MaxEigenvalue")
 
 
-def native_tensor_command(pythonslicer, dwi_header, tensor, baseline, enumeration, scalars, receipt=None) -> list[str]:
+def native_tensor_command(pythonslicer, dwi_header, tensor, baseline, enumeration, scalars, receipt=None,
+                          dec=None) -> list[str]:
     """One ``teem_dti.py estimate`` process: tensor, baseline and the scalar maps (operation, path) together.
 
     No ``--threads``: the child reads ``SLICERDSPACE_STAGE_CPUS`` (set by the cohort scheduler) itself.
     """
     from shared.teem_dti import estimate_command
-    return estimate_command(pythonslicer, dwi_header, tensor, baseline, enumeration, scalars, receipt)
+    return estimate_command(pythonslicer, dwi_header, tensor, baseline, enumeration, scalars, receipt, dec=dec)
 
 
 def build_cli_environment(cli_executable: str) -> dict[str, str]:
@@ -742,6 +744,7 @@ def _build_native_bundle(raw: RawInputBundle, fit_method: str) -> NativeDTIBundl
         mid_eig_nii_path=bundle_dir / f"{subject}-dti-MidEigenvalue.nii.gz",
         max_eig_nii_path=bundle_dir / f"{subject}-dti-MaxEigenvalue.nii.gz",
         manifest_path=bundle_dir / "manifest.json",
+        dec_nrrd_path=bundle_dir / f"{subject}-dti-DEC.nrrd",
     )
 
 
@@ -785,6 +788,7 @@ def _native_outputs_complete(bundle: NativeDTIBundle) -> bool:
         bundle.min_eig_nii_path,
         bundle.mid_eig_nii_path,
         bundle.max_eig_nii_path,
+        bundle.dec_nrrd_path,
     ]
     return _artifacts_current(bundle.bundle_dir, required)
 
@@ -846,7 +850,8 @@ def _ensure_native_dti_bundle(raw, fit_method, reuse, log):
         native_tensor_command(
             resolve_pythonslicer_executable(),
             bundle.dwi_nhdr_path, bundle.dti_nrrd_path, bundle.b0_nrrd_path,
-            "WLS" if fit_key == "wls" else "LS", scalar_outputs, receipt_path),
+            "WLS" if fit_key == "wls" else "LS", scalar_outputs, receipt_path,
+            dec=bundle.dec_nrrd_path),
         log,
     )
     tensor_receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
@@ -874,7 +879,7 @@ def _ensure_native_dti_bundle(raw, fit_method, reuse, log):
         'runtime_seconds': time.monotonic() - started, 'fit_method': fit_key,
         'source_dwi': str(raw.dwi_path), 'cache_reused': False,
         'tensor_fit': tensor_receipt,
-        'timing_scope': 'Fresh native Teem tensor fit and six scalar maps in one process, compatibility copies and NIfTI conversion; excludes registration and later ROI statistics',
+        'timing_scope': 'Fresh native Teem tensor fit and six scalar maps in one process (plus the DEC colour map), compatibility copies and NIfTI conversion; excludes registration and later ROI statistics',
     })
     return bundle
 

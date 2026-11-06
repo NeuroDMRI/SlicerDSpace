@@ -19,7 +19,7 @@ DTI 为基础步骤；DKI 拟合方法在“高级设置 > 模型参数”调整
 | DTI | FA、MD、AD、RD、三个特征值、Trace | 共用 native-space 张量拟合 |
 | FW | 自由水比例、组织 FA/MD、有效性掩膜与 QC | DIPY |
 | NODDI | NDI、ODI、IsoVF、残差、有效性掩膜与 QC | AMICO |
-| 标准 DKI | MK、AK、RK、KFA、MKT、RTK、残差与原始张量参数 | DIPY WLS/OLS |
+| 标准 DKI | MK、AK、RK、KFA、MKT、RTK、残差与原始张量参数 | 内置 Python MK-Curve（默认），或 DIPY WLS/OLS |
 | MK-Curve | 原始及校正 MK/AK/RK、FA/MD/AD/RD、特征值、有效性与残差 | 内置作者算法 Python 移植版，不是普通 DIPY MK |
 
 AD/RD 已存在；本次补充 DKI 的 MKT/RTK/KFA，参考

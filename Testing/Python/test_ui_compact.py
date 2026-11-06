@@ -79,7 +79,7 @@ class CompactUiTest(unittest.TestCase):
         node = SimpleNamespace(orchestrationMicrostructureStages="", orchestrationRunFreeWater=True,
                                orchestrationRunNoddi=True, orchestrationRunDki=True)
         self.assertEqual(compact_algorithm_labels(node)["targetMicrostructureCheckBox"],
-                         "DTI + FW + NODDI + DKI (WLS)")
+                         "DTI + FW + NODDI + MK-Curve")
 
     def test_backend_changes_update_labels_without_mutating_state(self):
         names = ("targetMicrostructureCheckBox", "targetTractographyCheckBox", "targetBundlesCheckBox")

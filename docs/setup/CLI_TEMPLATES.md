@@ -468,6 +468,15 @@ pipeline connectome_sift2 --targets validation,segmentation,parcellation,tractog
   --brain-mask-backend provided --select-streamlines 1000000 --plan
 ```
 
+CSD/ACT connectivity with the default `auto` backend (MRtrix for a `.tck` count, Python for any other source or metric):
+
+<!-- cli-template: connectome-auto -->
+```bash
+pipeline connectome_auto --targets validation,segmentation,parcellation,tractography,connectome \
+  --tractography-backend csd_act --connectome-backend auto \
+  --brain-mask-backend provided --select-streamlines 1000000 --plan
+```
+
 A combined anatomical priors/microstructure/UKF/WMQL/Python-connectome route:
 
 <!-- cli-template: combined -->

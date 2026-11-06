@@ -44,6 +44,7 @@ SUPPORTED_TARGETS = {
     "microstructure_freewater",
     "microstructure_noddi",
     "microstructure_dki",
+    "microstructure_ifw",
     "tractography",
     "bundles",
     "connectome",
@@ -77,6 +78,8 @@ class ProductOrchestratorConfig:
     wmql_query_selection: tuple[str, ...] = ()
     wmql_atlas_mode: str = 'native'
     execute: bool = False
+    # T-C5: tracking-variant children set this False; the aggregate manifest gets the one run record.
+    write_run_record: bool = True
     resume: bool = True
     preprocessing_backend: str = "dipy"
     brain_mask_backend: str = "pnl_cnn"
@@ -101,8 +104,12 @@ class ProductOrchestratorConfig:
     microstructure_run_free_water: bool = False
     microstructure_run_noddi: bool = False
     microstructure_run_dki: bool = False
+    microstructure_run_ifw: bool = False
+    microstructure_ifw_echo_time_ms: Optional[float] = None
+    microstructure_ifw_t2_gm_ms: float = 95.0
+    microstructure_ifw_t2_csf_ms: float = 1500.0
     max_parallel_models: int = 1
-    microstructure_dki_fit_method: str = "WLS"
+    microstructure_dki_fit_method: str = "MKCURVE"
     microstructure_dki_matlab_executable: Optional[Path] = None
     microstructure_dki_mkcurve_root: Optional[Path] = None
     microstructure_dki_execution: dict = field(default_factory=dict)
@@ -153,8 +160,8 @@ class ProductOrchestratorConfig:
     # Explicit exploratory fallback; the GUI retains complete DDSeg + DDParcel priors.
     allow_act_ddseg_only: bool = False
     tract_querier_root: Optional[Path] = None
-    connectome_backend: str = "python"
-    connectome_compress_mrtrix_dense: bool = False
+    connectome_backend: str = "auto"
+    connectome_compress_mrtrix_dense: Optional[bool] = None
     saf_fs_dir: Optional[Path] = None
     saf_pregenerated_tractogram: Optional[Path] = None
     saf_tckgen_options: str = ""
@@ -412,13 +419,28 @@ def _connectome_complete(
     tractography: Optional[Path] = None,
     parcellation: Optional[Path] = None,
     sift2_weights: Optional[Path] = None,
+    backend: Optional[str] = None,
+    compress_mrtrix_dense: Optional[bool] = None,
+    metric: str = "streamline_count",
 ) -> bool:
-    """Return true only when QC counts and both connectome tables have data."""
+    """Return true only when QC counts and both connectome tables have data.
+
+    With ``backend`` set (T-B2), the earlier run must also have used the backend and, for MRtrix, the
+    compression that a run now would resolve. A manifest without ``backend_used`` is an older Python run.
+    """
 
     if not _qc_completed(qc_path):
         return False
     try:
         qc = _read_json(qc_path)
+        if backend is not None and not _connectome_choice_current(
+            manifest_path or qc_path.with_name(qc_path.name.replace("_qc.json", "_manifest.json")),
+            backend=backend,
+            compress_mrtrix_dense=compress_mrtrix_dense,
+            tractography=tractography,
+            metric=metric,
+        ):
+            return False
         expected_dependencies = {
             key: path
             for key, path in {
@@ -441,6 +463,43 @@ def _connectome_complete(
         return _table_has_data_row(matrix_path, header_prefix="source_node,target_node,")
     except (OSError, TypeError, ValueError):
         return False
+
+
+def _connectome_choice_current(
+    manifest_path: Path,
+    *,
+    backend: str,
+    compress_mrtrix_dense: Optional[bool],
+    tractography: Optional[Path],
+    metric: str,
+) -> bool:
+    """True when the manifest records the backend and compression that a run now would resolve."""
+
+    from connectome.pipeline import ConnectomeConfig, expected_connectome_choice
+
+    try:
+        expected_backend, expected_compress = expected_connectome_choice(
+            ConnectomeConfig(
+                subject_id="",
+                tractography_path=Path(tractography) if tractography is not None else Path(""),
+                parcellation_path=Path(""),
+                metric=metric,
+                backend=backend,
+                compress_mrtrix_dense=compress_mrtrix_dense,
+            )
+        )
+    except RuntimeError:
+        return False  # the run would fail; do not reuse an earlier result as if it matched
+    try:
+        manifest = _read_json(manifest_path)
+    except (OSError, TypeError, ValueError):
+        return False
+    recorded_backend = manifest.get("backend_used") or "python"  # no field: a run before the auto backend
+    if recorded_backend != expected_backend:
+        return False
+    if expected_backend == "mrtrix":
+        return bool(manifest.get("compress_mrtrix_dense")) == expected_compress
+    return True
 
 
 def _table_has_data_row(path: Path, *, header_prefix: str) -> bool:
@@ -555,6 +614,7 @@ def orchestrator_closure(
     microstructure_run_free_water: bool = False,
     microstructure_run_noddi: bool = False,
     microstructure_run_dki: bool = False,
+    microstructure_run_ifw: bool = False,
     wma_source_explicit: bool = False,
     provided_tractography: tuple[str, ...] = (),
     excluded: tuple[str, ...] = (),
@@ -569,6 +629,7 @@ def orchestrator_closure(
         microstructure_free_water=microstructure_run_free_water,
         microstructure_noddi=microstructure_run_noddi,
         microstructure_dki=microstructure_run_dki,
+        microstructure_ifw=microstructure_run_ifw,
         wma_source_explicit=wma_source_explicit,
         provided_tractography=provided_tractography,
         excluded=excluded,
@@ -583,6 +644,7 @@ def normalize_orchestrator_targets(
     microstructure_run_free_water: bool = False,
     microstructure_run_noddi: bool = False,
     microstructure_run_dki: bool = False,
+    microstructure_run_ifw: bool = False,
     wma_source_explicit: bool = False,
     provided_tractography: tuple[str, ...] = (),
 ) -> tuple[str, ...]:
@@ -595,6 +657,7 @@ def normalize_orchestrator_targets(
         microstructure_run_free_water=microstructure_run_free_water,
         microstructure_run_noddi=microstructure_run_noddi,
         microstructure_run_dki=microstructure_run_dki,
+        microstructure_run_ifw=microstructure_run_ifw,
         wma_source_explicit=wma_source_explicit,
         provided_tractography=provided_tractography,
     ).targets
@@ -939,6 +1002,7 @@ def _with_closure(config: ProductOrchestratorConfig) -> ProductOrchestratorConfi
         microstructure_run_free_water=config.microstructure_run_free_water,
         microstructure_run_noddi=config.microstructure_run_noddi,
         microstructure_run_dki=config.microstructure_run_dki,
+        microstructure_run_ifw=config.microstructure_run_ifw,
         wma_source_explicit=bool(config.bundle_tractography_backend),
         provided_tractography=_provided_tractography(config),
         excluded=config.excluded_targets,  # K5: skipped targets are never added or expanded
@@ -1015,6 +1079,8 @@ def _task_name_for_target(target: str, config: ProductOrchestratorConfig) -> str
         return "microstructure.noddi"
     if target == "microstructure_dki":
         return "microstructure.dki"
+    if target == "microstructure_ifw":
+        return "microstructure.ifw"
     if target == "tractography":
         return "tractography." + _primary_tractography_backend(config)
     if target == "bundles":
@@ -1691,6 +1757,7 @@ def _microstructure_dti_outputs(subject_root: Path, subject_id: str, output_root
         "l2": dti_dir / f"{subject_id}_dti_L2.nii.gz",
         "l3": dti_dir / f"{subject_id}_dti_L3.nii.gz",
         "trace": dti_dir / f"{subject_id}_dti_Trace.nii.gz",
+        "dec": dti_dir / f"{subject_id}-dti-DEC.nrrd",
         "qc": dti_dir / "dti_qc.json",
         "manifest": layout.microstructure / "manifest.json",
     }
@@ -1725,7 +1792,7 @@ def _microstructure_dti_complete(subject_root: Path, subject_id: str, output_roo
             brain_mask_path=_resolve_analysis_inputs(subject_root, subject_id, output_root)["mask"],
         ):
             return False
-    return scalar_qc_current(outputs["qc"], [outputs[key] for key in ("fa", "md", "ad", "rd", "l1", "l2", "l3", "trace")]) and _manifest_inputs_match(
+    return outputs["dec"].is_file() and scalar_qc_current(outputs["qc"], [outputs[key] for key in ("fa", "md", "ad", "rd", "l1", "l2", "l3", "trace")]) and _manifest_inputs_match(
         outputs["manifest"],
         _resolve_analysis_inputs(subject_root, subject_id, output_root),
         "raw_input_bundle",
@@ -1755,6 +1822,82 @@ def _microstructure_freewater_complete(subject_root: Path, subject_id: str, outp
         _resolve_analysis_inputs(subject_root, subject_id, output_root),
         "raw_input_bundle",
     )
+
+
+def _microstructure_ifw_outputs(subject_root: Path, subject_id: str, output_root: Optional[Path] = None) -> dict[str, Path]:
+    from microstructure.ifw import ifw_output_paths
+
+    directory = subject_layout(subject_root, output_root=output_root).microstructure_ifw
+    paths = ifw_output_paths(subject_id, directory)
+    return {"ifw": paths["ifw"], "fw_volume_fraction": paths["fw_volume_fraction"], "manifest": paths["record"]}
+
+
+def _ifw_sidecar(config: "ProductOrchestratorConfig", inputs: dict[str, Path]) -> Optional[Path]:
+    """The DWI JSON sidecar next to the analysis DWI, else next to the raw DWI (SPEC-GAP: design names input/dwi.json)."""
+    candidates = [inputs["dwi"]]
+    try:
+        candidates.append(_resolve_raw_inputs(config.subject_root.expanduser().resolve())["dwi"])
+    except Exception:
+        pass
+    for dwi in candidates:
+        name = dwi.name
+        for suffix in (".nii.gz", ".nii"):
+            if name.endswith(suffix):
+                name = name[: -len(suffix)]
+                break
+        for stem in (name, "dwi"):
+            sidecar = dwi.with_name(stem + ".json")
+            if sidecar.is_file():
+                return sidecar
+    return None
+
+
+def _ifw_config(config: "ProductOrchestratorConfig", inputs: dict[str, Path], roi_label_map: Optional[Path] = None):
+    from microstructure.ifw import IfwConfig
+
+    root = config.subject_root.expanduser().resolve()
+    output_root = config.output_root
+    freewater = _microstructure_freewater_outputs(root, config.subject_id, output_root)
+    segmentation = _segmentation_outputs(root, output_root)
+    return IfwConfig(
+        subject_id=config.subject_id,
+        fw_fraction_path=freewater["fwf"],
+        csf_probability_path=segmentation["csf_probability"],
+        mask_path=inputs["mask"],
+        bval_path=inputs["bval"],
+        bvec_path=inputs["bvec"],
+        output_dir=subject_layout(root, output_root=output_root).microstructure_ifw,
+        echo_time_ms=config.microstructure_ifw_echo_time_ms,
+        dwi_sidecar_path=_ifw_sidecar(config, inputs),
+        tissue_t2_ms=config.microstructure_ifw_t2_gm_ms,
+        csf_t2_ms=config.microstructure_ifw_t2_csf_ms,
+        roi_label_map=roi_label_map,
+    )
+
+
+def _microstructure_ifw_complete(config: "ProductOrchestratorConfig", inputs: dict[str, Path]) -> bool:
+    from microstructure.ifw import IfwBlocked, ifw_outputs_current, resolve_echo_time
+
+    try:
+        ifw_config = _ifw_config(config, inputs)
+        echo_time, source = resolve_echo_time(ifw_config.echo_time_ms, ifw_config.dwi_sidecar_path)
+        return ifw_outputs_current(ifw_config, echo_time, source)
+    except (IfwBlocked, OSError, ValueError, KeyError):
+        return False
+
+
+def _free_water_ineligible(inputs: dict[str, Path]) -> str:
+    """Empty when the gradient table has three b-value groups (DIPY ``check_multi_b``), else the user message."""
+    from microstructure.ifw import free_water_eligibility
+    import numpy as np
+
+    if not Path(inputs["bval"]).is_file():
+        return ""  # a missing input is reported by the raw-input check
+    try:
+        bvals = np.loadtxt(inputs["bval"], dtype=float).ravel()
+    except ValueError:
+        return ""  # an unreadable b-value file is reported by input validation
+    return free_water_eligibility(bvals)[1]
 
 
 def _microstructure_noddi_outputs(subject_root: Path, subject_id: str, output_root: Optional[Path] = None) -> dict[str, Path]:
@@ -2093,8 +2236,8 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
     if config.tractography_backend not in TRACTOGRAPHY_BACKENDS:
         raise ValueError("tractography_backend must be one of: csd_act, ukf, dti_det, saf.")
     bundle_backends = _normalize_bundle_backends(config.bundle_backend)
-    if config.connectome_backend not in {"python", "mrtrix"}:
-        raise ValueError("connectome_backend must be one of: python, mrtrix.")
+    if config.connectome_backend not in {"auto", "python", "mrtrix"}:
+        raise ValueError("connectome_backend must be one of: auto, python, mrtrix.")
 
     targets = _normalize_targets(config)
     selected = set(targets)
@@ -2233,6 +2376,8 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
         if target == "microstructure_dki":
             from microstructure.dki import dki_outputs_current
             return dki_outputs_current(_dki_config(config, analysis_inputs))
+        if target == "microstructure_ifw":
+            return _microstructure_ifw_complete(config, analysis_inputs)
         if target == "tractography":
             if primary_tractography_backend == 'ukf':
                 return ukf_cached
@@ -2288,7 +2433,8 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
                 connectome_dir / f"{config.subject_id}-connectome-nodes.tsv",
                 manifest_path=connectome_dir / f"{connectome_stem}_manifest.json",
                 tractography=tractogram,
-                parcellation=parcellation,
+                parcellation=parcellation,                backend=config.connectome_backend,
+                compress_mrtrix_dense=config.connectome_compress_mrtrix_dense,
             )
         return False
 
@@ -2487,6 +2633,8 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
                 add(target, "skipped", "completed Free Water outputs found", "reuse", inputs=analysis_inputs, outputs=freewater_outputs, dependencies={"microstructure": "available" if dti_ready else None})
             elif not dti_ready:
                 add(target, "blocked", _upstream_reason(selected, "microstructure", "missing Microstructure DTI outputs; select microstructure or provide existing output"), "upstream", inputs=raw, outputs=freewater_outputs, dependencies={"microstructure": "missing"}, provides=False)
+            elif fw_ineligible := _free_water_ineligible(analysis_inputs):  # T-N3: read the b-values once
+                add(target, "blocked", fw_ineligible, "acquisition_or_backend", inputs=analysis_inputs, outputs=freewater_outputs, provides=False)
             elif not raw_input_block(target, freewater_outputs):
                 add(target, "will_run", "ready to run Microstructure Free Water", "runnable", inputs=analysis_inputs, outputs=freewater_outputs, dependencies={"microstructure": "available" if _microstructure_dti_complete(subject_root, config.subject_id, output_root) else "will_run"})
             continue
@@ -2519,6 +2667,39 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
             else:
                 add(target, "will_run", "eligible multi-shell DKI; final mask checked before fitting", "runnable",
                     inputs=analysis_inputs, outputs=outputs)
+            continue
+
+        if target == "microstructure_ifw":
+            from microstructure.ifw import IfwBlocked, resolve_echo_time
+
+            outputs = _microstructure_ifw_outputs(subject_root, config.subject_id, output_root)
+            if raw_input_block(target, outputs):
+                continue
+            fw_ready = available.get("microstructure_freewater", False) or _microstructure_freewater_complete(
+                subject_root, config.subject_id, output_root, config=config)
+            seg_ready = available.get("segmentation", False) or _segmentation_complete(subject_root, output_root)
+            ineligible = _free_water_ineligible(analysis_inputs)
+            ifw_config = _ifw_config(config, analysis_inputs)
+            echo_error = ""
+            try:
+                resolve_echo_time(ifw_config.echo_time_ms, ifw_config.dwi_sidecar_path)
+            except IfwBlocked as exc:
+                echo_error = str(exc)
+            if not fw_ready or not seg_ready:
+                add(target, "blocked", "iFW needs the Free Water fraction and the DDSeg CSF map; select both or provide existing outputs",
+                    "upstream", inputs=analysis_inputs, outputs=outputs, provides=False)
+            elif ineligible:
+                add(target, "blocked", ineligible, "acquisition_or_backend", inputs=analysis_inputs, outputs=outputs, provides=False)
+            elif echo_error:
+                add(target, "blocked", echo_error, "acquisition_or_backend", inputs=analysis_inputs, outputs=outputs, provides=False)
+            elif config.resume and _microstructure_ifw_complete(config, analysis_inputs) and not any(
+                    item.target == "microstructure_freewater" and item.status == "will_run" for item in items):
+                add(target, "skipped", "matching completed iFW outputs found", "reuse", inputs=analysis_inputs, outputs=outputs)
+            else:
+                fw_reruns = any(item.target == "microstructure_freewater" and item.status == "will_run" for item in items)
+                add(target, "will_run",
+                    "Free Water will re-run, so iFW will re-run on the new fraction" if fw_reruns else "ready to run iFW",
+                    "runnable", inputs=analysis_inputs, outputs=outputs)
             continue
 
         if target == "tractography":
@@ -2736,6 +2917,8 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
                 manifest_path=conn_outputs["manifest"],
                 tractography=tractogram,
                 parcellation=parcellation,
+                backend=config.connectome_backend,
+                compress_mrtrix_dense=config.connectome_compress_mrtrix_dense,
             ):
                 add(target, "skipped", "completed outputs found", "reuse", outputs=conn_outputs)
             elif not parcellation_ready:
@@ -2919,7 +3102,19 @@ def _mark_orchestration_failed(config: ProductOrchestratorConfig, error: BaseExc
     )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    if config.execute and config.write_run_record:
+        _write_run_record_best_effort(path, None)  # a failed run is also archived
     return path
+
+
+def _write_run_record_best_effort(manifest_path: Path, log) -> None:
+    """Write run_record.json beside the manifest; a record error must never fail or hide a run."""
+    try:
+        from shared.run_record import write_run_record
+
+        write_run_record(manifest_path)
+    except Exception as exc:  # pragma: no cover - archiving must not break pipeline execution
+        _emit(f"[RunRecord] run_record.json was not written: {exc}", log)
 
 
 def _write_normalized_task_records(
@@ -3026,7 +3221,7 @@ def _expected_output_top_dirs(targets: tuple[str, ...]) -> set[str]:
     selected = set(targets)
     if "preprocessing" in selected:
         expected.add("01_preproc")
-    if selected & {"microstructure", "microstructure_freewater", "microstructure_noddi", "microstructure_dki"}:
+    if selected & {"microstructure", "microstructure_freewater", "microstructure_noddi", "microstructure_dki", "microstructure_ifw"}:
         expected.update({"02_microstructure", "05_statistics"})
     if selected & {"segmentation", "parcellation", "surface", "surface_postprocess"}:
         expected.add(ANATOMY_OUTPUT_NAME)
@@ -3106,10 +3301,10 @@ def _write_output_tree_semantics(
     directory_targets: list[tuple[str, tuple[str, ...], str]] = [
         ("00_run_metadata", ("validation",), "Run metadata, validation, environment and task records."),
         ("01_preproc", ("preprocessing",), "DWI preprocessing outputs."),
-        ("02_microstructure", ("microstructure", "microstructure_freewater", "microstructure_noddi", "microstructure_dki"), "Microstructure model outputs."),
+        ("02_microstructure", ("microstructure", "microstructure_freewater", "microstructure_noddi", "microstructure_dki", "microstructure_ifw"), "Microstructure model outputs."),
         (ANATOMY_OUTPUT_NAME, ("segmentation", "parcellation", "surface", "surface_postprocess"), "Segmentation, parcellation and surface products."),
         ("04_tractography", ("tractography", "bundles", "saf", "wma", "tractcloud", "connectome"), "Tractography, bundle extraction, SAF and connectome products."),
-        ("05_statistics", ("microstructure", "microstructure_freewater", "microstructure_noddi", "microstructure_dki", "surface_postprocess"), "Regional summaries and post-process statistics."),
+        ("05_statistics", ("microstructure", "microstructure_freewater", "microstructure_noddi", "microstructure_dki", "microstructure_ifw", "surface_postprocess"), "Regional summaries and post-process statistics."),
         ("06_slicer_scene_report", tuple(TARGET_ORDER), "HTML/Markdown reports and output tree views."),
     ]
     if (layout.outputs / LEGACY_ANATOMY_OUTPUT_NAME).is_dir():
@@ -3394,8 +3589,8 @@ def _run_subject_products_impl(
     if config.tractography_backend not in TRACTOGRAPHY_BACKENDS:
         raise ValueError("tractography_backend must be one of: csd_act, ukf, dti_det, saf.")
     bundle_backends = _normalize_bundle_backends(config.bundle_backend)
-    if config.connectome_backend not in {"python", "mrtrix"}:
-        raise ValueError("connectome_backend must be one of: python, mrtrix.")
+    if config.connectome_backend not in {"auto", "python", "mrtrix"}:
+        raise ValueError("connectome_backend must be one of: auto, python, mrtrix.")
 
     targets = _normalize_targets(config)
     subject_root = config.subject_root.expanduser().resolve()
@@ -3472,7 +3667,7 @@ def _run_subject_products_impl(
             )
 
     dwi_targets = {'preprocessing', 'segmentation', 'parcellation', 'surface', 'microstructure',
-                   'microstructure_freewater', 'microstructure_noddi', 'microstructure_dki', 'tractography'}
+                   'microstructure_freewater', 'microstructure_noddi', 'microstructure_dki', 'microstructure_ifw', 'tractography'}
     if 'saf' in run_targets and config.saf_pregenerated_tractogram is None:
         dwi_targets.add('saf')
     input_validation_path = None
@@ -4052,6 +4247,7 @@ def _run_subject_products_impl(
                         "l2": result.l2_path.as_posix(),
                         "l3": result.l3_path.as_posix(),
                         "trace": result.trace_path.as_posix(),
+                        "dec": result.dec_path.as_posix() if getattr(result, "dec_path", None) else None,
                         "roi_stats_csv": result.roi_stats_csv_path.as_posix() if result.roi_stats_csv_path else None,
                         "roi_stats_json": result.roi_stats_json_path.as_posix() if result.roi_stats_json_path else None,
                     },
@@ -4085,6 +4281,8 @@ def _run_subject_products_impl(
         elif any(not path.is_file() for path in raw.values()):
             missing = [label for label, path in raw.items() if not path.is_file()]
             tasks.append(ProductTaskRecord(name="microstructure.freewater", status="blocked", reason="missing raw input: " + ", ".join(missing)))
+        elif fw_ineligible := _free_water_ineligible(_resolve_analysis_inputs(subject_root, config.subject_id, output_root)):  # T-N3
+            tasks.append(ProductTaskRecord(name="microstructure.freewater", status="blocked", reason=fw_ineligible))
         else:
             from microstructure import MicrostructureConfig, run_microstructure
             from shared.pipeline import ensure_native_dti_bundle, find_subject_root, resolve_preprocessed_input_bundle
@@ -4239,6 +4437,35 @@ def _run_subject_products_impl(
             except Exception as exc:
                 tasks.append(ProductTaskRecord(name="microstructure.dki", status="failed", reason=str(exc)))
                 _emit(f"[Orchestrator] DKI failed; other selected products can continue: {exc}", log)
+
+    if "microstructure_ifw" in run_targets:
+        from microstructure.ifw import IfwBlocked, run_ifw
+
+        ifw_plan = plan_by_target.get("microstructure_ifw")
+        ifw_outputs = _microstructure_ifw_outputs(subject_root, config.subject_id, output_root)
+        if not config.execute:
+            tasks.append(ProductTaskRecord(name="microstructure.ifw", status="planned", reason="execute=False"))
+        elif ifw_plan and ifw_plan.status == "blocked":
+            tasks.append(ProductTaskRecord(name="microstructure.ifw", status="blocked", reason=ifw_plan.reason))
+        else:
+            _emit("[Orchestrator] Running Microstructure iFW", log)
+            try:
+                ifw_inputs = _resolve_analysis_inputs(subject_root, config.subject_id, output_root)
+                result = run_ifw(_ifw_config(config, ifw_inputs, parcellation), log=lambda message: _emit(message, log))
+                tasks.append(ProductTaskRecord(
+                    name="microstructure.ifw", status="skipped" if result.status == "cached" else "completed",
+                    reason=("matching iFW outputs reused; " if result.status == "cached" else "")
+                    + f"TE {result.echo_time_ms:g} ms from {result.echo_time_source}",
+                    manifest_path=result.record_path,
+                    outputs={"ifw": result.ifw_path.as_posix(), "fw_volume_fraction": result.fw_volume_fraction_path.as_posix(),
+                             "roi_stats_csv": result.roi_stats_csv_path.as_posix() if result.roi_stats_csv_path else None},
+                ))
+            except IfwBlocked as exc:
+                tasks.append(ProductTaskRecord(name="microstructure.ifw", status="blocked", reason=str(exc)))
+                _emit(f"[Orchestrator] iFW stopped; other selected products can continue: {exc}", log)
+            except Exception as exc:
+                tasks.append(ProductTaskRecord(name="microstructure.ifw", status="failed", reason=str(exc)))
+                _emit(f"[Orchestrator] iFW failed; other selected products can continue: {exc}", log)
 
     if "tractography" in run_targets and primary_tractography_backend == 'ukf':
         from tractography.ukf import run_ukf
@@ -4820,6 +5047,8 @@ def _run_subject_products_impl(
             manifest_path=conn_manifest,
             tractography=tractogram,
             parcellation=parcellation,
+            backend=config.connectome_backend,
+            compress_mrtrix_dense=config.connectome_compress_mrtrix_dense,
         ):
             tasks.append(ProductTaskRecord(
                 name="connectome.streamline_count", status="skipped", reason="completed outputs found",
@@ -4888,6 +5117,9 @@ def _run_subject_products_impl(
                 tractography=tractogram,
                 parcellation=parcellation,
                 sift2_weights=sift2_weights,
+                backend=config.connectome_backend,
+                compress_mrtrix_dense=config.connectome_compress_mrtrix_dense,
+                metric="sift2_weighted_streamline_count",
             ):
                 tasks.append(
                     ProductTaskRecord(
@@ -5058,6 +5290,10 @@ def _run_subject_products_impl(
         "microstructure_run_free_water": config.microstructure_run_free_water,
         "microstructure_run_noddi": config.microstructure_run_noddi,
         "microstructure_run_dki": config.microstructure_run_dki,
+        "microstructure_run_ifw": config.microstructure_run_ifw,
+        "microstructure_ifw_echo_time_ms": config.microstructure_ifw_echo_time_ms,
+        "microstructure_ifw_t2_gm_ms": config.microstructure_ifw_t2_gm_ms,
+        "microstructure_ifw_t2_csf_ms": config.microstructure_ifw_t2_csf_ms,
         "microstructure_dki_fit_method": config.microstructure_dki_fit_method,
         "microstructure_dki_execution": config.microstructure_dki_execution,
         "wma_num_threads": config.wma_num_threads,
@@ -5075,6 +5311,7 @@ def _run_subject_products_impl(
                 ("freewater", config.microstructure_run_free_water),
                 ("noddi", config.microstructure_run_noddi),
                 ("dki", config.microstructure_run_dki),
+                ("ifw", config.microstructure_run_ifw),
             )
             if enabled
         ],
@@ -5089,6 +5326,7 @@ def _run_subject_products_impl(
         "postprocess_atlases": list(config.postprocess_atlases) if config.postprocess_atlases else None,
         "postprocess_force": config.postprocess_force,
         "atlas_t2": atlas_t2.as_posix(),
+        "model_assets_dir": model_assets_dir.as_posix() if model_assets_dir else None,
         "ddseg_device": config.ddseg_device,
         "surface_device": config.surface_device,
         "surface_atlas_t2": config.surface_atlas_t2.expanduser().resolve().as_posix() if config.surface_atlas_t2 else None,
@@ -5195,6 +5433,8 @@ def _run_subject_products_impl(
     performance_profile['wall_time_scope'] = manifest['wall_time_scope']
     Path(performance_profile['path']).write_text(json.dumps(performance_profile, indent=2, sort_keys=True) + '\n', encoding='utf-8')
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    if config.execute and config.write_run_record:
+        _write_run_record_best_effort(manifest_path, log)  # D6/C40: after every manifest is final
     return ProductOrchestratorResult(
         subject_id=config.subject_id,
         subject_root=subject_root,

@@ -719,7 +719,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--jobs", type=int, default=1)
     parser.add_argument("--arrange-inputs", choices=("none", "symlink", "copy"), default="none")
     parser.add_argument("--tractography-backend", default="csd_act", choices=("csd_act", "ukf", "dti_det", "saf"))
-    parser.add_argument("--connectome-backend", default="python", choices=("python", "mrtrix"))
+    parser.add_argument("--connectome-backend", default="python", choices=("auto", "python", "mrtrix"))
     parser.add_argument("--skip-slicer-smoke", action="store_true")
     parser.add_argument("--skip-asset-checks", action="store_true")
     parser.add_argument("--asset-mirror-dir", type=Path, help="Optional core-profile asset mirror directory to verify.")

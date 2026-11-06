@@ -3,7 +3,7 @@
 Generated from `docs/setup/CLI_TEMPLATES.md`; do not edit this catalogue or its generated scripts.
 Regenerate with `python scripts/build_skill_shell_templates.py` from the authorized checkout.
 
-Source SHA-256 (UTF-8, LF): `f13fc9ba5f11ec4b32bb20435254c2e12ee718e69573c2c94362b27b418cee2e`.
+Source SHA-256 (UTF-8, LF): `ed767342004922ab4ee1cdf0a3e38d4ac9ae88f08c1196f3145cd136c9ff2301`.
 
 ## Contents
 
@@ -424,6 +424,16 @@ pipeline connectome_python --targets validation,microstructure,parcellation,trac
 ```bash
 pipeline connectome_sift2 --targets validation,segmentation,parcellation,tractography,connectome \
   --tractography-backend csd_act --connectome-backend mrtrix \
+  --brain-mask-backend provided --select-streamlines 1000000 --plan
+```
+
+### Connectome with the automatic backend choice
+
+[Standalone Bash](../assets/shell/connectome_auto.sh) - Recipe `connectome-auto`.
+
+```bash
+pipeline connectome_auto --targets validation,segmentation,parcellation,tractography,connectome \
+  --tractography-backend csd_act --connectome-backend auto \
   --brain-mask-backend provided --select-streamlines 1000000 --plan
 ```
 

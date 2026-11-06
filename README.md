@@ -233,7 +233,7 @@ The [first-workflow tutorial](docs/setup/QUICKSTART.md) includes a synthetic ins
 | Part | Default | Other choices |
 | --- | --- | --- |
 | Missing brain mask | PNL diffusion CNN; valid supplied masks are reused | SynthStrip, MRtrix, DIPY median-Otsu, supplied mask only |
-| Microstructure | DTI | Add Free-water, NODDI and/or DKI; select WLS/OLS or Python MK-Curve for DKI |
+| Microstructure | DTI | Add Free-water, NODDI and/or DKI; DKI uses the Python MK-Curve by default; WLS or OLS are options |
 | Tractography | MRtrix3 CSD/ACT | DTI deterministic, UKF, SAF |
 | Fiber bundles | Official WMQL multi-bundle queries | WMQL subset selection, WMA, TractCloud |
 

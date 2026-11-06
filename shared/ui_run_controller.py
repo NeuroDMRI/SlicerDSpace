@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
@@ -58,14 +59,16 @@ class RunSelection:
     ddseg_device: str
     surface_device: str
     connectome_backend: str
-    connectome_compress_mrtrix_dense: bool
+    connectome_compress_mrtrix_dense: Optional[bool]
     preprocessing_backend: str = "dipy"
     wma_input_tractography_text: str = ""
     topup: TopupParameters = TopupParameters()
     brain_mask_backend: str = "pnl_cnn"
     brain_mask_device: str = "auto"
     microstructure_dki: bool = False
-    dki_fit_method: str = "WLS"
+    microstructure_ifw: bool = False
+    ifw_echo_time_ms: Optional[float] = None
+    dki_fit_method: str = "MKCURVE"
     wmql_query_preset: str = "official"
     wmql_query_selection: str = ""
     wma_atlas: str = "org"
@@ -168,6 +171,37 @@ def microstructure_optional_stage_flags(
     return "freewater" in stages, "noddi" in stages, "dki" in stages
 
 
+def microstructure_ifw_enabled(stages_text: str, *, legacy_ifw: bool = False) -> bool:
+    """True when the iFW stage is selected (T-C2). The three-flag API above keeps its shape."""
+
+    text = (stages_text or "").strip().lower()
+    if not text:
+        return bool(legacy_ifw)
+    return "ifw" in canonical_microstructure_stages(text)
+
+
+def compress_mrtrix_dense_value(state: Any) -> Optional[bool]:
+    """Three GUI states to the run value (T-N1): "on" -> True, "off" -> False, anything else "unset" -> None."""
+
+    text = str(state or "unset").strip().lower()
+    return {"on": True, "off": False}.get(text)
+
+
+def parse_ifw_echo_time_ms(text: Any) -> Optional[float]:
+    """Echo time (ms) from the GUI field: empty is unset (None); anything else must be a number >= 0."""
+
+    value = str(text if text is not None else "").strip()
+    if not value:
+        return None
+    try:
+        number = float(value)
+    except ValueError:
+        raise ValueError("Echo time (ms) must be a number, for example 89.5") from None
+    if not math.isfinite(number) or number < 0:
+        raise ValueError("Echo time (ms) must be zero or a positive number")
+    return number
+
+
 def selected_workflows(flags: ProductTargetFlags) -> list[str]:
     """Return human-readable selected workflow names."""
 
@@ -223,6 +257,7 @@ def selected_closure(
     microstructure_noddi: bool,
     microstructure_dki: bool = False,
     provided_tractography: tuple[str, ...] = (),
+    microstructure_ifw: bool = False,
 ):
     """Return the prerequisite closure (C1) of the ticked targets.
 
@@ -255,6 +290,7 @@ def selected_closure(
         microstructure_run_free_water=microstructure_freewater,
         microstructure_run_noddi=microstructure_noddi,
         microstructure_run_dki=microstructure_dki,
+        microstructure_run_ifw=microstructure_ifw,
         provided_tractography=tuple(provided_tractography),
     )
 
@@ -268,6 +304,7 @@ def selected_product_targets(
     microstructure_noddi: bool,
     microstructure_dki: bool = False,
     provided_tractography: tuple[str, ...] = (),
+    microstructure_ifw: bool = False,
 ) -> tuple[str, ...]:
     """Return normalized product targets after backend expansion and prerequisite closure."""
 
@@ -278,6 +315,7 @@ def selected_product_targets(
         microstructure_freewater=microstructure_freewater,
         microstructure_noddi=microstructure_noddi,
         microstructure_dki=microstructure_dki,
+        microstructure_ifw=microstructure_ifw,
         provided_tractography=provided_tractography,
     ).targets
 
@@ -478,6 +516,8 @@ def build_single_subject_run_kwargs(
         "microstructure_run_free_water": selection.microstructure_freewater,
         "microstructure_run_noddi": selection.microstructure_noddi,
         "microstructure_run_dki": selection.microstructure_dki,
+        "microstructure_run_ifw": selection.microstructure_ifw,
+        "microstructure_ifw_echo_time_ms": selection.ifw_echo_time_ms,
         "microstructure_dki_fit_method": selection.dki_fit_method,
         "microstructure_dki_matlab_executable": external_paths.get("dki_matlab_executable"),
         "microstructure_dki_mkcurve_root": external_paths.get("dki_mkcurve_root"),
@@ -542,6 +582,8 @@ def build_batch_run_kwargs(selection: RunSelection, *, batch_root: Path) -> dict
         "microstructure_run_free_water": selection.microstructure_freewater,
         "microstructure_run_noddi": selection.microstructure_noddi,
         "microstructure_run_dki": selection.microstructure_dki,
+        "microstructure_run_ifw": selection.microstructure_ifw,
+        "microstructure_ifw_echo_time_ms": selection.ifw_echo_time_ms,
         "microstructure_dki_fit_method": selection.dki_fit_method,
         "select_streamlines": max(1, int(selection.select_streamlines)),
         "ddseg_device": selection.ddseg_device,
@@ -794,7 +836,19 @@ def microstructure_stages_arg(common_run_kwargs: dict[str, Any]) -> str:
         stages.append("noddi")
     if common_run_kwargs.get("microstructure_run_dki"):
         stages.append("dki")
+    if common_run_kwargs.get("microstructure_run_ifw"):
+        stages.append("ifw")
     return ",".join(stages)
+
+
+def _append_ifw_args(args, common_run_kwargs):
+    """Forward the iFW echo time (ms) and the researcher T2 values; none is added when unset."""
+    for key, flag in (("microstructure_ifw_echo_time_ms", "--ifw-echo-time-ms"),
+                      ("microstructure_ifw_t2_gm_ms", "--ifw-t2-gm-ms"),
+                      ("microstructure_ifw_t2_csf_ms", "--ifw-t2-csf-ms")):
+        value = common_run_kwargs.get(key)
+        if value is not None:
+            args.extend([flag, str(value)])
 
 
 def build_background_cli_args(
@@ -854,9 +908,9 @@ def build_background_cli_args(
         args.extend(["--output-root", _path_text(output_root)])
     _append_ukf_args(args, common_run_kwargs)
     args.extend(["--microstructure-stages", microstructure_stages_arg(common_run_kwargs)])
-    args.extend(["--dki-fit-method", str(common_run_kwargs.get("microstructure_dki_fit_method", "WLS"))])
-    if common_run_kwargs.get("connectome_compress_mrtrix_dense"):
-        args.append("--compress-mrtrix-dense")
+    args.extend(["--dki-fit-method", str(common_run_kwargs.get("microstructure_dki_fit_method", "MKCURVE"))])
+    _append_compress_arg(args, common_run_kwargs)
+    _append_ifw_args(args, common_run_kwargs)
     wma_input = common_run_kwargs.get("wma_input_tractography")
     if wma_input is not None:
         args.extend(["--wma-input-tractography", _path_text(wma_input)])
@@ -924,9 +978,9 @@ def build_batch_background_cli_args(
         args.extend(["--output-root", _path_text(output_root)])
     _append_ukf_args(args, common_run_kwargs)
     args.extend(["--microstructure-stages", microstructure_stages_arg(common_run_kwargs)])
-    args.extend(["--dki-fit-method", str(common_run_kwargs.get("microstructure_dki_fit_method", "WLS"))])
-    if common_run_kwargs.get("connectome_compress_mrtrix_dense"):
-        args.append("--compress-mrtrix-dense")
+    args.extend(["--dki-fit-method", str(common_run_kwargs.get("microstructure_dki_fit_method", "MKCURVE"))])
+    _append_compress_arg(args, common_run_kwargs)
+    _append_ifw_args(args, common_run_kwargs)
     # Forwarded unchanged to every subject's run_subject_pipeline.py call.
     args.extend(topup_cli_args(topup_parameters_from_run_kwargs(common_run_kwargs)))
     _append_optional_path_args(args, external_paths)
@@ -957,6 +1011,14 @@ def _ukf_run_options(selection):
     except (OSError, RuntimeError):
         converter = None
     return dict(ukf_parameters=options, ukf_executable=binary, dwiconvert_executable=converter)
+
+
+
+def _append_compress_arg(args, common_run_kwargs):
+    """None = not set (nothing is passed); True and False are passed explicitly."""
+    value = common_run_kwargs.get("connectome_compress_mrtrix_dense")
+    if value is not None:
+        args.append("--compress-mrtrix-dense" if value else "--no-compress-mrtrix-dense")
 
 
 def _append_ukf_args(args, kwargs):

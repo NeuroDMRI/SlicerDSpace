@@ -86,8 +86,11 @@ from shared.ui_run_controller import (
     default_run_name_for_backend,
     extract_background_manifest_path,
     is_auto_generated_run_name,
+    compress_mrtrix_dense_value,
+    microstructure_ifw_enabled,
     microstructure_stage_flags,
     microstructure_optional_stage_flags,
+    parse_ifw_echo_time_ms,
     parse_manifest_line,
     blocked_plan_items,
     blocked_plan_log_text,
@@ -199,10 +202,26 @@ class SharedWidgetMixin:
         self._connect_topup_ui()
 
     def _connect_microstructure_stage_ui(self) -> None:
-        for name in ("orchestrationFreeWaterCheckBox", "orchestrationNoddiCheckBox", "orchestrationDkiCheckBox"):
+        for name in ("orchestrationFreeWaterCheckBox", "orchestrationNoddiCheckBox", "orchestrationDkiCheckBox",
+                     "orchestrationIfwCheckBox"):
             checkbox = getattr(self.ui, name, None)
             if checkbox is not None:
                 checkbox.toggled.connect(self._onOptionalMicrostructureStageChanged)
+        # T-C2: the T2 values are fixed in code (Cho et al.); the GUI only shows them.
+        from microstructure.ifw import IFW_T2_CSF_MS, IFW_T2_GM_MS
+        for name, value in (("orchestrationIfwT2TissueLineEdit", IFW_T2_GM_MS),
+                            ("orchestrationIfwT2CsfLineEdit", IFW_T2_CSF_MS)):
+            field = getattr(self.ui, name, None)
+            if field is not None:
+                field.setText(f"{value:g}")
+                field.setReadOnly(True)
+        echo_time = getattr(self.ui, "orchestrationIfwEchoTimeLineEdit", None)
+        if echo_time is not None:
+            echo_time.textChanged.connect(self._onIfwEchoTimeChanged)
+
+    def _onIfwEchoTimeChanged(self, text: str) -> None:
+        self._update_parameter_node("orchestrationIfwEchoTimeMs", str(text or "").strip())
+        self._schedule_common_user_settings_save()
 
     def _onOptionalMicrostructureStageChanged(self, _checked: bool) -> None:
         node = self._parameterNode
@@ -213,6 +232,7 @@ class SharedWidgetMixin:
             ("orchestrationFreeWaterCheckBox", "freewater"),
             ("orchestrationNoddiCheckBox", "noddi"),
             ("orchestrationDkiCheckBox", "dki"),
+            ("orchestrationIfwCheckBox", "ifw"),
         ):
             checkbox = getattr(self.ui, name, None)
             if checkbox is not None and checkbox.isChecked():
@@ -222,6 +242,7 @@ class SharedWidgetMixin:
             node.orchestrationRunFreeWater = "freewater" in stages
             node.orchestrationRunNoddi = "noddi" in stages
             node.orchestrationRunDki = "dki" in stages
+            node.orchestrationRunIfw = "ifw" in stages
 
     def _connect_brain_mask_ui(self) -> None:
         """Keep readable masking labels separate from canonical backend values."""
@@ -620,8 +641,8 @@ class SharedWidgetMixin:
                 stages = defaults.get("microstructure_stages") or ["dti"]
                 node.wmaAtlas = str(defaults.get("wma_atlas") or "org")
                 node.orchestrationMicrostructureStages = ",".join(canonical_microstructure_stages(stages))
-                node.orchestrationDkiFitMethod = str(defaults.get("dki_fit_method") or "WLS").upper()
-                node.connectomeBackend = str(defaults.get("connectome_backend") or node.connectomeBackend or "python")
+                node.orchestrationDkiFitMethod = str(defaults.get("dki_fit_method") or "MKCURVE").upper()
+                node.connectomeBackend = str(defaults.get("connectome_backend") or node.connectomeBackend or "auto")
                 node.orchestrationSelectStreamlines = int(
                     defaults.get("select_streamlines") or node.orchestrationSelectStreamlines or 1_000_000
                 )
@@ -635,7 +656,8 @@ class SharedWidgetMixin:
                     node.targetParcellation = "parcellation" in targets
                     node.targetSegmentation = "segmentation" in targets
                     node.targetMicrostructure = bool(
-                        targets & {"microstructure", "microstructure_freewater", "microstructure_noddi", "microstructure_dki"}
+                        targets & {"microstructure", "microstructure_freewater", "microstructure_noddi", "microstructure_dki",
+                                "microstructure_ifw"}
                     )
                     node.targetTractography = bool(targets & {"tractography", "saf"})
                     node.targetBundles = bool(targets & {"bundles", "wma", "tractcloud"})
@@ -681,8 +703,8 @@ class SharedWidgetMixin:
                         "bundle_backend": node.orchestrationBundleBackend or "wmql",
                         "wma_atlas": getattr(node, "wmaAtlas", "org") or "org",
                         "microstructure_stages": stages or ["dti"],
-                        "dki_fit_method": getattr(node, "orchestrationDkiFitMethod", "WLS") or "WLS",
-                        "connectome_backend": node.connectomeBackend or "python",
+                        "dki_fit_method": getattr(node, "orchestrationDkiFitMethod", "MKCURVE") or "MKCURVE",
+                        "connectome_backend": node.connectomeBackend or "auto",
                         "select_streamlines": int(node.orchestrationSelectStreamlines),
                         "auto_install_python_dependencies": bool(node.autoInstallPythonDependencies),
                     },
@@ -1487,7 +1509,7 @@ class SharedWidgetMixin:
                 tractography=self._tractography_backend_text(),
                 bundles=self._bundle_backend_text(),
                 microstructure_stages=self._microstructure_stages_text(),
-                connectome=(self._parameterNode.connectomeBackend or "python").strip() or "python",
+                connectome=(self._parameterNode.connectomeBackend or "auto").strip() or "auto",
             ),
         )
         label.setText(text)
@@ -1701,7 +1723,7 @@ class SharedWidgetMixin:
             "tractcloud_device": "cuda" if (node.ddsegDevice or "auto").startswith("cuda") else node.ddsegDevice or "auto",
             "brain_mask_required": bool(brain_mask_required),
             "tractography_backend": self._closure_tractography_backend_text(),
-            "connectome_backend": (node.connectomeBackend or "python").strip(),
+            "connectome_backend": (node.connectomeBackend or "auto").strip(),
             "ddseg_device": (node.ddsegDevice or "auto").strip() or "auto",
             "surface_device": (node.device or "auto").strip() or "auto",
             "python_path_entries": tuple(
@@ -1712,7 +1734,7 @@ class SharedWidgetMixin:
             "microstructure_run_free_water": self._microstructure_stage_flags()[0],
             "microstructure_run_noddi": self._microstructure_stage_flags()[1],
             "microstructure_run_dki": self._microstructure_dki_enabled(),
-            "dki_fit_method": getattr(node, "orchestrationDkiFitMethod", "WLS") or "WLS",
+            "dki_fit_method": getattr(node, "orchestrationDkiFitMethod", "MKCURVE") or "MKCURVE",
             **external_paths,
         }
 
@@ -2070,6 +2092,10 @@ class SharedWidgetMixin:
                 (bool(node.targetMicrostructure), ('parallelModelsLabel','parallelModelsSpinBox')),
                 (bool(node.targetMicrostructure) and self._microstructure_dki_enabled(),
                  ("orchestrationDkiFitMethodLabel", "orchestrationDkiFitMethodComboBox")),
+                (bool(node.targetMicrostructure) and self._microstructure_ifw_enabled(),
+                 ("orchestrationIfwEchoTimeLabel", "orchestrationIfwEchoTimeLineEdit",
+                  "orchestrationIfwT2TissueLabel", "orchestrationIfwT2TissueLineEdit",
+                  "orchestrationIfwT2CsfLabel", "orchestrationIfwT2CsfLineEdit")),
                 (bool(node.targetBundles), ("orchestrationBundleBackendLabel", "orchestrationBundleBackendComboBox")),
                 (bool(node.targetTractography or node.targetBundles or node.targetConnectome), ("orchestrationTractographyBackendLabel", "orchestrationTractographyBackendComboBox")),
                 (False, ("batchModeLabel", "batchModeCheckBox", "batchRootLabel", "batchRootPath", "batchSizeLabel", "batchSizeSpinBox", "batchArrangeInputsLabel", "batchArrangeInputsComboBox")),
@@ -2201,6 +2227,7 @@ class SharedWidgetMixin:
             microstructure_freewater=freewater,
             microstructure_noddi=noddi,
             microstructure_dki=self._microstructure_dki_enabled(),
+            microstructure_ifw=self._microstructure_ifw_enabled(),
             provided_tractography=self._provided_tractography(),
         )
 
@@ -2277,6 +2304,8 @@ class SharedWidgetMixin:
             stages.append("noddi")
         if bool(getattr(node, "orchestrationRunDki", False)):
             stages.append("dki")
+        if bool(getattr(node, "orchestrationRunIfw", False)):
+            stages.append("ifw")
         return ",".join(stages)
 
     def _microstructure_stage_flags(self) -> tuple[bool, bool]:
@@ -2295,6 +2324,20 @@ class SharedWidgetMixin:
 
     def _microstructure_dki_enabled(self) -> bool:
         return microstructure_optional_stage_flags(self._microstructure_stages_text())[2]
+
+    def _microstructure_ifw_enabled(self) -> bool:
+        node = self._parameterNode
+        return microstructure_ifw_enabled(
+            self._microstructure_stages_text(),
+            legacy_ifw=bool(getattr(node, "orchestrationRunIfw", False)) if node else False,
+        )
+
+    def _ifw_echo_time_ms(self) -> Optional[float]:
+        """Echo time (ms) typed by the user; None when iFW is off or the field is empty. Raises ValueError if invalid."""
+        node = self._parameterNode
+        if not node or not self._microstructure_ifw_enabled():
+            return None
+        return parse_ifw_echo_time_ms(getattr(node, "orchestrationIfwEchoTimeMs", ""))
 
     def _apply_shared_inputs_to_workflow_fields(self) -> None:
         """Populate empty product-specific fields from the shared subject setup."""
@@ -2971,6 +3014,11 @@ class SharedWidgetMixin:
         except ValueError as exc:
             self._setStatus('error', str(exc))
             return
+        try:
+            ifw_echo_time_ms = self._ifw_echo_time_ms()
+        except ValueError as exc:
+            self._setStatus("error", str(exc))
+            return
         self._save_common_user_settings()
 
         self._apply_shared_inputs_to_workflow_fields()
@@ -3008,12 +3056,15 @@ class SharedWidgetMixin:
             ukf_parameters_text=getattr(self._parameterNode, 'ukfParameters', '{}'),
             microstructure_noddi=run_noddi,
             microstructure_dki=self._microstructure_dki_enabled(),
-            dki_fit_method=getattr(self._parameterNode, "orchestrationDkiFitMethod", "WLS") or "WLS",
+            microstructure_ifw=self._microstructure_ifw_enabled(),
+            ifw_echo_time_ms=ifw_echo_time_ms,
+            dki_fit_method=getattr(self._parameterNode, "orchestrationDkiFitMethod", "MKCURVE") or "MKCURVE",
             select_streamlines=max(1, int(self._parameterNode.orchestrationSelectStreamlines)),
             ddseg_device=ddseg_device,
             surface_device=surface_device,
-            connectome_backend=(self._parameterNode.connectomeBackend or "python").strip(),
-            connectome_compress_mrtrix_dense=bool(self._parameterNode.connectomeCompressMrtrixDense),
+            connectome_backend=(self._parameterNode.connectomeBackend or "auto").strip(),
+            connectome_compress_mrtrix_dense=compress_mrtrix_dense_value(
+                getattr(self._parameterNode, "connectomeCompressMrtrixDenseState", "unset")),
             preprocessing_backend=(self._parameterNode.preprocessingBackend or "dipy").strip() or "dipy",
             brain_mask_backend=(getattr(self._parameterNode, "brainMaskBackend", "pnl_cnn") or "pnl_cnn").strip(),
             brain_mask_device=(getattr(self._parameterNode, "brainMaskDevice", "auto") or "auto").strip(),

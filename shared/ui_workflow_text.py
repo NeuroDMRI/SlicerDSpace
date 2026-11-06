@@ -60,12 +60,19 @@ WORKFLOW_TEXT = {
         "microstructure_fw_option": "FW",
         "microstructure_noddi_option": "NODDI",
         "microstructure_dki_option": "DKI",
+        "microstructure_ifw_option": "iFW",
         "microstructure_fw_tooltip": "Optional Free Water model. Independent of NODDI and DKI; off by default.",
         "microstructure_noddi_tooltip": "Optional NODDI model. Independent of Free Water and DKI; off by default.",
         "microstructure_dki_tooltip": "Optional diffusion kurtosis analysis. Standard DKI is not MK-Curve; off by default.",
+        "microstructure_ifw_tooltip": "Optional iFW: free-water fraction corrected for T2 weighting, minus the CSF fraction. Also runs Free Water and DDSeg; needs the echo time; off by default.",
+        "ifw_echo_time": "Echo time (ms)",
+        "ifw_echo_time_tooltip": "Echo time of the DWI in ms. Leave empty to read EchoTime from the DWI JSON sidecar; with neither, the iFW stage stops and the other stages continue. There is no default.",
+        "ifw_t2_tissue": "iFW tissue T2 (ms)",
+        "ifw_t2_csf": "iFW CSF T2 (ms)",
+        "ifw_t2_tooltip": "Fixed in code: T2 of tissue 95 ms and of CSF 1500 ms (Cho et al. preprint, Supplementary Methods 1). Read-only here; researchers can use --ifw-t2-gm-ms and --ifw-t2-csf-ms on the command line.",
         "dki_fit_method": "DKI fit method",
         "dki_fit_method_tooltip": (
-            "WLS/OLS are standard DKI fits. MKCURVE uses the bundled Python port without MATLAB. "
+            "MKCURVE (default) uses the bundled Python port without MATLAB; if it stops, re-run with WLS. WLS/OLS are standard DKI fits. "
             "MKCURVE_MATLAB is an optional author reference; configure its paths under Environment and installation > More options. "
             "All methods require eligible multi-shell data; no silent fallback."
         ),
@@ -148,12 +155,19 @@ WORKFLOW_TEXT = {
         "microstructure_fw_option": "FW",
         "microstructure_noddi_option": "NODDI",
         "microstructure_dki_option": "DKI",
+        "microstructure_ifw_option": "iFW",
         "microstructure_fw_tooltip": "可选自由水模型，独立于 NODDI 和 DKI，默认关闭。",
         "microstructure_noddi_tooltip": "可选 NODDI 模型，独立于自由水和 DKI，默认关闭。",
         "microstructure_dki_tooltip": "可选扩散峰度分析，标准 DKI 不等于 MK-Curve，默认关闭。",
+        "microstructure_ifw_tooltip": "可选 iFW：按 T2 加权校正的自由水分数，再减去 CSF 分数。会同时运行自由水和 DDSeg；需要回波时间；默认关闭。",
+        "ifw_echo_time": "回波时间 (ms)",
+        "ifw_echo_time_tooltip": "DWI 的回波时间，单位 ms。留空则读取 DWI JSON 附属文件中的 EchoTime；两者都没有时 iFW 步骤停止，其他步骤继续。没有默认值。",
+        "ifw_t2_tissue": "iFW 组织 T2 (ms)",
+        "ifw_t2_csf": "iFW CSF T2 (ms)",
+        "ifw_t2_tooltip": "固定在代码中：组织 T2 为 95 ms，CSF T2 为 1500 ms（Cho 等预印本，补充方法 1）。此处只读；研究者可在命令行使用 --ifw-t2-gm-ms 和 --ifw-t2-csf-ms。",
         "dki_fit_method": "DKI 拟合方法",
         "dki_fit_method_tooltip": (
-            "WLS/OLS 是标准 DKI 拟合。MKCURVE 使用内置 Python 移植版，不需要 MATLAB。"
+            "MKCURVE（默认）使用内置 Python 移植版，不需要 MATLAB；若它停止，请改用 WLS 重跑。WLS/OLS 是标准 DKI 拟合。"
             "MKCURVE_MATLAB 是可选的作者代码对照后端，可在高级设置中配置外部路径。"
             "所有方法都检查多 shell 数据条件，不会静默回退。"
         ),
@@ -205,6 +219,10 @@ WORKFLOW_TEXT_BINDINGS = {
     "orchestrationFreeWaterCheckBox": "microstructure_fw_option",
     "orchestrationNoddiCheckBox": "microstructure_noddi_option",
     "orchestrationDkiCheckBox": "microstructure_dki_option",
+    "orchestrationIfwCheckBox": "microstructure_ifw_option",
+    "orchestrationIfwEchoTimeLabel": "ifw_echo_time",
+    "orchestrationIfwT2TissueLabel": "ifw_t2_tissue",
+    "orchestrationIfwT2CsfLabel": "ifw_t2_csf",
     "orchestrationDkiFitMethodLabel": "dki_fit_method",
 }
 
@@ -214,6 +232,10 @@ WORKFLOW_TOOLTIP_BINDINGS = {
     "orchestrationFreeWaterCheckBox": "microstructure_fw_tooltip",
     "orchestrationNoddiCheckBox": "microstructure_noddi_tooltip",
     "orchestrationDkiCheckBox": "microstructure_dki_tooltip",
+    "orchestrationIfwCheckBox": "microstructure_ifw_tooltip",
+    "orchestrationIfwEchoTimeLineEdit": "ifw_echo_time_tooltip",
+    "orchestrationIfwT2TissueLineEdit": "ifw_t2_tooltip",
+    "orchestrationIfwT2CsfLineEdit": "ifw_t2_tooltip",
     "orchestrationDkiFitMethodComboBox": "dki_fit_method_tooltip",
     "targetPreprocessingCheckBox": "preprocessing_tooltip",
     "targetParcellationCheckBox": "parcellation_tooltip",

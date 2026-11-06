@@ -213,7 +213,7 @@ sub-01/
 | 部分 | 默认 | 其他选项 |
 | --- | --- | --- |
 | 缺失脑掩膜 | PNL diffusion CNN；有效的已有掩膜直接复用 | SynthStrip、MRtrix、DIPY median-Otsu、仅用已有掩膜 |
-| 微结构 | DTI | 加选 Free-water、NODDI、DKI；DKI 可选 WLS/OLS 或 Python MK-Curve |
+| 微结构 | DTI | 加选 Free-water、NODDI、DKI；DKI 默认使用 Python MK-Curve，也可选 WLS/OLS |
 | 纤维追踪 | MRtrix3 CSD/ACT | DTI 确定性追踪、UKF、SAF |
 | 束分析 | 官方 WMQL 多束查询 | WMQL 束子集、WMA、TractCloud |
 

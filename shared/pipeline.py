@@ -822,14 +822,12 @@ def _ensure_native_dti_bundle(raw, fit_method, reuse, log):
 
     receipt_path = bundle.bundle_dir / "native_dti_receipt.json"
     receipt_path.unlink(missing_ok=True)
-    scalar_outputs = [
-        ("FractionalAnisotropy", bundle.fa_nrrd_path),
-        ("Trace", bundle.trace_nrrd_path),
-        ("MeanDiffusivity", bundle.mean_diffusivity_nrrd_path),
-        ("MinEigenvalue", bundle.min_eig_nrrd_path),
-        ("MidEigenvalue", bundle.mid_eig_nrrd_path),
-        ("MaxEigenvalue", bundle.max_eig_nrrd_path),
-    ]
+    scalar_paths = {
+        "FractionalAnisotropy": bundle.fa_nrrd_path, "Trace": bundle.trace_nrrd_path,
+        "MeanDiffusivity": bundle.mean_diffusivity_nrrd_path, "MinEigenvalue": bundle.min_eig_nrrd_path,
+        "MidEigenvalue": bundle.mid_eig_nrrd_path, "MaxEigenvalue": bundle.max_eig_nrrd_path,
+    }
+    scalar_outputs = [(name, scalar_paths[name]) for name in NATIVE_TENSOR_SCALARS]  # N5: one list of scalar names
     _run_cli(
         native_tensor_command(
             resolve_pythonslicer_executable(),

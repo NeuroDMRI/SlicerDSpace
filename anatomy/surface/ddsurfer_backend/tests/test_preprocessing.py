@@ -186,6 +186,37 @@ class PreflightToolTests(unittest.TestCase):
                 self.assertNotIn('PythonSlicer', ' '.join(map(str, slicer_files(required=False))))
 
 
+class PythonSlicerLayoutTests(unittest.TestCase):
+    """F2: the backend finds PythonSlicer in the Linux, macOS .app and Windows layouts."""
+
+    def tree(self, root, relative):
+        path = root / relative
+        path.parent.mkdir(parents=True)
+        path.write_text('#!/bin/sh\n')
+        return path
+
+    def test_f2_resolver_handles_linux_macos_app_and_windows_trees(self):
+        from preprocessing.dti import pythonslicer
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            linux = self.tree(root / 'linux', 'bin/PythonSlicer')
+            mac = self.tree(root / 'Slicer.app', 'Contents/bin/PythonSlicer')
+            windows = self.tree(root / 'windows', 'bin/PythonSlicer.exe')
+            self.assertEqual(pythonslicer(root / 'linux'), linux)
+            self.assertEqual(pythonslicer(root / 'Slicer.app'), mac)  # the .app itself
+            self.assertEqual(pythonslicer(root / 'Slicer.app/Contents'), mac)
+            (root / 'Slicer.app/Contents/MacOS').mkdir()
+            self.assertEqual(pythonslicer(root / 'Slicer.app/Contents/MacOS'), mac)
+            self.assertEqual(pythonslicer(root / 'windows'), windows)
+            with self.assertRaisesRegex(FileNotFoundError, 'PythonSlicer'):
+                pythonslicer(root / 'empty')
+
+    def test_f2_dti_sh_finds_the_macos_app_layout_of_pythonslicer(self):
+        text = (ROOT / 'preprocessing/dti.sh').read_text()
+        self.assertIn('Contents/bin/PythonSlicer', text)
+        self.assertIn('bin/PythonSlicer.exe', text)
+
+
 class DtiShellTests(unittest.TestCase):
     def setup(self, root, pythonslicer):
         files = make_bundle(root / 'inputs')

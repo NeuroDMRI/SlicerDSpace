@@ -91,11 +91,16 @@ class CommandBuilderTests(unittest.TestCase):
         self.assertNotIn("--threads", command)
 
     def test_the_command_parses_with_the_script_parser(self) -> None:
-        command = teem_dti.estimate_command("py", "dwi.nhdr", "dti.nhdr", "b0.nhdr", "LS",
-                                            [("Trace", "t.nhdr")], receipt="r.json")
-        with mock.patch.object(teem_dti, "estimate_file", return_value={}) as estimate, \
-                mock.patch.object(teem_dti, "scalar_files", return_value={}) as scalars:
-            self.assertEqual(teem_dti.main(command[2:]), 0)
+        # F4: the receipt goes to a temporary folder, not the working directory.
+        with tempfile.TemporaryDirectory() as tmp:
+            receipt = Path(tmp) / "r.json"
+            command = teem_dti.estimate_command("py", "dwi.nhdr", "dti.nhdr", "b0.nhdr", "LS",
+                                                [("Trace", "t.nhdr")], receipt=str(receipt))
+            with mock.patch.object(teem_dti, "estimate_file", return_value={}) as estimate, \
+                    mock.patch.object(teem_dti, "scalar_files", return_value={}) as scalars:
+                self.assertEqual(teem_dti.main(command[2:]), 0)
+            self.assertTrue(receipt.is_file())
+        self.assertFalse((Path.cwd() / "r.json").exists(), "the parser test must not write into the working directory")
         self.assertEqual(estimate.call_args.args[:4], ("dwi.nhdr", "dti.nhdr", "b0.nhdr", "LS"))
         self.assertEqual(scalars.call_args.args[1], [("Trace", "t.nhdr")])
 

@@ -31,5 +31,5 @@ The reference times exclude its six scalar CLI runs (not timed); each of them re
 
 ## Self-check on other platforms
 
-- macOS arm64, Slicer 5.12 (`libteem.1.dylib`, Teem 1.12.0): `teem_dti.py selfcheck` status ok (LS error 3.4e-11, WLS error 1.4e-11 on a synthetic 12-direction, two-shell signal plus b0).
+- macOS, x86_64 Slicer 5.12.4 under Rosetta 2 on Apple Silicon (`libteem.1.dylib`, Teem 1.12.0): `teem_dti.py selfcheck` status ok (LS error 3.4e-11, WLS error 1.4e-11 on a synthetic 12-direction, two-shell signal plus b0).
 - Windows: pending (the Teem library file name has not been confirmed on a Windows Slicer).

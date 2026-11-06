@@ -205,6 +205,9 @@ class DDSurferSyncTests(unittest.TestCase):
             self.assertEqual(command[command.index('--dwi') + 1], bundle.dwi_path)
             self.assertEqual(command[command.index('--precision') + 1], 'bf16')
             self.assertEqual(env['DTI_REFERENCE_IMAGE'], '/atlas')
+            # N9: the backend learns where shared/teem_dti.py is, even when deployed away from this repository.
+            self.assertTrue(Path(env['SLICERDSPACE_TEEM_DTI_SCRIPT']).is_file())
+            self.assertEqual(Path(env['SLICERDSPACE_TEEM_DTI_SCRIPT']), ROOT / 'shared/teem_dti.py')
             self.assertIn('--resume', command)
             self.assertEqual(command[command.index('--cpu-threads') + 1], '2')
             self.assertEqual(command[command.index('--max-gpu-gib') + 1], '18.0')

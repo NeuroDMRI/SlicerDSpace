@@ -74,6 +74,13 @@ class NativeTensorBundleTests(unittest.TestCase):
             "MaxEigenvalue": str(bundle.max_eig_nrrd_path)})
         self.assertEqual(command[-3:], [str(bundle.dwi_nhdr_path), str(bundle.dti_nrrd_path), str(bundle.b0_nrrd_path)])
 
+    def test_n5_the_bundle_command_takes_its_scalar_names_from_the_shared_constant(self) -> None:
+        reversed_names = tuple(reversed(SIX_SCALARS))
+        with patch.object(pipeline, "NATIVE_TENSOR_SCALARS", reversed_names):
+            _raw, _bundle, commands = self.build("wls")
+        names = [item.split("=", 1)[0] for index, item in enumerate(commands[0]) if commands[0][index - 1] == "--scalar"]
+        self.assertEqual(tuple(names), reversed_names)
+
     def test_w1_ls_fit_uses_the_ls_enumeration(self) -> None:
         _raw, _bundle, commands = self.build("ls")
         self.assertEqual(commands[0][4], "LS")
@@ -159,6 +166,53 @@ class DDParcelTensorStepTests(unittest.TestCase):
         self.assertEqual(scalars["MeanDiffusivity"], str(out / "sub-dti-MeanDiffusivity.nhdr"))
         self.assertEqual(command[-3:], [str(root / "in/sub/T1w/Diffusion/sub.nhdr"),
                                         str(out / "sub-dti.nhdr"), str(out / "sub-b0.nhdr")])
+
+
+class DDParcelCompletenessTests(unittest.TestCase):
+    """N3: the DDParcel tensor step reruns when any scalar file it needs is missing."""
+
+    def first_command(self, remove=None):
+        from anatomy.parcellation import pipeline as parcel
+
+        commands = []
+
+        def stop_after_first(command, log=None):
+            commands.append(list(command))
+            raise _StopAfterTensorStep
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            diffusion = root / "in" / "sub" / "T1w" / "Diffusion"
+            diffusion.mkdir(parents=True)
+            for name in ("data.nii.gz", "bvals", "bvecs", "nodif_brain_mask.nii.gz", "sub-mask.nhdr"):
+                (diffusion / name).write_bytes(b"x")
+            out = root / "out" / "sub"
+            out.mkdir(parents=True)
+            (out / "sub-b0.nhdr").write_bytes(b"x")
+            for name in SIX_SCALARS:
+                for suffix in (".nhdr", ".nii.gz"):
+                    (out / f"sub-dti-{name}{suffix}").write_bytes(b"x")
+            if remove:
+                (out / remove).unlink()
+            atlas = root / "atlas.nii.gz"
+            atlas.write_bytes(b"x")
+            config = parcel.DDParcelConfig("sub", root / "in", root / "out", atlas)
+            with patch.object(parcel, "resolve_pythonslicer_executable", return_value="/slicer/bin/PythonSlicer",
+                              create=True), \
+                    patch.object(parcel, "resolve_cli_executable", return_value="/cli/BRAINSFit"), \
+                    patch.object(parcel, "_run_cli", side_effect=stop_after_first):
+                with self.assertRaises(_StopAfterTensorStep):
+                    parcel.run_ddparcel(config)
+        return commands[0]
+
+    def test_n3_complete_outputs_skip_the_tensor_fit(self) -> None:
+        self.assertNotEqual(Path(self.first_command()[1]), TEEM_SCRIPT)
+
+    def test_n3_a_missing_scalar_header_refits(self) -> None:
+        self.assertEqual(Path(self.first_command(remove="sub-dti-Trace.nhdr")[1]), TEEM_SCRIPT)
+
+    def test_n3_a_missing_scalar_nifti_refits(self) -> None:
+        self.assertEqual(Path(self.first_command(remove="sub-dti-MaxEigenvalue.nii.gz")[1]), TEEM_SCRIPT)
 
 
 class DetachedHeaderTests(unittest.TestCase):

@@ -14,7 +14,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
-from shared.external_process import interpreter_path, slicer_runtime_roots, text_subprocess_kwargs, python_tool_environment
+from shared.external_process import find_pythonslicer, interpreter_path, is_slicer_python, slicer_runtime_roots, text_subprocess_kwargs, python_tool_environment
 from shared.model_assets import model_asset_candidates, model_asset_path_or_none
 
 
@@ -2129,22 +2129,59 @@ def _teem_info_in_interpreter(python_path: Path) -> dict[str, str]:
     return {name: str(payload.get(name, "")) for name in ("teem_version", "library", "error")}
 
 
-def _native_tensor_status(targets: tuple[str, ...], python_executable: Optional[Path] = None, *,
+def _doctor_pythonslicer(config: "EnvironmentDoctorConfig") -> Optional[Path]:
+    """PythonSlicer that the native tensor fit will run in (D1), found from the settings, not from the doctor's Python.
+
+    Order: the configured Python when it is itself a PythonSlicer, the configured Slicer launcher,
+    SLICERDSPACE_SLICER_EXECUTABLE, SLICER_HOME / SLICERDSPACE_SLICER_HOME, then the common install paths.
+    """
+    configured = config.python_executable
+    if configured is not None and Path(configured).name in {"PythonSlicer", "PythonSlicer.exe"}:
+        return interpreter_path(configured)
+    launcher = _resolve_path(config.slicer_executable)
+    if launcher is None:
+        launcher, _ = _env_path_with_source("SLICERDSPACE_SLICER_EXECUTABLE")
+    homes: list[Path] = [launcher.parent] if launcher is not None else []
+    homes += [Path(os.environ[key]) for key in ("SLICER_HOME", "SLICERDSPACE_SLICER_HOME") if os.environ.get(key)]
+    if launcher is None:
+        common, _ = _first_existing_path(_common_slicer_executables(_effective_platform_name(config)), kind="file")
+        if common is not None:
+            homes.append(common.parent)
+    for home in homes:
+        found = find_pythonslicer(home)
+        if found is not None:
+            return interpreter_path(found)
+    return None
+
+
+def _native_tensor_status(targets: tuple[str, ...], config: Optional["EnvironmentDoctorConfig"] = None, *,
                           in_process: bool = False) -> DependencyStatus:
-    """The one requirement of the native tensor fit: Slicer core's Teem library loads in the selected Python."""
-    selected = interpreter_path(python_executable) if python_executable is not None else None
-    if not in_process and selected is not None and selected != interpreter_path(sys.executable):
-        info = _teem_info_in_interpreter(selected)
-    else:
+    """The one requirement of the native tensor fit: Teem loads in the PythonSlicer that runs the fit (D1, D6).
+
+    A Slicer process probes itself. Any other process probes the PythonSlicer found from the settings and never
+    loads Teem in its own interpreter, so a plain Python with SLICER_HOME set cannot report the fit as available.
+    """
+    if in_process or is_slicer_python(sys.executable):
+        probed: Optional[Path] = interpreter_path(sys.executable)
         info = _teem_info_in_process()
+    else:
+        probed = _doctor_pythonslicer(config) if config is not None else None
+        if probed is None:
+            info = {"teem_version": "", "library": "", "error":
+                    "PythonSlicer was not found. The native tensor fit runs in Slicer's PythonSlicer; "
+                    "set the Slicer executable (or SLICER_HOME) so the check can find it."}
+        else:
+            info = _teem_info_in_interpreter(probed)
     found = not info["error"] and bool(info["library"])
+    slicer_probed = probed is not None
     return DependencyStatus(
         key="native_tensor_fit", kind="setting", label="Native tensor fit (Slicer core Teem)",
         status="available" if found else "missing", required=True, targets=targets,
-        details={**info, "check": "Teem library load in the selected Python",
-                 "python_executable": (selected or Path(sys.executable)).as_posix()},
+        details={**info, "check": "Teem library load in Slicer's PythonSlicer", "notes": info["error"],
+                 "python_executable": probed.as_posix() if probed is not None else ""},
         install_group="slicer-runtime",
-        install_hint="" if found else "Run with Slicer's PythonSlicer",
+        # N1: the reason (searched roots, file names) reaches the panel and the install notes.
+        install_hint="" if found else (info["error"] if slicer_probed else "Run with Slicer's PythonSlicer"),
     )
 
 
@@ -2189,7 +2226,7 @@ def run_environment_doctor(config: EnvironmentDoctorConfig, *, _probe_cache=None
         if native_targets:
             # GUI session: the interpreter is Slicer's own, so the check runs in process.
             statuses += (_native_tensor_status(
-                native_targets, checked_python_path, in_process=config.loaded_slicer_modules is not None),)
+                native_targets, config, in_process=config.loaded_slicer_modules is not None),)
     if "microstructure_dki" in targets and config.dki_fit_method.upper().startswith("MKCURVE"):
         matlab_reference = config.dki_fit_method.upper() == "MKCURVE_MATLAB"
         if matlab_reference:

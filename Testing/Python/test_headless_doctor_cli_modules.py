@@ -30,12 +30,17 @@ class _FakeLibrary:
     _slicerdspace_path = "/slicer/lib/Teem-1.12.0/libteem.so"
 
 
-def _doctor(config: EnvironmentDoctorConfig, *, load=None, version="1.12.0"):
-    """Run the doctor with Teem loading faked: ``load`` is a callable that returns a library or raises."""
+def _doctor(config: EnvironmentDoctorConfig, *, load=None, version="1.12.0", slicer_process=True):
+    """Run the doctor with Teem loading faked: ``load`` is a callable that returns a library or raises.
+
+    ``slicer_process`` says whether the running interpreter counts as Slicer's (F1): only then does the doctor
+    load Teem in process. Otherwise it probes the PythonSlicer that it resolves from the settings.
+    """
     spec = _native_spec()
     load = load or (lambda: _FakeLibrary())
     with patch("shared.environment.build_dependency_specs", return_value=(spec,)), \
          patch("shared.environment._check_spec", return_value=_available(spec)), \
+         patch("shared.environment.is_slicer_python", return_value=slicer_process), \
          patch("shared.teem_dti.load_teem", side_effect=load), \
          patch("shared.teem_dti.teem_version", return_value=version):
         return run_environment_doctor(config)
@@ -58,9 +63,11 @@ class NativeTensorFitDoctorTests(unittest.TestCase):
         item = statuses["native_tensor_fit"]
         self.assertEqual(item.label, "Native tensor fit (Slicer core Teem)")
         self.assertEqual((item.kind, item.status, item.required, item.targets), ("setting", "missing", True, ("microstructure",)))
-        self.assertEqual(item.install_hint, "Run with Slicer's PythonSlicer")
         self.assertIn("Searched roots: /fake/Slicer", item.details["error"])  # D12: the message reaches the report
         self.assertIn("File names: libteem.so", item.details["error"])
+        # N1: the reason is in the panel text (notes) and in the install notes (install_hint), not a generic hint.
+        self.assertIn("Searched roots: /fake/Slicer", item.details["notes"])
+        self.assertIn("Searched roots: /fake/Slicer", item.install_hint)
         for key in self.old_keys:
             self.assertNotIn(key, statuses)
         self.assertEqual(report.blocker_count, 1)
@@ -73,7 +80,15 @@ class NativeTensorFitDoctorTests(unittest.TestCase):
         self.assertEqual(item.details["library"], _FakeLibrary._slicerdspace_path)
         self.assertEqual(report.blocker_count, 0)
 
-    def test_d6_check_runs_in_the_selected_interpreter(self) -> None:
+    @staticmethod
+    def _slicer_tree(root: Path) -> Path:
+        pythonslicer = root / "Slicer-5.10.0-linux-amd64" / "bin" / "PythonSlicer"
+        pythonslicer.parent.mkdir(parents=True)
+        pythonslicer.write_text("#!/bin/sh\n")
+        (pythonslicer.parent.parent / "Slicer").write_text("#!/bin/sh\n")
+        return pythonslicer
+
+    def test_d6_check_runs_in_the_selected_pythonslicer(self) -> None:
         selected = Path(tempfile.gettempdir()) / "selected-slicer" / "bin" / "PythonSlicer"
         payload = {"teem_version": "1.12.0", "library": "/selected/libteem.so", "error": ""}
         calls = []
@@ -88,40 +103,118 @@ class NativeTensorFitDoctorTests(unittest.TestCase):
         config = EnvironmentDoctorConfig(targets=("microstructure",), repo_root=Path("."),
                                          check_slicer_cli_modules=True, python_executable=selected)
         with patch("shared.environment.subprocess.run", side_effect=fake_run):
-            report = _doctor(config, load=caller_runtime)
+            report = _doctor(config, load=caller_runtime, slicer_process=False)
         item = {item.key: item for item in report.statuses}["native_tensor_fit"]
         self.assertEqual(calls[0][0], selected.as_posix())
         self.assertEqual((item.status, item.details["library"]), ("available", "/selected/libteem.so"))
+        self.assertEqual(item.details["python_executable"], selected.as_posix())
 
-    def test_d6_selected_interpreter_without_teem_reports_its_message(self) -> None:
-        selected = Path(tempfile.gettempdir()) / "plain-venv" / "bin" / "python"
-        payload = {"teem_version": "", "library": "", "error": "Slicer's Teem library was not found\n  Searched roots: (none)"}
+    def test_n2_plain_python_option_with_a_resolvable_pythonslicer_is_not_a_blocker(self) -> None:
+        """N2: --python-executable = plain python; the fit runs in PythonSlicer, so the PythonSlicer probe decides."""
+        payload = {"teem_version": "1.12.0", "library": "/slicer/libteem.so", "error": ""}
+        calls = []
+
+        def fake_run(command, **kwargs):
+            calls.append(command)
+            return subprocess.CompletedProcess(command, 0, stdout=json.dumps(payload), stderr="")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            pythonslicer = self._slicer_tree(Path(tmp).resolve())
+            plain = Path(tmp) / "venv" / "bin" / "python"
+            config = EnvironmentDoctorConfig(
+                targets=("microstructure",), repo_root=Path("."), check_slicer_cli_modules=True,
+                python_executable=plain, slicer_executable=pythonslicer.parent.parent / "Slicer")
+            with patch("shared.environment.subprocess.run", side_effect=fake_run):
+                report = _doctor(config, slicer_process=False,
+                                 load=lambda: (_ for _ in ()).throw(AssertionError("no in-process probe")))
+        item = {item.key: item for item in report.statuses}["native_tensor_fit"]
+        self.assertEqual(report.blocker_count, 0)
+        self.assertEqual(calls[0][0], pythonslicer.as_posix())
+        self.assertEqual(item.details["python_executable"], pythonslicer.as_posix())
+        self.assertNotEqual(item.details["python_executable"], plain.as_posix())
+
+    def test_f3_plain_python_never_reports_available_from_its_own_teem_load(self) -> None:
+        """F3: SLICER_HOME / a Teem override lets a plain Python load Teem; only the PythonSlicer probe counts."""
+        failure = {"teem_version": "", "library": "", "error": "Slicer's Teem library was not found\n  Searched roots: /s"}
+        with tempfile.TemporaryDirectory() as tmp:
+            pythonslicer = self._slicer_tree(Path(tmp).resolve())
+            home = pythonslicer.parent.parent
+            config = EnvironmentDoctorConfig(
+                targets=("microstructure",), repo_root=Path("."), check_slicer_cli_modules=True,
+                python_executable=Path(tmp) / "venv" / "bin" / "python")
+            with patch.dict("os.environ", {"SLICER_HOME": str(home)}), \
+                 patch("shared.environment.subprocess.run",
+                       return_value=subprocess.CompletedProcess([], 0, stdout=json.dumps(failure), stderr="")):
+                # The plain Python could load a stub Teem here; the doctor must not ask it.
+                report = _doctor(config, slicer_process=False, load=_FakeLibrary)
+        item = {item.key: item for item in report.statuses}["native_tensor_fit"]
+        self.assertEqual(item.status, "missing")
+        self.assertEqual(item.details["python_executable"], pythonslicer.as_posix())
+        self.assertIn("Searched roots: /s", item.details["notes"])
+
+    def test_n1_probe_failure_in_pythonslicer_shows_the_reason_not_the_generic_hint(self) -> None:
+        payload = {"teem_version": "", "library": "", "error": "Slicer's Teem library was not found\n  Searched roots: /x/Slicer"}
+        selected = Path(tempfile.gettempdir()) / "ps" / "bin" / "PythonSlicer"
         config = EnvironmentDoctorConfig(targets=("microstructure",), repo_root=Path("."),
                                          check_slicer_cli_modules=True, python_executable=selected)
         with patch("shared.environment.subprocess.run",
                    return_value=subprocess.CompletedProcess([], 0, stdout=json.dumps(payload), stderr="")):
-            report = _doctor(config)
+            report = _doctor(config, slicer_process=False)
+        item = {item.key: item for item in report.statuses}["native_tensor_fit"]
+        self.assertIn("Searched roots: /x/Slicer", item.details["notes"])
+        self.assertIn("Searched roots: /x/Slicer", item.install_hint)
+        self.assertNotIn("Run with Slicer's PythonSlicer", item.install_hint)
+
+    def test_n1_without_any_pythonslicer_the_hint_asks_for_one(self) -> None:
+        config = EnvironmentDoctorConfig(targets=("microstructure",), repo_root=Path("."),
+                                         check_slicer_cli_modules=True,
+                                         python_executable=Path(tempfile.gettempdir()) / "plain" / "bin" / "python")
+        with patch.dict("os.environ", {}, clear=True), \
+             patch("shared.environment._common_slicer_executables", return_value=()), \
+             patch("shared.environment.subprocess.run", side_effect=AssertionError("nothing to probe")):
+            report = _doctor(config, slicer_process=False)
         item = {item.key: item for item in report.statuses}["native_tensor_fit"]
         self.assertEqual(item.status, "missing")
-        self.assertIn("Searched roots: (none)", item.details["error"])
         self.assertEqual(item.install_hint, "Run with Slicer's PythonSlicer")
+        self.assertIn("PythonSlicer was not found", item.details["notes"])
+        self.assertEqual(item.details["python_executable"], "")
 
     def test_d6_probe_failure_is_a_status_not_a_traceback(self) -> None:
-        selected = Path(tempfile.gettempdir()) / "broken-venv" / "bin" / "python"
+        selected = Path(tempfile.gettempdir()) / "broken-slicer" / "bin" / "PythonSlicer"
         config = EnvironmentDoctorConfig(targets=("microstructure",), repo_root=Path("."),
                                          check_slicer_cli_modules=True, python_executable=selected)
         with patch("shared.environment.subprocess.run", side_effect=OSError("cannot execute")):
-            report = _doctor(config)
+            report = _doctor(config, slicer_process=False)
         item = {item.key: item for item in report.statuses}["native_tensor_fit"]
         self.assertEqual(item.status, "missing")
         self.assertIn("cannot execute", item.details["error"])
 
-    def test_d6_same_interpreter_keeps_the_in_process_check(self) -> None:
+    def test_d6_slicer_process_keeps_the_in_process_check(self) -> None:
         config = EnvironmentDoctorConfig(targets=("microstructure",), repo_root=Path("."),
                                          check_slicer_cli_modules=True, python_executable=Path(sys.executable))
         with patch("shared.environment.subprocess.run", side_effect=AssertionError("no subprocess")):
             report = _doctor(config)
         self.assertEqual({item.key: item for item in report.statuses}["native_tensor_fit"].status, "available")
+
+    def test_f1_configured_venv_does_not_move_the_teem_self_check_to_the_venv(self) -> None:
+        """F1 (D10): the recorded interpreter is the running Slicer one, so requests_for_report targets only it."""
+        from shared.external_process import interpreter_path
+        from shared.setup_selftest import requests_for_report
+
+        venv_python = Path(tempfile.gettempdir()) / "user-venv" / "bin" / "python"
+        config = EnvironmentDoctorConfig(targets=("microstructure",), repo_root=Path("."),
+                                         check_slicer_cli_modules=True, python_executable=venv_python)
+        with patch("shared.environment.subprocess.run", side_effect=AssertionError("no subprocess")):
+            report = _doctor(config, slicer_process=True)
+        item = {item.key: item for item in report.statuses}["native_tensor_fit"]
+        slicer_python = interpreter_path(sys.executable).as_posix()
+        self.assertEqual(item.details["python_executable"], slicer_python)
+        numpy = SimpleNamespace(key="python:numpy", kind="python", required=True, status="available",
+                                targets=("microstructure",),
+                                details={"import": "numpy", "python_executable": venv_python.as_posix()})
+        flags = {request["python"]: request.get("teem_self_check", False)
+                 for request in requests_for_report(SimpleNamespace(statuses=[item, numpy], targets=("microstructure",)))}
+        self.assertEqual(flags, {slicer_python: True, venv_python.as_posix(): False})
 
     def test_d6_gui_session_checks_teem_in_process_and_drops_the_module_requirement(self) -> None:
         gui = EnvironmentDoctorConfig(targets=("microstructure",), repo_root=Path("."), loaded_slicer_modules=())

@@ -342,29 +342,25 @@ def run_ddparcel(config: DDParcelConfig, log: Optional[Callable[[str], None]] = 
         nhdr_write(mask.as_posix(), None, None, nrrd_mask.as_posix())
 
     # W2: one teem_dti.py process writes the tensor, the baseline and the six scalar maps (.nhdr: detached data).
-    need_nifti = not nii_mid_eig.exists()
-    if not nrrd_b0.exists() or need_nifti:
+    scalar_maps = (
+        ("FractionalAnisotropy", nrrd_fa, nii_fa),
+        ("Trace", nrrd_trace, nii_trace),
+        ("MinEigenvalue", nrrd_min_eig, nii_min_eig),
+        ("MidEigenvalue", nrrd_mid_eig, nii_mid_eig),
+        ("MaxEigenvalue", nrrd_max_eig, nii_max_eig),
+        ("MeanDiffusivity", nrrd_md, nii_md),
+    )
+    # N3: the fit is complete only when the baseline and every scalar the later steps read exist, as .nhdr and as NIfTI.
+    need_fit = not nrrd_b0.exists() or any(not header.exists() or not nifti.exists() for _, header, nifti in scalar_maps)
+    if need_fit:
         _run_cli(
             native_tensor_command(
                 resolve_pythonslicer_executable(), nrrd_dwi, nrrd_dti, nrrd_b0, "WLS",
-                (
-                    ("FractionalAnisotropy", nrrd_fa),
-                    ("Trace", nrrd_trace),
-                    ("MinEigenvalue", nrrd_min_eig),
-                    ("MidEigenvalue", nrrd_mid_eig),
-                    ("MaxEigenvalue", nrrd_max_eig),
-                    ("MeanDiffusivity", nrrd_md),
-                )),
+                tuple((name, header) for name, header, _ in scalar_maps)),
             log,
         )
-
-    if need_nifti:
-        nifti_write(nrrd_fa.as_posix(), nrrd_fa.as_posix().replace(".nhdr", ""))
-        nifti_write(nrrd_trace.as_posix(), nrrd_trace.as_posix().replace(".nhdr", ""))
-        nifti_write(nrrd_min_eig.as_posix(), nrrd_min_eig.as_posix().replace(".nhdr", ""))
-        nifti_write(nrrd_mid_eig.as_posix(), nrrd_mid_eig.as_posix().replace(".nhdr", ""))
-        nifti_write(nrrd_max_eig.as_posix(), nrrd_max_eig.as_posix().replace(".nhdr", ""))
-        nifti_write(nrrd_md.as_posix(), nrrd_md.as_posix().replace(".nhdr", ""))
+        for _, header, _ in scalar_maps:
+            nifti_write(header.as_posix(), header.as_posix().replace(".nhdr", ""))
 
     if not tfm.exists():
         cli_exe = resolve_cli_executable("brainsfit")

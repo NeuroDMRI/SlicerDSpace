@@ -29,9 +29,14 @@ def teem_script():
 
 
 def pythonslicer(slicer_path):
-    """PythonSlicer of the selected installation (Linux/Windows root, or macOS Contents/MacOS)."""
+    """PythonSlicer of the selected installation (F2).
+
+    Linux and Windows: ``<root>/bin/PythonSlicer[.exe]``. macOS: ``Slicer.app/Contents/bin/PythonSlicer``, reached from
+    the .app, its ``Contents`` folder or ``Contents/MacOS``. The backend runs standalone, so it does not import the
+    repository's shared resolver; this list mirrors ``shared.external_process.find_pythonslicer``.
+    """
     home = Path(slicer_path)
-    for folder in (home / 'bin', home.parent / 'bin', home):
+    for folder in (home / 'bin', home / 'Contents/bin', home.parent / 'bin', home, home / 'MacOS'):
         for name in ('PythonSlicer', 'PythonSlicer.exe'):
             if (folder / name).is_file():
                 return folder / name

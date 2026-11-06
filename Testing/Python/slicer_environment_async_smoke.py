@@ -95,7 +95,10 @@ def run():
         with slicer.util.NodeModify(node):
             node.inputDirectory = str(demo)
             node.subjectId = demo.name
-            node.targetMicrostructure = True
+            # Q1 (D6/D8): the native tensor fit needs no SlicerDMRI, so only the WMA bundle target is blocked by its absence.
+            node.targetMicrostructure = False
+            node.targetBundles = True
+            node.orchestrationBundleBackend = 'wma'
             node.autoInstallPythonDependencies = False
         assert not hasattr(slicer.modules, 'dwitodtiestimation'), 'This isolation case requires SlicerDMRI to be absent'
         owner.ui.runSelectedButton.click()

@@ -165,7 +165,10 @@ def _raw_command(config, resources, output_dir):
     if home is None:
         from shared.pipeline import resolve_launcher_executable
         home = Path(resolve_launcher_executable()).parent
-    return command, dict(DTI_SLICER_PATH=str(home), DTI_REFERENCE_IMAGE=resources['registration_atlas'])
+    # N9: a separately deployed backend cannot find shared/teem_dti.py from its own location.
+    teem_script = Path(__file__).resolve().parents[2] / 'shared/teem_dti.py'
+    return command, dict(DTI_SLICER_PATH=str(home), DTI_REFERENCE_IMAGE=resources['registration_atlas'],
+                         SLICERDSPACE_TEEM_DTI_SCRIPT=str(teem_script))
 
 
 def _run_registered(config, resources, output_dir, subject_dir):

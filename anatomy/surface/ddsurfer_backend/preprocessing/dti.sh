@@ -206,6 +206,11 @@ SLICER_VERSION_DIR=$(basename "$SLICER_LIB_DIR")
 
 CLI_MODULES_PATH2="$SLICER_LIB_DIR/cli-modules"
 PYTHONSLICER="$SLICER_PATH/bin/PythonSlicer"
+# F2: macOS Slicer.app keeps PythonSlicer in Contents/bin; Windows names it PythonSlicer.exe.
+for candidate in "$SLICER_PATH/bin/PythonSlicer" "$SLICER_PATH/Contents/bin/PythonSlicer" \
+                 "$SLICER_PATH/bin/PythonSlicer.exe"; do
+  if [[ -x "$candidate" ]]; then PYTHONSLICER="$candidate"; break; fi
+done
 TEEM_LIB_DIR=$(find "$SLICER_PATH/lib" -maxdepth 1 -type d -name 'Teem-*' | sort | tail -n 1)
 
 [[ -d "$CLI_MODULES_PATH2" ]] || die "Unable to locate core Slicer CLI modules under $SLICER_LIB_DIR"

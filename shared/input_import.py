@@ -82,15 +82,24 @@ def _directory_has_dicom_like_files(path: Path) -> bool:
 
 
 def packaged_dcm2niix() -> Path | None:
-    """Executable of the pip package ``dcm2niix`` installed in this Python, found through its module (B6)."""
+    """Executable of the pip package ``dcm2niix`` installed in this Python, found through its module (B6).
+
+    S-N4: only string or path attributes count; anything else falls back. The wheel puts the executable at
+    ``<site>/bin/dcm2niix`` beside the module folder, so that place is searched too.
+    """
     try:
         import dcm2niix
     except ImportError:
         return None
+    candidates = []
     for value in (getattr(dcm2niix, "bin_path", None), getattr(dcm2niix, "bin", None)):
-        if not value:
-            continue
-        path = Path(value)
+        if isinstance(value, (str, os.PathLike)) and str(value):
+            candidates.append(Path(value))
+    module_file = getattr(dcm2niix, "__file__", None)
+    if isinstance(module_file, (str, os.PathLike)) and str(module_file):
+        folder = Path(module_file).parent
+        candidates.extend([folder.parent / "bin" / "dcm2niix", folder / "bin" / "dcm2niix"])
+    for path in candidates:
         for candidate in (path, path.with_name(path.name + ".exe")):
             if candidate.is_file() and os.access(candidate, os.X_OK):
                 return candidate

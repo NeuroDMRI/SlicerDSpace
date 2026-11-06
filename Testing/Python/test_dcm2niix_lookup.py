@@ -53,6 +53,23 @@ class Dcm2niixLookupTests(unittest.TestCase):
             with patch.dict(sys.modules, {"dcm2niix": module}):
                 self.assertEqual(packaged_dcm2niix(), exe)
 
+    def test_s_n4_odd_attributes_fall_back_and_the_wheel_layout_site_bin_is_found(self):
+        with tempfile.TemporaryDirectory() as temp:
+            site = Path(temp) / "site-packages"
+            (site / "dcm2niix").mkdir(parents=True)
+            (site / "bin").mkdir()
+            exe = site / "bin" / "dcm2niix"
+            exe.write_text("#!/bin/sh\n")
+            exe.chmod(0o755)
+            odd = types.SimpleNamespace(bin_path=None, bin=5, __file__=str(site / "dcm2niix" / "__init__.py"))
+            with patch.dict(sys.modules, {"dcm2niix": odd}):
+                self.assertEqual(packaged_dcm2niix(), exe)  # fails before: Path(5) raised TypeError
+            nothing = types.SimpleNamespace(bin_path=["x"], bin=object())
+            with patch.dict(sys.modules, {"dcm2niix": nothing}), \
+                    patch("shared.input_import.shutil.which", return_value="/usr/bin/dcm2niix"):
+                self.assertIsNone(packaged_dcm2niix())
+                self.assertEqual(find_dcm2niix(), "/usr/bin/dcm2niix")
+
     def test_dicom_converter_order_is_package_then_path_then_dwiconvert(self):
         with tempfile.TemporaryDirectory() as temp, patch.dict(os.environ, {"SLICERDSPACE_DWICONVERT_EXECUTABLE": ""}):
             module = fake_module(temp)

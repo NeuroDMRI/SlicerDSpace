@@ -75,6 +75,10 @@ class SubjectIOLayout:
         return self.microstructure / "dki"
 
     @property
+    def microstructure_ifw(self) -> Path:
+        return self.microstructure / "ifw"
+
+    @property
     def anatomy(self) -> Path:
         return self.outputs / ANATOMY_OUTPUT_NAME
 

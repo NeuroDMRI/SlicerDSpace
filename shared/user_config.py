@@ -38,7 +38,8 @@ RUN_DEFAULTS = {
 }
 
 
-MICROSTRUCTURE_STAGE_ORDER = ("dti", "freewater", "noddi", "dki")
+MICROSTRUCTURE_ALL_STAGES = ("dti", "freewater", "noddi", "dki")  # "all" does not include iFW
+MICROSTRUCTURE_STAGE_ORDER = MICROSTRUCTURE_ALL_STAGES + ("ifw",)
 
 
 def canonical_microstructure_stages(values: Iterable[str] | str | None) -> tuple[str, ...]:
@@ -53,7 +54,7 @@ def canonical_microstructure_stages(values: Iterable[str] | str | None) -> tuple
         if token.strip()
     }
     if stages & {"all", "full"}:
-        stages.update(MICROSTRUCTURE_STAGE_ORDER)
+        stages.update(MICROSTRUCTURE_ALL_STAGES)
         stages.difference_update(("all", "full"))
     unknown = stages - set(MICROSTRUCTURE_STAGE_ORDER)
     if unknown:
@@ -276,13 +277,15 @@ def user_config_from_cli_args(
     target_set = set(targets)
     stage_set = set(stages)
     if "all" in stage_set:
-        stage_set.update(MICROSTRUCTURE_STAGE_ORDER)
+        stage_set.update(MICROSTRUCTURE_ALL_STAGES)
     if "microstructure_freewater" in target_set:
         stage_set.update(("dti", "freewater"))
     if "microstructure_noddi" in target_set:
         stage_set.update(("dti", "noddi"))
     if "microstructure_dki" in target_set or bool(getattr(args, "run_dki", False)):
         stage_set.update(("dti", "dki"))
+    if "microstructure_ifw" in target_set or bool(getattr(args, "run_ifw", False)):
+        stage_set.update(("dti", "freewater", "ifw"))
     stages = list(canonical_microstructure_stages(stage_set))
     tractography_backend = getattr(args, "tractography_backend", None) or "csd_act"
     if "saf" in target_set:

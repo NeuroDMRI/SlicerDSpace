@@ -8,6 +8,7 @@ CLI, the cohort planner and the GUI setup plan can share one rule set.
 Rules (applied until nothing changes):
 
 * microstructure_freewater / _noddi / _dki  -> microstructure
+* microstructure_ifw                        -> microstructure, microstructure_freewater, segmentation
 * surface_postprocess                       -> surface
 * saf                                       -> surface_postprocess, tractography
 * bundles (WMQL), connectome                -> parcellation, tractography
@@ -40,6 +41,7 @@ TARGET_ORDER = (
     "microstructure_freewater",
     "microstructure_noddi",
     "microstructure_dki",
+    "microstructure_ifw",
     "tractography",
     "bundles",
     "saf",
@@ -51,7 +53,8 @@ TARGET_ORDER = (
 # Targets that need the brain mask (shared by the GUI setup plan and docs).
 MASK_TARGETS = (
     "preprocessing", "segmentation", "parcellation", "surface", "microstructure",
-    "microstructure_freewater", "microstructure_noddi", "microstructure_dki", "tractography", "saf",
+    "microstructure_freewater", "microstructure_noddi", "microstructure_dki", "microstructure_ifw",
+    "tractography", "saf",
 )
 
 # Static prerequisites: target -> targets it always needs.
@@ -59,6 +62,7 @@ STATIC_REQUIREMENTS = {
     "microstructure_freewater": ("microstructure",),
     "microstructure_noddi": ("microstructure",),
     "microstructure_dki": ("microstructure",),
+    "microstructure_ifw": ("microstructure", "microstructure_freewater", "segmentation"),
     "surface_postprocess": ("surface",),
     "saf": ("surface_postprocess", "tractography"),
     "bundles": ("parcellation", "tractography"),
@@ -84,6 +88,7 @@ DISPLAY_NAMES = {
     "microstructure_freewater": "Free Water",
     "microstructure_noddi": "NODDI",
     "microstructure_dki": "DKI",
+    "microstructure_ifw": "iFW",
     "tractography": "Tractography",
     "bundles": "WMQL bundles",
     "saf": "SAF",
@@ -119,7 +124,7 @@ class Closure:
         return ",".join(self.tractography_algorithms)
 
 
-def _expand_selection(targets, bundle_backends, free_water, noddi, dki) -> list[str]:
+def _expand_selection(targets, bundle_backends, free_water, noddi, dki, ifw=False) -> list[str]:
     """Product-level targets -> concrete targets (existing orchestrator semantics)."""
     expanded: list[str] = []
     for target in targets:
@@ -131,6 +136,8 @@ def _expand_selection(targets, bundle_backends, free_water, noddi, dki) -> list[
                 expanded.append("microstructure_noddi")
             if dki:
                 expanded.append("microstructure_dki")
+            if ifw:
+                expanded.append("microstructure_ifw")
         elif target == "bundles":
             for backend in bundle_backends:
                 expanded.append("bundles" if backend == "wmql" else backend)
@@ -166,6 +173,7 @@ def expand_closure(
     microstructure_free_water: bool = False,
     microstructure_noddi: bool = False,
     microstructure_dki: bool = False,
+    microstructure_ifw: bool = False,
     wma_source_explicit: bool = False,
     provided_tractography: Iterable[str] = (),
     excluded: Iterable[str] = (),
@@ -187,7 +195,8 @@ def expand_closure(
     skip = frozenset(str(t).strip().lower() for t in excluded if str(t).strip())
     requested = {target for target in _expand_selection(
         tuple(t for t in requested_raw if t not in skip), tuple(bundle_backends),
-        microstructure_free_water, microstructure_noddi, microstructure_dki) if target not in skip}
+        microstructure_free_water, microstructure_noddi, microstructure_dki, microstructure_ifw)
+        if target not in skip}
     if "tractography" in requested and "saf" in algorithms and "saf" not in skip:
         requested.add("saf")  # Q4: picking the SAF tracking algorithm requests the saf target
     selected = set(requested)

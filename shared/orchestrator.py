@@ -44,6 +44,7 @@ SUPPORTED_TARGETS = {
     "microstructure_freewater",
     "microstructure_noddi",
     "microstructure_dki",
+    "microstructure_ifw",
     "tractography",
     "bundles",
     "connectome",
@@ -101,6 +102,10 @@ class ProductOrchestratorConfig:
     microstructure_run_free_water: bool = False
     microstructure_run_noddi: bool = False
     microstructure_run_dki: bool = False
+    microstructure_run_ifw: bool = False
+    microstructure_ifw_echo_time_ms: Optional[float] = None
+    microstructure_ifw_t2_gm_ms: float = 95.0
+    microstructure_ifw_t2_csf_ms: float = 1500.0
     max_parallel_models: int = 1
     microstructure_dki_fit_method: str = "MKCURVE"
     microstructure_dki_matlab_executable: Optional[Path] = None
@@ -555,6 +560,7 @@ def orchestrator_closure(
     microstructure_run_free_water: bool = False,
     microstructure_run_noddi: bool = False,
     microstructure_run_dki: bool = False,
+    microstructure_run_ifw: bool = False,
     wma_source_explicit: bool = False,
     provided_tractography: tuple[str, ...] = (),
     excluded: tuple[str, ...] = (),
@@ -569,6 +575,7 @@ def orchestrator_closure(
         microstructure_free_water=microstructure_run_free_water,
         microstructure_noddi=microstructure_run_noddi,
         microstructure_dki=microstructure_run_dki,
+        microstructure_ifw=microstructure_run_ifw,
         wma_source_explicit=wma_source_explicit,
         provided_tractography=provided_tractography,
         excluded=excluded,
@@ -583,6 +590,7 @@ def normalize_orchestrator_targets(
     microstructure_run_free_water: bool = False,
     microstructure_run_noddi: bool = False,
     microstructure_run_dki: bool = False,
+    microstructure_run_ifw: bool = False,
     wma_source_explicit: bool = False,
     provided_tractography: tuple[str, ...] = (),
 ) -> tuple[str, ...]:
@@ -595,6 +603,7 @@ def normalize_orchestrator_targets(
         microstructure_run_free_water=microstructure_run_free_water,
         microstructure_run_noddi=microstructure_run_noddi,
         microstructure_run_dki=microstructure_run_dki,
+        microstructure_run_ifw=microstructure_run_ifw,
         wma_source_explicit=wma_source_explicit,
         provided_tractography=provided_tractography,
     ).targets
@@ -939,6 +948,7 @@ def _with_closure(config: ProductOrchestratorConfig) -> ProductOrchestratorConfi
         microstructure_run_free_water=config.microstructure_run_free_water,
         microstructure_run_noddi=config.microstructure_run_noddi,
         microstructure_run_dki=config.microstructure_run_dki,
+        microstructure_run_ifw=config.microstructure_run_ifw,
         wma_source_explicit=bool(config.bundle_tractography_backend),
         provided_tractography=_provided_tractography(config),
         excluded=config.excluded_targets,  # K5: skipped targets are never added or expanded
@@ -1015,6 +1025,8 @@ def _task_name_for_target(target: str, config: ProductOrchestratorConfig) -> str
         return "microstructure.noddi"
     if target == "microstructure_dki":
         return "microstructure.dki"
+    if target == "microstructure_ifw":
+        return "microstructure.ifw"
     if target == "tractography":
         return "tractography." + _primary_tractography_backend(config)
     if target == "bundles":
@@ -1752,6 +1764,82 @@ def _microstructure_freewater_complete(subject_root: Path, subject_id: str, outp
     )
 
 
+def _microstructure_ifw_outputs(subject_root: Path, subject_id: str, output_root: Optional[Path] = None) -> dict[str, Path]:
+    from microstructure.ifw import ifw_output_paths
+
+    directory = subject_layout(subject_root, output_root=output_root).microstructure_ifw
+    paths = ifw_output_paths(subject_id, directory)
+    return {"ifw": paths["ifw"], "fw_volume_fraction": paths["fw_volume_fraction"], "manifest": paths["record"]}
+
+
+def _ifw_sidecar(config: "ProductOrchestratorConfig", inputs: dict[str, Path]) -> Optional[Path]:
+    """The DWI JSON sidecar next to the analysis DWI, else next to the raw DWI (SPEC-GAP: design names input/dwi.json)."""
+    candidates = [inputs["dwi"]]
+    try:
+        candidates.append(_resolve_raw_inputs(config.subject_root.expanduser().resolve())["dwi"])
+    except Exception:
+        pass
+    for dwi in candidates:
+        name = dwi.name
+        for suffix in (".nii.gz", ".nii"):
+            if name.endswith(suffix):
+                name = name[: -len(suffix)]
+                break
+        for stem in (name, "dwi"):
+            sidecar = dwi.with_name(stem + ".json")
+            if sidecar.is_file():
+                return sidecar
+    return None
+
+
+def _ifw_config(config: "ProductOrchestratorConfig", inputs: dict[str, Path], roi_label_map: Optional[Path] = None):
+    from microstructure.ifw import IfwConfig
+
+    root = config.subject_root.expanduser().resolve()
+    output_root = config.output_root
+    freewater = _microstructure_freewater_outputs(root, config.subject_id, output_root)
+    segmentation = _segmentation_outputs(root, output_root)
+    return IfwConfig(
+        subject_id=config.subject_id,
+        fw_fraction_path=freewater["fwf"],
+        csf_probability_path=segmentation["csf_probability"],
+        mask_path=inputs["mask"],
+        bval_path=inputs["bval"],
+        bvec_path=inputs["bvec"],
+        output_dir=subject_layout(root, output_root=output_root).microstructure_ifw,
+        echo_time_ms=config.microstructure_ifw_echo_time_ms,
+        dwi_sidecar_path=_ifw_sidecar(config, inputs),
+        tissue_t2_ms=config.microstructure_ifw_t2_gm_ms,
+        csf_t2_ms=config.microstructure_ifw_t2_csf_ms,
+        roi_label_map=roi_label_map,
+    )
+
+
+def _microstructure_ifw_complete(config: "ProductOrchestratorConfig", inputs: dict[str, Path]) -> bool:
+    from microstructure.ifw import IfwBlocked, ifw_outputs_current, resolve_echo_time
+
+    try:
+        ifw_config = _ifw_config(config, inputs)
+        echo_time, source = resolve_echo_time(ifw_config.echo_time_ms, ifw_config.dwi_sidecar_path)
+        return ifw_outputs_current(ifw_config, echo_time, source)
+    except (IfwBlocked, OSError, ValueError, KeyError):
+        return False
+
+
+def _free_water_ineligible(inputs: dict[str, Path]) -> str:
+    """Empty when the gradient table has three b-value groups (DIPY ``check_multi_b``), else the user message."""
+    from microstructure.ifw import free_water_eligibility
+    import numpy as np
+
+    if not Path(inputs["bval"]).is_file():
+        return ""  # a missing input is reported by the raw-input check
+    try:
+        bvals = np.loadtxt(inputs["bval"], dtype=float).ravel()
+    except ValueError:
+        return ""  # an unreadable b-value file is reported by input validation
+    return free_water_eligibility(bvals)[1]
+
+
 def _microstructure_noddi_outputs(subject_root: Path, subject_id: str, output_root: Optional[Path] = None) -> dict[str, Path]:
     layout = subject_layout(subject_root, output_root=output_root)
     noddi_dir = layout.microstructure_noddi
@@ -2228,6 +2316,8 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
         if target == "microstructure_dki":
             from microstructure.dki import dki_outputs_current
             return dki_outputs_current(_dki_config(config, analysis_inputs))
+        if target == "microstructure_ifw":
+            return _microstructure_ifw_complete(config, analysis_inputs)
         if target == "tractography":
             if primary_tractography_backend == 'ukf':
                 return ukf_cached
@@ -2482,6 +2572,8 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
                 add(target, "skipped", "completed Free Water outputs found", "reuse", inputs=analysis_inputs, outputs=freewater_outputs, dependencies={"microstructure": "available" if dti_ready else None})
             elif not dti_ready:
                 add(target, "blocked", _upstream_reason(selected, "microstructure", "missing Microstructure DTI outputs; select microstructure or provide existing output"), "upstream", inputs=raw, outputs=freewater_outputs, dependencies={"microstructure": "missing"}, provides=False)
+            elif _free_water_ineligible(analysis_inputs):
+                add(target, "blocked", _free_water_ineligible(analysis_inputs), "acquisition_or_backend", inputs=analysis_inputs, outputs=freewater_outputs, provides=False)
             elif not raw_input_block(target, freewater_outputs):
                 add(target, "will_run", "ready to run Microstructure Free Water", "runnable", inputs=analysis_inputs, outputs=freewater_outputs, dependencies={"microstructure": "available" if _microstructure_dti_complete(subject_root, config.subject_id, output_root) else "will_run"})
             continue
@@ -2514,6 +2606,35 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
             else:
                 add(target, "will_run", "eligible multi-shell DKI; final mask checked before fitting", "runnable",
                     inputs=analysis_inputs, outputs=outputs)
+            continue
+
+        if target == "microstructure_ifw":
+            from microstructure.ifw import IfwBlocked, resolve_echo_time
+
+            outputs = _microstructure_ifw_outputs(subject_root, config.subject_id, output_root)
+            if raw_input_block(target, outputs):
+                continue
+            fw_ready = available.get("microstructure_freewater", False) or _microstructure_freewater_complete(
+                subject_root, config.subject_id, output_root, config=config)
+            seg_ready = available.get("segmentation", False) or _segmentation_complete(subject_root, output_root)
+            ineligible = _free_water_ineligible(analysis_inputs)
+            ifw_config = _ifw_config(config, analysis_inputs)
+            echo_error = ""
+            try:
+                resolve_echo_time(ifw_config.echo_time_ms, ifw_config.dwi_sidecar_path)
+            except IfwBlocked as exc:
+                echo_error = str(exc)
+            if not fw_ready or not seg_ready:
+                add(target, "blocked", "iFW needs the Free Water fraction and the DDSeg CSF map; select both or provide existing outputs",
+                    "upstream", inputs=analysis_inputs, outputs=outputs, provides=False)
+            elif ineligible:
+                add(target, "blocked", ineligible, "acquisition_or_backend", inputs=analysis_inputs, outputs=outputs, provides=False)
+            elif echo_error:
+                add(target, "blocked", echo_error, "acquisition_or_backend", inputs=analysis_inputs, outputs=outputs, provides=False)
+            elif config.resume and _microstructure_ifw_complete(config, analysis_inputs):
+                add(target, "skipped", "matching completed iFW outputs found", "reuse", inputs=analysis_inputs, outputs=outputs)
+            else:
+                add(target, "will_run", "ready to run iFW", "runnable", inputs=analysis_inputs, outputs=outputs)
             continue
 
         if target == "tractography":
@@ -3021,7 +3142,7 @@ def _expected_output_top_dirs(targets: tuple[str, ...]) -> set[str]:
     selected = set(targets)
     if "preprocessing" in selected:
         expected.add("01_preproc")
-    if selected & {"microstructure", "microstructure_freewater", "microstructure_noddi", "microstructure_dki"}:
+    if selected & {"microstructure", "microstructure_freewater", "microstructure_noddi", "microstructure_dki", "microstructure_ifw"}:
         expected.update({"02_microstructure", "05_statistics"})
     if selected & {"segmentation", "parcellation", "surface", "surface_postprocess"}:
         expected.add(ANATOMY_OUTPUT_NAME)
@@ -3101,10 +3222,10 @@ def _write_output_tree_semantics(
     directory_targets: list[tuple[str, tuple[str, ...], str]] = [
         ("00_run_metadata", ("validation",), "Run metadata, validation, environment and task records."),
         ("01_preproc", ("preprocessing",), "DWI preprocessing outputs."),
-        ("02_microstructure", ("microstructure", "microstructure_freewater", "microstructure_noddi", "microstructure_dki"), "Microstructure model outputs."),
+        ("02_microstructure", ("microstructure", "microstructure_freewater", "microstructure_noddi", "microstructure_dki", "microstructure_ifw"), "Microstructure model outputs."),
         (ANATOMY_OUTPUT_NAME, ("segmentation", "parcellation", "surface", "surface_postprocess"), "Segmentation, parcellation and surface products."),
         ("04_tractography", ("tractography", "bundles", "saf", "wma", "tractcloud", "connectome"), "Tractography, bundle extraction, SAF and connectome products."),
-        ("05_statistics", ("microstructure", "microstructure_freewater", "microstructure_noddi", "microstructure_dki", "surface_postprocess"), "Regional summaries and post-process statistics."),
+        ("05_statistics", ("microstructure", "microstructure_freewater", "microstructure_noddi", "microstructure_dki", "microstructure_ifw", "surface_postprocess"), "Regional summaries and post-process statistics."),
         ("06_slicer_scene_report", tuple(TARGET_ORDER), "HTML/Markdown reports and output tree views."),
     ]
     if (layout.outputs / LEGACY_ANATOMY_OUTPUT_NAME).is_dir():
@@ -3467,7 +3588,7 @@ def _run_subject_products_impl(
             )
 
     dwi_targets = {'preprocessing', 'segmentation', 'parcellation', 'surface', 'microstructure',
-                   'microstructure_freewater', 'microstructure_noddi', 'microstructure_dki', 'tractography'}
+                   'microstructure_freewater', 'microstructure_noddi', 'microstructure_dki', 'microstructure_ifw', 'tractography'}
     if 'saf' in run_targets and config.saf_pregenerated_tractogram is None:
         dwi_targets.add('saf')
     input_validation_path = None
@@ -4080,6 +4201,9 @@ def _run_subject_products_impl(
         elif any(not path.is_file() for path in raw.values()):
             missing = [label for label, path in raw.items() if not path.is_file()]
             tasks.append(ProductTaskRecord(name="microstructure.freewater", status="blocked", reason="missing raw input: " + ", ".join(missing)))
+        elif _free_water_ineligible(_resolve_analysis_inputs(subject_root, config.subject_id, output_root)):
+            tasks.append(ProductTaskRecord(name="microstructure.freewater", status="blocked",
+                                           reason=_free_water_ineligible(_resolve_analysis_inputs(subject_root, config.subject_id, output_root))))
         else:
             from microstructure import MicrostructureConfig, run_microstructure
             from shared.pipeline import ensure_native_dti_bundle, find_subject_root, resolve_preprocessed_input_bundle
@@ -4234,6 +4358,35 @@ def _run_subject_products_impl(
             except Exception as exc:
                 tasks.append(ProductTaskRecord(name="microstructure.dki", status="failed", reason=str(exc)))
                 _emit(f"[Orchestrator] DKI failed; other selected products can continue: {exc}", log)
+
+    if "microstructure_ifw" in run_targets:
+        from microstructure.ifw import IfwBlocked, run_ifw
+
+        ifw_plan = plan_by_target.get("microstructure_ifw")
+        ifw_outputs = _microstructure_ifw_outputs(subject_root, config.subject_id, output_root)
+        if not config.execute:
+            tasks.append(ProductTaskRecord(name="microstructure.ifw", status="planned", reason="execute=False"))
+        elif ifw_plan and ifw_plan.status == "blocked":
+            tasks.append(ProductTaskRecord(name="microstructure.ifw", status="blocked", reason=ifw_plan.reason))
+        else:
+            _emit("[Orchestrator] Running Microstructure iFW", log)
+            try:
+                ifw_inputs = _resolve_analysis_inputs(subject_root, config.subject_id, output_root)
+                result = run_ifw(_ifw_config(config, ifw_inputs, parcellation), log=lambda message: _emit(message, log))
+                tasks.append(ProductTaskRecord(
+                    name="microstructure.ifw", status="skipped" if result.status == "cached" else "completed",
+                    reason=("matching iFW outputs reused; " if result.status == "cached" else "")
+                    + f"TE {result.echo_time_ms:g} ms from {result.echo_time_source}",
+                    manifest_path=result.record_path,
+                    outputs={"ifw": result.ifw_path.as_posix(), "fw_volume_fraction": result.fw_volume_fraction_path.as_posix(),
+                             "roi_stats_csv": result.roi_stats_csv_path.as_posix() if result.roi_stats_csv_path else None},
+                ))
+            except IfwBlocked as exc:
+                tasks.append(ProductTaskRecord(name="microstructure.ifw", status="blocked", reason=str(exc)))
+                _emit(f"[Orchestrator] iFW stopped; other selected products can continue: {exc}", log)
+            except Exception as exc:
+                tasks.append(ProductTaskRecord(name="microstructure.ifw", status="failed", reason=str(exc)))
+                _emit(f"[Orchestrator] iFW failed; other selected products can continue: {exc}", log)
 
     if "tractography" in run_targets and primary_tractography_backend == 'ukf':
         from tractography.ukf import run_ukf
@@ -5047,6 +5200,10 @@ def _run_subject_products_impl(
         "microstructure_run_free_water": config.microstructure_run_free_water,
         "microstructure_run_noddi": config.microstructure_run_noddi,
         "microstructure_run_dki": config.microstructure_run_dki,
+        "microstructure_run_ifw": config.microstructure_run_ifw,
+        "microstructure_ifw_echo_time_ms": config.microstructure_ifw_echo_time_ms,
+        "microstructure_ifw_t2_gm_ms": config.microstructure_ifw_t2_gm_ms,
+        "microstructure_ifw_t2_csf_ms": config.microstructure_ifw_t2_csf_ms,
         "microstructure_dki_fit_method": config.microstructure_dki_fit_method,
         "microstructure_dki_execution": config.microstructure_dki_execution,
         "wma_num_threads": config.wma_num_threads,
@@ -5064,6 +5221,7 @@ def _run_subject_products_impl(
                 ("freewater", config.microstructure_run_free_water),
                 ("noddi", config.microstructure_run_noddi),
                 ("dki", config.microstructure_run_dki),
+                ("ifw", config.microstructure_run_ifw),
             )
             if enabled
         ],

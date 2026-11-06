@@ -905,6 +905,10 @@ def _compute_free_water_maps_impl(
 
     bvals, bvecs = _load_bvals_bvecs(raw)
     gtab = gradient_table(bvals, bvecs=bvecs, b0_threshold=50)
+    from dipy.core.gradients import check_multi_b
+    from microstructure.ifw import FREE_WATER_INELIGIBLE
+    if not check_multi_b(gtab, 3, non_zero=False):
+        raise ValueError(FREE_WATER_INELIGIBLE)
     fw_model = FreeWaterTensorModel(gtab, fit_method=fit_method)
     from microstructure.freewater_dispatch import configure_freewater_dispatch
     fit_implementation = configure_freewater_dispatch(fw_model, fit_method, engine)

@@ -65,6 +65,8 @@ class RunSelection:
     brain_mask_backend: str = "pnl_cnn"
     brain_mask_device: str = "auto"
     microstructure_dki: bool = False
+    microstructure_ifw: bool = False
+    ifw_echo_time_ms: Optional[float] = None
     dki_fit_method: str = "MKCURVE"
     wmql_query_preset: str = "official"
     wmql_query_selection: str = ""
@@ -478,6 +480,8 @@ def build_single_subject_run_kwargs(
         "microstructure_run_free_water": selection.microstructure_freewater,
         "microstructure_run_noddi": selection.microstructure_noddi,
         "microstructure_run_dki": selection.microstructure_dki,
+        "microstructure_run_ifw": selection.microstructure_ifw,
+        "microstructure_ifw_echo_time_ms": selection.ifw_echo_time_ms,
         "microstructure_dki_fit_method": selection.dki_fit_method,
         "microstructure_dki_matlab_executable": external_paths.get("dki_matlab_executable"),
         "microstructure_dki_mkcurve_root": external_paths.get("dki_mkcurve_root"),
@@ -542,6 +546,8 @@ def build_batch_run_kwargs(selection: RunSelection, *, batch_root: Path) -> dict
         "microstructure_run_free_water": selection.microstructure_freewater,
         "microstructure_run_noddi": selection.microstructure_noddi,
         "microstructure_run_dki": selection.microstructure_dki,
+        "microstructure_run_ifw": selection.microstructure_ifw,
+        "microstructure_ifw_echo_time_ms": selection.ifw_echo_time_ms,
         "microstructure_dki_fit_method": selection.dki_fit_method,
         "select_streamlines": max(1, int(selection.select_streamlines)),
         "ddseg_device": selection.ddseg_device,
@@ -794,7 +800,19 @@ def microstructure_stages_arg(common_run_kwargs: dict[str, Any]) -> str:
         stages.append("noddi")
     if common_run_kwargs.get("microstructure_run_dki"):
         stages.append("dki")
+    if common_run_kwargs.get("microstructure_run_ifw"):
+        stages.append("ifw")
     return ",".join(stages)
+
+
+def _append_ifw_args(args, common_run_kwargs):
+    """Forward the iFW echo time (ms) and the researcher T2 values; none is added when unset."""
+    for key, flag in (("microstructure_ifw_echo_time_ms", "--ifw-echo-time-ms"),
+                      ("microstructure_ifw_t2_gm_ms", "--ifw-t2-gm-ms"),
+                      ("microstructure_ifw_t2_csf_ms", "--ifw-t2-csf-ms")):
+        value = common_run_kwargs.get(key)
+        if value is not None:
+            args.extend([flag, str(value)])
 
 
 def build_background_cli_args(
@@ -856,6 +874,7 @@ def build_background_cli_args(
     args.extend(["--microstructure-stages", microstructure_stages_arg(common_run_kwargs)])
     args.extend(["--dki-fit-method", str(common_run_kwargs.get("microstructure_dki_fit_method", "MKCURVE"))])
     _append_compress_arg(args, common_run_kwargs)
+    _append_ifw_args(args, common_run_kwargs)
     wma_input = common_run_kwargs.get("wma_input_tractography")
     if wma_input is not None:
         args.extend(["--wma-input-tractography", _path_text(wma_input)])
@@ -925,6 +944,7 @@ def build_batch_background_cli_args(
     args.extend(["--microstructure-stages", microstructure_stages_arg(common_run_kwargs)])
     args.extend(["--dki-fit-method", str(common_run_kwargs.get("microstructure_dki_fit_method", "MKCURVE"))])
     _append_compress_arg(args, common_run_kwargs)
+    _append_ifw_args(args, common_run_kwargs)
     # Forwarded unchanged to every subject's run_subject_pipeline.py call.
     args.extend(topup_cli_args(topup_parameters_from_run_kwargs(common_run_kwargs)))
     _append_optional_path_args(args, external_paths)

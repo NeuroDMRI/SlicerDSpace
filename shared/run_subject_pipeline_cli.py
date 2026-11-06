@@ -63,6 +63,7 @@ OPTIONAL_ALGORITHM_TARGETS = (
     "microstructure_freewater",
     "microstructure_noddi",
     "microstructure_dki",
+    "microstructure_ifw",
     "surface_postprocess",
     "saf",
     "wma",
@@ -109,6 +110,7 @@ def _resolve_microstructure_stages(args: argparse.Namespace) -> tuple[str, ...]:
         "fw": "freewater",
         "noddi": "noddi",
         "dki": "dki",
+        "ifw": "ifw",
     }
     for value in raw_values:
         if value in {"all", "full"}:
@@ -117,16 +119,20 @@ def _resolve_microstructure_stages(args: argparse.Namespace) -> tuple[str, ...]:
         try:
             expanded.append(aliases[value])
         except KeyError as exc:
-            raise ValueError("microstructure stages must contain only: dti, freewater, noddi, dki, all.") from exc
+            raise ValueError("microstructure stages must contain only: dti, freewater, noddi, dki, ifw, all.") from exc
     if args.run_free_water:
         expanded.append("freewater")
     if args.run_noddi:
         expanded.append("noddi")
     if getattr(args, "run_dki", False) or "microstructure_dki" in _split_csv_or_repeat(args.targets):
         expanded.append("dki")
-    if any(stage in expanded for stage in ("freewater", "noddi", "dki")):
+    if getattr(args, "run_ifw", False) or "microstructure_ifw" in _split_csv_or_repeat(args.targets):
+        expanded.append("ifw")
+    if "ifw" in expanded:
+        expanded.append("freewater")  # iFW needs the Free Water fraction
+    if any(stage in expanded for stage in ("freewater", "noddi", "dki", "ifw")):
         expanded.append("dti")
-    return tuple(stage for stage in ("dti", "freewater", "noddi", "dki") if stage in set(expanded))
+    return tuple(stage for stage in ("dti", "freewater", "noddi", "dki", "ifw") if stage in set(expanded))
 
 
 def _infer_subject_id(subject_root: Path) -> str:
@@ -175,6 +181,7 @@ def _resolve_closure(args: argparse.Namespace):
         microstructure_run_free_water=bool(args.run_free_water),
         microstructure_run_noddi=bool(args.run_noddi),
         microstructure_run_dki=bool(getattr(args, "run_dki", False)),
+        microstructure_run_ifw=bool(getattr(args, "run_ifw", False)),
         wma_source_explicit=bool(getattr(args, "bundle_tractography_backend", None)),
         provided_tractography=tuple(name for name, value in (
             ("wma", getattr(args, "wma_input_tractography", None)),
@@ -199,6 +206,14 @@ def resolve_analysis_options(args, *, explicit_dests=()):
     args.run_free_water = 'freewater' in microstructure_stages
     args.run_noddi = 'noddi' in microstructure_stages
     args.run_dki = 'dki' in microstructure_stages
+    args.run_ifw = 'ifw' in microstructure_stages
+    for name in ('ifw_echo_time_ms', 'ifw_t2_gm_ms', 'ifw_t2_csf_ms'):
+        value = getattr(args, name, None)
+        if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float))
+                                  or not value == value or value in (float('inf'), float('-inf'))
+                                  or value < 0 or (name != 'ifw_echo_time_ms' and value <= 0)):
+            raise ValueError('--' + name.replace('_', '-') + (' must be zero or a positive number' if name == 'ifw_echo_time_ms'
+                                                              else ' must be a positive number'))
     if args.bundle_tractography_backend:
         from shared.algorithm_selection import algorithms
         if args.wma_input_tractography or args.tractcloud_input_tractography:
@@ -641,12 +656,22 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         help=(
             "Microstructure stages to run. May be repeated or comma-separated. "
-            "Choices: dti, freewater, noddi, dki, all. Defaults to dti only; optional stages are independent."
+            "Choices: dti, freewater, noddi, dki, ifw, all. Defaults to dti only; optional stages are independent. "
+            "ifw is not part of all: it needs the echo time and also runs Free Water and DDSeg."
         ),
     )
     parser.add_argument("--run-free-water", action="store_true", help="Enable Free Water stage under microstructure.")
     parser.add_argument("--run-noddi", action="store_true", help="Enable NODDI stage under microstructure.")
     parser.add_argument("--run-dki", action="store_true", help="Enable the optional DKI stage under microstructure.")
+    parser.add_argument("--run-ifw", action="store_true", help="Enable the iFW stage (also runs Free Water and DDSeg).")
+    parser.add_argument(
+        "--ifw-echo-time-ms", type=float, default=None,
+        help="iFW echo time in ms. Without it the stage reads EchoTime from the DWI JSON sidecar, else it stops. No default.",
+    )
+    parser.add_argument("--ifw-t2-gm-ms", type=float, default=95.0,
+                        help="iFW tissue T2 in ms (Cho et al. preprint, Suppl. Methods 1: 95).")
+    parser.add_argument("--ifw-t2-csf-ms", type=float, default=1500.0,
+                        help="iFW CSF T2 in ms (Cho et al. preprint, Suppl. Methods 1: 1500).")
     parser.add_argument(
         "--dki-fit-method", choices=("WLS", "OLS", "MKCURVE", "MKCURVE_MATLAB"), default="MKCURVE",
         help="DKI: WLS/OLS, bundled Python MKCURVE, or optional author reference MKCURVE_MATLAB. No fallback.",
@@ -946,6 +971,10 @@ def main(argv: list[str] | None = None) -> int:
         microstructure_run_free_water=bool(args.run_free_water),
         microstructure_run_noddi=bool(args.run_noddi),
         microstructure_run_dki=bool(args.run_dki),
+        microstructure_run_ifw=bool(getattr(args, "run_ifw", False)),
+        microstructure_ifw_echo_time_ms=getattr(args, "ifw_echo_time_ms", None),
+        microstructure_ifw_t2_gm_ms=getattr(args, "ifw_t2_gm_ms", 95.0),
+        microstructure_ifw_t2_csf_ms=getattr(args, "ifw_t2_csf_ms", 1500.0),
         microstructure_dki_fit_method=args.dki_fit_method,
         microstructure_dki_matlab_executable=args.dki_matlab_executable,
         microstructure_dki_mkcurve_root=args.dki_mkcurve_root,

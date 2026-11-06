@@ -116,9 +116,18 @@ class MrtrixCheckTests(ToolFixture):
 
 class FslCheckTests(ToolFixture):
     def good(self):
-        return {name: result(1, '', f'{name}\nUsage: {name} [options]') for name in ('eddy', 'eddy_cpu', 'topup')}
+        return {name: result(1, '', f'{name}\nUsage: {name} [options]') for name in ('eddy', 'eddy_cpu', 'eddy_openmp', 'topup')}
+
+    def managed(self):
+        """Treat self.root as the plugin runtime root, so self.fsl is a plugin-managed prefix."""
+        return patch('shared.managed_runtimes.runtime_root', return_value=self.root)
+
+    def present(self, *names):
+        for name in names:
+            (self.fsl / name).write_text('#!/bin/sh\n')
 
     def test_exit_1_with_usage_text_passes_for_all_three(self):
+        self.present('eddy_cpu')
         patcher, calls = self.runner(self.good())
         with patcher:
             checks = selftest.check_fsl(self.fsl, shim_root=self.root / 'shims')
@@ -135,16 +144,54 @@ class FslCheckTests(ToolFixture):
             selftest.check_fsl(self.fsl, shim_root=self.root / 'shims')
 
     def test_exit_0_and_exit_1_without_usage_fail(self):
+        self.present('eddy_cpu')
         for answer in (result(0, 'Usage: eddy'), result(1, '', 'segmentation fault')):
             patcher, _ = self.runner(dict(self.good(), eddy_cpu=answer))
             with patcher, self.assertRaisesRegex(RuntimeError, 'eddy_cpu --help'):
                 selftest.check_fsl(self.fsl, shim_root=self.root / 'shims')
 
     def test_topup_is_checked_last_and_can_fail_alone(self):
+        self.present('eddy_cpu')
         patcher, calls = self.runner(dict(self.good(), topup=result(127)))
         with patcher, self.assertRaisesRegex(RuntimeError, 'topup --help'):
             selftest.check_fsl(self.fsl, shim_root=self.root / 'shims')
         self.assertEqual([name for name, _, _ in calls], ['eddy', 'eddy_cpu', 'topup'])
+
+    def test_user_set_fsl_with_eddy_openmp_and_no_eddy_cpu_passes(self):
+        """G2: FSL before 6.0.7 has eddy_openmp, not eddy_cpu. Fails before the fix: eddy_cpu was always run."""
+        self.present('eddy_openmp')
+        patcher, calls = self.runner(self.good())
+        with patcher:
+            checks = selftest.check_fsl(self.fsl, shim_root=self.root / 'shims')
+        self.assertEqual(checks, ['fsl:eddy_help', 'fsl:eddy_openmp_help', 'fsl:topup_help'])
+        self.assertEqual([name for name, _, _ in calls], ['eddy', 'eddy_openmp', 'topup'])
+
+    def test_user_set_fsl_needs_only_eddy_and_topup(self):
+        patcher, calls = self.runner(self.good())
+        with patcher:
+            checks = selftest.check_fsl(self.fsl, shim_root=self.root / 'shims')
+        self.assertEqual(checks, ['fsl:eddy_help', 'fsl:topup_help'])
+        for missing in ('eddy', 'topup'):
+            patcher, _ = self.runner(dict(self.good(), **{missing: FileNotFoundError(missing)}))
+            with patcher, self.assertRaisesRegex(RuntimeError, missing + ' could not run'):
+                selftest.check_fsl(self.fsl, shim_root=self.root / 'shims')
+
+    def test_a_present_eddy_openmp_that_fails_fails_the_user_set_fsl(self):
+        self.present('eddy_openmp')
+        patcher, _ = self.runner(dict(self.good(), eddy_openmp=result(127)))
+        with patcher, self.assertRaisesRegex(RuntimeError, 'eddy_openmp --help'):
+            selftest.check_fsl(self.fsl, shim_root=self.root / 'shims')
+
+    def test_managed_prefix_without_eddy_cpu_fails(self):
+        """G2: the plugin-managed FSL prefix must have eddy_cpu."""
+        self.present('eddy_openmp')
+        patcher, calls = self.runner(dict(self.good(), eddy_cpu=FileNotFoundError('eddy_cpu')))
+        with patcher, self.managed(), self.assertRaisesRegex(RuntimeError, 'eddy_cpu could not run'):
+            selftest.check_fsl(self.fsl, shim_root=self.root / 'shims')
+        patcher, calls = self.runner(self.good())
+        with patcher, self.managed():
+            checks = selftest.check_fsl(self.fsl, shim_root=self.root / 'shims')
+        self.assertEqual(checks, ['fsl:eddy_help', 'fsl:eddy_cpu_help', 'fsl:topup_help'])
 
 
 class Dcm2niixCheckTests(ToolFixture):
@@ -261,6 +308,7 @@ class RunChecksDispatchTests(ToolFixture):
                    **{name: result(1, 'Usage') for name in ('eddy', 'eddy_cpu', 'topup')},
                    'dcm2niix': result(3, 'dcm2niix version v1')}
         patcher, _ = self.runner(answers)
+        (self.fsl / 'eddy_cpu').write_text('#!/bin/sh\n')
         request = {'mrtrix_bin_dir': str(self.mrtrix), 'fsl_bin_dir': str(self.fsl), 'dcm2niix': str(self.root / 'dcm2niix'),
                    'pnl_native_mask': {'model_dir': '/m'}}
         with patcher, patch.dict(os.environ, {'SLICERDSPACE_RUNTIME_ROOT': str(self.root / 'rt')}), \
@@ -310,6 +358,15 @@ SLICER_NUMPY = status('python:numpy', 'python', details={'import': 'numpy', 'pyt
 class RequestsForReportToolTests(unittest.TestCase):
     """R-B3: the builder used by the GUI check and the setup self_check step adds the B9 feature checks."""
 
+    def setUp(self):
+        # G1: the fallback asks DICOM import for dcm2niix; keep these tests independent of the machine's PATH.
+        patcher = patch('shared.input_import.packaged_dcm2niix', return_value=None)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        patcher = patch('shared.input_import.shutil.which', return_value=None)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_report_with_mrtrix_fsl_and_the_pnl_method_gives_all_keys(self):
         requests = selftest.requests_for_report(tool_report(SLICER_NUMPY, MRTRIX, FSL, PNL),
                                                 backend_paths={'dcm2niix_executable': '/opt/d2n/dcm2niix'})
@@ -350,6 +407,35 @@ class RequestsForReportToolTests(unittest.TestCase):
         self.assertEqual(request['dcm2niix'], '/opt/d2n/dcm2niix')
         request = selftest.requests_for_report(tool_report(SLICER_NUMPY), backend_paths={'packaged_dcm2niix': '/pkg/dcm2niix'})[0]
         self.assertEqual(request['dcm2niix'], '/pkg/dcm2niix')
+
+
+    def test_dcm2niix_from_the_packaged_wheel_when_the_report_has_no_field(self):
+        """G1: no report field and no path setting; the wheel in Slicer's Python is what DICOM import uses."""
+        with patch('shared.input_import.packaged_dcm2niix', return_value=Path('/slicer/site/bin/dcm2niix')):
+            request = selftest.requests_for_report(tool_report(SLICER_NUMPY))[0]
+        self.assertEqual(request['dcm2niix'], '/slicer/site/bin/dcm2niix')
+        self.assertEqual(request['python'], '/slicer/PythonSlicer')  # Slicer's Python request
+
+    def test_dcm2niix_on_path_when_there_is_no_wheel_and_none_means_no_check(self):
+        with patch('shared.input_import.shutil.which', return_value='/usr/local/bin/dcm2niix'):
+            request = selftest.requests_for_report(tool_report(SLICER_NUMPY))[0]
+        self.assertEqual(request['dcm2niix'], '/usr/local/bin/dcm2niix')
+        request = selftest.requests_for_report(tool_report(SLICER_NUMPY))[0]  # DWIConvert fallback
+        self.assertNotIn('dcm2niix', request)
+
+    def test_mrtrix_used_only_as_the_brain_mask_backend_gets_its_check(self):
+        """G3: the report has no MRtrix command entry, only the required brain_mask_backend setting."""
+        mask = status('brain_mask_backend', 'setting', details={
+            'backend': 'mrtrix', 'tool_paths': {'dwi2mask': '/opt/mrtrix3/bin/dwi2mask'}})
+        request = selftest.requests_for_report(tool_report(SLICER_NUMPY, mask))[0]
+        self.assertEqual(request['mrtrix_bin_dir'], '/opt/mrtrix3/bin')
+        self.assertNotIn('fsl_bin_dir', request)
+        missing = status('brain_mask_backend', 'setting', state='missing', details={
+            'backend': 'mrtrix', 'tool_paths': {'dwi2mask': '/opt/mrtrix3/bin/dwi2mask'}})
+        self.assertNotIn('mrtrix_bin_dir', selftest.requests_for_report(tool_report(SLICER_NUMPY, missing))[0])
+        # a command entry of the preprocessing target still wins
+        request = selftest.requests_for_report(tool_report(SLICER_NUMPY, MRTRIX, mask))[0]
+        self.assertEqual(request['mrtrix_bin_dir'], '/opt/mrtrix3/bin')
 
 
 class ScriptTests(ToolFixture):

@@ -109,15 +109,22 @@ def _tool_bin_dir(report, install_group):
 
 
 def _dcm2niix_executable(report, backend_paths):
-    # SPEC-GAP: this base has no dcm2niix entry in the report. Use the doctor's `command:dcm2niix` if one exists,
-    # else the path fields the setup branch uses (`packaged_dcm2niix`, then `dcm2niix_executable`).
+    """The dcm2niix that DICOM import would use (G1).
+
+    An explicit report field or path setting comes first. Otherwise the pip package in this Python
+    (`input_import.packaged_dcm2niix()`), then PATH (`find_dcm2niix()` does both). None: no check (DWIConvert is the fallback).
+    """
     for item in getattr(report, 'statuses', ()):
         if getattr(item, 'key', '') == 'command:dcm2niix' and item.required and item.status in _AVAILABLE:
             resolved = (item.details or {}).get('resolved')
             if resolved:
                 return str(resolved)
-    return next((str(backend_paths[name]) for name in ('packaged_dcm2niix', 'dcm2niix_executable')
-                 if backend_paths.get(name)), None)
+    explicit = next((str(backend_paths[name]) for name in ('packaged_dcm2niix', 'dcm2niix_executable')
+                     if backend_paths.get(name)), None)
+    if explicit:
+        return explicit
+    from shared import input_import
+    return input_import.find_dcm2niix()
 
 
 def _add_tool_requests(report, groups, backend_paths):
@@ -128,6 +135,14 @@ def _add_tool_requests(report, groups, backend_paths):
     from shared.external_process import is_slicer_python
     wanted = {}
     mrtrix, fsl = _tool_bin_dir(report, 'mrtrix'), _tool_bin_dir(report, 'fsl')
+    if not mrtrix:
+        # G3: MRtrix used only as the brain-mask backend has no command entry; the setting carries the dwi2mask path.
+        for item in getattr(report, 'statuses', ()):
+            details = item.details or {}
+            dwi2mask = (details.get('tool_paths') or {}).get('dwi2mask')
+            if getattr(item, 'key', '') == 'brain_mask_backend' and item.required and item.status in _AVAILABLE \
+                    and details.get('backend') == 'mrtrix' and dwi2mask:
+                mrtrix = str(Path(dwi2mask).parent)
     if mrtrix:
         wanted['mrtrix_bin_dir'] = mrtrix
     if fsl:
@@ -200,14 +215,20 @@ def check_mrtrix(bin_dir, fsl_bin_dir=None, *, shim_root=None):
 
 
 def check_fsl(fsl_bin_dir, mrtrix_bin_dir=None, *, shim_root=None):
-    """FSL eddy, eddy_cpu and topup with FSLDIR, FSLOUTPUTTYPE and the FSL bin on PATH.
+    """FSL eddy and topup (and eddy_cpu / eddy_openmp) with FSLDIR, FSLOUTPUTTYPE and the FSL bin on PATH.
 
+    G2: a plugin-managed prefix must have eddy, eddy_cpu and topup. Any other FSL needs eddy and topup, what the
+    doctor requires; eddy_cpu (FSL 6.0.7+) and eddy_openmp (older FSL) are checked only when present.
     The tools print their usage and exit with 1 for --help; exit 127 means the FSL Python was not found.
     """
     from shared.external_process import managed_tool_environment
     env = managed_tool_environment(mrtrix_bin_dir=mrtrix_bin_dir, fsl_bin_dir=fsl_bin_dir, shim_root=shim_root)
     checks = []
-    for name in ('eddy', 'eddy_cpu', 'topup'):
+    managed = is_managed_prefix(fsl_bin_dir)
+    required = {'eddy', 'topup'} | ({'eddy_cpu'} if managed else set())
+    for name in ('eddy', 'eddy_cpu', 'eddy_openmp', 'topup'):
+        if name not in required and (managed or not (Path(fsl_bin_dir) / name).exists()):
+            continue
         result = _run_tool([Path(fsl_bin_dir) / name, '--help'], env)
         if result.returncode != 1 or 'usage' not in _output(result).lower():
             raise RuntimeError(f'{name} --help should print its usage and exit with 1; got exit {result.returncode}: '

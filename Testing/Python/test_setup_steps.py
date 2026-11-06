@@ -54,16 +54,33 @@ class SetupStepsTests(unittest.TestCase):
             self.assertIn("setup_managed_runtime.py", " ".join(managed))
             self.assertTrue(steps[-1]["script"].endswith("check_setup_functionality.py"))
 
-    def test_dcm2niix_pin_goes_into_the_python_step_only_while_it_is_not_installed(self):
+    def requirements_by_program(self, step):
+        found = {}
+        for program, args, _env in step["commands"]:
+            request = json.loads(Path(args[args.index("--request") + 1]).read_text())
+            found.setdefault(program, []).extend(request["requirements"])
+        return found
+
+    def test_s_b3_dcm2niix_is_pending_alone_and_goes_into_slicers_python(self):
+        pin = "dcm2niix==1.0.20261029"
         with tempfile.TemporaryDirectory() as folder:
-            plan = full_plan(folder)
-            for pending, expected in ((True, True), (False, False)):
-                with patch("scripts.setup_python_packages.dcm2niix_pending", return_value=pending):
-                    steps = setup_steps(plan, accepted_for(plan), folder=folder)
-                    python = next(step for step in steps if step["id"] == "python_packages")
-                    text = json.dumps([json.loads(Path(args[args.index("--request") + 1]).read_text())
-                                       for _program, args, _env in python["commands"]])
-                    self.assertEqual("dcm2niix==1.0.20261029" in text, expected, text)
+            # Everything else installed, the wheel missing: the plan lists exactly the pin as pending.
+            plan = build_setup_plan(SimpleNamespace(statuses=[]), system="Linux", machine="x86_64", dcm2niix_missing=True)
+            self.assertEqual(plan["python_packages"], [pin])
+            self.assertEqual(build_setup_plan(SimpleNamespace(statuses=[]), system="Linux", machine="x86_64")["python_packages"], [])
+            # An external interpreter is selected for TractCloud: python_command returns it for every request.
+            plan["python_packages"].append("tractcloud-dep>=1")
+            plan["python_requests"].append(dict(requirement="tractcloud-dep>=1", python_executable="/ext/python"))
+            steps = setup_steps(plan, accepted_for(plan), folder=folder,
+                                launcher=("/slicer/PythonSlicer", ["--launch", "PythonSlicer"]),
+                                python_command=lambda override: (override or "/ext/python", []))
+            found = self.requirements_by_program(next(step for step in steps if step["id"] == "python_packages"))
+            self.assertEqual(found["/slicer/PythonSlicer"], [pin])  # fails before: the pin went to the selected external Python
+            self.assertNotIn(pin, found["/ext/python"])
+            # Without a launcher the pin goes to the interpreter that runs the setup (the CLI under PythonSlicer).
+            steps = setup_steps(plan, accepted_for(plan), folder=folder, python_command=lambda override: (override or "/ext/python", []))
+            import sys
+            self.assertEqual(self.requirements_by_program(steps[0])[sys.executable], [pin])
 
     def test_missing_licence_stops_setup_steps(self):
         with tempfile.TemporaryDirectory() as folder:

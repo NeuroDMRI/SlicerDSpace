@@ -20,6 +20,7 @@ def build_cli_plan(targets, user_config, *, doctor=None, wsl_distributions=None,
     """Closure, doctor report and setup plan for the targets, from the saved user configuration."""
     from shared.environment import EnvironmentDoctorConfig, run_environment_doctor
     from shared.environment_check import config_from_dict
+    from scripts.setup_python_packages import dcm2niix_pending
     from shared.selected_setup import build_setup_plan, need_flags
     from shared.target_closure import expand_closure
 
@@ -42,7 +43,8 @@ def build_cli_plan(targets, user_config, *, doctor=None, wsl_distributions=None,
         report, **need_flags(closure.targets, closure.tractography_algorithms),
         brain_mask_backend=defaults.get("brain_mask_backend") or "pnl_cnn", wma_atlas=defaults.get("wma_atlas") or "org",
         backend_paths=deps, closure_targets=closure.targets, system=system, machine=machine,
-        wsl_distributions=wsl_distributions, slicer_executable=deps.get("slicer_executable"))
+        wsl_distributions=wsl_distributions, slicer_executable=deps.get("slicer_executable"),
+        dcm2niix_missing=dcm2niix_pending())  # S-B3: this script runs in Slicer's Python (PythonSlicer)
     plan["closure_targets"] = list(closure.targets)
     return closure, report, plan
 

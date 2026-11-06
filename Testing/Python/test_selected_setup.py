@@ -37,6 +37,12 @@ def fake_jobs(started):
 
 
 class SelectedSetupTests(unittest.TestCase):
+    def setUp(self):
+        # S-B3: a missing dcm2niix wheel is pending work; these tests are about other things, so the wheel is "installed".
+        patcher = patch("scripts.setup_python_packages.dcm2niix_pending", return_value=False)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_d6_gui_doctor_needs_the_native_tensor_fit_not_the_dmri_module(self):
         spec = DependencySpec(key='python:slicer.util', kind='python', label='slicer.util', required=True,
                               targets=('microstructure',))
@@ -250,6 +256,22 @@ class SelectedSetupTests(unittest.TestCase):
                          [("SlicerDMRI", False), ("UKFTractography", False)])
         self.assertTrue(owner._setupRestartRequired)
         self.assertFalse(owner._selectedSetupActive)
+
+    def test_s_b3_a_missing_dcm2niix_wheel_alone_is_pending_work_in_the_gui(self):
+        report = result()
+        owner = self.owner(report)
+        context, _ = self.run_preparation(owner, report)
+        started = []
+        with tempfile.TemporaryDirectory() as temp, context, patch("shared.ui_selected_setup._confirm", return_value=True) as confirm, \
+                patch("scripts.setup_python_packages.dcm2niix_pending", return_value=True), \
+                patch("shared.setup_resume.accepted_licences", return_value={}), \
+                patch("shared.ui_environment_check.start_environment_check", side_effect=lambda widget, callback, **kwargs: callback(report) or True), \
+                patch("shared.ui_setup_jobs.start_setup_job", side_effect=fake_jobs(started)), \
+                patch("shared.user_config.default_user_config_path", return_value=Path(temp) / "config.json"), \
+                patch.dict("os.environ", {"SLICERDSPACE_USER_CONFIG": str(Path(temp) / "config.json")}):
+            self.assertTrue(prepare_selected_environment(owner, report))
+        confirm.assert_called_once()  # fails before S-B3: nothing else was missing, so no dialog and no install
+        self.assertEqual([title for title, _ in started], ["Install Python packages"])
 
     # ---- fix round 1: Windows GUI route (mocks only; Windows stays "implemented, not run") ----
     WSL_UBUNTU = [{"name": "Ubuntu", "state": "Running", "version": 2, "default": True}]

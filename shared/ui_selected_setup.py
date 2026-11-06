@@ -198,12 +198,14 @@ def selected_setup_plan(owner, result, *, repair=False):
     config = owner._environment_dependency_path_kwargs()
     existing = configured_profiles(config, candidates) if candidates else ()
     from shared.selected_setup import need_flags
+    from scripts.setup_python_packages import dcm2niix_pending
     plan = build_setup_plan(result, installed_extensions=installed, loaded_extensions=loaded,
         **need_flags(targets, closure.tractography_algorithms, fallback_ukf=fallback_ukf),
         brain_mask_backend=getattr(owner._parameterNode, "brainMaskBackend", "pnl_cnn"), gpu_available=gpu,
         wma_atlas=getattr(owner._parameterNode, "wmaAtlas", "org"),
         existing_managed_profiles=existing, repair=repair, backend_paths=config, closure_targets=tuple(closure.targets),
-        slicer_executable=config.get("slicer_executable") or _running_slicer_executable())
+        slicer_executable=config.get("slicer_executable") or _running_slicer_executable(),
+        dcm2niix_missing=dcm2niix_pending())  # S-B3: checked in the running Slicer's own Python
     # C4: the result's targets are already closed, so the owner (which knows what was ticked) words the notice.
     notice = getattr(owner, "_closure_notice_text", None)
     notice = notice() if callable(notice) else ""

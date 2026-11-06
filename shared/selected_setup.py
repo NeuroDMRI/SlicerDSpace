@@ -15,7 +15,7 @@ PNL_UNSUPPORTED_TEXT = "Automatic brain mask is not available on this system yet
 def build_setup_plan(result, *, installed_extensions=(), loaded_extensions=None, need_dti=False, need_torch=False, need_ukf=False,
                      need_slicerdmri=False, brain_mask_backend="pnl_cnn", wma_atlas="org", gpu_available=False, system=None, machine=None,
                      existing_managed_profiles=(), repair=False, backend_paths=None, closure_targets=(),
-                     wsl_distributions=None, slicer_executable=None):
+                     wsl_distributions=None, slicer_executable=None, dcm2niix_missing=False):
     installed = set(installed_extensions)
     # DTI-based targets use the native Teem tensor fit (Slicer core), so need_dti adds no extension.
     # SlicerDMRI is needed only where a step still loads its modules (the WMA harden-transform shim).
@@ -114,6 +114,13 @@ def build_setup_plan(result, *, installed_extensions=(), loaded_extensions=None,
         requirement = details.get('install_requirement') or details.get('package')
         if item.kind == 'python' and requirement in packages:
             python_requests.append(dict(requirement=requirement, python_executable=details.get('python_executable')))
+    if dcm2niix_missing:
+        # S-B3: the pinned dcm2niix wheel always goes into Slicer's own Python, never into an external
+        # interpreter chosen for TractCloud; it is pending even when nothing else is missing.
+        from scripts.setup_python_packages import DCM2NIIX_REQUIREMENT
+        if DCM2NIIX_REQUIREMENT not in packages:
+            packages.append(DCM2NIIX_REQUIREMENT)
+        python_requests.append(dict(requirement=DCM2NIIX_REQUIREMENT, python_executable=None, slicer_python=True))
     for name in source_profiles:
         if name == 'tractcloud':
             python = backend_paths.get('tractcloud_python_executable')
@@ -223,8 +230,11 @@ def windows_runtime_plan(groups, closure_targets, *, wsl_distributions=None, sli
 
 
 def python_package_commands(packages, *, requests=None, python_command, folder, statuses=(), tract_querier_root=None,
-                            root_expected=False):
-    """Group requests by their selected Python, never mix runtime targets. Pure, without a GUI object (B7)."""
+                            root_expected=False, slicer_command=None):
+    """Group requests by their selected Python, never mix runtime targets. Pure, without a GUI object (B7).
+
+    A request with `slicer_python` set goes to the `slicer_command` (program, prefix) pair when one is given (S-B3).
+    """
     import importlib.metadata
     import os
     import sys
@@ -249,7 +259,10 @@ def python_package_commands(packages, *, requests=None, python_command, folder, 
                         if item.kind == "python" and any(value and package_name(package) == package_name(value)
                             for value in ((item.details or {}).get("package"), (item.details or {}).get("install_requirement")))]
         for details in matches or [{}]:
-            program, prefix = python_command(details.get("python_executable"))
+            if details.get("slicer_python") and slicer_command:
+                program, prefix = slicer_command
+            else:
+                program, prefix = python_command(details.get("python_executable"))
             group = groups.setdefault((str(program), tuple(prefix)), {"requirements": [], "environment": {}})
             requirement = details.get("install_requirement") or package
             try:
@@ -406,7 +419,6 @@ def setup_steps(plan, accepted_licences, *, folder, launcher=None, python_comman
     The last step is the self-check; its commands are built at run time from a fresh doctor report (SPEC-GAP).
     """
     import sys
-    from scripts.setup_python_packages import DCM2NIIX_REQUIREMENT, dcm2niix_pending
     from shared.setup_components import pending_licences, plan_components, required_licences
 
     components = plan_components(plan)
@@ -429,9 +441,6 @@ def setup_steps(plan, accepted_licences, *, folder, launcher=None, python_comman
                           commands=[run("setup_backend_sources.py", "--profiles", *plan["backend_profiles"], "--root",
                                         str(plan["backend_root"]), "--execute", "--accept-terms", "--result", str(receipt))]))
     packages, requests = list(plan.get("python_packages", ())), list(plan.get("python_requests", ()))
-    if components and dcm2niix_pending():  # B6; SPEC-GAP: the spec names no target, so it goes to the default (Slicer) Python
-        packages.append(DCM2NIIX_REQUIREMENT)
-        requests.append(dict(requirement=DCM2NIIX_REQUIREMENT, python_executable=None))
     tract_root, expected_root = config.get("tract_querier_root"), False
     if "wmql" in plan.get("backend_profiles", ()):  # the backend step above puts the checkout here before this step runs
         from shared.backend_sources import profile_path
@@ -439,7 +448,7 @@ def setup_steps(plan, accepted_licences, *, folder, launcher=None, python_comman
     if packages:
         commands, receipts = python_package_commands(
             tuple(packages), requests=requests, python_command=python_command, folder=folder, statuses=statuses,
-            tract_querier_root=tract_root, root_expected=bool(expected_root))
+            tract_querier_root=tract_root, root_expected=bool(expected_root), slicer_command=(program, list(prefix)))
         steps.append(dict(id="python_packages", title="Install Python packages", commands=commands,
                           receipt=receipts[0] if receipts else None, receipts=receipts, packages=packages))
     if plan.get("asset_profiles"):

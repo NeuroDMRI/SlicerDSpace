@@ -6,12 +6,15 @@ from shared.managed_runtimes import supported_platform, runtime_root
 from shared.ui_environment_panel import environment_missing_items
 
 
+from shared.wsl_bridge import WSL_INSTALL_COMMAND, WSL_MISSING_LABEL, list_distributions, select_distribution
+
 PNL_UNSUPPORTED_TEXT = "Automatic brain mask is not available on this system yet. Provide a brain mask file (NIfTI)."
 
 
 def build_setup_plan(result, *, installed_extensions=(), loaded_extensions=None, need_dti=False, need_torch=False, need_ukf=False,
                      need_slicerdmri=False, brain_mask_backend="pnl_cnn", wma_atlas="org", gpu_available=False, system=None, machine=None,
-                     existing_managed_profiles=(), repair=False, backend_paths=None):
+                     existing_managed_profiles=(), repair=False, backend_paths=None, closure_targets=(),
+                     wsl_distributions=None, slicer_executable=None):
     installed = set(installed_extensions)
     # DTI-based targets use the native Teem tensor fit (Slicer core), so need_dti adds no extension.
     # SlicerDMRI is needed only where a step still loads its modules (the WMA harden-transform shim).
@@ -75,6 +78,19 @@ def build_setup_plan(result, *, installed_extensions=(), loaded_extensions=None,
             covered.add("brain_mask")
     if 'mrtrix' in supported_managed:
         covered.add('mrtrix')
+    windows_runtime = None
+    if native_windows:
+        windows_runtime = windows_runtime_plan(
+            groups, closure_targets, wsl_distributions=wsl_distributions, slicer_executable=slicer_executable,
+            license_file=backend_paths.get("postprocess_license_file"))
+        if windows_runtime["command"]:
+            covered.update(windows_runtime["covers"])
+            for name in ("mrtrix", "fsl_cpu", "fsl_cuda"):
+                if name in managed and name != "pnl_cnn":
+                    managed.remove(name)
+            supported_managed = [name for name in supported_managed if name not in {"mrtrix", "fsl_cpu", "fsl_cuda"}]
+            unsupported_managed = [name for name in unsupported_managed if name not in {"mrtrix", "fsl_cpu", "fsl_cuda"}]
+            unsupported_notes = {key: value for key, value in unsupported_notes.items() if key in unsupported_managed}
     assets = tuple(name for name in ("surface", "segmentation", "parcellation")
                    if any(name in item.targets and item.install_group == "model-resources" for item in missing))
     import json
@@ -152,11 +168,57 @@ def build_setup_plan(result, *, installed_extensions=(), loaded_extensions=None,
                               if native_windows and item.install_group == 'wma' and 'atlas' not in item.key
                               else PNL_UNSUPPORTED_TEXT if item.key == 'brain_mask_backend' and unsupported_notes
                               else item.install_hint}
-                             for item in missing if item.install_group not in covered and item.key not in handled_keys],
-            "fsl_license_required": any(name.startswith("fsl_") for name in managed) and platforms_ok,
+                             for item in missing if item.install_group not in covered and item.key not in handled_keys]
+                            + ([{"key": "wsl2_ubuntu", "label": WSL_MISSING_LABEL, "hint": WSL_INSTALL_COMMAND}]
+                               if windows_runtime and windows_runtime["needed"] and not windows_runtime["distribution"] else []),
+            "windows_runtime": windows_runtime,
+            "fsl_license_required": (any(name.startswith("fsl_") for name in managed) and platforms_ok)
+                                    or bool(windows_runtime and windows_runtime["command"]),
             "pnl_terms_required": "pnl_cnn" in managed and platforms_ok,
             "repair": bool(repair),
             "scope": "Dependency preparation only; installation is not scientific QC"}
+
+
+def windows_install_command(distribution, *, slicer_executable=None, install_freesurfer=False, license_file=None,
+                            skip_large_downloads=False, script=None):
+    """Argument list of the Windows ps1 call (B5). The caller adds the program, `powershell`."""
+    script = Path(script) if script else Path(__file__).resolve().parents[1] / "scripts" / "install_deps_windows.ps1"
+    command = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script), "-Distro", distribution]
+    if slicer_executable:  # SPEC-GAP: -SlicerExecutable is left out when the running Slicer path is unknown
+        command += ["-SlicerExecutable", str(slicer_executable)]
+    command += ["-AcceptFslLicense", "-SkipModelAssets", "-SkipSlicerPythonInstall"]
+    if install_freesurfer:
+        command += ["-FreeSurferLicensePath", str(license_file)]
+    else:
+        command.append("-SkipFreeSurfer")
+    if skip_large_downloads:
+        command.append("-SkipLargeDownloads")
+    return ["powershell", *command]
+
+
+def windows_runtime_plan(groups, closure_targets, *, wsl_distributions=None, slicer_executable=None, license_file=None):
+    """What the Windows setup does for the missing install groups: WSL distribution, ps1 switches (B5)."""
+    from shared.surface_license import resolve_surface_license, usable_license
+
+    needed = bool(set(groups) & {"mrtrix", "fsl", "freesurfer"})
+    distributions = list_distributions() if wsl_distributions is None and needed else (wsl_distributions or [])
+    distribution = select_distribution(distributions)
+    freesurfer_required = "freesurfer" in groups
+    found = None
+    if freesurfer_required:
+        candidate = resolve_surface_license(license_file)
+        found = candidate if usable_license(candidate) else None
+    install_freesurfer = bool(freesurfer_required and found)
+    wma = "wma" in tuple(closure_targets)
+    command = None
+    if needed and distribution:
+        command = windows_install_command(
+            distribution, slicer_executable=slicer_executable, install_freesurfer=install_freesurfer,
+            license_file=found, skip_large_downloads=not install_freesurfer and not wma)
+    covers = {"mrtrix", "fsl"} | ({"freesurfer"} if install_freesurfer else set())
+    return {"needed": needed, "distribution": distribution, "freesurfer_required": freesurfer_required,
+            "freesurfer_license": str(found) if found else None, "installs_freesurfer": install_freesurfer,
+            "wma_in_closure": wma, "command": command, "covers": sorted(covers)}
 
 
 # Receipt kinds a setup step can produce. Each is validated the way the GUI handlers did before B8.
@@ -207,6 +269,19 @@ def validate_setup_receipt(step, receipt):
         if not root.is_dir():
             raise ValueError("Model asset folder is unavailable")
         return {"model_assets_dir": str(root)}
+    if kind == "windows_runtime":
+        # The ps1 receipt is the user config it wrote (B5): the bridge folders must exist and belong to the chosen distribution.
+        from shared.wsl_bridge import check_bridge_distribution
+        wanted = {"mrtrix_bin_dir", "preprocessing_mrtrix_bin_dir", "preprocessing_fsl_bin_dir"}
+        written = (receipt or {}).get("external_dependencies") or {}
+        settings = {key: str(written[key]) for key in wanted if written.get(key)}
+        distribution = str(step.get("distribution") or "")
+        if set(settings) != wanted or not distribution or any(not Path(value).is_dir() for value in settings.values()):
+            raise ValueError("Windows runtime setup did not write the WSL bridge folders")
+        configs = [path for value in settings.values() for path in sorted(Path(value).glob("*.conf"))]
+        if not configs or any(check_bridge_distribution(Path(str(path)[:-len(".conf")]), distribution) is None for path in configs):
+            raise ValueError("WSL bridges are missing or were not written for distribution " + distribution)
+        return settings
     if kind in {"python_packages", "self_check"}:
         return {}
     raise ValueError("Unknown setup step: " + str(kind))
@@ -219,4 +294,6 @@ def apply_setup_receipt(step, receipt):
     settings = validate_setup_receipt(step, receipt)
     if settings:
         update_user_config({"external_dependencies": settings})
+    if step.get("id") == "windows_runtime":
+        update_user_config({"wsl_distribution": str(step["distribution"])})  # SPEC-GAP: a top-level key, not an external dependency
     return settings

@@ -134,6 +134,22 @@ def _inherited_lease(folder):
 
 
 @contextmanager
+def _torch_threads(count):
+    """Set the intra-op thread count of torch, when it is already imported, and restore it on exit."""
+    torch = sys.modules.get('torch')
+    setter, getter = getattr(torch, 'set_num_threads', None), getattr(torch, 'get_num_threads', None)
+    if setter is None or getter is None:
+        yield
+        return
+    previous = getter()
+    setter(count)
+    try:
+        yield
+    finally:
+        setter(previous)
+
+
+@contextmanager
 def stage_admission(name, *, gpu=False):
     selected = os.environ.get(ENV)
     if not selected or _inside.get():
@@ -221,7 +237,10 @@ def stage_admission(name, *, gpu=False):
         except ImportError:
             thread_limit = nullcontext()
         from shared.cohort_affinity import cpu_placement
-        with thread_limit, cpu_placement(row.get('cpu_affinity')):
+        # S1.3 (adaptive only; SPEC-GAP: resources mode keeps its behaviour): an already imported torch
+        # follows the reservation, then is restored.
+        torch_limit = _torch_threads(row['cpu']) if config['policy'] == 'fair_backfill' else nullcontext()
+        with thread_limit, torch_limit, cpu_placement(row.get('cpu_affinity')):
             yield row
         outcome = 'completed'
     finally:

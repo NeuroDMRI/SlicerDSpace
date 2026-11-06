@@ -29,7 +29,8 @@ class RunSubjectPipelineCliTest(unittest.TestCase):
         from shared.run_subject_pipeline_cli import build_parser
         defaults = build_parser().parse_args([])
         self.assertEqual(defaults.surface_precision, 'fp32')
-        self.assertEqual(defaults.surface_cpu_threads, 4)
+        # None: the stage CPU reservation of a cohort run, else 4 (T3 S1.3).
+        self.assertIsNone(defaults.surface_cpu_threads)
         self.assertEqual(defaults.surface_max_gpu_gib, 24.)
         selected = build_parser().parse_args(['--surface-precision', 'bf16',
             '--surface-cpu-threads', '2', '--surface-max-gpu-gib', '18'])

@@ -430,9 +430,12 @@ def main(argv: list[str] | None = None) -> int:
             forwarded_args += ['--max-parallel-models', '1']
         if not _command_option(forwarded_args, '--microstructure-free-water-n-jobs', ''):
             forwarded_args += ['--microstructure-free-water-n-jobs', '1']
-        for flag in ('--surface-cpu-threads', '--mrtrix-nthreads', '--preprocessing-eddy-threads'):
-            if not _command_option(forwarded_args, flag, ''):
-                forwarded_args += [flag, str(resource_plan['stage_cpus'])]
+        # S1.3: in adaptive mode the thread count of each stage follows its own CPU reservation
+        # (SLICERDSPACE_STAGE_CPUS), so the plan-wide default is not appended; the user's flags stay.
+        if args.scheduler != 'adaptive':
+            for flag in ('--surface-cpu-threads', '--mrtrix-nthreads', '--preprocessing-eddy-threads'):
+                if not _command_option(forwarded_args, flag, ''):
+                    forwarded_args += [flag, str(resource_plan['stage_cpus'])]
     else:
         args.jobs = args.jobs or 1
     subject_commands = [
@@ -481,6 +484,10 @@ def main(argv: list[str] | None = None) -> int:
         child_environment.update({key: str(resource_plan['stage_cpus']) for key in (
             'OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'MKL_NUM_THREADS',
             'ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS', 'MRTRIX_NTHREADS')})
+        if args.scheduler == 'adaptive':
+            # S1.3: a subject process starts with 1 BLAS/OpenMP thread, so an in-process pool cannot
+            # exceed a 1-CPU reservation; each admitted stage sets its own count.
+            child_environment.update({key: '1' for key in ('OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'MKL_NUM_THREADS')})
     failures = 0
     started = time.time()
     if subject_commands:

@@ -1,4 +1,4 @@
-"""Pure resource-admission policy, with bounded bypass and head reservations."""
+"""Pure resource-admission policy: backfill that never delays the head reservation."""
 
 import math
 
@@ -26,11 +26,12 @@ def reservation_time(head, active, limits, now):
     return math.inf
 
 
-def choose_ready(waiting, active, limits, now, *, max_wait=120., max_bypasses=8, ready_order='fifo'):
-    """Backfill only without delaying the head's estimated start; drain on ageing.
+def choose_ready(waiting, active, limits, now, *, ready_order='fifo'):
+    """Backfill only without delaying the head's estimated start.
 
     Unknown runtimes can use only resources the head does not need. Runtime
-    estimates are advisory; the ageing barrier also protects against overruns.
+    estimates are advisory. There is no ageing barrier: the head's reservation is
+    recomputed on every call, and a row past its expected end never releases.
     """
     if not waiting:
         return None
@@ -39,8 +40,6 @@ def choose_ready(waiting, active, limits, now, *, max_wait=120., max_bypasses=8,
     head = waiting[0]
     if fits(head, active, limits):
         return head
-    if now - head['queued_at'] >= max_wait or head.get('bypasses', 0) >= max_bypasses:
-        return None
     start = reservation_time(head, active, limits, now)
     candidates=waiting[1:]
     if ready_order=='mem_thread':

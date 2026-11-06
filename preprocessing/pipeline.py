@@ -49,6 +49,11 @@ def preprocessing_gradients_current(manifest: dict) -> bool:
 
 
 def _default_eddy_threads() -> int:
+    # An explicit config value never reaches here. The stage CPU reservation comes next.
+    from shared.numeric_threads import reserved_stage_cpus
+    reserved = reserved_stage_cpus()
+    if reserved is not None:
+        return reserved
     process_cpu_count = getattr(os, "process_cpu_count", None)
     if callable(process_cpu_count):
         count = process_cpu_count()

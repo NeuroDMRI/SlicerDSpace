@@ -53,7 +53,7 @@ class MatureCohortTests(unittest.TestCase):
             self.assertEqual(record['jobs'][1]['status'],'not_run')
             self.assertFalse(marker.exists())
 
-    def test_mem_thread_orders_only_safe_backfill_and_retains_ageing(self):
+    def test_mem_thread_orders_only_safe_backfill_without_an_ageing_barrier(self):
         limits=dict(cpu=4,memory_gb=16,gpu=1,io=2)
         active=[dict(id='running',cpu=1,memory_gb=1,started_at=90,duration_seconds=30)]
         head=dict(id='head',cpu=4,memory_gb=1,queued_at=90)
@@ -61,7 +61,8 @@ class MatureCohortTests(unittest.TestCase):
         small=dict(id='small',cpu=1,memory_gb=1,queued_at=92,duration_seconds=5)
         self.assertEqual(choose_ready([head,large,small],active,limits,100)['id'],'large')
         self.assertEqual(choose_ready([head,large,small],active,limits,100,ready_order='mem_thread')['id'],'small')
-        self.assertIsNone(choose_ready([dict(head,bypasses=8),large,small],active,limits,100,ready_order='mem_thread'))
+        # T3 S3: the 8-bypass barrier is removed; the safe backfill order is unchanged.
+        self.assertEqual(choose_ready([dict(head,bypasses=8),large,small],active,limits,100,ready_order='mem_thread')['id'],'small')
         self.assertEqual(choose_ready([head,small],[],limits,100,ready_order='mem_thread')['id'],'head')
 
     def test_invalid_resource_contracts_cannot_create_a_queue(self):

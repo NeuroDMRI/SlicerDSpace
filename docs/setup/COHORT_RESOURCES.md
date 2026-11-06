@@ -34,10 +34,12 @@ Dependencies remain enforced by each subject's existing orchestrator. Microstruc
 models acquire individual reservations; adaptive mode supports bounded independent
 model workers with `--max-parallel-models 2` or `3`. The default remains one model.
 
-Backfilling protects the oldest waiting stage's estimated start when runtime
-feedback is available. After eight bypasses or 120 seconds, the queue drains until
-that stage can start. Long-running stages are not preempted. Estimates can overrun;
-the ageing barrier prevents repeated small-stage bypass from causing starvation.
+Backfilling protects the oldest waiting stage's estimated start. The estimate
+comes from runtime feedback, else from the measured defaults in
+`shared/cohort_defaults.py`; a stage with neither has an unknown duration. A later
+stage starts early only if the protected start does not move later. There is no
+ageing barrier: the reservation is recomputed on every poll. Long-running stages are
+not preempted, and a stage that overruns its estimate never releases its reservation.
 Registration, preprocessing, WMQL and connectome stages also share two I/O admission slots. Reservations cover whole
 wrapped stages, rather than instantaneous disk bandwidth.
 DWI decompression has a separate two-permit FIFO gate, released before fitting.
@@ -107,7 +109,12 @@ memory or changing the analysis. Explicit method thread requests are retained if
 they fit the total budget. Estimates are conservative heuristics, not measured peaks.
 
 The scheduler sets common numerical/ITK/MRtrix thread defaults for child processes,
-provides surface/MRtrix/eddy defaults and bounds automatic NODDI threads. Explicit
+provides surface/MRtrix/eddy defaults and bounds automatic NODDI threads. In `adaptive`
+mode the batch driver adds no plan-wide `--surface-cpu-threads`, `--mrtrix-nthreads` or
+`--preprocessing-eddy-threads`: each stage uses its own reservation
+(`SLICERDSPACE_STAGE_CPUS`) unless the user gave a value, subject processes start with
+one OpenMP/BLAS thread, and an imported `torch` follows the reservation of each
+admitted stage. Explicit
 thread options above the reservation are rejected. UKF automatic threads use the
 stage reservation. The compatibility `resources` mode requires one within-subject
 model; `adaptive` also accepts bounded independent model workers. Free-water

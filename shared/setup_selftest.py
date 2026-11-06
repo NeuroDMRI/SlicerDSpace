@@ -3,8 +3,13 @@
 import importlib
 import json
 from pathlib import Path
+import re
+import subprocess
 import tempfile
 import time
+
+MRTRIX_VERSION = '3.0.8'
+TOOL_TIMEOUT_SECONDS = 120
 
 
 def requests_for_report(report, *, asset_root=None, repo_root=None, backend_paths=None, device_choices=None):
@@ -88,6 +93,97 @@ def requests_for_report(report, *, asset_root=None, repo_root=None, backend_path
     return list(groups.values())
 
 
+def _run_tool(argv, env):
+    try:
+        return subprocess.run([str(item) for item in argv], capture_output=True, text=True,
+                              timeout=TOOL_TIMEOUT_SECONDS, env=env)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeError(f'{Path(str(argv[0])).name} could not run: {type(exc).__name__}: {exc}') from exc
+
+
+def _output(result):
+    return (result.stdout or '') + (result.stderr or '')
+
+
+def check_mrtrix(bin_dir, fsl_bin_dir=None, *, shim_root=None):
+    """MRtrix3 through the B3 environment: the version, and two scripts that need the managed `python` shim."""
+    from shared.external_process import managed_tool_environment
+    env = managed_tool_environment(mrtrix_bin_dir=bin_dir, fsl_bin_dir=fsl_bin_dir, shim_root=shim_root)
+    checks = []
+    version = _run_tool([Path(bin_dir) / 'mrconvert', '--version'], env)
+    if version.returncode != 0 or not re.search(r'(?<![\d.])' + re.escape(MRTRIX_VERSION) + r'(?![\d.])', _output(version)):
+        raise RuntimeError(f'mrconvert --version does not report {MRTRIX_VERSION}: {_output(version).strip()[:200]}')
+    checks.append('mrtrix:mrconvert_version')
+    for name in ('dwi2response', 'dwifslpreproc'):
+        result = _run_tool([Path(bin_dir) / name, '--help'], env)
+        if result.returncode != 0 or name not in _output(result):
+            raise RuntimeError(f'{name} --help failed (exit {result.returncode}): {_output(result).strip()[:200]}')
+        checks.append(f'mrtrix:{name}_help')
+    return checks
+
+
+def check_fsl(fsl_bin_dir, mrtrix_bin_dir=None, *, shim_root=None):
+    """FSL eddy, eddy_cpu and topup with FSLDIR, FSLOUTPUTTYPE and the FSL bin on PATH.
+
+    The tools print their usage and exit with 1 for --help; exit 127 means the FSL Python was not found.
+    """
+    from shared.external_process import managed_tool_environment
+    env = managed_tool_environment(mrtrix_bin_dir=mrtrix_bin_dir, fsl_bin_dir=fsl_bin_dir, shim_root=shim_root)
+    checks = []
+    for name in ('eddy', 'eddy_cpu', 'topup'):
+        result = _run_tool([Path(fsl_bin_dir) / name, '--help'], env)
+        if result.returncode != 1 or 'usage' not in _output(result).lower():
+            raise RuntimeError(f'{name} --help should print its usage and exit with 1; got exit {result.returncode}: '
+                               f'{_output(result).strip()[:200]}')
+        checks.append(f'fsl:{name}_help')
+    return checks
+
+
+def check_dcm2niix(executable):
+    # SPEC-GAP: B9 names `dcm2niix -v` but no pass rule; it prints its version text and may exit with 0 or 1.
+    result = _run_tool([executable, '-v'], None)
+    text = _output(result).lower()
+    if result.returncode not in (0, 1) or 'dcm2niix' not in text or 'version' not in text:
+        raise RuntimeError(f'dcm2niix -v did not report a version (exit {result.returncode}): {_output(result).strip()[:200]}')
+    return ['dcm2niix:version']
+
+
+def check_torch_convolution(torch, device):
+    """One small convolution on the selected device: all-ones 4x4 input and 3x3 kernel give four values of 9."""
+    out = torch.nn.functional.conv2d(torch.ones((1, 1, 4, 4), device=device), torch.ones((1, 1, 3, 3), device=device))
+    if tuple(out.shape) != (1, 1, 2, 2) or not torch.equal(out, torch.full_like(out, 9)):
+        raise RuntimeError('PyTorch convolution returned a wrong result on ' + device)
+    return 'torch:convolution:' + device
+
+
+def native_mask_module_present():
+    return Path(__file__).with_name('pnl_mask_native.py').is_file()
+
+
+def check_native_mask(spec, *, torch=None, inference=None, weights=None):
+    """PNL native mask: the three views load and one 256x256 slice per view runs on the selected device.
+
+    Returns (checks, skipped). SPEC-GAP: the W-A module is absent on this base, so the check skips cleanly;
+    it uses the W-A API `shared.pnl_cnn.weights.load_model(dir, view, device)` and `inference.select_device`.
+    """
+    if not native_mask_module_present():
+        return [], [{'check': 'pnl_native_mask', 'reason': 'shared/pnl_mask_native.py is not present in this install'}]
+    if torch is None:
+        import torch
+    if inference is None or weights is None:
+        from shared.pnl_cnn import inference, weights
+    device = inference.select_device(spec.get('device', 'auto'))['resolved']
+    checks = []
+    with torch.inference_mode():
+        for view in inference.VIEWS:
+            model = weights.load_model(spec['model_dir'], view, device)
+            output = model(torch.zeros((1, 1, 256, 256), dtype=torch.float32, device=device), segmentation_only=True)
+            if tuple(output.shape[-2:]) != (256, 256) or not bool(torch.isfinite(output).all()):
+                raise RuntimeError(f'PNL {view} view gave a wrong or nonfinite slice on {device}')
+            checks.append(f'pnl_native_mask:{view}:{device}')
+    return checks, []
+
+
 def run_checks(request):
     import sys
     for path in request.get('pythonpath', ()):
@@ -153,6 +249,7 @@ def run_checks(request):
                 if not torch.equal(tensor @ tensor, tensor * 2):
                     raise RuntimeError('PyTorch tensor operation failed')
                 checks.append('torch:tensor_operation:' + device)
+                checks.append(check_torch_convolution(torch, device))
             from shared.backend_sources import file_hash
             for model in request.get('models', ()):
                 path = Path(model['path'])
@@ -196,7 +293,20 @@ def run_checks(request):
                 if not torch.isfinite(output).all():
                     raise RuntimeError('TractCloud produced nonfinite synthetic output')
                 checks.append('tractcloud:load_and_synthetic_forward')
+    skipped = []
+    if request.get('mrtrix_bin_dir'):
+        checks.extend(check_mrtrix(request['mrtrix_bin_dir'], request.get('fsl_bin_dir')))
+    if request.get('fsl_bin_dir'):
+        checks.extend(check_fsl(request['fsl_bin_dir'], request.get('mrtrix_bin_dir')))
+    if request.get('dcm2niix'):
+        checks.extend(check_dcm2niix(request['dcm2niix']))
+    if request.get('pnl_native_mask'):
+        done, not_run = check_native_mask(request['pnl_native_mask'])
+        checks.extend(done)
+        skipped.extend(not_run)
     extra = {} if teem_report is None else dict(teem_self_check=teem_report)
+    if skipped:
+        extra['skipped'] = skipped
     return dict(kind='slicerdspace_setup_selftest', status='passed', checks=checks, **extra,
                 elapsed_seconds=time.monotonic() - started,
                 scope='Installation functionality using synthetic inputs; no patient processing or anatomical QC')

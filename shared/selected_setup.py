@@ -310,6 +310,11 @@ RUNTIME_SETTINGS = {"mrtrix_bin_dir", "preprocessing_mrtrix_bin_dir", "preproces
                     "pnl_mask_python", "pnl_mask_script", "pnl_mask_model_dir", "pnl_mask_ants_bin_dir"}
 
 
+# Settings that scripts/install_deps_windows.ps1 writes into the user config (its external_dependencies block).
+WINDOWS_WRITTEN_SETTINGS = ("tract_querier_root", "wma_root", "wma_atlas_dir", "tractcloud_root", "tractcloud_python_executable",
+                            "tractcloud_data_dir", "slicer_executable", "python_executable", "postprocess_freesurfer_home")
+
+
 def validate_setup_receipt(step, receipt):
     """Return the settings a verified receipt may save; raise ValueError for anything else (B8)."""
     kind = step.get("id")
@@ -494,7 +499,13 @@ def complete_step(step):
         step["restart_required"] = any(record.get("restart_required") for record in records)
         return {}
     receipt = json.loads(Path(step["receipt"]).read_text()) if step.get("receipt") else None
-    return apply_setup_receipt(step, receipt)
+    settings = apply_setup_receipt(step, receipt)
+    if step["id"] == "windows_runtime":
+        # S-B2: the ps1 wrote more paths than the receipt checks. Return them all, so the GUI loads them into
+        # its settings and line edits and a later save of the common settings cannot erase them.
+        written = (receipt or {}).get("external_dependencies") or {}
+        settings = {**{key: str(written[key]) for key in WINDOWS_WRITTEN_SETTINGS if written.get(key)}, **settings}
+    return settings
 
 
 def run_setup_steps(steps, *, runner=None, self_check=None, log=print, after_step=None):

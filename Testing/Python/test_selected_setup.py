@@ -317,6 +317,29 @@ class SelectedSetupTests(unittest.TestCase):
             saved = json.loads((Path(root) / "config.json").read_text())
             self.assertEqual(saved["wsl_distribution"], "Ubuntu")
 
+    def test_s_b2_settings_the_ps1_wrote_are_loaded_and_survive_the_next_common_save(self):
+        from shared.dependency_config import UI_DEPENDENCY_PATHS
+        from shared.user_config import load_user_config, update_user_config
+        written = {"tract_querier_root": "\\\\wsl$\\Ubuntu\\tq", "wma_root": "\\\\wsl$\\Ubuntu\\wma",
+                   "wma_atlas_dir": "\\\\wsl$\\Ubuntu\\atlas", "tractcloud_root": "\\\\wsl$\\Ubuntu\\tc",
+                   "tractcloud_python_executable": "\\\\wsl$\\Ubuntu\\tc\\python", "tractcloud_data_dir": "\\\\wsl$\\Ubuntu\\tcdata",
+                   "slicer_executable": "C:\\Slicer\\Slicer.exe", "python_executable": "C:\\Slicer\\bin\\PythonSlicer.exe",
+                   "postprocess_freesurfer_home": "\\\\wsl$\\Ubuntu\\fs"}
+        with tempfile.TemporaryDirectory() as root:
+            owner, store = self.owner(result()), {}
+            owner._save_environment_path_setting.side_effect = lambda key, value: store.__setitem__(key, value)
+            ok, owner, _confirm, _check = self.run_windows_preparation(root, started=[], extra_written=written, owner=owner)
+            self.assertTrue(ok)
+            for key, value in written.items():  # fails before S-B2: only the three bridge keys were reloaded
+                self.assertEqual(store.get(key), value, key)
+            # What _save_common_user_settings does next: every dependency id is read back from the settings.
+            with patch.dict("os.environ", {"SLICERDSPACE_USER_CONFIG": str(Path(root) / "config.json")}):
+                update_user_config({"external_dependencies": {item["id"]: store.get(item["id"]) or None
+                                                              for item in UI_DEPENDENCY_PATHS}})
+                kept = load_user_config()["external_dependencies"]
+            for key, value in written.items():
+                self.assertEqual(kept.get(key), value, key)
+
 
 if __name__ == "__main__":
     unittest.main()

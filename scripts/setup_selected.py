@@ -7,6 +7,7 @@ licence link and local licence file. With --execute it installs. --accept-licenc
 
 import argparse
 import json
+import os
 import sys
 from dataclasses import fields
 from datetime import datetime
@@ -109,6 +110,43 @@ def self_check_commands(folder, user_config, closure_targets, step, *, doctor=No
     return commands, receipts
 
 
+def running_slicer_pythons():
+    """Paths that name the Slicer running this script: its interpreter, its PythonSlicer launcher and python-real (S3-1)."""
+    from shared.external_process import find_pythonslicer, interpreter_path
+
+    current = interpreter_path(sys.executable)
+    found = {current}
+    for folder in current.parents[:4]:
+        launcher = find_pythonslicer(folder)
+        if launcher:
+            found.add(interpreter_path(launcher))
+    for name in ("python-real", "python-real.exe"):
+        if (current.parent / name).is_file():
+            found.add(current.parent / name)
+    return found | {Path(os.path.realpath(path)) for path in found}
+
+
+def is_running_slicer_python(selected):
+    """True when ``selected`` is this Slicer's own Python (PythonSlicer or python-real), like the GUI's classification."""
+    from shared.external_process import interpreter_path
+
+    path = interpreter_path(selected)
+    return path in running_slicer_pythons() or Path(os.path.realpath(path)) in running_slicer_pythons()
+
+
+def make_python_command(configured):
+    """python_command for setup_steps: a request without its own interpreter uses the configured one, like the GUI (S-B7).
+
+    S3-1: a saved interpreter that is this Slicer's own Python (the Windows ps1 saves its PythonSlicer path) runs
+    directly as Slicer's Python, so protect_bundled stays true and torch goes through the PyTorch-extension installer.
+    """
+    def python_command(override):
+        selected = str(override or configured or sys.executable)
+        return (sys.executable if is_running_slicer_python(selected) else selected), []
+
+    return python_command
+
+
 def main(argv=None, *, runner=None, doctor=None, wsl_distributions=None, system=None, machine=None, log=print):
     from shared.selected_setup import run_setup_steps, setup_steps
     from shared.setup_components import accept_licences, pending_licences, plan_components, required_licences
@@ -147,11 +185,7 @@ def main(argv=None, *, runner=None, doctor=None, wsl_distributions=None, system=
     folder.mkdir(parents=True, exist_ok=True)
     configured = getattr(report, "python_executable", None)
 
-    def python_command(override):
-        # S-B7: a request without its own interpreter uses the configured one, like the GUI; Slicer's own stays direct.
-        selected = str(override or configured or sys.executable)
-        same = Path(selected).absolute() == Path(sys.executable).absolute()
-        return (sys.executable if same else selected), []
+    python_command = make_python_command(configured)
 
     steps = setup_steps(plan, config["accepted_licences"], folder=folder, config=config["external_dependencies"],
                         python_command=python_command)

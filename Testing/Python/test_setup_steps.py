@@ -327,5 +327,48 @@ class SetupSelectedPlanInputsTests(unittest.TestCase):
             self.assertNotIn("PYTHONHOME", env)
 
 
+    def test_s3_1_a_saved_pythonslicer_of_the_running_slicer_is_slicers_python(self):
+        """S3-1: the Windows ps1 saves PythonSlicer; the CLI must keep protect_bundled true. Fails before: it ran as external."""
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder).resolve() / "Slicer"
+            launcher, real = root / "bin/PythonSlicer", root / "lib/Python/bin/python-real"
+            for path in (launcher, real):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("")
+            plan = build_setup_plan(SimpleNamespace(statuses=[]), system="Linux", machine="x86_64")
+            plan.update(python_packages=["numpy>=1"], python_requests=[dict(requirement="numpy>=1", python_executable=None)])
+            closure = SimpleNamespace(targets=("validation",), tractography_algorithms=("csd_act",))
+            calls, out = [], io.StringIO()
+
+            def run_with(saved):
+                calls.clear()
+                report = SimpleNamespace(statuses=[], python_executable=str(saved))
+
+                def runner(command, env=None, check=False):
+                    calls.append(command)
+                    return SimpleNamespace(returncode=1)
+
+                with patch.dict("os.environ", {"SLICERDSPACE_USER_CONFIG": str(Path(folder) / "user_config.json")}), \
+                        patch("sys.executable", str(real)), \
+                        patch.object(setup_selected, "build_cli_plan", return_value=(closure, report, plan)), \
+                        patch("scripts.setup_python_packages.dcm2niix_pending", return_value=False), redirect_stdout(out):
+                    setup_selected.main(["--targets", "validation", "--execute", "--accept-licences"], runner=runner,
+                                        log=lambda text: out.write(str(text) + "\n"))
+                command = calls[0]
+                request = json.loads(Path(command[command.index("--request") + 1]).read_text())
+                return command[0], request
+
+            for saved in (launcher, real):
+                program, request = run_with(saved)
+                self.assertEqual(program, str(real))  # Slicer's Python, not the saved path
+                self.assertTrue(request["protect_bundled"])
+            other = Path(folder) / "OtherSlicer/bin/PythonSlicer"  # another Slicer install is an external interpreter
+            other.parent.mkdir(parents=True)
+            other.write_text("")
+            program, request = run_with(other)
+            self.assertEqual(program, str(other))
+            self.assertFalse(request["protect_bundled"])
+
+
 if __name__ == "__main__":
     unittest.main()

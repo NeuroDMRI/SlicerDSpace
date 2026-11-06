@@ -458,6 +458,20 @@ class ScriptTests(ToolFixture):
                                      'pnl_native_mask': {'model_dir': '/m', 'device': 'cpu'}})
         self.assertEqual(json.loads(out.read_text())['status'], 'passed')
 
+    def test_n1_help_text_names_the_calls_the_checks_make(self):
+        """N-1 guard: the options describe -help for MRtrix scripts, --help for FSL and -v for dcm2niix."""
+        import io
+        from contextlib import redirect_stdout
+        script = self.load_script()
+        out = io.StringIO()
+        with redirect_stdout(out), self.assertRaises(SystemExit):
+            script.main(['--help'])
+        text = ' '.join(out.getvalue().split())
+        self.assertIn('dwi2response -help and dwifslpreproc -help', text)
+        self.assertNotIn('dwi2response --help', text)
+        self.assertIn('eddy and topup --help', text)
+        self.assertIn('dcm2niix -v', text)
+
     def test_failed_check_gives_exit_code_1(self):
         script = self.load_script()
         out = self.root / 'result.json'

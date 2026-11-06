@@ -775,6 +775,12 @@ def build_tck2connectome_command(config: ConnectomeConfig, matrix_path: Path) ->
         cmd.extend(["-assignment_radial_search", str(config.assignment_radius_mm)])
     else:
         cmd.append("-assignment_end_voxels")
+    # SPEC-GAP: ConnectomeConfig has no explicit thread option, so "explicit wins" has no path here;
+    # the stage reservation sets tck2connectome -nthreads (the spec names connectome as a site).
+    from shared.numeric_threads import reserved_stage_cpus
+    reserved = reserved_stage_cpus()
+    if reserved is not None:
+        cmd.extend(["-nthreads", str(reserved)])
     cmd.append("-force")
     return tuple(cmd)
 

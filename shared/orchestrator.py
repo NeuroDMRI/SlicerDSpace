@@ -125,7 +125,7 @@ class ProductOrchestratorConfig:
     surface_atlas_t2: Optional[Path] = None
     surface_python_bin: Optional[Path] = None
     surface_precision: str = 'fp32'
-    surface_cpu_threads: int = 4
+    surface_cpu_threads: Optional[int] = None  # None: stage CPU reservation, else 4
     surface_max_gpu_gib: float = 24.
     model_assets_dir: Optional[Path] = None
     ddseg_device: str = "auto"
@@ -1470,8 +1470,13 @@ def _surface_complete(subject_root: Path, subject_id: str, output_root: Optional
                 or manifest.get('subject_root') != str(subject_root.resolve())):
             return False
         expected = config or ProductOrchestratorConfig(subject_id=subject_id, subject_root=subject_root, targets=('surface',))
+        # SPEC-GAP: without an explicit value the thread count follows the stage reservation,
+        # so inside a cohort the recorded count is not compared (outside it, 4 is expected).
+        from shared.cohort_schedule import cohort_active
+        threads_match = (expected.surface_cpu_threads is None and cohort_active()) or (
+            manifest.get('cpu_threads') == (expected.surface_cpu_threads or 4))
         if (manifest.get('precision') != expected.surface_precision
-                or manifest.get('cpu_threads') != expected.surface_cpu_threads
+                or not threads_match
                 or manifest.get('max_gpu_gib') != expected.surface_max_gpu_gib):
             return False
         if expected.surface_python_bin and manifest.get('runtime', {}).get('executable') != str(interpreter_path(expected.surface_python_bin)):
@@ -1994,7 +1999,7 @@ def _write_run_plan(plan: RunPlanResult) -> Path:
 def _validate_surface_settings(config: ProductOrchestratorConfig) -> None:
     if config.surface_precision not in ('fp32', 'bf16', 'auto'):
         raise ValueError('surface_precision must be fp32, bf16 or auto.')
-    if config.surface_cpu_threads < 1:
+    if config.surface_cpu_threads is not None and config.surface_cpu_threads < 1:
         raise ValueError('surface_cpu_threads must be positive.')
     if not math.isfinite(config.surface_max_gpu_gib) or config.surface_max_gpu_gib <= 0:
         raise ValueError('surface_max_gpu_gib must be finite and positive.')

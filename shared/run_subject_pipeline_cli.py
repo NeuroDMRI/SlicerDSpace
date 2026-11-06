@@ -709,7 +709,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--surface-atlas-t2", type=Path, help="Matching DDSurfer 1-mm atlas override (separate from DDParcel).")
     parser.add_argument("--surface-python-bin", type=Path, help="Optional isolated DDSurfer Python runtime; also supports DDSURFER_PYTHON_BIN.")
     parser.add_argument("--surface-precision", choices=('auto', 'bf16', 'fp32'), default='fp32')
-    parser.add_argument("--surface-cpu-threads", type=int, default=4, help="DDSurfer inference CPU thread budget.")
+    parser.add_argument("--surface-cpu-threads", type=int, default=None,
+                        help="DDSurfer inference CPU thread budget. Default: the stage CPU reservation of a cohort run, else 4.")
     parser.add_argument("--surface-max-gpu-gib", type=float, default=24., help="DDSurfer inference GPU allocation budget in GiB.")
     parser.add_argument("--ddseg-device", default="auto", help="DDSeg torch device. auto uses cuda:0 when available, otherwise cpu.")
     parser.add_argument("--surface-device", default="auto", help="DDSurfer torch device. auto uses cuda:0 when available, otherwise cpu.")

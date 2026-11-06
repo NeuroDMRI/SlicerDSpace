@@ -204,12 +204,22 @@ def anatomy_space_matches(config: CSDActConfig) -> Optional[bool]:
     return Path(config.anatomy_source_dwi).expanduser().resolve() == Path(config.dwi_path).expanduser().resolve()
 
 
+def effective_nthreads(config: CSDActConfig) -> Optional[int]:
+    """MRtrix -nthreads: the explicit value, else the stage CPU reservation, else None (MRtrix default)."""
+
+    if config.nthreads is not None:
+        return int(config.nthreads)
+    from shared.numeric_threads import reserved_stage_cpus
+
+    return reserved_stage_cpus()
+
+
 def tckgen_thread_count(config: CSDActConfig) -> Optional[int]:
-    """Effective tckgen -nthreads: 0 when seeded, else the requested value (None = MRtrix default)."""
+    """Effective tckgen -nthreads: 0 when seeded, else the explicit value or the stage reservation (None = MRtrix default)."""
 
     if config.random_seed is not None:
         return 0
-    return int(config.nthreads) if config.nthreads is not None else None
+    return effective_nthreads(config)
 
 
 def sift2_mu_path(tractogram: Path) -> Path:
@@ -225,8 +235,8 @@ def reproducibility_record(config: CSDActConfig) -> dict[str, object]:
         "nthreads_requested": config.nthreads,
         "tckgen_nthreads": threads,
         "tckgen_nthreads_pinned_for_seed": seeded,
-        "pretracking_nthreads": config.nthreads,
-        "tcksift2_nthreads": config.nthreads,
+        "pretracking_nthreads": effective_nthreads(config),
+        "tcksift2_nthreads": effective_nthreads(config),
         "tckgen_bit_reproducible": bool(seeded and threads == 0),
         "note": (
             "A seeded tckgen run is bit-reproducible only single-threaded (-nthreads 0); this was verified "
@@ -354,8 +364,8 @@ def build_csd_act_commands(config: CSDActConfig) -> tuple[tuple[str, ...], ...]:
             sift2_mu_path(tractogram).as_posix(),
             "-force",
         ]
-        if config.nthreads is not None:
-            tcksift2.extend(["-nthreads", str(config.nthreads)])
+        if effective_nthreads(config) is not None:
+            tcksift2.extend(["-nthreads", str(effective_nthreads(config))])
         commands.append(tuple(tcksift2))
     if config.export_vtk:
         commands.append(
@@ -366,9 +376,9 @@ def build_csd_act_commands(config: CSDActConfig) -> tuple[tuple[str, ...], ...]:
                 "-force",
             )
         )
-    if config.nthreads is not None:
+    if effective_nthreads(config) is not None:
         commands = [
-            command if "-nthreads" in command else (*command, "-nthreads", str(config.nthreads))
+            command if "-nthreads" in command else (*command, "-nthreads", str(effective_nthreads(config)))
             for command in commands
         ]
     return tuple(commands)

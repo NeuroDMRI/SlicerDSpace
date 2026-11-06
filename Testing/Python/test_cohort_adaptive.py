@@ -36,7 +36,8 @@ class AdaptiveCohortTests(unittest.TestCase):
         head = self.task('head', 4)
         self.assertIsNone(choose_ready([head, self.task('unsafe', 2, 200)], active, self.limits, 1))
 
-    def test_aged_or_overtaken_head_drains_resources(self):
+    def test_aged_or_overtaken_head_has_no_barrier_but_keeps_its_reservation(self):
+        # T3 S3: the 120 s / 8-bypass ageing barrier is removed. The head reservation stays.
         active = [self.task('running', 4)]
         for head, now in ((self.task('head', 8), 121), (self.task('head', 8, bypasses=8), 1)):
             self.assertIsNone(choose_ready([head, self.task('small', 1)], active, self.limits, now))

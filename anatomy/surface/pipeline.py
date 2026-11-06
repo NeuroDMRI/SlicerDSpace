@@ -36,7 +36,7 @@ class SurfaceConfig:
     precision: str = 'fp32'
     python_bin: Optional[Path] = None
     slicer_home: Optional[Path] = None
-    cpu_threads: int = 4
+    cpu_threads: Optional[int] = None  # None: stage CPU reservation, else 4
     max_gpu_gib: float = 24.
     resume: bool = False
     auto_mask: bool = False
@@ -263,13 +263,21 @@ def _run_shared_raw(config, resources, output_dir, manifest, previous, log):
         raise RuntimeError('Shared surface inputs changed during prediction')
 
 
+def resolved_cpu_threads(config):
+    """Explicit thread budget, else the stage CPU reservation (``SLICERDSPACE_STAGE_CPUS``), else 4."""
+    if config.cpu_threads is not None:
+        return config.cpu_threads
+    from shared.numeric_threads import reserved_stage_cpus
+    return reserved_stage_cpus() or 4
+
+
 def _surface_records(config, resources, output_dir):
     """The base manifest and QC records that ``run_surface`` starts from."""
     manifest = dict(kind='ddsurfer_surface', version=3, subject_id=config.subject_id,
         subject_root=str(config.subject_root.expanduser().resolve()), output_dir=str(output_dir),
         input_dwi=str(config.input_bundle.dwi_path) if config.input_bundle is not None else None,
         predict_mode=config.predict_mode, device=config.device, precision=config.precision,
-        cpu_threads=config.cpu_threads, max_gpu_gib=config.max_gpu_gib,
+        cpu_threads=resolved_cpu_threads(config), max_gpu_gib=config.max_gpu_gib,
         resume=config.resume, auto_mask=config.auto_mask, mask_threads=config.mask_threads,
         upstream_commit=resources['upstream_commit'], resources=resources,
         executed=config.execute, status='planned', outputs={})
@@ -308,6 +316,7 @@ def run_surface(config: SurfaceConfig, *, log: Optional[Callable[[str], None]] =
         raise ValueError('subject_id must be a nonempty directory name')
     if config.predict_mode not in ('all', 'wm') or config.precision not in ('auto', 'bf16', 'fp32'):
         raise ValueError('Invalid prediction mode or precision')
+    config = replace(config, cpu_threads=resolved_cpu_threads(config))
     if config.cpu_threads < 1 or config.mask_threads < 1:
         raise ValueError('DDSurfer thread budgets must be positive')
     if not math.isfinite(config.max_gpu_gib) or config.max_gpu_gib <= 0:

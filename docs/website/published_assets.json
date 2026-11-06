@@ -55,11 +55,11 @@
       "derivative": "Lossless WebP; decoded RGBA pixels and dimensions identical to PNG"
     },
     "docs/site/media/SlicerDSpace_promo_1080p.mp4": {
-      "sha256": "877f7e3a4dc7afbf4641a609398940a65bf2b21c26d918c3f170efee78c27df9",
-      "source_sha256": "4ead178f6d1165b98d0c5b61b1c94e250ac53d7893c5fae2d7847d6cdd1e13b5",
-      "source_bytes": 47767254,
-      "output_bytes": 24799408,
-      "reduction_percent": 48.08,
+      "sha256": "0531f24d91f8abedc278899b43649eee3469fcdd71b762e6d6cdb5afe204abb7",
+      "source_sha256": "a28e5980f72f26004b845a91e9b8ebb2f3df3c5dfcf097dbf1ce092b07aa1973",
+      "source_bytes": 45452363,
+      "output_bytes": 23356794,
+      "reduction_percent": 48.61,
       "derivative": "H.264 High, CRF 24, 1080p/30fps retained, original AAC copied",
       "source_metadata": {
         "programs": [],
@@ -71,18 +71,18 @@
             "width": 1920,
             "height": 1080,
             "r_frame_rate": "30/1",
-            "nb_read_frames": "2160"
+            "nb_read_frames": "1944"
           },
           {
             "codec_name": "aac",
             "codec_type": "audio",
             "r_frame_rate": "0/0",
-            "nb_read_frames": "3375"
+            "nb_read_frames": "3038"
           }
         ],
         "format": {
-          "duration": "72.000000",
-          "size": "47767254"
+          "duration": "64.800000",
+          "size": "45452363"
         }
       },
       "output_metadata": {
@@ -95,24 +95,24 @@
             "width": 1920,
             "height": 1080,
             "r_frame_rate": "30/1",
-            "nb_read_frames": "2160"
+            "nb_read_frames": "1944"
           },
           {
             "codec_name": "aac",
             "codec_type": "audio",
             "r_frame_rate": "0/0",
-            "nb_read_frames": "3375"
+            "nb_read_frames": "3038"
           }
         ],
         "format": {
-          "duration": "72.000000",
-          "size": "24799408"
+          "duration": "64.800000",
+          "size": "23356794"
         }
       },
-      "audio_payload_sha256": "65fa0d19c6b55b4ae970cf02e1bfac79d5c062d705b982443ce3fd517764bb25",
+      "audio_payload_sha256": "f8f4a6deca25756352b6ce5af601b455419f7a92a586f7c23d5660dccd646c12",
       "audio_payload_identical": true,
-      "complete_frame_ssim": 0.99387,
-      "ssim_frames_checked": 2160,
+      "complete_frame_ssim": 0.993841,
+      "ssim_frames_checked": 1944,
       "faststart": true
     },
     "docs/site/assets/img/workflow-overview.svg": {

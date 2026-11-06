@@ -404,6 +404,34 @@ def prepare_selected_environment(owner, result=None, *, repair=False):
                  "optional_resources": "准备所选资源", "managed_runtime": "准备外部计算工具",
                  "windows_runtime": "安装 WSL 运行环境", "surface_runtime": "安装表面处理组件"}
 
+    def report_step(step, status, details, log_path):
+        """S-N1: the status writes and error dialogs that the owner's install methods made before B7."""
+        if step["id"] == "python_packages":
+            owner._save_python_install_status(tuple(step.get("packages", ())), status, str(log_path))
+            owner._lastEnvironmentResult = owner._lastEnvironmentSignature = None
+            if status == "failed":
+                owner._show_actionable_error(
+                    title="Python dependency installation failed", what="The background installer stopped.",
+                    why="See the recorded pip output and exact command.",
+                    next_step="Open install logs, correct the reported problem, then check dependencies again.",
+                    auto_fix="No external software was installed.", details=str(details) + "\nLog: " + str(log_path))
+            elif status == "cancelled":
+                slicer.util.infoDisplay("Installation stopped. Packages already installed were not rolled back. "
+                                        "Check dependencies before retrying.", parent=owner.parent)
+        elif step["id"] == "model_assets":
+            message = ("Model assets downloaded and checksum-verified." if status == "completed" else
+                       "Download stopped; partial files are retained for retry." if status == "cancelled" else
+                       "Download or checksum verification failed.")
+            owner._set_model_assets_status_text(message + " " + str(step["asset_root"]))
+            owner._lastEnvironmentResult = owner._lastEnvironmentSignature = None
+            if status == "failed":
+                owner._show_actionable_error(
+                    title="Model asset setup failed", what=message,
+                    why="Network, file permissions or checksum validation may have failed.",
+                    next_step="Inspect the install log and retry using the same asset directory.",
+                    auto_fix="Partial downloads are retained; no scientific outputs were modified.",
+                    details=str(details) + "\nLog: " + str(log_path))
+
     def run_step(index):
         """B7: one async job per step; the steps come from setup_steps (shared with scripts/setup_selected.py)."""
         if index >= len(steps) or steps[index]["id"] == "self_check":
@@ -413,19 +441,18 @@ def prepare_selected_environment(owner, result=None, *, repair=False):
         from shared.ui_setup_jobs import start_setup_job
 
         def done(status, details, log_path):
+            if status == "completed":
+                try:
+                    settings = complete_step(step)
+                    if settings:
+                        apply_setup_settings(owner, settings)
+                    if step["id"] == "python_packages" and step.get("restart_required"):
+                        owner._setupRestartRequired = True
+                except Exception as exc:
+                    status, details = "failed", str(exc)
+            report_step(step, status, details, log_path)
             if status != "completed":
                 finish(status, details)
-                return
-            try:
-                settings = complete_step(step)
-                if settings:
-                    apply_setup_settings(owner, settings)
-                if step["id"] == "python_packages":
-                    if step.get("restart_required"):
-                        owner._setupRestartRequired = True
-                    owner._lastEnvironmentResult = owner._lastEnvironmentSignature = None
-            except Exception as exc:
-                finish("failed", str(exc))
                 return
             run_step(index + 1)
 

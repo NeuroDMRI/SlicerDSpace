@@ -264,6 +264,42 @@ class SelectedSetupTests(unittest.TestCase):
         self.assertTrue(owner._setupRestartRequired)
         self.assertFalse(owner._selectedSetupActive)
 
+    def test_s_n1_python_and_model_steps_keep_the_status_writes_and_error_dialogs_of_the_old_chain(self):
+        initial = result(item("numpy"), item("weights", "model-resources", "path", ("segmentation",), None))
+        for fail_title in ("Install Python packages", "Download and verify model assets", None):
+            owner = self.owner(result())
+            owner._environment_dependency_path_kwargs.return_value = {}
+            started = []
+
+            def jobs(widget, title, commands, done):
+                started.append(title)
+                if title == fail_title:
+                    done("failed", "boom", Path("/log/path"))
+                    return True
+                return fake_jobs([])(widget, title, commands, lambda status, details, _log: done(status, details, Path("/log/path")))
+
+            context, _ = self.run_preparation(owner, initial)
+            with tempfile.TemporaryDirectory() as temp, context, patch("shared.ui_selected_setup._confirm", side_effect=accepting_confirm), \
+                    patch("shared.ui_environment_check.start_environment_check", side_effect=lambda widget, callback, **kwargs: callback(owner._run_environment_dependency_check()) or True), \
+                    patch("shared.ui_setup_jobs.start_setup_job", side_effect=jobs), \
+                    patch("shared.user_config.default_user_config_path", return_value=Path(temp) / "config.json"), \
+                    patch.dict("os.environ", {"SLICERDSPACE_USER_CONFIG": str(Path(temp) / "config.json")}):
+                owner._environment_dependency_path_kwargs.return_value = {"model_assets_dir": Path(temp)}
+                prepare_selected_environment(owner, initial)
+            python_calls = owner._save_python_install_status.call_args_list
+            self.assertEqual(len(python_calls), 1, fail_title)  # guard for S-N1: the call was lost in B7
+            self.assertEqual(python_calls[0].args[1], "failed" if fail_title == "Install Python packages" else "completed")
+            titles = [call.kwargs["title"] for call in owner._show_actionable_error.call_args_list]
+            if fail_title == "Install Python packages":
+                self.assertEqual(titles, ["Python dependency installation failed"])
+                owner._set_model_assets_status_text.assert_not_called()
+            elif fail_title == "Download and verify model assets":
+                self.assertEqual(titles, ["Model asset setup failed"])
+                self.assertIn("failed", owner._set_model_assets_status_text.call_args.args[0])
+            else:
+                self.assertEqual(titles, [])
+                self.assertIn("checksum-verified", owner._set_model_assets_status_text.call_args.args[0])
+
     def test_s_b9_slicer_executable_is_the_launcher_then_the_application_path_then_the_configured_one(self):
         import shared.ui_selected_setup as ui
         report = result(item("mrtrix", "mrtrix", "path", package=None))

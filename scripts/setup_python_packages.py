@@ -8,6 +8,20 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+# B6: the DICOM converter is a pip wheel installed into Slicer's Python (wheel tags cp38-abi3 on every OS).
+DCM2NIIX_REQUIREMENT = "dcm2niix==1.0.20261029"
+
+
+def dcm2niix_pending(version=None):
+    """True when the pinned dcm2niix wheel is not installed in this Python."""
+    if version is None:
+        import importlib.metadata
+        try:
+            version = importlib.metadata.version("dcm2niix")
+        except importlib.metadata.PackageNotFoundError:
+            return True
+    return str(version) != DCM2NIIX_REQUIREMENT.split("==", 1)[1]
+
 
 def main():
     from shared.managed_runtimes import write_json

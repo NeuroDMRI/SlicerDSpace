@@ -81,10 +81,32 @@ def _directory_has_dicom_like_files(path: Path) -> bool:
     return False
 
 
+def packaged_dcm2niix() -> Path | None:
+    """Executable of the pip package ``dcm2niix`` installed in this Python, found through its module (B6)."""
+    try:
+        import dcm2niix
+    except ImportError:
+        return None
+    for value in (getattr(dcm2niix, "bin_path", None), getattr(dcm2niix, "bin", None)):
+        if not value:
+            continue
+        path = Path(value)
+        for candidate in (path, path.with_name(path.name + ".exe")):
+            if candidate.is_file() and os.access(candidate, os.X_OK):
+                return candidate
+    return None
+
+
+def find_dcm2niix() -> str | None:
+    """dcm2niix lookup order: the installed package first, then PATH (B6)."""
+    package = packaged_dcm2niix()
+    return package.as_posix() if package else shutil.which("dcm2niix")
+
+
 def _resolve_executable(explicit: Path | None, name: str) -> str:
     if explicit:
         return explicit.expanduser().as_posix()
-    found = shutil.which(name)
+    found = find_dcm2niix() if name == "dcm2niix" else shutil.which(name)
     if found:
         return found
     return name
@@ -356,7 +378,7 @@ def _select_backend(
     if source_kind == "dicom":
         if output_kind == "compat-nrrd":
             return "dwiconvert"
-        if dcm2niix_executable is not None or shutil.which("dcm2niix"):
+        if dcm2niix_executable is not None or find_dcm2niix():
             return "dcm2niix"
         if dwiconvert_executable is not None or shutil.which("DWIConvert"):
             return "dwiconvert"

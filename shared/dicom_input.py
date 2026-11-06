@@ -75,10 +75,13 @@ def converter_path(explicit=None):
         if not path.is_file() or not os.access(path, os.X_OK):
             raise FileNotFoundError("Configured DWIConvert is not executable: " + str(path))
         return "dwiconvert", path
-    for name, backend in (("dcm2niix", "dcm2niix"), ("DWIConvert", "dwiconvert")):
-        found = shutil.which(name)
-        if found:
-            return backend, Path(found)
+    from shared.input_import import find_dcm2niix
+    found = find_dcm2niix()  # B6: the installed dcm2niix package before PATH; DWIConvert stays the fallback
+    if found:
+        return "dcm2niix", Path(found)
+    found = shutil.which("DWIConvert")
+    if found:
+        return "dwiconvert", Path(found)
     from tractography.ukf import resolve_executable
     try:
         return "dwiconvert", resolve_executable(name="DWIConvert")

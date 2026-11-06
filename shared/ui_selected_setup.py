@@ -235,7 +235,8 @@ def prepare_selected_environment(owner, result=None, *, repair=False):
     manager = slicer.app.extensionsManagerModel()
     config = owner._environment_dependency_path_kwargs()
     plan = selected_setup_plan(owner, result, repair=repair)
-    pending_actions = plan.get('surface_build_required', False) or plan.get('surface_prebuilt_required', False) or any(plan[key] for key in (
+    # S-B1: the Windows ps1 step is pending work too; without it the dialog (and the licence acceptance) was skipped.
+    pending_actions = bool((plan.get('windows_runtime') or {}).get('command')) or plan.get('surface_build_required', False) or plan.get('surface_prebuilt_required', False) or any(plan[key] for key in (
         "extensions", "restart_extensions", "python_packages", "asset_profiles", "optional_asset_profiles",
         "managed_profiles", "unsupported_profiles", "manual_items", "backend_profiles"))
     if pending_actions and not _confirm(owner, plan):

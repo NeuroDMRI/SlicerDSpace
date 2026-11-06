@@ -251,6 +251,72 @@ class SelectedSetupTests(unittest.TestCase):
         self.assertTrue(owner._setupRestartRequired)
         self.assertFalse(owner._selectedSetupActive)
 
+    # ---- fix round 1: Windows GUI route (mocks only; Windows stays "implemented, not run") ----
+    WSL_UBUNTU = [{"name": "Ubuntu", "state": "Running", "version": 2, "default": True}]
+
+    def windows_plan(self, report, **extra):
+        plan = build_setup_plan(report, system="Windows", machine="AMD64", closure_targets=("validation",),
+                                wsl_distributions=self.WSL_UBUNTU, slicer_executable="C:/Slicer/SlicerApp.exe")
+        plan.update(also_runs="", closure_targets=["validation"], **extra)
+        return plan
+
+    def write_ps1_config(self, root, extra=None):
+        """What install_deps_windows.ps1 leaves in the user config: bridge folders and the other paths."""
+        written = {}
+        for name, key in (("mrtrix", "mrtrix_bin_dir"), ("mrtrix2", "preprocessing_mrtrix_bin_dir"),
+                          ("fsl", "preprocessing_fsl_bin_dir")):
+            folder = Path(root) / name
+            folder.mkdir(exist_ok=True)
+            exe = folder / "tool.exe"
+            Path(str(exe) + ".slicerdsurfer-owner").write_text("owner")
+            Path(str(exe) + ".conf").write_text("distribution=Ubuntu\ntarget=/usr/bin/env\n")
+            written[key] = str(folder)
+        written.update(extra or {})
+        (Path(root) / "config.json").write_text(json.dumps(
+            {"kind": "slicerdsurfer_user_config", "version": 1, "external_dependencies": written}))
+        return written
+
+    def run_windows_preparation(self, root, *, started, extra_written=None, owner=None, plan_extra=None):
+        from shared.setup_components import plan_components, required_licences
+        pre = result(item("mrtrix", "mrtrix", "path", package=None))
+        owner = owner or self.owner(result())
+        plan = self.windows_plan(pre, **(plan_extra or {}))
+        accepted = {key: {"id": key, "version": record["version"], "time": "t"}
+                    for key, record in required_licences(plan_components(plan)).items()}
+
+        def jobs(widget, title, commands, done):
+            started.append(title)
+            if title == "Install the WSL runtime":
+                self.write_ps1_config(root, extra_written)
+            done("completed", "", None)
+            return True
+
+        context, _ = self.run_preparation(owner, pre)
+        environment_check = Mock(side_effect=lambda widget, callback, **kwargs:
+                                 callback(owner._run_environment_dependency_check()) or True)
+        confirm = Mock(return_value=True)
+        with context, patch("shared.ui_selected_setup.selected_setup_plan", return_value=plan), \
+                patch("shared.ui_selected_setup._confirm", confirm), \
+                patch("shared.setup_resume.accepted_licences", return_value=accepted), \
+                patch("shared.ui_environment_check.start_environment_check", environment_check), \
+                patch("shared.ui_setup_jobs.start_setup_job", side_effect=jobs), \
+                patch("scripts.setup_python_packages.dcm2niix_pending", return_value=False), \
+                patch("shared.user_config.default_user_config_path", return_value=Path(root) / "config.json"), \
+                patch.dict("os.environ", {"SLICERDSPACE_USER_CONFIG": str(Path(root) / "config.json")}):
+            ok = prepare_selected_environment(owner, pre)
+        return ok, owner, confirm, environment_check
+
+    def test_s_b1_only_the_windows_step_pending_still_asks_and_runs_a_fresh_final_check(self):
+        with tempfile.TemporaryDirectory() as root:
+            started = []
+            ok, owner, confirm, environment_check = self.run_windows_preparation(root, started=started)
+            self.assertTrue(ok)
+            confirm.assert_called_once()  # fails before S-B1: the dialog was skipped and setup_steps raised PermissionError
+            self.assertEqual(started, ["Install the WSL runtime"])
+            environment_check.assert_called_once()  # a fresh doctor report, not the pre-install one
+            saved = json.loads((Path(root) / "config.json").read_text())
+            self.assertEqual(saved["wsl_distribution"], "Ubuntu")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -52,7 +52,7 @@
     "docs/release/benchmarks/module_runtimes_20261017.csv"
   ],
   "trees": [
-    {"root": "shared", "patterns": ["*.py"]},
+    {"root": "shared", "patterns": ["*.py", "pnl_cnn/LICENSE.txt", "pnl_cnn/UPSTREAM.json", "pnl_cnn/data/*.json"]},
     {"root": "preprocessing", "patterns": ["*.py"]},
     {"root": "anatomy", "patterns": ["*.py", "*.sh", "*.json", "*.md", "*.txt", "*.yml", "*.conf", "*.png"]},
     {"root": "microstructure", "patterns": ["*.py", "*.json"]},

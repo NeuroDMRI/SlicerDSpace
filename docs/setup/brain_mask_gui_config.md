@@ -19,6 +19,12 @@ masking**, not in the main Inputs or Products sections.
 | MRtrix dwi2mask | `mrtrix` |
 | Provided mask only | `provided` |
 
+PNL CNN licence: All or portions of this licensed product (such portions are
+the "Software") have been obtained under license from The Brigham and Women's
+Hospital, Inc. and are subject to the following terms and conditions:
+see [PNL CNN brain mask licence](../licenses/pnl_brain_mask.md) for the full
+terms (also in `shared/pnl_cnn/LICENSE.txt`).
+
 The selector controls generation of a missing mask. Supplied masks are
 respected. A missing dependency or required mask is an error, not permission
 to fall back to another backend. Selecting PNL CNN does not install or imply

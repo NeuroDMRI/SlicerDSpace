@@ -26,6 +26,7 @@ REQUIRED_RECORDS = {
     "wma_preprocessing": "licenses/WMA.txt",
     "freewater_wls": "licenses/DIPY.txt",
     "slicerdmri_tensor_fit": "licenses/SlicerDMRI.txt",
+    "pnl_cnn": "shared/pnl_cnn/LICENSE.txt",
 }
 
 

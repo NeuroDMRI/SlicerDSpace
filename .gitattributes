@@ -16,6 +16,8 @@ licenses/MK-Curve-DKI-MPL-2.0.txt text eol=lf
 licenses/WMA.txt text eol=lf
 licenses/DIPY.txt text eol=lf
 licenses/SlicerDMRI.txt text eol=lf
+shared/pnl_cnn/LICENSE.txt text eol=lf
+shared/pnl_cnn/data/CompNetBasicModel.json text eol=lf
 # Keep pinned author WMQL rules byte-for-byte, including upstream whitespace.
 tractography/wmql_queries/official/*.qry -text whitespace=-blank-at-eol,-blank-at-eof
 # Preserve contributed upstream font-license bytes, including their original CRLF/spacing.

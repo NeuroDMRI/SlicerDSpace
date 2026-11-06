@@ -20,7 +20,7 @@ from io import StringIO
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from shared.external_process import merged_startup_environment, text_subprocess_kwargs, slicer_runtime_roots
+from shared.external_process import find_pythonslicer, merged_startup_environment, text_subprocess_kwargs, slicer_runtime_roots
 from shared.brain_mask import BrainMaskConfig, generate_brain_mask
 from shared.cache_lock import cache_lock
 
@@ -459,19 +459,33 @@ def resolve_launcher_executable() -> str:
 
 
 def resolve_pythonslicer_executable() -> str:
-    _require_slicer()
-    slicer_home = _resolve_slicer_home()
-    candidates = [
-        slicer_home / "bin" / "PythonSlicer",
-        slicer_home / "bin" / "PythonSlicer.exe",
-        slicer_home / "PythonSlicer",
-        slicer_home / "PythonSlicer.exe",
-        slicer_home / "MacOS" / "PythonSlicer",
-    ]
-    for candidate in candidates:
-        if candidate.is_file():
-            return candidate.as_posix()
-    raise RuntimeError("Failed to resolve the PythonSlicer executable path.")
+    """PythonSlicer of the running Slicer, or (outside Slicer, A-C1) of the Slicer the environment names.
+
+    Inside Slicer the order is unchanged. Outside it: ``sys.executable`` when it is PythonSlicer, then
+    ``SLICER_HOME`` / ``Slicer_HOME``, then the configured Slicer path (``DTI_SLICER_PATH``, ``SLICER_PATH``).
+    """
+    if SLICER_IMPORT_ERROR is None and slicer is not None:
+        slicer_home = _resolve_slicer_home()
+        found = find_pythonslicer(slicer_home)
+        if found:
+            return found.as_posix()
+        raise RuntimeError("Failed to resolve the PythonSlicer executable path.")
+    executable = Path(sys.executable)
+    if executable.name.lower() in ("pythonslicer", "pythonslicer.exe") and executable.is_file():
+        return executable.as_posix()
+    homes = list(_slicer_home_candidates())
+    for key in ("DTI_SLICER_PATH", "SLICER_PATH"):
+        if os.environ.get(key):
+            homes.extend(slicer_runtime_roots(Path(os.environ[key]).expanduser().resolve()))
+    for home in homes:
+        found = find_pythonslicer(home)
+        if found:
+            return found.as_posix()
+    raise RuntimeError(
+        "Failed to resolve the PythonSlicer executable outside Slicer. Set SLICER_HOME to the Slicer install "
+        "folder (the folder that holds bin/PythonSlicer; on macOS the Slicer.app or its Contents folder), "
+        "or run this program with PythonSlicer. Searched: "
+        + (", ".join(path.as_posix() for path in homes) or "none"))
 
 
 NATIVE_TENSOR_SCALARS = ("FractionalAnisotropy", "Trace", "MeanDiffusivity",

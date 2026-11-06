@@ -214,7 +214,9 @@ def configure_level(method, parameters: RegistrationParameters, level: int) -> N
 
     method.SetMetricAsMattesMutualInformation(parameters.histogram_bins)
     method.SetMetricSamplingStrategy(method.REGULAR)
-    method.SetMetricSamplingPercentage(parameters.sampling_percentage, parameters.sampling_seed)
+    # ANTs runs one multi-level method whose sampling seed advances one step per level (ITK
+    # itkImageRegistrationMethodv4.hxx), so level k uses seed + k (finding A-O1).
+    method.SetMetricSamplingPercentage(parameters.sampling_percentage, parameters.sampling_seed + level)
     method.MetricUseFixedImageGradientFilterOff()
     method.MetricUseMovingImageGradientFilterOff()
     method.SetInterpolator(sitk.sitkLinear)
@@ -254,7 +256,8 @@ def register(fixed, moving, parameters: RegistrationParameters = PARAMETERS, log
         result = method.Execute(fixed_metric, moving_metric)
         composite = result if isinstance(result, sitk.CompositeTransform) else sitk.CompositeTransform(result)
         current = sitk.Euler3DTransform(composite.GetNthTransform(composite.GetNumberOfTransforms() - 1))
-        levels.append({"shrink": parameters.shrink_factors[level],
+        levels.append({"seed": parameters.sampling_seed + level,  # A-O1: ANTs' seed advances one step per level
+                       "shrink": parameters.shrink_factors[level],
                        "sigma_voxels": parameters.smoothing_sigmas_voxels[level],
                        "iterations": method.GetOptimizerIteration(),
                        "metric": method.GetMetricValue(),

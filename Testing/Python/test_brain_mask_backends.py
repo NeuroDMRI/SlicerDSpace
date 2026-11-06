@@ -408,7 +408,8 @@ class BrainMaskBackendsTest(unittest.TestCase):
         config = replace(fake_pnl_config(self.root), threads=3)
         before = self.snapshot()
         logs = []
-        result = self.generate(config, log=logs.append)
+        with patch.dict(os.environ, {"SLICERDSPACE_STAGE_CPUS": "3"}):  # A-O4: the child count, not config.threads
+            result = self.generate(config, log=logs.append)
         call, = self.calls(self.pythonslicer)
         command = result["command"]
         record = command[command.index("--record") + 1]
@@ -447,6 +448,21 @@ class BrainMaskBackendsTest(unittest.TestCase):
         self.assertEqual(json.loads(self.manifest.read_text(encoding="utf-8")), result)
         self.assertEqual(result["output"]["sha256"], hashlib.sha256(self.output.read_bytes()).hexdigest())
         self.assert_preserved(before)
+
+    def test_signature_and_receipt_record_the_effective_child_thread_count(self) -> None:
+        # A-O4: the native child ignores config.threads and reads SLICERDSPACE_STAGE_CPUS (A6).
+        config = replace(fake_pnl_config(self.root), threads=3)
+        with patch.dict(os.environ, {"SLICERDSPACE_STAGE_CPUS": "2"}):
+            self.assertEqual(inspect_brain_mask_backend(config)["settings"]["threads"], 2)
+            result = self.generate(config)
+        self.assertEqual(result["signature"]["settings"]["threads"], 2)
+        self.assertEqual(result["child_threads"], 2)
+        self.assertEqual(result["thread_environment"]["OMP_NUM_THREADS"], "2")
+        # The signature follows the reservation: another count is another signature (no silent reuse).
+        with patch.dict(os.environ, {"SLICERDSPACE_STAGE_CPUS": "5"}):
+            self.assertEqual(self.generate(config)["status"], "completed")
+        with patch.dict(os.environ, {"SLICERDSPACE_STAGE_CPUS": "5"}):
+            self.assertEqual(self.generate(config)["status"], "reused")
 
     def test_scheduler_cpu_reservation_reaches_the_native_child_from_slicer_startup_environment(self) -> None:
         # A6: the child reads SLICERDSPACE_STAGE_CPUS; inside Slicer the child environment starts from

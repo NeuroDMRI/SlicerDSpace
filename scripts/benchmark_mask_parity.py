@@ -13,8 +13,11 @@ Driver (Slicer's Python, which has SimpleITK, nibabel and torch)::
 
 ``cases.json`` is a list of ``{"id", "dwi", "bval", "bvec"}``. Inputs are read only, through symlinks
 under ``<out>/cases/<id>/input``. Results: ``<out>/cases/<id>/result.json`` per case, and
-``<out>/summary.json`` with ``<out>/summary.tsv``. A run with a completed record is reused; an
-incomplete run folder is renamed (``.stale-<time>``), never deleted.
+``<out>/summary.json`` with ``<out>/summary.tsv``. A completed run is reused only when its stored
+fingerprint (inputs, implementation and runtime) equals the current one; any other run folder is renamed
+(``.stale-<time>``), never deleted. T1, T2, T4 and T6 results carry the fingerprint of their inputs and are
+recomputed or dropped when it changes. If every reference perturbation equals run A on every case, the
+driver writes the stop report (no bounds) and skips the native, T1, T2, T4 and T6 steps (M-A 1).
 
 Workers (started by the driver):
 
@@ -28,7 +31,7 @@ Workers (started by the driver):
 from __future__ import annotations
 
 import argparse
-from dataclasses import replace
+from dataclasses import asdict, replace
 import hashlib
 import json
 import math
@@ -80,6 +83,35 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def file_hash(path) -> str | None:
+    """SHA-256 of a file, or None when it is absent (a fingerprint part)."""
+    try:
+        return sha256(Path(path))
+    except OSError:
+        return None
+
+
+def fingerprint(payload) -> str:
+    """SHA-256 of a canonical JSON form of ``payload``: the identity of a run's inputs, code and runtime."""
+    text = json.dumps(payload, sort_keys=True, default=_json_default)
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def implementation_hashes() -> dict:
+    """SHA-256 of ``shared/pnl_mask_native.py`` and every vendored file (``UPSTREAM.json`` included)."""
+    repository_on_path()
+    from shared.brain_mask import pnl_native_resources
+
+    result = {}
+    for path in pnl_native_resources():
+        try:
+            name = Path(path).resolve().relative_to(ROOT).as_posix()
+        except ValueError:
+            name = str(path)
+        result[name] = file_hash(path)
+    return result
+
+
 def write_json(path: Path, payload) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     staged = path.with_name(path.name + ".part")
@@ -129,7 +161,11 @@ def run_child(command, env, log_path: Path) -> dict:
 def set_aside(folder: Path) -> None:
     """Rename an incomplete run folder; the harness never deletes."""
     if folder.exists() or folder.is_symlink():
-        folder.rename(folder.with_name(f"{folder.name}.stale-{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}"))
+        stem = f"{folder.name}.stale-{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}"
+        target, number = folder.with_name(stem), 1
+        while target.exists() or target.is_symlink():  # two reruns inside one second
+            target, number = folder.with_name(f"{stem}-{number}"), number + 1
+        folder.rename(target)
 
 
 # --------------------------------------------------------------------------- reference worker (managed PNL Python)
@@ -324,18 +360,43 @@ def prepare_case(case: dict, folder: Path) -> dict:
                   "rotated_sha256": sha256(rotated), "rotation_degrees": ROTATION_DEGREES,
                   "rotated_affine": affine.tolist()}
         write_json(record_path, record)
+    elif not (record.get("rotated_sha256") == sha256(rotated) and record.get("rotation_degrees") == ROTATION_DEGREES):
+        # A-O3: the B2 baseline is checked on reuse; an altered file, or another rotation, is made again.
+        set_aside(rotated)
+        affine = rotated_baseline(baseline, rotated)
+        record = dict(record, rotated_sha256=sha256(rotated), rotation_degrees=ROTATION_DEGREES,
+                      rotated_affine=affine.tolist())
+        write_json(record_path, record)
     return record
 
 
 # --------------------------------------------------------------------------- arms
+def reference_fingerprint(name: str, baseline: dict) -> str:
+    """A-C2: seed, ``-n``, rotation and the SHA-256 of the baseline file the run reads (M-A 1)."""
+    seed, threads, baseline_name = REFERENCE_RUNS[name]
+    rotated = baseline_name == "mean_b0_rot2.nii.gz"
+    return fingerprint({"kind": "reference", "run": name, "seed": seed, "threads": threads,
+                        "baseline_file": baseline_name, "rotation_degrees": ROTATION_DEGREES if rotated else None,
+                        "baseline_sha256": baseline["rotated_sha256" if rotated else "sha256"],
+                        "device": "cpu", "percentile": PERCENTILE, "b0_threshold": B0_THRESHOLD})
+
+
+def stored_reference(folder: Path, name: str, baseline: dict) -> dict | None:
+    """The reference record of ``name`` when its fingerprint is the current one, else None."""
+    record = read_json(folder / "reference" / name / "reference.json")
+    return record if record and record.get("fingerprint") == reference_fingerprint(name, baseline) else None
+
+
 def reference_run(folder: Path, name: str, args, baseline: dict) -> dict:
-    """One reference run; a completed run on the same baseline file (SHA-256) is reused."""
+    """One reference run; a completed run with the same fingerprint (and baseline SHA-256) is reused."""
     seed, threads, baseline_name = REFERENCE_RUNS[name]
     expected = baseline["rotated_sha256" if baseline_name == "mean_b0_rot2.nii.gz" else "sha256"]
     run_dir = folder / "reference" / name
     record_path = run_dir / "reference.json"
     record = read_json(record_path)
-    if record and record.get("status") == "completed" and record.get("baseline_sha256") == expected:
+    current = reference_fingerprint(name, baseline)
+    if (record and record.get("status") == "completed" and record.get("baseline_sha256") == expected
+            and record.get("fingerprint") == current):
         return record
     set_aside(run_dir)
     run_dir.mkdir(parents=True)
@@ -354,19 +415,39 @@ def reference_run(folder: Path, name: str, args, baseline: dict) -> dict:
     process = run_child(command, env, run_dir / "worker.log")
     record = read_json(record_path) or {"status": "failed", "seed": seed, "threads": threads}
     record["process"] = process
+    record["fingerprint"] = current
     if process["returncode"]:
         record["status"] = "failed"
     write_json(record_path, record)
     return record
 
 
+def native_fingerprint(threads: int, device: str, args, baseline: dict) -> str:
+    """A-C2: baseline hash, code hashes, the full A3 parameters (failure-clause variant included), threads, runtime."""
+    repository_on_path()
+    from shared import pnl_mask_native as native
+
+    parameters = replace(native.PARAMETERS, **VARIANTS[args.variant])
+    return fingerprint({"kind": "native", "baseline_sha256": baseline["sha256"], "code": implementation_hashes(),
+                        "parameters": asdict(parameters), "variant": args.variant, "threads": threads,
+                        "device": device, "python": sys.executable,
+                        "weights_json_sha256": file_hash(Path(args.model_dir) / "weights.json")})
+
+
+def stored_native(folder: Path, name: str, threads: int, args, baseline: dict) -> dict | None:
+    record = read_json(folder / "native" / variant_name(name, args.variant, "") / "native.json")
+    return record if record and record.get("fingerprint") == native_fingerprint(threads, "cpu", args, baseline) else None
+
+
 def native_run(folder: Path, name: str, threads: int, args, baseline: dict, *, device: str = "cpu",
                group: str = "native") -> dict:
-    """One native run on the reference arm's baseline file; reused on the same baseline SHA-256."""
+    """One native run on the reference arm's baseline file; reused when its fingerprint is the current one."""
     run_dir = folder / group / variant_name(name, args.variant, "")
     record_path = run_dir / "native.json"
     record = read_json(record_path)
-    if record and record.get("status") == "completed" and record.get("input_sha256") == baseline["sha256"]:
+    current = native_fingerprint(threads, device, args, baseline)
+    if (record and record.get("status") == "completed" and record.get("input_sha256") == baseline["sha256"]
+            and record.get("fingerprint") == current):
         return record
     set_aside(run_dir)
     run_dir.mkdir(parents=True)
@@ -377,6 +458,7 @@ def native_run(folder: Path, name: str, threads: int, args, baseline: dict, *, d
     process = run_child(command, dict(os.environ, PYTHONUNBUFFERED="1"), run_dir / "worker.log")
     record = read_json(record_path) or {"status": "failed", "threads": threads, "device": device}
     record["process"] = process
+    record["fingerprint"] = current
     if process["returncode"]:
         record["status"] = "failed"
     write_json(record_path, record)
@@ -420,6 +502,46 @@ def a4_from_reference(template_mask: np.ndarray, reference_record: dict, templat
     return {"inverse": inverse, "filled": filled, "mask": native.finish_mask(filled)}
 
 
+def reference_digest(reference: dict) -> str:
+    """A-C2: identity of run A's outputs that T1, T2 and T4 read (run fingerprint and the files themselves)."""
+    work = Path(reference["work"])
+    return fingerprint({"run": reference.get("fingerprint"), "transform": file_hash(reference["transform"]),
+                        "warped": file_hash(reference["warped"]), "mask": file_hash(reference.get("mask", "")),
+                        "template_mask": file_hash(work / "template_mask.nii.gz"),
+                        "baseline": file_hash(work / "baseline.nii.gz")})
+
+
+def t1_fingerprint(reference: dict, template: Path) -> str:
+    return fingerprint({"kind": "t1", "A": reference_digest(reference), "code": implementation_hashes(),
+                        "template": file_hash(template)})
+
+
+def t2_fingerprint(reference: dict, native_record: dict, template: Path) -> str:
+    keep = Path(native_record["keep_dir"])
+    return fingerprint({"kind": "t2", "A": reference_digest(reference), "native": native_record.get("fingerprint"),
+                        "transform": file_hash(keep / "transform.tfm"), "warped": file_hash(keep / "Warped.nii.gz"),
+                        "template": file_hash(template)})
+
+
+def t4_input_fingerprint(reference: dict) -> str:
+    """T4 input: run A's Warped image, the percentile and the vendored normalisation code."""
+    return fingerprint({"kind": "t4-input", "warped_sha256": file_hash(reference["warped"]),
+                        "percentile": PERCENTILE, "code": implementation_hashes()})
+
+
+def t4_fingerprint(reference: dict, template: Path) -> str:
+    """T4 result identity apart from the arms' runtimes: the input, run A's transform and the template."""
+    return fingerprint({"kind": "t4", "input": t4_input_fingerprint(reference),
+                        "transform": file_hash(reference["transform"]), "template": file_hash(template)})
+
+
+def t6_fingerprint(args, baseline: dict) -> str:
+    runs = {"cpu4": native_fingerprint(4, "cpu", args, baseline)}
+    if args.gpu:
+        runs["gpu"] = native_fingerprint(4, "cuda", args, baseline)
+    return fingerprint({"kind": "t6", "runs": runs})
+
+
 def t1_case(reference: dict, template: Path) -> dict:
     """M-A 2: run A's transform and template-grid mask through A4; the result must equal run A's mask."""
     import nibabel as nib
@@ -436,6 +558,7 @@ def t1_case(reference: dict, template: Path) -> dict:
     result["filled_differing_voxels"] = int(np.count_nonzero(
         produced["filled"] != nib.load(str(work / "filled.nii.gz")).get_fdata()))
     result["pass"] = result["equal"]
+    result["fingerprint"] = t1_fingerprint(reference, template)
     return result
 
 
@@ -482,6 +605,7 @@ def t2_case(reference: dict, native_record: dict, template: Path) -> dict:
         "max_corner_displacement_mm": max(displacement(corner) for corner in corners),
         # SPEC-GAP: NCC over all template-grid voxels.
         "warped_ncc": float(np.corrcoef(warped_native, warped_reference)[0, 1]),
+        "fingerprint": t2_fingerprint(reference, native_record, template),
     }
 
 
@@ -495,32 +619,81 @@ def normalized_input(reference: dict) -> np.ndarray:
     return normalize(nib.load(str(reference["warped"])).get_fdata(), PERCENTILE)
 
 
+_VERSION_CACHE: dict = {}
+_VERSION_PROBE = (
+    "import json\n"
+    "from importlib import import_module\n"
+    "from importlib.metadata import PackageNotFoundError, version\n"
+    "found = {}\n"
+    "for name in ('torch', 'numpy'):\n"
+    "    try:\n"
+    "        found[name] = version(name)\n"
+    "    except PackageNotFoundError:\n"
+    "        try:\n"
+    "            found[name] = import_module(name).__version__\n"
+    "        except Exception:\n"
+    "            found[name] = None\n"
+    "print(json.dumps(found))\n")
+
+
+def interpreter_versions(python, env) -> dict:
+    """torch and numpy versions of one interpreter (a fingerprint part); looked up once per interpreter path."""
+    key = str(python)
+    if key not in _VERSION_CACHE:
+        try:
+            done = subprocess.run([key, "-c", _VERSION_PROBE], env=env, capture_output=True, text=True, timeout=300)
+            _VERSION_CACHE[key] = json.loads(done.stdout.strip().splitlines()[-1]) if done.returncode == 0 else {}
+        except (OSError, ValueError, IndexError, subprocess.SubprocessError):
+            _VERSION_CACHE[key] = {}
+    return _VERSION_CACHE[key]
+
+
+def t4_arm_fingerprint(arm: str, python, env, input_fingerprint: str, args) -> str:
+    """A-C2: the arm's input, interpreter path, torch and numpy versions, threads and model."""
+    versions = interpreter_versions(python, env)
+    return fingerprint({"kind": "t4-arm", "arm": arm, "input": input_fingerprint, "python": str(python),
+                        "torch": versions.get("torch"), "numpy": versions.get("numpy"), "threads": 1,
+                        "weights_json_sha256": file_hash(Path(args.model_dir) / "weights.json")})
+
+
 def t4_case(folder: Path, reference: dict, args) -> dict:
     """M-A 5: the same normalised input through two torch versions; both masks through A4 with run A's transform."""
     t4 = folder / "t4"
-    t4.mkdir(parents=True, exist_ok=True)
-    source = t4 / "input.npy"
-    if not source.is_file():
+    source, source_record = t4 / "input.npy", t4 / "input.json"
+    input_fingerprint = t4_input_fingerprint(reference)
+    stored = read_json(source_record)
+    if not (source.is_file() and stored and stored.get("fingerprint") == input_fingerprint):
+        # A-C2: another Warped image (or normalisation code) makes every arm output of this folder stale.
+        set_aside(t4)
+        t4.mkdir(parents=True)
         np.save(source, normalized_input(reference))
+        write_json(source_record, {"fingerprint": input_fingerprint, "warped": str(reference["warped"]),
+                                   "warped_sha256": file_hash(reference["warped"])})
     # The driver runs in Slicer's Python (Slicer torch arm); --torch-python is the torch 2.2.2 + numpy 1.26 venv.
     arms = {"slicer": sys.executable, "venv": args.torch_python}
-    outputs = {}
+    outputs, arm_fingerprints = {}, {}
     for arm, python in arms.items():
         mask_path, record_path = t4 / f"{arm}_template_mask.npy", t4 / f"{arm}.json"
+        if arm == "slicer":
+            env = dict(os.environ, PYTHONUNBUFFERED="1")
+        else:
+            from shared.external_process import python_tool_environment
+            env = python_tool_environment(python, {"PYTHONUNBUFFERED": "1"})
+        current = arm_fingerprints[arm] = t4_arm_fingerprint(arm, python, env, input_fingerprint, args)
         record = read_json(record_path)
-        if not (record and record.get("status") == "completed" and mask_path.is_file()):
+        if not (record and record.get("status") == "completed" and mask_path.is_file()
+                and record.get("fingerprint") == current):
+            for stale in (mask_path, record_path):
+                if stale.exists():
+                    set_aside(stale)
             # SPEC-GAP: M-A 5 names CPU but no thread count; both arms use 1 thread (production count).
             command = [python, Path(__file__).resolve(), "--inference-worker", "--input", source,
                        "--model-dir", args.model_dir, "--output", mask_path, "--record", record_path,
                        "--threads", 1]
-            if arm == "slicer":
-                env = dict(os.environ, PYTHONUNBUFFERED="1")
-            else:
-                from shared.external_process import python_tool_environment
-                env = python_tool_environment(python, {"PYTHONUNBUFFERED": "1"})
             process = run_child(command, env, t4 / f"{arm}.log")
             record = read_json(record_path) or {"status": "failed"}
             record["process"] = process
+            record["fingerprint"] = current
             write_json(record_path, record)
             if process["returncode"]:
                 return {"status": "failed", "arm": arm, "record": record}
@@ -532,7 +705,8 @@ def t4_case(folder: Path, reference: dict, args) -> dict:
     result = compare(finals["venv"], finals["slicer"])
     result.update(status="completed", template_grid_differing_voxels=template_difference,
                   torch_versions={arm: item["record"].get("torch_version") for arm, item in outputs.items()},
-                  numpy_versions={arm: item["record"].get("numpy_version") for arm, item in outputs.items()})
+                  numpy_versions={arm: item["record"].get("numpy_version") for arm, item in outputs.items()},
+                  fingerprint=t4_fingerprint(reference, args.template), arm_fingerprints=arm_fingerprints)
     return result
 
 
@@ -554,13 +728,14 @@ def evaluate(cases: dict) -> dict:
             for key in perturbation_values:
                 perturbation_values[key].append(item[key])
     bounds = {key: max(values) if values else None for key, values in perturbation_values.items()}
-    noise_zero = all_equal and not missing
+    noise_zero = bool(cases) and all_equal and not missing
+    stop = {"status": "stop", "reason": "every perturbation equals run A on every case; no bound (M-A 1)"}
 
     def verdict(name):
         values = [(case_id, case.get(name)) for case_id, case in cases.items()]
         absent = [case_id for case_id, value in values if not value or value.get("status") == "failed"]
         if noise_zero:
-            return {"status": "stop", "reason": "every perturbation equals run A on every case; no bound (M-A 1)"}
+            return dict(stop)
         if absent or missing or bounds["one_minus_dice"] is None:
             return {"status": "incomplete", "missing": absent + missing}
         failing = [case_id for case_id, value in values
@@ -574,13 +749,20 @@ def evaluate(cases: dict) -> dict:
     invalid = [f"{case_id}:{run}" for case_id, case in cases.items()
                for run, record in case.get("reference", {}).items()
                if record.get("status") != "completed" or not record.get("valid")]
-    return {"perturbation_bounds": bounds, "noise_floor_zero": noise_zero, "missing_reference_runs": missing,
-            "a_repeat_differs": repeat_differs, "invalid_reference_runs": invalid,
-            "t1": {"status": "incomplete" if any(item is None for item in t1) else
-                   ("pass" if all(item["pass"] for item in t1) else "fail"),
-                   "failing_cases": [case_id for case_id, case in cases.items()
-                                     if case.get("t1") and not case["t1"]["pass"]]},
-            "t3": verdict("t3"), "t4": verdict("t4")}
+    evaluation = {"noise_floor_zero": noise_zero, "missing_reference_runs": missing,
+                  "a_repeat_differs": repeat_differs, "invalid_reference_runs": invalid,
+                  "t1": {"status": "incomplete" if any(item is None for item in t1) else
+                         ("pass" if all(item["pass"] for item in t1) else "fail"),
+                         "failing_cases": [case_id for case_id, case in cases.items()
+                                           if case.get("t1") and not case["t1"]["pass"]]},
+                  "t3": verdict("t3"), "t4": verdict("t4")}
+    if noise_zero:
+        # A-C3, M-A 1: no pass bound is written from reasoning; the bounds are absent, not 0.
+        evaluation["t1"] = dict(stop)
+        evaluation["stop"] = dict(stop)
+    else:
+        evaluation["perturbation_bounds"] = bounds
+    return evaluation
 
 
 TABLE_COLUMNS = ("case", "shape", "baseline_sha256", "qform_sform_flag", "A_valid",
@@ -651,51 +833,81 @@ def drive(args) -> int:
             print(f"[mask parity] {case_id}: {check['volumes']} volumes, {check['bvals']} b-values, "
                   f"{check['bvecs']} b-vectors", file=sys.stderr)
         raise SystemExit("Pre-check failed: volume and b-value counts differ; no run started")
-    results = {}
+    results, carried = {}, {}
+    # Phase 1: baselines and reference runs for every case. Records are used only with the current fingerprint.
     for case in cases:
         folder = out / "cases" / case["id"]
         print(f"[mask parity] case {case['id']}", flush=True)
-        # Steps not selected in this call keep their earlier results.
+        # Steps not selected in this call keep their earlier results, if their input fingerprints still match.
         earlier = read_json(folder / variant_name("result", args.variant, ".json")) or {}
-        result = {key: earlier[key] for key in ("t1", "t2", "t4", "t6") if key in earlier}
-        result.update(check=checks[case["id"]], baseline=prepare_case(case, folder), reference={}, native={})
-        if "reference" in steps:
-            for name in REFERENCE_RUNS:
+        carried[case["id"]] = {key: earlier[key] for key in ("t1", "t2", "t4", "t6") if key in earlier}
+        result = dict(check=checks[case["id"]], baseline=prepare_case(case, folder), reference={}, native={})
+        for name in REFERENCE_RUNS:
+            if "reference" in steps:
                 result["reference"][name] = reference_run(folder, name, args, result["baseline"])
-        else:
-            for name in REFERENCE_RUNS:
-                record = read_json(folder / "reference" / name / "reference.json")
+            else:
+                record = stored_reference(folder, name, result["baseline"])
                 if record:
                     result["reference"][name] = record
-        if "native" in steps:
-            for name, threads in NATIVE_RUNS.items():
-                result["native"][name] = native_run(folder, name, threads, args, result["baseline"])
-        else:
-            for name in NATIVE_RUNS:
-                record = read_json(folder / "native" / variant_name(name, args.variant, "") / "native.json")
-                if record:
-                    result["native"][name] = record
         reference_a = result["reference"].get("A")
-        a_ok = bool(reference_a and reference_a.get("status") == "completed" and reference_a.get("valid"))
-        if a_ok:
+        if reference_a and reference_a.get("status") == "completed" and reference_a.get("valid"):
             mask_a = load_mask(Path(reference_a["mask"]))
             result["reference_vs_A"] = {
                 name: dict(compare(load_mask(Path(record["mask"])), mask_a), valid=record.get("valid"))
                 for name, record in result["reference"].items()
                 if name != "A" and record.get("status") == "completed" and record.get("valid")}
+        write_json(folder / variant_name("result", args.variant, ".json"), result)
+        results[case["id"]] = result
+    # A-C3, M-A 1: zero noise stops the run before the native route, T1, T2, T4 and T6.
+    if evaluate(results)["noise_floor_zero"]:
+        print("[mask parity] every perturbation equals run A on every case: stop, no bounds", flush=True)
+        steps -= {"native", "t1", "t2", "t4", "t6"}
+        carried = {case_id: {} for case_id in carried}
+        stopped = True
+    else:
+        stopped = False
+
+    def keep(case_id: str, key: str, expected: str):
+        item = carried[case_id].get(key)
+        return item if item is not None and item.get("fingerprint") == expected else None
+
+    # Phase 2: native route, T3, T1, T2, T4.
+    for case in cases:
+        if stopped:
+            break
+        folder = out / "cases" / case["id"]
+        result = results[case["id"]]
+        for name, threads in NATIVE_RUNS.items():
+            if "native" in steps:
+                result["native"][name] = native_run(folder, name, threads, args, result["baseline"])
+            else:
+                record = stored_native(folder, name, threads, args, result["baseline"])
+                if record:
+                    result["native"][name] = record
+        reference_a = result["reference"].get("A")
+        if "reference_vs_A" in result:
+            mask_a = load_mask(Path(reference_a["mask"]))
             for name, key in (("N1", "t3"), ("N8", "n8")):
                 record = result["native"].get(name)
                 if record and record.get("status") == "completed":
                     result[key] = compare(load_mask(Path(record["mask"])), mask_a)
             if "t1" in steps:
                 result["t1"] = t1_case(reference_a, args.template)
+            elif keep(case["id"], "t1", t1_fingerprint(reference_a, args.template)):
+                result["t1"] = carried[case["id"]]["t1"]
             native_one = result["native"].get("N1")
-            if "t2" in steps and native_one and native_one.get("status") == "completed":
-                result["t2"] = t2_case(reference_a, native_one, args.template)
+            if native_one and native_one.get("status") == "completed":
+                if "t2" in steps:
+                    result["t2"] = t2_case(reference_a, native_one, args.template)
+                elif keep(case["id"], "t2", t2_fingerprint(reference_a, native_one, args.template)):
+                    result["t2"] = carried[case["id"]]["t2"]
             if "t4" in steps:
                 result["t4"] = t4_case(folder, reference_a, args)
+            elif keep(case["id"], "t4", t4_fingerprint(reference_a, args.template)):
+                result["t4"] = carried[case["id"]]["t4"]
+        if "t6" not in steps and keep(case["id"], "t6", t6_fingerprint(args, result["baseline"])):
+            result["t6"] = carried[case["id"]]["t6"]
         write_json(folder / variant_name("result", args.variant, ".json"), result)
-        results[case["id"]] = result
     if "t6" in steps:
         # SPEC-GAP: M-A 6 names no route or memory metric; the native route is timed, memory is the worker's
         # host peak RSS (os.wait4); CUDA device memory is not recorded.
@@ -708,6 +920,7 @@ def drive(args) -> int:
             results[case_id]["t6"] = {name: {"status": record.get("status"), "process": record.get("process"),
                                              "phase_seconds": record.get("phase_seconds"),
                                              "device": record.get("device")} for name, record in timing.items()}
+            results[case_id]["t6"]["fingerprint"] = t6_fingerprint(args, baseline)
             write_json(folder / variant_name("result", args.variant, ".json"), results[case_id])
     summary = summarise(out, results, args)
     print(json.dumps(summary["evaluation"], indent=2, default=_json_default))

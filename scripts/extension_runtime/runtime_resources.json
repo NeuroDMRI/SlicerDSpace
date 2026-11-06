@@ -62,6 +62,7 @@
     {"root": "docs/setup", "patterns": ["*.md"]},
     {"root": "docs/assets", "patterns": ["*.md"]},
     {"root": "docs/architecture", "patterns": ["*.md"]},
+    {"root": "docs/licenses", "patterns": ["*.md"]},
     {"root": "licenses", "patterns": ["*"]}
   ],
   "excluded_components": ["tests", "Testing", "third_party", "__pycache__", ".pytest_cache", ".mypy_cache", ".git"],

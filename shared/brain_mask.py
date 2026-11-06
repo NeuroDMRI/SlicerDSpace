@@ -103,6 +103,12 @@ def _pnl_native_python() -> Optional[Path]:
         return None
 
 
+def pnl_child_threads() -> int:
+    """Thread count the native PNL child uses (A6): ``SLICERDSPACE_STAGE_CPUS``, else affinity, else CPU count."""
+    from shared.pnl_mask_native import default_threads
+    return default_threads()
+
+
 def pnl_native_resources() -> list[Path]:
     """A7 cache resources: ``pnl_mask_native.py`` and every vendored file in UPSTREAM.json (O5: with the JSON)."""
     record = json.loads((PNL_VENDOR_DIR / "UPSTREAM.json").read_text(encoding="utf-8"))
@@ -122,7 +128,10 @@ def inspect_brain_mask_backend(config: BrainMaskConfig | None = None, *, system:
     missing = []
     tools, resources = {}, []
     settings = {}
+    threads = config.threads
     if config.backend == "pnl_cnn":
+        # A-O4: the child ignores config.threads; the signature records the count it will use.
+        threads = pnl_child_threads()
         # A7 (T2 design v4): Slicer's Python runs shared/pnl_mask_native.py (A1) with the vendored CNN code.
         # The conda runner settings (pnl_mask_python, pnl_mask_script, pnl_mask_ants_bin_dir) are not read;
         # they stay in the config until A8 removes the managed profile.
@@ -216,7 +225,7 @@ def inspect_brain_mask_backend(config: BrainMaskConfig | None = None, *, system:
             resources.append(executable)
     return {"backend": config.backend, "available": not missing, "missing_required": missing,
             "tool_paths": tools, "resources": [str(p) for p in resources],
-            "settings": {"b0_threshold": config.b0_threshold, "threads": config.threads,
+            "settings": {"b0_threshold": config.b0_threshold, "threads": threads,
                          "pnl_percentile": 99, "pnl_cleanup": "official_fill_holes_no_optional_filter",
                          "device": config.brain_mask_device if config.backend in ("pnl_cnn", "synthstrip") else "cpu",
                          **({"pnl_framework": "pytorch", "pnl_route": "native-sitk",
@@ -350,8 +359,10 @@ def generate_brain_mask(dwi_path: Path, bval_path: Path, bvec_path: Path, output
         phase_seconds["b0_preparation"] = time.monotonic() - phase_started
         candidate = work / "mask.nii.gz"
         prepend = []
-        env_extra = {"OMP_NUM_THREADS": str(config.threads), "MKL_NUM_THREADS": str(config.threads),
-                     "OPENBLAS_NUM_THREADS": str(config.threads), "PYTHONUNBUFFERED": "1"}
+        # A-O4: for pnl_cnn the effective child count (backend settings), else config.threads.
+        threads = backend["settings"]["threads"]
+        env_extra = {"OMP_NUM_THREADS": str(threads), "MKL_NUM_THREADS": str(threads),
+                     "OPENBLAS_NUM_THREADS": str(threads), "PYTHONUNBUFFERED": "1"}
         if config.backend == "dipy":
             command = []
         elif config.backend == "pnl_cnn":
@@ -420,6 +431,7 @@ def generate_brain_mask(dwi_path: Path, bval_path: Path, bvec_path: Path, output
                         "device_execution": device,
                         "phase_seconds": phase_seconds,
                         "phase_timing_scope": "Non-overlapping measured phases, not a complete sum of wall time; external process includes interpreter/model startup and upstream registration/inference/cleanup",
+                        **({"child_threads": threads} if config.backend == "pnl_cnn" else {}),
                         "thread_environment": {key: env.get(key) for key in (
                             "OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS",
                             "TF_NUM_INTRAOP_THREADS", "TF_NUM_INTEROP_THREADS", "TF_ENABLE_ONEDNN_OPTS")},

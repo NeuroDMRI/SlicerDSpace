@@ -14,6 +14,7 @@ import tempfile
 import textwrap
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 
@@ -245,7 +246,7 @@ class HelperTest(unittest.TestCase):
                          "once-constant")
         method = Method()
         native.configure_level(method, sampling, 1)
-        self.assertEqual(method.calls["SetMetricSamplingPercentage"][0], (1.0, 1))
+        self.assertEqual(method.calls["SetMetricSamplingPercentage"][0], (1.0, 2))  # A-O1: seed 1 + level 1
         self.assertEqual(method.calls["SetOptimizerAsConjugateGradientLineSearch"][1]["estimateLearningRate"],
                          "each-constant")
 
@@ -317,6 +318,72 @@ class InputTest(unittest.TestCase):
             angle = math.radians(2.0)
             np.testing.assert_allclose(change, [[math.cos(angle), -math.sin(angle), 0],
                                                 [math.sin(angle), math.cos(angle), 0], [0, 0, 1]], atol=1e-12)
+
+
+    def test_altered_b2_baseline_is_made_again_on_reuse(self):
+        # A-O3 (A-C2): prepare_case checks the rotated baseline against its recorded SHA-256 before it reuses it.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            case = as_paths(write_case(root, "c"))
+            folder = root / "out"
+            first = parity.prepare_case(case, folder)
+            rotated = folder / "baseline" / "mean_b0_rot2.nii.gz"
+            baseline = folder / "baseline" / "mean_b0.nii.gz"
+            baseline_before = baseline.stat().st_mtime_ns
+            self.assertEqual(parity.prepare_case(case, folder), first)
+            rotated.write_bytes(b"altered")
+            second = parity.prepare_case(case, folder)
+            self.assertEqual(second["rotated_sha256"], parity.sha256(rotated))
+            self.assertEqual(second["rotated_sha256"], first["rotated_sha256"])
+            self.assertEqual(len(list(rotated.parent.glob("mean_b0_rot2.nii.gz.stale-*"))), 1)
+            self.assertEqual(baseline.stat().st_mtime_ns, baseline_before)
+
+
+class NativeReuseTest(unittest.TestCase):
+    """A-C2: a native run is reused only with an equal fingerprint of its inputs, code, parameters and threads."""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name).resolve()
+        (self.root / "models").mkdir()
+        (self.root / "models" / "weights.json").write_text("{}")
+        self.args = SimpleNamespace(template=self.root / "t.nii.gz", model_dir=self.root / "models",
+                                    variant="default")
+        self.baseline = {"sha256": "baseline-hash"}
+        self.calls = []
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def run_native(self, threads=1):
+        def child(command, env, log):
+            command = [str(part) for part in command]
+            self.calls.append(command)
+            Path(command[command.index("--record") + 1]).write_text(json.dumps(
+                {"status": "completed", "input_sha256": "baseline-hash", "threads": threads}))
+            return {"returncode": 0, "seconds": 0.0, "max_rss_mb": 1.0, "log": str(log)}
+
+        with patch.object(parity, "run_child", child):
+            return parity.native_run(self.root, "N1", threads, self.args, self.baseline)
+
+    def test_native_run_is_repeated_when_parameters_code_or_threads_change(self):
+        self.run_native()
+        self.run_native()
+        self.assertEqual(len(self.calls), 1)                      # same fingerprint: reused
+        with patch.dict(parity.VARIANTS, {"default": {"sampling_percentage": 1.0}}):
+            self.run_native()                                     # the A3 variant changed (fails at 1a2e8d6)
+        self.assertEqual(len(self.calls), 2)
+        self.run_native()                                         # default parameters again: stale record is not it
+        self.assertEqual(len(self.calls), 3)
+        hashes = parity.implementation_hashes()
+        self.assertIn("shared/pnl_mask_native.py", hashes)
+        self.assertIn("shared/pnl_cnn/UPSTREAM.json", hashes)
+        with patch.object(parity, "implementation_hashes", return_value=dict(hashes, extra="changed")):
+            self.run_native()                                     # native code or a vendored file changed
+        self.assertEqual(len(self.calls), 4)
+        self.run_native(threads=2)                                # threads changed
+        self.assertEqual(len(self.calls), 5)
+        self.assertEqual(len(list((self.root / "native").glob("N1.stale-*"))), 4)
 
 
 @unittest.skipUnless(HAS_NIBABEL and HAS_SITK and HAS_SCIPY, "nibabel, SimpleITK and scipy are required")
@@ -422,6 +489,61 @@ class ReferenceArmTest(unittest.TestCase):
         self.assertEqual(evaluation["t3"]["status"], "incomplete")
 
 
+    def test_reference_record_without_the_current_fingerprint_is_repeated(self):
+        # A-C2: an older record (no fingerprint) or one made with other settings is set aside and repeated.
+        cases = [write_case(self.root, "c1")]
+        parity.drive(self.arguments(cases, "reference"))
+        runs = self.root / "out" / "cases" / "c1" / "reference"
+        record = runs / "B1" / "reference.json"
+        stored = json.loads(record.read_text())
+        self.assertEqual(len(stored["fingerprint"]), 64)
+        record.write_text(json.dumps({key: value for key, value in stored.items() if key != "fingerprint"}))
+        parity.drive(self.arguments(cases, "reference"))
+        self.assertEqual(len(list(runs.glob("B1.stale-*"))), 1)
+        self.assertEqual(json.loads(record.read_text())["fingerprint"], stored["fingerprint"])
+        self.assertEqual(len(list(runs.glob("A.stale-*"))), 0)
+        # The B2 fingerprint follows the rotated baseline's own hash and the rotation.
+        b2 = json.loads((runs / "B2" / "reference.json").read_text())["fingerprint"]
+        self.assertNotEqual(b2, json.loads((runs / "A" / "reference.json").read_text())["fingerprint"])
+
+    def test_carried_t1_is_dropped_when_run_a_outputs_change(self):
+        (self.ants / "seed2_shift").touch()
+        cases = [write_case(self.root, "c1")]
+        parity.drive(self.arguments(cases, "reference,t1"))
+        result_path = self.root / "out" / "cases" / "c1" / "result.json"
+        self.assertTrue(json.loads(result_path.read_text())["t1"]["pass"])
+        parity.drive(self.arguments(cases, "reference"))
+        self.assertTrue(json.loads(result_path.read_text())["t1"]["pass"])      # unchanged inputs: kept
+        transform = Path(json.loads(result_path.read_text())["reference"]["A"]["transform"])
+        write_matlab_transform(transform, [0.0, 1.0, 0, -1.0, 0.0, 0, 0, 0, 1.0, 0, 0, 0])
+        parity.drive(self.arguments(cases, "reference"))
+        self.assertNotIn("t1", json.loads(result_path.read_text()))               # run A's transform changed
+        summary = json.loads((self.root / "out" / "summary.json").read_text())["evaluation"]
+        self.assertEqual(summary["t1"]["status"], "incomplete")
+
+    def test_zero_noise_writes_the_stop_report_without_bounds_and_skips_later_steps(self):
+        # A-C3, M-A 1: every perturbation equals run A on every case.
+        cases = [write_case(self.root, "c1"), write_case(self.root, "c2", blob=(2, 8))]
+        arguments = self.arguments(cases, "reference,native,t1,t2,t4,t6")
+        arguments.torch_python = Path(sys.executable)
+        trap = AssertionError("a step after the zero-noise stop ran")
+        with patch.object(parity, "native_run", side_effect=trap), patch.object(parity, "t1_case", side_effect=trap), \
+                patch.object(parity, "t2_case", side_effect=trap), patch.object(parity, "t4_case", side_effect=trap):
+            self.assertEqual(parity.drive(arguments), 0)
+        out = self.root / "out"
+        evaluation = json.loads((out / "summary.json").read_text())["evaluation"]
+        self.assertTrue(evaluation["noise_floor_zero"])
+        self.assertNotIn("perturbation_bounds", evaluation)
+        self.assertEqual(evaluation["stop"]["status"], "stop")
+        self.assertEqual({key: evaluation[key]["status"] for key in ("t1", "t3", "t4")},
+                         {"t1": "stop", "t3": "stop", "t4": "stop"})
+        for case in ("c1", "c2"):
+            result = json.loads((out / "cases" / case / "result.json").read_text())
+            self.assertEqual({name for name in ("t1", "t2", "t3", "t4", "t6") if name in result}, set())
+            self.assertFalse((out / "cases" / case / "native").exists())
+            self.assertTrue(all(item["equal"] for item in result["reference_vs_A"].values()))
+
+
 class EvaluationTest(unittest.TestCase):
     @staticmethod
     def case(perturbations=None, t3=(0.0, 0.0), t4=(0.0, 0.0)):
@@ -516,26 +638,68 @@ class DiagnosticTest(unittest.TestCase):
         # Corner offset from the centre in the x-y plane: 2 voxels x 2 mm each axis.
         self.assertAlmostEqual(result["max_corner_displacement_mm"], 2 * math.sin(math.radians(0.5)) * math.hypot(4, 4))
 
-    def test_t4_compares_both_torch_masks_after_a4_on_the_native_grid(self):
-        case = self.root / "case"
-        t4 = case / "t4"
-        t4.mkdir(parents=True)
-        np.save(t4 / "input.npy", np.zeros(SHAPE, np.float32))
+    def t4_setup(self):
         mask = np.zeros(SHAPE, np.uint8)
         mask[2:7, 3:8, 1:6] = 1
         other = mask.copy()
         other[6, 7, 5] = 0
-        for arm, values, version in (("slicer", mask, "2.14.1"), ("venv", other, "2.2.2")):
-            np.save(t4 / f"{arm}_template_mask.npy", values)
-            (t4 / f"{arm}.json").write_text(json.dumps({"status": "completed", "torch_version": version}))
-        args = SimpleNamespace(template=self.template, model_dir=self.root, torch_python=Path(sys.executable))
-        result = parity.t4_case(case, self.reference, args)
+        venv = self.root / "venv" / "bin" / "python"
+        venv.parent.mkdir(parents=True, exist_ok=True)
+        venv.write_text(f'#!/bin/sh\nexec "{sys.executable}" "$@"\n')
+        venv.chmod(0o755)
+        parity._VERSION_CACHE.clear()
+        calls = []
+
+        def child(command, env, log):
+            command = [str(part) for part in command]
+            python = command[0]
+            calls.append(python)
+            arm_mask, version = (mask, "2.14.1") if python == sys.executable else (other, "2.2.2")
+            np.save(command[command.index("--output") + 1], arm_mask)
+            Path(command[command.index("--record") + 1]).write_text(json.dumps(
+                {"status": "completed", "torch_version": version, "numpy_version": "1.26.4"}))
+            return {"returncode": 0, "seconds": 0.0, "max_rss_mb": 1.0, "log": str(log)}
+
+        args = SimpleNamespace(template=self.template, model_dir=self.root, torch_python=venv)
+        return args, calls, child
+
+    def test_t4_compares_both_torch_masks_after_a4_on_the_native_grid(self):
+        case = self.root / "case"
+        args, calls, child = self.t4_setup()
+        with patch.object(parity, "run_child", child), \
+                patch.object(parity, "normalized_input", return_value=np.zeros(SHAPE, np.float32)):
+            result = parity.t4_case(case, self.reference, args)
         self.assertEqual(result["status"], "completed")
         self.assertEqual(result["template_grid_differing_voxels"], 1)
         self.assertEqual((result["voxels"], result["reference_voxels"]), (124, 125))
         self.assertAlmostEqual(result["one_minus_dice"], 1 - 248 / 249)
         self.assertAlmostEqual(result["relative_voxel_difference"], 1 / 125)
         self.assertEqual(result["torch_versions"], {"slicer": "2.14.1", "venv": "2.2.2"})
+        self.assertEqual(len(calls), 2)
+
+    def test_t4_arms_and_input_are_repeated_only_when_their_fingerprints_change(self):
+        # A-C2: --torch-python changes -> that arm runs again; run A's Warped image changes -> both arms and the input.
+        case = self.root / "case"
+        args, calls, child = self.t4_setup()
+        normalized = patch.object(parity, "normalized_input", return_value=np.zeros(SHAPE, np.float32))
+        with patch.object(parity, "run_child", child), normalized:
+            first = parity.t4_case(case, self.reference, args)
+            parity.t4_case(case, self.reference, args)
+            self.assertEqual(len(calls), 2)                                # nothing changed: both reused
+            moved = self.root / "venv2" / "bin" / "python"
+            moved.parent.mkdir(parents=True)
+            moved.write_bytes(args.torch_python.read_bytes())
+            moved.chmod(0o755)
+            second = parity.t4_case(case, self.reference, SimpleNamespace(**dict(vars(args), torch_python=moved)))
+            self.assertEqual(calls[2:], [str(moved)])                      # only the venv arm (fails at 1a2e8d6)
+            self.assertNotEqual(second["arm_fingerprints"]["venv"], first["arm_fingerprints"]["venv"])
+            self.assertEqual(second["arm_fingerprints"]["slicer"], first["arm_fingerprints"]["slicer"])
+            write_volume(Path(self.reference["warped"]), 3 * self.warped + 2)  # run A's Warped image changed
+            third = parity.t4_case(case, self.reference, SimpleNamespace(**dict(vars(args), torch_python=moved)))
+            self.assertEqual(len(calls), 5)                                # both arms again
+            self.assertNotEqual(third["fingerprint"], first["fingerprint"])
+        self.assertEqual(len(list((case).glob("t4.stale-*"))), 1)
+        self.assertTrue((case / "t4" / "input.json").is_file())
 
 
 if __name__ == "__main__":

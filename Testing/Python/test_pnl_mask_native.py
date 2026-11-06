@@ -63,7 +63,7 @@ class ParameterTest(unittest.TestCase):
             calls = method.calls
             self.assertEqual(calls["SetMetricAsMattesMutualInformation"][0], (32,))
             self.assertEqual(calls["SetMetricSamplingStrategy"][0], ("REGULAR",))
-            self.assertEqual(calls["SetMetricSamplingPercentage"][0], (0.25, 1))
+            self.assertEqual(calls["SetMetricSamplingPercentage"][0], (0.25, 1 + level))  # A-O1
             self.assertIn("MetricUseFixedImageGradientFilterOff", calls)
             self.assertIn("MetricUseMovingImageGradientFilterOff", calls)
             self.assertIn("SetOptimizerScalesFromPhysicalShift", calls)
@@ -113,6 +113,21 @@ class WinsorizeTest(unittest.TestCase):
         # 2550.99609375 - ((0.998 - p) / 0.004) * 10.00390625 = 2543.4931759881 -> float32 2543.4931640625.
         # (A closed-right bin edge would move the edge voxel to bin 254 and give 2542.992919921875.)
         self.assertEqual(upper, 2543.4931640625)
+
+    def test_window_with_both_histogram_bounds_non_zero_uses_float32_subtraction(self):
+        # A-O6. min 100.1, max 2660.3: the histogram range is [100.1, 2660.3 + margin], both ends non-zero.
+        # ITK subtracts the float32 bounds: interval = (float32(upper) - float32(lower)) / 256 in float32.
+        # Values come from a loop-based re-computation of Initialize/GetIndex/Quantile (not this module).
+        data = np.full(1000, 1000.0)
+        data[:4] = 100.1            # bin 0: 4 voxels
+        data[4:6] = 114.1           # bin 1: 2 voxels
+        data[6] = 2660.3            # the maximum
+        data[7:11] = 2645.3         # bin 254: 4 voxels
+        lower, upper = native.winsorize_window(data.reshape(10, 10, 10))
+        self.assertEqual(lower, 115.1070327758789)
+        self.assertEqual(upper, 2641.290771484375)
+        # Subtracting in double and rounding once gives 2641.291015625 for the upper bound.
+        self.assertNotEqual(upper, 2641.291015625)
 
     def test_constant_image_is_refused(self):
         with self.assertRaisesRegex(ValueError, "constant"):
@@ -278,6 +293,8 @@ class EndToEndTest(unittest.TestCase):
             self.assertEqual(receipt["route"], "native-sitk")
             self.assertEqual((receipt["device"], receipt["threads"]), ("cpu", 2))
             self.assertEqual(len(receipt["registration"]["levels"]), 3)
+            # A-O1: ANTs' sampling seed advances one step per level; the receipt records each level's seed.
+            self.assertEqual([level["seed"] for level in receipt["registration"]["levels"]], [1, 2, 3])
             self.assertEqual(set(receipt["phase_seconds"]),
                              {"read_inputs", "registration", "inference", "inverse_and_fill", "write"})
             self.assertTrue(receipt["simpleitk_version"] and receipt["torch_version"])

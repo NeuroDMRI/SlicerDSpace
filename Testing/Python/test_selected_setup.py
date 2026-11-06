@@ -24,6 +24,18 @@ def result(*items, targets=("validation",), blockers=None):
                            blocker_count=len(items) if blockers is None else blockers)
 
 
+def fake_jobs(started):
+    """B7: stand-in for start_setup_job. It records the step and writes the receipt the script would write."""
+    def start(widget, title, commands, done):
+        started.append((title, commands))
+        for _program, args, _env in commands:
+            if "--result" in args:
+                Path(args[args.index("--result") + 1]).write_text(json.dumps({"status": "completed"}))
+        done("completed", "", None)
+        return True
+    return start
+
+
 class SelectedSetupTests(unittest.TestCase):
     def test_d6_gui_doctor_needs_the_native_tensor_fit_not_the_dmri_module(self):
         spec = DependencySpec(key='python:slicer.util', kind='python', label='slicer.util', required=True,
@@ -144,22 +156,25 @@ class SelectedSetupTests(unittest.TestCase):
         with context, patch("shared.ui_selected_setup._confirm", return_value=False):
             self.assertFalse(prepare_selected_environment(owner))
         manager.installExtensionFromServer.assert_not_called()
-        owner._install_python_packages_from_environment_dialog.assert_not_called()
         owner._save_environment_path_setting.assert_not_called()
 
     def test_python_models_and_runtime_phases_finish_with_a_fresh_check(self):
+        # B7: the GUI runs the steps from setup_steps, one async job each, then the fresh check.
         initial = result(item("numpy"), item("weights", "model-resources", "path", ("segmentation",), None))
         owner = self.owner(result())
-        owner._install_python_packages_from_environment_dialog.side_effect = lambda packages, on_complete, **kwargs: on_complete(True)
-        owner._install_model_assets_from_environment_dialog.side_effect = lambda profile, on_complete: on_complete(True, "verified")
+        started = []
         context, _ = self.run_preparation(owner, initial)
         with tempfile.TemporaryDirectory() as temp, context, patch("shared.ui_selected_setup._confirm", return_value=True), \
                 patch("shared.ui_environment_check.start_environment_check", side_effect=lambda widget, callback, **kwargs: callback(owner._run_environment_dependency_check()) or True), \
-                patch("shared.user_config.default_user_config_path", return_value=Path(temp) / "config.json"):
+                patch("shared.ui_setup_jobs.start_setup_job", side_effect=fake_jobs(started)), \
+                patch("scripts.setup_python_packages.dcm2niix_pending", return_value=False), \
+                patch("shared.user_config.default_user_config_path", return_value=Path(temp) / "config.json"), \
+                patch.dict("os.environ", {"SLICERDSPACE_USER_CONFIG": str(Path(temp) / "config.json")}):
+            owner._environment_dependency_path_kwargs.return_value = {"model_assets_dir": Path(temp)}
             self.assertTrue(prepare_selected_environment(owner, initial))
             receipt = next(Path(temp).glob("setup-history/*/result.json"))
             self.assertEqual(json.loads(receipt.read_text())["status"], "ready")
-        owner._install_model_assets_from_environment_dialog.assert_called_once()
+        self.assertEqual([title for title, _ in started], ["Install Python packages", "Download and verify model assets"])
         self.assertFalse(owner._selectedSetupActive)
         owner._run_environment_dependency_check.assert_called_once()
 
@@ -175,7 +190,6 @@ class SelectedSetupTests(unittest.TestCase):
             confirm.assert_not_called()
         manager.installExtensionFromServer.assert_not_called()
         owner._run_environment_dependency_check.assert_not_called()
-        owner._install_python_packages_from_environment_dialog.assert_not_called()
 
     def test_importable_environment_must_pass_functional_checks_before_ready(self):
         report = result()
@@ -205,15 +219,23 @@ class SelectedSetupTests(unittest.TestCase):
         manager.installExtensionFromServer.assert_not_called()
 
     def test_failure_stops_the_chain_and_releases_preparation_lock(self):
-        initial = result(item("numpy"))
+        initial = result(item("numpy"), item("weights", "model-resources", "path", ("segmentation",), None))
         owner = self.owner(initial)
-        owner._install_python_packages_from_environment_dialog.side_effect = lambda packages, on_complete, **kwargs: on_complete(False)
+        started = []
+
+        def failing(widget, title, commands, done):
+            started.append(title)
+            done("failed", "pip failed", None)
+            return True
+
         context, _ = self.run_preparation(owner, initial)
         with tempfile.TemporaryDirectory() as temp, context, patch("shared.ui_selected_setup._confirm", return_value=True), \
+                patch("shared.ui_setup_jobs.start_setup_job", side_effect=failing), \
+                patch("scripts.setup_python_packages.dcm2niix_pending", return_value=False), \
                 patch("shared.user_config.default_user_config_path", return_value=Path(temp) / "config.json"):
             prepare_selected_environment(owner, initial)
         self.assertFalse(owner._selectedSetupActive)
-        owner._install_model_assets_from_environment_dialog.assert_not_called()
+        self.assertEqual(started, ["Install Python packages"])  # the model-asset step never started
         self.assertEqual(owner._setStatus.call_args.args[0], "warning")
 
     def test_extension_install_requires_restart_not_false_readiness(self):
@@ -228,7 +250,6 @@ class SelectedSetupTests(unittest.TestCase):
                          [("SlicerDMRI", False), ("UKFTractography", False)])
         self.assertTrue(owner._setupRestartRequired)
         self.assertFalse(owner._selectedSetupActive)
-        owner._install_python_packages_from_environment_dialog.assert_not_called()
 
 
 if __name__ == "__main__":

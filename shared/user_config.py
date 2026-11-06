@@ -103,6 +103,7 @@ def empty_user_config() -> dict[str, Any]:
         },
         "run_defaults": deepcopy(RUN_DEFAULTS),
         "external_dependencies": {},
+        "accepted_licences": {},
     }
 
 
@@ -137,6 +138,13 @@ def normalize_user_config(payload: Mapping[str, Any] | None) -> dict[str, Any]:
         key: str(value).strip()
         for key, value in (dependencies.items() if isinstance(dependencies, Mapping) else ())
         if key in DEPENDENCY_CONFIG_KEYS and str(value or "").strip()
+    }
+    # B7: {licence id: {"id", "version" (SHA-256 of the local licence file), "time"}}; malformed records are dropped.
+    accepted = config.get("accepted_licences")
+    config["accepted_licences"] = {
+        str(key): {"id": str(key), "version": str(value["version"]), "time": str(value.get("time") or "")}
+        for key, value in (accepted.items() if isinstance(accepted, Mapping) else ())
+        if isinstance(value, Mapping) and str(value.get("version") or "").strip()
     }
     defaults = config.get("run_defaults", {})
     targets = defaults.get("targets")

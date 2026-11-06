@@ -1,5 +1,6 @@
 """Pure, inspectable preparation plan for only the selected workflow."""
 
+from datetime import datetime
 from pathlib import Path
 
 from shared.managed_runtimes import supported_platform, runtime_root
@@ -221,6 +222,88 @@ def windows_runtime_plan(groups, closure_targets, *, wsl_distributions=None, sli
             "wma_in_closure": wma, "command": command, "covers": sorted(covers)}
 
 
+def python_package_commands(packages, *, requests=None, python_command, folder, statuses=(), tract_querier_root=None,
+                            root_expected=False):
+    """Group requests by their selected Python, never mix runtime targets. Pure, without a GUI object (B7)."""
+    import importlib.metadata
+    import os
+    import sys
+    from shared.managed_runtimes import write_json
+    folder = Path(folder)
+    folder.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    script = Path(__file__).resolve().parents[1] / "scripts/setup_python_packages.py"
+    groups = {}
+    from shared.python_setup import _packaging_api
+    InvalidRequirement, Requirement, canonicalize = _packaging_api()
+
+    def package_name(value):
+        try:
+            return canonicalize(Requirement(value).name)
+        except InvalidRequirement:
+            return value
+
+    selections = [(item['requirement'], item) for item in requests] if requests is not None else [(package, None) for package in packages]
+    for package, explicit in selections:
+        matches = [explicit] if explicit is not None else [(item.details or {}) for item in statuses
+                        if item.kind == "python" and any(value and package_name(package) == package_name(value)
+                            for value in ((item.details or {}).get("package"), (item.details or {}).get("install_requirement")))]
+        for details in matches or [{}]:
+            program, prefix = python_command(details.get("python_executable"))
+            group = groups.setdefault((str(program), tuple(prefix)), {"requirements": [], "environment": {}})
+            requirement = details.get("install_requirement") or package
+            try:
+                if Requirement(package).specifier:
+                    requirement = package
+            except InvalidRequirement:
+                pass
+            if requirement == "git+https://github.com/demianw/tract_querier.git":
+                root = tract_querier_root() if callable(tract_querier_root) else tract_querier_root
+                if root and (root_expected or (Path(root) / "pyproject.toml").is_file()):
+                    requirement = str(root)
+                    group["environment"]["SETUPTOOLS_SCM_PRETEND_VERSION_FOR_TRACT_QUERIER"] = "0+local"
+            if requirement not in group["requirements"]:
+                group["requirements"].append(requirement)
+    loaded = {name for module, names in importlib.metadata.packages_distributions().items()
+              if module in sys.modules for name in names}
+    commands, receipts = [], []
+    for index, ((program, prefix), data) in enumerate(groups.items()):
+        slicer_python = bool(prefix) or Path(program).absolute() == Path(sys.executable).absolute()
+        requirements = data["requirements"]
+        try:
+            if all(not Requirement(value).url for value in requirements):
+                data['environment']['PIP_ONLY_BINARY'] = ':all:'
+        except InvalidRequirement:
+            pass
+        if not slicer_python:
+            from shared.external_process import external_python_environment
+            clean = external_python_environment(path_prepend=[Path(program).parent])
+            overrides = {key: None for key in os.environ if key not in clean}
+            overrides.update(clean)
+            overrides.update(data["environment"])
+            data["environment"] = overrides
+        torch_minimum = None
+        torchvision_required = any(item == "torchvision" or item.startswith(("torchvision>", "torchvision=", "torchvision<"))
+                                   for item in requirements)
+        if slicer_python and (torchvision_required or any(item == "torch" or item.startswith(("torch>", "torch=", "torch<")) for item in requirements)):
+            from packaging.requirements import Requirement
+            from packaging.version import Version
+            minimums = ["2.0.0"]
+            for value in requirements:
+                if value.startswith('torch>='):
+                    minimums.extend(spec.version for spec in Requirement(value).specifier if spec.operator == '>=')
+            torch_minimum = str(max(map(Version, minimums)))
+            requirements = [item for item in requirements if not (item == "torch" or item.startswith(("torch>", "torch=", "torch<")))]
+        request, receipt = (folder / f"python-{stamp}-{index}-{suffix}.json" for suffix in ("request", "result"))
+        write_json(request, {"requirements": requirements, "torch_minimum": torch_minimum,
+                            "torchvision_required": torchvision_required and slicer_python,
+                            "protect_bundled": slicer_python, "loaded_packages": sorted(loaded) if slicer_python else [],
+                            "python_path_entries": [path for path in sys.path if path] if slicer_python else []})
+        commands.append((program, [*prefix, "-u", str(script), "--request", str(request), "--result", str(receipt)], data["environment"]))
+        receipts.append(receipt)
+    return commands, receipts
+
+
 # Receipt kinds a setup step can produce. Each is validated the way the GUI handlers did before B8.
 RUNTIME_FILE_SETTINGS = {"pnl_mask_python", "pnl_mask_script"}
 RUNTIME_SETTINGS = {"mrtrix_bin_dir", "preprocessing_mrtrix_bin_dir", "preprocessing_fsl_bin_dir", "postprocess_runtime",
@@ -297,3 +380,164 @@ def apply_setup_receipt(step, receipt):
     if step.get("id") == "windows_runtime":
         update_user_config({"wsl_distribution": str(step["distribution"])})  # SPEC-GAP: a top-level key, not an external dependency
     return settings
+
+
+def need_flags(closure_targets, algorithms=("csd_act",), *, fallback_ukf=False):
+    """The build_setup_plan need_* switches for one target closure (B7; one place for the GUI and the CLI)."""
+    targets = set(closure_targets)
+    return dict(
+        need_dti=bool(targets & {"segmentation", "parcellation", "surface", "microstructure", "tractography", "wma"}),
+        need_slicerdmri="wma" in targets,
+        need_torch=bool(targets & {"segmentation", "parcellation", "surface", "tractcloud"}),
+        need_ukf="tractography" in targets and ("ukf" in tuple(algorithms) or bool(fallback_ukf)))
+
+
+def setup_steps(plan, accepted_licences, *, folder, launcher=None, python_command=None, config=None, statuses=()):
+    """Ordered setup steps for one plan (B7). Each step names its commands and its receipt file.
+
+    `launcher` is (program, prefix) that runs a repo script in Slicer's Python; the default is this interpreter.
+    `python_command(override)` returns (program, prefix) for the Python step. `accepted_licences` is the user-config
+    record {id: {"version", ...}}. A required licence that is not accepted raises PermissionError.
+    The last step is the self-check; its commands are built at run time from a fresh doctor report (SPEC-GAP).
+    """
+    import sys
+    from scripts.setup_python_packages import DCM2NIIX_REQUIREMENT, dcm2niix_pending
+    from shared.setup_components import pending_licences, plan_components, required_licences
+
+    components = plan_components(plan)
+    pending = pending_licences(required_licences(components), accepted_licences)
+    if pending:
+        raise PermissionError("Accept these licences before installing: " + ", ".join(sorted(pending)))
+    folder, config = Path(folder), dict(config or {})
+    repo = Path(__file__).resolve().parents[1]
+    program, prefix = launcher or (sys.executable, [])
+    python_command = python_command or (lambda override: (override or sys.executable, []))
+
+    def run(script, *args):
+        return (program, [*prefix, "-u", str(repo / "scripts" / script), *args], {})
+
+    steps = []
+    if plan.get("backend_profiles"):
+        receipt = folder / "backend-sources-result.json"
+        steps.append(dict(id="backend_sources", title="Prepare algorithm sources", receipt=receipt,
+                          profiles=list(plan["backend_profiles"]), root=str(plan["backend_root"]),
+                          commands=[run("setup_backend_sources.py", "--profiles", *plan["backend_profiles"], "--root",
+                                        str(plan["backend_root"]), "--execute", "--accept-terms", "--result", str(receipt))]))
+    packages, requests = list(plan.get("python_packages", ())), list(plan.get("python_requests", ()))
+    if components and dcm2niix_pending():  # B6; SPEC-GAP: the spec names no target, so it goes to the default (Slicer) Python
+        packages.append(DCM2NIIX_REQUIREMENT)
+        requests.append(dict(requirement=DCM2NIIX_REQUIREMENT, python_executable=None))
+    tract_root, expected_root = config.get("tract_querier_root"), False
+    if "wmql" in plan.get("backend_profiles", ()):  # the backend step above puts the checkout here before this step runs
+        from shared.backend_sources import profile_path
+        tract_root, expected_root = profile_path("wmql", plan["backend_root"]), True
+    if packages:
+        commands, receipts = python_package_commands(
+            tuple(packages), requests=requests, python_command=python_command, folder=folder, statuses=statuses,
+            tract_querier_root=tract_root, root_expected=bool(expected_root))
+        steps.append(dict(id="python_packages", title="Install Python packages", commands=commands,
+                          receipt=receipts[0] if receipts else None, receipts=receipts, packages=packages))
+    if plan.get("asset_profiles"):
+        steps.append(dict(id="model_assets", title="Download and verify model assets", receipt=None,
+                          asset_root=str(plan["asset_root"]), profiles=list(plan["asset_profiles"]),
+                          commands=[run("download_model_assets.py", "--profile", name, "--asset-root", str(plan["asset_root"]),
+                                        "--source", "url", "--source-id", "slicerdsurfer_models_git")
+                                    for name in plan["asset_profiles"]]))
+    if plan.get("optional_asset_profiles"):
+        receipt = folder / "optional-resources-result.json"
+        steps.append(dict(id="optional_resources", title="Prepare selected resources", receipt=receipt,
+                          profiles=list(plan["optional_asset_profiles"]), root=str(plan["asset_root"]),
+                          commands=[run("setup_optional_assets.py", "--profiles", *plan["optional_asset_profiles"],
+                                        "--asset-root", str(plan["asset_root"]), "--execute", "--accept-terms",
+                                        "--result", str(receipt))]))
+    windows = plan.get("windows_runtime") or {}
+    if windows.get("command"):
+        from shared.user_config import default_user_config_path
+        steps.append(dict(id="windows_runtime", title="Install the WSL runtime", receipt=default_user_config_path(),
+                          distribution=windows["distribution"], commands=[(windows["command"][0], windows["command"][1:], {})]))
+    elif plan.get("managed_profiles"):
+        receipt = folder / "runtime-result.json"
+        args = ["--profiles", *plan["managed_profiles"], "--execute", "--result", str(receipt)]
+        args += ["--repair"] if plan.get("repair") else []
+        args += ["--accept-fsl-license"] if plan.get("fsl_license_required") else []
+        args += ["--accept-pnl-terms"] if plan.get("pnl_terms_required") else []
+        args += ["--asset-root", str(config["model_assets_dir"])] if config.get("model_assets_dir") else []
+        args += ["--conda", str(config["conda_executable"])] if config.get("conda_executable") else []
+        steps.append(dict(id="managed_runtime", title="Prepare external tools", receipt=receipt,
+                          commands=[run("setup_managed_runtime.py", *args)]))
+    if plan.get("surface_build_required") or plan.get("surface_prebuilt_required"):
+        receipt = folder / "surface-runtime-result.json"
+        args = ["--execute", "--accept-terms", "--jobs", "4", "--result", str(receipt)]
+        for key, flag in (("model_assets_dir", "--asset-root"), ("postprocess_runtime", "--prefix")):
+            if config.get(key):
+                args += [flag, str(config[key])]
+        steps.append(dict(id="surface_runtime", title="Install surface components", receipt=receipt,
+                          commands=[run("setup_surface_runtime.py", *args)]))
+    steps.append(dict(id="self_check", title="Test the installation", receipt=None, commands=[],
+                      script=str(repo / "scripts" / "check_setup_functionality.py")))
+    return steps
+
+
+def complete_step(step):
+    """After a step's commands succeeded: read its receipt(s), validate them, save the settings (B7/B8)."""
+    import json
+
+    if step["id"] == "python_packages":
+        records = []
+        for path in step.get("receipts", ()):
+            try:
+                records.append(json.loads(Path(path).read_text()))
+            except (OSError, ValueError):
+                records.append({})
+        if any(record.get("status") != "completed" for record in records):
+            raise ValueError("Python package installation did not complete")
+        step["restart_required"] = any(record.get("restart_required") for record in records)
+        return {}
+    receipt = json.loads(Path(step["receipt"]).read_text()) if step.get("receipt") else None
+    return apply_setup_receipt(step, receipt)
+
+
+def run_setup_steps(steps, *, runner=None, self_check=None, log=print, after_step=None):
+    """Run the steps one after the other (CLI). Stops at the first failure. Returns one record per step.
+
+    `self_check(step)` returns (commands, receipts) for the last step; a receipt must report status "passed".
+    `after_step(step, settings)` runs after a step was validated and its settings were saved.
+    """
+    import json
+    import os
+    import subprocess
+
+    runner = runner or subprocess.run
+    records = []
+    for step in steps:
+        log("[Setup] " + step["title"])
+        commands, receipts = step["commands"], []
+        if step["id"] == "self_check":
+            commands, receipts = self_check(step) if self_check else ([], [])
+        status, details = "completed", ""
+        for program, args, extra in commands:
+            environment = dict(os.environ)
+            for key, value in (extra or {}).items():
+                if value is None:
+                    environment.pop(key, None)
+                else:
+                    environment[key] = value
+            if runner([program, *args], env=environment, check=False).returncode != 0:
+                status, details = "failed", "Command failed: " + str(program)
+                break
+        settings = {}
+        if status == "completed":
+            try:
+                if step["id"] == "self_check":
+                    if any(json.loads(Path(path).read_text()).get("status") != "passed" for path in receipts):
+                        raise ValueError("Installation functionality check failed")
+                else:
+                    settings = complete_step(step)
+                    if after_step:
+                        after_step(step, settings)
+            except Exception as exc:
+                status, details = "failed", str(exc)
+        records.append(dict(id=step["id"], status=status, details=details))
+        if status != "completed":
+            break
+    return records

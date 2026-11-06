@@ -78,6 +78,8 @@ class ProductOrchestratorConfig:
     wmql_query_selection: tuple[str, ...] = ()
     wmql_atlas_mode: str = 'native'
     execute: bool = False
+    # T-C5: tracking-variant children set this False; the aggregate manifest gets the one run record.
+    write_run_record: bool = True
     resume: bool = True
     preprocessing_backend: str = "dipy"
     brain_mask_backend: str = "pnl_cnn"
@@ -417,13 +419,28 @@ def _connectome_complete(
     tractography: Optional[Path] = None,
     parcellation: Optional[Path] = None,
     sift2_weights: Optional[Path] = None,
+    backend: Optional[str] = None,
+    compress_mrtrix_dense: Optional[bool] = None,
+    metric: str = "streamline_count",
 ) -> bool:
-    """Return true only when QC counts and both connectome tables have data."""
+    """Return true only when QC counts and both connectome tables have data.
+
+    With ``backend`` set (T-B2), the earlier run must also have used the backend and, for MRtrix, the
+    compression that a run now would resolve. A manifest without ``backend_used`` is an older Python run.
+    """
 
     if not _qc_completed(qc_path):
         return False
     try:
         qc = _read_json(qc_path)
+        if backend is not None and not _connectome_choice_current(
+            manifest_path or qc_path.with_name(qc_path.name.replace("_qc.json", "_manifest.json")),
+            backend=backend,
+            compress_mrtrix_dense=compress_mrtrix_dense,
+            tractography=tractography,
+            metric=metric,
+        ):
+            return False
         expected_dependencies = {
             key: path
             for key, path in {
@@ -446,6 +463,43 @@ def _connectome_complete(
         return _table_has_data_row(matrix_path, header_prefix="source_node,target_node,")
     except (OSError, TypeError, ValueError):
         return False
+
+
+def _connectome_choice_current(
+    manifest_path: Path,
+    *,
+    backend: str,
+    compress_mrtrix_dense: Optional[bool],
+    tractography: Optional[Path],
+    metric: str,
+) -> bool:
+    """True when the manifest records the backend and compression that a run now would resolve."""
+
+    from connectome.pipeline import ConnectomeConfig, expected_connectome_choice
+
+    try:
+        expected_backend, expected_compress = expected_connectome_choice(
+            ConnectomeConfig(
+                subject_id="",
+                tractography_path=Path(tractography) if tractography is not None else Path(""),
+                parcellation_path=Path(""),
+                metric=metric,
+                backend=backend,
+                compress_mrtrix_dense=compress_mrtrix_dense,
+            )
+        )
+    except RuntimeError:
+        return False  # the run would fail; do not reuse an earlier result as if it matched
+    try:
+        manifest = _read_json(manifest_path)
+    except (OSError, TypeError, ValueError):
+        return False
+    recorded_backend = manifest.get("backend_used") or "python"  # no field: a run before the auto backend
+    if recorded_backend != expected_backend:
+        return False
+    if expected_backend == "mrtrix":
+        return bool(manifest.get("compress_mrtrix_dense")) == expected_compress
+    return True
 
 
 def _table_has_data_row(path: Path, *, header_prefix: str) -> bool:
@@ -2374,7 +2428,8 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
                 connectome_dir / f"{config.subject_id}-connectome-nodes.tsv",
                 manifest_path=connectome_dir / f"{connectome_stem}_manifest.json",
                 tractography=tractogram,
-                parcellation=parcellation,
+                parcellation=parcellation,                backend=config.connectome_backend,
+                compress_mrtrix_dense=config.connectome_compress_mrtrix_dense,
             )
         return False
 
@@ -2573,8 +2628,8 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
                 add(target, "skipped", "completed Free Water outputs found", "reuse", inputs=analysis_inputs, outputs=freewater_outputs, dependencies={"microstructure": "available" if dti_ready else None})
             elif not dti_ready:
                 add(target, "blocked", _upstream_reason(selected, "microstructure", "missing Microstructure DTI outputs; select microstructure or provide existing output"), "upstream", inputs=raw, outputs=freewater_outputs, dependencies={"microstructure": "missing"}, provides=False)
-            elif _free_water_ineligible(analysis_inputs):
-                add(target, "blocked", _free_water_ineligible(analysis_inputs), "acquisition_or_backend", inputs=analysis_inputs, outputs=freewater_outputs, provides=False)
+            elif fw_ineligible := _free_water_ineligible(analysis_inputs):  # T-N3: read the b-values once
+                add(target, "blocked", fw_ineligible, "acquisition_or_backend", inputs=analysis_inputs, outputs=freewater_outputs, provides=False)
             elif not raw_input_block(target, freewater_outputs):
                 add(target, "will_run", "ready to run Microstructure Free Water", "runnable", inputs=analysis_inputs, outputs=freewater_outputs, dependencies={"microstructure": "available" if _microstructure_dti_complete(subject_root, config.subject_id, output_root) else "will_run"})
             continue
@@ -2632,10 +2687,14 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
                 add(target, "blocked", ineligible, "acquisition_or_backend", inputs=analysis_inputs, outputs=outputs, provides=False)
             elif echo_error:
                 add(target, "blocked", echo_error, "acquisition_or_backend", inputs=analysis_inputs, outputs=outputs, provides=False)
-            elif config.resume and _microstructure_ifw_complete(config, analysis_inputs):
+            elif config.resume and _microstructure_ifw_complete(config, analysis_inputs) and not any(
+                    item.target == "microstructure_freewater" and item.status == "will_run" for item in items):
                 add(target, "skipped", "matching completed iFW outputs found", "reuse", inputs=analysis_inputs, outputs=outputs)
             else:
-                add(target, "will_run", "ready to run iFW", "runnable", inputs=analysis_inputs, outputs=outputs)
+                fw_reruns = any(item.target == "microstructure_freewater" and item.status == "will_run" for item in items)
+                add(target, "will_run",
+                    "Free Water will re-run, so iFW will re-run on the new fraction" if fw_reruns else "ready to run iFW",
+                    "runnable", inputs=analysis_inputs, outputs=outputs)
             continue
 
         if target == "tractography":
@@ -2853,6 +2912,8 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
                 manifest_path=conn_outputs["manifest"],
                 tractography=tractogram,
                 parcellation=parcellation,
+                backend=config.connectome_backend,
+                compress_mrtrix_dense=config.connectome_compress_mrtrix_dense,
             ):
                 add(target, "skipped", "completed outputs found", "reuse", outputs=conn_outputs)
             elif not parcellation_ready:
@@ -3036,7 +3097,7 @@ def _mark_orchestration_failed(config: ProductOrchestratorConfig, error: BaseExc
     )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    if config.execute:
+    if config.execute and config.write_run_record:
         _write_run_record_best_effort(path, None)  # a failed run is also archived
     return path
 
@@ -4215,9 +4276,8 @@ def _run_subject_products_impl(
         elif any(not path.is_file() for path in raw.values()):
             missing = [label for label, path in raw.items() if not path.is_file()]
             tasks.append(ProductTaskRecord(name="microstructure.freewater", status="blocked", reason="missing raw input: " + ", ".join(missing)))
-        elif _free_water_ineligible(_resolve_analysis_inputs(subject_root, config.subject_id, output_root)):
-            tasks.append(ProductTaskRecord(name="microstructure.freewater", status="blocked",
-                                           reason=_free_water_ineligible(_resolve_analysis_inputs(subject_root, config.subject_id, output_root))))
+        elif fw_ineligible := _free_water_ineligible(_resolve_analysis_inputs(subject_root, config.subject_id, output_root)):  # T-N3
+            tasks.append(ProductTaskRecord(name="microstructure.freewater", status="blocked", reason=fw_ineligible))
         else:
             from microstructure import MicrostructureConfig, run_microstructure
             from shared.pipeline import ensure_native_dti_bundle, find_subject_root, resolve_preprocessed_input_bundle
@@ -4976,6 +5036,8 @@ def _run_subject_products_impl(
             manifest_path=conn_manifest,
             tractography=tractogram,
             parcellation=parcellation,
+            backend=config.connectome_backend,
+            compress_mrtrix_dense=config.connectome_compress_mrtrix_dense,
         ):
             tasks.append(ProductTaskRecord(
                 name="connectome.streamline_count", status="skipped", reason="completed outputs found",
@@ -5044,6 +5106,9 @@ def _run_subject_products_impl(
                 tractography=tractogram,
                 parcellation=parcellation,
                 sift2_weights=sift2_weights,
+                backend=config.connectome_backend,
+                compress_mrtrix_dense=config.connectome_compress_mrtrix_dense,
+                metric="sift2_weighted_streamline_count",
             ):
                 tasks.append(
                     ProductTaskRecord(
@@ -5356,7 +5421,7 @@ def _run_subject_products_impl(
     performance_profile['wall_time_scope'] = manifest['wall_time_scope']
     Path(performance_profile['path']).write_text(json.dumps(performance_profile, indent=2, sort_keys=True) + '\n', encoding='utf-8')
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    if config.execute:
+    if config.execute and config.write_run_record:
         _write_run_record_best_effort(manifest_path, log)  # D6/C40: after every manifest is final
     return ProductOrchestratorResult(
         subject_id=config.subject_id,

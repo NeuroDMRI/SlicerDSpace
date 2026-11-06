@@ -53,10 +53,30 @@ def _package_versions() -> dict[str, Optional[str]]:
     return versions
 
 
-def _is_final_product(path: Path, run_record_path: Path) -> bool:
+def _is_final_product(path: Path, run_record_path: Path, output_root: Optional[Path] = None) -> bool:
+    """False for the record itself and for files under a work folder or intermediate of the run output root.
+
+    Only the parts of the path below the run output root count (T-B1): a root that sits under /tmp, /work,
+    /scratch or a folder named cache or temp must not hide its products. A path outside the root is kept.
+    """
     if path.name == RUN_RECORD_NAME or path == run_record_path:
         return False
-    return not (set(part.lower() for part in path.parts) & EXCLUDED_PATH_PARTS)
+    if output_root is None:
+        return True
+    try:
+        parts = path.relative_to(output_root).parts
+    except ValueError:
+        try:  # the same folder reached through a symbolic link
+            parts = path.resolve().relative_to(Path(output_root).resolve()).parts
+        except (OSError, ValueError):
+            return True
+    return not (set(part.lower() for part in parts[:-1]) & EXCLUDED_PATH_PARTS)
+
+
+def _output_root(manifest: dict, manifest_path: Path) -> Path:
+    """The run output root: the ``output_root`` of the manifest, else the folder above ``00_run_metadata``."""
+    declared = manifest.get("output_root")
+    return Path(declared) if declared else Path(manifest_path).parent.parent
 
 
 def _iter_output_paths(value: Any):
@@ -71,14 +91,16 @@ def _iter_output_paths(value: Any):
             yield from _iter_output_paths(item)
 
 
-def product_inventory(manifest: dict, run_record_path: Path) -> list[dict]:
+def product_inventory(manifest: dict, run_record_path: Path, output_root: Optional[Path] = None) -> list[dict]:
     """SHA-256 inventory of the final product files in the task outputs of the run manifest."""
+    if output_root is None:
+        output_root = _output_root(manifest, run_record_path)
     products: dict[str, dict] = {}
     for task in manifest.get("tasks") or []:
         for key, value in (task.get("outputs") or {}).items():
             for text in _iter_output_paths(value):
                 path = Path(text)
-                if not path.is_absolute() or not _is_final_product(path, run_record_path):
+                if not path.is_absolute() or not _is_final_product(path, run_record_path, output_root):
                     continue
                 if path.is_file():
                     products.setdefault(path.as_posix(), {
@@ -109,6 +131,85 @@ def _qc_summary(manifest: dict) -> dict:
     return {"manifest_status": manifest.get("status"), "task_status_counts": counts, "tasks": tasks}
 
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+ASSET_MANIFESTS = ("models/assets_manifest.json", "models/external_assets_manifest.json")
+# Task name (before "@") -> model asset profile that the task reads. WMA and the brain mask depend on options.
+TASK_ASSET_PROFILES = {
+    "segmentation.ddseg": ("segmentation",), "parcellation.ddparcel": ("parcellation",),
+    "surface.ddsurfer": ("surface",), "surface.ddsurfer_postprocess": ("surface", "surface-postprocess"),
+    "bundles.tractcloud": ("tractcloud",),
+}
+BRAIN_MASK_PROFILES = {"pnl_cnn": ("pnl-cnn-weights",), "synthstrip": ("synthstrip",)}
+USED_STATUSES = frozenset({"completed", "skipped"})
+
+
+def _load_asset_manifests(repo_root: Path) -> list[dict]:
+    loaded = []
+    for relative in ASSET_MANIFESTS:
+        try:
+            data = json.loads((repo_root / relative).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(data, dict):
+            loaded.append({"path": relative, "version": data.get("version"), "profiles": data.get("profiles") or {},
+                           "records": data.get("asset_records") or {},
+                           "upstream_commit": data.get("ddsurfer_upstream_commit")})
+    return loaded
+
+
+def used_asset_profiles(manifest: dict) -> list[str]:
+    """Names of the model asset profiles that the finished tasks of the run read."""
+    names: list[str] = []
+    tasks = [task for task in manifest.get("tasks") or [] if task.get("status") in USED_STATUSES]
+    for task in tasks:
+        name = str(task.get("name", "")).split("@", 1)[0]
+        names.extend(TASK_ASSET_PROFILES.get(name, ()))
+        if name == "bundles.wma":
+            try:
+                from tractography.wma_atlases import atlas_definition
+                names.append(atlas_definition(manifest.get("wma_atlas") or "org")["profile"])
+            except (ImportError, ValueError):
+                names.append("wma")
+    if tasks:
+        names.extend(BRAIN_MASK_PROFILES.get(str(manifest.get("brain_mask_backend")), ()))
+    return sorted(dict.fromkeys(names))
+
+
+def asset_versions(manifest: dict, repo_root: Optional[Path] = None) -> dict:
+    """Version and SHA-256 values that the asset manifests already store, per profile that the run used.
+
+    Nothing is hashed here (the weights are large). A profile that no manifest lists gets the model
+    folder and the version ``"unknown"``.
+    """
+    manifests = _load_asset_manifests(Path(repo_root) if repo_root else REPO_ROOT)
+    folder = manifest.get("model_assets_dir")
+
+    def paths_of(name: str, found: dict, seen: set) -> list[str]:
+        if name in seen or name not in found["profiles"]:
+            return []
+        seen.add(name)
+        profile = found["profiles"][name]
+        paths = [path for child in profile.get("include_profiles", []) for path in paths_of(child, found, seen)]
+        return paths + list(profile.get("required_paths", []))
+
+    result: dict[str, Any] = {}
+    for name in used_asset_profiles(manifest):
+        for found in manifests:
+            if name not in found["profiles"]:
+                continue
+            files = {path: (found["records"].get(path) or {}).get("sha256")
+                     for path in dict.fromkeys(paths_of(name, found, set()))}
+            entry = {"manifest": found["path"], "version": found["version"], "files": files,
+                     "sha256_source": "asset manifest (stored value, not re-hashed at run time)"}
+            if found["upstream_commit"] and name.startswith("surface"):
+                entry["upstream_commit"] = found["upstream_commit"]
+            result[name] = entry
+            break
+        else:
+            result[name] = {"manifest": None, "version": "unknown", "folder": folder, "files": {}}
+    return result
+
+
 def _assets(manifest: dict) -> dict:
     assets: dict[str, Any] = {}
     atlas = manifest.get("atlas_t2")
@@ -117,6 +218,7 @@ def _assets(manifest: dict) -> dict:
         assets["atlas_t2"] = {"path": path.as_posix(), "sha256": sha256_file(path) if path.is_file() else None}
     if manifest.get("model_assets_dir"):
         assets["model_assets_dir"] = manifest["model_assets_dir"]
+    assets["model_profiles"] = asset_versions(manifest)  # T-C7 (D6): asset versions of the run
     return assets
 
 
@@ -138,7 +240,7 @@ def build_run_record(manifest_path: Path) -> dict:
         # The licence acceptance record belongs to the setup step of T2 (B7); this run records what the manifest holds.
         "accepted_licences": manifest.get("accepted_licences", []),
         "qc_summary": _qc_summary(manifest),
-        "products": product_inventory(manifest, record_path),
+        "products": product_inventory(manifest, record_path, _output_root(manifest, manifest_path)),
         "excludes": "run_record.json itself, work folders (" + ", ".join(sorted(EXCLUDED_PATH_PARTS))
                     + ") and intermediates; no output file is copied",
     }

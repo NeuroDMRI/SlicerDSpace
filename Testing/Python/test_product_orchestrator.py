@@ -1494,6 +1494,9 @@ class ProductOrchestratorTest(unittest.TestCase):
                         targets=("segmentation", "parcellation", "surface", "microstructure", "tractography", "bundles", "connectome"),
                         run_name=run_name,
                         select_streamlines=1,
+                        # T-B2: the fixture connectome has no backend_used, so it is a python connectome; the
+                        # default auto choice would resolve to MRtrix for this .tck source and re-run it.
+                        connectome_backend="python",
                         execute=True,
                         resume=True,
                     )

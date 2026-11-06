@@ -78,6 +78,24 @@ def select_connectome_backend(config: ConnectomeConfig, backend_status: dict[str
     return False, "python", "requested python" if config.backend == "python" else f"backend {config.backend!r}: python"
 
 
+def resolve_compress_mrtrix_dense(config: ConnectomeConfig, use_mrtrix: bool) -> bool:
+    """The compression choice of a run: the user value, else on only for ``auto`` with the MRtrix path (D5)."""
+    if config.compress_mrtrix_dense is not None:
+        return bool(config.compress_mrtrix_dense)
+    return bool(use_mrtrix and config.backend == "auto")
+
+
+def expected_connectome_choice(config: ConnectomeConfig) -> tuple[str, bool]:
+    """(backend_used, compress_mrtrix_dense) that a run of ``config`` would record (T-B2).
+
+    Used by the orchestrator to decide whether an earlier connectome is current. The availability of
+    ``tck2connectome`` does not enter: a missing tool is a run-time error, not a different result.
+    Raises RuntimeError when the requested backend cannot work for this input (as the run does).
+    """
+    use_mrtrix, backend_used, _reason = select_connectome_backend(config, {"tck2connectome": True})
+    return backend_used, resolve_compress_mrtrix_dense(config, use_mrtrix)
+
+
 @dataclass(frozen=True)
 class ConnectomeResult:
     subject_id: str
@@ -1101,10 +1119,7 @@ def run_connectome(config: ConnectomeConfig, *, log: Optional[Callable[[str], No
                 raise
             manifest["backend_used"] = backend_used
             manifest["backend_reason"] = backend_reason
-            compress_dense = (
-                config.compress_mrtrix_dense if config.compress_mrtrix_dense is not None
-                else bool(use_mrtrix and config.backend == "auto")
-            )
+            compress_dense = resolve_compress_mrtrix_dense(config, use_mrtrix)
             manifest["compress_mrtrix_dense"] = compress_dense
             if use_mrtrix:
                 data, _ = _load_label_volume(config.parcellation_path.expanduser().resolve())

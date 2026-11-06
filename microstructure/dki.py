@@ -581,7 +581,11 @@ def run_dki(config: DkiConfig, log: Optional[Callable[[str], None]] = None) -> D
                     max_bvalue=config.max_bvalue, log=log, **backend_options,
                 )
             except ValueError as exc:
-                # D4: MK-Curve is the default; a stop names the WLS option and never falls back by itself.
+                # D4: MK-Curve is the default; a stop caused by the signal data names the WLS option and never
+                # falls back by itself. Option and input errors (T-N2) keep their own message.
+                from microstructure.mkcurve import NO_VALID_VOXELS_STOP, SIGNAL_SCALE_STOP
+                if not any(reason in str(exc) for reason in (SIGNAL_SCALE_STOP, NO_VALID_VOXELS_STOP)):
+                    raise
                 raise ValueError(f"{exc}; re-run with DKI fit method WLS (--dki-fit-method WLS)") from exc
             manifest["mkcurve"] = mkcurve
             manifest["mkcurve_record_artifact"] = _signature(Path(mkcurve["record_path"]))

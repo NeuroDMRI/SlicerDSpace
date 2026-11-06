@@ -807,6 +807,12 @@
                <property name="toolTip"><string>Optional diffusion kurtosis analysis; off by default. Standard DKI is not MK-Curve.</string></property>
               </widget>
              </item>
+             <item>
+              <widget class="QCheckBox" name="orchestrationIfwCheckBox">
+               <property name="text"><string>iFW</string></property>
+               <property name="toolTip"><string>Optional iFW: free-water fraction corrected for T2 weighting, minus the CSF fraction. Also runs Free Water and DDSeg; needs the echo time; off by default.</string></property>
+              </widget>
+             </item>
             </layout>
            </item>
            <item>
@@ -821,6 +827,14 @@
              <item><property name="text"><string>dti,freewater,dki</string></property></item>
              <item><property name="text"><string>dti,noddi,dki</string></property></item>
              <item><property name="text"><string>dti,freewater,noddi,dki</string></property></item>
+             <item><property name="text"><string>dti,ifw</string></property></item>
+             <item><property name="text"><string>dti,freewater,ifw</string></property></item>
+             <item><property name="text"><string>dti,noddi,ifw</string></property></item>
+             <item><property name="text"><string>dti,dki,ifw</string></property></item>
+             <item><property name="text"><string>dti,freewater,noddi,ifw</string></property></item>
+             <item><property name="text"><string>dti,freewater,dki,ifw</string></property></item>
+             <item><property name="text"><string>dti,noddi,dki,ifw</string></property></item>
+             <item><property name="text"><string>dti,freewater,noddi,dki,ifw</string></property></item>
             </widget>
            </item>
           </layout>
@@ -841,6 +855,41 @@
           <item><property name="text"><string>OLS</string></property></item>
           <item><property name="text"><string>MKCURVE</string></property></item>
           <item><property name="text"><string>MKCURVE_MATLAB</string></property></item>
+         </widget>
+        </item>
+        <item row="11" column="0">
+         <widget class="QLabel" name="orchestrationIfwEchoTimeLabel">
+          <property name="text"><string>Echo time (ms)</string></property>
+         </widget>
+        </item>
+        <item row="11" column="1">
+         <widget class="QLineEdit" name="orchestrationIfwEchoTimeLineEdit">
+          <property name="placeholderText"><string>Not set (read from the DWI sidecar)</string></property>
+          <property name="toolTip"><string>Echo time of the DWI in ms. Leave empty to read EchoTime from the DWI JSON sidecar; with neither, the iFW stage stops and the other stages continue. There is no default.</string></property>
+         </widget>
+        </item>
+        <item row="12" column="0">
+         <widget class="QLabel" name="orchestrationIfwT2TissueLabel">
+          <property name="text"><string>iFW tissue T2 (ms)</string></property>
+         </widget>
+        </item>
+        <item row="12" column="1">
+         <widget class="QLineEdit" name="orchestrationIfwT2TissueLineEdit">
+          <property name="text"><string>95</string></property>
+          <property name="readOnly"><bool>true</bool></property>
+          <property name="toolTip"><string>Fixed in code (Cho et al. preprint, Supplementary Methods 1). Read-only.</string></property>
+         </widget>
+        </item>
+        <item row="13" column="0">
+         <widget class="QLabel" name="orchestrationIfwT2CsfLabel">
+          <property name="text"><string>iFW CSF T2 (ms)</string></property>
+         </widget>
+        </item>
+        <item row="13" column="1">
+         <widget class="QLineEdit" name="orchestrationIfwT2CsfLineEdit">
+          <property name="text"><string>1500</string></property>
+          <property name="readOnly"><bool>true</bool></property>
+          <property name="toolTip"><string>Fixed in code (Cho et al. preprint, Supplementary Methods 1). Read-only.</string></property>
          </widget>
         </item>
        </layout>
@@ -2046,6 +2095,7 @@
   <tabstop>orchestrationNoddiCheckBox</tabstop>
   <tabstop>orchestrationDkiCheckBox</tabstop>
   <tabstop>orchestrationDkiFitMethodComboBox</tabstop>
+  <tabstop>orchestrationIfwEchoTimeLineEdit</tabstop>
   <tabstop>brainMaskBackendComboBox</tabstop>
   <tabstop>orchestrationRunNameLineEdit</tabstop>
   <tabstop>orchestrationSelectStreamlinesSpinBox</tabstop>

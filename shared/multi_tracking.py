@@ -8,7 +8,8 @@ from datetime import datetime, timezone
 from shared.algorithm_selection import algorithms
 
 SHARED = {"validation", "preprocessing", "segmentation", "parcellation", "surface", "surface_postprocess",
-          "microstructure", "microstructure_freewater", "microstructure_noddi", "microstructure_dki"}
+          "microstructure", "microstructure_freewater", "microstructure_noddi", "microstructure_dki",
+          "microstructure_ifw"}
 
 
 def variants(config):
@@ -30,7 +31,7 @@ def variants(config):
             targets = tuple(target for target in targets if target in {"tractography", *requesters})
         if not targets:
             continue
-        yield replace(config, tractography_backend=backend, closure_applied=True,
+        yield replace(config, tractography_backend=backend, closure_applied=True, write_run_record=False,
                       preflight_blocked_targets=config.preflight_blocked_by_backend.get(
                           backend, config.preflight_blocked_targets),
                       bundle_tractography_backend=(config.bundle_tractography_backend
@@ -132,5 +133,9 @@ def run(config, *, log=None):
     payload["elapsed_seconds"] = time.monotonic() - started
     payload['ended_at'] = datetime.now(timezone.utc).isoformat()
     publish()
+    if config.execute:
+        # T-C5: one run record from the final aggregate manifest, not one per child.
+        from shared.orchestrator import _write_run_record_best_effort
+        _write_run_record_best_effort(destination, log)
     records = tuple(ProductTaskRecord(name=task["name"], status=task["status"], reason=task.get("reason", "")) for task in tasks)
     return ProductOrchestratorResult(config.subject_id, config.subject_root.resolve(), destination, records, planned.run_plan_path)

@@ -14,6 +14,9 @@ import time
 UPSTREAM_URL = "https://github.com/zhangfanmark/MK-Curve"
 UPSTREAM_COMMIT = "9a213e1a5850fe50c998793f31ed852df00242f8"
 PORT_VERSION = 2
+# The two stops that come from the signal data. Only these get the WLS hint in the DKI stage (T-N2).
+SIGNAL_SCALE_STOP = "Signal scale cannot support the author's integer synthetic-b0 grid; rescale acquisition explicitly"
+NO_VALID_VOXELS_STOP = "MK-Curve has no valid corrected quantitative voxels; inspect raw curves and acquisition"
 
 
 def metric_validity(maps, coefficients_finite, curve_valid, nrmse):
@@ -61,7 +64,7 @@ def synthetic_b0_grid(b0):
     lower, upper = int(np.floor(mean * .1 + .5)), int(np.floor(mean * 2 + .5))
     step = int(np.floor((upper - lower) / 200 + .5))
     if lower <= 0 or step <= 0:
-        raise ValueError("Signal scale cannot support the author's integer synthetic-b0 grid; rescale acquisition explicitly")
+        raise ValueError(SIGNAL_SCALE_STOP)
     return np.arange(lower, upper + 1, step, dtype=float)
 
 
@@ -305,7 +308,7 @@ def run_mkcurve(dwi_path, bval_path, bvec_path, mask_path, output_dir, *,
                           "curve_storage": "mk_vs_synthetic_b0.npy: grid x masked voxels in MATLAB/Fortran order",
                           "record_path": str(root / "mkcurve_record.json")}
                 if record["corrected_valid_voxels"] == 0:
-                    raise ValueError("MK-Curve has no valid corrected quantitative voxels; inspect raw curves and acquisition")
+                    raise ValueError(NO_VALID_VOXELS_STOP)
                 for array in (curves, original_coefficients, corrected_coefficients):
                     array.flush()
                 record["auxiliary_files"] = {key: str(root / filename) for key, filename in

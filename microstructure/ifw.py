@@ -20,6 +20,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
 
+from shared.cohort_schedule import scheduled_stage
+
 import numpy as np
 
 IFW_T2_GM_MS = 95.0
@@ -166,7 +168,6 @@ def _canonical(path: Path):
 
 def _to_orientation_of(array: np.ndarray, canonical_affine: np.ndarray, native_affine: np.ndarray) -> np.ndarray:
     """Bring a canonical-order array back to the voxel order of an image with ``native_affine``."""
-    import nibabel as nib
     from nibabel.orientations import apply_orientation, io_orientation, ornt_transform
 
     transform = ornt_transform(io_orientation(canonical_affine), io_orientation(native_affine))
@@ -203,6 +204,38 @@ def ifw_outputs_current(config: IfwConfig, echo_time_ms: float, source: str) -> 
                                            "fw_volume_fraction": _sha256(paths["fw_volume_fraction"])}
 
 
+IFW_ROI_METRICS = ("ifw", "fw_volume_fraction")
+
+
+def _write_roi_table(config: IfwConfig, paths: dict[str, Path]) -> Path:
+    from microstructure.pipeline import _compute_roi_stats
+
+    _compute_roi_stats(metric_paths={key: paths[key] for key in IFW_ROI_METRICS},
+                       roi_label_map=Path(config.roi_label_map), lut_path=config.lut_path,
+                       csv_path=paths["roi_stats_csv"], json_path=paths["roi_stats_json"],
+                       brain_mask_path=Path(config.mask_path))
+    return paths["roi_stats_csv"]
+
+
+def _roi_table_current(config: IfwConfig, paths: dict[str, Path]) -> bool:
+    """T-B3: the regional table fits the cached maps, the label map, the LUT and the mask (as the other maps)."""
+    from microstructure.pipeline import roi_statistics_current
+
+    if not (paths["roi_stats_csv"].is_file() and paths["roi_stats_json"].is_file()):
+        return False
+    if not roi_statistics_current(paths["roi_stats_json"], paths["roi_stats_csv"],
+                                 roi_label_map=Path(config.roi_label_map), required_metrics=IFW_ROI_METRICS,
+                                 brain_mask_path=Path(config.mask_path)):
+        return False
+    try:
+        recorded = json.loads(paths["roi_stats_json"].read_text(encoding="utf-8")).get("lut_path")
+    except (OSError, ValueError, AttributeError):
+        return False
+    wanted = str(Path(config.lut_path).resolve()) if config.lut_path is not None else None
+    return recorded == wanted  # the LUT file content is covered by the source signatures
+
+
+@scheduled_stage('microstructure_ifw')
 def run_ifw(config: IfwConfig, log: Optional[Callable[[str], None]] = None) -> IfwResult:
     """Run the iFW stage on the native grid. Raises :class:`IfwBlocked` for fixable stops."""
     import nibabel as nib
@@ -220,9 +253,14 @@ def run_ifw(config: IfwConfig, log: Optional[Callable[[str], None]] = None) -> I
     paths["ifw"].parent.mkdir(parents=True, exist_ok=True)
     if ifw_outputs_current(config, echo_time_ms, source):
         emit("[iFW] Reusing matching completed stage")
+        cached_csv = None
+        if config.roi_label_map is not None:
+            if not _roi_table_current(config, paths):
+                emit("[iFW] Regional table is missing or stale; recomputing it from the cached maps")
+                _write_roi_table(config, paths)
+            cached_csv = paths["roi_stats_csv"]
         return IfwResult(config.subject_id, "cached", paths["ifw"], paths["fw_volume_fraction"], paths["record"],
-                         echo_time_ms, source,
-                         paths["roi_stats_csv"] if paths["roi_stats_csv"].is_file() else None)
+                         echo_time_ms, source, cached_csv)
     started = time.monotonic()
     native = nib.load(str(config.fw_fraction_path))
     images = {"fw_fraction": _canonical(config.fw_fraction_path),
@@ -250,13 +288,7 @@ def run_ifw(config: IfwConfig, log: Optional[Callable[[str], None]] = None) -> I
         outputs[key] = _sha256(paths[key])
     roi_csv = None
     if config.roi_label_map is not None:
-        from microstructure.pipeline import _compute_roi_stats
-
-        _compute_roi_stats(metric_paths={"ifw": paths["ifw"], "fw_volume_fraction": paths["fw_volume_fraction"]},
-                           roi_label_map=Path(config.roi_label_map), lut_path=config.lut_path,
-                           csv_path=paths["roi_stats_csv"], json_path=paths["roi_stats_json"],
-                           brain_mask_path=Path(config.mask_path))
-        roi_csv = paths["roi_stats_csv"]
+        roi_csv = _write_roi_table(config, paths)
     record = {
         "kind": "microstructure_ifw_stage", "version": 1, "status": "completed", "subject_id": config.subject_id,
         **_signature(config, echo_time_ms, source),

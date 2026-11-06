@@ -69,7 +69,7 @@ class UIParameterSyncTest(unittest.TestCase):
             batchSize=1,
             batchArrangeInputs="none",
             connectomeBackend="python",
-            connectomeCompressMrtrixDense=False,
+            connectomeCompressMrtrixDenseState="unset",
             autoInstallPythonDependencies=True,
             targetSurface=True,
             targetSurfacePostprocess=False,

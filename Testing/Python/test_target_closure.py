@@ -479,7 +479,8 @@ class K2GuiHonoursASuppliedTractogramTest(unittest.TestCase):
                     _parameterNode=node,
                     _product_target_flags=lambda: controller.ProductTargetFlags(bundles=True),
                     _tractography_backend_text=lambda: "csd_act", _bundle_backend_text=lambda: "wma",
-                    _microstructure_stage_flags=lambda: (False, False), _microstructure_dki_enabled=lambda: False)
+                    _microstructure_stage_flags=lambda: (False, False), _microstructure_dki_enabled=lambda: False,
+                    _microstructure_ifw_enabled=lambda: False)
                 owner._provided_tractography = lambda owner=owner: provided(owner)
                 self.assertEqual(provided(owner), expected)
                 targets = closure_method(owner).targets

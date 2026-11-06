@@ -560,6 +560,17 @@ def _ijk_to_ras(reader, vtk):
     return matrix
 
 
+def _matrix_to_numpy(matrix, size=4) -> np.ndarray:
+    """A ``vtkMatrix4x4`` as a (size, size) float array (T-C1: the VTK matrix has no array protocol).
+
+    An object that already is array-like (a numpy array or a nested list) passes through unchanged.
+    """
+    if hasattr(matrix, "GetElement"):
+        return np.array([[matrix.GetElement(row, column) for column in range(size)] for row in range(size)],
+                        dtype=np.float64)
+    return np.asarray(matrix, dtype=np.float64).reshape(size, size)
+
+
 def estimate_file(dwi_path, tensor_path, baseline_path, method="WLS", shift_negative=False,
                   threads=None, log=print) -> dict:
     """DWIToDTIEstimation: read a DWI NRRD, write the tensor NRRD and the baseline NRRD."""
@@ -662,7 +673,7 @@ def write_dec_nrrd(path, rgb, dims, ijk_to_ras) -> None:
 
     nx, ny, nz = (int(value) for value in dims)
     rgb = np.ascontiguousarray(rgb, dtype=np.uint8).reshape(nz, ny, nx, 3)
-    lps = np.diag([-1.0, -1.0, 1.0, 1.0]) @ np.asarray(ijk_to_ras, dtype=np.float64).reshape(4, 4)
+    lps = np.diag([-1.0, -1.0, 1.0, 1.0]) @ _matrix_to_numpy(ijk_to_ras, 4)
     directions = " ".join("(" + ",".join(repr(float(value) + 0.0) for value in lps[:3, axis]) + ")" for axis in range(3))
     origin = "(" + ",".join(repr(float(value) + 0.0) for value in lps[:3, 3]) + ")"
     header = ("NRRD0004\n# Complete NRRD file format specification at:\n"
@@ -693,8 +704,7 @@ def dec_file(tensor_path, fa_path, dec_path, log=print) -> dict:
     fa_scalars = fa_reader.GetOutput().GetPointData().GetScalars()
     if fa_reader.GetReadStatus() or fa_scalars is None:
         raise TeemError(f"No FA data in {fa_path}")
-    frame_matrix = reader.GetMeasurementFrameMatrix()
-    frame = np.array([[frame_matrix.GetElement(row, column) for column in range(3)] for row in range(3)])
+    frame = _matrix_to_numpy(reader.GetMeasurementFrameMatrix(), 3)
     rgb = directional_colour(numpy_support.vtk_to_numpy(tensors), frame, numpy_support.vtk_to_numpy(fa_scalars))
     write_dec_nrrd(dec_path, rgb, reader.GetOutput().GetDimensions(), _ijk_to_ras(reader, vtk))
     seconds = round(time.monotonic() - started, 3)

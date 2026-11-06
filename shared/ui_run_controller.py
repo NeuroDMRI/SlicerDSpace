@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
@@ -170,6 +171,37 @@ def microstructure_optional_stage_flags(
     return "freewater" in stages, "noddi" in stages, "dki" in stages
 
 
+def microstructure_ifw_enabled(stages_text: str, *, legacy_ifw: bool = False) -> bool:
+    """True when the iFW stage is selected (T-C2). The three-flag API above keeps its shape."""
+
+    text = (stages_text or "").strip().lower()
+    if not text:
+        return bool(legacy_ifw)
+    return "ifw" in canonical_microstructure_stages(text)
+
+
+def compress_mrtrix_dense_value(state: Any) -> Optional[bool]:
+    """Three GUI states to the run value (T-N1): "on" -> True, "off" -> False, anything else "unset" -> None."""
+
+    text = str(state or "unset").strip().lower()
+    return {"on": True, "off": False}.get(text)
+
+
+def parse_ifw_echo_time_ms(text: Any) -> Optional[float]:
+    """Echo time (ms) from the GUI field: empty is unset (None); anything else must be a number >= 0."""
+
+    value = str(text if text is not None else "").strip()
+    if not value:
+        return None
+    try:
+        number = float(value)
+    except ValueError:
+        raise ValueError("Echo time (ms) must be a number, for example 89.5") from None
+    if not math.isfinite(number) or number < 0:
+        raise ValueError("Echo time (ms) must be zero or a positive number")
+    return number
+
+
 def selected_workflows(flags: ProductTargetFlags) -> list[str]:
     """Return human-readable selected workflow names."""
 
@@ -225,6 +257,7 @@ def selected_closure(
     microstructure_noddi: bool,
     microstructure_dki: bool = False,
     provided_tractography: tuple[str, ...] = (),
+    microstructure_ifw: bool = False,
 ):
     """Return the prerequisite closure (C1) of the ticked targets.
 
@@ -257,6 +290,7 @@ def selected_closure(
         microstructure_run_free_water=microstructure_freewater,
         microstructure_run_noddi=microstructure_noddi,
         microstructure_run_dki=microstructure_dki,
+        microstructure_run_ifw=microstructure_ifw,
         provided_tractography=tuple(provided_tractography),
     )
 
@@ -270,6 +304,7 @@ def selected_product_targets(
     microstructure_noddi: bool,
     microstructure_dki: bool = False,
     provided_tractography: tuple[str, ...] = (),
+    microstructure_ifw: bool = False,
 ) -> tuple[str, ...]:
     """Return normalized product targets after backend expansion and prerequisite closure."""
 
@@ -280,6 +315,7 @@ def selected_product_targets(
         microstructure_freewater=microstructure_freewater,
         microstructure_noddi=microstructure_noddi,
         microstructure_dki=microstructure_dki,
+        microstructure_ifw=microstructure_ifw,
         provided_tractography=provided_tractography,
     ).targets
 

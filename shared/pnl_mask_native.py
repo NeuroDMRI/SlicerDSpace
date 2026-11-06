@@ -45,6 +45,8 @@ class RegistrationParameters:
     shrink_factors: tuple = (8, 4, 2)
     smoothing_sigmas_voxels: tuple = (3.0, 2.0, 1.0)
     iterations: tuple = (1000, 500, 250)
+    # ImageRegistrationMethod constant name; "Once" is the second M-A T3 fallback change (design §3 M-A).
+    learning_rate_estimation: str = "EachIteration"
     # ANTs passes the winsorise quantiles as C++ float (helper.hxx:80); Quantile takes them as double.
     winsorize_lower: float = float(np.float32(0.005))
     winsorize_upper: float = float(np.float32(0.995))
@@ -225,7 +227,7 @@ def configure_level(method, parameters: RegistrationParameters, level: int) -> N
         lineSearchUpperLimit=parameters.line_search_upper_limit,
         lineSearchEpsilon=parameters.line_search_epsilon,
         lineSearchMaximumIterations=parameters.line_search_iterations,
-        estimateLearningRate=method.EachIteration,
+        estimateLearningRate=getattr(method, parameters.learning_rate_estimation),
         maximumStepSizeInPhysicalUnits=parameters.maximum_step_physical)
     method.SetOptimizerScalesFromPhysicalShift()
     method.SetShrinkFactorsPerLevel([parameters.shrink_factors[level]])

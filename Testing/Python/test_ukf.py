@@ -485,7 +485,10 @@ class IntegrationTests(unittest.TestCase):
         targets = normalize_orchestrator_targets(("bundles",), tractography_backend="ukf", bundle_backend="wma")
         self.assertEqual(targets, ("tractography", "wma"))
         self.assertNotIn("segmentation", targets)
-        self.assertEqual(normalize_orchestrator_targets(("bundles",), bundle_backend="wma"), ("wma",))
+        # C1: WMA needs tractography; the closure adds it (and UKF tracking, see test_target_closure).
+        self.assertEqual(normalize_orchestrator_targets(("bundles",), bundle_backend="wma"), ("tractography", "wma"))
+        self.assertEqual(normalize_orchestrator_targets(("bundles",), bundle_backend="wma", provided_tractography=("wma",)),
+                         ("wma",))
 
     def test_no_mrtrix_dependency_for_ukf_only(self):
         from shared.environment import EnvironmentDoctorConfig, build_dependency_specs

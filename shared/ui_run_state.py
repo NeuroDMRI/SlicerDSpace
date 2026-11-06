@@ -90,17 +90,37 @@ def run_button_state(
         if not (batch_root_text or subject_root_text).strip():
             return ButtonState(True, "Set 'Batch root' under Analysis settings (or a Subject root) for batch mode.")
     else:
-        missing = []
-        if not (subject_id or "").strip():
-            missing.append("Subject ID")
+        # C6: an empty Subject ID is derived from the input path, so only the input is required.
         if not (subject_root_text or "").strip():
-            missing.append("Subject root")
-        if missing:
-            return ButtonState(True, "Fill in " + " and ".join(missing) + " under 1. Inputs.")
+            return ButtonState(True, "Fill in Subject root under 1. Inputs.")
     errors = [error for error in topup_errors if error]
     if errors:
         return ButtonState(True, "Fix distortion-correction settings under 3. Route and parameters: " + errors[0])
     return ButtonState(True, RUN_BUTTON_READY_TOOLTIP)
+
+
+def gui_brain_mask_required(
+    targets: Iterable[str],
+    *,
+    input_known: bool,
+    input_mask_exists: bool,
+    preprocessing_on: bool,
+    mask_backend: str,
+) -> bool:
+    """C5: provision the brain-mask runtime whenever the closure needs a mask and none is supplied.
+
+    The runtime is also required when the input folder is not chosen yet, so Prepare
+    installs it before the first run. A supplied ``input/nodif_brain_mask.nii.gz`` removes the need.
+    """
+
+    from shared.target_closure import MASK_TARGETS
+
+    needs_mask = bool(set(MASK_TARGETS).intersection(targets))
+    has_user_mask = bool(input_known and input_mask_exists)
+    missing_mask = needs_mask and not has_user_mask and (input_known or mask_backend != "provided")
+    # GUI preprocessing uses motion correction by default and may need a new mask in
+    # corrected space even when a supplied input mask already exists.
+    return bool(missing_mask or (preprocessing_on and mask_backend != "provided"))
 
 
 SCENE_ACTION_TOOLTIPS = {

@@ -166,7 +166,7 @@ class ProductOrchestratorTest(unittest.TestCase):
             second_manifest = json.loads(second.run_manifest_path.read_text(encoding="utf-8"))
             archived = second_manifest["previous_run_records"]
 
-            self.assertEqual(second_manifest["targets"], ["surface_postprocess"])
+            self.assertEqual(second_manifest["targets"], ["surface", "surface_postprocess"])
             self.assertEqual(set(archived), {"orchestration_manifest", "run_plan"})
             for path in archived.values():
                 self.assertTrue(Path(path).is_file())
@@ -472,7 +472,13 @@ class ProductOrchestratorTest(unittest.TestCase):
             self.assertTrue(Path(manifest["run_plan_path"]).is_file())
             self.assertTrue(Path(manifest["output_tree_audit_path"]).is_file())
             self.assertIsInstance(manifest["output_tree_warnings"], list)
-            self.assertEqual(manifest["run_plan_summary"]["will_run"], 1)
+            # C1: tractography is blocked by preflight; its prerequisites DDSeg and DDParcel are added to the plan.
+            plan_items = {item["target"]: item for item in json.loads(Path(manifest["run_plan_path"]).read_text())["items"]}
+            self.assertEqual(plan_items["microstructure"]["status"], "will_run")
+            self.assertEqual([plan_items[name]["required_by"] for name in ("segmentation", "parcellation")],
+                             [["tractography"], ["tractography"]])
+            self.assertEqual(sum(item["status"] == "will_run" for item in plan_items.values()),
+                             manifest["run_plan_summary"]["will_run"])
             for task in manifest["tasks"]:
                 normalized_manifest = Path(task["normalized_manifest_path"])
                 normalized_qc = Path(task["normalized_qc_path"])
@@ -719,9 +725,12 @@ class ProductOrchestratorTest(unittest.TestCase):
                 )
             )
 
-            self.assertEqual([task.name for task in result.tasks], ["bundles.wmql", "bundles.wma", "bundles.tractcloud"])
+            # C1: the closure adds DDSeg, DDParcel and tractography; WMA runs on a UKF tractogram.
+            self.assertEqual([task.name for task in result.tasks], [
+                "segmentation.ddseg", "parcellation.ddparcel", "tractography.csd_act@csd_act", "bundles.wmql@csd_act",
+                "bundles.tractcloud@csd_act", "tractography.ukf@ukf", "bundles.wma@ukf"])
             manifest = json.loads(result.run_manifest_path.read_text(encoding="utf-8"))
-            self.assertEqual(manifest["targets"], ["bundles", "wma", "tractcloud"])
+            self.assertEqual(manifest["targets"], ["segmentation", "parcellation", "tractography", "bundles", "tractcloud", "wma"])
             self.assertEqual(manifest["bundle_backends"], ["wmql", "wma", "tractcloud"])
 
     def test_wma_plan_does_not_reuse_connectome_csd_tractogram_implicitly(self) -> None:
@@ -756,11 +765,13 @@ class ProductOrchestratorTest(unittest.TestCase):
                 write=False,
             )
 
-            items = {item.target: item for item in plan.items}
-            self.assertEqual(items["tractography"].status, "will_run")
-            self.assertEqual(items["wma"].status, "blocked")
-            self.assertIn("WMA-compatible", items["wma"].reason)
-            self.assertNotIn("input_tractography", items["wma"].inputs)
+            # C1: WMA now runs on its own UKF tracking variant; it never takes the CSD tractogram of the other variant.
+            items = {item.task_name: item for item in plan.items}
+            self.assertEqual(items["tractography.csd_act@csd_act"].status, "will_run")
+            self.assertEqual(items["bundles.wma@ukf"].status, "blocked")
+            self.assertIn("UKF", items["bundles.wma@ukf"].reason)
+            self.assertNotIn("bundles.wma@csd_act", items)
+            self.assertNotIn("input_tractography", items["bundles.wma@ukf"].inputs)
 
     def test_wma_no_resume_does_not_take_inner_cache_shortcut(self):
         from shared import ProductOrchestratorConfig, run_subject_products
@@ -801,7 +812,10 @@ class ProductOrchestratorTest(unittest.TestCase):
                 )
             )
 
-            self.assertEqual([task.name for task in result.tasks], ["surface.ddsurfer_postprocess", "tractography.csd_act", "tractography.saf"])
+            # C1: SAF needs the surfaces (DDSurfer) and the ACT anatomy (DDSeg, DDParcel) for its CSD FOD.
+            self.assertEqual([task.name for task in result.tasks], [
+                "segmentation.ddseg", "parcellation.ddparcel", "surface.ddsurfer", "surface.ddsurfer_postprocess",
+                "tractography.csd_act", "tractography.saf"])
             manifest = json.loads(result.run_manifest_path.read_text(encoding="utf-8"))
             self.assertEqual(manifest["tractography_backend"], "saf")
             self.assertEqual(manifest["primary_tractography_backend"], "csd_act")
@@ -884,11 +898,12 @@ class ProductOrchestratorTest(unittest.TestCase):
             )
 
             statuses = {task.name: task.status for task in result.tasks}
-            self.assertEqual(statuses["tractography.saf"], "planned")
-            self.assertEqual(statuses["bundles.wma"], "planned")
-            self.assertEqual(statuses["bundles.tractcloud"], "planned")
+            self.assertEqual(statuses["tractography.saf@csd_act"], "planned")
+            self.assertEqual(statuses["bundles.wma@ukf"], "planned")
+            self.assertEqual(statuses["bundles.tractcloud@csd_act"], "planned")
             manifest = json.loads(result.run_manifest_path.read_text(encoding="utf-8"))
-            self.assertEqual(manifest["targets"], ["saf", "wma", "tractcloud"])
+            self.assertEqual(manifest["targets"], ["segmentation", "parcellation", "surface", "surface_postprocess",
+                                                   "tractography", "saf", "tractcloud", "wma"])
 
     def test_tractcloud_uses_same_run_whole_brain_tractography_not_saf(self) -> None:
         from shared import ProductOrchestratorConfig, plan_subject_products, subject_layout
@@ -1028,11 +1043,13 @@ class ProductOrchestratorTest(unittest.TestCase):
                 )
             )
 
-            self.assertEqual(len(result.tasks), 1)
-            self.assertEqual(result.tasks[0].name, "surface.ddsurfer_postprocess")
-            self.assertEqual(result.tasks[0].status, "planned")
+            # C1: surface postprocess needs the DDSurfer surfaces, so DDSurfer is added and marked as required.
+            self.assertEqual([task.name for task in result.tasks], ["surface.ddsurfer", "surface.ddsurfer_postprocess"])
+            self.assertEqual(result.tasks[1].status, "planned")
             manifest = json.loads(result.run_manifest_path.read_text(encoding="utf-8"))
-            self.assertEqual(manifest["targets"], ["surface_postprocess"])
+            self.assertEqual(manifest["targets"], ["surface", "surface_postprocess"])
+            self.assertEqual([(task["requested"], task["required_by"]) for task in manifest["tasks"]],
+                             [(False, ["surface_postprocess"]), (True, [])])
 
     def test_surface_postprocess_plan_requires_native_surfaces_and_wmparc(self) -> None:
         from shared import ProductOrchestratorConfig, plan_subject_products, subject_layout
@@ -1047,6 +1064,7 @@ class ProductOrchestratorTest(unittest.TestCase):
                 subject_id="100307",
                 subject_root=subject_root,
                 targets=("surface_postprocess",),
+                excluded_targets=("surface",),  # safety net: DDSurfer skipped on purpose, existing output is required
                 execute=True,
                 resume=False,
             )
@@ -1124,6 +1142,7 @@ class ProductOrchestratorTest(unittest.TestCase):
                 subject_id="100307",
                 subject_root=subject_root,
                 targets=("surface_postprocess",),
+                excluded_targets=("surface",),
                 execute=True,
                 resume=True,
             )
@@ -1134,6 +1153,7 @@ class ProductOrchestratorTest(unittest.TestCase):
                 subject_id="100307",
                 subject_root=subject_root,
                 targets=("surface_postprocess",),
+                excluded_targets=("surface",),
                 execute=True,
                 resume=True,
                 postprocess_mode="left",
@@ -1178,6 +1198,7 @@ class ProductOrchestratorTest(unittest.TestCase):
                         subject_id="100307",
                         subject_root=subject_root,
                         targets=("surface_postprocess",),
+                        excluded_targets=("surface",),
                         execute=True,
                         resume=False,
                     )
@@ -1201,7 +1222,7 @@ class ProductOrchestratorTest(unittest.TestCase):
             )
 
             manifest = json.loads(result.run_manifest_path.read_text(encoding="utf-8"))
-            self.assertEqual(manifest["targets"], ["surface_postprocess"])
+            self.assertEqual(manifest["targets"], ["surface", "surface_postprocess"])
             self.assertEqual(manifest["postprocess_atlases"], ["aparc", "aparc.a2009s"])
 
     def test_resume_skips_completed_existing_outputs(self) -> None:

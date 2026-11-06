@@ -154,9 +154,10 @@ def snapshot_selection(owner):
         raise ValueError('; '.join(topup.errors))
     if node.experimentScope == 'cohort' and node.preprocessingReversePhaseB0.strip():
         raise ValueError('Cohort experiments cannot reuse a single reverse-PE image across subjects. Prepare subject-specific inputs first.')
-    return RunSelection(subject_id=node.subjectId.strip(), subject_root_text=node.inputDirectory.strip(),
+    return RunSelection(subject_id=owner._effective_subject_id(), subject_root_text=node.inputDirectory.strip(),
         output_root_text=node.outputDirectory.strip(), selected_targets=owner._selected_product_targets(),
-        run_name=node.orchestrationRunName, tractography_backend=owner._tractography_backend_text(),
+        run_name=node.orchestrationRunName, tractography_backend=owner._closure_tractography_backend_text(),
+        requested_targets=owner._requested_product_targets(),
         bundle_backend=owner._bundle_backend_text(), microstructure_freewater=freewater, microstructure_noddi=noddi,
         select_streamlines=node.orchestrationSelectStreamlines, ddseg_device=node.ddsegDevice, surface_device=node.device,
         connectome_backend=node.connectomeBackend, connectome_compress_mrtrix_dense=node.connectomeCompressMrtrixDense,
@@ -195,7 +196,7 @@ def request_and_plan(owner):
         if not source:
             raise ValueError('Set a subject/cohort directory and an output directory')
         output = str(Path(source) / 'outputs')
-    request = make_request(base_args=base, subject_root=node.inputDirectory.strip(), subject_id=node.subjectId.strip(),
+    request = make_request(base_args=base, subject_root=node.inputDirectory.strip(), subject_id=owner._effective_subject_id(),
         output_root=output, run_name=node.orchestrationRunName, scope=node.experimentScope,
         cohort_root=node.experimentRoot.strip(), jobs=node.experimentJobs,
         options=node.experimentCliOptions, variants=node.experimentVariants)

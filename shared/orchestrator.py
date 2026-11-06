@@ -57,24 +57,7 @@ BUNDLE_BACKENDS = {"wmql", "wma", "tractcloud"}
 WMA_MIN_ANATOMICAL_TRACT_COUNT = 73
 WMA_MIN_NONEMPTY_ANATOMICAL_TRACT_COUNT = 55
 
-TARGET_ORDER = (
-    "validation",
-    "preprocessing",
-    "segmentation",
-    "parcellation",
-    "surface",
-    "surface_postprocess",
-    "microstructure",
-    "microstructure_freewater",
-    "microstructure_noddi",
-    "microstructure_dki",
-    "tractography",
-    "bundles",
-    "saf",
-    "wma",
-    "tractcloud",
-    "connectome",
-)
+from shared.target_closure import TARGET_ORDER, expand_closure  # noqa: E402
 
 
 @dataclass(frozen=True)
@@ -194,6 +177,15 @@ class ProductOrchestratorConfig:
     tractcloud_random_seed: int = 0
     preflight_blocked_targets: dict[str, str] = field(default_factory=dict)
     preflight_blocked_by_backend: dict[str, dict[str, str]] = field(default_factory=dict)
+    # C3 provenance: target added by the prerequisite closure -> targets that required it.
+    # Callers that already applied the closure (CLI, GUI) pass it here.
+    target_required_by: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    # Targets the user explicitly skipped (CLI --skip-targets); the closure does not re-add them.
+    excluded_targets: tuple[str, ...] = ()
+    # Set once the closure was applied, so tracking variants do not expand again.
+    closure_applied: bool = False
+    # Algorithm added by the closure -> targets that required it; its variant runs only those targets.
+    closure_algorithm_requesters: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -208,6 +200,8 @@ class ProductTaskRecord:
     ended_at: Optional[str] = None
     runtime_seconds: Optional[float] = None
     logs: tuple[str, ...] = ()
+    # C8: "skipped_no_parcellation" when microstructure ran without a parcellation (no ROI statistics).
+    regional_statistics: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -223,10 +217,14 @@ class RunPlanItem:
     inputs: dict[str, str | None] = field(default_factory=dict)
     outputs: dict[str, str | None] = field(default_factory=dict)
     dependencies: dict[str, str | None] = field(default_factory=dict)
+    requested: bool = True
+    required_by: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, object]:
         return {
             "target": self.target,
+            "requested": self.requested,
+            "required_by": list(self.required_by),
             "task_name": self.task_name,
             "status": self.status,
             "reason": self.reason,
@@ -549,6 +547,32 @@ def _ukf_current(config, inputs, directory):
                    config.ukf_executable, config.dwiconvert_executable)
 
 
+def orchestrator_closure(
+    targets: tuple[str, ...],
+    *,
+    tractography_backend: str = "csd_act",
+    bundle_backend: str = "wmql",
+    microstructure_run_free_water: bool = False,
+    microstructure_run_noddi: bool = False,
+    microstructure_run_dki: bool = False,
+    wma_source_explicit: bool = False,
+    provided_tractography: tuple[str, ...] = (),
+):
+    """Return the prerequisite closure (see ``shared.target_closure``) of the selected targets."""
+
+    from shared.algorithm_selection import algorithms
+    return expand_closure(
+        targets,
+        tractography_algorithms=algorithms(tractography_backend),
+        bundle_backends=_normalize_bundle_backends(bundle_backend),
+        microstructure_free_water=microstructure_run_free_water,
+        microstructure_noddi=microstructure_run_noddi,
+        microstructure_dki=microstructure_run_dki,
+        wma_source_explicit=wma_source_explicit,
+        provided_tractography=provided_tractography,
+    )
+
+
 def normalize_orchestrator_targets(
     targets: tuple[str, ...],
     *,
@@ -557,51 +581,21 @@ def normalize_orchestrator_targets(
     microstructure_run_free_water: bool = False,
     microstructure_run_noddi: bool = False,
     microstructure_run_dki: bool = False,
+    wma_source_explicit: bool = False,
+    provided_tractography: tuple[str, ...] = (),
 ) -> tuple[str, ...]:
-    """Expand product-level targets according to selected backend parameters."""
+    """Expand product-level targets and add every prerequisite target (C1 closure)."""
 
-    from shared.algorithm_selection import algorithms
-    tracking = algorithms(tractography_backend)
-    if len(tracking) > 1:
-        expanded = {target for backend in tracking for target in normalize_orchestrator_targets(
-            targets, tractography_backend=backend, bundle_backend=bundle_backend,
-            microstructure_run_free_water=microstructure_run_free_water,
-            microstructure_run_noddi=microstructure_run_noddi, microstructure_run_dki=microstructure_run_dki)}
-        return tuple(target for target in TARGET_ORDER if target in expanded)
-
-    requested = tuple(dict.fromkeys(target.strip().lower() for target in targets if target.strip()))
-    bundle_backends = _normalize_bundle_backends(bundle_backend)
-    expanded: list[str] = []
-    for target in requested:
-        if target == "microstructure":
-            expanded.append("microstructure")
-            if microstructure_run_free_water:
-                expanded.append("microstructure_freewater")
-            if microstructure_run_noddi:
-                expanded.append("microstructure_noddi")
-            if microstructure_run_dki:
-                expanded.append("microstructure_dki")
-            continue
-        if target == "bundles":
-            for backend in bundle_backends:
-                expanded.append("bundles" if backend == "wmql" else backend)
-            continue
-        expanded.append(target)
-        if target == "tractography" and tractography_backend == "saf":
-            expanded.append("surface_postprocess")
-            expanded.append("saf")
-
-    requested_set = set(expanded)
-    if tractography_backend == "ukf" and requested_set.intersection({"bundles", "wma", "tractcloud", "connectome"}):
-        requested_set.add("tractography")
-    normalized = tuple(target for target in TARGET_ORDER if target in requested_set)
-    unsupported = sorted(set(normalized) - SUPPORTED_TARGETS)
-    if unsupported:
-        raise ValueError(f"Unsupported orchestrator target(s): {', '.join(unsupported)}")
-    missing_from_order = sorted(requested_set - set(TARGET_ORDER))
-    if missing_from_order:
-        raise ValueError(f"Unsupported orchestrator target(s): {', '.join(missing_from_order)}")
-    return normalized
+    return orchestrator_closure(
+        targets,
+        tractography_backend=tractography_backend,
+        bundle_backend=bundle_backend,
+        microstructure_run_free_water=microstructure_run_free_water,
+        microstructure_run_noddi=microstructure_run_noddi,
+        microstructure_run_dki=microstructure_run_dki,
+        wma_source_explicit=wma_source_explicit,
+        provided_tractography=provided_tractography,
+    ).targets
 
 
 def _resolve_bundle_input_tractography(
@@ -913,14 +907,81 @@ def _saf_complete(
 
 
 def _normalize_targets(config: ProductOrchestratorConfig) -> tuple[str, ...]:
-    return normalize_orchestrator_targets(
+    if not config.closure_applied:
+        return _with_closure(config).targets
+    # Tracking variants carry a deliberate subset of the closed targets: only validate and order it.
+    requested = {target.strip().lower() for target in config.targets if target.strip()}
+    unsupported = sorted(requested - set(TARGET_ORDER))
+    if unsupported:
+        raise ValueError(f"Unsupported orchestrator target(s): {', '.join(unsupported)}")
+    return tuple(target for target in TARGET_ORDER if target in requested)
+
+
+def _provided_tractography(config: ProductOrchestratorConfig) -> tuple[str, ...]:
+    """Bundle targets whose tractogram the user supplied as a file (no tracking is needed for them)."""
+
+    return tuple(name for name, value in (
+        ("wma", config.wma_input_tractography), ("tractcloud", config.tractcloud_input_tractography),
+        ("saf", config.saf_pregenerated_tractogram)) if value is not None)
+
+
+def _with_closure(config: ProductOrchestratorConfig) -> ProductOrchestratorConfig:
+    """Apply the prerequisite closure once: targets, tractography algorithms and provenance."""
+
+    if config.closure_applied:
+        return config
+    closure = orchestrator_closure(
         config.targets,
         tractography_backend=config.tractography_backend,
         bundle_backend=config.bundle_backend,
         microstructure_run_free_water=config.microstructure_run_free_water,
         microstructure_run_noddi=config.microstructure_run_noddi,
         microstructure_run_dki=config.microstructure_run_dki,
+        wma_source_explicit=bool(config.bundle_tractography_backend),
+        provided_tractography=_provided_tractography(config),
     )
+    from shared.target_closure import provenance_map
+    required_by = {target: tuple(value) for target, value in
+                   provenance_map(closure, config.target_required_by).items() if target in closure.targets}
+    targets = tuple(target for target in closure.targets if target not in config.excluded_targets)
+    required_by = {target: value for target, value in required_by.items() if target in targets}
+    backend = config.tractography_backend
+    if "tractography" in targets:
+        backend = closure.algorithms_text
+    return replace(config, targets=targets, tractography_backend=backend,
+                   target_required_by=required_by, closure_applied=True,
+                   closure_algorithm_requesters={**config.closure_algorithm_requesters,
+                                                 **{key: tuple(value) for key, value in closure.added_algorithms.items()}})
+
+
+def closure_notice_for(config: ProductOrchestratorConfig) -> str:
+    """C4 one-line notice for a config whose closure was applied (empty when nothing was added)."""
+
+    from shared.algorithm_selection import algorithms
+    from shared.target_closure import Closure, closure_notice
+    required_by = {target: tuple(value) for target, value in config.target_required_by.items()}
+    ordered = {target: required_by[target] for target in config.targets if target in required_by}
+    return closure_notice(Closure(
+        targets=tuple(config.targets), tractography_algorithms=algorithms(config.tractography_backend),
+        requested=tuple(t for t in config.targets if t not in ordered), required_by=ordered))
+
+
+REGIONAL_STATISTICS_SKIPPED = "skipped_no_parcellation"
+
+
+def regional_statistics_note(parcellation, log=None) -> Optional[str]:
+    """C8: parcellation is not added for microstructure; say so when ROI statistics are skipped."""
+
+    if parcellation is not None:
+        return None
+    _emit("[Microstructure] Regional statistics skipped: parcellation was not selected", log)
+    return REGIONAL_STATISTICS_SKIPPED
+
+
+def mask_failure_message(reason: str) -> str:
+    """C7: one wording for the log line and the blocked reasons when the automatic mask fails."""
+
+    return f"Automatic brain mask failed: {reason}. Provide a brain mask file (NIfTI) or run Prepare to install the mask runtime."
 
 
 def _task_name_for_target(target: str, config: ProductOrchestratorConfig) -> str:
@@ -1985,7 +2046,7 @@ def _validate_bundle_tractography_source(config: ProductOrchestratorConfig) -> N
 def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = True) -> RunPlanResult:
     """Build a target-level run plan without executing product algorithms."""
 
-    config = _with_shared_bundle_resources(config)
+    config = _with_shared_bundle_resources(_with_closure(config))
     from shared.algorithm_selection import algorithms
     _validate_bundle_tractography_source(config)
     if len(algorithms(config.tractography_backend)) > 1:
@@ -2237,6 +2298,8 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
             inputs=_path_dict(inputs or {}),
             outputs=_path_dict(outputs or {}),
             dependencies=dependencies or {},
+            requested=target not in config.target_required_by,
+            required_by=tuple(config.target_required_by.get(target, ())),
         )
         items.append(item)
         available[target] = provides and status in {"will_run", "skipped"}
@@ -2244,8 +2307,9 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
     def raw_input_block(target: str, outputs: dict[str, Path | None] | None = None) -> bool:
         if raw_missing:
             if raw_missing == ["mask"] and not mask_backend["available"]:
-                add(target, "blocked", f"brain mask backend {config.brain_mask_backend} unavailable: " +
-                    ", ".join(mask_backend["missing_required"]), "environment", inputs=raw,
+                add(target, "blocked", mask_failure_message(
+                    f"brain mask backend {config.brain_mask_backend} unavailable ("
+                    + ", ".join(mask_backend["missing_required"]) + ")"), "environment", inputs=raw,
                     outputs=outputs, provides=False)
                 return True
             add(
@@ -2753,6 +2817,13 @@ class _TimedTaskList(list):
             self._on_append(self)
 
 
+def _task_provenance(plan: RunPlanResult, task_name: str) -> dict[str, object]:
+    """C3: ``requested`` / ``required_by`` for a manifest task entry."""
+
+    item = next((item for item in plan.items if item.task_name == task_name), None)
+    return {"requested": item.requested if item else True, "required_by": list(item.required_by) if item else []}
+
+
 def _write_orchestration_checkpoint(
     *,
     path: Path,
@@ -2788,9 +2859,12 @@ def _write_orchestration_checkpoint(
                 "started_at": task.started_at,
                 "ended_at": task.ended_at,
                 "runtime_seconds": task.runtime_seconds,
+                **_task_provenance(plan, task.name),
+                **({"regional_statistics": task.regional_statistics} if task.regional_statistics else {}),
             }
             for task in tasks
         ],
+        "closure": {"required_by": {key: list(value) for key, value in config.target_required_by.items()}},
     }
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -2872,10 +2946,13 @@ def _write_normalized_task_records(
             "status": task.status,
             "reason": task.reason,
             "reason_category": plan_item.reason_category if plan_item else "",
+            "requested": plan_item.requested if plan_item else True,
+            "required_by": list(plan_item.required_by) if plan_item else [],
             "reused": reused,
             "started_at": task.started_at,
             "ended_at": task.ended_at,
             "runtime_seconds": task.runtime_seconds,
+            **({"regional_statistics": task.regional_statistics} if task.regional_statistics else {}),
             "created_at": _now_utc(),
             "inputs": plan_item.inputs if plan_item else {},
             "outputs": task.outputs or (plan_item.outputs if plan_item else {}),
@@ -3276,7 +3353,7 @@ def _run_subject_products_impl(
 ) -> ProductOrchestratorResult:
     """Run or plan selected products from a shared subject root."""
 
-    config = _with_shared_bundle_resources(config)
+    config = _with_shared_bundle_resources(_with_closure(config))
     if not config.subject_id.strip():
         raise ValueError("subject_id is required.")
     if config.select_streamlines <= 0:
@@ -3347,6 +3424,7 @@ def _run_subject_products_impl(
     from shared.brain_mask import brain_mask_config_from_options
     selected_mask_config = brain_mask_config_from_options(config)
     initial_raw = _resolve_raw_inputs(subject_root)
+    mask_failure = ""
     if (
         config.execute
         and not initial_raw["mask"].is_file()
@@ -3362,7 +3440,8 @@ def _run_subject_products_impl(
                 brain_mask_config=selected_mask_config,
             )
         except (FileNotFoundError, RuntimeError) as exc:
-            _emit(f"[Brain mask] Automatic generation unavailable: {exc}", log)
+            mask_failure = mask_failure_message(str(exc))
+            _emit(f"[Brain mask] {mask_failure}", log)
     raw = _resolve_raw_inputs(subject_root)
 
     for target in targets:
@@ -3415,6 +3494,9 @@ def _run_subject_products_impl(
                 if (invalid_data and target in dwi_targets) or (
                         target == 'preprocessing' and any(issue.category == 'metadata' for issue in errors)):
                     reason = 'Input validation failed: ' + '; '.join(issue.message for issue in errors)
+                    if mask_failure and any(issue.category == 'brain_mask' or 'mask' in issue.message.lower()
+                                            for issue in errors):
+                        reason = mask_failure + ' ' + reason
                     input_blocked_targets[target] = reason
                     tasks.append(ProductTaskRecord(name=_task_name_for_target(target, config), status='blocked',
                                                    reason=reason, qc_path=validation.report_path))
@@ -3924,6 +4006,7 @@ def _run_subject_products_impl(
                 ProductTaskRecord(
                     name="microstructure.dti",
                     status="completed",
+                    regional_statistics=regional_statistics_note(parcellation, log),
                     manifest_path=layout.microstructure / "manifest.json",
                     qc_path=layout.microstructure_dti / "dti_qc.json",
                     outputs={
@@ -4841,6 +4924,8 @@ def _run_subject_products_impl(
             "started_at": task.started_at,
             "ended_at": task.ended_at,
             "runtime_seconds": task.runtime_seconds,
+            **_task_provenance(plan, task.name),
+            **({"regional_statistics": task.regional_statistics} if task.regional_statistics else {}),
         }
         payload.update(
             {
@@ -4877,6 +4962,7 @@ def _run_subject_products_impl(
         "output_root": output_root.as_posix() if output_root is not None else layout.outputs.as_posix(),
         "targets": list(targets),
         "run_targets": list(run_targets),
+        "closure": {"required_by": {key: list(value) for key, value in config.target_required_by.items()}},
         "run_plan_path": plan.run_plan_path.as_posix(),
         "previous_run_records": {key: value.as_posix() for key, value in previous_run_records.items()},
         "run_plan_summary": plan.to_dict()["summary"],
@@ -5086,6 +5172,11 @@ def run_subject_products(
     """Run products while preserving a failed manifest if any stage raises."""
 
     try:
+        config = _with_closure(config)
+        notice = closure_notice_for(config)
+        if notice and config.execute:
+            # Plan-only runs keep stdout as pure JSON, so the notice is written for real runs only.
+            _emit("[Targets] " + notice, log)
         _validate_bundle_tractography_source(config)
         if config.execute:
             if not config.subject_id.strip() or config.select_streamlines <= 0:

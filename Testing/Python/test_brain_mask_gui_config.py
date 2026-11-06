@@ -59,7 +59,10 @@ def widget_method(name, **namespace):
     path = ROOT / "shared/module_widget.py"
     tree = ast.parse(path.read_text(encoding="utf-8"))
     method = next(node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == name)
-    namespace.update(Any=Any, Optional=Optional, Path=Path)
+    from shared.subject_id import effective_subject_id
+    from shared.ui_run_state import gui_brain_mask_required
+    namespace.update(Any=Any, Optional=Optional, Path=Path, effective_subject_id=effective_subject_id,
+                     gui_brain_mask_required=gui_brain_mask_required)
     exec(compile(ast.Module(body=[method], type_ignores=[]), str(path), "exec"), namespace)
     return namespace[name]
 
@@ -286,7 +289,8 @@ class BrainMaskGuiConfigTest(unittest.TestCase):
                                    targetPreprocessing=False, preprocessingBackend="dipy",
                                    connectomeBackend="python", ddsegDevice="cpu", device="cpu")
             owner = SimpleNamespace(_parameterNode=node, _selected_environment_targets=lambda: ("microstructure",),
-                                    _tractography_backend_text=lambda: "dti_det", _microstructure_stage_flags=lambda: (False, False))
+                                    _tractography_backend_text=lambda: "dti_det", _microstructure_stage_flags=lambda: (False, False),
+                                    _closure_tractography_backend_text=lambda: "dti_det")
             paths = {key: root / key for key in PNL_MODES}
             owner._microstructure_dki_enabled = lambda: False
             kwargs = doctor_kwargs(owner, external_paths=paths)
@@ -305,6 +309,9 @@ class BrainMaskGuiConfigTest(unittest.TestCase):
                                      backend != "provided")
             node.targetPreprocessing = False
             node.inputDirectory = ""
+            # C5: a mask-needing target with no input folder and no user mask still needs the mask runtime.
+            self.assertTrue(doctor_kwargs(owner, external_paths=paths)["brain_mask_required"])
+            node.brainMaskBackend = "provided"
             self.assertFalse(doctor_kwargs(owner, external_paths=paths)["brain_mask_required"])
             node.brainMaskBackend = "pnl_cnn"
             node.targetPreprocessing = True
@@ -329,7 +336,7 @@ class BrainMaskGuiConfigTest(unittest.TestCase):
                 connectomeBackend="python", ddsegDevice="auto", device="auto")
             owner = SimpleNamespace(_parameterNode=node, _selected_environment_targets=lambda: ("microstructure",),
                 _tractography_backend_text=lambda: "dti_det", _microstructure_stage_flags=lambda: (False, False),
-                _microstructure_dki_enabled=lambda: False)
+                _microstructure_dki_enabled=lambda: False, _closure_tractography_backend_text=lambda: "dti_det")
             self.assertFalse(doctor_kwargs(owner, external_paths={})["brain_mask_required"])
             (folder / "nodif_brain_mask.nii.gz").unlink()
             self.assertTrue(doctor_kwargs(owner, external_paths={})["brain_mask_required"])

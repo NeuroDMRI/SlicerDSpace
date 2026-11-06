@@ -122,7 +122,9 @@ class SelectedSetupTests(unittest.TestCase):
 
     def test_d8_widget_plan_asks_for_slicerdmri_only_with_the_wma_target(self):
         import shared.ui_selected_setup as ui
-        for targets, expected in ((("microstructure", "tractography", "surface"), []), (("wma",), ["SlicerDMRI"])):
+        for targets, expected in ((("microstructure", "tractography", "surface"), []),
+                                  # C2: WMA needs a UKF tractogram, so its closure also needs the UKF extension.
+                                  (("wma",), ["SlicerDMRI", "UKFTractography"])):
             with self.subTest(targets=targets):
                 owner = self.owner(result(targets=targets))
                 context, manager = self.run_preparation(owner, owner._run_environment_dependency_check.return_value)
@@ -217,7 +219,8 @@ class SelectedSetupTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp, context, patch("shared.ui_selected_setup._confirm", return_value=True), \
                 patch("shared.user_config.default_user_config_path", return_value=Path(temp) / "config.json"):
             prepare_selected_environment(owner)
-        manager.installExtensionFromServer.assert_called_once_with("SlicerDMRI", False)
+        self.assertEqual([call.args for call in manager.installExtensionFromServer.call_args_list],
+                         [("SlicerDMRI", False), ("UKFTractography", False)])
         self.assertTrue(owner._setupRestartRequired)
         self.assertFalse(owner._selectedSetupActive)
         owner._install_python_packages_from_environment_dialog.assert_not_called()

@@ -66,7 +66,8 @@ from shared.ui_run_history import (
     stop_progress_polling,
     validated_selected_manifest,
 )
-from shared.ui_run_state import run_button_state, run_state_from_manifest_status
+from shared.subject_id import effective_subject_id
+from shared.ui_run_state import gui_brain_mask_required, run_button_state, run_state_from_manifest_status
 from shared.ui_output_loading import qbytearray_to_text
 from shared.ui_input_inspection import inspect_input_directory
 from shared.ui_parameter_sync import sync_parameter_node_to_ui
@@ -99,6 +100,7 @@ from shared.ui_run_controller import (
     rows_from_result,
     rows_from_single_subject_manifest,
     run_summary_from_manifest,
+    selected_closure,
     selected_environment_targets,
     selected_orchestrator_targets,
     selected_product_targets,
@@ -347,6 +349,7 @@ class SharedWidgetMixin:
             button.enabled = False
             return
         validation = validation or self._topup_validation()
+        self._refresh_subject_id_placeholder()
         cohort_experiments = bool(getattr(node, 'experimentsEnabled', False) and
                                   getattr(node, 'experimentScope', 'subject') == 'cohort')
         state = run_button_state(
@@ -1257,6 +1260,26 @@ class SharedWidgetMixin:
         node = self._parameterNode
         return str((node.inputDirectory if node else "") or "").strip()
 
+    def _effective_subject_id(self) -> str:
+        """Typed subject ID, else the ID derived from the input path (C6)."""
+        node = self._parameterNode
+        if not node:
+            return ""
+        from shared.subject_id import effective_subject_id
+        return effective_subject_id(node.subjectId, node.inputDirectory)
+
+    def _refresh_subject_id_placeholder(self) -> None:
+        widget = getattr(self.ui, "subjectIdLineEdit", None)
+        node = self._parameterNode
+        if widget is None or not node:
+            return
+        from shared.subject_id import derive_subject_id
+        derived = derive_subject_id(node.inputDirectory or "")
+        try:
+            widget.setPlaceholderText(derived)
+        except Exception:
+            pass
+
     def _shared_subject_id_text(self) -> str:
         widget = getattr(self.ui, "subjectIdLineEdit", None)
         if widget:
@@ -1436,6 +1459,14 @@ class SharedWidgetMixin:
         summary.visible = False
         self._selectedProductsSummaryLabel = summary
         (targets_layout if targets_layout is not None else configuration_layout).addWidget(summary)
+        # C4: one line under the target checkboxes naming the prerequisites that run automatically.
+        also_runs = qt.QLabel("")
+        also_runs.wordWrap = True
+        also_runs.setObjectName("alsoRunsAutomaticallyLabel")
+        also_runs.setStyleSheet("QLabel#alsoRunsAutomaticallyLabel { color: #335B70; }")
+        also_runs.visible = False
+        self._alsoRunsLabel = also_runs
+        (targets_layout if targets_layout is not None else configuration_layout).addWidget(also_runs)
 
     def _refresh_selected_products_summary(self) -> None:
         label = getattr(self, "_selectedProductsSummaryLabel", None)
@@ -1444,6 +1475,11 @@ class SharedWidgetMixin:
         if not self._parameterNode:
             label.setText("Selected products will appear here after the parameter node is ready.")
             return
+        notice = getattr(self, "_alsoRunsLabel", None)
+        if notice is not None:
+            notice_text = self._closure_notice_text()
+            notice.setText(notice_text)
+            notice.visible = bool(notice_text)
         text, target_text = selected_products_summary(
             self._selected_product_targets(),
             BackendSelection(
@@ -1643,22 +1679,16 @@ class SharedWidgetMixin:
         output_root_text = (output_root_text or (node.outputDirectory or "")).strip()
         targets = self._selected_environment_targets()
         mask_backend = (getattr(node, "brainMaskBackend", "pnl_cnn") or "pnl_cnn").strip()
-        inspected = inspect_input_directory(self, subject_root_text, node.subjectId.strip()) if subject_root_text else {}
+        inspected = inspect_input_directory(self, subject_root_text, effective_subject_id(node.subjectId, subject_root_text)) if subject_root_text else {}
         raw_inputs_known = inspected.get("mode") in {"subject_root", "dicom"}
         input_root = inspected.get("subject_root") or subject_root_text
         input_dir = Path(input_root).expanduser() / "input" if input_root else None
-        mask_targets = {
-            "preprocessing", "segmentation", "parcellation", "surface", "microstructure",
-            "microstructure_freewater", "microstructure_noddi", "microstructure_dki", "tractography", "saf",
-        }
-        missing_input_mask = (
-            raw_inputs_known and bool(mask_targets.intersection(targets))
-            and not (input_dir / "nodif_brain_mask.nii.gz").is_file()
-        )
-        # GUI preprocessing uses motion correction by default and may need a new
-        # mask in corrected space even when a supplied input mask already exists.
-        brain_mask_required = missing_input_mask or (
-            bool(node.targetPreprocessing) and mask_backend != "provided"
+        brain_mask_required = gui_brain_mask_required(
+            targets,
+            input_known=raw_inputs_known,
+            input_mask_exists=bool(input_dir and (input_dir / "nodif_brain_mask.nii.gz").is_file()),
+            preprocessing_on=bool(node.targetPreprocessing),
+            mask_backend=mask_backend,
         )
         return {
             "targets": targets,
@@ -1670,7 +1700,7 @@ class SharedWidgetMixin:
             "brain_mask_device": getattr(node, "brainMaskDevice", "auto") or "auto",
             "tractcloud_device": "cuda" if (node.ddsegDevice or "auto").startswith("cuda") else node.ddsegDevice or "auto",
             "brain_mask_required": bool(brain_mask_required),
-            "tractography_backend": self._tractography_backend_text(),
+            "tractography_backend": self._closure_tractography_backend_text(),
             "connectome_backend": (node.connectomeBackend or "python").strip(),
             "ddseg_device": (node.ddsegDevice or "auto").strip() or "auto",
             "surface_device": (node.device or "auto").strip() or "auto",
@@ -2158,12 +2188,13 @@ class SharedWidgetMixin:
             return ()
         return selected_orchestrator_targets(self._product_target_flags())
 
-    def _selected_product_targets(self) -> tuple[str, ...]:
+    def _selected_closure(self):
+        """Ticked targets plus every prerequisite (C1); ``None`` without a parameter node."""
         node = self._parameterNode
         if not node:
-            return ()
+            return None
         freewater, noddi = self._microstructure_stage_flags()
-        return selected_product_targets(
+        return selected_closure(
             self._product_target_flags(),
             tractography_backend=self._tractography_backend_text(),
             bundle_backend=self._bundle_backend_text(),
@@ -2171,6 +2202,30 @@ class SharedWidgetMixin:
             microstructure_noddi=noddi,
             microstructure_dki=self._microstructure_dki_enabled(),
         )
+
+    def _selected_product_targets(self) -> tuple[str, ...]:
+        closure = self._selected_closure()
+        return closure.targets if closure is not None else ()
+
+    def _closure_tractography_backend_text(self) -> str:
+        """Tractography algorithms after the closure (WMA adds UKF); the node text if no tracking runs."""
+        closure = self._selected_closure()
+        if closure is None or "tractography" not in closure.targets:
+            return self._tractography_backend_text()
+        from shared.algorithm_selection import choice_value
+        return choice_value(closure.algorithms_text)
+
+    def _closure_notice_text(self) -> str:
+        """C4 one-line notice naming the targets that run automatically."""
+        closure = self._selected_closure()
+        if closure is None:
+            return ""
+        from shared.target_closure import closure_notice
+        return closure_notice(closure)
+
+    def _requested_product_targets(self) -> tuple[str, ...]:
+        closure = self._selected_closure()
+        return closure.requested if closure is not None else ()
 
     def _product_target_flags(self) -> ProductTargetFlags:
         node = self._parameterNode
@@ -2234,7 +2289,7 @@ class SharedWidgetMixin:
         node = self._parameterNode
         if not node:
             return
-        subject_id = (node.subjectId or "").strip()
+        subject_id = self._effective_subject_id()
         subject_root = (node.inputDirectory or "").strip()
         with slicer.util.NodeModify(node):
             if subject_id:
@@ -2914,7 +2969,7 @@ class SharedWidgetMixin:
         for warning in topup_validation.warnings:
             self.appendLog("[Preprocessing] WARNING: " + warning)
         subject_root_text = (self._parameterNode.inputDirectory or "").strip()
-        subject_id = (self._parameterNode.subjectId or "").strip()
+        subject_id = self._effective_subject_id()
         output_root_text = (self._parameterNode.outputDirectory or "").strip()
         surface_device = (self._parameterNode.device or "auto").strip() or "auto"
         ddseg_device = (self._parameterNode.ddsegDevice or "auto").strip() or "auto"
@@ -2929,7 +2984,8 @@ class SharedWidgetMixin:
             output_root_text=output_root_text,
             selected_targets=selected_targets,
             run_name=run_name,
-            tractography_backend=self._tractography_backend_text(),
+            tractography_backend=self._closure_tractography_backend_text(),
+            requested_targets=self._requested_product_targets(),
             bundle_backend=self._bundle_backend_text(),
             microstructure_freewater=run_free_water,
             wmql_query_preset=getattr(self._parameterNode, "orchestrationWmqlPreset", "official") or "official",

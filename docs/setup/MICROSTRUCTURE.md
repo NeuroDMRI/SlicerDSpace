@@ -20,7 +20,7 @@ Choose the DKI fitting method in **Advanced settings > Model parameters**.
 | DTI | FA, MD, AD, RD, L1/L2/L3, Trace | Shared native-space tensor fit |
 | Free-water | FWF, tissue FA/MD, validity mask and QC | DIPY free-water tensor model |
 | NODDI | NDI, ODI, IsoVF, RMSE/NRMSE, validity mask and QC | AMICO NODDI |
-| Standard DKI | MK, AK, RK, KFA, MKT, RTK, residuals and raw tensor estimates | DIPY WLS (default DKI method) or OLS |
+| Standard DKI | MK, AK, RK, KFA, MKT, RTK, residuals and raw tensor estimates | Python MK-Curve port (default DKI method; stops with a WLS re-run hint when the signal scale or data cannot support it), or DIPY WLS or OLS |
 | MK-Curve | Original and corrected MK/AK/RK, FA/MD/AD/RD, eigenvalues, validity and residuals | Bundled Python port of the author algorithm, not a DIPY approximation |
 
 AD/RD and tensor eigenvalues are already available; DKI adds the complementary

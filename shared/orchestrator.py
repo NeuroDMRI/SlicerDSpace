@@ -102,7 +102,7 @@ class ProductOrchestratorConfig:
     microstructure_run_noddi: bool = False
     microstructure_run_dki: bool = False
     max_parallel_models: int = 1
-    microstructure_dki_fit_method: str = "WLS"
+    microstructure_dki_fit_method: str = "MKCURVE"
     microstructure_dki_matlab_executable: Optional[Path] = None
     microstructure_dki_mkcurve_root: Optional[Path] = None
     microstructure_dki_execution: dict = field(default_factory=dict)
@@ -153,8 +153,8 @@ class ProductOrchestratorConfig:
     # Explicit exploratory fallback; the GUI retains complete DDSeg + DDParcel priors.
     allow_act_ddseg_only: bool = False
     tract_querier_root: Optional[Path] = None
-    connectome_backend: str = "python"
-    connectome_compress_mrtrix_dense: bool = False
+    connectome_backend: str = "auto"
+    connectome_compress_mrtrix_dense: Optional[bool] = None
     saf_fs_dir: Optional[Path] = None
     saf_pregenerated_tractogram: Optional[Path] = None
     saf_tckgen_options: str = ""
@@ -2088,8 +2088,8 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
     if config.tractography_backend not in TRACTOGRAPHY_BACKENDS:
         raise ValueError("tractography_backend must be one of: csd_act, ukf, dti_det, saf.")
     bundle_backends = _normalize_bundle_backends(config.bundle_backend)
-    if config.connectome_backend not in {"python", "mrtrix"}:
-        raise ValueError("connectome_backend must be one of: python, mrtrix.")
+    if config.connectome_backend not in {"auto", "python", "mrtrix"}:
+        raise ValueError("connectome_backend must be one of: auto, python, mrtrix.")
 
     targets = _normalize_targets(config)
     selected = set(targets)
@@ -3389,8 +3389,8 @@ def _run_subject_products_impl(
     if config.tractography_backend not in TRACTOGRAPHY_BACKENDS:
         raise ValueError("tractography_backend must be one of: csd_act, ukf, dti_det, saf.")
     bundle_backends = _normalize_bundle_backends(config.bundle_backend)
-    if config.connectome_backend not in {"python", "mrtrix"}:
-        raise ValueError("connectome_backend must be one of: python, mrtrix.")
+    if config.connectome_backend not in {"auto", "python", "mrtrix"}:
+        raise ValueError("connectome_backend must be one of: auto, python, mrtrix.")
 
     targets = _normalize_targets(config)
     subject_root = config.subject_root.expanduser().resolve()

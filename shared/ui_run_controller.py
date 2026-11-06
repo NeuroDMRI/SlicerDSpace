@@ -58,14 +58,14 @@ class RunSelection:
     ddseg_device: str
     surface_device: str
     connectome_backend: str
-    connectome_compress_mrtrix_dense: bool
+    connectome_compress_mrtrix_dense: Optional[bool]
     preprocessing_backend: str = "dipy"
     wma_input_tractography_text: str = ""
     topup: TopupParameters = TopupParameters()
     brain_mask_backend: str = "pnl_cnn"
     brain_mask_device: str = "auto"
     microstructure_dki: bool = False
-    dki_fit_method: str = "WLS"
+    dki_fit_method: str = "MKCURVE"
     wmql_query_preset: str = "official"
     wmql_query_selection: str = ""
     wma_atlas: str = "org"
@@ -854,9 +854,8 @@ def build_background_cli_args(
         args.extend(["--output-root", _path_text(output_root)])
     _append_ukf_args(args, common_run_kwargs)
     args.extend(["--microstructure-stages", microstructure_stages_arg(common_run_kwargs)])
-    args.extend(["--dki-fit-method", str(common_run_kwargs.get("microstructure_dki_fit_method", "WLS"))])
-    if common_run_kwargs.get("connectome_compress_mrtrix_dense"):
-        args.append("--compress-mrtrix-dense")
+    args.extend(["--dki-fit-method", str(common_run_kwargs.get("microstructure_dki_fit_method", "MKCURVE"))])
+    _append_compress_arg(args, common_run_kwargs)
     wma_input = common_run_kwargs.get("wma_input_tractography")
     if wma_input is not None:
         args.extend(["--wma-input-tractography", _path_text(wma_input)])
@@ -924,9 +923,8 @@ def build_batch_background_cli_args(
         args.extend(["--output-root", _path_text(output_root)])
     _append_ukf_args(args, common_run_kwargs)
     args.extend(["--microstructure-stages", microstructure_stages_arg(common_run_kwargs)])
-    args.extend(["--dki-fit-method", str(common_run_kwargs.get("microstructure_dki_fit_method", "WLS"))])
-    if common_run_kwargs.get("connectome_compress_mrtrix_dense"):
-        args.append("--compress-mrtrix-dense")
+    args.extend(["--dki-fit-method", str(common_run_kwargs.get("microstructure_dki_fit_method", "MKCURVE"))])
+    _append_compress_arg(args, common_run_kwargs)
     # Forwarded unchanged to every subject's run_subject_pipeline.py call.
     args.extend(topup_cli_args(topup_parameters_from_run_kwargs(common_run_kwargs)))
     _append_optional_path_args(args, external_paths)
@@ -957,6 +955,14 @@ def _ukf_run_options(selection):
     except (OSError, RuntimeError):
         converter = None
     return dict(ukf_parameters=options, ukf_executable=binary, dwiconvert_executable=converter)
+
+
+
+def _append_compress_arg(args, common_run_kwargs):
+    """None = not set (nothing is passed); True and False are passed explicitly."""
+    value = common_run_kwargs.get("connectome_compress_mrtrix_dense")
+    if value is not None:
+        args.append("--compress-mrtrix-dense" if value else "--no-compress-mrtrix-dense")
 
 
 def _append_ukf_args(args, kwargs):

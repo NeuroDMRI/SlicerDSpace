@@ -288,7 +288,7 @@ def _environment_config_from_args(
         run_free_water=bool(args.run_free_water),
         run_noddi=bool(args.run_noddi),
         run_dki=bool(getattr(args, "run_dki", False)),
-        dki_fit_method=getattr(args, "dki_fit_method", "WLS"),
+        dki_fit_method=getattr(args, "dki_fit_method", "MKCURVE"),
         dki_matlab_executable=getattr(args, "dki_matlab_executable", None),
         dki_mkcurve_root=getattr(args, "dki_mkcurve_root", None),
         mrtrix_bin_dir=args.mrtrix_bin_dir,
@@ -557,9 +557,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--connectome-backend",
-        default="python",
-        choices=("python", "mrtrix"),
-        help="Connectome backend.",
+        default="auto",
+        choices=("auto", "python", "mrtrix"),
+        help=("Connectome backend. auto: MRtrix tck2connectome for a .tck source with a streamline-count "
+              "metric, Python for any other source or metric; no silent fallback."),
     )
     parser.add_argument('--max-parallel-models', type=int, choices=(1,2,3), default=1,
                         help='Independent Free-water/NODDI/DKI processes; resource-bounded; default sequential.')
@@ -647,7 +648,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--run-noddi", action="store_true", help="Enable NODDI stage under microstructure.")
     parser.add_argument("--run-dki", action="store_true", help="Enable the optional DKI stage under microstructure.")
     parser.add_argument(
-        "--dki-fit-method", choices=("WLS", "OLS", "MKCURVE", "MKCURVE_MATLAB"), default="WLS",
+        "--dki-fit-method", choices=("WLS", "OLS", "MKCURVE", "MKCURVE_MATLAB"), default="MKCURVE",
         help="DKI: WLS/OLS, bundled Python MKCURVE, or optional author reference MKCURVE_MATLAB. No fallback.",
     )
     parser.add_argument(
@@ -715,8 +716,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--surface-device", default="auto", help="DDSurfer torch device. auto uses cuda:0 when available, otherwise cpu.")
     parser.add_argument(
         "--compress-mrtrix-dense",
-        action="store_true",
-        help="Compress MRtrix dense connectome CSV into ROI-label edge list.",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=("Compress MRtrix dense connectome CSV into ROI-label edge list. "
+              "Not set: on for the auto backend with the MRtrix path, off otherwise."),
     )
     parser.add_argument(
         "--print-manifest-only",
@@ -986,7 +989,7 @@ def main(argv: list[str] | None = None) -> int:
         allow_act_ddseg_only=bool(args.allow_act_ddseg_only),
         tract_querier_root=args.tract_querier_root,
         connectome_backend=args.connectome_backend,
-        connectome_compress_mrtrix_dense=bool(args.compress_mrtrix_dense),
+        connectome_compress_mrtrix_dense=args.compress_mrtrix_dense,
         saf_fs_dir=args.saf_fs_dir,
         saf_pregenerated_tractogram=args.saf_pregenerated_tractogram,
         saf_tckgen_options=args.saf_tckgen_options,

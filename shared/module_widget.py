@@ -620,8 +620,8 @@ class SharedWidgetMixin:
                 stages = defaults.get("microstructure_stages") or ["dti"]
                 node.wmaAtlas = str(defaults.get("wma_atlas") or "org")
                 node.orchestrationMicrostructureStages = ",".join(canonical_microstructure_stages(stages))
-                node.orchestrationDkiFitMethod = str(defaults.get("dki_fit_method") or "WLS").upper()
-                node.connectomeBackend = str(defaults.get("connectome_backend") or node.connectomeBackend or "python")
+                node.orchestrationDkiFitMethod = str(defaults.get("dki_fit_method") or "MKCURVE").upper()
+                node.connectomeBackend = str(defaults.get("connectome_backend") or node.connectomeBackend or "auto")
                 node.orchestrationSelectStreamlines = int(
                     defaults.get("select_streamlines") or node.orchestrationSelectStreamlines or 1_000_000
                 )
@@ -681,8 +681,8 @@ class SharedWidgetMixin:
                         "bundle_backend": node.orchestrationBundleBackend or "wmql",
                         "wma_atlas": getattr(node, "wmaAtlas", "org") or "org",
                         "microstructure_stages": stages or ["dti"],
-                        "dki_fit_method": getattr(node, "orchestrationDkiFitMethod", "WLS") or "WLS",
-                        "connectome_backend": node.connectomeBackend or "python",
+                        "dki_fit_method": getattr(node, "orchestrationDkiFitMethod", "MKCURVE") or "MKCURVE",
+                        "connectome_backend": node.connectomeBackend or "auto",
                         "select_streamlines": int(node.orchestrationSelectStreamlines),
                         "auto_install_python_dependencies": bool(node.autoInstallPythonDependencies),
                     },
@@ -1487,7 +1487,7 @@ class SharedWidgetMixin:
                 tractography=self._tractography_backend_text(),
                 bundles=self._bundle_backend_text(),
                 microstructure_stages=self._microstructure_stages_text(),
-                connectome=(self._parameterNode.connectomeBackend or "python").strip() or "python",
+                connectome=(self._parameterNode.connectomeBackend or "auto").strip() or "auto",
             ),
         )
         label.setText(text)
@@ -1701,7 +1701,7 @@ class SharedWidgetMixin:
             "tractcloud_device": "cuda" if (node.ddsegDevice or "auto").startswith("cuda") else node.ddsegDevice or "auto",
             "brain_mask_required": bool(brain_mask_required),
             "tractography_backend": self._closure_tractography_backend_text(),
-            "connectome_backend": (node.connectomeBackend or "python").strip(),
+            "connectome_backend": (node.connectomeBackend or "auto").strip(),
             "ddseg_device": (node.ddsegDevice or "auto").strip() or "auto",
             "surface_device": (node.device or "auto").strip() or "auto",
             "python_path_entries": tuple(
@@ -1712,7 +1712,7 @@ class SharedWidgetMixin:
             "microstructure_run_free_water": self._microstructure_stage_flags()[0],
             "microstructure_run_noddi": self._microstructure_stage_flags()[1],
             "microstructure_run_dki": self._microstructure_dki_enabled(),
-            "dki_fit_method": getattr(node, "orchestrationDkiFitMethod", "WLS") or "WLS",
+            "dki_fit_method": getattr(node, "orchestrationDkiFitMethod", "MKCURVE") or "MKCURVE",
             **external_paths,
         }
 
@@ -3008,12 +3008,12 @@ class SharedWidgetMixin:
             ukf_parameters_text=getattr(self._parameterNode, 'ukfParameters', '{}'),
             microstructure_noddi=run_noddi,
             microstructure_dki=self._microstructure_dki_enabled(),
-            dki_fit_method=getattr(self._parameterNode, "orchestrationDkiFitMethod", "WLS") or "WLS",
+            dki_fit_method=getattr(self._parameterNode, "orchestrationDkiFitMethod", "MKCURVE") or "MKCURVE",
             select_streamlines=max(1, int(self._parameterNode.orchestrationSelectStreamlines)),
             ddseg_device=ddseg_device,
             surface_device=surface_device,
-            connectome_backend=(self._parameterNode.connectomeBackend or "python").strip(),
-            connectome_compress_mrtrix_dense=bool(self._parameterNode.connectomeCompressMrtrixDense),
+            connectome_backend=(self._parameterNode.connectomeBackend or "auto").strip(),
+            connectome_compress_mrtrix_dense=True if self._parameterNode.connectomeCompressMrtrixDense else None,
             preprocessing_backend=(self._parameterNode.preprocessingBackend or "dipy").strip() or "dipy",
             brain_mask_backend=(getattr(self._parameterNode, "brainMaskBackend", "pnl_cnn") or "pnl_cnn").strip(),
             brain_mask_device=(getattr(self._parameterNode, "brainMaskDevice", "auto") or "auto").strip(),

@@ -28,7 +28,7 @@ class DkiConfig:
     subject_id: str
     raw_input_bundle: RawInputBundle
     output_dir: Path
-    fit_method: str = "WLS"
+    fit_method: str = "MKCURVE"
     b0_threshold: float = 50.0
     shell_tolerance: float = 100.0
     max_bvalue: float = 2500.0
@@ -574,11 +574,15 @@ def run_dki(config: DkiConfig, log: Optional[Callable[[str], None]] = None) -> D
                                    "chunk_schedule": config.mkcurve_chunk_schedule}
 
             bundle = config.raw_input_bundle
-            mkcurve = run_mkcurve(
-                bundle.dwi_path, bundle.bval_path, bundle.bvec_path, bundle.mask_path,
-                config.output_dir / "mkcurve", b0_threshold=config.b0_threshold,
-                max_bvalue=config.max_bvalue, log=log, **backend_options,
-            )
+            try:
+                mkcurve = run_mkcurve(
+                    bundle.dwi_path, bundle.bval_path, bundle.bvec_path, bundle.mask_path,
+                    config.output_dir / "mkcurve", b0_threshold=config.b0_threshold,
+                    max_bvalue=config.max_bvalue, log=log, **backend_options,
+                )
+            except ValueError as exc:
+                # D4: MK-Curve is the default; a stop names the WLS option and never falls back by itself.
+                raise ValueError(f"{exc}; re-run with DKI fit method WLS (--dki-fit-method WLS)") from exc
             manifest["mkcurve"] = mkcurve
             manifest["mkcurve_record_artifact"] = _signature(Path(mkcurve["record_path"]))
             manifest["mkcurve_artifacts"] = {key: _signature(Path(value)) for key, value in mkcurve["maps"].items()}

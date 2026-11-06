@@ -39,8 +39,43 @@ class ConnectomeConfig:
     assignment_radius_mm: float = 4.0
     symmetric: bool = True
     zero_diagonal: bool = True
-    compress_mrtrix_dense: bool = False
+    # None = not set by the user: ``auto`` with the MRtrix path then compresses (D5).
+    compress_mrtrix_dense: Optional[bool] = None
     execute: bool = False
+
+
+CONNECTOME_BACKENDS = ("auto", "python", "mrtrix")
+MRTRIX_CONNECTOME_METRICS = frozenset({"streamline_count", "sift2_weighted_streamline_count"})
+TCK2CONNECTOME_MISSING = (
+    "MRtrix tck2connectome is needed for this connectome; install MRtrix3 in Prepare, "
+    "or choose the Python connectome backend (--connectome-backend python)"
+)
+
+
+def _mrtrix_connectome_input(config: ConnectomeConfig) -> bool:
+    return config.tractography_path.suffix.lower() == ".tck" and config.metric in MRTRIX_CONNECTOME_METRICS
+
+
+def select_connectome_backend(config: ConnectomeConfig, backend_status: dict[str, object]) -> tuple[bool, str, str]:
+    """Return (use_mrtrix, backend_used, reason) for the requested backend.
+
+    ``auto``: a ``.tck`` source with a streamline-count metric uses MRtrix ``tck2connectome``;
+    any other source or metric uses Python. A missing ``tck2connectome`` is an error, never a fallback.
+    ``mrtrix`` and ``python`` keep their earlier meaning.
+    """
+    eligible = _mrtrix_connectome_input(config)
+    have_tool = bool(backend_status.get("tck2connectome"))
+    if config.backend == "auto":
+        if not eligible:
+            return False, "python", "auto: source is not a .tck file or the metric is not a streamline count"
+        if not have_tool:
+            raise RuntimeError(TCK2CONNECTOME_MISSING)
+        return True, "mrtrix", "auto: .tck source with a streamline-count metric"
+    if config.backend == "mrtrix":
+        if not (eligible and have_tool):
+            raise RuntimeError("Requested MRtrix connectome backend is unavailable for this input/metric.")
+        return True, "mrtrix", "requested mrtrix"
+    return False, "python", "requested python" if config.backend == "python" else f"backend {config.backend!r}: python"
 
 
 @dataclass(frozen=True)
@@ -1058,14 +1093,19 @@ def run_connectome(config: ConnectomeConfig, *, log: Optional[Callable[[str], No
         manifest["status"] = "running"
         manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         try:
-            use_mrtrix = (
-                config.backend == "mrtrix"
-                and config.tractography_path.suffix.lower() == ".tck"
-                and config.metric in {"streamline_count", "sift2_weighted_streamline_count"}
-                and bool(backend_status["tck2connectome"])
+            try:
+                use_mrtrix, backend_used, backend_reason = select_connectome_backend(config, backend_status)
+            except RuntimeError as exc:
+                manifest["backend_used"] = None
+                manifest["backend_reason"] = str(exc)
+                raise
+            manifest["backend_used"] = backend_used
+            manifest["backend_reason"] = backend_reason
+            compress_dense = (
+                config.compress_mrtrix_dense if config.compress_mrtrix_dense is not None
+                else bool(use_mrtrix and config.backend == "auto")
             )
-            if config.backend == "mrtrix" and not use_mrtrix:
-                raise RuntimeError("Requested MRtrix connectome backend is unavailable for this input/metric.")
+            manifest["compress_mrtrix_dense"] = compress_dense
             if use_mrtrix:
                 data, _ = _load_label_volume(config.parcellation_path.expanduser().resolve())
                 label_names = _parse_label_names(lut_path)
@@ -1086,9 +1126,9 @@ def run_connectome(config: ConnectomeConfig, *, log: Optional[Callable[[str], No
                     manifest["outputs"]["filtered_parcellation"] = filtered_parcellation.as_posix()  # type: ignore[index]
 
                 mrtrix_matrix_path = (
-                    output_dir / f"{stem}_dense.csv" if config.compress_mrtrix_dense else matrix_path
+                    output_dir / f"{stem}_dense.csv" if compress_dense else matrix_path
                 )
-                if config.compress_mrtrix_dense:
+                if compress_dense:
                     manifest["outputs"]["dense_matrix"] = mrtrix_matrix_path.as_posix()  # type: ignore[index]
                 command = build_tck2connectome_command(command_config, mrtrix_matrix_path)
                 manifest["command"] = list(command)
@@ -1106,7 +1146,7 @@ def run_connectome(config: ConnectomeConfig, *, log: Optional[Callable[[str], No
                     )
                 except Exception:
                     _write_nodes_table(nodes_path, [], label_names={})
-                if config.compress_mrtrix_dense:
+                if compress_dense:
                     qc.update(
                         _write_compressed_dense_connectome(
                             mrtrix_matrix_path,

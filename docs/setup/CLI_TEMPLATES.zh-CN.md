@@ -440,6 +440,15 @@ pipeline connectome_sift2 --targets validation,segmentation,parcellation,tractog
   --brain-mask-backend provided --select-streamlines 1000000 --plan
 ```
 
+CSD/ACT 路线使用自动连接组后端（`.tck` 计数用 MRtrix，其他来源或指标用 Python）：
+
+<!-- cli-template: connectome-auto -->
+```bash
+pipeline connectome_auto --targets validation,segmentation,parcellation,tractography,connectome \
+  --tractography-backend csd_act --connectome-backend auto \
+  --brain-mask-backend provided --select-streamlines 1000000 --plan
+```
+
 解剖、微结构、UKF、WMQL 与 Python 连接组组合路线：
 
 <!-- cli-template: combined -->

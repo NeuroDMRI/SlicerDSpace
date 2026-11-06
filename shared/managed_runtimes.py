@@ -87,8 +87,11 @@ def selected_profiles(node, gpu_available):
     """Only provision external tools used by the current GUI selections."""
     preproc = bool(getattr(node, "targetPreprocessing", False)) and getattr(node, "preprocessingBackend", "dipy") == "mrtrix_fsl"
     from shared.algorithm_selection import algorithms
-    tracts = bool(getattr(node, "targetTractography", False)) and bool(set(algorithms(getattr(node, "orchestrationTractographyBackend", "dti_det"))) & {"csd_act", "saf"})
-    conn = bool(getattr(node, "targetConnectome", False)) and getattr(node, "connectomeBackend", "python") == "mrtrix"
+    csd_source = bool(set(algorithms(getattr(node, "orchestrationTractographyBackend", "dti_det"))) & {"csd_act", "saf"})
+    tracts = bool(getattr(node, "targetTractography", False)) and csd_source
+    # auto uses MRtrix tck2connectome for a .tck source (csd_act, saf); mrtrix always does.
+    backend = getattr(node, "connectomeBackend", "auto")
+    conn = bool(getattr(node, "targetConnectome", False)) and (backend == "mrtrix" or (backend == "auto" and csd_source))
     mask = getattr(node, "brainMaskBackend", "provided") == "mrtrix"
     result = ["mrtrix"] if preproc or tracts or conn or mask else []
     if preproc:

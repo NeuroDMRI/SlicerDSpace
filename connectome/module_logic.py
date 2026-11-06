@@ -20,7 +20,7 @@ class ConnectomeLogicMixin:
         output_dir: Optional[Path] = None,
         metric: str = "streamline_count",
         node_source: str = "ddparcel",
-        compress_mrtrix_dense: bool = False,
+        compress_mrtrix_dense: Optional[bool] = None,
         execute: bool = False,
     ) -> ConnectomeResult:
         config = ConnectomeConfig(

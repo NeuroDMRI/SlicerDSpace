@@ -65,7 +65,7 @@ WORKFLOW_TEXT = {
         "microstructure_dki_tooltip": "Optional diffusion kurtosis analysis. Standard DKI is not MK-Curve; off by default.",
         "dki_fit_method": "DKI fit method",
         "dki_fit_method_tooltip": (
-            "WLS/OLS are standard DKI fits. MKCURVE uses the bundled Python port without MATLAB. "
+            "MKCURVE (default) uses the bundled Python port without MATLAB; if it stops, re-run with WLS. WLS/OLS are standard DKI fits. "
             "MKCURVE_MATLAB is an optional author reference; configure its paths under Environment and installation > More options. "
             "All methods require eligible multi-shell data; no silent fallback."
         ),
@@ -153,7 +153,7 @@ WORKFLOW_TEXT = {
         "microstructure_dki_tooltip": "可选扩散峰度分析，标准 DKI 不等于 MK-Curve，默认关闭。",
         "dki_fit_method": "DKI 拟合方法",
         "dki_fit_method_tooltip": (
-            "WLS/OLS 是标准 DKI 拟合。MKCURVE 使用内置 Python 移植版，不需要 MATLAB。"
+            "MKCURVE（默认）使用内置 Python 移植版，不需要 MATLAB；若它停止，请改用 WLS 重跑。WLS/OLS 是标准 DKI 拟合。"
             "MKCURVE_MATLAB 是可选的作者代码对照后端，可在高级设置中配置外部路径。"
             "所有方法都检查多 shell 数据条件，不会静默回退。"
         ),

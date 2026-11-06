@@ -125,7 +125,7 @@ def sync_parameter_node_to_ui(widget) -> None:
         getattr(node, "batchArrangeInputs", "none") or "none",
         via_index=False,
     )
-    widget._sync_combo_text(getattr(ui, "connectomeBackendComboBox", None), node.connectomeBackend or "python", via_index=False)
+    widget._sync_combo_text(getattr(ui, "connectomeBackendComboBox", None), node.connectomeBackend or "auto", via_index=False)
     widget._sync_checkbox(getattr(ui, "connectomeCompressMrtrixDenseCheckBox", None), bool(node.connectomeCompressMrtrixDense))
     widget._sync_combo_text(
         getattr(ui, "unifiedTorchDeviceComboBox", None),

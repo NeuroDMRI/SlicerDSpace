@@ -31,7 +31,7 @@ def calibration_options(stage, arguments=()):
     from shared.cohort_planning import _option
     fields = DkiConfig.__dataclass_fields__
     return dict(fit_method=_option(arguments, '--dki-fit-method',
-                                  'MKCURVE' if stage.endswith('mkcurve') else 'WLS'),
+                                  'MKCURVE'),
                 **{name: fields[name].default for name in ('b0_threshold', 'max_bvalue', 'shell_tolerance')})
 
 
@@ -39,7 +39,7 @@ def tuning_key(stage, shape, arguments):
     from shared.cohort_planning import _option
     from shared.cohort_profile import workload_key
     # Target selection and unrelated models do not change this node's identity.
-    flags = {'--dki-fit-method': 'MKCURVE' if stage.endswith('mkcurve') else 'WLS'}
+    flags = {'--dki-fit-method': 'MKCURVE'}
     if stage == 'wma':
         flags = {'--wma-root': '', '--wma-atlas': 'org', '--wma-atlas-dir': ''}
     settings = [value for flag, default in sorted(flags.items())

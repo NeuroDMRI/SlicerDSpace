@@ -383,7 +383,7 @@ class ProductOrchestratorTest(unittest.TestCase):
             self.assertEqual(manifest["tractography_backend"], "csd_act")
             self.assertFalse(manifest["execute"])
             self.assertEqual(manifest["select_streamlines"], 1000000)
-            self.assertEqual(manifest["connectome_backend"], "python")
+            self.assertEqual(manifest["connectome_backend"], "auto")
 
     def test_preflight_blocked_targets_are_recorded_but_do_not_stop_other_targets(self) -> None:
         from shared import ProductOrchestratorConfig, run_subject_products

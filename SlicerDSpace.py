@@ -119,7 +119,7 @@ class SlicerDSpaceParameterNode:
         "dti", "dti,freewater", "dti,noddi", "dti,dki",
         "dti,freewater,noddi", "dti,freewater,dki", "dti,noddi,dki", "dti,freewater,noddi,dki",
     ])] = "dti"
-    orchestrationDkiFitMethod: Annotated[str, Choice(["WLS", "OLS", "MKCURVE", "MKCURVE_MATLAB"])] = "WLS"
+    orchestrationDkiFitMethod: Annotated[str, Choice(["WLS", "OLS", "MKCURVE", "MKCURVE_MATLAB"])] = "MKCURVE"
     orchestrationRunFreeWater: bool = False
     orchestrationRunNoddi: bool = False
     orchestrationRunDki: bool = False
@@ -133,7 +133,8 @@ class SlicerDSpaceParameterNode:
     experimentJobs: Annotated[int, WithinRange(1, 8)] = 1
     experimentCliOptions: str = ""
     experimentVariants: str = '[{"name": "baseline", "args": []}]'
-    connectomeBackend: Annotated[str, Choice(["python", "mrtrix"])] = "python"
+    connectomeBackend: Annotated[str, Choice(["auto", "python", "mrtrix"])] = "auto"
+    # GUI: unchecked = not set (None); the auto backend then compresses on the MRtrix path.
     connectomeCompressMrtrixDense: bool = False
     autoInstallPythonDependencies: bool = True
     targetSurface: bool = True

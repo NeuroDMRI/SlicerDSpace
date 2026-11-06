@@ -89,7 +89,7 @@ class MicrostructureConfig:
     run_free_water: bool = False
     run_noddi: bool = False
     run_dki: bool = False
-    dki_fit_method: str = "WLS"
+    dki_fit_method: str = "MKCURVE"
     dki_matlab_executable: Path | None = None
     dki_mkcurve_root: Path | None = None
     dki_execution: dict | None = None

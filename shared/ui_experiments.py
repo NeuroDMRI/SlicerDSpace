@@ -161,7 +161,7 @@ def snapshot_selection(owner):
         requested_targets=owner._requested_product_targets(),
         bundle_backend=owner._bundle_backend_text(), microstructure_freewater=freewater, microstructure_noddi=noddi,
         select_streamlines=node.orchestrationSelectStreamlines, ddseg_device=node.ddsegDevice, surface_device=node.device,
-        connectome_backend=node.connectomeBackend, connectome_compress_mrtrix_dense=node.connectomeCompressMrtrixDense,
+        connectome_backend=node.connectomeBackend, connectome_compress_mrtrix_dense=True if node.connectomeCompressMrtrixDense else None,
         preprocessing_backend=node.preprocessingBackend, brain_mask_backend=node.brainMaskBackend,
         brain_mask_device=node.brainMaskDevice, microstructure_dki=owner._microstructure_dki_enabled(),
         dki_fit_method=node.orchestrationDkiFitMethod, wmql_query_preset=node.orchestrationWmqlPreset,

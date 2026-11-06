@@ -32,7 +32,7 @@ class MicrostructureLogicMixin:
         run_free_water: bool = False,
         run_noddi: bool = False,
         run_dki: bool = False,
-        dki_fit_method: str = "WLS",
+        dki_fit_method: str = "MKCURVE",
         dki_matlab_executable: Optional[Path] = None,
         dki_mkcurve_root: Optional[Path] = None,
         force_recompute: bool = False,

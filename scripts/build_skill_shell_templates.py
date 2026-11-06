@@ -49,6 +49,7 @@ TITLES = {
     "bundle-existing": "WMA with existing reviewed tracks",
     "connectome-python": "Count/scalar-weighted Python connectome",
     "connectome-sift2": "MRtrix connectome with matching SIFT2 weights",
+    "connectome-auto": "Connectome with the automatic backend choice",
     "combined": "Combined anatomical priors, DTI, UKF, WMQL and connectome",
 }
 

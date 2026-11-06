@@ -169,6 +169,39 @@ class C2ConsumersTest(unittest.TestCase):
         self.assertNotIn("UKFTractography", plan["extensions"])
 
 
+class C2GuiPathKeepsProvenanceTest(unittest.TestCase):
+    def test_gui_bundles_all_selection_gives_the_cli_the_user_backend_and_keeps_ukf_variant_minimal(self) -> None:
+        from shared import ui_run_controller as controller
+        from shared.multi_tracking import variants
+        from shared.orchestrator import ProductOrchestratorConfig, _with_closure
+        from shared.run_subject_pipeline_cli import build_parser, resolve_analysis_options
+
+        flags = controller.ProductTargetFlags(bundles=True)
+        closure = controller.selected_closure(
+            flags, tractography_backend="csd_act", bundle_backend="all",
+            microstructure_freewater=False, microstructure_noddi=False)
+        self.assertEqual(closure.algorithms_text, "csd_act,ukf")
+        selection = controller.RunSelection(
+            subject_id="s", subject_root_text="/none/s", output_root_text="", selected_targets=closure.targets,
+            run_name="r", tractography_backend="csd_act", bundle_backend="all", microstructure_freewater=False,
+            microstructure_noddi=False, select_streamlines=1000, ddseg_device="cpu", surface_device="cpu",
+            connectome_backend="mrtrix", connectome_compress_mrtrix_dense=False,
+            requested_targets=closure.requested, closure_tractography_backend=closure.algorithms_text)
+        kwargs = controller.build_single_subject_run_kwargs(selection, {}, preflight_blocked_targets={})
+        self.assertEqual(kwargs["tractography_backend"], "csd_act")
+        self.assertIn("ukf_parameters", kwargs)  # UKF options still ship: the closure runs UKF
+        argv = controller.build_background_cli_args(kwargs, {}, repo_root=REPO_ROOT)
+        self.assertIn("--ukf-parameters", argv)
+        args = build_parser().parse_args(argv[3:])
+        resolve_analysis_options(args)
+        config = _with_closure(ProductOrchestratorConfig(
+            subject_id="s", subject_root=Path("/none/s"), targets=("bundles",), bundle_backend="all",
+            tractography_backend=args.tractography_backend,
+            closure_algorithm_requesters=dict(args.closure_algorithm_requesters)))
+        by_backend = {child.tractography_backend: child.targets for child in variants(config)}
+        self.assertEqual(by_backend["ukf"], ("tractography", "wma"))
+
+
 class C3ProvenanceTest(unittest.TestCase):
     def test_plan_items_and_manifest_tasks_record_requested_and_required_by(self) -> None:
         from shared.orchestrator import ProductOrchestratorConfig, run_subject_products

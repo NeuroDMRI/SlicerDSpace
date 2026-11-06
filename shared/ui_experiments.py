@@ -156,7 +156,8 @@ def snapshot_selection(owner):
         raise ValueError('Cohort experiments cannot reuse a single reverse-PE image across subjects. Prepare subject-specific inputs first.')
     return RunSelection(subject_id=owner._effective_subject_id(), subject_root_text=node.inputDirectory.strip(),
         output_root_text=node.outputDirectory.strip(), selected_targets=owner._selected_product_targets(),
-        run_name=node.orchestrationRunName, tractography_backend=owner._closure_tractography_backend_text(),
+        run_name=node.orchestrationRunName, tractography_backend=owner._tractography_backend_text(),
+        closure_tractography_backend=owner._closure_tractography_backend_text(),
         requested_targets=owner._requested_product_targets(),
         bundle_backend=owner._bundle_backend_text(), microstructure_freewater=freewater, microstructure_noddi=noddi,
         select_streamlines=node.orchestrationSelectStreamlines, ddseg_device=node.ddsegDevice, surface_device=node.device,

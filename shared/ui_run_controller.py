@@ -74,6 +74,9 @@ class RunSelection:
     # Targets the user ticked, before the prerequisite closure; the CLI recomputes the closure
     # from these so the run manifest can record which targets were added automatically.
     requested_targets: tuple[str, ...] = ()
+    # Algorithms after the closure (WMA adds UKF). Only used to ship UKF options; the CLI and the
+    # orchestrator get the user's ``tractography_backend`` and recompute the closure with provenance.
+    closure_tractography_backend: str = ""
 
 
 @dataclass(frozen=True)
@@ -933,7 +936,7 @@ def _wmql_selection(value, preset='official'):
 
 def _ukf_run_options(selection):
     from shared.algorithm_selection import contains_tracking
-    if not contains_tracking(selection.tractography_backend, 'ukf'):
+    if not contains_tracking(selection.closure_tractography_backend or selection.tractography_backend, 'ukf'):
         return {}
     from tractography.ukf import parameters, resolve_executable
     from dataclasses import asdict
@@ -951,7 +954,7 @@ def _ukf_run_options(selection):
 
 def _append_ukf_args(args, kwargs):
     from shared.algorithm_selection import contains_tracking
-    if contains_tracking(kwargs.get('tractography_backend'), 'ukf'):
+    if contains_tracking(kwargs.get('tractography_backend'), 'ukf') or 'ukf_parameters' in kwargs:
         args.extend(('--ukf-parameters', json.dumps(kwargs.get('ukf_parameters', {}), sort_keys=True)))
         if kwargs.get('ukf_executable'):
             args.extend(('--ukf-executable', str(kwargs['ukf_executable'])))

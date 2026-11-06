@@ -134,6 +134,7 @@ class MicrostructureResult:
     roi_stats_json_path: Path | None
     dki_result: object | None = None
     compute_schedule: dict | None = None
+    dec_path: Path | None = None
 
 
 def _emit(message: str, log: Optional[Callable[[str], None]] = None) -> None:
@@ -313,6 +314,7 @@ def _output_paths(
         "l2": dti_dir / f"{subject_id}_dti_L2.nii.gz",
         "l3": dti_dir / f"{subject_id}_dti_L3.nii.gz",
         "trace": dti_dir / f"{subject_id}_dti_Trace.nii.gz",
+        "dec": dti_dir / f"{subject_id}-dti-DEC.nrrd",  # D6: direction-encoded colour FA map
         "dti_qc": dti_dir / "dti_qc.json",
         "fwf": freewater_dir / f"{subject_id}_fw_fraction.nii.gz",
         "fw_tissue_fa": freewater_dir / f"{subject_id}_fw_FA.nii.gz",
@@ -467,6 +469,7 @@ def _outputs_complete(
         paths["l2"],
         paths["l3"],
         paths["trace"],
+        paths["dec"],
         paths["manifest"],
     ]
     if free_water_enabled:
@@ -566,6 +569,7 @@ def _export_dti_scalar_maps(config: MicrostructureConfig, paths: dict[str, Path]
     _copy_if_needed(native.mid_eig_nii_path, paths["l2"])
     _copy_if_needed(native.min_eig_nii_path, paths["l3"])
     _copy_if_needed(native.trace_nii_path, paths["trace"])
+    _copy_if_needed(native.dec_nrrd_path, paths["dec"])
     _copy_if_needed(native.max_eig_nii_path, paths["ad"])
     # RD belongs to the current eigenvalue export, never to a previous input.
     _compute_rd_map(paths["l2"], paths["l3"], paths["rd"])
@@ -580,13 +584,14 @@ def _dti_source_signature(config: MicrostructureConfig) -> dict[str, object]:
     native = config.native_bundle
     return {name: _file_signature(Path(getattr(native, name))) for name in (
         "fa_nii_path", "mean_diffusivity_nii_path", "max_eig_nii_path", "mid_eig_nii_path",
-        "min_eig_nii_path", "trace_nii_path", "manifest_path",
+        "min_eig_nii_path", "trace_nii_path", "dec_nrrd_path", "manifest_path",
     )} | {"mask": _file_signature(config.raw_input_bundle.mask_path)}
 
 
 def _dti_outputs_current(config: MicrostructureConfig, paths: dict[str, Path]) -> bool:
     try:
         return (scalar_qc_current(paths["dti_qc"], [paths[key] for key in DTI_KEYS])
+                and paths["dec"].is_file()
                 and (_read_json(paths["dti_qc"]) or {}).get("source_signature") == _dti_source_signature(config))
     except OSError:
         return False
@@ -1848,6 +1853,7 @@ def run_microstructure(
             roi_stats_json_path=paths["roi_stats_json"] if roi_enabled else None,
             dki_result=dki_result,
             compute_schedule=schedule,
+            dec_path=paths["dec"],
         )
 
     action = 'Reusing verified' if _dti_outputs_current(config, paths) else 'Exporting'
@@ -2017,4 +2023,5 @@ def run_microstructure(
         roi_stats_json_path=paths["roi_stats_json"] if roi_label_map is not None else None,
         dki_result=dki_result,
         compute_schedule=schedule,
+        dec_path=paths["dec"],
     )

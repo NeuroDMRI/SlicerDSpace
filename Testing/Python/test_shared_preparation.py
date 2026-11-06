@@ -108,7 +108,8 @@ class SharedPreparationTests(unittest.TestCase):
                 arguments = command[2:]
                 Path(arguments[arguments.index('--receipt') + 1]).write_text('{"kind": "teem_tensor_estimation"}')
                 for target in [*arguments[-2:], *(item.partition('=')[2] for index, item in enumerate(arguments)
-                                                  if arguments[index - 1] == '--scalar')]:
+                                                  if arguments[index - 1] == '--scalar'),
+                               *(arguments[index + 1] for index, item in enumerate(arguments) if item == '--dec')]:
                     Path(target).write_bytes(b'fixture output')
             def convert(source, target):
                 target.write_bytes(source.read_bytes())

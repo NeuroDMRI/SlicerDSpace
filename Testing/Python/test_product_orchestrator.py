@@ -1450,6 +1450,7 @@ class ProductOrchestratorTest(unittest.TestCase):
             micro_dir.mkdir(parents=True)
             for suffix in ("FA", "MD", "AD", "RD", "L1", "L2", "L3", "Trace"):
                 _write_test_volume(micro_dir / f"100307_dti_{suffix}.nii.gz")
+            (micro_dir / "100307-dti-DEC.nrrd").write_bytes(b"dec")  # D6: a completed DTI stage has the DEC map
             (micro_dir / "dti_qc.json").write_text(json.dumps({
                 "status": "completed", "automatic_qc_passed": True, "checks": {"synthetic_fixture": True},
                 "output_artifacts": {str(path.resolve()): _file_signature(path) for path in micro_dir.glob("*.nii.gz")},

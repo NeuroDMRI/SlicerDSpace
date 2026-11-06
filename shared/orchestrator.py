@@ -1698,6 +1698,7 @@ def _microstructure_dti_outputs(subject_root: Path, subject_id: str, output_root
         "l2": dti_dir / f"{subject_id}_dti_L2.nii.gz",
         "l3": dti_dir / f"{subject_id}_dti_L3.nii.gz",
         "trace": dti_dir / f"{subject_id}_dti_Trace.nii.gz",
+        "dec": dti_dir / f"{subject_id}-dti-DEC.nrrd",
         "qc": dti_dir / "dti_qc.json",
         "manifest": layout.microstructure / "manifest.json",
     }
@@ -1732,7 +1733,7 @@ def _microstructure_dti_complete(subject_root: Path, subject_id: str, output_roo
             brain_mask_path=_resolve_analysis_inputs(subject_root, subject_id, output_root)["mask"],
         ):
             return False
-    return scalar_qc_current(outputs["qc"], [outputs[key] for key in ("fa", "md", "ad", "rd", "l1", "l2", "l3", "trace")]) and _manifest_inputs_match(
+    return outputs["dec"].is_file() and scalar_qc_current(outputs["qc"], [outputs[key] for key in ("fa", "md", "ad", "rd", "l1", "l2", "l3", "trace")]) and _manifest_inputs_match(
         outputs["manifest"],
         _resolve_analysis_inputs(subject_root, subject_id, output_root),
         "raw_input_bundle",
@@ -3035,7 +3036,19 @@ def _mark_orchestration_failed(config: ProductOrchestratorConfig, error: BaseExc
     )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    if config.execute:
+        _write_run_record_best_effort(path, None)  # a failed run is also archived
     return path
+
+
+def _write_run_record_best_effort(manifest_path: Path, log) -> None:
+    """Write run_record.json beside the manifest; a record error must never fail or hide a run."""
+    try:
+        from shared.run_record import write_run_record
+
+        write_run_record(manifest_path)
+    except Exception as exc:  # pragma: no cover - archiving must not break pipeline execution
+        _emit(f"[RunRecord] run_record.json was not written: {exc}", log)
 
 
 def _write_normalized_task_records(
@@ -4168,6 +4181,7 @@ def _run_subject_products_impl(
                         "l2": result.l2_path.as_posix(),
                         "l3": result.l3_path.as_posix(),
                         "trace": result.trace_path.as_posix(),
+                        "dec": result.dec_path.as_posix() if getattr(result, "dec_path", None) else None,
                         "roi_stats_csv": result.roi_stats_csv_path.as_posix() if result.roi_stats_csv_path else None,
                         "roi_stats_json": result.roi_stats_json_path.as_posix() if result.roi_stats_json_path else None,
                     },
@@ -5342,6 +5356,8 @@ def _run_subject_products_impl(
     performance_profile['wall_time_scope'] = manifest['wall_time_scope']
     Path(performance_profile['path']).write_text(json.dumps(performance_profile, indent=2, sort_keys=True) + '\n', encoding='utf-8')
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    if config.execute:
+        _write_run_record_best_effort(manifest_path, log)  # D6/C40: after every manifest is final
     return ProductOrchestratorResult(
         subject_id=config.subject_id,
         subject_root=subject_root,

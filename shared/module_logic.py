@@ -1147,6 +1147,8 @@ class SharedLogicMixin:
                         success = bool(slicer.util.loadLabelVolume(str(path), properties={"name": name, "show": False}))
                     else:
                         success = self._load_scalar_volume_node(path, name)
+                elif suffix == ".nrrd":
+                    success = self._load_scalar_volume_node(path, name)  # D6: RGB DEC map loads as a vector volume
                 elif suffix in {".csv", ".tsv"}:
                     success = self._load_table_node(path, name)
                 elif suffix == ".stl":

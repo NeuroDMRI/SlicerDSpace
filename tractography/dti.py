@@ -97,6 +97,7 @@ def _native_bundle_from_expected_cache(subject_root: Path, subject_id: str, fit_
         mid_eig_nii_path=bundle_dir / f"{subject_id}-dti-MidEigenvalue.nii.gz",
         max_eig_nii_path=bundle_dir / f"{subject_id}-dti-MaxEigenvalue.nii.gz",
         manifest_path=bundle_dir / "manifest.json",
+        dec_nrrd_path=bundle_dir / f"{subject_id}-dti-DEC.nrrd",
     )
 
 

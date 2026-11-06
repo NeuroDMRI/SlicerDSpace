@@ -280,6 +280,8 @@ def selected_setup_plan(owner, result, *, repair=False):
 
 def prepare_selected_environment(owner, result=None, *, repair=False):
     import slicer
+    from shared.selected_setup import apply_setup_receipt
+    from shared.ui_managed_runtimes import apply_setup_settings
     from shared.managed_runtimes import write_json
     from shared.user_config import default_user_config_path
     from shared.setup_resume import pending_setup
@@ -503,7 +505,7 @@ def prepare_selected_environment(owner, result=None, *, repair=False):
                 finish(status, details)
                 return
             try:
-                apply_runtime_result(owner, json.loads(receipt.read_text()))
+                apply_runtime_result(owner, json.loads(receipt.read_text()), 'surface_runtime')
             except Exception as exc:
                 finish('failed', str(exc))
                 return
@@ -517,7 +519,6 @@ def prepare_selected_environment(owner, result=None, *, repair=False):
             surface_setup()
             return
         from shared.ui_setup_jobs import start_setup_job
-        from scripts.setup_optional_assets import PATH_SETTINGS
         from shared.model_assets import configured_model_assets_root
         root = configured_model_assets_root(config.get("model_assets_dir"))
         receipt = folder / "optional-resources-result.json"
@@ -530,19 +531,9 @@ def prepare_selected_environment(owner, result=None, *, repair=False):
                 finish(status, details)
                 return
             try:
-                record = json.loads(receipt.read_text())
-                if (record.get("kind") != "slicerdsurfer_optional_asset_setup" or record.get("status") != "completed"
-                        or record.get("profiles") != plan["optional_asset_profiles"] or record.get("root") != str(root)):
-                    raise ValueError("Optional resource preparation receipt is incomplete")
-                settings = record["external_dependencies"]
-                allowed = {"model_assets_dir", *(PATH_SETTINGS[name] for name in plan["optional_asset_profiles"] if name in PATH_SETTINGS)}
-                if set(settings) != allowed or any(not Path(value).is_dir() for value in settings.values()):
-                    raise ValueError("Prepared resource paths are unavailable")
-                for key, value in settings.items():
-                    owner._save_environment_path_setting(key, value)
-                    edit = (getattr(owner, "_environmentPathLineEdits", {}) or {}).get(key)
-                    if edit is not None:
-                        edit.setText(value)
+                apply_setup_settings(owner, apply_setup_receipt(
+                    {"id": "optional_resources", "profiles": plan["optional_asset_profiles"], "root": str(root)},
+                    json.loads(receipt.read_text())))
             except Exception as exc:
                 finish("failed", str(exc))
                 return
@@ -572,7 +563,6 @@ def prepare_selected_environment(owner, result=None, *, repair=False):
             python_setup()
             return
         from shared.ui_setup_jobs import start_setup_job
-        from shared.backend_sources import SOURCES, verify_source, profile_path
         script = Path(__file__).resolve().parents[1] / 'scripts/setup_backend_sources.py'
         receipt = folder / 'backend-sources-result.json'
         args = ['--launch', 'PythonSlicer', '-u', str(script), '--profiles', *plan['backend_profiles'],
@@ -583,18 +573,9 @@ def prepare_selected_environment(owner, result=None, *, repair=False):
                 finish(status, details)
                 return
             try:
-                record = json.loads(receipt.read_text())
-                expected = {SOURCES[name]['setting']: str(profile_path(name, plan['backend_root']))
-                            for name in plan['backend_profiles']}
-                if record.get('status') != 'completed' or record.get('profiles') != plan['backend_profiles'] or record.get('external_dependencies') != expected:
-                    raise ValueError('Invalid prepared algorithm-source receipt')
-                for name in plan['backend_profiles']:
-                    verify_source(name, Path(expected[SOURCES[name]['setting']]))
-                for key, value in expected.items():
-                    owner._save_environment_path_setting(key, value)
-                    edit = (getattr(owner, '_environmentPathLineEdits', {}) or {}).get(key)
-                    if edit is not None:
-                        edit.setText(value)
+                apply_setup_settings(owner, apply_setup_receipt(
+                    {"id": "backend_sources", "profiles": plan["backend_profiles"], "root": str(plan["backend_root"])},
+                    json.loads(receipt.read_text())))
             except Exception as exc:
                 finish('failed', str(exc))
                 return

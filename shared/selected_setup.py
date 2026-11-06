@@ -1,5 +1,7 @@
 """Pure, inspectable preparation plan for only the selected workflow."""
 
+from pathlib import Path
+
 from shared.managed_runtimes import supported_platform, runtime_root
 from shared.ui_environment_panel import environment_missing_items
 
@@ -155,3 +157,66 @@ def build_setup_plan(result, *, installed_extensions=(), loaded_extensions=None,
             "pnl_terms_required": "pnl_cnn" in managed and platforms_ok,
             "repair": bool(repair),
             "scope": "Dependency preparation only; installation is not scientific QC"}
+
+
+# Receipt kinds a setup step can produce. Each is validated the way the GUI handlers did before B8.
+RUNTIME_FILE_SETTINGS = {"pnl_mask_python", "pnl_mask_script"}
+RUNTIME_SETTINGS = {"mrtrix_bin_dir", "preprocessing_mrtrix_bin_dir", "preprocessing_fsl_bin_dir", "postprocess_runtime",
+                    "pnl_mask_python", "pnl_mask_script", "pnl_mask_model_dir", "pnl_mask_ants_bin_dir"}
+
+
+def validate_setup_receipt(step, receipt):
+    """Return the settings a verified receipt may save; raise ValueError for anything else (B8)."""
+    kind = step.get("id")
+    if kind in {"managed_runtime", "surface_runtime"}:
+        # Same allow-list and path checks as shared/ui_managed_runtimes.py before B8.
+        if (not isinstance(receipt, dict) or receipt.get("kind") != "slicerdsurfer_runtime_setup"
+                or receipt.get("status") != "completed"):
+            raise ValueError("Only a completed managed runtime setup can update paths")
+        settings = receipt.get("external_dependencies", {})
+        if not settings or set(settings) - RUNTIME_SETTINGS:
+            raise ValueError("Unexpected managed runtime settings")
+        if any(not (Path(value).is_file() if key in RUNTIME_FILE_SETTINGS else Path(value).is_dir())
+               for key, value in settings.items()):
+            raise ValueError("Managed runtime paths are unavailable")
+        return {key: str(value) for key, value in settings.items()}
+    if kind == "optional_resources":
+        from scripts.setup_optional_assets import PATH_SETTINGS
+        record = receipt or {}
+        if (record.get("kind") != "slicerdsurfer_optional_asset_setup" or record.get("status") != "completed"
+                or record.get("profiles") != list(step["profiles"]) or record.get("root") != str(step["root"])):
+            raise ValueError("Optional resource preparation receipt is incomplete")
+        settings = record["external_dependencies"]
+        allowed = {"model_assets_dir", *(PATH_SETTINGS[name] for name in step["profiles"] if name in PATH_SETTINGS)}
+        if set(settings) != allowed or any(not Path(value).is_dir() for value in settings.values()):
+            raise ValueError("Prepared resource paths are unavailable")
+        return {key: str(value) for key, value in settings.items()}
+    if kind == "backend_sources":
+        from shared.backend_sources import SOURCES, verify_source, profile_path
+        record = receipt or {}
+        expected = {SOURCES[name]["setting"]: str(profile_path(name, step["root"])) for name in step["profiles"]}
+        if (record.get("status") != "completed" or record.get("profiles") != list(step["profiles"])
+                or record.get("external_dependencies") != expected):
+            raise ValueError("Invalid prepared algorithm-source receipt")
+        for name in step["profiles"]:
+            verify_source(name, Path(expected[SOURCES[name]["setting"]]))
+        return expected
+    if kind == "model_assets":
+        # SPEC-GAP: download_model_assets.py writes no receipt; a finished step saves the plan's asset root.
+        root = Path(str(step["asset_root"]))
+        if not root.is_dir():
+            raise ValueError("Model asset folder is unavailable")
+        return {"model_assets_dir": str(root)}
+    if kind in {"python_packages", "self_check"}:
+        return {}
+    raise ValueError("Unknown setup step: " + str(kind))
+
+
+def apply_setup_receipt(step, receipt):
+    """Validate a step receipt, save its settings in the user config and return them (B8). No GUI owner."""
+    from shared.user_config import update_user_config
+
+    settings = validate_setup_receipt(step, receipt)
+    if settings:
+        update_user_config({"external_dependencies": settings})
+    return settings

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import re
 from pathlib import Path
 import shutil
 import stat
@@ -74,6 +76,7 @@ class ExtensionDistributionTest(unittest.TestCase):
                      "anatomy/parcellation/conversion/LICENSE.txt",
                      "anatomy/surface/ddsurfer_backend/LICENSE.txt",
                      "licenses/FreeSurfer.txt", "licenses/PyTorch3D.txt", "licenses/provenance.json",
+                     "docs/licenses/pnl_brain_mask.md",  # A-O2: linked from docs/setup/brain_mask_gui_config.md
                      "anatomy/parcellation/conversion/data/FreeSurferColorLUT.txt",
                      "shared/pnl_mask_runner.py", "shared/synthstrip_mask_runner.py",
                      "shared/mrtrix_preproc_runner.py", "shared/managed_runtimes.py",
@@ -83,6 +86,12 @@ class ExtensionDistributionTest(unittest.TestCase):
                      "docs/release/benchmarks/module_runtimes_20261015.csv"):
             self.assertIn(name, selected)
         self.assertFalse(any("/tests/" in name or "/slicer_dmri_reference/" in name for name in selected))
+        # A-O2: every relative .md link of a packaged setup page that stays inside docs/ points to a packaged file.
+        link = re.compile(r"\]\((\.\./licenses/[^)#]+\.md)")
+        for page in (name for name in selected if name.startswith("docs/setup/") and name.endswith(".md")):
+            for target in link.findall((ROOT / page).read_text(encoding="utf-8")):
+                resolved = os.path.normpath(os.path.join(os.path.dirname(page), target)).replace(os.sep, "/")
+                self.assertIn(resolved, selected, f"{page} links {target}")
         self.assertFalse(any(name.startswith('scripts/figures/') for name in selected))
         self.assertNotIn('scripts/sync_website_logo.py', selected)
         self.assertEqual([name for name in selected if "/" not in name and name.endswith(".py")], ["SlicerDSpace.py"])

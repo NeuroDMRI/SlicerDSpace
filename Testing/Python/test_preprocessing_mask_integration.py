@@ -24,6 +24,21 @@ from shared.validation import InputValidationConfig, validate_subject_inputs
 from test_preprocessing_pipeline import _write_fake_backend, _write_fake_command, _write_nifti_subject
 
 
+# The pnl_cnn backend runs [PythonSlicer, shared/pnl_mask_native.py, ...] (T2 A1/A7). The tests put a fake
+# PythonSlicer in place of Slicer's interpreter; it ignores the module path and writes a fixed mask.
+_FAKE_PYTHONSLICER: list[Path] = []
+_RESOLVER = mock.patch("shared.brain_mask._pnl_native_python",
+                       side_effect=lambda: _FAKE_PYTHONSLICER[-1] if _FAKE_PYTHONSLICER else None)
+
+
+def setUpModule():
+    _RESOLVER.start()
+
+
+def tearDownModule():
+    _RESOLVER.stop()
+
+
 def _pnl_options(root: Path) -> dict:
     models = root / "pnl models"
     models.mkdir()
@@ -31,32 +46,31 @@ def _pnl_options(root: Path) -> dict:
     nib.save(nib.Nifti1Image(np.ones((5, 5, 5), np.float32), np.eye(4)), models / "IITmean_b0_256.nii.gz")
     for view in ("sagittal", "coronal", "axial"):
         (models / f"{view}.pt").write_text("test weights")
-    ants = root / "ants bin"
-    ants.mkdir()
-    for tool in ("antsRegistrationSyNQuick.sh", "antsApplyTransforms", "ImageMath"):
-        _write_fake_command(ants / tool, "raise SystemExit(0)\n")
-    script = root / "fake pnl.py"
-    script.write_text(
+    python = root / "slicer bin" / "PythonSlicer"
+    python.parent.mkdir()
+    _write_fake_command(
+        python,
         "import json, pathlib, sys\n"
         "import nibabel as nib\n"
         "import numpy as np\n"
+        "assert pathlib.Path(sys.argv[1]).name == 'pnl_mask_native.py'\n"
         "baseline = pathlib.Path(sys.argv[sys.argv.index('--input') + 1])\n"
         "image = nib.load(baseline)\n"
         "mask = np.zeros(image.shape, dtype=np.uint8)\n"
         "mask[1:4, 1:4, 1:4] = 1\n"
         "output = pathlib.Path(sys.argv[sys.argv.index('--output') + 1])\n"
         "nib.save(nib.Nifti1Image(mask, image.affine), output)\n"
+        "record = pathlib.Path(sys.argv[sys.argv.index('--record') + 1])\n"
+        "record.write_text(json.dumps({'requested': 'cpu', 'resolved': 'cpu', 'route': 'native-sitk'}))\n"
         f"with pathlib.Path({str(root / 'pnl_calls.jsonl')!r}).open('a') as stream:\n"
         "    stream.write(json.dumps({'b0_mean': float(image.get_fdata().mean()), 'affine': image.affine.tolist()}) + '\\n')\n"
-        "print('test PNL inference completed')\n"
+        "print('test PNL inference completed')\n",
     )
+    _FAKE_PYTHONSLICER[:] = [python]
     return {
         "brain_mask_backend": "pnl_cnn",
         "brain_mask_device": "cpu",
-        "pnl_mask_python": Path(sys.executable),
-        "pnl_mask_script": script,
         "pnl_mask_model_dir": models,
-        "pnl_mask_ants_bin_dir": ants,
     }
 
 
@@ -291,12 +305,10 @@ class PreprocessingMaskIntegrationTest(unittest.TestCase):
                     self.assertEqual(result.status, "completed")
                     self.assertNotEqual(json.loads(result.manifest_path.read_text())["cache_key"]["brain_mask"], initial_key)
             result = run_dwi_preprocessing(config)
-            config.pnl_mask_script.write_text(config.pnl_mask_script.read_text() + "\n# script changed\n")
+            python = _FAKE_PYTHONSLICER[-1]
+            python.write_text(python.read_text() + "\n# interpreter changed\n")
             self.assertEqual(run_dwi_preprocessing(config).status, "completed")
             (config.pnl_mask_model_dir / "axial.pt").write_text("different test weights")
-            self.assertEqual(run_dwi_preprocessing(config).status, "completed")
-            ants = config.pnl_mask_ants_bin_dir / "ImageMath"
-            _write_fake_command(ants, "# tool changed\nraise SystemExit(0)\n")
             self.assertEqual(run_dwi_preprocessing(config).status, "completed")
 
     def test_cached_invalid_mask_is_not_silently_accepted(self):

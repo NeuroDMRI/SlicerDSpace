@@ -8,7 +8,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import shlex
+import shutil
 import sys
 import tempfile
 import textwrap
@@ -36,7 +36,6 @@ from shared.brain_mask import (
 
 SHAPE = (4, 5, 3)
 AFFINE = np.array([[1.5, 0, 0, -7], [0, 2, 0, 11], [0, 0, 2.5, 3], [0, 0, 0, 1]], dtype=float)
-ANTS_COMMANDS = ("antsRegistrationSyNQuick.sh", "antsApplyTransforms", "ImageMath")
 ISOLATED_ENV = {
     "PATH": str(Path(sys.executable).parent),
     "SLICERDSPACE_MRTRIX_BIN_DIR": "",
@@ -97,26 +96,23 @@ FAKE_COMMAND = textwrap.dedent(
     args = sys.argv[1:]
     record = {"argv": args, "python": sys.executable}
     if MODE == "pnl_cnn":
+        # Stands in for PythonSlicer: argv[1] is shared/pnl_mask_native.py (T2 A1), not run here.
+        script = Path(args[0])
+        assert script.name == "pnl_mask_native.py" and script.is_file()
         parser = argparse.ArgumentParser()
-        parser.add_argument("command", choices=("mask",))
-        for flag in ("--input", "--output", "--model-dir", "--percentile", "--threads", "--device", "--record", "--ants-bin"):
+        for flag in ("--input", "--output", "--model-dir", "--template", "--device", "--record"):
             parser.add_argument(flag, required=True)
-        parsed = parser.parse_args(args)
-        assert parsed.percentile == "99"
+        parsed = parser.parse_args(args[1:])
         source = Path(parsed.input)
         assert source.name == "mean_b0.nii.gz"
-        assert Path(parsed.model_dir).is_symlink()
-        record["model_dir"] = str(Path(parsed.model_dir).resolve())
+        record["script"] = str(script)
+        record["model_dir"] = parsed.model_dir
+        record["template"] = parsed.template
         record["model_files"] = sorted(p.name for p in Path(parsed.model_dir).iterdir())
-        record["ants"] = {}
-        for name in ("antsRegistrationSyNQuick.sh", "antsApplyTransforms", "ImageMath"):
-            executable = shutil.which(name)
-            assert executable
-            result = subprocess.run([executable, "--fixture-contract"], check=True,
-                                    capture_output=True, text=True)
-            assert result.stdout.strip() == name
-            record["ants"][name] = executable
         candidate = Path(parsed.output)
+        Path(parsed.record).write_text(json.dumps({
+            "requested": parsed.device, "resolved": "cpu", "framework": "pytorch", "route": "native-sitk",
+            "status": "completed", "threads": 1, "phase_seconds": {"registration": 0.0}}), encoding="utf-8")
     elif MODE == "mrtrix":
         assert len(args) == 6 and args[2] == "-fslgrad" and args[5] == "-force"
         source, candidate = Path(args[0]), Path(args[1])
@@ -130,7 +126,7 @@ FAKE_COMMAND = textwrap.dedent(
                    "candidate": str(candidate),
                    "env": {key: os.environ.get(key) for key in (
                        "CUDA_VISIBLE_DEVICES", "OMP_NUM_THREADS", "MKL_NUM_THREADS",
-                       "OPENBLAS_NUM_THREADS", "PYTHONUNBUFFERED", "ANTSPATH",
+                       "OPENBLAS_NUM_THREADS", "PYTHONUNBUFFERED", "ANTSPATH", "SLICERDSPACE_STAGE_CPUS",
                        "FREESURFER_HOME", "PYTHONHOME", "PYTHONPATH", "PATH")}})
     with Path(RECORD).open("a", encoding="utf-8") as stream:
         stream.write(json.dumps(record) + "\\n")
@@ -173,6 +169,10 @@ def write_fake_mrtrix(bin_dir: Path, *, behavior: str = "valid") -> Path:
     return write_fake_command(bin_dir / "dwi2mask", "mrtrix", behavior=behavior)
 
 
+def fake_pythonslicer(root: Path) -> Path:
+    return root / "Slicer with spaces" / "bin" / "PythonSlicer"
+
+
 def fake_pnl_config(root: Path) -> BrainMaskConfig:
     models = root / "PNL models with spaces"
     models.mkdir(parents=True)
@@ -180,20 +180,8 @@ def fake_pnl_config(root: Path) -> BrainMaskConfig:
     save_nifti(models / "IITmean_b0_256.nii.gz", np.ones(SHAPE, dtype=np.float32))
     for view in ("sagittal", "coronal", "axial"):
         (models / f"{view}.pt").write_bytes(b"adapter-only fake weights")
-    ants = root / "ANTs tools with spaces"
-    ants.mkdir()
-    for name in ANTS_COMMANDS:
-        tool = ants / name
-        tool.write_text(
-            f"#!{sys.executable}\nfrom pathlib import Path\nprint(Path(__file__).name)\n", encoding="ascii"
-        )
-        tool.chmod(0o755)
-    script = write_fake_command(root / "PNL scripts with spaces" / "pnl-brain-mask", "pnl_cnn")
-    return BrainMaskConfig(
-        brain_mask_device="cpu",
-        pnl_mask_python=Path(sys.executable), pnl_mask_script=script,
-        pnl_mask_model_dir=models, pnl_mask_ants_bin_dir=ants,
-    )
+    write_fake_command(fake_pythonslicer(root), "pnl_cnn")
+    return BrainMaskConfig(brain_mask_device="cpu", pnl_mask_model_dir=models)
 
 
 class BrainMaskBackendsTest(unittest.TestCase):
@@ -213,6 +201,12 @@ class BrainMaskBackendsTest(unittest.TestCase):
         self.manifest = self.inputs / "nodif_brain_mask.manifest.json"
         self.mrtrix = write_fake_mrtrix(self.root / "MRtrix tools with spaces")
         self.mrtrix_config = BrainMaskConfig(backend="mrtrix", mrtrix_bin_dir=self.mrtrix.parent)
+        # The fake PythonSlicer exists only after fake_pnl_config(); before that no Slicer Python is found.
+        self.pythonslicer = fake_pythonslicer(self.root)
+        resolver = patch.object(brain_mask, "_pnl_native_python",
+                                side_effect=lambda: self.pythonslicer if self.pythonslicer.exists() else None)
+        resolver.start()
+        self.addCleanup(resolver.stop)
 
     def generate(self, config: BrainMaskConfig | None = None, **kwargs):
         return generate_brain_mask(
@@ -248,11 +242,11 @@ class BrainMaskBackendsTest(unittest.TestCase):
         self.assertEqual(config.freesurfer_home, options.postprocess_freesurfer_home)
         self.assertEqual(config.b0_threshold, 25)
 
-    def test_windows_profile_rejects_posix_pnl_even_if_files_are_discovered(self):
+    def test_windows_does_not_block_the_native_pnl_route(self):
+        # T2 A1: no POSIX-only ANTs runtime is left in the pnl_cnn route.
         config = fake_pnl_config(self.root)
         result = inspect_brain_mask_backend(config, system="Windows")
-        self.assertFalse(result["available"])
-        self.assertTrue(any("POSIX external runtime" in item for item in result["missing_required"]))
+        self.assertTrue(result["available"], result)
 
     def test_missing_default_pnl_never_falls_through_to_available_mrtrix(self) -> None:
         with patch.dict(os.environ, {"SLICERDSPACE_MRTRIX_BIN_DIR": str(self.mrtrix.parent)}):
@@ -261,7 +255,7 @@ class BrainMaskBackendsTest(unittest.TestCase):
             self.assertEqual(inspected["backend"], "pnl_cnn")
             self.assertFalse(inspected["available"])
             before = self.snapshot()
-            with self.assertRaisesRegex(FileNotFoundError, "pnl_cnn unavailable.*pnl_mask_python"):
+            with self.assertRaisesRegex(FileNotFoundError, "pnl_cnn unavailable.*PythonSlicer"):
                 generate_brain_mask(self.dwi, self.bvals, self.bvecs, self.output)
         self.assertEqual(self.calls(self.mrtrix), [])
         self.assertFalse(self.output.exists())
@@ -273,7 +267,7 @@ class BrainMaskBackendsTest(unittest.TestCase):
         original_import = __import__
 
         def forbid_tensorflow(name, *args, **kwargs):
-            if name.split(".")[0] in ("tensorflow", "keras"):
+            if name.split(".")[0] in ("tensorflow", "keras", "torch"):
                 raise AssertionError("Inspection must not import an inference runtime")
             return original_import(name, *args, **kwargs)
 
@@ -282,9 +276,42 @@ class BrainMaskBackendsTest(unittest.TestCase):
         run.assert_not_called()
         self.assertTrue(inspected["available"], inspected)
         self.assertEqual(inspected["missing_required"], [])
-        self.assertEqual(len(inspected["resources"]), 7)
-        self.assertEqual(set(ANTS_COMMANDS) - inspected["tool_paths"].keys(), set())
-        self.assertEqual(self.calls(config.pnl_mask_script), [])
+        # Native module + UPSTREAM.json + the 7 vendored files + weights.json, template and 3 views.
+        self.assertEqual(len(inspected["resources"]), 14)
+        self.assertEqual(inspected["tool_paths"]["pythonslicer"], str(self.pythonslicer))
+        self.assertEqual(self.calls(self.pythonslicer), [])
+
+    def test_a7_signature_hashes_native_module_and_every_vendored_file(self) -> None:
+        # T2 A7 / O5: the cache signature covers pnl_mask_native.py and every vendored file, with the JSON.
+        config = fake_pnl_config(self.root)
+        shared_dir = Path(brain_mask.__file__).parent
+        vendor = shared_dir / "pnl_cnn"
+        upstream = json.loads((vendor / "UPSTREAM.json").read_text(encoding="utf-8"))
+        expected = {shared_dir / "pnl_mask_native.py", vendor / "UPSTREAM.json",
+                    *(vendor / relative for relative in upstream["files"])}
+        self.assertIn(vendor / "data/CompNetBasicModel.json", expected)
+        self.assertIn(vendor / "model.py", expected)
+        self.assertNotIn(shared_dir / "pnl_mask_runner.py", {Path(p) for p in inspect_brain_mask_backend(config)["resources"]})
+        result = self.generate(config)
+        hashed = {Path(item["path"]): item["sha256"] for item in result["signature"]["resources"]}
+        for path in expected:
+            with self.subTest(file=path.name):
+                self.assertEqual(hashed[path.resolve()], hashlib.sha256(path.read_bytes()).hexdigest())
+        self.assertEqual(result["signature"]["settings"]["pnl_route"], "native-sitk")
+        self.assertEqual(result["device_execution"]["route"], "native-sitk")
+        # A change in any vendored file (here the architecture JSON, in a copy) changes the signature.
+        copy = self.root / "vendored copy" / "pnl_cnn"
+        shutil.copytree(vendor, copy, ignore=shutil.ignore_patterns("__pycache__"))
+        with patch.object(brain_mask, "PNL_VENDOR_DIR", copy):
+            same = self.generate(config)
+            self.assertEqual(same["status"], "completed")  # other paths, so a new signature
+            again = self.generate(config)
+            self.assertEqual(again["status"], "reused")
+            with (copy / "data/CompNetBasicModel.json").open("ab") as stream:
+                stream.write(b" ")
+            changed = self.generate(config)
+        self.assertEqual(changed["status"], "completed")
+        self.assertNotEqual(again["signature"]["resources"], changed["signature"]["resources"])
 
     def test_pnl_requires_converted_weights_and_rejects_legacy_hdf5(self) -> None:
         config = fake_pnl_config(self.root)
@@ -312,13 +339,12 @@ class BrainMaskBackendsTest(unittest.TestCase):
                 file.write_bytes(content)
         self.assertTrue(inspect_brain_mask_backend(config)["available"])
 
-    def test_pnl_checks_model_template_script_interpreter_and_all_ants_commands(self) -> None:
+    def test_pnl_checks_model_files_interpreter_and_vendored_files(self) -> None:
         config = fake_pnl_config(self.root)
         cases = [
             (config.pnl_mask_model_dir / "weights.json", "weights.json"),
             (config.pnl_mask_model_dir / "IITmean_b0_256.nii.gz", "IITmean_b0_256.nii.gz"),
-            (config.pnl_mask_script, "pnl_mask_script"),
-            *[(config.pnl_mask_ants_bin_dir / command, command) for command in ANTS_COMMANDS],
+            (self.pythonslicer, brain_mask.PNL_NATIVE_PYTHON_MISSING),
         ]
         for file, missing in cases:
             with self.subTest(resource=missing):
@@ -330,45 +356,41 @@ class BrainMaskBackendsTest(unittest.TestCase):
                     self.assertIn(missing, inspected["missing_required"])
                 finally:
                     saved.rename(file)
-        for key in ("pnl_mask_python", "pnl_mask_model_dir"):
-            with self.subTest(resource=key):
-                inspected = inspect_brain_mask_backend(replace(config, **{key: self.root / "missing"}))
-                self.assertFalse(inspected["available"])
-                self.assertIn(key, inspected["missing_required"])
+        with self.subTest(resource="pnl_mask_model_dir"):
+            inspected = inspect_brain_mask_backend(replace(config, pnl_mask_model_dir=self.root / "missing"))
+            self.assertFalse(inspected["available"])
+            self.assertIn("pnl_mask_model_dir", inspected["missing_required"])
+        copy = self.root / "vendored copy" / "pnl_cnn"
+        shutil.copytree(Path(brain_mask.__file__).with_name("pnl_cnn"), copy,
+                        ignore=shutil.ignore_patterns("__pycache__"))
+        with patch.object(brain_mask, "PNL_VENDOR_DIR", copy):
+            self.assertTrue(inspect_brain_mask_backend(config)["available"])
+            for relative in ("data/CompNetBasicModel.json", "UPSTREAM.json"):
+                with self.subTest(resource=relative):
+                    (copy / relative).unlink()
+                    inspected = inspect_brain_mask_backend(config)
+                    self.assertFalse(inspected["available"])
+                    self.assertIn(f"PNL native file {copy / relative}", inspected["missing_required"])
 
     def test_pnl_interpreter_must_be_executable(self) -> None:
         config = fake_pnl_config(self.root)
-        python = self.root / "not-executable-python"
-        python.write_bytes(b"not an executable")
-        python.chmod(0o644)
-        inspected = inspect_brain_mask_backend(replace(config, pnl_mask_python=python))
+        self.pythonslicer.chmod(0o644)
+        inspected = inspect_brain_mask_backend(config)
         self.assertFalse(inspected["available"])
-        self.assertIn("executable pnl_mask_python", inspected["missing_required"])
+        self.assertIn(brain_mask.PNL_NATIVE_PYTHON_MISSING, inspected["missing_required"])
 
-    def test_pnl_python_tool_path_keeps_virtualenv_symlink_for_config_and_environment(self) -> None:
-        config = fake_pnl_config(self.root)
-        # A bare symlink to a venv's binary loses pyvenv.cfg and its packages.
-        # Bind the launcher to the test runtime, while still testing link retention.
-        launcher = self.root / "test-runtime-python"
-        launcher.write_text(f'#!/bin/sh\nexec {shlex.quote(sys.executable)} "$@"\n', encoding="ascii")
-        launcher.chmod(0o755)
-        python = self.root / "virtualenv with spaces" / "bin/python"
-        python.parent.mkdir(parents=True)
-        python.symlink_to(launcher)
-        self.assertNotEqual(python, python.resolve())
-        for source in ("config", "environment"):
-            with self.subTest(source=source):
-                selected = replace(config, pnl_mask_python=python if source == "config" else None)
-                with patch.dict(os.environ, {"SLICERDSPACE_PNL_MASK_PYTHON": str(python)}):
-                    inspected = inspect_brain_mask_backend(selected)
-                    self.assertTrue(inspected["available"])
-                    self.assertEqual(inspected["tool_paths"]["pnl_mask_python"], str(python))
-                    result = self.generate(selected, force=True)
-                self.assertEqual(result["command"][0], str(python))
-                self.assertEqual(result["signature"]["tool_paths"]["pnl_mask_python"], str(python))
-                child = self.calls(config.pnl_mask_script)[-1]
-                self.assertEqual(child["python"], sys.executable)
-                self.assertIn(str(python.parent), child["env"]["PATH"].split(os.pathsep))
+    def test_saved_conda_runner_settings_are_not_used_by_the_native_route(self) -> None:
+        # T2 A7: brain_mask runs A1 instead of the conda runner; the old paths stay in the config until A8.
+        config = replace(fake_pnl_config(self.root), pnl_mask_python=self.root / "missing python",
+                         pnl_mask_script=self.root / "missing script", pnl_mask_ants_bin_dir=self.root / "missing ants")
+        with patch.dict(os.environ, {"SLICERDSPACE_PNL_MASK_PYTHON": str(self.root / "missing python"),
+                                     "ANTSPATH": str(self.root / "missing ants")}):
+            inspected = inspect_brain_mask_backend(config)
+            self.assertTrue(inspected["available"], inspected)
+            result = self.generate(config)
+        self.assertEqual(result["command"][:2], [str(self.pythonslicer), str(brain_mask.PNL_NATIVE_SCRIPT)])
+        self.assertNotIn("pnl_mask_runner.py", " ".join(result["command"]))
+        self.assertEqual(set(inspected["tool_paths"]), {"pythonslicer", "model_dir"})
 
     def test_invalid_backend_threshold_and_threads_are_rejected(self) -> None:
         for config in (
@@ -382,35 +404,33 @@ class BrainMaskBackendsTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Unknown brain mask backend"):
             self.generate(BrainMaskConfig(backend="auto"))
 
-    def test_pnl_torch_adapter_interface_output_and_environment(self) -> None:
+    def test_pnl_native_adapter_interface_output_and_environment(self) -> None:
         config = replace(fake_pnl_config(self.root), threads=3)
         before = self.snapshot()
         logs = []
-        with patch.dict(os.environ, {"PYTHONHOME": "/invalid/slicer/python", "PYTHONPATH": "/invalid/slicer/modules"}):
+        with patch.dict(os.environ, {"SLICERDSPACE_STAGE_CPUS": "3"}):  # A-O4: the child count, not config.threads
             result = self.generate(config, log=logs.append)
-        call, = self.calls(config.pnl_mask_script)
+        call, = self.calls(self.pythonslicer)
         command = result["command"]
-        self.assertEqual(command[:2], [str(config.pnl_mask_python), str(Path(brain_mask.__file__).with_name("pnl_mask_runner.py"))])
-        self.assertEqual(command[command.index("--script") + 1], str(config.pnl_mask_script))
-        upstream = command[command.index("--") + 1:]
-        self.assertEqual(upstream[0], "mask")
-        self.assertEqual(upstream[upstream.index("--percentile") + 1], "99")
-        self.assertEqual(upstream[upstream.index("--threads") + 1], "3")
-        self.assertEqual(call["argv"], [*upstream, "--device", "cpu", "--record", command[command.index("--record") + 1]])
+        record = command[command.index("--record") + 1]
+        # T2 A1: [PythonSlicer, shared/pnl_mask_native.py, ...]; no --threads (the child reads SLICERDSPACE_STAGE_CPUS).
+        self.assertEqual(command[:2], [str(self.pythonslicer), str(Path(brain_mask.__file__).with_name("pnl_mask_native.py"))])
+        self.assertEqual(call["argv"], command[1:])
+        self.assertEqual(command[2:], [
+            "--input", call["source"], "--output", call["candidate"],
+            "--model-dir", str(config.pnl_mask_model_dir),
+            "--template", str(config.pnl_mask_model_dir / "IITmean_b0_256.nii.gz"),
+            "--device", "cpu", "--record", record])
+        self.assertNotIn("--threads", command)
         self.assertEqual(result["device_execution"]["resolved"], "cpu")
+        self.assertEqual(result["device_execution"]["route"], "native-sitk")
         self.assertEqual(Path(call["candidate"]).name, "mask.nii.gz")
         self.assertEqual(result["device_execution"]["framework"], "pytorch")
-        self.assertEqual(call["model_dir"], str(config.pnl_mask_model_dir))
         self.assertEqual(len(call["model_files"]), 5)
-        for name in ANTS_COMMANDS:
-            self.assertEqual(call["ants"][name], str(config.pnl_mask_ants_bin_dir / name))
         for key in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS"):
             self.assertEqual(call["env"][key], "3")
-        self.assertEqual(call["env"]["CUDA_VISIBLE_DEVICES"], "-1")
-        self.assertEqual(call["env"]["ANTSPATH"], str(config.pnl_mask_ants_bin_dir))
         self.assertEqual(call["env"]["PYTHONUNBUFFERED"], "1")
-        self.assertIsNone(call["env"]["PYTHONHOME"])
-        self.assertIsNone(call["env"]["PYTHONPATH"])
+        self.assertFalse(call["env"]["ANTSPATH"])
         self.assertEqual(result["backend"], "pnl_cnn")
         self.assertEqual(result["status"], "completed")
         self.assertEqual(result["b0_volumes"], 2)
@@ -429,6 +449,32 @@ class BrainMaskBackendsTest(unittest.TestCase):
         self.assertEqual(result["output"]["sha256"], hashlib.sha256(self.output.read_bytes()).hexdigest())
         self.assert_preserved(before)
 
+    def test_signature_and_receipt_record_the_effective_child_thread_count(self) -> None:
+        # A-O4: the native child ignores config.threads and reads SLICERDSPACE_STAGE_CPUS (A6).
+        config = replace(fake_pnl_config(self.root), threads=3)
+        with patch.dict(os.environ, {"SLICERDSPACE_STAGE_CPUS": "2"}):
+            self.assertEqual(inspect_brain_mask_backend(config)["settings"]["threads"], 2)
+            result = self.generate(config)
+        self.assertEqual(result["signature"]["settings"]["threads"], 2)
+        self.assertEqual(result["child_threads"], 2)
+        self.assertEqual(result["thread_environment"]["OMP_NUM_THREADS"], "2")
+        # The signature follows the reservation: another count is another signature (no silent reuse).
+        with patch.dict(os.environ, {"SLICERDSPACE_STAGE_CPUS": "5"}):
+            self.assertEqual(self.generate(config)["status"], "completed")
+        with patch.dict(os.environ, {"SLICERDSPACE_STAGE_CPUS": "5"}):
+            self.assertEqual(self.generate(config)["status"], "reused")
+
+    def test_scheduler_cpu_reservation_reaches_the_native_child_from_slicer_startup_environment(self) -> None:
+        # A6: the child reads SLICERDSPACE_STAGE_CPUS; inside Slicer the child environment starts from
+        # slicer.util.startupEnvironment(), which does not hold the scheduler's value.
+        config = fake_pnl_config(self.root)
+        startup = {key: value for key, value in os.environ.items() if key != "SLICERDSPACE_STAGE_CPUS"}
+        slicer = SimpleNamespace(util=SimpleNamespace(startupEnvironment=lambda: dict(startup)))
+        with patch.dict(sys.modules, {"slicer": slicer}), patch.dict(os.environ, {"SLICERDSPACE_STAGE_CPUS": "2"}):
+            self.generate(config)
+        call, = self.calls(self.pythonslicer)
+        self.assertEqual(call["env"]["SLICERDSPACE_STAGE_CPUS"], "2")
+
     def test_pnl_averages_only_b_values_at_or_below_50_in_native_grid(self) -> None:
         config = fake_pnl_config(self.root)
         data = nib.load(str(self.dwi)).get_fdata()
@@ -437,7 +483,7 @@ class BrainMaskBackendsTest(unittest.TestCase):
         data[..., 3] = np.inf
         save_nifti(self.dwi, data.astype(np.float32))
         self.generate(config)
-        call, = self.calls(config.pnl_mask_script)
+        call, = self.calls(self.pythonslicer)
         np.testing.assert_allclose(call["data"], np.mean(data[..., :2], axis=-1), rtol=0, atol=0)
         self.assertEqual(call["shape"], list(SHAPE))
         np.testing.assert_allclose(call["affine"], AFFINE)
@@ -450,7 +496,7 @@ class BrainMaskBackendsTest(unittest.TestCase):
         # tempfile caches its directory: set both knobs to actually exercise it.
         with patch.dict(os.environ, {"TMPDIR": str(unsafe)}), patch.object(tempfile, "tempdir", str(unsafe)):
             result = self.generate(config)
-        call, = self.calls(config.pnl_mask_script)
+        call, = self.calls(self.pythonslicer)
         work = Path(call["source"]).parent
         self.assertEqual(work.parent, Path("/tmp"))
         for value in (result["command"][3], result["command"][5], call["source"], call["candidate"]):
@@ -581,7 +627,8 @@ class BrainMaskBackendsTest(unittest.TestCase):
             self.assertNotEqual(previous["signature"]["inputs"], current["signature"]["inputs"])
         self.assertEqual(len(self.calls(self.mrtrix)), 3)
 
-    def test_changed_pnl_model_weights_template_and_script_each_invalidate_cache(self) -> None:
+    def test_changed_pnl_model_weights_and_template_each_invalidate_cache(self) -> None:
+        # Vendored code changes: test_a7_signature_hashes_native_module_and_every_vendored_file.
         config = fake_pnl_config(self.root)
         previous = self.generate(config)
         files = [
@@ -590,7 +637,6 @@ class BrainMaskBackendsTest(unittest.TestCase):
             config.pnl_mask_model_dir / "coronal.pt",
             config.pnl_mask_model_dir / "axial.pt",
             config.pnl_mask_model_dir / "IITmean_b0_256.nii.gz",
-            config.pnl_mask_script,
         ]
         for file in files:
             with self.subTest(resource=file.name):
@@ -605,7 +651,7 @@ class BrainMaskBackendsTest(unittest.TestCase):
                 self.assertEqual(current["status"], "completed")
                 self.assertNotEqual(previous["signature"]["resources"], current["signature"]["resources"])
                 previous = current
-        self.assertEqual(len(self.calls(config.pnl_mask_script)), 7)
+        self.assertEqual(len(self.calls(self.pythonslicer)), 6)
 
     def test_changed_backend_invalidates_generated_cache(self) -> None:
         first = self.generate()
@@ -618,7 +664,7 @@ class BrainMaskBackendsTest(unittest.TestCase):
         self.assertEqual(third["status"], "completed")
         self.assertEqual(third["backend"], "mrtrix")
         self.assertEqual(len(self.calls(self.mrtrix)), 2)
-        self.assertEqual(len(self.calls(config.pnl_mask_script)), 1)
+        self.assertEqual(len(self.calls(self.pythonslicer)), 1)
 
     def test_threshold_and_thread_changes_invalidate_cache(self) -> None:
         first = self.generate()

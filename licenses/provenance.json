@@ -83,6 +83,15 @@
       "source": "https://github.com/SlicerDMRI/SlicerDMRI/blob/a40200bfb9df21a6092b308188175d1e339b5771/License.txt",
       "covers": ["shared/teem_dti.py"],
       "conditions": "Preserve the full 3D Slicer Contribution and Software License Agreement and attribution; identify shared/teem_dti.py as a modified Python reimplementation of SlicerDMRI DWIToDTIEstimation, DiffusionTensorScalarMeasurements and vtkTeemEstimateDiffusionTensor, not an upstream release. The plugin calls the Teem library that 3D Slicer ships (LGPL-2.1 with a static-linking exception) and does not redistribute it."
+    },
+    {
+      "id": "pnl_cnn",
+      "license": "LicenseRef-PNL-CNN-BWH",
+      "path": "shared/pnl_cnn/LICENSE.txt",
+      "sha256": "2586e5953fa5a9bd8d700c21db9503ed448a57209f6e4f24ec3f8d5381715902",
+      "source": "https://github.com/ChengjinLii/PNLBrainMask-Torch/blob/8d201a50447ebea8b10a4f252bfd262931603970/LICENSE",
+      "covers": ["shared/pnl_cnn"],
+      "conditions": "Clause (b): print the licence terms, prefaced by the fixed sentence, in every copy and in the user documentation (docs/licenses/pnl_brain_mask.md, THIRD_PARTY_NOTICES.md). Clause (c): keep all attributions and notices. Clause (d): mark modified versions as modified (header comment on each modified Python file; patch list in shared/pnl_cnn/UPSTREAM.json). Model weights and the IIT template are separate assets with their own terms."
     }
   ]
 }

@@ -1,0 +1,68 @@
+{
+  "format": 1,
+  "name": "PNLBrainMask-Torch",
+  "repository": "https://github.com/ChengjinLii/PNLBrainMask-Torch",
+  "commit": "8d201a50447ebea8b10a4f252bfd262931603970",
+  "license": "LicenseRef-PNL-CNN-BWH",
+  "license_file": "shared/pnl_cnn/LICENSE.txt",
+  "files": {
+    "LICENSE.txt": {
+      "upstream_path": "LICENSE",
+      "upstream_sha256": "2586e5953fa5a9bd8d700c21db9503ed448a57209f6e4f24ec3f8d5381715902",
+      "sha256": "2586e5953fa5a9bd8d700c21db9503ed448a57209f6e4f24ec3f8d5381715902",
+      "patches": []
+    },
+    "__init__.py": {
+      "upstream_path": "src/pnl_brain_mask/__init__.py",
+      "upstream_sha256": "a11dfe13d4a3ac8ce1d9ac357c8c7c2f12f492af4316e1c8cb7b0d2a03634909",
+      "sha256": "a11dfe13d4a3ac8ce1d9ac357c8c7c2f12f492af4316e1c8cb7b0d2a03634909",
+      "patches": []
+    },
+    "inference.py": {
+      "upstream_path": "src/pnl_brain_mask/inference.py",
+      "upstream_sha256": "db7313dace57ef0461e7818f958652320b44e5335efcb64267123af1793b055a",
+      "sha256": "db7313dace57ef0461e7818f958652320b44e5335efcb64267123af1793b055a",
+      "patches": []
+    },
+    "model.py": {
+      "upstream_path": "src/pnl_brain_mask/model.py",
+      "upstream_sha256": "02405dd1929294ce2708443fa99b060153cac7a7e085a4d8704fd67e38c590c7",
+      "sha256": "bc85e25b2b46f9d5a3a9118c7dc436fb2a74b7d5ccf1740b3509372de9438763",
+      "patches": [
+        "architecture() reads data/CompNetBasicModel.json by a path next to this file instead of importlib.resources",
+        "import lines changed to match",
+        "clause-(d) modification comment added as line 1"
+      ]
+    },
+    "weights.py": {
+      "upstream_path": "src/pnl_brain_mask/weights.py",
+      "upstream_sha256": "209504dc55c742590a35dc70da0fe724c62db3d426c83b5e241175003967984e",
+      "sha256": "750c5db8a404b89a1eb33f5617a58aebc302512363f77350dfb8bd5fcbba3e34",
+      "patches": [
+        "only the checked weight loader is kept (constants, sha256, check, load_model)",
+        "download, acquire_author_weights and convert are removed with their imports",
+        "clause-(d) modification comment added as line 1"
+      ]
+    },
+    "pipeline.py": {
+      "upstream_path": "src/pnl_brain_mask/pipeline.py",
+      "upstream_sha256": "893964dee3f15a1692f88991987d740aef4488795b311f46dc983a289dba1ddf",
+      "sha256": "d9b903131fe1502c4b5553cb7184ef522fcaecd68de06fcfedc5c2394b2ff820",
+      "patches": [
+        "only the 3-D input branch of mean_b0 is kept (the 4-D mean, ANTs calls, run and finish_native are removed with their imports)",
+        "a non-3-D input raises ValueError",
+        "clause-(d) modification comment added as line 1"
+      ]
+    },
+    "data/CompNetBasicModel.json": {
+      "upstream_path": "src/pnl_brain_mask/data/CompNetBasicModel.json",
+      "upstream_sha256": "989fd5a64d9307268441c3525d59b31d59c20db864f0262ef53ad53ec495bdae",
+      "sha256": "989fd5a64d9307268441c3525d59b31d59c20db864f0262ef53ad53ec495bdae",
+      "patches": []
+    }
+  },
+  "not_vendored": [
+    "src/pnl_brain_mask/cli.py",
+    "src/pnl_brain_mask/data/PNL-LICENSE.txt (equals LICENSE lines 8-202)"
+  ]
+}

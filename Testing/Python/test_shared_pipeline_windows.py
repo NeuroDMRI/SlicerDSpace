@@ -42,6 +42,54 @@ class SharedPipelineWindowsCompatibilityTest(unittest.TestCase):
                 self.assertEqual(Path(pipeline.resolve_launcher_executable()), home / "MacOS/Slicer")
                 self.assertEqual(Path(pipeline.resolve_pythonslicer_executable()), home / "bin/PythonSlicer")
 
+    def test_pythonslicer_resolves_outside_slicer_from_the_interpreter_or_the_environment(self):
+        # A-C1: the resolver no longer needs an imported ``slicer`` module.
+        error = ImportError("no slicer")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            interpreter = root / "tool" / "PythonSlicer"
+            interpreter.parent.mkdir()
+            interpreter.touch()
+            home = root / "Slicer-5.10"
+            (home / "bin").mkdir(parents=True)
+            (home / "bin/PythonSlicer").touch()
+            configured = root / "Configured"
+            (configured / "bin").mkdir(parents=True)
+            (configured / "bin/PythonSlicer").touch()
+            other = root / "venv" / "bin" / "python"
+            other.parent.mkdir(parents=True)
+            other.touch()
+            outside = (patch.object(pipeline, "SLICER_IMPORT_ERROR", error), patch.object(pipeline, "slicer", None))
+            with outside[0], outside[1]:
+                # 1. sys.executable named PythonSlicer wins, even when SLICER_HOME names another install.
+                with patch.object(sys, "executable", str(interpreter)), \
+                        patch.dict(os.environ, {"SLICER_HOME": str(home)}, clear=True):
+                    self.assertEqual(Path(pipeline.resolve_pythonslicer_executable()), interpreter)
+                # 2. SLICER_HOME, then the configured Slicer path.
+                with patch.object(sys, "executable", str(other)), \
+                        patch.dict(os.environ, {"SLICER_HOME": str(home), "SLICER_PATH": str(configured)}, clear=True):
+                    self.assertEqual(Path(pipeline.resolve_pythonslicer_executable()), home / "bin/PythonSlicer")
+                with patch.object(sys, "executable", str(other)), \
+                        patch.dict(os.environ, {"DTI_SLICER_PATH": str(configured)}, clear=True):
+                    self.assertEqual(Path(pipeline.resolve_pythonslicer_executable()), configured / "bin/PythonSlicer")
+                # 3. Nothing found: the error names what to set.
+                with patch.object(sys, "executable", str(other)), patch.dict(os.environ, {}, clear=True):
+                    with self.assertRaisesRegex(RuntimeError, "Set SLICER_HOME"):
+                        pipeline.resolve_pythonslicer_executable()
+
+    def test_pythonslicer_inside_slicer_keeps_the_slicer_home_order(self):
+        # A-C1: inside Slicer the interpreter and environment are not consulted before slicerHome.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            running, environment = root / "running", root / "environment"
+            for home in (running, environment):
+                (home / "bin").mkdir(parents=True)
+                (home / "bin/PythonSlicer").touch()
+            fake = SimpleNamespace(app=SimpleNamespace(slicerHome=str(running)))
+            with patch.object(pipeline, "SLICER_IMPORT_ERROR", None), patch.object(pipeline, "slicer", fake), \
+                    patch.dict(os.environ, {"SLICER_HOME": str(environment)}, clear=True):
+                self.assertEqual(Path(pipeline.resolve_pythonslicer_executable()), running / "bin/PythonSlicer")
+
     def test_cli_library_variable_matches_platform(self):
         with tempfile.TemporaryDirectory() as tmp:
             executable = Path(tmp) / "cli-modules/CLI"

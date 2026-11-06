@@ -405,6 +405,13 @@ class PairTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             workflows.validate_pair(self.args(output=existing))
 
+    def test_hybrid_pair_checks_model_directories_before_launch(self):
+        with self.assertRaises(ValueError):
+            workflows.validate_pair(self.args(workload='hybrid'))
+        for name in workflows.MODEL_DIRECTORIES:
+            (self.base / 'models' / name).mkdir()
+        workflows.validate_pair(self.args(workload='hybrid'))
+
     def test_pair_refuses_an_existing_folder_without_touching_it(self):
         existing = self.base / 'pair1'
         existing.mkdir()

@@ -799,6 +799,10 @@ def validate_pair(args):
                               ('--mrtrix', args.mrtrix, 'dir'), ('--launcher', args.launcher, 'file')):
         if not (item.is_dir() if kind == 'dir' else item.is_file()):
             raise ValueError(f'{label} does not exist: {item}')
+    if args.workload == 'hybrid':       # fail at time zero, not after the 5-minute launch sampling
+        for name in MODEL_DIRECTORIES:
+            if not (args.models/name).is_dir():
+                raise ValueError(f'Required model directory absent: {args.models/name}')
     previous = None
     if args.previous_pair is not None:
         assignment = json.loads((args.previous_pair/'pair.json').read_text()).get('assignment')

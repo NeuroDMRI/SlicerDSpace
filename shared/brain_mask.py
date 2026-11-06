@@ -18,7 +18,7 @@ import tempfile
 import time
 from typing import Any, Callable, Optional
 
-from shared.external_process import external_python_environment, text_subprocess_kwargs
+from shared.external_process import external_python_environment, managed_tool_environment, text_subprocess_kwargs
 
 
 BRAIN_MASK_BACKENDS = ("pnl_cnn", "synthstrip", "mrtrix", "provided", "dipy")
@@ -369,6 +369,8 @@ def generate_brain_mask(dwi_path: Path, bval_path: Path, bvec_path: Path, output
         else:
             command = [tools["dwi2mask"], str(paths[0]), str(candidate), "-fslgrad", str(paths[2]), str(paths[1]), "-force"]
         env = external_python_environment(env_extra, path_prepend=prepend)
+        if config.backend == "mrtrix":  # dwi2mask is an MRtrix Python script: it needs the managed `python` shim
+            env = managed_tool_environment(env_extra, mrtrix_bin_dir=Path(tools["dwi2mask"]).parent, path_prepend=prepend)
         if config.backend == "pnl_cnn":
             from shared.managed_pnl import pnl_python_environment
             env = pnl_python_environment(tools["pnl_mask_python"], env_extra, path_prepend=prepend)

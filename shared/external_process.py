@@ -198,3 +198,105 @@ def python_tool_environment(python_executable: Path | str,
     if is_slicer_python(path):
         return startup_environment(extra_env)
     return external_python_environment(extra_env, path_prepend=[path.parent])
+
+
+# --- B3: one environment for MRtrix scripts and FSL tools -------------------------------------------------
+
+FSL_OUTPUT_TYPE = "NIFTI_GZ"
+
+
+def fsl_root_from_bin_dir(bin_dir: Path | str) -> Path:
+    """``FSLDIR`` for either ``$FSLDIR/bin`` or ``share/fsl/bin``."""
+    resolved = Path(bin_dir).expanduser().resolve()
+    if (
+        resolved.name == "bin"
+        and resolved.parent.name == "fsl"
+        and resolved.parent.parent.name == "share"
+    ):
+        return resolved.parent.parent.parent
+    return resolved.parent
+
+
+def _default_slicer_python() -> Optional[Path]:
+    # SPEC-GAP: B3 says "PythonSlicer" but not how to find it; use the running interpreter's Slicer, else PATH.
+    executable = Path(sys.executable)
+    if executable.name.lower() in {"pythonslicer", "pythonslicer.exe"}:
+        return executable
+    if is_slicer_python(executable):
+        return find_pythonslicer(executable.parent)
+    found = shutil.which("PythonSlicer")
+    return Path(found) if found else None
+
+
+def shim_target_python(*, mrtrix_bin_dir=None, fsl_bin_dir=None, system: Optional[str] = None,
+                      slicer_python: Optional[Path | str] = None) -> Optional[Path]:
+    """The Python that the managed ``python`` shim forwards to; None when no shim is wanted.
+
+    Linux: the runtime's own conda Python. macOS: the FSL prefix Python when FSL is installed, else PythonSlicer.
+    Windows: none (the WSL bridges supply Python).
+    """
+    system = (system or sys.platform).lower()
+    if system in {"win32", "windows"}:
+        return None
+    if system in {"darwin", "macos"}:
+        fsl_python = Path(fsl_bin_dir).expanduser() / "python" if fsl_bin_dir is not None else None
+        if fsl_python is not None and fsl_python.is_file():
+            return fsl_python
+        found = Path(slicer_python) if slicer_python is not None else _default_slicer_python()
+        return found if found is not None and found.is_file() else None
+    # SPEC-GAP: "runtime conda Python" on Linux is taken as <mrtrix bin>/python, else <fsl bin>/python.
+    candidates = [Path(path).expanduser() / "python" for path in (mrtrix_bin_dir, fsl_bin_dir) if path is not None]
+    return next((path for path in candidates if path.is_file()), None)
+
+
+def python_shim_folder(target: Path | str, shim_root: Optional[Path | str] = None) -> Path:
+    """Create (or refresh) a folder with ``python`` and ``python3`` scripts that run ``target``."""
+    import hashlib
+    import shlex
+    target = Path(target).expanduser().absolute()
+    if shim_root is None:
+        from shared.managed_runtimes import runtime_root
+        shim_root = runtime_root() / "shims"
+    folder = Path(shim_root) / hashlib.sha256(str(target).encode()).hexdigest()[:16]
+    folder.mkdir(parents=True, exist_ok=True)
+    body = f"#!/bin/sh\n# SlicerDSpace managed shim\nexec {shlex.quote(str(target))} \"$@\"\n"
+    for name in ("python", "python3"):
+        script = folder / name
+        if not script.is_file() or script.read_text() != body:
+            temporary = script.with_name(name + ".tmp")
+            temporary.write_text(body)
+            temporary.chmod(0o755)
+            temporary.replace(script)
+    return folder
+
+
+def managed_tool_environment(
+    extra_env: Optional[Mapping[str, str]] = None,
+    *,
+    mrtrix_bin_dir: Optional[Path | str] = None,
+    fsl_bin_dir: Optional[Path | str] = None,
+    path_prepend: Optional[Iterable[Path | str]] = None,
+    system: Optional[str] = None,
+    slicer_python: Optional[Path | str] = None,
+    shim_root: Optional[Path | str] = None,
+) -> dict[str, str]:
+    """Environment for MRtrix scripts and FSL wrappers (the one place that builds it).
+
+    PATH order: managed ``python`` shim folder, MRtrix bin, FSL bin, ``path_prepend``, the cleaned PATH.
+    With an FSL bin dir the environment also has ``FSLDIR`` and ``FSLOUTPUTTYPE=NIFTI_GZ``.
+    """
+    prepend: list[Path | str] = []
+    target = shim_target_python(mrtrix_bin_dir=mrtrix_bin_dir, fsl_bin_dir=fsl_bin_dir,
+                                system=system, slicer_python=slicer_python)
+    if target is not None:
+        prepend.append(python_shim_folder(target, shim_root))
+    for directory in (mrtrix_bin_dir, fsl_bin_dir):
+        if directory is not None:
+            prepend.append(Path(directory).expanduser().resolve())
+    prepend.extend(path_prepend or ())
+    extra: dict[str, str] = {}
+    if fsl_bin_dir is not None:
+        extra["FSLDIR"] = fsl_root_from_bin_dir(fsl_bin_dir).as_posix()
+        extra["FSLOUTPUTTYPE"] = FSL_OUTPUT_TYPE
+    extra.update({str(key): str(value) for key, value in (extra_env or {}).items() if value is not None})
+    return external_python_environment(extra, path_prepend=prepend)

@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
 
-from shared.external_process import external_python_environment, resolve_external_command
+from shared.external_process import managed_tool_environment, resolve_external_command
 
 
 SEEDING_MODES = ("dynamic", "gmwmi")
@@ -685,9 +685,9 @@ def run_csd_act(config: CSDActConfig, *, log: Optional[Callable[[str], None]] = 
         manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         # MRtrix3 ignores "-config RandomSeed <n>" on the command line; the
         # seed must be provided via the MRTRIX_RNG_SEED environment variable.
-        command_env = external_python_environment(
+        command_env = managed_tool_environment(
             extra_env={"MRTRIX_RNG_SEED": str(config.random_seed)} if config.random_seed is not None else None,
-            path_prepend=[config.mrtrix_bin_dir] if config.mrtrix_bin_dir is not None else None,
+            mrtrix_bin_dir=config.mrtrix_bin_dir,
         )
         try:
             for command in commands:

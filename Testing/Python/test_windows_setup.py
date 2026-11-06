@@ -1,5 +1,6 @@
 """W-B5: WSL distribution detection and the Windows ps1 command line (mocked; Windows status: implemented, not run)."""
 
+import json
 import subprocess
 import tempfile
 import unittest
@@ -164,6 +165,35 @@ class WindowsReceiptTests(unittest.TestCase):
                     apply_setup_receipt({"id": "windows_runtime", "distribution": "Debian"}, receipt)
                 with self.assertRaises(ValueError):
                     apply_setup_receipt(step, {"external_dependencies": {}})
+
+    def accepted(self, plan):
+        from shared.setup_components import plan_components, required_licences
+        return {key: {"id": key, "version": record["version"], "time": "t"}
+                for key, record in required_licences(plan_components(plan)).items()}
+
+    def test_s_n3_the_ps1_receipt_is_read_from_the_path_the_ps1_wrote_not_the_legacy_folder(self):
+        from shared.selected_setup import complete_step, setup_steps
+        with tempfile.TemporaryDirectory() as root:
+            home = Path(root) / "home"
+            support = home / "Library" / "Application Support"
+            legacy = support / "SlicerDDSurfer"
+            legacy.mkdir(parents=True)
+            (legacy / "user_config.json").write_text('{"kind": "slicerdsurfer_user_config", "version": 1}')
+            environment = {"HOME": str(home), "SLICERDSPACE_USER_CONFIG": "", "SLICERDDSURFER_USER_CONFIG": "",
+                           "XDG_CONFIG_HOME": str(home / ".config")}
+            with patch.dict("os.environ", environment), patch("shared.user_config.platform.system", return_value="Darwin"):
+                plan = build_setup_plan(SimpleNamespace(statuses=[]), system="Linux", machine="x86_64")
+                plan["windows_runtime"] = dict(distribution="Ubuntu", installs_freesurfer=False,
+                                               command=["powershell", "-File", "x.ps1"])
+                steps = setup_steps(plan, self.accepted(plan), folder=root)
+                step = next(item for item in steps if item["id"] == "windows_runtime")
+                self.assertEqual(Path(step["receipt"]), legacy / "user_config.json")  # the path known before the ps1 ran
+                written = WindowsReceiptTests.bridges(self, root, "Ubuntu")  # the ps1 writes the new folder
+                new_config = support / "SlicerDSpace" / "user_config.json"
+                new_config.parent.mkdir(parents=True)
+                new_config.write_text(json.dumps(written))
+                settings = complete_step(step)  # fails before: it read the legacy file and found no bridge folders
+                self.assertEqual(settings, written["external_dependencies"])
 
 
 if __name__ == "__main__":

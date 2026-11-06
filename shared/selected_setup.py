@@ -511,7 +511,13 @@ def complete_step(step):
             raise ValueError("Python package installation did not complete")
         step["restart_required"] = any(record.get("restart_required") for record in records)
         return {}
-    receipt = json.loads(Path(step["receipt"]).read_text()) if step.get("receipt") else None
+    path = step.get("receipt")
+    if step["id"] == "windows_runtime":
+        # S-N3: the ps1 writes %APPDATA%\SlicerDSpace\user_config.json. Resolve the path now, after it ran: while only the
+        # legacy SlicerDDSurfer folder existed, the path chosen when the step was built pointed there.
+        from shared.user_config import default_user_config_path
+        path = default_user_config_path()
+    receipt = json.loads(Path(path).read_text()) if path else None
     settings = apply_setup_receipt(step, receipt)
     if step["id"] == "windows_runtime":
         # S-B2: the ps1 wrote more paths than the receipt checks. Return them all, so the GUI loads them into

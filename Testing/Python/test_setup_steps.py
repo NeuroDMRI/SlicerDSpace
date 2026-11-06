@@ -198,5 +198,83 @@ class SetupSelectedCliTests(unittest.TestCase):
         self.assertEqual([(r["id"], r["status"]) for r in records], [("model_assets", "failed")])
 
 
+class SetupSelectedPlanInputsTests(unittest.TestCase):
+    """Fix round 1: how scripts/setup_selected.py builds the doctor config from the saved user config."""
+
+    def plan_for(self, targets, defaults=None, deps=None):
+        seen = []
+
+        def doctor(config):
+            seen.append(config)
+            return SimpleNamespace(statuses=[], targets=config.targets, blocker_count=0,
+                                   python_executable=str(config.python_executable) if config.python_executable else None)
+
+        config = empty_user_config()
+        config["run_defaults"].update(defaults or {})
+        config["external_dependencies"].update(deps or {})
+        with patch("scripts.setup_python_packages.dcm2niix_pending", return_value=False):
+            closure, report, plan = setup_selected.build_cli_plan(targets, config, doctor=doctor, system="Linux", machine="x86_64")
+        return seen[0], closure, report, plan
+
+    def test_s_b4_a_saved_interpreter_is_kept_and_the_current_one_is_only_the_default(self):
+        import sys
+        config, *_ = self.plan_for(["validation"], deps={"python_executable": "/ext/py/bin/python"})
+        self.assertEqual(config.python_executable, Path("/ext/py/bin/python"))  # fails before: replaced by sys.executable
+        config, *_ = self.plan_for(["validation"], deps={"python_environment": "tractcloud-env"})
+        self.assertIsNone(config.python_executable)
+        self.assertEqual(config.python_environment, "tractcloud-env")
+        config, *_ = self.plan_for(["validation"])
+        self.assertEqual(config.python_executable, Path(sys.executable))
+
+    def test_s_b5_saved_multi_backend_selections_are_parsed_before_the_closure(self):
+        _config, closure, *_ = self.plan_for(["bundles"], defaults={"bundle_backend": "wmql,wma", "tractography_backend": "csd_act,ukf"})
+        self.assertIn("wma", closure.targets)  # fails before: "wmql,wma" was passed as one unknown backend
+        self.assertIn("ukf", closure.tractography_algorithms)
+        self.assertIn("csd_act", closure.tractography_algorithms)
+        _config, closure, *_ = self.plan_for(["bundles"], defaults={"bundle_backend": "all", "tractography_backend": "all"})
+        self.assertTrue({"wma", "tractcloud"} <= set(closure.targets))
+        self.assertEqual(set(closure.tractography_algorithms), {"csd_act", "ukf", "dti_det", "saf"})
+
+    def test_s_b6_the_doctor_gets_the_closed_algorithm_set(self):
+        config, closure, *_ = self.plan_for(["wma"])  # defaults: csd_act; the WMA closure adds UKF
+        self.assertIn("ukf", closure.tractography_algorithms)
+        self.assertIn("ukf", config.tractography_backend.split(","))  # fails before: the saved csd_act only
+
+    def test_s_b7_the_cli_self_check_cleans_the_environment_for_an_external_interpreter(self):
+        request = {"python": "/ext/py/bin/python"}
+        with tempfile.TemporaryDirectory() as folder, \
+                patch("shared.setup_selftest.requests_for_report", return_value=[request]), \
+                patch.dict("os.environ", {"PYTHONHOME": "/slicer/lib/python"}):
+            doctor = lambda config: SimpleNamespace(statuses=[], targets=config.targets, blocker_count=0, python_executable=None)
+            commands, _receipts = setup_selected.self_check_commands(
+                folder, empty_user_config(), ["validation"], {"script": "check_setup_functionality.py"}, doctor=doctor)
+        program, _args, environment = commands[0]
+        self.assertEqual(program, "/ext/py/bin/python")
+        self.assertIsNone(environment.get("PYTHONHOME", "absent"))  # fails before: only MPLBACKEND was set
+        self.assertEqual(environment["MPLBACKEND"], "Agg")
+
+    def test_s_b7_the_cli_python_step_uses_the_configured_external_interpreter_with_a_clean_environment(self):
+        with tempfile.TemporaryDirectory() as folder:
+            plan = build_setup_plan(SimpleNamespace(statuses=[]), system="Linux", machine="x86_64")
+            plan.update(python_packages=["numpy>=1"], python_requests=[dict(requirement="numpy>=1", python_executable=None)])
+            closure = SimpleNamespace(targets=("validation",), tractography_algorithms=("csd_act",))
+            report = SimpleNamespace(statuses=[], python_executable="/ext/py/bin/python")
+            calls, out = [], io.StringIO()
+
+            def runner(command, env=None, check=False):
+                calls.append((command, env))
+                return SimpleNamespace(returncode=1)  # stop after the first command
+
+            with patch.dict("os.environ", {"SLICERDSPACE_USER_CONFIG": str(Path(folder) / "user_config.json"),
+                                           "PYTHONHOME": "/slicer/lib/python"}), \
+                    patch.object(setup_selected, "build_cli_plan", return_value=(closure, report, plan)), \
+                    patch("scripts.setup_python_packages.dcm2niix_pending", return_value=False), redirect_stdout(out):
+                setup_selected.main(["--targets", "validation", "--execute", "--accept-licences"], runner=runner,
+                                    log=lambda text: out.write(str(text) + "\n"))
+            command, env = calls[0]
+            self.assertEqual(command[0], "/ext/py/bin/python")  # fails before: sys.executable
+            self.assertNotIn("PYTHONHOME", env)
+
+
 if __name__ == "__main__":
     unittest.main()

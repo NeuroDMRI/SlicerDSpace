@@ -65,7 +65,7 @@ remain visible as manual items; preparation does not fall back to compilation.
 Install an offline bundle after reviewing its component/data terms:
 
 ```bash
-python scripts/setup_surface_runtime.py --execute --accept-terms \
+PythonSlicer scripts/setup_surface_runtime.py --execute --accept-terms \
   --asset-root /path/to/assets --offline
 ```
 

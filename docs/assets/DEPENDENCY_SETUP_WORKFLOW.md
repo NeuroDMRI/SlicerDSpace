@@ -73,7 +73,7 @@ without consent.
 Download model assets into a user-selected cache:
 
 ```bash
-python3 scripts/download_model_assets.py \
+PythonSlicer scripts/download_model_assets.py \
   --profile core \
   --asset-root /srv/slicerddsurfer/model-assets \
   --source url \
@@ -83,7 +83,7 @@ python3 scripts/download_model_assets.py \
 Test the public download route without large model files:
 
 ```bash
-python3 scripts/download_model_assets.py \
+PythonSlicer scripts/download_model_assets.py \
   --profile sentinel \
   --asset-root /tmp/slicerdsurfer-model-sentinel \
   --source url \

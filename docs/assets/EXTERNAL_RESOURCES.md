@@ -53,7 +53,7 @@ the separately hosted resource repository was already public when checked.
 No repository visibility was changed by this work.
 
 ```bash
-python3 scripts/download_model_assets.py \
+PythonSlicer scripts/download_model_assets.py \
   --manifest models/external_assets_manifest.json --profile mirrorable-inference \
   --asset-root /path/to/SlicerDSpace-models --verify-only
 ```
@@ -93,10 +93,10 @@ supported. No GPU setting, algorithm parameter or scientific-QC threshold change
 The equivalent CLI defaults to a plan; execution requires explicit confirmation:
 
 ```bash
-python3 scripts/setup_optional_assets.py --profiles tractcloud wma
-python3 scripts/setup_optional_assets.py --profiles tractcloud wma \
+PythonSlicer scripts/setup_optional_assets.py --profiles tractcloud wma
+PythonSlicer scripts/setup_optional_assets.py --profiles tractcloud wma \
   --asset-root /path/to/resources --execute --accept-terms
-python3 scripts/setup_optional_assets.py --profiles tractcloud wma \
+PythonSlicer scripts/setup_optional_assets.py --profiles tractcloud wma \
   --asset-root /path/to/resources --from-directory /path/to/offline-resources --execute
 ```
 

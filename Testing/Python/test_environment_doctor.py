@@ -514,6 +514,25 @@ class EnvironmentDoctorDiscoveryTest(unittest.TestCase):
             )
             self.assertIn("git+https://github.com/demianw/tract_querier.git", result.missing_python_packages)
 
+    def test_b10_wmql_git_pip_line_is_not_listed_when_the_checkout_passes(self) -> None:
+        url = "git+https://github.com/demianw/tract_querier.git"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "tract_querier"
+            (root / "scripts").mkdir(parents=True)
+            (root / "scripts" / "cli_tract_querier.py").write_text("# fixture\n")
+            missing_python = Path(tmp) / "missing-python"
+            with_root = run_environment_doctor(EnvironmentDoctorConfig(
+                targets=("bundles",), repo_root=REPO_ROOT, python_executable=missing_python, tract_querier_root=root))
+            by_key = {item.key: item for item in with_root.statuses}
+            self.assertEqual(by_key["path:tract_querier_root"].status, "available")
+            self.assertEqual(by_key["python:tract_querier"].status, "missing")
+            self.assertNotIn(url, with_root.missing_python_packages)
+            without_root = run_environment_doctor(EnvironmentDoctorConfig(
+                targets=("bundles",), repo_root=REPO_ROOT, python_executable=missing_python,
+                tract_querier_root=Path(tmp) / "absent"))
+            self.assertEqual({item.key: item for item in without_root.statuses}["path:tract_querier_root"].status, "missing")
+            self.assertIn(url, without_root.missing_python_packages)
+
     def test_freesurfer_home_is_discovered_from_local_software_dir(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             # Resolve up front: on macOS `tempfile` returns a path under the

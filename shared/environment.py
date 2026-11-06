@@ -2278,12 +2278,16 @@ def run_environment_doctor(config: EnvironmentDoctorConfig, *, _probe_cache=None
             )
         )
 
+    # B10: a passing Tract Querier checkout is installed from that checkout, so its pip line is not listed.
+    wmql_root = status_by_key.get("path:tract_querier_root")
+    wmql_checkout_passes = wmql_root is not None and wmql_root.status == "available"
     missing_python_packages = tuple(
         dict.fromkeys(
             item.details.get("install_requirement") or item.details.get("package")
             for item in statuses
             if item.kind == "python"
             and item.status == "missing"
+            and not (wmql_checkout_passes and item.key == "python:tract_querier")
             and (item.details.get("install_requirement") or item.details.get("package"))
         )
     )

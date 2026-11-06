@@ -55,7 +55,7 @@ ORG 压缩包与 [Zenodo 固定记录](https://zenodo.org/records/2648292) 的�
 核对 GitHub 时，代码仓库仍为私有，独立资源仓库已是公开状态；本轮没有更改任何仓库的可见性。
 
 ```bash
-python3 scripts/download_model_assets.py \
+PythonSlicer scripts/download_model_assets.py \
   --manifest models/external_assets_manifest.json --profile mirrorable-inference \
   --asset-root /path/to/SlicerDSpace-models --verify-only
 ```
@@ -85,10 +85,10 @@ PNL 环境安装会复用共享目录中校验通过的模型和模板；缺少�
 命令行默认仅规划，明确执行才下载：
 
 ```bash
-python3 scripts/setup_optional_assets.py --profiles tractcloud wma
-python3 scripts/setup_optional_assets.py --profiles tractcloud wma \
+PythonSlicer scripts/setup_optional_assets.py --profiles tractcloud wma
+PythonSlicer scripts/setup_optional_assets.py --profiles tractcloud wma \
   --asset-root /path/to/resources --execute --accept-terms
-python3 scripts/setup_optional_assets.py --profiles tractcloud wma \
+PythonSlicer scripts/setup_optional_assets.py --profiles tractcloud wma \
   --asset-root /path/to/resources --from-directory /path/to/offline-resources --execute
 ```
 

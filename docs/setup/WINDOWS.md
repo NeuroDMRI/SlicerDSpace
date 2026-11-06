@@ -193,10 +193,10 @@ the installer never terminates an open Slicer process.
 
 The WSL installer covers executable backends and their atlas/model resources.
 DDSeg, DDParcel and DDSurfer checkpoints remain managed by the model-asset
-installer:
+installer. `PythonSlicer.exe` is Slicer's own Python (in the Slicer `bin` folder). No system Python is needed:
 
 ```powershell
-python scripts\download_model_assets.py `
+PythonSlicer.exe scripts\download_model_assets.py `
   --profile core `
   --asset-root D:\SlicerDSpace-model-assets `
   --source url `

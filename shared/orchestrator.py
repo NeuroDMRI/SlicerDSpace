@@ -5276,8 +5276,9 @@ def _run_subject_products_impl(
         "brain_mask_backend": config.brain_mask_backend,
         "brain_mask_device": config.brain_mask_device,
         "pnl_mask_route": config.pnl_mask_route,
-        # SC-1b: the resolved route of the pnl_cnn backend (route, and status + reason for the native route).
-        **({"brain_mask_route": pnl_route_record(resolve_pnl_mask_route(config.pnl_mask_route))}
+        # SC-1b / F2: the route that this run requested for the pnl_cnn backend. It is not the route of the mask
+        # that was consumed (a supplied or cached mask has its own); the run record reads that from the mask receipt.
+        **({"brain_mask_route_requested": pnl_route_record(resolve_pnl_mask_route(config.pnl_mask_route))}
            if config.brain_mask_backend == "pnl_cnn" else {}),
         "brain_mask_configuration": {
             name: str(getattr(config, name)) if getattr(config, name) else None

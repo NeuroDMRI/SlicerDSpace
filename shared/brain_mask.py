@@ -149,6 +149,26 @@ def pnl_route_record(route: str) -> dict[str, str]:
     return record
 
 
+def mask_provenance(mask_path: Path) -> dict[str, str]:
+    """F2: route, status and reason of the mask that a run consumes, read from that mask's own receipt.
+
+    A mask file without a receipt was supplied by the user: ``{"route": "supplied"}``. A receipt that has no ``pnl_route``
+    (a legacy receipt, a mask from another backend) or no mask file gives ``{"route": "unknown"}``. A generated PNL mask gives the
+    receipt's ``pnl_route`` (route, and for the native route status and reason), also when the cache entry was reused.
+    """
+    record_path = _manifest_path_for_mask(Path(mask_path))
+    if not record_path.is_file():
+        return {"route": "supplied" if Path(mask_path).is_file() else "unknown"}
+    try:
+        record = json.loads(record_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"route": "unknown"}
+    route = record.get("pnl_route") if isinstance(record, dict) else None
+    if record.get("backend") == "pnl_cnn" and isinstance(route, dict) and route.get("route"):
+        return {key: str(value) for key, value in route.items()}
+    return {"route": "unknown"}
+
+
 def _inspect_pnl_managed(config: BrainMaskConfig, system: str | None, missing: list, tools: dict, resources: list) -> None:
     """The managed route: the pre-W-A tool lookup of 70fb635^1 (conda Python, ``pnl-brain-mask`` script, ANTs)."""
     resources.append(Path(__file__).with_name("pnl_mask_runner.py"))

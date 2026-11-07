@@ -93,23 +93,58 @@ class PnlMaskRouteWiringTest(unittest.TestCase):
         self.assertEqual(defaults["pnlMaskRoute"], "auto")
 
     def test_run_record_carries_the_route_and_the_experimental_marker(self) -> None:
+        """The run record takes the route from the receipt of the mask in the subject's input folder (F2)."""
         for route, name, experimental in (("managed", "managed-ants", False), ("native", "native-sitk", True)):
             with self.subTest(route=route), tempfile.TemporaryDirectory() as tmp:
+                inputs = Path(tmp) / "subject" / "input"
+                inputs.mkdir(parents=True)
+                (inputs / "nodif_brain_mask.nii.gz").write_bytes(b"mask")
+                (inputs / "nodif_brain_mask.manifest.json").write_text(json.dumps({
+                    "kind": "generated_brain_mask", "version": 2, "status": "completed", "backend": "pnl_cnn",
+                    "route": name, "pnl_route": pnl_route_record(route)}), encoding="utf-8")
                 manifest = Path(tmp) / "run_manifest.json"
                 manifest.write_text(json.dumps({
-                    "kind": "slicerddsurfer_product_orchestration", "subject_id": "sub-01",
+                    "kind": "slicerddsurfer_product_orchestration", "subject_id": "sub-01", "subject_root": str(Path(tmp) / "subject"),
                     "brain_mask_backend": "pnl_cnn", "pnl_mask_route": "auto",
-                    "brain_mask_route": pnl_route_record(route),
+                    "brain_mask_route_requested": pnl_route_record("managed" if route == "native" else "native"),
                 }), encoding="utf-8")
                 record = build_run_record(manifest)
                 mask = record["brain_mask"]
-                self.assertEqual(mask["route"], name)
+                self.assertEqual(mask["route"], name)  # the receipt wins over the requested route
                 self.assertEqual(mask["backend"], "pnl_cnn")
                 if experimental:
                     self.assertEqual(mask["status"], "experimental")
                     self.assertEqual(mask["reason"], PNL_NATIVE_EXPERIMENTAL_REASON)
                 else:
                     self.assertNotIn("status", mask)
+
+    def test_f2_supplied_mask_with_the_default_pnl_selection_records_supplied(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            inputs = Path(tmp) / "subject" / "input"
+            inputs.mkdir(parents=True)
+            (inputs / "nodif_brain_mask.nii.gz").write_bytes(b"user mask")
+            manifest = Path(tmp) / "run_manifest.json"
+            manifest.write_text(json.dumps({
+                "subject_id": "sub-01", "subject_root": str(Path(tmp) / "subject"), "brain_mask_backend": "pnl_cnn",
+                "brain_mask_route_requested": pnl_route_record("native")}), encoding="utf-8")
+            mask = build_run_record(manifest)["brain_mask"]
+            self.assertEqual(mask, {"backend": "pnl_cnn", "route": "supplied"})
+
+    def test_f2_orchestrator_manifest_keeps_the_setting_and_names_the_requested_route(self) -> None:
+        from shared import ProductOrchestratorConfig, run_subject_products
+        for route, system, requested in (("auto", "Darwin", "native-sitk"), ("auto", "Linux", "managed-ants"),
+                                         ("native", "Linux", "native-sitk")):
+            with self.subTest(route=route, system=system), tempfile.TemporaryDirectory() as tmp, \
+                    unittest.mock.patch("platform.system", return_value=system):
+                subject_root = Path(tmp) / "100307"
+                (subject_root / "input").mkdir(parents=True)
+                result = run_subject_products(ProductOrchestratorConfig(
+                    subject_id="100307", subject_root=subject_root, targets=("microstructure",), execute=False,
+                    brain_mask_backend="pnl_cnn", pnl_mask_route=route))
+                data = json.loads(result.run_manifest_path.read_text(encoding="utf-8"))
+                self.assertEqual(data["pnl_mask_route"], route)
+                self.assertEqual(data["brain_mask_route_requested"]["route"], requested)
+                self.assertNotIn("brain_mask_route", data)
 
     def test_sc1d_doctor_config_selects_the_route_checks(self) -> None:
         from shared.brain_mask import brain_mask_config_from_options, inspect_brain_mask_backend

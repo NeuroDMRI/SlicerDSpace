@@ -616,6 +616,40 @@ class BrainMaskBackendsTest(unittest.TestCase):
         # Same inputs, same route: the same signature.
         self.assertEqual(first["signature"]["settings"], third["signature"]["settings"])
 
+    # ---- F2: the run record states the route of the mask that was consumed
+    def consumed_route(self) -> dict:
+        from shared.run_record import _mask_provenance
+        return _mask_provenance({"subject_root": str(self.subject)})
+
+    def test_f2_supplied_mask_is_recorded_as_supplied_not_as_a_pnl_route(self) -> None:
+        save_nifti(self.output, mask_data())
+        with patch.object(brain_mask, "_run") as run:
+            result = self.generate(BrainMaskConfig())  # default selection: pnl_cnn
+        run.assert_not_called()
+        self.assertEqual(result["backend"], "provided")
+        self.assertEqual(self.consumed_route(), {"route": "supplied"})
+        # A legacy receipt (version 1) or a receipt without a PNL route is "unknown"; no mask file is "unknown" too.
+        self.manifest.write_text('{"version": 1, "backend": "mrtrix"}\n', encoding="ascii")
+        self.assertEqual(self.consumed_route(), {"route": "unknown"})
+        self.manifest.unlink()
+        self.output.unlink()
+        self.assertEqual(self.consumed_route(), {"route": "unknown"})
+
+    def test_f2_generated_native_mask_gives_native_and_experimental_from_its_receipt_also_when_reused(self) -> None:
+        config = fake_pnl_config(self.root)
+        self.assertEqual(self.generate(config)["status"], "completed")
+        expected = {"route": "native-sitk", "status": "experimental", "reason": brain_mask.PNL_NATIVE_EXPERIMENTAL_REASON}
+        self.assertEqual(self.consumed_route(), expected)
+        self.assertEqual(self.generate(config)["status"], "reused")
+        self.assertEqual(self.consumed_route(), expected)
+
+    def test_f2_generated_managed_mask_gives_managed_without_a_status(self) -> None:
+        models = self.managed_setup()
+        managed = fake_managed_pnl_config(self.root, models, pnl_mask_route="managed")
+        with patch.object(brain_mask, "_run", side_effect=self.run_fake_managed):
+            self.generate(managed)
+        self.assertEqual(self.consumed_route(), {"route": "managed-ants"})
+
     def test_sc1e_native_signature_records_one_registration_thread(self) -> None:
         settings = inspect_brain_mask_backend(fake_pnl_config(self.root))["settings"]
         self.assertEqual(settings["pnl_registration_threads"], 1)

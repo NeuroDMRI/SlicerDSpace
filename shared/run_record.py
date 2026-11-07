@@ -306,6 +306,16 @@ def _assets(manifest: dict) -> dict:
     return assets
 
 
+def _mask_provenance(effective: dict) -> dict:
+    """F2: route, status and reason of the input mask the run consumed (`find_subject_root` takes input/nodif_brain_mask)."""
+    from shared.brain_mask import mask_provenance
+
+    root = effective.get("subject_root")
+    if not root:
+        return {"route": "unknown"}
+    return mask_provenance(Path(root) / "input" / "nodif_brain_mask.nii.gz")
+
+
 def build_run_record(manifest_path: Path) -> dict:
     manifest_path = Path(manifest_path)
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -322,9 +332,10 @@ def build_run_record(manifest_path: Path) -> dict:
         "run_name": manifest.get("run_name"),
         "run_manifest": {"path": manifest_path.as_posix(), "sha256": sha256_file(manifest_path)},
         "parameters": parameters,
-        # T2 SC-1b: the route of the pnl_cnn mask and, for the native route, "status": "experimental" with the reason.
-        **({"brain_mask": {"backend": effective.get("brain_mask_backend"), **effective["brain_mask_route"]}}
-           if isinstance(effective.get("brain_mask_route"), dict) else {}),
+        # T2 SC-1b / F2: the route of the mask that the run consumed, read from that mask's receipt (a supplied mask
+        # records "supplied", one without a usable receipt "unknown"); the requested route stays in the parameters.
+        **({"brain_mask": {"backend": effective.get("brain_mask_backend"), **_mask_provenance(effective)}}
+           if isinstance(effective.get("brain_mask_route_requested"), dict) else {}),
         "software": {"python": sys.version.split()[0], "platform": platform.platform(),
                      "packages": _package_versions()},
         "assets": _assets(effective),

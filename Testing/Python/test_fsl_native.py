@@ -12,7 +12,7 @@ class FSLNativeTest(unittest.TestCase):
     def setUp(self):
         temp = tempfile.TemporaryDirectory(prefix="FSL subject ")
         self.addCleanup(temp.cleanup)
-        self.root = Path(temp.name)
+        self.root = Path(temp.name).resolve()
         self.scratch = self.root / "scratch dir"
         self.source = self.root / "input dwi.nii.gz"
         self.bvec = self.root / "input.bvec"
@@ -143,7 +143,7 @@ class FSLNativeTest(unittest.TestCase):
         eddy_input = self.command_for_output("eddy_in.nii")
         self.assertTrue(eddy_input[0].endswith("dwi_pad2.mif"))
         eddy = next(args for tool, args in self.calls if tool == "eddy")
-        self.assertIn(f"--topup={self.scratch / 'field'}", eddy)
+        self.assertIn(f"--topup={(self.scratch / 'field').as_posix()}", eddy)
         restore = self.command_for_output("result.mif")
         coords = [restore[index + 1:index + 3] for index, arg in enumerate(restore) if arg == "-coord"]
         self.assertEqual(coords, [["3", "1,2,0"], ["0", "0:4"], ["2", "0:6"]])

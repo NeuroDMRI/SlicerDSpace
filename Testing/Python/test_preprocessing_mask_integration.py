@@ -69,6 +69,7 @@ def _pnl_options(root: Path) -> dict:
     return {
         "brain_mask_backend": "pnl_cnn",
         "brain_mask_device": "cpu",
+        "pnl_mask_route": "native",
         "pnl_mask_model_dir": models,
     }
 
@@ -325,7 +326,7 @@ class PreprocessingMaskIntegrationTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             subject = _write_nifti_subject(root)
-            native = _config(subject, root, pnl_mask_route="native", **_pnl_options(root))
+            native = _config(subject, root, **_pnl_options(root))
             self.assertEqual(mask_key(native, 1), mask_key(native, 8))
             self.assertEqual(mask_key(replace(native, eddy_threads=2), 1), mask_key(replace(native, eddy_threads=8), 1))
             self.assertNotEqual(mask_key(native, 1), mask_key(replace(native, brain_mask_device="cuda"), 1))

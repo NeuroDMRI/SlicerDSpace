@@ -32,12 +32,14 @@ jobs:
           python-version: '3.11'
       - name: Install unit-test VTK (no separate Slicer or WSL required)
         run: python -m pip install --disable-pip-version-check vtk numpy
-      - name: Test native staging and WMA core transform
-        run: |
-          python -m unittest discover -s Testing/Python -p test_native_runtimes.py -v
-          python -m unittest discover -s Testing/Python -p test_native_candidate_builds.py -v
-          python -m unittest discover -s Testing/Python -p test_wma_core_harden.py -v
-          python -m unittest discover -s Testing/Python -p test_wma_native_measures.py -v
+      - name: Test native staging and FSL and WMA dispatch
+        env:
+          PYTHONPATH: Testing/Python
+        run: >-
+          python -m unittest -v
+          test_native_runtimes test_native_candidate_builds
+          test_wma_core_harden test_wma_native_measures test_wma_native
+          test_fsl_native test_native_fsl_runtime
 
   windows-mrtrix-candidate:
     if: github.event_name == 'workflow_dispatch' && inputs.build_windows_mrtrix

@@ -49,8 +49,9 @@ class DDSurferSyncTests(unittest.TestCase):
 
     def test_c4_local_bash_patches_stay_recorded_and_guarded(self):
         record = json.loads((BACKEND_ROOT / 'UPSTREAM.json').read_text())
-        # R5 (W4-W6): the native tensor fit also patches dti.py, preflight.py and the tests that model the old CLIs.
+        # Keep the tensor-fit and native surface activation patches protected from source sync.
         self.assertEqual(set(record['local_patches']), {
+            'postprocessing/core/runtime.py', 'postprocessing/environment.py', 'tests/test_native_build.py',
             'preprocessing/dti.sh', 'run_ddsurfer_pipeline.sh', 'preprocessing/dti.py', 'utils/preflight.py',
             'tests/check_environment.py', 'tests/test_environment_check.py', 'tests/test_inference.py',
             'tests/test_pipeline_reliability.py', 'tests/test_preprocessing.py'})

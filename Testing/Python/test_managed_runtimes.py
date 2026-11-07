@@ -75,9 +75,7 @@ class ManagedRuntimeTests(unittest.TestCase):
             self.assertFalse(root.exists())
 
     def test_only_selected_gui_routes_install_external_tools(self):
-        node = SimpleNamespace(targetPreprocessing=True, preprocessingBackend="dipy", brainMaskBackend="provided")
-        self.assertEqual(runtime.selected_profiles(node, True), ())
-        node.preprocessingBackend = "mrtrix_fsl"
+        node = SimpleNamespace(targetPreprocessing=True, brainMaskBackend="provided")
         self.assertEqual(runtime.selected_profiles(node, True), ("mrtrix", "fsl_cuda"))
         self.assertEqual(runtime.selected_profiles(node, False), ("mrtrix", "fsl_cpu"))
         node.targetPreprocessing = False

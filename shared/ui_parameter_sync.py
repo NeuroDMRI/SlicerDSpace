@@ -5,6 +5,20 @@ from __future__ import annotations
 from shared.user_config import canonical_microstructure_stages
 
 
+def apply_preprocessing_availability(checkbox, system=None, machine=None) -> bool:
+    """W2a (D1): a platform with no FSL build does not offer preprocessing. Returns True when it is offered."""
+
+    from shared.selected_setup import PREPROCESSING_UNSUPPORTED_TEXT, preprocessing_offered
+
+    if checkbox is None:
+        return True
+    offered = preprocessing_offered(system, machine)
+    if not offered:
+        checkbox.setEnabled(False)
+        checkbox.setToolTip(PREPROCESSING_UNSUPPORTED_TEXT)
+    return offered
+
+
 def sync_parameter_node_to_ui(widget) -> None:
     """Synchronize common SlicerDSpace parameter-node values into Qt widgets."""
 
@@ -54,6 +68,7 @@ def sync_parameter_node_to_ui(widget) -> None:
     widget._sync_checkbox(getattr(ui, "ddsegSoftmaxCheckBox", None), bool(node.ddsegApplySoftmax))
 
     widget._sync_checkbox(getattr(ui, "targetPreprocessingCheckBox", None), bool(node.targetPreprocessing))
+    apply_preprocessing_availability(getattr(ui, "targetPreprocessingCheckBox", None))
     sync_combo_data = getattr(widget, "_sync_combo_data", None)
     if sync_combo_data is not None:
         sync_combo_data(
@@ -78,7 +93,6 @@ def sync_parameter_node_to_ui(widget) -> None:
             getattr(ui, "preprocessingReversePhaseB0Path", None),
             getattr(node, "preprocessingReversePhaseB0", "") or "",
         )
-    widget._sync_combo_text(getattr(ui, "preprocessingBackendComboBox", None), node.preprocessingBackend or "dipy", via_index=False)
     widget._sync_line_edit(getattr(ui, "orchestrationRunNameLineEdit", None), node.orchestrationRunName or "")
     widget._sync_combo_text(
         getattr(ui, "orchestrationTractographyBackendComboBox", None),

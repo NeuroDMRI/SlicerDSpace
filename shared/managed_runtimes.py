@@ -123,7 +123,7 @@ def cuda_candidate():
 
 def selected_profiles(node, gpu_available):
     """Only provision external tools used by the current GUI selections."""
-    preproc = bool(getattr(node, "targetPreprocessing", False)) and getattr(node, "preprocessingBackend", "dipy") == "mrtrix_fsl"
+    preproc = bool(getattr(node, "targetPreprocessing", False))  # W2a (D1): the one route always needs FSL
     from shared.algorithm_selection import algorithms
     csd_source = bool(set(algorithms(getattr(node, "orchestrationTractographyBackend", "dti_det"))) & {"csd_act", "saf"})
     tracts = bool(getattr(node, "targetTractography", False)) and csd_source

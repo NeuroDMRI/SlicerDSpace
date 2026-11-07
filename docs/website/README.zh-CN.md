@@ -42,7 +42,7 @@
 Python QR 路径。展开说明和 JSON 保留两种求解器的结果；batched 候选无稳定收益，
 不改为默认路线。目录复核日期与每一条实测记录的日期分别生成。
 
-`python3 scripts/build_performance_site.py` 从既有证据生成表格，写入 `index.html` 中
+`PythonSlicer scripts/build_performance_site.py` 从既有证据生成表格，写入 `index.html` 中
 `measured-evidence` 标记之间；`--check` 核对来源哈希并拦截过期 HTML／JSON。只有筛选后的
 `assets/data/performance.json` 进入公开网站，不复制原始快照、私有文件路径、被试数据或内部报告；
 网页与生成工具不进入插件运行包。
@@ -74,9 +74,9 @@ The idea、Workflows 和 Status 部分，结果简介不再反复强调被试编
 “What is integrated” 位于主页最后。方法总图继续保留，六种产品组合示例
 及独立 In Slicer 区块不再展示。页眉仅保留居中的导航，不展示 Logo 和预发布标记。
 主区域与页脚使用透明矢量字标 `assets/img/slicerdspace-wordmark-light.svg`；
-`python3 scripts/check_website_assets.py --check` 检查字标。
+`PythonSlicer scripts/check_website_assets.py --check` 检查字标。
 浏览器图标仍由 `paper-latex:docs/figures/logo-ref.svg` 导出；
-`python3 scripts/check_website_assets.py --check` 检查这些图标。
+`PythonSlicer scripts/check_website_assets.py --check` 检查这些图标。
 Get started 提供安装路径、输入准备、
 按需环境安装、方法选择及 CLI 示例。
 
@@ -86,7 +86,7 @@ Get started 提供安装路径、输入准备、
   每个 `<img>` 的宽高与文件像素一致，并链接到原图。
 - WMQL 卡片改用 `assets/img/res-wmql-ukf.jpg`，与 Results 图的官方多束规则 UKF
   素材逐字节一致，来源及哈希见 `paper-latex:docs/figures/src/results/wmql_sources.json`。
-  `python3 scripts/check_website_assets.py --check` 校验已发布文件；更新时从独立论文仓库重新生成并导入。
+  `PythonSlicer scripts/check_website_assets.py --check` 校验已发布文件；更新时从独立论文仓库重新生成并导入。
   完整侧位图按比例显示，不裁切边缘；旧 CSD/ACT AF/CST 缩略图不再发布。
 - 独立的 `#integrated` 部分用“What is integrated”表列出 35 项具体方法及分析工具，
   覆盖去噪、脑掩膜、解剖、微结构、追踪、束分析、连接组和选区分析，每项均有来源引用。
@@ -97,7 +97,7 @@ Get started 提供安装路径、输入准备、
   不再单列参考文献章节，也不显示数字引用索引。
   `docs/website/references.json` 保留已核对的来源目录；新增 DOI
   的出版者元数据保存在 `reference_verification_20261026.json`。
-  `python3 scripts/build_website_catalog.py` 生成方法表及来源直链，`--check` 检查
+  `PythonSlicer scripts/build_website_catalog.py` 生成方法表及来源直链，`--check` 检查
   HTML 是否过期、源码入口是否存在、方法是否缺引用。文献链接由该审核目录加入允许列表；
   其他外部链接仍须加入 `Testing/Website/check_site.py` 的 `ALLOWED_URLS`。
 

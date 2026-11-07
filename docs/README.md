@@ -29,10 +29,10 @@ lightweight source checkout or complete development/research repository.
 | [Output layout](setup/OUTPUT_LAYOUT.md) | New `03_anatomy` products and read-only compatibility with historical `03_structural` results |
 | [Capabilities and platforms](setup/SUPPORT_MATRIX.md) | Configure only the selected backend |
 | [Result review](setup/GUI_RESULT_REVIEW.md) | Run-scoped loading, cancellation and QC |
-| [Brain masking](setup/brain_mask_gui_config.md) | PNL CNN default, explicit alternatives and external runtime |
+| [Brain masking](setup/brain_mask_gui_config.md) | PNL CNN default (managed on Linux, native and experimental on macOS and Windows), explicit alternatives |
 | [GPU execution](setup/GPU_EXECUTION.md) | GPU-preferred neural inference, explicit CPU choices and CPU-only route boundaries |
-| [Managed setup](setup/MANAGED_SETUP.md) | Selected extensions, Python/models, isolated MRtrix/FSL/PNL, repair and offline resources |
-| [Microstructure](setup/MICROSTRUCTURE.md) | DTI default, independent FW/NODDI/DKI and original MK-Curve boundary |
+| [Managed setup](setup/MANAGED_SETUP.md) | One confirmation with all licences, self-checks, Python/models, MRtrix/FSL runtimes, repair and offline resources |
+| [Microstructure](setup/MICROSTRUCTURE.md) | DTI default with colour FA map, independent FW/iFW/NODDI/DKI and original MK-Curve boundary |
 | [UKF tractography](setup/UKF.md) | Optional author extension, defaults, lossless input and automatic WMA handoff |
 | [WMA atlases](setup/WMA_ATLASES.md) | ORG, East-West and NABA selection, on-demand resources and atlas-specific QC |
 | [WMQL cerebellar selections](setup/WMQL_CEREBELLAR.md) | Optional regional rules, CLI/GUI presets and checks |
@@ -43,7 +43,7 @@ lightweight source checkout or complete development/research repository.
 | [Model assets](assets/MODEL_ASSETS.md) | Profiles, download and checksum verification |
 | [Asset terms](assets/MODEL_ASSET_TERMS.md) | Permission review, independent of file verification |
 | [Third-party notices](../THIRD_PARTY_NOTICES.md) | Bundled source licenses, provenance and distribution conditions |
-| [Implementation origins](architecture/IMPLEMENTATION_PROVENANCE.md) | DDSeg/SAF/MK-Curve ports versus the external official PNL Python adapter |
+| [Implementation origins](architecture/IMPLEMENTATION_PROVENANCE.md) | DDSeg/SAF/MK-Curve ports and the modified PNL inference code versus unmodified upstream |
 | [Dependencies](setup/EXTERNAL_DEPENDENCIES.md) | External software and route prerequisites |
 
 ---
@@ -58,6 +58,10 @@ lightweight source checkout or complete development/research repository.
 ---
 
 ## Validation Records
+
+[Portable setup and default methods](release/PORTABLE_SETUP_20261107.md) lists
+what changed for users: native tensor fit, one setup confirmation, the PNL mask
+route per platform, the run record, and the one-time regeneration after the update.
 
 [Selected dependency preparation](release/DEPENDENCY_SETUP_20261021.md) records
 native setup/cancellation checks, an isolated PNL GPU installation and mask run,

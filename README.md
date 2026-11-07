@@ -54,7 +54,7 @@ Complete 48-second preview at 1.5× speed · [Watch the full video (MP4, 1:05)](
 | Workflow | Methods and products |
 | --- | --- |
 | Input preparation | DICOM, NIfTI and NRRD/NHDR import; gradient checks, brain masking and optional DWI correction |
-| Microstructure | DTI FA/MD/AD/RD; optional Free-water, NODDI, DKI and Python MK-Curve |
+| Microstructure | DTI FA/MD/AD/RD and a colour FA map; optional Free-water, iFW, NODDI and DKI (Python MK-Curve by default) |
 | Anatomical prior | DDSeg tissue labels, DDParcel regions, DDSurfer white/pial surfaces; optional cortical postprocessing |
 | Tractography | DTI deterministic, UKF, CSD/ACT with SIFT2, and SAF short association fibres |
 | Fiber bundles | Official WMQL queries, WMA atlas classification and TractCloud |
@@ -83,18 +83,20 @@ configured resource budget. See [experiments](docs/setup/EXPERIMENTS.md) and
 | Scientific Python | Python, NumPy, SciPy, nibabel, SimpleITK | Images, geometry, numerical fitting and data exchange |
 | Neural inference | PyTorch, DDSeg/DDParcel/DDSurfer models | Tissue, regional and surface reconstruction |
 | Microstructure | DIPY, AMICO, Python MK-Curve | Tensor, free-water, neurite and kurtosis models |
-| Diffusion tools | SlicerDMRI, optional UKFTractography, MRtrix3 and FSL | DTI preparation, tracking and selected correction routes |
+| Diffusion tools | Teem tensor fit (Slicer core); optional UKFTractography, MRtrix3 and FSL; SlicerDMRI for WMA only | DTI fit, tracking and selected correction routes |
 | Optional backends | PNL CNN/ANTs, native FreeSurfer components, WMQL, WMA, TractCloud | Masking, cortical postprocessing and bundle identification |
 | Automation | Python CLI, JSON run plans, batch runner, Agent Skill | Reproducible commands, parameter variants and cohort scheduling |
 
-Dependencies follow the selected route. The default CSD/ACT route needs MRtrix3;
-a DTI-only route with a supplied mask avoids PNL, FSL and FreeSurfer.
+Dependencies follow the selected route. The DTI fit runs inside Slicer and needs
+no extra extension. The default CSD/ACT route needs MRtrix3; a DTI-only route
+with a supplied mask avoids PNL, FSL and FreeSurfer.
 The explicit Slicer-native preset offers fewer external environments.
 See the [capability/platform matrix](docs/setup/SUPPORT_MATRIX.md).
 
 **Implementation origins:** DDSeg uses converted Python/PyTorch models; SAF
 and MK-Curve are unofficial Python ports of author MATLAB methods. PNL CNN
-masking calls the author's existing Python backend. Optional surface
+masking runs a modified copy of the author's PNL inference code (licence
+terms in the [PNL licence page](docs/licenses/pnl_brain_mask.md)). Optional surface
 postprocessing uses original FreeSurfer components and a personal activation
 file. Details: [provenance](docs/architecture/IMPLEMENTATION_PROVENANCE.md) ·
 [surface components](docs/setup/SURFACE_COMPONENTS.md).
@@ -163,7 +165,7 @@ git clone --filter=blob:none --no-checkout --depth 1 https://github.com/NeuroDMR
 cd SlicerDSpace
 git show HEAD:scripts/extension_runtime/runtime_checkout.txt | git sparse-checkout set --no-cone --stdin
 git checkout
-python3 scripts/stage_slicer_extension.py \
+PythonSlicer scripts/stage_slicer_extension.py \
   --install-root ~/SlicerDSpace-extension --slicer-version Slicer-5.10 \
   --link-mode copy
 ```
@@ -180,10 +182,16 @@ the extension and restart Slicer. More options: [download and installation guide
 
 ### Prepare The Selected Environment
 
-In the module, select products, then open **Environment and installation >
-Prepare selected analysis environment**. Confirm required tools and model terms;
-restart if requested and select Prepare again to continue. SlicerDMRI,
-PyTorch and the optional UKFTractography extension are prepared as needed.
+In the module, tick the products you need. The plugin adds the prerequisites of
+each ticked product by itself. Then open **Environment and installation >
+Prepare selected analysis environment**. One dialog lists every download with
+its size and its licence (name, link and local file). Press **Accept licences
+and install** once. Restart if Slicer asks, then select Prepare again to
+continue. When the install ends, a self-check runs for each feature on synthetic
+data; a failed self-check is shown and the setup is not marked ready.
+Slicer extensions are added only when a product needs them: PyTorch for the
+neural models and the native brain mask, UKFTractography for UKF and
+SlicerDMRI for WMA. The tensor fit needs no extension.
 
 Weights, templates and atlases live separately in [**SlicerDSpace-models**](https://github.com/ChengjinLii/SlicerDSpace-models).
 The setup checks SHA256, caches downloads and saves paths. Existing installations,
@@ -191,7 +199,17 @@ offline models and repair are available under **More options**.
 See [managed setup](docs/setup/MANAGED_SETUP.md) and
 [resource terms](docs/assets/MODEL_ASSET_TERMS.md).
 
-For explicit CLI surface-model preparation (`PythonSlicer` is Slicer's own Python in the Slicer `bin` folder; no system Python is needed):
+Without the GUI, run the same setup in Slicer's own Python. `PythonSlicer` is in
+the Slicer `bin` folder; no system Python is needed. The first command lists the
+plan with sizes and licences; the second installs and accepts every listed licence:
+
+```bash
+PythonSlicer scripts/setup_selected.py --targets microstructure,tractography
+PythonSlicer scripts/setup_selected.py --targets microstructure,tractography --execute --accept-licences
+```
+
+The setup runs the self-checks (`scripts/check_setup_functionality.py`) for you.
+For explicit CLI surface-model preparation:
 
 ```bash
 PythonSlicer scripts/download_model_assets.py --profile surface \
@@ -232,15 +250,28 @@ The [first-workflow tutorial](docs/setup/QUICKSTART.md) includes a synthetic ins
 
 | Part | Default | Other choices |
 | --- | --- | --- |
+| DWI preprocessing (only when ticked) | DIPY: MP-PCA denoising, Gibbs removal, between-volume motion correction | MRtrix3/FSL route (denoise, Gibbs, eddy, topup); other DIPY denoisers (local PCA, Patch2Self, none) |
 | Missing brain mask | PNL diffusion CNN; valid supplied masks are reused | SynthStrip, MRtrix, DIPY median-Otsu, supplied mask only |
-| Microstructure | DTI | Add Free-water, NODDI and/or DKI; DKI uses the Python MK-Curve by default; WLS or OLS are options |
+| Microstructure | DTI | Add Free-water, NODDI, DKI and/or iFW (iFW needs the echo time); DKI uses the Python MK-Curve by default; WLS or OLS are options |
 | Tractography | MRtrix3 CSD/ACT | DTI deterministic, UKF, SAF |
+| Connectome | `auto`: MRtrix `tck2connectome` for a `.tck` source with a streamline-count metric, Python otherwise | `python` or `mrtrix` |
 | Fiber bundles | Official WMQL multi-bundle queries | WMQL subset selection, WMA, TractCloud |
 
 Use **...** beside Microstructure, Tractography and Fiber bundles to select one or
 several methods. **Advanced settings** groups masking, model parameters,
 performance, regional analysis/input import and experiments. Environment
 installation remains separate.
+
+**Platforms.** On Linux the PNL brain mask runs in a managed conda runtime with
+ANTs. On macOS and Windows it runs in Slicer's own Python (SimpleITK and PyTorch).
+This native route is **experimental**: its masks did not match the Linux route
+closely enough on 2 of 24 test cases. The setting is **PNL route** (`auto`,
+`managed`, `native`) in Advanced settings or `--pnl-mask-route` on the command
+line, and the run record names the route of the mask that was used. On Windows,
+the MRtrix3 and FSL commands (and the optional WMA, WMQL, TractCloud and
+FreeSurfer tools) run in WSL 2 Ubuntu; the brain mask and the Python stages run
+in Windows Slicer's Python. See [Windows](docs/setup/WINDOWS.md) and
+[macOS](docs/setup/MACOS.md).
 
 UKF runs automatically through its installed extension and can feed WMA directly.
 WMA supports `--wma-atlas org|east-west|naba` (default: `org`), with the same
@@ -312,7 +343,7 @@ Development checks require a full checkout:
 
 ```bash
 make test-fast
-python3 scripts/audit_slicer_extension_metadata.py --json
+PythonSlicer scripts/audit_slicer_extension_metadata.py --json
 ```
 
 Validation is local during development. GitHub Actions and website publication

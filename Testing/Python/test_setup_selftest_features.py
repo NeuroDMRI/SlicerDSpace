@@ -475,6 +475,7 @@ class ScriptTests(ToolFixture):
                                 '--dcm2niix', '/bin/d2n', '--pnl-model-dir', '/m', '--device', 'cpu'])
         self.assertEqual(code, 0)
         run.assert_called_once_with({'mrtrix_bin_dir': str(self.mrtrix), 'fsl_bin_dir': str(self.fsl), 'dcm2niix': '/bin/d2n',
+                                     'dcm2niix_configured': True,  # C1: the option is an explicit user choice
                                      'pnl_native_mask': {'model_dir': '/m', 'device': 'cpu'}})
         self.assertEqual(json.loads(out.read_text())['status'], 'passed')
 

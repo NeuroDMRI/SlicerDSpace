@@ -128,6 +128,7 @@ class SelectedSetupTests(unittest.TestCase):
                 self.assertEqual(plan["pnl_terms_required"], managed)
                 from shared.setup_components import plan_components, required_licences
                 licences = list(required_licences(plan_components(plan)))
+                # F3: with no pnl-cnn asset planned, only the managed runtime brings the PNL licence.
                 self.assertEqual("pnl" in licences, managed)
 
     def test_sc1c_native_route_installs_the_brain_mask_assets_when_only_the_models_are_missing(self):
@@ -152,6 +153,26 @@ class SelectedSetupTests(unittest.TestCase):
         plan = build_setup_plan(result(models), system="Linux", machine="x86_64", pnl_mask_route="managed")
         self.assertEqual(plan["optional_asset_profiles"], [])
         self.assertEqual(plan["managed_profiles"], ["pnl_cnn"])
+
+    def test_f3_native_route_with_planned_pnl_assets_requires_the_pnl_licence_but_not_the_managed_runtime(self):
+        """F3: the native assets need the PNL licence (preface and shared/pnl_cnn/LICENSE.txt); no managed runtime."""
+        from shared.setup_components import plan_components, required_licences
+        models = item("brain_mask_backend", "brain_mask", "setting", package=None)
+        models.details = {"backend": "pnl_cnn", "missing_required": ["pnl_mask_model_dir"]}
+        for system, machine in (("Darwin", "arm64"), ("Windows", "AMD64")):
+            with self.subTest(system=system):
+                plan = build_setup_plan(result(models), system=system, machine=machine)
+                self.assertEqual(plan["optional_asset_profiles"], ["pnl-cnn"])
+                self.assertEqual(plan["managed_profiles"], [])
+                self.assertFalse(plan["pnl_terms_required"])
+                licences = required_licences(plan_components(plan))
+                self.assertIn("pnl", licences)
+                self.assertIn("optional_resources", licences)
+                self.assertTrue(licences["pnl"]["file"].endswith("shared/pnl_cnn/LICENSE.txt"))
+        # The managed route plans no pnl-cnn resources, so its PNL licence comes from the managed profile only.
+        linux = build_setup_plan(result(models), system="Linux", machine="x86_64")
+        self.assertEqual(linux["optional_asset_profiles"], [])
+        self.assertIn("pnl", required_licences(plan_components(linux)))
 
     def test_f1_native_mask_only_closure_plans_pytorch_and_the_managed_route_does_not(self):
         """F1: a required native pnl_cnn mask needs torch even when no torch target is selected."""

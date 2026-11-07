@@ -183,6 +183,10 @@ def plan_components(plan, root=REPO_ROOT):
     if plan.get("optional_asset_profiles"):
         items.append(_component("optional_resources", "Resources: " + ", ".join(plan["optional_asset_profiles"]),
                                 plan.get("optional_asset_size_bytes") or None, "optional_resources", root))
+    if "pnl-cnn" in plan.get("optional_asset_profiles", ()):
+        # F3 (SC-1 fix round): the native route runs the vendored PNL CNN code with these model files, so the PNL
+        # licence (clause-(b) preface and terms in shared/pnl_cnn/LICENSE.txt, design A2/B7) is listed and accepted too.
+        items.append(_component("pnl_native_mask", "PNL CNN brain mask: vendored code, models and template", None, "pnl", root))
     windows = plan.get("windows_runtime") or {}
     if windows.get("command"):
         # The ps1 installs MRtrix3, FSL, the three algorithm sources and the TractCloud data in WSL every time;

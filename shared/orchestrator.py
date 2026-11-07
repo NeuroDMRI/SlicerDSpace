@@ -1258,6 +1258,18 @@ def _preprocessing_complete(
         return False
 
 
+def _preprocessing_pe_block(config: ProductOrchestratorConfig, subject_root: Path) -> Optional[str]:
+    """Rule 4 (T1 D1): the message when preprocessing of this subject would run with no PE direction; else None."""
+    from shared.pe_resolution import phase_encoding_block_reason
+
+    return phase_encoding_block_reason(
+        subject_root,
+        user_phase_encoding=config.preprocessing_phase_encoding_direction,
+        user_readout_time=config.preprocessing_readout_time,
+        has_reverse_b0=config.preprocessing_reverse_phase_b0 is not None,
+    )
+
+
 def _resolve_segmentation(subject_root: Path, output_root: Optional[Path] = None) -> Optional[Path]:
     layout = subject_layout(subject_root, output_root=output_root)
     directory = layout.anatomy_input_dir("ddseg")
@@ -2507,7 +2519,10 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
             if config.resume and _preprocessing_complete(subject_root, config.subject_id, output_root, config=config):
                 add(target, "skipped", "completed outputs found", "reuse", inputs=raw, outputs=preprocessing_outputs)
             elif not raw_input_block(target, preprocessing_outputs):
-                add(target, "will_run", "ready to run DWI preprocessing", "runnable", inputs=raw, outputs=preprocessing_outputs)
+                if pe_block := _preprocessing_pe_block(config, subject_root):  # W2b rule 4: no direction, no run
+                    add(target, "blocked", pe_block, "phase_encoding", inputs=raw, outputs=preprocessing_outputs, provides=False)
+                else:
+                    add(target, "will_run", "ready to run DWI preprocessing", "runnable", inputs=raw, outputs=preprocessing_outputs)
             continue
 
         if target == "segmentation":
@@ -3699,6 +3714,21 @@ def _run_subject_products_impl(
                                                    reason=reason, qc_path=validation.report_path))
             run_targets = tuple(target for target in run_targets if target not in input_blocked_targets)
 
+    if config.execute and "preprocessing" in run_targets:
+        # W2b rule 4 (T1 D1): preprocessing that would run with no PE direction blocks the run before any stage. The
+        # selected products that use the DWI are blocked with it: they must not silently use the raw DWI instead.
+        pe_block = None if (config.resume and _preprocessing_complete(
+            subject_root, config.subject_id, output_root, config=config)) else _preprocessing_pe_block(config, subject_root)
+        if pe_block:
+            for target in run_targets:
+                if target != "preprocessing" and target not in dwi_targets:
+                    continue
+                reason = pe_block if target == "preprocessing" else "Not run: preprocessing is blocked. " + pe_block
+                input_blocked_targets[target] = reason
+                tasks.append(ProductTaskRecord(name=_task_name_for_target(target, config), status="blocked", reason=reason))
+            run_targets = tuple(target for target in run_targets if target not in input_blocked_targets)
+            _emit("[Orchestrator] " + pe_block, log)
+
     input_seconds = time.monotonic() - input_started
     execution_started = time.monotonic()
     if "preprocessing" in run_targets:
@@ -3731,7 +3761,10 @@ def _run_subject_products_impl(
                 ProductTaskRecord(
                     name="preprocessing.dwi",
                     status="completed" if result.status in {"completed", "cached"} else result.status,
-                    reason="cached outputs reused" if result.status == "cached" else "",
+                    # W2b: the result-panel text holds the PE and readout values with their sources, the flags and the
+                    # conflict warnings (the same mechanism as the iFW "TE ... from ...").
+                    reason=("cached outputs reused; " if result.status == "cached" else "")
+                    + (result.acquisition.summary_text() if result.acquisition is not None else ""),
                     manifest_path=result.manifest_path,
                     qc_path=result.qc_path,
                     outputs={

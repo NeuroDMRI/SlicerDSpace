@@ -364,6 +364,9 @@ class SharedWidgetMixin:
             readout_time=float(getattr(node, "preprocessingReadoutTime", 0.0) or 0.0),
             reverse_phase_b0=getattr(node, "preprocessingReversePhaseB0", "") or "",
             batch_mode=bool(getattr(node, "batchMode", False)) if batch_mode is None else batch_mode,
+            # W2b rule 4: the sidecar of the chosen subject decides whether a direction exists.
+            subject_root=(getattr(node, "inputDirectory", "") or "").strip() or None,
+            output_root=(getattr(node, "outputDirectory", "") or "").strip() or None,
         )
 
     def _refresh_topup_controls(self) -> TopupValidation:

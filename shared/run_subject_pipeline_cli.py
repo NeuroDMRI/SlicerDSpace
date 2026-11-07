@@ -379,10 +379,18 @@ def _make_sigterm_handler(manifest_path: Path, *, subject_id: str, run_name: str
 def _cli_log(message: str) -> None:
     """Run log: the closure notice goes to stderr so stdout stays the JSON result for blocked runs (GUI merges both).
 
-    W2b: so does the notice that no current preprocessed DWI is used.
+    W2b: so do the notice that no current preprocessed DWI is used and the rule-4 phase-encoding block message.
     """
-    to_stderr = message.startswith(("[Targets]", "[Orchestrator] No current preprocessed DWI"))
+    to_stderr = message.startswith(("[Targets]", "[Orchestrator] No current preprocessed DWI", "[Orchestrator] Phase-encoding"))
     print(message, file=sys.stderr if to_stderr else sys.stdout)
+
+
+def _phase_encoding_block(plan) -> str:
+    """W2b rule 4: the message of a preprocessing plan item that is blocked for want of a PE direction, else ''."""
+    for item in getattr(plan, "items", ()) or ():
+        if item.status == "blocked" and item.reason_category == "phase_encoding":
+            return item.reason
+    return ""
 
 
 def _brain_mask_backend_argument(value: str) -> str:
@@ -537,8 +545,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--preprocessing-mrtrix-bin-dir", type=Path, help="Optional MRtrix3 bin dir for preprocessing.")
     parser.add_argument("--preprocessing-fsl-bin-dir", type=Path, help="Optional FSL bin dir for preprocessing.")
     parser.add_argument("--preprocessing-reverse-phase-b0", type=Path, help="Optional reverse phase-encoding b0 for MRtrix/FSL preprocessing.")
-    parser.add_argument("--preprocessing-phase-encoding-direction", help="Optional phase encoding direction for MRtrix/FSL preprocessing.")
-    parser.add_argument("--preprocessing-readout-time", type=float, help="Optional readout time for MRtrix/FSL preprocessing.")
+    parser.add_argument("--preprocessing-phase-encoding-direction", help="Phase-encoding direction for preprocessing: AP, PA, LR, RL, IS, SI or a NIfTI axis code (i, i-, j, j-, k, k-). Without it the direction comes from input/dwi.json (PhaseEncodingDirection); if neither has it, preprocessing is blocked (most axial clinical DWI: AP).")
+    parser.add_argument("--preprocessing-readout-time", type=float, help="Total readout time in seconds for preprocessing. Without it: TotalReadoutTime from input/dwi.json, else dwifslpreproc assumes 0.1 s (recorded as readout_assumed).")
     parser.add_argument(
         "--preprocessing-eddy-threads",
         type=int,
@@ -1063,11 +1071,18 @@ def main(argv: list[str] | None = None) -> int:
                 ensure_ascii=False,
             )
         )
+        if reason := _phase_encoding_block(plan):
+            print(reason, file=sys.stderr)
+            return 2
         return 0
 
     if args.execute:
         plan = plan_subject_products(config, write=True)
         _print_run_plan_summary(plan, stream=sys.stderr)
+        if reason := _phase_encoding_block(plan):
+            # W2b rule 4 (T1 D1): no phase-encoding direction, no preprocessing; stop before any stage starts.
+            print(reason, file=sys.stderr)
+            return 2
         # If Cancel kills this process's whole process group (see
         # shared/process_group.py), leave a terminal "cancelled" manifest
         # instead of letting run_subject_products() vanish mid-flight with

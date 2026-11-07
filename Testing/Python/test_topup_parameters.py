@@ -39,8 +39,10 @@ class PhaseEncodingTest(unittest.TestCase):
             set(PHASE_ENCODING_DIRECTIONS),
             {"i", "i-", "j", "j-", "k", "k-", "AP", "PA", "LR", "RL", "IS", "SI"},
         )
-        self.assertEqual(PHASE_ENCODING_CHOICES[0], ("", "Not set"))
-        self.assertEqual({value for value, _ in PHASE_ENCODING_CHOICES[1:]}, set(PHASE_ENCODING_DIRECTIONS))
+        # W2b: the GUI offers "From sidecar" and the six anatomical designators; NIfTI axis codes stay valid on the CLI.
+        self.assertEqual(PHASE_ENCODING_CHOICES[0][0], "")
+        self.assertIn("sidecar", PHASE_ENCODING_CHOICES[0][1])
+        self.assertEqual({value for value, _ in PHASE_ENCODING_CHOICES[1:]}, {"AP", "PA", "LR", "RL", "IS", "SI"})
 
     def test_normalisation_is_case_insensitive_and_canonical(self) -> None:
         self.assertEqual(normalize_phase_encoding_direction("ap"), "AP")
@@ -147,7 +149,8 @@ class ValidationTest(unittest.TestCase):
     def test_warnings_and_notes_for_incomplete_but_runnable_inputs(self) -> None:
         result = validate_topup_parameters(preprocessing_selected=True)
         self.assertTrue(result.ok)
-        self.assertIn("-pe_dir", result.warnings[0])
+        self.assertEqual(result.warnings, ())
+        self.assertTrue(any("input/dwi.json" in note and "AP" in note for note in result.notes))
         self.assertTrue(any("0.1 s" in note for note in result.notes))
         self.assertTrue(any("-rpe_none" in note for note in result.notes))
         long_readout = validate_topup_parameters(

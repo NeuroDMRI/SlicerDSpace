@@ -463,7 +463,7 @@
            <item row="0" column="1">
             <widget class="QComboBox" name="preprocessingPhaseEncodingDirectionComboBox">
              <property name="toolTip">
-              <string>Phase-encoding direction of the DWI series (dwifslpreproc -pe_dir): NIfTI axis code (i, i-, j, j-, k, k-) or anatomical designator (AP, PA, LR, RL, IS, SI). Use PhaseEncodingDirection from the BIDS JSON sidecar.</string>
+              <string>Phase-encoding direction of the DWI series. Leave it on 'From sidecar' to use PhaseEncodingDirection from input/dwi.json. If the sidecar has none, choose AP, PA, LR, RL, IS or SI here (most axial clinical DWI: AP); without a direction preprocessing does not start. A direction you choose wins over the sidecar.</string>
              </property>
             </widget>
            </item>
@@ -477,7 +477,7 @@
            <item row="1" column="1">
             <widget class="QDoubleSpinBox" name="preprocessingReadoutTimeSpinBox">
              <property name="toolTip">
-              <string>Total readout time in seconds (dwifslpreproc -readout_time), e.g. TotalReadoutTime from the BIDS JSON sidecar. Accepted range 0.001–1.0 s. Leave at 'Not set' to let dwifslpreproc assume 0.1 s.</string>
+              <string>Total readout time in seconds (dwifslpreproc -readout_time). Leave it at 'Not set' to use TotalReadoutTime from input/dwi.json; if the sidecar has none, dwifslpreproc assumes 0.1 s and the result says readout_assumed. A value you set wins over the sidecar. Accepted range 0.001–1.0 s.</string>
              </property>
              <property name="specialValueText">
               <string>Not set</string>

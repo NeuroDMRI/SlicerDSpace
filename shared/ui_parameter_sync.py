@@ -81,10 +81,13 @@ def sync_parameter_node_to_ui(widget) -> None:
         update_route_visibility = getattr(widget, "_update_pnl_route_visibility", None)
         if update_route_visibility is not None:
             update_route_visibility(getattr(node, "brainMaskBackend", "pnl_cnn") or "pnl_cnn")
-        sync_combo_data(
-            getattr(ui, "preprocessingPhaseEncodingDirectionComboBox", None),
-            getattr(node, "preprocessingPhaseEncodingDirection", "") or "",
-        )
+        # W2b: a saved NIfTI axis code (i, j-, ...) has no entry in the anatomical list; it gets one of its own, so
+        # the combo shows what the run will use (the code is converted with the DWI affine at run time).
+        saved_direction = getattr(node, "preprocessingPhaseEncodingDirection", "") or ""
+        direction_combo = getattr(ui, "preprocessingPhaseEncodingDirectionComboBox", None)
+        if saved_direction and direction_combo is not None and direction_combo.findData(saved_direction) < 0:
+            direction_combo.addItem(f"{saved_direction}  (saved NIfTI axis code)", saved_direction)
+        sync_combo_data(direction_combo, saved_direction)
         widget._sync_double_spinbox(
             getattr(ui, "preprocessingReadoutTimeSpinBox", None),
             float(getattr(node, "preprocessingReadoutTime", 0.0) or 0.0),

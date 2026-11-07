@@ -3,8 +3,8 @@
 The one preprocessing route (DIPY MP-PCA, DIPY Gibbs removal, FSL eddy/topup
 through ``dwifslpreproc``) passes three optional values to ``dwifslpreproc``:
 
-* ``--preprocessing-phase-encoding-direction`` -> ``-pe_dir``
-* ``--preprocessing-readout-time``             -> ``-readout_time`` (seconds)
+* ``--preprocessing-phase-encoding-direction`` -> ``-pe_dir`` (always passed; W2b: from the sidecar when not given)
+* ``--preprocessing-readout-time``             -> ``-readout_time`` (seconds; omitted when no value is known)
 * ``--preprocessing-reverse-phase-b0``         -> ``-rpe_pair -se_epi``
 
 This module validates what the user typed and maps it onto exactly those CLI
@@ -26,14 +26,10 @@ NIFTI_PHASE_ENCODING_DIRECTIONS = ("j-", "j", "i", "i-", "k", "k-")
 ANATOMICAL_PHASE_ENCODING_DIRECTIONS = ("AP", "PA", "LR", "RL", "IS", "SI")
 PHASE_ENCODING_DIRECTIONS = NIFTI_PHASE_ENCODING_DIRECTIONS + ANATOMICAL_PHASE_ENCODING_DIRECTIONS
 
+# W2b (T1 D1): the GUI offers the anatomical designators only (a NIfTI axis code would need the affine to be
+# understood). The empty value means "take it from input/dwi.json"; with no sidecar value the run is blocked.
 PHASE_ENCODING_CHOICES: tuple[tuple[str, str], ...] = (
-    ("", "Not set"),
-    ("j-", "j-  (NIfTI axis code)"),
-    ("j", "j  (NIfTI axis code)"),
-    ("i", "i  (NIfTI axis code)"),
-    ("i-", "i-  (NIfTI axis code)"),
-    ("k", "k  (NIfTI axis code)"),
-    ("k-", "k-  (NIfTI axis code)"),
+    ("", "From sidecar (input/dwi.json)"),
     ("AP", "AP  (anterior → posterior)"),
     ("PA", "PA  (posterior → anterior)"),
     ("LR", "LR  (left → right)"),
@@ -162,11 +158,18 @@ def validate_topup_parameters(
     readout_time: Any = None,
     reverse_phase_b0: Any = "",
     batch_mode: bool = False,
+    subject_root: Any = None,
+    output_root: Any = None,
 ) -> TopupValidation:
     """Validate the three GUI fields for the preprocessing route.
 
     When preprocessing is not selected the fields are ignored and
     nothing is forwarded, so pipeline defaults are untouched.
+
+    W2b rule 4 (T1 D1): with a ``subject_root`` (single-subject runs) the same resolution as the run is applied to the
+    chosen direction and the sidecar ``input/dwi.json``. When no direction results, the message is an error, so the
+    run is stopped before any stage. Outputs of an earlier preprocessing that are still current are reused, so they
+    do not need a direction. Batch mode is checked per subject by the cohort plan.
     """
 
     if not route_uses_topup(preprocessing_selected):
@@ -209,16 +212,26 @@ def validate_topup_parameters(
         else:
             reverse_path = candidate
 
+    if subject_root is not None and not batch_mode and not errors:
+        from shared.pe_resolution import phase_encoding_block_reason
+        from shared.pipeline import preprocessed_outputs_usable
+
+        root = Path(str(subject_root)).expanduser()
+        out = Path(str(output_root)).expanduser() if str(output_root or "").strip() else None
+        if not preprocessed_outputs_usable(root, out):
+            blocked = phase_encoding_block_reason(
+                root, user_phase_encoding=pe_direction, user_readout_time=readout, has_reverse_b0=bool(reverse_text))
+            if blocked:
+                errors.append(blocked)
     if pe_direction is None and not errors:
-        warnings.append(
-            "Phase-encoding direction is not set. dwifslpreproc stops with "
-            "'phase encoding direction must be provided using the -pe_dir option' unless "
-            "preprocessing outputs from an earlier run are reused."
+        notes.append(
+            "Phase-encoding direction: taken from input/dwi.json (PhaseEncodingDirection) when you leave it on "
+            "'From sidecar'. If the sidecar has none, preprocessing does not start (most axial clinical DWI: AP)."
         )
     if readout is None and not errors:
         notes.append(
-            f"Total readout time not set: dwifslpreproc assumes {DWIFSLPREPROC_DEFAULT_READOUT_S:g} s, "
-            "which only affects the field-map scaling."
+            "Total readout time not set: TotalReadoutTime from input/dwi.json is used when it exists; otherwise "
+            f"dwifslpreproc assumes {DWIFSLPREPROC_DEFAULT_READOUT_S:g} s (recorded as readout_assumed)."
         )
     elif readout is not None and readout > READOUT_TIME_TYPICAL_MAX_S:
         warnings.append(

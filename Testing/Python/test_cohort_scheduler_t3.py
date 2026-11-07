@@ -62,10 +62,24 @@ class StageRequestTableTests(unittest.TestCase):
             plan = plan_cohort(subjects(), ['--targets', 'surface'], available=(32, 256 * GIB))
         self.assertEqual(plan['subject_profiles']['S0']['native_dti']['cpu'], plan['stage_cpus'])
 
-    def test_shipped_table_keeps_todays_requests(self):
-        _, profile = adaptive_profile()
-        for stage in cohort_defaults.STAGE_CPU_REQUESTS:
-            self.assertEqual(profile[stage]['cpu'], 4, stage)
+    def test_shipped_table_holds_the_m1_choices(self):
+        """M1 fill (m1_bcdbc95): the largest candidate with efficiency >= 0.75 per bracketed stage."""
+        expected = {'native_dti': 16, 'registered_dti': 2, 'segmentation': 2, 'parcellation': 2, 'surface': 2,
+                    'microstructure_noddi': 8}
+        self.assertEqual(cohort_defaults.STAGE_CPU_REQUESTS, expected)
+        _, profile = adaptive_profile(cpus=32)
+        self.assertEqual({stage: profile[stage]['cpu'] for stage in expected}, expected)
+
+    def test_m1_fill_explicit_thread_flag_above_four_sets_only_its_own_stages(self):
+        """Backlog (Codex P1 = Opus N1, routed to the M1 fill): --mrtrix-nthreads 8 sets csd_act and connectome
+        to 8; the bracketed stages keep their M1 table values."""
+        arguments = ('--targets', 'tractography,connectome', '--tractography-backend', 'csd_act',
+                     '--mrtrix-nthreads', '8')
+        _, profile = adaptive_profile(arguments, cpus=32)
+        self.assertEqual((profile['csd_act']['cpu'], profile['connectome']['cpu']), (8, 8))
+        expected = {'native_dti': 16, 'registered_dti': 2, 'segmentation': 2, 'parcellation': 2, 'surface': 2,
+                    'microstructure_noddi': 8}
+        self.assertEqual({stage: profile[stage]['cpu'] for stage in expected}, expected)
 
 
 class ThreadPrecedenceTests(unittest.TestCase):
@@ -335,12 +349,11 @@ class RamFitTests(unittest.TestCase):
         self.assertEqual(self.memory({'native_dti': (2.0, ABSENT_SIGNAL * 2)}), 2.25)
 
     def test_stage_outside_the_table_keeps_the_header_heuristic(self):
-        _, profile = adaptive_profile()
-        self.assertEqual(self.memory({'native_dti': (8.0, ABSENT_SIGNAL)}, 'surface'), profile['surface']['memory_gb'])
+        # Baseline with an empty table (the shipped table holds M1 values since the M1 fill).
+        self.assertEqual(self.memory({'native_dti': (8.0, ABSENT_SIGNAL)}, 'surface'), self.memory({}, 'surface'))
 
     def test_invalid_entry_falls_back_to_the_header_heuristic(self):
-        _, profile = adaptive_profile()
-        self.assertEqual(self.memory({'native_dti': (8.0, 0)}), profile['native_dti']['memory_gb'])
+        self.assertEqual(self.memory({'native_dti': (8.0, 0)}), self.memory({}))
 
     def test_fit_is_not_applied_outside_adaptive_mode(self):
         with patch.dict(cohort_defaults.RAM_FIT, {'native_dti': (80.0, ABSENT_SIGNAL)}, clear=True):
@@ -405,6 +418,20 @@ class DurationDefaultTests(unittest.TestCase):
             _, forced = adaptive_profile(stage_cpus=2)
         self.assertAlmostEqual(profile['native_dti']['duration_seconds'], 400.0)
         self.assertAlmostEqual(forced['native_dti']['duration_seconds'], 1000.0)
+
+    def test_m1_fill_shipped_tables_give_ram_and_duration_for_the_measured_stages(self):
+        """M1 fill: the shipped RAM_FIT and DURATION_DEFAULTS reach the plan for a measured stage
+        (native_dti at its table request) and leave an unmeasured stage unknown."""
+        self.assertEqual(set(cohort_defaults.RAM_FIT), set(cohort_defaults.DURATION_DEFAULTS))
+        self.assertIn('native_dti', cohort_defaults.RAM_FIT)
+        _, profile = adaptive_profile(cpus=32)
+        ratio = ABSENT_SIGNAL / cohort_defaults.SIGNAL_REF
+        peak, _ = cohort_defaults.RAM_FIT['native_dti']
+        self.assertEqual(profile['native_dti']['memory_gb'], math.ceil((1 + 1.25 * peak * ratio) * 4) / 4)
+        t16, c16 = cohort_defaults.DURATION_DEFAULTS['native_dti']['probes'][16]
+        self.assertAlmostEqual(profile['native_dti']['duration_seconds'], t16 * c16 / min(16, c16) * ratio)
+        self.assertNotIn('brain_mask', cohort_defaults.DURATION_DEFAULTS)
+        self.assertEqual(profile['brain_mask']['duration_seconds'], 0)
 
     def test_history_wins_over_the_default(self):
         table = {'native_dti': dict(signal_ref=ABSENT_SIGNAL, probes={4: (600., 3.5)})}

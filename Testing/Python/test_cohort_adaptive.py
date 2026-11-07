@@ -89,12 +89,14 @@ class AdaptiveCohortTests(unittest.TestCase):
             path = Path(tmp) / 'history.json'
             plan = plan_cohort(subjects, args, adaptive=True, available=(8, 64 * 1024**3))
             key = plan['subject_profiles']['A']['connectome']['profile_key']
+            # The floor is the plan's own estimate (header or M1 fit), not a fixed 4 GiB, since the M1 fill.
+            floor = plan['subject_profiles']['A']['connectome']['memory_gb']
             for gib in (.1, 10):
                 record_history(path, key, dict(outcome='completed', samples=3,
                     peak_tree_rss_bytes=gib*1024**3, execution_seconds=10))
                 updated = plan_cohort(subjects, args, adaptive=True, history_path=path,
                                       available=(8, 64 * 1024**3))
-                self.assertGreaterEqual(updated['subject_profiles']['A']['connectome']['memory_gb'], 4)
+                self.assertGreaterEqual(updated['subject_profiles']['A']['connectome']['memory_gb'], floor)
             self.assertEqual(updated['subject_profiles']['A']['connectome']['memory_gb'], 13)
 
     def test_automatic_frontier_is_budget_bound_not_fixed_at_eight(self):

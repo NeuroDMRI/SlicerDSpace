@@ -49,6 +49,10 @@ class SelectedSetupTests(unittest.TestCase):
         patcher = patch("scripts.setup_python_packages.dcm2niix_pending", return_value=False)
         patcher.start()
         self.addCleanup(patcher.stop)
+        # G1-T: requests_for_report asks DICOM import for dcm2niix; keep this test independent of the machine's PATH and wheel.
+        patcher = patch("shared.input_import.find_dcm2niix", return_value=None)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def test_d6_gui_doctor_needs_the_native_tensor_fit_not_the_dmri_module(self):
         spec = DependencySpec(key='python:slicer.util', kind='python', label='slicer.util', required=True,

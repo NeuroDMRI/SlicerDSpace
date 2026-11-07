@@ -214,6 +214,11 @@ class PrebuiltSurfaceTests(unittest.TestCase):
 
 
 class FunctionalSetupTests(unittest.TestCase):
+    def setUp(self):
+        # G1-T: requests_for_report asks DICOM import for dcm2niix; keep these tests independent of the machine's PATH and wheel.
+        patcher = patch("shared.input_import.find_dcm2niix", return_value=None)
+        patcher.start()
+        self.addCleanup(patcher.stop)
     def test_cpu_choice_does_not_become_an_automatic_cuda_test(self):
         status = SimpleNamespace(kind='python', required=True, status='available', targets=('segmentation',),
                                  details={'import': 'torch', 'python_executable': 'python'})

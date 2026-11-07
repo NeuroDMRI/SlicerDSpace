@@ -584,6 +584,12 @@ class PackagingTests(unittest.TestCase):
 class SelfCheckRequestTests(unittest.TestCase):
     """D10: the setup functional check runs the Teem self-check in the Slicer interpreter only."""
 
+    def setUp(self):
+        # G1-T: requests_for_report asks DICOM import for dcm2niix; keep these tests independent of the machine's PATH and wheel.
+        patcher = patch("shared.input_import.find_dcm2niix", return_value=None)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     @staticmethod
     def report(statuses):
         return types.SimpleNamespace(statuses=statuses, targets=("microstructure",))

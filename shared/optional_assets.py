@@ -111,9 +111,6 @@ def missing_optional_profiles(result, brain_mask_backend, wma_atlas="org", pnl_r
             profiles.append(atlas_definition(wma_atlas)["profile"])
         elif item.key == "tractcloud_data_dir" or item.key.startswith("tractcloud_data:"):
             profiles.append("tractcloud")
-        elif item.key == "brain_mask_backend" and brain_mask_backend == "synthstrip":
-            if any("synthstrip.1.pt" in str(reason) for reason in (item.details or {}).get("missing_required", [])):
-                profiles.append("synthstrip")
         elif item.key == "brain_mask_backend" and brain_mask_backend == "pnl_cnn" and pnl_route == "native":
             # SC-1c: the native route needs the brain_mask assets; it installs them only when nothing else is missing.
             reasons = [str(reason) for reason in (item.details or {}).get("missing_required", [])]

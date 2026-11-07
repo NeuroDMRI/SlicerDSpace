@@ -78,7 +78,7 @@ class ExtensionDistributionTest(unittest.TestCase):
                      "licenses/FreeSurfer.txt", "licenses/PyTorch3D.txt", "licenses/provenance.json",
                      "docs/licenses/pnl_brain_mask.md",  # A-O2: linked from docs/setup/brain_mask_gui_config.md
                      "anatomy/parcellation/conversion/data/FreeSurferColorLUT.txt",
-                     "shared/pnl_mask_runner.py", "shared/synthstrip_mask_runner.py",
+                     "shared/pnl_mask_runner.py",
                      "shared/mrtrix_preproc_runner.py", "shared/managed_runtimes.py",
                      "shared/ui_managed_runtimes.py", "scripts/setup_managed_runtime.py",
                      "shared/wsl_bridge.py", "scripts/wsl/configure_device.py",
@@ -100,7 +100,7 @@ class ExtensionDistributionTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             install = stage_extension(Path(directory) / "install", slicer_version="Slicer-5.10", clean=True, link_mode="copy")
             module = Path(install["module_dir"])
-            for relative in ("shared/pnl_mask_runner.py", "shared/synthstrip_mask_runner.py",
+            for relative in ("shared/pnl_mask_runner.py",
                              "shared/mrtrix_preproc_runner.py", "scripts/setup_managed_runtime.py"):
                 with self.subTest(resource=relative):
                     target = module / relative

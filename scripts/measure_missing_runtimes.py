@@ -32,7 +32,6 @@ def main():
         raise FileExistsError('Measured outputs must be created in a new directory.')
     args.output_dir.mkdir(parents=True)
     from shared.input_import import InputImportConfig, prepare_inputs
-    from shared.brain_mask import BrainMaskConfig, generate_brain_mask
     from microstructure.pipeline import _compute_roi_stats
     from scripts.generate_protocol_benchmarks import _report_generation_system
 
@@ -65,15 +64,6 @@ def main():
                             source=str(cfg['source']), checks=checks,
                             source_record=str((args.output_dir / kind / 'input' / 'input_import_manifest.json').resolve()),
                             scope=manifest['timing_scope']))
-
-    mask_path = args.output_dir / 'mask_mrtrix.nii.gz'
-    mask_record = generate_brain_mask(original, native / 'bvals', native / 'bvecs', mask_path,
-                                    config=BrainMaskConfig(backend='mrtrix', threads=4,
-                                        mrtrix_bin_dir=Path('/data/chengjin/software/mrtrix3_env/bin')), log=print)
-    records.append(dict(module='brainmask.mrtrix', subject_id='sub-dicom', status='completed',
-                        runtime_seconds=mask_record['runtime_seconds'], shape=list(source_img.shape),
-                        source=str(original), source_record=mask_record['manifest_path'],
-                        scope=mask_record['timing_scope'], human_review='pending'))
 
     subject = ROOT / 'ignore/validation/slicer_acceptance_20261006/science/subjects/100307/outputs'
     micro = subject / '02_microstructure'

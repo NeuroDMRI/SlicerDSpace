@@ -130,8 +130,7 @@ def selected_profiles(node, gpu_available):
     # auto uses MRtrix tck2connectome for a .tck source (csd_act, saf); mrtrix always does.
     backend = getattr(node, "connectomeBackend", "auto")
     conn = bool(getattr(node, "targetConnectome", False)) and (backend == "mrtrix" or (backend == "auto" and csd_source))
-    mask = getattr(node, "brainMaskBackend", "provided") == "mrtrix"
-    result = ["mrtrix"] if preproc or tracts or conn or mask else []
+    result = ["mrtrix"] if preproc or tracts or conn else []
     if preproc:
         result.append("fsl_cuda" if gpu_available else "fsl_cpu")
     return tuple(result)

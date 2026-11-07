@@ -190,7 +190,7 @@ $plan = [ordered]@{
         accepted = [bool]$AcceptFslLicense
         terms_url = "https://fsl.fmrib.ox.ac.uk/fsl/docs/license.html"
     }
-    new_user_brain_mask_backend = "mrtrix (existing user defaults are preserved)"
+    new_user_brain_mask_backend = "pnl_cnn (existing user defaults are preserved)"
     apt = [ordered]@{
         execute_as = "wsl.exe --distribution <distro> --user root"
         skipped = [bool]$SkipApt
@@ -589,7 +589,7 @@ if (-not $SkipUserConfigUpdate) {
                 run_name = "Test1"
                 targets = @("microstructure", "tractography", "bundles", "connectome")
                 preprocessing_backend = "dipy"
-                brain_mask_backend = "mrtrix"
+                brain_mask_backend = "pnl_cnn"
                 tractography_backend = "csd_act"
                 bundle_backend = "wmql"
                 microstructure_stages = @("dti")

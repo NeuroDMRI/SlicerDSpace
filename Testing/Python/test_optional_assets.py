@@ -45,16 +45,16 @@ class OptionalAssetsTests(unittest.TestCase):
         try:
             with tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
-                relative = "brain_mask/synthstrip/synthstrip.1.pt"
+                relative = "bundles/tractcloud/test_model.pt"
                 catalog = root / "catalog.json"
-                catalog.write_text(json.dumps({"profiles": {"synthstrip": {"directory": "brain_mask/synthstrip", "required_paths": [relative]}},
+                catalog.write_text(json.dumps({"profiles": {"tractcloud": {"directory": "bundles/tractcloud", "required_paths": [relative]}},
                     "asset_records": {relative: {"sha256": hashlib.sha256(data).hexdigest(), "size_bytes": len(data),
                         "urls": [f"http://127.0.0.1:{server.server_port}/model"]}}}))
                 local_opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
                 with patch.object(setup_optional_assets, "MANIFEST", catalog), patch.object(optional_assets, "MANIFEST", catalog), \
                         patch("scripts.download_model_assets.urllib.request.urlopen", side_effect=local_opener.open):
                     for _ in range(2):
-                        result = setup_optional_assets.prepare(["synthstrip"], asset_root=root / "assets", execute=True, accept_terms=True)
+                        result = setup_optional_assets.prepare(["tractcloud"], asset_root=root / "assets", execute=True, accept_terms=True)
                         self.assertEqual(result["status"], "completed")
                     self.assertEqual((root / "assets" / relative).read_bytes(), data)
                     self.assertEqual(hits, ["/model"])
@@ -148,8 +148,8 @@ class OptionalAssetsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             catalog = root / "catalog.json"
-            relative = "brain_mask/synthstrip/synthstrip.1.pt"
-            catalog.write_text(json.dumps({"profiles": {"synthstrip": {"directory": "brain_mask/synthstrip", "required_paths": [relative]}},
+            relative = "bundles/tractcloud/test_model.pt"
+            catalog.write_text(json.dumps({"profiles": {"tractcloud": {"directory": "bundles/tractcloud", "required_paths": [relative]}},
                 "asset_records": {relative: {"sha256": hashlib.sha256(b"author").hexdigest(), "size_bytes": 6}}}))
             source, target = root / "source", root / "target"
             (source / relative).parent.mkdir(parents=True)
@@ -157,13 +157,13 @@ class OptionalAssetsTests(unittest.TestCase):
             (source / "unselected_training_data").write_bytes(b"never copy")
             with patch.object(setup_optional_assets, "MANIFEST", catalog), patch.object(optional_assets, "MANIFEST", catalog), \
                     patch.object(setup_optional_assets, "download_asset_plan") as download:
-                result = setup_optional_assets.prepare(["synthstrip"], asset_root=target, execute=True, offline_root=source)
+                result = setup_optional_assets.prepare(["tractcloud"], asset_root=target, execute=True, offline_root=source)
                 self.assertEqual(result["status"], "completed")
                 self.assertFalse((target / "unselected_training_data").exists())
                 self.assertEqual((source / relative).read_bytes(), b"author")
                 (target / relative).write_bytes(b"broken")
                 with self.assertRaisesRegex(ValueError, "Existing resource differs"):
-                    setup_optional_assets.prepare(["synthstrip"], asset_root=target, execute=True, accept_terms=True)
+                    setup_optional_assets.prepare(["tractcloud"], asset_root=target, execute=True, accept_terms=True)
                 self.assertEqual((target / relative).read_bytes(), b"broken")
                 download.assert_not_called()
 
@@ -310,14 +310,14 @@ class OptionalAssetsTests(unittest.TestCase):
             base = Path(tmp).resolve()
             (base / 'real').mkdir()
             (base / 'link').symlink_to(base / 'real')
-            source = base / 'synthstrip.pt'
+            source = base / 'test_model.pt'
             source.write_bytes(b'author resource')
-            relative = 'brain_mask/synthstrip/synthstrip.1.pt'
+            relative = 'bundles/tractcloud/test_model.pt'
             catalog = base / 'catalog.json'
             catalog.write_text(json.dumps({'asset_records': {relative: {
                 'sha256': hashlib.sha256(b'author resource').hexdigest(), 'size_bytes': 15, 'redistribution': 'test'}}}))
             argv = ['import_external_resources.py', '--asset-root', str(base / 'link/assets'),
-                    '--synthstrip-model', str(source), '--execute']
+                    '--tractcloud-data', str(base), '--tractcloud-license', str(source), '--execute']
             with patch.object(importer, 'MANIFEST', catalog), patch.object(sys, 'argv', argv), \
                     contextlib.redirect_stdout(io.StringIO()):
                 importer.main()

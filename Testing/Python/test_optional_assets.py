@@ -7,7 +7,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 import zipfile
 
 from shared import optional_assets
@@ -77,6 +77,43 @@ class OptionalAssetsTests(unittest.TestCase):
         self.assertGreaterEqual(plan['optional_asset_peak_disk_bytes'], plan['optional_asset_size_bytes'] + 2439318525)
         clean = build_setup_plan(SimpleNamespace(statuses=[]))
         self.assertEqual(clean["optional_asset_profiles"], [])
+
+    def _weights_gap_report(self):
+        gap = SimpleNamespace(key="brain_mask_backend", kind="setting", status="missing", required=True, targets=("microstructure",),
+                              label="mask", details={"backend": "pnl_cnn", "missing_required": ["weights.json"]},
+                              install_group="brain_mask", install_hint="")
+        return SimpleNamespace(statuses=[gap], targets=("microstructure",), blocker_count=1)
+
+    def test_f4_missing_optional_profiles_resolves_auto_for_the_platform_without_a_route(self):
+        """F4: no pnl_route means auto: native on macOS and Windows, managed on Linux (no silent managed default)."""
+        report = self._weights_gap_report()
+        for system, expected in (("Darwin", ["pnl-cnn"]), ("Windows", ["pnl-cnn"]), ("Linux", [])):
+            with self.subTest(system=system), patch("platform.system", return_value=system):
+                self.assertEqual(optional_assets.missing_optional_profiles(report, "pnl_cnn"), expected)
+        with patch("platform.system", return_value="Linux"):
+            self.assertEqual(optional_assets.missing_optional_profiles(report, "pnl_cnn", pnl_route="native"), ["pnl-cnn"])
+
+    def test_f4_offline_assets_helper_passes_the_route_of_the_parameter_node(self):
+        """F4: use_offline_assets resolves the node's pnlMaskRoute, so a native user gets the weights offline."""
+        import shared.ui_selected_setup as ui
+        qt = MagicMock()
+        qt.QFileDialog.getExistingDirectory.return_value = "/offline"
+        slicer = SimpleNamespace(util=SimpleNamespace(mainWindow=lambda: None, infoDisplay=lambda *args: None))
+        for system, route, expected in (("Linux", "native", ["pnl-cnn"]), ("Darwin", "auto", ["pnl-cnn"]),
+                                        ("Linux", "auto", [])):
+            with self.subTest(system=system, route=route), tempfile.TemporaryDirectory() as tmp, \
+                    patch.dict("sys.modules", {"qt": qt, "slicer": slicer}), patch("platform.system", return_value=system), \
+                    patch("shared.user_config.default_user_config_path", return_value=Path(tmp) / "config.json"), \
+                    patch("shared.ui_setup_jobs.start_setup_job", return_value=True) as start:
+                node = SimpleNamespace(brainMaskBackend="pnl_cnn", pnlMaskRoute=route, wmaAtlas="org")
+                owner = SimpleNamespace(_parameterNode=node, _lastEnvironmentResult=self._weights_gap_report(),
+                                        _slicer_launcher_program=lambda: "Slicer")
+                ui.use_offline_assets(owner)
+                if not expected:
+                    start.assert_not_called()
+                    continue
+                args = start.call_args[0][2][0][1]
+                self.assertEqual(args[args.index("--optional-profiles") + 1:], expected)
 
     def test_explicit_wma_and_legacy_environment_precede_shared_directory(self):
         with patch.object(optional_assets, "verified_resource_directory") as check, \

@@ -496,8 +496,10 @@ def use_offline_assets(owner):
                                          ("parcellation", "targetParcellation")) if getattr(node, target, False)]
     report = getattr(owner, "_lastEnvironmentResult", None)
     from shared.optional_assets import missing_optional_profiles
+    # F4: the offline path uses the route of the node's setting, as the plan does.
     optional = missing_optional_profiles(report, getattr(node, "brainMaskBackend", "pnl_cnn"),
-                                         getattr(node, "wmaAtlas", "org")) if report else []
+                                         getattr(node, "wmaAtlas", "org"),
+                                         pnl_route=getattr(node, "pnlMaskRoute", "auto") or "auto") if report else []
     if not profiles and not optional:
         slicer.util.infoDisplay(_text(owner, "Check the selected environment first to identify required resources.",
                                      "请先检查所选环境，确认需要的离线资源。"))

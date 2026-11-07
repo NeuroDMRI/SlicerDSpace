@@ -95,8 +95,13 @@ def resolve_tractcloud_data_directory(explicit=None, *, asset_root=None):
 PNL_MODEL_GAPS = ("pnl_mask_model_dir", "weights.json", "IITmean_b0_256.nii.gz", ".pt ")
 
 
-def missing_optional_profiles(result, brain_mask_backend, wma_atlas="org", pnl_route="managed"):
-    """Infer resource actions from selected required blockers, never all backends."""
+def missing_optional_profiles(result, brain_mask_backend, wma_atlas="org", pnl_route=None):
+    """Infer resource actions from selected required blockers, never all backends.
+
+    `pnl_route` is the pnl_mask_route setting; None means ``auto`` (F4: resolved for this platform, no silent managed default).
+    """
+    from shared.brain_mask import resolve_pnl_mask_route
+    pnl_route = resolve_pnl_mask_route(pnl_route)
     profiles = []
     for item in result.statuses:
         if not item.required or item.status != "missing":

@@ -346,10 +346,11 @@ def build_run_record(manifest_path: Path) -> dict:
         "run_name": manifest.get("run_name"),
         "run_manifest": {"path": manifest_path.as_posix(), "sha256": sha256_file(manifest_path)},
         "parameters": parameters,
-        # T2 SC-1b / F2: the route of the mask that the run consumed, read from that mask's receipt (a supplied mask
-        # records "supplied", one without a usable receipt "unknown"); the requested route stays in the parameters.
-        **({"brain_mask": {"backend": effective.get("brain_mask_backend"), **_mask_provenance(effective)}}
-           if isinstance(effective.get("brain_mask_route_requested"), dict) else {}),
+        # T2 SC-1b / F2 / SC1-CARRY-1: the route of the mask that the run consumed, read from that mask's receipt
+        # (a supplied mask records "supplied", one without a usable receipt "unknown"), for every requested backend;
+        # `requested_backend` is the selection, not the origin of the mask. The requested route stays in the parameters.
+        **({"brain_mask": {"requested_backend": effective.get("brain_mask_backend"), **_mask_provenance(effective)}}
+           if effective.get("brain_mask_backend") else {}),
         "software": {"python": sys.version.split()[0], "platform": platform.platform(),
                      "packages": _package_versions()},
         "assets": _assets(effective),

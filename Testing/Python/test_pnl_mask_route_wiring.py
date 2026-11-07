@@ -16,7 +16,8 @@ from shared import run_subject_pipeline_cli as cli
 from shared.brain_mask import PNL_NATIVE_EXPERIMENTAL_REASON, pnl_route_record
 from shared.run_record import build_run_record
 from shared.ui_onboarding import onboarding_text
-from shared.ui_run_controller import RunSelection, build_background_cli_args, build_single_subject_run_kwargs
+from shared.ui_run_controller import (
+    RunSelection, build_background_cli_args, build_batch_background_cli_args, build_single_subject_run_kwargs)
 from shared.ui_workflow_text import PNL_MASK_ROUTE_TEXT_KEYS
 from shared.user_config import (
     apply_user_config_to_args,
@@ -65,10 +66,15 @@ class PnlMaskRouteWiringTest(unittest.TestCase):
                                  1000000, "cuda:0", "auto", "python", False, pnl_mask_route="native")
         kwargs = build_single_subject_run_kwargs(selection, {}, preflight_blocked_targets={})
         self.assertEqual(kwargs["pnl_mask_route"], "native")
-        args = build_background_cli_args(selection, {}, repository_root=ROOT) if "repository_root" in \
-            inspect.signature(build_background_cli_args).parameters else None
-        if args is not None:
-            self.assertEqual(args[args.index("--pnl-mask-route") + 1], "native")
+        paths = {}
+        single = build_background_cli_args(kwargs, paths, repo_root=ROOT)
+        self.assertEqual(single[single.index("--pnl-mask-route") + 1], "native")
+        batch = build_batch_background_cli_args(kwargs, paths, repo_root=ROOT, batch_root=ROOT, batch_size=1,
+                                                arrange_inputs="no")
+        self.assertEqual(batch[batch.index("--pnl-mask-route") + 1], "native")
+        # The batch script forwards unknown options to the subject CLI, whose parser knows this one.
+        tail = batch[batch.index("--pnl-mask-route"):batch.index("--pnl-mask-route") + 2]
+        self.assertEqual(cli.build_parser().parse_args(tail).pnl_mask_route, "native")
 
     def test_gui_route_selector_is_declared_and_texts_exist(self) -> None:
         tree = ET.parse(ROOT / "Resources/UI/SlicerDSpace.ui")

@@ -535,11 +535,11 @@ def generate_brain_mask(dwi_path: Path, bval_path: Path, bvec_path: Path, output
                         "device_execution": device,
                         "phase_seconds": phase_seconds,
                         "phase_timing_scope": "Non-overlapping measured phases, not a complete sum of wall time; external process includes interpreter/model startup and upstream registration/inference/cleanup",
-                        # SC-1b: the route, and the experimental status of the native route. The receipt's own
-                        # `status` ("completed") stays: cache reuse and the callers read it.
-                        **({"route": PNL_ROUTE_NAMES[route],
-                            **({"route_status": "experimental", "route_reason": PNL_NATIVE_EXPERIMENTAL_REASON}
-                               if route == "native" else {})} if config.backend == "pnl_cnn" else {}),
+                        # SC-1b: the route. SPEC-GAP SC-1: the experimental status and reason of the native route are
+                        # nested in `pnl_route` (same keys as the run record: route, status, reason), because the
+                        # receipt's own `status` ("completed") is read by cache reuse and the callers.
+                        **({"route": PNL_ROUTE_NAMES[route], "pnl_route": pnl_route_record(route)}
+                           if config.backend == "pnl_cnn" else {}),
                         **({"child_threads": threads} if config.backend == "pnl_cnn" and route == "native" else {}),
                         "thread_environment": {key: env.get(key) for key in (
                             "OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS",

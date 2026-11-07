@@ -535,7 +535,7 @@ class BrainMaskBackendsTest(unittest.TestCase):
         self.assertEqual(call["env"]["ANTSPATH"], str(config.pnl_mask_ants_bin_dir))
         self.assertEqual(call["env"]["OMP_NUM_THREADS"], "3")
         self.assertEqual(result["route"], "managed-ants")
-        self.assertNotIn("route_status", result)
+        self.assertEqual(result["pnl_route"], {"route": "managed-ants"})
         self.assertNotIn("child_threads", result)
         self.assertEqual(result["status"], "completed")
         self.assertEqual(result["signature"]["settings"]["pnl_route"], "managed-ants")
@@ -578,8 +578,9 @@ class BrainMaskBackendsTest(unittest.TestCase):
     def test_sc1b_receipt_marks_native_experimental_and_managed_not(self) -> None:
         native = self.generate(fake_pnl_config(self.root))
         self.assertEqual(native["route"], "native-sitk")
-        self.assertEqual(native["route_status"], "experimental")
-        self.assertEqual(native["route_reason"], "did not meet the M-A parity rule on 2 of 24 cases (T2 design \u00a73)")
+        self.assertEqual(native["pnl_route"]["route"], "native-sitk")
+        self.assertEqual(native["pnl_route"]["status"], "experimental")
+        self.assertEqual(native["pnl_route"]["reason"], "did not meet the M-A parity rule on 2 of 24 cases (T2 design \u00a73)")
         self.assertEqual(native["status"], "completed")  # the receipt status keeps its meaning
         self.assertEqual(brain_mask.pnl_route_record("native"), {
             "route": "native-sitk", "status": "experimental", "reason": brain_mask.PNL_NATIVE_EXPERIMENTAL_REASON})

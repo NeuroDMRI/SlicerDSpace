@@ -25,7 +25,6 @@ USER_CONFIG_ENV = "SLICERDSPACE_USER_CONFIG"
 RUN_DEFAULTS = {
     "run_name": "Test1",
     "targets": ["microstructure", "tractography", "bundles", "connectome"],
-    "preprocessing_backend": "dipy",
     "brain_mask_backend": "pnl_cnn",
     "brain_mask_device": "auto",
     "pnl_mask_route": "auto",
@@ -42,6 +41,9 @@ RUN_DEFAULTS = {
     "auto_install_python_dependencies": True,
 }
 
+
+# W2a (D1): run-default keys of the removed preprocessing route and denoise choices.
+REMOVED_PREPROCESSING_SETTINGS = ("preprocessing_backend", "preprocessing_dipy_denoise_method", "preprocessing_skip_motion")
 
 MICROSTRUCTURE_ALL_STAGES = ("dti", "freewater", "noddi", "dki")  # "all" does not include iFW
 MICROSTRUCTURE_STAGE_ORDER = MICROSTRUCTURE_ALL_STAGES + ("ifw",)
@@ -162,13 +164,25 @@ def normalize_user_config(payload: Mapping[str, Any] | None) -> dict[str, Any]:
     # W5 / SC-2: a saved removed backend (synthstrip, mrtrix, dipy) loads as pnl_cnn with one note; no one is blocked.
     # The note is in config["notes"] for the GUI and the CLI. It is also logged. write_user_config does not save it.
     config.pop("notes", None)
+    notes: list[str] = []
     saved_backend = str(defaults.get("brain_mask_backend") or RUN_DEFAULTS["brain_mask_backend"])
     if saved_backend in REMOVED_BRAIN_MASK_BACKENDS:
         defaults["brain_mask_backend"] = RUN_DEFAULTS["brain_mask_backend"]
         note = (f"Saved brain mask backend {saved_backend!r} was removed. Brain masking now uses pnl_cnn; "
                 "select Provided mask only (provided) to use a supplied mask.")
-        config["notes"] = [note]
+        notes.append(note)
         _LOG.warning(note)
+    # W2a (D1): a saved preprocessing route or denoise choice was removed. The setting loads without it, with one note.
+    removed = [key for key in REMOVED_PREPROCESSING_SETTINGS if key in defaults]
+    if removed:
+        for key in removed:
+            defaults.pop(key, None)
+        note = (f"Saved preprocessing setting {', '.join(repr(key) for key in removed)} was removed. "
+                "Preprocessing has one route: DIPY MP-PCA, DIPY Gibbs removal, FSL eddy/topup through dwifslpreproc.")
+        notes.append(note)
+        _LOG.warning(note)
+    if notes:
+        config["notes"] = notes
     # SC-1a: shared.brain_mask.PNL_MASK_ROUTES; an unknown saved value falls back to auto.
     if str(defaults.get("pnl_mask_route") or "auto") not in ("auto", "managed", "native"):
         defaults["pnl_mask_route"] = "auto"
@@ -229,7 +243,6 @@ def user_config_cli_values(config: Mapping[str, Any]) -> dict[str, Any]:
         "output_root": Path(recent["output_root"]).expanduser() if recent.get("output_root") else None,
         "run_name": defaults.get("run_name") or RUN_DEFAULTS["run_name"],
         "targets": [",".join(defaults.get("targets") or RUN_DEFAULTS["targets"])],
-        "preprocessing_backend": defaults.get("preprocessing_backend") or RUN_DEFAULTS["preprocessing_backend"],
         "brain_mask_backend": defaults.get("brain_mask_backend") or RUN_DEFAULTS["brain_mask_backend"],
         "brain_mask_device": defaults.get("brain_mask_device") or RUN_DEFAULTS["brain_mask_device"],
         "pnl_mask_route": defaults.get("pnl_mask_route") or RUN_DEFAULTS["pnl_mask_route"],
@@ -346,7 +359,6 @@ def user_config_from_cli_args(
         {
             "run_name": str(getattr(args, "run_name", "") or "Test1"),
             "targets": targets or list(RUN_DEFAULTS["targets"]),
-            "preprocessing_backend": getattr(args, "preprocessing_backend", None) or "dipy",
             "brain_mask_backend": getattr(args, "brain_mask_backend", None) or "pnl_cnn",
             "brain_mask_device": getattr(args, "brain_mask_device", None) or "auto",
             "pnl_mask_route": getattr(args, "pnl_mask_route", None) or "auto",

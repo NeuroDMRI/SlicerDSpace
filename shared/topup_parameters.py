@@ -1,7 +1,7 @@
 """Validation and mapping of topup / distortion-correction inputs from the GUI.
 
-The MRtrix3/FSL preprocessing route (``--preprocessing-backend mrtrix_fsl``)
-passes three optional values to ``dwifslpreproc``:
+The one preprocessing route (DIPY MP-PCA, DIPY Gibbs removal, FSL eddy/topup
+through ``dwifslpreproc``) passes three optional values to ``dwifslpreproc``:
 
 * ``--preprocessing-phase-encoding-direction`` -> ``-pe_dir``
 * ``--preprocessing-readout-time``             -> ``-readout_time`` (seconds)
@@ -19,8 +19,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
-
-MRTRIX_FSL_BACKEND = "mrtrix_fsl"
 
 # Accepted by MRtrix3 ``phaseencoding.direction`` (dwifslpreproc -pe_dir):
 # NIfTI/BIDS axis codes and anatomical axis designators.
@@ -86,10 +84,10 @@ class TopupValidation:
         return not self.errors
 
 
-def route_uses_topup(backend: str, preprocessing_selected: bool = True) -> bool:
+def route_uses_topup(preprocessing_selected: bool = True) -> bool:
     """True when the topup fields apply (and should be shown)."""
 
-    return bool(preprocessing_selected) and (backend or "").strip() == MRTRIX_FSL_BACKEND
+    return bool(preprocessing_selected)
 
 
 def normalize_phase_encoding_direction(value: Any) -> Optional[str]:
@@ -159,20 +157,19 @@ def _has_image_suffix(path: Path) -> bool:
 
 def validate_topup_parameters(
     *,
-    backend: str,
     preprocessing_selected: bool,
     phase_encoding_direction: Any = "",
     readout_time: Any = None,
     reverse_phase_b0: Any = "",
     batch_mode: bool = False,
 ) -> TopupValidation:
-    """Validate the three GUI fields for the selected preprocessing route.
+    """Validate the three GUI fields for the preprocessing route.
 
-    When the MRtrix3/FSL route is not selected the fields are ignored and
+    When preprocessing is not selected the fields are ignored and
     nothing is forwarded, so pipeline defaults are untouched.
     """
 
-    if not route_uses_topup(backend, preprocessing_selected):
+    if not route_uses_topup(preprocessing_selected):
         return TopupValidation(parameters=TopupParameters())
 
     errors: list[str] = []

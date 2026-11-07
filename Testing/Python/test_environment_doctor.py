@@ -173,10 +173,23 @@ class EnvironmentDoctorDiscoveryTest(unittest.TestCase):
             EnvironmentDoctorConfig(
                 targets=("preprocessing",),
                 repo_root=REPO_ROOT,
-                preprocessing_backend="mrtrix_fsl",
             )
         )
         self.assertIn("command:dwi2mask", {spec.key for spec in specs})
+
+    def test_w2a_preprocessing_target_needs_the_one_route_tools_on_every_os(self) -> None:
+        """W2a (D1): DIPY, MRtrix3 (dwifslpreproc, dwi2mask) and FSL (eddy, topup); no dwidenoise or mrdegibbs."""
+        for platform_name in ("Linux", "Darwin", "Windows"):
+            with self.subTest(platform_name=platform_name):
+                specs = build_dependency_specs(EnvironmentDoctorConfig(
+                    targets=("preprocessing",), repo_root=REPO_ROOT, platform_name=platform_name))
+                keys = {spec.key: spec for spec in specs if "preprocessing" in spec.targets}
+                for command, group in (("dwifslpreproc", "mrtrix"), ("dwi2mask", "mrtrix"), ("eddy", "fsl"), ("topup", "fsl")):
+                    self.assertTrue(keys[f"command:{command}"].required, command)
+                    self.assertEqual(keys[f"command:{command}"].install_group, group, command)
+                self.assertTrue(keys["python:dipy"].required)
+                self.assertNotIn("command:dwidenoise", keys)
+                self.assertNotIn("command:mrdegibbs", keys)
 
     def test_dti_runtime_requires_real_slicer_python(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

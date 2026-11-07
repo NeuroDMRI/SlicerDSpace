@@ -91,7 +91,6 @@ class EnvironmentDoctorConfig:
     python_environment: Optional[str] = None
     conda_executable: Optional[Path] = None
     platform_name: Optional[str] = None
-    preprocessing_backend: str = "dipy"
     brain_mask_backend: str = "pnl_cnn"
     brain_mask_device: str = "auto"
     brain_mask_required: bool = False
@@ -132,9 +131,7 @@ class EnvironmentDoctorConfig:
 
 
 def run_needs_brain_mask(subject_root: Path, *, targets, subject_id: str, output_root=None,
-                         preprocessing_backend='dipy', brain_mask_backend='pnl_cnn',
-                         denoise_method='mppca', run_gibbs=True, run_motion=True,
-                         force=False, resume=True) -> bool:
+                         brain_mask_backend='pnl_cnn', force=False, resume=True) -> bool:
     """Common CLI/API mask prerequisite policy, including stale preprocessing outputs."""
     from shared.io_layout import subject_layout
     subject_root = subject_root.expanduser().resolve()
@@ -146,8 +143,8 @@ def run_needs_brain_mask(subject_root: Path, *, targets, subject_id: str, output
     from shared.target_closure import MASK_TARGETS
     mask_targets = set(MASK_TARGETS)
     required = raw and bool(mask_targets.intersection(targets)) and not (input_dir / 'nodif_brain_mask.nii.gz').is_file()
-    generates_mask = preprocessing_backend != 'dipy' or denoise_method != 'none' or run_gibbs or run_motion
-    if raw and 'preprocessing' in targets and brain_mask_backend != 'provided' and generates_mask:
+    # W2a (D1): preprocessing always runs FSL eddy, so it always writes a new corrected DWI and needs a new mask.
+    if raw and 'preprocessing' in targets and brain_mask_backend != 'provided':
         layout = subject_layout(subject_root, output_root=output_root)
         stem = subject_id or subject_root.name
         dwi, mask = layout.preproc / f'{stem}_dwi_final.nii.gz', layout.preproc / f'{stem}_brain_mask_final.nii.gz'
@@ -1095,23 +1092,23 @@ def build_dependency_specs(config: EnvironmentDoctorConfig) -> tuple[DependencyS
             _python(specs, target=target, import_name="SimpleITK", package="SimpleITK")
 
         if target == "preprocessing":
-            if config.preprocessing_backend == "mrtrix_fsl":
-                _add_mrtrix_commands(
+            # W2a (D1): one route. DIPY MP-PCA and Gibbs removal, then FSL eddy/topup through dwifslpreproc.
+            # So the target needs MRtrix3 and FSL on every OS (the setup plan reads these install groups).
+            _add_dipy_stack(specs, target)
+            _add_mrtrix_commands(
+                specs,
+                target,
+                ("dwifslpreproc", "dwi2mask"),
+                config.preprocessing_mrtrix_bin_dir or config.mrtrix_bin_dir,
+            )
+            for command in ("eddy", "topup"):
+                _command(
                     specs,
-                    target,
-                    ("dwidenoise", "mrdegibbs", "dwifslpreproc", "dwi2mask"),
-                    config.preprocessing_mrtrix_bin_dir or config.mrtrix_bin_dir,
+                    target=target,
+                    command=command,
+                    group="fsl",
+                    bin_dir=config.preprocessing_fsl_bin_dir,
                 )
-                for command in ("eddy", "topup"):
-                    _command(
-                        specs,
-                        target=target,
-                        command=command,
-                        group="fsl",
-                        bin_dir=config.preprocessing_fsl_bin_dir,
-                    )
-            else:
-                _add_dipy_stack(specs, target)
 
         if target in {"microstructure", "microstructure_freewater", "microstructure_dki", "tractography"} and (
             target in {"microstructure", "microstructure_freewater", "microstructure_dki"} or config.tractography_backend == "dti_det"

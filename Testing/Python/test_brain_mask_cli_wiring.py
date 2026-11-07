@@ -254,8 +254,6 @@ class BrainMaskCliWiringTest(unittest.TestCase):
             for suffix in ("dwi_final.nii.gz", "dwi_final.bval", "dwi_final.bvec", "brain_mask_final.nii.gz"):
                 (preproc / f"sub-01_{suffix}").touch()
             self.assertFalse(required(("preprocessing",)))
-            args.preprocessing_backend = "mrtrix_fsl"
-            self.assertFalse(required(("preprocessing",)))
             args.preprocessing_force = True
             self.assertTrue(required(("preprocessing",)))
             args.preprocessing_force = False
@@ -267,11 +265,8 @@ class BrainMaskCliWiringTest(unittest.TestCase):
             args.brain_mask_backend = "provided"
             self.assertFalse(required(("preprocessing",)))
             args.brain_mask_backend = "pnl_cnn"
-            args.preprocessing_backend = "dipy"
-            args.preprocessing_dipy_denoise_method = "none"
-            args.preprocessing_skip_gibbs = True
-            args.preprocessing_skip_motion = True
-            self.assertFalse(required(("preprocessing",)))
+            args.preprocessing_skip_gibbs = True  # W2a: the old no-op fast path is gone; skipping Gibbs still needs the mask
+            self.assertTrue(required(("preprocessing",)))
             args.brain_mask_backend = "provided"
             (input_dir / "nodif_brain_mask.nii.gz").unlink()
             self.assertTrue(required(("preprocessing",)))

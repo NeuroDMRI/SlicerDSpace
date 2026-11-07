@@ -81,7 +81,6 @@ class ProductOrchestratorConfig:
     # T-C5: tracking-variant children set this False; the aggregate manifest gets the one run record.
     write_run_record: bool = True
     resume: bool = True
-    preprocessing_backend: str = "dipy"
     brain_mask_backend: str = "pnl_cnn"
     brain_mask_device: str = "auto"
     pnl_mask_python: Optional[Path] = None
@@ -90,9 +89,7 @@ class ProductOrchestratorConfig:
     pnl_mask_ants_bin_dir: Optional[Path] = None
     pnl_mask_route: str = "auto"
     preprocessing_force: bool = False
-    preprocessing_dipy_denoise_method: str = "mppca"
     preprocessing_dipy_run_gibbs: bool = True
-    preprocessing_dipy_run_motion_correction: bool = True
     preprocessing_mrtrix_bin_dir: Optional[Path] = None
     preprocessing_fsl_bin_dir: Optional[Path] = None
     preprocessing_reverse_phase_b0: Optional[Path] = None
@@ -1205,7 +1202,7 @@ def _preprocessing_config(config: ProductOrchestratorConfig, subject_root: Path,
 
     return DwiPreprocessingConfig(
         subject_id=config.subject_id, input_root=subject_root, output_dir=output_dir,
-        backend=config.preprocessing_backend, execute=True, skip=False,
+        execute=True, skip=False,
         brain_mask_backend=config.brain_mask_backend,
         brain_mask_device=config.brain_mask_device,
         pnl_mask_python=config.pnl_mask_python,
@@ -1214,9 +1211,7 @@ def _preprocessing_config(config: ProductOrchestratorConfig, subject_root: Path,
         pnl_mask_ants_bin_dir=config.pnl_mask_ants_bin_dir,
         pnl_mask_route=config.pnl_mask_route,
         force=config.preprocessing_force or (not config.resume),
-        dipy_denoise_method=config.preprocessing_dipy_denoise_method,
         dipy_run_gibbs=config.preprocessing_dipy_run_gibbs,
-        dipy_run_motion_correction=config.preprocessing_dipy_run_motion_correction,
         mrtrix_bin_dir=config.preprocessing_mrtrix_bin_dir,
         fsl_bin_dir=config.preprocessing_fsl_bin_dir,
         reverse_phase_b0=config.preprocessing_reverse_phase_b0,
@@ -5259,7 +5254,6 @@ def _run_subject_products_impl(
         "bundle_backends": list(bundle_backends),
         "execute": config.execute,
         "resume": config.resume,
-        "preprocessing_backend": config.preprocessing_backend,
         "brain_mask_backend": config.brain_mask_backend,
         "brain_mask_device": config.brain_mask_device,
         "pnl_mask_route": config.pnl_mask_route,
@@ -5272,9 +5266,7 @@ def _run_subject_products_impl(
             for name in ("pnl_mask_python", "pnl_mask_script", "pnl_mask_model_dir", "pnl_mask_ants_bin_dir")
         },
         "preprocessing_force": config.preprocessing_force,
-        "preprocessing_dipy_denoise_method": config.preprocessing_dipy_denoise_method,
         "preprocessing_dipy_run_gibbs": config.preprocessing_dipy_run_gibbs,
-        "preprocessing_dipy_run_motion_correction": config.preprocessing_dipy_run_motion_correction,
         "preprocessing_mrtrix_bin_dir": config.preprocessing_mrtrix_bin_dir.as_posix() if config.preprocessing_mrtrix_bin_dir else None,
         "preprocessing_fsl_bin_dir": config.preprocessing_fsl_bin_dir.as_posix() if config.preprocessing_fsl_bin_dir else None,
         "preprocessing_reverse_phase_b0": config.preprocessing_reverse_phase_b0.as_posix() if config.preprocessing_reverse_phase_b0 else None,

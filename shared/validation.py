@@ -28,8 +28,6 @@ PYTHON_DEPENDENCY_GROUPS: dict[str, tuple[str, ...]] = {
 
 COMMAND_DEPENDENCY_GROUPS: dict[str, tuple[str, ...]] = {
     "preprocessing": (
-        "dwidenoise",
-        "mrdegibbs",
         "dwifslpreproc",
         "dwi2mask",
         "eddy",

@@ -48,24 +48,6 @@ def _write_fake_command(path: Path, body: str) -> None:
 def _write_fake_backend(bin_dir: Path) -> None:
     bin_dir.mkdir(parents=True)
     _write_fake_command(
-        bin_dir / "dwidenoise",
-        """
-import pathlib, shutil, sys
-if pathlib.Path(sys.argv[2]).exists() and '-force' not in sys.argv:
-    raise SystemExit('existing denoised output needs -force')
-shutil.copy2(sys.argv[1], sys.argv[2])
-if '-noise' in sys.argv:
-    pathlib.Path(sys.argv[sys.argv.index('-noise') + 1]).write_text('noise')
-""",
-    )
-    _write_fake_command(
-        bin_dir / "mrdegibbs",
-        """
-import shutil, sys
-shutil.copy2(sys.argv[1], sys.argv[2])
-""",
-    )
-    _write_fake_command(
         bin_dir / "dwifslpreproc",
         """
 import os, pathlib, shutil, sys
@@ -149,6 +131,12 @@ def _fake_pnl_mask(dwi, bval, bvec, output, *, config, force=False, log=None):
     return {"status": "completed"}
 
 
+def _external_commands(manifest):
+    """Argv of the subprocess commands of a plan: the in-process DIPY steps and the output marker are left out."""
+    return [record["argv"] for record in manifest["commands"]
+            if record["argv"][0] != "dipy" and record["argv"][0] != "optional-output"]
+
+
 class DwiPreprocessingPipelineTest(unittest.TestCase):
     def setUp(self) -> None:
         from unittest.mock import patch
@@ -167,100 +155,6 @@ class DwiPreprocessingPipelineTest(unittest.TestCase):
         self.assertTrue(preprocessing_gradients_current(manifest))
         manifest["cache_key"]["backend"] = "mrtrix_fsl"
         self.assertTrue(preprocessing_gradients_current(manifest))
-
-    def test_rotate_bvecs_accepts_n_by_4_by_4_affines(self) -> None:
-        import numpy as np
-
-        from preprocessing.pipeline import _rotate_bvecs_best_effort
-
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            source = root / "source.bvec"
-            output = root / "rotated.bvec"
-            source.write_text("1 0 0\n0 1 0\n0 0 1\n", encoding="utf-8")
-            rotation = np.array(
-                [
-                    [0.0, -1.0, 0.0, 0.0],
-                    [1.0, 0.0, 0.0, 0.0],
-                    [0.0, 0.0, 1.0, 0.0],
-                    [0.0, 0.0, 0.0, 1.0],
-                ]
-            )
-            affines = np.repeat(np.eye(4)[None, ...], 3, axis=0)
-            affines[1] = rotation
-
-            status = _rotate_bvecs_best_effort(source, output, affines)
-
-            rotated = np.loadtxt(output)
-            self.assertEqual(status["status"], "rotated")
-            self.assertEqual(status["affine_layout"], "Nx4x4")
-            np.testing.assert_allclose(rotated[:, 0], [1.0, 0.0, 0.0], atol=1e-8)
-            np.testing.assert_allclose(rotated[:, 1], [1.0, 0.0, 0.0], atol=1e-8)
-
-    def test_rotate_bvecs_accepts_dipy_4_by_4_by_n_affines(self) -> None:
-        import numpy as np
-
-        from preprocessing.pipeline import _rotate_bvecs_best_effort
-
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            source = root / "source.bvec"
-            output = root / "rotated.bvec"
-            source.write_text("1 0 0\n0 1 0\n0 0 1\n", encoding="utf-8")
-            rotation = np.array(
-                [
-                    [0.0, -1.0, 0.0, 0.0],
-                    [1.0, 0.0, 0.0, 0.0],
-                    [0.0, 0.0, 1.0, 0.0],
-                    [0.0, 0.0, 0.0, 1.0],
-                ]
-            )
-            affines = np.repeat(np.eye(4)[None, ...], 3, axis=0)
-            affines[1] = rotation
-
-            status = _rotate_bvecs_best_effort(source, output, np.moveaxis(affines, 0, -1))
-
-            rotated = np.loadtxt(output)
-            self.assertEqual(status["status"], "rotated")
-            self.assertEqual(status["affine_layout"], "4x4xN")
-            np.testing.assert_allclose(rotated[:, 0], [1.0, 0.0, 0.0], atol=1e-8)
-            np.testing.assert_allclose(rotated[:, 1], [1.0, 0.0, 0.0], atol=1e-8)
-
-    def test_gradient_reorientation_matches_dipy_with_rotation_and_shear(self):
-        import numpy as np
-        from dipy.core.gradients import gradient_table, reorient_bvecs
-        from scipy.spatial.transform import Rotation
-        from preprocessing.pipeline import _rotate_bvecs_best_effort
-
-        rng = np.random.default_rng(42)
-        vectors = rng.normal(size=(7, 3))
-        vectors /= np.linalg.norm(vectors, axis=1, keepdims=True)
-        vectors[0] = 0
-        bvals = np.array([0] + [1000] * 6)
-        affines = np.repeat(np.eye(4)[..., None], len(vectors), axis=-1)
-        for index in range(1, len(vectors)):
-            stretch = np.array([[1.1, .08, 0], [.08, .9, .04], [0, .04, 1.03]])
-            affines[:3, :3, index] = Rotation.from_euler("xyz", [index * 7, -11, 18], degrees=True).as_matrix() @ stretch
-        reference = reorient_bvecs(gradient_table(bvals, bvecs=vectors.copy()), affines[..., 1:]).bvecs
-        with tempfile.TemporaryDirectory() as tmp:
-            source, output = Path(tmp) / "source.bvec", Path(tmp) / "rotated.bvec"
-            np.savetxt(source, vectors.T)
-            for layout in (affines, np.moveaxis(affines, -1, 0)):
-                result = _rotate_bvecs_best_effort(source, output, layout)
-                np.testing.assert_allclose(np.loadtxt(output).T, reference, atol=1e-9, rtol=1e-9)
-                self.assertEqual(result["status"], "rotated")
-
-    def test_invalid_motion_affines_do_not_silently_copy_gradients(self):
-        import numpy as np
-        from preprocessing.pipeline import _rotate_bvecs_best_effort
-
-        with tempfile.TemporaryDirectory() as tmp:
-            source, output = Path(tmp) / "source.bvec", Path(tmp) / "rotated.bvec"
-            source.write_text("1 0\n0 1\n0 0\n")
-            for affines in (np.eye(4)[..., None], np.full((4, 4, 2), np.nan), np.zeros((4, 4, 2))):
-                with self.assertRaises(ValueError):
-                    _rotate_bvecs_best_effort(source, output, affines)
-                self.assertFalse(output.exists())
 
     def test_skip_writes_optional_skipped_manifest(self) -> None:
         from preprocessing import DwiPreprocessingConfig, run_dwi_preprocessing
@@ -288,8 +182,9 @@ class DwiPreprocessingPipelineTest(unittest.TestCase):
             manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
             self.assertEqual(result.status, "planned")
             self.assertEqual(manifest["status"], "planned")
-            self.assertEqual(manifest["backend"]["backend"], "dipy")
-            self.assertIn("motion_correction", " ".join(manifest["commands"][2]["argv"]))
+            self.assertEqual(manifest["backend"]["backend"], "dipy_mppca+gibbs+fsl_eddy")
+            self.assertEqual([record["argv"][1] for record in manifest["commands"][:2]], ["mppca", "gibbs_removal"])
+            self.assertEqual(Path(manifest["commands"][2]["argv"][0]).name, "dwifslpreproc")
 
     def test_execute_with_fake_backend_generates_final_outputs(self) -> None:
         from preprocessing import DwiPreprocessingConfig, inspect_preprocessing_backend, run_dwi_preprocessing
@@ -303,7 +198,6 @@ class DwiPreprocessingPipelineTest(unittest.TestCase):
             config = DwiPreprocessingConfig(
                 subject_id="100307",
                 input_root=subject,
-                backend="mrtrix_fsl",
                 execute=True,
                 mrtrix_bin_dir=bin_dir,
                 fsl_bin_dir=bin_dir,
@@ -346,7 +240,8 @@ class DwiPreprocessingPipelineTest(unittest.TestCase):
                 )
 
             manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
-            executable_commands = [record["argv"] for record in manifest["commands"][:3]]
+            executable_commands = _external_commands(manifest)
+            self.assertEqual(len(executable_commands), 1)
             self.assertTrue(all("-force" not in command for command in executable_commands))
             self.assertTrue(qc["backend_details"]["diagnostics"]["topup_field_map"]["exists"])
             self.assertEqual(qc["mask_generation"]["method"], "pnl_cnn_corrected_dwi")
@@ -382,7 +277,6 @@ class DwiPreprocessingPipelineTest(unittest.TestCase):
             changed_config = DwiPreprocessingConfig(
                 subject_id="100307",
                 input_root=subject,
-                backend="mrtrix_fsl",
                 execute=True,
                 mrtrix_bin_dir=bin_dir,
                 fsl_bin_dir=bin_dir,
@@ -392,7 +286,7 @@ class DwiPreprocessingPipelineTest(unittest.TestCase):
             changed_manifest = json.loads(changed.manifest_path.read_text(encoding="utf-8"))
             self.assertEqual(changed.status, "completed")
             self.assertTrue(changed_manifest["overwrite_existing"])
-            self.assertIn("-force", changed_manifest["commands"][0]["argv"])
+            self.assertIn("-force", _external_commands(changed_manifest)[0])
             self.assertEqual(
                 changed_manifest["cache_key"]["parameters"]["eddy_second_level_model"],
                 "linear",
@@ -412,7 +306,7 @@ class DwiPreprocessingPipelineTest(unittest.TestCase):
             bin_dir = root / "bin"
             _write_fake_backend(bin_dir)
             config = DwiPreprocessingConfig(
-                subject_id="100307", input_root=subject, backend="mrtrix_fsl",
+                subject_id="100307", input_root=subject,
                 execute=True, mrtrix_bin_dir=bin_dir, fsl_bin_dir=bin_dir,
             )
             result = run_dwi_preprocessing(config)
@@ -429,7 +323,7 @@ class DwiPreprocessingPipelineTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             config = DwiPreprocessingConfig(
-                subject_id="100307", input_root=root, backend="mrtrix_fsl",
+                subject_id="100307", input_root=root,
                 reverse_phase_b0=root / "reverse.nii.gz",
             )
             backend = inspect_preprocessing_backend(config)
@@ -450,7 +344,6 @@ class DwiPreprocessingPipelineTest(unittest.TestCase):
                 DwiPreprocessingConfig(
                     subject_id="100307",
                     input_root=subject,
-                    backend="mrtrix_fsl",
                         execute=False,
                     mrtrix_bin_dir=bin_dir,
                     fsl_bin_dir=bin_dir,
@@ -460,7 +353,7 @@ class DwiPreprocessingPipelineTest(unittest.TestCase):
             )
 
             manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
-            command = manifest["commands"][2]["argv"]
+            command = _external_commands(manifest)[0]
             self.assertIn("-rpe_none", command)
             self.assertEqual(command[command.index("-pe_dir") + 1], "AP")
             self.assertEqual(command[command.index("-readout_time") + 1], "0.1")
@@ -478,7 +371,6 @@ class DwiPreprocessingPipelineTest(unittest.TestCase):
                 DwiPreprocessingConfig(
                     subject_id="100307",
                     input_root=subject,
-                    backend="mrtrix_fsl",
                         execute=True,
                     force=True,
                     mrtrix_bin_dir=bin_dir,
@@ -487,7 +379,8 @@ class DwiPreprocessingPipelineTest(unittest.TestCase):
             )
 
             manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
-            executable_commands = [record["argv"] for record in manifest["commands"][:3]]
+            executable_commands = _external_commands(manifest)
+            self.assertEqual(len(executable_commands), 1)
             self.assertTrue(all("-force" in command for command in executable_commands))
 
     def test_external_command_failure_is_recorded_in_manifest_and_qc(self) -> None:
@@ -499,7 +392,7 @@ class DwiPreprocessingPipelineTest(unittest.TestCase):
             bin_dir = tmp_path / "bin"
             _write_fake_backend(bin_dir)
             _write_fake_command(
-                bin_dir / "mrdegibbs",
+                bin_dir / "dwifslpreproc",
                 """
 import sys
 sys.exit(9)
@@ -513,7 +406,6 @@ sys.exit(9)
                         subject_id="100307",
                         input_root=subject,
                         output_dir=output_dir,
-                        backend="mrtrix_fsl",
                                 execute=True,
                         mrtrix_bin_dir=bin_dir,
                         fsl_bin_dir=bin_dir,
@@ -548,7 +440,6 @@ sys.exit(9)
                 DwiPreprocessingConfig(
                     subject_id="100307",
                     input_root=subject,
-                    backend="mrtrix_fsl",
                         execute=True,
                     force=True,
                     mrtrix_bin_dir=bin_dir,
@@ -575,64 +466,95 @@ sys.exit(9)
             self.assertEqual(manifest["parameters"]["eddy_threads"], 3)
             self.assertEqual(manifest["parameters"]["eddy_second_level_model"], "linear")
 
-    def test_execute_dipy_basic_generates_final_outputs(self) -> None:
+
+    def _w2a_plan(self, root, **kwargs):
+        from preprocessing import DwiPreprocessingConfig, run_dwi_preprocessing
+
+        subject = _write_subject(root)
+        bin_dir = root / "bin"
+        _write_fake_backend(bin_dir)
+        result = run_dwi_preprocessing(DwiPreprocessingConfig(
+            subject_id="100307", input_root=subject, execute=False, mrtrix_bin_dir=bin_dir, fsl_bin_dir=bin_dir, **kwargs))
+        return json.loads(result.manifest_path.read_text(encoding="utf-8"))
+
+    def test_w2a_plan_is_mppca_then_gibbs_then_dwifslpreproc_without_rpe_pair(self) -> None:
+        """W2a (D1): one route. MP-PCA, then Gibbs removal, then dwifslpreproc on the Gibbs-corrected image."""
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = self._w2a_plan(Path(tmp))
+            argv = [record["argv"] for record in manifest["commands"]]
+            names = [Path(item[0]).name if item[0] != "dipy" else "dipy:" + item[1] for item in argv]
+            self.assertEqual(names, ["dipy:mppca", "dipy:gibbs_removal", "dwifslpreproc", "optional-output"])
+            flat = " ".join(" ".join(item) for item in argv)
+            self.assertNotIn("dwidenoise", flat)
+            self.assertNotIn("mrdegibbs", flat)
+            self.assertNotIn("-rpe_pair", argv[2])
+            self.assertIn("-rpe_none", argv[2])
+            # The dwifslpreproc input is the Gibbs-corrected image, with the original FSL gradients.
+            self.assertEqual(argv[2][1], argv[1][3])
+            self.assertEqual(argv[2][argv[2].index("-fslgrad") + 1:argv[2].index("-fslgrad") + 3],
+                             [str(Path(tmp).resolve() / "100307" / "input" / "bvecs"), str(Path(tmp).resolve() / "100307" / "input" / "bvals")])
+            self.assertNotIn("-eddy_mask", argv[2])
+            self.assertEqual(manifest["backend"]["missing_required"], [])
+
+    def test_w2a_skip_gibbs_keeps_the_degibbs_path_for_dwifslpreproc(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = self._w2a_plan(Path(tmp), dipy_run_gibbs=False)
+            argv = [record["argv"] for record in manifest["commands"]]
+            self.assertEqual([item[1] for item in argv[:2]], ["mppca", "skip_gibbs_removal"])
+            self.assertEqual(argv[2][1], argv[1][3])
+
+    def test_w2a_rpe_pair_only_when_a_reverse_b0_is_given(self) -> None:
+        import nibabel as nib
+        import numpy as np
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            reverse = root / "reverse_b0.nii.gz"
+            nib.save(nib.Nifti1Image(np.zeros((5, 5, 5, 1), dtype=np.float32), np.eye(4)), str(reverse))
+            manifest = self._w2a_plan(root, reverse_phase_b0=reverse, phase_encoding_direction="AP", readout_time=0.05)
+            argv = [record["argv"] for record in manifest["commands"]]
+            names = [Path(item[0]).name if item[0] != "dipy" else "dipy:" + item[1] for item in argv]
+            self.assertEqual(names, ["dipy:mppca", "dipy:gibbs_removal", "dwiextract", "mrconvert", "mrcat",
+                                     "dwifslpreproc", "optional-output"])
+            self.assertIn("-rpe_pair", argv[5])
+            self.assertNotIn("-rpe_none", argv[5])
+            self.assertEqual(argv[2][1], argv[1][3])
+
+    def test_w2a_dipy_steps_run_in_process_and_save_float32_with_the_source_affine(self) -> None:
+        import nibabel as nib
+        import numpy as np
+
         from preprocessing import DwiPreprocessingConfig, run_dwi_preprocessing
 
         with tempfile.TemporaryDirectory() as tmp:
-            subject = _write_nifti_subject(Path(tmp))
-            result = run_dwi_preprocessing(
-                DwiPreprocessingConfig(
-                    subject_id="100307",
-                    input_root=subject,
-                    backend="dipy",
-                    brain_mask_backend="provided",
-                    execute=True,
-                    dipy_denoise_method="none",
-                    dipy_run_gibbs=False,
-                    dipy_run_motion_correction=False,
-                )
-            )
-
-            qc = json.loads(result.qc_path.read_text(encoding="utf-8"))
-            self.assertEqual(result.status, "completed")
-            self.assertTrue(result.final_dwi_path.is_file())
-            self.assertEqual(qc["backend_details"]["denoise"]["status"], "skipped")
-            self.assertEqual(qc["backend_details"]["motion"]["status"], "skipped")
-
-    def test_execute_dipy_fast_path_links_raw_outputs(self) -> None:
-        from preprocessing import DwiPreprocessingConfig, run_dwi_preprocessing
-
-        with tempfile.TemporaryDirectory() as tmp:
-            subject = _write_subject(Path(tmp))
-            stale_final = subject / "outputs" / "01_preproc" / "100307_dwi_final.nii.gz"
-            stale_final.parent.mkdir(parents=True)
-            stale_final.write_text("stale preprocessed data", encoding="utf-8")
-            result = run_dwi_preprocessing(
-                DwiPreprocessingConfig(
-                    subject_id="100307",
-                    input_root=subject,
-                    backend="dipy",
-                    brain_mask_backend="provided",
-                    execute=True,
-                    dipy_denoise_method="none",
-                    dipy_run_gibbs=False,
-                    dipy_run_motion_correction=False,
-                    force=True,
-                )
-            )
-
+            root = Path(tmp)
+            subject = _write_subject(root)
+            bin_dir = root / "bin"
+            _write_fake_backend(bin_dir)
+            result = run_dwi_preprocessing(DwiPreprocessingConfig(
+                subject_id="100307", input_root=subject, execute=True, mrtrix_bin_dir=bin_dir, fsl_bin_dir=bin_dir))
             manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
+            argv = [record["argv"] for record in manifest["commands"]]
+            for step in argv[:2]:
+                image = nib.load(step[3])
+                self.assertEqual(image.get_data_dtype(), np.float32)
+                np.testing.assert_array_equal(image.affine, np.eye(4))
+                self.assertEqual(image.shape, (5, 5, 5, 3))
             qc = json.loads(result.qc_path.read_text(encoding="utf-8"))
-            self.assertEqual(result.status, "completed")
-            self.assertTrue(result.final_dwi_path.exists())
-            self.assertEqual(
-                result.final_dwi_path.resolve(),
-                (subject / "input" / "data.nii.gz").resolve(),
-            )
-            self.assertEqual(manifest["status"], "completed")
-            self.assertTrue(qc["backend_details"]["fast_path"])
-            self.assertEqual(len(qc["warnings"]), 5)
-            self.assertTrue(any("Bias-field" in warning for warning in qc["warnings"]))
+            self.assertEqual(qc["backend_details"]["denoise"]["method"], "dipy_mppca")
+            self.assertEqual(qc["backend_details"]["gibbs"]["method"], "dipy_gibbs_removal")
+
+    def test_w2a_the_route_needs_dwifslpreproc_and_dwi2mask_not_the_mrtrix_denoise_tools(self) -> None:
+        from preprocessing.pipeline import REQUIRED_COMMANDS
+
+        self.assertEqual(REQUIRED_COMMANDS, ("dwifslpreproc", "dwi2mask"))
+
+    def test_w2a_removed_config_fields_are_gone(self) -> None:
+        from preprocessing import DwiPreprocessingConfig
+
+        for name in ("backend", "dipy_denoise_method", "dipy_run_motion_correction"):
+            with self.subTest(name=name), self.assertRaises(TypeError):
+                DwiPreprocessingConfig(subject_id="100307", input_root=Path("."), **{name: "x"})
 
 
 if __name__ == "__main__":

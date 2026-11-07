@@ -1,4 +1,10 @@
-"""Optional DWI preprocessing wrapper around DIPY or MRtrix3/FSL commands.
+"""Optional DWI preprocessing: one route (W2a / D1).
+
+The route is DIPY MP-PCA denoising, then DIPY Gibbs-ringing removal, then FSL
+eddy (and topup when a reverse-PE b=0 image is given) through MRtrix3
+``dwifslpreproc``. The ``dwifslpreproc`` input is the denoised, Gibbs-corrected
+NIfTI, with the voxel order and affine of the imported DWI and the original FSL
+gradients.
 
 This stage is intentionally optional. Product pipelines may consume raw
 ``input/data.nii.gz`` directly, or users may run this stage first to generate a
@@ -31,16 +37,21 @@ from shared.brain_mask import (
     validate_brain_mask,
 )
 from shared.pipeline import RawInputBundle, find_subject_root
+from shared.preprocessing_route import ROUTE_ID as _ROUTE_ID
 
 
-REQUIRED_COMMANDS = ("dwidenoise", "mrdegibbs", "dwifslpreproc", "dwi2mask")
+REQUIRED_COMMANDS = ("dwifslpreproc", "dwi2mask")
 REVERSE_PHASE_COMMANDS = ("mrconvert", "dwiextract", "mrcat")
 DIAGNOSTIC_COMMANDS = ("eddy", "topup")
+PYTHON_MODULES = ("nibabel", "numpy", "dipy")
+# W2a (D1): the one route. Its label is in the cache key and the manifest. The cache-key version stays 5 (W2b adds v6).
+ROUTE_ID = _ROUTE_ID
+# Old manifests (the removed DIPY between-volume route) still exist on disk and are read, never written.
 DIPY_BVEC_ROTATION_POLICY = "inverse_sampling_affine_polar_v1"
 
 
 def preprocessing_gradients_current(manifest: dict) -> bool:
-    """Reject motion-corrected DIPY products using the superseded rotation rule."""
+    """Reject motion-corrected products of the removed DIPY route that used the superseded rotation rule (old manifests)."""
     key = manifest.get("cache_key") or {}
     if not isinstance(key, dict) or key.get("backend") != "dipy":
         return True
@@ -70,13 +81,10 @@ class DwiPreprocessingConfig:
     subject_id: str
     input_root: Path
     output_dir: Optional[Path] = None
-    backend: str = "dipy"
     execute: bool = False
     skip: bool = False
     force: bool = False
-    dipy_denoise_method: str = "mppca"
     dipy_run_gibbs: bool = True
-    dipy_run_motion_correction: bool = True
     b0_threshold: float = 50.0
     mrtrix_bin_dir: Optional[Path] = None
     fsl_bin_dir: Optional[Path] = None
@@ -176,35 +184,9 @@ def _external_command_environment(config: DwiPreprocessingConfig) -> dict[str, s
 
 
 def inspect_preprocessing_backend(config: DwiPreprocessingConfig) -> dict[str, Any]:
-    backend_name = config.backend.lower()
-    if backend_name == "dipy":
-        python_modules = ("nibabel", "numpy", "dipy")
-        python_status = {
-            module: importlib.util.find_spec(module) is not None
-            for module in python_modules
-        }
-        missing_python = [module for module, available in python_status.items() if not available]
-        return {
-            "kind": "dwi_preprocessing_backend",
-            "backend": "dipy",
-            "python": python_status,
-            "missing_python": missing_python,
-            "available": not missing_python,
-            "capabilities": {
-                "denoise": config.dipy_denoise_method,
-                "gibbs_removal": bool(config.dipy_run_gibbs),
-                "between_volume_motion_correction": bool(config.dipy_run_motion_correction),
-                "susceptibility_distortion_correction": False,
-                "eddy_current_modeling": False,
-            },
-        }
-    if backend_name not in {"mrtrix_fsl", "mrtrix", "fsl"}:
-        return {
-            "kind": "dwi_preprocessing_backend",
-            "backend": backend_name,
-            "available": False,
-            "missing_required": [f"unsupported backend: {config.backend}"],
-        }
+    """W2a (D1): the one route needs DIPY (Python) and MRtrix3 plus FSL (commands)."""
+    python_status = {module: importlib.util.find_spec(module) is not None for module in PYTHON_MODULES}
+    missing_python = [module for module, available in python_status.items() if not available]
     required_commands = list(REQUIRED_COMMANDS)
     if config.reverse_phase_b0 is not None:
         required_commands.extend(REVERSE_PHASE_COMMANDS)
@@ -212,21 +194,23 @@ def inspect_preprocessing_backend(config: DwiPreprocessingConfig) -> dict[str, A
         command: _resolve_command(command, config)
         for command in (*required_commands, *DIAGNOSTIC_COMMANDS)
     }
-    missing_required = [command for command in required_commands if commands[command] is None]
+    missing_commands = [command for command in required_commands if commands[command] is None]
     missing_diagnostic = [command for command in DIAGNOSTIC_COMMANDS if commands[command] is None]
     return {
         "kind": "dwi_preprocessing_backend",
-        "backend": "mrtrix_fsl",
+        "backend": ROUTE_ID,
+        "python": python_status,
+        "missing_python": missing_python,
         "required_commands": required_commands,
         "diagnostic_commands": list(DIAGNOSTIC_COMMANDS),
         "commands": commands,
-        "missing_required": missing_required,
+        "missing_commands": missing_commands,
+        "missing_required": [*(f"python module: {module}" for module in missing_python), *missing_commands],
         "missing_diagnostic": missing_diagnostic,
-        "available": not missing_required,
+        "available": not missing_python and not missing_commands,
         "capabilities": {
             "denoise": "mppca",
-            "gibbs_removal": True,
-            "between_volume_motion_correction": True,
+            "gibbs_removal": bool(config.dipy_run_gibbs),
             "susceptibility_distortion_correction": config.reverse_phase_b0 is not None,
             "eddy_current_modeling": True,
         },
@@ -254,6 +238,14 @@ def _link_or_copy(src: Path, dest: Path) -> None:
     except OSError:
         pass
     shutil.copy2(src, dest)
+
+
+def _module_version(name: str) -> Optional[str]:
+    try:
+        from importlib import metadata
+        return metadata.version(name)
+    except Exception:
+        return None
 
 
 def _file_record(path: Path) -> dict[str, Any]:
@@ -291,7 +283,7 @@ def _preprocessing_cache_key(
     return {
         "kind": "dwi_preprocessing_cache_key",
         "version": 5,
-        "backend": str(backend.get("backend") or config.backend).lower(),
+        "backend": ROUTE_ID,
         "inputs": {
             "dwi": _file_record(raw.dwi_path),
             "bval": _file_record(raw.bval_path),
@@ -300,11 +292,7 @@ def _preprocessing_cache_key(
             "reverse_phase_b0": _file_record(reverse_phase) if reverse_phase else None,
         },
         "parameters": {
-            "dipy_denoise_method": config.dipy_denoise_method.lower(),
             "dipy_run_gibbs": bool(config.dipy_run_gibbs),
-            "dipy_run_motion_correction": bool(config.dipy_run_motion_correction),
-            **({"dipy_bvec_rotation_policy": DIPY_BVEC_ROTATION_POLICY}
-               if str(backend.get("backend") or config.backend).lower() == "dipy" and config.dipy_run_motion_correction else {}),
             "b0_threshold": float(config.b0_threshold),
             "phase_encoding_direction": config.phase_encoding_direction,
             "readout_time": config.readout_time,
@@ -323,10 +311,9 @@ def _preprocessing_cache_key(
             if path.is_file()
         },
         "eddy_binaries": eddy_binaries,
-        "eddy_cuda_visibility": os.environ.get("CUDA_VISIBLE_DEVICES")
-        if backend.get("backend") == "mrtrix_fsl" else None,
-        "eddy_device_policy": _file_record(Path(__file__).resolve().parents[1] / "shared/mrtrix_preproc_runner.py")
-        if backend.get("backend") == "mrtrix_fsl" else None,
+        "dipy_version": _module_version("dipy"),
+        "eddy_cuda_visibility": os.environ.get("CUDA_VISIBLE_DEVICES"),
+        "eddy_device_policy": _file_record(Path(__file__).resolve().parents[1] / "shared/mrtrix_preproc_runner.py"),
         "brain_mask": _brain_mask_cache_key(
             config, mask_backend if mask_backend is not None else inspect_brain_mask_backend(_brain_mask_config(config)),
         ),
@@ -470,17 +457,6 @@ def _collect_dwifslpreproc_diagnostics(paths: dict[str, Path], subject: str) -> 
 
 
 def _build_commands(raw: RawInputBundle, config: DwiPreprocessingConfig, paths: dict[str, Path], backend: dict[str, Any]) -> list[list[str]]:
-    if backend.get("backend") == "dipy":
-        return [
-            ["dipy", "denoise", config.dipy_denoise_method, raw.dwi_path.as_posix(), (paths["denoise_dir"] / f"{raw.subject_id}_dwi_denoised.nii.gz").as_posix()],
-            ["dipy", "gibbs_removal", (paths["denoise_dir"] / f"{raw.subject_id}_dwi_degibbs.nii.gz").as_posix()]
-            if config.dipy_run_gibbs
-            else ["dipy", "skip_gibbs_removal"],
-            ["dipy", "motion_correction", (paths["motion_dir"] / f"{raw.subject_id}_dwi_preproc.nii.gz").as_posix()]
-            if config.dipy_run_motion_correction
-            else ["dipy", "skip_motion_correction"],
-        ]
-
     subject = raw.subject_id
     denoised = paths["denoise_dir"] / f"{subject}_dwi_denoised.nii.gz"
     noise = paths["denoise_dir"] / f"{subject}_dwi_noise.nii.gz"
@@ -592,25 +568,15 @@ def _build_commands(raw: RawInputBundle, config: DwiPreprocessingConfig, paths: 
     if config.readout_time is not None:
         dwifslpreproc_cmd.extend(["-readout_time", str(config.readout_time)])
 
-    dwidenoise_cmd = [
-        backend["commands"]["dwidenoise"] or "dwidenoise",
-        raw.dwi_path.as_posix(),
-        denoised.as_posix(),
-        "-noise",
-        noise.as_posix(),
-    ]
-    mrdegibbs_cmd = [
-        backend["commands"]["mrdegibbs"] or "mrdegibbs",
-        denoised.as_posix(),
-        degibbs.as_posix(),
-    ]
-    if config.force:
-        dwidenoise_cmd.append("-force")
-        mrdegibbs_cmd.append("-force")
+    # W2a (D1): DIPY MP-PCA, then DIPY Gibbs removal (a copy when skipped, so the next step reads one fixed path).
+    # These two steps run in this process; the MRtrix3 and FSL steps below run as commands.
+    mppca_cmd = ["dipy", "mppca", raw.dwi_path.as_posix(), denoised.as_posix(), noise.as_posix()]
+    gibbs_cmd = ["dipy", "gibbs_removal" if config.dipy_run_gibbs else "skip_gibbs_removal",
+                 denoised.as_posix(), degibbs.as_posix()]
 
     return [
-        dwidenoise_cmd,
-        mrdegibbs_cmd,
+        mppca_cmd,
+        gibbs_cmd,
         *reverse_phase_commands,
         dwifslpreproc_cmd,
         [
@@ -680,244 +646,66 @@ def _copy_input_sidecars(raw: RawInputBundle, paths: dict[str, Path]) -> None:
     _link_or_copy(raw.bvec_path, paths["gradients_dir"] / f"{raw.subject_id}_gradients_checked.bvec")
 
 
-def _load_bvecs(path: Path) -> list[list[float]]:
-    rows = [[float(token) for token in line.split()] for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
-    if len(rows) == 3:
-        return [list(vector) for vector in zip(*rows)]
-    return rows
+def _save_float32(array: Any, source_img: Any, path: Path) -> None:
+    """Save with the affine and header of the imported DWI, but as float32.
+
+    The source header may name an integer type. Saving denoised floats in that type would round them
+    (and write a scale), so the eddy input would differ from the DIPY result.
+    """
+    import nibabel as nib
+    import numpy as np
+
+    image = nib.Nifti1Image(np.asarray(array, dtype=np.float32), source_img.affine, source_img.header)
+    image.set_data_dtype(np.float32)
+    nib.save(image, str(path))
 
 
-def _write_bvecs(path: Path, vectors: list[list[float]]) -> None:
-    if not vectors:
-        path.write_text("", encoding="utf-8")
-        return
-    rows = list(zip(*vectors))
-    text = "\n".join(" ".join(f"{float(value):.10g}" for value in row) for row in rows) + "\n"
-    path.write_text(text, encoding="utf-8")
-
-
-def _rotate_bvecs_best_effort(raw_bvec_path: Path, output_bvec_path: Path, affines: Any) -> dict[str, Any]:
-    """Reorient gradients using DIPY's reference-to-moving sampling transforms."""
-    try:
-        import numpy as np
-    except Exception as exc:  # pragma: no cover
-        raise RuntimeError("Gradient reorientation requires NumPy") from exc
-
-    bvecs = _load_bvecs(raw_bvec_path)
-    affine_array = np.asarray(affines)
-    input_affine_shape = list(affine_array.shape)
-    affine_layout: Optional[str] = None
-    if (
-        affine_array.ndim == 3
-        and affine_array.shape[:2] == (4, 4)
-        and affine_array.shape[-1] == len(bvecs)
-    ):
-        # DIPY 1.12 returns one affine per volume with shape (4, 4, N).
-        # Move the volume axis first so the rotation loop below also remains
-        # compatible with the historical/list-derived (N, 4, 4) layout.
-        affine_array = np.moveaxis(affine_array, -1, 0)
-        affine_layout = "4x4xN"
-    elif (
-        affine_array.ndim == 3
-        and affine_array.shape[-2:] == (4, 4)
-        and affine_array.shape[0] == len(bvecs)
-    ):
-        affine_layout = "Nx4x4"
-
-    if affine_layout is None:
-        raise ValueError(f"Motion affine shape {input_affine_shape} does not match {len(bvecs)} gradients")
-    if not np.isfinite(affine_array).all() or not np.isfinite(bvecs).all():
-        raise ValueError("Motion affines and gradients must be finite for reorientation")
-
-    rotated: list[list[float]] = []
-    for vector, affine in zip(bvecs, affine_array):
-        vec = np.asarray(vector, dtype=float)
-        norm = float(np.linalg.norm(vec))
-        if norm < 1e-8:
-            rotated.append([0.0, 0.0, 0.0])
-            continue
-        linear = affine[:3, :3]
-        if np.linalg.matrix_rank(linear) < 3:
-            raise ValueError("Singular motion affine cannot define a gradient rotation")
-        try:
-            u, _, vt = np.linalg.svd(linear)
-            rotation = u @ vt
-        except np.linalg.LinAlgError as exc:
-            raise ValueError("Motion affine polar decomposition failed") from exc
-        # DIPY affines map reference positions to moving samples; gradients use R^-1.
-        new_vec = rotation.T @ vec
-        new_norm = float(np.linalg.norm(new_vec))
-        if new_norm > 1e-8:
-            new_vec = new_vec / new_norm
-        rotated.append([float(new_vec[0]), float(new_vec[1]), float(new_vec[2])])
-    _write_bvecs(output_bvec_path, rotated)
-    return {
-        "status": "rotated",
-        "method": "inverse_polar_rotation_of_dipy_sampling_affines",
-        "gradient_count": len(rotated),
-        "affine_layout": affine_layout,
-        "affine_shape": input_affine_shape,
-    }
-
-
-def _run_dipy_backend(
-    raw: RawInputBundle,
-    config: DwiPreprocessingConfig,
-    paths: dict[str, Path],
+def _run_dipy_step(
+    command: list[str],
     *,
     log: Optional[Callable[[str], None]],
 ) -> dict[str, Any]:
-    try:
-        import nibabel as nib
-        import numpy as np
-        from dipy.align import motion_correction
-        from dipy.core.gradients import gradient_table
-        from dipy.denoise.gibbs import gibbs_removal
-        from dipy.denoise.localpca import localpca, mppca
-        try:
-            from dipy.denoise.patch2self import patch2self
-        except Exception:  # pragma: no cover - version-dependent optional path
-            patch2self = None
-    except Exception as exc:
-        raise RuntimeError("DIPY preprocessing backend requires nibabel, numpy, and dipy.") from exc
+    """Run one in-process DIPY step of the plan: ``mppca`` or ``gibbs_removal`` (``skip_gibbs_removal`` copies)."""
+    step = command[1]
 
     def emit(message: str) -> None:
         if log:
             log("[Preproc:DIPY] " + message)
 
-    subject = raw.subject_id
-    denoise_method = config.dipy_denoise_method.lower()
-    if denoise_method in {"none", "skip", ""} and not config.dipy_run_gibbs and not config.dipy_run_motion_correction:
-        emit("Fast path: linking raw DWI/gradients directly to final preprocessing outputs")
-        denoised_path = paths["denoise_dir"] / f"{subject}_dwi_denoised.nii.gz"
-        degibbs_path = paths["denoise_dir"] / f"{subject}_dwi_degibbs.nii.gz"
-        corrected_path = paths["motion_dir"] / f"{subject}_dwi_preproc.nii.gz"
-        _link_or_copy(raw.dwi_path, denoised_path)
-        _link_or_copy(denoised_path, degibbs_path)
-        _link_or_copy(degibbs_path, corrected_path)
-        _link_or_copy(corrected_path, paths["final_dwi"])
-        _link_or_copy(raw.bval_path, paths["final_bval"])
-        _link_or_copy(raw.bvec_path, paths["final_bvec"])
-        return {
-            "denoise": {"method": denoise_method, "status": "skipped"},
-            "gibbs": {"status": "skipped"},
-            "motion": {"status": "skipped", "bvec_rotation": {"status": "copied"}},
-            "bias_correction": {
-                "status": "not_run",
-                "reason": "fast path requested with no denoise/gibbs/motion operations",
-            },
-            "susceptibility_distortion_correction": {
-                "status": "not_supported_by_dipy_backend",
-                "recommended_backend": "mrtrix_fsl",
-            },
-            "files": {
-                "denoised": denoised_path.as_posix(),
-                "degibbs": degibbs_path.as_posix(),
-                "motion_corrected": corrected_path.as_posix(),
-            },
-            "fast_path": True,
-        }
-
-    emit(f"Loading source DWI from {raw.dwi_path}")
-    source_img = nib.load(str(raw.dwi_path))
-    emit("Materializing DWI array into memory")
+    if step == "skip_gibbs_removal":
+        emit("Skipping Gibbs removal")
+        shutil.copy2(command[2], command[3])
+        return {"status": "skipped"}
+    try:
+        import nibabel as nib
+        import numpy as np
+    except Exception as exc:
+        raise RuntimeError("DIPY preprocessing requires nibabel, numpy, and dipy.") from exc
+    source_img = nib.load(command[2])
     data = source_img.get_fdata(dtype=np.float32)
     if data.ndim != 4:
         raise ValueError(f"DIPY preprocessing expects a 4D DWI image, got shape {data.shape}")
-    emit(f"Loaded DWI shape={data.shape}")
-
-    emit("Loading gradients")
-    bvals = np.loadtxt(str(raw.bval_path), ndmin=1)
-    bvecs = np.loadtxt(str(raw.bvec_path))
-    if bvecs.ndim == 2 and bvecs.shape[0] == 3:
-        bvecs = bvecs.T
-    gtab = gradient_table(bvals, bvecs=bvecs, b0_threshold=config.b0_threshold)
-    emit(f"Gradient table prepared with {int(len(bvals))} volumes")
-
-    denoised = data
-    noise_path = paths["denoise_dir"] / f"{subject}_dwi_noise.nii.gz"
-    denoise_status: dict[str, Any] = {"method": denoise_method}
-    if denoise_method in {"none", "skip", ""}:
-        emit("Skipping denoise")
-        denoise_status["status"] = "skipped"
-    elif denoise_method == "mppca":
-        emit("Running mppca denoise")
+    emit(f"Loaded {command[2]} shape={data.shape}")
+    if step == "mppca":
+        try:
+            from dipy.denoise.localpca import mppca
+        except Exception as exc:
+            raise RuntimeError("DIPY preprocessing requires nibabel, numpy, and dipy.") from exc
+        emit("Running MP-PCA denoising")
         denoised, sigma = mppca(data, patch_radius=2, return_sigma=True)
-        nib.save(nib.Nifti1Image(np.asarray(sigma, dtype=np.float32), source_img.affine, source_img.header), str(noise_path))
-        denoise_status["status"] = "completed"
-        denoise_status["noise_map"] = noise_path.as_posix()
-    elif denoise_method == "localpca":
-        emit("Running localpca denoise")
-        denoised = localpca(data, sigma=None, patch_radius=2)
-        denoise_status["status"] = "completed"
-    elif denoise_method == "patch2self":
-        if patch2self is None:
-            raise RuntimeError("DIPY patch2self is not available in this environment.")
-        emit("Running patch2self denoise")
-        denoised = patch2self(data, bvals, b0_threshold=config.b0_threshold, verbose=False)
-        denoise_status["status"] = "completed"
-    else:
-        raise ValueError(f"Unsupported DIPY denoise method: {config.dipy_denoise_method}")
-
-    denoised_path = paths["denoise_dir"] / f"{subject}_dwi_denoised.nii.gz"
-    nib.save(nib.Nifti1Image(np.asarray(denoised, dtype=np.float32), source_img.affine, source_img.header), str(denoised_path))
-
-    if config.dipy_run_gibbs:
+        _save_float32(denoised, source_img, Path(command[3]))
+        _save_float32(sigma, source_img, Path(command[4]))
+        return {"status": "completed", "method": "dipy_mppca", "noise_map": command[4]}
+    if step == "gibbs_removal":
+        try:
+            from dipy.denoise.gibbs import gibbs_removal
+        except Exception as exc:
+            raise RuntimeError("DIPY preprocessing requires nibabel, numpy, and dipy.") from exc
         emit("Running Gibbs removal")
-        degibbs = gibbs_removal(np.asarray(denoised, dtype=np.float32), slice_axis=2, inplace=False, num_processes=1)
-        gibbs_status = {"status": "completed"}
-    else:
-        emit("Skipping Gibbs removal")
-        degibbs = np.asarray(denoised, dtype=np.float32)
-        gibbs_status = {"status": "skipped"}
-    degibbs_path = paths["denoise_dir"] / f"{subject}_dwi_degibbs.nii.gz"
-    nib.save(nib.Nifti1Image(np.asarray(degibbs, dtype=np.float32), source_img.affine, source_img.header), str(degibbs_path))
-
-    if config.dipy_run_motion_correction:
-        emit("Running between-volume motion correction")
-        corrected_img, affine_array = motion_correction(
-            nib.Nifti1Image(np.asarray(degibbs, dtype=np.float32), source_img.affine, source_img.header),
-            gtab,
-            b0_ref=0,
-        )
-        corrected_path = paths["motion_dir"] / f"{subject}_dwi_preproc.nii.gz"
-        nib.save(corrected_img, str(corrected_path))
-        affine_path = paths["motion_dir"] / f"{subject}_dipy_motion_affines.npy"
-        np.save(str(affine_path), np.asarray(affine_array))
-        rotation_status = _rotate_bvecs_best_effort(raw.bvec_path, paths["final_bvec"], affine_array)
-        motion_status = {
-            "status": "completed",
-            "affines": affine_path.as_posix(),
-            "bvec_rotation": rotation_status,
-        }
-    else:
-        emit("Skipping motion correction")
-        corrected_path = paths["motion_dir"] / f"{subject}_dwi_preproc.nii.gz"
-        shutil.copy2(degibbs_path, corrected_path)
-        shutil.copy2(raw.bvec_path, paths["final_bvec"])
-        motion_status = {"status": "skipped", "bvec_rotation": {"status": "copied"}}
-
-    shutil.copy2(corrected_path, paths["final_dwi"])
-    shutil.copy2(raw.bval_path, paths["final_bval"])
-
-    return {
-        "denoise": denoise_status,
-        "gibbs": gibbs_status,
-        "motion": motion_status,
-        "bias_correction": {
-            "status": "not_available",
-            "reason": "DIPY bias_correction module is not available in the tested 1.11.0 environment.",
-        },
-        "susceptibility_distortion_correction": {
-            "status": "not_supported_by_dipy_backend",
-            "recommended_backend": "mrtrix_fsl",
-        },
-        "files": {
-            "denoised": denoised_path.as_posix(),
-            "degibbs": degibbs_path.as_posix(),
-            "motion_corrected": corrected_path.as_posix(),
-        },
-    }
+        corrected = gibbs_removal(data, slice_axis=2, inplace=False, num_processes=1)
+        _save_float32(corrected, source_img, Path(command[3]))
+        return {"status": "completed", "method": "dipy_gibbs_removal"}
+    raise ValueError(f"Unknown DIPY preprocessing step: {step}")
 
 
 def _mrtrix_backend_details(
@@ -931,8 +719,10 @@ def _mrtrix_backend_details(
             "FSLDIR": env.get("FSLDIR"),
             "FSLOUTPUTTYPE": env.get("FSLOUTPUTTYPE"),
         },
-        "denoise": {"status": "completed", "method": "dwidenoise_mppca"},
-        "gibbs": {"status": "completed", "method": "mrdegibbs"},
+        "route": ROUTE_ID,
+        "denoise": {"status": "completed", "method": "dipy_mppca"},
+        "gibbs": ({"status": "completed", "method": "dipy_gibbs_removal"} if config.dipy_run_gibbs
+                  else {"status": "skipped", "method": "dipy_gibbs_removal"}),
         "motion": {"status": "completed", "method": "fsl_eddy",
                    "device_execution": json.loads((paths["qc_dir"] / "eddy_device.json").read_text())
                    if (paths["qc_dir"] / "eddy_device.json").is_file() else None},
@@ -959,11 +749,13 @@ def _execute_preprocessing_backend(
     *,
     log: Optional[Callable[[str], None]],
 ) -> dict[str, Any]:
-    if backend.get("backend") == "dipy":
-        return _run_dipy_backend(raw, config, paths, log=log)
-
     env = _external_command_environment(config)
     for command in commands:
+        if command[0] == "dipy":
+            if log:
+                log("[Preproc] DIPY step: " + " ".join(command[1:]))
+            _run_dipy_step(command, log=log)
+            continue
         if command[0] == "copy":
             shutil.copy2(command[1], command[2])
             continue
@@ -987,7 +779,6 @@ def _preprocessing_warnings(
         warnings.append("Denoising was not applied by the selected preprocessing configuration.")
     for capability, message in (
         ("gibbs_removal", "Gibbs-ringing removal was not applied."),
-        ("between_volume_motion_correction", "Between-volume motion correction was not applied."),
         ("susceptibility_distortion_correction", "Susceptibility-distortion correction was not applied."),
     ):
         if capabilities.get(capability) is False:
@@ -1008,9 +799,7 @@ def _finalize_brain_mask(
 ) -> dict[str, Any]:
     selected = _brain_mask_config(config)
     motion_applied = (backend_details.get("motion") or {}).get("status") == "completed"
-    preserve_input = selected.backend == "provided" or (
-        backend_details.get("fast_path") is True and not motion_applied and raw.mask_path.is_file()
-    )
+    preserve_input = selected.backend == "provided"
     warnings: list[str] = []
     if preserve_input:
         if not raw.mask_path.is_file():
@@ -1118,13 +907,10 @@ def run_dwi_preprocessing(
             "reverse_phase_b0": config.reverse_phase_b0.as_posix() if config.reverse_phase_b0 else None,
         },
         "parameters": {
-            "eddy_threads": _resolved_eddy_threads(config)
-            if backend.get("backend") == "mrtrix_fsl"
-            else None,
+            "eddy_threads": _resolved_eddy_threads(config),
             "eddy_second_level_model": (
                 config.eddy_second_level_model.strip().lower()
-                if backend.get("backend") == "mrtrix_fsl"
-                and config.eddy_second_level_model is not None
+                if config.eddy_second_level_model is not None
                 else None
             ),
             "brain_mask_backend": _brain_mask_config(config).backend,
@@ -1151,8 +937,8 @@ def run_dwi_preprocessing(
         return DwiPreprocessingResult(raw.subject_id, "planned", output_dir, paths["manifest"], paths["qc"], paths["final_dwi"], paths["final_bval"], paths["final_bvec"], paths["final_mask"])
 
     if not backend["available"]:
-        missing = ", ".join(backend.get("missing_required", backend.get("missing_python", [])))
-        raise RuntimeError(f"DWI preprocessing backend is unavailable ({config.backend}): {missing}")
+        missing = ", ".join(backend.get("missing_required", []))
+        raise RuntimeError(f"DWI preprocessing is unavailable ({ROUTE_ID}): {missing}")
 
     cached_core_ready = (
         not config.force
@@ -1172,8 +958,7 @@ def run_dwi_preprocessing(
         backend_details: dict[str, Any] = (
             dict(previous_details) if isinstance(previous_details, dict) else {}
         )
-        if backend.get("backend") == "mrtrix_fsl":
-            backend_details = _mrtrix_backend_details(paths, raw.subject_id, config)
+        backend_details = _mrtrix_backend_details(paths, raw.subject_id, config)
         try:
             mask_is_stale = (
                 not paths["final_mask"].is_file()
@@ -1233,9 +1018,9 @@ def run_dwi_preprocessing(
 
     _materialize_dirs(paths)
     overwrite_existing = config.force or bool(previous_manifest)
-    if overwrite_existing and backend.get("backend") == "mrtrix_fsl":
+    if overwrite_existing:
         # A cache miss may leave old intermediates/final files. Overwrite them
-        # instead of failing at dwidenoise, and never resume an old eddy scratch.
+        # instead of failing at the first MRtrix3 command, and never resume an old eddy scratch.
         commands = _build_commands(raw, replace(config, force=True), paths, backend)
         manifest["commands"] = [{"argv": command} for command in commands]
         manifest["overwrite_existing"] = True

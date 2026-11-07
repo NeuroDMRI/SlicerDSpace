@@ -246,7 +246,7 @@ class FslEnvironmentTests(ToolEnvironmentBase):
                 patch.object(pipeline, 'preprocessing_launcher', side_effect=fake_launcher), \
                 patch.object(pipeline, '_run_command', side_effect=fake_run), \
                 patch.object(pipeline, '_mrtrix_backend_details', return_value={}):
-            pipeline._execute_preprocessing_backend(raw, config, {'qc_dir': self.root}, {'backend': 'mrtrix_fsl'},
+            pipeline._execute_preprocessing_backend(raw, config, {'qc_dir': self.root}, {'backend': 'dipy_mppca+gibbs+fsl_eddy'},
                                                     commands, log=None)
         self.assertEqual([name for name, _ in seen], ['dwifslpreproc', 'eddy', 'topup'])
         for name, env in seen:

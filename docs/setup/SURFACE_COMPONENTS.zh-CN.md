@@ -75,7 +75,7 @@ CMake >=3.24,<4，保持上游构建器与数值源码不变。
 ## 运行与检查
 
 ```bash
-python run_subject_pipeline.py --subject-root /data/sub-01 --subject-id sub-01 \
+PythonSlicer run_subject_pipeline.py --subject-root /data/sub-01 --subject-id sub-01 \
   --targets surface_postprocess --postprocess-runtime /data/local-components \
   --postprocess-license-file /data/private/freesurfer-license.txt --execute
 ```

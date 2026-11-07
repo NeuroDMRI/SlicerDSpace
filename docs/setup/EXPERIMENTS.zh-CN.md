@@ -21,7 +21,7 @@
 | 可选预处理 | DIPY | 不需要 |
 | DTI / FW / NODDI / Python DKI | Slicer Python 中所选模型 | 不需要；按需安装 Python 包 |
 | 解剖重建 | DDSeg / DDParcel / DDSurfer | PyTorch 扩展、Python 包及下载资源 |
-| 追踪 | DTI deterministic | SlicerDMRI 与兼容 Python 包 |
+| 追踪 | DTI deterministic | 兼容 Python 包（张量拟合在 Slicer 内完成） |
 | 束分析 | WMQL | Python 实现及查询文件 |
 | 连接组 | Python | 兼容 Python 包 |
 | 可选表面后处理 | 原生组件运行包 | 小型授权组件，无需完整版 FreeSurfer |

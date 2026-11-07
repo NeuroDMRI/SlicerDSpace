@@ -34,7 +34,11 @@ CI job.
 - Default targets, run name, preprocessing/tractography/bundle/connectome
   backends, microstructure stages and streamline count.
 - Python environment, model asset root, MRtrix3, FSL, FreeSurfer, TractQuerier,
-  WMA, Slicer/SlicerDMRI and TractCloud paths.
+  WMA, Slicer and TractCloud paths.
+- The PNL brain-mask route (`run_defaults.pnl_mask_route`: `auto`, `managed` or
+  `native`; an unknown value is read as `auto`).
+- The licences you accepted in the setup dialog (`accepted_licences`: id, version
+  and time), so a licence that has not changed is not asked for again.
 
 The GUI still writes compatible Slicer QSettings. The JSON file is the portable
 configuration that can be inspected, copied, versioned privately or reused by
@@ -70,13 +74,13 @@ overwriting an existing language choice.
 Print the automatically loaded configuration:
 
 ```bash
-python3 run_subject_pipeline.py --print-user-config
+PythonSlicer run_subject_pipeline.py --print-user-config
 ```
 
 Save resolved CLI choices to the default JSON path:
 
 ```bash
-python3 run_subject_pipeline.py \
+PythonSlicer run_subject_pipeline.py \
   --subject-root /data/project/sub-01 \
   --targets validation,microstructure,tractography \
   --tractography-backend dti_det \
@@ -87,13 +91,13 @@ python3 run_subject_pipeline.py \
 Reuse the saved subject root and defaults:
 
 ```bash
-python3 run_subject_pipeline.py --doctor
+PythonSlicer run_subject_pipeline.py --doctor
 ```
 
 Use an isolated test profile:
 
 ```bash
-python3 run_subject_pipeline.py \
+PythonSlicer run_subject_pipeline.py \
   --user-config /tmp/slicerdsurfer-test-user-config.json \
   --subject-root /data/project/sub-01 \
   --targets validation \
@@ -104,7 +108,7 @@ python3 run_subject_pipeline.py \
 Disable saved settings for one command:
 
 ```bash
-python3 run_subject_pipeline.py \
+PythonSlicer run_subject_pipeline.py \
   --no-user-config \
   --subject-root /data/project/sub-01 \
   --targets validation \

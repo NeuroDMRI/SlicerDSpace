@@ -41,20 +41,25 @@ See [GPU execution policy](GPU_EXECUTION.md).
 The advanced **PNL route** selector (shown only for PNL CNN) is `auto`, `managed`
 or `native (experimental)`: `auto` uses the managed conda runner with ANTs on Linux and
 the native SimpleITK route on macOS and Windows, and the native route is experimental because it
-did not meet the M-A parity rule on 2 of 24 cases (T2 design §3). It is saved as
+did not match the managed route closely enough on 2 of 24 test cases (the parity rule). It is saved as
 `run_defaults.pnl_mask_route`; the mask receipt and the run record state the route.
 
 On Linux x86_64, **Environment and installation > Prepare selected
-analysis environment** can install the pinned author-compatible PNL runtime,
-weights and template after terms confirmation, then fill all four paths.
-This is the official PNL Python masking backend, not a rewrite of PNLpipeline.
+analysis environment** can install the pinned PNL runtime (a conda environment
+with ANTs 2.3.0), weights and template. The licence appears in the one setup
+dialog. The setup then fills all four paths. The managed route runs the PNL
+inference code, which this plugin also carries as a modified copy for the native
+route (see the [PNL licence page](../licenses/pnl_brain_mask.md)); it is not a rewrite of PNLpipeline.
+On macOS and Windows no managed runtime exists: the native route runs in Slicer's
+own Python and needs only the PyTorch extension and the pnl-cnn assets.
 See [managed setup](MANAGED_SETUP.md) for repair, verification and platform limits.
-For an existing environment, configure **External Runtime Paths**:
+For an existing managed environment, configure **External Runtime Paths**
+(the four PNL paths are read only by the managed route):
 
 | Setting | Browse Mode |
 | --- | --- |
 | `pnl_mask_python` | Python executable file in the user's PNL environment |
-| `pnl_mask_script` | Official `dwi_masking.py` file |
+| `pnl_mask_script` | The `pnl-brain-mask` console script of the installed PNLBrainMask-Torch package |
 | `pnl_mask_model_dir` | Model directory |
 | `pnl_mask_ants_bin_dir` | ANTs binary directory |
 | `synthstrip_python` | Optional CUDA-compatible Python with PyTorch/surfa; defaults to FreeSurfer fspython |

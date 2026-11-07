@@ -86,7 +86,7 @@ it is published and its distribution permissions are cleared.
 ## Run And Verify
 
 ```bash
-python run_subject_pipeline.py --subject-root /data/sub-01 --subject-id sub-01 \
+PythonSlicer run_subject_pipeline.py --subject-root /data/sub-01 --subject-id sub-01 \
   --targets surface_postprocess --postprocess-runtime /data/local-components \
   --postprocess-license-file /data/private/freesurfer-license.txt --execute
 ```

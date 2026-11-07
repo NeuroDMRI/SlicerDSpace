@@ -118,7 +118,9 @@ is lossless only within the checked int16 range; the importer refuses overflow.
 ## Masks And Preprocessing
 
 Choose one mask method; these commands generate a mask only if needed. PNL
-needs its configured PyTorch/ANTs runtime; DIPY needs no weights or external
+runs on the route `--pnl-mask-route auto|managed|native`: on Linux `auto` is the
+managed conda runtime with ANTs; on macOS and Windows it is the native route in
+Slicer's Python (SimpleITK and PyTorch, "native (experimental)"). DIPY needs no weights or external
 mask program. MRtrix and SynthStrip retain their own requirements. None is an
 error-triggered fallback for another method.
 
@@ -268,6 +270,11 @@ pipeline freewater --targets validation,microstructure \
   --microstructure-stages dti,freewater --brain-mask-backend provided --plan
 ```
 
+iFW is selected with `--microstructure-stages dti,ifw` (or `--run-ifw`). It also
+runs Free Water and DDSeg. Give the echo time with `--ifw-echo-time-ms`; without
+it the stage reads `EchoTime` from the DWI sidecar and otherwise stops.
+`all` does not include iFW.
+
 <!-- cli-template: micro-noddi -->
 ```bash
 pipeline noddi --targets validation,microstructure \
@@ -292,7 +299,8 @@ pipeline mkcurve --targets validation,microstructure --microstructure-stages dti
   --dki-fit-method MKCURVE --brain-mask-backend provided --plan
 ```
 
-`MKCURVE` is the Python port and does not need MATLAB. `MKCURVE_MATLAB` is
+`MKCURVE` is the Python port and does not need MATLAB. It is also the default
+DKI method when `--dki-fit-method` is not given. `MKCURVE_MATLAB` is
 an optional author-reference route with separately configured paths.
 
 <!-- cli-template: micro-mkcurve-matlab -->
@@ -316,7 +324,7 @@ eligible optional fits can overlap after prerequisites; it is not the default.
 
 ## Tractography
 
-DTI deterministic tracking uses SlicerDMRI/native DTI preparation and DIPY.
+DTI deterministic tracking uses the native Teem tensor fit (Slicer core) and DIPY.
 `--select-streamlines` is not an equivalent UKF budget.
 
 <!-- cli-template: tract-dti -->
@@ -326,7 +334,7 @@ pipeline tracks_dti --targets validation,tractography --tractography-backend dti
   --dti-min-length-mm 10 --dti-max-length-mm 250 --plan
 ```
 
-UKF uses the installed UKFTractography extension/CLI and SlicerDMRI. Its own
+UKF uses the installed UKFTractography extension/CLI. Its own
 author defaults apply; this example changes only its thread budget:
 
 <!-- cli-template: tract-ukf -->

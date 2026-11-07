@@ -11,17 +11,21 @@
 ## 用户操作
 
 选择分析任务后，展开独立的“环境与安装”区域，点击 **准备所选分析环境**。
+勾选一个产品会加入它的前置步骤（预处理不会被自动加入），计划只覆盖这些步骤。
+一个对话框列出每项下载的大小和许可（名称、链接和本地文件），点击一次 **接受许可并安装** 即可。
 环境报告的组合入口使用同一逻辑。检查与最终复核均在可取消的后台进程中进行。
-只有存在待处理项目时才确认安装计划、下载和相关许可；依赖已能导入时不重复安装，仍执行功能自检。
+只有存在待处理项目时才确认；依赖已能导入时不重复安装，仍执行功能自检。
 离线资源、修复和手工路径位于环境区的“更多选项”，不混入算法高级设置。
 只处理本次所需依赖：
 
-1. 通过 Slicer 扩展管理器安装缺少的 SlicerDMRI/PyTorch；仅选择 UKF 时请求 UKFTractography。
+1. 通过 Slicer 扩展管理器安装所勾选产品缺少的扩展：神经网络模型和 native 脑掩膜需要 PyTorch，UKF 需要 UKFTractography，WMA 需要 SlicerDMRI。张量拟合不需要扩展（它使用 Slicer 内核中的 Teem）。
 2. 新安装或启用扩展后，保存工作并重启 Slicer；重新进入 SlicerDSpace 后提示继续准备，复用已有扩展。
 3. 后台准备固定版本的 WMQL/WMA/TractCloud 源码，无需 Git；安装缺少的 Python wheel、下载模型并准备支持的隔离工具。
 4. 校验成功后保存路径，重新检查依赖并执行小型功能测试。自检失败时不能进入分析，须重新准备并通过。
 
-同一配置的功能自检失败会跨重启保留。源码发现与实际运行使用同一份经校验缓存，
+同一配置的功能自检失败会跨重启保留。命令行可用 `scripts/check_setup_functionality.py` 运行同样的自检。
+dcm2niix（用于 DICOM 导入）遵循一条规则：插件自带的固定版本轮子或你自己设置的 dcm2niix 路径未通过检查时，准备未完成；
+只在 `PATH` 中找到的 dcm2niix 未通过检查时只给出警告，因为 NIfTI 输入不需要它。源码发现与实际运行使用同一份经校验缓存，
 未保存显式源码路径时也能复用。Windows 的 WMA 不会把 Bash 源码目录当作 WSL 可执行桥接。
 
 启用“首次使用准备”后，点击运行时发现缺少依赖会进入同一个确认流程，安装或重启后不自动启动科学计算。
@@ -77,14 +81,18 @@ PNL 模型/模板、TractCloud 推理参考、SynthStrip 权重和 WMA ORG 图�
 自动安装是明确发起的操作，不会在科学分析过程中静默替换已有环境。
 默认环境目录位于模型资源旁的 `SlicerDSpace/runtimes`。
 
+准备步骤替换已有的 macOS MRtrix3 运行环境时，会把旧文件夹重命名为该 runtimes 文件夹中的
+`mrtrix-3.0.8-macos.replaced-<ns>`（每个约 169 MB，`<ns>` 为时间戳）。插件从不删除这些文件夹，
+运行成功后你可以手动删除。
+
 ---
 
 ## 当前覆盖范围
 
 | 工具 | 自动配置范围 |
 | --- | --- |
-| MRtrix3 3.0.8 | 官方预编译 Conda 包；Linux x86_64；增加 macOS Intel 安装适配，要求 macOS 14.5+，尚未 Mac 真机运行 |
-| FSL eddy 2602.0 / topup 2203.5 | Linux x86_64，官方 FSL 源，安装前确认许可 |
+| MRtrix3 3.0.8 | Linux x86_64：官方预编译 Conda 包。macOS（Intel 和 Apple Silicon，macOS 14.5 或更高）：官方通用 tarball，校验 SHA-256 后解压到 runtimes 文件夹 |
+| FSL eddy 2602.0 / topup 2203.5 | Linux x86_64、macOS Intel 和 Apple Silicon（macOS 14.5 或更高，仅 CPU eddy），官方 FSL 源，安装前确认许可 |
 | CUDA eddy 2602.0 | 可选 FSL profile，需要 NVIDIA 驱动，不要求安装完整 CUDA Toolkit |
 | DDSurfer / DDSeg / DDParcel 资源 | 已有后台下载，改为按产品选择并使用默认目录 |
 | Python 科学计算包 | 所选解释器、核心版本约束、可用时使用原生 packaging API；官方 PyTorch 辅助器 |
@@ -92,8 +100,9 @@ PNL 模型/模板、TractCloud 推理参考、SynthStrip 权重和 WMA ORG 图�
 | 可选皮层后处理 | Linux x86_64 [合格预编译运行包](SURFACE_COMPONENTS.zh-CN.md)；已测离线安装，在线发布待完成；个人激活文件独立提供，GUI 不编译源码 |
 | WMA / TractCloud / SynthStrip 非代码资源 | 所选分组下载/导入、校验、ORG 解压及自动保存路径；私有镜像仍需访问权限 |
 | WMA/WMQL/TractCloud 源码 | 固定提交压缩包、安全解压、逐文件哈希、自动发现并保存路径，无需 Git，也不重复实现算法 |
-| macOS 与 Windows 的 PNL 扩散 CNN | 无 managed 运行环境。native 路线（“native（实验性）”）需要 PyTorch 扩展和 pnl-cnn 脑掩膜资源，本安装器会规划它们（含 PNL 许可） |
-| Windows 原生、macOS ARM、macOS FSL | 本安装器暂无合格的自动原生配置；保留 Windows/WSL 和已有环境路线 |
+| macOS 与 Windows 的 PNL 扩散 CNN | 无 managed 运行环境。native 路线（“native（实验性）”）在 Slicer 的 Python 中运行，需要 PyTorch 扩展和 pnl-cnn 脑掩膜资源，本安装器会规划它们（含 PNL 许可） |
+| Windows | 由 `scripts/install_deps_windows.ps1` 安装 WSL 2 Ubuntu 运行环境，用于 MRtrix3、FSL 以及可选的 FreeSurfer 和算法源码；准备对话框会列出它及其许可。脑掩膜和 Python 阶段在 Windows 版 Slicer 的 Python 中运行，不在 WSL 中 |
+| macOS CUDA eddy、Windows 原生 MRtrix3/FSL | 不提供。CUDA eddy 需要 Linux（或带 NVIDIA GPU 的 WSL） |
 
 功能自检按所选依赖执行 NumPy 求解、小型 NIfTI 与 VTK 流线写入读回、所选 PyTorch 设备计算、
 解剖模型反序列化及 DDSeg、TractCloud 小型前向推理；MRtrix 转换小体积图像，
@@ -122,6 +131,7 @@ CUDA wheel 的库和工具仅对该 Python 子进程可见，不修改全局 PAT
 
 ## 维护者接口
 
+`scripts/setup_selected.py --targets <targets>` 输出与图形界面相同的计划；`--execute` 执行，`--accept-licences` 接受计划中的全部许可，用 `PythonSlicer` 运行。
 `scripts/setup_managed_runtime.py` 默认只生成计划；`--execute` 才执行安装，
 FSL 另需 `--accept-fsl-license`，PNL 另需 `--accept-pnl-terms`，
 `--repair` 显式重装所选受管环境。

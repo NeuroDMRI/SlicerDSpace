@@ -11,15 +11,17 @@
 ## Select A Route
 
 Select Microstructure in Products. **DTI is the only default model**. Click
-**...** beside Microstructure to enable FW, NODDI and DKI independently;
-choosing DKI does not imply enabling FW or NODDI. DTI remains required preparation.
+**...** beside Microstructure to enable FW, NODDI, DKI and iFW independently;
+choosing DKI does not imply enabling FW or NODDI. iFW is the exception: it
+needs the FW result, so the plugin runs FW and the DDSeg segmentation for it. DTI remains required preparation.
 Choose the DKI fitting method in **Advanced settings > Model parameters**.
 
 | Model | Outputs | Implementation |
 | --- | --- | --- |
-| DTI | FA, MD, AD, RD, L1/L2/L3, Trace | Shared native-space tensor fit |
+| DTI | FA, MD, AD, RD, L1/L2/L3, Trace, colour FA map (`<id>-dti-DEC.nrrd`) | Shared native-space tensor fit with the Teem library in Slicer's Python; no SlicerDMRI needed |
 | Free-water | FWF, tissue FA/MD, validity mask and QC | DIPY free-water tensor model |
 | NODDI | NDI, ODI, IsoVF, RMSE/NRMSE, validity mask and QC | AMICO NODDI |
+| iFW | Free-water fraction corrected for T2 weighting, minus the CSF fraction, with regional table | Python implementation of the published equations (fixed T2 of 95 ms for tissue and 1500 ms for CSF); needs the echo time (typed in Microstructure, or read from the DWI sidecar) and at least three distinct b-values, b=0 counted |
 | Standard DKI | MK, AK, RK, KFA, MKT, RTK, residuals and raw tensor estimates | Python MK-Curve port (default DKI method; stops with a WLS re-run hint when the signal scale or data cannot support it), or DIPY WLS or OLS |
 | MK-Curve | Original and corrected MK/AK/RK, FA/MD/AD/RD, eigenvalues, validity and residuals | Bundled Python port of the author algorithm, not a DIPY approximation |
 
@@ -91,7 +93,7 @@ author checkout paths; missing dependencies block it without falling back.
 ## CLI And Outputs
 
 ```bash
-python3 run_subject_pipeline.py --subject-root /path/to/sub-01 \
+PythonSlicer run_subject_pipeline.py --subject-root /path/to/sub-01 \
   --targets microstructure --microstructure-stages dti,dki \
   --dki-fit-method WLS --plan
 ```

@@ -90,12 +90,18 @@ module load fsl
 module load freesurfer
 ```
 
+On Linux the PNL brain mask uses the managed route (`--pnl-mask-route auto`
+resolves to `managed`: a conda runtime with ANTs 2.3.0). After you update to
+this version, each deployment regenerates the brain masks and the preprocessing
+(eddy included) once, because the mask signature now holds the route. See the
+[7 November release note](../release/PORTABLE_SETUP_20261107.md).
+
 ---
 
 ## 5. Command-Line Preflight
 
 ```bash
-python3 run_subject_pipeline.py \
+PythonSlicer run_subject_pipeline.py \
   --subject-root /data/project/sub-01 \
   --targets validation,microstructure,tractography \
   --tractography-backend dti_det \

@@ -42,10 +42,10 @@ git clone --filter=blob:none --no-checkout --depth 1 https://github.com/NeuroDMR
 cd SlicerDSpace
 git show HEAD:scripts/extension_runtime/runtime_checkout.txt | git sparse-checkout set --no-cone --stdin
 git checkout
-python3 scripts/stage_slicer_extension.py --install-root ~/SlicerDSpace-extension --link-mode copy --clean
+PythonSlicer scripts/stage_slicer_extension.py --install-root ~/SlicerDSpace-extension --link-mode copy --clean
 ```
 
-Windows 若没有 `python3` 命令，可用 `python`。根据实际 Slicer 版本设置
+`PythonSlicer` 是 Slicer 自带的 Python，位于 Slicer 的 `bin` 文件夹，无需系统 Python。根据实际 Slicer 版本设置
 `--slicer-version`，并按[项目安装说明](../../README.zh-CN.md#安装)添加模块路径。
 上述 staging 是源码安装，不是官方 SDK/CPack 发布认证。
 
@@ -78,9 +78,9 @@ Slicer Extension Manager 的安装文件。经过对应验收的 CPack 扩展包
 维护者也可生成明确标为本地预发布测试的 staging 包：
 
 ```bash
-python3 scripts/stage_slicer_extension.py --install-root /path/to/staging --link-mode copy --clean
-python3 scripts/package_slicer_extension.py --extension-root /path/to/staging/SlicerDSpace --output /path/to/packages/SlicerDSpace.tar.gz
-python3 scripts/audit_extension_package.py /path/to/packages/SlicerDSpace.tar.gz
+PythonSlicer scripts/stage_slicer_extension.py --install-root /path/to/staging --link-mode copy --clean
+PythonSlicer scripts/package_slicer_extension.py --extension-root /path/to/staging/SlicerDSpace --output /path/to/packages/SlicerDSpace.tar.gz
+PythonSlicer scripts/audit_extension_package.py /path/to/packages/SlicerDSpace.tar.gz
 ```
 
 CMake 与 staging 共用 `scripts/extension_runtime/runtime_resources.json`，

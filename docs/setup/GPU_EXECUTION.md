@@ -55,7 +55,7 @@ for DDSeg, DDParcel, DDSurfer and TractCloud. Existing explicit choices are
 respected; the defaults do not overwrite a user's saved CPU preference.
 
 ```bash
-python shared/run_subject_pipeline_cli.py \
+PythonSlicer shared/run_subject_pipeline_cli.py \
   --subject-root /data/sub-01 --subject-id sub-01 \
   --targets microstructure --execute \
   --brain-mask-device auto --ddseg-device auto \

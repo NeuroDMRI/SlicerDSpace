@@ -23,7 +23,7 @@ and explicitly apply the lighter preset:
 | Optional preprocessing | DIPY | None |
 | DTI / FW / NODDI / Python DKI | Selected models in Slicer's Python | None; model-specific Python packages as needed |
 | Anatomical prior | DDSeg / DDParcel / DDSurfer | PyTorch extension, Python packages and downloaded assets |
-| Tracking | DTI deterministic | SlicerDMRI and compatible Python packages |
+| Tracking | DTI deterministic | Compatible Python packages (the tensor fit runs in Slicer) |
 | Fiber bundles | WMQL | Python implementation and queries |
 | Connectome | Python | Compatible Python packages |
 | Optional surface postprocessing | Licensed native components | Small component runtime; no full FreeSurfer |

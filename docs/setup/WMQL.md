@@ -36,7 +36,7 @@ batch and background GUI runs pass the same selection. Changing the selection or
 rule dependencies invalidates the old extraction cache.
 
 ```bash
-python shared/run_subject_pipeline_cli.py --subject-id SUBJECT --subject-root /data/SUBJECT \
+PythonSlicer shared/run_subject_pipeline_cli.py --subject-id SUBJECT --subject-root /data/SUBJECT \
   --targets bundles --wmql-query-selection AF,CST,UF --execute
 ```
 

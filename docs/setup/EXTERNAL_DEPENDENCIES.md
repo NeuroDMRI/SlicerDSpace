@@ -26,7 +26,7 @@ Slicer GUI 的 Linux x86_64 用户可先用[插件内自动配置](MANAGED_SETUP
 命令行体检示例：
 
 ```bash
-python3 run_subject_pipeline.py \
+PythonSlicer run_subject_pipeline.py \
   --subject-root /path/to/subject \
   --targets microstructure,tractography,bundles,connectome \
   --tractography-backend csd_act \
@@ -37,7 +37,7 @@ python3 run_subject_pipeline.py \
 执行前 run plan 示例：
 
 ```bash
-python3 run_subject_pipeline.py \
+PythonSlicer run_subject_pipeline.py \
   --subject-root /path/to/subject \
   --targets validation,preprocessing,microstructure,tractography,bundles,connectome \
   --plan
@@ -152,7 +152,7 @@ Slicer user settings，然后自动重新运行环境扫描。这样换机器时
 CLI 仍然支持同一份 JSON：
 
 ```bash
-python3 run_subject_pipeline.py \
+PythonSlicer run_subject_pipeline.py \
   --subject-root /path/to/subject \
   --targets tractography,bundles \
   --doctor \
@@ -169,7 +169,7 @@ python3 run_subject_pipeline.py \
 发布前或给用户排查环境时，可以生成三平台 dependency profile 矩阵：
 
 ```bash
-python3 scripts/dependency_profile_matrix.py \
+PythonSlicer scripts/dependency_profile_matrix.py \
   --output-dir install_plan/dependency_profile_matrix
 ```
 
@@ -215,7 +215,7 @@ SlicerDSpace 需要区分三件事：
 因此，如果目标是让 Slicer 插件内运行，请优先用 Slicer Python 做检查和安装：
 
 ```bash
-python3 run_subject_pipeline.py \
+PythonSlicer run_subject_pipeline.py \
   --subject-root /path/to/subject \
   --targets segmentation,surface \
   --doctor \
@@ -232,8 +232,8 @@ python3 run_subject_pipeline.py \
   --execute
 ```
 
-直接用系统 `python3 run_subject_pipeline.py --execute` 可能无法解析 Slicer CLI，例如 `DWIConvert`、`DWIToDTIEstimation`、`BRAINSFit` 和 `ResampleScalarVectorDWIVolume`。
-对于依赖这些 CLI 的目标，preflight 会要求真实的 `slicer.util` 运行时并阻止系统 Python 继续执行。不要通过 `pip install slicer` 处理该提示；应改用 3D Slicer 或其 `bin/PythonSlicer`。
+直接用系统 `python3 run_subject_pipeline.py --execute` 不能运行张量拟合：它需要 Slicer 内核中的 Teem 库，环境检查会报告 `native_tensor_fit` 缺失，并提示使用 Slicer 的 `PythonSlicer`。
+不要通过 `pip install slicer` 处理该提示；应改用 3D Slicer 或其 `bin/PythonSlicer`。
 
 设备策略：
 
@@ -276,7 +276,7 @@ Slicer UI 中的路径输入框会保存到 Slicer user settings，下次打开 
 CLI 可保存和复用同样的外部路径配置：
 
 ```bash
-python3 run_subject_pipeline.py \
+PythonSlicer run_subject_pipeline.py \
   --subject-root /path/to/subject \
   --targets tractography,bundles \
   --doctor \
@@ -284,7 +284,7 @@ python3 run_subject_pipeline.py \
   --tract-querier-root /path/to/tract_querier \
   --save-dependency-config ~/.slicerdsurfer-deps.json
 
-python3 run_subject_pipeline.py \
+PythonSlicer run_subject_pipeline.py \
   --subject-root /path/to/subject \
   --targets tractography,bundles \
   --doctor \
@@ -388,13 +388,15 @@ export SLICERDSPACE_SLICER_EXECUTABLE=/data/chengjin/software/Slicer-5.10.0-linu
 
 ### 3.2 SlicerDMRI
 
-以下场景建议安装 SlicerDMRI 扩展：
+张量拟合不再需要 SlicerDMRI：它由 Slicer 内核中的 Teem 库完成（`shared/teem_dti.py`）。
+勾选 DTI、微结构、追踪等目标时，准备步骤不会要求 SlicerDMRI。以下场景仍使用 SlicerDMRI：
 
+- 勾选 WMA 时，准备步骤会请求 SlicerDMRI（WMA 步骤仍加载它的模块）。
 - 在 Slicer scene 中直接加载/显示 fiber bundle。
 - WMA diffusion measures 导出时使用 `FiberTractMeasurements` CLI。
-- 需要复用 SlicerDMRI 的 tractography / fiber bundle 相关模块。
+- DICOM 导入时，`DWIConvert` 是 dcm2niix 和 MRtrix3 `mrconvert` 之外的可选转换器。
 
-如果只运行 Python/MRtrix 的 headless pipeline，不一定需要 SlicerDMRI。
+UKF 的错误提示同时提到 UKFTractography 和 SlicerDMRI；准备步骤只为 UKF 请求 UKFTractography。
 
 ---
 
@@ -442,7 +444,7 @@ preprocessing MRtrix/FSL 路线：
 优先用 CLI 显式传入：
 
 ```bash
-python3 run_subject_pipeline.py \
+PythonSlicer run_subject_pipeline.py \
   --subject-root /path/to/subject \
   --execute \
   --mrtrix-bin-dir /path/to/mrtrix3/bin
@@ -472,7 +474,7 @@ FSL 不是默认必需项。只有选择 `--preprocessing-backend mrtrix_fsl`，
 配置方式：
 
 ```bash
-python3 run_subject_pipeline.py \
+PythonSlicer run_subject_pipeline.py \
   --subject-root /path/to/subject \
   --targets preprocessing \
   --execute \
@@ -557,7 +559,7 @@ export FREESURFER_LICENSE=/path/to/license.txt
 也可以通过 CLI 参数覆盖：
 
 ```bash
-python3 run_subject_pipeline.py \
+PythonSlicer run_subject_pipeline.py \
   --subject-root /path/to/subject \
   --targets surface_postprocess \
   --execute \
@@ -605,7 +607,7 @@ WMA 是可选外部 bundle backend，插件不把 WMA 作为内置运行依赖�
 其他常用参数：
 
 ```bash
-python3 run_subject_pipeline.py \
+PythonSlicer run_subject_pipeline.py \
   --subject-root /path/to/subject \
   --targets wma \
   --execute \
@@ -679,7 +681,7 @@ TractCloud 是可选外部 deep-learning bundle backend。
 示例：
 
 ```bash
-python3 run_subject_pipeline.py \
+PythonSlicer run_subject_pipeline.py \
   --subject-root /path/to/subject \
   --targets tractcloud \
   --execute \
@@ -771,13 +773,13 @@ scripts/download_model_assets.sh --profile parcellation
 
 | 目标 | 必需依赖 | 可选/说明 |
 | --- | --- | --- |
-| 启动 Slicer GUI | 3D Slicer, PyTorch Extension | SlicerDMRI 用于 fiber bundle 显示 |
+| 启动 Slicer GUI | 3D Slicer, PyTorch Extension | SlicerDMRI 用于 WMA 和 fiber bundle 显示 |
 | Input validation | `nibabel`, `SimpleITK` | 可检查 MRtrix/FSL/Microstructure 依赖状态 |
 | DDSurfer surface | PyTorch, `torchvision`, DDSurfer weights/templates, `SimpleITK`, `trimesh` | GPU 可选 |
 | DDSurfer postprocess | 本机源码组件或已有 FreeSurfer、个人许可证、`nibabel`、`numpy`、`trimesh`、`rtree` | 当前原生 OBJ 路线不需完整版；不需要外部 T1w，可用 FA/b0 生成 `brain.mgz` |
 | DDParcel | PyTorch, `torchvision`, `nibabel`, `pynrrd`, `h5py`, `scikit-image`, `SimpleITK`, weights | Slicer CLI DTI extraction |
 | DDSeg | PyTorch, `torchvision`, `nibabel`, `pynrrd`, weights | GPU 可选 |
-| Microstructure DTI | `dipy`, `nibabel`, `numpy` | ROI-wise 需要 parcellation label map |
+| Microstructure DTI | Slicer 内核 Teem（`PythonSlicer`）、`dipy`、`nibabel`、`numpy` | 同时输出彩色 FA 图；ROI-wise 需要 parcellation label map |
 | Free Water | `dipy` | 显式启用 |
 | NODDI | `dmri-amico` | 显式启用 |
 | DIPY preprocessing | `dipy`, `nibabel`, `numpy` | 不做完整 eddy/topup |
@@ -787,7 +789,7 @@ scripts/download_model_assets.sh --profile parcellation
 | WMQL | Tract Querier, `nibabel`, `numpy` | 默认官方多束规则，支持束子集 |
 | WMA ORG atlas | external WMA, ORG atlas, Slicer | 可选 xvfb/SlicerDMRI measurements |
 | TractCloud | TractCloud, `torch`, model data | 当前是可选后端 |
-| Connectome | Python 或 MRtrix3 `tck2connectome` | 两个后端默认采用 4 mm 径向端点分配、FreeSurfer/DDParcel 灰质节点和零对角矩阵；Python 支持 `.trk/.tck/.vtk/.vtp` |
+| Connectome | Python 或 MRtrix3 `tck2connectome`（默认 `auto`：`.tck` 来源且指标为流线计数时用 MRtrix，其他情况用 Python） | 两个后端默认采用 4 mm 径向端点分配、FreeSurfer/DDParcel 灰质节点和零对角矩阵；Python 支持 `.trk/.tck/.vtk/.vtp` |
 
 ---
 

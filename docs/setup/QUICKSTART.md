@@ -15,14 +15,19 @@ shown; this project is not yet in the official Extensions Catalog.
 
 ## Prepare A Subject
 
-Use authorized, de-identified DWI, matching bval/bvec and a brain mask on the
-same voxel grid. Follow the canonical input layout in the README. DICOM/NRRD
+Use authorized, de-identified DWI with matching bval/bvec, or a DICOM series.
+A brain mask is optional: without one, the selected mask backend (PNL CNN by
+default) makes it. Follow the canonical input layout in the README. DICOM/NRRD
 conversion is under **Advanced settings > Regions & input import > Input import / conversion**; preview
-before writing. Install SlicerDMRI for Slicer-based DTI preparation.
+before writing. The DTI fit runs inside Slicer; no extra extension is needed for it.
 
+Tick the products you need. The plugin adds the prerequisites of each product
+by itself; preprocessing is never added without your tick.
 Check the runtime in the separate **Environment and installation** section.
-Choose **Prepare selected analysis environment**, confirm downloads and terms,
-and restart when requested. Click Prepare again after restart to continue.
+Choose **Prepare selected analysis environment**. One dialog lists the downloads
+with their licences; press **Accept licences and install** once.
+Restart when requested, then click Prepare again to continue. After the install,
+a self-check runs for each feature.
 Checks run in a cancellable background process and update the inline summary.
 Preparing an already-ready environment does not prompt, download or reinstall.
 Dependency details, offline import, repair and manual paths are under
@@ -37,8 +42,8 @@ The Microstructure, Tractography and Fiber bundles rows show the current algorit
 selection: **DTI**, **MRtrix3 CSD / ACT** and **WMQL** by default. These labels
 update when settings change; they describe the configuration, not completed or
 QC-approved results. Click **...** beside each of these three products to
-choose one or several methods. DTI remains required preparation; FW, NODDI and
-DKI are independent options. Advanced settings uses categories, showing
+choose one or several methods. DTI remains required preparation; FW, NODDI, DKI and
+iFW are independent options (iFW needs the echo time, and also runs FW and DDSeg). Advanced settings uses categories, showing
 only the selected category's parameters. Environment installation is separate.
 
 Multiple tracking methods run sequentially as separate `<run>__<backend>`
@@ -64,14 +69,14 @@ dependency checks and QC gates still apply. More methods require more time and d
 Generate a plan without execution:
 
 ~~~bash
-python3 run_subject_pipeline.py --subject-root /path/to/sub-01 \
+PythonSlicer run_subject_pipeline.py --subject-root /path/to/sub-01 \
   --targets validation,microstructure --microstructure-stages dti --plan
 ~~~
 
 MD loads in grayscale. Display settings do not change voxel values.
 Execution completion, automated QC and human review are separate states.
-DTI is the default; enable FW, NODDI and DKI with the main-screen selector only when
-their acquisition requirements are met. A missing input mask uses the selected
+DTI is the default; enable FW, NODDI, DKI and iFW with the main-screen selector only when
+their acquisition requirements are met. The DTI products include a colour FA map. A missing input mask uses the selected
 backend (PNL CNN by default); an existing mask avoids that dependency. Configure
 mask alternatives and external runtimes before running.
 
@@ -91,7 +96,7 @@ methods. For example, run CSD/ACT and UKF, then apply WMQL and TractCloud only
 to the UKF result:
 
 ~~~bash
-python3 run_subject_pipeline.py --subject-root /path/to/sub-01 \
+PythonSlicer run_subject_pipeline.py --subject-root /path/to/sub-01 \
   --targets segmentation,parcellation,tractography,bundles \
   --tractography-backend csd_act,ukf --bundle-backend wmql,tractcloud \
   --bundle-tractography-backend ukf --plan
@@ -116,7 +121,7 @@ selected methods and use `--doctor` before execution.
 From the repository root, in a runtime with NumPy and nibabel:
 
 ~~~bash
-python3 -c "from pathlib import Path; from shared.demo_data import create_synthetic_demo_subject; print(create_synthetic_demo_subject(Path('ignore/demo')))"
+PythonSlicer -c "from pathlib import Path; from shared.demo_data import create_synthetic_demo_subject; print(create_synthetic_demo_subject(Path('ignore/demo')))"
 ~~~
 
 Use the resulting <code>ignore/demo/slicerdsurfer-demo</code> as Subject root.

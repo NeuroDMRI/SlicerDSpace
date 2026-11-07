@@ -18,18 +18,20 @@ inference errors never trigger a hidden CPU retry. MRtrix masking is CPU-only.
 `provided` requires an existing `input/nodif_brain_mask.nii.gz`.
 `--pnl-mask-route auto|managed|native` chooses the route of `pnl_cnn`: `auto` is
 `managed` (conda runner with ANTs) on Linux and `native` on macOS and Windows; `native` is
-labelled "native (experimental)" because it did not meet the M-A parity rule on 2 of 24 cases
-(T2 design §3). The setting is saved in `run_defaults.pnl_mask_route`.
+labelled "native (experimental)" because its masks did not match the managed route closely
+enough on 2 of 24 test cases (the parity rule). The setting is saved in `run_defaults.pnl_mask_route`;
+the mask receipt and the run record name the route that made the mask. The four `--pnl-mask-*` path
+options below are read only by the managed route.
 
 Configure the PNL runtime through external dependency paths:
 
 ```bash
-python shared/run_subject_pipeline_cli.py \
+PythonSlicer shared/run_subject_pipeline_cli.py \
   --subject-root /data/sub-01 --targets preprocessing,microstructure \
   --brain-mask-backend pnl_cnn \
   --brain-mask-device auto \
   --pnl-mask-python /opt/pnl/bin/python \
-  --pnl-mask-script /opt/pnl/dwi_masking.py \
+  --pnl-mask-script /opt/pnl/bin/pnl-brain-mask \
   --pnl-mask-model-dir /opt/pnl/models \
   --pnl-mask-ants-bin-dir /opt/ants/bin \
   --doctor
@@ -59,7 +61,7 @@ resolved settings.
 Batch runs forward the selected backend and paths unchanged to every subject:
 
 ```bash
-python scripts/run_batch_pipeline.py \
+PythonSlicer scripts/run_batch_pipeline.py \
   --batch-root /data/subjects --jobs 2 \
   --targets preprocessing,microstructure \
   --brain-mask-backend synthstrip \

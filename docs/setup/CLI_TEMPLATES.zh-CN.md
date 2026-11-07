@@ -107,7 +107,7 @@ NRRD uint16 只在已检查的 int16 数值范围内无损转换；溢出时导�
 
 ## 掩膜和预处理
 
-选择一种掩膜方法，缺少掩膜时才生成。PNL 需要配置好的 PyTorch/ANTs 环境；
+选择一种掩膜方法，缺少掩膜时才生成。PNL 按 `--pnl-mask-route auto|managed|native` 选择路线：Linux 上 `auto` 即 managed（带 ANTs 的 conda 运行环境），macOS 和 Windows 上即 Slicer Python 中的 native 路线（SimpleITK 和 PyTorch，“native（实验性）”）；
 DIPY 不需要权重或外部掩膜程序；MRtrix 和 SynthStrip 各有依赖。
 某个方法失败时不会自动改用另一个方法。
 
@@ -252,6 +252,9 @@ pipeline freewater --targets validation,microstructure \
   --microstructure-stages dti,freewater --brain-mask-backend provided --plan
 ```
 
+iFW 用 `--microstructure-stages dti,ifw`（或 `--run-ifw`）选择，同时运行 Free Water 和 DDSeg。
+用 `--ifw-echo-time-ms` 给出回波时间；不给时从 DWI sidecar 读取 `EchoTime`，否则停止。`all` 不含 iFW。
+
 <!-- cli-template: micro-noddi -->
 ```bash
 pipeline noddi --targets validation,microstructure \
@@ -276,7 +279,7 @@ pipeline mkcurve --targets validation,microstructure --microstructure-stages dti
   --dki-fit-method MKCURVE --brain-mask-backend provided --plan
 ```
 
-`MKCURVE` 是 Python 移植版，无需 MATLAB。`MKCURVE_MATLAB` 是另行配置路径的作者参考路线。
+`MKCURVE` 是 Python 移植版，无需 MATLAB；不给出 `--dki-fit-method` 时它也是默认的 DKI 方法。`MKCURVE_MATLAB` 是另行配置路径的作者参考路线。
 
 <!-- cli-template: micro-mkcurve-matlab -->
 ```bash
@@ -298,7 +301,7 @@ pipeline micro_multi --targets validation,microstructure \
 
 ## 纤维追踪
 
-DTI 确定性追踪使用 SlicerDMRI/原生 DTI 准备及 DIPY。
+DTI 确定性追踪使用原生 Teem 张量拟合（Slicer 内核）及 DIPY。
 `--select-streamlines` 不等同于 UKF 的追踪预算。
 
 <!-- cli-template: tract-dti -->
@@ -308,7 +311,7 @@ pipeline tracks_dti --targets validation,tractography --tractography-backend dti
   --dti-min-length-mm 10 --dti-max-length-mm 250 --plan
 ```
 
-UKF 自动调用已安装的 UKFTractography 扩展/CLI，并使用 SlicerDMRI。
+UKF 自动调用已安装的 UKFTractography 扩展/CLI。
 采用作者默认参数，下面仅调整线程预算：
 
 <!-- cli-template: tract-ukf -->

@@ -44,10 +44,10 @@ git clone --filter=blob:none --no-checkout --depth 1 https://github.com/NeuroDMR
 cd SlicerDSpace
 git show HEAD:scripts/extension_runtime/runtime_checkout.txt | git sparse-checkout set --no-cone --stdin
 git checkout
-python3 scripts/stage_slicer_extension.py --install-root ~/SlicerDSpace-extension --link-mode copy --clean
+PythonSlicer scripts/stage_slicer_extension.py --install-root ~/SlicerDSpace-extension --link-mode copy --clean
 ```
 
-On Windows, use `python` if `python3` is unavailable. Set `--slicer-version`
+`PythonSlicer` is Slicer's own Python, in the Slicer `bin` folder; no system Python is needed. Set `--slicer-version`
 for your Slicer and follow the [module-path instructions](../../README.md#installation).
 Staging is a source installation, not official SDK/CPack release certification.
 
@@ -83,9 +83,9 @@ package. Prefer a CPack extension with corresponding validation. Maintainers
 can also generate a clearly labeled local pre-release staging package:
 
 ```bash
-python3 scripts/stage_slicer_extension.py --install-root /path/to/staging --link-mode copy --clean
-python3 scripts/package_slicer_extension.py --extension-root /path/to/staging/SlicerDSpace --output /path/to/packages/SlicerDSpace.tar.gz
-python3 scripts/audit_extension_package.py /path/to/packages/SlicerDSpace.tar.gz
+PythonSlicer scripts/stage_slicer_extension.py --install-root /path/to/staging --link-mode copy --clean
+PythonSlicer scripts/package_slicer_extension.py --extension-root /path/to/staging/SlicerDSpace --output /path/to/packages/SlicerDSpace.tar.gz
+PythonSlicer scripts/audit_extension_package.py /path/to/packages/SlicerDSpace.tar.gz
 ```
 
 CMake and staging share `scripts/extension_runtime/runtime_resources.json`;

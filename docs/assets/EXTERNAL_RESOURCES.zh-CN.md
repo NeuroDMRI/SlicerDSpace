@@ -22,7 +22,6 @@ CUDA 库、外部程序和逐被试生成的拟合字典均排除。
 | PNL CNN | `brain_mask/pnl_cnn/` | 三方向 HDF5、结构 JSON、完整原许可；约 216 MiB |
 | IIT b0 模板 | 同目录，约 7.5 MiB | 仅本地保留，Git 忽略；未经书面许可不得电子镜像 |
 | TractCloud | `bundles/tractcloud/` | 权重、推理参数、308 字节参考、原许可；约 8.5 MiB，不复制训练/测试包 |
-| SynthStrip | `brain_mask/synthstrip/` | 官方版本 1 主模型，约 29 MiB；CC BY 4.0 署名；不等于安装 FreeSurfer |
 | WMA / ORG | `bundles/wma/archives/` 与本地解压目录 | 两个官方 ZIP 共约 1.68 GiB；按需获取，解压副本不重复提交 Git |
 | WMQL / SAF / MK-Curve | 插件运行资源 | 查询、方向表等小文件随代码包；无需另传大型权重 |
 | DTI / FW / NODDI / MRtrix / UKF | 算法或 runtime | 不因算法名含 model 就假定存在预训练权重；缓存和软件环境分别管理 |
@@ -33,7 +32,6 @@ CUDA 库、外部程序和逐被试生成的拟合字典均排除。
 
 PNL 的权重来自作者 v0.3，TractCloud 来自 v1.0.0 的最小推理子集，均保留原完整协议与引用。
 TractCloud 权重及参考字节与已保存的官方发布包一致。
-SynthStrip 主模型已与作者官方 URL 的 SHA256 核对一致。
 
 ORG 压缩包与 [Zenodo 固定记录](https://zenodo.org/records/2648292) 的文件大小和 MD5 一致，
 另记录本地 SHA256；官方记录声明 CC BY 4.0，并保留 ORG 仓库的完整 Slicer 协议及方法引用。
@@ -67,7 +65,6 @@ ORG 解压防止越界与链接攻击，排除 `__MACOSX` 元数据；849 个运
 
 PNL、TractCloud、WMA 在未指定专用目录时查找统一资源目录，先校验再使用；
 显式路径和旧环境变量仍优先。WMA 按固定索引核对全部解压文件，不能仅凭 ZIP 或空目录判定就绪。
-SynthStrip 优先使用已安装的模型，否则通过作者支持的 `--model` 参数使用共享模型；仍需匹配运行环境。
 
 ---
 
@@ -97,7 +94,7 @@ PythonSlicer scripts/setup_optional_assets.py --profiles tractcloud wma \
 
 公开资源镜像支持匿名下载，GUI 的 URL 下载不要求用户安装 Git 或 Git LFS。
 已在干净目录中匿名下载 TractCloud 四个推理资源，文件大小及 SHA256 全部通过。
-ORG、SynthStrip、IIT 以及 PNL 运行环境安装仍保留官方来源。
+ORG、IIT 以及 PNL 运行环境安装仍保留官方来源。
 如果将来使用私有镜像，须标记 `access: authorized-private`，准备流程将提前说明权限要求，
 不会先下载一部分再因权限失败；可改用获授权的完整 Git LFS 副本或离线导入。
 

@@ -77,7 +77,7 @@ Optional and default behaviour:
 - "Microstructure runs **DTI only by default**. Enable Free-water, NODDI or DKI independently under Advanced." (R/README.md:120-121)
 - DKI "checks baseline measurements, nonzero shells, gradient directions and design rank before fitting." (R/README.md:121-122)
 - MK-Curve: "uses a bundled Python port of the author's algorithm, distinct from standard DIPY WLS/OLS. MATLAB is only an optional reference backend." (R/README.md:122-124)
-- Mask: an existing input mask is retained. If one must be generated, the default is "PNL diffusion CNN masking"; SynthStrip, MRtrix and supplied-mask alternatives are selectable. "A missing backend is reported, never silently replaced." (R/README.md:113-118)
+- Mask: an existing input mask is retained. If one must be generated, the default is "PNL diffusion CNN masking"; a supplied mask is the only alternative (SynthStrip, MRtrix and DIPY masks were removed in W5). "A missing backend is reported, never silently replaced." (R/README.md:113-118)
 - PNL CNN default is not dependency-free: if no mask is supplied it needs PyTorch and model resources; on Linux also the managed ANTs 2.3.0 runtime. On macOS and Windows the native route (SimpleITK and PyTorch in Slicer's Python) is used and is labelled "native (experimental)". (R/docs/architecture/PRODUCT_ARCHITECTURE.md; R/shared/brain_mask.py:142-162)
 - Tractography display: "Automatic tractography display uses a capped VTK preview, preserving the full TCK/TRK source; a preview is not the analysis tractogram." (R/README.md:125-126)
 - GUI language: English or Chinese, chosen in the header. (R/README.md:89; R/README.zh-CN.md:79)

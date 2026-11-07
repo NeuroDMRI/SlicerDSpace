@@ -27,13 +27,11 @@ does not make CUDA available: fix that backend's environment first.
 | Route | Policy / implementation |
 | --- | --- |
 | PNL CNN masking | `auto` in external PNL PyTorch; first caller-visible CUDA GPU or CPU; explicit CPU/CUDA options |
-| SynthStrip masking | `auto` in FreeSurfer fspython; GPU flag supplied when CUDA is usable; preserves caller visibility |
 | DDSeg | `auto` at GUI, CLI and direct API; tensor inference resolves in its executing Python |
 | DDParcel | `auto`; follows the GUI PyTorch choice, including standalone legacy entrypoints; explicit CUDA cannot silently become CPU |
 | DDSurfer surfaces | `auto`; resolves in its selected external Python, not the calling Slicer Python; preserves model memory/precision checks |
 | TractCloud | `auto` in its selected Python; GUI PyTorch choice forwarded; CPU retry after a CUDA inference error is refused |
 | MRtrix/FSL eddy | GPU-first when its CUDA binary and GPU access are available; launcher refuses upstream CUDA-error CPU retries |
-| MRtrix dwi2mask | CPU implementation; no CUDA option in this route |
 | DIPY denoising/Gibbs/motion | Current CPU implementations; not made into a different algorithm to claim GPU acceleration |
 | Slicer DTI, DIPY free-water/DKI, Python MK-Curve | Current CPU implementations |
 | AMICO NODDI | Current CPU fitting backend; threading is separate from GPU availability |
@@ -68,11 +66,10 @@ device receipt and includes it in its manifest. Source/model hashes remain in
 the corresponding scientific provenance.
 
 PNL's known undefined `DEVICE_ID_LIST` startup branch is replaced **in memory**
-by the launcher. SynthStrip's old fixed physical-GPU-0 assignment is likewise
-suppressed in memory. Neither adjustment changes weights, CNN operations,
+by the launcher. This adjustment does not change weights, CNN operations,
 registration or cleanup. The pinned DDSurfer snapshot remains unmodified;
-the facade supplies its generated native mask explicitly so its standalone
-CPU-only SynthStrip helper is not used by SlicerDSpace.
+the facade supplies its generated native mask (made by PNL CNN) explicitly so the standalone
+CPU-only helper of that snapshot is not used by SlicerDSpace.
 
 ---
 
@@ -81,13 +78,6 @@ CPU-only SynthStrip helper is not used by SlicerDSpace.
 [PNLBrainMask-Torch](https://github.com/ChengjinLii/PNLBrainMask-Torch)
 uses converted PNL weights and PyTorch inference. Managed installation defaults
 to the paired-tested CPU build; an explicit CUDA route needs a compatible PyTorch/CUDA runtime.
-[SynthStrip](https://surfer.nmr.mgh.harvard.edu/docs/synthstrip/) uses FreeSurfer's
-own interpreter by default. For newer GPUs, set optional `synthstrip_python`
-under **Environment and installation > External Runtime Paths** to a
-compatible independent Python with PyTorch, surfa and NumPy. The same official
-FreeSurfer script/weights are used. Known unvalidated old-CUDA/new-GPU combinations
-are blocked before model processing; they do not silently select CPU.
-
 MRtrix `dwifslpreproc` itself normally retries CPU after a CUDA error; the
 SlicerDSpace launcher prevents that retry. CPU-only discovery is allowed when
 there is no CUDA eddy backend. Official CUDA eddy 2602.0 was installed in a separate

@@ -94,7 +94,7 @@ previous path. Preserve the documented directory layout when transferring
 resources. This imports models, not a portable Conda environment. Protected
 model downloads may still require source authorization; setup does not bypass it.
 
-Optional PNL models/templates, TractCloud inference references, SynthStrip weights
+Optional PNL models/templates, TractCloud inference references
 and WMA ORG atlases use the shared resource layout. Selected preparation acquires
 missing profiles, verifies SHA256 and safely extracts ORG before saving paths.
 Algorithm sources and their data are separate preparation phases. Pinned source
@@ -125,7 +125,7 @@ them by hand after a successful run.
 | Python scientific packages | Selected interpreter, protected Slicer core packages, native packaging API when available; official PyTorch helper |
 | PNL diffusion CNN | Linux x86_64; pinned PNLBrainMask-Torch package, converted v0.3 three-view weights, IIT b0 template, Python 3.11, PyTorch 2.5.1 CPU and ANTs 2.3.0 in a separate prefix |
 | Optional cortical postprocessing | [Qualified prebuilt bundle](SURFACE_COMPONENTS.md), Linux x86_64; offline installation tested. Bundle publication is pending. Personal activation is separate; the GUI never compiles sources |
-| WMA / TractCloud / SynthStrip non-code resources | Selected optional profile download/import, checksums, ORG extraction and automatic path saving; private-mirror authorization still applies |
+| WMA / TractCloud non-code resources | Selected optional profile download/import, checksums, ORG extraction and automatic path saving; private-mirror authorization still applies |
 | WMA/WMQL/TractCloud sources | Pinned archives, safe extraction, file hashes, automatic discovery/path saving; no Git or duplicated algorithm implementation |
 | PNL diffusion CNN on macOS and Windows | No managed runtime. The native route ("native (experimental)") runs in Slicer's Python and needs the PyTorch extension and the pnl-cnn brain-mask assets, which this installer plans (with the PNL licence) |
 | Windows | WSL 2 Ubuntu runtime from `scripts/install_deps_windows.ps1` for MRtrix3, FSL and the optional FreeSurfer and algorithm sources; the setup dialog lists it with its licences. The brain mask and the Python stages run in Windows Slicer's Python, not in WSL |

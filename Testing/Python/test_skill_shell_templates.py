@@ -34,7 +34,7 @@ class SkillShellTemplateTests(unittest.TestCase):
     def test_generated_scripts_and_catalogue_match_the_source_recipes(self):
         outputs = generator.generated_files()
         scripts = {path for path in outputs if path.suffix == ".sh"}
-        self.assertEqual(len(scripts), 38)
+        self.assertEqual(len(scripts), 34)
         self.assertEqual({path.relative_to(ROOT) for path in SHELL.glob("*.sh")}, scripts)
         for path, expected in outputs.items():
             with self.subTest(path=str(path)):
@@ -142,7 +142,7 @@ class SkillShellExecutionTests(unittest.TestCase):
                 self.assertEqual(args.dependency_config, Path(self.env["DEPENDENCY_CONFIG"]))
                 route = [self.env["SLICER"] if value == "$SLICER" else value for value in tokens[2:]]
                 self.assertEqual(call[-len(route):], route)
-        self.assertEqual(len(self.calls()), 38)
+        self.assertEqual(len(self.calls()), 34)
 
     def test_modes_change_only_the_execution_flag(self):
         for mode in ("doctor", "plan", "execute"):

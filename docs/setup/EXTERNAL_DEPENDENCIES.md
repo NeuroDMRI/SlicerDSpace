@@ -492,8 +492,8 @@ PythonSlicer run_subject_pipeline.py \
 asymmetric，可按其建议添加 `--preprocessing-eddy-slm linear`；不要在没有该
 警告或方法学依据时任意改变 EC model。
 
-FSL 校正完成后，最终脑掩膜由 MRtrix `dwi2mask` 基于校正后的 DWI 和旋转后的
-梯度重新生成，不复用校正前输入掩膜。恢复运行会自动修复缺失或时间早于最终
+FSL 校正完成后，最终脑掩膜由 PNL CNN 基于校正后的 DWI 和旋转后的
+梯度重新生成（选择“仅使用提供的掩膜”时复制该掩膜），不复用校正前输入掩膜。MRtrix `dwi2mask` 只由 `dwifslpreproc` 内部使用。恢复运行会自动修复缺失或时间早于最终
 DWI 的旧掩膜。
 
 DIPY preprocessing backend 不需要 FSL，但它不提供完整 susceptibility distortion / eddy-current 建模。
@@ -504,7 +504,7 @@ DIPY preprocessing backend 不需要 FSL，但它不提供完整 susceptibility 
 
 DDSurfer postprocess 生成 FreeSurfer-style `surf/label/stats`，当前原生 OBJ 路线可使用
 本机从固定源码编译的七个原始组件，**不强制安装完整 FreeSurfer**。已有完整安装仍可复用。
-组件并非 Python 重写，仍适用 FreeSurfer 许可及个人激活要求；SynthStrip 单独配置。
+组件并非 Python 重写，仍适用 FreeSurfer 许可及个人激活要求。
 详见[表面组件与首次准备](SURFACE_COMPONENTS.zh-CN.md)。
 
 ### 6.1 用途

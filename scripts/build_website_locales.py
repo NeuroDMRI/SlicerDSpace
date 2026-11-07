@@ -16,7 +16,7 @@ VOID = {'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link',
         'meta', 'param', 'source', 'track', 'wbr', 'path'}
 KEEP = {'SlicerDSpace', 'SLICERDSPACE', 'DDSeg', 'DDParcel', 'DDSurfer', 'DTI', 'DKI', 'NODDI',
         'SAF', 'UKF', 'WMA', 'WMQL', 'TractCloud', 'SIFT2', 'MK-Curve', 'MP-PCA', 'Patch2Self',
-        'MRtrix3', 'SynthStrip', 'SlicerDMRI', 'CSD/ACT', 'CSD / MSMT-CSD', 'NODDI / AMICO',
+        'MRtrix3', 'SlicerDMRI', 'CSD/ACT', 'CSD / MSMT-CSD', 'NODDI / AMICO',
         'MRtrix3 dwi2mask', 'MRtrix3 mtnormalise', 'FSL eddy', 'FSL topup', 'Local PCA',
         'Slicer BRAINSFit / BRAINSResample', 'DIPY or MRtrix3 dwidenoise', 'DIPY or MRtrix3 mrdegibbs',
         'DICOM / NIfTI / NRRD', 'CITATION.cff', 'LICENSE.txt', 'lemo-opuscar', 'ds004666', 'bash', 'Eng'}

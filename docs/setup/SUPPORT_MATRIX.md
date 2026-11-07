@@ -62,8 +62,6 @@ inherit Linux QC or timings.
 | DIPY preprocessing, FW, NODDI | Scoped inputs measured | Native Python candidate; compatible DIPY/AMICO | Native Python candidate; architecture-compatible packages |
 | DKI/Python MK-Curve | Specified-subject full-brain checks and timing recorded; invalid voxels excluded | Native numerical candidate; eligible multi-shell data | Native numerical candidate; eligible multi-shell data |
 | PNL CNN mask | PyTorch/ANTs route; paired CPU probability/mask checks; Linux x86_64 managed setup | Native route in Windows Slicer's Python (SimpleITK + PyTorch), **experimental**; not run on Windows here | Native route (SimpleITK + PyTorch), **experimental**; no CUDA, Metal unimplemented; unmeasured here |
-| DIPY median-Otsu mask | Python-only generation and DTI sample route measured | Native Python candidate; no POSIX tool required, unmeasured here | Native Python candidate, unmeasured here |
-| Full FreeSurfer SynthStrip environment | CPU/CUDA measured | **Not native Windows in this wrapper**; full Linux/WSL environment needed | FreeSurfer/Python CPU candidate, unmeasured here |
 | Cortical postprocessing | Verified native components or existing FreeSurfer; offline prebuilt installation tested, publication pending; [setup](SURFACE_COMPONENTS.md) | No qualified native prebuilt bundle; WSL/full-install bridge acceptance pending | Existing native FreeSurfer candidate; no qualified prebuilt bundle |
 | MRtrix/FSL preprocessing | CPU/CUDA recorded | WSL 2 bridges; device policy runs in actual WSL Python | Native CPU MRtrix/FSL candidate; **no CUDA eddy** |
 | CSD/ACT/SIFT2 | External MRtrix route recorded | MRtrix WSL bridges; acceptance pending | Native MRtrix candidate; acceptance pending |

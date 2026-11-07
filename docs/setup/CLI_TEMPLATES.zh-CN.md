@@ -65,7 +65,7 @@ Doctor/plan 可以写入元数据，不执行科学模型。`--strict-environmen
 也可用 `--help` 中列出的显式路径参数。按[托管环境配置](MANAGED_SETUP.zh-CN.md)
 只准备选定依赖和模型。资源下载、许可确认与正式分析分开进行。
 
-大多数模板使用已检查的原生掩膜（`provided`）；需要生成时明确改选 DIPY 或 PNL。
+大多数模板使用已检查的原生掩膜（`provided`）；需要生成时明确改选 PNL CNN。
 已有掩膜优先使用。掩膜及可复用缓存位于被试根目录，仅换输出目录不能隔离掩膜生成对照；
 比较掩膜方法时使用独立输入副本。
 
@@ -107,30 +107,14 @@ NRRD uint16 只在已检查的 int16 数值范围内无损转换；溢出时导�
 
 ## 掩膜和预处理
 
-选择一种掩膜方法，缺少掩膜时才生成。PNL 按 `--pnl-mask-route auto|managed|native` 选择路线：Linux 上 `auto` 即 managed（带 ANTs 的 conda 运行环境），macOS 和 Windows 上即 Slicer Python 中的 native 路线（SimpleITK 和 PyTorch，“native（实验性）”）；
-DIPY 不需要权重或外部掩膜程序；MRtrix 和 SynthStrip 各有依赖。
-某个方法失败时不会自动改用另一个方法。
+脑掩膜只有两种方法：`pnl_cnn` 和 `provided`；缺少掩膜时才生成。PNL 按 `--pnl-mask-route auto|managed|native` 选择路线：Linux 上 `auto` 即 managed（带 ANTs 的 conda 运行环境），macOS 和 Windows 上即 Slicer Python 中的 native 路线（SimpleITK 和 PyTorch，“native（实验性）”）；
+SynthStrip、MRtrix `dwi2mask` 和 DIPY 掩膜方法已移除（W5）；`--brain-mask-backend` 写已移除的名称会失败，并提示 `pnl_cnn` 和 `provided`。
+一种方法失败时不会自动改用另一种。
 
 <!-- cli-template: mask-pnl -->
 ```bash
 pipeline mask_pnl --targets validation --brain-mask-backend pnl_cnn \
   --brain-mask-device auto --plan
-```
-
-<!-- cli-template: mask-dipy -->
-```bash
-pipeline mask_dipy --targets validation --brain-mask-backend dipy --plan
-```
-
-<!-- cli-template: mask-mrtrix -->
-```bash
-pipeline mask_mrtrix --targets validation --brain-mask-backend mrtrix --plan
-```
-
-<!-- cli-template: mask-synthstrip -->
-```bash
-pipeline mask_synthstrip --targets validation --brain-mask-backend synthstrip \
-  --postprocess-freesurfer-home "/path/to/freesurfer" --brain-mask-device auto --plan
 ```
 
 可选的 DIPY 去噪、Gibbs 和运动校正：
@@ -236,14 +220,6 @@ pipeline dti --targets validation,microstructure --microstructure-stages dti \
 ```bash
 pipeline dti_ols --targets validation,microstructure --microstructure-stages dti \
   --brain-mask-backend provided --micro-fit-method ls --plan
-```
-
-明确使用轻量掩膜生成及 DTI：
-
-<!-- cli-template: micro-dti-light -->
-```bash
-pipeline dti_light --targets validation,microstructure --microstructure-stages dti \
-  --brain-mask-backend dipy --plan
 ```
 
 <!-- cli-template: micro-fw -->
@@ -596,9 +572,9 @@ function Invoke-DDSurfer {
     if ($LASTEXITCODE -ne 0) { throw "SlicerDSpace exited with $LASTEXITCODE" }
 }
 
-Invoke-DDSurfer -Run 'dti_light' -RouteArgs @(
+Invoke-DDSurfer -Run 'dti' -RouteArgs @(
     '--targets', 'validation,microstructure', '--microstructure-stages', 'dti',
-    '--brain-mask-backend', 'dipy', '--plan'
+    '--brain-mask-backend', 'provided', '--plan'
 )
 ```
 

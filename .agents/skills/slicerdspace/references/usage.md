@@ -26,7 +26,7 @@ inspect, preview or explain is not a request to execute an analysis.
 
 Check `docs/setup/SUPPORT_MATRIX.md` for the user's OS and backend. Preserve
 explicit CPU/CUDA choices. Auto prefers usable CUDA in supported neural methods;
-DIPY masking, tensor fitting and several other numerical methods are CPU-based.
+Tensor fitting and several other numerical methods are CPU-based.
 Plan concurrency against the combined RAM/GPU demand, not just CPU count.
 
 ## Prepare Inputs
@@ -42,7 +42,7 @@ Canonical inputs are `input/data.nii.gz`, `input/bvals`, `input/bvecs`, optional
 Verify volume/gradient counts, finite values, gradient orientation and mask
 shape/affine. Valid supplied masks are retained. PNL remains the default missing
 mask generator (`--brain-mask-backend pnl_cnn`; route `--pnl-mask-route auto|managed|native`,
-native is experimental); DIPY is an explicit model-free alternative, not a fallback.
+native is experimental). The only other mask method is `provided`. SynthStrip, MRtrix `dwi2mask` and DIPY masks were removed; a removed name fails and names `pnl_cnn` and `provided`.
 
 For a small real installation example, use the project's
 `docs/setup/SLICER_SAMPLE_DTI.md`. A synthetic tensor-field demo only checks

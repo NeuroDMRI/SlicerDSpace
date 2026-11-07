@@ -63,7 +63,7 @@ the requested route and its prerequisites, not every algorithm at once.
 
 | Section | Algorithms and variants |
 | --- | --- |
-| [Masks](references/shell_templates.md#brain-masks) | PNL CNN (route auto/managed/native), DIPY, MRtrix, SynthStrip |
+| [Masks](references/shell_templates.md#brain-masks) | PNL CNN (route auto/managed/native); a supplied mask (`provided`) |
 | [Preprocessing](references/shell_templates.md#preprocessing) | DIPY MP-PCA/Local PCA/Patch2Self; MRtrix/FSL |
 | [Anatomical prior](references/shell_templates.md#anatomical-prior) | DDSeg, DDParcel, DDSurfer, native cortical postprocessing |
 | [Microstructure](references/shell_templates.md#microstructure) | DTI WLS/OLS, FW, NODDI, DKI WLS/OLS, Python MK-Curve, optional MATLAB reference |

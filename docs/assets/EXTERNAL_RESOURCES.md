@@ -23,7 +23,6 @@ The default 31-file core profile is unchanged. Optional resources remain opt-in.
 | PNL CNN weights/architecture | `brain_mask/pnl_cnn/` | Three HDF5 files, architecture and full upstream agreement |
 | IIT b0 template | Same local directory | Git-ignored, upstream-only; electronic redistribution requires written IIT permission |
 | TractCloud inference subset | `bundles/tractcloud/` | Model, arguments, 308-byte reference and upstream agreement; no training/test archives |
-| SynthStrip main model v1 | `brain_mask/synthstrip/` | Author's CC BY 4.0 option, unmodified and attributed; not a runtime installer |
 | WMA / ORG atlases | `bundles/wma/archives/` | Two pinned official ZIPs, approximately 1.68 GiB; local extracted copies are Git-ignored |
 | WMQL / SAF / MK-Curve small data | Extension runtime package | Query files/direction tables stay packaged; not duplicated as large weights |
 
@@ -32,7 +31,7 @@ The default 31-file core profile is unchanged. Optional resources remain opt-in.
 ## Provenance
 
 PNL uses author release v0.3; TractCloud's minimal inference subset matches the
-saved v1.0.0 archives. The SynthStrip model matches the author's current v1 URL.
+saved v1.0.0 archives.
 ORG ZIP sizes/MD5 match the fixed [Zenodo record](https://zenodo.org/records/2648292),
 whose metadata states CC BY 4.0. SHA256, citations and the original Slicer/BWH
 agreement are retained. The [IIT terms](https://www.nitrc.org/projects/iit/) require
@@ -68,8 +67,7 @@ PNL, TractCloud and WMA can resolve complete, hash-verified resources from the
 configured shared asset root when no backend-specific path is supplied.
 Explicit paths and legacy environment variables retain precedence. WMA checks
 the extracted files against the pinned index, not just the existence of ZIPs
-or empty directories. SynthStrip uses its installed model first, or the shared
-model via the upstream `--model` option; its runtime is still required.
+or empty directories.
 
 ---
 
@@ -109,7 +107,7 @@ blockers remain visible rather than being marked ready after downloading data.
 The public resource mirror supports anonymous downloads; users do not need Git
 or Git LFS for Slicer's URL downloader. Anonymous TractCloud acquisition in a
 clean resource root passed all four file size/SHA256 checks. Official URLs remain
-available for ORG, SynthStrip, IIT and PNL runtime acquisition. A future private
+available for ORG, IIT and PNL runtime acquisition. A future private
 mirror must declare `access: authorized-private`: preparation then fails before
 partial downloads and directs users to an authorized checkout or offline import.
 

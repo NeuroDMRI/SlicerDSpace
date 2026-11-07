@@ -29,7 +29,7 @@ independent scientific validation, not merely matching its output filenames.
 | --- | --- | --- |
 | Slicer integration | Qt, MRML, imaging I/O, display, the Teem tensor fit in Slicer core; the PyTorch extension (declared), UKFTractography and SlicerDMRI (requested at setup only when a ticked product needs them) | Declare the one extension dependency; use Slicer APIs rather than a separate desktop UI |
 | Python scientific routes | DDSeg/DDParcel/DDSurfer, DIPY, AMICO, numerical statistics | Install only selected requirements; protect Slicer's existing Python environment; reuse compatible PyTorch |
-| Isolated Python workers | Managed PNL runtime (Python 3.11, PyTorch, ANTs 2.3.0; Linux), optional SynthStrip interpreter, independently configured model runtimes | Probe and run in the actual selected interpreter; do not force incompatible stacks into Slicer. On macOS and Windows the PNL mask runs in Slicer's own Python instead (native route) |
+| Isolated Python workers | Managed PNL runtime (Python 3.11, PyTorch, ANTs 2.3.0; Linux) independently configured model runtimes | Probe and run in the actual selected interpreter; do not force incompatible stacks into Slicer. On macOS and Windows the PNL mask runs in Slicer's own Python instead (native route) |
 | Optional external tools | MRtrix/FSL, FreeSurfer refinement, WMA/WMQL/TractCloud resources | Versioned, explicit paths; dependency checks before execution; official sources and license review |
 | Model assets | Weights, templates and atlases | Download selected profiles, verify hashes, retain provenance; licensing is a separate gate |
 

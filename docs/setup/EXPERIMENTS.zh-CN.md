@@ -17,7 +17,7 @@
 
 | 部分 | 方法 | 额外独立环境 |
 | --- | --- | --- |
-| 脑掩膜 | mean b0 上的 DIPY median-Otsu | 无外部程序或权重 |
+| 脑掩膜 | PNL CNN（唯一的生成方法） | PyTorch 扩展和 pnl-cnn 资源 |
 | 可选预处理 | DIPY | 不需要 |
 | DTI / FW / NODDI / Python DKI | Slicer Python 中所选模型 | 不需要；按需安装 Python 包 |
 | 解剖重建 | DDSeg / DDParcel / DDSurfer | PyTorch 扩展、Python 包及下载资源 |
@@ -26,15 +26,13 @@
 | 连接组 | Python | 兼容 Python 包 |
 | 可选表面后处理 | 原生组件运行包 | 小型授权组件，无需完整版 FreeSurfer |
 
-默认 PNL 掩膜和 CSD/ACT 追踪不自动改变。PNL 仍需 PyTorch/ANTs；
+默认 PNL 掩膜和 CSD/ACT 追踪不自动改变。PNL 需要 PyTorch 和 pnl-cnn 资源（ANTs 仅 managed 路线需要）；
 CSD/ACT 和 SAF 仍需 MRtrix；MRtrix/FSL 预处理仍需 FSL；UKF 调用安装的
 UKFTractography 扩展。保留这些算法的按需入口，不将其他方法伪装为等价替代。
 轻量预设不修改 GPU 算法的设备偏好。
 
-DIPY median-Otsu 是 CPU 算法，采用半径 4、中值滤波 4 次、膨胀 1 次、不裁剪。
-原生网格、算法版本、参数、输入指纹与 QC 均保留。需检查脑边界、脑干和小脑；
-它不等同于 PNL 模型。见 [DIPY 官方说明](https://docs.dipy.org/stable/reference/dipy.segment.html#dipy.segment.mask.median_otsu)
-与 [Slicer Python 文档](https://slicer.readthedocs.io/en/latest/developer_guide/python_faq.html)。
+预设把脑掩膜设为 PNL CNN。DIPY median-Otsu 掩膜已移除（W5）；“仅使用提供的掩膜”仍可用。
+需检查脑边界、脑干和小脑。见 [Slicer Python 文档](https://slicer.readthedocs.io/en/latest/developer_guide/python_faq.html)。
 
 ---
 

@@ -19,7 +19,7 @@ and explicitly apply the lighter preset:
 
 | Part | Method | Standalone environment |
 | --- | --- | --- |
-| Brain mask | DIPY median-Otsu on mean b0 | None; no weights |
+| Brain mask | PNL CNN (the only generating method) | PyTorch extension and the pnl-cnn assets |
 | Optional preprocessing | DIPY | None |
 | DTI / FW / NODDI / Python DKI | Selected models in Slicer's Python | None; model-specific Python packages as needed |
 | Anatomical prior | DDSeg / DDParcel / DDSurfer | PyTorch extension, Python packages and downloaded assets |
@@ -28,17 +28,14 @@ and explicitly apply the lighter preset:
 | Connectome | Python | Compatible Python packages |
 | Optional surface postprocessing | Licensed native components | Small component runtime; no full FreeSurfer |
 
-PNL and CSD/ACT defaults stay unchanged until explicitly changed. PNL still
-needs PyTorch/ANTs; CSD/ACT and SAF need MRtrix; MRtrix/FSL preprocessing needs
+PNL and CSD/ACT defaults stay unchanged until explicitly changed. PNL needs
+PyTorch and the pnl-cnn assets (ANTs only on the managed route); CSD/ACT and SAF need MRtrix; MRtrix/FSL preprocessing needs
 FSL. UKF uses its installed extension. GPU-capable stages retain their device
 preference. Optional methods remain available on demand.
 
-DIPY median-Otsu is a CPU method: median radius 4, four passes, one dilation,
-no cropping, native mean-b0 grid. Algorithm version, parameters, input hashes
-and output QC are recorded. Inspect brain boundaries, brainstem and cerebellum;
-this is an alternative to PNL, not an equivalent model. See the
-[DIPY reference](https://docs.dipy.org/stable/reference/dipy.segment.html#dipy.segment.mask.median_otsu)
-and [Slicer Python documentation](https://slicer.readthedocs.io/en/latest/developer_guide/python_faq.html).
+The preset sets the brain mask to PNL CNN. The DIPY median-Otsu mask was removed (W5); a supplied
+mask (`provided`) stays available. Inspect brain boundaries, brainstem and cerebellum. See the
+[Slicer Python documentation](https://slicer.readthedocs.io/en/latest/developer_guide/python_faq.html).
 
 ---
 

@@ -71,7 +71,7 @@ PyTorch；WMQL、DIPY、AMICO 默认使用工作流 Python，明确配置的其�
 不下载、不执行资源，失败保留原路径；复制资源时须保留目录结构。
 导入的是模型目录，不是可移植 Conda 环境；受保护的模型下载仍需相应访问授权，不会绕过权限。
 
-PNL 模型/模板、TractCloud 推理参考、SynthStrip 权重和 WMA ORG 图谱使用统一资源目录。
+PNL 模型/模板、TractCloud 推理参考和 WMA ORG 图谱使用统一资源目录。
 准备所选环境时，按缺少的分组获取资源、核对 SHA256 并安全解压 ORG，成功后保存路径。
 算法源码与数据分阶段准备；源码压缩包固定提交和 SHA256，保留作者许可，校验后自动保存路径。
 用户明确配置的其他源码目录不会被替换。
@@ -98,7 +98,7 @@ PNL 模型/模板、TractCloud 推理参考、SynthStrip 权重和 WMA ORG 图�
 | Python 科学计算包 | 所选解释器、核心版本约束、可用时使用原生 packaging API；官方 PyTorch 辅助器 |
 | PNL diffusion CNN | Linux x86_64；固定 PNLBrainMask-Torch 包、转换后的 v0.3 三方向权重、IIT b0 模板、Python 3.11、PyTorch 2.5.1 CPU、ANTs 2.3.0，独立环境 |
 | 可选皮层后处理 | Linux x86_64 [合格预编译运行包](SURFACE_COMPONENTS.zh-CN.md)；已测离线安装，在线发布待完成；个人激活文件独立提供，GUI 不编译源码 |
-| WMA / TractCloud / SynthStrip 非代码资源 | 所选分组下载/导入、校验、ORG 解压及自动保存路径；私有镜像仍需访问权限 |
+| WMA / TractCloud 非代码资源 | 所选分组下载/导入、校验、ORG 解压及自动保存路径；私有镜像仍需访问权限 |
 | WMA/WMQL/TractCloud 源码 | 固定提交压缩包、安全解压、逐文件哈希、自动发现并保存路径，无需 Git，也不重复实现算法 |
 | macOS 与 Windows 的 PNL 扩散 CNN | 无 managed 运行环境。native 路线（“native（实验性）”）在 Slicer 的 Python 中运行，需要 PyTorch 扩展和 pnl-cnn 脑掩膜资源，本安装器会规划它们（含 PNL 许可） |
 | Windows | 由 `scripts/install_deps_windows.ps1` 安装 WSL 2 Ubuntu 运行环境，用于 MRtrix3、FSL 以及可选的 FreeSurfer 和算法源码；准备对话框会列出它及其许可。脑掩膜和 Python 阶段在 Windows 版 Slicer 的 Python 中运行，不在 WSL 中 |

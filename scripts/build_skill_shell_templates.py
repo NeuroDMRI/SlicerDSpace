@@ -24,8 +24,7 @@ GROUPS = (
 )
 
 TITLES = {
-    "mask-pnl": "PNL CNN brain mask", "mask-dipy": "DIPY brain mask",
-    "mask-mrtrix": "MRtrix brain mask", "mask-synthstrip": "SynthStrip brain mask",
+    "mask-pnl": "PNL CNN brain mask",
     "preproc-dipy": "DIPY preprocessing with MP-PCA",
     "preproc-localpca": "DIPY preprocessing with Local PCA",
     "preproc-patch2self": "DIPY preprocessing with Patch2Self",
@@ -34,7 +33,7 @@ TITLES = {
     "anatomy-surface": "DDSurfer native surfaces", "anatomy-combined": "Combined anatomical priors",
     "anatomy-postprocess": "Native cortical postprocessing and atlas mapping",
     "micro-dti": "DTI with WLS", "micro-dti-ols": "DTI with OLS",
-    "micro-dti-light": "DTI with explicit DIPY masking", "micro-fw": "Free-water imaging",
+    "micro-fw": "Free-water imaging",
     "micro-noddi": "NODDI with AMICO", "micro-dki": "DKI with WLS",
     "micro-dki-ols": "DKI with OLS", "micro-mkcurve": "MK-Curve Python port",
     "micro-mkcurve-matlab": "MK-Curve optional MATLAB reference",

@@ -70,8 +70,8 @@ by `--help`. Prepare only selected dependencies/models using
 [managed setup](MANAGED_SETUP.md); model availability and license acceptance
 are separate from analysis execution.
 
-Most recipes assume an existing reviewed native mask (`provided`). Select the
-DIPY or PNL alternatives explicitly when generation is needed. Supplied masks
+Most recipes assume an existing reviewed native mask (`provided`). Select
+PNL CNN explicitly when generation is needed. Supplied masks
 take priority. Mask generation and eligible caches live under the subject root;
 separate output folders alone do not isolate mask-generation comparisons. Use
 independent input copies for those comparisons.
@@ -117,33 +117,17 @@ is lossless only within the checked int16 range; the importer refuses overflow.
 
 ## Masks And Preprocessing
 
-Choose one mask method; these commands generate a mask only if needed. PNL
+The brain mask has two methods, `pnl_cnn` and `provided`; the command generates a mask only if needed. PNL
 runs on the route `--pnl-mask-route auto|managed|native`: on Linux `auto` is the
 managed conda runtime with ANTs; on macOS and Windows it is the native route in
-Slicer's Python (SimpleITK and PyTorch, "native (experimental)"). DIPY needs no weights or external
-mask program. MRtrix and SynthStrip retain their own requirements. None is an
-error-triggered fallback for another method.
+Slicer's Python (SimpleITK and PyTorch, "native (experimental)"). The SynthStrip, MRtrix `dwi2mask` and DIPY mask
+methods were removed (W5). A removed name on `--brain-mask-backend` fails and names `pnl_cnn` and `provided`.
+Neither method is an error-triggered fallback for the other.
 
 <!-- cli-template: mask-pnl -->
 ```bash
 pipeline mask_pnl --targets validation --brain-mask-backend pnl_cnn \
   --brain-mask-device auto --plan
-```
-
-<!-- cli-template: mask-dipy -->
-```bash
-pipeline mask_dipy --targets validation --brain-mask-backend dipy --plan
-```
-
-<!-- cli-template: mask-mrtrix -->
-```bash
-pipeline mask_mrtrix --targets validation --brain-mask-backend mrtrix --plan
-```
-
-<!-- cli-template: mask-synthstrip -->
-```bash
-pipeline mask_synthstrip --targets validation --brain-mask-backend synthstrip \
-  --postprocess-freesurfer-home "/path/to/freesurfer" --brain-mask-device auto --plan
 ```
 
 Optional DIPY denoising/Gibbs/motion correction:
@@ -254,14 +238,6 @@ An explicit ordinary least-squares comparison:
 ```bash
 pipeline dti_ols --targets validation,microstructure --microstructure-stages dti \
   --brain-mask-backend provided --micro-fit-method ls --plan
-```
-
-Explicit lightweight masking plus DTI:
-
-<!-- cli-template: micro-dti-light -->
-```bash
-pipeline dti_light --targets validation,microstructure --microstructure-stages dti \
-  --brain-mask-backend dipy --plan
 ```
 
 <!-- cli-template: micro-fw -->
@@ -643,9 +619,9 @@ function Invoke-DDSurfer {
     if ($LASTEXITCODE -ne 0) { throw "SlicerDSpace exited with $LASTEXITCODE" }
 }
 
-Invoke-DDSurfer -Run 'dti_light' -RouteArgs @(
+Invoke-DDSurfer -Run 'dti' -RouteArgs @(
     '--targets', 'validation,microstructure', '--microstructure-stages', 'dti',
-    '--brain-mask-backend', 'dipy', '--plan'
+    '--brain-mask-backend', 'provided', '--plan'
 )
 ```
 

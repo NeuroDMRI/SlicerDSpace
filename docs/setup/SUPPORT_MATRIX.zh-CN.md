@@ -58,8 +58,6 @@ WSL 是 Linux 后端，不是 Windows 原生计算；Windows/macOS 不继承 Lin
 | DIPY 预处理、FW、NODDI | 指定输入已测 | 原生 Python 候选，需兼容 DIPY/AMICO | 原生 Python 候选，需匹配架构的包 |
 | DKI/Python MK-Curve | 指定被试全脑已有独立检查与计时；无效体素须排除 | 原生数值候选，需适用的多壳数据 | 原生数值候选，需适用的多壳数据 |
 | PNL CNN 掩膜 | PyTorch/ANTs 路线；CPU 概率/掩膜配对检查；Linux x86_64 自动配置 | Windows Slicer Python 内的 native 路线（SimpleITK + PyTorch），**实验性**；此处未在 Windows 上运行 | native 路线（SimpleITK + PyTorch），**实验性**；无 CUDA，Metal 未实现，未实测 |
-| DIPY median-Otsu 掩膜 | 已测纯 Python 掩膜生成及 DTI 示例 | 原生 Python 候选，不需 POSIX 工具；未实测 | 原生 Python 候选，未实测 |
-| 完整 FreeSurfer SynthStrip 环境 | CPU/CUDA 已测 | **当前封装不支持原生 Windows**，需完整 Linux/WSL 环境 | FreeSurfer/Python CPU 候选，未实测 |
 | 皮层表面后处理 | 合格原生组件或已有 FreeSurfer；已测离线预编译包安装，在线发布待完成；[配置说明](SURFACE_COMPONENTS.zh-CN.md) | 无合格原生预编译包；WSL／完整安装桥接待验收 | 已有原生 FreeSurfer 候选；无合格预编译包 |
 | MRtrix/FSL 预处理 | CPU、CUDA 有记录 | WSL 2 桥接；设备策略在实际 WSL Python 内运行 | 原生 CPU MRtrix/FSL 候选；**不能使用 CUDA eddy** |
 | CSD/ACT/SIFT2 | 外部 MRtrix 路线已测 | MRtrix WSL 桥接，全流程待验收 | 原生 MRtrix 候选，全流程待验收 |

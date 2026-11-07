@@ -9,12 +9,13 @@
 ---
 
 The subject CLI and batch CLI use `pnl_cnn` by default. Select a backend
-explicitly with `--brain-mask-backend pnl_cnn|synthstrip|mrtrix|provided`.
+explicitly with `--brain-mask-backend pnl_cnn|provided`. The SynthStrip, MRtrix `dwi2mask` and DIPY
+mask backends were removed; a removed name fails and the message names `pnl_cnn` and `provided`.
 Missing dependencies are reported, not replaced with another backend.
-`--brain-mask-device auto|cuda|cpu` controls PNL/SynthStrip inference and defaults
+`--brain-mask-device auto|cuda|cpu` controls PNL inference and defaults
 to GPU-preferred `auto`. It is saved in `run_defaults.brain_mask_device`.
 An explicit CUDA request fails if the external runtime cannot use CUDA;
-inference errors never trigger a hidden CPU retry. MRtrix masking is CPU-only.
+inference errors never trigger a hidden CPU retry.
 `provided` requires an existing `input/nodif_brain_mask.nii.gz`.
 `--pnl-mask-route auto|managed|native` chooses the route of `pnl_cnn`: `auto` is
 `managed` (conda runner with ANTs) on Linux and `native` on macOS and Windows; `native` is
@@ -46,9 +47,8 @@ not an inference runtime when the final preprocessing mask needs refreshing.
 The shared-logic doctor entrypoints accept `brain_mask_required=False`;
 subject-aware callers can pass `True` for a known missing or newly needed mask.
 
-SynthStrip reuses `--postprocess-freesurfer-home /opt/freesurfer`; there is no
-separate SynthStrip installation-path option. MRtrix uses the existing
-`--mrtrix-bin-dir` and preprocessing MRtrix path settings.
+A saved user setting with a removed backend (`synthstrip`, `mrtrix`, `dipy`) loads as
+`pnl_cnn` with one note in the log; it does not block the run.
 
 The four PNL paths can also be supplied in `external_dependencies` in
 `--dependency-config` or `--user-config` JSON. The backend is stored in
@@ -64,8 +64,7 @@ Batch runs forward the selected backend and paths unchanged to every subject:
 PythonSlicer scripts/run_batch_pipeline.py \
   --batch-root /data/subjects --jobs 2 \
   --targets preprocessing,microstructure \
-  --brain-mask-backend synthstrip \
-  --postprocess-freesurfer-home /opt/freesurfer \
+  --brain-mask-backend provided \
   --doctor
 ```
 

@@ -3,7 +3,7 @@
 Generated from `docs/setup/CLI_TEMPLATES.md`; do not edit this catalogue or its generated scripts.
 Regenerate with `python scripts/build_skill_shell_templates.py` from the authorized checkout.
 
-Source SHA-256 (UTF-8, LF): `59b61079d6a5b0f8512c9407f8c6c99d558821adc4d2805611140cef55598b0b`.
+Source SHA-256 (UTF-8, LF): `a2ed39878940d95110f203dc9dddd55fc310704d47b9ae3edcd03525207c67f3`.
 
 ## Contents
 
@@ -79,31 +79,6 @@ and sparse-bundle warnings. UKF is called automatically, and bundle sources rema
 ```bash
 pipeline mask_pnl --targets validation --brain-mask-backend pnl_cnn \
   --brain-mask-device auto --plan
-```
-
-### DIPY brain mask
-
-[Standalone Bash](../assets/shell/mask_dipy.sh) - Recipe `mask-dipy`.
-
-```bash
-pipeline mask_dipy --targets validation --brain-mask-backend dipy --plan
-```
-
-### MRtrix brain mask
-
-[Standalone Bash](../assets/shell/mask_mrtrix.sh) - Recipe `mask-mrtrix`.
-
-```bash
-pipeline mask_mrtrix --targets validation --brain-mask-backend mrtrix --plan
-```
-
-### SynthStrip brain mask
-
-[Standalone Bash](../assets/shell/mask_synthstrip.sh) - Recipe `mask-synthstrip`.
-
-```bash
-pipeline mask_synthstrip --targets validation --brain-mask-backend synthstrip \
-  --postprocess-freesurfer-home "/path/to/freesurfer" --brain-mask-device auto --plan
 ```
 
 ## Preprocessing
@@ -214,15 +189,6 @@ pipeline dti --targets validation,microstructure --microstructure-stages dti \
 ```bash
 pipeline dti_ols --targets validation,microstructure --microstructure-stages dti \
   --brain-mask-backend provided --micro-fit-method ls --plan
-```
-
-### DTI with explicit DIPY masking
-
-[Standalone Bash](../assets/shell/dti_light.sh) - Recipe `micro-dti-light`.
-
-```bash
-pipeline dti_light --targets validation,microstructure --microstructure-stages dti \
-  --brain-mask-backend dipy --plan
 ```
 
 ### Free-water imaging

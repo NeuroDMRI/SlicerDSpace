@@ -26,7 +26,7 @@
 | --- | --- | --- |
 | Slicer 集成 | Qt、MRML、读写和显示、Slicer 内核中的 Teem 张量拟合；PyTorch 扩展（已声明），UKFTractography 和 SlicerDMRI（仅在所勾选产品需要时由准备步骤请求） | 只声明一个扩展依赖，使用 Slicer API，不另外创建桌面客户端 |
 | Python 科学计算 | DDSeg/DDParcel/DDSurfer、DIPY、AMICO、区域统计 | 按所选功能安装，保护 Slicer 已有环境，共用兼容 PyTorch |
-| 隔离 Python worker | managed PNL 运行环境（Python 3.11、PyTorch、ANTs 2.3.0；Linux）、可选 SynthStrip Python、独立模型环境 | 在实际执行解释器中检查和运行，不强行向 Slicer 混装冲突框架。macOS 和 Windows 上 PNL 掩膜改在 Slicer 自带的 Python 中运行（native 路线） |
+| 隔离 Python worker | managed PNL 运行环境（Python 3.11、PyTorch、ANTs 2.3.0；Linux）、独立模型环境 | 在实际执行解释器中检查和运行，不强行向 Slicer 混装冲突框架。macOS 和 Windows 上 PNL 掩膜改在 Slicer 自带的 Python 中运行（native 路线） |
 | 可选外部工具 | MRtrix/FSL、FreeSurfer 后处理、WMA/WMQL/TractCloud 资源 | 明确版本与路径，执行前体检，采用官方来源并核对许可 |
 | 模型资源 | 权重、模板和图谱 | 按需下载、校验哈希、记录来源；授权单独验收 |
 

@@ -225,7 +225,7 @@ sub-01/
 | 部分 | 默认 | 其他选项 |
 | --- | --- | --- |
 | DWI 预处理（仅在勾选时） | DIPY：MP-PCA 去噪、Gibbs 去除、体积间运动校正 | MRtrix3/FSL 路线（去噪、Gibbs、eddy、topup）；其他 DIPY 去噪（局部 PCA、Patch2Self、不去噪） |
-| 缺失脑掩膜 | PNL diffusion CNN；有效的已有掩膜直接复用 | SynthStrip、MRtrix、DIPY median-Otsu、仅用已有掩膜 |
+| 缺失脑掩膜 | PNL diffusion CNN；有效的已有掩膜直接复用 | 仅用已有掩膜（`provided`）；SynthStrip、MRtrix、DIPY 掩膜已移除 |
 | 微结构 | DTI | 加选 Free-water、NODDI、DKI、iFW（iFW 需要回波时间）；DKI 默认使用 Python MK-Curve，也可选 WLS/OLS |
 | 纤维追踪 | MRtrix3 CSD/ACT | DTI 确定性追踪、UKF、SAF |
 | 连接组 | `auto`：`.tck` 来源且指标为流线计数时用 MRtrix `tck2connectome`，其他情况用 Python | `python` 或 `mrtrix` |

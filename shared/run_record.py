@@ -367,7 +367,8 @@ PER_CHILD_NOISE_KEYS = frozenset({"run_name", "run_plan_path", "run_plan_summary
 
 # Keys that only a finished child manifest holds. A child that crashed has the checkpoint manifest shape without them
 # (B3 (1)); the aggregate takes them from the children that hold them.
-SETTINGS_ONLY_IN_FINISHED_CHILDREN = ("wma_atlas", "brain_mask_backend", "model_assets_dir")
+# C4: brain_mask_configuration is one of them. It holds the custom pnl_mask_model_dir that asset_versions must see.
+SETTINGS_ONLY_IN_FINISHED_CHILDREN = ("wma_atlas", "brain_mask_backend", "model_assets_dir", "brain_mask_configuration")
 
 
 def _read_children(manifest: dict) -> list[tuple[Any, dict, Path]]:

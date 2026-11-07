@@ -61,6 +61,21 @@ class B3RecordTest(unittest.TestCase):
         self.assertIn("wma-naba", record["assets"]["model_profiles"])
         self.assertNotIn("wma", record["assets"]["model_profiles"])
 
+    def test_c4_a_crashed_child_does_not_hide_the_custom_pnl_weights_folder_of_the_finished_child(self) -> None:
+        """C4: brain_mask_configuration is kept from the finished child. Fails at 0064d04: the catalog hashes were recorded."""
+        with tempfile.TemporaryDirectory() as tmp:
+            aggregate, children = _aggregate(tmp)
+            weights = Path(tmp) / "my pnl weights"
+            weights.mkdir()
+            (weights / "axial.pt").write_bytes(b"other weights")
+            finished = json.loads(children[0].read_text(encoding="utf-8"))
+            finished.update(brain_mask_backend="pnl_cnn", brain_mask_configuration={"pnl_mask_model_dir": str(weights)})
+            children[0].write_text(json.dumps(finished), encoding="utf-8")
+            record = build_run_record(aggregate)
+        self.assertEqual(record["parameters"]["brain_mask_configuration"], {"pnl_mask_model_dir": str(weights)})
+        self.assertEqual(record["assets"]["model_profiles"]["pnl-cnn-weights"],
+                         {"manifest": None, "version": "unknown", "folder": weights.as_posix(), "files": {}})
+
     def test_b3_3_the_record_lists_the_child_manifests_it_read(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             aggregate, children = _aggregate(tmp)

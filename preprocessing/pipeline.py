@@ -220,7 +220,7 @@ def inspect_preprocessing_backend(config: DwiPreprocessingConfig) -> dict[str, A
     missing_diagnostic = [command for command in DIAGNOSTIC_COMMANDS if commands[command] is None]
     return {
         "kind": "dwi_preprocessing_backend",
-        "backend": ROUTE_ID,
+        "backend": run_route_id(config),
         "python": python_status,
         "missing_python": missing_python,
         "required_commands": required_commands,
@@ -287,9 +287,16 @@ def _preprocessing_cache_key(
     config: DwiPreprocessingConfig,
     backend: dict[str, Any],
     mask_backend: Optional[dict[str, Any]] = None,
+    acquisition: Optional[AcquisitionMetadata] = None,
 ) -> dict[str, Any]:
-    """Describe every input and setting that can change preprocessing output."""
+    """Describe every input and setting that can change preprocessing output.
 
+    Version 6 (W2b): the route id of the run, the effective PE direction and readout time with their sources, and the
+    SHA-256 of `input/dwi.json`.
+    """
+
+    if acquisition is None:
+        acquisition = resolve_acquisition_for(raw, config)
     reverse_phase = config.reverse_phase_b0.expanduser().resolve() if config.reverse_phase_b0 else None
     executables = {
         name: _file_record(Path(value))
@@ -304,8 +311,9 @@ def _preprocessing_cache_key(
     }
     return {
         "kind": "dwi_preprocessing_cache_key",
-        "version": 5,
-        "backend": ROUTE_ID,
+        "version": CACHE_KEY_VERSION,
+        "backend": run_route_id(config),
+        "dwi_sidecar_sha256": acquisition.sidecar_sha256,
         "inputs": {
             "dwi": _file_record(raw.dwi_path),
             "bval": _file_record(raw.bval_path),
@@ -316,8 +324,11 @@ def _preprocessing_cache_key(
         "parameters": {
             "dipy_run_gibbs": bool(config.dipy_run_gibbs),
             "b0_threshold": float(config.b0_threshold),
-            "phase_encoding_direction": config.phase_encoding_direction,
-            "readout_time": config.readout_time,
+            "phase_encoding_direction": acquisition.phase_encoding,
+            "phase_encoding_source": acquisition.phase_encoding_source,
+            "pe_sign_assumed": acquisition.pe_sign_assumed,
+            "readout_time": acquisition.readout_time,
+            "readout_time_source": acquisition.readout_time_source,
             "eddy_threads": _resolved_eddy_threads(config),
             "eddy_second_level_model": (
                 config.eddy_second_level_model.strip().lower()
@@ -740,6 +751,7 @@ def _mrtrix_backend_details(
     paths: dict[str, Path],
     subject_id: str,
     config: DwiPreprocessingConfig,
+    acquisition: Optional[AcquisitionMetadata] = None,
 ) -> dict[str, Any]:
     env = _external_command_environment(config)
     return {
@@ -747,7 +759,8 @@ def _mrtrix_backend_details(
             "FSLDIR": env.get("FSLDIR"),
             "FSLOUTPUTTYPE": env.get("FSLOUTPUTTYPE"),
         },
-        "route": ROUTE_ID,
+        "route": run_route_id(config),
+        **({"acquisition": acquisition.to_record()} if acquisition is not None else {}),
         "denoise": {"status": "completed", "method": "dipy_mppca"},
         "gibbs": ({"status": "completed", "method": "dipy_gibbs_removal"} if config.dipy_run_gibbs
                   else {"status": "skipped", "method": "dipy_gibbs_removal"}),
@@ -776,6 +789,7 @@ def _execute_preprocessing_backend(
     commands: list[list[str]],
     *,
     log: Optional[Callable[[str], None]],
+    acquisition: Optional[AcquisitionMetadata] = None,
 ) -> dict[str, Any]:
     env = _external_command_environment(config)
     for command in commands:
@@ -791,14 +805,21 @@ def _execute_preprocessing_backend(
             continue
         runtime_command = preprocessing_launcher(command, paths["qc_dir"] / "eddy_device.json", env)
         _run_command(runtime_command, env=env, log=log)
-    return _mrtrix_backend_details(paths, raw.subject_id, config)
+    return _mrtrix_backend_details(paths, raw.subject_id, config, acquisition)
 
 
 def _preprocessing_warnings(
     backend: dict[str, Any],
     backend_details: dict[str, Any],
 ) -> list[str]:
-    warnings = [
+    # W2b: the conflict warnings and the assumption flags of the PE and readout resolution (result panel and QC).
+    acquisition = backend_details.get("acquisition") or {}
+    warnings = list(acquisition.get("warnings") or [])
+    if acquisition.get("pe_sign_assumed"):
+        warnings.append("pe_sign_assumed: the sidecar names only the phase-encoding axis; a positive sign was assumed.")
+    if acquisition.get("readout_assumed"):
+        warnings.append("readout_assumed: no readout time was given; dwifslpreproc assumed 0.1 s.")
+    warnings += [
         f"Diagnostic command not found: {command}"
         for command in backend.get("missing_diagnostic", [])
     ]
@@ -915,7 +936,7 @@ def run_dwi_preprocessing(
         previous_manifest = json.loads(paths["manifest"].read_text(encoding="utf-8"))
     except (OSError, ValueError):
         previous_manifest = {}
-    cache_key = _preprocessing_cache_key(raw, config, backend, mask_backend)
+    cache_key = _preprocessing_cache_key(raw, config, backend, mask_backend, acquisition)
 
     output_dir.mkdir(parents=True, exist_ok=True)
     status = "skipped" if config.skip else ("planned" if not config.execute else "completed")
@@ -930,6 +951,7 @@ def run_dwi_preprocessing(
         "skip": config.skip,
         "backend": backend,
         "brain_mask_backend": mask_backend,
+        "acquisition": acquisition.to_record(),
         "inputs": {
             "subject_root": raw.subject_root.as_posix(),
             "dwi": raw.dwi_path.as_posix(),
@@ -990,7 +1012,7 @@ def run_dwi_preprocessing(
         backend_details: dict[str, Any] = (
             dict(previous_details) if isinstance(previous_details, dict) else {}
         )
-        backend_details = _mrtrix_backend_details(paths, raw.subject_id, config)
+        backend_details = _mrtrix_backend_details(paths, raw.subject_id, config, acquisition)
         try:
             mask_is_stale = (
                 not paths["final_mask"].is_file()
@@ -1041,12 +1063,13 @@ def run_dwi_preprocessing(
                 },
                 "backend_details": backend_details,
                 "warnings": _preprocessing_warnings(backend, backend_details) + mask_generation.get("warnings", []),
+                "acquisition": acquisition.to_record(),
                 "brain_mask_backend": mask_backend,
                 "brain_mask_qc": mask_generation["qc"],
                 "mask_generation": mask_generation,
             },
         )
-        return DwiPreprocessingResult(raw.subject_id, "cached", output_dir, paths["manifest"], paths["qc"], paths["final_dwi"], paths["final_bval"], paths["final_bvec"], paths["final_mask"])
+        return DwiPreprocessingResult(raw.subject_id, "cached", output_dir, paths["manifest"], paths["qc"], paths["final_dwi"], paths["final_bval"], paths["final_bvec"], paths["final_mask"], acquisition)
 
     _materialize_dirs(paths)
     overwrite_existing = config.force or bool(previous_manifest)
@@ -1080,6 +1103,7 @@ def run_dwi_preprocessing(
             backend,
             commands,
             log=log,
+            acquisition=acquisition,
         )
 
         if not paths["final_bval"].exists():
@@ -1135,6 +1159,7 @@ def run_dwi_preprocessing(
             "eddy_residuals": _file_record(paths["eddy_residuals"]),
         },
         "warnings": _preprocessing_warnings(backend, backend_details) + mask_generation.get("warnings", []),
+        "acquisition": acquisition.to_record(),
         "brain_mask_backend": mask_backend,
         "brain_mask_qc": mask_generation["qc"],
         "mask_generation": mask_generation,
@@ -1146,4 +1171,4 @@ def run_dwi_preprocessing(
     _write_json(paths["manifest"], manifest)
     _write_json(paths["qc"], qc_payload)
 
-    return DwiPreprocessingResult(raw.subject_id, "completed", output_dir, paths["manifest"], paths["qc"], paths["final_dwi"], paths["final_bval"], paths["final_bvec"], paths["final_mask"])
+    return DwiPreprocessingResult(raw.subject_id, "completed", output_dir, paths["manifest"], paths["qc"], paths["final_dwi"], paths["final_bval"], paths["final_bvec"], paths["final_mask"], acquisition)

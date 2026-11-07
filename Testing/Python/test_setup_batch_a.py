@@ -111,5 +111,23 @@ def SimpleStatuses():
     return SimpleNamespace(statuses=[], targets=("validation",))
 
 
+class LicenceDialogRowTests(unittest.TestCase):
+    def test_a3_nb1_the_gui_licence_dialog_shows_each_packages_local_licence_file(self):
+        """A3 NB1: the GUI rows name the local file of every Python package, as the CLI does. Fails before: no such row part."""
+        from types import SimpleNamespace
+        from shared.ui_selected_setup import component_rows
+
+        with tempfile.TemporaryDirectory() as folder:
+            record = Path(folder) / "numpy-LICENSE.txt"
+            record.write_text("x")
+            packages = [dict(name="numpy", license="BSD-3-Clause", url="https://pypi.org/project/numpy/", file=str(record)),
+                        dict(name="nibabel", license="MIT", url="https://pypi.org/project/nibabel/", file=None)]
+            licence = dict(id="pypi_packages", name="Python packages", url="https://pypi.org", file=None, packages=packages)
+            components = [dict(title="Python packages", size_bytes=0, licence=licence)]
+            rows = component_rows(SimpleNamespace(_onboardingLanguage="en"), components, {"pypi_packages"})
+        self.assertIn(record.as_uri(), rows[0])
+        self.assertIn("no local file", rows[0])
+
+
 if __name__ == "__main__":
     unittest.main()

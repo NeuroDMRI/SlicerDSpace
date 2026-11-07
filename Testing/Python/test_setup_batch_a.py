@@ -161,5 +161,52 @@ class WindowsReceiptSettingsTests(unittest.TestCase):
         self.assertEqual(settings["model_assets_dir"], str(Path(root) / "assets"))
 
 
+class CliLauncherAndLicenceTests(unittest.TestCase):
+    def test_a4_3_the_cli_passes_the_running_slicer_launcher_not_the_saved_one(self):
+        """A4 (3): same launcher as the GUI (running Slicer first, saved path only as the fallback). Fails before: saved path."""
+        from types import SimpleNamespace
+        from shared.user_config import empty_user_config
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder).resolve() / "Slicer-5.10"
+            real = root / "lib/Python/bin/python-real"
+            launcher = root / "Slicer"
+            real.parent.mkdir(parents=True)
+            real.write_text("")
+            launcher.write_text("")
+            config = empty_user_config()
+            config["external_dependencies"]["slicer_executable"] = "/old/Slicer"
+            seen = []
+
+            def plan(report, **kwargs):
+                seen.append(kwargs["slicer_executable"])
+                return {}
+
+            def build(sys_executable):
+                with patch("sys.executable", sys_executable), patch("shared.selected_setup.build_setup_plan", side_effect=plan), \
+                        patch("scripts.setup_python_packages.dcm2niix_pending", return_value=False):
+                    setup_selected.build_cli_plan(["validation"], config,
+                                                  doctor=lambda cfg: SimpleNamespace(statuses=[], python_executable=None))
+                return seen[-1]
+
+            self.assertEqual(build(str(real)), str(launcher))
+            self.assertEqual(build("/elsewhere/bin/python"), "/old/Slicer")
+
+    def test_a4_2_the_cli_reports_a_licence_problem_with_the_names(self):
+        """A4 (2): a PermissionError from setup_steps reaches the log with the licence names. Fails before: a traceback."""
+        import os
+        from types import SimpleNamespace
+        closure = SimpleNamespace(targets=("validation",), tractography_algorithms=("csd_act",))
+        plan = {"python_packages": [], "extensions": [], "restart_extensions": [], "manual_items": []}
+        lines = []
+        with tempfile.TemporaryDirectory() as folder, \
+                patch.dict(os.environ, {"SLICERDSPACE_USER_CONFIG": str(Path(folder) / "user_config.json")}), \
+                patch.object(setup_selected, "build_cli_plan", return_value=(closure, SimpleNamespace(), plan)), \
+                patch("shared.setup_components.plan_components", return_value=[]), \
+                patch("shared.selected_setup.setup_steps", side_effect=PermissionError("No licence is listed for: fsl_terms")):
+            code = setup_selected.main(["--targets", "validation", "--execute"], log=lines.append)
+        self.assertEqual(code, 2)
+        self.assertTrue(any("fsl_terms" in line for line in lines))
+
+
 if __name__ == "__main__":
     unittest.main()

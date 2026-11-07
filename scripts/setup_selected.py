@@ -52,7 +52,8 @@ def build_cli_plan(targets, user_config, *, doctor=None, wsl_distributions=None,
         brain_mask_backend=defaults.get("brain_mask_backend") or "pnl_cnn", pnl_mask_route=defaults.get("pnl_mask_route") or "auto",
         wma_atlas=defaults.get("wma_atlas") or "org",
         backend_paths=deps, closure_targets=closure.targets, system=system, machine=machine,
-        wsl_distributions=wsl_distributions, slicer_executable=deps.get("slicer_executable"),
+        wsl_distributions=wsl_distributions,
+        slicer_executable=running_slicer_launcher() or deps.get("slicer_executable"),  # A4 (3): the GUI's launcher first
         dcm2niix_missing=dcm2niix_pending())  # S-B3: this script runs in Slicer's Python (PythonSlicer)
     plan["closure_targets"] = list(closure.targets)
     return closure, report, plan
@@ -133,6 +134,21 @@ def running_slicer_pythons():
     return found
 
 
+def running_slicer_launcher():
+    """Launcher (Slicer, Slicer.exe, MacOS/Slicer) of the Slicer that runs this script, or None (A4 (3)).
+
+    The GUI passes its launcher to the Windows installer. The CLI runs in Slicer's Python, so the launcher sits above
+    ``sys.executable``: <home>/Slicer, <home>/Slicer.exe, <home>/bin/Slicer[.exe] or <app>/Contents/MacOS/Slicer.
+    """
+    from shared.external_process import interpreter_path
+
+    for folder in interpreter_path(sys.executable).parents[:5]:
+        for relative in ("Slicer", "Slicer.exe", "bin/Slicer", "bin/Slicer.exe", "MacOS/Slicer"):
+            if (folder / relative).is_file():
+                return str(folder / relative)
+    return None
+
+
 def is_running_slicer_python(selected):
     """True when ``selected`` is this Slicer's own Python (PythonSlicer or python-real), like the GUI's classification."""
     from shared.external_process import interpreter_path
@@ -193,8 +209,12 @@ def main(argv=None, *, runner=None, doctor=None, wsl_distributions=None, system=
 
     python_command = make_python_command(configured)
 
-    steps = setup_steps(plan, config["accepted_licences"], folder=folder, config=config["external_dependencies"],
-                        python_command=python_command)
+    try:
+        steps = setup_steps(plan, config["accepted_licences"], folder=folder, config=config["external_dependencies"],
+                            python_command=python_command)
+    except PermissionError as exc:  # A4 (2): the licence names reach the user
+        log("Licence problem: " + str(exc))
+        return 2
     records = run_setup_steps(
         steps, runner=runner, log=log,
         self_check=lambda step: self_check_commands(folder, load_user_config(), closure.targets, step, doctor=doctor))

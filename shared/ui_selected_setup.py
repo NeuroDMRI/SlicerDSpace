@@ -489,6 +489,15 @@ def prepare_selected_environment(owner, result=None, *, repair=False):
                             python_command=owner._setup_python_command,
                             statuses=getattr(getattr(owner, "_lastEnvironmentResult", None), "statuses", ()))
         run_step(0)
+    except PermissionError as exc:
+        # A4 (2): a licence that is not accepted or not listed. Show its names, not the generic "stopped" text.
+        finish("failed", str(exc))
+        owner._setStatus("warning", str(exc))
+        owner._show_actionable_error(
+            title="Licence not accepted", what="Preparation did not start because of a licence.", why=str(exc),
+            next_step="Start the preparation again and accept the licences in the dialog.",
+            auto_fix="Nothing was installed.", details=str(exc))
+        return False
     except Exception as exc:
         finish("failed", str(exc))
         return False

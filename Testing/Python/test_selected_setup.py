@@ -357,6 +357,19 @@ class SelectedSetupTests(unittest.TestCase):
         self.assertEqual(started, ["Install Python packages"])  # the model-asset step never started
         self.assertEqual(owner._setStatus.call_args.args[0], "warning")
 
+    def test_a4_2_a_licence_permission_error_reaches_the_user_with_the_licence_names(self):
+        """A4 (2): the status line and the error dialog carry the licence names. Fails before: generic "stopped" text."""
+        initial = result(item("numpy"))
+        owner = self.owner(initial)
+        context, _ = self.run_preparation(owner, initial)
+        with tempfile.TemporaryDirectory() as temp, context, patch("shared.ui_selected_setup._confirm", side_effect=accepting_confirm), \
+                patch("shared.selected_setup.setup_steps", side_effect=PermissionError("No licence is listed for: fsl_terms")), \
+                patch("shared.user_config.default_user_config_path", return_value=Path(temp) / "config.json"):
+            self.assertFalse(prepare_selected_environment(owner, initial))
+        self.assertIn("fsl_terms", owner._setStatus.call_args.args[1])
+        self.assertIn("fsl_terms", owner._show_actionable_error.call_args.kwargs["why"])
+        self.assertFalse(owner._selectedSetupActive)
+
     def test_extension_install_requires_restart_not_false_readiness(self):
         owner = self.owner(result(targets=("wma",)))
         context, manager = self.run_preparation(owner, owner._run_environment_dependency_check.return_value)

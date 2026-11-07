@@ -335,7 +335,8 @@ RUNTIME_SETTINGS = {"mrtrix_bin_dir", "preprocessing_mrtrix_bin_dir", "preproces
 
 # Settings that scripts/install_deps_windows.ps1 writes into the user config (its external_dependencies block).
 WINDOWS_WRITTEN_SETTINGS = ("tract_querier_root", "wma_root", "wma_atlas_dir", "tractcloud_root", "tractcloud_python_executable",
-                            "tractcloud_data_dir", "slicer_executable", "python_executable", "postprocess_freesurfer_home")
+                            "tractcloud_data_dir", "slicer_executable", "python_executable", "postprocess_freesurfer_home",
+                            "model_assets_dir")
 
 
 def validate_setup_receipt(step, receipt):

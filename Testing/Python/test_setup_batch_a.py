@@ -129,5 +129,37 @@ class LicenceDialogRowTests(unittest.TestCase):
         self.assertIn("no local file", rows[0])
 
 
+def bridge_receipt(root, distribution):
+    """A ps1 receipt: the three WSL bridge folders with an owner marker and a .conf for the distribution."""
+    folders = {}
+    for name, key in (("mrtrix", "mrtrix_bin_dir"), ("mrtrix2", "preprocessing_mrtrix_bin_dir"),
+                      ("fsl", "preprocessing_fsl_bin_dir")):
+        folder = Path(root) / name
+        folder.mkdir()
+        exe = folder / "tool.exe"
+        Path(str(exe) + ".slicerdsurfer-owner").write_text("owner")
+        Path(str(exe) + ".conf").write_text(f"distribution={distribution}\ntarget=/usr/bin/env\n")
+        folders[key] = str(folder)
+    return {"kind": "slicerdsurfer_user_config", "external_dependencies": folders}
+
+
+class WindowsReceiptSettingsTests(unittest.TestCase):
+    def test_a4_1_the_ps1_model_assets_dir_comes_back_to_the_gui(self):
+        """A4 (1): WINDOWS_WRITTEN_SETTINGS includes model_assets_dir. Fails before: the key was dropped from the settings."""
+        import json
+        from types import SimpleNamespace
+        from shared.selected_setup import WINDOWS_WRITTEN_SETTINGS, complete_step
+
+        self.assertIn("model_assets_dir", WINDOWS_WRITTEN_SETTINGS)
+        with tempfile.TemporaryDirectory() as root:
+            config = Path(root) / "user_config.json"
+            written = bridge_receipt(root, "Ubuntu")
+            written["external_dependencies"]["model_assets_dir"] = str(Path(root) / "assets")
+            config.write_text(json.dumps(written))
+            with patch.dict("os.environ", {"SLICERDSPACE_USER_CONFIG": str(config)}):
+                settings = complete_step({"id": "windows_runtime", "distribution": "Ubuntu", "receipt": config})
+        self.assertEqual(settings["model_assets_dir"], str(Path(root) / "assets"))
+
+
 if __name__ == "__main__":
     unittest.main()

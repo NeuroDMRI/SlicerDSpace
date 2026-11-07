@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import platform
 import sys
 from datetime import datetime, timezone
@@ -59,8 +60,8 @@ def _is_final_product(path: Path, run_record_path: Path, output_root: Optional[P
     Only the parts of the path below the run output root count (T-B1): a root that sits under /tmp, /work,
     /scratch or a folder named cache or temp must not hide its products. A path outside the root is kept.
     """
-    if path.name == RUN_RECORD_NAME or path == run_record_path:
-        return False
+    if path.name == RUN_RECORD_NAME or path == run_record_path or path.name.startswith("run_record-"):
+        return False  # the record itself and the earlier records kept by B4
     if output_root is None:
         return True
     try:
@@ -458,9 +459,37 @@ def build_run_record(manifest_path: Path) -> dict:
     }
 
 
+def _previous_record_name(path: Path) -> str:
+    """B4: ``run_record-<started_at>.json`` for the record at `path`, from the start time that record holds."""
+    import re
+
+    stamp = None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        parameters = data.get("parameters") if isinstance(data, dict) else None
+        stamp = (parameters or {}).get("started_at") or data.get("created_at")
+    except (OSError, ValueError, AttributeError):
+        pass
+    if not stamp:
+        stamp = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat()
+    safe = re.sub(r"[^0-9A-Za-z._+-]+", "", str(stamp).replace("+00:00", "Z").replace(":", "")) or "unknown"
+    return f"run_record-{safe}.json"
+
+
 def write_run_record(manifest_path: Path) -> Path:
-    """Write ``run_record.json`` beside the run manifest; return its path."""
+    """Write ``run_record.json`` beside the run manifest; return its path.
+
+    B4: a record that already exists is kept under ``run_record-<started_at>.json`` (its own start time) before the new
+    one is written; nothing is deleted.
+    """
     record = build_run_record(manifest_path)
     path = Path(manifest_path).parent / RUN_RECORD_NAME
+    if path.is_file():
+        archived = path.with_name(_previous_record_name(path))
+        number = 2
+        while archived.exists():
+            archived = archived.with_name(archived.stem.rsplit("~", 1)[0] + f"~{number}.json")
+            number += 1
+        os.replace(path, archived)
     path.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return path

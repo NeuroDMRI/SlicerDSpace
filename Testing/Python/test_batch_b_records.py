@@ -156,5 +156,37 @@ class B3RecordTest(unittest.TestCase):
                          [{"id": "freesurfer", "version": "ab" * 32, "time": "2026-11-07T10:00:00Z"}])
 
 
+class B4OverwriteTest(unittest.TestCase):
+    def test_b4_a_rerun_keeps_the_previous_record_under_its_own_start_time(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = Path(tmp) / "run_manifest.json"
+            manifest.write_text(json.dumps({"subject_id": "s", "started_at": "2026-11-07T09:30:00+00:00", "tasks": []}),
+                                encoding="utf-8")
+            first = write_run_record(manifest)
+            first_text = first.read_text(encoding="utf-8")
+            manifest.write_text(json.dumps({"subject_id": "s", "started_at": "2026-11-07T11:00:00+00:00", "tasks": []}),
+                                encoding="utf-8")
+            second = write_run_record(manifest)
+            self.assertEqual(first, second)
+            kept = sorted(path.name for path in Path(tmp).glob("run_record*.json"))
+            self.assertEqual(kept, ["run_record-2026-11-07T093000Z.json", "run_record.json"])
+            self.assertEqual((Path(tmp) / kept[0]).read_text(encoding="utf-8"), first_text)
+            self.assertEqual(json.loads(second.read_text())["parameters"]["started_at"], "2026-11-07T11:00:00+00:00")
+            # The same start time again: nothing is overwritten, a number is added.
+            write_run_record(manifest)
+            write_run_record(manifest)
+            self.assertEqual(len(list(Path(tmp).glob("run_record-2026-11-07T110000Z*.json"))), 2)
+
+    def test_b4_an_unreadable_previous_record_is_kept_too(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = Path(tmp) / "run_manifest.json"
+            manifest.write_text(json.dumps({"subject_id": "s", "tasks": []}), encoding="utf-8")
+            (Path(tmp) / "run_record.json").write_text("not json", encoding="utf-8")
+            write_run_record(manifest)
+            kept = [path for path in Path(tmp).glob("run_record-*.json")]
+            self.assertEqual(len(kept), 1)
+            self.assertEqual(kept[0].read_text(encoding="utf-8"), "not json")
+
+
 if __name__ == "__main__":
     unittest.main()

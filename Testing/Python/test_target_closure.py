@@ -576,7 +576,7 @@ class K4SavedDefaultsHoldTheUsersTicksTest(unittest.TestCase):
         saved: dict = {}
         node = SimpleNamespace(
             orchestrationMicrostructureStages="dti", subjectId="s", inputDirectory="", outputDirectory="",
-            orchestrationRunName="r", preprocessingBackend="dipy", ddsegDevice="cpu", device="cpu",
+            orchestrationRunName="r", ddsegDevice="cpu", device="cpu",
             orchestrationTractographyBackend="csd_act", orchestrationBundleBackend="wmql",
             orchestrationSelectStreamlines=1000, autoInstallPythonDependencies=False, connectomeBackend="python")
         closure = controller.selected_closure(

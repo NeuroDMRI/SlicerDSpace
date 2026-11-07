@@ -37,7 +37,7 @@ def texts(owner):
 
 
 def native_route_values():
-    return dict(brainMaskBackend='pnl_cnn', preprocessingBackend='dipy',
+    return dict(brainMaskBackend='pnl_cnn',
                 orchestrationTractographyBackend='dti_det', orchestrationBundleBackend='wmql',
                 connectomeBackend='python')
 
@@ -162,7 +162,7 @@ def snapshot_selection(owner):
         bundle_backend=owner._bundle_backend_text(), microstructure_freewater=freewater, microstructure_noddi=noddi,
         select_streamlines=node.orchestrationSelectStreamlines, ddseg_device=node.ddsegDevice, surface_device=node.device,
         connectome_backend=node.connectomeBackend, connectome_compress_mrtrix_dense=compress_mrtrix_dense_value(node.connectomeCompressMrtrixDenseState),
-        preprocessing_backend=node.preprocessingBackend, brain_mask_backend=node.brainMaskBackend,
+        brain_mask_backend=node.brainMaskBackend,
         brain_mask_device=node.brainMaskDevice, pnl_mask_route=getattr(node, "pnlMaskRoute", "auto") or "auto",
         microstructure_dki=owner._microstructure_dki_enabled(),
         microstructure_ifw=owner._microstructure_ifw_enabled(), ifw_echo_time_ms=owner._ifw_echo_time_ms(),
@@ -182,7 +182,7 @@ def request_and_plan(owner):
     external = owner._environment_dependency_path_kwargs()
     common = build_single_subject_run_kwargs(selection, external, preflight_blocked_targets={})
     root = Path(__file__).resolve().parents[1]
-    args = build_background_cli_args(common, external, repo_root=root, preprocessing_backend=node.preprocessingBackend)[3:]
+    args = build_background_cli_args(common, external, repo_root=root)[3:]
     managed = {'--subject-root': 1, '--subject-id': 1, '--output-root': 1, '--run-name': 1,
                '--execute': 0, '--print-manifest-only': 0}
     base, index = [], 0

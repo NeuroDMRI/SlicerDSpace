@@ -59,7 +59,7 @@ def make_node(**override):
         orchestrationRunDki=False, orchestrationRunIfw=False, orchestrationIfwEchoTimeMs="",
         inputDirectory="/data/sub-01", outputDirectory="/data/out", orchestrationRunName="Test1",
         orchestrationSelectStreamlines=1000, ddsegDevice="cpu", device="cpu", connectomeBackend="auto",
-        connectomeCompressMrtrixDenseState="unset", preprocessingBackend="dipy", brainMaskBackend="pnl_cnn",
+        connectomeCompressMrtrixDenseState="unset", brainMaskBackend="pnl_cnn",
         brainMaskDevice="auto", orchestrationDkiFitMethod="MKCURVE", orchestrationWmqlPreset="official",
         orchestrationWmqlSelection="", maxParallelModels=1, ukfParameters="{}", wmaInputTractography="",
         experimentScope="subject", preprocessingReversePhaseB0="")
@@ -91,7 +91,7 @@ def make_owner(node):
 def cli_args(selection):
     common = build_single_subject_run_kwargs(selection, {}, preflight_blocked_targets={})
     repo = REPO_ROOT
-    return build_background_cli_args(common, {}, repo_root=repo, preprocessing_backend="dipy")
+    return build_background_cli_args(common, {}, repo_root=repo)
 
 
 class StubSlicer:

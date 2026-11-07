@@ -328,7 +328,7 @@ class BrainMaskGuiConfigTest(unittest.TestCase):
             for name in ("data.nii.gz", "bvals", "bvecs"):
                 (input_dir / name).touch()
             node = SimpleNamespace(subjectId="subject", inputDirectory=str(root), outputDirectory="", brainMaskBackend="pnl_cnn",
-                                   targetPreprocessing=False, preprocessingBackend="dipy",
+                                   targetPreprocessing=False,
                                    connectomeBackend="python", ddsegDevice="cpu", device="cpu")
             owner = SimpleNamespace(_parameterNode=node, _selected_environment_targets=lambda: ("microstructure",),
                                     _tractography_backend_text=lambda: "dti_det", _microstructure_stage_flags=lambda: (False, False),
@@ -343,12 +343,10 @@ class BrainMaskGuiConfigTest(unittest.TestCase):
             (input_dir / "nodif_brain_mask.nii.gz").touch()
             self.assertFalse(doctor_kwargs(owner, external_paths=paths)["brain_mask_required"])
             node.targetPreprocessing = True
-            for route in ("dipy", "mrtrix_fsl"):
-                node.preprocessingBackend = route
-                for backend in BACKENDS:
-                    node.brainMaskBackend = backend
-                    self.assertEqual(doctor_kwargs(owner, external_paths=paths)["brain_mask_required"],
-                                     backend != "provided")
+            for backend in BACKENDS:
+                node.brainMaskBackend = backend
+                self.assertEqual(doctor_kwargs(owner, external_paths=paths)["brain_mask_required"],
+                                 backend != "provided")
             node.targetPreprocessing = False
             node.brainMaskBackend = "pnl_cnn"
             node.inputDirectory = ""
@@ -375,7 +373,7 @@ class BrainMaskGuiConfigTest(unittest.TestCase):
             for name in ("data.nii.gz", "bvals", "bvecs", "nodif_brain_mask.nii.gz"):
                 (folder / name).touch()
             node = SimpleNamespace(subjectId="subject", inputDirectory=str(root), outputDirectory="",
-                brainMaskBackend="pnl_cnn", targetPreprocessing=False, preprocessingBackend="dipy",
+                brainMaskBackend="pnl_cnn", targetPreprocessing=False,
                 connectomeBackend="python", ddsegDevice="auto", device="auto")
             owner = SimpleNamespace(_parameterNode=node, _selected_environment_targets=lambda: ("microstructure",),
                 _tractography_backend_text=lambda: "dti_det", _microstructure_stage_flags=lambda: (False, False),

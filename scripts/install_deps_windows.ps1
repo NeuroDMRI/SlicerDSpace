@@ -431,7 +431,7 @@ $mrtrixBridge = Join-Path $bridgeRoot "mrtrix"
 $mrtrixCommands = @(
     "mrconvert", "dwi2response", "dwi2fod", "mtnormalise", "tckgen", "tcksift2",
     "tckstats", "tckconvert", "tcksample", "tck2connectome", "tckedit", "dwi2mask",
-    "dwidenoise", "mrdegibbs", "dwifslpreproc", "5ttgen", "5tt2gmwmi",
+    "dwifslpreproc", "5ttgen", "5tt2gmwmi",
     "dwiextract", "mrcat", "python"
 )
 foreach ($command in $mrtrixCommands) {
@@ -588,7 +588,6 @@ if (-not $SkipUserConfigUpdate) {
             run_defaults = [pscustomobject][ordered]@{
                 run_name = "Test1"
                 targets = @("microstructure", "tractography", "bundles", "connectome")
-                preprocessing_backend = "dipy"
                 brain_mask_backend = "pnl_cnn"
                 tractography_backend = "csd_act"
                 bundle_backend = "wmql"
@@ -666,7 +665,6 @@ if (-not $SkipSlicerPythonInstall) {
         "--python-executable", $ResolvedPython,
         "--dependency-config", $dependencyConfigPath,
         "--output-dir", $doctorOutput,
-        "--preprocessing-backend", "mrtrix_fsl",
         "--tractography-backend", "csd_act",
         "--connectome-backend", "mrtrix"
     )

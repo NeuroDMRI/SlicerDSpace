@@ -357,9 +357,8 @@ class SharedWidgetMixin:
     def _topup_validation(self, *, batch_mode: Optional[bool] = None) -> TopupValidation:
         node = self._parameterNode
         if not node:
-            return validate_topup_parameters(backend="dipy", preprocessing_selected=False)
+            return validate_topup_parameters(preprocessing_selected=False)
         return validate_topup_parameters(
-            backend=(node.preprocessingBackend or "dipy").strip() or "dipy",
             preprocessing_selected=bool(node.targetPreprocessing),
             phase_encoding_direction=getattr(node, "preprocessingPhaseEncodingDirection", "") or "",
             readout_time=float(getattr(node, "preprocessingReadoutTime", 0.0) or 0.0),
@@ -373,13 +372,9 @@ class SharedWidgetMixin:
         node = self._parameterNode
         validation = self._topup_validation()
         preprocessing_on = bool(node.targetPreprocessing) if node else False
-        for name in ("preprocessingBackendLabel", "preprocessingBackendComboBox"):
-            control = getattr(self.ui, name, None)
-            if control is not None:
-                control.visible = preprocessing_on
         group = getattr(self.ui, "topupCollapsibleGroupBox", None)
         if group is not None:
-            group.visible = bool(node) and route_uses_topup(node.preprocessingBackend or "dipy", preprocessing_on)
+            group.visible = bool(node) and route_uses_topup(preprocessing_on)
         hint = getattr(self.ui, "topupHintLabel", None)
         if hint is not None:
             hint.setText(topup_summary_text(validation))
@@ -662,7 +657,6 @@ class SharedWidgetMixin:
                 node.inputDirectory = str(recent.get("subject_root") or node.inputDirectory or "")
                 node.outputDirectory = str(recent.get("output_root") or node.outputDirectory or "")
                 node.orchestrationRunName = str(defaults.get("run_name") or node.orchestrationRunName or "Test1")
-                node.preprocessingBackend = str(defaults.get("preprocessing_backend") or node.preprocessingBackend or "dipy")
                 node.brainMaskBackend = str(defaults.get("brain_mask_backend") or "pnl_cnn")
                 node.brainMaskDevice = str(defaults.get("brain_mask_device") or "auto")
                 node.pnlMaskRoute = str(defaults.get("pnl_mask_route") or "auto")
@@ -730,7 +724,6 @@ class SharedWidgetMixin:
                     "run_defaults": {
                         "run_name": node.orchestrationRunName or "Test1",
                         "targets": targets,
-                        "preprocessing_backend": node.preprocessingBackend or "dipy",
                         "brain_mask_backend": getattr(node, "brainMaskBackend", "pnl_cnn") or "pnl_cnn",
                         "brain_mask_device": getattr(node, "brainMaskDevice", "auto") or "auto",
                         "pnl_mask_route": getattr(node, "pnlMaskRoute", "auto") or "auto",
@@ -1543,7 +1536,6 @@ class SharedWidgetMixin:
         text, target_text = selected_products_summary(
             self._selected_product_targets(),
             BackendSelection(
-                preprocessing=(self._parameterNode.preprocessingBackend or "dipy").strip() or "dipy",
                 tractography=self._tractography_backend_text(),
                 bundles=self._bundle_backend_text(),
                 microstructure_stages=self._microstructure_stages_text(),
@@ -1754,7 +1746,6 @@ class SharedWidgetMixin:
             "targets": targets,
             "subject_root": Path(subject_root_text).expanduser() if subject_root_text else None,
             "output_root": Path(output_root_text).expanduser() if output_root_text else None,
-            "preprocessing_backend": (node.preprocessingBackend or "dipy").strip(),
             "brain_mask_backend": mask_backend,
             "wma_atlas": getattr(node, "wmaAtlas", "org") or "org",
             "brain_mask_device": getattr(node, "brainMaskDevice", "auto") or "auto",
@@ -2432,7 +2423,6 @@ class SharedWidgetMixin:
             common_run_kwargs,
             external_paths,
             repo_root=repo_root,
-            preprocessing_backend=(node.preprocessingBackend or "dipy").strip() if node else "dipy",
         )
 
     def _build_batch_background_cli_args(
@@ -2453,7 +2443,6 @@ class SharedWidgetMixin:
             batch_root=batch_root,
             batch_size=batch_size,
             arrange_inputs=arrange_inputs,
-            preprocessing_backend=(node.preprocessingBackend or "dipy").strip() if node else "dipy",
         )
 
     def _reset_result_scene_actions(self) -> None:
@@ -3104,7 +3093,6 @@ class SharedWidgetMixin:
             connectome_backend=(self._parameterNode.connectomeBackend or "auto").strip(),
             connectome_compress_mrtrix_dense=compress_mrtrix_dense_value(
                 getattr(self._parameterNode, "connectomeCompressMrtrixDenseState", "unset")),
-            preprocessing_backend=(self._parameterNode.preprocessingBackend or "dipy").strip() or "dipy",
             brain_mask_backend=(getattr(self._parameterNode, "brainMaskBackend", "pnl_cnn") or "pnl_cnn").strip(),
             brain_mask_device=(getattr(self._parameterNode, "brainMaskDevice", "auto") or "auto").strip(),
             pnl_mask_route=(getattr(self._parameterNode, "pnlMaskRoute", "auto") or "auto").strip(),
@@ -3220,7 +3208,7 @@ class SharedWidgetMixin:
             why="\n".join(validation.errors),
             next_step=(
                 "Open Advanced settings > Preprocessing & mask > Distortion correction (topup), "
-                "or switch Preprocessing route to dipy if you do not need MRtrix3/FSL correction."
+                "and correct or clear the invalid value."
             ),
             auto_fix="Not available; nothing was written.",
             details="dwifslpreproc options: -pe_dir, -readout_time, -rpe_pair -se_epi",

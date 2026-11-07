@@ -86,7 +86,7 @@ class WindowsWslInstallerContractTest(unittest.TestCase):
         self.assertIn('(Join-Path $mrtrixBridge "$command.exe")', powershell)
         self.assertIn("preprocessing_fsl_bin_dir", powershell)
         self.assertIn('(Join-Path $fslBridge "$command.exe")', powershell)
-        self.assertIn('"--preprocessing-backend", "mrtrix_fsl"', powershell)
+        self.assertNotIn("--preprocessing-backend", powershell)  # W2a (D1): preprocessing has one route
         self.assertIn('"--only-binary=:all:"', powershell)
         self.assertIn('"--platform", "win_amd64"', powershell)
         self.assertIn('"--pip-no-index"', powershell)

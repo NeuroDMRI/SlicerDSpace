@@ -97,7 +97,6 @@ class SlicerDSpaceParameterNode:
     microstructureRunNoddi: bool = False
     microstructureForceRecompute: bool = False
     targetPreprocessing: bool = True
-    preprocessingBackend: Annotated[str, Choice(["dipy", "mrtrix_fsl"])] = "dipy"
     brainMaskBackend: Annotated[str, Choice(["pnl_cnn", "provided"])] = "pnl_cnn"
     brainMaskDevice: Annotated[str, Choice(["auto", "cpu", "cuda"])] = "auto"
     pnlMaskRoute: Annotated[str, Choice(["auto", "managed", "native"])] = "auto"

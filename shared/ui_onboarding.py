@@ -60,7 +60,6 @@ TRANSLATIONS = {
         "output_directory": "Output directory",
         "preprocessing": "Preprocessing",
         "preprocessing_option": "Denoise, Gibbs, eddy",
-        "preprocessing_backend": "Preprocessing route",
         "surface": "Surface (native)",
         "surface_option": "Native white / pial STL",
         "surface_tooltip": (
@@ -250,7 +249,6 @@ TRANSLATIONS = {
         "output_directory": "输出目录",
         "preprocessing": "预处理",
         "preprocessing_option": "降噪、Gibbs、涡流校正",
-        "preprocessing_backend": "预处理路线",
         "surface": "表面重建（原生）",
         "surface_option": "原生白质面 / 软脑膜面",
         "surface_tooltip": (
@@ -564,7 +562,6 @@ MAIN_UI_TEXT_BINDINGS = {
     "outputDirectoryLabel": "output_directory",
     "targetPreprocessingLabel": "preprocessing",
     "targetPreprocessingCheckBox": "preprocessing_option",
-    "preprocessingBackendLabel": "preprocessing_backend",
     "targetSurfaceLabel": "surface",
     "targetSurfaceCheckBox": "surface_option",
     "targetSurfacePostprocessLabel": "surface_postprocess",

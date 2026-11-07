@@ -151,7 +151,6 @@ class SlicerUiLayoutContractTest(unittest.TestCase):
         parameters = _widget(root, "parametersCollapsibleButton")
         names = {element.attrib.get("name") for element in parameters.iter("widget")}
         for name in (
-            "preprocessingBackendComboBox",
             "topupCollapsibleGroupBox",
             "preprocessingPhaseEncodingDirectionComboBox",
             "preprocessingReadoutTimeSpinBox",
@@ -176,14 +175,51 @@ class SlicerUiLayoutContractTest(unittest.TestCase):
         for name in ("preprocessingPhaseEncodingDirectionComboBox", "preprocessingReadoutTimeSpinBox", "preprocessingReversePhaseB0Path"):
             self.assertEqual(_property_text(_widget(root, name), "SlicerParameterName"), "")
 
+    def test_w2a_gui_offers_no_preprocessing_route_or_denoise_choice(self) -> None:
+        """W2a (D1): preprocessing has one route, so the GUI has no route combo, no denoise combo and no motion switch."""
+        root = _load_ui()
+        names = {element.attrib.get("name") for element in root.iter("widget")}
+        for name in ("preprocessingBackendLabel", "preprocessingBackendComboBox"):
+            self.assertNotIn(name, names)
+        self.assertFalse([name for name in names if name and ("Denoise" in name or ("Motion" in name and "preprocessing" in name))])
+        texts = {element.text for element in root.iter("string")}
+        self.assertNotIn("mrtrix_fsl", texts)
+        self.assertNotIn("preprocessingBackendComboBox", {element.text for element in root.findall("tabstops/tabstop")})
+        parameter_names = {element.text for element in root.iter("string")
+                           if element.text and element.text.startswith("preprocessing")}
+        self.assertNotIn("preprocessingBackend", parameter_names)
+        source = (REPO_ROOT / "SlicerDSpace.py").read_text(encoding="utf-8")
+        self.assertNotIn("preprocessingBackend", source)
+        self.assertNotIn("preprocessingBackend", MODULE_WIDGET_PATH.read_text(encoding="utf-8"))
+
+    def test_w2a_a_platform_without_an_fsl_build_does_not_offer_preprocessing(self) -> None:
+        from shared.selected_setup import PREPROCESSING_UNSUPPORTED_TEXT
+        from shared.ui_parameter_sync import apply_preprocessing_availability
+
+        from unittest.mock import patch
+
+        calls = []
+        checkbox = SimpleNamespace(setEnabled=lambda value: calls.append(("enabled", value)),
+                                   setToolTip=lambda text: calls.append(("tip", text)))
+        patcher = patch("platform.mac_ver", return_value=("15.1", ("", "", ""), ""))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.assertFalse(apply_preprocessing_availability(checkbox, "Linux", "aarch64"))
+        self.assertEqual(calls, [("enabled", False), ("tip", PREPROCESSING_UNSUPPORTED_TEXT)])
+        self.assertEqual(PREPROCESSING_UNSUPPORTED_TEXT, "Preprocessing needs FSL, which has no build for this platform; "
+                                                         "import preprocessed data instead")
+        for system, machine in (("Linux", "x86_64"), ("Darwin", "arm64"), ("Darwin", "x86_64"), ("Windows", "AMD64")):
+            calls.clear()
+            self.assertTrue(apply_preprocessing_availability(checkbox, system, machine), (system, machine))
+            self.assertEqual(calls, [])
+
     def test_tab_order_covers_the_main_workflow(self) -> None:
         root = _load_ui()
         stops = [element.text for element in root.findall("tabstops/tabstop")]
         for earlier, later in (
             ("subjectIdLineEdit", "inputDirectoryPath"),
             ("inputDirectoryPath", "targetPreprocessingCheckBox"),
-            ("targetConnectomeCheckBox", "preprocessingBackendComboBox"),
-            ("preprocessingBackendComboBox", "preprocessingPhaseEncodingDirectionComboBox"),
+            ("targetConnectomeCheckBox", "preprocessingPhaseEncodingDirectionComboBox"),
             ("preprocessingReversePhaseB0Path", "runSelectedButton"),
         ):
             self.assertLess(stops.index(earlier), stops.index(later))

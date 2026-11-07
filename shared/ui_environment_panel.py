@@ -105,8 +105,6 @@ PATH_STATUS_DEPENDENCY_KEYS = {
         "command:tckstats",
         "command:tckconvert",
         "command:tck2connectome",
-        "command:dwidenoise",
-        "command:mrdegibbs",
         "command:dwifslpreproc",
         "command:dwi2mask",
     },

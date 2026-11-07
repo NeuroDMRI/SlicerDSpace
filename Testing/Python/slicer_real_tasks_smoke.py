@@ -81,7 +81,6 @@ def next_case():
             node.orchestrationSelectStreamlines = case.get("streamlines", 50000)
             node.device = node.ddsegDevice = "cuda:0"
             node.connectomeBackend = case.get("connectome_backend", "python")
-            node.preprocessingBackend = case.get("preprocessing_backend", "dipy")
             node.preprocessingPhaseEncodingDirection = case.get("pe", "")
             node.preprocessingReadoutTime = case.get("readout", 0.)
             node.preprocessingReversePhaseB0 = case.get("reverse_b0", "")

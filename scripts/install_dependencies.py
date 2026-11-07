@@ -23,6 +23,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from shared.environment import EnvironmentDoctorConfig, run_environment_doctor, write_environment_report
 from shared.external_process import text_subprocess_kwargs
+from shared.preprocessing_route import add_removed_flags
 from shared.dependency_config import add_dependency_config_arguments, apply_dependency_config, write_dependency_config
 from shared.python_environment import resolve_python_executable
 from shared.algorithm_selection import choice_value
@@ -217,7 +218,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Return exit code 2 when required dependencies are still missing after planning/installation.",
     )
-    parser.add_argument("--preprocessing-backend", default="dipy", choices=("dipy", "mrtrix_fsl"))
+    add_removed_flags(parser, ("--preprocessing-backend",))  # W2a (D1): preprocessing has one route
     parser.add_argument("--tractography-backend", default="csd_act", type=choice_value,
                         help="One or comma-separated tracking methods: csd_act, ukf, dti_det, saf.")
     parser.add_argument("--connectome-backend", default="python", choices=("auto", "python", "mrtrix"))
@@ -267,7 +268,6 @@ def main(argv: list[str] | None = None) -> int:
         python_environment=args.python_environment,
         conda_executable=args.conda_executable,
         platform_name=args.platform_name,
-        preprocessing_backend=args.preprocessing_backend,
         tractography_backend=args.tractography_backend,
         connectome_backend=args.connectome_backend,
         ddseg_device=args.ddseg_device,

@@ -75,9 +75,7 @@ class SkillShellTemplateTests(unittest.TestCase):
         self.assertEqual({args.brain_mask_backend for name, args in selections if name.startswith("mask-")},
                          set(BRAIN_MASK_BACKENDS) - {"provided"})
         choices = {action.dest: set(action.choices) for action in build_parser()._actions if action.choices}
-        for destination, prefix, excluded in (("preprocessing_backend", "preproc-", set()),
-                                               ("preprocessing_dipy_denoise_method", "preproc-", {"none"}),
-                                               ("micro_fit_method", "micro-dti", set()),
+        for destination, prefix, excluded in (("micro_fit_method", "micro-dti", set()),
                                                ("dki_fit_method", "micro-", set()),
                                                ("connectome_backend", "connectome-", set())):
             actual = {getattr(args, destination) for name, args in selections if name.startswith(prefix)}

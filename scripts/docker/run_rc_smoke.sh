@@ -32,7 +32,8 @@ fi
 SMOKE_ASSET_PROFILE="${SMOKE_ASSET_PROFILE:-quick-gate}"
 SMOKE_SUBJECT_ID="${SMOKE_SUBJECT_ID:-100307-release-candidate}"
 SMOKE_RUN_NAME="${SMOKE_RUN_NAME:-rc_csd_act}"
-SMOKE_TARGETS="${SMOKE_TARGETS:-validation,preprocessing,segmentation,parcellation,surface,microstructure,tractography,bundles,connectome}"
+# W2a (D1): preprocessing has one route (FSL eddy). It has no fast path, and the quick gate has no FSL, so it is not a default target.
+SMOKE_TARGETS="${SMOKE_TARGETS:-validation,segmentation,parcellation,surface,microstructure,tractography,bundles,connectome}"
 SMOKE_BUNDLE_BACKEND="${SMOKE_BUNDLE_BACKEND:-all}"
 SMOKE_SELECT_STREAMLINES="${SMOKE_SELECT_STREAMLINES:-100000}"
 HOST_SUBJECT_INPUT_ROOT="${HOST_SUBJECT_INPUT_ROOT:-/data/chengjin/SlicerDDSurfer-test/100307-release-candidate/input}"
@@ -395,9 +396,6 @@ PY
       --model-assets-dir "$SMOKE_MODEL_ASSET_ROOT"
       --mrtrix-bin-dir "$HOST_MRTRIX_BIN"
       --select-streamlines "$SMOKE_SELECT_STREAMLINES"
-      --preprocessing-dipy-denoise-method none
-      --preprocessing-skip-gibbs
-      --preprocessing-skip-motion
       --execute
       --print-manifest-only
     )
@@ -422,7 +420,6 @@ by_name = {task.get("name"): task for task in tasks}
 failed = [task for task in tasks if task.get("status") == "failed"]
 required_statuses = {
     "validation": {"completed", "passed"},
-    "preprocessing.dwi": {"completed", "skipped"},
     "segmentation.ddseg": {"completed", "skipped"},
     "parcellation.ddparcel": {"completed", "skipped"},
     "surface.ddsurfer": {"completed", "skipped"},

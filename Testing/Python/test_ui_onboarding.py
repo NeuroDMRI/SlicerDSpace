@@ -215,7 +215,7 @@ class OnboardingHelpersTest(unittest.TestCase):
             self.assertIn(key, TRANSLATIONS["zh"])
         self.assertEqual(onboarding_text("en", "browse_runs"), "Browse…")
         self.assertEqual(onboarding_text("en", "run_selector_label"), "Run")
-        self.assertEqual(onboarding_text("en", "preprocessing_backend"), "Preprocessing route")
+        self.assertEqual(onboarding_text("en", "preprocessing_backend"), "preprocessing_backend")  # W2a: the route choice is gone
 
     def test_known_status_messages_follow_selected_language(self) -> None:
         self.assertEqual(translated_ui_message("zh", "Environment ready"), "环境已就绪")

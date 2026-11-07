@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -18,6 +19,10 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 if str(REPO_ROOT / "Testing" / "Python") not in sys.path:
     sys.path.insert(0, str(REPO_ROOT / "Testing" / "Python"))
+
+import user_data_isolation  # noqa: E402  B2: SHA-256 cache, user config and model root of these tests are temporary
+
+user_data_isolation.install()
 
 from shared import teem_dti  # noqa: E402
 
@@ -442,7 +447,9 @@ class TC7AssetVersionsTest(unittest.TestCase):
         from shared import run_record
 
         manifests = {name: json.loads((REPO_ROOT / name).read_text()) for name in run_record.ASSET_MANIFESTS}
-        with patch.object(run_record, "sha256_file", side_effect=AssertionError("must not hash weights")):
+        # B2: the managed root means no model-folder variable; do not depend on the caller's environment.
+        with patch.dict("os.environ"), patch.object(run_record, "sha256_file", side_effect=AssertionError("must not hash weights")):
+            os.environ.pop("SLICERDSPACE_MODEL_ASSETS_DIR", None)
             profiles = run_record.asset_versions(self.manifest(model_assets_dir=None))  # managed root
         segmentation = profiles["segmentation"]
         self.assertEqual(segmentation["manifest"], "models/assets_manifest.json")

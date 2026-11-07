@@ -1117,6 +1117,12 @@ def build_dependency_specs(config: EnvironmentDoctorConfig) -> tuple[DependencyS
             if target != "microstructure_dki":
                 _add_slicer_python_runtime(specs, target)
 
+        # Native DTI scalar export converts Teem NRRD outputs to NIfTI with pynrrd.
+        # Include it in preparation, even when no anatomical model was selected.
+        if target in {"microstructure", "microstructure_freewater", "microstructure_dki", "microstructure_noddi"} or (
+                target == "tractography" and config.tractography_backend == "dti_det"):
+            _python(specs, target=target, import_name="nrrd", package="pynrrd")
+
         if target == "microstructure_noddi":
             _add_core_python(specs, target)
             _python(specs, target=target, import_name="amico", package="dmri-amico")

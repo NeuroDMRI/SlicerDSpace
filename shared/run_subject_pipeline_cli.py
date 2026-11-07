@@ -30,7 +30,9 @@ from shared import (
     write_environment_report,
 )
 from shared.run_cancellation import orchestration_manifest_path, write_cancelled_manifest
-from shared.brain_mask import BRAIN_MASK_BACKENDS, PNL_MASK_ROUTES, PNL_NATIVE_EXPERIMENTAL_REASON
+from shared.brain_mask import (
+    BRAIN_MASK_BACKENDS, PNL_MASK_ROUTES, PNL_NATIVE_EXPERIMENTAL_REASON, unsupported_backend_message,
+)
 from shared.dependency_config import (
     DEPENDENCY_CONFIG_KEYS,
     add_dependency_config_arguments,
@@ -293,7 +295,6 @@ def _environment_config_from_args(
         pnl_mask_script=args.pnl_mask_script,
         pnl_mask_model_dir=args.pnl_mask_model_dir,
         pnl_mask_ants_bin_dir=args.pnl_mask_ants_bin_dir,
-        synthstrip_python=args.synthstrip_python,
         tractography_backend=getattr(args, 'closure_tractography_backend', None) or args.tractography_backend,
         ukf_executable=getattr(args, 'ukf_executable', None),
         dwiconvert_executable=getattr(args, 'dwiconvert_executable', None),
@@ -380,6 +381,13 @@ def _make_sigterm_handler(manifest_path: Path, *, subject_id: str, run_name: str
 def _cli_log(message: str) -> None:
     """Run log: the closure notice goes to stderr so stdout stays the JSON result for blocked runs (GUI merges both)."""
     print(message, file=sys.stderr if message.startswith("[Targets]") else sys.stdout)
+
+
+def _brain_mask_backend_argument(value: str) -> str:
+    """W5 / SC-2: a removed or unknown brain mask backend fails with a message that names pnl_cnn and provided."""
+    if value not in BRAIN_MASK_BACKENDS:
+        raise argparse.ArgumentTypeError(unsupported_backend_message(value))
+    return value
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -505,14 +513,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--brain-mask-backend",
         default="pnl_cnn",
+        type=_brain_mask_backend_argument,
         choices=BRAIN_MASK_BACKENDS,
         help=(
             "Brain mask backend (default: pnl_cnn). Missing dependencies are reported without falling back. "
-            "synthstrip uses --postprocess-freesurfer-home; provided requires an existing input mask."
+            "provided requires an existing input mask. synthstrip, mrtrix and dipy were removed (W5)."
         ),
     )
     parser.add_argument("--brain-mask-device", choices=("auto", "cpu", "cuda"), default="auto",
-                        help="PNL/SynthStrip device: auto prefers the first visible GPU in that runtime; cuda requires GPU; cpu disables CUDA.")
+                        help="PNL device: auto prefers the first visible GPU in that runtime; cuda requires GPU; cpu disables CUDA.")
     parser.add_argument("--pnl-mask-route", choices=PNL_MASK_ROUTES, default="auto",
                         help=("Route of the pnl_cnn brain mask. auto: managed on Linux (conda runner with ANTs), native on macOS and Windows. "
                               "managed: the conda runner. native (experimental): SimpleITK registration in Slicer's Python; it "
@@ -730,7 +739,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--postprocess-freesurfer-home",
         type=Path,
-        help="Optional FreeSurfer home for SynthStrip brain masking and DDSurfer postprocessing.",
+        help="Optional FreeSurfer home for DDSurfer postprocessing.",
     )
     parser.add_argument("--postprocess-atlases", action="append", help="Optional comma-separated atlas list for DDSurfer postprocess.")
     parser.add_argument("--postprocess-force", action="store_true", help="Force restaging DDSurfer postprocess inputs.")
@@ -850,7 +859,7 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:
         parser.error(str(exc))
     if args.brain_mask_backend not in BRAIN_MASK_BACKENDS:
-        parser.error("--brain-mask-backend must be one of: " + ", ".join(BRAIN_MASK_BACKENDS))
+        parser.error(unsupported_backend_message(args.brain_mask_backend))
     if args.subject_root is None:
         parser.error(
             "--subject-root is required unless a recent subject_root is available in the shared user config. "
@@ -962,7 +971,6 @@ def main(argv: list[str] | None = None) -> int:
         pnl_mask_script=args.pnl_mask_script,
         pnl_mask_model_dir=args.pnl_mask_model_dir,
         pnl_mask_ants_bin_dir=args.pnl_mask_ants_bin_dir,
-        synthstrip_python=args.synthstrip_python,
         preprocessing_force=bool(args.preprocessing_force),
         preprocessing_dipy_denoise_method=args.preprocessing_dipy_denoise_method,
         preprocessing_dipy_run_gibbs=not args.preprocessing_skip_gibbs,

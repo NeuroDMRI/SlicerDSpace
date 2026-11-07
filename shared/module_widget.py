@@ -71,6 +71,7 @@ from shared.ui_run_state import gui_brain_mask_required, run_button_state, run_s
 from shared.ui_output_loading import qbytearray_to_text
 from shared.ui_input_inspection import inspect_input_directory
 from shared.ui_parameter_sync import sync_parameter_node_to_ui
+from shared.brain_mask import REMOVED_BRAIN_MASK_BACKENDS
 from shared.ui_workflow_text import BRAIN_MASK_BACKEND_TEXT_KEYS, PNL_MASK_ROUTE_TEXT_KEYS
 from shared.ui_run_controller import (
     BackendSelection,
@@ -617,6 +618,8 @@ class SharedWidgetMixin:
             config_path = default_user_config_path().expanduser()
             if config_path.is_file():
                 config = load_user_config(config_path)
+                for note in config.get("notes", ()):  # W5 / SC-2: a saved removed mask backend loaded as pnl_cnn
+                    self.appendLog(f"[Settings] {note}")
                 configured_dependencies = config.get("external_dependencies", {})
                 for item in ENVIRONMENT_DEPENDENCY_PATHS:
                     dependency_id = item["id"]
@@ -642,6 +645,10 @@ class SharedWidgetMixin:
                     value = self._coerce_user_setting_value(settings.value(key), value_type)
                     if attribute == 'orchestrationWmqlPreset' and value != 'official':
                         value = 'official'  # Migrate saved defaults, not loaded scientific run records.
+                    if attribute == 'brainMaskBackend' and value in REMOVED_BRAIN_MASK_BACKENDS:
+                        # W5 / SC-2: a saved removed backend loads as pnl_cnn with one note; the clinician is not blocked.
+                        self.appendLog(f"[Settings] Saved brain mask backend {value!r} was removed. Brain masking now uses pnl_cnn.")
+                        value = 'pnl_cnn'
                     setattr(node, attribute, value)
                 except Exception:
                     continue

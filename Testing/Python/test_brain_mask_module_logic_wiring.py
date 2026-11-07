@@ -90,12 +90,12 @@ class BrainMaskModuleLogicWiringTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             logic = DummyLogic(root)
-            paths = {key: root / "external tools" / key for key in (*PATH_KEYS, "postprocess_freesurfer_home")}
+            paths = {key: root / "external tools" / key for key in PATH_KEYS}
             validation = types.SimpleNamespace(report_path=None, status="passed", error_count=0, warning_count=0)
             execution = types.SimpleNamespace(run_manifest_path=root / "manifest.json", tasks=())
             planning = types.SimpleNamespace(run_plan_path=root / "plan.json", items=())
             doctor = types.SimpleNamespace()
-            for backend in ("pnl_cnn", "synthstrip", "mrtrix", "provided"):
+            for backend in ("pnl_cnn", "provided"):
                 for name in METHODS:
                     with (
                         self.subTest(method=name, backend=backend),

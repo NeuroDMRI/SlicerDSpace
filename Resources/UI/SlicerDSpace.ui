@@ -731,22 +731,7 @@
           </item>
           <item>
            <property name="text">
-            <string>SynthStrip</string>
-           </property>
-          </item>
-          <item>
-           <property name="text">
-            <string>MRtrix dwi2mask</string>
-           </property>
-          </item>
-          <item>
-           <property name="text">
             <string>Provided mask only</string>
-           </property>
-          </item>
-          <item>
-           <property name="text">
-            <string>DIPY median-Otsu (lightweight)</string>
            </property>
           </item>
          </widget>
@@ -759,7 +744,7 @@
            <item>
             <widget class="QComboBox" name="brainMaskDeviceComboBox">
              <property name="SlicerParameterName" stdset="0"><string>brainMaskDevice</string></property>
-             <property name="toolTip"><string>PNL CNN and SynthStrip: auto prefers the first CUDA GPU visible to their external runtime. CUDA requires a GPU; CPU explicitly disables it. GPU errors are reported, not silently retried.</string></property>
+             <property name="toolTip"><string>PNL CNN: auto prefers the first CUDA GPU visible to its runtime. CUDA requires a GPU; CPU explicitly disables it. GPU errors are reported, not silently retried.</string></property>
              <item><property name="text"><string>auto</string></property></item>
              <item><property name="text"><string>cuda</string></property></item>
              <item><property name="text"><string>cpu</string></property></item>

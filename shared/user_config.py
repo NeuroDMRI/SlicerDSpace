@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import platform
 from copy import deepcopy
@@ -10,9 +11,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
+from shared.brain_mask import REMOVED_BRAIN_MASK_BACKENDS
 from shared.dependency_config import DEPENDENCY_CONFIG_KEYS
 from shared.branding import LEGACY_ENV_PREFIX, reuse_legacy_path
 
+
+_LOG = logging.getLogger(__name__)
 
 USER_CONFIG_KIND = "slicerdsurfer_user_config"
 USER_CONFIG_VERSION = 1
@@ -155,6 +159,16 @@ def normalize_user_config(payload: Mapping[str, Any] | None) -> dict[str, Any]:
     stages = defaults.get("microstructure_stages")
     defaults["microstructure_stages"] = list(canonical_microstructure_stages(stages))
     defaults["dki_fit_method"] = str(defaults.get("dki_fit_method") or "MKCURVE").strip().upper()
+    # W5 / SC-2: a saved removed backend (synthstrip, mrtrix, dipy) loads as pnl_cnn with one note; no one is blocked.
+    # The note is in config["notes"] for the GUI and the CLI. It is also logged. write_user_config does not save it.
+    config.pop("notes", None)
+    saved_backend = str(defaults.get("brain_mask_backend") or RUN_DEFAULTS["brain_mask_backend"])
+    if saved_backend in REMOVED_BRAIN_MASK_BACKENDS:
+        defaults["brain_mask_backend"] = RUN_DEFAULTS["brain_mask_backend"]
+        note = (f"Saved brain mask backend {saved_backend!r} was removed. Brain masking now uses pnl_cnn; "
+                "select Provided mask only (provided) to use a supplied mask.")
+        config["notes"] = [note]
+        _LOG.warning(note)
     # SC-1a: shared.brain_mask.PNL_MASK_ROUTES; an unknown saved value falls back to auto.
     if str(defaults.get("pnl_mask_route") or "auto") not in ("auto", "managed", "native"):
         defaults["pnl_mask_route"] = "auto"
@@ -183,6 +197,7 @@ def write_user_config(payload: Mapping[str, Any], path: Path | None = None) -> P
     resolved = (path or default_user_config_path()).expanduser().resolve()
     resolved.parent.mkdir(parents=True, exist_ok=True)
     config = normalize_user_config(payload)
+    config.pop("notes", None)
     config["updated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
     temporary = resolved.with_name(resolved.name + ".tmp")
     temporary.write_text(json.dumps(config, indent=2, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8")

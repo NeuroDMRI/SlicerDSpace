@@ -9,10 +9,7 @@ from __future__ import annotations
 
 BRAIN_MASK_BACKEND_TEXT_KEYS = {
     "pnl_cnn": "brain_mask_pnl_cnn",
-    "synthstrip": "brain_mask_synthstrip",
-    "mrtrix": "brain_mask_mrtrix",
     "provided": "brain_mask_provided",
-    "dipy": "brain_mask_dipy",
 }
 
 
@@ -58,7 +55,7 @@ WORKFLOW_TEXT = {
         "reverse_phase_b0": "Reverse-PE b=0 image",
         "brain_mask_backend": "Brain masking",
         "brain_mask_device": "Mask device",
-        "brain_mask_device_tooltip": "PNL CNN and SynthStrip: auto prefers the first visible CUDA GPU in the selected external runtime. CUDA requires a GPU; CPU explicitly disables it. Runtime GPU failures are not silently retried. MRtrix dwi2mask and DIPY median-Otsu are CPU algorithms.",
+        "brain_mask_device_tooltip": "PNL CNN: auto prefers the first visible CUDA GPU in the selected runtime. CUDA requires a GPU; CPU explicitly disables it. Runtime GPU failures are not silently retried.",
         "pnl_mask_route": "PNL route",
         "pnl_mask_route_tooltip": (
             "PNL CNN route. auto: managed (conda runner with ANTs) on Linux, native on macOS and Windows. "
@@ -68,9 +65,6 @@ WORKFLOW_TEXT = {
         "pnl_route_managed": "managed",
         "pnl_route_native": "native (experimental)",
         "brain_mask_pnl_cnn": "PNL CNN (dMRI)",
-        "brain_mask_synthstrip": "SynthStrip",
-        "brain_mask_mrtrix": "MRtrix dwi2mask",
-        "brain_mask_dipy": "DIPY median-Otsu (lightweight)",
         "brain_mask_provided": "Provided mask only",
         "microstructure_dti_always": "DTI (always enabled)",
         "microstructure_fw_option": "FW",
@@ -96,8 +90,6 @@ WORKFLOW_TEXT = {
             "Existing supplied masks are respected. This choice only controls generation of a missing mask. "
             "PNL CNN (dMRI) is the default. Prepare selected analysis environment manages its Python, official dwi_masking.py, "
             "models and ANTs. Manual path overrides are under Environment and installation > More options. "
-            "SynthStrip uses FreeSurfer home; MRtrix uses MRtrix3 bin dir. "
-            "DIPY median-Otsu uses the existing Python runtime without model weights or external tools; review brain boundaries. "
             "Provided mask only requires an existing mask. Missing dependencies or masks cause an error; "
             "there is no automatic fallback to another masking backend."
         ),
@@ -161,7 +153,7 @@ WORKFLOW_TEXT = {
         "reverse_phase_b0": "反向相位编码 b=0 图像",
         "brain_mask_backend": "脑掩膜方法",
         "brain_mask_device": "掩膜计算设备",
-        "brain_mask_device_tooltip": "PNL CNN 和 SynthStrip：Auto 优先使用对应外部运行环境中可见的第一个 CUDA GPU；CUDA 要求 GPU 可用，CPU 显式禁用 GPU。GPU 运行错误不会静默重试。MRtrix dwi2mask 与 DIPY median-Otsu 是 CPU 算法。",
+        "brain_mask_device_tooltip": "PNL CNN：Auto 优先使用所选运行环境中可见的第一个 CUDA GPU；CUDA 要求 GPU 可用，CPU 显式禁用 GPU。GPU 运行错误不会静默重试。",
         "pnl_mask_route": "PNL 路线",
         "pnl_mask_route_tooltip": (
             "PNL CNN 路线。auto：Linux 用 managed（conda 运行环境，含 ANTs），macOS 和 Windows 用 native。"
@@ -171,9 +163,6 @@ WORKFLOW_TEXT = {
         "pnl_route_managed": "managed",
         "pnl_route_native": "native（实验性）",
         "brain_mask_pnl_cnn": "PNL CNN (dMRI)",
-        "brain_mask_synthstrip": "SynthStrip",
-        "brain_mask_mrtrix": "MRtrix dwi2mask",
-        "brain_mask_dipy": "DIPY median-Otsu（轻量方案）",
         "brain_mask_provided": "仅使用提供的掩膜",
         "microstructure_dti_always": "DTI（始终启用）",
         "microstructure_fw_option": "FW",
@@ -196,9 +185,9 @@ WORKFLOW_TEXT = {
             "所有方法都检查多 shell 数据条件，不会静默回退。"
         ),
         "brain_mask_backend_tooltip": (
-            "尊重已有的用户提供掩膜；此选项仅控制缺失掩膜的生成。DIPY median-Otsu 不需要外部程序或权重，需检查脑边界。默认 PNL CNN (dMRI)，"
+            "尊重已有的用户提供掩膜；此选项仅控制缺失掩膜的生成。默认 PNL CNN (dMRI)，"
             "需在“高级设置 > 环境与模型 > 外部运行路径”配置外部 Python、官方 dwi_masking.py、"
-            "模型目录和 ANTs 路径。SynthStrip 共用 FreeSurfer 主目录，MRtrix 共用 MRtrix3 bin 目录。"
+            "模型目录和 ANTs 路径。"
             "“仅使用提供的掩膜”要求掩膜已存在。依赖或掩膜缺失时明确报错，不会自动切换其他掩膜后端。"
         ),
         "run_selector_label": "运行",

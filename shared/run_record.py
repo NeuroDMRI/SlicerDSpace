@@ -505,7 +505,7 @@ def build_run_record(manifest_path: Path) -> dict:
         "licence_acceptances": _licence_acceptances(),
         "qc_summary": _qc_summary(manifest),
         "products": product_inventory(manifest, record_path, _output_root(manifest, manifest_path)),
-        "excludes": "run_record.json itself, work folders (" + ", ".join(sorted(EXCLUDED_PATH_PARTS))
+        "excludes": "run_record.json itself, the kept run_record-*.json files of earlier records, work folders (" + ", ".join(sorted(EXCLUDED_PATH_PARTS))
                     + ") and intermediates; no output file is copied",
     }
 

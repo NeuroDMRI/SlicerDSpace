@@ -148,11 +148,15 @@ def _same_executable(first, second):
         return os.path.abspath(str(first)) == os.path.abspath(str(second))
 
 
-def _plugin_dcm2niix(executable, backend_paths):
-    """A2: True when ``executable`` is the pinned wheel that the plugin installed in a Python (not one found on PATH)."""
+def _configured_dcm2niix(executable, backend_paths):
+    """A2b: True when DICOM import uses ``executable`` as its configured choice: the plugin's wheel, or an explicit setting.
+
+    Only a dcm2niix found by PATH discovery alone is False (a failed check is then a warning).
+    """
     from shared import input_import
-    if backend_paths.get('packaged_dcm2niix') and _same_executable(executable, backend_paths['packaged_dcm2niix']):
-        return True
+    for name in ('packaged_dcm2niix', 'dcm2niix_executable'):
+        if backend_paths.get(name) and _same_executable(executable, backend_paths[name]):
+            return True
     return _same_executable(executable, input_import.packaged_dcm2niix())
 
 
@@ -179,7 +183,7 @@ def _add_tool_requests(report, groups, backend_paths):
     dcm2niix = _dcm2niix_executable(report, backend_paths)
     if dcm2niix:
         wanted['dcm2niix'] = dcm2niix
-        wanted['dcm2niix_installed_by_plugin'] = _plugin_dcm2niix(dcm2niix, backend_paths)
+        wanted['dcm2niix_configured'] = _configured_dcm2niix(dcm2niix, backend_paths)
     slicer_hint = None
     for item in getattr(report, 'statuses', ()):
         details = item.details or {}
@@ -430,15 +434,15 @@ def run_checks(request):
         checks.extend(check_fsl(request['fsl_bin_dir'], request.get('mrtrix_bin_dir')))
     warnings = []
     if request.get('dcm2niix'):
-        # A2: only the plugin's own wheel blocks "ready". A dcm2niix found on PATH is a warning: NIfTI input never needs it
+        # A2/A2b: the plugin's wheel or an explicit setting blocks "ready". A dcm2niix found by PATH discovery is a warning: NIfTI input never needs it
         # and DICOM import tries the wheel first.
         try:
             checks.extend(check_dcm2niix(request['dcm2niix']))
         except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
             from shared import input_import
-            if request.get('dcm2niix_installed_by_plugin') or _same_executable(request['dcm2niix'], input_import.packaged_dcm2niix()):
+            if request.get('dcm2niix_configured') or _same_executable(request['dcm2niix'], input_import.packaged_dcm2niix()):
                 raise
-            warnings.append(f"dcm2niix at {request['dcm2niix']} was not installed by this plugin and failed its check ({exc}). "
+            warnings.append(f"dcm2niix at {request['dcm2niix']} was found on PATH only and failed its check ({exc}). "
                             'NIfTI input does not need it; DICOM import tries the plugin wheel first.')
     if request.get('pnl_native_mask'):
         checks.extend(check_native_mask(request['pnl_native_mask']))

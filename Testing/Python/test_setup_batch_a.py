@@ -78,7 +78,7 @@ class Dcm2niixWarningTests(unittest.TestCase):
     def test_a2_a_failing_wheel_dcm2niix_is_not_ready(self):
         from shared import setup_selftest
         with self.assertRaises(RuntimeError):
-            self.run_checks({"dcm2niix": "/slicer/bin/dcm2niix", "dcm2niix_installed_by_plugin": True})
+            self.run_checks({"dcm2niix": "/slicer/bin/dcm2niix", "dcm2niix_configured": True})
         with tempfile.TemporaryDirectory() as folder:
             wheel = Path(folder) / "dcm2niix"
             wheel.write_text("")
@@ -86,13 +86,23 @@ class Dcm2niixWarningTests(unittest.TestCase):
                 self.run_checks({"dcm2niix": str(wheel)}, packaged=wheel)
             report = SimpleStatuses()
             request = setup_selftest.requests_for_report(report, backend_paths={"packaged_dcm2niix": str(wheel)})[0]
-            self.assertTrue(request["dcm2niix_installed_by_plugin"])
+            self.assertTrue(request["dcm2niix_configured"])
 
-    def test_a2_the_request_for_a_path_dcm2niix_is_not_plugin_installed(self):
+    def test_a2_the_request_for_a_path_found_dcm2niix_is_not_configured(self):
+        from shared import setup_selftest
+        with patch("shared.input_import.packaged_dcm2niix", return_value=None), \
+                patch("shared.input_import.find_dcm2niix", return_value="/usr/bin/dcm2niix"):
+            request = setup_selftest.requests_for_report(SimpleStatuses())[0]
+        self.assertFalse(request["dcm2niix_configured"])
+
+    def test_a2b_an_explicit_user_set_failing_dcm2niix_is_not_ready(self):
+        """A2b: an explicit dcm2niix_executable blocks ready when it fails. Fails at 2d121ad: it was a warning."""
         from shared import setup_selftest
         with patch("shared.input_import.packaged_dcm2niix", return_value=None):
-            request = setup_selftest.requests_for_report(SimpleStatuses(), backend_paths={"dcm2niix_executable": "/usr/bin/dcm2niix"})[0]
-        self.assertFalse(request["dcm2niix_installed_by_plugin"])
+            request = setup_selftest.requests_for_report(SimpleStatuses(), backend_paths={"dcm2niix_executable": "/opt/d2n/dcm2niix"})[0]
+            self.assertTrue(request["dcm2niix_configured"])
+            with self.assertRaises(RuntimeError):
+                self.run_checks(request)
 
     def test_a2_the_cli_logs_the_warning_and_stays_completed(self):
         from shared.selected_setup import run_setup_steps

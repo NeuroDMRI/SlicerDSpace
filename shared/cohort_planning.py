@@ -110,13 +110,13 @@ def image_size(root):
 def cohort_phase_encoding_blocks(subjects, arguments, *, selected=None, output_root=None):
     """W2b rule 4 (T1 D1): {subject_id: message} for subjects whose preprocessing would run with no PE direction.
 
-    Empty when preprocessing is not selected. A subject whose preprocessed outputs are current (the shared reuse
-    predicate) is not blocked: its preprocessing is reused. `output_root` is the batch output base when the batch has
-    one (a subject's outputs then sit under `output_root/<subject_id>`).
+    Empty when preprocessing is not selected. Earlier preprocessing outputs do not lift the block (F5): selected
+    preprocessing is reused only by the full version-6 key of the current settings, which needs a PE direction, so a
+    subject with no direction (user value or sidecar) cannot reuse earlier outputs, version 5 or 6. `output_root` is
+    the batch output base; it is kept for callers and no longer changes the decision.
     """
     from shared.cohort_targets import selected_stages
     from shared.pe_resolution import phase_encoding_block_reason
-    from shared.pipeline import preprocessed_outputs_usable
 
     if 'preprocessing' not in (selected_stages(arguments) if selected is None else selected):
         return {}
@@ -129,9 +129,6 @@ def cohort_phase_encoding_blocks(subjects, arguments, *, selected=None, output_r
     has_reverse = bool(_option(arguments, '--preprocessing-reverse-phase-b0'))
     blocks = {}
     for subject in subjects:
-        subject_output = Path(output_root) / subject.subject_id if output_root is not None else None
-        if preprocessed_outputs_usable(subject.subject_root, subject_output, subject.subject_id):
-            continue
         reason = phase_encoding_block_reason(subject.subject_root, user_phase_encoding=direction,
                                              user_readout_time=readout, has_reverse_b0=has_reverse)
         if reason:

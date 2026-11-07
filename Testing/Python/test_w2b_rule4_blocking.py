@@ -202,7 +202,8 @@ class W2bGuiBlockTest(unittest.TestCase):
         self.assertEqual([value for value, _ in PHASE_ENCODING_CHOICES], ["", "AP", "PA", "LR", "RL", "IS", "SI"])
         self.assertIn("sidecar", PHASE_ENCODING_CHOICES[0][1].lower())
 
-    def test_w2b_gui_outputs_of_an_earlier_run_that_are_current_need_no_direction(self) -> None:
+    def test_w2b_gui_outputs_of_an_earlier_run_do_not_lift_the_block(self) -> None:
+        """F5 (replaces the earlier rule): selected preprocessing is reused only by the full version-6 key."""
         from test_w2b_reuse_predicate import make_subject, write_preprocessing
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -213,9 +214,8 @@ class W2bGuiBlockTest(unittest.TestCase):
             nib.save(nib.Nifti1Image(np.zeros((3, 3, 3, 2), dtype=np.float32), np.eye(4)),
                      str(subject / "input" / "data.nii.gz"))
             write_preprocessing(subject, cache_key="v5")
-            self.assertTrue(self.validate(subject).ok)
-            (subject / "input" / "bvals").write_text("changed", encoding="utf-8")
-            self.assertFalse(self.validate(subject).ok)
+            self.assertEqual(self.validate(subject).errors, (RULE4_MESSAGE,))
+            self.assertTrue(self.validate(subject, phase_encoding_direction="AP").ok)
 
 
 class W2bCohortBlockTest(unittest.TestCase):

@@ -168,8 +168,9 @@ def validate_topup_parameters(
 
     W2b rule 4 (T1 D1): with a ``subject_root`` (single-subject runs) the same resolution as the run is applied to the
     chosen direction and the sidecar ``input/dwi.json``. When no direction results, the message is an error, so the
-    run is stopped before any stage. Outputs of an earlier preprocessing that are still current are reused, so they
-    do not need a direction. Batch mode is checked per subject by the cohort plan.
+    run is stopped before any stage. Earlier preprocessing outputs do not lift the block: selected preprocessing is reused
+    only by the full version-6 key of the current settings, which needs a direction (F5). Batch mode is checked per
+    subject by the cohort plan.
     """
 
     if not route_uses_topup(preprocessing_selected):
@@ -214,15 +215,15 @@ def validate_topup_parameters(
 
     if subject_root is not None and not batch_mode and not errors:
         from shared.pe_resolution import phase_encoding_block_reason
-        from shared.pipeline import preprocessed_outputs_usable
 
-        root = Path(str(subject_root)).expanduser()
-        out = Path(str(output_root)).expanduser() if str(output_root or "").strip() else None
-        if not preprocessed_outputs_usable(root, out):
-            blocked = phase_encoding_block_reason(
-                root, user_phase_encoding=pe_direction, user_readout_time=readout, has_reverse_b0=bool(reverse_text))
-            if blocked:
-                errors.append(blocked)
+        # F5: the orchestrator reuses selected preprocessing only by the full version-6 key of the current settings, and
+        # that key holds the effective PE direction. With no direction there is no matching key, so no outputs of an
+        # earlier run (version 5 or 6) make the run possible: the block does not depend on earlier outputs.
+        blocked = phase_encoding_block_reason(
+            Path(str(subject_root)).expanduser(), user_phase_encoding=pe_direction, user_readout_time=readout,
+            has_reverse_b0=bool(reverse_text))
+        if blocked:
+            errors.append(blocked)
     if pe_direction is None and not errors:
         notes.append(
             "Phase-encoding direction: taken from input/dwi.json (PhaseEncodingDirection) when you leave it on "

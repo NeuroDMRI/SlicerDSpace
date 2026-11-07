@@ -225,5 +225,77 @@ class F4NoQcRequirementTest(unittest.TestCase):
             self.assertEqual(set(reuse_points(subject).values()), {False})
 
 
+class F5SelectedPreprocessingBlockTest(unittest.TestCase):
+    """F5: with preprocessing selected, the GUI check and the cohort plan block a subject with no PE direction even when
+    version-5 outputs are current (selected preprocessing is reused only by the full version-6 key)."""
+
+    def add_v5_outputs(self, subject: Path) -> None:
+        from preprocessing.pipeline import _file_record
+
+        preproc = subject / "outputs" / "01_preproc"
+        (preproc / "05_qc").mkdir(parents=True)
+        for name in ("dwi_final.nii.gz", "dwi_final.bval", "dwi_final.bvec", "brain_mask_final.nii.gz"):
+            (preproc / f"{subject.name}_{name}").write_text("preprocessed", encoding="utf-8")
+        inputs = {key: _file_record(subject / "input" / name) for key, name in RAW_NAMES.items()}
+        (preproc / f"{subject.name}_preproc_manifest.json").write_text(
+            json.dumps({"status": "completed", "cache_key": {"version": 5, "inputs": inputs}}), encoding="utf-8")
+        (preproc / "05_qc" / f"{subject.name}_preproc_qc.json").write_text(
+            json.dumps({"status": "completed"}), encoding="utf-8")
+
+    def test_f5_the_v5_subject_really_has_usable_outputs_for_the_config_less_predicate(self) -> None:
+        from shared.pipeline import preprocessed_outputs_usable
+        from test_w2b_pe_resolution import write_subject
+
+        with tempfile.TemporaryDirectory() as tmp:
+            subject = write_subject(Path(tmp))
+            self.add_v5_outputs(subject)
+            self.assertTrue(preprocessed_outputs_usable(subject, None, "100307"))
+
+    def test_f5_gui_validation_blocks_a_v5_subject_with_no_pe_direction(self) -> None:
+        from shared.pe_resolution import RULE4_MESSAGE
+        from shared.topup_parameters import validate_topup_parameters
+        from test_w2b_pe_resolution import write_subject
+
+        with tempfile.TemporaryDirectory() as tmp:
+            subject = write_subject(Path(tmp))
+            self.add_v5_outputs(subject)
+            result = validate_topup_parameters(preprocessing_selected=True, subject_root=subject)
+            self.assertFalse(result.ok)
+            self.assertEqual(result.errors, (RULE4_MESSAGE,))
+            self.assertTrue(validate_topup_parameters(
+                preprocessing_selected=True, subject_root=subject, phase_encoding_direction="AP").ok)
+            # Preprocessing not selected: nothing to block.
+            self.assertTrue(validate_topup_parameters(preprocessing_selected=False, subject_root=subject).ok)
+
+    def test_f5_the_cohort_plan_blocks_a_v5_subject_with_no_pe_direction(self) -> None:
+        from types import SimpleNamespace
+
+        from shared.cohort_planning import cohort_phase_encoding_blocks
+        from shared.pe_resolution import RULE4_MESSAGE
+        from test_w2b_pe_resolution import write_subject
+
+        with tempfile.TemporaryDirectory() as tmp:
+            subject = write_subject(Path(tmp))
+            self.add_v5_outputs(subject)
+            subjects = [SimpleNamespace(subject_id="100307", subject_root=subject, mode="input")]
+            blocks = cohort_phase_encoding_blocks(subjects, ["--targets", "preprocessing"])
+            self.assertEqual(blocks, {"100307": RULE4_MESSAGE})
+            self.assertEqual(cohort_phase_encoding_blocks(
+                subjects, ["--targets", "preprocessing", "--preprocessing-phase-encoding-direction", "AP"]), {})
+
+    def test_f5_the_gui_check_and_the_orchestrator_decide_alike_for_a_v5_subject(self) -> None:
+        from shared import ProductOrchestratorConfig, plan_subject_products
+        from shared.topup_parameters import validate_topup_parameters
+        from test_w2b_pe_resolution import write_subject
+
+        with tempfile.TemporaryDirectory() as tmp:
+            subject = write_subject(Path(tmp))
+            self.add_v5_outputs(subject)
+            plan = plan_subject_products(ProductOrchestratorConfig(
+                subject_id="100307", subject_root=subject, targets=("preprocessing",), resume=True), write=False)
+            self.assertEqual(plan.items[0].status, "blocked")
+            self.assertFalse(validate_topup_parameters(preprocessing_selected=True, subject_root=subject).ok)
+
+
 if __name__ == "__main__":
     unittest.main()

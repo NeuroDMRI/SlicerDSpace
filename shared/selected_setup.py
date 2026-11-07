@@ -429,16 +429,16 @@ def setup_steps(plan, accepted_licences, *, folder, launcher=None, python_comman
 
     `launcher` is (program, prefix) that runs a repo script in Slicer's Python; the default is this interpreter.
     `python_command(override)` returns (program, prefix) for the Python step. `accepted_licences` is the user-config
-    record {id: {"version", ...}}. A required licence that is not accepted raises PermissionError.
+    record {id: {"version", ...}}. A required licence that is not accepted or not listed raises LicenceNotAccepted (a PermissionError).
     The last step is the self-check; its commands are built at run time from a fresh doctor report (SPEC-GAP).
     """
     import sys
-    from shared.setup_components import pending_licences, plan_components, required_licences
+    from shared.setup_components import LicenceNotAccepted, pending_licences, plan_components, required_licences
 
     components = plan_components(plan)
     pending = pending_licences(required_licences(components), accepted_licences)
     if pending:
-        raise PermissionError("Accept these licences before installing: " + ", ".join(sorted(pending)))
+        raise LicenceNotAccepted("Accept these licences before installing: " + ", ".join(sorted(pending)))
     folder, config = Path(folder), dict(config or {})
     repo = Path(__file__).resolve().parents[1]
     program, prefix = launcher or (sys.executable, [])
@@ -506,7 +506,7 @@ def setup_steps(plan, accepted_licences, *, folder, launcher=None, python_comman
     from shared.setup_components import unlisted_licences
     unlisted = unlisted_licences(steps, components)
     if unlisted:  # S-B8: an install without a listed licence does not run
-        raise PermissionError("No licence is listed for: " + ", ".join(unlisted))
+        raise LicenceNotAccepted("No licence is listed for: " + ", ".join(unlisted))
     return steps
 
 

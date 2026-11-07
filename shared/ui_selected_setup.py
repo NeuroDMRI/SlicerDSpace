@@ -481,6 +481,7 @@ def prepare_selected_environment(owner, result=None, *, repair=False):
 
         start_setup_job(owner, _text(owner, step["title"], ZH_TITLES.get(step["id"], step["title"])), step["commands"], done)
 
+    from shared.setup_components import LicenceNotAccepted
     try:
         from shared.selected_setup import setup_steps
         from shared.setup_resume import accepted_licences
@@ -489,8 +490,8 @@ def prepare_selected_environment(owner, result=None, *, repair=False):
                             python_command=owner._setup_python_command,
                             statuses=getattr(getattr(owner, "_lastEnvironmentResult", None), "statuses", ()))
         run_step(0)
-    except PermissionError as exc:
-        # A4 (2): a licence that is not accepted or not listed. Show its names, not the generic "stopped" text.
+    except LicenceNotAccepted as exc:
+        # A4 (2), OB3: a licence that is not accepted or not listed (only this error gets the licence title). Show its names, not the generic "stopped" text.
         finish("failed", str(exc))
         owner._setStatus("warning", str(exc))
         owner._show_actionable_error(

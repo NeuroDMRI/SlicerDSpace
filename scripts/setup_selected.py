@@ -209,10 +209,11 @@ def main(argv=None, *, runner=None, doctor=None, wsl_distributions=None, system=
 
     python_command = make_python_command(configured)
 
+    from shared.setup_components import LicenceNotAccepted
     try:
         steps = setup_steps(plan, config["accepted_licences"], folder=folder, config=config["external_dependencies"],
                             python_command=python_command)
-    except PermissionError as exc:  # A4 (2): the licence names reach the user
+    except LicenceNotAccepted as exc:  # A4 (2), OB3: the licence names reach the user; an OS PermissionError is not this
         log("Licence problem: " + str(exc))
         return 2
     records = run_setup_steps(

@@ -14,6 +14,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from scripts import setup_selected  # noqa: E402
+from shared.setup_components import LicenceNotAccepted  # noqa: E402
 
 
 class SlicerPythonIdentityTests(unittest.TestCase):
@@ -242,10 +243,36 @@ class CliLauncherAndLicenceTests(unittest.TestCase):
                 patch.dict(os.environ, {"SLICERDSPACE_USER_CONFIG": str(Path(folder) / "user_config.json")}), \
                 patch.object(setup_selected, "build_cli_plan", return_value=(closure, SimpleNamespace(), plan)), \
                 patch("shared.setup_components.plan_components", return_value=[]), \
-                patch("shared.selected_setup.setup_steps", side_effect=PermissionError("No licence is listed for: fsl_terms")):
+                patch("shared.selected_setup.setup_steps", side_effect=LicenceNotAccepted("No licence is listed for: fsl_terms")):
             code = setup_selected.main(["--targets", "validation", "--execute"], log=lines.append)
         self.assertEqual(code, 2)
         self.assertTrue(any("fsl_terms" in line for line in lines))
+
+
+class LicenceTitleTests(unittest.TestCase):
+    def test_ob3_the_cli_does_not_call_an_os_permission_error_a_licence_problem(self):
+        """OB3: an OS PermissionError from the setup steps is not logged as a licence problem. Fails at 0064d04."""
+        import os
+        from types import SimpleNamespace
+        closure = SimpleNamespace(targets=("validation",), tractography_algorithms=("csd_act",))
+        plan = {"python_packages": [], "extensions": [], "restart_extensions": [], "manual_items": []}
+        lines = []
+        with tempfile.TemporaryDirectory() as folder, \
+                patch.dict(os.environ, {"SLICERDSPACE_USER_CONFIG": str(Path(folder) / "user_config.json")}), \
+                patch.object(setup_selected, "build_cli_plan", return_value=(closure, SimpleNamespace(), plan)), \
+                patch("shared.setup_components.plan_components", return_value=[]), \
+                patch("shared.selected_setup.setup_steps", side_effect=PermissionError(13, "Permission denied", "/x/log.txt")):
+            with self.assertRaises(PermissionError):  # it keeps its own path: no exit code 2, no licence text
+                setup_selected.main(["--targets", "validation", "--execute"], log=lines.append)
+        self.assertFalse(any("Licence problem" in line for line in lines))
+
+    def test_ob3_the_real_licence_checks_raise_the_licence_error(self):
+        from shared.selected_setup import setup_steps
+        from shared.setup_components import LicenceNotAccepted
+        self.assertTrue(issubclass(LicenceNotAccepted, PermissionError))
+        plan = {"python_packages": ["numpy"], "extensions": [], "restart_extensions": [], "manual_items": []}
+        with tempfile.TemporaryDirectory() as folder, self.assertRaises(LicenceNotAccepted):
+            setup_steps(plan, {}, folder=folder)
 
 
 class MigrationEmptiesSettingsTests(unittest.TestCase):

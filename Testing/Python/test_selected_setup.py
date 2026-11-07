@@ -8,6 +8,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from shared.selected_setup import build_setup_plan, need_flags
+from shared.setup_components import LicenceNotAccepted
 from shared.target_closure import expand_closure
 from shared.ui_selected_setup import extension_states, prepare_selected_environment
 from shared.environment import DependencySpec, EnvironmentDoctorConfig, run_environment_doctor
@@ -394,11 +395,27 @@ class SelectedSetupTests(unittest.TestCase):
         owner = self.owner(initial)
         context, _ = self.run_preparation(owner, initial)
         with tempfile.TemporaryDirectory() as temp, context, patch("shared.ui_selected_setup._confirm", side_effect=accepting_confirm), \
-                patch("shared.selected_setup.setup_steps", side_effect=PermissionError("No licence is listed for: fsl_terms")), \
+                patch("shared.selected_setup.setup_steps", side_effect=LicenceNotAccepted("No licence is listed for: fsl_terms")), \
                 patch("shared.user_config.default_user_config_path", return_value=Path(temp) / "config.json"):
             self.assertFalse(prepare_selected_environment(owner, initial))
         self.assertIn("fsl_terms", owner._setStatus.call_args.args[1])
         self.assertIn("fsl_terms", owner._show_actionable_error.call_args.kwargs["why"])
+        self.assertFalse(owner._selectedSetupActive)
+
+    def test_ob3_an_os_permission_error_does_not_get_the_licence_title(self):
+        """OB3: only LicenceNotAccepted gets the licence dialog. Fails at 0064d04: any PermissionError did."""
+        initial = result(item("numpy"))
+        owner = self.owner(initial)
+        context, _ = self.run_preparation(owner, initial)
+        denied = PermissionError(13, "Permission denied", "/read-only/setup-history/log.txt")
+        with tempfile.TemporaryDirectory() as temp, context, patch("shared.ui_selected_setup._confirm", side_effect=accepting_confirm), \
+                patch("shared.selected_setup.setup_steps", side_effect=denied), \
+                patch("shared.user_config.default_user_config_path", return_value=Path(temp) / "config.json"):
+            self.assertFalse(prepare_selected_environment(owner, initial))
+            details = [json.loads(path.read_text())["details"] for path in Path(temp).glob("setup-history/*/result.json")]
+        owner._show_actionable_error.assert_not_called()
+        self.assertEqual(len(details), 1)
+        self.assertIn("Permission denied", details[0])  # the generic path keeps the real text
         self.assertFalse(owner._selectedSetupActive)
 
     def test_extension_install_requires_restart_not_false_readiness(self):

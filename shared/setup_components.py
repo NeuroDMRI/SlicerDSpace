@@ -20,6 +20,10 @@ DCM2NIIX_TERMS_URL = "https://github.com/rordenlab/dcm2niix/blob/master/license.
 PYPI_URL = "https://pypi.org/"
 
 
+class LicenceNotAccepted(PermissionError):
+    """OB3: the licence check refused (a licence is not accepted, or not listed). An operating-system PermissionError is not this."""
+
+
 def _licences():
     from shared.backend_sources import SOURCES
     from shared.managed_pnl import PNL_TERMS_URL

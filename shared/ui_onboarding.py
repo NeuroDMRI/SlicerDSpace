@@ -15,6 +15,7 @@ from shared.demo_data import DEMO_SUBJECT_ID, create_synthetic_demo_subject
 from shared.user_config import default_user_config_path, load_user_config, update_user_config
 from shared.ui_workflow_text import (
     BRAIN_MASK_BACKEND_TEXT_KEYS,
+    PNL_MASK_ROUTE_TEXT_KEYS,
     WORKFLOW_TEXT,
     WORKFLOW_TEXT_BINDINGS,
     WORKFLOW_TOOLTIP_BINDINGS,
@@ -59,7 +60,6 @@ TRANSLATIONS = {
         "output_directory": "Output directory",
         "preprocessing": "Preprocessing",
         "preprocessing_option": "Denoise, Gibbs, eddy",
-        "preprocessing_backend": "Preprocessing route",
         "surface": "Surface (native)",
         "surface_option": "Native white / pial STL",
         "surface_tooltip": (
@@ -249,7 +249,6 @@ TRANSLATIONS = {
         "output_directory": "输出目录",
         "preprocessing": "预处理",
         "preprocessing_option": "降噪、Gibbs、涡流校正",
-        "preprocessing_backend": "预处理路线",
         "surface": "表面重建（原生）",
         "surface_option": "原生白质面 / 软脑膜面",
         "surface_tooltip": (
@@ -471,9 +470,9 @@ ENVIRONMENT_DEPENDENCY_TEXT = {
         ),
         "postprocess_freesurfer_home": (
             "FreeSurfer home (optional)",
-            "Optional existing installation. Surface processing can instead use verified native components; SynthStrip remains separate. FREESURFER_HOME is detected.",
+            "Optional existing installation. Surface processing can instead use verified native components. FREESURFER_HOME is detected.",
         ),
-        "postprocess_runtime": ("Surface components (optional)", "Verified runtime containing runtime.json; otherwise the matching user cache is detected. Supports qualified prebuilt bundles. Does not contain SynthStrip."),
+        "postprocess_runtime": ("Surface components (optional)", "Verified runtime containing runtime.json; otherwise the matching user cache is detected. Supports qualified prebuilt bundles."),
         "postprocess_license_file": ("FreeSurfer activation file", "Your own activation file outside the runtime; FS_LICENSE is also detected. Never downloaded or bundled."),
         "pnl_mask_python": (
             "PNL mask Python",
@@ -530,14 +529,13 @@ ENVIRONMENT_DEPENDENCY_TEXT = {
         "model_assets_dir": ("模型资源根目录", "可选。下载的 SlicerDSpace 模型资源根目录；默认使用 SLICERDSPACE_MODEL_ASSETS_DIR 或用户数据目录。"),
         "mrtrix_bin_dir": ("MRtrix3 bin 目录", "可选。包含 mrconvert、dwi2response、dwi2fod、tckgen、tcksift2 的目录。"),
         "preprocessing_fsl_bin_dir": ("FSL bin 目录", "可选。包含 MRtrix/FSL 预处理所需 eddy 和 topup 的目录。"),
-        "postprocess_freesurfer_home": ("FreeSurfer 主目录（可选）", "可选已有 FreeSurfer 安装根目录；表面后处理可改用经校验的原生组件，SynthStrip 仍需单独配置；检测 FREESURFER_HOME。"),
-        "postprocess_runtime": ("表面处理组件（可选）", "包含 runtime.json 的经校验运行目录，支持合格的预编译运行包；留空检测匹配的用户缓存。不含 SynthStrip。"),
+        "postprocess_freesurfer_home": ("FreeSurfer 主目录（可选）", "可选已有 FreeSurfer 安装根目录；表面后处理可改用经校验的原生组件；检测 FREESURFER_HOME。"),
+        "postprocess_runtime": ("表面处理组件（可选）", "包含 runtime.json 的经校验运行目录，支持合格的预编译运行包；留空检测匹配的用户缓存。"),
         "postprocess_license_file": ("FreeSurfer 激活文件", "您自己的激活文件，放在组件目录外；也检测 FS_LICENSE。插件不会下载或打包私人激活文件。"),
         "pnl_mask_python": ("PNL 掩膜 Python", "外部 PNL CNN dMRI 脑掩膜环境的 Python 可执行文件，不是用于通用依赖安装的 Python。"),
         "pnl_mask_script": ("PNL dwi_masking.py", "外部官方 PNL CNN dwi_masking.py 脚本路径；不会自动切换其他脑掩膜后端。"),
         "pnl_mask_model_dir": ("PNL 掩膜模型目录", "外部 PNL CNN 模型目录。使用 PNL CNN 生成缺失掩膜时需配置；已有的用户掩膜会被复用。"),
         "pnl_mask_ants_bin_dir": ("PNL 掩膜 ANTs bin 目录", "包含外部 PNL CNN 脑掩膜脚本所需 ANTs 可执行文件的目录。"),
-        "synthstrip_python": ("SynthStrip Python（可选）", "可选独立 Python，需兼容 CUDA 的 PyTorch 和 surfa；用于新 GPU。仍使用官方 FreeSurfer 脚本和权重；默认 fspython。"),
         "dki_matlab_executable": ("MK-Curve MATLAB 可执行文件", "仅用于 MKCURVE_MATLAB 的外部 MATLAB 可执行文件。选择 MKCURVE_MATLAB 时必须配置；缺少 MATLAB 时明确阻止执行，不会回退。"),
         "dki_mkcurve_root": ("作者原始 MK-Curve 代码目录", "包含作者原始外部 MATLAB MK-Curve 代码的目录；标准 DKI WLS/OLS 不使用此路径。"),
         "tract_querier_root": ("TractQuerier 根目录", "可选。当 Slicer Python 未安装 tract_querier 时，WMQL 使用的代码根目录。"),
@@ -564,7 +562,6 @@ MAIN_UI_TEXT_BINDINGS = {
     "outputDirectoryLabel": "output_directory",
     "targetPreprocessingLabel": "preprocessing",
     "targetPreprocessingCheckBox": "preprocessing_option",
-    "preprocessingBackendLabel": "preprocessing_backend",
     "targetSurfaceLabel": "surface",
     "targetSurfaceCheckBox": "surface_option",
     "targetSurfacePostprocessLabel": "surface_postprocess",
@@ -1126,6 +1123,17 @@ def apply_onboarding_language(owner: Any, language: str) -> None:
                     mask_combo.setItemText(index, onboarding_text(lang, key))
         finally:
             mask_combo.blockSignals(previous)
+
+    route_combo = getattr(ui, "pnlMaskRouteComboBox", None)
+    if route_combo is not None:
+        previous = route_combo.blockSignals(True)
+        try:
+            for route, key in PNL_MASK_ROUTE_TEXT_KEYS.items():
+                index = route_combo.findData(route)
+                if index >= 0:
+                    route_combo.setItemText(index, onboarding_text(lang, key))
+        finally:
+            route_combo.blockSignals(previous)
 
     for widget_name, key in MAIN_UI_TITLE_BINDINGS.items():
         widget = getattr(ui, widget_name, None)

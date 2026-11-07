@@ -52,7 +52,7 @@ SlicerDSpace 将无需 T1 加权影像的解剖重建、微结构定量和白质
 | 工作流 | 方法与结果 |
 | --- | --- |
 | 输入准备 | DICOM、NIfTI、NRRD/NHDR 导入；梯度检查、脑掩膜及可选 DWI 校正 |
-| 微结构 | DTI FA/MD/AD/RD；可选 Free-water、NODDI、DKI 和 Python MK-Curve |
+| 微结构 | DTI FA/MD/AD/RD 及彩色 FA 图；可选 Free-water、iFW、NODDI、DKI（默认 Python MK-Curve） |
 | 解剖重建 | DDSeg 组织分割、DDParcel 脑区、DDSurfer 白质/软脑膜表面及可选皮层后处理 |
 | 纤维追踪 | DTI 确定性追踪、UKF、CSD/ACT 与 SIFT2、SAF 短程联络纤维 |
 | 束分析 | 官方 WMQL 查询、WMA 图谱分类、TractCloud |
@@ -76,16 +76,16 @@ SlicerDSpace 将无需 T1 加权影像的解剖重建、微结构定量和白质
 | 科学计算 | Python、NumPy、SciPy、nibabel、SimpleITK | 影像、几何、数值拟合与数据交换 |
 | 神经网络推理 | PyTorch、DDSeg/DDParcel/DDSurfer 模型 | 组织、脑区与皮层表面重建 |
 | 微结构 | DIPY、AMICO、Python MK-Curve | 张量、自由水、神经突和峰度模型 |
-| 扩散工具 | SlicerDMRI，可选 UKFTractography、MRtrix3、FSL | DTI 准备、追踪及相应校正路线 |
+| 扩散工具 | Teem 张量拟合（Slicer 内核）；可选 UKFTractography、MRtrix3、FSL；SlicerDMRI 仅用于 WMA | DTI 拟合、追踪及相应校正路线 |
 | 可选后端 | PNL CNN/ANTs、原生 FreeSurfer 组件、WMQL、WMA、TractCloud | 掩膜、皮层后处理与束识别 |
 | 自动化 | Python CLI、JSON 运行计划、批量调度器、Agent Skill | 命令执行、参数组合及多被试调度 |
 
-依赖按路线配置：默认 CSD/ACT 需要 MRtrix3；提供已有掩膜的 DTI-only 路线
+依赖按路线配置：DTI 拟合在 Slicer 内部完成，不需要额外扩展。默认 CSD/ACT 需要 MRtrix3；提供已有掩膜的 DTI-only 路线
 无需 PNL、FSL 或 FreeSurfer。也可明确选择 Slicer 原生轻量预设，以减少外部环境。
 详见[能力与平台矩阵](docs/setup/SUPPORT_MATRIX.zh-CN.md)。
 
 **实现来源：** DDSeg 使用转换后的 Python/PyTorch 模型；SAF、MK-Curve 为作者
-MATLAB 方法的非官方 Python 移植；PNL CNN 掩膜调用作者已有的 Python 后端。
+MATLAB 方法的非官方 Python 移植；PNL CNN 掩膜运行作者 PNL 推理代码的修改副本（许可条款见 [PNL 许可页](docs/licenses/pnl_brain_mask.md)）。
 可选皮层后处理使用原生 FreeSurfer 组件及个人激活文件。
 详见[实现来源](docs/architecture/IMPLEMENTATION_PROVENANCE.zh-CN.md)与[表面组件](docs/setup/SURFACE_COMPONENTS.zh-CN.md)。
 
@@ -147,7 +147,7 @@ git clone --filter=blob:none --no-checkout --depth 1 https://github.com/NeuroDMR
 cd SlicerDSpace
 git show HEAD:scripts/extension_runtime/runtime_checkout.txt | git sparse-checkout set --no-cone --stdin
 git checkout
-python3 scripts/stage_slicer_extension.py \
+PythonSlicer scripts/stage_slicer_extension.py \
   --install-root ~/SlicerDSpace-extension --slicer-version Slicer-5.10 \
   --link-mode copy
 ```
@@ -164,18 +164,30 @@ Slicer 5.10 用户在 **Edit > Application Settings > Modules > Additional modul
 
 ### 准备所选环境
 
-进入模块，勾选产品，点击 **环境与安装 > 准备所选分析环境**。
-确认所需工具和模型条款；如提示重启，重启后再点击准备以继续。
-SlicerDMRI、PyTorch 及可选的 UKFTractography 扩展按路线准备。
+进入模块，勾选所需产品；插件会自动加入每个产品的前置步骤。然后点击 **环境与安装 > 准备所选分析环境**。
+一个对话框列出每项下载的大小及其许可（名称、链接和本地文件）。点击一次 **接受许可并安装** 即可。
+如提示重启，重启后再点击准备以继续。安装结束后，会用合成数据对每项功能做自检；
+自检失败会显示出来，且不会标记为就绪。
+Slicer 扩展仅在产品需要时添加：神经网络模型和 native 脑掩膜需要 PyTorch，UKF 需要 UKFTractography，
+WMA 需要 SlicerDMRI。张量拟合不需要扩展。
 
 权重、模板和图谱单独存放于 [**SlicerDSpace-models**](https://github.com/ChengjinLii/SlicerDSpace-models)。配置过程校验 SHA256、
 缓存下载并保存路径；**更多选项** 提供已有环境、离线模型和修复入口。
 详见[自动配置](docs/setup/MANAGED_SETUP.zh-CN.md)与[资源条款](docs/assets/MODEL_ASSET_TERMS.md)。
 
+不使用图形界面时，可在 Slicer 自带的 Python 中运行同样的准备。`PythonSlicer` 位于 Slicer 的 `bin` 文件夹，
+无需系统 Python。第一条命令列出计划（含大小和许可）；第二条执行安装并接受所列全部许可：
+
+```bash
+PythonSlicer scripts/setup_selected.py --targets microstructure,tractography
+PythonSlicer scripts/setup_selected.py --targets microstructure,tractography --execute --accept-licences
+```
+
+准备过程会自动运行自检（`scripts/check_setup_functionality.py`）。
 需要显式使用 CLI 准备表面模型时：
 
 ```bash
-python3 scripts/download_model_assets.py --profile surface \
+PythonSlicer scripts/download_model_assets.py --profile surface \
   --asset-root ~/SlicerDSpace-model-assets --source url \
   --source-id slicerdsurfer_models_git
 ```
@@ -212,13 +224,21 @@ sub-01/
 
 | 部分 | 默认 | 其他选项 |
 | --- | --- | --- |
-| 缺失脑掩膜 | PNL diffusion CNN；有效的已有掩膜直接复用 | SynthStrip、MRtrix、DIPY median-Otsu、仅用已有掩膜 |
-| 微结构 | DTI | 加选 Free-water、NODDI、DKI；DKI 可选 WLS/OLS 或 Python MK-Curve |
+| DWI 预处理（仅在勾选时） | 唯一路线：DIPY MP-PCA 去噪、DIPY Gibbs 去除、通过 `dwifslpreproc` 运行 FSL eddy/topup（需要 MRtrix3、FSL 和 FSL 许可；没有 FSL 构建的平台不提供）；需要相位编码方向，手动输入或取自 `input/dwi.json`（大多数轴位临床 DWI 为 AP） | `--preprocessing-skip-gibbs` 跳过 Gibbs 去除；路线、去噪方法和跳过运动校正的选项已移除 |
+| 缺失脑掩膜 | PNL diffusion CNN；有效的已有掩膜直接复用 | 仅用已有掩膜（`provided`）；SynthStrip、MRtrix、DIPY 掩膜已移除 |
+| 微结构 | DTI | 加选 Free-water、NODDI、DKI、iFW（iFW 需要回波时间）；DKI 默认使用 Python MK-Curve，也可选 WLS/OLS |
 | 纤维追踪 | MRtrix3 CSD/ACT | DTI 确定性追踪、UKF、SAF |
+| 连接组 | `auto`：`.tck` 来源且指标为流线计数时用 MRtrix `tck2connectome`，其他情况用 Python | `python` 或 `mrtrix` |
 | 束分析 | 官方 WMQL 多束查询 | WMQL 束子集、WMA、TractCloud |
 
 微结构、纤维追踪和束分析旁的 **...** 支持多选。
 **高级设置** 按掩膜、模型参数、性能、脑区/输入导入和实验分类；环境安装单独管理。
+
+**平台。** Linux 上 PNL 脑掩膜在带 ANTs 的 managed conda 运行环境中运行；macOS 和 Windows 上在 Slicer 自带的 Python 中运行（SimpleITK 和 PyTorch）。
+这条 native 路线为 **实验性**：在 24 个测试例中有 2 例的掩膜与 Linux 路线的差异超出一致性规则。
+设置项为高级设置中的 **PNL 路线**（`auto`、`managed`、`native`），命令行为 `--pnl-mask-route`；运行记录会写明所用掩膜的路线。
+在 Windows 上，MRtrix3 和 FSL 命令（以及可选的 WMA、WMQL、TractCloud 和 FreeSurfer 工具）在 WSL 2 Ubuntu 中运行；
+脑掩膜和 Python 阶段在 Windows 版 Slicer 的 Python 中运行。见 [Windows](docs/setup/WINDOWS.md) 和 [macOS](docs/setup/MACOS.md)。
 
 UKF 通过已安装扩展自动运行，并可直接把结果传给 WMA。
 WMA 支持 `--wma-atlas org|east-west|naba`（默认 `org`），高级设置中也可选择。
@@ -287,7 +307,7 @@ export SLICER="/path/to/Slicer"
 
 ```bash
 make test-fast
-python3 scripts/audit_slicer_extension_metadata.py --json
+PythonSlicer scripts/audit_slicer_extension_metadata.py --json
 ```
 
 开发阶段使用本地验证，GitHub Actions 与网站发布保持手动触发。

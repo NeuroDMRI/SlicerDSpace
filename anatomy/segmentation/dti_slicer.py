@@ -5,7 +5,8 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
-from shared.external_process import slicer_runtime_roots
+from shared.external_process import find_pythonslicer, slicer_runtime_roots
+from shared.teem_dti import estimate_command
 
 
 def _launcher(cli: Path, slicer_exe: Optional[Path]) -> list[str]:
@@ -37,7 +38,7 @@ def run_dti_feature_extraction(
     bvec_file: Path,
     output_folder: Path,
     slicer_base: Optional[Path] = None,
-    slicer_ext: Optional[Path] = None,
+    slicer_ext: Optional[Path] = None,  # deprecated: no longer needed
 ) -> None:
     output_folder.mkdir(parents=True, exist_ok=True)
     dti_e3 = output_folder / "DTI_E3.nrrd"
@@ -46,16 +47,13 @@ def run_dti_feature_extraction(
 
     if slicer_base is None:
         raise ValueError("slicer_base is required for DTI feature extraction.")
-    if slicer_ext is None:
-        raise ValueError("slicer_ext is required for DTI feature extraction.")
+    # slicer_ext is accepted for old callers and ignored: the tensor fit uses Slicer core only (teem_dti.py).
 
     slicer_lib_dir = _find_slicer_lib_dir(slicer_base)
-    extension_root = next((root for root in slicer_runtime_roots(slicer_ext)
-                           if (root / "lib" / slicer_lib_dir.name).is_dir()), slicer_ext)
     dwi_convert = _cli_path(slicer_lib_dir / "cli-modules", "DWIConvert")
-    extension_cli = extension_root / "lib" / slicer_lib_dir.name / "cli-modules"
-    dti_est = _cli_path(extension_cli, "DWIToDTIEstimation")
-    dti_scalar = _cli_path(extension_cli, "DiffusionTensorScalarMeasurements")
+    python_slicer = find_pythonslicer(slicer_base)
+    if python_slicer is None:
+        raise FileNotFoundError(f"PythonSlicer not found in the Slicer install: {slicer_base}")
     slicer_exe = next((path for root in slicer_runtime_roots(slicer_base)
                        for path in (root / "Slicer.exe", root / "Slicer", root / "MacOS/Slicer")
                        if path.is_file()), None)
@@ -86,22 +84,13 @@ def run_dti_feature_extraction(
         "--allowLossyConversion",
     ]
 
-    dti_est_cmd = _launcher(dti_est, slicer_exe) + [
-        "--enumeration",
-        "LS",
-        str(dwi_nrrd),
-        str(dti_nrrd),
-        str(b0_nrrd),
-    ]
+    # One PythonSlicer process fits the tensor and writes the five scalar maps (E1 = max, E3 = min eigenvalue).
+    tensor_cmd = estimate_command(
+        python_slicer, dwi_nrrd, dti_nrrd, b0_nrrd, "LS",
+        (("FractionalAnisotropy", fa_nrrd), ("Trace", md_nrrd), ("MaxEigenvalue", e1_nrrd),
+         ("MidEigenvalue", e2_nrrd), ("MinEigenvalue", e3_nrrd)))
 
-    scalar_launcher = _launcher(dti_scalar, slicer_exe)
-    fa_cmd = scalar_launcher + ["--enumeration", "FractionalAnisotropy", str(dti_nrrd), str(fa_nrrd)]
-    md_cmd = scalar_launcher + ["--enumeration", "Trace", str(dti_nrrd), str(md_nrrd)]
-    e1_cmd = scalar_launcher + ["--enumeration", "MinEigenvalue", str(dti_nrrd), str(e3_nrrd)]
-    e2_cmd = scalar_launcher + ["--enumeration", "MidEigenvalue", str(dti_nrrd), str(e2_nrrd)]
-    e3_cmd = scalar_launcher + ["--enumeration", "MaxEigenvalue", str(dti_nrrd), str(e1_nrrd)]
-
-    for cmd in [dwi_convert_cmd, dti_est_cmd, fa_cmd, md_cmd, e1_cmd, e2_cmd, e3_cmd]:
+    for cmd in [dwi_convert_cmd, tensor_cmd]:
         subprocess.run(cmd, check=True)
 
     if not dti_e3.exists():

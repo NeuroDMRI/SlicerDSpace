@@ -21,7 +21,8 @@ def selected_stages(arguments):
                        and args.dki_fit_method.startswith('MKCURVE') else target)
             stages.add('microstructure_dti')
         elif target == 'tractography':
-            stages.update('dti_tracking' if name == 'dti_det' else name for name in algorithms(args.tractography_backend))
+            tracking = getattr(args, 'closure_tractography_backend', None) or args.tractography_backend
+            stages.update('dti_tracking' if name == 'dti_det' else name for name in algorithms(tracking))
         elif target == 'bundles':
             stages.update(algorithms(args.bundle_backend, BUNDLES, 'wmql'))
         else:
@@ -32,8 +33,6 @@ def selected_stages(arguments):
         stages.update(('brain_mask', 'native_dti'))
     if stages & {'parcellation', 'surface'}:
         stages.add('registered_dti')
-    if 'csd_act' in stages:
-        stages.update(('segmentation', 'parcellation', 'registered_dti'))
-    if 'saf' in stages:
-        stages.add('surface_postprocess')
+    # Prerequisite targets (segmentation, parcellation, surface_postprocess, ...) are already in
+    # `targets`: resolve_analysis_options returns the closure of shared/target_closure.py.
     return stages

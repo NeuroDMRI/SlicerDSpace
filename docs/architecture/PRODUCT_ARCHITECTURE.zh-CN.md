@@ -24,13 +24,13 @@
 
 | 层级 | 内容 | 管理方式 |
 | --- | --- | --- |
-| Slicer 集成 | Qt、MRML、读写和显示；SlicerDMRI、PyTorch 扩展 | 声明扩展依赖，使用 Slicer API，不另外创建桌面客户端 |
+| Slicer 集成 | Qt、MRML、读写和显示、Slicer 内核中的 Teem 张量拟合；PyTorch 扩展（已声明），UKFTractography 和 SlicerDMRI（仅在所勾选产品需要时由准备步骤请求） | 只声明一个扩展依赖，使用 Slicer API，不另外创建桌面客户端 |
 | Python 科学计算 | DDSeg/DDParcel/DDSurfer、DIPY、AMICO、区域统计 | 按所选功能安装，保护 Slicer 已有环境，共用兼容 PyTorch |
-| 隔离 Python worker | PNL TensorFlow/ANTs、可选 SynthStrip Python、独立模型环境 | 在实际执行解释器中检查和运行，不强行向 Slicer 混装冲突框架 |
+| 隔离 Python worker | managed PNL 运行环境（Python 3.11、PyTorch、ANTs 2.3.0；Linux）、独立模型环境 | 在实际执行解释器中检查和运行，不强行向 Slicer 混装冲突框架。macOS 和 Windows 上 PNL 掩膜改在 Slicer 自带的 Python 中运行（native 路线） |
 | 可选外部工具 | MRtrix/FSL、FreeSurfer 后处理、WMA/WMQL/TractCloud 资源 | 明确版本与路径，执行前体检，采用官方来源并核对许可 |
 | 模型资源 | 权重、模板和图谱 | 按需下载、校验哈希、记录来源；授权单独验收 |
 
-目前默认脑掩膜后端仍为 PNL CNN。没有输入掩膜时，它需要 TensorFlow、ANTs 和模型资源，
+目前默认脑掩膜后端仍为 PNL CNN。没有输入掩膜时，它需要 PyTorch、模型资源，Linux 上还需要 managed 的 ANTs 运行环境；macOS 和 Windows 上由 native 路线（Slicer Python 中的 SimpleITK 配准和 PyTorch，标注为“native（实验性）”）取代 managed 运行环境。
 **不能把它描述成零外部依赖的默认路线**。用户提供掩膜，或主动选择替代后端，
 可以避免调用该 worker。局部验收用过的 FreeSurfer Docker 大镜像不是插件必装依赖，
 PNL 本身不要求安装这个镜像。替换后端必须明确选择，不能静默切换。
@@ -45,7 +45,7 @@ Linux NVIDIA 组件，与插件的 PyTorch 设备选择、脑掩膜设备选择�
 | 源码目录 | 职责 |
 | --- | --- |
 | `shared/` | 输入与目录契约、掩膜适配、依赖体检、编排、QC、设置及结果回载 |
-| `preprocessing/` | DIPY 或官方 MRtrix/FSL 预处理、校正梯度和诊断产物 |
+| `preprocessing/` | 预处理（唯一路线：DIPY MP-PCA 和 Gibbs，然后通过 `dwifslpreproc` 运行 FSL eddy/topup）、校正梯度和诊断产物 |
 | `anatomy/segmentation/` | DDSeg 组织分割 |
 | `anatomy/parcellation/` | DDParcel 分区及格式转换 |
 | `anatomy/surface/` | 固定 DDSurfer 后端、原生表面及可选后处理 |
@@ -60,11 +60,11 @@ Linux NVIDIA 组件，与插件的 PyTorch 设备选择、脑掩膜设备选择�
 
 ## 已实现管理与剩余发布工作
 
-已有 `SlicerDMRI`、`PyTorch` 扩展依赖声明，使用 PyTorch 扩展管理框架，
+已有 `PyTorch` 扩展依赖声明（不再声明 SlicerDMRI；张量拟合使用 Slicer 内核中的 Teem），使用 PyTorch 扩展管理框架，
 并检测可用的 `slicer.packaging` API 安装 Python 依赖。
 依赖配置、外部 worker 路径和模型哈希管理已经实现。
 [插件内自动配置](../setup/MANAGED_SETUP.zh-CN.md)现支持 Linux x86_64 的 MRtrix/FSL
-按需安装与路径自动保存；其他外部工具仍需显式配置。
+按需安装与路径自动保存；macOS 14.5 或更高时还可安装 MRtrix3 和 FSL CPU 工具；Windows 上 WSL 2 运行环境列入同一个确认对话框；其他外部工具仍需显式配置。
 **尚未实现并验收所有后端的跨平台一键安装**。
 
 正式分发前还需要可选环境的干净安装验收、可信且固定版本的下载、必要的授权确认入口，

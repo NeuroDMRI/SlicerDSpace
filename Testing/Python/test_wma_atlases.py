@@ -64,9 +64,14 @@ class WMAAtlasTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'T_AF'):
             atlas_output_contract('naba', cluster)
         (cluster / 'T_AF.mrml').touch()
-        (cluster / 'T_af.mrml').touch()
-        with self.assertRaisesRegex(ValueError, 'Ambiguous'):
-            atlas_output_contract('naba', cluster)
+        probe = self.root / 'CaseProbe'
+        probe.touch()
+        case_sensitive = not (self.root / 'caseprobe').exists()  # F4: macOS folders are often case-insensitive
+        probe.unlink()
+        if case_sensitive:  # a case-insensitive folder cannot hold both names; only the missing part applies
+            (cluster / 'T_af.mrml').touch()
+            with self.assertRaisesRegex(ValueError, 'Ambiguous'):
+                atlas_output_contract('naba', cluster)
 
     def test_other_author_driver_commands_are_preserved(self):
         source = ('#!/bin/bash\nRegAtlasFolder=$AtlasBaseFolder/ORG-RegAtlas-100HCP\n'

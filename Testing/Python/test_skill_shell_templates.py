@@ -34,7 +34,7 @@ class SkillShellTemplateTests(unittest.TestCase):
     def test_generated_scripts_and_catalogue_match_the_source_recipes(self):
         outputs = generator.generated_files()
         scripts = {path for path in outputs if path.suffix == ".sh"}
-        self.assertEqual(len(scripts), 37)
+        self.assertEqual(len(scripts), 31)
         self.assertEqual({path.relative_to(ROOT) for path in SHELL.glob("*.sh")}, scripts)
         for path, expected in outputs.items():
             with self.subTest(path=str(path)):
@@ -75,9 +75,7 @@ class SkillShellTemplateTests(unittest.TestCase):
         self.assertEqual({args.brain_mask_backend for name, args in selections if name.startswith("mask-")},
                          set(BRAIN_MASK_BACKENDS) - {"provided"})
         choices = {action.dest: set(action.choices) for action in build_parser()._actions if action.choices}
-        for destination, prefix, excluded in (("preprocessing_backend", "preproc-", set()),
-                                               ("preprocessing_dipy_denoise_method", "preproc-", {"none"}),
-                                               ("micro_fit_method", "micro-dti", set()),
+        for destination, prefix, excluded in (("micro_fit_method", "micro-dti", set()),
                                                ("dki_fit_method", "micro-", set()),
                                                ("connectome_backend", "connectome-", set())):
             actual = {getattr(args, destination) for name, args in selections if name.startswith(prefix)}
@@ -142,7 +140,7 @@ class SkillShellExecutionTests(unittest.TestCase):
                 self.assertEqual(args.dependency_config, Path(self.env["DEPENDENCY_CONFIG"]))
                 route = [self.env["SLICER"] if value == "$SLICER" else value for value in tokens[2:]]
                 self.assertEqual(call[-len(route):], route)
-        self.assertEqual(len(self.calls()), 37)
+        self.assertEqual(len(self.calls()), 31)
 
     def test_modes_change_only_the_execution_flag(self):
         for mode in ("doctor", "plan", "execute"):

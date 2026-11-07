@@ -3,7 +3,7 @@
 Generated from `docs/setup/CLI_TEMPLATES.md`; do not edit this catalogue or its generated scripts.
 Regenerate with `python scripts/build_skill_shell_templates.py` from the authorized checkout.
 
-Source SHA-256 (UTF-8, LF): `f13fc9ba5f11ec4b32bb20435254c2e12ee718e69573c2c94362b27b418cee2e`.
+Source SHA-256 (UTF-8, LF): `11c42a48ff9b50e485914517a29d03c32b7e5f54f959f3dfa3306409732f67bb`.
 
 ## Contents
 
@@ -81,70 +81,15 @@ pipeline mask_pnl --targets validation --brain-mask-backend pnl_cnn \
   --brain-mask-device auto --plan
 ```
 
-### DIPY brain mask
-
-[Standalone Bash](../assets/shell/mask_dipy.sh) - Recipe `mask-dipy`.
-
-```bash
-pipeline mask_dipy --targets validation --brain-mask-backend dipy --plan
-```
-
-### MRtrix brain mask
-
-[Standalone Bash](../assets/shell/mask_mrtrix.sh) - Recipe `mask-mrtrix`.
-
-```bash
-pipeline mask_mrtrix --targets validation --brain-mask-backend mrtrix --plan
-```
-
-### SynthStrip brain mask
-
-[Standalone Bash](../assets/shell/mask_synthstrip.sh) - Recipe `mask-synthstrip`.
-
-```bash
-pipeline mask_synthstrip --targets validation --brain-mask-backend synthstrip \
-  --postprocess-freesurfer-home "/path/to/freesurfer" --brain-mask-device auto --plan
-```
-
 ## Preprocessing
 
-### DIPY preprocessing with MP-PCA
-
-[Standalone Bash](../assets/shell/preproc_dipy.sh) - Recipe `preproc-dipy`.
-
-```bash
-pipeline preproc_dipy --targets validation,preprocessing \
-  --brain-mask-backend provided --preprocessing-backend dipy \
-  --preprocessing-dipy-denoise-method mppca --plan
-```
-
-### DIPY preprocessing with Local PCA
-
-[Standalone Bash](../assets/shell/preproc_localpca.sh) - Recipe `preproc-localpca`.
-
-```bash
-pipeline preproc_localpca --targets validation,preprocessing \
-  --brain-mask-backend provided --preprocessing-backend dipy \
-  --preprocessing-dipy-denoise-method localpca --plan
-```
-
-### DIPY preprocessing with Patch2Self
-
-[Standalone Bash](../assets/shell/preproc_patch2self.sh) - Recipe `preproc-patch2self`.
-
-```bash
-pipeline preproc_patch2self --targets validation,preprocessing \
-  --brain-mask-backend provided --preprocessing-backend dipy \
-  --preprocessing-dipy-denoise-method patch2self --plan
-```
-
-### MRtrix/FSL preprocessing
+### Preprocessing: DIPY MP-PCA and Gibbs, FSL eddy/topup
 
 [Standalone Bash](../assets/shell/preproc_fsl.sh) - Recipe `preproc-fsl`.
 
 ```bash
 pipeline preproc_fsl --targets validation,preprocessing \
-  --brain-mask-backend provided --preprocessing-backend mrtrix_fsl \
+  --brain-mask-backend provided \
   --preprocessing-phase-encoding-direction j- --preprocessing-readout-time 0.05 \
   --preprocessing-reverse-phase-b0 "/path/to/matched_reverse_b0.nii.gz" --plan
 ```
@@ -214,15 +159,6 @@ pipeline dti --targets validation,microstructure --microstructure-stages dti \
 ```bash
 pipeline dti_ols --targets validation,microstructure --microstructure-stages dti \
   --brain-mask-backend provided --micro-fit-method ls --plan
-```
-
-### DTI with explicit DIPY masking
-
-[Standalone Bash](../assets/shell/dti_light.sh) - Recipe `micro-dti-light`.
-
-```bash
-pipeline dti_light --targets validation,microstructure --microstructure-stages dti \
-  --brain-mask-backend dipy --plan
 ```
 
 ### Free-water imaging
@@ -424,6 +360,16 @@ pipeline connectome_python --targets validation,microstructure,parcellation,trac
 ```bash
 pipeline connectome_sift2 --targets validation,segmentation,parcellation,tractography,connectome \
   --tractography-backend csd_act --connectome-backend mrtrix \
+  --brain-mask-backend provided --select-streamlines 1000000 --plan
+```
+
+### Connectome with the automatic backend choice
+
+[Standalone Bash](../assets/shell/connectome_auto.sh) - Recipe `connectome-auto`.
+
+```bash
+pipeline connectome_auto --targets validation,segmentation,parcellation,tractography,connectome \
+  --tractography-backend csd_act --connectome-backend auto \
   --brain-mask-backend provided --select-streamlines 1000000 --plan
 ```
 

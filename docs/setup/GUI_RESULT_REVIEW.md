@@ -116,11 +116,11 @@ the original processing files or environment are included in the bundle.
 
 ---
 
-## Distortion correction (MRtrix3/FSL route)
+## Distortion correction (topup)
 
-With **Preprocessing** checked under **2. Products** and **Preprocessing route**
-set to `mrtrix_fsl` under **Advanced settings > Preprocessing & mask**, the
-**Distortion correction (topup)** group shows three fields. They set the same
+With **Preprocessing** checked under **2. Products**, the
+**Distortion correction (topup)** group under **Advanced settings > Preprocessing & mask**
+shows three fields. Preprocessing has one route (W2a), so there is no route choice. They set the same
 options as the command line:
 
 | GUI field | CLI flag | dwifslpreproc |
@@ -129,8 +129,40 @@ options as the command line:
 | Total readout time (s) | `--preprocessing-readout-time` | `-readout_time` |
 | Reverse-PE b=0 image | `--preprocessing-reverse-phase-b0` | `-rpe_pair -se_epi` |
 
-Accepted directions are `i`, `i-`, `j`, `j-`, `k`, `k-`, `AP`, `PA`, `LR`,
-`RL`, `IS`, `SI`. The readout time must lie in 0.001–1.0 s; values that look
-like milliseconds are rejected. The reverse-PE image must be an existing
-NIfTI/MRtrix file and cannot be combined with batch mode. Unset fields are not
-forwarded, so dwifslpreproc defaults apply.
+**Phase-encoding direction (where the value comes from).** The direction is the
+way the scanner encoded the image in the phase direction, for example
+anterior to posterior (AP). It is needed for every preprocessing run. The
+program takes it in this order:
+
+1. The value you choose in the field. The choices are **From sidecar**, AP, PA,
+   LR, RL, IS and SI. On the command line, a NIfTI axis code such as `j-` is
+   also accepted and is converted with the image orientation.
+2. The `PhaseEncodingDirection` entry in `input/dwi.json`, converted with the
+   image orientation, so that `j-` in a LAS file is understood correctly.
+3. Nothing else. If neither is available, the run is blocked and the message
+   says: "Phase-encoding direction needed: choose AP, PA, LR, RL, IS or SI in
+   Preprocessing (most axial clinical DWI: AP)". The program never guesses
+   the sign from the axis alone (a sidecar with only `PhaseEncodingAxis` does
+   not count), and it never guesses an oblique direction.
+
+What to choose when asked: read it from the scan protocol or the DICOM header.
+If you cannot, ask the scanner operator. Most axial clinical DWI is AP.
+
+**Readout time.** The program takes your value, then `TotalReadoutTime` from
+`input/dwi.json`. If both are missing, the call leaves out `-readout_time` and
+dwifslpreproc uses its own default of 0.1 s. The result then shows
+`readout_assumed`. If your value differs from the sidecar by more than 0.005 s,
+the program keeps your value and shows a warning with both values.
+
+The result panel and the preprocessing manifest show each value with its
+source (user or sidecar), the `readout_assumed` flag and any warning. The
+readout time must lie in 0.001–1.0 s; values that look like milliseconds are
+rejected (a sidecar value outside this range is treated as missing). The
+reverse-PE image must be an existing NIfTI/MRtrix file and cannot be combined
+with batch mode. In batch mode, each subject needs its own sidecar or the
+shared direction typed in the field; the cohort plan names the subjects that
+have neither.
+
+Earlier preprocessing results stay in use only while the raw inputs and the
+settings above are unchanged. A change of direction, readout time or sidecar
+runs preprocessing again.

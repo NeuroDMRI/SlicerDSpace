@@ -18,10 +18,6 @@ SLICER_INSTALL = (
     'export SLICER_PATH="/path/to/Slicer-installation"',
     'If DTI_SLICER_PATH is set, it takes precedence; update it or run: unset DTI_SLICER_PATH',
 )
-DMRI_INSTALL = (
-    'Install SlicerDMRI through Slicer Extensions Manager, then restart Slicer.',
-    'Instructions: https://dmri.slicer.org/download/',
-)
 FS_INSTALL = (
     'Install FreeSurfer: https://surfer.nmr.mgh.harvard.edu/fswiki/DownloadAndInstall',
     'export FREESURFER_HOME="/path/to/freesurfer"',
@@ -200,12 +196,9 @@ def check_slicer(report):
     core = versions[-1] / 'cli-modules'
     for name in ('BRAINSFit', 'ResampleScalarVectorDWIVolume'):
         check_file(report, name, core / name, True, SLICER_INSTALL)
-    extensions = sorted(home.glob(f'**/SlicerDMRI/lib/{versions[-1].name}/cli-modules'))
-    if not extensions:
-        report.add('FAIL', 'SlicerDMRI', 'No matching SlicerDMRI CLI directory found', DMRI_INSTALL)
-        return
-    for name in ('DWIToDTIEstimation', 'DiffusionTensorScalarMeasurements'):
-        check_file(report, name, extensions[-1] / name, True, DMRI_INSTALL)
+    # The tensor fit runs in Slicer's own Python (native Teem), so SlicerDMRI is not required.
+    check_file(report, 'PythonSlicer', next((path for path in (home / 'bin/PythonSlicer', home.parent / 'bin/PythonSlicer')
+                                             if path.is_file()), home / 'bin/PythonSlicer'), True, SLICER_INSTALL)
 
 
 def check_freesurfer(report, args):
@@ -256,7 +249,7 @@ def parse_args(argv=None):
     parser.add_argument('--device', default='cpu', help='cpu (default), cuda or cuda:<index>')
     parser.add_argument('--precision', choices=('fp32', 'bf16'), default='fp32')
     parser.add_argument('--skip-slicer', action='store_true',
-                        help='Skip Slicer/DMRI only if not checking raw-DWI preprocessing')
+                        help='Skip Slicer only if not checking raw-DWI preprocessing')
     parser.add_argument('--auto-mask', action='store_true', help='Also check FreeSurfer SynthStrip')
     parser.add_argument('--post-process', action='store_true', help='Also check FreeSurfer postprocessing')
     parser.add_argument('--freesurfer-home', type=Path, default=os.environ.get('FREESURFER_HOME'))
@@ -274,7 +267,7 @@ def main(argv=None, stream=None):
     loaded = check_packages(report)
     check_device(report, loaded.get('torch'), args.device, args.precision)
     if args.skip_slicer:
-        report.add('SKIP', 'Slicer/DMRI', '--skip-slicer selected; raw-DWI prerequisites are not verified')
+        report.add('SKIP', 'Slicer', '--skip-slicer selected; raw-DWI prerequisites are not verified')
     else:
         check_slicer(report)
     check_freesurfer(report, args)

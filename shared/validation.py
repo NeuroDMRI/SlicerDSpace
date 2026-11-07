@@ -28,8 +28,6 @@ PYTHON_DEPENDENCY_GROUPS: dict[str, tuple[str, ...]] = {
 
 COMMAND_DEPENDENCY_GROUPS: dict[str, tuple[str, ...]] = {
     "preprocessing": (
-        "dwidenoise",
-        "mrdegibbs",
         "dwifslpreproc",
         "dwi2mask",
         "eddy",
@@ -57,7 +55,6 @@ class InputValidationConfig:
     bids_metadata_path: Optional[Path] = None
     dependency_groups: tuple[str, ...] = ("core",)
     require_phase_encoding: bool = False
-    mrtrix_bin_dir: Optional[Path] = None
     write_report: bool = True
     brain_mask_backend: str = "pnl_cnn"
     brain_mask_device: str = "auto"
@@ -65,8 +62,7 @@ class InputValidationConfig:
     pnl_mask_script: Optional[Path] = None
     pnl_mask_model_dir: Optional[Path] = None
     pnl_mask_ants_bin_dir: Optional[Path] = None
-    synthstrip_python: Optional[Path] = None
-    postprocess_freesurfer_home: Optional[Path] = None
+    pnl_mask_route: str = "auto"
 
 
 @dataclass(frozen=True)
@@ -459,7 +455,6 @@ def validate_subject_inputs(config: InputValidationConfig) -> InputValidationRes
             raw = find_subject_root(
                 config.input_root.expanduser().resolve(),
                 config.subject_id,
-                mrtrix_bin_dir=config.mrtrix_bin_dir,
                 brain_mask_config=mask_config,
             )
         except Exception as exc:

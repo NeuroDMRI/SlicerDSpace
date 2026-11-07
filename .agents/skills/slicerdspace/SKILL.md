@@ -33,8 +33,11 @@ and `agents/`; the entry Markdown file alone does not include those resources.
   validate an already supplied path, or present usable candidates and **ask and
   wait** before creating directories, moving caches or downloading resources.
 - Use **Environment and installation > Prepare selected analysis environment**
-  as the normal preparation entry. Prefer compatible shared Slicer Python/PyTorch
-  and pinned no-Git sources; keep managed PNL isolated. Prepare only requested routes.
+  as the normal preparation entry. It shows one plan and asks for one confirmation,
+  with all licences in one dialog. Prefer compatible shared Slicer Python/PyTorch
+  and pinned no-Git sources. On Linux the PNL mask runs in a managed runtime; on
+  macOS and Windows it runs in Slicer's Python (native, experimental). Prepare
+  only requested routes. The plugin adds the prerequisites of the ticked targets itself.
 - Require explicit user approval of downloads and applicable terms. Never
   autoclick approval boxes, bypass the real confirmation dialog or accept terms
   on the user's behalf. Installation authorization never authorizes a scientific run.
@@ -52,6 +55,21 @@ arguments for `--doctor`, `--plan` and the authorized `--execute` run. Preserve
 the selected method when dependencies or acquisition checks fail; explain the
 specific blocker instead of substituting a method or relaxing QC thresholds.
 
+## Phase-Encoding Direction For Preprocessing
+
+Preprocessing needs the phase-encoding direction of the scan. The program takes
+it from the value the user types (AP, PA, LR, RL, IS or SI), otherwise from
+`PhaseEncodingDirection` in `input/dwi.json`. It never guesses. With neither
+value, `--plan` and `--execute` stop with exit code 2 and the message
+"Phase-encoding direction needed: choose AP, PA, LR, RL, IS or SI in
+Preprocessing (most axial clinical DWI: AP)". Then ask the user for the value
+and offer AP as the usual choice for axial clinical DWI; do not pick one on the
+user's behalf and do not run preprocessing without it. The readout time comes
+from the user, then from `TotalReadoutTime` in the sidecar; if both are
+missing, the run uses 0.1 s and records `readout_assumed`. Report the values and
+their sources from the result, and report any warning about a user value that
+differs from the sidecar.
+
 ## Algorithm Code Templates
 
 Use [references/shell_templates.md](references/shell_templates.md) for the full
@@ -60,8 +78,8 @@ the requested route and its prerequisites, not every algorithm at once.
 
 | Section | Algorithms and variants |
 | --- | --- |
-| [Masks](references/shell_templates.md#brain-masks) | PNL CNN, DIPY, MRtrix, SynthStrip |
-| [Preprocessing](references/shell_templates.md#preprocessing) | DIPY MP-PCA/Local PCA/Patch2Self; MRtrix/FSL |
+| [Masks](references/shell_templates.md#brain-masks) | PNL CNN (route auto/managed/native); a supplied mask (`provided`) |
+| [Preprocessing](references/shell_templates.md#preprocessing) | One route: DIPY MP-PCA, DIPY Gibbs removal, FSL eddy/topup through `dwifslpreproc` |
 | [Anatomical prior](references/shell_templates.md#anatomical-prior) | DDSeg, DDParcel, DDSurfer, native cortical postprocessing |
 | [Microstructure](references/shell_templates.md#microstructure) | DTI WLS/OLS, FW, NODDI, DKI WLS/OLS, Python MK-Curve, optional MATLAB reference |
 | [Tractography](references/shell_templates.md#tractography) | DTI deterministic, UKF, CSD/ACT with SIFT2, SAF |
@@ -93,7 +111,7 @@ guide for the single-subject and cohort forms.
 
 The standalone scripts are generated from `docs/setup/CLI_TEMPLATES.md`, not
 independent implementations of the algorithms. Update that guide and its
-Chinese counterpart first, then run `python scripts/build_skill_shell_templates.py`.
+Chinese counterpart first, then run `PythonSlicer scripts/build_skill_shell_templates.py`.
 `--check` detects missing, edited or stale generated files. Do not regenerate or
 overwrite a user's customized copy during an installation or analysis.
 

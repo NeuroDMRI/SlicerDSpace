@@ -124,7 +124,7 @@ class ExperimentsTest(unittest.TestCase):
     def test_native_preset_does_not_turn_off_anatomy_or_force_cpu(self):
         from shared.ui_experiments import native_route_values
         values = native_route_values()
-        self.assertEqual(values['brainMaskBackend'], 'dipy')
+        self.assertEqual(values['brainMaskBackend'], 'pnl_cnn')
         self.assertEqual(values['orchestrationTractographyBackend'], 'dti_det')
         self.assertFalse(any('Device' in key or key.startswith('target') for key in values))
 

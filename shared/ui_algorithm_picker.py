@@ -3,7 +3,7 @@
 from shared.algorithm_selection import TRACKING, BUNDLES, LABELS, algorithms
 
 FAMILIES = {
-    "microstructure": ("targetMicrostructureCheckBox", ("dti", "freewater", "noddi", "dki"), "orchestrationMicrostructureStages"),
+    "microstructure": ("targetMicrostructureCheckBox", ("dti", "freewater", "noddi", "dki", "ifw"), "orchestrationMicrostructureStages"),
     "tractography": ("targetTractographyCheckBox", TRACKING, "orchestrationTractographyBackend"),
     "bundles": ("targetBundlesCheckBox", BUNDLES, "orchestrationBundleBackend"),
 }
@@ -26,7 +26,7 @@ def set_algorithms(owner, family, values):
     with slicer.util.NodeModify(owner._parameterNode):
         setattr(owner._parameterNode, attribute, ",".join(selected))
         if family == "microstructure":
-            for stage, field in (("freewater", "orchestrationRunFreeWater"), ("noddi", "orchestrationRunNoddi"), ("dki", "orchestrationRunDki")):
+            for stage, field in (("freewater", "orchestrationRunFreeWater"), ("noddi", "orchestrationRunNoddi"), ("dki", "orchestrationRunDki"), ("ifw", "orchestrationRunIfw")):
                 setattr(owner._parameterNode, field, stage in selected)
     owner._lastEnvironmentResult = owner._lastEnvironmentSignature = None
     owner._refresh_advanced_run_settings()

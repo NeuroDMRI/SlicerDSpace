@@ -57,7 +57,7 @@
 阅读组件与数据许可后安装离线包：
 
 ```bash
-python scripts/setup_surface_runtime.py --execute --accept-terms \
+PythonSlicer scripts/setup_surface_runtime.py --execute --accept-terms \
   --asset-root /path/to/assets --offline
 ```
 
@@ -75,14 +75,13 @@ CMake >=3.24,<4，保持上游构建器与数值源码不变。
 ## 运行与检查
 
 ```bash
-python run_subject_pipeline.py --subject-root /data/sub-01 --subject-id sub-01 \
+PythonSlicer run_subject_pipeline.py --subject-root /data/sub-01 --subject-id sub-01 \
   --targets surface_postprocess --postprocess-runtime /data/local-components \
   --postprocess-license-file /data/private/freesurfer-license.txt --execute
 ```
 
 使用已保存原生 OBJ 的同一被试目录，也可指定 `--postprocess-native-dir`。
-完整安装仍可通过 `--postprocess-freesurfer-home` 使用。SynthStrip 及其模型单独配置，
-不包含在这七个表面组件中。
+完整安装仍可通过 `--postprocess-freesurfer-home` 使用。这七个表面组件不提供脑掩膜。
 
 独立工作进程检查组件清单、源码版本、动态库和校验和。激活文件预检查仅确认文件
 存在，不代表取得授权；原生命令仍执行其激活检查。几何、标量和分区完整性 QC 独立进行，

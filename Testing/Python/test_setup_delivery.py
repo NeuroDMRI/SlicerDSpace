@@ -169,13 +169,17 @@ class SetupDeliveryTests(unittest.TestCase):
     def test_macos_mrtrix_is_separate_from_unqualified_pnl_fsl_profiles(self):
         report = SimpleNamespace(statuses=(self.missing('command:mrconvert', 'mrtrix'),
                                           self.missing('brain_mask_backend', 'brain_mask')))
-        plan = build_setup_plan(report, system='Darwin', machine='x86_64')
+        plan = build_setup_plan(report, system='Darwin', machine='x86_64', pnl_mask_route='managed')
         self.assertEqual(plan['managed_profiles'], ['mrtrix'])
         self.assertEqual(plan['unsupported_profiles'], ['pnl_cnn'])
+        # SC-1c: on macOS the auto route is native, so no managed pnl_cnn profile is planned or reported unsupported.
+        auto = build_setup_plan(report, system='Darwin', machine='x86_64')
+        self.assertEqual((auto['managed_profiles'], auto['unsupported_profiles']), (['mrtrix'], []))
         from shared.managed_runtimes import bootstrap_artifact, profile_spec
-        with patch('platform.system', return_value='Darwin'), patch('platform.mac_ver', return_value=('14.5', (), '')):
+        with patch('platform.system', return_value='Darwin'), patch('platform.mac_ver', return_value=('14.5', (), '')), \
+                patch('shared.managed_runtimes.host_machine', return_value='x86_64'):
             self.assertIn('MacOSX-x86_64', bootstrap_artifact()[0])
-            self.assertIn('mrtrix3=3.0.8=hee5d243_0', profile_spec('mrtrix')['packages'])
+            self.assertEqual(profile_spec('mrtrix')['kind'], 'tarball')  # W-B2: the official macOS tarball, not conda
 
 
 class PrebuiltSurfaceTests(unittest.TestCase):
@@ -213,6 +217,11 @@ class PrebuiltSurfaceTests(unittest.TestCase):
 
 
 class FunctionalSetupTests(unittest.TestCase):
+    def setUp(self):
+        # G1-T: requests_for_report asks DICOM import for dcm2niix; keep these tests independent of the machine's PATH and wheel.
+        patcher = patch("shared.input_import.find_dcm2niix", return_value=None)
+        patcher.start()
+        self.addCleanup(patcher.stop)
     def test_cpu_choice_does_not_become_an_automatic_cuda_test(self):
         status = SimpleNamespace(kind='python', required=True, status='available', targets=('segmentation',),
                                  details={'import': 'torch', 'python_executable': 'python'})

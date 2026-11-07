@@ -43,7 +43,7 @@ def _run() -> None:
         assert not manager.isExtensionInstalled("SlicerDSpace"), "Private install root is not empty"
         metadata = {
             "extensionname": "SlicerDSpace",
-            "depends": "SlicerDMRI PyTorch",
+            "depends": "PyTorch",
             "slicer_revision": str(manager.slicerRevision),
             "os": str(manager.slicerOs),
             "arch": str(manager.slicerArch),

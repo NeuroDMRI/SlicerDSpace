@@ -17,7 +17,6 @@ class PreprocessingLogicMixin:
         subject_id: str,
         input_root: Path,
         output_dir: Optional[Path] = None,
-        backend: str = "dipy",
         execute: bool = True,
         skip: bool = False,
         force: bool = False,
@@ -34,14 +33,12 @@ class PreprocessingLogicMixin:
         pnl_mask_script: Optional[Path] = None,
         pnl_mask_model_dir: Optional[Path] = None,
         pnl_mask_ants_bin_dir: Optional[Path] = None,
-        synthstrip_python: Optional[Path] = None,
-        postprocess_freesurfer_home: Optional[Path] = None,
+        pnl_mask_route: str = "auto",
     ) -> DwiPreprocessingResult:
         config = DwiPreprocessingConfig(
             subject_id=subject_id,
             input_root=input_root,
             output_dir=output_dir,
-            backend=backend,
             execute=execute,
             skip=skip,
             force=force,
@@ -58,8 +55,7 @@ class PreprocessingLogicMixin:
             pnl_mask_script=pnl_mask_script,
             pnl_mask_model_dir=pnl_mask_model_dir,
             pnl_mask_ants_bin_dir=pnl_mask_ants_bin_dir,
-            synthstrip_python=synthstrip_python,
-            postprocess_freesurfer_home=postprocess_freesurfer_home,
+            pnl_mask_route=pnl_mask_route,
         )
         result = run_dwi_preprocessing(config, log=self.log)
         self.log(f"[Preproc] {result.status}: {result.output_dir}")

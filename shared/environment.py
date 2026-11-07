@@ -14,7 +14,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
-from shared.external_process import interpreter_path, slicer_runtime_roots, text_subprocess_kwargs, python_tool_environment
+from shared.external_process import SLICER_PYTHON_NAMES, find_pythonslicer, interpreter_path, slicer_runtime_roots, text_subprocess_kwargs, python_tool_environment
 from shared.model_assets import model_asset_candidates, model_asset_path_or_none
 
 
@@ -91,7 +91,6 @@ class EnvironmentDoctorConfig:
     python_environment: Optional[str] = None
     conda_executable: Optional[Path] = None
     platform_name: Optional[str] = None
-    preprocessing_backend: str = "dipy"
     brain_mask_backend: str = "pnl_cnn"
     brain_mask_device: str = "auto"
     brain_mask_required: bool = False
@@ -99,18 +98,18 @@ class EnvironmentDoctorConfig:
     pnl_mask_script: Optional[Path] = None
     pnl_mask_model_dir: Optional[Path] = None
     pnl_mask_ants_bin_dir: Optional[Path] = None
-    synthstrip_python: Optional[Path] = None
+    pnl_mask_route: str = "auto"
     tractography_backend: str = "csd_act"
     ukf_executable: Optional[Path] = None
     dwiconvert_executable: Optional[Path] = None
-    connectome_backend: str = "python"
+    connectome_backend: str = "auto"
     ddseg_device: str = "auto"
     surface_device: str = "auto"
     tractcloud_device: str = "auto"
     run_free_water: bool = False
     run_noddi: bool = False
     run_dki: bool = False
-    dki_fit_method: str = "WLS"
+    dki_fit_method: str = "MKCURVE"
     dki_matlab_executable: Optional[Path] = None
     dki_mkcurve_root: Optional[Path] = None
     mrtrix_bin_dir: Optional[Path] = None
@@ -132,9 +131,7 @@ class EnvironmentDoctorConfig:
 
 
 def run_needs_brain_mask(subject_root: Path, *, targets, subject_id: str, output_root=None,
-                         preprocessing_backend='dipy', brain_mask_backend='pnl_cnn',
-                         denoise_method='mppca', run_gibbs=True, run_motion=True,
-                         force=False, resume=True) -> bool:
+                         brain_mask_backend='pnl_cnn', force=False, resume=True) -> bool:
     """Common CLI/API mask prerequisite policy, including stale preprocessing outputs."""
     from shared.io_layout import subject_layout
     subject_root = subject_root.expanduser().resolve()
@@ -143,11 +140,11 @@ def run_needs_brain_mask(subject_root: Path, *, targets, subject_id: str, output
     if not raw:
         from shared.dicom_input import is_dicom_root
         raw = is_dicom_root(subject_root)
-    mask_targets = {'preprocessing', 'segmentation', 'parcellation', 'surface', 'microstructure',
-                    'microstructure_freewater', 'microstructure_noddi', 'microstructure_dki', 'tractography'}
+    from shared.target_closure import MASK_TARGETS
+    mask_targets = set(MASK_TARGETS)
     required = raw and bool(mask_targets.intersection(targets)) and not (input_dir / 'nodif_brain_mask.nii.gz').is_file()
-    generates_mask = preprocessing_backend != 'dipy' or denoise_method != 'none' or run_gibbs or run_motion
-    if raw and 'preprocessing' in targets and brain_mask_backend != 'provided' and generates_mask:
+    # W2a (D1): preprocessing always runs FSL eddy, so it always writes a new corrected DWI and needs a new mask.
+    if raw and 'preprocessing' in targets and brain_mask_backend != 'provided':
         layout = subject_layout(subject_root, output_root=output_root)
         stem = subject_id or subject_root.name
         dwi, mask = layout.preproc / f'{stem}_dwi_final.nii.gz', layout.preproc / f'{stem}_brain_mask_final.nii.gz'
@@ -484,7 +481,7 @@ def _add_slicer_python_runtime(specs: dict[str, DependencySpec], target: str) ->
         install_group="slicer-runtime",
         notes=(
             "Run this target from 3D Slicer or with Slicer's bin/PythonSlicer executable. "
-            "Do not install the unrelated PyPI package named 'slicer'. Install SlicerDMRI in 3D Slicer as well."
+            "Do not install the unrelated PyPI package named 'slicer'."
         ),
     )
 
@@ -1089,33 +1086,29 @@ def build_dependency_specs(config: EnvironmentDoctorConfig) -> tuple[DependencyS
     repo_root = _resource_root(config)
     platform_name = _effective_platform_name(config)
 
-    if config.brain_mask_required and config.brain_mask_backend == 'dipy':
-        for target in targets:
-            _add_dipy_stack(specs, target)
-
     for target in targets:
         if target == "validation":
             _add_core_python(specs, target)
             _python(specs, target=target, import_name="SimpleITK", package="SimpleITK")
 
         if target == "preprocessing":
-            if config.preprocessing_backend == "mrtrix_fsl":
-                _add_mrtrix_commands(
+            # W2a (D1): one route. DIPY MP-PCA and Gibbs removal, then FSL eddy/topup through dwifslpreproc.
+            # So the target needs MRtrix3 and FSL on every OS (the setup plan reads these install groups).
+            _add_dipy_stack(specs, target)
+            _add_mrtrix_commands(
+                specs,
+                target,
+                ("dwifslpreproc", "dwi2mask"),
+                config.preprocessing_mrtrix_bin_dir or config.mrtrix_bin_dir,
+            )
+            for command in ("eddy", "topup"):
+                _command(
                     specs,
-                    target,
-                    ("dwidenoise", "mrdegibbs", "dwifslpreproc", "dwi2mask"),
-                    config.preprocessing_mrtrix_bin_dir or config.mrtrix_bin_dir,
+                    target=target,
+                    command=command,
+                    group="fsl",
+                    bin_dir=config.preprocessing_fsl_bin_dir,
                 )
-                for command in ("eddy", "topup"):
-                    _command(
-                        specs,
-                        target=target,
-                        command=command,
-                        group="fsl",
-                        bin_dir=config.preprocessing_fsl_bin_dir,
-                    )
-            else:
-                _add_dipy_stack(specs, target)
 
         if target in {"microstructure", "microstructure_freewater", "microstructure_dki", "tractography"} and (
             target in {"microstructure", "microstructure_freewater", "microstructure_dki"} or config.tractography_backend == "dti_det"
@@ -1374,7 +1367,9 @@ def build_dependency_specs(config: EnvironmentDoctorConfig) -> tuple[DependencyS
 
         if target == "connectome":
             _add_core_python(specs, target)
-            if config.connectome_backend == "mrtrix":
+            # auto needs MRtrix3 for a .tck source (csd_act, saf); python never does.
+            if config.connectome_backend == "mrtrix" or (
+                    config.connectome_backend == "auto" and config.tractography_backend in ("csd_act", "saf")):
                 _add_mrtrix_commands(specs, target, ("tck2connectome",), config.mrtrix_bin_dir)
 
         if target == "saf":
@@ -1727,7 +1722,7 @@ def _install_hint(spec: DependencySpec, platform_name: str) -> str:
     if spec.install_group == "slicer-dmri":
         return "Install SlicerDMRI in Slicer and point to the required CLI if this optional export is enabled."
     if spec.install_group == 'ukf':
-        return 'Install UKFTractography and SlicerDMRI through Slicer Extension Manager and restart Slicer. UKF is optional; no automatic algorithm fallback.'
+        return 'Install UKFTractography through Slicer Extension Manager and restart Slicer. UKF is optional; no automatic algorithm fallback.'
     if spec.install_group == "device":
         return "Use CPU, or install a CUDA-capable PyTorch runtime and NVIDIA driver visible to the selected Python/Slicer environment."
     return spec.notes
@@ -2088,26 +2083,29 @@ def _check_spec(spec: DependencySpec, platform_name: str) -> DependencyStatus:
     )
 
 
-_SLICER_CLI_NAMES = ("DWIToDTIEstimation", "DiffusionTensorScalarMeasurements")
+def _teem_info_in_process() -> dict[str, str]:
+    """Load Slicer's Teem library in this interpreter; return version, library path and error text."""
+    try:
+        from shared import teem_dti
+
+        library = teem_dti.load_teem()
+        return {"teem_version": teem_dti.teem_version(library),
+                "library": str(getattr(library, "_slicerdspace_path", "")), "error": ""}
+    except Exception as exc:  # TeemError, ImportError (no numpy), OSError: all mean "not available here"
+        return {"teem_version": "", "library": "", "error": str(exc)}
 
 
-def _find_slicer_clis_in_interpreter(python_path: Path) -> dict[str, tuple[str, str]]:
-    """Run the CLI search in the selected interpreter (C2); return name -> (path, error)."""
+def _teem_info_in_interpreter(python_path: Path) -> dict[str, str]:
+    """Run the Teem check in the selected interpreter (C2), so it answers for that runtime."""
     probe = (
         "import json, sys\n"
         f"sys.path.insert(0, {Path(__file__).resolve().parents[1].as_posix()!r})\n"
-        f"names = {list(_SLICER_CLI_NAMES)!r}\n"
-        "result = {}\n"
         "try:\n"
-        "    from shared.pipeline import resolve_cli_executable\n"
+        "    from shared import teem_dti\n"
+        "    lib = teem_dti.load_teem()\n"
+        "    result = dict(teem_version=teem_dti.teem_version(lib), library=str(getattr(lib, '_slicerdspace_path', '')), error='')\n"
         "except Exception as exc:\n"
-        "    result = {name: ['', str(exc)] for name in names}\n"
-        "else:\n"
-        "    for name in names:\n"
-        "        try:\n"
-        "            result[name] = [resolve_cli_executable(name), '']\n"
-        "        except Exception as exc:\n"
-        "            result[name] = ['', str(exc)]\n"
+        "    result = dict(teem_version='', library='', error=str(exc))\n"
         "print(json.dumps(result))\n"
     )
     try:
@@ -2118,47 +2116,78 @@ def _find_slicer_clis_in_interpreter(python_path: Path) -> dict[str, tuple[str, 
         )
         payload = _parse_json_probe_output(completed.stdout)
     except subprocess.TimeoutExpired as exc:
-        return {name: ("", _probe_timeout_error(exc)) for name in _SLICER_CLI_NAMES}
+        return {"teem_version": "", "library": "", "error": _probe_timeout_error(exc)}
     except (OSError, subprocess.SubprocessError) as exc:
-        return {name: ("", str(exc)) for name in _SLICER_CLI_NAMES}
-    results = {}
-    for name in _SLICER_CLI_NAMES:
-        entry = payload.get(name)
-        found, error = (str(entry[0]), str(entry[1])) if isinstance(entry, list) and len(entry) == 2 else ("", "probe returned no result")
-        results[name] = (found, error)
-    return results
+        return {"teem_version": "", "library": "", "error": str(exc)}
+    if not isinstance(payload, dict):
+        return {"teem_version": "", "library": "", "error": "probe returned no result"}
+    return {name: str(payload.get(name, "")) for name in ("teem_version", "library", "error")}
 
 
-def _slicer_cli_statuses(targets: tuple[str, ...], python_executable: Optional[Path] = None) -> tuple[DependencyStatus, ...]:
-    """Headless counterpart of the GUI loaded-module check: search the Slicer CLI folders.
+def _doctor_pythonslicer(config: "EnvironmentDoctorConfig") -> Optional[Path]:
+    """PythonSlicer that the native tensor fit will run in (D1), found from the settings, not from the doctor's Python.
 
-    The search runs in the selected interpreter (C2); the in-process search is kept when
-    that interpreter is the caller's own.
+    Order: the call-site resolver ``resolve_pythonslicer_executable()`` that the fit uses, the configured Python when
+    it is itself a PythonSlicer, the configured Slicer launcher, SLICERDSPACE_SLICER_EXECUTABLE,
+    SLICER_HOME / SLICERDSPACE_SLICER_HOME, then the common install paths.
     """
-    from shared.pipeline import resolve_cli_executable
+    # T2/R3: ask the resolver that the fit uses first. Outside Slicer it also reads SLICER_HOME, SLICERDSPACE_SLICER_HOME,
+    # SLICERDSPACE_SLICER_EXECUTABLE and the configured Slicer path; it raises when none gives a PythonSlicer, and the
+    # search below adds the doctor's own settings (configured Python and launcher, common install paths).
+    try:
+        from shared.pipeline import resolve_pythonslicer_executable
+        return interpreter_path(resolve_pythonslicer_executable())
+    except Exception:
+        pass
+    configured = config.python_executable
+    if configured is not None and Path(configured).name in {"PythonSlicer", "PythonSlicer.exe"}:
+        return interpreter_path(configured)
+    launcher = _resolve_path(config.slicer_executable)
+    if launcher is None:
+        launcher, _ = _env_path_with_source("SLICERDSPACE_SLICER_EXECUTABLE")
+    homes: list[Path] = [launcher.parent] if launcher is not None else []
+    homes += [Path(os.environ[key]) for key in ("SLICER_HOME", "SLICERDSPACE_SLICER_HOME") if os.environ.get(key)]
+    if launcher is None:
+        common, _ = _first_existing_path(_common_slicer_executables(_effective_platform_name(config)), kind="file")
+        if common is not None:
+            homes.append(common.parent)
+    for home in homes:
+        found = find_pythonslicer(home)
+        if found is not None:
+            return interpreter_path(found)
+    return None
 
-    selected = interpreter_path(python_executable) if python_executable is not None else None
-    results: dict[str, tuple[str, str]] = {}
-    if selected is not None and selected != interpreter_path(sys.executable):
-        results = _find_slicer_clis_in_interpreter(selected)
+
+def _native_tensor_status(targets: tuple[str, ...], config: Optional["EnvironmentDoctorConfig"] = None, *,
+                          in_process: bool = False) -> DependencyStatus:
+    """The one requirement of the native tensor fit: Teem loads in the PythonSlicer that runs the fit (D1, D6).
+
+    A Slicer process probes itself. Any other process probes the PythonSlicer found from the settings and never
+    loads Teem in its own interpreter, so a plain Python with SLICER_HOME set cannot report the fit as available.
+    """
+    # T1: only Slicer's own interpreter name takes the in-process branch, never a path marker such as envs/slicer-x/.
+    if in_process or Path(sys.executable).name.lower() in SLICER_PYTHON_NAMES:
+        probed: Optional[Path] = interpreter_path(sys.executable)
+        info = _teem_info_in_process()
     else:
-        for name in _SLICER_CLI_NAMES:
-            try:
-                results[name] = (resolve_cli_executable(name), "")
-            except (RuntimeError, ImportError, OSError) as exc:  # C7: iterdir can raise PermissionError
-                results[name] = ("", str(exc))
-    statuses = []
-    for name in _SLICER_CLI_NAMES:
-        found, error = results[name]
-        statuses.append(DependencyStatus(
-            key=f"slicer_cli:{name.lower()}", kind="setting", label=f"SlicerDMRI {name} CLI",
-            status="available" if found else "missing", required=True, targets=targets,
-            details={"path": found, "error": error, "check": "Slicer CLI module search",
-                     "python_executable": (selected or Path(sys.executable)).as_posix()},
-            install_group="slicer-dmri",
-            install_hint="" if found else "Install SlicerDMRI in 3D Slicer, or run with Slicer's PythonSlicer so its CLI folders are searched.",
-        ))
-    return tuple(statuses)
+        probed = _doctor_pythonslicer(config) if config is not None else None
+        if probed is None:
+            info = {"teem_version": "", "library": "", "error":
+                    "PythonSlicer was not found. The native tensor fit runs in Slicer's PythonSlicer; "
+                    "set the Slicer executable (or SLICER_HOME) so the check can find it."}
+        else:
+            info = _teem_info_in_interpreter(probed)
+    found = not info["error"] and bool(info["library"])
+    slicer_probed = probed is not None
+    return DependencyStatus(
+        key="native_tensor_fit", kind="setting", label="Native tensor fit (Slicer core Teem)",
+        status="available" if found else "missing", required=True, targets=targets,
+        details={**info, "check": "Teem library load in Slicer's PythonSlicer", "notes": info["error"],
+                 "python_executable": probed.as_posix() if probed is not None else ""},
+        install_group="slicer-runtime",
+        # N1: the reason (searched roots, file names) reaches the panel and the install notes.
+        install_hint="" if found else (info["error"] if slicer_probed else "Run with Slicer's PythonSlicer"),
+    )
 
 
 def run_environment_doctor(config: EnvironmentDoctorConfig, *, _probe_cache=None) -> EnvironmentDoctorResult:
@@ -2196,23 +2225,13 @@ def run_environment_doctor(config: EnvironmentDoctorConfig, *, _probe_cache=None
                 targets=('surface_postprocess',), details={'notes': 'Set the activation file or FS_LICENSE; it is not downloaded or included in the runtime.'},
                 install_group='freesurfer-license', install_hint='Register for your own FreeSurfer activation file and select it in Environment paths, or set FS_LICENSE.'),
         )
-    if config.loaded_slicer_modules is not None:
+    if config.loaded_slicer_modules is not None or config.check_slicer_cli_modules:
         native_targets = tuple(dict.fromkeys(target for spec in specs if spec.key == 'python:slicer.util'
                                              for target in spec.targets))
         if native_targets:
-            available = 'dwitodtiestimation' in config.loaded_slicer_modules
-            statuses += (DependencyStatus(
-                key='slicer_module:dwitodtiestimation', kind='setting', label='SlicerDMRI DWIToDTIEstimation module',
-                status='available' if available else 'missing', required=True, targets=native_targets,
-                details={'loaded_modules': list(config.loaded_slicer_modules), 'check': 'actual current Slicer session'},
-                install_group='slicer-dmri',
-                install_hint='' if available else 'Install or enable SlicerDMRI in Extension Manager, then restart Slicer. Importing slicer.util alone does not load its CLI modules.',
-            ),)
-    if config.check_slicer_cli_modules and config.loaded_slicer_modules is None:
-        native_targets = tuple(dict.fromkeys(target for spec in specs if spec.key == 'python:slicer.util'
-                                             for target in spec.targets))
-        if native_targets:
-            statuses += _slicer_cli_statuses(native_targets, checked_python_path)
+            # GUI session: the interpreter is Slicer's own, so the check runs in process.
+            statuses += (_native_tensor_status(
+                native_targets, config, in_process=config.loaded_slicer_modules is not None),)
     if "microstructure_dki" in targets and config.dki_fit_method.upper().startswith("MKCURVE"):
         matlab_reference = config.dki_fit_method.upper() == "MKCURVE_MATLAB"
         if matlab_reference:
@@ -2238,7 +2257,7 @@ def run_environment_doctor(config: EnvironmentDoctorConfig, *, _probe_cache=None
                 key="brain_mask_backend", kind="setting", label="Selected brain-mask backend",
                 status="available" if masking["available"] and config.brain_mask_backend != "provided" else "missing",
                 required=True, targets=mask_targets, details=masking,
-                install_hint="Use Environment and installation to prepare the selected backend, provide a native mask, or select another backend explicitly in Advanced settings > Preprocessing & mask.",
+                install_hint="Use Environment and installation to prepare PNL CNN, or provide a native mask (select Provided mask only in Advanced settings > Preprocessing & mask).",
                 install_group="brain_mask"),)
     status_by_key = {item.key: item for item in statuses}
 
@@ -2256,12 +2275,16 @@ def run_environment_doctor(config: EnvironmentDoctorConfig, *, _probe_cache=None
             )
         )
 
+    # B10: a passing Tract Querier checkout is installed from that checkout, so its pip line is not listed.
+    wmql_root = status_by_key.get("path:tract_querier_root")
+    wmql_checkout_passes = wmql_root is not None and wmql_root.status == "available"
     missing_python_packages = tuple(
         dict.fromkeys(
             item.details.get("install_requirement") or item.details.get("package")
             for item in statuses
             if item.kind == "python"
             and item.status == "missing"
+            and not (wmql_checkout_passes and item.key == "python:tract_querier")
             and (item.details.get("install_requirement") or item.details.get("package"))
         )
     )
@@ -2410,7 +2433,8 @@ def write_environment_report(result: EnvironmentDoctorResult, output_dir: Path) 
                 f"- Required: `{item.required}`",
                 f"- Targets: `{', '.join(item.targets)}`",
                 f"- Detected source: `{item.details.get('detected_source', 'not found')}`",
-                f"- Suggested fix: {item.install_hint or 'See docs/setup/EXTERNAL_DEPENDENCIES.md.'}",
+                # B10: a multi-line hint (for example a Teem error) would end the Markdown bullet; keep it on one line.
+                f"- Suggested fix: {' '.join((item.install_hint or '').split()) or 'See docs/setup/EXTERNAL_DEPENDENCIES.md.'}",
                 "",
             ]
         )

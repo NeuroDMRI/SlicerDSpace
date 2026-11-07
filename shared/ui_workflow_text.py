@@ -9,10 +9,15 @@ from __future__ import annotations
 
 BRAIN_MASK_BACKEND_TEXT_KEYS = {
     "pnl_cnn": "brain_mask_pnl_cnn",
-    "synthstrip": "brain_mask_synthstrip",
-    "mrtrix": "brain_mask_mrtrix",
     "provided": "brain_mask_provided",
-    "dipy": "brain_mask_dipy",
+}
+
+
+# SC-1b: route value -> text key. "native (experimental)" is the label of the native route.
+PNL_MASK_ROUTE_TEXT_KEYS = {
+    "auto": "pnl_route_auto",
+    "managed": "pnl_route_managed",
+    "native": "pnl_route_native",
 }
 
 
@@ -50,22 +55,34 @@ WORKFLOW_TEXT = {
         "reverse_phase_b0": "Reverse-PE b=0 image",
         "brain_mask_backend": "Brain masking",
         "brain_mask_device": "Mask device",
-        "brain_mask_device_tooltip": "PNL CNN and SynthStrip: auto prefers the first visible CUDA GPU in the selected external runtime. CUDA requires a GPU; CPU explicitly disables it. Runtime GPU failures are not silently retried. MRtrix dwi2mask and DIPY median-Otsu are CPU algorithms.",
+        "brain_mask_device_tooltip": "PNL CNN: auto prefers the first visible CUDA GPU in the selected runtime. CUDA requires a GPU; CPU explicitly disables it. Runtime GPU failures are not silently retried.",
+        "pnl_mask_route": "PNL route",
+        "pnl_mask_route_tooltip": (
+            "PNL CNN route. auto: managed (conda runner with ANTs) on Linux, native on macOS and Windows. "
+            "native (experimental): did not meet the M-A parity rule on 2 of 24 cases (T2 design §3)."
+        ),
+        "pnl_route_auto": "auto",
+        "pnl_route_managed": "managed",
+        "pnl_route_native": "native (experimental)",
         "brain_mask_pnl_cnn": "PNL CNN (dMRI)",
-        "brain_mask_synthstrip": "SynthStrip",
-        "brain_mask_mrtrix": "MRtrix dwi2mask",
-        "brain_mask_dipy": "DIPY median-Otsu (lightweight)",
         "brain_mask_provided": "Provided mask only",
         "microstructure_dti_always": "DTI (always enabled)",
         "microstructure_fw_option": "FW",
         "microstructure_noddi_option": "NODDI",
         "microstructure_dki_option": "DKI",
+        "microstructure_ifw_option": "iFW",
         "microstructure_fw_tooltip": "Optional Free Water model. Independent of NODDI and DKI; off by default.",
         "microstructure_noddi_tooltip": "Optional NODDI model. Independent of Free Water and DKI; off by default.",
         "microstructure_dki_tooltip": "Optional diffusion kurtosis analysis. Standard DKI is not MK-Curve; off by default.",
+        "microstructure_ifw_tooltip": "Optional iFW: free-water fraction corrected for T2 weighting, minus the CSF fraction. Also runs Free Water and DDSeg; needs the echo time; off by default.",
+        "ifw_echo_time": "Echo time (ms)",
+        "ifw_echo_time_tooltip": "Echo time of the DWI in ms. Leave empty to read EchoTime from the DWI JSON sidecar; with neither, the iFW stage stops and the other stages continue. There is no default.",
+        "ifw_t2_tissue": "iFW tissue T2 (ms)",
+        "ifw_t2_csf": "iFW CSF T2 (ms)",
+        "ifw_t2_tooltip": "Fixed in code: T2 of tissue 95 ms and of CSF 1500 ms (Cho et al. preprint, Supplementary Methods 1). Read-only here; researchers can use --ifw-t2-gm-ms and --ifw-t2-csf-ms on the command line.",
         "dki_fit_method": "DKI fit method",
         "dki_fit_method_tooltip": (
-            "WLS/OLS are standard DKI fits. MKCURVE uses the bundled Python port without MATLAB. "
+            "MKCURVE (default) uses the bundled Python port without MATLAB; if it stops, re-run with WLS. WLS/OLS are standard DKI fits. "
             "MKCURVE_MATLAB is an optional author reference; configure its paths under Environment and installation > More options. "
             "All methods require eligible multi-shell data; no silent fallback."
         ),
@@ -73,8 +90,6 @@ WORKFLOW_TEXT = {
             "Existing supplied masks are respected. This choice only controls generation of a missing mask. "
             "PNL CNN (dMRI) is the default. Prepare selected analysis environment manages its Python, official dwi_masking.py, "
             "models and ANTs. Manual path overrides are under Environment and installation > More options. "
-            "SynthStrip uses FreeSurfer home; MRtrix uses MRtrix3 bin dir. "
-            "DIPY median-Otsu uses the existing Python runtime without model weights or external tools; review brain boundaries. "
             "Provided mask only requires an existing mask. Missing dependencies or masks cause an error; "
             "there is no automatic fallback to another masking backend."
         ),
@@ -138,29 +153,41 @@ WORKFLOW_TEXT = {
         "reverse_phase_b0": "反向相位编码 b=0 图像",
         "brain_mask_backend": "脑掩膜方法",
         "brain_mask_device": "掩膜计算设备",
-        "brain_mask_device_tooltip": "PNL CNN 和 SynthStrip：Auto 优先使用对应外部运行环境中可见的第一个 CUDA GPU；CUDA 要求 GPU 可用，CPU 显式禁用 GPU。GPU 运行错误不会静默重试。MRtrix dwi2mask 与 DIPY median-Otsu 是 CPU 算法。",
+        "brain_mask_device_tooltip": "PNL CNN：Auto 优先使用所选运行环境中可见的第一个 CUDA GPU；CUDA 要求 GPU 可用，CPU 显式禁用 GPU。GPU 运行错误不会静默重试。",
+        "pnl_mask_route": "PNL 路线",
+        "pnl_mask_route_tooltip": (
+            "PNL CNN 路线。auto：Linux 用 managed（conda 运行环境，含 ANTs），macOS 和 Windows 用 native。"
+            "native（实验性）：在 M-A 一致性规则的 24 例中有 2 例未达标（T2 设计 §3）。"
+        ),
+        "pnl_route_auto": "auto",
+        "pnl_route_managed": "managed",
+        "pnl_route_native": "native（实验性）",
         "brain_mask_pnl_cnn": "PNL CNN (dMRI)",
-        "brain_mask_synthstrip": "SynthStrip",
-        "brain_mask_mrtrix": "MRtrix dwi2mask",
-        "brain_mask_dipy": "DIPY median-Otsu（轻量方案）",
         "brain_mask_provided": "仅使用提供的掩膜",
         "microstructure_dti_always": "DTI（始终启用）",
         "microstructure_fw_option": "FW",
         "microstructure_noddi_option": "NODDI",
         "microstructure_dki_option": "DKI",
+        "microstructure_ifw_option": "iFW",
         "microstructure_fw_tooltip": "可选自由水模型，独立于 NODDI 和 DKI，默认关闭。",
         "microstructure_noddi_tooltip": "可选 NODDI 模型，独立于自由水和 DKI，默认关闭。",
         "microstructure_dki_tooltip": "可选扩散峰度分析，标准 DKI 不等于 MK-Curve，默认关闭。",
+        "microstructure_ifw_tooltip": "可选 iFW：按 T2 加权校正的自由水分数，再减去 CSF 分数。会同时运行自由水和 DDSeg；需要回波时间；默认关闭。",
+        "ifw_echo_time": "回波时间 (ms)",
+        "ifw_echo_time_tooltip": "DWI 的回波时间，单位 ms。留空则读取 DWI JSON 附属文件中的 EchoTime；两者都没有时 iFW 步骤停止，其他步骤继续。没有默认值。",
+        "ifw_t2_tissue": "iFW 组织 T2 (ms)",
+        "ifw_t2_csf": "iFW CSF T2 (ms)",
+        "ifw_t2_tooltip": "固定在代码中：组织 T2 为 95 ms，CSF T2 为 1500 ms（Cho 等预印本，补充方法 1）。此处只读；研究者可在命令行使用 --ifw-t2-gm-ms 和 --ifw-t2-csf-ms。",
         "dki_fit_method": "DKI 拟合方法",
         "dki_fit_method_tooltip": (
-            "WLS/OLS 是标准 DKI 拟合。MKCURVE 使用内置 Python 移植版，不需要 MATLAB。"
+            "MKCURVE（默认）使用内置 Python 移植版，不需要 MATLAB；若它停止，请改用 WLS 重跑。WLS/OLS 是标准 DKI 拟合。"
             "MKCURVE_MATLAB 是可选的作者代码对照后端，可在高级设置中配置外部路径。"
             "所有方法都检查多 shell 数据条件，不会静默回退。"
         ),
         "brain_mask_backend_tooltip": (
-            "尊重已有的用户提供掩膜；此选项仅控制缺失掩膜的生成。DIPY median-Otsu 不需要外部程序或权重，需检查脑边界。默认 PNL CNN (dMRI)，"
+            "尊重已有的用户提供掩膜；此选项仅控制缺失掩膜的生成。默认 PNL CNN (dMRI)，"
             "需在“高级设置 > 环境与模型 > 外部运行路径”配置外部 Python、官方 dwi_masking.py、"
-            "模型目录和 ANTs 路径。SynthStrip 共用 FreeSurfer 主目录，MRtrix 共用 MRtrix3 bin 目录。"
+            "模型目录和 ANTs 路径。"
             "“仅使用提供的掩膜”要求掩膜已存在。依赖或掩膜缺失时明确报错，不会自动切换其他掩膜后端。"
         ),
         "run_selector_label": "运行",
@@ -201,19 +228,29 @@ WORKFLOW_TEXT_BINDINGS = {
     "preprocessingReversePhaseB0Label": "reverse_phase_b0",
     "brainMaskBackendLabel": "brain_mask_backend",
     "brainMaskDeviceLabel": "brain_mask_device",
+    "pnlMaskRouteLabel": "pnl_mask_route",
     "orchestrationDtiStageLabel": "microstructure_dti_always",
     "orchestrationFreeWaterCheckBox": "microstructure_fw_option",
     "orchestrationNoddiCheckBox": "microstructure_noddi_option",
     "orchestrationDkiCheckBox": "microstructure_dki_option",
+    "orchestrationIfwCheckBox": "microstructure_ifw_option",
+    "orchestrationIfwEchoTimeLabel": "ifw_echo_time",
+    "orchestrationIfwT2TissueLabel": "ifw_t2_tissue",
+    "orchestrationIfwT2CsfLabel": "ifw_t2_csf",
     "orchestrationDkiFitMethodLabel": "dki_fit_method",
 }
 
 WORKFLOW_TOOLTIP_BINDINGS = {
     "brainMaskBackendComboBox": "brain_mask_backend_tooltip",
     "brainMaskDeviceComboBox": "brain_mask_device_tooltip",
+    "pnlMaskRouteComboBox": "pnl_mask_route_tooltip",
     "orchestrationFreeWaterCheckBox": "microstructure_fw_tooltip",
     "orchestrationNoddiCheckBox": "microstructure_noddi_tooltip",
     "orchestrationDkiCheckBox": "microstructure_dki_tooltip",
+    "orchestrationIfwCheckBox": "microstructure_ifw_tooltip",
+    "orchestrationIfwEchoTimeLineEdit": "ifw_echo_time_tooltip",
+    "orchestrationIfwT2TissueLineEdit": "ifw_t2_tooltip",
+    "orchestrationIfwT2CsfLineEdit": "ifw_t2_tooltip",
     "orchestrationDkiFitMethodComboBox": "dki_fit_method_tooltip",
     "targetPreprocessingCheckBox": "preprocessing_tooltip",
     "targetParcellationCheckBox": "parcellation_tooltip",

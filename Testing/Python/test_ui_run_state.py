@@ -57,13 +57,18 @@ class RunButtonTest(unittest.TestCase):
     def test_pending_inputs_keep_button_clickable_with_actionable_tooltips(self) -> None:
         cases = {
             "selected_targets": (("validation",), "2. Products"),
-            "subject_id": ("", "Subject ID"),
             "subject_root_text": ("", "Subject root"),
         }
         for key, (value, expected) in cases.items():
             state = run_button_state(**{**self.BASE, key: value})
             self.assertTrue(state.enabled, key)
             self.assertIn(expected, state.tooltip, key)
+
+    def test_c6_empty_subject_id_does_not_block_the_run_button(self) -> None:
+        # C6: the ID is derived from the input path, so an empty field is ready, not pending.
+        state = run_button_state(**{**self.BASE, "subject_id": ""})
+        self.assertTrue(state.enabled)
+        self.assertEqual(state.tooltip, RUN_BUTTON_READY_TOOLTIP)
 
     def test_active_run_is_disabled_even_with_missing_inputs(self) -> None:
         state = run_button_state(**{**self.BASE, "pipeline_active": True, "subject_id": ""})

@@ -37,7 +37,14 @@ def _complete_preprocessing(subject_root: Path) -> Path:
     preproc.mkdir(parents=True)
     for name in ("dwi_final.nii.gz", "dwi_final.bval", "dwi_final.bvec", "brain_mask_final.nii.gz"):
         (preproc / f"100307_{name}").write_text("preproc", encoding="utf-8")
-    (preproc / "100307_preproc_manifest.json").write_text('{"status": "completed"}', encoding="utf-8")
+    # W2b (T1 D1): the one reuse predicate needs a completed QC record and a version 5 or 6 cache key that records
+    # the raw input files (the two reuse points used to disagree on a manifest without them).
+    (preproc / "05_qc").mkdir()
+    (preproc / "05_qc" / "100307_preproc_qc.json").write_text('{"status": "completed"}', encoding="utf-8")
+    inputs = {key: _record(subject_root / "input" / name) for key, name in
+              {"dwi": "data.nii.gz", "bval": "bvals", "bvec": "bvecs", "mask": "nodif_brain_mask.nii.gz"}.items()}
+    (preproc / "100307_preproc_manifest.json").write_text(
+        json.dumps({"status": "completed", "cache_key": {"version": 5, "inputs": inputs}}), encoding="utf-8")
     return preproc
 
 
@@ -61,7 +68,7 @@ class AnatomyInputBundleTest(unittest.TestCase):
             manifest = preproc / "100307_preproc_manifest.json"
             inputs = {key: _record(subject / "input" / name) for key, name in
                       {"dwi": "data.nii.gz", "bval": "bvals", "bvec": "bvecs", "mask": "nodif_brain_mask.nii.gz"}.items()}
-            manifest.write_text(json.dumps({"status": "completed", "cache_key": {"inputs": inputs}}))
+            manifest.write_text(json.dumps({"status": "completed", "cache_key": {"version": 5, "inputs": inputs}}))
             self.assertEqual(_anatomy_input_bundle(subject, "100307", None, None).input_dir, preproc)
             (subject / "input/bvals").write_text("changed gradients")
             self.assertEqual(_anatomy_input_bundle(subject, "100307", None, None).input_dir, subject / "input")
@@ -269,7 +276,8 @@ class WorldQCGateTest(unittest.TestCase):
             layout.ddseg.mkdir(parents=True)
             (layout.ddseg / "SegmentationMap_GMWMCSF.nii.gz").write_text("segmentation")
             config = ProductOrchestratorConfig("100307", subject, ("tractography",),
-                execute=True, resume=False, brain_mask_backend="provided")
+                execute=True, resume=False, brain_mask_backend="provided",
+                excluded_targets=("segmentation", "parcellation"))
             plan = plan_subject_products(config, write=False)
             task = next(t for t in plan.items if t.target == "tractography")
             self.assertEqual(task.status, "blocked")
@@ -309,6 +317,7 @@ class WorldQCGateTest(unittest.TestCase):
                     targets=("tractography",),
                     execute=True,
                     resume=True,
+                    excluded_targets=("segmentation", "parcellation"),
                 )
             )
             statuses = {task.name: task.status for task in result.tasks}

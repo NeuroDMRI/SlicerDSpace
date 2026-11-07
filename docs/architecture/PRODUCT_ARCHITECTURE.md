@@ -27,15 +27,17 @@ independent scientific validation, not merely matching its output filenames.
 
 | Layer | Components | Deployment policy |
 | --- | --- | --- |
-| Slicer integration | Qt, MRML, imaging I/O, display; SlicerDMRI and PyTorch extensions | Declare extension dependencies; use Slicer APIs rather than a separate desktop UI |
+| Slicer integration | Qt, MRML, imaging I/O, display, the Teem tensor fit in Slicer core; the PyTorch extension (declared), UKFTractography and SlicerDMRI (requested at setup only when a ticked product needs them) | Declare the one extension dependency; use Slicer APIs rather than a separate desktop UI |
 | Python scientific routes | DDSeg/DDParcel/DDSurfer, DIPY, AMICO, numerical statistics | Install only selected requirements; protect Slicer's existing Python environment; reuse compatible PyTorch |
-| Isolated Python workers | PNL TensorFlow/ANTs, optional SynthStrip interpreter, independently configured model runtimes | Probe and run in the actual selected interpreter; do not force incompatible TensorFlow/PyTorch stacks into Slicer |
+| Isolated Python workers | Managed PNL runtime (Python 3.11, PyTorch, ANTs 2.3.0; Linux) independently configured model runtimes | Probe and run in the actual selected interpreter; do not force incompatible stacks into Slicer. On macOS and Windows the PNL mask runs in Slicer's own Python instead (native route) |
 | Optional external tools | MRtrix/FSL, FreeSurfer refinement, WMA/WMQL/TractCloud resources | Versioned, explicit paths; dependency checks before execution; official sources and license review |
 | Model assets | Weights, templates and atlases | Download selected profiles, verify hashes, retain provenance; licensing is a separate gate |
 
 PNL CNN is the current default mask method. If no input mask is supplied, that
-selection requires its TensorFlow, ANTs and model resources; it is **not** a
-dependency-free default. A supplied mask or an explicitly selected alternative
+selection requires its PyTorch, model resources and, on Linux, the managed ANTs
+runtime; it is **not** a dependency-free default. On macOS and Windows the
+native route (SimpleITK registration and PyTorch in Slicer's Python, labelled
+"native (experimental)") replaces the managed runtime. A supplied mask or an explicitly selected alternative
 can avoid that worker. PNL does not require the large FreeSurfer Docker image used
 in some local acceptance tests: that image is a test environment, not a mandatory
 plugin dependency. Backend changes must remain explicit, never silent fallbacks.
@@ -51,7 +53,7 @@ independent of the plugin's PyTorch and brain-mask device selectors.
 | Package | Responsibility |
 | --- | --- |
 | `shared/` | Input/layout contracts, brain-mask adapters, dependencies, orchestration, QC, settings and GUI result reintegration |
-| `preprocessing/` | Optional DIPY or official MRtrix/FSL preprocessing, corrected gradients and diagnostic artifacts |
+| `preprocessing/` | Optional preprocessing (one route: DIPY MP-PCA and Gibbs, then FSL eddy/topup through `dwifslpreproc`), corrected gradients and diagnostic artifacts |
 | `anatomy/segmentation/` | DDSeg tissue segmentation |
 | `anatomy/parcellation/` | DDParcel anatomical labels and conversion |
 | `anatomy/surface/` | Pinned DDSurfer inference, native surfaces and optional refinement |
@@ -68,12 +70,14 @@ different statuses, not interchangeable assurances of scientific correctness.
 
 ## Existing Management And Release Gaps
 
-The current extension declares `SlicerDMRI` and `PyTorch` dependencies, uses the
+The current extension declares the `PyTorch` dependency (SlicerDMRI is no longer
+declared; the tensor fit uses Teem in Slicer core), uses the
 PyTorch extension for framework installation, and feature-detects
 `slicer.packaging` for Python requirements. Dependency profiles, external worker
 paths and model hashes are implemented. [Managed setup](../setup/MANAGED_SETUP.md)
-now provisions selected MRtrix/FSL environments on Linux x86_64 and saves their
-paths automatically. Other external tools still use explicit configuration; this
+now provisions selected MRtrix/FSL environments on Linux x86_64 and, with macOS 14.5 or later,
+MRtrix3 and FSL CPU tools on macOS; on Windows it lists the WSL 2 runtime in the same single
+confirmation. It saves their paths automatically. Other external tools still use explicit configuration; this
 is **not** a certified one-click installation of every backend on every platform.
 
 Before public distribution, optional runtimes still need platform-specific clean

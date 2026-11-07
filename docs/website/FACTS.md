@@ -28,7 +28,7 @@ Read in full: all files named in the brief. Not read (linked from them): docs/re
 | Author as recorded: one person, Chengjin Li (CITATION.cff, .zenodo.json "Li, Chengjin", codemeta). s4ext "contributors Chengjin Li". No affiliation is recorded in any file read. | R/CITATION.cff:5-7; R/.zenodo.json:6-10; R/codemeta.json:21-27; R/SlicerDDSurfer.s4ext:10 |
 | Repo URL: https://github.com/ChengjinLii/SlicerDDSurfer (origin, fetch and push) | R/README.md:55; R/CITATION.cff:8-9; `git remote -v` |
 | Extension category: Diffusion | R/SlicerDDSurfer.s4ext:9; R/CMakeLists.txt:8 |
-| Extension dependencies (declared): SlicerDMRI, PyTorch | R/SlicerDDSurfer.s4ext:6; R/CMakeLists.txt:13; R/README.md:66 |
+| Extension dependencies (declared): PyTorch only. SlicerDMRI and UKFTractography are requested at setup only for a ticked product that needs them (WMA; UKF) | R/SlicerDSpace.s4ext:6; R/CMakeLists.txt:15; R/shared/selected_setup.py:25-32, 422 |
 | Slicer version used for local GUI validation: "Local GUI validation uses Slicer 5.10." Badge: 3D_Slicer-5.10. | R/README.md:9, 64; R/docs/images/README.md:14 |
 | Release status, exact: "**Research software.** Private pre-release; not currently distributed through the official Extensions Catalog. A completed run is not a clinical assessment or proof of scientific correctness." | R/README.md:20-22 |
 | Same, Chinese: "科研软件。当前为私有预发布项目，尚未通过官方 Extensions Catalog 分发。任务完成不等于科学结果正确，也不构成临床诊断依据。" | R/README.zh-CN.md:18-19 |
@@ -65,7 +65,7 @@ Five workflow families (README table, verbatim; R/README.md:28-36):
 | Workflow | Products | Main prerequisites |
 |---|---|---|
 | Input preparation | DICOM/NIfTI/NRRD import, gradient validation, optional mask generation and preprocessing | Appropriate import/preprocessing backend |
-| Anatomical reconstruction | DDSeg tissue labels, DDParcel regions, DDSurfer white/pial surfaces | Matching model assets, PyTorch and SlicerDMRI for the selected route |
+| Anatomical reconstruction | DDSeg tissue labels, DDParcel regions, DDSurfer white/pial surfaces | Matching model assets and PyTorch for the selected route |
 | Microstructural analysis | DTI FA/MD/AD/RD, optional Free-water, NODDI and DKI, regional summaries | Route-specific packages and acquisition suitability checks |
 | White-matter pathways | DTI/CSD tractography, ACT/SIFT2, SAF, WMQL/WMA/TractCloud bundles | Backend-specific tools and assets |
 | Structural connectivity | Regional matrices, Slicer scene inspection, QC and provenance | Compatible parcellation and tractogram; SIFT2 weights for weighted routes |
@@ -77,8 +77,8 @@ Optional and default behaviour:
 - "Microstructure runs **DTI only by default**. Enable Free-water, NODDI or DKI independently under Advanced." (R/README.md:120-121)
 - DKI "checks baseline measurements, nonzero shells, gradient directions and design rank before fitting." (R/README.md:121-122)
 - MK-Curve: "uses a bundled Python port of the author's algorithm, distinct from standard DIPY WLS/OLS. MATLAB is only an optional reference backend." (R/README.md:122-124)
-- Mask: an existing input mask is retained. If one must be generated, the default is "PNL diffusion CNN masking"; SynthStrip, MRtrix and supplied-mask alternatives are selectable. "A missing backend is reported, never silently replaced." (R/README.md:113-118)
-- PNL CNN default is not dependency-free: it needs TensorFlow, ANTs and model resources if no mask is supplied. (R/docs/architecture/PRODUCT_ARCHITECTURE.md:36-39)
+- Mask: an existing input mask is retained. If one must be generated, the default is "PNL diffusion CNN masking"; a supplied mask is the only alternative (SynthStrip, MRtrix and DIPY masks were removed in W5). "A missing backend is reported, never silently replaced." (R/README.md:113-118)
+- PNL CNN default is not dependency-free: if no mask is supplied it needs PyTorch and model resources; on Linux also the managed ANTs 2.3.0 runtime. On macOS and Windows the native route (SimpleITK and PyTorch in Slicer's Python) is used and is labelled "native (experimental)". (R/docs/architecture/PRODUCT_ARCHITECTURE.md; R/shared/brain_mask.py:142-162)
 - Tractography display: "Automatic tractography display uses a capped VTK preview, preserving the full TCK/TRK source; a preview is not the analysis tractogram." (R/README.md:125-126)
 - GUI language: English or Chinese, chosen in the header. (R/README.md:89; R/README.zh-CN.md:79)
 - "There is no visible Beginner section or automatic first-run wizard in the default interface." (R/README.md:96-97)
@@ -86,26 +86,26 @@ Optional and default behaviour:
 - Dependency levels (Inspect/plan, Minimal DTI, Anatomical models, Microstructure, Advanced pathways, Connectome): R/docs/setup/SUPPORT_MATRIX.md:18-25. "Capability checks detect packages, executables and assets. They do not certify numerical accuracy for every acquisition or platform." (SUPPORT_MATRIX.md:11-12)
 - CLI exists: `run_subject_pipeline.py ... --doctor` or `--plan`. (R/README.md:144-152)
 - Slicer client design: "a Slicer-native workflow client, not a replacement implementation of every external scientific tool." (R/docs/architecture/PRODUCT_ARCHITECTURE.md:13-14)
-- Managed MRtrix/FSL setup button: Linux x86_64 only; Unavailable on macOS. (R/docs/setup/SUPPORT_MATRIX.md:72; PRODUCT_ARCHITECTURE.md:74-77)
+- Managed MRtrix/FSL setup: Linux x86_64 (conda) and macOS 14.5 or later on Intel and Apple Silicon (MRtrix3 3.0.8 official tarball; FSL CPU tools). On Windows the WSL 2 Ubuntu runtime holds MRtrix3 and FSL; the brain mask and the Python stages run in Windows Slicer's Python. (R/docs/setup/MANAGED_SETUP.md; R/shared/managed_runtimes.py:31-33, 50-57, 77-84)
 - GPU: "Auto PyTorch uses CUDA when available, otherwise CPU. **Apple MPS is not implemented/validated**". (R/docs/setup/SUPPORT_MATRIX.md:80)
 - Compact-UI product list as shown in the screenshot (probe: viewed R/docs/images/slicerdds-compact-en.png): Preprocessing; Surface (native); Surface postprocess; Parcellation; Segmentation; Microstructure "DTI / Free-water / NODDI"; Tractography; Bundles; Connectome. In that image Microstructure, Tractography, Bundles and Connectome are ticked.
 
 ## 4. Implementation provenance hedges
 
-Quoted (R/README.md:42-45): "DDSeg is a MATLAB-to-Python/PyTorch reimplementation; SAF and MK-Curve are unofficial Python ports of author MATLAB methods. PNL CNN masking invokes the author's existing Python backend, not a rewritten entire PNL pipeline."
+Quoted (R/README.md:96-99): "DDSeg uses converted Python/PyTorch models; SAF and MK-Curve are unofficial Python ports of author MATLAB methods. PNL CNN masking runs a modified copy of the author's PNL inference code (licence terms in the PNL licence page)."
 
 Provenance page (R/docs/architecture/IMPLEMENTATION_PROVENANCE.md):
 - Preamble: "Language translation, successful execution, numerical equivalence and anatomical validity are different claims. This page ... does not assert author endorsement or clinical validation." (:11-13)
 - DDSeg: "**MATLAB-to-Python/PyTorch reimplementation**, not a newly trained tissue model" (:21). "That complete original-runtime comparison is not claimed here." (a same-input, per-view MATLAB/PyTorch parity study is not claimed) (:45-47). The tissue route uses "five DTI features", not the author's ten-feature MK-Curve tissue network (:43-44).
 - SAF: "**Unofficial Python port**, restricted to already co-registered native diffusion surfaces, with documented corrections" (:22). "whole-pipeline bitwise equivalence is **not** guaranteed." (:62-63). Upstream default 90 mm initial-track limit; validated runs used 40 mm (:65-67). "Describe outputs as **surface-constrained tractographic SAF candidates**. A curved display subset is not evidence that all output fibres are U-shaped." (:72-74). Neither mode "imposes adjacent-gyri labels or a U-shaped curvature classifier." (:69-70)
-- PNL mask: "**Python integration adapter for existing author Python**, not a MATLAB port or a rewrite of the entire PNL pipeline" (:23). It "does **not** execute the entire PNL preprocessing pipeline or replace PNL's CNN with a locally reimplemented model." (:87-88)
+- PNL mask: "**Modified PyTorch re-implementation of the author's PNL network, with BWH licence terms kept** ... not a MATLAB port or a rewrite of the entire PNL pipeline; the native route is experimental" (R/docs/architecture/IMPLEMENTATION_PROVENANCE.md:23). The code is `shared/pnl_cnn/`, a modified copy of PNLBrainMask-Torch at commit 8d201a5 (R/shared/pnl_cnn/UPSTREAM.json).
 - MK-Curve: "**Unofficial MATLAB-to-Python port**; distinct from standard DIPY DKI" (:24).
 - DDSurfer: "Bundled upstream Python plus Slicer orchestration, not a MATLAB rewrite" (:25).
 - DTI/Free-water/NODDI: "Library-backed computation" (DIPY/AMICO) (:26).
 - WMA/WMQL/TractCloud: "**External author-code integration**, not local algorithm ports" (:27).
 - Verification limits: reference checks use original `.m` kernels run in GNU Octave, "not MATLAB itself and not a blanket validation of every optional branch or subject." (:100-103)
 - Third-party notice repeats: SAF "author endorsement and whole-pipeline bitwise equivalence are not implied." (R/THIRD_PARTY_NOTICES.md:55-56); MK-Curve "is not an official author-endorsed Python implementation." (:179-180)
-- zh README says the PNL backend is "官方" (official) Python backend (R/README.zh-CN.md:38-39); the English README says "the author's existing Python backend" (README.md:43-44).
+- The English and the Chinese README now say the same about PNL: a modified copy of the author's PNL inference code (R/README.md:97; R/README.zh-CN.md, Implementation origins). The earlier "官方" (official) wording is gone.
 
 ## 5. Platform and validation status
 
@@ -116,10 +116,10 @@ Provenance page (R/docs/architecture/IMPLEMENTATION_PROVENANCE.md):
 - "Public source access, third-party licensing clearance and asset redistribution review remain release gates." (R/README.md:176)
 - "**Current limitation:** no complete genuine SDK build or native Windows/macOS scientific acceptance is asserted by this change." (R/docs/release/EXTENSION_READINESS.md:69-71). Contract tests use "a clearly identified minimal SDK stub". (:70-71)
 - Platform matrix (R/docs/setup/SUPPORT_MATRIX.md:34-40): Real Slicer GUI/source install: Linux "Dated local records"; Windows "Not certified"; macOS "Not certified". Scientific workflows: Linux "Only recorded routes/data"; Windows "Native not certified; WSL setup is not native acceptance"; macOS "Not certified". Real SDK/CTest/CPack: all three "Requires real SDK acceptance".
-- PNL CNN mask: "**Unavailable in native Windows GUI**" (SUPPORT_MATRIX.md:62).
+- PNL CNN mask: available on all three systems. Linux: managed conda runtime with ANTs 2.3.0. macOS and Windows: native route in Slicer's Python (SimpleITK and PyTorch), **experimental**: its masks did not meet the parity rule on 2 of 24 test cases; not run on Windows or macOS here. (R/docs/setup/SUPPORT_MATRIX.md, PNL CNN mask row; R/shared/brain_mask.py:142-162)
 - "Windows/macOS do not inherit Linux QC or timings." (SUPPORT_MATRIX.md:51-52)
 - Release gate table (R/docs/release/EXTENSION_READINESS.md:94-104): real SDK/CPack + clean install "Requires independent evidence"; model/template/fixture redistribution "Unconfirmed groups remain excluded from public asset archives"; real-data tutorial and Sample Data registration "Not completed"; patent: "Maintainer review required; no absence claim is made".
-- Extension Index descriptor `docs/release/extension-index/SlicerDDSurfer.json`: tier 1, scm_revision main, build_dependencies SlicerDMRI and PyTorch; "a schema-compatible draft, not a submitted catalog entry." (R/docs/release/extension-index/SlicerDDSurfer.json; EXTENSION_READINESS.md:106-109)
+- Extension Index descriptor `docs/release/extension-index/SlicerDSpace.json`: tier 1, scm_revision main, build_dependencies PyTorch; "a schema-compatible draft, not a submitted catalog entry." (R/docs/release/extension-index/SlicerDSpace.json; EXTENSION_READINESS.md:106-109)
 - CI: the README badge tracks main push runs; "the live badge ... is not externally accessible without authorization." (R/README.md:165-168)
 - Documented real-data scope is Linux. Later validation records (CSD/ACT, platform audit, etc.) are listed in R/docs/README.md:47-92 but were not read. One recorded caveat: the CSD/ACT investigation "supersedes the earlier CSD acceptance ... old ACT-dependent outputs require regeneration." (R/docs/README.md:49-51)
 - Film run platform: macOS, Apple M4, x86_64 Slicer 5.12.4 under Rosetta, CPU only. P/MAKING_OF.md:73-74, 144-145 ("SlicerDDSurfer is validated on Linux. This run used macOS ... and needed the run-time workarounds in §10.")
@@ -130,14 +130,14 @@ Source/staging install (R/README.md:51-67). It is "a **source/staging installati
 ```bash
 git clone https://github.com/ChengjinLii/SlicerDDSurfer.git
 cd SlicerDDSurfer
-python3 scripts/stage_slicer_extension.py \
+PythonSlicer scripts/stage_slicer_extension.py \
   --install-root ~/SlicerDDSurfer-extension --link-mode copy --clean
 ```
 - Then in Edit > Application Settings > Modules, add `~/SlicerDDSurfer-extension/SlicerDDSurfer/lib/Slicer-5.10/qt-scripted-modules` (expanded to an absolute path) to Additional module paths, then restart Slicer. Set `--slicer-version` to the actual version. Updating the source needs restaging and a restart. (R/README.md:61-67)
-- Install SlicerDMRI and PyTorch from Slicer's Extension Manager for routes that need them. (R/README.md:66-67)
+- Install PyTorch from Slicer's Extension Manager; setup adds UKFTractography and SlicerDMRI only for the products that need them. (R/README.md, Installation and Prepare sections)
 - Model files live outside the checkout; choose a writable directory in Advanced settings > Environment and models. Review the asset terms first. (R/README.md:69-71)
 ```bash
-python3 scripts/download_model_assets.py --profile surface \
+PythonSlicer scripts/download_model_assets.py --profile surface \
   --asset-root ~/SlicerDDSurfer-model-assets --source url \
   --source-id slicerdsurfer_models_git
 ```
@@ -328,7 +328,7 @@ Contradictions between sources:
 3. Platforms. codemeta.json:12-18 lists runtimePlatform "Linux, macOS, Windows" and developmentStatus "active". README:174 and SUPPORT_MATRIX say Windows/macOS scientific workflows are not certified.
 4. Tag. RELEASE.md:163 mentions "the existing `v0.1.0` tag" and a draft release file. `git tag -l` in R/ lists no tag. CITATION.cff:2 asks users to cite "the tagged software release". HEAD is dated 2026-10-16; date-released is 2026-06-24.
 5. Clinical wording. The end card says "Not for clinical use" and P/film/FACTS.md:18 attributes it to the README. The README wording is "A completed run is not a clinical assessment or proof of scientific correctness." (README.md:21-22). The words "Not for clinical use" do not appear in the README.
-6. "Official". zh README calls the PNL backend "官方" (official) Python; English says "the author's existing Python backend".
+6. "Official". Settled: both READMEs now describe PNL as a modified copy of the author's inference code; neither calls it "official".
 7. DDSurfer citation detail. CITATION.cff has year 2026 and article number e76596 only; P/CREDITS.md:12 adds "13(56)". Settled: Crossref gives 13(56) (§7); the site's [1] gives it since 2026-10-24.
 8. Description text differs across README, s4ext, CITATION.cff, codemeta, .zenodo.json (section 1). No file defines one official one-line description. README tagline: "Diffusion MRI workflows in 3D Slicer".
 9. Final narration line 12 ("Brain anatomy from diffusion MRI, inside 3D Slicer.") has no row of its own in P/film/FACTS.md. The FACTS row for the end card covers the tagline "Diffusion MRI workflows in 3D Slicer" only.

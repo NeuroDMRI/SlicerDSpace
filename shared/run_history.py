@@ -528,6 +528,7 @@ TARGET_LABELS = {
     "microstructure_freewater": "free water",
     "microstructure_noddi": "NODDI",
     "microstructure_dki": "DKI",
+    "microstructure_ifw": "iFW",
     "tractography": "tractography",
     "bundles": "bundles",
     "saf": "SAF",

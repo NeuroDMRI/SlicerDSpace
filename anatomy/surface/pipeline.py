@@ -36,7 +36,7 @@ class SurfaceConfig:
     precision: str = 'fp32'
     python_bin: Optional[Path] = None
     slicer_home: Optional[Path] = None
-    cpu_threads: int = 4
+    cpu_threads: Optional[int] = None  # None: stage CPU reservation, else 4
     max_gpu_gib: float = 24.
     resume: bool = False
     auto_mask: bool = False
@@ -165,7 +165,11 @@ def _raw_command(config, resources, output_dir):
     if home is None:
         from shared.pipeline import resolve_launcher_executable
         home = Path(resolve_launcher_executable()).parent
-    return command, dict(DTI_SLICER_PATH=str(home), DTI_REFERENCE_IMAGE=resources['registration_atlas'])
+    # N9: a separately deployed backend cannot find shared/teem_dti.py from its own location.
+    env = dict(DTI_SLICER_PATH=str(home), DTI_REFERENCE_IMAGE=resources['registration_atlas'])
+    if not os.environ.get('SLICERDSPACE_TEEM_DTI_SCRIPT'):  # T4: a user value wins
+        env['SLICERDSPACE_TEEM_DTI_SCRIPT'] = str(Path(__file__).resolve().parents[2] / 'shared/teem_dti.py')
+    return command, env
 
 
 def _run_registered(config, resources, output_dir, subject_dir):
@@ -193,12 +197,27 @@ def _run_registered(config, resources, output_dir, subject_dir):
             shutil.rmtree(path, ignore_errors=True)
 
 
-def _run_shared_raw(config, resources, output_dir, manifest, previous, log):
+def uses_shared_raw_route(config):
+    """True when ``run_surface`` takes the shared raw route for a prepared input bundle."""
+    return bool(config.reuse_shared_preprocessing and not config.auto_mask and config.input_bundle is not None)
+
+
+def prepare_shared_registered_bundle(config, resources, log=None):
+    """Obtain the raw bundle and the shared registered bundle (WLS, NRRD scalars, reuse).
+
+    The cohort orchestrator calls this before ``run_surface``, and only in cohort mode, so that ``native_dti``
+    and ``registered_dti`` are admitted as their own stages (S1.2), not inside the ``surface`` admission.
+    """
     from shared.pipeline import ensure_registered_dti_bundle
 
     raw = config.input_bundle or find_subject_root(config.subject_root, config.subject_id)
     registered = ensure_registered_dti_bundle(raw, Path(resources['registration_atlas']),
         fit_method='wls', reuse=True, log=log, scalar_format='nrrd')
+    return raw, registered
+
+
+def _run_shared_raw(config, resources, output_dir, manifest, previous, log):
+    raw, registered = prepare_shared_registered_bundle(config, resources, log)
     paths = [getattr(registered, name) for name in registered.__dataclass_fields__
              if name.endswith('_path')]
     paths += [getattr(raw, name + '_path') for name in ('dwi', 'bval', 'bvec', 'mask')]
@@ -244,12 +263,60 @@ def _run_shared_raw(config, resources, output_dir, manifest, previous, log):
         raise RuntimeError('Shared surface inputs changed during prediction')
 
 
+def resolved_cpu_threads(config):
+    """Explicit thread budget, else the stage CPU reservation (``SLICERDSPACE_STAGE_CPUS``), else 4."""
+    if config.cpu_threads is not None:
+        return config.cpu_threads
+    from shared.numeric_threads import reserved_stage_cpus
+    return reserved_stage_cpus() or 4
+
+
+def _surface_records(config, resources, output_dir):
+    """The base manifest and QC records that ``run_surface`` starts from."""
+    manifest = dict(kind='ddsurfer_surface', version=3, subject_id=config.subject_id,
+        subject_root=str(config.subject_root.expanduser().resolve()), output_dir=str(output_dir),
+        input_dwi=str(config.input_bundle.dwi_path) if config.input_bundle is not None else None,
+        predict_mode=config.predict_mode, device=config.device, precision=config.precision,
+        cpu_threads=resolved_cpu_threads(config), max_gpu_gib=config.max_gpu_gib,
+        resume=config.resume, auto_mask=config.auto_mask, mask_threads=config.mask_threads,
+        upstream_commit=resources['upstream_commit'], resources=resources,
+        executed=config.execute, status='planned', outputs={})
+    qc = dict(subject_id=config.subject_id, status='planned', executed=False, model_count=0,
+              elapsed_seconds=0., error=None, human_review='pending')
+    return manifest, qc
+
+
+def _mark_surface_failed(manifest, qc, exc, executed):
+    manifest['status'] = 'failed'
+    qc.update(status='failed', executed=executed, error=str(exc), automatic_qc_passed=False)
+
+
+def _write_surface_records(manifest_path, qc_path, manifest, qc, started):
+    qc['elapsed_seconds'] = time.monotonic() - started
+    manifest_path.write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
+    qc_path.write_text(json.dumps(qc, indent=2) + '\n', encoding='utf-8')
+
+
+def record_surface_failure(config, resources, exc, started):
+    """Write the failed surface records for a failure outside ``run_surface`` (R1) and return the error to raise.
+
+    It writes the same files and fields as the failure handler of ``run_surface``.
+    """
+    output_dir = config.output_dir.expanduser().resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    manifest, qc = _surface_records(config, resources, output_dir)
+    _mark_surface_failed(manifest, qc, exc, config.execute)
+    _write_surface_records(output_dir / 'surface_manifest.json', output_dir / 'surface_qc.json', manifest, qc, started)
+    return RuntimeError(f'DDSurfer surface execution failed: {exc}')
+
+
 @scheduled_stage('surface', gpu=True)
 def run_surface(config: SurfaceConfig, *, log: Optional[Callable[[str], None]] = None) -> SurfaceResult:
     if not config.subject_id.strip() or Path(config.subject_id).name != config.subject_id or config.subject_id in ('.', '..', 'fsaverage'):
         raise ValueError('subject_id must be a nonempty directory name')
     if config.predict_mode not in ('all', 'wm') or config.precision not in ('auto', 'bf16', 'fp32'):
         raise ValueError('Invalid prediction mode or precision')
+    config = replace(config, cpu_threads=resolved_cpu_threads(config))
     if config.cpu_threads < 1 or config.mask_threads < 1:
         raise ValueError('DDSurfer thread budgets must be positive')
     if not math.isfinite(config.max_gpu_gib) or config.max_gpu_gib <= 0:
@@ -262,16 +329,7 @@ def run_surface(config: SurfaceConfig, *, log: Optional[Callable[[str], None]] =
         previous = json.loads(manifest_path.read_text())
     except (OSError, ValueError):
         previous = {}
-    manifest = dict(kind='ddsurfer_surface', version=3, subject_id=config.subject_id,
-        subject_root=str(config.subject_root.expanduser().resolve()), output_dir=str(output_dir),
-        input_dwi=str(config.input_bundle.dwi_path) if config.input_bundle is not None else None,
-        predict_mode=config.predict_mode, device=config.device, precision=config.precision,
-        cpu_threads=config.cpu_threads, max_gpu_gib=config.max_gpu_gib,
-        resume=config.resume, auto_mask=config.auto_mask, mask_threads=config.mask_threads,
-        upstream_commit=resources['upstream_commit'], resources=resources,
-        executed=config.execute, status='planned', outputs={})
-    qc = dict(subject_id=config.subject_id, status='planned', executed=False, model_count=0,
-              elapsed_seconds=0., error=None, human_review='pending')
+    manifest, qc = _surface_records(config, resources, output_dir)
     products = []
     started, failure = time.monotonic(), None
     try:
@@ -307,12 +365,12 @@ def run_surface(config: SurfaceConfig, *, log: Optional[Callable[[str], None]] =
                         from shared.brain_mask import BrainMaskConfig, generate_brain_mask
                         mask_path = output_dir / 'native_brain_mask.nii.gz'
                         mask_record = generate_brain_mask(raw.dwi_path, raw.bval_path, raw.bvec_path, mask_path,
-                            config=BrainMaskConfig(backend='synthstrip', freesurfer_home=config.freesurfer_home,
+                            config=BrainMaskConfig(backend='pnl_cnn',  # W5 (D2): the one mask generator
                                 brain_mask_device='cuda' if config.device.startswith('cuda') else 'cpu', threads=config.mask_threads), log=log)
                         manifest['mask_generation'] = mask_record
                         config = replace(config, input_bundle=replace(raw, mask_path=mask_path))
                     # Supply the native mask explicitly, bypassing the pinned
-                    # upstream helper's independent CPU-only SynthStrip default.
+                    # upstream helper's independent CPU-only default.
                 command, env = _raw_command(config, resources, output_dir)
                 run_backend(command, python_bin=config.python_bin, env=env, log=log,
                             log_path=output_dir / 'backend.log')
@@ -354,12 +412,9 @@ def run_surface(config: SurfaceConfig, *, log: Optional[Callable[[str], None]] =
         raise
     except Exception as exc:
         failure = exc
-        manifest['status'] = 'failed'
-        qc.update(status='failed', executed=config.execute, error=str(exc), automatic_qc_passed=False)
+        _mark_surface_failed(manifest, qc, exc, config.execute)
     finally:
-        qc['elapsed_seconds'] = time.monotonic() - started
-        manifest_path.write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
-        qc_path.write_text(json.dumps(qc, indent=2) + '\n', encoding='utf-8')
+        _write_surface_records(manifest_path, qc_path, manifest, qc, started)
     if failure is not None:
         raise RuntimeError(f'DDSurfer surface execution failed: {failure}') from failure
     if log:

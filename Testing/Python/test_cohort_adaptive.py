@@ -36,7 +36,11 @@ class AdaptiveCohortTests(unittest.TestCase):
         head = self.task('head', 4)
         self.assertIsNone(choose_ready([head, self.task('unsafe', 2, 200)], active, self.limits, 1))
 
-    def test_aged_or_overtaken_head_drains_resources(self):
+    def test_aged_or_overtaken_head_has_no_barrier_and_small_work_waits_for_unknown_duration_fallback(self):
+        # T3 S3: the 120 s / 8-bypass ageing barrier is removed. The head reservation stays.
+        # The None result comes from the head's start time. The running task has no duration, so it never releases and
+        # the head's start is infinite (shared/cohort_policy.py reservation_time). A task is then safe only if the head
+        # still fits beside it. The small task fails fits(head, [small]) on CPU (8 + 1 > 8), so it waits.
         active = [self.task('running', 4)]
         for head, now in ((self.task('head', 8), 121), (self.task('head', 8, bypasses=8), 1)):
             self.assertIsNone(choose_ready([head, self.task('small', 1)], active, self.limits, now))
@@ -85,12 +89,14 @@ class AdaptiveCohortTests(unittest.TestCase):
             path = Path(tmp) / 'history.json'
             plan = plan_cohort(subjects, args, adaptive=True, available=(8, 64 * 1024**3))
             key = plan['subject_profiles']['A']['connectome']['profile_key']
+            # The floor is the plan's own estimate (header or M1 fit), not a fixed 4 GiB, since the M1 fill.
+            floor = plan['subject_profiles']['A']['connectome']['memory_gb']
             for gib in (.1, 10):
                 record_history(path, key, dict(outcome='completed', samples=3,
                     peak_tree_rss_bytes=gib*1024**3, execution_seconds=10))
                 updated = plan_cohort(subjects, args, adaptive=True, history_path=path,
                                       available=(8, 64 * 1024**3))
-                self.assertGreaterEqual(updated['subject_profiles']['A']['connectome']['memory_gb'], 4)
+                self.assertGreaterEqual(updated['subject_profiles']['A']['connectome']['memory_gb'], floor)
             self.assertEqual(updated['subject_profiles']['A']['connectome']['memory_gb'], 13)
 
     def test_automatic_frontier_is_budget_bound_not_fixed_at_eight(self):

@@ -17,6 +17,10 @@ foreach(TEST_SCRIPT IN LISTS SLICERDSPACE_UNIT_TESTS)
   add_test(NAME "py_${TEST_NAME}"
     COMMAND "${SLICERDSPACE_UNIT_TEST_PYTHON}" -m unittest discover
       -s "${SLICERDSPACE_TEST_SOURCE_DIR}" -p "${TEST_FILENAME}")
+  # B2: each test file runs alone (no test_00_user_data_isolation.py), so the per-user data folders of every OS point
+  # into the build folder here. A value in the caller's shell for the three SlicerDSpace path variables is blanked.
+  set(SLICERDSPACE_TEST_HOME "${CMAKE_CURRENT_BINARY_DIR}/test-home/${TEST_NAME}")
   set_tests_properties("py_${TEST_NAME}" PROPERTIES
-    WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}" LABELS "backend-unit")
+    WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}" LABELS "backend-unit"
+    ENVIRONMENT "HOME=${SLICERDSPACE_TEST_HOME};USERPROFILE=${SLICERDSPACE_TEST_HOME};XDG_CONFIG_HOME=${SLICERDSPACE_TEST_HOME}/.config;XDG_DATA_HOME=${SLICERDSPACE_TEST_HOME}/.local/share;XDG_CACHE_HOME=${SLICERDSPACE_TEST_HOME}/.cache;APPDATA=${SLICERDSPACE_TEST_HOME}/AppData/Roaming;LOCALAPPDATA=${SLICERDSPACE_TEST_HOME}/AppData/Local;SLICERDSPACE_USER_CONFIG=;SLICERDSPACE_MODEL_ASSETS_DIR=;SLICERDSPACE_RUNTIME_ROOT=")
 endforeach()

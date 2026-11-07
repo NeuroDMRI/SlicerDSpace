@@ -70,8 +70,8 @@ by `--help`. Prepare only selected dependencies/models using
 [managed setup](MANAGED_SETUP.md); model availability and license acceptance
 are separate from analysis execution.
 
-Most recipes assume an existing reviewed native mask (`provided`). Select the
-DIPY or PNL alternatives explicitly when generation is needed. Supplied masks
+Most recipes assume an existing reviewed native mask (`provided`). Select
+PNL CNN explicitly when generation is needed. Supplied masks
 take priority. Mask generation and eligible caches live under the subject root;
 separate output folders alone do not isolate mask-generation comparisons. Use
 independent input copies for those comparisons.
@@ -117,10 +117,12 @@ is lossless only within the checked int16 range; the importer refuses overflow.
 
 ## Masks And Preprocessing
 
-Choose one mask method; these commands generate a mask only if needed. PNL
-needs its configured PyTorch/ANTs runtime; DIPY needs no weights or external
-mask program. MRtrix and SynthStrip retain their own requirements. None is an
-error-triggered fallback for another method.
+The brain mask has two methods, `pnl_cnn` and `provided`; the command generates a mask only if needed. PNL
+runs on the route `--pnl-mask-route auto|managed|native`: on Linux `auto` is the
+managed conda runtime with ANTs; on macOS and Windows it is the native route in
+Slicer's Python (SimpleITK and PyTorch, "native (experimental)"). The SynthStrip, MRtrix `dwi2mask` and DIPY mask
+methods were removed (W5). A removed name on `--brain-mask-backend` fails and names `pnl_cnn` and `provided`.
+Neither method is an error-triggered fallback for the other.
 
 <!-- cli-template: mask-pnl -->
 ```bash
@@ -128,55 +130,27 @@ pipeline mask_pnl --targets validation --brain-mask-backend pnl_cnn \
   --brain-mask-device auto --plan
 ```
 
-<!-- cli-template: mask-dipy -->
-```bash
-pipeline mask_dipy --targets validation --brain-mask-backend dipy --plan
-```
-
-<!-- cli-template: mask-mrtrix -->
-```bash
-pipeline mask_mrtrix --targets validation --brain-mask-backend mrtrix --plan
-```
-
-<!-- cli-template: mask-synthstrip -->
-```bash
-pipeline mask_synthstrip --targets validation --brain-mask-backend synthstrip \
-  --postprocess-freesurfer-home "/path/to/freesurfer" --brain-mask-device auto --plan
-```
-
-Optional DIPY denoising/Gibbs/motion correction:
-
-<!-- cli-template: preproc-dipy -->
-```bash
-pipeline preproc_dipy --targets validation,preprocessing \
-  --brain-mask-backend provided --preprocessing-backend dipy \
-  --preprocessing-dipy-denoise-method mppca --plan
-```
-
-Alternative denoisers keep the remaining preprocessing route unchanged:
-
-<!-- cli-template: preproc-localpca -->
-```bash
-pipeline preproc_localpca --targets validation,preprocessing \
-  --brain-mask-backend provided --preprocessing-backend dipy \
-  --preprocessing-dipy-denoise-method localpca --plan
-```
-
-<!-- cli-template: preproc-patch2self -->
-```bash
-pipeline preproc_patch2self --targets validation,preprocessing \
-  --brain-mask-backend provided --preprocessing-backend dipy \
-  --preprocessing-dipy-denoise-method patch2self --plan
-```
-
-MRtrix/FSL with acquisition-specific phase encoding and total readout time.
+Preprocessing has one route: DIPY MP-PCA denoising, DIPY Gibbs removal, then FSL
+eddy and topup through MRtrix3 `dwifslpreproc`. It needs MRtrix3, FSL (eddy, topup) and the FSL
+licence on every OS. A platform with no FSL build (for example Linux aarch64) does not offer it;
+import preprocessed data instead. `--preprocessing-skip-gibbs` is the only way to leave a step out.
+The old `--preprocessing-backend`, `--preprocessing-dipy-denoise-method` and `--preprocessing-skip-motion`
+options were removed (W2a); each fails and names the one route.
+Every preprocessing run needs a phase-encoding direction. The command takes it from
+`--preprocessing-phase-encoding-direction` (AP, PA, LR, RL, IS, SI, or a NIfTI axis code
+such as `j-`), otherwise from `PhaseEncodingDirection` in `input/dwi.json`. With neither,
+`--plan` and `--execute` stop with exit code 2 and the message "Phase-encoding direction
+needed: choose AP, PA, LR, RL, IS or SI in Preprocessing (most axial clinical DWI: AP)".
+The readout time comes from `--preprocessing-readout-time`, otherwise from `TotalReadoutTime`
+in the sidecar; if both are missing, dwifslpreproc uses 0.1 s and the record says
+`readout_assumed`.
 Replace `j-`, `0.05` and the reverse-PE image with the actual protocol; they are
 examples, not universal defaults:
 
 <!-- cli-template: preproc-fsl -->
 ```bash
 pipeline preproc_fsl --targets validation,preprocessing \
-  --brain-mask-backend provided --preprocessing-backend mrtrix_fsl \
+  --brain-mask-backend provided \
   --preprocessing-phase-encoding-direction j- --preprocessing-readout-time 0.05 \
   --preprocessing-reverse-phase-b0 "/path/to/matched_reverse_b0.nii.gz" --plan
 ```
@@ -254,19 +228,16 @@ pipeline dti_ols --targets validation,microstructure --microstructure-stages dti
   --brain-mask-backend provided --micro-fit-method ls --plan
 ```
 
-Explicit lightweight masking plus DTI:
-
-<!-- cli-template: micro-dti-light -->
-```bash
-pipeline dti_light --targets validation,microstructure --microstructure-stages dti \
-  --brain-mask-backend dipy --plan
-```
-
 <!-- cli-template: micro-fw -->
 ```bash
 pipeline freewater --targets validation,microstructure \
   --microstructure-stages dti,freewater --brain-mask-backend provided --plan
 ```
+
+iFW is selected with `--microstructure-stages dti,ifw` (or `--run-ifw`). It also
+runs Free Water and DDSeg. Give the echo time with `--ifw-echo-time-ms`; without
+it the stage reads `EchoTime` from the DWI sidecar and otherwise stops.
+`all` does not include iFW.
 
 <!-- cli-template: micro-noddi -->
 ```bash
@@ -292,7 +263,8 @@ pipeline mkcurve --targets validation,microstructure --microstructure-stages dti
   --dki-fit-method MKCURVE --brain-mask-backend provided --plan
 ```
 
-`MKCURVE` is the Python port and does not need MATLAB. `MKCURVE_MATLAB` is
+`MKCURVE` is the Python port and does not need MATLAB. It is also the default
+DKI method when `--dki-fit-method` is not given. `MKCURVE_MATLAB` is
 an optional author-reference route with separately configured paths.
 
 <!-- cli-template: micro-mkcurve-matlab -->
@@ -316,7 +288,7 @@ eligible optional fits can overlap after prerequisites; it is not the default.
 
 ## Tractography
 
-DTI deterministic tracking uses SlicerDMRI/native DTI preparation and DIPY.
+DTI deterministic tracking uses the native Teem tensor fit (Slicer core) and DIPY.
 `--select-streamlines` is not an equivalent UKF budget.
 
 <!-- cli-template: tract-dti -->
@@ -326,7 +298,7 @@ pipeline tracks_dti --targets validation,tractography --tractography-backend dti
   --dti-min-length-mm 10 --dti-max-length-mm 250 --plan
 ```
 
-UKF uses the installed UKFTractography extension/CLI and SlicerDMRI. Its own
+UKF uses the installed UKFTractography extension/CLI. Its own
 author defaults apply; this example changes only its thread budget:
 
 <!-- cli-template: tract-ukf -->
@@ -465,6 +437,15 @@ CSD/ACT connectivity with matching SIFT2 weights and MRtrix:
 ```bash
 pipeline connectome_sift2 --targets validation,segmentation,parcellation,tractography,connectome \
   --tractography-backend csd_act --connectome-backend mrtrix \
+  --brain-mask-backend provided --select-streamlines 1000000 --plan
+```
+
+CSD/ACT connectivity with the default `auto` backend (MRtrix for a `.tck` count, Python for any other source or metric):
+
+<!-- cli-template: connectome-auto -->
+```bash
+pipeline connectome_auto --targets validation,segmentation,parcellation,tractography,connectome \
+  --tractography-backend csd_act --connectome-backend auto \
   --brain-mask-backend provided --select-streamlines 1000000 --plan
 ```
 
@@ -626,9 +607,9 @@ function Invoke-DDSurfer {
     if ($LASTEXITCODE -ne 0) { throw "SlicerDSpace exited with $LASTEXITCODE" }
 }
 
-Invoke-DDSurfer -Run 'dti_light' -RouteArgs @(
+Invoke-DDSurfer -Run 'dti' -RouteArgs @(
     '--targets', 'validation,microstructure', '--microstructure-stages', 'dti',
-    '--brain-mask-backend', 'dipy', '--plan'
+    '--brain-mask-backend', 'provided', '--plan'
 )
 ```
 

@@ -44,6 +44,7 @@ SUPPORTED_TARGETS = {
     "microstructure_freewater",
     "microstructure_noddi",
     "microstructure_dki",
+    "microstructure_ifw",
     "tractography",
     "bundles",
     "connectome",
@@ -57,24 +58,7 @@ BUNDLE_BACKENDS = {"wmql", "wma", "tractcloud"}
 WMA_MIN_ANATOMICAL_TRACT_COUNT = 73
 WMA_MIN_NONEMPTY_ANATOMICAL_TRACT_COUNT = 55
 
-TARGET_ORDER = (
-    "validation",
-    "preprocessing",
-    "segmentation",
-    "parcellation",
-    "surface",
-    "surface_postprocess",
-    "microstructure",
-    "microstructure_freewater",
-    "microstructure_noddi",
-    "microstructure_dki",
-    "tractography",
-    "bundles",
-    "saf",
-    "wma",
-    "tractcloud",
-    "connectome",
-)
+from shared.target_closure import TARGET_ORDER, expand_closure  # noqa: E402
 
 
 @dataclass(frozen=True)
@@ -94,19 +78,18 @@ class ProductOrchestratorConfig:
     wmql_query_selection: tuple[str, ...] = ()
     wmql_atlas_mode: str = 'native'
     execute: bool = False
+    # T-C5: tracking-variant children set this False; the aggregate manifest gets the one run record.
+    write_run_record: bool = True
     resume: bool = True
-    preprocessing_backend: str = "dipy"
     brain_mask_backend: str = "pnl_cnn"
     brain_mask_device: str = "auto"
     pnl_mask_python: Optional[Path] = None
     pnl_mask_script: Optional[Path] = None
     pnl_mask_model_dir: Optional[Path] = None
     pnl_mask_ants_bin_dir: Optional[Path] = None
-    synthstrip_python: Optional[Path] = None
+    pnl_mask_route: str = "auto"
     preprocessing_force: bool = False
-    preprocessing_dipy_denoise_method: str = "mppca"
     preprocessing_dipy_run_gibbs: bool = True
-    preprocessing_dipy_run_motion_correction: bool = True
     preprocessing_mrtrix_bin_dir: Optional[Path] = None
     preprocessing_fsl_bin_dir: Optional[Path] = None
     preprocessing_reverse_phase_b0: Optional[Path] = None
@@ -118,8 +101,12 @@ class ProductOrchestratorConfig:
     microstructure_run_free_water: bool = False
     microstructure_run_noddi: bool = False
     microstructure_run_dki: bool = False
+    microstructure_run_ifw: bool = False
+    microstructure_ifw_echo_time_ms: Optional[float] = None
+    microstructure_ifw_t2_gm_ms: float = 95.0
+    microstructure_ifw_t2_csf_ms: float = 1500.0
     max_parallel_models: int = 1
-    microstructure_dki_fit_method: str = "WLS"
+    microstructure_dki_fit_method: str = "MKCURVE"
     microstructure_dki_matlab_executable: Optional[Path] = None
     microstructure_dki_mkcurve_root: Optional[Path] = None
     microstructure_dki_execution: dict = field(default_factory=dict)
@@ -142,7 +129,7 @@ class ProductOrchestratorConfig:
     surface_atlas_t2: Optional[Path] = None
     surface_python_bin: Optional[Path] = None
     surface_precision: str = 'fp32'
-    surface_cpu_threads: int = 4
+    surface_cpu_threads: Optional[int] = None  # None: stage CPU reservation, else 4
     surface_max_gpu_gib: float = 24.
     model_assets_dir: Optional[Path] = None
     ddseg_device: str = "auto"
@@ -170,8 +157,8 @@ class ProductOrchestratorConfig:
     # Explicit exploratory fallback; the GUI retains complete DDSeg + DDParcel priors.
     allow_act_ddseg_only: bool = False
     tract_querier_root: Optional[Path] = None
-    connectome_backend: str = "python"
-    connectome_compress_mrtrix_dense: bool = False
+    connectome_backend: str = "auto"
+    connectome_compress_mrtrix_dense: Optional[bool] = None
     saf_fs_dir: Optional[Path] = None
     saf_pregenerated_tractogram: Optional[Path] = None
     saf_tckgen_options: str = ""
@@ -194,6 +181,18 @@ class ProductOrchestratorConfig:
     tractcloud_random_seed: int = 0
     preflight_blocked_targets: dict[str, str] = field(default_factory=dict)
     preflight_blocked_by_backend: dict[str, dict[str, str]] = field(default_factory=dict)
+    # C3 provenance: target added by the prerequisite closure -> targets that required it.
+    # Callers that already applied the closure (CLI, GUI) pass it here.
+    target_required_by: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    # Targets the user explicitly skipped (CLI --skip-targets); the closure does not re-add them.
+    excluded_targets: tuple[str, ...] = ()
+    # Set once the closure was applied, so tracking variants do not expand again.
+    closure_applied: bool = False
+    # Rule 4 (T1 D1), decided once at the subject entry point before the tracking variants are dispatched (F3): None =
+    # not decided yet, "" = no block, text = the block message for every DWI target of every variant.
+    preprocessing_pe_block: Optional[str] = None
+    # Algorithm added by the closure -> targets that required it; its variant runs only those targets.
+    closure_algorithm_requesters: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -208,6 +207,8 @@ class ProductTaskRecord:
     ended_at: Optional[str] = None
     runtime_seconds: Optional[float] = None
     logs: tuple[str, ...] = ()
+    # C8: "skipped_no_parcellation" when microstructure ran without a parcellation (no ROI statistics).
+    regional_statistics: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -223,10 +224,14 @@ class RunPlanItem:
     inputs: dict[str, str | None] = field(default_factory=dict)
     outputs: dict[str, str | None] = field(default_factory=dict)
     dependencies: dict[str, str | None] = field(default_factory=dict)
+    requested: bool = True
+    required_by: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, object]:
         return {
             "target": self.target,
+            "requested": self.requested,
+            "required_by": list(self.required_by),
             "task_name": self.task_name,
             "status": self.status,
             "reason": self.reason,
@@ -414,13 +419,28 @@ def _connectome_complete(
     tractography: Optional[Path] = None,
     parcellation: Optional[Path] = None,
     sift2_weights: Optional[Path] = None,
+    backend: Optional[str] = None,
+    compress_mrtrix_dense: Optional[bool] = None,
+    metric: str = "streamline_count",
 ) -> bool:
-    """Return true only when QC counts and both connectome tables have data."""
+    """Return true only when QC counts and both connectome tables have data.
+
+    With ``backend`` set (T-B2), the earlier run must also have used the backend and, for MRtrix, the
+    compression that a run now would resolve. A manifest without ``backend_used`` is an older Python run.
+    """
 
     if not _qc_completed(qc_path):
         return False
     try:
         qc = _read_json(qc_path)
+        if backend is not None and not _connectome_choice_current(
+            manifest_path or qc_path.with_name(qc_path.name.replace("_qc.json", "_manifest.json")),
+            backend=backend,
+            compress_mrtrix_dense=compress_mrtrix_dense,
+            tractography=tractography,
+            metric=metric,
+        ):
+            return False
         expected_dependencies = {
             key: path
             for key, path in {
@@ -443,6 +463,43 @@ def _connectome_complete(
         return _table_has_data_row(matrix_path, header_prefix="source_node,target_node,")
     except (OSError, TypeError, ValueError):
         return False
+
+
+def _connectome_choice_current(
+    manifest_path: Path,
+    *,
+    backend: str,
+    compress_mrtrix_dense: Optional[bool],
+    tractography: Optional[Path],
+    metric: str,
+) -> bool:
+    """True when the manifest records the backend and compression that a run now would resolve."""
+
+    from connectome.pipeline import ConnectomeConfig, expected_connectome_choice
+
+    try:
+        expected_backend, expected_compress = expected_connectome_choice(
+            ConnectomeConfig(
+                subject_id="",
+                tractography_path=Path(tractography) if tractography is not None else Path(""),
+                parcellation_path=Path(""),
+                metric=metric,
+                backend=backend,
+                compress_mrtrix_dense=compress_mrtrix_dense,
+            )
+        )
+    except RuntimeError:
+        return False  # the run would fail; do not reuse an earlier result as if it matched
+    try:
+        manifest = _read_json(manifest_path)
+    except (OSError, TypeError, ValueError):
+        return False
+    recorded_backend = manifest.get("backend_used") or "python"  # no field: a run before the auto backend
+    if recorded_backend != expected_backend:
+        return False
+    if expected_backend == "mrtrix":
+        return bool(manifest.get("compress_mrtrix_dense")) == expected_compress
+    return True
 
 
 def _table_has_data_row(path: Path, *, header_prefix: str) -> bool:
@@ -549,6 +606,36 @@ def _ukf_current(config, inputs, directory):
                    config.ukf_executable, config.dwiconvert_executable)
 
 
+def orchestrator_closure(
+    targets: tuple[str, ...],
+    *,
+    tractography_backend: str = "csd_act",
+    bundle_backend: str = "wmql",
+    microstructure_run_free_water: bool = False,
+    microstructure_run_noddi: bool = False,
+    microstructure_run_dki: bool = False,
+    microstructure_run_ifw: bool = False,
+    wma_source_explicit: bool = False,
+    provided_tractography: tuple[str, ...] = (),
+    excluded: tuple[str, ...] = (),
+):
+    """Return the prerequisite closure (see ``shared.target_closure``) of the selected targets."""
+
+    from shared.algorithm_selection import algorithms
+    return expand_closure(
+        targets,
+        tractography_algorithms=algorithms(tractography_backend),
+        bundle_backends=_normalize_bundle_backends(bundle_backend),
+        microstructure_free_water=microstructure_run_free_water,
+        microstructure_noddi=microstructure_run_noddi,
+        microstructure_dki=microstructure_run_dki,
+        microstructure_ifw=microstructure_run_ifw,
+        wma_source_explicit=wma_source_explicit,
+        provided_tractography=provided_tractography,
+        excluded=excluded,
+    )
+
+
 def normalize_orchestrator_targets(
     targets: tuple[str, ...],
     *,
@@ -557,51 +644,23 @@ def normalize_orchestrator_targets(
     microstructure_run_free_water: bool = False,
     microstructure_run_noddi: bool = False,
     microstructure_run_dki: bool = False,
+    microstructure_run_ifw: bool = False,
+    wma_source_explicit: bool = False,
+    provided_tractography: tuple[str, ...] = (),
 ) -> tuple[str, ...]:
-    """Expand product-level targets according to selected backend parameters."""
+    """Expand product-level targets and add every prerequisite target (C1 closure)."""
 
-    from shared.algorithm_selection import algorithms
-    tracking = algorithms(tractography_backend)
-    if len(tracking) > 1:
-        expanded = {target for backend in tracking for target in normalize_orchestrator_targets(
-            targets, tractography_backend=backend, bundle_backend=bundle_backend,
-            microstructure_run_free_water=microstructure_run_free_water,
-            microstructure_run_noddi=microstructure_run_noddi, microstructure_run_dki=microstructure_run_dki)}
-        return tuple(target for target in TARGET_ORDER if target in expanded)
-
-    requested = tuple(dict.fromkeys(target.strip().lower() for target in targets if target.strip()))
-    bundle_backends = _normalize_bundle_backends(bundle_backend)
-    expanded: list[str] = []
-    for target in requested:
-        if target == "microstructure":
-            expanded.append("microstructure")
-            if microstructure_run_free_water:
-                expanded.append("microstructure_freewater")
-            if microstructure_run_noddi:
-                expanded.append("microstructure_noddi")
-            if microstructure_run_dki:
-                expanded.append("microstructure_dki")
-            continue
-        if target == "bundles":
-            for backend in bundle_backends:
-                expanded.append("bundles" if backend == "wmql" else backend)
-            continue
-        expanded.append(target)
-        if target == "tractography" and tractography_backend == "saf":
-            expanded.append("surface_postprocess")
-            expanded.append("saf")
-
-    requested_set = set(expanded)
-    if tractography_backend == "ukf" and requested_set.intersection({"bundles", "wma", "tractcloud", "connectome"}):
-        requested_set.add("tractography")
-    normalized = tuple(target for target in TARGET_ORDER if target in requested_set)
-    unsupported = sorted(set(normalized) - SUPPORTED_TARGETS)
-    if unsupported:
-        raise ValueError(f"Unsupported orchestrator target(s): {', '.join(unsupported)}")
-    missing_from_order = sorted(requested_set - set(TARGET_ORDER))
-    if missing_from_order:
-        raise ValueError(f"Unsupported orchestrator target(s): {', '.join(missing_from_order)}")
-    return normalized
+    return orchestrator_closure(
+        targets,
+        tractography_backend=tractography_backend,
+        bundle_backend=bundle_backend,
+        microstructure_run_free_water=microstructure_run_free_water,
+        microstructure_run_noddi=microstructure_run_noddi,
+        microstructure_run_dki=microstructure_run_dki,
+        microstructure_run_ifw=microstructure_run_ifw,
+        wma_source_explicit=wma_source_explicit,
+        provided_tractography=provided_tractography,
+    ).targets
 
 
 def _resolve_bundle_input_tractography(
@@ -913,14 +972,92 @@ def _saf_complete(
 
 
 def _normalize_targets(config: ProductOrchestratorConfig) -> tuple[str, ...]:
-    return normalize_orchestrator_targets(
+    if not config.closure_applied:
+        return _with_closure(config).targets
+    # Tracking variants carry a deliberate subset of the closed targets: only validate and order it.
+    requested = {target.strip().lower() for target in config.targets if target.strip()}
+    unsupported = sorted(requested - set(TARGET_ORDER))
+    if unsupported:
+        raise ValueError(f"Unsupported orchestrator target(s): {', '.join(unsupported)}")
+    return tuple(target for target in TARGET_ORDER if target in requested)
+
+
+def _provided_tractography(config: ProductOrchestratorConfig) -> tuple[str, ...]:
+    """Bundle targets whose tractogram the user supplied as a file (no tracking is needed for them)."""
+
+    return tuple(name for name, value in (
+        ("wma", config.wma_input_tractography), ("tractcloud", config.tractcloud_input_tractography),
+        ("saf", config.saf_pregenerated_tractogram)) if value is not None)
+
+
+def _with_closure(config: ProductOrchestratorConfig) -> ProductOrchestratorConfig:
+    """Apply the prerequisite closure once: targets, tractography algorithms and provenance."""
+
+    if config.closure_applied:
+        return config
+    closure = orchestrator_closure(
         config.targets,
         tractography_backend=config.tractography_backend,
         bundle_backend=config.bundle_backend,
         microstructure_run_free_water=config.microstructure_run_free_water,
         microstructure_run_noddi=config.microstructure_run_noddi,
         microstructure_run_dki=config.microstructure_run_dki,
+        microstructure_run_ifw=config.microstructure_run_ifw,
+        wma_source_explicit=bool(config.bundle_tractography_backend),
+        provided_tractography=_provided_tractography(config),
+        excluded=config.excluded_targets,  # K5: skipped targets are never added or expanded
     )
+    from shared.target_closure import provenance_map
+    required_by = {target: tuple(value) for target, value in
+                   provenance_map(closure, config.target_required_by).items() if target in closure.targets}
+    targets = closure.targets
+    backend = config.tractography_backend
+    if "tractography" in targets:
+        backend = closure.algorithms_text
+    return replace(config, targets=targets, tractography_backend=backend,
+                   target_required_by=required_by, closure_applied=True,
+                   closure_algorithm_requesters={**config.closure_algorithm_requesters,
+                                                 **{key: tuple(value) for key, value in closure.added_algorithms.items()}})
+
+
+def closure_notice_for(config: ProductOrchestratorConfig) -> str:
+    """C4 one-line notice for a config whose closure was applied (empty when nothing was added)."""
+
+    from shared.algorithm_selection import algorithms
+    from shared.target_closure import Closure, closure_notice
+    required_by = {target: tuple(value) for target, value in config.target_required_by.items()}
+    ordered = {target: required_by[target] for target in config.targets if target in required_by}
+    return closure_notice(Closure(
+        targets=tuple(config.targets), tractography_algorithms=algorithms(config.tractography_backend),
+        requested=tuple(t for t in config.targets if t not in ordered), required_by=ordered,
+        added_algorithms={key: tuple(value) for key, value in config.closure_algorithm_requesters.items()}))
+
+
+def _upstream_reason(selected, upstream: str, missing_text: str) -> str:
+    """Q2: a stage that is already in this run must not be told to "select" it."""
+
+    if upstream in selected:
+        from shared.target_closure import DISPLAY_NAMES
+        return f"{DISPLAY_NAMES.get(upstream, upstream)} is in this run but produced no output (see its task)"
+    return missing_text
+
+
+REGIONAL_STATISTICS_SKIPPED = "skipped_no_parcellation"
+
+
+def regional_statistics_note(parcellation, log=None) -> Optional[str]:
+    """C8: parcellation is not added for microstructure; say so when ROI statistics are skipped."""
+
+    if parcellation is not None:
+        return None
+    _emit("[Microstructure] Regional statistics skipped: parcellation was not selected", log)
+    return REGIONAL_STATISTICS_SKIPPED
+
+
+def mask_failure_message(reason: str) -> str:
+    """C7: one wording for the log line and the blocked reasons when the automatic mask fails."""
+
+    return f"Automatic brain mask failed: {reason}. Provide a brain mask file (NIfTI) or run Prepare to install the mask runtime."
 
 
 def _task_name_for_target(target: str, config: ProductOrchestratorConfig) -> str:
@@ -942,6 +1079,8 @@ def _task_name_for_target(target: str, config: ProductOrchestratorConfig) -> str
         return "microstructure.noddi"
     if target == "microstructure_dki":
         return "microstructure.dki"
+    if target == "microstructure_ifw":
+        return "microstructure.ifw"
     if target == "tractography":
         return "tractography." + _primary_tractography_backend(config)
     if target == "bundles":
@@ -972,7 +1111,7 @@ def _resolve_analysis_inputs(
     subject_id: str,
     output_root: Optional[Path] = None,
 ) -> dict[str, Path]:
-    """Return the completed preprocessing bundle, or canonical raw inputs."""
+    """Return the current preprocessing bundle, or canonical raw inputs (W2b: one predicate for every reuse point)."""
 
     if _preprocessing_complete(subject_root, subject_id, output_root):
         outputs = _preprocessing_outputs(subject_root, subject_id, output_root)
@@ -1066,19 +1205,16 @@ def _preprocessing_config(config: ProductOrchestratorConfig, subject_root: Path,
 
     return DwiPreprocessingConfig(
         subject_id=config.subject_id, input_root=subject_root, output_dir=output_dir,
-        backend=config.preprocessing_backend, execute=True, skip=False,
+        execute=True, skip=False,
         brain_mask_backend=config.brain_mask_backend,
         brain_mask_device=config.brain_mask_device,
         pnl_mask_python=config.pnl_mask_python,
         pnl_mask_script=config.pnl_mask_script,
         pnl_mask_model_dir=config.pnl_mask_model_dir,
         pnl_mask_ants_bin_dir=config.pnl_mask_ants_bin_dir,
-        synthstrip_python=config.synthstrip_python,
-        postprocess_freesurfer_home=config.postprocess_freesurfer_home,
+        pnl_mask_route=config.pnl_mask_route,
         force=config.preprocessing_force or (not config.resume),
-        dipy_denoise_method=config.preprocessing_dipy_denoise_method,
         dipy_run_gibbs=config.preprocessing_dipy_run_gibbs,
-        dipy_run_motion_correction=config.preprocessing_dipy_run_motion_correction,
         mrtrix_bin_dir=config.preprocessing_mrtrix_bin_dir,
         fsl_bin_dir=config.preprocessing_fsl_bin_dir,
         reverse_phase_b0=config.preprocessing_reverse_phase_b0,
@@ -1093,39 +1229,78 @@ def _preprocessing_complete(
     subject_root: Path, subject_id: str, output_root: Optional[Path] = None,
     *, config: Optional[ProductOrchestratorConfig] = None,
 ) -> bool:
-    outputs = _preprocessing_outputs(subject_root, subject_id, output_root)
-    if not all(path.is_file() for key, path in outputs.items() if key != "qc") or not _qc_completed(outputs["qc"]):
-        return False
-    try:
-        manifest = _read_json(outputs["manifest"])
-        if manifest.get("status") not in {"completed", "cached"}:
-            return False
-        from preprocessing.pipeline import preprocessing_gradients_current
-        if not preprocessing_gradients_current(manifest):
-            return False
-        cache_key = manifest.get("cache_key")
-        raw = _resolve_raw_inputs(subject_root)
-        if isinstance(cache_key, dict) and not all(
-            _file_record_matches((cache_key.get("inputs") or {}).get(key), path)
-            for key, path in raw.items()
-        ):
-            return False
-        if config is not None:
-            from preprocessing.pipeline import _preprocessing_cache_key, inspect_preprocessing_backend
-            from shared.pipeline import RawInputBundle
+    """W2b (T1 D1): the shared predicate decides; with a config the full cache key must also match.
 
-            expected = _preprocessing_config(config, subject_root, outputs["dwi"].parent)
-            if expected.force:
-                return False
-            bundle = RawInputBundle(
-                subject_root=subject_root, subject_id=subject_id, input_dir=subject_root / "input",
-                dwi_path=raw["dwi"], bval_path=raw["bval"], bvec_path=raw["bvec"], mask_path=raw["mask"],
-            )
-            if cache_key != _preprocessing_cache_key(bundle, expected, inspect_preprocessing_backend(expected)):
-                return False
+    Without a config this is exactly ``preprocessed_outputs_usable`` (the same decision as
+    ``resolve_preprocessed_input_bundle``): a completed manifest with cache-key version 5 or 6, its files, and raw-input
+    signatures that match. With a config (preprocessing is selected) the settings must match too:
+    the stored cache key must equal the key of the run that this config would make, so a changed PE direction, route or
+    sidecar reruns preprocessing. A config that cannot resolve a PE direction never matches.
+    """
+    from shared.pipeline import current_preprocessed_outputs
+
+    current = current_preprocessed_outputs(subject_root, output_root, subject_id)
+    if current is None:
+        return False
+    if config is None:
+        return True
+    try:
+        from preprocessing.pipeline import _preprocessing_cache_key, inspect_preprocessing_backend
+        from shared.pipeline import RawInputBundle
+
+        expected = _preprocessing_config(config, subject_root, current.preproc_dir)
+        if expected.force:
+            return False
+        raw = _resolve_raw_inputs(subject_root)
+        bundle = RawInputBundle(
+            subject_root=subject_root, subject_id=subject_id, input_dir=subject_root / "input",
+            dwi_path=raw["dwi"], bval_path=raw["bval"], bvec_path=raw["bvec"], mask_path=raw["mask"],
+        )
+        return current.cache_key == _preprocessing_cache_key(bundle, expected, inspect_preprocessing_backend(expected))
     except (OSError, ValueError, TypeError, AttributeError):
         return False
-    return True
+
+
+def _preprocessing_pe_block(config: ProductOrchestratorConfig, subject_root: Path) -> Optional[str]:
+    """Rule 4 (T1 D1): the message when preprocessing of this subject would run with no PE direction; else None."""
+    from shared.pe_resolution import phase_encoding_block_reason
+
+    return phase_encoding_block_reason(
+        subject_root,
+        user_phase_encoding=config.preprocessing_phase_encoding_direction,
+        user_readout_time=config.preprocessing_readout_time,
+        has_reverse_b0=config.preprocessing_reverse_phase_b0 is not None,
+    )
+
+
+def _dwi_targets(config: ProductOrchestratorConfig) -> set[str]:
+    """The targets that read the DWI (rule 4 blocks all of them when preprocessing is blocked)."""
+
+    targets = {'preprocessing', 'segmentation', 'parcellation', 'surface', 'microstructure',
+               'microstructure_freewater', 'microstructure_noddi', 'microstructure_dki', 'microstructure_ifw',
+               'tractography'}
+    if 'saf' in config.targets and config.saf_pregenerated_tractogram is None:
+        targets.add('saf')
+    return targets
+
+
+def _with_preprocessing_pe_decision(config: ProductOrchestratorConfig) -> ProductOrchestratorConfig:
+    """F3: decide rule 4 once, before the tracking variants are dispatched; every variant carries the decision.
+
+    Preprocessing that is selected and would run with no PE direction blocks every DWI target of every variant: a
+    later variant has no preprocessing target of its own and must not run on the raw DWI instead. Preprocessing that
+    resume reuses is not blocked.
+    """
+
+    if config.preprocessing_pe_block is not None:
+        return config
+    block = ""
+    if "preprocessing" in config.targets:
+        subject_root = config.subject_root.expanduser().resolve()
+        output_root = config.output_root.expanduser().resolve() if config.output_root is not None else None
+        if not (config.resume and _preprocessing_complete(subject_root, config.subject_id, output_root, config=config)):
+            block = _preprocessing_pe_block(config, subject_root) or ""
+    return replace(config, preprocessing_pe_block=block)
 
 
 def _resolve_segmentation(subject_root: Path, output_root: Optional[Path] = None) -> Optional[Path]:
@@ -1144,7 +1319,6 @@ def _anatomy_input_bundle(
     subject_root: Path,
     subject_id: str,
     output_root: Optional[Path],
-    mrtrix_bin_dir: Optional[Path],
     brain_mask_config=None,
 ):
     """DWI bundle for DDSeg/DDParcel/DDSurfer: the preprocessed DWI when preprocessing completed.
@@ -1156,8 +1330,7 @@ def _anatomy_input_bundle(
 
     from shared.pipeline import find_subject_root, resolve_preprocessed_input_bundle
 
-    raw_bundle = find_subject_root(subject_root, subject_id, mrtrix_bin_dir=mrtrix_bin_dir,
-                                  brain_mask_config=brain_mask_config)
+    raw_bundle = find_subject_root(subject_root, subject_id, brain_mask_config=brain_mask_config)
     return resolve_preprocessed_input_bundle(raw_bundle, output_root=output_root)
 
 
@@ -1397,8 +1570,13 @@ def _surface_complete(subject_root: Path, subject_id: str, output_root: Optional
                 or manifest.get('subject_root') != str(subject_root.resolve())):
             return False
         expected = config or ProductOrchestratorConfig(subject_id=subject_id, subject_root=subject_root, targets=('surface',))
+        # SPEC-GAP: without an explicit value the thread count follows the stage reservation,
+        # so inside a cohort the recorded count is not compared (outside it, 4 is expected).
+        from shared.cohort_schedule import cohort_active
+        threads_match = (expected.surface_cpu_threads is None and cohort_active()) or (
+            manifest.get('cpu_threads') == (expected.surface_cpu_threads or 4))
         if (manifest.get('precision') != expected.surface_precision
-                or manifest.get('cpu_threads') != expected.surface_cpu_threads
+                or not threads_match
                 or manifest.get('max_gpu_gib') != expected.surface_max_gpu_gib):
             return False
         if expected.surface_python_bin and manifest.get('runtime', {}).get('executable') != str(interpreter_path(expected.surface_python_bin)):
@@ -1613,6 +1791,7 @@ def _microstructure_dti_outputs(subject_root: Path, subject_id: str, output_root
         "l2": dti_dir / f"{subject_id}_dti_L2.nii.gz",
         "l3": dti_dir / f"{subject_id}_dti_L3.nii.gz",
         "trace": dti_dir / f"{subject_id}_dti_Trace.nii.gz",
+        "dec": dti_dir / f"{subject_id}-dti-DEC.nrrd",
         "qc": dti_dir / "dti_qc.json",
         "manifest": layout.microstructure / "manifest.json",
     }
@@ -1647,7 +1826,7 @@ def _microstructure_dti_complete(subject_root: Path, subject_id: str, output_roo
             brain_mask_path=_resolve_analysis_inputs(subject_root, subject_id, output_root)["mask"],
         ):
             return False
-    return scalar_qc_current(outputs["qc"], [outputs[key] for key in ("fa", "md", "ad", "rd", "l1", "l2", "l3", "trace")]) and _manifest_inputs_match(
+    return outputs["dec"].is_file() and scalar_qc_current(outputs["qc"], [outputs[key] for key in ("fa", "md", "ad", "rd", "l1", "l2", "l3", "trace")]) and _manifest_inputs_match(
         outputs["manifest"],
         _resolve_analysis_inputs(subject_root, subject_id, output_root),
         "raw_input_bundle",
@@ -1677,6 +1856,82 @@ def _microstructure_freewater_complete(subject_root: Path, subject_id: str, outp
         _resolve_analysis_inputs(subject_root, subject_id, output_root),
         "raw_input_bundle",
     )
+
+
+def _microstructure_ifw_outputs(subject_root: Path, subject_id: str, output_root: Optional[Path] = None) -> dict[str, Path]:
+    from microstructure.ifw import ifw_output_paths
+
+    directory = subject_layout(subject_root, output_root=output_root).microstructure_ifw
+    paths = ifw_output_paths(subject_id, directory)
+    return {"ifw": paths["ifw"], "fw_volume_fraction": paths["fw_volume_fraction"], "manifest": paths["record"]}
+
+
+def _ifw_sidecar(config: "ProductOrchestratorConfig", inputs: dict[str, Path]) -> Optional[Path]:
+    """The DWI JSON sidecar next to the analysis DWI, else next to the raw DWI (SPEC-GAP: design names input/dwi.json)."""
+    candidates = [inputs["dwi"]]
+    try:
+        candidates.append(_resolve_raw_inputs(config.subject_root.expanduser().resolve())["dwi"])
+    except Exception:
+        pass
+    for dwi in candidates:
+        name = dwi.name
+        for suffix in (".nii.gz", ".nii"):
+            if name.endswith(suffix):
+                name = name[: -len(suffix)]
+                break
+        for stem in (name, "dwi"):
+            sidecar = dwi.with_name(stem + ".json")
+            if sidecar.is_file():
+                return sidecar
+    return None
+
+
+def _ifw_config(config: "ProductOrchestratorConfig", inputs: dict[str, Path], roi_label_map: Optional[Path] = None):
+    from microstructure.ifw import IfwConfig
+
+    root = config.subject_root.expanduser().resolve()
+    output_root = config.output_root
+    freewater = _microstructure_freewater_outputs(root, config.subject_id, output_root)
+    segmentation = _segmentation_outputs(root, output_root)
+    return IfwConfig(
+        subject_id=config.subject_id,
+        fw_fraction_path=freewater["fwf"],
+        csf_probability_path=segmentation["csf_probability"],
+        mask_path=inputs["mask"],
+        bval_path=inputs["bval"],
+        bvec_path=inputs["bvec"],
+        output_dir=subject_layout(root, output_root=output_root).microstructure_ifw,
+        echo_time_ms=config.microstructure_ifw_echo_time_ms,
+        dwi_sidecar_path=_ifw_sidecar(config, inputs),
+        tissue_t2_ms=config.microstructure_ifw_t2_gm_ms,
+        csf_t2_ms=config.microstructure_ifw_t2_csf_ms,
+        roi_label_map=roi_label_map,
+    )
+
+
+def _microstructure_ifw_complete(config: "ProductOrchestratorConfig", inputs: dict[str, Path]) -> bool:
+    from microstructure.ifw import IfwBlocked, ifw_outputs_current, resolve_echo_time
+
+    try:
+        ifw_config = _ifw_config(config, inputs)
+        echo_time, source = resolve_echo_time(ifw_config.echo_time_ms, ifw_config.dwi_sidecar_path)
+        return ifw_outputs_current(ifw_config, echo_time, source)
+    except (IfwBlocked, OSError, ValueError, KeyError):
+        return False
+
+
+def _free_water_ineligible(inputs: dict[str, Path]) -> str:
+    """Empty when the gradient table has three b-value groups (DIPY ``check_multi_b``), else the user message."""
+    from microstructure.ifw import free_water_eligibility
+    import numpy as np
+
+    if not Path(inputs["bval"]).is_file():
+        return ""  # a missing input is reported by the raw-input check
+    try:
+        bvals = np.loadtxt(inputs["bval"], dtype=float).ravel()
+    except ValueError:
+        return ""  # an unreadable b-value file is reported by input validation
+    return free_water_eligibility(bvals)[1]
 
 
 def _microstructure_noddi_outputs(subject_root: Path, subject_id: str, output_root: Optional[Path] = None) -> dict[str, Path]:
@@ -1921,7 +2176,7 @@ def _write_run_plan(plan: RunPlanResult) -> Path:
 def _validate_surface_settings(config: ProductOrchestratorConfig) -> None:
     if config.surface_precision not in ('fp32', 'bf16', 'auto'):
         raise ValueError('surface_precision must be fp32, bf16 or auto.')
-    if config.surface_cpu_threads < 1:
+    if config.surface_cpu_threads is not None and config.surface_cpu_threads < 1:
         raise ValueError('surface_cpu_threads must be positive.')
     if not math.isfinite(config.surface_max_gpu_gib) or config.surface_max_gpu_gib <= 0:
         raise ValueError('surface_max_gpu_gib must be finite and positive.')
@@ -1985,9 +2240,10 @@ def _validate_bundle_tractography_source(config: ProductOrchestratorConfig) -> N
 def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = True) -> RunPlanResult:
     """Build a target-level run plan without executing product algorithms."""
 
-    config = _with_shared_bundle_resources(config)
+    config = _with_shared_bundle_resources(_with_closure(config))
     from shared.algorithm_selection import algorithms
     _validate_bundle_tractography_source(config)
+    config = _with_preprocessing_pe_decision(config)
     if len(algorithms(config.tractography_backend)) > 1:
         from shared.multi_tracking import plan
         return plan(config, write=write)
@@ -2015,8 +2271,8 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
     if config.tractography_backend not in TRACTOGRAPHY_BACKENDS:
         raise ValueError("tractography_backend must be one of: csd_act, ukf, dti_det, saf.")
     bundle_backends = _normalize_bundle_backends(config.bundle_backend)
-    if config.connectome_backend not in {"python", "mrtrix"}:
-        raise ValueError("connectome_backend must be one of: python, mrtrix.")
+    if config.connectome_backend not in {"auto", "python", "mrtrix"}:
+        raise ValueError("connectome_backend must be one of: auto, python, mrtrix.")
 
     targets = _normalize_targets(config)
     selected = set(targets)
@@ -2155,6 +2411,8 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
         if target == "microstructure_dki":
             from microstructure.dki import dki_outputs_current
             return dki_outputs_current(_dki_config(config, analysis_inputs))
+        if target == "microstructure_ifw":
+            return _microstructure_ifw_complete(config, analysis_inputs)
         if target == "tractography":
             if primary_tractography_backend == 'ukf':
                 return ukf_cached
@@ -2211,6 +2469,8 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
                 manifest_path=connectome_dir / f"{connectome_stem}_manifest.json",
                 tractography=tractogram,
                 parcellation=parcellation,
+                backend=config.connectome_backend,
+                compress_mrtrix_dense=config.connectome_compress_mrtrix_dense,
             )
         return False
 
@@ -2237,6 +2497,8 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
             inputs=_path_dict(inputs or {}),
             outputs=_path_dict(outputs or {}),
             dependencies=dependencies or {},
+            requested=target not in config.target_required_by,
+            required_by=tuple(config.target_required_by.get(target, ())),
         )
         items.append(item)
         available[target] = provides and status in {"will_run", "skipped"}
@@ -2244,8 +2506,9 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
     def raw_input_block(target: str, outputs: dict[str, Path | None] | None = None) -> bool:
         if raw_missing:
             if raw_missing == ["mask"] and not mask_backend["available"]:
-                add(target, "blocked", f"brain mask backend {config.brain_mask_backend} unavailable: " +
-                    ", ".join(mask_backend["missing_required"]), "environment", inputs=raw,
+                add(target, "blocked", mask_failure_message(
+                    f"brain mask backend {config.brain_mask_backend} unavailable ("
+                    + ", ".join(mask_backend["missing_required"]) + ")"), "environment", inputs=raw,
                     outputs=outputs, provides=False)
                 return True
             add(
@@ -2274,6 +2537,12 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
             )
             continue
 
+        if config.preprocessing_pe_block and target in _dwi_targets(config) and target != "preprocessing":
+            # F3: the same targets execute blocks when preprocessing has no PE direction.
+            add(target, "blocked", "Not run: preprocessing is blocked. " + config.preprocessing_pe_block,
+                "phase_encoding", provides=False)
+            continue
+
         if target == "validation":
             add(
                 target,
@@ -2290,7 +2559,11 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
             if config.resume and _preprocessing_complete(subject_root, config.subject_id, output_root, config=config):
                 add(target, "skipped", "completed outputs found", "reuse", inputs=raw, outputs=preprocessing_outputs)
             elif not raw_input_block(target, preprocessing_outputs):
-                add(target, "will_run", "ready to run DWI preprocessing", "runnable", inputs=raw, outputs=preprocessing_outputs)
+                if config.preprocessing_pe_block:  # W2b rule 4: no direction, no run (decided once, F3)
+                    add(target, "blocked", config.preprocessing_pe_block, "phase_encoding", inputs=raw,
+                        outputs=preprocessing_outputs, provides=False)
+                else:
+                    add(target, "will_run", "ready to run DWI preprocessing", "runnable", inputs=raw, outputs=preprocessing_outputs)
             continue
 
         if target == "segmentation":
@@ -2405,7 +2678,9 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
             if config.resume and _microstructure_freewater_complete(subject_root, config.subject_id, output_root, config=config):
                 add(target, "skipped", "completed Free Water outputs found", "reuse", inputs=analysis_inputs, outputs=freewater_outputs, dependencies={"microstructure": "available" if dti_ready else None})
             elif not dti_ready:
-                add(target, "blocked", "missing Microstructure DTI outputs; select microstructure or provide existing output", "upstream", inputs=raw, outputs=freewater_outputs, dependencies={"microstructure": "missing"}, provides=False)
+                add(target, "blocked", _upstream_reason(selected, "microstructure", "missing Microstructure DTI outputs; select microstructure or provide existing output"), "upstream", inputs=raw, outputs=freewater_outputs, dependencies={"microstructure": "missing"}, provides=False)
+            elif fw_ineligible := _free_water_ineligible(analysis_inputs):  # T-N3: read the b-values once
+                add(target, "blocked", fw_ineligible, "acquisition_or_backend", inputs=analysis_inputs, outputs=freewater_outputs, provides=False)
             elif not raw_input_block(target, freewater_outputs):
                 add(target, "will_run", "ready to run Microstructure Free Water", "runnable", inputs=analysis_inputs, outputs=freewater_outputs, dependencies={"microstructure": "available" if _microstructure_dti_complete(subject_root, config.subject_id, output_root) else "will_run"})
             continue
@@ -2415,7 +2690,7 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
             if config.resume and _microstructure_noddi_complete(subject_root, config.subject_id, output_root, config=config):
                 add(target, "skipped", "completed NODDI outputs found", "reuse", inputs=analysis_inputs, outputs=noddi_outputs, dependencies={"microstructure": "available" if dti_ready else None})
             elif not dti_ready:
-                add(target, "blocked", "missing Microstructure DTI outputs; select microstructure or provide existing output", "upstream", inputs=raw, outputs=noddi_outputs, dependencies={"microstructure": "missing"}, provides=False)
+                add(target, "blocked", _upstream_reason(selected, "microstructure", "missing Microstructure DTI outputs; select microstructure or provide existing output"), "upstream", inputs=raw, outputs=noddi_outputs, dependencies={"microstructure": "missing"}, provides=False)
             elif not raw_input_block(target, noddi_outputs):
                 add(target, "will_run", "ready to run Microstructure NODDI", "runnable", inputs=analysis_inputs, outputs=noddi_outputs, dependencies={"microstructure": "available" if _microstructure_dti_complete(subject_root, config.subject_id, output_root) else "will_run"})
             continue
@@ -2438,6 +2713,39 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
             else:
                 add(target, "will_run", "eligible multi-shell DKI; final mask checked before fitting", "runnable",
                     inputs=analysis_inputs, outputs=outputs)
+            continue
+
+        if target == "microstructure_ifw":
+            from microstructure.ifw import IfwBlocked, resolve_echo_time
+
+            outputs = _microstructure_ifw_outputs(subject_root, config.subject_id, output_root)
+            if raw_input_block(target, outputs):
+                continue
+            fw_ready = available.get("microstructure_freewater", False) or _microstructure_freewater_complete(
+                subject_root, config.subject_id, output_root, config=config)
+            seg_ready = available.get("segmentation", False) or _segmentation_complete(subject_root, output_root)
+            ineligible = _free_water_ineligible(analysis_inputs)
+            ifw_config = _ifw_config(config, analysis_inputs)
+            echo_error = ""
+            try:
+                resolve_echo_time(ifw_config.echo_time_ms, ifw_config.dwi_sidecar_path)
+            except IfwBlocked as exc:
+                echo_error = str(exc)
+            if not fw_ready or not seg_ready:
+                add(target, "blocked", "iFW needs the Free Water fraction and the DDSeg CSF map; select both or provide existing outputs",
+                    "upstream", inputs=analysis_inputs, outputs=outputs, provides=False)
+            elif ineligible:
+                add(target, "blocked", ineligible, "acquisition_or_backend", inputs=analysis_inputs, outputs=outputs, provides=False)
+            elif echo_error:
+                add(target, "blocked", echo_error, "acquisition_or_backend", inputs=analysis_inputs, outputs=outputs, provides=False)
+            elif config.resume and _microstructure_ifw_complete(config, analysis_inputs) and not any(
+                    item.target == "microstructure_freewater" and item.status == "will_run" for item in items):
+                add(target, "skipped", "matching completed iFW outputs found", "reuse", inputs=analysis_inputs, outputs=outputs)
+            else:
+                fw_reruns = any(item.target == "microstructure_freewater" and item.status == "will_run" for item in items)
+                add(target, "will_run",
+                    "Free Water will re-run, so iFW will re-run on the new fraction" if fw_reruns else "ready to run iFW",
+                    "runnable", inputs=analysis_inputs, outputs=outputs)
             continue
 
         if target == "tractography":
@@ -2486,10 +2794,10 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
             elif raw_input_block(target, tractography_outputs):
                 pass
             elif primary_tractography_backend == "csd_act" and not segmentation_ready:
-                add(target, "blocked", "missing DDSeg segmentation; select segmentation or provide existing output", "upstream", inputs=raw, outputs=tractography_outputs, dependencies={"segmentation": "missing"}, provides=False)
+                add(target, "blocked", _upstream_reason(selected, "segmentation", "missing DDSeg segmentation; select segmentation or provide existing output"), "upstream", inputs=raw, outputs=tractography_outputs, dependencies={"segmentation": "missing"}, provides=False)
             elif (primary_tractography_backend == "csd_act" and not config.allow_act_ddseg_only
                   and parcellation is None and not available.get("parcellation", False)):
-                add(target, "blocked", "missing DDParcel anatomical labels for ACT; select parcellation or provide existing output", "upstream", inputs=raw, outputs=tractography_outputs, dependencies={"parcellation": "missing"}, provides=False)
+                add(target, "blocked", _upstream_reason(selected, "parcellation", "missing DDParcel anatomical labels for ACT; select parcellation or provide existing output"), "upstream", inputs=raw, outputs=tractography_outputs, dependencies={"parcellation": "missing"}, provides=False)
             else:
                 add(target, "will_run", f"ready to run tractography backend {config.tractography_backend}", "runnable", inputs=analysis_inputs, outputs=tractography_outputs, dependencies={"segmentation": "available" if segmentation is not None else ("will_run" if available.get("segmentation", False) else None)})
             continue
@@ -2513,9 +2821,9 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
             ):
                 add(target, "skipped", "completed outputs found", "reuse", outputs=wmql_outputs, dependencies={"parcellation": "available", "tractogram": "available"})
             elif not parcellation_ready:
-                add(target, "blocked", "missing parcellation; select parcellation or provide existing output", "upstream", outputs=wmql_outputs, dependencies={"parcellation": "missing"}, provides=False)
+                add(target, "blocked", _upstream_reason(selected, "parcellation", "missing parcellation; select parcellation or provide existing output"), "upstream", outputs=wmql_outputs, dependencies={"parcellation": "missing"}, provides=False)
             elif not tractogram_ready:
-                add(target, "blocked", "missing TRK tractogram; select tractography or provide existing output", "upstream", outputs=wmql_outputs, dependencies={"tractogram": "missing"}, provides=False)
+                add(target, "blocked", _upstream_reason(selected, "tractography", "missing TRK tractogram; select tractography or provide existing output"), "upstream", outputs=wmql_outputs, dependencies={"tractogram": "missing"}, provides=False)
             else:
                 add(target, "will_run", "ready to run WMQL bundles", "runnable", inputs={"tractogram_trk": tractogram_trk, "parcellation": parcellation}, outputs=wmql_outputs, dependencies={"parcellation": "available" if parcellation is not None else "will_run", "tractogram": "available" if tractogram_trk.is_file() else "will_run"})
             continue
@@ -2655,12 +2963,14 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
                 manifest_path=conn_outputs["manifest"],
                 tractography=tractogram,
                 parcellation=parcellation,
+                backend=config.connectome_backend,
+                compress_mrtrix_dense=config.connectome_compress_mrtrix_dense,
             ):
                 add(target, "skipped", "completed outputs found", "reuse", outputs=conn_outputs)
             elif not parcellation_ready:
-                add(target, "blocked", "missing parcellation; select parcellation or provide existing output", "upstream", outputs=conn_outputs, dependencies={"parcellation": "missing"}, provides=False)
+                add(target, "blocked", _upstream_reason(selected, "parcellation", "missing parcellation; select parcellation or provide existing output"), "upstream", outputs=conn_outputs, dependencies={"parcellation": "missing"}, provides=False)
             elif not tractogram_ready:
-                add(target, "blocked", "missing tractogram; select tractography or provide existing output", "upstream", outputs=conn_outputs, dependencies={"tractogram": "missing"}, provides=False)
+                add(target, "blocked", _upstream_reason(selected, "tractography", "missing tractogram; select tractography or provide existing output"), "upstream", outputs=conn_outputs, dependencies={"tractogram": "missing"}, provides=False)
             elif primary_tractography_backend != "csd_act" and config.connectome_backend == "mrtrix":
                 add(target, "blocked", "UKF/DTI tractography currently supports python connectome backend only", "configuration", outputs=conn_outputs, provides=False)
             else:
@@ -2753,6 +3063,13 @@ class _TimedTaskList(list):
             self._on_append(self)
 
 
+def _task_provenance(plan: RunPlanResult, task_name: str) -> dict[str, object]:
+    """C3: ``requested`` / ``required_by`` for a manifest task entry."""
+
+    item = next((item for item in plan.items if item.task_name == task_name), None)
+    return {"requested": item.requested if item else True, "required_by": list(item.required_by) if item else []}
+
+
 def _write_orchestration_checkpoint(
     *,
     path: Path,
@@ -2788,9 +3105,12 @@ def _write_orchestration_checkpoint(
                 "started_at": task.started_at,
                 "ended_at": task.ended_at,
                 "runtime_seconds": task.runtime_seconds,
+                **_task_provenance(plan, task.name),
+                **({"regional_statistics": task.regional_statistics} if task.regional_statistics else {}),
             }
             for task in tasks
         ],
+        "closure": {"required_by": {key: list(value) for key, value in config.target_required_by.items()}},
     }
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -2828,7 +3148,19 @@ def _mark_orchestration_failed(config: ProductOrchestratorConfig, error: BaseExc
     )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    if config.execute and config.write_run_record:
+        _write_run_record_best_effort(path, None)  # a failed run is also archived
     return path
+
+
+def _write_run_record_best_effort(manifest_path: Path, log) -> None:
+    """Write run_record.json beside the manifest; a record error must never fail or hide a run."""
+    try:
+        from shared.run_record import write_run_record
+
+        write_run_record(manifest_path)
+    except Exception as exc:  # pragma: no cover - archiving must not break pipeline execution
+        _emit(f"[RunRecord] run_record.json was not written: {exc}", log)
 
 
 def _write_normalized_task_records(
@@ -2872,10 +3204,13 @@ def _write_normalized_task_records(
             "status": task.status,
             "reason": task.reason,
             "reason_category": plan_item.reason_category if plan_item else "",
+            "requested": plan_item.requested if plan_item else True,
+            "required_by": list(plan_item.required_by) if plan_item else [],
             "reused": reused,
             "started_at": task.started_at,
             "ended_at": task.ended_at,
             "runtime_seconds": task.runtime_seconds,
+            **({"regional_statistics": task.regional_statistics} if task.regional_statistics else {}),
             "created_at": _now_utc(),
             "inputs": plan_item.inputs if plan_item else {},
             "outputs": task.outputs or (plan_item.outputs if plan_item else {}),
@@ -2932,7 +3267,7 @@ def _expected_output_top_dirs(targets: tuple[str, ...]) -> set[str]:
     selected = set(targets)
     if "preprocessing" in selected:
         expected.add("01_preproc")
-    if selected & {"microstructure", "microstructure_freewater", "microstructure_noddi", "microstructure_dki"}:
+    if selected & {"microstructure", "microstructure_freewater", "microstructure_noddi", "microstructure_dki", "microstructure_ifw"}:
         expected.update({"02_microstructure", "05_statistics"})
     if selected & {"segmentation", "parcellation", "surface", "surface_postprocess"}:
         expected.add(ANATOMY_OUTPUT_NAME)
@@ -3012,10 +3347,10 @@ def _write_output_tree_semantics(
     directory_targets: list[tuple[str, tuple[str, ...], str]] = [
         ("00_run_metadata", ("validation",), "Run metadata, validation, environment and task records."),
         ("01_preproc", ("preprocessing",), "DWI preprocessing outputs."),
-        ("02_microstructure", ("microstructure", "microstructure_freewater", "microstructure_noddi", "microstructure_dki"), "Microstructure model outputs."),
+        ("02_microstructure", ("microstructure", "microstructure_freewater", "microstructure_noddi", "microstructure_dki", "microstructure_ifw"), "Microstructure model outputs."),
         (ANATOMY_OUTPUT_NAME, ("segmentation", "parcellation", "surface", "surface_postprocess"), "Segmentation, parcellation and surface products."),
         ("04_tractography", ("tractography", "bundles", "saf", "wma", "tractcloud", "connectome"), "Tractography, bundle extraction, SAF and connectome products."),
-        ("05_statistics", ("microstructure", "microstructure_freewater", "microstructure_noddi", "microstructure_dki", "surface_postprocess"), "Regional summaries and post-process statistics."),
+        ("05_statistics", ("microstructure", "microstructure_freewater", "microstructure_noddi", "microstructure_dki", "microstructure_ifw", "surface_postprocess"), "Regional summaries and post-process statistics."),
         ("06_slicer_scene_report", tuple(TARGET_ORDER), "HTML/Markdown reports and output tree views."),
     ]
     if (layout.outputs / LEGACY_ANATOMY_OUTPUT_NAME).is_dir():
@@ -3231,7 +3566,6 @@ def _parallel_model_products(config, targets, parcellation, log):
     from shared.brain_mask import brain_mask_config_from_options
 
     raw = find_subject_root(config.subject_root, config.subject_id,
-        mrtrix_bin_dir=config.mrtrix_bin_dir or config.preprocessing_mrtrix_bin_dir,
         brain_mask_config=brain_mask_config_from_options(config))
     raw = resolve_preprocessed_input_bundle(raw, output_root=config.output_root)
     native = ensure_native_dti_bundle(raw, fit_method=config.microstructure_fit_method, reuse=True, log=log)
@@ -3276,7 +3610,7 @@ def _run_subject_products_impl(
 ) -> ProductOrchestratorResult:
     """Run or plan selected products from a shared subject root."""
 
-    config = _with_shared_bundle_resources(config)
+    config = _with_preprocessing_pe_decision(_with_shared_bundle_resources(_with_closure(config)))
     if not config.subject_id.strip():
         raise ValueError("subject_id is required.")
     if config.select_streamlines <= 0:
@@ -3300,8 +3634,8 @@ def _run_subject_products_impl(
     if config.tractography_backend not in TRACTOGRAPHY_BACKENDS:
         raise ValueError("tractography_backend must be one of: csd_act, ukf, dti_det, saf.")
     bundle_backends = _normalize_bundle_backends(config.bundle_backend)
-    if config.connectome_backend not in {"python", "mrtrix"}:
-        raise ValueError("connectome_backend must be one of: python, mrtrix.")
+    if config.connectome_backend not in {"auto", "python", "mrtrix"}:
+        raise ValueError("connectome_backend must be one of: auto, python, mrtrix.")
 
     targets = _normalize_targets(config)
     subject_root = config.subject_root.expanduser().resolve()
@@ -3343,10 +3677,10 @@ def _run_subject_products_impl(
 
     input_started = time.monotonic()
     materialize_canonical_output_tree(subject_root, output_root=output_root, mode="symlink", archive_legacy=False)
-    mask_mrtrix_bin_dir = config.mrtrix_bin_dir or config.preprocessing_mrtrix_bin_dir
     from shared.brain_mask import brain_mask_config_from_options
     selected_mask_config = brain_mask_config_from_options(config)
     initial_raw = _resolve_raw_inputs(subject_root)
+    mask_failure = ""
     if (
         config.execute
         and not initial_raw["mask"].is_file()
@@ -3358,11 +3692,11 @@ def _run_subject_products_impl(
             find_subject_root(
                 subject_root,
                 config.subject_id,
-                mrtrix_bin_dir=mask_mrtrix_bin_dir,
                 brain_mask_config=selected_mask_config,
             )
         except (FileNotFoundError, RuntimeError) as exc:
-            _emit(f"[Brain mask] Automatic generation unavailable: {exc}", log)
+            mask_failure = mask_failure_message(str(exc))
+            _emit(f"[Brain mask] {mask_failure}", log)
     raw = _resolve_raw_inputs(subject_root)
 
     for target in targets:
@@ -3375,10 +3709,7 @@ def _run_subject_products_impl(
                 )
             )
 
-    dwi_targets = {'preprocessing', 'segmentation', 'parcellation', 'surface', 'microstructure',
-                   'microstructure_freewater', 'microstructure_noddi', 'microstructure_dki', 'tractography'}
-    if 'saf' in run_targets and config.saf_pregenerated_tractogram is None:
-        dwi_targets.add('saf')
+    dwi_targets = _dwi_targets(config)
     input_validation_path = None
     input_blocked_targets = {}
     if "validation" in run_targets or (config.execute and dwi_targets.intersection(run_targets)):
@@ -3388,15 +3719,13 @@ def _run_subject_products_impl(
                 input_root=subject_root,
                 output_dir=layout.run_metadata / "validation",
                 dependency_groups=("core",),
-                mrtrix_bin_dir=mask_mrtrix_bin_dir,
                 brain_mask_backend=config.brain_mask_backend,
                 brain_mask_device=config.brain_mask_device,
                 pnl_mask_python=config.pnl_mask_python,
                 pnl_mask_script=config.pnl_mask_script,
                 pnl_mask_model_dir=config.pnl_mask_model_dir,
                 pnl_mask_ants_bin_dir=config.pnl_mask_ants_bin_dir,
-                synthstrip_python=config.synthstrip_python,
-                postprocess_freesurfer_home=config.postprocess_freesurfer_home,
+                pnl_mask_route=config.pnl_mask_route,
             )
         )
         input_validation_path = validation.report_path
@@ -3415,10 +3744,27 @@ def _run_subject_products_impl(
                 if (invalid_data and target in dwi_targets) or (
                         target == 'preprocessing' and any(issue.category == 'metadata' for issue in errors)):
                     reason = 'Input validation failed: ' + '; '.join(issue.message for issue in errors)
+                    if mask_failure and any(issue.category == 'brain_mask' or 'mask' in issue.message.lower()
+                                            for issue in errors):
+                        reason = mask_failure + ' ' + reason
                     input_blocked_targets[target] = reason
                     tasks.append(ProductTaskRecord(name=_task_name_for_target(target, config), status='blocked',
                                                    reason=reason, qc_path=validation.report_path))
             run_targets = tuple(target for target in run_targets if target not in input_blocked_targets)
+
+    if config.execute and config.preprocessing_pe_block:
+        # W2b rule 4 (T1 D1), decided once at the entry point (F3): preprocessing that would run with no PE direction
+        # blocks the run before any stage. The selected products that use the DWI are blocked with it, in every
+        # tracking variant: they must not silently use the raw DWI instead.
+        pe_block = config.preprocessing_pe_block
+        for target in run_targets:
+            if target != "preprocessing" and target not in dwi_targets:
+                continue
+            reason = pe_block if target == "preprocessing" else "Not run: preprocessing is blocked. " + pe_block
+            input_blocked_targets[target] = reason
+            tasks.append(ProductTaskRecord(name=_task_name_for_target(target, config), status="blocked", reason=reason))
+        run_targets = tuple(target for target in run_targets if target not in input_blocked_targets)
+        _emit("[Orchestrator] " + pe_block, log)
 
     input_seconds = time.monotonic() - input_started
     execution_started = time.monotonic()
@@ -3452,7 +3798,10 @@ def _run_subject_products_impl(
                 ProductTaskRecord(
                     name="preprocessing.dwi",
                     status="completed" if result.status in {"completed", "cached"} else result.status,
-                    reason="cached outputs reused" if result.status == "cached" else "",
+                    # W2b: the result-panel text holds the PE and readout values with their sources, the flags and the
+                    # conflict warnings (the same mechanism as the iFW "TE ... from ...").
+                    reason=("cached outputs reused; " if result.status == "cached" else "")
+                    + (result.acquisition.summary_text() if result.acquisition is not None else ""),
                     manifest_path=result.manifest_path,
                     qc_path=result.qc_path,
                     outputs={
@@ -3466,6 +3815,11 @@ def _run_subject_products_impl(
 
     preprocessing_outputs = _preprocessing_outputs(subject_root, config.subject_id, output_root)
     analysis_inputs = _resolve_analysis_inputs(subject_root, config.subject_id, output_root)
+    if "preprocessing" not in run_targets and dwi_targets.difference({"preprocessing"}).intersection(run_targets) \
+            and not _preprocessing_complete(subject_root, config.subject_id, output_root):
+        # W2b (T1 D1): one decision for the whole run; the log (and the run record) say which input the stages used.
+        from shared.pipeline import NO_CURRENT_PREPROCESSING_MESSAGE
+        _emit("[Orchestrator] " + NO_CURRENT_PREPROCESSING_MESSAGE, log)
     segmentation = _resolve_segmentation(subject_root, output_root)
     parcellation = _resolve_parcellation(subject_root, config.subject_id, output_root)
     model_assets_dir = config.model_assets_dir.expanduser().resolve() if config.model_assets_dir is not None else None
@@ -3568,7 +3922,7 @@ def _run_subject_products_impl(
 
             _emit("[Orchestrator] Running DDSeg", log)
             task_started = _start_task_timer("DDSeg", log)
-            raw_bundle = _anatomy_input_bundle(subject_root, config.subject_id, output_root, mask_mrtrix_bin_dir, selected_mask_config)
+            raw_bundle = _anatomy_input_bundle(subject_root, config.subject_id, output_root, selected_mask_config)
             _emit(f"[Orchestrator] DDSeg input DWI: {raw_bundle.dwi_path}", log)
             native_bundle = ensure_native_dti_bundle(raw_bundle, fit_method="ls", reuse=True, log=log)
             run_ddseg(
@@ -3619,7 +3973,7 @@ def _run_subject_products_impl(
 
             _emit("[Orchestrator] Running DDParcel", log)
             task_started = _start_task_timer("DDParcel", log)
-            raw_bundle = _anatomy_input_bundle(subject_root, config.subject_id, output_root, mask_mrtrix_bin_dir, selected_mask_config)
+            raw_bundle = _anatomy_input_bundle(subject_root, config.subject_id, output_root, selected_mask_config)
             _emit(f"[Orchestrator] DDParcel input DWI: {raw_bundle.dwi_path}", log)
             registered = ensure_registered_dti_bundle(
                 raw_bundle,
@@ -3713,7 +4067,7 @@ def _run_subject_products_impl(
                 reuse_shared_preprocessing=True,
                 execute=True,
                 input_bundle=(
-                    _anatomy_input_bundle(subject_root, config.subject_id, output_root, mask_mrtrix_bin_dir, selected_mask_config)
+                    _anatomy_input_bundle(subject_root, config.subject_id, output_root, selected_mask_config)
                     if not any(not path.is_file() for path in raw.values())
                     else None
                 ),
@@ -3734,6 +4088,18 @@ def _run_subject_products_impl(
             else:
                 _emit("[Orchestrator] Running DDSurfer surface", log)
                 task_started = _start_task_timer("DDSurfer surface", log)
+                from anatomy.surface.pipeline import (
+                    prepare_shared_registered_bundle, record_surface_failure, uses_shared_raw_route)
+                from shared.cohort_schedule import cohort_active
+
+                # S1 (cohort mode only): native_dti and registered_dti get their own admissions, outside the surface one.
+                # Outside cohort mode the preparation stays inside run_surface (the 121345b path).
+                if cohort_active() and uses_shared_raw_route(surface_config):
+                    prepare_started = time.monotonic()
+                    try:
+                        prepare_shared_registered_bundle(surface_config, resources, log)
+                    except Exception as exc:  # R1: same failed records as run_surface
+                        raise record_surface_failure(surface_config, resources, exc, prepare_started) from exc
                 result = run_surface(surface_config, log=log)
                 _finish_task_timer("DDSurfer surface", task_started, log)
                 tasks.append(
@@ -3863,13 +4229,18 @@ def _run_subject_products_impl(
         micro_outputs = _microstructure_dti_outputs(subject_root, config.subject_id, output_root)
         freewater_outputs = _microstructure_freewater_outputs(subject_root, config.subject_id, output_root)
         noddi_outputs = _microstructure_noddi_outputs(subject_root, config.subject_id, output_root)
-        if config.resume and _microstructure_dti_complete(subject_root, config.subject_id, output_root, fit_method=config.microstructure_fit_method):
+        # K6: when a parcellation is available to this run, outputs without ROI statistics are not complete.
+        roi_statistics_missing = parcellation is not None and not (
+            layout.regional_microstructure / f"{config.subject_id}_ROIWise-Microstructure.json").is_file()
+        if (config.resume and not roi_statistics_missing
+                and _microstructure_dti_complete(subject_root, config.subject_id, output_root, fit_method=config.microstructure_fit_method)):
             outputs = {key: path.as_posix() for key, path in micro_outputs.items() if key != "manifest"}
             tasks.append(
                 ProductTaskRecord(
                     name="microstructure.dti",
                     status="skipped",
                     reason="completed DTI microstructure outputs found",
+                    regional_statistics=regional_statistics_note(parcellation, log),  # K6: keep the C8 status on resume
                     manifest_path=micro_outputs["manifest"],
                     qc_path=micro_outputs["qc"],
                     outputs=outputs,
@@ -3889,7 +4260,6 @@ def _run_subject_products_impl(
             raw_bundle = find_subject_root(
                 subject_root,
                 config.subject_id,
-                mrtrix_bin_dir=mask_mrtrix_bin_dir,
                 brain_mask_config=selected_mask_config,
             )
             analysis_input_bundle = resolve_preprocessed_input_bundle(raw_bundle, output_root=output_root)
@@ -3924,6 +4294,7 @@ def _run_subject_products_impl(
                 ProductTaskRecord(
                     name="microstructure.dti",
                     status="completed",
+                    regional_statistics=regional_statistics_note(parcellation, log),
                     manifest_path=layout.microstructure / "manifest.json",
                     qc_path=layout.microstructure_dti / "dti_qc.json",
                     outputs={
@@ -3935,6 +4306,7 @@ def _run_subject_products_impl(
                         "l2": result.l2_path.as_posix(),
                         "l3": result.l3_path.as_posix(),
                         "trace": result.trace_path.as_posix(),
+                        "dec": result.dec_path.as_posix() if getattr(result, "dec_path", None) else None,
                         "roi_stats_csv": result.roi_stats_csv_path.as_posix() if result.roi_stats_csv_path else None,
                         "roi_stats_json": result.roi_stats_json_path.as_posix() if result.roi_stats_json_path else None,
                     },
@@ -3968,6 +4340,8 @@ def _run_subject_products_impl(
         elif any(not path.is_file() for path in raw.values()):
             missing = [label for label, path in raw.items() if not path.is_file()]
             tasks.append(ProductTaskRecord(name="microstructure.freewater", status="blocked", reason="missing raw input: " + ", ".join(missing)))
+        elif fw_ineligible := _free_water_ineligible(_resolve_analysis_inputs(subject_root, config.subject_id, output_root)):  # T-N3
+            tasks.append(ProductTaskRecord(name="microstructure.freewater", status="blocked", reason=fw_ineligible))
         else:
             from microstructure import MicrostructureConfig, run_microstructure
             from shared.pipeline import ensure_native_dti_bundle, find_subject_root, resolve_preprocessed_input_bundle
@@ -3976,7 +4350,6 @@ def _run_subject_products_impl(
             raw_bundle = find_subject_root(
                 subject_root,
                 config.subject_id,
-                mrtrix_bin_dir=mask_mrtrix_bin_dir,
                 brain_mask_config=selected_mask_config,
             )
             analysis_input_bundle = resolve_preprocessed_input_bundle(raw_bundle, output_root=output_root)
@@ -4048,7 +4421,6 @@ def _run_subject_products_impl(
             raw_bundle = find_subject_root(
                 subject_root,
                 config.subject_id,
-                mrtrix_bin_dir=mask_mrtrix_bin_dir,
                 brain_mask_config=selected_mask_config,
             )
             analysis_input_bundle = resolve_preprocessed_input_bundle(raw_bundle, output_root=output_root)
@@ -4122,6 +4494,35 @@ def _run_subject_products_impl(
             except Exception as exc:
                 tasks.append(ProductTaskRecord(name="microstructure.dki", status="failed", reason=str(exc)))
                 _emit(f"[Orchestrator] DKI failed; other selected products can continue: {exc}", log)
+
+    if "microstructure_ifw" in run_targets:
+        from microstructure.ifw import IfwBlocked, run_ifw
+
+        ifw_plan = plan_by_target.get("microstructure_ifw")
+        ifw_outputs = _microstructure_ifw_outputs(subject_root, config.subject_id, output_root)
+        if not config.execute:
+            tasks.append(ProductTaskRecord(name="microstructure.ifw", status="planned", reason="execute=False"))
+        elif ifw_plan and ifw_plan.status == "blocked":
+            tasks.append(ProductTaskRecord(name="microstructure.ifw", status="blocked", reason=ifw_plan.reason))
+        else:
+            _emit("[Orchestrator] Running Microstructure iFW", log)
+            try:
+                ifw_inputs = _resolve_analysis_inputs(subject_root, config.subject_id, output_root)
+                result = run_ifw(_ifw_config(config, ifw_inputs, parcellation), log=lambda message: _emit(message, log))
+                tasks.append(ProductTaskRecord(
+                    name="microstructure.ifw", status="skipped" if result.status == "cached" else "completed",
+                    reason=("matching iFW outputs reused; " if result.status == "cached" else "")
+                    + f"TE {result.echo_time_ms:g} ms from {result.echo_time_source}",
+                    manifest_path=result.record_path,
+                    outputs={"ifw": result.ifw_path.as_posix(), "fw_volume_fraction": result.fw_volume_fraction_path.as_posix(),
+                             "roi_stats_csv": result.roi_stats_csv_path.as_posix() if result.roi_stats_csv_path else None},
+                ))
+            except IfwBlocked as exc:
+                tasks.append(ProductTaskRecord(name="microstructure.ifw", status="blocked", reason=str(exc)))
+                _emit(f"[Orchestrator] iFW stopped; other selected products can continue: {exc}", log)
+            except Exception as exc:
+                tasks.append(ProductTaskRecord(name="microstructure.ifw", status="failed", reason=str(exc)))
+                _emit(f"[Orchestrator] iFW failed; other selected products can continue: {exc}", log)
 
     if "tractography" in run_targets and primary_tractography_backend == 'ukf':
         from tractography.ukf import run_ukf
@@ -4496,16 +4897,22 @@ def _run_subject_products_impl(
         wma_summary = _wma_output_summary(wma_dir)
         anatomical_tract_count = int(wma_summary.get("anatomical_tract_count", 0) or 0)
         nonempty_tract_count = int(wma_summary.get("anatomical_tract_nonempty_count", 0) or 0)
-        if bundle_source_invalid or bundle_conversion_error:
-            tasks.append(ProductTaskRecord(name='bundles.wma', status='blocked', reason=bundle_conversion_error or 'selected tractography did not pass current-run QC'))
-        elif ukf_upstream_invalid and config.wma_input_tractography is None:
-            tasks.append(ProductTaskRecord(name='bundles.wma', status='blocked', reason='current UKF run is not QC-valid'))
-        elif config.resume and _wma_complete(
+        wma_resume_complete = bool(config.resume and _wma_complete(
             wma_dir,
             input_tractography=wma_input_tractography,
             atlas_dir=config.wma_atlas_dir,
             atlas_family=config.wma_atlas,
-        ):
+        ))
+        if bundle_source_invalid or bundle_conversion_error:
+            tasks.append(ProductTaskRecord(name='bundles.wma', status='blocked', reason=bundle_conversion_error or 'selected tractography did not pass current-run QC'))
+        elif (ukf_upstream_invalid and config.wma_input_tractography is None
+                and not ('tractography' in input_blocked_targets and wma_resume_complete)):
+            # F1: the block is lifted only when the input gate stopped tractography (the UKF
+            # prerequisite did not run) and the WMA result is complete on resume. A UKF failure
+            # or a stale UKF output keeps WMA blocked, so a WMA result made from an older
+            # tractogram is not reported as skipped.
+            tasks.append(ProductTaskRecord(name='bundles.wma', status='blocked', reason='current UKF run is not QC-valid'))
+        elif wma_resume_complete:
             tasks.append(
                 ProductTaskRecord(
                     name="bundles.wma",
@@ -4697,6 +5104,8 @@ def _run_subject_products_impl(
             manifest_path=conn_manifest,
             tractography=tractogram,
             parcellation=parcellation,
+            backend=config.connectome_backend,
+            compress_mrtrix_dense=config.connectome_compress_mrtrix_dense,
         ):
             tasks.append(ProductTaskRecord(
                 name="connectome.streamline_count", status="skipped", reason="completed outputs found",
@@ -4765,6 +5174,9 @@ def _run_subject_products_impl(
                 tractography=tractogram,
                 parcellation=parcellation,
                 sift2_weights=sift2_weights,
+                backend=config.connectome_backend,
+                compress_mrtrix_dense=config.connectome_compress_mrtrix_dense,
+                metric="sift2_weighted_streamline_count",
             ):
                 tasks.append(
                     ProductTaskRecord(
@@ -4841,6 +5253,8 @@ def _run_subject_products_impl(
             "started_at": task.started_at,
             "ended_at": task.ended_at,
             "runtime_seconds": task.runtime_seconds,
+            **_task_provenance(plan, task.name),
+            **({"regional_statistics": task.regional_statistics} if task.regional_statistics else {}),
         }
         payload.update(
             {
@@ -4860,6 +5274,7 @@ def _run_subject_products_impl(
     phase_timings = dict(planning=planning_seconds, input_preparation_and_validation=input_seconds,
                          product_execution=execution_seconds, metadata_and_profile=time.monotonic() - metadata_started)
 
+    from shared.brain_mask import pnl_route_record, resolve_pnl_mask_route
     manifest = {
         "kind": "slicerddsurfer_product_orchestration",
         "version": 1,
@@ -4877,6 +5292,7 @@ def _run_subject_products_impl(
         "output_root": output_root.as_posix() if output_root is not None else layout.outputs.as_posix(),
         "targets": list(targets),
         "run_targets": list(run_targets),
+        "closure": {"required_by": {key: list(value) for key, value in config.target_required_by.items()}},
         "run_plan_path": plan.run_plan_path.as_posix(),
         "previous_run_records": {key: value.as_posix() for key, value in previous_run_records.items()},
         "run_plan_summary": plan.to_dict()["summary"],
@@ -4910,17 +5326,19 @@ def _run_subject_products_impl(
         "bundle_backends": list(bundle_backends),
         "execute": config.execute,
         "resume": config.resume,
-        "preprocessing_backend": config.preprocessing_backend,
         "brain_mask_backend": config.brain_mask_backend,
         "brain_mask_device": config.brain_mask_device,
+        "pnl_mask_route": config.pnl_mask_route,
+        # SC-1b / F2: the route that this run requested for the pnl_cnn backend. It is not the route of the mask
+        # that was consumed (a supplied or cached mask has its own); the run record reads that from the mask receipt.
+        **({"brain_mask_route_requested": pnl_route_record(resolve_pnl_mask_route(config.pnl_mask_route))}
+           if config.brain_mask_backend == "pnl_cnn" else {}),
         "brain_mask_configuration": {
             name: str(getattr(config, name)) if getattr(config, name) else None
             for name in ("pnl_mask_python", "pnl_mask_script", "pnl_mask_model_dir", "pnl_mask_ants_bin_dir")
         },
         "preprocessing_force": config.preprocessing_force,
-        "preprocessing_dipy_denoise_method": config.preprocessing_dipy_denoise_method,
         "preprocessing_dipy_run_gibbs": config.preprocessing_dipy_run_gibbs,
-        "preprocessing_dipy_run_motion_correction": config.preprocessing_dipy_run_motion_correction,
         "preprocessing_mrtrix_bin_dir": config.preprocessing_mrtrix_bin_dir.as_posix() if config.preprocessing_mrtrix_bin_dir else None,
         "preprocessing_fsl_bin_dir": config.preprocessing_fsl_bin_dir.as_posix() if config.preprocessing_fsl_bin_dir else None,
         "preprocessing_reverse_phase_b0": config.preprocessing_reverse_phase_b0.as_posix() if config.preprocessing_reverse_phase_b0 else None,
@@ -4932,6 +5350,10 @@ def _run_subject_products_impl(
         "microstructure_run_free_water": config.microstructure_run_free_water,
         "microstructure_run_noddi": config.microstructure_run_noddi,
         "microstructure_run_dki": config.microstructure_run_dki,
+        "microstructure_run_ifw": config.microstructure_run_ifw,
+        "microstructure_ifw_echo_time_ms": config.microstructure_ifw_echo_time_ms,
+        "microstructure_ifw_t2_gm_ms": config.microstructure_ifw_t2_gm_ms,
+        "microstructure_ifw_t2_csf_ms": config.microstructure_ifw_t2_csf_ms,
         "microstructure_dki_fit_method": config.microstructure_dki_fit_method,
         "microstructure_dki_execution": config.microstructure_dki_execution,
         "wma_num_threads": config.wma_num_threads,
@@ -4949,6 +5371,7 @@ def _run_subject_products_impl(
                 ("freewater", config.microstructure_run_free_water),
                 ("noddi", config.microstructure_run_noddi),
                 ("dki", config.microstructure_run_dki),
+                ("ifw", config.microstructure_run_ifw),
             )
             if enabled
         ],
@@ -4963,6 +5386,7 @@ def _run_subject_products_impl(
         "postprocess_atlases": list(config.postprocess_atlases) if config.postprocess_atlases else None,
         "postprocess_force": config.postprocess_force,
         "atlas_t2": atlas_t2.as_posix(),
+        "model_assets_dir": model_assets_dir.as_posix() if model_assets_dir else None,
         "ddseg_device": config.ddseg_device,
         "surface_device": config.surface_device,
         "surface_atlas_t2": config.surface_atlas_t2.expanduser().resolve().as_posix() if config.surface_atlas_t2 else None,
@@ -5069,6 +5493,8 @@ def _run_subject_products_impl(
     performance_profile['wall_time_scope'] = manifest['wall_time_scope']
     Path(performance_profile['path']).write_text(json.dumps(performance_profile, indent=2, sort_keys=True) + '\n', encoding='utf-8')
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    if config.execute and config.write_run_record:
+        _write_run_record_best_effort(manifest_path, log)  # D6/C40: after every manifest is final
     return ProductOrchestratorResult(
         subject_id=config.subject_id,
         subject_root=subject_root,
@@ -5086,6 +5512,12 @@ def run_subject_products(
     """Run products while preserving a failed manifest if any stage raises."""
 
     try:
+        fresh_closure = not config.closure_applied  # Q1: multi-tracking children arrive already closed
+        config = _with_closure(config)
+        notice = closure_notice_for(config)
+        if fresh_closure and notice and config.execute:
+            # Plan-only runs keep stdout as pure JSON, so the notice is written for real runs only.
+            _emit("[Targets] " + notice, log)
         _validate_bundle_tractography_source(config)
         if config.execute:
             if not config.subject_id.strip() or config.select_streamlines <= 0:
@@ -5093,6 +5525,7 @@ def run_subject_products(
             _normalize_targets(config)
             from shared.dicom_input import prepare_dicom_root
             prepare_dicom_root(config.subject_root, config.subject_id, dwiconvert=config.dwiconvert_executable, log=log)
+        config = _with_preprocessing_pe_decision(config)
         from shared.algorithm_selection import algorithms
         if len(algorithms(config.tractography_backend)) > 1:
             from shared.multi_tracking import run

@@ -109,20 +109,15 @@ def install_selected_runtimes(owner, profiles=None):
                            [(owner._slicer_launcher_program(), arguments, {})], done)
 
 
-def apply_runtime_result(owner, result):
-    """Save only settings from a successful, verified setup receipt."""
-    if result.get("kind") != "slicerdsurfer_runtime_setup" or result.get("status") != "completed":
-        raise ValueError("Only a completed managed runtime setup can update paths")
-    file_settings = {"pnl_mask_python", "pnl_mask_script"}
-    allowed = {"mrtrix_bin_dir", "preprocessing_mrtrix_bin_dir", "preprocessing_fsl_bin_dir",
-               "postprocess_runtime",
-               "pnl_mask_python", "pnl_mask_script", "pnl_mask_model_dir", "pnl_mask_ants_bin_dir"}
-    settings = result.get("external_dependencies", {})
-    if not settings or set(settings) - allowed:
-        raise ValueError("Unexpected managed runtime settings")
-    if any(not (Path(value).is_file() if key in file_settings else Path(value).is_dir())
-           for key, value in settings.items()):
-        raise ValueError("Managed runtime paths are unavailable")
+def apply_runtime_result(owner, result, step="managed_runtime"):
+    """Save only settings from a successful, verified setup receipt (validation: selected_setup.apply_setup_receipt)."""
+    from shared.selected_setup import apply_setup_receipt
+
+    apply_setup_settings(owner, apply_setup_receipt({"id": step}, result))
+
+
+def apply_setup_settings(owner, settings):
+    """GUI side of a saved receipt: Slicer settings, line edits, log and a fresh environment check."""
     for key, value in settings.items():
         owner._save_environment_path_setting(key, str(value))
         edit = (getattr(owner, "_environmentPathLineEdits", {}) or {}).get(key)

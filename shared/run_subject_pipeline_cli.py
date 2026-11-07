@@ -29,8 +29,11 @@ from shared import (
     summarize_environment_doctor,
     write_environment_report,
 )
+from shared.preprocessing_route import add_removed_flags
 from shared.run_cancellation import orchestration_manifest_path, write_cancelled_manifest
-from shared.brain_mask import BRAIN_MASK_BACKENDS
+from shared.brain_mask import (
+    BRAIN_MASK_BACKENDS, PNL_MASK_ROUTES, PNL_NATIVE_EXPERIMENTAL_REASON, unsupported_backend_message,
+)
 from shared.dependency_config import (
     DEPENDENCY_CONFIG_KEYS,
     add_dependency_config_arguments,
@@ -63,6 +66,7 @@ OPTIONAL_ALGORITHM_TARGETS = (
     "microstructure_freewater",
     "microstructure_noddi",
     "microstructure_dki",
+    "microstructure_ifw",
     "surface_postprocess",
     "saf",
     "wma",
@@ -109,6 +113,7 @@ def _resolve_microstructure_stages(args: argparse.Namespace) -> tuple[str, ...]:
         "fw": "freewater",
         "noddi": "noddi",
         "dki": "dki",
+        "ifw": "ifw",
     }
     for value in raw_values:
         if value in {"all", "full"}:
@@ -117,20 +122,25 @@ def _resolve_microstructure_stages(args: argparse.Namespace) -> tuple[str, ...]:
         try:
             expanded.append(aliases[value])
         except KeyError as exc:
-            raise ValueError("microstructure stages must contain only: dti, freewater, noddi, dki, all.") from exc
+            raise ValueError("microstructure stages must contain only: dti, freewater, noddi, dki, ifw, all.") from exc
     if args.run_free_water:
         expanded.append("freewater")
     if args.run_noddi:
         expanded.append("noddi")
     if getattr(args, "run_dki", False) or "microstructure_dki" in _split_csv_or_repeat(args.targets):
         expanded.append("dki")
-    if any(stage in expanded for stage in ("freewater", "noddi", "dki")):
+    if getattr(args, "run_ifw", False) or "microstructure_ifw" in _split_csv_or_repeat(args.targets):
+        expanded.append("ifw")
+    if "ifw" in expanded:
+        expanded.append("freewater")  # iFW needs the Free Water fraction
+    if any(stage in expanded for stage in ("freewater", "noddi", "dki", "ifw")):
         expanded.append("dti")
-    return tuple(stage for stage in ("dti", "freewater", "noddi", "dki") if stage in set(expanded))
+    return tuple(stage for stage in ("dti", "freewater", "noddi", "dki", "ifw") if stage in set(expanded))
 
 
 def _infer_subject_id(subject_root: Path) -> str:
-    return subject_root.resolve().name
+    from shared.subject_id import derive_subject_id
+    return derive_subject_id(str(subject_root.resolve()))
 
 
 def _apply_dependency_config(args: argparse.Namespace) -> None:
@@ -141,7 +151,8 @@ def _write_dependency_config(args: argparse.Namespace, path: Path) -> Path:
     return write_dependency_config(args, path)
 
 
-def _resolve_targets(args: argparse.Namespace) -> tuple[str, ...]:
+def _resolve_closure(args: argparse.Namespace):
+    """Selected CLI targets with every prerequisite added (C1/C2), minus --skip-targets."""
     include = list(_split_csv_or_repeat(args.targets))
     exclude = set(_split_csv_or_repeat(args.skip_targets))
 
@@ -165,18 +176,27 @@ def _resolve_targets(args: argparse.Namespace) -> tuple[str, ...]:
         if target not in seen and target not in exclude:
             resolved.append(target)
             seen.add(target)
-    return tuple(
-        target
-        for target in normalize_orchestrator_targets(
-            tuple(resolved),
-            tractography_backend=args.tractography_backend,
-            bundle_backend=args.bundle_backend,
-            microstructure_run_free_water=bool(args.run_free_water),
-            microstructure_run_noddi=bool(args.run_noddi),
-            microstructure_run_dki=bool(getattr(args, "run_dki", False)),
-        )
-        if target not in exclude
-    )
+    from shared.orchestrator import orchestrator_closure
+    return orchestrator_closure(
+        tuple(resolved),
+        tractography_backend=args.tractography_backend,
+        bundle_backend=args.bundle_backend,
+        microstructure_run_free_water=bool(args.run_free_water),
+        microstructure_run_noddi=bool(args.run_noddi),
+        microstructure_run_dki=bool(getattr(args, "run_dki", False)),
+        microstructure_run_ifw=bool(getattr(args, "run_ifw", False)),
+        wma_source_explicit=bool(getattr(args, "bundle_tractography_backend", None)),
+        provided_tractography=tuple(name for name, value in (
+            ("wma", getattr(args, "wma_input_tractography", None)),
+            ("tractcloud", getattr(args, "tractcloud_input_tractography", None)),
+            ("saf", getattr(args, "saf_pregenerated_tractogram", None))) if value),
+        excluded=tuple(exclude),  # K5: the closure never adds or expands a skipped target
+    ), exclude
+
+
+def _resolve_targets(args: argparse.Namespace) -> tuple[str, ...]:
+    closure, exclude = _resolve_closure(args)
+    return closure.targets
 
 
 def resolve_analysis_options(args, *, explicit_dests=()):
@@ -189,6 +209,14 @@ def resolve_analysis_options(args, *, explicit_dests=()):
     args.run_free_water = 'freewater' in microstructure_stages
     args.run_noddi = 'noddi' in microstructure_stages
     args.run_dki = 'dki' in microstructure_stages
+    args.run_ifw = 'ifw' in microstructure_stages
+    for name in ('ifw_echo_time_ms', 'ifw_t2_gm_ms', 'ifw_t2_csf_ms'):
+        value = getattr(args, name, None)
+        if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float))
+                                  or not value == value or value in (float('inf'), float('-inf'))
+                                  or value < 0 or (name != 'ifw_echo_time_ms' and value <= 0)):
+            raise ValueError('--' + name.replace('_', '-') + (' must be zero or a positive number' if name == 'ifw_echo_time_ms'
+                                                              else ' must be a positive number'))
     if args.bundle_tractography_backend:
         from shared.algorithm_selection import algorithms
         if args.wma_input_tractography or args.tractcloud_input_tractography:
@@ -207,9 +235,17 @@ def resolve_analysis_options(args, *, explicit_dests=()):
     parameters(json.loads(args.ukf_parameters))
     if args.wmql_query_preset in CATALOG_PRESETS:
         canonical_wmql_selection(args.wmql_query_selection, args.wmql_query_preset)
-    targets = _resolve_targets(args)
+    closure, exclude = _resolve_closure(args)
+    targets = closure.targets
     if not targets:
         raise ValueError('No targets selected. Use --all or --targets.')
+    # C2/C3: later stages (doctor, config, cohort planner) see the closed algorithm set and provenance.
+    args.closure_tractography_backend = closure.algorithms_text if 'tractography' in targets else args.tractography_backend
+    args.target_required_by = {target: tuple(value) for target, value in closure.required_by.items() if target in targets}
+    args.excluded_targets = tuple(sorted(exclude))
+    # K4: what the user asked for (not the closed set) is what --save-user-config saves.
+    args.requested_targets = tuple(target for target in closure.requested if target in targets)
+    args.closure_algorithm_requesters = {key: tuple(value) for key, value in closure.added_algorithms.items()}
     if args.bundle_tractography_backend:
         if not set(targets).intersection({'bundles', 'wma', 'tractcloud'}):
             raise ValueError('--bundle-tractography-backend requires a bundle target')
@@ -232,9 +268,7 @@ def _environment_config_from_args(
     from shared.environment import run_needs_brain_mask
     brain_mask_required = run_needs_brain_mask(subject_root, targets=targets,
         subject_id=args.subject_id, output_root=output_root,
-        preprocessing_backend=args.preprocessing_backend, brain_mask_backend=args.brain_mask_backend,
-        denoise_method=args.preprocessing_dipy_denoise_method,
-        run_gibbs=not args.preprocessing_skip_gibbs, run_motion=not args.preprocessing_skip_motion,
+        brain_mask_backend=args.brain_mask_backend,
         force=args.preprocessing_force, resume=not args.no_resume)
     return EnvironmentDoctorConfig(
         targets=targets,
@@ -251,16 +285,15 @@ def _environment_config_from_args(
         check_slicer_cli_modules=True,
         python_environment=args.python_environment,
         conda_executable=args.conda_executable,
-        preprocessing_backend=args.preprocessing_backend,
         brain_mask_backend=args.brain_mask_backend,
         brain_mask_device=args.brain_mask_device,
+        pnl_mask_route=args.pnl_mask_route,
         brain_mask_required=bool(brain_mask_required),
         pnl_mask_python=args.pnl_mask_python,
         pnl_mask_script=args.pnl_mask_script,
         pnl_mask_model_dir=args.pnl_mask_model_dir,
         pnl_mask_ants_bin_dir=args.pnl_mask_ants_bin_dir,
-        synthstrip_python=args.synthstrip_python,
-        tractography_backend=args.tractography_backend,
+        tractography_backend=getattr(args, 'closure_tractography_backend', None) or args.tractography_backend,
         ukf_executable=getattr(args, 'ukf_executable', None),
         dwiconvert_executable=getattr(args, 'dwiconvert_executable', None),
         connectome_backend=args.connectome_backend,
@@ -270,7 +303,7 @@ def _environment_config_from_args(
         run_free_water=bool(args.run_free_water),
         run_noddi=bool(args.run_noddi),
         run_dki=bool(getattr(args, "run_dki", False)),
-        dki_fit_method=getattr(args, "dki_fit_method", "WLS"),
+        dki_fit_method=getattr(args, "dki_fit_method", "MKCURVE"),
         dki_matlab_executable=getattr(args, "dki_matlab_executable", None),
         dki_mkcurve_root=getattr(args, "dki_mkcurve_root", None),
         mrtrix_bin_dir=args.mrtrix_bin_dir,
@@ -341,6 +374,30 @@ def _make_sigterm_handler(manifest_path: Path, *, subject_id: str, run_name: str
         sys.exit(143)
 
     return _handle_sigterm
+
+
+def _cli_log(message: str) -> None:
+    """Run log: the closure notice goes to stderr so stdout stays the JSON result for blocked runs (GUI merges both).
+
+    W2b: so do the notice that no current preprocessed DWI is used and the rule-4 phase-encoding block message.
+    """
+    to_stderr = message.startswith(("[Targets]", "[Orchestrator] No current preprocessed DWI", "[Orchestrator] Phase-encoding"))
+    print(message, file=sys.stderr if to_stderr else sys.stdout)
+
+
+def _phase_encoding_block(plan) -> str:
+    """W2b rule 4: the message of a preprocessing plan item that is blocked for want of a PE direction, else ''."""
+    for item in getattr(plan, "items", ()) or ():
+        if item.status == "blocked" and item.reason_category == "phase_encoding":
+            return item.reason
+    return ""
+
+
+def _brain_mask_backend_argument(value: str) -> str:
+    """W5 / SC-2: a removed or unknown brain mask backend fails with a message that names pnl_cnn and provided."""
+    if value not in BRAIN_MASK_BACKENDS:
+        raise argparse.ArgumentTypeError(unsupported_backend_message(value))
+    return value
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -462,38 +519,34 @@ def build_parser() -> argparse.ArgumentParser:
         help="Abort before execution when any selected target has missing required dependencies.",
     )
     parser.add_argument("--execute", action="store_true", help="Actually execute workflows. Default is dry-run planning only.")
-    parser.add_argument("--no-resume", action="store_true", help="Disable resume/skip of completed outputs.")
+    parser.add_argument("--no-resume", action="store_true", help="Recompute every stage of this run, including prerequisites added automatically.")
     parser.add_argument(
         "--brain-mask-backend",
         default="pnl_cnn",
+        type=_brain_mask_backend_argument,
         choices=BRAIN_MASK_BACKENDS,
         help=(
             "Brain mask backend (default: pnl_cnn). Missing dependencies are reported without falling back. "
-            "synthstrip uses --postprocess-freesurfer-home; provided requires an existing input mask."
+            "provided requires an existing input mask. synthstrip, mrtrix and dipy were removed (W5)."
         ),
     )
     parser.add_argument("--brain-mask-device", choices=("auto", "cpu", "cuda"), default="auto",
-                        help="PNL/SynthStrip device: auto prefers the first visible GPU in that runtime; cuda requires GPU; cpu disables CUDA.")
-    parser.add_argument(
-        "--preprocessing-backend",
-        default="dipy",
-        choices=("dipy", "mrtrix_fsl"),
-        help="Optional DWI preprocessing backend.",
-    )
+                        help="PNL device: auto prefers the first visible GPU in that runtime; cuda requires GPU; cpu disables CUDA.")
+    parser.add_argument("--pnl-mask-route", choices=PNL_MASK_ROUTES, default="auto",
+                        help=("Route of the pnl_cnn brain mask. auto: managed on Linux (conda runner with ANTs), native on macOS and Windows. "
+                              "managed: the conda runner. native (experimental): SimpleITK registration in Slicer's Python; it "
+                              + PNL_NATIVE_EXPERIMENTAL_REASON + "."))
+    # W2a (D1): preprocessing has one route. The three removed flags stay registered only to fail with the message.
+    add_removed_flags(parser)
     parser.add_argument("--preprocessing-force", action="store_true", help="Force rerun preprocessing even if outputs exist.")
-    parser.add_argument(
-        "--preprocessing-dipy-denoise-method",
-        default="mppca",
-        choices=("mppca", "localpca", "patch2self", "none"),
-        help="DIPY denoise method for preprocessing.",
-    )
-    parser.add_argument("--preprocessing-skip-gibbs", action="store_true", help="Skip Gibbs removal in DIPY preprocessing.")
-    parser.add_argument("--preprocessing-skip-motion", action="store_true", help="Skip between-volume motion correction in DIPY preprocessing.")
+    parser.add_argument("--preprocessing-skip-gibbs", action="store_true",
+                        help="Skip DIPY Gibbs removal (for partial-Fourier data). Preprocessing has one route: DIPY MP-PCA, "
+                             "DIPY Gibbs removal, FSL eddy/topup through dwifslpreproc.")
     parser.add_argument("--preprocessing-mrtrix-bin-dir", type=Path, help="Optional MRtrix3 bin dir for preprocessing.")
     parser.add_argument("--preprocessing-fsl-bin-dir", type=Path, help="Optional FSL bin dir for preprocessing.")
     parser.add_argument("--preprocessing-reverse-phase-b0", type=Path, help="Optional reverse phase-encoding b0 for MRtrix/FSL preprocessing.")
-    parser.add_argument("--preprocessing-phase-encoding-direction", help="Optional phase encoding direction for MRtrix/FSL preprocessing.")
-    parser.add_argument("--preprocessing-readout-time", type=float, help="Optional readout time for MRtrix/FSL preprocessing.")
+    parser.add_argument("--preprocessing-phase-encoding-direction", help="Phase-encoding direction for preprocessing: AP, PA, LR, RL, IS, SI or a NIfTI axis code (i, i-, j, j-, k, k-). Without it the direction comes from input/dwi.json (PhaseEncodingDirection); if neither has it, preprocessing is blocked (most axial clinical DWI: AP).")
+    parser.add_argument("--preprocessing-readout-time", type=float, help="Total readout time in seconds for preprocessing. Without it: TotalReadoutTime from input/dwi.json, else dwifslpreproc assumes 0.1 s (recorded as readout_assumed).")
     parser.add_argument(
         "--preprocessing-eddy-threads",
         type=int,
@@ -534,9 +587,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--connectome-backend",
-        default="python",
-        choices=("python", "mrtrix"),
-        help="Connectome backend.",
+        default="auto",
+        choices=("auto", "python", "mrtrix"),
+        help=("Connectome backend. auto: MRtrix tck2connectome for a .tck source with a streamline-count "
+              "metric, Python for any other source or metric; no silent fallback."),
     )
     parser.add_argument('--max-parallel-models', type=int, choices=(1,2,3), default=1,
                         help='Independent Free-water/NODDI/DKI processes; resource-bounded; default sequential.')
@@ -617,14 +671,24 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         help=(
             "Microstructure stages to run. May be repeated or comma-separated. "
-            "Choices: dti, freewater, noddi, dki, all. Defaults to dti only; optional stages are independent."
+            "Choices: dti, freewater, noddi, dki, ifw, all. Defaults to dti only; optional stages are independent. "
+            "ifw is not part of all: it needs the echo time and also runs Free Water and DDSeg."
         ),
     )
     parser.add_argument("--run-free-water", action="store_true", help="Enable Free Water stage under microstructure.")
     parser.add_argument("--run-noddi", action="store_true", help="Enable NODDI stage under microstructure.")
     parser.add_argument("--run-dki", action="store_true", help="Enable the optional DKI stage under microstructure.")
+    parser.add_argument("--run-ifw", action="store_true", help="Enable the iFW stage (also runs Free Water and DDSeg).")
     parser.add_argument(
-        "--dki-fit-method", choices=("WLS", "OLS", "MKCURVE", "MKCURVE_MATLAB"), default="WLS",
+        "--ifw-echo-time-ms", type=float, default=None,
+        help="iFW echo time in ms. Without it the stage reads EchoTime from the DWI JSON sidecar, else it stops. No default.",
+    )
+    parser.add_argument("--ifw-t2-gm-ms", type=float, default=95.0,
+                        help="iFW tissue T2 in ms (Cho et al. preprint, Suppl. Methods 1: 95).")
+    parser.add_argument("--ifw-t2-csf-ms", type=float, default=1500.0,
+                        help="iFW CSF T2 in ms (Cho et al. preprint, Suppl. Methods 1: 1500).")
+    parser.add_argument(
+        "--dki-fit-method", choices=("WLS", "OLS", "MKCURVE", "MKCURVE_MATLAB"), default="MKCURVE",
         help="DKI: WLS/OLS, bundled Python MKCURVE, or optional author reference MKCURVE_MATLAB. No fallback.",
     )
     parser.add_argument(
@@ -676,7 +740,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--postprocess-freesurfer-home",
         type=Path,
-        help="Optional FreeSurfer home for SynthStrip brain masking and DDSurfer postprocessing.",
+        help="Optional FreeSurfer home for DDSurfer postprocessing.",
     )
     parser.add_argument("--postprocess-atlases", action="append", help="Optional comma-separated atlas list for DDSurfer postprocess.")
     parser.add_argument("--postprocess-force", action="store_true", help="Force restaging DDSurfer postprocess inputs.")
@@ -686,14 +750,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--surface-atlas-t2", type=Path, help="Matching DDSurfer 1-mm atlas override (separate from DDParcel).")
     parser.add_argument("--surface-python-bin", type=Path, help="Optional isolated DDSurfer Python runtime; also supports DDSURFER_PYTHON_BIN.")
     parser.add_argument("--surface-precision", choices=('auto', 'bf16', 'fp32'), default='fp32')
-    parser.add_argument("--surface-cpu-threads", type=int, default=4, help="DDSurfer inference CPU thread budget.")
+    parser.add_argument("--surface-cpu-threads", type=int, default=None,
+                        help="DDSurfer inference CPU thread budget. Default: the stage CPU reservation of a cohort run, else 4.")
     parser.add_argument("--surface-max-gpu-gib", type=float, default=24., help="DDSurfer inference GPU allocation budget in GiB.")
     parser.add_argument("--ddseg-device", default="auto", help="DDSeg torch device. auto uses cuda:0 when available, otherwise cpu.")
     parser.add_argument("--surface-device", default="auto", help="DDSurfer torch device. auto uses cuda:0 when available, otherwise cpu.")
     parser.add_argument(
         "--compress-mrtrix-dense",
-        action="store_true",
-        help="Compress MRtrix dense connectome CSV into ROI-label edge list.",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=("Compress MRtrix dense connectome CSV into ROI-label edge list. "
+              "Not set: on for the auto backend with the MRtrix path, off otherwise."),
     )
     parser.add_argument(
         "--print-manifest-only",
@@ -793,7 +860,7 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:
         parser.error(str(exc))
     if args.brain_mask_backend not in BRAIN_MASK_BACKENDS:
-        parser.error("--brain-mask-backend must be one of: " + ", ".join(BRAIN_MASK_BACKENDS))
+        parser.error(unsupported_backend_message(args.brain_mask_backend))
     if args.subject_root is None:
         parser.error(
             "--subject-root is required unless a recent subject_root is available in the shared user config. "
@@ -820,7 +887,7 @@ def main(argv: list[str] | None = None) -> int:
             args,
             language=args.language or str((user_config or {}).get("ui", {}).get("language") or "en"),
             base_config=user_config,
-            resolved_targets=targets,
+            resolved_targets=getattr(args, "requested_targets", None) or targets,
             resolved_stages=_resolve_microstructure_stages(args),
         )
         written = write_user_config(saved_payload, save_path)
@@ -885,7 +952,7 @@ def main(argv: list[str] | None = None) -> int:
         output_root=output_root,
         targets=targets,
         run_name=args.run_name,
-        tractography_backend=args.tractography_backend,
+        tractography_backend=getattr(args, 'closure_tractography_backend', None) or args.tractography_backend,
         bundle_backend=args.bundle_backend,
         bundle_tractography_backend=args.bundle_tractography_backend,
         ukf_parameters=json.loads(args.ukf_parameters),
@@ -897,18 +964,15 @@ def main(argv: list[str] | None = None) -> int:
         wmql_query_selection=tuple(value.strip() for value in args.wmql_query_selection.split(',') if value.strip()),
         max_parallel_models=args.max_parallel_models,
         resume=not args.no_resume,
-        preprocessing_backend=args.preprocessing_backend,
         brain_mask_backend=args.brain_mask_backend,
         brain_mask_device=args.brain_mask_device,
+        pnl_mask_route=args.pnl_mask_route,
         pnl_mask_python=args.pnl_mask_python,
         pnl_mask_script=args.pnl_mask_script,
         pnl_mask_model_dir=args.pnl_mask_model_dir,
         pnl_mask_ants_bin_dir=args.pnl_mask_ants_bin_dir,
-        synthstrip_python=args.synthstrip_python,
         preprocessing_force=bool(args.preprocessing_force),
-        preprocessing_dipy_denoise_method=args.preprocessing_dipy_denoise_method,
         preprocessing_dipy_run_gibbs=not args.preprocessing_skip_gibbs,
-        preprocessing_dipy_run_motion_correction=not args.preprocessing_skip_motion,
         preprocessing_mrtrix_bin_dir=args.preprocessing_mrtrix_bin_dir,
         preprocessing_fsl_bin_dir=args.preprocessing_fsl_bin_dir,
         preprocessing_reverse_phase_b0=args.preprocessing_reverse_phase_b0,
@@ -920,6 +984,10 @@ def main(argv: list[str] | None = None) -> int:
         microstructure_run_free_water=bool(args.run_free_water),
         microstructure_run_noddi=bool(args.run_noddi),
         microstructure_run_dki=bool(args.run_dki),
+        microstructure_run_ifw=bool(getattr(args, "run_ifw", False)),
+        microstructure_ifw_echo_time_ms=getattr(args, "ifw_echo_time_ms", None),
+        microstructure_ifw_t2_gm_ms=getattr(args, "ifw_t2_gm_ms", 95.0),
+        microstructure_ifw_t2_csf_ms=getattr(args, "ifw_t2_csf_ms", 1500.0),
         microstructure_dki_fit_method=args.dki_fit_method,
         microstructure_dki_matlab_executable=args.dki_matlab_executable,
         microstructure_dki_mkcurve_root=args.dki_mkcurve_root,
@@ -963,7 +1031,7 @@ def main(argv: list[str] | None = None) -> int:
         allow_act_ddseg_only=bool(args.allow_act_ddseg_only),
         tract_querier_root=args.tract_querier_root,
         connectome_backend=args.connectome_backend,
-        connectome_compress_mrtrix_dense=bool(args.compress_mrtrix_dense),
+        connectome_compress_mrtrix_dense=args.compress_mrtrix_dense,
         saf_fs_dir=args.saf_fs_dir,
         saf_pregenerated_tractogram=args.saf_pregenerated_tractogram,
         saf_tckgen_options=args.saf_tckgen_options,
@@ -984,6 +1052,9 @@ def main(argv: list[str] | None = None) -> int:
         tractcloud_batch_size=args.tractcloud_batch_size,
         preflight_blocked_targets=preflight_blocked_targets,
         preflight_blocked_by_backend=(getattr(doctor_result, 'tracking_backend_blockers', {}) if doctor_result else {}),
+        target_required_by=dict(getattr(args, 'target_required_by', {}) or {}),
+        excluded_targets=tuple(getattr(args, 'excluded_targets', ()) or ()),
+        closure_algorithm_requesters=dict(getattr(args, 'closure_algorithm_requesters', {}) or {}),
     )
 
     if args.plan:
@@ -1000,11 +1071,18 @@ def main(argv: list[str] | None = None) -> int:
                 ensure_ascii=False,
             )
         )
+        if reason := _phase_encoding_block(plan):
+            print(reason, file=sys.stderr)
+            return 2
         return 0
 
     if args.execute:
         plan = plan_subject_products(config, write=True)
         _print_run_plan_summary(plan, stream=sys.stderr)
+        if reason := _phase_encoding_block(plan):
+            # W2b rule 4 (T1 D1): no phase-encoding direction, no preprocessing; stop before any stage starts.
+            print(reason, file=sys.stderr)
+            return 2
         # If Cancel kills this process's whole process group (see
         # shared/process_group.py), leave a terminal "cancelled" manifest
         # instead of letting run_subject_products() vanish mid-flight with
@@ -1022,7 +1100,7 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     orchestration_started = time.monotonic()
-    result = run_subject_products(config, log=print)
+    result = run_subject_products(config, log=_cli_log)
     orchestration_seconds = time.monotonic() - orchestration_started
     cli_timing = dict(main_wall_seconds=time.monotonic() - cli_started,
                       environment_check_seconds=environment_seconds, orchestration_call_seconds=orchestration_seconds,

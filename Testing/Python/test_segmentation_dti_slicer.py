@@ -18,28 +18,65 @@ from anatomy.segmentation.dti_slicer import run_dti_feature_extraction
 
 class DtiSlicerCommandConstructionTest(unittest.TestCase):
     def test_windows_executables_and_macos_app_layout(self):
-        for windows in (True, False):
-            with self.subTest(windows=windows), tempfile.TemporaryDirectory() as tmp:
-                root = Path(tmp) / ("SlicerWindows" if windows else "Slicer.app")
-                runtime = root if windows else root / "Contents"
+        """W3: PythonSlicer is found in the Linux, macOS .app and Windows layouts; slicer_ext is not needed."""
+        for layout in ("linux", "macos", "windows"):
+            with self.subTest(layout=layout), tempfile.TemporaryDirectory() as tmp:
+                windows = layout == "windows"
+                root = Path(tmp) / ("Slicer.app" if layout == "macos" else "Slicer")
+                runtime = root / "Contents" if layout == "macos" else root
                 cli = runtime / "lib/Slicer-5.10/cli-modules"
                 cli.mkdir(parents=True)
                 suffix = ".exe" if windows else ""
-                for name in ("DWIConvert", "DWIToDTIEstimation", "DiffusionTensorScalarMeasurements"):
-                    (cli / (name + suffix)).touch()
-                launcher = runtime / "Slicer.exe" if windows else runtime / "MacOS/Slicer"
+                (cli / ("DWIConvert" + suffix)).touch()
+                python = runtime / "bin" / ("PythonSlicer" + suffix)
+                python.parent.mkdir(parents=True)
+                python.touch()
+                launcher = runtime / ("Slicer.exe" if windows else "MacOS/Slicer" if layout == "macos" else "Slicer")
                 launcher.parent.mkdir(parents=True, exist_ok=True)
                 launcher.touch()
                 with mock.patch("anatomy.segmentation.dti_slicer.subprocess.run") as run:
                     with self.assertRaises(RuntimeError):
                         run_dti_feature_extraction(root / "data.nii.gz", root / "bvals", root / "bvecs",
-                                                   root / "output", root, root)
-                self.assertEqual(run.call_count, 7)
-                self.assertEqual(run.call_args_list[0].args[0][:3], [str(launcher), "--launch", str(cli / ("DWIConvert" + suffix))])
+                                                   root / "output", root, None)
+                self.assertEqual(run.call_count, 2)
+                self.assertEqual(run.call_args_list[0].args[0][:3],
+                                 [str(launcher), "--launch", str(cli / ("DWIConvert" + suffix))])
+                teem = run.call_args_list[1].args[0]
+                self.assertEqual(teem[0], str(python))
+                self.assertEqual(Path(teem[1]), REPO_ROOT / "shared/teem_dti.py")
+                self.assertEqual(teem[2:5], ["estimate", "--enumeration", "LS"])
+                scalars = dict(item.split("=", 1) for index, item in enumerate(teem) if teem[index - 1] == "--scalar")
+                output = root / "output"
+                self.assertEqual(scalars, {
+                    "FractionalAnisotropy": str(output / "DTI_FA.nrrd"), "Trace": str(output / "DTI_MD.nrrd"),
+                    "MaxEigenvalue": str(output / "DTI_E1.nrrd"), "MidEigenvalue": str(output / "DTI_E2.nrrd"),
+                    "MinEigenvalue": str(output / "DTI_E3.nrrd")})
+                self.assertEqual(teem[-3:], [str(output / "DWI.nrrd"), str(output / "DTI.nrrd"), str(output / "b0.nrrd")])
+
+    def test_w3_missing_pythonslicer_is_a_clear_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "Slicer"
+            (root / "lib/Slicer-5.10/cli-modules").mkdir(parents=True)
+            with mock.patch("anatomy.segmentation.dti_slicer.subprocess.run") as run:
+                with self.assertRaisesRegex(FileNotFoundError, "PythonSlicer"):
+                    run_dti_feature_extraction(root / "d.nii.gz", root / "bvals", root / "bvecs", root / "out", root)
+            run.assert_not_called()
+
+    def test_w3_run_ddseg_still_accepts_the_deprecated_slicer_ext_option(self):
+        import importlib
+        run_ddseg = importlib.import_module("anatomy.segmentation.run_ddseg")
+        with mock.patch.object(sys, "argv", ["run_ddseg.py", "--mask", "m", "--output", "o", "--weights-dir", "w",
+                                             "--slicer-ext", "/old/SlicerDMRI"]), \
+                mock.patch.object(run_ddseg, "run_ddseg") as run:
+            run_ddseg.main()
+        self.assertEqual(run.call_args.args[0].slicer_ext, Path("/old/SlicerDMRI").resolve())
+        self.assertIn("deprecated", run_ddseg.build_parser().format_help())
 
     def _make_slicer_base(self, root: Path) -> Path:
         slicer_base = root / "SlicerBase"
         (slicer_base / "lib" / "Slicer-5.10").mkdir(parents=True)
+        (slicer_base / "bin").mkdir()
+        (slicer_base / "bin" / "PythonSlicer").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
         (slicer_base / "Slicer").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
         return slicer_base
 
@@ -114,7 +151,7 @@ class DtiSlicerCommandConstructionTest(unittest.TestCase):
                         slicer_ext=slicer_base,
                     )
 
-            self.assertEqual(mock_run.call_count, 7)
+            self.assertEqual(mock_run.call_count, 2)
             first_argv = mock_run.call_args_list[0].args[0]
             self.assertEqual(first_argv[0], str(slicer_base / "Slicer"))
             self.assertEqual(first_argv[1], "--launch")

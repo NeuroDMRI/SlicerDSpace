@@ -29,7 +29,8 @@ class RunSubjectPipelineCliTest(unittest.TestCase):
         from shared.run_subject_pipeline_cli import build_parser
         defaults = build_parser().parse_args([])
         self.assertEqual(defaults.surface_precision, 'fp32')
-        self.assertEqual(defaults.surface_cpu_threads, 4)
+        # None: the stage CPU reservation of a cohort run, else 4 (T3 S1.3).
+        self.assertIsNone(defaults.surface_cpu_threads)
         self.assertEqual(defaults.surface_max_gpu_gib, 24.)
         selected = build_parser().parse_args(['--surface-precision', 'bf16',
             '--surface-cpu-threads', '2', '--surface-max-gpu-gib', '18'])
@@ -261,7 +262,12 @@ class RunSubjectPipelineCliTest(unittest.TestCase):
 
             payload = json.loads(completed.stdout)
             task_names = [task["name"] for task in payload["tasks"]]
-            self.assertEqual(task_names, ["tractography.saf", "bundles.wma", "bundles.tractcloud"])
+            # C1: the closure adds the anatomy, surface and CSD/ACT tracking that SAF/WMA/TractCloud need.
+            self.assertEqual([name for name in task_names if name.split("@")[0] in
+                              {"tractography.saf", "bundles.wma", "bundles.tractcloud"}],
+                             ["tractography.saf@csd_act", "bundles.tractcloud@csd_act", "bundles.wma@ukf"])
+            for added in ("segmentation.ddseg", "parcellation.ddparcel", "surface.ddsurfer_postprocess"):
+                self.assertIn(added, task_names)
 
     def test_cli_expands_bundle_backend_from_product_target(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -289,7 +295,9 @@ class RunSubjectPipelineCliTest(unittest.TestCase):
 
             payload = json.loads(completed.stdout)
             task_names = [task["name"] for task in payload["tasks"]]
-            self.assertEqual(task_names, ["bundles.wmql", "bundles.wma", "bundles.tractcloud"])
+            self.assertEqual([name for name in task_names if name.startswith("bundles.")],
+                             ["bundles.wmql@csd_act", "bundles.tractcloud@csd_act", "bundles.wma@ukf"])
+            self.assertIn("parcellation.ddparcel", task_names)
 
     def test_cli_microstructure_stages_drive_freewater_noddi_gates(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -386,8 +394,10 @@ class RunSubjectPipelineCliTest(unittest.TestCase):
             )
 
             payload = json.loads(completed.stdout)
-            self.assertEqual([task["name"] for task in payload["tasks"]], ["surface.ddsurfer_postprocess"])
-            self.assertEqual(payload["tasks"][0]["status"], "planned")
+            self.assertEqual([task["name"] for task in payload["tasks"]], ["surface.ddsurfer", "surface.ddsurfer_postprocess"])
+            self.assertEqual([task["requested"] for task in payload["tasks"]], [False, True])
+            self.assertEqual(payload["tasks"][0]["required_by"], ["surface_postprocess"])
+            self.assertEqual(payload["tasks"][1]["status"], "planned")
 
     def test_cli_records_surface_postprocess_atlases(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -415,7 +425,8 @@ class RunSubjectPipelineCliTest(unittest.TestCase):
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             self.assertEqual(manifest["postprocess_atlases"], ["aparc", "aparc.a2009s"])
 
-    def test_cli_records_preprocessing_dipy_options(self) -> None:
+    def test_cli_records_preprocessing_route_options(self) -> None:
+        """W2a (D1): the only route option left is --preprocessing-skip-gibbs."""
         with tempfile.TemporaryDirectory() as tmp:
             subject_root = Path(tmp) / "100307"
             input_dir = subject_root / "input"
@@ -424,32 +435,35 @@ class RunSubjectPipelineCliTest(unittest.TestCase):
                 (input_dir / name).write_text("x", encoding="utf-8")
 
             completed = subprocess.run(
-                [
-                    sys.executable,
-                    str(CLI_PATH),
-                    "--subject-root",
-                    str(subject_root),
-                    "--targets",
-                    "preprocessing",
-                    "--preprocessing-backend",
-                    "dipy",
-                    "--preprocessing-dipy-denoise-method",
-                    "none",
-                    "--preprocessing-skip-gibbs",
-                    "--preprocessing-skip-motion",
-                    "--print-manifest-only",
-                ],
-                check=True,
-                capture_output=True,
-                text=True,
+                [sys.executable, str(CLI_PATH), "--subject-root", str(subject_root), "--targets", "preprocessing",
+                 "--preprocessing-skip-gibbs", "--print-manifest-only"],
+                check=True, capture_output=True, text=True,
             )
 
-            manifest_path = Path(completed.stdout.strip())
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            self.assertEqual(manifest["preprocessing_backend"], "dipy")
-            self.assertEqual(manifest["preprocessing_dipy_denoise_method"], "none")
+            manifest = json.loads(Path(completed.stdout.strip()).read_text(encoding="utf-8"))
             self.assertFalse(manifest["preprocessing_dipy_run_gibbs"])
-            self.assertFalse(manifest["preprocessing_dipy_run_motion_correction"])
+            for removed in ("preprocessing_backend", "preprocessing_dipy_denoise_method",
+                            "preprocessing_dipy_run_motion_correction"):
+                self.assertNotIn(removed, manifest)
+
+    def test_w2a_each_removed_preprocessing_flag_fails_with_the_single_route_message(self) -> None:
+        """W2a (D1): an old route, denoise or motion flag stops the run and names the one route."""
+        with tempfile.TemporaryDirectory() as tmp:
+            subject_root = Path(tmp) / "100307"
+            (subject_root / "input").mkdir(parents=True)
+            for flag in (["--preprocessing-backend", "dipy"], ["--preprocessing-backend", "mrtrix_fsl"],
+                         ["--preprocessing-backend=dipy"], ["--preprocessing-dipy-denoise-method", "localpca"],
+                         ["--preprocessing-dipy-denoise-method=none"], ["--preprocessing-skip-motion"]):
+                with self.subTest(flag=flag):
+                    completed = subprocess.run(
+                        [sys.executable, str(CLI_PATH), "--subject-root", str(subject_root), "--targets", "preprocessing",
+                         *flag, "--print-manifest-only"],
+                        capture_output=True, text=True,
+                    )
+                    name = flag[0].split("=")[0]
+                    self.assertEqual(completed.returncode, 2, completed.stderr)
+                    self.assertIn("Preprocessing has one route: DIPY MP-PCA, DIPY Gibbs removal, FSL eddy/topup "
+                                  f"through dwifslpreproc; remove {name}", completed.stderr)
 
     def test_doctor_writes_environment_report_and_install_helpers(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

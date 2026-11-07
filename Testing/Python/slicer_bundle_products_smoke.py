@@ -1,4 +1,4 @@
-"""Native SlicerDMRI reading and fresh DTI timing on real, isolated data."""
+"""Native bundle reading and fresh native Teem DTI timing on real, isolated data."""
 
 from dataclasses import replace
 import json
@@ -190,7 +190,7 @@ def run():
             records.append(dict(module='microstructure.native_dti_fresh', subject_id='100307', status='completed',
                                 runtime_seconds=seconds, shape=list(source.shape), source=str(raw.dwi_path),
                                 source_record=str(bundle.bundle_dir / 'native_dti_timing.json'),
-                                scope='Fresh real full-volume SlicerDMRI WLS fitting and six scalar conversions, no cache reuse'))
+                                scope='Fresh real full-volume native Teem WLS fitting and six scalar conversions, no cache reuse'))
         result = dict(status='passed', records=records, slicer_version=slicer.app.applicationVersion,
                       scientific_scope='Geometry/integrity and scoped elapsed measurements; not anatomical certification')
         code = 0

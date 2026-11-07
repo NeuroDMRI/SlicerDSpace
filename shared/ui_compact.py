@@ -27,6 +27,10 @@ def compact_algorithm_labels(node: Any) -> dict[str, str]:
         method = (getattr(node, "orchestrationDkiFitMethod", "") or RUN_DEFAULTS["dki_fit_method"]).upper()
         models.append({"MKCURVE": "MK-Curve", "MKCURVE_MATLAB": "MK-Curve (MATLAB)"}
                       .get(method, f"DKI ({method})"))
+    from shared.ui_run_controller import microstructure_ifw_enabled
+    if microstructure_ifw_enabled(getattr(node, "orchestrationMicrostructureStages", ""),
+                                  legacy_ifw=bool(getattr(node, "orchestrationRunIfw", False))):
+        models.append("iFW")
     tractography = (getattr(node, "orchestrationTractographyBackend", "")
                     or RUN_DEFAULTS["tractography_backend"]).strip().lower()
     bundles = (getattr(node, "orchestrationBundleBackend", "")

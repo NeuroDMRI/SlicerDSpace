@@ -4,7 +4,7 @@ TRACKING = ("csd_act", "ukf", "dti_det", "saf")
 BUNDLES = ("wmql", "wma", "tractcloud")
 LABELS = {"csd_act": "CSD / ACT", "ukf": "UKF", "dti_det": "DTI deterministic", "saf": "CSD + SAF",
           "wmql": "WMQL", "wma": "WMA", "tractcloud": "TractCloud",
-          "dti": "DTI", "freewater": "FW", "noddi": "NODDI", "dki": "DKI"}
+          "dti": "DTI", "freewater": "FW", "noddi": "NODDI", "dki": "DKI", "ifw": "iFW"}
 
 
 def selection_choices(choices):

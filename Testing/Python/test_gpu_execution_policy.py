@@ -13,7 +13,6 @@ from unittest.mock import Mock, patch
 from shared.brain_mask import BrainMaskConfig, brain_mask_config_from_options
 from shared.environment import resolve_auto_torch_device
 from shared.pnl_mask_runner import select_device as pnl_device, main as pnl_main
-from shared.synthstrip_mask_runner import select_device as synthstrip_device, upstream_code as synthstrip_code
 
 
 class GPUExecutionPolicyTests(unittest.TestCase):
@@ -68,40 +67,6 @@ class GPUExecutionPolicyTests(unittest.TestCase):
             self.assertEqual(json.loads(record.read_text())["framework"], "pytorch")
             self.assertEqual(script.read_text(), "# console script fixture; no model inference")
 
-    def test_synthstrip_auto_and_cpu_and_strict_cuda(self):
-        for requested, available, expected in (("auto", True, "cuda"), ("auto", False, "cpu"), ("cpu", True, "cpu")):
-            with self.subTest(requested=requested, available=available), patch.dict(os.environ):
-                torch = self.fake_torch(available)
-                self.assertEqual(synthstrip_device(requested, torch)["resolved"], expected)
-                if expected == "cuda":
-                    torch.empty.assert_called_once_with(1, device="cuda:0")
-                else:
-                    torch.empty.assert_not_called()
-        with self.assertRaisesRegex(RuntimeError, "no visible CUDA GPU"):
-            synthstrip_device("cuda", self.fake_torch(False))
-
-    def test_synthstrip_does_not_unmask_another_gpu(self):
-        with tempfile.TemporaryDirectory() as temp:
-            script = Path(temp) / "mri_synthstrip"
-            source = "import os\nos.environ['CUDA_VISIBLE_DEVICES'] = '0'\nscientific_value = 42\n"
-            script.write_text(source)
-            code, record = synthstrip_code(script)
-            namespace = {}
-            with patch.dict(os.environ, {"CUDA_VISIBLE_DEVICES": "1"}):
-                exec(code, namespace)
-                self.assertEqual(os.environ["CUDA_VISIBLE_DEVICES"], "1")
-            self.assertEqual(namespace["scientific_value"], 42)
-            self.assertTrue(record["preserved_caller_gpu_visibility"])
-            self.assertEqual(script.read_text(), source)
-
-    def test_synthstrip_rejects_unvalidated_old_gpu_build_without_cpu_retry(self):
-        torch = self.fake_torch(True)
-        torch.version.cuda = "11.7"
-        torch.cuda.get_arch_list.return_value = ["sm_80", "sm_86"]
-        with self.assertRaisesRegex(RuntimeError, "Configure Advanced > SynthStrip Python"):
-            synthstrip_device("auto", torch)
-        torch.empty.assert_not_called()
-
     def test_torch_auto_gpu_cpu_and_probe_failure(self):
         for available, count, expected in ((True, 2, "cuda:0"), (False, 0, "cpu")):
             with patch("shared.environment._check_cuda_device", return_value=(available, {"device_count": count})) as probe:
@@ -150,7 +115,7 @@ class GPUExecutionPolicyTests(unittest.TestCase):
         self.assertEqual(original.call_count, 1)
 
     def test_invalid_devices_are_rejected(self):
-        for select, runtime in ((pnl_device, self.fake_torch(False)), (synthstrip_device, self.fake_torch(False))):
+        for select, runtime in ((pnl_device, self.fake_torch(False)),):
             with self.assertRaises(ValueError):
                 select("invalid", runtime)
 

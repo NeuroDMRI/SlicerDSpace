@@ -24,17 +24,13 @@ GROUPS = (
 )
 
 TITLES = {
-    "mask-pnl": "PNL CNN brain mask", "mask-dipy": "DIPY brain mask",
-    "mask-mrtrix": "MRtrix brain mask", "mask-synthstrip": "SynthStrip brain mask",
-    "preproc-dipy": "DIPY preprocessing with MP-PCA",
-    "preproc-localpca": "DIPY preprocessing with Local PCA",
-    "preproc-patch2self": "DIPY preprocessing with Patch2Self",
-    "preproc-fsl": "MRtrix/FSL preprocessing",
+    "mask-pnl": "PNL CNN brain mask",
+    "preproc-fsl": "Preprocessing: DIPY MP-PCA and Gibbs, FSL eddy/topup",
     "anatomy-seg": "DDSeg tissue segmentation", "anatomy-parcel": "DDParcel brain parcellation",
     "anatomy-surface": "DDSurfer native surfaces", "anatomy-combined": "Combined anatomical priors",
     "anatomy-postprocess": "Native cortical postprocessing and atlas mapping",
     "micro-dti": "DTI with WLS", "micro-dti-ols": "DTI with OLS",
-    "micro-dti-light": "DTI with explicit DIPY masking", "micro-fw": "Free-water imaging",
+    "micro-fw": "Free-water imaging",
     "micro-noddi": "NODDI with AMICO", "micro-dki": "DKI with WLS",
     "micro-dki-ols": "DKI with OLS", "micro-mkcurve": "MK-Curve Python port",
     "micro-mkcurve-matlab": "MK-Curve optional MATLAB reference",
@@ -49,6 +45,7 @@ TITLES = {
     "bundle-existing": "WMA with existing reviewed tracks",
     "connectome-python": "Count/scalar-weighted Python connectome",
     "connectome-sift2": "MRtrix connectome with matching SIFT2 weights",
+    "connectome-auto": "Connectome with the automatic backend choice",
     "combined": "Combined anatomical priors, DTI, UKF, WMQL and connectome",
 }
 

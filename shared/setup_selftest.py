@@ -2,9 +2,26 @@
 
 import importlib
 import json
+import os
 from pathlib import Path
+import re
+import subprocess
 import tempfile
 import time
+
+MRTRIX_VERSION = '3.0.8'
+TOOL_TIMEOUT_SECONDS = 120
+
+
+def receipt_warnings(receipt_paths):
+    """A2: the warnings of passed self-check receipts (GUI and CLI show them; they do not block readiness)."""
+    found = []
+    for path in receipt_paths:
+        try:
+            found.extend(str(text) for text in json.loads(Path(path).read_text()).get('warnings') or ())
+        except (OSError, ValueError, AttributeError):
+            continue
+    return found
 
 
 def requests_for_report(report, *, asset_root=None, repo_root=None, backend_paths=None, device_choices=None):
@@ -29,6 +46,12 @@ def requests_for_report(report, *, asset_root=None, repo_root=None, backend_path
         group = groups.setdefault(python, dict(python=python, imports=[], pythonpath=[], models=[]))
         group['imports'].append(name)
         group['pythonpath'].extend(details.get('pythonpath', ()))
+    for item in getattr(report, 'statuses', ()):
+        # Teem is Slicer's library, so only the interpreter that loaded it gets the Teem self-check.
+        if getattr(item, 'key', '') == 'native_tensor_fit' and item.required and item.status == 'available':
+            python = (item.details or {}).get('python_executable')
+            group = groups.setdefault(python, dict(python=python, imports=[], pythonpath=[], models=[]))
+            group['teem_self_check'] = True
     backend_paths = backend_paths or {}
     if 'wma' in getattr(report, 'targets', ()) and backend_paths.get('wma_root'):
         wma_python = next(((item.details or {}).get('python_executable') for item in report.statuses
@@ -79,7 +102,213 @@ def requests_for_report(report, *, asset_root=None, repo_root=None, backend_path
                      data / 'TrainData_800clu800ol/HCP_mass_center.npy']
             tract_group['tractcloud_resources'] = [{'path': str(path), 'sha256': file_hash(path)} for path in paths]
             tract_group['tractcloud_device'] = target_devices['tractcloud']
+    _add_tool_requests(report, groups, backend_paths)
     return list(groups.values())
+
+
+_AVAILABLE = {'available', 'ok', 'passed'}
+
+
+def _tool_bin_dir(report, install_group):
+    """Directory of the first required, available command of an install group ('mrtrix' or 'fsl'), or None."""
+    for item in getattr(report, 'statuses', ()):
+        if item.kind == 'command' and item.required and item.status in _AVAILABLE \
+                and getattr(item, 'install_group', '') == install_group:
+            resolved = (item.details or {}).get('resolved')
+            if resolved:
+                return str(Path(resolved).parent)
+    return None
+
+
+def _dcm2niix_executable(report, backend_paths):
+    """The dcm2niix that DICOM import would use (G1).
+
+    An explicit report field or path setting comes first. Otherwise the pip package in this Python
+    (`input_import.packaged_dcm2niix()`), then PATH (`find_dcm2niix()` does both). None: no check (DWIConvert is the fallback).
+    """
+    for item in getattr(report, 'statuses', ()):
+        if getattr(item, 'key', '') == 'command:dcm2niix' and item.required and item.status in _AVAILABLE:
+            resolved = (item.details or {}).get('resolved')
+            if resolved:
+                return str(resolved)
+    explicit = next((str(backend_paths[name]) for name in ('packaged_dcm2niix', 'dcm2niix_executable')
+                     if backend_paths.get(name)), None)
+    if explicit:
+        return explicit
+    from shared import input_import
+    return input_import.find_dcm2niix()
+
+
+def _same_executable(first, second):
+    if not first or not second:
+        return False
+    try:
+        return os.path.samefile(first, second)
+    except OSError:
+        return os.path.abspath(str(first)) == os.path.abspath(str(second))
+
+
+def _configured_dcm2niix(executable, backend_paths):
+    """A2b: True when DICOM import uses ``executable`` as its configured choice: the plugin's wheel, or an explicit setting.
+
+    Only a dcm2niix found by PATH discovery alone is False (a failed check is then a warning).
+    """
+    from shared import input_import
+    for name in ('packaged_dcm2niix', 'dcm2niix_executable'):
+        if backend_paths.get(name) and _same_executable(executable, backend_paths[name]):
+            return True
+    return _same_executable(executable, input_import.packaged_dcm2niix())
+
+
+def _add_tool_requests(report, groups, backend_paths):
+    """R-B3: MRtrix, FSL, dcm2niix and the PNL native mask checks for what the report selects and has a path for.
+
+    They go into the request of Slicer's Python (the managed `python` shim and the PNL check need it).
+    """
+    from shared.external_process import is_slicer_python
+    wanted = {}
+    mrtrix, fsl = _tool_bin_dir(report, 'mrtrix'), _tool_bin_dir(report, 'fsl')
+    if mrtrix:
+        wanted['mrtrix_bin_dir'] = mrtrix
+    if fsl:
+        wanted['fsl_bin_dir'] = fsl
+    dcm2niix = _dcm2niix_executable(report, backend_paths)
+    if dcm2niix:
+        wanted['dcm2niix'] = dcm2niix
+        wanted['dcm2niix_configured'] = _configured_dcm2niix(dcm2niix, backend_paths)
+    slicer_hint = None
+    for item in getattr(report, 'statuses', ()):
+        details = item.details or {}
+        if getattr(item, 'key', '') == 'brain_mask_backend' and item.required and item.status in _AVAILABLE \
+                and details.get('backend') == 'pnl_cnn' and (details.get('tool_paths') or {}).get('model_dir') \
+                and (details.get('settings') or {}).get('pnl_route') == 'native-sitk':
+            # SC-1d: the native check runs only for the native route; the managed route keeps its runtime check.
+            wanted['pnl_native_mask'] = {'model_dir': details['tool_paths']['model_dir'],
+                                         'device': (details.get('settings') or {}).get('device', 'auto')}
+            slicer_hint = (details.get('tool_paths') or {}).get('pythonslicer')
+    if not wanted:
+        return
+    group = next((g for python, g in groups.items() if python and is_slicer_python(python)), None)
+    if group is None:
+        # python=None: the interpreter that ran the environment check (Slicer's Python in the GUI).
+        group = groups.setdefault(slicer_hint, dict(python=slicer_hint, imports=[], pythonpath=[], models=[], devices=['cpu']))
+    group.update(wanted)
+
+
+def _run_tool(argv, env):
+    try:
+        return subprocess.run([str(item) for item in argv], capture_output=True, text=True,
+                              timeout=TOOL_TIMEOUT_SECONDS, env=env)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeError(f'{Path(str(argv[0])).name} could not run: {type(exc).__name__}: {exc}') from exc
+
+
+def _output(result):
+    return (result.stdout or '') + (result.stderr or '')
+
+
+def is_managed_prefix(bin_dir):
+    """True when ``bin_dir`` lies inside the plugin runtime root (a prefix this plugin installed)."""
+    from shared.managed_runtimes import runtime_root
+    root, path = runtime_root(), Path(bin_dir).expanduser().resolve()
+    return path == root or root in path.parents
+
+
+def check_mrtrix(bin_dir, fsl_bin_dir=None, *, shim_root=None):
+    """MRtrix3 through the B3 environment: the version, and two scripts that need the managed `python` shim.
+
+    R-B4: the plugin-managed prefix must report exactly MRTRIX_VERSION. A path the user set may be any MRtrix3 release.
+    R-B1: MRtrix scripts take a single dash (`-help`); measured 2026-11-07, `dwi2response --help` exits 1.
+    """
+    from shared.external_process import managed_tool_environment
+    env = managed_tool_environment(mrtrix_bin_dir=bin_dir, fsl_bin_dir=fsl_bin_dir, shim_root=shim_root)
+    checks = []
+    version = _run_tool([Path(bin_dir) / 'mrconvert', '--version'], env)
+    text = _output(version)
+    if is_managed_prefix(bin_dir):
+        reports = re.search(r'(?<![\d.])' + re.escape(MRTRIX_VERSION) + r'(?![\d.])', text)
+        expected = MRTRIX_VERSION
+    else:
+        reports = re.search(r'mrconvert\s+3\.\d', text)
+        expected = '3.x'
+    if version.returncode != 0 or not reports:
+        raise RuntimeError(f'mrconvert --version does not report {expected}: {text.strip()[:200]}')
+    checks.append('mrtrix:mrconvert_version')
+    for name in ('dwi2response', 'dwifslpreproc'):
+        result = _run_tool([Path(bin_dir) / name, '-help'], env)
+        if result.returncode != 0 or name not in _output(result):
+            raise RuntimeError(f'{name} -help failed (exit {result.returncode}): {_output(result).strip()[:200]}')
+        checks.append(f'mrtrix:{name}_help')
+    return checks
+
+
+def check_fsl(fsl_bin_dir, mrtrix_bin_dir=None, *, shim_root=None):
+    """FSL eddy and topup (and eddy_cpu / eddy_openmp) with FSLDIR, FSLOUTPUTTYPE and the FSL bin on PATH.
+
+    G2: a plugin-managed prefix must have eddy, eddy_cpu and topup. Any other FSL needs eddy and topup, what the
+    doctor requires; eddy_cpu (FSL 6.0.7+) and eddy_openmp (older FSL) are checked only when present.
+    The tools print their usage and exit with 1 for --help; exit 127 means the FSL Python was not found.
+    """
+    from shared.external_process import managed_tool_environment
+    env = managed_tool_environment(mrtrix_bin_dir=mrtrix_bin_dir, fsl_bin_dir=fsl_bin_dir, shim_root=shim_root)
+    checks = []
+    managed = is_managed_prefix(fsl_bin_dir)
+    required = {'eddy', 'topup'} | ({'eddy_cpu'} if managed else set())
+    for name in ('eddy', 'eddy_cpu', 'eddy_openmp', 'topup'):
+        if name not in required and (managed or not (Path(fsl_bin_dir) / name).exists()):
+            continue
+        result = _run_tool([Path(fsl_bin_dir) / name, '--help'], env)
+        if result.returncode != 1 or 'usage' not in _output(result).lower():
+            raise RuntimeError(f'{name} --help should print its usage and exit with 1; got exit {result.returncode}: '
+                               f'{_output(result).strip()[:200]}')
+        checks.append(f'fsl:{name}_help')
+    return checks
+
+
+def check_dcm2niix(executable):
+    # R-B2: measured 2026-11-07 (wheel v1.0.20261029): `dcm2niix -v` prints the banner and exits 3
+    # (main_console.cpp kEXIT_REPORT_VERSION). Exit 0 is accepted as well.
+    result = _run_tool([executable, '-v'], None)
+    text = _output(result).lower()
+    if result.returncode not in (0, 3) or 'dcm2niix' not in text or 'version' not in text:
+        raise RuntimeError(f'dcm2niix -v did not report a version (exit {result.returncode}): {_output(result).strip()[:200]}')
+    return ['dcm2niix:version']
+
+
+def check_torch_convolution(torch, device):
+    """One small convolution on the selected device: all-ones 4x4 input and 3x3 kernel give four values of 9."""
+    out = torch.nn.functional.conv2d(torch.ones((1, 1, 4, 4), device=device), torch.ones((1, 1, 3, 3), device=device))
+    if tuple(out.shape) != (1, 1, 2, 2) or not torch.equal(out, torch.full_like(out, 9)):
+        raise RuntimeError('PyTorch convolution returned a wrong result on ' + device)
+    return 'torch:convolution:' + device
+
+
+def native_mask_module_present():
+    return Path(__file__).with_name('pnl_mask_native.py').is_file()
+
+
+def check_native_mask(spec, *, torch=None, inference=None, weights=None):
+    """PNL native mask: the three views load and one 256x256 slice per view runs on the selected device.
+
+    Returns the check names. R-B5: a requested check with `shared/pnl_mask_native.py` absent is a failure.
+    It uses the W-A API `shared.pnl_cnn.weights.load_model(dir, view, device)` and `inference.select_device`.
+    """
+    if not native_mask_module_present():
+        raise RuntimeError('PNL native mask is selected but shared/pnl_mask_native.py is not present in this install')
+    if torch is None:
+        import torch
+    if inference is None or weights is None:
+        from shared.pnl_cnn import inference, weights
+    device = inference.select_device(spec.get('device', 'auto'))['resolved']
+    checks = []
+    with torch.inference_mode():
+        for view in inference.VIEWS:
+            model = weights.load_model(spec['model_dir'], view, device)
+            output = model(torch.zeros((1, 1, 256, 256), dtype=torch.float32, device=device), segmentation_only=True)
+            if tuple(output.shape[-2:]) != (256, 256) or not bool(torch.isfinite(output).all()):
+                raise RuntimeError(f'PNL {view} view gave a wrong or nonfinite slice on {device}')
+            checks.append(f'pnl_native_mask:{view}:{device}')
+    return checks
 
 
 def run_checks(request):
@@ -90,6 +319,11 @@ def run_checks(request):
     for name in request.get('imports', ()):
         importlib.import_module(name)
         checks.append('import:' + name)
+    teem_report = None
+    if request.get('teem_self_check'):
+        from shared import teem_dti
+        teem_report = teem_dti.self_check()  # raises TeemError (reported as a failed check) when Teem is unusable
+        checks.append('teem:self_check')
     names = set(request.get('imports', ()))
     with tempfile.TemporaryDirectory(prefix='slicerdspace-selftest-') as temporary:
         folder = Path(temporary)
@@ -142,6 +376,7 @@ def run_checks(request):
                 if not torch.equal(tensor @ tensor, tensor * 2):
                     raise RuntimeError('PyTorch tensor operation failed')
                 checks.append('torch:tensor_operation:' + device)
+                checks.append(check_torch_convolution(torch, device))
             from shared.backend_sources import file_hash
             for model in request.get('models', ()):
                 path = Path(model['path'])
@@ -185,6 +420,27 @@ def run_checks(request):
                 if not torch.isfinite(output).all():
                     raise RuntimeError('TractCloud produced nonfinite synthetic output')
                 checks.append('tractcloud:load_and_synthetic_forward')
-    return dict(kind='slicerdspace_setup_selftest', status='passed', checks=checks,
+    if request.get('mrtrix_bin_dir'):
+        checks.extend(check_mrtrix(request['mrtrix_bin_dir'], request.get('fsl_bin_dir')))
+    if request.get('fsl_bin_dir'):
+        checks.extend(check_fsl(request['fsl_bin_dir'], request.get('mrtrix_bin_dir')))
+    warnings = []
+    if request.get('dcm2niix'):
+        # A2/A2b: the plugin's wheel or an explicit setting blocks "ready". A dcm2niix found by PATH discovery is a warning: NIfTI input never needs it
+        # and DICOM import tries the wheel first.
+        try:
+            checks.extend(check_dcm2niix(request['dcm2niix']))
+        except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
+            from shared import input_import
+            if request.get('dcm2niix_configured') or _same_executable(request['dcm2niix'], input_import.packaged_dcm2niix()):
+                raise
+            warnings.append(f"dcm2niix at {request['dcm2niix']} was found on PATH only and failed its check ({exc}). "
+                            'NIfTI input does not need it; DICOM import tries the plugin wheel first.')
+    if request.get('pnl_native_mask'):
+        checks.extend(check_native_mask(request['pnl_native_mask']))
+    extra = {} if teem_report is None else dict(teem_self_check=teem_report)
+    if warnings:
+        extra['warnings'] = warnings
+    return dict(kind='slicerdspace_setup_selftest', status='passed', checks=checks, **extra,
                 elapsed_seconds=time.monotonic() - started,
                 scope='Installation functionality using synthetic inputs; no patient processing or anatomical QC')

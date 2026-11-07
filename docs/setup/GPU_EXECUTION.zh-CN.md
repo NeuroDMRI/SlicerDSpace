@@ -25,14 +25,12 @@
 | 环节 | 实际策略 |
 | --- | --- |
 | PNL CNN 掩膜 | 外部 PyTorch `auto`；优先调用方可见的首个 CUDA GPU，否则 CPU，可显式选择 |
-| SynthStrip 掩膜 | FreeSurfer fspython 内 `auto`；可用时传 GPU 参数，保留调用方 GPU 限制 |
 | DDSeg | GUI、CLI、直接 API 默认 `auto`；在执行推理的环境中判断设备 |
 | DDParcel | 默认 `auto`；继承 GUI 的 PyTorch 选择，旧版独立入口也转发选择；显式 CUDA 不静默变 CPU |
 | DDSurfer 表面 | 默认 `auto`；用实际外部 Python 探测，保留显存与精度检查 |
 | TractCloud | 用其实际 Python 判断；继承 GUI 选择，CUDA 出错不自动重跑 CPU |
 | MRtrix/FSL eddy | CUDA 版和 GPU 可用时优先使用；启动器禁止 CUDA 失败后自动重跑 CPU |
-| MRtrix dwi2mask | 本路线仅有 CPU 实现 |
-| DIPY 去噪、Gibbs、运动校正 | 当前 CPU 实现 |
+| DIPY MP-PCA 去噪、Gibbs 去除 | 当前 CPU 实现 |
 | Slicer DTI、DIPY FW/DKI、Python MK-Curve | 当前 CPU 实现 |
 | AMICO NODDI | 当前 CPU 拟合后端，线程设置与 GPU 是两回事 |
 | ANTs/BRAINSFit、FreeSurfer 表面后处理 | 当前 CPU 配准与几何后端 |
@@ -55,9 +53,9 @@
 掩膜 manifest 记录 `device_execution`，表面 manifest 记录 `resolved_device`，
 DDSeg QC 记录执行设备，TractCloud 保存独立设备记录并写入 manifest。
 
-PNL 的 `DEVICE_ID_LIST` 未定义分支和旧 SynthStrip 固定 GPU 0 的赋值由启动器
+PNL 的 `DEVICE_ID_LIST` 未定义分支由启动器
 在内存中修正，不改外部源文件、模型权重、科学计算、配准或后处理逻辑。
-DDSurfer 的固定上游快照保持不变；插件预先生成并明确传入原生掩膜，避开上游
+DDSurfer 的固定上游快照保持不变；插件预先用 PNL CNN 生成并明确传入原生掩膜，避开上游
 独立辅助脚本的 CPU 默认值。
 
 ---
@@ -66,11 +64,6 @@ DDSurfer 的固定上游快照保持不变；插件预先生成并明确传入�
 
 [PNLBrainMask-Torch](https://github.com/ChengjinLii/PNLBrainMask-Torch)
 使用转换后的 PNL 权重与 PyTorch 推理；受管安装默认使用已做配对测试的 CPU 构建，显式 CUDA 路线需要兼容的 PyTorch/CUDA。
-[SynthStrip](https://surfer.nmr.mgh.harvard.edu/docs/synthstrip/) 在本适配器中
-默认使用 FreeSurfer 自带 Python。新 GPU 可在“环境与安装 > 外部运行路径”
-设置 `synthstrip_python`，选择装有兼容 CUDA PyTorch、surfa、NumPy 的独立 Python，
-仍使用同一官方脚本和权重。已知未经验证的旧 CUDA/新 GPU 组合会提前阻止运行，
-不会悄悄改用 CPU。
 GPU 可用不代表每次端到端运行更快。
 
 官方 CUDA eddy 2602.0 已装到本机独立 FSL 环境，完成真实 31-volume 数据的预处理验收，

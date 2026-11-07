@@ -68,16 +68,34 @@ class BrainMaskModuleLogicWiringTest(unittest.TestCase):
         for name in ("runEnvironmentDoctor", "runEnvironmentDependencyCheck"):
             self.assertIs(inspect.signature(getattr(DummyLogic, name)).parameters["brain_mask_required"].default, False)
 
+    def test_sc1a_every_entrypoint_takes_and_forwards_pnl_mask_route(self) -> None:
+        for name in METHODS:
+            with self.subTest(method=name):
+                self.assertEqual(inspect.signature(getattr(DummyLogic, name)).parameters["pnl_mask_route"].default, "auto")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            logic = DummyLogic(root)
+            execution = types.SimpleNamespace(run_manifest_path=root / "m.json", tasks=())
+            planning = types.SimpleNamespace(run_plan_path=root / "p.json", items=())
+            with (patch.object(logic_module, "run_subject_products", return_value=execution) as run,
+                  patch.object(logic_module, "plan_subject_products", return_value=planning) as plan):
+                logic.runSelectedProductOrchestration(subject_id="s", subject_root=root, targets=("microstructure",),
+                                                      pnl_mask_route="native")
+                logic.planSelectedProductOrchestration(subject_id="s", subject_root=root, targets=("microstructure",),
+                                                       pnl_mask_route="managed")
+            self.assertEqual(run.call_args.args[0].pnl_mask_route, "native")
+            self.assertEqual(plan.call_args.args[0].pnl_mask_route, "managed")
+
     def test_validation_plan_doctors_and_execution_forward_all_settings(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             logic = DummyLogic(root)
-            paths = {key: root / "external tools" / key for key in (*PATH_KEYS, "postprocess_freesurfer_home")}
+            paths = {key: root / "external tools" / key for key in PATH_KEYS}
             validation = types.SimpleNamespace(report_path=None, status="passed", error_count=0, warning_count=0)
             execution = types.SimpleNamespace(run_manifest_path=root / "manifest.json", tasks=())
             planning = types.SimpleNamespace(run_plan_path=root / "plan.json", items=())
             doctor = types.SimpleNamespace()
-            for backend in ("pnl_cnn", "synthstrip", "mrtrix", "provided"):
+            for backend in ("pnl_cnn", "provided"):
                 for name in METHODS:
                     with (
                         self.subTest(method=name, backend=backend),

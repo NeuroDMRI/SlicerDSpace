@@ -10,6 +10,7 @@ import argparse
 from dataclasses import replace
 import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -27,7 +28,15 @@ from shared import pipeline
 from shared.external_process import merged_startup_environment
 
 
+def leave_cohort_environment():
+    """B10 (S1.2 Opus N4): the benchmark is a standalone run. A cohort schedule left in the shell would make the
+    stages of ``run_surface`` nest their admissions, so the script drops the cohort variables first."""
+    for key in [name for name in os.environ if name.startswith('SLICERDSPACE_COHORT_')]:
+        del os.environ[key]
+
+
 def main():
+    leave_cohort_environment()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--subject-root', type=Path, required=True)
     parser.add_argument('--subject', required=True)
@@ -45,15 +54,19 @@ def main():
     config = SurfaceConfig(args.subject, subject, root / 'author', input_bundle=raw, execute=True,
         model_assets_dir=args.assets.resolve(), slicer_home=args.slicer_home.resolve(), device='auto')
     binaries = {name: next(args.slicer_home.rglob(filename)) for name, filename in (
-        ('dwitodtiestimation', 'DWIToDTIEstimation'), ('diffusiontensorscalarmeasurements', 'DiffusionTensorScalarMeasurements'),
         ('brainsfit', 'BRAINSFit'), ('resamplescalarvectordwivolume', 'ResampleScalarVectorDWIVolume'))}
+    python_slicer = next(path for path in (args.slicer_home / 'bin/PythonSlicer', args.slicer_home / 'PythonSlicer')
+                         if path.is_file())
     def execute(command, log=None):
-        subprocess.run([str(args.slicer_home / 'Slicer'), '--launch', *command], check=True,
+        # The native tensor fit is a PythonSlicer command; Slicer CLI modules still start through the launcher.
+        launch = [] if Path(command[0]) == python_slicer else [str(args.slicer_home / 'Slicer'), '--launch']
+        subprocess.run([*launch, *command], check=True,
             env=merged_startup_environment(pipeline.build_cli_environment(command[0])))
     started = time.perf_counter()
     author = run_surface(config, log=lambda value: print(value, flush=True))
     author_seconds = time.perf_counter() - started
     with patch.object(pipeline, '_require_slicer'), \
+            patch.object(pipeline, 'resolve_pythonslicer_executable', return_value=str(python_slicer)), \
             patch.object(pipeline, '_get_cli_executable', side_effect=lambda name: str(binaries[name])), \
             patch.object(pipeline, '_run_cli', side_effect=execute):
         started = time.perf_counter()

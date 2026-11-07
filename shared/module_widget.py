@@ -66,11 +66,13 @@ from shared.ui_run_history import (
     stop_progress_polling,
     validated_selected_manifest,
 )
-from shared.ui_run_state import run_button_state, run_state_from_manifest_status
+from shared.subject_id import effective_subject_id
+from shared.ui_run_state import gui_brain_mask_required, run_button_state, run_state_from_manifest_status
 from shared.ui_output_loading import qbytearray_to_text
 from shared.ui_input_inspection import inspect_input_directory
 from shared.ui_parameter_sync import sync_parameter_node_to_ui
-from shared.ui_workflow_text import BRAIN_MASK_BACKEND_TEXT_KEYS
+from shared.brain_mask import REMOVED_BRAIN_MASK_BACKENDS
+from shared.ui_workflow_text import BRAIN_MASK_BACKEND_TEXT_KEYS, PNL_MASK_ROUTE_TEXT_KEYS
 from shared.ui_run_controller import (
     BackendSelection,
     ProductTargetFlags,
@@ -85,8 +87,11 @@ from shared.ui_run_controller import (
     default_run_name_for_backend,
     extract_background_manifest_path,
     is_auto_generated_run_name,
+    compress_mrtrix_dense_value,
+    microstructure_ifw_enabled,
     microstructure_stage_flags,
     microstructure_optional_stage_flags,
+    parse_ifw_echo_time_ms,
     parse_manifest_line,
     blocked_plan_items,
     blocked_plan_log_text,
@@ -99,6 +104,7 @@ from shared.ui_run_controller import (
     rows_from_result,
     rows_from_single_subject_manifest,
     run_summary_from_manifest,
+    selected_closure,
     selected_environment_targets,
     selected_orchestrator_targets,
     selected_product_targets,
@@ -197,10 +203,26 @@ class SharedWidgetMixin:
         self._connect_topup_ui()
 
     def _connect_microstructure_stage_ui(self) -> None:
-        for name in ("orchestrationFreeWaterCheckBox", "orchestrationNoddiCheckBox", "orchestrationDkiCheckBox"):
+        for name in ("orchestrationFreeWaterCheckBox", "orchestrationNoddiCheckBox", "orchestrationDkiCheckBox",
+                     "orchestrationIfwCheckBox"):
             checkbox = getattr(self.ui, name, None)
             if checkbox is not None:
                 checkbox.toggled.connect(self._onOptionalMicrostructureStageChanged)
+        # T-C2: the T2 values are fixed in code (Cho et al.); the GUI only shows them.
+        from microstructure.ifw import IFW_T2_CSF_MS, IFW_T2_GM_MS
+        for name, value in (("orchestrationIfwT2TissueLineEdit", IFW_T2_GM_MS),
+                            ("orchestrationIfwT2CsfLineEdit", IFW_T2_CSF_MS)):
+            field = getattr(self.ui, name, None)
+            if field is not None:
+                field.setText(f"{value:g}")
+                field.setReadOnly(True)
+        echo_time = getattr(self.ui, "orchestrationIfwEchoTimeLineEdit", None)
+        if echo_time is not None:
+            echo_time.textChanged.connect(self._onIfwEchoTimeChanged)
+
+    def _onIfwEchoTimeChanged(self, text: str) -> None:
+        self._update_parameter_node("orchestrationIfwEchoTimeMs", str(text or "").strip())
+        self._schedule_common_user_settings_save()
 
     def _onOptionalMicrostructureStageChanged(self, _checked: bool) -> None:
         node = self._parameterNode
@@ -211,6 +233,7 @@ class SharedWidgetMixin:
             ("orchestrationFreeWaterCheckBox", "freewater"),
             ("orchestrationNoddiCheckBox", "noddi"),
             ("orchestrationDkiCheckBox", "dki"),
+            ("orchestrationIfwCheckBox", "ifw"),
         ):
             checkbox = getattr(self.ui, name, None)
             if checkbox is not None and checkbox.isChecked():
@@ -220,10 +243,20 @@ class SharedWidgetMixin:
             node.orchestrationRunFreeWater = "freewater" in stages
             node.orchestrationRunNoddi = "noddi" in stages
             node.orchestrationRunDki = "dki" in stages
+            node.orchestrationRunIfw = "ifw" in stages
 
     def _connect_brain_mask_ui(self) -> None:
         """Keep readable masking labels separate from canonical backend values."""
 
+        route_combo = getattr(self.ui, "pnlMaskRouteComboBox", None)
+        if route_combo is not None:
+            # SC-1b: the route is an advanced choice with its own label; "native (experimental)" is only a label.
+            blocker = QSignalBlocker(route_combo)
+            route_combo.clear()
+            for route, key in PNL_MASK_ROUTE_TEXT_KEYS.items():
+                route_combo.addItem(onboarding_text(getattr(self, "_onboardingLanguage", "en"), key), route)
+            del blocker
+            route_combo.currentIndexChanged.connect(self._onPnlMaskRouteChanged)
         combo = getattr(self.ui, "brainMaskBackendComboBox", None)
         if combo is None:
             return
@@ -235,6 +268,25 @@ class SharedWidgetMixin:
         combo.setMinimumContentsLength(8)
         del blocker
         combo.currentIndexChanged.connect(self._onBrainMaskBackendChanged)
+        self._update_pnl_route_visibility("pnl_cnn")
+
+    def _update_pnl_route_visibility(self, backend: str) -> None:
+        """SC-1b: the PNL route choice is shown only for the pnl_cnn backend."""
+        for name in ("pnlMaskRouteLabel", "pnlMaskRouteComboBox"):
+            widget = getattr(self.ui, name, None)
+            if widget is not None:
+                widget.setVisible(backend == "pnl_cnn")
+
+    def _onPnlMaskRouteChanged(self, index: int) -> None:
+        combo = getattr(self.ui, "pnlMaskRouteComboBox", None)
+        if combo is None or index < 0:
+            return
+        route = str(combo.itemData(index) or "")
+        if route not in PNL_MASK_ROUTE_TEXT_KEYS:
+            return
+        self._lastEnvironmentResult = None
+        self._lastEnvironmentSignature = None
+        self._update_parameter_node("pnlMaskRoute", route)
 
     def _onBrainMaskBackendChanged(self, index: int) -> None:
         combo = getattr(self.ui, "brainMaskBackendComboBox", None)
@@ -245,6 +297,7 @@ class SharedWidgetMixin:
             return
         self._lastEnvironmentResult = None
         self._lastEnvironmentSignature = None
+        self._update_pnl_route_visibility(backend)
         self._update_parameter_node("brainMaskBackend", backend)
 
     def _connect_topup_ui(self) -> None:
@@ -304,14 +357,16 @@ class SharedWidgetMixin:
     def _topup_validation(self, *, batch_mode: Optional[bool] = None) -> TopupValidation:
         node = self._parameterNode
         if not node:
-            return validate_topup_parameters(backend="dipy", preprocessing_selected=False)
+            return validate_topup_parameters(preprocessing_selected=False)
         return validate_topup_parameters(
-            backend=(node.preprocessingBackend or "dipy").strip() or "dipy",
             preprocessing_selected=bool(node.targetPreprocessing),
             phase_encoding_direction=getattr(node, "preprocessingPhaseEncodingDirection", "") or "",
             readout_time=float(getattr(node, "preprocessingReadoutTime", 0.0) or 0.0),
             reverse_phase_b0=getattr(node, "preprocessingReversePhaseB0", "") or "",
             batch_mode=bool(getattr(node, "batchMode", False)) if batch_mode is None else batch_mode,
+            # W2b rule 4: the sidecar of the chosen subject decides whether a direction exists.
+            subject_root=(getattr(node, "inputDirectory", "") or "").strip() or None,
+            output_root=(getattr(node, "outputDirectory", "") or "").strip() or None,
         )
 
     def _refresh_topup_controls(self) -> TopupValidation:
@@ -320,13 +375,9 @@ class SharedWidgetMixin:
         node = self._parameterNode
         validation = self._topup_validation()
         preprocessing_on = bool(node.targetPreprocessing) if node else False
-        for name in ("preprocessingBackendLabel", "preprocessingBackendComboBox"):
-            control = getattr(self.ui, name, None)
-            if control is not None:
-                control.visible = preprocessing_on
         group = getattr(self.ui, "topupCollapsibleGroupBox", None)
         if group is not None:
-            group.visible = bool(node) and route_uses_topup(node.preprocessingBackend or "dipy", preprocessing_on)
+            group.visible = bool(node) and route_uses_topup(preprocessing_on)
         hint = getattr(self.ui, "topupHintLabel", None)
         if hint is not None:
             hint.setText(topup_summary_text(validation))
@@ -347,6 +398,7 @@ class SharedWidgetMixin:
             button.enabled = False
             return
         validation = validation or self._topup_validation()
+        self._refresh_subject_id_placeholder()
         cohort_experiments = bool(getattr(node, 'experimentsEnabled', False) and
                                   getattr(node, 'experimentScope', 'subject') == 'cohort')
         state = run_button_state(
@@ -548,7 +600,7 @@ class SharedWidgetMixin:
         return f"SlicerDSpace/UserSettings/{name}"
 
     def _common_user_setting_specs(self) -> tuple[tuple[str, type], ...]:
-        return common_user_setting_specs() + (("brainMaskBackend", str), ("brainMaskDevice", str), ("device", str),
+        return common_user_setting_specs() + (("brainMaskBackend", str), ("brainMaskDevice", str), ("pnlMaskRoute", str), ("device", str),
                                              ("ddsegDevice", str), ("orchestrationDkiFitMethod", str))
 
     def _coerce_user_setting_value(self, value: Any, value_type: type) -> Any:
@@ -564,6 +616,8 @@ class SharedWidgetMixin:
             config_path = default_user_config_path().expanduser()
             if config_path.is_file():
                 config = load_user_config(config_path)
+                for note in config.get("notes", ()):  # W5 / SC-2: a saved removed mask backend loaded as pnl_cnn
+                    self.appendLog(f"[Settings] {note}")
                 configured_dependencies = config.get("external_dependencies", {})
                 for item in ENVIRONMENT_DEPENDENCY_PATHS:
                     dependency_id = item["id"]
@@ -589,6 +643,10 @@ class SharedWidgetMixin:
                     value = self._coerce_user_setting_value(settings.value(key), value_type)
                     if attribute == 'orchestrationWmqlPreset' and value != 'official':
                         value = 'official'  # Migrate saved defaults, not loaded scientific run records.
+                    if attribute == 'brainMaskBackend' and value in REMOVED_BRAIN_MASK_BACKENDS:
+                        # W5 / SC-2: a saved removed backend loads as pnl_cnn with one note; the clinician is not blocked.
+                        self.appendLog(f"[Settings] Saved brain mask backend {value!r} was removed. Brain masking now uses pnl_cnn.")
+                        value = 'pnl_cnn'
                     setattr(node, attribute, value)
                 except Exception:
                     continue
@@ -602,9 +660,9 @@ class SharedWidgetMixin:
                 node.inputDirectory = str(recent.get("subject_root") or node.inputDirectory or "")
                 node.outputDirectory = str(recent.get("output_root") or node.outputDirectory or "")
                 node.orchestrationRunName = str(defaults.get("run_name") or node.orchestrationRunName or "Test1")
-                node.preprocessingBackend = str(defaults.get("preprocessing_backend") or node.preprocessingBackend or "dipy")
                 node.brainMaskBackend = str(defaults.get("brain_mask_backend") or "pnl_cnn")
                 node.brainMaskDevice = str(defaults.get("brain_mask_device") or "auto")
+                node.pnlMaskRoute = str(defaults.get("pnl_mask_route") or "auto")
                 node.device = str(defaults.get("surface_device") or "auto")
                 node.ddsegDevice = str(defaults.get("ddseg_device") or "auto")
                 from shared.algorithm_selection import choice_value, BUNDLES
@@ -617,8 +675,8 @@ class SharedWidgetMixin:
                 stages = defaults.get("microstructure_stages") or ["dti"]
                 node.wmaAtlas = str(defaults.get("wma_atlas") or "org")
                 node.orchestrationMicrostructureStages = ",".join(canonical_microstructure_stages(stages))
-                node.orchestrationDkiFitMethod = str(defaults.get("dki_fit_method") or "WLS").upper()
-                node.connectomeBackend = str(defaults.get("connectome_backend") or node.connectomeBackend or "python")
+                node.orchestrationDkiFitMethod = str(defaults.get("dki_fit_method") or "MKCURVE").upper()
+                node.connectomeBackend = str(defaults.get("connectome_backend") or node.connectomeBackend or "auto")
                 node.orchestrationSelectStreamlines = int(
                     defaults.get("select_streamlines") or node.orchestrationSelectStreamlines or 1_000_000
                 )
@@ -632,7 +690,8 @@ class SharedWidgetMixin:
                     node.targetParcellation = "parcellation" in targets
                     node.targetSegmentation = "segmentation" in targets
                     node.targetMicrostructure = bool(
-                        targets & {"microstructure", "microstructure_freewater", "microstructure_noddi", "microstructure_dki"}
+                        targets & {"microstructure", "microstructure_freewater", "microstructure_noddi", "microstructure_dki",
+                                "microstructure_ifw"}
                     )
                     node.targetTractography = bool(targets & {"tractography", "saf"})
                     node.targetBundles = bool(targets & {"bundles", "wma", "tractcloud"})
@@ -651,7 +710,7 @@ class SharedWidgetMixin:
             except Exception:
                 continue
             settings.setValue(self._user_settings_key(attribute), value)
-        targets = list(self._selected_product_targets())
+        targets = list(self._requested_product_targets())  # K4: the user's ticks, not the closed set
         stages = list(canonical_microstructure_stages(node.orchestrationMicrostructureStages or "dti"))
         external_dependencies = {
             item["id"]: self._read_environment_path_setting(item["id"]) or None
@@ -668,9 +727,9 @@ class SharedWidgetMixin:
                     "run_defaults": {
                         "run_name": node.orchestrationRunName or "Test1",
                         "targets": targets,
-                        "preprocessing_backend": node.preprocessingBackend or "dipy",
                         "brain_mask_backend": getattr(node, "brainMaskBackend", "pnl_cnn") or "pnl_cnn",
                         "brain_mask_device": getattr(node, "brainMaskDevice", "auto") or "auto",
+                        "pnl_mask_route": getattr(node, "pnlMaskRoute", "auto") or "auto",
                         "ddseg_device": node.ddsegDevice or "auto",
                         "surface_device": node.device or "auto",
                         "tractcloud_device": "cuda" if (node.ddsegDevice or "auto").startswith("cuda") else node.ddsegDevice or "auto",
@@ -678,8 +737,8 @@ class SharedWidgetMixin:
                         "bundle_backend": node.orchestrationBundleBackend or "wmql",
                         "wma_atlas": getattr(node, "wmaAtlas", "org") or "org",
                         "microstructure_stages": stages or ["dti"],
-                        "dki_fit_method": getattr(node, "orchestrationDkiFitMethod", "WLS") or "WLS",
-                        "connectome_backend": node.connectomeBackend or "python",
+                        "dki_fit_method": getattr(node, "orchestrationDkiFitMethod", "MKCURVE") or "MKCURVE",
+                        "connectome_backend": node.connectomeBackend or "auto",
                         "select_streamlines": int(node.orchestrationSelectStreamlines),
                         "auto_install_python_dependencies": bool(node.autoInstallPythonDependencies),
                     },
@@ -1257,6 +1316,26 @@ class SharedWidgetMixin:
         node = self._parameterNode
         return str((node.inputDirectory if node else "") or "").strip()
 
+    def _effective_subject_id(self) -> str:
+        """Typed subject ID, else the ID derived from the input path (C6)."""
+        node = self._parameterNode
+        if not node:
+            return ""
+        from shared.subject_id import effective_subject_id
+        return effective_subject_id(node.subjectId, node.inputDirectory)
+
+    def _refresh_subject_id_placeholder(self) -> None:
+        widget = getattr(self.ui, "subjectIdLineEdit", None)
+        node = self._parameterNode
+        if widget is None or not node:
+            return
+        from shared.subject_id import derive_subject_id
+        derived = derive_subject_id(node.inputDirectory or "")
+        try:
+            widget.setPlaceholderText(derived)
+        except Exception:
+            pass
+
     def _shared_subject_id_text(self) -> str:
         widget = getattr(self.ui, "subjectIdLineEdit", None)
         if widget:
@@ -1436,6 +1515,14 @@ class SharedWidgetMixin:
         summary.visible = False
         self._selectedProductsSummaryLabel = summary
         (targets_layout if targets_layout is not None else configuration_layout).addWidget(summary)
+        # C4: one line under the target checkboxes naming the prerequisites that run automatically.
+        also_runs = qt.QLabel("")
+        also_runs.wordWrap = True
+        also_runs.setObjectName("alsoRunsAutomaticallyLabel")
+        also_runs.setStyleSheet("QLabel#alsoRunsAutomaticallyLabel { color: #335B70; }")
+        also_runs.visible = False
+        self._alsoRunsLabel = also_runs
+        (targets_layout if targets_layout is not None else configuration_layout).addWidget(also_runs)
 
     def _refresh_selected_products_summary(self) -> None:
         label = getattr(self, "_selectedProductsSummaryLabel", None)
@@ -1444,14 +1531,18 @@ class SharedWidgetMixin:
         if not self._parameterNode:
             label.setText("Selected products will appear here after the parameter node is ready.")
             return
+        notice = getattr(self, "_alsoRunsLabel", None)
+        if notice is not None:
+            notice_text = self._closure_notice_text()
+            notice.setText(notice_text)
+            notice.visible = bool(notice_text)
         text, target_text = selected_products_summary(
             self._selected_product_targets(),
             BackendSelection(
-                preprocessing=(self._parameterNode.preprocessingBackend or "dipy").strip() or "dipy",
                 tractography=self._tractography_backend_text(),
                 bundles=self._bundle_backend_text(),
                 microstructure_stages=self._microstructure_stages_text(),
-                connectome=(self._parameterNode.connectomeBackend or "python").strip() or "python",
+                connectome=(self._parameterNode.connectomeBackend or "auto").strip() or "auto",
             ),
         )
         label.setText(text)
@@ -1643,35 +1734,29 @@ class SharedWidgetMixin:
         output_root_text = (output_root_text or (node.outputDirectory or "")).strip()
         targets = self._selected_environment_targets()
         mask_backend = (getattr(node, "brainMaskBackend", "pnl_cnn") or "pnl_cnn").strip()
-        inspected = inspect_input_directory(self, subject_root_text, node.subjectId.strip()) if subject_root_text else {}
+        inspected = inspect_input_directory(self, subject_root_text, effective_subject_id(node.subjectId, subject_root_text)) if subject_root_text else {}
         raw_inputs_known = inspected.get("mode") in {"subject_root", "dicom"}
         input_root = inspected.get("subject_root") or subject_root_text
         input_dir = Path(input_root).expanduser() / "input" if input_root else None
-        mask_targets = {
-            "preprocessing", "segmentation", "parcellation", "surface", "microstructure",
-            "microstructure_freewater", "microstructure_noddi", "microstructure_dki", "tractography", "saf",
-        }
-        missing_input_mask = (
-            raw_inputs_known and bool(mask_targets.intersection(targets))
-            and not (input_dir / "nodif_brain_mask.nii.gz").is_file()
-        )
-        # GUI preprocessing uses motion correction by default and may need a new
-        # mask in corrected space even when a supplied input mask already exists.
-        brain_mask_required = missing_input_mask or (
-            bool(node.targetPreprocessing) and mask_backend != "provided"
+        brain_mask_required = gui_brain_mask_required(
+            targets,
+            input_known=raw_inputs_known,
+            input_mask_exists=bool(input_dir and (input_dir / "nodif_brain_mask.nii.gz").is_file()),
+            preprocessing_on=bool(node.targetPreprocessing),
+            mask_backend=mask_backend,
         )
         return {
             "targets": targets,
             "subject_root": Path(subject_root_text).expanduser() if subject_root_text else None,
             "output_root": Path(output_root_text).expanduser() if output_root_text else None,
-            "preprocessing_backend": (node.preprocessingBackend or "dipy").strip(),
             "brain_mask_backend": mask_backend,
             "wma_atlas": getattr(node, "wmaAtlas", "org") or "org",
             "brain_mask_device": getattr(node, "brainMaskDevice", "auto") or "auto",
+            "pnl_mask_route": getattr(node, "pnlMaskRoute", "auto") or "auto",
             "tractcloud_device": "cuda" if (node.ddsegDevice or "auto").startswith("cuda") else node.ddsegDevice or "auto",
             "brain_mask_required": bool(brain_mask_required),
-            "tractography_backend": self._tractography_backend_text(),
-            "connectome_backend": (node.connectomeBackend or "python").strip(),
+            "tractography_backend": self._closure_tractography_backend_text(),
+            "connectome_backend": (node.connectomeBackend or "auto").strip(),
             "ddseg_device": (node.ddsegDevice or "auto").strip() or "auto",
             "surface_device": (node.device or "auto").strip() or "auto",
             "python_path_entries": tuple(
@@ -1682,7 +1767,7 @@ class SharedWidgetMixin:
             "microstructure_run_free_water": self._microstructure_stage_flags()[0],
             "microstructure_run_noddi": self._microstructure_stage_flags()[1],
             "microstructure_run_dki": self._microstructure_dki_enabled(),
-            "dki_fit_method": getattr(node, "orchestrationDkiFitMethod", "WLS") or "WLS",
+            "dki_fit_method": getattr(node, "orchestrationDkiFitMethod", "MKCURVE") or "MKCURVE",
             **external_paths,
         }
 
@@ -2040,6 +2125,10 @@ class SharedWidgetMixin:
                 (bool(node.targetMicrostructure), ('parallelModelsLabel','parallelModelsSpinBox')),
                 (bool(node.targetMicrostructure) and self._microstructure_dki_enabled(),
                  ("orchestrationDkiFitMethodLabel", "orchestrationDkiFitMethodComboBox")),
+                (bool(node.targetMicrostructure) and self._microstructure_ifw_enabled(),
+                 ("orchestrationIfwEchoTimeLabel", "orchestrationIfwEchoTimeLineEdit",
+                  "orchestrationIfwT2TissueLabel", "orchestrationIfwT2TissueLineEdit",
+                  "orchestrationIfwT2CsfLabel", "orchestrationIfwT2CsfLineEdit")),
                 (bool(node.targetBundles), ("orchestrationBundleBackendLabel", "orchestrationBundleBackendComboBox")),
                 (bool(node.targetTractography or node.targetBundles or node.targetConnectome), ("orchestrationTractographyBackendLabel", "orchestrationTractographyBackendComboBox")),
                 (False, ("batchModeLabel", "batchModeCheckBox", "batchRootLabel", "batchRootPath", "batchSizeLabel", "batchSizeSpinBox", "batchArrangeInputsLabel", "batchArrangeInputsComboBox")),
@@ -2158,19 +2247,57 @@ class SharedWidgetMixin:
             return ()
         return selected_orchestrator_targets(self._product_target_flags())
 
-    def _selected_product_targets(self) -> tuple[str, ...]:
+    def _selected_closure(self):
+        """Ticked targets plus every prerequisite (C1); ``None`` without a parameter node."""
         node = self._parameterNode
         if not node:
-            return ()
+            return None
         freewater, noddi = self._microstructure_stage_flags()
-        return selected_product_targets(
+        return selected_closure(
             self._product_target_flags(),
             tractography_backend=self._tractography_backend_text(),
             bundle_backend=self._bundle_backend_text(),
             microstructure_freewater=freewater,
             microstructure_noddi=noddi,
             microstructure_dki=self._microstructure_dki_enabled(),
+            microstructure_ifw=self._microstructure_ifw_enabled(),
+            provided_tractography=self._provided_tractography(),
         )
+
+    def _provided_tractography(self) -> tuple[str, ...]:
+        """K2: targets whose tractogram file the user supplied (same set the CLI builds).
+
+        The GUI has one input-tractogram parameter, ``wmaInputTractography``; there is none for
+        TractCloud or SAF.
+        """
+        node = self._parameterNode
+        if node and str(getattr(node, "wmaInputTractography", "") or "").strip():
+            return ("wma",)
+        return ()
+
+    def _selected_product_targets(self) -> tuple[str, ...]:
+        closure = self._selected_closure()
+        return closure.targets if closure is not None else ()
+
+    def _closure_tractography_backend_text(self) -> str:
+        """Tractography algorithms after the closure (WMA adds UKF); the node text if no tracking runs."""
+        closure = self._selected_closure()
+        if closure is None or "tractography" not in closure.targets:
+            return self._tractography_backend_text()
+        from shared.algorithm_selection import choice_value
+        return choice_value(closure.algorithms_text)
+
+    def _closure_notice_text(self) -> str:
+        """C4 one-line notice naming the targets that run automatically."""
+        closure = self._selected_closure()
+        if closure is None:
+            return ""
+        from shared.target_closure import closure_notice
+        return closure_notice(closure)
+
+    def _requested_product_targets(self) -> tuple[str, ...]:
+        closure = self._selected_closure()
+        return closure.requested if closure is not None else ()
 
     def _product_target_flags(self) -> ProductTargetFlags:
         node = self._parameterNode
@@ -2210,6 +2337,8 @@ class SharedWidgetMixin:
             stages.append("noddi")
         if bool(getattr(node, "orchestrationRunDki", False)):
             stages.append("dki")
+        if bool(getattr(node, "orchestrationRunIfw", False)):
+            stages.append("ifw")
         return ",".join(stages)
 
     def _microstructure_stage_flags(self) -> tuple[bool, bool]:
@@ -2229,12 +2358,26 @@ class SharedWidgetMixin:
     def _microstructure_dki_enabled(self) -> bool:
         return microstructure_optional_stage_flags(self._microstructure_stages_text())[2]
 
+    def _microstructure_ifw_enabled(self) -> bool:
+        node = self._parameterNode
+        return microstructure_ifw_enabled(
+            self._microstructure_stages_text(),
+            legacy_ifw=bool(getattr(node, "orchestrationRunIfw", False)) if node else False,
+        )
+
+    def _ifw_echo_time_ms(self) -> Optional[float]:
+        """Echo time (ms) typed by the user; None when iFW is off or the field is empty. Raises ValueError if invalid."""
+        node = self._parameterNode
+        if not node or not self._microstructure_ifw_enabled():
+            return None
+        return parse_ifw_echo_time_ms(getattr(node, "orchestrationIfwEchoTimeMs", ""))
+
     def _apply_shared_inputs_to_workflow_fields(self) -> None:
         """Populate empty product-specific fields from the shared subject setup."""
         node = self._parameterNode
         if not node:
             return
-        subject_id = (node.subjectId or "").strip()
+        subject_id = self._effective_subject_id()
         subject_root = (node.inputDirectory or "").strip()
         with slicer.util.NodeModify(node):
             if subject_id:
@@ -2283,7 +2426,6 @@ class SharedWidgetMixin:
             common_run_kwargs,
             external_paths,
             repo_root=repo_root,
-            preprocessing_backend=(node.preprocessingBackend or "dipy").strip() if node else "dipy",
         )
 
     def _build_batch_background_cli_args(
@@ -2304,7 +2446,6 @@ class SharedWidgetMixin:
             batch_root=batch_root,
             batch_size=batch_size,
             arrange_inputs=arrange_inputs,
-            preprocessing_backend=(node.preprocessingBackend or "dipy").strip() if node else "dipy",
         )
 
     def _reset_result_scene_actions(self) -> None:
@@ -2904,6 +3045,11 @@ class SharedWidgetMixin:
         except ValueError as exc:
             self._setStatus('error', str(exc))
             return
+        try:
+            ifw_echo_time_ms = self._ifw_echo_time_ms()
+        except ValueError as exc:
+            self._setStatus("error", str(exc))
+            return
         self._save_common_user_settings()
 
         self._apply_shared_inputs_to_workflow_fields()
@@ -2914,7 +3060,7 @@ class SharedWidgetMixin:
         for warning in topup_validation.warnings:
             self.appendLog("[Preprocessing] WARNING: " + warning)
         subject_root_text = (self._parameterNode.inputDirectory or "").strip()
-        subject_id = (self._parameterNode.subjectId or "").strip()
+        subject_id = self._effective_subject_id()
         output_root_text = (self._parameterNode.outputDirectory or "").strip()
         surface_device = (self._parameterNode.device or "auto").strip() or "auto"
         ddseg_device = (self._parameterNode.ddsegDevice or "auto").strip() or "auto"
@@ -2930,6 +3076,8 @@ class SharedWidgetMixin:
             selected_targets=selected_targets,
             run_name=run_name,
             tractography_backend=self._tractography_backend_text(),
+            closure_tractography_backend=self._closure_tractography_backend_text(),
+            requested_targets=self._requested_product_targets(),
             bundle_backend=self._bundle_backend_text(),
             microstructure_freewater=run_free_water,
             wmql_query_preset=getattr(self._parameterNode, "orchestrationWmqlPreset", "official") or "official",
@@ -2939,15 +3087,18 @@ class SharedWidgetMixin:
             ukf_parameters_text=getattr(self._parameterNode, 'ukfParameters', '{}'),
             microstructure_noddi=run_noddi,
             microstructure_dki=self._microstructure_dki_enabled(),
-            dki_fit_method=getattr(self._parameterNode, "orchestrationDkiFitMethod", "WLS") or "WLS",
+            microstructure_ifw=self._microstructure_ifw_enabled(),
+            ifw_echo_time_ms=ifw_echo_time_ms,
+            dki_fit_method=getattr(self._parameterNode, "orchestrationDkiFitMethod", "MKCURVE") or "MKCURVE",
             select_streamlines=max(1, int(self._parameterNode.orchestrationSelectStreamlines)),
             ddseg_device=ddseg_device,
             surface_device=surface_device,
-            connectome_backend=(self._parameterNode.connectomeBackend or "python").strip(),
-            connectome_compress_mrtrix_dense=bool(self._parameterNode.connectomeCompressMrtrixDense),
-            preprocessing_backend=(self._parameterNode.preprocessingBackend or "dipy").strip() or "dipy",
+            connectome_backend=(self._parameterNode.connectomeBackend or "auto").strip(),
+            connectome_compress_mrtrix_dense=compress_mrtrix_dense_value(
+                getattr(self._parameterNode, "connectomeCompressMrtrixDenseState", "unset")),
             brain_mask_backend=(getattr(self._parameterNode, "brainMaskBackend", "pnl_cnn") or "pnl_cnn").strip(),
             brain_mask_device=(getattr(self._parameterNode, "brainMaskDevice", "auto") or "auto").strip(),
+            pnl_mask_route=(getattr(self._parameterNode, "pnlMaskRoute", "auto") or "auto").strip(),
             wma_input_tractography_text=(
                 getattr(self._parameterNode, "wmaInputTractography", "") or ""
             ).strip(),
@@ -3060,7 +3211,7 @@ class SharedWidgetMixin:
             why="\n".join(validation.errors),
             next_step=(
                 "Open Advanced settings > Preprocessing & mask > Distortion correction (topup), "
-                "or switch Preprocessing route to dipy if you do not need MRtrix3/FSL correction."
+                "and correct or clear the invalid value."
             ),
             auto_fix="Not available; nothing was written.",
             details="dwifslpreproc options: -pe_dir, -readout_time, -rpe_pair -se_epi",

@@ -1,0 +1,228 @@
+[
+ {
+  "reference": "ref/DTI_wls.nrrd",
+  "candidate": "new/DTI_wls.nrrd",
+  "shape_ref": [
+   3658350,
+   9
+  ],
+  "shape_new": [
+   3658350,
+   9
+  ],
+  "dtype_ref": "float32",
+  "dtype_new": "float32",
+  "file_sha256_equal": true,
+  "payload_sha256_equal": true,
+  "header_equal": true,
+  "ras_to_ijk_equal": true,
+  "measurement_frame_equal": true,
+  "values": 32925150,
+  "equal_values": 32925150,
+  "nan_ref": 0,
+  "nan_new": 0,
+  "nan_mask_equal": true,
+  "max_abs_diff": 0.0,
+  "max_rel_diff": 0.0,
+  "max_ulp": 0,
+  "values_over_1_ulp": 0,
+  "voxels": 3658350,
+  "voxels_identical": 3658350
+ },
+ {
+  "reference": "ref/b0_wls.nrrd",
+  "candidate": "new/b0_wls.nrrd",
+  "shape_ref": [
+   3658350
+  ],
+  "shape_new": [
+   3658350
+  ],
+  "dtype_ref": "float32",
+  "dtype_new": "float32",
+  "file_sha256_equal": true,
+  "payload_sha256_equal": true,
+  "header_equal": true,
+  "ras_to_ijk_equal": true,
+  "measurement_frame_equal": true,
+  "values": 3658350,
+  "equal_values": 3658350,
+  "nan_ref": 0,
+  "nan_new": 0,
+  "nan_mask_equal": true,
+  "max_abs_diff": 0.0,
+  "max_rel_diff": 0.0,
+  "max_ulp": 0,
+  "values_over_1_ulp": 0,
+  "voxels": 3658350,
+  "voxels_identical": 3658350
+ },
+ {
+  "reference": "ref/FractionalAnisotropy_wls.nrrd",
+  "candidate": "new/FractionalAnisotropy_wls.nrrd",
+  "shape_ref": [
+   3658350
+  ],
+  "shape_new": [
+   3658350
+  ],
+  "dtype_ref": "float32",
+  "dtype_new": "float32",
+  "file_sha256_equal": true,
+  "payload_sha256_equal": true,
+  "header_equal": true,
+  "ras_to_ijk_equal": true,
+  "measurement_frame_equal": true,
+  "values": 3658350,
+  "equal_values": 3658350,
+  "nan_ref": 0,
+  "nan_new": 0,
+  "nan_mask_equal": true,
+  "max_abs_diff": 0.0,
+  "max_rel_diff": 0.0,
+  "max_ulp": 0,
+  "values_over_1_ulp": 0,
+  "voxels": 3658350,
+  "voxels_identical": 3658350
+ },
+ {
+  "reference": "ref/Trace_wls.nrrd",
+  "candidate": "new/Trace_wls.nrrd",
+  "shape_ref": [
+   3658350
+  ],
+  "shape_new": [
+   3658350
+  ],
+  "dtype_ref": "float32",
+  "dtype_new": "float32",
+  "file_sha256_equal": true,
+  "payload_sha256_equal": true,
+  "header_equal": true,
+  "ras_to_ijk_equal": true,
+  "measurement_frame_equal": true,
+  "values": 3658350,
+  "equal_values": 3658350,
+  "nan_ref": 0,
+  "nan_new": 0,
+  "nan_mask_equal": true,
+  "max_abs_diff": 0.0,
+  "max_rel_diff": 0.0,
+  "max_ulp": 0,
+  "values_over_1_ulp": 0,
+  "voxels": 3658350,
+  "voxels_identical": 3658350
+ },
+ {
+  "reference": "ref/MeanDiffusivity_wls.nrrd",
+  "candidate": "new/MeanDiffusivity_wls.nrrd",
+  "shape_ref": [
+   3658350
+  ],
+  "shape_new": [
+   3658350
+  ],
+  "dtype_ref": "float32",
+  "dtype_new": "float32",
+  "file_sha256_equal": true,
+  "payload_sha256_equal": true,
+  "header_equal": true,
+  "ras_to_ijk_equal": true,
+  "measurement_frame_equal": true,
+  "values": 3658350,
+  "equal_values": 3658350,
+  "nan_ref": 0,
+  "nan_new": 0,
+  "nan_mask_equal": true,
+  "max_abs_diff": 0.0,
+  "max_rel_diff": 0.0,
+  "max_ulp": 0,
+  "values_over_1_ulp": 0,
+  "voxels": 3658350,
+  "voxels_identical": 3658350
+ },
+ {
+  "reference": "ref/MinEigenvalue_wls.nrrd",
+  "candidate": "new/MinEigenvalue_wls.nrrd",
+  "shape_ref": [
+   3658350
+  ],
+  "shape_new": [
+   3658350
+  ],
+  "dtype_ref": "float32",
+  "dtype_new": "float32",
+  "file_sha256_equal": true,
+  "payload_sha256_equal": true,
+  "header_equal": true,
+  "ras_to_ijk_equal": true,
+  "measurement_frame_equal": true,
+  "values": 3658350,
+  "equal_values": 3658350,
+  "nan_ref": 0,
+  "nan_new": 0,
+  "nan_mask_equal": true,
+  "max_abs_diff": 0.0,
+  "max_rel_diff": 0.0,
+  "max_ulp": 0,
+  "values_over_1_ulp": 0,
+  "voxels": 3658350,
+  "voxels_identical": 3658350
+ },
+ {
+  "reference": "ref/MidEigenvalue_wls.nrrd",
+  "candidate": "new/MidEigenvalue_wls.nrrd",
+  "shape_ref": [
+   3658350
+  ],
+  "shape_new": [
+   3658350
+  ],
+  "dtype_ref": "float32",
+  "dtype_new": "float32",
+  "file_sha256_equal": true,
+  "payload_sha256_equal": true,
+  "header_equal": true,
+  "ras_to_ijk_equal": true,
+  "measurement_frame_equal": true,
+  "values": 3658350,
+  "equal_values": 3658350,
+  "nan_ref": 0,
+  "nan_new": 0,
+  "nan_mask_equal": true,
+  "max_abs_diff": 0.0,
+  "max_rel_diff": 0.0,
+  "max_ulp": 0,
+  "values_over_1_ulp": 0,
+  "voxels": 3658350,
+  "voxels_identical": 3658350
+ },
+ {
+  "reference": "ref/MaxEigenvalue_wls.nrrd",
+  "candidate": "new/MaxEigenvalue_wls.nrrd",
+  "shape_ref": [
+   3658350
+  ],
+  "shape_new": [
+   3658350
+  ],
+  "dtype_ref": "float32",
+  "dtype_new": "float32",
+  "file_sha256_equal": true,
+  "payload_sha256_equal": true,
+  "header_equal": true,
+  "ras_to_ijk_equal": true,
+  "measurement_frame_equal": true,
+  "values": 3658350,
+  "equal_values": 3658350,
+  "nan_ref": 0,
+  "nan_new": 0,
+  "nan_mask_equal": true,
+  "max_abs_diff": 0.0,
+  "max_rel_diff": 0.0,
+  "max_ulp": 0,
+  "values_over_1_ulp": 0,
+  "voxels": 3658350,
+  "voxels_identical": 3658350
+ }
+]

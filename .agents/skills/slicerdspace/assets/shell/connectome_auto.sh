@@ -57,6 +57,7 @@ pipeline() {
   "${command[@]}"
 }
 
-# docs/setup/CLI_TEMPLATES.md: micro-dti-light
-pipeline dti_light --targets validation,microstructure --microstructure-stages dti \
-  --brain-mask-backend dipy --plan
+# docs/setup/CLI_TEMPLATES.md: connectome-auto
+pipeline connectome_auto --targets validation,segmentation,parcellation,tractography,connectome \
+  --tractography-backend csd_act --connectome-backend auto \
+  --brain-mask-backend provided --select-streamlines 1000000 --plan

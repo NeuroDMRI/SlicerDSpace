@@ -17,6 +17,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from shared.environment import EnvironmentDoctorConfig, run_environment_doctor, write_environment_report
+from shared.preprocessing_route import ROUTE_ID, add_removed_flags
 
 
 DEFAULT_PLATFORMS = ("Linux", "Darwin", "Windows")
@@ -123,9 +124,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Targets to profile. May be repeated or comma-separated. Defaults to the full dependency surface.",
     )
     parser.add_argument("--python-executable", default=sys.executable, help="Python executable to check for Python packages.")
-    parser.add_argument("--preprocessing-backend", default="mrtrix_fsl", choices=("dipy", "mrtrix_fsl"))
+    add_removed_flags(parser, ("--preprocessing-backend",))  # W2a (D1): preprocessing has one route
     parser.add_argument("--tractography-backend", default="csd_act", choices=("csd_act", "ukf", "dti_det", "saf"))
-    parser.add_argument("--connectome-backend", default="mrtrix", choices=("python", "mrtrix"))
+    parser.add_argument("--connectome-backend", default="mrtrix", choices=("auto", "python", "mrtrix"))
     parser.add_argument("--ddseg-device", default="auto")
     parser.add_argument("--surface-device", default="auto")
     parser.add_argument("--tractcloud-device", default="auto", choices=("auto", "cpu", "cuda"))
@@ -159,7 +160,6 @@ def main(argv: list[str] | None = None) -> int:
             output_dir=platform_dir,
             python_executable=python_executable,
             platform_name=platform_name,
-            preprocessing_backend=args.preprocessing_backend,
             tractography_backend=args.tractography_backend,
             connectome_backend=args.connectome_backend,
             ddseg_device=args.ddseg_device,
@@ -179,7 +179,7 @@ def main(argv: list[str] | None = None) -> int:
         "python_executable": python_executable.as_posix(),
         "targets": list(targets),
         "backend_profile": {
-            "preprocessing": args.preprocessing_backend,
+            "preprocessing": ROUTE_ID,
             "tractography": args.tractography_backend,
             "connectome": args.connectome_backend,
             "ddseg_device": args.ddseg_device,

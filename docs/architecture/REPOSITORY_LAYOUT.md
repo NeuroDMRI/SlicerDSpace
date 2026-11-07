@@ -64,8 +64,8 @@ parcellation training helpers. See [source hygiene](SOURCE_HYGIENE.md) for the
 evidence and retained-file policy.
 
 - `shared/`: common Slicer UI, dependency, IO, reporting and orchestration code.
-- `preprocessing/`: diffusion preprocessing (denoising, Gibbs correction,
-  motion correction and associated QC). Input import and standardisation use
+- `preprocessing/`: diffusion preprocessing (DIPY denoising and Gibbs correction,
+  FSL eddy/topup and associated QC). Input import and standardisation use
   `shared/input_import.py` with the stable `scripts/prepare_inputs.py` CLI.
 - `anatomy/`: anatomical reconstruction, grouped into `segmentation/` (DDSeg),
   `parcellation/` (DDParcel) and `surface/` (DDSurfer). The pinned upstream

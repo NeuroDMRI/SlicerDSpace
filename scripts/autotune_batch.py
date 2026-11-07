@@ -230,7 +230,7 @@ def main(argv=None):
                     trial = work / f'{stage}-i{index}-{ident}-r{repeat}'
                     request = dict(stage=stage, settings=config, output=str(trial),
                                    protocol=calibration_options(stage, forwarded),
-                                   fit_method=_option(forwarded, '--dki-fit-method', 'WLS'), **sample)
+                                   fit_method=_option(forwarded, '--dki-fit-method', 'MKCURVE'), **sample)
                     request_path = trial.with_suffix('.request.json')
                     save(request_path, request)
                     environment = {key:value for key,value in os.environ.items()

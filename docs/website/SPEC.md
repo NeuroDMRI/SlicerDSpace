@@ -402,7 +402,7 @@ Two columns: text left, `idea.jpg` right.
      settings › Results and QC.”
 - Side note (panel, mono command) [F3 README:144-152]: title “From the command line”, text “Check inputs and
   environment without running anything:”, code
-  `python3 run_subject_pipeline.py --subject-root /path/to/sub-01 --targets validation,microstructure --microstructure-stages dti --doctor`,
+  `PythonSlicer run_subject_pipeline.py --subject-root /path/to/sub-01 --targets validation,microstructure --microstructure-stages dti --doctor`,
   then “Use `--plan` instead of `--doctor` to write a run plan.”
 
 ### 5.8 Status (`#status`)
@@ -439,7 +439,7 @@ Two columns: text left, `idea.jpg` right.
      ```
      git clone https://github.com/ChengjinLii/SlicerDDSurfer.git
      cd SlicerDDSurfer
-     python3 scripts/stage_slicer_extension.py \
+     PythonSlicer scripts/stage_slicer_extension.py \
        --install-root ~/SlicerDDSurfer-extension --link-mode copy --clean
      ```
      “Set `--slicer-version` to your Slicer version. This is a source install, not an official CPack release.”
@@ -450,7 +450,7 @@ Two columns: text left, `idea.jpg` right.
   4. “Get the model files” — “Read the asset terms, then download only the profile you need to a writable folder
      outside the checkout:”
      ```
-     python3 scripts/download_model_assets.py --profile surface \
+     PythonSlicer scripts/download_model_assets.py --profile surface \
        --asset-root ~/SlicerDDSurfer-model-assets --source url \
        --source-id slicerdsurfer_models_git
      ```

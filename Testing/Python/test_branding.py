@@ -60,7 +60,8 @@ class BrandingTests(unittest.TestCase):
             assets = home / '.local/share' / LEGACY_NAME / 'model-assets'
             assets.mkdir(parents=True)
             with patch('shared.model_assets.platform.system', return_value='Linux'), \
-                 patch('shared.model_assets.Path.home', return_value=home), patch.dict(os.environ, {}, clear=True):
+                 patch('shared.model_assets.Path.home', return_value=home), \
+                 patch.dict(os.environ, {'XDG_DATA_HOME': ''}, clear=True):  # B2: the isolation keeps XDG_DATA_HOME; empty = unset
                 self.assertEqual(default_user_model_assets_root(), assets)
             canonical = home / '.config/SlicerDSpace/user_config.json'
             canonical.parent.mkdir()

@@ -19,11 +19,13 @@
 | --- | --- | --- | --- |
 | DDSeg | [原作者 MATLAB 流程及 U-Net](https://github.com/zhangfanmark/DDSeg) | `anatomy/segmentation/`：Python 预处理/推理、转换后的 PyTorch/TorchScript 网络 | **MATLAB 到 Python/PyTorch 的改写实现**，不是重新训练的新组织模型 |
 | SAF | [原作者 MATLAB 框架](https://github.com/dmitrishastin/SAF/tree/7e2a9d152caf1cf3e6bface64e7e176faac0c14f) | `tractography/saf_backend/`：NumPy/SciPy/scikit-learn、NiBabel、外部 MRtrix | **非官方 Python 移植版**，限已对齐的原生扩散空间表面，并保留明确记录的几何修正 |
-| PNL diffusion CNN 脑掩膜 | [原作者 Python/TensorFlow 代码](https://github.com/pnlbwh/CNN-Diffusion-MRIBrain-Segmentation) | `shared/brain_mask.py` 调用外部官方 `dwi_masking.py`、模型及 ANTs | **对已有官方 Python 的集成适配**，不是 MATLAB 移植，也不是重写整套 PNLpipeline |
+| PNL diffusion CNN 脑掩膜 | [原作者 Python/TensorFlow 代码](https://github.com/pnlbwh/CNN-Diffusion-MRIBrain-Segmentation)，经 [PyTorch 版 PNLBrainMask-Torch](https://github.com/ChengjinLii/PNLBrainMask-Torch) | `shared/pnl_cnn/` 是 PNLBrainMask-Torch 的修改副本（固定提交，哈希见 `UPSTREAM.json`）；`shared/brain_mask.py` 在 Slicer Python 中原生运行它（SimpleITK 配准），Linux 上则在 managed 运行环境中用 ANTs 运行已安装的包 | **作者 PNL 网络的修改版 PyTorch 重新实现，保留 BWH 许可条款**（[许可页](../licenses/pnl_brain_mask.md)）；不是 MATLAB 移植，也不是重写整套 PNLpipeline；native 路线为实验性 |
 | MK-Curve | [原作者 MATLAB 算法](https://github.com/zhangfanmark/MK-Curve/tree/9a213e1a5850fe50c998793f31ed852df00242f8) | `microstructure/mkcurve.py`、`mkcurve_tensor.py`，可选 MATLAB 对照 | **非官方 MATLAB 到 Python 移植版**，不能与普通 DIPY DKI 混称 |
 | DDSurfer 表面重建 | 上游 Python/PyTorch 项目 | 固定的 `anatomy/surface/ddsurfer_backend/` 快照与 Slicer 调度 | 同步上游 Python，不是 MATLAB 改写 |
 | 皮层后处理 | 原始 FreeSurfer C++ 算法 | 固定上游配方在本机编译七个命令，或复用已有 FreeSurfer | **原生算法复用**，不是 Python 重写；本机组件无需完整套件；[配置与边界](../setup/SURFACE_COMPONENTS.zh-CN.md) |
-| DTI / Free-water / NODDI | 所选路线的 DIPY / AMICO Python 实现 | 输入验证、拟合适配、参数记录与 QC | 调用科学计算库，不能笼统称为本项目 MATLAB 移植 |
+| DTI 张量拟合 | SlicerDMRI `DWIToDTIEstimation` 与 Teem 库（Slicer 内核） | `shared/teem_dti.py` 在 Slicer Python 中调用 Teem，写出张量、FA 和彩色 FA 图 | **SlicerDMRI 估计器的修改版 Python 重新实现**，遵循 Slicer 许可（[声明](../../THIRD_PARTY_NOTICES.md)）；插件不再分发 Teem |
+| Free-water / NODDI | 所选路线的 DIPY / AMICO Python 实现 | 输入验证、拟合适配、参数记录与 QC | 调用科学计算库，不能笼统称为本项目 MATLAB 移植 |
+| iFW | 已发表公式（Cho 等预印本，补充方法 1） | `microstructure/ifw.py` | 已发表公式的 Python 实现；遵循论文的参考函数 |
 | Free-water WLS 优化 | 固定来源的 DIPY `wls_iter` Python 估计器 | 源码匹配时用 `microstructure/freewater_wls.py` 消除大对角矩阵；串行 NLS 沿用同一初始化 | **修改后的等价 Python 计算实现**，不是新估计器或 MATLAB 移植；见[配对实测](../release/PERFORMANCE_OPTIMIZATIONS.zh-CN.md)及[DIPY 授权](../../licenses/DIPY.txt) |
 | WMA / WMQL / TractCloud | 外部作者 Python/shell 流程 | 独立运行目录、原始入口和溯源记录；TractCloud 增加固定种子/logging 兼容启动器 | **外部作者代码适配**，不是算法移植；[真实核查](../release/BUNDLE_BACKENDS_20261013.zh-CN.md) 区分执行、完整性和人工解剖核验 |
 

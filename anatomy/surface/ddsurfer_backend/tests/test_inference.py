@@ -222,9 +222,9 @@ class InferenceTests(unittest.TestCase):
             np.savetxt(inputs/'bvecs', vectors.T)
             slicer=cwd/'slicer'
             core=slicer/'lib/Slicer-5.2/cli-modules';core.mkdir(parents=True)
-            dmri=slicer/'extensions/SlicerDMRI/lib/Slicer-5.2/cli-modules';dmri.mkdir(parents=True)
-            for path in (slicer/'Slicer',core/'BRAINSFit',core/'ResampleScalarVectorDWIVolume',
-                         dmri/'DWIToDTIEstimation',dmri/'DiffusionTensorScalarMeasurements'):
+            (slicer/'bin').mkdir()
+            # W5: no SlicerDMRI folders; PythonSlicer runs the native tensor fit.
+            for path in (slicer/'Slicer',slicer/'bin/PythonSlicer',core/'BRAINSFit',core/'ResampleScalarVectorDWIVolume'):
                 path.write_text('#!/bin/sh\nexit 0\n');path.chmod(0o755)
             helper=cwd/'python-helper'
             helper.write_text('#!/bin/sh\nif [ "$(basename "$1")" = inputs.py ]; then\n'

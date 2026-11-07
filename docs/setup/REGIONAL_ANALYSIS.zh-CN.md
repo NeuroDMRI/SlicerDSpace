@@ -116,9 +116,9 @@ VTK 保存 RAS-mm 几何，不复制原文件的张量或逐点数组；可用�
 常规分析直接传参，无需手写请求文件；GUI 与 CLI 共用同一后端：
 
 ```bash
-python scripts/analyze_regions.py --source-manifest /absolute/run_orchestration_manifest.json \
+PythonSlicer scripts/analyze_regions.py --source-manifest /absolute/run_orchestration_manifest.json \
   --regions 1024 2024 --metrics fa md --output-dir /absolute/new_region_results
-python scripts/validate_region_analysis.py /absolute/region_analysis_manifest.json \
+PythonSlicer scripts/validate_region_analysis.py /absolute/region_analysis_manifest.json \
   --report /absolute/independent_check.json
 ```
 
@@ -144,7 +144,7 @@ python scripts/validate_region_analysis.py /absolute/region_analysis_manifest.js
 例如，筛选连接双侧中央前回的 UKF 流线：
 
 ```bash
-python scripts/analyze_regions.py --source-manifest /absolute/run_orchestration_manifest.json \
+PythonSlicer scripts/analyze_regions.py --source-manifest /absolute/run_orchestration_manifest.json \
   --regions 1024 --target-regions 2024 --tractogram tractography.ukf \
   --tract-rule endpoint_pair --output-dir /absolute/new_region_tracks
 ```
@@ -156,7 +156,7 @@ python scripts/analyze_regions.py --source-manifest /absolute/run_orchestration_
 同一组参数可直接应用于多个已完成的被试：
 
 ```bash
-python scripts/analyze_regions.py --source-manifest /absolute/subject1/run.json /absolute/subject2/run.json \
+PythonSlicer scripts/analyze_regions.py --source-manifest /absolute/subject1/run.json /absolute/subject2/run.json \
   --regions 1024 2024 --metrics fa md --output-dir /absolute/new_region_cohort
 ```
 

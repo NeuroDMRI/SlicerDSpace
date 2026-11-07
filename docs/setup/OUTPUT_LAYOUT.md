@@ -25,6 +25,13 @@ outputs/
   06_slicer_scene_report/
 ```
 
+`00_run_metadata/run_record.json` is written at the end of every run. It lists the run
+manifest, the parameters, the software and asset versions, the licences that were
+accepted, the brain-mask provenance (the requested backend and the route of the
+mask that the run used), a QC summary and the SHA-256 of every final product file.
+It copies no output file. A re-run keeps the previous record as
+`run_record-<started_at>.json` and nothing is deleted.
+
 New anatomical results use `03_anatomy`. Segmentation, parcellation and surface
 reconstruction remain separate products. The directory name does not prescribe
 the execution order or imply that all products were selected or passed QC.

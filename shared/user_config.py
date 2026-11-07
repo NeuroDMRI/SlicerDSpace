@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import platform
 from copy import deepcopy
@@ -10,9 +11,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
+from shared.brain_mask import REMOVED_BRAIN_MASK_BACKENDS
 from shared.dependency_config import DEPENDENCY_CONFIG_KEYS
 from shared.branding import LEGACY_ENV_PREFIX, reuse_legacy_path
 
+
+_LOG = logging.getLogger(__name__)
 
 USER_CONFIG_KIND = "slicerdsurfer_user_config"
 USER_CONFIG_VERSION = 1
@@ -21,9 +25,9 @@ USER_CONFIG_ENV = "SLICERDSPACE_USER_CONFIG"
 RUN_DEFAULTS = {
     "run_name": "Test1",
     "targets": ["microstructure", "tractography", "bundles", "connectome"],
-    "preprocessing_backend": "dipy",
     "brain_mask_backend": "pnl_cnn",
     "brain_mask_device": "auto",
+    "pnl_mask_route": "auto",
     "ddseg_device": "auto",
     "surface_device": "auto",
     "tractcloud_device": "auto",
@@ -31,14 +35,18 @@ RUN_DEFAULTS = {
     "bundle_backend": "wmql",
     "wma_atlas": "org",
     "microstructure_stages": ["dti"],
-    "dki_fit_method": "WLS",
-    "connectome_backend": "python",
+    "dki_fit_method": "MKCURVE",
+    "connectome_backend": "auto",
     "select_streamlines": 1_000_000,
     "auto_install_python_dependencies": True,
 }
 
 
-MICROSTRUCTURE_STAGE_ORDER = ("dti", "freewater", "noddi", "dki")
+# W2a (D1): run-default keys of the removed preprocessing route and denoise choices.
+REMOVED_PREPROCESSING_SETTINGS = ("preprocessing_backend", "preprocessing_dipy_denoise_method", "preprocessing_skip_motion")
+
+MICROSTRUCTURE_ALL_STAGES = ("dti", "freewater", "noddi", "dki")  # "all" does not include iFW
+MICROSTRUCTURE_STAGE_ORDER = MICROSTRUCTURE_ALL_STAGES + ("ifw",)
 
 
 def canonical_microstructure_stages(values: Iterable[str] | str | None) -> tuple[str, ...]:
@@ -53,7 +61,7 @@ def canonical_microstructure_stages(values: Iterable[str] | str | None) -> tuple
         if token.strip()
     }
     if stages & {"all", "full"}:
-        stages.update(MICROSTRUCTURE_STAGE_ORDER)
+        stages.update(MICROSTRUCTURE_ALL_STAGES)
         stages.difference_update(("all", "full"))
     unknown = stages - set(MICROSTRUCTURE_STAGE_ORDER)
     if unknown:
@@ -103,6 +111,7 @@ def empty_user_config() -> dict[str, Any]:
         },
         "run_defaults": deepcopy(RUN_DEFAULTS),
         "external_dependencies": {},
+        "accepted_licences": {},
     }
 
 
@@ -138,13 +147,45 @@ def normalize_user_config(payload: Mapping[str, Any] | None) -> dict[str, Any]:
         for key, value in (dependencies.items() if isinstance(dependencies, Mapping) else ())
         if key in DEPENDENCY_CONFIG_KEYS and str(value or "").strip()
     }
+    # B7: {licence id: {"id", "version" (SHA-256 of the local licence file), "time"}}; malformed records are dropped.
+    accepted = config.get("accepted_licences")
+    config["accepted_licences"] = {
+        str(key): {"id": str(key), "version": str(value["version"]), "time": str(value.get("time") or "")}
+        for key, value in (accepted.items() if isinstance(accepted, Mapping) else ())
+        if isinstance(value, Mapping) and str(value.get("version") or "").strip()
+    }
     defaults = config.get("run_defaults", {})
     targets = defaults.get("targets")
     if isinstance(targets, str):
         defaults["targets"] = [token.strip() for token in targets.split(",") if token.strip()]
     stages = defaults.get("microstructure_stages")
     defaults["microstructure_stages"] = list(canonical_microstructure_stages(stages))
-    defaults["dki_fit_method"] = str(defaults.get("dki_fit_method") or "WLS").strip().upper()
+    defaults["dki_fit_method"] = str(defaults.get("dki_fit_method") or "MKCURVE").strip().upper()
+    # W5 / SC-2: a saved removed backend (synthstrip, mrtrix, dipy) loads as pnl_cnn with one note; no one is blocked.
+    # The note is in config["notes"] for the GUI and the CLI. It is also logged. write_user_config does not save it.
+    config.pop("notes", None)
+    notes: list[str] = []
+    saved_backend = str(defaults.get("brain_mask_backend") or RUN_DEFAULTS["brain_mask_backend"])
+    if saved_backend in REMOVED_BRAIN_MASK_BACKENDS:
+        defaults["brain_mask_backend"] = RUN_DEFAULTS["brain_mask_backend"]
+        note = (f"Saved brain mask backend {saved_backend!r} was removed. Brain masking now uses pnl_cnn; "
+                "select Provided mask only (provided) to use a supplied mask.")
+        notes.append(note)
+        _LOG.warning(note)
+    # W2a (D1): a saved preprocessing route or denoise choice was removed. The setting loads without it, with one note.
+    removed = [key for key in REMOVED_PREPROCESSING_SETTINGS if key in defaults]
+    if removed:
+        for key in removed:
+            defaults.pop(key, None)
+        note = (f"Saved preprocessing setting {', '.join(repr(key) for key in removed)} was removed. "
+                "Preprocessing has one route: DIPY MP-PCA, DIPY Gibbs removal, FSL eddy/topup through dwifslpreproc.")
+        notes.append(note)
+        _LOG.warning(note)
+    if notes:
+        config["notes"] = notes
+    # SC-1a: shared.brain_mask.PNL_MASK_ROUTES; an unknown saved value falls back to auto.
+    if str(defaults.get("pnl_mask_route") or "auto") not in ("auto", "managed", "native"):
+        defaults["pnl_mask_route"] = "auto"
     return config
 
 
@@ -170,6 +211,7 @@ def write_user_config(payload: Mapping[str, Any], path: Path | None = None) -> P
     resolved = (path or default_user_config_path()).expanduser().resolve()
     resolved.parent.mkdir(parents=True, exist_ok=True)
     config = normalize_user_config(payload)
+    config.pop("notes", None)
     config["updated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
     temporary = resolved.with_name(resolved.name + ".tmp")
     temporary.write_text(json.dumps(config, indent=2, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8")
@@ -201,9 +243,9 @@ def user_config_cli_values(config: Mapping[str, Any]) -> dict[str, Any]:
         "output_root": Path(recent["output_root"]).expanduser() if recent.get("output_root") else None,
         "run_name": defaults.get("run_name") or RUN_DEFAULTS["run_name"],
         "targets": [",".join(defaults.get("targets") or RUN_DEFAULTS["targets"])],
-        "preprocessing_backend": defaults.get("preprocessing_backend") or RUN_DEFAULTS["preprocessing_backend"],
         "brain_mask_backend": defaults.get("brain_mask_backend") or RUN_DEFAULTS["brain_mask_backend"],
         "brain_mask_device": defaults.get("brain_mask_device") or RUN_DEFAULTS["brain_mask_device"],
+        "pnl_mask_route": defaults.get("pnl_mask_route") or RUN_DEFAULTS["pnl_mask_route"],
         "ddseg_device": defaults.get("ddseg_device") or RUN_DEFAULTS["ddseg_device"],
         "surface_device": defaults.get("surface_device") or RUN_DEFAULTS["surface_device"],
         "tractcloud_device": defaults.get("tractcloud_device") or RUN_DEFAULTS["tractcloud_device"],
@@ -211,7 +253,7 @@ def user_config_cli_values(config: Mapping[str, Any]) -> dict[str, Any]:
         "bundle_backend": defaults.get("bundle_backend") or RUN_DEFAULTS["bundle_backend"],
         "wma_atlas": defaults.get("wma_atlas") or "org",
         "microstructure_stages": [",".join(defaults.get("microstructure_stages") or RUN_DEFAULTS["microstructure_stages"])],
-        "dki_fit_method": defaults.get("dki_fit_method") or "WLS",
+        "dki_fit_method": defaults.get("dki_fit_method") or "MKCURVE",
         "connectome_backend": defaults.get("connectome_backend") or RUN_DEFAULTS["connectome_backend"],
         "select_streamlines": int(defaults.get("select_streamlines") or RUN_DEFAULTS["select_streamlines"]),
     }
@@ -276,13 +318,15 @@ def user_config_from_cli_args(
     target_set = set(targets)
     stage_set = set(stages)
     if "all" in stage_set:
-        stage_set.update(MICROSTRUCTURE_STAGE_ORDER)
+        stage_set.update(MICROSTRUCTURE_ALL_STAGES)
     if "microstructure_freewater" in target_set:
         stage_set.update(("dti", "freewater"))
     if "microstructure_noddi" in target_set:
         stage_set.update(("dti", "noddi"))
     if "microstructure_dki" in target_set or bool(getattr(args, "run_dki", False)):
         stage_set.update(("dti", "dki"))
+    if "microstructure_ifw" in target_set or bool(getattr(args, "run_ifw", False)):
+        stage_set.update(("dti", "freewater", "ifw"))
     stages = list(canonical_microstructure_stages(stage_set))
     tractography_backend = getattr(args, "tractography_backend", None) or "csd_act"
     if "saf" in target_set:
@@ -315,9 +359,9 @@ def user_config_from_cli_args(
         {
             "run_name": str(getattr(args, "run_name", "") or "Test1"),
             "targets": targets or list(RUN_DEFAULTS["targets"]),
-            "preprocessing_backend": getattr(args, "preprocessing_backend", None) or "dipy",
             "brain_mask_backend": getattr(args, "brain_mask_backend", None) or "pnl_cnn",
             "brain_mask_device": getattr(args, "brain_mask_device", None) or "auto",
+            "pnl_mask_route": getattr(args, "pnl_mask_route", None) or "auto",
             "ddseg_device": getattr(args, "ddseg_device", None) or "auto",
             "surface_device": getattr(args, "surface_device", None) or "auto",
             "tractcloud_device": getattr(args, "tractcloud_device", None) or "auto",
@@ -325,8 +369,8 @@ def user_config_from_cli_args(
             "bundle_backend": bundle_backend,
             "wma_atlas": getattr(args, "wma_atlas", None) or "org",
             "microstructure_stages": stages or ["dti"],
-            "dki_fit_method": str(getattr(args, "dki_fit_method", None) or "WLS").upper(),
-            "connectome_backend": getattr(args, "connectome_backend", None) or "python",
+            "dki_fit_method": str(getattr(args, "dki_fit_method", None) or "MKCURVE").upper(),
+            "connectome_backend": getattr(args, "connectome_backend", None) or "auto",
             "select_streamlines": int(
                 getattr(args, "select_streamlines", None) or RUN_DEFAULTS["select_streamlines"]
             ),

@@ -9,23 +9,30 @@
 ---
 
 The subject CLI and batch CLI use `pnl_cnn` by default. Select a backend
-explicitly with `--brain-mask-backend pnl_cnn|synthstrip|mrtrix|provided`.
+explicitly with `--brain-mask-backend pnl_cnn|provided`. The SynthStrip, MRtrix `dwi2mask` and DIPY
+mask backends were removed; a removed name fails and the message names `pnl_cnn` and `provided`.
 Missing dependencies are reported, not replaced with another backend.
-`--brain-mask-device auto|cuda|cpu` controls PNL/SynthStrip inference and defaults
+`--brain-mask-device auto|cuda|cpu` controls PNL inference and defaults
 to GPU-preferred `auto`. It is saved in `run_defaults.brain_mask_device`.
 An explicit CUDA request fails if the external runtime cannot use CUDA;
-inference errors never trigger a hidden CPU retry. MRtrix masking is CPU-only.
+inference errors never trigger a hidden CPU retry.
 `provided` requires an existing `input/nodif_brain_mask.nii.gz`.
+`--pnl-mask-route auto|managed|native` chooses the route of `pnl_cnn`: `auto` is
+`managed` (conda runner with ANTs) on Linux and `native` on macOS and Windows; `native` is
+labelled "native (experimental)" because its masks did not match the managed route closely
+enough on 2 of 24 test cases (the parity rule). The setting is saved in `run_defaults.pnl_mask_route`;
+the mask receipt and the run record name the route that made the mask. The four `--pnl-mask-*` path
+options below are read only by the managed route.
 
 Configure the PNL runtime through external dependency paths:
 
 ```bash
-python shared/run_subject_pipeline_cli.py \
+PythonSlicer shared/run_subject_pipeline_cli.py \
   --subject-root /data/sub-01 --targets preprocessing,microstructure \
   --brain-mask-backend pnl_cnn \
   --brain-mask-device auto \
   --pnl-mask-python /opt/pnl/bin/python \
-  --pnl-mask-script /opt/pnl/dwi_masking.py \
+  --pnl-mask-script /opt/pnl/bin/pnl-brain-mask \
   --pnl-mask-model-dir /opt/pnl/models \
   --pnl-mask-ants-bin-dir /opt/ants/bin \
   --doctor
@@ -40,9 +47,8 @@ not an inference runtime when the final preprocessing mask needs refreshing.
 The shared-logic doctor entrypoints accept `brain_mask_required=False`;
 subject-aware callers can pass `True` for a known missing or newly needed mask.
 
-SynthStrip reuses `--postprocess-freesurfer-home /opt/freesurfer`; there is no
-separate SynthStrip installation-path option. MRtrix uses the existing
-`--mrtrix-bin-dir` and preprocessing MRtrix path settings.
+A saved user setting with a removed backend (`synthstrip`, `mrtrix`, `dipy`) loads as
+`pnl_cnn` with one note in the log; it does not block the run.
 
 The four PNL paths can also be supplied in `external_dependencies` in
 `--dependency-config` or `--user-config` JSON. The backend is stored in
@@ -55,11 +61,10 @@ resolved settings.
 Batch runs forward the selected backend and paths unchanged to every subject:
 
 ```bash
-python scripts/run_batch_pipeline.py \
+PythonSlicer scripts/run_batch_pipeline.py \
   --batch-root /data/subjects --jobs 2 \
   --targets preprocessing,microstructure \
-  --brain-mask-backend synthstrip \
-  --postprocess-freesurfer-home /opt/freesurfer \
+  --brain-mask-backend provided \
   --doctor
 ```
 

@@ -5,6 +5,20 @@ from functools import wraps
 import os
 
 
+def reserved_stage_cpus():
+    """CPUs of the current stage reservation (``SLICERDSPACE_STAGE_CPUS``), or None.
+
+    Thread precedence for every stage: explicit user value, then this reservation,
+    then the stage's built-in default. A missing or invalid value gives None.
+    """
+    value = os.environ.get('SLICERDSPACE_STAGE_CPUS', '').strip()
+    try:
+        count = int(value)
+    except ValueError:
+        return None
+    return count if count >= 1 else None
+
+
 @contextmanager
 def numerical_threads(threads, *, workers=1):
     if threads is None:

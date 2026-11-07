@@ -7,7 +7,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 import zipfile
 
 from shared import optional_assets
@@ -45,16 +45,16 @@ class OptionalAssetsTests(unittest.TestCase):
         try:
             with tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
-                relative = "brain_mask/synthstrip/synthstrip.1.pt"
+                relative = "bundles/tractcloud/test_model.pt"
                 catalog = root / "catalog.json"
-                catalog.write_text(json.dumps({"profiles": {"synthstrip": {"directory": "brain_mask/synthstrip", "required_paths": [relative]}},
+                catalog.write_text(json.dumps({"profiles": {"tractcloud": {"directory": "bundles/tractcloud", "required_paths": [relative]}},
                     "asset_records": {relative: {"sha256": hashlib.sha256(data).hexdigest(), "size_bytes": len(data),
                         "urls": [f"http://127.0.0.1:{server.server_port}/model"]}}}))
                 local_opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
                 with patch.object(setup_optional_assets, "MANIFEST", catalog), patch.object(optional_assets, "MANIFEST", catalog), \
                         patch("scripts.download_model_assets.urllib.request.urlopen", side_effect=local_opener.open):
                     for _ in range(2):
-                        result = setup_optional_assets.prepare(["synthstrip"], asset_root=root / "assets", execute=True, accept_terms=True)
+                        result = setup_optional_assets.prepare(["tractcloud"], asset_root=root / "assets", execute=True, accept_terms=True)
                         self.assertEqual(result["status"], "completed")
                     self.assertEqual((root / "assets" / relative).read_bytes(), data)
                     self.assertEqual(hits, ["/model"])
@@ -77,6 +77,43 @@ class OptionalAssetsTests(unittest.TestCase):
         self.assertGreaterEqual(plan['optional_asset_peak_disk_bytes'], plan['optional_asset_size_bytes'] + 2439318525)
         clean = build_setup_plan(SimpleNamespace(statuses=[]))
         self.assertEqual(clean["optional_asset_profiles"], [])
+
+    def _weights_gap_report(self):
+        gap = SimpleNamespace(key="brain_mask_backend", kind="setting", status="missing", required=True, targets=("microstructure",),
+                              label="mask", details={"backend": "pnl_cnn", "missing_required": ["weights.json"]},
+                              install_group="brain_mask", install_hint="")
+        return SimpleNamespace(statuses=[gap], targets=("microstructure",), blocker_count=1)
+
+    def test_f4_missing_optional_profiles_resolves_auto_for_the_platform_without_a_route(self):
+        """F4: no pnl_route means auto: native on macOS and Windows, managed on Linux (no silent managed default)."""
+        report = self._weights_gap_report()
+        for system, expected in (("Darwin", ["pnl-cnn"]), ("Windows", ["pnl-cnn"]), ("Linux", [])):
+            with self.subTest(system=system), patch("platform.system", return_value=system):
+                self.assertEqual(optional_assets.missing_optional_profiles(report, "pnl_cnn"), expected)
+        with patch("platform.system", return_value="Linux"):
+            self.assertEqual(optional_assets.missing_optional_profiles(report, "pnl_cnn", pnl_route="native"), ["pnl-cnn"])
+
+    def test_f4_offline_assets_helper_passes_the_route_of_the_parameter_node(self):
+        """F4: use_offline_assets resolves the node's pnlMaskRoute, so a native user gets the weights offline."""
+        import shared.ui_selected_setup as ui
+        qt = MagicMock()
+        qt.QFileDialog.getExistingDirectory.return_value = "/offline"
+        slicer = SimpleNamespace(util=SimpleNamespace(mainWindow=lambda: None, infoDisplay=lambda *args: None))
+        for system, route, expected in (("Linux", "native", ["pnl-cnn"]), ("Darwin", "auto", ["pnl-cnn"]),
+                                        ("Linux", "auto", [])):
+            with self.subTest(system=system, route=route), tempfile.TemporaryDirectory() as tmp, \
+                    patch.dict("sys.modules", {"qt": qt, "slicer": slicer}), patch("platform.system", return_value=system), \
+                    patch("shared.user_config.default_user_config_path", return_value=Path(tmp) / "config.json"), \
+                    patch("shared.ui_setup_jobs.start_setup_job", return_value=True) as start:
+                node = SimpleNamespace(brainMaskBackend="pnl_cnn", pnlMaskRoute=route, wmaAtlas="org")
+                owner = SimpleNamespace(_parameterNode=node, _lastEnvironmentResult=self._weights_gap_report(),
+                                        _slicer_launcher_program=lambda: "Slicer")
+                ui.use_offline_assets(owner)
+                if not expected:
+                    start.assert_not_called()
+                    continue
+                args = start.call_args[0][2][0][1]
+                self.assertEqual(args[args.index("--optional-profiles") + 1:], expected)
 
     def test_explicit_wma_and_legacy_environment_precede_shared_directory(self):
         with patch.object(optional_assets, "verified_resource_directory") as check, \
@@ -111,8 +148,8 @@ class OptionalAssetsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             catalog = root / "catalog.json"
-            relative = "brain_mask/synthstrip/synthstrip.1.pt"
-            catalog.write_text(json.dumps({"profiles": {"synthstrip": {"directory": "brain_mask/synthstrip", "required_paths": [relative]}},
+            relative = "bundles/tractcloud/test_model.pt"
+            catalog.write_text(json.dumps({"profiles": {"tractcloud": {"directory": "bundles/tractcloud", "required_paths": [relative]}},
                 "asset_records": {relative: {"sha256": hashlib.sha256(b"author").hexdigest(), "size_bytes": 6}}}))
             source, target = root / "source", root / "target"
             (source / relative).parent.mkdir(parents=True)
@@ -120,13 +157,13 @@ class OptionalAssetsTests(unittest.TestCase):
             (source / "unselected_training_data").write_bytes(b"never copy")
             with patch.object(setup_optional_assets, "MANIFEST", catalog), patch.object(optional_assets, "MANIFEST", catalog), \
                     patch.object(setup_optional_assets, "download_asset_plan") as download:
-                result = setup_optional_assets.prepare(["synthstrip"], asset_root=target, execute=True, offline_root=source)
+                result = setup_optional_assets.prepare(["tractcloud"], asset_root=target, execute=True, offline_root=source)
                 self.assertEqual(result["status"], "completed")
                 self.assertFalse((target / "unselected_training_data").exists())
                 self.assertEqual((source / relative).read_bytes(), b"author")
                 (target / relative).write_bytes(b"broken")
                 with self.assertRaisesRegex(ValueError, "Existing resource differs"):
-                    setup_optional_assets.prepare(["synthstrip"], asset_root=target, execute=True, accept_terms=True)
+                    setup_optional_assets.prepare(["tractcloud"], asset_root=target, execute=True, accept_terms=True)
                 self.assertEqual((target / relative).read_bytes(), b"broken")
                 download.assert_not_called()
 
@@ -273,14 +310,14 @@ class OptionalAssetsTests(unittest.TestCase):
             base = Path(tmp).resolve()
             (base / 'real').mkdir()
             (base / 'link').symlink_to(base / 'real')
-            source = base / 'synthstrip.pt'
+            source = base / 'test_model.pt'
             source.write_bytes(b'author resource')
-            relative = 'brain_mask/synthstrip/synthstrip.1.pt'
+            relative = 'bundles/tractcloud/test_model.pt'
             catalog = base / 'catalog.json'
             catalog.write_text(json.dumps({'asset_records': {relative: {
                 'sha256': hashlib.sha256(b'author resource').hexdigest(), 'size_bytes': 15, 'redistribution': 'test'}}}))
             argv = ['import_external_resources.py', '--asset-root', str(base / 'link/assets'),
-                    '--synthstrip-model', str(source), '--execute']
+                    '--tractcloud-data', str(base), '--tractcloud-license', str(source), '--execute']
             with patch.object(importer, 'MANIFEST', catalog), patch.object(sys, 'argv', argv), \
                     contextlib.redirect_stdout(io.StringIO()):
                 importer.main()
@@ -302,6 +339,25 @@ class OptionalAssetsTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'Unsafe'):
                 extract_org(archive, root / 'unsafe')
             self.assertFalse((root / 'outside').exists())
+
+    def test_n1_guard_extract_org_refuses_a_symlinked_destination_and_accepts_a_symlink_at_or_above_its_parent(self):
+        # Guard test: it keeps the N1 rule as it is; it does not cover a new behaviour.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            archive = root / 'ORG-800FC-100HCP.zip'
+            with zipfile.ZipFile(archive, 'w') as zipped:
+                zipped.writestr('ORG-800FC-100HCP/atlas.p', b'reference')
+            (root / 'real').mkdir()
+            (root / 'link').symlink_to(root / 'real', target_is_directory=True)
+            # A symlink at or above the destination's parent folder is allowed.
+            self.assertEqual(len(extract_org(archive, root / 'link/assets')), 1)
+            self.assertEqual((root / 'real/assets/ORG-800FC-100HCP/atlas.p').read_bytes(), b'reference')
+            # The destination folder itself as a symlink is refused, and nothing is written outside.
+            (root / 'outside').mkdir()
+            (root / 'dest').symlink_to(root / 'outside', target_is_directory=True)
+            with self.assertRaisesRegex(ValueError, 'Refusing symlink'):
+                extract_org(archive, root / 'dest')
+            self.assertEqual(list((root / 'outside').iterdir()), [])
 
     def test_shared_directory_requires_all_recorded_files_and_valid_hashes(self):
         with tempfile.TemporaryDirectory() as tmp:

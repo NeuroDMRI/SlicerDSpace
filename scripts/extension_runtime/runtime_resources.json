@@ -28,7 +28,6 @@
     "scripts/wsl/WslCommandBridge.cs",
     "scripts/wsl/requirements-runtime.txt",
     "shared/pnl_mask_runner.py",
-    "shared/synthstrip_mask_runner.py",
     "shared/mrtrix_preproc_runner.py",
     "shared/managed_runtimes.py",
     "shared/ui_managed_runtimes.py",
@@ -52,7 +51,7 @@
     "docs/release/benchmarks/module_runtimes_20261017.csv"
   ],
   "trees": [
-    {"root": "shared", "patterns": ["*.py"]},
+    {"root": "shared", "patterns": ["*.py", "pnl_cnn/LICENSE.txt", "pnl_cnn/UPSTREAM.json", "pnl_cnn/data/*.json"]},
     {"root": "preprocessing", "patterns": ["*.py"]},
     {"root": "anatomy", "patterns": ["*.py", "*.sh", "*.json", "*.md", "*.txt", "*.yml", "*.conf", "*.png"]},
     {"root": "microstructure", "patterns": ["*.py", "*.json"]},
@@ -62,6 +61,7 @@
     {"root": "docs/setup", "patterns": ["*.md"]},
     {"root": "docs/assets", "patterns": ["*.md"]},
     {"root": "docs/architecture", "patterns": ["*.md"]},
+    {"root": "docs/licenses", "patterns": ["*.md"]},
     {"root": "licenses", "patterns": ["*"]}
   ],
   "excluded_components": ["tests", "Testing", "third_party", "__pycache__", ".pytest_cache", ".mypy_cache", ".git"],

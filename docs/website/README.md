@@ -55,7 +55,7 @@ change. Expanded details and the JSON retain both solver outcomes; the batched
 candidate has no consistent benefit and is not the default. Catalogue review
 dates are generated independently of the dates on individual measurements.
 
-`python3 scripts/build_performance_site.py` exports selected benchmark records and
+`PythonSlicer scripts/build_performance_site.py` exports selected benchmark records and
 renders their tables into `index.html`, between the `measured-evidence` markers.
 `--check` verifies source hashes and detects stale HTML/JSON. Only the curated
 `assets/data/performance.json` is public. Raw runtime snapshots, private filesystem
@@ -103,13 +103,13 @@ remains; the six example combinations and standalone In Slicer section are
 removed. The hero and footer use the transparent, outlined
 `assets/img/slicerdspace-wordmark-light.svg`; the header contains only centered
 navigation, with no logo or status badge. Verify the wordmark with
-`python3 scripts/check_website_assets.py --check`. Browser icons remain
+`PythonSlicer scripts/check_website_assets.py --check`. Browser icons remain
 PNG exports of `paper-latex:docs/figures/logo-ref.svg`; verify them with
-`python3 scripts/check_website_assets.py --check`.
+`PythonSlicer scripts/check_website_assets.py --check`.
 
 - The WMQL gallery tile uses `assets/img/res-wmql-ukf.jpg`, an unchanged copy of
   the official multi-query UKF render in `paper-latex:docs/figures/src/results/`. Its source
-  and hash are recorded in `wmql_sources.json`. `python3 scripts/check_website_assets.py --check`
+  and hash are recorded in `wmql_sources.json`. `PythonSlicer scripts/check_website_assets.py --check`
   verifies the published copy; regenerate and import artwork from the independent repository when updating it. The full lateral view fits
   inside the gallery tile without cropping. The earlier CSD/ACT AF/CST thumbnail is retired.
 - `assets/img/fig-product-map.png` (section `#choose`) and
@@ -132,7 +132,7 @@ PNG exports of `paper-latex:docs/figures/logo-ref.svg`; verify them with
   `docs/website/references.json` retains the reviewed source catalogue;
   publisher-deposited metadata for the added DOI entries are retained in
   `reference_verification_20261026.json`.
-  `python3 scripts/build_website_catalog.py` renders the method inventory and source links;
+  `PythonSlicer scripts/build_website_catalog.py` renders the method inventory and source links;
   `--check` catches stale HTML, missing source entry points and missing citations.
   Bibliography URLs are allowlisted from this reviewed catalogue; other external
   links still require an explicit `ALLOWED_URLS` entry in `Testing/Website/check_site.py`.

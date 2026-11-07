@@ -7,11 +7,15 @@ from shared.bundle_qc import bundle_record_error
 PREFIX = "SlicerDDSurfer."
 FREESURFER_LUT = Path(__file__).resolve().parents[1] / "anatomy/parcellation/conversion/data/FreeSurferColorLUT.txt"
 SUFFIXES = (".nii.gz", ".nii", ".mgz", ".csv", ".tsv", ".stl", ".vtk", ".vtp", ".trk", ".tck")
+# D6: the DEC colour FA map is the only NRRD result; other .nrrd files in the tree stay intermediates.
+DEC_SUFFIX = "-dti-dec.nrrd"
 
 
 def result_file_suffix(path):
     """Compound extensions must not absorb dots in product/subject filenames."""
     name = Path(path).name.lower()
+    if name.endswith(DEC_SUFFIX):
+        return ".nrrd"
     return next((suffix for suffix in sorted(SUFFIXES, key=len, reverse=True) if name.endswith(suffix)), "")
 
 
@@ -161,7 +165,7 @@ def result_candidates(manifest, *, allow_bundle_directory_scan=True, include_pre
             if not path.is_absolute():
                 skipped.append({"path": value, "reason": "Relative output path needs an explicit source root"})
                 continue
-            if not path.name.lower().endswith(SUFFIXES):
+            if not path.name.lower().endswith(SUFFIXES + (DEC_SUFFIX,)):
                 continue
             if path.name.endswith("_orig.stl") and path.with_name(path.name.replace("_orig.stl", ".stl")).is_file():
                 continue

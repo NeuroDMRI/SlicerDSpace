@@ -25,10 +25,10 @@
 | [输出目录](setup/OUTPUT_LAYOUT.zh-CN.md) | 新 `03_anatomy` 产品及旧 `03_structural` 结果的只读兼容 |
 | [能力与平台](setup/SUPPORT_MATRIX.zh-CN.md) | 按路线配置依赖 |
 | [结果检查](setup/GUI_RESULT_REVIEW.md) | 按运行加载结果、取消任务与 QC |
-| [脑掩膜](setup/brain_mask_gui_config.md) | 默认 PNL CNN、替代后端及外部运行环境 |
+| [脑掩膜](setup/brain_mask_gui_config.md) | 默认 PNL CNN（Linux 为 managed，macOS 和 Windows 为实验性的 native）、替代后端 |
 | [GPU 策略](setup/GPU_EXECUTION.zh-CN.md) | 神经网络优先 GPU、明确 CPU 选择与 CPU-only 路线边界 |
-| [插件内自动配置](setup/MANAGED_SETUP.zh-CN.md) | 所选扩展、Python/模型、隔离 MRtrix/FSL/PNL、修复与离线资源 |
-| [微结构分析](setup/MICROSTRUCTURE.zh-CN.md) | DTI 默认、独立 FW/NODDI/DKI 与原作者 MK-Curve 边界 |
+| [插件内自动配置](setup/MANAGED_SETUP.zh-CN.md) | 一次确认含全部许可、自检、Python/模型、MRtrix/FSL 运行环境、修复与离线资源 |
+| [微结构分析](setup/MICROSTRUCTURE.zh-CN.md) | DTI 默认（含彩色 FA 图）、独立 FW/iFW/NODDI/DKI 与原作者 MK-Curve 边界 |
 | [UKF 纤维追踪](setup/UKF.zh-CN.md) | 可选作者扩展、默认参数、无损输入及自动 WMA 衔接 |
 | [WMA 图谱](setup/WMA_ATLASES.zh-CN.md) | ORG、East-West 与 NABA 选择、按需资源及图谱对应的 QC |
 | [WMQL 小脑区域查询](setup/WMQL_CEREBELLAR.zh-CN.md) | 可选区域规则、CLI/GUI 预设与检查 |
@@ -39,7 +39,7 @@
 | [模型资源](assets/MODEL_ASSETS.md) | Profile、下载与校验 |
 | [资源授权](assets/MODEL_ASSET_TERMS.md) | 文件校验与再分发许可分别审查 |
 | [代码与第三方授权](assets/CODE_LICENSES.zh-CN.md) | 原许可证、固定来源与分发条件 |
-| [实现来源](architecture/IMPLEMENTATION_PROVENANCE.zh-CN.md) | DDSeg/SAF/MK-Curve 移植与官方 PNL Python 外部适配的区别 |
+| [实现来源](architecture/IMPLEMENTATION_PROVENANCE.zh-CN.md) | DDSeg/SAF/MK-Curve 移植及修改后的 PNL 推理代码与未修改上游的区别 |
 | [外部依赖](setup/EXTERNAL_DEPENDENCIES.md) | 外部软件与路线前提 |
 
 ---
@@ -55,6 +55,9 @@
 ---
 
 ## 历史验证记录
+
+[可移植安装与默认方法](release/PORTABLE_SETUP_20261107.zh-CN.md)列出对用户的变化：
+原生张量拟合、一次安装确认、各平台的 PNL 掩膜路线、运行记录，以及更新后的一次性重新生成。
 
 [所选依赖准备验证](release/DEPENDENCY_SETUP_20261021.zh-CN.md)记录原生安装/取消检查、
 PNL 新隔离环境 GPU 掩膜、离线资源校验，以及平台和空白机器验收边界。

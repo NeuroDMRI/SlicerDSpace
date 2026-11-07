@@ -581,6 +581,9 @@ class ModelAssetsTest(unittest.TestCase):
         self.assertIn("slicerdsurfer_models_git", guidance["active_url_sources"])
         self.assertIn("--source-id slicerdsurfer_models_git", guidance["recommended_command"])
         self.assertIn("--asset-root", guidance["recommended_command"])
+        # S-N2 (guard): setup commands in messages run with PythonSlicer, not a system Python.
+        self.assertTrue(guidance["recommended_command"].startswith("PythonSlicer scripts/download_model_assets.py "))
+        self.assertTrue(guidance["verify_command"].startswith("PythonSlicer scripts/download_model_assets.py "))
         self.assertIn("target_asset_root", guidance)
         self.assertEqual(guidance["missing_count"], 1)
         self.assertEqual(guidance["lfs_pointer_count"], 1)

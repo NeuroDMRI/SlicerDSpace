@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import subprocess
 import tempfile
 import time
 import unittest
@@ -48,7 +49,11 @@ class DDSurferSyncTests(unittest.TestCase):
 
     def test_c4_local_bash_patches_stay_recorded_and_guarded(self):
         record = json.loads((BACKEND_ROOT / 'UPSTREAM.json').read_text())
-        self.assertEqual(set(record['local_patches']), {'preprocessing/dti.sh', 'run_ddsurfer_pipeline.sh'})
+        # R5 (W4-W6): the native tensor fit also patches dti.py, preflight.py and the tests that model the old CLIs.
+        self.assertEqual(set(record['local_patches']), {
+            'preprocessing/dti.sh', 'run_ddsurfer_pipeline.sh', 'preprocessing/dti.py', 'utils/preflight.py',
+            'tests/check_environment.py', 'tests/test_environment_check.py', 'tests/test_inference.py',
+            'tests/test_pipeline_reliability.py', 'tests/test_preprocessing.py'})
         wrapper = (BACKEND_ROOT / 'run_ddsurfer_pipeline.sh').read_text()
         self.assertIn('${ARGS[@]+"${ARGS[@]}"}', wrapper)
         self.assertNotIn(' "${ARGS[@]}"', wrapper)
@@ -201,9 +206,71 @@ class DDSurferSyncTests(unittest.TestCase):
             self.assertEqual(command[command.index('--dwi') + 1], bundle.dwi_path)
             self.assertEqual(command[command.index('--precision') + 1], 'bf16')
             self.assertEqual(env['DTI_REFERENCE_IMAGE'], '/atlas')
+            # N9: the backend learns where shared/teem_dti.py is, even when deployed away from this repository.
+            self.assertTrue(Path(env['SLICERDSPACE_TEEM_DTI_SCRIPT']).is_file())
+            self.assertEqual(Path(env['SLICERDSPACE_TEEM_DTI_SCRIPT']), ROOT / 'shared/teem_dti.py')
             self.assertIn('--resume', command)
             self.assertEqual(command[command.index('--cpu-threads') + 1], '2')
             self.assertEqual(command[command.index('--max-gpu-gib') + 1], '18.0')
+
+    def test_t4_a_preset_teem_script_is_not_overwritten(self):
+        from anatomy.surface.backend_bridge import backend_environment
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            bundle = SimpleNamespace(**{name: root / name for name in ('dwi_path', 'bval_path', 'bvec_path', 'mask_path')})
+            for path in vars(bundle).values():
+                path.touch()
+            resources = dict(checkpoint_root='/weights', template_dir='/templates', registration_atlas='/atlas')
+            config = SurfaceConfig('x', root, root, input_bundle=bundle, slicer_home=root)
+            with patch.dict(os.environ, {'SLICERDSPACE_TEEM_DTI_SCRIPT': '/user/teem_dti.py'}):
+                _, env = _raw_command(config, resources, root)
+                self.assertEqual(backend_environment(env)['SLICERDSPACE_TEEM_DTI_SCRIPT'], '/user/teem_dti.py')
+            with patch.dict(os.environ, clear=False):
+                os.environ.pop('SLICERDSPACE_TEEM_DTI_SCRIPT', None)
+                _, env = _raw_command(config, resources, root)
+                self.assertEqual(Path(env['SLICERDSPACE_TEEM_DTI_SCRIPT']), ROOT / 'shared/teem_dti.py')
+
+    def test_t3_dti_sh_resolves_runtime_root_and_launcher_for_every_slicer_layout(self):
+        script = ROOT / 'anatomy/surface/ddsurfer_backend/preprocessing/dti.sh'
+
+        def resolve(path):
+            run = subprocess.run(['bash', str(script), '--subject', 'x', '--slicer-path', str(path)],
+                                 env={**os.environ, 'DTI_RESOLVE_SLICER_ONLY': '1'},
+                                 capture_output=True, text=True, timeout=60)
+            self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+            values = dict(line.split('=', 1) for line in run.stdout.splitlines() if '=' in line)
+            return Path(values['root']).resolve(), Path(values['launcher']).resolve()
+
+        def touch(path):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.touch()
+            path.chmod(0o755)
+
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            linux = base / 'linux'
+            touch(linux / 'Slicer')
+            touch(linux / 'bin/PythonSlicer')
+            (linux / 'lib').mkdir()
+            self.assertEqual(resolve(linux), (linux.resolve(), (linux / 'Slicer').resolve()))
+            windows = base / 'windows'
+            touch(windows / 'Slicer.exe')
+            touch(windows / 'bin/PythonSlicer.exe')
+            (windows / 'lib').mkdir()
+            self.assertEqual(resolve(windows), (windows.resolve(), (windows / 'Slicer.exe').resolve()))
+            app = base / 'Slicer.app'
+            touch(app / 'Contents/MacOS/Slicer')
+            touch(app / 'Contents/bin/PythonSlicer')
+            (app / 'Contents/lib').mkdir()
+            expected = ((app / 'Contents').resolve(), (app / 'Contents/MacOS/Slicer').resolve())
+            for given in (app, app / 'Contents', app / 'Contents/MacOS'):
+                with self.subTest(given=str(given.relative_to(base))):
+                    self.assertEqual(resolve(given), expected)
+            (base / 'empty').mkdir()
+            missing = subprocess.run(['bash', str(script), '--subject', 'x', '--slicer-path', str(base / 'empty')],
+                                     env={**os.environ, 'DTI_RESOLVE_SLICER_ONLY': '1'},
+                                     capture_output=True, text=True, timeout=60)
+            self.assertNotEqual(missing.returncode, 0)
 
     def test_missing_mask_requires_explicit_synthstrip_opt_in(self):
         with tempfile.TemporaryDirectory() as temp:

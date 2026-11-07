@@ -113,7 +113,8 @@ class UIRunControllerTest(unittest.TestCase):
             microstructure_noddi=False,
         )
 
-        self.assertEqual(targets, ("validation", "surface_postprocess"))
+        # C1: surface postprocess needs the DDSurfer surfaces, so the closure adds "surface".
+        self.assertEqual(targets, ("validation", "surface", "surface_postprocess"))
 
     def test_summary_and_streamline_state_are_backend_aware(self) -> None:
         summary, target_text = selected_products_summary(
@@ -350,7 +351,7 @@ class UIRunControllerTest(unittest.TestCase):
         self.assertEqual(single["subject_id"], "sub-01")
         self.assertEqual(single["targets"], ("validation", "tractography", "bundles"))
         self.assertEqual(single["select_streamlines"], 1)
-        self.assertEqual(single["preprocessing_backend"], "dipy")
+        self.assertNotIn("preprocessing_backend", single)  # W2a (D1): preprocessing has one route
         self.assertEqual(single["mrtrix_bin_dir"], external_paths["mrtrix_bin_dir"])
         self.assertEqual(single["preprocessing_mrtrix_bin_dir"], external_paths["mrtrix_bin_dir"])
         self.assertEqual(single["postprocess_freesurfer_home"], external_paths["postprocess_freesurfer_home"])
@@ -460,13 +461,12 @@ class UIRunControllerTest(unittest.TestCase):
                 self._common_run_kwargs(root),
                 {"mrtrix_bin_dir": root / "mrtrix" / "bin", "wma_root": root / "wma"},
                 repo_root=repo_root,
-                preprocessing_backend="mrtrix_fsl",
             )
 
             self.assertIn((repo_root / "shared" / "run_subject_pipeline_cli.py").as_posix(), args)
             self.assertIn("--print-manifest-only", args)
             self.assertIn("--compress-mrtrix-dense", args)
-            self.assertEqual(args[args.index("--preprocessing-backend") + 1], "mrtrix_fsl")
+            self.assertNotIn("--preprocessing-backend", args)
             self.assertEqual(args[args.index("--microstructure-stages") + 1], "dti,freewater")
             self.assertEqual(args[args.index("--mrtrix-bin-dir") + 1], (root / "mrtrix" / "bin").as_posix())
             self.assertEqual(args[args.index("--preprocessing-mrtrix-bin-dir") + 1], (root / "mrtrix" / "bin").as_posix())
@@ -487,7 +487,6 @@ class UIRunControllerTest(unittest.TestCase):
                 batch_root=root / "batch",
                 batch_size=0,
                 arrange_inputs="symlink",
-                preprocessing_backend="dipy",
             )
 
             self.assertIn((repo_root / "scripts" / "run_batch_pipeline.py").as_posix(), args)

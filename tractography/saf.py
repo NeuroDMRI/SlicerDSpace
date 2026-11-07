@@ -252,6 +252,22 @@ def _effective_tckgen_options(config: SAFConfig) -> str:
     return config.tckgen_options.strip()
 
 
+def _tckgen_command_options(config: SAFConfig) -> str:
+    """tckgen options for the SAF command line: an explicit ``-nthreads`` wins, else the stage reservation.
+
+    SPEC-GAP: the stage CPU reservation is applied only here, not in the recorded options,
+    so the cache record does not depend on the admitted CPU count.
+    """
+
+    from shared.numeric_threads import reserved_stage_cpus
+
+    options = _effective_tckgen_options(config)
+    reserved = reserved_stage_cpus()
+    if reserved is None or "-nthreads" in options.split():
+        return options
+    return f"{options} -nthreads {reserved}".strip()
+
+
 @contextmanager
 def _mrtrix_rng_seed_env(seed: int) -> Iterator[None]:
     """Temporarily export MRTRIX_RNG_SEED for the SAF backend's subprocess calls.
@@ -354,7 +370,7 @@ def _build_saf_args(config: SAFConfig, output_dir: Path) -> list[Any]:
     else:
         args.extend(["maxlen", float(config.maxlen)])
     if config.pregenerated_tractogram is None:
-        args.extend(["tckgen", _effective_tckgen_options(config)])
+        args.extend(["tckgen", _tckgen_command_options(config)])
     elif config.tckgen_options:
         args.extend(["tckgen", config.tckgen_options])
     if config.pregenerated_tractogram is not None:

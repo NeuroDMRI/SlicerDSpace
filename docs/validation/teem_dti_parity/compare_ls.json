@@ -1,0 +1,228 @@
+[
+ {
+  "reference": "ref/DTI_ls.nrrd",
+  "candidate": "new/DTI_ls.nrrd",
+  "shape_ref": [
+   3658350,
+   9
+  ],
+  "shape_new": [
+   3658350,
+   9
+  ],
+  "dtype_ref": "float32",
+  "dtype_new": "float32",
+  "file_sha256_equal": true,
+  "payload_sha256_equal": true,
+  "header_equal": true,
+  "ras_to_ijk_equal": true,
+  "measurement_frame_equal": true,
+  "values": 32925150,
+  "equal_values": 32925150,
+  "nan_ref": 0,
+  "nan_new": 0,
+  "nan_mask_equal": true,
+  "max_abs_diff": 0.0,
+  "max_rel_diff": 0.0,
+  "max_ulp": 0,
+  "values_over_1_ulp": 0,
+  "voxels": 3658350,
+  "voxels_identical": 3658350
+ },
+ {
+  "reference": "ref/b0_ls.nrrd",
+  "candidate": "new/b0_ls.nrrd",
+  "shape_ref": [
+   3658350
+  ],
+  "shape_new": [
+   3658350
+  ],
+  "dtype_ref": "float32",
+  "dtype_new": "float32",
+  "file_sha256_equal": true,
+  "payload_sha256_equal": true,
+  "header_equal": true,
+  "ras_to_ijk_equal": true,
+  "measurement_frame_equal": true,
+  "values": 3658350,
+  "equal_values": 3658350,
+  "nan_ref": 0,
+  "nan_new": 0,
+  "nan_mask_equal": true,
+  "max_abs_diff": 0.0,
+  "max_rel_diff": 0.0,
+  "max_ulp": 0,
+  "values_over_1_ulp": 0,
+  "voxels": 3658350,
+  "voxels_identical": 3658350
+ },
+ {
+  "reference": "ref/FractionalAnisotropy_ls.nrrd",
+  "candidate": "new/FractionalAnisotropy_ls.nrrd",
+  "shape_ref": [
+   3658350
+  ],
+  "shape_new": [
+   3658350
+  ],
+  "dtype_ref": "float32",
+  "dtype_new": "float32",
+  "file_sha256_equal": true,
+  "payload_sha256_equal": true,
+  "header_equal": true,
+  "ras_to_ijk_equal": true,
+  "measurement_frame_equal": true,
+  "values": 3658350,
+  "equal_values": 3658350,
+  "nan_ref": 0,
+  "nan_new": 0,
+  "nan_mask_equal": true,
+  "max_abs_diff": 0.0,
+  "max_rel_diff": 0.0,
+  "max_ulp": 0,
+  "values_over_1_ulp": 0,
+  "voxels": 3658350,
+  "voxels_identical": 3658350
+ },
+ {
+  "reference": "ref/Trace_ls.nrrd",
+  "candidate": "new/Trace_ls.nrrd",
+  "shape_ref": [
+   3658350
+  ],
+  "shape_new": [
+   3658350
+  ],
+  "dtype_ref": "float32",
+  "dtype_new": "float32",
+  "file_sha256_equal": true,
+  "payload_sha256_equal": true,
+  "header_equal": true,
+  "ras_to_ijk_equal": true,
+  "measurement_frame_equal": true,
+  "values": 3658350,
+  "equal_values": 3658350,
+  "nan_ref": 0,
+  "nan_new": 0,
+  "nan_mask_equal": true,
+  "max_abs_diff": 0.0,
+  "max_rel_diff": 0.0,
+  "max_ulp": 0,
+  "values_over_1_ulp": 0,
+  "voxels": 3658350,
+  "voxels_identical": 3658350
+ },
+ {
+  "reference": "ref/MeanDiffusivity_ls.nrrd",
+  "candidate": "new/MeanDiffusivity_ls.nrrd",
+  "shape_ref": [
+   3658350
+  ],
+  "shape_new": [
+   3658350
+  ],
+  "dtype_ref": "float32",
+  "dtype_new": "float32",
+  "file_sha256_equal": true,
+  "payload_sha256_equal": true,
+  "header_equal": true,
+  "ras_to_ijk_equal": true,
+  "measurement_frame_equal": true,
+  "values": 3658350,
+  "equal_values": 3658350,
+  "nan_ref": 0,
+  "nan_new": 0,
+  "nan_mask_equal": true,
+  "max_abs_diff": 0.0,
+  "max_rel_diff": 0.0,
+  "max_ulp": 0,
+  "values_over_1_ulp": 0,
+  "voxels": 3658350,
+  "voxels_identical": 3658350
+ },
+ {
+  "reference": "ref/MinEigenvalue_ls.nrrd",
+  "candidate": "new/MinEigenvalue_ls.nrrd",
+  "shape_ref": [
+   3658350
+  ],
+  "shape_new": [
+   3658350
+  ],
+  "dtype_ref": "float32",
+  "dtype_new": "float32",
+  "file_sha256_equal": true,
+  "payload_sha256_equal": true,
+  "header_equal": true,
+  "ras_to_ijk_equal": true,
+  "measurement_frame_equal": true,
+  "values": 3658350,
+  "equal_values": 3658350,
+  "nan_ref": 0,
+  "nan_new": 0,
+  "nan_mask_equal": true,
+  "max_abs_diff": 0.0,
+  "max_rel_diff": 0.0,
+  "max_ulp": 0,
+  "values_over_1_ulp": 0,
+  "voxels": 3658350,
+  "voxels_identical": 3658350
+ },
+ {
+  "reference": "ref/MidEigenvalue_ls.nrrd",
+  "candidate": "new/MidEigenvalue_ls.nrrd",
+  "shape_ref": [
+   3658350
+  ],
+  "shape_new": [
+   3658350
+  ],
+  "dtype_ref": "float32",
+  "dtype_new": "float32",
+  "file_sha256_equal": true,
+  "payload_sha256_equal": true,
+  "header_equal": true,
+  "ras_to_ijk_equal": true,
+  "measurement_frame_equal": true,
+  "values": 3658350,
+  "equal_values": 3658350,
+  "nan_ref": 0,
+  "nan_new": 0,
+  "nan_mask_equal": true,
+  "max_abs_diff": 0.0,
+  "max_rel_diff": 0.0,
+  "max_ulp": 0,
+  "values_over_1_ulp": 0,
+  "voxels": 3658350,
+  "voxels_identical": 3658350
+ },
+ {
+  "reference": "ref/MaxEigenvalue_ls.nrrd",
+  "candidate": "new/MaxEigenvalue_ls.nrrd",
+  "shape_ref": [
+   3658350
+  ],
+  "shape_new": [
+   3658350
+  ],
+  "dtype_ref": "float32",
+  "dtype_new": "float32",
+  "file_sha256_equal": true,
+  "payload_sha256_equal": true,
+  "header_equal": true,
+  "ras_to_ijk_equal": true,
+  "measurement_frame_equal": true,
+  "values": 3658350,
+  "equal_values": 3658350,
+  "nan_ref": 0,
+  "nan_new": 0,
+  "nan_mask_equal": true,
+  "max_abs_diff": 0.0,
+  "max_rel_diff": 0.0,
+  "max_ulp": 0,
+  "values_over_1_ulp": 0,
+  "voxels": 3658350,
+  "voxels_identical": 3658350
+ }
+]

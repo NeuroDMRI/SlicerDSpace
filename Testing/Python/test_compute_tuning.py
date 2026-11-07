@@ -180,7 +180,7 @@ class SubsetPlanningTests(unittest.TestCase):
                            cpu_budget=4,memory_gb=32,jobs=2,adaptive=True,available=(4,32*GIB),**extra)
 
     def test_single_model_does_not_select_all_models_or_tracking(self):
-        selected = set(self.plan(['--targets','microstructure','--microstructure-stages','dki'])['selected_stages'])
+        selected = set(self.plan(['--targets','microstructure','--microstructure-stages','dki','--dki-fit-method','WLS'])['selected_stages'])
         self.assertIn('microstructure_dki',selected)
         self.assertIn('microstructure_dti',selected)
         self.assertFalse(selected & {'microstructure_mkcurve','microstructure_noddi','csd_act','wma','surface'})

@@ -3,7 +3,7 @@
 scm git
 scmurl https://github.com/NeuroDMRI/SlicerDSpace.git
 scmrevision main
-depends SlicerDMRI PyTorch
+depends PyTorch
 build_subdirectory .
 homepage https://github.com/NeuroDMRI/SlicerDSpace
 category Diffusion

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from contextlib import nullcontext
 from dataclasses import replace
 import json
 from pathlib import Path
@@ -24,6 +23,21 @@ from shared.validation import InputValidationConfig, validate_subject_inputs
 from test_preprocessing_pipeline import _write_fake_backend, _write_fake_command, _write_nifti_subject
 
 
+# The pnl_cnn backend runs [PythonSlicer, shared/pnl_mask_native.py, ...] (T2 A1/A7). The tests put a fake
+# PythonSlicer in place of Slicer's interpreter; it ignores the module path and writes a fixed mask.
+_FAKE_PYTHONSLICER: list[Path] = []
+_RESOLVER = mock.patch("shared.brain_mask._pnl_native_python",
+                       side_effect=lambda: _FAKE_PYTHONSLICER[-1] if _FAKE_PYTHONSLICER else None)
+
+
+def setUpModule():
+    _RESOLVER.start()
+
+
+def tearDownModule():
+    _RESOLVER.stop()
+
+
 def _pnl_options(root: Path) -> dict:
     models = root / "pnl models"
     models.mkdir()
@@ -31,144 +45,145 @@ def _pnl_options(root: Path) -> dict:
     nib.save(nib.Nifti1Image(np.ones((5, 5, 5), np.float32), np.eye(4)), models / "IITmean_b0_256.nii.gz")
     for view in ("sagittal", "coronal", "axial"):
         (models / f"{view}.pt").write_text("test weights")
-    ants = root / "ants bin"
-    ants.mkdir()
-    for tool in ("antsRegistrationSyNQuick.sh", "antsApplyTransforms", "ImageMath"):
-        _write_fake_command(ants / tool, "raise SystemExit(0)\n")
-    script = root / "fake pnl.py"
-    script.write_text(
+    python = root / "slicer bin" / "PythonSlicer"
+    python.parent.mkdir()
+    _write_fake_command(
+        python,
         "import json, pathlib, sys\n"
         "import nibabel as nib\n"
         "import numpy as np\n"
+        "assert pathlib.Path(sys.argv[1]).name == 'pnl_mask_native.py'\n"
         "baseline = pathlib.Path(sys.argv[sys.argv.index('--input') + 1])\n"
         "image = nib.load(baseline)\n"
         "mask = np.zeros(image.shape, dtype=np.uint8)\n"
         "mask[1:4, 1:4, 1:4] = 1\n"
         "output = pathlib.Path(sys.argv[sys.argv.index('--output') + 1])\n"
         "nib.save(nib.Nifti1Image(mask, image.affine), output)\n"
+        "record = pathlib.Path(sys.argv[sys.argv.index('--record') + 1])\n"
+        "record.write_text(json.dumps({'requested': 'cpu', 'resolved': 'cpu', 'route': 'native-sitk'}))\n"
         f"with pathlib.Path({str(root / 'pnl_calls.jsonl')!r}).open('a') as stream:\n"
         "    stream.write(json.dumps({'b0_mean': float(image.get_fdata().mean()), 'affine': image.affine.tolist()}) + '\\n')\n"
-        "print('test PNL inference completed')\n"
+        "print('test PNL inference completed')\n",
     )
+    _FAKE_PYTHONSLICER[:] = [python]
     return {
         "brain_mask_backend": "pnl_cnn",
         "brain_mask_device": "cpu",
-        "pnl_mask_python": Path(sys.executable),
-        "pnl_mask_script": script,
         "pnl_mask_model_dir": models,
-        "pnl_mask_ants_bin_dir": ants,
     }
 
 
-def _motion_correction(image, gtab, **kwargs):
-    affine = image.affine.copy()
-    affine[0, 3] += 2.0
-    corrected = nib.Nifti1Image(image.get_fdata(dtype=np.float32) + 4, affine)
-    affines = np.repeat(np.eye(4)[..., None], image.shape[3], axis=2)
-    return corrected, affines
+def _shifted_dwifslpreproc(bin_dir: Path) -> None:
+    """A dwifslpreproc stand-in that moves the corrected image by 2 mm, as a motion/eddy correction can."""
+    _write_fake_command(
+        bin_dir / "dwifslpreproc",
+        """
+import pathlib, shutil, sys
+import nibabel as nib
+image = nib.load(sys.argv[1])
+affine = image.affine.copy()
+affine[0, 3] += 2.0
+nib.save(nib.Nifti1Image(image.get_fdata() + 4, affine), sys.argv[2])
+idx = sys.argv.index('-export_grad_fsl')
+pathlib.Path(sys.argv[idx + 1]).write_text('0 1 0\\n0 0 1\\n0 0 0\\n')
+pathlib.Path(sys.argv[idx + 2]).write_text('0 1000 1000\\n')
+""",
+    )
 
 
-def _motion_patch(backend: str):
-    return mock.patch("dipy.align.motion_correction", side_effect=_motion_correction) if backend == "dipy" else nullcontext()
-
-
-def _config(subject: Path, bin_dir: Path, backend: str, **options) -> DwiPreprocessingConfig:
+def _config(subject: Path, bin_dir: Path, **options) -> DwiPreprocessingConfig:
+    # W2a (D1): one route. The Gibbs step is skipped here only to keep the test fast; the route test covers it.
     return DwiPreprocessingConfig(
-        subject_id="100307", input_root=subject, backend=backend, execute=True,
+        subject_id="100307", input_root=subject, execute=True,
         mrtrix_bin_dir=bin_dir, fsl_bin_dir=bin_dir,
-        dipy_denoise_method="none", dipy_run_gibbs=False,
+        dipy_run_gibbs=False,
         **options,
     )
 
 
 class PreprocessingMaskIntegrationTest(unittest.TestCase):
     def test_planning_and_skip_never_generate_a_missing_mask(self):
-        for backend in ("dipy", "mrtrix_fsl"):
-            for skip in (False, True):
-                with self.subTest(backend=backend, skip=skip), tempfile.TemporaryDirectory() as tmp:
-                    root = Path(tmp)
-                    subject = _write_nifti_subject(root)
-                    canonical = subject / "input/nodif_brain_mask.nii.gz"
-                    canonical.unlink()
-                    bin_dir = root / "bin"
-                    _write_fake_backend(bin_dir)
-                    config = replace(_config(subject, bin_dir, backend), execute=False, skip=skip)
-                    with mock.patch("shared.pipeline.generate_brain_mask") as raw_generator, \
-                            mock.patch("preprocessing.pipeline.generate_brain_mask") as final_generator, \
-                            mock.patch("preprocessing.pipeline._execute_preprocessing_backend") as executor:
-                        result = run_dwi_preprocessing(config)
-                    raw_generator.assert_not_called()
-                    final_generator.assert_not_called()
-                    executor.assert_not_called()
-                    self.assertFalse(canonical.exists())
-                    self.assertEqual(result.status, "skipped" if skip else "planned")
-                    manifest = json.loads(result.manifest_path.read_text())
-                    self.assertEqual(manifest["brain_mask_backend"]["backend"], "pnl_cnn")
-                    self.assertFalse(manifest["brain_mask_backend"]["available"])
-
-    def test_pnl_runs_once_on_corrected_dwi_for_both_routes_and_refreshes_only_mask(self):
-        for backend in ("dipy", "mrtrix_fsl"):
-            with self.subTest(backend=backend), tempfile.TemporaryDirectory() as tmp:
-                root = Path(tmp)
-                subject = _write_nifti_subject(root)
-                bin_dir = root / "bin"
-                _write_fake_backend(bin_dir)
-                canonical = subject / "input/nodif_brain_mask.nii.gz"
-                original_mask = canonical.read_bytes()
-                original_dwi = (subject / "input/data.nii.gz").read_bytes()
-                config = _config(subject, bin_dir, backend, **_pnl_options(root))
-                log = []
-                with _motion_patch(backend):
-                    result = run_dwi_preprocessing(config, log=log.append)
-                self.assertTrue(any("test PNL inference completed" in line for line in log))
-                calls = root / "pnl_calls.jsonl"
-                call_records = [json.loads(line) for line in calls.read_text().splitlines()]
-                self.assertEqual(len(call_records), 1)
-                self.assertEqual(call_records[0]["b0_mean"], 5 if backend == "dipy" else 1)
-                final_image = nib.load(result.final_dwi_path)
-                np.testing.assert_allclose(call_records[0]["affine"], final_image.affine)
-                qc = json.loads(result.qc_path.read_text())
-                self.assertEqual(qc["brain_mask_backend"]["backend"], "pnl_cnn")
-                self.assertTrue(qc["brain_mask_qc"]["geometry_pass"])
-                self.assertEqual(qc["brain_mask_qc"]["brain_voxels"], 27)
-                self.assertEqual(qc["mask_generation"]["source"], result.final_dwi_path.as_posix())
-                signature = qc["mask_generation"]["signature"]
-                self.assertEqual([record["path"] for record in signature["inputs"]], [
-                    str(result.final_dwi_path.resolve()), str(result.final_bval_path.resolve()),
-                    str(result.final_bvec_path.resolve()),
-                ])
-                manifest = json.loads(result.manifest_path.read_text())
-                self.assertFalse(any(Path(record["argv"][0]).name == "dwi2mask" for record in manifest["commands"]))
-                self.assertFalse(result.final_dwi_path.with_name("mask_calls.txt").exists())
-                core_stat = result.final_dwi_path.stat().st_mtime_ns
-                with mock.patch("preprocessing.pipeline._execute_preprocessing_backend", side_effect=AssertionError("core rerun")):
-                    self.assertEqual(run_dwi_preprocessing(config).status, "cached")
-                    self.assertEqual(len(calls.read_text().splitlines()), 1)
-                    result.final_mask_path.unlink()
-                    refreshed = run_dwi_preprocessing(config)
-                self.assertEqual(refreshed.status, "cached")
-                self.assertEqual(len(calls.read_text().splitlines()), 2)
-                self.assertEqual(refreshed.final_dwi_path.stat().st_mtime_ns, core_stat)
-                refreshed_qc = json.loads(refreshed.qc_path.read_text())
-                self.assertEqual(refreshed_qc["mask_refresh_status"], "regenerated_from_corrected_dwi")
-                self.assertEqual(canonical.read_bytes(), original_mask)
-                self.assertEqual((subject / "input/data.nii.gz").read_bytes(), original_dwi)
-
-    def test_missing_raw_mask_is_generated_only_in_final_space(self):
-        for backend in ("dipy", "mrtrix_fsl"):
-            with self.subTest(backend=backend), tempfile.TemporaryDirectory() as tmp:
+        for skip in (False, True):
+            with self.subTest(skip=skip), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
                 subject = _write_nifti_subject(root)
                 canonical = subject / "input/nodif_brain_mask.nii.gz"
                 canonical.unlink()
                 bin_dir = root / "bin"
                 _write_fake_backend(bin_dir)
-                config = _config(subject, bin_dir, backend, **_pnl_options(root))
-                with _motion_patch(backend):
+                config = replace(_config(subject, bin_dir), execute=False, skip=skip)
+                with mock.patch("shared.pipeline.generate_brain_mask") as raw_generator, \
+                        mock.patch("preprocessing.pipeline.generate_brain_mask") as final_generator, \
+                        mock.patch("preprocessing.pipeline._execute_preprocessing_backend") as executor:
                     result = run_dwi_preprocessing(config)
+                raw_generator.assert_not_called()
+                final_generator.assert_not_called()
+                executor.assert_not_called()
                 self.assertFalse(canonical.exists())
-                self.assertTrue(validate_brain_mask(result.final_dwi_path, result.final_mask_path)["geometry_pass"])
-                self.assertEqual(len((root / "pnl_calls.jsonl").read_text().splitlines()), 1)
+                self.assertEqual(result.status, "skipped" if skip else "planned")
+                manifest = json.loads(result.manifest_path.read_text())
+                self.assertEqual(manifest["brain_mask_backend"]["backend"], "pnl_cnn")
+                self.assertFalse(manifest["brain_mask_backend"]["available"])
+
+    def test_pnl_runs_once_on_corrected_dwi_and_refreshes_only_mask(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            subject = _write_nifti_subject(root)
+            bin_dir = root / "bin"
+            _write_fake_backend(bin_dir)
+            canonical = subject / "input/nodif_brain_mask.nii.gz"
+            original_mask = canonical.read_bytes()
+            original_dwi = (subject / "input/data.nii.gz").read_bytes()
+            config = _config(subject, bin_dir, **_pnl_options(root))
+            log = []
+            result = run_dwi_preprocessing(config, log=log.append)
+            self.assertTrue(any("test PNL inference completed" in line for line in log))
+            calls = root / "pnl_calls.jsonl"
+            call_records = [json.loads(line) for line in calls.read_text().splitlines()]
+            self.assertEqual(len(call_records), 1)
+            final_image = nib.load(result.final_dwi_path)
+            self.assertAlmostEqual(call_records[0]["b0_mean"], float(final_image.get_fdata()[..., 0].mean()), places=4)
+            np.testing.assert_allclose(call_records[0]["affine"], final_image.affine)
+            qc = json.loads(result.qc_path.read_text())
+            self.assertEqual(qc["brain_mask_backend"]["backend"], "pnl_cnn")
+            self.assertTrue(qc["brain_mask_qc"]["geometry_pass"])
+            self.assertEqual(qc["brain_mask_qc"]["brain_voxels"], 27)
+            self.assertEqual(qc["mask_generation"]["source"], result.final_dwi_path.as_posix())
+            signature = qc["mask_generation"]["signature"]
+            self.assertEqual([record["path"] for record in signature["inputs"]], [
+                str(result.final_dwi_path.resolve()), str(result.final_bval_path.resolve()),
+                str(result.final_bvec_path.resolve()),
+            ])
+            manifest = json.loads(result.manifest_path.read_text())
+            self.assertFalse(any(Path(record["argv"][0]).name == "dwi2mask" for record in manifest["commands"]))
+            self.assertFalse(result.final_dwi_path.with_name("mask_calls.txt").exists())
+            core_stat = result.final_dwi_path.stat().st_mtime_ns
+            with mock.patch("preprocessing.pipeline._execute_preprocessing_backend", side_effect=AssertionError("core rerun")):
+                self.assertEqual(run_dwi_preprocessing(config).status, "cached")
+                self.assertEqual(len(calls.read_text().splitlines()), 1)
+                result.final_mask_path.unlink()
+                refreshed = run_dwi_preprocessing(config)
+            self.assertEqual(refreshed.status, "cached")
+            self.assertEqual(len(calls.read_text().splitlines()), 2)
+            self.assertEqual(refreshed.final_dwi_path.stat().st_mtime_ns, core_stat)
+            refreshed_qc = json.loads(refreshed.qc_path.read_text())
+            self.assertEqual(refreshed_qc["mask_refresh_status"], "regenerated_from_corrected_dwi")
+            self.assertEqual(canonical.read_bytes(), original_mask)
+            self.assertEqual((subject / "input/data.nii.gz").read_bytes(), original_dwi)
+
+    def test_missing_raw_mask_is_generated_only_in_final_space(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            subject = _write_nifti_subject(root)
+            canonical = subject / "input/nodif_brain_mask.nii.gz"
+            canonical.unlink()
+            bin_dir = root / "bin"
+            _write_fake_backend(bin_dir)
+            config = _config(subject, bin_dir, **_pnl_options(root))
+            result = run_dwi_preprocessing(config)
+            self.assertFalse(canonical.exists())
+            self.assertTrue(validate_brain_mask(result.final_dwi_path, result.final_mask_path)["geometry_pass"])
+            self.assertEqual(len((root / "pnl_calls.jsonl").read_text().splitlines()), 1)
 
     def test_provided_mask_is_copied_after_motion_with_review_warning_and_cached(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -178,7 +193,7 @@ class PreprocessingMaskIntegrationTest(unittest.TestCase):
             _write_fake_backend(bin_dir)
             canonical = subject / "input/nodif_brain_mask.nii.gz"
             original = canonical.read_bytes()
-            config = _config(subject, bin_dir, "mrtrix_fsl", brain_mask_backend="provided")
+            config = _config(subject, bin_dir, brain_mask_backend="provided")
             with mock.patch("preprocessing.pipeline.generate_brain_mask") as generator:
                 result = run_dwi_preprocessing(config)
                 self.assertEqual(run_dwi_preprocessing(config).status, "cached")
@@ -203,8 +218,11 @@ class PreprocessingMaskIntegrationTest(unittest.TestCase):
             subject = _write_nifti_subject(root)
             canonical = subject / "input/nodif_brain_mask.nii.gz"
             original = canonical.read_bytes()
-            config = _config(subject, root, "dipy", brain_mask_backend="provided")
-            with _motion_patch("dipy"), self.assertRaisesRegex(ValueError, "native 3D voxel grid"):
+            bin_dir = root / "bin"
+            _write_fake_backend(bin_dir)
+            _shifted_dwifslpreproc(bin_dir)
+            config = _config(subject, bin_dir, brain_mask_backend="provided")
+            with self.assertRaisesRegex(ValueError, "native 3D voxel grid"):
                 run_dwi_preprocessing(config)
             self.assertEqual(canonical.read_bytes(), original)
             qc = json.loads((subject / "outputs/01_preproc/05_qc/100307_preproc_qc.json").read_text())
@@ -216,12 +234,40 @@ class PreprocessingMaskIntegrationTest(unittest.TestCase):
             subject = _write_nifti_subject(root)
             canonical = subject / "input/nodif_brain_mask.nii.gz"
             canonical.unlink()
-            config = _config(subject, root, "dipy", brain_mask_backend="provided", dipy_run_motion_correction=False)
+            bin_dir = root / "bin"
+            _write_fake_backend(bin_dir)
+            config = _config(subject, bin_dir, brain_mask_backend="provided")
             with mock.patch("preprocessing.pipeline.generate_brain_mask") as generator, \
                     self.assertRaisesRegex(FileNotFoundError, "provided.*supplied mask"):
                 run_dwi_preprocessing(config)
             generator.assert_not_called()
             self.assertFalse(canonical.exists())
+
+    def test_w5_mask_step_runs_pnl_cnn_unless_provided_and_refuses_removed_backends(self):
+        """W5 (D1/D2): the final mask is made by PNL CNN, or copied when provided. A removed backend never runs."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            subject = _write_nifti_subject(root)
+            bin_dir = root / "bin"
+            _write_fake_backend(bin_dir)
+            options = _pnl_options(root)
+            options.pop("brain_mask_backend")  # the default selection is the PNL CNN
+            result = run_dwi_preprocessing(_config(subject, bin_dir, **options))
+            qc = json.loads(result.qc_path.read_text())
+            self.assertEqual(qc["mask_generation"]["backend"], "pnl_cnn")
+            self.assertEqual(qc["mask_generation"]["method"], "pnl_cnn_corrected_dwi")
+            self.assertEqual(len((root / "pnl_calls.jsonl").read_text().splitlines()), 1)
+            self.assertFalse(result.final_dwi_path.with_name("mask_calls.txt").exists())
+        for removed in ("synthstrip", "mrtrix", "dipy"):
+            with self.subTest(removed=removed), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                subject = _write_nifti_subject(root)
+                bin_dir = root / "bin"
+                _write_fake_backend(bin_dir)
+                config = _config(subject, bin_dir, brain_mask_backend=removed)
+                with self.assertRaisesRegex(ValueError, "pnl_cnn.*provided"):
+                    run_dwi_preprocessing(config)
+                self.assertFalse((subject / "outputs/01_preproc/mask_calls.txt").exists())
 
     def test_unavailable_selected_backend_never_falls_back_to_mrtrix(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -229,7 +275,7 @@ class PreprocessingMaskIntegrationTest(unittest.TestCase):
             subject = _write_nifti_subject(root)
             bin_dir = root / "bin"
             _write_fake_backend(bin_dir)
-            config = _config(subject, bin_dir, "mrtrix_fsl")
+            config = _config(subject, bin_dir)
             with self.assertRaisesRegex(FileNotFoundError, "pnl_cnn unavailable"):
                 run_dwi_preprocessing(config)
             self.assertFalse((subject / "outputs/01_preproc/mask_calls.txt").exists())
@@ -237,52 +283,17 @@ class PreprocessingMaskIntegrationTest(unittest.TestCase):
             self.assertEqual(qc["status"], "failed")
             self.assertEqual(qc["brain_mask_backend"]["backend"], "pnl_cnn")
 
-    def test_fast_dipy_preserves_existing_mask_without_mask_tools(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            subject = _write_nifti_subject(root)
-            config = _config(subject, root, "dipy", dipy_run_motion_correction=False)
-            with mock.patch("preprocessing.pipeline.generate_brain_mask") as generator:
-                result = run_dwi_preprocessing(config)
-            generator.assert_not_called()
-            qc = json.loads(result.qc_path.read_text())
-            self.assertFalse(qc["brain_mask_backend"]["available"])
-            self.assertEqual(qc["mask_generation"]["method"], "input_mask")
-            self.assertEqual(qc["mask_generation"]["backend"], "provided")
-            self.assertEqual(qc["mask_generation"]["selected_backend"], "pnl_cnn")
-            self.assertTrue(qc["mask_generation"]["human_review_required"])
-            self.assertTrue(qc["brain_mask_qc"]["geometry_pass"])
-
-    def test_force_after_fast_links_does_not_overwrite_canonical_inputs(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            subject = _write_nifti_subject(root)
-            canonical_paths = list((subject / "input").iterdir())
-            originals = {path: path.read_bytes() for path in canonical_paths}
-            config = _config(subject, root, "dipy", brain_mask_backend="provided", dipy_run_motion_correction=False)
-            result = run_dwi_preprocessing(config)
-            result.final_mask_path.unlink()
-            result.final_mask_path.symlink_to(subject / "input/nodif_brain_mask.nii.gz")
-            changed = replace(config, force=True, dipy_run_motion_correction=True, **_pnl_options(root))
-            with _motion_patch("dipy"):
-                result = run_dwi_preprocessing(changed)
-            self.assertEqual(nib.load(result.final_dwi_path).affine[0, 3], 2)
-            self.assertFalse(result.final_mask_path.is_symlink())
-            for path, original in originals.items():
-                self.assertEqual(path.read_bytes(), original, path.name)
-
     def test_mask_backend_tools_resources_and_options_invalidate_cache(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             subject = _write_nifti_subject(root)
             bin_dir = root / "bin"
             _write_fake_backend(bin_dir)
-            config = _config(subject, bin_dir, "mrtrix_fsl", **_pnl_options(root))
+            config = _config(subject, bin_dir, **_pnl_options(root))
             result = run_dwi_preprocessing(config)
             initial_key = json.loads(result.manifest_path.read_text())["cache_key"]["brain_mask"]
             changes = (
                 replace(config, b0_threshold=25),
-                replace(config, eddy_threads=2),
                 replace(config, brain_mask_backend="provided"),
             )
             for settings in changes:
@@ -291,19 +302,45 @@ class PreprocessingMaskIntegrationTest(unittest.TestCase):
                     self.assertEqual(result.status, "completed")
                     self.assertNotEqual(json.loads(result.manifest_path.read_text())["cache_key"]["brain_mask"], initial_key)
             result = run_dwi_preprocessing(config)
-            config.pnl_mask_script.write_text(config.pnl_mask_script.read_text() + "\n# script changed\n")
+            # A-O5: each change below must be the only reason for a rerun, so first show that nothing changed means reuse.
+            self.assertEqual(run_dwi_preprocessing(config).status, "cached")
+            python = _FAKE_PYTHONSLICER[-1]
+            python.write_text(python.read_text() + "\n# interpreter changed\n")
             self.assertEqual(run_dwi_preprocessing(config).status, "completed")
+            self.assertEqual(run_dwi_preprocessing(config).status, "cached")
             (config.pnl_mask_model_dir / "axial.pt").write_text("different test weights")
             self.assertEqual(run_dwi_preprocessing(config).status, "completed")
-            ants = config.pnl_mask_ants_bin_dir / "ImageMath"
-            _write_fake_command(ants, "# tool changed\nraise SystemExit(0)\n")
-            self.assertEqual(run_dwi_preprocessing(config).status, "completed")
+            self.assertEqual(run_dwi_preprocessing(config).status, "cached")
+
+    def test_b12_native_mask_part_of_the_preprocessing_key_ignores_threads(self):
+        """B12 (M-A2): native route, SLICERDSPACE_STAGE_CPUS 1 vs 8 gives one mask key; managed differs; device differs."""
+        from preprocessing.pipeline import _brain_mask_cache_key
+        from shared.brain_mask import inspect_brain_mask_backend
+        from preprocessing.pipeline import _brain_mask_config
+
+        def mask_key(config, cpus):
+            with mock.patch.dict("os.environ", {"SLICERDSPACE_STAGE_CPUS": str(cpus)}):
+                return _brain_mask_cache_key(config, inspect_brain_mask_backend(_brain_mask_config(config)))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            subject = _write_nifti_subject(root)
+            native = _config(subject, root, pnl_mask_route="native", **_pnl_options(root))
+            self.assertEqual(mask_key(native, 1), mask_key(native, 8))
+            self.assertEqual(mask_key(replace(native, eddy_threads=2), 1), mask_key(replace(native, eddy_threads=8), 1))
+            self.assertNotEqual(mask_key(native, 1), mask_key(replace(native, brain_mask_device="cuda"), 1))
+            managed = replace(native, pnl_mask_route="managed")
+            first = json.dumps(mask_key(replace(managed, eddy_threads=2), 1), sort_keys=True, default=str)
+            second = json.dumps(mask_key(replace(managed, eddy_threads=8), 1), sort_keys=True, default=str)
+            self.assertNotEqual(first, second)
 
     def test_cached_invalid_mask_is_not_silently_accepted(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             subject = _write_nifti_subject(root)
-            config = _config(subject, root, "dipy", brain_mask_backend="provided", dipy_run_motion_correction=False)
+            bin_dir = root / "bin"
+            _write_fake_backend(bin_dir)
+            config = _config(subject, bin_dir, brain_mask_backend="provided")
             result = run_dwi_preprocessing(config)
             nib.save(nib.Nifti1Image(np.zeros((5, 5, 5), np.uint8), np.eye(4)), result.final_mask_path)
             with self.assertRaisesRegex(ValueError, "binary and nonempty"):
@@ -387,19 +424,17 @@ class ValidationMaskIntegrationTest(unittest.TestCase):
         expected.final_dwi_path.is_file.return_value = False
         with mock.patch("preprocessing.module_logic.run_dwi_preprocessing", return_value=expected) as runner:
             actual = logic.runDwiPreprocessingPipeline(
-                subject_id="100307", input_root=Path("/subject"), brain_mask_backend="synthstrip",
+                subject_id="100307", input_root=Path("/subject"), brain_mask_backend="provided",
                 pnl_mask_python=Path("/python"), pnl_mask_script=Path("/script"),
                 pnl_mask_model_dir=Path("/models"), pnl_mask_ants_bin_dir=Path("/ants"),
-                postprocess_freesurfer_home=Path("/freesurfer"),
             )
         self.assertIs(actual, expected)
         config = runner.call_args.args[0]
-        self.assertEqual(config.brain_mask_backend, "synthstrip")
+        self.assertEqual(config.brain_mask_backend, "provided")
         self.assertEqual(config.pnl_mask_python, Path("/python"))
         self.assertEqual(config.pnl_mask_script, Path("/script"))
         self.assertEqual(config.pnl_mask_model_dir, Path("/models"))
         self.assertEqual(config.pnl_mask_ants_bin_dir, Path("/ants"))
-        self.assertEqual(config.postprocess_freesurfer_home, Path("/freesurfer"))
 
 
 if __name__ == "__main__":

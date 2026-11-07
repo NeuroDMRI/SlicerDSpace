@@ -73,7 +73,7 @@ without consent.
 Download model assets into a user-selected cache:
 
 ```bash
-python3 scripts/download_model_assets.py \
+PythonSlicer scripts/download_model_assets.py \
   --profile core \
   --asset-root /srv/slicerddsurfer/model-assets \
   --source url \
@@ -83,7 +83,7 @@ python3 scripts/download_model_assets.py \
 Test the public download route without large model files:
 
 ```bash
-python3 scripts/download_model_assets.py \
+PythonSlicer scripts/download_model_assets.py \
   --profile sentinel \
   --asset-root /tmp/slicerdsurfer-model-sentinel \
   --source url \
@@ -93,7 +93,7 @@ python3 scripts/download_model_assets.py \
 Generate an install plan without changing the system:
 
 ```bash
-python3 scripts/install_dependencies.py \
+PythonSlicer scripts/install_dependencies.py \
   --profile core \
   --model-assets-dir /srv/slicerddsurfer/model-assets \
   --output-dir /tmp/slicerdsurfer-install-plan
@@ -102,7 +102,7 @@ python3 scripts/install_dependencies.py \
 Install Python packages into a selected Slicer Python:
 
 ```bash
-python3 scripts/install_dependencies.py \
+PythonSlicer scripts/install_dependencies.py \
   --profile core \
   --python-executable /path/to/Slicer/bin/PythonSlicer \
   --execute

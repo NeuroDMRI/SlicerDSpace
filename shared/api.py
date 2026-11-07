@@ -7,11 +7,12 @@ import sys
 from shared.environment import (EnvironmentDoctorConfig, blocked_target_reasons, run_environment_doctor,
                                 run_needs_brain_mask, summarize_environment_doctor, write_environment_report)
 from shared.io_layout import subject_layout
-from shared.orchestrator import ProductOrchestratorConfig, _normalize_targets, run_subject_products
+from shared.orchestrator import ProductOrchestratorConfig, _normalize_targets, _with_closure, run_subject_products
 
 
 def environment_for_products(config: ProductOrchestratorConfig) -> EnvironmentDoctorConfig:
     """Check the selected algorithm settings and the current Python execution context."""
+    config = _with_closure(config)
     targets = _normalize_targets(config)
     if not targets:
         raise ValueError('Select at least one workflow target')
@@ -28,10 +29,7 @@ def environment_for_products(config: ProductOrchestratorConfig) -> EnvironmentDo
         check_slicer_cli_modules=True,
         brain_mask_required=run_needs_brain_mask(config.subject_root, targets=targets,
             subject_id=config.subject_id, output_root=config.output_root,
-            preprocessing_backend=config.preprocessing_backend, brain_mask_backend=config.brain_mask_backend,
-            denoise_method=config.preprocessing_dipy_denoise_method,
-            run_gibbs=config.preprocessing_dipy_run_gibbs,
-            run_motion=config.preprocessing_dipy_run_motion_correction,
+            brain_mask_backend=config.brain_mask_backend,
             force=config.preprocessing_force, resume=config.resume))
     return EnvironmentDoctorConfig(**options)
 

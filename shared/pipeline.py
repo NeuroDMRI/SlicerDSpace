@@ -20,7 +20,7 @@ from io import StringIO
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from shared.external_process import merged_startup_environment, text_subprocess_kwargs, slicer_runtime_roots
+from shared.external_process import find_pythonslicer, merged_startup_environment, text_subprocess_kwargs, slicer_runtime_roots
 from shared.brain_mask import BrainMaskConfig, generate_brain_mask
 from shared.cache_lock import cache_lock
 
@@ -102,6 +102,7 @@ class NativeDTIBundle:
     mid_eig_nii_path: Path
     max_eig_nii_path: Path
     manifest_path: Path
+    dec_nrrd_path: Path  # D6: direction-encoded colour FA map
 
 
 @dataclass(frozen=True)
@@ -144,10 +145,14 @@ def _slicer_home_candidates() -> list[Path]:
                 candidates.append(Path(str(slicer_home)).expanduser().resolve())
         except Exception:
             pass
-    for env_key in ("SLICER_HOME", "Slicer_HOME"):
+    for env_key in ("SLICER_HOME", "Slicer_HOME", "SLICERDSPACE_SLICER_HOME"):
         env_value = os.environ.get(env_key)
         if env_value:
             candidates.append(Path(env_value).expanduser().resolve())
+    # B7 (A-C1 3): the doctor and teem_dti.py read this launcher variable too; its folder is a Slicer runtime root.
+    launcher = os.environ.get("SLICERDSPACE_SLICER_EXECUTABLE")
+    if launcher:
+        candidates.append(Path(launcher).expanduser().resolve().parent)
     executable = Path(sys.executable).expanduser().resolve()
     if executable.stem.lower() in {"python-real", "pythonslicer", "python"}:
         candidates.append(executable.parent.parent)
@@ -222,7 +227,6 @@ def find_subject_root(
     base_path: Path,
     subject_id: str,
     *,
-    mrtrix_bin_dir: Optional[Path] = None,
     brain_mask_config: Optional[BrainMaskConfig] = None,
     generate_missing_mask: bool = True,
 ) -> RawInputBundle:
@@ -248,7 +252,7 @@ def find_subject_root(
             input_dir / RAW_INPUT_FILES["bval"],
             input_dir / RAW_INPUT_FILES["bvec"],
             mask_path,
-            config=brain_mask_config or BrainMaskConfig(mrtrix_bin_dir=mrtrix_bin_dir),
+            config=brain_mask_config or BrainMaskConfig(),
         )
     return RawInputBundle(
         subject_root=subject_root,
@@ -261,63 +265,176 @@ def find_subject_root(
     )
 
 
+PREPROCESSING_CACHE_KEY_VERSIONS = (5, 6)
+NO_CURRENT_PREPROCESSING_MESSAGE = "No current preprocessed DWI for this input; using the raw DWI"
+
+
+def qc_record_completed(path: Path) -> bool:
+    """True when a QC JSON says ``completed`` and no automatic check failed."""
+    if not path.is_file():
+        return False
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+        checks = record.get("checks") or {}
+        return (record.get("status") == "completed" and record.get("automatic_qc_passed") is not False
+                and (not isinstance(checks, dict) or not any(value is False for value in checks.values())))
+    except Exception:
+        return False
+
+
+@dataclass(frozen=True)
+class PreprocessedOutputs:
+    """The latest preprocessing outputs that match the current raw input (see ``current_preprocessed_outputs``)."""
+
+    subject_id: str
+    preproc_dir: Path
+    dwi_path: Path
+    bval_path: Path
+    bvec_path: Path
+    mask_path: Path
+    manifest_path: Path
+    qc_path: Path
+    manifest: dict
+
+    @property
+    def cache_key(self) -> dict:
+        return self.manifest["cache_key"]
+
+    @property
+    def cache_key_version(self) -> int:
+        return int(self.cache_key["version"])
+
+    @property
+    def route_id(self) -> str:
+        """The route id of the outputs; a version-5 manifest has none of the version-6 kind."""
+        return str(self.cache_key.get("backend")) if self.cache_key_version >= 6 else "pre-v6"
+
+
+def _latest_preprocessing_manifest(preproc_dir: Path, subject_id: Optional[str]) -> Optional[tuple[str, Path]]:
+    suffix = "_preproc_manifest.json"
+    if subject_id is not None:
+        path = preproc_dir / f"{subject_id}{suffix}"
+        return (subject_id, path) if path.is_file() else None
+    try:
+        candidates = [path for path in preproc_dir.glob("*" + suffix) if path.is_file()]
+    except OSError:
+        return None
+    if not candidates:
+        return None
+    latest = max(candidates, key=lambda path: (path.stat().st_mtime_ns, path.name))
+    return latest.name[: -len(suffix)], latest
+
+
+def current_preprocessed_outputs(
+    subject_root: Path,
+    output_root: Optional[Path] = None,
+    subject_id: Optional[str] = None,
+) -> Optional[PreprocessedOutputs]:
+    """T1 D1: the preprocessing outputs every stage of a run may use, or None.
+
+    The one decision behind both reuse points (``resolve_preprocessed_input_bundle`` and the orchestrator's
+    ``_resolve_analysis_inputs`` / ``_preprocessing_complete``). It needs no preprocessing config. The latest
+    preprocessing manifest (or the one of ``subject_id``) must be completed or cached, with a cache key of version 5 or
+    6 (so subjects preprocessed before the upgrade keep their outputs); its four output files and its gradient rule
+    must be current (the QC JSON is not part of the decision, F4); and its recorded signatures of the raw dwi, bval, bvec and mask files must match the
+    current raw input. Anything else gives None, and then every stage uses the raw DWI.
+    """
+
+    from shared.io_layout import subject_layout
+
+    root = Path(subject_root).expanduser().resolve()
+    preproc_dir = subject_layout(root, output_root=Path(output_root) if output_root is not None else None).preproc
+    found = _latest_preprocessing_manifest(preproc_dir, subject_id)
+    if found is None:
+        return None
+    found_id, manifest_path = found
+    paths = {
+        "dwi": preproc_dir / f"{found_id}_dwi_final.nii.gz",
+        "bval": preproc_dir / f"{found_id}_dwi_final.bval",
+        "bvec": preproc_dir / f"{found_id}_dwi_final.bvec",
+        "mask": preproc_dir / f"{found_id}_brain_mask_final.nii.gz",
+    }
+    qc_path = preproc_dir / "05_qc" / f"{found_id}_preproc_qc.json"
+    if not all(path.is_file() for path in paths.values()):
+        return None
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(manifest, dict) or manifest.get("status") not in {"completed", "cached"}:
+        return None
+    from preprocessing.pipeline import preprocessing_gradients_current
+    if not preprocessing_gradients_current(manifest):
+        return None
+    cache_key = manifest.get("cache_key")
+    if not isinstance(cache_key, dict) or cache_key.get("version") not in PREPROCESSING_CACHE_KEY_VERSIONS:
+        return None
+    inputs = cache_key.get("inputs")
+    if not isinstance(inputs, dict):
+        return None
+    input_dir = root / "input"
+    for key, name in RAW_INPUT_FILES.items():
+        record = inputs.get(key)
+        if not _input_record_matches(record, input_dir / name):
+            return None
+    return PreprocessedOutputs(
+        subject_id=found_id, preproc_dir=preproc_dir, dwi_path=paths["dwi"], bval_path=paths["bval"],
+        bvec_path=paths["bvec"], mask_path=paths["mask"], manifest_path=manifest_path, qc_path=qc_path,
+        manifest=manifest,
+    )
+
+
+def _input_record_matches(record: object, path: Path) -> bool:
+    """True when a recorded input file names ``path`` (resolved paths equal) with the same size and mtime.
+
+    The producer (``preprocessing.pipeline._file_record``) writes the path as ``as_posix()``, so the stored string can
+    differ from ``str(path.resolve())`` (Windows: ``C:/`` against ``C:\\``). Compare resolved paths, not strings.
+    """
+    if not isinstance(record, dict):
+        return False
+    try:
+        stat = path.stat()
+        return (
+            Path(str(record.get("path") or "")).resolve() == path.resolve()
+            and int(record.get("size", -1)) == stat.st_size
+            and int(record.get("mtime_ns", -1)) == stat.st_mtime_ns
+        )
+    except (OSError, TypeError, ValueError):
+        return False
+
+
+def preprocessed_outputs_usable(
+    subject_root: Path,
+    output_root: Optional[Path] = None,
+    subject_id: Optional[str] = None,
+) -> bool:
+    """T1 D1: True when ``current_preprocessed_outputs`` finds usable preprocessing outputs for the whole run."""
+    return current_preprocessed_outputs(subject_root, output_root, subject_id) is not None
+
+
 def resolve_preprocessed_input_bundle(
     raw: RawInputBundle,
     *,
     output_root: Optional[Path] = None,
 ) -> RawInputBundle:
-    """Use completed preprocessing outputs as an analysis bundle when available.
+    """Use current preprocessing outputs as an analysis bundle when available.
 
     Downstream quantitative models must consume the same dMRI, gradients and
-    mask emitted by preprocessing. If the user has not run preprocessing, the
-    canonical input bundle remains the explicit fallback.
+    mask emitted by preprocessing. If there are no current preprocessing outputs
+    (``preprocessed_outputs_usable``), the canonical input bundle is the explicit
+    fallback, for every stage alike.
     """
-    resolved_output_root = (
-        output_root.expanduser().resolve()
-        if output_root is not None
-        else raw.subject_root / "outputs"
-    )
-    preproc_dir = resolved_output_root / "01_preproc"
-    manifest_path = preproc_dir / f"{raw.subject_id}_preproc_manifest.json"
-    candidates = {
-        "dwi": preproc_dir / f"{raw.subject_id}_dwi_final.nii.gz",
-        "bval": preproc_dir / f"{raw.subject_id}_dwi_final.bval",
-        "bvec": preproc_dir / f"{raw.subject_id}_dwi_final.bvec",
-        "mask": preproc_dir / f"{raw.subject_id}_brain_mask_final.nii.gz",
-    }
-    if not manifest_path.is_file() or not all(path.is_file() for path in candidates.values()):
+    outputs = current_preprocessed_outputs(raw.subject_root, output_root, raw.subject_id)
+    if outputs is None:
         return raw
-    try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return raw
-    if manifest.get("status") not in {"completed", "cached"}:
-        return raw
-    from preprocessing.pipeline import preprocessing_gradients_current
-    if not preprocessing_gradients_current(manifest):
-        return raw
-    if "cache_key" in manifest:
-        cache_key = manifest.get("cache_key")
-        inputs = cache_key.get("inputs") if isinstance(cache_key, dict) else None
-        if not isinstance(inputs, dict):
-            return raw
-        for key, path in {"dwi": raw.dwi_path, "bval": raw.bval_path,
-                          "bvec": raw.bvec_path, "mask": raw.mask_path}.items():
-            record = inputs.get(key)
-            try:
-                current = _file_signature(path)
-                if not isinstance(record, dict) or any(record.get(field) != value for field, value in current.items()):
-                    return raw
-            except OSError:
-                return raw
     return RawInputBundle(
         subject_root=raw.subject_root,
         subject_id=raw.subject_id,
-        input_dir=preproc_dir,
-        dwi_path=candidates["dwi"],
-        bval_path=candidates["bval"],
-        bvec_path=candidates["bvec"],
-        mask_path=candidates["mask"],
+        input_dir=outputs.preproc_dir,
+        dwi_path=outputs.dwi_path,
+        bval_path=outputs.bval_path,
+        bvec_path=outputs.bvec_path,
+        mask_path=outputs.mask_path,
     )
 
 
@@ -459,19 +576,47 @@ def resolve_launcher_executable() -> str:
 
 
 def resolve_pythonslicer_executable() -> str:
-    _require_slicer()
-    slicer_home = _resolve_slicer_home()
-    candidates = [
-        slicer_home / "bin" / "PythonSlicer",
-        slicer_home / "bin" / "PythonSlicer.exe",
-        slicer_home / "PythonSlicer",
-        slicer_home / "PythonSlicer.exe",
-        slicer_home / "MacOS" / "PythonSlicer",
-    ]
-    for candidate in candidates:
-        if candidate.is_file():
-            return candidate.as_posix()
-    raise RuntimeError("Failed to resolve the PythonSlicer executable path.")
+    """PythonSlicer of the running Slicer, or (outside Slicer, A-C1) of the Slicer the environment names.
+
+    Inside Slicer the order is unchanged. Outside it: ``sys.executable`` when it is PythonSlicer, then
+    ``SLICER_HOME`` / ``Slicer_HOME``, then the configured Slicer path (``DTI_SLICER_PATH``, ``SLICER_PATH``).
+    """
+    if SLICER_IMPORT_ERROR is None and slicer is not None:
+        slicer_home = _resolve_slicer_home()
+        found = find_pythonslicer(slicer_home)
+        if found:
+            return found.as_posix()
+        raise RuntimeError("Failed to resolve the PythonSlicer executable path.")
+    executable = Path(sys.executable)
+    if executable.name.lower() in ("pythonslicer", "pythonslicer.exe") and executable.is_file():
+        return executable.as_posix()
+    homes = list(_slicer_home_candidates())
+    for key in ("DTI_SLICER_PATH", "SLICER_PATH"):
+        if os.environ.get(key):
+            homes.extend(slicer_runtime_roots(Path(os.environ[key]).expanduser().resolve()))
+    for home in homes:
+        found = find_pythonslicer(home)
+        if found:
+            return found.as_posix()
+    raise RuntimeError(
+        "Failed to resolve the PythonSlicer executable outside Slicer. Set SLICER_HOME to the Slicer install "
+        "folder (the folder that holds bin/PythonSlicer; on macOS the Slicer.app or its Contents folder), "
+        "or run this program with PythonSlicer. Searched: "
+        + (", ".join(path.as_posix() for path in homes) or "none"))
+
+
+NATIVE_TENSOR_SCALARS = ("FractionalAnisotropy", "Trace", "MeanDiffusivity",
+                         "MinEigenvalue", "MidEigenvalue", "MaxEigenvalue")
+
+
+def native_tensor_command(pythonslicer, dwi_header, tensor, baseline, enumeration, scalars, receipt=None,
+                          dec=None) -> list[str]:
+    """One ``teem_dti.py estimate`` process: tensor, baseline and the scalar maps (operation, path) together.
+
+    No ``--threads``: the child reads ``SLICERDSPACE_STAGE_CPUS`` (set by the cohort scheduler) itself.
+    """
+    from shared.teem_dti import estimate_command
+    return estimate_command(pythonslicer, dwi_header, tensor, baseline, enumeration, scalars, receipt, dec=dec)
 
 
 def build_cli_environment(cli_executable: str) -> dict[str, str]:
@@ -715,17 +860,19 @@ def _build_native_bundle(raw: RawInputBundle, fit_method: str) -> NativeDTIBundl
         mid_eig_nii_path=bundle_dir / f"{subject}-dti-MidEigenvalue.nii.gz",
         max_eig_nii_path=bundle_dir / f"{subject}-dti-MaxEigenvalue.nii.gz",
         manifest_path=bundle_dir / "manifest.json",
+        dec_nrrd_path=bundle_dir / f"{subject}-dti-DEC.nrrd",
     )
 
 
 def _native_manifest(raw: RawInputBundle, bundle: NativeDTIBundle) -> dict[str, Any]:
     return {
         "kind": "native_dti_bundle",
-        "version": 3,
+        "version": 4,
         "subject_id": raw.subject_id,
         "fit_method": bundle.fit_method,
         "conversion_implementation": _conversion_implementation(),
         "preparation_implementation": _artifact_record(Path(__file__))['sha256'],
+        "tensor_implementation": _artifact_record(Path(__file__).with_name('teem_dti.py'))['sha256'],
         "source_files": {
             "dwi": _cache_file_signature(raw.dwi_path),
             "bval": _cache_file_signature(raw.bval_path),
@@ -757,6 +904,7 @@ def _native_outputs_complete(bundle: NativeDTIBundle) -> bool:
         bundle.min_eig_nii_path,
         bundle.mid_eig_nii_path,
         bundle.max_eig_nii_path,
+        bundle.dec_nrrd_path,
     ]
     return _artifacts_current(bundle.bundle_dir, required)
 
@@ -806,41 +954,23 @@ def _ensure_native_dti_bundle(raw, fit_method, reuse, log):
     shutil.copy2(headers[0], bundle.dwi_nhdr_path)
     shutil.copy2(headers[1], bundle.mask_nhdr_path)
 
-    dti_cli = _get_cli_executable("dwitodtiestimation")
-    scalar_cli = _get_cli_executable("diffusiontensorscalarmeasurements")
-    fit_enum = "WLS" if fit_key == "wls" else "LS"
-
+    receipt_path = bundle.bundle_dir / "native_dti_receipt.json"
+    receipt_path.unlink(missing_ok=True)
+    scalar_paths = {
+        "FractionalAnisotropy": bundle.fa_nrrd_path, "Trace": bundle.trace_nrrd_path,
+        "MeanDiffusivity": bundle.mean_diffusivity_nrrd_path, "MinEigenvalue": bundle.min_eig_nrrd_path,
+        "MidEigenvalue": bundle.mid_eig_nrrd_path, "MaxEigenvalue": bundle.max_eig_nrrd_path,
+    }
+    scalar_outputs = [(name, scalar_paths[name]) for name in NATIVE_TENSOR_SCALARS]  # N5: one list of scalar names
     _run_cli(
-        [
-            dti_cli,
-            "--enumeration",
-            fit_enum,
-            bundle.dwi_nhdr_path.as_posix(),
-            bundle.dti_nrrd_path.as_posix(),
-            bundle.b0_nrrd_path.as_posix(),
-        ],
+        native_tensor_command(
+            resolve_pythonslicer_executable(),
+            bundle.dwi_nhdr_path, bundle.dti_nrrd_path, bundle.b0_nrrd_path,
+            "WLS" if fit_key == "wls" else "LS", scalar_outputs, receipt_path,
+            dec=bundle.dec_nrrd_path),
         log,
     )
-
-    scalar_outputs = [
-        ("FractionalAnisotropy", bundle.fa_nrrd_path),
-        ("Trace", bundle.trace_nrrd_path),
-        ("MeanDiffusivity", bundle.mean_diffusivity_nrrd_path),
-        ("MinEigenvalue", bundle.min_eig_nrrd_path),
-        ("MidEigenvalue", bundle.mid_eig_nrrd_path),
-        ("MaxEigenvalue", bundle.max_eig_nrrd_path),
-    ]
-    for enum_name, output_path in scalar_outputs:
-        _run_cli(
-            [
-                scalar_cli,
-                "--enumeration",
-                enum_name,
-                bundle.dti_nrrd_path.as_posix(),
-                output_path.as_posix(),
-            ],
-            log,
-        )
+    tensor_receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
 
     shutil.copy2(bundle.trace_nrrd_path, bundle.ddseg_md_nrrd_path)
     shutil.copy2(bundle.max_eig_nrrd_path, bundle.ddseg_e1_nrrd_path)
@@ -864,9 +994,8 @@ def _ensure_native_dti_bundle(raw, fit_method, reuse, log):
         'kind': 'native_dti_timing', 'status': 'completed', 'subject_id': raw.subject_id,
         'runtime_seconds': time.monotonic() - started, 'fit_method': fit_key,
         'source_dwi': str(raw.dwi_path), 'cache_reused': False,
-        'itk_default_threads': build_cli_environment(dti_cli).get('ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS'),
-        'thread_control_scope': 'ITK environment only; not a thread limit on the VTK tensor estimator',
-        'timing_scope': 'Fresh native tensor fitting, six scalar measurements, compatibility copies and NIfTI conversion; excludes registration and later ROI statistics',
+        'tensor_fit': tensor_receipt,
+        'timing_scope': 'Fresh native Teem tensor fit and six scalar maps in one process (plus the DEC colour map), compatibility copies and NIfTI conversion; excludes registration and later ROI statistics',
     })
     return bundle
 
@@ -949,7 +1078,6 @@ def _write_inverse_transform(forward_path: Path, inverse_path: Path) -> None:
     sitk.WriteTransform(inverse, str(inverse_path))
 
 
-@scheduled_stage('registered_dti')
 def ensure_registered_dti_bundle(
     raw: RawInputBundle,
     atlas_t2: Path,
@@ -959,23 +1087,32 @@ def ensure_registered_dti_bundle(
     *,
     scalar_format: str = 'nifti',
 ) -> RegisteredDTIBundle:
-    """Create or reuse registered DTI features under cache/registered_dti."""
+    """Create or reuse registered DTI features under cache/registered_dti.
+
+    S1.2: the native bundle comes first and is admitted as its own ``native_dti`` stage (or reused). The
+    ``registered_dti`` admission then covers registration and resampling only. Lock order: the native cache
+    lock is taken and released inside ``ensure_native_dti_bundle`` before the registered cache lock is
+    taken, so no process holds the registered lock while it waits for the native fit.
+    """
     if scalar_format not in ('nifti', 'nrrd'):
         raise ValueError('Registered scalar format must be nifti or nrrd')
     if fit_method.lower() not in ('ls', 'wls'):
         raise ValueError(f'Unsupported fit method: {fit_method}')
     atlas_t2 = atlas_t2.expanduser().resolve()
-    bundle = _build_registered_bundle(raw, fit_method, atlas_t2, scalar_format)
-    with cache_lock(bundle.bundle_dir / '.lock'):
-        return _ensure_registered_dti_bundle(raw, atlas_t2, fit_method, reuse, log, scalar_format)
-
-
-def _ensure_registered_dti_bundle(raw, atlas_t2, fit_method, reuse, log, scalar_format):
-    atlas_t2 = atlas_t2.expanduser().resolve()
     if not atlas_t2.is_file():
         raise FileNotFoundError(f"Atlas T2 not found: {atlas_t2}")
-
     native = ensure_native_dti_bundle(raw, fit_method=fit_method, reuse=True, log=log)
+    return _registered_dti_stage(raw, native, atlas_t2, fit_method, reuse, log, scalar_format)
+
+
+@scheduled_stage('registered_dti')
+def _registered_dti_stage(raw, native, atlas_t2, fit_method, reuse, log, scalar_format):
+    bundle = _build_registered_bundle(raw, fit_method, atlas_t2, scalar_format)
+    with cache_lock(bundle.bundle_dir / '.lock'):
+        return _ensure_registered_dti_bundle(raw, native, atlas_t2, fit_method, reuse, log, scalar_format)
+
+
+def _ensure_registered_dti_bundle(raw, native, atlas_t2, fit_method, reuse, log, scalar_format):
     bundle = _build_registered_bundle(raw, fit_method, atlas_t2, scalar_format)
     expected_manifest = _registered_manifest(raw, native, bundle)
     actual_manifest = _read_manifest(bundle.manifest_path)

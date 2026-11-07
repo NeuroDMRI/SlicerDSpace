@@ -13,7 +13,7 @@ from shared.ui_surface_license import prepare_surface_license
 class SurfaceLicenseTests(unittest.TestCase):
     def test_known_locations_and_explicit_precedence(self):
         with TemporaryDirectory() as tmp:
-            home = Path(tmp)
+            home = Path(tmp).resolve()  # F4: macOS /var is a symlink to /private/var
             activation = home / '.licenses/freesurfer/license.txt'
             activation.parent.mkdir(parents=True)
             activation.write_text('synthetic activation fixture')
@@ -26,7 +26,7 @@ class SurfaceLicenseTests(unittest.TestCase):
 
     def test_existing_install_hidden_license_and_alias(self):
         with TemporaryDirectory() as tmp:
-            root = Path(tmp)
+            root = Path(tmp).resolve()  # F4: macOS /var is a symlink to /private/var
             activation = root / '.license'
             activation.write_text('synthetic activation fixture')
             self.assertEqual(resolve_surface_license(freesurfer_home=root, home=root, environ={}), activation)

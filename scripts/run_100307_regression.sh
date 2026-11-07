@@ -38,7 +38,6 @@ COMMON_ARGS=(
   --subject-id "$SUBJECT_ID"
   --run-name "$RUN_NAME"
   --targets "$TARGETS"
-  --preprocessing-backend dipy
   --tractography-backend csd_act
   --connectome-backend python
 )

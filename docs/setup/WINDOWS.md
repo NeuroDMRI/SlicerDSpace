@@ -18,6 +18,15 @@ bridges for Linux backends. Native Windows scientific workflows and complete
 SDK/CPack acceptance remain unverified; installer plans are not that evidence.
 Use the minimal DTI tutorial before considering the optional full WSL runtime.
 
+**What runs where.** WSL 2 Ubuntu runs the MRtrix3 and FSL commands (and the
+optional FreeSurfer, WMA, WMQL and TractCloud tools). The tensor fit, the PNL
+brain mask and the other Python stages run in Windows Slicer's own Python. The
+PNL mask on Windows uses the native route (SimpleITK and PyTorch), labelled
+"native (experimental)"; the managed conda route is refused on Windows. In the
+GUI, **Prepare selected analysis environment** lists the WSL runtime, with its
+licences, in the same single dialog as the other downloads. If WSL 2 Ubuntu is
+missing, the dialog shows the install command; it does not install WSL itself.
+
 ---
 
 ## 1. Prerequisites
@@ -173,7 +182,7 @@ The installer writes:
 For command-line runs, pass it explicitly:
 
 ```powershell
-python -m shared.run_subject_pipeline_cli `
+PythonSlicer -m shared.run_subject_pipeline_cli `
   --subject-root D:\data\sub-01 `
   --targets tractography,wma,tractcloud,connectome `
   --dependency-config "$env:LOCALAPPDATA\SlicerDSpace\wsl-runtime\dependency-config.json" `
@@ -193,10 +202,10 @@ the installer never terminates an open Slicer process.
 
 The WSL installer covers executable backends and their atlas/model resources.
 DDSeg, DDParcel and DDSurfer checkpoints remain managed by the model-asset
-installer:
+installer. `PythonSlicer.exe` is Slicer's own Python (in the Slicer `bin` folder). No system Python is needed:
 
 ```powershell
-python scripts\download_model_assets.py `
+PythonSlicer.exe scripts\download_model_assets.py `
   --profile core `
   --asset-root D:\SlicerDSpace-model-assets `
   --source url `
@@ -225,8 +234,9 @@ In SlicerDSpace, set the subject ID and subject root, then run `Check
 environment dependencies`. If a stage is still blocked, include the generated
 environment report and install plan when reporting the issue.
 
-For `mrtrix_fsl` preprocessing, provide the real phase-encoding direction and
-total readout time from the acquisition metadata. Susceptibility correction
+For preprocessing (DIPY MP-PCA, DIPY Gibbs removal, then FSL eddy/topup through `dwifslpreproc`), provide the real phase-encoding direction (needed; the run is blocked without it) and
+the total readout time from the acquisition metadata. Both can come from `input/dwi.json`;
+a direction you type wins over the sidecar. Most axial clinical DWI is AP. Susceptibility correction
 with topup additionally requires the subject's reverse-phase spin-echo b0 data.
 If those acquisition files are absent, `-rpe_none` can exercise Eddy but cannot
 replace a scientifically valid topup correction; do not guess these values for

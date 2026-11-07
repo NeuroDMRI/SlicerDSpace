@@ -1,10 +1,10 @@
 """Validation and mapping of topup / distortion-correction inputs from the GUI.
 
-The MRtrix3/FSL preprocessing route (``--preprocessing-backend mrtrix_fsl``)
-passes three optional values to ``dwifslpreproc``:
+The one preprocessing route (DIPY MP-PCA, DIPY Gibbs removal, FSL eddy/topup
+through ``dwifslpreproc``) passes three optional values to ``dwifslpreproc``:
 
-* ``--preprocessing-phase-encoding-direction`` -> ``-pe_dir``
-* ``--preprocessing-readout-time``             -> ``-readout_time`` (seconds)
+* ``--preprocessing-phase-encoding-direction`` -> ``-pe_dir`` (always passed; W2b: from the sidecar when not given)
+* ``--preprocessing-readout-time``             -> ``-readout_time`` (seconds; omitted when no value is known)
 * ``--preprocessing-reverse-phase-b0``         -> ``-rpe_pair -se_epi``
 
 This module validates what the user typed and maps it onto exactly those CLI
@@ -20,22 +20,16 @@ from pathlib import Path
 from typing import Any, Optional
 
 
-MRTRIX_FSL_BACKEND = "mrtrix_fsl"
-
 # Accepted by MRtrix3 ``phaseencoding.direction`` (dwifslpreproc -pe_dir):
 # NIfTI/BIDS axis codes and anatomical axis designators.
 NIFTI_PHASE_ENCODING_DIRECTIONS = ("j-", "j", "i", "i-", "k", "k-")
 ANATOMICAL_PHASE_ENCODING_DIRECTIONS = ("AP", "PA", "LR", "RL", "IS", "SI")
 PHASE_ENCODING_DIRECTIONS = NIFTI_PHASE_ENCODING_DIRECTIONS + ANATOMICAL_PHASE_ENCODING_DIRECTIONS
 
+# W2b (T1 D1): the GUI offers the anatomical designators only (a NIfTI axis code would need the affine to be
+# understood). The empty value means "take it from input/dwi.json"; with no sidecar value the run is blocked.
 PHASE_ENCODING_CHOICES: tuple[tuple[str, str], ...] = (
-    ("", "Not set"),
-    ("j-", "j-  (NIfTI axis code)"),
-    ("j", "j  (NIfTI axis code)"),
-    ("i", "i  (NIfTI axis code)"),
-    ("i-", "i-  (NIfTI axis code)"),
-    ("k", "k  (NIfTI axis code)"),
-    ("k-", "k-  (NIfTI axis code)"),
+    ("", "From sidecar (input/dwi.json)"),
     ("AP", "AP  (anterior → posterior)"),
     ("PA", "PA  (posterior → anterior)"),
     ("LR", "LR  (left → right)"),
@@ -86,10 +80,10 @@ class TopupValidation:
         return not self.errors
 
 
-def route_uses_topup(backend: str, preprocessing_selected: bool = True) -> bool:
+def route_uses_topup(preprocessing_selected: bool = True) -> bool:
     """True when the topup fields apply (and should be shown)."""
 
-    return bool(preprocessing_selected) and (backend or "").strip() == MRTRIX_FSL_BACKEND
+    return bool(preprocessing_selected)
 
 
 def normalize_phase_encoding_direction(value: Any) -> Optional[str]:
@@ -159,20 +153,27 @@ def _has_image_suffix(path: Path) -> bool:
 
 def validate_topup_parameters(
     *,
-    backend: str,
     preprocessing_selected: bool,
     phase_encoding_direction: Any = "",
     readout_time: Any = None,
     reverse_phase_b0: Any = "",
     batch_mode: bool = False,
+    subject_root: Any = None,
+    output_root: Any = None,
 ) -> TopupValidation:
-    """Validate the three GUI fields for the selected preprocessing route.
+    """Validate the three GUI fields for the preprocessing route.
 
-    When the MRtrix3/FSL route is not selected the fields are ignored and
+    When preprocessing is not selected the fields are ignored and
     nothing is forwarded, so pipeline defaults are untouched.
+
+    W2b rule 4 (T1 D1): with a ``subject_root`` (single-subject runs) the same resolution as the run is applied to the
+    chosen direction and the sidecar ``input/dwi.json``. When no direction results, the message is an error, so the
+    run is stopped before any stage. Earlier preprocessing outputs do not lift the block: selected preprocessing is reused
+    only by the full version-6 key of the current settings, which needs a direction (F5). Batch mode is checked per
+    subject by the cohort plan.
     """
 
-    if not route_uses_topup(backend, preprocessing_selected):
+    if not route_uses_topup(preprocessing_selected):
         return TopupValidation(parameters=TopupParameters())
 
     errors: list[str] = []
@@ -212,16 +213,26 @@ def validate_topup_parameters(
         else:
             reverse_path = candidate
 
+    if subject_root is not None and not batch_mode and not errors:
+        from shared.pe_resolution import phase_encoding_block_reason
+
+        # F5: the orchestrator reuses selected preprocessing only by the full version-6 key of the current settings, and
+        # that key holds the effective PE direction. With no direction there is no matching key, so no outputs of an
+        # earlier run (version 5 or 6) make the run possible: the block does not depend on earlier outputs.
+        blocked = phase_encoding_block_reason(
+            Path(str(subject_root)).expanduser(), user_phase_encoding=pe_direction, user_readout_time=readout,
+            has_reverse_b0=bool(reverse_text))
+        if blocked:
+            errors.append(blocked)
     if pe_direction is None and not errors:
-        warnings.append(
-            "Phase-encoding direction is not set. dwifslpreproc stops with "
-            "'phase encoding direction must be provided using the -pe_dir option' unless "
-            "preprocessing outputs from an earlier run are reused."
+        notes.append(
+            "Phase-encoding direction: taken from input/dwi.json (PhaseEncodingDirection) when you leave it on "
+            "'From sidecar'. If the sidecar has none, preprocessing does not start (most axial clinical DWI: AP)."
         )
     if readout is None and not errors:
         notes.append(
-            f"Total readout time not set: dwifslpreproc assumes {DWIFSLPREPROC_DEFAULT_READOUT_S:g} s, "
-            "which only affects the field-map scaling."
+            "Total readout time not set: TotalReadoutTime from input/dwi.json is used when it exists; otherwise "
+            f"dwifslpreproc assumes {DWIFSLPREPROC_DEFAULT_READOUT_S:g} s (recorded as readout_assumed)."
         )
     elif readout is not None and readout > READOUT_TIME_TYPICAL_MAX_S:
         warnings.append(

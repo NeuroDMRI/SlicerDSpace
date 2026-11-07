@@ -122,7 +122,7 @@ class GeometryTests(unittest.TestCase):
 
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
+        self.root = Path(self.temp.name).resolve()  # F4: macOS /var is a symlink to /private/var
         # Nontrivial orientation/origin detects accidental LPS or voxel-space exports.
         self.affine = np.array([[0, -2, 0, 20], [1.5, 0, 0, -10], [0, 0, 2.5, 3], [0, 0, 0, 1.0]])
         self.dwi = self.root / "data.nii.gz"
@@ -485,7 +485,10 @@ class IntegrationTests(unittest.TestCase):
         targets = normalize_orchestrator_targets(("bundles",), tractography_backend="ukf", bundle_backend="wma")
         self.assertEqual(targets, ("tractography", "wma"))
         self.assertNotIn("segmentation", targets)
-        self.assertEqual(normalize_orchestrator_targets(("bundles",), bundle_backend="wma"), ("wma",))
+        # C1: WMA needs tractography; the closure adds it (and UKF tracking, see test_target_closure).
+        self.assertEqual(normalize_orchestrator_targets(("bundles",), bundle_backend="wma"), ("tractography", "wma"))
+        self.assertEqual(normalize_orchestrator_targets(("bundles",), bundle_backend="wma", provided_tractography=("wma",)),
+                         ("wma",))
 
     def test_no_mrtrix_dependency_for_ukf_only(self):
         from shared.environment import EnvironmentDoctorConfig, build_dependency_specs

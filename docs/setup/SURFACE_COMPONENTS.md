@@ -65,7 +65,7 @@ remain visible as manual items; preparation does not fall back to compilation.
 Install an offline bundle after reviewing its component/data terms:
 
 ```bash
-python scripts/setup_surface_runtime.py --execute --accept-terms \
+PythonSlicer scripts/setup_surface_runtime.py --execute --accept-terms \
   --asset-root /path/to/assets --offline
 ```
 
@@ -86,15 +86,14 @@ it is published and its distribution permissions are cleared.
 ## Run And Verify
 
 ```bash
-python run_subject_pipeline.py --subject-root /data/sub-01 --subject-id sub-01 \
+PythonSlicer run_subject_pipeline.py --subject-root /data/sub-01 --subject-id sub-01 \
   --targets surface_postprocess --postprocess-runtime /data/local-components \
   --postprocess-license-file /data/private/freesurfer-license.txt --execute
 ```
 
 Use the same subject root containing the reconstructed native OBJ masters, or
 provide `--postprocess-native-dir`. `--postprocess-freesurfer-home` remains
-available for the full-installation route. SynthStrip and its model are separate;
-the seven surface commands do not supply masking.
+available for the full-installation route. The seven surface commands do not supply masking.
 
 The component manifest, source revision, library availability and checksums are
 verified in an isolated worker. The activation precheck tests file presence,

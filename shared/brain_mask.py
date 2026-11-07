@@ -18,11 +18,32 @@ import tempfile
 import time
 from typing import Any, Callable, Optional
 
-from shared.external_process import external_python_environment, text_subprocess_kwargs
+from shared.external_process import python_tool_environment, text_subprocess_kwargs
 
 
-BRAIN_MASK_BACKENDS = ("pnl_cnn", "synthstrip", "mrtrix", "provided", "dipy")
+BRAIN_MASK_BACKENDS = ("pnl_cnn", "provided")
+# W5 (D2): these mask backends are gone. Old manifests, receipts and saved settings may still name them (SC-2).
+REMOVED_BRAIN_MASK_BACKENDS = ("synthstrip", "mrtrix", "dipy")
+
+
+def unsupported_backend_message(backend: str) -> str:
+    """SC-2: the text for a brain mask backend that is removed or unknown; it names the two that remain."""
+    kind = "was removed" if backend in REMOVED_BRAIN_MASK_BACKENDS else "is not known"
+    return f"Brain mask backend {backend!r} {kind}. Use pnl_cnn (PNL CNN) or provided (a supplied mask)."
 BRAIN_MASK_DEVICES = ("auto", "cpu", "cuda")
+# T2 design SC-1a: route of the pnl_cnn backend. auto -> managed on Linux (WSL included), native elsewhere.
+PNL_MASK_ROUTES = ("auto", "managed", "native")
+PNL_ROUTE_NAMES = {"managed": "managed-ants", "native": "native-sitk"}
+PNL_ROUTE_LABELS = {"auto": "auto", "managed": "managed", "native": "native (experimental)"}
+# SC-1b: the reason text of the experimental status of the native route.
+PNL_NATIVE_EXPERIMENTAL_REASON = "did not meet the M-A parity rule on 2 of 24 cases (T2 design §3)"
+# SC-1e: the native registration always runs with one SimpleITK thread (the T3 configuration).
+PNL_REGISTRATION_THREADS = 1
+# T2 design A1/A7: the pnl_cnn backend runs this module in Slicer's Python, with the vendored CNN code.
+PNL_NATIVE_SCRIPT = Path(__file__).with_name("pnl_mask_native.py")
+PNL_VENDOR_DIR = Path(__file__).with_name("pnl_cnn")
+PNL_TEMPLATE_NAME = "IITmean_b0_256.nii.gz"
+PNL_NATIVE_PYTHON_MISSING = "PythonSlicer (Slicer's Python with SlicerPyTorch runs the native PNL mask)"
 
 
 @dataclass(frozen=True)
@@ -33,9 +54,7 @@ class BrainMaskConfig:
     pnl_mask_script: Optional[Path] = None
     pnl_mask_model_dir: Optional[Path] = None
     pnl_mask_ants_bin_dir: Optional[Path] = None
-    synthstrip_python: Optional[Path] = None
-    mrtrix_bin_dir: Optional[Path] = None
-    freesurfer_home: Optional[Path] = None
+    pnl_mask_route: str = "auto"
     b0_threshold: float = 50.0
     threads: int = 4
     model_assets_dir: Optional[Path] = None
@@ -45,10 +64,9 @@ def brain_mask_config_from_options(options) -> BrainMaskConfig:
     return BrainMaskConfig(
         backend=getattr(options, "brain_mask_backend", "pnl_cnn"),
         brain_mask_device=getattr(options, "brain_mask_device", "auto"),
+        pnl_mask_route=getattr(options, "pnl_mask_route", None) or "auto",
         **{name: getattr(options, name, None) for name in (
-            "pnl_mask_python", "pnl_mask_script", "pnl_mask_model_dir", "pnl_mask_ants_bin_dir", "synthstrip_python", "model_assets_dir")},
-        mrtrix_bin_dir=getattr(options, "mrtrix_bin_dir", None) or getattr(options, "preprocessing_mrtrix_bin_dir", None),
-        freesurfer_home=getattr(options, "postprocess_freesurfer_home", None),
+            "pnl_mask_python", "pnl_mask_script", "pnl_mask_model_dir", "pnl_mask_ants_bin_dir", "model_assets_dir")},
         b0_threshold=getattr(options, "b0_threshold", 50.0),
     )
 
@@ -78,55 +96,213 @@ def _fingerprint(path: Path) -> dict[str, Any]:
     return {"path": str(path.resolve()), "size": path.stat().st_size, "sha256": _sha256(path)}
 
 
-def resolve_dwi2mask(explicit_bin_dir: Optional[Path] = None) -> Optional[Path]:
-    for folder in (explicit_bin_dir, os.environ.get("SLICERDSPACE_MRTRIX_BIN_DIR"), os.environ.get("MRTRIX_BIN_DIR")):
-        if folder:
-            candidate = Path(folder).expanduser().resolve() / "dwi2mask"
-            if candidate.is_file() and os.access(candidate, os.X_OK):
-                return candidate
-    found = shutil.which("dwi2mask")
-    return Path(found).resolve() if found else None
+_pnl_native_python_problem = ""  # B7: why the last `_pnl_native_python()` call found nothing
+
+
+def _pnl_native_python() -> Optional[Path]:
+    """PythonSlicer for the A1 subprocess, found as for ``teem_dti.py``; None outside a Slicer Python."""
+    global _pnl_native_python_problem
+    _pnl_native_python_problem = ""
+    try:
+        # Imported here: shared.pipeline imports this module.
+        from shared.pipeline import resolve_pythonslicer_executable
+        return Path(resolve_pythonslicer_executable())
+    except (ImportError, RuntimeError) as exc:
+        _pnl_native_python_problem = str(exc)
+        return None
+
+
+def _pnl_native_python_checked() -> Optional[Path]:
+    """``_pnl_native_python()`` with a clean problem text, so a replaced resolver never shows an old message."""
+    global _pnl_native_python_problem
+    _pnl_native_python_problem = ""
+    return _pnl_native_python()
+
+
+def pnl_child_threads() -> int:
+    """Thread count the native PNL child uses (A6): ``SLICERDSPACE_STAGE_CPUS``, else affinity, else CPU count."""
+    from shared.pnl_mask_native import default_threads
+    return default_threads()
+
+
+def pnl_native_resources() -> list[Path]:
+    """A7 cache resources: ``pnl_mask_native.py`` and every vendored file in UPSTREAM.json (O5: with the JSON)."""
+    record = json.loads((PNL_VENDOR_DIR / "UPSTREAM.json").read_text(encoding="utf-8"))
+    return [PNL_NATIVE_SCRIPT, PNL_VENDOR_DIR / "UPSTREAM.json",
+            *(PNL_VENDOR_DIR / relative for relative in sorted(record["files"]))]
+
+
+def resolve_pnl_mask_route(route: str | None = "auto", system: str | None = None) -> str:
+    """SC-1a: ``managed`` or ``native`` for the setting ``auto`` | ``managed`` | ``native``.
+
+    ``auto`` is ``managed`` on Linux and ``native`` on macOS and Windows. On Windows the mask runs in Windows Slicer's
+    Python (only the MRtrix and FSL tools go through WSL), and the managed route is refused there; the managed ``pnl_cnn``
+    runtime has no macOS or Windows build, so native is the only PNL route on those systems.
+    """
+    route = route or "auto"
+    if route not in PNL_MASK_ROUTES:
+        raise ValueError("pnl_mask_route must be one of: " + ", ".join(PNL_MASK_ROUTES))
+    if route != "auto":
+        return route
+    # S1 (SC-1 fix round): Windows resolves auto to native (spec SC-1a); managed only on Linux.
+    return "managed" if (system or platform.system()) == "Linux" else "native"
+
+
+def pnl_route_record(route: str) -> dict[str, str]:
+    """SC-1b: ``route`` and, for the native route, the experimental status with its reason (receipt, run record)."""
+    record = {"route": PNL_ROUTE_NAMES[route]}
+    if route == "native":
+        record.update(status="experimental", reason=PNL_NATIVE_EXPERIMENTAL_REASON)
+    return record
+
+
+def _generated_route(mask: Path) -> dict[str, str] | None:
+    """The route of the receipt next to `mask`, only when that receipt describes these very bytes (F2b).
+
+    A pnl_cnn receipt gives its ``pnl_route``. A receipt of a removed generating backend (SC1-CARRY-1, W5 SC-2) still
+    reads and gives that backend as the route, for example ``{"route": "synthstrip"}``.
+    """
+    record_path = _manifest_path_for_mask(mask)
+    try:
+        record = json.loads(record_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(record, dict):
+        return None
+    recorded = (record.get("output") or {}).get("sha256") if isinstance(record.get("output"), dict) else None
+    if not recorded or recorded != _sha256(mask):
+        return None
+    backend = record.get("backend")
+    route = record.get("pnl_route")
+    if backend == "pnl_cnn":
+        if isinstance(route, dict) and route.get("route"):
+            return {key: str(value) for key, value in route.items()}
+        return None
+    if backend in REMOVED_BRAIN_MASK_BACKENDS:
+        return {"route": str(backend)}
+    return None
+
+
+def mask_provenance(mask_path: Path, *, preprocessing_manifest: dict | None = None) -> dict[str, str]:
+    """F2 / F2b: route, status and reason of the mask that a run consumes.
+
+    (a) The receipt next to the mask gives its ``pnl_route`` if the backend is pnl_cnn and ``pnl_route`` is present; a
+    receipt of another generating backend gives that backend's name as the route. Both need the receipt's
+    ``output.sha256`` to equal the SHA-256 of the mask now (a stale receipt never labels a later mask); this
+    holds also for a reused cache entry. (b) Otherwise, for a preprocessing final mask, a preprocessing manifest whose
+    ``mask_generation`` has backend ``provided`` and a ``source`` gives the provenance of that source (same rule), when
+    the final mask is a byte copy of it. (c) Otherwise a mask file with no receipt at all is ``supplied``; a receipt that
+    does not match, or has no usable route, is ``unknown``; no mask file is ``unknown``.
+    """
+    mask = Path(mask_path)
+    if not mask.is_file():
+        return {"route": "unknown"}
+    route = _generated_route(mask)
+    if route:
+        return route
+    generation = (preprocessing_manifest or {}).get("mask_generation")
+    if isinstance(generation, dict) and generation.get("backend") == "provided" and generation.get("source"):
+        source = Path(str(generation["source"]))
+        if source.is_file() and _sha256(source) == _sha256(mask):
+            return mask_provenance(source)
+    return {"route": "unknown" if _manifest_path_for_mask(mask).is_file() else "supplied"}
+
+
+def _inspect_pnl_managed(config: BrainMaskConfig, system: str | None, missing: list, tools: dict, resources: list) -> None:
+    """The managed route: the pre-W-A tool lookup of 70fb635^1 (conda Python, ``pnl-brain-mask`` script, ANTs)."""
+    resources.append(Path(__file__).with_name("pnl_mask_runner.py"))
+    # Resolving a venv's Python symlink would select the base interpreter
+    # and lose that environment's installed PNLBrainMask-Torch package.
+    python = _path(config.pnl_mask_python, "SLICERDSPACE_PNL_MASK_PYTHON", resolve=False)
+    script = _path(config.pnl_mask_script, "SLICERDSPACE_PNL_MASK_SCRIPT")
+    if script is None and python is not None:
+        script = python.parent / "pnl-brain-mask"
+    ants = _path(config.pnl_mask_ants_bin_dir, "ANTSPATH")
+    for name, path in (("pnl_mask_python", python), ("pnl_mask_script", script)):
+        if path is None or not path.is_file():
+            missing.append(name)
+        else:
+            tools[name] = str(path)
+    if python is not None and python.is_file() and not os.access(python, os.X_OK):
+        missing.append("executable pnl_mask_python")
+    if script and script.is_file():
+        resources.append(script)
+    search = os.pathsep.join(str(p) for p in (ants, python.parent if python else None) if p)
+    search += os.pathsep + os.environ.get("PATH", "")
+    for command in ("antsRegistrationSyNQuick.sh", "antsApplyTransforms", "ImageMath"):
+        found = shutil.which(command, path=search)
+        if found:
+            tools[command] = str(Path(found).resolve())
+        else:
+            missing.append(command)
+    tools["ants_bin_dir"] = str(ants) if ants else ""
+    if (system or platform.system()) == "Windows" or os.name == "nt":
+        missing.append("PNL CNN requires a POSIX external runtime (use Linux/WSL pipeline execution)")
+
+
+def _pnl_settings(route: str) -> dict[str, Any]:
+    """The route-dependent part of the cache signature (SC-1f: ``pnl_route`` differs per route)."""
+    if route == "managed":
+        return {"pnl_framework": "pytorch", "pnl_route": PNL_ROUTE_NAMES["managed"], "pnl_package": "pnl-brain-mask",
+                "pnl_inverse_interpolation": "ANTs default linear"}
+    return {"pnl_framework": "pytorch", "pnl_route": PNL_ROUTE_NAMES["native"],
+            "pnl_package": "vendored PNLBrainMask-Torch 8d201a5 (shared/pnl_cnn)",
+            "pnl_registration": "SimpleITK rigid, ANTs rigid-stage parameters",
+            "pnl_registration_threads": PNL_REGISTRATION_THREADS,
+            "pnl_inverse_interpolation": "SimpleITK linear, float32"}
 
 
 def inspect_brain_mask_backend(config: BrainMaskConfig | None = None, *, system: str | None = None) -> dict[str, Any]:
     """Inspect files/tools only; no framework import, model download or inference."""
     config = config or BrainMaskConfig()
     if config.backend not in BRAIN_MASK_BACKENDS:
-        raise ValueError("brain_mask_backend must be one of: " + ", ".join(BRAIN_MASK_BACKENDS))
+        raise ValueError(unsupported_backend_message(config.backend))
     if config.brain_mask_device not in BRAIN_MASK_DEVICES:
         raise ValueError("brain_mask_device must be one of: " + ", ".join(BRAIN_MASK_DEVICES))
+    if config.pnl_mask_route not in PNL_MASK_ROUTES:
+        raise ValueError("pnl_mask_route must be one of: " + ", ".join(PNL_MASK_ROUTES))
     if not math.isfinite(config.b0_threshold) or config.b0_threshold < 0 or config.threads < 1:
         raise ValueError("Mask b0 threshold must be finite/nonnegative and threads must be positive")
     missing = []
     tools, resources = {}, []
-    settings = {}
+    threads = config.threads
+    route = None
     if config.backend == "pnl_cnn":
-        resources.append(Path(__file__).with_name("pnl_mask_runner.py"))
-        # Resolving a venv's Python symlink would select the base interpreter
-        # and lose that environment's installed PNLBrainMask-Torch package.
-        python = _path(config.pnl_mask_python, "SLICERDSPACE_PNL_MASK_PYTHON", resolve=False)
-        script = _path(config.pnl_mask_script, "SLICERDSPACE_PNL_MASK_SCRIPT")
-        if script is None and python is not None:
-            script = python.parent / "pnl-brain-mask"
+        route = resolve_pnl_mask_route(config.pnl_mask_route, system)
+        if route == "managed":
+            # SC-1a: the conda runner of 70fb635^1 (ANTs 2.3.0); it uses config.threads as before W-A.
+            _inspect_pnl_managed(config, system, missing, tools, resources)
+        else:
+            # A-O4: the child ignores config.threads; the signature records the count it will use.
+            threads = pnl_child_threads()
+            # A7 (T2 design v4): Slicer's Python runs shared/pnl_mask_native.py (A1) with the vendored CNN code.
+            # The conda runner settings (pnl_mask_python, pnl_mask_script, pnl_mask_ants_bin_dir) are not read.
+            python = _pnl_native_python_checked()
+            if python is None or not python.is_file() or not os.access(python, os.X_OK):
+                # B7 (A-C1 2): when the resolver found nothing, its message (with "Set SLICER_HOME") reaches the user.
+                reason = _pnl_native_python_problem if python is None else ""
+                missing.append(PNL_NATIVE_PYTHON_MISSING + (": " + reason if reason else ""))
+            else:
+                tools["pythonslicer"] = str(python)
+            try:
+                vendored = pnl_native_resources()
+            except (OSError, ValueError, KeyError):
+                vendored = []
+                missing.append(f"PNL native file {PNL_VENDOR_DIR / 'UPSTREAM.json'}")
+            for file in vendored:
+                if file.is_file():
+                    resources.append(file)
+                else:
+                    missing.append(f"PNL native file {file}")
         models = _path(config.pnl_mask_model_dir, "SLICERDSPACE_PNL_MASK_MODEL_DIR")
         if models is None:
             from shared.optional_assets import verified_resource_directory
             models = verified_resource_directory("pnl-cnn", asset_root=config.model_assets_dir)
-        ants = _path(config.pnl_mask_ants_bin_dir, "ANTSPATH")
-        for name, path in (("pnl_mask_python", python), ("pnl_mask_script", script)):
-            if path is None or not path.is_file():
-                missing.append(name)
-            else:
-                tools[name] = str(path)
-        if python is not None and python.is_file() and not os.access(python, os.X_OK):
-            missing.append("executable pnl_mask_python")
-        if script and script.is_file():
-            resources.append(script)
         if models is None or not models.is_dir():
             missing.append("pnl_mask_model_dir")
         else:
             tools["model_dir"] = str(models)
-            for name in ("weights.json", "IITmean_b0_256.nii.gz"):
+            for name in ("weights.json", PNL_TEMPLATE_NAME):
                 file = models / name
                 if not file.is_file():
                     missing.append(name)
@@ -138,79 +314,27 @@ def inspect_brain_mask_backend(config: BrainMaskConfig | None = None, *, system:
                     missing.append(view + ".pt (convert/download PNLBrainMask-Torch weights; legacy HDF5 is not a Torch runtime)")
                 else:
                     resources.append(weights)
-        search = os.pathsep.join(str(p) for p in (ants, python.parent if python else None) if p)
-        search += os.pathsep + os.environ.get("PATH", "")
-        for command in ("antsRegistrationSyNQuick.sh", "antsApplyTransforms", "ImageMath"):
-            found = shutil.which(command, path=search)
-            if found:
-                tools[command] = str(Path(found).resolve())
-            else:
-                missing.append(command)
-        tools["ants_bin_dir"] = str(ants) if ants else ""
-        if (system or platform.system()) == "Windows" or os.name == "nt":
-            missing.append("PNL CNN requires a POSIX external runtime (use Linux/WSL pipeline execution)")
-    elif config.backend == "synthstrip":
-        if (system or platform.system()) == "Windows" or os.name == "nt":
-            missing.append("Full FreeSurfer SynthStrip runtime is not native Windows; use a reviewed supplied mask or an explicitly configured Linux/WSL pipeline")
-        home = _path(config.freesurfer_home, "FREESURFER_HOME")
-        executable = home / "bin/mri_synthstrip" if home else _path(shutil.which("mri_synthstrip"))
-        if executable is None or not executable.is_file() or not os.access(executable, os.X_OK):
-            missing.append("FreeSurfer mri_synthstrip")
-        else:
-            tools["mri_synthstrip"] = str(executable)
-            resources.append(executable)
-            home = home or executable.parent.parent
-            model = home / "models/synthstrip.1.pt"
-            if not model.is_file():
-                from shared.optional_assets import verified_resource_directory
-                shared = verified_resource_directory("synthstrip", asset_root=config.model_assets_dir)
-                if shared:
-                    model = shared / "synthstrip.1.pt"
-            if model.is_file():
-                resources.append(model)
-                if model != home / "models/synthstrip.1.pt":
-                    tools["synthstrip_model"] = str(model)
-            else:
-                missing.append("FreeSurfer models/synthstrip.1.pt")
-            tools["freesurfer_home"] = str(home)
-            python = _path(config.synthstrip_python, "SLICERDSPACE_SYNTHSTRIP_PYTHON", resolve=False) or home / "bin/fspython"
-            script = home / "python/scripts/mri_synthstrip"
-            if (config.synthstrip_python or os.environ.get("SLICERDSPACE_SYNTHSTRIP_PYTHON")) and (
-                    not python.is_file() or not os.access(python, os.X_OK)):
-                missing.append("executable configured synthstrip_python")
-            if python.is_file() and script.is_file():
-                tools["synthstrip_python"], tools["synthstrip_script"] = str(python), str(script)
-                resources.extend((script, Path(__file__).with_name("synthstrip_mask_runner.py")))
-            elif config.brain_mask_device != "cpu":
-                missing.append("SynthStrip fspython and python/scripts/mri_synthstrip for auto/CUDA device discovery (or explicitly select CPU)")
-    elif config.backend == "dipy":
-        from importlib.metadata import PackageNotFoundError, version
-        try:
-            implementation = version('dipy')
-        except PackageNotFoundError:
-            implementation = 'not installed'
-        # Python-package availability is checked in the selected interpreter by
-        # Dependency Doctor; no external executable or model is required here.
-        settings = dict(implementation='dipy.segment.mask.median_otsu',
-                        implementation_version=implementation, median_radius=4,
-                        numpass=4, dilate=1, autocrop=False)
-        resources.append(Path(__file__))
-    elif config.backend == "mrtrix":
-        executable = resolve_dwi2mask(config.mrtrix_bin_dir)
-        if executable is None:
-            missing.append("MRtrix3 dwi2mask")
-        else:
-            tools["dwi2mask"] = str(executable)
-            resources.append(executable)
     return {"backend": config.backend, "available": not missing, "missing_required": missing,
+            "pnl_route_resolved": route,
             "tool_paths": tools, "resources": [str(p) for p in resources],
-            "settings": {"b0_threshold": config.b0_threshold, "threads": config.threads,
+            "settings": {"b0_threshold": config.b0_threshold, "threads": threads,
                          "pnl_percentile": 99, "pnl_cleanup": "official_fill_holes_no_optional_filter",
-                         "device": config.brain_mask_device if config.backend in ("pnl_cnn", "synthstrip") else "cpu",
-                         **({"pnl_framework": "pytorch", "pnl_package": "pnl-brain-mask",
-                             "pnl_inverse_interpolation": "ANTs default linear"} if config.backend == "pnl_cnn" else {}),
-                         **settings},
+                         "device": config.brain_mask_device if config.backend == "pnl_cnn" else "cpu",
+                         **(_pnl_settings(route) if config.backend == "pnl_cnn" else {})},
             "note": "File discovery is not runtime/model compatibility or anatomical QC"}
+
+
+def brain_mask_cache_inspection(inspection: dict[str, Any]) -> dict[str, Any]:
+    """B12: the inspection as the cache signature and the preprocessing cache key hold it.
+
+    The native PNL route leaves the thread count out (M-A2, 2026-11-07: 24 cases, 0 differing voxels between 1 and 8
+    inference threads with the registration pinned to 1 thread); the receipt still records ``child_threads``. The
+    managed route keeps its threads (ANTs was not measured). The device stays in the key.
+    """
+    if inspection.get("backend") != "pnl_cnn" or inspection.get("pnl_route_resolved") != "native":
+        return inspection
+    settings = {key: value for key, value in inspection["settings"].items() if key != "threads"}
+    return dict(inspection, settings=settings)
 
 
 def validate_brain_mask(dwi_path: Path, mask_path: Path) -> dict[str, Any]:
@@ -295,7 +419,7 @@ def generate_brain_mask(dwi_path: Path, bval_path: Path, bvec_path: Path, output
     if record_path.is_symlink():
         raise ValueError("Mask provenance must not be a symlink")
     if config.backend not in BRAIN_MASK_BACKENDS:
-        raise ValueError("Unknown brain mask backend: " + config.backend)
+        raise ValueError(unsupported_backend_message(config.backend))
     existing = {}
     if record_path.is_file():
         existing = json.loads(record_path.read_text(encoding="utf-8"))
@@ -312,10 +436,11 @@ def generate_brain_mask(dwi_path: Path, bval_path: Path, bvec_path: Path, output
         return {"status": "reused", "backend": "provided", "mask_path": str(output),
                 "qc": validate_brain_mask(paths[0], output)}
     backend = inspect_brain_mask_backend(config)
+    route = backend["pnl_route_resolved"]
     if not backend["available"]:
         raise FileNotFoundError(f"Brain mask backend {config.backend} unavailable: " + ", ".join(backend["missing_required"]) +
                                 ". Configure Advanced > Environment and models, choose another backend, or supply a verified mask.")
-    signature = {"backend": config.backend, "settings": backend["settings"],
+    signature = {"backend": config.backend, "settings": brain_mask_cache_inspection(backend)["settings"],
                  "inputs": [_fingerprint(p) for p in paths],
                  "resources": [_fingerprint(Path(p)) for p in backend["resources"]],
                  "tool_paths": backend["tool_paths"]}
@@ -336,11 +461,12 @@ def generate_brain_mask(dwi_path: Path, bval_path: Path, bvec_path: Path, output
         phase_seconds["b0_preparation"] = time.monotonic() - phase_started
         candidate = work / "mask.nii.gz"
         prepend = []
-        env_extra = {"OMP_NUM_THREADS": str(config.threads), "MKL_NUM_THREADS": str(config.threads),
-                     "OPENBLAS_NUM_THREADS": str(config.threads), "PYTHONUNBUFFERED": "1"}
-        if config.backend == "dipy":
-            command = []
-        elif config.backend == "pnl_cnn":
+        # A-O4: for pnl_cnn the effective child count (backend settings), else config.threads.
+        threads = backend["settings"]["threads"]
+        env_extra = {"OMP_NUM_THREADS": str(threads), "MKL_NUM_THREADS": str(threads),
+                     "OPENBLAS_NUM_THREADS": str(threads), "PYTHONUNBUFFERED": "1"}
+        if route == "managed":
+            # SC-1a: the pre-W-A conda runner (70fb635^1), ANTs 2.3.0 in the managed pnl_cnn runtime.
             models = work / "models"
             models.symlink_to(tools["model_dir"], target_is_directory=True)
             prepend.append(Path(tools["pnl_mask_python"]).parent)
@@ -355,44 +481,27 @@ def generate_brain_mask(dwi_path: Path, bval_path: Path, bvec_path: Path, output
                        "--threads", str(config.threads)]
             if tools.get("ants_bin_dir"):
                 command.extend(("--ants-bin", tools["ants_bin_dir"]))
-        elif config.backend == "synthstrip":
-            env_extra["FREESURFER_HOME"] = tools["freesurfer_home"]
-            prepend.append(Path(tools["mri_synthstrip"]).parent)
-            command = [tools["mri_synthstrip"], "-i", str(baseline), "-m", str(candidate)]
-            if "synthstrip_model" in tools:
-                command.extend(("--model", tools["synthstrip_model"]))
-            if "synthstrip_python" in tools:
-                device_record = work / "synthstrip_device.json"
-                command = [tools["synthstrip_python"], str(Path(__file__).with_name("synthstrip_mask_runner.py")),
-                           "--device", config.brain_mask_device, "--record", str(device_record),
-                           "--script", tools["synthstrip_script"], "--", *command[1:]]
         else:
-            command = [tools["dwi2mask"], str(paths[0]), str(candidate), "-fslgrad", str(paths[2]), str(paths[1]), "-force"]
-        env = external_python_environment(env_extra, path_prepend=prepend)
-        if config.backend == "pnl_cnn":
+            # A1: one Slicer-Python process. No --threads: the child reads SLICERDSPACE_STAGE_CPUS (A6).
+            # The receipt (route, versions, device, threads, phase times) becomes device_execution.
+            models = Path(tools["model_dir"])
+            device_record = work / "pnl_device.json"
+            command = [tools["pythonslicer"], str(PNL_NATIVE_SCRIPT), "--input", str(baseline),
+                       "--output", str(candidate), "--model-dir", str(models),
+                       "--template", str(models / PNL_TEMPLATE_NAME),
+                       "--device", config.brain_mask_device, "--record", str(device_record)]
+        if route == "managed":
             from shared.managed_pnl import pnl_python_environment
             env = pnl_python_environment(tools["pnl_mask_python"], env_extra, path_prepend=prepend)
-        phase_started = time.monotonic()
-        if config.backend == 'dipy':
-            import nibabel as nib
-            import numpy as np
-            from dipy.segment.mask import median_otsu
-            baseline_image = nib.load(baseline)
-            _, mask = median_otsu(np.asarray(baseline_image.dataobj), median_radius=4,
-                                  numpass=4, dilate=1, autocrop=False)
-            header = baseline_image.header.copy()
-            header.set_data_dtype(np.uint8)
-            nib.save(nib.Nifti1Image(mask.astype(np.uint8), baseline_image.affine, header), candidate)
-            tail = 'DIPY median_otsu: mean b0, radius=4, passes=4, dilation=1, native grid'
-            if log:
-                log('[Brain mask] ' + tail)
-            phase_seconds['native_python_mask'] = time.monotonic() - phase_started
-            device = dict(requested=config.brain_mask_device, resolved='cpu',
-                          reason='DIPY median_otsu is a CPU algorithm')
         else:
-            tail = _run(command, env, log)
-            phase_seconds["external_process"] = time.monotonic() - phase_started
-            device = json.loads(device_record.read_text(encoding="utf-8")) if config.backend == "pnl_cnn" or "synthstrip_python" in tools else None
+            env = python_tool_environment(tools["pythonslicer"], env_extra)
+            # A6: the child reads the scheduler's CPU reservation; Slicer's startup environment does not hold it.
+            if os.environ.get("SLICERDSPACE_STAGE_CPUS"):
+                env["SLICERDSPACE_STAGE_CPUS"] = os.environ["SLICERDSPACE_STAGE_CPUS"]
+        phase_started = time.monotonic()
+        tail = _run(command, env, log)
+        phase_seconds["external_process"] = time.monotonic() - phase_started
+        device = json.loads(device_record.read_text(encoding="utf-8"))
         if not candidate.is_file():
             raise RuntimeError(f"{config.backend} returned success but did not create its declared mask")
         phase_started = time.monotonic()
@@ -410,6 +519,12 @@ def generate_brain_mask(dwi_path: Path, bval_path: Path, bvec_path: Path, output
                         "device_execution": device,
                         "phase_seconds": phase_seconds,
                         "phase_timing_scope": "Non-overlapping measured phases, not a complete sum of wall time; external process includes interpreter/model startup and upstream registration/inference/cleanup",
+                        # SC-1b: the route. SPEC-GAP SC-1: the experimental status and reason of the native route are
+                        # nested in `pnl_route` (same keys as the run record: route, status, reason), because the
+                        # receipt's own `status` ("completed") is read by cache reuse and the callers.
+                        **({"route": PNL_ROUTE_NAMES[route], "pnl_route": pnl_route_record(route)}
+                           if config.backend == "pnl_cnn" else {}),
+                        **({"child_threads": threads} if config.backend == "pnl_cnn" and route == "native" else {}),
                         "thread_environment": {key: env.get(key) for key in (
                             "OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS",
                             "TF_NUM_INTRAOP_THREADS", "TF_NUM_INTEROP_THREADS", "TF_ENABLE_ONEDNN_OPTS")},
@@ -447,10 +562,3 @@ def generate_brain_mask(dwi_path: Path, bval_path: Path, bvec_path: Path, output
             if staging_record is not None:
                 staging_record.unlink(missing_ok=True)
     return manifest
-
-
-def generate_brain_mask_with_dwi2mask(dwi_path, bval_path, bvec_path, output_mask_path,
-                                     *, mrtrix_bin_dir=None, force=False):
-    """Compatibility wrapper for callers explicitly requesting MRtrix."""
-    return generate_brain_mask(dwi_path, bval_path, bvec_path, output_mask_path,
-                               config=BrainMaskConfig(backend="mrtrix", mrtrix_bin_dir=mrtrix_bin_dir), force=force)

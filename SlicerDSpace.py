@@ -97,9 +97,9 @@ class SlicerDSpaceParameterNode:
     microstructureRunNoddi: bool = False
     microstructureForceRecompute: bool = False
     targetPreprocessing: bool = True
-    preprocessingBackend: Annotated[str, Choice(["dipy", "mrtrix_fsl"])] = "dipy"
-    brainMaskBackend: Annotated[str, Choice(["pnl_cnn", "synthstrip", "mrtrix", "provided", "dipy"])] = "pnl_cnn"
+    brainMaskBackend: Annotated[str, Choice(["pnl_cnn", "provided"])] = "pnl_cnn"
     brainMaskDevice: Annotated[str, Choice(["auto", "cpu", "cuda"])] = "auto"
+    pnlMaskRoute: Annotated[str, Choice(["auto", "managed", "native"])] = "auto"
     # Topup / distortion correction for the MRtrix3/FSL route. Empty/0 means
     # "not set", so nothing is forwarded and dwifslpreproc defaults apply.
     preprocessingPhaseEncodingDirection: str = ""
@@ -118,11 +118,17 @@ class SlicerDSpaceParameterNode:
     orchestrationMicrostructureStages: Annotated[str, Choice([
         "dti", "dti,freewater", "dti,noddi", "dti,dki",
         "dti,freewater,noddi", "dti,freewater,dki", "dti,noddi,dki", "dti,freewater,noddi,dki",
+        # iFW (T1 D3): the same combinations with ifw last, the canonical stage order.
+        "dti,ifw", "dti,freewater,ifw", "dti,noddi,ifw", "dti,dki,ifw",
+        "dti,freewater,noddi,ifw", "dti,freewater,dki,ifw", "dti,noddi,dki,ifw", "dti,freewater,noddi,dki,ifw",
     ])] = "dti"
-    orchestrationDkiFitMethod: Annotated[str, Choice(["WLS", "OLS", "MKCURVE", "MKCURVE_MATLAB"])] = "WLS"
+    # Echo time (ms) for iFW as text; empty = not set (the stage then reads EchoTime from the DWI sidecar).
+    orchestrationIfwEchoTimeMs: str = ""
+    orchestrationDkiFitMethod: Annotated[str, Choice(["WLS", "OLS", "MKCURVE", "MKCURVE_MATLAB"])] = "MKCURVE"
     orchestrationRunFreeWater: bool = False
     orchestrationRunNoddi: bool = False
     orchestrationRunDki: bool = False
+    orchestrationRunIfw: bool = False
     batchMode: bool = False
     batchRoot: str = ""
     batchSize: int = 1
@@ -133,8 +139,10 @@ class SlicerDSpaceParameterNode:
     experimentJobs: Annotated[int, WithinRange(1, 8)] = 1
     experimentCliOptions: str = ""
     experimentVariants: str = '[{"name": "baseline", "args": []}]'
-    connectomeBackend: Annotated[str, Choice(["python", "mrtrix"])] = "python"
-    connectomeCompressMrtrixDense: bool = False
+    connectomeBackend: Annotated[str, Choice(["auto", "python", "mrtrix"])] = "auto"
+    # Three states (T-N1): unset = not forwarded (the auto backend then compresses on the MRtrix path),
+    # on = --compress-mrtrix-dense, off = --no-compress-mrtrix-dense.
+    connectomeCompressMrtrixDenseState: Annotated[str, Choice(["unset", "on", "off"])] = "unset"
     autoInstallPythonDependencies: bool = True
     targetSurface: bool = True
     targetSurfacePostprocess: bool = False
@@ -262,6 +270,7 @@ class SlicerDSpaceTest(ScriptedLoadableModuleTest):
             parameters = SlicerDSpaceParameterNode(raw)
             self.assertEqual(parameters.brainMaskBackend, 'pnl_cnn')
             self.assertEqual(parameters.brainMaskDevice, 'auto')
+            self.assertEqual(parameters.pnlMaskRoute, 'auto')
             self.assertEqual(parameters.orchestrationMicrostructureStages, 'dti')
             self.assertFalse(parameters.orchestrationRunFreeWater)
             self.assertFalse(parameters.orchestrationRunNoddi)
@@ -303,6 +312,7 @@ class SlicerDSpaceTest(ScriptedLoadableModuleTest):
             'inputDirectory': '/example/subject with spaces',
             'brainMaskBackend': 'provided',
             'brainMaskDevice': 'auto',
+            'pnlMaskRoute': 'native',
             'orchestrationMicrostructureStages': 'dti,freewater,noddi,dki',
             'orchestrationRunFreeWater': True,
             'orchestrationRunNoddi': True,

@@ -388,6 +388,17 @@ def main(argv: list[str] | None = None) -> int:
                        for subject in runnable_subjects[args.subject_limit:])
         runnable_subjects = selected
     resource_plan = None
+    if not resource_mode:
+        # W2b rule 4 (T1 D1): preprocessing with no PE direction blocks the cohort at plan time (the resource modes
+        # check inside plan_cohort).
+        from shared.cohort_planning import cohort_phase_encoding_blocks, cohort_phase_encoding_message
+        try:
+            blocks = cohort_phase_encoding_blocks(
+                runnable_subjects, forwarded_args, output_root=output_base if args.output_root else None)
+        except (SystemExit, ValueError, ImportError):
+            blocks = {}  # an unparsable option is reported by the subject command
+        if blocks:
+            parser.error(cohort_phase_encoding_message(blocks))
     if resource_mode:
         from shared.cohort_planning import plan_cohort
         try:
@@ -397,7 +408,7 @@ def main(argv: list[str] | None = None) -> int:
                 gpu_slots=args.batch_gpu_slots, adaptive=args.scheduler == 'adaptive',
                 resource_fraction=args.resource_budget,
                 history_path=args.resource_history or output_base / '00_batch_metadata/resource_history.json',
-                tuning_profile=args.compute_profile)
+                tuning_profile=args.compute_profile, output_root=output_base if args.output_root else None)
         except (ValueError, ImportError) as exc:
             parser.error(str(exc))
         args.jobs = resource_plan['jobs']
@@ -422,7 +433,8 @@ def main(argv: list[str] | None = None) -> int:
                     cpu_budget=resource_plan['cpu_budget'], memory_gb=resource_plan['memory_gb'],
                     stage_cpus=args.batch_stage_cpus, stage_memory_gb=args.batch_stage_memory_gb,
                     gpu_slots=args.batch_gpu_slots, adaptive=True, resource_fraction=args.resource_budget,
-                    history_path=resource_plan['history_path'], tuning_profile=profile)
+                    history_path=resource_plan['history_path'], tuning_profile=profile,
+                    output_root=output_base if args.output_root else None)
         print(f"[Batch] Resource plan: up to {args.jobs} subjects; "
               f"{resource_plan['cpu_budget']} CPU threads, {resource_plan['memory_gb']:.1f} GiB RAM; "
               f"{resource_plan['gpu_slots']} GPU-capable stage slot(s).", flush=True)
@@ -430,9 +442,12 @@ def main(argv: list[str] | None = None) -> int:
             forwarded_args += ['--max-parallel-models', '1']
         if not _command_option(forwarded_args, '--microstructure-free-water-n-jobs', ''):
             forwarded_args += ['--microstructure-free-water-n-jobs', '1']
-        for flag in ('--surface-cpu-threads', '--mrtrix-nthreads', '--preprocessing-eddy-threads'):
-            if not _command_option(forwarded_args, flag, ''):
-                forwarded_args += [flag, str(resource_plan['stage_cpus'])]
+        # S1.3: in adaptive mode the thread count of each stage follows its own CPU reservation
+        # (SLICERDSPACE_STAGE_CPUS), so the plan-wide default is not appended; the user's flags stay.
+        if args.scheduler != 'adaptive':
+            for flag in ('--surface-cpu-threads', '--mrtrix-nthreads', '--preprocessing-eddy-threads'):
+                if not _command_option(forwarded_args, flag, ''):
+                    forwarded_args += [flag, str(resource_plan['stage_cpus'])]
     else:
         args.jobs = args.jobs or 1
     subject_commands = [
@@ -481,6 +496,10 @@ def main(argv: list[str] | None = None) -> int:
         child_environment.update({key: str(resource_plan['stage_cpus']) for key in (
             'OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'MKL_NUM_THREADS',
             'ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS', 'MRTRIX_NTHREADS')})
+        if args.scheduler == 'adaptive':
+            # S1.3: a subject process starts with 1 BLAS/OpenMP thread, so an in-process pool cannot
+            # exceed a 1-CPU reservation; each admitted stage sets its own count.
+            child_environment.update({key: '1' for key in ('OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'MKL_NUM_THREADS')})
     failures = 0
     started = time.time()
     if subject_commands:

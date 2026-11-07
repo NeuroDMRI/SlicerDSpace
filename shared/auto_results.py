@@ -14,7 +14,7 @@ from shared.result_scene import result_candidates, result_file_suffix, record_qc
 DISPLAY_STREAMLINE_LIMIT = 30_000
 AUTOMATIC_VTK_MAX_BYTES = 32 * 1024 * 1024
 PER_PRODUCT_CAPS = {
-    "microstructure.dki": 9,
+    "microstructure.dki": 9, "microstructure.dti": 5,
     "microstructure": 4, "segmentation": 1, "parcellation": 1,
     "surface": 4, "tractography": 1, "saf": 1, "bundles": 6, "connectome": 4, "statistics": 2,
     "preprocessing": 2, "microstructure.dki": 9, "microstructure.mkcurve": 6,
@@ -185,6 +185,8 @@ def _role(candidate):
             return "categorical:mask"
         if key in {"b0", "mean_b0", "mean_b0_image", "nodif"}:
             return "scalar:b0"
+    if product == "microstructure.dti" and suffix == ".nrrd" and key == "dec":
+        return "vector:dec"  # sorts after the scalar roles, so it never displaces FA, MD, AD or RD
     if product.startswith("microstructure.") and suffix in {".nii", ".nii.gz", ".mgz"}:
         aliases = {"fa": "fa", "md": "md", "ad": "ad", "rd": "rd", "fwf": "fwf", "fw_fraction": "fwf",
                    "fw_fa": "fw_fa", "fw_tissue_fa": "fw_fa", "fw_md": "fw_md", "fw_tissue_md": "fw_md",

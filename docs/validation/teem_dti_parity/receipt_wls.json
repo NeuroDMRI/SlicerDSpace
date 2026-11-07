@@ -1,0 +1,30 @@
+{
+  "kind": "teem_tensor_estimation",
+  "method": "WLS",
+  "shift_negative_eigenvalues": false,
+  "threads": 16,
+  "voxels": 3658350,
+  "gradients": 288,
+  "max_b": 3010.0,
+  "failed_voxels": 0,
+  "baseline_cast_out_of_range": 0,
+  "teem_version": "1.12.0",
+  "teem_library": "/data04/chengjin/opt/Slicer-5.10.0-linux-amd64/lib/Teem-1.12.0/libteem.so.1",
+  "read_seconds": 37.047,
+  "fit_seconds": 391.676,
+  "total_seconds": 430.354,
+  "reference": "SlicerDMRI a40200b DWIToDTIEstimation / vtkTeemEstimateDiffusionTensor",
+  "scalars": {
+    "kind": "teem_tensor_scalars",
+    "operations": [
+      "FractionalAnisotropy",
+      "Trace",
+      "MeanDiffusivity",
+      "MinEigenvalue",
+      "MidEigenvalue",
+      "MaxEigenvalue"
+    ],
+    "threads": 16,
+    "seconds": 1.447
+  }
+}

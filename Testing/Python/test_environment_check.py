@@ -35,11 +35,11 @@ class EnvironmentCheckTests(unittest.TestCase):
                                'model_assets_dir': Path('/assets'), 'python_path_entries': (Path('/python'),),
                                'microstructure_run_noddi': True, 'microstructure_run_dki': True,
                                'dki_fit_method': 'MKCURVE', 'tractography_backend': 'csd_act,ukf'},
-                              repo_root=Path('/repo'), output_dir=Path('/reports'), loaded_modules=('dwitodtiestimation',))
+                              repo_root=Path('/repo'), output_dir=Path('/reports'), loaded_modules=('dwiconvert',))
         config = config_from_dict(json.loads(json.dumps(values, default=str)))
         self.assertEqual(config.model_assets_dir, Path('/assets'))
         self.assertEqual(config.python_path_entries, (Path('/python'),))
-        self.assertEqual(config.loaded_slicer_modules, ('dwitodtiestimation',))
+        self.assertEqual(config.loaded_slicer_modules, ('dwiconvert',))
         self.assertEqual(config.tractography_backend, 'csd_act,ukf')
         self.assertTrue(config.run_noddi and config.run_dki)
         self.assertFalse(config.run_free_water)

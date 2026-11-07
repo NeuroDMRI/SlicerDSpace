@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
-from shared.orchestrator import normalize_orchestrator_targets
+from shared.orchestrator import normalize_orchestrator_targets, orchestrator_closure
 from shared.topup_parameters import TopupParameters, topup_cli_args, topup_orchestrator_kwargs
 from shared.user_config import canonical_microstructure_stages
 
@@ -27,7 +28,6 @@ class ProductTargetFlags:
 
 @dataclass(frozen=True)
 class BackendSelection:
-    preprocessing: str = "dipy"
     tractography: str = "csd_act"
     bundles: str = "wmql"
     microstructure_stages: str = "dti"
@@ -58,19 +58,27 @@ class RunSelection:
     ddseg_device: str
     surface_device: str
     connectome_backend: str
-    connectome_compress_mrtrix_dense: bool
-    preprocessing_backend: str = "dipy"
+    connectome_compress_mrtrix_dense: Optional[bool]
     wma_input_tractography_text: str = ""
     topup: TopupParameters = TopupParameters()
     brain_mask_backend: str = "pnl_cnn"
     brain_mask_device: str = "auto"
+    pnl_mask_route: str = "auto"
     microstructure_dki: bool = False
-    dki_fit_method: str = "WLS"
+    microstructure_ifw: bool = False
+    ifw_echo_time_ms: Optional[float] = None
+    dki_fit_method: str = "MKCURVE"
     wmql_query_preset: str = "official"
     wmql_query_selection: str = ""
     wma_atlas: str = "org"
     max_parallel_models: int = 1
     ukf_parameters_text: str = '{}'
+    # Targets the user ticked, before the prerequisite closure; the CLI recomputes the closure
+    # from these so the run manifest can record which targets were added automatically.
+    requested_targets: tuple[str, ...] = ()
+    # Algorithms after the closure (WMA adds UKF). Only used to ship UKF options; the CLI and the
+    # orchestrator get the user's ``tractography_backend`` and recompute the closure with provenance.
+    closure_tractography_backend: str = ""
 
 
 @dataclass(frozen=True)
@@ -162,6 +170,37 @@ def microstructure_optional_stage_flags(
     return "freewater" in stages, "noddi" in stages, "dki" in stages
 
 
+def microstructure_ifw_enabled(stages_text: str, *, legacy_ifw: bool = False) -> bool:
+    """True when the iFW stage is selected (T-C2). The three-flag API above keeps its shape."""
+
+    text = (stages_text or "").strip().lower()
+    if not text:
+        return bool(legacy_ifw)
+    return "ifw" in canonical_microstructure_stages(text)
+
+
+def compress_mrtrix_dense_value(state: Any) -> Optional[bool]:
+    """Three GUI states to the run value (T-N1): "on" -> True, "off" -> False, anything else "unset" -> None."""
+
+    text = str(state or "unset").strip().lower()
+    return {"on": True, "off": False}.get(text)
+
+
+def parse_ifw_echo_time_ms(text: Any) -> Optional[float]:
+    """Echo time (ms) from the GUI field: empty is unset (None); anything else must be a number >= 0."""
+
+    value = str(text if text is not None else "").strip()
+    if not value:
+        return None
+    try:
+        number = float(value)
+    except ValueError:
+        raise ValueError("Echo time (ms) must be a number, for example 89.5") from None
+    if not math.isfinite(number) or number < 0:
+        raise ValueError("Echo time (ms) must be zero or a positive number")
+    return number
+
+
 def selected_workflows(flags: ProductTargetFlags) -> list[str]:
     """Return human-readable selected workflow names."""
 
@@ -208,7 +247,7 @@ def selected_orchestrator_targets(flags: ProductTargetFlags) -> tuple[str, ...]:
     return tuple(targets)
 
 
-def selected_product_targets(
+def selected_closure(
     flags: ProductTargetFlags,
     *,
     tractography_backend: str,
@@ -216,8 +255,13 @@ def selected_product_targets(
     microstructure_freewater: bool,
     microstructure_noddi: bool,
     microstructure_dki: bool = False,
-) -> tuple[str, ...]:
-    """Return normalized product targets after backend expansion."""
+    provided_tractography: tuple[str, ...] = (),
+    microstructure_ifw: bool = False,
+):
+    """Return the prerequisite closure (C1) of the ticked targets.
+
+    ``provided_tractography`` names targets whose tractogram the user supplied as a file (K2).
+    """
 
     product_targets = ["validation"]
     if flags.preprocessing:
@@ -238,14 +282,41 @@ def selected_product_targets(
         product_targets.append("bundles")
     if flags.connectome:
         product_targets.append("connectome")
-    return normalize_orchestrator_targets(
+    return orchestrator_closure(
         tuple(product_targets),
         tractography_backend=(tractography_backend or "csd_act").strip() or "csd_act",
         bundle_backend=(bundle_backend or "wmql").strip() or "wmql",
         microstructure_run_free_water=microstructure_freewater,
         microstructure_run_noddi=microstructure_noddi,
         microstructure_run_dki=microstructure_dki,
+        microstructure_run_ifw=microstructure_ifw,
+        provided_tractography=tuple(provided_tractography),
     )
+
+
+def selected_product_targets(
+    flags: ProductTargetFlags,
+    *,
+    tractography_backend: str,
+    bundle_backend: str,
+    microstructure_freewater: bool,
+    microstructure_noddi: bool,
+    microstructure_dki: bool = False,
+    provided_tractography: tuple[str, ...] = (),
+    microstructure_ifw: bool = False,
+) -> tuple[str, ...]:
+    """Return normalized product targets after backend expansion and prerequisite closure."""
+
+    return selected_closure(
+        flags,
+        tractography_backend=tractography_backend,
+        bundle_backend=bundle_backend,
+        microstructure_freewater=microstructure_freewater,
+        microstructure_noddi=microstructure_noddi,
+        microstructure_dki=microstructure_dki,
+        microstructure_ifw=microstructure_ifw,
+        provided_tractography=provided_tractography,
+    ).targets
 
 
 def selected_environment_targets(product_targets: tuple[str, ...]) -> tuple[str, ...]:
@@ -262,8 +333,7 @@ def selected_products_summary(targets: tuple[str, ...], backends: BackendSelecti
     micro_stages = canonical_microstructure_stages(backends.microstructure_stages)
     summary = (
         f"Selected targets: {target_text}\n"
-        f"Backends: preprocessing={(backends.preprocessing or 'dipy').strip() or 'dipy'}, "
-        f"tractography={(backends.tractography or 'csd_act').strip() or 'csd_act'}, "
+        f"Backends: tractography={(backends.tractography or 'csd_act').strip() or 'csd_act'}, "
         f"bundles={(backends.bundles or 'wmql').strip() or 'wmql'}, "
         f"microstructure={','.join(micro_stages)}, "
         f"connectome={(backends.connectome or 'python').strip() or 'python'}"
@@ -430,19 +500,22 @@ def build_single_subject_run_kwargs(
         "subject_root": Path(selection.subject_root_text).expanduser(),
         "output_root": Path(selection.output_root_text).expanduser() if selection.output_root_text else None,
         "targets": selection.selected_targets,
+        "requested_targets": selection.requested_targets,
         "run_name": selection.run_name,
         "tractography_backend": selection.tractography_backend,
         "bundle_backend": selection.bundle_backend,
         "wmql_query_preset": selection.wmql_query_preset,
         "wmql_query_selection": _wmql_selection(selection.wmql_query_selection, selection.wmql_query_preset),
         "max_parallel_models": selection.max_parallel_models,
-        "preprocessing_backend": selection.preprocessing_backend,
         "brain_mask_backend": selection.brain_mask_backend,
         "brain_mask_device": selection.brain_mask_device,
+        "pnl_mask_route": selection.pnl_mask_route,
         "resume": True,
         "microstructure_run_free_water": selection.microstructure_freewater,
         "microstructure_run_noddi": selection.microstructure_noddi,
         "microstructure_run_dki": selection.microstructure_dki,
+        "microstructure_run_ifw": selection.microstructure_ifw,
+        "microstructure_ifw_echo_time_ms": selection.ifw_echo_time_ms,
         "microstructure_dki_fit_method": selection.dki_fit_method,
         "microstructure_dki_matlab_executable": external_paths.get("dki_matlab_executable"),
         "microstructure_dki_mkcurve_root": external_paths.get("dki_mkcurve_root"),
@@ -461,7 +534,6 @@ def build_single_subject_run_kwargs(
         "pnl_mask_script": external_paths.get("pnl_mask_script"),
         "pnl_mask_model_dir": external_paths.get("pnl_mask_model_dir"),
         "pnl_mask_ants_bin_dir": external_paths.get("pnl_mask_ants_bin_dir"),
-        "synthstrip_python": external_paths.get("synthstrip_python"),
         "tract_querier_root": external_paths.get("tract_querier_root"),
         "wma_root": external_paths.get("wma_root"),
         "wma_atlas_dir": external_paths.get("wma_atlas_dir"),
@@ -492,6 +564,7 @@ def build_batch_run_kwargs(selection: RunSelection, *, batch_root: Path) -> dict
         "subject_root": batch_root,
         "output_root": Path(selection.output_root_text).expanduser() if selection.output_root_text else None,
         "targets": selection.selected_targets,
+        "requested_targets": selection.requested_targets,
         "run_name": selection.run_name,
         "tractography_backend": selection.tractography_backend,
         "bundle_backend": selection.bundle_backend,
@@ -499,13 +572,15 @@ def build_batch_run_kwargs(selection: RunSelection, *, batch_root: Path) -> dict
         "wma_atlas": selection.wma_atlas,
         "wmql_query_selection": _wmql_selection(selection.wmql_query_selection, selection.wmql_query_preset),
         "max_parallel_models": selection.max_parallel_models,
-        "preprocessing_backend": selection.preprocessing_backend,
         "brain_mask_backend": selection.brain_mask_backend,
         "brain_mask_device": selection.brain_mask_device,
+        "pnl_mask_route": selection.pnl_mask_route,
         "resume": True,
         "microstructure_run_free_water": selection.microstructure_freewater,
         "microstructure_run_noddi": selection.microstructure_noddi,
         "microstructure_run_dki": selection.microstructure_dki,
+        "microstructure_run_ifw": selection.microstructure_ifw,
+        "microstructure_ifw_echo_time_ms": selection.ifw_echo_time_ms,
         "microstructure_dki_fit_method": selection.dki_fit_method,
         "select_streamlines": max(1, int(selection.select_streamlines)),
         "ddseg_device": selection.ddseg_device,
@@ -712,7 +787,6 @@ EXTERNAL_PATH_CLI_FLAGS: tuple[tuple[str, str], ...] = (
     ("pnl_mask_script", "--pnl-mask-script"),
     ("pnl_mask_model_dir", "--pnl-mask-model-dir"),
     ("pnl_mask_ants_bin_dir", "--pnl-mask-ants-bin-dir"),
-    ("synthstrip_python", "--synthstrip-python"),
     ("dki_matlab_executable", "--dki-matlab-executable"),
     ("dki_mkcurve_root", "--dki-mkcurve-root"),
     ("tract_querier_root", "--tract-querier-root"),
@@ -758,7 +832,19 @@ def microstructure_stages_arg(common_run_kwargs: dict[str, Any]) -> str:
         stages.append("noddi")
     if common_run_kwargs.get("microstructure_run_dki"):
         stages.append("dki")
+    if common_run_kwargs.get("microstructure_run_ifw"):
+        stages.append("ifw")
     return ",".join(stages)
+
+
+def _append_ifw_args(args, common_run_kwargs):
+    """Forward the iFW echo time (ms) and the researcher T2 values; none is added when unset."""
+    for key, flag in (("microstructure_ifw_echo_time_ms", "--ifw-echo-time-ms"),
+                      ("microstructure_ifw_t2_gm_ms", "--ifw-t2-gm-ms"),
+                      ("microstructure_ifw_t2_csf_ms", "--ifw-t2-csf-ms")):
+        value = common_run_kwargs.get(key)
+        if value is not None:
+            args.extend([flag, str(value)])
 
 
 def build_background_cli_args(
@@ -766,7 +852,6 @@ def build_background_cli_args(
     external_paths: dict[str, Optional[Path]],
     *,
     repo_root: Path,
-    preprocessing_backend: str = "dipy",
 ) -> list[str]:
     """Build the Slicer launcher args for one subject background execution."""
 
@@ -785,15 +870,15 @@ def build_background_cli_args(
         "--run-name",
         str(common_run_kwargs["run_name"]),
         "--targets",
-        ",".join(common_run_kwargs["targets"]),
+        ",".join(common_run_kwargs.get("requested_targets") or common_run_kwargs["targets"]),
         "--execute",
         "--print-manifest-only",
-        "--preprocessing-backend",
-        (preprocessing_backend or "dipy").strip() or "dipy",
         "--brain-mask-backend",
         str(common_run_kwargs.get("brain_mask_backend", "pnl_cnn")),
         "--brain-mask-device",
         str(common_run_kwargs.get("brain_mask_device", "auto")),
+        "--pnl-mask-route",
+        str(common_run_kwargs.get("pnl_mask_route", "auto")),
         "--tractography-backend",
         str(common_run_kwargs["tractography_backend"]),
         "--bundle-backend",
@@ -818,9 +903,9 @@ def build_background_cli_args(
         args.extend(["--output-root", _path_text(output_root)])
     _append_ukf_args(args, common_run_kwargs)
     args.extend(["--microstructure-stages", microstructure_stages_arg(common_run_kwargs)])
-    args.extend(["--dki-fit-method", str(common_run_kwargs.get("microstructure_dki_fit_method", "WLS"))])
-    if common_run_kwargs.get("connectome_compress_mrtrix_dense"):
-        args.append("--compress-mrtrix-dense")
+    args.extend(["--dki-fit-method", str(common_run_kwargs.get("microstructure_dki_fit_method", "MKCURVE"))])
+    _append_compress_arg(args, common_run_kwargs)
+    _append_ifw_args(args, common_run_kwargs)
     wma_input = common_run_kwargs.get("wma_input_tractography")
     if wma_input is not None:
         args.extend(["--wma-input-tractography", _path_text(wma_input)])
@@ -837,7 +922,6 @@ def build_batch_background_cli_args(
     batch_root: Path,
     batch_size: int,
     arrange_inputs: str,
-    preprocessing_backend: str = "dipy",
 ) -> list[str]:
     """Build the Slicer launcher args for batch background execution."""
 
@@ -857,13 +941,13 @@ def build_batch_background_cli_args(
         arrange_inputs,
         "--execute",
         "--targets",
-        ",".join(common_run_kwargs["targets"]),
-        "--preprocessing-backend",
-        (preprocessing_backend or "dipy").strip() or "dipy",
+        ",".join(common_run_kwargs.get("requested_targets") or common_run_kwargs["targets"]),
         "--brain-mask-backend",
         str(common_run_kwargs.get("brain_mask_backend", "pnl_cnn")),
         "--brain-mask-device",
         str(common_run_kwargs.get("brain_mask_device", "auto")),
+        "--pnl-mask-route",
+        str(common_run_kwargs.get("pnl_mask_route", "auto")),
         "--tractography-backend",
         str(common_run_kwargs["tractography_backend"]),
         "--bundle-backend",
@@ -888,9 +972,9 @@ def build_batch_background_cli_args(
         args.extend(["--output-root", _path_text(output_root)])
     _append_ukf_args(args, common_run_kwargs)
     args.extend(["--microstructure-stages", microstructure_stages_arg(common_run_kwargs)])
-    args.extend(["--dki-fit-method", str(common_run_kwargs.get("microstructure_dki_fit_method", "WLS"))])
-    if common_run_kwargs.get("connectome_compress_mrtrix_dense"):
-        args.append("--compress-mrtrix-dense")
+    args.extend(["--dki-fit-method", str(common_run_kwargs.get("microstructure_dki_fit_method", "MKCURVE"))])
+    _append_compress_arg(args, common_run_kwargs)
+    _append_ifw_args(args, common_run_kwargs)
     # Forwarded unchanged to every subject's run_subject_pipeline.py call.
     args.extend(topup_cli_args(topup_parameters_from_run_kwargs(common_run_kwargs)))
     _append_optional_path_args(args, external_paths)
@@ -907,7 +991,7 @@ def _wmql_selection(value, preset='official'):
 
 def _ukf_run_options(selection):
     from shared.algorithm_selection import contains_tracking
-    if not contains_tracking(selection.tractography_backend, 'ukf'):
+    if not contains_tracking(selection.closure_tractography_backend or selection.tractography_backend, 'ukf'):
         return {}
     from tractography.ukf import parameters, resolve_executable
     from dataclasses import asdict
@@ -923,9 +1007,17 @@ def _ukf_run_options(selection):
     return dict(ukf_parameters=options, ukf_executable=binary, dwiconvert_executable=converter)
 
 
+
+def _append_compress_arg(args, common_run_kwargs):
+    """None = not set (nothing is passed); True and False are passed explicitly."""
+    value = common_run_kwargs.get("connectome_compress_mrtrix_dense")
+    if value is not None:
+        args.append("--compress-mrtrix-dense" if value else "--no-compress-mrtrix-dense")
+
+
 def _append_ukf_args(args, kwargs):
     from shared.algorithm_selection import contains_tracking
-    if contains_tracking(kwargs.get('tractography_backend'), 'ukf'):
+    if contains_tracking(kwargs.get('tractography_backend'), 'ukf') or 'ukf_parameters' in kwargs:
         args.extend(('--ukf-parameters', json.dumps(kwargs.get('ukf_parameters', {}), sort_keys=True)))
         if kwargs.get('ukf_executable'):
             args.extend(('--ukf-executable', str(kwargs['ukf_executable'])))

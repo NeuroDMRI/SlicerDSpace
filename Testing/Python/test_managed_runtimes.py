@@ -13,7 +13,17 @@ from shared import managed_runtimes as runtime
 from shared.ui_managed_runtimes import apply_runtime_result, asset_profiles_for_items
 
 
+ORIGINAL_CONDA_SUBDIR = runtime.conda_subdir
+
+
 class ManagedRuntimeTests(unittest.TestCase):
+    def setUp(self):
+        # The suite runs on any host; these contracts are the Linux x86_64 route.
+        for patcher in (patch.object(runtime.platform, 'system', return_value='Linux'),
+                        patch.object(runtime, 'host_machine', return_value='x86_64')):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
     def test_pnl_native_image_test_must_succeed_before_a_ready_receipt(self):
         with tempfile.TemporaryDirectory() as tmp:
             prefix = Path(tmp)
@@ -25,7 +35,7 @@ class ManagedRuntimeTests(unittest.TestCase):
                 command.chmod(0o755)
             for package in runtime.PROFILES['pnl_cnn']['packages']:
                 name, version = package.split('=')[:2]
-                (prefix / 'conda-meta' / (name + '.json')).write_text(json.dumps(dict(name=name, version=version)))
+                (prefix / 'conda-meta' / (name + '.json')).write_text(json.dumps(dict(name=name, version=version, subdir='linux-64')))
             with patch.object(runtime.subprocess, 'run') as run:
                 result = runtime.verify_prefix('pnl_cnn', prefix)
                 self.assertEqual(result['functional_checks'], ['ants:synthetic_image_roundtrip'])
@@ -65,9 +75,7 @@ class ManagedRuntimeTests(unittest.TestCase):
             self.assertFalse(root.exists())
 
     def test_only_selected_gui_routes_install_external_tools(self):
-        node = SimpleNamespace(targetPreprocessing=True, preprocessingBackend="dipy", brainMaskBackend="provided")
-        self.assertEqual(runtime.selected_profiles(node, True), ())
-        node.preprocessingBackend = "mrtrix_fsl"
+        node = SimpleNamespace(targetPreprocessing=True, brainMaskBackend="provided")
         self.assertEqual(runtime.selected_profiles(node, True), ("mrtrix", "fsl_cuda"))
         self.assertEqual(runtime.selected_profiles(node, False), ("mrtrix", "fsl_cpu"))
         node.targetPreprocessing = False
@@ -150,7 +158,8 @@ class ManagedRuntimeTests(unittest.TestCase):
         self.assertEqual(asset_profiles_for_items((SimpleNamespace(targets=("surface", "parcellation")),)), ("surface", "parcellation"))
 
     def test_gui_saves_verified_paths_and_invalidates_environment_cache(self):
-        with tempfile.TemporaryDirectory() as temp:
+        with tempfile.TemporaryDirectory() as temp, \
+                patch.dict("os.environ", {"SLICERDSPACE_USER_CONFIG": str(Path(temp) / "user_config.json")}):
             owner = Mock(_environmentPathLineEdits={"mrtrix_bin_dir": Mock()})
             apply_runtime_result(owner, {"kind": "slicerdsurfer_runtime_setup", "status": "completed",
                                          "external_dependencies": {"mrtrix_bin_dir": temp}})
@@ -162,13 +171,13 @@ class ManagedRuntimeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp, patch.object(runtime.shutil, "which", return_value=None), \
                 patch.object(runtime, "file_hash", return_value=runtime.MINIFORGE_SHA256):
             root = Path(temp)
-            bootstrap = root / "miniforge-26.7.2-0"
+            bootstrap = root / "miniforge-26.7.2-0-linux-64"
             bootstrap.mkdir()
             (root / "Miniforge3-26.7.2-0-Linux-x86_64.sh").write_text("test fixture, not executed")
             with self.assertRaisesRegex(RuntimeError, "unmanaged bootstrap"):
                 runtime.ensure_conda(root)
-            (root / "miniforge-26.7.2-0.bootstrap.json").write_text(json.dumps(
-                {"kind": "slicerdsurfer_miniforge_bootstrap", "prefix": str(bootstrap)}))
+            (root / "miniforge-26.7.2-0-linux-64.bootstrap.json").write_text(json.dumps(
+                {"kind": "slicerdsurfer_miniforge_bootstrap", "prefix": str(bootstrap), "subdir": "linux-64"}))
 
             def installed(argv):
                 self.assertIn("-u", argv)

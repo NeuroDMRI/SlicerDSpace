@@ -18,7 +18,7 @@ def _path_or_none(value: str | None) -> Path | None:
     return Path(value).expanduser().resolve()
 
 
-def main() -> None:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run DDSeg inside PythonSlicer.")
     parser.add_argument("--mask", required=True, help="Path to nodif_brain_mask.nii.gz")
     parser.add_argument("--output", required=True, help="Output directory")
@@ -31,8 +31,12 @@ def main() -> None:
     parser.add_argument("--bval", help="bvals path")
     parser.add_argument("--bvec", help="bvecs path")
     parser.add_argument("--slicer-base", help="Slicer installation root")
-    parser.add_argument("--slicer-ext", help="SlicerDMRI extension root")
-    args = parser.parse_args()
+    parser.add_argument("--slicer-ext", help="deprecated; no longer needed")
+    return parser
+
+
+def main() -> None:
+    args = build_parser().parse_args()
 
     cfg = DDSegConfig(
         input_mask_nii=Path(args.mask).expanduser().resolve(),

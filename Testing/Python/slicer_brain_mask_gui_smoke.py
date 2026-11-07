@@ -13,7 +13,7 @@ import slicer
 
 ROOT = Path(os.environ["SLICERDSPACE_SMOKE_ROOT"]).resolve()
 PHASE = os.environ.get("SLICERDSPACE_BRAIN_MASK_SMOKE_PHASE", "select")
-BACKENDS = ("pnl_cnn", "synthstrip", "mrtrix", "provided")
+BACKENDS = ("pnl_cnn", "provided")
 CHECKS = []
 
 
@@ -242,8 +242,8 @@ def check():
             require(node.brainMaskBackend == backend, "UI switch updates node: " + backend)
             owner._save_common_user_settings()
             verify_saved(owner, backend)
-        node.brainMaskBackend = "synthstrip"
-        require(str(combo.itemData(combo.currentIndex)) == "synthstrip", "Node change syncs selector by data")
+        node.brainMaskBackend = "pnl_cnn"
+        require(str(combo.itemData(combo.currentIndex)) == "pnl_cnn", "Node change syncs selector by data")
         owner._save_common_user_settings()
         for key in ("pnl_mask_python", "pnl_mask_script", "pnl_mask_model_dir", "pnl_mask_ants_bin_dir", "dki_matlab_executable", "dki_mkcurve_root"):
             path = str(ROOT / "external-config-only" / key)

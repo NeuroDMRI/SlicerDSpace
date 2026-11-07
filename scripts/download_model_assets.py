@@ -461,12 +461,12 @@ def model_asset_setup_guidance(
     default_root = configured_model_assets_root()
     target_root = asset_root.expanduser().resolve() if asset_root is not None else default_root
     command = (
-        "python3 scripts/download_model_assets.py "
+        "PythonSlicer scripts/download_model_assets.py "
         f"--profile {plan.profile} --asset-root {target_root.as_posix()} "
         f"--source url --source-id {preferred_source}"
     )
     verify_command = (
-        "python3 scripts/download_model_assets.py "
+        "PythonSlicer scripts/download_model_assets.py "
         f"--profile {plan.profile} --asset-root {target_root.as_posix()} --verify-only"
     )
     return {

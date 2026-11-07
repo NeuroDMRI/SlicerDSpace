@@ -224,7 +224,7 @@ sub-01/
 
 | 部分 | 默认 | 其他选项 |
 | --- | --- | --- |
-| DWI 预处理（仅在勾选时） | 唯一路线：DIPY MP-PCA 去噪、DIPY Gibbs 去除、通过 `dwifslpreproc` 运行 FSL eddy/topup（需要 MRtrix3、FSL 和 FSL 许可；没有 FSL 构建的平台不提供） | `--preprocessing-skip-gibbs` 跳过 Gibbs 去除；路线、去噪方法和跳过运动校正的选项已移除 |
+| DWI 预处理（仅在勾选时） | 唯一路线：DIPY MP-PCA 去噪、DIPY Gibbs 去除、通过 `dwifslpreproc` 运行 FSL eddy/topup（需要 MRtrix3、FSL 和 FSL 许可；没有 FSL 构建的平台不提供）；需要相位编码方向，手动输入或取自 `input/dwi.json`（大多数轴位临床 DWI 为 AP） | `--preprocessing-skip-gibbs` 跳过 Gibbs 去除；路线、去噪方法和跳过运动校正的选项已移除 |
 | 缺失脑掩膜 | PNL diffusion CNN；有效的已有掩膜直接复用 | 仅用已有掩膜（`provided`）；SynthStrip、MRtrix、DIPY 掩膜已移除 |
 | 微结构 | DTI | 加选 Free-water、NODDI、DKI、iFW（iFW 需要回波时间）；DKI 默认使用 Python MK-Curve，也可选 WLS/OLS |
 | 纤维追踪 | MRtrix3 CSD/ACT | DTI 确定性追踪、UKF、SAF |

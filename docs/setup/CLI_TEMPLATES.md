@@ -136,6 +136,14 @@ licence on every OS. A platform with no FSL build (for example Linux aarch64) do
 import preprocessed data instead. `--preprocessing-skip-gibbs` is the only way to leave a step out.
 The old `--preprocessing-backend`, `--preprocessing-dipy-denoise-method` and `--preprocessing-skip-motion`
 options were removed (W2a); each fails and names the one route.
+Every preprocessing run needs a phase-encoding direction. The command takes it from
+`--preprocessing-phase-encoding-direction` (AP, PA, LR, RL, IS, SI, or a NIfTI axis code
+such as `j-`), otherwise from `PhaseEncodingDirection` in `input/dwi.json`. With neither,
+`--plan` and `--execute` stop with exit code 2 and the message "Phase-encoding direction
+needed: choose AP, PA, LR, RL, IS or SI in Preprocessing (most axial clinical DWI: AP)".
+The readout time comes from `--preprocessing-readout-time`, otherwise from `TotalReadoutTime`
+in the sidecar; if both are missing, dwifslpreproc uses 0.1 s and the record says
+`readout_assumed`.
 Replace `j-`, `0.05` and the reverse-PE image with the actual protocol; they are
 examples, not universal defaults:
 

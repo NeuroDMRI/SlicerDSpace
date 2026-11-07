@@ -484,6 +484,8 @@ PythonSlicer run_subject_pipeline.py \
   --preprocessing-eddy-threads 8
 ```
 
+相位编码方向是必需的：先取 `--preprocessing-phase-encoding-direction`，否则取 `input/dwi.json` 的 `PhaseEncodingDirection`（按图像方向换算为 AP、PA、LR、RL、IS、SI）；两者都没有时，运行被阻止，不会猜测（大多数轴位临床 DWI 为 AP）。读出时间先取用户值，再取 sidecar 的 `TotalReadoutTime`；都没有时 dwifslpreproc 使用 0.1 s，并记为 `readout_assumed`。
+
 未指定 `--preprocessing-eddy-threads` 时，CPU eddy 使用当前进程可用 CPU
 数量，上限为 8。若 `dwifslpreproc` 报告 diffusion-direction sampling strongly
 asymmetric，可按其建议添加 `--preprocessing-eddy-slm linear`；不要在没有该

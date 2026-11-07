@@ -55,6 +55,21 @@ arguments for `--doctor`, `--plan` and the authorized `--execute` run. Preserve
 the selected method when dependencies or acquisition checks fail; explain the
 specific blocker instead of substituting a method or relaxing QC thresholds.
 
+## Phase-Encoding Direction For Preprocessing
+
+Preprocessing needs the phase-encoding direction of the scan. The program takes
+it from the value the user types (AP, PA, LR, RL, IS or SI), otherwise from
+`PhaseEncodingDirection` in `input/dwi.json`. It never guesses. With neither
+value, `--plan` and `--execute` stop with exit code 2 and the message
+"Phase-encoding direction needed: choose AP, PA, LR, RL, IS or SI in
+Preprocessing (most axial clinical DWI: AP)". Then ask the user for the value
+and offer AP as the usual choice for axial clinical DWI; do not pick one on the
+user's behalf and do not run preprocessing without it. The readout time comes
+from the user, then from `TotalReadoutTime` in the sidecar; if both are
+missing, the run uses 0.1 s and records `readout_assumed`. Report the values and
+their sources from the result, and report any warning about a user value that
+differs from the sidecar.
+
 ## Algorithm Code Templates
 
 Use [references/shell_templates.md](references/shell_templates.md) for the full

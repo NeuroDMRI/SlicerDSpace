@@ -234,8 +234,9 @@ In SlicerDSpace, set the subject ID and subject root, then run `Check
 environment dependencies`. If a stage is still blocked, include the generated
 environment report and install plan when reporting the issue.
 
-For preprocessing (DIPY MP-PCA, DIPY Gibbs removal, then FSL eddy/topup through `dwifslpreproc`), provide the real phase-encoding direction and
-total readout time from the acquisition metadata. Susceptibility correction
+For preprocessing (DIPY MP-PCA, DIPY Gibbs removal, then FSL eddy/topup through `dwifslpreproc`), provide the real phase-encoding direction (needed; the run is blocked without it) and
+the total readout time from the acquisition metadata. Both can come from `input/dwi.json`;
+a direction you type wins over the sidecar. Most axial clinical DWI is AP. Susceptibility correction
 with topup additionally requires the subject's reverse-phase spin-echo b0 data.
 If those acquisition files are absent, `-rpe_none` can exercise Eddy but cannot
 replace a scientifically valid topup correction; do not guess these values for

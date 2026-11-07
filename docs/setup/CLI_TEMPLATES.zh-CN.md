@@ -120,6 +120,8 @@ pipeline mask_pnl --targets validation --brain-mask-backend pnl_cnn \
 预处理只有一条路线：DIPY MP-PCA 去噪、DIPY Gibbs 去除，然后通过 MRtrix3 `dwifslpreproc` 运行 FSL eddy 和 topup。
 所有系统都需要 MRtrix3、FSL（eddy、topup）和 FSL 许可。没有 FSL 构建的平台（例如 Linux aarch64）不提供该目标，请导入已预处理的数据。
 `--preprocessing-skip-gibbs` 是唯一可以跳过某一步的选项。旧的 `--preprocessing-backend`、`--preprocessing-dipy-denoise-method` 和 `--preprocessing-skip-motion` 已移除（W2a）；使用它们会失败，并提示这条唯一路线。
+每次预处理都需要相位编码方向。命令先取 `--preprocessing-phase-encoding-direction`（AP、PA、LR、RL、IS、SI，或 `j-` 这类 NIfTI 轴代码），否则取 `input/dwi.json` 中的 `PhaseEncodingDirection`。两者都没有时，`--plan` 和 `--execute` 以退出码 2 停止，并提示 "Phase-encoding direction needed: choose AP, PA, LR, RL, IS or SI in Preprocessing (most axial clinical DWI: AP)"。
+读出时间先取 `--preprocessing-readout-time`，否则取 sidecar 的 `TotalReadoutTime`；两者都没有时，dwifslpreproc 使用 0.1 s，记录中标为 `readout_assumed`。
 下面的 `j-`、`0.05` 和反向相位编码 b0 仅为示例，必须按采集协议替换。
 
 <!-- cli-template: preproc-fsl -->

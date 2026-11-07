@@ -500,7 +500,9 @@ def build_run_record(manifest_path: Path) -> dict:
                      "packages": _package_versions()},
         "assets": _assets(effective),
         # `accepted_licences` is what the manifest holds. B3 (5): the setup step (T2 B7) writes the acceptances (id,
-        # licence-file SHA-256, time) into the user config; the record lists them as `licence_acceptances`.
+        # version, time) into the user config; the record lists them as `licence_acceptances`. The version is the
+        # SHA-256 of the local licence file; for the Python package group it is the SHA-256 of the (package, licence)
+        # list; for a licence with no local file it is the SHA-256 of its URL (shared/setup_components.py).
         "accepted_licences": effective.get("accepted_licences", []),
         "licence_acceptances": _licence_acceptances(),
         "qc_summary": _qc_summary(manifest),

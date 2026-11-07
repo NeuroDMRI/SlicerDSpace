@@ -114,13 +114,6 @@ FAKE_COMMAND = textwrap.dedent(
         Path(parsed.record).write_text(json.dumps({
             "requested": parsed.device, "resolved": "cpu", "framework": "pytorch", "route": "native-sitk",
             "status": "completed", "threads": 1, "phase_seconds": {"registration": 0.0}}), encoding="utf-8")
-    elif MODE == "mrtrix":
-        assert len(args) == 6 and args[2] == "-fslgrad" and args[5] == "-force"
-        source, candidate = Path(args[0]), Path(args[1])
-        assert Path(args[3]).name == "bvecs" and Path(args[4]).name == "bvals"
-    else:
-        assert len(args) == 4 and args[0] == "-i" and args[2] == "-m"
-        source, candidate = Path(args[1]), Path(args[3])
     image = nib.load(str(source))
     record.update({"source": str(source), "shape": list(image.shape),
                    "affine": image.affine.tolist(), "data": np.asarray(image.dataobj).tolist(),
@@ -166,17 +159,13 @@ def write_fake_command(tool: Path, mode: str, *, behavior: str = "valid") -> Pat
     return tool
 
 
-def write_fake_mrtrix(bin_dir: Path, *, behavior: str = "valid") -> Path:
-    return write_fake_command(bin_dir / "dwi2mask", "mrtrix", behavior=behavior)
-
-
 def fake_pythonslicer(root: Path) -> Path:
     return root / "Slicer with spaces" / "bin" / "PythonSlicer"
 
 
 def fake_pnl_models(root: Path) -> Path:
     models = root / "PNL models with spaces"
-    models.mkdir(parents=True)
+    models.mkdir(parents=True, exist_ok=True)
     (models / "weights.json").write_text("{}\n", encoding="ascii")
     save_nifti(models / "IITmean_b0_256.nii.gz", np.ones(SHAPE, dtype=np.float32))
     for view in ("sagittal", "coronal", "axial"):
@@ -219,8 +208,7 @@ class BrainMaskBackendsTest(unittest.TestCase):
         self.bvecs = self.inputs / "bvecs"
         self.output = self.inputs / "nodif_brain_mask.nii.gz"
         self.manifest = self.inputs / "nodif_brain_mask.manifest.json"
-        self.mrtrix = write_fake_mrtrix(self.root / "MRtrix tools with spaces")
-        self.mrtrix_config = BrainMaskConfig(backend="mrtrix", mrtrix_bin_dir=self.mrtrix.parent)
+        self._pnl_config = None
         # The fake PythonSlicer exists only after fake_pnl_config(); before that no Slicer Python is found.
         self.pythonslicer = fake_pythonslicer(self.root)
         resolver = patch.object(brain_mask, "_pnl_native_python",
@@ -232,14 +220,21 @@ class BrainMaskBackendsTest(unittest.TestCase):
         system.start()
         self.addCleanup(system.stop)
 
+    @property
+    def pnl_config(self) -> BrainMaskConfig:
+        """W5: the one generating backend, pinned to the native route with the fake PythonSlicer."""
+        if self._pnl_config is None:
+            self._pnl_config = fake_pnl_config(self.root)
+        return self._pnl_config
+
     def generate(self, config: BrainMaskConfig | None = None, **kwargs):
         return generate_brain_mask(
             self.dwi, self.bvals, self.bvecs, self.output,
-            config=config if config is not None else self.mrtrix_config, **kwargs,
+            config=config if config is not None else self.pnl_config, **kwargs,
         )
 
-    def calls(self, tool: Path) -> list[dict]:
-        record = command_record(tool)
+    def calls(self, tool: Path | None = None) -> list[dict]:
+        record = command_record(tool or self.pythonslicer)
         return [json.loads(line) for line in record.read_text(encoding="utf-8").splitlines()] if record.exists() else []
 
     def snapshot(self) -> dict[Path, bytes]:
@@ -252,18 +247,16 @@ class BrainMaskBackendsTest(unittest.TestCase):
         self.assertEqual(list(self.inputs.glob(".mask-record-*")), [])
         self.assertEqual(list(self.inputs.glob(".mask-backup-*")), [])
 
-    def test_default_and_options_select_pnl_not_mrtrix(self) -> None:
+    def test_default_and_options_select_pnl(self) -> None:
         self.assertEqual(BrainMaskConfig().backend, "pnl_cnn")
         self.assertEqual(brain_mask_config_from_options(SimpleNamespace()).backend, "pnl_cnn")
         options = SimpleNamespace(
-            brain_mask_backend="mrtrix", preprocessing_mrtrix_bin_dir=self.mrtrix.parent, b0_threshold=25,
-            pnl_mask_python=self.root / "venv/bin/python", postprocess_freesurfer_home=self.root / "fs",
+            brain_mask_backend="provided", b0_threshold=25,
+            pnl_mask_python=self.root / "venv/bin/python",
         )
         config = brain_mask_config_from_options(options)
-        self.assertEqual(config.backend, "mrtrix")
-        self.assertEqual(config.mrtrix_bin_dir, self.mrtrix.parent)
+        self.assertEqual(config.backend, "provided")
         self.assertEqual(config.pnl_mask_python, options.pnl_mask_python)
-        self.assertEqual(config.freesurfer_home, options.postprocess_freesurfer_home)
         self.assertEqual(config.b0_threshold, 25)
 
     def test_windows_does_not_block_the_native_pnl_route(self):
@@ -272,16 +265,13 @@ class BrainMaskBackendsTest(unittest.TestCase):
         result = inspect_brain_mask_backend(config, system="Windows")
         self.assertTrue(result["available"], result)
 
-    def test_missing_default_pnl_never_falls_through_to_available_mrtrix(self) -> None:
-        with patch.dict(os.environ, {"SLICERDSPACE_MRTRIX_BIN_DIR": str(self.mrtrix.parent)}):
-            self.assertTrue(inspect_brain_mask_backend(self.mrtrix_config)["available"])
-            inspected = inspect_brain_mask_backend()
-            self.assertEqual(inspected["backend"], "pnl_cnn")
-            self.assertFalse(inspected["available"])
-            before = self.snapshot()
-            with self.assertRaisesRegex(FileNotFoundError, "pnl_cnn unavailable.*PythonSlicer"):
-                generate_brain_mask(self.dwi, self.bvals, self.bvecs, self.output)
-        self.assertEqual(self.calls(self.mrtrix), [])
+    def test_missing_default_pnl_fails_instead_of_falling_through(self) -> None:
+        inspected = inspect_brain_mask_backend()
+        self.assertEqual(inspected["backend"], "pnl_cnn")
+        self.assertFalse(inspected["available"])
+        before = self.snapshot()
+        with self.assertRaisesRegex(FileNotFoundError, "pnl_cnn unavailable.*PythonSlicer"):
+            generate_brain_mask(self.dwi, self.bvals, self.bvecs, self.output)
         self.assertFalse(self.output.exists())
         self.assertFalse(self.manifest.exists())
         self.assert_preserved(before)
@@ -425,7 +415,7 @@ class BrainMaskBackendsTest(unittest.TestCase):
         ):
             with self.subTest(config=config), self.assertRaises(ValueError):
                 inspect_brain_mask_backend(config)
-        with self.assertRaisesRegex(ValueError, "Unknown brain mask backend"):
+        with self.assertRaisesRegex(ValueError, "Brain mask backend .auto. is not known.*pnl_cnn.*provided"):
             self.generate(BrainMaskConfig(backend="auto"))
 
     def test_pnl_native_adapter_interface_output_and_environment(self) -> None:
@@ -504,7 +494,7 @@ class BrainMaskBackendsTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "pnl_mask_route must be one of: auto, managed, native"):
             brain_mask.resolve_pnl_mask_route("conda", "Linux")
         with self.assertRaisesRegex(ValueError, "pnl_mask_route"):
-            inspect_brain_mask_backend(BrainMaskConfig(backend="mrtrix", pnl_mask_route="conda"))
+            inspect_brain_mask_backend(BrainMaskConfig(pnl_mask_route="conda"))
         self.assertEqual(BrainMaskConfig().pnl_mask_route, "auto")
         self.assertEqual(brain_mask_config_from_options(SimpleNamespace()).pnl_mask_route, "auto")
         self.assertEqual(brain_mask_config_from_options(SimpleNamespace(pnl_mask_route="managed")).pnl_mask_route, "managed")
@@ -586,7 +576,8 @@ class BrainMaskBackendsTest(unittest.TestCase):
             "route": "native-sitk", "status": "experimental", "reason": brain_mask.PNL_NATIVE_EXPERIMENTAL_REASON})
         self.assertEqual(brain_mask.pnl_route_record("managed"), {"route": "managed-ants"})
         self.assertEqual(brain_mask.PNL_ROUTE_LABELS["native"], "native (experimental)")
-        self.assertEqual(self.generate(self.mrtrix_config).get("route"), None)
+        save_nifti(self.output, mask_data())
+        self.assertEqual(self.generate(BrainMaskConfig(backend="provided")).get("route"), None)
 
     # ---- SC-1f: the route is part of the cache signature
     def test_sc1f_route_is_part_of_the_cache_signature(self) -> None:
@@ -807,7 +798,7 @@ class BrainMaskBackendsTest(unittest.TestCase):
         self.assertEqual(result["previous_backend"], "mrtrix")
         self.assert_preserved(before)
 
-    def test_provided_without_mask_fails_even_with_mrtrix_available(self) -> None:
+    def test_provided_without_mask_fails_even_with_pnl_available(self) -> None:
         with patch.object(brain_mask, "_run") as run:
             with self.assertRaisesRegex(FileNotFoundError, "Provided-mask route requires"):
                 self.generate(BrainMaskConfig(backend="provided"))
@@ -822,7 +813,7 @@ class BrainMaskBackendsTest(unittest.TestCase):
         run.assert_not_called()
         self.assertEqual(second["status"], "reused")
         self.assertEqual(first["signature"], second["signature"])
-        self.assertEqual(len(self.calls(self.mrtrix)), 1)
+        self.assertEqual(len(self.calls()), 1)
         self.assert_preserved(before)
 
     def test_changed_input_content_invalidates_cache_even_with_same_size_and_mtime(self) -> None:
@@ -834,7 +825,7 @@ class BrainMaskBackendsTest(unittest.TestCase):
         second = self.generate()
         self.assertEqual(second["status"], "completed")
         self.assertNotEqual(first["signature"]["inputs"], second["signature"]["inputs"])
-        self.assertEqual(len(self.calls(self.mrtrix)), 2)
+        self.assertEqual(len(self.calls()), 2)
 
     def test_changed_dwi_and_b_vectors_each_invalidate_cache(self) -> None:
         first = self.generate()
@@ -846,7 +837,7 @@ class BrainMaskBackendsTest(unittest.TestCase):
         for previous, current in ((first, second), (second, third)):
             self.assertEqual(current["status"], "completed")
             self.assertNotEqual(previous["signature"]["inputs"], current["signature"]["inputs"])
-        self.assertEqual(len(self.calls(self.mrtrix)), 3)
+        self.assertEqual(len(self.calls()), 3)
 
     def test_changed_pnl_model_weights_and_template_each_invalidate_cache(self) -> None:
         # Vendored code changes: test_a7_signature_hashes_native_module_and_every_vendored_file.
@@ -874,28 +865,14 @@ class BrainMaskBackendsTest(unittest.TestCase):
                 previous = current
         self.assertEqual(len(self.calls(self.pythonslicer)), 6)
 
-    def test_changed_backend_invalidates_generated_cache(self) -> None:
+    def test_threshold_change_invalidates_cache(self) -> None:
+        # The native child ignores `threads` (test_b12); the managed route keeps it in its signature.
         first = self.generate()
-        config = fake_pnl_config(self.root)
-        second = self.generate(config)
-        self.assertEqual(second["status"], "completed")
-        self.assertEqual(second["backend"], "pnl_cnn")
-        self.assertNotEqual(first["signature"], second["signature"])
-        third = self.generate()
-        self.assertEqual(third["status"], "completed")
-        self.assertEqual(third["backend"], "mrtrix")
-        self.assertEqual(len(self.calls(self.mrtrix)), 2)
-        self.assertEqual(len(self.calls(self.pythonslicer)), 1)
-
-    def test_threshold_and_thread_changes_invalidate_cache(self) -> None:
-        first = self.generate()
-        second = self.generate(replace(self.mrtrix_config, b0_threshold=0))
-        third = self.generate(replace(self.mrtrix_config, b0_threshold=0, threads=2))
+        second = self.generate(replace(self.pnl_config, b0_threshold=0))
         self.assertEqual(second["b0_volumes"], 1)
-        for previous, current in ((first, second), (second, third)):
-            self.assertEqual(current["status"], "completed")
-            self.assertNotEqual(previous["signature"]["settings"], current["signature"]["settings"])
-        self.assertEqual(len(self.calls(self.mrtrix)), 3)
+        self.assertEqual(second["status"], "completed")
+        self.assertNotEqual(first["signature"]["settings"], second["signature"]["settings"])
+        self.assertEqual(len(self.calls()), 2)
 
     def test_edited_generated_mask_raises_unless_explicitly_provided(self) -> None:
         self.generate()
@@ -920,7 +897,7 @@ class BrainMaskBackendsTest(unittest.TestCase):
         result = self.generate(force=True)
         self.assertEqual(result["status"], "completed")
         np.testing.assert_array_equal(nib.load(str(self.output)).dataobj, mask_data())
-        self.assertEqual(len(self.calls(self.mrtrix)), 2)
+        self.assertEqual(len(self.calls()), 2)
 
     def test_geometry_rejects_wrong_shape_affine_or_four_dimensional_masks(self) -> None:
         shifted = AFFINE.copy()
@@ -956,7 +933,7 @@ class BrainMaskBackendsTest(unittest.TestCase):
         self.assertTrue(any("Unusual mask/FOV" in warning for warning in warnings))
 
     def test_invalid_provided_masks_are_not_accepted_or_replaced(self) -> None:
-        for backend in ("provided", "pnl_cnn", "mrtrix"):
+        for backend in ("provided", "pnl_cnn"):
             with self.subTest(backend=backend), patch.object(brain_mask, "_run") as run:
                 save_nifti(self.output, np.zeros(SHAPE, dtype=np.uint8))
                 before = self.snapshot()
@@ -968,7 +945,7 @@ class BrainMaskBackendsTest(unittest.TestCase):
     def test_nonzero_command_with_partial_output_preserves_previous_mask_and_inputs(self) -> None:
         self.generate()
         before = self.snapshot()
-        write_fake_mrtrix(self.mrtrix.parent, behavior="partial_failure")
+        write_fake_command(self.pythonslicer, "pnl_cnn", behavior="partial_failure")
         with self.assertRaisesRegex(RuntimeError, r"Brain-mask command failed \(7\).*partial candidate"):
             self.generate(force=True)
         self.assert_preserved(before)
@@ -976,7 +953,7 @@ class BrainMaskBackendsTest(unittest.TestCase):
     def test_success_without_declared_output_preserves_previous_mask_and_inputs(self) -> None:
         self.generate()
         before = self.snapshot()
-        write_fake_mrtrix(self.mrtrix.parent, behavior="missing_output")
+        write_fake_command(self.pythonslicer, "pnl_cnn", behavior="missing_output")
         with self.assertRaisesRegex(RuntimeError, "did not create its declared mask"):
             self.generate(force=True)
         self.assert_preserved(before)
@@ -986,7 +963,7 @@ class BrainMaskBackendsTest(unittest.TestCase):
         before = self.snapshot()
         for behavior in ("empty", "nonbinary", "shifted"):
             with self.subTest(behavior=behavior):
-                write_fake_mrtrix(self.mrtrix.parent, behavior=behavior)
+                write_fake_command(self.pythonslicer, "pnl_cnn", behavior=behavior)
                 with self.assertRaises(ValueError):
                     self.generate(force=True)
                 self.assert_preserved(before)
@@ -1015,7 +992,7 @@ class BrainMaskBackendsTest(unittest.TestCase):
     def test_failed_provenance_replace_preserves_previous_mask_manifest_and_inputs(self) -> None:
         self.generate()
         before = self.snapshot()
-        write_fake_mrtrix(self.mrtrix.parent, behavior="alternate")
+        write_fake_command(self.pythonslicer, "pnl_cnn", behavior="alternate")
         real_replace = os.replace
 
         def fail_record_only(source, destination):
@@ -1061,7 +1038,7 @@ class BrainMaskBackendsTest(unittest.TestCase):
         before = self.snapshot()
         for source in (self.dwi, self.bvals, self.bvecs):
             with self.subTest(source=source.name), self.assertRaisesRegex(ValueError, "source input or symlink"):
-                generate_brain_mask(self.dwi, self.bvals, self.bvecs, source, config=self.mrtrix_config)
+                generate_brain_mask(self.dwi, self.bvals, self.bvecs, source, config=self.pnl_config)
         self.assert_preserved(before)
 
     def test_output_and_manifest_symlinks_are_rejected_without_modifying_targets(self) -> None:
@@ -1078,53 +1055,6 @@ class BrainMaskBackendsTest(unittest.TestCase):
             self.generate()
         self.assertEqual(target.read_text(encoding="ascii"), "protected user data\n")
         self.assertFalse(self.output.exists())
-
-    def test_explicit_mrtrix_command_uses_native_dwi_and_fsl_gradients(self) -> None:
-        result = self.generate()
-        call, = self.calls(self.mrtrix)
-        self.assertEqual(result["command"][0], str(self.mrtrix))
-        self.assertEqual(call["source"], str(self.dwi))
-        self.assertEqual(call["shape"], [*SHAPE, 4])
-        self.assertEqual(result["command"][3:], ["-fslgrad", str(self.bvecs), str(self.bvals), "-force"])
-        self.assertEqual(result["backend"], "mrtrix")
-
-    def test_compatibility_wrapper_explicitly_selects_mrtrix(self) -> None:
-        result = brain_mask.generate_brain_mask_with_dwi2mask(
-            self.dwi, self.bvals, self.bvecs, self.output, mrtrix_bin_dir=self.mrtrix.parent,
-        )
-        self.assertEqual(result["backend"], "mrtrix")
-        self.assertEqual(len(self.calls(self.mrtrix)), 1)
-
-    def test_synthstrip_adapter_receives_mean_b0_and_declared_mask_argument(self) -> None:
-        home = self.root / "FreeSurfer with spaces"
-        tool = write_fake_command(home / "bin/mri_synthstrip", "synthstrip")
-        model = home / "models/synthstrip.1.pt"
-        model.parent.mkdir()
-        model.write_bytes(b"adapter-only fake SynthStrip model")
-        config = BrainMaskConfig(backend="synthstrip", freesurfer_home=home, brain_mask_device="cpu")
-        self.assertTrue(inspect_brain_mask_backend(config)["available"])
-        result = self.generate(config)
-        call, = self.calls(tool)
-        self.assertEqual(result["command"][1::2], ["-i", "-m"])
-        self.assertEqual(call["shape"], list(SHAPE))
-        expected = nib.load(str(self.dwi)).get_fdata()[..., :2].mean(axis=-1)
-        np.testing.assert_allclose(call["data"], expected)
-        self.assertEqual(call["env"]["FREESURFER_HOME"], str(home))
-        self.assertEqual(result["backend"], "synthstrip")
-
-    def test_synthstrip_missing_model_or_command_never_falls_back_to_mrtrix(self) -> None:
-        home = self.root / "freesurfer"
-        config = BrainMaskConfig(backend="synthstrip", freesurfer_home=home, brain_mask_device="cpu")
-        for missing in ("FreeSurfer mri_synthstrip", "FreeSurfer models/synthstrip.1.pt"):
-            with self.subTest(missing=missing), patch.object(brain_mask, "_run") as run:
-                inspected = inspect_brain_mask_backend(config)
-                self.assertFalse(inspected["available"])
-                self.assertIn(missing, inspected["missing_required"])
-                with self.assertRaisesRegex(FileNotFoundError, "synthstrip unavailable"):
-                    self.generate(config)
-                run.assert_not_called()
-            write_fake_command(home / "bin/mri_synthstrip", "synthstrip")
-        self.assertEqual(self.calls(self.mrtrix), [])
 
     def test_run_streams_logs_and_limits_failure_diagnostics_to_last_50_lines(self) -> None:
         logs = []

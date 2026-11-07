@@ -237,6 +237,34 @@ class PreprocessingMaskIntegrationTest(unittest.TestCase):
             generator.assert_not_called()
             self.assertFalse(canonical.exists())
 
+    def test_w5_mask_step_runs_pnl_cnn_unless_provided_and_refuses_removed_backends(self):
+        """W5 (D1/D2): the final mask is made by PNL CNN, or copied when provided. A removed backend never runs."""
+        for backend in ("dipy", "mrtrix_fsl"):
+            with self.subTest(backend=backend), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                subject = _write_nifti_subject(root)
+                bin_dir = root / "bin"
+                _write_fake_backend(bin_dir)
+                options = _pnl_options(root)
+                options.pop("brain_mask_backend")  # the default selection is the PNL CNN
+                with _motion_patch(backend):
+                    result = run_dwi_preprocessing(_config(subject, bin_dir, backend, **options))
+                qc = json.loads(result.qc_path.read_text())
+                self.assertEqual(qc["mask_generation"]["backend"], "pnl_cnn")
+                self.assertEqual(qc["mask_generation"]["method"], "pnl_cnn_corrected_dwi")
+                self.assertEqual(len((root / "pnl_calls.jsonl").read_text().splitlines()), 1)
+                self.assertFalse(result.final_dwi_path.with_name("mask_calls.txt").exists())
+        for removed in ("synthstrip", "mrtrix", "dipy"):
+            with self.subTest(removed=removed), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                subject = _write_nifti_subject(root)
+                bin_dir = root / "bin"
+                _write_fake_backend(bin_dir)
+                config = _config(subject, bin_dir, "mrtrix_fsl", brain_mask_backend=removed)
+                with self.assertRaisesRegex(ValueError, "pnl_cnn.*provided"):
+                    run_dwi_preprocessing(config)
+                self.assertFalse((subject / "outputs/01_preproc/mask_calls.txt").exists())
+
     def test_unavailable_selected_backend_never_falls_back_to_mrtrix(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -424,19 +452,17 @@ class ValidationMaskIntegrationTest(unittest.TestCase):
         expected.final_dwi_path.is_file.return_value = False
         with mock.patch("preprocessing.module_logic.run_dwi_preprocessing", return_value=expected) as runner:
             actual = logic.runDwiPreprocessingPipeline(
-                subject_id="100307", input_root=Path("/subject"), brain_mask_backend="synthstrip",
+                subject_id="100307", input_root=Path("/subject"), brain_mask_backend="provided",
                 pnl_mask_python=Path("/python"), pnl_mask_script=Path("/script"),
                 pnl_mask_model_dir=Path("/models"), pnl_mask_ants_bin_dir=Path("/ants"),
-                postprocess_freesurfer_home=Path("/freesurfer"),
             )
         self.assertIs(actual, expected)
         config = runner.call_args.args[0]
-        self.assertEqual(config.brain_mask_backend, "synthstrip")
+        self.assertEqual(config.brain_mask_backend, "provided")
         self.assertEqual(config.pnl_mask_python, Path("/python"))
         self.assertEqual(config.pnl_mask_script, Path("/script"))
         self.assertEqual(config.pnl_mask_model_dir, Path("/models"))
         self.assertEqual(config.pnl_mask_ants_bin_dir, Path("/ants"))
-        self.assertEqual(config.postprocess_freesurfer_home, Path("/freesurfer"))
 
 
 if __name__ == "__main__":

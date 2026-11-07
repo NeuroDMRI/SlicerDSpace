@@ -140,7 +140,8 @@ TASK_ASSET_PROFILES = {
     "surface.ddsurfer": ("surface",), "surface.ddsurfer_postprocess": ("surface", "surface-postprocess"),
     "bundles.tractcloud": ("tractcloud",),
 }
-BRAIN_MASK_PROFILES = {"pnl_cnn": ("pnl-cnn-weights",), "synthstrip": ("synthstrip",)}
+# W5 (SC-2): an old manifest can name a removed backend (synthstrip, mrtrix, dipy); it reads, and it adds no asset profile.
+BRAIN_MASK_PROFILES = {"pnl_cnn": ("pnl-cnn-weights",)}
 USED_STATUSES = frozenset({"completed", "skipped"})
 
 

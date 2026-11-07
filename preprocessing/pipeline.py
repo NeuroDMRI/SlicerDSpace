@@ -92,8 +92,6 @@ class DwiPreprocessingConfig:
     pnl_mask_model_dir: Optional[Path] = None
     pnl_mask_ants_bin_dir: Optional[Path] = None
     pnl_mask_route: str = "auto"
-    synthstrip_python: Optional[Path] = None
-    postprocess_freesurfer_home: Optional[Path] = None
 
 
 @dataclass(frozen=True)
@@ -1050,7 +1048,7 @@ def _finalize_brain_mask(
         ))
         generation.update({
             "backend": selected.backend,
-            "method": "dwi2mask_corrected_dwi" if selected.backend == "mrtrix" else f"{selected.backend}_corrected_dwi",
+            "method": f"{selected.backend}_corrected_dwi",
             "source": paths["final_dwi"].as_posix(),
         })
         qc = validate_brain_mask(paths["final_dwi"], paths["final_mask"])

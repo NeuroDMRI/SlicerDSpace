@@ -6,7 +6,7 @@ from pathlib import Path
 from shared.environment import DependencyStatus, EnvironmentDoctorConfig, EnvironmentDoctorResult, TargetEnvironmentStatus
 
 PATH_FIELDS = {'repo_root', 'output_dir', 'python_executable', 'conda_executable', 'pnl_mask_python',
-               'pnl_mask_script', 'pnl_mask_model_dir', 'pnl_mask_ants_bin_dir', 'synthstrip_python',
+               'pnl_mask_script', 'pnl_mask_model_dir', 'pnl_mask_ants_bin_dir',
                'ukf_executable', 'dwiconvert_executable', 'dki_matlab_executable', 'dki_mkcurve_root',
                'mrtrix_bin_dir', 'preprocessing_mrtrix_bin_dir', 'preprocessing_fsl_bin_dir',
                'postprocess_freesurfer_home', 'postprocess_runtime', 'postprocess_license_file',

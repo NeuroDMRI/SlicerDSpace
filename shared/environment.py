@@ -100,7 +100,6 @@ class EnvironmentDoctorConfig:
     pnl_mask_model_dir: Optional[Path] = None
     pnl_mask_ants_bin_dir: Optional[Path] = None
     pnl_mask_route: str = "auto"
-    synthstrip_python: Optional[Path] = None
     tractography_backend: str = "csd_act"
     ukf_executable: Optional[Path] = None
     dwiconvert_executable: Optional[Path] = None
@@ -1089,10 +1088,6 @@ def build_dependency_specs(config: EnvironmentDoctorConfig) -> tuple[DependencyS
     specs: dict[str, DependencySpec] = {}
     repo_root = _resource_root(config)
     platform_name = _effective_platform_name(config)
-
-    if config.brain_mask_required and config.brain_mask_backend == 'dipy':
-        for target in targets:
-            _add_dipy_stack(specs, target)
 
     for target in targets:
         if target == "validation":
@@ -2265,7 +2260,7 @@ def run_environment_doctor(config: EnvironmentDoctorConfig, *, _probe_cache=None
                 key="brain_mask_backend", kind="setting", label="Selected brain-mask backend",
                 status="available" if masking["available"] and config.brain_mask_backend != "provided" else "missing",
                 required=True, targets=mask_targets, details=masking,
-                install_hint="Use Environment and installation to prepare the selected backend, provide a native mask, or select another backend explicitly in Advanced settings > Preprocessing & mask.",
+                install_hint="Use Environment and installation to prepare PNL CNN, or provide a native mask (select Provided mask only in Advanced settings > Preprocessing & mask).",
                 install_group="brain_mask"),)
     status_by_key = {item.key: item for item in statuses}
 

@@ -134,7 +134,29 @@ pathlib.Path(sys.argv[3]).write_text('se-epi-pair')
     )
 
 
+def _fake_pnl_mask(dwi, bval, bvec, output, *, config, force=False, log=None):
+    """W5 (D1/D2): the final mask comes from PNL CNN. This fixture writes the mask a fake PNL CNN would write."""
+    import nibabel as nib
+    import numpy as np
+
+    assert config.backend == "pnl_cnn", config.backend
+    image = nib.load(str(dwi))
+    mask = np.zeros(image.shape[:3], dtype=np.uint8)
+    mask[1:4, 1:4, 1:4] = 1
+    nib.save(nib.Nifti1Image(mask, image.affine), str(output))
+    with Path(dwi).with_name("mask_calls.txt").open("a") as stream:
+        stream.write(str(dwi) + "\n")
+    return {"status": "completed"}
+
+
 class DwiPreprocessingPipelineTest(unittest.TestCase):
+    def setUp(self) -> None:
+        from unittest.mock import patch
+
+        patcher = patch("preprocessing.pipeline.generate_brain_mask", side_effect=_fake_pnl_mask)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_motion_cache_requires_current_gradient_rotation_policy(self):
         from preprocessing.pipeline import DIPY_BVEC_ROTATION_POLICY, preprocessing_gradients_current
         manifest = {"cache_key": {"backend": "dipy", "parameters": {"dipy_run_motion_correction": True}}}
@@ -282,7 +304,6 @@ class DwiPreprocessingPipelineTest(unittest.TestCase):
                 subject_id="100307",
                 input_root=subject,
                 backend="mrtrix_fsl",
-                brain_mask_backend="mrtrix",
                 execute=True,
                 mrtrix_bin_dir=bin_dir,
                 fsl_bin_dir=bin_dir,
@@ -328,7 +349,7 @@ class DwiPreprocessingPipelineTest(unittest.TestCase):
             executable_commands = [record["argv"] for record in manifest["commands"][:3]]
             self.assertTrue(all("-force" not in command for command in executable_commands))
             self.assertTrue(qc["backend_details"]["diagnostics"]["topup_field_map"]["exists"])
-            self.assertEqual(qc["mask_generation"]["method"], "dwi2mask_corrected_dwi")
+            self.assertEqual(qc["mask_generation"]["method"], "pnl_cnn_corrected_dwi")
             import nibabel as nib
             import numpy as np
 
@@ -362,7 +383,6 @@ class DwiPreprocessingPipelineTest(unittest.TestCase):
                 subject_id="100307",
                 input_root=subject,
                 backend="mrtrix_fsl",
-                brain_mask_backend="mrtrix",
                 execute=True,
                 mrtrix_bin_dir=bin_dir,
                 fsl_bin_dir=bin_dir,
@@ -393,7 +413,6 @@ class DwiPreprocessingPipelineTest(unittest.TestCase):
             _write_fake_backend(bin_dir)
             config = DwiPreprocessingConfig(
                 subject_id="100307", input_root=subject, backend="mrtrix_fsl",
-                brain_mask_backend="mrtrix",
                 execute=True, mrtrix_bin_dir=bin_dir, fsl_bin_dir=bin_dir,
             )
             result = run_dwi_preprocessing(config)
@@ -432,8 +451,7 @@ class DwiPreprocessingPipelineTest(unittest.TestCase):
                     subject_id="100307",
                     input_root=subject,
                     backend="mrtrix_fsl",
-                    brain_mask_backend="mrtrix",
-                    execute=False,
+                        execute=False,
                     mrtrix_bin_dir=bin_dir,
                     fsl_bin_dir=bin_dir,
                     phase_encoding_direction="AP",
@@ -461,8 +479,7 @@ class DwiPreprocessingPipelineTest(unittest.TestCase):
                     subject_id="100307",
                     input_root=subject,
                     backend="mrtrix_fsl",
-                    brain_mask_backend="mrtrix",
-                    execute=True,
+                        execute=True,
                     force=True,
                     mrtrix_bin_dir=bin_dir,
                     fsl_bin_dir=bin_dir,
@@ -497,8 +514,7 @@ sys.exit(9)
                         input_root=subject,
                         output_dir=output_dir,
                         backend="mrtrix_fsl",
-                        brain_mask_backend="mrtrix",
-                        execute=True,
+                                execute=True,
                         mrtrix_bin_dir=bin_dir,
                         fsl_bin_dir=bin_dir,
                     )
@@ -533,8 +549,7 @@ sys.exit(9)
                     subject_id="100307",
                     input_root=subject,
                     backend="mrtrix_fsl",
-                    brain_mask_backend="mrtrix",
-                    execute=True,
+                        execute=True,
                     force=True,
                     mrtrix_bin_dir=bin_dir,
                     fsl_bin_dir=bin_dir,

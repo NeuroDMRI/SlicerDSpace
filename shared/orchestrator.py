@@ -89,7 +89,6 @@ class ProductOrchestratorConfig:
     pnl_mask_model_dir: Optional[Path] = None
     pnl_mask_ants_bin_dir: Optional[Path] = None
     pnl_mask_route: str = "auto"
-    synthstrip_python: Optional[Path] = None
     preprocessing_force: bool = False
     preprocessing_dipy_denoise_method: str = "mppca"
     preprocessing_dipy_run_gibbs: bool = True
@@ -1214,8 +1213,6 @@ def _preprocessing_config(config: ProductOrchestratorConfig, subject_root: Path,
         pnl_mask_model_dir=config.pnl_mask_model_dir,
         pnl_mask_ants_bin_dir=config.pnl_mask_ants_bin_dir,
         pnl_mask_route=config.pnl_mask_route,
-        synthstrip_python=config.synthstrip_python,
-        postprocess_freesurfer_home=config.postprocess_freesurfer_home,
         force=config.preprocessing_force or (not config.resume),
         dipy_denoise_method=config.preprocessing_dipy_denoise_method,
         dipy_run_gibbs=config.preprocessing_dipy_run_gibbs,
@@ -1285,7 +1282,6 @@ def _anatomy_input_bundle(
     subject_root: Path,
     subject_id: str,
     output_root: Optional[Path],
-    mrtrix_bin_dir: Optional[Path],
     brain_mask_config=None,
 ):
     """DWI bundle for DDSeg/DDParcel/DDSurfer: the preprocessed DWI when preprocessing completed.
@@ -1297,8 +1293,7 @@ def _anatomy_input_bundle(
 
     from shared.pipeline import find_subject_root, resolve_preprocessed_input_bundle
 
-    raw_bundle = find_subject_root(subject_root, subject_id, mrtrix_bin_dir=mrtrix_bin_dir,
-                                  brain_mask_config=brain_mask_config)
+    raw_bundle = find_subject_root(subject_root, subject_id, brain_mask_config=brain_mask_config)
     return resolve_preprocessed_input_bundle(raw_bundle, output_root=output_root)
 
 
@@ -3523,7 +3518,6 @@ def _parallel_model_products(config, targets, parcellation, log):
     from shared.brain_mask import brain_mask_config_from_options
 
     raw = find_subject_root(config.subject_root, config.subject_id,
-        mrtrix_bin_dir=config.mrtrix_bin_dir or config.preprocessing_mrtrix_bin_dir,
         brain_mask_config=brain_mask_config_from_options(config))
     raw = resolve_preprocessed_input_bundle(raw, output_root=config.output_root)
     native = ensure_native_dti_bundle(raw, fit_method=config.microstructure_fit_method, reuse=True, log=log)
@@ -3635,7 +3629,6 @@ def _run_subject_products_impl(
 
     input_started = time.monotonic()
     materialize_canonical_output_tree(subject_root, output_root=output_root, mode="symlink", archive_legacy=False)
-    mask_mrtrix_bin_dir = config.mrtrix_bin_dir or config.preprocessing_mrtrix_bin_dir
     from shared.brain_mask import brain_mask_config_from_options
     selected_mask_config = brain_mask_config_from_options(config)
     initial_raw = _resolve_raw_inputs(subject_root)
@@ -3651,7 +3644,6 @@ def _run_subject_products_impl(
             find_subject_root(
                 subject_root,
                 config.subject_id,
-                mrtrix_bin_dir=mask_mrtrix_bin_dir,
                 brain_mask_config=selected_mask_config,
             )
         except (FileNotFoundError, RuntimeError) as exc:
@@ -3682,7 +3674,6 @@ def _run_subject_products_impl(
                 input_root=subject_root,
                 output_dir=layout.run_metadata / "validation",
                 dependency_groups=("core",),
-                mrtrix_bin_dir=mask_mrtrix_bin_dir,
                 brain_mask_backend=config.brain_mask_backend,
                 brain_mask_device=config.brain_mask_device,
                 pnl_mask_python=config.pnl_mask_python,
@@ -3690,8 +3681,6 @@ def _run_subject_products_impl(
                 pnl_mask_model_dir=config.pnl_mask_model_dir,
                 pnl_mask_ants_bin_dir=config.pnl_mask_ants_bin_dir,
                 pnl_mask_route=config.pnl_mask_route,
-                synthstrip_python=config.synthstrip_python,
-                postprocess_freesurfer_home=config.postprocess_freesurfer_home,
             )
         )
         input_validation_path = validation.report_path
@@ -3866,7 +3855,7 @@ def _run_subject_products_impl(
 
             _emit("[Orchestrator] Running DDSeg", log)
             task_started = _start_task_timer("DDSeg", log)
-            raw_bundle = _anatomy_input_bundle(subject_root, config.subject_id, output_root, mask_mrtrix_bin_dir, selected_mask_config)
+            raw_bundle = _anatomy_input_bundle(subject_root, config.subject_id, output_root, selected_mask_config)
             _emit(f"[Orchestrator] DDSeg input DWI: {raw_bundle.dwi_path}", log)
             native_bundle = ensure_native_dti_bundle(raw_bundle, fit_method="ls", reuse=True, log=log)
             run_ddseg(
@@ -3917,7 +3906,7 @@ def _run_subject_products_impl(
 
             _emit("[Orchestrator] Running DDParcel", log)
             task_started = _start_task_timer("DDParcel", log)
-            raw_bundle = _anatomy_input_bundle(subject_root, config.subject_id, output_root, mask_mrtrix_bin_dir, selected_mask_config)
+            raw_bundle = _anatomy_input_bundle(subject_root, config.subject_id, output_root, selected_mask_config)
             _emit(f"[Orchestrator] DDParcel input DWI: {raw_bundle.dwi_path}", log)
             registered = ensure_registered_dti_bundle(
                 raw_bundle,
@@ -4011,7 +4000,7 @@ def _run_subject_products_impl(
                 reuse_shared_preprocessing=True,
                 execute=True,
                 input_bundle=(
-                    _anatomy_input_bundle(subject_root, config.subject_id, output_root, mask_mrtrix_bin_dir, selected_mask_config)
+                    _anatomy_input_bundle(subject_root, config.subject_id, output_root, selected_mask_config)
                     if not any(not path.is_file() for path in raw.values())
                     else None
                 ),
@@ -4204,7 +4193,6 @@ def _run_subject_products_impl(
             raw_bundle = find_subject_root(
                 subject_root,
                 config.subject_id,
-                mrtrix_bin_dir=mask_mrtrix_bin_dir,
                 brain_mask_config=selected_mask_config,
             )
             analysis_input_bundle = resolve_preprocessed_input_bundle(raw_bundle, output_root=output_root)
@@ -4295,7 +4283,6 @@ def _run_subject_products_impl(
             raw_bundle = find_subject_root(
                 subject_root,
                 config.subject_id,
-                mrtrix_bin_dir=mask_mrtrix_bin_dir,
                 brain_mask_config=selected_mask_config,
             )
             analysis_input_bundle = resolve_preprocessed_input_bundle(raw_bundle, output_root=output_root)
@@ -4367,7 +4354,6 @@ def _run_subject_products_impl(
             raw_bundle = find_subject_root(
                 subject_root,
                 config.subject_id,
-                mrtrix_bin_dir=mask_mrtrix_bin_dir,
                 brain_mask_config=selected_mask_config,
             )
             analysis_input_bundle = resolve_preprocessed_input_bundle(raw_bundle, output_root=output_root)

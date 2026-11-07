@@ -65,7 +65,7 @@ def main(argv=None):
             phase_encoding_direction=args.phase_encoding_direction,
             readout_time=args.readout_time, reverse_phase_b0=args.reverse_phase_b0,
             eddy_threads=args.eddy_threads, eddy_second_level_model=args.eddy_slm,
-            brain_mask_backend="mrtrix",
+            brain_mask_backend="pnl_cnn",
         ), log=print)
         receipt["runtime_seconds"] = time.perf_counter() - start
         qc = json.loads(result.qc_path.read_text())

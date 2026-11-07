@@ -227,7 +227,6 @@ def find_subject_root(
     base_path: Path,
     subject_id: str,
     *,
-    mrtrix_bin_dir: Optional[Path] = None,
     brain_mask_config: Optional[BrainMaskConfig] = None,
     generate_missing_mask: bool = True,
 ) -> RawInputBundle:
@@ -253,7 +252,7 @@ def find_subject_root(
             input_dir / RAW_INPUT_FILES["bval"],
             input_dir / RAW_INPUT_FILES["bvec"],
             mask_path,
-            config=brain_mask_config or BrainMaskConfig(mrtrix_bin_dir=mrtrix_bin_dir),
+            config=brain_mask_config or BrainMaskConfig(),
         )
     return RawInputBundle(
         subject_root=subject_root,

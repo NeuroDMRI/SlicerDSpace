@@ -365,12 +365,12 @@ def run_surface(config: SurfaceConfig, *, log: Optional[Callable[[str], None]] =
                         from shared.brain_mask import BrainMaskConfig, generate_brain_mask
                         mask_path = output_dir / 'native_brain_mask.nii.gz'
                         mask_record = generate_brain_mask(raw.dwi_path, raw.bval_path, raw.bvec_path, mask_path,
-                            config=BrainMaskConfig(backend='synthstrip', freesurfer_home=config.freesurfer_home,
+                            config=BrainMaskConfig(backend='pnl_cnn',  # W5 (D2): the one mask generator
                                 brain_mask_device='cuda' if config.device.startswith('cuda') else 'cpu', threads=config.mask_threads), log=log)
                         manifest['mask_generation'] = mask_record
                         config = replace(config, input_bundle=replace(raw, mask_path=mask_path))
                     # Supply the native mask explicitly, bypassing the pinned
-                    # upstream helper's independent CPU-only SynthStrip default.
+                    # upstream helper's independent CPU-only default.
                 command, env = _raw_command(config, resources, output_dir)
                 run_backend(command, python_bin=config.python_bin, env=env, log=log,
                             log_path=output_dir / 'backend.log')

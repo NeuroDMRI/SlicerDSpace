@@ -37,14 +37,16 @@ from shared.brain_mask import (
     validate_brain_mask,
 )
 from shared.pipeline import RawInputBundle, find_subject_root
-from shared.preprocessing_route import ROUTE_ID as _ROUTE_ID
+from shared.preprocessing_route import CACHE_KEY_VERSION, ROUTE_ID as _ROUTE_ID, route_id as _route_id
+from shared.pe_resolution import AcquisitionMetadata, resolve_for_inputs
 
 
 REQUIRED_COMMANDS = ("dwifslpreproc", "dwi2mask")
 REVERSE_PHASE_COMMANDS = ("mrconvert", "dwiextract", "mrcat")
 DIAGNOSTIC_COMMANDS = ("eddy", "topup")
 PYTHON_MODULES = ("nibabel", "numpy", "dipy")
-# W2a (D1): the one route. Its label is in the cache key and the manifest. The cache-key version stays 5 (W2b adds v6).
+# W2a (D1): the one route. W2b: the cache key (version 6) and the manifest carry the route id of the run,
+# `dipy_mppca+gibbs+fsl_eddy[+topup]` (without `+gibbs` when Gibbs removal is skipped); ROUTE_ID is the base string.
 ROUTE_ID = _ROUTE_ID
 # Old manifests (the removed DIPY between-volume route) still exist on disk and are read, never written.
 DIPY_BVEC_ROTATION_POLICY = "inverse_sampling_affine_polar_v1"
@@ -113,6 +115,26 @@ class DwiPreprocessingResult:
     final_bval_path: Path
     final_bvec_path: Path
     final_mask_path: Path
+    # W2b: the resolved phase-encoding direction and readout time (None for an old caller or a skipped run).
+    acquisition: Optional[AcquisitionMetadata] = None
+
+
+def run_route_id(config: DwiPreprocessingConfig) -> str:
+    """The route id of this run: `dipy_mppca[+gibbs]+fsl_eddy[+topup]`."""
+    return _route_id(gibbs=bool(config.dipy_run_gibbs), topup=config.reverse_phase_b0 is not None)
+
+
+def resolve_acquisition_for(raw: RawInputBundle, config: DwiPreprocessingConfig) -> AcquisitionMetadata:
+    """W2b (D1): resolve the PE direction and readout time from the user values and `input/dwi.json`.
+
+    The sidecar sits next to the imported DWI; the affine is the one of the imported DWI. This function never raises
+    for a missing direction: `.error` holds the rule-4 message and `require_phase_encoding()` raises it.
+    """
+    return resolve_for_inputs(
+        input_dir=Path(raw.dwi_path).parent, dwi_path=raw.dwi_path,
+        user_phase_encoding=config.phase_encoding_direction, user_readout_time=config.readout_time,
+        has_reverse_b0=config.reverse_phase_b0 is not None,
+    )
 
 
 def _brain_mask_config(config: DwiPreprocessingConfig) -> BrainMaskConfig:
@@ -456,7 +478,10 @@ def _collect_dwifslpreproc_diagnostics(paths: dict[str, Path], subject: str) -> 
     return records
 
 
-def _build_commands(raw: RawInputBundle, config: DwiPreprocessingConfig, paths: dict[str, Path], backend: dict[str, Any]) -> list[list[str]]:
+def _build_commands(raw: RawInputBundle, config: DwiPreprocessingConfig, paths: dict[str, Path], backend: dict[str, Any],
+                    acquisition: Optional[AcquisitionMetadata] = None) -> list[list[str]]:
+    if acquisition is None:
+        acquisition = resolve_acquisition_for(raw, config)
     subject = raw.subject_id
     denoised = paths["denoise_dir"] / f"{subject}_dwi_denoised.nii.gz"
     noise = paths["denoise_dir"] / f"{subject}_dwi_noise.nii.gz"
@@ -563,10 +588,13 @@ def _build_commands(raw: RawInputBundle, config: DwiPreprocessingConfig, paths: 
         dwifslpreproc_cmd.extend(["-rpe_pair", "-se_epi", reverse_phase_b0.as_posix()])
     else:
         dwifslpreproc_cmd.append("-rpe_none")
-    if config.phase_encoding_direction:
-        dwifslpreproc_cmd.extend(["-pe_dir", config.phase_encoding_direction])
-    if config.readout_time is not None:
-        dwifslpreproc_cmd.extend(["-readout_time", str(config.readout_time)])
+    # W2b (D1): `-pe_dir <designator>` is always passed (it is mandatory with -rpe_none and -rpe_pair; no -json_import,
+    # because the JSON cannot replace it). `-readout_time` only when a value is known: dwifslpreproc assumes 0.1 s.
+    # A plan with no direction (rule 4) shows no -pe_dir; executing such a plan fails first.
+    if acquisition.phase_encoding is not None:
+        dwifslpreproc_cmd.extend(["-pe_dir", acquisition.phase_encoding])
+    if acquisition.readout_time_for_command is not None:
+        dwifslpreproc_cmd.extend(["-readout_time", str(acquisition.readout_time_for_command)])
 
     # W2a (D1): DIPY MP-PCA, then DIPY Gibbs removal (a copy when skipped, so the next step reads one fixed path).
     # These two steps run in this process; the MRtrix3 and FSL steps below run as commands.
@@ -877,7 +905,11 @@ def run_dwi_preprocessing(
     paths = _planned_paths(output_dir, raw.subject_id)
     backend = inspect_preprocessing_backend(config)
     mask_backend = inspect_brain_mask_backend(_brain_mask_config(config))
-    commands = _build_commands(raw, config, paths, backend)
+    acquisition = resolve_acquisition_for(raw, config)
+    if config.execute and not config.skip:
+        # Rule 4 (T1 D1): no direction, no run. Fails before the manifest, the scratch folder or any stage.
+        acquisition.require_phase_encoding()
+    commands = _build_commands(raw, config, paths, backend, acquisition)
     command_records = [{"argv": command} for command in commands]
     try:
         previous_manifest = json.loads(paths["manifest"].read_text(encoding="utf-8"))
@@ -1021,7 +1053,7 @@ def run_dwi_preprocessing(
     if overwrite_existing:
         # A cache miss may leave old intermediates/final files. Overwrite them
         # instead of failing at the first MRtrix3 command, and never resume an old eddy scratch.
-        commands = _build_commands(raw, replace(config, force=True), paths, backend)
+        commands = _build_commands(raw, replace(config, force=True), paths, backend, acquisition)
         manifest["commands"] = [{"argv": command} for command in commands]
         manifest["overwrite_existing"] = True
     if overwrite_existing:

@@ -8,6 +8,13 @@ from __future__ import annotations
 import argparse
 
 ROUTE_ID = "dipy_mppca+gibbs+fsl_eddy"
+CACHE_KEY_VERSION = 6
+
+
+def route_id(*, gibbs: bool = True, topup: bool = False) -> str:
+    """W2b: the route id of one run: ``dipy_mppca+gibbs+fsl_eddy[+topup]``, without ``+gibbs`` when Gibbs removal is skipped."""
+    return "dipy_mppca" + ("+gibbs" if gibbs else "") + "+fsl_eddy" + ("+topup" if topup else "")
+
 ROUTE_TEXT = "DIPY MP-PCA, DIPY Gibbs removal, FSL eddy/topup through dwifslpreproc"
 # Flags of the removed route choice, the removed denoise choice and the removed between-volume motion correction.
 REMOVED_FLAGS = ("--preprocessing-backend", "--preprocessing-dipy-denoise-method", "--preprocessing-skip-motion")

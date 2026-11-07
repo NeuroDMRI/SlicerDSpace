@@ -37,6 +37,9 @@ def _write_nifti_subject(root: Path, subject_id: str = "100307") -> Path:
     nib.save(nib.Nifti1Image(mask, np.eye(4)), str(input_dir / "nodif_brain_mask.nii.gz"))
     (input_dir / "bvals").write_text("0 1000 1000\n", encoding="utf-8")
     (input_dir / "bvecs").write_text("0 1 0\n0 0 1\n0 0 0\n", encoding="utf-8")
+    # W2b (T1 D1): preprocessing needs a phase-encoding direction. The sidecar gives it (j- on an identity affine = AP).
+    (input_dir / "dwi.json").write_text(
+        json.dumps({"PhaseEncodingDirection": "j-", "TotalReadoutTime": 0.05}), encoding="utf-8")
     return subject
 
 

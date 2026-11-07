@@ -73,7 +73,10 @@ def validate_runtime(home, hemisphere='both', atlas_names='aparc,aparc.a2009s', 
     records = manifest.get('files', {})
     if not set(required_files(hemis, atlases)).issubset(records):
         raise ValueError('Local runtime omits required commands or atlas files')
-    if (root / 'license.txt').exists() or (root / '.license').exists():
+    # A case-insensitive filesystem resolves license.txt to the required public
+    # LICENSE.txt notice. Inspect the stored names; the file inventory and
+    # checksums below also reject renamed or substituted activation files.
+    if {'license.txt', '.license'}.intersection(path.name for path in root.iterdir()):
         raise ValueError('Keep the private activation key outside the runtime; set FS_LICENSE instead')
     for name, info in records.items():
         relative = PurePosixPath(name)

@@ -16,17 +16,17 @@ Goal: one SlicerDSpace GUI and one algorithm configuration schema on Windows, ma
 
 - `shared/native_runtimes.py`: safe, SHA256-checked installer for precompiled platform-native archives, with explicit licence acceptance. No WSL fallback.
 - `models/native_runtime_bundles.json`: intentionally empty until an accepted archive exists. An empty list is **not** an installable MRtrix/FSL/FreeSurfer backend.
-- `.github/workflows/native-runtime-candidates.yml`: manually dispatched three-host Python/VTK unit tests and candidate generation. Candidate artifacts are uploaded to Actions; this workflow must **not** upload approved release assets.
+- `.github/workflows/native-runtime-candidates.yml` runs Python/VTK unit tests and builds candidates on manual dispatch. The workflow uploads the build and relocation reports.
 
 ## Windows x86_64: build MRtrix3 executables on a runner
 
 1. Trigger **Native runtime candidates (not a release)** in GitHub Actions. The Windows job runs on `windows-2022` with `msys2/setup-msys2@v2` using `MSYSTEM=MINGW64`. These tools are installed **only on the build runner**.
 2. Checkout the exact upstream MRtrix3 `3.0.8` tag under `mrtrix3/`.
-3. `scripts/native/build_mrtrix_windows.sh` runs upstream `./configure -nogui` and `./build` and stages the six named C++ CLI programs. `prepare_mrtrix_candidate.py` copies transitive DLLs from the MinGW/MSYS2 directories using `objdump -p`, failing if a non-system DLL is missing. The upstream licence file is carried into the archive.
-4. The artifact is **unpublished** and **scientifically unqualified**. Before release, extract to a fresh Windows machine **without MSYS2/WSL installed**, clear build-only PATH entries, and invoke each binary (`mrconvert`, `dwi2fod`, `tckgen`, `tcksift2`, `tck2connectome`, `tckconvert`) on a small synthetic input and actual DWI data.
-5. Extend beyond these six tools. `dwi2response`, `5ttgen`, `dwifslpreproc` and other MRtrix Python scripts are not yet covered. `dwifslpreproc` still depends on FSL Eddy/Topup, which lacks an approved native Windows build.
+3. `scripts/native/build_mrtrix_windows.sh` runs upstream `./configure -nogui` and `./build`. The Windows candidate stages 26 executable commands and the Dhollander `dwi2response` entry point. `prepare_mrtrix_candidate.py` copies transitive DLLs using `objdump -p` and includes the upstream licence file.
+4. The local candidate completed Dhollander, MSMT-CSD, ACT and SIFT2 on synthetic DWI in Wine. The Windows runner tests compilation and command startup after relocation. Release qualification still needs a clean Windows installation and a comparison on real DWI data.
+5. `5ttgen` and `dwifslpreproc` remain outside this candidate. The unified FSL correction pilot invokes the native programs directly.
 
-**Windows WMA**: the hardening call now uses Slicer core Model/Transform/ModelStorage, no SlicerDMRI reader. WMA's upstream `wm_apply_ORG_atlas_to_subject.sh` is still a POSIX workflow and must be ported to a native Python orchestration with argv-based process invocation. The native point-scalar measurement method is identified separately and must not be represented as the upstream FiberTractMeasurements tensor algorithm. Add Windows real-host tests of all atlas registration/clustering stages.
+The native WMA ORG runner uses Slicer core to harden transforms. Windows end-to-end testing still needs to cover registration, clustering and anatomical tract output.
 
 ## macOS arm64 and x86_64
 
@@ -51,7 +51,7 @@ Keep the existing managed original MRtrix/FSL routes as the scientific baseline;
 
 ### How to read the CI results
 
-A green `platform-unit` job proves *only* that portable Python unit tests passed. The Windows and macOS artifact uploads are **build candidates**, not clean-install or scientific acceptance. A missing/blocked build is a failure to satisfy the native-only requirement, not a reason to fall back to WSL.
+A green `platform-unit` job records a portable Python test result. The Windows and macOS reports record candidate build, packaging and relocation results. Clean installation and scientific acceptance have separate release gates.
 
 ## Integration on server 93 (2026-11-07)
 
@@ -116,3 +116,11 @@ DSP_PREPROCESSING_EXECUTION_BACKEND=native before launching Slicer. Point the
 preprocessing binary-directory settings at native MRtrix and FSL installations.
 The pilot needs same-version correction and end-to-end validation before any
 default change. macOS Intel and Apple Silicon need separate runtime checks.
+
+Local validation on server 93 used a 66-volume synthetic DWI. The Windows x64
+Topup 2203.5 and Eddy CPU 2602.0 build completed all 16 correction stages in
+Wine. On Linux, both dispatchers generated identical Eddy inputs with and
+without reverse phase encoding. Fixed-seed Eddy replays produced identical
+outputs for both cases. The default unseeded runs differed. The separate Windows
+Topup 2203.6 build passed a voxel-spacing regression against the same Linux
+version. Windows host and real DWI acceptance are still pending.

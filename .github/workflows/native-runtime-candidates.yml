@@ -24,7 +24,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, windows-2022, macos-14]
+        os: [ubuntu-24.04, windows-2022, macos-15]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -85,12 +85,14 @@ jobs:
         shell: pwsh
         working-directory: slicerdspace
         run: python scripts/native/smoke_mrtrix_candidate.py --archive dist/native-candidates/mrtrix-3.0.8-windows-x86_64.zip --record dist/native-candidates/mrtrix-3.0.8-windows-x86_64.draft-record.json --output dist/native-candidates/relocation-smoke.json
-      - name: Upload unqualified candidate for maintainer inspection
+      - name: Upload build and relocation reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: windows-mrtrix-native-candidate
-          path: slicerdspace/dist/native-candidates/
+          name: windows-mrtrix-validation-reports
+          path: |
+            slicerdspace/dist/native-candidates/*.draft-record.json
+            slicerdspace/dist/native-candidates/relocation-smoke.json
           if-no-files-found: warn
 
   macos-mrtrix-candidate:
@@ -123,10 +125,12 @@ jobs:
             --archive "dist/native-candidates/mrtrix-3.0.8-darwin-${{ matrix.machine }}.tar.gz" \
             --record "dist/native-candidates/mrtrix-3.0.8-darwin-${{ matrix.machine }}.draft-record.json" \
             --output dist/native-candidates/relocation-smoke.json
-      - name: Upload unqualified candidate for maintainer inspection
+      - name: Upload build and relocation reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: macos-${{ matrix.machine }}-mrtrix-native-candidate
-          path: dist/native-candidates/
+          name: macos-${{ matrix.machine }}-mrtrix-validation-reports
+          path: |
+            dist/native-candidates/*.draft-record.json
+            dist/native-candidates/relocation-smoke.json
           if-no-files-found: warn

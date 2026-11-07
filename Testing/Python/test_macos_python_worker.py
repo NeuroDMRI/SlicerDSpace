@@ -1,5 +1,6 @@
 """Mac application workers must execute Python, rather than opening another GUI."""
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -11,6 +12,7 @@ from shared.process_group import grouped_launch_command
 
 
 class MacPythonWorkerTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == 'posix', 'macOS worker layout is POSIX-specific')
     def test_grouped_worker_executes_bundled_python_with_space_in_path(self):
         with tempfile.TemporaryDirectory(prefix='Slicer worker ') as folder:
             contents = Path(folder) / 'Slicer.app/Contents'
@@ -26,6 +28,7 @@ class MacPythonWorkerTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(json.loads(result.stdout), ['value with spaces'])
 
+    @unittest.skipUnless(os.name == 'posix', 'macOS worker layout is POSIX-specific')
     def test_missing_mac_python_fails_before_launch(self):
         with tempfile.TemporaryDirectory() as folder:
             app = Path(folder) / 'Slicer.app/Contents/MacOS/Slicer'

@@ -6,9 +6,19 @@ Pure Python (no Slicer, Qt or heavy imports), so the CLI, the install scripts an
 from __future__ import annotations
 
 import argparse
+import os
 
 ROUTE_ID = "dipy_mppca+gibbs+fsl_eddy"
 CACHE_KEY_VERSION = 6
+
+
+def resolve_preprocessing_execution_backend(selection: str | None = None) -> str:
+    """Keep the validated runner as default while the shared native runner is qualified."""
+    choice = selection if selection is not None else os.environ.get("DSP_PREPROCESSING_EXECUTION_BACKEND", "legacy")
+    choice = choice.strip().lower()
+    if choice not in {"legacy", "native"}:
+        raise ValueError("Preprocessing execution backend must be legacy or native.")
+    return choice
 
 
 def route_id(*, gibbs: bool = True, topup: bool = False) -> str:

@@ -92,6 +92,7 @@ class ProductOrchestratorConfig:
     preprocessing_dipy_run_gibbs: bool = True
     preprocessing_mrtrix_bin_dir: Optional[Path] = None
     preprocessing_fsl_bin_dir: Optional[Path] = None
+    preprocessing_execution_backend: Optional[str] = None
     preprocessing_reverse_phase_b0: Optional[Path] = None
     preprocessing_phase_encoding_direction: Optional[str] = None
     preprocessing_readout_time: Optional[float] = None
@@ -157,6 +158,7 @@ class ProductOrchestratorConfig:
     # Explicit exploratory fallback; the GUI retains complete DDSeg + DDParcel priors.
     allow_act_ddseg_only: bool = False
     tract_querier_root: Optional[Path] = None
+    wmql_python_executable: Optional[Path] = None
     connectome_backend: str = "auto"
     connectome_compress_mrtrix_dense: Optional[bool] = None
     saf_fs_dir: Optional[Path] = None
@@ -810,6 +812,8 @@ def _wma_complete(
     input_tractography: Optional[Path] = None,
     atlas_dir: Optional[Path] = None,
     atlas_family: str = "org",
+    wma_root: Optional[Path] = None,
+    export_diffusion_measures: bool = False,
 ) -> bool:
     if input_tractography is None:
         return False
@@ -818,7 +822,7 @@ def _wma_complete(
     if not _qc_completed(qc_path):
         return False
     try:
-        from tractography.wma import summarize_wma_outputs, _wma_output_contract_error
+        from tractography.wma import resolve_wma_execution_backend, summarize_wma_outputs, _wma_output_contract_error
         from shared.bundle_qc import bundle_record_error
 
         if bundle_record_error('bundles.wma', _read_json(qc_path)):
@@ -826,6 +830,11 @@ def _wma_complete(
 
         manifest = _read_json(manifest_path)
         if manifest.get("atlas_family", "org") != atlas_family:
+            return False
+        execution_backend = resolve_wma_execution_backend(
+            wma_root, atlas_family=atlas_family, export_diffusion_measures=export_diffusion_measures,
+        )
+        if manifest.get("execution_backend", "legacy") != execution_backend:
             return False
         expected_dependencies = {
             key: path
@@ -844,7 +853,9 @@ def _wma_complete(
         prepared_input = Path(str(manifest.get("prepared_input_tractography") or ""))
         if not prepared_input.is_file():
             return False
-        summary = summarize_wma_outputs(output_dir, prepared_input)
+        summary = summarize_wma_outputs(
+            output_dir, prepared_input, registration_mode=manifest.get("registration_mode", "rig"),
+        )
         if atlas_family != "org":
             from tractography.wma import inspect_wma_org_atlas
             if atlas_dir is None:
@@ -1202,7 +1213,12 @@ def _preprocessing_outputs(subject_root: Path, subject_id: str, output_root: Opt
 
 def _preprocessing_config(config: ProductOrchestratorConfig, subject_root: Path, output_dir: Path):
     from preprocessing import DwiPreprocessingConfig
+    from shared.preprocessing_route import resolve_preprocessing_execution_backend
 
+    execution_backend = resolve_preprocessing_execution_backend(config.preprocessing_execution_backend)
+    mrtrix_bin_dir = config.preprocessing_mrtrix_bin_dir
+    if execution_backend == "native" and mrtrix_bin_dir is None:
+        mrtrix_bin_dir = config.mrtrix_bin_dir
     return DwiPreprocessingConfig(
         subject_id=config.subject_id, input_root=subject_root, output_dir=output_dir,
         execute=True, skip=False,
@@ -1215,8 +1231,9 @@ def _preprocessing_config(config: ProductOrchestratorConfig, subject_root: Path,
         pnl_mask_route=config.pnl_mask_route,
         force=config.preprocessing_force or (not config.resume),
         dipy_run_gibbs=config.preprocessing_dipy_run_gibbs,
-        mrtrix_bin_dir=config.preprocessing_mrtrix_bin_dir,
+        mrtrix_bin_dir=mrtrix_bin_dir,
         fsl_bin_dir=config.preprocessing_fsl_bin_dir,
+        execution_backend=execution_backend,
         reverse_phase_b0=config.preprocessing_reverse_phase_b0,
         phase_encoding_direction=config.preprocessing_phase_encoding_direction,
         readout_time=config.preprocessing_readout_time,
@@ -2452,6 +2469,8 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
                 input_tractography=wma_input_tractography,
                 atlas_dir=config.wma_atlas_dir,
                 atlas_family=config.wma_atlas,
+                wma_root=config.wma_root,
+                export_diffusion_measures=config.wma_export_diffusion_measures,
             )
         if target == "tractcloud":
             return _tractcloud_complete(
@@ -2870,6 +2889,8 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
                     input_tractography=wma_input_tractography,
                     atlas_dir=config.wma_atlas_dir,
                     atlas_family=config.wma_atlas,
+                    wma_root=config.wma_root,
+                    export_diffusion_measures=config.wma_export_diffusion_measures,
                 )
             ):
                 add(target, "skipped", "completed outputs found", "reuse", outputs=wma_outputs)
@@ -4764,6 +4785,7 @@ def _run_subject_products_impl(
                     atlas_path=parcellation,
                     output_dir=wmql_dir,
                     tract_querier_root=config.tract_querier_root,
+                    python_executable=config.wmql_python_executable,
                     query_preset=config.wmql_query_preset,
                     query_selection=config.wmql_query_selection,
                     atlas_mode=config.wmql_atlas_mode,
@@ -4902,6 +4924,8 @@ def _run_subject_products_impl(
             input_tractography=wma_input_tractography,
             atlas_dir=config.wma_atlas_dir,
             atlas_family=config.wma_atlas,
+            wma_root=config.wma_root,
+            export_diffusion_measures=config.wma_export_diffusion_measures,
         ))
         if bundle_source_invalid or bundle_conversion_error:
             tasks.append(ProductTaskRecord(name='bundles.wma', status='blocked', reason=bundle_conversion_error or 'selected tractography did not pass current-run QC'))
@@ -4949,6 +4973,8 @@ def _run_subject_products_impl(
                 input_tractography=wma_input_tractography,
                 atlas_dir=config.wma_atlas_dir,
                 atlas_family=config.wma_atlas,
+                wma_root=config.wma_root,
+                export_diffusion_measures=config.wma_export_diffusion_measures,
             ):
                 tasks.append(ProductTaskRecord(name="bundles.wma", status="skipped", reason="completed outputs found", qc_path=wma_qc, manifest_path=wma_dir / "wma_org_atlas_manifest.json", outputs={"anatomical_tract_count": str(anatomical_tract_count), "anatomical_tract_nonempty_count": str(nonempty_tract_count)}))
             elif wma_input_tractography is None:
@@ -5003,6 +5029,8 @@ def _run_subject_products_impl(
                     input_tractography=wma_input_tractography,
                     atlas_dir=config.wma_atlas_dir,
                     atlas_family=config.wma_atlas,
+                    wma_root=config.wma_root,
+                    export_diffusion_measures=config.wma_export_diffusion_measures,
                 )
                 tasks.append(
                     _task_from_result(
@@ -5319,6 +5347,7 @@ def _run_subject_products_impl(
         "primary_tractography_backend": primary_tractography_backend,
         "bundle_backend": config.bundle_backend,
         "wmql_query_preset": config.wmql_query_preset,
+        "wmql_python_executable": _optional_interpreter(config.wmql_python_executable).as_posix() if config.wmql_python_executable else None,
         "wmql_atlas_mode": config.wmql_atlas_mode,
         "wma_atlas": config.wma_atlas,
         "wmql_query_selection": list(config.wmql_query_selection),
@@ -5341,6 +5370,7 @@ def _run_subject_products_impl(
         "preprocessing_dipy_run_gibbs": config.preprocessing_dipy_run_gibbs,
         "preprocessing_mrtrix_bin_dir": config.preprocessing_mrtrix_bin_dir.as_posix() if config.preprocessing_mrtrix_bin_dir else None,
         "preprocessing_fsl_bin_dir": config.preprocessing_fsl_bin_dir.as_posix() if config.preprocessing_fsl_bin_dir else None,
+        "preprocessing_execution_backend": config.preprocessing_execution_backend,
         "preprocessing_reverse_phase_b0": config.preprocessing_reverse_phase_b0.as_posix() if config.preprocessing_reverse_phase_b0 else None,
         "preprocessing_phase_encoding_direction": config.preprocessing_phase_encoding_direction,
         "preprocessing_readout_time": config.preprocessing_readout_time,

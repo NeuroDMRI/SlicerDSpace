@@ -502,6 +502,10 @@ ENVIRONMENT_DEPENDENCY_TEXT = {
             "TractQuerier root",
             "Optional. Checkout root used by WMQL when tract_querier is not installed in Slicer Python.",
         ),
+        "wmql_python_executable": (
+            "WMQL Python",
+            "Optional. Use a dedicated Python executable with a native TractQuerier checkout.",
+        ),
         "wma_root": ("WMA root", "Optional. External WhiteMatterAnalysis checkout root."),
         "wma_atlas_dir": (
             "WMA atlas directory",
@@ -539,6 +543,7 @@ ENVIRONMENT_DEPENDENCY_TEXT = {
         "dki_matlab_executable": ("MK-Curve MATLAB 可执行文件", "仅用于 MKCURVE_MATLAB 的外部 MATLAB 可执行文件。选择 MKCURVE_MATLAB 时必须配置；缺少 MATLAB 时明确阻止执行，不会回退。"),
         "dki_mkcurve_root": ("作者原始 MK-Curve 代码目录", "包含作者原始外部 MATLAB MK-Curve 代码的目录；标准 DKI WLS/OLS 不使用此路径。"),
         "tract_querier_root": ("TractQuerier 根目录", "可选。当 Slicer Python 未安装 tract_querier 时，WMQL 使用的代码根目录。"),
+        "wmql_python_executable": ("WMQL Python", "可选。与原生 TractQuerier 源码目录配合使用的 Python 可执行文件。"),
         "wma_root": ("WMA 根目录", "可选。外部 WhiteMatterAnalysis 代码根目录。"),
         "wma_atlas_dir": ("WMA 图谱目录", "可选。高级设置中所选图谱的配准图谱和 800 簇目录所在位置。"),
         "slicer_executable": ("WMA 使用的 Slicer", "可选。WMA/SlicerDMRI 辅助调用使用的 Slicer 可执行文件。"),
@@ -941,6 +946,7 @@ def diagnostic_report_text(owner: Any) -> str:
         "pnl_mask_model_dir",
         "pnl_mask_ants_bin_dir",
         "tract_querier_root",
+        "wmql_python_executable",
         "wma_root",
         "tractcloud_root",
     ):

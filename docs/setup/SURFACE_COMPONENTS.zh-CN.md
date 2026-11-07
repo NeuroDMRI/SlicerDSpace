@@ -46,13 +46,20 @@
 **“检查”不安装依赖，GUI 的准备流程不编译源码。**
 “准备所选分析环境”优先安装合格预编译包，核对压缩包及逐文件哈希、构建配方、动态库，
 成功后保存组件路径。Linux x86_64 候选包包含七个不变的原生命令及图谱，
-压缩大小为 40,994,566 字节，解压约 85.2 MiB，不包含个人激活文件。
+压缩大小为 40,995,581 字节，解压约 85.2 MiB，不包含个人激活文件。
 分析时仍需您自己的激活文件。
 
-该运行包尚待发布到模型仓库。发布前可将合格压缩包放到
-`<asset-root>/runtime/surface/surface-runtime-linux-x86_64.tar.gz`，
-或配置已有的合格运行目录／FreeSurfer 安装。缺少尚未发布的包会明确列为待处理项，
-不会自动转为源码编译。
+这些运行包尚未发布。请将对应平台的压缩包放到 `<asset-root>/runtime/surface/`，
+也可配置已有的已验证运行目录或 FreeSurfer 安装。安装器按当前 Python 进程的架构
+选择压缩包。Apple Silicon 运行包需要用 arm64 Python 进程安装。
+
+| 平台 | 离线压缩包 |
+| --- | --- |
+| Linux x86_64 | `surface-runtime-linux-x86_64.tar.gz` |
+| macOS 15 或更高版本，Intel | `surface-runtime-darwin-x86_64.tar.gz` |
+| macOS 15 或更高版本，Apple Silicon | `surface-runtime-darwin-arm64.tar.gz` |
+
+缺少压缩包时，准备窗口会将该运行环境列为手动处理项。
 
 阅读组件与数据许可后安装离线包：
 
@@ -64,7 +71,7 @@ PythonSlicer scripts/setup_surface_runtime.py --execute --accept-terms \
 不加 `--execute` 只打印计划。损坏或配方不同的已有安装不会被覆盖；默认使用上游按配方
 区分的用户缓存，也可通过 `--prefix` 选择新的安装位置。
 
-维护者可明确使用 `--build-from-source --jobs 4`，该专家路线需要 Git、C/C++ 开发工具和
+Linux 维护者可使用 `--build-from-source --jobs 4`。该路线需要 Git、C/C++ 开发工具和
 CMake >=3.24,<4，保持上游构建器与数值源码不变。
 `scripts/package_surface_runtime.py` 将合格构建打包，不收录激活文件。
 `models/runtime_bundles.json` 记录平台、版本、配方、哈希和大小；
@@ -88,9 +95,17 @@ PythonSlicer run_subject_pipeline.py --subject-root /data/sub-01 --subject-id su
 不代替人工解剖审核。清单及缓存签名记录运行环境身份；切换显式组件目录时不会沿用
 上一运行环境的“已完成”状态。
 
-合格预编译包目前仅覆盖 **Linux x86_64**；未认证 macOS 编译或原生 Windows，
-WSL 也不等于原生 Windows 支持。支持的平台上仍可使用已有原生 FreeSurfer。
-不宣称核心算法或完整计算流程因此提速。
+Apple Silicon 候选包在 macOS 15.8.1 上用固定的 FreeSurfer 7.4.1 源码构建。
+构建时在 `CFLAGS` 和 `CXXFLAGS` 中加入上游 Apple Silicon 选项
+`-DARM64 -DPNG_ARM_NEON_OPT=0`，并设置 `MACOSX_DEPLOYMENT_TARGET=15.0`。
+七个二进制均为 arm64，并在干净的进程环境下通过 `--version` 检查。
+全新离线安装重复通过了这七项检查。此候选包未链接 OpenMP。
+macOS 科学结果对照仍待验证。
+
+面向 Windows 的 CMake 探针识别了 MinGW GCC 10，随后在现有 UNIX 平台检查处停止。
+用 MinGW 单独检查固定版本的 `utils/utils.cpp` 和 `mris_sphere/mris_sphere.cpp` 时，
+编译器均因缺少 `sys/resource.h` 停止。原构建和激活检查仍保留。
+Windows 原生构建需要先移植这些 POSIX 依赖。
 
 ---
 

@@ -27,9 +27,17 @@ import tempfile
 import zipfile
 
 VERSION = '3.0.8'
-# These are C++ CLI binaries, not helper scripts that implicitly require FSL.
-# 5ttgen, dwi2response and dwifslpreproc are *not* certified by this step.
+# Keep the existing macOS/Linux command set. The Windows candidate adds ACT
+# preparation, normalisation and tools used by FSL, Dhollander and SAF.
 NATIVE_COMMANDS = ('mrconvert', 'dwi2fod', 'tckgen', 'tcksift2', 'tck2connectome', 'tckconvert')
+WINDOWS_COMMANDS = (
+    *NATIVE_COMMANDS, '5ttcheck', '5tt2gmwmi', 'mtnormalise', 'mrtransform', 'tckstats', 'tcksample',
+    'amp2response', 'dwi2mask', 'dwi2tensor', 'dwiextract', 'maskfilter', 'mrcalc',
+    'mrcat', 'mrinfo', 'mrmath', 'mrstats', 'mrthreshold', 'peaks2amp', 'sh2peaks',
+    'tensor2metric',
+)
+WINDOWS_RESPONSE_SCRIPT = 'bin/dwi2response'
+WINDOWS_PATH_HELPER = 'lib/mrtrix3/path.py'
 SYSTEM_DLL = frozenset({
     'kernel32.dll','ntdll.dll','advapi32.dll','user32.dll','shell32.dll',
     'gdi32.dll','comdlg32.dll','ole32.dll','oleaut32.dll','ws2_32.dll',
@@ -98,6 +106,43 @@ def _copy_with_mode(source: Path, target: Path) -> None:
         target.chmod(target.stat().st_mode | 0o111)
 
 
+def _patch_windows_path_helper(stage: Path) -> dict[str, str]:
+    """Match the pinned path helper to the upstream Windows command tokenizer."""
+    path = stage / WINDOWS_PATH_HELPER
+    upstream = path.read_bytes()
+    newline = b'\r\n' if b'\r\n' in upstream else b'\n'
+    anchor = (
+        b'try:\n'
+        b'  from shlex import quote\n'
+        b'except ImportError:\n'
+        b'  from pipes import quote #pylint: disable=deprecated-module\n'
+    ).replace(b'\n', newline)
+    if upstream.count(anchor) != 1:
+        raise ValueError(f'Cannot patch {WINDOWS_PATH_HELPER}: unexpected upstream quote implementation')
+    replacement = anchor.replace(b'import quote', b'import quote as _posix_quote')
+    replacement += (
+        b'\n'
+        b'# SlicerDSpace: native Windows run.command uses shlex in non-POSIX mode.\n'
+        b'# It strips double quotes from path tokens before launching an argv list.\n'
+        b'def quote(value):\n'
+        b"  if os.sep == '/' or not os.path.isabs(value):\n"
+        b'    return _posix_quote(value)\n'
+        b'  if any(character == \'"\' or ord(character) < 32 for character in value):\n'
+        b"    raise ValueError('Invalid character in Windows command path')\n"
+        b'  return \'"\' + value + \'"\'\n'
+        b'\n'
+    ).replace(b'\n', newline)
+    patched = upstream.replace(anchor, replacement, 1)
+    path.write_bytes(patched)
+    return {
+        'file': WINDOWS_PATH_HELPER,
+        'upstream_commit': '464173c5294e021b2d508e557085d90c09d642fd',
+        'change': 'Use double quotes for absolute paths parsed by native Windows run.command',
+        'original_sha256': hashlib.sha256(upstream).hexdigest(),
+        'patched_sha256': hashlib.sha256(patched).hexdigest(),
+    }
+
+
 def make_archive(folder: Path, archive: Path, system: str) -> None:
     if system == 'Windows':
         with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as out:
@@ -116,6 +161,8 @@ def build(source: Path, output: Path, *, system: str, machine: str, dll_search: 
         raise ValueError('Unsupported host system')
     if machine not in ('x86_64', 'arm64') or (system == 'Windows' and machine != 'x86_64'):
         raise ValueError('Unsupported architecture; do not claim a build for another CPU')
+    if system == 'Windows' and not dll_search:
+        raise ValueError('Windows requires MSYS2 MinGW DLL search directories; never publish unbundled executables')
     source, output = source.resolve(), output.resolve()
     if not source.is_dir():
         raise FileNotFoundError(source)
@@ -135,34 +182,52 @@ def build(source: Path, output: Path, *, system: str, machine: str, dll_search: 
         destination = stage / 'bin'
         destination.mkdir()
         command_paths = []
-        for command in NATIVE_COMMANDS:
+        commands = WINDOWS_COMMANDS if system == 'Windows' else NATIVE_COMMANDS
+        for command in commands:
             binary = _find_command(source, command, system)
             target = destination / binary.name
             _copy_with_mode(binary, target)
             command_paths.append(f'bin/{target.name}')
         copied_dlls = []
+        patches = []
         if system == 'Windows':
-            if not dll_search:
-                raise ValueError('Windows requires MSYS2 MinGW DLL search directories; never publish unbundled executables')
+            for relpath in (WINDOWS_RESPONSE_SCRIPT, 'lib/mrtrix3/__init__.py', 'lib/mrtrix3/_version.py',
+                            'lib/mrtrix3/dwi2response/dhollander.py', WINDOWS_PATH_HELPER):
+                if not (source / relpath).is_file():
+                    raise FileNotFoundError(f'Missing built MRtrix3 response payload: {relpath}')
+            _copy_with_mode(source / WINDOWS_RESPONSE_SCRIPT, stage / WINDOWS_RESPONSE_SCRIPT)
+            shutil.copytree(source / 'lib/mrtrix3', stage / 'lib/mrtrix3',
+                            ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
+            patches.append(_patch_windows_path_helper(stage))
             copied_dlls = copy_windows_dll_closure([stage / rel for rel in command_paths], destination,
                                                    dll_search, objdump=objdump)
+            command_paths.append(WINDOWS_RESPONSE_SCRIPT)
         else:
             # Only bundle a platform's *own* library tree. Toolchain-provided
             # .dylib/.so portability must be verified on a clean test host.
             for library_root in (source / 'lib', source / 'share'):
                 if library_root.is_dir():
                     shutil.copytree(library_root, stage / library_root.name, symlinks=False)
+        if system == 'Windows':
+            limitations = [
+                'The Windows response script requires a native Python interpreter.',
+                'This candidate targets Dhollander response, CSD, normalisation and ACT with prepared priors.',
+            ]
+        else:
+            limitations = [
+                'This package only qualifies the listed C++ CLI programs.',
+                'MRtrix Python scripts/ACT prior generation may require additional dependencies.',
+            ]
+        limitations.append('FSL Eddy/Topup and FreeSurfer are not bundled or approved.')
         receipt = {
             'kind': 'slicerdspace_native_candidate', 'version': VERSION,
             'system': system, 'machine': machine, 'commands': command_paths,
             'copied_dlls': copied_dlls, 'scientifically_accepted': False,
             'end_user_install_requires_build_tools': False,
-            'limitations': [
-                'This package only qualifies the listed C++ CLI programs.',
-                'MRtrix Python scripts/ACT prior generation may require additional dependencies.',
-                'FSL Eddy/Topup and FreeSurfer are not bundled or approved.',
-            ],
+            'limitations': limitations,
         }
+        if patches:
+            receipt['patches'] = patches
         (stage / 'native-runtime.json').write_text(json.dumps(receipt, indent=2, sort_keys=True) + '\n')
         make_archive(stage, artifact, system)
     record = {

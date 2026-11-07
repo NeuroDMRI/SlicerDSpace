@@ -9,16 +9,20 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 BACKEND = ROOT / 'anatomy/surface/ddsurfer_backend'
+sys.path.insert(0, str(ROOT))
 
 
 def probe(args):
     sys.path.insert(0, str(BACKEND))
     from postprocessing.core.runtime import validate_runtime, selection
+    from shared.surface_license import resolve_surface_license, usable_license
+
     home = args.home.expanduser().resolve()
-    license_file = args.license_file or Path(os.environ.get('FS_LICENSE') or home / 'license.txt')
-    license_file = license_file.expanduser().resolve()
+    license_file = resolve_surface_license(
+        args.license_file, freesurfer_home=home if args.backend == 'freesurfer' else None,
+    )
     result = dict(backend=args.backend, home=str(home), components_available=False,
-                  license_available=license_file.is_file() and license_file.stat().st_size > 0,
+                  license_available=usable_license(license_file),
                   build_required=False, available=False)
     try:
         if args.backend == 'native':

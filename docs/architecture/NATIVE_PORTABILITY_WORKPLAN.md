@@ -60,8 +60,17 @@ from the patch's exact upstream base `f09110a964697622d57dbefa8499cf45109cd15d`.
 The original ZIP and the previous checkout files are retained outside the repo.
 
 WMA hardening now uses only Slicer core Model/Transform classes. This removes
-the default WMA setup's SlicerDMRI dependency; WMA's original POSIX atlas
-orchestration and existing Linux backends remain in use.
+the default WMA setup's SlicerDMRI dependency.
+
+The ORG workflow also has a native Python runner. It calls the pinned WMA
+scripts with Slicer's PythonSlicer and uses a separate Slicer process to harden
+transforms. Windows selects this runner when no WMA WSL bridge is configured.
+Linux and macOS default to the author shell. Set
+`DSP_WMA_EXECUTION_BACKEND=native` to exercise the native runner on any platform,
+or set it to `legacy` to use the author shell or configured WSL bridge. Native
+runs record each stage command and bypass the POSIX registration cache. Resume
+checks the recorded execution backend before reusing results. East-West, NABA
+and the FiberTractMeasurements export continue to use the legacy runner.
 
 The optional measurement methods have separate selection. In
 `WMAOrgAtlasConfig`, `export_diffusion_measures=True` retains the existing
@@ -92,3 +101,18 @@ point scalar preservation, unchanged empty clusters and removal of created MRML
 nodes with SlicerDMRI unloaded. These are synthetic geometry checks, not a full
 atlas or cross-platform scientific validation. Native bundle publication stays
 disabled until the release gates above pass.
+
+## Unified FSL correction pilot
+
+DIPY MP-PCA, Gibbs removal, phase-encoding resolution and output management
+use the existing preprocessing entry point. The default correction runner is
+MRtrix's dwifslpreproc. The experimental runner uses native Eddy CPU on all
+hosts and requires Topup, Applytopup and b02b0.cnf only for paired phase encoding.
+It uses MRtrix image commands to prepare the FSL input and export the rotated
+gradients. It writes a separate cache identity and records the executed commands.
+
+Select the pilot with --preprocessing-execution-backend native or set
+DSP_PREPROCESSING_EXECUTION_BACKEND=native before launching Slicer. Point the
+preprocessing binary-directory settings at native MRtrix and FSL installations.
+The pilot needs same-version correction and end-to-end validation before any
+default change. macOS Intel and Apple Silicon need separate runtime checks.

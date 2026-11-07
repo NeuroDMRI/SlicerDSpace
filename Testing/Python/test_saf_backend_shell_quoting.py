@@ -1,14 +1,5 @@
 #!/usr/bin/env python3
-"""Tests that SAF backend shell=True command strings quote interpolated paths.
-
-Several bundled SAF pipeline modules build a single command string and hand
-it to ``sys_exec`` (``subprocess.run(cmd, shell=True, ...)``). Every path
-interpolated into those strings must be shell-quoted; otherwise a path
-containing whitespace or a shell metacharacter such as ";" could be
-misinterpreted. Each test below mocks ``sys_exec`` so no real process runs,
-and asserts the built command properly quotes a path with a space and a
-path with a semicolon.
-"""
+"""SAF command boundaries preserve path values and explicit legacy quoting."""
 
 from __future__ import annotations
 
@@ -44,7 +35,7 @@ class ShellQuoteHelperTest(unittest.TestCase):
 
 
 class ApplyTckSampleTest(unittest.TestCase):
-    def test_paths_are_quoted_in_built_command(self) -> None:
+    def test_paths_are_single_argv_entries(self) -> None:
         from Data_modules.apply_tck_sample import apply_tck_sample
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -60,14 +51,12 @@ class ApplyTckSampleTest(unittest.TestCase):
             mock_exec.assert_called_once()
             command, ps_arg = mock_exec.call_args.args
             self.assertIs(ps_arg, PS)
-            import shlex
-
-            self.assertIn(shlex.quote(str(tracks)), command)
-            self.assertIn(shlex.quote(str(scalar)), command)
+            self.assertEqual(command, ["tcksample", "-stat_tck", "mean", "-precise", "-force",
+                                       str(tracks), str(scalar), str(out_dir / "fa.nii.tsf")])
 
 
 class TxClassTest(unittest.TestCase):
-    def test_mrconvert_paths_are_quoted(self) -> None:
+    def test_mrconvert_paths_are_single_argv_entries(self) -> None:
         from Class_files.tx_class import tx_class
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -83,16 +72,12 @@ class TxClassTest(unittest.TestCase):
             mock_exec.assert_called_once()
             command, ps_arg = mock_exec.call_args.args
             self.assertIs(ps_arg, PS)
-            import shlex
-
-            expected_input = str(fs_dir / "mri" / "brain.mgz")
-            expected_output = str(work_dir / "brain_T1.nii.gz")
-            self.assertIn(shlex.quote(expected_input), command)
-            self.assertIn(shlex.quote(expected_output), command)
+            self.assertEqual(command, ["mrconvert", str(fs_dir / "mri" / "brain.mgz"),
+                                       str(work_dir / "brain_T1.nii.gz")])
 
 
 class FiltersLengthTest(unittest.TestCase):
-    def test_final_init_path_is_quoted(self) -> None:
+    def test_final_init_path_is_one_argv_entry(self) -> None:
         from Filters import filters_length as filters_length_module
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -115,9 +100,8 @@ class FiltersLengthTest(unittest.TestCase):
             mock_exec.assert_called_once()
             command, ps_arg = mock_exec.call_args.args
             self.assertIs(ps_arg, PS)
-            import shlex
-
-            self.assertIn(shlex.quote(str(final_init)), command)
+            self.assertEqual(command, ["tckstats", "-dump", str(work_dir / "lengths.txt"),
+                                       str(final_init), "-force"])
 
 
 def _stub_nibabel() -> types.ModuleType:
@@ -140,7 +124,7 @@ def _stub_nibabel() -> types.ModuleType:
 
 
 class TractographyMrtrixTest(unittest.TestCase):
-    def test_fod_and_seed_paths_are_quoted(self) -> None:
+    def test_fod_seed_and_custom_option_paths_are_single_argv_entries(self) -> None:
         # Support.mrtrix_tracks does `import nibabel as nib` at module scope;
         # stub it for the import so this test can run without the real
         # (heavy, optional) nibabel dependency installed. Once imported, the
@@ -172,7 +156,7 @@ class TractographyMrtrixTest(unittest.TestCase):
                 force=True,
                 surfseed=True,
                 mrtrix_prefix="",
-                tckgen="-select 100",
+                tckgen='-select 100 -mask "custom dir/brain mask.mif"',
                 fod=str(fod),
                 dgn=False,
                 logt=[],
@@ -193,15 +177,9 @@ class TractographyMrtrixTest(unittest.TestCase):
             mock_exec.assert_called_once()
             command, ps_arg = mock_exec.call_args.args
             self.assertIs(ps_arg, PS)
-            import shlex
-
-            self.assertIn(shlex.quote(str(fod)), command)
-            self.assertIn(shlex.quote(str(sl_init)), command)
-            self.assertIn(shlex.quote(str(seed_out)), command)
-            self.assertIn(shlex.quote(str(seed_in)), command)
-            # PS.tckgen is a multi-token option string, not a single path; it
-            # must remain unquoted so its options are still shell-word-split.
-            self.assertIn(PS.tckgen, command)
+            self.assertEqual(command, ["tckgen", "-seed_coordinates_global", str(seed_in),
+                                       "-output_seeds", str(seed_out), "-select", "100", "-mask",
+                                       "custom dir/brain mask.mif", str(fod), str(sl_init), "-force"])
 
 
 class InitClassSortFSTest(unittest.TestCase):

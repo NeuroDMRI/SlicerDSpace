@@ -33,6 +33,7 @@ class init_class:
         self.gwg_hard = False
         self.gg_margin = 0
         self.mrtrix_prefix = ''
+        self.mrtrix_bin_dir = ''
         self.outf = -1
         self.force = False
         self.dgn = False
@@ -156,6 +157,7 @@ class init_class:
             self.logt.append(['Streamline weights:', self.sl_weights])
         self.logt.extend([
             ['MRtrix command prefix:', self.mrtrix_prefix],
+            ['MRtrix bin directory:', self.mrtrix_bin_dir],
             ['Fast mesh-streamline intersection detection:', self.fastx],
             ['Extra margin during GG:', self.gg_margin],
             ['Hard 2-point intersection during GWG:', self.gwg_hard],

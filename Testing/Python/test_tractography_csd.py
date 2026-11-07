@@ -22,6 +22,29 @@ from tractography.csd import CSDActConfig, _timed_step, inspect_mrtrix_csd_backe
 
 
 class CSDActBackendTest(unittest.TestCase):
+    def test_windows_native_response_uses_explicit_python_and_runtime_library(self):
+        from unittest.mock import patch
+        from tractography.csd import _mrtrix_csd_invocation
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            script = root / "runtime with spaces" / "bin" / "dwi2response"
+            script.parent.mkdir(parents=True)
+            script.touch()
+            library = script.parent.parent / "lib"
+            (library / "mrtrix3").mkdir(parents=True)
+            (library / "mrtrix3" / "__init__.py").touch()
+            python = root / "Slicer with spaces" / "PythonSlicer.exe"
+            with patch("tractography.csd.sys.platform", "win32"), patch(
+                "tractography.csd.find_pythonslicer", return_value=python,
+            ):
+                command, environment = _mrtrix_csd_invocation((str(script), "dhollander", "a b.mif"), {})
+                legacy, legacy_env = _mrtrix_csd_invocation((str(script) + ".exe", "dhollander"), {})
+            self.assertEqual(command, (str(python), "-B", "-S", str(script), "dhollander", "a b.mif"))
+            self.assertEqual(environment["PYTHONPATH"], str(library))
+            self.assertEqual(legacy, (str(script) + ".exe", "dhollander"))
+            self.assertNotIn("PYTHONPATH", legacy_env)
+
     def test_phase_timing_preserves_running_success_and_failed_subprocess(self):
         import subprocess
 

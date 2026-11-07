@@ -48,7 +48,9 @@ def inspect_surface_runtime(runtime=None, freesurfer_home=None, license_file=Non
         backend, home = resolve_surface_runtime(runtime, freesurfer_home)
         command += ['--backend', backend, '--home', str(home)]
         from shared.surface_license import resolve_surface_license
-        license_file = resolve_surface_license(license_file, freesurfer_home=home)
+        license_file = resolve_surface_license(
+            license_file, freesurfer_home=home if backend == 'freesurfer' else None,
+        )
         if license_file is not None:
             command += ['--license-file', str(license_file)]
         result = subprocess.run(command, env=backend_environment(), capture_output=True, text=True, timeout=60)

@@ -31,6 +31,22 @@
       "min_macos": "15.0",
       "url": "https://media.githubusercontent.com/media/ChengjinLii/SlicerDSpace-models/main/runtime/surface/surface-runtime-darwin-x86_64.tar.gz",
       "terms": "https://surfer.nmr.mgh.harvard.edu/fswiki/FreeSurferSoftwareLicense"
+    },
+    {
+      "system": "Darwin",
+      "machine": "arm64",
+      "recipe_sha256": "0ca82110b74fc3898b2a96ee4b4749369a208e5fc65553335008d1c4c05284c6",
+      "source_revision": "7eb846079b0dc0c92e8313205a3d2387b5c7a354",
+      "sha256": "87a17dbab4b1efc1aac93ce65d6d982c0124319062c68f3de01a2d0c60f62e5e",
+      "bytes": 38612233,
+      "unpacked_bytes": 83293015,
+      "activation_key_included": false,
+      "files": 67,
+      "asset": "runtime/surface/surface-runtime-darwin-arm64.tar.gz",
+      "published": false,
+      "min_macos": "15.0",
+      "url": "https://media.githubusercontent.com/media/ChengjinLii/SlicerDSpace-models/main/runtime/surface/surface-runtime-darwin-arm64.tar.gz",
+      "terms": "https://surfer.nmr.mgh.harvard.edu/fswiki/FreeSurferSoftwareLicense"
     }
   ]
 }

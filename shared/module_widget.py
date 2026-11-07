@@ -3484,6 +3484,8 @@ class SharedWidgetMixin:
             return "slicer_executable", "file"
         if group == "slicer-dmri":
             return "fiber_tract_measurements_cli", "file"
+        if key == "path:wmql_python":
+            return "wmql_python_executable", "file"
         if "tract_querier" in key:
             return "tract_querier_root", "dir"
         return None, "dir"

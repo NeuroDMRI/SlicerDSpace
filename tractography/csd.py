@@ -10,6 +10,7 @@ from __future__ import annotations
 from shared.cohort_schedule import scheduled_stage
 
 import json
+import sys
 import subprocess
 import time
 from contextlib import contextmanager
@@ -18,7 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
 
-from shared.external_process import managed_tool_environment, resolve_external_command
+from shared.external_process import find_pythonslicer, managed_tool_environment, resolve_external_command
 
 
 SEEDING_MODES = ("dynamic", "gmwmi")
@@ -139,6 +140,25 @@ def _file_info(path: Path) -> dict[str, object]:
 
 def _resolve_command(name: str, bin_dir: Optional[Path] = None) -> Optional[str]:
     return resolve_external_command(name, bin_dir)
+
+
+def _mrtrix_csd_invocation(command: tuple[str, ...], env: dict[str, str]) -> tuple[tuple[str, ...], dict[str, str]]:
+    script = Path(command[0])
+    if sys.platform != "win32" or script.name.lower() != "dwi2response":
+        return command, env
+
+    # The native MRtrix package ships dwi2response as a Python script.
+    # The WSL bridge is an executable and continues to launch directly.
+    library = script.resolve().parent.parent / "lib"
+    if not (library / "mrtrix3" / "__init__.py").is_file():
+        raise RuntimeError(f"Native MRtrix Python package is missing from {library}")
+    current = Path(sys.executable).resolve()
+    python = find_pythonslicer(current.parent)
+    if python is None:
+        if not current.name.lower().startswith("python") or current.stem.lower() == "python-real":
+            raise RuntimeError("Native dwi2response requires an installed Python or PythonSlicer launcher.")
+        python = current
+    return (str(python), "-B", "-S", *command), dict(env, PYTHONPATH=str(library))
 
 
 def inspect_mrtrix_csd_backend(
@@ -691,9 +711,10 @@ def run_csd_act(config: CSDActConfig, *, log: Optional[Callable[[str], None]] = 
         )
         try:
             for command in commands:
-                _emit(f"[Tractography] Running MRtrix CSD/ACT command: {' '.join(command)}", log)
-                with _timed_step(phase_timings, Path(command[0]).name, persist_timings, command) as phase:
-                    completed = subprocess.run(command, check=True, env=command_env, cwd=output_dir)
+                argv, env = _mrtrix_csd_invocation(command, command_env)
+                _emit(f"[Tractography] Running MRtrix CSD/ACT command: {' '.join(argv)}", log)
+                with _timed_step(phase_timings, Path(command[0]).name, persist_timings, argv) as phase:
+                    completed = subprocess.run(argv, check=True, env=env, cwd=output_dir)
                     return_code = completed.returncode
                     phase['return_code'] = return_code
             if config.export_trk and tractogram_trk is not None:

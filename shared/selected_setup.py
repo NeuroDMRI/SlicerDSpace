@@ -50,19 +50,24 @@ def build_setup_plan(result, *, installed_extensions=(), loaded_extensions=None,
     backend_paths = backend_paths or {}
     asset_value = backend_paths.get('model_assets_dir')
     asset_root = configured_model_assets_root(Path(asset_value) if asset_value else None)
+    native_wma = any(
+        item.key == 'path:wma_root_path' and (item.details or {}).get('execution_backend') == 'native'
+        for item in result.statuses
+    )
     source_profiles = []
     unsupported_sources = []
+    keys = {item.key for item in missing}
+    packages_missing = {str((item.details or {}).get('package', '')).split('>=')[0]
+                        for item in missing if item.kind == 'python'}
     for name, source in SOURCES.items():
         root = backend_paths.get(source['setting'])
         if root and not Path(str(root)).expanduser().resolve().is_relative_to(source_root().resolve()):
             continue
-        keys = {item.key for item in missing}
-        packages_missing = {str((item.details or {}).get('package', '')).split('>=')[0]
-                            for item in missing if item.kind == 'python'}
         if ((name == 'wmql' and ('tract_querier' in packages_missing or keys & {'tract_querier_root', 'tract_querier_root_script'}))
-                or (name == 'wma' and keys & {'wma_root', 'wma_root_path', 'command:wm_apply_ORG_atlas_to_subject.sh'})
+                or (name == 'wma' and keys & {'wma_root', 'wma_root_path', 'path:wma_root_path',
+                                               'command:wm_apply_ORG_atlas_to_subject.sh'})
                 or (name == 'tractcloud' and ('tractcloud' in packages_missing or 'tractcloud_root_path' in keys))):
-            if name == 'wma' and native_windows:
+            if name == 'wma' and native_windows and not native_wma:
                 unsupported_sources.append(name)
             else:
                 source_profiles.append(name)
@@ -105,10 +110,16 @@ def build_setup_plan(result, *, installed_extensions=(), loaded_extensions=None,
         covered.add('fsl')  # W2a: macOS has FSL builds too, but supported_platform() without profiles is Linux only
     windows_runtime = None
     if native_windows:
+        preserve_wma = native_wma or "wma" not in closure_targets
         windows_runtime = windows_runtime_plan(
             groups, closure_targets, wsl_distributions=wsl_distributions, slicer_executable=slicer_executable,
-            license_file=backend_paths.get("postprocess_license_file"))
+            license_file=backend_paths.get("postprocess_license_file"), preserve_wma_settings=bool(preserve_wma))
         if windows_runtime["command"]:
+            if backend_paths.get("wmql_python_executable"):
+                windows_runtime["command"].append("-PreserveWmqlSettings")
+            tractcloud_python = backend_paths.get("tractcloud_python_executable")
+            if tractcloud_python and not Path(str(tractcloud_python) + ".slicerdsurfer-owner").is_file():
+                windows_runtime["command"].append("-PreserveTractCloudSettings")
             covered.update(windows_runtime["covers"])
             for name in ("mrtrix", "fsl_cpu", "fsl_cuda"):
                 if name in managed and name != "pnl_cnn":
@@ -130,7 +141,12 @@ def build_setup_plan(result, *, installed_extensions=(), loaded_extensions=None,
         package.lower().replace('-', '_') == name or
         ('/' + name in package.lower().replace('-', '_') and 'github.com' in package.lower())
         for name in source_packages)]
-    backend_requirements = [requirement for name in source_profiles for requirement in SOURCES[name]['requirements']]
+    # Native WMA dependencies are already probed in its exact PythonSlicer.
+    # In particular, a missing PythonSlicer must not send the source package
+    # requirements to the doctor's fallback interpreter.
+    sources_needing_requirements = [name for name in source_profiles if name != 'wma' or not native_wma]
+    backend_requirements = [requirement for name in sources_needing_requirements
+                            for requirement in SOURCES[name]['requirements']]
     packages = list(dict.fromkeys([*packages, *backend_requirements]))
     python_requests = []
     for item in missing:
@@ -145,7 +161,7 @@ def build_setup_plan(result, *, installed_extensions=(), loaded_extensions=None,
         if DCM2NIIX_REQUIREMENT not in packages:
             packages.append(DCM2NIIX_REQUIREMENT)
         python_requests.append(dict(requirement=DCM2NIIX_REQUIREMENT, python_executable=None, slicer_python=True))
-    for name in source_profiles:
+    for name in sources_needing_requirements:
         if name == 'tractcloud':
             python = backend_paths.get('tractcloud_python_executable')
             candidates = [item for item in result.statuses if 'tractcloud' in item.targets and item.kind == 'python']
@@ -153,7 +169,7 @@ def build_setup_plan(result, *, installed_extensions=(), loaded_extensions=None,
             python = None
             candidates = [item for item in result.statuses if item.key.startswith('python:wma:')]
         else:
-            python = backend_paths.get('python_executable')
+            python = backend_paths.get('wmql_python_executable')
             candidates = [item for item in result.statuses if item.key == 'python:tract_querier']
         if not python:
             python = next(((item.details or {}).get('python_executable') for item in candidates
@@ -199,7 +215,7 @@ def build_setup_plan(result, *, installed_extensions=(), loaded_extensions=None,
             "unsupported_notes": unsupported_notes,
             "manual_items": [{"key": item.key, "label": item.label, "hint":
                               'Windows WMA needs a configured WSL executable bridge; an author Bash checkout alone is not runnable. See docs/setup/WINDOWS.md.'
-                              if native_windows and item.install_group == 'wma' and 'atlas' not in item.key
+                              if native_windows and not native_wma and item.install_group == 'wma' and 'atlas' not in item.key
                               else PNL_UNSUPPORTED_TEXT if item.key == 'brain_mask_backend' and "pnl_cnn" in unsupported_notes
                               else PREPROCESSING_UNSUPPORTED_TEXT if item.install_group in {'mrtrix', 'fsl'} and fsl_unsupported
                               else item.install_hint}
@@ -215,7 +231,7 @@ def build_setup_plan(result, *, installed_extensions=(), loaded_extensions=None,
 
 
 def windows_install_command(distribution, *, slicer_executable=None, install_freesurfer=False, license_file=None,
-                            skip_large_downloads=False, script=None):
+                            skip_large_downloads=False, preserve_wma_settings=False, script=None):
     """Argument list of the Windows ps1 call (B5). The caller adds the program, `powershell`."""
     script = Path(script) if script else Path(__file__).resolve().parents[1] / "scripts" / "install_deps_windows.ps1"
     command = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script), "-Distro", distribution]
@@ -228,10 +244,13 @@ def windows_install_command(distribution, *, slicer_executable=None, install_fre
         command.append("-SkipFreeSurfer")
     if skip_large_downloads:
         command.append("-SkipLargeDownloads")
+    if preserve_wma_settings:
+        command.append("-PreserveWmaSettings")
     return ["powershell", *command]
 
 
-def windows_runtime_plan(groups, closure_targets, *, wsl_distributions=None, slicer_executable=None, license_file=None):
+def windows_runtime_plan(groups, closure_targets, *, wsl_distributions=None, slicer_executable=None, license_file=None,
+                         preserve_wma_settings=False):
     """What the Windows setup does for the missing install groups: WSL distribution, ps1 switches (B5)."""
     from shared.surface_license import resolve_surface_license, usable_license
 
@@ -249,7 +268,8 @@ def windows_runtime_plan(groups, closure_targets, *, wsl_distributions=None, sli
     if needed and distribution:
         command = windows_install_command(
             distribution, slicer_executable=slicer_executable, install_freesurfer=install_freesurfer,
-            license_file=found, skip_large_downloads=not install_freesurfer and not wma)
+            license_file=found, skip_large_downloads=not install_freesurfer and (not wma or preserve_wma_settings),
+            preserve_wma_settings=preserve_wma_settings)
     covers = {"mrtrix", "fsl"} | ({"freesurfer"} if install_freesurfer else set())
     return {"needed": needed, "distribution": distribution, "freesurfer_required": freesurfer_required,
             "freesurfer_license": str(found) if found else None, "installs_freesurfer": install_freesurfer,

@@ -560,5 +560,28 @@ sys.exit(9)
                 DwiPreprocessingConfig(subject_id="100307", input_root=Path("."), **{name: "x"})
 
 
+class NativePreprocessingIntegrationTest(unittest.TestCase):
+    def test_native_dry_run_has_own_backend_and_cache_identity(self):
+        from preprocessing import DwiPreprocessingConfig, run_dwi_preprocessing
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            subject = _write_nifti_subject(root)
+            common = dict(subject_id="100307", input_root=subject, brain_mask_backend="provided",
+                          mrtrix_bin_dir=root / "mrtrix", fsl_bin_dir=root / "fsl")
+            with patch.dict("os.environ", {"DSP_PREPROCESSING_EXECUTION_BACKEND": "native"}):
+                native = run_dwi_preprocessing(DwiPreprocessingConfig(output_dir=root / "native", **common))
+                legacy = run_dwi_preprocessing(DwiPreprocessingConfig(
+                    output_dir=root / "legacy", execution_backend="legacy", **common))
+            native_record = json.loads(native.manifest_path.read_text())
+            legacy_record = json.loads(legacy.manifest_path.read_text())
+            self.assertEqual(native_record["backend"]["execution_backend"], "native")
+            self.assertNotIn("environment", native_record["backend"])
+            self.assertTrue(any(row["argv"][0] == "native-fsl-correction" for row in native_record["commands"]))
+            self.assertNotEqual(native_record["cache_key"], legacy_record["cache_key"])
+            self.assertNotIn("execution_backend", legacy_record["cache_key"])
+
+
 if __name__ == "__main__":
     unittest.main()

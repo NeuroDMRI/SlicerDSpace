@@ -43,9 +43,11 @@ def check_environment(home=None, hemisphere='both', atlas_names='aparc,aparc.a20
     for binary in binaries:
         if not binary.is_file() or not os.access(binary, os.X_OK):
             raise FileNotFoundError(f'FreeSurfer executable not available: {binary.name}')
-    license_file = Path(license_file if license_file is not None else
-                        os.environ.get('FS_LICENSE', str(home / 'license.txt'))).expanduser().resolve()
-    if not license_file.is_file() or not license_file.stat().st_size:
+    activation = license_file if license_file is not None else os.environ.get('FS_LICENSE')
+    if activation is None and runtime_manifest is None:
+        activation = next((path for path in home.iterdir() if path.name == 'license.txt'), None)
+    license_file = Path(activation).expanduser().resolve() if activation else None
+    if license_file is None or not license_file.is_file() or not license_file.stat().st_size:
         raise FileNotFoundError('Set FS_LICENSE to a valid FreeSurfer license file')
     fsaverage = home / 'subjects/fsaverage'
     references = []

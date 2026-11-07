@@ -34,6 +34,17 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 class EnvironmentDoctorDiscoveryTest(unittest.TestCase):
+    def test_wmql_doctor_checks_dependencies_in_the_selected_worker(self) -> None:
+        worker = Path(sys.executable).absolute().with_name("wmql-worker.exe")
+        config = EnvironmentDoctorConfig(repo_root=REPO_ROOT, targets=("bundles",), wmql_python_executable=worker)
+
+        specs = {spec.key: spec for spec in build_dependency_specs(config)}
+
+        self.assertEqual(specs["python:tract_querier"].python_executable, worker)
+        for name in ("nibabel", "numpy", "vtk"):
+            self.assertEqual(specs[f"python:wmql:{name}"].python_executable, worker)
+        self.assertNotEqual(specs["python:nibabel"].python_executable, worker)
+
     def test_default_pythonpath_does_not_leak_into_an_external_python(self) -> None:
         default_python = Path(sys.executable).resolve()
         external_python = default_python.with_name("external-python.exe")

@@ -739,30 +739,75 @@ class SAFIntegrationTest(unittest.TestCase):
         self.assertEqual(status["mrtrix_required"]["tckgen"], "singularity exec mrtrix.sif tckgen")
         self.assertEqual(status["missing_required"], [])
 
-    def test_effective_mrtrix_prefix_quotes_bin_dir_with_shell_metacharacters(self) -> None:
-        # _effective_mrtrix_prefix() builds "PATH=<bin_dir>:$PATH " that is
-        # interpolated verbatim into shell=True command strings by the
-        # bundled SAF backend; bin_dir must be shell-quoted so a directory
-        # name containing a space or ";" cannot corrupt the command.
-        from tractography.saf import SAFConfig, _effective_mrtrix_prefix
+    def test_configured_mrtrix_bin_is_passed_as_a_path_to_saf(self) -> None:
+        from tractography.saf import SAFConfig, _build_saf_args
 
         with tempfile.TemporaryDirectory() as tmp:
-            bin_dir = Path(tmp) / "unsafe dir; touch pwned" / "mrtrix-bin"
+            bin_dir = Path(tmp) / "MRtrix with spaces; ampersand &" / "bin"
             bin_dir.mkdir(parents=True)
-
-            prefix = _effective_mrtrix_prefix(
-                SAFConfig(
-                    subject_id="100307",
-                    input_root=Path("/tmp/subject"),
-                    fs_dir=Path("/tmp/fs"),
-                    fod_path=Path("/tmp/fod.mif"),
-                    mrtrix_bin_dir=bin_dir,
-                )
+            config = SAFConfig(
+                subject_id="100307",
+                input_root=Path(tmp),
+                fs_dir=Path(tmp) / "fs",
+                fod_path=Path(tmp) / "fod.mif",
+                mrtrix_bin_dir=bin_dir,
             )
+            args = _build_saf_args(config, Path(tmp) / "output")
+            self.assertNotIn("mrtrix_prefix", args)
+            self.assertEqual(args[args.index("mrtrix_bin_dir") + 1], bin_dir.resolve().as_posix())
 
-            quoted_bin_dir = shlex.quote(bin_dir.resolve().as_posix())
-            self.assertEqual(prefix, f"PATH={quoted_bin_dir}:$PATH ")
-            self.assertEqual(shlex.split(prefix.replace(":$PATH", "")), [f"PATH={bin_dir.resolve().as_posix()}"])
+    def test_argv_runner_resolves_configured_bin_and_preserves_seed(self) -> None:
+        from Support.sys_exec import sys_exec
+
+        with tempfile.TemporaryDirectory() as tmp:
+            bin_dir = Path(tmp) / "MRtrix tools"
+            executable = bin_dir / ("tckstats.exe" if sys.platform == "win32" else "tckstats")
+            bin_dir.mkdir()
+            executable.touch()
+            executable.chmod(0o755)
+            path_with_shell_characters = str(Path(tmp) / "literal; file.tck")
+            ps = types.SimpleNamespace(dgn=False, mrtrix_bin_dir=str(bin_dir))
+            with mock.patch.dict("os.environ", {"MRTRIX_RNG_SEED": "31"}), \
+                    mock.patch("Support.sys_exec.startup_environment", side_effect=lambda extra_env: dict(
+                        PATH="original", **(extra_env or {}))), \
+                    mock.patch("Support.sys_exec.shutil.which", return_value=str(Path(tmp) / "other-tckstats")) as which, \
+                    mock.patch("Support.sys_exec.subprocess.run") as run:
+                sys_exec(["tckstats", path_with_shell_characters], ps)
+            which.assert_not_called()
+            self.assertEqual(run.call_args.kwargs["env"]["PATH"], str(bin_dir) + os.pathsep + "original")
+            self.assertEqual(run.call_args.args[0], [str(executable), path_with_shell_characters])
+            self.assertFalse(run.call_args.kwargs["shell"])
+            self.assertEqual(run.call_args.kwargs["env"]["MRTRIX_RNG_SEED"], "31")
+
+    def test_windows_argv_runner_supplies_home_only_to_its_child(self) -> None:
+        from Support.sys_exec import sys_exec
+
+        ps = types.SimpleNamespace(dgn=False)
+        for environment, expected in (
+            ({"HOME": "custom home", "USERPROFILE": "profile"}, "custom home"),
+            ({"USERPROFILE": "profile"}, "profile"),
+            ({}, "detected home"),
+        ):
+            with self.subTest(environment=environment), mock.patch("sys.platform", "win32"), \
+                    mock.patch("Support.sys_exec.Path.home", return_value=Path("detected home")), \
+                    mock.patch("Support.sys_exec.startup_environment", return_value=dict(environment)), \
+                    mock.patch("Support.sys_exec.shutil.which", return_value="/absolute/tckstats.exe"), \
+                    mock.patch("Support.sys_exec.subprocess.run") as run:
+                inherited_home = os.environ.get("HOME")
+                sys_exec(["tckstats", "a.tck"], ps)
+                self.assertEqual(run.call_args.kwargs["env"]["HOME"], expected)
+                self.assertEqual(os.environ.get("HOME"), inherited_home)
+
+    @unittest.skipIf(sys.platform == "win32", "Legacy shell wrappers are tested on POSIX")
+    def test_legacy_prefix_still_wraps_the_mrtrix_command(self) -> None:
+        from Support.sys_exec import sys_exec
+
+        ps = types.SimpleNamespace(dgn=False, mrtrix_prefix="singularity exec 'MRtrix tools.sif'")
+        with mock.patch("Support.sys_exec.subprocess.run") as run:
+            sys_exec(["tckstats", "/data/a; b.tck"], ps)
+        self.assertTrue(run.call_args.kwargs["shell"])
+        self.assertEqual(shlex.split(run.call_args.args[0]),
+                         ["singularity", "exec", "MRtrix tools.sif", "tckstats", "/data/a; b.tck"])
 
 
 if __name__ == "__main__":

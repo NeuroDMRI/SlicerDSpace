@@ -73,6 +73,38 @@ class InstallDependenciesProfileTest(unittest.TestCase):
             self.assertEqual(command[-1], "scikit-learn")
             self.assertEqual(results[0].status, "passed")
 
+    def test_install_commands_use_each_missing_packages_checked_python(self) -> None:
+        module = _load_install_dependencies_module()
+        from shared.environment import DependencyStatus, EnvironmentDoctorResult
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            default_python, worker = str(root / "Slicer Python"), str(root / "WMQL Python")
+            dependencies = tuple(DependencyStatus(
+                key=key, kind="python", label=requirement, status="missing", required=True,
+                targets=("bundles",), details={"install_requirement": requirement, "python_executable": python},
+                install_group="python", install_hint="",
+            ) for key, requirement, python in (
+                ("python:nibabel", "nibabel>=5.0", default_python),
+                ("python:wmql:numpy", "numpy>=1.26", worker),
+            ))
+            doctor = EnvironmentDoctorResult(
+                platform="Linux", host_platform="Linux", python_executable=default_python,
+                targets=("bundles",), statuses=dependencies, target_statuses=(), blocker_count=2,
+                missing_python_packages=("nibabel>=5.0", "numpy>=1.26"), missing_external_groups=(),
+            )
+
+            with mock.patch.object(module, "run_environment_doctor", return_value=doctor), \
+                    mock.patch.object(module, "_install_python_packages", return_value=[]) as install, \
+                    contextlib.redirect_stdout(io.StringIO()):
+                module.main(["--target", "bundles", "--output-dir", str(root), "--execute"])
+
+            self.assertEqual([call.args[:2] for call in install.call_args_list],
+                             [(default_python, ("nibabel>=5.0",)), (worker, ("numpy>=1.26",))])
+            helper = (root / "install_missing_python.sh").read_text()
+            self.assertIn(f"'{worker}' -m pip install 'numpy>=1.26'", helper)
+            self.assertNotIn("nibabel>=5.0' 'numpy>=1.26", helper)
+
     def test_macos_wrapper_generates_a_darwin_plan(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             output_dir = Path(temporary) / "macos-plan"

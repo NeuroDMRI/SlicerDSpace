@@ -62,7 +62,7 @@ class NativeBuildTests(unittest.TestCase):
             self.validate()
 
     def test_private_activation_file_must_not_be_in_runtime(self):
-        (self.runtime / 'license.txt').write_text('private')
+        (self.runtime / '.license').write_text('private')
         with self.assertRaisesRegex(ValueError, 'private activation'):
             self.validate()
 
@@ -159,7 +159,7 @@ class NativeBuildTests(unittest.TestCase):
     def test_named_compiler_can_be_selected_through_path(self):
         compiler = self.root / 'fakecc'; compiler.write_text('#!/bin/sh\nexit 0\n'); compiler.chmod(0o755)
         with patch.dict(os.environ, {'PATH': str(self.root)}):
-            self.assertEqual(build.require_tool('fakecc', 'cc'), str(compiler))
+            self.assertEqual(build.require_tool('fakecc', 'cc'), str(compiler.resolve()))
 
     def test_staged_algorithm_sources_cannot_be_edited(self):
         source = self.root / 'upstream'; (source / 'include').mkdir(parents=True)

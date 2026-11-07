@@ -309,6 +309,8 @@ def _environment_config_from_args(
         mrtrix_bin_dir=args.mrtrix_bin_dir,
         preprocessing_mrtrix_bin_dir=args.preprocessing_mrtrix_bin_dir,
         preprocessing_fsl_bin_dir=args.preprocessing_fsl_bin_dir,
+        preprocessing_execution_backend=getattr(args, "preprocessing_execution_backend", None),
+        preprocessing_reverse_phase=bool(getattr(args, "preprocessing_reverse_phase_b0", None)),
         postprocess_freesurfer_home=args.postprocess_freesurfer_home,
         postprocess_runtime=args.postprocess_runtime,
         postprocess_license_file=args.postprocess_license_file,
@@ -316,9 +318,11 @@ def _environment_config_from_args(
         wma_root=args.wma_root,
         wma_atlas_dir=args.wma_atlas_dir,
         wma_atlas=args.wma_atlas,
+        wma_export_diffusion_measures=bool(getattr(args, "wma_export_diffusion_measures", False)),
         slicer_executable=args.slicer_executable,
         fiber_tract_measurements_cli=args.fiber_tract_measurements_cli,
         tract_querier_root=args.tract_querier_root,
+        wmql_python_executable=args.wmql_python_executable,
         tractcloud_root=args.tractcloud_root,
         tractcloud_python_executable=args.tractcloud_python_executable,
         tractcloud_data_dir=args.tractcloud_data_dir,
@@ -544,6 +548,8 @@ def build_parser() -> argparse.ArgumentParser:
                              "DIPY Gibbs removal, FSL eddy/topup through dwifslpreproc.")
     parser.add_argument("--preprocessing-mrtrix-bin-dir", type=Path, help="Optional MRtrix3 bin dir for preprocessing.")
     parser.add_argument("--preprocessing-fsl-bin-dir", type=Path, help="Optional FSL bin dir for preprocessing.")
+    parser.add_argument("--preprocessing-execution-backend", choices=("legacy", "native"),
+                        help="FSL correction runner. Default: legacy. Native uses the shared experimental CPU runner.")
     parser.add_argument("--preprocessing-reverse-phase-b0", type=Path, help="Optional reverse phase-encoding b0 for MRtrix/FSL preprocessing.")
     parser.add_argument("--preprocessing-phase-encoding-direction", help="Phase-encoding direction for preprocessing: AP, PA, LR, RL, IS, SI or a NIfTI axis code (i, i-, j, j-, k, k-). Without it the direction comes from input/dwi.json (PhaseEncodingDirection); if neither has it, preprocessing is blocked (most axial clinical DWI: AP).")
     parser.add_argument("--preprocessing-readout-time", type=float, help="Total readout time in seconds for preprocessing. Without it: TotalReadoutTime from input/dwi.json, else dwifslpreproc assumes 0.1 s (recorded as readout_assumed).")
@@ -975,6 +981,7 @@ def main(argv: list[str] | None = None) -> int:
         preprocessing_dipy_run_gibbs=not args.preprocessing_skip_gibbs,
         preprocessing_mrtrix_bin_dir=args.preprocessing_mrtrix_bin_dir,
         preprocessing_fsl_bin_dir=args.preprocessing_fsl_bin_dir,
+        preprocessing_execution_backend=args.preprocessing_execution_backend,
         preprocessing_reverse_phase_b0=args.preprocessing_reverse_phase_b0,
         preprocessing_phase_encoding_direction=args.preprocessing_phase_encoding_direction,
         preprocessing_readout_time=args.preprocessing_readout_time,
@@ -1030,6 +1037,7 @@ def main(argv: list[str] | None = None) -> int:
         allow_anatomy_space_mismatch=bool(args.allow_anatomy_space_mismatch),
         allow_act_ddseg_only=bool(args.allow_act_ddseg_only),
         tract_querier_root=args.tract_querier_root,
+        wmql_python_executable=args.wmql_python_executable,
         connectome_backend=args.connectome_backend,
         connectome_compress_mrtrix_dense=args.compress_mrtrix_dense,
         saf_fs_dir=args.saf_fs_dir,

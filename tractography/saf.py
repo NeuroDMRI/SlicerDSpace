@@ -13,7 +13,6 @@ import importlib
 import importlib.util
 import json
 import os
-import shlex
 import shutil
 import subprocess
 import sys
@@ -290,20 +289,6 @@ def _mrtrix_rng_seed_env(seed: int) -> Iterator[None]:
             os.environ["MRTRIX_RNG_SEED"] = previous
 
 
-def _effective_mrtrix_prefix(config: SAFConfig) -> str:
-    if config.mrtrix_prefix:
-        return config.mrtrix_prefix
-    bin_dir = _configured_mrtrix_bin_dir(config.mrtrix_bin_dir)
-    if bin_dir is None:
-        return ""
-    # This prefix is interpolated verbatim into shell=True command strings
-    # by the bundled SAF backend (see saf_backend/Support/sys_exec.py and its
-    # callers), so bin_dir must be shell-quoted even though it is a trusted
-    # configuration path: a space or shell metacharacter in the directory
-    # name would otherwise corrupt every downstream MRtrix command.
-    return f"PATH={shlex.quote(bin_dir.as_posix())}:$PATH "
-
-
 def _resolved_mrtrix_command(config: SAFConfig, command: str) -> Optional[str]:
     bin_dir = _configured_mrtrix_bin_dir(config.mrtrix_bin_dir)
     return _resolve_command(command, bin_dir=bin_dir)
@@ -377,9 +362,11 @@ def _build_saf_args(config: SAFConfig, output_dir: Path) -> list[Any]:
         args.extend(["noseed", config.pregenerated_tractogram.expanduser().resolve().as_posix()])
     if config.streamline_weights is not None:
         args.extend(["sl_weights", config.streamline_weights.expanduser().resolve().as_posix()])
-    mrtrix_prefix = _effective_mrtrix_prefix(config)
-    if mrtrix_prefix:
-        args.extend(["mrtrix_prefix", mrtrix_prefix])
+    if config.mrtrix_prefix:
+        args.extend(["mrtrix_prefix", config.mrtrix_prefix])
+    mrtrix_bin_dir = _configured_mrtrix_bin_dir(config.mrtrix_bin_dir)
+    if mrtrix_bin_dir is not None:
+        args.extend(["mrtrix_bin_dir", mrtrix_bin_dir.as_posix()])
     if config.force_recompute:
         args.append("force")
     if config.diagnostics:
@@ -551,7 +538,7 @@ def run_saf(config: SAFConfig, *, log: Optional[Callable[[str], None]] = None) -
             ),
             "mrtrix_bin_dir": config.mrtrix_bin_dir.expanduser().resolve().as_posix() if config.mrtrix_bin_dir else None,
             "mrtrix_prefix": config.mrtrix_prefix,
-            "effective_mrtrix_prefix": _effective_mrtrix_prefix(config),
+            "effective_mrtrix_prefix": config.mrtrix_prefix,
             "initial_tractogram_source": "pregenerated" if config.pregenerated_tractogram else "mrtrix_tckgen",
             "force_recompute": config.force_recompute,
             "diagnostics": config.diagnostics,

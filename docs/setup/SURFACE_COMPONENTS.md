@@ -53,14 +53,23 @@ the original commands validate activation.
 **Prepare selected analysis environment** prefers a qualified prebuilt bundle,
 checks archive/file hashes, recipe and native library availability, then saves
 the component path. The Linux x86_64 candidate contains seven unchanged native
-commands and atlas data: 40,994,566 bytes compressed, about 85.2 MiB unpacked.
+commands and atlas data: 40,995,581 bytes compressed, about 85.2 MiB unpacked.
 It contains no personal activation key. Your own activation remains required.
 
-Publication of this bundle in the model repository is pending. Until published,
-place the qualified archive at
-`<asset-root>/runtime/surface/surface-runtime-linux-x86_64.tar.gz`, or use an
-existing verified runtime/FreeSurfer installation. Missing unpublished bundles
-remain visible as manual items; preparation does not fall back to compilation.
+The bundles remain unpublished. Place the archive for your platform under
+`<asset-root>/runtime/surface/`, or select an existing verified runtime or
+FreeSurfer installation. The installer selects the architecture of its Python
+process. On an Apple Silicon Mac, use an arm64 Python process for the arm64
+archive.
+
+| Platform | Offline archive |
+| --- | --- |
+| Linux x86_64 | `surface-runtime-linux-x86_64.tar.gz` |
+| macOS 15 or later, Intel | `surface-runtime-darwin-x86_64.tar.gz` |
+| macOS 15 or later, Apple Silicon | `surface-runtime-darwin-arm64.tar.gz` |
+
+If the archive is missing, the preparation dialog lists the runtime as a
+manual item.
 
 Install an offline bundle after reviewing its component/data terms:
 
@@ -73,7 +82,7 @@ Without `--execute`, the command only prints its plan. Existing corrupt or
 differently built prefixes are not overwritten. The default destination is the
 upstream recipe-addressed user cache; `--prefix` selects another empty location.
 
-Maintainers can explicitly use `--build-from-source --jobs 4`; this expert route
+On Linux, maintainers can use `--build-from-source --jobs 4`. This expert route
 requires Git, C/C++ development tools and CMake >=3.24,<4. The upstream builder
 and numerical source remain unchanged. `scripts/package_surface_runtime.py`
 packages a verified matching build without an activation key. Platform, source
@@ -103,10 +112,19 @@ QC success does not replace anatomical review. Runtime identity is recorded in
 the manifest and cache signature; switching an explicit runtime prevents reuse
 of the previous runtime's completion state.
 
-The qualified prebuilt bundle is currently **Linux x86_64 only**. macOS source
-compilation and native Windows are not certified; Windows/WSL is not equivalent
-to native Windows support. Existing platform-native FreeSurfer remains an
-alternative where supported. No end-to-end computation speedup is claimed.
+The Apple Silicon candidate was built on macOS 15.8.1 from the pinned
+FreeSurfer 7.4.1 source. The build passed the upstream Apple Silicon flags
+`-DARM64 -DPNG_ARM_NEON_OPT=0` in both `CFLAGS` and `CXXFLAGS` and set
+`MACOSX_DEPLOYMENT_TARGET=15.0`. All seven binaries were arm64 and passed
+`--version` in a clean process environment. A fresh offline installation
+repeated all seven checks. This candidate was built without OpenMP. Scientific
+comparison on macOS remains pending.
+
+The Windows-target CMake probe recognized MinGW GCC 10 and stopped at the
+existing UNIX platform check. Separate MinGW syntax checks on the pinned
+`utils/utils.cpp` and `mris_sphere/mris_sphere.cpp` both stopped at the missing
+`sys/resource.h` header. The original build and activation checks remain in
+place. A native Windows build needs a port of those POSIX dependencies.
 
 ---
 

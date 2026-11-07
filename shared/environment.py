@@ -115,6 +115,8 @@ class EnvironmentDoctorConfig:
     mrtrix_bin_dir: Optional[Path] = None
     preprocessing_mrtrix_bin_dir: Optional[Path] = None
     preprocessing_fsl_bin_dir: Optional[Path] = None
+    preprocessing_execution_backend: Optional[str] = None
+    preprocessing_reverse_phase: bool = False
     postprocess_freesurfer_home: Optional[Path] = None
     postprocess_runtime: Optional[Path] = None
     postprocess_license_file: Optional[Path] = None
@@ -122,9 +124,11 @@ class EnvironmentDoctorConfig:
     wma_root: Optional[Path] = None
     wma_atlas_dir: Optional[Path] = None
     wma_atlas: str = "org"
+    wma_export_diffusion_measures: bool = False
     slicer_executable: Optional[Path] = None
     fiber_tract_measurements_cli: Optional[Path] = None
     tract_querier_root: Optional[Path] = None
+    wmql_python_executable: Optional[Path] = None
     tractcloud_root: Optional[Path] = None
     tractcloud_python_executable: Optional[Path] = None
     tractcloud_data_dir: Optional[Path] = None
@@ -262,14 +266,23 @@ def _put(specs: dict[str, DependencySpec], spec: DependencySpec) -> None:
     specs[spec.key] = _merge_spec(existing, spec) if existing else spec
 
 
-def _pythonslicer_next_to(slicer_executable: Optional[Path]) -> Optional[Path]:
-    """PythonSlicer of a Slicer launcher, resolved as tractography/wma.py does; None if absent."""
-    if slicer_executable is None or sys.platform == "win32":
+def _pythonslicer_next_to(slicer_executable: Optional[Path], *, native_wma: bool = False) -> Optional[Path]:
+    """Find the PythonSlicer for the configured application."""
+    if slicer_executable is None or (sys.platform == "win32" and not native_wma):
         return None
     try:
         launcher_dir = slicer_executable.expanduser().resolve().parent
     except OSError:
         return None
+    if native_wma:
+        python = find_pythonslicer(launcher_dir)
+        if python is None and slicer_executable.is_file():
+            from tractography.wma import _resolve_slicer_runtime
+            try:
+                python = find_pythonslicer(_resolve_slicer_runtime(slicer_executable).parent)
+            except (OSError, RuntimeError, subprocess.SubprocessError):
+                pass
+        return python
     for root in slicer_runtime_roots(launcher_dir):
         for candidate in (root / "PythonSlicer", root / "bin" / "PythonSlicer"):
             if candidate.is_file():
@@ -1072,6 +1085,34 @@ def resolve_config_python_executable(config: EnvironmentDoctorConfig) -> Path:
     )
 
 
+def _add_native_preprocessing_dependencies(specs, config, platform_name):
+    from preprocessing.fsl_runtime import FSL_COMMANDS, REVERSE_FSL_COMMANDS, inspect_native_fsl_runtime
+
+    runtime = inspect_native_fsl_runtime(
+        config.preprocessing_mrtrix_bin_dir or config.mrtrix_bin_dir,
+        config.preprocessing_fsl_bin_dir,
+        reverse_phase=config.preprocessing_reverse_phase,
+        platform=platform_name,
+    )
+    files = dict(runtime["commands"])
+    if config.preprocessing_reverse_phase:
+        files["topup_config"] = runtime["topup_config"]
+    fsl_names = (*FSL_COMMANDS, *REVERSE_FSL_COMMANDS, "topup_config")
+    for name, path in files.items():
+        fsl = name in fsl_names
+        key = "native_preprocessing_" + name
+        label = {"eddy": "eddy_cpu", "topup_config": "FSL topup configuration (b02b0.cnf)"}.get(name, name)
+        group = "native-fsl" if fsl else "native-mrtrix"
+        if path:
+            _path(specs, target="preprocessing", key=key, label=label, path=Path(path),
+                  path_kind="file", group=group, discovery_source="native runtime")
+        else:
+            flag = "--preprocessing-fsl-bin-dir" if fsl else "--preprocessing-mrtrix-bin-dir"
+            note = (f"Set {flag} to the bin directory of a native runtime with {label}. "
+                    "This route needs host executables and their matching data.")
+            _setting(specs, target="preprocessing", key=key, label=label, group=group, notes=note)
+
+
 def build_dependency_specs(config: EnvironmentDoctorConfig) -> tuple[DependencySpec, ...]:
     from shared.algorithm_selection import algorithms
     tracking = algorithms(config.tractography_backend)
@@ -1092,9 +1133,12 @@ def build_dependency_specs(config: EnvironmentDoctorConfig) -> tuple[DependencyS
             _python(specs, target=target, import_name="SimpleITK", package="SimpleITK")
 
         if target == "preprocessing":
-            # W2a (D1): one route. DIPY MP-PCA and Gibbs removal, then FSL eddy/topup through dwifslpreproc.
-            # So the target needs MRtrix3 and FSL on every OS (the setup plan reads these install groups).
+            from shared.preprocessing_route import resolve_preprocessing_execution_backend
+
             _add_dipy_stack(specs, target)
+            if resolve_preprocessing_execution_backend(config.preprocessing_execution_backend) == "native":
+                _add_native_preprocessing_dependencies(specs, config, platform_name)
+                continue
             _add_mrtrix_commands(
                 specs,
                 target,
@@ -1317,7 +1361,22 @@ def build_dependency_specs(config: EnvironmentDoctorConfig) -> tuple[DependencyS
                          notes='Optional native Slicer extension; no vendored UKF algorithm or MRtrix dependency.')
 
         if target == "bundles":
+            from tractography.wmql import WMQL_PYTHON_ENV_VARS
+
             _add_core_python(specs, target)
+            wmql_python = _resolve_interpreter(config.wmql_python_executable)
+            wmql_python_source = "user setting"
+            if wmql_python is None:
+                wmql_python, wmql_python_source = _env_path_with_source(*WMQL_PYTHON_ENV_VARS, resolve=False)
+            if wmql_python is not None:
+                _path(specs, target=target, key="wmql_python", label="WMQL Python executable",
+                      path=wmql_python, path_kind="file", group="wmql", discovery_source=wmql_python_source)
+                from shared.backend_sources import SOURCES
+
+                for name, requirement in zip(("numpy", "nibabel", "vtk"), SOURCES["wmql"]["requirements"]):
+                    _python(specs, target=target, import_name=name, package=requirement,
+                            python_executable=wmql_python, key=f"python:wmql:{name}", label=f"{name} (WMQL)")
+
             tract_querier_root_source = "user setting"
             tract_querier_root = _resolve_path(config.tract_querier_root)
             if tract_querier_root is None:
@@ -1359,6 +1418,7 @@ def build_dependency_specs(config: EnvironmentDoctorConfig) -> tuple[DependencyS
                     import_name="tract_querier",
                     package="tract_querier",
                     install_requirement=_python_install_requirement_for_import("tract_querier"),
+                    python_executable=wmql_python,
                     python_path_entries=(tract_querier_root,),
                     notes="Checked by adding the configured Tract Querier checkout to PYTHONPATH.",
                 )
@@ -1369,6 +1429,7 @@ def build_dependency_specs(config: EnvironmentDoctorConfig) -> tuple[DependencyS
                     import_name="tract_querier",
                     package="tract_querier",
                     install_requirement=_python_install_requirement_for_import("tract_querier"),
+                    python_executable=wmql_python,
                 )
 
         if target == "connectome":
@@ -1385,6 +1446,31 @@ def build_dependency_specs(config: EnvironmentDoctorConfig) -> tuple[DependencyS
             _add_mrtrix_commands(specs, target, ("tckgen", "tckstats", "tckconvert"), config.mrtrix_bin_dir)
 
         if target == "wma":
+            from tractography.wma import resolve_configured_wma_root, resolve_wma_execution_backend
+
+            wma_root_source = "user setting"
+            wma_root = _resolve_path(config.wma_root)
+            if wma_root is None:
+                wma_root, wma_root_source = _env_path_with_source("SLICERDSPACE_WMA_ROOT", "WMA_ROOT")
+            native_wma = resolve_wma_execution_backend(
+                wma_root, atlas_family=config.wma_atlas,
+                export_diffusion_measures=config.wma_export_diffusion_measures, platform=platform_name,
+            ) == "native"
+            if wma_root is None and native_wma:
+                from shared.backend_sources import profile_path
+                try:
+                    wma_root = resolve_configured_wma_root(execution_backend="native", platform=platform_name)
+                    wma_root_source = "discovered native WMA source"
+                except FileNotFoundError:
+                    wma_root = profile_path("wma")
+                    wma_root_source = "managed source cache"
+            if wma_root is None:
+                wma_root, _ = _first_existing_path(
+                    (*_repo_checkout_roots(config.repo_root, "wma"), *_common_checkout_roots("wma", platform_name)),
+                    kind="dir",
+                )
+                if wma_root is not None:
+                    wma_root_source = "common path"
             _add_core_python(specs, target)
             if platform_name == "Linux" and not any(os.environ.get(name) for name in (
                     "DISPLAY", "SLICERDSPACE_DISPLAY")):
@@ -1411,10 +1497,18 @@ def build_dependency_specs(config: EnvironmentDoctorConfig) -> tuple[DependencyS
                     slicer_executable_source = "common path"
             # C3: the author scripts run with the PythonSlicer of the configured Slicer (tractography/wma.py),
             # so probe that interpreter; fall back to the doctor's Python when it cannot be resolved.
-            wma_python = _pythonslicer_next_to(slicer_executable)
-            for import_name, package in (("joblib", "joblib"), ("scipy", "scipy"), ("xlrd", "xlrd"),
-                                         ("matplotlib", "matplotlib"), ("pandas", "pandas"),
-                                         ("PIL", "Pillow"), ("statsmodels", "statsmodels")):
+            wma_python = _pythonslicer_next_to(slicer_executable, native_wma=native_wma)
+            wma_packages = (("joblib", "joblib"), ("scipy", "scipy"), ("xlrd", "xlrd"),
+                            ("matplotlib", "matplotlib"), ("pandas", "pandas"),
+                            ("PIL", "Pillow"), ("statsmodels", "statsmodels"))
+            if native_wma:
+                if wma_python is None:
+                    _setting(specs, target=target, key="wma_pythonslicer", label="PythonSlicer for native WMA",
+                             group="slicer", notes="Select a Slicer installation that includes PythonSlicer.")
+                    wma_packages = ()
+                else:
+                    wma_packages += (("numpy", "numpy"), ("nibabel", "nibabel"), ("vtk", "vtk"))
+            for import_name, package in wma_packages:
                 # N1: own key, so the host interpreter's check of the same module is not merged into this one.
                 _python(specs, target=target, import_name=import_name, package=package,
                         python_executable=wma_python, key=f"python:wma:{import_name}",
@@ -1429,17 +1523,6 @@ def build_dependency_specs(config: EnvironmentDoctorConfig) -> tuple[DependencyS
                 required=False,
                 notes="Required only when the WMA input tractogram is a TCK file.",
             )
-            wma_root_source = "user setting"
-            wma_root = _resolve_path(config.wma_root)
-            if wma_root is None:
-                wma_root, wma_root_source = _env_path_with_source("SLICERDSPACE_WMA_ROOT", "WMA_ROOT")
-            if wma_root is None:
-                wma_root, _ = _first_existing_path(
-                    (*_repo_checkout_roots(config.repo_root, "wma"), *_common_checkout_roots("wma", platform_name)),
-                    kind="dir",
-                )
-                if wma_root is not None:
-                    wma_root_source = "common path"
             _env(
                 specs,
                 target=target,
@@ -1448,7 +1531,8 @@ def build_dependency_specs(config: EnvironmentDoctorConfig) -> tuple[DependencyS
                 env_vars=("SLICERDSPACE_WMA_ROOT", "WMA_ROOT"),
                 group="wma",
                 required=False,
-                notes="Can also be supplied with --wma-root or by putting wm_apply_ORG_atlas_to_subject.sh on PATH.",
+                notes=("Prepare the pinned native source or supply it with --wma-root." if native_wma
+                       else "Can also be supplied with --wma-root or by putting wm_apply_ORG_atlas_to_subject.sh on PATH."),
                 resolved_path=wma_root,
                 discovery_source=wma_root_source if wma_root is not None else "",
             )
@@ -1457,24 +1541,25 @@ def build_dependency_specs(config: EnvironmentDoctorConfig) -> tuple[DependencyS
                     specs,
                     target=target,
                     key="wma_root_path",
-                    label="WhiteMatterAnalysis checkout path",
+                    label="Native WhiteMatterAnalysis source" if native_wma else "WhiteMatterAnalysis checkout path",
                     path=wma_root,
-                    path_kind="dir",
+                    path_kind="wma_native_source" if native_wma else "dir",
                     group="wma",
                     discovery_source=wma_root_source,
                 )
-            _command(
-                specs,
-                target=target,
-                command="wm_apply_ORG_atlas_to_subject.sh",
-                group="wma",
-                bin_dir=wma_root / "bin" if config.wma_root is not None and wma_root is not None else None,
-            )
-            if platform_name == "Windows" and config.wma_atlas != "org" and wma_root is not None:
-                _path(specs, target=target, key="wma_atlas_python_bridge",
-                      label="WMA atlas Python bridge (repair Windows runtime if missing)",
-                      path=wma_root / "bin/python.exe", path_kind="file", group="wma",
-                      discovery_source="managed Windows runtime")
+            if not native_wma:
+                _command(
+                    specs,
+                    target=target,
+                    command="wm_apply_ORG_atlas_to_subject.sh",
+                    group="wma",
+                    bin_dir=wma_root / "bin" if config.wma_root is not None and wma_root is not None else None,
+                )
+                if platform_name == "Windows" and config.wma_atlas != "org" and wma_root is not None:
+                    _path(specs, target=target, key="wma_atlas_python_bridge",
+                          label="WMA atlas Python bridge (repair Windows runtime if missing)",
+                          path=wma_root / "bin/python.exe", path_kind="file", group="wma",
+                          discovery_source="managed Windows runtime")
             wma_atlas_dir_source = "user setting"
             wma_atlas_dir = _resolve_path(config.wma_atlas_dir)
             if wma_atlas_dir is None:
@@ -1563,9 +1648,13 @@ def build_dependency_specs(config: EnvironmentDoctorConfig) -> tuple[DependencyS
                     path=fiber_cli,
                     path_kind="file",
                     group="slicer-dmri",
-                    required=False,
+                    required=config.wma_export_diffusion_measures,
                     discovery_source=fiber_cli_source,
                 )
+            elif config.wma_export_diffusion_measures:
+                _setting(specs, target=target, key="fiber_tract_measurements_cli",
+                         label="SlicerDMRI FiberTractMeasurements CLI", group="slicer-dmri",
+                         notes="Select the FiberTractMeasurements CLI for WMA diffusion measurements.")
 
         if target == "tractcloud":
             _add_core_python(specs, target)
@@ -1717,6 +1806,8 @@ def _install_hint(spec: DependencySpec, platform_name: str) -> str:
         return "Install FSL/eddy/topup via the official FSL installer, then add $FSLDIR/bin to PATH or pass --preprocessing-fsl-bin-dir."
     if spec.install_group == "freesurfer":
         return "Install FreeSurfer, set FREESURFER_HOME, source SetUpFreeSurfer.sh, and provide a FreeSurfer license."
+    if spec.path_kind == "wma_native_source":
+        return "Prepare the pinned WhiteMatterAnalysis source or select its native Python checkout with --wma-root."
     if spec.install_group == "wma":
         return "Install/configure external WhiteMatterAnalysis and ORG atlas; pass --wma-root/--wma-atlas-dir or set SLICERDSPACE_WMA_ROOT."
     if spec.install_group == "tractcloud":
@@ -2045,6 +2136,18 @@ def _check_spec(spec: DependencySpec, platform_name: str) -> DependencyStatus:
                 "detected_source": "not found",
                 "error": "Only cpu, auto, cuda, and cuda:N are supported by the environment doctor.",
             }
+    elif spec.kind == "path" and spec.path_kind == "wma_native_source":
+        from tractography.wma import inspect_wma_backend
+
+        assert spec.path
+        details = {"execution_backend": "native", "path": spec.path.as_posix(), "path_kind": "dir",
+                   "detected_source": spec.discovery_source}
+        try:
+            backend = inspect_wma_backend(spec.path, execution_backend="native", platform=platform_name)
+            available = backend["available"]
+            details.update(backend)
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            details["error"] = str(exc)
     elif spec.kind == "path":
         assert spec.path
         checked_locations = [spec.path.as_posix()]
@@ -2371,6 +2474,24 @@ def _shell_quote(value: str) -> str:
     return "'" + value.replace("'", "'\"'\"'") + "'"
 
 
+def missing_python_install_groups(result: EnvironmentDoctorResult) -> dict[str, tuple[str, ...]]:
+    """Use the interpreter that reported each missing package."""
+    groups: dict[str, dict[str, None]] = {}
+    for item in result.statuses:
+        if item.kind != "python" or item.status != "missing":
+            continue
+        requirement = item.details.get("install_requirement") or item.details.get("package")
+        if not requirement or requirement not in result.missing_python_packages:
+            continue
+        python = item.details.get("python_executable") or result.python_executable or "python3"
+        groups.setdefault(python, {})[requirement] = None
+    return {python: tuple(requirements) for python, requirements in groups.items()}
+
+
+def _powershell_quote(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
 def write_environment_report(result: EnvironmentDoctorResult, output_dir: Path) -> dict[str, Path]:
     """Write JSON report plus user-editable install helper scripts."""
 
@@ -2380,40 +2501,28 @@ def write_environment_report(result: EnvironmentDoctorResult, output_dir: Path) 
     report_path.write_text(json.dumps(result.to_dict(), indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     profile_path = output_dir / "dependency_profile.json"
 
-    packages = result.missing_python_packages
+    groups = missing_python_install_groups(result)
     sh_path = output_dir / "install_missing_python.sh"
     ps1_path = output_dir / "install_missing_python.ps1"
     notes_path = output_dir / "install_external_tools.md"
     default_python = result.python_executable or "python3"
-
-    if packages:
-        sh_lines = [
-            "#!/usr/bin/env bash",
-            "set -euo pipefail",
-            f'PYTHON_BIN="${{PYTHON_BIN:-{default_python}}}"',
-            '"$PYTHON_BIN" -m pip install ' + " ".join(_shell_quote(pkg) for pkg in packages),
-            "",
-        ]
-        ps1_lines = [
-            '$ErrorActionPreference = "Stop"',
-            f'if (-not $env:PYTHON_BIN) {{ $env:PYTHON_BIN = "{default_python}" }}',
-            "& $env:PYTHON_BIN -m pip install " + " ".join(f'"{pkg}"' for pkg in packages),
-            "",
-        ]
-    else:
-        sh_lines = [
-            "#!/usr/bin/env bash",
-            "set -euo pipefail",
-            f'PYTHON_BIN="${{PYTHON_BIN:-{default_python}}}"',
-            'echo "No missing Python packages were detected for the selected targets."',
-            "",
-        ]
-        ps1_lines = [
-            '$ErrorActionPreference = "Stop"',
-            f'if (-not $env:PYTHON_BIN) {{ $env:PYTHON_BIN = "{default_python}" }}',
-            'Write-Host "No missing Python packages were detected for the selected targets."',
-            "",
-        ]
+    sh_lines = ["#!/usr/bin/env bash", "set -euo pipefail"]
+    ps1_lines = ['$ErrorActionPreference = "Stop"']
+    for python, requirements in groups.items():
+        shell_python = _shell_quote(python)
+        powershell_python = _powershell_quote(python)
+        if python == default_python:
+            sh_lines.append(f'if [[ -z "${{PYTHON_BIN:-}}" ]]; then PYTHON_BIN={shell_python}; fi')
+            ps1_lines.append(f'if (-not $env:PYTHON_BIN) {{ $env:PYTHON_BIN = {powershell_python} }}')
+            shell_python, powershell_python = '"$PYTHON_BIN"', "$env:PYTHON_BIN"
+        sh_lines.append(f"{shell_python} -m pip install " + " ".join(map(_shell_quote, requirements)))
+        ps1_lines.append(f"& {powershell_python} -m pip install " + " ".join(map(_powershell_quote, requirements)))
+        ps1_lines.append("if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }")
+    if not groups:
+        sh_lines.append('echo "No missing Python packages were detected for the selected targets."')
+        ps1_lines.append('Write-Host "No missing Python packages were detected for the selected targets."')
+    sh_lines.append("")
+    ps1_lines.append("")
     sh_path.write_text("\n".join(sh_lines), encoding="utf-8")
     ps1_path.write_text("\n".join(ps1_lines), encoding="utf-8")
 

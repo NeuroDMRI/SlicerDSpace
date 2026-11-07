@@ -194,6 +194,18 @@ class PreparedBackendDiscoveryTest(unittest.TestCase):
             self.assertEqual(wmql.inspect_wmql_backend()["root"], canonical.as_posix())
         self.available.assert_not_called()
 
+    def test_wmql_explicit_checkout_and_python_precede_path_bridge(self):
+        native = self.source("wmql", self.root / "native source")
+        bridge = self.root / "legacy bridge.exe"
+        bridge.touch()
+        self.which.return_value = str(bridge)
+
+        for override in ({}, {"TRACT_QUERIER_EXECUTABLE": str(bridge)}):
+            with self.subTest(override=override), mock.patch.dict(os.environ, override):
+                command = wmql.build_wmql_command(self.wmql_config(tract_querier_root=native))
+                self.assertEqual(command[:2], (Path(sys.executable).absolute().as_posix(),
+                                              (native / "scripts/cli_tract_querier.py").as_posix()))
+
     def test_wmql_configured_and_path_executables_precede_cache(self):
         self.source("wmql")
         executable = self.root / "tract_querier"

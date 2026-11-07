@@ -17,6 +17,9 @@ param(
     [switch]$SkipSlicerBridge,
     [switch]$SkipSlicerPythonInstall,
     [switch]$SkipUserConfigUpdate,
+    [switch]$PreserveWmaSettings,
+    [switch]$PreserveWmqlSettings,
+    [switch]$PreserveTractCloudSettings,
     [string]$PlanOutput,
     [string]$OrgRegUrl = "https://zenodo.org/record/2648292/files/ORG-RegAtlas-100HCP.zip?download=1",
     [string]$OrgRegSha256 = "c2b024980999b925ea896c49183995bfc97aeed8cbb648946dcbfa9e3ea6a5f1",
@@ -615,6 +618,15 @@ if (-not $SkipUserConfigUpdate) {
         }
     }
     foreach ($entry in $externalDependencies.GetEnumerator()) {
+        if ($PreserveWmaSettings -and $entry.Key -in @("wma_root", "wma_atlas_dir")) {
+            continue
+        }
+        if ($PreserveWmqlSettings -and $entry.Key -eq "tract_querier_root") {
+            continue
+        }
+        if ($PreserveTractCloudSettings -and $entry.Key -in @("tractcloud_root", "tractcloud_python_executable", "tractcloud_data_dir")) {
+            continue
+        }
         $mergedExternal[$entry.Key] = $entry.Value
     }
     $externalObject = [pscustomobject]$mergedExternal

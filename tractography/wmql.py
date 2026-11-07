@@ -26,6 +26,7 @@ from tractography.wmql_protocol import (OFFICIAL_DIR, official_query_names, cano
 
 
 TRACT_QUERIER_REPOSITORY = "https://github.com/demianw/tract_querier"
+WMQL_PYTHON_ENV_VARS = ("SLICERDSPACE_WMQL_PYTHON", "TRACT_QUERIER_PYTHON")
 VALID_TRACT_EXTENSIONS = {".vtk", ".vtp", ".trk"}
 WMQL_QC_VERSION = 6
 # Sampling sanity policy, not an anatomical accuracy or statistical-power test.
@@ -206,7 +207,7 @@ def _resolve_python(python_executable: Optional[Path]) -> Path:
         if not candidate.is_file():
             raise FileNotFoundError(f"Python executable not found: {candidate}")
         return candidate
-    for env_name in ("SLICERDSPACE_WMQL_PYTHON", "TRACT_QUERIER_PYTHON"):
+    for env_name in WMQL_PYTHON_ENV_VARS:
         env_value = os.environ.get(env_name)
         if env_value:
             candidate = Path(env_value).expanduser().absolute()
@@ -255,14 +256,18 @@ def inspect_wmql_backend(
     explicit_cli = tract_querier_executable.expanduser().resolve() if tract_querier_executable is not None else None
     env_cli = os.environ.get("SLICERDSPACE_WMQL_EXECUTABLE") or os.environ.get("TRACT_QUERIER_EXECUTABLE")
     cli_path: Optional[Path] = None
+    worker_selected = python_executable is not None or any(os.environ.get(name) for name in WMQL_PYTHON_ENV_VARS)
     if explicit_cli is not None:
         cli_path = explicit_cli
-    elif env_cli:
-        cli_path = Path(env_cli).expanduser().resolve()
-    else:
-        found = shutil.which("tract_querier")
-        if found:
-            cli_path = Path(found).resolve()
+    elif root is None or not worker_selected:
+        # A checkout paired with a selected Python must run in that interpreter.
+        # An ambient launcher may point at a different Python or a legacy WSL bridge.
+        if env_cli:
+            cli_path = Path(env_cli).expanduser().resolve()
+        else:
+            found = shutil.which("tract_querier")
+            if found:
+                cli_path = Path(found).resolve()
 
     if root is None and cli_path is None:
         from shared.backend_sources import available_source

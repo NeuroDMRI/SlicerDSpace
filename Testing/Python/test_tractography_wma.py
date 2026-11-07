@@ -214,9 +214,99 @@ exit 0
         config = WMAOrgAtlasConfig(subject_id='100307', input_tractography=self.tractography,
             atlas_dir=self.atlas_dir, output_dir=self.output_dir, slicer_executable=self.slicer_executable,
             wma_root=self.wma_root, execute=True)
-        with mock.patch('tractography.wma.sys.platform', 'win32'):
+        with mock.patch('tractography.wma.sys.platform', 'win32'), \
+                mock.patch.dict(os.environ, {'DSP_WMA_EXECUTION_BACKEND': 'legacy'}):
             with self.assertRaisesRegex(RuntimeError, 'managed WSL command bridge'):
                 validate_wma_org_inputs(config)
+
+    def test_org_route_respects_platform_bridge_and_measurements(self):
+        from tractography.wma import resolve_wma_execution_backend
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(resolve_wma_execution_backend(self.wma_root, platform='win32'), 'native')
+            self.assertEqual(resolve_wma_execution_backend(self.wma_root, platform='linux'), 'legacy')
+            self.assertEqual(resolve_wma_execution_backend(
+                self.wma_root, platform='win32', atlas_family='naba'), 'legacy')
+            self.assertEqual(resolve_wma_execution_backend(
+                self.wma_root, platform='win32', export_diffusion_measures=True), 'legacy')
+            self.assertEqual(resolve_wma_execution_backend(
+                self.wma_root, platform='win32', export_diffusion_measures=True,
+                measurement_backend='native_vtk_point_scalar_summary'), 'native')
+            bridge = self.wma_script.with_name(self.wma_script.name + '.exe')
+            bridge.touch()
+            Path(str(bridge) + '.slicerdsurfer-owner').touch()
+            self.assertEqual(resolve_wma_execution_backend(self.wma_root, platform='win32'), 'legacy')
+        with mock.patch.dict(os.environ, {'DSP_WMA_EXECUTION_BACKEND': 'native'}, clear=True):
+            self.assertEqual(resolve_wma_execution_backend(self.wma_root, platform='darwin'), 'native')
+            with self.assertRaisesRegex(ValueError, 'FiberTractMeasurements'):
+                resolve_wma_execution_backend(self.wma_root, export_diffusion_measures=True)
+
+    def test_native_source_does_not_need_executable_author_shell(self):
+        from tractography.wma import WMAOrgAtlasConfig, run_wma_org_atlas
+        self.wma_script.unlink()
+        package = self.wma_root / 'whitematteranalysis'
+        package.mkdir()
+        (package / '__init__.py').touch()
+        config = WMAOrgAtlasConfig(subject_id='subject', input_tractography=self.tractography,
+            atlas_dir=self.atlas_dir, output_dir=self.output_dir, slicer_executable=self.slicer_executable,
+            wma_root=self.wma_root)
+        with mock.patch.dict(os.environ, {'DSP_WMA_EXECUTION_BACKEND': 'native', 'DISPLAY': ':1'}):
+            result = run_wma_org_atlas(config)
+        record = json.loads(result.manifest_path.read_text())
+        self.assertEqual(result.status, 'planned')
+        self.assertEqual(result.command, ())
+        self.assertEqual(record['execution_backend'], 'native')
+        self.assertEqual(record['stage_commands'], [])
+
+    def test_native_source_receipt_is_verified_even_with_an_explicit_root(self):
+        from tractography.wma import inspect_wma_backend
+        (self.wma_root / '.slicerdspace-source.json').write_text('{}', encoding='utf-8')
+        with self.assertRaisesRegex(ValueError, 'Unrecognized algorithm source receipt'):
+            inspect_wma_backend(self.wma_root, execution_backend='native')
+
+    def test_native_subprocess_failure_retains_stage_log_and_products(self):
+        from shared.external_process import find_pythonslicer
+        from tractography.wma import WMAOrgAtlasConfig, run_wma_org_atlas
+        package = self.wma_root / 'whitematteranalysis'
+        package.mkdir()
+        (package / '__init__.py').touch()
+        (self.wma_bin / 'wm_register_to_atlas_new.py').write_text(
+            'import sys\nprint("native registration failed", file=sys.stderr)\nsys.exit(7)\n',
+            encoding='utf-8',
+        )
+        config = WMAOrgAtlasConfig(subject_id='subject', input_tractography=self.tractography,
+            atlas_dir=self.atlas_dir, output_dir=self.output_dir, slicer_executable=self.slicer_executable,
+            wma_root=self.wma_root, execute=True)
+        python = find_pythonslicer(Path(sys.executable).parent) or Path(sys.executable)
+        with (
+            mock.patch.dict(os.environ, {'DSP_WMA_EXECUTION_BACKEND': 'native', 'DISPLAY': ':1'}),
+            mock.patch('tractography.wma._resolve_slicer_runtime', return_value=self.slicer_executable),
+            mock.patch('tractography.wma.find_pythonslicer', return_value=python),
+        ):
+            result = run_wma_org_atlas(config)
+        record = json.loads(result.manifest_path.read_text())
+        self.assertEqual(result.status, 'failed')
+        self.assertEqual(result.return_code, 7)
+        self.assertEqual(len(record['stage_commands']), 1)
+        stage = record['stage_commands'][0]
+        self.assertEqual(stage['stage'], 'registration-rigid_affine_fast')
+        self.assertEqual(stage['return_code'], 7)
+        self.assertIn('native registration failed', Path(record['outputs']['stderr_log']).read_text())
+        self.assertFalse((self.output_dir / 'subject').exists())
+        self.assertTrue(list(self.output_dir.glob('.failed_products/*/subject')))
+
+    @unittest.skipIf(sys.platform == 'win32', 'Uses the POSIX author shell fixture')
+    def test_resume_does_not_reuse_legacy_output_for_native_org(self):
+        from shared.orchestrator import _wma_complete
+        from tractography.wma import WMAOrgAtlasConfig, run_wma_org_atlas
+        config = WMAOrgAtlasConfig(subject_id='subject', input_tractography=self.tractography,
+            atlas_dir=self.atlas_dir, output_dir=self.output_dir, slicer_executable=self.slicer_executable,
+            wma_root=self.wma_root, execute=True)
+        resume_args = dict(input_tractography=self.tractography, atlas_dir=self.atlas_dir, wma_root=self.wma_root)
+        with mock.patch.dict(os.environ, {'DSP_WMA_EXECUTION_BACKEND': 'legacy', 'DISPLAY': ':1'}):
+            self.assertEqual(run_wma_org_atlas(config).status, 'completed')
+            self.assertTrue(_wma_complete(self.output_dir, **resume_args))
+        with mock.patch.dict(os.environ, {'DSP_WMA_EXECUTION_BACKEND': 'native'}):
+            self.assertFalse(_wma_complete(self.output_dir, **resume_args))
 
     def test_windows_prefers_explicit_executable_bridge(self):
         from tractography.wma import _wma_script_path, _command_path, resolve_wma_root

@@ -2,8 +2,8 @@
 """Relocation test of native CLI candidate with build-system PATH stripped.
 
 This smoke is deliberately *not* a scientific-validation test. Exit nonzero on
-missing commands, loader failures or nonzero version checks. Runner's OS and
-architecture must match the candidate record.
+missing commands, loader failures or a failed Dhollander script startup.
+The runner's OS and architecture must match the candidate record.
 """
 from __future__ import annotations
 
@@ -11,7 +11,6 @@ import argparse
 import json
 import os
 from pathlib import Path
-import platform
 import subprocess
 import sys
 import tempfile
@@ -28,6 +27,8 @@ def main(argv=None):
     parser.add_argument('--output', required=True, type=Path)
     args = parser.parse_args(argv)
     from shared.native_runtimes import _extract, _sha256, host_platform
+    from scripts.native.prepare_mrtrix_candidate import WINDOWS_COMMANDS, WINDOWS_RESPONSE_SCRIPT
+
     record = json.loads(args.record.read_text())
     actual_system, actual_machine = host_platform()
     if (record['system'], record['machine']) != (actual_system, actual_machine):
@@ -35,34 +36,53 @@ def main(argv=None):
                            f'on {actual_system}/{actual_machine}')
     if _sha256(args.archive) != record['sha256']:
         raise ValueError('Candidate archive checksum mismatch')
+    is_windows = actual_system == 'Windows'
+    if is_windows:
+        required = {WINDOWS_RESPONSE_SCRIPT, *(f'bin/{name}.exe' for name in WINDOWS_COMMANDS)}
+        missing = required.difference(record['commands'])
+        if missing:
+            raise ValueError(f'Incomplete Windows candidate command list: {", ".join(sorted(missing))}')
+    scope = 'loader/-version and Dhollander script startup' if is_windows else 'loader/-version only'
     result = {'system': actual_system, 'machine': actual_machine, 'checks': [],
-              'status': 'running', 'scope': 'loader/--version only (not scientific validation)'}
-    with tempfile.TemporaryDirectory(prefix='native-relocation-') as folder:
-        root = Path(folder)
+              'status': 'running', 'scope': scope + ' (not scientific validation)'}
+    prefix = 'native relocation ' if is_windows else 'native-relocation-'
+    with tempfile.TemporaryDirectory(prefix=prefix) as folder:
+        root = Path(folder).resolve()
         _extract(args.archive, root, record['format'])
-        # Remove MSYS2/miniconda/compilers from PATH; Windows system DLLs are
-        # found by the OS loader, and bundled DLLs sit beside each EXE.
-        if actual_system == 'Windows':
+        if is_windows:
             windows = Path(os.environ['WINDIR'])
-            base_path = str(windows / 'System32') + os.pathsep + str(windows)
+            base_path = os.pathsep.join((str(windows / 'System32'), str(windows)))
+            # Use only OS paths and the extracted payload. Isolate user MRtrix
+            # config and scratch files from the runner's profile.
+            environment = {
+                'WINDIR': str(windows), 'SYSTEMROOT': str(windows),
+                'HOME': str(root), 'USERPROFILE': str(root), 'TEMP': str(root), 'TMP': str(root),
+                'MRTRIX_CONFIGFILE': str(root / 'mrtrix.conf'),
+            }
         else:
             base_path = '/usr/bin:/bin'
-        for command in record['commands']:
-            executable = (root / command).resolve()
-            if not executable.is_file() or not executable.is_relative_to(root.resolve()):
-                raise FileNotFoundError(command)
             environment = dict(os.environ)
-            environment['PATH'] = str(executable.parent) + os.pathsep + base_path
-            # Set a clean runtime lib env. Do not rely on the build runner's
-            # installed Qt/MSYS2/Homebrew dependencies.
             for key in ('LD_LIBRARY_PATH', 'DYLD_LIBRARY_PATH', 'DYLD_FALLBACK_LIBRARY_PATH',
                         'PYTHONHOME', 'PYTHONPATH', 'MSYSTEM', 'MSYS2_PATH_TYPE'):
                 environment.pop(key, None)
-            completed = subprocess.run([str(executable), '-version'], cwd=root, env=environment,
+        for command in record['commands']:
+            executable = (root / command).resolve()
+            if not executable.is_file() or not executable.is_relative_to(root):
+                raise FileNotFoundError(command)
+            child_env = {**environment, 'PATH': str(executable.parent) + os.pathsep + base_path}
+            invocation = [str(executable), '-version']
+            output_key = 'version_output'
+            if is_windows and command == WINDOWS_RESPONSE_SCRIPT:
+                child_env['PYTHONPATH'] = str(root / 'lib')
+                # Ask the pinned upstream script to print the specific algorithm's
+                # usage. This loads its Python modules without a help pager.
+                invocation = [sys.executable, '-B', '-S', str(executable), 'dhollander', '__print_full_usage__']
+                output_key = 'output'
+            completed = subprocess.run(invocation, cwd=root, env=child_env,
                                        capture_output=True, text=True, errors='replace', timeout=45)
             output = ((completed.stdout or '') + '\n' + (completed.stderr or '')).strip()
             result['checks'].append({'binary': command, 'exit_code': completed.returncode,
-                                     'version_output': output[:4000]})
+                                     output_key: output[:4000]})
             if completed.returncode != 0:
                 raise RuntimeError(f'Portable command failed: {command}: {output[-600:]}')
     result['status'] = 'passed'

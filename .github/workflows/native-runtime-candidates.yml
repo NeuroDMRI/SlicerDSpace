@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       build_windows_mrtrix:
-        description: 'Build Windows MRtrix3 C++ executable candidate'
+        description: 'Build Windows MRtrix3 CSD/ACT candidate'
         required: true
         type: boolean
         default: true
@@ -60,19 +60,28 @@ jobs:
           msystem: MINGW64
           update: true
           install: >-
-            git python pkgconf make diffutils
+            git python pkgconf make diffutils curl
             mingw-w64-x86_64-gcc
-            mingw-w64-x86_64-eigen3
             mingw-w64-x86_64-fftw
             mingw-w64-x86_64-libpng
             mingw-w64-x86_64-libtiff
             mingw-w64-x86_64-zlib
             mingw-w64-x86_64-binutils
-      - name: Compile and stage DLL closure on Windows
+      - name: Install Eigen 3.4 for the pinned C++11 build
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          temp="$(mktemp -d)"
+          trap 'rm -rf "$temp"' EXIT
+          package="mingw-w64-x86_64-eigen3-3.4.0-1-any.pkg.tar.zst"
+          curl -fsSLo "$temp/$package" "https://repo.msys2.org/mingw/mingw64/$package"
+          printf '%s  %s\n' fd0c4360d46052ba65a97ca8b6caf270610f91dc437d699cd5cd88962c7efbb3 "$temp/$package" | sha256sum --check
+          pacman -U --noconfirm "$temp/$package"
+      - name: Compile and stage CSD/ACT runtime on Windows
         shell: msys2 {0}
         working-directory: slicerdspace
         run: bash scripts/native/build_mrtrix_windows.sh mrtrix3 dist/native-candidates
-      - name: Relocation/loader smoke using native Windows Python, without MSYS2 PATH
+      - name: Relocation smoke for native commands and Dhollander startup
         shell: pwsh
         working-directory: slicerdspace
         run: python scripts/native/smoke_mrtrix_candidate.py --archive dist/native-candidates/mrtrix-3.0.8-windows-x86_64.zip --record dist/native-candidates/mrtrix-3.0.8-windows-x86_64.draft-record.json --output dist/native-candidates/relocation-smoke.json

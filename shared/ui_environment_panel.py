@@ -122,6 +122,7 @@ PATH_STATUS_DEPENDENCY_KEYS = {
         "command:mri_segstats",
     },
     "tract_querier_root": {"path:tract_querier_root", "path:tract_querier_root_script", "python:tract_querier"},
+    "wmql_python_executable": {"path:wmql_python"},
     "wma_root": {"env:wma_root", "path:wma_root_path", "command:wm_apply_ORG_atlas_to_subject.sh",
                  "path:wma_atlas_python_bridge"},
     "wma_atlas_dir": {

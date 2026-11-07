@@ -20,14 +20,43 @@ from tractography.wma_transform import AuthorCompatibleFiberTransform, registrat
 from tractography.wma_fibers import AuthorCompatibleFiberArrayConverter, fiber_conversion_support
 
 
+def _run_native_nonrigid(author, author_args):
+    from whitematteranalysis import register_two_subjects_nonrigid_bsplines as registration
+
+    # The pinned author code references resource only in a progress message.
+    if not hasattr(registration, "resource"):
+        try:
+            import resource
+        except ImportError:
+            from types import SimpleNamespace
+
+            def getrusage(_):
+                return SimpleNamespace(ru_maxrss="unavailable")
+
+            resource = SimpleNamespace(RUSAGE_SELF=0, getrusage=getrusage)
+        registration.resource = resource
+
+    previous_argv = sys.argv
+    try:
+        sys.argv = [str(author), *author_args]
+        runpy.run_path(str(author), run_name="__main__")
+    finally:
+        sys.argv = previous_argv
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--author-script", type=Path, required=True)
-    parser.add_argument("--report-dir", type=Path, required=True)
+    parser.add_argument("--report-dir", type=Path)
+    parser.add_argument("--native-nonrigid", action="store_true")
     parser.add_argument("author_args", nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
     author_args = args.author_args[1:] if args.author_args[:1] == ["--"] else args.author_args
     author = args.author_script.resolve(strict=True)
+    if args.native_nonrigid:
+        return _run_native_nonrigid(author, author_args)
+    if args.report_dir is None:
+        parser.error("--report-dir is required for cached registration.")
     args.report_dir.mkdir(parents=True, exist_ok=True)
     report_path = args.report_dir / ("registration_cache_" + uuid.uuid4().hex + ".json")
     record = {"kind": "wma_registration_preprocess_cache", "version": 1,

@@ -48,6 +48,24 @@ previous preset in `SlicerDSpace.LegacyWMQLPreset`. Run records are not rewritte
 
 ---
 
+## Native Python Worker
+
+To select a native worker, set **TractQuerier root** and **WMQL Python** under
+**Environment and installation > Core Python & Runtime Paths**. On the command
+line, use `--tract-querier-root <checkout>` and
+`--wmql-python-executable <python>`. Choose a checkout containing
+`scripts/cli_tract_querier.py`. The worker needs NumPy, NiBabel and VTK.
+The dependency check and WMQL execution use the selected interpreter.
+Use a new run name or `--no-resume` to verify a different worker on the same data.
+
+With the worker field empty, existing configurations keep their default route.
+Selected-environment preparation preserves configured native WMQL and TractCloud
+paths when it repairs a Windows WSL runtime for other tools. For a manual
+Windows installer run, use `-PreserveWmqlSettings` or
+`-PreserveTractCloudSettings` to keep those saved paths.
+
+---
+
 ## Compatibility and QC
 
 The atlas must contain finite nonnegative integer 3-D FreeSurfer/DK region IDs.

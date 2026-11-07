@@ -356,4 +356,8 @@ def managed_tool_environment(
         extra["FSLDIR"] = fsl_root_from_bin_dir(fsl_bin_dir).as_posix()
         extra["FSLOUTPUTTYPE"] = FSL_OUTPUT_TYPE
     extra.update({str(key): str(value) for key, value in (extra_env or {}).items() if value is not None})
-    return external_python_environment(extra, path_prepend=prepend)
+    env = external_python_environment(extra, path_prepend=prepend)
+    if sys.platform == "win32" and not env.get("HOME"):
+        # MRtrix 3.0.8 resolves its configuration via HOME even on Windows.
+        env["HOME"] = env.get("USERPROFILE") or str(Path.home())
+    return env

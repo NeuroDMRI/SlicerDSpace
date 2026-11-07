@@ -1,10 +1,10 @@
 ﻿import os
+import shlex
 import time
 
 from Support.verb_msg import verb_msg
 from Support.sys_exec import sys_exec
 from Support.pts_to_tck import pts_to_tck
-from Support.shell_quote import shell_quote
 from .read_prefilter_tracks import read_prefilter_tracks
 
 
@@ -20,17 +20,20 @@ def tractography_mrtrix(PS, SD):
         verb_msg('Running mrtrix tckgen', PS)
         tstart = time.time()
 
-        seed_str = ''
+        start = ["tckgen"]
         if PS.surfseed:
-            seed_str = f" -seed_coordinates_global {shell_quote(SD.DWI.seed_coords_file_in)}"
-
-        command = (
-            f"{PS.mrtrix_prefix} tckgen{seed_str} "
-            f"-output_seeds {shell_quote(SD.DWI.seed_coords_file_out)} {PS.tckgen} "
-            f"{shell_quote(PS.fod)} {shell_quote(SD.DWI.sl_init)} -force"
-        )
-        verb_msg('tckgen string:', PS)
-        verb_msg(command, PS)
+            start.extend(("-seed_coordinates_global", SD.DWI.seed_coords_file_in))
+        start.extend(("-output_seeds", SD.DWI.seed_coords_file_out))
+        end = [PS.fod, SD.DWI.sl_init, "-force"]
+        if PS.mrtrix_prefix:
+            # Explicit legacy wrappers can use shell syntax in their options.
+            command = f"{PS.mrtrix_prefix} {shlex.join(start)} {PS.tckgen} {shlex.join(end)}"
+            description = command
+        else:
+            command = [*start, *shlex.split(PS.tckgen), *end]
+            description = shlex.join(command)
+        verb_msg("tckgen command:", PS)
+        verb_msg(description, PS)
         sys_exec(command, PS)
 
         t = time.time() - tstart

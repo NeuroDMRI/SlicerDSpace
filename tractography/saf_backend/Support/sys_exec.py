@@ -3,8 +3,9 @@ import shlex
 import shutil
 import subprocess
 import sys
+from pathlib import Path
 
-from shared.external_process import startup_environment, text_subprocess_kwargs
+from shared.external_process import resolve_external_command, startup_environment, text_subprocess_kwargs
 
 
 def _mrtrix_seed_extra_env(PS):
@@ -27,16 +28,35 @@ def _mrtrix_seed_extra_env(PS):
 
 
 def sys_exec(cmd, PS):
-    """Run an external SAF command and stop immediately on failure."""
+    """Run MRtrix argv or an explicitly configured legacy shell command."""
 
     extra_env = _mrtrix_seed_extra_env(PS)
     env = startup_environment(extra_env=extra_env)
-    shell = True
-    if sys.platform == "win32":
+    if not isinstance(cmd, str):
+        cmd = [str(arg) for arg in cmd]
+        prefix = getattr(PS, "mrtrix_prefix", "")
+        if prefix:
+            cmd = f"{prefix} {shlex.join(cmd)}"
+        else:
+            # Native MRtrix reads HOME for its configuration on Windows too.
+            if sys.platform == "win32" and not env.get("HOME"):
+                env["HOME"] = env.get("USERPROFILE") or str(Path.home())
+            bin_dir = getattr(PS, "mrtrix_bin_dir", "")
+            if bin_dir:
+                env["PATH"] = os.pathsep.join(filter(None, (str(bin_dir), env.get("PATH"))))
+                executable = resolve_external_command(cmd[0], Path(bin_dir), require_executable=True)
+            else:
+                executable = shutil.which(cmd[0], path=env.get("PATH", ""))
+            if not executable:
+                raise FileNotFoundError(f"SAF command {cmd[0]} was not found. Configure the MRtrix bin directory.")
+            cmd[0] = os.path.abspath(executable)
+
+    shell = isinstance(cmd, str)
+    if shell and sys.platform == "win32":
         # Backend paths use POSIX quoting, which cmd.exe does not understand.
         # Decode those quotes to argv, preserve the MRtrix PATH prefix in the
         # environment, and let the selected native/WSL executable handle argv.
-        cmd = shlex.split(cmd) if isinstance(cmd, str) else list(cmd)
+        cmd = shlex.split(cmd)
         if cmd and cmd[0].startswith("PATH="):
             prefix = cmd.pop(0)[len("PATH="):]
             if not prefix.endswith(":$PATH"):

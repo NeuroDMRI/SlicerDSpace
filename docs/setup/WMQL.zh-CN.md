@@ -39,6 +39,22 @@
 
 ---
 
+## 原生 Python 执行器
+
+要选择原生执行器，在 **环境与安装 > 核心 Python 与运行时路径** 设置
+**TractQuerier 根目录**和 **WMQL Python**。命令行对应
+`--tract-querier-root <源码目录>` 和 `--wmql-python-executable <Python>`。
+源码目录须包含 `scripts/cli_tract_querier.py`。执行器需要 NumPy、NiBabel 和 VTK。
+依赖检查和 WMQL 执行都使用所选解释器。更换执行器后，如需用同一数据
+验证新执行器，请使用新的运行名或 `--no-resume`。
+
+留空 **WMQL Python** 时，已有配置沿用默认路径。Windows 为其他工具修复
+WSL 运行时时，所选环境准备流程会保留已配置的原生 WMQL 和 TractCloud 路径。
+手动运行 Windows 安装脚本时，可用 `-PreserveWmqlSettings` 或
+`-PreserveTractCloudSettings` 保留对应的已保存路径。
+
+---
+
 ## 兼容性与质量控制
 
 执行前检查标签是否为三维、有限、非负整数，是否具备 FreeSurfer/DK 区域编号及有效仿射矩阵。

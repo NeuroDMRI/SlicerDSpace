@@ -55,6 +55,23 @@ class SelectedSetupTests(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
+    def test_windows_runtime_plan_preserves_explicit_native_bundle_settings(self):
+        report = result(item("command:topup", group="fsl", kind="command"))
+        ubuntu = [{"name": "Ubuntu", "version": 2, "default": True}]
+        with tempfile.TemporaryDirectory() as temporary:
+            worker = Path(temporary) / "python.exe"
+            worker.touch()
+            options = dict(system="Windows", machine="AMD64", wsl_distributions=ubuntu)
+            native = build_setup_plan(report, backend_paths={
+                "wmql_python_executable": worker, "tractcloud_python_executable": worker}, **options)
+            self.assertIn("-PreserveWmqlSettings", native["windows_runtime"]["command"])
+            self.assertIn("-PreserveTractCloudSettings", native["windows_runtime"]["command"])
+
+            Path(str(worker) + ".slicerdsurfer-owner").touch()
+            legacy = build_setup_plan(report, backend_paths={"tractcloud_python_executable": worker}, **options)
+            self.assertNotIn("-PreserveWmqlSettings", legacy["windows_runtime"]["command"])
+            self.assertNotIn("-PreserveTractCloudSettings", legacy["windows_runtime"]["command"])
+
     def test_d6_gui_doctor_needs_the_native_tensor_fit_not_the_dmri_module(self):
         spec = DependencySpec(key='python:slicer.util', kind='python', label='slicer.util', required=True,
                               targets=('microstructure',))

@@ -21,8 +21,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from shared.environment import EnvironmentDoctorConfig, run_environment_doctor, write_environment_report
-from shared.external_process import text_subprocess_kwargs
+from shared.environment import EnvironmentDoctorConfig, missing_python_install_groups, run_environment_doctor, write_environment_report
+from shared.external_process import python_tool_environment, text_subprocess_kwargs
 from shared.preprocessing_route import add_removed_flags
 from shared.dependency_config import add_dependency_config_arguments, apply_dependency_config, write_dependency_config
 from shared.python_environment import resolve_python_executable
@@ -146,6 +146,7 @@ def _install_python_packages(
             check=False,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            env=python_tool_environment(python_executable),
             **text_subprocess_kwargs(),
         )
         safe_name = _safe_log_name(requirement)
@@ -287,6 +288,7 @@ def main(argv: list[str] | None = None) -> int:
         slicer_executable=args.slicer_executable,
         fiber_tract_measurements_cli=args.fiber_tract_measurements_cli,
         tract_querier_root=args.tract_querier_root,
+        wmql_python_executable=args.wmql_python_executable,
         tractcloud_root=args.tractcloud_root,
         tractcloud_python_executable=args.tractcloud_python_executable,
         tractcloud_data_dir=args.tractcloud_data_dir,
@@ -295,14 +297,17 @@ def main(argv: list[str] | None = None) -> int:
     written = write_environment_report(result, args.output_dir)
 
     python_install_results: list[PipInstallResult] = []
-    if args.execute and result.missing_python_packages:
-        python_install_results = _install_python_packages(
-            args.python_executable,
-            tuple(result.missing_python_packages),
-            args.output_dir,
-            pip_find_links=args.pip_find_links,
-            pip_no_index=bool(args.pip_no_index),
-        )
+    groups = missing_python_install_groups(result)
+    if args.execute and groups:
+        for index, (python, requirements) in enumerate(groups.items(), start=1):
+            report_dir = args.output_dir if len(groups) == 1 else args.output_dir / f"python-{index}"
+            python_install_results.extend(_install_python_packages(
+                python,
+                requirements,
+                report_dir,
+                pip_find_links=args.pip_find_links,
+                pip_no_index=bool(args.pip_no_index),
+            ))
         result = run_environment_doctor(config)
         written = write_environment_report(result, args.output_dir)
 

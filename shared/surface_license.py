@@ -33,5 +33,12 @@ def resolve_surface_license(explicit=None, *, freesurfer_home=None, home=None, e
                   user / 'license.txt']
     for root in (freesurfer_home, env.get('FREESURFER_HOME')):
         if root:
-            candidates.extend(Path(root).expanduser() / name for name in ('license.txt', '.license'))
+            directory = Path(root).expanduser()
+            try:
+                names = {path.name for path in directory.iterdir()}
+            except OSError:
+                continue
+            # Look at stored names: case-insensitive filesystems alias the
+            # public LICENSE.txt notice to a lookup for private license.txt.
+            candidates.extend(directory / name for name in ('license.txt', '.license') if name in names)
     return next((path.resolve() for path in candidates if usable_license(path)), None)

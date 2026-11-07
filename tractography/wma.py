@@ -25,6 +25,7 @@ from typing import Any, Callable, Optional
 
 from shared.external_process import (
     external_python_environment,
+    find_pythonslicer,
     text_subprocess_kwargs,
     slicer_runtime_roots,
 )
@@ -72,6 +73,7 @@ REQUIRED_WMA_COMMANDS = (
     "wm_register_to_atlas_new.py",
     "wm_separate_clusters_by_hemisphere.py",
 )
+NATIVE_WMA_COMMANDS = tuple(name for name in REQUIRED_WMA_COMMANDS if name != "wm_harden_transform.py")
 OPTIONAL_WMA_COMMANDS = ("wm_diffusion_measurements.py", "xvfb-run")
 EXTRA_TOOL_DIRS = (
     Path("/data/chengjin/software/xvfb/usr/bin"),
@@ -143,33 +145,75 @@ def _wma_script_path(root: Path) -> Path:
     return windows_binary if sys.platform == 'win32' and windows_binary.is_file() else script
 
 
-def resolve_configured_wma_root() -> Path:
-    """Resolve WMA from environment, PATH, then the verified POSIX source cache."""
-
+def _configured_wma_root() -> Optional[Path]:
     for env_name in ("SLICERDSPACE_WMA_ROOT", "WMA_ROOT"):
         env_value = os.environ.get(env_name)
         if env_value:
             return Path(env_value).expanduser().resolve()
+    return None
 
-    script_on_path = shutil.which(WMA_APPLY_ORG_SCRIPT_NAME)
-    if script_on_path:
-        script_path = Path(script_on_path).resolve()
-        if script_path.parent.name == "bin":
-            return script_path.parent.parent
-        return script_path.parent
 
-    # The prepared source archive has no native Windows/WSL executable bridge.
-    if sys.platform != "win32":
+def _wma_root_on_path() -> Optional[Path]:
+    script = shutil.which(WMA_APPLY_ORG_SCRIPT_NAME)
+    if script:
+        parent = Path(script).resolve().parent
+        return parent.parent if parent.name == "bin" else parent
+    return None
+
+
+def _has_wma_bridge(root: Path) -> bool:
+    shell = root / WMA_APPLY_ORG_SCRIPT
+    bridge = shell.with_name(shell.name + ".exe")
+    return bridge.is_file() and Path(str(bridge) + ".slicerdsurfer-owner").is_file()
+
+
+def resolve_wma_execution_backend(
+    wma_root: Optional[Path],
+    *,
+    atlas_family: str = "org",
+    export_diffusion_measures: bool = False,
+    measurement_backend: str = "fibertractmeasurements",
+    platform: Optional[str] = None,
+) -> str:
+    """Select an ORG native source or the existing author/WSL route."""
+    choice = os.environ.get("DSP_WMA_EXECUTION_BACKEND", "auto").strip().lower()
+    if choice not in {"auto", "native", "legacy"}:
+        raise ValueError("DSP_WMA_EXECUTION_BACKEND must be auto, native or legacy.")
+    needs_legacy_measurements = export_diffusion_measures and measurement_backend == "fibertractmeasurements"
+    if choice == "native":
+        if atlas_family != "org" or needs_legacy_measurements:
+            raise ValueError("Native WMA supports ORG without the legacy FiberTractMeasurements export.")
+        return choice
+    if (choice == "legacy" or (platform or sys.platform).lower() not in {"win32", "windows"}
+            or atlas_family != "org" or needs_legacy_measurements):
+        return "legacy"
+    root = wma_root or _configured_wma_root() or _wma_root_on_path()
+    return "legacy" if root is not None and _has_wma_bridge(root.expanduser()) else "native"
+
+
+def resolve_configured_wma_root(
+    *, execution_backend: str = "legacy", platform: Optional[str] = None,
+) -> Path:
+    """Resolve a configured root, PATH tool, or verified source cache."""
+    configured = _configured_wma_root()
+    if configured is not None:
+        return configured
+
+    native = execution_backend == "native"
+    path_root = _wma_root_on_path()
+    if not native and path_root is not None:
+        return path_root
+    if native or (platform or sys.platform).lower() not in {"win32", "windows"}:
         from shared.backend_sources import available_source
         prepared = available_source("wma")
         if prepared is not None:
             return prepared.expanduser().resolve()
+    if native and path_root is not None and not _has_wma_bridge(path_root):
+        return path_root
 
     raise FileNotFoundError(
-        "WMA ORG atlas script was not found. Configure WMA by passing wma_root, "
-        "setting SLICERDSPACE_WMA_ROOT or WMA_ROOT, or adding "
-        f"{WMA_APPLY_ORG_SCRIPT_NAME} to PATH. WMA is an optional external backend; "
-        "it is not bundled inside SlicerDSpace."
+        "WMA source was not found. Prepare WMA or configure wma_root, "
+        "SLICERDSPACE_WMA_ROOT or WMA_ROOT. WMA is an optional external backend."
     )
 
 
@@ -212,6 +256,15 @@ def wma_source_info(wma_root: Path) -> dict[str, str]:
             if normalized_key in {"commit", "date_added"}:
                 info[normalized_key] = value.strip()
         info["source_record"] = source_record.as_posix()
+    receipt = wma_root / ".slicerdspace-source.json"
+    if "commit" not in info and receipt.is_file():
+        try:
+            revision = json.loads(receipt.read_text(encoding="utf-8"))["revision"]
+        except (OSError, ValueError, TypeError, KeyError):
+            pass
+        else:
+            if isinstance(revision, str):
+                info.update(commit=revision, source_record=receipt.as_posix())
     return info
 
 
@@ -324,6 +377,8 @@ def inspect_wma_backend(
     *,
     require_virtual_x: bool = False,
     require_diffusion_measurements: bool = False,
+    execution_backend: str = "legacy",
+    platform: Optional[str] = None,
 ) -> dict[str, Any]:
     """Inspect the external WhiteMatterAnalysis backend without running WMA."""
 
@@ -336,17 +391,37 @@ def inspect_wma_backend(
         "commands": {},
         "source": None,
     }
-    root = resolve_wma_root(wma_root)
+    native = execution_backend == "native"
+    if native:
+        from shared.backend_sources import profile_path, verify_source
+
+        root = (wma_root.expanduser().resolve() if wma_root is not None else
+                resolve_configured_wma_root(execution_backend=execution_backend, platform=platform))
+        receipt = root / ".slicerdspace-source.json"
+        if root == profile_path("wma").resolve() or receipt.exists() or receipt.is_symlink():
+            verify_source("wma", root)
+    else:
+        root = resolve_wma_root(wma_root)
     status["root"] = root.as_posix()
+    status["execution_backend"] = execution_backend
     script = _wma_script_path(root)
     status["script"] = script.as_posix()
     status["source"] = wma_source_info(root)
 
-    required = list(REQUIRED_WMA_COMMANDS)
+    if native:
+        for name in NATIVE_WMA_COMMANDS:
+            source = root / "bin" / name
+            status["commands"][name] = source.as_posix() if source.is_file() else None
+            if not source.is_file():
+                status["missing_required"].append(name)
+        if not (root / "whitematteranalysis" / "__init__.py").is_file():
+            status["missing_required"].append("whitematteranalysis package")
+    required = [] if native else list(REQUIRED_WMA_COMMANDS)
     optional = list(OPTIONAL_WMA_COMMANDS)
     if require_diffusion_measurements and "wm_diffusion_measurements.py" not in required:
         required.append("wm_diffusion_measurements.py")
-    if _use_virtual_x(require_virtual_x):
+    runtime_platform = (platform or sys.platform).lower()
+    if require_virtual_x or (runtime_platform.startswith("linux") and _resolve_runtime_display() is None):
         for command in ("xvfb-run", "Xvfb", "xauth"):
             if command not in required:
                 required.append(command)
@@ -364,7 +439,7 @@ def inspect_wma_backend(
             status["missing_optional"].append(command_name)
 
     status["script_executable"] = os.access(script, os.X_OK)
-    status["available"] = not status["missing_required"] and bool(status["script_executable"])
+    status["available"] = not status["missing_required"] and (native or bool(status["script_executable"]))
     return status
 
 
@@ -418,15 +493,18 @@ def inspect_wma_org_atlas(atlas_dir: Path, atlas_family: str = "auto") -> dict[s
     return status
 
 
-def summarize_wma_outputs(output_dir: Path, input_tractography: Path) -> dict[str, Any]:
+def summarize_wma_outputs(
+    output_dir: Path, input_tractography: Path, *, registration_mode: str = "rig",
+) -> dict[str, Any]:
     """Summarize expected WMA output products for manifest/QC."""
 
     case_id = input_tractography.stem
     case_dir = output_dir / case_id
     anatomical_dir = case_dir / "AnatomicalTracts"
     cluster_dir = case_dir / "FiberClustering"
-    initial_dir = cluster_dir / "InitialClusters" / f"{case_id}_reg"
-    outlier_dir = cluster_dir / "OutlierRemovedClusters" / f"{case_id}_reg_outlier_removed"
+    registered_case = f"{case_id}_reg_reg" if registration_mode == "nonrig" else f"{case_id}_reg"
+    initial_dir = cluster_dir / "InitialClusters" / registered_case
+    outlier_dir = cluster_dir / "OutlierRemovedClusters" / f"{registered_case}_outlier_removed"
     transformed_dir = cluster_dir / "TransformedClusters" / case_id
     separated_dir = cluster_dir / "SeparatedClusters"
     tracts = sorted(anatomical_dir.glob("*.vtp")) if anatomical_dir.is_dir() else []
@@ -681,6 +759,10 @@ def _resolve_tckconvert(config: WMAOrgAtlasConfig) -> Optional[Path]:
 
 
 def validate_wma_org_inputs(config: WMAOrgAtlasConfig) -> None:
+    _inspect_wma_run(config)
+
+
+def _inspect_wma_run(config: WMAOrgAtlasConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     if config.measurement_backend not in {"fibertractmeasurements", "native_vtk_point_scalar_summary"}:
         raise ValueError("Unknown WMA measurement backend: " + str(config.measurement_backend))
     if not config.subject_id.strip():
@@ -711,8 +793,19 @@ def validate_wma_org_inputs(config: WMAOrgAtlasConfig) -> None:
         and not config.fiber_tract_measurements_cli.expanduser().is_file()
     ):
         raise FileNotFoundError(f"FiberTractMeasurements CLI not found: {config.fiber_tract_measurements_cli}")
+    execution_backend = resolve_wma_execution_backend(
+        config.wma_root, atlas_family=atlas_status["atlas_family"],
+        export_diffusion_measures=config.export_diffusion_measures,
+        measurement_backend=config.measurement_backend,
+    )
+    if execution_backend == "native":
+        if config.registration_mode not in {"rig", "nonrig"}:
+            raise ValueError("registration_mode must be 'rig' or 'nonrig'.")
+        if config.clean_files not in {0, 1, 2}:
+            raise ValueError("clean_files must be 0, 1, or 2.")
     backend_status = inspect_wma_backend(
         config.wma_root,
+        execution_backend=execution_backend,
         require_virtual_x=config.use_virtual_x,
         require_diffusion_measurements=(config.export_diffusion_measures
                                         and config.measurement_backend == "fibertractmeasurements"),
@@ -720,11 +813,89 @@ def validate_wma_org_inputs(config: WMAOrgAtlasConfig) -> None:
     if not backend_status["available"]:
         missing = ", ".join(backend_status["missing_required"])
         raise RuntimeError(f"WMA backend is incomplete. Missing required command(s): {missing}")
-    if config.execute and sys.platform == 'win32':
+    if config.execute and sys.platform == 'win32' and execution_backend == 'legacy':
         from shared.wsl_bridge import bridge_config
         if bridge_config(Path(backend_status['script'])) is None:
             raise RuntimeError('Windows WMA requires the managed WSL command bridge; a raw Linux .sh checkout '
                                'cannot run natively. Run Advanced settings > Windows runtime setup.')
+    return backend_status, atlas_status
+
+
+def _run_native_org(config, staging, wma_root, slicer, python, env, manifest, stdout_log, stderr_log, log):
+    from tractography.wma_native import run_org_atlas_native
+
+    xvfb = _command_path("xvfb-run", wma_root) if config.use_virtual_x else None
+    scripts = Path(__file__).resolve().parents[1] / "scripts"
+    env = dict(env, PYTHONUTF8="1")
+    with tempfile.TemporaryDirectory(prefix="wma-worker-", dir=staging) as temp_dir, \
+            stdout_log.open("w", encoding="utf-8") as stdout, \
+            stderr_log.open("w", encoding="utf-8") as stderr:
+        if sys.platform == "win32" and config.num_threads > 1:
+            # Joblib's process tracker uses an ASCII wire format for temp paths.
+            joblib_temp = env.get("JOBLIB_TEMP_FOLDER") or tempfile.gettempdir()
+            if not joblib_temp.isascii():
+                if not temp_dir.isascii():
+                    raise RuntimeError(
+                        "WMA with multiple workers needs a writable temporary path with ASCII characters. "
+                        "Set JOBLIB_TEMP_FOLDER to that directory or run with one WMA worker."
+                    )
+                env["JOBLIB_TEMP_FOLDER"] = temp_dir
+        worker = Path(temp_dir) / "harden.py"
+        worker.write_text(
+            "import sys, traceback, slicer\n"
+            f"sys.path.insert(0, {str(scripts)!r})\n"
+            "from run_wma_harden_transform import main\n"
+            "try:\n"
+            "    result = main(sys.argv[1:])\n"
+            "except BaseException:\n"
+            "    traceback.print_exc()\n"
+            "    result = 1\n"
+            "slicer.util.exit(result)\n",
+            encoding="utf-8",
+        )
+
+        def run_stage(stage, argv):
+            script, *args = argv
+            if script == "run_wma_harden_transform.py":
+                command = [str(slicer), "--no-main-window", "--python-script", str(worker), *args]
+                if xvfb is not None:
+                    command[:0] = [str(xvfb), "-a"]
+            elif stage == "registration-nonrigid":
+                command = [
+                    str(python), "-u", str(scripts / "run_wma_registration.py"),
+                    "--author-script", str(wma_root / "bin" / script),
+                    "--native-nonrigid", "--", *args,
+                ]
+            else:
+                command = [str(python), "-u", str(wma_root / "bin" / script), *args]
+            record = {"stage": stage, "command": command}
+            manifest["stage_commands"].append(record)
+            if log:
+                log(f"[WMA] {stage}")
+            stdout.write(f"\n[WMA] {stage}\n")
+            stdout.flush()
+            stderr.write(f"\n[WMA] {stage}\n")
+            stderr.flush()
+            stage_output_start = stdout.tell()
+            completed = subprocess.run(command, cwd=wma_root, env=env, stdout=stdout, stderr=stderr)
+            record["return_code"] = completed.returncode
+            completed.check_returncode()
+            if stage == "registration-nonrigid":
+                with stdout_log.open("rb") as stream:
+                    stream.seek(stage_output_start)
+                    if any(b"EXCEPTION WAS CAUGHT" in line for line in stream):
+                        raise RuntimeError("WMA nonrigid registration reported an optimizer exception. See the WMA stdout log.")
+
+        run_org_atlas_native(
+            input_tractography=config.input_tractography.resolve(),
+            output_dir=staging,
+            atlas_dir=config.atlas_dir.expanduser().resolve(),
+            registration_mode=config.registration_mode,
+            num_threads=config.num_threads,
+            clean_files=config.clean_files,
+            transform_path=config.transform_path.expanduser().resolve() if config.transform_path else None,
+            run_stage=run_stage,
+        )
 
 
 @scheduled_stage('wma')
@@ -745,18 +916,13 @@ def run_wma_org_atlas(
         raise ValueError('WMA worker count exceeds the admitted CPU reservation')
     virtual_x_requested = config.use_virtual_x
     config = replace(config, num_threads=threads, use_virtual_x=_use_virtual_x(virtual_x_requested))
-    validate_wma_org_inputs(config)
-    wma_root = resolve_wma_root(config.wma_root)
-    backend_status = inspect_wma_backend(
-        wma_root,
-        require_virtual_x=config.use_virtual_x,
-        require_diffusion_measurements=(config.export_diffusion_measures
-                                        and config.measurement_backend == "fibertractmeasurements"),
-    )
-    atlas_status = inspect_wma_org_atlas(config.atlas_dir, config.atlas_family)
+    backend_status, atlas_status = _inspect_wma_run(config)
+    wma_root = Path(backend_status["root"])
+    execution_backend = backend_status["execution_backend"]
+    native = execution_backend == "native"
     atlas_contract = atlas_status.get("output_contract", {})
     def summarize(directory, tractogram):
-        summary = summarize_wma_outputs(directory, tractogram)
+        summary = summarize_wma_outputs(directory, tractogram, registration_mode=config.registration_mode)
         if atlas_contract:
             summary["atlas_contract"] = atlas_contract
         return summary
@@ -777,7 +943,7 @@ def run_wma_org_atlas(
             "-force",
         )
     runtime_config = replace(config, input_tractography=prepared_tractography)
-    command = build_wma_org_atlas_command(runtime_config)
+    command = () if native else build_wma_org_atlas_command(runtime_config)
     manifest_path = output_dir / "wma_org_atlas_manifest.json"
     qc_path = output_dir / "wma_org_atlas_qc.json"
     previous_records = archive_run_records(output_dir, ('wma_org_atlas_manifest.json', 'wma_org_atlas_qc.json')) if config.execute else None
@@ -818,6 +984,7 @@ def run_wma_org_atlas(
         "executed": bool(config.execute),
         "status": "planned" if not config.execute else "running",
         "command": list(command),
+        "execution_backend": execution_backend,
         "backend": backend_status,
         "previous_records": previous_records,
         "atlas": atlas_status,
@@ -835,11 +1002,14 @@ def run_wma_org_atlas(
             "summary": output_summary,
         },
     }
+    if native:
+        manifest["stage_commands"] = []
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
     if log:
         mode = "Executing" if config.execute else "Prepared dry-run"
-        log(f"[WMA] {mode} {atlas_status['atlas_family']} atlas command: {' '.join(command)}")
+        route = "native Python stages" if native else " ".join(command)
+        log(f"[WMA] {mode} {atlas_status['atlas_family']} atlas: {route}")
         log(f"[WMA] Manifest: {manifest_path}")
 
     start_time = time.monotonic()
@@ -872,6 +1042,10 @@ def run_wma_org_atlas(
             slicer_python_candidates = tuple(path for root in slicer_runtime_roots(runtime_executable.parent)
                                             for path in (root / 'PythonSlicer', root / 'bin' / 'PythonSlicer'))
             slicer_python = next((path for path in slicer_python_candidates if path.is_file()), None) if native_posix else None
+            if native:
+                slicer_python = find_pythonslicer(runtime_executable.parent)
+                if slicer_python is None:
+                    raise FileNotFoundError(f"Native WMA needs PythonSlicer from {runtime_executable}.")
             library_entries = [str(path) for path in _slicer_runtime_library_paths(runtime_executable)] if native_posix else []
             if native_posix and config.export_diffusion_measures and config.measurement_backend == "fibertractmeasurements":
                 for extension in _slicerdmri_module_paths(runtime_executable):
@@ -897,7 +1071,7 @@ def run_wma_org_atlas(
                 conversion_stderr_log.write_text(converted.stderr or "", encoding="utf-8")
             # POSIX author scripts still use PythonSlicer/virtual-display shims;
             # no SlicerDMRI module injection is needed for ModelFile transforms.
-            if native_posix and (slicer_python is not None or config.use_virtual_x):
+            if not native and native_posix and (slicer_python is not None or config.use_virtual_x):
                 temp_python_dir = tempfile.TemporaryDirectory(prefix="slicerdds_wma_python_")
                 if slicer_python is not None:
                     shim = Path(temp_python_dir.name) / "python"
@@ -948,20 +1122,27 @@ def run_wma_org_atlas(
             if runtime_display:
                 env["DISPLAY"] = runtime_display
             staging = new_product_staging(output_dir, 'wma')
-            runtime_command = list(command_to_run)
-            runtime_command[runtime_command.index('-o') + 1] = str(staging)
-            manifest['executed_command'] = runtime_command
-            completed = subprocess.run(
-                runtime_command,
-                check=True,
-                cwd=wma_root.as_posix(),
-                env=env,
-                capture_output=True,
-                **text_subprocess_kwargs(),
-            )
-            stdout_log.write_text(completed.stdout or "", encoding="utf-8")
-            stderr_log.write_text(completed.stderr or "", encoding="utf-8")
-            return_code = completed.returncode
+            if native:
+                _run_native_org(
+                    runtime_config, staging, wma_root, runtime_executable, slicer_python,
+                    env, manifest, stdout_log, stderr_log, log,
+                )
+                return_code = 0
+            else:
+                runtime_command = list(command_to_run)
+                runtime_command[runtime_command.index('-o') + 1] = str(staging)
+                manifest['executed_command'] = runtime_command
+                completed = subprocess.run(
+                    runtime_command,
+                    check=True,
+                    cwd=wma_root.as_posix(),
+                    env=env,
+                    capture_output=True,
+                    **text_subprocess_kwargs(),
+                )
+                stdout_log.write_text(completed.stdout or "", encoding="utf-8")
+                stderr_log.write_text(completed.stderr or "", encoding="utf-8")
+                return_code = completed.returncode
             if config.export_diffusion_measures and config.measurement_backend == "native_vtk_point_scalar_summary":
                 # This is not an unqualified replacement of FiberTractMeasurements:
                 # tensor-only inputs fail and the method is recorded explicitly.
@@ -972,26 +1153,29 @@ def run_wma_org_atlas(
             return_code = exc.returncode
             failed_stdout = conversion_stdout_log if conversion_command and not prepared_tractography.is_file() else stdout_log
             failed_stderr = conversion_stderr_log if conversion_command and not prepared_tractography.is_file() else stderr_log
-            failed_stdout.write_text(exc.stdout or "", encoding="utf-8")
-            failed_stderr.write_text(exc.stderr or "", encoding="utf-8")
+            if not native or failed_stdout == conversion_stdout_log:
+                failed_stdout.write_text(exc.stdout or "", encoding="utf-8")
+                failed_stderr.write_text(exc.stderr or "", encoding="utf-8")
             execution_error = str(exc)
         except KeyboardInterrupt:
             return_code = 130
             execution_error = "Interrupted by user."
-            stderr_log.write_text(execution_error + "\n", encoding="utf-8")
+            with stderr_log.open("a" if native else "w", encoding="utf-8") as stream:
+                stream.write(execution_error + "\n")
         except Exception as exc:
             return_code = None
             execution_error = f"{type(exc).__name__}: {exc}"
-            stderr_log.write_text(traceback.format_exc(), encoding="utf-8")
+            with stderr_log.open("a" if native else "w", encoding="utf-8") as stream:
+                stream.write(traceback.format_exc())
         finally:
             if temp_python_dir is not None:
                 temp_python_dir.cleanup()
             output_summary = summarize(staging, prepared_tractography) if staging else {}
             contract_error = _wma_output_contract_error(output_summary) if config.execute else None
             if execution_error is None and contract_error is not None:
-                log_hint = _last_nonempty_line(stderr_log.read_text(encoding="utf-8") if stderr_log.is_file() else "")
+                log_hint = _last_nonempty_line(stderr_log.read_text(encoding="utf-8", errors="replace") if stderr_log.is_file() else "")
                 if log_hint is None:
-                    log_hint = _last_nonempty_line(stdout_log.read_text(encoding="utf-8") if stdout_log.is_file() else "")
+                    log_hint = _last_nonempty_line(stdout_log.read_text(encoding="utf-8", errors="replace") if stdout_log.is_file() else "")
                 execution_error = contract_error
                 if log_hint:
                     execution_error += f" Last log line: {log_hint}"

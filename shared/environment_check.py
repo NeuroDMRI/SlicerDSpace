@@ -11,7 +11,7 @@ PATH_FIELDS = {'repo_root', 'output_dir', 'python_executable', 'conda_executable
                'mrtrix_bin_dir', 'preprocessing_mrtrix_bin_dir', 'preprocessing_fsl_bin_dir',
                'postprocess_freesurfer_home', 'postprocess_runtime', 'postprocess_license_file',
                'model_assets_dir', 'wma_root', 'wma_atlas_dir',
-               'slicer_executable', 'fiber_tract_measurements_cli', 'tract_querier_root', 'tractcloud_root',
+               'slicer_executable', 'fiber_tract_measurements_cli', 'tract_querier_root', 'wmql_python_executable', 'tractcloud_root',
                'tractcloud_python_executable', 'tractcloud_data_dir'}
 
 

@@ -32,7 +32,7 @@ does not make CUDA available: fix that backend's environment first.
 | DDSurfer surfaces | `auto`; resolves in its selected external Python, not the calling Slicer Python; preserves model memory/precision checks |
 | TractCloud | `auto` in its selected Python; GUI PyTorch choice forwarded; CPU retry after a CUDA inference error is refused |
 | MRtrix/FSL eddy | GPU-first when its CUDA binary and GPU access are available; launcher refuses upstream CUDA-error CPU retries |
-| DIPY denoising/Gibbs/motion | Current CPU implementations; not made into a different algorithm to claim GPU acceleration |
+| DIPY MP-PCA denoising and Gibbs removal | Current CPU implementations; not made into a different algorithm to claim GPU acceleration |
 | Slicer DTI, DIPY free-water/DKI, Python MK-Curve | Current CPU implementations |
 | AMICO NODDI | Current CPU fitting backend; threading is separate from GPU availability |
 | ANTs/BRAINSFit, FreeSurfer surface refinement | Current CPU registration / geometry backends |

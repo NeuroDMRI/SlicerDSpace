@@ -53,7 +53,7 @@ independent of the plugin's PyTorch and brain-mask device selectors.
 | Package | Responsibility |
 | --- | --- |
 | `shared/` | Input/layout contracts, brain-mask adapters, dependencies, orchestration, QC, settings and GUI result reintegration |
-| `preprocessing/` | Optional DIPY or official MRtrix/FSL preprocessing, corrected gradients and diagnostic artifacts |
+| `preprocessing/` | Optional preprocessing (one route: DIPY MP-PCA and Gibbs, then FSL eddy/topup through `dwifslpreproc`), corrected gradients and diagnostic artifacts |
 | `anatomy/segmentation/` | DDSeg tissue segmentation |
 | `anatomy/parcellation/` | DDParcel anatomical labels and conversion |
 | `anatomy/surface/` | Pinned DDSurfer inference, native surfaces and optional refinement |

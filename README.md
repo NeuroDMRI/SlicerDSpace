@@ -250,7 +250,7 @@ The [first-workflow tutorial](docs/setup/QUICKSTART.md) includes a synthetic ins
 
 | Part | Default | Other choices |
 | --- | --- | --- |
-| DWI preprocessing (only when ticked) | DIPY: MP-PCA denoising, Gibbs removal, between-volume motion correction | MRtrix3/FSL route (denoise, Gibbs, eddy, topup); other DIPY denoisers (local PCA, Patch2Self, none) |
+| DWI preprocessing (only when ticked) | One route: DIPY MP-PCA denoising, DIPY Gibbs removal, FSL eddy/topup through `dwifslpreproc` (needs MRtrix3, FSL and the FSL licence; a platform with no FSL build does not offer it) | `--preprocessing-skip-gibbs` skips Gibbs removal; the route, denoise-method and skip-motion options were removed |
 | Missing brain mask | PNL diffusion CNN; valid supplied masks are reused | Supplied mask only (`provided`); SynthStrip, MRtrix and DIPY masks were removed |
 | Microstructure | DTI | Add Free-water, NODDI, DKI and/or iFW (iFW needs the echo time); DKI uses the Python MK-Curve by default; WLS or OLS are options |
 | Tractography | MRtrix3 CSD/ACT | DTI deterministic, UKF, SAF |

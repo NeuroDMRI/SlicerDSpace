@@ -130,39 +130,19 @@ pipeline mask_pnl --targets validation --brain-mask-backend pnl_cnn \
   --brain-mask-device auto --plan
 ```
 
-Optional DIPY denoising/Gibbs/motion correction:
-
-<!-- cli-template: preproc-dipy -->
-```bash
-pipeline preproc_dipy --targets validation,preprocessing \
-  --brain-mask-backend provided --preprocessing-backend dipy \
-  --preprocessing-dipy-denoise-method mppca --plan
-```
-
-Alternative denoisers keep the remaining preprocessing route unchanged:
-
-<!-- cli-template: preproc-localpca -->
-```bash
-pipeline preproc_localpca --targets validation,preprocessing \
-  --brain-mask-backend provided --preprocessing-backend dipy \
-  --preprocessing-dipy-denoise-method localpca --plan
-```
-
-<!-- cli-template: preproc-patch2self -->
-```bash
-pipeline preproc_patch2self --targets validation,preprocessing \
-  --brain-mask-backend provided --preprocessing-backend dipy \
-  --preprocessing-dipy-denoise-method patch2self --plan
-```
-
-MRtrix/FSL with acquisition-specific phase encoding and total readout time.
+Preprocessing has one route: DIPY MP-PCA denoising, DIPY Gibbs removal, then FSL
+eddy and topup through MRtrix3 `dwifslpreproc`. It needs MRtrix3, FSL (eddy, topup) and the FSL
+licence on every OS. A platform with no FSL build (for example Linux aarch64) does not offer it;
+import preprocessed data instead. `--preprocessing-skip-gibbs` is the only way to leave a step out.
+The old `--preprocessing-backend`, `--preprocessing-dipy-denoise-method` and `--preprocessing-skip-motion`
+options were removed (W2a); each fails and names the one route.
 Replace `j-`, `0.05` and the reverse-PE image with the actual protocol; they are
 examples, not universal defaults:
 
 <!-- cli-template: preproc-fsl -->
 ```bash
 pipeline preproc_fsl --targets validation,preprocessing \
-  --brain-mask-backend provided --preprocessing-backend mrtrix_fsl \
+  --brain-mask-backend provided \
   --preprocessing-phase-encoding-direction j- --preprocessing-readout-time 0.05 \
   --preprocessing-reverse-phase-b0 "/path/to/matched_reverse_b0.nii.gz" --plan
 ```

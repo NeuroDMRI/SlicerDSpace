@@ -98,7 +98,7 @@ implemented MPS. The PNL brain mask runs on macOS through its native route
 (experimental)"; it also uses CPU and does not select MPS. [PyTorch MPS](https://docs.pytorch.org/docs/main/notes/mps.html).
 
 For the least external dependencies, provide a reviewed native brain mask and
-select DTI with optional DIPY preprocessing. FW/NODDI/DKI/MK-Curve additionally
+select DTI without the `preprocessing` target (it needs FSL and MRtrix3). FW/NODDI/DKI/MK-Curve additionally
 need suitable acquisition and compatible numerical packages; they remain
 unverified on real macOS data. WMA, SAF and FreeSurfer-style postprocessing need
 their shell/CLI/display prerequisites and separate end-to-end validation.

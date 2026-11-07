@@ -45,7 +45,7 @@ Linux NVIDIA 组件，与插件的 PyTorch 设备选择、脑掩膜设备选择�
 | 源码目录 | 职责 |
 | --- | --- |
 | `shared/` | 输入与目录契约、掩膜适配、依赖体检、编排、QC、设置及结果回载 |
-| `preprocessing/` | DIPY 或官方 MRtrix/FSL 预处理、校正梯度和诊断产物 |
+| `preprocessing/` | 预处理（唯一路线：DIPY MP-PCA 和 Gibbs，然后通过 `dwifslpreproc` 运行 FSL eddy/topup）、校正梯度和诊断产物 |
 | `anatomy/segmentation/` | DDSeg 组织分割 |
 | `anatomy/parcellation/` | DDParcel 分区及格式转换 |
 | `anatomy/surface/` | 固定 DDSurfer 后端、原生表面及可选后处理 |

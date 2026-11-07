@@ -234,7 +234,7 @@ In SlicerDSpace, set the subject ID and subject root, then run `Check
 environment dependencies`. If a stage is still blocked, include the generated
 environment report and install plan when reporting the issue.
 
-For `mrtrix_fsl` preprocessing, provide the real phase-encoding direction and
+For preprocessing (DIPY MP-PCA, DIPY Gibbs removal, then FSL eddy/topup through `dwifslpreproc`), provide the real phase-encoding direction and
 total readout time from the acquisition metadata. Susceptibility correction
 with topup additionally requires the subject's reverse-phase spin-echo b0 data.
 If those acquisition files are absent, `-rpe_none` can exercise Eddy but cannot

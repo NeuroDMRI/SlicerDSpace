@@ -20,7 +20,7 @@ and explicitly apply the lighter preset:
 | Part | Method | Standalone environment |
 | --- | --- | --- |
 | Brain mask | PNL CNN (the only generating method) | PyTorch extension and the pnl-cnn assets |
-| Optional preprocessing | DIPY | None |
+| Optional preprocessing | Not part of this route (one route only: DIPY MP-PCA and Gibbs, then FSL eddy/topup) | MRtrix3, FSL and the FSL licence |
 | DTI / FW / NODDI / Python DKI | Selected models in Slicer's Python | None; model-specific Python packages as needed |
 | Anatomical prior | DDSeg / DDParcel / DDSurfer | PyTorch extension, Python packages and downloaded assets |
 | Tracking | DTI deterministic | Compatible Python packages (the tensor fit runs in Slicer) |
@@ -29,8 +29,8 @@ and explicitly apply the lighter preset:
 | Optional surface postprocessing | Licensed native components | Small component runtime; no full FreeSurfer |
 
 PNL and CSD/ACT defaults stay unchanged until explicitly changed. PNL needs
-PyTorch and the pnl-cnn assets (ANTs only on the managed route); CSD/ACT and SAF need MRtrix; MRtrix/FSL preprocessing needs
-FSL. UKF uses its installed extension. GPU-capable stages retain their device
+PyTorch and the pnl-cnn assets (ANTs only on the managed route); CSD/ACT and SAF need MRtrix; preprocessing needs
+MRtrix3 and FSL. UKF uses its installed extension. GPU-capable stages retain their device
 preference. Optional methods remain available on demand.
 
 The preset sets the brain mask to PNL CNN. The DIPY median-Otsu mask was removed (W5); a supplied

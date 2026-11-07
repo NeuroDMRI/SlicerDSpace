@@ -70,7 +70,7 @@ Explicit CLI options override saved values.
 
 The GUI environment check requires the selected generator when a known
 canonical input is missing its mask or automatic masking is selected with
-preprocessing. The GUI's default motion correction may require a fresh mask in
+preprocessing. FSL eddy correction (the only preprocessing route) may require a fresh mask in
 corrected space, even if a supplied input mask exists. With preprocessing off,
 a supplied canonical mask does not require generator dependencies. `provided`
 does not require an inference runtime for preprocessing; a known missing

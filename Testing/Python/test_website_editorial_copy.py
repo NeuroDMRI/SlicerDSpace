@@ -81,9 +81,9 @@ class WebsiteEditorialCopyTests(unittest.TestCase):
     def test_integration_is_standalone_and_source_backed(self):
         integrated = self.section("integrated")
         methods = re.findall(r'<tr data-method="([^"]+)"', integrated)
-        self.assertEqual(len(methods), 33)
-        self.assertEqual(len(set(methods)), 33)
-        for method in ("pnl_cnn", "localpca", "patch2self", "eddy", "topup", "dti",
+        self.assertEqual(len(methods), 30)
+        self.assertEqual(len(set(methods)), 30)
+        for method in ("pnl_cnn", "mppca", "gibbs", "eddy", "topup", "dti",
                        "freewater", "noddi", "dki", "mkcurve", "ddseg", "ddparcel",
                        "ddsurfer", "surface_postprocess", "ukf", "saf", "wmql",
                        "wma", "tractcloud", "sift2", "scalar_length", "regional"):

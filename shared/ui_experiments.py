@@ -17,7 +17,7 @@ TEXT = {
         'preview': 'Preview experiments', 'export': 'Export request...',
         'lite': 'Use Slicer-native route...',
         'lite_title': 'Use a lighter dependency route?',
-        'lite_message': 'Keep PNL CNN masking. Use DIPY preprocessing, DTI deterministic tracking, WMQL bundles and Python connectomes. Anatomical models still use PyTorch and downloaded weights. Optional surface postprocessing keeps its native components. PNL and CSD defaults are unchanged unless you accept this preset. Inspect the mask and tractography: these are different methods, not equivalent substitutes.',
+        'lite_message': 'Keep PNL CNN masking. Preprocessing is not part of this route (it needs FSL). Use DTI deterministic tracking, WMQL bundles and Python connectomes. Anatomical models still use PyTorch and downloaded weights. Optional surface postprocessing keeps its native components. PNL and CSD defaults are unchanged unless you accept this preset. Inspect the mask and tractography: these are different methods, not equivalent substitutes.',
     },
     'zh': {
         'enabled': '启用实验运行器', 'scope': '输入范围',
@@ -27,7 +27,7 @@ TEXT = {
         'preview': '预览实验计划', 'export': '导出配置...',
         'lite': '使用 Slicer 原生轻量路线...',
         'lite_title': '切换到较少外部依赖的路线？',
-        'lite_message': '保持 PNL CNN 掩膜，使用 DIPY 预处理、DTI 确定性追踪、WMQL 束分析和 Python 连接组。解剖模型仍使用 PyTorch 和下载的权重；可选表面后处理保留原生组件。只有确认后才修改当前 PNL/CSD 等选择。这些算法不保证等价，请检查脑掩膜和追踪结果。',
+        'lite_message': '保持 PNL CNN 掩膜；预处理（需要 FSL）不属于这条路线。使用 DTI 确定性追踪、WMQL 束分析和 Python 连接组。解剖模型仍使用 PyTorch 和下载的权重；可选表面后处理保留原生组件。只有确认后才修改当前 PNL/CSD 等选择。这些算法不保证等价，请检查脑掩膜和追踪结果。',
     },
 }
 

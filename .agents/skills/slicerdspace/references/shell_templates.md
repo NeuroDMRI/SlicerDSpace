@@ -3,7 +3,7 @@
 Generated from `docs/setup/CLI_TEMPLATES.md`; do not edit this catalogue or its generated scripts.
 Regenerate with `python scripts/build_skill_shell_templates.py` from the authorized checkout.
 
-Source SHA-256 (UTF-8, LF): `a2ed39878940d95110f203dc9dddd55fc310704d47b9ae3edcd03525207c67f3`.
+Source SHA-256 (UTF-8, LF): `a7fec4df8beae70f70923d506f1be7842a26162ee925f172c68a06f6d64b1f99`.
 
 ## Contents
 
@@ -83,43 +83,13 @@ pipeline mask_pnl --targets validation --brain-mask-backend pnl_cnn \
 
 ## Preprocessing
 
-### DIPY preprocessing with MP-PCA
-
-[Standalone Bash](../assets/shell/preproc_dipy.sh) - Recipe `preproc-dipy`.
-
-```bash
-pipeline preproc_dipy --targets validation,preprocessing \
-  --brain-mask-backend provided --preprocessing-backend dipy \
-  --preprocessing-dipy-denoise-method mppca --plan
-```
-
-### DIPY preprocessing with Local PCA
-
-[Standalone Bash](../assets/shell/preproc_localpca.sh) - Recipe `preproc-localpca`.
-
-```bash
-pipeline preproc_localpca --targets validation,preprocessing \
-  --brain-mask-backend provided --preprocessing-backend dipy \
-  --preprocessing-dipy-denoise-method localpca --plan
-```
-
-### DIPY preprocessing with Patch2Self
-
-[Standalone Bash](../assets/shell/preproc_patch2self.sh) - Recipe `preproc-patch2self`.
-
-```bash
-pipeline preproc_patch2self --targets validation,preprocessing \
-  --brain-mask-backend provided --preprocessing-backend dipy \
-  --preprocessing-dipy-denoise-method patch2self --plan
-```
-
-### MRtrix/FSL preprocessing
+### Preprocessing: DIPY MP-PCA and Gibbs, FSL eddy/topup
 
 [Standalone Bash](../assets/shell/preproc_fsl.sh) - Recipe `preproc-fsl`.
 
 ```bash
 pipeline preproc_fsl --targets validation,preprocessing \
-  --brain-mask-backend provided --preprocessing-backend mrtrix_fsl \
+  --brain-mask-backend provided \
   --preprocessing-phase-encoding-direction j- --preprocessing-readout-time 0.05 \
   --preprocessing-reverse-phase-b0 "/path/to/matched_reverse_b0.nii.gz" --plan
 ```

@@ -116,11 +116,11 @@ the original processing files or environment are included in the bundle.
 
 ---
 
-## Distortion correction (MRtrix3/FSL route)
+## Distortion correction (topup)
 
-With **Preprocessing** checked under **2. Products** and **Preprocessing route**
-set to `mrtrix_fsl` under **Advanced settings > Preprocessing & mask**, the
-**Distortion correction (topup)** group shows three fields. They set the same
+With **Preprocessing** checked under **2. Products**, the
+**Distortion correction (topup)** group under **Advanced settings > Preprocessing & mask**
+shows three fields. Preprocessing has one route (W2a), so there is no route choice. They set the same
 options as the command line:
 
 | GUI field | CLI flag | dwifslpreproc |

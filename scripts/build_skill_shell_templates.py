@@ -25,10 +25,7 @@ GROUPS = (
 
 TITLES = {
     "mask-pnl": "PNL CNN brain mask",
-    "preproc-dipy": "DIPY preprocessing with MP-PCA",
-    "preproc-localpca": "DIPY preprocessing with Local PCA",
-    "preproc-patch2self": "DIPY preprocessing with Patch2Self",
-    "preproc-fsl": "MRtrix/FSL preprocessing",
+    "preproc-fsl": "Preprocessing: DIPY MP-PCA and Gibbs, FSL eddy/topup",
     "anatomy-seg": "DDSeg tissue segmentation", "anatomy-parcel": "DDParcel brain parcellation",
     "anatomy-surface": "DDSurfer native surfaces", "anatomy-combined": "Combined anatomical priors",
     "anatomy-postprocess": "Native cortical postprocessing and atlas mapping",

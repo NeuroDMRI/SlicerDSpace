@@ -118,7 +118,7 @@ def gui_brain_mask_required(
     needs_mask = bool(set(MASK_TARGETS).intersection(targets))
     has_user_mask = bool(input_known and input_mask_exists)
     missing_mask = needs_mask and not has_user_mask and (input_known or mask_backend != "provided")
-    # GUI preprocessing uses motion correction by default and may need a new mask in
+    # Preprocessing (FSL eddy) changes the voxel space and may need a new mask in
     # corrected space even when a supplied input mask already exists.
     return bool(missing_mask or (preprocessing_on and mask_backend != "provided"))
 

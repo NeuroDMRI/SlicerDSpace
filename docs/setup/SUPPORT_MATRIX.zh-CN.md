@@ -55,7 +55,7 @@ WSL 是 Linux 后端，不是 Windows 原生计算；Windows/macOS 不继承 Lin
 | DICOM 转换 | 需要转换器 | 原生转换器/Slicer 候选 | 原生转换器/Slicer 候选 |
 | DTI、确定性追踪 | Slicer 内 Teem 张量拟合；DIPY 追踪 | 同左，原生候选 | 同左，原生候选 |
 | DDSeg/DDParcel/DDSurfer 原生重建 | 指定数据/路线已测，需匹配模型 | 原生 PyTorch 候选，需可用掩膜 | 原生 CPU 候选，需可用掩膜及匹配模型 |
-| DIPY 预处理、FW、NODDI | 指定输入已测 | 原生 Python 候选，需兼容 DIPY/AMICO | 原生 Python 候选，需匹配架构的包 |
+| FW、NODDI | 指定输入已测 | 原生 Python 候选，需兼容 DIPY/AMICO | 原生 Python 候选，需匹配架构的包 |
 | DKI/Python MK-Curve | 指定被试全脑已有独立检查与计时；无效体素须排除 | 原生数值候选，需适用的多壳数据 | 原生数值候选，需适用的多壳数据 |
 | PNL CNN 掩膜 | PyTorch/ANTs 路线；CPU 概率/掩膜配对检查；Linux x86_64 自动配置 | Windows Slicer Python 内的 native 路线（SimpleITK + PyTorch），**实验性**；此处未在 Windows 上运行 | native 路线（SimpleITK + PyTorch），**实验性**；无 CUDA，Metal 未实现，未实测 |
 | 皮层表面后处理 | 合格原生组件或已有 FreeSurfer；已测离线预编译包安装，在线发布待完成；[配置说明](SURFACE_COMPONENTS.zh-CN.md) | 无合格原生预编译包；WSL／完整安装桥接待验收 | 已有原生 FreeSurfer 候选；无合格预编译包 |

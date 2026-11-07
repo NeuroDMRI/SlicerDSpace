@@ -117,38 +117,15 @@ pipeline mask_pnl --targets validation --brain-mask-backend pnl_cnn \
   --brain-mask-device auto --plan
 ```
 
-可选的 DIPY 去噪、Gibbs 和运动校正：
-
-<!-- cli-template: preproc-dipy -->
-```bash
-pipeline preproc_dipy --targets validation,preprocessing \
-  --brain-mask-backend provided --preprocessing-backend dipy \
-  --preprocessing-dipy-denoise-method mppca --plan
-```
-
-替换去噪器时，其余预处理路线保持一致：
-
-<!-- cli-template: preproc-localpca -->
-```bash
-pipeline preproc_localpca --targets validation,preprocessing \
-  --brain-mask-backend provided --preprocessing-backend dipy \
-  --preprocessing-dipy-denoise-method localpca --plan
-```
-
-<!-- cli-template: preproc-patch2self -->
-```bash
-pipeline preproc_patch2self --targets validation,preprocessing \
-  --brain-mask-backend provided --preprocessing-backend dipy \
-  --preprocessing-dipy-denoise-method patch2self --plan
-```
-
-MRtrix/FSL 路线使用真实采集参数。下面的 `j-`、`0.05` 和反向相位编码 b0
-仅为示例，必须按采集协议替换。
+预处理只有一条路线：DIPY MP-PCA 去噪、DIPY Gibbs 去除，然后通过 MRtrix3 `dwifslpreproc` 运行 FSL eddy 和 topup。
+所有系统都需要 MRtrix3、FSL（eddy、topup）和 FSL 许可。没有 FSL 构建的平台（例如 Linux aarch64）不提供该目标，请导入已预处理的数据。
+`--preprocessing-skip-gibbs` 是唯一可以跳过某一步的选项。旧的 `--preprocessing-backend`、`--preprocessing-dipy-denoise-method` 和 `--preprocessing-skip-motion` 已移除（W2a）；使用它们会失败，并提示这条唯一路线。
+下面的 `j-`、`0.05` 和反向相位编码 b0 仅为示例，必须按采集协议替换。
 
 <!-- cli-template: preproc-fsl -->
 ```bash
 pipeline preproc_fsl --targets validation,preprocessing \
-  --brain-mask-backend provided --preprocessing-backend mrtrix_fsl \
+  --brain-mask-backend provided \
   --preprocessing-phase-encoding-direction j- --preprocessing-readout-time 0.05 \
   --preprocessing-reverse-phase-b0 "/path/to/matched_reverse_b0.nii.gz" --plan
 ```

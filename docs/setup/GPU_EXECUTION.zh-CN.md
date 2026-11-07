@@ -30,7 +30,7 @@
 | DDSurfer 表面 | 默认 `auto`；用实际外部 Python 探测，保留显存与精度检查 |
 | TractCloud | 用其实际 Python 判断；继承 GUI 选择，CUDA 出错不自动重跑 CPU |
 | MRtrix/FSL eddy | CUDA 版和 GPU 可用时优先使用；启动器禁止 CUDA 失败后自动重跑 CPU |
-| DIPY 去噪、Gibbs、运动校正 | 当前 CPU 实现 |
+| DIPY MP-PCA 去噪、Gibbs 去除 | 当前 CPU 实现 |
 | Slicer DTI、DIPY FW/DKI、Python MK-Curve | 当前 CPU 实现 |
 | AMICO NODDI | 当前 CPU 拟合后端，线程设置与 GPU 是两回事 |
 | ANTs/BRAINSFit、FreeSurfer 表面后处理 | 当前 CPU 配准与几何后端 |

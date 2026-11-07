@@ -15,10 +15,10 @@ CATALOG = ROOT / 'docs/website/zh-CN.json'
 VOID = {'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link',
         'meta', 'param', 'source', 'track', 'wbr', 'path'}
 KEEP = {'SlicerDSpace', 'SLICERDSPACE', 'DDSeg', 'DDParcel', 'DDSurfer', 'DTI', 'DKI', 'NODDI',
-        'SAF', 'UKF', 'WMA', 'WMQL', 'TractCloud', 'SIFT2', 'MK-Curve', 'MP-PCA', 'Patch2Self',
-        'MRtrix3', 'SlicerDMRI', 'CSD/ACT', 'CSD / MSMT-CSD', 'NODDI / AMICO',
-        'MRtrix3 dwi2mask', 'MRtrix3 mtnormalise', 'FSL eddy', 'FSL topup', 'Local PCA',
-        'Slicer BRAINSFit / BRAINSResample', 'DIPY or MRtrix3 dwidenoise', 'DIPY or MRtrix3 mrdegibbs',
+        'SAF', 'UKF', 'WMA', 'WMQL', 'TractCloud', 'SIFT2', 'MK-Curve', 'MP-PCA',
+        'MRtrix3', 'DIPY', 'SlicerDMRI', 'CSD/ACT', 'CSD / MSMT-CSD', 'NODDI / AMICO',
+        'MRtrix3 dwi2mask', 'MRtrix3 mtnormalise', 'FSL eddy', 'FSL topup',
+        'Slicer BRAINSFit / BRAINSResample',
         'DICOM / NIfTI / NRRD', 'CITATION.cff', 'LICENSE.txt', 'lemo-opuscar', 'ds004666', 'bash', 'Eng'}
 
 

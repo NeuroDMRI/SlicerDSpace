@@ -18,7 +18,7 @@
 | 部分 | 方法 | 额外独立环境 |
 | --- | --- | --- |
 | 脑掩膜 | PNL CNN（唯一的生成方法） | PyTorch 扩展和 pnl-cnn 资源 |
-| 可选预处理 | DIPY | 不需要 |
+| 可选预处理 | 不属于这条路线（预处理只有一条路线：DIPY MP-PCA 和 Gibbs，然后 FSL eddy/topup） | 需要 MRtrix3、FSL 和 FSL 许可 |
 | DTI / FW / NODDI / Python DKI | Slicer Python 中所选模型 | 不需要；按需安装 Python 包 |
 | 解剖重建 | DDSeg / DDParcel / DDSurfer | PyTorch 扩展、Python 包及下载资源 |
 | 追踪 | DTI deterministic | 兼容 Python 包（张量拟合在 Slicer 内完成） |
@@ -27,7 +27,7 @@
 | 可选表面后处理 | 原生组件运行包 | 小型授权组件，无需完整版 FreeSurfer |
 
 默认 PNL 掩膜和 CSD/ACT 追踪不自动改变。PNL 需要 PyTorch 和 pnl-cnn 资源（ANTs 仅 managed 路线需要）；
-CSD/ACT 和 SAF 仍需 MRtrix；MRtrix/FSL 预处理仍需 FSL；UKF 调用安装的
+CSD/ACT 和 SAF 仍需 MRtrix；预处理仍需 MRtrix3 和 FSL；UKF 调用安装的
 UKFTractography 扩展。保留这些算法的按需入口，不将其他方法伪装为等价替代。
 轻量预设不修改 GPU 算法的设备偏好。
 

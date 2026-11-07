@@ -222,8 +222,7 @@ example, substituting only the user's requested targets/settings:
 - `model_assets_dir`: the user-confirmed absolute path outside the extension.
 - `parameters`: optional MRML field names with string values, restricted to
   `brainMaskBackend`, `brainMaskDevice`, `ddsegDevice`, `device`,
-  `preprocessingBackend`, `orchestrationMicrostructureStages`,
-  `orchestrationDkiFitMethod`, `orchestrationTractographyBackend`,
+  `orchestrationMicrostructureStages`, `orchestrationDkiFitMethod`, `orchestrationTractographyBackend`,
   `orchestrationBundleBackend`, `wmaAtlas`, `connectomeBackend`.
   Choice validation applies. Include only requested scientific options, not
   paths, installation flags or consent. Bundle targets select their respective

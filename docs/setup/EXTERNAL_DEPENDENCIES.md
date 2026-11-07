@@ -176,7 +176,7 @@ PythonSlicer scripts/dependency_profile_matrix.py \
 默认矩阵覆盖完整依赖面，包括常规产品、`surface_postprocess`、
 `microstructure_freewater`、`microstructure_noddi`、`saf`、`wma` 和
 `tractcloud`。默认 backend profile 会选择更严格的外部依赖组合：
-`preprocessing=mrtrix_fsl`、`tractography=csd_act`、`connectome=mrtrix`。
+`tractography=csd_act`、`connectome=mrtrix`；预处理只有一条路线（DIPY MP-PCA、DIPY Gibbs、FSL eddy/topup），不再有 backend 选项。
 
 输出结构：
 
@@ -347,7 +347,7 @@ scripts/download_model_assets.sh --profile core
 
 ### 2.3 Microstructure
 
-- DTI / Free Water / preprocessing DIPY backend：
+- DTI / Free Water / preprocessing（DIPY MP-PCA 和 Gibbs）：
   - `dipy>=1.10,<1.13` (DIPY 1.10 is the compatible choice for Slicer 5.6 / Python 3.9)
 - NODDI：
   - `dmri-amico`，Python import 名为 `amico`
@@ -432,10 +432,8 @@ SAF / connectome 常用：
 - `tcksample`，可选
 - `tck2connectome`
 
-preprocessing MRtrix/FSL 路线：
+preprocessing（唯一路线；去噪和 Gibbs 去除由 DIPY 完成，不再使用 `dwidenoise` 和 `mrdegibbs`）：
 
-- `dwidenoise`
-- `mrdegibbs`
 - `dwifslpreproc`
 - `dwi2mask`
 
@@ -463,7 +461,7 @@ export MRTRIX_BIN_DIR=/path/to/mrtrix3/bin
 
 ## 5. FSL
 
-FSL 不是默认必需项。只有选择 `--preprocessing-backend mrtrix_fsl`，并希望使用完整 `dwifslpreproc` / eddy / topup 路线时才需要。
+FSL 只在选择 `preprocessing` 目标时需要（W2a）：预处理只有一条路线，即 DIPY MP-PCA、DIPY Gibbs 去除，然后通过 `dwifslpreproc` 运行 FSL eddy / topup。该目标还需要 MRtrix3 和 FSL 许可。没有 FSL 构建的平台（例如 Linux aarch64）不提供 `preprocessing`，请导入已预处理的数据。
 
 需要的命令或工具：
 
@@ -478,7 +476,6 @@ PythonSlicer run_subject_pipeline.py \
   --subject-root /path/to/subject \
   --targets preprocessing \
   --execute \
-  --preprocessing-backend mrtrix_fsl \
   --preprocessing-mrtrix-bin-dir /path/to/mrtrix3/bin \
   --preprocessing-fsl-bin-dir /path/to/fsl/bin \
   --preprocessing-reverse-phase-b0 /path/to/reverse_b0.nii.gz \
@@ -496,7 +493,7 @@ FSL 校正完成后，最终脑掩膜由 PNL CNN 基于校正后的 DWI 和旋�
 梯度重新生成（选择“仅使用提供的掩膜”时复制该掩膜），不复用校正前输入掩膜。MRtrix `dwi2mask` 只由 `dwifslpreproc` 内部使用。恢复运行会自动修复缺失或时间早于最终
 DWI 的旧掩膜。
 
-DIPY preprocessing backend 不需要 FSL，但它不提供完整 susceptibility distortion / eddy-current 建模。
+预处理只有一条路线，没有“不需要 FSL”的 DIPY 路线；需要导入已预处理数据时，请不要选择 `preprocessing` 目标。
 
 ---
 
@@ -782,8 +779,7 @@ scripts/download_model_assets.sh --profile parcellation
 | Microstructure DTI | Slicer 内核 Teem（`PythonSlicer`）、`dipy`、`nibabel`、`numpy` | 同时输出彩色 FA 图；ROI-wise 需要 parcellation label map |
 | Free Water | `dipy` | 显式启用 |
 | NODDI | `dmri-amico` | 显式启用 |
-| DIPY preprocessing | `dipy`, `nibabel`, `numpy` | 不做完整 eddy/topup |
-| MRtrix/FSL preprocessing | MRtrix3, FSL | 需要 `dwifslpreproc`, `dwi2mask`, `eddy`, `topup` |
+| preprocessing（唯一路线） | `dipy`, `nibabel`, `numpy`; MRtrix3, FSL | DIPY 做 MP-PCA 和 Gibbs；需要 `dwifslpreproc`, `dwi2mask`, `eddy`, `topup` 和 FSL 许可 |
 | CSD/FOD/ACT | MRtrix3, 5TT, GMWMI | 当前 5TT/GMWMI 可由标签近似生成 |
 | SAF | 内置 SAF backend, MRtrix3, DDSurfer postprocess surface | 表面必须位于原生 dMRI 空间 |
 | WMQL | Tract Querier, `nibabel`, `numpy` | 默认官方多束规则，支持束子集 |

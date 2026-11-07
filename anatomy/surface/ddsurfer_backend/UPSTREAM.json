@@ -104,14 +104,14 @@
     "utils/surface_io.py": "fd76684dd0272151ceb43596b3c1311b86c116301a2e3efc7fb76b0af786acd6"
   },
   "local_patches": {
-    "preprocessing/dti.py": "c0345156b02a1707f3256d0b9b37a23cc0d0ab3d18ad2069fd0232e8bb528f9b",
+    "preprocessing/dti.py": "55fddb27a59d0ea147667dc60578f31bd741a1bcb41d6fa935e272d8efb193fd",
     "preprocessing/dti.sh": "609333d35580274ece4b4ca8c88e57805791a6745040873a3e3791c311804aa1",
     "run_ddsurfer_pipeline.sh": "ed5deafbc427eb58861f1703535c6cd667bccd494f67afce42fc1eb62debee10",
     "tests/check_environment.py": "3d55cca06c7b4b5bb77a3faf3074f5359676e03172c22da22909d6f6edff7072",
     "tests/test_environment_check.py": "9fa0115167904b78de50fdfa59f6b022762c1c1cbe16665516915863e17f3ac9",
     "tests/test_inference.py": "f9cb2b76d136c549ce291542b7393b1a456e1f723a4d7e04ca871ed021f0e422",
     "tests/test_pipeline_reliability.py": "4216b9cce258091ae26c42aaa933a1b13b7289fab4c42e791a79214a0936210c",
-    "tests/test_preprocessing.py": "98e1aed626c739f028ba8823b24146ac50664eed40f473e0cbaaa938cbc64a2c",
+    "tests/test_preprocessing.py": "b54fe90de224c1dd4326e40573474fc28e41f4412ad8e24b2118c511348e52e8",
     "utils/preflight.py": "803fdfbbea3dd10097fccce3081a0afc32bdffc1e964b596f111554d9237b110"
   }
 }

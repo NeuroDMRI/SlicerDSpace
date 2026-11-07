@@ -119,6 +119,13 @@ def _pnl_native_python() -> Optional[Path]:
         return None
 
 
+def _pnl_native_python_checked() -> Optional[Path]:
+    """``_pnl_native_python()`` with a clean problem text, so a replaced resolver never shows an old message."""
+    global _pnl_native_python_problem
+    _pnl_native_python_problem = ""
+    return _pnl_native_python()
+
+
 def pnl_child_threads() -> int:
     """Thread count the native PNL child uses (A6): ``SLICERDSPACE_STAGE_CPUS``, else affinity, else CPU count."""
     from shared.pnl_mask_native import default_threads
@@ -278,7 +285,7 @@ def inspect_brain_mask_backend(config: BrainMaskConfig | None = None, *, system:
             threads = pnl_child_threads()
             # A7 (T2 design v4): Slicer's Python runs shared/pnl_mask_native.py (A1) with the vendored CNN code.
             # The conda runner settings (pnl_mask_python, pnl_mask_script, pnl_mask_ants_bin_dir) are not read.
-            python = _pnl_native_python()
+            python = _pnl_native_python_checked()
             if python is None or not python.is_file() or not os.access(python, os.X_OK):
                 # B7 (A-C1 2): when the resolver found nothing, its message (with "Set SLICER_HOME") reaches the user.
                 reason = _pnl_native_python_problem if python is None else ""

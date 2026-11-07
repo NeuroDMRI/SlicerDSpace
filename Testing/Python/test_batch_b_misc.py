@@ -40,6 +40,17 @@ class B7ResolverTest(unittest.TestCase):
         self.assertEqual(len(problems), 1)
         self.assertIn("Set SLICER_HOME", problems[0])
 
+    def test_b7_an_old_resolver_message_is_not_shown_for_a_later_missing_interpreter(self) -> None:
+        from shared import brain_mask
+        from shared.brain_mask import BrainMaskConfig, inspect_brain_mask_backend
+
+        config = BrainMaskConfig(pnl_mask_route="native", brain_mask_device="cpu")
+        with patch("shared.pipeline.resolve_pythonslicer_executable", side_effect=RuntimeError("old message")):
+            inspect_brain_mask_backend(config)
+        with patch.object(brain_mask, "_pnl_native_python", return_value=None):
+            found = inspect_brain_mask_backend(config)
+        self.assertIn(brain_mask.PNL_NATIVE_PYTHON_MISSING, found["missing_required"])
+
     def _slicer_install(self, tmp: str) -> Path:
         home = Path(tmp) / "Slicer-5.8"
         (home / "bin").mkdir(parents=True)

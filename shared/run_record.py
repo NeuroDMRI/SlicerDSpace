@@ -322,6 +322,9 @@ def build_run_record(manifest_path: Path) -> dict:
         "run_name": manifest.get("run_name"),
         "run_manifest": {"path": manifest_path.as_posix(), "sha256": sha256_file(manifest_path)},
         "parameters": parameters,
+        # T2 SC-1b: the route of the pnl_cnn mask and, for the native route, "status": "experimental" with the reason.
+        **({"brain_mask": {"backend": effective.get("brain_mask_backend"), **effective["brain_mask_route"]}}
+           if isinstance(effective.get("brain_mask_route"), dict) else {}),
         "software": {"python": sys.version.split()[0], "platform": platform.platform(),
                      "packages": _package_versions()},
         "assets": _assets(effective),

@@ -198,13 +198,16 @@ class BrainMaskGuiConfigTest(unittest.TestCase):
     def test_combo_handler_persists_item_data_not_display_text(self):
         combo = FakeCombo()
         updates = []
+        shown = []
         owner = SimpleNamespace(ui=SimpleNamespace(brainMaskBackendComboBox=combo),
                                 _update_parameter_node=lambda *args: updates.append(args),
+                                _update_pnl_route_visibility=shown.append,
                                 _lastEnvironmentResult=object(), _lastEnvironmentSignature=("old",))
         changed = widget_method("_onBrainMaskBackendChanged", BRAIN_MASK_BACKEND_TEXT_KEYS=BRAIN_MASK_BACKEND_TEXT_KEYS)
         for index, backend in enumerate(BACKENDS):
             changed(owner, index)
             self.assertEqual(updates[-1], ("brainMaskBackend", backend))
+            self.assertEqual(shown[-1], backend)  # SC-1b: the route selector follows the backend
             self.assertIsNone(owner._lastEnvironmentResult)
             self.assertIsNone(owner._lastEnvironmentSignature)
         changed(owner, -1)

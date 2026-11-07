@@ -99,6 +99,7 @@ class EnvironmentDoctorConfig:
     pnl_mask_script: Optional[Path] = None
     pnl_mask_model_dir: Optional[Path] = None
     pnl_mask_ants_bin_dir: Optional[Path] = None
+    pnl_mask_route: str = "auto"
     synthstrip_python: Optional[Path] = None
     tractography_backend: str = "csd_act"
     ukf_executable: Optional[Path] = None

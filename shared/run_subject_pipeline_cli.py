@@ -30,7 +30,7 @@ from shared import (
     write_environment_report,
 )
 from shared.run_cancellation import orchestration_manifest_path, write_cancelled_manifest
-from shared.brain_mask import BRAIN_MASK_BACKENDS
+from shared.brain_mask import BRAIN_MASK_BACKENDS, PNL_MASK_ROUTES, PNL_NATIVE_EXPERIMENTAL_REASON
 from shared.dependency_config import (
     DEPENDENCY_CONFIG_KEYS,
     add_dependency_config_arguments,
@@ -287,6 +287,7 @@ def _environment_config_from_args(
         preprocessing_backend=args.preprocessing_backend,
         brain_mask_backend=args.brain_mask_backend,
         brain_mask_device=args.brain_mask_device,
+        pnl_mask_route=args.pnl_mask_route,
         brain_mask_required=bool(brain_mask_required),
         pnl_mask_python=args.pnl_mask_python,
         pnl_mask_script=args.pnl_mask_script,
@@ -512,6 +513,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--brain-mask-device", choices=("auto", "cpu", "cuda"), default="auto",
                         help="PNL/SynthStrip device: auto prefers the first visible GPU in that runtime; cuda requires GPU; cpu disables CUDA.")
+    parser.add_argument("--pnl-mask-route", choices=PNL_MASK_ROUTES, default="auto",
+                        help=("Route of the pnl_cnn brain mask. auto: managed on Linux (conda runner with ANTs), native on macOS. "
+                              "managed: the conda runner. native (experimental): SimpleITK registration in Slicer's Python; it "
+                              + PNL_NATIVE_EXPERIMENTAL_REASON + "."))
     parser.add_argument(
         "--preprocessing-backend",
         default="dipy",
@@ -952,6 +957,7 @@ def main(argv: list[str] | None = None) -> int:
         preprocessing_backend=args.preprocessing_backend,
         brain_mask_backend=args.brain_mask_backend,
         brain_mask_device=args.brain_mask_device,
+        pnl_mask_route=args.pnl_mask_route,
         pnl_mask_python=args.pnl_mask_python,
         pnl_mask_script=args.pnl_mask_script,
         pnl_mask_model_dir=args.pnl_mask_model_dir,

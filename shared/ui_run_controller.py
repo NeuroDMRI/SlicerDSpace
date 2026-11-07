@@ -65,6 +65,7 @@ class RunSelection:
     topup: TopupParameters = TopupParameters()
     brain_mask_backend: str = "pnl_cnn"
     brain_mask_device: str = "auto"
+    pnl_mask_route: str = "auto"
     microstructure_dki: bool = False
     microstructure_ifw: bool = False
     ifw_echo_time_ms: Optional[float] = None
@@ -512,6 +513,7 @@ def build_single_subject_run_kwargs(
         "preprocessing_backend": selection.preprocessing_backend,
         "brain_mask_backend": selection.brain_mask_backend,
         "brain_mask_device": selection.brain_mask_device,
+        "pnl_mask_route": selection.pnl_mask_route,
         "resume": True,
         "microstructure_run_free_water": selection.microstructure_freewater,
         "microstructure_run_noddi": selection.microstructure_noddi,
@@ -578,6 +580,7 @@ def build_batch_run_kwargs(selection: RunSelection, *, batch_root: Path) -> dict
         "preprocessing_backend": selection.preprocessing_backend,
         "brain_mask_backend": selection.brain_mask_backend,
         "brain_mask_device": selection.brain_mask_device,
+        "pnl_mask_route": selection.pnl_mask_route,
         "resume": True,
         "microstructure_run_free_water": selection.microstructure_freewater,
         "microstructure_run_noddi": selection.microstructure_noddi,
@@ -884,6 +887,8 @@ def build_background_cli_args(
         str(common_run_kwargs.get("brain_mask_backend", "pnl_cnn")),
         "--brain-mask-device",
         str(common_run_kwargs.get("brain_mask_device", "auto")),
+        "--pnl-mask-route",
+        str(common_run_kwargs.get("pnl_mask_route", "auto")),
         "--tractography-backend",
         str(common_run_kwargs["tractography_backend"]),
         "--bundle-backend",
@@ -954,6 +959,8 @@ def build_batch_background_cli_args(
         str(common_run_kwargs.get("brain_mask_backend", "pnl_cnn")),
         "--brain-mask-device",
         str(common_run_kwargs.get("brain_mask_device", "auto")),
+        "--pnl-mask-route",
+        str(common_run_kwargs.get("pnl_mask_route", "auto")),
         "--tractography-backend",
         str(common_run_kwargs["tractography_backend"]),
         "--bundle-backend",

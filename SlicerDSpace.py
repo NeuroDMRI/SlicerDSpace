@@ -100,6 +100,7 @@ class SlicerDSpaceParameterNode:
     preprocessingBackend: Annotated[str, Choice(["dipy", "mrtrix_fsl"])] = "dipy"
     brainMaskBackend: Annotated[str, Choice(["pnl_cnn", "synthstrip", "mrtrix", "provided", "dipy"])] = "pnl_cnn"
     brainMaskDevice: Annotated[str, Choice(["auto", "cpu", "cuda"])] = "auto"
+    pnlMaskRoute: Annotated[str, Choice(["auto", "managed", "native"])] = "auto"
     # Topup / distortion correction for the MRtrix3/FSL route. Empty/0 means
     # "not set", so nothing is forwarded and dwifslpreproc defaults apply.
     preprocessingPhaseEncodingDirection: str = ""
@@ -270,6 +271,7 @@ class SlicerDSpaceTest(ScriptedLoadableModuleTest):
             parameters = SlicerDSpaceParameterNode(raw)
             self.assertEqual(parameters.brainMaskBackend, 'pnl_cnn')
             self.assertEqual(parameters.brainMaskDevice, 'auto')
+            self.assertEqual(parameters.pnlMaskRoute, 'auto')
             self.assertEqual(parameters.orchestrationMicrostructureStages, 'dti')
             self.assertFalse(parameters.orchestrationRunFreeWater)
             self.assertFalse(parameters.orchestrationRunNoddi)
@@ -311,6 +313,7 @@ class SlicerDSpaceTest(ScriptedLoadableModuleTest):
             'inputDirectory': '/example/subject with spaces',
             'brainMaskBackend': 'provided',
             'brainMaskDevice': 'auto',
+            'pnlMaskRoute': 'native',
             'orchestrationMicrostructureStages': 'dti,freewater,noddi,dki',
             'orchestrationRunFreeWater': True,
             'orchestrationRunNoddi': True,

@@ -62,6 +62,10 @@ def sync_parameter_node_to_ui(widget) -> None:
         )
         widget._sync_combo_text(getattr(ui, "brainMaskDeviceComboBox", None),
                                 getattr(node, "brainMaskDevice", "auto") or "auto", via_index=False)
+        sync_combo_data(getattr(ui, "pnlMaskRouteComboBox", None), getattr(node, "pnlMaskRoute", "auto") or "auto")
+        update_route_visibility = getattr(widget, "_update_pnl_route_visibility", None)
+        if update_route_visibility is not None:
+            update_route_visibility(getattr(node, "brainMaskBackend", "pnl_cnn") or "pnl_cnn")
         sync_combo_data(
             getattr(ui, "preprocessingPhaseEncodingDirectionComboBox", None),
             getattr(node, "preprocessingPhaseEncodingDirection", "") or "",

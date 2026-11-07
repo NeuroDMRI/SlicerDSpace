@@ -35,7 +35,7 @@ def build_cli_plan(targets, user_config, *, doctor=None, wsl_distributions=None,
                              microstructure_free_water="freewater" in stages, microstructure_noddi="noddi" in stages,
                              microstructure_dki="dki" in stages)
     known = {field.name for field in fields(EnvironmentDoctorConfig)}
-    values = {key: defaults[key] for key in ("preprocessing_backend", "brain_mask_backend", "brain_mask_device",
+    values = {key: defaults[key] for key in ("preprocessing_backend", "brain_mask_backend", "brain_mask_device", "pnl_mask_route",
                                              "ddseg_device", "surface_device", "tractcloud_device",
                                              "tractography_backend", "connectome_backend", "wma_atlas",
                                              "dki_fit_method") if defaults.get(key)}

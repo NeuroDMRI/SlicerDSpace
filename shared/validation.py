@@ -65,6 +65,7 @@ class InputValidationConfig:
     pnl_mask_script: Optional[Path] = None
     pnl_mask_model_dir: Optional[Path] = None
     pnl_mask_ants_bin_dir: Optional[Path] = None
+    pnl_mask_route: str = "auto"
     synthstrip_python: Optional[Path] = None
     postprocess_freesurfer_home: Optional[Path] = None
 

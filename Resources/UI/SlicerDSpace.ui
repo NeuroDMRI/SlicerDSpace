@@ -765,6 +765,19 @@
              <item><property name="text"><string>cpu</string></property></item>
             </widget>
            </item>
+           <item>
+            <widget class="QLabel" name="pnlMaskRouteLabel">
+             <property name="text"><string>PNL route</string></property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QComboBox" name="pnlMaskRouteComboBox">
+             <property name="toolTip"><string>PNL CNN route. auto: managed on Linux, native on macOS. native (experimental) did not meet the M-A parity rule on 2 of 24 cases (T2 design 3).</string></property>
+             <item><property name="text"><string>auto</string></property></item>
+             <item><property name="text"><string>managed</string></property></item>
+             <item><property name="text"><string>native (experimental)</string></property></item>
+            </widget>
+           </item>
           </layout>
          </widget>
         </item>

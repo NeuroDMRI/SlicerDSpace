@@ -71,7 +71,7 @@ from shared.ui_run_state import gui_brain_mask_required, run_button_state, run_s
 from shared.ui_output_loading import qbytearray_to_text
 from shared.ui_input_inspection import inspect_input_directory
 from shared.ui_parameter_sync import sync_parameter_node_to_ui
-from shared.ui_workflow_text import BRAIN_MASK_BACKEND_TEXT_KEYS
+from shared.ui_workflow_text import BRAIN_MASK_BACKEND_TEXT_KEYS, PNL_MASK_ROUTE_TEXT_KEYS
 from shared.ui_run_controller import (
     BackendSelection,
     ProductTargetFlags,
@@ -247,6 +247,15 @@ class SharedWidgetMixin:
     def _connect_brain_mask_ui(self) -> None:
         """Keep readable masking labels separate from canonical backend values."""
 
+        route_combo = getattr(self.ui, "pnlMaskRouteComboBox", None)
+        if route_combo is not None:
+            # SC-1b: the route is an advanced choice with its own label; "native (experimental)" is only a label.
+            blocker = QSignalBlocker(route_combo)
+            route_combo.clear()
+            for route, key in PNL_MASK_ROUTE_TEXT_KEYS.items():
+                route_combo.addItem(onboarding_text(getattr(self, "_onboardingLanguage", "en"), key), route)
+            del blocker
+            route_combo.currentIndexChanged.connect(self._onPnlMaskRouteChanged)
         combo = getattr(self.ui, "brainMaskBackendComboBox", None)
         if combo is None:
             return
@@ -258,6 +267,25 @@ class SharedWidgetMixin:
         combo.setMinimumContentsLength(8)
         del blocker
         combo.currentIndexChanged.connect(self._onBrainMaskBackendChanged)
+        self._update_pnl_route_visibility("pnl_cnn")
+
+    def _update_pnl_route_visibility(self, backend: str) -> None:
+        """SC-1b: the PNL route choice is shown only for the pnl_cnn backend."""
+        for name in ("pnlMaskRouteLabel", "pnlMaskRouteComboBox"):
+            widget = getattr(self.ui, name, None)
+            if widget is not None:
+                widget.setVisible(backend == "pnl_cnn")
+
+    def _onPnlMaskRouteChanged(self, index: int) -> None:
+        combo = getattr(self.ui, "pnlMaskRouteComboBox", None)
+        if combo is None or index < 0:
+            return
+        route = str(combo.itemData(index) or "")
+        if route not in PNL_MASK_ROUTE_TEXT_KEYS:
+            return
+        self._lastEnvironmentResult = None
+        self._lastEnvironmentSignature = None
+        self._update_parameter_node("pnlMaskRoute", route)
 
     def _onBrainMaskBackendChanged(self, index: int) -> None:
         combo = getattr(self.ui, "brainMaskBackendComboBox", None)
@@ -268,6 +296,7 @@ class SharedWidgetMixin:
             return
         self._lastEnvironmentResult = None
         self._lastEnvironmentSignature = None
+        self._update_pnl_route_visibility(backend)
         self._update_parameter_node("brainMaskBackend", backend)
 
     def _connect_topup_ui(self) -> None:
@@ -572,7 +601,7 @@ class SharedWidgetMixin:
         return f"SlicerDSpace/UserSettings/{name}"
 
     def _common_user_setting_specs(self) -> tuple[tuple[str, type], ...]:
-        return common_user_setting_specs() + (("brainMaskBackend", str), ("brainMaskDevice", str), ("device", str),
+        return common_user_setting_specs() + (("brainMaskBackend", str), ("brainMaskDevice", str), ("pnlMaskRoute", str), ("device", str),
                                              ("ddsegDevice", str), ("orchestrationDkiFitMethod", str))
 
     def _coerce_user_setting_value(self, value: Any, value_type: type) -> Any:
@@ -629,6 +658,7 @@ class SharedWidgetMixin:
                 node.preprocessingBackend = str(defaults.get("preprocessing_backend") or node.preprocessingBackend or "dipy")
                 node.brainMaskBackend = str(defaults.get("brain_mask_backend") or "pnl_cnn")
                 node.brainMaskDevice = str(defaults.get("brain_mask_device") or "auto")
+                node.pnlMaskRoute = str(defaults.get("pnl_mask_route") or "auto")
                 node.device = str(defaults.get("surface_device") or "auto")
                 node.ddsegDevice = str(defaults.get("ddseg_device") or "auto")
                 from shared.algorithm_selection import choice_value, BUNDLES
@@ -696,6 +726,7 @@ class SharedWidgetMixin:
                         "preprocessing_backend": node.preprocessingBackend or "dipy",
                         "brain_mask_backend": getattr(node, "brainMaskBackend", "pnl_cnn") or "pnl_cnn",
                         "brain_mask_device": getattr(node, "brainMaskDevice", "auto") or "auto",
+                        "pnl_mask_route": getattr(node, "pnlMaskRoute", "auto") or "auto",
                         "ddseg_device": node.ddsegDevice or "auto",
                         "surface_device": node.device or "auto",
                         "tractcloud_device": "cuda" if (node.ddsegDevice or "auto").startswith("cuda") else node.ddsegDevice or "auto",
@@ -1720,6 +1751,7 @@ class SharedWidgetMixin:
             "brain_mask_backend": mask_backend,
             "wma_atlas": getattr(node, "wmaAtlas", "org") or "org",
             "brain_mask_device": getattr(node, "brainMaskDevice", "auto") or "auto",
+            "pnl_mask_route": getattr(node, "pnlMaskRoute", "auto") or "auto",
             "tractcloud_device": "cuda" if (node.ddsegDevice or "auto").startswith("cuda") else node.ddsegDevice or "auto",
             "brain_mask_required": bool(brain_mask_required),
             "tractography_backend": self._closure_tractography_backend_text(),
@@ -3068,6 +3100,7 @@ class SharedWidgetMixin:
             preprocessing_backend=(self._parameterNode.preprocessingBackend or "dipy").strip() or "dipy",
             brain_mask_backend=(getattr(self._parameterNode, "brainMaskBackend", "pnl_cnn") or "pnl_cnn").strip(),
             brain_mask_device=(getattr(self._parameterNode, "brainMaskDevice", "auto") or "auto").strip(),
+            pnl_mask_route=(getattr(self._parameterNode, "pnlMaskRoute", "auto") or "auto").strip(),
             wma_input_tractography_text=(
                 getattr(self._parameterNode, "wmaInputTractography", "") or ""
             ).strip(),

@@ -34,6 +34,7 @@ class PreprocessingLogicMixin:
         pnl_mask_script: Optional[Path] = None,
         pnl_mask_model_dir: Optional[Path] = None,
         pnl_mask_ants_bin_dir: Optional[Path] = None,
+        pnl_mask_route: str = "auto",
         synthstrip_python: Optional[Path] = None,
         postprocess_freesurfer_home: Optional[Path] = None,
     ) -> DwiPreprocessingResult:
@@ -58,6 +59,7 @@ class PreprocessingLogicMixin:
             pnl_mask_script=pnl_mask_script,
             pnl_mask_model_dir=pnl_mask_model_dir,
             pnl_mask_ants_bin_dir=pnl_mask_ants_bin_dir,
+            pnl_mask_route=pnl_mask_route,
             synthstrip_python=synthstrip_python,
             postprocess_freesurfer_home=postprocess_freesurfer_home,
         )

@@ -15,6 +15,7 @@ from shared.demo_data import DEMO_SUBJECT_ID, create_synthetic_demo_subject
 from shared.user_config import default_user_config_path, load_user_config, update_user_config
 from shared.ui_workflow_text import (
     BRAIN_MASK_BACKEND_TEXT_KEYS,
+    PNL_MASK_ROUTE_TEXT_KEYS,
     WORKFLOW_TEXT,
     WORKFLOW_TEXT_BINDINGS,
     WORKFLOW_TOOLTIP_BINDINGS,
@@ -1126,6 +1127,17 @@ def apply_onboarding_language(owner: Any, language: str) -> None:
                     mask_combo.setItemText(index, onboarding_text(lang, key))
         finally:
             mask_combo.blockSignals(previous)
+
+    route_combo = getattr(ui, "pnlMaskRouteComboBox", None)
+    if route_combo is not None:
+        previous = route_combo.blockSignals(True)
+        try:
+            for route, key in PNL_MASK_ROUTE_TEXT_KEYS.items():
+                index = route_combo.findData(route)
+                if index >= 0:
+                    route_combo.setItemText(index, onboarding_text(lang, key))
+        finally:
+            route_combo.blockSignals(previous)
 
     for widget_name, key in MAIN_UI_TITLE_BINDINGS.items():
         widget = getattr(ui, widget_name, None)

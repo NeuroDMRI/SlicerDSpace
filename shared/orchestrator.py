@@ -88,6 +88,7 @@ class ProductOrchestratorConfig:
     pnl_mask_script: Optional[Path] = None
     pnl_mask_model_dir: Optional[Path] = None
     pnl_mask_ants_bin_dir: Optional[Path] = None
+    pnl_mask_route: str = "auto"
     synthstrip_python: Optional[Path] = None
     preprocessing_force: bool = False
     preprocessing_dipy_denoise_method: str = "mppca"
@@ -1212,6 +1213,7 @@ def _preprocessing_config(config: ProductOrchestratorConfig, subject_root: Path,
         pnl_mask_script=config.pnl_mask_script,
         pnl_mask_model_dir=config.pnl_mask_model_dir,
         pnl_mask_ants_bin_dir=config.pnl_mask_ants_bin_dir,
+        pnl_mask_route=config.pnl_mask_route,
         synthstrip_python=config.synthstrip_python,
         postprocess_freesurfer_home=config.postprocess_freesurfer_home,
         force=config.preprocessing_force or (not config.resume),
@@ -3686,6 +3688,7 @@ def _run_subject_products_impl(
                 pnl_mask_script=config.pnl_mask_script,
                 pnl_mask_model_dir=config.pnl_mask_model_dir,
                 pnl_mask_ants_bin_dir=config.pnl_mask_ants_bin_dir,
+                pnl_mask_route=config.pnl_mask_route,
                 synthstrip_python=config.synthstrip_python,
                 postprocess_freesurfer_home=config.postprocess_freesurfer_home,
             )
@@ -5217,6 +5220,7 @@ def _run_subject_products_impl(
     phase_timings = dict(planning=planning_seconds, input_preparation_and_validation=input_seconds,
                          product_execution=execution_seconds, metadata_and_profile=time.monotonic() - metadata_started)
 
+    from shared.brain_mask import pnl_route_record, resolve_pnl_mask_route
     manifest = {
         "kind": "slicerddsurfer_product_orchestration",
         "version": 1,
@@ -5271,6 +5275,10 @@ def _run_subject_products_impl(
         "preprocessing_backend": config.preprocessing_backend,
         "brain_mask_backend": config.brain_mask_backend,
         "brain_mask_device": config.brain_mask_device,
+        "pnl_mask_route": config.pnl_mask_route,
+        # SC-1b: the resolved route of the pnl_cnn backend (route, and status + reason for the native route).
+        **({"brain_mask_route": pnl_route_record(resolve_pnl_mask_route(config.pnl_mask_route))}
+           if config.brain_mask_backend == "pnl_cnn" else {}),
         "brain_mask_configuration": {
             name: str(getattr(config, name)) if getattr(config, name) else None
             for name in ("pnl_mask_python", "pnl_mask_script", "pnl_mask_model_dir", "pnl_mask_ants_bin_dir")

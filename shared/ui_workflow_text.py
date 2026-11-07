@@ -16,6 +16,14 @@ BRAIN_MASK_BACKEND_TEXT_KEYS = {
 }
 
 
+# SC-1b: route value -> text key. "native (experimental)" is the label of the native route.
+PNL_MASK_ROUTE_TEXT_KEYS = {
+    "auto": "pnl_route_auto",
+    "managed": "pnl_route_managed",
+    "native": "pnl_route_native",
+}
+
+
 WORKFLOW_TEXT = {
     "en": {
         "section_getting_started": "Getting started",
@@ -51,6 +59,14 @@ WORKFLOW_TEXT = {
         "brain_mask_backend": "Brain masking",
         "brain_mask_device": "Mask device",
         "brain_mask_device_tooltip": "PNL CNN and SynthStrip: auto prefers the first visible CUDA GPU in the selected external runtime. CUDA requires a GPU; CPU explicitly disables it. Runtime GPU failures are not silently retried. MRtrix dwi2mask and DIPY median-Otsu are CPU algorithms.",
+        "pnl_mask_route": "PNL route",
+        "pnl_mask_route_tooltip": (
+            "PNL CNN route. auto: managed (conda runner with ANTs) on Linux, native on macOS. "
+            "native (experimental): did not meet the M-A parity rule on 2 of 24 cases (T2 design §3)."
+        ),
+        "pnl_route_auto": "auto",
+        "pnl_route_managed": "managed",
+        "pnl_route_native": "native (experimental)",
         "brain_mask_pnl_cnn": "PNL CNN (dMRI)",
         "brain_mask_synthstrip": "SynthStrip",
         "brain_mask_mrtrix": "MRtrix dwi2mask",
@@ -146,6 +162,14 @@ WORKFLOW_TEXT = {
         "brain_mask_backend": "脑掩膜方法",
         "brain_mask_device": "掩膜计算设备",
         "brain_mask_device_tooltip": "PNL CNN 和 SynthStrip：Auto 优先使用对应外部运行环境中可见的第一个 CUDA GPU；CUDA 要求 GPU 可用，CPU 显式禁用 GPU。GPU 运行错误不会静默重试。MRtrix dwi2mask 与 DIPY median-Otsu 是 CPU 算法。",
+        "pnl_mask_route": "PNL 路线",
+        "pnl_mask_route_tooltip": (
+            "PNL CNN 路线。auto：Linux 用 managed（conda 运行环境，含 ANTs），macOS 用 native。"
+            "native（实验性）：在 M-A 一致性规则的 24 例中有 2 例未达标（T2 设计 §3）。"
+        ),
+        "pnl_route_auto": "auto",
+        "pnl_route_managed": "managed",
+        "pnl_route_native": "native（实验性）",
         "brain_mask_pnl_cnn": "PNL CNN (dMRI)",
         "brain_mask_synthstrip": "SynthStrip",
         "brain_mask_mrtrix": "MRtrix dwi2mask",
@@ -215,6 +239,7 @@ WORKFLOW_TEXT_BINDINGS = {
     "preprocessingReversePhaseB0Label": "reverse_phase_b0",
     "brainMaskBackendLabel": "brain_mask_backend",
     "brainMaskDeviceLabel": "brain_mask_device",
+    "pnlMaskRouteLabel": "pnl_mask_route",
     "orchestrationDtiStageLabel": "microstructure_dti_always",
     "orchestrationFreeWaterCheckBox": "microstructure_fw_option",
     "orchestrationNoddiCheckBox": "microstructure_noddi_option",
@@ -229,6 +254,7 @@ WORKFLOW_TEXT_BINDINGS = {
 WORKFLOW_TOOLTIP_BINDINGS = {
     "brainMaskBackendComboBox": "brain_mask_backend_tooltip",
     "brainMaskDeviceComboBox": "brain_mask_device_tooltip",
+    "pnlMaskRouteComboBox": "pnl_mask_route_tooltip",
     "orchestrationFreeWaterCheckBox": "microstructure_fw_tooltip",
     "orchestrationNoddiCheckBox": "microstructure_noddi_tooltip",
     "orchestrationDkiCheckBox": "microstructure_dki_tooltip",

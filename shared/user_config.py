@@ -24,6 +24,7 @@ RUN_DEFAULTS = {
     "preprocessing_backend": "dipy",
     "brain_mask_backend": "pnl_cnn",
     "brain_mask_device": "auto",
+    "pnl_mask_route": "auto",
     "ddseg_device": "auto",
     "surface_device": "auto",
     "tractcloud_device": "auto",
@@ -154,6 +155,9 @@ def normalize_user_config(payload: Mapping[str, Any] | None) -> dict[str, Any]:
     stages = defaults.get("microstructure_stages")
     defaults["microstructure_stages"] = list(canonical_microstructure_stages(stages))
     defaults["dki_fit_method"] = str(defaults.get("dki_fit_method") or "MKCURVE").strip().upper()
+    # SC-1a: shared.brain_mask.PNL_MASK_ROUTES; an unknown saved value falls back to auto.
+    if str(defaults.get("pnl_mask_route") or "auto") not in ("auto", "managed", "native"):
+        defaults["pnl_mask_route"] = "auto"
     return config
 
 
@@ -213,6 +217,7 @@ def user_config_cli_values(config: Mapping[str, Any]) -> dict[str, Any]:
         "preprocessing_backend": defaults.get("preprocessing_backend") or RUN_DEFAULTS["preprocessing_backend"],
         "brain_mask_backend": defaults.get("brain_mask_backend") or RUN_DEFAULTS["brain_mask_backend"],
         "brain_mask_device": defaults.get("brain_mask_device") or RUN_DEFAULTS["brain_mask_device"],
+        "pnl_mask_route": defaults.get("pnl_mask_route") or RUN_DEFAULTS["pnl_mask_route"],
         "ddseg_device": defaults.get("ddseg_device") or RUN_DEFAULTS["ddseg_device"],
         "surface_device": defaults.get("surface_device") or RUN_DEFAULTS["surface_device"],
         "tractcloud_device": defaults.get("tractcloud_device") or RUN_DEFAULTS["tractcloud_device"],
@@ -329,6 +334,7 @@ def user_config_from_cli_args(
             "preprocessing_backend": getattr(args, "preprocessing_backend", None) or "dipy",
             "brain_mask_backend": getattr(args, "brain_mask_backend", None) or "pnl_cnn",
             "brain_mask_device": getattr(args, "brain_mask_device", None) or "auto",
+            "pnl_mask_route": getattr(args, "pnl_mask_route", None) or "auto",
             "ddseg_device": getattr(args, "ddseg_device", None) or "auto",
             "surface_device": getattr(args, "surface_device", None) or "auto",
             "tractcloud_device": getattr(args, "tractcloud_device", None) or "auto",

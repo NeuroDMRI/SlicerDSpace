@@ -206,7 +206,10 @@ def selected_setup_plan(owner, result, *, repair=False):
     targets = set(closure.targets)
     gpu = cuda_candidate()
     candidates = list(selected_profiles(owner._parameterNode, gpu))
+    from shared.brain_mask import resolve_pnl_mask_route
+    pnl_route = getattr(owner._parameterNode, "pnlMaskRoute", "auto") or "auto"
     if (getattr(owner._parameterNode, "brainMaskBackend", "pnl_cnn") == "pnl_cnn" and
+            resolve_pnl_mask_route(pnl_route) == "managed" and  # SC-1c: the managed profile is for the managed route
             any(item.key == "brain_mask_backend" and item.required for item in result.statuses)):
         candidates.append("pnl_cnn")
     config = owner._environment_dependency_path_kwargs()
@@ -216,6 +219,7 @@ def selected_setup_plan(owner, result, *, repair=False):
     plan = build_setup_plan(result, installed_extensions=installed, loaded_extensions=loaded,
         **need_flags(targets, closure.tractography_algorithms, fallback_ukf=fallback_ukf),
         brain_mask_backend=getattr(owner._parameterNode, "brainMaskBackend", "pnl_cnn"), gpu_available=gpu,
+        pnl_mask_route=pnl_route,
         wma_atlas=getattr(owner._parameterNode, "wmaAtlas", "org"),
         existing_managed_profiles=existing, repair=repair, backend_paths=config, closure_targets=tuple(closure.targets),
         slicer_executable=_running_slicer_executable(owner) or config.get("slicer_executable"),

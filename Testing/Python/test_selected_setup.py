@@ -116,9 +116,46 @@ class SelectedSetupTests(unittest.TestCase):
         self.assertTrue(plan["fsl_license_required"] and plan["pnl_terms_required"])
         self.assertEqual(plan["manual_items"], [])
 
+    def test_sc1c_managed_profile_and_licence_only_for_the_managed_route(self):
+        missing = result(item("brain_mask_backend", "brain_mask", "setting", package=None))
+        cases = (("auto", "Linux", True), ("auto", "Darwin", False), ("managed", "Linux", True),
+                 ("native", "Linux", False), ("native", "Darwin", False), ("auto", "Windows", False))
+        for route, system, managed in cases:
+            with self.subTest(route=route, system=system):
+                plan = build_setup_plan(missing, system=system, machine="x86_64" if system != "Darwin" else "arm64",
+                                        pnl_mask_route=route)
+                self.assertEqual("pnl_cnn" in plan["managed_profiles"], managed)
+                self.assertEqual(plan["pnl_terms_required"], managed)
+                from shared.setup_components import plan_components, required_licences
+                licences = list(required_licences(plan_components(plan)))
+                self.assertEqual("pnl" in licences, managed)
+
+    def test_sc1c_native_route_installs_the_brain_mask_assets_when_only_the_models_are_missing(self):
+        models = item("brain_mask_backend", "brain_mask", "setting", package=None)
+        models.details = {"backend": "pnl_cnn", "missing_required": [
+            "pnl_mask_model_dir"]}
+        weights = item("brain_mask_backend", "brain_mask", "setting", package=None)
+        weights.details = {"backend": "pnl_cnn", "missing_required": [
+            "sagittal.pt (convert/download PNLBrainMask-Torch weights; legacy HDF5 is not a Torch runtime)", "weights.json"]}
+        torch_gap = item("brain_mask_backend", "brain_mask", "setting", package=None)
+        torch_gap.details = {"backend": "pnl_cnn", "missing_required": [
+            "pnl_mask_model_dir", "PNL native file /x/UPSTREAM.json"]}
+        for label, found, assets in (("models", models, ["pnl-cnn"]), ("weights", weights, ["pnl-cnn"]),
+                                     ("other gap", torch_gap, [])):
+            with self.subTest(case=label):
+                plan = build_setup_plan(result(found), system="Darwin", machine="arm64", pnl_mask_route="native")
+                self.assertEqual(plan["optional_asset_profiles"], assets)
+                self.assertEqual(plan["managed_profiles"], [])
+                self.assertEqual([entry["key"] for entry in plan["manual_items"]],
+                                 [] if assets else ["brain_mask_backend"])
+        # The managed route never asks for the optional pnl-cnn resources through this path.
+        plan = build_setup_plan(result(models), system="Linux", machine="x86_64", pnl_mask_route="managed")
+        self.assertEqual(plan["optional_asset_profiles"], [])
+        self.assertEqual(plan["managed_profiles"], ["pnl_cnn"])
+
     def test_ukf_is_optional_and_platform_limits_remain_visible(self):
         missing = result(item("brain_mask_backend", "brain_mask", "setting", package=None))
-        plan = build_setup_plan(missing, need_ukf=True, system="Windows", machine="AMD64")
+        plan = build_setup_plan(missing, need_ukf=True, system="Windows", machine="AMD64", pnl_mask_route="managed")
         self.assertEqual(plan["extensions"], ["UKFTractography"])  # D8: UKF alone needs no SlicerDMRI
         self.assertEqual(plan["managed_profiles"], [])
         self.assertEqual(plan["unsupported_profiles"], ["pnl_cnn"])

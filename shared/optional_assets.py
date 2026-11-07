@@ -92,7 +92,10 @@ def resolve_tractcloud_data_directory(explicit=None, *, asset_root=None):
     return Path(value).expanduser().absolute() if value else verified_resource_directory("tractcloud", asset_root=asset_root)
 
 
-def missing_optional_profiles(result, brain_mask_backend, wma_atlas="org"):
+PNL_MODEL_GAPS = ("pnl_mask_model_dir", "weights.json", "IITmean_b0_256.nii.gz", ".pt ")
+
+
+def missing_optional_profiles(result, brain_mask_backend, wma_atlas="org", pnl_route="managed"):
     """Infer resource actions from selected required blockers, never all backends."""
     profiles = []
     for item in result.statuses:
@@ -106,4 +109,9 @@ def missing_optional_profiles(result, brain_mask_backend, wma_atlas="org"):
         elif item.key == "brain_mask_backend" and brain_mask_backend == "synthstrip":
             if any("synthstrip.1.pt" in str(reason) for reason in (item.details or {}).get("missing_required", [])):
                 profiles.append("synthstrip")
+        elif item.key == "brain_mask_backend" and brain_mask_backend == "pnl_cnn" and pnl_route == "native":
+            # SC-1c: the native route needs the brain_mask assets; it installs them only when nothing else is missing.
+            reasons = [str(reason) for reason in (item.details or {}).get("missing_required", [])]
+            if reasons and all(any(gap in reason + " " for gap in PNL_MODEL_GAPS) for reason in reasons):
+                profiles.append("pnl-cnn")
     return list(dict.fromkeys(profiles))

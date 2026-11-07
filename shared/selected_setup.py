@@ -15,7 +15,11 @@ PNL_UNSUPPORTED_TEXT = "Automatic brain mask is not available on this system yet
 def build_setup_plan(result, *, installed_extensions=(), loaded_extensions=None, need_dti=False, need_torch=False, need_ukf=False,
                      need_slicerdmri=False, brain_mask_backend="pnl_cnn", wma_atlas="org", gpu_available=False, system=None, machine=None,
                      existing_managed_profiles=(), repair=False, backend_paths=None, closure_targets=(),
-                     wsl_distributions=None, slicer_executable=None, dcm2niix_missing=False):
+                     wsl_distributions=None, slicer_executable=None, dcm2niix_missing=False, pnl_mask_route="auto"):
+    # SC-1c: the managed pnl_cnn profile (and its licence) is for the managed route only. The native route
+    # needs torch and the brain_mask assets (the pnl-cnn optional profile), not the conda runtime.
+    from shared.brain_mask import resolve_pnl_mask_route
+    pnl_managed = resolve_pnl_mask_route(pnl_mask_route, system) == "managed"
     installed = set(installed_extensions)
     # DTI-based targets use the native Teem tensor fit (Slicer core), so need_dti adds no extension.
     # SlicerDMRI is needed only where a step still loads its modules (the WMA harden-transform shim).
@@ -56,7 +60,7 @@ def build_setup_plan(result, *, installed_extensions=(), loaded_extensions=None,
         managed.append("mrtrix")
     if "fsl" in groups:
         managed.append("fsl_cuda" if gpu_available else "fsl_cpu")
-    if brain_mask_backend == "pnl_cnn" and any(item.key == "brain_mask_backend" for item in missing):
+    if brain_mask_backend == "pnl_cnn" and pnl_managed and any(item.key == "brain_mask_backend" for item in missing):
         managed.append("pnl_cnn")
     managed = list(dict.fromkeys(managed))
     supported_managed = [name for name in managed if supported_platform(system, machine, profiles=(name,))]
@@ -138,11 +142,13 @@ def build_setup_plan(result, *, installed_extensions=(), loaded_extensions=None,
                                for requirement in SOURCES[name]['requirements'])
     from shared.optional_assets import missing_optional_profiles
     from scripts.setup_optional_assets import prepare
-    optional = missing_optional_profiles(result, brain_mask_backend, wma_atlas)
+    optional = missing_optional_profiles(result, brain_mask_backend, wma_atlas, pnl_route="managed" if pnl_managed else "native")
     optional_plan = prepare(optional) if optional else {}
     handled_keys = {item.key for item in missing if
                     (any(name.startswith("wma") for name in optional) and item.key.startswith("wma_org_atlas")) or
-                    ("tractcloud" in optional and (item.key == "tractcloud_data_dir" or item.key.startswith("tractcloud_data:")))}
+                    ("tractcloud" in optional and (item.key == "tractcloud_data_dir" or item.key.startswith("tractcloud_data:"))) or
+                    # SC-1c: a native-route mask item whose only gaps are the model files is fixed by the pnl-cnn resources.
+                    ("pnl-cnn" in optional and item.key == "brain_mask_backend")}
     for item in missing:
         if ('wma' in source_profiles and item.install_group == 'wma' and 'atlas' not in item.key):
             handled_keys.add(item.key)

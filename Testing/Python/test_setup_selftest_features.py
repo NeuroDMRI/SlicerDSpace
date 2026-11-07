@@ -351,7 +351,11 @@ MRTRIX = status('command:dwifslpreproc', 'command', group='mrtrix', details={'re
 FSL = status('command:eddy', 'command', group='fsl', details={'resolved': '/opt/fsl/bin/eddy'})
 PNL = status('brain_mask_backend', 'setting', details={
     'backend': 'pnl_cnn', 'tool_paths': {'model_dir': '/models/pnl-cnn', 'pythonslicer': '/slicer/PythonSlicer'},
-    'settings': {'device': 'cuda'}})
+    'settings': {'device': 'cuda', 'pnl_route': 'native-sitk'}})
+# SC-1d: the managed (conda runner) route reports the same tool paths but keeps its own runtime check.
+PNL_MANAGED = status('brain_mask_backend', 'setting', details={
+    'backend': 'pnl_cnn', 'tool_paths': {'model_dir': '/models/pnl-cnn', 'pnl_mask_python': '/pnl/bin/python'},
+    'settings': {'device': 'cuda', 'pnl_route': 'managed-ants'}})
 SLICER_NUMPY = status('python:numpy', 'python', details={'import': 'numpy', 'python_executable': '/slicer/PythonSlicer'})
 
 
@@ -378,6 +382,19 @@ class RequestsForReportToolTests(unittest.TestCase):
         self.assertEqual(request['fsl_bin_dir'], '/opt/fsl/bin')
         self.assertEqual(request['dcm2niix'], '/opt/d2n/dcm2niix')
         self.assertEqual(request['pnl_native_mask'], {'model_dir': '/models/pnl-cnn', 'device': 'cuda'})
+
+    def test_sc1d_the_managed_route_gets_no_native_mask_check(self):
+        requests = selftest.requests_for_report(tool_report(SLICER_NUMPY, MRTRIX, PNL_MANAGED))
+        self.assertEqual(len(requests), 1)
+        self.assertNotIn('pnl_native_mask', requests[0])
+        self.assertEqual(requests[0]['mrtrix_bin_dir'], '/opt/mrtrix3/bin')
+
+    def test_sc1d_a_report_without_a_route_gets_no_native_mask_check(self):
+        unrouted = status('brain_mask_backend', 'setting', details={
+            'backend': 'pnl_cnn', 'tool_paths': {'model_dir': '/m', 'pythonslicer': '/slicer/PythonSlicer'},
+            'settings': {'device': 'cpu'}})
+        requests = selftest.requests_for_report(tool_report(SLICER_NUMPY, unrouted))
+        self.assertTrue(all('pnl_native_mask' not in request for request in requests))
 
     def test_tools_only_report_gets_a_request_for_the_report_interpreter(self):
         requests = selftest.requests_for_report(tool_report(MRTRIX, FSL))

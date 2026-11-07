@@ -105,6 +105,19 @@ class PnlMaskRouteWiringTest(unittest.TestCase):
                 else:
                     self.assertNotIn("status", mask)
 
+    def test_sc1d_doctor_config_selects_the_route_checks(self) -> None:
+        from shared.brain_mask import brain_mask_config_from_options, inspect_brain_mask_backend
+        from shared.environment import EnvironmentDoctorConfig
+        for route, system, name, wants_conda in (("auto", "Linux", "managed-ants", True), ("managed", "Darwin", "managed-ants", True),
+                                                 ("auto", "Darwin", "native-sitk", False), ("native", "Linux", "native-sitk", False)):
+            with self.subTest(route=route, system=system):
+                config = EnvironmentDoctorConfig(repo_root=ROOT, targets=("preprocessing",), brain_mask_backend="pnl_cnn",
+                                                 brain_mask_required=True, pnl_mask_route=route)
+                found = inspect_brain_mask_backend(brain_mask_config_from_options(config), system=system)
+                self.assertEqual(found["settings"]["pnl_route"], name)
+                missing = " ".join(str(item) for item in found["missing_required"])
+                self.assertEqual("pnl_mask_python" in missing, wants_conda)
+
     def test_manifest_without_a_pnl_route_has_no_brain_mask_block(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             manifest = Path(tmp) / "run_manifest.json"

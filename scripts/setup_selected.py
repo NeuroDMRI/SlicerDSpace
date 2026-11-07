@@ -49,7 +49,8 @@ def build_cli_plan(targets, user_config, *, doctor=None, wsl_distributions=None,
     report = (doctor or run_environment_doctor)(config_from_dict(values))
     plan = build_setup_plan(
         report, **need_flags(closure.targets, closure.tractography_algorithms),
-        brain_mask_backend=defaults.get("brain_mask_backend") or "pnl_cnn", wma_atlas=defaults.get("wma_atlas") or "org",
+        brain_mask_backend=defaults.get("brain_mask_backend") or "pnl_cnn", pnl_mask_route=defaults.get("pnl_mask_route") or "auto",
+        wma_atlas=defaults.get("wma_atlas") or "org",
         backend_paths=deps, closure_targets=closure.targets, system=system, machine=machine,
         wsl_distributions=wsl_distributions, slicer_executable=deps.get("slicer_executable"),
         dcm2niix_missing=dcm2niix_pending())  # S-B3: this script runs in Slicer's Python (PythonSlicer)

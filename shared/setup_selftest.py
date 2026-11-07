@@ -154,7 +154,9 @@ def _add_tool_requests(report, groups, backend_paths):
     for item in getattr(report, 'statuses', ()):
         details = item.details or {}
         if getattr(item, 'key', '') == 'brain_mask_backend' and item.required and item.status in _AVAILABLE \
-                and details.get('backend') == 'pnl_cnn' and (details.get('tool_paths') or {}).get('model_dir'):
+                and details.get('backend') == 'pnl_cnn' and (details.get('tool_paths') or {}).get('model_dir') \
+                and (details.get('settings') or {}).get('pnl_route') == 'native-sitk':
+            # SC-1d: the native check runs only for the native route; the managed route keeps its runtime check.
             wanted['pnl_native_mask'] = {'model_dir': details['tool_paths']['model_dir'],
                                          'device': (details.get('settings') or {}).get('device', 'auto')}
             slicer_hint = (details.get('tool_paths') or {}).get('pythonslicer')

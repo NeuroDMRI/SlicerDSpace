@@ -4,8 +4,8 @@ Every value in this module comes from the M1 measurement run (one subject, four
 1-subject adaptive cohorts at 16, 8, 4 and 2 CPUs per stage). The run folder is
 ``/data04/chengjin/r5_cohort/m1_bcdbc95`` (code bcdbc95, fan93, HCP 100307, finished
 2026-11-07; all four probes exit 0). The values were copied from its summary
-``m1_bcdbc95_summary.json`` (``m1_summary.py``): wall times rounded to 0.1 s, mean
-cores and peak RSS to three decimals.
+``m1_bcdbc95_summary.json`` (``m1_summary.py``): wall times (s), mean cores and peak
+RSS (GiB) rounded to three decimals (relative change at most 0.06 %).
 
 The planner reads these tables at call time, so tests can replace them.
 
@@ -58,15 +58,26 @@ RAM_FIT = {
 
 # S3: probed CPUs -> (summed non-reused wall seconds, mean cores).
 DURATION_DEFAULTS = {
-    'connectome': {'signal_ref': SIGNAL_REF, 'probes': {2: (17.5, 1.598), 4: (15.8, 1.751), 8: (16.7, 1.999), 16: (15.7, 2.041)}},
-    'csd_act': {'signal_ref': SIGNAL_REF, 'probes': {2: (14779.6, 1.971), 4: (7629.0, 3.828), 8: (4406.5, 7.235), 16: (2144.1, 12.615)}},
-    'microstructure_dki': {'signal_ref': SIGNAL_REF, 'probes': {2: (1273.9, 1.201), 4: (1362.5, 1.204), 8: (1254.6, 1.212), 16: (1241.9, 1.218)}},
-    'microstructure_dti': {'signal_ref': SIGNAL_REF, 'probes': {2: (0.8, 1.116), 4: (0.7, 1.199), 8: (0.8, 1.119), 16: (0.7, 1.187)}},
-    'microstructure_freewater': {'signal_ref': SIGNAL_REF, 'probes': {2: (1473.6, 1.184), 4: (1467.4, 1.176), 8: (1402.8, 1.180), 16: (1376.1, 1.180)}},
-    'microstructure_noddi': {'signal_ref': SIGNAL_REF, 'probes': {2: (1615.6, 1.953), 4: (809.1, 3.636), 8: (418.6, 6.583), 16: (594.3, 4.123)}},
-    'native_dti': {'signal_ref': SIGNAL_REF, 'probes': {2: (4920.2, 1.984), 4: (2440.1, 3.816), 8: (1220.1, 7.394), 16: (652.4, 13.600)}},
-    'parcellation': {'signal_ref': SIGNAL_REF, 'probes': {2: (176.8, 1.460), 4: (144.8, 1.694), 8: (138.8, 2.065), 16: (150.3, 2.658)}},
-    'registered_dti': {'signal_ref': SIGNAL_REF, 'probes': {2: (36.8, 1.474), 4: (26.3, 1.735), 8: (26.6, 2.126), 16: (22.7, 2.200)}},
-    'segmentation': {'signal_ref': SIGNAL_REF, 'probes': {2: (14.4, 1.203), 4: (15.1, 1.147), 8: (13.1, 1.216), 16: (17.5, 1.008)}},
-    'surface': {'signal_ref': SIGNAL_REF, 'probes': {2: (77.9, 1.282), 4: (74.5, 1.342), 8: (72.6, 1.493), 16: (77.0, 1.819)}},
+    'connectome': {'signal_ref': SIGNAL_REF,
+        'probes': {2: (17.539, 1.598), 4: (15.825, 1.751), 8: (16.650, 1.999), 16: (15.652, 2.041)}},
+    'csd_act': {'signal_ref': SIGNAL_REF,
+        'probes': {2: (14779.576, 1.971), 4: (7629.035, 3.828), 8: (4406.515, 7.235), 16: (2144.138, 12.615)}},
+    'microstructure_dki': {'signal_ref': SIGNAL_REF,
+        'probes': {2: (1273.919, 1.201), 4: (1362.503, 1.204), 8: (1254.556, 1.212), 16: (1241.900, 1.218)}},
+    'microstructure_dti': {'signal_ref': SIGNAL_REF,
+        'probes': {2: (0.761, 1.116), 4: (0.726, 1.199), 8: (0.795, 1.119), 16: (0.725, 1.187)}},
+    'microstructure_freewater': {'signal_ref': SIGNAL_REF,
+        'probes': {2: (1473.621, 1.184), 4: (1467.362, 1.176), 8: (1402.845, 1.180), 16: (1376.124, 1.180)}},
+    'microstructure_noddi': {'signal_ref': SIGNAL_REF,
+        'probes': {2: (1615.589, 1.953), 4: (809.103, 3.636), 8: (418.590, 6.583), 16: (594.260, 4.123)}},
+    'native_dti': {'signal_ref': SIGNAL_REF,
+        'probes': {2: (4920.204, 1.984), 4: (2440.108, 3.816), 8: (1220.131, 7.394), 16: (652.404, 13.600)}},
+    'parcellation': {'signal_ref': SIGNAL_REF,
+        'probes': {2: (176.776, 1.460), 4: (144.849, 1.694), 8: (138.840, 2.065), 16: (150.342, 2.658)}},
+    'registered_dti': {'signal_ref': SIGNAL_REF,
+        'probes': {2: (36.826, 1.474), 4: (26.288, 1.735), 8: (26.597, 2.126), 16: (22.737, 2.200)}},
+    'segmentation': {'signal_ref': SIGNAL_REF,
+        'probes': {2: (14.350, 1.203), 4: (15.140, 1.147), 8: (13.104, 1.216), 16: (17.498, 1.008)}},
+    'surface': {'signal_ref': SIGNAL_REF,
+        'probes': {2: (77.901, 1.282), 4: (74.543, 1.342), 8: (72.620, 1.493), 16: (77.018, 1.819)}},
 }

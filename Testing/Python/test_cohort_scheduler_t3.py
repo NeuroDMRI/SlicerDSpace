@@ -433,6 +433,16 @@ class DurationDefaultTests(unittest.TestCase):
         self.assertNotIn('brain_mask', cohort_defaults.DURATION_DEFAULTS)
         self.assertEqual(profile['brain_mask']['duration_seconds'], 0)
 
+    def test_m1_fill_pinned_values_match_the_m1_summary(self):
+        """Opus M1-fill review, blocking 1: wall times kept to three decimals (0.1 s rounding moved short stages by
+        up to 5 %). Values from m1_bcdbc95_summary.json: s3 points and s2 P_gib."""
+        probes = {stage: row['probes'] for stage, row in cohort_defaults.DURATION_DEFAULTS.items()}
+        self.assertEqual(probes['microstructure_dti'][2], (0.761, 1.116))
+        self.assertEqual(probes['connectome'][2], (17.539, 1.598))
+        self.assertEqual(probes['native_dti'][16], (652.404, 13.6))
+        self.assertEqual(probes['csd_act'][16], (2144.138, 12.615))
+        self.assertEqual(cohort_defaults.RAM_FIT['native_dti'], (9.749, cohort_defaults.SIGNAL_REF))
+
     def test_history_wins_over_the_default(self):
         table = {'native_dti': dict(signal_ref=ABSENT_SIGNAL, probes={4: (600., 3.5)})}
         with tempfile.TemporaryDirectory() as tmp, patch.dict(cohort_defaults.DURATION_DEFAULTS, table, clear=True):

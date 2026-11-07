@@ -115,7 +115,10 @@ def self_check_commands(folder, user_config, closure_targets, step, *, doctor=No
 
 
 def running_slicer_pythons():
-    """Paths that name the Slicer running this script: its interpreter, its PythonSlicer launcher and python-real (S3-1)."""
+    """Paths that name the Slicer running this script: its interpreter, its PythonSlicer launcher and python-real (S3-1).
+
+    W-B-CARRY-1: exact paths only. A virtualenv whose ``bin/python`` links to python-real is an external interpreter.
+    """
     from shared.external_process import find_pythonslicer, interpreter_path
 
     current = interpreter_path(sys.executable)
@@ -127,15 +130,14 @@ def running_slicer_pythons():
     for name in ("python-real", "python-real.exe"):
         if (current.parent / name).is_file():
             found.add(current.parent / name)
-    return found | {Path(os.path.realpath(path)) for path in found}
+    return found
 
 
 def is_running_slicer_python(selected):
     """True when ``selected`` is this Slicer's own Python (PythonSlicer or python-real), like the GUI's classification."""
     from shared.external_process import interpreter_path
 
-    path = interpreter_path(selected)
-    return path in running_slicer_pythons() or Path(os.path.realpath(path)) in running_slicer_pythons()
+    return interpreter_path(selected) in running_slicer_pythons()
 
 
 def make_python_command(configured):

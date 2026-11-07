@@ -41,7 +41,8 @@ Canonical inputs are `input/data.nii.gz`, `input/bvals`, `input/bvecs`, optional
 `input/dwi.json`, and a supplied or generated `input/nodif_brain_mask.nii.gz`.
 Verify volume/gradient counts, finite values, gradient orientation and mask
 shape/affine. Valid supplied masks are retained. PNL remains the default missing
-mask generator; DIPY is an explicit model-free alternative, not a fallback.
+mask generator (`--brain-mask-backend pnl_cnn`; route `--pnl-mask-route auto|managed|native`,
+native is experimental); DIPY is an explicit model-free alternative, not a fallback.
 
 For a small real installation example, use the project's
 `docs/setup/SLICER_SAMPLE_DTI.md`. A synthetic tensor-field demo only checks
@@ -117,7 +118,9 @@ requested analysis and scope are clear. Long/increased-scope downloads or a
 new expensive route need confirmation, not silent expansion.
 
 Retain the exact argv, logs, run/plan manifests, input/model signatures, device
-and timing. Default resume reuses compatible recorded outputs; use new run/output
+and timing. `00_run_metadata/run_record.json` holds the parameters, the brain-mask
+route and backend that was used, the accepted licences and the software versions; a
+re-run keeps the old file as `run_record-<started_at>.json`. Default resume reuses compatible recorded outputs; use new run/output
 paths for controlled method comparisons. `--no-resume` is an explicit rerun,
 not a repair for an unexplained failed QC record.
 

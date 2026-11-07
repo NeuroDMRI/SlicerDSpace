@@ -38,11 +38,12 @@ Read as needed: [activation](#stage-and-enable-the-module),
 
 ## Stage And Enable The Module
 
-For a source install, use normal Python from the authorized checkout. Substitute
-the approved install root and installed Slicer major/minor version:
+For a source install, use Slicer's Python (`PythonSlicer`, in the Slicer folder)
+from the authorized checkout. Substitute the approved install root and installed
+Slicer major/minor version:
 
 ```bash
-python3 scripts/stage_slicer_extension.py \
+PythonSlicer scripts/stage_slicer_extension.py \
   --install-root /path/to/user/extensions --slicer-version Slicer-5.10 \
   --link-mode copy
 ```
@@ -131,13 +132,18 @@ Dependency reports and First-use setup route to this same preparation logic.
 Do not use Run as an installation shortcut: setup permission is not permission
 to submit an analysis.
 
-1. Inspect the plan, destinations, sizes and terms with the user. Obtain
-   explicit approval for downloads and applicable algorithm, resource, FSL,
-   PNL source/model/template and FreeSurfer/component terms. The user must make
-   the real dialog approvals. Never autoclick checkboxes/Prepare, monkeypatch
+1. Inspect the plan, destinations, sizes and terms with the user. The GUI shows
+   one confirmation; every licence is in that one dialog (button **Accept
+   licences and install**). Obtain explicit approval for downloads and applicable
+   algorithm, resource, FSL, PNL source/model/template and FreeSurfer/component
+   terms. The user must make the real dialog approvals. An accepted licence is
+   stored with its version (SHA-256 of the text) and is not asked again until
+   that text changes. Never autoclick checkboxes/Prepare, monkeypatch
    confirmation, inject acceptance or treat hashes as a license grant.
-2. Let Slicer's Extension Manager install/enable the needed SlicerDMRI/PyTorch
-   extensions; UKFTractography is requested only for UKF. An enabled extension
+2. Let Slicer's Extension Manager install/enable the extensions the plan names:
+   PyTorch for the neural models and the native mask, UKFTractography only for UKF,
+   SlicerDMRI only for WMA. The tensor fit needs no extension (Teem in Slicer
+   core). An enabled extension
    is not necessarily loaded. If restart is required, stop, ask the user to save
    work and approve restarting, then reopen SlicerDSpace.
 3. Continue with **Continue preparing selected analysis environment** or the
@@ -152,15 +158,24 @@ to submit an analysis.
    and official-extension PyTorch by default; WMQL/DIPY/AMICO use workflow Python.
    Protect bundled NumPy/SciPy/VTK/SimpleITK/PyTorch. Conflicts or unavailable
    wheels must fail visibly, not trigger core upgrades or local compilation.
-5. Prepare PNLBrainMask-Torch with its converted weights and ANTs in the managed
-   Python 3.11 prefix. Reuse a compatible PyTorch there; new prefixes use the
-   paired-tested PyTorch 2.5.1 CPU build. TensorFlow/Keras are not runtime dependencies. Selected supported external
+5. PNL mask, by `pnl_mask_route` (`auto`, `managed`, `native`). On Linux `auto` is
+   `managed`: PNLBrainMask-Torch with its converted weights and ANTs 2.3.0 in the
+   managed Python 3.11 prefix (new prefixes use the paired-tested PyTorch 2.5.1
+   CPU build). On macOS and Windows `auto` is `native`: SimpleITK registration and
+   PyTorch in Slicer's Python, no conda runtime; the plugin labels it "native
+   (experimental)" (2 of 24 parity cases failed). The native route does not read the
+   managed-runner settings. TensorFlow/Keras are not runtime dependencies. Selected supported external
    runtimes use user-local managed prefixes and, when needed, a hash-verified
    pinned Miniforge bootstrap; do not replace unmanaged environments, drivers or
    global shell/CUDA settings.
 6. Inspect the final dependency report and synthetic functional results, not
    just package imports or worker completion. Failed functional checks block
-   readiness. Receipts/logs live in `setup-history` beside
+   readiness. A failing plugin-pinned or user-set dcm2niix blocks `ready`; a
+   failing dcm2niix found only on `PATH` is a warning (NIfTI input does not need it).
+   The same self-check runs per feature from `scripts/check_setup_functionality.py`.
+   The command-line form of this whole step is
+   `PythonSlicer scripts/setup_selected.py --targets T [--execute] [--accept-licences]`;
+   `--accept-licences` is allowed only after the user approved the printed licences. Receipts/logs live in `setup-history` beside
    `shared.user_config.default_user_config_path()`. A `ready` receipt means
    installation readiness for that selection, not anatomical correctness.
 
@@ -312,7 +327,10 @@ are distinct evidence.
 
 - Linux x86_64/Slicer 5.10 is the verified reference, not an all-platform
   zero-configuration guarantee. MRtrix3 3.0.8, FSL and managed PNL have scoped
-  Linux routes; CUDA still requires a usable existing NVIDIA driver/device.
+  Linux routes. A replaced managed prefix stays on disk as
+  `<name>.replaced-<ns>` in the runtimes folder (`SLICERDSPACE_RUNTIME_ROOT`, else
+  `runtimes` beside the model assets); the plugin never deletes it, and only the user
+  may delete it by hand after a successful run; CUDA still requires a usable existing NVIDIA driver/device.
 - Optional cortical postprocessing is separate from neural surface inference.
   `shared.prebuilt_surface.bundle_for_platform()` reads
   `models/runtime_bundles.json`; its Linux x86_64 entry currently has
@@ -330,15 +348,18 @@ are distinct evidence.
   See `docs/setup/SURFACE_COMPONENTS.md`. The GUI never compiles;
   `scripts/setup_surface_runtime.py` defaults to prebuilt, with
   `--build-from-source` an expert opt-in, not an automatic failure fallback.
-- Mac Intel MRtrix requires macOS **14.5+**. The package/installer adaptation has
-  plan tests, not real-Mac execution or native scientific acceptance. No
-  qualified managed ARM/FSL/PNL profiles or surface bundle are supplied for
-  macOS; do not silently switch Apple Silicon to Intel/Rosetta. Plugin MPS is
+- macOS (Intel and Apple Silicon) managed MRtrix3 3.0.8 is the official universal
+  tarball and FSL CPU tools come from conda; both need macOS **14.5+**. There is no
+  CUDA eddy on macOS. The package/installer adaptation has plan tests, not
+  real-Mac execution or native scientific acceptance. The PNL mask runs natively in
+  Slicer's Python (experimental); no surface bundle is supplied for macOS. Plugin MPS is
   not implemented/validated.
-- Windows' existing WSL installer/bridges are a separate path, not native Windows
-  acceptance or the same unified Linux managed installer. Read
-  `docs/setup/WINDOWS.md` before proposing it; it has broader downloads, storage
-  and authorization needs. Do not launch it implicitly to repair a missing item.
+- Windows: the WSL 2 Ubuntu runtime (`scripts/install_deps_windows.ps1`, hint
+  `wsl --install -d Ubuntu`) holds MRtrix3 and FSL (and the FreeSurfer and algorithm
+  sources). The brain mask and the Python stages run in Windows Slicer's Python.
+  It is not native Windows acceptance. Read `docs/setup/WINDOWS.md` before proposing
+  it; it has broader downloads, storage and authorization needs. Do not launch it
+  implicitly to repair a missing item.
 
 ## Retry, Offline Import And Handoff
 

@@ -211,9 +211,62 @@ class PythonSlicerLayoutTests(unittest.TestCase):
             with self.assertRaisesRegex(FileNotFoundError, 'PythonSlicer'):
                 pythonslicer(root / 'empty')
 
+    def test_b9_launcher_resolver_handles_linux_macos_app_and_windows_trees(self):
+        from preprocessing.dti import slicer_launcher
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            linux = self.tree(root / 'linux', 'Slicer')
+            mac = self.tree(root / 'Slicer.app', 'Contents/MacOS/Slicer')
+            windows = self.tree(root / 'windows', 'Slicer.exe')
+            for path in (linux, mac, windows):
+                path.chmod(0o755)
+            self.assertEqual(slicer_launcher(root / 'linux'), linux)
+            self.assertEqual(slicer_launcher(root / 'Slicer.app'), mac)  # the .app itself
+            self.assertEqual(slicer_launcher(root / 'Slicer.app/Contents'), mac)
+            self.assertEqual(slicer_launcher(root / 'Slicer.app/Contents/MacOS'), mac)
+            self.assertEqual(slicer_launcher(root / 'windows'), windows)
+            self.assertEqual(slicer_launcher(root / 'empty'), root / 'empty/Slicer')
+
+    def test_b9_run_launches_the_registration_cli_with_the_macos_app_launcher(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            files = make_bundle(root / 'inputs')
+            app = root / 'Slicer.app'
+            launcher = self.tree(app, 'Contents/MacOS/Slicer')
+            launcher.chmod(0o755)
+            self.tree(app, 'Contents/bin/PythonSlicer')
+            core = root / 'core'; core.mkdir()
+            for name in ('BRAINSFit', 'ResampleScalarVectorDWIVolume'):
+                (core / name).write_text('fixture')
+            folder = root / 'dti'; folder.mkdir()
+            args = argparse.Namespace(subject='x', output_dir=folder, slicer_path=app, core_cli=core,
+                                      reference_image=files['mask'], mask_flip=1, jobs=1, minimal=True, **files)
+            launched = []
+
+            def command(argv, **kwargs):
+                if argv[1:2] == ['--launch']:
+                    launched.append(argv[0])
+                    raise RuntimeError('stop after the first Slicer command')
+                if Path(argv[1]).name == 'nhdr_write.py':
+                    values = {argv[i]: argv[i + 1] for i in range(2, len(argv), 2)}
+                    write_nhdr(values['--nifti'], values.get('--bval'), values.get('--bvec'), values['--nhdr'])
+                    return
+                outputs = [argv[-1]]
+                if Path(argv[1]).name == 'teem_dti.py':
+                    outputs = argv[-2:] + [item.partition('=')[2] for i, item in enumerate(argv) if argv[i - 1] == '--scalar']
+                for output in outputs:
+                    sitk.WriteImage(sitk.GetImageFromArray(np.ones((5, 6, 7), np.float32)), output, True)
+
+            with patch('preprocessing.dti.subprocess.run', side_effect=command):
+                with self.assertRaises(RuntimeError):
+                    dti.run(args)
+            self.assertEqual(launched[:1], [str(launcher)])
+
     def test_f2_dti_sh_finds_the_macos_app_layout_of_pythonslicer(self):
         text = (ROOT / 'preprocessing/dti.sh').read_text()
-        self.assertIn('Contents/bin/PythonSlicer', text)
+        # T3 moved the macOS rule to SLICER_ROOT (= Contents for a .app); the text no longer names Contents/bin.
+        self.assertIn('*.app) SLICER_ROOT=$SLICER_PATH/Contents', text)
+        self.assertIn('$SLICER_ROOT/bin/PythonSlicer', text)
         self.assertIn('bin/PythonSlicer.exe', text)
 
 

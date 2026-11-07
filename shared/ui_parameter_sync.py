@@ -5,17 +5,24 @@ from __future__ import annotations
 from shared.user_config import canonical_microstructure_stages
 
 
-def apply_preprocessing_availability(checkbox, system=None, machine=None) -> bool:
-    """W2a (D1): a platform with no FSL build does not offer preprocessing. Returns True when it is offered."""
+def apply_preprocessing_availability(checkbox, system=None, machine=None, node=None) -> bool:
+    """W2a (D1): a platform with no FSL build does not offer preprocessing. Returns True when it is offered.
+
+    Where it is not offered, the checkbox is disabled and unchecked, and the parameter node (when given) no longer
+    selects preprocessing, so the saved setting cannot keep it selected and no dependency check blocks the run (F2).
+    """
 
     from shared.selected_setup import PREPROCESSING_UNSUPPORTED_TEXT, preprocessing_offered
 
-    if checkbox is None:
-        return True
     offered = preprocessing_offered(system, machine)
-    if not offered:
+    if not offered and node is not None and getattr(node, "targetPreprocessing", False):
+        node.targetPreprocessing = False
+    if checkbox is not None and not offered:
         checkbox.setEnabled(False)
         checkbox.setToolTip(PREPROCESSING_UNSUPPORTED_TEXT)
+        checkbox.blockSignals(True)
+        checkbox.setChecked(False)
+        checkbox.blockSignals(False)
     return offered
 
 
@@ -67,8 +74,8 @@ def sync_parameter_node_to_ui(widget) -> None:
     widget._sync_combo_text(getattr(ui, "ddsegDeviceComboBox", None), node.ddsegDevice or "auto", via_index=False)
     widget._sync_checkbox(getattr(ui, "ddsegSoftmaxCheckBox", None), bool(node.ddsegApplySoftmax))
 
+    apply_preprocessing_availability(getattr(ui, "targetPreprocessingCheckBox", None), node=node)
     widget._sync_checkbox(getattr(ui, "targetPreprocessingCheckBox", None), bool(node.targetPreprocessing))
-    apply_preprocessing_availability(getattr(ui, "targetPreprocessingCheckBox", None))
     sync_combo_data = getattr(widget, "_sync_combo_data", None)
     if sync_combo_data is not None:
         sync_combo_data(

@@ -200,12 +200,15 @@ class SlicerUiLayoutContractTest(unittest.TestCase):
 
         calls = []
         checkbox = SimpleNamespace(setEnabled=lambda value: calls.append(("enabled", value)),
-                                   setToolTip=lambda text: calls.append(("tip", text)))
+                                   setToolTip=lambda text: calls.append(("tip", text)),
+                                   blockSignals=lambda value: calls.append(("signals", value)),
+                                   setChecked=lambda value: calls.append(("checked", value)))
         patcher = patch("platform.mac_ver", return_value=("15.1", ("", "", ""), ""))
         patcher.start()
         self.addCleanup(patcher.stop)
         self.assertFalse(apply_preprocessing_availability(checkbox, "Linux", "aarch64"))
-        self.assertEqual(calls, [("enabled", False), ("tip", PREPROCESSING_UNSUPPORTED_TEXT)])
+        self.assertEqual(calls, [("enabled", False), ("tip", PREPROCESSING_UNSUPPORTED_TEXT),
+                                 ("signals", True), ("checked", False), ("signals", False)])
         self.assertEqual(PREPROCESSING_UNSUPPORTED_TEXT, "Preprocessing needs FSL, which has no build for this platform; "
                                                          "import preprocessed data instead")
         for system, machine in (("Linux", "x86_64"), ("Darwin", "arm64"), ("Darwin", "x86_64"), ("Windows", "AMD64")):

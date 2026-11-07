@@ -7,6 +7,7 @@ import json
 import os
 import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
 
@@ -73,6 +74,66 @@ class F1InputRecordPathTest(unittest.TestCase):
             stat = path.stat()
             os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
             self.assertEqual(set(reuse_points(subject).values()), {False})
+
+
+class F2UnsupportedPlatformTest(unittest.TestCase):
+    """F2: a platform with no FSL build does not offer preprocessing, and it is not left selected."""
+
+    def fake_checkbox(self, checked=True):
+        state = {"checked": checked, "enabled": True, "calls": []}
+
+        def set_checked(value):
+            state["checked"] = value
+            state["calls"].append(("checked", value))
+
+        box = types.SimpleNamespace(
+            setEnabled=lambda value: state.update(enabled=value), setToolTip=lambda text: None,
+            blockSignals=lambda value: state["calls"].append(("signals", value)), setChecked=set_checked,
+            isChecked=lambda: state["checked"])
+        return box, state
+
+    def test_f2_apply_unchecks_the_box_and_clears_the_parameter_node_where_there_is_no_fsl_build(self) -> None:
+        from unittest.mock import patch
+
+        from shared.ui_parameter_sync import apply_preprocessing_availability
+
+        box, state = self.fake_checkbox(True)
+        node = types.SimpleNamespace(targetPreprocessing=True)
+        with patch("platform.mac_ver", return_value=("15.1", ("", "", ""), "")):
+            self.assertFalse(apply_preprocessing_availability(box, "Linux", "aarch64", node=node))
+        self.assertFalse(state["enabled"])
+        self.assertFalse(state["checked"])
+        self.assertFalse(node.targetPreprocessing)
+
+    def test_f2_apply_keeps_the_selection_where_preprocessing_is_offered(self) -> None:
+        from shared.ui_parameter_sync import apply_preprocessing_availability
+
+        box, state = self.fake_checkbox(True)
+        node = types.SimpleNamespace(targetPreprocessing=True)
+        self.assertTrue(apply_preprocessing_availability(box, "Linux", "x86_64", node=node))
+        self.assertTrue(state["checked"])
+        self.assertTrue(node.targetPreprocessing)
+
+    def test_f2_sync_parameter_node_to_ui_clears_a_saved_selection_where_there_is_no_fsl_build(self) -> None:
+        from unittest.mock import MagicMock, patch
+
+        from shared import ui_parameter_sync
+
+        box, state = self.fake_checkbox(True)
+        node = MagicMock()
+        node.targetPreprocessing = True
+        node.orchestrationTractographyBackend = "csd_act"
+        node.orchestrationBundleBackend = "wmql"
+        widget = MagicMock()
+        widget._parameterNode = node
+        del widget._ukfControls
+        widget.ui = types.SimpleNamespace(targetPreprocessingCheckBox=box)
+        widget._microstructure_stages_text.return_value = "dti"
+        widget._sync_checkbox.side_effect = lambda w, desired: w.setChecked(desired) if w is not None else None
+        with patch("shared.selected_setup.preprocessing_offered", return_value=False):
+            ui_parameter_sync.sync_parameter_node_to_ui(widget)
+        self.assertFalse(node.targetPreprocessing)
+        self.assertFalse(state["checked"])
 
 
 if __name__ == "__main__":

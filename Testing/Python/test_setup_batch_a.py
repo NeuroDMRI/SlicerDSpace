@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 import tempfile
 import unittest
@@ -103,6 +104,35 @@ class Dcm2niixWarningTests(unittest.TestCase):
             self.assertTrue(request["dcm2niix_configured"])
             with self.assertRaises(RuntimeError):
                 self.run_checks(request)
+
+    def _main_with_failing_dcm2niix(self, argv_extra, folder):
+        """Run scripts/check_setup_functionality.main() with a failing dcm2niix; return (exit code, result file text)."""
+        from scripts import check_setup_functionality
+        from shared import setup_selftest
+        result = Path(folder) / "result.json"
+        with patch.object(setup_selftest.subprocess, "run", side_effect=self.failing_run), \
+                patch("shared.input_import.packaged_dcm2niix", return_value=None), \
+                patch("sys.stdout", new=__import__("io").StringIO()):
+            code = check_setup_functionality.main(["--result", str(result)] + argv_extra)
+        return code, json.loads(result.read_text())
+
+    def test_c1_an_explicit_dcm2niix_option_that_fails_is_not_ready(self):
+        """C1: --dcm2niix is an explicit user choice. Fails at 0064d04: the script gave a passed result with a warning."""
+        with tempfile.TemporaryDirectory() as folder:
+            code, record = self._main_with_failing_dcm2niix(["--dcm2niix", "/opt/d2n/dcm2niix"], folder)
+        self.assertEqual(record["status"], "failed")
+        self.assertNotEqual(code, 0)
+        self.assertIn("dcm2niix", record["error"])
+
+    def test_c1_a_path_discovered_dcm2niix_in_a_request_file_still_gives_the_warning(self):
+        """C1: a request with a PATH-found dcm2niix only (no flag, no setting) keeps the warning."""
+        with tempfile.TemporaryDirectory() as folder:
+            request = Path(folder) / "request.json"
+            request.write_text(json.dumps({"dcm2niix": "/usr/local/bin/dcm2niix"}))
+            code, record = self._main_with_failing_dcm2niix(["--request", str(request)], folder)
+        self.assertEqual(code, 0)
+        self.assertEqual(record["status"], "passed")
+        self.assertEqual(len(record["warnings"]), 1)
 
     def test_a2_the_cli_logs_the_warning_and_stays_completed(self):
         from shared.selected_setup import run_setup_steps

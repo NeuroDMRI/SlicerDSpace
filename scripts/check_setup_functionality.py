@@ -18,6 +18,7 @@ def build_request(args):
         request['fsl_bin_dir'] = str(args.fsl_bin_dir)
     if args.dcm2niix:
         request['dcm2niix'] = str(args.dcm2niix)
+        request['dcm2niix_configured'] = True  # C1: a dcm2niix given with the option is an explicit user choice
     if args.pnl_model_dir:
         request['pnl_native_mask'] = {'model_dir': str(args.pnl_model_dir), 'device': args.device}
     return request

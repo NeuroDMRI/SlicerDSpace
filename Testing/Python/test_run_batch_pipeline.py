@@ -219,7 +219,8 @@ sys.exit(3 if failed else 0)
 
     def test_resource_mode_can_omit_jobs_and_all_resource_parameters(self):
         with tempfile.TemporaryDirectory() as tmp, \
-             patch('shared.cohort_planning.available_cohort_resources', return_value=(16, 64 * 1024**3)):
+             patch('shared.cohort_planning.available_cohort_resources', return_value=(16, 64 * 1024**3)), \
+             patch('shared.cohort_affinity.os.sched_getaffinity', return_value=set(range(16)), create=True):
             status, manifest = self.run_fake_batch(Path(tmp), '--scheduler', 'resources', jobs=None)
             self.assertEqual(status, 0)
             self.assertEqual(manifest['jobs'], 2)

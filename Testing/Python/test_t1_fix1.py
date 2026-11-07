@@ -290,6 +290,18 @@ class TB3IfwRegionalTableReuseTest(unittest.TestCase):
         self.assertEqual(self.table_ids(second), ["7", "9"])
         self.assertTrue((self.root / "out" / "S1_ROIWise-iFW.json").is_file())
 
+    def test_b6_n5_a_cached_result_returns_the_existing_table_path_also_without_a_label_map(self):
+        from microstructure.ifw import run_ifw
+
+        first = run_ifw(self.config(roi_label_map=self.root / "labels.nii.gz"))
+        second = run_ifw(self.config())  # no label map this time
+        self.assertEqual(second.status, "cached")
+        self.assertEqual(second.roi_stats_csv_path, first.roi_stats_csv_path)
+        self.assertTrue(second.roi_stats_csv_path.is_file())
+        # Nothing to return when no table was ever written.
+        (self.root / "out" / "S1_ROIWise-iFW.csv").unlink()
+        self.assertIsNone(run_ifw(self.config()).roi_stats_csv_path)
+
     def test_t_b3_changed_label_map_regenerates_the_table(self):
         from microstructure.ifw import run_ifw
 

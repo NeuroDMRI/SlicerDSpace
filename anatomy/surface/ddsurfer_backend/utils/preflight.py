@@ -39,10 +39,11 @@ def slicer_files(required=True):
         if required:
             raise FileNotFoundError('Set SLICER_PATH to a Slicer installation')
         return []
-    from preprocessing.dti import pythonslicer
+    from preprocessing.dti import pythonslicer, slicer_launcher, slicer_root
 
-    versions = sorted(path for path in (home / 'lib').glob('Slicer-*') if path.is_dir())
-    files = [home / 'Slicer']
+    # B9b: a macOS .app (or its Contents or Contents/MacOS folder) keeps lib/ under Contents and the launcher in MacOS/.
+    versions = sorted(path for path in (slicer_root(home) / 'lib').glob('Slicer-*') if path.is_dir())
+    files = [slicer_launcher(home)]
     try:
         files.append(pythonslicer(home))
     except FileNotFoundError:

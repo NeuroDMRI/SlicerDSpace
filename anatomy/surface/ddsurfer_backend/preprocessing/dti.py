@@ -43,6 +43,12 @@ def pythonslicer(slicer_path):
     raise FileNotFoundError(f'PythonSlicer not found in the Slicer installation: {home}')
 
 
+def slicer_root(slicer_path):
+    """Folder that holds ``lib/`` and ``bin/``: the path itself, or ``Contents`` for a macOS .app or ``Contents/MacOS``."""
+    home = Path(slicer_path)
+    return home.parent if home.name == 'MacOS' else home / 'Contents' if home.suffix == '.app' else home
+
+
 def slicer_launcher(slicer_path):
     """Slicer executable of the selected installation (B9), as ``dti.sh`` finds it for the same folders.
 
@@ -50,7 +56,7 @@ def slicer_launcher(slicer_path):
     its ``Contents`` folder or ``Contents/MacOS``.
     """
     home = Path(slicer_path)
-    root = home.parent if home.name == 'MacOS' else home / 'Contents' if home.suffix == '.app' else home
+    root = slicer_root(home)
     for candidate in (home / 'Slicer', home / 'Slicer.exe', root / 'MacOS/Slicer', root / 'Slicer', root / 'Slicer.exe'):
         if candidate.is_file() and os.access(candidate, os.X_OK):
             return candidate

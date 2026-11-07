@@ -571,6 +571,9 @@ def run_setup_steps(steps, *, runner=None, self_check=None, log=print, after_ste
                 if step["id"] == "self_check":
                     if any(json.loads(Path(path).read_text()).get("status") != "passed" for path in receipts):
                         raise ValueError("Installation functionality check failed")
+                    from shared.setup_selftest import receipt_warnings
+                    for warning in receipt_warnings(receipts):  # A2: a warning does not block "ready"
+                        log("[Setup] Warning: " + warning)
                 else:
                     settings = complete_step(step)
                     if after_step:

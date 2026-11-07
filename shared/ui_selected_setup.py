@@ -380,11 +380,12 @@ def prepare_selected_environment(owner, result=None, *, repair=False):
                 failed(str(exc))
                 return
             owner._setupFunctionalFailure = False
-            record_readiness(current)
+            from shared.setup_selftest import receipt_warnings
+            record_readiness(current, receipt_warnings(receipts))  # A2: warnings do not block "ready"
 
         start_setup_job(owner, _text(owner, 'Testing selected installation', '测试所选分析的安装'), commands, done)
 
-    def record_readiness(current):
+    def record_readiness(current, warnings=()):
         owner._latestEnvironmentReportDir = folder
         pending = bool(getattr(owner, "_setupRestartRequired", False))
         state = "restart_required" if pending else "ready" if current and current.blocker_count == 0 else "blocked"
@@ -394,15 +395,19 @@ def prepare_selected_environment(owner, result=None, *, repair=False):
             if pending_before:
                 complete_setup(pending_before['request'])
             refresh_setup_button(owner)
-        write_json(folder / "result.json", {"status": state, "blockers": current.blocker_count if current else None,
-                                            "scope": "Environment readiness only; not scientific QC"})
+        record = {"status": state, "blockers": current.blocker_count if current else None,
+                  "scope": "Environment readiness only; not scientific QC"}
+        if warnings:
+            record["warnings"] = list(warnings)
+        write_json(folder / "result.json", record)
         if current:
             owner._update_environment_result_label(current)
             owner._update_environment_path_status_labels(current)
-        owner._setStatus("ready" if state == "ready" else "warning", _text(owner,
-            "Selected environment is ready." if state == "ready" else
+        note = " " + " ".join(warnings) if warnings and state == "ready" else ""  # A2: a warning does not block "ready"
+        owner._setStatus("warning" if warnings or state != "ready" else "ready", _text(owner,
+            "Selected environment is ready." + note if state == "ready" else
             "Restart Slicer before analysis." if pending else "Preparation finished; some selected dependencies still need attention.",
-            "所选分析环境已就绪。" if state == "ready" else
+            "所选分析环境已就绪。" + note if state == "ready" else
             "请重启 Slicer 后再运行分析。" if pending else "自动准备已结束，仍有依赖需要处理。"))
         if current and state == "blocked":
             owner._show_environment_results_dialog(current)

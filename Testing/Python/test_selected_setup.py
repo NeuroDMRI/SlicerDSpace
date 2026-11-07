@@ -301,6 +301,30 @@ class SelectedSetupTests(unittest.TestCase):
         self.assertTrue(owner._setupFunctionalFailure)
         self.assertFalse(owner._selectedSetupActive)
 
+    def test_a2_a_warning_receipt_keeps_the_gui_ready_and_shows_the_warning(self):
+        """A2: a passed self-check receipt with a warning (a failing PATH dcm2niix) is ready, not failed."""
+        report = result()
+        owner = self.owner(report)
+        context, _ = self.run_preparation(owner, report)
+
+        def jobs(widget, title, commands, done):
+            for _program, args, _env in commands:
+                Path(args[args.index('--result') + 1]).write_text(json.dumps(
+                    {'status': 'passed', 'warnings': ['dcm2niix at /usr/bin/dcm2niix failed its check (garbled)']}))
+            done('completed', '', None)
+            return True
+
+        with tempfile.TemporaryDirectory() as temp, context, \
+                patch('shared.user_config.default_user_config_path', return_value=Path(temp) / 'config.json'), \
+                patch('shared.setup_selftest.requests_for_report', return_value=[{'python': 'python'}]), \
+                patch('shared.ui_setup_jobs.start_setup_job', side_effect=jobs):
+            prepare_selected_environment(owner, report)
+            record = json.loads(next(Path(temp).glob('setup-history/*/result.json')).read_text())
+        self.assertEqual(record['status'], 'ready')
+        self.assertIn('/usr/bin/dcm2niix', record['warnings'][0])
+        self.assertFalse(owner._setupFunctionalFailure)
+        self.assertIn('/usr/bin/dcm2niix', owner._setStatus.call_args.args[1])
+
     def test_completed_restart_preparation_clears_previous_pending_request(self):
         from shared.setup_resume import remember_setup, pending_setup
         report = result()

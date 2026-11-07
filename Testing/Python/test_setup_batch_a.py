@@ -53,5 +53,63 @@ class SlicerPythonIdentityTests(unittest.TestCase):
         self.assertEqual(found.call_count, 1)
 
 
+class Dcm2niixWarningTests(unittest.TestCase):
+    """A2: a failing dcm2niix blocks readiness only when the plugin installed it."""
+
+    @staticmethod
+    def failing_run(argv, **kwargs):
+        from types import SimpleNamespace
+        return SimpleNamespace(returncode=1, stdout="", stderr="dcm2niix: bad news")
+
+    def run_checks(self, request, *, packaged=None):
+        from shared import setup_selftest
+        with patch.object(setup_selftest.subprocess, "run", side_effect=self.failing_run), \
+                patch("shared.input_import.packaged_dcm2niix", return_value=packaged):
+            return setup_selftest.run_checks(request)
+
+    def test_a2_a_failing_path_dcm2niix_is_a_warning_with_path_and_output(self):
+        report = self.run_checks({"dcm2niix": "/usr/local/bin/dcm2niix"})
+        self.assertEqual(report["status"], "passed")
+        self.assertEqual(len(report["warnings"]), 1)
+        self.assertIn("/usr/local/bin/dcm2niix", report["warnings"][0])
+        self.assertIn("bad news", report["warnings"][0])
+        self.assertNotIn("dcm2niix:version", report["checks"])
+
+    def test_a2_a_failing_wheel_dcm2niix_is_not_ready(self):
+        from shared import setup_selftest
+        with self.assertRaises(RuntimeError):
+            self.run_checks({"dcm2niix": "/slicer/bin/dcm2niix", "dcm2niix_installed_by_plugin": True})
+        with tempfile.TemporaryDirectory() as folder:
+            wheel = Path(folder) / "dcm2niix"
+            wheel.write_text("")
+            with self.assertRaises(RuntimeError):  # the request flag is missing, the running Python's wheel is the same file
+                self.run_checks({"dcm2niix": str(wheel)}, packaged=wheel)
+            report = SimpleStatuses()
+            request = setup_selftest.requests_for_report(report, backend_paths={"packaged_dcm2niix": str(wheel)})[0]
+            self.assertTrue(request["dcm2niix_installed_by_plugin"])
+
+    def test_a2_the_request_for_a_path_dcm2niix_is_not_plugin_installed(self):
+        from shared import setup_selftest
+        with patch("shared.input_import.packaged_dcm2niix", return_value=None):
+            request = setup_selftest.requests_for_report(SimpleStatuses(), backend_paths={"dcm2niix_executable": "/usr/bin/dcm2niix"})[0]
+        self.assertFalse(request["dcm2niix_installed_by_plugin"])
+
+    def test_a2_the_cli_logs_the_warning_and_stays_completed(self):
+        from shared.selected_setup import run_setup_steps
+        with tempfile.TemporaryDirectory() as folder:
+            receipt = Path(folder) / "result.json"
+            receipt.write_text('{"status": "passed", "warnings": ["dcm2niix at /x failed its check"]}')
+            lines = []
+            records = run_setup_steps([dict(id="self_check", title="Test", commands=[])], self_check=lambda step: ([], [receipt]),
+                                      log=lines.append)
+        self.assertEqual(records[0]["status"], "completed")
+        self.assertTrue(any("Warning" in line and "/x" in line for line in lines))
+
+
+def SimpleStatuses():
+    from types import SimpleNamespace
+    return SimpleNamespace(statuses=[], targets=("validation",))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -19,14 +19,19 @@ def bundle_for_platform(system=None, machine=None):
     payload = json.loads(CATALOG.read_text())
     selected_machine = (machine or platform.machine()).lower()
     machine = {'amd64': 'x86_64', 'aarch64': 'arm64'}.get(selected_machine, selected_machine)
-    return next((record for record in payload['surface'] if record['system'] == (system or platform.system())
+    record = next((record for record in payload['surface'] if record['system'] == (system or platform.system())
                  and record['machine'] == machine), None)
+    if record and record.get('min_macos') and platform.system() == 'Darwin':
+        version = platform.mac_ver()[0]
+        if not version or tuple(map(int, version.split('.')[:2])) < tuple(map(int, record['min_macos'].split('.')[:2])):
+            return None
+    return record
 
 
 def prepare(*, prefix=None, asset_root=None, execute=False, accept_terms=False, offline=False):
     from shared.surface_runtime import default_surface_runtime
     from shared.model_assets import configured_model_assets_root
-    from anatomy.surface.backend_bridge import backend_environment
+    from anatomy.surface.backend_bridge import backend_environment, python_executable
     from anatomy.surface.ddsurfer_backend.postprocessing.core.config import recipe_digest
     record = bundle_for_platform()
     if record is None:
@@ -49,7 +54,7 @@ def prepare(*, prefix=None, asset_root=None, execute=False, accept_terms=False, 
     script = Path(__file__).resolve().parents[1] / 'scripts/probe_surface_runtime.py'
 
     def validate(path):
-        probe = subprocess.run([sys.executable, str(script), '--backend', 'native', '--home', str(path)],
+        probe = subprocess.run([python_executable(sys.executable), str(script), '--backend', 'native', '--home', str(path)],
                                env=backend_environment(), capture_output=True, text=True, check=True, timeout=180)
         checked = json.loads(probe.stdout.strip().splitlines()[-1])
         if not checked.get('components_available'):

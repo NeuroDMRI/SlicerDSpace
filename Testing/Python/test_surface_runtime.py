@@ -127,10 +127,11 @@ class SurfaceRuntimeTests(unittest.TestCase):
             self.assertFalse(prefix.exists())
             resources.assert_not_called()
 
-    def test_builder_refuses_automatic_preparation_outside_linux(self):
+    def test_builder_refuses_platforms_without_a_candidate(self):
         from scripts.setup_surface_runtime import prepare
         for system in ('Darwin', 'Windows'):
             with tempfile.TemporaryDirectory() as tmp, patch('platform.system', return_value=system), \
+                    patch('platform.machine', return_value='arm64'), \
                     patch('scripts.setup_optional_assets.prepare') as resources:
                 prefix = Path(tmp) / 'components'
                 with self.assertRaisesRegex(ValueError, 'No qualified prebuilt surface bundle'):

@@ -329,7 +329,7 @@ class ProductOrchestratorTest(unittest.TestCase):
             _write_fake_backend(bin_dir)
             config = ProductOrchestratorConfig(
                 subject_id="100307", subject_root=subject, targets=("preprocessing",),
-                execute=False, preprocessing_backend="mrtrix_fsl",
+                execute=False,
                 brain_mask_backend="provided",
                 preprocessing_mrtrix_bin_dir=bin_dir, preprocessing_fsl_bin_dir=bin_dir,
             )
@@ -337,7 +337,7 @@ class ProductOrchestratorTest(unittest.TestCase):
             self.assertTrue(_preprocessing_complete(subject, "100307", config=config))
             self.assertEqual(plan_subject_products(config, write=False).items[0].status, "skipped")
             changed = (
-                replace(config, preprocessing_backend="dipy"),
+                replace(config, preprocessing_dipy_run_gibbs=False),
                 replace(config, preprocessing_eddy_second_level_model="linear"),
                 replace(config, preprocessing_force=True),
             )

@@ -59,6 +59,6 @@ pipeline() {
 
 # docs/setup/CLI_TEMPLATES.md: preproc-fsl
 pipeline preproc_fsl --targets validation,preprocessing \
-  --brain-mask-backend provided --preprocessing-backend mrtrix_fsl \
+  --brain-mask-backend provided \
   --preprocessing-phase-encoding-direction j- --preprocessing-readout-time 0.05 \
   --preprocessing-reverse-phase-b0 "/path/to/matched_reverse_b0.nii.gz" --plan

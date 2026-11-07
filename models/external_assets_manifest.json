@@ -189,18 +189,6 @@
       "size_bytes": 10512,
       "redistribution": "with-notice"
     },
-    "brain_mask/synthstrip/synthstrip.1.pt": {
-      "sha256": "37417f802196186441aae3e7f385d94f8a98c64a88acaeaa2723af995c653e33",
-      "size_bytes": 30851709,
-      "urls": [
-        "https://surfer.nmr.mgh.harvard.edu/docs/synthstrip/requirements/synthstrip.1.pt"
-      ],
-      "redistribution": "with-notice",
-      "license": "CC-BY-4.0",
-      "license_url": "https://creativecommons.org/licenses/by/4.0/",
-      "attribution": "Andrew Hoopes, Jocelyn S. Mora, Adrian V. Dalca, Bruce Fischl, Malte Hoffmann. SynthStrip, NeuroImage 260:119474 (2022). Main model version 1, unmodified.",
-      "terms_url": "https://surfer.nmr.mgh.harvard.edu/docs/synthstrip/"
-    },
     "bundles/wma/naba/archives/runtime.zip.part-000": {
       "source_ids": ["wma_atlases_mirror"],
       "sha256": "3b7decaa531051740c9454f4584a16ff7ea2fcce76c0a03e1ef018d3417276a1",
@@ -556,15 +544,6 @@
         "Unmodified inference subset only. Preserve the complete Slicer/BWH agreement and cite TractCloud and its ORG reference atlas. No raw subject or training/test data included."
       ]
     },
-    "synthstrip": {
-      "directory": "brain_mask/synthstrip",
-      "required_paths": [
-        "brain_mask/synthstrip/synthstrip.1.pt"
-      ],
-      "terms_notice": [
-        "Unmodified model by Andrew Hoopes, Jocelyn S. Mora, Adrian V. Dalca, Bruce Fischl and Malte Hoffmann, NeuroImage 260:119474 (2022). Distributed under the author's CC BY 4.0 option: https://creativecommons.org/licenses/by/4.0/. Weights alone do not install the SynthStrip runtime."
-      ]
-    },
     "wma": {
       "expanded_size_bytes": 2439318525,
       "description": "Pinned official ORG distribution archives. Extract with validated paths before WMA use; not part of the default core download.",
@@ -583,7 +562,6 @@
       "include_profiles": [
         "pnl-cnn-weights",
         "tractcloud",
-        "synthstrip",
         "wma"
       ],
       "terms_notice": [

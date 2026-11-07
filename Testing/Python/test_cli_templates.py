@@ -59,7 +59,7 @@ def parse_route(code):
 class CliTemplatesTest(unittest.TestCase):
     def test_languages_publish_identical_recipe_arguments(self):
         english, chinese = (blocks(path, 'template') for path in GUIDES)
-        self.assertEqual(len(english), 46)
+        self.assertEqual(len(english), 39)
         self.assertEqual(english.keys(), chinese.keys())
         for name in english:
             with self.subTest(recipe=name):
@@ -83,7 +83,19 @@ class CliTemplatesTest(unittest.TestCase):
                 self.assertFalse(args.no_resume)
                 self.assertNotIn(args.run_name, names)
                 names.add(args.run_name)
-        self.assertEqual(len(names), 38)
+        self.assertEqual(len(names), 31)
+
+    def test_w2a_one_preprocessing_recipe_without_removed_options(self):
+        """W2a: one preprocessing recipe; none of the removed route, denoise or motion options is published."""
+        for path in GUIDES:
+            recipes = blocks(path, 'template')
+            with self.subTest(guide=path.name):
+                self.assertEqual([n for n in recipes if n.startswith('preproc')], ['preproc-fsl'])
+                for removed in ('--preprocessing-backend', '--preprocessing-dipy-denoise-method',
+                                '--preprocessing-skip-motion'):
+                    self.assertNotIn(removed, recipes['preproc-fsl'])
+        args, targets = parse_route(blocks(GUIDES[0], 'template')['preproc-fsl'])
+        self.assertIn('preprocessing', targets)
 
     def test_bundle_routes_keep_source_and_method_independent(self):
         recipes = blocks(GUIDES[0], 'template')
@@ -103,8 +115,8 @@ class CliTemplatesTest(unittest.TestCase):
 
     def test_optional_models_and_saf_are_explicit(self):
         recipes = blocks(GUIDES[0], 'template')
-        args, targets = parse_route(recipes['micro-dti-light'])
-        self.assertEqual(args.brain_mask_backend, 'dipy')
+        args, targets = parse_route(recipes['micro-dti'])
+        self.assertEqual(args.brain_mask_backend, 'provided')
         self.assertFalse(args.run_free_water or args.run_noddi or args.run_dki)
         args, targets = parse_route(recipes['micro-parallel'])
         self.assertTrue(args.run_free_water and args.run_noddi and args.run_dki)

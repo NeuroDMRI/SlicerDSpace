@@ -168,14 +168,6 @@ def _add_tool_requests(report, groups, backend_paths):
     from shared.external_process import is_slicer_python
     wanted = {}
     mrtrix, fsl = _tool_bin_dir(report, 'mrtrix'), _tool_bin_dir(report, 'fsl')
-    if not mrtrix:
-        # G3: MRtrix used only as the brain-mask backend has no command entry; the setting carries the dwi2mask path.
-        for item in getattr(report, 'statuses', ()):
-            details = item.details or {}
-            dwi2mask = (details.get('tool_paths') or {}).get('dwi2mask')
-            if getattr(item, 'key', '') == 'brain_mask_backend' and item.required and item.status in _AVAILABLE \
-                    and details.get('backend') == 'mrtrix' and dwi2mask:
-                mrtrix = str(Path(dwi2mask).parent)
     if mrtrix:
         wanted['mrtrix_bin_dir'] = mrtrix
     if fsl:

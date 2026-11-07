@@ -43,7 +43,6 @@ archive contents.
 | ORG registration/clustering atlases | External catalog: `wma` | Fixed official ZIPs; size/MD5 match the Zenodo record, SHA256 pinned. | CC BY 4.0 per doi:10.5281/zenodo.2648292; retain attribution and original upstream agreement. |
 | East-West WM atlas | External catalog: `wma-east-west` | Byte-preserved runtime subset of ScienceDB `10.57760/sciencedb.17354`; all 800 reference clusters retained, split archives and extracted files SHA256-pinned. | CC BY 4.0 per the dataset record; cite Li et al., Scientific Data 11:787 (2024), doi:10.1038/s41597-024-03624-2. |
 | NABA neonatal/adult atlas | External catalog: `wma-naba` | Byte-preserved runtime subset of Zenodo `10.5281/zenodo.18227691`; original published MD5 verified before packaging. | CC BY 4.0 per the dataset record; cite Zhang et al., Fundamental Research 6:1838-1847 (2026), doi:10.1016/j.fmre.2025.12.030. No NABA source code is copied. |
-| SynthStrip main model v1 | External catalog: `synthstrip` | Matches author's v1 download SHA256. | Author's CC BY 4.0 option; preserve attribution and license link. Does not cover the rest of FreeSurfer. |
 
 Optional-resource layout, official sources and migration boundaries are recorded
 in [Non-Code Runtime Resources](EXTERNAL_RESOURCES.md).

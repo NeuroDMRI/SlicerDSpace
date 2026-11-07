@@ -28,7 +28,6 @@
     "scripts/wsl/WslCommandBridge.cs",
     "scripts/wsl/requirements-runtime.txt",
     "shared/pnl_mask_runner.py",
-    "shared/synthstrip_mask_runner.py",
     "shared/mrtrix_preproc_runner.py",
     "shared/managed_runtimes.py",
     "shared/ui_managed_runtimes.py",

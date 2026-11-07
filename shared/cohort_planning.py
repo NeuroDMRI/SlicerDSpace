@@ -107,9 +107,46 @@ def image_size(root):
     return dict(shape=[160, 192, 160, 128], source=None, estimated=True)
 
 
+def cohort_phase_encoding_blocks(subjects, arguments, *, selected=None, output_root=None):
+    """W2b rule 4 (T1 D1): {subject_id: message} for subjects whose preprocessing would run with no PE direction.
+
+    Empty when preprocessing is not selected. Earlier preprocessing outputs do not lift the block (F5): selected
+    preprocessing is reused only by the full version-6 key of the current settings, which needs a PE direction, so a
+    subject with no direction (user value or sidecar) cannot reuse earlier outputs, version 5 or 6. `output_root` is
+    the batch output base; it is kept for callers and no longer changes the decision.
+    """
+    from shared.cohort_targets import selected_stages
+    from shared.pe_resolution import phase_encoding_block_reason
+
+    if 'preprocessing' not in (selected_stages(arguments) if selected is None else selected):
+        return {}
+    direction = _option(arguments, '--preprocessing-phase-encoding-direction') or None
+    readout = _option(arguments, '--preprocessing-readout-time')
+    try:
+        readout = float(readout) if readout else None
+    except ValueError:
+        readout = None  # the subject command reports a bad value
+    has_reverse = bool(_option(arguments, '--preprocessing-reverse-phase-b0'))
+    blocks = {}
+    for subject in subjects:
+        reason = phase_encoding_block_reason(subject.subject_root, user_phase_encoding=direction,
+                                             user_readout_time=readout, has_reverse_b0=has_reverse)
+        if reason:
+            blocks[subject.subject_id] = reason
+    return blocks
+
+
+def cohort_phase_encoding_message(blocks):
+    """One error text for the cohort plan: the rule-4 message once, then the subjects that need it."""
+    if not blocks:
+        return ''
+    first = next(iter(blocks.values()))
+    return f"{first}. Blocked subjects ({len(blocks)}): " + ', '.join(sorted(blocks))
+
+
 def plan_cohort(subjects, arguments, *, jobs=None, cpu_budget=None, memory_gb=None,
                 stage_cpus=None, stage_memory_gb=None, gpu_slots=1, available=None,
-                adaptive=False, resource_fraction=.8, history_path=None, tuning_profile=None):
+                adaptive=False, resource_fraction=.8, history_path=None, tuning_profile=None, output_root=None):
     if not math.isfinite(resource_fraction) or not 0 < resource_fraction <= 1:
         raise ValueError('Resource fraction must be greater than zero and at most one')
     cpus, memory = available if available is not None else available_cohort_resources(resource_fraction if adaptive else .7)
@@ -125,6 +162,8 @@ def plan_cohort(subjects, arguments, *, jobs=None, cpu_budget=None, memory_gb=No
     cpu_requests, ram_fit = cohort_defaults.STAGE_CPU_REQUESTS, cohort_defaults.RAM_FIT
     duration_defaults = cohort_defaults.DURATION_DEFAULTS
     selected = selected_stages(arguments)
+    if blocks := cohort_phase_encoding_blocks(subjects, arguments, selected=selected, output_root=output_root):
+        raise ValueError(cohort_phase_encoding_message(blocks))
     hints, stage_hints = [], {}
     for flag, stages in (('--surface-cpu-threads', {'surface'}), ('--mrtrix-nthreads', {'csd_act', 'saf', 'connectome'}),
                          ('--preprocessing-eddy-threads', {'preprocessing'}),

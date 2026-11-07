@@ -13,8 +13,8 @@
 ## Select A Route
 
 The default tractography route remains **MRtrix CSD/ACT/SIFT2**. To use UKF,
-install **UKFTractography** and **SlicerDMRI** through Extension Manager,
-restart Slicer, and click **...** beside Tractography to choose **UKF**.
+install **UKFTractography** through Extension Manager (the UKF error message
+also names SlicerDMRI, and WMA needs it), restart Slicer, and click **...** beside Tractography to choose **UKF**.
 Click **...** beside Fiber bundles to choose **WMA** for automatic
 UKF → WMA processing. The ORG atlas and WMA runtime remain separate dependencies.
 UKF parameters are under **Advanced settings > Model parameters**. If other
@@ -106,7 +106,7 @@ complete cross-platform scientific acceptance.
 ## Command Line
 
 ```bash
-python scripts/run_subject_pipeline.py \
+PythonSlicer run_subject_pipeline.py \
   --subject-root /path/to/subject --subject-id subject \
   --targets tractography,bundles --tractography-backend ukf \
   --bundle-backend wma --execute

@@ -18,9 +18,10 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from shared import brain_mask
 from shared.brain_mask import BrainMaskConfig
 from Testing.Python.test_brain_mask_backends import (
-    ISOLATED_ENV, command_record, make_subject, mask_data, write_fake_mrtrix,
+    ISOLATED_ENV, command_record, fake_pnl_config, fake_pythonslicer, make_subject, mask_data,
 )
 
 
@@ -30,97 +31,75 @@ class BrainMaskTest(unittest.TestCase):
         environment.start()
         self.addCleanup(environment.stop)
 
-    def test_missing_subject_mask_is_generated_with_mrtrix_dwi2mask(self) -> None:
+    def fake_pnl(self, root: Path) -> BrainMaskConfig:
+        """W5: the one generating backend, on the native route with a fake PythonSlicer."""
+        config = fake_pnl_config(root)
+        tool = fake_pythonslicer(root)
+        resolver = patch.object(brain_mask, "_pnl_native_python", return_value=tool)
+        resolver.start()
+        self.addCleanup(resolver.stop)
+        return config
+
+    def test_missing_subject_mask_is_generated_with_pnl_cnn(self) -> None:
         from shared.pipeline import find_subject_root
 
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            bin_dir = root / "bin"
-            write_fake_mrtrix(bin_dir)
+            root = Path(tmp).resolve()
+            config = self.fake_pnl(root)
             subject_root = make_subject(root)
             input_dir = subject_root / "input"
 
-            with patch.dict("os.environ", {"SLICERDSPACE_MRTRIX_BIN_DIR": bin_dir.as_posix()}):
-                raw = find_subject_root(subject_root, "sub-01", brain_mask_config=BrainMaskConfig(backend="mrtrix"))
+            raw = find_subject_root(subject_root, "sub-01", brain_mask_config=config)
 
             self.assertTrue(raw.mask_path.is_file())
             self.assertTrue((input_dir / "nodif_brain_mask.manifest.json").is_file())
             np.testing.assert_array_equal(nib.load(str(raw.mask_path)).dataobj, mask_data())
 
-    def test_explicit_mrtrix_bin_dir_is_used_for_mask_generation(self) -> None:
-        from shared.pipeline import find_subject_root
-
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            bin_dir = root / "bin"
-            write_fake_mrtrix(bin_dir)
-            subject_root = make_subject(root)
-
-            with patch.dict(
-                "os.environ",
-                {"PATH": Path(sys.executable).resolve().parent.as_posix()},
-                clear=False,
-            ):
-                raw = find_subject_root(
-                    subject_root,
-                    "sub-01",
-                    mrtrix_bin_dir=bin_dir,
-                    brain_mask_config=BrainMaskConfig(backend="mrtrix", mrtrix_bin_dir=bin_dir),
-                )
-
-            self.assertTrue(raw.mask_path.is_file())
-
-    def test_missing_subject_mask_without_dwi2mask_fails_with_setup_message(self) -> None:
+    def test_missing_subject_mask_without_pnl_files_fails_with_setup_message(self) -> None:
         from shared.pipeline import find_subject_root
 
         with tempfile.TemporaryDirectory() as tmp:
             subject_root = make_subject(Path(tmp))
+            with self.assertRaisesRegex(FileNotFoundError, "pnl_cnn unavailable"):
+                find_subject_root(subject_root, "sub-01")
 
-            with patch.dict("os.environ", {"SLICERDSPACE_MRTRIX_BIN_DIR": "/missing"}, clear=False):
-                with self.assertRaisesRegex(FileNotFoundError, "MRtrix3 dwi2mask"):
-                    find_subject_root(subject_root, "sub-01", brain_mask_config=BrainMaskConfig(backend="mrtrix"))
-
-    def test_validation_accepts_subject_without_supplied_mask_when_dwi2mask_is_available(self) -> None:
+    def test_validation_accepts_subject_without_supplied_mask_when_pnl_is_available(self) -> None:
         from shared import InputValidationConfig, validate_subject_inputs
 
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            bin_dir = root / "bin"
-            write_fake_mrtrix(bin_dir)
+            root = Path(tmp).resolve()
+            config = self.fake_pnl(root)
             subject_root = make_subject(root)
             input_dir = subject_root / "input"
 
-            with patch.dict("os.environ", {"SLICERDSPACE_MRTRIX_BIN_DIR": bin_dir.as_posix()}):
-                result = validate_subject_inputs(
-                    InputValidationConfig(
-                        subject_id="sub-01", input_root=subject_root, dependency_groups=(),
-                        brain_mask_backend="mrtrix",
-                    )
+            result = validate_subject_inputs(
+                InputValidationConfig(
+                    subject_id="sub-01", input_root=subject_root, dependency_groups=(),
+                    brain_mask_backend="pnl_cnn", brain_mask_device="cpu",
+                    pnl_mask_model_dir=config.pnl_mask_model_dir, pnl_mask_route="native",
                 )
+            )
 
             self.assertTrue(result.passed, result.messages)
             self.assertTrue((input_dir / "nodif_brain_mask.nii.gz").is_file())
             self.assertTrue(result.metrics["brain_mask_qc"]["geometry_pass"])
 
-    def test_default_pnl_missing_dependencies_fails_despite_available_mrtrix(self) -> None:
+    def test_default_pnl_missing_dependencies_fails_without_a_fallback(self) -> None:
         from shared import InputValidationConfig, validate_subject_inputs
         from shared.pipeline import find_subject_root
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            tool = write_fake_mrtrix(root / "bin")
             subject = make_subject(root)
-            with patch.dict(os.environ, {"SLICERDSPACE_MRTRIX_BIN_DIR": str(tool.parent)}):
-                with self.assertRaisesRegex(FileNotFoundError, "pnl_cnn unavailable"):
-                    find_subject_root(subject, "sub-01")
-                result = validate_subject_inputs(InputValidationConfig(
-                    subject_id="sub-01", input_root=subject, dependency_groups=(), write_report=False,
-                ))
+            with self.assertRaisesRegex(FileNotFoundError, "pnl_cnn unavailable"):
+                find_subject_root(subject, "sub-01")
+            result = validate_subject_inputs(InputValidationConfig(
+                subject_id="sub-01", input_root=subject, dependency_groups=(), write_report=False,
+            ))
             self.assertFalse(result.passed)
             self.assertEqual(result.metrics["brain_mask_selection"]["backend"], "pnl_cnn")
             self.assertTrue(any("pnl_cnn" in issue.message for issue in result.messages))
             self.assertFalse((subject / "input/nodif_brain_mask.nii.gz").exists())
-            self.assertFalse(tool.with_name(tool.name + ".calls.jsonl").exists())
 
     def test_valid_supplied_mask_is_preserved_and_passes_qc_without_pnl_dependencies(self) -> None:
         from shared import InputValidationConfig, validate_subject_inputs
@@ -148,10 +127,10 @@ class BrainMaskTest(unittest.TestCase):
         from Testing.Python.test_brain_mask_backends import save_nifti
 
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            tool = write_fake_mrtrix(root / "bin")
+            root = Path(tmp).resolve()
+            config = self.fake_pnl(root)
+            tool = fake_pythonslicer(root)
             subject = make_subject(root)
-            config = BrainMaskConfig(backend="mrtrix", mrtrix_bin_dir=tool.parent)
             raw = find_subject_root(subject, "sub-01", brain_mask_config=config)
             record = raw.mask_path.with_name("nodif_brain_mask.manifest.json")
             first = json.loads(record.read_text(encoding="utf-8"))
@@ -176,7 +155,7 @@ class BrainMaskTest(unittest.TestCase):
             original = mask.read_bytes()
             with patch("shared.brain_mask._run") as run:
                 with self.assertRaises(json.JSONDecodeError):
-                    find_subject_root(subject, "sub-01", brain_mask_config=BrainMaskConfig(backend="mrtrix"))
+                    find_subject_root(subject, "sub-01")
             run.assert_not_called()
             self.assertEqual(mask.read_bytes(), original)
 

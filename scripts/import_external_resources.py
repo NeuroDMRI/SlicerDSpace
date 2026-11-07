@@ -153,7 +153,6 @@ def main():
     parser.add_argument('--pnl-prefix', type=Path)
     parser.add_argument('--tractcloud-data', type=Path)
     parser.add_argument('--tractcloud-license', type=Path)
-    parser.add_argument('--synthstrip-model', type=Path)
     parser.add_argument('--wma-downloads', type=Path)
     parser.add_argument('--wma-license', type=Path)
     parser.add_argument('--execute', action='store_true', help='Copy verified resources; otherwise print a plan only')
@@ -179,8 +178,6 @@ def main():
                 source = args.pnl_prefix / ('pnl-source/LICENSE' if relative.endswith('/LICENSE.txt') else 'pnl-models/' + Path(relative).name)
         elif args.tractcloud_data and relative.startswith('bundles/tractcloud/'):
             source = args.tractcloud_license if relative.endswith('/LICENSE.txt') else args.tractcloud_data / relative.removeprefix('bundles/tractcloud/')
-        elif args.synthstrip_model and relative == 'brain_mask/synthstrip/synthstrip.1.pt':
-            source = args.synthstrip_model
         elif args.wma_downloads and relative.startswith('bundles/wma/'):
             source = args.wma_license if relative.endswith('/LICENSE.txt') else args.wma_downloads / Path(relative).name
         if source is not None:

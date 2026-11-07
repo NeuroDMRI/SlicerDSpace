@@ -195,6 +195,62 @@ class SelectedSetupTests(unittest.TestCase):
         optional = item("brain_mask_backend", "brain_mask", "setting", package=None, required=False)
         self.assertNotIn("PyTorch", build_setup_plan(result(optional), system="Darwin", machine="arm64")["extensions"])
 
+    def _w2a_missing_preprocessing_items(self):
+        """The doctor's own list for the preprocessing target, every MRtrix3 and FSL item missing."""
+        from shared.environment import build_dependency_specs
+
+        repo = Path(__file__).resolve().parents[2]
+        specs = build_dependency_specs(EnvironmentDoctorConfig(targets=("preprocessing",), repo_root=repo))
+        items = [SimpleNamespace(key=spec.key, label=spec.label, install_group=spec.install_group, kind=spec.kind,
+                                 targets=spec.targets, required=spec.required, status="missing",
+                                 install_hint="Review " + spec.key, details={})
+                 for spec in specs if spec.install_group in {"mrtrix", "fsl"}]
+        self.assertEqual({item.key for item in items},
+                         {"command:dwifslpreproc", "command:dwi2mask", "command:eddy", "command:topup"})
+        return items
+
+    def test_w2a_setup_plan_for_preprocessing_holds_mrtrix3_fsl_and_the_fsl_licence_on_every_os(self):
+        """W2a (D1): preprocessing needs MRtrix3, FSL (eddy, topup) and the FSL licence on Linux, macOS and Windows."""
+        from shared.setup_components import plan_components, required_licences
+
+        ubuntu = [{"name": "Ubuntu", "state": "Running", "version": 2, "default": True}]
+        items = self._w2a_missing_preprocessing_items()
+        with patch("platform.mac_ver", return_value=("15.1", (), "")):
+            for system, machine in (("Linux", "x86_64"), ("Darwin", "arm64"), ("Darwin", "x86_64"), ("Windows", "AMD64")):
+                with self.subTest(system=system, machine=machine):
+                    plan = build_setup_plan(result(*items, targets=("preprocessing",)), system=system, machine=machine,
+                                            closure_targets=("preprocessing",), wsl_distributions=ubuntu,
+                                            slicer_executable="C:/Slicer/Slicer.exe")
+                    self.assertEqual(plan["unsupported_profiles"], [])
+                    self.assertEqual(plan["manual_items"], [])
+                    self.assertTrue(plan["fsl_license_required"])
+                    licences = required_licences(plan_components(plan))
+                    self.assertIn("fsl", licences)
+                    self.assertIn("mrtrix", licences)
+                    if system == "Windows":
+                        self.assertEqual(plan["managed_profiles"], [])
+                        self.assertIn("-AcceptFslLicense", plan["windows_runtime"]["command"])
+                    else:
+                        self.assertEqual(plan["managed_profiles"], ["mrtrix", "fsl_cpu"])
+
+    def test_w2a_a_platform_without_an_fsl_build_does_not_offer_preprocessing(self):
+        from shared.selected_setup import PREPROCESSING_UNSUPPORTED_TEXT, preprocessing_offered
+
+        items = self._w2a_missing_preprocessing_items()
+        with patch("platform.mac_ver", return_value=("15.1", (), "")):
+            plan = build_setup_plan(result(*items, targets=("preprocessing",)), system="Linux", machine="aarch64",
+                                    closure_targets=("preprocessing",))
+            self.assertFalse(preprocessing_offered("Linux", "aarch64"))
+            for system, machine in (("Linux", "x86_64"), ("Darwin", "arm64"), ("Darwin", "x86_64"), ("Windows", "AMD64")):
+                self.assertTrue(preprocessing_offered(system, machine), (system, machine))
+        self.assertEqual(plan["managed_profiles"], [])
+        self.assertFalse(plan["fsl_license_required"])
+        self.assertIn(PREPROCESSING_UNSUPPORTED_TEXT, plan["unsupported_notes"].values())
+        self.assertEqual(PREPROCESSING_UNSUPPORTED_TEXT, "Preprocessing needs FSL, which has no build for this platform; "
+                                                         "import preprocessed data instead")
+        self.assertTrue(plan["manual_items"])
+        self.assertEqual({item["hint"] for item in plan["manual_items"]}, {PREPROCESSING_UNSUPPORTED_TEXT})
+
     def test_ukf_is_optional_and_platform_limits_remain_visible(self):
         missing = result(item("brain_mask_backend", "brain_mask", "setting", package=None))
         plan = build_setup_plan(missing, need_ukf=True, system="Windows", machine="AMD64", pnl_mask_route="managed")

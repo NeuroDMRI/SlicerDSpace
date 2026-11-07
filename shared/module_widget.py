@@ -71,6 +71,7 @@ from shared.ui_run_state import gui_brain_mask_required, run_button_state, run_s
 from shared.ui_output_loading import qbytearray_to_text
 from shared.ui_input_inspection import inspect_input_directory
 from shared.ui_parameter_sync import sync_parameter_node_to_ui
+from shared.brain_mask import REMOVED_BRAIN_MASK_BACKENDS
 from shared.ui_workflow_text import BRAIN_MASK_BACKEND_TEXT_KEYS, PNL_MASK_ROUTE_TEXT_KEYS
 from shared.ui_run_controller import (
     BackendSelection,
@@ -356,14 +357,16 @@ class SharedWidgetMixin:
     def _topup_validation(self, *, batch_mode: Optional[bool] = None) -> TopupValidation:
         node = self._parameterNode
         if not node:
-            return validate_topup_parameters(backend="dipy", preprocessing_selected=False)
+            return validate_topup_parameters(preprocessing_selected=False)
         return validate_topup_parameters(
-            backend=(node.preprocessingBackend or "dipy").strip() or "dipy",
             preprocessing_selected=bool(node.targetPreprocessing),
             phase_encoding_direction=getattr(node, "preprocessingPhaseEncodingDirection", "") or "",
             readout_time=float(getattr(node, "preprocessingReadoutTime", 0.0) or 0.0),
             reverse_phase_b0=getattr(node, "preprocessingReversePhaseB0", "") or "",
             batch_mode=bool(getattr(node, "batchMode", False)) if batch_mode is None else batch_mode,
+            # W2b rule 4: the sidecar of the chosen subject decides whether a direction exists.
+            subject_root=(getattr(node, "inputDirectory", "") or "").strip() or None,
+            output_root=(getattr(node, "outputDirectory", "") or "").strip() or None,
         )
 
     def _refresh_topup_controls(self) -> TopupValidation:
@@ -372,13 +375,9 @@ class SharedWidgetMixin:
         node = self._parameterNode
         validation = self._topup_validation()
         preprocessing_on = bool(node.targetPreprocessing) if node else False
-        for name in ("preprocessingBackendLabel", "preprocessingBackendComboBox"):
-            control = getattr(self.ui, name, None)
-            if control is not None:
-                control.visible = preprocessing_on
         group = getattr(self.ui, "topupCollapsibleGroupBox", None)
         if group is not None:
-            group.visible = bool(node) and route_uses_topup(node.preprocessingBackend or "dipy", preprocessing_on)
+            group.visible = bool(node) and route_uses_topup(preprocessing_on)
         hint = getattr(self.ui, "topupHintLabel", None)
         if hint is not None:
             hint.setText(topup_summary_text(validation))
@@ -617,6 +616,8 @@ class SharedWidgetMixin:
             config_path = default_user_config_path().expanduser()
             if config_path.is_file():
                 config = load_user_config(config_path)
+                for note in config.get("notes", ()):  # W5 / SC-2: a saved removed mask backend loaded as pnl_cnn
+                    self.appendLog(f"[Settings] {note}")
                 configured_dependencies = config.get("external_dependencies", {})
                 for item in ENVIRONMENT_DEPENDENCY_PATHS:
                     dependency_id = item["id"]
@@ -642,6 +643,10 @@ class SharedWidgetMixin:
                     value = self._coerce_user_setting_value(settings.value(key), value_type)
                     if attribute == 'orchestrationWmqlPreset' and value != 'official':
                         value = 'official'  # Migrate saved defaults, not loaded scientific run records.
+                    if attribute == 'brainMaskBackend' and value in REMOVED_BRAIN_MASK_BACKENDS:
+                        # W5 / SC-2: a saved removed backend loads as pnl_cnn with one note; the clinician is not blocked.
+                        self.appendLog(f"[Settings] Saved brain mask backend {value!r} was removed. Brain masking now uses pnl_cnn.")
+                        value = 'pnl_cnn'
                     setattr(node, attribute, value)
                 except Exception:
                     continue
@@ -655,7 +660,6 @@ class SharedWidgetMixin:
                 node.inputDirectory = str(recent.get("subject_root") or node.inputDirectory or "")
                 node.outputDirectory = str(recent.get("output_root") or node.outputDirectory or "")
                 node.orchestrationRunName = str(defaults.get("run_name") or node.orchestrationRunName or "Test1")
-                node.preprocessingBackend = str(defaults.get("preprocessing_backend") or node.preprocessingBackend or "dipy")
                 node.brainMaskBackend = str(defaults.get("brain_mask_backend") or "pnl_cnn")
                 node.brainMaskDevice = str(defaults.get("brain_mask_device") or "auto")
                 node.pnlMaskRoute = str(defaults.get("pnl_mask_route") or "auto")
@@ -723,7 +727,6 @@ class SharedWidgetMixin:
                     "run_defaults": {
                         "run_name": node.orchestrationRunName or "Test1",
                         "targets": targets,
-                        "preprocessing_backend": node.preprocessingBackend or "dipy",
                         "brain_mask_backend": getattr(node, "brainMaskBackend", "pnl_cnn") or "pnl_cnn",
                         "brain_mask_device": getattr(node, "brainMaskDevice", "auto") or "auto",
                         "pnl_mask_route": getattr(node, "pnlMaskRoute", "auto") or "auto",
@@ -1536,7 +1539,6 @@ class SharedWidgetMixin:
         text, target_text = selected_products_summary(
             self._selected_product_targets(),
             BackendSelection(
-                preprocessing=(self._parameterNode.preprocessingBackend or "dipy").strip() or "dipy",
                 tractography=self._tractography_backend_text(),
                 bundles=self._bundle_backend_text(),
                 microstructure_stages=self._microstructure_stages_text(),
@@ -1747,7 +1749,6 @@ class SharedWidgetMixin:
             "targets": targets,
             "subject_root": Path(subject_root_text).expanduser() if subject_root_text else None,
             "output_root": Path(output_root_text).expanduser() if output_root_text else None,
-            "preprocessing_backend": (node.preprocessingBackend or "dipy").strip(),
             "brain_mask_backend": mask_backend,
             "wma_atlas": getattr(node, "wmaAtlas", "org") or "org",
             "brain_mask_device": getattr(node, "brainMaskDevice", "auto") or "auto",
@@ -2425,7 +2426,6 @@ class SharedWidgetMixin:
             common_run_kwargs,
             external_paths,
             repo_root=repo_root,
-            preprocessing_backend=(node.preprocessingBackend or "dipy").strip() if node else "dipy",
         )
 
     def _build_batch_background_cli_args(
@@ -2446,7 +2446,6 @@ class SharedWidgetMixin:
             batch_root=batch_root,
             batch_size=batch_size,
             arrange_inputs=arrange_inputs,
-            preprocessing_backend=(node.preprocessingBackend or "dipy").strip() if node else "dipy",
         )
 
     def _reset_result_scene_actions(self) -> None:
@@ -3097,7 +3096,6 @@ class SharedWidgetMixin:
             connectome_backend=(self._parameterNode.connectomeBackend or "auto").strip(),
             connectome_compress_mrtrix_dense=compress_mrtrix_dense_value(
                 getattr(self._parameterNode, "connectomeCompressMrtrixDenseState", "unset")),
-            preprocessing_backend=(self._parameterNode.preprocessingBackend or "dipy").strip() or "dipy",
             brain_mask_backend=(getattr(self._parameterNode, "brainMaskBackend", "pnl_cnn") or "pnl_cnn").strip(),
             brain_mask_device=(getattr(self._parameterNode, "brainMaskDevice", "auto") or "auto").strip(),
             pnl_mask_route=(getattr(self._parameterNode, "pnlMaskRoute", "auto") or "auto").strip(),
@@ -3213,7 +3211,7 @@ class SharedWidgetMixin:
             why="\n".join(validation.errors),
             next_step=(
                 "Open Advanced settings > Preprocessing & mask > Distortion correction (topup), "
-                "or switch Preprocessing route to dipy if you do not need MRtrix3/FSL correction."
+                "and correct or clear the invalid value."
             ),
             auto_fix="Not available; nothing was written.",
             details="dwifslpreproc options: -pe_dir, -readout_time, -rpe_pair -se_epi",

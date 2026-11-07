@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import json
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
@@ -44,7 +45,7 @@ from shared.user_config import (
 
 
 ROOT = Path(__file__).resolve().parents[2]
-BACKENDS = ("pnl_cnn", "synthstrip", "mrtrix", "provided", "dipy")
+BACKENDS = ("pnl_cnn", "provided")
 PNL_MODES = {
     "pnl_mask_python": "file",
     "pnl_mask_script": "file",
@@ -70,7 +71,7 @@ def widget_method(name, **namespace):
 class FakeCombo:
     def __init__(self):
         self.items = [[onboarding_text("en", key), value] for value, key in BRAIN_MASK_BACKEND_TEXT_KEYS.items()]
-        self.currentIndex = 3
+        self.currentIndex = 1
         self.blocked = False
 
     def findData(self, value):
@@ -100,6 +101,44 @@ class BrainMaskGuiConfigTest(unittest.TestCase):
         choice = next(item for item in ast.walk(node.annotation) if isinstance(item, ast.Call)
                       and isinstance(item.func, ast.Name) and item.func.id == "Choice")
         self.assertEqual(ast.literal_eval(choice.args[0]), list(BACKENDS))
+
+    def test_w5_gui_and_onboarding_offer_exactly_pnl_cnn_and_provided(self):
+        """W5 (D2): the Slicer node, the .ui combo and the onboarding table offer only pnl_cnn and provided."""
+        self.assertEqual(list(BRAIN_MASK_BACKEND_TEXT_KEYS), ["pnl_cnn", "provided"])
+        root = ET.parse(ROOT / "Resources/UI/SlicerDSpace.ui").getroot()
+        combo = root.find(".//widget[@name='brainMaskBackendComboBox']")
+        labels = [item.find("property[@name='text']/string").text for item in combo.findall("item")]
+        self.assertEqual(len(labels), 2)
+        self.assertEqual(labels, [onboarding_text("en", key) for key in BRAIN_MASK_BACKEND_TEXT_KEYS.values()])
+        fake = FakeCombo()
+        apply_onboarding_language(SimpleNamespace(ui=SimpleNamespace(brainMaskBackendComboBox=fake)), "zh")
+        self.assertEqual([item[1] for item in fake.items], ["pnl_cnn", "provided"])
+        for language in ("en", "zh"):
+            for removed in ("synthstrip", "mrtrix", "dipy", "SynthStrip", "dwi2mask", "DIPY"):
+                for key in BRAIN_MASK_BACKEND_TEXT_KEYS.values():
+                    self.assertNotIn(removed, onboarding_text(language, key))
+                self.assertNotIn(removed, onboarding_text(language, "brain_mask_backend_tooltip"))
+
+    def test_w5_saved_removed_backend_loads_as_pnl_cnn_with_one_note(self):
+        """W5 (SC-2 rule 2): a saved synthstrip, mrtrix or dipy loads as pnl_cnn and the note says so once."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "user_config.json"
+            for backend in ("synthstrip", "mrtrix", "dipy"):
+                with self.subTest(backend=backend):
+                    path.write_text(json.dumps({"run_defaults": {"brain_mask_backend": backend}}), encoding="utf-8")
+                    with self.assertLogs("shared.user_config", level="WARNING") as logged:
+                        saved = load_user_config(path)
+                    self.assertEqual(saved["run_defaults"]["brain_mask_backend"], "pnl_cnn")
+                    self.assertEqual(len(saved["notes"]), 1)
+                    self.assertIn(backend, saved["notes"][0])
+                    self.assertIn("pnl_cnn", saved["notes"][0])
+                    self.assertEqual(len(logged.records), 1)
+                    # The note is not saved: the next load is silent.
+                    write_user_config(saved, path)
+                    again = load_user_config(path)
+                    self.assertEqual(again["run_defaults"]["brain_mask_backend"], "pnl_cnn")
+                    self.assertNotIn("notes", again)
+                    self.assertEqual(user_config_cli_values(saved)["brain_mask_backend"], "pnl_cnn")
 
     def test_selector_lives_in_analysis_parameters_not_products_or_inputs(self):
         root = ET.parse(ROOT / "Resources/UI/SlicerDSpace.ui").getroot()
@@ -150,7 +189,7 @@ class BrainMaskGuiConfigTest(unittest.TestCase):
         add_dependency_config_arguments(parser)
         argv = ["--brain-mask-backend", "provided", "--pnl-mask-python", "/explicit/python"]
         args = parser.parse_args(argv)
-        apply_user_config_to_args(args, {"run_defaults": {"brain_mask_backend": "synthstrip"},
+        apply_user_config_to_args(args, {"run_defaults": {"brain_mask_backend": "pnl_cnn"},
                                         "external_dependencies": {"pnl_mask_python": "/saved/python"}},
                                   explicit_dests=explicit_cli_destinations(parser, argv))
         self.assertEqual(args.brain_mask_backend, "provided")
@@ -187,9 +226,9 @@ class BrainMaskGuiConfigTest(unittest.TestCase):
             for initially_blocked in (False, True):
                 combo.blocked = initially_blocked
                 apply_onboarding_language(owner, language)
-                self.assertEqual(combo.currentIndex, 3)
-                self.assertEqual(combo.itemData(3), "provided")
-                self.assertEqual(combo.items[3][0], onboarding_text(language, "brain_mask_provided"))
+                self.assertEqual(combo.currentIndex, 1)
+                self.assertEqual(combo.itemData(1), "provided")
+                self.assertEqual(combo.items[1][0], onboarding_text(language, "brain_mask_provided"))
                 self.assertEqual(combo.items[0][0], "PNL CNN (dMRI)")
                 self.assertEqual(combo.blocked, initially_blocked)
         self.assertIn("supplied masks", onboarding_text("en", "brain_mask_backend_tooltip"))
@@ -289,7 +328,7 @@ class BrainMaskGuiConfigTest(unittest.TestCase):
             for name in ("data.nii.gz", "bvals", "bvecs"):
                 (input_dir / name).touch()
             node = SimpleNamespace(subjectId="subject", inputDirectory=str(root), outputDirectory="", brainMaskBackend="pnl_cnn",
-                                   targetPreprocessing=False, preprocessingBackend="dipy",
+                                   targetPreprocessing=False,
                                    connectomeBackend="python", ddsegDevice="cpu", device="cpu")
             owner = SimpleNamespace(_parameterNode=node, _selected_environment_targets=lambda: ("microstructure",),
                                     _tractography_backend_text=lambda: "dti_det", _microstructure_stage_flags=lambda: (False, False),
@@ -304,13 +343,12 @@ class BrainMaskGuiConfigTest(unittest.TestCase):
             (input_dir / "nodif_brain_mask.nii.gz").touch()
             self.assertFalse(doctor_kwargs(owner, external_paths=paths)["brain_mask_required"])
             node.targetPreprocessing = True
-            for route in ("dipy", "mrtrix_fsl"):
-                node.preprocessingBackend = route
-                for backend in BACKENDS:
-                    node.brainMaskBackend = backend
-                    self.assertEqual(doctor_kwargs(owner, external_paths=paths)["brain_mask_required"],
-                                     backend != "provided")
+            for backend in BACKENDS:
+                node.brainMaskBackend = backend
+                self.assertEqual(doctor_kwargs(owner, external_paths=paths)["brain_mask_required"],
+                                 backend != "provided")
             node.targetPreprocessing = False
+            node.brainMaskBackend = "pnl_cnn"
             node.inputDirectory = ""
             # C5: a mask-needing target with no input folder and no user mask still needs the mask runtime.
             self.assertTrue(doctor_kwargs(owner, external_paths=paths)["brain_mask_required"])
@@ -335,7 +373,7 @@ class BrainMaskGuiConfigTest(unittest.TestCase):
             for name in ("data.nii.gz", "bvals", "bvecs", "nodif_brain_mask.nii.gz"):
                 (folder / name).touch()
             node = SimpleNamespace(subjectId="subject", inputDirectory=str(root), outputDirectory="",
-                brainMaskBackend="pnl_cnn", targetPreprocessing=False, preprocessingBackend="dipy",
+                brainMaskBackend="pnl_cnn", targetPreprocessing=False,
                 connectomeBackend="python", ddsegDevice="auto", device="auto")
             owner = SimpleNamespace(_parameterNode=node, _selected_environment_targets=lambda: ("microstructure",),
                 _tractography_backend_text=lambda: "dti_det", _microstructure_stage_flags=lambda: (False, False),

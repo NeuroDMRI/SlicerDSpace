@@ -199,7 +199,7 @@ class B3RecordTest(unittest.TestCase):
         catalog = {"manifest": "e.json", "version": "3", "records": {"pnl/axial.pt": {"sha256": digest}}, "path": "e.json",
                    "profiles": {"pnl-cnn-weights": {"required_paths": ["pnl/axial.pt"]},
                                 "pnl-cnn": {"include_profiles": ["pnl-cnn-weights"], "required_paths": []},
-                                "synthstrip": {"required_paths": ["x"]}},
+                                "tractcloud": {"required_paths": ["x"]}},
                    "upstream_commit": None}
         manifest = {"brain_mask_backend": "pnl_cnn", "tasks": [_task("preprocessing.dwi")]}
         with tempfile.TemporaryDirectory() as tmp:
@@ -220,7 +220,7 @@ class B3RecordTest(unittest.TestCase):
                 self.assertEqual(profiles["pnl-cnn-weights"]["files"], {"pnl/axial.pt": digest})
                 # A receipt for another optional profile does not cover the weights: the folder is hashed (the guard raises).
                 with patch("shared.optional_assets.verified_resource_directory", return_value=root):
-                    receipt.write_text(json.dumps(verify_offline_assets(root, (), ("synthstrip",))), encoding="utf-8")
+                    receipt.write_text(json.dumps(verify_offline_assets(root, (), ("tractcloud",))), encoding="utf-8")
                 with self.assertRaises(AssertionError):
                     run_record.asset_versions(dict(manifest, model_assets_dir=str(root)))
 

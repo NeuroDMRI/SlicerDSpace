@@ -10,6 +10,17 @@ from shared.ui_environment_panel import environment_missing_items
 from shared.wsl_bridge import WSL_INSTALL_COMMAND, WSL_MISSING_LABEL, list_distributions, select_distribution
 
 PNL_UNSUPPORTED_TEXT = "Automatic brain mask is not available on this system yet. Provide a brain mask file (NIfTI)."
+# W2a (D1): the one preprocessing route needs MRtrix3 and FSL (eddy, topup).
+PREPROCESSING_UNSUPPORTED_TEXT = ("Preprocessing needs FSL, which has no build for this platform; "
+                                  "import preprocessed data instead")
+
+
+def preprocessing_offered(system=None, machine=None):
+    """True when the platform has MRtrix3 and FSL builds (Windows gets them through WSL)."""
+    import platform
+    if (system or platform.system()) == "Windows":
+        return True
+    return supported_platform(system, machine, profiles=("mrtrix", "fsl_cpu"))
 
 
 def build_setup_plan(result, *, installed_extensions=(), loaded_extensions=None, need_dti=False, need_torch=False, need_ukf=False,
@@ -71,6 +82,9 @@ def build_setup_plan(result, *, installed_extensions=(), loaded_extensions=None,
     unsupported_managed = [name for name in managed if name not in supported_managed]
     platforms_ok = supported_platform(system, machine)
     unsupported_notes = {"pnl_cnn": PNL_UNSUPPORTED_TEXT} if "pnl_cnn" in unsupported_managed else {}
+    fsl_unsupported = [] if native_windows else [name for name in unsupported_managed if name.startswith("fsl_")]  # Windows gets FSL through WSL
+    if fsl_unsupported:
+        unsupported_notes[fsl_unsupported[0]] = PREPROCESSING_UNSUPPORTED_TEXT
     covered = {"model-resources", "python", "slicer-runtime", "slicer-dmri", "ukf"}
     from shared.prebuilt_surface import bundle_for_platform
     surface_prebuilt = bundle_for_platform(system, machine)
@@ -87,6 +101,8 @@ def build_setup_plan(result, *, installed_extensions=(), loaded_extensions=None,
             covered.add("brain_mask")
     if 'mrtrix' in supported_managed:
         covered.add('mrtrix')
+    if any(name.startswith('fsl_') for name in supported_managed):
+        covered.add('fsl')  # W2a: macOS has FSL builds too, but supported_platform() without profiles is Linux only
     windows_runtime = None
     if native_windows:
         windows_runtime = windows_runtime_plan(
@@ -184,13 +200,14 @@ def build_setup_plan(result, *, installed_extensions=(), loaded_extensions=None,
             "manual_items": [{"key": item.key, "label": item.label, "hint":
                               'Windows WMA needs a configured WSL executable bridge; an author Bash checkout alone is not runnable. See docs/setup/WINDOWS.md.'
                               if native_windows and item.install_group == 'wma' and 'atlas' not in item.key
-                              else PNL_UNSUPPORTED_TEXT if item.key == 'brain_mask_backend' and unsupported_notes
+                              else PNL_UNSUPPORTED_TEXT if item.key == 'brain_mask_backend' and "pnl_cnn" in unsupported_notes
+                              else PREPROCESSING_UNSUPPORTED_TEXT if item.install_group in {'mrtrix', 'fsl'} and fsl_unsupported
                               else item.install_hint}
                              for item in missing if item.install_group not in covered and item.key not in handled_keys]
                             + ([{"key": "wsl2_ubuntu", "label": WSL_MISSING_LABEL, "hint": WSL_INSTALL_COMMAND}]
                                if windows_runtime and windows_runtime["needed"] and not windows_runtime["distribution"] else []),
             "windows_runtime": windows_runtime,
-            "fsl_license_required": (any(name.startswith("fsl_") for name in managed) and platforms_ok)
+            "fsl_license_required": any(name.startswith("fsl_") for name in supported_managed)
                                     or bool(windows_runtime and windows_runtime["command"]),
             "pnl_terms_required": "pnl_cnn" in managed and platforms_ok,
             "repair": bool(repair),

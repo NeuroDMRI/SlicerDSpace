@@ -41,7 +41,7 @@ def run():
         checks.append('optional_experiment_category_and_bilingual_controls')
         with patch.object(slicer.util, 'confirmYesNoDisplay', return_value=True):
             apply_native_route(owner)
-        assert node.brainMaskBackend == 'dipy' and node.orchestrationTractographyBackend == 'dti_det'
+        assert node.brainMaskBackend == 'pnl_cnn' and node.orchestrationTractographyBackend == 'dti_det'
         assert node.device == node.ddsegDevice == 'auto'
         checks.append('explicit_native_route_preserves_device_preference')
         cohort = ROOT / 'cohort'

@@ -135,9 +135,9 @@ fit validation or human anatomical approval.** Coverage and anatomical priors st
 Routine analysis uses direct arguments, without a request file:
 
 ```bash
-python scripts/analyze_regions.py --source-manifest /absolute/run_orchestration_manifest.json \
+PythonSlicer scripts/analyze_regions.py --source-manifest /absolute/run_orchestration_manifest.json \
   --regions 1024 2024 --metrics fa md --output-dir /absolute/new_region_results
-python scripts/validate_region_analysis.py /absolute/region_analysis_manifest.json \
+PythonSlicer scripts/validate_region_analysis.py /absolute/region_analysis_manifest.json \
   --report /absolute/independent_check.json
 ```
 
@@ -164,7 +164,7 @@ implicitly add scalar metrics. Metrics must be present and QC-eligible in the ru
 For example, select UKF tracks connecting the precentral regions:
 
 ```bash
-python scripts/analyze_regions.py --source-manifest /absolute/run_orchestration_manifest.json \
+PythonSlicer scripts/analyze_regions.py --source-manifest /absolute/run_orchestration_manifest.json \
   --regions 1024 --target-regions 2024 --tractogram tractography.ukf \
   --tract-rule endpoint_pair --output-dir /absolute/new_region_tracks
 ```
@@ -176,7 +176,7 @@ saves that inventory. Names resolve against the current LUT; ambiguous names req
 Apply the same options to multiple completed subject runs:
 
 ```bash
-python scripts/analyze_regions.py --source-manifest /absolute/subject1/run.json /absolute/subject2/run.json \
+PythonSlicer scripts/analyze_regions.py --source-manifest /absolute/subject1/run.json /absolute/subject2/run.json \
   --regions 1024 2024 --metrics fa md --output-dir /absolute/new_region_cohort
 ```
 

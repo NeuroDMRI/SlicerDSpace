@@ -29,10 +29,7 @@ def environment_for_products(config: ProductOrchestratorConfig) -> EnvironmentDo
         check_slicer_cli_modules=True,
         brain_mask_required=run_needs_brain_mask(config.subject_root, targets=targets,
             subject_id=config.subject_id, output_root=config.output_root,
-            preprocessing_backend=config.preprocessing_backend, brain_mask_backend=config.brain_mask_backend,
-            denoise_method=config.preprocessing_dipy_denoise_method,
-            run_gibbs=config.preprocessing_dipy_run_gibbs,
-            run_motion=config.preprocessing_dipy_run_motion_correction,
+            brain_mask_backend=config.brain_mask_backend,
             force=config.preprocessing_force, resume=config.resume))
     return EnvironmentDoctorConfig(**options)
 

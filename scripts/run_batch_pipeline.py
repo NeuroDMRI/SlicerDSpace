@@ -388,6 +388,17 @@ def main(argv: list[str] | None = None) -> int:
                        for subject in runnable_subjects[args.subject_limit:])
         runnable_subjects = selected
     resource_plan = None
+    if not resource_mode:
+        # W2b rule 4 (T1 D1): preprocessing with no PE direction blocks the cohort at plan time (the resource modes
+        # check inside plan_cohort).
+        from shared.cohort_planning import cohort_phase_encoding_blocks, cohort_phase_encoding_message
+        try:
+            blocks = cohort_phase_encoding_blocks(
+                runnable_subjects, forwarded_args, output_root=output_base if args.output_root else None)
+        except (SystemExit, ValueError, ImportError):
+            blocks = {}  # an unparsable option is reported by the subject command
+        if blocks:
+            parser.error(cohort_phase_encoding_message(blocks))
     if resource_mode:
         from shared.cohort_planning import plan_cohort
         try:
@@ -397,7 +408,7 @@ def main(argv: list[str] | None = None) -> int:
                 gpu_slots=args.batch_gpu_slots, adaptive=args.scheduler == 'adaptive',
                 resource_fraction=args.resource_budget,
                 history_path=args.resource_history or output_base / '00_batch_metadata/resource_history.json',
-                tuning_profile=args.compute_profile)
+                tuning_profile=args.compute_profile, output_root=output_base if args.output_root else None)
         except (ValueError, ImportError) as exc:
             parser.error(str(exc))
         args.jobs = resource_plan['jobs']
@@ -422,7 +433,8 @@ def main(argv: list[str] | None = None) -> int:
                     cpu_budget=resource_plan['cpu_budget'], memory_gb=resource_plan['memory_gb'],
                     stage_cpus=args.batch_stage_cpus, stage_memory_gb=args.batch_stage_memory_gb,
                     gpu_slots=args.batch_gpu_slots, adaptive=True, resource_fraction=args.resource_budget,
-                    history_path=resource_plan['history_path'], tuning_profile=profile)
+                    history_path=resource_plan['history_path'], tuning_profile=profile,
+                    output_root=output_base if args.output_root else None)
         print(f"[Batch] Resource plan: up to {args.jobs} subjects; "
               f"{resource_plan['cpu_budget']} CPU threads, {resource_plan['memory_gb']:.1f} GiB RAM; "
               f"{resource_plan['gpu_slots']} GPU-capable stage slot(s).", flush=True)

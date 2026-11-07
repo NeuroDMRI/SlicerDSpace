@@ -774,7 +774,7 @@ async function runLanguages(browser, origin) {
     const count = await page.locator('.perf-table .perf-record').count();
     record(count === 14 && await page.locator('.perf-table').isVisible() &&
         await page.locator('[data-perf-filter], #perf-count').count() === 0 &&
-        await page.locator('#integrated tr[data-method]').count() === 35 &&
+        await page.locator('#integrated tr[data-method]').count() === 33 &&
         await page.locator('.int-table .method-reference').count() > 35 &&
         await page.locator('#cite').count() === 0,
       `language ${width}px: full translated performance table and complete method/reference catalogs`);

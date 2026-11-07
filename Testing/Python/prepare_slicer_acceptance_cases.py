@@ -92,8 +92,7 @@ def main():
     add("connectome_resume", "100307", ["connectome"], connectome_backend="mrtrix",
         expected_tasks=["connectome.streamline_count", "connectome.sift2_weighted"],
         expected_statuses={"connectome.streamline_count": "skipped", "connectome.sift2_weighted": "skipped"})
-    add("dipy_preprocessing", "sub-dicom", ["preprocessing"], expected_tasks=["preprocessing.dwi"])
-    add("fsl_preprocessing", "sub-dicom", ["preprocessing"], preprocessing_backend="mrtrix_fsl", pe="AP",
+    add("fsl_preprocessing", "sub-dicom", ["preprocessing"], pe="AP",
         readout=0.039655, reverse_b0=str(args.dicom_fixture / "reverse_phase/reverse_b0.nii.gz"),
         extra_cli_args=["--no-resume", "--preprocessing-eddy-threads", "4", "--preprocessing-eddy-slm", "linear"])
     cases[-1]["output_root"] = str(root / "subjects/sub-dicom/outputs_fsl")

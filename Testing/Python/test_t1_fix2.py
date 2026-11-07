@@ -60,8 +60,9 @@ class TC5bAggregateRecordTest(unittest.TestCase):
         self.assertEqual(parameters["microstructure_ifw_echo_time_ms"], 82.0)
         self.assertEqual(parameters["compression"], "zstd")
         self.assertEqual(parameters["wma_atlas"], "naba")
-        self.assertNotIn("pnl-cnn-weights", profiles)  # B2 (was a tautology): the children use synthstrip, not PNL
-        self.assertIn("synthstrip", profiles)
+        # W5 (SC-2 rule 3): an old record that names the removed synthstrip still reads, and it names no profile for it.
+        self.assertNotIn("pnl-cnn-weights", profiles)
+        self.assertNotIn("synthstrip", profiles)
         self.assertEqual([entry["tracking_backend"] for entry in parameters["per_tracking_backend"]],
                          ["csd_act", "ukf"])
         self.assertEqual([entry["tractography_backend"] for entry in parameters["per_tracking_backend"]],

@@ -18,7 +18,8 @@ from scripts import run_batch_pipeline as batch_cli
 from shared import run_subject_pipeline_cli as cli
 
 
-BACKENDS = ("pnl_cnn", "synthstrip", "mrtrix", "provided")
+BACKENDS = ("pnl_cnn", "provided")
+REMOVED_BACKENDS = ("synthstrip", "mrtrix", "dipy")
 PATH_KEYS = ("pnl_mask_python", "pnl_mask_script", "pnl_mask_model_dir", "pnl_mask_ants_bin_dir")
 
 
@@ -42,6 +43,29 @@ class BrainMaskCliWiringTest(unittest.TestCase):
         with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as raised:
             parser.parse_args(["--brain-mask-backend", "auto"])
         self.assertEqual(raised.exception.code, 2)
+
+    def test_w5_removed_backends_fail_on_the_cli_naming_the_two_that_remain(self) -> None:
+        """W5 (SC-2 rule 1): each removed backend is refused with a message that names pnl_cnn and provided."""
+        for backend in REMOVED_BACKENDS:
+            for flags in (["--brain-mask-backend", backend], [f"--brain-mask-backend={backend}"]):
+                with self.subTest(backend=backend, flags=flags):
+                    stderr = io.StringIO()
+                    with patch.object(cli, "run_subject_products") as run, redirect_stderr(stderr), \
+                            self.assertRaises(SystemExit) as raised:
+                        cli.build_parser().parse_args(flags)
+                    self.assertEqual(raised.exception.code, 2)
+                    text = stderr.getvalue()
+                    self.assertIn(backend, text)
+                    self.assertIn("pnl_cnn", text)
+                    self.assertIn("provided", text)
+                    run.assert_not_called()
+        # The full entry point stops before any work, too.
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(cli, "run_subject_products") as run, redirect_stderr(io.StringIO()) as stderr, \
+                    self.assertRaises(SystemExit):
+                cli.main(["--subject-root", tmp, "--no-user-config", "--brain-mask-backend", "synthstrip"])
+            run.assert_not_called()
+            self.assertIn("pnl_cnn", stderr.getvalue())
 
     def _invoke(self, subject: Path, flags: list[str]):
         result = SimpleNamespace(
@@ -122,7 +146,7 @@ class BrainMaskCliWiringTest(unittest.TestCase):
             profile_paths = _path_options(root / "profile")
             explicit_paths = _path_options(root / "explicit")
             user_config.write_text(json.dumps({
-                "run_defaults": {"brain_mask_backend": "synthstrip"},
+                "run_defaults": {"brain_mask_backend": "provided"},
                 "external_dependencies": {key: str(path) for key, path in saved_paths.items()},
             }), encoding="utf-8")
             dependency_config.write_text(json.dumps({
@@ -130,10 +154,10 @@ class BrainMaskCliWiringTest(unittest.TestCase):
             }), encoding="utf-8")
             common = ["--user-config", str(user_config)]
             for extra, expected_backend, expected_paths in (
-                ([], "synthstrip", saved_paths),
-                (["--dependency-config", str(dependency_config)], "synthstrip", profile_paths),
-                (["--dependency-config", str(dependency_config), "--brain-mask-backend=provided",
-                  *_path_flags(explicit_paths)], "provided", explicit_paths),
+                ([], "provided", saved_paths),
+                (["--dependency-config", str(dependency_config)], "provided", profile_paths),
+                (["--dependency-config", str(dependency_config), "--brain-mask-backend=pnl_cnn",
+                  *_path_flags(explicit_paths)], "pnl_cnn", explicit_paths),
             ):
                 with self.subTest(extra=extra):
                     run, _, _ = self._invoke(root / "sub-01", [*common, *extra])
@@ -196,7 +220,9 @@ class BrainMaskCliWiringTest(unittest.TestCase):
                 config = validate.call_args.args[0]
                 self.assertEqual(config.brain_mask_backend, backend)
                 for key, path in paths.items():
-                    self.assertEqual(getattr(config, key), path)
+                    if hasattr(config, key):  # W5: the validation config no longer carries the FreeSurfer home
+                        self.assertEqual(getattr(config, key), path)
+                self.assertTrue(all(hasattr(config, key) for key in PATH_KEYS))
 
     def test_doctor_marks_only_known_mask_requirements(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -228,8 +254,6 @@ class BrainMaskCliWiringTest(unittest.TestCase):
             for suffix in ("dwi_final.nii.gz", "dwi_final.bval", "dwi_final.bvec", "brain_mask_final.nii.gz"):
                 (preproc / f"sub-01_{suffix}").touch()
             self.assertFalse(required(("preprocessing",)))
-            args.preprocessing_backend = "mrtrix_fsl"
-            self.assertFalse(required(("preprocessing",)))
             args.preprocessing_force = True
             self.assertTrue(required(("preprocessing",)))
             args.preprocessing_force = False
@@ -241,11 +265,8 @@ class BrainMaskCliWiringTest(unittest.TestCase):
             args.brain_mask_backend = "provided"
             self.assertFalse(required(("preprocessing",)))
             args.brain_mask_backend = "pnl_cnn"
-            args.preprocessing_backend = "dipy"
-            args.preprocessing_dipy_denoise_method = "none"
-            args.preprocessing_skip_gibbs = True
-            args.preprocessing_skip_motion = True
-            self.assertFalse(required(("preprocessing",)))
+            args.preprocessing_skip_gibbs = True  # W2a: the old no-op fast path is gone; skipping Gibbs still needs the mask
+            self.assertTrue(required(("preprocessing",)))
             args.brain_mask_backend = "provided"
             (input_dir / "nodif_brain_mask.nii.gz").unlink()
             self.assertTrue(required(("preprocessing",)))

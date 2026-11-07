@@ -18,9 +18,9 @@ numerical accuracy for every acquisition or platform.
 | Level | Products | Prerequisites |
 | --- | --- | --- |
 | Inspect/plan | Input preview, validation, plans | Basic imaging runtime; converter for DICOM/NRRD |
-| Minimal DTI | Tensor scalars, optional deterministic tracks | SlicerDMRI or supported DTI route and Python packages |
+| Minimal DTI | Tensor scalars and colour FA map, optional deterministic tracks | Slicer's own Python (Teem tensor fit, no extension) and Python packages |
 | Anatomical models | DDSurfer/DDSeg/DDParcel | PyTorch, matching assets, route-specific preparation |
-| Microstructure | DTI/FW/NODDI/DKI/MK-Curve | Configured numerical packages and eligible acquisition; DTI is default |
+| Microstructure | DTI/FW/iFW/NODDI/DKI/MK-Curve | Configured numerical packages and eligible acquisition; DTI is default |
 | Advanced pathways | CSD/ACT/SIFT2/SAF/fiber bundles | External backend only as selected |
 | Connectome | Regional matrices, scene QC | Tractogram/parcellation; weights only for weighted routes |
 
@@ -57,13 +57,11 @@ inherit Linux QC or timings.
 | --- | --- | --- | --- |
 | UI, NIfTI/NRRD, validation, result loading | Scoped tests recorded | Native candidate with imaging packages | Native candidate with imaging packages |
 | DICOM conversion | Converter required | Native converter/Slicer candidate | Native converter/Slicer candidate |
-| DTI, deterministic tracking | SlicerDMRI route measured | Native SlicerDMRI candidate | Native SlicerDMRI candidate |
-| DDSeg/DDParcel/DDSurfer native reconstruction | Recorded data/routes and matching models | Native PyTorch/SlicerDMRI candidate with usable mask | Native CPU candidate with usable mask and matching models |
-| DIPY preprocessing, FW, NODDI | Scoped inputs measured | Native Python candidate; compatible DIPY/AMICO | Native Python candidate; architecture-compatible packages |
+| DTI, deterministic tracking | Teem tensor fit in Slicer; DIPY tracking | Same, native candidate | Same, native candidate |
+| DDSeg/DDParcel/DDSurfer native reconstruction | Recorded data/routes and matching models | Native PyTorch candidate with usable mask | Native CPU candidate with usable mask and matching models |
+| FW, NODDI | Scoped inputs measured | Native Python candidate; compatible DIPY/AMICO | Native Python candidate; architecture-compatible packages |
 | DKI/Python MK-Curve | Specified-subject full-brain checks and timing recorded; invalid voxels excluded | Native numerical candidate; eligible multi-shell data | Native numerical candidate; eligible multi-shell data |
 | PNL CNN mask | PyTorch/ANTs route; paired CPU probability/mask checks; Linux x86_64 managed setup | Native route in Windows Slicer's Python (SimpleITK + PyTorch), **experimental**; not run on Windows here | Native route (SimpleITK + PyTorch), **experimental**; no CUDA, Metal unimplemented; unmeasured here |
-| DIPY median-Otsu mask | Python-only generation and DTI sample route measured | Native Python candidate; no POSIX tool required, unmeasured here | Native Python candidate, unmeasured here |
-| Full FreeSurfer SynthStrip environment | CPU/CUDA measured | **Not native Windows in this wrapper**; full Linux/WSL environment needed | FreeSurfer/Python CPU candidate, unmeasured here |
 | Cortical postprocessing | Verified native components or existing FreeSurfer; offline prebuilt installation tested, publication pending; [setup](SURFACE_COMPONENTS.md) | No qualified native prebuilt bundle; WSL/full-install bridge acceptance pending | Existing native FreeSurfer candidate; no qualified prebuilt bundle |
 | MRtrix/FSL preprocessing | CPU/CUDA recorded | WSL 2 bridges; device policy runs in actual WSL Python | Native CPU MRtrix/FSL candidate; **no CUDA eddy** |
 | CSD/ACT/SIFT2 | External MRtrix route recorded | MRtrix WSL bridges; acceptance pending | Native MRtrix candidate; acceptance pending |
@@ -72,7 +70,7 @@ inherit Linux QC or timings.
 | WMA | 149741 scoped pass; old 100307 coverage failures remain excluded | WSL author shell/Slicer reverse bridge; acceptance pending | Author shell/display/Slicer CLI requirements; acceptance pending |
 | TractCloud | Seeded CUDA/repeat checks on recorded inputs | WSL device-selected CPU/CUDA; native Python not certified | External Python CPU candidate; MPS not implemented |
 | Python connectome/ROI statistics/VTK previews | Scoped tests recorded | Native candidate given valid input products | Native candidate given valid input products |
-| Managed MRtrix/FSL/PNL setup | Linux x86_64 (managed PNL runtime) | Separate Windows/WSL installer for MRtrix/FSL; PNL uses the native route (PyTorch extension and the brain-mask assets) | MRtrix Intel/macOS 14.5+ package adaptation, not real-host tested; no ARM/FSL profile; PNL uses the native route |
+| Managed MRtrix/FSL/PNL setup | Linux x86_64 (managed PNL runtime) | Separate Windows/WSL installer for MRtrix3 and FSL (the mask and the Python stages stay in Windows Slicer's Python); PNL uses the native route (PyTorch extension and the brain-mask assets) | MRtrix3 3.0.8 official tarball and FSL CPU runtime, Intel and Apple Silicon, macOS 14.5 or later; PNL uses the native route |
 
 ---
 

@@ -13,7 +13,7 @@
 ## 使用方式
 
 默认追踪仍为 **MRtrix CSD/ACT/SIFT2**。需要 UKF 时，在 Extension Manager
-安装 **UKFTractography** 和 **SlicerDMRI**，重启 Slicer，再到
+安装 **UKFTractography**（UKF 的错误提示还会提到 SlicerDMRI，WMA 需要它），重启 Slicer，再到
 点击 Tractography 旁的 **...** 勾选 `UKF`。
 束分析旁同样选择 `WMA` 后，自动执行 **UKF → WMA**，不必先手动运行 UKF 再导入。
 UKF 参数位于 **高级设置 > 模型参数**。如同时选择其他追踪算法，各自生成独立的运行结果。
@@ -90,7 +90,7 @@ Linux 验证冒充三平台完整验收。
 ## 命令行
 
 ```bash
-python scripts/run_subject_pipeline.py \
+PythonSlicer run_subject_pipeline.py \
   --subject-root /path/to/subject --subject-id subject \
   --targets tractography,bundles --tractography-backend ukf \
   --bundle-backend wma --execute

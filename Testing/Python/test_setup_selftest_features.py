@@ -416,7 +416,7 @@ class RequestsForReportToolTests(unittest.TestCase):
         optional = status('command:tckconvert', 'command', group='mrtrix', required=False,
                           details={'resolved': '/opt/mrtrix3/bin/tckconvert'})
         missing = status('command:eddy', 'command', group='fsl', state='missing', details={'resolved': None})
-        other = status('brain_mask_backend', 'setting', details={'backend': 'synthstrip', 'tool_paths': {'model_dir': '/m'}})
+        other = status('brain_mask_backend', 'setting', details={'backend': 'provided', 'tool_paths': {'model_dir': '/m'}})
         self.assertEqual(selftest.requests_for_report(tool_report(SLICER_NUMPY, optional, missing, other)),
                          [dict(python='/slicer/PythonSlicer', imports=['numpy'], pythonpath=[], models=[], devices=['cpu'])])
 
@@ -442,20 +442,6 @@ class RequestsForReportToolTests(unittest.TestCase):
         self.assertEqual(request['dcm2niix'], '/usr/local/bin/dcm2niix')
         request = selftest.requests_for_report(tool_report(SLICER_NUMPY))[0]  # DWIConvert fallback
         self.assertNotIn('dcm2niix', request)
-
-    def test_mrtrix_used_only_as_the_brain_mask_backend_gets_its_check(self):
-        """G3: the report has no MRtrix command entry, only the required brain_mask_backend setting."""
-        mask = status('brain_mask_backend', 'setting', details={
-            'backend': 'mrtrix', 'tool_paths': {'dwi2mask': '/opt/mrtrix3/bin/dwi2mask'}})
-        request = selftest.requests_for_report(tool_report(SLICER_NUMPY, mask))[0]
-        self.assertEqual(request['mrtrix_bin_dir'], '/opt/mrtrix3/bin')
-        self.assertNotIn('fsl_bin_dir', request)
-        missing = status('brain_mask_backend', 'setting', state='missing', details={
-            'backend': 'mrtrix', 'tool_paths': {'dwi2mask': '/opt/mrtrix3/bin/dwi2mask'}})
-        self.assertNotIn('mrtrix_bin_dir', selftest.requests_for_report(tool_report(SLICER_NUMPY, missing))[0])
-        # a command entry of the preprocessing target still wins
-        request = selftest.requests_for_report(tool_report(SLICER_NUMPY, MRTRIX, mask))[0]
-        self.assertEqual(request['mrtrix_bin_dir'], '/opt/mrtrix3/bin')
 
 
 class ScriptTests(ToolFixture):

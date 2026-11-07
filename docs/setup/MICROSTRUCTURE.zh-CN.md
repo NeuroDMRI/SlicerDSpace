@@ -11,14 +11,15 @@
 ## 选择模型
 
 主界面勾选 Microstructure 后，**默认仅运行 DTI**。
-点击 Microstructure 旁的 **...**，分别启用 FW、NODDI、DKI，不要求逐级同时开启。
+点击 Microstructure 旁的 **...**，分别启用 FW、NODDI、DKI、iFW，不要求逐级同时开启。iFW 例外：它需要 FW 结果，所以插件会为它同时运行 FW 和 DDSeg 分割。
 DTI 为基础步骤；DKI 拟合方法在“高级设置 > 模型参数”调整。
 
 | 模型 | 主要结果 | 实现 |
 | --- | --- | --- |
-| DTI | FA、MD、AD、RD、三个特征值、Trace | 共用 native-space 张量拟合 |
+| DTI | FA、MD、AD、RD、三个特征值、Trace、彩色 FA 图（`<id>-dti-DEC.nrrd`） | 共用 native-space 张量拟合，使用 Slicer Python 中的 Teem 库，不需要 SlicerDMRI |
 | FW | 自由水比例、组织 FA/MD、有效性掩膜与 QC | DIPY |
 | NODDI | NDI、ODI、IsoVF、残差、有效性掩膜与 QC | AMICO |
+| iFW | 校正 T2 加权并减去 CSF 比例的自由水比例，附区域表 | 已发表公式的 Python 实现（组织 T2 固定为 95 ms，CSF 为 1500 ms）；需要回波时间（在 Microstructure 中输入，或取自 DWI sidecar）和至少三个不同的 b 值（b=0 计入） |
 | 标准 DKI | MK、AK、RK、KFA、MKT、RTK、残差与原始张量参数 | 内置 Python MK-Curve（默认），或 DIPY WLS/OLS |
 | MK-Curve | 原始及校正 MK/AK/RK、FA/MD/AD/RD、特征值、有效性与残差 | 内置作者算法 Python 移植版，不是普通 DIPY MK |
 
@@ -72,7 +73,7 @@ KFA/MKT/RTK 仍是独立 DIPY 参考结果，不称为 MK-Curve 校正指标。
 ## 运行与结果
 
 ```bash
-python3 run_subject_pipeline.py --subject-root /path/to/sub-01 \
+PythonSlicer run_subject_pipeline.py --subject-root /path/to/sub-01 \
   --targets microstructure --microstructure-stages dti,dki \
   --dki-fit-method WLS --plan
 ```

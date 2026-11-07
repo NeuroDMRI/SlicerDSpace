@@ -93,7 +93,6 @@ class UserConfigTest(unittest.TestCase):
             output_root=None,
             run_name="RunA",
             targets=["all"],
-            preprocessing_backend="dipy",
             tractography_backend="dti_det",
             bundle_backend="wmql",
             microstructure_stages=["all"],
@@ -123,6 +122,32 @@ class UserConfigTest(unittest.TestCase):
         self.assertEqual(config["run_defaults"]["tractography_backend"], "saf")
         self.assertEqual(config["run_defaults"]["bundle_backend"], "wma")
         self.assertEqual(config["external_dependencies"]["model_assets_dir"], "/models")
+
+    def test_w2a_saved_removed_preprocessing_setting_loads_without_it_with_one_note(self) -> None:
+        """W2a (D1): a saved preprocessing route or denoise choice loads without it, with one note, and is not saved again."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "user_config.json"
+            saved_values = ({"preprocessing_backend": "dipy"},
+                            {"preprocessing_backend": "mrtrix_fsl", "preprocessing_dipy_denoise_method": "localpca"})
+            for run_defaults in saved_values:
+                with self.subTest(saved=run_defaults):
+                    path.write_text(json.dumps({"run_defaults": {"run_name": "R1", **run_defaults}}), encoding="utf-8")
+                    with self.assertLogs("shared.user_config", level="WARNING") as logged:
+                        loaded = load_user_config(path)
+                    for key in run_defaults:
+                        self.assertNotIn(key, loaded["run_defaults"])
+                    self.assertEqual(loaded["run_defaults"]["run_name"], "R1")
+                    self.assertEqual(len(loaded["notes"]), 1)
+                    self.assertEqual(len(logged.records), 1)
+                    for key in run_defaults:
+                        self.assertIn(key, loaded["notes"][0])
+                    self.assertIn("one route", loaded["notes"][0])
+                    self.assertNotIn("preprocessing_backend", user_config_cli_values(loaded))
+                    write_user_config(loaded, path)
+                    again = load_user_config(path)
+                    self.assertNotIn("notes", again)
+                    self.assertNotIn("preprocessing_backend", again["run_defaults"])
+        self.assertNotIn("preprocessing_backend", empty_user_config()["run_defaults"])
 
     def test_non_object_json_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

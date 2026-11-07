@@ -81,7 +81,6 @@ class ProductOrchestratorConfig:
     # T-C5: tracking-variant children set this False; the aggregate manifest gets the one run record.
     write_run_record: bool = True
     resume: bool = True
-    preprocessing_backend: str = "dipy"
     brain_mask_backend: str = "pnl_cnn"
     brain_mask_device: str = "auto"
     pnl_mask_python: Optional[Path] = None
@@ -89,11 +88,8 @@ class ProductOrchestratorConfig:
     pnl_mask_model_dir: Optional[Path] = None
     pnl_mask_ants_bin_dir: Optional[Path] = None
     pnl_mask_route: str = "auto"
-    synthstrip_python: Optional[Path] = None
     preprocessing_force: bool = False
-    preprocessing_dipy_denoise_method: str = "mppca"
     preprocessing_dipy_run_gibbs: bool = True
-    preprocessing_dipy_run_motion_correction: bool = True
     preprocessing_mrtrix_bin_dir: Optional[Path] = None
     preprocessing_fsl_bin_dir: Optional[Path] = None
     preprocessing_reverse_phase_b0: Optional[Path] = None
@@ -192,6 +188,9 @@ class ProductOrchestratorConfig:
     excluded_targets: tuple[str, ...] = ()
     # Set once the closure was applied, so tracking variants do not expand again.
     closure_applied: bool = False
+    # Rule 4 (T1 D1), decided once at the subject entry point before the tracking variants are dispatched (F3): None =
+    # not decided yet, "" = no block, text = the block message for every DWI target of every variant.
+    preprocessing_pe_block: Optional[str] = None
     # Algorithm added by the closure -> targets that required it; its variant runs only those targets.
     closure_algorithm_requesters: dict = field(default_factory=dict)
 
@@ -1112,7 +1111,7 @@ def _resolve_analysis_inputs(
     subject_id: str,
     output_root: Optional[Path] = None,
 ) -> dict[str, Path]:
-    """Return the completed preprocessing bundle, or canonical raw inputs."""
+    """Return the current preprocessing bundle, or canonical raw inputs (W2b: one predicate for every reuse point)."""
 
     if _preprocessing_complete(subject_root, subject_id, output_root):
         outputs = _preprocessing_outputs(subject_root, subject_id, output_root)
@@ -1206,7 +1205,7 @@ def _preprocessing_config(config: ProductOrchestratorConfig, subject_root: Path,
 
     return DwiPreprocessingConfig(
         subject_id=config.subject_id, input_root=subject_root, output_dir=output_dir,
-        backend=config.preprocessing_backend, execute=True, skip=False,
+        execute=True, skip=False,
         brain_mask_backend=config.brain_mask_backend,
         brain_mask_device=config.brain_mask_device,
         pnl_mask_python=config.pnl_mask_python,
@@ -1214,12 +1213,8 @@ def _preprocessing_config(config: ProductOrchestratorConfig, subject_root: Path,
         pnl_mask_model_dir=config.pnl_mask_model_dir,
         pnl_mask_ants_bin_dir=config.pnl_mask_ants_bin_dir,
         pnl_mask_route=config.pnl_mask_route,
-        synthstrip_python=config.synthstrip_python,
-        postprocess_freesurfer_home=config.postprocess_freesurfer_home,
         force=config.preprocessing_force or (not config.resume),
-        dipy_denoise_method=config.preprocessing_dipy_denoise_method,
         dipy_run_gibbs=config.preprocessing_dipy_run_gibbs,
-        dipy_run_motion_correction=config.preprocessing_dipy_run_motion_correction,
         mrtrix_bin_dir=config.preprocessing_mrtrix_bin_dir,
         fsl_bin_dir=config.preprocessing_fsl_bin_dir,
         reverse_phase_b0=config.preprocessing_reverse_phase_b0,
@@ -1234,39 +1229,78 @@ def _preprocessing_complete(
     subject_root: Path, subject_id: str, output_root: Optional[Path] = None,
     *, config: Optional[ProductOrchestratorConfig] = None,
 ) -> bool:
-    outputs = _preprocessing_outputs(subject_root, subject_id, output_root)
-    if not all(path.is_file() for key, path in outputs.items() if key != "qc") or not _qc_completed(outputs["qc"]):
-        return False
-    try:
-        manifest = _read_json(outputs["manifest"])
-        if manifest.get("status") not in {"completed", "cached"}:
-            return False
-        from preprocessing.pipeline import preprocessing_gradients_current
-        if not preprocessing_gradients_current(manifest):
-            return False
-        cache_key = manifest.get("cache_key")
-        raw = _resolve_raw_inputs(subject_root)
-        if isinstance(cache_key, dict) and not all(
-            _file_record_matches((cache_key.get("inputs") or {}).get(key), path)
-            for key, path in raw.items()
-        ):
-            return False
-        if config is not None:
-            from preprocessing.pipeline import _preprocessing_cache_key, inspect_preprocessing_backend
-            from shared.pipeline import RawInputBundle
+    """W2b (T1 D1): the shared predicate decides; with a config the full cache key must also match.
 
-            expected = _preprocessing_config(config, subject_root, outputs["dwi"].parent)
-            if expected.force:
-                return False
-            bundle = RawInputBundle(
-                subject_root=subject_root, subject_id=subject_id, input_dir=subject_root / "input",
-                dwi_path=raw["dwi"], bval_path=raw["bval"], bvec_path=raw["bvec"], mask_path=raw["mask"],
-            )
-            if cache_key != _preprocessing_cache_key(bundle, expected, inspect_preprocessing_backend(expected)):
-                return False
+    Without a config this is exactly ``preprocessed_outputs_usable`` (the same decision as
+    ``resolve_preprocessed_input_bundle``): a completed manifest with cache-key version 5 or 6, its files, and raw-input
+    signatures that match. With a config (preprocessing is selected) the settings must match too:
+    the stored cache key must equal the key of the run that this config would make, so a changed PE direction, route or
+    sidecar reruns preprocessing. A config that cannot resolve a PE direction never matches.
+    """
+    from shared.pipeline import current_preprocessed_outputs
+
+    current = current_preprocessed_outputs(subject_root, output_root, subject_id)
+    if current is None:
+        return False
+    if config is None:
+        return True
+    try:
+        from preprocessing.pipeline import _preprocessing_cache_key, inspect_preprocessing_backend
+        from shared.pipeline import RawInputBundle
+
+        expected = _preprocessing_config(config, subject_root, current.preproc_dir)
+        if expected.force:
+            return False
+        raw = _resolve_raw_inputs(subject_root)
+        bundle = RawInputBundle(
+            subject_root=subject_root, subject_id=subject_id, input_dir=subject_root / "input",
+            dwi_path=raw["dwi"], bval_path=raw["bval"], bvec_path=raw["bvec"], mask_path=raw["mask"],
+        )
+        return current.cache_key == _preprocessing_cache_key(bundle, expected, inspect_preprocessing_backend(expected))
     except (OSError, ValueError, TypeError, AttributeError):
         return False
-    return True
+
+
+def _preprocessing_pe_block(config: ProductOrchestratorConfig, subject_root: Path) -> Optional[str]:
+    """Rule 4 (T1 D1): the message when preprocessing of this subject would run with no PE direction; else None."""
+    from shared.pe_resolution import phase_encoding_block_reason
+
+    return phase_encoding_block_reason(
+        subject_root,
+        user_phase_encoding=config.preprocessing_phase_encoding_direction,
+        user_readout_time=config.preprocessing_readout_time,
+        has_reverse_b0=config.preprocessing_reverse_phase_b0 is not None,
+    )
+
+
+def _dwi_targets(config: ProductOrchestratorConfig) -> set[str]:
+    """The targets that read the DWI (rule 4 blocks all of them when preprocessing is blocked)."""
+
+    targets = {'preprocessing', 'segmentation', 'parcellation', 'surface', 'microstructure',
+               'microstructure_freewater', 'microstructure_noddi', 'microstructure_dki', 'microstructure_ifw',
+               'tractography'}
+    if 'saf' in config.targets and config.saf_pregenerated_tractogram is None:
+        targets.add('saf')
+    return targets
+
+
+def _with_preprocessing_pe_decision(config: ProductOrchestratorConfig) -> ProductOrchestratorConfig:
+    """F3: decide rule 4 once, before the tracking variants are dispatched; every variant carries the decision.
+
+    Preprocessing that is selected and would run with no PE direction blocks every DWI target of every variant: a
+    later variant has no preprocessing target of its own and must not run on the raw DWI instead. Preprocessing that
+    resume reuses is not blocked.
+    """
+
+    if config.preprocessing_pe_block is not None:
+        return config
+    block = ""
+    if "preprocessing" in config.targets:
+        subject_root = config.subject_root.expanduser().resolve()
+        output_root = config.output_root.expanduser().resolve() if config.output_root is not None else None
+        if not (config.resume and _preprocessing_complete(subject_root, config.subject_id, output_root, config=config)):
+            block = _preprocessing_pe_block(config, subject_root) or ""
+    return replace(config, preprocessing_pe_block=block)
 
 
 def _resolve_segmentation(subject_root: Path, output_root: Optional[Path] = None) -> Optional[Path]:
@@ -1285,7 +1319,6 @@ def _anatomy_input_bundle(
     subject_root: Path,
     subject_id: str,
     output_root: Optional[Path],
-    mrtrix_bin_dir: Optional[Path],
     brain_mask_config=None,
 ):
     """DWI bundle for DDSeg/DDParcel/DDSurfer: the preprocessed DWI when preprocessing completed.
@@ -1297,8 +1330,7 @@ def _anatomy_input_bundle(
 
     from shared.pipeline import find_subject_root, resolve_preprocessed_input_bundle
 
-    raw_bundle = find_subject_root(subject_root, subject_id, mrtrix_bin_dir=mrtrix_bin_dir,
-                                  brain_mask_config=brain_mask_config)
+    raw_bundle = find_subject_root(subject_root, subject_id, brain_mask_config=brain_mask_config)
     return resolve_preprocessed_input_bundle(raw_bundle, output_root=output_root)
 
 
@@ -2211,6 +2243,7 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
     config = _with_shared_bundle_resources(_with_closure(config))
     from shared.algorithm_selection import algorithms
     _validate_bundle_tractography_source(config)
+    config = _with_preprocessing_pe_decision(config)
     if len(algorithms(config.tractography_backend)) > 1:
         from shared.multi_tracking import plan
         return plan(config, write=write)
@@ -2504,6 +2537,12 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
             )
             continue
 
+        if config.preprocessing_pe_block and target in _dwi_targets(config) and target != "preprocessing":
+            # F3: the same targets execute blocks when preprocessing has no PE direction.
+            add(target, "blocked", "Not run: preprocessing is blocked. " + config.preprocessing_pe_block,
+                "phase_encoding", provides=False)
+            continue
+
         if target == "validation":
             add(
                 target,
@@ -2520,7 +2559,11 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
             if config.resume and _preprocessing_complete(subject_root, config.subject_id, output_root, config=config):
                 add(target, "skipped", "completed outputs found", "reuse", inputs=raw, outputs=preprocessing_outputs)
             elif not raw_input_block(target, preprocessing_outputs):
-                add(target, "will_run", "ready to run DWI preprocessing", "runnable", inputs=raw, outputs=preprocessing_outputs)
+                if config.preprocessing_pe_block:  # W2b rule 4: no direction, no run (decided once, F3)
+                    add(target, "blocked", config.preprocessing_pe_block, "phase_encoding", inputs=raw,
+                        outputs=preprocessing_outputs, provides=False)
+                else:
+                    add(target, "will_run", "ready to run DWI preprocessing", "runnable", inputs=raw, outputs=preprocessing_outputs)
             continue
 
         if target == "segmentation":
@@ -3523,7 +3566,6 @@ def _parallel_model_products(config, targets, parcellation, log):
     from shared.brain_mask import brain_mask_config_from_options
 
     raw = find_subject_root(config.subject_root, config.subject_id,
-        mrtrix_bin_dir=config.mrtrix_bin_dir or config.preprocessing_mrtrix_bin_dir,
         brain_mask_config=brain_mask_config_from_options(config))
     raw = resolve_preprocessed_input_bundle(raw, output_root=config.output_root)
     native = ensure_native_dti_bundle(raw, fit_method=config.microstructure_fit_method, reuse=True, log=log)
@@ -3568,7 +3610,7 @@ def _run_subject_products_impl(
 ) -> ProductOrchestratorResult:
     """Run or plan selected products from a shared subject root."""
 
-    config = _with_shared_bundle_resources(_with_closure(config))
+    config = _with_preprocessing_pe_decision(_with_shared_bundle_resources(_with_closure(config)))
     if not config.subject_id.strip():
         raise ValueError("subject_id is required.")
     if config.select_streamlines <= 0:
@@ -3635,7 +3677,6 @@ def _run_subject_products_impl(
 
     input_started = time.monotonic()
     materialize_canonical_output_tree(subject_root, output_root=output_root, mode="symlink", archive_legacy=False)
-    mask_mrtrix_bin_dir = config.mrtrix_bin_dir or config.preprocessing_mrtrix_bin_dir
     from shared.brain_mask import brain_mask_config_from_options
     selected_mask_config = brain_mask_config_from_options(config)
     initial_raw = _resolve_raw_inputs(subject_root)
@@ -3651,7 +3692,6 @@ def _run_subject_products_impl(
             find_subject_root(
                 subject_root,
                 config.subject_id,
-                mrtrix_bin_dir=mask_mrtrix_bin_dir,
                 brain_mask_config=selected_mask_config,
             )
         except (FileNotFoundError, RuntimeError) as exc:
@@ -3669,10 +3709,7 @@ def _run_subject_products_impl(
                 )
             )
 
-    dwi_targets = {'preprocessing', 'segmentation', 'parcellation', 'surface', 'microstructure',
-                   'microstructure_freewater', 'microstructure_noddi', 'microstructure_dki', 'microstructure_ifw', 'tractography'}
-    if 'saf' in run_targets and config.saf_pregenerated_tractogram is None:
-        dwi_targets.add('saf')
+    dwi_targets = _dwi_targets(config)
     input_validation_path = None
     input_blocked_targets = {}
     if "validation" in run_targets or (config.execute and dwi_targets.intersection(run_targets)):
@@ -3682,7 +3719,6 @@ def _run_subject_products_impl(
                 input_root=subject_root,
                 output_dir=layout.run_metadata / "validation",
                 dependency_groups=("core",),
-                mrtrix_bin_dir=mask_mrtrix_bin_dir,
                 brain_mask_backend=config.brain_mask_backend,
                 brain_mask_device=config.brain_mask_device,
                 pnl_mask_python=config.pnl_mask_python,
@@ -3690,8 +3726,6 @@ def _run_subject_products_impl(
                 pnl_mask_model_dir=config.pnl_mask_model_dir,
                 pnl_mask_ants_bin_dir=config.pnl_mask_ants_bin_dir,
                 pnl_mask_route=config.pnl_mask_route,
-                synthstrip_python=config.synthstrip_python,
-                postprocess_freesurfer_home=config.postprocess_freesurfer_home,
             )
         )
         input_validation_path = validation.report_path
@@ -3717,6 +3751,20 @@ def _run_subject_products_impl(
                     tasks.append(ProductTaskRecord(name=_task_name_for_target(target, config), status='blocked',
                                                    reason=reason, qc_path=validation.report_path))
             run_targets = tuple(target for target in run_targets if target not in input_blocked_targets)
+
+    if config.execute and config.preprocessing_pe_block:
+        # W2b rule 4 (T1 D1), decided once at the entry point (F3): preprocessing that would run with no PE direction
+        # blocks the run before any stage. The selected products that use the DWI are blocked with it, in every
+        # tracking variant: they must not silently use the raw DWI instead.
+        pe_block = config.preprocessing_pe_block
+        for target in run_targets:
+            if target != "preprocessing" and target not in dwi_targets:
+                continue
+            reason = pe_block if target == "preprocessing" else "Not run: preprocessing is blocked. " + pe_block
+            input_blocked_targets[target] = reason
+            tasks.append(ProductTaskRecord(name=_task_name_for_target(target, config), status="blocked", reason=reason))
+        run_targets = tuple(target for target in run_targets if target not in input_blocked_targets)
+        _emit("[Orchestrator] " + pe_block, log)
 
     input_seconds = time.monotonic() - input_started
     execution_started = time.monotonic()
@@ -3750,7 +3798,10 @@ def _run_subject_products_impl(
                 ProductTaskRecord(
                     name="preprocessing.dwi",
                     status="completed" if result.status in {"completed", "cached"} else result.status,
-                    reason="cached outputs reused" if result.status == "cached" else "",
+                    # W2b: the result-panel text holds the PE and readout values with their sources, the flags and the
+                    # conflict warnings (the same mechanism as the iFW "TE ... from ...").
+                    reason=("cached outputs reused; " if result.status == "cached" else "")
+                    + (result.acquisition.summary_text() if result.acquisition is not None else ""),
                     manifest_path=result.manifest_path,
                     qc_path=result.qc_path,
                     outputs={
@@ -3764,6 +3815,11 @@ def _run_subject_products_impl(
 
     preprocessing_outputs = _preprocessing_outputs(subject_root, config.subject_id, output_root)
     analysis_inputs = _resolve_analysis_inputs(subject_root, config.subject_id, output_root)
+    if "preprocessing" not in run_targets and dwi_targets.difference({"preprocessing"}).intersection(run_targets) \
+            and not _preprocessing_complete(subject_root, config.subject_id, output_root):
+        # W2b (T1 D1): one decision for the whole run; the log (and the run record) say which input the stages used.
+        from shared.pipeline import NO_CURRENT_PREPROCESSING_MESSAGE
+        _emit("[Orchestrator] " + NO_CURRENT_PREPROCESSING_MESSAGE, log)
     segmentation = _resolve_segmentation(subject_root, output_root)
     parcellation = _resolve_parcellation(subject_root, config.subject_id, output_root)
     model_assets_dir = config.model_assets_dir.expanduser().resolve() if config.model_assets_dir is not None else None
@@ -3866,7 +3922,7 @@ def _run_subject_products_impl(
 
             _emit("[Orchestrator] Running DDSeg", log)
             task_started = _start_task_timer("DDSeg", log)
-            raw_bundle = _anatomy_input_bundle(subject_root, config.subject_id, output_root, mask_mrtrix_bin_dir, selected_mask_config)
+            raw_bundle = _anatomy_input_bundle(subject_root, config.subject_id, output_root, selected_mask_config)
             _emit(f"[Orchestrator] DDSeg input DWI: {raw_bundle.dwi_path}", log)
             native_bundle = ensure_native_dti_bundle(raw_bundle, fit_method="ls", reuse=True, log=log)
             run_ddseg(
@@ -3917,7 +3973,7 @@ def _run_subject_products_impl(
 
             _emit("[Orchestrator] Running DDParcel", log)
             task_started = _start_task_timer("DDParcel", log)
-            raw_bundle = _anatomy_input_bundle(subject_root, config.subject_id, output_root, mask_mrtrix_bin_dir, selected_mask_config)
+            raw_bundle = _anatomy_input_bundle(subject_root, config.subject_id, output_root, selected_mask_config)
             _emit(f"[Orchestrator] DDParcel input DWI: {raw_bundle.dwi_path}", log)
             registered = ensure_registered_dti_bundle(
                 raw_bundle,
@@ -4011,7 +4067,7 @@ def _run_subject_products_impl(
                 reuse_shared_preprocessing=True,
                 execute=True,
                 input_bundle=(
-                    _anatomy_input_bundle(subject_root, config.subject_id, output_root, mask_mrtrix_bin_dir, selected_mask_config)
+                    _anatomy_input_bundle(subject_root, config.subject_id, output_root, selected_mask_config)
                     if not any(not path.is_file() for path in raw.values())
                     else None
                 ),
@@ -4204,7 +4260,6 @@ def _run_subject_products_impl(
             raw_bundle = find_subject_root(
                 subject_root,
                 config.subject_id,
-                mrtrix_bin_dir=mask_mrtrix_bin_dir,
                 brain_mask_config=selected_mask_config,
             )
             analysis_input_bundle = resolve_preprocessed_input_bundle(raw_bundle, output_root=output_root)
@@ -4295,7 +4350,6 @@ def _run_subject_products_impl(
             raw_bundle = find_subject_root(
                 subject_root,
                 config.subject_id,
-                mrtrix_bin_dir=mask_mrtrix_bin_dir,
                 brain_mask_config=selected_mask_config,
             )
             analysis_input_bundle = resolve_preprocessed_input_bundle(raw_bundle, output_root=output_root)
@@ -4367,7 +4421,6 @@ def _run_subject_products_impl(
             raw_bundle = find_subject_root(
                 subject_root,
                 config.subject_id,
-                mrtrix_bin_dir=mask_mrtrix_bin_dir,
                 brain_mask_config=selected_mask_config,
             )
             analysis_input_bundle = resolve_preprocessed_input_bundle(raw_bundle, output_root=output_root)
@@ -5273,7 +5326,6 @@ def _run_subject_products_impl(
         "bundle_backends": list(bundle_backends),
         "execute": config.execute,
         "resume": config.resume,
-        "preprocessing_backend": config.preprocessing_backend,
         "brain_mask_backend": config.brain_mask_backend,
         "brain_mask_device": config.brain_mask_device,
         "pnl_mask_route": config.pnl_mask_route,
@@ -5286,9 +5338,7 @@ def _run_subject_products_impl(
             for name in ("pnl_mask_python", "pnl_mask_script", "pnl_mask_model_dir", "pnl_mask_ants_bin_dir")
         },
         "preprocessing_force": config.preprocessing_force,
-        "preprocessing_dipy_denoise_method": config.preprocessing_dipy_denoise_method,
         "preprocessing_dipy_run_gibbs": config.preprocessing_dipy_run_gibbs,
-        "preprocessing_dipy_run_motion_correction": config.preprocessing_dipy_run_motion_correction,
         "preprocessing_mrtrix_bin_dir": config.preprocessing_mrtrix_bin_dir.as_posix() if config.preprocessing_mrtrix_bin_dir else None,
         "preprocessing_fsl_bin_dir": config.preprocessing_fsl_bin_dir.as_posix() if config.preprocessing_fsl_bin_dir else None,
         "preprocessing_reverse_phase_b0": config.preprocessing_reverse_phase_b0.as_posix() if config.preprocessing_reverse_phase_b0 else None,
@@ -5475,6 +5525,7 @@ def run_subject_products(
             _normalize_targets(config)
             from shared.dicom_input import prepare_dicom_root
             prepare_dicom_root(config.subject_root, config.subject_id, dwiconvert=config.dwiconvert_executable, log=log)
+        config = _with_preprocessing_pe_decision(config)
         from shared.algorithm_selection import algorithms
         if len(algorithms(config.tractography_backend)) > 1:
             from shared.multi_tracking import run

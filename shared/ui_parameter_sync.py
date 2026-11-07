@@ -5,6 +5,27 @@ from __future__ import annotations
 from shared.user_config import canonical_microstructure_stages
 
 
+def apply_preprocessing_availability(checkbox, system=None, machine=None, node=None) -> bool:
+    """W2a (D1): a platform with no FSL build does not offer preprocessing. Returns True when it is offered.
+
+    Where it is not offered, the checkbox is disabled and unchecked, and the parameter node (when given) no longer
+    selects preprocessing, so the saved setting cannot keep it selected and no dependency check blocks the run (F2).
+    """
+
+    from shared.selected_setup import PREPROCESSING_UNSUPPORTED_TEXT, preprocessing_offered
+
+    offered = preprocessing_offered(system, machine)
+    if not offered and node is not None and getattr(node, "targetPreprocessing", False):
+        node.targetPreprocessing = False
+    if checkbox is not None and not offered:
+        checkbox.setEnabled(False)
+        checkbox.setToolTip(PREPROCESSING_UNSUPPORTED_TEXT)
+        checkbox.blockSignals(True)
+        checkbox.setChecked(False)
+        checkbox.blockSignals(False)
+    return offered
+
+
 def sync_parameter_node_to_ui(widget) -> None:
     """Synchronize common SlicerDSpace parameter-node values into Qt widgets."""
 
@@ -53,6 +74,7 @@ def sync_parameter_node_to_ui(widget) -> None:
     widget._sync_combo_text(getattr(ui, "ddsegDeviceComboBox", None), node.ddsegDevice or "auto", via_index=False)
     widget._sync_checkbox(getattr(ui, "ddsegSoftmaxCheckBox", None), bool(node.ddsegApplySoftmax))
 
+    apply_preprocessing_availability(getattr(ui, "targetPreprocessingCheckBox", None), node=node)
     widget._sync_checkbox(getattr(ui, "targetPreprocessingCheckBox", None), bool(node.targetPreprocessing))
     sync_combo_data = getattr(widget, "_sync_combo_data", None)
     if sync_combo_data is not None:
@@ -66,10 +88,13 @@ def sync_parameter_node_to_ui(widget) -> None:
         update_route_visibility = getattr(widget, "_update_pnl_route_visibility", None)
         if update_route_visibility is not None:
             update_route_visibility(getattr(node, "brainMaskBackend", "pnl_cnn") or "pnl_cnn")
-        sync_combo_data(
-            getattr(ui, "preprocessingPhaseEncodingDirectionComboBox", None),
-            getattr(node, "preprocessingPhaseEncodingDirection", "") or "",
-        )
+        # W2b: a saved NIfTI axis code (i, j-, ...) has no entry in the anatomical list; it gets one of its own, so
+        # the combo shows what the run will use (the code is converted with the DWI affine at run time).
+        saved_direction = getattr(node, "preprocessingPhaseEncodingDirection", "") or ""
+        direction_combo = getattr(ui, "preprocessingPhaseEncodingDirectionComboBox", None)
+        if saved_direction and direction_combo is not None and direction_combo.findData(saved_direction) < 0:
+            direction_combo.addItem(f"{saved_direction}  (saved NIfTI axis code)", saved_direction)
+        sync_combo_data(direction_combo, saved_direction)
         widget._sync_double_spinbox(
             getattr(ui, "preprocessingReadoutTimeSpinBox", None),
             float(getattr(node, "preprocessingReadoutTime", 0.0) or 0.0),
@@ -78,7 +103,6 @@ def sync_parameter_node_to_ui(widget) -> None:
             getattr(ui, "preprocessingReversePhaseB0Path", None),
             getattr(node, "preprocessingReversePhaseB0", "") or "",
         )
-    widget._sync_combo_text(getattr(ui, "preprocessingBackendComboBox", None), node.preprocessingBackend or "dipy", via_index=False)
     widget._sync_line_edit(getattr(ui, "orchestrationRunNameLineEdit", None), node.orchestrationRunName or "")
     widget._sync_combo_text(
         getattr(ui, "orchestrationTractographyBackendComboBox", None),

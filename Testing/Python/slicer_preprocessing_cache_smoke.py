@@ -34,7 +34,7 @@ def start():
         settings = DwiPreprocessingConfig(
             subject_id=case["subject_id"], input_root=Path(case["subject_root"]),
             output_dir=Path(case["output_root"]) / "01_preproc",
-            backend="mrtrix_fsl", execute=True, force=False,
+            execute=True, force=False,
             mrtrix_bin_dir=Path(deps["mrtrix_bin_dir"]),
             fsl_bin_dir=Path(deps["preprocessing_fsl_bin_dir"]),
             reverse_phase_b0=Path(case["reverse_b0"]),
@@ -56,7 +56,7 @@ def start():
         plan_config = ProductOrchestratorConfig(
             subject_id=case["subject_id"], subject_root=Path(case["subject_root"]),
             output_root=Path(case["output_root"]), targets=("preprocessing",),
-            execute=False, preprocessing_backend="mrtrix_fsl",
+            execute=False,
             preprocessing_mrtrix_bin_dir=settings.mrtrix_bin_dir,
             preprocessing_fsl_bin_dir=settings.fsl_bin_dir,
             preprocessing_reverse_phase_b0=settings.reverse_phase_b0,
@@ -67,11 +67,11 @@ def start():
         )
         plans = {
             "matching": plan_subject_products(plan_config, write=False).items[0].status,
-            "changed_backend": plan_subject_products(replace(plan_config, preprocessing_backend="dipy"), write=False).items[0].status,
+            "changed_gibbs": plan_subject_products(replace(plan_config, preprocessing_dipy_run_gibbs=False), write=False).items[0].status,
             "changed_parameters": plan_subject_products(replace(plan_config, preprocessing_eddy_second_level_model="none"), write=False).items[0].status,
             "forced": plan_subject_products(replace(plan_config, preprocessing_force=True), write=False).items[0].status,
         }
-        assert plans == {"matching": "skipped", "changed_backend": "will_run", "changed_parameters": "will_run", "forced": "will_run"}, plans
+        assert plans == {"matching": "skipped", "changed_gibbs": "will_run", "changed_parameters": "will_run", "forced": "will_run"}, plans
         (ROOT / "preprocessing_qc_before.json").write_bytes(paths["qc"].read_bytes())
         result = run_dwi_preprocessing(settings, log=lambda line: print(line, flush=True))
         assert result.status == "cached", result.status

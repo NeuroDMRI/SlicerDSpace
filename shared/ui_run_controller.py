@@ -28,7 +28,6 @@ class ProductTargetFlags:
 
 @dataclass(frozen=True)
 class BackendSelection:
-    preprocessing: str = "dipy"
     tractography: str = "csd_act"
     bundles: str = "wmql"
     microstructure_stages: str = "dti"
@@ -60,7 +59,6 @@ class RunSelection:
     surface_device: str
     connectome_backend: str
     connectome_compress_mrtrix_dense: Optional[bool]
-    preprocessing_backend: str = "dipy"
     wma_input_tractography_text: str = ""
     topup: TopupParameters = TopupParameters()
     brain_mask_backend: str = "pnl_cnn"
@@ -335,8 +333,7 @@ def selected_products_summary(targets: tuple[str, ...], backends: BackendSelecti
     micro_stages = canonical_microstructure_stages(backends.microstructure_stages)
     summary = (
         f"Selected targets: {target_text}\n"
-        f"Backends: preprocessing={(backends.preprocessing or 'dipy').strip() or 'dipy'}, "
-        f"tractography={(backends.tractography or 'csd_act').strip() or 'csd_act'}, "
+        f"Backends: tractography={(backends.tractography or 'csd_act').strip() or 'csd_act'}, "
         f"bundles={(backends.bundles or 'wmql').strip() or 'wmql'}, "
         f"microstructure={','.join(micro_stages)}, "
         f"connectome={(backends.connectome or 'python').strip() or 'python'}"
@@ -510,7 +507,6 @@ def build_single_subject_run_kwargs(
         "wmql_query_preset": selection.wmql_query_preset,
         "wmql_query_selection": _wmql_selection(selection.wmql_query_selection, selection.wmql_query_preset),
         "max_parallel_models": selection.max_parallel_models,
-        "preprocessing_backend": selection.preprocessing_backend,
         "brain_mask_backend": selection.brain_mask_backend,
         "brain_mask_device": selection.brain_mask_device,
         "pnl_mask_route": selection.pnl_mask_route,
@@ -538,7 +534,6 @@ def build_single_subject_run_kwargs(
         "pnl_mask_script": external_paths.get("pnl_mask_script"),
         "pnl_mask_model_dir": external_paths.get("pnl_mask_model_dir"),
         "pnl_mask_ants_bin_dir": external_paths.get("pnl_mask_ants_bin_dir"),
-        "synthstrip_python": external_paths.get("synthstrip_python"),
         "tract_querier_root": external_paths.get("tract_querier_root"),
         "wma_root": external_paths.get("wma_root"),
         "wma_atlas_dir": external_paths.get("wma_atlas_dir"),
@@ -577,7 +572,6 @@ def build_batch_run_kwargs(selection: RunSelection, *, batch_root: Path) -> dict
         "wma_atlas": selection.wma_atlas,
         "wmql_query_selection": _wmql_selection(selection.wmql_query_selection, selection.wmql_query_preset),
         "max_parallel_models": selection.max_parallel_models,
-        "preprocessing_backend": selection.preprocessing_backend,
         "brain_mask_backend": selection.brain_mask_backend,
         "brain_mask_device": selection.brain_mask_device,
         "pnl_mask_route": selection.pnl_mask_route,
@@ -793,7 +787,6 @@ EXTERNAL_PATH_CLI_FLAGS: tuple[tuple[str, str], ...] = (
     ("pnl_mask_script", "--pnl-mask-script"),
     ("pnl_mask_model_dir", "--pnl-mask-model-dir"),
     ("pnl_mask_ants_bin_dir", "--pnl-mask-ants-bin-dir"),
-    ("synthstrip_python", "--synthstrip-python"),
     ("dki_matlab_executable", "--dki-matlab-executable"),
     ("dki_mkcurve_root", "--dki-mkcurve-root"),
     ("tract_querier_root", "--tract-querier-root"),
@@ -859,7 +852,6 @@ def build_background_cli_args(
     external_paths: dict[str, Optional[Path]],
     *,
     repo_root: Path,
-    preprocessing_backend: str = "dipy",
 ) -> list[str]:
     """Build the Slicer launcher args for one subject background execution."""
 
@@ -881,8 +873,6 @@ def build_background_cli_args(
         ",".join(common_run_kwargs.get("requested_targets") or common_run_kwargs["targets"]),
         "--execute",
         "--print-manifest-only",
-        "--preprocessing-backend",
-        (preprocessing_backend or "dipy").strip() or "dipy",
         "--brain-mask-backend",
         str(common_run_kwargs.get("brain_mask_backend", "pnl_cnn")),
         "--brain-mask-device",
@@ -932,7 +922,6 @@ def build_batch_background_cli_args(
     batch_root: Path,
     batch_size: int,
     arrange_inputs: str,
-    preprocessing_backend: str = "dipy",
 ) -> list[str]:
     """Build the Slicer launcher args for batch background execution."""
 
@@ -953,8 +942,6 @@ def build_batch_background_cli_args(
         "--execute",
         "--targets",
         ",".join(common_run_kwargs.get("requested_targets") or common_run_kwargs["targets"]),
-        "--preprocessing-backend",
-        (preprocessing_backend or "dipy").strip() or "dipy",
         "--brain-mask-backend",
         str(common_run_kwargs.get("brain_mask_backend", "pnl_cnn")),
         "--brain-mask-device",

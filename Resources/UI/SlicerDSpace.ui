@@ -438,40 +438,13 @@
         <property name="fieldGrowthPolicy">
          <enum>QFormLayout::AllNonFixedFieldsGrow</enum>
         </property>
-        <item row="0" column="0">
-         <widget class="QLabel" name="preprocessingBackendLabel">
-          <property name="text">
-           <string>Preprocessing route</string>
-          </property>
-         </widget>
-        </item>
-        <item row="0" column="1">
-         <widget class="QComboBox" name="preprocessingBackendComboBox">
-          <property name="SlicerParameterName" stdset="0">
-           <string>preprocessingBackend</string>
-          </property>
-          <property name="toolTip">
-           <string>dipy: denoise, Gibbs removal and between-volume motion correction in Python. mrtrix_fsl: MRtrix3 dwifslpreproc with FSL eddy, plus topup when a reverse-PE b=0 image is given.</string>
-          </property>
-          <item>
-           <property name="text">
-            <string>dipy</string>
-           </property>
-          </item>
-          <item>
-           <property name="text">
-            <string>mrtrix_fsl</string>
-           </property>
-          </item>
-         </widget>
-        </item>
-        <item row="1" column="0" colspan="2">
+        <item row="0" column="0" colspan="2">
          <widget class="ctkCollapsibleGroupBox" name="topupCollapsibleGroupBox">
           <property name="title">
            <string>Distortion correction (topup)</string>
           </property>
           <property name="toolTip">
-           <string>Passed to dwifslpreproc for the MRtrix3/FSL route only: -pe_dir, -readout_time and -rpe_pair -se_epi. Same values as --preprocessing-phase-encoding-direction, --preprocessing-readout-time and --preprocessing-reverse-phase-b0 on the command line.</string>
+           <string>Passed to dwifslpreproc (FSL eddy and topup): -pe_dir, -readout_time and -rpe_pair -se_epi. Same values as --preprocessing-phase-encoding-direction, --preprocessing-readout-time and --preprocessing-reverse-phase-b0 on the command line.</string>
           </property>
           <layout class="QFormLayout" name="topupFormLayout">
            <property name="rowWrapPolicy">
@@ -490,7 +463,7 @@
            <item row="0" column="1">
             <widget class="QComboBox" name="preprocessingPhaseEncodingDirectionComboBox">
              <property name="toolTip">
-              <string>Phase-encoding direction of the DWI series (dwifslpreproc -pe_dir): NIfTI axis code (i, i-, j, j-, k, k-) or anatomical designator (AP, PA, LR, RL, IS, SI). Use PhaseEncodingDirection from the BIDS JSON sidecar.</string>
+              <string>Phase-encoding direction of the DWI series. Leave it on 'From sidecar' to use PhaseEncodingDirection from input/dwi.json. If the sidecar has none, choose AP, PA, LR, RL, IS or SI here (most axial clinical DWI: AP); without a direction preprocessing does not start. A direction you choose wins over the sidecar.</string>
              </property>
             </widget>
            </item>
@@ -504,7 +477,7 @@
            <item row="1" column="1">
             <widget class="QDoubleSpinBox" name="preprocessingReadoutTimeSpinBox">
              <property name="toolTip">
-              <string>Total readout time in seconds (dwifslpreproc -readout_time), e.g. TotalReadoutTime from the BIDS JSON sidecar. Accepted range 0.001–1.0 s. Leave at 'Not set' to let dwifslpreproc assume 0.1 s.</string>
+              <string>Total readout time in seconds (dwifslpreproc -readout_time). Leave it at 'Not set' to use TotalReadoutTime from input/dwi.json; if the sidecar has none, dwifslpreproc assumes 0.1 s and the result says readout_assumed. A value you set wins over the sidecar. Accepted range 0.001–1.0 s.</string>
              </property>
              <property name="specialValueText">
               <string>Not set</string>
@@ -731,22 +704,7 @@
           </item>
           <item>
            <property name="text">
-            <string>SynthStrip</string>
-           </property>
-          </item>
-          <item>
-           <property name="text">
-            <string>MRtrix dwi2mask</string>
-           </property>
-          </item>
-          <item>
-           <property name="text">
             <string>Provided mask only</string>
-           </property>
-          </item>
-          <item>
-           <property name="text">
-            <string>DIPY median-Otsu (lightweight)</string>
            </property>
           </item>
          </widget>
@@ -759,7 +717,7 @@
            <item>
             <widget class="QComboBox" name="brainMaskDeviceComboBox">
              <property name="SlicerParameterName" stdset="0"><string>brainMaskDevice</string></property>
-             <property name="toolTip"><string>PNL CNN and SynthStrip: auto prefers the first CUDA GPU visible to their external runtime. CUDA requires a GPU; CPU explicitly disables it. GPU errors are reported, not silently retried.</string></property>
+             <property name="toolTip"><string>PNL CNN: auto prefers the first CUDA GPU visible to its runtime. CUDA requires a GPU; CPU explicitly disables it. GPU errors are reported, not silently retried.</string></property>
              <item><property name="text"><string>auto</string></property></item>
              <item><property name="text"><string>cuda</string></property></item>
              <item><property name="text"><string>cpu</string></property></item>
@@ -2097,7 +2055,6 @@
   <tabstop>targetTractographyCheckBox</tabstop>
   <tabstop>targetBundlesCheckBox</tabstop>
   <tabstop>targetConnectomeCheckBox</tabstop>
-  <tabstop>preprocessingBackendComboBox</tabstop>
   <tabstop>preprocessingPhaseEncodingDirectionComboBox</tabstop>
   <tabstop>preprocessingReadoutTimeSpinBox</tabstop>
   <tabstop>preprocessingReversePhaseB0Path</tabstop>

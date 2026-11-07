@@ -15,16 +15,18 @@
 
 ## 准备输入
 
-使用获授权、去标识化的 DWI、匹配的 bval/bvec，以及同一网格上的脑掩膜。
-按 README 的规范目录存放。DICOM/NRRD 转换位于 **高级设置 > 脑区与输入导入 > 输入导入 /
-转换**，先预览后写入。Slicer DTI 准备路线需要 SlicerDMRI。
+使用获授权、去标识化的 DWI 及匹配的 bval/bvec，或 DICOM 序列。脑掩膜是可选的：
+没有时由所选掩膜后端（默认 PNL CNN）生成。按 README 的规范目录存放。DICOM/NRRD 转换位于
+**高级设置 > 脑区与输入导入 > 输入导入 / 转换**，先预览后写入。DTI 拟合在 Slicer 内部完成，不需要额外扩展。
+
+勾选所需产品，插件会自动加入每个产品的前置步骤；预处理不会在未勾选时被加入。
 
 在独立的 **环境与安装** 区域检查环境。仅尝试 DTI 不必安装 MRtrix3、FSL 或
 FreeSurfer。依赖不足会报告阻碍，不会悄悄换成另一种科学算法。
 
 检查在可取消的后台进程中进行，结果直接显示在环境区；无需逐次关闭详情弹窗。
-点击 **准备所选分析环境**，仅在确实需要安装时确认下载与许可；已经就绪时不再确认或安装。
-如提示重启，保存工作并重启后再次准备。
+点击 **准备所选分析环境**。一个对话框列出下载项及其许可，点击一次 **接受许可并安装** 即可；已经就绪时不再确认或安装。
+如提示重启，保存工作并重启后再次准备。安装结束后，会对每项功能做自检。
 **更多选项（离线、修复、路径）** 中提供依赖详情、**使用离线模型资源**、
 **修复所选受管工具** 和手工路径。
 支持范围与平台限制见[自动配置说明](MANAGED_SETUP.zh-CN.md)。
@@ -32,7 +34,7 @@ FreeSurfer。依赖不足会报告阻碍，不会悄悄换成另一种科学算�
 主界面的 Microstructure、Tractography 和 Fiber bundles 三行显示当前算法，默认分别为
 **DTI**、**MRtrix3 CSD / ACT** 和 **WMQL**。修改设置后提示会同步更新；这是运行
 配置，不表示结果已完成或 QC 已通过。点击每行旁的 **...**，可勾选一种或多种算法。
-DTI 为基础步骤；FW、NODDI、DKI 可分别勾选。高级设置按类别组织，每次只显示当前类别参数，
+DTI 为基础步骤；FW、NODDI、DKI、iFW 可分别勾选（iFW 需要回波时间，并同时运行 FW 和 DDSeg）。高级设置按类别组织，每次只显示当前类别参数，
 环境安装独立于高级设置。
 
 多种追踪方法顺序运行，以 `<run>__<backend>` 分别保存，共用解剖与微结构只运行一次。
@@ -55,12 +57,12 @@ DTI 为基础步骤；FW、NODDI、DKI 可分别勾选。高级设置按类别�
 只生成计划、不执行算法：
 
 ~~~bash
-python3 run_subject_pipeline.py --subject-root /path/to/sub-01 \
+PythonSlicer run_subject_pipeline.py --subject-root /path/to/sub-01 \
   --targets validation,microstructure --microstructure-stages dti --plan
 ~~~
 
 MD 使用灰度；显示设置不修改真实参数。执行完成、自动 QC 和人审是不同状态。
-默认只跑 DTI；FW、NODDI、DKI 在该行的选择框分别启用。缺少掩膜时使用所选后端
+默认只跑 DTI；FW、NODDI、DKI、iFW 在该行的选择框分别启用。DTI 产品包含彩色 FA 图。缺少掩膜时使用所选后端
 （默认 PNL CNN），需要先配置其外部环境；已有掩膜不需要生成器依赖。
 
 ---
@@ -77,7 +79,7 @@ CLI 可以分别选择全脑追踪来源和束分析方法。例如，同时运�
 但仅对 UKF 结果运行 WMQL 和 TractCloud：
 
 ~~~bash
-python3 run_subject_pipeline.py --subject-root /path/to/sub-01 \
+PythonSlicer run_subject_pipeline.py --subject-root /path/to/sub-01 \
   --targets segmentation,parcellation,tractography,bundles \
   --tractography-backend csd_act,ukf --bundle-backend wmql,tractcloud \
   --bundle-tractography-backend ukf --plan
@@ -98,7 +100,7 @@ SAF 是短程联络纤维结果，不作为全脑来源。WMA 使用非 UKF 来�
 在具备 NumPy/nibabel 的环境、从仓库根目录执行：
 
 ~~~bash
-python3 -c "from pathlib import Path; from shared.demo_data import create_synthetic_demo_subject; print(create_synthetic_demo_subject(Path('ignore/demo')))"
+PythonSlicer -c "from pathlib import Path; from shared.demo_data import create_synthetic_demo_subject; print(create_synthetic_demo_subject(Path('ignore/demo')))"
 ~~~
 
 使用生成的 <code>ignore/demo/slicerdsurfer-demo</code> 作为 Subject root。

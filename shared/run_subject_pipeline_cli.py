@@ -29,8 +29,11 @@ from shared import (
     summarize_environment_doctor,
     write_environment_report,
 )
+from shared.preprocessing_route import add_removed_flags
 from shared.run_cancellation import orchestration_manifest_path, write_cancelled_manifest
-from shared.brain_mask import BRAIN_MASK_BACKENDS, PNL_MASK_ROUTES, PNL_NATIVE_EXPERIMENTAL_REASON
+from shared.brain_mask import (
+    BRAIN_MASK_BACKENDS, PNL_MASK_ROUTES, PNL_NATIVE_EXPERIMENTAL_REASON, unsupported_backend_message,
+)
 from shared.dependency_config import (
     DEPENDENCY_CONFIG_KEYS,
     add_dependency_config_arguments,
@@ -265,9 +268,7 @@ def _environment_config_from_args(
     from shared.environment import run_needs_brain_mask
     brain_mask_required = run_needs_brain_mask(subject_root, targets=targets,
         subject_id=args.subject_id, output_root=output_root,
-        preprocessing_backend=args.preprocessing_backend, brain_mask_backend=args.brain_mask_backend,
-        denoise_method=args.preprocessing_dipy_denoise_method,
-        run_gibbs=not args.preprocessing_skip_gibbs, run_motion=not args.preprocessing_skip_motion,
+        brain_mask_backend=args.brain_mask_backend,
         force=args.preprocessing_force, resume=not args.no_resume)
     return EnvironmentDoctorConfig(
         targets=targets,
@@ -284,7 +285,6 @@ def _environment_config_from_args(
         check_slicer_cli_modules=True,
         python_environment=args.python_environment,
         conda_executable=args.conda_executable,
-        preprocessing_backend=args.preprocessing_backend,
         brain_mask_backend=args.brain_mask_backend,
         brain_mask_device=args.brain_mask_device,
         pnl_mask_route=args.pnl_mask_route,
@@ -293,7 +293,6 @@ def _environment_config_from_args(
         pnl_mask_script=args.pnl_mask_script,
         pnl_mask_model_dir=args.pnl_mask_model_dir,
         pnl_mask_ants_bin_dir=args.pnl_mask_ants_bin_dir,
-        synthstrip_python=args.synthstrip_python,
         tractography_backend=getattr(args, 'closure_tractography_backend', None) or args.tractography_backend,
         ukf_executable=getattr(args, 'ukf_executable', None),
         dwiconvert_executable=getattr(args, 'dwiconvert_executable', None),
@@ -378,8 +377,27 @@ def _make_sigterm_handler(manifest_path: Path, *, subject_id: str, run_name: str
 
 
 def _cli_log(message: str) -> None:
-    """Run log: the closure notice goes to stderr so stdout stays the JSON result for blocked runs (GUI merges both)."""
-    print(message, file=sys.stderr if message.startswith("[Targets]") else sys.stdout)
+    """Run log: the closure notice goes to stderr so stdout stays the JSON result for blocked runs (GUI merges both).
+
+    W2b: so do the notice that no current preprocessed DWI is used and the rule-4 phase-encoding block message.
+    """
+    to_stderr = message.startswith(("[Targets]", "[Orchestrator] No current preprocessed DWI", "[Orchestrator] Phase-encoding"))
+    print(message, file=sys.stderr if to_stderr else sys.stdout)
+
+
+def _phase_encoding_block(plan) -> str:
+    """W2b rule 4: the message of a preprocessing plan item that is blocked for want of a PE direction, else ''."""
+    for item in getattr(plan, "items", ()) or ():
+        if item.status == "blocked" and item.reason_category == "phase_encoding":
+            return item.reason
+    return ""
+
+
+def _brain_mask_backend_argument(value: str) -> str:
+    """W5 / SC-2: a removed or unknown brain mask backend fails with a message that names pnl_cnn and provided."""
+    if value not in BRAIN_MASK_BACKENDS:
+        raise argparse.ArgumentTypeError(unsupported_backend_message(value))
+    return value
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -505,38 +523,30 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--brain-mask-backend",
         default="pnl_cnn",
+        type=_brain_mask_backend_argument,
         choices=BRAIN_MASK_BACKENDS,
         help=(
             "Brain mask backend (default: pnl_cnn). Missing dependencies are reported without falling back. "
-            "synthstrip uses --postprocess-freesurfer-home; provided requires an existing input mask."
+            "provided requires an existing input mask. synthstrip, mrtrix and dipy were removed (W5)."
         ),
     )
     parser.add_argument("--brain-mask-device", choices=("auto", "cpu", "cuda"), default="auto",
-                        help="PNL/SynthStrip device: auto prefers the first visible GPU in that runtime; cuda requires GPU; cpu disables CUDA.")
+                        help="PNL device: auto prefers the first visible GPU in that runtime; cuda requires GPU; cpu disables CUDA.")
     parser.add_argument("--pnl-mask-route", choices=PNL_MASK_ROUTES, default="auto",
                         help=("Route of the pnl_cnn brain mask. auto: managed on Linux (conda runner with ANTs), native on macOS and Windows. "
                               "managed: the conda runner. native (experimental): SimpleITK registration in Slicer's Python; it "
                               + PNL_NATIVE_EXPERIMENTAL_REASON + "."))
-    parser.add_argument(
-        "--preprocessing-backend",
-        default="dipy",
-        choices=("dipy", "mrtrix_fsl"),
-        help="Optional DWI preprocessing backend.",
-    )
+    # W2a (D1): preprocessing has one route. The three removed flags stay registered only to fail with the message.
+    add_removed_flags(parser)
     parser.add_argument("--preprocessing-force", action="store_true", help="Force rerun preprocessing even if outputs exist.")
-    parser.add_argument(
-        "--preprocessing-dipy-denoise-method",
-        default="mppca",
-        choices=("mppca", "localpca", "patch2self", "none"),
-        help="DIPY denoise method for preprocessing.",
-    )
-    parser.add_argument("--preprocessing-skip-gibbs", action="store_true", help="Skip Gibbs removal in DIPY preprocessing.")
-    parser.add_argument("--preprocessing-skip-motion", action="store_true", help="Skip between-volume motion correction in DIPY preprocessing.")
+    parser.add_argument("--preprocessing-skip-gibbs", action="store_true",
+                        help="Skip DIPY Gibbs removal (for partial-Fourier data). Preprocessing has one route: DIPY MP-PCA, "
+                             "DIPY Gibbs removal, FSL eddy/topup through dwifslpreproc.")
     parser.add_argument("--preprocessing-mrtrix-bin-dir", type=Path, help="Optional MRtrix3 bin dir for preprocessing.")
     parser.add_argument("--preprocessing-fsl-bin-dir", type=Path, help="Optional FSL bin dir for preprocessing.")
     parser.add_argument("--preprocessing-reverse-phase-b0", type=Path, help="Optional reverse phase-encoding b0 for MRtrix/FSL preprocessing.")
-    parser.add_argument("--preprocessing-phase-encoding-direction", help="Optional phase encoding direction for MRtrix/FSL preprocessing.")
-    parser.add_argument("--preprocessing-readout-time", type=float, help="Optional readout time for MRtrix/FSL preprocessing.")
+    parser.add_argument("--preprocessing-phase-encoding-direction", help="Phase-encoding direction for preprocessing: AP, PA, LR, RL, IS, SI or a NIfTI axis code (i, i-, j, j-, k, k-). Without it the direction comes from input/dwi.json (PhaseEncodingDirection); if neither has it, preprocessing is blocked (most axial clinical DWI: AP).")
+    parser.add_argument("--preprocessing-readout-time", type=float, help="Total readout time in seconds for preprocessing. Without it: TotalReadoutTime from input/dwi.json, else dwifslpreproc assumes 0.1 s (recorded as readout_assumed).")
     parser.add_argument(
         "--preprocessing-eddy-threads",
         type=int,
@@ -730,7 +740,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--postprocess-freesurfer-home",
         type=Path,
-        help="Optional FreeSurfer home for SynthStrip brain masking and DDSurfer postprocessing.",
+        help="Optional FreeSurfer home for DDSurfer postprocessing.",
     )
     parser.add_argument("--postprocess-atlases", action="append", help="Optional comma-separated atlas list for DDSurfer postprocess.")
     parser.add_argument("--postprocess-force", action="store_true", help="Force restaging DDSurfer postprocess inputs.")
@@ -850,7 +860,7 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:
         parser.error(str(exc))
     if args.brain_mask_backend not in BRAIN_MASK_BACKENDS:
-        parser.error("--brain-mask-backend must be one of: " + ", ".join(BRAIN_MASK_BACKENDS))
+        parser.error(unsupported_backend_message(args.brain_mask_backend))
     if args.subject_root is None:
         parser.error(
             "--subject-root is required unless a recent subject_root is available in the shared user config. "
@@ -954,7 +964,6 @@ def main(argv: list[str] | None = None) -> int:
         wmql_query_selection=tuple(value.strip() for value in args.wmql_query_selection.split(',') if value.strip()),
         max_parallel_models=args.max_parallel_models,
         resume=not args.no_resume,
-        preprocessing_backend=args.preprocessing_backend,
         brain_mask_backend=args.brain_mask_backend,
         brain_mask_device=args.brain_mask_device,
         pnl_mask_route=args.pnl_mask_route,
@@ -962,11 +971,8 @@ def main(argv: list[str] | None = None) -> int:
         pnl_mask_script=args.pnl_mask_script,
         pnl_mask_model_dir=args.pnl_mask_model_dir,
         pnl_mask_ants_bin_dir=args.pnl_mask_ants_bin_dir,
-        synthstrip_python=args.synthstrip_python,
         preprocessing_force=bool(args.preprocessing_force),
-        preprocessing_dipy_denoise_method=args.preprocessing_dipy_denoise_method,
         preprocessing_dipy_run_gibbs=not args.preprocessing_skip_gibbs,
-        preprocessing_dipy_run_motion_correction=not args.preprocessing_skip_motion,
         preprocessing_mrtrix_bin_dir=args.preprocessing_mrtrix_bin_dir,
         preprocessing_fsl_bin_dir=args.preprocessing_fsl_bin_dir,
         preprocessing_reverse_phase_b0=args.preprocessing_reverse_phase_b0,
@@ -1065,11 +1071,18 @@ def main(argv: list[str] | None = None) -> int:
                 ensure_ascii=False,
             )
         )
+        if reason := _phase_encoding_block(plan):
+            print(reason, file=sys.stderr)
+            return 2
         return 0
 
     if args.execute:
         plan = plan_subject_products(config, write=True)
         _print_run_plan_summary(plan, stream=sys.stderr)
+        if reason := _phase_encoding_block(plan):
+            # W2b rule 4 (T1 D1): no phase-encoding direction, no preprocessing; stop before any stage starts.
+            print(reason, file=sys.stderr)
+            return 2
         # If Cancel kills this process's whole process group (see
         # shared/process_group.py), leave a terminal "cancelled" manifest
         # instead of letting run_subject_products() vanish mid-flight with

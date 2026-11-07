@@ -39,8 +39,10 @@ class PhaseEncodingTest(unittest.TestCase):
             set(PHASE_ENCODING_DIRECTIONS),
             {"i", "i-", "j", "j-", "k", "k-", "AP", "PA", "LR", "RL", "IS", "SI"},
         )
-        self.assertEqual(PHASE_ENCODING_CHOICES[0], ("", "Not set"))
-        self.assertEqual({value for value, _ in PHASE_ENCODING_CHOICES[1:]}, set(PHASE_ENCODING_DIRECTIONS))
+        # W2b: the GUI offers "From sidecar" and the six anatomical designators; NIfTI axis codes stay valid on the CLI.
+        self.assertEqual(PHASE_ENCODING_CHOICES[0][0], "")
+        self.assertIn("sidecar", PHASE_ENCODING_CHOICES[0][1])
+        self.assertEqual({value for value, _ in PHASE_ENCODING_CHOICES[1:]}, {"AP", "PA", "LR", "RL", "IS", "SI"})
 
     def test_normalisation_is_case_insensitive_and_canonical(self) -> None:
         self.assertEqual(normalize_phase_encoding_direction("ap"), "AP")
@@ -92,14 +94,12 @@ class ValidationTest(unittest.TestCase):
         self._tmp.cleanup()
 
     def test_route_gate(self) -> None:
-        self.assertTrue(route_uses_topup("mrtrix_fsl", True))
-        self.assertFalse(route_uses_topup("mrtrix_fsl", False))
-        self.assertFalse(route_uses_topup("dipy", True))
+        self.assertTrue(route_uses_topup(True))
+        self.assertFalse(route_uses_topup(False))
 
-    def test_other_routes_ignore_fields_and_forward_nothing(self) -> None:
+    def test_unselected_preprocessing_ignores_fields_and_forwards_nothing(self) -> None:
         result = validate_topup_parameters(
-            backend="dipy",
-            preprocessing_selected=True,
+            preprocessing_selected=False,
             phase_encoding_direction="nonsense",
             readout_time=-3,
             reverse_phase_b0="/does/not/exist.nii.gz",
@@ -110,7 +110,6 @@ class ValidationTest(unittest.TestCase):
 
     def test_valid_mrtrix_fsl_inputs(self) -> None:
         result = validate_topup_parameters(
-            backend="mrtrix_fsl",
             preprocessing_selected=True,
             phase_encoding_direction="ap",
             readout_time=0.0646,
@@ -122,39 +121,40 @@ class ValidationTest(unittest.TestCase):
 
     def test_missing_and_bad_reverse_b0(self) -> None:
         missing = validate_topup_parameters(
-            backend="mrtrix_fsl", preprocessing_selected=True, phase_encoding_direction="j-",
+            preprocessing_selected=True, phase_encoding_direction="j-",
             reverse_phase_b0=str(self.root / "nope.nii.gz"),
         )
         self.assertIn("not found", missing.errors[0])
         folder = validate_topup_parameters(
-            backend="mrtrix_fsl", preprocessing_selected=True, phase_encoding_direction="j-",
+            preprocessing_selected=True, phase_encoding_direction="j-",
             reverse_phase_b0=str(self.root),
         )
         self.assertIn("must be a file", folder.errors[0])
         text_file = self.root / "notes.txt"
         text_file.write_text("x")
         wrong_type = validate_topup_parameters(
-            backend="mrtrix_fsl", preprocessing_selected=True, phase_encoding_direction="j-",
+            preprocessing_selected=True, phase_encoding_direction="j-",
             reverse_phase_b0=str(text_file),
         )
         self.assertIn("not a NIfTI", wrong_type.errors[0])
 
     def test_batch_mode_blocks_single_reverse_b0(self) -> None:
         result = validate_topup_parameters(
-            backend="mrtrix_fsl", preprocessing_selected=True, phase_encoding_direction="j-",
+            preprocessing_selected=True, phase_encoding_direction="j-",
             reverse_phase_b0=str(self.b0), batch_mode=True,
         )
         self.assertFalse(result.ok)
         self.assertIn("batch mode", result.errors[0].lower())
 
     def test_warnings_and_notes_for_incomplete_but_runnable_inputs(self) -> None:
-        result = validate_topup_parameters(backend="mrtrix_fsl", preprocessing_selected=True)
+        result = validate_topup_parameters(preprocessing_selected=True)
         self.assertTrue(result.ok)
-        self.assertIn("-pe_dir", result.warnings[0])
+        self.assertEqual(result.warnings, ())
+        self.assertTrue(any("input/dwi.json" in note and "AP" in note for note in result.notes))
         self.assertTrue(any("0.1 s" in note for note in result.notes))
         self.assertTrue(any("-rpe_none" in note for note in result.notes))
         long_readout = validate_topup_parameters(
-            backend="mrtrix_fsl", preprocessing_selected=True, phase_encoding_direction="PA", readout_time=0.5
+            preprocessing_selected=True, phase_encoding_direction="PA", readout_time=0.5
         )
         self.assertTrue(long_readout.ok)
         self.assertIn("longer than usual", long_readout.warnings[0])
@@ -162,7 +162,7 @@ class ValidationTest(unittest.TestCase):
 
     def test_errors_are_collected_and_summarised(self) -> None:
         result = validate_topup_parameters(
-            backend="mrtrix_fsl", preprocessing_selected=True, phase_encoding_direction="x", readout_time=5,
+            preprocessing_selected=True, phase_encoding_direction="x", readout_time=5,
         )
         self.assertEqual(len(result.errors), 2)
         self.assertTrue(topup_summary_text(result).startswith("Fix before running:"))
@@ -222,7 +222,6 @@ class RunControllerWiringTest(unittest.TestCase):
             surface_device="auto",
             connectome_backend="python",
             connectome_compress_mrtrix_dense=False,
-            preprocessing_backend="mrtrix_fsl",
             topup=topup,
         )
 
@@ -239,10 +238,9 @@ class RunControllerWiringTest(unittest.TestCase):
         self.assertEqual(kwargs["preprocessing_readout_time"], 0.0646)
         self.assertEqual(kwargs["preprocessing_reverse_phase_b0"], self.TOPUP.reverse_phase_b0)
         with tempfile.TemporaryDirectory() as tmp:
-            args = build_background_cli_args(kwargs, {}, repo_root=self._repo(tmp), preprocessing_backend="mrtrix_fsl")
+            args = build_background_cli_args(kwargs, {}, repo_root=self._repo(tmp))
         cli_part = args[args.index("--subject-root"):]
         parsed = build_parser().parse_args(cli_part)
-        self.assertEqual(parsed.preprocessing_backend, "mrtrix_fsl")
         self.assertEqual(parsed.preprocessing_phase_encoding_direction, "PA")
         self.assertEqual(parsed.preprocessing_readout_time, 0.0646)
         self.assertEqual(parsed.preprocessing_reverse_phase_b0, self.TOPUP.reverse_phase_b0)
@@ -250,7 +248,7 @@ class RunControllerWiringTest(unittest.TestCase):
     def test_unset_topup_leaves_cli_untouched(self) -> None:
         kwargs = build_single_subject_run_kwargs(self._selection(TopupParameters()), {}, preflight_blocked_targets={})
         with tempfile.TemporaryDirectory() as tmp:
-            args = build_background_cli_args(kwargs, {}, repo_root=self._repo(tmp), preprocessing_backend="mrtrix_fsl")
+            args = build_background_cli_args(kwargs, {}, repo_root=self._repo(tmp))
         self.assertFalse([arg for arg in args if "phase" in arg or "readout" in arg])
 
     def test_batch_forwards_protocol_values_but_never_a_reverse_b0(self) -> None:
@@ -259,7 +257,7 @@ class RunControllerWiringTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             args = build_batch_background_cli_args(
                 kwargs, {}, repo_root=self._repo(tmp), batch_root=Path("/data/study"), batch_size=1,
-                arrange_inputs="none", preprocessing_backend="mrtrix_fsl",
+                arrange_inputs="none",
             )
         self.assertEqual(args[args.index("--preprocessing-phase-encoding-direction") + 1], "PA")
         self.assertEqual(float(args[args.index("--preprocessing-readout-time") + 1]), 0.0646)

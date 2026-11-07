@@ -65,7 +65,7 @@ Doctor/plan 可以写入元数据，不执行科学模型。`--strict-environmen
 也可用 `--help` 中列出的显式路径参数。按[托管环境配置](MANAGED_SETUP.zh-CN.md)
 只准备选定依赖和模型。资源下载、许可确认与正式分析分开进行。
 
-大多数模板使用已检查的原生掩膜（`provided`）；需要生成时明确改选 DIPY 或 PNL。
+大多数模板使用已检查的原生掩膜（`provided`）；需要生成时明确改选 PNL CNN。
 已有掩膜优先使用。掩膜及可复用缓存位于被试根目录，仅换输出目录不能隔离掩膜生成对照；
 比较掩膜方法时使用独立输入副本。
 
@@ -107,9 +107,9 @@ NRRD uint16 只在已检查的 int16 数值范围内无损转换；溢出时导�
 
 ## 掩膜和预处理
 
-选择一种掩膜方法，缺少掩膜时才生成。PNL 需要配置好的 PyTorch/ANTs 环境；
-DIPY 不需要权重或外部掩膜程序；MRtrix 和 SynthStrip 各有依赖。
-某个方法失败时不会自动改用另一个方法。
+脑掩膜只有两种方法：`pnl_cnn` 和 `provided`；缺少掩膜时才生成。PNL 按 `--pnl-mask-route auto|managed|native` 选择路线：Linux 上 `auto` 即 managed（带 ANTs 的 conda 运行环境），macOS 和 Windows 上即 Slicer Python 中的 native 路线（SimpleITK 和 PyTorch，“native（实验性）”）；
+SynthStrip、MRtrix `dwi2mask` 和 DIPY 掩膜方法已移除（W5）；`--brain-mask-backend` 写已移除的名称会失败，并提示 `pnl_cnn` 和 `provided`。
+一种方法失败时不会自动改用另一种。
 
 <!-- cli-template: mask-pnl -->
 ```bash
@@ -117,54 +117,17 @@ pipeline mask_pnl --targets validation --brain-mask-backend pnl_cnn \
   --brain-mask-device auto --plan
 ```
 
-<!-- cli-template: mask-dipy -->
-```bash
-pipeline mask_dipy --targets validation --brain-mask-backend dipy --plan
-```
-
-<!-- cli-template: mask-mrtrix -->
-```bash
-pipeline mask_mrtrix --targets validation --brain-mask-backend mrtrix --plan
-```
-
-<!-- cli-template: mask-synthstrip -->
-```bash
-pipeline mask_synthstrip --targets validation --brain-mask-backend synthstrip \
-  --postprocess-freesurfer-home "/path/to/freesurfer" --brain-mask-device auto --plan
-```
-
-可选的 DIPY 去噪、Gibbs 和运动校正：
-
-<!-- cli-template: preproc-dipy -->
-```bash
-pipeline preproc_dipy --targets validation,preprocessing \
-  --brain-mask-backend provided --preprocessing-backend dipy \
-  --preprocessing-dipy-denoise-method mppca --plan
-```
-
-替换去噪器时，其余预处理路线保持一致：
-
-<!-- cli-template: preproc-localpca -->
-```bash
-pipeline preproc_localpca --targets validation,preprocessing \
-  --brain-mask-backend provided --preprocessing-backend dipy \
-  --preprocessing-dipy-denoise-method localpca --plan
-```
-
-<!-- cli-template: preproc-patch2self -->
-```bash
-pipeline preproc_patch2self --targets validation,preprocessing \
-  --brain-mask-backend provided --preprocessing-backend dipy \
-  --preprocessing-dipy-denoise-method patch2self --plan
-```
-
-MRtrix/FSL 路线使用真实采集参数。下面的 `j-`、`0.05` 和反向相位编码 b0
-仅为示例，必须按采集协议替换。
+预处理只有一条路线：DIPY MP-PCA 去噪、DIPY Gibbs 去除，然后通过 MRtrix3 `dwifslpreproc` 运行 FSL eddy 和 topup。
+所有系统都需要 MRtrix3、FSL（eddy、topup）和 FSL 许可。没有 FSL 构建的平台（例如 Linux aarch64）不提供该目标，请导入已预处理的数据。
+`--preprocessing-skip-gibbs` 是唯一可以跳过某一步的选项。旧的 `--preprocessing-backend`、`--preprocessing-dipy-denoise-method` 和 `--preprocessing-skip-motion` 已移除（W2a）；使用它们会失败，并提示这条唯一路线。
+每次预处理都需要相位编码方向。命令先取 `--preprocessing-phase-encoding-direction`（AP、PA、LR、RL、IS、SI，或 `j-` 这类 NIfTI 轴代码），否则取 `input/dwi.json` 中的 `PhaseEncodingDirection`。两者都没有时，`--plan` 和 `--execute` 以退出码 2 停止，并提示 "Phase-encoding direction needed: choose AP, PA, LR, RL, IS or SI in Preprocessing (most axial clinical DWI: AP)"。
+读出时间先取 `--preprocessing-readout-time`，否则取 sidecar 的 `TotalReadoutTime`；两者都没有时，dwifslpreproc 使用 0.1 s，记录中标为 `readout_assumed`。
+下面的 `j-`、`0.05` 和反向相位编码 b0 仅为示例，必须按采集协议替换。
 
 <!-- cli-template: preproc-fsl -->
 ```bash
 pipeline preproc_fsl --targets validation,preprocessing \
-  --brain-mask-backend provided --preprocessing-backend mrtrix_fsl \
+  --brain-mask-backend provided \
   --preprocessing-phase-encoding-direction j- --preprocessing-readout-time 0.05 \
   --preprocessing-reverse-phase-b0 "/path/to/matched_reverse_b0.nii.gz" --plan
 ```
@@ -238,19 +201,14 @@ pipeline dti_ols --targets validation,microstructure --microstructure-stages dti
   --brain-mask-backend provided --micro-fit-method ls --plan
 ```
 
-明确使用轻量掩膜生成及 DTI：
-
-<!-- cli-template: micro-dti-light -->
-```bash
-pipeline dti_light --targets validation,microstructure --microstructure-stages dti \
-  --brain-mask-backend dipy --plan
-```
-
 <!-- cli-template: micro-fw -->
 ```bash
 pipeline freewater --targets validation,microstructure \
   --microstructure-stages dti,freewater --brain-mask-backend provided --plan
 ```
+
+iFW 用 `--microstructure-stages dti,ifw`（或 `--run-ifw`）选择，同时运行 Free Water 和 DDSeg。
+用 `--ifw-echo-time-ms` 给出回波时间；不给时从 DWI sidecar 读取 `EchoTime`，否则停止。`all` 不含 iFW。
 
 <!-- cli-template: micro-noddi -->
 ```bash
@@ -276,7 +234,7 @@ pipeline mkcurve --targets validation,microstructure --microstructure-stages dti
   --dki-fit-method MKCURVE --brain-mask-backend provided --plan
 ```
 
-`MKCURVE` 是 Python 移植版，无需 MATLAB。`MKCURVE_MATLAB` 是另行配置路径的作者参考路线。
+`MKCURVE` 是 Python 移植版，无需 MATLAB；不给出 `--dki-fit-method` 时它也是默认的 DKI 方法。`MKCURVE_MATLAB` 是另行配置路径的作者参考路线。
 
 <!-- cli-template: micro-mkcurve-matlab -->
 ```bash
@@ -298,7 +256,7 @@ pipeline micro_multi --targets validation,microstructure \
 
 ## 纤维追踪
 
-DTI 确定性追踪使用 SlicerDMRI/原生 DTI 准备及 DIPY。
+DTI 确定性追踪使用原生 Teem 张量拟合（Slicer 内核）及 DIPY。
 `--select-streamlines` 不等同于 UKF 的追踪预算。
 
 <!-- cli-template: tract-dti -->
@@ -308,7 +266,7 @@ pipeline tracks_dti --targets validation,tractography --tractography-backend dti
   --dti-min-length-mm 10 --dti-max-length-mm 250 --plan
 ```
 
-UKF 自动调用已安装的 UKFTractography 扩展/CLI，并使用 SlicerDMRI。
+UKF 自动调用已安装的 UKFTractography 扩展/CLI。
 采用作者默认参数，下面仅调整线程预算：
 
 <!-- cli-template: tract-ukf -->
@@ -593,9 +551,9 @@ function Invoke-DDSurfer {
     if ($LASTEXITCODE -ne 0) { throw "SlicerDSpace exited with $LASTEXITCODE" }
 }
 
-Invoke-DDSurfer -Run 'dti_light' -RouteArgs @(
+Invoke-DDSurfer -Run 'dti' -RouteArgs @(
     '--targets', 'validation,microstructure', '--microstructure-stages', 'dti',
-    '--brain-mask-backend', 'dipy', '--plan'
+    '--brain-mask-backend', 'provided', '--plan'
 )
 ```
 

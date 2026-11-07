@@ -425,7 +425,8 @@ class RunSubjectPipelineCliTest(unittest.TestCase):
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             self.assertEqual(manifest["postprocess_atlases"], ["aparc", "aparc.a2009s"])
 
-    def test_cli_records_preprocessing_dipy_options(self) -> None:
+    def test_cli_records_preprocessing_route_options(self) -> None:
+        """W2a (D1): the only route option left is --preprocessing-skip-gibbs."""
         with tempfile.TemporaryDirectory() as tmp:
             subject_root = Path(tmp) / "100307"
             input_dir = subject_root / "input"
@@ -434,32 +435,35 @@ class RunSubjectPipelineCliTest(unittest.TestCase):
                 (input_dir / name).write_text("x", encoding="utf-8")
 
             completed = subprocess.run(
-                [
-                    sys.executable,
-                    str(CLI_PATH),
-                    "--subject-root",
-                    str(subject_root),
-                    "--targets",
-                    "preprocessing",
-                    "--preprocessing-backend",
-                    "dipy",
-                    "--preprocessing-dipy-denoise-method",
-                    "none",
-                    "--preprocessing-skip-gibbs",
-                    "--preprocessing-skip-motion",
-                    "--print-manifest-only",
-                ],
-                check=True,
-                capture_output=True,
-                text=True,
+                [sys.executable, str(CLI_PATH), "--subject-root", str(subject_root), "--targets", "preprocessing",
+                 "--preprocessing-skip-gibbs", "--print-manifest-only"],
+                check=True, capture_output=True, text=True,
             )
 
-            manifest_path = Path(completed.stdout.strip())
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            self.assertEqual(manifest["preprocessing_backend"], "dipy")
-            self.assertEqual(manifest["preprocessing_dipy_denoise_method"], "none")
+            manifest = json.loads(Path(completed.stdout.strip()).read_text(encoding="utf-8"))
             self.assertFalse(manifest["preprocessing_dipy_run_gibbs"])
-            self.assertFalse(manifest["preprocessing_dipy_run_motion_correction"])
+            for removed in ("preprocessing_backend", "preprocessing_dipy_denoise_method",
+                            "preprocessing_dipy_run_motion_correction"):
+                self.assertNotIn(removed, manifest)
+
+    def test_w2a_each_removed_preprocessing_flag_fails_with_the_single_route_message(self) -> None:
+        """W2a (D1): an old route, denoise or motion flag stops the run and names the one route."""
+        with tempfile.TemporaryDirectory() as tmp:
+            subject_root = Path(tmp) / "100307"
+            (subject_root / "input").mkdir(parents=True)
+            for flag in (["--preprocessing-backend", "dipy"], ["--preprocessing-backend", "mrtrix_fsl"],
+                         ["--preprocessing-backend=dipy"], ["--preprocessing-dipy-denoise-method", "localpca"],
+                         ["--preprocessing-dipy-denoise-method=none"], ["--preprocessing-skip-motion"]):
+                with self.subTest(flag=flag):
+                    completed = subprocess.run(
+                        [sys.executable, str(CLI_PATH), "--subject-root", str(subject_root), "--targets", "preprocessing",
+                         *flag, "--print-manifest-only"],
+                        capture_output=True, text=True,
+                    )
+                    name = flag[0].split("=")[0]
+                    self.assertEqual(completed.returncode, 2, completed.stderr)
+                    self.assertIn("Preprocessing has one route: DIPY MP-PCA, DIPY Gibbs removal, FSL eddy/topup "
+                                  f"through dwifslpreproc; remove {name}", completed.stderr)
 
     def test_doctor_writes_environment_report_and_install_helpers(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

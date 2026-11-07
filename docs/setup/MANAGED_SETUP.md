@@ -11,17 +11,23 @@
 ## Inside Slicer
 
 Select your analyses, then open the separate **Environment and installation** section
-and choose **Prepare selected analysis environment**. Review the plan and
-approve downloads and applicable licenses. The dependency report uses the same
-entry. Checks and final verification run in cancellable background processes.
+and choose **Prepare selected analysis environment**. Ticking a product adds the
+prerequisites of that product (preprocessing is never added), and the plan covers
+only those. One dialog lists every download with its size and its licence (name,
+link and local file). Press **Accept licences and install** once. The dependency
+report uses the same entry. Checks and final verification run in cancellable background processes.
 An already-importable environment skips installation and runs functional checks. Offline import,
 repair and manual paths live under Environment > More options, not Advanced
 algorithm settings. It prepares required selected items, not every optional backend:
 
-1. Slicer's Extension Manager installs missing SlicerDMRI/PyTorch extensions; UKFTractography is requested only for a selected UKF route.
+1. Slicer's Extension Manager installs the missing extensions that the ticked products need: PyTorch for the neural models and the native brain mask, UKFTractography for UKF, SlicerDMRI for WMA. The tensor fit needs none (it uses Teem in Slicer core).
 2. If an extension was installed or enabled, save your work and restart Slicer. Reopening SlicerDSpace offers to continue preparation; extensions are reused.
 3. Background workers prepare pinned WMQL/WMA/TractCloud sources without Git, install missing Python wheels, download selected models, and prepare supported isolated tools.
 4. Paths are saved after verification. A fresh dependency check and synthetic functional tests determine readiness. A failed functional test prevents analysis until preparation passes again.
+The same self-checks run from the command line with `scripts/check_setup_functionality.py`.
+dcm2niix (used for DICOM import) follows one rule: if the plugin's own pinned wheel,
+or a dcm2niix path that you set, fails its check, the setup is not ready. If a
+dcm2niix found only on `PATH` fails, you get a warning, because NIfTI input does not need it.
 
 Functional failures are retained across restarts for the same configuration.
 Source discovery is shared with runtime execution, so verified prepared sources
@@ -88,7 +94,7 @@ previous path. Preserve the documented directory layout when transferring
 resources. This imports models, not a portable Conda environment. Protected
 model downloads may still require source authorization; setup does not bypass it.
 
-Optional PNL models/templates, TractCloud inference references, SynthStrip weights
+Optional PNL models/templates, TractCloud inference references
 and WMA ORG atlases use the shared resource layout. Selected preparation acquires
 missing profiles, verifies SHA256 and safely extracts ORG before saving paths.
 Algorithm sources and their data are separate preparation phases. Pinned source
@@ -101,23 +107,29 @@ environments and administrator-managed clusters. Managed setup is opt-in and doe
 not silently replace an explicitly configured environment while an analysis runs.
 User-local defaults live alongside model assets under `SlicerDSpace/runtimes`.
 
+When setup replaces an existing macOS MRtrix3 runtime, it renames the old folder
+to `mrtrix-3.0.8-macos.replaced-<ns>` in that runtimes folder (about 169 MB each;
+`<ns>` is a time stamp). The plugin never deletes these folders. You can delete
+them by hand after a successful run.
+
 ---
 
 ## Current Coverage
 
 | Component | Managed path |
 | --- | --- |
-| MRtrix3 3.0.8 | Official prebuilt Conda packages: Linux x86_64; macOS Intel package/installer adaptation, requiring macOS 14.5+, not yet run on a Mac |
-| FSL eddy 2602.0 / topup 2203.5 | Linux x86_64, official FSL channel; explicit license approval |
+| MRtrix3 3.0.8 | Linux x86_64: official prebuilt Conda packages. macOS (Intel and Apple Silicon, macOS 14.5 or later): the official universal tarball, SHA-256 verified, unpacked into the runtimes folder |
+| FSL eddy 2602.0 / topup 2203.5 | Linux x86_64, macOS Intel and Apple Silicon (macOS 14.5 or later; CPU eddy only), official FSL channel; explicit license approval |
 | CUDA eddy 2602.0 | Optional FSL profile; NVIDIA driver required; no full CUDA Toolkit installation |
 | DDSurfer / DDSeg / DDParcel assets | Existing background download with profile-specific selection and default directory |
 | Python scientific packages | Selected interpreter, protected Slicer core packages, native packaging API when available; official PyTorch helper |
 | PNL diffusion CNN | Linux x86_64; pinned PNLBrainMask-Torch package, converted v0.3 three-view weights, IIT b0 template, Python 3.11, PyTorch 2.5.1 CPU and ANTs 2.3.0 in a separate prefix |
 | Optional cortical postprocessing | [Qualified prebuilt bundle](SURFACE_COMPONENTS.md), Linux x86_64; offline installation tested. Bundle publication is pending. Personal activation is separate; the GUI never compiles sources |
-| WMA / TractCloud / SynthStrip non-code resources | Selected optional profile download/import, checksums, ORG extraction and automatic path saving; private-mirror authorization still applies |
+| WMA / TractCloud non-code resources | Selected optional profile download/import, checksums, ORG extraction and automatic path saving; private-mirror authorization still applies |
 | WMA/WMQL/TractCloud sources | Pinned archives, safe extraction, file hashes, automatic discovery/path saving; no Git or duplicated algorithm implementation |
-| PNL diffusion CNN on macOS and Windows | No managed runtime. The native route ("native (experimental)") needs the PyTorch extension and the pnl-cnn brain-mask assets, which this installer plans (with the PNL licence) |
-| Native Windows, macOS ARM, macOS FSL | No qualified automatic native profiles in this installer; existing Windows/WSL and administrator-provided routes remain |
+| PNL diffusion CNN on macOS and Windows | No managed runtime. The native route ("native (experimental)") runs in Slicer's Python and needs the PyTorch extension and the pnl-cnn brain-mask assets, which this installer plans (with the PNL licence) |
+| Windows | WSL 2 Ubuntu runtime from `scripts/install_deps_windows.ps1` for MRtrix3, FSL and the optional FreeSurfer and algorithm sources; the setup dialog lists it with its licences. The brain mask and the Python stages run in Windows Slicer's Python, not in WSL |
+| macOS CUDA eddy, native Windows MRtrix3/FSL | Not offered. CUDA eddy needs Linux (or WSL with an NVIDIA GPU) |
 
 Functional preparation tests execute a NumPy solve, write/read a small NIfTI and
 VTK streamline where selected, exercise the selected PyTorch device, deserialize
@@ -157,7 +169,9 @@ automatically. See the [Agent setup reference](https://github.com/NeuroDMRI/Slic
 
 ## Maintainer Interface
 
-`scripts/setup_managed_runtime.py` plans by default; `--execute` performs setup.
+`scripts/setup_selected.py --targets <targets>` prints the same plan as the GUI;
+`--execute` runs it and `--accept-licences` accepts every licence in the plan.
+Run it with `PythonSlicer`. `scripts/setup_managed_runtime.py` plans by default; `--execute` performs setup.
 FSL requires `--accept-fsl-license`; PNL requires `--accept-pnl-terms`.
 `--repair` explicitly reinstalls owned selected prefixes. `--root` and
 `SLICERDSPACE_RUNTIME_ROOT` support isolated test environments. The worker returns

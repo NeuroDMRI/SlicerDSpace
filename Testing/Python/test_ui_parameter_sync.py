@@ -59,7 +59,6 @@ class UIParameterSyncTest(unittest.TestCase):
             ddsegDevice="cpu",
             ddsegApplySoftmax=False,
             targetPreprocessing=True,
-            preprocessingBackend="dipy",
             orchestrationRunName="Test1",
             orchestrationTractographyBackend="dti_det",
             orchestrationBundleBackend="wmql",

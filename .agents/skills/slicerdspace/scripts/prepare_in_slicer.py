@@ -12,7 +12,7 @@ TARGET_FIELDS = {
     'tractography': 'targetTractography', 'connectome': 'targetConnectome',
 }
 PARAMETERS = {
-    'brainMaskBackend', 'brainMaskDevice', 'ddsegDevice', 'device', 'preprocessingBackend',
+    'brainMaskBackend', 'brainMaskDevice', 'ddsegDevice', 'device',
     'orchestrationMicrostructureStages', 'orchestrationDkiFitMethod',
     'orchestrationTractographyBackend', 'orchestrationBundleBackend', 'wmaAtlas', 'connectomeBackend',
 }

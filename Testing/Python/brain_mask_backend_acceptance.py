@@ -27,15 +27,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input-dir", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--backend", choices=("pnl_cnn", "synthstrip", "mrtrix"), required=True)
+    parser.add_argument("--backend", choices=("pnl_cnn",), required=True)
     parser.add_argument("--python", type=Path)
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
     parser.add_argument("--script", type=Path)
     parser.add_argument("--models", type=Path)
     parser.add_argument("--ants", type=Path)
-    parser.add_argument("--freesurfer-home", type=Path)
-    parser.add_argument("--synthstrip-python", type=Path)
-    parser.add_argument("--mrtrix-bin-dir", type=Path)
     args = parser.parse_args()
     source, output = args.input_dir.resolve(), args.output_dir.resolve()
     if output == source or output.is_relative_to(source):
@@ -46,9 +43,7 @@ def main():
     config = BrainMaskConfig(backend=args.backend, pnl_mask_python=args.python,
                              brain_mask_device=args.device,
                              pnl_mask_script=args.script, pnl_mask_model_dir=args.models,
-                             pnl_mask_ants_bin_dir=args.ants, freesurfer_home=args.freesurfer_home,
-                             synthstrip_python=args.synthstrip_python,
-                             mrtrix_bin_dir=args.mrtrix_bin_dir)
+                             pnl_mask_ants_bin_dir=args.ants)
     started = time.monotonic()
     report = {"backend": args.backend, "kind": "real_brain_mask_acceptance",
               "anatomical_review": "pending", "scope": "Real external inference and integrity, not accuracy certification"}

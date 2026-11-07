@@ -177,24 +177,44 @@ def used_asset_profiles(manifest: dict) -> list[str]:
 
 
 def _custom_model_root(manifest: dict) -> Optional[Path]:
-    """The user-supplied model folder (run option or environment variable), or None for the managed root.
+    """The model folder named by the run option or ``SLICERDSPACE_MODEL_ASSETS_DIR``, or None when none is named.
 
-    B3 (2): the GUI saves the managed root as ``model_assets_dir``. A folder that is the per-user default root is
-    managed, so the first GUI run does not hash the weights again.
+    C2: a folder that equals the per-user default root is returned like any other. It is not trusted by its path:
+    ``asset_versions`` checks it with the resolver's own check (``_default_root_matches_catalog``). The GUI saves the
+    managed root as ``model_assets_dir``, and the resolver does not verify an explicit root at run time.
     """
     import os
 
     explicit = manifest.get("model_assets_dir") or os.environ.get("SLICERDSPACE_MODEL_ASSETS_DIR")
-    if not explicit:
-        return None
-    folder = Path(explicit).expanduser()
+    return Path(explicit).expanduser() if explicit else None
+
+
+def _is_default_model_root(folder: Path) -> bool:
     try:
         from shared.model_assets import default_user_model_assets_root
-        if folder.resolve() == default_user_model_assets_root().expanduser().resolve():
-            return None
+        return folder.resolve() == default_user_model_assets_root().expanduser().resolve()
     except (OSError, ImportError):
-        pass
-    return folder
+        return False
+
+
+def _default_root_matches_catalog(files: dict, records: dict) -> bool:
+    """C2: True when the per-user default root holds every catalogued file of the profile with the catalogued SHA-256.
+
+    This is the check of the model-asset resolver (``_has_verified_required_asset``), one file at a time, with the
+    records of the manifest that lists the profile. It uses the same (mtime, size) digest cache and the same cache keys
+    (the default root as the resolver spells it), so a file that the resolver verified before is not hashed again.
+    The managed install (``download_model_assets.py``) hashes with its own function and writes no cache entry: the
+    first record after a fresh install hashes each catalogued file once.
+    """
+    expected = [path for path, digest in files.items() if digest]
+    if not expected:
+        return False
+    try:
+        from shared.model_assets import _has_verified_required_asset, default_user_model_assets_root
+        root = default_user_model_assets_root()
+        return all(_has_verified_required_asset(root, (path,), manifest_records=records) for path in expected)
+    except (OSError, ImportError):
+        return False
 
 
 def _custom_pnl_model_dir(manifest: dict) -> Optional[Path]:
@@ -260,10 +280,13 @@ def _folder_matches_catalog(folder: Path, files: dict, profile: Optional[str] = 
 def asset_versions(manifest: dict, repo_root: Optional[Path] = None) -> dict:
     """Version and SHA-256 values that the asset manifests already store, per profile that the run used.
 
-    The managed root is never hashed here (the weights are large): the values come from the manifests. A user-supplied
-    model folder is checked against the catalog (a verification receipt, else the digest cache, else one hash per
-    uncached catalogued file), and a folder that does not match records the version ``"unknown"``. A profile that no
-    manifest lists gets the model folder and the version ``"unknown"``.
+    When no model folder is named, the values come from the manifests and nothing is hashed. A named model folder
+    (run option or environment variable) is checked against the catalog before the catalog values are used, and a
+    folder that does not match records the version ``"unknown"``. C2: this holds for a folder that equals the
+    per-user default root too. That folder goes through the resolver's check (digest cache, else one hash per
+    uncached catalogued file). Any other named folder goes through ``_folder_matches_catalog`` (a verification
+    receipt, else the digest cache, else one hash per uncached file). A profile that no manifest lists gets the model
+    folder and the version ``"unknown"``.
     """
     manifests = _load_asset_manifests(Path(repo_root) if repo_root else REPO_ROOT)
     folder = manifest.get("model_assets_dir")
@@ -277,6 +300,7 @@ def asset_versions(manifest: dict, repo_root: Optional[Path] = None) -> dict:
         return paths + list(profile.get("required_paths", []))
 
     custom_root = _custom_model_root(manifest)
+    default_root = custom_root is not None and _is_default_model_root(custom_root)
     if custom_root is not None:
         folder = custom_root.as_posix()
     result: dict[str, Any] = {}
@@ -288,7 +312,9 @@ def asset_versions(manifest: dict, repo_root: Optional[Path] = None) -> dict:
                      for path in dict.fromkeys(paths_of(name, found, set()))}
             # T-C7b: a user-supplied model folder is not verified by the resolver. Take the catalog values
             # only when every catalogued file in that folder has the catalogued SHA-256; else record "unknown".
-            if custom_root is not None and not _folder_matches_catalog(custom_root, files, name):
+            if custom_root is not None and not (
+                    _default_root_matches_catalog(files, found["records"]) if default_root
+                    else _folder_matches_catalog(custom_root, files, name)):
                 result[name] = {"manifest": None, "version": "unknown", "folder": folder, "files": {}}
                 break
             # B3 (4): a custom PNL weights folder is not the catalog folder. Its files sit beside each other, so the

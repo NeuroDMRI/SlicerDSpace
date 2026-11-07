@@ -79,12 +79,63 @@ class B3RecordTest(unittest.TestCase):
     # ---- B3 (2): a verified folder counts as managed
     manifest = {"brain_mask_backend": "synthstrip", "tasks": [_task("segmentation.ddseg")]}
 
-    def test_b3_2_the_default_managed_root_saved_by_the_gui_is_not_hashed(self) -> None:
-        from shared.model_assets import default_user_model_assets_root
+    # ---- C2: the default root named explicitly gets catalog values only after a check
+    @staticmethod
+    def _default_root_catalog(tmp):
+        """A default root with two catalogued files, a catalog for it, and a repo checkout with the same manifest."""
+        files = {"seg/a.pt": b"weights a", "seg/b.pt": b"weights b"}
+        records = {path: {"sha256": hashlib.sha256(data).hexdigest()} for path, data in files.items()}
+        root = Path(tmp) / "default model assets"
+        for path, data in files.items():
+            (root / path).parent.mkdir(parents=True, exist_ok=True)
+            (root / path).write_bytes(data)
+        catalog = {"manifest": "m.json", "version": "9", "records": records, "path": "m.json", "upstream_commit": None,
+                   "profiles": {"segmentation": {"required_paths": list(files)}}}
+        repo = Path(tmp) / "repo"
+        (repo / "models").mkdir(parents=True)
+        (repo / "models" / "assets_manifest.json").write_text(json.dumps({"asset_records": records}), encoding="utf-8")
+        return root, catalog, repo, {path: record["sha256"] for path, record in records.items()}
 
-        root = default_user_model_assets_root()
-        with patch("shared.model_asset_integrity.sha256_of_file", side_effect=AssertionError("must not hash")):
-            profiles = run_record.asset_versions(dict(self.manifest, model_assets_dir=str(root)))
+    def test_c2_an_explicit_default_root_with_a_replaced_file_records_unknown(self) -> None:
+        """C2: the path-equality shortcut is gone. Fails at 0064d04: the default root got the catalog values unchecked."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root, catalog, _, _ = self._default_root_catalog(tmp)
+            (root / "seg" / "b.pt").write_bytes(b"a different file")
+            with patch.object(run_record, "_load_asset_manifests", return_value=[catalog]), \
+                    patch("shared.model_assets.default_user_model_assets_root", return_value=root), \
+                    patch("shared.model_assets._sha256_cache", return_value={}):
+                profiles = run_record.asset_versions(dict(self.manifest, model_assets_dir=str(root)))
+                from_env = None
+                with patch.dict(os.environ, {"SLICERDSPACE_MODEL_ASSETS_DIR": str(root)}):
+                    from_env = run_record.asset_versions(dict(self.manifest))
+        for found in (profiles, from_env):
+            self.assertEqual(found["segmentation"]["version"], "unknown")
+            self.assertEqual(found["segmentation"]["files"], {})
+
+    def test_c2_an_explicit_default_root_after_a_verified_install_gets_catalog_values_without_hashing(self) -> None:
+        """C2: the resolver fills the digest cache while it verifies; the record then reads that cache and hashes nothing."""
+        from shared.model_assets import model_asset_path
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root, catalog, repo, digests = self._default_root_catalog(tmp)
+            cache: dict = {}
+            with patch("shared.model_assets.default_user_model_assets_root", return_value=root), \
+                    patch("shared.model_assets._sha256_cache", return_value=cache), \
+                    patch("shared.model_assets._persist_sha256_cache"):
+                for relative in digests:  # the resolver's own verification of the install (no explicit root)
+                    self.assertEqual(model_asset_path(relative, repo_root=repo), (root / relative).resolve())
+                self.assertTrue(cache)  # the resolver wrote digests for the install
+                guard = patch("shared.model_asset_integrity.sha256_of_file", side_effect=AssertionError("must not hash"))
+                with patch.object(run_record, "_load_asset_manifests", return_value=[catalog]), guard:
+                    profiles = run_record.asset_versions(dict(self.manifest, model_assets_dir=str(root)))
+        self.assertEqual(profiles["segmentation"]["files"], digests)
+        self.assertEqual(profiles["segmentation"]["manifest"], "m.json")
+
+    def test_c2_no_model_folder_named_records_catalog_values_without_hashing(self) -> None:
+        guard = patch("shared.model_asset_integrity.sha256_of_file", side_effect=AssertionError("must not hash"))
+        with patch.dict(os.environ, {}, clear=False), guard:
+            os.environ.pop("SLICERDSPACE_MODEL_ASSETS_DIR", None)
+            profiles = run_record.asset_versions(dict(self.manifest))
         self.assertEqual(profiles["segmentation"]["manifest"], "models/assets_manifest.json")
         self.assertTrue(profiles["segmentation"]["files"])
 

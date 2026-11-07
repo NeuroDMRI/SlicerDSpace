@@ -33,12 +33,12 @@ def build_setup_plan(result, *, installed_extensions=(), loaded_extensions=None,
     pnl_managed = resolve_pnl_mask_route(pnl_mask_route, system) == "managed"
     installed = set(installed_extensions)
     # DTI-based targets use the native Teem tensor fit (Slicer core), so need_dti adds no extension.
-    # SlicerDMRI is needed only where a step still loads its modules (the WMA harden-transform shim).
+    # WMA hardening uses Slicer-core Model/Transform nodes; do not require SlicerDMRI.
     # F1 (SC-1 fix round): the native mask runs torch in Slicer's interpreter, so a required pnl_cnn mask on the
     # native route needs PyTorch even when no segmentation, parcellation, surface or TractCloud target is selected.
     native_mask_torch = (brain_mask_backend == "pnl_cnn" and not pnl_managed and
                          any(item.key == "brain_mask_backend" and item.required for item in result.statuses))
-    required_extensions = (["SlicerDMRI"] if need_slicerdmri else []) + (["PyTorch"] if need_torch or native_mask_torch else [])
+    required_extensions = (["PyTorch"] if need_torch or native_mask_torch else [])
     if need_ukf:
         required_extensions.append("UKFTractography")
     missing = [item for item in environment_missing_items(result) if item.required]
@@ -436,7 +436,7 @@ def need_flags(closure_targets, algorithms=("csd_act",), *, fallback_ukf=False):
     targets = set(closure_targets)
     return dict(
         need_dti=bool(targets & {"segmentation", "parcellation", "surface", "microstructure", "tractography", "wma"}),
-        need_slicerdmri="wma" in targets,
+        need_slicerdmri=False,  # WMA uses Slicer-core Model/Transform nodes
         need_torch=bool(targets & {"segmentation", "parcellation", "surface", "tractcloud"}),
         need_ukf="tractography" in targets and ("ukf" in tuple(algorithms) or bool(fallback_ukf)))
 

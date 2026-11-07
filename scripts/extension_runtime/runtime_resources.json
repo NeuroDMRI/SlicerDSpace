@@ -10,6 +10,7 @@
     "models/assets_manifest.json",
     "models/external_assets_manifest.json",
     "models/runtime_bundles.json",
+    "models/native_runtime_bundles.json",
     "Resources/Icons/SlicerDSpace.png",
     "Resources/Icons/SlicerDSpace-wordmark.svg",
     "Resources/UI/SlicerDSpace.ui",

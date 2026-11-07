@@ -75,25 +75,25 @@ class SelectedSetupTests(unittest.TestCase):
             self.assertEqual(report.blocker_count, 0)
     def test_slicer_510_installed_is_not_loaded_and_nonexposed_api_is_not_called(self):
         manager = Mock(spec=('isExtensionInstalled', 'isExtensionEnabled'))
-        manager.isExtensionInstalled.side_effect = lambda name: name in ('SlicerDMRI', 'PyTorch')
+        manager.isExtensionInstalled.side_effect = lambda name: name == 'PyTorch'
         manager.isExtensionEnabled.return_value = True
         with patch('importlib.util.find_spec', return_value=None):
             installed, loaded = extension_states(manager, SimpleNamespace())
-        self.assertEqual(installed, ['SlicerDMRI', 'PyTorch'])
+        self.assertEqual(installed, ['PyTorch'])
         self.assertEqual(loaded, [])
         plan = build_setup_plan(result(), need_slicerdmri=True, installed_extensions=installed, loaded_extensions=loaded)
-        self.assertEqual(plan['restart_extensions'], ['SlicerDMRI'])
+        self.assertEqual(plan['restart_extensions'], [])
         with patch('importlib.util.find_spec', return_value=object()):
             _, loaded = extension_states(manager, SimpleNamespace(dwitodtiestimation=object()))
-        self.assertEqual(loaded, ['SlicerDMRI', 'PyTorch'])
+        self.assertEqual(loaded, ['PyTorch'])
 
-    def test_d8_slicerdmri_is_needed_only_for_wma(self):
+    def test_d8_wma_does_not_require_slicerdmri(self):
         missing = result()
         self.assertEqual(build_setup_plan(missing, need_dti=True)["extensions"], [])
-        self.assertEqual(build_setup_plan(missing, need_dti=True, need_slicerdmri=True)["extensions"], ["SlicerDMRI"])
+        self.assertEqual(build_setup_plan(missing, need_dti=True, need_slicerdmri=True)["extensions"], [])
         self.assertEqual(build_setup_plan(missing, need_ukf=True)["extensions"], ["UKFTractography"])
         both = build_setup_plan(missing, need_slicerdmri=True, need_torch=True, need_ukf=True)
-        self.assertEqual(both["extensions"], ["SlicerDMRI", "PyTorch", "UKFTractography"])
+        self.assertEqual(both["extensions"], ["PyTorch", "UKFTractography"])
         installed = build_setup_plan(missing, need_dti=True, installed_extensions=("SlicerDMRI",), loaded_extensions=[])
         self.assertEqual((installed["extensions"], installed["restart_extensions"]), ([], []))
 
@@ -287,13 +287,13 @@ class SelectedSetupTests(unittest.TestCase):
                                  modules=SimpleNamespace(), util=SimpleNamespace(infoDisplay=Mock()))
         return patch.dict("sys.modules", {"slicer": slicer}), manager
 
-    def test_d8_widget_plan_asks_for_slicerdmri_only_with_the_wma_target(self):
+    def test_d8_widget_plan_uses_ukf_without_slicerdmri_for_wma(self):
         import shared.ui_selected_setup as ui
         for ticked, doctor_targets, expected in (
                 (("microstructure", "tractography", "surface"), ("microstructure", "tractography", "surface"), []),
                 # C2: WMA needs a UKF tractogram, so its closure also needs the UKF extension.
                 # K1: the doctor result holds the real closed shape (validation, tractography, wma).
-                (("wma",), ("validation", "tractography", "wma"), ["SlicerDMRI", "UKFTractography"])):
+                (("wma",), ("validation", "tractography", "wma"), ["UKFTractography"])):
             with self.subTest(targets=ticked):
                 owner = self.owner(result(targets=doctor_targets), closure=expand_closure(ticked))
                 context, manager = self.run_preparation(owner, owner._run_environment_dependency_check.return_value)
@@ -483,7 +483,7 @@ class SelectedSetupTests(unittest.TestCase):
                 patch("shared.user_config.default_user_config_path", return_value=Path(temp) / "config.json"):
             prepare_selected_environment(owner)
         self.assertEqual([call.args for call in manager.installExtensionFromServer.call_args_list],
-                         [("SlicerDMRI", False), ("UKFTractography", False)])
+                         [("UKFTractography", False)])
         self.assertTrue(owner._setupRestartRequired)
         self.assertFalse(owner._selectedSetupActive)
 

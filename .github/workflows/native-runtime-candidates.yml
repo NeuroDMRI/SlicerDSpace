@@ -1,0 +1,123 @@
+name: Native runtime candidates (not a release)
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_windows_mrtrix:
+        description: 'Build Windows MRtrix3 C++ executable candidate'
+        required: true
+        type: boolean
+        default: true
+      package_macos_mrtrix:
+        description: 'Package SHA256-verified macOS MRtrix3 3.0.8 candidate'
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  platform-unit:
+    name: Portable unit checks (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2022, macos-14]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install unit-test VTK (no separate Slicer or WSL required)
+        run: python -m pip install --disable-pip-version-check vtk numpy
+      - name: Test native staging and WMA core transform
+        run: |
+          python -m unittest discover -s Testing/Python -p test_native_runtimes.py -v
+          python -m unittest discover -s Testing/Python -p test_native_candidate_builds.py -v
+          python -m unittest discover -s Testing/Python -p test_wma_core_harden.py -v
+          python -m unittest discover -s Testing/Python -p test_wma_native_measures.py -v
+
+  windows-mrtrix-candidate:
+    if: github.event_name == 'workflow_dispatch' && inputs.build_windows_mrtrix
+    runs-on: windows-2022
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: slicerdspace
+      - uses: actions/checkout@v4
+        with:
+          repository: MRtrix3/mrtrix3
+          ref: '3.0.8'
+          path: slicerdspace/mrtrix3
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            git python pkgconf make diffutils
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-eigen3
+            mingw-w64-x86_64-fftw
+            mingw-w64-x86_64-libpng
+            mingw-w64-x86_64-libtiff
+            mingw-w64-x86_64-zlib
+            mingw-w64-x86_64-binutils
+      - name: Compile and stage DLL closure on Windows
+        shell: msys2 {0}
+        working-directory: slicerdspace
+        run: bash scripts/native/build_mrtrix_windows.sh mrtrix3 dist/native-candidates
+      - name: Relocation/loader smoke using native Windows Python, without MSYS2 PATH
+        shell: pwsh
+        working-directory: slicerdspace
+        run: python scripts/native/smoke_mrtrix_candidate.py --archive dist/native-candidates/mrtrix-3.0.8-windows-x86_64.zip --record dist/native-candidates/mrtrix-3.0.8-windows-x86_64.draft-record.json --output dist/native-candidates/relocation-smoke.json
+      - name: Upload unqualified candidate for maintainer inspection
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-mrtrix-native-candidate
+          path: slicerdspace/dist/native-candidates/
+          if-no-files-found: warn
+
+  macos-mrtrix-candidate:
+    if: github.event_name == 'workflow_dispatch' && inputs.package_macos_mrtrix
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            machine: arm64
+          - os: macos-15-intel
+            machine: x86_64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Verify actual host architecture
+        shell: bash
+        run: test "$(uname -m)" = "${{ matrix.machine }}" || (echo 'Runner architecture mismatch' >&2; exit 1)
+      - name: Stage pinned official macOS build (not compilation)
+        shell: bash
+        run: bash scripts/native/build_mrtrix_macos.sh dist/native-candidates
+      - name: Relocation/loader smoke without Homebrew PATH
+        shell: bash
+        run: |
+          python scripts/native/smoke_mrtrix_candidate.py \
+            --archive "dist/native-candidates/mrtrix-3.0.8-darwin-${{ matrix.machine }}.tar.gz" \
+            --record "dist/native-candidates/mrtrix-3.0.8-darwin-${{ matrix.machine }}.draft-record.json" \
+            --output dist/native-candidates/relocation-smoke.json
+      - name: Upload unqualified candidate for maintainer inspection
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-${{ matrix.machine }}-mrtrix-native-candidate
+          path: dist/native-candidates/
+          if-no-files-found: warn

@@ -1,36 +1,93 @@
-"""Run WMA's harden_transform_with_slicer.py in 3D Slicer with a fiber-bundle save that does not depend
-on Slicer's default writer choice.
+"""Harden WMA transforms with Slicer core's Model/Transform nodes.
 
-    Slicer --no-main-window --python-script <shim> <author args...>
-
-tractography/wma.py writes the shim, named like the author script, into the folder that it puts first on
-PATH for the author pipeline; the shim calls run(<author script>). The author path is not a command-line
-argument because Slicer runs a .py positional argument instead of the --python-script file.
-
-3D Slicer 5.12.4 with SlicerDMRI (macOS, 2026-10-23) picks the writer type "TRXFile" for fiber bundles
-and has no writer registered for it, so slicer.util.saveNode() wrote no cluster and WMA stopped
-("There should be 800 resulting fiber clusters, but only 23 generated"). The author script runs
-unchanged; only its .vtp/.vtk fiber-bundle saves go through the fiber bundle storage node.
+No SlicerDMRI FiberBundle reader, writer, or TractographyDisplay module is
+needed. The pinned WMA author command calls ``Slicer --python-script`` with
+four positional arguments. The caller provides the same four arguments here.
+This adapter deliberately retains WMA's transform inversion and empty-cluster
+behavior; the registration/clustering algorithms are unchanged.
 """
 
-import runpy
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+import shutil
 import sys
 
-import slicer
+
+def harden_transform(polydata, transform, inverse, outdir, *, slicer_module=None):
+    """Transform one .vtk/.vtp cluster using only Slicer-core MRML classes."""
+    if slicer_module is None:
+        import slicer as slicer_module
+    slicer = slicer_module
+    source = Path(polydata)
+    destination = Path(outdir) / source.name
+    if destination.exists():
+        return destination
+    destination.parent.mkdir(parents=True, exist_ok=True)
+
+    model = transformation = storage = None
+    try:
+        # loadModel uses Slicer's core ModelFile reader, unlike loadFiberBundle
+        # whose FiberBundleFile reader is registered by SlicerDMRI.
+        model = slicer.util.loadModel(str(source))
+        if model is None or model.GetPolyData() is None:
+            raise RuntimeError(f"Could not load model polydata: {source}")
+        if model.GetPolyData().GetNumberOfCells() == 0:
+            shutil.copyfile(source, destination)
+            return destination
+
+        transformation = slicer.util.loadTransform(str(transform))
+        if transformation is None:
+            raise RuntimeError(f"Could not load transform: {transform}")
+        if str(inverse) == "1":
+            transformation.Inverse()
+        model.SetAndObserveTransformNodeID(transformation.GetID())
+        slicer.vtkSlicerTransformLogic().hardenTransform(model)
+
+        # Explicit Model storage prevents SlicerDMRI's optional TRX/FiberBundle
+        # writers from changing how .vtk/.vtp data are serialized.
+        storage = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLModelStorageNode")
+        if storage is None:
+            raise RuntimeError("Slicer core vtkMRMLModelStorageNode is unavailable")
+        storage.SetFileName(str(destination))
+        if not storage.WriteData(model):
+            raise RuntimeError(f"Failed to save transformed model: {destination}")
+        return destination
+    finally:
+        for node in (storage, model, transformation):
+            if node is not None:
+                slicer.mrmlScene.RemoveNode(node)
 
 
-def save_fiber_bundle(node, filename, properties=None, _save=slicer.util.saveNode):
-    if node.IsA("vtkMRMLFiberBundleNode") and str(filename).lower().endswith((".vtp", ".vtk")):
-        storage = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLFiberBundleStorageNode")
-        try:
-            storage.SetFileName(str(filename))
-            return bool(storage.WriteData(node))
-        finally:
-            slicer.mrmlScene.RemoveNode(storage)
-    return _save(node, filename, properties or {})
+def main(argv=None, *, slicer_module=None):
+    parser = argparse.ArgumentParser(description="WMA transform using Slicer core; SlicerDMRI is not required")
+    parser.add_argument("polydata")
+    parser.add_argument("transform")
+    parser.add_argument("inverse", choices=("0", "1"))
+    parser.add_argument("outdir")
+    args = parser.parse_args(argv)
+    source = Path(args.polydata)
+    if source.is_file():
+        paths = [source]
+    elif source.is_dir():
+        paths = sorted((*source.glob("*.vtk"), *source.glob("*.vtp")))
+    else:
+        raise FileNotFoundError(f"WMA polydata not found: {source}")
+    for path in paths:
+        harden_transform(path, args.transform, args.inverse, args.outdir, slicer_module=slicer_module)
+    return 0
 
 
-def run(author):
-    slicer.util.saveNode = save_fiber_bundle
-    sys.argv = [str(author), *sys.argv[1:]]
-    runpy.run_path(str(author), run_name="__main__")
+def run(author=None):
+    """Compatibility entrypoint used by tractography/wma.py's existing shim.
+
+    ``author`` is kept only for historical call-site compatibility. No author
+    script is executed, because its loadFiberBundle() requires SlicerDMRI.
+    """
+    del author
+    return main(sys.argv[1:])
+
+
+if __name__ == "__main__":
+    sys.exit(main())

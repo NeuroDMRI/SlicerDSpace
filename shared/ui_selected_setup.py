@@ -56,7 +56,7 @@ def extension_states(manager, modules):
     """
     import importlib.util
     installed, loaded = [], []
-    for name, module in (("SlicerDMRI", "dwitodtiestimation"), ("PyTorch", "pytorchutils"),
+    for name, module in (("PyTorch", "pytorchutils"),
                          ("UKFTractography", "ukftractography")):
         available = hasattr(modules, module)
         if name == 'PyTorch' and not available:

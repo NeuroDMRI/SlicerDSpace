@@ -294,12 +294,66 @@ exit 0
         self.assertEqual(qc["status"], "planned")
         self.assertFalse(qc["executed"])
 
+    def test_original_measurement_export_keeps_author_cli(self):
+        from dataclasses import replace
+        from tractography.wma import WMAOrgAtlasConfig, build_wma_org_atlas_command
+        cli = self.tmp_path / 'FiberTractMeasurements'
+        cli.write_text('fixture')
+        config = WMAOrgAtlasConfig(subject_id='100307', input_tractography=self.tractography,
+            atlas_dir=self.atlas_dir, output_dir=self.output_dir, slicer_executable=self.slicer_executable,
+            wma_root=self.wma_root, export_diffusion_measures=True, fiber_tract_measurements_cli=cli)
+        command = build_wma_org_atlas_command(config)
+        self.assertEqual(command[command.index('-m') + 1], str(cli))
+        self.assertEqual(command[command.index('-d') + 1], '1')
+        native = replace(config, measurement_backend='native_vtk_point_scalar_summary',
+                         fiber_tract_measurements_cli=None)
+        self.assertNotIn('-m', build_wma_org_atlas_command(native))
+        self.assertNotIn('-d', build_wma_org_atlas_command(native))
+
+    def test_native_measurement_provenance_and_failure_prevent_publish(self):
+        from dataclasses import replace
+        from tractography.wma import WMAOrgAtlasConfig, run_wma_org_atlas
+        config = WMAOrgAtlasConfig(subject_id='100307', input_tractography=self.tractography,
+            atlas_dir=self.atlas_dir, output_dir=self.output_dir, slicer_executable=self.slicer_executable,
+            wma_root=self.wma_root, execute=True, export_diffusion_measures=True,
+            measurement_backend='native_vtk_point_scalar_summary')
+        provenance = {'backend': 'native_vtk_point_scalar_summary',
+                      'upstream_fibertractmeasurements_parity_certified': False}
+        with mock.patch('tractography.wma_native_measures.export_wma_case_measurements',
+                        return_value=provenance) as exporter:
+            result = run_wma_org_atlas(config)
+        self.assertEqual(result.status, 'completed')
+        exporter.assert_called_once()
+        manifest = json.loads(result.manifest_path.read_text())
+        self.assertEqual(manifest['measurement_provenance'], provenance)
+        self.assertEqual(manifest['requested_measurement_backend'], config.measurement_backend)
+        failed_config = replace(config, output_dir=self.tmp_path / 'failed-native')
+        with mock.patch('tractography.wma_native_measures.export_wma_case_measurements',
+                        side_effect=RuntimeError('tensor not supported')):
+            failed = run_wma_org_atlas(failed_config)
+        self.assertEqual(failed.status, 'partial_failed')
+        self.assertFalse((failed_config.output_dir / 'subject').exists())
+
+    def test_unknown_measurement_backend_is_rejected(self):
+        from tractography.wma import WMAOrgAtlasConfig, validate_wma_org_inputs
+        config = WMAOrgAtlasConfig(subject_id='100307', input_tractography=self.tractography,
+            atlas_dir=self.atlas_dir, output_dir=self.output_dir, slicer_executable=self.slicer_executable,
+            measurement_backend='typo')
+        with self.assertRaisesRegex(ValueError, 'measurement backend'):
+            validate_wma_org_inputs(config)
+
     @unittest.skipIf(sys.platform == 'win32', 'POSIX shim; Windows uses the WSL bridge')
     def test_registration_dispatch_and_reports_are_fresh_per_run(self):
         from tractography.wma import WMAOrgAtlasConfig, run_wma_org_atlas
         python = self.tmp_path / 'bin' / 'PythonSlicer'
         python.parent.mkdir()
-        python.symlink_to(sys.executable)
+        # PythonSlicer launches python-real with Slicer's shared-library paths.
+        # A symlink to python-real cannot run in the deliberately cleaned WMA env.
+        import shlex
+        launcher = Path(sys.executable).parent / 'PythonSlicer'
+        interpreter = launcher if launcher.is_file() else Path(sys.executable)
+        python.write_text('#!/bin/sh\nexec ' + shlex.quote(str(interpreter)) + ' "$@"\n')
+        python.chmod(0o755)
         package = self.wma_root / 'whitematteranalysis'
         package.mkdir()
         (package / '__init__.py').write_text('')
@@ -350,7 +404,7 @@ exit 0
         manifest = json.loads(result.manifest_path.read_text())
         self.assertEqual(manifest['harden_transform_shim'], 'harden_transform_with_slicer.py')
         runner = Path(__file__).resolve().parents[2] / 'scripts' / 'run_wma_harden_transform.py'
-        self.assertIn('def run(author)', runner.read_text())
+        self.assertIn('def run(author=None)', runner.read_text())
 
     def test_cache_can_be_disabled_without_changing_author_command(self):
         from tractography.wma import WMAOrgAtlasConfig, run_wma_org_atlas
@@ -678,7 +732,7 @@ exit 0
         self.assertEqual(qc["acceptance_criteria"]["minimum_nonempty_anatomical_tract_count"], 55)
         self.assertIn("under-populated", qc["error"])
 
-    def test_runtime_library_paths_include_slicerdmri_extension_dirs(self) -> None:
+    def test_runtime_library_paths_exclude_slicerdmri_extension_dirs(self) -> None:
         from tractography.wma import _slicer_runtime_library_paths
 
         slicer_root = self.tmp_path / "SlicerRoot"
@@ -700,8 +754,8 @@ exit 0
 
         paths = _slicer_runtime_library_paths(slicer_exec)
         self.assertIn((slicer_root / "lib" / "Slicer-5.10").resolve(), paths)
-        self.assertIn(qt_loadable.resolve(), paths)
-        self.assertIn(qt_loadable.parent.resolve(), paths)
+        self.assertNotIn(qt_loadable.resolve(), paths)
+        self.assertNotIn(qt_loadable.parent.resolve(), paths)
 
     def test_runtime_library_paths_discover_installed_slicer_version(self) -> None:
         from tractography.wma import _slicer_runtime_library_paths
@@ -725,8 +779,8 @@ exit 0
         paths = _slicer_runtime_library_paths(slicer_exec)
 
         self.assertIn(slicer_library.resolve(), paths)
-        self.assertIn(qt_scripted.resolve(), paths)
-        self.assertIn(qt_scripted.parent.resolve(), paths)
+        self.assertNotIn(qt_scripted.resolve(), paths)
+        self.assertNotIn(qt_scripted.parent.resolve(), paths)
 
     def test_resolve_slicer_launcher_prefers_run_slicer_sh_when_present(self) -> None:
         from tractography.wma import _resolve_slicer_launcher

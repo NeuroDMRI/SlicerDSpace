@@ -117,6 +117,8 @@ class WMAOrgAtlasConfig:
     execute: bool = False
     registration_preprocess_cache: bool = True
     atlas_family: str = "auto"
+    # Keep the original optional export until the new method is explicitly selected.
+    measurement_backend: str = "fibertractmeasurements"
 
 
 @dataclass(frozen=True)
@@ -258,10 +260,7 @@ def _slicer_runtime_library_paths(slicer_executable: Path) -> tuple[Path, ...]:
     roots = slicer_runtime_roots(slicer_executable.expanduser().resolve().parent)
     candidates = [path for root in roots for path in sorted((root / 'lib').glob('Slicer-*'))]
     candidates.extend(root / 'lib' for root in roots)
-    slicerdmri_paths = _slicerdmri_module_paths(slicer_executable)
-    for path in slicerdmri_paths:
-        candidates.append(path)
-        candidates.append(path.parent)
+    # Slicer-core Model/Transform hardening needs no SlicerDMRI extension paths.
     candidates.extend(path for path in EXTRA_LIBRARY_DIRS)
     unique: list[Path] = []
     for path in candidates:
@@ -635,17 +634,11 @@ def build_wma_org_atlas_command(config: WMAOrgAtlasConfig) -> tuple[str, ...]:
     ]
     if config.transform_path is not None:
         cmd.extend(["-t", config.transform_path.expanduser().resolve().as_posix()])
-    if config.export_diffusion_measures:
+    if config.export_diffusion_measures and config.measurement_backend == "fibertractmeasurements":
         if config.fiber_tract_measurements_cli is None:
             raise ValueError("fiber_tract_measurements_cli is required when export_diffusion_measures=True.")
-        cmd.extend(
-            [
-                "-d",
-                "1",
-                "-m",
-                config.fiber_tract_measurements_cli.expanduser().resolve().as_posix(),
-            ]
-        )
+        cmd.extend(["-d", "1", "-m", config.fiber_tract_measurements_cli.expanduser().resolve().as_posix()])
+    # The separately selected native method runs after author clustering.
     family = detect_atlas_family(config.atlas_dir, config.atlas_family)
     if family != "org":
         runner = Path(__file__).resolve().parents[1] / "scripts/run_wma_atlas.py"
@@ -688,6 +681,8 @@ def _resolve_tckconvert(config: WMAOrgAtlasConfig) -> Optional[Path]:
 
 
 def validate_wma_org_inputs(config: WMAOrgAtlasConfig) -> None:
+    if config.measurement_backend not in {"fibertractmeasurements", "native_vtk_point_scalar_summary"}:
+        raise ValueError("Unknown WMA measurement backend: " + str(config.measurement_backend))
     if not config.subject_id.strip():
         raise ValueError("subject_id is required.")
     input_suffix = config.input_tractography.suffix.lower()
@@ -719,7 +714,8 @@ def validate_wma_org_inputs(config: WMAOrgAtlasConfig) -> None:
     backend_status = inspect_wma_backend(
         config.wma_root,
         require_virtual_x=config.use_virtual_x,
-        require_diffusion_measurements=config.export_diffusion_measures,
+        require_diffusion_measurements=(config.export_diffusion_measures
+                                        and config.measurement_backend == "fibertractmeasurements"),
     )
     if not backend_status["available"]:
         missing = ", ".join(backend_status["missing_required"])
@@ -754,7 +750,8 @@ def run_wma_org_atlas(
     backend_status = inspect_wma_backend(
         wma_root,
         require_virtual_x=config.use_virtual_x,
-        require_diffusion_measurements=config.export_diffusion_measures,
+        require_diffusion_measurements=(config.export_diffusion_measures
+                                        and config.measurement_backend == "fibertractmeasurements"),
     )
     atlas_status = inspect_wma_org_atlas(config.atlas_dir, config.atlas_family)
     atlas_contract = atlas_status.get("output_contract", {})
@@ -815,6 +812,8 @@ def run_wma_org_atlas(
         "use_virtual_x": config.use_virtual_x,
         "virtual_x_requested": virtual_x_requested,
         "export_diffusion_measures": config.export_diffusion_measures,
+        "requested_measurement_backend": (config.measurement_backend
+                                          if config.export_diffusion_measures else None),
         "clean_files": config.clean_files,
         "executed": bool(config.execute),
         "status": "planned" if not config.execute else "running",
@@ -874,6 +873,9 @@ def run_wma_org_atlas(
                                             for path in (root / 'PythonSlicer', root / 'bin' / 'PythonSlicer'))
             slicer_python = next((path for path in slicer_python_candidates if path.is_file()), None) if native_posix else None
             library_entries = [str(path) for path in _slicer_runtime_library_paths(runtime_executable)] if native_posix else []
+            if native_posix and config.export_diffusion_measures and config.measurement_backend == "fibertractmeasurements":
+                for extension in _slicerdmri_module_paths(runtime_executable):
+                    library_entries.extend((str(extension), str(extension.parent)))
             manifest['runtime'] = {'configured_launcher': str(slicer_executable),
                                    'resolved_executable': str(runtime_executable),
                                    'python': str(slicer_python) if slicer_python else None}
@@ -893,9 +895,9 @@ def run_wma_org_atlas(
                 )
                 conversion_stdout_log.write_text(converted.stdout or "", encoding="utf-8")
                 conversion_stderr_log.write_text(converted.stderr or "", encoding="utf-8")
-            slicerdmri_paths = _slicerdmri_module_paths(runtime_executable) if native_posix else ()
-            # WSL supplies Python/CLIs; Windows cannot execute our POSIX shims.
-            if native_posix and (slicer_python is not None or config.use_virtual_x or slicerdmri_paths):
+            # POSIX author scripts still use PythonSlicer/virtual-display shims;
+            # no SlicerDMRI module injection is needed for ModelFile transforms.
+            if native_posix and (slicer_python is not None or config.use_virtual_x):
                 temp_python_dir = tempfile.TemporaryDirectory(prefix="slicerdds_wma_python_")
                 if slicer_python is not None:
                     shim = Path(temp_python_dir.name) / "python"
@@ -933,25 +935,7 @@ def run_wma_org_atlas(
                             encoding="utf-8",
                         )
                         xvfb_shim.chmod(0o755)
-                if slicerdmri_paths:
-                    slicer_shim = Path(temp_python_dir.name) / "Slicer"
-                    slicer_launcher = _resolve_slicer_launcher(slicer_executable)
-                    module_args = " ".join(
-                        f"--additional-module-paths {shlex.quote(path.as_posix())}" for path in slicerdmri_paths
-                    )
-                    slicer_shim.write_text(
-                        f"#!/bin/sh\nexec {shlex.quote(slicer_launcher.as_posix())} {module_args} \"$@\"\n",
-                        encoding="utf-8",
-                    )
-                    slicer_shim.chmod(0o755)
-                    runtime_command = list(command)
-                    if "-s" in runtime_command:
-                        runtime_command[runtime_command.index("-s") + 1] = slicer_shim.as_posix()
-                    if runtime_display and "-x" in runtime_command:
-                        runtime_command[runtime_command.index("-x") + 1] = "0"
-                    command_to_run = tuple(runtime_command)
-                else:
-                    command_to_run = command
+                command_to_run = command
                 path_entries.insert(0, temp_python_dir.name)
             else:
                 command_to_run = command
@@ -978,6 +962,12 @@ def run_wma_org_atlas(
             stdout_log.write_text(completed.stdout or "", encoding="utf-8")
             stderr_log.write_text(completed.stderr or "", encoding="utf-8")
             return_code = completed.returncode
+            if config.export_diffusion_measures and config.measurement_backend == "native_vtk_point_scalar_summary":
+                # This is not an unqualified replacement of FiberTractMeasurements:
+                # tensor-only inputs fail and the method is recorded explicitly.
+                from tractography.wma_native_measures import export_wma_case_measurements
+                manifest["measurement_provenance"] = export_wma_case_measurements(
+                    staging, prepared_tractography.stem)
         except subprocess.CalledProcessError as exc:
             return_code = exc.returncode
             failed_stdout = conversion_stdout_log if conversion_command and not prepared_tractography.is_file() else stdout_log
@@ -1066,6 +1056,10 @@ def run_wma_org_atlas(
         },
         "error": execution_error,
     }
+    if config.export_diffusion_measures and config.measurement_backend == "native_vtk_point_scalar_summary":
+        qc["warnings"].append(
+            "Native VTK point-scalar summary was used. FiberTractMeasurements tensor/statistical "
+            "parity is not yet validated; review numerical methods before quantification.")
     qc_path.write_text(json.dumps(qc, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
     manifest["status"] = status

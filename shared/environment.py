@@ -2441,7 +2441,8 @@ def write_environment_report(result: EnvironmentDoctorResult, output_dir: Path) 
                 f"- Required: `{item.required}`",
                 f"- Targets: `{', '.join(item.targets)}`",
                 f"- Detected source: `{item.details.get('detected_source', 'not found')}`",
-                f"- Suggested fix: {item.install_hint or 'See docs/setup/EXTERNAL_DEPENDENCIES.md.'}",
+                # B10: a multi-line hint (for example a Teem error) would end the Markdown bullet; keep it on one line.
+                f"- Suggested fix: {' '.join((item.install_hint or '').split()) or 'See docs/setup/EXTERNAL_DEPENDENCIES.md.'}",
                 "",
             ]
         )

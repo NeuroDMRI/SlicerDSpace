@@ -10,6 +10,7 @@ import argparse
 from dataclasses import replace
 import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -27,7 +28,15 @@ from shared import pipeline
 from shared.external_process import merged_startup_environment
 
 
+def leave_cohort_environment():
+    """B10 (S1.2 Opus N4): the benchmark is a standalone run. A cohort schedule left in the shell would make the
+    stages of ``run_surface`` nest their admissions, so the script drops the cohort variables first."""
+    for key in [name for name in os.environ if name.startswith('SLICERDSPACE_COHORT_')]:
+        del os.environ[key]
+
+
 def main():
+    leave_cohort_environment()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--subject-root', type=Path, required=True)
     parser.add_argument('--subject', required=True)

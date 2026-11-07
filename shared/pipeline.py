@@ -145,10 +145,14 @@ def _slicer_home_candidates() -> list[Path]:
                 candidates.append(Path(str(slicer_home)).expanduser().resolve())
         except Exception:
             pass
-    for env_key in ("SLICER_HOME", "Slicer_HOME"):
+    for env_key in ("SLICER_HOME", "Slicer_HOME", "SLICERDSPACE_SLICER_HOME"):
         env_value = os.environ.get(env_key)
         if env_value:
             candidates.append(Path(env_value).expanduser().resolve())
+    # B7 (A-C1 3): the doctor and teem_dti.py read this launcher variable too; its folder is a Slicer runtime root.
+    launcher = os.environ.get("SLICERDSPACE_SLICER_EXECUTABLE")
+    if launcher:
+        candidates.append(Path(launcher).expanduser().resolve().parent)
     executable = Path(sys.executable).expanduser().resolve()
     if executable.stem.lower() in {"python-real", "pythonslicer", "python"}:
         candidates.append(executable.parent.parent)

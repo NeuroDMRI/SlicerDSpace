@@ -304,11 +304,15 @@ class PreprocessingMaskIntegrationTest(unittest.TestCase):
                     self.assertEqual(result.status, "completed")
                     self.assertNotEqual(json.loads(result.manifest_path.read_text())["cache_key"]["brain_mask"], initial_key)
             result = run_dwi_preprocessing(config)
+            # A-O5: each change below must be the only reason for a rerun, so first show that nothing changed means reuse.
+            self.assertEqual(run_dwi_preprocessing(config).status, "cached")
             python = _FAKE_PYTHONSLICER[-1]
             python.write_text(python.read_text() + "\n# interpreter changed\n")
             self.assertEqual(run_dwi_preprocessing(config).status, "completed")
+            self.assertEqual(run_dwi_preprocessing(config).status, "cached")
             (config.pnl_mask_model_dir / "axial.pt").write_text("different test weights")
             self.assertEqual(run_dwi_preprocessing(config).status, "completed")
+            self.assertEqual(run_dwi_preprocessing(config).status, "cached")
 
     def test_b12_native_mask_part_of_the_preprocessing_key_ignores_threads(self):
         """B12 (M-A2): native route, SLICERDSPACE_STAGE_CPUS 1 vs 8 gives one mask key; managed differs; device differs."""

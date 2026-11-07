@@ -103,14 +103,21 @@ def resolve_dwi2mask(explicit_bin_dir: Optional[Path] = None) -> Optional[Path]:
     return Path(found).resolve() if found else None
 
 
-def _pnl_native_python() -> Optional[Path]:
-    """PythonSlicer for the A1 subprocess, found as for ``teem_dti.py``; None outside a Slicer Python."""
+def _pnl_native_python_resolution() -> tuple[Optional[Path], str]:
+    """(PythonSlicer, "") or (None, the resolver's message, for example the "Set SLICER_HOME" hint)."""
     try:
         # Imported here: shared.pipeline imports this module.
         from shared.pipeline import resolve_pythonslicer_executable
-        return Path(resolve_pythonslicer_executable())
-    except (ImportError, RuntimeError):
-        return None
+        return Path(resolve_pythonslicer_executable()), ""
+    except ImportError as exc:
+        return None, str(exc)
+    except RuntimeError as exc:
+        return None, str(exc)
+
+
+def _pnl_native_python() -> Optional[Path]:
+    """PythonSlicer for the A1 subprocess, found as for ``teem_dti.py``; None outside a Slicer Python."""
+    return _pnl_native_python_resolution()[0]
 
 
 def pnl_child_threads() -> int:
@@ -274,7 +281,9 @@ def inspect_brain_mask_backend(config: BrainMaskConfig | None = None, *, system:
             # The conda runner settings (pnl_mask_python, pnl_mask_script, pnl_mask_ants_bin_dir) are not read.
             python = _pnl_native_python()
             if python is None or not python.is_file() or not os.access(python, os.X_OK):
-                missing.append(PNL_NATIVE_PYTHON_MISSING)
+                # B7 (A-C1 2): when the resolver found nothing, its message (with "Set SLICER_HOME") reaches the user.
+                reason = _pnl_native_python_resolution()[1] if python is None else ""
+                missing.append(PNL_NATIVE_PYTHON_MISSING + (": " + reason if reason else ""))
             else:
                 tools["pythonslicer"] = str(python)
             try:

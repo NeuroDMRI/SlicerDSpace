@@ -208,5 +208,17 @@ class CliLauncherAndLicenceTests(unittest.TestCase):
         self.assertTrue(any("fsl_terms" in line for line in lines))
 
 
+class MigrationEmptiesSettingsTests(unittest.TestCase):
+    def test_a5_n4_a_migration_that_keeps_every_user_path_is_not_a_failed_step(self):
+        """A5 N4: completed receipt, no settings left, a migration note: nothing to save, no failure. Fails before: ValueError."""
+        from shared.selected_setup import validate_setup_receipt
+        receipt = {"kind": "slicerdsurfer_runtime_setup", "status": "completed", "external_dependencies": {},
+                   "migration": {"old_prefix": "/old", "repointed": [], "kept_user_paths": ["mrtrix_bin_dir"], "note": "n"}}
+        self.assertEqual(validate_setup_receipt({"id": "managed_runtime"}, receipt), {})
+        del receipt["migration"]  # an empty receipt without a migration is still wrong
+        with self.assertRaises(ValueError):
+            validate_setup_receipt({"id": "managed_runtime"}, receipt)
+
+
 if __name__ == "__main__":
     unittest.main()

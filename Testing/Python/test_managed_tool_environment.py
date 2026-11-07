@@ -11,6 +11,9 @@ from shared import external_process as ep
 from preprocessing import pipeline
 
 
+REAL_DISCOVER = ep._discover_fsl_bin_dir
+
+
 class ToolEnvironmentBase(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -19,6 +22,10 @@ class ToolEnvironmentBase(unittest.TestCase):
         self.shims = self.root / 'shims'
         self.mrtrix = self.make_prefix('mrtrix', with_python=False)
         self.fsl = self.make_prefix('fsl', with_python=False)
+        # A5 N9: keep these tests independent of an FSL on the developer machine.
+        patcher = patch.object(ep, '_discover_fsl_bin_dir', return_value=None)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def make_prefix(self, name, with_python):
         bin_dir = self.root / name / 'bin'
@@ -72,6 +79,24 @@ class ShimTests(ToolEnvironmentBase):
         slicer.write_text('#!/bin/sh\n')
         env = self.environment('darwin', mrtrix_bin_dir=self.mrtrix, fsl_bin_dir=self.fsl, slicer_python=slicer)
         self.assertIn(f'exec {slicer} "$@"', (Path(self.path_entries(env)[0]) / 'python').read_text())
+
+    def test_a5_n9_macos_shim_uses_the_fsl_python_found_through_fsldir_or_path(self):
+        """A5 N9: no fsl_bin_dir passed; FSL found the usual way. Fails before: the shim pointed to PythonSlicer."""
+        fsl_python = self.make_prefix('fslhome', with_python=True) / 'python'
+        slicer = self.root / 'PythonSlicer'
+        slicer.write_text('#!/bin/sh\n')
+        with patch.object(ep, '_discover_fsl_bin_dir', REAL_DISCOVER):
+            with patch.dict(os.environ, {'FSLDIR': str(fsl_python.parent.parent)}):
+                env = self.environment('darwin', mrtrix_bin_dir=self.mrtrix, slicer_python=slicer)
+            self.assertIn(f'exec {fsl_python} "$@"', (Path(self.path_entries(env)[0]) / 'python').read_text())
+            (fsl_python.parent / 'eddy').write_text('#!/bin/sh\n')
+            (fsl_python.parent / 'eddy').chmod(0o755)
+            with patch.dict(os.environ, {'PATH': str(fsl_python.parent)}):
+                os.environ.pop('FSLDIR', None)
+                self.assertEqual(ep.shim_target_python(system='darwin', slicer_python=slicer), fsl_python)
+            with patch.dict(os.environ, {'PATH': str(self.mrtrix)}):
+                os.environ.pop('FSLDIR', None)
+                self.assertEqual(ep.shim_target_python(system='darwin', slicer_python=slicer), slicer)
 
     def test_macos_without_any_python_adds_no_shim(self):
         with patch.object(ep, '_default_slicer_python', return_value=None):

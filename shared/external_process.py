@@ -241,18 +241,29 @@ def _bin_dir_python(bin_dir) -> Optional[Path]:
     return None
 
 
+def _discover_fsl_bin_dir() -> Optional[Path]:
+    """The FSL bin folder found the usual way: ``$FSLDIR/bin``, else the folder of ``eddy`` on PATH (A5 N9)."""
+    root = os.environ.get("FSLDIR")
+    if root and (Path(root).expanduser() / "bin").is_dir():
+        return Path(root).expanduser() / "bin"
+    found = shutil.which("eddy") or shutil.which("eddy_cpu")
+    return Path(found).parent if found else None
+
+
 def shim_target_python(*, mrtrix_bin_dir=None, fsl_bin_dir=None, system: Optional[str] = None,
                       slicer_python: Optional[Path | str] = None) -> Optional[Path]:
     """The Python that the managed ``python`` shim forwards to; None when no shim is wanted.
 
-    Linux: the runtime's own conda Python. macOS: the FSL prefix Python when FSL is installed, else PythonSlicer.
+    Linux: the runtime's own conda Python. macOS: the FSL prefix Python when FSL is installed (passed, or found
+    through FSLDIR or PATH), else PythonSlicer.
     Windows: none (the WSL bridges supply Python).
     """
     system = (system or sys.platform).lower()
     if system in {"win32", "windows"}:
         return None
     if system in {"darwin", "macos"}:
-        fsl_python = _bin_dir_python(fsl_bin_dir)
+        # A5 N9: FSL found the usual way counts too, also for callers that do not pass fsl_bin_dir.
+        fsl_python = _bin_dir_python(fsl_bin_dir if fsl_bin_dir is not None else _discover_fsl_bin_dir())
         if fsl_python is not None:
             return fsl_python
         found = Path(slicer_python) if slicer_python is not None else _default_slicer_python()

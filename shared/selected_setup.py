@@ -348,6 +348,9 @@ def validate_setup_receipt(step, receipt):
                 or receipt.get("status") != "completed"):
             raise ValueError("Only a completed managed runtime setup can update paths")
         settings = receipt.get("external_dependencies", {})
+        # A5 N4: a migration that keeps every user-set path leaves no settings to save. The install itself succeeded.
+        if not settings and isinstance(receipt.get("migration"), dict):
+            return {}
         if not settings or set(settings) - RUNTIME_SETTINGS:
             raise ValueError("Unexpected managed runtime settings")
         if any(not (Path(value).is_file() if key in RUNTIME_FILE_SETTINGS else Path(value).is_dir())

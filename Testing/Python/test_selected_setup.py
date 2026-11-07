@@ -245,6 +245,37 @@ class SelectedSetupTests(unittest.TestCase):
                     plan = ui.selected_setup_plan(owner, owner._run_environment_dependency_check.return_value)
                 self.assertEqual([name for name in plan["extensions"] if name != "PyTorch"], expected)
 
+    def test_a6_gui_closure_equals_cli_closure_for_a_non_default_tractography_selection(self):
+        """A6 (closure Opus N3): UKF selected. The GUI closure, the GUI plan and the CLI plan name the same targets.
+
+        The no-node fallback of selected_setup_plan builds the Closure from the doctor result without a second expansion.
+        """
+        from scripts import setup_selected
+        from shared.ui_run_controller import ProductTargetFlags, selected_closure
+        from shared.user_config import empty_user_config
+        import shared.ui_selected_setup as ui
+
+        gui = selected_closure(ProductTargetFlags(tractography=True), tractography_backend="ukf", bundle_backend="wmql",
+                               microstructure_freewater=False, microstructure_noddi=False)
+        config = empty_user_config()
+        config["run_defaults"]["tractography_backend"] = "ukf"
+        with patch("scripts.setup_python_packages.dcm2niix_pending", return_value=False):
+            cli, _report, cli_plan = setup_selected.build_cli_plan(
+                ["validation", "tractography"], config, doctor=lambda cfg: SimpleNamespace(statuses=[], targets=cfg.targets, blocker_count=0,
+                                                                              python_executable=None),
+                system="Linux", machine="x86_64")
+        self.assertEqual((gui.targets, gui.tractography_algorithms), (cli.targets, cli.tractography_algorithms))
+        self.assertIn("ukf", gui.tractography_algorithms)
+        report = result(targets=gui.targets)
+        owner = self.owner(report, closure=gui)
+        context, _ = self.run_preparation(owner, report)
+        with context, patch("scripts.setup_python_packages.dcm2niix_pending", return_value=False):
+            gui_plan = ui.selected_setup_plan(owner, report)
+            owner._selected_closure.return_value = None  # no parameter node: the closed doctor targets are taken as they are
+            fallback = ui.selected_setup_plan(owner, report)
+        self.assertEqual(gui_plan["closure_targets"], cli_plan["closure_targets"])
+        self.assertEqual(fallback["closure_targets"], list(gui.targets))
+
     def test_cancelled_confirmation_has_no_install_or_settings_side_effect(self):
         owner = self.owner(result(item("missing")))
         context, manager = self.run_preparation(owner, owner._run_environment_dependency_check.return_value)

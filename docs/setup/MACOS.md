@@ -76,8 +76,8 @@ sources and Python wheels without Git. It now includes the official MRtrix3
 3.0.8 Intel package for macOS 14.5+, with an architecture-matched Miniforge
 bootstrap. This package route has planning tests but awaits real-Mac execution.
 Apple Silicon is not silently switched to an Intel/Rosetta environment.
-FSL/PNL and other unqualified native routes still use an existing compatible
-installation; Linux Conda prefixes cannot be copied to macOS.
+FSL and other unqualified native routes still use an existing compatible
+installation (the PNL brain mask has its own native route, below); Linux Conda prefixes cannot be copied to macOS.
 WMA path discovery now accepts `Slicer.app/Contents` libraries and installed
 SlicerDMRI modules rather than assuming Linux layout. This has app-layout
 regression tests, not real macOS scientific acceptance.
@@ -86,8 +86,9 @@ installations rather than copying a Linux Conda prefix. [Official macOS FSL](htt
 
 CUDA eddy is unavailable on macOS. MRtrix/FSL correction uses the CPU eddy
 executable; Auto PyTorch also currently uses CPU because this plugin has not
-implemented MPS. PNLBrainMask-Torch also uses CPU on macOS; its launcher does
-not select MPS. [PyTorch MPS](https://docs.pytorch.org/docs/main/notes/mps.html).
+implemented MPS. The PNL brain mask runs on macOS through its native route
+(SimpleITK registration and PyTorch in Slicer's Python), labelled "native
+(experimental)"; it also uses CPU and does not select MPS. [PyTorch MPS](https://docs.pytorch.org/docs/main/notes/mps.html).
 
 For the least external dependencies, provide a reviewed native brain mask and
 select DTI with optional DIPY preprocessing. FW/NODDI/DKI/MK-Curve additionally

@@ -57,7 +57,7 @@ WSL 是 Linux 后端，不是 Windows 原生计算；Windows/macOS 不继承 Lin
 | DDSeg/DDParcel/DDSurfer 原生重建 | 指定数据/路线已测，需匹配模型 | 原生 PyTorch/SlicerDMRI 候选，需可用掩膜 | 原生 CPU 候选，需可用掩膜及匹配模型 |
 | DIPY 预处理、FW、NODDI | 指定输入已测 | 原生 Python 候选，需兼容 DIPY/AMICO | 原生 Python 候选，需匹配架构的包 |
 | DKI/Python MK-Curve | 指定被试全脑已有独立检查与计时；无效体素须排除 | 原生数值候选，需适用的多壳数据 | 原生数值候选，需适用的多壳数据 |
-| PNL CNN 掩膜 | PyTorch/ANTs 路线；CPU 概率/掩膜配对检查；Linux x86_64 自动配置 | **Windows 原生 GUI 不支持**；提供掩膜或明确选择 MRtrix/WSL | 需 POSIX/ANTs/PyTorch；无 CUDA，Metal 未实现，未实测 |
+| PNL CNN 掩膜 | PyTorch/ANTs 路线；CPU 概率/掩膜配对检查；Linux x86_64 自动配置 | Windows Slicer Python 内的 native 路线（SimpleITK + PyTorch），**实验性**；此处未在 Windows 上运行 | native 路线（SimpleITK + PyTorch），**实验性**；无 CUDA，Metal 未实现，未实测 |
 | DIPY median-Otsu 掩膜 | 已测纯 Python 掩膜生成及 DTI 示例 | 原生 Python 候选，不需 POSIX 工具；未实测 | 原生 Python 候选，未实测 |
 | 完整 FreeSurfer SynthStrip 环境 | CPU/CUDA 已测 | **当前封装不支持原生 Windows**，需完整 Linux/WSL 环境 | FreeSurfer/Python CPU 候选，未实测 |
 | 皮层表面后处理 | 合格原生组件或已有 FreeSurfer；已测离线预编译包安装，在线发布待完成；[配置说明](SURFACE_COMPONENTS.zh-CN.md) | 无合格原生预编译包；WSL／完整安装桥接待验收 | 已有原生 FreeSurfer 候选；无合格预编译包 |
@@ -68,14 +68,14 @@ WSL 是 Linux 后端，不是 Windows 原生计算；Windows/macOS 不继承 Lin
 | WMA | 149741 限定范围通过；旧 100307 覆盖失败仍排除 | WSL 作者 shell/Slicer 反向桥接，待验收 | 作者 shell/display/Slicer CLI 前提，待验收 |
 | TractCloud | 指定输入的固定种子 CUDA/重复检查通过 | WSL 按设备选 CPU/CUDA；原生 Python 未认证 | 外部 Python CPU 候选，未实现 MPS |
 | Python 连接组/ROI 统计/VTK 预览 | 有限定范围实测 | 有效输入产品下的原生候选 | 有效输入产品下的原生候选 |
-| 插件内 MRtrix/FSL/PNL 自动配置 | Linux x86_64 | 独立 Windows/WSL 安装器，不代表 PNL 已验收 | 增加 MRtrix Intel/macOS 14.5+ 安装适配，未真机实测；无 ARM/FSL/PNL profile |
+| 插件内 MRtrix/FSL/PNL 自动配置 | Linux x86_64（含 managed PNL 运行环境） | 独立 Windows/WSL 安装器配置 MRtrix/FSL；PNL 使用 native 路线（PyTorch 扩展与脑掩膜资源） | 增加 MRtrix Intel/macOS 14.5+ 安装适配，未真机实测；无 ARM/FSL profile；PNL 使用 native 路线 |
 
 ---
 
 ## 使用边界
 
 - 各平台优先保留已有、人工检查过的原生掩膜，后端失败不会静默换算法。
-- Linux 默认 PNL 生成掩膜。显式 WSL 安装器创建的新 Windows 配置默认 MRtrix 掩膜；已有默认设置不变。无 WSL 时，可提供已核验掩膜，或明确选择纯 Python 的 DIPY 掩膜候选路线。见[轻量路线](EXPERIMENTS.zh-CN.md)。
+- PNL 掩膜路线：Linux 用 managed conda 运行环境（ANTs 2.3.0）；macOS 和 Windows 用 native 路线，标注为“native（实验性）”。Linux 默认 PNL 生成掩膜。显式 WSL 安装器创建的新 Windows 配置默认 MRtrix 掩膜；已有默认设置不变。无 WSL 时，可提供已核验掩膜，或明确选择纯 Python 的 DIPY 掩膜候选路线。见[轻量路线](EXPERIMENTS.zh-CN.md)。
 - PyTorch Auto 只选择 CUDA 或 CPU。**Apple MPS 尚未实现/验证**，并不是 Mac 没有 GPU。PNL 同样选择 PyTorch CPU 或调用方可见的 CUDA，不选择 MPS。
 - Windows 安装器默认 `-Device auto`，在 WSL 内检测 GPU 并验证真实 PyTorch CUDA 分配。明确 CUDA 失败不会重试 CPU。
 - FSL 安装需明确接受许可；不会修改 NVIDIA 驱动或安装替代 Linux 显卡驱动。

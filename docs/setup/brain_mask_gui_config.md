@@ -40,7 +40,7 @@ See [GPU execution policy](GPU_EXECUTION.md).
 
 The advanced **PNL route** selector (shown only for PNL CNN) is `auto`, `managed`
 or `native (experimental)`: `auto` uses the managed conda runner with ANTs on Linux and
-the native SimpleITK route on macOS, and the native route is experimental because it
+the native SimpleITK route on macOS and Windows, and the native route is experimental because it
 did not meet the M-A parity rule on 2 of 24 cases (T2 design §3). It is saved as
 `run_defaults.pnl_mask_route`; the mask receipt and the run record state the route.
 
@@ -108,7 +108,7 @@ Python 中可见的第一个 CUDA GPU；`cuda` 要求 GPU 可用，`cpu` 显式�
 MRtrix dwi2mask 本身仅支持 CPU。详见[GPU 策略](GPU_EXECUTION.zh-CN.md)。
 
 高级选项“PNL 路线”（仅在选择 PNL CNN 时显示）可选 `auto`、`managed` 或 `native（实验性）`：
-`auto` 在 Linux 使用带 ANTs 的 managed conda 运行环境，在 macOS 使用 native SimpleITK 路线；
+`auto` 在 Linux 使用带 ANTs 的 managed conda 运行环境，在 macOS 和 Windows 使用 native SimpleITK 路线；
 native 路线为实验性，因为它在 M-A 一致性规则的 24 例中有 2 例未达标（T2 设计 §3）。
 选择保存为 `run_defaults.pnl_mask_route`，掩膜回执与运行记录会写明所用路线。
 

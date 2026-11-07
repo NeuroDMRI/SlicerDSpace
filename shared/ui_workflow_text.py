@@ -61,7 +61,7 @@ WORKFLOW_TEXT = {
         "brain_mask_device_tooltip": "PNL CNN and SynthStrip: auto prefers the first visible CUDA GPU in the selected external runtime. CUDA requires a GPU; CPU explicitly disables it. Runtime GPU failures are not silently retried. MRtrix dwi2mask and DIPY median-Otsu are CPU algorithms.",
         "pnl_mask_route": "PNL route",
         "pnl_mask_route_tooltip": (
-            "PNL CNN route. auto: managed (conda runner with ANTs) on Linux, native on macOS. "
+            "PNL CNN route. auto: managed (conda runner with ANTs) on Linux, native on macOS and Windows. "
             "native (experimental): did not meet the M-A parity rule on 2 of 24 cases (T2 design §3)."
         ),
         "pnl_route_auto": "auto",
@@ -164,7 +164,7 @@ WORKFLOW_TEXT = {
         "brain_mask_device_tooltip": "PNL CNN 和 SynthStrip：Auto 优先使用对应外部运行环境中可见的第一个 CUDA GPU；CUDA 要求 GPU 可用，CPU 显式禁用 GPU。GPU 运行错误不会静默重试。MRtrix dwi2mask 与 DIPY median-Otsu 是 CPU 算法。",
         "pnl_mask_route": "PNL 路线",
         "pnl_mask_route_tooltip": (
-            "PNL CNN 路线。auto：Linux 用 managed（conda 运行环境，含 ANTs），macOS 用 native。"
+            "PNL CNN 路线。auto：Linux 用 managed（conda 运行环境，含 ANTs），macOS 和 Windows 用 native。"
             "native（实验性）：在 M-A 一致性规则的 24 例中有 2 例未达标（T2 设计 §3）。"
         ),
         "pnl_route_auto": "auto",

@@ -514,7 +514,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--brain-mask-device", choices=("auto", "cpu", "cuda"), default="auto",
                         help="PNL/SynthStrip device: auto prefers the first visible GPU in that runtime; cuda requires GPU; cpu disables CUDA.")
     parser.add_argument("--pnl-mask-route", choices=PNL_MASK_ROUTES, default="auto",
-                        help=("Route of the pnl_cnn brain mask. auto: managed on Linux (conda runner with ANTs), native on macOS. "
+                        help=("Route of the pnl_cnn brain mask. auto: managed on Linux (conda runner with ANTs), native on macOS and Windows. "
                               "managed: the conda runner. native (experimental): SimpleITK registration in Slicer's Python; it "
                               + PNL_NATIVE_EXPERIMENTAL_REASON + "."))
     parser.add_argument(

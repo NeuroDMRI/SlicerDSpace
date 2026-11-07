@@ -116,7 +116,8 @@ User-local defaults live alongside model assets under `SlicerDSpace/runtimes`.
 | Optional cortical postprocessing | [Qualified prebuilt bundle](SURFACE_COMPONENTS.md), Linux x86_64; offline installation tested. Bundle publication is pending. Personal activation is separate; the GUI never compiles sources |
 | WMA / TractCloud / SynthStrip non-code resources | Selected optional profile download/import, checksums, ORG extraction and automatic path saving; private-mirror authorization still applies |
 | WMA/WMQL/TractCloud sources | Pinned archives, safe extraction, file hashes, automatic discovery/path saving; no Git or duplicated algorithm implementation |
-| Native Windows, macOS ARM, macOS FSL/PNL | No qualified automatic native profiles in this installer; existing Windows/WSL and administrator-provided routes remain |
+| PNL diffusion CNN on macOS and Windows | No managed runtime. The native route ("native (experimental)") needs the PyTorch extension and the pnl-cnn brain-mask assets, which this installer plans (with the PNL licence) |
+| Native Windows, macOS ARM, macOS FSL | No qualified automatic native profiles in this installer; existing Windows/WSL and administrator-provided routes remain |
 
 Functional preparation tests execute a NumPy solve, write/read a small NIfTI and
 VTK streamline where selected, exercise the selected PyTorch device, deserialize

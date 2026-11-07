@@ -92,7 +92,8 @@ PNL 模型/模板、TractCloud 推理参考、SynthStrip 权重和 WMA ORG 图�
 | 可选皮层后处理 | Linux x86_64 [合格预编译运行包](SURFACE_COMPONENTS.zh-CN.md)；已测离线安装，在线发布待完成；个人激活文件独立提供，GUI 不编译源码 |
 | WMA / TractCloud / SynthStrip 非代码资源 | 所选分组下载/导入、校验、ORG 解压及自动保存路径；私有镜像仍需访问权限 |
 | WMA/WMQL/TractCloud 源码 | 固定提交压缩包、安全解压、逐文件哈希、自动发现并保存路径，无需 Git，也不重复实现算法 |
-| Windows 原生、macOS ARM、macOS FSL/PNL | 本安装器暂无合格的自动原生配置；保留 Windows/WSL 和已有环境路线 |
+| macOS 与 Windows 的 PNL 扩散 CNN | 无 managed 运行环境。native 路线（“native（实验性）”）需要 PyTorch 扩展和 pnl-cnn 脑掩膜资源，本安装器会规划它们（含 PNL 许可） |
+| Windows 原生、macOS ARM、macOS FSL | 本安装器暂无合格的自动原生配置；保留 Windows/WSL 和已有环境路线 |
 
 功能自检按所选依赖执行 NumPy 求解、小型 NIfTI 与 VTK 流线写入读回、所选 PyTorch 设备计算、
 解剖模型反序列化及 DDSeg、TractCloud 小型前向推理；MRtrix 转换小体积图像，

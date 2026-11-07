@@ -17,7 +17,7 @@ An explicit CUDA request fails if the external runtime cannot use CUDA;
 inference errors never trigger a hidden CPU retry. MRtrix masking is CPU-only.
 `provided` requires an existing `input/nodif_brain_mask.nii.gz`.
 `--pnl-mask-route auto|managed|native` chooses the route of `pnl_cnn`: `auto` is
-`managed` (conda runner with ANTs) on Linux and `native` on macOS; `native` is
+`managed` (conda runner with ANTs) on Linux and `native` on macOS and Windows; `native` is
 labelled "native (experimental)" because it did not meet the M-A parity rule on 2 of 24 cases
 (T2 design §3). The setting is saved in `run_defaults.pnl_mask_route`.
 

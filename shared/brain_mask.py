@@ -129,15 +129,16 @@ def pnl_native_resources() -> list[Path]:
 def resolve_pnl_mask_route(route: str | None = "auto", system: str | None = None) -> str:
     """SC-1a: ``managed`` or ``native`` for the setting ``auto`` | ``managed`` | ``native``.
 
-    ``auto`` is ``managed`` on Linux (WSL, the Windows route, is Linux) and ``native`` on macOS. The managed ``pnl_cnn``
-    runtime has no macOS build, so native is the only PNL route there.
+    ``auto`` is ``managed`` on Linux and ``native`` on macOS and Windows. On Windows the mask runs in Windows Slicer's
+    Python (only the MRtrix and FSL tools go through WSL), and the managed route is refused there; the managed ``pnl_cnn``
+    runtime has no macOS or Windows build, so native is the only PNL route on those systems.
     """
     route = route or "auto"
     if route not in PNL_MASK_ROUTES:
         raise ValueError("pnl_mask_route must be one of: " + ", ".join(PNL_MASK_ROUTES))
     if route != "auto":
         return route
-    # SPEC-GAP SC-1: native Windows (no WSL) is not named; it gets native, the rule "managed only on Linux".
+    # S1 (SC-1 fix round): Windows resolves auto to native (spec SC-1a); managed only on Linux.
     return "managed" if (system or platform.system()) == "Linux" else "native"
 
 

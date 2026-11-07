@@ -663,7 +663,9 @@ class K6ResumeKeepsTheRegionalStatisticsStatusTest(unittest.TestCase):
         fake_micro = SimpleNamespace(MicrostructureConfig=lambda **kw: SimpleNamespace(**kw), run_microstructure=fake_run)
         fake_pipeline = SimpleNamespace(
             ensure_native_dti_bundle=lambda *a, **k: None, find_subject_root=lambda *a, **k: None,
-            resolve_preprocessed_input_bundle=lambda *a, **k: None)
+            resolve_preprocessed_input_bundle=lambda *a, **k: None,
+            current_preprocessed_outputs=lambda *a, **k: None,  # W2b: the one reuse predicate
+            NO_CURRENT_PREPROCESSING_MESSAGE="No current preprocessed DWI for this input; using the raw DWI")
         passed = SimpleNamespace(report_path=root / "v.json", passed=True, status="passed", error_count=0,
                                  warning_count=0, messages=())
         with mock.patch.dict("sys.modules", {"microstructure": fake_micro, "shared.pipeline": fake_pipeline}), \

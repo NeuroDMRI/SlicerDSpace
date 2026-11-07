@@ -377,8 +377,12 @@ def _make_sigterm_handler(manifest_path: Path, *, subject_id: str, run_name: str
 
 
 def _cli_log(message: str) -> None:
-    """Run log: the closure notice goes to stderr so stdout stays the JSON result for blocked runs (GUI merges both)."""
-    print(message, file=sys.stderr if message.startswith("[Targets]") else sys.stdout)
+    """Run log: the closure notice goes to stderr so stdout stays the JSON result for blocked runs (GUI merges both).
+
+    W2b: so does the notice that no current preprocessed DWI is used.
+    """
+    to_stderr = message.startswith(("[Targets]", "[Orchestrator] No current preprocessed DWI"))
+    print(message, file=sys.stderr if to_stderr else sys.stdout)
 
 
 def _brain_mask_backend_argument(value: str) -> str:

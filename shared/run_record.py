@@ -464,6 +464,28 @@ def _mask_provenance(effective: dict) -> dict:
         return {"route": "unknown"}
 
 
+def _preprocessed_input(effective: dict) -> dict:
+    """W2b (T1 D1): which DWI the stages used. The shared predicate decides, as in the run itself.
+
+    `used` true: the cache-key version, the route id ("pre-v6" for a version 5 manifest) and the cache key of the
+    preprocessing outputs. `used` false: the stages used the raw DWI, with the message that the run log shows.
+    """
+    from shared.pipeline import NO_CURRENT_PREPROCESSING_MESSAGE, current_preprocessed_outputs
+
+    root, subject_id = effective.get("subject_root"), effective.get("subject_id")
+    if not root or not subject_id:
+        return {"used": False, "message": "unknown"}
+    output_root = Path(effective["output_root"]) if effective.get("output_root") else None
+    try:
+        outputs = current_preprocessed_outputs(Path(root), output_root, str(subject_id))
+    except (OSError, ValueError, TypeError):
+        return {"used": False, "message": "unknown"}
+    if outputs is None:
+        return {"used": False, "message": NO_CURRENT_PREPROCESSING_MESSAGE}
+    return {"used": True, "cache_key_version": outputs.cache_key_version, "route_id": outputs.route_id,
+            "cache_key": outputs.cache_key, "message": None}
+
+
 def _licence_acceptances() -> list[dict]:
     """Licence acceptances that the setup step stored in the user config ({id, version, time}), sorted by id."""
     try:
@@ -497,6 +519,7 @@ def build_run_record(manifest_path: Path) -> dict:
         # `requested_backend` is the selection, not the origin of the mask. The requested route stays in the parameters.
         **({"brain_mask": {"requested_backend": effective.get("brain_mask_backend"), **_mask_provenance(effective)}}
            if effective.get("brain_mask_backend") else {}),
+        "preprocessed_input": _preprocessed_input(effective),
         "software": {"python": sys.version.split()[0], "platform": platform.platform(),
                      "packages": _package_versions()},
         "assets": _assets(effective),

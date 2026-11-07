@@ -1108,7 +1108,7 @@ def _resolve_analysis_inputs(
     subject_id: str,
     output_root: Optional[Path] = None,
 ) -> dict[str, Path]:
-    """Return the completed preprocessing bundle, or canonical raw inputs."""
+    """Return the current preprocessing bundle, or canonical raw inputs (W2b: one predicate for every reuse point)."""
 
     if _preprocessing_complete(subject_root, subject_id, output_root):
         outputs = _preprocessing_outputs(subject_root, subject_id, output_root)
@@ -1226,39 +1226,36 @@ def _preprocessing_complete(
     subject_root: Path, subject_id: str, output_root: Optional[Path] = None,
     *, config: Optional[ProductOrchestratorConfig] = None,
 ) -> bool:
-    outputs = _preprocessing_outputs(subject_root, subject_id, output_root)
-    if not all(path.is_file() for key, path in outputs.items() if key != "qc") or not _qc_completed(outputs["qc"]):
-        return False
-    try:
-        manifest = _read_json(outputs["manifest"])
-        if manifest.get("status") not in {"completed", "cached"}:
-            return False
-        from preprocessing.pipeline import preprocessing_gradients_current
-        if not preprocessing_gradients_current(manifest):
-            return False
-        cache_key = manifest.get("cache_key")
-        raw = _resolve_raw_inputs(subject_root)
-        if isinstance(cache_key, dict) and not all(
-            _file_record_matches((cache_key.get("inputs") or {}).get(key), path)
-            for key, path in raw.items()
-        ):
-            return False
-        if config is not None:
-            from preprocessing.pipeline import _preprocessing_cache_key, inspect_preprocessing_backend
-            from shared.pipeline import RawInputBundle
+    """W2b (T1 D1): the shared predicate decides; with a config the full cache key must also match.
 
-            expected = _preprocessing_config(config, subject_root, outputs["dwi"].parent)
-            if expected.force:
-                return False
-            bundle = RawInputBundle(
-                subject_root=subject_root, subject_id=subject_id, input_dir=subject_root / "input",
-                dwi_path=raw["dwi"], bval_path=raw["bval"], bvec_path=raw["bvec"], mask_path=raw["mask"],
-            )
-            if cache_key != _preprocessing_cache_key(bundle, expected, inspect_preprocessing_backend(expected)):
-                return False
+    Without a config this is exactly ``preprocessed_outputs_usable`` (the same decision as
+    ``resolve_preprocessed_input_bundle``): a completed manifest with cache-key version 5 or 6, its files, a completed
+    QC, and raw-input signatures that match. With a config (preprocessing is selected) the settings must match too:
+    the stored cache key must equal the key of the run that this config would make, so a changed PE direction, route or
+    sidecar reruns preprocessing. A config that cannot resolve a PE direction never matches.
+    """
+    from shared.pipeline import current_preprocessed_outputs
+
+    current = current_preprocessed_outputs(subject_root, output_root, subject_id)
+    if current is None:
+        return False
+    if config is None:
+        return True
+    try:
+        from preprocessing.pipeline import _preprocessing_cache_key, inspect_preprocessing_backend
+        from shared.pipeline import RawInputBundle
+
+        expected = _preprocessing_config(config, subject_root, current.preproc_dir)
+        if expected.force:
+            return False
+        raw = _resolve_raw_inputs(subject_root)
+        bundle = RawInputBundle(
+            subject_root=subject_root, subject_id=subject_id, input_dir=subject_root / "input",
+            dwi_path=raw["dwi"], bval_path=raw["bval"], bvec_path=raw["bvec"], mask_path=raw["mask"],
+        )
+        return current.cache_key == _preprocessing_cache_key(bundle, expected, inspect_preprocessing_backend(expected))
     except (OSError, ValueError, TypeError, AttributeError):
         return False
-    return True
 
 
 def _resolve_segmentation(subject_root: Path, output_root: Optional[Path] = None) -> Optional[Path]:
@@ -3748,6 +3745,11 @@ def _run_subject_products_impl(
 
     preprocessing_outputs = _preprocessing_outputs(subject_root, config.subject_id, output_root)
     analysis_inputs = _resolve_analysis_inputs(subject_root, config.subject_id, output_root)
+    if "preprocessing" not in run_targets and dwi_targets.difference({"preprocessing"}).intersection(run_targets) \
+            and not _preprocessing_complete(subject_root, config.subject_id, output_root):
+        # W2b (T1 D1): one decision for the whole run; the log (and the run record) say which input the stages used.
+        from shared.pipeline import NO_CURRENT_PREPROCESSING_MESSAGE
+        _emit("[Orchestrator] " + NO_CURRENT_PREPROCESSING_MESSAGE, log)
     segmentation = _resolve_segmentation(subject_root, output_root)
     parcellation = _resolve_parcellation(subject_root, config.subject_id, output_root)
     model_assets_dir = config.model_assets_dir.expanduser().resolve() if config.model_assets_dir is not None else None

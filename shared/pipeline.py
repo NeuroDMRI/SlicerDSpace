@@ -265,63 +265,161 @@ def find_subject_root(
     )
 
 
+PREPROCESSING_CACHE_KEY_VERSIONS = (5, 6)
+NO_CURRENT_PREPROCESSING_MESSAGE = "No current preprocessed DWI for this input; using the raw DWI"
+
+
+def qc_record_completed(path: Path) -> bool:
+    """True when a QC JSON says ``completed`` and no automatic check failed."""
+    if not path.is_file():
+        return False
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+        checks = record.get("checks") or {}
+        return (record.get("status") == "completed" and record.get("automatic_qc_passed") is not False
+                and (not isinstance(checks, dict) or not any(value is False for value in checks.values())))
+    except Exception:
+        return False
+
+
+@dataclass(frozen=True)
+class PreprocessedOutputs:
+    """The latest preprocessing outputs that match the current raw input (see ``current_preprocessed_outputs``)."""
+
+    subject_id: str
+    preproc_dir: Path
+    dwi_path: Path
+    bval_path: Path
+    bvec_path: Path
+    mask_path: Path
+    manifest_path: Path
+    qc_path: Path
+    manifest: dict
+
+    @property
+    def cache_key(self) -> dict:
+        return self.manifest["cache_key"]
+
+    @property
+    def cache_key_version(self) -> int:
+        return int(self.cache_key["version"])
+
+    @property
+    def route_id(self) -> str:
+        """The route id of the outputs; a version-5 manifest has none of the version-6 kind."""
+        return str(self.cache_key.get("backend")) if self.cache_key_version >= 6 else "pre-v6"
+
+
+def _latest_preprocessing_manifest(preproc_dir: Path, subject_id: Optional[str]) -> Optional[tuple[str, Path]]:
+    suffix = "_preproc_manifest.json"
+    if subject_id is not None:
+        path = preproc_dir / f"{subject_id}{suffix}"
+        return (subject_id, path) if path.is_file() else None
+    try:
+        candidates = [path for path in preproc_dir.glob("*" + suffix) if path.is_file()]
+    except OSError:
+        return None
+    if not candidates:
+        return None
+    latest = max(candidates, key=lambda path: (path.stat().st_mtime_ns, path.name))
+    return latest.name[: -len(suffix)], latest
+
+
+def current_preprocessed_outputs(
+    subject_root: Path,
+    output_root: Optional[Path] = None,
+    subject_id: Optional[str] = None,
+) -> Optional[PreprocessedOutputs]:
+    """T1 D1: the preprocessing outputs every stage of a run may use, or None.
+
+    The one decision behind both reuse points (``resolve_preprocessed_input_bundle`` and the orchestrator's
+    ``_resolve_analysis_inputs`` / ``_preprocessing_complete``). It needs no preprocessing config. The latest
+    preprocessing manifest (or the one of ``subject_id``) must be completed or cached, with a cache key of version 5 or
+    6 (so subjects preprocessed before the upgrade keep their outputs); its four output files, its QC record and its
+    gradient rule must be current; and its recorded signatures of the raw dwi, bval, bvec and mask files must match the
+    current raw input. Anything else gives None, and then every stage uses the raw DWI.
+    """
+
+    from shared.io_layout import subject_layout
+
+    root = Path(subject_root).expanduser().resolve()
+    preproc_dir = subject_layout(root, output_root=Path(output_root) if output_root is not None else None).preproc
+    found = _latest_preprocessing_manifest(preproc_dir, subject_id)
+    if found is None:
+        return None
+    found_id, manifest_path = found
+    paths = {
+        "dwi": preproc_dir / f"{found_id}_dwi_final.nii.gz",
+        "bval": preproc_dir / f"{found_id}_dwi_final.bval",
+        "bvec": preproc_dir / f"{found_id}_dwi_final.bvec",
+        "mask": preproc_dir / f"{found_id}_brain_mask_final.nii.gz",
+    }
+    qc_path = preproc_dir / "05_qc" / f"{found_id}_preproc_qc.json"
+    if not all(path.is_file() for path in paths.values()) or not qc_record_completed(qc_path):
+        return None
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(manifest, dict) or manifest.get("status") not in {"completed", "cached"}:
+        return None
+    from preprocessing.pipeline import preprocessing_gradients_current
+    if not preprocessing_gradients_current(manifest):
+        return None
+    cache_key = manifest.get("cache_key")
+    if not isinstance(cache_key, dict) or cache_key.get("version") not in PREPROCESSING_CACHE_KEY_VERSIONS:
+        return None
+    inputs = cache_key.get("inputs")
+    if not isinstance(inputs, dict):
+        return None
+    input_dir = root / "input"
+    for key, name in RAW_INPUT_FILES.items():
+        record = inputs.get(key)
+        try:
+            current = _file_signature(input_dir / name)
+        except OSError:
+            return None
+        if not isinstance(record, dict) or any(record.get(field) != value for field, value in current.items()):
+            return None
+    return PreprocessedOutputs(
+        subject_id=found_id, preproc_dir=preproc_dir, dwi_path=paths["dwi"], bval_path=paths["bval"],
+        bvec_path=paths["bvec"], mask_path=paths["mask"], manifest_path=manifest_path, qc_path=qc_path,
+        manifest=manifest,
+    )
+
+
+def preprocessed_outputs_usable(
+    subject_root: Path,
+    output_root: Optional[Path] = None,
+    subject_id: Optional[str] = None,
+) -> bool:
+    """T1 D1: True when ``current_preprocessed_outputs`` finds usable preprocessing outputs for the whole run."""
+    return current_preprocessed_outputs(subject_root, output_root, subject_id) is not None
+
+
 def resolve_preprocessed_input_bundle(
     raw: RawInputBundle,
     *,
     output_root: Optional[Path] = None,
 ) -> RawInputBundle:
-    """Use completed preprocessing outputs as an analysis bundle when available.
+    """Use current preprocessing outputs as an analysis bundle when available.
 
     Downstream quantitative models must consume the same dMRI, gradients and
-    mask emitted by preprocessing. If the user has not run preprocessing, the
-    canonical input bundle remains the explicit fallback.
+    mask emitted by preprocessing. If there are no current preprocessing outputs
+    (``preprocessed_outputs_usable``), the canonical input bundle is the explicit
+    fallback, for every stage alike.
     """
-    resolved_output_root = (
-        output_root.expanduser().resolve()
-        if output_root is not None
-        else raw.subject_root / "outputs"
-    )
-    preproc_dir = resolved_output_root / "01_preproc"
-    manifest_path = preproc_dir / f"{raw.subject_id}_preproc_manifest.json"
-    candidates = {
-        "dwi": preproc_dir / f"{raw.subject_id}_dwi_final.nii.gz",
-        "bval": preproc_dir / f"{raw.subject_id}_dwi_final.bval",
-        "bvec": preproc_dir / f"{raw.subject_id}_dwi_final.bvec",
-        "mask": preproc_dir / f"{raw.subject_id}_brain_mask_final.nii.gz",
-    }
-    if not manifest_path.is_file() or not all(path.is_file() for path in candidates.values()):
+    outputs = current_preprocessed_outputs(raw.subject_root, output_root, raw.subject_id)
+    if outputs is None:
         return raw
-    try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return raw
-    if manifest.get("status") not in {"completed", "cached"}:
-        return raw
-    from preprocessing.pipeline import preprocessing_gradients_current
-    if not preprocessing_gradients_current(manifest):
-        return raw
-    if "cache_key" in manifest:
-        cache_key = manifest.get("cache_key")
-        inputs = cache_key.get("inputs") if isinstance(cache_key, dict) else None
-        if not isinstance(inputs, dict):
-            return raw
-        for key, path in {"dwi": raw.dwi_path, "bval": raw.bval_path,
-                          "bvec": raw.bvec_path, "mask": raw.mask_path}.items():
-            record = inputs.get(key)
-            try:
-                current = _file_signature(path)
-                if not isinstance(record, dict) or any(record.get(field) != value for field, value in current.items()):
-                    return raw
-            except OSError:
-                return raw
     return RawInputBundle(
         subject_root=raw.subject_root,
         subject_id=raw.subject_id,
-        input_dir=preproc_dir,
-        dwi_path=candidates["dwi"],
-        bval_path=candidates["bval"],
-        bvec_path=candidates["bvec"],
-        mask_path=candidates["mask"],
+        input_dir=outputs.preproc_dir,
+        dwi_path=outputs.dwi_path,
+        bval_path=outputs.bval_path,
+        bvec_path=outputs.bvec_path,
+        mask_path=outputs.mask_path,
     )
 
 

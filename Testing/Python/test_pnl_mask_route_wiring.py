@@ -136,6 +136,8 @@ class PnlMaskRouteWiringTest(unittest.TestCase):
         inputs = root / "input"
         inputs.mkdir(parents=True)
         input_mask = inputs / "nodif_brain_mask.nii.gz"
+        for name in ("data.nii.gz", "bvals", "bvecs"):  # W2b: the shared reuse predicate checks the raw input files
+            (inputs / name).write_bytes(b"raw " + name.encode())
         preproc = subject_layout(root).preproc
         (preproc / "05_qc").mkdir(parents=True)
         for name in ("dwi_final.nii.gz", "dwi_final.bval", "dwi_final.bvec"):
@@ -151,6 +153,19 @@ class PnlMaskRouteWiringTest(unittest.TestCase):
         return run, final, input_mask
 
     @staticmethod
+    def _seal(run: Path) -> None:
+        """W2b: record the raw input files in the preprocessing cache key (version 5), as a real run does."""
+        from shared.io_layout import subject_layout
+        from shared.pipeline import _file_signature
+        root = Path(json.loads(run.read_text(encoding="utf-8"))["subject_root"])
+        path = subject_layout(root).preproc / "sub-01_preproc_manifest.json"
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+        names = {"dwi": "data.nii.gz", "bval": "bvals", "bvec": "bvecs", "mask": "nodif_brain_mask.nii.gz"}
+        manifest["cache_key"] = {"version": 5, "inputs": {key: _file_signature(root / "input" / name)
+                                                           for key, name in names.items()}}
+        path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    @staticmethod
     def _write_receipt(mask: Path, route: str, *, sha: str | None = None, backend: str = "pnl_cnn") -> None:
         import hashlib
         digest = sha or hashlib.sha256(mask.read_bytes()).hexdigest()
@@ -164,6 +179,7 @@ class PnlMaskRouteWiringTest(unittest.TestCase):
             input_mask.write_bytes(b"user input mask")  # the input is a different, supplied mask
             final.write_bytes(b"generated on the corrected dwi")
             self._write_receipt(final, "native")
+            self._seal(run)
             mask = build_run_record(run)["brain_mask"]
             self.assertEqual(mask["route"], "native-sitk")
             self.assertEqual(mask["status"], "experimental")
@@ -176,6 +192,7 @@ class PnlMaskRouteWiringTest(unittest.TestCase):
             self._write_receipt(input_mask, "native")  # a valid native receipt on the input must not be used here
             final.write_bytes(b"replaced mask")
             self._write_receipt(final, "native", sha="0" * 64)
+            self._seal(run)
             self.assertEqual(build_run_record(run)["brain_mask"]["route"], "unknown")
 
     def test_f2b_provided_final_mask_copied_from_a_generated_input_mask_keeps_the_input_route(self) -> None:
@@ -188,6 +205,7 @@ class PnlMaskRouteWiringTest(unittest.TestCase):
             manifest = final.with_name("sub-01_preproc_manifest.json")
             manifest.write_text(json.dumps({"status": "completed", "mask_generation": {
                 "backend": "provided", "status": "copied", "source": input_mask.as_posix()}}), encoding="utf-8")
+            self._seal(run)
             mask = build_run_record(run)["brain_mask"]
             self.assertEqual((mask["route"], mask["status"]), ("native-sitk", "experimental"))
             # A copy that no longer matches its source is not labelled with the source's route.

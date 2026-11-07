@@ -169,9 +169,12 @@ class SetupDeliveryTests(unittest.TestCase):
     def test_macos_mrtrix_is_separate_from_unqualified_pnl_fsl_profiles(self):
         report = SimpleNamespace(statuses=(self.missing('command:mrconvert', 'mrtrix'),
                                           self.missing('brain_mask_backend', 'brain_mask')))
-        plan = build_setup_plan(report, system='Darwin', machine='x86_64')
+        plan = build_setup_plan(report, system='Darwin', machine='x86_64', pnl_mask_route='managed')
         self.assertEqual(plan['managed_profiles'], ['mrtrix'])
         self.assertEqual(plan['unsupported_profiles'], ['pnl_cnn'])
+        # SC-1c: on macOS the auto route is native, so no managed pnl_cnn profile is planned or reported unsupported.
+        auto = build_setup_plan(report, system='Darwin', machine='x86_64')
+        self.assertEqual((auto['managed_profiles'], auto['unsupported_profiles']), (['mrtrix'], []))
         from shared.managed_runtimes import bootstrap_artifact, profile_spec
         with patch('platform.system', return_value='Darwin'), patch('platform.mac_ver', return_value=('14.5', (), '')), \
                 patch('shared.managed_runtimes.host_machine', return_value='x86_64'):

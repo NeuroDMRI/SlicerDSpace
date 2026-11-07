@@ -318,7 +318,10 @@ class C5BrainMaskRuntimeTest(unittest.TestCase):
         self.assertEqual(linux["managed_profiles"], ["pnl_cnn"])
         self.assertEqual(linux["unsupported_profiles"], [])
         self.assertEqual(linux["unsupported_notes"], {})
-        mac = build_setup_plan(self._missing_mask_report(), system="Darwin", machine="arm64")
+        # SC-1c: on macOS the auto route is native: no managed profile, and nothing is reported unsupported.
+        native = build_setup_plan(self._missing_mask_report(), system="Darwin", machine="arm64")
+        self.assertEqual((native["managed_profiles"], native["unsupported_profiles"]), ([], []))
+        mac = build_setup_plan(self._missing_mask_report(), system="Darwin", machine="arm64", pnl_mask_route="managed")
         self.assertEqual(mac["managed_profiles"], [])
         self.assertEqual(mac["unsupported_profiles"], ["pnl_cnn"])
         self.assertEqual(mac["unsupported_notes"], {"pnl_cnn": self.NOT_AVAILABLE})

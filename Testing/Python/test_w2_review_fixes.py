@@ -199,5 +199,31 @@ class F3PeBlockDecidedOnceTest(unittest.TestCase):
             self.assertEqual((status["preprocessing"], status["microstructure"]), ("blocked", "blocked"))
 
 
+class F4NoQcRequirementTest(unittest.TestCase):
+    """F4: the config-less predicate is true for a completed manifest with its files and raw signatures; the QC JSON
+    is not part of it (D1)."""
+
+    def test_f4_a_qc_json_that_says_running_or_is_absent_or_failed_still_gives_usable_outputs_at_both_points(self) -> None:
+        for version in ("v5", "v6"):
+            for qc in ("running", "absent", "failed"):
+                with self.subTest(version=version, qc=qc), tempfile.TemporaryDirectory() as tmp:
+                    subject = make_subject(Path(tmp))
+                    preproc = write_preprocessing(subject, cache_key=version)
+                    qc_path = preproc / "05_qc" / "100307_preproc_qc.json"
+                    if qc == "absent":
+                        qc_path.unlink()
+                    else:
+                        qc_path.write_text(json.dumps({"status": qc}), encoding="utf-8")
+                    self.assertEqual(set(reuse_points(subject).values()), {True})
+
+    def test_f4_a_missing_cache_key_or_missing_output_or_changed_raw_input_is_still_unusable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            subject = make_subject(Path(tmp))
+            write_preprocessing(subject, cache_key=None, qc="running")
+            self.assertEqual(set(reuse_points(subject).values()), {False})
+            write_preprocessing(subject, cache_key="v5", qc="running", missing="dwi_final.bval")
+            self.assertEqual(set(reuse_points(subject).values()), {False})
+
+
 if __name__ == "__main__":
     unittest.main()

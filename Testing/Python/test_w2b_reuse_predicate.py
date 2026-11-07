@@ -99,7 +99,10 @@ class W2bReusePredicateTest(unittest.TestCase):
                 self.assertEqual(set(reuse_points(subject).values()), {False})
 
     def test_w2b_property_the_two_reuse_points_always_agree(self) -> None:
-        """Over manifest states (status, cache key, QC, missing file, raw change) both points give one answer."""
+        """Over manifest states (status, cache key, QC, missing file, raw change) both points give one answer.
+
+        F4: the QC JSON is not part of the decision.
+        """
         states = itertools.product(
             ("completed", "cached", "failed", "running"),
             ("v4", "v5", "v6", None, "bad"),
@@ -116,7 +119,7 @@ class W2bReusePredicateTest(unittest.TestCase):
                 write_preprocessing(subject, status=status, cache_key=cache_key, qc=qc, missing=missing)
                 if raw_changed:
                     (subject / "input" / "bvals").write_text("raw bvals changed later", encoding="utf-8")
-                expected = (status in {"completed", "cached"} and cache_key in {"v5", "v6"} and qc == "completed"
+                expected = (status in {"completed", "cached"} and cache_key in {"v5", "v6"}
                             and not missing and not raw_changed)
                 decisions = reuse_points(subject)
                 with self.subTest(status=status, cache_key=cache_key, qc=qc, missing=missing, raw_changed=raw_changed):

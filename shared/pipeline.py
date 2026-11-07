@@ -335,8 +335,8 @@ def current_preprocessed_outputs(
     The one decision behind both reuse points (``resolve_preprocessed_input_bundle`` and the orchestrator's
     ``_resolve_analysis_inputs`` / ``_preprocessing_complete``). It needs no preprocessing config. The latest
     preprocessing manifest (or the one of ``subject_id``) must be completed or cached, with a cache key of version 5 or
-    6 (so subjects preprocessed before the upgrade keep their outputs); its four output files, its QC record and its
-    gradient rule must be current; and its recorded signatures of the raw dwi, bval, bvec and mask files must match the
+    6 (so subjects preprocessed before the upgrade keep their outputs); its four output files and its gradient rule
+    must be current (the QC JSON is not part of the decision, F4); and its recorded signatures of the raw dwi, bval, bvec and mask files must match the
     current raw input. Anything else gives None, and then every stage uses the raw DWI.
     """
 
@@ -355,7 +355,7 @@ def current_preprocessed_outputs(
         "mask": preproc_dir / f"{found_id}_brain_mask_final.nii.gz",
     }
     qc_path = preproc_dir / "05_qc" / f"{found_id}_preproc_qc.json"
-    if not all(path.is_file() for path in paths.values()) or not qc_record_completed(qc_path):
+    if not all(path.is_file() for path in paths.values()):
         return None
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))

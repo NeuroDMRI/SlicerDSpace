@@ -1232,8 +1232,8 @@ def _preprocessing_complete(
     """W2b (T1 D1): the shared predicate decides; with a config the full cache key must also match.
 
     Without a config this is exactly ``preprocessed_outputs_usable`` (the same decision as
-    ``resolve_preprocessed_input_bundle``): a completed manifest with cache-key version 5 or 6, its files, a completed
-    QC, and raw-input signatures that match. With a config (preprocessing is selected) the settings must match too:
+    ``resolve_preprocessed_input_bundle``): a completed manifest with cache-key version 5 or 6, its files, and raw-input
+    signatures that match. With a config (preprocessing is selected) the settings must match too:
     the stored cache key must equal the key of the run that this config would make, so a changed PE direction, route or
     sidecar reruns preprocessing. A config that cannot resolve a PE direction never matches.
     """

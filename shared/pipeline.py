@@ -375,17 +375,32 @@ def current_preprocessed_outputs(
     input_dir = root / "input"
     for key, name in RAW_INPUT_FILES.items():
         record = inputs.get(key)
-        try:
-            current = _file_signature(input_dir / name)
-        except OSError:
-            return None
-        if not isinstance(record, dict) or any(record.get(field) != value for field, value in current.items()):
+        if not _input_record_matches(record, input_dir / name):
             return None
     return PreprocessedOutputs(
         subject_id=found_id, preproc_dir=preproc_dir, dwi_path=paths["dwi"], bval_path=paths["bval"],
         bvec_path=paths["bvec"], mask_path=paths["mask"], manifest_path=manifest_path, qc_path=qc_path,
         manifest=manifest,
     )
+
+
+def _input_record_matches(record: object, path: Path) -> bool:
+    """True when a recorded input file names ``path`` (resolved paths equal) with the same size and mtime.
+
+    The producer (``preprocessing.pipeline._file_record``) writes the path as ``as_posix()``, so the stored string can
+    differ from ``str(path.resolve())`` (Windows: ``C:/`` against ``C:\\``). Compare resolved paths, not strings.
+    """
+    if not isinstance(record, dict):
+        return False
+    try:
+        stat = path.stat()
+        return (
+            Path(str(record.get("path") or "")).resolve() == path.resolve()
+            and int(record.get("size", -1)) == stat.st_size
+            and int(record.get("mtime_ns", -1)) == stat.st_mtime_ns
+        )
+    except (OSError, TypeError, ValueError):
+        return False
 
 
 def preprocessed_outputs_usable(

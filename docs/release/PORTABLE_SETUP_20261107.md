@@ -42,7 +42,7 @@ Plan the compute time for the first run after the update.
   If the wheel, or a dcm2niix path that you set yourself, fails its check, the
   setup is not ready. If a dcm2niix found only on `PATH` fails, you get a
   warning. NIfTI input does not need dcm2niix.
-- macOS installs MRtrix3 3.0.8 and FSL as managed runtimes (FSL needs macOS 14.5 or newer).
+- macOS installs MRtrix3 3.0.8 and FSL as managed runtimes (both need macOS 14.5 or newer).
 - Windows runs MRtrix3 and FSL in WSL 2 Ubuntu. The brain mask and the Python
   stages run in Windows Slicer's Python.
 - Setup commands use `PythonSlicer` (Slicer's own Python), not `python3`.

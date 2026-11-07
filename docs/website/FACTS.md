@@ -92,7 +92,7 @@ Optional and default behaviour:
 
 ## 4. Implementation provenance hedges
 
-Quoted (R/README.md:42-45): "DDSeg is a MATLAB-to-Python/PyTorch reimplementation; SAF and MK-Curve are unofficial Python ports of author MATLAB methods. PNL CNN masking runs a modified copy of the author's PNL inference code (licence terms in the PNL licence page), not a rewritten entire PNL pipeline."
+Quoted (R/README.md:96-99): "DDSeg uses converted Python/PyTorch models; SAF and MK-Curve are unofficial Python ports of author MATLAB methods. PNL CNN masking runs a modified copy of the author's PNL inference code (licence terms in the PNL licence page)."
 
 Provenance page (R/docs/architecture/IMPLEMENTATION_PROVENANCE.md):
 - Preamble: "Language translation, successful execution, numerical equivalence and anatomical validity are different claims. This page ... does not assert author endorsement or clinical validation." (:11-13)
@@ -119,7 +119,7 @@ Provenance page (R/docs/architecture/IMPLEMENTATION_PROVENANCE.md):
 - PNL CNN mask: available on all three systems. Linux: managed conda runtime with ANTs 2.3.0. macOS and Windows: native route in Slicer's Python (SimpleITK and PyTorch), **experimental**: its masks did not meet the parity rule on 2 of 24 test cases; not run on Windows or macOS here. (R/docs/setup/SUPPORT_MATRIX.md, PNL CNN mask row; R/shared/brain_mask.py:142-162)
 - "Windows/macOS do not inherit Linux QC or timings." (SUPPORT_MATRIX.md:51-52)
 - Release gate table (R/docs/release/EXTENSION_READINESS.md:94-104): real SDK/CPack + clean install "Requires independent evidence"; model/template/fixture redistribution "Unconfirmed groups remain excluded from public asset archives"; real-data tutorial and Sample Data registration "Not completed"; patent: "Maintainer review required; no absence claim is made".
-- Extension Index descriptor `docs/release/extension-index/SlicerDDSurfer.json`: tier 1, scm_revision main, build_dependencies PyTorch; "a schema-compatible draft, not a submitted catalog entry." (R/docs/release/extension-index/SlicerDDSurfer.json; EXTENSION_READINESS.md:106-109)
+- Extension Index descriptor `docs/release/extension-index/SlicerDSpace.json`: tier 1, scm_revision main, build_dependencies PyTorch; "a schema-compatible draft, not a submitted catalog entry." (R/docs/release/extension-index/SlicerDSpace.json; EXTENSION_READINESS.md:106-109)
 - CI: the README badge tracks main push runs; "the live badge ... is not externally accessible without authorization." (R/README.md:165-168)
 - Documented real-data scope is Linux. Later validation records (CSD/ACT, platform audit, etc.) are listed in R/docs/README.md:47-92 but were not read. One recorded caveat: the CSD/ACT investigation "supersedes the earlier CSD acceptance ... old ACT-dependent outputs require regeneration." (R/docs/README.md:49-51)
 - Film run platform: macOS, Apple M4, x86_64 Slicer 5.12.4 under Rosetta, CPU only. P/MAKING_OF.md:73-74, 144-145 ("SlicerDDSurfer is validated on Linux. This run used macOS ... and needed the run-time workarounds in §10.")

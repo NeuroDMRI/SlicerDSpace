@@ -36,7 +36,7 @@
 - dcm2niix：插件把固定版本的 dcm2niix 轮子装入 Slicer 的 Python。
   如果该轮子或你自己设置的 dcm2niix 路径未通过检查，则准备未完成。
   如果只在 `PATH` 中找到的 dcm2niix 未通过检查，只给出警告。NIfTI 输入不需要 dcm2niix。
-- macOS 把 MRtrix3 3.0.8 和 FSL 安装为托管运行环境（FSL 需要 macOS 14.5 或更高）。
+- macOS 把 MRtrix3 3.0.8 和 FSL 安装为托管运行环境（两者都需要 macOS 14.5 或更高）。
 - Windows 在 WSL 2 Ubuntu 中运行 MRtrix3 和 FSL。脑掩膜和 Python 阶段在 Windows 版 Slicer 的 Python 中运行。
 - 准备命令使用 `PythonSlicer`（Slicer 自带的 Python），不再用 `python3`。
 

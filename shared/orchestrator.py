@@ -2435,7 +2435,8 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
                 connectome_dir / f"{config.subject_id}-connectome-nodes.tsv",
                 manifest_path=connectome_dir / f"{connectome_stem}_manifest.json",
                 tractography=tractogram,
-                parcellation=parcellation,                backend=config.connectome_backend,
+                parcellation=parcellation,
+                backend=config.connectome_backend,
                 compress_mrtrix_dense=config.connectome_compress_mrtrix_dense,
             )
         return False

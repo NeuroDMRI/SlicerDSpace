@@ -137,6 +137,24 @@ class PreflightTests(unittest.TestCase):
             with self.assertRaisesRegex(FileNotFoundError, 'SLICER_PATH'):
                 slicer_files()
 
+    def test_b9b_slicer_files_find_the_macos_app_layout(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            contents = Path(tmp) / 'Slicer.app' / 'Contents'
+            core = contents / 'lib/Slicer-5.2/cli-modules'
+            core.mkdir(parents=True)
+            (contents / 'bin').mkdir()
+            (contents / 'MacOS').mkdir()
+            tools = [contents / 'MacOS/Slicer', contents / 'bin/PythonSlicer', core / 'BRAINSFit',
+                     core / 'ResampleScalarVectorDWIVolume']
+            for path in tools:
+                path.write_text('#!/bin/sh\nexit 0\n')
+                path.chmod(0o755)
+            for home in (contents.parent, contents, contents / 'MacOS'):
+                with self.subTest(home=home.name), patch.dict(os.environ, {'DTI_SLICER_PATH': str(home)}):
+                    self.assertEqual(sorted(slicer_files()), sorted(tools))
+            with patch.dict(os.environ, {}, clear=True), patch('shutil.which', return_value=str(contents / 'MacOS/Slicer')):
+                self.assertEqual(sorted(slicer_files()), sorted(tools))  # Slicer found on PATH
+
     def test_signature_checks_inputs_assets_and_settings(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); files = make_bundle(root / 'inputs/x')

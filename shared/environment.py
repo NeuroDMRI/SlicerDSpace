@@ -2139,7 +2139,9 @@ def _doctor_pythonslicer(config: "EnvironmentDoctorConfig") -> Optional[Path]:
     it is itself a PythonSlicer, the configured Slicer launcher, SLICERDSPACE_SLICER_EXECUTABLE,
     SLICER_HOME / SLICERDSPACE_SLICER_HOME, then the common install paths.
     """
-    # T2/R3: ask the resolver that the fit uses first; it raises outside Slicer, then the search below applies.
+    # T2/R3: ask the resolver that the fit uses first. Outside Slicer it also reads SLICER_HOME, SLICERDSPACE_SLICER_HOME,
+    # SLICERDSPACE_SLICER_EXECUTABLE and the configured Slicer path; it raises when none gives a PythonSlicer, and the
+    # search below adds the doctor's own settings (configured Python and launcher, common install paths).
     try:
         from shared.pipeline import resolve_pythonslicer_executable
         return interpreter_path(resolve_pythonslicer_executable())
@@ -2439,7 +2441,8 @@ def write_environment_report(result: EnvironmentDoctorResult, output_dir: Path) 
                 f"- Required: `{item.required}`",
                 f"- Targets: `{', '.join(item.targets)}`",
                 f"- Detected source: `{item.details.get('detected_source', 'not found')}`",
-                f"- Suggested fix: {item.install_hint or 'See docs/setup/EXTERNAL_DEPENDENCIES.md.'}",
+                # B10: a multi-line hint (for example a Teem error) would end the Markdown bullet; keep it on one line.
+                f"- Suggested fix: {' '.join((item.install_hint or '').split()) or 'See docs/setup/EXTERNAL_DEPENDENCIES.md.'}",
                 "",
             ]
         )

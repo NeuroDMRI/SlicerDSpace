@@ -13,6 +13,12 @@ from unittest.mock import patch
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
+if str(REPO_ROOT / "Testing" / "Python") not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT / "Testing" / "Python"))
+
+import user_data_isolation  # B2: the SHA-256 cache and the user config of these tests are temporary
+
+user_data_isolation.install()
 
 
 def _task(name, status="completed"):
@@ -54,7 +60,7 @@ class TC5bAggregateRecordTest(unittest.TestCase):
         self.assertEqual(parameters["microstructure_ifw_echo_time_ms"], 82.0)
         self.assertEqual(parameters["compression"], "zstd")
         self.assertEqual(parameters["wma_atlas"], "naba")
-        self.assertIn("pnl-cnn-weights", {"pnl-cnn-weights"} | set())  # guard: names are plain strings
+        self.assertNotIn("pnl-cnn-weights", profiles)  # B2 (was a tautology): the children use synthstrip, not PNL
         self.assertIn("synthstrip", profiles)
         self.assertEqual([entry["tracking_backend"] for entry in parameters["per_tracking_backend"]],
                          ["csd_act", "ukf"])
@@ -125,8 +131,19 @@ class TC7bCustomModelRootTest(unittest.TestCase):
         self.assertEqual(other["segmentation"]["version"], "unknown")
 
     def test_t_c7b_the_orchestrator_manifest_records_the_model_folder(self):
-        source = (REPO_ROOT / "shared" / "orchestrator.py").read_text(encoding="utf-8")
-        self.assertIn('"model_assets_dir": model_assets_dir.as_posix() if model_assets_dir else None', source)
+        """B2: behaviour, not source text. A planned run writes the model folder into its manifest."""
+        from shared import ProductOrchestratorConfig, run_subject_products
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "100307"
+            (root / "input").mkdir(parents=True)
+            models = Path(tmp) / "models"
+            for folder, expected in ((models, models.resolve().as_posix()), (None, None)):
+                result = run_subject_products(ProductOrchestratorConfig(
+                    subject_id="100307", subject_root=root, targets=("microstructure",), execute=False,
+                    model_assets_dir=folder, run_name="b2_" + ("set" if folder else "unset")))
+                data = json.loads(result.run_manifest_path.read_text(encoding="utf-8"))
+                self.assertEqual(data["model_assets_dir"], expected)
 
 
 class TO2IfwFlagTest(unittest.TestCase):

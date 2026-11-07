@@ -259,6 +259,8 @@ def run_ifw(config: IfwConfig, log: Optional[Callable[[str], None]] = None) -> I
                 emit("[iFW] Regional table is missing or stale; recomputing it from the cached maps")
                 _write_roi_table(config, paths)
             cached_csv = paths["roi_stats_csv"]
+        elif paths["roi_stats_csv"].is_file():
+            cached_csv = paths["roi_stats_csv"]  # T1 N5: a table from an earlier run stays a product of the stage
         return IfwResult(config.subject_id, "cached", paths["ifw"], paths["fw_volume_fraction"], paths["record"],
                          echo_time_ms, source, cached_csv)
     started = time.monotonic()

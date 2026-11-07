@@ -43,6 +43,26 @@ def pythonslicer(slicer_path):
     raise FileNotFoundError(f'PythonSlicer not found in the Slicer installation: {home}')
 
 
+def slicer_root(slicer_path):
+    """Folder that holds ``lib/`` and ``bin/``: the path itself, or ``Contents`` for a macOS .app or ``Contents/MacOS``."""
+    home = Path(slicer_path)
+    return home.parent if home.name == 'MacOS' else home / 'Contents' if home.suffix == '.app' else home
+
+
+def slicer_launcher(slicer_path):
+    """Slicer executable of the selected installation (B9), as ``dti.sh`` finds it for the same folders.
+
+    Linux and Windows: ``<root>/Slicer[.exe]``. macOS: ``Slicer.app/Contents/MacOS/Slicer``, reached from the .app,
+    its ``Contents`` folder or ``Contents/MacOS``.
+    """
+    home = Path(slicer_path)
+    root = slicer_root(home)
+    for candidate in (home / 'Slicer', home / 'Slicer.exe', root / 'MacOS/Slicer', root / 'Slicer', root / 'Slicer.exe'):
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return candidate
+    return home / 'Slicer'  # not found: the command fails with this path in its error message
+
+
 def substitute(part, replacements):
     """Swap a staged output path into one argument, also inside an ``Operation=path`` pair."""
     text = str(part)
@@ -58,7 +78,7 @@ def run(args):
     folder = args.output_dir.resolve()
     stem = args.subject
     cache = StageCache(folder / '.stages.json', related_files, validate_output)
-    slicer = [str(args.slicer_path / 'Slicer'), '--launch']
+    slicer = [str(slicer_launcher(args.slicer_path)), '--launch']
     helper_env = dict(os.environ)
     for name, value in (('OMP_NUM_THREADS', '1'), ('OPENBLAS_NUM_THREADS', '1'),
                         ('MKL_NUM_THREADS', '1'), ('NUMEXPR_NUM_THREADS', '1'),

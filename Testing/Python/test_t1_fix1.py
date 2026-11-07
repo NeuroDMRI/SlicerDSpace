@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -18,6 +19,10 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 if str(REPO_ROOT / "Testing" / "Python") not in sys.path:
     sys.path.insert(0, str(REPO_ROOT / "Testing" / "Python"))
+
+import user_data_isolation  # noqa: E402  B2: SHA-256 cache, user config and model root of these tests are temporary
+
+user_data_isolation.install()
 
 from shared import teem_dti  # noqa: E402
 
@@ -285,6 +290,18 @@ class TB3IfwRegionalTableReuseTest(unittest.TestCase):
         self.assertEqual(self.table_ids(second), ["7", "9"])
         self.assertTrue((self.root / "out" / "S1_ROIWise-iFW.json").is_file())
 
+    def test_b6_n5_a_cached_result_returns_the_existing_table_path_also_without_a_label_map(self):
+        from microstructure.ifw import run_ifw
+
+        first = run_ifw(self.config(roi_label_map=self.root / "labels.nii.gz"))
+        second = run_ifw(self.config())  # no label map this time
+        self.assertEqual(second.status, "cached")
+        self.assertEqual(second.roi_stats_csv_path, first.roi_stats_csv_path)
+        self.assertTrue(second.roi_stats_csv_path.is_file())
+        # Nothing to return when no table was ever written.
+        (self.root / "out" / "S1_ROIWise-iFW.csv").unlink()
+        self.assertIsNone(run_ifw(self.config()).roi_stats_csv_path)
+
     def test_t_b3_changed_label_map_regenerates_the_table(self):
         from microstructure.ifw import run_ifw
 
@@ -442,7 +459,10 @@ class TC7AssetVersionsTest(unittest.TestCase):
         from shared import run_record
 
         manifests = {name: json.loads((REPO_ROOT / name).read_text()) for name in run_record.ASSET_MANIFESTS}
-        with patch.object(run_record, "sha256_file", side_effect=AssertionError("must not hash weights")):
+        # B2: the managed root means no model-folder variable; do not depend on the caller's environment.
+        with patch.dict("os.environ"), patch.object(run_record, "sha256_file", side_effect=AssertionError("must not hash weights")), \
+                patch("shared.model_asset_integrity.sha256_of_file", side_effect=AssertionError("must not hash weights")):
+            os.environ.pop("SLICERDSPACE_MODEL_ASSETS_DIR", None)
             profiles = run_record.asset_versions(self.manifest(model_assets_dir=None))  # managed root
         segmentation = profiles["segmentation"]
         self.assertEqual(segmentation["manifest"], "models/assets_manifest.json")

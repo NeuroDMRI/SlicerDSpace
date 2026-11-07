@@ -94,6 +94,6 @@ class InputExecutionGateTests(unittest.TestCase):
         self.assertEqual(tasks['bundles.wma'].status, 'blocked')
 
     def test_b1_stale_ukf_output_keeps_wma_blocked_even_with_a_complete_wma_result(self):
-        # B1: valid input, UKF did not run and its output is not current.
+        # B1: valid input, UKF reported success but its output is not current.
         tasks = self._wma_task_with_valid_input(dict(return_value={'status': 'completed'}), False)
         self.assertEqual(tasks['bundles.wma'].status, 'blocked')

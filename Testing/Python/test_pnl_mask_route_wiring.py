@@ -109,7 +109,7 @@ class PnlMaskRouteWiringTest(unittest.TestCase):
                 record = build_run_record(manifest)
                 mask = record["brain_mask"]
                 self.assertEqual(mask["route"], name)  # the receipt wins over the requested route
-                self.assertEqual(mask["backend"], "pnl_cnn")
+                self.assertEqual(mask["requested_backend"], "pnl_cnn")
                 if experimental:
                     self.assertEqual(mask["status"], "experimental")
                     self.assertEqual(mask["reason"], PNL_NATIVE_EXPERIMENTAL_REASON)
@@ -126,7 +126,7 @@ class PnlMaskRouteWiringTest(unittest.TestCase):
                 "subject_id": "sub-01", "subject_root": str(Path(tmp) / "subject"), "brain_mask_backend": "pnl_cnn",
                 "brain_mask_route_requested": pnl_route_record("native")}), encoding="utf-8")
             mask = build_run_record(manifest)["brain_mask"]
-            self.assertEqual(mask, {"backend": "pnl_cnn", "route": "supplied"})
+            self.assertEqual(mask, {"requested_backend": "pnl_cnn", "route": "supplied"})
 
     # ---- F2b: with complete preprocessing the consumed mask is the preprocessing final mask
     def _preprocessed_subject(self, tmp: str, *, generation: dict) -> tuple[Path, Path, Path]:
@@ -194,13 +194,13 @@ class PnlMaskRouteWiringTest(unittest.TestCase):
             final.write_bytes(b"edited after the copy")
             self.assertEqual(build_run_record(run)["brain_mask"]["route"], "supplied")
 
-    def test_f2b_supplied_input_mask_without_a_receipt_gives_supplied_also_with_a_stale_pnl_receipt_absent(self) -> None:
+    def test_f2b_incomplete_preprocessing_and_input_mask_without_a_receipt_gives_supplied(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             run, final, input_mask = self._preprocessed_subject(tmp, generation={"backend": "provided"})
             for path in final.parent.glob("sub-01_dwi_final*"):
                 path.unlink()  # preprocessing not complete: the input mask is consumed
             input_mask.write_bytes(b"user mask")
-            self.assertEqual(build_run_record(run)["brain_mask"], {"backend": "pnl_cnn", "route": "supplied"})
+            self.assertEqual(build_run_record(run)["brain_mask"], {"requested_backend": "pnl_cnn", "route": "supplied"})
 
     def test_f2_orchestrator_manifest_keeps_the_setting_and_names_the_requested_route(self) -> None:
         from shared import ProductOrchestratorConfig, run_subject_products
@@ -231,11 +231,47 @@ class PnlMaskRouteWiringTest(unittest.TestCase):
                 missing = " ".join(str(item) for item in found["missing_required"])
                 self.assertEqual("pnl_mask_python" in missing, wants_conda)
 
-    def test_manifest_without_a_pnl_route_has_no_brain_mask_block(self) -> None:
+    def test_sc1_carry_1_every_requested_backend_records_the_consumed_mask(self) -> None:
+        """SC1-CARRY-1: a non-PNL selection records the consumed mask too; a synthstrip receipt gives its backend."""
         with tempfile.TemporaryDirectory() as tmp:
+            inputs = Path(tmp) / "subject" / "input"
+            inputs.mkdir(parents=True)
+            mask_path = inputs / "nodif_brain_mask.nii.gz"
+            mask_path.write_bytes(b"synthstrip mask")
             manifest = Path(tmp) / "run_manifest.json"
-            manifest.write_text(json.dumps({"subject_id": "s", "brain_mask_backend": "synthstrip"}), encoding="utf-8")
-            self.assertNotIn("brain_mask", build_run_record(manifest))
+            manifest.write_text(json.dumps({"subject_id": "s", "subject_root": str(Path(tmp) / "subject"),
+                                            "brain_mask_backend": "synthstrip"}), encoding="utf-8")
+            self.assertEqual(build_run_record(manifest)["brain_mask"],
+                             {"requested_backend": "synthstrip", "route": "supplied"})
+            self._write_receipt(mask_path, "native", backend="synthstrip")
+            self.assertEqual(build_run_record(manifest)["brain_mask"],
+                             {"requested_backend": "synthstrip", "route": "synthstrip"})
+            self._write_receipt(mask_path, "native", backend="synthstrip", sha="0" * 64)  # stale receipt
+            self.assertEqual(build_run_record(manifest)["brain_mask"]["route"], "unknown")
+
+    def test_sc1_carry_1_real_provided_backend_reusing_a_native_receipt_records_native_experimental(self) -> None:
+        import nibabel as nib
+        import numpy as np
+        from shared.brain_mask import BrainMaskConfig, generate_brain_mask
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "subject"
+            inputs = root / "input"
+            inputs.mkdir(parents=True)
+            nib.save(nib.Nifti1Image(np.ones((4, 4, 4, 2), dtype="float32"), np.eye(4)), str(inputs / "data.nii.gz"))
+            (inputs / "bvals").write_text("0 1000\n")
+            (inputs / "bvecs").write_text("0 1\n0 0\n0 0\n")
+            mask = inputs / "nodif_brain_mask.nii.gz"
+            nib.save(nib.Nifti1Image(np.ones((4, 4, 4), dtype="uint8"), np.eye(4)), str(mask))
+            self._write_receipt(mask, "native")
+            result = generate_brain_mask(inputs / "data.nii.gz", inputs / "bvals", inputs / "bvecs", mask,
+                                         config=BrainMaskConfig(backend="provided"))
+            self.assertEqual(result["status"], "reused")
+            manifest = Path(tmp) / "run_manifest.json"
+            manifest.write_text(json.dumps({"subject_id": "s", "subject_root": str(root),
+                                            "brain_mask_backend": "provided"}), encoding="utf-8")
+            record = build_run_record(manifest)["brain_mask"]
+            self.assertEqual(record["requested_backend"], "provided")
+            self.assertEqual((record["route"], record["status"]), ("native-sitk", "experimental"))
 
 
 if __name__ == "__main__":

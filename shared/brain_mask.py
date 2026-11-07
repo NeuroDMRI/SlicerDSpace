@@ -103,14 +103,27 @@ def resolve_dwi2mask(explicit_bin_dir: Optional[Path] = None) -> Optional[Path]:
     return Path(found).resolve() if found else None
 
 
+_pnl_native_python_problem = ""  # B7: why the last `_pnl_native_python()` call found nothing
+
+
 def _pnl_native_python() -> Optional[Path]:
     """PythonSlicer for the A1 subprocess, found as for ``teem_dti.py``; None outside a Slicer Python."""
+    global _pnl_native_python_problem
+    _pnl_native_python_problem = ""
     try:
         # Imported here: shared.pipeline imports this module.
         from shared.pipeline import resolve_pythonslicer_executable
         return Path(resolve_pythonslicer_executable())
-    except (ImportError, RuntimeError):
+    except (ImportError, RuntimeError) as exc:
+        _pnl_native_python_problem = str(exc)
         return None
+
+
+def _pnl_native_python_checked() -> Optional[Path]:
+    """``_pnl_native_python()`` with a clean problem text, so a replaced resolver never shows an old message."""
+    global _pnl_native_python_problem
+    _pnl_native_python_problem = ""
+    return _pnl_native_python()
 
 
 def pnl_child_threads() -> int:
@@ -150,8 +163,12 @@ def pnl_route_record(route: str) -> dict[str, str]:
     return record
 
 
-def _generated_pnl_route(mask: Path) -> dict[str, str] | None:
-    """The ``pnl_route`` of the receipt next to `mask`, only when that receipt describes these very bytes (F2b)."""
+def _generated_route(mask: Path) -> dict[str, str] | None:
+    """The route of the receipt next to `mask`, only when that receipt describes these very bytes (F2b).
+
+    A pnl_cnn receipt gives its ``pnl_route``. A receipt of another generating backend (SC1-CARRY-1) gives that backend
+    as the route, for example ``{"route": "synthstrip"}``.
+    """
     record_path = _manifest_path_for_mask(mask)
     try:
         record = json.loads(record_path.read_text(encoding="utf-8"))
@@ -159,28 +176,35 @@ def _generated_pnl_route(mask: Path) -> dict[str, str] | None:
         return None
     if not isinstance(record, dict):
         return None
-    route = record.get("pnl_route")
     recorded = (record.get("output") or {}).get("sha256") if isinstance(record.get("output"), dict) else None
-    if (record.get("backend") == "pnl_cnn" and isinstance(route, dict) and route.get("route")
-            and recorded and recorded == _sha256(mask)):
-        return {key: str(value) for key, value in route.items()}
+    if not recorded or recorded != _sha256(mask):
+        return None
+    backend = record.get("backend")
+    route = record.get("pnl_route")
+    if backend == "pnl_cnn":
+        if isinstance(route, dict) and route.get("route"):
+            return {key: str(value) for key, value in route.items()}
+        return None
+    if backend in BRAIN_MASK_BACKENDS and backend != "provided":
+        return {"route": str(backend)}
     return None
 
 
 def mask_provenance(mask_path: Path, *, preprocessing_manifest: dict | None = None) -> dict[str, str]:
     """F2 / F2b: route, status and reason of the mask that a run consumes.
 
-    (a) The receipt next to the mask gives its ``pnl_route`` only if the backend is pnl_cnn, ``pnl_route`` is present and
-    the receipt's ``output.sha256`` equals the SHA-256 of the mask now (a stale receipt never labels a later mask); this
+    (a) The receipt next to the mask gives its ``pnl_route`` if the backend is pnl_cnn and ``pnl_route`` is present; a
+    receipt of another generating backend gives that backend's name as the route. Both need the receipt's
+    ``output.sha256`` to equal the SHA-256 of the mask now (a stale receipt never labels a later mask); this
     holds also for a reused cache entry. (b) Otherwise, for a preprocessing final mask, a preprocessing manifest whose
     ``mask_generation`` has backend ``provided`` and a ``source`` gives the provenance of that source (same rule), when
     the final mask is a byte copy of it. (c) Otherwise a mask file with no receipt at all is ``supplied``; a receipt that
-    does not match, or comes from another backend, is ``unknown``; no mask file is ``unknown``.
+    does not match, or has no usable route, is ``unknown``; no mask file is ``unknown``.
     """
     mask = Path(mask_path)
     if not mask.is_file():
         return {"route": "unknown"}
-    route = _generated_pnl_route(mask)
+    route = _generated_route(mask)
     if route:
         return route
     generation = (preprocessing_manifest or {}).get("mask_generation")
@@ -261,9 +285,11 @@ def inspect_brain_mask_backend(config: BrainMaskConfig | None = None, *, system:
             threads = pnl_child_threads()
             # A7 (T2 design v4): Slicer's Python runs shared/pnl_mask_native.py (A1) with the vendored CNN code.
             # The conda runner settings (pnl_mask_python, pnl_mask_script, pnl_mask_ants_bin_dir) are not read.
-            python = _pnl_native_python()
+            python = _pnl_native_python_checked()
             if python is None or not python.is_file() or not os.access(python, os.X_OK):
-                missing.append(PNL_NATIVE_PYTHON_MISSING)
+                # B7 (A-C1 2): when the resolver found nothing, its message (with "Set SLICER_HOME") reaches the user.
+                reason = _pnl_native_python_problem if python is None else ""
+                missing.append(PNL_NATIVE_PYTHON_MISSING + (": " + reason if reason else ""))
             else:
                 tools["pythonslicer"] = str(python)
             try:
@@ -358,6 +384,19 @@ def inspect_brain_mask_backend(config: BrainMaskConfig | None = None, *, system:
                          **(_pnl_settings(route) if config.backend == "pnl_cnn" else {}),
                          **settings},
             "note": "File discovery is not runtime/model compatibility or anatomical QC"}
+
+
+def brain_mask_cache_inspection(inspection: dict[str, Any]) -> dict[str, Any]:
+    """B12: the inspection as the cache signature and the preprocessing cache key hold it.
+
+    The native PNL route leaves the thread count out (M-A2, 2026-11-07: 24 cases, 0 differing voxels between 1 and 8
+    inference threads with the registration pinned to 1 thread); the receipt still records ``child_threads``. The
+    managed route keeps its threads (ANTs was not measured). The device stays in the key.
+    """
+    if inspection.get("backend") != "pnl_cnn" or inspection.get("pnl_route_resolved") != "native":
+        return inspection
+    settings = {key: value for key, value in inspection["settings"].items() if key != "threads"}
+    return dict(inspection, settings=settings)
 
 
 def validate_brain_mask(dwi_path: Path, mask_path: Path) -> dict[str, Any]:
@@ -463,7 +502,7 @@ def generate_brain_mask(dwi_path: Path, bval_path: Path, bvec_path: Path, output
     if not backend["available"]:
         raise FileNotFoundError(f"Brain mask backend {config.backend} unavailable: " + ", ".join(backend["missing_required"]) +
                                 ". Configure Advanced > Environment and models, choose another backend, or supply a verified mask.")
-    signature = {"backend": config.backend, "settings": backend["settings"],
+    signature = {"backend": config.backend, "settings": brain_mask_cache_inspection(backend)["settings"],
                  "inputs": [_fingerprint(p) for p in paths],
                  "resources": [_fingerprint(Path(p)) for p in backend["resources"]],
                  "tool_paths": backend["tool_paths"]}

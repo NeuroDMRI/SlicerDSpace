@@ -26,6 +26,7 @@ from shared.brain_mask import (
     BrainMaskConfig,
     brain_mask_config_from_options,
     generate_brain_mask,
+    brain_mask_cache_inspection,
     inspect_brain_mask_backend,
     validate_brain_mask,
 )
@@ -338,9 +339,12 @@ def _brain_mask_cache_key(
     config: DwiPreprocessingConfig, inspection: dict[str, Any],
 ) -> dict[str, Any]:
     selected = _brain_mask_config(config)
+    # B12: the native PNL route leaves the thread count out of the key (M-A2); the managed route keeps it.
+    inspection = brain_mask_cache_inspection(inspection)
+    native_pnl = selected.backend == "pnl_cnn" and inspection.get("pnl_route_resolved") == "native"
     options = {
         name: (value.expanduser().resolve().as_posix() if isinstance(value, Path) else value)
-        for name, value in vars(selected).items()
+        for name, value in vars(selected).items() if not (native_pnl and name == "threads")
     }
     assets: dict[str, Any] = {}
     for name, value in vars(selected).items():

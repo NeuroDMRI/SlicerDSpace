@@ -330,7 +330,13 @@ def install_results_panel(owner: Any) -> None:
     table.setTextElideMode(qt.Qt.ElideRight)
     table.setHorizontalScrollBarPolicy(qt.Qt.ScrollBarAlwaysOff)
     table.verticalHeader().setVisible(False)
-    table.verticalHeader().setDefaultSectionSize(table.fontMetrics().height() + 8)
+    # Some supported PythonQt builds cannot wrap QWidget.fontMetrics().
+    # Keep the style's row height as a fallback so panel setup can complete.
+    try:
+        row_height = table.fontMetrics().height() + 8
+    except (TypeError, ValueError, AttributeError):
+        row_height = max(24, table.verticalHeader().defaultSectionSize)
+    table.verticalHeader().setDefaultSectionSize(row_height)
     for column in (3, 4, 5):
         table.setColumnHidden(column, True)
     table.setToolTip("Per-stage outcome of the selected run. Double-click a row to open its QC file or logs.")

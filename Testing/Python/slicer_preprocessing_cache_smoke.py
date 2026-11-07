@@ -34,7 +34,7 @@ def start():
         settings = DwiPreprocessingConfig(
             subject_id=case["subject_id"], input_root=Path(case["subject_root"]),
             output_dir=Path(case["output_root"]) / "01_preproc",
-            backend="mrtrix_fsl", execute=True, force=False,
+            execute=True, force=False,
             mrtrix_bin_dir=Path(deps["mrtrix_bin_dir"]),
             fsl_bin_dir=Path(deps["preprocessing_fsl_bin_dir"]),
             reverse_phase_b0=Path(case["reverse_b0"]),

@@ -171,15 +171,16 @@ def choose_gpus(samples, *, count=2, min_free_mib=MIN_FREE_GPU_MIB):
     return eligible[:count], stats
 
 
-def decide_launch(busy, topology, gpu_samples, disk_free_bytes, *, hybrid):
-    """Apply S4 launch-rule steps 2 and 3. Returns the decision and every reason for a refusal."""
+def decide_launch(busy, topology, gpu_samples, disk_free_bytes, *, hybrid, max_busy_percent=MAX_BUSY_PERCENT):
+    """Apply S4 launch-rule steps 2 and 3. Returns the decision and every reason for a refusal.
+    `max_busy_percent`: the step-3 CPU limit; the design value is 25 (pair `--max-busy-percent`, scope change SC-M4a)."""
     reasons = []
     cores = choose_cores(busy, topology)
     for node in (0, 1):
         if node not in cores:
             reasons.append(f'node{node} missing from the topology')
-        elif cores[node]['mean_busy_percent'] > MAX_BUSY_PERCENT:
-            reasons.append(f'node{node} chosen set busy {cores[node]["mean_busy_percent"]:.1f} % > {MAX_BUSY_PERCENT:.0f} %')
+        elif cores[node]['mean_busy_percent'] > max_busy_percent:
+            reasons.append(f'node{node} chosen set busy {cores[node]["mean_busy_percent"]:.1f} % > {max_busy_percent:g} %')
     gpus, gpu_stats = choose_gpus(gpu_samples)
     if hybrid and len(gpus) < 2:
         reasons.append(f'only {len(gpus)} GPU(s) have >= 14 GiB free in every sample; need 2')

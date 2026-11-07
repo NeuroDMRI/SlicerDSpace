@@ -431,6 +431,28 @@ class PairTests(unittest.TestCase):
             (self.base / 'models' / name).mkdir()
         workflows.validate_pair(self.args(workload='hybrid'))
 
+    def test_sc_m4a_max_busy_percent_is_passed_to_the_launch_rule_and_recorded(self):
+        """SC-M4a (fan93 2026-11-07: chosen sets 33-37 % busy): `--max-busy-percent` sets the step-3 CPU limit."""
+        busy = idle_busy(default=33.0)
+        code, events = self.run_pair(self.args(attempts=1), self.doctor_ok(), busy=busy)
+        self.assertEqual(code, 2)
+        refused = json.loads((self.base / 'pair1' / 'pair.json').read_text())
+        self.assertEqual(refused['status'], 'launch_refused')
+        self.assertEqual(refused['max_busy_percent'], 25.0)
+        self.assertIn('node0 chosen set busy 33.0 % > 25 %', refused['attempts'][0]['reasons'])
+        code, events = self.run_pair(self.args(output=self.base / 'pair2', attempts=1, max_busy_percent=40.0),
+                                     self.doctor_ok(), busy=busy)
+        record = json.loads((self.base / 'pair2' / 'pair.json').read_text())
+        self.assertEqual(record['max_busy_percent'], 40.0)
+        self.assertTrue(record['attempts'][0]['ok'])
+        self.assertIn(('stage',), events)
+
+    def test_sc_m4a_bad_max_busy_percent_fails_before_anything_is_created(self):
+        for value in (0.0, -1.0, 100.5):
+            with self.assertRaises(ValueError):
+                self.run_pair(self.args(max_busy_percent=value), self.doctor_ok())
+            self.assertFalse((self.base / 'pair1').exists())
+
     def test_pair_refuses_an_existing_folder_without_touching_it(self):
         existing = self.base / 'pair1'
         existing.mkdir()

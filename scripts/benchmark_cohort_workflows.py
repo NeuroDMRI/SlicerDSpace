@@ -23,7 +23,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from shared.cohort_telemetry import CohortTelemetry
 from scripts.benchmark_cohort_harness import (
-    ARM_CPUS, ARM_THREADS, BATCH_MEMORY_GB, KILL_MEMORY_GB, MAX_ATTEMPTS, RETRY_WAIT_SECONDS, SUBJECT_JOBS,
+    ARM_CPUS, ARM_THREADS, BATCH_MEMORY_GB, KILL_MEMORY_GB, MAX_ATTEMPTS, MAX_BUSY_PERCENT, RETRY_WAIT_SECONDS,
+    SUBJECT_JOBS,
     GPU_SAMPLE_SECONDS, HOST_SAMPLE_SECONDS, THREAD_ENV, T3_ROUTES, LaunchRefused, HostReader, Sampler,
     assign_arms, claim_folder, decide_launch, doctor_blockers, kill_group, make_gpu_reader, parse_cpu_list,
     parse_doctor_output, read_topology, run_bounded, run_launch_rule, safe_component, sample_window)
@@ -826,6 +827,8 @@ def validate_pair(args):
         raise ValueError('Bad --workload, --repeat, --attempts or --retry-wait-seconds')
     if args.count < 10 or args.max_hours <= 0:
         raise ValueError('Use at least 10 subjects and a positive time budget')
+    if not 0 < getattr(args, 'max_busy_percent', MAX_BUSY_PERCENT) <= 100:
+        raise ValueError('--max-busy-percent must be above 0 and at most 100')
     for label, item, kind in (('--dataset-root', args.dataset_root, 'dir'), ('--models', args.models, 'dir'),
                               ('--mrtrix', args.mrtrix, 'dir'), ('--launcher', args.launcher, 'file')):
         if not (item.is_dir() if kind == 'dir' else item.is_file()):
@@ -864,11 +867,14 @@ def pair(args, *, topology=None, sampler=sample_window, runner=run_bounded, slee
     for name in INPUTS:
         (doctor_root/'input'/name).symlink_to(Path(first['source'])/name)
     hybrid = args.workload == 'hybrid'
-    state = dict(workload=args.workload, repeat=args.repeat, started_at=time.time(), attempts=[])
+    max_busy = getattr(args, 'max_busy_percent', MAX_BUSY_PERCENT)
+    state = dict(workload=args.workload, repeat=args.repeat, started_at=time.time(), attempts=[],
+                 max_busy_percent=max_busy)
 
     def attempt(number):
         busy, gpu_samples, gpu_errors = sampler(pair_dir/'launch', number)
-        decision = decide_launch(busy, topology, gpu_samples, shutil.disk_usage(pair_dir).free, hybrid=hybrid)
+        decision = decide_launch(busy, topology, gpu_samples, shutil.disk_usage(pair_dir).free, hybrid=hybrid,
+                                 max_busy_percent=max_busy)
         outcome = dict(ok=decision['ok'], reasons=list(decision['reasons']), decision=decision, gpu_errors=gpu_errors[:5])
         if hybrid and not gpu_samples:
             outcome.update(ok=False, reasons=outcome['reasons'] + ['nvidia-smi gave no sample'])
@@ -1024,6 +1030,8 @@ def main():
     parser.add_argument('--previous-pair',type=Path,help='pair repeat 2: repeat 1 folder, to swap GPUs')
     parser.add_argument('--attempts',type=int,default=MAX_ATTEMPTS)
     parser.add_argument('--retry-wait-seconds',type=float,default=RETRY_WAIT_SECONDS)
+    parser.add_argument('--max-busy-percent',type=float,default=MAX_BUSY_PERCENT,
+                        help='pair: launch-rule CPU limit on each chosen set (design value 25)')
     parser.add_argument('--subject-campaign',type=Path,help='compare: Subject-arm campaign folder')
     parser.add_argument('--adaptive-campaign',type=Path,help='compare: Adaptive-arm campaign folder')
     parser.add_argument('--id-list-dir',type=Path,default=Path('/dataset/nfs_share01/100HCP'))

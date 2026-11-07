@@ -176,22 +176,73 @@ def used_asset_profiles(manifest: dict) -> list[str]:
 
 
 def _custom_model_root(manifest: dict) -> Optional[Path]:
-    """The user-supplied model folder (run option or environment variable), or None for the managed root."""
+    """The user-supplied model folder (run option or environment variable), or None for the managed root.
+
+    B3 (2): the GUI saves the managed root as ``model_assets_dir``. A folder that is the per-user default root is
+    managed, so the first GUI run does not hash the weights again.
+    """
     import os
 
     explicit = manifest.get("model_assets_dir") or os.environ.get("SLICERDSPACE_MODEL_ASSETS_DIR")
+    if not explicit:
+        return None
+    folder = Path(explicit).expanduser()
+    try:
+        from shared.model_assets import default_user_model_assets_root
+        if folder.resolve() == default_user_model_assets_root().expanduser().resolve():
+            return None
+    except (OSError, ImportError):
+        pass
+    return folder
+
+
+def _custom_pnl_model_dir(manifest: dict) -> Optional[Path]:
+    """B3 (4): the PNL weights folder given by the run option or ``SLICERDSPACE_PNL_MASK_MODEL_DIR``, else None."""
+    import os
+
+    configuration = manifest.get("brain_mask_configuration")
+    explicit = (configuration.get("pnl_mask_model_dir") if isinstance(configuration, dict) else None) \
+        or os.environ.get("SLICERDSPACE_PNL_MASK_MODEL_DIR")
     return Path(explicit).expanduser() if explicit else None
 
 
-def _folder_matches_catalog(folder: Path, files: dict) -> bool:
+def _receipt_verifies(folder: Path, profile: str, files: dict) -> bool:
+    """B3 (2): True when a completed offline-asset verification receipt covers this folder and profile.
+
+    ``scripts/verify_offline_assets.py`` writes ``offline-assets-*.json`` beside the user config after it checked the
+    profile against the manifest. The receipt counts only if no catalogued file is newer than the receipt.
+    """
+    try:
+        from shared.user_config import default_user_config_path
+        receipts = sorted(default_user_config_path().parent.glob("offline-assets-*.json"))
+        wanted = folder.resolve()
+        for receipt in receipts:
+            data = json.loads(receipt.read_text(encoding="utf-8"))
+            checks = data.get("checks") if isinstance(data, dict) else None
+            if (not isinstance(checks, dict) or data.get("kind") != "slicerdsurfer_offline_assets"
+                    or data.get("status") != "completed" or Path(str(data.get("root"))).resolve() != wanted
+                    or not (checks.get(profile) or {}).get("ok")):
+                continue
+            stamp = receipt.stat().st_mtime_ns
+            if all((folder / path).is_file() and (folder / path).stat().st_mtime_ns <= stamp for path in files):
+                return True
+    except (OSError, ValueError, ImportError, AttributeError):
+        return False
+    return False
+
+
+def _folder_matches_catalog(folder: Path, files: dict, profile: Optional[str] = None) -> bool:
     """True when the folder holds every catalogued file of the profile with the catalogued SHA-256.
 
-    The digests come from the stored (mtime and size) cache of the model-asset resolver, so a file that an
-    earlier resolve already hashed is not hashed again.
+    A completed offline-asset verification receipt for this folder and profile (``_receipt_verifies``) answers without
+    hashing. Otherwise the digests come from the stored (mtime and size) cache of the model-asset resolver; a
+    catalogued file that is not in the cache is hashed once, and the cache keeps the digest.
     """
     expected = {path: digest for path, digest in files.items() if digest}
     if not expected:
         return False
+    if profile and _receipt_verifies(folder, profile, expected):
+        return True
     try:
         from shared.model_asset_integrity import cached_sha256_of_file
         from shared.model_assets import _persist_sha256_cache, _sha256_cache
@@ -208,8 +259,10 @@ def _folder_matches_catalog(folder: Path, files: dict) -> bool:
 def asset_versions(manifest: dict, repo_root: Optional[Path] = None) -> dict:
     """Version and SHA-256 values that the asset manifests already store, per profile that the run used.
 
-    Nothing is hashed here (the weights are large). A profile that no manifest lists gets the model
-    folder and the version ``"unknown"``.
+    The managed root is never hashed here (the weights are large): the values come from the manifests. A user-supplied
+    model folder is checked against the catalog (a verification receipt, else the digest cache, else one hash per
+    uncached catalogued file), and a folder that does not match records the version ``"unknown"``. A profile that no
+    manifest lists gets the model folder and the version ``"unknown"``.
     """
     manifests = _load_asset_manifests(Path(repo_root) if repo_root else REPO_ROOT)
     folder = manifest.get("model_assets_dir")
@@ -234,8 +287,15 @@ def asset_versions(manifest: dict, repo_root: Optional[Path] = None) -> dict:
                      for path in dict.fromkeys(paths_of(name, found, set()))}
             # T-C7b: a user-supplied model folder is not verified by the resolver. Take the catalog values
             # only when every catalogued file in that folder has the catalogued SHA-256; else record "unknown".
-            if custom_root is not None and not _folder_matches_catalog(custom_root, files):
+            if custom_root is not None and not _folder_matches_catalog(custom_root, files, name):
                 result[name] = {"manifest": None, "version": "unknown", "folder": folder, "files": {}}
+                break
+            # B3 (4): a custom PNL weights folder is not the catalog folder. Its files sit beside each other, so the
+            # catalogued names are looked up there; a folder that does not match records "unknown", not the catalog hashes.
+            pnl_dir = _custom_pnl_model_dir(manifest) if name == "pnl-cnn-weights" else None
+            if pnl_dir is not None and not _folder_matches_catalog(
+                    pnl_dir, {Path(path).name: digest for path, digest in files.items()}, None):
+                result[name] = {"manifest": None, "version": "unknown", "folder": pnl_dir.as_posix(), "files": {}}
                 break
             entry = {"manifest": found["path"], "version": found["version"], "files": files,
                      "sha256_source": "asset manifest (stored value, not re-hashed at run time)"}
@@ -254,29 +314,50 @@ PER_CHILD_NOISE_KEYS = frozenset({"run_name", "run_plan_path", "run_plan_summary
                                   "run_manifest_path"})
 
 
+# Keys that only a finished child manifest holds. A child that crashed has the checkpoint manifest shape without them
+# (B3 (1)); the aggregate takes them from the children that hold them.
+SETTINGS_ONLY_IN_FINISHED_CHILDREN = ("wma_atlas", "brain_mask_backend", "model_assets_dir")
+
+
+def _read_children(manifest: dict) -> list[tuple[Any, dict, Path]]:
+    """(backend, data, path) of every readable child manifest of an aggregate manifest."""
+    children: list[tuple[Any, dict, Path]] = []
+    for entry in manifest.get("child_runs") or []:
+        try:
+            path = Path(entry["manifest_path"])
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+        if isinstance(data, dict):
+            children.append((entry.get("backend"), data, path))
+    return children
+
+
+def child_manifest_records(manifest: dict) -> list[dict]:
+    """B3 (3): the child manifests that the record read (backend, path, SHA-256)."""
+    return [{"backend": backend, "path": path.as_posix(), "sha256": sha256_file(path)}
+            for backend, _, path in _read_children(manifest)]
+
+
 def merge_child_settings(manifest: dict) -> tuple[dict, list[dict]]:
     """T-C5b: effective settings of an aggregate manifest (several tracking backends).
 
     Keys that all readable child manifests hold with the same value go to the top level; the aggregate's own
     keys win. Keys that differ go to one entry per child (``tracking_backend`` plus the differing keys).
     ``accepted_licences`` is the union. A manifest without readable children comes back unchanged.
+    For the keys in ``SETTINGS_ONLY_IN_FINISHED_CHILDREN`` a child without the key (a crashed child) is skipped.
     """
-    children: list[tuple[Any, dict]] = []
-    for entry in manifest.get("child_runs") or []:
-        try:
-            data = json.loads(Path(entry["manifest_path"]).read_text(encoding="utf-8"))
-        except (OSError, ValueError, KeyError, TypeError):
-            continue
-        if isinstance(data, dict):
-            children.append((entry.get("backend"), data))
+    children = [(backend, data) for backend, data, _ in _read_children(manifest)]
     if not children:
         return manifest, []
     keys = set().union(*(data.keys() for _, data in children))
     merged: dict[str, Any] = {}
     differing: set[str] = set()
     for key in keys:
-        values = [data.get(key) for _, data in children]
-        if all(value == values[0] for value in values) and all(key in data for _, data in children):
+        holders = [data for _, data in children if key in data] if key in SETTINGS_ONLY_IN_FINISHED_CHILDREN \
+            else [data for _, data in children]
+        values = [data.get(key) for data in holders]
+        if all(value == values[0] for value in values) and all(key in data for data in holders):
             merged[key] = values[0]
         else:
             differing.add(key)
@@ -330,6 +411,16 @@ def _mask_provenance(effective: dict) -> dict:
         return {"route": "unknown"}
 
 
+def _licence_acceptances() -> list[dict]:
+    """Licence acceptances that the setup step stored in the user config ({id, version, time}), sorted by id."""
+    try:
+        from shared.user_config import load_user_config
+        accepted = load_user_config()["accepted_licences"]
+    except (OSError, ValueError, KeyError, ImportError):
+        return []
+    return [dict(accepted[key]) for key in sorted(accepted)]
+
+
 def build_run_record(manifest_path: Path) -> dict:
     manifest_path = Path(manifest_path)
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -345,6 +436,8 @@ def build_run_record(manifest_path: Path) -> dict:
         "subject_id": manifest.get("subject_id"),
         "run_name": manifest.get("run_name"),
         "run_manifest": {"path": manifest_path.as_posix(), "sha256": sha256_file(manifest_path)},
+        # B3 (3): an aggregate manifest names its child manifests; the record lists the ones it read.
+        "child_manifests": child_manifest_records(manifest),
         "parameters": parameters,
         # T2 SC-1b / F2 / SC1-CARRY-1: the route of the mask that the run consumed, read from that mask's receipt
         # (a supplied mask records "supplied", one without a usable receipt "unknown"), for every requested backend;
@@ -354,8 +447,10 @@ def build_run_record(manifest_path: Path) -> dict:
         "software": {"python": sys.version.split()[0], "platform": platform.platform(),
                      "packages": _package_versions()},
         "assets": _assets(effective),
-        # The licence acceptance record belongs to the setup step of T2 (B7); this run records what the manifest holds.
+        # `accepted_licences` is what the manifest holds. B3 (5): the setup step (T2 B7) writes the acceptances (id,
+        # licence-file SHA-256, time) into the user config; the record lists them as `licence_acceptances`.
         "accepted_licences": effective.get("accepted_licences", []),
+        "licence_acceptances": _licence_acceptances(),
         "qc_summary": _qc_summary(manifest),
         "products": product_inventory(manifest, record_path, _output_root(manifest, manifest_path)),
         "excludes": "run_record.json itself, work folders (" + ", ".join(sorted(EXCLUDED_PATH_PARTS))

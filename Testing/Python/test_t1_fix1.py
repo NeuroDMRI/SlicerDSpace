@@ -448,7 +448,8 @@ class TC7AssetVersionsTest(unittest.TestCase):
 
         manifests = {name: json.loads((REPO_ROOT / name).read_text()) for name in run_record.ASSET_MANIFESTS}
         # B2: the managed root means no model-folder variable; do not depend on the caller's environment.
-        with patch.dict("os.environ"), patch.object(run_record, "sha256_file", side_effect=AssertionError("must not hash weights")):
+        with patch.dict("os.environ"), patch.object(run_record, "sha256_file", side_effect=AssertionError("must not hash weights")), \
+                patch("shared.model_asset_integrity.sha256_of_file", side_effect=AssertionError("must not hash weights")):
             os.environ.pop("SLICERDSPACE_MODEL_ASSETS_DIR", None)
             profiles = run_record.asset_versions(self.manifest(model_assets_dir=None))  # managed root
         segmentation = profiles["segmentation"]

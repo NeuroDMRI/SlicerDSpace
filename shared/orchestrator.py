@@ -188,6 +188,9 @@ class ProductOrchestratorConfig:
     excluded_targets: tuple[str, ...] = ()
     # Set once the closure was applied, so tracking variants do not expand again.
     closure_applied: bool = False
+    # Rule 4 (T1 D1), decided once at the subject entry point before the tracking variants are dispatched (F3): None =
+    # not decided yet, "" = no block, text = the block message for every DWI target of every variant.
+    preprocessing_pe_block: Optional[str] = None
     # Algorithm added by the closure -> targets that required it; its variant runs only those targets.
     closure_algorithm_requesters: dict = field(default_factory=dict)
 
@@ -1270,6 +1273,36 @@ def _preprocessing_pe_block(config: ProductOrchestratorConfig, subject_root: Pat
     )
 
 
+def _dwi_targets(config: ProductOrchestratorConfig) -> set[str]:
+    """The targets that read the DWI (rule 4 blocks all of them when preprocessing is blocked)."""
+
+    targets = {'preprocessing', 'segmentation', 'parcellation', 'surface', 'microstructure',
+               'microstructure_freewater', 'microstructure_noddi', 'microstructure_dki', 'microstructure_ifw',
+               'tractography'}
+    if 'saf' in config.targets and config.saf_pregenerated_tractogram is None:
+        targets.add('saf')
+    return targets
+
+
+def _with_preprocessing_pe_decision(config: ProductOrchestratorConfig) -> ProductOrchestratorConfig:
+    """F3: decide rule 4 once, before the tracking variants are dispatched; every variant carries the decision.
+
+    Preprocessing that is selected and would run with no PE direction blocks every DWI target of every variant: a
+    later variant has no preprocessing target of its own and must not run on the raw DWI instead. Preprocessing that
+    resume reuses is not blocked.
+    """
+
+    if config.preprocessing_pe_block is not None:
+        return config
+    block = ""
+    if "preprocessing" in config.targets:
+        subject_root = config.subject_root.expanduser().resolve()
+        output_root = config.output_root.expanduser().resolve() if config.output_root is not None else None
+        if not (config.resume and _preprocessing_complete(subject_root, config.subject_id, output_root, config=config)):
+            block = _preprocessing_pe_block(config, subject_root) or ""
+    return replace(config, preprocessing_pe_block=block)
+
+
 def _resolve_segmentation(subject_root: Path, output_root: Optional[Path] = None) -> Optional[Path]:
     layout = subject_layout(subject_root, output_root=output_root)
     directory = layout.anatomy_input_dir("ddseg")
@@ -2210,6 +2243,7 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
     config = _with_shared_bundle_resources(_with_closure(config))
     from shared.algorithm_selection import algorithms
     _validate_bundle_tractography_source(config)
+    config = _with_preprocessing_pe_decision(config)
     if len(algorithms(config.tractography_backend)) > 1:
         from shared.multi_tracking import plan
         return plan(config, write=write)
@@ -2503,6 +2537,12 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
             )
             continue
 
+        if config.preprocessing_pe_block and target in _dwi_targets(config) and target != "preprocessing":
+            # F3: the same targets execute blocks when preprocessing has no PE direction.
+            add(target, "blocked", "Not run: preprocessing is blocked. " + config.preprocessing_pe_block,
+                "phase_encoding", provides=False)
+            continue
+
         if target == "validation":
             add(
                 target,
@@ -2519,8 +2559,9 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
             if config.resume and _preprocessing_complete(subject_root, config.subject_id, output_root, config=config):
                 add(target, "skipped", "completed outputs found", "reuse", inputs=raw, outputs=preprocessing_outputs)
             elif not raw_input_block(target, preprocessing_outputs):
-                if pe_block := _preprocessing_pe_block(config, subject_root):  # W2b rule 4: no direction, no run
-                    add(target, "blocked", pe_block, "phase_encoding", inputs=raw, outputs=preprocessing_outputs, provides=False)
+                if config.preprocessing_pe_block:  # W2b rule 4: no direction, no run (decided once, F3)
+                    add(target, "blocked", config.preprocessing_pe_block, "phase_encoding", inputs=raw,
+                        outputs=preprocessing_outputs, provides=False)
                 else:
                     add(target, "will_run", "ready to run DWI preprocessing", "runnable", inputs=raw, outputs=preprocessing_outputs)
             continue
@@ -3569,7 +3610,7 @@ def _run_subject_products_impl(
 ) -> ProductOrchestratorResult:
     """Run or plan selected products from a shared subject root."""
 
-    config = _with_shared_bundle_resources(_with_closure(config))
+    config = _with_preprocessing_pe_decision(_with_shared_bundle_resources(_with_closure(config)))
     if not config.subject_id.strip():
         raise ValueError("subject_id is required.")
     if config.select_streamlines <= 0:
@@ -3668,10 +3709,7 @@ def _run_subject_products_impl(
                 )
             )
 
-    dwi_targets = {'preprocessing', 'segmentation', 'parcellation', 'surface', 'microstructure',
-                   'microstructure_freewater', 'microstructure_noddi', 'microstructure_dki', 'microstructure_ifw', 'tractography'}
-    if 'saf' in run_targets and config.saf_pregenerated_tractogram is None:
-        dwi_targets.add('saf')
+    dwi_targets = _dwi_targets(config)
     input_validation_path = None
     input_blocked_targets = {}
     if "validation" in run_targets or (config.execute and dwi_targets.intersection(run_targets)):
@@ -3714,20 +3752,19 @@ def _run_subject_products_impl(
                                                    reason=reason, qc_path=validation.report_path))
             run_targets = tuple(target for target in run_targets if target not in input_blocked_targets)
 
-    if config.execute and "preprocessing" in run_targets:
-        # W2b rule 4 (T1 D1): preprocessing that would run with no PE direction blocks the run before any stage. The
-        # selected products that use the DWI are blocked with it: they must not silently use the raw DWI instead.
-        pe_block = None if (config.resume and _preprocessing_complete(
-            subject_root, config.subject_id, output_root, config=config)) else _preprocessing_pe_block(config, subject_root)
-        if pe_block:
-            for target in run_targets:
-                if target != "preprocessing" and target not in dwi_targets:
-                    continue
-                reason = pe_block if target == "preprocessing" else "Not run: preprocessing is blocked. " + pe_block
-                input_blocked_targets[target] = reason
-                tasks.append(ProductTaskRecord(name=_task_name_for_target(target, config), status="blocked", reason=reason))
-            run_targets = tuple(target for target in run_targets if target not in input_blocked_targets)
-            _emit("[Orchestrator] " + pe_block, log)
+    if config.execute and config.preprocessing_pe_block:
+        # W2b rule 4 (T1 D1), decided once at the entry point (F3): preprocessing that would run with no PE direction
+        # blocks the run before any stage. The selected products that use the DWI are blocked with it, in every
+        # tracking variant: they must not silently use the raw DWI instead.
+        pe_block = config.preprocessing_pe_block
+        for target in run_targets:
+            if target != "preprocessing" and target not in dwi_targets:
+                continue
+            reason = pe_block if target == "preprocessing" else "Not run: preprocessing is blocked. " + pe_block
+            input_blocked_targets[target] = reason
+            tasks.append(ProductTaskRecord(name=_task_name_for_target(target, config), status="blocked", reason=reason))
+        run_targets = tuple(target for target in run_targets if target not in input_blocked_targets)
+        _emit("[Orchestrator] " + pe_block, log)
 
     input_seconds = time.monotonic() - input_started
     execution_started = time.monotonic()
@@ -5488,6 +5525,7 @@ def run_subject_products(
             _normalize_targets(config)
             from shared.dicom_input import prepare_dicom_root
             prepare_dicom_root(config.subject_root, config.subject_id, dwiconvert=config.dwiconvert_executable, log=log)
+        config = _with_preprocessing_pe_decision(config)
         from shared.algorithm_selection import algorithms
         if len(algorithms(config.tractography_backend)) > 1:
             from shared.multi_tracking import run

@@ -136,5 +136,68 @@ class F2UnsupportedPlatformTest(unittest.TestCase):
         self.assertFalse(state["checked"])
 
 
+class F3PeBlockDecidedOnceTest(unittest.TestCase):
+    """F3: rule 4 is decided once at the entry point and blocks every DWI target of every tracking variant."""
+
+    TARGETS = ("preprocessing", "microstructure", "tractography")
+
+    def config(self, subject: Path, **kwargs):
+        from shared import ProductOrchestratorConfig
+
+        return ProductOrchestratorConfig(
+            subject_id="100307", subject_root=subject, targets=self.TARGETS,
+            tractography_backend="csd_act,dti_det", **kwargs)
+
+    def test_f3_a_multi_variant_run_without_a_pe_direction_runs_no_stage_of_any_variant(self) -> None:
+        from shared import run_subject_products
+        from shared.pe_resolution import RULE4_MESSAGE
+        from test_w2b_pe_resolution import write_subject
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as tmp:
+            subject = write_subject(Path(tmp))
+            lines: list[str] = []
+            with patch("preprocessing.run_dwi_preprocessing") as preprocessing:
+                result = run_subject_products(self.config(subject, execute=True), log=lines.append)
+            preprocessing.assert_not_called()
+            names = sorted(task.name for task in result.tasks)
+            self.assertEqual({task.status for task in result.tasks}, {"blocked"}, [(t.name, t.status) for t in result.tasks])
+            # Both variants have a blocked tractography task: the second one did not run on the raw DWI.
+            self.assertEqual(len([name for name in names if name.startswith("tractography")]), 2, names)
+            self.assertFalse([name for name in names if name.startswith("execution.failure")], names)
+            self.assertTrue(all(RULE4_MESSAGE in task.reason for task in result.tasks if task.name != "preprocessing.dwi"))
+            self.assertFalse((subject / "outputs" / "02_microstructure").exists())
+            self.assertFalse((subject / "outputs" / "01_preproc" / "100307_preproc_manifest.json").exists())
+
+    def test_f3_the_plan_marks_the_same_dwi_targets_blocked_as_execute(self) -> None:
+        from shared import plan_subject_products, run_subject_products
+        from shared.pe_resolution import RULE4_MESSAGE
+        from test_w2b_pe_resolution import write_subject
+
+        with tempfile.TemporaryDirectory() as tmp:
+            subject = write_subject(Path(tmp))
+            plan = plan_subject_products(self.config(subject), write=False)
+            planned = {item.task_name for item in plan.items if item.status == "blocked"
+                       and RULE4_MESSAGE in item.reason}
+            result = run_subject_products(self.config(subject, execute=True))
+            executed = {task.name for task in result.tasks if task.status == "blocked" and RULE4_MESSAGE in task.reason}
+            self.assertIn("microstructure.dti", planned)
+            self.assertIn("preprocessing.dwi", planned)
+            self.assertEqual(planned, executed)
+            self.assertFalse([item for item in plan.items if item.status == "will_run"
+                              and item.target in {"microstructure", "tractography", "segmentation"}])
+
+    def test_f3_a_single_variant_plan_blocks_the_dwi_targets_with_preprocessing(self) -> None:
+        from shared import ProductOrchestratorConfig, plan_subject_products
+        from test_w2b_pe_resolution import write_subject
+
+        with tempfile.TemporaryDirectory() as tmp:
+            subject = write_subject(Path(tmp))
+            plan = plan_subject_products(ProductOrchestratorConfig(
+                subject_id="100307", subject_root=subject, targets=("preprocessing", "microstructure")), write=False)
+            status = {item.target: item.status for item in plan.items}
+            self.assertEqual((status["preprocessing"], status["microstructure"]), ("blocked", "blocked"))
+
+
 if __name__ == "__main__":
     unittest.main()

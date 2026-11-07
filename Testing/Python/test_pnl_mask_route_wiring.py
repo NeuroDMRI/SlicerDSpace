@@ -194,7 +194,7 @@ class PnlMaskRouteWiringTest(unittest.TestCase):
             final.write_bytes(b"edited after the copy")
             self.assertEqual(build_run_record(run)["brain_mask"]["route"], "supplied")
 
-    def test_f2b_supplied_input_mask_without_a_receipt_gives_supplied_also_with_a_stale_pnl_receipt_absent(self) -> None:
+    def test_f2b_incomplete_preprocessing_and_input_mask_without_a_receipt_gives_supplied(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             run, final, input_mask = self._preprocessed_subject(tmp, generation={"backend": "provided"})
             for path in final.parent.glob("sub-01_dwi_final*"):

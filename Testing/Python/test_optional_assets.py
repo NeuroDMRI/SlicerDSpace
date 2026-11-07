@@ -340,7 +340,8 @@ class OptionalAssetsTests(unittest.TestCase):
                 extract_org(archive, root / 'unsafe')
             self.assertFalse((root / 'outside').exists())
 
-    def test_n1_extract_org_refuses_a_symlinked_destination_and_accepts_a_symlinked_ancestor(self):
+    def test_n1_guard_extract_org_refuses_a_symlinked_destination_and_accepts_a_symlink_at_or_above_its_parent(self):
+        # Guard test: it keeps the N1 rule as it is; it does not cover a new behaviour.
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp).resolve()
             archive = root / 'ORG-800FC-100HCP.zip'
@@ -348,7 +349,7 @@ class OptionalAssetsTests(unittest.TestCase):
                 zipped.writestr('ORG-800FC-100HCP/atlas.p', b'reference')
             (root / 'real').mkdir()
             (root / 'link').symlink_to(root / 'real', target_is_directory=True)
-            # A symlinked ancestor of the destination's parent is allowed.
+            # A symlink at or above the destination's parent folder is allowed.
             self.assertEqual(len(extract_org(archive, root / 'link/assets')), 1)
             self.assertEqual((root / 'real/assets/ORG-800FC-100HCP/atlas.p').read_bytes(), b'reference')
             # The destination folder itself as a symlink is refused, and nothing is written outside.

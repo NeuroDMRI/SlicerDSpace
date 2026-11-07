@@ -160,7 +160,7 @@ def main():
     parser.add_argument('--report', type=Path)
     args = parser.parse_args()
     # Resolve the chosen root once (macOS keeps /tmp and /var behind symlinks).
-    # import_file then refuses any link in the destination path. extract_org allows a link above
+    # import_file then refuses any link in the destination path. extract_org allows a link at or above
     # the destination's parent folder and refuses a link at or below the destination.
     root = args.asset_root.expanduser().resolve()
     manifest = json.loads(MANIFEST.read_text())

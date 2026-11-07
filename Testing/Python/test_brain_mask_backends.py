@@ -34,6 +34,7 @@ from shared.brain_mask import (
 )
 
 
+ANTS_COMMANDS = ("antsRegistrationSyNQuick.sh", "antsApplyTransforms", "ImageMath")
 SHAPE = (4, 5, 3)
 AFFINE = np.array([[1.5, 0, 0, -7], [0, 2, 0, 11], [0, 0, 2.5, 3], [0, 0, 0, 1]], dtype=float)
 ISOLATED_ENV = {
@@ -173,15 +174,34 @@ def fake_pythonslicer(root: Path) -> Path:
     return root / "Slicer with spaces" / "bin" / "PythonSlicer"
 
 
-def fake_pnl_config(root: Path) -> BrainMaskConfig:
+def fake_pnl_models(root: Path) -> Path:
     models = root / "PNL models with spaces"
     models.mkdir(parents=True)
     (models / "weights.json").write_text("{}\n", encoding="ascii")
     save_nifti(models / "IITmean_b0_256.nii.gz", np.ones(SHAPE, dtype=np.float32))
     for view in ("sagittal", "coronal", "axial"):
         (models / f"{view}.pt").write_bytes(b"adapter-only fake weights")
+    return models
+
+
+def fake_pnl_config(root: Path) -> BrainMaskConfig:
+    # SC-1a: pinned to the native route so these tests do not depend on the platform of the machine.
+    models = fake_pnl_models(root)
     write_fake_command(fake_pythonslicer(root), "pnl_cnn")
-    return BrainMaskConfig(brain_mask_device="cpu", pnl_mask_model_dir=models)
+    return BrainMaskConfig(brain_mask_device="cpu", pnl_mask_model_dir=models, pnl_mask_route="native")
+
+
+def fake_managed_pnl_config(root: Path, models: Path, **changes) -> BrainMaskConfig:
+    """SC-1a: the conda runner files of the managed route (Python, ``pnl-brain-mask`` script, three ANTs commands)."""
+    prefix = root / "pnl-cnn-torch prefix" / "bin"
+    ants = root / "ANTs tools with spaces"
+    for folder in (prefix, ants):
+        folder.mkdir(parents=True)
+    for tool in (prefix / "python", prefix / "pnl-brain-mask", *(ants / name for name in ANTS_COMMANDS)):
+        tool.write_text("#!/bin/sh\n", encoding="ascii")
+        tool.chmod(0o755)
+    return BrainMaskConfig(brain_mask_device="cpu", pnl_mask_model_dir=models, pnl_mask_python=prefix / "python",
+                           pnl_mask_script=prefix / "pnl-brain-mask", pnl_mask_ants_bin_dir=ants, **changes)
 
 
 class BrainMaskBackendsTest(unittest.TestCase):
@@ -207,6 +227,10 @@ class BrainMaskBackendsTest(unittest.TestCase):
                                 side_effect=lambda: self.pythonslicer if self.pythonslicer.exists() else None)
         resolver.start()
         self.addCleanup(resolver.stop)
+        # SC-1a: `auto` depends on the platform; the tests run as on macOS unless a test sets another system.
+        system = patch.object(brain_mask.platform, "system", return_value="Darwin")
+        system.start()
+        self.addCleanup(system.stop)
 
     def generate(self, config: BrainMaskConfig | None = None, **kwargs):
         return generate_brain_mask(
@@ -448,6 +472,154 @@ class BrainMaskBackendsTest(unittest.TestCase):
         self.assertEqual(json.loads(self.manifest.read_text(encoding="utf-8")), result)
         self.assertEqual(result["output"]["sha256"], hashlib.sha256(self.output.read_bytes()).hexdigest())
         self.assert_preserved(before)
+
+    # ---- SC-1a: route of the pnl_cnn backend per platform
+    def run_fake_managed(self, command, env, log):
+        """Stands in for the conda runner: writes the mask and the device record the runner would write."""
+        self.managed_calls.append({"command": list(command), "env": dict(env)})
+        source = nib.load(command[command.index("--input") + 1])
+        mask = np.zeros(source.shape[:3], dtype=np.float32)
+        mask[1:3, 1:4, 1:3] = 1
+        nib.save(nib.Nifti1Image(mask, source.affine), command[command.index("--output") + 1])
+        Path(command[command.index("--record") + 1]).write_text(
+            json.dumps({"requested": "cpu", "resolved": "cpu", "framework": "pytorch"}), encoding="utf-8")
+        return "managed runner fixture"
+
+    def managed_setup(self):
+        models = fake_pnl_models(self.root)
+        write_fake_command(fake_pythonslicer(self.root), "pnl_cnn")
+        self.managed_calls = []
+        return models
+
+    def test_sc1a_auto_route_is_managed_on_linux_and_native_on_macos(self) -> None:
+        for system, expected in (("Linux", "managed"), ("Darwin", "native"), ("Windows", "native")):
+            with self.subTest(system=system):
+                self.assertEqual(brain_mask.resolve_pnl_mask_route("auto", system), expected)
+                with patch.object(brain_mask.platform, "system", return_value=system):
+                    self.assertEqual(brain_mask.resolve_pnl_mask_route("auto"), expected)
+                    self.assertEqual(brain_mask.resolve_pnl_mask_route(None), expected)
+        for system in ("Linux", "Darwin"):
+            self.assertEqual(brain_mask.resolve_pnl_mask_route("native", system), "native")
+            self.assertEqual(brain_mask.resolve_pnl_mask_route("managed", system), "managed")
+        with self.assertRaisesRegex(ValueError, "pnl_mask_route must be one of: auto, managed, native"):
+            brain_mask.resolve_pnl_mask_route("conda", "Linux")
+        with self.assertRaisesRegex(ValueError, "pnl_mask_route"):
+            inspect_brain_mask_backend(BrainMaskConfig(backend="mrtrix", pnl_mask_route="conda"))
+        self.assertEqual(BrainMaskConfig().pnl_mask_route, "auto")
+        self.assertEqual(brain_mask_config_from_options(SimpleNamespace()).pnl_mask_route, "auto")
+        self.assertEqual(brain_mask_config_from_options(SimpleNamespace(pnl_mask_route="managed")).pnl_mask_route, "managed")
+        self.assertEqual(brain_mask_config_from_options(SimpleNamespace(pnl_mask_route=None)).pnl_mask_route, "auto")
+
+    def test_sc1a_auto_on_linux_runs_the_managed_conda_runner(self) -> None:
+        models = self.managed_setup()
+        config = fake_managed_pnl_config(self.root, models)
+        self.assertEqual(config.pnl_mask_route, "auto")
+        inspected = inspect_brain_mask_backend(config, system="Linux")
+        self.assertTrue(inspected["available"], inspected["missing_required"])
+        self.assertEqual(inspected["pnl_route_resolved"], "managed")
+        self.assertEqual(inspected["settings"]["pnl_route"], "managed-ants")
+        self.assertEqual(set(inspected["tool_paths"]) & {"pythonslicer"}, set())
+        self.assertIn(str(Path(brain_mask.__file__).with_name("pnl_mask_runner.py")), inspected["resources"])
+        with patch.object(brain_mask.platform, "system", return_value="Linux"), \
+                patch.object(brain_mask, "_run", side_effect=self.run_fake_managed):
+            result = self.generate(replace(config, threads=3))
+        call, = self.managed_calls
+        command = call["command"]
+        self.assertEqual(command[:2], [str(config.pnl_mask_python), str(Path(brain_mask.__file__).with_name("pnl_mask_runner.py"))])
+        self.assertEqual(command[command.index("--script") + 1], str(config.pnl_mask_script))
+        self.assertEqual(command[command.index("--") + 1], "mask")
+        self.assertEqual(command[command.index("--percentile") + 1], "99")
+        self.assertEqual(command[command.index("--threads") + 1], "3")
+        self.assertEqual(command[command.index("--ants-bin") + 1], str(config.pnl_mask_ants_bin_dir))
+        self.assertNotIn("pnl_mask_native.py", " ".join(command))
+        self.assertEqual(call["env"]["ANTSPATH"], str(config.pnl_mask_ants_bin_dir))
+        self.assertEqual(call["env"]["OMP_NUM_THREADS"], "3")
+        self.assertEqual(result["route"], "managed-ants")
+        self.assertNotIn("route_status", result)
+        self.assertNotIn("child_threads", result)
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["signature"]["settings"]["pnl_route"], "managed-ants")
+
+    def test_sc1a_managed_route_lists_missing_runner_files_and_blocks_windows(self) -> None:
+        models = self.managed_setup()
+        config = BrainMaskConfig(pnl_mask_model_dir=models, pnl_mask_route="managed")
+        inspected = inspect_brain_mask_backend(config, system="Linux")
+        self.assertFalse(inspected["available"])
+        for name in ("pnl_mask_python", "pnl_mask_script", *ANTS_COMMANDS):
+            self.assertIn(name, inspected["missing_required"])
+        full = fake_managed_pnl_config(self.root, models)
+        self.assertTrue(inspect_brain_mask_backend(full, system="Linux")["available"])
+        windows = inspect_brain_mask_backend(replace(full, pnl_mask_route="managed"), system="Windows")
+        self.assertTrue(any("POSIX external runtime" in item for item in windows["missing_required"]))
+
+    def test_sc1a_auto_on_macos_runs_the_native_route(self) -> None:
+        config = replace(fake_pnl_config(self.root), pnl_mask_route="auto")
+        result = self.generate(config)
+        call, = self.calls(self.pythonslicer)
+        self.assertEqual(result["command"][:2], [str(self.pythonslicer), str(Path(brain_mask.__file__).with_name("pnl_mask_native.py"))])
+        self.assertEqual(call["argv"], result["command"][1:])
+        self.assertEqual(result["route"], "native-sitk")
+        self.assertEqual(result["signature"]["settings"]["pnl_route"], "native-sitk")
+
+    def test_sc1a_explicit_native_on_linux_runs_the_native_route(self) -> None:
+        models = self.managed_setup()
+        config = replace(fake_managed_pnl_config(self.root, models), pnl_mask_route="native")
+        with patch.object(brain_mask.platform, "system", return_value="Linux"):
+            inspected = inspect_brain_mask_backend(config)
+            self.assertEqual(inspected["pnl_route_resolved"], "native")
+            self.assertEqual(inspected["tool_paths"]["pythonslicer"], str(self.pythonslicer))
+            self.assertNotIn("pnl_mask_python", inspected["tool_paths"])
+            result = self.generate(config)
+        call, = self.calls(self.pythonslicer)
+        self.assertEqual(result["command"][:2], [str(self.pythonslicer), str(Path(brain_mask.__file__).with_name("pnl_mask_native.py"))])
+        self.assertEqual(result["route"], "native-sitk")
+
+    # ---- SC-1b: the receipt marks the native route as experimental
+    def test_sc1b_receipt_marks_native_experimental_and_managed_not(self) -> None:
+        native = self.generate(fake_pnl_config(self.root))
+        self.assertEqual(native["route"], "native-sitk")
+        self.assertEqual(native["route_status"], "experimental")
+        self.assertEqual(native["route_reason"], "did not meet the M-A parity rule on 2 of 24 cases (T2 design \u00a73)")
+        self.assertEqual(native["status"], "completed")  # the receipt status keeps its meaning
+        self.assertEqual(brain_mask.pnl_route_record("native"), {
+            "route": "native-sitk", "status": "experimental", "reason": brain_mask.PNL_NATIVE_EXPERIMENTAL_REASON})
+        self.assertEqual(brain_mask.pnl_route_record("managed"), {"route": "managed-ants"})
+        self.assertEqual(brain_mask.PNL_ROUTE_LABELS["native"], "native (experimental)")
+        self.assertEqual(self.generate(self.mrtrix_config).get("route"), None)
+
+    # ---- SC-1f: the route is part of the cache signature
+    def test_sc1f_route_is_part_of_the_cache_signature(self) -> None:
+        models = self.managed_setup()
+        managed = fake_managed_pnl_config(self.root, models, pnl_mask_route="managed")
+        native = replace(managed, pnl_mask_route="native")
+        signatures = {}
+        for name, config in (("managed", managed), ("native", native)):
+            inspected = inspect_brain_mask_backend(config, system="Linux")
+            self.assertTrue(inspected["available"], inspected["missing_required"])
+            signatures[name] = inspected["settings"]
+        self.assertNotEqual(signatures["managed"]["pnl_route"], signatures["native"]["pnl_route"])
+        with patch.object(brain_mask, "_run", side_effect=self.run_fake_managed):
+            first = self.generate(managed)
+            self.assertEqual(self.generate(managed)["status"], "reused")
+        # A managed mask is never reused for a native request, nor the reverse.
+        self.assertEqual(first["signature"]["settings"]["pnl_route"], "managed-ants")
+        second = self.generate(native)
+        self.assertEqual(second["status"], "completed")
+        self.assertEqual(second["signature"]["settings"]["pnl_route"], "native-sitk")
+        self.assertNotEqual(first["signature"], second["signature"])
+        self.assertEqual(self.generate(native)["status"], "reused")
+        with patch.object(brain_mask, "_run", side_effect=self.run_fake_managed):
+            third = self.generate(managed)
+        self.assertEqual(third["status"], "completed")
+        self.assertEqual(len(self.managed_calls), 2)
+        # Same inputs, same route: the same signature.
+        self.assertEqual(first["signature"]["settings"], third["signature"]["settings"])
+
+    def test_sc1e_native_signature_records_one_registration_thread(self) -> None:
+        settings = inspect_brain_mask_backend(fake_pnl_config(self.root))["settings"]
+        self.assertEqual(settings["pnl_registration_threads"], 1)
+        from shared import pnl_mask_native
+        self.assertEqual(brain_mask.PNL_REGISTRATION_THREADS, pnl_mask_native.REGISTRATION_THREADS)
 
     def test_signature_and_receipt_record_the_effective_child_thread_count(self) -> None:
         # A-O4: the native child ignores config.threads and reads SLICERDSPACE_STAGE_CPUS (A6).

@@ -245,6 +245,37 @@ class SelectedSetupTests(unittest.TestCase):
                     plan = ui.selected_setup_plan(owner, owner._run_environment_dependency_check.return_value)
                 self.assertEqual([name for name in plan["extensions"] if name != "PyTorch"], expected)
 
+    def test_a6_gui_closure_equals_cli_closure_for_a_non_default_tractography_selection(self):
+        """A6 (closure Opus N3): UKF selected. The GUI closure, the GUI plan and the CLI plan name the same targets.
+
+        The no-node fallback of selected_setup_plan builds the Closure from the doctor result without a second expansion.
+        """
+        from scripts import setup_selected
+        from shared.ui_run_controller import ProductTargetFlags, selected_closure
+        from shared.user_config import empty_user_config
+        import shared.ui_selected_setup as ui
+
+        gui = selected_closure(ProductTargetFlags(tractography=True), tractography_backend="ukf", bundle_backend="wmql",
+                               microstructure_freewater=False, microstructure_noddi=False)
+        config = empty_user_config()
+        config["run_defaults"]["tractography_backend"] = "ukf"
+        with patch("scripts.setup_python_packages.dcm2niix_pending", return_value=False):
+            cli, _report, cli_plan = setup_selected.build_cli_plan(
+                ["validation", "tractography"], config, doctor=lambda cfg: SimpleNamespace(statuses=[], targets=cfg.targets, blocker_count=0,
+                                                                              python_executable=None),
+                system="Linux", machine="x86_64")
+        self.assertEqual((gui.targets, gui.tractography_algorithms), (cli.targets, cli.tractography_algorithms))
+        self.assertIn("ukf", gui.tractography_algorithms)
+        report = result(targets=gui.targets)
+        owner = self.owner(report, closure=gui)
+        context, _ = self.run_preparation(owner, report)
+        with context, patch("scripts.setup_python_packages.dcm2niix_pending", return_value=False):
+            gui_plan = ui.selected_setup_plan(owner, report)
+            owner._selected_closure.return_value = None  # no parameter node: the closed doctor targets are taken as they are
+            fallback = ui.selected_setup_plan(owner, report)
+        self.assertEqual(gui_plan["closure_targets"], cli_plan["closure_targets"])
+        self.assertEqual(fallback["closure_targets"], list(gui.targets))
+
     def test_cancelled_confirmation_has_no_install_or_settings_side_effect(self):
         owner = self.owner(result(item("missing")))
         context, manager = self.run_preparation(owner, owner._run_environment_dependency_check.return_value)
@@ -301,6 +332,30 @@ class SelectedSetupTests(unittest.TestCase):
         self.assertTrue(owner._setupFunctionalFailure)
         self.assertFalse(owner._selectedSetupActive)
 
+    def test_a2_a_warning_receipt_keeps_the_gui_ready_and_shows_the_warning(self):
+        """A2: a passed self-check receipt with a warning (a failing PATH dcm2niix) is ready, not failed."""
+        report = result()
+        owner = self.owner(report)
+        context, _ = self.run_preparation(owner, report)
+
+        def jobs(widget, title, commands, done):
+            for _program, args, _env in commands:
+                Path(args[args.index('--result') + 1]).write_text(json.dumps(
+                    {'status': 'passed', 'warnings': ['dcm2niix at /usr/bin/dcm2niix failed its check (garbled)']}))
+            done('completed', '', None)
+            return True
+
+        with tempfile.TemporaryDirectory() as temp, context, \
+                patch('shared.user_config.default_user_config_path', return_value=Path(temp) / 'config.json'), \
+                patch('shared.setup_selftest.requests_for_report', return_value=[{'python': 'python'}]), \
+                patch('shared.ui_setup_jobs.start_setup_job', side_effect=jobs):
+            prepare_selected_environment(owner, report)
+            record = json.loads(next(Path(temp).glob('setup-history/*/result.json')).read_text())
+        self.assertEqual(record['status'], 'ready')
+        self.assertIn('/usr/bin/dcm2niix', record['warnings'][0])
+        self.assertFalse(owner._setupFunctionalFailure)
+        self.assertIn('/usr/bin/dcm2niix', owner._setStatus.call_args.args[1])
+
     def test_completed_restart_preparation_clears_previous_pending_request(self):
         from shared.setup_resume import remember_setup, pending_setup
         report = result()
@@ -332,6 +387,19 @@ class SelectedSetupTests(unittest.TestCase):
         self.assertFalse(owner._selectedSetupActive)
         self.assertEqual(started, ["Install Python packages"])  # the model-asset step never started
         self.assertEqual(owner._setStatus.call_args.args[0], "warning")
+
+    def test_a4_2_a_licence_permission_error_reaches_the_user_with_the_licence_names(self):
+        """A4 (2): the status line and the error dialog carry the licence names. Fails before: generic "stopped" text."""
+        initial = result(item("numpy"))
+        owner = self.owner(initial)
+        context, _ = self.run_preparation(owner, initial)
+        with tempfile.TemporaryDirectory() as temp, context, patch("shared.ui_selected_setup._confirm", side_effect=accepting_confirm), \
+                patch("shared.selected_setup.setup_steps", side_effect=PermissionError("No licence is listed for: fsl_terms")), \
+                patch("shared.user_config.default_user_config_path", return_value=Path(temp) / "config.json"):
+            self.assertFalse(prepare_selected_environment(owner, initial))
+        self.assertIn("fsl_terms", owner._setStatus.call_args.args[1])
+        self.assertIn("fsl_terms", owner._show_actionable_error.call_args.kwargs["why"])
+        self.assertFalse(owner._selectedSetupActive)
 
     def test_extension_install_requires_restart_not_false_readiness(self):
         owner = self.owner(result(targets=("wma",)))

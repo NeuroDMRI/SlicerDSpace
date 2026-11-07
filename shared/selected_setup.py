@@ -335,7 +335,8 @@ RUNTIME_SETTINGS = {"mrtrix_bin_dir", "preprocessing_mrtrix_bin_dir", "preproces
 
 # Settings that scripts/install_deps_windows.ps1 writes into the user config (its external_dependencies block).
 WINDOWS_WRITTEN_SETTINGS = ("tract_querier_root", "wma_root", "wma_atlas_dir", "tractcloud_root", "tractcloud_python_executable",
-                            "tractcloud_data_dir", "slicer_executable", "python_executable", "postprocess_freesurfer_home")
+                            "tractcloud_data_dir", "slicer_executable", "python_executable", "postprocess_freesurfer_home",
+                            "model_assets_dir")
 
 
 def validate_setup_receipt(step, receipt):
@@ -347,6 +348,9 @@ def validate_setup_receipt(step, receipt):
                 or receipt.get("status") != "completed"):
             raise ValueError("Only a completed managed runtime setup can update paths")
         settings = receipt.get("external_dependencies", {})
+        # A5 N4: a migration that keeps every user-set path leaves no settings to save. The install itself succeeded.
+        if not settings and isinstance(receipt.get("migration"), dict):
+            return {}
         if not settings or set(settings) - RUNTIME_SETTINGS:
             raise ValueError("Unexpected managed runtime settings")
         if any(not (Path(value).is_file() if key in RUNTIME_FILE_SETTINGS else Path(value).is_dir())
@@ -571,6 +575,9 @@ def run_setup_steps(steps, *, runner=None, self_check=None, log=print, after_ste
                 if step["id"] == "self_check":
                     if any(json.loads(Path(path).read_text()).get("status") != "passed" for path in receipts):
                         raise ValueError("Installation functionality check failed")
+                    from shared.setup_selftest import receipt_warnings
+                    for warning in receipt_warnings(receipts):  # A2: a warning does not block "ready"
+                        log("[Setup] Warning: " + warning)
                 else:
                     settings = complete_step(step)
                     if after_step:

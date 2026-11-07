@@ -2,6 +2,7 @@
 
 import importlib
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -10,6 +11,17 @@ import time
 
 MRTRIX_VERSION = '3.0.8'
 TOOL_TIMEOUT_SECONDS = 120
+
+
+def receipt_warnings(receipt_paths):
+    """A2: the warnings of passed self-check receipts (GUI and CLI show them; they do not block readiness)."""
+    found = []
+    for path in receipt_paths:
+        try:
+            found.extend(str(text) for text in json.loads(Path(path).read_text()).get('warnings') or ())
+        except (OSError, ValueError, AttributeError):
+            continue
+    return found
 
 
 def requests_for_report(report, *, asset_root=None, repo_root=None, backend_paths=None, device_choices=None):
@@ -127,6 +139,27 @@ def _dcm2niix_executable(report, backend_paths):
     return input_import.find_dcm2niix()
 
 
+def _same_executable(first, second):
+    if not first or not second:
+        return False
+    try:
+        return os.path.samefile(first, second)
+    except OSError:
+        return os.path.abspath(str(first)) == os.path.abspath(str(second))
+
+
+def _configured_dcm2niix(executable, backend_paths):
+    """A2b: True when DICOM import uses ``executable`` as its configured choice: the plugin's wheel, or an explicit setting.
+
+    Only a dcm2niix found by PATH discovery alone is False (a failed check is then a warning).
+    """
+    from shared import input_import
+    for name in ('packaged_dcm2niix', 'dcm2niix_executable'):
+        if backend_paths.get(name) and _same_executable(executable, backend_paths[name]):
+            return True
+    return _same_executable(executable, input_import.packaged_dcm2niix())
+
+
 def _add_tool_requests(report, groups, backend_paths):
     """R-B3: MRtrix, FSL, dcm2niix and the PNL native mask checks for what the report selects and has a path for.
 
@@ -150,6 +183,7 @@ def _add_tool_requests(report, groups, backend_paths):
     dcm2niix = _dcm2niix_executable(report, backend_paths)
     if dcm2niix:
         wanted['dcm2niix'] = dcm2niix
+        wanted['dcm2niix_configured'] = _configured_dcm2niix(dcm2niix, backend_paths)
     slicer_hint = None
     for item in getattr(report, 'statuses', ()):
         details = item.details or {}
@@ -398,11 +432,23 @@ def run_checks(request):
         checks.extend(check_mrtrix(request['mrtrix_bin_dir'], request.get('fsl_bin_dir')))
     if request.get('fsl_bin_dir'):
         checks.extend(check_fsl(request['fsl_bin_dir'], request.get('mrtrix_bin_dir')))
+    warnings = []
     if request.get('dcm2niix'):
-        checks.extend(check_dcm2niix(request['dcm2niix']))
+        # A2/A2b: the plugin's wheel or an explicit setting blocks "ready". A dcm2niix found by PATH discovery is a warning: NIfTI input never needs it
+        # and DICOM import tries the wheel first.
+        try:
+            checks.extend(check_dcm2niix(request['dcm2niix']))
+        except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
+            from shared import input_import
+            if request.get('dcm2niix_configured') or _same_executable(request['dcm2niix'], input_import.packaged_dcm2niix()):
+                raise
+            warnings.append(f"dcm2niix at {request['dcm2niix']} was found on PATH only and failed its check ({exc}). "
+                            'NIfTI input does not need it; DICOM import tries the plugin wheel first.')
     if request.get('pnl_native_mask'):
         checks.extend(check_native_mask(request['pnl_native_mask']))
     extra = {} if teem_report is None else dict(teem_self_check=teem_report)
+    if warnings:
+        extra['warnings'] = warnings
     return dict(kind='slicerdspace_setup_selftest', status='passed', checks=checks, **extra,
                 elapsed_seconds=time.monotonic() - started,
                 scope='Installation functionality using synthetic inputs; no patient processing or anatomical QC')

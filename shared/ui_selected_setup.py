@@ -22,6 +22,32 @@ def _text(owner, english, chinese):
     return chinese if str(getattr(owner, "_onboardingLanguage", "en")).startswith("zh") else english
 
 
+def component_rows(owner, components, pending):
+    """HTML rows of the licence dialog: size, licence with link and local file, and each Python package with its file."""
+    from scripts.download_model_assets import _format_bytes
+    import html
+
+    rows = []
+    for item in components:
+        size = _format_bytes(item["size_bytes"]) if item["size_bytes"] else _text(owner, "size not known", "大小未知")
+        row = "<b>%s</b> (%s)" % (html.escape(item["title"]), size)
+        licence = item["licence"]
+        if licence:
+            local = ('<a href="%s">%s</a>' % (Path(licence["file"]).as_uri(), html.escape(licence["file"]))
+                     if licence["file"] else _text(owner, "none", "无"))
+            row += "<br>%s: <a href=\"%s\">%s</a> | %s: %s%s" % (
+                _text(owner, "Licence", "许可"), html.escape(licence["url"]), html.escape(licence["name"]),
+                _text(owner, "local file", "本地文件"), local,
+                "" if licence["id"] in pending else _text(owner, " (already accepted)", "（已接受）"))
+        for package in (licence or {}).get("packages", ()):  # S3-2: each package with its licence, link and local file (A3 NB1)
+            package_file = ('<a href="%s">%s</a>' % (Path(package["file"]).as_uri(), html.escape(Path(package["file"]).name))
+                            if package.get("file") else _text(owner, "no local file", "无本地文件"))
+            row += '<br>&nbsp;&nbsp;<a href="%s">%s</a>: %s | %s' % (
+                html.escape(package["url"]), html.escape(package["name"]), html.escape(package["license"]), package_file)
+        rows.append(row)
+    return rows
+
+
 def extension_states(manager, modules):
     """Use exposed APIs and actual capabilities, not enabled == loaded.
 
@@ -115,27 +141,10 @@ def _confirm(owner, plan):
     # B7: the component list (size, licence name, link, local licence file) and one action.
     from shared.setup_components import pending_licences, plan_components, required_licences
     from shared.setup_resume import accepted_licences
-    from scripts.download_model_assets import _format_bytes
-    import html
     components = plan_components(plan)
     required = required_licences(components)
     pending = pending_licences(required, accepted_licences())
-    rows = []
-    for item in components:
-        size = _format_bytes(item["size_bytes"]) if item["size_bytes"] else _text(owner, "size not known", "大小未知")
-        row = "<b>%s</b> (%s)" % (html.escape(item["title"]), size)
-        licence = item["licence"]
-        if licence:
-            local = ('<a href="%s">%s</a>' % (Path(licence["file"]).as_uri(), html.escape(licence["file"]))
-                     if licence["file"] else _text(owner, "none", "无"))
-            row += "<br>%s: <a href=\"%s\">%s</a> | %s: %s%s" % (
-                _text(owner, "Licence", "许可"), html.escape(licence["url"]), html.escape(licence["name"]),
-                _text(owner, "local file", "本地文件"), local,
-                "" if licence["id"] in pending else _text(owner, " (already accepted)", "（已接受）"))
-        for package in (licence or {}).get("packages", ()):  # S3-2: each package with its licence and link
-            row += '<br>&nbsp;&nbsp;<a href="%s">%s</a>: %s' % (html.escape(package["url"]), html.escape(package["name"]),
-                                                              html.escape(package["license"]))
-        rows.append(row)
+    rows = component_rows(owner, components, pending)
     if rows:
         components_label = qt.QLabel("<br><br>".join(rows))
         components_label.wordWrap = True
@@ -157,7 +166,9 @@ def _confirm(owner, plan):
     dialog.deleteLater()
     if accepted and pending:
         from shared.setup_components import accept_licences
-        accept_licences(pending)  # id, version (SHA-256 of the local licence file) and time, in the user config
+        # id, version and time, in the user config. Version: SHA-256 of the local licence file;
+        # for a Python package group: SHA-256 of its sorted (package, licence name) list (A3 NB2).
+        accept_licences(pending)
     return accepted
 
 
@@ -380,11 +391,12 @@ def prepare_selected_environment(owner, result=None, *, repair=False):
                 failed(str(exc))
                 return
             owner._setupFunctionalFailure = False
-            record_readiness(current)
+            from shared.setup_selftest import receipt_warnings
+            record_readiness(current, receipt_warnings(receipts))  # A2: warnings do not block "ready"
 
         start_setup_job(owner, _text(owner, 'Testing selected installation', '测试所选分析的安装'), commands, done)
 
-    def record_readiness(current):
+    def record_readiness(current, warnings=()):
         owner._latestEnvironmentReportDir = folder
         pending = bool(getattr(owner, "_setupRestartRequired", False))
         state = "restart_required" if pending else "ready" if current and current.blocker_count == 0 else "blocked"
@@ -394,15 +406,19 @@ def prepare_selected_environment(owner, result=None, *, repair=False):
             if pending_before:
                 complete_setup(pending_before['request'])
             refresh_setup_button(owner)
-        write_json(folder / "result.json", {"status": state, "blockers": current.blocker_count if current else None,
-                                            "scope": "Environment readiness only; not scientific QC"})
+        record = {"status": state, "blockers": current.blocker_count if current else None,
+                  "scope": "Environment readiness only; not scientific QC"}
+        if warnings:
+            record["warnings"] = list(warnings)
+        write_json(folder / "result.json", record)
         if current:
             owner._update_environment_result_label(current)
             owner._update_environment_path_status_labels(current)
-        owner._setStatus("ready" if state == "ready" else "warning", _text(owner,
-            "Selected environment is ready." if state == "ready" else
+        note = " " + " ".join(warnings) if warnings and state == "ready" else ""  # A2: a warning does not block "ready"
+        owner._setStatus("warning" if warnings or state != "ready" else "ready", _text(owner,
+            "Selected environment is ready." + note if state == "ready" else
             "Restart Slicer before analysis." if pending else "Preparation finished; some selected dependencies still need attention.",
-            "所选分析环境已就绪。" if state == "ready" else
+            "所选分析环境已就绪。" + note if state == "ready" else
             "请重启 Slicer 后再运行分析。" if pending else "自动准备已结束，仍有依赖需要处理。"))
         if current and state == "blocked":
             owner._show_environment_results_dialog(current)
@@ -473,6 +489,15 @@ def prepare_selected_environment(owner, result=None, *, repair=False):
                             python_command=owner._setup_python_command,
                             statuses=getattr(getattr(owner, "_lastEnvironmentResult", None), "statuses", ()))
         run_step(0)
+    except PermissionError as exc:
+        # A4 (2): a licence that is not accepted or not listed. Show its names, not the generic "stopped" text.
+        finish("failed", str(exc))
+        owner._setStatus("warning", str(exc))
+        owner._show_actionable_error(
+            title="Licence not accepted", what="Preparation did not start because of a licence.", why=str(exc),
+            next_step="Start the preparation again and accept the licences in the dialog.",
+            auto_fix="Nothing was installed.", details=str(exc))
+        return False
     except Exception as exc:
         finish("failed", str(exc))
         return False

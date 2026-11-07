@@ -12,7 +12,9 @@ from unittest.mock import patch
 
 import numpy as np
 
-from shared import setup_selftest as selftest
+from shared import input_import, setup_selftest as selftest
+
+REAL_FIND_DCM2NIIX = input_import.find_dcm2niix
 
 SCRIPTS = Path(__file__).resolve().parents[2] / 'scripts'
 
@@ -367,7 +369,7 @@ class RequestsForReportToolTests(unittest.TestCase):
         patcher = patch('shared.input_import.packaged_dcm2niix', return_value=None)
         patcher.start()
         self.addCleanup(patcher.stop)
-        patcher = patch('shared.input_import.shutil.which', return_value=None)
+        patcher = patch('shared.input_import.find_dcm2niix', return_value=None)  # A3 NB7: not the global shutil.which
         patcher.start()
         self.addCleanup(patcher.stop)
 
@@ -428,13 +430,14 @@ class RequestsForReportToolTests(unittest.TestCase):
 
     def test_dcm2niix_from_the_packaged_wheel_when_the_report_has_no_field(self):
         """G1: no report field and no path setting; the wheel in Slicer's Python is what DICOM import uses."""
-        with patch('shared.input_import.packaged_dcm2niix', return_value=Path('/slicer/site/bin/dcm2niix')):
+        with patch('shared.input_import.packaged_dcm2niix', return_value=Path('/slicer/site/bin/dcm2niix')), \
+                patch('shared.input_import.find_dcm2niix', REAL_FIND_DCM2NIIX):
             request = selftest.requests_for_report(tool_report(SLICER_NUMPY))[0]
         self.assertEqual(request['dcm2niix'], '/slicer/site/bin/dcm2niix')
         self.assertEqual(request['python'], '/slicer/PythonSlicer')  # Slicer's Python request
 
     def test_dcm2niix_on_path_when_there_is_no_wheel_and_none_means_no_check(self):
-        with patch('shared.input_import.shutil.which', return_value='/usr/local/bin/dcm2niix'):
+        with patch('shared.input_import.find_dcm2niix', return_value='/usr/local/bin/dcm2niix'):
             request = selftest.requests_for_report(tool_report(SLICER_NUMPY))[0]
         self.assertEqual(request['dcm2niix'], '/usr/local/bin/dcm2niix')
         request = selftest.requests_for_report(tool_report(SLICER_NUMPY))[0]  # DWIConvert fallback

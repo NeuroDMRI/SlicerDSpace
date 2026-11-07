@@ -99,9 +99,7 @@ class PnlMaskRouteWiringTest(unittest.TestCase):
                 inputs = Path(tmp) / "subject" / "input"
                 inputs.mkdir(parents=True)
                 (inputs / "nodif_brain_mask.nii.gz").write_bytes(b"mask")
-                (inputs / "nodif_brain_mask.manifest.json").write_text(json.dumps({
-                    "kind": "generated_brain_mask", "version": 2, "status": "completed", "backend": "pnl_cnn",
-                    "route": name, "pnl_route": pnl_route_record(route)}), encoding="utf-8")
+                self._write_receipt(inputs / "nodif_brain_mask.nii.gz", route)
                 manifest = Path(tmp) / "run_manifest.json"
                 manifest.write_text(json.dumps({
                     "kind": "slicerddsurfer_product_orchestration", "subject_id": "sub-01", "subject_root": str(Path(tmp) / "subject"),
@@ -129,6 +127,80 @@ class PnlMaskRouteWiringTest(unittest.TestCase):
                 "brain_mask_route_requested": pnl_route_record("native")}), encoding="utf-8")
             mask = build_run_record(manifest)["brain_mask"]
             self.assertEqual(mask, {"backend": "pnl_cnn", "route": "supplied"})
+
+    # ---- F2b: with complete preprocessing the consumed mask is the preprocessing final mask
+    def _preprocessed_subject(self, tmp: str, *, generation: dict) -> tuple[Path, Path, Path]:
+        """A subject with a complete preprocessing layout; returns (run manifest, final mask, input mask)."""
+        from shared.io_layout import subject_layout
+        root = Path(tmp) / "subject"
+        inputs = root / "input"
+        inputs.mkdir(parents=True)
+        input_mask = inputs / "nodif_brain_mask.nii.gz"
+        preproc = subject_layout(root).preproc
+        (preproc / "05_qc").mkdir(parents=True)
+        for name in ("dwi_final.nii.gz", "dwi_final.bval", "dwi_final.bvec"):
+            (preproc / ("sub-01_" + name)).write_bytes(b"x")
+        final = preproc / "sub-01_brain_mask_final.nii.gz"
+        (preproc / "sub-01_preproc_manifest.json").write_text(json.dumps({
+            "status": "completed", "mask_generation": generation}), encoding="utf-8")
+        (preproc / "05_qc" / "sub-01_preproc_qc.json").write_text(json.dumps({"status": "completed"}), encoding="utf-8")
+        run = Path(tmp) / "run_manifest.json"
+        run.write_text(json.dumps({
+            "subject_id": "sub-01", "subject_root": str(root), "brain_mask_backend": "pnl_cnn",
+            "brain_mask_route_requested": pnl_route_record("native")}), encoding="utf-8")
+        return run, final, input_mask
+
+    @staticmethod
+    def _write_receipt(mask: Path, route: str, *, sha: str | None = None, backend: str = "pnl_cnn") -> None:
+        import hashlib
+        digest = sha or hashlib.sha256(mask.read_bytes()).hexdigest()
+        mask.with_name(mask.name.removesuffix(".nii.gz") + ".manifest.json").write_text(json.dumps({
+            "kind": "generated_brain_mask", "version": 2, "status": "completed", "backend": backend,
+            "output": {"path": str(mask), "sha256": digest}, "pnl_route": pnl_route_record(route)}), encoding="utf-8")
+
+    def test_f2b_generated_native_final_mask_of_complete_preprocessing_gives_native_experimental(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            run, final, input_mask = self._preprocessed_subject(tmp, generation={"backend": "pnl_cnn", "status": "completed"})
+            input_mask.write_bytes(b"user input mask")  # the input is a different, supplied mask
+            final.write_bytes(b"generated on the corrected dwi")
+            self._write_receipt(final, "native")
+            mask = build_run_record(run)["brain_mask"]
+            self.assertEqual(mask["route"], "native-sitk")
+            self.assertEqual(mask["status"], "experimental")
+            self.assertEqual(mask["reason"], PNL_NATIVE_EXPERIMENTAL_REASON)
+
+    def test_f2b_stale_receipt_does_not_label_a_later_final_mask(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            run, final, input_mask = self._preprocessed_subject(tmp, generation={"backend": "pnl_cnn", "status": "completed"})
+            input_mask.write_bytes(b"generated input mask")
+            self._write_receipt(input_mask, "native")  # a valid native receipt on the input must not be used here
+            final.write_bytes(b"replaced mask")
+            self._write_receipt(final, "native", sha="0" * 64)
+            self.assertEqual(build_run_record(run)["brain_mask"]["route"], "unknown")
+
+    def test_f2b_provided_final_mask_copied_from_a_generated_input_mask_keeps_the_input_route(self) -> None:
+        import shutil
+        with tempfile.TemporaryDirectory() as tmp:
+            run, final, input_mask = self._preprocessed_subject(tmp, generation={"backend": "pnl_cnn"})
+            input_mask.write_bytes(b"generated input mask")
+            self._write_receipt(input_mask, "native")
+            shutil.copy2(input_mask, final)
+            manifest = final.with_name("sub-01_preproc_manifest.json")
+            manifest.write_text(json.dumps({"status": "completed", "mask_generation": {
+                "backend": "provided", "status": "copied", "source": input_mask.as_posix()}}), encoding="utf-8")
+            mask = build_run_record(run)["brain_mask"]
+            self.assertEqual((mask["route"], mask["status"]), ("native-sitk", "experimental"))
+            # A copy that no longer matches its source is not labelled with the source's route.
+            final.write_bytes(b"edited after the copy")
+            self.assertEqual(build_run_record(run)["brain_mask"]["route"], "supplied")
+
+    def test_f2b_supplied_input_mask_without_a_receipt_gives_supplied_also_with_a_stale_pnl_receipt_absent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            run, final, input_mask = self._preprocessed_subject(tmp, generation={"backend": "provided"})
+            for path in final.parent.glob("sub-01_dwi_final*"):
+                path.unlink()  # preprocessing not complete: the input mask is consumed
+            input_mask.write_bytes(b"user mask")
+            self.assertEqual(build_run_record(run)["brain_mask"], {"backend": "pnl_cnn", "route": "supplied"})
 
     def test_f2_orchestrator_manifest_keeps_the_setting_and_names_the_requested_route(self) -> None:
         from shared import ProductOrchestratorConfig, run_subject_products

@@ -150,24 +150,45 @@ def pnl_route_record(route: str) -> dict[str, str]:
     return record
 
 
-def mask_provenance(mask_path: Path) -> dict[str, str]:
-    """F2: route, status and reason of the mask that a run consumes, read from that mask's own receipt.
-
-    A mask file without a receipt was supplied by the user: ``{"route": "supplied"}``. A receipt that has no ``pnl_route``
-    (a legacy receipt, a mask from another backend) or no mask file gives ``{"route": "unknown"}``. A generated PNL mask gives the
-    receipt's ``pnl_route`` (route, and for the native route status and reason), also when the cache entry was reused.
-    """
-    record_path = _manifest_path_for_mask(Path(mask_path))
-    if not record_path.is_file():
-        return {"route": "supplied" if Path(mask_path).is_file() else "unknown"}
+def _generated_pnl_route(mask: Path) -> dict[str, str] | None:
+    """The ``pnl_route`` of the receipt next to `mask`, only when that receipt describes these very bytes (F2b)."""
+    record_path = _manifest_path_for_mask(mask)
     try:
         record = json.loads(record_path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return {"route": "unknown"}
-    route = record.get("pnl_route") if isinstance(record, dict) else None
-    if record.get("backend") == "pnl_cnn" and isinstance(route, dict) and route.get("route"):
+        return None
+    if not isinstance(record, dict):
+        return None
+    route = record.get("pnl_route")
+    recorded = (record.get("output") or {}).get("sha256") if isinstance(record.get("output"), dict) else None
+    if (record.get("backend") == "pnl_cnn" and isinstance(route, dict) and route.get("route")
+            and recorded and recorded == _sha256(mask)):
         return {key: str(value) for key, value in route.items()}
-    return {"route": "unknown"}
+    return None
+
+
+def mask_provenance(mask_path: Path, *, preprocessing_manifest: dict | None = None) -> dict[str, str]:
+    """F2 / F2b: route, status and reason of the mask that a run consumes.
+
+    (a) The receipt next to the mask gives its ``pnl_route`` only if the backend is pnl_cnn, ``pnl_route`` is present and
+    the receipt's ``output.sha256`` equals the SHA-256 of the mask now (a stale receipt never labels a later mask); this
+    holds also for a reused cache entry. (b) Otherwise, for a preprocessing final mask, a preprocessing manifest whose
+    ``mask_generation`` has backend ``provided`` and a ``source`` gives the provenance of that source (same rule), when
+    the final mask is a byte copy of it. (c) Otherwise a mask file with no receipt at all is ``supplied``; a receipt that
+    does not match, or comes from another backend, is ``unknown``; no mask file is ``unknown``.
+    """
+    mask = Path(mask_path)
+    if not mask.is_file():
+        return {"route": "unknown"}
+    route = _generated_pnl_route(mask)
+    if route:
+        return route
+    generation = (preprocessing_manifest or {}).get("mask_generation")
+    if isinstance(generation, dict) and generation.get("backend") == "provided" and generation.get("source"):
+        source = Path(str(generation["source"]))
+        if source.is_file() and _sha256(source) == _sha256(mask):
+            return mask_provenance(source)
+    return {"route": "unknown" if _manifest_path_for_mask(mask).is_file() else "supplied"}
 
 
 def _inspect_pnl_managed(config: BrainMaskConfig, system: str | None, missing: list, tools: dict, resources: list) -> None:

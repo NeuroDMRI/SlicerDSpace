@@ -619,7 +619,7 @@ class BrainMaskBackendsTest(unittest.TestCase):
     # ---- F2: the run record states the route of the mask that was consumed
     def consumed_route(self) -> dict:
         from shared.run_record import _mask_provenance
-        return _mask_provenance({"subject_root": str(self.subject)})
+        return _mask_provenance({"subject_root": str(self.subject), "subject_id": "sub-01"})
 
     def test_f2_supplied_mask_is_recorded_as_supplied_not_as_a_pnl_route(self) -> None:
         save_nifti(self.output, mask_data())

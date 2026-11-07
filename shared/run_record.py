@@ -307,13 +307,27 @@ def _assets(manifest: dict) -> dict:
 
 
 def _mask_provenance(effective: dict) -> dict:
-    """F2: route, status and reason of the input mask the run consumed (`find_subject_root` takes input/nodif_brain_mask)."""
-    from shared.brain_mask import mask_provenance
+    """F2b: route, status and reason of the mask the run consumed.
 
-    root = effective.get("subject_root")
-    if not root:
+    The consumed mask is the one `_resolve_analysis_inputs` returns: the preprocessing final mask when preprocessing
+    is complete, else the canonical input mask. For a final mask the preprocessing manifest is passed along.
+    """
+    from shared.brain_mask import mask_provenance
+    from shared.orchestrator import _preprocessing_outputs, _resolve_analysis_inputs
+
+    root, subject_id = effective.get("subject_root"), effective.get("subject_id")
+    if not root or not subject_id:
         return {"route": "unknown"}
-    return mask_provenance(Path(root) / "input" / "nodif_brain_mask.nii.gz")
+    output_root = Path(effective["output_root"]) if effective.get("output_root") else None
+    try:
+        mask = _resolve_analysis_inputs(Path(root), str(subject_id), output_root)["mask"]
+        outputs = _preprocessing_outputs(Path(root), str(subject_id), output_root)
+        manifest = None
+        if mask == outputs["mask"]:
+            manifest = json.loads(outputs["manifest"].read_text(encoding="utf-8"))
+        return mask_provenance(mask, preprocessing_manifest=manifest)
+    except (OSError, ValueError, TypeError):
+        return {"route": "unknown"}
 
 
 def build_run_record(manifest_path: Path) -> dict:

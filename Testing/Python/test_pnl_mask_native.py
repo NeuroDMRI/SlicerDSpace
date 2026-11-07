@@ -240,6 +240,66 @@ class ThreadTest(unittest.TestCase):
             sitk.ProcessObject.SetGlobalDefaultNumberOfThreads(before[1])
 
 
+class RegistrationThreadsTest(unittest.TestCase):
+    """SC-1e: the A3 registration runs with one SimpleITK thread; the previous global default comes back."""
+
+    def fake_sitk(self, state, fail_at=None):
+        class Composite:
+            def __init__(self, transforms=()):
+                self.transforms = list(transforms)
+
+            def GetNthTransform(self, index):
+                return "transform"
+
+            def GetNumberOfTransforms(self):
+                return 1
+
+        class Method:
+            def __init__(self):
+                state["method_threads"] = state["threads"]  # ITK reads the global default when it makes the object
+
+            def __getattr__(self, name):
+                def call(*args, **kwargs):
+                    if name == "Execute":
+                        state["execute_threads"].append(state["threads"])
+                        if fail_at is not None and len(state["execute_threads"]) == fail_at:
+                            raise RuntimeError("registration failed")
+                        return Composite()
+                    return 0
+                return call
+
+        process = mock.Mock()
+        process.GetGlobalDefaultNumberOfThreads.side_effect = lambda: state["threads"]
+        process.SetGlobalDefaultNumberOfThreads.side_effect = lambda n: state.update(threads=n)
+        return mock.Mock(
+            ProcessObject=process, ImageRegistrationMethod=Method, CompositeTransform=Composite,
+            Euler3DTransform=lambda *args: mock.Mock(GetParameters=lambda: [0.0], GetFixedParameters=lambda: [0.0]),
+            CenteredTransformInitializer=lambda *args: mock.Mock(GetParameters=lambda: [0.0], GetFixedParameters=lambda: [0.0]),
+            CenteredTransformInitializerFilter=mock.Mock(MOMENTS=1))
+
+    def run_register(self, state, **kwargs):
+        fake = self.fake_sitk(state, **kwargs)
+        with mock.patch.dict(sys.modules, {"SimpleITK": fake}), \
+                mock.patch.object(native, "winsorize", return_value=("image", (0.0, 1.0))), \
+                mock.patch.object(native, "configure_level"):
+            return native.register("fixed", "moving")
+
+    def test_registration_uses_one_thread_and_restores_the_global_default(self):
+        state = {"threads": 6, "execute_threads": []}
+        final, initial, current, record = self.run_register(state)
+        self.assertEqual(native.REGISTRATION_THREADS, 1)
+        self.assertEqual(state["method_threads"], 1)
+        self.assertEqual(state["execute_threads"], [1, 1, 1])  # three levels
+        self.assertEqual(state["threads"], 6)  # the A6 count is back for inference and resampling
+
+    def test_the_global_default_is_restored_after_a_failure(self):
+        state = {"threads": 4, "execute_threads": []}
+        with self.assertRaisesRegex(RuntimeError, "registration failed"):
+            self.run_register(state, fail_at=2)
+        self.assertEqual(state["threads"], 4)
+        self.assertEqual(state["execute_threads"], [1, 1])
+
+
 @unittest.skipUnless(HAS_SITK and HAS_TORCH and HAS_SCIPY, "SimpleITK, torch or scipy is not installed")
 class EndToEndTest(unittest.TestCase):
     """Tiny synthetic run: real registration, normalisation, predict/orient/aggregate, inverse, FillHoles."""
@@ -292,6 +352,7 @@ class EndToEndTest(unittest.TestCase):
             self.assertEqual(mask[0, 0, 0], 0)
             self.assertEqual(receipt["route"], "native-sitk")
             self.assertEqual((receipt["device"], receipt["threads"]), ("cpu", 2))
+            self.assertEqual(receipt["registration_threads"], 1)  # SC-1e: registration 1 thread, inference 2
             self.assertEqual(len(receipt["registration"]["levels"]), 3)
             # A-O1: ANTs' sampling seed advances one step per level; the receipt records each level's seed.
             self.assertEqual([level["seed"] for level in receipt["registration"]["levels"]], [1, 2, 3])

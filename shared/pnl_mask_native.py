@@ -23,6 +23,9 @@ import time
 import numpy as np
 
 ROUTE = "native-sitk"
+# T2 SC-1e: the A3 registration always runs with one SimpleITK thread (the T3 configuration of M-A);
+# torch inference keeps the A6 thread rule.
+REGISTRATION_THREADS = 1
 TEMPLATE_NAME = "IITmean_b0_256.nii.gz"
 VIEWS = ("sagittal", "coronal", "axial")
 
@@ -238,9 +241,22 @@ def configure_level(method, parameters: RegistrationParameters, level: int) -> N
 
 
 def register(fixed, moving, parameters: RegistrationParameters = PARAMETERS, log=None):
-    """Rigid fixed(template)->moving(b0) transform; returns (final composite, initial, optimised Euler, record)."""
+    """Rigid fixed(template)->moving(b0) transform; returns (final composite, initial, optimised Euler, record).
+
+    SC-1e: runs with ``REGISTRATION_THREADS`` SimpleITK threads. The global default is set before the registration
+    objects exist (ITK reads it when it makes them) and put back afterwards, so the A6 count stays for the rest.
+    """
     import SimpleITK as sitk
 
+    previous = sitk.ProcessObject.GetGlobalDefaultNumberOfThreads()
+    sitk.ProcessObject.SetGlobalDefaultNumberOfThreads(REGISTRATION_THREADS)
+    try:
+        return _register(sitk, fixed, moving, parameters, log)
+    finally:
+        sitk.ProcessObject.SetGlobalDefaultNumberOfThreads(previous)
+
+
+def _register(sitk, fixed, moving, parameters, log):
     fixed_metric, fixed_window = winsorize(fixed, parameters)
     moving_metric, moving_window = winsorize(moving, parameters)
     initial = sitk.CenteredTransformInitializer(fixed, moving, sitk.Euler3DTransform(),
@@ -420,7 +436,8 @@ def run(baseline: Path, output: Path, model_dir: Path, template: Path, *, device
     import torch
 
     return {**selection, "route": ROUTE, "status": "completed", "device": selection["resolved"],
-            "threads": threads, "simpleitk_version": sitk.Version_VersionString(), "torch_version": torch.__version__,
+            "threads": threads, "registration_threads": REGISTRATION_THREADS,
+            "simpleitk_version": sitk.Version_VersionString(), "torch_version": torch.__version__,
             "numpy_version": np.__version__, "python": sys.executable,
             "vendored_package_version": importlib.import_module(weights.__package__).__version__,
             "source_commit": weights.SOURCE_COMMIT, "input_sha256": _sha256(baseline),

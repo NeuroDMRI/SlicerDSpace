@@ -227,22 +227,46 @@ def _custom_pnl_model_dir(manifest: dict) -> Optional[Path]:
     return Path(explicit).expanduser() if explicit else None
 
 
+def _receipt_check_names(profile: str) -> list[str]:
+    """C3: the keys under which ``verify_offline_assets`` can record a check that covers ``profile``.
+
+    The writer names a model profile by itself (``segmentation``) and an optional resource profile with the prefix
+    ``optional:`` (``optional:pnl-cnn``). A verified profile that includes this one covers it as well: the
+    ``optional:pnl-cnn`` check verifies the ``pnl-cnn-weights`` files.
+    """
+    def includes(name: str, wanted: str, profiles: dict, seen: set) -> bool:
+        if name in seen:
+            return False
+        seen.add(name)
+        children = (profiles.get(name) or {}).get("include_profiles") or []
+        return wanted in children or any(includes(child, wanted, profiles, seen) for child in children)
+
+    names = [profile, "optional:" + profile]
+    for found in _load_asset_manifests(REPO_ROOT):
+        for parent in found["profiles"]:
+            if parent != profile and includes(parent, profile, found["profiles"], set()):
+                names.extend((parent, "optional:" + parent))
+    return list(dict.fromkeys(names))
+
+
 def _receipt_verifies(folder: Path, profile: str, files: dict) -> bool:
     """B3 (2): True when a completed offline-asset verification receipt covers this folder and profile.
 
     ``scripts/verify_offline_assets.py`` writes ``offline-assets-*.json`` beside the user config after it checked the
-    profile against the manifest. The receipt counts only if no catalogued file is newer than the receipt.
+    profile against the manifest. C3: the check names are those that the writer really uses (``_receipt_check_names``).
+    The receipt counts only if no catalogued file is newer than the receipt.
     """
     try:
         from shared.user_config import default_user_config_path
         receipts = sorted(default_user_config_path().parent.glob("offline-assets-*.json"))
         wanted = folder.resolve()
+        names = _receipt_check_names(profile)
         for receipt in receipts:
             data = json.loads(receipt.read_text(encoding="utf-8"))
             checks = data.get("checks") if isinstance(data, dict) else None
             if (not isinstance(checks, dict) or data.get("kind") != "slicerdsurfer_offline_assets"
                     or data.get("status") != "completed" or Path(str(data.get("root"))).resolve() != wanted
-                    or not (checks.get(profile) or {}).get("ok")):
+                    or not any((checks.get(name) or {}).get("ok") for name in names)):
                 continue
             stamp = receipt.stat().st_mtime_ns
             if all((folder / path).is_file() and (folder / path).stat().st_mtime_ns <= stamp for path in files):

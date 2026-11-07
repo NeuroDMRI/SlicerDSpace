@@ -175,6 +175,40 @@ class B3RecordTest(unittest.TestCase):
                 with self.assertRaises(AssertionError):
                     run_record.asset_versions(dict(self.manifest, model_assets_dir=str(custom)))
 
+    def test_c3_a_receipt_written_by_the_real_writer_covers_the_included_pnl_weights_profile(self) -> None:
+        """C3: the writer names the check ``optional:pnl-cnn``; the record asks for ``pnl-cnn-weights``. Fails at 0064d04."""
+        from scripts.verify_offline_assets import verify_offline_assets
+        from shared.user_config import default_user_config_path
+
+        digest = hashlib.sha256(b"axial").hexdigest()
+        catalog = {"manifest": "e.json", "version": "3", "records": {"pnl/axial.pt": {"sha256": digest}}, "path": "e.json",
+                   "profiles": {"pnl-cnn-weights": {"required_paths": ["pnl/axial.pt"]},
+                                "pnl-cnn": {"include_profiles": ["pnl-cnn-weights"], "required_paths": []},
+                                "synthstrip": {"required_paths": ["x"]}},
+                   "upstream_commit": None}
+        manifest = {"brain_mask_backend": "pnl_cnn", "tasks": [_task("preprocessing.dwi")]}
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "offline"
+            (root / "pnl").mkdir(parents=True)
+            (root / "pnl" / "axial.pt").write_bytes(b"axial")
+            receipt = default_user_config_path().parent / "offline-assets-c3test.json"
+            receipt.parent.mkdir(parents=True, exist_ok=True)
+            self.addCleanup(lambda: receipt.unlink(missing_ok=True))
+            guard = patch("shared.model_asset_integrity.sha256_of_file", side_effect=AssertionError("must not hash"))
+            with patch("shared.optional_assets.verified_resource_directory", return_value=root):
+                written = verify_offline_assets(root, (), ("pnl-cnn",))
+            self.assertEqual(list(written["checks"]), ["optional:pnl-cnn"])
+            receipt.write_text(json.dumps(written), encoding="utf-8")
+            with patch.object(run_record, "_load_asset_manifests", return_value=[catalog]), \
+                    patch("shared.model_assets._sha256_cache", return_value={}), guard:
+                profiles = run_record.asset_versions(dict(manifest, model_assets_dir=str(root)))
+                self.assertEqual(profiles["pnl-cnn-weights"]["files"], {"pnl/axial.pt": digest})
+                # A receipt for another optional profile does not cover the weights: the folder is hashed (the guard raises).
+                with patch("shared.optional_assets.verified_resource_directory", return_value=root):
+                    receipt.write_text(json.dumps(verify_offline_assets(root, (), ("synthstrip",))), encoding="utf-8")
+                with self.assertRaises(AssertionError):
+                    run_record.asset_versions(dict(manifest, model_assets_dir=str(root)))
+
     def test_b3_4_a_custom_pnl_model_dir_is_not_recorded_with_the_catalog_hashes(self) -> None:
         manifest = {"brain_mask_backend": "pnl_cnn", "tasks": [_task("preprocessing.dwi")]}
         with tempfile.TemporaryDirectory() as tmp:

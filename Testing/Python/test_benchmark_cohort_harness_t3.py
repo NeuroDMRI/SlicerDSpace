@@ -377,6 +377,24 @@ class PairTests(unittest.TestCase):
         self.assertEqual([len(r['trials']) for r in records], [1, 1])
         self.assertEqual([r['trials'][0]['policy'] for r in records], ['subject', 'adaptive'])
 
+    def test_hf3b_pair_fallback_reaps_with_require_match(self):
+        """H-F3b: fails before the fix (the fallback called reap_group without require_match)."""
+        driver = FAKE_DRIVER + textwrap.dedent("""\
+            import json
+            record = json.loads((campaign / 'campaign.json').read_text())
+            record['trials'][0].update(status='running', child_pid=4242, child_start_ticks=111)
+            (campaign / 'campaign.json').write_text(json.dumps(record))
+            """)
+        (self.snapshot / 'scripts/benchmark_cohort_workflows.py').write_text(driver)
+        reap = MagicMock(return_value=False)
+        with patch.object(workflows, 'reap_group', reap):
+            code, _ = self.run_pair(self.args(), self.doctor_ok())
+        self.assertEqual(code, 0)
+        self.assertEqual(reap.call_count, 2)
+        for call in reap.call_args_list:
+            self.assertEqual(call.args, (4242, 111))
+            self.assertIs(call.kwargs.get('require_match'), True)
+
     def test_doctor_blocker_counts_as_failed_attempt_and_stops_launch(self):
         code, events = self.run_pair(self.args(attempts=2), self.doctor_ok(blockers=1))
         self.assertEqual(code, 2)
@@ -457,6 +475,21 @@ class PairTests(unittest.TestCase):
     def test_hf3_reap_without_proc_keeps_the_old_behaviour(self):
         with patch.object(workflows, 'process_start_ticks', return_value=None), patch('os.killpg') as killpg:
             self.assertTrue(workflows.reap_group(4242, start_ticks=111))
+        self.assertEqual(killpg.call_count, 2)
+
+    def test_hf3b_require_match_skips_when_the_start_time_is_unreadable(self):
+        with patch.object(workflows, 'process_start_ticks', return_value=None), patch('os.killpg') as killpg:
+            self.assertFalse(workflows.reap_group(4242, start_ticks=111, require_match=True))
+        killpg.assert_not_called()
+
+    def test_hf3b_require_match_skips_when_the_start_time_differs(self):
+        with patch.object(workflows, 'process_start_ticks', return_value=222), patch('os.killpg') as killpg:
+            self.assertFalse(workflows.reap_group(4242, start_ticks=111, require_match=True))
+        killpg.assert_not_called()
+
+    def test_hf3b_require_match_kills_when_the_start_time_matches(self):
+        with patch.object(workflows, 'process_start_ticks', return_value=111), patch('os.killpg') as killpg:
+            self.assertTrue(workflows.reap_group(4242, start_ticks=111, require_match=True))
         self.assertEqual(killpg.call_count, 2)
 
     def test_hf3_start_ticks_is_field_22_of_proc_stat(self):

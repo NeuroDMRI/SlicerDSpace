@@ -472,11 +472,19 @@ def process_start_ticks(pid):
         return None
 
 
-def reap_group(pid, start_ticks=None):
+def reap_group(pid, start_ticks=None, require_match=False):
     """Kill whatever is left in a finished arm's process group. Returns True when something was left.
 
-    H-F3: when the stored start time differs from the live process, the id belongs to another process; do nothing."""
-    if start_ticks is not None:
+    H-F3: when the stored start time differs from the live process, the id belongs to another process; do nothing.
+    H-F3b: run() and pair() differ on a missing leader. In run() the leader is normally gone and the group must
+    still be reaped, so an unreadable start time keeps the old behaviour (require_match=False). In pair() the arm
+    process already reaped its own trial; the fallback only runs after an abnormal exit, and a missing leader
+    there gives no proof that the stored group is still ours. With require_match=True, send no signal unless the
+    start time was read and equals start_ticks."""
+    if require_match:
+        if start_ticks is None or process_start_ticks(pid) != start_ticks:
+            return False
+    elif start_ticks is not None:
         current = process_start_ticks(pid)
         if current is not None and current != start_ticks:
             return False
@@ -958,7 +966,7 @@ def pair(args, *, topology=None, sampler=sample_window, runner=run_bounded, slee
             try:
                 for trial in json.loads((campaign/'campaign.json').read_text())['trials']:
                     if trial.get('status') == 'running' and trial.get('child_pid'):
-                        reap_group(trial['child_pid'], trial.get('child_start_ticks'))
+                        reap_group(trial['child_pid'], trial.get('child_start_ticks'), require_match=True)
             except (OSError, ValueError, KeyError):
                 pass
     # Both timed trees have stopped; only now run QC and the comparison.

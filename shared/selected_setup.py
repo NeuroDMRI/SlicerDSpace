@@ -23,7 +23,11 @@ def build_setup_plan(result, *, installed_extensions=(), loaded_extensions=None,
     installed = set(installed_extensions)
     # DTI-based targets use the native Teem tensor fit (Slicer core), so need_dti adds no extension.
     # SlicerDMRI is needed only where a step still loads its modules (the WMA harden-transform shim).
-    required_extensions = (["SlicerDMRI"] if need_slicerdmri else []) + (["PyTorch"] if need_torch else [])
+    # F1 (SC-1 fix round): the native mask runs torch in Slicer's interpreter, so a required pnl_cnn mask on the
+    # native route needs PyTorch even when no segmentation, parcellation, surface or TractCloud target is selected.
+    native_mask_torch = (brain_mask_backend == "pnl_cnn" and not pnl_managed and
+                         any(item.key == "brain_mask_backend" and item.required for item in result.statuses))
+    required_extensions = (["SlicerDMRI"] if need_slicerdmri else []) + (["PyTorch"] if need_torch or native_mask_torch else [])
     if need_ukf:
         required_extensions.append("UKFTractography")
     missing = [item for item in environment_missing_items(result) if item.required]

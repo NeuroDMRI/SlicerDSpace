@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
-from shared.selected_setup import build_setup_plan
+from shared.selected_setup import build_setup_plan, need_flags
 from shared.target_closure import expand_closure
 from shared.ui_selected_setup import extension_states, prepare_selected_environment
 from shared.environment import DependencySpec, EnvironmentDoctorConfig, run_environment_doctor
@@ -152,6 +152,26 @@ class SelectedSetupTests(unittest.TestCase):
         plan = build_setup_plan(result(models), system="Linux", machine="x86_64", pnl_mask_route="managed")
         self.assertEqual(plan["optional_asset_profiles"], [])
         self.assertEqual(plan["managed_profiles"], ["pnl_cnn"])
+
+    def test_f1_native_mask_only_closure_plans_pytorch_and_the_managed_route_does_not(self):
+        """F1: a required native pnl_cnn mask needs torch even when no torch target is selected."""
+        mask = item("brain_mask_backend", "brain_mask", "setting", package=None, targets=("microstructure",))
+        for system, machine in (("Darwin", "arm64"), ("Windows", "AMD64")):
+            with self.subTest(system=system):
+                plan = build_setup_plan(result(mask, targets=("microstructure",)), system=system, machine=machine,
+                                        closure_targets=("microstructure",), **need_flags(("microstructure",)))
+                self.assertIn("PyTorch", plan["extensions"])
+                installed = build_setup_plan(result(mask, targets=("microstructure",)), system=system, machine=machine,
+                                             installed_extensions=("PyTorch",), loaded_extensions=["PyTorch"])
+                self.assertEqual(installed["extensions"], [])
+        # Guards: the managed route (Linux auto), another backend, and a mask that is not required add no PyTorch.
+        linux = build_setup_plan(result(mask, targets=("microstructure",)), system="Linux", machine="x86_64",
+                                 **need_flags(("microstructure",)))
+        self.assertNotIn("PyTorch", linux["extensions"])
+        provided = build_setup_plan(result(mask), system="Darwin", machine="arm64", brain_mask_backend="provided")
+        self.assertNotIn("PyTorch", provided["extensions"])
+        optional = item("brain_mask_backend", "brain_mask", "setting", package=None, required=False)
+        self.assertNotIn("PyTorch", build_setup_plan(result(optional), system="Darwin", machine="arm64")["extensions"])
 
     def test_ukf_is_optional_and_platform_limits_remain_visible(self):
         missing = result(item("brain_mask_backend", "brain_mask", "setting", package=None))

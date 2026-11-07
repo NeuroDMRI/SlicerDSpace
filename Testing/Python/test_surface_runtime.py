@@ -117,7 +117,9 @@ class SurfaceRuntimeTests(unittest.TestCase):
     def test_builder_dry_run_and_unapproved_execute_never_prepare_resources(self):
         from scripts.setup_surface_runtime import prepare
         with tempfile.TemporaryDirectory() as tmp, patch('scripts.setup_optional_assets.prepare') as resources, \
-                patch('platform.system', return_value='Linux'):
+                patch('platform.system', return_value='Linux'), patch('platform.machine', return_value='x86_64'):
+            # B11: the catalog holds one prebuilt bundle, Linux x86_64. Patching only the system made the test fail on
+            # Linux arm64 and on a Mac (Apple Silicon); it now fixes both parts of the platform.
             prefix = Path(tmp) / 'components'
             self.assertEqual(prepare(prefix=prefix)['status'], 'planned')
             with self.assertRaises(PermissionError):

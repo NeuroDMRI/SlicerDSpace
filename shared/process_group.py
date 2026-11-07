@@ -68,6 +68,8 @@ def grouped_launch_command(program: str, args: list[str]) -> tuple[str, list[str
     with ``pgid == pid`` -- see :func:`capture_process_group_id`.
     """
 
+    from shared.external_process import normalize_slicer_python_launch
+    program, args = normalize_slicer_python_launch(program, args)
     if os.name == "posix":
         setsid = shutil.which("setsid")
         if setsid:

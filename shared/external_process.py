@@ -47,6 +47,24 @@ def find_pythonslicer(home: Path | str) -> Optional[Path]:
     return None
 
 
+def normalize_slicer_python_launch(program: str, args: list[str]) -> tuple[str, list[str]]:
+    """Use the bundled PythonSlicer directly for macOS application workers.
+
+    The macOS application executable does not implement the CTK launcher's
+    ``--launch PythonSlicer`` contract: it opens another GUI instead. Keep
+    Linux/Windows CTK commands and ordinary application launches unchanged.
+    """
+    if list(args[:2]) != ['--launch', 'PythonSlicer'] or os.name == 'nt':
+        return program, args
+    app = Path(program).expanduser()
+    if app.parent.name == 'MacOS' and app.parent.parent.name == 'Contents':
+        python = find_pythonslicer(app.parent.parent)
+        if python is None:
+            raise FileNotFoundError('Missing bundled PythonSlicer in ' + str(app.parent.parent))
+        return str(python), list(args[2:])
+    return program, args
+
+
 def startup_environment(extra_env: Optional[Mapping[str, str]] = None) -> dict[str, str]:
     """Return an environment suitable for external tools.
 

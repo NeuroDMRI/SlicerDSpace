@@ -371,6 +371,19 @@ def inspect_brain_mask_backend(config: BrainMaskConfig | None = None, *, system:
             "note": "File discovery is not runtime/model compatibility or anatomical QC"}
 
 
+def brain_mask_cache_inspection(inspection: dict[str, Any]) -> dict[str, Any]:
+    """B12: the inspection as the cache signature and the preprocessing cache key hold it.
+
+    The native PNL route leaves the thread count out (M-A2, 2026-11-07: 24 cases, 0 differing voxels between 1 and 8
+    inference threads with the registration pinned to 1 thread); the receipt still records ``child_threads``. The
+    managed route keeps its threads (ANTs was not measured). The device stays in the key.
+    """
+    if inspection.get("backend") != "pnl_cnn" or inspection.get("pnl_route_resolved") != "native":
+        return inspection
+    settings = {key: value for key, value in inspection["settings"].items() if key != "threads"}
+    return dict(inspection, settings=settings)
+
+
 def validate_brain_mask(dwi_path: Path, mask_path: Path) -> dict[str, Any]:
     import nibabel as nib
     import numpy as np
@@ -474,7 +487,7 @@ def generate_brain_mask(dwi_path: Path, bval_path: Path, bvec_path: Path, output
     if not backend["available"]:
         raise FileNotFoundError(f"Brain mask backend {config.backend} unavailable: " + ", ".join(backend["missing_required"]) +
                                 ". Configure Advanced > Environment and models, choose another backend, or supply a verified mask.")
-    signature = {"backend": config.backend, "settings": backend["settings"],
+    signature = {"backend": config.backend, "settings": brain_mask_cache_inspection(backend)["settings"],
                  "inputs": [_fingerprint(p) for p in paths],
                  "resources": [_fingerprint(Path(p)) for p in backend["resources"]],
                  "tool_paths": backend["tool_paths"]}

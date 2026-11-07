@@ -658,18 +658,32 @@ class BrainMaskBackendsTest(unittest.TestCase):
 
     def test_signature_and_receipt_record_the_effective_child_thread_count(self) -> None:
         # A-O4: the native child ignores config.threads and reads SLICERDSPACE_STAGE_CPUS (A6).
+        # B12: the receipt keeps the count as a record; the native cache signature no longer holds it.
         config = replace(fake_pnl_config(self.root), threads=3)
         with patch.dict(os.environ, {"SLICERDSPACE_STAGE_CPUS": "2"}):
             self.assertEqual(inspect_brain_mask_backend(config)["settings"]["threads"], 2)
             result = self.generate(config)
-        self.assertEqual(result["signature"]["settings"]["threads"], 2)
+        self.assertNotIn("threads", result["signature"]["settings"])
         self.assertEqual(result["child_threads"], 2)
         self.assertEqual(result["thread_environment"]["OMP_NUM_THREADS"], "2")
-        # The signature follows the reservation: another count is another signature (no silent reuse).
-        with patch.dict(os.environ, {"SLICERDSPACE_STAGE_CPUS": "5"}):
-            self.assertEqual(self.generate(config)["status"], "completed")
         with patch.dict(os.environ, {"SLICERDSPACE_STAGE_CPUS": "5"}):
             self.assertEqual(self.generate(config)["status"], "reused")
+
+    def test_b12_native_signature_ignores_threads_managed_keeps_them_and_the_device_stays(self) -> None:
+        """B12 (M-A2): native route, threads 1 vs 8 give one signature; managed differs; native cpu vs cuda differs."""
+        native = fake_pnl_config(self.root)
+        managed = fake_managed_pnl_config(self.root, native.pnl_mask_model_dir, pnl_mask_route="managed")
+
+        def cache_settings(config, cpus):
+            with patch.dict(os.environ, {"SLICERDSPACE_STAGE_CPUS": str(cpus)}):
+                return brain_mask.brain_mask_cache_inspection(inspect_brain_mask_backend(config))["settings"]
+
+        self.assertEqual(cache_settings(native, 1), cache_settings(native, 8))
+        self.assertNotEqual(cache_settings(managed, 1), cache_settings(replace(managed, threads=8), 8))
+        self.assertNotEqual(cache_settings(native, 1), cache_settings(replace(native, brain_mask_device="cuda"), 1))
+        # The inspection itself still carries the count for the run (env of the child, receipt).
+        with patch.dict(os.environ, {"SLICERDSPACE_STAGE_CPUS": "8"}):
+            self.assertEqual(inspect_brain_mask_backend(native)["settings"]["threads"], 8)
 
     def test_scheduler_cpu_reservation_reaches_the_native_child_from_slicer_startup_environment(self) -> None:
         # A6: the child reads SLICERDSPACE_STAGE_CPUS; inside Slicer the child environment starts from

@@ -296,7 +296,6 @@ class PreprocessingMaskIntegrationTest(unittest.TestCase):
             initial_key = json.loads(result.manifest_path.read_text())["cache_key"]["brain_mask"]
             changes = (
                 replace(config, b0_threshold=25),
-                replace(config, eddy_threads=2),
                 replace(config, brain_mask_backend="provided"),
             )
             for settings in changes:
@@ -310,6 +309,28 @@ class PreprocessingMaskIntegrationTest(unittest.TestCase):
             self.assertEqual(run_dwi_preprocessing(config).status, "completed")
             (config.pnl_mask_model_dir / "axial.pt").write_text("different test weights")
             self.assertEqual(run_dwi_preprocessing(config).status, "completed")
+
+    def test_b12_native_mask_part_of_the_preprocessing_key_ignores_threads(self):
+        """B12 (M-A2): native route, SLICERDSPACE_STAGE_CPUS 1 vs 8 gives one mask key; managed differs; device differs."""
+        from preprocessing.pipeline import _brain_mask_cache_key
+        from shared.brain_mask import inspect_brain_mask_backend
+        from preprocessing.pipeline import _brain_mask_config
+
+        def mask_key(config, cpus):
+            with mock.patch.dict("os.environ", {"SLICERDSPACE_STAGE_CPUS": str(cpus)}):
+                return _brain_mask_cache_key(config, inspect_brain_mask_backend(_brain_mask_config(config)))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            subject = _write_nifti_subject(root)
+            native = _config(subject, root, "dipy", pnl_mask_route="native", **_pnl_options(root))
+            self.assertEqual(mask_key(native, 1), mask_key(native, 8))
+            self.assertEqual(mask_key(replace(native, eddy_threads=2), 1), mask_key(replace(native, eddy_threads=8), 1))
+            self.assertNotEqual(mask_key(native, 1), mask_key(replace(native, brain_mask_device="cuda"), 1))
+            managed = replace(native, pnl_mask_route="managed")
+            first = json.dumps(mask_key(replace(managed, eddy_threads=2), 1), sort_keys=True, default=str)
+            second = json.dumps(mask_key(replace(managed, eddy_threads=8), 1), sort_keys=True, default=str)
+            self.assertNotEqual(first, second)
 
     def test_cached_invalid_mask_is_not_silently_accepted(self):
         with tempfile.TemporaryDirectory() as tmp:

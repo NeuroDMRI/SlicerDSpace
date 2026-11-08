@@ -28,8 +28,7 @@ def snapshot_case(case, output):
             if not isinstance(value, str) or not Path(value).is_file() or value in copies:
                 continue
             path = Path(value)
-            with path.open("rb") as stream:
-                digest = hashlib.file_digest(stream, "sha256").hexdigest()
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
             entry = {"source": value, "sha256": digest, "bytes": path.stat().st_size}
             # Preserve numerical tables and QC before a later route can replace them.
             if path.suffix.lower() in {".json", ".csv", ".tsv"}:

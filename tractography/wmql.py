@@ -104,11 +104,12 @@ def wmql_query_dependencies(query_path: Path, include_dirs) -> dict[str, str]:
         path = Path(path).resolve()
         if path in active:
             raise ValueError(f"Cyclic WMQL query import: {path}")
-        if str(path) in records:
+        key = path.as_posix()
+        if key in records:
             return
         active.add(path)
         contents = path.read_bytes()
-        records[str(path)] = hashlib.sha256(contents).hexdigest()
+        records[key] = hashlib.sha256(contents).hexdigest()
         for node in ast.walk(ast.parse(contents.decode('utf-8'), filename=str(path))):
             if not isinstance(node, ast.Import):
                 continue

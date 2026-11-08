@@ -49,7 +49,12 @@ class TextSubprocessKwargsTest(unittest.TestCase):
             real.touch()
             link = root / "venv/bin/python"
             link.parent.mkdir(parents=True)
-            link.symlink_to(real)
+            try:
+                link.symlink_to(real)
+            except OSError as exc:
+                if sys.platform == "win32":
+                    self.skipTest(f"Windows symlink privilege unavailable: {exc}")
+                raise
             cwd = root / "work"
             cwd.mkdir()
             old = os.getcwd()

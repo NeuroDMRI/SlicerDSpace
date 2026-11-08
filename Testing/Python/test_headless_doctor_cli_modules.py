@@ -40,7 +40,7 @@ def _doctor(config: EnvironmentDoctorConfig, *, load=None, version="1.12.0", sli
     load = load or (lambda: _FakeLibrary())
     with patch("shared.environment.build_dependency_specs", return_value=(spec,)), \
          patch("shared.environment._check_spec", return_value=_available(spec)), \
-         patch("shared.environment.sys.executable", "/slicer/bin/PythonSlicer" if slicer_process else sys.executable), \
+         patch("shared.environment.sys.executable", "/slicer/bin/PythonSlicer" if slicer_process else "/usr/bin/python3"), \
          patch("shared.teem_dti.load_teem", side_effect=load), \
          patch("shared.teem_dti.teem_version", return_value=version):
         return run_environment_doctor(config)
@@ -59,6 +59,20 @@ class NativeTensorFitDoctorTests(unittest.TestCase):
         common = patch("shared.environment._common_slicer_executables", return_value=())
         common.start()
         self.addCleanup(common.stop)
+        cleaned_env = {
+            k: v for k, v in subprocess.os.environ.items()
+            if k not in {
+                "SLICER_HOME",
+                "Slicer_HOME",
+                "SLICERDSPACE_SLICER_HOME",
+                "SLICERDSPACE_SLICER_EXECUTABLE",
+                "DTI_SLICER_PATH",
+                "SLICER_PATH",
+            }
+        }
+        env_patch = patch.dict("os.environ", cleaned_env, clear=True)
+        env_patch.start()
+        self.addCleanup(env_patch.stop)
 
     old_keys = ("slicer_cli:dwitodtiestimation", "slicer_cli:diffusiontensorscalarmeasurements",
                 "slicer_module:dwitodtiestimation")

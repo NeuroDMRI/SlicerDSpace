@@ -81,16 +81,17 @@ class BackendSourceTests(unittest.TestCase):
 
 class SetupDeliveryTests(unittest.TestCase):
     def test_backend_dependency_requests_retain_the_external_interpreter(self):
+        chosen = Path('/chosen/python')
         report = SimpleNamespace(statuses=[self.missing('python:tractcloud', 'python', 'tractcloud')])
-        plan = build_setup_plan(report, backend_paths={'tractcloud_python_executable': Path('/chosen/python')})
-        self.assertEqual({item['python_executable'] for item in plan['python_requests']}, {'/chosen/python'})
+        plan = build_setup_plan(report, backend_paths={'tractcloud_python_executable': chosen})
+        self.assertEqual({item['python_executable'] for item in plan['python_requests']}, {str(chosen)})
         with tempfile.TemporaryDirectory() as tmp:
             owner = Mock()
             owner._latestEnvironmentReportDir = tmp
             owner._setup_python_command.side_effect = lambda executable: (executable, [])
             commands, _ = python_setup_commands(owner, plan['python_packages'], requests=plan['python_requests'])
             self.assertEqual(len(commands), 1)
-            self.assertEqual(commands[0][0], '/chosen/python')
+            self.assertEqual(commands[0][0], str(chosen))
             payload = json.loads(Path(commands[0][1][commands[0][1].index('--request') + 1]).read_text())
             self.assertIn('numpy>=1.21', payload['requirements'])
             self.assertIn('vtk>=9', payload['requirements'])
@@ -127,7 +128,7 @@ class SetupDeliveryTests(unittest.TestCase):
     def test_bundle_sources_are_prepared_without_vcs_package_installs(self):
         report = SimpleNamespace(statuses=(self.missing('python:tract_querier', 'python', 'tract_querier'),
             self.missing('wma_root', 'wma'), self.missing('python:tractcloud', 'python', 'tractcloud')))
-        plan = build_setup_plan(report)
+        plan = build_setup_plan(report, system='Linux')
         self.assertEqual(plan['backend_profiles'], ['wmql', 'wma', 'tractcloud'])
         self.assertFalse(any('git+' in package for package in plan['python_packages']))
         self.assertIn('torch>=2.3.1', plan['python_packages'])

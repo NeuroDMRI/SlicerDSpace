@@ -74,6 +74,8 @@ def main(argv=None):
             output_key = 'version_output'
             if is_windows and command == WINDOWS_RESPONSE_SCRIPT:
                 child_env['PYTHONPATH'] = str(root / 'lib')
+                if os.environ.get('PYTHONHOME'):
+                    child_env['PYTHONHOME'] = os.environ['PYTHONHOME']
                 # Ask the pinned upstream script to print the specific algorithm's
                 # usage. This loads its Python modules without a help pager.
                 invocation = [sys.executable, '-B', '-S', str(executable), 'dhollander', '__print_full_usage__']

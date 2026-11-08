@@ -17,8 +17,11 @@ sys.path.insert(0, str(ROOT))
 
 
 def digest(path):
+    hasher = hashlib.sha256()
     with Path(path).open('rb') as stream:
-        return hashlib.file_digest(stream, 'sha256').hexdigest()
+        for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+            hasher.update(chunk)
+    return hasher.hexdigest()
 
 
 def write_json(path, record):
@@ -103,7 +106,7 @@ def run_isolated(command, *, environment, cwd, log_path, timeout):
                 except subprocess.TimeoutExpired:
                     pass
                 try:
-                    os.killpg(process.pid, signal.SIGKILL)
+                    os.killpg(process.pid, getattr(signal, 'SIGKILL', signal.SIGTERM))
                 except ProcessLookupError:
                     pass
             process.wait()

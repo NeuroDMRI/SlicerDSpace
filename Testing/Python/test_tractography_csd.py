@@ -116,7 +116,7 @@ class CSDActBackendTest(unittest.TestCase):
             self.assertEqual(qc["act_preparation"], manifest["act_preparation"])
             self.assertEqual(qc["act_preparation"]["anatomical_prior_status"], "ddseg_only")
             self.assertEqual(qc["act_preparation"]["warnings"], [prior_warning])
-            self.assertEqual(manifest["dependencies"]["act_prep_qc"]["path"], str(prep_qc))
+            self.assertEqual(manifest["dependencies"]["act_prep_qc"]["path"], prep_qc.as_posix())
             self.assertEqual(manifest["parameters"]["mrtrix_bin_dir"], (root / "fake_mrtrix_bin").as_posix())
             self.assertEqual(
                 manifest["parameters"]["tractogram_dir"],
@@ -236,6 +236,8 @@ class CSDActBackendTest(unittest.TestCase):
 
             bin_dir = root / "mrtrix_bin"
             bin_dir.mkdir()
+            (root / "lib" / "mrtrix3").mkdir(parents=True, exist_ok=True)
+            (root / "lib" / "mrtrix3" / "__init__.py").write_text("", encoding="utf-8")
             for command in ("mrconvert", "dwi2response", "dwi2fod", "mtnormalise", "tckgen", "tcksift2"):
                 path = bin_dir / command
                 path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")

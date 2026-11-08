@@ -111,7 +111,14 @@ class EnvironmentDoctorDiscoveryTest(unittest.TestCase):
         # PythonSlicer exports PYTHONHOME; an external venv probed with it fails ("SRE module mismatch").
         slicer_env = {"PYTHONHOME": "/Applications/Slicer.app/Contents/lib/Python",
                       "PYTHONPATH": "/Applications/Slicer.app/Contents/lib/Slicer-5.12"}
-        with mock.patch.dict(os.environ, slicer_env):
+        probe_python = Path(sys.executable)
+        if probe_python.stem.lower() == "python-real":
+            for candidate in (probe_python.with_name("PythonSlicer.exe"), probe_python.with_name("PythonSlicer")):
+                if candidate.is_file():
+                    probe_python = candidate
+                    break
+        with mock.patch.dict(os.environ, slicer_env), \
+                mock.patch("shared.external_process.is_slicer_python", return_value=False):
             status = _check_spec(
                 DependencySpec(
                     key="python:json",
@@ -121,7 +128,7 @@ class EnvironmentDoctorDiscoveryTest(unittest.TestCase):
                     targets=("tractcloud",),
                     python_import="json",
                     python_package="",
-                    python_executable=Path(sys.executable),
+                    python_executable=probe_python,
                 ),
                 sys.platform,
             )
@@ -375,7 +382,7 @@ class EnvironmentDoctorDiscoveryTest(unittest.TestCase):
 
     def test_path_source_is_reported(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            path_bin = self._make_mrtrix_bin(Path(tmp))
+            path_bin = self._make_windows_mrtrix_bin(Path(tmp)) if sys.platform == "win32" else self._make_mrtrix_bin(Path(tmp))
             old_path = os.environ.get("PATH", "")
             old_env = os.environ.get("SLICERDSPACE_MRTRIX_BIN_DIR")
             os.environ.pop("SLICERDSPACE_MRTRIX_BIN_DIR", None)
@@ -522,7 +529,9 @@ class EnvironmentDoctorDiscoveryTest(unittest.TestCase):
         self.assertIn("C:/Program Files/FreeSurfer", win_freesurfer)
 
     def test_python_install_requirement_survives_default_python_assignment(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch("shared.environment._repo_checkout_roots", return_value=()), \
+                mock.patch("shared.environment._common_checkout_roots", return_value=()):
             missing_python = Path(tmp) / "missing-python"
             result = run_environment_doctor(
                 EnvironmentDoctorConfig(
@@ -675,15 +684,23 @@ class EnvironmentDoctorDiscoveryTest(unittest.TestCase):
             expected_python = root / "envs" / "slicerdsurfer" / "bin" / "python"
             expected_python.parent.mkdir(parents=True)
             expected_python.write_text("", encoding="utf-8")
-            conda = root / "conda"
-            conda.write_text(
+            conda_py = root / "conda_fake.py"
+            conda_py.write_text(
                 "#!/usr/bin/env python3\n"
                 "import sys\n"
                 "assert sys.argv[1:4] == ['run', '-n', 'slicerdsurfer']\n"
                 f"print({expected_python.as_posix()!r})\n",
                 encoding="utf-8",
             )
-            conda.chmod(0o755)
+            conda_py.chmod(0o755)
+            if sys.platform == "win32":
+                conda = root / "conda.cmd"
+                conda.write_text(
+                    f'@echo off\n"{sys.executable}" "{conda_py}" %*\n',
+                    encoding="utf-8",
+                )
+            else:
+                conda = conda_py
 
             result = run_environment_doctor(
                 EnvironmentDoctorConfig(

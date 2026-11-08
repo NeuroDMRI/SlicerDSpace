@@ -39,9 +39,10 @@ def python_executable(explicit=None):
         selected = Path(configured).expanduser()
         # The raw embedded interpreter needs the launcher to reconstruct its
         # Python home after Slicer's process environment has been isolated.
-        launcher = selected.parent / 'PythonSlicer'
-        if selected.name == 'python-real' and launcher.is_file():
-            return str(launcher)
+        for name in ('PythonSlicer', 'PythonSlicer.exe'):
+            launcher = selected.parent / name
+            if selected.stem.lower() == 'python-real' and launcher.is_file():
+                return str(launcher)
         return str(selected)
     try:
         import slicer
@@ -51,8 +52,10 @@ def python_executable(explicit=None):
     except ImportError:
         pass
     current = Path(sys.executable)
-    if current.name == 'python-real' and (current.parent / 'PythonSlicer').is_file():
-        return str(current.parent / 'PythonSlicer')
+    for name in ('PythonSlicer', 'PythonSlicer.exe'):
+        launcher = current.parent / name
+        if current.stem.lower() == 'python-real' and launcher.is_file():
+            return str(launcher)
     return str(current)
 
 

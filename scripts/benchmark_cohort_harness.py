@@ -221,10 +221,13 @@ def run_launch_rule(attempt, *, max_attempts=MAX_ATTEMPTS, wait_seconds=RETRY_WA
     raise LaunchRefused(attempts)
 
 
-def kill_group(process, *, sig=signal.SIGKILL, wait=10):
+def kill_group(process, *, sig=getattr(signal, 'SIGKILL', signal.SIGTERM), wait=10):
     """Signal a process group started with start_new_session and reap its leader."""
     try:
-        os.killpg(process.pid, sig)
+        if hasattr(os, 'killpg'):
+            os.killpg(process.pid, sig)
+        else:
+            process.kill()
     except (ProcessLookupError, PermissionError):
         pass
     try:
@@ -419,7 +422,7 @@ class HostReader:
             try:
                 status = os.stat(data_path).st_dev
                 device_numbers = (os.major(status), os.minor(status))
-            except OSError:
+            except (OSError, AttributeError):
                 device_numbers = None
         self.device_numbers = device_numbers
         self.previous = None

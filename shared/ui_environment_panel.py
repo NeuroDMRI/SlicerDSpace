@@ -318,7 +318,7 @@ def model_assets_summary_text(repo_root: Path) -> str:
             f"Refresh or verify with `{command}`."
             f"{status_text}"
         )
-    return f"Unified source expected at {manifest}. Refresh or verify with `{command}`."
+    return f"Unified source expected at {manifest.as_posix()}. Refresh or verify with `{command}`."
 
 
 def _model_asset_profiles_status_text(repo_root: Path) -> str:
@@ -355,8 +355,8 @@ def _model_asset_profiles_status_text(repo_root: Path) -> str:
 def model_assets_provenance_text(repo_root: Path) -> str:
     """Return compact model-asset provenance and release-boundary text."""
 
-    manifest = repo_root / "models" / "assets_manifest.json"
-    terms = doc_path(repo_root, "model_asset_terms")
+    manifest = (repo_root / "models" / "assets_manifest.json").as_posix()
+    terms = doc_path(repo_root, "model_asset_terms").as_posix()
     lock_command = (
         "PythonSlicer scripts/download_model_assets.py --profile core --verify-only "
         "--asset-root <asset-root> --write-lockfile outputs/00_run_metadata/model_assets_core.lock.json"

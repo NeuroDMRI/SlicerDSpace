@@ -124,7 +124,7 @@ def running_slicer_pythons():
 
     current = interpreter_path(sys.executable)
     found = {current}
-    for folder in current.parents[:4]:
+    for folder in tuple(current.parents)[:4]:
         launcher = find_pythonslicer(folder)
         if launcher:
             found.add(interpreter_path(launcher))
@@ -142,7 +142,7 @@ def running_slicer_launcher():
     """
     from shared.external_process import interpreter_path
 
-    for folder in interpreter_path(sys.executable).parents[:5]:
+    for folder in tuple(interpreter_path(sys.executable).parents)[:5]:
         for relative in ("Slicer", "Slicer.exe", "bin/Slicer", "bin/Slicer.exe", "MacOS/Slicer"):
             if (folder / relative).is_file():
                 return str(folder / relative)

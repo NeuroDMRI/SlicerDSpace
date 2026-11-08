@@ -197,7 +197,9 @@ def validate(path):
             for row, label in itertools.zip_longest(reader, selected):
                 if row is None or label is None or int(row[0]) != label:
                     raise AssertionError("Selected matrix labels/order differ")
-                for partner, value in zip(selected, row[1:], strict=True):
+                if len(row[1:]) != len(selected):
+                    raise AssertionError("Selected matrix row length differs")
+                for partner, value in zip(selected, row[1:]):
                     if float(value) != original.get(tuple(sorted((label, partner))), 0.0):
                         raise AssertionError("A connectivity weight changed")
         with (folder / "selected_region_connections.csv").open(newline="") as stream:

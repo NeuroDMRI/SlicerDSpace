@@ -157,6 +157,7 @@ def prepare_sources(profiles, *, root=None, execute=False, accept_terms=False, o
                                     raise ValueError("Downloaded algorithm archive checksum mismatch")
                                 partial.replace(archive)
                             finally:
+                                stream.close()
                                 partial.unlink(missing_ok=True)
                 with tempfile.TemporaryDirectory(dir=root, prefix=".extract-") as temporary:
                     staged = Path(temporary) / "source"

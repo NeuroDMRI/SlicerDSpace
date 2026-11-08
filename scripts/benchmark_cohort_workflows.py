@@ -489,12 +489,19 @@ def reap_group(pid, start_ticks=None, require_match=False):
         current = process_start_ticks(pid)
         if current is not None and current != start_ticks:
             return False
+    if not hasattr(os, 'killpg'):
+        res = subprocess.run(
+            ['taskkill', '/F', '/T', '/PID', str(pid)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return res.returncode == 0
     try:
         os.killpg(pid, 0)
     except (ProcessLookupError, PermissionError):
         return False
     try:
-        os.killpg(pid, signal.SIGKILL)
+        os.killpg(pid, getattr(signal, 'SIGKILL', signal.SIGTERM))
     except (ProcessLookupError, PermissionError):
         pass
     return True
@@ -517,6 +524,11 @@ def stop(child):
         if os.name != 'nt':
             os.killpg(child.pid, signal.SIGTERM)
         else:
+            subprocess.run(
+                ['taskkill', '/F', '/T', '/PID', str(child.pid)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
             child.terminate()
         child.wait(timeout=10)
     except (ProcessLookupError, subprocess.TimeoutExpired):
@@ -677,7 +689,10 @@ def run(args):
             inputs = destination/'inputs'/subject['subject']/'input'
             inputs.mkdir(parents=True)
             for name in INPUTS:
-                (inputs/name).symlink_to(Path(subject['source'])/name)
+                try:
+                    (inputs/name).symlink_to(Path(subject['source'])/name)
+                except OSError:
+                    shutil.copy2(Path(subject['source'])/name, inputs/name)
         execution_snapshot=Path(trial.get('snapshot',snapshot))
         t3 = trial['route'] in T3_ROUTES
         if record.get('automatic_jobs', False) and not t3:
@@ -865,7 +880,10 @@ def pair(args, *, topology=None, sampler=sample_window, runner=run_bounded, slee
     doctor_root = pair_dir/'doctor'/'subject'/first['subject']
     (doctor_root/'input').mkdir(parents=True)
     for name in INPUTS:
-        (doctor_root/'input'/name).symlink_to(Path(first['source'])/name)
+        try:
+            (doctor_root/'input'/name).symlink_to(Path(first['source'])/name)
+        except OSError:
+            shutil.copy2(Path(first['source'])/name, doctor_root/'input'/name)
     hybrid = args.workload == 'hybrid'
     max_busy = getattr(args, 'max_busy_percent', MAX_BUSY_PERCENT)
     state = dict(workload=args.workload, repeat=args.repeat, started_at=time.time(), attempts=[],

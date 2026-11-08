@@ -51,9 +51,10 @@ class DDSurferSyncTests(unittest.TestCase):
         record = json.loads((BACKEND_ROOT / 'UPSTREAM.json').read_text())
         # R5 (W4-W6): the native tensor fit also patches dti.py, preflight.py and the tests that model the old CLIs.
         self.assertEqual(set(record['local_patches']), {
-            'preprocessing/dti.sh', 'run_ddsurfer_pipeline.sh', 'preprocessing/dti.py', 'utils/preflight.py',
+            'postprocessing/core/runtime.py', 'postprocessing/environment.py', 'preprocessing/dti.sh',
+            'run_ddsurfer_pipeline.sh', 'preprocessing/dti.py', 'utils/preflight.py',
             'tests/check_environment.py', 'tests/test_environment_check.py', 'tests/test_inference.py',
-            'tests/test_pipeline_reliability.py', 'tests/test_preprocessing.py'})
+            'tests/test_native_build.py', 'tests/test_pipeline_reliability.py', 'tests/test_preprocessing.py'})
         wrapper = (BACKEND_ROOT / 'run_ddsurfer_pipeline.sh').read_text()
         self.assertIn('${ARGS[@]+"${ARGS[@]}"}', wrapper)
         self.assertNotIn(' "${ARGS[@]}"', wrapper)
@@ -230,6 +231,7 @@ class DDSurferSyncTests(unittest.TestCase):
                 _, env = _raw_command(config, resources, root)
                 self.assertEqual(Path(env['SLICERDSPACE_TEEM_DTI_SCRIPT']), ROOT / 'shared/teem_dti.py')
 
+    @unittest.skipUnless(os.name == 'posix', 'POSIX bash script test')
     def test_t3_dti_sh_resolves_runtime_root_and_launcher_for_every_slicer_layout(self):
         script = ROOT / 'anatomy/surface/ddsurfer_backend/preprocessing/dti.sh'
 
@@ -388,7 +390,8 @@ class DDSurferSyncTests(unittest.TestCase):
                 write_postprocess_fixture(output)
 
             config = DDSurferPostprocessConfig('x', layout.outputs, subject_root=root, native_dir=native)
-            with patch('anatomy.surface.backend_bridge.run_backend', side_effect=fake_backend):
+            with patch('anatomy.surface.backend_bridge.run_backend', side_effect=fake_backend), \
+                    patch('shared.surface_runtime.resolve_surface_runtime', return_value=('native', root / 'runtime')):
                 result = run_ddsurfer_postprocess(config)
                 original = json.loads(result.manifest_path.read_text())
                 self.assertFalse(original['requires_ddparcel'])

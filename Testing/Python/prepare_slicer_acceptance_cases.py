@@ -37,12 +37,10 @@ def main():
                     raise FileExistsError(f"Use a fresh workspace: {target}")
             else:
                 shutil.copy2(original, target)
-            with target.open("rb") as stream:
-                digest = hashlib.file_digest(stream, "sha256").hexdigest()
+            digest = hashlib.sha256(target.read_bytes()).hexdigest()
             if args.reuse_inputs:
-                with original.open("rb") as stream:
-                    if hashlib.file_digest(stream, "sha256").hexdigest() != digest:
-                        raise ValueError(f"Staged input differs from original: {target}")
+                if hashlib.sha256(original.read_bytes()).hexdigest() != digest:
+                    raise ValueError(f"Staged input differs from original: {target}")
             provenance.append({"subject": subject, "source": str(original), "copy": str(target), "sha256": digest})
     software = args.software
     slicer = software / "Slicer-5.10.0-linux-amd64"

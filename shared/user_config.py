@@ -82,8 +82,15 @@ def default_user_config_path(
     explicit = str(env.get(USER_CONFIG_ENV) or env.get(LEGACY_ENV_PREFIX + 'USER_CONFIG') or "").strip()
     if explicit:
         return Path(explicit).expanduser()
-    resolved_home = (home or Path.home()).expanduser()
     system_name = (system or platform.system()).lower()
+    if home is not None:
+        resolved_home = home.expanduser()
+    elif not system_name.startswith("win") and env.get("HOME"):
+        resolved_home = Path(env["HOME"]).expanduser()
+    else:
+        from shared.environment import _safe_home
+        from shared.model_assets import _FALLBACK_HOME
+        resolved_home = _safe_home() or _FALLBACK_HOME
     if system_name.startswith("win"):
         base = Path(env.get("APPDATA") or env.get("LOCALAPPDATA") or resolved_home / "AppData" / "Roaming")
     elif system_name == "darwin":

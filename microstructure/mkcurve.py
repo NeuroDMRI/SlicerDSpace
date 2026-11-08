@@ -327,6 +327,15 @@ def run_mkcurve(dwi_path, bval_path, bvec_path, mask_path, output_dir, *,
             finally:
                 for array in (curves, original_coefficients, corrected_coefficients, *results.values()):
                     array._mmap.close()
+                if isinstance(data, np.memmap):
+                    data._mmap.close()
+                for holder in working_image.file_map.values():
+                    if getattr(holder, "fileobj", None) is not None:
+                        holder.fileobj.close()
+                results.clear()
+                del curves, original_coefficients, corrected_coefficients, data, working_image
+                import gc
+                gc.collect()
     except Exception as exc:
         _write_json(progress, {"status": "failed", "error": f"{type(exc).__name__}: {exc}"})
         _write_json(root / "mkcurve_record.json", {"kind": "mkcurve_python_port", "status": "failed", "error": f"{type(exc).__name__}: {exc}"})

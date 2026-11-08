@@ -10,7 +10,11 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
-from vtp_fixture import vtp_lines
+
+try:
+    from vtp_fixture import vtp_lines
+except ImportError:
+    from Testing.Python.vtp_fixture import vtp_lines
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -112,11 +116,13 @@ exit 0
         (home / 'Slicer').touch()
         (home / 'bin' / 'PythonSlicer').touch()
         completed = mock.Mock(returncode=0, stdout=f'SLICER_HOME={home}\n')
-        with mock.patch('tractography.wma.subprocess.run', return_value=completed) as run:
+        with mock.patch('tractography.wma.sys.platform', 'linux'), \
+                mock.patch('tractography.wma.subprocess.run', return_value=completed) as run:
             self.assertEqual(_resolve_slicer_runtime(self.slicer_executable), home / 'Slicer')
             self.assertEqual(run.call_args.args[0][1], '--launcher-dump-environment')
             self.assertNotIn('PYTHONHOME', run.call_args.kwargs['env'])
-        with mock.patch('tractography.wma.subprocess.run', return_value=mock.Mock(
+        with mock.patch('tractography.wma.sys.platform', 'linux'), \
+                mock.patch('tractography.wma.subprocess.run', return_value=mock.Mock(
             returncode=0, stdout=f'SLICER_HOME={self.tmp_path / "missing"}\n')):
             with self.assertRaisesRegex(RuntimeError, 'incomplete runtime'):
                 _resolve_slicer_runtime(self.slicer_executable)
@@ -169,6 +175,7 @@ exit 0
             with self.assertRaisesRegex(RuntimeError, 'Missing required command.*Xvfb'):
                 validate_wma_org_inputs(config)
 
+    @unittest.skipIf(sys.platform == 'win32', 'Uses the POSIX author shell fixture')
     def test_execution_records_automatically_selected_virtual_display(self):
         from tractography.wma import WMAOrgAtlasConfig, run_wma_org_atlas
         config = WMAOrgAtlasConfig(subject_id='100307', input_tractography=self.tractography,
@@ -319,6 +326,7 @@ exit 0
             self.assertEqual(_command_path('wm_cluster_from_atlas.py', self.wma_root), tool.resolve())
             self.assertEqual(resolve_wma_root(self.wma_root), self.wma_root.resolve())
 
+    @unittest.skipIf(sys.platform == 'win32', 'Uses the POSIX author shell fixture')
     def test_rerun_zero_exit_cannot_reuse_old_anatomical_products(self):
         from tractography import WMAOrgAtlasConfig, run_wma_org_atlas
         config = WMAOrgAtlasConfig(subject_id='100307', input_tractography=self.tractography,
@@ -337,21 +345,23 @@ exit 0
     def test_builds_org_atlas_command_without_running_wma(self) -> None:
         from tractography import WMAOrgAtlasConfig, run_wma_org_atlas
 
-        result = run_wma_org_atlas(
-            WMAOrgAtlasConfig(
-                subject_id="100307",
-                input_tractography=self.tractography,
-                atlas_dir=self.atlas_dir,
-                output_dir=self.output_dir,
-                slicer_executable=self.slicer_executable,
-                wma_root=self.wma_root,
-                registration_mode="rig",
-                num_threads=2,
-                use_virtual_x=True,
-                clean_files=1,
-                execute=False,
+        with mock.patch("tractography.wma.sys.platform", "linux"), \
+                mock.patch.dict(os.environ, {"DSP_WMA_EXECUTION_BACKEND": "legacy"}):
+            result = run_wma_org_atlas(
+                WMAOrgAtlasConfig(
+                    subject_id="100307",
+                    input_tractography=self.tractography,
+                    atlas_dir=self.atlas_dir,
+                    output_dir=self.output_dir,
+                    slicer_executable=self.slicer_executable,
+                    wma_root=self.wma_root,
+                    registration_mode="rig",
+                    num_threads=2,
+                    use_virtual_x=True,
+                    clean_files=1,
+                    execute=False,
+                )
             )
-        )
 
         self.assertFalse(result.executed)
         self.assertEqual(result.status, "planned")
@@ -393,13 +403,14 @@ exit 0
             atlas_dir=self.atlas_dir, output_dir=self.output_dir, slicer_executable=self.slicer_executable,
             wma_root=self.wma_root, export_diffusion_measures=True, fiber_tract_measurements_cli=cli)
         command = build_wma_org_atlas_command(config)
-        self.assertEqual(command[command.index('-m') + 1], str(cli))
+        self.assertEqual(command[command.index('-m') + 1], cli.as_posix())
         self.assertEqual(command[command.index('-d') + 1], '1')
         native = replace(config, measurement_backend='native_vtk_point_scalar_summary',
                          fiber_tract_measurements_cli=None)
         self.assertNotIn('-m', build_wma_org_atlas_command(native))
         self.assertNotIn('-d', build_wma_org_atlas_command(native))
 
+    @unittest.skipIf(sys.platform == 'win32', 'Uses the POSIX author shell fixture')
     def test_native_measurement_provenance_and_failure_prevent_publish(self):
         from dataclasses import replace
         from tractography.wma import WMAOrgAtlasConfig, run_wma_org_atlas
@@ -501,7 +512,9 @@ exit 0
         config = WMAOrgAtlasConfig(subject_id='100307', input_tractography=self.tractography,
             atlas_dir=self.atlas_dir, output_dir=self.output_dir, slicer_executable=self.slicer_executable,
             wma_root=self.wma_root, registration_preprocess_cache=False)
-        result = run_wma_org_atlas(config)
+        with mock.patch('tractography.wma.sys.platform', 'linux'), \
+                mock.patch.dict(os.environ, {'DSP_WMA_EXECUTION_BACKEND': 'legacy', 'DISPLAY': ':1'}):
+            result = run_wma_org_atlas(config)
         manifest = json.loads(result.manifest_path.read_text())
         self.assertEqual(manifest['registration_preprocess_cache'],
                          {'requested': False, 'installed': False, 'reports': []})
@@ -549,6 +562,7 @@ exit 0
             ukf_whole_brain.resolve(),
         )
 
+    @unittest.skipIf(sys.platform == 'win32', 'Uses the POSIX author shell fixture')
     def test_tck_input_is_converted_before_wma_execution(self) -> None:
         from tractography import WMAOrgAtlasConfig, run_wma_org_atlas
 
@@ -611,6 +625,7 @@ exit 0
                 )
             )
 
+    @unittest.skipIf(sys.platform == 'win32', 'Uses the POSIX author shell fixture')
     def test_execute_true_records_completed_qc_with_fake_backend(self) -> None:
         from tractography import WMAOrgAtlasConfig, run_wma_org_atlas
 
@@ -635,6 +650,7 @@ exit 0
         self.assertTrue(Path(qc["logs"]["stdout"]).is_file())
         self.assertTrue(Path(qc["logs"]["stderr"]).is_file())
 
+    @unittest.skipIf(sys.platform == 'win32', 'Uses the POSIX author shell fixture')
     def test_execute_true_marks_failed_when_script_returns_zero_without_outputs(self) -> None:
         from tractography import WMAOrgAtlasConfig, run_wma_org_atlas
 
@@ -667,6 +683,7 @@ exit 0
         self.assertTrue(Path(qc["logs"]["stdout"]).is_file())
         self.assertTrue(Path(qc["logs"]["stderr"]).is_file())
 
+    @unittest.skipIf(sys.platform == 'win32', 'Uses the POSIX author shell fixture')
     def test_execute_true_records_nonzero_backend_failure_before_returning(self) -> None:
         from tractography import WMAOrgAtlasConfig, run_wma_org_atlas
 
@@ -700,7 +717,9 @@ exit 0
     def test_keyboard_interrupt_is_persisted_as_failed_qc(self) -> None:
         from tractography import WMAOrgAtlasConfig, run_wma_org_atlas
 
-        with mock.patch("tractography.wma.subprocess.run", side_effect=KeyboardInterrupt):
+        with mock.patch("tractography.wma.sys.platform", "linux"), \
+                mock.patch.dict(os.environ, {"DSP_WMA_EXECUTION_BACKEND": "legacy", "DISPLAY": ":1"}), \
+                mock.patch("tractography.wma.subprocess.run", side_effect=KeyboardInterrupt):
             result = run_wma_org_atlas(
                 WMAOrgAtlasConfig(
                     subject_id="100307",
@@ -721,6 +740,7 @@ exit 0
         self.assertEqual(manifest["status"], "failed")
         self.assertEqual(manifest["return_code"], 130)
 
+    @unittest.skipIf(sys.platform == 'win32', 'Uses the POSIX author shell fixture')
     def test_execute_true_marks_partial_failed_when_clusters_exist_but_anatomical_tracts_do_not(self) -> None:
         from tractography import WMAOrgAtlasConfig, run_wma_org_atlas
 
@@ -764,6 +784,7 @@ exit 0
         self.assertEqual(manifest["status"], "partial_failed")
         self.assertIn("runtime_seconds", manifest)
 
+    @unittest.skipIf(sys.platform == 'win32', 'Uses the POSIX author shell fixture')
     def test_execute_true_marks_partial_failed_below_required_tract_count(self) -> None:
         from tractography import WMAOrgAtlasConfig, run_wma_org_atlas
 
@@ -794,6 +815,7 @@ exit 0
         self.assertIn("expected at least 73 files", qc["error"])
         self.assertEqual(manifest["error"], qc["error"])
 
+    @unittest.skipIf(sys.platform == 'win32', 'Uses the POSIX author shell fixture')
     def test_execute_true_rejects_atlas_filenames_when_most_tracts_are_empty(self) -> None:
         from tractography import WMAOrgAtlasConfig, run_wma_org_atlas
 

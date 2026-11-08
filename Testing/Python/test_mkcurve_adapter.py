@@ -45,12 +45,13 @@ class MKCurveAdapterTests(unittest.TestCase):
             work = root / "work"
             work.mkdir()
             prepared, reference, record = _prepare_inputs(*paths, work, 50)
-            data = nib.load(str(prepared[0])).get_fdata()
+            loaded = nib.load(str(prepared[0]), mmap=False)
+            data = loaded.get_fdata()
             self.assertEqual(data.shape, (2, 3, 2, 3))
             np.testing.assert_array_equal(data[..., 0], 12)
             np.testing.assert_array_equal(np.loadtxt(prepared[1]), [0, 1000, 2000])
             self.assertEqual(record["baseline_count"], 2)
-            np.testing.assert_array_equal(nib.load(str(prepared[0])).affine, reference.affine)
+            np.testing.assert_array_equal(loaded.affine, reference.affine)
             self.assertEqual([path.read_bytes() for path in paths], original)
 
     def test_mask_geometry_rejected(self):

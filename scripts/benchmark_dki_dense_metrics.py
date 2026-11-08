@@ -21,8 +21,11 @@ sys.path.insert(0,str(ROOT))
 
 
 def digest(path):
+    hasher = hashlib.sha256()
     with path.open('rb') as handle:
-        return hashlib.file_digest(handle,'sha256').hexdigest()
+        for chunk in iter(lambda: handle.read(1024 * 1024), b''):
+            hasher.update(chunk)
+    return hasher.hexdigest()
 
 
 def main():

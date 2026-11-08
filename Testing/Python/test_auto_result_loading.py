@@ -252,7 +252,7 @@ class AutoResultLoadingTest(unittest.TestCase):
         with patch.object(nib.streamlines, "load", wraps=nib.streamlines.load) as load:
             self.assertTrue(self.logic._load_streamline_file_as_fiber_bundle(
                 source, "preview", max_streamlines=30, preview_dir=self.root / "display_previews"))
-        load.assert_called_once_with(str(source), lazy_load=True)
+        load.assert_called_once_with(source.as_posix(), lazy_load=True)
         node = self.scene.nodes[0]
         self.assertEqual(node.polydata.GetNumberOfLines(), 30)
         self.assertEqual(node.polydata.GetPoint(0), (0.0, 1.0, 2.0))
@@ -265,7 +265,7 @@ class AutoResultLoadingTest(unittest.TestCase):
         self.assertEqual(provenance["display_streamline_count"], 30)
         self.assertEqual(provenance["source_streamline_count"], 130)
         self.assertTrue(provenance["display_only"])
-        self.assertEqual(node.GetAttribute("SlicerDDSurfer.SourcePath"), str(source))
+        self.assertEqual(node.GetAttribute("SlicerDDSurfer.SourcePath"), source.as_posix())
         self.assertEqual(node.GetAttribute("SlicerDDSurfer.SourceStreamlineCount"), "130")
         self.assertEqual(hashlib.sha256(source.read_bytes()).hexdigest(), original)
 

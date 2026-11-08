@@ -736,7 +736,7 @@ def build_wma_org_atlas_command(config: WMAOrgAtlasConfig) -> tuple[str, ...]:
                     or Path(python_bridge["arguments"][0]).name != "python"):
                 raise RuntimeError("Repair the Windows WMA runtime to enable its atlas Python bridge")
             author_shell = bridge["arguments"][0]
-        cmd = [python, str(runner), "--family", family, "--author-shell", author_shell, "--", *cmd[1:]]
+        cmd = [python, runner.as_posix(), "--family", family, "--author-shell", author_shell, "--", *cmd[1:]]
     return tuple(cmd)
 
 
@@ -1060,6 +1060,8 @@ def run_wma_org_atlas(
                 conversion_env = external_python_environment(
                     path_prepend=(config.mrtrix_bin_dir,) if config.mrtrix_bin_dir is not None else (),
                 )
+                if sys.platform == "win32" and not conversion_env.get("HOME"):
+                    conversion_env["HOME"] = conversion_env.get("USERPROFILE") or str(Path.home())
                 converted = subprocess.run(
                     conversion_command,
                     check=True,

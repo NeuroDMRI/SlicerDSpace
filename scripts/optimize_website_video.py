@@ -15,8 +15,11 @@ OUTPUT = ROOT / 'docs/site/media/SlicerDSpace_promo_1080p.mp4'
 
 
 def digest(path):
+    hasher = hashlib.sha256()
     with Path(path).open('rb') as stream:
-        return hashlib.file_digest(stream, 'sha256').hexdigest()
+        for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+            hasher.update(chunk)
+    return hasher.hexdigest()
 
 
 def faststart(path):

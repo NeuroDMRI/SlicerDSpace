@@ -99,7 +99,13 @@ def _symlink_canonical_output(src: Path, dest: Path) -> None:
             dest.unlink()
     elif dest.exists():
         return
-    dest.symlink_to(src, target_is_directory=True)
+    try:
+        dest.symlink_to(src, target_is_directory=True)
+    except OSError:
+        if src.is_dir():
+            shutil.copytree(src, dest, dirs_exist_ok=True)
+        elif src.is_file():
+            shutil.copy2(src, dest)
 
 
 def _default_backend_root() -> Path:
@@ -381,6 +387,10 @@ def run_ddsurfer_postprocess(
     _emit("[DDSurfer Postprocess] Running: " + " ".join(cmd), log)
     env = merged_startup_environment()
     env["SLICERDSPACE_ANATOMY_DIRNAME"] = ANATOMY_OUTPUT_NAME
+    if os.name == "nt":
+        wslenv = env.get("WSLENV", "").strip(":")
+        entry = "SLICERDSPACE_ANATOMY_DIRNAME/u"
+        env["WSLENV"] = f"{wslenv}:{entry}" if wslenv else entry
     process = subprocess.Popen(
         cmd,
         cwd=str(backend_root),
@@ -456,6 +466,12 @@ def _run_current_postprocess(config, subject_root, native_dir, log):
                     command=list(map(str, command)), requires_ddparcel=False,
                     native_sha256=inputs, cache_signature=signature, cache_key=cache_key)
     manifest_path, qc_path = structural / 'manifest.json', structural / 'qc.json'
+    prior_is_current = False
+    if manifest_path.is_file():
+        try:
+            prior_is_current = json.loads(manifest_path.read_text()).get('kind') == 'ddsurfer_surface_only_postprocess'
+        except Exception:
+            prior_is_current = False
     manifest_path.write_text(json.dumps(manifest, indent=2) + '\n')
     try:
         run_backend(command, python_bin=config.python_bin, log=log, log_path=structural / 'backend.log')
@@ -471,11 +487,14 @@ def _run_current_postprocess(config, subject_root, native_dir, log):
         for source, destination in [(fs_subject / name, structural / name) for name in
                                     ('surf', 'label', 'mri', 'fsaverage', 'logs')] + [(fs_subject / 'stats', stats / 'stats')]:
             if destination.exists() and not destination.is_symlink():
-                backup = destination.parent / ('legacy_before_' + upstream_record()['commit'][:12]) / destination.name
-                backup.parent.mkdir(parents=True, exist_ok=True)
-                if backup.exists():
-                    raise FileExistsError(f'Existing postprocess output conflicts with preserved backup: {backup}')
-                destination.rename(backup)
+                if prior_is_current:
+                    shutil.rmtree(destination) if destination.is_dir() else destination.unlink()
+                else:
+                    backup = destination.parent / ('legacy_before_' + upstream_record()['commit'][:12]) / destination.name
+                    backup.parent.mkdir(parents=True, exist_ok=True)
+                    if backup.exists():
+                        raise FileExistsError(f'Existing postprocess output conflicts with preserved backup: {backup}')
+                    destination.rename(backup)
             _symlink_canonical_output(source, destination)
         # Track the public copies too on platforms without directory symlinks.
         integrity = validate_postprocess_outputs(structural, hemis, signature['atlases'], stats_dir=stats / 'stats')

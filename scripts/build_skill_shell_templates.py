@@ -189,7 +189,7 @@ def generated_files(root: Path = ROOT) -> dict[Path, str]:
                 continue
             run_name = tokens(code)[1]
             script = SKILL / "assets/shell" / (run_name + ".sh")
-            outputs[script] = SHELL_HEADER + "# " + str(GUIDE) + ": " + name + "\n" + code + "\n"
+            outputs[script] = SHELL_HEADER + "# " + GUIDE.as_posix() + ": " + name + "\n" + code + "\n"
             lines += ["### " + TITLES[name], "",
                       "[Standalone Bash](../assets/shell/" + script.name + ") - Recipe `" + name + "`.", "",
                       "```bash", code, "```", ""]

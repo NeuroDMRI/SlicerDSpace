@@ -19,9 +19,16 @@ ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / 'models/external_assets_manifest.json'
 
 
+def _stream_sha256(stream):
+    hasher = hashlib.sha256()
+    for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+        hasher.update(chunk)
+    return hasher.hexdigest()
+
+
 def digest(path):
     with path.open('rb') as stream:
-        return hashlib.file_digest(stream, 'sha256').hexdigest()
+        return _stream_sha256(stream)
 
 
 def import_file(source, destination, expected):
@@ -85,7 +92,7 @@ def extract_org(archive, destination):
             if _symlink_inside(target, anchor):
                 raise ValueError('Refusing symlink extraction target')
             with zipped.open(item) as stream:
-                expected = hashlib.file_digest(stream, 'sha256').hexdigest()
+                expected = _stream_sha256(stream)
             if not target.exists():
                 target.parent.mkdir(parents=True, exist_ok=True)
                 with tempfile.TemporaryDirectory(prefix='.org-import-', dir=target.parent) as temporary:

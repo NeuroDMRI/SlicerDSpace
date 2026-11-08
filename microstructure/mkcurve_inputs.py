@@ -1,5 +1,6 @@
 """Shared Python input staging for native and optional MATLAB MK-Curve."""
 
+import gc
 import shutil
 import gzip
 
@@ -8,8 +9,8 @@ def _prepare_inputs(dwi_path, bval_path, bvec_path, mask_path, directory, b0_thr
     import numpy as np
     from microstructure.dki import _shells
 
-    image = nib.load(str(dwi_path), keep_file_open=True)
-    mask_image = nib.load(str(mask_path))
+    image = nib.load(str(dwi_path), mmap=False)
+    mask_image = nib.load(str(mask_path), mmap=False)
     bvals = np.asarray(np.loadtxt(bval_path), dtype=float).reshape(-1)
     bvecs = np.asarray(np.loadtxt(bvec_path), dtype=float)
     if bvecs.shape == (3, len(bvals)):
@@ -28,39 +29,55 @@ def _prepare_inputs(dwi_path, bval_path, bvec_path, mask_path, directory, b0_thr
                                  if np.median(bvals[shell]) <= max_bvalue for index in shell), dtype=int)
     if not len(baseline):
         raise ValueError("MK-Curve requires baseline measurements")
+    uncompressed_image = None
     if str(dwi_path).endswith(".gz"):
         uncompressed = directory / "source.nii"
         with gzip.open(dwi_path, "rb") as source, uncompressed.open("wb") as destination:
             shutil.copyfileobj(source, destination, length=1024 * 1024)
-        image = nib.load(str(uncompressed), mmap="r", keep_file_open=True)
+        uncompressed_image = nib.load(str(uncompressed), mmap="r", keep_file_open=True)
+        source_image = uncompressed_image
+    else:
+        source_image = image
     # Upstream detects b0 strictly below 10. Make the caller's documented b0
     # convention explicit and collapse all baseline repeats, without editing input.
     data = np.lib.format.open_memmap(directory / "selected_signals.npy", mode="w+", dtype=np.float64,
-                                   shape=(*image.shape[:3], len(weighted) + 1))
-    total = np.zeros(image.shape[:3], dtype=np.float64)
-    for index in baseline:
-        volume = np.asarray(image.dataobj[..., int(index)], dtype=np.float64)
-        if not allow_nonfinite and not np.isfinite(volume[mask > 0]).all():
-            raise ValueError("MK-Curve baseline contains NaN/Inf in the brain mask")
-        total += volume
-    data[..., 0] = total / len(baseline)
-    for destination, source in enumerate(weighted, start=1):
-        volume = np.asarray(image.dataobj[..., int(source)], dtype=np.float64)
-        if not allow_nonfinite and not np.isfinite(volume[mask > 0]).all():
-            raise ValueError("MK-Curve DWI contains NaN/Inf in the brain mask")
-        data[..., destination] = volume
-    header = image.header.copy()
-    header.set_data_dtype(np.float64)
-    dwi = directory / "data.nii"
-    bval = directory / "bvals"
-    bvec = directory / "bvecs"
-    mask_file = directory / "mask.nii.gz"
-    nib.save(nib.Nifti1Image(data, image.affine, header), str(dwi))
-    data._mmap.close()
+                                   shape=(*source_image.shape[:3], len(weighted) + 1))
+    try:
+        total = np.zeros(source_image.shape[:3], dtype=np.float64)
+        for index in baseline:
+            volume = np.asarray(source_image.dataobj[..., int(index)], dtype=np.float64)
+            if not allow_nonfinite and not np.isfinite(volume[mask > 0]).all():
+                raise ValueError("MK-Curve baseline contains NaN/Inf in the brain mask")
+            total += volume
+        data[..., 0] = total / len(baseline)
+        for destination, source in enumerate(weighted, start=1):
+            volume = np.asarray(source_image.dataobj[..., int(source)], dtype=np.float64)
+            if not allow_nonfinite and not np.isfinite(volume[mask > 0]).all():
+                raise ValueError("MK-Curve DWI contains NaN/Inf in the brain mask")
+            data[..., destination] = volume
+        header = source_image.header.copy()
+        header.set_data_dtype(np.float64)
+        affine = source_image.affine.copy()
+        dwi = directory / "data.nii"
+        bval = directory / "bvals"
+        bvec = directory / "bvecs"
+        mask_file = directory / "mask.nii.gz"
+        nib.save(nib.Nifti1Image(data, affine, header), str(dwi))
+    finally:
+        data._mmap.close()
+        del data
+        if uncompressed_image is not None:
+            for holder in uncompressed_image.file_map.values():
+                if getattr(holder, "fileobj", None) is not None:
+                    holder.fileobj.close()
+            del uncompressed_image
+        del source_image
+        gc.collect()
+    reference = nib.Nifti1Image(np.empty((0,), dtype=np.float32), affine, header)
     np.savetxt(bval, np.concatenate(([0.0], bvals[weighted]))[None, :], fmt="%.10g")
     np.savetxt(bvec, np.vstack((np.zeros((1, 3)), bvecs[weighted])).T, fmt="%.10g")
     shutil.copy2(mask_path, mask_file)
-    return (dwi, bval, bvec, mask_file), image, {
+    return (dwi, bval, bvec, mask_file), reference, {
         "b0_threshold_s_mm2": b0_threshold, "baseline_count": len(baseline),
         "max_bvalue_s_mm2": max_bvalue, "excluded_high_b_volumes": len(bvals) - len(baseline) - len(weighted),
         "upper_bvalue_policy": "complete shells selected by median, tolerance 100 s/mm2",

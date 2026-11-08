@@ -632,11 +632,11 @@ def build_cli_environment(cli_executable: str) -> dict[str, str]:
 
     cli_dir = cli_path.parent
     if cli_dir.is_dir():
-        extra_lib_dirs.append(cli_dir.as_posix())
+        extra_lib_dirs.append(str(cli_dir))
 
     qt_loadable_dir = cli_dir.parent / "qt-loadable-modules"
     if qt_loadable_dir.is_dir():
-        extra_lib_dirs.append(qt_loadable_dir.as_posix())
+        extra_lib_dirs.append(str(qt_loadable_dir))
 
     if sys.platform == "darwin":
         # macOS extension CLIs (UKFTractography for Slicer 5.12) name Slicer's
@@ -661,9 +661,9 @@ def build_cli_environment(cli_executable: str) -> dict[str, str]:
                    for parent in cli_path.parents)
         )
         for root in (*bounded_parents(cli_path), *((runtime_root,) if belongs_to_slicer and runtime_root else ())):
-            extra_lib_dirs.extend(path.as_posix() for path in sorted(root.glob("lib/Slicer-*")) if path.is_dir())
+            extra_lib_dirs.extend(str(path) for path in sorted(root.glob("lib/Slicer-*")) if path.is_dir())
 
-    library_var = "PATH" if os.name == "nt" or sys.platform == "win32" else (
+    library_var = "PATH" if sys.platform == "win32" else (
         "DYLD_LIBRARY_PATH" if sys.platform == "darwin" else "LD_LIBRARY_PATH")
     existing = [entry for entry in env.get(library_var, "").split(os.pathsep) if entry]
     merged: list[str] = []
@@ -692,7 +692,8 @@ def _cli_search_dirs() -> tuple[Path, ...]:
     if sys.platform == "darwin":
         # C1: accept only extension builds made for this Slicer's own lib/Slicer-X.Y,
         # newest revision first; a 5.6 or 5.10 CLI must not serve a 5.12 runtime.
-        user_extensions = Path.home() / "Library/Application Support/slicer.org"
+        home_dir = Path(os.environ["HOME"]) if os.environ.get("HOME") else Path.home()
+        user_extensions = home_dir / "Library/Application Support/slicer.org"
         own_versions = {path.name for path in slicer_home.glob("lib/Slicer-*") if path.is_dir()}
 
         def revision(path: Path) -> int:

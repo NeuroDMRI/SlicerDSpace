@@ -324,7 +324,8 @@ def python_package_commands(packages, *, requests=None, python_command, folder, 
                     group["environment"]["SETUPTOOLS_SCM_PRETEND_VERSION_FOR_TRACT_QUERIER"] = "0+local"
             if requirement not in group["requirements"]:
                 group["requirements"].append(requirement)
-    loaded = {name for module, names in importlib.metadata.packages_distributions().items()
+    packages_distributions = getattr(importlib.metadata, "packages_distributions", None)
+    loaded = {name for module, names in (packages_distributions().items() if callable(packages_distributions) else ())
               if module in sys.modules for name in names}
     commands, receipts = [], []
     for index, ((program, prefix), data) in enumerate(groups.items()):

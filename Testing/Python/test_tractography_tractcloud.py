@@ -10,7 +10,11 @@ import unittest
 from pathlib import Path
 from unittest import mock
 import types
-from vtp_fixture import vtp_lines
+
+try:
+    from vtp_fixture import vtp_lines
+except ImportError:
+    from Testing.Python.vtp_fixture import vtp_lines
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -35,9 +39,30 @@ class TractCloudIntegrationTest(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.tmp_path = Path(self.tmp.name)
-        self.python = self.tmp_path / "PythonSlicer"
-        self.python.write_text(
-            """#!/bin/sh
+        if sys.platform == "win32":
+            from shared.external_process import find_pythonslicer
+            real_py = find_pythonslicer(Path(sys.executable).parent) or Path(sys.executable)
+            py_helper = self.tmp_path / "fake_pythonslicer.py"
+            py_helper.write_text(
+                "import pathlib, sys\n"
+                "if len(sys.argv) >= 3 and sys.argv[1] == '-c' and 'importlib.util' in sys.argv[2]:\n"
+                "    print('{\"tractcloud\": true, \"torch\": true}')\n"
+                "    sys.exit(0)\n"
+                "if '--output-dir' in sys.argv:\n"
+                "    out = pathlib.Path(sys.argv[sys.argv.index('--output-dir') + 1])\n"
+                "else:\n"
+                "    out = next(pathlib.Path(__file__).parent.glob('.tractcloud_out-tractcloud-*'))\n"
+                "assoc = out / 'Association'\n"
+                "assoc.mkdir(parents=True, exist_ok=True)\n"
+                f"(assoc / 'arcuate_fasciculus.vtp').write_text({vtp_lines(3)!r}, encoding='utf-8')\n",
+                encoding="utf-8",
+            )
+            self.python = self.tmp_path / "PythonSlicer.cmd"
+            self.python.write_text(f'@echo off\r\n"{real_py}" "{py_helper}" %*\r\n', encoding="utf-8")
+        else:
+            self.python = self.tmp_path / "PythonSlicer"
+            self.python.write_text(
+                """#!/bin/sh
 if [ "$1" = "-c" ] && [ "$#" -eq 2 ]; then
   echo '{"tractcloud": true, "torch": true}'
   exit 0
@@ -54,9 +79,9 @@ mkdir -p "$out/Association"
 printf 'VTP_FIXTURE' > "$out/Association/arcuate_fasciculus.vtp"
 exit 0
 """.replace("VTP_FIXTURE", vtp_lines(3)),
-            encoding="utf-8",
-        )
-        self.python.chmod(0o755)
+                encoding="utf-8",
+            )
+            self.python.chmod(0o755)
         self.tractography = self.tmp_path / "subject.vtp"
         self.tractography.write_text("<VTKFile></VTKFile>\n", encoding="utf-8")
         self.output_dir = self.tmp_path / "tractcloud_out"

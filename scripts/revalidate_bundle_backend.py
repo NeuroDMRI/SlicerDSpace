@@ -27,9 +27,11 @@ def main():
     if m['kind'] == 'wmql_bundle_segmentation':
         from tractography.wmql import WMQLConfig, run_wmql_bundle_segmentation
         python = Path(m['backend']['commands']['python'])
-        if python.name == 'python-real' and python.with_name('PythonSlicer').is_file():
-            # The GUI's python-real requires launcher settings outside Slicer.
-            python = python.with_name('PythonSlicer')
+        for name in ('PythonSlicer', 'PythonSlicer.exe'):
+            if python.stem.lower() == 'python-real' and python.with_name(name).is_file():
+                # The GUI's python-real requires launcher settings outside Slicer.
+                python = python.with_name(name)
+                break
         cfg = WMQLConfig(**common, atlas_path=args.atlas_path or Path(m['atlas_path']), query_path=args.query_path or Path(m['query_path']),
                          query_selection=tuple(args.query_selection.split(',')) if args.query_selection else tuple(m['query_selection']), threshold=m['threshold'],
                          length_threshold=m['length_threshold'],

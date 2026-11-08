@@ -50,7 +50,7 @@ def configure_freewater_dispatch(model, method, engine, *, reuse_protocol=True):
     from dipy.reconst import fwdti
 
     record['dipy_version'] = dipy.__version__
-    if dipy.__version__ not in {'1.11.0', '1.12.1'}:
+    if dipy.__version__ not in {'1.10.0', '1.11.0', '1.12.1'}:
         return {**record, 'reason': 'Unqualified DIPY release; retain original dispatch'}
     if type(model) is not fwdti.FreeWaterTensorModel or model.fit_method is not fwdti.common_fit_methods.get(method):
         return {**record, 'reason': 'Custom model or fit method; retain original dispatch'}

@@ -64,17 +64,22 @@ def _load_asset_manifest_records(repo_root: Path | None) -> dict[str, Any]:
     return records if isinstance(records, dict) else {}
 
 
+_FALLBACK_HOME = Path.home()
+
+
 def default_user_model_assets_root() -> Path:
     """Return the per-user default model-asset root."""
 
     from shared.branding import reuse_legacy_path
+    from shared.environment import _safe_home
+    home = _safe_home() or _FALLBACK_HOME
     system = platform.system()
     if system == "Windows":
-        base = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local")
+        base = Path(os.environ.get("LOCALAPPDATA") or home / "AppData" / "Local")
         return reuse_legacy_path(base / "SlicerDSpace" / "model-assets")
     if system == "Darwin":
-        return reuse_legacy_path(Path.home() / "Library" / "Application Support" / "SlicerDSpace" / "model-assets")
-    return reuse_legacy_path(Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share") / "SlicerDSpace" / "model-assets")
+        return reuse_legacy_path(home / "Library" / "Application Support" / "SlicerDSpace" / "model-assets")
+    return reuse_legacy_path(Path(os.environ.get("XDG_DATA_HOME") or home / ".local" / "share") / "SlicerDSpace" / "model-assets")
 
 
 def configured_model_assets_root(explicit: Path | None = None) -> Path:

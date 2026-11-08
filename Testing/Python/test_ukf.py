@@ -547,7 +547,10 @@ class IntegrationTests(unittest.TestCase):
             (root / "input").mkdir()
             for name in ("data.nii.gz", "bvals", "bvecs", "nodif_brain_mask.nii.gz"):
                 (root / "input" / name).write_text("fixture for mocked execution only")
-            from test_product_orchestrator import _write_valid_raw_subject
+            try:
+                from test_product_orchestrator import _write_valid_raw_subject
+            except ImportError:
+                from Testing.Python.test_product_orchestrator import _write_valid_raw_subject
             _write_valid_raw_subject(root)
             layout = subject_layout(root)
             old = ukf.paths("s", layout.tractograms / "ukf" / "run")

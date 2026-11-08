@@ -568,20 +568,43 @@ def _env_command_dirs(group: str) -> tuple[tuple[Path, str], ...]:
     return tuple(candidates)
 
 
+def _safe_home() -> Optional[Path]:
+    for env_name in ("HOME", "USERPROFILE"):
+        value = os.environ.get(env_name)
+        if value:
+            return Path(value)
+    try:
+        return Path.home()
+    except RuntimeError:
+        return None
+
+
 def _current_user_names() -> tuple[str, ...]:
     names: list[str] = []
-    for value in (os.environ.get("USER"), os.environ.get("USERNAME"), Path.home().name):
+    home = _safe_home()
+    for value in (os.environ.get("USER"), os.environ.get("USERNAME"), home.name if home else None):
         if value:
             names.append(value)
     return tuple(dict.fromkeys(names))
 
 
 def _local_software_roots() -> tuple[Path, ...]:
-    roots: list[Path] = [
-        Path.home(),
-        Path.home() / "software",
-        Path.home() / "Software",
-    ]
+    homes: list[Path] = []
+    home = _safe_home()
+    if home is not None:
+        homes.append(home)
+    env_home = os.environ.get("HOME")
+    if env_home and Path(env_home) not in homes:
+        homes.insert(0, Path(env_home))
+    roots: list[Path] = []
+    for home in homes:
+        roots.extend(
+            [
+                home,
+                home / "software",
+                home / "Software",
+            ]
+        )
     for user_name in _current_user_names():
         roots.extend(
             [
@@ -625,10 +648,16 @@ def _common_freesurfer_homes(platform_name: Optional[str] = None) -> tuple[Path,
             [
                 Path("/Applications/freesurfer"),
                 Path("/Applications/FreeSurfer"),
-                Path.home() / "Applications" / "freesurfer",
-                Path.home() / "Applications" / "FreeSurfer",
             ]
         )
+        home = _safe_home()
+        if home is not None:
+            candidates.extend(
+                [
+                    home / "Applications" / "freesurfer",
+                    home / "Applications" / "FreeSurfer",
+                ]
+            )
     if platform_name == "Windows":
         candidates.extend(
             [
@@ -716,12 +745,10 @@ def _common_command_dirs(group: str, platform_name: str) -> tuple[Path, ...]:
                 ]
             )
         if platform_name == "Darwin":
-            candidates.extend(
-                [
-                    Path("/Applications/MRtrix3.app/Contents/bin"),
-                    Path.home() / "Applications" / "MRtrix3.app" / "Contents" / "bin",
-                ]
-            )
+            candidates.append(Path("/Applications/MRtrix3.app/Contents/bin"))
+            home = _safe_home()
+            if home is not None:
+                candidates.append(home / "Applications" / "MRtrix3.app" / "Contents" / "bin")
         if platform_name == "Windows":
             candidates.extend(
                 [
@@ -756,12 +783,10 @@ def _common_command_dirs(group: str, platform_name: str) -> tuple[Path, ...]:
                 ]
             )
         if platform_name == "Darwin":
-            candidates.extend(
-                [
-                    Path("/Applications/fsl/bin"),
-                    Path.home() / "Applications" / "fsl" / "bin",
-                ]
-            )
+            candidates.append(Path("/Applications/fsl/bin"))
+            home = _safe_home()
+            if home is not None:
+                candidates.append(home / "Applications" / "fsl" / "bin")
     elif group == "freesurfer":
         candidates.extend(home / "bin" for home in _common_freesurfer_homes(platform_name))
     elif group == "wma":
@@ -789,25 +814,33 @@ def _common_command_dirs(group: str, platform_name: str) -> tuple[Path, ...]:
 
 def _common_checkout_roots(name: str, platform_name: str) -> tuple[Path, ...]:
     candidates: list[Path] = []
-    work_roots = [
-        Path.home(),
-        Path.home() / "src",
-        Path.home() / "workspace",
-        Path.home() / "code",
-        Path.home() / "projects",
-    ]
+    home = _safe_home()
+    work_roots: list[Path] = []
+    if home is not None:
+        work_roots.extend(
+            [
+                home,
+                home / "src",
+                home / "workspace",
+                home / "code",
+                home / "projects",
+            ]
+        )
     for root in _local_software_roots():
         work_roots.extend([root, root / "src", root / "workspace", root / "code", root / "projects"])
     if platform_name == "Darwin":
-        work_roots.extend([Path("/Applications"), Path.home() / "Applications"])
+        work_roots.append(Path("/Applications"))
+        if home is not None:
+            work_roots.append(home / "Applications")
     if platform_name == "Windows":
         work_roots.extend(
             [
                 Path("C:/Program Files"),
                 Path("C:/Program Files (x86)"),
-                Path.home() / "AppData" / "Local",
             ]
         )
+        if home is not None:
+            work_roots.append(home / "AppData" / "Local")
     unique_roots = tuple(dict.fromkeys(path.expanduser() for path in work_roots))
 
     if name == "tract_querier":
@@ -898,13 +931,24 @@ def _common_slicer_executables(platform_name: str) -> tuple[Path, ...]:
             ]
         )
     if platform_name == "Darwin":
-        candidates.extend(
-            [
-                Path("/Applications/Slicer.app/Contents/MacOS/Slicer"),
-                Path.home() / "Applications" / "Slicer.app" / "Contents" / "MacOS" / "Slicer",
-            ]
-        )
+        candidates.append(Path("/Applications/Slicer.app/Contents/MacOS/Slicer"))
+        home = _safe_home()
+        if home is not None:
+            candidates.append(home / "Applications" / "Slicer.app" / "Contents" / "MacOS" / "Slicer")
     if platform_name == "Windows":
+        local_appdata_roots: list[Path] = []
+        home = _safe_home()
+        if home is not None:
+            local_appdata_roots.append(home / "AppData" / "Local" / "slicer.org")
+        if os.environ.get("LOCALAPPDATA"):
+            local_appdata_roots.insert(0, Path(os.environ["LOCALAPPDATA"]) / "slicer.org")
+        for appdata_root in local_appdata_roots:
+            try:
+                if appdata_root.is_dir():
+                    for child in sorted(appdata_root.glob("Slicer*"), reverse=True):
+                        candidates.append(child / "Slicer.exe")
+            except OSError:
+                pass
         candidates.extend(
             [
                 Path("C:/Program Files/Slicer 5.10.0/Slicer.exe"),
@@ -1024,7 +1068,15 @@ def _model_asset_spec_path(config: EnvironmentDoctorConfig, relative: str) -> tu
 
 
 def _effective_platform_name(config: EnvironmentDoctorConfig) -> str:
-    return (config.platform_name or platform.system() or "unknown").strip() or "unknown"
+    if config.platform_name and config.platform_name.strip():
+        return config.platform_name.strip()
+    if sys.platform == "darwin":
+        return "Darwin"
+    if sys.platform == "win32":
+        return "Windows"
+    if sys.platform.startswith("linux"):
+        return "Linux"
+    return (platform.system() or "unknown").strip() or "unknown"
 
 
 def _apply_default_python(
@@ -1731,11 +1783,13 @@ def build_dependency_specs(config: EnvironmentDoctorConfig) -> tuple[DependencyS
                 python_executable=tractcloud_python,
                 python_path_entries=python_path_entries,
             )
+            # Slicer 5.6 embeds Python 3.9, where torch 2.2.2 is the latest release
+            # and supports all TractCloud APIs including torch.load(..., weights_only=True).
             _python(
                 specs,
                 target=target,
                 import_name="torch",
-                package="torch>=2.3.1",
+                package="torch>=2.0.0" if sys.version_info < (3, 10) else "torch>=2.3.1",
                 python_executable=tractcloud_python,
                 key='python:tractcloud:torch',
                 notes="Inside Slicer, prefer installing torch via the Slicer PyTorch extension.",

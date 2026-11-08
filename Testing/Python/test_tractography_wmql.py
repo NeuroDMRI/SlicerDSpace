@@ -83,9 +83,30 @@ class WMQLIntegrationTest(unittest.TestCase):
         # its cwd/output paths) compare equal under macOS's /tmp ->
         # /private/tmp symlink.
         self.tmp_path = Path(self.tmp.name).resolve()
-        self.python = self.tmp_path / "python"
-        self.python.write_text(
-            """#!/bin/sh
+        if sys.platform == "win32":
+            from shared.external_process import find_pythonslicer
+            real_py = find_pythonslicer(Path(sys.executable).parent) or Path(sys.executable)
+            py_helper = self.tmp_path / "fake_python.py"
+            py_helper.write_text(
+                "import pathlib, sys\n"
+                "if len(sys.argv) > 1 and sys.argv[1] == '-c':\n"
+                "    print('{\"tract_querier\": true, \"nibabel\": true, \"numpy\": true}')\n"
+                "    sys.exit(0)\n"
+                "out = sys.argv[sys.argv.index('-o') + 1]\n"
+                "pathlib.Path(out).parent.mkdir(parents=True, exist_ok=True)\n"
+                "for name in ('AF.left', 'AF.right', 'CST.left', 'CST.right'):\n"
+                "    pathlib.Path(f'{out}_{name}.vtk').write_text(\n"
+                "        '# vtk DataFile Version 3.0\\nWMQL unit fixture\\nASCII\\nDATASET POLYDATA\\nPOINTS 2 float\\n0 0 0 1 0 0\\nLINES 1 3\\n2 0 1\\n',\n"
+                "        encoding='utf-8',\n"
+                "    )\n",
+                encoding="utf-8",
+            )
+            self.python = self.tmp_path / "python.cmd"
+            self.python.write_text(f'@echo off\r\n"{real_py}" "{py_helper}" %*\r\n', encoding="utf-8")
+        else:
+            self.python = self.tmp_path / "python"
+            self.python.write_text(
+                """#!/bin/sh
 if [ "$1" = "-c" ]; then
   echo '{"tract_querier": true, "nibabel": true, "numpy": true}'
   exit 0
@@ -106,9 +127,9 @@ for name in AF.left AF.right CST.left CST.right; do
 done
 exit 0
 """,
-            encoding="utf-8",
-        )
-        self.python.chmod(0o755)
+                encoding="utf-8",
+            )
+            self.python.chmod(0o755)
         self.tract_querier_root = self.tmp_path / "tract_querier_root"
         scripts = self.tract_querier_root / "scripts"
         data = self.tract_querier_root / "tract_querier" / "data"

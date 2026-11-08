@@ -25,8 +25,11 @@ SOURCES = {
 
 
 def digest(path, algorithm="sha256"):
+    hasher = hashlib.new(algorithm)
     with path.open("rb") as stream:
-        return hashlib.file_digest(stream, algorithm).hexdigest()
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            hasher.update(chunk)
+    return hasher.hexdigest()
 
 
 def select_member(name, definition):

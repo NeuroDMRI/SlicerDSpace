@@ -73,6 +73,7 @@ class ACTTractographyScaffoldTest(unittest.TestCase):
             self.assertTrue(manifest["act_readiness"]["standard_act_ready"])
             self.assertEqual(manifest["commands"], [])
 
+    @unittest.skipIf(os.name == "nt", "Uses POSIX /bin/sh symlink fixtures")
     def test_execute_true_runs_fake_mrtrix_backend_when_ready(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -55,8 +55,11 @@ def prepare_surface_license(owner, result):
     config = owner._environment_dependency_path_kwargs()
     explicit = config.get('postprocess_license_file')
     from shared.surface_runtime import resolve_surface_runtime
-    _, runtime_home = resolve_surface_runtime(config.get('postprocess_runtime'),
-                                               config.get('postprocess_freesurfer_home'))
+    try:
+        _, runtime_home = resolve_surface_runtime(config.get('postprocess_runtime'),
+                                                   config.get('postprocess_freesurfer_home'))
+    except ValueError:
+        runtime_home = None
     path = resolve_surface_license(explicit, freesurfer_home=runtime_home)
     missing = any(item.key == 'surface_postprocess_license' and item.status != 'available'
                   for item in result.statuses)

@@ -16,7 +16,7 @@ from typing import Iterable, Mapping, Optional
 def resolve_external_command(name: str, bin_dir: Optional[Path] = None, *, require_executable=False) -> Optional[str]:
     """Prefer configured binaries, including Windows .exe, without shell lookup."""
     if bin_dir is not None:
-        names = (name + '.exe', name) if sys.platform == 'win32' and not name.lower().endswith('.exe') else (name,)
+        names = (name + '.exe', name + '.cmd', name + '.bat', name) if sys.platform == 'win32' and not Path(name).suffix else (name,)
         for basename in names:
             candidate = Path(bin_dir).expanduser() / basename
             if candidate.is_file() and (not require_executable or os.access(candidate, os.X_OK)):
@@ -182,12 +182,14 @@ def external_python_environment(
 
     prepend = [Path(path).expanduser().as_posix() for path in (path_prepend or [])]
     for key in ("PATH", "LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH", "DYLD_FALLBACK_LIBRARY_PATH"):
-        parts = _path_parts(env.get(key))
+        sep = os.pathsep if key == "PATH" else ":"
+        raw_val = env.get(key)
+        parts = [part for part in (raw_val or "").split(sep) if part] if key != "PATH" else _path_parts(raw_val)
         if strip_slicer_paths:
             parts = [part for part in parts if not _looks_like_slicer_runtime_path(part)]
         if key == "PATH":
             parts = prepend + parts
-        env[key] = os.pathsep.join(_dedupe_paths(parts))
+        env[key] = sep.join(_dedupe_paths(parts))
 
     if extra_env:
         env.update({str(key): str(value) for key, value in extra_env.items() if value is not None})

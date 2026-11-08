@@ -20,8 +20,11 @@ def audit(manifest_path, source_coverage=False):
     labels = np.asarray(atlas.dataobj)
     names = official_query_names()
     def digest(path):
+        hasher = hashlib.sha256()
         with Path(path).open('rb') as stream:
-            return hashlib.file_digest(stream, 'sha256').hexdigest()
+            for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+                hasher.update(chunk)
+        return hasher.hexdigest()
     record = {
         'schema': 'wmql_query_coverage.v1',
         'query_sha256': hashlib.sha256((OFFICIAL_DIR / 'freesurfer_queries.qry').read_bytes()).hexdigest(),

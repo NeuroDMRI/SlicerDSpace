@@ -177,6 +177,13 @@ class ConnectomePipelineTest(unittest.TestCase):
                 encoding="utf-8",
             )
             fake.chmod(0o755)
+            if os.name == "nt":
+                (bin_dir / "tck2connectome.cmd").write_text(
+                    "@echo off\r\n"
+                    "(echo 1,2,3)> \"%~3\"\r\n"
+                    "exit /b 0\r\n",
+                    encoding="utf-8",
+                )
             tractography = root / "streamlines.tck"
             parcellation = root / "wmparc.nii.gz"
             tractography.write_text("tck", encoding="utf-8")
@@ -231,6 +238,13 @@ class ConnectomePipelineTest(unittest.TestCase):
                 encoding="utf-8",
             )
             fake.chmod(0o755)
+            if os.name == "nt":
+                (bin_dir / "tck2connectome.cmd").write_text(
+                    "@echo off\r\n"
+                    "(echo 1.5,0& echo 0,2.5)> \"%~3\"\r\n"
+                    "echo %* | findstr /C:\"-tck_weights_in\" >nul && exit /b 0 || exit /b 2\r\n",
+                    encoding="utf-8",
+                )
             tractography = root / "streamlines.tck"
             parcellation = root / "wmparc.nii.gz"
             weights = root / "sift2.txt"
@@ -287,6 +301,13 @@ class ConnectomePipelineTest(unittest.TestCase):
                 encoding="utf-8",
             )
             fake.chmod(0o755)
+            if os.name == "nt":
+                (bin_dir / "tck2connectome.cmd").write_text(
+                    "@echo off\r\n"
+                    "(echo 0,0,0,0,0& echo 0,2,0,0,7& echo 0,0,0,0,0& echo 0,0,0,0,0& echo 0,0,0,0,3)> \"%~3\"\r\n"
+                    "exit /b 0\r\n",
+                    encoding="utf-8",
+                )
             tractography = root / "streamlines.tck"
             tractography.write_text("tck", encoding="utf-8")
             labels = np.zeros((6, 6, 6), dtype=np.int16)

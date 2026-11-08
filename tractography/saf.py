@@ -294,10 +294,22 @@ def _resolved_mrtrix_command(config: SAFConfig, command: str) -> Optional[str]:
     return _resolve_command(command, bin_dir=bin_dir)
 
 
-def _run_mrtrix_command(args: list[str], *, log: Optional[Callable[[str], None]] = None) -> subprocess.CompletedProcess[str]:
+def _run_mrtrix_command(
+    args: list[str],
+    *,
+    config: Optional[SAFConfig] = None,
+    log: Optional[Callable[[str], None]] = None,
+) -> subprocess.CompletedProcess[str]:
     _emit("[SAF] " + " ".join(args), log)
+    env = startup_environment()
+    if sys.platform == "win32" and not env.get("HOME"):
+        env["HOME"] = env.get("USERPROFILE") or str(Path.home())
+    if config is not None:
+        bin_dir = _configured_mrtrix_bin_dir(config.mrtrix_bin_dir)
+        if bin_dir is not None:
+            env["PATH"] = os.pathsep.join(filter(None, (str(bin_dir), env.get("PATH"))))
     return subprocess.run(
-        args, check=True, capture_output=True, env=startup_environment(), **text_subprocess_kwargs()
+        args, check=True, capture_output=True, env=env, **text_subprocess_kwargs()
     )
 
 
@@ -306,7 +318,7 @@ def _count_tck_streamlines(tck_path: Path, *, config: SAFConfig, log: Optional[C
     if tckstats is None:
         return None, "mrtrix:tckstats not found"
     try:
-        completed = _run_mrtrix_command([tckstats, "-output", "count", tck_path.as_posix()], log=log)
+        completed = _run_mrtrix_command([tckstats, "-output", "count", tck_path.as_posix()], config=config, log=log)
         return int(completed.stdout.strip().split()[0]), None
     except Exception as exc:
         return None, str(exc)
@@ -323,7 +335,7 @@ def _export_tck_to_vtk(
     if tckconvert is None:
         return False, "mrtrix:tckconvert not found"
     try:
-        _run_mrtrix_command([tckconvert, tck_path.as_posix(), vtk_path.as_posix(), "-force"], log=log)
+        _run_mrtrix_command([tckconvert, tck_path.as_posix(), vtk_path.as_posix(), "-force"], config=config, log=log)
         return vtk_path.is_file(), None if vtk_path.is_file() else "tckconvert finished without VTK output"
     except Exception as exc:
         return False, str(exc)

@@ -478,39 +478,42 @@ class PairTests(unittest.TestCase):
         try:
             self.assertTrue(workflows.reap_group(child.pid))
             child.wait(timeout=10)
-            self.assertEqual(child.returncode, -9)
+            if sys.platform != 'win32':
+                self.assertEqual(child.returncode, -9)
+            else:
+                self.assertNotEqual(child.returncode, 0)
         finally:
             if child.poll() is None:
                 child.kill()
         self.assertFalse(workflows.reap_group(child.pid))
 
     def test_hf3_reap_skips_a_process_with_another_start_time(self):
-        with patch.object(workflows, 'process_start_ticks', return_value=222), patch('os.killpg') as killpg:
+        with patch.object(workflows, 'process_start_ticks', return_value=222), patch('os.killpg', create=True) as killpg:
             self.assertFalse(workflows.reap_group(4242, start_ticks=111))
         killpg.assert_not_called()
 
     def test_hf3_reap_signals_the_group_when_the_start_time_matches(self):
-        with patch.object(workflows, 'process_start_ticks', return_value=111), patch('os.killpg') as killpg:
+        with patch.object(workflows, 'process_start_ticks', return_value=111), patch('os.killpg', create=True) as killpg:
             self.assertTrue(workflows.reap_group(4242, start_ticks=111))
         self.assertEqual(killpg.call_count, 2)           # existence probe, then SIGKILL
 
     def test_hf3_reap_without_proc_keeps_the_old_behaviour(self):
-        with patch.object(workflows, 'process_start_ticks', return_value=None), patch('os.killpg') as killpg:
+        with patch.object(workflows, 'process_start_ticks', return_value=None), patch('os.killpg', create=True) as killpg:
             self.assertTrue(workflows.reap_group(4242, start_ticks=111))
         self.assertEqual(killpg.call_count, 2)
 
     def test_hf3b_require_match_skips_when_the_start_time_is_unreadable(self):
-        with patch.object(workflows, 'process_start_ticks', return_value=None), patch('os.killpg') as killpg:
+        with patch.object(workflows, 'process_start_ticks', return_value=None), patch('os.killpg', create=True) as killpg:
             self.assertFalse(workflows.reap_group(4242, start_ticks=111, require_match=True))
         killpg.assert_not_called()
 
     def test_hf3b_require_match_skips_when_the_start_time_differs(self):
-        with patch.object(workflows, 'process_start_ticks', return_value=222), patch('os.killpg') as killpg:
+        with patch.object(workflows, 'process_start_ticks', return_value=222), patch('os.killpg', create=True) as killpg:
             self.assertFalse(workflows.reap_group(4242, start_ticks=111, require_match=True))
         killpg.assert_not_called()
 
     def test_hf3b_require_match_kills_when_the_start_time_matches(self):
-        with patch.object(workflows, 'process_start_ticks', return_value=111), patch('os.killpg') as killpg:
+        with patch.object(workflows, 'process_start_ticks', return_value=111), patch('os.killpg', create=True) as killpg:
             self.assertTrue(workflows.reap_group(4242, start_ticks=111, require_match=True))
         self.assertEqual(killpg.call_count, 2)
 
@@ -884,9 +887,26 @@ class RunTests(unittest.TestCase):
         return directory.name
 
     def make_campaign(self, base, policy):
-        launcher = base / 'launcher.sh'
-        launcher.write_text(FAKE_LAUNCHER)
-        launcher.chmod(0o755)
+        if sys.platform == 'win32':
+            py_launcher = base / 'launcher.py'
+            py_launcher.write_text(
+                "import os, pathlib, sys\n"
+                "p = pathlib.Path(os.environ['FAKE_ARGV'])\n"
+                "c = os.environ.get('CUDA_VISIBLE_DEVICES', '')\n"
+                "t = os.environ.get('OMP_NUM_THREADS', '')\n"
+                "p.write_text(' '.join(sys.argv[1:]) + '\\n' + f'{c}|{t}\\n', encoding='utf-8')\n"
+                "if '--manifest' in sys.argv:\n"
+                "    m = pathlib.Path(sys.argv[sys.argv.index('--manifest') + 1])\n"
+                "    m.write_text('{\"results\": [], \"not_launched\": []}\\n', encoding='utf-8')\n"
+                "sys.exit(2)\n",
+                encoding='utf-8',
+            )
+            launcher = base / 'launcher.cmd'
+            launcher.write_text(f'@echo off\r\n"{sys.executable}" "{py_launcher}" %*\r\n', encoding='utf-8')
+        else:
+            launcher = base / 'launcher.sh'
+            launcher.write_text(FAKE_LAUNCHER)
+            launcher.chmod(0o755)
         snapshot = base / 'snapshot'
         (snapshot / 'scripts').mkdir(parents=True)
         (snapshot / 'scripts/benchmark_cohort_workflows.py').write_text('x')

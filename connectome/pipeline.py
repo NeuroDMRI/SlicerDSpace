@@ -7,6 +7,7 @@ from shared.cohort_schedule import scheduled_stage
 import csv
 import json
 import math
+import os
 import subprocess
 import time
 from collections import Counter
@@ -1153,7 +1154,14 @@ def run_connectome(config: ConnectomeConfig, *, log: Optional[Callable[[str], No
                     manifest["outputs"]["dense_matrix"] = mrtrix_matrix_path.as_posix()  # type: ignore[index]
                 command = build_tck2connectome_command(command_config, mrtrix_matrix_path)
                 manifest["command"] = list(command)
-                completed = subprocess.run(command, check=True, env=startup_environment())
+                command_env = startup_environment()
+                if os.name == "nt" and not command_env.get("HOME"):
+                    command_env["HOME"] = command_env.get("USERPROFILE") or str(Path.home())
+                if config.mrtrix_bin_dir is not None:
+                    command_env["PATH"] = os.pathsep.join(
+                        filter(None, (str(config.mrtrix_bin_dir.expanduser().resolve()), command_env.get("PATH")))
+                    )
+                completed = subprocess.run(command, check=True, env=command_env)
                 return_code = completed.returncode
                 try:
                     _write_nodes_table(nodes_path, node_labels, label_names=label_names)

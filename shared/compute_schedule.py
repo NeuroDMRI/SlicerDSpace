@@ -1,5 +1,7 @@
 """Resource-bounded independent subprocesses; no MRML/Qt work in workers."""
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime, timezone

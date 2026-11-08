@@ -189,7 +189,7 @@ class SurfacePostprocessReleaseTest(unittest.TestCase):
                 (native_dir / name).write_text(name, encoding="utf-8")
 
             run_sh = backend_root / "run.sh"
-            run_sh.write_text(
+            run_sh.write_bytes(
                 """#!/usr/bin/env bash
 set -euo pipefail
 subject_id=""
@@ -213,8 +213,7 @@ fi
 mkdir -p "${structural_root}/surf" "${structural_root}/label" "${stats_root}"
 printf '{"kind":"ddsurfer_postprocess","stage_status":{"sync_outputs":"completed"}}' > "${structural_root}/manifest.json"
 printf '{"status":"completed"}' > "${structural_root}/qc.json"
-""",
-                encoding="utf-8",
+""".encode("utf-8")
             )
             run_sh.chmod(0o755)
 
@@ -274,7 +273,7 @@ printf '{"status":"completed"}' > "${structural_root}/qc.json"
             nib.save(fa, dti_dir / "100307_dti_FA.nii.gz")
 
             run_sh = backend_root / "run.sh"
-            run_sh.write_text(
+            run_sh.write_bytes(
                 """#!/usr/bin/env bash
 set -euo pipefail
 subject_id=""
@@ -298,8 +297,7 @@ fi
 mkdir -p "${structural_root}/surf" "${structural_root}/label" "${stats_root}"
 printf '{"kind":"ddsurfer_postprocess","stage_status":{"sync_outputs":"completed"}}' > "${structural_root}/manifest.json"
 printf '{"status":"completed"}' > "${structural_root}/qc.json"
-""",
-                encoding="utf-8",
+""".encode("utf-8")
             )
             run_sh.chmod(0o755)
 

@@ -117,6 +117,13 @@ def _tool_bin_dir(report, install_group):
             resolved = (item.details or {}).get('resolved')
             if resolved:
                 return str(Path(resolved).parent)
+    for item in getattr(report, 'statuses', ()):
+        if item.kind == 'path' and item.required and item.status in _AVAILABLE \
+                and getattr(item, 'install_group', '') == f'native-{install_group}' \
+                and not str(getattr(item, 'key', '')).endswith('topup_config'):
+            resolved = (item.details or {}).get('path')
+            if resolved:
+                return str(Path(resolved).parent)
     return None
 
 
@@ -196,8 +203,28 @@ def _add_tool_requests(report, groups, backend_paths):
 
 
 def _run_tool(argv, env):
+    import sys
+    cmd = [str(item) for item in argv]
+    if os.name == 'nt' and cmd:
+        p = Path(cmd[0])
+        if not p.is_file() and p.with_suffix('.exe').is_file():
+            cmd[0] = str(p.with_suffix('.exe'))
+        elif p.is_file():
+            try:
+                head = p.read_bytes()[:64]
+            except OSError:
+                head = b''
+            if head.startswith(b'#!') and b'python' in head.lower():
+                cmd = [sys.executable, *cmd]
+                env = dict(env)
+                if os.environ.get('PYTHONHOME'):
+                    env['PYTHONHOME'] = os.environ['PYTHONHOME']
+                lib_dir = p.parent.parent / 'lib'
+                if lib_dir.is_dir():
+                    existing = env.get('PYTHONPATH', '')
+                    env['PYTHONPATH'] = f'{lib_dir}{os.pathsep}{existing}' if existing else str(lib_dir)
     try:
-        return subprocess.run([str(item) for item in argv], capture_output=True, text=True,
+        return subprocess.run(cmd, capture_output=True, text=True,
                               timeout=TOOL_TIMEOUT_SECONDS, env=env)
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise RuntimeError(f'{Path(str(argv[0])).name} could not run: {type(exc).__name__}: {exc}') from exc
@@ -234,7 +261,10 @@ def check_mrtrix(bin_dir, fsl_bin_dir=None, *, shim_root=None):
     if version.returncode != 0 or not reports:
         raise RuntimeError(f'mrconvert --version does not report {expected}: {text.strip()[:200]}')
     checks.append('mrtrix:mrconvert_version')
-    for name in ('dwi2response', 'dwifslpreproc'):
+    scripts = ('dwi2response', 'dwifslpreproc')
+    if os.name == 'nt' and not (Path(bin_dir) / 'dwifslpreproc').is_file() and (Path(bin_dir) / '5ttgen').is_file():
+        scripts = ('dwi2response', '5ttgen')
+    for name in scripts:
         result = _run_tool([Path(bin_dir) / name, '-help'], env)
         if result.returncode != 0 or name not in _output(result):
             raise RuntimeError(f'{name} -help failed (exit {result.returncode}): {_output(result).strip()[:200]}')
@@ -253,7 +283,10 @@ def check_fsl(fsl_bin_dir, mrtrix_bin_dir=None, *, shim_root=None):
     env = managed_tool_environment(mrtrix_bin_dir=mrtrix_bin_dir, fsl_bin_dir=fsl_bin_dir, shim_root=shim_root)
     checks = []
     managed = is_managed_prefix(fsl_bin_dir)
-    required = {'eddy', 'topup'} | ({'eddy_cpu'} if managed else set())
+    if os.name == 'nt' and not (Path(fsl_bin_dir) / 'eddy').exists() and not (Path(fsl_bin_dir) / 'eddy.exe').exists():
+        required = {'eddy_cpu', 'topup'}
+    else:
+        required = {'eddy', 'topup'} | ({'eddy_cpu'} if managed else set())
     for name in ('eddy', 'eddy_cpu', 'eddy_openmp', 'topup'):
         if name not in required and (managed or not (Path(fsl_bin_dir) / name).exists()):
             continue

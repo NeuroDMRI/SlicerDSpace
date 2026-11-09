@@ -4,11 +4,12 @@ from datetime import datetime
 import json
 from pathlib import Path
 
+from shared.environment_check import check_config, result_from_dict
+from shared.ui_selected_setup import _text
+from shared.ui_setup_jobs import start_setup_job
+
 
 def start_environment_check(owner, on_complete=None, *, on_failure=None):
-    from shared.ui_selected_setup import _text
-    from shared.ui_setup_jobs import start_setup_job
-    from shared.environment_check import check_config, result_from_dict
     import slicer
 
     if owner._pipelineActive or getattr(owner, '_setupJob', None) or getattr(owner, '_selectedSetupActive', False):

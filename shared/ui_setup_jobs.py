@@ -163,9 +163,9 @@ class SetupJob:
         self.log.write(f"\nSTATUS: {status}\n")
         self.log.close()
         self.dialog.close()
-        self.owner._setupJob = None
         self.owner._setPipelineActive(False)
         self.owner.appendLog(f"[Setup] {status}. Log: {self.log_path}")
+        self.owner._setupJob = None
         try:
             self.on_done(status, self.tail, self.log_path)
         finally:

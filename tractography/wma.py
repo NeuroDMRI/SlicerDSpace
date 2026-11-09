@@ -866,6 +866,13 @@ def _run_native_org(config, staging, wma_root, slicer, python, env, manifest, st
                     "--author-script", str(wma_root / "bin" / script),
                     "--native-nonrigid", "--", *args,
                 ]
+            elif stage in ("registration-rigid_affine_fast", "registration-affine") and config.registration_preprocess_cache:
+                manifest["registration_preprocess_cache"]["installed"] = True
+                command = [
+                    str(python), "-u", str(scripts / "run_wma_registration.py"),
+                    "--author-script", str(wma_root / "bin" / script),
+                    "--report-dir", str(stdout_log.parent), "--", *args,
+                ]
             else:
                 command = [str(python), "-u", str(wma_root / "bin" / script), *args]
             record = {"stage": stage, "command": command}

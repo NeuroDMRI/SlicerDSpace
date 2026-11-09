@@ -27,7 +27,11 @@ def main(argv=None):
     parser.add_argument('--output', required=True, type=Path)
     args = parser.parse_args(argv)
     from shared.native_runtimes import _extract, _sha256, host_platform
-    from scripts.native.prepare_mrtrix_candidate import WINDOWS_COMMANDS, WINDOWS_RESPONSE_SCRIPT
+    from scripts.native.prepare_mrtrix_candidate import (
+        WINDOWS_ACT_SCRIPT,
+        WINDOWS_COMMANDS,
+        WINDOWS_RESPONSE_SCRIPT,
+    )
 
     record = json.loads(args.record.read_text())
     actual_system, actual_machine = host_platform()
@@ -72,13 +76,15 @@ def main(argv=None):
             child_env = {**environment, 'PATH': str(executable.parent) + os.pathsep + base_path}
             invocation = [str(executable), '-version']
             output_key = 'version_output'
-            if is_windows and command == WINDOWS_RESPONSE_SCRIPT:
+            if command in (WINDOWS_RESPONSE_SCRIPT, WINDOWS_ACT_SCRIPT):
                 child_env['PYTHONPATH'] = str(root / 'lib')
-                if os.environ.get('PYTHONHOME'):
-                    child_env['PYTHONHOME'] = os.environ['PYTHONHOME']
+                python_home = os.environ.get('PYTHONHOME')
+                if python_home and (Path(python_home) / 'Lib' / 'encodings').is_dir():
+                    child_env['PYTHONHOME'] = python_home
                 # Ask the pinned upstream script to print the specific algorithm's
                 # usage. This loads its Python modules without a help pager.
-                invocation = [sys.executable, '-B', '-S', str(executable), 'dhollander', '__print_full_usage__']
+                algorithm = 'dhollander' if command == WINDOWS_RESPONSE_SCRIPT else 'freesurfer'
+                invocation = [sys.executable, '-B', '-S', str(executable), algorithm, '__print_full_usage__']
                 output_key = 'output'
             completed = subprocess.run(invocation, cwd=root, env=child_env,
                                        capture_output=True, text=True, errors='replace', timeout=45)

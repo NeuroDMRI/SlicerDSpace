@@ -24,7 +24,7 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Mapping, Optional
-from shared.external_process import resolve_external_command
+from shared.external_process import managed_tool_environment, resolve_external_command
 
 ACT_PREP_VERSION = 3
 ACT_PREP_METHOD = "ddseg_partial_volume_ddparcel_tissue_priors_5tt2gmwmi_v3"
@@ -229,10 +229,20 @@ def _save_like(img, data, path: Path) -> None:
     nib.save(out, path.as_posix())
 
 
-def _run_mrtrix(command: list[str], log: Optional[Callable[[str], None]]) -> dict[str, object]:
+def _run_mrtrix(
+    command: list[str],
+    log: Optional[Callable[[str], None]],
+    *,
+    mrtrix_bin_dir: Optional[Path] = None,
+) -> dict[str, object]:
     if log:
         log(f"[ACT Prep] Running: {' '.join(command)}")
-    completed = subprocess.run(command, capture_output=True, text=True)
+    completed = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        env=managed_tool_environment(mrtrix_bin_dir=mrtrix_bin_dir),
+    )
     record = {
         "command": command,
         "returncode": completed.returncode,
@@ -353,8 +363,16 @@ def run_act_prep(config: ACTPrepConfig, *, log: Optional[Callable[[str], None]] 
                 if log:
                     log(f"[ACT Prep] WARNING: {warning}")
             _save_like(img, five_tt, five_tt_path)
-            check = _run_mrtrix([str(commands["5ttcheck"]), five_tt_path.as_posix()], log)
-            gmwmi = _run_mrtrix([str(commands["5tt2gmwmi"]), five_tt_path.as_posix(), gmwmi_path.as_posix(), "-force"], log)
+            check = _run_mrtrix(
+                [str(commands["5ttcheck"]), five_tt_path.as_posix()],
+                log,
+                mrtrix_bin_dir=config.mrtrix_bin_dir,
+            )
+            gmwmi = _run_mrtrix(
+                [str(commands["5tt2gmwmi"]), five_tt_path.as_posix(), gmwmi_path.as_posix(), "-force"],
+                log,
+                mrtrix_bin_dir=config.mrtrix_bin_dir,
+            )
             manifest["commands"] = [check["command"], gmwmi["command"]]
             qc.update(
                 status="completed",

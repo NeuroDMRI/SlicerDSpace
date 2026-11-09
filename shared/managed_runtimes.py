@@ -361,14 +361,31 @@ def _run(argv, extra_env=None):
 
 @contextmanager
 def setup_lock(root):
-    import fcntl
     root.mkdir(parents=True, exist_ok=True)
-    with (root / ".setup.lock").open("a") as stream:
-        try:
-            fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as exc:
-            raise RuntimeError("Another managed runtime installation is active") from exc
-        yield
+    if os.name == "nt":
+        import msvcrt
+        with (root / ".setup.lock").open("a+b") as stream:
+            try:
+                stream.seek(0)
+                stream.write(b"0")
+                stream.flush()
+                stream.seek(0)
+                msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+            except OSError as exc:
+                raise RuntimeError("Another managed runtime installation is active") from exc
+            try:
+                yield
+            finally:
+                stream.seek(0)
+                msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+    else:
+        import fcntl
+        with (root / ".setup.lock").open("a") as stream:
+            try:
+                fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                raise RuntimeError("Another managed runtime installation is active") from exc
+            yield
 
 
 def _path_conda_platform(executable):

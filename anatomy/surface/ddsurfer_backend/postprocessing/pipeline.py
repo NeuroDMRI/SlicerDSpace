@@ -122,17 +122,19 @@ def run_locked(args):
     atomic_json(signature_path, signature)
     average_link = root / 'fsaverage'
     if average_link.exists() or average_link.is_symlink():
-        if average_link.resolve() != fsaverage.resolve():
+        if average_link.is_symlink() and average_link.resolve() != fsaverage.resolve():
             raise ValueError('SUBJECTS_DIR/fsaverage points to an unexpected template')
     else:
         try:
             average_link.symlink_to(fsaverage, target_is_directory=True)
         except FileExistsError:
-            if average_link.resolve() != fsaverage.resolve():
+            if average_link.is_symlink() and average_link.resolve() != fsaverage.resolve():
                 raise ValueError('SUBJECTS_DIR/fsaverage points to an unexpected template')
+        except OSError:
+            shutil.copytree(fsaverage, average_link, dirs_exist_ok=True)
     workers = min(len(hemis), args.threads, 1 if args.serial else 2)
     per_hemi_threads = max(1, args.threads // workers)
-    env = dict(os.environ, FREESURFER_HOME=str(home), SUBJECTS_DIR=str(root), FS_LICENSE=str(license_file.resolve()),
+    env = dict(os.environ, FREESURFER_HOME=home.as_posix(), SUBJECTS_DIR=root.as_posix(), FS_LICENSE=license_file.resolve().as_posix(),
                PATH=str(home / 'bin') + os.pathsep + os.environ.get('PATH', ''),
                OMP_NUM_THREADS=str(per_hemi_threads), ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS=str(per_hemi_threads),
                OPENBLAS_NUM_THREADS='1')
@@ -140,7 +142,11 @@ def run_locked(args):
         # Avoid private libraries and commands from an unrelated full installation.
         for name in ('LD_LIBRARY_PATH', 'LD_PRELOAD', 'LD_AUDIT'):
             env.pop(name, None)
-        env['PATH'] = str(home / 'bin') + os.pathsep + os.defpath
+        if os.name == 'nt':
+            sys_root = Path(os.environ.get('SystemRoot', r'C:\Windows'))
+            env['PATH'] = os.pathsep.join([str(home / 'bin'), str(sys_root / 'System32'), str(sys_root)])
+        else:
+            env['PATH'] = str(home / 'bin') + os.pathsep + os.defpath
     log_path = subject_dir / 'logs/postprocess.log'
     completed_path = subject_dir / 'logs/completed.json'
     done = json.loads(completed_path.read_text()) if completed_path.exists() else {}
@@ -153,25 +159,34 @@ def run_locked(args):
     qc = dict(coordinate_space='native_scanner_RAS_mm', surface_storage='FreeSurfer_surface_RAS_mm',
               reference_content=signature['reference_content'], hemispheres={})
 
+    def _resolve_bin(name):
+        if os.name == 'nt' and (home / 'bin' / f'{name}.exe').is_file():
+            return home / 'bin' / f'{name}.exe'
+        return home / 'bin' / str(name)
+
+    def _arg_str(v):
+        return v.as_posix() if isinstance(v, Path) else str(v)
+
     def run_command(key, command):
         command = list(command)
         if environment['minimal_runtime'] and command[0] != sys.executable:
-            command[0] = home / 'bin' / command[0]
+            command[0] = _resolve_bin(command[0])
+        argv = [str(command[0]), *(_arg_str(v) for v in command[1:])]
         stage_log = subject_dir / 'logs' / f'{key.split(".")[0]}.log'
         with stage_log.open('a') as log:
-            message = f'[run] {key}: {shlex.join([str(v) for v in command])}'
+            message = f'[run] {key}: {shlex.join(argv)}'
             print(message, flush=True)
             log.write(message + '\n'); log.flush()
             with state_lock, log_path.open('a') as summary:
                 summary.write(message + '\n')
             try:
-                subprocess.run([str(v) for v in command], check=True, env=env, cwd=subject_dir, stdout=log, stderr=log)
+                subprocess.run(argv, check=True, env=env, cwd=subject_dir, stdout=log, stderr=log)
             except subprocess.CalledProcessError as error:
                 raise RuntimeError(f'{key} failed (exit {error.returncode}); see {stage_log}') from error
 
     def execute(key, command, outputs, inputs):
         outputs = [Path(path) for path in outputs]
-        executable = Path(sys.executable) if command[0] == sys.executable else home / 'bin' / command[0]
+        executable = Path(sys.executable) if command[0] == sys.executable else _resolve_bin(command[0])
         implementation = [executable, Path(__file__)]
         if command[0] == sys.executable:
             implementation.append(Path(command[1]))
@@ -346,7 +361,7 @@ def run_locked(args):
         python_stage(f'{hemi}.fsaverage',
                      [surf / f'{hemi}.{field}' for field in FIELDS] +
                      [surf / f'{hemi}.sphere.reg', fsaverage / 'surf' / f'{hemi}.sphere.reg',
-                      home / 'bin/mri_surf2surf', ROOT / 'postprocessing/overlays.py'],
+                      _resolve_bin('mri_surf2surf'), ROOT / 'postprocessing/overlays.py'],
                      [subject_dir / 'fsaverage' / f'{hemi}.{field}.mgh' for field in FIELDS], transfer_overlays)
         thickness = (measurements[1]['thickness'] if measurements is not None
                      else nib.freesurfer.read_morph_data(str(surf / f'{hemi}.thickness')))

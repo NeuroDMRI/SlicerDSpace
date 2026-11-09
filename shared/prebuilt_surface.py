@@ -64,7 +64,7 @@ def prepare(*, prefix=None, asset_root=None, execute=False, accept_terms=False, 
             raise ValueError('Prebuilt runtime recipe or activation policy differs')
         checked_commands = []
         for relative in sorted(manifest['files']):
-            if not relative.startswith('bin/'):
+            if not relative.startswith('bin/') or relative.lower().endswith('.dll'):
                 continue
             command = subprocess.run([str(path / relative), '--version'], env=backend_environment(),
                                      capture_output=True, text=True, timeout=30)

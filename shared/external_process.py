@@ -89,6 +89,8 @@ def startup_environment(extra_env: Optional[Mapping[str, str]] = None) -> dict[s
 
     if extra_env:
         env.update({str(key): str(value) for key, value in extra_env.items() if value is not None})
+    if sys.platform == "win32" and not env.get("HOME"):
+        env["HOME"] = env.get("USERPROFILE") or str(Path.home())
     return env
 
 
@@ -193,6 +195,8 @@ def external_python_environment(
 
     if extra_env:
         env.update({str(key): str(value) for key, value in extra_env.items() if value is not None})
+    if sys.platform == "win32" and not env.get("HOME"):
+        env["HOME"] = env.get("USERPROFILE") or str(Path.home())
     return env
 
 

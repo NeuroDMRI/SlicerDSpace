@@ -110,15 +110,29 @@ class SetupDeliveryTests(unittest.TestCase):
             self.assertFalse(install_plan(('mrtrix',))['platform_supported'])
 
     def test_unpublished_missing_surface_bundle_is_not_offered_as_downloadable(self):
+        from shared.prebuilt_surface import bundle_for_platform
+        unpublished = dict(bundle_for_platform('Linux', 'x86_64'), published=False)
         item = SimpleNamespace(key='surface_postprocess_runtime', label='Surface components', install_group='surface-runtime',
             kind='setting', required=True, status='missing', targets=('surface_postprocess',),
             install_hint='Use a verified offline bundle', details={'build_required': True})
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory() as tmp, patch('shared.prebuilt_surface.bundle_for_platform', return_value=unpublished):
             plan = build_setup_plan(SimpleNamespace(statuses=[item]), system='Linux', machine='x86_64',
                                     backend_paths={'model_assets_dir': tmp})
         self.assertFalse(plan['surface_prebuilt_required'])
         self.assertTrue(plan['surface_bundle_unavailable'])
         self.assertEqual(plan['manual_items'][0]['key'], 'surface_postprocess_runtime')
+
+    def test_published_surface_bundle_is_offered_as_downloadable(self):
+        item = SimpleNamespace(key='surface_postprocess_runtime', label='Surface components', install_group='surface-runtime',
+            kind='setting', required=True, status='missing', targets=('surface_postprocess',),
+            install_hint='Use a verified offline bundle', details={'build_required': True})
+        for system_name in ('Linux', 'Windows'):
+            with tempfile.TemporaryDirectory() as tmp:
+                plan = build_setup_plan(SimpleNamespace(statuses=[item]), system=system_name, machine='x86_64',
+                                        backend_paths={'model_assets_dir': tmp})
+            self.assertTrue(plan['surface_prebuilt_required'])
+            self.assertFalse(plan['surface_bundle_unavailable'])
+            self.assertEqual(plan['manual_items'], [])
 
     def missing(self, key, group, package=None):
         return SimpleNamespace(key=key, label=key, install_group=group, kind='python' if package else 'setting',
@@ -202,8 +216,10 @@ class PrebuiltSurfaceTests(unittest.TestCase):
             self.assertFalse(assets.exists())
 
     def test_unpublished_archive_never_downloads_or_builds_sources(self):
-        from shared.prebuilt_surface import prepare
-        with tempfile.TemporaryDirectory() as tmp, patch('urllib.request.urlopen') as download:
+        from shared.prebuilt_surface import prepare, bundle_for_platform
+        unpublished = dict(bundle_for_platform('Linux', 'x86_64'), published=False)
+        with tempfile.TemporaryDirectory() as tmp, patch('urllib.request.urlopen') as download, \
+                patch('shared.prebuilt_surface.bundle_for_platform', return_value=unpublished):
             with self.assertRaisesRegex(FileNotFoundError, 'offline archive'):
                 prepare(prefix=Path(tmp) / 'runtime', asset_root=Path(tmp) / 'assets', execute=True, accept_terms=True)
             self.assertFalse((Path(tmp) / 'runtime').exists())

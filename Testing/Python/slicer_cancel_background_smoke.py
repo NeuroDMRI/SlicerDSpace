@@ -4,14 +4,16 @@ from __future__ import annotations
 
 import json
 import os
+import sys
+import tempfile
 from pathlib import Path
 
 import qt
 import slicer
 
 
-SUBJECT_ROOT = Path("/data/chengjin/SlicerDDSurfer-test/100307")
-OUTPUT_ROOT = Path(os.environ.get("SLICERDSPACE_SMOKE_ROOT", "/tmp")) / "slicerdsurfer-cancel-smoke-output"
+SUBJECT_ROOT = Path(os.environ.get("SLICERDSPACE_SMOKE_SUBJECT_ROOT", "/data/chengjin/SlicerDDSurfer-test/100307"))
+OUTPUT_ROOT = Path(os.environ.get("SLICERDSPACE_SMOKE_ROOT", tempfile.gettempdir())) / "slicerdsurfer-cancel-smoke-output"
 RUN_NAME = "cancel_smoke"
 
 
@@ -31,10 +33,12 @@ def _run() -> None:
             f"SLICERDSPACE_CANCEL_INFO={message}",
             flush=True,
         )
-        widget._slicer_launcher_program = lambda: "/bin/bash"
         widget._build_background_cli_args = lambda common_run_kwargs, external_paths: [
+            "--launch",
+            "PythonSlicer",
+            "-u",
             "-c",
-            "echo '[Orchestrator] Running Microstructure DTI'; sleep 30",
+            "import time; print('[Orchestrator] Running Microstructure DTI', flush=True); time.sleep(30)",
         ]
         widget._cancelSmokeSawRunning = False
         common_run_kwargs = {

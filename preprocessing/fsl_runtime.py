@@ -65,6 +65,9 @@ def _candidate_dirs(configured: Path | str | None, tool: str, system: str) -> tu
 
     candidates = [Path(os.environ[key]).expanduser() for key in settings if os.environ.get(key)]
     candidates.extend(Path(os.environ[key]).expanduser() / "bin" for key in homes if os.environ.get(key))
+    from shared.native_runtimes import installed_bundle_bin_dirs
+    host_sys = {"windows": "Windows", "darwin": "Darwin", "linux": "Linux"}.get(system, system)
+    candidates.extend(installed_bundle_bin_dirs(tool, system=host_sys))
     if system != "windows":
         base = runtime_root()
         candidates.extend(base / name / "bin" for name in managed)

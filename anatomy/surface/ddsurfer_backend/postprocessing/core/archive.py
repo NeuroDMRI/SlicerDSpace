@@ -61,7 +61,7 @@ def install_assets(destination, package=None):
     destination = Path(destination)
     archive, manifest = assets(package)
     extract(archive, destination, 'atlas', max_bytes=256 * 1024 ** 2)
-    actual = {str(path.relative_to(destination)) for path in destination.rglob('*') if path.is_file()}
+    actual = {path.relative_to(destination).as_posix() for path in destination.rglob('*') if path.is_file()}
     if actual != set(manifest['files']):
         raise ValueError('Atlas archive and file manifest disagree')
     for name, record in manifest['files'].items():

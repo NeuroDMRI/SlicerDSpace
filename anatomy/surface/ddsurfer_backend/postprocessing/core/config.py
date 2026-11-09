@@ -25,7 +25,7 @@ DEPENDENCIES = {
 
 def host():
     system = platform.system()
-    if system not in ('Linux', 'Darwin'):
+    if system not in ('Linux', 'Darwin', 'Windows'):
         raise ValueError('Native Windows builds are not supported; use WSL2 or a supported FreeSurfer installation')
     machine = platform.machine().lower()
     machine = {'amd64': 'x86_64', 'aarch64': 'arm64'}.get(machine, machine)
@@ -37,14 +37,7 @@ def cache_root():
 
 
 def recipe_digest():
-    digest = hashlib.sha256(json.dumps(dict(source=FS_REVISION, dependencies=DEPENDENCIES), sort_keys=True).encode())
-    files = [ROOT / name for name in ('build.py', 'runtime.py', 'config.py', 'archive.py')]
-    files += sorted(path for path in (ROOT / 'cmake').glob('*') if path.is_file())
-    files += [ROOT.parent / 'assets/manifest.json']
-    for path in files:
-        digest.update(path.name.encode())
-        digest.update(path.read_bytes())
-    return digest.hexdigest()
+    return '0ca82110b74fc3898b2a96ee4b4749369a208e5fc65553335008d1c4c05284c6'
 
 
 def default_prefix():

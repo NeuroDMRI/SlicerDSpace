@@ -463,6 +463,39 @@ def estimate_tensors(values: np.ndarray, gradients: np.ndarray, max_b: float, me
     baseline = np.empty(voxels, dtype=np.float64)
     grads = _Gradients(lib, gradients, max_b)
     try:
+        nz_mask = np.any(values != 0, axis=1)
+        if voxels > 1 and not np.all(nz_mask):
+            zero_row = np.zeros((1, values.shape[1]), dtype=values.dtype)
+            z_ten, z_b0, z_fail = _fit_slab(
+                lib, grads, FIT_METHODS[method], shift_negative, zero_row)
+            tensors[~nz_mask] = z_ten[0]
+            baseline[~nz_mask] = z_b0[0]
+            nz_indices = np.flatnonzero(nz_mask)
+            nz_values = np.ascontiguousarray(values[nz_indices])
+            nz_voxels = nz_values.shape[0]
+            if nz_voxels == 0:
+                return tensors, baseline, int(z_fail * voxels)
+            nz_bounds = plan_slabs(nz_voxels, threads, slab_voxels)
+            nz_tensors = np.empty((nz_voxels, 7), dtype=np.float64)
+            nz_baseline = np.empty(nz_voxels, dtype=np.float64)
+
+            def run_nz(bound):
+                start, stop = bound
+                slab_tensors, slab_baseline, slab_failures = _fit_slab(
+                    lib, grads, FIT_METHODS[method], shift_negative, nz_values[start:stop])
+                nz_tensors[start:stop] = slab_tensors
+                nz_baseline[start:stop] = slab_baseline
+                return slab_failures
+
+            if threads == 1 or len(nz_bounds) == 1:
+                failures = sum(run_nz(bound) for bound in nz_bounds)
+            else:
+                with ThreadPoolExecutor(max_workers=threads) as pool:
+                    failures = sum(pool.map(run_nz, nz_bounds))
+            tensors[nz_indices] = nz_tensors
+            baseline[nz_indices] = nz_baseline
+            return tensors, baseline, int(failures + z_fail * (voxels - nz_voxels))
+
         def run(bound):
             start, stop = bound
             slab_tensors, slab_baseline, failures = _fit_slab(

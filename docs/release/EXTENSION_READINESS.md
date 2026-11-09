@@ -14,6 +14,7 @@ explicitly chooses otherwise. No Index PR, visibility change or package upload
 is performed by the build tools.
 
 Executed local checks and their limits are recorded in the
+[Windows 5.10.0 native acceptance report](WINDOWS_NATIVE_ACCEPTANCE_5.10.0.md),
 [24 October local surface components validation](SURFACE_COMPONENTS_20261024.md),
 [23 October GUI follow-up](GUI_RESPONSIVENESS_20261023.md),
 [22 October official integration validation](OFFICIAL_SLICER_VALIDATION_20261022.md),
@@ -112,7 +113,7 @@ source tests and already configured workstations cannot replace this test.
 | Compact-interface documentation, EN/ZH and screenshot sources | Prepared |
 | Public repository, resolvable icon/screenshot URLs, GitHub topic | Deferred by maintainer; required before public Index submission |
 | Linux real SDK/CPack and private installation | Passed for the documented selected routes; not a blank-machine full workflow |
-| Windows/macOS native SDK and scientific workflows | Not validated |
+| Windows native 5.10.0 runtime bundles & full-workflow real-data acceptance | Passed on 3D Slicer 5.10.0 (`HCP 100307`) with `SLICERDSPACE_DISABLE_WSL=1`; see [Windows 5.10.0 Acceptance Report](WINDOWS_NATIVE_ACCEPTANCE_5.10.0.md) |
 | Recorded source licenses and LUT notices | Conversion/BWH, FreeSurfer/MGH, DDSurfer/MIT and PyTorch3D/BSD notices restored and checked; not a blanket legal clearance |
 | Model/template and fixture redistribution | Unconfirmed groups remain excluded from public asset archives |
 | Real-data tutorial and Sample Data registration | [Upstream Slicer DWIVolume walkthrough](../setup/SLICER_SAMPLE_DTI.md) tested for DTI; custom redistributable dataset registration remains pending |

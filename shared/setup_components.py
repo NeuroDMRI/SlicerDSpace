@@ -68,7 +68,7 @@ def licence_version(licence, root=REPO_ROOT):
 def licence_record(licence_id, root=REPO_ROOT):
     licence = _licences()[licence_id]
     path = licence_file(licence, root)
-    return dict(id=licence_id, name=licence["name"], url=licence["url"], file=str(path) if path else None,
+    return dict(id=licence_id, name=licence["name"], url=licence["url"], file=path.as_posix() if path else None,
                 version=licence_version(licence, root))
 
 
@@ -214,6 +214,16 @@ def plan_components(plan, root=REPO_ROOT):
             licence = ("pnl" if name == "pnl_cnn" else "fsl" if name.startswith("fsl_") else
                        "mrtrix" if name == "mrtrix" else None)
             items.append(_component("managed:" + name, "Managed tool: " + name, None, licence, root))
+    if plan.get("native_bundles"):
+        from shared.native_runtimes import load_catalog, select_bundle
+        catalog = load_catalog()
+        for name in plan["native_bundles"]:
+            size = None
+            try:
+                size = select_bundle(catalog, name).get("bytes")
+            except Exception:
+                pass
+            items.append(_component("native:" + name, "Native tool: " + name, size, name, root))
     if plan.get("surface_prebuilt_required") or plan.get("surface_build_required"):
         items.append(_component("surface_runtime", "Surface components", plan.get("surface_download_bytes") or None,
                                 "freesurfer", root))
@@ -223,7 +233,8 @@ def plan_components(plan, root=REPO_ROOT):
 # Step id -> prefixes of the component ids that cover what the step installs.
 STEP_COMPONENTS = {"backend_sources": ("backend:",), "python_packages": ("python_packages", "python:"),
                    "model_assets": ("model_assets",), "optional_resources": ("optional_resources",),
-                   "windows_runtime": ("windows_",), "managed_runtime": ("managed:",), "surface_runtime": ("surface_runtime",)}
+                   "windows_runtime": ("windows_",), "managed_runtime": ("managed:",),
+                   "native_runtime": ("native:",), "surface_runtime": ("surface_runtime",)}
 
 
 def unlisted_licences(steps, components):

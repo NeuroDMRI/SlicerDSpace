@@ -26,7 +26,8 @@ def preprocessing_offered(system=None, machine=None):
 def build_setup_plan(result, *, installed_extensions=(), loaded_extensions=None, need_dti=False, need_torch=False, need_ukf=False,
                      need_slicerdmri=False, brain_mask_backend="pnl_cnn", wma_atlas="org", gpu_available=False, system=None, machine=None,
                      existing_managed_profiles=(), repair=False, backend_paths=None, closure_targets=(),
-                     wsl_distributions=None, slicer_executable=None, dcm2niix_missing=False, pnl_mask_route="auto"):
+                     wsl_distributions=None, slicer_executable=None, dcm2niix_missing=False, pnl_mask_route="auto",
+                     use_native_runtime=False):
     # SC-1c: the managed pnl_cnn profile (and its licence) is for the managed route only. The native route
     # needs torch and the brain_mask assets (the pnl-cnn optional profile), not the conda runtime.
     from shared.brain_mask import resolve_pnl_mask_route
@@ -100,6 +101,29 @@ def build_setup_plan(result, *, installed_extensions=(), loaded_extensions=None,
     surface_install = surface_needed and surface_bundle_available
     if surface_install:
         covered.add('surface-runtime')
+    from shared.native_runtimes import NativeRuntimeUnavailable, load_catalog, select_bundle
+    native_catalog = load_catalog()
+    native_bundles = []
+    native_download_bytes = 0
+    for bundle_name, group_names in (("mrtrix", {"native-mrtrix"} | ({"mrtrix"} if use_native_runtime else set())),
+                                     ("fsl", {"native-fsl"} | ({"fsl"} if use_native_runtime else set()))):
+        if groups & group_names:
+            try:
+                rec = select_bundle(native_catalog, bundle_name, system=system, machine=machine)
+            except NativeRuntimeUnavailable:
+                pass
+            else:
+                native_bundles.append(bundle_name)
+                native_download_bytes += int(rec.get("bytes", 0))
+                covered.update(group_names)
+    if use_native_runtime and native_bundles:
+        groups = {g for g in groups if g not in covered}
+        for name in ("mrtrix", "fsl_cpu", "fsl_cuda"):
+            if name in managed and (("mrtrix" in native_bundles and name == "mrtrix") or ("fsl" in native_bundles and name.startswith("fsl_"))):
+                managed.remove(name)
+        supported_managed = [name for name in supported_managed if name in managed]
+        unsupported_managed = [name for name in unsupported_managed if name in managed]
+        unsupported_notes = {key: value for key, value in unsupported_notes.items() if key in unsupported_managed}
     if platforms_ok:
         covered.update(("mrtrix", "fsl"))
         if "pnl_cnn" in managed:
@@ -207,6 +231,8 @@ def build_setup_plan(result, *, installed_extensions=(), loaded_extensions=None,
             "optional_asset_peak_disk_bytes": optional_plan.get("estimated_peak_disk_bytes", 0),
             "optional_asset_terms": optional_plan.get("terms", []),
             "managed_profiles": supported_managed,
+            "native_bundles": native_bundles,
+            "native_download_bytes": native_download_bytes,
             "runtime_root": str(runtime_root()),
             "surface_build_required": False, "surface_prebuilt_required": surface_install,
             "surface_download_bytes": surface_prebuilt['bytes'] if surface_install else 0,
@@ -224,6 +250,7 @@ def build_setup_plan(result, *, installed_extensions=(), loaded_extensions=None,
                                if windows_runtime and windows_runtime["needed"] and not windows_runtime["distribution"] else []),
             "windows_runtime": windows_runtime,
             "fsl_license_required": any(name.startswith("fsl_") for name in supported_managed)
+                                    or "fsl" in native_bundles
                                     or bool(windows_runtime and windows_runtime["command"]),
             "pnl_terms_required": "pnl_cnn" in managed and platforms_ok,
             "repair": bool(repair),
@@ -380,7 +407,7 @@ WINDOWS_WRITTEN_SETTINGS = ("tract_querier_root", "wma_root", "wma_atlas_dir", "
 def validate_setup_receipt(step, receipt):
     """Return the settings a verified receipt may save; raise ValueError for anything else (B8)."""
     kind = step.get("id")
-    if kind in {"managed_runtime", "surface_runtime"}:
+    if kind in {"managed_runtime", "surface_runtime", "native_runtime"}:
         # Same allow-list and path checks as shared/ui_managed_runtimes.py before B8.
         if (not isinstance(receipt, dict) or receipt.get("kind") != "slicerdsurfer_runtime_setup"
                 or receipt.get("status") != "completed"):
@@ -531,6 +558,13 @@ def setup_steps(plan, accepted_licences, *, folder, launcher=None, python_comman
         args += ["--conda", str(config["conda_executable"])] if config.get("conda_executable") else []
         steps.append(dict(id="managed_runtime", title="Prepare external tools", receipt=receipt,
                           commands=[run("setup_managed_runtime.py", *args)]))
+    if plan.get("native_bundles"):
+        receipt = folder / "native-runtime-result.json"
+        args = ["--bundles", *plan["native_bundles"], "--execute", "--accept-terms", "--result", str(receipt)]
+        if config.get("native_archive_dir"):
+            args += ["--archive-dir", str(config["native_archive_dir"])]
+        steps.append(dict(id="native_runtime", title="Install native tools", receipt=receipt,
+                          commands=[run("setup_native_runtime.py", *args)]))
     if plan.get("surface_build_required") or plan.get("surface_prebuilt_required"):
         receipt = folder / "surface-runtime-result.json"
         args = ["--execute", "--accept-terms", "--jobs", "4", "--result", str(receipt)]

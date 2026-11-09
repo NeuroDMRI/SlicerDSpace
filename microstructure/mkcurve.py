@@ -244,11 +244,16 @@ def run_mkcurve(dwi_path, bval_path, bvec_path, mask_path, output_dir, *,
                     from threadpoolctl import threadpool_limits
                     handles.enter_context(threadpool_limits(limits=worker_threads))
                 if num_workers > 1:
-                    from concurrent.futures import ProcessPoolExecutor
-                    import multiprocessing
-                    pool = ProcessPoolExecutor(max_workers=num_workers,
-                        mp_context=multiprocessing.get_context("spawn"),
-                        initializer=_initialize_worker, initargs=(worker_threads,))
+                    if os.name == "nt":
+                        from concurrent.futures import ThreadPoolExecutor
+                        pool = ThreadPoolExecutor(max_workers=num_workers,
+                            initializer=_initialize_worker, initargs=(worker_threads,))
+                    else:
+                        from concurrent.futures import ProcessPoolExecutor
+                        import multiprocessing
+                        pool = ProcessPoolExecutor(max_workers=num_workers,
+                            mp_context=multiprocessing.get_context("spawn"),
+                            initializer=_initialize_worker, initargs=(worker_threads,))
                     handles.callback(pool.shutdown, wait=True, cancel_futures=True)
                 else:
                     pool = None

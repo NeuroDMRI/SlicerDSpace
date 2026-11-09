@@ -179,9 +179,12 @@ def install_compact_layout(owner: Any) -> None:
 
     def fit_height() -> None:
         # Slicer's scroll area keeps an old expanded height unless resized explicitly.
-        layout.invalidate()
-        layout.activate()
-        root.resize(root.width, root.minimumSizeHint.height())
+        try:
+            layout.invalidate()
+            layout.activate()
+            root.resize(root.width, root.minimumSizeHint.height())
+        except ValueError:
+            return
 
     def queue_fit(*_args: Any) -> None:
         qt.QTimer.singleShot(0, fit_height)

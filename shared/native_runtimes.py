@@ -39,6 +39,27 @@ def runtime_root():
                 default_user_model_assets_root().parent / "runtimes").expanduser().resolve()
 
 
+def installed_bundle_bin_dirs(name, *, system=None, machine=None, root=None):
+    """Return bin directories of installed native runtime bundles matching name and host platform."""
+    system, machine = host_platform(system, machine)
+    base = Path(root or runtime_root()).expanduser().resolve()
+    if not base.is_dir():
+        return ()
+    prefix = f"{name}-"
+    suffix = f"-{system.lower()}-{machine}"
+    dirs = []
+    try:
+        children = sorted(base.iterdir(), reverse=True)
+    except OSError:
+        return ()
+    for child in children:
+        if child.is_dir() and child.name.startswith(prefix) and child.name.endswith(suffix):
+            bin_dir = child / "bin"
+            if (child / "native-runtime.json").is_file() and bin_dir.is_dir():
+                dirs.append(bin_dir.resolve())
+    return tuple(dirs)
+
+
 def _sha256(path):
     digest = hashlib.sha256()
     with Path(path).open("rb") as stream:
@@ -184,3 +205,71 @@ def install_bundle(record, *, archive=None, root=None, accept_terms=False):
     finally:
         if download is not None:
             Path(download).unlink(missing_ok=True)
+
+
+CATALOG = Path(__file__).resolve().parents[1] / "models" / "native_runtime_bundles.json"
+BUNDLE_SETTINGS = {
+    "mrtrix": ("mrtrix_bin_dir", "preprocessing_mrtrix_bin_dir"),
+    "fsl": ("preprocessing_fsl_bin_dir",),
+}
+
+
+def load_catalog(path=None):
+    return json.loads(Path(path or CATALOG).read_text(encoding="utf-8"))
+
+
+def provision_bundles(names, *, root=None, archive_dir=None, accept_terms=False, execute=False, catalog_path=None):
+    """Plan or install verified native runtime bundles (`mrtrix`, `fsl`) without WSL/Conda."""
+    selected = tuple(dict.fromkeys(names))
+    if not selected or any(name not in BUNDLE_SETTINGS for name in selected):
+        raise ValueError("Choose one or more supported native runtime bundles (mrtrix, fsl)")
+    catalog = load_catalog(catalog_path)
+    base = Path(root or runtime_root()).expanduser().resolve()
+    records = {name: select_bundle(catalog, name) for name in selected}
+    prefixes = {
+        name: str(base / f"{r['name']}-{r['version']}-{r['system'].lower()}-{r['machine']}")
+        for name, r in records.items()
+    }
+    plan = {
+        "kind": "slicerdsurfer_runtime_setup",
+        "method": "native_bundle",
+        "status": "planned",
+        "root": str(base),
+        "bundles": list(selected),
+        "prefixes": prefixes,
+        "download_bytes": sum(int(r.get("bytes", 0)) for r in records.values()),
+        "external_dependencies": {},
+        "changes_slicer_python": False,
+    }
+    if not execute:
+        return plan
+    if not accept_terms:
+        raise PermissionError("Review and accept the native runtime licences before installing")
+    settings = {}
+    installed = {}
+    for name, record in records.items():
+        dest = Path(prefixes[name])
+        receipt_file = dest / "native-runtime.json"
+        reused = False
+        if dest.is_dir() and receipt_file.is_file():
+            try:
+                existing = json.loads(receipt_file.read_text(encoding="utf-8"))
+                reused = (
+                    existing.get("archive_sha256") == record["sha256"]
+                    and all(dest.joinpath(*_safe_relpath(cmd).parts).is_file() for cmd in record["commands"])
+                )
+            except (OSError, ValueError):
+                reused = False
+        if not reused:
+            archive = None
+            if archive_dir is not None:
+                cand = Path(archive_dir) / record.get("artifact", "")
+                if cand.is_file():
+                    archive = cand
+            dest = install_bundle(record, archive=archive, root=base, accept_terms=True)
+        bin_dir = str((dest / "bin").resolve())
+        for key in BUNDLE_SETTINGS[name]:
+            settings[key] = bin_dir
+        installed[name] = str(dest)
+    plan.update(status="completed", external_dependencies=settings, installed_prefixes=installed)
+    return plan

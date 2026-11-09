@@ -144,10 +144,10 @@ def _resolve_command(name: str, bin_dir: Optional[Path] = None) -> Optional[str]
 
 def _mrtrix_csd_invocation(command: tuple[str, ...], env: dict[str, str]) -> tuple[tuple[str, ...], dict[str, str]]:
     script = Path(command[0])
-    if sys.platform != "win32" or script.name.lower() != "dwi2response":
+    if sys.platform != "win32" or script.name.lower() not in {"dwi2response", "5ttgen"}:
         return command, env
 
-    # The native MRtrix package ships dwi2response as a Python script.
+    # The native MRtrix package ships dwi2response and 5ttgen as Python scripts.
     # The WSL bridge is an executable and continues to launch directly.
     library = script.resolve().parent.parent / "lib"
     if not (library / "mrtrix3" / "__init__.py").is_file():

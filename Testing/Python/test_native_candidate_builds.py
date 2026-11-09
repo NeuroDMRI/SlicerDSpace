@@ -166,6 +166,31 @@ class NativeCandidateTest(unittest.TestCase):
                 self.assertIn('lib/mrtrix3/dwi2response/dhollander.py', archive.namelist())
                 self.assertIn('bin/libact.dll', archive.namelist())
 
+    def test_windows_archive_includes_5ttgen_and_share_when_present(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = windows_source(root)
+            for name in ('labelconvert', 'mrgrid'):
+                binary = source / 'bin' / f'{name}.exe'
+                binary.write_text('#!/bin/sh\n[ "$1" = "-version" ] && echo "' + name + ' 3.0.8"\n')
+            (source / 'bin/5ttgen').write_text('#!/no/shebang/python\nprint("5ttgen 3.0.8")\n')
+            (source / 'share/mrtrix3/_5ttgen').mkdir(parents=True)
+            (source / 'share/mrtrix3/_5ttgen/FreeSurfer2ACT.txt').write_text('1 1\n')
+            deps = root / 'mingw'
+            deps.mkdir()
+            with patch.object(module, '_dll_dependencies', return_value=set()):
+                result = module.build(source, root / 'dist', system='Windows', machine='x86_64',
+                                      dll_search=[deps], objdump='objdump')
+            record = json.loads(Path(result['record']).read_text())
+            self.assertIn('bin/5ttgen', record['commands'])
+            self.assertIn('bin/labelconvert.exe', record['commands'])
+            self.assertIn('bin/mrgrid.exe', record['commands'])
+            with zipfile.ZipFile(result['archive']) as archive:
+                self.assertIn('bin/5ttgen', archive.namelist())
+                self.assertIn('bin/labelconvert.exe', archive.namelist())
+                self.assertIn('bin/mrgrid.exe', archive.namelist())
+                self.assertIn('share/mrtrix3/_5ttgen/FreeSurfer2ACT.txt', archive.namelist())
+
     def test_windows_response_paths_round_trip_upstream_tokenizer(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -321,6 +346,30 @@ class NativeCandidateTest(unittest.TestCase):
             with patch.object(module.subprocess, 'run', side_effect=fake_objdump):
                 copied = module.copy_windows_dll_closure([exe], target, [deps], objdump='objdump')
             self.assertEqual(copied, ['libbar.dll','libfoo.dll'])
+
+    def test_fsl_windows_candidate_includes_binaries_config_and_dlls(self):
+        from scripts.native import prepare_fsl_candidate
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / 'fsl'
+            (source / 'bin').mkdir(parents=True)
+            (source / 'etc/flirtsch').mkdir(parents=True)
+            (source / 'etc/flirtsch/b02b0.cnf').write_text('--subsamp=1\n')
+            for name in prepare_fsl_candidate.FSL_COMMANDS:
+                (source / 'bin' / f'{name}.exe').write_bytes(b'MZfixture')
+            (source / 'bin/libgfortran-5.dll').write_bytes(b'dllfixture')
+            result = prepare_fsl_candidate.build(
+                source, root / 'dist', system='Windows', machine='x86_64',
+                dll_search=[source / 'bin'], objdump=None,
+            )
+            record = json.loads(Path(result['record']).read_text(encoding='utf-8'))
+            self.assertEqual(record['name'], 'fsl')
+            self.assertEqual(set(record['commands']), {'bin/eddy_cpu.exe', 'bin/topup.exe', 'bin/applytopup.exe'})
+            with zipfile.ZipFile(result['archive']) as archive:
+                names = set(archive.namelist())
+                self.assertIn('etc/flirtsch/b02b0.cnf', names)
+                self.assertIn('bin/libgfortran-5.dll', names)
+                self.assertIn('LICENSE.txt', names)
 
 if __name__ == '__main__':
     unittest.main()

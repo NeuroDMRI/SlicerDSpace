@@ -286,10 +286,12 @@ def run_act_tracking(config: ACTTrackingConfig, *, log: Optional[Callable[[str],
         manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         resolved = next((Path(path) for path in backend_status["commands"].values() if path), None)
         command_env = managed_tool_environment(mrtrix_bin_dir=resolved.parent if resolved else None)
+        from tractography.csd import _mrtrix_csd_invocation
         try:
             for command in commands:
-                _emit(f"[Tractography] Running ACT command: {' '.join(command)}", log)
-                completed = subprocess.run(command, check=True, env=command_env)
+                argv, env = _mrtrix_csd_invocation(command, command_env)
+                _emit(f"[Tractography] Running ACT command: {' '.join(argv)}", log)
+                completed = subprocess.run(argv, check=True, env=env)
                 return_code = completed.returncode
         except subprocess.CalledProcessError as exc:
             return_code = exc.returncode

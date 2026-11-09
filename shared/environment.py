@@ -722,6 +722,9 @@ def resolve_freesurfer_home() -> Optional[Path]:
 
 def _common_command_dirs(group: str, platform_name: str) -> tuple[Path, ...]:
     candidates: list[Path] = []
+    if group in ("mrtrix", "fsl"):
+        from shared.native_runtimes import installed_bundle_bin_dirs
+        candidates.extend(installed_bundle_bin_dirs(group, system=platform_name))
     if group == "mrtrix":
         candidates.extend(
             [

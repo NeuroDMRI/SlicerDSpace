@@ -36,7 +36,9 @@ WINDOWS_COMMANDS = (
     'mrcat', 'mrinfo', 'mrmath', 'mrstats', 'mrthreshold', 'peaks2amp', 'sh2peaks',
     'tensor2metric',
 )
+WINDOWS_OPTIONAL_ACT_COMMANDS = ('labelconvert', 'mrgrid')
 WINDOWS_RESPONSE_SCRIPT = 'bin/dwi2response'
+WINDOWS_ACT_SCRIPT = 'bin/5ttgen'
 WINDOWS_PATH_HELPER = 'lib/mrtrix3/path.py'
 SYSTEM_DLL = frozenset({
     'kernel32.dll','ntdll.dll','advapi32.dll','user32.dll','shell32.dll',
@@ -45,6 +47,11 @@ SYSTEM_DLL = frozenset({
     'version.dll','msvcrt.dll','ucrtbase.dll','combase.dll','imm32.dll',
     'setupapi.dll','winmm.dll','cfgmgr32.dll','psapi.dll','iphlpapi.dll',
 })
+SYSTEM_SO_PREFIXES = (
+    'linux-vdso.so', 'ld-linux', 'libc.so.', 'libm.so.', 'libdl.so.',
+    'libpthread.so.', 'librt.so.', 'libutil.so.', 'libresolv.so.',
+    'libnsl.so.', 'libcrypt.so.',
+)
 
 
 def sha256(path: Path) -> str:
@@ -96,6 +103,47 @@ def copy_windows_dll_closure(programs: list[Path], destination: Path, search_dir
                 shutil.copy2(source, target)
                 queue.append(target)
                 copied.append(target.name)
+    return sorted(copied)
+
+
+def copy_linux_so_closure(programs: list[Path], lib_dest: Path, search_dirs: list[Path] | None = None) -> list[str]:
+    """Bundle non-glibc shared libraries required by ELF binaries as regular files in lib/."""
+    elf_programs = [p for p in programs if p.is_file() and p.read_bytes()[:4] == b'\x7fELF']
+    if not elf_programs or not shutil.which('ldd'):
+        return []
+    lib_dest.mkdir(parents=True, exist_ok=True)
+    env = dict(os.environ)
+    if search_dirs:
+        existing = env.get('LD_LIBRARY_PATH', '')
+        extra = os.pathsep.join(str(d) for d in search_dirs if d.is_dir())
+        env['LD_LIBRARY_PATH'] = f'{extra}{os.pathsep}{existing}' if existing else extra
+    copied: list[str] = []
+    seen: set[str] = set()
+    queue = list(elf_programs)
+    while queue:
+        binary = queue.pop()
+        done = subprocess.run(['ldd', str(binary)], env=env, capture_output=True, text=True,
+                              errors='replace', timeout=60, check=True)
+        for line in done.stdout.splitlines():
+            line = line.strip()
+            if 'not found' in line:
+                raise FileNotFoundError(f'Unresolved Linux shared library for {binary.name}: {line}')
+            match = re.match(r'^(\S+)\s+=>\s+(\S+)\s+\(0x[0-9a-fA-F]+\)$', line)
+            if not match:
+                continue
+            soname, resolved_raw = match.group(1), match.group(2)
+            if soname in seen or soname.startswith(SYSTEM_SO_PREFIXES):
+                continue
+            seen.add(soname)
+            resolved = Path(resolved_raw).resolve()
+            if not resolved.is_file():
+                raise FileNotFoundError(f'Missing resolved shared library {resolved_raw} for {soname}')
+            target = lib_dest / soname
+            if not target.exists():
+                shutil.copy2(resolved, target)
+                target.chmod(0o755)
+                queue.append(target)
+                copied.append(soname)
     return sorted(copied)
 
 
@@ -196,18 +244,53 @@ def build(source: Path, output: Path, *, system: str, machine: str, dll_search: 
                 if not (source / relpath).is_file():
                     raise FileNotFoundError(f'Missing built MRtrix3 response payload: {relpath}')
             _copy_with_mode(source / WINDOWS_RESPONSE_SCRIPT, stage / WINDOWS_RESPONSE_SCRIPT)
+            has_act_script = (source / WINDOWS_ACT_SCRIPT).is_file()
+            if has_act_script:
+                for command in WINDOWS_OPTIONAL_ACT_COMMANDS:
+                    binary = _find_command(source, command, system)
+                    target = destination / binary.name
+                    _copy_with_mode(binary, target)
+                    command_paths.append(f'bin/{target.name}')
+                _copy_with_mode(source / WINDOWS_ACT_SCRIPT, stage / WINDOWS_ACT_SCRIPT)
+                if (source / 'share/mrtrix3').is_dir():
+                    shutil.copytree(source / 'share/mrtrix3', stage / 'share/mrtrix3', symlinks=False)
             shutil.copytree(source / 'lib/mrtrix3', stage / 'lib/mrtrix3',
                             ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
             patches.append(_patch_windows_path_helper(stage))
             copied_dlls = copy_windows_dll_closure([stage / rel for rel in command_paths], destination,
                                                    dll_search, objdump=objdump)
             command_paths.append(WINDOWS_RESPONSE_SCRIPT)
+            if has_act_script:
+                command_paths.append(WINDOWS_ACT_SCRIPT)
         else:
-            # Only bundle a platform's *own* library tree. Toolchain-provided
-            # .dylib/.so portability must be verified on a clean test host.
-            for library_root in (source / 'lib', source / 'share'):
-                if library_root.is_dir():
-                    shutil.copytree(library_root, stage / library_root.name, symlinks=False)
+            for extra_cmd in (*WINDOWS_COMMANDS, *WINDOWS_OPTIONAL_ACT_COMMANDS):
+                if extra_cmd in commands:
+                    continue
+                try:
+                    binary = _find_command(source, extra_cmd, system)
+                except FileNotFoundError:
+                    continue
+                target = destination / binary.name
+                _copy_with_mode(binary, target)
+                command_paths.append(f'bin/{target.name}')
+            elf_binaries = [stage / rel for rel in command_paths if (stage / rel).read_bytes()[:4] == b'\x7fELF']
+            if system == 'Linux' and elf_binaries:
+                copied_dlls = copy_linux_so_closure(elf_binaries, stage / 'lib', [source / 'lib'])
+                if (source / 'lib/mrtrix3').is_dir():
+                    shutil.copytree(source / 'lib/mrtrix3', stage / 'lib/mrtrix3',
+                                    ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
+                if (source / 'share/mrtrix3').is_dir():
+                    shutil.copytree(source / 'share/mrtrix3', stage / 'share/mrtrix3', symlinks=False)
+                for script_rel in (WINDOWS_RESPONSE_SCRIPT, WINDOWS_ACT_SCRIPT):
+                    if (source / script_rel).is_file():
+                        _copy_with_mode(source / script_rel, stage / script_rel)
+                        command_paths.append(script_rel)
+            else:
+                # Only bundle a platform's *own* library tree. Toolchain-provided
+                # .dylib/.so portability must be verified on a clean test host.
+                for library_root in (source / 'lib', source / 'share'):
+                    if library_root.is_dir():
+                        shutil.copytree(library_root, stage / library_root.name, symlinks=False)
         if system == 'Windows':
             limitations = [
                 'The Windows response script requires a native Python interpreter.',

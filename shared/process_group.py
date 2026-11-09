@@ -185,7 +185,9 @@ def kill_process_tree(
         command = ["taskkill", "/PID", str(pid), "/T"]
         if force:
             command.append("/F")
-        subprocess.run(command, check=False, capture_output=True)
+        result = subprocess.run(command, check=False, capture_output=True)
+        if not force and platform_name is None and getattr(result, "returncode", 0) != 0:
+            subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], check=False, capture_output=True)
         return
     if grouped:
         target_pgid = pgid if pgid is not None else pid

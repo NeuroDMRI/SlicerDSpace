@@ -86,12 +86,13 @@ class SurfaceRuntimeTests(unittest.TestCase):
             label='components', install_hint='prepare')
         result = SimpleNamespace(statuses=(item,))
         from shared.prebuilt_surface import bundle_for_platform
-        bundle = dict(bundle_for_platform('Linux', 'x86_64'), published=True)
-        with patch('shared.prebuilt_surface.bundle_for_platform', return_value=bundle):
-            plan = build_setup_plan(result, system='Linux', machine='x86_64')
-        self.assertFalse(plan['surface_build_required'])
-        self.assertTrue(plan['surface_prebuilt_required'])
-        for system, machine in (('Darwin', 'arm64'), ('Windows', 'AMD64')):
+        for system, machine in (('Linux', 'x86_64'), ('Windows', 'AMD64')):
+            bundle = dict(bundle_for_platform(system, machine), published=True)
+            with patch('shared.prebuilt_surface.bundle_for_platform', return_value=bundle):
+                plan = build_setup_plan(result, system=system, machine=machine)
+            self.assertFalse(plan['surface_build_required'])
+            self.assertTrue(plan['surface_prebuilt_required'])
+        for system, machine in (('Darwin', 'arm64'), ('Windows', 'arm64')):
             plan = build_setup_plan(result, system=system, machine=machine)
             self.assertFalse(plan['surface_prebuilt_required'])
             self.assertTrue(plan['manual_items'])

@@ -158,6 +158,7 @@ from shared.user_config import (
     load_user_config,
     update_user_config,
 )
+from shared.ui_environment_check import start_environment_check
 
 
 ENVIRONMENT_DEPENDENCY_PATHS = UI_DEPENDENCY_PATHS
@@ -3261,8 +3262,8 @@ class SharedWidgetMixin:
             combo.setCurrentIndex(index)
 
     def _onValidateClicked(self):
+        self._lastProcessEventsAt = monotonic()
         self._save_common_user_settings()
-        from shared.ui_environment_check import start_environment_check
         return start_environment_check(self)
 
     def _run_environment_dependency_check(self):

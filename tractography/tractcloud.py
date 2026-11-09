@@ -154,6 +154,12 @@ def resolve_tractcloud_python(python_executable: Optional[Path] = None) -> Path:
         if found:
             return Path(found).absolute()
 
+    from shared.external_process import find_pythonslicer, is_slicer_python
+    if is_slicer_python(sys.executable):
+        slicer_py = find_pythonslicer(Path(sys.executable).parent)
+        if slicer_py is not None:
+            return slicer_py.absolute()
+
     return Path(sys.executable).absolute()
 
 
@@ -433,7 +439,11 @@ def run_tractcloud_parcellation(
     staging = None
     published_archive = None
     if config.execute:
-        env = python_tool_environment(backend_status['python_executable'], _tractcloud_env(config, backend_status))
+        extra_env = _tractcloud_env(config, backend_status)
+        source_pythonpath = extra_env.pop("PYTHONPATH", None)
+        env = python_tool_environment(backend_status['python_executable'], extra_env)
+        if source_pythonpath:
+            env["PYTHONPATH"] = source_pythonpath + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
         try:
             (output_dir / 'tractcloud_device.json').unlink(missing_ok=True)
             staging = new_product_staging(output_dir, 'tractcloud')

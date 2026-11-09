@@ -26,7 +26,8 @@ def selection(hemisphere, atlas_names):
 
 
 def required_files(hemis, atlases):
-    files = ['bin/' + name for name in COMMANDS]
+    suffix = '.exe' if host()[0] == 'Windows' else ''
+    files = ['bin/' + name + suffix for name in COMMANDS]
     files += ['build-stamp.txt', 'FreeSurferColorLUT.txt', 'LICENSE.txt']
     for hemi in hemis:
         files += [f'average/{hemi}.average.curvature.filled.buckner40.tif',
@@ -40,6 +41,11 @@ def required_files(hemis, atlases):
 
 def shared_libraries(binary):
     system, _ = host()
+    if system == 'Windows':
+        result = subprocess.run([str(binary), '--version'], capture_output=True, text=True, timeout=30)
+        if result.returncode or not (result.stdout or result.stderr).strip():
+            raise RuntimeError(f'Unresolved shared libraries or failed startup for {Path(binary).name}:\n{result.stdout}{result.stderr}')
+        return (result.stdout or result.stderr).strip()
     name = 'ldd' if system == 'Linux' else 'otool'
     tool = shutil.which(name)
     if tool is None:
@@ -88,12 +94,13 @@ def validate_runtime(home, hemisphere='both', atlas_names='aparc,aparc.a2009s', 
             raise ValueError('Local runtime must not link to an external installation')
         if not path.is_file() or path.stat().st_size != info['bytes'] or sha256_file(path) != info['sha256']:
             raise ValueError(f'Local runtime checksum mismatch: {name}')
-    actual = {str(path.relative_to(root)) for path in root.rglob('*') if path.is_file()}
+    actual = {path.relative_to(root).as_posix() for path in root.rglob('*') if path.is_file()}
     if actual != set(records) | {'runtime.json'}:
         raise ValueError('Local runtime contains unrecorded files')
+    suffix = '.exe' if system == 'Windows' else ''
     for name in COMMANDS:
-        path = root / 'bin' / name
-        if not os.access(path, os.X_OK):
+        path = root / 'bin' / f'{name}{suffix}'
+        if system != 'Windows' and not os.access(path, os.X_OK):
             raise ValueError(f'Local runtime command is not executable: {name}')
         with path.open('rb') as stream:
             magic = stream.read(4)
@@ -101,6 +108,8 @@ def validate_runtime(home, hemisphere='both', atlas_names='aparc,aparc.a2009s', 
             raise ValueError(f'Expected a local ELF executable: {name}')
         if system == 'Darwin' and magic not in (b'\xcf\xfa\xed\xfe', b'\xfe\xed\xfa\xcf', b'\xca\xfe\xba\xbe'):
             raise ValueError(f'Expected a local Mach-O executable: {name}')
+        if system == 'Windows' and magic[:2] != b'MZ':
+            raise ValueError(f'Expected a local Windows PE executable: {name}')
         if check_libraries:
             shared_libraries(path)
     return manifest

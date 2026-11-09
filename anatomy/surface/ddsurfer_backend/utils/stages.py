@@ -1,6 +1,5 @@
 """Content-checked stage reuse and atomic publication of pipeline outputs."""
 from contextlib import contextmanager, ExitStack
-import fcntl
 import json
 import os
 from pathlib import Path
@@ -15,16 +14,36 @@ from utils.files import atomic_json, sha256_file
 def subject_lock(path):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor = os.open(str(path), os.O_CREAT | os.O_WRONLY | os.O_APPEND | os.O_NOFOLLOW, 0o600)
-    with os.fdopen(descriptor, 'a') as stream:
-        try:
-            fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            raise RuntimeError(f'Another process is using this subject: {path.parent}')
-        try:
-            yield
-        finally:
-            fcntl.flock(stream, fcntl.LOCK_UN)
+    if path.is_symlink():
+        raise ValueError(f'Refusing linked subject lock: {path}')
+    if os.name == 'nt':
+        import msvcrt
+        with path.open('a+b') as stream:
+            try:
+                stream.seek(0)
+                stream.write(b'0')
+                stream.flush()
+                stream.seek(0)
+                msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+            except OSError as exc:
+                raise RuntimeError(f'Another process is using this subject: {path.parent}') from exc
+            try:
+                yield
+            finally:
+                stream.seek(0)
+                msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+    else:
+        import fcntl
+        descriptor = os.open(str(path), os.O_CREAT | os.O_WRONLY | os.O_APPEND | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(descriptor, 'a') as stream:
+            try:
+                fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                raise RuntimeError(f'Another process is using this subject: {path.parent}')
+            try:
+                yield
+            finally:
+                fcntl.flock(stream, fcntl.LOCK_UN)
 
 
 class StageCache:

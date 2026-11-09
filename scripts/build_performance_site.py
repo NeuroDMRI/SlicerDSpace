@@ -56,7 +56,7 @@ def build_evidence():
 
     def load(name):
         path = BENCHMARKS / name
-        sources.append({'file': name, 'sha256': hashlib.sha256(path.read_bytes()).hexdigest()})
+        sources.append({'file': name, 'sha256': hashlib.sha256(path.read_bytes().replace(b'\r\n', b'\n')).hexdigest()})
         return json.loads(path.read_text(encoding='utf-8'))
 
     full_name = ('freewater_protocol_full_20261029.json' if (BENCHMARKS / 'freewater_protocol_full_20261029.json').is_file()
@@ -394,8 +394,8 @@ def main():
         print('PASS public performance data, source hashes and rendered measurements')
     else:
         data.parent.mkdir(parents=True, exist_ok=True)
-        data.write_text(payload, encoding='utf-8')
-        page.write_text(expected, encoding='utf-8')
+        data.write_text(payload, encoding='utf-8', newline='\n')
+        page.write_text(expected, encoding='utf-8', newline='\n')
         print(f"Exported {len(evidence['records'])} scoped measurements; private paths and runtime snapshots excluded")
 
 

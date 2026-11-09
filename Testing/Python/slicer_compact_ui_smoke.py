@@ -38,7 +38,7 @@ def check():
             node.inputDirectory = ""
             node.outputDirectory = ""
         assert ui.runSelectedButton.enabled
-        assert "#63727D" in ui.statusLabel.styleSheet
+        assert any(c in ui.statusLabel.styleSheet for c in ("#63727D", "#9BA7B4")), ui.statusLabel.styleSheet
         doctor = owner._environment_doctor_result_for_run
 
         def unexpected_preflight(*args, **kwargs):
@@ -47,11 +47,11 @@ def check():
         owner._environment_doctor_result_for_run = unexpected_preflight
         ui.runSelectedButton.click()
         assert ui.runSelectedButton.enabled
-        assert "#C62828" in ui.statusLabel.styleSheet
+        assert any(c in ui.statusLabel.styleSheet for c in ("#C62828", "#FF7B72")), ui.statusLabel.styleSheet
         assert not owner._pipelineActive
         with slicer.util.NodeModify(node):
             node.subjectId = "sub-test"
-        assert "#C62828" in ui.statusLabel.styleSheet
+        assert any(c in ui.statusLabel.styleSheet for c in ("#C62828", "#FF7B72")), ui.statusLabel.styleSheet
         node.subjectId = ""
 
         window = slicer.util.mainWindow()
@@ -67,7 +67,7 @@ def check():
             assert owner._onboardingLanguage == lang
             assert ui.runSelectedButton.text == ("Run SlicerDSpace" if lang == "en" else "运行 SlicerDSpace")
             ui.runSelectedButton.click()
-            assert ui.runSelectedButton.enabled and "#C62828" in ui.statusLabel.styleSheet
+            assert ui.runSelectedButton.enabled and any(c in ui.statusLabel.styleSheet for c in ("#C62828", "#FF7B72"))
             assert "Waiting:" in ui.statusLabel.text if lang == "en" else "待填写：" in ui.statusLabel.text
             assert "advanced" in str(advanced.text).lower() if lang == "en" else "高级" in advanced.text
             for width in (440, 540):
@@ -84,7 +84,7 @@ def check():
             node.batchMode = True
             node.batchRoot = ""
         ui.runSelectedButton.click()
-        assert ui.runSelectedButton.enabled and "#C62828" in ui.statusLabel.styleSheet
+        assert ui.runSelectedButton.enabled and any(c in ui.statusLabel.styleSheet for c in ("#C62828", "#FF7B72"))
         assert not node.batchMode and node.batchSize == 1
         assert "待填写：" in ui.statusLabel.text, ui.statusLabel.text
         assert "批处理根目录" not in ui.statusLabel.text
@@ -93,7 +93,7 @@ def check():
             node.subjectId = "100307"
             node.inputDirectory = os.environ["SLICERDSPACE_SMOKE_SUBJECT_ROOT"]
         assert owner.validateInputs()
-        assert "#63727D" in ui.statusLabel.styleSheet
+        assert any(c in ui.statusLabel.styleSheet for c in ("#63727D", "#9BA7B4")), ui.statusLabel.styleSheet
         assert "点击运行时将检查依赖" in ui.statusLabel.text
         owner._environment_doctor_result_for_run = doctor
 
@@ -150,8 +150,57 @@ def check():
         ui.parametersCollapsibleButton.collapsed = True
         advanced.collapsed = True
         apply_onboarding_language(owner, "en")
+        panel.setFixedWidth(390)
+        slicer.app.processEvents()
+        panel.setMinimumWidth(0)
+        panel.setMaximumWidth(16777215)
+        window.resize(1280, 900)
         slicer.app.processEvents()
         slicer.app.processEvents()
+        jitter_steps = [
+            ("advanced_open", advanced, False),
+            ("prepare_open", prepare, False),
+            ("regions_open", owner._regionWidgets["panel"], False),
+            ("region_options_open", owner._regionWidgets["options"], False),
+            ("env_open", ui.environmentCollapsibleButton, False),
+            ("env_more_open", owner._environmentMoreOptions, False),
+            ("env_paths_open", owner._environmentAdvancedPathsWidget, False),
+            ("results_open", ui.resultsCollapsibleButton, False),
+            ("results_close", ui.resultsCollapsibleButton, True),
+            ("env_paths_close", owner._environmentAdvancedPathsWidget, True),
+            ("env_more_close", owner._environmentMoreOptions, True),
+            ("env_close", ui.environmentCollapsibleButton, True),
+            ("region_options_close", owner._regionWidgets["options"], True),
+            ("regions_close", owner._regionWidgets["panel"], True),
+            ("prepare_close", prepare, True),
+            ("advanced_close", advanced, True),
+        ]
+        owner._advancedCategorySelector.setCurrentIndex(3)
+        slicer.app.processEvents()
+        jitter_trace = []
+        for step_name, section_widget, collapsed_state in jitter_steps:
+            section_widget.collapsed = collapsed_state
+            ui_w_sync = owner._uiWidget.width
+            ui_h_sync = owner._uiWidget.height
+            slicer.app.processEvents()
+            slicer.app.processEvents()
+            ui_w = owner._uiWidget.width
+            ui_h = owner._uiWidget.height
+            jitter_trace.append({
+                "step": step_name,
+                "win": [window.width, window.height],
+                "panel_w": panel.width,
+                "ui_w_sync": ui_w_sync,
+                "ui_w": ui_w,
+                "ui_h_sync": ui_h_sync,
+                "ui_h": ui_h,
+                "w_diff": abs(ui_w - ui_w_sync),
+                "h_diff": abs(ui_h - ui_h_sync),
+            })
+        (ROOT / "jitter_trace.json").write_text(json.dumps(jitter_trace, indent=2) + "\n")
+        for item in jitter_trace:
+            assert item["w_diff"] == 0, item
+            assert item["win"] == [1280, 900], item
         (ROOT / "layout_height.json").write_text(json.dumps({"height": owner._uiWidget.height,
             "minimum_height": owner._uiWidget.minimumSizeHint.height(),
             "size_hint": owner._uiWidget.sizeHint.height()}, indent=2))
@@ -173,6 +222,8 @@ def check():
         print("COMPACT_UI_PASS", flush=True)
         slicer.app.exit(0)
     except Exception:
+        err = traceback.format_exc()
+        (ROOT / "smoke_error.log").write_text(err, encoding="utf-8")
         traceback.print_exc()
         slicer.app.exit(2)
 

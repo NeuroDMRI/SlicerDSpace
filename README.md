@@ -161,7 +161,7 @@ Download the single platform installer from the GitHub Release page:
 - **Windows (`x86_64`)**: `SlicerDSpace-v0.1.1-Windows-x64.zip`
 - **Linux (`x86_64`)**: `SlicerDSpace-v0.1.1-Linux-x64.tar.gz`
 
-Each archive bundles the SlicerDSpace extension together with modular native runtime bundles inside `SlicerDSpace/bundled-runtimes/` (**MRtrix3 `3.0.8`** with 68 commands, **FSL `2602.0`** with `topup`/`applytopup`/`eddy_cpu`, and the **FreeSurfer Surface Runtime** with 7 commands and templates; no personal FreeSurfer activation key is bundled). Install it directly in **3D Slicer 5.10.0** via **View > Extensions Manager > Install Extensions > Install Extension from File**, restart Slicer, and open **Modules > Diffusion > SlicerDSpace**. Bundled native runtimes are discovered automatically on first launch; model weights and large atlases are downloaded on demand. (macOS native dependencies are not yet certified for full release support.)
+Each archive bundles the SlicerDSpace extension together with modular native runtime bundles inside `SlicerDSpace/bundled-runtimes/` (**MRtrix3 `3.0.8`** with 68 commands, **FSL `2602.0`** with `topup`/`applytopup`/`eddy_cpu`, and the **FreeSurfer Surface Runtime** with 7 commands and templates; no personal FreeSurfer activation key is bundled, so users running cortical surface postprocessing must supply their own FreeSurfer license file). Install it directly in **3D Slicer 5.10.0** via **View > Extensions Manager > Install Extensions > Install Extension from File**, restart Slicer, and open **Modules > Diffusion > SlicerDSpace**. Bundled native runtimes are discovered automatically on first launch and verified via per-file `tree_sha256` digests (automatically repairing from the release archive if a component is deleted or corrupted). Deep-learning model weights (`DDSeg`, `DDParcel`, `DDSurfer`, `TractCloud`, `PNL`) and large atlases (`ORG`) are downloaded on demand on first use. (macOS native dependencies are not yet certified for full release support.)
 
 ### Option B: Stage From Source
 
@@ -341,10 +341,10 @@ Start with one concurrency level and budget combined RAM/VRAM use.
 
 | Area | Current scope |
 | --- | --- |
-| Reference environment | Linux and Slicer 5.10; Windows/macOS availability is route-specific |
-| Validation | Recorded Linux SDK/CPack, GUI and selected real-data workflows; coverage is tied to the documented revision and inputs |
-| Distribution | Private pre-release; Extension Index entry remains a Tier 1 proposal |
-| Licensing | BSD-3-Clause project code; third-party source and model assets retain separate terms and release gates |
+| Reference environment | Windows (`x86_64`) and Linux (`x86_64`) on 3D Slicer 5.10.0; macOS full native runtime certification pending |
+| Validation | Recorded Windows & Linux Slicer 5.10.0 Extension Manager install, GUI smoke suites, runtime corruption auto-repair, and multi-subject real-data workflows (`HCP 100307`, `HCP 100408`, clinical `sub-001`) |
+| Distribution | GitHub Release `v0.1.1` unified platform packages (`SlicerDSpace-v0.1.1-Windows-x64.zip`, `SlicerDSpace-v0.1.1-Linux-x64.tar.gz`) installed via Slicer Extension Manager (`Install Extension from File`); online Extension Catalog listing remains a Tier 1 proposal |
+| Licensing | BSD-3-Clause project code; third-party runtimes and on-demand model assets retain separate terms and release gates (FreeSurfer surface postprocessing requires a user-supplied license) |
 
 Execution status, automatic QC and human review are recorded or assessed separately.
 Review [validation records](docs/README.md#validation-records),

@@ -17,8 +17,29 @@ def default_surface_runtime():
     return module.default_prefix()
 
 
+def is_valid_surface_runtime_dir(cand):
+    """Return True if cand has a valid runtime.json and all listed files exist."""
+    cand = Path(cand)
+    manifest_file = cand / "runtime.json"
+    bin_dir = cand / "bin"
+    if not cand.is_dir() or not manifest_file.is_file() or not bin_dir.is_dir():
+        return False
+    try:
+        manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
+        if manifest.get("activation_key_included") is not False:
+            return False
+        files = manifest.get("files")
+        if files is not None:
+            if not isinstance(files, dict) or not files:
+                return False
+            return all((cand / rel).is_file() for rel in files)
+        return any(p.is_file() for p in bin_dir.iterdir())
+    except (OSError, ValueError, TypeError):
+        return False
+
+
 def bundled_surface_runtime(system=None, machine=None):
-    """Return a bundled surface-runtime directory inside the installed extension if present."""
+    """Return a bundled surface-runtime directory inside the installed extension if present and complete."""
     from shared.native_runtimes import bundled_runtime_roots, host_platform
     sys_name, arch = host_platform(system, machine)
     folder_names = (
@@ -28,7 +49,7 @@ def bundled_surface_runtime(system=None, machine=None):
     for root in bundled_runtime_roots():
         for name in folder_names:
             cand = root / name
-            if (cand / "runtime.json").is_file() and (cand / "bin").is_dir():
+            if is_valid_surface_runtime_dir(cand):
                 return cand.resolve()
     return None
 

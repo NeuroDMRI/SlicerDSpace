@@ -50,53 +50,46 @@ Slicer builds. See the [release gate](../release/EXTENSION_READINESS.md).
 
 ## Feature Routes
 
-**Native candidate** describes source feasibility, not native scientific acceptance.
-WSL is a Linux backend, not native Windows computation. Windows/macOS do not
-inherit Linux QC or timings.
+**Native verified** indicates real-data execution verified without WSL (`SLICERDSPACE_DISABLE_WSL=1`).
+**Native candidate** describes source feasibility where full platform certification is still pending.
+WSL is a Linux backend, not native Windows computation; on Windows `v0.1.1`, native execution is the default and WSL 2 is only an optional fallback.
 
-| Feature | Linux | Windows | macOS |
+| Feature | Linux (`x86_64`) | Windows (`x86_64`) | macOS |
 | --- | --- | --- | --- |
-| UI, NIfTI/NRRD, validation, result loading | Scoped tests recorded | Native candidate with imaging packages | Native candidate with imaging packages |
-| DICOM conversion | Converter required | Native converter/Slicer candidate | Native converter/Slicer candidate |
-| DTI, deterministic tracking | Teem tensor fit in Slicer; DIPY tracking | Same, native candidate | Same, native candidate |
-| DDSeg/DDParcel/DDSurfer native reconstruction | Recorded data/routes and matching models | Native PyTorch candidate with usable mask | Native CPU candidate with usable mask and matching models |
-| FW, NODDI | Scoped inputs measured | Native Python candidate; compatible DIPY/AMICO | Native Python candidate; architecture-compatible packages |
-| DKI/Python MK-Curve | Specified-subject full-brain checks and timing recorded; invalid voxels excluded | Native numerical candidate; eligible multi-shell data | Native numerical candidate; eligible multi-shell data |
-| PNL CNN mask | PyTorch/ANTs route; paired CPU probability/mask checks; Linux x86_64 managed setup | Native route in Windows Slicer's Python (SimpleITK + PyTorch), **experimental**; not run on Windows here | Native route (SimpleITK + PyTorch), **experimental**; no CUDA, Metal unimplemented; unmeasured here |
-| Cortical postprocessing | Verified native components or existing FreeSurfer; offline prebuilt installation tested, publication pending; [setup](SURFACE_COMPONENTS.md) | No qualified native prebuilt bundle; WSL/full-install bridge acceptance pending | Existing native FreeSurfer candidate; no qualified prebuilt bundle |
-| MRtrix/FSL preprocessing | CPU/CUDA recorded | WSL 2 bridges; device policy runs in actual WSL Python | Native CPU MRtrix/FSL candidate; **no CUDA eddy** |
-| CSD/ACT/SIFT2 | External MRtrix route recorded | MRtrix WSL bridges; acceptance pending | Native MRtrix candidate; acceptance pending |
-| Full SAF | Python filter/geometry checks on recorded inputs | Windows argv/PATH adaptation added; MRtrix bridges/prepared surfaces; acceptance pending | POSIX/MRtrix with prepared surfaces; acceptance pending |
-| WMQL | Rule checks pass; sparse AF is **PARTIAL** | Pinned TractQuerier WSL bridge candidate | Configured author Python backend candidate |
-| WMA | 149741 scoped pass; old 100307 coverage failures remain excluded | WSL author shell/Slicer reverse bridge; acceptance pending | Author shell/display/Slicer CLI requirements; acceptance pending |
-| TractCloud | Seeded CUDA/repeat checks on recorded inputs | WSL device-selected CPU/CUDA; native Python not certified | External Python CPU candidate; MPS not implemented |
-| Python connectome/ROI statistics/VTK previews | Scoped tests recorded | Native candidate given valid input products | Native candidate given valid input products |
-| Managed MRtrix/FSL/PNL setup | Linux x86_64 (managed PNL runtime) | Separate Windows/WSL installer for MRtrix3 and FSL (the mask and the Python stages stay in Windows Slicer's Python); PNL uses the native route (PyTorch extension and the brain-mask assets) | MRtrix3 3.0.8 official tarball and FSL CPU runtime, Intel and Apple Silicon, macOS 14.5 or later; PNL uses the native route |
+| UI, NIfTI/NRRD, validation, result loading | Verified in Slicer 5.10.0 | **Verified native in 3D Slicer 5.10.0** (Extension Manager install + 4 GUI smoke suites + scene reload) | Native candidate with imaging packages |
+| DICOM conversion | Converter required (`dcm2niix`) | **Verified native in 3D Slicer 5.10.0** (`dcm2niix.exe`) | Native converter/Slicer candidate |
+| DTI, deterministic tracking | Teem tensor fit in Slicer; DIPY tracking | **Verified native in 3D Slicer 5.10.0** (full-brain multi-shell `HCP 100307` & `HCP 100408` + clinical single-shell `sub-001`) | Same, native candidate |
+| DDSeg/DDParcel/DDSurfer native reconstruction | Verified on recorded data/routes with matching models | **Verified native in 3D Slicer 5.10.0** (full-brain `HCP 100307`, `HCP 100408`, and `sub-001`) | Native CPU candidate with usable mask and matching models |
+| FW, NODDI | Verified on recorded inputs | **Verified native in 3D Slicer 5.10.0** (full-brain `HCP 100307` FW & NODDI; full-brain `sub-001` FW) | Native Python candidate; architecture-compatible packages |
+| DKI/Python MK-Curve | Full-brain WLS and MK-Curve checks recorded; invalid voxels excluded | **Verified native in 3D Slicer 5.10.0** (full-brain WLS on `HCP 100307` & `HCP 100408`; whole-axial-slab + stratified multi-slice MK-Curve) | Native numerical candidate; eligible multi-shell data |
+| PNL CNN mask | PyTorch/ANTs route; paired CPU probability/mask checks | Native route in Windows Slicer's Python (SimpleITK + PyTorch), **experimental** | Native route (SimpleITK + PyTorch), **experimental**; no CUDA, Metal unimplemented |
+| Cortical postprocessing | Bundled native 7-command Surface Runtime in `SlicerDSpace-v0.1.1-Linux-x64.tar.gz`; [setup](SURFACE_COMPONENTS.md) | **Verified native in 3D Slicer 5.10.0** (7 native `.exe` tools bundled in `surface-runtime-windows-x86_64`; requires user FreeSurfer license) | Existing native FreeSurfer candidate; no prebuilt bundle yet |
+| MRtrix/FSL preprocessing | Bundled native MRtrix3/FSL in `SlicerDSpace-v0.1.1-Linux-x64.tar.gz` | **Verified native in 3D Slicer 5.10.0** (`topup.exe`, `applytopup.exe`, `eddy_cpu.exe` in `fsl-2602.0-windows-x86_64`, numerically matched to Linux; WSL 2 optional fallback only) | Native CPU MRtrix/FSL candidate; **no CUDA eddy** |
+| CSD/ACT/SIFT2 | Bundled native MRtrix3 `3.0.8` route verified | **Verified native in 3D Slicer 5.10.0** (68 commands in `mrtrix-3.0.8-windows-x86_64`; T1-free ACT via `act_prep.py` `DDSeg + DDParcel -> 5TT -> 5ttcheck + 5tt2gmwmi` and `5ttgen freesurfer`) | Native MRtrix candidate; full acceptance pending |
+| Full SAF | Python filter/geometry checks on recorded inputs | **Verified native in 3D Slicer 5.10.0** (`tckgen.exe`, `tckedit.exe`, `tckresample.exe`, `tckmap.exe`, `tcksift2.exe` + native `trimesh`/`rtree`) | POSIX/MRtrix with prepared surfaces; acceptance pending |
+| WMQL | Verified (`37/37` non-empty bundles) | **Verified native in 3D Slicer 5.10.0** (native `tract_querier`, `37/37` non-empty bundles matching Linux) | Configured author Python backend candidate |
+| WMA | Verified (`74/74` ORG bundles) | **Verified native in 3D Slicer 5.10.0** (`whitematteranalysis` + native VTK scalar stats, `74/74` ORG bundles 100% coverage) | Author shell/display/Slicer CLI requirements; acceptance pending |
+| TractCloud | Seeded CPU/CUDA checks on recorded inputs | **Verified native in 3D Slicer 5.10.0** (Slicer PyTorch CPU/CUDA, `42/42` bundles 100% parity with Linux) | External Python CPU candidate; MPS not implemented |
+| Python connectome/ROI statistics/VTK previews | Verified on recorded inputs | **Verified native in 3D Slicer 5.10.0** (`84×84` symmetric matrices across multiple subjects) | Native candidate given valid input products |
+| Bundled runtime distribution & auto-recovery | `SlicerDSpace-v0.1.1-Linux-x64.tar.gz` (`bundled-runtimes` + `tree_sha256` auto-repair) | **`SlicerDSpace-v0.1.1-Windows-x64.zip`** (`bundled-runtimes` auto-discovered on first start + `tree_sha256` auto-repair if deleted/corrupted) | Not yet packaged as a unified archive |
 
 ---
 
-## Practical Limits
+## Practical Limits & Distribution Scope
 
-- Preserve existing reviewed native masks on all platforms. No error-triggered silent algorithm substitution.
-- PNL mask route: Linux uses the managed conda runner (ANTs 2.3.0); macOS and Windows use the native route, labelled "native (experimental)". Linux defaults to PNL generation. Fresh Windows configs from the explicit WSL installer default to MRtrix masking; existing defaults are preserved. Without WSL, supply a reviewed mask or explicitly select the Python-only DIPY mask candidate. See [lightweight routes](EXPERIMENTS.md).
-- Auto PyTorch uses CUDA when available, otherwise CPU. **Apple MPS is not implemented/validated**; this is not lack of Mac GPU hardware. PNL also selects PyTorch CPU or caller-visible CUDA; MPS is not selected.
-- Windows setup defaults to `-Device auto`, detects the GPU inside WSL and verifies actual PyTorch CUDA allocation. Explicit CUDA errors are not retried on CPU.
-- FSL requires explicit license acceptance. Installers do not change NVIDIA drivers or install replacement Linux display drivers.
-- WSL process-tree cancellation and Windows/macOS scene reintegration require real-host acceptance. Unit/source checks do not prove every Linux descendant stops on Windows cancellation.
-- The [full-brain DKI/MK-Curve records](../release/MODULE_RUNTIMES_20261017.md) concern a specified subject; valid-voxel screening is not a full-brain MATLAB comparison or validation of all acquisitions.
+- **Installation method**: Install `SlicerDSpace-v0.1.1-Windows-x64.zip` or `SlicerDSpace-v0.1.1-Linux-x64.tar.gz` from GitHub Releases via 3D Slicer 5.10.0 `Extensions Manager -> Install Extensions -> Install Extension from File` (not yet listed in the online Slicer Extension Catalog).
+- **On-demand model weights & atlases**: The unified platform archive bundles the extension code and native C/C++ runtimes (`MRtrix3 3.0.8`, `FSL 2602.0` diffusion preprocessing, and `FreeSurfer Surface Runtime 0.1.0`). Deep-learning model weights (`DDSeg`, `DDParcel`, `DDSurfer`, `TractCloud`, `PNL`) and large atlases (`ORG`) remain downloaded on demand on first use and cached locally.
+- **ACT / 5TT preparation scope**: SlicerDSpace's native T1-free ACT workflow generates 5TT and GMWMI directly from `DDSeg + DDParcel` (`tractography/act_prep.py`, validated by `5ttcheck` and `5tt2gmwmi`) or via `5ttgen freesurfer` on parcellation volumes. Upstream MRtrix3 `5ttgen fsl` requires T1w input plus external full FSL (`bet`, `fast`, `run_first_all`) and is not used by SlicerDSpace or supported by the 3-command FSL diffusion preprocessing bundle (`topup`, `applytopup`, `eddy_cpu`).
+- **FreeSurfer license requirement**: The 7 bundled FreeSurfer cortical surface postprocessing commands (`mris_anatomical_stats`, `mris_ca_label`, etc.) do not include any user-specific FreeSurfer license file (`activation_key_included: false`). Users running cortical surface postprocessing must supply their own free FreeSurfer license (`FS_LICENSE`).
+- **Mask policy & PyTorch devices**: Existing reviewed native masks are preserved on all platforms without silent algorithm substitution. Auto PyTorch selects CUDA when available and otherwise CPU; **Apple MPS is not implemented/validated**.
+- **DKI / MK-Curve scope**: Full-brain DKI (`WLS`) and whole-axial-slab / multi-slice Python `MK-Curve` runs are recorded on multi-shell subjects (`HCP 100307`, `HCP 100408`); valid-voxel screening is not a full-brain MATLAB runtime match across arbitrary clinical protocols.
 
-The legacy DDSeg entry now handles `.exe` and `Slicer.app/Contents`; macOS
-external Python removes Slicer dylib-path contamination. Details:
-[platform audit](../release/PLATFORM_AUDIT_20261015.md), [Windows](WINDOWS.md), [macOS](MACOS.md).
+See the [Windows 5.10.0 Acceptance Report](../release/WINDOWS_NATIVE_ACCEPTANCE_5.10.0.md), [Windows Setup Guide](WINDOWS.md), and [macOS Guide](MACOS.md).
 
 ---
 
 ## Upstream Boundaries
 
-FSL supports Linux/macOS and Windows through WSL; our wrappers still require host acceptance.
-[FSL installation](https://fsl.fmrib.ox.ac.uk/fsl/docs/install/index.html),
-[FSL Windows](https://fsl.fmrib.ox.ac.uk/fsl/docs/install/windows.html).
-FreeSurfer's Windows route hosts Linux, not native Windows binaries.
-[FreeSurfer requirements](https://surfer.nmr.mgh.harvard.edu/fswiki/SystemRequirements).
-PyTorch has MPS support, but this plugin does not yet implement it.
-[PyTorch MPS](https://docs.pytorch.org/docs/main/notes/mps.html).
+- **FSL**: Upstream FSL officially distributes full Linux/macOS suites and recommends WSL on Windows ([FSL installation](https://fsl.fmrib.ox.ac.uk/fsl/docs/install/index.html), [FSL Windows](https://fsl.fmrib.ox.ac.uk/fsl/docs/install/windows.html)). SlicerDSpace `v0.1.1` bundles native Windows x64 builds of the 3 diffusion preprocessing executables (`topup.exe`, `applytopup.exe`, `eddy_cpu.exe`) under the Oxford University Innovation Academic Licence; full FSL tools outside diffusion preprocessing (`bet`, `fast`, `FIRST`, GPU `eddy_cuda`) are not bundled.
+- **FreeSurfer**: Upstream FreeSurfer officially distributes Linux/macOS suites ([FreeSurfer requirements](https://surfer.nmr.mgh.harvard.edu/fswiki/SystemRequirements)). SlicerDSpace `v0.1.1` bundles native Windows x64 builds of the 7 cortical surface postprocessing commands required by `DDSurfer`; full `recon-all` is not bundled and a user FreeSurfer license is still required.
+- **PyTorch MPS**: PyTorch supports Apple MPS ([PyTorch MPS](https://docs.pytorch.org/docs/main/notes/mps.html)), but SlicerDSpace does not yet enable or certify MPS execution.

@@ -244,7 +244,14 @@ def run_mkcurve(dwi_path, bval_path, bvec_path, mask_path, output_dir, *,
                     from threadpoolctl import threadpool_limits
                     handles.enter_context(threadpool_limits(limits=worker_threads))
                 if num_workers > 1:
-                    if os.name == "nt":
+                    import sys
+                    main_file = getattr(sys.modules.get("__main__"), "__file__", None)
+                    can_spawn = (
+                        "slicerapp" not in Path(sys.executable).stem.lower()
+                        and bool(main_file)
+                        and Path(main_file).is_file()
+                    )
+                    if os.name == "nt" and not (can_spawn and count >= 256):
                         from concurrent.futures import ThreadPoolExecutor
                         pool = ThreadPoolExecutor(max_workers=num_workers,
                             initializer=_initialize_worker, initargs=(worker_threads,))

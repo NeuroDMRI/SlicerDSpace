@@ -113,7 +113,7 @@ source tests and already configured workstations cannot replace this test.
 | Compact-interface documentation, EN/ZH and screenshot sources | Prepared |
 | Public repository, resolvable icon/screenshot URLs, GitHub topic | Deferred by maintainer; required before public Index submission |
 | Linux real SDK/CPack and private installation | Passed for the documented selected routes; not a blank-machine full workflow |
-| Windows native 5.10.0 runtime bundles & full-workflow real-data acceptance | Passed on 3D Slicer 5.10.0 (`HCP 100307`) with `SLICERDSPACE_DISABLE_WSL=1`; see [Windows 5.10.0 Acceptance Report](WINDOWS_NATIVE_ACCEPTANCE_5.10.0.md) |
+| Windows native 5.10.0 runtime bundles & full-workflow real-data acceptance | Passed on 3D Slicer 5.10.0 (`HCP 100307`, `HCP 100408`, and clinical single-shell `sub-001`) with `SLICERDSPACE_DISABLE_WSL=1`, including clean-environment Extension Manager installation and corrupted-bundle auto-repair; see [Windows 5.10.0 Acceptance Report](WINDOWS_NATIVE_ACCEPTANCE_5.10.0.md) |
 | Recorded source licenses and LUT notices | Conversion/BWH, FreeSurfer/MGH, DDSurfer/MIT and PyTorch3D/BSD notices restored and checked; not a blanket legal clearance |
 | Model/template and fixture redistribution | Unconfirmed groups remain excluded from public asset archives |
 | Real-data tutorial and Sample Data registration | [Upstream Slicer DWIVolume walkthrough](../setup/SLICER_SAMPLE_DTI.md) tested for DTI; custom redistributable dataset registration remains pending |

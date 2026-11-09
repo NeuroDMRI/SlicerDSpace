@@ -6,6 +6,7 @@ import glob
 import logging
 import os
 import copy
+import gc
 import nibabel as nib
 import numpy as np
 
@@ -150,6 +151,7 @@ def run_network(img_filename, orig_data, prediction_probability, plane, ckpts, p
         plane_start = time.time()
 
         start_index = 0
+        cached_constant_temps = {}
         for batch_idx, sample_batch in enumerate(test_data_loader):
             if batch_idx == 0 or (batch_idx + 1) % progress_interval == 0 or (batch_idx + 1) == batch_count:
                 logger.info(
@@ -161,11 +163,22 @@ def run_network(img_filename, orig_data, prediction_probability, plane, ckpts, p
                 )
 
             images_batch = Variable(sample_batch["image"])
+            const_key = None
+            if (
+                images_batch.shape[0] == params_model["batch_size"]
+                and bool(torch.min(images_batch) == torch.max(images_batch))
+            ):
+                const_key = float(images_batch.reshape(-1)[0].item())
 
-            if params_model["use_cuda"]:
-                images_batch = images_batch.to(params_model["device"])
+            if const_key is not None and const_key in cached_constant_temps:
+                temp_list = [cached_constant_temps[const_key]]
+            else:
+                if params_model["use_cuda"]:
+                    images_batch = images_batch.to(params_model["device"])
 
-            temp, temp_list = model(images_batch)
+                temp, temp_list = model(images_batch)
+                if const_key is not None and temp_list:
+                    cached_constant_temps[const_key] = temp_list[0].detach().clone()
 
             # Only the fused prediction at index 0 is consumed during
             # postprocessing.  Caching every backbone prediction as a full
@@ -192,6 +205,8 @@ def run_network(img_filename, orig_data, prediction_probability, plane, ckpts, p
 
         logger.info("  -%s inference finished in %0.1f seconds", plane, time.time() - plane_start)
 
+    del test_data_loader, test_dataset, cached_constant_temps
+    gc.collect()
     return prediction_probability
 
 
@@ -251,6 +266,8 @@ def fastsurfercnn(img_filename, save_as, logger, args):
     start = time.time()
     pred_prob = run_network(img_filename, orig_data, pred_prob, "Axial", args.network_axial_path, params_model, model, logger)
     logger.info("Axial View Tested in {:0.4f} seconds".format(time.time() - start))
+    del model
+    gc.collect()
 
     # Coronal
     params_network["num_classes"] = args.num_classes_ax_cor
@@ -263,6 +280,8 @@ def fastsurfercnn(img_filename, save_as, logger, args):
     start = time.time()
     pred_prob = run_network(img_filename,  orig_data, pred_prob, "Coronal", args.network_coronal_path, params_model, model, logger)
     logger.info("Coronal View Tested in {:0.4f} seconds".format(time.time() - start))
+    del model
+    gc.collect()
 
     # Sagittal
     params_network["num_classes"] = args.num_classes_sag
@@ -275,6 +294,9 @@ def fastsurfercnn(img_filename, save_as, logger, args):
     start = time.time()
     pred_prob = run_network(img_filename, orig_data, pred_prob, "Sagittal", args.network_sagittal_path, params_model, model, logger)
     logger.info("Sagittal View Tested in {:0.4f} seconds".format(time.time() - start))
+    background_mask = orig_data[0] == -4
+    del model, orig_data
+    gc.collect()
 
 
     # # 保存 pred_prob 为 numpy 数组，文件名包含 subject_id
@@ -365,7 +387,7 @@ def fastsurfercnn(img_filename, save_as, logger, args):
         pred_prob[mask == 1] = pred_prob_medfilt[mask == 1]
         logger.info("Segmentation Cleaned up in {:0.4f} seconds.".format(time.time() - start))
 
-    pred_prob[orig_data[0] == -4] = 0
+    pred_prob[background_mask] = 0
 
     print(f" pred_prob 3 : {pred_prob.shape}")
 

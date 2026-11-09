@@ -273,10 +273,15 @@ class SharedWidgetMixin:
 
     def _update_pnl_route_visibility(self, backend: str) -> None:
         """SC-1b: the PNL route choice is shown only for the pnl_cnn backend."""
+        target_visible = backend == "pnl_cnn"
+        changed = False
         for name in ("pnlMaskRouteLabel", "pnlMaskRouteComboBox"):
             widget = getattr(self.ui, name, None)
-            if widget is not None:
-                widget.setVisible(backend == "pnl_cnn")
+            if widget is not None and widget.visible != target_visible:
+                widget.setVisible(target_visible)
+                changed = True
+        if changed and hasattr(self, "_fitAdvancedPage"):
+            self._fitAdvancedPage()
 
     def _onPnlMaskRouteChanged(self, index: int) -> None:
         combo = getattr(self.ui, "pnlMaskRouteComboBox", None)
@@ -381,9 +386,17 @@ class SharedWidgetMixin:
             group.visible = bool(node) and route_uses_topup(preprocessing_on)
         hint = getattr(self.ui, "topupHintLabel", None)
         if hint is not None:
-            hint.setText(topup_summary_text(validation))
-            color = "#C62828" if validation.errors else ("#E65100" if validation.warnings else "#607D8B")
-            hint.setStyleSheet(f"QLabel#topupHintLabel {{ color: {color}; }}")
+            text = topup_summary_text(validation)
+            if hint.text != text:
+                hint.setText(text)
+            from shared.ui_styles import is_dark_mode, set_stylesheet_if_changed
+
+            dark = is_dark_mode(hint)
+            if dark:
+                color = "#FF7B72" if validation.errors else ("#FFB74D" if validation.warnings else "#B8C5D0")
+            else:
+                color = "#C62828" if validation.errors else ("#E65100" if validation.warnings else "#607D8B")
+            set_stylesheet_if_changed(hint, f"QLabel#topupHintLabel {{ color: {color}; }}")
         errors = " ".join(validation.errors).lower()
         self._setWidgetError(getattr(self.ui, "preprocessingPhaseEncodingDirectionComboBox", None), "phase-encoding" in errors)
         self._setWidgetError(getattr(self.ui, "preprocessingReadoutTimeSpinBox", None), "readout" in errors)
@@ -1381,8 +1394,10 @@ class SharedWidgetMixin:
             return
         from shared.subject_id import derive_subject_id
         derived = derive_subject_id(node.inputDirectory or "")
+        lang = getattr(self, "_onboardingLanguage", "en")
+        placeholder = derived or onboarding_text(lang, "subject_id_placeholder")
         try:
-            widget.setPlaceholderText(derived)
+            widget.setPlaceholderText(placeholder)
         except Exception:
             pass
 
@@ -1566,10 +1581,13 @@ class SharedWidgetMixin:
         self._selectedProductsSummaryLabel = summary
         (targets_layout if targets_layout is not None else configuration_layout).addWidget(summary)
         # C4: one line under the target checkboxes naming the prerequisites that run automatically.
+        from shared.ui_styles import is_dark_mode
+
         also_runs = qt.QLabel("")
         also_runs.wordWrap = True
         also_runs.setObjectName("alsoRunsAutomaticallyLabel")
-        also_runs.setStyleSheet("QLabel#alsoRunsAutomaticallyLabel { color: #335B70; }")
+        also_color = "#7CC4EA" if is_dark_mode(getattr(self, "_uiWidget", None)) else "#335B70"
+        also_runs.setStyleSheet(f"QLabel#alsoRunsAutomaticallyLabel {{ color: {also_color}; }}")
         also_runs.visible = False
         self._alsoRunsLabel = also_runs
         (targets_layout if targets_layout is not None else configuration_layout).addWidget(also_runs)
@@ -1584,8 +1602,11 @@ class SharedWidgetMixin:
         notice = getattr(self, "_alsoRunsLabel", None)
         if notice is not None:
             notice_text = self._closure_notice_text()
-            notice.setText(notice_text)
-            notice.visible = bool(notice_text)
+            if notice.text != notice_text:
+                notice.setText(notice_text)
+            target_visible = bool(notice_text)
+            if notice.visible != target_visible:
+                notice.visible = target_visible
         text, target_text = selected_products_summary(
             self._selected_product_targets(),
             BackendSelection(
@@ -1595,12 +1616,13 @@ class SharedWidgetMixin:
                 connectome=(self._parameterNode.connectomeBackend or "auto").strip() or "auto",
             ),
         )
-        label.setText(text)
+        if label.text != text:
+            label.setText(text)
         run_button = getattr(self.ui, "runSelectedButton", None)
         if run_button:
-            run_button.setToolTip(
-                "Run selected products after environment preflight. Current selection: " + target_text
-            )
+            tip = "Run selected products after environment preflight. Current selection: " + target_text
+            if run_button.toolTip != tip:
+                run_button.setToolTip(tip)
 
     def _configure_log_widget(self) -> None:
         configure_log_widget(getattr(self.ui, "logPlainTextEdit", None), line_limit=int(self._logLineLimit))
@@ -2171,9 +2193,10 @@ class SharedWidgetMixin:
 
     def _refresh_advanced_run_settings(self, *, backend: Optional[str] = None) -> None:
         node = self._parameterNode
+        has_compact_categories = hasattr(self, "_advancedCategorySelector")
         if node:
             groups = (
-                (bool(node.targetMicrostructure), ("orchestrationMicrostructureStagesLabel", "orchestrationMicrostructureStageOptions")),
+                (not has_compact_categories and bool(node.targetMicrostructure), ("orchestrationMicrostructureStagesLabel", "orchestrationMicrostructureStageOptions")),
                 (bool(node.targetMicrostructure), ('parallelModelsLabel','parallelModelsSpinBox')),
                 (bool(node.targetMicrostructure) and self._microstructure_dki_enabled(),
                  ("orchestrationDkiFitMethodLabel", "orchestrationDkiFitMethodComboBox")),
@@ -2181,17 +2204,17 @@ class SharedWidgetMixin:
                  ("orchestrationIfwEchoTimeLabel", "orchestrationIfwEchoTimeLineEdit",
                   "orchestrationIfwT2TissueLabel", "orchestrationIfwT2TissueLineEdit",
                   "orchestrationIfwT2CsfLabel", "orchestrationIfwT2CsfLineEdit")),
-                (bool(node.targetBundles), ("orchestrationBundleBackendLabel", "orchestrationBundleBackendComboBox")),
-                (bool(node.targetTractography or node.targetBundles or node.targetConnectome), ("orchestrationTractographyBackendLabel", "orchestrationTractographyBackendComboBox")),
+                (not has_compact_categories and bool(node.targetBundles), ("orchestrationBundleBackendLabel", "orchestrationBundleBackendComboBox")),
+                (not has_compact_categories and bool(node.targetTractography or node.targetBundles or node.targetConnectome), ("orchestrationTractographyBackendLabel", "orchestrationTractographyBackendComboBox")),
                 (False, ("batchModeLabel", "batchModeCheckBox", "batchRootLabel", "batchRootPath", "batchSizeLabel", "batchSizeSpinBox", "batchArrangeInputsLabel", "batchArrangeInputsComboBox")),
             )
             for visible, names in groups:
                 for name in names:
                     control = getattr(self.ui, name, None)
-                    if control:
+                    if control and control.visible != visible:
                         control.visible = visible
             legacy_combo = getattr(self.ui, "orchestrationMicrostructureStagesComboBox", None)
-            if legacy_combo is not None:
+            if legacy_combo is not None and legacy_combo.visible:
                 legacy_combo.visible = False
         backend = (backend or self._tractography_backend_text() or "csd_act").strip() or "csd_act"
         from shared.ui_ukf import refresh_ukf_controls
@@ -2210,26 +2233,37 @@ class SharedWidgetMixin:
             return
 
         control_state = streamline_control_state(backend)
-        streamline_spinbox.enabled = control_state.enabled
+        if streamline_spinbox.enabled != control_state.enabled:
+            streamline_spinbox.enabled = control_state.enabled
         streamlines_visible = control_state.enabled and (not node or bool(node.targetTractography or node.targetConnectome))
-        streamline_spinbox.visible = streamlines_visible
-        streamline_label.visible = streamlines_visible
-        streamline_label.text = control_state.label
-        streamline_label.toolTip = control_state.tooltip
-        streamline_spinbox.toolTip = control_state.tooltip
+        if streamline_spinbox.visible != streamlines_visible:
+            streamline_spinbox.visible = streamlines_visible
+        if streamline_label.visible != streamlines_visible:
+            streamline_label.visible = streamlines_visible
+        if streamline_label.text != control_state.label:
+            streamline_label.text = control_state.label
+        if streamline_label.toolTip != control_state.tooltip:
+            streamline_label.toolTip = control_state.tooltip
+        if streamline_spinbox.toolTip != control_state.tooltip:
+            streamline_spinbox.toolTip = control_state.tooltip
         self._refresh_bundle_backend_highlight()
         from shared.ui_advanced_layout import refresh_advanced_categories
         refresh_advanced_categories(self)
 
     def _refresh_bundle_backend_highlight(self, *, bundle_backend: Optional[str] = None) -> None:
+        from shared.ui_styles import set_stylesheet_if_changed
+
         active_sections = active_bundle_backend_sections(bundle_backend or self._bundle_backend_text())
         node = self._parameterNode
         for name in ("wmqlQueryPresetLabel", "wmqlQueryPresetComboBox", 'wmqlQuerySelectionLabel', 'wmqlQuerySelectionLineEdit'):
             control = getattr(self.ui, name, None)
             if control is not None:
                 from shared.algorithm_selection import algorithms, BUNDLES
-                control.visible = bool(node and node.targetBundles and "wmql" in algorithms(bundle_backend or self._bundle_backend_text(), BUNDLES, "wmql"))
+                target_vis = bool(node and node.targetBundles and "wmql" in algorithms(bundle_backend or self._bundle_backend_text(), BUNDLES, "wmql"))
+                if control.visible != target_vis:
+                    control.visible = target_vis
 
+        wma_active = "wma" in active_sections
         wma_input_widgets = (
             getattr(self.ui, "wmaAtlasLabel", None),
             getattr(self.ui, "wmaAtlasComboBox", None),
@@ -2238,8 +2272,10 @@ class SharedWidgetMixin:
         )
         for widget in wma_input_widgets:
             if widget is not None:
-                widget.enabled = "wma" in active_sections
-                widget.visible = "wma" in active_sections
+                if widget.enabled != wma_active:
+                    widget.enabled = wma_active
+                if widget.visible != wma_active:
+                    widget.visible = wma_active
 
         label_groups = getattr(self, "_environmentBackendSectionLabels", {}) or {}
         row_groups = getattr(self, "_environmentBackendSectionRows", {}) or {}
@@ -2248,9 +2284,9 @@ class SharedWidgetMixin:
             active = key in active_sections
             title_style, description_style = optional_backend_label_styles(active)
             if title_label:
-                title_label.setStyleSheet(title_style)
+                set_stylesheet_if_changed(title_label, title_style)
             if description_label:
-                description_label.setStyleSheet(description_style)
+                set_stylesheet_if_changed(description_label, description_style)
 
             for widgets in row_groups.get(key, []):
                 for widget in widgets:
@@ -2259,7 +2295,7 @@ class SharedWidgetMixin:
                     if hasattr(widget, "setStyleSheet"):
                         style = optional_backend_widget_style(widget.__class__.__name__, active)
                         if style is not None:
-                            widget.setStyleSheet(style)
+                            set_stylesheet_if_changed(widget, style)
 
     def appendLog(self, text: str) -> None:
         append_log(self, text)
@@ -3292,12 +3328,18 @@ class SharedWidgetMixin:
     def _setWidgetError(self, widget, has_error: bool) -> None:
         if not widget:
             return
-        border_style = "border: 1px solid #C62828;" if has_error else ""
+        from shared.ui_styles import is_dark_mode, set_stylesheet_if_changed
+
+        if not has_error:
+            set_stylesheet_if_changed(widget, "")
+            return
+        border_color = "#FF7B72" if is_dark_mode(widget) else "#C62828"
+        border_style = f"border: 1px solid {border_color};"
         class_name = widget.metaObject().className() if hasattr(widget, "metaObject") else ""
         if class_name == "ctkPathLineEdit":
-            widget.setStyleSheet(f"ctkPathLineEdit {{ {border_style} }}")
+            set_stylesheet_if_changed(widget, f"ctkPathLineEdit {{ {border_style} }}")
         else:
-            widget.setStyleSheet(border_style)
+            set_stylesheet_if_changed(widget, border_style)
 
     def _populateDeviceCombo(self) -> None:
         combo = getattr(self.ui, "deviceComboBox", None)
@@ -3380,15 +3422,21 @@ class SharedWidgetMixin:
         label = getattr(self.ui, "environmentResultLabel", None)
         if not label:
             return
+        from shared.ui_styles import is_dark_mode
+
+        dark = is_dark_mode(label)
+        err_color = "#FF7B72" if dark else "#C62828"
+        neutral_color = "#B8C5D0" if dark else "#546E7A"
+        ok_color = "#66BB6A" if dark else "#2E7D32"
         if error:
             label.setText(f"Environment check failed: {error}")
-            label.setStyleSheet("QLabel#environmentResultLabel { color: #C62828; padding-top: 4px; }")
+            label.setStyleSheet(f"QLabel#environmentResultLabel {{ color: {err_color}; padding-top: 4px; }}")
             return
         if result is None:
             label.setText("No environment check has been run yet.")
-            label.setStyleSheet("QLabel#environmentResultLabel { color: #546E7A; padding-top: 4px; }")
+            label.setStyleSheet(f"QLabel#environmentResultLabel {{ color: {neutral_color}; padding-top: 4px; }}")
             return
-        color = "#C62828" if result.blocker_count else "#2E7D32"
+        color = err_color if result.blocker_count else ok_color
         label.setText(self._environment_summary_text(result))
         label.setStyleSheet(f"QLabel#environmentResultLabel {{ color: {color}; padding-top: 4px; }}")
 

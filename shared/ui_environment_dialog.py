@@ -10,7 +10,12 @@ from shared.ui_environment_panel import (
     environment_item_button_tooltip,
     environment_item_text,
 )
-from shared.ui_styles import ENVIRONMENT_READY_LABEL_STYLE, ENVIRONMENT_RESULTS_DIALOG_STYLE
+from shared.ui_styles import (
+    ENVIRONMENT_READY_LABEL_STYLE,
+    ENVIRONMENT_RESULTS_DIALOG_STYLE,
+    environment_ready_label_style,
+    environment_results_dialog_style,
+)
 
 
 def build_environment_item_row(
@@ -70,7 +75,7 @@ def show_environment_results_dialog(
     dialog = qt.QDialog(slicer.util.mainWindow())
     dialog.setWindowTitle("SlicerDSpace Environment Dependencies")
     dialog.resize(900, 640)
-    dialog.setStyleSheet(ENVIRONMENT_RESULTS_DIALOG_STYLE)
+    dialog.setStyleSheet(environment_results_dialog_style(widget=dialog))
     owner._environmentDialog = dialog
     state = environment_dialog_state(result, python_install_target=python_install_target)
 
@@ -134,7 +139,7 @@ def show_environment_results_dialog(
     else:
         ready_label = qt.QLabel(state.ready_text)
         ready_label.wordWrap = True
-        ready_label.setStyleSheet(ENVIRONMENT_READY_LABEL_STYLE)
+        ready_label.setStyleSheet(environment_ready_label_style(widget=dialog))
         layout.addWidget(ready_label)
 
     dialog.show()

@@ -61,16 +61,23 @@ def refresh_compact_algorithms(owner: Any, language: str | None = None) -> None:
         control = getattr(ui, name, None)
         if control is not None:
             text = onboarding_text(language, "compact_algorithm_selection").format(algorithms=algorithms)
+            tooltip = onboarding_text(language, "compact_algorithm_tooltip").format(algorithms=algorithms)
             summary = getattr(owner, "_algorithmSummaryLabels", {}).get(name)
             if summary is None:
-                control.setText(text)
+                if getattr(control, "text", None) != text:
+                    control.setText(text)
             else:
-                control.setText("")
-                control.setAccessibleName(text)
-            control.setToolTip(onboarding_text(language, "compact_algorithm_tooltip").format(algorithms=algorithms))
+                if getattr(control, "text", None) != "":
+                    control.setText("")
+                if getattr(control, "accessibleName", None) != text:
+                    control.setAccessibleName(text)
+            if getattr(control, "toolTip", None) != tooltip:
+                control.setToolTip(tooltip)
             if summary is not None:
-                summary.setText(algorithms)
-                summary.setToolTip(control.toolTip)
+                if getattr(summary, "text", None) != algorithms:
+                    summary.setText(algorithms)
+                if getattr(summary, "toolTip", None) != tooltip:
+                    summary.setToolTip(tooltip)
     from shared.ui_algorithm_picker import refresh_picker_language
     refresh_picker_language(owner)
 
@@ -85,7 +92,11 @@ def install_compact_layout(owner: Any) -> None:
 
     ui = owner.ui
     root = owner._uiWidget
-    root.setSizePolicy(qt.QSizePolicy.Expanding, qt.QSizePolicy.Maximum)
+    root.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Maximum)
+    root.setMinimumWidth(0)
+    parent_widget = getattr(owner, "parent", None)
+    if parent_widget is not None and hasattr(parent_widget, "setMinimumWidth"):
+        parent_widget.setMinimumWidth(0)
     # Content stays at the top through trailing stretches, not setAlignment(AlignTop): an aligned
     # layout keeps its size hint as height, which leaves out wrapped lines (height-for-width), so
     # rows were clipped in narrow docks.
@@ -95,6 +106,8 @@ def install_compact_layout(owner: Any) -> None:
     layout.setContentsMargins(6, 4, 6, 6)
     layout.setSpacing(6)
     layout.setSizeConstraint(qt.QLayout.SetMinAndMaxSize)
+    ui.headerFrame.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Maximum)
+    ui.headerFrame.setMinimumWidth(0)
     ui.headerLayout.setContentsMargins(0, 2, 0, 5)
     ui.headerTextLayout.setContentsMargins(0, 0, 0, 0)
     from shared.ui_branding import install_header_wordmark
@@ -112,6 +125,8 @@ def install_compact_layout(owner: Any) -> None:
     advanced = ctk.ctkCollapsibleButton(root)
     advanced.setObjectName("advancedSettingsPanel")
     advanced.collapsed = True
+    advanced.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Preferred)
+    advanced.setMinimumWidth(0)
     advanced_layout = qt.QVBoxLayout(advanced)
     advanced_layout.setContentsMargins(8, 8, 8, 8)
     advanced_layout.setSpacing(8)
@@ -127,15 +142,20 @@ def install_compact_layout(owner: Any) -> None:
     advanced_layout.addWidget(prepare_inputs)
     prepare_inputs.show()
     prepare_inputs.collapsed = True
+    prepare_inputs.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Preferred)
+    prepare_inputs.setMinimumWidth(0)
     for name in ("parametersCollapsibleButton", "resultsCollapsibleButton"):
         section = getattr(ui, name)
         layout.removeWidget(section)
         advanced_layout.addWidget(section)
         section.collapsed = True
+        section.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Preferred)
+        section.setMinimumWidth(0)
 
     utilities = qt.QHBoxLayout()
     for name in ("diagnostic_button", "config_button"):
         button = owner._onboardingWidgets[name]
+        button.setMinimumWidth(0)
         utilities.addWidget(button)
         button.show()
     advanced_layout.addLayout(utilities)
@@ -146,6 +166,8 @@ def install_compact_layout(owner: Any) -> None:
     layout.removeWidget(environment)
     layout.insertWidget(layout.indexOf(advanced) + 1, environment)
     environment.collapsed = True
+    environment.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Preferred)
+    environment.setMinimumWidth(0)
     from shared.ui_algorithm_picker import install_algorithm_pickers
     install_algorithm_pickers(owner)
 
@@ -154,16 +176,20 @@ def install_compact_layout(owner: Any) -> None:
     ui.runLayout.addWidget(ui.statusFrame)
     ui.runLayout.setContentsMargins(0, 0, 0, 0)
     ui.runLayout.setSpacing(4)
+    ui.runCollapsibleButton.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Preferred)
+    ui.runCollapsibleButton.setMinimumWidth(0)
     ui.logLayout.setContentsMargins(0, 0, 0, 0)
     ui.logLayout.setSpacing(4)
     ui.logPlainTextEdit.setMinimumHeight(80)
     ui.logPlainTextEdit.setMaximumHeight(100)
-    ui.logCollapsibleButton.setSizePolicy(qt.QSizePolicy.Expanding, qt.QSizePolicy.Maximum)
+    ui.logCollapsibleButton.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Maximum)
+    ui.logCollapsibleButton.setMinimumWidth(0)
     owner._prepareInputWidgets["panel"].setStyleSheet("")
     for section in (ui.configurationCollapsibleButton, ui.targetsCollapsibleButton):
         # Preferred, not Maximum: Maximum caps a section at its size hint, which leaves out wrapped
         # form rows; the trailing stretch below keeps sections from growing beyond their content.
-        section.setSizePolicy(qt.QSizePolicy.Expanding, qt.QSizePolicy.Preferred)
+        section.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Preferred)
+        section.setMinimumWidth(0)
         section.layout().setContentsMargins(8, 6, 8, 6)
         section.layout().setSpacing(4)
     for form in (ui.configurationFormLayout, ui.targetProductsFormLayout):
@@ -176,24 +202,85 @@ def install_compact_layout(owner: Any) -> None:
     owner._cancelRunButton.hide()
     owner._selectedProductsSummaryLabel.hide()
     layout.addStretch(1)
+    owner._fitHeightQueued = False
 
-    def fit_height() -> None:
+    def _configure_parent_scroll_area() -> None:
+        curr = getattr(owner, "parent", None) or root.parentWidget()
+        while curr is not None:
+            if curr.inherits("QScrollArea"):
+                curr.setVerticalScrollBarPolicy(qt.Qt.ScrollBarAlwaysOn)
+                curr.setHorizontalScrollBarPolicy(qt.Qt.ScrollBarAlwaysOff)
+                break
+            curr = curr.parentWidget()
+
+    _configure_parent_scroll_area()
+
+    def fit_height(*_args: Any) -> None:
         # Slicer's scroll area keeps an old expanded height unless resized explicitly.
+        # Only adjust height (never width) and include height-for-width so root.resize matches
+        # owner.layout's exact height calculation on the first pass without a 2-step vertical bounce.
+        owner._fitHeightQueued = False
         try:
-            layout.invalidate()
-            layout.activate()
-            root.resize(root.width, root.minimumSizeHint.height())
+            _configure_parent_scroll_area()
+            if root.width <= 0:
+                return
+            children = [c for c in root.findChildren(qt.QWidget) if c.isVisibleTo(root) and c.layout() is not None]
+            sync_stack = getattr(owner, "_syncAdvancedStackHeight", None)
+            for _ in range(3):
+                # Top-down: propagate container widths/geometries down to newly shown child widgets.
+                layout.invalidate()
+                layout.activate()
+                for child in children:
+                    child.layout().invalidate()
+                    child.layout().activate()
+                if callable(sync_stack):
+                    sync_stack()
+                # Bottom-up: propagate updated height-for-width from leaf layouts up to root.
+                for child in reversed(children):
+                    child.layout().invalidate()
+                    child.layout().activate()
+                if callable(sync_stack):
+                    sync_stack()
+                layout.invalidate()
+                layout.activate()
+                hfw = layout.totalHeightForWidth(root.width) if layout.hasHeightForWidth() else 0
+                target_height = max(root.minimumSizeHint.height(), hfw)
+                if root.height != target_height:
+                    root.resize(root.width, target_height)
+            if getattr(owner, "layout", None) is not None:
+                owner.layout.invalidate()
+                owner.layout.activate()
         except ValueError:
             return
 
     def queue_fit(*_args: Any) -> None:
+        if getattr(owner, "_fitHeightQueued", False):
+            return
+        owner._fitHeightQueued = True
         qt.QTimer.singleShot(0, fit_height)
 
-    for section in (advanced, ui.configurationCollapsibleButton, ui.targetsCollapsibleButton,
-                    ui.parametersCollapsibleButton, ui.environmentCollapsibleButton,
-                    ui.resultsCollapsibleButton, ui.advancedRunCollapsibleButton,
-                    owner._prepareInputWidgets["panel"]):
-        section.connect("contentsCollapsed(bool)", queue_fit)
+    def on_section_toggled(*_args: Any) -> None:
+        fit_height()
+        queue_fit()
+
+    owner._fitCompactHeight = fit_height
+    owner._queueCompactFit = queue_fit
+
+    sections = [
+        advanced,
+        ui.configurationCollapsibleButton,
+        ui.targetsCollapsibleButton,
+        ui.parametersCollapsibleButton,
+        ui.environmentCollapsibleButton,
+        ui.resultsCollapsibleButton,
+        ui.advancedRunCollapsibleButton,
+        owner._prepareInputWidgets["panel"],
+        getattr(owner, "_environmentMoreOptions", None),
+        getattr(owner, "_environmentAdvancedPathsWidget", None),
+    ]
+    for section in sections:
+        if section is not None and hasattr(section, "connect"):
+            section.connect("contentsCollapsed(bool)", on_section_toggled)
     queue_fit()
 
 

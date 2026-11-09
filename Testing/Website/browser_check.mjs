@@ -229,7 +229,7 @@ async function runViewport(browser, origin, name, width, height, opts) {
     return { src: img.getAttribute('src'), width: img.naturalWidth, height: img.naturalHeight,
       fit: getComputedStyle(img).objectFit, ratio: box.width / box.height };
   });
-  record(overview.src === 'assets/img/results-overview.svg?v=wmql-cerebellar-200' && overview.width > 0
+  record(overview.src === 'assets/img/results-overview.svg?v=ukf-coverage-2' && overview.width > 0
       && Math.abs(overview.ratio - 1830 / 2036) < .01,
     `${tag}: complete vector results overview is uncropped`, JSON.stringify(overview));
   record(await page.locator('#outputs article.tile').count() === 0,
@@ -451,20 +451,20 @@ async function runPerformance(browser, origin, width, noJs = false) {
   await evidence.scrollIntoViewIfNeeded();
   record(await evidence.evaluate(el => el.tagName === 'DIV' && !el.closest('details')) &&
     await page.locator('#performance-evidence .perf-table').isVisible(), prefix + ': complete comparison table is visible by default');
-  record(await page.locator('.perf-table .perf-record').count() === 14 &&
+  record(await page.locator('.perf-table .perf-record').count() === 17 &&
     await page.locator('.perf-table .perf-record').evaluateAll(rows => rows.every(row => getComputedStyle(row).display !== 'none')),
-    prefix + ': all fourteen timing rows are visible without expanding anything');
+    prefix + ': all seventeen timing rows are visible without expanding anything');
   record(await page.locator('.perf-chart, .perf-filters, #perf-count').count() === 0,
     prefix + ': no filter controls, count or highlighted bar charts');
   record(await page.locator('.perf-methods').count() === 0, prefix + ': no separate method-details section');
-  record(await page.locator('.perf-toggle[aria-expanded="false"]').count() === 14 &&
+  record(await page.locator('.perf-toggle[aria-expanded="false"]').count() === 17 &&
     await page.locator('.perf-detail-row.is-open').count() === 0 &&
     await page.locator('.perf-detail-row').evaluateAll(rows => rows.every(row => row.hidden && getComputedStyle(row).display === 'none')),
     prefix + ': all method and verification details start hidden, including without JavaScript');
   record(await page.locator('.perf-toggle-icon').evaluateAll(icons => icons.every(icon => icon.textContent === '+')),
     prefix + ': each timing row has an explicit plus control');
   if (noJs) {
-    record(await page.locator('.perf-toggle:disabled').count() === 14,
+    record(await page.locator('.perf-toggle:disabled').count() === 17,
       prefix + ': failed or disabled scripting does not expose details or leave active broken buttons');
   }
   record(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), prefix + ': no page overflow with the table visible');
@@ -494,7 +494,7 @@ async function runPerformance(browser, origin, width, noJs = false) {
       prefix + ': a fresh load never expands details from a retained URL fragment');
     const response = await context.request.get(origin + '/SlicerDSpace/assets/data/performance.json');
     const data = await response.json();
-    record(response.ok() && data.records.length === 14 && !JSON.stringify(data).includes('/data/chengjin/'), prefix + ': sanitized evidence download');
+    record(response.ok() && data.records.length === 17 && !JSON.stringify(data).includes('/data/chengjin/'), prefix + ': sanitized evidence download');
     // Both the direct fragment and footer navigate to the already-visible table.
     await page.goto(origin + '/SlicerDSpace/index.html#performance', { waitUntil: 'load' });
     record(await page.locator('#performance-evidence .perf-table').isVisible(), prefix + ': #performance shows the complete table');
@@ -523,22 +523,22 @@ async function runPerformanceFailures(browser, origin) {
       if (mode === 'no root JS class') {
         await page.evaluate(() => document.documentElement.classList.remove('js'));
       }
-      record(await page.locator('.perf-record').count() === 14 &&
+      record(await page.locator('.perf-record').count() === 17 &&
         await page.locator('.perf-table').isVisible() &&
-        await page.locator('.perf-detail-row').evaluateAll(rows => rows.length === 14 &&
+        await page.locator('.perf-detail-row').evaluateAll(rows => rows.length === 17 &&
           rows.every(row => row.hidden && getComputedStyle(row).display === 'none')),
         `${file} ${mode}: timing table remains visible and every detail stays hidden`);
       if (mode === 'no root JS class') {
         const toggle = page.locator('.perf-toggle[aria-controls="method-freewater"]');
         await toggle.locator('.perf-toggle-icon').click();
         record(await page.locator('#method-freewater').isVisible() &&
-          await page.locator('.perf-detail-row[hidden]').count() === 13,
+          await page.locator('.perf-detail-row[hidden]').count() === 16,
           `${file} ${mode}: explicit plus opens only the selected detail`);
         await toggle.click();
-        record(await page.locator('.perf-detail-row[hidden]').count() === 14,
+        record(await page.locator('.perf-detail-row[hidden]').count() === 17,
           `${file} ${mode}: minus restores the compact timing-only table`);
       } else {
-        record(await page.locator('.perf-toggle:disabled').count() === 14,
+        record(await page.locator('.perf-toggle:disabled').count() === 17,
           `${file} ${mode}: unavailable toggles are safely disabled`);
       }
       await context.close();
@@ -697,9 +697,12 @@ async function runSkills(browser, origin) {
       await page.locator('#cli').evaluate(el => !el.closest('details')),
       `skills ${width}px: no capability panels; CLI instructions are always expanded`);
     for (const id of ['agent-install-prompt', 'agent-analysis-prompt']) {
-      await skills.locator('[data-code]').filter({ has: page.locator('#' + id) }).locator('.copy').click();
-      const copied = await page.evaluate(() => navigator.clipboard.readText());
-      record(copied === await page.locator('#' + id).textContent() &&
+      const copyBtn = skills.locator('[data-code]').filter({ has: page.locator('#' + id) }).locator('.copy');
+      await copyBtn.click();
+      await page.waitForTimeout(80);
+      const copied = (await page.evaluate(() => navigator.clipboard.readText())).replace(/\r\n/g, '\n');
+      const expected = (await page.locator('#' + id).textContent()).replace(/\r\n/g, '\n');
+      record(copied === expected &&
         copied.includes('https://github.com/NeuroDMRI/SlicerDSpace/blob/main/.agents/skills/slicerdspace/SKILL.md'),
         `skills ${width}px: ${id} copies intact with its Skill URL`);
     }
@@ -767,14 +770,16 @@ async function runLanguages(browser, origin) {
       `language ${width}px: capsule stays at the right without moving or covering navigation`, JSON.stringify(header));
     await context.grantPermissions(['clipboard-read', 'clipboard-write']);
     await page.locator('#skills [data-code]').filter({ has: page.locator('#agent-install-prompt') }).locator('.copy').click();
-    const copied = await page.evaluate(() => navigator.clipboard.readText());
-    record(copied === await page.locator('#agent-install-prompt').textContent() && copied.includes('配置需要的依赖环境'),
+    await page.waitForTimeout(80);
+    const copied = (await page.evaluate(() => navigator.clipboard.readText())).replace(/\r\n/g, '\n');
+    const expected = (await page.locator('#agent-install-prompt').textContent()).replace(/\r\n/g, '\n');
+    record(copied === expected && copied.includes('配置需要的依赖环境'),
       `language ${width}px: copy uses the Chinese Agent prompt`);
     await page.goto(origin + '/SlicerDSpace/zh.html#performance', { waitUntil: 'load' });
     const count = await page.locator('.perf-table .perf-record').count();
-    record(count === 14 && await page.locator('.perf-table').isVisible() &&
+    record(count === 17 && await page.locator('.perf-table').isVisible() &&
         await page.locator('[data-perf-filter], #perf-count').count() === 0 &&
-        await page.locator('#integrated tr[data-method]').count() === 33 &&
+        await page.locator('#integrated tr[data-method]').count() === 30 &&
         await page.locator('.int-table .method-reference').count() > 35 &&
         await page.locator('#cite').count() === 0,
       `language ${width}px: full translated performance table and complete method/reference catalogs`);
@@ -797,7 +802,7 @@ async function runLanguages(browser, origin) {
   record(await page.locator('html').getAttribute('lang') === 'zh-CN' &&
       await page.locator('#skills-title .start-route-text').innerText() === '让 Agent 协助安装、分析与结果检查。' &&
       await page.locator('#skills-title .start-recommended').innerText() === '（推荐）' &&
-      await page.locator('#integrated tr[data-method]').count() === 35,
+      await page.locator('#integrated tr[data-method]').count() === 30,
     'language no JS: Chinese content, commands and all methods are available without scripting');
   record(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
     'language no JS: Chinese page fits a mobile viewport');

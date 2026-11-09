@@ -43,6 +43,13 @@ def choose_algorithms(owner, family):
     dialog = qt.QDialog(slicer.util.mainWindow())
     dialog.objectName = "algorithmPicker_" + family
     dialog.windowTitle = ("选择算法（可多选）" if zh else "Select algorithms (multiple allowed)")
+    try:
+        from shared.ui_styles import is_dark_mode, ui_stylesheet
+
+        if is_dark_mode(getattr(owner, "_uiWidget", None)):
+            dialog.setStyleSheet(ui_stylesheet(dark=True, widget=dialog))
+    except Exception:
+        pass
     layout = qt.QVBoxLayout(dialog)
     hint = qt.QLabel("勾选本次需要的算法。" if zh else "Choose the algorithms to run.")
     hint.wordWrap = True
@@ -136,6 +143,10 @@ def refresh_picker_language(owner):
                 "tractography": ("纤维追踪", "tractography"),
                 "bundles": ("纤维束分析", "bundle analysis")}[family][0 if zh else 1]
         action = "选择" + name + "算法" if zh else "Select " + name + " algorithms"
-        button.text = "..."
-        button.setAccessibleName(action)
-        button.toolTip = action + ("（可多选）。当前：" if zh else " (multiple allowed). Current: ") + ", ".join(LABELS[value] for value in selected)
+        tip = action + ("（可多选）。当前：" if zh else " (multiple allowed). Current: ") + ", ".join(LABELS[value] for value in selected)
+        if getattr(button, "text", None) != "...":
+            button.text = "..."
+        if getattr(button, "accessibleName", None) != action:
+            button.setAccessibleName(action)
+        if getattr(button, "toolTip", None) != tip:
+            button.toolTip = tip

@@ -82,22 +82,38 @@ def table_item(text: str, state: str = ""):
     """Return a styled run-status table item."""
 
     import qt
+    from shared.ui_styles import is_dark_mode
 
     item = qt.QTableWidgetItem(text or "")
     if text:
         item.setToolTip(text)
     if state:
-        colors = {
-            "queued": qt.QColor("#546E7A"),
-            "running": qt.QColor("#1565C0"),
-            "will_run": qt.QColor("#1565C0"),
-            "completed": qt.QColor("#2E7D32"),
-            "passed": qt.QColor("#2E7D32"),
-            "skipped": qt.QColor("#546E7A"),
-            "blocked": qt.QColor("#C62828"),
-            "failed": qt.QColor("#C62828"),
-            "cancelled": qt.QColor("#EF6C00"),
-        }
+        dark = is_dark_mode()
+        colors = (
+            {
+                "queued": qt.QColor("#9BA7B4"),
+                "running": qt.QColor("#64B5F6"),
+                "will_run": qt.QColor("#64B5F6"),
+                "completed": qt.QColor("#66BB6A"),
+                "passed": qt.QColor("#66BB6A"),
+                "skipped": qt.QColor("#9BA7B4"),
+                "blocked": qt.QColor("#FF7B72"),
+                "failed": qt.QColor("#FF7B72"),
+                "cancelled": qt.QColor("#FFB74D"),
+            }
+            if dark
+            else {
+                "queued": qt.QColor("#546E7A"),
+                "running": qt.QColor("#1565C0"),
+                "will_run": qt.QColor("#1565C0"),
+                "completed": qt.QColor("#2E7D32"),
+                "passed": qt.QColor("#2E7D32"),
+                "skipped": qt.QColor("#546E7A"),
+                "blocked": qt.QColor("#C62828"),
+                "failed": qt.QColor("#C62828"),
+                "cancelled": qt.QColor("#EF6C00"),
+            }
+        )
         color = colors.get(state)
         if color:
             item.setForeground(color)

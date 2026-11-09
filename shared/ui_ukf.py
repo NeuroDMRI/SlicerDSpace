@@ -33,7 +33,11 @@ def refresh_ukf_controls(owner, backend):
         group = ctk.ctkCollapsibleGroupBox()
         group.objectName = "ukfParametersGroup"
         group.collapsed = True
+        group.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Preferred)
+        group.setMinimumWidth(0)
         layout = qt.QFormLayout(group)
+        layout.setRowWrapPolicy(qt.QFormLayout.WrapLongRows)
+        layout.setFieldGrowthPolicy(qt.QFormLayout.AllNonFixedFieldsGrow)
         controls, labels = {}, {}
         owner._ukfUpdating = True
 
@@ -77,27 +81,38 @@ def refresh_ukf_controls(owner, backend):
         owner._ukfControls, owner._ukfLabels = controls, labels
         owner._ukfGroup, owner._ukfNote, owner._ukfReset = group, note, reset
         if hasattr(owner, '_fitAdvancedPage'):
-            group.toggled.connect(lambda *_: qt.QTimer.singleShot(0, owner._fitAdvancedPage))
+            group.toggled.connect(owner._fitAdvancedPage)
 
     from shared.algorithm_selection import contains_tracking
-    owner._ukfGroup.visible = contains_tracking(backend, "ukf") and bool(
+    target_visible = contains_tracking(backend, "ukf") and bool(
         node and (node.targetTractography or node.targetBundles or node.targetConnectome)
     )
+    if owner._ukfGroup.visible != target_visible:
+        owner._ukfGroup.visible = target_visible
     if hasattr(owner, '_advancedCategoryStack') and owner._ukfGroup.parent() != owner._advancedCategoryStack.widget(1):
         owner.ui.parametersLayout.removeWidget(owner._ukfGroup)
         owner._advancedCategoryStack.widget(1).layout().addWidget(owner._ukfGroup)
     zh = getattr(owner, "_onboardingLanguage", "en").startswith("zh")
-    owner._ukfGroup.title = "UKF 参数 · 作者默认值" if zh else "UKF parameters · author defaults"
-    owner._ukfReset.text = "恢复作者默认值" if zh else "Restore author defaults"
+    target_title = "UKF 参数 · 作者默认值" if zh else "UKF parameters · author defaults"
+    if owner._ukfGroup.title != target_title:
+        owner._ukfGroup.title = target_title
+    target_reset = "恢复作者默认值" if zh else "Restore author defaults"
+    if owner._ukfReset.text != target_reset:
+        owner._ukfReset.text = target_reset
     for key, en, chinese, *_ in CONTROLS:
-        owner._ukfLabels[key].text = chinese if zh else en
+        target_label = chinese if zh else en
+        if owner._ukfLabels[key].text != target_label:
+            owner._ukfLabels[key].text = target_label
     owner._ukfUpdating = True
     try:
         values = asdict(parameters(json.loads(getattr(node, "ukfParameters", "{}") or "{}")))
         for key, control in owner._ukfControls.items():
             if key == "freeWater":
-                control.checked = values[key]
+                if control.checked != values[key]:
+                    control.checked = values[key]
             else:
-                control.value = 0 if key == "numThreads" and values[key] == -1 else values[key]
+                target_val = 0 if key == "numThreads" and values[key] == -1 else values[key]
+                if abs(float(control.value) - float(target_val)) > 1e-9:
+                    control.value = target_val
     finally:
         owner._ukfUpdating = False

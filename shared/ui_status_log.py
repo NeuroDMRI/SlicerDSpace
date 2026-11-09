@@ -7,7 +7,16 @@ from time import monotonic
 from typing import Any
 
 from shared.ui_run_state import log_line_html
-from shared.ui_styles import RUN_STATUS_TABLE_STYLE, SLICERDSPACE_UI_STYLE, run_summary_label_style
+from shared.ui_styles import (
+    RUN_STATUS_TABLE_STYLE,
+    SLICERDSPACE_UI_STYLE,
+    apply_placeholder_palette,
+    is_dark_mode,
+    run_status_table_style,
+    run_summary_label_style,
+    set_stylesheet_if_changed,
+    ui_stylesheet,
+)
 
 
 STATUS_COLORS = {
@@ -16,6 +25,14 @@ STATUS_COLORS = {
     "waiting": "#63727D",
     "warning": "#865F24",
     "error": "#C62828",
+}
+
+DARK_STATUS_COLORS = {
+    "ready": "#66BB6A",
+    "running": "#64B5F6",
+    "waiting": "#B8C5D0",
+    "warning": "#FFB74D",
+    "error": "#FF7B72",
 }
 
 
@@ -48,17 +65,34 @@ def apply_widget_styles(owner: Any) -> None:
     """Apply global SlicerDSpace widget styles."""
 
     root_widget = getattr(owner, "_uiWidget", None)
+    dark = is_dark_mode(root_widget)
+    style = ui_stylesheet(dark=dark, widget=root_widget)
     try:
         if root_widget:
-            root_widget.setStyleSheet(SLICERDSPACE_UI_STYLE)
+            root_widget.setStyleSheet(style)
+            apply_placeholder_palette(root_widget, dark=dark)
     except Exception:
         try:
-            owner.parent.setStyleSheet(SLICERDSPACE_UI_STYLE)
+            owner.parent.setStyleSheet(style)
+        except Exception:
+            pass
+    also_runs = getattr(owner, "_alsoRunsLabel", None)
+    if also_runs is not None:
+        try:
+            color = "#7CC4EA" if dark else "#335B70"
+            also_runs.setStyleSheet(f"QLabel#alsoRunsAutomaticallyLabel {{ color: {color}; }}")
+        except Exception:
+            pass
+    if getattr(owner, "_headerWordmark", None) is not None:
+        try:
+            from shared.ui_branding import install_header_wordmark
+
+            install_header_wordmark(owner)
         except Exception:
             pass
     table = getattr(owner, "_runStatusTable", None)
     if table:
-        table.setStyleSheet(RUN_STATUS_TABLE_STYLE)
+        table.setStyleSheet(run_status_table_style(dark=dark, widget=table))
         try:
             table.verticalHeader().setVisible(False)
         except Exception:
@@ -72,10 +106,20 @@ def set_status(owner: Any, kind: str, message: str) -> None:
     if not label:
         return
     progress = getattr(owner.ui, "statusProgressBar", None)
-    color = STATUS_COLORS.get(kind, STATUS_COLORS["error"])
-    label.setText(message)
-    label.setStyleSheet(
-        f"background: transparent; color: {color}; padding: 2px 0; border: none;"
+    dark = is_dark_mode(label)
+    light_color = STATUS_COLORS.get(kind, STATUS_COLORS["error"])
+    palette = DARK_STATUS_COLORS if dark else STATUS_COLORS
+    color = palette.get(kind, palette["error"])
+    token_comment = f" /* {light_color} */" if dark and color != light_color else ""
+    try:
+        current_text = label.text() if callable(getattr(label, "text", None)) else getattr(label, "text", None)
+    except Exception:
+        current_text = None
+    if current_text != message:
+        label.setText(message)
+    set_stylesheet_if_changed(
+        label,
+        f"background: transparent; color: {color};{token_comment} padding: 2px 0; border: none;",
     )
     if not progress:
         return
@@ -106,8 +150,14 @@ def set_run_summary_message(owner: Any, message: str, state: str = "") -> None:
     label = getattr(owner, "_runSummaryLabel", None)
     if not label:
         return
-    label.setText(message or "Run summary is not available yet.")
-    label.setStyleSheet(run_summary_label_style(state))
+    target_text = message or "Run summary is not available yet."
+    try:
+        current_text = label.text() if callable(getattr(label, "text", None)) else getattr(label, "text", None)
+    except Exception:
+        current_text = None
+    if current_text != target_text:
+        label.setText(target_text)
+    set_stylesheet_if_changed(label, run_summary_label_style(state, widget=label))
 
 
 def set_existing_report_path(owner: Any, attribute: str, button_attribute: str, report_path: str | Path | None) -> None:

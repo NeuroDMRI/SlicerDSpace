@@ -81,8 +81,14 @@ def prepare(*, prefix=None, asset_root=None, execute=False, accept_terms=False, 
         raise ValueError('Prebuilt runtime paths must not be symbolic links')
     with source_lock(prefix.parent):
         if prefix.exists():
-            checks = validate(prefix)
-        else:
+            try:
+                checks = validate(prefix)
+            except Exception:
+                if not prefix.is_symlink() and (prefix / 'runtime.json').is_file():
+                    shutil.rmtree(prefix)
+                else:
+                    raise
+        if not prefix.exists():
             archive.parent.mkdir(parents=True, exist_ok=True)
             if not archive.is_file() or file_hash(archive) != record['sha256']:
                 if offline or not record.get('published'):

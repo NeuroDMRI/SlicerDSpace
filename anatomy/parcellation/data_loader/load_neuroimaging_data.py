@@ -124,12 +124,12 @@ def get_thick_slices(img_data, slice_thickness=3):
     :return: 
     """
     h, w, d = img_data.shape
-    img_data_pad = np.expand_dims(np.pad(img_data, ((0, 0), (0, 0), (slice_thickness, slice_thickness)), mode='edge'),
-                                  axis=3)
-    img_data_thick = np.ndarray((h, w, d, 0), dtype=np.uint8)
-    
-    for slice_idx in range(2 * slice_thickness + 1):
-        img_data_thick = np.append(img_data_thick, img_data_pad[:, :, slice_idx:d + slice_idx, :], axis=3)
+    n_thick = 2 * slice_thickness + 1
+    out_dtype = np.float32 if np.issubdtype(img_data.dtype, np.floating) else img_data.dtype
+    img_data_pad = np.pad(img_data, ((0, 0), (0, 0), (slice_thickness, slice_thickness)), mode='edge')
+    img_data_thick = np.empty((h, w, d, n_thick), dtype=out_dtype)
+    for slice_idx in range(n_thick):
+        img_data_thick[:, :, :, slice_idx] = img_data_pad[:, :, slice_idx:d + slice_idx]
 
     return img_data_thick
 
@@ -747,7 +747,8 @@ class OrigDataThickSlices_Fused_Input(Dataset):
             self.plane = plane
             self.slice_thickness = slice_thickness
 
-            orig_thick_list = []
+            n_thick = 2 * self.slice_thickness + 1
+            self.images = None
             for idx, orig_ in enumerate(orig):
                 # Transform Data as needed
                 if plane == 'Sagittal':
@@ -766,9 +767,13 @@ class OrigDataThickSlices_Fused_Input(Dataset):
 
                 # Make 4D
                 orig_thick = np.transpose(orig_thick, (2, 0, 1, 3))
-                orig_thick_list.append(orig_thick)
-
-            self.images = np.concatenate(orig_thick_list, axis=3)
+                if self.images is None:
+                    self.images = np.empty(
+                        (*orig_thick.shape[:3], len(orig) * n_thick),
+                        dtype=orig_thick.dtype,
+                    )
+                self.images[:, :, :, idx * n_thick:(idx + 1) * n_thick] = orig_thick
+                del orig_thick
 
             self.count = self.images.shape[0]
 

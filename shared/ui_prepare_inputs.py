@@ -26,14 +26,23 @@ def install_prepare_inputs_panel(owner: Any, configuration_layout: Any) -> None:
     panel.setToolTip("Normalize DICOM, NRRD/NHDR, or NIfTI+bval/bvec inputs into a SlicerDSpace subject root.")
     register_ui_language_binding(owner, panel, "text", "prepare_inputs")
     register_ui_language_binding(owner, panel, "tooltip", "prepare_inputs_tooltip")
+    from shared.ui_styles import is_dark_mode
+
+    dark = is_dark_mode(getattr(owner, "_uiWidget", None))
     panel.setStyleSheet(
-        "QWidget#prepareInputsPanel { background: #F7FAF8; border: 1px solid #D6E4DC; border-radius: 8px; }"
+        "QWidget#prepareInputsPanel { background: #232A2E; border: 1px solid #3B474E; border-radius: 8px; }"
+        if dark
+        else "QWidget#prepareInputsPanel { background: #F7FAF8; border: 1px solid #D6E4DC; border-radius: 8px; }"
     )
     owner._prepareInputWidgets["panel"] = panel
 
     form_layout = qt.QFormLayout(panel)
     form_layout.setSpacing(8)
     form_layout.setContentsMargins(10, 10, 10, 10)
+    form_layout.setRowWrapPolicy(qt.QFormLayout.WrapLongRows)
+    form_layout.setFieldGrowthPolicy(qt.QFormLayout.AllNonFixedFieldsGrow)
+    panel.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Preferred)
+    panel.setMinimumWidth(0)
 
     summary = qt.QLabel(
         "Use this when inputs are not already organized as input/data.nii.gz, input/bvals and input/bvecs. "
@@ -41,7 +50,9 @@ def install_prepare_inputs_panel(owner: Any, configuration_layout: Any) -> None:
     )
     summary.wordWrap = True
     summary.setStyleSheet(
-        "QLabel { background: #EEF6F1; border: 1px solid #CFE1D5; border-radius: 6px; color: #274737; padding: 7px; }"
+        "QLabel { background: #1E2C25; border: 1px solid #355042; border-radius: 6px; color: #C2E0D0; padding: 7px; }"
+        if dark
+        else "QLabel { background: #EEF6F1; border: 1px solid #CFE1D5; border-radius: 6px; color: #274737; padding: 7px; }"
     )
     owner._prepareInputWidgets["summary"] = summary
     register_ui_language_binding(owner, summary, "text", "prepare_summary")
@@ -81,7 +92,11 @@ def install_prepare_inputs_panel(owner: Any, configuration_layout: Any) -> None:
     _add_labeled_row(owner, form_layout, "subject_id", subject_id)
 
     sidecar_summary = qt.QLabel("Optional sidecars for NIfTI inputs or externally generated masks.")
-    sidecar_summary.setStyleSheet("QLabel { color: #5B7167; padding-top: 4px; }")
+    sidecar_summary.setStyleSheet(
+        "QLabel { color: #B8C5D0; padding-top: 4px; }"
+        if dark
+        else "QLabel { color: #5B7167; padding-top: 4px; }"
+    )
     owner._prepareInputWidgets["sidecar_summary"] = sidecar_summary
     register_ui_language_binding(owner, sidecar_summary, "text", "sidecar_summary")
     form_layout.addRow(sidecar_summary)

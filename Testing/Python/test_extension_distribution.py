@@ -255,6 +255,159 @@ class ExtensionDistributionTest(unittest.TestCase):
             self.assertEqual(bad_audit["status"], "fail")
             self.assertTrue(any("activation_key_included" in item for item in bad_audit["unsafe"]))
 
+    def test_corrupted_bundled_runtime_repairs_from_unified_archive(self):
+        from shared.native_runtimes import bundle_tree_sha256, installed_bundle_bin_dirs, provision_bundles
+        from shared.surface_runtime import bundled_surface_runtime
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            install = stage_extension(root / "install", slicer_version="Slicer-5.10", clean=True, link_mode="copy")
+            ext_root = Path(install["extension_root"])
+            bundled_dir = ext_root / "bundled-runtimes"
+            sys_name, arch = ("Windows", "x86_64") if os.name == "nt" else ("Linux", "x86_64")
+            cmd_rel = "bin/mrconvert.exe" if os.name == "nt" else "bin/mrconvert"
+            fsl_rel = "bin/eddy_cpu.exe" if os.name == "nt" else "bin/eddy_cpu"
+
+            mrtrix_dir = bundled_dir / f"mrtrix-3.0.8-{sys_name.lower()}-{arch}"
+            (mrtrix_dir / "bin").mkdir(parents=True)
+            (mrtrix_dir / cmd_rel).write_bytes(b"MRTRIX_BIN_PAYLOAD")
+            mrtrix_tree = bundle_tree_sha256(mrtrix_dir)
+            (mrtrix_dir / "native-runtime.json").write_text(
+                json.dumps(
+                    {
+                        "name": "mrtrix",
+                        "version": "3.0.8",
+                        "system": sys_name,
+                        "machine": arch,
+                        "archive_sha256": "a" * 64,
+                        "tree_sha256": mrtrix_tree,
+                        "commands": [cmd_rel],
+                        "license_url": "https://example.org/mrtrix",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            fsl_dir = bundled_dir / f"fsl-2602.0-{sys_name.lower()}-{arch}"
+            (fsl_dir / "bin").mkdir(parents=True)
+            (fsl_dir / fsl_rel).write_bytes(b"FSL_BIN_PAYLOAD")
+            fsl_tree = bundle_tree_sha256(fsl_dir)
+            (fsl_dir / "native-runtime.json").write_text(
+                json.dumps(
+                    {
+                        "name": "fsl",
+                        "version": "2602.0",
+                        "system": sys_name,
+                        "machine": arch,
+                        "archive_sha256": "b" * 64,
+                        "tree_sha256": fsl_tree,
+                        "commands": [fsl_rel],
+                        "license_url": "https://example.org/fsl",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            surf_dir = bundled_dir / f"surface-runtime-{sys_name.lower()}-{arch}"
+            (surf_dir / "bin").mkdir(parents=True)
+            (surf_dir / "bin" / "mris_inflate.exe").write_bytes(b"SURF_PAYLOAD")
+            (surf_dir / "runtime.json").write_text(
+                json.dumps(
+                    {
+                        "activation_key_included": False,
+                        "files": {"bin/mris_inflate.exe": {"bytes": 12, "sha256": "c" * 64}},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            unified_name = "SlicerDSpace-v0.1.1-Windows-x64.zip" if os.name == "nt" else "SlicerDSpace-v0.1.1-Linux-x64.tar.gz"
+            archive_dir = root / "archives"
+            archive_dir.mkdir()
+            unified_archive = archive_dir / unified_name
+            package_extension(ext_root, unified_archive)
+
+            catalog_path = root / "catalog.json"
+            catalog_path.write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "bundles": [
+                            {
+                                "name": "mrtrix",
+                                "version": "3.0.8",
+                                "system": sys_name,
+                                "machine": arch,
+                                "format": "zip" if os.name == "nt" else "tar.gz",
+                                "artifact": "mrtrix-standalone.zip",
+                                "unified_artifact": unified_name,
+                                "sha256": "a" * 64,
+                                "tree_sha256": mrtrix_tree,
+                                "bytes": 18,
+                                "commands": [cmd_rel],
+                                "license_url": "https://example.org/mrtrix",
+                                "published": True,
+                            },
+                            {
+                                "name": "fsl",
+                                "version": "2602.0",
+                                "system": sys_name,
+                                "machine": arch,
+                                "format": "zip" if os.name == "nt" else "tar.gz",
+                                "artifact": "fsl-standalone.zip",
+                                "unified_artifact": unified_name,
+                                "sha256": "b" * 64,
+                                "tree_sha256": fsl_tree,
+                                "bytes": 15,
+                                "commands": [fsl_rel],
+                                "license_url": "https://example.org/fsl",
+                                "published": True,
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            # Corrupt bundled-runtimes: delete mrtrix folder, delete fsl binary, delete surface binary
+            import shutil as _shutil
+
+            _shutil.rmtree(mrtrix_dir)
+            (fsl_dir / fsl_rel).unlink()
+            (surf_dir / "bin" / "mris_inflate.exe").unlink()
+
+            user_runtime_root = root / "user-runtimes"
+            with patch.dict(
+                os.environ,
+                {
+                    "SLICERDSPACE_BUNDLED_RUNTIMES_ROOT": str(bundled_dir),
+                    "SLICERDSPACE_RUNTIME_ROOT": str(user_runtime_root),
+                },
+            ):
+                # Corrupted bundled directories must not be reported as valid
+                self.assertEqual(installed_bundle_bin_dirs("mrtrix", system=sys_name, machine=arch), ())
+                self.assertEqual(installed_bundle_bin_dirs("fsl", system=sys_name, machine=arch), ())
+                self.assertIsNone(bundled_surface_runtime(system=sys_name, machine=arch))
+
+                # Auto-repair from the unified installer archive using tree_sha256 verification
+                repaired = provision_bundles(
+                    ["mrtrix", "fsl"],
+                    archive_dir=archive_dir,
+                    accept_terms=True,
+                    execute=True,
+                    catalog_path=catalog_path,
+                )
+                self.assertEqual(repaired["status"], "completed")
+                self.assertEqual(
+                    installed_bundle_bin_dirs("mrtrix", system=sys_name, machine=arch),
+                    ((user_runtime_root / f"mrtrix-3.0.8-{sys_name.lower()}-{arch}" / "bin").resolve(),),
+                )
+                self.assertEqual(
+                    installed_bundle_bin_dirs("fsl", system=sys_name, machine=arch),
+                    ((user_runtime_root / f"fsl-2602.0-{sys_name.lower()}-{arch}" / "bin").resolve(),),
+                )
+
+
 
 if __name__ == "__main__":
     unittest.main()

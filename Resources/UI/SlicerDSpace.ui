@@ -1214,9 +1214,6 @@
       </item>
       <item>
        <widget class="QLabel" name="dockerHintLabel">
-        <property name="styleSheet">
-         <string notr="true">QLabel#dockerHintLabel { color: #546E7A; }</string>
-        </property>
         <property name="text">
          <string>Stage DDSurfer surfaces plus MRI inputs and run the bundled FreeSurfer-style postprocess backend locally.</string>
         </property>
@@ -1405,9 +1402,6 @@
       </item>
       <item>
        <widget class="QLabel" name="ddparcelHintLabel">
-        <property name="styleSheet">
-         <string notr="true">QLabel#ddparcelHintLabel { color: #546E7A; }</string>
-        </property>
         <property name="text">
          <string>Run DDParcel from the same subject directory layout used by DDSurfer. If cached registered DTI features already exist, they will be reused automatically.</string>
         </property>
@@ -1542,9 +1536,6 @@
       </item>
       <item>
        <widget class="QLabel" name="microstructureHintLabel">
-        <property name="styleSheet">
-         <string notr="true">QLabel#microstructureHintLabel { color: #546E7A; }</string>
-        </property>
         <property name="text">
          <string>Export native-space DTI scalar maps and run selected optional microstructure models. If ROI labels are left empty, use &lt;subject_root&gt;/outputs/03_anatomy/ddparcel, with compatible reading of existing 03_structural products. Each enabled model checks its acquisition requirements; optional multi-shell models are not run on ineligible data. Model outputs and cache records are kept separately for selective reruns.</string>
         </property>
@@ -1740,9 +1731,6 @@
       </item>
       <item>
        <widget class="QLabel" name="ddsegHintLabel">
-        <property name="styleSheet">
-         <string notr="true">QLabel#ddsegHintLabel { color: #546E7A; }</string>
-        </property>
         <property name="text">
          <string>Preferred mode: choose the same &lt;subject_root&gt; in the “Subject directory / DWI” field and leave mask, bval, and bvec empty. DDSeg will reuse cache/native_dti/ls automatically. Legacy raw-file mode is still supported below.</string>
         </property>

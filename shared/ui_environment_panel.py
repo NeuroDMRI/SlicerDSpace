@@ -153,6 +153,14 @@ PATH_STATUS_COLORS = {
     "inactive": "#90A4AE",
 }
 
+DARK_PATH_STATUS_COLORS = {
+    "available": "#66BB6A",
+    "missing": "#FF7B72",
+    "pending": "#FFB74D",
+    "unchecked": "#9BA7B4",
+    "inactive": "#8B949E",
+}
+
 OPTIONAL_BACKEND_TITLE_STYLES = {
     True: (
         "QLabel { background: #E4F4EA; border: 1px solid #AFCDBA; "
@@ -164,23 +172,57 @@ OPTIONAL_BACKEND_TITLE_STYLES = {
     ),
 }
 
+DARK_OPTIONAL_BACKEND_TITLE_STYLES = {
+    True: (
+        "QLabel { background: #1F3528; border: 1px solid #3B6E52; "
+        "border-radius: 8px; color: #A8E6CF; font-weight: 800; padding: 7px 10px; }"
+    ),
+    False: (
+        "QLabel { background: #252B32; border: 1px solid #3D4750; border-radius: 7px; "
+        "color: #D2DEE8; font-weight: 700; padding: 7px 9px; }"
+    ),
+}
+
 OPTIONAL_BACKEND_DESCRIPTION_STYLES = {
     True: "QLabel { background: #F7FCF8; border-radius: 7px; color: #3F6754; padding: 4px 9px 7px 10px; }",
     False: "QLabel { color: #6A7D74; padding: 1px 8px 5px 9px; }",
 }
 
+DARK_OPTIONAL_BACKEND_DESCRIPTION_STYLES = {
+    True: "QLabel { background: #1C2D24; border-radius: 7px; color: #9BD1B8; padding: 4px 9px 7px 10px; }",
+    False: "QLabel { color: #9BA7B4; padding: 1px 8px 5px 9px; }",
+}
+
 OPTIONAL_BACKEND_ROW_STYLES = {
     ("QLineEdit", True): (
-        "QLineEdit { background: #FCFEFC; border: 1px solid #7EB892; "
+        "QLineEdit { background: #FCFEFC; color: #1E293B; border: 1px solid #7EB892; "
         "border-radius: 8px; padding: 7px 10px; }"
     ),
     ("ctkPathLineEdit", True): (
-        "QLineEdit { background: #FCFEFC; border: 1px solid #7EB892; "
+        "QLineEdit { background: #FCFEFC; color: #1E293B; border: 1px solid #7EB892; "
         "border-radius: 8px; padding: 7px 10px; }"
     ),
     ("QPushButton", True): (
         "QPushButton { background: #F7FCF8; border: 1px solid #A9CBB4; "
         "color: #1E5A3F; border-radius: 8px; padding: 6px 12px; }"
+    ),
+    ("QLineEdit", False): "",
+    ("ctkPathLineEdit", False): "",
+    ("QPushButton", False): "",
+}
+
+DARK_OPTIONAL_BACKEND_ROW_STYLES = {
+    ("QLineEdit", True): (
+        "QLineEdit { background: #1E2923; color: #F0F6FC; border: 1px solid #4A8B65; "
+        "border-radius: 8px; padding: 7px 10px; }"
+    ),
+    ("ctkPathLineEdit", True): (
+        "QLineEdit { background: #1E2923; color: #F0F6FC; border: 1px solid #4A8B65; "
+        "border-radius: 8px; padding: 7px 10px; }"
+    ),
+    ("QPushButton", True): (
+        "QPushButton { background: #23362B; border: 1px solid #4A8B65; "
+        "color: #A8E6CF; border-radius: 8px; padding: 6px 12px; }"
     ),
     ("QLineEdit", False): "",
     ("ctkPathLineEdit", False): "",
@@ -249,11 +291,17 @@ def dependency_subsection_metadata(subsection: str) -> dict[str, str]:
     return ENVIRONMENT_SUBSECTION_METADATA[subsection]
 
 
-def environment_path_status_style(state: str) -> str:
+def environment_path_status_style(state: str, *, dark: bool | None = None) -> str:
     """Return the stylesheet for one environment path status label."""
 
-    color = PATH_STATUS_COLORS.get(state, PATH_STATUS_COLORS["unchecked"])
-    return f"QLabel {{ color: {color}; font-weight: 600; }}"
+    from shared.ui_styles import is_dark_mode
+
+    use_dark = is_dark_mode() if dark is None else bool(dark)
+    palette = DARK_PATH_STATUS_COLORS if use_dark else PATH_STATUS_COLORS
+    color = palette.get(state, palette["unchecked"])
+    light_color = PATH_STATUS_COLORS.get(state, PATH_STATUS_COLORS["unchecked"])
+    comment = f" /* {light_color} */" if use_dark and color != light_color else ""
+    return f"QLabel {{ color: {color}; font-weight: 600;{comment} }}"
 
 
 def path_status_dependencies(result: Any, dependency_id: str) -> list[Any]:
@@ -291,16 +339,25 @@ def environment_path_status_from_dependencies(dependencies: list[Any]) -> tuple[
     return "not found", "missing"
 
 
-def optional_backend_label_styles(active: bool) -> tuple[str, str]:
+def optional_backend_label_styles(active: bool, *, dark: bool | None = None) -> tuple[str, str]:
     """Return title and description styles for an optional backend subsection."""
 
-    return OPTIONAL_BACKEND_TITLE_STYLES[bool(active)], OPTIONAL_BACKEND_DESCRIPTION_STYLES[bool(active)]
+    from shared.ui_styles import is_dark_mode
+
+    use_dark = is_dark_mode() if dark is None else bool(dark)
+    titles = DARK_OPTIONAL_BACKEND_TITLE_STYLES if use_dark else OPTIONAL_BACKEND_TITLE_STYLES
+    descriptions = DARK_OPTIONAL_BACKEND_DESCRIPTION_STYLES if use_dark else OPTIONAL_BACKEND_DESCRIPTION_STYLES
+    return titles[bool(active)], descriptions[bool(active)]
 
 
-def optional_backend_widget_style(class_name: str, active: bool) -> str | None:
+def optional_backend_widget_style(class_name: str, active: bool, *, dark: bool | None = None) -> str | None:
     """Return style override for a widget in an optional backend row."""
 
-    return OPTIONAL_BACKEND_ROW_STYLES.get((class_name, bool(active)))
+    from shared.ui_styles import is_dark_mode
+
+    use_dark = is_dark_mode() if dark is None else bool(dark)
+    styles = DARK_OPTIONAL_BACKEND_ROW_STYLES if use_dark else OPTIONAL_BACKEND_ROW_STYLES
+    return styles.get((class_name, bool(active)))
 
 
 def model_assets_summary_text(repo_root: Path) -> str:

@@ -44,20 +44,20 @@
 只有选择表面后处理才出现该提示。文本可读性检查不代表激活有效，原生命令仍执行激活校验。
 
 **“检查”不安装依赖，GUI 的准备流程不编译源码。**
-“准备所选分析环境”优先安装合格预编译包，核对压缩包及逐文件哈希、构建配方、动态库，
-成功后保存组件路径。Linux x86_64 候选包包含七个不变的原生命令及图谱，
-压缩大小为 40,995,581 字节，解压约 85.2 MiB，不包含个人激活文件。
-分析时仍需您自己的激活文件。
+在 **`v0.1.1`** 中，包含 7 个原生命令与图谱模板的 `Surface Runtime 0.1.0` 已**直接内置**于各平台统一安装包中：
+- **Windows x64**：`SlicerDSpace-v0.1.1-Windows-x64.zip`（`bundled-runtimes/surface-runtime-windows-x86_64`）
+- **Linux x86_64**：`SlicerDSpace-v0.1.1-Linux-x64.tar.gz`（`bundled-runtimes/surface-runtime-linux-x86_64`）
 
-这些运行包尚未发布。请将对应平台的压缩包放到 `<asset-root>/runtime/surface/`，
-也可配置已有的已验证运行目录或 FreeSurfer 安装。安装器按当前 Python 进程的架构
-选择压缩包。Apple Silicon 运行包需要用 arm64 Python 进程安装。
+首次启动自动发现路径并通过 `tree_sha256` 校验（缺失或损坏时自动从发布包修复）。内置运行包不包含任何个人 FreeSurfer 激活文件（`activation_key_included: false`），运行时仍需提供您的个人 FreeSurfer 许可证文件（`FS_LICENSE`）。
 
-| 平台 | 离线压缩包 |
-| --- | --- |
-| Linux x86_64 | `surface-runtime-linux-x86_64.tar.gz` |
-| macOS 15 或更高版本，Intel | `surface-runtime-darwin-x86_64.tar.gz` |
-| macOS 15 或更高版本，Apple Silicon | `surface-runtime-darwin-arm64.tar.gz` |
+各平台内置与离线运行包状态如下：
+
+| 平台 | 内置 / 离线压缩包 | 状态 |
+| --- | --- | --- |
+| Windows x86_64 | 已内置于 `SlicerDSpace-v0.1.1-Windows-x64.zip`（`surface-runtime-windows-x86_64`） | **已通过 3D Slicer 5.10.0 原生验收** |
+| Linux x86_64 | 已内置于 `SlicerDSpace-v0.1.1-Linux-x64.tar.gz`（`surface-runtime-linux-x86_64`） | **已通过 3D Slicer 5.10.0 原生验收** |
+| macOS 15 或更高版本，Intel | `surface-runtime-darwin-x86_64.tar.gz` | 离线候选包，科学结果对照待完成 |
+| macOS 15 或更高版本，Apple Silicon | `surface-runtime-darwin-arm64.tar.gz` | 离线候选包，科学结果对照待完成 |
 
 缺少压缩包时，准备窗口会将该运行环境列为手动处理项。
 
@@ -102,10 +102,7 @@ Apple Silicon 候选包在 macOS 15.8.1 上用固定的 FreeSurfer 7.4.1 源码�
 全新离线安装重复通过了这七项检查。此候选包未链接 OpenMP。
 macOS 科学结果对照仍待验证。
 
-面向 Windows 的 CMake 探针识别了 MinGW GCC 10，随后在现有 UNIX 平台检查处停止。
-用 MinGW 单独检查固定版本的 `utils/utils.cpp` 和 `mris_sphere/mris_sphere.cpp` 时，
-编译器均因缺少 `sys/resource.h` 停止。原构建和激活检查仍保留。
-Windows 原生构建需要先移植这些 POSIX 依赖。
+Windows x86_64（`v0.1.1`）已完成全部 7 个原生 FreeSurfer 表面后处理程序（`mris_convert.exe`、`mris_inflate.exe`、`mris_curv.exe`、`mris_smooth.exe`、`mris_sphere.exe`、`mris_register.exe`、`mris_ca_label.exe`、`mris_anatomical_stats.exe`）的 Windows 原生移植、编译与打包（内置于 `surface-runtime-windows-x86_64`），并在 3D Slicer 5.10.0 中通过真实数据与 Linux 参考结果的一致性验收（`Activation Key Included: false`，运行仍需用户个人 FreeSurfer 许可证）。
 
 ---
 

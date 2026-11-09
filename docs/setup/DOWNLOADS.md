@@ -11,8 +11,7 @@
 Running the plugin does not require website source, historical performance
 reports or tests. Keep those in the complete repository for development,
 auditing and reproducibility, not as installation prerequisites.
-The repository remains a private pre-release. These instructions do not imply
-an official Extensions Catalog entry or an available public release package.
+Release `v0.1.1` provides unified platform archives on GitHub Releases (`SlicerDSpace-v0.1.1-Windows-x64.zip` and `SlicerDSpace-v0.1.1-Linux-x64.tar.gz`) for local installation in **3D Slicer 5.10.0** via **Extensions Manager > Install Extensions > Install Extension from File**; online Slicer Extensions Catalog listing remains a separate proposal, and macOS does not yet have a certified full release archive.
 
 ---
 
@@ -20,7 +19,7 @@ an official Extensions Catalog entry or an available public release package.
 
 | Purpose | Recommended route | Contents |
 | --- | --- | --- |
-| Use SlicerDSpace | Maintainer-provided extension package with corresponding acceptance evidence | Runtime, UI, queries, licenses, user guides and required reference files |
+| Use SlicerDSpace on Windows or Linux | `SlicerDSpace-v0.1.1-Windows-x64.zip` or `SlicerDSpace-v0.1.1-Linux-x64.tar.gz` from GitHub Releases (`Install Extension from File` in Slicer 5.10.0) | Extension runtime, UI, queries, licenses, user guides, and modular `bundled-runtimes/` (`MRtrix3 3.0.8`, `FSL 2602.0`, `Surface Runtime 0.1.0`) with `tree_sha256` auto-repair |
 | Install source with repository access | Lightweight checkout below, then staging | Updatable runtime source without website, tests or historical optimization reports |
 | Develop or reproduce research | Complete source checkout | Tests, performance evidence, release tools, website source and documentation |
 | Inspect performance evidence | Browse the authenticated GitHub repository | No need to copy reports into the plugin installation |
@@ -29,8 +28,7 @@ The runtime package excludes `docs/site/`, `docs/website/`, `website/`,
 `Testing/`, historical optimization/QC reports, raw benchmark JSON and timing
 scripts. A few release documents and runtime CSV references are explicitly
 retained. Third-party notices, WMQL queries, WSL helpers and the model manifest
-remain included. Weights, templates and external runtimes are separate,
-route-dependent downloads, not bundled source code.
+remain included. While the unified `v0.1.1` release archive bundles the native C/C++ runtimes (`MRtrix3`, `FSL` diffusion preprocessing, and `FreeSurfer Surface Runtime`), **deep-learning model weights** (`DDSeg`, `DDParcel`, `DDSurfer`, `TractCloud`, `PNL`) and **large atlases** (`ORG`) remain on-demand downloads fetched on first use, and **FreeSurfer cortical surface postprocessing** requires a user-supplied FreeSurfer license file (`FS_LICENSE`; no personal activation key is bundled).
 
 ---
 

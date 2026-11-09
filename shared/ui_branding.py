@@ -10,10 +10,12 @@ def install_header_wordmark(owner):
     path = Path(owner.resourcePath('Icons/SlicerDSpace-wordmark.svg'))
     artwork = path.read_bytes()
     # Transparent QFrames may report a black Window palette on a light parent.
-    # Follow the effective heading text colour instead of that background role.
+    # Follow the effective heading text colour or active dark-mode theme.
+    from shared.ui_styles import is_dark_mode
+
     owner.ui.headlineLabel.ensurePolished()
     foreground = owner.ui.headlineLabel.palette.color(qt.QPalette.WindowText)
-    if foreground.lightness() > 128:
+    if is_dark_mode(getattr(owner, '_uiWidget', None)) or foreground.lightness() > 128:
         artwork = artwork.replace(b'fill="#000000"', b'fill="#f5f3ee"')
     wordmark = existing if existing is not None else qt.QLabel(owner.ui.headerFrame)
     wordmark.setObjectName('slicerDSpaceHeaderWordmark')

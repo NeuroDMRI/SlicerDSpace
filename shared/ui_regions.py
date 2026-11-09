@@ -85,7 +85,8 @@ def install_region_panel(owner):
     panel = ctk.ctkCollapsibleButton(owner._advancedSettingsPanel)
     panel.objectName = "regionalAnalysisPanel"
     panel.collapsed = True
-    panel.setSizePolicy(qt.QSizePolicy.Expanding, qt.QSizePolicy.Maximum)
+    panel.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Maximum)
+    panel.setMinimumWidth(0)
     layout = qt.QVBoxLayout(panel)
     controls = dict(panel=panel, labels={})
     button = qt.QPushButton()
@@ -119,7 +120,8 @@ def install_region_panel(owner):
     options = ctk.ctkCollapsibleButton()
     options.objectName = "regionalAnalysisOptions"
     options.collapsed = True
-    options.setSizePolicy(qt.QSizePolicy.Expanding, qt.QSizePolicy.Maximum)
+    options.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Maximum)
+    options.setMinimumWidth(0)
     controls["options"] = options
     layout.addWidget(options)
     details = qt.QVBoxLayout(options)
@@ -217,9 +219,15 @@ def _paths(owner):
 
 
 def _status(owner, text, error=False):
+    from shared.ui_styles import is_dark_mode
+
     label = owner._regionWidgets["status"]
     label.text = text
-    label.setStyleSheet("color: #B3261E;" if error else "color: #52616B;")
+    dark = is_dark_mode(label)
+    if dark:
+        label.setStyleSheet("color: #FF7B72;" if error else "color: #B8C5D0;")
+    else:
+        label.setStyleSheet("color: #B3261E;" if error else "color: #52616B;")
 
 
 def _expanded(owner, collapsed):
@@ -229,14 +237,9 @@ def _expanded(owner, collapsed):
         use_latest_run(owner)
     if not collapsed and _paths(owner)[0] and not owner._regionCatalog and not getattr(owner, "_pipelineActive", False):
         qt.QTimer.singleShot(0, lambda: inspect_regions(owner))
-    root = owner._uiWidget
-
-    def fit():
-        root.layout().invalidate()
-        root.layout().activate()
-        root.resize(root.width, root.minimumSizeHint.height())
-
-    qt.QTimer.singleShot(0, fit)
+    fit = getattr(owner, "_fitAdvancedPage", None) or getattr(owner, "_fitCompactHeight", None)
+    if callable(fit):
+        fit()
 
 
 def _tract_enabled(owner, enabled):
@@ -245,8 +248,11 @@ def _tract_enabled(owner, enabled):
         widgets[key].enabled = enabled
     pair = str(widgets["rule"].itemData(widgets["rule"].currentIndex)) == "endpoint_pair"
     widgets["target"].enabled = enabled and pair
+    vis_changed = widgets["target"].visible != pair
     widgets["target"].setVisible(pair)
     widgets["labels"]["target"].setVisible(pair)
+    if vis_changed and hasattr(owner, "_fitAdvancedPage"):
+        owner._fitAdvancedPage()
 
 
 def _selection_changed(owner):
@@ -414,6 +420,8 @@ def inspect_regions(owner):
             for warning in data["warnings"]:
                 owner.appendLog("[Regions] Excluded/not available: " + warning)
             filter_regions(owner, widgets["search"].text)
+            if hasattr(owner, "_fitAdvancedPage"):
+                owner._fitAdvancedPage()
         except Exception as exc:
             invalidate_catalog(owner)
             _status(owner, str(exc), True)

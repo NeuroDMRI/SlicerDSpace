@@ -144,7 +144,7 @@ Agent 会检查可用空间和已有资源，等你选择后再下载，并保�
 - **Windows (`x86_64`)**：`SlicerDSpace-v0.1.1-Windows-x64.zip`
 - **Linux (`x86_64`)**：`SlicerDSpace-v0.1.1-Linux-x64.tar.gz`
 
-每个安装包均包含 SlicerDSpace 扩展本体及模块化内置于 `SlicerDSpace/bundled-runtimes/` 的三大原生运行环境（**MRtrix3 `3.0.8`** 共 68 个命令、**FSL `2602.0`** 含 `topup`/`applytopup`/`eddy_cpu`、**FreeSurfer Surface Runtime** 含 7 个表面命令与球面模板，不包含任何个人专属 FreeSurfer 激活文件）。在 **3D Slicer 5.10.0** 中通过 **View > Extensions Manager > Install Extensions > Install Extension from File** 选择该压缩包安装并重启 Slicer，首次启动会自动识别内置依赖，无需手动分别下载多个依赖包或配置路径；模型权重与大型图谱按需下载。（macOS 在原生依赖全部完成验收前，暂不宣称完整原生支持。）
+每个安装包均包含 SlicerDSpace 扩展本体及模块化内置于 `SlicerDSpace/bundled-runtimes/` 的三大原生运行环境（**MRtrix3 `3.0.8`** 共 68 个命令、**FSL `2602.0`** 含 `topup`/`applytopup`/`eddy_cpu`、**FreeSurfer Surface Runtime** 含 7 个表面命令与球面模板，不包含任何个人专属 FreeSurfer 激活文件；运行皮层表面后处理需用户自备 FreeSurfer 许可证文件）。在 **3D Slicer 5.10.0** 中通过 **View > Extensions Manager > Install Extensions > Install Extension from File** 选择该压缩包安装并重启 Slicer，首次启动会自动识别内置依赖并通过 `tree_sha256` 校验文件完整性（若内置运行包被误删或损坏，可从统一安装包自动修复）；深度学习模型权重（`DDSeg`、`DDParcel`、`DDSurfer`、`TractCloud`、`PNL`）与大型白质图谱（`ORG`）在首次使用时按需下载。（macOS 在原生依赖全部完成验收前，暂不宣称完整原生支持。）
 
 ### 方式二：从源码部署插件
 
@@ -301,10 +301,10 @@ export SLICER="/path/to/Slicer"
 
 | 范围 | 当前状态 |
 | --- | --- |
-| 参考环境 | Linux、Slicer 5.10；Windows/macOS 支持范围取决于所选路线 |
-| 验证 | 已记录 Linux SDK/CPack、GUI 和部分真实数据工作流；范围对应具体版本和输入 |
-| 分发 | 私有预发布；Extension Index 条目仍为 Tier 1 申请草稿 |
-| 授权 | 项目代码采用 BSD-3-Clause；第三方源码和模型资源各自保留条款与发布门槛 |
+| 参考环境 | Windows (`x86_64`) 与 Linux (`x86_64`)，目标 3D Slicer 5.10.0；macOS 完整原生依赖尚待验收 |
+| 验证 | 已记录 Windows 与 Linux 在 3D Slicer 5.10.0 下的 Extension Manager 安装、GUI 冒烟测试、损坏运行包自动修复及多被试真实数据工作流（`HCP 100307`、`HCP 100408`、临床单壳 `sub-001`） |
+| 分发 | GitHub Release `v0.1.1` 平台统一安装包（`SlicerDSpace-v0.1.1-Windows-x64.zip`、`SlicerDSpace-v0.1.1-Linux-x64.tar.gz`），通过 Slicer Extension Manager 本地文件安装（`Install Extension from File`）；在线扩展商店目录（Extension Catalog）仍为 Tier 1 申请草稿 |
+| 授权 | 项目代码采用 BSD-3-Clause；第三方运行环境与按需下载的模型资源各自保留条款与发布门禁（皮层表面后处理仍需用户自备 FreeSurfer 许可证） |
 
 执行状态、自动 QC 和人工审核分别记录或评估。
 验证范围与待检查项见[验证记录](docs/README.zh-CN.md#历史验证记录)、

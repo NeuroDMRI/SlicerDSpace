@@ -65,6 +65,54 @@ def bundled_runtime_roots():
     return tuple(roots)
 
 
+def _sha256(path):
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def bundle_tree_sha256(root_dir):
+    """Compute a deterministic SHA256 over all regular files in a runtime directory (excluding native-runtime.json)."""
+    root = Path(root_dir)
+    entries = []
+    for path in sorted(root.rglob("*"), key=lambda p: p.relative_to(root).as_posix()):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(root).as_posix()
+        if rel == "native-runtime.json":
+            continue
+        entries.append(f"{rel}:{_sha256(path)}\n")
+    digest = hashlib.sha256()
+    for line in entries:
+        digest.update(line.encode("utf-8"))
+    return digest.hexdigest()
+
+
+def is_valid_installed_bundle_dir(bundle_dir, record=None):
+    """Return True only if native-runtime.json and all declared command files exist."""
+    bundle_dir = Path(bundle_dir)
+    receipt_file = bundle_dir / "native-runtime.json"
+    bin_dir = bundle_dir / "bin"
+    if not bundle_dir.is_dir() or not receipt_file.is_file() or not bin_dir.is_dir():
+        return False
+    try:
+        receipt = json.loads(receipt_file.read_text(encoding="utf-8"))
+        commands = list(receipt.get("commands") or ())
+        if record is not None:
+            if receipt.get("archive_sha256") != record.get("sha256"):
+                return False
+            for cmd in record.get("commands") or ():
+                if cmd not in commands:
+                    commands.append(cmd)
+        if commands:
+            return all(bundle_dir.joinpath(*_safe_relpath(cmd).parts).is_file() for cmd in commands)
+        return any(p.is_file() for p in bin_dir.iterdir())
+    except (OSError, ValueError, TypeError):
+        return False
+
+
 def installed_bundle_bin_dirs(name, *, system=None, machine=None, root=None):
     """Return bin directories of installed native runtime bundles matching name and host platform."""
     system, machine = host_platform(system, machine)
@@ -87,20 +135,12 @@ def installed_bundle_bin_dirs(name, *, system=None, machine=None, root=None):
         for child in children:
             if child.is_dir() and child.name.startswith(prefix) and child.name.endswith(suffix):
                 bin_dir = child / "bin"
-                if (child / "native-runtime.json").is_file() and bin_dir.is_dir():
+                if is_valid_installed_bundle_dir(child):
                     resolved = bin_dir.resolve()
                     if resolved not in seen:
                         seen.add(resolved)
                         dirs.append(resolved)
     return tuple(dirs)
-
-
-def _sha256(path):
-    digest = hashlib.sha256()
-    with Path(path).open("rb") as stream:
-        for block in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def select_bundle(catalog, name, *, system=None, machine=None):
@@ -221,7 +261,10 @@ def install_bundle(record, *, archive=None, root=None, accept_terms=False):
         valid_digests = {record["sha256"]}
         if isinstance(record.get("unified_sha256"), str) and len(record["unified_sha256"]) == 64:
             valid_digests.add(record["unified_sha256"])
-        if digest not in valid_digests:
+        archive_matched = digest in valid_digests
+        tree_sha256 = record.get("tree_sha256")
+        has_tree_sha256 = isinstance(tree_sha256, str) and len(tree_sha256) == 64
+        if not archive_matched and not has_tree_sha256:
             raise ValueError("Native runtime SHA256 mismatch")
         archive_str = str(archive).lower()
         fmt = "zip" if archive_str.endswith(".zip") else ("tar.gz" if archive_str.endswith((".tar.gz", ".tgz")) else record["format"])
@@ -235,6 +278,9 @@ def install_bundle(record, *, archive=None, root=None, accept_terms=False):
                     if cand.is_dir() and cand.joinpath(*first_cmd.parts).is_file():
                         stage = cand
                         break
+            if not archive_matched:
+                if not has_tree_sha256 or bundle_tree_sha256(stage) != tree_sha256:
+                    raise ValueError("Native runtime SHA256 mismatch")
             paths = []
             for command in record["commands"]:
                 rel = _safe_relpath(command)
@@ -248,6 +294,8 @@ def install_bundle(record, *, archive=None, root=None, accept_terms=False):
                 "archive_sha256": record["sha256"], "commands": paths,
                 "license_url": record["license_url"],
             }
+            if has_tree_sha256:
+                receipt["tree_sha256"] = tree_sha256
             (stage / "native-runtime.json").write_text(json.dumps(receipt, indent=2) + "\n")
             stage.rename(dest)
         return dest
@@ -296,41 +344,50 @@ def provision_bundles(names, *, root=None, archive_dir=None, accept_terms=False,
         raise PermissionError("Review and accept the native runtime licences before installing")
     settings = {}
     installed = {}
-    for name, record in records.items():
-        folder_name = f"{record['name']}-{record['version']}-{record['system'].lower()}-{record['machine']}"
-        candidate_dirs = [Path(prefixes[name])]
-        if root is None:
-            candidate_dirs = [b / folder_name for b in bundled_runtime_roots()] + candidate_dirs
-        dest = Path(prefixes[name])
-        reused = False
-        for cand_dest in candidate_dirs:
-            receipt_file = cand_dest / "native-runtime.json"
-            if cand_dest.is_dir() and receipt_file.is_file():
-                try:
-                    existing = json.loads(receipt_file.read_text(encoding="utf-8"))
-                    if (
-                        existing.get("archive_sha256") == record["sha256"]
-                        and all(cand_dest.joinpath(*_safe_relpath(cmd).parts).is_file() for cmd in record["commands"])
-                    ):
-                        dest = cand_dest
-                        reused = True
-                        break
-                except (OSError, ValueError):
-                    continue
-        if not reused:
-            if dest.is_dir() and (dest / "native-runtime.json").is_file() and not dest.is_symlink():
-                shutil.rmtree(dest)
-            archive = None
-            if archive_dir is not None:
-                for art_key in ("artifact", "unified_artifact"):
-                    art_name = record.get(art_key, "")
-                    if art_name and (Path(archive_dir) / art_name).is_file():
-                        archive = Path(archive_dir) / art_name
-                        break
-            dest = install_bundle(record, archive=archive, root=base, accept_terms=True)
-        bin_dir = str((dest / "bin").resolve())
-        for key in BUNDLE_SETTINGS[name]:
-            settings[key] = bin_dir
-        installed[name] = str(dest)
+    downloaded_by_url = {}
+    try:
+        for name, record in records.items():
+            folder_name = f"{record['name']}-{record['version']}-{record['system'].lower()}-{record['machine']}"
+            candidate_dirs = [Path(prefixes[name])]
+            if root is None:
+                candidate_dirs = [b / folder_name for b in bundled_runtime_roots()] + candidate_dirs
+            dest = Path(prefixes[name])
+            reused = False
+            for cand_dest in candidate_dirs:
+                if is_valid_installed_bundle_dir(cand_dest, record=record):
+                    dest = cand_dest
+                    reused = True
+                    break
+            if not reused:
+                if dest.is_dir() and not dest.is_symlink():
+                    shutil.rmtree(dest)
+                archive = None
+                if archive_dir is not None:
+                    for art_key in ("artifact", "unified_artifact"):
+                        art_name = record.get(art_key, "")
+                        if art_name and (Path(archive_dir) / art_name).is_file():
+                            archive = Path(archive_dir) / art_name
+                            break
+                if archive is None and record.get("url", "").startswith("https://"):
+                    url = record["url"]
+                    if url in downloaded_by_url and Path(downloaded_by_url[url]).is_file():
+                        archive = downloaded_by_url[url]
+                    else:
+                        base.mkdir(parents=True, exist_ok=True)
+                        suffix = ".zip" if url.lower().endswith(".zip") else (".tar.gz" if url.lower().endswith((".tar.gz", ".tgz")) else ".part")
+                        fd, shared_dl = tempfile.mkstemp(prefix="native-shared-download-", suffix=suffix, dir=base)
+                        os.close(fd)
+                        with urllib.request.urlopen(url, timeout=90) as src, open(shared_dl, "wb") as out:
+                            shutil.copyfileobj(src, out)
+                        downloaded_by_url[url] = Path(shared_dl)
+                        archive = downloaded_by_url[url]
+                dest = install_bundle(record, archive=archive, root=base, accept_terms=True)
+            bin_dir = str((dest / "bin").resolve())
+            for key in BUNDLE_SETTINGS[name]:
+                settings[key] = bin_dir
+            installed[name] = str(dest)
+    finally:
+        for shared_dl in downloaded_by_url.values():
+            Path(shared_dl).unlink(missing_ok=True)
     plan.update(status="completed", external_dependencies=settings, installed_prefixes=installed)
     return plan

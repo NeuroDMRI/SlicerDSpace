@@ -56,8 +56,11 @@ TRANSLATIONS = {
         "missing_python_dependencies": "First-use setup",
         "install_python_dependencies": "Offer to prepare missing dependencies before running",
         "subject_id": "Subject ID",
+        "subject_id_placeholder": "e.g. 100307",
         "subject_root": "Subject root",
+        "subject_root_placeholder": "Folder with input/data.nii.gz, bvals, bvecs",
         "output_directory": "Output directory",
+        "output_directory_placeholder": "Optional; defaults to <subject root>/outputs",
         "preprocessing": "Preprocessing",
         "preprocessing_option": "Denoise, Gibbs, eddy",
         "surface": "Surface (native)",
@@ -245,8 +248,11 @@ TRANSLATIONS = {
         "missing_python_dependencies": "首次使用准备",
         "install_python_dependencies": "运行前提示一键准备缺少的依赖",
         "subject_id": "受试者 ID",
+        "subject_id_placeholder": "例如 100307",
         "subject_root": "受试者根目录",
+        "subject_root_placeholder": "包含 input/data.nii.gz、bvals、bvecs 的文件夹",
         "output_directory": "输出目录",
+        "output_directory_placeholder": "可选；默认为 <subject root>/outputs",
         "preprocessing": "预处理",
         "preprocessing_option": "降噪、Gibbs、涡流校正",
         "surface": "表面重建（原生）",
@@ -1003,10 +1009,17 @@ def install_onboarding_panel(owner: Any, parent_layout: Any) -> None:
     panel.setContentsMargins(0, 0, 0, 0)
     layout = qt.QVBoxLayout(panel)
 
+    from shared.ui_styles import is_dark_mode
+
+    dark = is_dark_mode(getattr(owner, "_uiWidget", None))
     top = qt.QHBoxLayout()
     title = qt.QLabel()
     title.setObjectName("onboardingTitleLabel")
-    title.setStyleSheet("QLabel { color: #173D2A; font-size: 15px; font-weight: 800; }")
+    title.setStyleSheet(
+        "QLabel { color: #9BE0B8; font-size: 15px; font-weight: 800; }"
+        if dark
+        else "QLabel { color: #173D2A; font-size: 15px; font-weight: 800; }"
+    )
     top.addWidget(title, 1)
     language_label = qt.QLabel()
     language_label.setObjectName("onboardingLanguageLabel")
@@ -1020,7 +1033,7 @@ def install_onboarding_panel(owner: Any, parent_layout: Any) -> None:
     body = qt.QLabel()
     body.setObjectName("onboardingBodyLabel")
     body.wordWrap = True
-    body.setStyleSheet("QLabel { color: #426154; }")
+    body.setStyleSheet("QLabel { color: #B8C5D0; }" if dark else "QLabel { color: #426154; }")
     layout.addWidget(body)
 
     # 2 x 2 grid so the panel stays usable in a narrow module panel.
@@ -1039,7 +1052,10 @@ def install_onboarding_panel(owner: Any, parent_layout: Any) -> None:
     dashboard.setObjectName("capabilityDashboardLabel")
     dashboard.wordWrap = True
     dashboard.setStyleSheet(
-        "QLabel { background: #FFFFFF; border: 1px solid #DCE8E0; border-radius: 8px; "
+        "QLabel { background: #1E2A24; border: 1px solid #354C40; border-radius: 8px; "
+        "color: #C2E0D0; padding: 8px; }"
+        if dark
+        else "QLabel { background: #FFFFFF; border: 1px solid #DCE8E0; border-radius: 8px; "
         "color: #244034; padding: 8px; }"
     )
     layout.addWidget(dashboard)
@@ -1047,7 +1063,11 @@ def install_onboarding_panel(owner: Any, parent_layout: Any) -> None:
     examples = qt.QLabel()
     examples.setObjectName("pathExamplesLabel")
     examples.wordWrap = True
-    examples.setStyleSheet("QLabel { color: #6B7D74; font-size: 11px; }")
+    examples.setStyleSheet(
+        "QLabel { color: #9BA7B4; font-size: 11px; }"
+        if dark
+        else "QLabel { color: #6B7D74; font-size: 11px; }"
+    )
     layout.addWidget(examples)
 
     owner._onboardingWidgets = {
@@ -1117,7 +1137,22 @@ def apply_onboarding_language(owner: Any, language: str) -> None:
     for widget_name, key in MAIN_UI_TOOLTIP_BINDINGS.items():
         _set_widget_tooltip(getattr(ui, widget_name, None), onboarding_text(lang, key))
 
+    _set_path_edit_placeholder(getattr(ui, "inputDirectoryPath", None), onboarding_text(lang, "subject_root_placeholder"))
+    _set_path_edit_placeholder(getattr(ui, "outputDirectoryPath", None), onboarding_text(lang, "output_directory_placeholder"))
     _set_path_edit_placeholder(getattr(ui, "wmaInputTractographyPath", None), onboarding_text(lang, "wma_input_placeholder"))
+    if hasattr(owner, "_refresh_subject_id_placeholder"):
+        try:
+            owner._refresh_subject_id_placeholder()
+        except Exception:
+            pass
+    root_widget = getattr(owner, "_uiWidget", None)
+    if root_widget is not None:
+        try:
+            from shared.ui_styles import apply_placeholder_palette
+
+            apply_placeholder_palette(root_widget)
+        except Exception:
+            pass
 
     mask_combo = getattr(ui, "brainMaskBackendComboBox", None)
     if mask_combo is not None:
@@ -1333,14 +1368,25 @@ def show_first_run_wizard(owner: Any) -> None:
         "scan_failed": "扫描没有完成；请复制诊断报告后重试。" if is_zh else "The scan did not complete. Copy the diagnostic report and retry.",
         "report_missing": "请先执行依赖扫描。" if is_zh else "Run the dependency scan first.",
     }
+    from shared.ui_styles import is_dark_mode
+
+    dark = is_dark_mode(dialog)
     intro = qt.QLabel(copy["intro"])
     intro.wordWrap = True
-    intro.setStyleSheet("QLabel { color: #3E5B4A; padding: 4px 2px 8px 2px; }")
+    intro.setStyleSheet(
+        "QLabel { color: #B8C5D0; padding: 4px 2px 8px 2px; }"
+        if dark
+        else "QLabel { color: #3E5B4A; padding: 4px 2px 8px 2px; }"
+    )
     layout.addWidget(intro)
 
     progress_label = qt.QLabel(f"{copy['progress']}: 0 / 5")
     progress_label.setObjectName("firstRunWizardProgressLabel")
-    progress_label.setStyleSheet("QLabel { color: #173D2A; font-weight: 700; padding-bottom: 4px; }")
+    progress_label.setStyleSheet(
+        "QLabel { color: #9BE0B8; font-weight: 700; padding-bottom: 4px; }"
+        if dark
+        else "QLabel { color: #173D2A; font-weight: 700; padding-bottom: 4px; }"
+    )
     layout.addWidget(progress_label)
 
     scroll = qt.QScrollArea()
@@ -1408,12 +1454,21 @@ def show_first_run_wizard(owner: Any) -> None:
         label = status_labels[index]
         prefix = copy["ready"] if state == "ready" else copy["failed"] if state == "failed" else copy["working"] if state == "working" else copy["pending"]
         label.setText(f"{prefix}: {detail}" if detail else prefix)
-        colors = {
-            "ready": ("#EAF6EE", "#26643D"),
-            "failed": ("#FFF3E8", "#9A4B13"),
-            "working": ("#EAF2F8", "#285A78"),
-            "pending": ("#F3F5F4", "#64736B"),
-        }
+        colors = (
+            {
+                "ready": ("#1D3326", "#8CE99A"),
+                "failed": ("#382C1B", "#FFD8A8"),
+                "working": ("#1C2F42", "#8CD2F5"),
+                "pending": ("#252B32", "#9BA7B4"),
+            }
+            if dark
+            else {
+                "ready": ("#EAF6EE", "#26643D"),
+                "failed": ("#FFF3E8", "#9A4B13"),
+                "working": ("#EAF2F8", "#285A78"),
+                "pending": ("#F3F5F4", "#64736B"),
+            }
+        )
         background, foreground = colors.get(state, colors["pending"])
         label.setStyleSheet(
             f"QLabel {{ background: {background}; color: {foreground}; border-radius: 5px; padding: 4px 7px; }}"
@@ -1436,12 +1491,16 @@ def show_first_run_wizard(owner: Any) -> None:
     for index, (title_text, body_text, action_text, callback) in enumerate(steps):
         frame = qt.QFrame()
         frame.setObjectName(f"firstRunWizardStep{index + 1}")
-        frame.setStyleSheet("QFrame { background: #FFFFFF; border: 1px solid #DCE8E0; border-radius: 8px; }")
+        frame.setStyleSheet(
+            "QFrame { background: #22272E; border: 1px solid #3B434D; border-radius: 8px; }"
+            if dark
+            else "QFrame { background: #FFFFFF; border: 1px solid #DCE8E0; border-radius: 8px; }"
+        )
         row = qt.QGridLayout(frame)
         title = qt.QLabel(f"<b>{title_text}</b>")
         body = qt.QLabel(body_text)
         body.wordWrap = True
-        body.setStyleSheet("QLabel { color: #51665A; border: none; }")
+        body.setStyleSheet("QLabel { color: #B8C5D0; border: none; }" if dark else "QLabel { color: #51665A; border: none; }")
         status = qt.QLabel(copy["pending"])
         status.setObjectName(f"firstRunWizardStatus{index + 1}")
         status.setWordWrap(True)

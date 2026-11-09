@@ -9,6 +9,7 @@
       "format": "zip",
       "artifact": "mrtrix-3.0.8-windows-x86_64.zip",
       "sha256": "a0d5c3f12e6e54a914bb8690edf6b795ae432b82a1e99d741094f8460db8a20a",
+      "tree_sha256": "9b3d583c4b5b166311ecc2784c1b7d3185e9cba7247d728cb6aa5800a850ae41",
       "bytes": 30968289,
       "commands": [
         "bin/mrconvert.exe",
@@ -94,6 +95,7 @@
       "format": "tar.gz",
       "artifact": "mrtrix-3.0.8-linux-x86_64.tar.gz",
       "sha256": "c5b4ad88c20c569638ca9d49779f439a156247a417dc8f15d33cee0543aa5c7b",
+      "tree_sha256": "14c62f47b893bf28fa90c52dede069656ec2a13e7dcfd5308451ddcc8270229b",
       "bytes": 27145376,
       "commands": [
         "bin/mrconvert",
@@ -179,6 +181,7 @@
       "format": "zip",
       "artifact": "fsl-2602.0-windows-x86_64.zip",
       "sha256": "1a50663922099c3207e02a45f3416a6f4093fc28c982a123e8451f94f005816f",
+      "tree_sha256": "939e1c11d01d83f5e4554ca3d8dc712090f81f33bd85b89c4a57a351c5cd89d6",
       "bytes": 16331282,
       "commands": [
         "bin/eddy_cpu.exe",
@@ -199,6 +202,7 @@
       "format": "tar.gz",
       "artifact": "fsl-2602.0-linux-x86_64.tar.gz",
       "sha256": "327d92c8be1f09ebb9d22357de390b0ebfecd72ae5a917875fa48b3e6ad200ab",
+      "tree_sha256": "07c0f75bfda028e1e9f2267c5bf32ae920bd8efd926cbf759bc706d8e1878175",
       "bytes": 42914629,
       "commands": [
         "bin/eddy_cpu",

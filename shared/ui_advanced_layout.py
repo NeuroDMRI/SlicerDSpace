@@ -105,18 +105,45 @@ def install_advanced_categories(owner):
     # It sat in the collapsed Advanced panel, which hid it explicitly; moving it does not show it again.
     owner.ui.resultsCollapsibleButton.show()
     selector.currentIndexChanged.connect(stack.setCurrentIndex)
-    def fit(*_):
+    def _sync_stack_height():
         page = stack.currentWidget()
         if page:
+            for child in page.findChildren(qt.QWidget):
+                child_layout = child.layout()
+                if child_layout is not None:
+                    child_layout.invalidate()
+                    child_layout.activate()
+            page.layout().invalidate()
             page.layout().activate()
-            stack.setMaximumHeight(max(60, page.sizeHint.height() + 12))
-        owner._uiWidget.adjustSize()
-    selector.currentIndexChanged.connect(lambda *_: qt.QTimer.singleShot(0, fit))
-    for panel in (root, owner._prepareInputWidgets['panel'], owner._regionWidgets['panel']):
-        panel.connect('contentsCollapsed(bool)', lambda *_: qt.QTimer.singleShot(0, fit))
-    owner.ui.topupCollapsibleGroupBox.toggled.connect(lambda *_: qt.QTimer.singleShot(0, fit))
+            eff_width = page.width if page.width > 120 else max(120, owner._uiWidget.width - 28)
+            hfw = page.layout().totalHeightForWidth(eff_width) if eff_width > 0 and page.layout().hasHeightForWidth() else 0
+            target_stack_height = max(60, page.sizeHint.height() + 12, page.minimumSizeHint.height() + 12, hfw + 12)
+            if stack.maximumHeight != target_stack_height:
+                stack.setMaximumHeight(target_stack_height)
+
+    owner._syncAdvancedStackHeight = _sync_stack_height
+
+    def fit(*_):
+        _sync_stack_height()
+        if getattr(root, "collapsed", False):
+            return
+        compact_fit = getattr(owner, "_fitCompactHeight", None)
+        if callable(compact_fit):
+            compact_fit()
+        queue_fit = getattr(owner, "_queueCompactFit", None)
+        if callable(queue_fit):
+            queue_fit()
+
+    selector.currentIndexChanged.connect(fit)
+    owner._regionWidgets['panel'].connect('contentsCollapsed(bool)', fit)
+    owner._regionWidgets['options'].connect('contentsCollapsed(bool)', fit)
+    owner.ui.topupCollapsibleGroupBox.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Preferred)
+    owner.ui.topupCollapsibleGroupBox.setMinimumWidth(0)
+    owner.ui.topupCollapsibleGroupBox.toggled.connect(fit)
     if hasattr(owner, '_ukfGroup'):
-        owner._ukfGroup.toggled.connect(lambda *_: qt.QTimer.singleShot(0, fit))
+        owner._ukfGroup.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Preferred)
+        owner._ukfGroup.setMinimumWidth(0)
+        owner._ukfGroup.toggled.connect(fit)
     owner._fitAdvancedPage = fit
     from shared.ui_experiments import install
     install(owner, stack.widget(4))
@@ -155,7 +182,10 @@ def refresh_advanced_categories(owner):
     for name in ("orchestrationTractographyBackendLabel", "orchestrationTractographyBackendComboBox",
                  "orchestrationBundleBackendLabel", "orchestrationBundleBackendComboBox",
                  "orchestrationMicrostructureStagesLabel", "orchestrationMicrostructureStageOptions"):
-        getattr(owner.ui, name).hide()
-    owner._fitAdvancedPage()
+        widget = getattr(owner.ui, name, None)
+        if widget is not None and widget.visible:
+            widget.hide()
     from shared.ui_experiments import sync
     sync(owner)
+    if not getattr(owner._advancedSettingsPanel, "collapsed", True):
+        owner._fitAdvancedPage()

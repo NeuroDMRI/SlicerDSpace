@@ -7,11 +7,19 @@ import re
 import unittest
 
 from shared.ui_styles import (
+    DARK_ENVIRONMENT_READY_LABEL_STYLE,
+    DARK_ENVIRONMENT_RESULTS_DIALOG_STYLE,
+    DARK_RUN_STATUS_TABLE_STYLE,
     ENVIRONMENT_READY_LABEL_STYLE,
     ENVIRONMENT_RESULTS_DIALOG_STYLE,
     RUN_STATUS_TABLE_STYLE,
+    SLICERDSPACE_DARK_UI_STYLE,
     SLICERDSPACE_UI_STYLE,
+    environment_ready_label_style,
+    environment_results_dialog_style,
+    run_status_table_style,
     run_summary_label_style,
+    ui_stylesheet,
 )
 
 
@@ -67,6 +75,20 @@ class UIStylesTest(unittest.TestCase):
     def test_run_summary_card_keeps_its_box(self) -> None:
         body = self._rule_for("QLabel#runSummaryLabel")
         self.assertIn("border: 1px solid", body)
+
+    def test_dark_mode_stylesheets_provide_high_contrast_inputs_and_labels(self) -> None:
+        self.assertEqual(ui_stylesheet(dark=False), SLICERDSPACE_UI_STYLE)
+        self.assertEqual(ui_stylesheet(dark=True), SLICERDSPACE_DARK_UI_STYLE)
+        self.assertEqual(run_status_table_style(dark=True), DARK_RUN_STATUS_TABLE_STYLE)
+        self.assertEqual(environment_results_dialog_style(dark=True), DARK_ENVIRONMENT_RESULTS_DIALOG_STYLE)
+        self.assertEqual(environment_ready_label_style(dark=True), DARK_ENVIRONMENT_READY_LABEL_STYLE)
+        self.assertIn("background: #22272E;", SLICERDSPACE_DARK_UI_STYLE)
+        self.assertIn("color: #F0F6FC;", SLICERDSPACE_DARK_UI_STYLE)
+        self.assertIn("color: #7CC4EA;", SLICERDSPACE_DARK_UI_STYLE)
+        self.assertIn("color: #1E293B;", SLICERDSPACE_UI_STYLE)
+        dark_failed = run_summary_label_style("failed", dark=True)
+        self.assertIn("#3B2124", dark_failed)
+        self.assertIn("#FFA8A8", dark_failed)
 
 
 if __name__ == "__main__":

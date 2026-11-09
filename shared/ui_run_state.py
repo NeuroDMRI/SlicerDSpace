@@ -151,6 +151,14 @@ LOG_LEVEL_COLORS = {
     "info": "#425360",
 }
 
+DARK_LOG_LEVEL_COLORS = {
+    "error": "#FF7B72",
+    "warning": "#FFB74D",
+    "stage": "#7CC4EA",
+    "success": "#66BB6A",
+    "info": "#D2DEE8",
+}
+
 _ERROR_PATTERN = re.compile(r"\b(error|failed|failure|traceback|exception|fatal)\b", re.IGNORECASE)
 _WARNING_PATTERN = re.compile(r"\b(warning|warn|blocked|cancelled|skipped|deprecated)\b", re.IGNORECASE)
 _SUCCESS_PATTERN = re.compile(r"\b(completed|passed|succeeded|ready to run|environment ready)\b", re.IGNORECASE)
@@ -171,10 +179,20 @@ def log_line_level(line: str) -> str:
     return "info"
 
 
-def log_line_html(line: str) -> str:
+def log_line_html(line: str, *, dark: bool | None = None) -> str:
     """Escape a log line and wrap it in a coloured span (whitespace preserved)."""
 
+    if dark is None:
+        try:
+            from shared.ui_styles import is_dark_mode
+
+            use_dark = is_dark_mode()
+        except Exception:
+            use_dark = False
+    else:
+        use_dark = bool(dark)
     level = log_line_level(line)
     escaped = html.escape(line or "", quote=False)
     weight = "font-weight:600;" if level in {"stage", "error"} else ""
-    return f'<span style="white-space:pre;color:{LOG_LEVEL_COLORS[level]};{weight}">{escaped}</span>'
+    palette = DARK_LOG_LEVEL_COLORS if use_dark else LOG_LEVEL_COLORS
+    return f'<span style="white-space:pre;color:{palette[level]};{weight}">{escaped}</span>'

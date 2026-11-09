@@ -50,23 +50,20 @@ limited to surface postprocessing. Readable text is only a preliminary check;
 the original commands validate activation.
 
 **Check never installs. The GUI preparation route never compiles sources.**
-**Prepare selected analysis environment** prefers a qualified prebuilt bundle,
-checks archive/file hashes, recipe and native library availability, then saves
-the component path. The Linux x86_64 candidate contains seven unchanged native
-commands and atlas data: 40,995,581 bytes compressed, about 85.2 MiB unpacked.
-It contains no personal activation key. Your own activation remains required.
+In **`v0.1.1`**, the verified 7-command native Surface Runtime (`0.1.0`) and atlas templates are **bundled directly** inside the unified platform installers:
+- **Windows x64**: `SlicerDSpace-v0.1.1-Windows-x64.zip` (`bundled-runtimes/surface-runtime-windows-x86_64`)
+- **Linux x86_64**: `SlicerDSpace-v0.1.1-Linux-x64.tar.gz` (`bundled-runtimes/surface-runtime-linux-x86_64`)
 
-The bundles remain unpublished. Place the archive for your platform under
-`<asset-root>/runtime/surface/`, or select an existing verified runtime or
-FreeSurfer installation. The installer selects the architecture of its Python
-process. On an Apple Silicon Mac, use an arm64 Python process for the arm64
-archive.
+They are automatically discovered on first launch and verified via `tree_sha256` (with automatic repair from the release archive if deleted or corrupted). Neither bundle includes a personal FreeSurfer activation key (`activation_key_included: false`); your own free FreeSurfer license (`FS_LICENSE`) remains required at runtime.
 
-| Platform | Offline archive |
-| --- | --- |
-| Linux x86_64 | `surface-runtime-linux-x86_64.tar.gz` |
-| macOS 15 or later, Intel | `surface-runtime-darwin-x86_64.tar.gz` |
-| macOS 15 or later, Apple Silicon | `surface-runtime-darwin-arm64.tar.gz` |
+For standalone/offline cache import (`<asset-root>/runtime/surface/`), the archive names by platform are:
+
+| Platform | Bundled / Offline archive | Status |
+| --- | --- | --- |
+| Windows x86_64 | Bundled in `SlicerDSpace-v0.1.1-Windows-x64.zip` (`surface-runtime-windows-x86_64`) | **Verified native in 3D Slicer 5.10.0** |
+| Linux x86_64 | Bundled in `SlicerDSpace-v0.1.1-Linux-x64.tar.gz` (`surface-runtime-linux-x86_64`) | **Verified native in 3D Slicer 5.10.0** |
+| macOS 15 or later, Intel | `surface-runtime-darwin-x86_64.tar.gz` | Offline candidate; scientific comparison pending |
+| macOS 15 or later, Apple Silicon | `surface-runtime-darwin-arm64.tar.gz` | Offline candidate; scientific comparison pending |
 
 If the archive is missing, the preparation dialog lists the runtime as a
 manual item.
@@ -120,11 +117,7 @@ FreeSurfer 7.4.1 source. The build passed the upstream Apple Silicon flags
 repeated all seven checks. This candidate was built without OpenMP. Scientific
 comparison on macOS remains pending.
 
-The Windows-target CMake probe recognized MinGW GCC 10 and stopped at the
-existing UNIX platform check. Separate MinGW syntax checks on the pinned
-`utils/utils.cpp` and `mris_sphere/mris_sphere.cpp` both stopped at the missing
-`sys/resource.h` header. The original build and activation checks remain in
-place. A native Windows build needs a port of those POSIX dependencies.
+On Windows x86_64 (`v0.1.1`), the 7 native FreeSurfer surface postprocessing executables (`mris_convert.exe`, `mris_inflate.exe`, `mris_curv.exe`, `mris_smooth.exe`, `mris_sphere.exe`, `mris_register.exe`, `mris_ca_label.exe`, `mris_anatomical_stats.exe`) have been ported, built, bundled in `surface-runtime-windows-x86_64`, and verified on real data in 3D Slicer 5.10.0 against the Linux reference (`Activation Key Included: false`; personal FreeSurfer license required at runtime).
 
 ---
 

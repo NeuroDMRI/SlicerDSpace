@@ -31,8 +31,11 @@ dcm2niix found only on `PATH` fails, you get a warning, because NIfTI input does
 
 Functional failures are retained across restarts for the same configuration.
 Source discovery is shared with runtime execution, so verified prepared sources
-remain usable if an explicit saved source path is absent. Windows WMA is not
-offered a Bash-only source checkout as a substitute for its WSL executable bridge.
+remain usable if an explicit saved source path is absent. On Windows `v0.1.1`,
+native execution is the default (`MRtrix3 3.0.8`, `FSL 2602.0` diffusion preprocessing,
+and `FreeSurfer Surface Runtime 0.1.0` are bundled inside `SlicerDSpace-v0.1.1-Windows-x64.zip`
+under `bundled-runtimes/`, and `WMA`, `WMQL`, `TractCloud`, and `SAF` run natively in
+Windows Slicer's Python without WSL; WSL 2 remains an optional fallback).
 
 With **First-use setup** enabled, clicking Run with missing dependencies opens this
 same preparation plan. It does not start analysis automatically after installation
@@ -118,18 +121,17 @@ them by hand after a successful run.
 
 | Component | Managed path |
 | --- | --- |
-| MRtrix3 3.0.8 | Linux x86_64: official prebuilt Conda packages. macOS (Intel and Apple Silicon, macOS 14.5 or later): the official universal tarball, SHA-256 verified, unpacked into the runtimes folder |
-| FSL eddy 2602.0 / topup 2203.5 | Linux x86_64, macOS Intel and Apple Silicon (macOS 14.5 or later; CPU eddy only), official FSL channel; explicit license approval |
-| CUDA eddy 2602.0 | Optional FSL profile; NVIDIA driver required; no full CUDA Toolkit installation |
-| DDSurfer / DDSeg / DDParcel assets | Existing background download with profile-specific selection and default directory |
+| MRtrix3 3.0.8 | Windows x64 & Linux x86_64: bundled natively in the unified `v0.1.1` release archive (`bundled-runtimes/mrtrix-3.0.8-*`, 68 commands, `tree_sha256` auto-repair) or installed via prebuilt packages. macOS (Intel and Apple Silicon, macOS 14.5 or later): official universal tarball, SHA-256 verified, unpacked into the runtimes folder (full scientific acceptance pending) |
+| FSL eddy 2602.0 / topup 2203.5 | Windows x64 (`topup.exe`, `applytopup.exe`, `eddy_cpu.exe`) & Linux x86_64: bundled natively in the unified `v0.1.1` release archive (`bundled-runtimes/fsl-2602.0-*`, `tree_sha256` auto-repair) or installed from official FSL channel with explicit license approval. macOS Intel and Apple Silicon (macOS 14.5 or later; CPU eddy only): official FSL channel candidate |
+| CUDA eddy 2602.0 | Optional Linux FSL profile (or optional WSL 2 with NVIDIA GPU on Windows); NVIDIA driver required; no full CUDA Toolkit installation |
+| DDSurfer / DDSeg / DDParcel assets | On-demand background download with profile-specific selection and default directory (`SHA-256` verified) |
 | Python scientific packages | Selected interpreter, protected Slicer core packages, native packaging API when available; official PyTorch helper |
-| PNL diffusion CNN | Linux x86_64; pinned PNLBrainMask-Torch package, converted v0.3 three-view weights, IIT b0 template, Python 3.11, PyTorch 2.5.1 CPU and ANTs 2.3.0 in a separate prefix |
-| Optional cortical postprocessing | [Qualified prebuilt bundle](SURFACE_COMPONENTS.md), Linux x86_64; offline installation tested. Bundle publication is pending. Personal activation is separate; the GUI never compiles sources |
-| WMA / TractCloud non-code resources | Selected optional profile download/import, checksums, ORG extraction and automatic path saving; private-mirror authorization still applies |
-| WMA/WMQL/TractCloud sources | Pinned archives, safe extraction, file hashes, automatic discovery/path saving; no Git or duplicated algorithm implementation |
-| PNL diffusion CNN on macOS and Windows | No managed runtime. The native route ("native (experimental)") runs in Slicer's Python and needs the PyTorch extension and the pnl-cnn brain-mask assets, which this installer plans (with the PNL licence) |
-| Windows | WSL 2 Ubuntu runtime from `scripts/install_deps_windows.ps1` for MRtrix3, FSL and the optional FreeSurfer and algorithm sources; the setup dialog lists it with its licences. The brain mask and the Python stages run in Windows Slicer's Python, not in WSL |
-| macOS CUDA eddy, native Windows MRtrix3/FSL | Not offered. CUDA eddy needs Linux (or WSL with an NVIDIA GPU) |
+| PNL diffusion CNN | Linux x86_64: pinned PNLBrainMask-Torch package, converted v0.3 three-view weights, IIT b0 template, Python 3.11, PyTorch 2.5.1 CPU and ANTs 2.3.0 in a separate prefix. Windows & macOS: native route (`SimpleITK` + `PyTorch`) in Slicer's Python (`experimental`) |
+| Optional cortical postprocessing | Bundled 7-command native [Surface Runtime](SURFACE_COMPONENTS.md) (`0.1.0`) in both `SlicerDSpace-v0.1.1-Windows-x64.zip` (`surface-runtime-windows-x86_64`) and `SlicerDSpace-v0.1.1-Linux-x64.tar.gz` (`surface-runtime-linux-x86_64`); personal FreeSurfer license (`FS_LICENSE`) required; GUI never compiles sources |
+| WMA / TractCloud non-code resources | On-demand profile download/import, checksums, ORG extraction and automatic path saving |
+| WMA/WMQL/TractCloud sources | Pinned archives, safe extraction, file hashes, automatic discovery/path saving; runs natively on Windows and Linux without Git or WSL |
+| Windows (`x86_64`) | **Default native execution** (`SlicerDSpace-v0.1.1-Windows-x64.zip`): bundled native `MRtrix3 3.0.8` (68 commands), `FSL 2602.0` (`topup.exe`, `applytopup.exe`, `eddy_cpu.exe`), and `Surface Runtime 0.1.0` (7 commands) auto-discovered on first launch with `tree_sha256` auto-repair; `WMA`, `WMQL`, `TractCloud`, `SAF`, and microstructure models run natively in Windows Slicer's Python. WSL 2 (`scripts/install_deps_windows.ps1`) is an optional fallback only |
+| macOS | Native candidate only; unified release archive and full native runtime validation remain pending (no CUDA eddy) |
 
 Functional preparation tests execute a NumPy solve, write/read a small NIfTI and
 VTK streamline where selected, exercise the selected PyTorch device, deserialize

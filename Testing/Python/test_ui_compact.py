@@ -175,6 +175,15 @@ class CompactUiTest(unittest.TestCase):
         owner.validateInputs = lambda **kwargs: self.fail("Active run must not revalidate or start")
         click(owner)
 
+    def test_advanced_layout_fit_never_calls_adjust_size_to_narrow_panel(self):
+        root = Path(__file__).resolve().parents[2]
+        for rel in ("shared/ui_advanced_layout.py", "shared/ui_compact.py", "shared/ui_regions.py"):
+            source = (root / rel).read_text(encoding="utf-8")
+            self.assertNotIn("adjustSize(", source, rel)
+            self.assertNotIn("contentsRect().width()", source, rel)
+        compact_source = (root / "shared/ui_compact.py").read_text(encoding="utf-8")
+        self.assertIn("root.resize(root.width, target_height)", compact_source)
+
 
 if __name__ == "__main__":
     unittest.main()

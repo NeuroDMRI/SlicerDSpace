@@ -10,16 +10,17 @@
 
 Starting in **`v0.1.1`**, SlicerDSpace provides a single unified Windows release package (**`SlicerDSpace-v0.1.1-Windows-x64.zip`**) for **3D Slicer 5.10.0** that bundles the extension together with modularly managed native Windows runtimes under `SlicerDSpace/bundled-runtimes/`:
 
-- **MRtrix3 `3.0.8`** (`bundled-runtimes/mrtrix-3.0.8-windows-x86_64`, **68 native commands** including `dwi2response`, `5ttgen`, `dwi2fod`, `mtnormalise`, `tckgen`, `tcksift2`, `tck2connectome`, `tckedit`, `tckresample`, `tckmap`, `mrcrop`, plus bundled `FreeSurferColorLUT.txt` fallback).
-- **FSL `2602.0`** (`bundled-runtimes/fsl-2602.0-windows-x86_64`, native `topup.exe`, `applytopup.exe`, `eddy_cpu.exe`).
+- **MRtrix3 `3.0.8`** (`bundled-runtimes/mrtrix-3.0.8-windows-x86_64`, **68 native commands** including `dwi2response`, `5ttgen`, `5ttcheck`, `5tt2gmwmi`, `dwi2fod`, `mtnormalise`, `tckgen`, `tcksift2`, `tck2connectome`, `tckedit`, `tckresample`, `tckmap`, `mrcrop`, plus bundled `FreeSurferColorLUT.txt` fallback). SlicerDSpace prepares 5TT and GMWMI natively without a T1w scan via `tractography/act_prep.py` (`DDSeg + DDParcel -> 5TT -> 5ttcheck.exe + 5tt2gmwmi.exe`) or `5ttgen freesurfer` (upstream `5ttgen fsl` requires T1w + external full FSL `bet`/`fast`/`FIRST` and is not used by SlicerDSpace).
+- **FSL `2602.0`** (`bundled-runtimes/fsl-2602.0-windows-x86_64`, native `topup.exe`, `applytopup.exe`, `eddy_cpu.exe` for diffusion distortion and motion/eddy correction).
 - **FreeSurfer Surface Runtime** (`bundled-runtimes/surface-runtime-windows-x86_64`, 7 native surface postprocessing commands and atlas templates; `activation_key_included: false` — supply your personal FreeSurfer license file when running cortical postprocessing).
 
-**Installation & First Run:**
+**Installation, First Run & Automatic Integrity Recovery:**
 1. Open **3D Slicer 5.10.0** → **View > Extension Manager** → wrench icon (**Install Extension from File…**) and select `SlicerDSpace-v0.1.1-Windows-x64.zip`, then restart Slicer.
 2. On first launch, SlicerDSpace defaults to the **Native** execution backend on Windows (`preprocessing_execution_backend = "native"`) and automatically discovers the bundled MRtrix3, FSL, and Surface Runtime paths without manual path entry or WSL.
-3. Model weights (`DDSeg`, `DDParcel`, `DDSurfer`, `PNL`, `TractCloud`) and large atlases (`WMA ORG`) remain downloaded on demand via **Environment and installation > Prepare selected analysis environment**.
+3. Each bundled runtime is validated against its per-file content digest (`tree_sha256` in `models/native_runtime_bundles.json`). If any file or component inside `bundled-runtimes/` is accidentally deleted or corrupted, **Prepare selected analysis environment** automatically detects the mismatch and repairs the missing runtime from the release archive into `%LOCALAPPDATA%\SlicerDSpace\runtimes`.
+4. Deep-learning model weights (`DDSeg`, `DDParcel`, `DDSurfer`, `PNL`, `TractCloud`) and large atlases (`WMA ORG`) remain downloaded on demand on first use via **Environment and installation > Prepare selected analysis environment**.
 
-See the [Windows 5.10.0 Native Acceptance Report](../release/WINDOWS_NATIVE_ACCEPTANCE_5.10.0.md) for full-volume real-data (`HCP 100307`) validation and numerical parity against Linux.
+See the [Windows 5.10.0 Native Acceptance Report](../release/WINDOWS_NATIVE_ACCEPTANCE_5.10.0.md) for multi-subject real-data (`HCP 100307`, `HCP 100408`, clinical `sub-001`) validation and numerical parity against Linux.
 
 ---
 

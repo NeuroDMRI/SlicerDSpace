@@ -136,12 +136,18 @@ def sync(owner):
                 field.setPlainText(value)
         finally:
             field.blockSignals(previous)
-    widgets['scope'].blockSignals(True)
-    widgets['scope'].setCurrentIndex(1 if node.experimentScope == 'cohort' else 0)
-    widgets['scope'].blockSignals(False)
+    target_index = 1 if node.experimentScope == 'cohort' else 0
+    if widgets['scope'].currentIndex != target_index:
+        widgets['scope'].blockSignals(True)
+        widgets['scope'].setCurrentIndex(target_index)
+        widgets['scope'].blockSignals(False)
+    is_cohort = node.experimentScope == 'cohort'
+    visibility_changed = False
     for key in ('root', 'root_label', 'jobs', 'jobs_label'):
-        widgets[key].setVisible(node.experimentScope == 'cohort')
-    if hasattr(owner, '_fitAdvancedPage'):
+        if widgets[key].visible != is_cohort:
+            widgets[key].setVisible(is_cohort)
+            visibility_changed = True
+    if visibility_changed and hasattr(owner, '_fitAdvancedPage'):
         owner._fitAdvancedPage()
 
 

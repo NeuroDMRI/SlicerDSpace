@@ -32,6 +32,20 @@ JSON evidence records implementation hashes and immutable snapshots.
 
 ---
 
+## 9 November: Multi-Subject Cohort Stage-Level Scheduling
+
+The batch runner (scripts/run_batch_pipeline.py --scheduler adaptive) coordinates individual pipeline stages across subjects within a shared CPU, memory, GPU and I/O budget ([source records](benchmarks/cohort_multi_pipeline_20261109.json)). Under a 32-core CPU budget per arm on a 16-subject HCP cohort, Subject-level fixed concurrency (--scheduler subjects) is compared against Adaptive stage-level scheduling (--scheduler adaptive):
+
+| Cohort pipeline (N = 16) | Subject-level makespan | Adaptive makespan | Throughput ratio | Time saved |
+| --- | ---: | ---: | ---: | ---: |
+| Microstructure (DTI + FW + NODDI + DKI + MK-Curve) | 301.79 min | 197.44 min | 1.53× | 34.58% |
+| Anatomical priors (DDSeg + DDParcel + DDSurfer) | 78.43 min | 68.33 min | 1.15× | 12.88% |
+| Tractography (CSD/ACT + SIFT2) | 78.61 min | 70.66 min | 1.11× | 10.11% |
+
+All 16 subjects pass output and Rule-1 numerical equivalence checks in every arm. In the Microstructure cohort, stage-level scheduling overlaps single-thread Free-water/DKI stages with multithreaded NODDI/MK-Curve stages across subjects, raising mean CPU core utilization from 12.6 to 21.2 cores without altering individual scientific estimators.
+
+---
+
 ## 30 October: Evidence Refresh
 
 The supplement and homepage now include the 29 October incremental MK-Curve

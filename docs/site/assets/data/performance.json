@@ -5,51 +5,55 @@
   "sources": [
     {
       "file": "freewater_protocol_full_20261029.json",
-      "sha256": "e579f58c6bec9e7b22c2c6912d61515134621058b2cfaee5e81a54585a9a98fa"
+      "sha256": "16a79230db14dc014532c33c4f5b582da62e03f2322927ea2b2c429cbf04965d"
     },
     {
       "file": "complete_models_20261020.json",
-      "sha256": "347ace4803bb070ad48e5c9a1b51702ce82d7e0cb37f8849d29940f9f51f6c98"
+      "sha256": "14ae179508358fbf28ed6a49bdd27d59280d1b0798b09132dfc4cba477dfa51c"
     },
     {
       "file": "mkcurve_qr_scipy1181_20261022.json",
-      "sha256": "e4b11207509cd39278ce3d12d9c4336d1912584cb6a3d5dac4ffeeccfbef6bab"
+      "sha256": "22c1a42bfdbfa0ca53cd7620cf4787e1f2fae9bcc6ca3b44abc83b003990ac2d"
     },
     {
       "file": "performance_next_20261029.json",
-      "sha256": "634b458fe75d2a087705c65b530a2b29ca73a781a63b3c47b1372cad8689205e"
+      "sha256": "87765a29ddbc5410c4f2c5b5d923195f3ec0e84c311fde964701c6e4595db491"
     },
     {
       "file": "dki_latest_stable_integration_20261022.json",
-      "sha256": "d906ebffdc9d5136969403a1be1925233b40fecd3f679f7ba896a6db3cdb5847"
+      "sha256": "f9c2007a036ab4e41024ada5ef7164e86de78f0f311d616ce80729dcaff29ff7"
+    },
+    {
+      "file": "cohort_multi_pipeline_20261109.json",
+      "sha256": "a7672b95b752bce9f285307223f5ed8a58d572e1582fbe726364f23cdd8280e6"
     },
     {
       "file": "author_wma_optimizations_20261020.json",
-      "sha256": "edef21040341eda6e614d73f9c5e972cdcf4cfb35d169c0de2efb59a642b8e34"
+      "sha256": "bacf40b583e761d39fb46115c8a28a2821c3ffd1d513edb66cdafa93107572eb"
     },
     {
       "file": "freewater_dispatch_slicer_20261021.json",
-      "sha256": "c5c3597f662cb3cd71877058e7d384379d2558575aabe3bdb46a1ae1a3eaab12"
+      "sha256": "23b1ffc4ec7332527e56467324c182f626348495e200bc0098f70e1b0fb48f97"
     },
     {
       "file": "wma_transform_20261021.json",
-      "sha256": "1436dfcf82ed8dbe36886719ad89bd38103a453955ec1466adc27605343bba35"
+      "sha256": "011ccc637b3ca7c747a2768de013e2a7d3968377f78ff9cb5e2727b1469f4b36"
     },
     {
       "file": "wma_fibers_bounded_20261021.json",
-      "sha256": "7e09c9d6ae6be3442abb6c472a4cbbf77db05ab6f93335e1501064890aae9529"
+      "sha256": "b99b84f1ade6ba4b10f4e63cfe7797518dc18dceed88c8f55416f852798eafd2"
     },
     {
       "file": "performance_optimizations_20261020.json",
-      "sha256": "8b0c16688e6ce00c3c3527060be6d950a8a6cef9083c9340f256fe2c31f35a39"
+      "sha256": "3105a32b9a9a85a2c2db3ce0b5a289ded3f91e588181b949edba8a094a5b434e"
     },
     {
       "file": "upstream_freshness_verified_20261022.json",
-      "sha256": "b96025854ddd3ae724e2b10d42b63819708d40144aee39f2504344b96a477cb4"
+      "sha256": "052cb2237836c350539062a010b28a88d622f0251255f1d0f73247bc34754eb3"
     },
     {
       "file": "freewater_protocol_upstream_20261029.json",
-      "sha256": "0a41483d1c0d56a8816b0a1dd685ee3e72d747ada2c7ecc3f0fb352e04cdeedc"
+      "sha256": "bf00688c92f765eb0270f76f8688d2093f989b9c9f840756253e70105fe02810"
     }
   ],
   "records": [
@@ -72,7 +76,7 @@
       "upstream_reference": "Measured DIPY 1.12.1; latest stable on 29 October. The stable/head fitting definitions match qualified hashes; bounded protocol reuse is included in this full-brain pair.",
       "measurement_source": {
         "file": "freewater_protocol_full_20261029.json",
-        "sha256": "e579f58c6bec9e7b22c2c6912d61515134621058b2cfaee5e81a54585a9a98fa"
+        "sha256": "16a79230db14dc014532c33c4f5b582da62e03f2322927ea2b2c429cbf04965d"
       }
     },
     {
@@ -94,7 +98,7 @@
       "upstream_reference": "Author commit 4532b911386d: matches current HEAD and measured source bytes.",
       "measurement_source": {
         "file": "complete_models_20261020.json",
-        "sha256": "347ace4803bb070ad48e5c9a1b51702ce82d7e0cb37f8849d29940f9f51f6c98"
+        "sha256": "14ae179508358fbf28ed6a49bdd27d59280d1b0798b09132dfc4cba477dfa51c"
       }
     },
     {
@@ -116,7 +120,7 @@
       "upstream_reference": "AMICO 2.1.1 verified in both timed configurations; latest stable at review. Threads are already upstream functionality.",
       "measurement_source": {
         "file": "complete_models_20261020.json",
-        "sha256": "347ace4803bb070ad48e5c9a1b51702ce82d7e0cb37f8849d29940f9f51f6c98"
+        "sha256": "14ae179508358fbf28ed6a49bdd27d59280d1b0798b09132dfc4cba477dfa51c"
       }
     },
     {
@@ -182,7 +186,7 @@
       "upstream_reference": "Current MATLAB reference 9a213e1a5850; measured on current stable SciPy 1.18.1. This port-only comparison does not claim to outperform MATLAB or invent upstream native batching.",
       "measurement_source": {
         "file": "mkcurve_qr_scipy1181_20261022.json",
-        "sha256": "e4b11207509cd39278ce3d12d9c4336d1912584cb6a3d5dac4ffeeccfbef6bab"
+        "sha256": "22c1a42bfdbfa0ca53cd7620cf4787e1f2fae9bcc6ca3b44abc83b003990ac2d"
       }
     },
     {
@@ -344,7 +348,7 @@
       "upstream_reference": "Recorded 29 October with SciPy 1.18.1; source/input checksums and one-thread settings are preserved. This is an incremental comparison within the Python port, following the qualified QR change.",
       "measurement_source": {
         "file": "performance_next_20261029.json",
-        "sha256": "634b458fe75d2a087705c65b530a2b29ca73a781a63b3c47b1372cad8689205e"
+        "sha256": "87765a29ddbc5410c4f2c5b5d923195f3ec0e84c311fde964701c6e4595db491"
       }
     },
     {
@@ -386,7 +390,7 @@
       "upstream_reference": "DIPY 1.12.1 is current stable at review. Array metrics already exist upstream; this is plugin integration, not an author-algorithm speedup.",
       "measurement_source": {
         "file": "dki_latest_stable_integration_20261022.json",
-        "sha256": "d906ebffdc9d5136969403a1be1925233b40fecd3f679f7ba896a6db3cdb5847"
+        "sha256": "f9c2007a036ab4e41024ada5ef7164e86de78f0f311d616ce80729dcaff29ff7"
       }
     },
     {
@@ -408,7 +412,73 @@
       "upstream_reference": "Historical plugin scheduler comparison, not a latest-upstream algorithm performance claim.",
       "measurement_source": {
         "file": "complete_models_20261020.json",
-        "sha256": "347ace4803bb070ad48e5c9a1b51702ce82d7e0cb37f8849d29940f9f51f6c98"
+        "sha256": "14ae179508358fbf28ed6a49bdd27d59280d1b0798b09132dfc4cba477dfa51c"
+      }
+    },
+    {
+      "id": "cohort-microstructure",
+      "title": "Cohort scheduling: Microstructure",
+      "category": "workflow",
+      "scope": "16 HCP subjects / 32-core budget",
+      "evidence_date": "2026-11-09",
+      "reference_seconds": 18107.2,
+      "optimized_seconds": 11846.6,
+      "speed_ratio": 1.5284723042898385,
+      "seconds_saved": 6260.6,
+      "reduction_percent": 34.57519660687461,
+      "method": "Stage-level resource-aware scheduling across subjects overlaps single-thread Free-water/DKI and multithreaded NODDI/MK-Curve stages within a shared 32-core CPU and memory budget.",
+      "baseline": "Subject-level fixed concurrency (4 concurrent subjects, 8 threads each) versus Adaptive stage-level scheduling under the same 32-core CPU ceiling.",
+      "unchanged": "All 16 subjects pass output and Rule-1 numerical equivalence checks across DTI, Free-water, NODDI, DKI and MK-Curve maps.",
+      "limitation": "16-subject HCP cohort on a shared Linux host (32-core CPU budget per arm). Reduces cohort makespan by raising mean CPU utilization from 12.6 to 21.2 cores, without changing individual model estimators.",
+      "sample": "16 full-brain HCP subjects; complete Microstructure route (DTI + FW + NODDI + DKI + MK-Curve).",
+      "upstream_reference": "Plugin batch scheduler comparison (scripts/run_batch_pipeline.py); upstream DIPY 1.12.1, AMICO 2.1.1 and SciPy 1.18.1 estimators are unchanged.",
+      "measurement_source": {
+        "file": "cohort_multi_pipeline_20261109.json",
+        "sha256": "a7672b95b752bce9f285307223f5ed8a58d572e1582fbe726364f23cdd8280e6"
+      }
+    },
+    {
+      "id": "cohort-anatomy",
+      "title": "Cohort scheduling: Anatomical priors",
+      "category": "workflow",
+      "scope": "16 HCP subjects / 32-core budget + GPU",
+      "evidence_date": "2026-11-09",
+      "reference_seconds": 4706.0,
+      "optimized_seconds": 4100.1,
+      "speed_ratio": 1.1477768834906465,
+      "seconds_saved": 605.8999999999996,
+      "reduction_percent": 12.875053123671897,
+      "method": "Coordinate GPU-backed DDSeg/DDParcel/DDSurfer inference and CPU-bound surface post-processing across subjects using per-stage CPU, RAM and GPU tokens.",
+      "baseline": "Subject-level fixed concurrency versus Adaptive stage-level scheduling across the same 16-subject cohort.",
+      "unchanged": "All 16 subjects produce identical tissue segmentations, parcellations, cortical surfaces and QC outcomes.",
+      "limitation": "16-subject HCP cohort. Speedup reflects overlapping CPU surface post-processing with GPU inference across subjects rather than shortening single-subject neural network inference.",
+      "sample": "16 full-brain HCP subjects; complete Anatomical priors route (DDSeg + DDParcel + DDSurfer).",
+      "upstream_reference": "Plugin batch scheduler comparison (scripts/run_batch_pipeline.py); upstream DDSeg, DDParcel, DDSurfer and FreeSurfer routines are unchanged.",
+      "measurement_source": {
+        "file": "cohort_multi_pipeline_20261109.json",
+        "sha256": "a7672b95b752bce9f285307223f5ed8a58d572e1582fbe726364f23cdd8280e6"
+      }
+    },
+    {
+      "id": "cohort-tractography",
+      "title": "Cohort scheduling: Tractography",
+      "category": "workflow",
+      "scope": "16 HCP subjects / 32-core budget + GPU",
+      "evidence_date": "2026-11-09",
+      "reference_seconds": 4716.5,
+      "optimized_seconds": 4239.7,
+      "speed_ratio": 1.1124607873198575,
+      "seconds_saved": 476.8000000000002,
+      "reduction_percent": 10.109191137496031,
+      "method": "Overlap CPU-bound response estimation, MSMT-CSD, ACT/iFOD2 tracking and SIFT2 weighting with GPU-assisted anatomical priors across subjects under a unified resource budget.",
+      "baseline": "Subject-level fixed concurrency versus Adaptive stage-level scheduling across the same 16-subject cohort.",
+      "unchanged": "All 16 subjects pass tractogram, SIFT2 weight and structural connectome equivalence and QC checks.",
+      "limitation": "16-subject HCP cohort. Because MSMT-CSD and iFOD2 already saturate multi-core CPU threads per subject, stage-level scheduling provides a moderate makespan reduction.",
+      "sample": "16 full-brain HCP subjects; complete Tractography route (CSD/ACT + SIFT2).",
+      "upstream_reference": "Plugin batch scheduler comparison (scripts/run_batch_pipeline.py); upstream MRtrix3 CSD/ACT/SIFT2 routines are unchanged.",
+      "measurement_source": {
+        "file": "cohort_multi_pipeline_20261109.json",
+        "sha256": "a7672b95b752bce9f285307223f5ed8a58d572e1582fbe726364f23cdd8280e6"
       }
     },
     {
@@ -430,7 +500,7 @@
       "upstream_reference": "Same immutable current WMA source audit as the full-module record.",
       "measurement_source": {
         "file": "author_wma_optimizations_20261020.json",
-        "sha256": "edef21040341eda6e614d73f9c5e972cdcf4cfb35d169c0de2efb59a642b8e34"
+        "sha256": "bacf40b583e761d39fb46115c8a28a2821c3ffd1d513edb66cdafa93107572eb"
       }
     },
     {
@@ -452,7 +522,7 @@
       "upstream_reference": "Measured DIPY 1.12.1 in Slicer; author NLS/residual/Jacobian source hashes match the dated stable-source audit.",
       "measurement_source": {
         "file": "freewater_dispatch_slicer_20261021.json",
-        "sha256": "c5c3597f662cb3cd71877058e7d384379d2558575aabe3bdb46a1ae1a3eaab12"
+        "sha256": "23b1ffc4ec7332527e56467324c182f626348495e200bc0098f70e1b0fb48f97"
       }
     },
     {
@@ -474,7 +544,7 @@
       "upstream_reference": "Author register_two_subjects.py SHA256 matches the 22 October WMA source audit; measured bulk vtkTransform path.",
       "measurement_source": {
         "file": "wma_transform_20261021.json",
-        "sha256": "1436dfcf82ed8dbe36886719ad89bd38103a453955ec1466adc27605343bba35"
+        "sha256": "011ccc637b3ca7c747a2768de013e2a7d3968377f78ff9cb5e2727b1469f4b36"
       }
     },
     {
@@ -496,7 +566,7 @@
       "upstream_reference": "Author fibers.py at 4532b911386d independently verified; native VTK array sampling, not a new registration algorithm.",
       "measurement_source": {
         "file": "wma_fibers_bounded_20261021.json",
-        "sha256": "7e09c9d6ae6be3442abb6c472a4cbbf77db05ab6f93335e1501064890aae9529"
+        "sha256": "b99b84f1ade6ba4b10f4e63cfe7797518dc18dceed88c8f55416f852798eafd2"
       }
     },
     {
@@ -518,7 +588,7 @@
       "upstream_reference": "Preserved same-author preparation pair. Source-qualified reuse, not a fresh latest-version benchmark.",
       "measurement_source": {
         "file": "performance_optimizations_20261020.json",
-        "sha256": "8b0c16688e6ce00c3c3527060be6d950a8a6cef9083c9340f256fe2c31f35a39"
+        "sha256": "3105a32b9a9a85a2c2db3ce0b5a289ded3f91e588181b949edba8a094a5b434e"
       }
     },
     {
@@ -540,7 +610,7 @@
       "upstream_reference": "Optimization inherited from DDSurfer c3b2d40; no plugin-original credit or latest-FreeSurfer speed claim.",
       "measurement_source": {
         "file": "performance_optimizations_20261020.json",
-        "sha256": "8b0c16688e6ce00c3c3527060be6d950a8a6cef9083c9340f256fe2c31f35a39"
+        "sha256": "3105a32b9a9a85a2c2db3ce0b5a289ded3f91e588181b949edba8a094a5b434e"
       }
     },
     {
@@ -562,7 +632,7 @@
       "upstream_reference": "Generic compression/I/O control, not an improvement to a scientific estimator or an upstream-freshness claim.",
       "measurement_source": {
         "file": "performance_optimizations_20261020.json",
-        "sha256": "8b0c16688e6ce00c3c3527060be6d950a8a6cef9083c9340f256fe2c31f35a39"
+        "sha256": "3105a32b9a9a85a2c2db3ce0b5a289ded3f91e588181b949edba8a094a5b434e"
       }
     }
   ],

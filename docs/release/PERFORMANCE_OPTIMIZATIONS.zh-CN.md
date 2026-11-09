@@ -27,6 +27,20 @@ GPU 设备选择、上游继承的改动和原作者源码对照也分别标注�
 
 ---
 
+## 11 月 9 日：多受试者队列阶段级并发调度
+
+批处理调度器（scripts/run_batch_pipeline.py --scheduler adaptive）在共享 CPU、内存、GPU 与 I/O 预算下跨受试者协同调度各分析阶段（[源记录](benchmarks/cohort_multi_pipeline_20261109.json)）。在 16 名 HCP 受试者队列、每组 32 核 CPU 预算下，受试者级固定并发（--scheduler subjects）与自适应阶段级调度（--scheduler adaptive）的实测总耗时对比如下：
+
+| 队列流程（N = 16） | 受试者级总耗时 | 自适应调度总耗时 | 吞吐率比值 | 耗时减少 |
+| --- | ---: | ---: | ---: | ---: |
+| 微结构分析（DTI + FW + NODDI + DKI + MK-Curve） | 301.79 min | 197.44 min | 1.53× | 34.58% |
+| 解剖先验（DDSeg + DDParcel + DDSurfer） | 78.43 min | 68.33 min | 1.15× | 12.88% |
+| 纤维束追踪（CSD/ACT + SIFT2） | 78.61 min | 70.66 min | 1.11× | 10.11% |
+
+全部 16 名受试者在各流程中均通过输出与 Rule-1 数值一致性校验。在微结构队列中，阶段级调度跨受试者重叠单线程 Free-water/DKI 与多线程 NODDI/MK-Curve 阶段，在不改变单个科学估计算法的前提下将平均 CPU 核利用率从 12.6 核提升至 21.2 核。
+
+---
+
 ## 10 月 30 日：补充材料与主页证据更新
 
 新增整理 10 月 29 日 MK-Curve 信号复用的增量对照，

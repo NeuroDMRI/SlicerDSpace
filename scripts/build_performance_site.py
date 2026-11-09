@@ -178,6 +178,36 @@ def build_evidence():
         'One ROI pair. This reduces schedule wall time, not the cost of an individual scientific model. Default model concurrency remains one; memory/CPU budgets may prevent overlap.',
         'Two independent models; CPU/memory-constrained scheduling; not full-brain timing.')
 
+    cohort = load('cohort_multi_pipeline_20261109.json')
+    cohort_by_workload = {item['workload']: item for item in cohort.get('pipelines', [])}
+    cohort_specs = (
+        ('cpu', 'cohort-microstructure', 'Cohort scheduling: Microstructure', '16 HCP subjects / 32-core budget',
+         'Stage-level resource-aware scheduling across subjects overlaps single-thread Free-water/DKI and multithreaded NODDI/MK-Curve stages within a shared 32-core CPU and memory budget.',
+         'Subject-level fixed concurrency (4 concurrent subjects, 8 threads each) versus Adaptive stage-level scheduling under the same 32-core CPU ceiling.',
+         'All 16 subjects pass output and Rule-1 numerical equivalence checks across DTI, Free-water, NODDI, DKI and MK-Curve maps.',
+         '16-subject HCP cohort on a shared Linux host (32-core CPU budget per arm). Reduces cohort makespan by raising mean CPU utilization from 12.6 to 21.2 cores, without changing individual model estimators.',
+         '16 full-brain HCP subjects; complete Microstructure route (DTI + FW + NODDI + DKI + MK-Curve).'),
+        ('anatomy', 'cohort-anatomy', 'Cohort scheduling: Anatomical priors', '16 HCP subjects / 32-core budget + GPU',
+         'Coordinate GPU-backed DDSeg/DDParcel/DDSurfer inference and CPU-bound surface post-processing across subjects using per-stage CPU, RAM and GPU tokens.',
+         'Subject-level fixed concurrency versus Adaptive stage-level scheduling across the same 16-subject cohort.',
+         'All 16 subjects produce identical tissue segmentations, parcellations, cortical surfaces and QC outcomes.',
+         '16-subject HCP cohort. Speedup reflects overlapping CPU surface post-processing with GPU inference across subjects rather than shortening single-subject neural network inference.',
+         '16 full-brain HCP subjects; complete Anatomical priors route (DDSeg + DDParcel + DDSurfer).'),
+        ('tractography', 'cohort-tractography', 'Cohort scheduling: Tractography', '16 HCP subjects / 32-core budget + GPU',
+         'Overlap CPU-bound response estimation, MSMT-CSD, ACT/iFOD2 tracking and SIFT2 weighting with GPU-assisted anatomical priors across subjects under a unified resource budget.',
+         'Subject-level fixed concurrency versus Adaptive stage-level scheduling across the same 16-subject cohort.',
+         'All 16 subjects pass tractogram, SIFT2 weight and structural connectome equivalence and QC checks.',
+         '16-subject HCP cohort. Because MSMT-CSD and iFOD2 already saturate multi-core CPU threads per subject, stage-level scheduling provides a moderate makespan reduction.',
+         '16 full-brain HCP subjects; complete Tractography route (CSD/ACT + SIFT2).'),
+    )
+    for workload, identifier, title, scope, method, baseline, unchanged, limitation, sample in cohort_specs:
+        entry = cohort_by_workload.get(workload)
+        if not entry or entry['arms']['subject']['subjects_passed_rule1'] != 16 or entry['arms']['adaptive']['subjects_passed_rule1'] != 16:
+            raise ValueError('Incomplete 16-subject cohort scheduling evidence: ' + workload)
+        add(identifier, title, 'workflow', scope,
+            entry['arms']['subject']['makespan_seconds'], entry['arms']['adaptive']['makespan_seconds'],
+            method, baseline, unchanged, limitation, sample, evidence_date='2026-11-09')
+
     filtering = load('author_wma_optimizations_20261020.json')
     sample = filtering['full_inputs']['cases'][0]
     if filtering['status'] != 'passed' or filtering['full_inputs']['status'] != 'passed':
@@ -274,6 +304,9 @@ def build_evidence():
             '; measured on current stable SciPy 1.18.1. This port-only comparison does not claim to outperform MATLAB or invent upstream native batching.',
         'mkcurve-signal': 'Recorded 29 October with SciPy 1.18.1; source/input checksums and one-thread settings are preserved. This is an incremental comparison within the Python port, following the qualified QR change.',
         'scheduling': 'Historical plugin scheduler comparison, not a latest-upstream algorithm performance claim.',
+        'cohort-microstructure': 'Plugin batch scheduler comparison (scripts/run_batch_pipeline.py); upstream DIPY 1.12.1, AMICO 2.1.1 and SciPy 1.18.1 estimators are unchanged.',
+        'cohort-anatomy': 'Plugin batch scheduler comparison (scripts/run_batch_pipeline.py); upstream DDSeg, DDParcel, DDSurfer and FreeSurfer routines are unchanged.',
+        'cohort-tractography': 'Plugin batch scheduler comparison (scripts/run_batch_pipeline.py); upstream MRtrix3 CSD/ACT/SIFT2 routines are unchanged.',
         'freewater-nls': 'Measured DIPY 1.12.1 in Slicer; author NLS/residual/Jacobian source hashes match the dated stable-source audit.',
         'wma-transform': 'Author register_two_subjects.py SHA256 matches the 22 October WMA source audit; measured bulk vtkTransform path.',
         'wma-fibers': 'Author fibers.py at 4532b911386d independently verified; native VTK array sampling, not a new registration algorithm.',
@@ -292,7 +325,11 @@ def build_evidence():
         'wma': 'complete_models_20261020.json', 'noddi': 'complete_models_20261020.json',
         'mkcurve': 'mkcurve_qr_scipy1181_20261022.json', 'dki': 'dki_latest_stable_integration_20261022.json',
         'mkcurve-signal': 'performance_next_20261029.json',
-        'scheduling': 'complete_models_20261020.json', 'wma-filter': 'author_wma_optimizations_20261020.json',
+        'scheduling': 'complete_models_20261020.json',
+        'cohort-microstructure': 'cohort_multi_pipeline_20261109.json',
+        'cohort-anatomy': 'cohort_multi_pipeline_20261109.json',
+        'cohort-tractography': 'cohort_multi_pipeline_20261109.json',
+        'wma-filter': 'author_wma_optimizations_20261020.json',
         'freewater-nls': 'freewater_dispatch_slicer_20261021.json', 'wma-transform': 'wma_transform_20261021.json',
         'wma-fibers': 'wma_fibers_bounded_20261021.json',
         **{identifier: 'performance_optimizations_20261020.json' for _, identifier, *_ in selected},

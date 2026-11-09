@@ -1,7 +1,7 @@
 {
   "kind": "slicerddsurfer_public_performance_evidence",
   "version": 4,
-  "reviewed_on": "2026-10-30",
+  "reviewed_on": "2026-11-09",
   "sources": [
     {
       "file": "freewater_protocol_full_20261029.json",
@@ -42,6 +42,10 @@
     {
       "file": "performance_optimizations_20261020.json",
       "sha256": "8b0c16688e6ce00c3c3527060be6d950a8a6cef9083c9340f256fe2c31f35a39"
+    },
+    {
+      "file": "runtime_optimizations_20261109.json",
+      "sha256": "3a65d4dff5c1bb294b44f80ab7cc307881ab3b60e5ea192c8c1a783c7517225d"
     },
     {
       "file": "upstream_freshness_verified_20261022.json",
@@ -563,6 +567,174 @@
       "measurement_source": {
         "file": "performance_optimizations_20261020.json",
         "sha256": "8b0c16688e6ce00c3c3527060be6d950a8a6cef9083c9340f256fe2c31f35a39"
+      }
+    },
+    {
+      "id": "teem-dti-wls",
+      "title": "Teem DTI WLS estimation",
+      "category": "implementation",
+      "scope": "Full brain",
+      "evidence_date": "2026-11-09",
+      "reference_seconds": 74.08627468533814,
+      "optimized_seconds": 31.310826977714896,
+      "speed_ratio": 2.366155155789023,
+      "seconds_saved": 42.77544770762324,
+      "reduction_percent": 57.737344588185394,
+      "method": "Evaluate one all-zero signal template once and run Teem tenEstimateUpdate only on nonzero-signal voxel rows; fill zero-signal rows directly from the template.",
+      "baseline": "Previous full-volume Teem tenEstimateUpdate loop across all image-grid rows versus nonzero-row estimation with the same thread pool and gradient table.",
+      "unchanged": "All 7 tensor/mask components, baseline b0 volume and failure counts match voxelwise across all three acquisitions.",
+      "limitation": "Displayed values use subject 100206 on a shared Linux host with the default host thread pool. Gains depend on the background zero-voxel fraction of the masked DWI volume.",
+      "sample": "3658350 image-grid voxels (1427977 nonzero); 288 gradient rows; three real acquisitions verified.",
+      "subject_results": [
+        {
+          "subject": "100206",
+          "reference_seconds": 74.08627468533814,
+          "optimized_seconds": 31.310826977714896,
+          "speed_ratio": 2.366155155789023
+        },
+        {
+          "subject": "100408",
+          "reference_seconds": 73.64379691146314,
+          "optimized_seconds": 31.905542386695743,
+          "speed_ratio": 2.3081819459108077
+        },
+        {
+          "subject": "149741",
+          "reference_seconds": 71.76310877688229,
+          "optimized_seconds": 30.869968570768833,
+          "speed_ratio": 2.3246900498899663
+        }
+      ],
+      "upstream_reference": "Measured with Slicer 5.10.0 bundled Teem 1.12.0; preserves Teem tenEstimate WLS numerics and thread count.",
+      "measurement_source": {
+        "file": "runtime_optimizations_20261109.json",
+        "sha256": "3a65d4dff5c1bb294b44f80ab7cc307881ab3b60e5ea192c8c1a783c7517225d"
+      }
+    },
+    {
+      "id": "teem-dec-fa",
+      "title": "Direction-encoded colour FA",
+      "category": "implementation",
+      "scope": "Full brain",
+      "evidence_date": "2026-11-09",
+      "reference_seconds": 4.507668623700738,
+      "optimized_seconds": 2.634297087788582,
+      "speed_ratio": 1.7111466449992543,
+      "seconds_saved": 1.873371535912156,
+      "reduction_percent": 41.559655163252486,
+      "method": "Restrict 3x3 measurement-frame rotation and symmetric eigendecomposition to voxels with positive fractional anisotropy; assign zero RGB directly elsewhere.",
+      "baseline": "Full-grid 3x3 matrix rotation and NumPy eigh across every image voxel versus active-FA voxel indexing with one numerical thread.",
+      "unchanged": "Exported uint8 RGB direction-encoded colour maps are byte-identical in all three acquisitions.",
+      "limitation": "Subject 100206 medians of three alternating repeats after one warmup. Gains depend on the proportion of zero-FA background voxels.",
+      "sample": "3658350 total voxels (1427615 with FA > 0); three acquisitions, three alternating repeats each.",
+      "subject_results": [
+        {
+          "subject": "100206",
+          "reference_seconds": 4.507668623700738,
+          "optimized_seconds": 2.634297087788582,
+          "speed_ratio": 1.7111466449992543
+        },
+        {
+          "subject": "100408",
+          "reference_seconds": 5.380347900092602,
+          "optimized_seconds": 2.6243808027356863,
+          "speed_ratio": 2.050139939479843
+        },
+        {
+          "subject": "149741",
+          "reference_seconds": 5.679583685472608,
+          "optimized_seconds": 2.952127907425165,
+          "speed_ratio": 1.9238948526543753
+        }
+      ],
+      "upstream_reference": "Same measurement-frame rotation and NumPy eigh eigenvector convention; skips zero-FA background voxels where RGB is identically zero.",
+      "measurement_source": {
+        "file": "runtime_optimizations_20261109.json",
+        "sha256": "3a65d4dff5c1bb294b44f80ab7cc307881ab3b60e5ea192c8c1a783c7517225d"
+      }
+    },
+    {
+      "id": "regional-endpoints",
+      "title": "Streamline endpoint ROI selection",
+      "category": "implementation",
+      "scope": "1M streamlines",
+      "evidence_date": "2026-11-09",
+      "reference_seconds": 33.58021034114063,
+      "optimized_seconds": 1.7487374041229486,
+      "speed_ratio": 19.20254594084253,
+      "seconds_saved": 31.83147293701768,
+      "reduction_percent": 94.79235720575433,
+      "method": "Transform start and end streamline points, check grid bounds and evaluate inclusion/target masks in 4096-streamline NumPy blocks; invert the atlas affine once.",
+      "baseline": "Per-streamline Python loop and repeated affine inversion versus batched 4096-streamline endpoint array evaluation.",
+      "unchanged": "Selected streamline indices and output point arrays match identically in all three 1000000-streamline tractograms.",
+      "limitation": "Subject 100206 medians of three alternating repeats after one warmup on 4096-streamline batches; excludes file loading and writing.",
+      "sample": "Three 1000000-streamline whole-brain tractograms; bilateral thalamus/precentral to superior-frontal endpoint query; one numerical thread.",
+      "subject_results": [
+        {
+          "subject": "100206",
+          "reference_seconds": 33.58021034114063,
+          "optimized_seconds": 1.7487374041229486,
+          "speed_ratio": 19.20254594084253
+        },
+        {
+          "subject": "100408",
+          "reference_seconds": 33.53127024695277,
+          "optimized_seconds": 1.8107743058353662,
+          "speed_ratio": 18.51764194957679
+        },
+        {
+          "subject": "149741",
+          "reference_seconds": 33.2755076084286,
+          "optimized_seconds": 1.7632269598543644,
+          "speed_ratio": 18.871936719466348
+        }
+      ],
+      "upstream_reference": "Internal regional-tractography endpoint selector; preserves nearest-voxel rounding and endpoint-pair logic.",
+      "measurement_source": {
+        "file": "runtime_optimizations_20261109.json",
+        "sha256": "3a65d4dff5c1bb294b44f80ab7cc307881ab3b60e5ea192c8c1a783c7517225d"
+      }
+    },
+    {
+      "id": "connectome-radial",
+      "title": "Connectome radial endpoint assignment",
+      "category": "implementation",
+      "scope": "1M streamlines",
+      "evidence_date": "2026-11-09",
+      "reference_seconds": 120.60630070231855,
+      "optimized_seconds": 4.312568271532655,
+      "speed_ratio": 27.96623568801056,
+      "seconds_saved": 116.2937324307859,
+      "reduction_percent": 96.4242595565741,
+      "method": "Batch direct voxel label lookup and SciPy cKDTree 2 mm radial search across 4096-streamline endpoint blocks instead of per-endpoint Python calls.",
+      "baseline": "Per-endpoint Python voxel lookup and single-point cKDTree queries versus batched 8192-point array queries with the same KD-tree and 2 mm radius.",
+      "unchanged": "Direct voxel labels, radially assigned node labels and all 84x84 connectome matrices match identically across all three acquisitions.",
+      "limitation": "Displayed values use subject 100206 on 1000000 streamlines (2000000 endpoints); excludes tractogram file parsing and matrix export.",
+      "sample": "Three 1000000-streamline tractograms; 84 grey-matter nodes; 2.0 mm radial assignment search; one numerical thread.",
+      "subject_results": [
+        {
+          "subject": "100206",
+          "reference_seconds": 120.60630070231855,
+          "optimized_seconds": 4.312568271532655,
+          "speed_ratio": 27.96623568801056
+        },
+        {
+          "subject": "100408",
+          "reference_seconds": 120.8455902505666,
+          "optimized_seconds": 4.1192723494023085,
+          "speed_ratio": 29.33663521133796
+        },
+        {
+          "subject": "149741",
+          "reference_seconds": 120.71240596100688,
+          "optimized_seconds": 4.171764105558395,
+          "speed_ratio": 28.935578068801036
+        }
+      ],
+      "upstream_reference": "Measured with SciPy 1.18.1 cKDTree; preserves exact tie-breaking and 2 mm radial distance cutoff.",
+      "measurement_source": {
+        "file": "runtime_optimizations_20261109.json",
+        "sha256": "3a65d4dff5c1bb294b44f80ab7cc307881ab3b60e5ea192c8c1a783c7517225d"
       }
     }
   ],

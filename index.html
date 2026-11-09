@@ -101,7 +101,7 @@
     <figure class="results-overview">
       <div class="results-scroll" role="region" tabindex="0" aria-label="Complete results overview; scroll horizontally on small screens">
         <a href="assets/img/results-overview.svg?v=ukf-coverage-2" target="_blank" rel="noopener" aria-label="Open the full-size results overview SVG">
-          <img src="assets/img/results-overview.svg?v=ukf-coverage-2" width="1830" height="2036" loading="lazy" decoding="async" fetchpriority="low" alt="Complete result overview: anatomical priors, microstructure maps, four tractography methods, WMQL, TractCloud and WMA fiber bundles, and structural connectomes">
+          <img src="assets/img/results-overview.svg?v=ukf-coverage-2" width="1830" height="2080" loading="lazy" decoding="async" fetchpriority="low" alt="Complete result overview: anatomical priors, microstructure maps, four tractography methods, WMQL, TractCloud and WMA fiber bundles, and structural connectomes">
         </a>
       </div>
       <figcaption>Maps, cortical surfaces, fiber bundles and connectomes from the available analysis routes. <a href="assets/img/results-overview.svg?v=ukf-coverage-2" target="_blank" rel="noopener">Open full-size SVG</a></figcaption>
@@ -115,7 +115,7 @@
     <h2>Workflow overview.</h2>
     <figure class="shot fig">
       <a href="assets/img/workflow-overview.svg?v=rounded-frames-4" target="_blank" rel="noopener" aria-label="Open the full-size workflow overview">
-        <img src="assets/img/workflow-overview.svg?v=rounded-frames-4" width="1830" height="1118" loading="lazy" decoding="async" fetchpriority="low" alt="Workflow overview: dMRI preparation, anatomical priors, microstructure, tractography, fibre bundles and connectomes.">
+        <img src="assets/img/workflow-overview.svg?v=rounded-frames-4" width="1660" height="1118" loading="lazy" decoding="async" fetchpriority="low" alt="Workflow overview: dMRI preparation, anatomical priors, microstructure, tractography, fibre bundles and connectomes.">
       </a>
       <figcaption>From dMRI preparation to anatomical priors and downstream analyses.</figcaption>
     </figure>
@@ -133,7 +133,7 @@
           <div class="start-body">
             <h4>Read the Skill</h4>
             <p>We provide an install-and-use Skill for SlicerDSpace. Give its SKILL.md to your local Agent to follow the project's setup, analysis and result-review workflow.</p>
-            <p class="note">The prompts link to SKILL.md as the entry point. To install the Skill in your Agent, copy the complete slicerdspace folder with its references, scripts and templates.</p>
+            <p class="note">The prompts link to SKILL.md as the entry point. To install the Skill in your Agent (such as Claude Code, Codex, Cursor or OpenCode), copy the complete <code>.agents/skills/slicerdspace</code> folder with its usage guides, scripts and shell templates so the Agent can run preflight checks (<code>--doctor</code>), preview execution plans (<code>--plan</code>) and summarize quality-control receipts.</p>
             <ul class="doc-links">
               <li><a class="btn btn-secondary" href="https://github.com/NeuroDMRI/SlicerDSpace/blob/main/.agents/skills/slicerdspace/SKILL.md" target="_blank" rel="noopener">Open Skill</a></li>
               <li><a class="btn btn-secondary" href="https://github.com/NeuroDMRI/SlicerDSpace/blob/main/.agents/skills/slicerdspace/references/usage.md" target="_blank" rel="noopener">Agent usage guide</a></li>
@@ -150,7 +150,7 @@
 Install and enable SlicerDSpace in my local 3D Slicer.
 Set up the required dependencies and download the corresponding model weights.</code></pre>
             </div>
-            <p class="note">Your Agent checks storage space and existing resources, waits for your choice and saves the path for later use. It prepares only the selected analyses. Confirm licenses and restarts when requested.</p>
+            <p class="note">Your Agent checks storage space, local 3D Slicer paths and existing resources, waits for your choice and saves the path for later use. It stages the module, prepares only the selected analyses and runs synthetic self-checks after installation. Confirm licenses and restarts when requested.</p>
           </div>
         </li>
         <li class="start-step">
@@ -163,6 +163,7 @@ Set up the required dependencies and download the corresponding model weights.</
 Use SlicerDSpace to run DDParcel brain parcellation, CSD/ACT tractography and structural connectome construction for /path/to/subject; save results to /path/to/results.
 Show me the plan and wait for confirmation before running. Afterwards, summarize the outputs and QC findings.</code></pre>
             </div>
+            <p class="note">The Agent runs <code>--doctor</code> and <code>--plan</code> with your exact method flags before executing. When DWI preprocessing is requested without a phase-encoding axis in <code>input/dwi.json</code>, it asks you to confirm the axis (such as <code>AP</code> for standard axial scans) rather than guessing, and reports stage-wise QC checks after completion.</p>
           </div>
         </li>
       </ol>
@@ -172,7 +173,7 @@ Show me the plan and wait for confirmation before running. Afterwards, summarize
       <li class="start-step">
         <div class="start-body">
           <h4>Install the module</h4>
-          <p>Start with 3D Slicer; the protocol reference is version 5.10. Clone the source and create a separate extension installation:</p>
+          <p>Start with 3D Slicer on Linux, macOS or Windows; the protocol reference is version 5.10. Clone the source and create a separate extension installation:</p>
           <div class="code" data-code>
             <div class="code-head"><span>bash</span><button class="copy" type="button" hidden>Copy</button></div>
             <pre><code>git clone https://github.com/NeuroDMRI/SlicerDSpace.git
@@ -181,7 +182,7 @@ python3 scripts/stage_slicer_extension.py \
   --install-root ~/SlicerDSpace-extension --slicer-version 5.10 \
   --link-mode copy</code></pre>
           </div>
-          <p>Replace <code>5.10</code> with the major/minor version shown in Slicer’s About dialog. The script stages the module and reports its installation directory.</p>
+          <p>Replace <code>5.10</code> with the major/minor version shown in Slicer’s About dialog (you can also run the script with Slicer’s bundled <code>PythonSlicer</code>). Use <code>--link-mode copy</code> for an isolated deployment or <code>--link-mode symlink</code> when developing from a local checkout.</p>
         </div>
       </li>
       <li class="start-step">
@@ -189,6 +190,7 @@ python3 scripts/stage_slicer_extension.py \
           <h4>Add the module path</h4>
           <p>Open Edit › Application Settings › Modules › Additional module paths. Add the expanded absolute path of <code>~/SlicerDSpace-extension/SlicerDSpace/lib/Slicer-5.10/qt-scripted-modules</code>, matching the version you staged.</p>
           <p>Install SlicerDMRI and PyTorch from Slicer’s Extension Manager. Add the separate UKFTractography extension if you plan to use UKF. Restart Slicer, then open Modules › Diffusion › SlicerDSpace.</p>
+          <p>DTI tensor fitting runs directly in Slicer core without extra extensions. PyTorch is used by the neural anatomical models (DDSeg, DDParcel, DDSurfer), TractCloud and the native PNL brain mask on macOS and Windows; UKFTractography provides two-tensor UKF tracking; and SlicerDMRI supports WMA bundle clustering and diffusion visualization. On Windows, external neuroimaging tools (MRtrix3, FSL, WMQL, WMA and FreeSurfer components) run through WSL 2 Ubuntu.</p>
         </div>
       </li>
       <li class="start-step">
@@ -197,44 +199,70 @@ python3 scripts/stage_slicer_extension.py \
           <p>Enter a Subject ID and Subject root. For prepared inputs, use this layout; the output directory can remain empty to use the subject’s <code>outputs/</code> folder.</p>
           <pre class="code-block"><code>sub-01/
   input/
-    data.nii.gz
-    bvals
-    bvecs
-    nodif_brain_mask.nii.gz   # optional; supply or generate</code></pre>
+    data.nii.gz               # 4D diffusion series
+    bvals                     # FSL b-values (1 x N)
+    bvecs                     # FSL b-vectors (3 x N)
+    dwi.json                  # optional BIDS metadata (PhaseEncodingDirection, TotalReadoutTime, EchoTime)
+    nodif_brain_mask.nii.gz   # optional; supply a reviewed mask or generate with PNL CNN
+    b0_pa.nii.gz              # optional reverse-phase b0 for topup susceptibility correction
+    acqparams.txt             # optional phase-encoding table for topup / eddy
+    index.txt                 # optional volume-to-acqparams index</code></pre>
           <p>DWI and mask must share one voxel grid. The gradient count must match the DWI volume count, and motion-corrected images need the corresponding rotated gradients.</p>
-          <p>For DICOM or NRRD/NHDR, use Advanced settings › Regions &amp; input import › Input import / conversion. Preview the import, then prepare the inputs before analysis.</p>
+          <p>For DICOM or NRRD/NHDR, use Advanced settings › Regions &amp; input import › Input import / conversion. Preview the import, then prepare the inputs before analysis. If you enable built-in DWI preprocessing (DIPY MP-PCA denoising, Gibbs-ringing removal and FSL eddy/topup via MRtrix3), specify the scan’s phase-encoding direction (<code>AP</code>, <code>PA</code>, <code>LR</code>, <code>RL</code>, <code>IS</code> or <code>SI</code>) or include <code>PhaseEncodingDirection</code> in <code>input/dwi.json</code>; leave preprocessing unchecked when importing externally preprocessed data.</p>
         </div>
       </li>
       <li class="start-step">
         <div class="start-body">
           <h4>Select methods and prepare their environment</h4>
-          <p>For a small first run, select only Microstructure, clear the other products and keep DTI in its ... selector. For a fuller route, choose one or several algorithms beside each product. Advanced settings contains the model and tracking parameters.</p>
-          <p>Open Environment and installation › Prepare selected analysis environment. Confirm the required tools, models and resource terms. Downloads are checked and cached for reuse. If a restart is requested, restart and select Prepare again to continue.</p>
-          <p>Offline model resources, repair and manual path overrides are under More options. An existing reviewed mask avoids installing a mask-generation backend for the DTI-only route.</p>
+          <p>Tick the target products your study needs (Microstructure, Anatomical prior, Tractography, Fiber bundles, Connectome); SlicerDSpace automatically enables their upstream prerequisites. For a small initial run, select only Microstructure, clear the other products and keep DTI in its <code>...</code> selector. For broader workflows, click <code>...</code> beside Microstructure (DTI, Free-water, iFW, NODDI, DKI WLS/OLS, Python MK-Curve), Tractography (CSD/ACT, DTI deterministic, UKF, SAF) or Fiber bundles (WMQL, WMA with ORG/East-West/NABA atlases, TractCloud) to combine one or several algorithms. Advanced settings contains the model, masking and tracking parameters.</p>
+          <p>Open Environment and installation › Prepare selected analysis environment. One dialog summarizes the required tools, model checkpoints and license terms; click Accept licences and install once. Downloads are SHA-256 verified and cached for reuse, followed by an automated self-check on synthetic data. If a restart is requested, restart Slicer and select Prepare again to continue.</p>
+          <p>Offline model archives, cache repair, dependency path export (<code>dependency_paths.json</code>) and manual path overrides are under More options. Supplying an existing reviewed brain mask avoids installing a mask-generation backend for a DTI-only route.</p>
         </div>
       </li>
       <li class="start-step">
         <div class="start-body">
           <h4>Run and inspect</h4>
-          <p>Click Run SlicerDSpace. Missing fields are highlighted, and the log reports progress or a specific correction. Successful key products load automatically; DTI supplies FA and MD for inspection.</p>
-          <p>In Results and QC, select the run to inspect its checks and reload or replace products without duplicating scene nodes. Review mask coverage, alignment and method-specific QC before accepting results.</p>
+          <p>Click Run SlicerDSpace. Preflight checks validate voxel geometry, shell sampling and required runtimes before starting background workers; missing fields are highlighted and the log reports live stage progress or specific remediation steps. Completed key products load automatically into the scene, with DTI supplying FA, MD and direction-encoded colour FA for immediate inspection.</p>
+          <p>In Results and QC, select any completed run to inspect its stage-wise <code>*_qc.json</code> checks (brain-mask coverage, tensor residuals, label completeness, surface topology, streamline counts and connectome metrics) and reload or switch products in the 2D slice and 3D views without duplicating MRML scene nodes. For post-hoc ROI statistics, track filtering or submatrix extraction on completed runs, open Advanced settings › Regions &amp; input import. Always perform visual anatomical review of mask boundaries, cortical surfaces and tracts before downstream interpretation.</p>
         </div>
       </li>
     </ol>
     <div class="start-cli" id="cli" aria-labelledby="cli-title">
       <h3 class="start-route-title" id="cli-title"><span class="start-route-marker" aria-hidden="true">C</span><span class="start-route-label start-route-text">Command-line execution and cohort processing</span></h3>
-      <p>From the checkout, use Slicer’s Python to check a DTI-only route. Replace the two absolute paths below:</p>
+      <p>From the repository checkout (or staged <code>qt-scripted-modules</code> folder), use Slicer’s bundled <code>PythonSlicer</code> to provision selected dependencies headlessly and run the three-phase single-subject workflow (<code>--doctor</code>, <code>--plan</code>, <code>--execute</code>). Replace the paths below:</p>
       <div class="code" data-code>
         <div class="code-head"><span>bash</span><button class="copy" type="button" hidden>Copy</button></div>
         <pre><code>export SLICER_LAUNCHER="/path/to/Slicer"
 export SUBJECT_ROOT="/path/to/sub-01"
+# Optional headless environment preview and installation for selected targets:
+"$SLICER_LAUNCHER" --launch PythonSlicer scripts/setup_selected.py \
+  --targets microstructure,segmentation,parcellation,tractography,bundles,connectome
+# Step 1: preflight check on a DTI-only route (then repeat with --plan and --execute):
 "$SLICER_LAUNCHER" --launch PythonSlicer run_subject_pipeline.py \
   --subject-root "$SUBJECT_ROOT" --subject-id sub-01 --no-user-config \
   --targets microstructure --microstructure-stages dti --doctor</code></pre>
       </div>
-      <p>Repeat with <code>--plan</code> to inspect the processing plan, then <code>--execute</code> to run it. Keep the same method options for all three commands.</p>
-      <p>For example, <code>--microstructure-stages dti,noddi</code> selects two models; <code>--tractography-backend csd_act,ukf</code> selects two tracking variants; and <code>--bundle-backend wmql,wma</code> selects two bundle methods. Their input and dependency checks still apply.</p>
-      <p>For independent subjects, use <code>scripts/run_batch_pipeline.py --batch-root /path/to/study --jobs 2</code> with your chosen analysis options. The GUI processes the current subject; the batch CLI manages separate outputs and logs.</p>
+      <p>Repeat the command with <code>--plan</code> to inspect the resolved execution plan and dependency closure, then <code>--execute</code> to run it. Keep identical method flags across all three phases, and add <code>--strict-environment</code> to stop immediately if any requested runtime or model asset is missing.</p>
+      <p>To combine anatomical priors, multi-shell microstructure, multiple tractography backends, bundle extraction and connectome construction in one command, list the target stages and comma-separated backend choices:</p>
+      <div class="code" data-code>
+        <div class="code-head"><span>bash</span><button class="copy" type="button" hidden>Copy</button></div>
+        <pre><code>"$SLICER_LAUNCHER" --launch PythonSlicer run_subject_pipeline.py \
+  --subject-root "$SUBJECT_ROOT" --subject-id sub-01 --no-user-config --strict-environment \
+  --targets segmentation,parcellation,surface,microstructure,tractography,bundles,connectome \
+  --microstructure-stages dti,freewater,noddi,dki \
+  --tractography-backend csd_act,ukf --bundle-backend wmql,wma \
+  --bundle-tractography-backend ukf --wma-atlas org --plan</code></pre>
+      </div>
+      <p>When multiple tracking methods are requested, each runs into an isolated <code>&lt;run&gt;__&lt;backend&gt;</code> subfolder so tractograms and downstream connectomes are never mixed. For multi-subject cohorts, use <code>scripts/run_batch_pipeline.py</code> with the adaptive resource-aware scheduler (or profile one pilot subject first with <code>scripts/autotune_batch.py</code>):</p>
+      <div class="code" data-code>
+        <div class="code-head"><span>bash</span><button class="copy" type="button" hidden>Copy</button></div>
+        <pre><code>"$SLICER_LAUNCHER" --launch PythonSlicer scripts/run_batch_pipeline.py \
+  --batch-root /path/to/study_subjects --output-root /path/to/study_outputs \
+  --targets segmentation,parcellation,microstructure,tractography,connectome \
+  --microstructure-stages dti,noddi --tractography-backend csd_act \
+  --scheduler-mode adaptive --jobs 4 --threads-per-job 8 --memory-budget-gb 48</code></pre>
+      </div>
+      <p>Both single-subject and batch runs organize every subject’s outputs and machine-readable quality-control receipts into a standardized native-space directory tree (<code>01_preprocess/</code>, <code>02_microstructure/</code>, <code>03_anatomy/</code>, <code>04_tractography/</code>, <code>05_connectome/</code> and <code>qc/</code>).</p>
     </div>
     <ul class="doc-links">
       <li><a class="btn btn-secondary" href="https://github.com/NeuroDMRI/SlicerDSpace/blob/main/docs/setup/QUICKSTART.md" target="_blank" rel="noopener">Quick Start</a></li>
@@ -256,7 +284,7 @@ export SUBJECT_ROOT="/path/to/sub-01"
           <img src="assets/img/fig-runtime-resources.png" width="2400" height="1217" loading="lazy" decoding="async" fetchpriority="low" alt="One row per algorithm, with CPU circles and open CUDA diamonds on a shared log-time axis. Aligned CPU and CUDA columns give both recorded times; the title names the repeat hardware.">
         </picture>
       </a>
-      <figcaption>Scoped stage times on a shared Linux host. Each algorithm occupies one row, with aligned CPU/CUDA time columns; seven routes have both device observations. A dash means no measurement for that device. Thread budgets differ by method and the devices are shared, so these are not controlled device speed ratios. Rows are not summed. SAF re-filters 100,000 existing tracks; TractCloud uses 50,000 tracks.</figcaption>
+      <figcaption>Scoped stage times on a shared Linux host. Each algorithm occupies one row, with aligned CPU/CUDA time columns; six routes have both device observations. A dash means no measurement for that device. Thread budgets differ by method and the devices are shared, so these are not controlled device speed ratios. Rows are not summed. SAF re-filters 100,000 existing tracks; TractCloud uses 50,000 tracks.</figcaption>
     </figure>
   </div>
 </section>
@@ -290,13 +318,8 @@ export SUBJECT_ROOT="/path/to/sub-01"
 <!-- methods-catalog:start -->
             <tr data-method="input" class="stage-start"><th scope="row">Input</th><td>DICOM / NIfTI / NRRD</td><td>Conversion, gradient validation and spatial checks.</td><td class="st-cell">dcm2niix or Slicer DWIConvert; supplied masks accepted</td><td class="ref-cell"><a class="method-reference" data-reference="36" href="https://doi.org/10.1016/j.jneumeth.2016.03.001" title="Li X, et al. The first step for neuroimaging data analysis: DICOM to NIfTI conversion. Journal of Neuroscience Methods 264:47-56, 2016." aria-label="Reference 36" target="_blank" rel="noopener">[36]</a> <a class="method-reference" data-reference="27" href="https://doi.org/10.1016/j.mri.2012.05.001" title="Fedorov A, et al. 3D Slicer as an image computing platform for the Quantitative Imaging Network. Magnetic Resonance Imaging 30(9):1323–1341, 2012." aria-label="Reference 27" target="_blank" rel="noopener">[27]</a> <a class="method-reference" data-reference="28" href="https://doi.org/10.1200/CCI.19.00141" title="Zhang F, et al. SlicerDMRI: Diffusion MRI and tractography research software for brain cancer surgery planning and visualization. JCO Clinical Cancer Informatics, issue 4:299–309, 2020." aria-label="Reference 28" target="_blank" rel="noopener">[28]</a></td></tr>
             <tr data-method="pnl_cnn" class="stage-start"><th scope="row">Brain mask</th><td>PNL CNN (default)</td><td>Author diffusion-CNN brain masking and registration.</td><td class="st-cell">Managed PNL runtime, weights and ANTs</td><td class="ref-cell"><a class="method-reference" data-reference="37" href="https://doi.org/10.1038/s41597-024-03058-w" title="Cetin-Karayumak S, et al. Harmonized diffusion MRI data and white matter measures from the Adolescent Brain Cognitive Development Study. Scientific Data 11:249, 2024." aria-label="Reference 37" target="_blank" rel="noopener">[37]</a> <a class="method-reference" data-reference="38" href="https://github.com/pnlbwh/CNN-Diffusion-MRIBrain-Segmentation" title="Palanivelu S, et al. CNN based diffusion MRI brain segmentation tool. Author software and citation instructions." aria-label="Reference 38" target="_blank" rel="noopener">[38]</a></td></tr>
-            <tr data-method="synthstrip"><th scope="row">Brain mask</th><td>SynthStrip</td><td>Brain extraction with the author model.</td><td class="st-cell">Isolated runtime and weights</td><td class="ref-cell"><a class="method-reference" data-reference="32" href="https://doi.org/10.1016/j.neuroimage.2022.119474" title="Hoopes A, et al. SynthStrip: skull-stripping for any brain image. NeuroImage 260:119474, 2022." aria-label="Reference 32" target="_blank" rel="noopener">[32]</a></td></tr>
-            <tr data-method="dwi2mask"><th scope="row">Brain mask</th><td>MRtrix3 dwi2mask</td><td>Native diffusion-volume masking.</td><td class="st-cell">MRtrix3</td><td class="ref-cell"><a class="method-reference" data-reference="29" href="https://doi.org/10.1016/j.neuroimage.2019.116137" title="Tournier JD, et al. MRtrix3: A fast, flexible and open software framework for medical image processing and visualisation. NeuroImage 202:116137, 2019." aria-label="Reference 29" target="_blank" rel="noopener">[29]</a></td></tr>
-            <tr data-method="mppca" class="stage-start"><th scope="row">Preprocessing</th><td>MP-PCA</td><td>Random-matrix denoising and noise estimation.</td><td class="st-cell">DIPY or MRtrix3 dwidenoise</td><td class="ref-cell"><a class="method-reference" data-reference="39" href="https://doi.org/10.1016/j.neuroimage.2016.08.016" title="Veraart J, et al. Denoising of diffusion MRI using random matrix theory. NeuroImage 142:394-406, 2016." aria-label="Reference 39" target="_blank" rel="noopener">[39]</a> <a class="method-reference" data-reference="52" href="https://doi.org/10.1002/mrm.26059" title="Veraart J, Fieremans E, Novikov DS. Diffusion MRI noise mapping using random matrix theory. Magnetic Resonance in Medicine 76:1582-1593, 2016." aria-label="Reference 52" target="_blank" rel="noopener">[52]</a> <a class="method-reference" data-reference="53" href="https://doi.org/10.1016/j.neuroimage.2019.06.039" title="Cordero-Grande L, et al. Complex diffusion-weighted image estimation via matrix recovery under general noise models. NeuroImage 200:391-404, 2019." aria-label="Reference 53" target="_blank" rel="noopener">[53]</a> <a class="method-reference" data-reference="29" href="https://doi.org/10.1016/j.neuroimage.2019.116137" title="Tournier JD, et al. MRtrix3: A fast, flexible and open software framework for medical image processing and visualisation. NeuroImage 202:116137, 2019." aria-label="Reference 29" target="_blank" rel="noopener">[29]</a> <a class="method-reference" data-reference="30" href="https://doi.org/10.3389/fninf.2014.00008" title="Garyfallidis E, et al. Dipy, a library for the analysis of diffusion MRI data. Frontiers in Neuroinformatics 8:8, 2014." aria-label="Reference 30" target="_blank" rel="noopener">[30]</a></td></tr>
-            <tr data-method="localpca"><th scope="row">Preprocessing</th><td>Local PCA</td><td>Overcomplete local-PCA denoising.</td><td class="st-cell">DIPY; optional denoising choice</td><td class="ref-cell"><a class="method-reference" data-reference="40" href="https://doi.org/10.1371/journal.pone.0073021" title="Manjón JV, et al. Diffusion Weighted Image Denoising Using Overcomplete Local PCA. PLoS ONE 8:e73021, 2013." aria-label="Reference 40" target="_blank" rel="noopener">[40]</a> <a class="method-reference" data-reference="30" href="https://doi.org/10.3389/fninf.2014.00008" title="Garyfallidis E, et al. Dipy, a library for the analysis of diffusion MRI data. Frontiers in Neuroinformatics 8:8, 2014." aria-label="Reference 30" target="_blank" rel="noopener">[30]</a></td></tr>
-            <tr data-method="patch2self"><th scope="row">Preprocessing</th><td>Patch2Self</td><td>Self-supervised diffusion-volume denoising.</td><td class="st-cell">DIPY; optional denoising choice</td><td class="ref-cell"><a class="method-reference" data-reference="41" href="https://proceedings.neurips.cc/paper/2020/hash/bc047286b224b7bfa73d4cb02de1238d-Abstract.html" title="Fadnavis S, Batson J, Garyfallidis E. Patch2Self: Denoising Diffusion MRI with Self-Supervised Learning. Advances in Neural Information Processing Systems 33, 2020." aria-label="Reference 41" target="_blank" rel="noopener">[41]</a> <a class="method-reference" data-reference="30" href="https://doi.org/10.3389/fninf.2014.00008" title="Garyfallidis E, et al. Dipy, a library for the analysis of diffusion MRI data. Frontiers in Neuroinformatics 8:8, 2014." aria-label="Reference 30" target="_blank" rel="noopener">[30]</a></td></tr>
-            <tr data-method="gibbs"><th scope="row">Preprocessing</th><td>Gibbs removal</td><td>Local subvoxel-shift ringing correction.</td><td class="st-cell">DIPY or MRtrix3 mrdegibbs</td><td class="ref-cell"><a class="method-reference" data-reference="42" href="https://doi.org/10.1002/mrm.26054" title="Kellner E, et al. Gibbs‐ringing artifact removal based on local subvoxel‐shifts. Magnetic Resonance in Medicine 76:1574-1581, 2016." aria-label="Reference 42" target="_blank" rel="noopener">[42]</a> <a class="method-reference" data-reference="29" href="https://doi.org/10.1016/j.neuroimage.2019.116137" title="Tournier JD, et al. MRtrix3: A fast, flexible and open software framework for medical image processing and visualisation. NeuroImage 202:116137, 2019." aria-label="Reference 29" target="_blank" rel="noopener">[29]</a> <a class="method-reference" data-reference="30" href="https://doi.org/10.3389/fninf.2014.00008" title="Garyfallidis E, et al. Dipy, a library for the analysis of diffusion MRI data. Frontiers in Neuroinformatics 8:8, 2014." aria-label="Reference 30" target="_blank" rel="noopener">[30]</a></td></tr>
-            <tr data-method="motion"><th scope="row">Preprocessing</th><td>Volume registration</td><td>Between-volume motion correction and gradient rotation.</td><td class="st-cell">DIPY; does not perform FSL eddy correction</td><td class="ref-cell"><a class="method-reference" data-reference="30" href="https://doi.org/10.3389/fninf.2014.00008" title="Garyfallidis E, et al. Dipy, a library for the analysis of diffusion MRI data. Frontiers in Neuroinformatics 8:8, 2014." aria-label="Reference 30" target="_blank" rel="noopener">[30]</a></td></tr>
+            <tr data-method="mppca" class="stage-start"><th scope="row">Preprocessing</th><td>MP-PCA</td><td>Random-matrix denoising and noise estimation.</td><td class="st-cell">DIPY</td><td class="ref-cell"><a class="method-reference" data-reference="39" href="https://doi.org/10.1016/j.neuroimage.2016.08.016" title="Veraart J, et al. Denoising of diffusion MRI using random matrix theory. NeuroImage 142:394-406, 2016." aria-label="Reference 39" target="_blank" rel="noopener">[39]</a> <a class="method-reference" data-reference="52" href="https://doi.org/10.1002/mrm.26059" title="Veraart J, Fieremans E, Novikov DS. Diffusion MRI noise mapping using random matrix theory. Magnetic Resonance in Medicine 76:1582-1593, 2016." aria-label="Reference 52" target="_blank" rel="noopener">[52]</a> <a class="method-reference" data-reference="53" href="https://doi.org/10.1016/j.neuroimage.2019.06.039" title="Cordero-Grande L, et al. Complex diffusion-weighted image estimation via matrix recovery under general noise models. NeuroImage 200:391-404, 2019." aria-label="Reference 53" target="_blank" rel="noopener">[53]</a> <a class="method-reference" data-reference="29" href="https://doi.org/10.1016/j.neuroimage.2019.116137" title="Tournier JD, et al. MRtrix3: A fast, flexible and open software framework for medical image processing and visualisation. NeuroImage 202:116137, 2019." aria-label="Reference 29" target="_blank" rel="noopener">[29]</a> <a class="method-reference" data-reference="30" href="https://doi.org/10.3389/fninf.2014.00008" title="Garyfallidis E, et al. Dipy, a library for the analysis of diffusion MRI data. Frontiers in Neuroinformatics 8:8, 2014." aria-label="Reference 30" target="_blank" rel="noopener">[30]</a></td></tr>
+            <tr data-method="gibbs"><th scope="row">Preprocessing</th><td>Gibbs removal</td><td>Local subvoxel-shift ringing correction.</td><td class="st-cell">DIPY</td><td class="ref-cell"><a class="method-reference" data-reference="42" href="https://doi.org/10.1002/mrm.26054" title="Kellner E, et al. Gibbs‐ringing artifact removal based on local subvoxel‐shifts. Magnetic Resonance in Medicine 76:1574-1581, 2016." aria-label="Reference 42" target="_blank" rel="noopener">[42]</a> <a class="method-reference" data-reference="29" href="https://doi.org/10.1016/j.neuroimage.2019.116137" title="Tournier JD, et al. MRtrix3: A fast, flexible and open software framework for medical image processing and visualisation. NeuroImage 202:116137, 2019." aria-label="Reference 29" target="_blank" rel="noopener">[29]</a> <a class="method-reference" data-reference="30" href="https://doi.org/10.3389/fninf.2014.00008" title="Garyfallidis E, et al. Dipy, a library for the analysis of diffusion MRI data. Frontiers in Neuroinformatics 8:8, 2014." aria-label="Reference 30" target="_blank" rel="noopener">[30]</a></td></tr>
             <tr data-method="eddy"><th scope="row">Preprocessing</th><td>FSL eddy</td><td>Eddy-current and motion correction.</td><td class="st-cell">MRtrix3 dwifslpreproc; FSL</td><td class="ref-cell"><a class="method-reference" data-reference="43" href="https://doi.org/10.1016/j.neuroimage.2015.10.019" title="Andersson JLR, Sotiropoulos SN. An integrated approach to correction for off-resonance effects and subject movement in diffusion MR imaging. NeuroImage 125:1063-1078, 2016." aria-label="Reference 43" target="_blank" rel="noopener">[43]</a> <a class="method-reference" data-reference="29" href="https://doi.org/10.1016/j.neuroimage.2019.116137" title="Tournier JD, et al. MRtrix3: A fast, flexible and open software framework for medical image processing and visualisation. NeuroImage 202:116137, 2019." aria-label="Reference 29" target="_blank" rel="noopener">[29]</a></td></tr>
             <tr data-method="topup"><th scope="row">Preprocessing</th><td>FSL topup</td><td>Susceptibility-distortion estimation and correction.</td><td class="st-cell">FSL; reverse-phase data and acquisition metadata</td><td class="ref-cell"><a class="method-reference" data-reference="44" href="https://doi.org/10.1016/S1053-8119(03)00336-7" title="Andersson JLR, Skare S, Ashburner J. How to correct susceptibility distortions in spin-echo echo-planar images: application to diffusion tensor imaging. NeuroImage 20:870-888, 2003." aria-label="Reference 44" target="_blank" rel="noopener">[44]</a> <a class="method-reference" data-reference="29" href="https://doi.org/10.1016/j.neuroimage.2019.116137" title="Tournier JD, et al. MRtrix3: A fast, flexible and open software framework for medical image processing and visualisation. NeuroImage 202:116137, 2019." aria-label="Reference 29" target="_blank" rel="noopener">[29]</a></td></tr>
             <tr data-method="dti" class="stage-start"><th scope="row">Microstructure</th><td>DTI (default)</td><td>LS/WLS tensor fitting; FA, MD, AD, RD, eigenvalues and trace.</td><td class="st-cell">SlicerDMRI</td><td class="ref-cell"><a class="method-reference" data-reference="45" href="https://doi.org/10.1016/S0006-3495(94)80775-1" title="Basser PJ, Mattiello J, LeBihan D. MR diffusion tensor spectroscopy and imaging. Biophysical Journal 66:259-267, 1994." aria-label="Reference 45" target="_blank" rel="noopener">[45]</a> <a class="method-reference" data-reference="27" href="https://doi.org/10.1016/j.mri.2012.05.001" title="Fedorov A, et al. 3D Slicer as an image computing platform for the Quantitative Imaging Network. Magnetic Resonance Imaging 30(9):1323–1341, 2012." aria-label="Reference 27" target="_blank" rel="noopener">[27]</a> <a class="method-reference" data-reference="28" href="https://doi.org/10.1200/CCI.19.00141" title="Zhang F, et al. SlicerDMRI: Diffusion MRI and tractography research software for brain cancer surgery planning and visualization. JCO Clinical Cancer Informatics, issue 4:299–309, 2020." aria-label="Reference 28" target="_blank" rel="noopener">[28]</a></td></tr>

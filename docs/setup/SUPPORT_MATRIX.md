@@ -31,13 +31,14 @@ separately from runtime readiness.
 
 ## Evidence By Platform
 
-| Check | Linux | Windows | macOS |
+| Check | Linux (`x86_64`) | Windows (`x86_64`) | macOS |
 | --- | --- | --- | --- |
-| Resource/CMake contract | Local evidence; CI configured | CI configured; execution evidence needed | CI configured; execution evidence needed |
-| Real Slicer GUI/source install | Dated local records | Not certified | Not certified |
-| Real SDK/CTest/CPack | Linux/Slicer 5.10 candidate verified 2026-10-22 | Requires real SDK acceptance | Requires real SDK acceptance |
-| Scientific workflows | Only recorded routes/data | Native not certified; WSL setup is not native acceptance | Not certified |
-| Advanced backends | Only recorded routes | Tool/WSL limitations | Tool-specific limitations |
+| Unified `v0.1.1` Release Package (3D Slicer 5.10.0) | Verified (`SlicerDSpace-v0.1.1-Linux-x64.tar.gz`: extension + modular MRtrix3 `3.0.8` 68 cmds + FSL `2602.0` + Surface Runtime) | Verified (`SlicerDSpace-v0.1.1-Windows-x64.zip`: extension + modular MRtrix3 `3.0.8` 68 cmds + FSL `2602.0` + Surface Runtime) | Not yet packaged / native dependencies unvalidated (do not claim complete native support) |
+| Resource/CMake contract | Local evidence; CI configured | Verified (`audit_extension_package.py` pass); CI configured | CI configured; execution evidence needed |
+| Real Slicer 5.10.0 GUI & Extension Manager install | Dated local records (`slicer_extension_manager_install_smoke.py` pass) | Verified on 3D Slicer 5.10.0 (`slicer_extension_manager_install_smoke.py` + 4 GUI smoke suites pass with `SLICERDSPACE_DISABLE_WSL=1`) | Not certified |
+| Real SDK/CTest/CPack | Linux/Slicer 5.10 candidate verified 2026-10-22 | Unified extension archive verified in Slicer 5.10.0 Extension Manager | Requires real SDK acceptance |
+| Scientific workflows (Real Data `HCP 100307`) | Recorded reference routes/data (`145×174×145×288`) | Native Windows verified across all P0/P1 workflows with `SLICERDSPACE_DISABLE_WSL=1`; see [Windows 5.10.0 Acceptance Report](../release/WINDOWS_NATIVE_ACCEPTANCE_5.10.0.md) | Not certified |
+| Advanced backends | Bundled native MRtrix3 `3.0.8`, FSL `2602.0`, Surface Runtime | Bundled native MRtrix3 `3.0.8`, FSL `2602.0` (`eddy_cpu`/`topup`), Surface Runtime (default native; optional WSL 2) | Tool-specific limitations; native validation pending |
 
 The Linux record includes a real CPack archive and local installation with
 isolated settings; see the [official integration record](../release/OFFICIAL_SLICER_VALIDATION_20261022.md).

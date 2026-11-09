@@ -371,5 +371,47 @@ class NativeCandidateTest(unittest.TestCase):
                 self.assertIn('bin/libgfortran-5.dll', names)
                 self.assertIn('LICENSE.txt', names)
 
+    def test_windows_candidate_includes_extra_built_commands_and_freesurfer_lut_fallback(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = windows_source(root)
+            for name in ('labelconvert', 'mrgrid', 'tckedit', 'tckresample', 'tckmap', 'mrcrop'):
+                (source / 'bin' / f'{name}.exe').write_bytes(b'MZfixture')
+            (source / 'bin/5ttgen').write_text('#!/usr/bin/env python\nprint("5ttgen 3.0.8")\n')
+            act_dir = source / 'lib/mrtrix3/_5ttgen'
+            act_dir.mkdir(parents=True, exist_ok=True)
+            (act_dir / 'freesurfer.py').write_text(
+                'import os\n'
+                'from mrtrix3 import app, fsl, mrinfo, path, run\n'
+                'def execute():\n'
+                "  lut_input_path = app.ARGS.lut\n"
+                "  if not lut_input_path:\n"
+                "    freesurfer_home = os.environ.get('FREESURFER_HOME', '')\n"
+                "    if not freesurfer_home:\n"
+                "      app.error('Environment variable FREESURFER_HOME is not set')\n"
+                "    lut_input_path = os.path.join(freesurfer_home, 'FreeSurferColorLUT.txt')\n"
+                "  run.command('labelconvert input.mif ' + lut_input_path + ' ' + lut_output_path + ' indices.mif')\n"
+            )
+            lut_src = root / 'FreeSurferColorLUT.txt'
+            lut_src.write_text('0 Unknown 0 0 0 0\n')
+            with (
+                patch.object(module, '_dll_dependencies', return_value=set()),
+                patch.object(module, 'REPO_FREESURFER_LUT', lut_src),
+            ):
+                result = module.build(
+                    source, root / 'dist', system='Windows', machine='x86_64',
+                    dll_search=[source / 'bin'], objdump='objdump',
+                )
+            record = json.loads(Path(result['record']).read_text(encoding='utf-8'))
+            for cmd in ('bin/tckedit.exe', 'bin/tckresample.exe', 'bin/tckmap.exe', 'bin/mrcrop.exe', 'bin/5ttgen'):
+                self.assertIn(cmd, record['commands'])
+            with zipfile.ZipFile(result['archive']) as archive:
+                names = set(archive.namelist())
+                self.assertIn('share/mrtrix3/_5ttgen/FreeSurferColorLUT.txt', names)
+                patched_fs = archive.read('lib/mrtrix3/_5ttgen/freesurfer.py').decode('utf-8')
+                self.assertIn('FreeSurferColorLUT.txt', patched_fs)
+                self.assertIn('path.quote(lut_input_path)', patched_fs)
+                self.assertIn('path.quote(lut_output_path)', patched_fs)
+
 if __name__ == '__main__':
     unittest.main()

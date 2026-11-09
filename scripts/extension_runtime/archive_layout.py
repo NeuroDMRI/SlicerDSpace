@@ -26,6 +26,7 @@ def inspect_archive_layout(archive: Path):
                 elif item.isfile():
                     members.append(item.name)
     module_roots = set()
+    bundled_runtimes = set()
     development = []
     seen = set()
     for name in members:
@@ -36,8 +37,14 @@ def inspect_archive_layout(archive: Path):
         if normalized in seen:
             unsafe.append(name)
         seen.add(normalized)
-        if set(path.parts) & {".git", ".pytest_cache", ".mypy_cache", "Testing", "tests"}:
+        if set(path.parts) & {".git", ".pytest_cache", ".mypy_cache"}:
             development.append(name)
+        elif "bundled-runtimes" not in path.parts and (set(path.parts) & {"Testing", "tests"}):
+            development.append(name)
+        if "bundled-runtimes" in path.parts:
+            idx = path.parts.index("bundled-runtimes")
+            if len(path.parts) > idx + 1:
+                bundled_runtimes.add(path.parts[idx + 1])
         if "qt-scripted-modules" in path.parts:
             index = path.parts.index("qt-scripted-modules")
             if path.parts[index + 1:] == ("SlicerDSpace.py",):
@@ -45,6 +52,8 @@ def inspect_archive_layout(archive: Path):
     # CPack chooses a revision/platform-prefixed top directory; compiled Python
     # bytecode is a normal Slicer build product, not proof of a dirty checkout.
     return {"status": "pass" if len(module_roots) == 1 and not unsafe and not development else "fail",
-            "module_roots": sorted(module_roots), "unsafe": unsafe,
+            "module_roots": sorted(module_roots),
+            "bundled_runtimes": sorted(bundled_runtimes),
+            "unsafe": unsafe,
             "development_artifacts": development,
             "bytecode_count": sum(name.endswith((".pyc", ".pyo")) for name in members)}

@@ -16,20 +16,34 @@ TEMP_ROOT = Path(os.environ.get("SLICERDSPACE_SMOKE_ROOT", "/tmp/slicerdsurfer-e
 
 
 def _run() -> None:
+    import json
+    import os
+    import runpy
+    import shutil
+    from pathlib import Path
+    import qt
+    import slicer
+
+    temp_root = Path(os.environ.get("SLICERDSPACE_SMOKE_ROOT", "/tmp/slicerdsurfer-extension-manager-install-smoke")) / "extension-manager"
     try:
         archive_path = Path(os.environ["SLICERDSPACE_EXTENSION_ARCHIVE"]).expanduser().resolve()
-        shutil.rmtree(TEMP_ROOT, ignore_errors=True)
-        TEMP_ROOT.mkdir(parents=True)
+        shutil.rmtree(temp_root, ignore_errors=True)
+        temp_root.mkdir(parents=True)
         # Load only this stdlib inspector, not scientific modules from the checkout.
-        inspector_path = os.environ.get("SLICERDSPACE_ARCHIVE_INSPECTOR") or str(
-            Path(__file__).resolve().parents[2] / "scripts/extension_runtime/archive_layout.py")
+        script_file = globals().get("__file__")
+        default_inspector = (
+            Path(script_file).resolve().parents[2] / "scripts/extension_runtime/archive_layout.py"
+            if script_file
+            else Path.cwd() / "scripts/extension_runtime/archive_layout.py"
+        )
+        inspector_path = os.environ.get("SLICERDSPACE_ARCHIVE_INSPECTOR") or str(default_inspector)
         inspector = runpy.run_path(inspector_path)
         layout = inspector["inspect_archive_layout"](archive_path)
         archive_rooted = len(layout["module_roots"]) == 1 and not layout["unsafe"]
         archive_clean = not layout["development_artifacts"]
 
-        settings_path = TEMP_ROOT / "settings.ini"
-        install_root = TEMP_ROOT / "extensions"
+        settings_path = temp_root / "settings.ini"
+        install_root = temp_root / "extensions"
         settings = qt.QSettings(settings_path.as_posix(), qt.QSettings.IniFormat)
         settings.setValue("Extensions/InstallPath", install_root.as_posix())
         settings.setValue("Extensions/ManagerEnabled", True)
@@ -67,10 +81,11 @@ def _run() -> None:
             factory.registerModule(qt.QFileInfo(installed_module.as_posix()))
         registered = bool(factory.isRegistered("SlicerDSpace"))
         loaded = bool(registered and factory.loadModules(["SlicerDSpace"]))
-        module_available = hasattr(slicer.modules, "slicerddsurfer")
+        module_available = hasattr(slicer.modules, "slicerdspace") or hasattr(slicer.modules, "slicerddsurfer")
         top_level_python = []
         runtime_resources_ready = False
         installed_imports_ready = False
+        bundled_runtimes_ready = True
         self_tests_passed = False
         if installed_module:
             top_level_python = sorted(path.name for path in installed_module.parent.glob("*.py"))
@@ -86,6 +101,8 @@ def _run() -> None:
             import tractography.wmql as wmql
             import anatomy.segmentation.pipeline as ddseg
             import scripts.audit_third_party as license_audit
+            import shared.native_runtimes as native_runtimes
+            import shared.surface_runtime as surface_runtime
             installed_imports_ready = (
                 Path(wmql.__file__).resolve().is_relative_to(root)
                 and Path(ddseg.__file__).resolve().is_relative_to(root)
@@ -94,6 +111,19 @@ def _run() -> None:
                 and Path(license_audit.__file__).resolve().is_relative_to(root)
                 and license_audit.audit(root)["status"] == "pass"
             )
+            if layout.get("bundled_runtimes"):
+                os.environ["SLICERDSPACE_RUNTIME_ROOT"] = str(temp_root / "empty-runtime-cache")
+                mrtrix_bins = native_runtimes.installed_bundle_bin_dirs("mrtrix")
+                fsl_bins = native_runtimes.installed_bundle_bin_dirs("fsl")
+                surf_dir = surface_runtime.bundled_surface_runtime()
+                bundled_runtimes_ready = bool(
+                    mrtrix_bins
+                    and mrtrix_bins[0].resolve().is_relative_to(install_root.resolve())
+                    and fsl_bins
+                    and fsl_bins[0].resolve().is_relative_to(install_root.resolve())
+                    and surf_dir is not None
+                    and surf_dir.resolve().is_relative_to(install_root.resolve())
+                )
             if loaded and installed_imports_ready:
                 # Exercise the official Self Tests registration on the installed package.
                 nodes_before = slicer.mrmlScene.GetNumberOfNodes()
@@ -111,6 +141,7 @@ def _run() -> None:
         print(f"SLICERDSPACE_EXTMGR_TOP_LEVEL_PY={top_level_python}", flush=True)
         print(f"SLICERDSPACE_EXTMGR_RUNTIME_RESOURCES_READY={runtime_resources_ready}", flush=True)
         print(f"SLICERDSPACE_EXTMGR_INSTALLED_IMPORTS_READY={installed_imports_ready}", flush=True)
+        print(f"SLICERDSPACE_EXTMGR_BUNDLED_RUNTIMES_READY={bundled_runtimes_ready}", flush=True)
         print(f"SLICERDSPACE_EXTMGR_SELF_TESTS_PASSED={self_tests_passed}", flush=True)
         ready = (
             archive_rooted
@@ -124,19 +155,33 @@ def _run() -> None:
             and top_level_python == ["SlicerDSpace.py"]
             and runtime_resources_ready
             and installed_imports_ready
+            and bundled_runtimes_ready
             and self_tests_passed
         )
-        (TEMP_ROOT / 'installation.json').write_text(json.dumps({
+        (temp_root / 'installation.json').write_text(json.dumps({
             'passed': ready, 'archive': str(archive_path),
+            'archive_rooted': archive_rooted, 'archive_clean': archive_clean,
+            'installed': installed, 'manager_reports_installed': manager_reports_installed,
+            'registered': registered, 'module_available': module_available,
+            'top_level_python': top_level_python,
             'installed_module': str(installed_module), 'module_loaded': loaded,
             'installed_imports_ready': installed_imports_ready,
             'runtime_resources_ready': runtime_resources_ready,
+            'bundled_runtimes_ready': bundled_runtimes_ready,
+            'bundled_runtimes': layout.get("bundled_runtimes", []),
             'self_tests_passed': self_tests_passed,
             'slicer_version': str(slicer.app.applicationVersion),
             'slicer_revision': str(slicer.app.repositoryRevision),
         }, indent=2) + '\n')
         slicer.app.exit(0 if ready else 2)
     except Exception as exc:
+        import traceback
+        temp_root.mkdir(parents=True, exist_ok=True)
+        (temp_root / 'installation.json').write_text(json.dumps({
+            'passed': False,
+            'error': str(exc),
+            'traceback': traceback.format_exc(),
+        }, indent=2) + '\n')
         print(f"SLICERDSPACE_EXTMGR_ERROR={exc}", flush=True)
         slicer.app.exit(2)
 

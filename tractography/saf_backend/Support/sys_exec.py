@@ -46,7 +46,9 @@ def sys_exec(cmd, PS):
                 env["PATH"] = os.pathsep.join(filter(None, (str(bin_dir), env.get("PATH"))))
                 executable = resolve_external_command(cmd[0], Path(bin_dir), require_executable=True)
             else:
-                executable = shutil.which(cmd[0], path=env.get("PATH", ""))
+                executable = shutil.which(cmd[0], path=env.get("PATH", "")) or resolve_external_command(cmd[0], None, require_executable=True)
+                if executable and Path(executable).is_file():
+                    env["PATH"] = os.pathsep.join(filter(None, (str(Path(executable).resolve().parent), env.get("PATH"))))
             if not executable:
                 raise FileNotFoundError(f"SAF command {cmd[0]} was not found. Configure the MRtrix bin directory.")
             cmd[0] = os.path.abspath(executable)

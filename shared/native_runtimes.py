@@ -39,24 +39,59 @@ def runtime_root():
                 default_user_model_assets_root().parent / "runtimes").expanduser().resolve()
 
 
+def bundled_runtime_roots():
+    """Return existing bundled-runtimes directories shipped inside the installed extension."""
+    repo_root = Path(__file__).resolve().parents[1]
+    candidates = []
+    env_root = os.environ.get("SLICERDSPACE_BUNDLED_RUNTIMES_ROOT")
+    if env_root:
+        candidates.append(Path(env_root).expanduser())
+    candidates.extend((
+        repo_root / "SlicerDSpace" / "bundled-runtimes",
+        repo_root / "bundled-runtimes",
+    ))
+    if len(repo_root.parents) >= 3:
+        candidates.append(repo_root.parents[2] / "bundled-runtimes")
+    roots = []
+    seen = set()
+    for cand in candidates:
+        try:
+            resolved = cand.resolve()
+        except OSError:
+            continue
+        if resolved not in seen and resolved.is_dir():
+            seen.add(resolved)
+            roots.append(resolved)
+    return tuple(roots)
+
+
 def installed_bundle_bin_dirs(name, *, system=None, machine=None, root=None):
     """Return bin directories of installed native runtime bundles matching name and host platform."""
     system, machine = host_platform(system, machine)
-    base = Path(root or runtime_root()).expanduser().resolve()
-    if not base.is_dir():
-        return ()
+    bases = (
+        (Path(root).expanduser().resolve(),)
+        if root is not None
+        else (*bundled_runtime_roots(), runtime_root())
+    )
     prefix = f"{name}-"
     suffix = f"-{system.lower()}-{machine}"
     dirs = []
-    try:
-        children = sorted(base.iterdir(), reverse=True)
-    except OSError:
-        return ()
-    for child in children:
-        if child.is_dir() and child.name.startswith(prefix) and child.name.endswith(suffix):
-            bin_dir = child / "bin"
-            if (child / "native-runtime.json").is_file() and bin_dir.is_dir():
-                dirs.append(bin_dir.resolve())
+    seen = set()
+    for base in bases:
+        if not base.is_dir():
+            continue
+        try:
+            children = sorted(base.iterdir(), reverse=True)
+        except OSError:
+            continue
+        for child in children:
+            if child.is_dir() and child.name.startswith(prefix) and child.name.endswith(suffix):
+                bin_dir = child / "bin"
+                if (child / "native-runtime.json").is_file() and bin_dir.is_dir():
+                    resolved = bin_dir.resolve()
+                    if resolved not in seen:
+                        seen.add(resolved)
+                        dirs.append(resolved)
     return tuple(dirs)
 
 
@@ -165,8 +200,9 @@ def install_bundle(record, *, archive=None, root=None, accept_terms=False):
         if not isinstance(record.get(key), str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", record[key]):
             raise ValueError(f"Invalid native runtime {key}")
     root = Path(root or runtime_root()).expanduser().resolve()
-    dest = root / (record["name"] + "-" + record["version"] + "-" + record["system"].lower()
+    folder_name = (record["name"] + "-" + record["version"] + "-" + record["system"].lower()
                    + "-" + record["machine"])
+    dest = root / folder_name
     if dest.exists() or dest.is_symlink():
         raise FileExistsError(f"Refusing to replace native runtime directory: {dest}")
     root.mkdir(parents=True, exist_ok=True)
@@ -175,17 +211,30 @@ def install_bundle(record, *, archive=None, root=None, accept_terms=False):
         if archive is None:
             if not record.get("url", "").startswith("https://"):
                 raise NativeRuntimeUnavailable("No HTTPS download URL for native runtime")
-            fd, download = tempfile.mkstemp(prefix="native-download-", suffix=".part", dir=root)
+            suffix = ".zip" if record["url"].lower().endswith(".zip") else ".part"
+            fd, download = tempfile.mkstemp(prefix="native-download-", suffix=suffix, dir=root)
             os.close(fd)
             with urllib.request.urlopen(record["url"], timeout=90) as src, open(download, "wb") as out:
                 shutil.copyfileobj(src, out)
             archive = download
-        if _sha256(archive) != record["sha256"]:
+        digest = _sha256(archive)
+        valid_digests = {record["sha256"]}
+        if isinstance(record.get("unified_sha256"), str) and len(record["unified_sha256"]) == 64:
+            valid_digests.add(record["unified_sha256"])
+        if digest not in valid_digests:
             raise ValueError("Native runtime SHA256 mismatch")
+        archive_str = str(archive).lower()
+        fmt = "zip" if archive_str.endswith(".zip") else ("tar.gz" if archive_str.endswith((".tar.gz", ".tgz")) else record["format"])
         with tempfile.TemporaryDirectory(prefix="native-stage-", dir=root) as temp:
             stage = Path(temp) / "payload"
             stage.mkdir()
-            _extract(archive, stage, record["format"])
+            _extract(archive, stage, fmt)
+            first_cmd = _safe_relpath(record["commands"][0])
+            if not stage.joinpath(*first_cmd.parts).is_file():
+                for cand in stage.rglob(folder_name):
+                    if cand.is_dir() and cand.joinpath(*first_cmd.parts).is_file():
+                        stage = cand
+                        break
             paths = []
             for command in record["commands"]:
                 rel = _safe_relpath(command)
@@ -248,24 +297,36 @@ def provision_bundles(names, *, root=None, archive_dir=None, accept_terms=False,
     settings = {}
     installed = {}
     for name, record in records.items():
+        folder_name = f"{record['name']}-{record['version']}-{record['system'].lower()}-{record['machine']}"
+        candidate_dirs = [Path(prefixes[name])]
+        if root is None:
+            candidate_dirs = [b / folder_name for b in bundled_runtime_roots()] + candidate_dirs
         dest = Path(prefixes[name])
-        receipt_file = dest / "native-runtime.json"
         reused = False
-        if dest.is_dir() and receipt_file.is_file():
-            try:
-                existing = json.loads(receipt_file.read_text(encoding="utf-8"))
-                reused = (
-                    existing.get("archive_sha256") == record["sha256"]
-                    and all(dest.joinpath(*_safe_relpath(cmd).parts).is_file() for cmd in record["commands"])
-                )
-            except (OSError, ValueError):
-                reused = False
+        for cand_dest in candidate_dirs:
+            receipt_file = cand_dest / "native-runtime.json"
+            if cand_dest.is_dir() and receipt_file.is_file():
+                try:
+                    existing = json.loads(receipt_file.read_text(encoding="utf-8"))
+                    if (
+                        existing.get("archive_sha256") == record["sha256"]
+                        and all(cand_dest.joinpath(*_safe_relpath(cmd).parts).is_file() for cmd in record["commands"])
+                    ):
+                        dest = cand_dest
+                        reused = True
+                        break
+                except (OSError, ValueError):
+                    continue
         if not reused:
+            if dest.is_dir() and (dest / "native-runtime.json").is_file() and not dest.is_symlink():
+                shutil.rmtree(dest)
             archive = None
             if archive_dir is not None:
-                cand = Path(archive_dir) / record.get("artifact", "")
-                if cand.is_file():
-                    archive = cand
+                for art_key in ("artifact", "unified_artifact"):
+                    art_name = record.get(art_key, "")
+                    if art_name and (Path(archive_dir) / art_name).is_file():
+                        archive = Path(archive_dir) / art_name
+                        break
             dest = install_bundle(record, archive=archive, root=base, accept_terms=True)
         bin_dir = str((dest / "bin").resolve())
         for key in BUNDLE_SETTINGS[name]:

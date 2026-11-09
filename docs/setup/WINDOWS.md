@@ -6,25 +6,35 @@
 
 </div>
 
-The current bridge also supervises the owned Linux process group with a
+## Recommended Default: Unified Windows Native Package (`v0.1.1`, No WSL Required)
+
+Starting in **`v0.1.1`**, SlicerDSpace provides a single unified Windows release package (**`SlicerDSpace-v0.1.1-Windows-x64.zip`**) for **3D Slicer 5.10.0** that bundles the extension together with modularly managed native Windows runtimes under `SlicerDSpace/bundled-runtimes/`:
+
+- **MRtrix3 `3.0.8`** (`bundled-runtimes/mrtrix-3.0.8-windows-x86_64`, **68 native commands** including `dwi2response`, `5ttgen`, `dwi2fod`, `mtnormalise`, `tckgen`, `tcksift2`, `tck2connectome`, `tckedit`, `tckresample`, `tckmap`, `mrcrop`, plus bundled `FreeSurferColorLUT.txt` fallback).
+- **FSL `2602.0`** (`bundled-runtimes/fsl-2602.0-windows-x86_64`, native `topup.exe`, `applytopup.exe`, `eddy_cpu.exe`).
+- **FreeSurfer Surface Runtime** (`bundled-runtimes/surface-runtime-windows-x86_64`, 7 native surface postprocessing commands and atlas templates; `activation_key_included: false` — supply your personal FreeSurfer license file when running cortical postprocessing).
+
+**Installation & First Run:**
+1. Open **3D Slicer 5.10.0** → **View > Extension Manager** → wrench icon (**Install Extension from File…**) and select `SlicerDSpace-v0.1.1-Windows-x64.zip`, then restart Slicer.
+2. On first launch, SlicerDSpace defaults to the **Native** execution backend on Windows (`preprocessing_execution_backend = "native"`) and automatically discovers the bundled MRtrix3, FSL, and Surface Runtime paths without manual path entry or WSL.
+3. Model weights (`DDSeg`, `DDParcel`, `DDSurfer`, `PNL`, `TractCloud`) and large atlases (`WMA ORG`) remain downloaded on demand via **Environment and installation > Prepare selected analysis environment**.
+
+See the [Windows 5.10.0 Native Acceptance Report](../release/WINDOWS_NATIVE_ACCEPTANCE_5.10.0.md) for full-volume real-data (`HCP 100307`) validation and numerical parity against Linux.
+
+---
+
+## Optional Legacy Route: WSL 2 Bridge Setup
+
+The sections below document the optional legacy Ubuntu WSL 2 bridge setup (useful if you specifically require Linux CUDA `eddy` inside WSL 2). The current bridge supervises the owned Linux process group with a
 Windows heartbeat. If the bridge is killed, only that WSL task is terminated;
 the distribution and unrelated jobs are not shut down. Existing bridges need
-the runtime installer rerun to obtain this change. Linux cleanup tests and C#
-compilation are not a completed native WSL cancellation acceptance test.
+the runtime installer rerun to obtain this change.
 See [current bundle/platform follow-up](../release/BUNDLE_QC_20261015.md).
 
-SlicerDSpace provides Windows Slicer/Python setup and Ubuntu WSL 2 command
-bridges for Linux backends. Native Windows scientific workflows and complete
-SDK/CPack acceptance remain unverified; installer plans are not that evidence.
-Use the minimal DTI tutorial before considering the optional full WSL runtime.
-
-**What runs where.** WSL 2 Ubuntu runs MRtrix3, FSL, and the optional
-FreeSurfer, WMQL and TractCloud tools. ORG clustering can run in Windows
-Slicer's PythonSlicer when no WMA WSL bridge is configured. Use **Prepare
+**What runs where.** In native mode (default on Windows), MRtrix3, FSL (`topup`/`applytopup`/`eddy_cpu`), FreeSurfer surface postprocessing, WMA ORG clustering, WMQL, TractCloud, SAF, DTI, Free-Water, NODDI, DKI (`WLS` & `MK-Curve`), and DDSeg/DDParcel/DDSurfer all run natively on Windows without WSL. In the optional WSL 2 mode, WSL 2 Ubuntu runs MRtrix3, FSL, and optional Linux tools. Use **Prepare
 selected analysis environment** with WMA selected to prepare the ORG atlas
 and pinned WMA source. An existing bridge remains usable. East-West, NABA and
-the FiberTractMeasurements export use the legacy route. The native ORG runner
-still needs Windows end-to-end verification.
+the FiberTractMeasurements export use the legacy route.
 
 The tensor fit, the PNL brain mask and the other Python stages run in Windows
 Slicer's own Python. The

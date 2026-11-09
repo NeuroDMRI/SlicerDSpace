@@ -779,8 +779,57 @@ class SharedWidgetMixin:
 
     def _read_environment_path_setting(self, dependency_id: str) -> str:
         settings = slicer.app.userSettings()
-        value = settings.value(self._environment_settings_key(dependency_id), "")
-        return str(value or "").strip()
+        value = str(settings.value(self._environment_settings_key(dependency_id), "") or "").strip()
+        if not value:
+            try:
+                ext = load_user_config().get("external_dependencies") or {}
+                value = str(ext.get(dependency_id) or "").strip()
+            except Exception:
+                value = ""
+        if value and dependency_id in {
+            "mrtrix_bin_dir",
+            "preprocessing_mrtrix_bin_dir",
+            "preprocessing_fsl_bin_dir",
+            "postprocess_runtime",
+        }:
+            if not Path(value).expanduser().exists():
+                value = ""
+        if value and dependency_id in {"mrtrix_bin_dir", "preprocessing_mrtrix_bin_dir"}:
+            tckedit_name = "tckedit.exe" if sys.platform == "win32" else "tckedit"
+            if not (Path(value).expanduser() / tckedit_name).is_file():
+                try:
+                    from shared.native_runtimes import installed_bundle_bin_dirs
+                    for cand_bin in installed_bundle_bin_dirs("mrtrix"):
+                        if (cand_bin / tckedit_name).is_file():
+                            value = cand_bin.as_posix()
+                            settings.setValue(self._environment_settings_key(dependency_id), value)
+                            update_user_config({"external_dependencies": {dependency_id: value}})
+                            break
+                except Exception:
+                    pass
+        if not value:
+            try:
+                if dependency_id in {"mrtrix_bin_dir", "preprocessing_mrtrix_bin_dir"}:
+                    from shared.native_runtimes import installed_bundle_bin_dirs
+                    bins = installed_bundle_bin_dirs("mrtrix")
+                    if bins:
+                        value = bins[0].as_posix()
+                elif dependency_id == "preprocessing_fsl_bin_dir":
+                    from shared.native_runtimes import installed_bundle_bin_dirs
+                    bins = installed_bundle_bin_dirs("fsl")
+                    if bins:
+                        value = bins[0].as_posix()
+                elif dependency_id == "postprocess_runtime":
+                    from shared.surface_runtime import bundled_surface_runtime
+                    bundled = bundled_surface_runtime()
+                    if bundled is not None:
+                        value = bundled.as_posix()
+                if value:
+                    settings.setValue(self._environment_settings_key(dependency_id), value)
+                    update_user_config({"external_dependencies": {dependency_id: value}})
+            except Exception:
+                pass
+        return value
 
     def _save_environment_path_setting(self, dependency_id: str, value: str) -> None:
         self._lastEnvironmentResult = None
@@ -1769,6 +1818,8 @@ class SharedWidgetMixin:
             "microstructure_run_noddi": self._microstructure_stage_flags()[1],
             "microstructure_run_dki": self._microstructure_dki_enabled(),
             "dki_fit_method": getattr(node, "orchestrationDkiFitMethod", "MKCURVE") or "MKCURVE",
+            "preprocessing_execution_backend": os.environ.get("SLICERDSPACE_PREPROCESSING_EXECUTION_BACKEND")
+            or ("native" if sys.platform == "win32" else None),
             **external_paths,
         }
 

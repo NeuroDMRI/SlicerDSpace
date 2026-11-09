@@ -23,11 +23,26 @@ def audit_package(archive: Path, source_root: Path) -> dict:
     unexpected = []
     unsafe = []
     module_roots = set()
+    bundled_runtimes = set()
 
     def record(name, payload):
         parts = PurePosixPath(name.replace("\\", "/")).parts
         if ".." in parts or name.startswith(("/", "\\")) or (parts and ":" in parts[0]):
             unsafe.append(name)
+            return
+        if "bundled-runtimes" in parts:
+            idx = parts.index("bundled-runtimes")
+            if len(parts) > idx + 1:
+                bundled_runtimes.add(parts[idx + 1])
+            if parts[-1] == ".license" or parts[-1].lower() == "freesurfer_license.txt":
+                unsafe.append(f"Bundled user activation key: {name}")
+            if len(parts) == idx + 3 and parts[-1] == "runtime.json":
+                try:
+                    rt_meta = json.loads(payload.decode("utf-8"))
+                    if rt_meta.get("activation_key_included") is not False:
+                        unsafe.append(f"Bundled surface runtime has activation_key_included != false: {name}")
+                except Exception as exc:
+                    unsafe.append(f"Invalid runtime.json in {name}: {exc}")
             return
         if "qt-scripted-modules" not in parts:
             return
@@ -61,6 +76,7 @@ def audit_package(archive: Path, source_root: Path) -> dict:
         "archive": str(archive.resolve()), "source_root": str(source_root.resolve()),
         "archive_sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
         "expected_file_count": len(expected), "module_roots": sorted(module_roots),
+        "bundled_runtimes": sorted(bundled_runtimes),
         "missing": missing, "changed": changed, "unexpected": sorted(unexpected), "unsafe": unsafe,
         "scope": "Package contents only; not SDK provenance or scientific correctness",
     }

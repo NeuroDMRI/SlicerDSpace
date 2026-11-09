@@ -227,6 +227,10 @@ def selected_setup_plan(owner, result, *, repair=False):
     existing = configured_profiles(config, candidates) if candidates else ()
     from shared.selected_setup import need_flags
     from scripts.setup_python_packages import dcm2niix_pending
+    use_native = not any(
+        getattr(item, "key", None) == "mrtrix" and getattr(item, "kind", None) == "path"
+        for item in getattr(result, "statuses", ())
+    )
     plan = build_setup_plan(result, installed_extensions=installed, loaded_extensions=loaded,
         **need_flags(targets, closure.tractography_algorithms, fallback_ukf=fallback_ukf),
         brain_mask_backend=getattr(owner._parameterNode, "brainMaskBackend", "pnl_cnn"), gpu_available=gpu,
@@ -234,7 +238,8 @@ def selected_setup_plan(owner, result, *, repair=False):
         wma_atlas=getattr(owner._parameterNode, "wmaAtlas", "org"),
         existing_managed_profiles=existing, repair=repair, backend_paths=config, closure_targets=tuple(closure.targets),
         slicer_executable=_running_slicer_executable(owner) or config.get("slicer_executable"),
-        dcm2niix_missing=dcm2niix_pending())  # S-B3: checked in the running Slicer's own Python
+        dcm2niix_missing=dcm2niix_pending(),  # S-B3: checked in the running Slicer's own Python
+        use_native_runtime=use_native)
     # C4: the result's targets are already closed, so the owner (which knows what was ticked) words the notice.
     notice = getattr(owner, "_closure_notice_text", None)
     notice = notice() if callable(notice) else ""
@@ -267,9 +272,9 @@ def prepare_selected_environment(owner, result=None, *, repair=False):
     config = owner._environment_dependency_path_kwargs()
     plan = selected_setup_plan(owner, result, repair=repair)
     # S-B1: the Windows ps1 step is pending work too; without it the dialog (and the licence acceptance) was skipped.
-    pending_actions = bool((plan.get('windows_runtime') or {}).get('command')) or plan.get('surface_build_required', False) or plan.get('surface_prebuilt_required', False) or any(plan[key] for key in (
+    pending_actions = bool((plan.get('windows_runtime') or {}).get('command')) or plan.get('surface_build_required', False) or plan.get('surface_prebuilt_required', False) or any(plan.get(key) for key in (
         "extensions", "restart_extensions", "python_packages", "asset_profiles", "optional_asset_profiles",
-        "managed_profiles", "unsupported_profiles", "manual_items", "backend_profiles"))
+        "managed_profiles", "native_bundles", "unsupported_profiles", "manual_items", "backend_profiles"))
     if pending_actions and not _confirm(owner, plan):
         return False
     owner._selectedSetupActive = True

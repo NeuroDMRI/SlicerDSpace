@@ -705,9 +705,12 @@ def run_csd_act(config: CSDActConfig, *, log: Optional[Callable[[str], None]] = 
         manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         # MRtrix3 ignores "-config RandomSeed <n>" on the command line; the
         # seed must be provided via the MRTRIX_RNG_SEED environment variable.
+        effective_mrtrix_bin = config.mrtrix_bin_dir
+        if effective_mrtrix_bin is None and commands and Path(commands[0][0]).is_file():
+            effective_mrtrix_bin = Path(commands[0][0]).resolve().parent
         command_env = managed_tool_environment(
             extra_env={"MRTRIX_RNG_SEED": str(config.random_seed)} if config.random_seed is not None else None,
-            mrtrix_bin_dir=config.mrtrix_bin_dir,
+            mrtrix_bin_dir=effective_mrtrix_bin,
         )
         try:
             for command in commands:

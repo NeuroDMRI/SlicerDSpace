@@ -137,7 +137,16 @@ Agent 会检查可用空间和已有资源，等你选择后再下载，并保�
 
 ## 安装
 
-### 部署插件
+### 方式一：单文件完整 Release 安装包（Windows 与 Linux 推荐）
+
+从 GitHub Release 页面下载对应平台的唯一完整安装包：
+
+- **Windows (`x86_64`)**：`SlicerDSpace-v0.1.1-Windows-x64.zip`
+- **Linux (`x86_64`)**：`SlicerDSpace-v0.1.1-Linux-x64.tar.gz`
+
+每个安装包均包含 SlicerDSpace 扩展本体及模块化内置于 `SlicerDSpace/bundled-runtimes/` 的三大原生运行环境（**MRtrix3 `3.0.8`** 共 68 个命令、**FSL `2602.0`** 含 `topup`/`applytopup`/`eddy_cpu`、**FreeSurfer Surface Runtime** 含 7 个表面命令与球面模板，不包含任何个人专属 FreeSurfer 激活文件）。在 **3D Slicer 5.10.0** 中通过 **View > Extensions Manager > Install Extensions > Install Extension from File** 选择该压缩包安装并重启 Slicer，首次启动会自动识别内置依赖，无需手动分别下载多个依赖包或配置路径；模型权重与大型图谱按需下载。（macOS 在原生依赖全部完成验收前，暂不宣称完整原生支持。）
+
+### 方式二：从源码部署插件
 
 仓库暂为私有，需要已有访问权限。以下轻量源码安装不下载网站和历史报告；
 开发测试与科研材料保留在完整仓库中。
@@ -237,8 +246,7 @@ sub-01/
 **平台。** Linux 上 PNL 脑掩膜在带 ANTs 的 managed conda 运行环境中运行；macOS 和 Windows 上在 Slicer 自带的 Python 中运行（SimpleITK 和 PyTorch）。
 这条 native 路线为 **实验性**：在 24 个测试例中有 2 例的掩膜与 Linux 路线的差异超出一致性规则。
 设置项为高级设置中的 **PNL 路线**（`auto`、`managed`、`native`），命令行为 `--pnl-mask-route`；运行记录会写明所用掩膜的路线。
-在 Windows 上，MRtrix3 和 FSL 命令（以及可选的 WMA、WMQL、TractCloud 和 FreeSurfer 工具）在 WSL 2 Ubuntu 中运行；
-脑掩膜和 Python 阶段在 Windows 版 Slicer 的 Python 中运行。见 [Windows](docs/setup/WINDOWS.md) 和 [macOS](docs/setup/MACOS.md)。
+在 Windows 上，SlicerDSpace **默认使用原生运行环境，无需 WSL**：MRtrix3（`3.0.8`，68 个命令）、FSL（`2602.0`，`topup`/`applytopup`/`eddy_cpu`）、FreeSurfer 皮层表面后处理（7 个原生命令）、WMA、WMQL、TractCloud、脑掩膜和所有 Python 微结构/解剖重建阶段均直接在 Windows 版 **3D Slicer 5.10.0** 中原生运行（WSL 2 仅作为可选回退保留）。macOS 原生依赖尚待完整科学验收。见 [Windows](docs/setup/WINDOWS.md)、[Windows 5.10.0 原生验收报告](docs/release/WINDOWS_NATIVE_ACCEPTANCE_5.10.0.zh-CN.md) 和 [macOS](docs/setup/MACOS.md)。
 
 UKF 通过已安装扩展自动运行，并可直接把结果传给 WMA。
 WMA 支持 `--wma-atlas org|east-west|naba`（默认 `org`），高级设置中也可选择。

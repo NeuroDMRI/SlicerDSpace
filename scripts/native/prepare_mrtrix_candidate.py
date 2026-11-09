@@ -37,9 +37,23 @@ WINDOWS_COMMANDS = (
     'tensor2metric',
 )
 WINDOWS_OPTIONAL_ACT_COMMANDS = ('labelconvert', 'mrgrid')
+EXTRA_BUILT_COMMANDS = (
+    'tckedit', 'tckresample', 'tckmap', 'mrcrop',
+    'tckinfo', 'tcktransform', 'tcksift', 'connectome2tck',
+    '5ttedit', '5tt2vis', 'mredit', 'mrdump', 'maskdump',
+    'mesh2voxel', 'meshconvert', 'meshfilter', 'voxel2mesh',
+    'label2mesh', 'label2colour', 'labelstats',
+    'fod2fixel', 'fixel2voxel', 'fixel2peaks', 'fixel2sh',
+    'sh2amp', 'sh2power', 'sh2response', 'shconv',
+    'dwidenoise', 'mrdegibbs', 'mrfilter', 'mrregister',
+    'transformcalc', 'transformcompose', 'transformconvert',
+    'warpinit', 'warpconvert', 'warpinvert',
+)
 WINDOWS_RESPONSE_SCRIPT = 'bin/dwi2response'
 WINDOWS_ACT_SCRIPT = 'bin/5ttgen'
 WINDOWS_PATH_HELPER = 'lib/mrtrix3/path.py'
+ACT_FREESURFER_HELPER = 'lib/mrtrix3/_5ttgen/freesurfer.py'
+REPO_FREESURFER_LUT = Path(__file__).resolve().parents[2] / 'anatomy/parcellation/conversion/data/FreeSurferColorLUT.txt'
 SYSTEM_DLL = frozenset({
     'kernel32.dll','ntdll.dll','advapi32.dll','user32.dll','shell32.dll',
     'gdi32.dll','comdlg32.dll','ole32.dll','oleaut32.dll','ws2_32.dll',
@@ -191,6 +205,38 @@ def _patch_windows_path_helper(stage: Path) -> dict[str, str]:
     }
 
 
+def _patch_act_freesurfer_helper(stage: Path) -> None:
+    """Allow 5ttgen freesurfer to use bundled FreeSurferColorLUT.txt and quote LUT paths on Windows."""
+    helper = stage / ACT_FREESURFER_HELPER
+    lut_dir = stage / 'share/mrtrix3/_5ttgen'
+    if (lut_dir.is_dir() or helper.is_file()) and REPO_FREESURFER_LUT.is_file():
+        lut_dir.mkdir(parents=True, exist_ok=True)
+        if not (lut_dir / 'FreeSurferColorLUT.txt').is_file():
+            shutil.copy2(REPO_FREESURFER_LUT, lut_dir / 'FreeSurferColorLUT.txt')
+    if not helper.is_file():
+        return
+    text = helper.read_text(encoding='utf-8')
+    old_env = (
+        "    freesurfer_home = os.environ.get('FREESURFER_HOME', '')\n"
+        "    if not freesurfer_home:\n"
+    )
+    new_env = (
+        "    freesurfer_home = os.environ.get('FREESURFER_HOME', '')\n"
+        "    if not freesurfer_home:\n"
+        "      bundled_dir = os.path.join(path.shared_data_path(), path.script_subdir_name())\n"
+        "      if os.path.isfile(os.path.join(bundled_dir, 'FreeSurferColorLUT.txt')):\n"
+        "        freesurfer_home = bundled_dir\n"
+        "    if not freesurfer_home:\n"
+    )
+    if old_env in text and 'bundled_dir' not in text:
+        text = text.replace(old_env, new_env, 1)
+    old_cmd = "run.command('labelconvert input.mif ' + lut_input_path + ' ' + lut_output_path + ' indices.mif')"
+    new_cmd = "run.command('labelconvert input.mif ' + path.quote(lut_input_path) + ' ' + path.quote(lut_output_path) + ' indices.mif')"
+    if old_cmd in text:
+        text = text.replace(old_cmd, new_cmd, 1)
+    helper.write_text(text, encoding='utf-8')
+
+
 def make_archive(folder: Path, archive: Path, system: str) -> None:
     if system == 'Windows':
         with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as out:
@@ -254,16 +300,25 @@ def build(source: Path, output: Path, *, system: str, machine: str, dll_search: 
                 _copy_with_mode(source / WINDOWS_ACT_SCRIPT, stage / WINDOWS_ACT_SCRIPT)
                 if (source / 'share/mrtrix3').is_dir():
                     shutil.copytree(source / 'share/mrtrix3', stage / 'share/mrtrix3', symlinks=False)
+            for extra_cmd in EXTRA_BUILT_COMMANDS:
+                try:
+                    binary = _find_command(source, extra_cmd, system)
+                except FileNotFoundError:
+                    continue
+                target = destination / binary.name
+                _copy_with_mode(binary, target)
+                command_paths.append(f'bin/{target.name}')
             shutil.copytree(source / 'lib/mrtrix3', stage / 'lib/mrtrix3',
                             ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
             patches.append(_patch_windows_path_helper(stage))
+            _patch_act_freesurfer_helper(stage)
             copied_dlls = copy_windows_dll_closure([stage / rel for rel in command_paths], destination,
                                                    dll_search, objdump=objdump)
             command_paths.append(WINDOWS_RESPONSE_SCRIPT)
             if has_act_script:
                 command_paths.append(WINDOWS_ACT_SCRIPT)
         else:
-            for extra_cmd in (*WINDOWS_COMMANDS, *WINDOWS_OPTIONAL_ACT_COMMANDS):
+            for extra_cmd in (*WINDOWS_COMMANDS, *WINDOWS_OPTIONAL_ACT_COMMANDS, *EXTRA_BUILT_COMMANDS):
                 if extra_cmd in commands:
                     continue
                 try:
@@ -281,6 +336,7 @@ def build(source: Path, output: Path, *, system: str, machine: str, dll_search: 
                                     ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
                 if (source / 'share/mrtrix3').is_dir():
                     shutil.copytree(source / 'share/mrtrix3', stage / 'share/mrtrix3', symlinks=False)
+                _patch_act_freesurfer_helper(stage)
                 for script_rel in (WINDOWS_RESPONSE_SCRIPT, WINDOWS_ACT_SCRIPT):
                     if (source / script_rel).is_file():
                         _copy_with_mode(source / script_rel, stage / script_rel)

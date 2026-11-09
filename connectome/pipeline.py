@@ -1157,9 +1157,14 @@ def run_connectome(config: ConnectomeConfig, *, log: Optional[Callable[[str], No
                 command_env = startup_environment()
                 if os.name == "nt" and not command_env.get("HOME"):
                     command_env["HOME"] = command_env.get("USERPROFILE") or str(Path.home())
-                if config.mrtrix_bin_dir is not None:
+                effective_bin = (
+                    config.mrtrix_bin_dir.expanduser().resolve()
+                    if config.mrtrix_bin_dir is not None
+                    else (Path(command[0]).resolve().parent if command and Path(command[0]).is_file() else None)
+                )
+                if effective_bin is not None:
                     command_env["PATH"] = os.pathsep.join(
-                        filter(None, (str(config.mrtrix_bin_dir.expanduser().resolve()), command_env.get("PATH")))
+                        filter(None, (str(effective_bin), command_env.get("PATH")))
                     )
                 completed = subprocess.run(command, check=True, env=command_env)
                 return_code = completed.returncode

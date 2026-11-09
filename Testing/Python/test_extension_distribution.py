@@ -202,6 +202,59 @@ class ExtensionDistributionTest(unittest.TestCase):
             self.assertEqual(result["clean_install_test"], "NOT_RUN")
             self.assertEqual(json.loads((root / "build/sdk_build_report.json").read_text())["status"], "blocked")
 
+    def test_unified_zip_package_bundles_modular_runtimes_without_activation_key(self):
+        from scripts.extension_runtime.archive_layout import inspect_archive_layout
+        from shared.native_runtimes import installed_bundle_bin_dirs
+        from shared.surface_runtime import bundled_surface_runtime
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            install = stage_extension(root / "install", slicer_version="Slicer-5.10", clean=True, link_mode="copy")
+            ext_root = Path(install["extension_root"])
+            bundled_dir = ext_root / "bundled-runtimes"
+            mrtrix_dir = bundled_dir / "mrtrix-3.0.8-windows-x86_64"
+            (mrtrix_dir / "bin").mkdir(parents=True)
+            (mrtrix_dir / "bin" / "tckgen.exe").write_bytes(b"MZfixture")
+            (mrtrix_dir / "native-runtime.json").write_text('{"name":"mrtrix","version":"3.0.8"}', encoding="utf-8")
+            surf_dir = bundled_dir / "surface-runtime-windows-x86_64"
+            (surf_dir / "bin").mkdir(parents=True)
+            (surf_dir / "bin" / "mris_inflate.exe").write_bytes(b"MZfixture")
+            (surf_dir / "runtime.json").write_text('{"activation_key_included": false}', encoding="utf-8")
+
+            archive = root / "SlicerDSpace-v0.1.1-Windows-x64.zip"
+            package_extension(ext_root, archive)
+            audit = audit_package(archive, ROOT)
+            self.assertEqual(audit["status"], "pass", audit)
+            self.assertEqual(
+                audit["bundled_runtimes"],
+                ["mrtrix-3.0.8-windows-x86_64", "surface-runtime-windows-x86_64"],
+            )
+            layout = inspect_archive_layout(archive)
+            self.assertEqual(layout["status"], "pass", layout)
+            with patch.dict(
+                os.environ,
+                {
+                    "SLICERDSPACE_BUNDLED_RUNTIMES_ROOT": str(bundled_dir),
+                    "SLICERDSPACE_RUNTIME_ROOT": str(root / "empty-runtimes"),
+                },
+            ):
+                self.assertEqual(
+                    installed_bundle_bin_dirs("mrtrix", system="Windows", machine="x86_64"),
+                    ((mrtrix_dir / "bin").resolve(),),
+                )
+                self.assertEqual(
+                    bundled_surface_runtime(system="Windows", machine="x86_64"),
+                    surf_dir.resolve(),
+                )
+
+            # Verify that a bundled surface runtime with activation_key_included=true fails audit.
+            (surf_dir / "runtime.json").write_text('{"activation_key_included": true}', encoding="utf-8")
+            bad_archive = root / "bad.zip"
+            package_extension(ext_root, bad_archive)
+            bad_audit = audit_package(bad_archive, ROOT)
+            self.assertEqual(bad_audit["status"], "fail")
+            self.assertTrue(any("activation_key_included" in item for item in bad_audit["unsafe"]))
+
 
 if __name__ == "__main__":
     unittest.main()

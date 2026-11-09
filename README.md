@@ -154,7 +154,16 @@ analysis run through your own Agent.
 
 ## Installation
 
-### Stage The Extension
+### Option A: Unified Release Package (Recommended for Windows & Linux)
+
+Download the single platform installer from the GitHub Release page:
+
+- **Windows (`x86_64`)**: `SlicerDSpace-v0.1.1-Windows-x64.zip`
+- **Linux (`x86_64`)**: `SlicerDSpace-v0.1.1-Linux-x64.tar.gz`
+
+Each archive bundles the SlicerDSpace extension together with modular native runtime bundles inside `SlicerDSpace/bundled-runtimes/` (**MRtrix3 `3.0.8`** with 68 commands, **FSL `2602.0`** with `topup`/`applytopup`/`eddy_cpu`, and the **FreeSurfer Surface Runtime** with 7 commands and templates; no personal FreeSurfer activation key is bundled). Install it directly in **3D Slicer 5.10.0** via **View > Extensions Manager > Install Extensions > Install Extension from File**, restart Slicer, and open **Modules > Diffusion > SlicerDSpace**. Bundled native runtimes are discovered automatically on first launch; model weights and large atlases are downloaded on demand. (macOS native dependencies are not yet certified for full release support.)
+
+### Option B: Stage From Source
 
 Use an authorized checkout while the repository is private. This lightweight
 source installation omits the website and historical reports; a full checkout
@@ -268,9 +277,13 @@ This native route is **experimental**: its masks did not match the Linux route
 closely enough on 2 of 24 test cases. The setting is **PNL route** (`auto`,
 `managed`, `native`) in Advanced settings or `--pnl-mask-route` on the command
 line, and the run record names the route of the mask that was used. On Windows,
-the MRtrix3 and FSL commands (and the optional WMA, WMQL, TractCloud and
-FreeSurfer tools) run in WSL 2 Ubuntu; the brain mask and the Python stages run
-in Windows Slicer's Python. See [Windows](docs/setup/WINDOWS.md) and
+SlicerDSpace runs **natively by default without WSL**: MRtrix3 (`3.0.8`, 68 commands),
+FSL (`2602.0`, `topup`/`applytopup`/`eddy_cpu`), FreeSurfer cortical surface
+postprocessing (7 commands), WMA, WMQL, TractCloud, brain masking and all Python
+microstructure/anatomical stages execute directly on Windows in **3D Slicer 5.10.0**
+(WSL 2 remains an optional fallback). On macOS, full native dependency acceptance
+is still pending. See [Windows](docs/setup/WINDOWS.md),
+[Windows 5.10.0 Acceptance](docs/release/WINDOWS_NATIVE_ACCEPTANCE_5.10.0.md) and
 [macOS](docs/setup/MACOS.md).
 
 UKF runs automatically through its installed extension and can feed WMA directly.

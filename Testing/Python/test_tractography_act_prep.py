@@ -46,7 +46,7 @@ def _fake_mrtrix(bin_dir: Path) -> None:
         (bin_dir / name).chmod(0o755)
 
 
-def _fake_run(command, capture_output=True, text=True):
+def _fake_run(command, capture_output=True, text=True, **_kwargs):
     """Stand-in for MRtrix: 5tt2gmwmi writes a GMWMI copied from the 5TT grid."""
 
     if Path(command[0]).name == "5tt2gmwmi":

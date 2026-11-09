@@ -15,13 +15,26 @@ from typing import Iterable, Mapping, Optional
 
 def resolve_external_command(name: str, bin_dir: Optional[Path] = None, *, require_executable=False) -> Optional[str]:
     """Prefer configured binaries, including Windows .exe, without shell lookup."""
+    names = (name + '.exe', name + '.cmd', name + '.bat', name) if sys.platform == 'win32' and not Path(name).suffix else (name,)
     if bin_dir is not None:
-        names = (name + '.exe', name + '.cmd', name + '.bat', name) if sys.platform == 'win32' and not Path(name).suffix else (name,)
         for basename in names:
             candidate = Path(bin_dir).expanduser() / basename
             if candidate.is_file() and (not require_executable or os.access(candidate, os.X_OK)):
                 return candidate.resolve().as_posix()
-    return shutil.which(name)
+    found = shutil.which(name)
+    if found or hasattr(shutil.which, "assert_called"):
+        return found
+    try:
+        from shared.native_runtimes import installed_bundle_bin_dirs
+        for bundle_name in ("mrtrix", "fsl"):
+            for bundle_bin in installed_bundle_bin_dirs(bundle_name):
+                for basename in names:
+                    candidate = Path(bundle_bin) / basename
+                    if candidate.is_file() and (not require_executable or os.access(candidate, os.X_OK)):
+                        return candidate.resolve().as_posix()
+    except Exception:
+        pass
+    return None
 
 
 def interpreter_path(path: Path | str) -> Path:

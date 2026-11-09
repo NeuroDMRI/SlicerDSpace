@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import math
+import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
@@ -527,6 +529,8 @@ def build_single_subject_run_kwargs(
         "mrtrix_bin_dir": external_paths.get("mrtrix_bin_dir"),
         "preprocessing_mrtrix_bin_dir": external_paths.get("mrtrix_bin_dir"),
         "preprocessing_fsl_bin_dir": external_paths.get("preprocessing_fsl_bin_dir"),
+        "preprocessing_execution_backend": os.environ.get("SLICERDSPACE_PREPROCESSING_EXECUTION_BACKEND")
+        or ("native" if sys.platform == "win32" else None),
         "postprocess_freesurfer_home": external_paths.get("postprocess_freesurfer_home"),
         "postprocess_runtime": external_paths.get("postprocess_runtime"),
         "postprocess_license_file": external_paths.get("postprocess_license_file"),
@@ -588,6 +592,8 @@ def build_batch_run_kwargs(selection: RunSelection, *, batch_root: Path) -> dict
         "surface_device": selection.surface_device,
         "tractcloud_device": "cuda" if selection.ddseg_device.startswith("cuda") else selection.ddseg_device,
         "model_assets_dir": None,
+        "preprocessing_execution_backend": os.environ.get("SLICERDSPACE_PREPROCESSING_EXECUTION_BACKEND")
+        or ("native" if sys.platform == "win32" else None),
         "connectome_backend": selection.connectome_backend,
         "connectome_compress_mrtrix_dense": selection.connectome_compress_mrtrix_dense,
         "preflight_blocked_targets": {},
@@ -908,6 +914,8 @@ def build_background_cli_args(
     args.extend(["--dki-fit-method", str(common_run_kwargs.get("microstructure_dki_fit_method", "MKCURVE"))])
     _append_compress_arg(args, common_run_kwargs)
     _append_ifw_args(args, common_run_kwargs)
+    if common_run_kwargs.get("preprocessing_execution_backend"):
+        args.extend(["--preprocessing-execution-backend", str(common_run_kwargs["preprocessing_execution_backend"])])
     wma_input = common_run_kwargs.get("wma_input_tractography")
     if wma_input is not None:
         args.extend(["--wma-input-tractography", _path_text(wma_input)])
@@ -977,6 +985,8 @@ def build_batch_background_cli_args(
     args.extend(["--dki-fit-method", str(common_run_kwargs.get("microstructure_dki_fit_method", "MKCURVE"))])
     _append_compress_arg(args, common_run_kwargs)
     _append_ifw_args(args, common_run_kwargs)
+    if common_run_kwargs.get("preprocessing_execution_backend"):
+        args.extend(["--preprocessing-execution-backend", str(common_run_kwargs["preprocessing_execution_backend"])])
     # Forwarded unchanged to every subject's run_subject_pipeline.py call.
     args.extend(topup_cli_args(topup_parameters_from_run_kwargs(common_run_kwargs)))
     _append_optional_path_args(args, external_paths)

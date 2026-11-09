@@ -29,7 +29,7 @@ def bundle_for_platform(system=None, machine=None):
 
 
 def prepare(*, prefix=None, asset_root=None, execute=False, accept_terms=False, offline=False):
-    from shared.surface_runtime import default_surface_runtime
+    from shared.surface_runtime import bundled_surface_runtime, default_surface_runtime
     from shared.model_assets import configured_model_assets_root
     from anatomy.surface.backend_bridge import backend_environment, python_executable
     from anatomy.surface.ddsurfer_backend.postprocessing.core.config import recipe_digest
@@ -38,7 +38,11 @@ def prepare(*, prefix=None, asset_root=None, execute=False, accept_terms=False, 
         raise ValueError('No qualified prebuilt surface bundle for this platform; use a supported configured runtime')
     if record['recipe_sha256'] != recipe_digest():
         raise ValueError('Prebuilt bundle catalog does not match the current source recipe')
-    prefix = Path(prefix or default_surface_runtime()).expanduser().absolute()
+    if prefix is None:
+        default_pref = default_surface_runtime()
+        bundled_pref = bundled_surface_runtime()
+        prefix = (bundled_pref if bundled_pref is not None and not default_pref.exists() else default_pref)
+    prefix = Path(prefix).expanduser().absolute()
     root = configured_model_assets_root(asset_root)
     relative = PurePosixPath(record['asset'])
     if relative.is_absolute() or '..' in relative.parts or '\\' in record['asset'] or ':' in record['asset']:

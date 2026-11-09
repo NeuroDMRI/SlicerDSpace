@@ -237,11 +237,14 @@ def _run_mrtrix(
 ) -> dict[str, object]:
     if log:
         log(f"[ACT Prep] Running: {' '.join(command)}")
+    effective_bin = mrtrix_bin_dir
+    if effective_bin is None and command and Path(command[0]).is_file():
+        effective_bin = Path(command[0]).resolve().parent
     completed = subprocess.run(
         command,
         capture_output=True,
         text=True,
-        env=managed_tool_environment(mrtrix_bin_dir=mrtrix_bin_dir),
+        env=managed_tool_environment(mrtrix_bin_dir=effective_bin),
     )
     record = {
         "command": command,

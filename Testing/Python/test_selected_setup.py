@@ -186,7 +186,7 @@ class SelectedSetupTests(unittest.TestCase):
                 licences = required_licences(plan_components(plan))
                 self.assertIn("pnl", licences)
                 self.assertIn("optional_resources", licences)
-                self.assertTrue(licences["pnl"]["file"].endswith("shared/pnl_cnn/LICENSE.txt"))
+                self.assertTrue(Path(licences["pnl"]["file"]).as_posix().endswith("shared/pnl_cnn/LICENSE.txt"))
         # The managed route plans no pnl-cnn resources, so its PNL licence comes from the managed profile only.
         linux = build_setup_plan(result(models), system="Linux", machine="x86_64")
         self.assertEqual(linux["optional_asset_profiles"], [])

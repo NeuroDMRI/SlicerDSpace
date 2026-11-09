@@ -17,6 +17,22 @@ def default_surface_runtime():
     return module.default_prefix()
 
 
+def bundled_surface_runtime(system=None, machine=None):
+    """Return a bundled surface-runtime directory inside the installed extension if present."""
+    from shared.native_runtimes import bundled_runtime_roots, host_platform
+    sys_name, arch = host_platform(system, machine)
+    folder_names = (
+        f"surface-runtime-{sys_name.lower()}-{arch}",
+        f"{sys_name.lower()}-{arch}",
+    )
+    for root in bundled_runtime_roots():
+        for name in folder_names:
+            cand = root / name
+            if (cand / "runtime.json").is_file() and (cand / "bin").is_dir():
+                return cand.resolve()
+    return None
+
+
 def resolve_surface_runtime(runtime=None, freesurfer_home=None):
     if runtime is not None:
         return 'native', Path(runtime).expanduser().resolve()
@@ -30,6 +46,9 @@ def resolve_surface_runtime(runtime=None, freesurfer_home=None):
     home = resolve_freesurfer_home()
     if home is not None:
         return ('native' if (home / 'runtime.json').is_file() else 'freesurfer'), home
+    bundled = bundled_surface_runtime()
+    if bundled is not None:
+        return 'native', bundled
     return 'native', default_surface_runtime()
 
 

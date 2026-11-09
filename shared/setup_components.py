@@ -68,7 +68,7 @@ def licence_version(licence, root=REPO_ROOT):
 def licence_record(licence_id, root=REPO_ROOT):
     licence = _licences()[licence_id]
     path = licence_file(licence, root)
-    return dict(id=licence_id, name=licence["name"], url=licence["url"], file=path.as_posix() if path else None,
+    return dict(id=licence_id, name=licence["name"], url=licence["url"], file=str(path) if path else None,
                 version=licence_version(licence, root))
 
 

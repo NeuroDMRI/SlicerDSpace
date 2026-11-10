@@ -438,8 +438,8 @@ export SUBJECT_ROOT="/path/to/sub-01"
                   <figcaption><strong>DDSeg 组织先验：</strong> 扩散原生空间 GM/WM/CSF 组织分割与连续脑脊液概率体数据（03_structural/ddseg/ProbabilisticMap_CSF.nii.gz）。</figcaption>
                 </figure>
                 <figure class="demo-fig">
-                  <img src="assets/img/res-parcel.jpg" width="1200" height="900" loading="lazy" alt="DDParcel 皮层与皮层下脑区分割">
-                  <figcaption><strong>DDParcel 脑区分割：</strong> 定义脑区 ROI 掩膜的扩散原生空间皮层与皮层下标签（DDSurfer-wmparc.nii.gz）。</figcaption>
+                  <img src="assets/img/demo-box2-app1-steps.jpg" width="1200" height="900" loading="lazy" alt="派生的皮层 iFW 轴位切片及叠加 DDParcel 边界的皮层局部放大区">
+                  <figcaption><strong>派生 iFW 与 DDParcel 脑区放大图：</strong> 逐体素经 T2 与脑脊液校正的皮层 iFW（0–0.4 灰度，轴位切片 z = 64）及展示 DDParcel 边界的皮层局部放大区。</figcaption>
                 </figure>
               </div>
             </div>
@@ -447,8 +447,8 @@ export SUBJECT_ROOT="/path/to/sub-01"
             <div class="demo-part">
               <h4>5. 最终结果（Final Results）</h4>
               <figure class="demo-fig demo-fig-wide">
-                <img src="assets/img/demo-box2-ifw.jpg" width="1607" height="432" loading="lazy" alt="Box 2a 皮层间质自由水分析流程与脑区 iFW 统计结果">
-                <figcaption><strong>Box 2a — HCP 受试者 100307 的皮层间质自由水（iFW）分析：</strong> 结合 DIPY 自由水分数图与 DDSeg 脑脊液概率图，得到经 CSF 校正的皮层 iFW 图（0–0.4 灰度局部放大图叠加 DDParcel 皮层边界）及各皮层脑区均值。</figcaption>
+                <img src="assets/img/demo-box2-ifw.jpg" width="2160" height="578" loading="lazy" alt="Box 2a 皮层间质自由水分析流程与脑区 iFW 统计结果">
+                <figcaption><strong>Box 2a — HCP 受试者 100307 的皮层间质自由水（iFW）分析：</strong> 自由水估计、T2 弛豫校正与 DDSeg 脑脊液概率相减得到皮层 iFW（0–0.4 灰度插图叠加 DDParcel 皮层边界）及各脑区均值。</figcaption>
               </figure>
               <div class="table-wrap demo-table-wrap">
                 <table class="demo-table">
@@ -457,32 +457,32 @@ export SUBJECT_ROOT="/path/to/sub-01"
                     <tr>
                       <th scope="col">皮层脑区</th>
                       <th scope="col">DDParcel 标签 ID（左 / 右半球）</th>
-                      <th scope="col">有效体素数（左 / 右半球）</th>
+                      <th scope="col">有效体素数（左 / 右半球；Box 2a 左半球）</th>
                       <th scope="col">未校正 fwf 均值（左 / 右半球）</th>
-                      <th scope="col">皮层 iFW（Box 2a）</th>
+                      <th scope="col">皮层 iFW 均值 ± 标准差（Box 2a 左半球）</th>
                     </tr>
                   </thead>
                   <tbody>
                     <tr>
                       <td>中央前回（Precentral gyrus）</td>
                       <td>1024 / 2024</td>
-                      <td>7,870 / 7,973</td>
+                      <td>7,870 / 7,973 (7,197)</td>
                       <td>0.273 / 0.285</td>
-                      <td><strong>0.101</strong></td>
+                      <td><strong>0.101 ± 0.066</strong></td>
                     </tr>
                     <tr>
                       <td>中央后回（Postcentral gyrus）</td>
                       <td>1022 / 2022</td>
-                      <td>5,700 / 5,305</td>
+                      <td>5,700 / 5,305 (5,368)</td>
                       <td>0.274 / 0.270</td>
-                      <td><strong>0.092</strong></td>
+                      <td><strong>0.092 ± 0.068</strong></td>
                     </tr>
                     <tr>
                       <td>楔前叶（Precuneus）</td>
                       <td>1025 / 2025</td>
-                      <td>6,498 / 6,578</td>
+                      <td>6,498 / 6,578 (5,278)</td>
                       <td>0.276 / 0.299</td>
-                      <td><strong>0.063</strong></td>
+                      <td><strong>0.063 ± 0.056</strong></td>
                     </tr>
                   </tbody>
                 </table>
@@ -568,7 +568,7 @@ export SUBJECT_ROOT="/path/to/sub-01"
                     <pre><code>"$SLICER_LAUNCHER" --launch PythonSlicer \
   "$DSPACE_REPO/scripts/analyze_regions.py" \
   --source-manifest "$SUBJECT_ROOT/outputs/00_run_metadata/run_orchestration_manifest.json" \
-  --regions 1024 2024 1022 2022 1021 2021 1033 2033 \
+  --regions 1024 2024 1022 2022 1021 2021 1032 2032 1033 2033 \
   --metrics fwf noddi_ndi --tissue --surface \
   --output-dir "$SUBJECT_ROOT/outputs/05_statistics/box2_ndi_surface_regions"</code></pre>
                   </div>
@@ -578,14 +578,18 @@ export SUBJECT_ROOT="/path/to/sub-01"
 
             <div class="demo-part">
               <h4>4. 中间结果（Intermediate Results）</h4>
-              <div class="demo-fig-grid demo-fig-grid-2">
+              <div class="demo-fig-grid">
                 <figure class="demo-fig">
                   <img src="assets/img/res-ndi.jpg" width="1200" height="900" loading="lazy" alt="轴位与冠状位平面上的 NODDI 神经突密度指数图">
                   <figcaption><strong>NODDI 神经突密度（NDI）：</strong> AMICO 在扩散原生空间拟合的全脑胞内神经突密度指数（02_microstructure/noddi/100307_noddi_ndi.nii.gz）。</figcaption>
                 </figure>
                 <figure class="demo-fig">
-                  <img src="assets/img/out-surfaces.jpg" width="1200" height="900" loading="lazy" alt="DDSurfer 原生皮层曲面、皮层厚度与 Desikan-Killiany 脑区划分">
-                  <figcaption><strong>DDSurfer 皮层曲面与形态学指标：</strong> 扩散原生空间白质与软脑膜网格、逐顶点皮层厚度以及 Desikan–Killiany（aparc）皮层脑区划分。</figcaption>
+                  <img src="assets/img/demo-box2-app2-surface-priors.jpg" width="1200" height="900" loading="lazy" alt="DDSurfer 原生皮层表面 Desikan-Killiany 分区与逐顶点皮层厚度">
+                  <figcaption><strong>皮层表面分区与厚度：</strong> 包含 34 个 Desikan–Killiany（aparc）皮层分区与逐顶点皮层厚度（0–5 毫米）的原生软脑膜表面。</figcaption>
+                </figure>
+                <figure class="demo-fig">
+                  <img src="assets/img/demo-box2-app2-regional-maps.jpg" width="1200" height="900" loading="lazy" alt="映射至原生软脑膜表面的脑区平均 NDI 与脑区平均皮层厚度">
+                  <figcaption><strong>脑区级皮层表面映射图：</strong> 投影至原生软脑膜网格的脑区平均 NDI（0.3–0.5）与脑区平均皮层厚度（0–5 毫米）。</figcaption>
                 </figure>
               </div>
             </div>
@@ -593,56 +597,63 @@ export SUBJECT_ROOT="/path/to/sub-01"
             <div class="demo-part">
               <h4>5. 最终结果（Final Results）</h4>
               <figure class="demo-fig demo-fig-wide">
-                <img src="assets/img/demo-box2-ndi-thickness.jpg" width="1607" height="520" loading="lazy" alt="Box 2b 脑区 NDI 与皮层厚度曲面映射及联合散点分布">
-                <figcaption><strong>Box 2b — HCP 受试者 100307 的脑区 NDI 与皮层厚度联合分析：</strong> 映射至扩散原生皮层曲面的脑区级 NODDI NDI（0.3–0.5）与皮层厚度（0–5 mm），以及二者在全脑各皮层脑区上的联合分布。</figcaption>
+                <img src="assets/img/demo-box2-ndi-thickness.jpg" width="2160" height="726" loading="lazy" alt="Box 2b 脑区 NDI 与皮层厚度曲面映射及联合散点分布">
+                <figcaption><strong>Box 2b — HCP 受试者 100307 的脑区 NDI 与皮层厚度联合分析：</strong> 脑区级 NODDI NDI（0.3–0.5）与皮层厚度（0–5 毫米）映射至原生软脑膜表面，并在各皮层脑区间进行联合对比（突出标注颞极、额极与距状沟周围皮层）。</figcaption>
               </figure>
               <div class="table-wrap demo-table-wrap">
                 <table class="demo-table">
-                  <caption>HCP 受试者 100307 代表性皮层脑区的 NODDI NDI 与曲面皮层厚度统计（100307_ROIWise-Microstructure.csv 与 lh/rh.aparc.stats）</caption>
+                  <caption>HCP 受试者 100307 的代表性脑区 NODDI NDI 与皮层表面厚度（Box 2b cortical_profiles.csv 与双侧 analyze_regions.py 汇总）</caption>
                   <thead>
                     <tr>
                       <th scope="col">皮层脑区（aparc）</th>
                       <th scope="col">DDParcel 标签 ID（左 / 右半球）</th>
-                      <th scope="col">脑区 NDI 均值 ± 标准差（左 / 右半球）</th>
-                      <th scope="col">曲面皮层厚度均值 ± 标准差（左 / 右半球，mm）</th>
-                      <th scope="col">曲面顶点数（左 / 右半球）</th>
+                      <th scope="col">Box 2b 散点图剖面（左半球 NDI / 厚度）</th>
+                      <th scope="col">双侧组织有效掩膜 NDI（左 / 右半球）</th>
+                      <th scope="col">aparc.stats 皮层厚度（左 / 右半球，毫米）</th>
                     </tr>
                   </thead>
                   <tbody>
                     <tr>
                       <td>距状裂周围皮层（Pericalcarine，初级视觉）</td>
                       <td>1021 / 2021</td>
+                      <td>0.413 / 1.644 毫米</td>
                       <td>0.428 ± 0.095 / 0.422 ± 0.101</td>
                       <td>1.583 ± 0.411 / 1.696 ± 0.419</td>
-                      <td>2,097 / 2,600</td>
                     </tr>
                     <tr>
                       <td>中央后回（Postcentral，初级躯体感觉）</td>
                       <td>1022 / 2022</td>
+                      <td>0.387 / 2.406 毫米</td>
                       <td>0.413 ± 0.094 / 0.429 ± 0.097</td>
                       <td>2.241 ± 0.588 / 2.170 ± 0.611</td>
-                      <td>7,229 / 6,371</td>
                     </tr>
                     <tr>
                       <td>中央前回（Precentral，初级运动）</td>
                       <td>1024 / 2024</td>
+                      <td>0.406 / 2.913 毫米</td>
                       <td>0.436 ± 0.095 / 0.431 ± 0.096</td>
                       <td>2.703 ± 0.628 / 2.686 ± 0.647</td>
-                      <td>7,542 / 7,595</td>
                     </tr>
                     <tr>
                       <td>额上回（Superior frontal）</td>
                       <td>1028 / 2028</td>
+                      <td>0.357 / 3.071 毫米</td>
                       <td>0.374 ± 0.088 / 0.384 ± 0.091</td>
                       <td>2.829 ± 0.571 / 2.816 ± 0.674</td>
-                      <td>13,321 / 11,175</td>
+                    </tr>
+                    <tr>
+                      <td>额极（Frontal pole）</td>
+                      <td>1032 / 2032</td>
+                      <td>0.360 / 3.669 毫米</td>
+                      <td>0.381 ± 0.107 / 0.377 ± 0.114</td>
+                      <td>3.149 ± 0.692 / 2.952 ± 0.728</td>
                     </tr>
                     <tr>
                       <td>颞极（Temporal pole）</td>
                       <td>1033 / 2033</td>
+                      <td>0.426 / 4.410 毫米</td>
                       <td>0.466 ± 0.149 / 0.424 ± 0.135</td>
                       <td>3.508 ± 0.609 / 3.514 ± 1.284</td>
-                      <td>817 / 1,074</td>
                     </tr>
                   </tbody>
                 </table>
@@ -745,8 +756,8 @@ export SUBJECT_ROOT="/path/to/sub-01"
               <h4>4. 中间结果（Intermediate Results）</h4>
               <div class="demo-fig-grid">
                 <figure class="demo-fig">
-                  <img src="assets/img/res-tissue.jpg" width="1200" height="900" loading="lazy" alt="输入至 5TT 体数据的 DDSeg 组织分割">
-                  <figcaption><strong>用于 5TT 的 DDSeg 组织先验：</strong> 在脑掩膜内归一化的原生空间 GM/WM/CSF 组织概率（04_tractography/act_prep/100307_5tt_from_ddseg.nii.gz）。</figcaption>
+                  <img src="assets/img/demo-box3-app1-fod.jpg" width="1200" height="900" loading="lazy" alt="MSMT-CSD FOD 球谐方向分布块与 ACT 5TT 组织先验">
+                  <figcaption><strong>MSMT-CSD FOD 与 5TT 组织先验：</strong> 真实的 5 × 5 球谐 FOD 方向分布块（100307_wmfod_norm.mif）及通过 5ttcheck 校验的 5TT 体积（100307_5tt_from_ddseg.nii.gz）。</figcaption>
                 </figure>
                 <figure class="demo-fig">
                   <img src="assets/img/res-parcel.jpg" width="1200" height="900" loading="lazy" alt="DDParcel 皮层下先验与 84 个连接组节点">
@@ -763,7 +774,7 @@ export SUBJECT_ROOT="/path/to/sub-01"
               <h4>5. 最终结果（Final Results）</h4>
               <div class="demo-fig-grid demo-fig-grid-2">
                 <figure class="demo-fig">
-                  <img src="assets/img/demo-box3-csd-connectome.jpg" width="1607" height="530" loading="lazy" alt="Box 3a CSD/ACT 纤维束追踪与 SIFT2 结构连接组流程">
+                  <img src="assets/img/demo-box3-csd-connectome.jpg" width="2160" height="735" loading="lazy" alt="Box 3a CSD/ACT 纤维束追踪与 SIFT2 结构连接组流程">
                   <figcaption><strong>Box 3a — CSD/ACT 纤维束追踪与 SIFT2 连接组流程：</strong> FOD、5TT 组织分割与 DDParcel 脑区分割相结合，生成 ACT 全脑纤维束图与对数尺度 SIFT2 结构连接组矩阵（0–9.2）。</figcaption>
                 </figure>
                 <figure class="demo-fig">
@@ -832,7 +843,7 @@ export SUBJECT_ROOT="/path/to/sub-01"
               <h4>1. 概览（Overview）</h4>
               <p>紧邻皮层下方的浅表白质（SWM）主要由连接相邻皮层脑回的短联合纤维（SAF）构成（Shastin et al. NeuroImage 2022; Schilling et al. NeuroImage 2023）。SlicerDSpace 集成了基于皮层曲面的 SAF 扩散原生空间 Python 实现（tractography/saf.py），结合 DDSurfer 白质/软脑膜网格、后处理皮层标签与 CSD FOD，直接在扩散空间内进行中皮层种子点采样与皮层内终止短联合纤维的几何筛选。</p>
               <div class="demo-formula">
-                <p><strong>受皮层曲面约束的 SAF 生成逻辑（tractography/saf.py）：</strong> 从后处理后的原生 DDSurfer 目录（_subjects/&lt;subject_id&gt;）中，SlicerDSpace 读取 lh/rh.white、lh/rh.pial、lh/rh.cortex.label 与 lh/rh.aparc.annot，构建中皮层种子曲面及逐顶点皮层半厚度（0–2.5 mm）。流线通过 tckgen 由归一化 CSD FOD 生成（或从 --saf-pregenerated-tractogram 读取），并依次经曲面三角面片相交检测、灰质–白质–灰质（GWG）皮层内终止判定、内侧壁排除（cortex.label）、同侧半球约束以及物理长度范围过滤。</p>
+                <p><strong>受皮层曲面约束的 SAF 生成逻辑（tractography/saf.py）：</strong> SlicerDSpace 从后处理后的原生 DDSurfer 目录（_subjects/&lt;subject_id&gt;）读取 lh/rh.white、lh/rh.pial、lh/rh.cortex.label 与 lh/rh.aparc.annot，构建中皮层种子表面（(WM + pial) / 2）及逐顶点皮层半厚度（0–2.5 毫米）。流线由归一化 CSD FOD 经 tckgen 生成（或通过 --saf-pregenerated-tractogram 读取），并依次经皮层表面三角面相交判定、灰质–白质–灰质（GWG）皮层内终止判定、内侧壁剔除（cortex.label）、同侧半球约束及物理长度过滤。</p>
               </div>
               <p class="demo-scope-note"><strong>演示范围说明：</strong> Schilling 等（2023）在大型多中心队列中研究了浅表白质（SWM）微结构随年龄的变化轨迹。此处 SlicerDSpace 在 HCP 受试者 100307 上演示单受试者扩散原生空间的 SAF 提取流程；输出结果代表受皮层曲面约束的纤维束追踪候选流线，而非组织学金标准。</p>
             </div>
@@ -888,12 +899,12 @@ export SUBJECT_ROOT="/path/to/sub-01"
               <h4>4. 中间结果（Intermediate Results）</h4>
               <div class="demo-fig-grid demo-fig-grid-2">
                 <figure class="demo-fig">
-                  <img src="assets/img/out-surfaces.jpg" width="1200" height="900" loading="lazy" alt="用于 SAF 种子点生成的 DDSurfer 原生皮层曲面与厚度图">
-                  <figcaption><strong>原生白质/软脑膜曲面与皮层厚度：</strong> 在扩散原生空间重建，用于定义中皮层种子曲面、皮层半厚度（0–2.5 mm）以及 cortex.label 皮层掩膜。</figcaption>
+                  <img src="assets/img/demo-box3-app2-surfaces.jpg" width="1200" height="900" loading="lazy" alt="DDSurfer 原生白质表面、软脑膜表面、派生的中皮层表面及浅表白质 CSD FOD 球谐图形">
+                  <figcaption><strong>白质、软脑膜与中皮层表面 + FOD：</strong> 原生 lh.white 与 lh.pial 网格（164,239 个顶点）派生出按半厚度（0–2.5 毫米）着色的中皮层种子表面，并配合浅表白质 CSD FOD 方向分布。</figcaption>
                 </figure>
                 <figure class="demo-fig">
-                  <img src="assets/img/res-tr-csd.jpg" width="1200" height="900" loading="lazy" alt="驱动流线传播的扩散原生空间 CSD FOD 取向分布场">
-                  <figcaption><strong>CSD FOD 纤维取向分布场：</strong> 驱动相邻皮层脑回间流线传播的归一化多组织 FOD（100307_wmfod_norm.mif）。</figcaption>
+                  <img src="assets/img/demo-box3-app2-tractogram.jpg" width="1200" height="900" loading="lazy" alt="过滤后的原生空间短联络纤维束图">
+                  <figcaption><strong>过滤后的原生空间 SAF 纤维束图：</strong> 13,043 条经几何过滤的短联络纤维（左半球 6,525 / 右半球 6,518；中位长度 19.78 毫米），按局部 RAS 方向着色。</figcaption>
                 </figure>
               </div>
             </div>
@@ -901,8 +912,8 @@ export SUBJECT_ROOT="/path/to/sub-01"
             <div class="demo-part">
               <h4>5. 最终结果（Final Results）</h4>
               <figure class="demo-fig demo-fig-wide">
-                <img src="assets/img/demo-box3-saf.jpg" width="1607" height="557" loading="lazy" alt="Box 3b 基于皮层曲面的短联合纤维（SAF）追踪流程、长度直方图与脑区纤维计数">
-                <figcaption><strong>Box 3b — HCP 受试者 100307 基于皮层曲面的短联合纤维（SAF）追踪：</strong> 结合 CSD FOD、皮层标签（Cortex label，排除内侧壁）与皮层半厚度（0–2.5 mm），生成筛选后的 SAF 纤维束图、流线长度分布（0–40 mm）以及各皮层脑区的 SAF 计数（从额上回至内嗅皮层）。</figcaption>
+                <img src="assets/img/demo-box3-saf.jpg" width="2160" height="675" loading="lazy" alt="Box 3b 基于皮层曲面的短联合纤维（SAF）追踪流程、长度直方图与脑区纤维计数">
+                <figcaption><strong>Box 3b — HCP 受试者 100307 的基于皮层表面短联络纤维（SAF）：</strong> 白质与软脑膜表面派生中皮层表面（0–2.5 毫米半厚度）以联合 CSD FOD 引导 SAF 过滤；右侧统计流线长度分布（10–40 毫米）及左半球皮层非排他脑区 SAF 计数（1 毫米端点至表面阈值，从额上回至内嗅皮层）。</figcaption>
               </figure>
               <div class="table-wrap demo-table-wrap">
                 <table class="demo-table">
@@ -917,10 +928,16 @@ export SUBJECT_ROOT="/path/to/sub-01"
                   </thead>
                   <tbody>
                     <tr>
-                      <td>筛选后的 SAF 纤维束图</td>
+                      <td>全脑种子 SAF 纤维束图（Box 3b）</td>
                       <td>04_tractography/saf/&lt;run&gt;/SAF.tck 与 SAF.vtk</td>
-                      <td>全种子点 Box 3b 直方图覆盖 0–40 mm（峰值位于 15–30 mm）；脑区流线计数以额上回最高（约 920 条），内嗅皮层最低</td>
+                      <td>13,043 条流线（左 6,525 / 右 6,518；中位数 = 19.78 毫米，p05 = 3.70 毫米，p95 = 34.63 毫米；10–40 毫米分箱计数：1,841、1,988、1,987、1,956、1,880、577）</td>
                       <td>tckstats 流线计数与 NiBabel 解码流线计数一致；已导出供 Slicer 可视化的 VTK polydata</td>
+                    </tr>
+                    <tr>
+                      <td>脑区 SAF 端点计数（Box 3b）</td>
+                      <td>lh.white 与 lh.aparc.annot（1 毫米阈值）</td>
+                      <td>左半球 34 个 DK 皮层分区：额上回（925）、额中回吻侧（754）、中央前回（604）、顶上小叶（456）、枕外侧回（431），直至内嗅皮层（29）</td>
+                      <td>左半球皮层非排他流线计数（至少一个端点距 lh.white ≤ 1.0 毫米）</td>
                     </tr>
                     <tr>
                       <td>10 万条预生成流线重筛选基准</td>

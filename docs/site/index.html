@@ -438,8 +438,8 @@ export SUBJECT_ROOT="/path/to/sub-01"
                   <figcaption><strong>DDSeg tissue priors:</strong> Native-space GM/WM/CSF segmentation and continuous CSF probability volume (03_structural/ddseg/ProbabilisticMap_CSF.nii.gz).</figcaption>
                 </figure>
                 <figure class="demo-fig">
-                  <img src="assets/img/res-parcel.jpg" width="1200" height="900" loading="lazy" alt="DDParcel cortical and subcortical brain parcellation">
-                  <figcaption><strong>DDParcel brain parcellation:</strong> Native-space cortical and subcortical labels defining the regional ROI masks (DDSurfer-wmparc.nii.gz).</figcaption>
+                  <img src="assets/img/demo-box2-app1-steps.jpg" width="1200" height="900" loading="lazy" alt="Derived cortical iFW axial slice and enlarged cortical ROI with DDParcel boundaries">
+                  <figcaption><strong>Derived iFW &amp; DDParcel ROI zoom:</strong> Voxel-wise T2- and CSF-corrected cortical iFW (0–0.4 greyscale, axial slice z = 64) and enlarged cortical ROI showing DDParcel boundaries.</figcaption>
                 </figure>
               </div>
             </div>
@@ -447,8 +447,8 @@ export SUBJECT_ROOT="/path/to/sub-01"
             <div class="demo-part">
               <h4>5. Final Results</h4>
               <figure class="demo-fig demo-fig-wide">
-                <img src="assets/img/demo-box2-ifw.jpg" width="1607" height="432" loading="lazy" alt="Box 2a cortical interstitial free water workflow and regional iFW summary">
-                <figcaption><strong>Box 2a — Cortical interstitial free water (iFW) on HCP subject 100307:</strong> Combining the DIPY free-water map and DDSeg CSF probability yields the CSF-corrected cortical iFW map (0–0.4 greyscale inset with DDParcel cortical boundaries) and regional cortical summaries.</figcaption>
+                <img src="assets/img/demo-box2-ifw.jpg" width="2160" height="578" loading="lazy" alt="Box 2a cortical interstitial free water workflow and regional iFW summary">
+                <figcaption><strong>Box 2a — Cortical interstitial free water (iFW) on HCP subject 100307:</strong> Free-water estimation, T2 correction and DDSeg CSF probability subtraction yield cortical iFW (0–0.4 greyscale inset with DDParcel cortical boundaries) and regional cortical means.</figcaption>
               </figure>
               <div class="table-wrap demo-table-wrap">
                 <table class="demo-table">
@@ -457,32 +457,32 @@ export SUBJECT_ROOT="/path/to/sub-01"
                     <tr>
                       <th scope="col">Cortical region</th>
                       <th scope="col">DDParcel IDs (LH / RH)</th>
-                      <th scope="col">Valid voxels (LH / RH)</th>
+                      <th scope="col">Valid voxels (LH / RH; Box 2a LH)</th>
                       <th scope="col">Uncorrected fwf mean (LH / RH)</th>
-                      <th scope="col">Cortical iFW (Box 2a)</th>
+                      <th scope="col">Cortical iFW mean ± SD (Box 2a LH)</th>
                     </tr>
                   </thead>
                   <tbody>
                     <tr>
                       <td>Precentral gyrus</td>
                       <td>1024 / 2024</td>
-                      <td>7,870 / 7,973</td>
+                      <td>7,870 / 7,973 (7,197)</td>
                       <td>0.273 / 0.285</td>
-                      <td><strong>0.101</strong></td>
+                      <td><strong>0.101 ± 0.066</strong></td>
                     </tr>
                     <tr>
                       <td>Postcentral gyrus</td>
                       <td>1022 / 2022</td>
-                      <td>5,700 / 5,305</td>
+                      <td>5,700 / 5,305 (5,368)</td>
                       <td>0.274 / 0.270</td>
-                      <td><strong>0.092</strong></td>
+                      <td><strong>0.092 ± 0.068</strong></td>
                     </tr>
                     <tr>
                       <td>Precuneus</td>
                       <td>1025 / 2025</td>
-                      <td>6,498 / 6,578</td>
+                      <td>6,498 / 6,578 (5,278)</td>
                       <td>0.276 / 0.299</td>
-                      <td><strong>0.063</strong></td>
+                      <td><strong>0.063 ± 0.056</strong></td>
                     </tr>
                   </tbody>
                 </table>
@@ -568,7 +568,7 @@ export SUBJECT_ROOT="/path/to/sub-01"
                     <pre><code>"$SLICER_LAUNCHER" --launch PythonSlicer \
   "$DSPACE_REPO/scripts/analyze_regions.py" \
   --source-manifest "$SUBJECT_ROOT/outputs/00_run_metadata/run_orchestration_manifest.json" \
-  --regions 1024 2024 1022 2022 1021 2021 1033 2033 \
+  --regions 1024 2024 1022 2022 1021 2021 1032 2032 1033 2033 \
   --metrics fwf noddi_ndi --tissue --surface \
   --output-dir "$SUBJECT_ROOT/outputs/05_statistics/box2_ndi_surface_regions"</code></pre>
                   </div>
@@ -578,14 +578,18 @@ export SUBJECT_ROOT="/path/to/sub-01"
 
             <div class="demo-part">
               <h4>4. Intermediate Results</h4>
-              <div class="demo-fig-grid demo-fig-grid-2">
+              <div class="demo-fig-grid">
                 <figure class="demo-fig">
                   <img src="assets/img/res-ndi.jpg" width="1200" height="900" loading="lazy" alt="NODDI neurite density index map on axial and coronal planes">
                   <figcaption><strong>NODDI neurite density (NDI):</strong> Whole-brain intracellular neurite density fitted by AMICO in native diffusion space (02_microstructure/noddi/100307_noddi_ndi.nii.gz).</figcaption>
                 </figure>
                 <figure class="demo-fig">
-                  <img src="assets/img/out-surfaces.jpg" width="1200" height="900" loading="lazy" alt="DDSurfer native cortical surfaces, thickness and Desikan-Killiany parcellation">
-                  <figcaption><strong>DDSurfer surfaces &amp; cortical morphology:</strong> Native white and pial meshes, vertex-wise cortical thickness, and Desikan–Killiany (aparc) cortical parcellation.</figcaption>
+                  <img src="assets/img/demo-box2-app2-surface-priors.jpg" width="1200" height="900" loading="lazy" alt="DDSurfer native surface Desikan-Killiany parcellation and vertex-wise cortical thickness">
+                  <figcaption><strong>Surface parcellation &amp; thickness:</strong> Native pial surface with 34 Desikan–Killiany (aparc) cortical parcels and vertex-wise cortical thickness (0–5 mm).</figcaption>
+                </figure>
+                <figure class="demo-fig">
+                  <img src="assets/img/demo-box2-app2-regional-maps.jpg" width="1200" height="900" loading="lazy" alt="Parcel-wise regional mean NDI and regional mean cortical thickness mapped onto the native pial surface">
+                  <figcaption><strong>Parcel-wise regional surface maps:</strong> Regional mean NDI (0.3–0.5) and regional mean cortical thickness (0–5 mm) projected onto the native pial mesh.</figcaption>
                 </figure>
               </div>
             </div>
@@ -593,56 +597,63 @@ export SUBJECT_ROOT="/path/to/sub-01"
             <div class="demo-part">
               <h4>5. Final Results</h4>
               <figure class="demo-fig demo-fig-wide">
-                <img src="assets/img/demo-box2-ndi-thickness.jpg" width="1607" height="520" loading="lazy" alt="Box 2b regional NDI and cortical thickness maps and joint scatter plot">
-                <figcaption><strong>Box 2b — Regional NDI and cortical thickness on HCP subject 100307:</strong> Parcel-wise NODDI NDI (0.3–0.5) and cortical thickness (0–5 mm) mapped onto the native cortical surface alongside their joint regional distribution across cortical parcels.</figcaption>
+                <img src="assets/img/demo-box2-ndi-thickness.jpg" width="2160" height="726" loading="lazy" alt="Box 2b regional NDI and cortical thickness maps and joint scatter plot">
+                <figcaption><strong>Box 2b — Regional NDI and cortical thickness on HCP subject 100307:</strong> Parcel-wise NODDI NDI (0.3–0.5) and cortical thickness (0–5 mm) mapped onto the native pial surface and compared across cortical parcels (highlighting Temporal pole, Frontal pole and Pericalcarine).</figcaption>
               </figure>
               <div class="table-wrap demo-table-wrap">
                 <table class="demo-table">
-                  <caption>Representative regional NODDI NDI and surface cortical thickness on HCP subject 100307 (100307_ROIWise-Microstructure.csv &amp; lh/rh.aparc.stats)</caption>
+                  <caption>Representative regional NODDI NDI and surface cortical thickness on HCP subject 100307 (Box 2b cortical_profiles.csv &amp; bilateral analyze_regions.py summary)</caption>
                   <thead>
                     <tr>
                       <th scope="col">Cortical parcel (aparc)</th>
                       <th scope="col">DDParcel IDs (LH / RH)</th>
-                      <th scope="col">Regional NDI mean ± SD (LH / RH)</th>
-                      <th scope="col">Surface thickness mean ± SD (LH / RH, mm)</th>
-                      <th scope="col">Surface vertices (LH / RH)</th>
+                      <th scope="col">Box 2b scatter profile (LH NDI / thickness)</th>
+                      <th scope="col">Bilateral tissue-valid NDI (LH / RH)</th>
+                      <th scope="col">aparc.stats thickness (LH / RH, mm)</th>
                     </tr>
                   </thead>
                   <tbody>
                     <tr>
                       <td>Pericalcarine (primary visual)</td>
                       <td>1021 / 2021</td>
+                      <td>0.413 / 1.644 mm</td>
                       <td>0.428 ± 0.095 / 0.422 ± 0.101</td>
                       <td>1.583 ± 0.411 / 1.696 ± 0.419</td>
-                      <td>2,097 / 2,600</td>
                     </tr>
                     <tr>
                       <td>Postcentral (primary somatosensory)</td>
                       <td>1022 / 2022</td>
+                      <td>0.387 / 2.406 mm</td>
                       <td>0.413 ± 0.094 / 0.429 ± 0.097</td>
                       <td>2.241 ± 0.588 / 2.170 ± 0.611</td>
-                      <td>7,229 / 6,371</td>
                     </tr>
                     <tr>
                       <td>Precentral (primary motor)</td>
                       <td>1024 / 2024</td>
+                      <td>0.406 / 2.913 mm</td>
                       <td>0.436 ± 0.095 / 0.431 ± 0.096</td>
                       <td>2.703 ± 0.628 / 2.686 ± 0.647</td>
-                      <td>7,542 / 7,595</td>
                     </tr>
                     <tr>
                       <td>Superior frontal</td>
                       <td>1028 / 2028</td>
+                      <td>0.357 / 3.071 mm</td>
                       <td>0.374 ± 0.088 / 0.384 ± 0.091</td>
                       <td>2.829 ± 0.571 / 2.816 ± 0.674</td>
-                      <td>13,321 / 11,175</td>
+                    </tr>
+                    <tr>
+                      <td>Frontal pole</td>
+                      <td>1032 / 2032</td>
+                      <td>0.360 / 3.669 mm</td>
+                      <td>0.381 ± 0.107 / 0.377 ± 0.114</td>
+                      <td>3.149 ± 0.692 / 2.952 ± 0.728</td>
                     </tr>
                     <tr>
                       <td>Temporal pole</td>
                       <td>1033 / 2033</td>
+                      <td>0.426 / 4.410 mm</td>
                       <td>0.466 ± 0.149 / 0.424 ± 0.135</td>
                       <td>3.508 ± 0.609 / 3.514 ± 1.284</td>
-                      <td>817 / 1,074</td>
                     </tr>
                   </tbody>
                 </table>
@@ -745,8 +756,8 @@ export SUBJECT_ROOT="/path/to/sub-01"
               <h4>4. Intermediate Results</h4>
               <div class="demo-fig-grid">
                 <figure class="demo-fig">
-                  <img src="assets/img/res-tissue.jpg" width="1200" height="900" loading="lazy" alt="DDSeg tissue segmentation feeding the 5TT volume">
-                  <figcaption><strong>DDSeg tissue priors for 5TT:</strong> Native-space GM/WM/CSF probabilities normalized inside the brain mask (04_tractography/act_prep/100307_5tt_from_ddseg.nii.gz).</figcaption>
+                  <img src="assets/img/demo-box3-app1-fod.jpg" width="1200" height="900" loading="lazy" alt="MSMT-CSD FOD spherical-harmonic glyph patch and ACT 5TT tissue prior">
+                  <figcaption><strong>MSMT-CSD FODs &amp; 5TT tissue prior:</strong> Real 5 × 5 spherical-harmonic FOD glyph patch (100307_wmfod_norm.mif) alongside the 5ttcheck-verified 5TT volume (100307_5tt_from_ddseg.nii.gz).</figcaption>
                 </figure>
                 <figure class="demo-fig">
                   <img src="assets/img/res-parcel.jpg" width="1200" height="900" loading="lazy" alt="DDParcel subcortical priors and 84 connectome nodes">
@@ -763,7 +774,7 @@ export SUBJECT_ROOT="/path/to/sub-01"
               <h4>5. Final Results</h4>
               <div class="demo-fig-grid demo-fig-grid-2">
                 <figure class="demo-fig">
-                  <img src="assets/img/demo-box3-csd-connectome.jpg" width="1607" height="530" loading="lazy" alt="Box 3a CSD/ACT tractography and SIFT2 connectome workflow">
+                  <img src="assets/img/demo-box3-csd-connectome.jpg" width="2160" height="735" loading="lazy" alt="Box 3a CSD/ACT tractography and SIFT2 connectome workflow">
                   <figcaption><strong>Box 3a — CSD/ACT &amp; SIFT2 connectome workflow:</strong> FODs, 5TT tissue segmentation and DDParcel parcellation combine to produce the ACT tractogram and log-scaled SIFT2 connectome (0–9.2).</figcaption>
                 </figure>
                 <figure class="demo-fig">
@@ -832,7 +843,7 @@ export SUBJECT_ROOT="/path/to/sub-01"
               <h4>1. Overview</h4>
               <p>Superficial white matter (SWM) immediately beneath the cortex is dominated by short association fibers (SAFs) connecting adjacent cortical gyri (Shastin et al. NeuroImage 2022; Schilling et al. NeuroImage 2023). SlicerDSpace integrates a native-space Python port of the surface-based SAF pipeline (tractography/saf.py) that combines DDSurfer white/pial meshes, post-processed cortical labels and CSD FODs to seed and geometrically filter intracortical-terminating short association fibers directly in diffusion space.</p>
               <div class="demo-formula">
-                <p><strong>Surface-constrained SAF generation logic (tractography/saf.py):</strong> From the post-processed native DDSurfer directory (_subjects/&lt;subject_id&gt;), SlicerDSpace reads lh/rh.white, lh/rh.pial, lh/rh.cortex.label and lh/rh.aparc.annot to construct the midcortical seeding surface and vertex-wise cortical half-thickness (0–2.5 mm). Streamlines are generated from normalized CSD FODs via tckgen (or read from --saf-pregenerated-tractogram) and filtered by surface-face intersection, grey–white–grey (GWG) intracortical termination, medial-wall exclusion (cortex.label), same-hemisphere constraint and physical length filtering.</p>
+                <p><strong>Surface-constrained SAF generation logic (tractography/saf.py):</strong> From the post-processed native DDSurfer directory (_subjects/&lt;subject_id&gt;), SlicerDSpace reads lh/rh.white, lh/rh.pial, lh/rh.cortex.label and lh/rh.aparc.annot to derive the midcortical seeding surface ((WM + pial) / 2) and vertex-wise cortical half-thickness (0–2.5 mm). Streamlines are generated from normalized CSD FODs via tckgen (or read from --saf-pregenerated-tractogram) and filtered by surface-face intersection, grey–white–grey (GWG) intracortical termination, medial-wall exclusion (cortex.label), same-hemisphere constraint and physical length filtering.</p>
               </div>
               <p class="demo-scope-note"><strong>Scope note:</strong> Schilling et al. (2023) examined age-related SWM microstructural trajectories across large multi-site cohorts. Here, SlicerDSpace demonstrates single-subject native-space SAF extraction on HCP subject 100307; outputs represent surface-constrained tractographic SAF candidates rather than histological ground truth.</p>
             </div>
@@ -888,12 +899,12 @@ export SUBJECT_ROOT="/path/to/sub-01"
               <h4>4. Intermediate Results</h4>
               <div class="demo-fig-grid demo-fig-grid-2">
                 <figure class="demo-fig">
-                  <img src="assets/img/out-surfaces.jpg" width="1200" height="900" loading="lazy" alt="DDSurfer native cortical surfaces and thickness maps used for SAF seeding">
-                  <figcaption><strong>Native white/pial surfaces &amp; thickness:</strong> Reconstructed in native diffusion space to define the midcortical seeding surface, cortical half-thickness (0–2.5 mm) and cortex.label mask.</figcaption>
+                  <img src="assets/img/demo-box3-app2-surfaces.jpg" width="1200" height="900" loading="lazy" alt="DDSurfer native WM surface, Pial surface, derived Midcortical surface and superficial WM CSD FOD glyphs">
+                  <figcaption><strong>WM, Pial &amp; Midcortical surfaces + FODs:</strong> Native lh.white and lh.pial meshes (164,239 vertices) derive the midcortical seeding surface colored by half-thickness (0–2.5 mm) alongside superficial WM CSD FOD glyphs.</figcaption>
                 </figure>
                 <figure class="demo-fig">
-                  <img src="assets/img/res-tr-csd.jpg" width="1200" height="900" loading="lazy" alt="Native-space CSD FOD orientation field driving streamline propagation">
-                  <figcaption><strong>CSD FOD orientation field:</strong> Normalized multi-tissue FODs (100307_wmfod_norm.mif) driving streamline propagation between adjacent cortical gyri.</figcaption>
+                  <img src="assets/img/demo-box3-app2-tractogram.jpg" width="1200" height="900" loading="lazy" alt="Filtered native-space short association fiber tractogram">
+                  <figcaption><strong>Filtered native-space SAF tractogram:</strong> 13,043 geometrically filtered short association fibers (6,525 LH / 6,518 RH; median length 19.78 mm) colored by local RAS orientation.</figcaption>
                 </figure>
               </div>
             </div>
@@ -901,8 +912,8 @@ export SUBJECT_ROOT="/path/to/sub-01"
             <div class="demo-part">
               <h4>5. Final Results</h4>
               <figure class="demo-fig demo-fig-wide">
-                <img src="assets/img/demo-box3-saf.jpg" width="1607" height="557" loading="lazy" alt="Box 3b surface-based short association fibers workflow, SAF length histogram and regional SAF count">
-                <figcaption><strong>Box 3b — Surface-based short association fibers (SAF) on HCP subject 100307:</strong> Combining CSD FODs, Cortex label (excluding the medial wall) and Cortical half-thickness (0–2.5 mm) produces the filtered SAF tractogram, streamline length distribution (0–40 mm) and regional SAF counts across cortical parcels (from Superior frontal to Entorhinal).</figcaption>
+                <img src="assets/img/demo-box3-saf.jpg" width="2160" height="675" loading="lazy" alt="Box 3b surface-based short association fibers workflow, SAF length histogram and regional SAF count">
+                <figcaption><strong>Box 3b — Surface-based short association fibres (SAF) on HCP subject 100307:</strong> WM and pial surfaces derive the midcortical surface (0–2.5 mm half-thickness) to guide SAF filtering with CSD FODs; plots summarize streamline lengths (10–40 mm) and non-exclusive left-cortical regional SAF counts (1-mm endpoint-to-surface threshold, from Superior frontal to Entorhinal).</figcaption>
               </figure>
               <div class="table-wrap demo-table-wrap">
                 <table class="demo-table">
@@ -917,10 +928,16 @@ export SUBJECT_ROOT="/path/to/sub-01"
                   </thead>
                   <tbody>
                     <tr>
-                      <td>Filtered SAF tractogram</td>
+                      <td>Full-seed SAF tractogram (Box 3b)</td>
                       <td>04_tractography/saf/&lt;run&gt;/SAF.tck &amp; SAF.vtk</td>
-                      <td>Full-seed Box 3b histogram spans 0–40 mm (peak 15–30 mm); regional counts peak in Superior frontal (~920 streamlines) down to Entorhinal</td>
+                      <td>13,043 streamlines (6,525 LH / 6,518 RH; median = 19.78 mm, p05 = 3.70 mm, p95 = 34.63 mm; 10–40 mm bins: 1,841, 1,988, 1,987, 1,956, 1,880, 577)</td>
                       <td>tckstats count matches decoded NiBabel streamline count; VTK polydata exported for Slicer</td>
+                    </tr>
+                    <tr>
+                      <td>Regional SAF endpoint counts (Box 3b)</td>
+                      <td>lh.white &amp; lh.aparc.annot (1 mm threshold)</td>
+                      <td>34 left DK cortical regions: Superior frontal (925), Rostral middle frontal (754), Precentral (604), Superior parietal (456), Lateral occipital (431), down to Entorhinal (29)</td>
+                      <td>Non-exclusive left-cortical streamline counts with ≥1 endpoint within 1.0 mm of lh.white</td>
                     </tr>
                     <tr>
                       <td>100k pregenerated re-filter benchmark</td>

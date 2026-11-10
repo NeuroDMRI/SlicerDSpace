@@ -17,6 +17,7 @@ import { createRequire } from 'node:module';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const DOCS = path.resolve(here, '..', '..', 'docs', 'site');
 const OUT = path.resolve(here, 'out');
+const PERF_COUNT = JSON.parse(fs.readFileSync(path.join(DOCS, 'assets', 'data', 'performance.json'), 'utf8')).records.length;
 fs.mkdirSync(OUT, { recursive: true });
 
 const coreDir = process.env.PLAYWRIGHT_CORE;
@@ -155,6 +156,10 @@ async function runViewport(browser, origin, name, width, height, opts) {
 
   // 3. images
   await scrollThrough(page);
+  const demoBoxesStartClosed = await page.locator('details.demo-box').evaluateAll(items =>
+    items.length === 2 && items.every(d => !d.open && getComputedStyle(d.querySelector('.demo-box-body')).display === 'none'));
+  record(demoBoxesStartClosed, `${tag}: demonstration Box 2 and Box 3 modules start collapsed by default`);
+  await page.locator('details.demo-box').evaluateAll(items => items.forEach(d => { d.open = true; }));
   for (const image of await page.locator('img').all()) {
     if (await image.evaluate(i => !i.complete || i.naturalWidth === 0)) await image.scrollIntoViewIfNeeded();
   }
@@ -162,6 +167,7 @@ async function runViewport(browser, origin, name, width, height, opts) {
   const imgs = await page.evaluate(() => [...document.images].map((i) => ({
     src: i.getAttribute('src'), ok: i.complete && i.naturalWidth > 0,
   })));
+  await page.locator('details.demo-box').evaluateAll(items => items.forEach(d => { d.open = false; }));
   const bad = imgs.filter((i) => !i.ok).map((i) => i.src);
   record(bad.length === 0, `${tag}: all ${imgs.length} images loaded`, 'not loaded: ' + bad.join(', '));
   const webpSources = await page.locator('picture > img').evaluateAll(items => items.map(image => image.currentSrc));
@@ -451,20 +457,20 @@ async function runPerformance(browser, origin, width, noJs = false) {
   await evidence.scrollIntoViewIfNeeded();
   record(await evidence.evaluate(el => el.tagName === 'DIV' && !el.closest('details')) &&
     await page.locator('#performance-evidence .perf-table').isVisible(), prefix + ': complete comparison table is visible by default');
-  record(await page.locator('.perf-table .perf-record').count() === 17 &&
+  record(await page.locator('.perf-table .perf-record').count() === PERF_COUNT &&
     await page.locator('.perf-table .perf-record').evaluateAll(rows => rows.every(row => getComputedStyle(row).display !== 'none')),
-    prefix + ': all seventeen timing rows are visible without expanding anything');
+    prefix + ': all timing rows are visible without expanding anything');
   record(await page.locator('.perf-chart, .perf-filters, #perf-count').count() === 0,
     prefix + ': no filter controls, count or highlighted bar charts');
   record(await page.locator('.perf-methods').count() === 0, prefix + ': no separate method-details section');
-  record(await page.locator('.perf-toggle[aria-expanded="false"]').count() === 17 &&
+  record(await page.locator('.perf-toggle[aria-expanded="false"]').count() === PERF_COUNT &&
     await page.locator('.perf-detail-row.is-open').count() === 0 &&
     await page.locator('.perf-detail-row').evaluateAll(rows => rows.every(row => row.hidden && getComputedStyle(row).display === 'none')),
     prefix + ': all method and verification details start hidden, including without JavaScript');
   record(await page.locator('.perf-toggle-icon').evaluateAll(icons => icons.every(icon => icon.textContent === '+')),
     prefix + ': each timing row has an explicit plus control');
   if (noJs) {
-    record(await page.locator('.perf-toggle:disabled').count() === 17,
+    record(await page.locator('.perf-toggle:disabled').count() === PERF_COUNT,
       prefix + ': failed or disabled scripting does not expose details or leave active broken buttons');
   }
   record(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), prefix + ': no page overflow with the table visible');
@@ -494,7 +500,7 @@ async function runPerformance(browser, origin, width, noJs = false) {
       prefix + ': a fresh load never expands details from a retained URL fragment');
     const response = await context.request.get(origin + '/SlicerDSpace/assets/data/performance.json');
     const data = await response.json();
-    record(response.ok() && data.records.length === 17 && !JSON.stringify(data).includes('/data/chengjin/'), prefix + ': sanitized evidence download');
+    record(response.ok() && data.records.length === PERF_COUNT && !JSON.stringify(data).includes('/data/chengjin/'), prefix + ': sanitized evidence download');
     // Both the direct fragment and footer navigate to the already-visible table.
     await page.goto(origin + '/SlicerDSpace/index.html#performance', { waitUntil: 'load' });
     record(await page.locator('#performance-evidence .perf-table').isVisible(), prefix + ': #performance shows the complete table');
@@ -523,22 +529,22 @@ async function runPerformanceFailures(browser, origin) {
       if (mode === 'no root JS class') {
         await page.evaluate(() => document.documentElement.classList.remove('js'));
       }
-      record(await page.locator('.perf-record').count() === 17 &&
+      record(await page.locator('.perf-record').count() === PERF_COUNT &&
         await page.locator('.perf-table').isVisible() &&
-        await page.locator('.perf-detail-row').evaluateAll(rows => rows.length === 17 &&
-          rows.every(row => row.hidden && getComputedStyle(row).display === 'none')),
+        await page.locator('.perf-detail-row').evaluateAll((rows, expected) => rows.length === expected &&
+          rows.every(row => row.hidden && getComputedStyle(row).display === 'none'), PERF_COUNT),
         `${file} ${mode}: timing table remains visible and every detail stays hidden`);
       if (mode === 'no root JS class') {
         const toggle = page.locator('.perf-toggle[aria-controls="method-freewater"]');
         await toggle.locator('.perf-toggle-icon').click();
         record(await page.locator('#method-freewater').isVisible() &&
-          await page.locator('.perf-detail-row[hidden]').count() === 16,
+          await page.locator('.perf-detail-row[hidden]').count() === PERF_COUNT - 1,
           `${file} ${mode}: explicit plus opens only the selected detail`);
         await toggle.click();
-        record(await page.locator('.perf-detail-row[hidden]').count() === 17,
+        record(await page.locator('.perf-detail-row[hidden]').count() === PERF_COUNT,
           `${file} ${mode}: minus restores the compact timing-only table`);
       } else {
-        record(await page.locator('.perf-toggle:disabled').count() === 17,
+        record(await page.locator('.perf-toggle:disabled').count() === PERF_COUNT,
           `${file} ${mode}: unavailable toggles are safely disabled`);
       }
       await context.close();
@@ -711,6 +717,41 @@ async function runSkills(browser, origin) {
   }
 }
 
+async function runDemonstrations(browser, origin) {
+  for (const [file, width] of [['index.html', 1440], ['index.html', 390], ['zh.html', 1440], ['zh.html', 390]]) {
+    const context = await browser.newContext({ viewport: { width, height: 900 }, reducedMotion: 'reduce' });
+    const page = await context.newPage();
+    await page.route('**/*.mp4', route => route.abort());
+    await page.goto(`${origin}/${file}#demonstrations`, { waitUntil: 'load' });
+    const section = page.locator('#demonstrations');
+    await section.scrollIntoViewIfNeeded();
+    const box2 = page.locator('#demo-box-2');
+    const box3 = page.locator('#demo-box-3');
+    const prefix = `demonstrations ${file} ${width}px`;
+    record(await box2.evaluate(d => !d.open) && await box3.evaluate(d => !d.open) &&
+      await box2.locator('.demo-box-body').isHidden() && await box3.locator('.demo-box-body').isHidden(),
+      `${prefix}: Box 2 and Box 3 start collapsed by default`);
+    await box2.locator('.demo-box-summary').click();
+    record(await box2.evaluate(d => d.open) && await box2.locator('#demo-box2-app1').isVisible() &&
+      await box2.locator('#demo-box2-app2').isVisible() && await box3.evaluate(d => !d.open),
+      `${prefix}: clicking Box 2 expands only Box 2`);
+    await box3.locator('.demo-box-summary').click();
+    record(await box3.evaluate(d => d.open) && await box3.locator('#demo-box3-app1').isVisible() &&
+      await box3.locator('#demo-box3-app2').isVisible(),
+      `${prefix}: clicking Box 3 expands Box 3`);
+    await page.waitForFunction(() => [...document.querySelectorAll('#demonstrations img')].every(i => i.complete && i.naturalWidth > 0), null, { timeout: 10000 });
+    record(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+      `${prefix}: expanded Box 2 and Box 3 fit viewport without horizontal scroll`);
+    await section.screenshot({ path: path.join(OUT, `demonstrations-${file.replace('.html', '')}-${width}.png`) });
+    await box2.locator('.demo-box-summary').click();
+    await box3.locator('.demo-box-summary').click();
+    record(await box2.evaluate(d => !d.open) && await box3.evaluate(d => !d.open) &&
+      await box2.locator('.demo-box-body').isHidden() && await box3.locator('.demo-box-body').isHidden(),
+      `${prefix}: clicking Box 2 and Box 3 summaries again collapses both modules`);
+    await context.close();
+  }
+}
+
 async function runReadmeWordmarks(browser, origin) {
   for (const name of ['README.md', 'README.zh-CN.md']) {
     const readme = fs.readFileSync(path.resolve(DOCS, '..', '..', name), 'utf8');
@@ -777,7 +818,7 @@ async function runLanguages(browser, origin) {
       `language ${width}px: copy uses the Chinese Agent prompt`);
     await page.goto(origin + '/SlicerDSpace/zh.html#performance', { waitUntil: 'load' });
     const count = await page.locator('.perf-table .perf-record').count();
-    record(count === 17 && await page.locator('.perf-table').isVisible() &&
+    record(count === PERF_COUNT && await page.locator('.perf-table').isVisible() &&
         await page.locator('[data-perf-filter], #perf-count').count() === 0 &&
         await page.locator('#integrated tr[data-method]').count() === 30 &&
         await page.locator('.int-table .method-reference').count() > 35 &&
@@ -851,10 +892,12 @@ try {
     }
     await run404AndNoJs(browser, origin);
     await runSkills(browser, origin);
+    await runDemonstrations(browser, origin);
     await runLanguages(browser, origin);
     await runReadmeWordmarks(browser, origin);
     await runReferenceLinks(browser, origin);
   }
+  if (process.argv.includes('--demonstrations')) await runDemonstrations(browser, origin);
   if (process.argv.includes('--skills')) await runSkills(browser, origin);
   if (!process.argv.includes('--performance') && !process.argv.includes('--skills')) await runFooter(browser, origin);
   if (!process.argv.includes('--footer') && !process.argv.includes('--skills')) {

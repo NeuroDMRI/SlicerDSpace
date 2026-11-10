@@ -267,9 +267,9 @@ export SUBJECT_ROOT="/path/to/sub-01"
     <h2>运行效率优化。</h2>
     <p class="intro">各项操作的实测性能对比，附测量范围与实现细节。</p>
     <div class="perf-evidence" id="performance-evidence">
-      <div class="perf-intro-line"><p>????? 2026 ? 11 ? 10 ?</p><a href="assets/data/performance.json" download>下载测量数据（JSON）</a></div>
+      <div class="perf-intro-line"><p>目录更新于 2026 年 11 月 10 日</p><a href="assets/data/performance.json" download>下载测量数据（JSON）</a></div>
         <!-- measured-evidence:start -->
-<div class="perf-table-wrap" tabindex="0" role="region" aria-label="实测性能对比，小屏幕可横向滚动"><table class="perf-table"><caption>不同模型与测量范围不作横向排名。比值为原始实现耗时除以优化实现耗时。</caption><thead><tr><th scope="col">计算内容 / 范围</th><th scope="col">优化类型</th><th scope="col">原始实现</th><th scope="col">优化实现</th><th scope="col">实测比值</th></tr></thead><tbody><tr class="perf-record" data-category="implementation" data-record="freewater"><th scope="row"><button class="perf-toggle" type="button" aria-controls="method-freewater" aria-expanded="false" disabled><span class="perf-toggle-icon" aria-hidden="true">+</span><span>自由水 WLS</span></button><small>全脑 / 记录 2026-10-29</small></th><td><span class="perf-kind implementation">同方法实现优化</span></td><td>15.64 分钟</td><td>11.89 分钟</td><td>1.32x<small>耗时减少 23.99%</small></td></tr><tr class="perf-detail-row" id="method-freewater" hidden><td colspan="5"><div class="perf-method-body"><dl><dt>上游核查</dt><dd>测量使用 DIPY 1.12.1，为 10 月 29 日的最新稳定版。稳定版与主分支的拟合定义通过哈希核验，本次全脑配对已包含有界协议缓存复用。</dd><dt>优化方法</dt><dd>在有界内部缓存中复用仅依赖采集协议的衰减、谱和网格数组，同时使用无显式对角矩阵的权重计算和经源码核验的张量辅助函数。</dd><dt>原始实现</dt><dd>参考为已安装的原始 DIPY WLS；两条路径均使用一个数值线程。</dd><dt>一致性验证</dt><dd>13 个原始拟合参数、四个参数图或掩膜、仿射矩阵、数据类型和自动 QC 均一致，同样排除 116935 个体素。</dd><dt>测量范围</dt><dd>740916 个掩膜体素、288 次测量；自动 QC 通过，待解剖复核。</dd><dt>适用范围与限制</dt><dd>共享 Linux 主机上的单被试配对，先运行优化实现；未清空操作系统缓存，两次调用均包含原始参数导出。</dd></dl></div></td></tr><tr class="perf-record" data-category="implementation" data-record="wma"><th scope="row"><button class="perf-toggle" type="button" aria-controls="method-wma" aria-expanded="false" disabled><span class="perf-toggle-icon" aria-hidden="true">+</span><span>WMA 配准与分类</span></button><small>完整模块 / 记录 2026-10-20</small></th><td><span class="perf-kind implementation">同方法实现优化</span></td><td>102.10 分钟</td><td>74.22 分钟</td><td>1.38x<small>耗时减少 27.31%</small></td></tr><tr class="perf-detail-row" id="method-wma" hidden><td colspan="5"><div class="perf-method-body"><dl><dt>上游核查</dt><dd>作者提交 4532b911386d 与核查时的主分支及测量源码字节一致。</dd><dt>优化方法</dt><dd>通过批量几何复制和已验证的配准输入复用，减少重复 Python/VTK 遍历与准备。</dd><dt>原始实现</dt><dd>对比原作者处理流程与等价的批量及缓存实现，使用完全相同的 UKF 输入和图谱。</dd><dt>一致性验证</dt><dd>74 个解剖纤维束输出文件逐字节一致，源输入和作者代码未改变。</dd><dt>测量范围</dt><dd>包含完整配准和 74 束输出，未为计时增加流线降采样。</dd><dt>适用范围与限制</dt><dd>共享 Linux 主机上的一组完整模块配对。文件一致性与小束采样、解剖有效性分别评估；本组计时未包含后续坐标变换优化。</dd></dl></div></td></tr><tr class="perf-record" data-category="parallel" data-record="noddi"><th scope="row"><button class="perf-toggle" type="button" aria-controls="method-noddi" aria-expanded="false" disabled><span class="perf-toggle-icon" aria-hidden="true">+</span><span>NODDI / AMICO</span></button><small>全脑 / 记录 2026-10-20</small></th><td><span class="perf-kind parallel">原生多线程</span></td><td>29.15 分钟</td><td>5.19 分钟</td><td>5.61x<small>耗时减少 82.19%</small></td></tr><tr class="perf-detail-row" id="method-noddi" hidden><td colspan="5"><div class="perf-method-body"><dl><dt>上游核查</dt><dd>两组计时均核验为 AMICO 2.1.1，即核查时最新稳定版。多线程为上游已有功能。</dd><dt>优化方法</dt><dd>使用 AMICO 原生多线程，对比 1 线程和 8 线程。</dd><dt>原始实现</dt><dd>使用相同作者实现和模型设置，对比线程配置。</dd><dt>一致性验证</dt><dd>NDI、ODI、IsoVF、RMSE、NRMSE 及组织有效掩膜逐体素一致，仿射矩阵也一致。</dd><dt>测量范围</dt><dd>使用原始 740916 体素脑掩膜和全新输出目录。</dd><dt>适用范围与限制</dt><dd>共享主机上的一组配对，反映该硬件的多线程收益，不外推为通用速度或完整工作流收益。</dd></dl></div></td></tr><tr class="perf-record" data-category="port" data-record="mkcurve"><th scope="row"><button class="perf-toggle" type="button" aria-controls="method-mkcurve" aria-expanded="false" disabled><span class="perf-toggle-icon" aria-hidden="true">+</span><span>MK-Curve QR / Python 移植版</span></button><small>64 体素数值计算块 / 记录 2026-10-22</small></th><td><span class="perf-kind port">Python 移植版计算</span></td><td>1.73 秒</td><td>1.09 秒</td><td>1.58x<small>耗时减少 36.70%</small></td></tr><tr class="perf-detail-row" id="method-mkcurve" hidden><td colspan="5"><div class="perf-method-body"><dl><dt>上游核查</dt><dd>MATLAB 参考提交为 9a213e1a5850，测量使用 SciPy 1.18.1 稳定版。此处仅比较 Python 移植版内部实现，不比较 MATLAB 速度，也不将上游原生批处理列为新方法。</dd><dt>优化方法</dt><dd>复用协议与设计矩阵检查及 LAPACK 工作区大小，保留相同的列主元 QR 和完整 b0 网格。</dd><dt>原始实现</dt><dd>在同一 Python 移植版中，对比 SciPy 1.18.1 公共 gelsy 求解器与经核验的底层驱动及缓存调用。</dd><dt>一致性验证</dt><dd>三个被试的原始系数、完整曲线、所有参数图和有效性判断均一致，已检查参考与批处理求解器。</dd><dt>测量范围</dt><dd>三个真实的 64 体素计算块，181 次测量、完整的 200–201 点 b0 网格，使用一个数值线程。</dd><dt>适用范围与限制</dt><dd>表中为被试 100206 默认 QR 实现的中位数，预热后交替重复三次。数值块计时不含输入准备和导出，不外推为整个 ROI 或全脑耗时；SciPy 已提供原生批处理。</dd></dl></div></td></tr><tr class="perf-record" data-category="port" data-record="mkcurve-signal"><th scope="row"><button class="perf-toggle" type="button" aria-controls="method-mkcurve-signal" aria-expanded="false" disabled><span class="perf-toggle-icon" aria-hidden="true">+</span><span>MK-Curve 信号复用</span></button><small>64 体素计算块 / QR 后续增量优化 / 记录 2026-10-29</small></th><td><span class="perf-kind port">Python 移植版计算</span></td><td>1.19 秒</td><td>1.06 秒</td><td>1.13x<small>耗时减少 11.26%</small></td></tr><tr class="perf-detail-row" id="method-mkcurve-signal" hidden><td colspan="5"><div class="perf-method-body"><dl><dt>上游核查</dt><dd>10 月 29 日使用 SciPy 1.18.1 测量，保留源码及输入校验和、单线程设置。比较的是 Python 移植版完成 QR 优化之后的增量改动。</dd><dt>优化方法</dt><dd>在每个计算块的完整合成 b0 扫描中复用非 b0 信号及其对数，只更新候选 b0 列。</dd><dt>原始实现</dt><dd>对照为先前经过核验的 QR Python 实现与新增信号复用的实现；求解器、扫描网格、校正规则和单数值线程设置一致。</dd><dt>一致性验证</dt><dd>三份采集数据、两种求解器的原始及校正系数、完整曲线、参数图、残差和有效掩膜均完全一致。</dd><dt>测量范围</dt><dd>三份采集数据，各取 64 个体素、181 次测量及 200–201 个合成 b0 采样点。reference QR 路径耗时减少 10.24%–11.26%。计时范围为数值计算，不含输入准备和文件导出。</dd><dt>适用范围与限制</dt><dd>表中使用采集数据 1，与之前 QR 记录的选取方式一致。预热一次后交替重复三次。批量求解路径的耗时变化为减少 -1.50% 至 +3.07%，因此默认仅在 reference 求解器启用信号复用。此处是之前 QR 实现上的增量对照，收益不可叠加。</dd></dl></div></td></tr><tr class="perf-record" data-category="integration" data-record="dki"><th scope="row"><button class="perf-toggle" type="button" aria-controls="method-dki" aria-expanded="false" disabled><span class="perf-toggle-icon" aria-hidden="true">+</span><span>DKI WLS 参数计算</span></button><small>原生网格 24³ ROI / 记录 2026-10-22</small></th><td><span class="perf-kind integration">上游已有能力</span></td><td>37.11 秒</td><td>11.47 秒</td><td>3.24x<small>耗时减少 69.09%</small></td></tr><tr class="perf-detail-row" id="method-dki" hidden><td colspan="5"><div class="perf-method-body"><dl><dt>上游核查</dt><dd>核查时 DIPY 1.12.1 为最新稳定版。数组参数计算已存在于上游，此项为插件接入优化。</dd><dt>优化方法</dt><dd>每个数据块一次调用作者已有的数组峰度计算，避免逐体素重复创建结果包装对象。</dd><dt>原始实现</dt><dd>对比插件原有逐体素接入和现有 DIPY 数组 API 的使用，不视为超越作者原生向量化 API。</dd><dt>一致性验证</dt><dd>三个被试的所有导出体素数组和仿射矩阵一致，各交替重复三次。</dd><dt>测量范围</dt><dd>三个被试，每条路径重复三次，使用原生网格 ROI，不重采样；DIPY 1.12.1、SciPy 1.18.1。</dd><dt>适用范围与限制</dt><dd>表中展示被试 100307 的中位数。此项采用 DIPY 已有原生功能；尚无完成的全脑 DKI 配对，ROI 耗时不外推到全脑。</dd></dl></div></td></tr><tr class="perf-record" data-category="workflow" data-record="scheduling"><th scope="row"><button class="perf-toggle" type="button" aria-controls="method-scheduling" aria-expanded="false" disabled><span class="perf-toggle-icon" aria-hidden="true">+</span><span>独立的 FW 与 DKI 任务</span></button><small>原生网格 24³ ROI / 记录 2026-10-20</small></th><td><span class="perf-kind workflow">工作流调度</span></td><td>43.95 秒</td><td>24.63 秒</td><td>1.78x<small>耗时减少 43.96%</small></td></tr><tr class="perf-detail-row" id="method-scheduling" hidden><td colspan="5"><div class="perf-method-body"><dl><dt>上游核查</dt><dd>插件调度器的历史对照，不作为最新上游算法性能结论。</dd><dt>优化方法</dt><dd>在共享输入就绪后并发运行独立模型子进程，同时保留下游依赖关系。</dd><dt>原始实现</dt><dd>相同模型计算，对比串行调度和两个并发工作进程。</dd><dt>一致性验证</dt><dd>全部导出参数和掩膜数组一致，计时包含进程启动。</dd><dt>测量范围</dt><dd>两个独立模型，受 CPU 和内存预算约束的调度；此处并非全脑计时。</dd><dt>适用范围与限制</dt><dd>一组 ROI 配对，缩短调度墙钟时间，单模型计算不变。默认并发数仍为一，内存或 CPU 预算可能限制并发。</dd></dl></div></td></tr><tr class="perf-record" data-category="workflow" data-record="cohort-microstructure"><th scope="row"><button class="perf-toggle" type="button" aria-controls="method-cohort-microstructure" aria-expanded="false" disabled><span class="perf-toggle-icon" aria-hidden="true">+</span><span>队列并发调度：微结构分析</span></button><small>16 名 HCP 受试者 / 32 核预算 / 记录 2026-11-09</small></th><td><span class="perf-kind workflow">工作流调度</span></td><td>301.79 分钟</td><td>197.44 分钟</td><td>1.53x<small>耗时减少 34.58%</small></td></tr><tr class="perf-detail-row" id="method-cohort-microstructure" hidden><td colspan="5"><div class="perf-method-body"><dl><dt>上游核查</dt><dd>插件批处理调度器对比（scripts/run_batch_pipeline.py）；上游 DIPY 1.12.1、AMICO 2.1.1 与 SciPy 1.18.1 估计器保持不变。</dd><dt>优化方法</dt><dd>跨受试者阶段级资源感知调度在共享 32 核 CPU 与内存预算下重叠单线程 Free-water/DKI 与多线程 NODDI/MK-Curve 阶段。</dd><dt>原始实现</dt><dd>受试者级固定并发（4 名并发受试者，每名 8 线程）对比相同 32 核 CPU 上限下的自适应阶段级调度。</dd><dt>一致性验证</dt><dd>全部 16 名受试者的 DTI、Free-water、NODDI、DKI 与 MK-Curve 图均通过输出与 Rule-1 数值一致性校验。</dd><dt>测量范围</dt><dd>16 名全脑 HCP 受试者；完整微结构流程（DTI + FW + NODDI + DKI + MK-Curve）。</dd><dt>适用范围与限制</dt><dd>共享 Linux 主机上的 16 名 HCP 受试者队列（每组 32 核 CPU 预算）。通过将平均 CPU 利用率从 12.6 核提升至 21.2 核缩短队列总耗时，不改变单个模型估计算法。</dd></dl></div></td></tr><tr class="perf-record" data-category="workflow" data-record="cohort-anatomy"><th scope="row"><button class="perf-toggle" type="button" aria-controls="method-cohort-anatomy" aria-expanded="false" disabled><span class="perf-toggle-icon" aria-hidden="true">+</span><span>队列并发调度：解剖先验</span></button><small>16 名 HCP 受试者 / 32 核预算 + GPU / 记录 2026-11-09</small></th><td><span class="perf-kind workflow">工作流调度</span></td><td>78.43 分钟</td><td>68.34 分钟</td><td>1.15x<small>耗时减少 12.88%</small></td></tr><tr class="perf-detail-row" id="method-cohort-anatomy" hidden><td colspan="5"><div class="perf-method-body"><dl><dt>上游核查</dt><dd>插件批处理调度器对比（scripts/run_batch_pipeline.py）；上游 DDSeg、DDParcel、DDSurfer 与 FreeSurfer 流程保持不变。</dd><dt>优化方法</dt><dd>利用分阶段 CPU、内存与 GPU 配额，跨受试者协同调度 GPU 加速的 DDSeg/DDParcel/DDSurfer 推理与 CPU 密集型皮层后处理。</dd><dt>原始实现</dt><dd>同一 16 名受试者队列上的受试者级固定并发对比自适应阶段级调度。</dd><dt>一致性验证</dt><dd>全部 16 名受试者生成一致的组织分割、脑区分割、皮层曲面及质控结果。</dd><dt>测量范围</dt><dd>16 名全脑 HCP 受试者；完整解剖先验流程（DDSeg + DDParcel + DDSurfer）。</dd><dt>适用范围与限制</dt><dd>16 名 HCP 受试者队列。加速来自跨受试者重叠 CPU 皮层后处理与 GPU 推理，而非单受试者神经网络推理本身的加速。</dd></dl></div></td></tr><tr class="perf-record" data-category="workflow" data-record="cohort-tractography"><th scope="row"><button class="perf-toggle" type="button" aria-controls="method-cohort-tractography" aria-expanded="false" disabled><span class="perf-toggle-icon" aria-hidden="true">+</span><span>???????????????</span></button><small>16 名 HCP 受试者 / 32 核预算 + GPU / 记录 2026-11-09</small></th><td><span class="perf-kind workflow">工作流调度</span></td><td>78.61 分钟</td><td>70.66 分钟</td><td>1.11x<small>耗时减少 10.11%</small></td></tr><tr class="perf-detail-row" id="method-cohort-tractography" hidden><td colspan="5"><div class="perf-method-body"><dl><dt>上游核查</dt><dd>???????????scripts/run_batch_pipeline.py???? DDSeg?DDParcel?DIPY ??????WMQL?TractCloud ???????????</dd><dt>优化方法</dt><dd>?????????????? CPU ??? DTI ??????WMQL ????????????? GPU ??? DDSeg/DDParcel/TractCloud ???</dd><dt>原始实现</dt><dd>同一 16 名受试者队列上的受试者级固定并发对比自适应阶段级调度。</dd><dt>一致性验证</dt><dd>?? 16 ?????????????????WMQL ? TractCloud??????????????????</dd><dt>测量范围</dt><dd>16 ??? HCP ????????????????DDSeg + DDParcel + DTI + DTI-Det + WMQL + TractCloud + Connectome??</dd><dt>适用范围与限制</dt><dd>16 ?? HCP ????????????? GPU ?????/TractCloud ??? CPU ??????WMQL ???????</dd></dl></div></td></tr><tr class="perf-record" data-category="implementation" data-record="wma-filter"><th scope="row"><button class="perf-toggle" type="button" aria-controls="method-wma-filter" aria-expanded="false" disabled><span class="perf-toggle-icon" aria-hidden="true">+</span><span>WMA 图谱长度筛选</span></button><small>单个子步骤 / 记录 2026-10-20</small></th><td><span class="perf-kind implementation">同方法实现优化</span></td><td>134.29 秒</td><td>2.48 秒</td><td>54.06x<small>耗时减少 98.15%</small></td></tr><tr class="perf-detail-row" id="method-wma-filter" hidden><td colspan="5"><div class="perf-method-body"><dl><dt>上游核查</dt><dd>与完整模块记录使用相同的固定 WMA 源码核查。</dd><dt>优化方法</dt><dd>用等价的批量坐标与拓扑操作替代 Python 逐点几何复制。</dd><dt>原始实现</dt><dd>在完整的 1989106 条流线配准图谱上运行未修改的作者筛选器。</dd><dt>一致性验证</dt><dd>输出坐标、拓扑及固定种子采样完全一致。</dd><dt>测量范围</dt><dd>仅包含完整配准图谱的长度筛选子步骤。</dd><dt>适用范围与限制</dt><dd>一组完整图谱子步骤配对，不包含全部 WMA；局部比值不能与完整 WMA 结果相乘或叠加。</dd></dl></div></td></tr><tr class="perf-record" data-category="implementation" data-record="freewater-nls"><th scope="row"><button class="perf-toggle" type="button" aria-controls="method-freewater-nls" aria-expanded="false" disabled><span class="perf-toggle-icon" aria-hidden="true">+</span><span>自由水 NLS 调用分派</span></button><small>1728 体素 ROI / 记录 2026-10-21</small></th><td><span class="perf-kind implementation">同方法实现优化</span></td><td>12.47 秒</td><td>5.17 秒</td><td>2.41x<small>耗时减少 58.50%</small></td></tr><tr class="perf-detail-row" id="method-freewater-nls" hidden><td colspan="5"><div class="perf-method-body"><dl><dt>上游核查</dt><dd>在 Slicer 中测量 DIPY 1.12.1，作者 NLS、残差和雅可比源码哈希与注明日期的稳定版核查一致。</dd><dt>优化方法</dt><dd>直接调用经源码核验的作者 NLS、残差和雅可比函数主体，减少重复的关键字兼容性分派。</dd><dt>原始实现</dt><dd>比较原始 DIPY 1.12.1 串行 NLS 与相同函数主体，两条路径均使用一个数值线程。</dd><dt>一致性验证</dt><dd>三个被试的 13 个原始参数、导出参数图、仿射矩阵和 QC 判断全部一致。</dd><dt>测量范围</dt><dd>三个原生网格 12³ ROI，288 次测量；包含完整 ROI 处理和全新导出。</dd><dt>适用范围与限制</dt><dd>被试 100307 的中位数，预热后交替重复三次。仅限 ROI；测量早于后续 WLS 初始化及辅助函数修改，收益不可叠加。</dd></dl></div></td></tr><tr class="perf-record" data-category="implementation" data-record="wma-transform"><th scope="row"><button class="perf-toggle" type="button" aria-controls="method-wma-transform" aria-expanded="false" disabled><span class="perf-toggle-icon" aria-hidden="true">+</span><span>WMA 点坐标变换</span></button><small>1000 条流线 × 15 个点 / 记录 2026-10-21</small></th><td><span class="perf-kind implementation">同方法实现优化</span></td><td>24.6 毫秒</td><td>0.322 毫秒</td><td>76.31x<small>耗时减少 98.69%</small></td></tr><tr class="perf-detail-row" id="method-wma-transform" hidden><td colspan="5"><div class="perf-method-body"><dl><dt>上游核查</dt><dd>作者 register_two_subjects.py 的 SHA256 与 10 月 22 日 WMA 源码核查一致，测量批量 vtkTransform 路径。</dd><dt>优化方法</dt><dd>使用相同作者 vtkTransform，按有界数据块批量变换，替代逐点 Python/VTK 调用。</dd><dt>原始实现</dt><dd>对比原作者逐点循环与批量调用，保持 float64 点顺序和变换一致。</dd><dt>一致性验证</dt><dd>三个被试的全部变换点、小规模优化器完整轨迹和最终变换均一致。</dd><dt>测量范围</dt><dd>三个真实被试样例，独立优化器检查使用明确记录的合成偏移。</dd><dt>适用范围与限制</dt><dd>被试 100206 点变换重复五次的中位数，不包含完整配准。小规模优化器收益约为 1.27–1.28 倍，点变换比值不外推到整个 WMA。</dd></dl></div></td></tr><tr class="perf-record" data-category="implementation" data-record="wma-fibers"><th scope="row"><button class="perf-toggle" type="button" aria-controls="method-wma-fibers" aria-expanded="false" disabled><span class="perf-toggle-icon" aria-hidden="true">+</span><span>WMA 纤维数组转换</span></button><small>20000 条流线 × 15 个点 / 记录 2026-10-21</small></th><td><span class="perf-kind implementation">同方法实现优化</span></td><td>0.59 秒</td><td>12.8 毫秒</td><td>45.84x<small>耗时减少 97.82%</small></td></tr><tr class="perf-detail-row" id="method-wma-fibers" hidden><td colspan="5"><div class="perf-method-body"><dl><dt>上游核查</dt><dd>独立核验作者提交 4532b911386d 的 fibers.py；使用原生 VTK 数组采样，配准算法不变。</dd><dt>优化方法</dt><dd>按有界 NumPy 数据块，从 VTK 拓扑中提取与作者规则相同的最近邻流线采样点。</dd><dt>原始实现</dt><dd>对比原作者 FiberArray 转换与等价批量转换，不新增插值或流线缩减。</dd><dt>一致性验证</dt><dd>三个被试的全部数组、半球标记及独立小规模优化器轨迹和变换均一致。</dd><dt>测量范围</dt><dd>每个被试使用相同的 20000 条采样流线，保留原始最近邻规则和顺序。</dd><dt>适用范围与限制</dt><dd>被试 100206 转换重复五次的中位数；不代表完整 WMA。小规模优化器收益约 1.02–1.05 倍，历史采样失败状态不作改写。</dd></dl></div></td></tr><tr class="perf-record" data-category="implementation" data-record="wma-cache"><th scope="row"><button class="perf-toggle" type="button" aria-controls="method-wma-cache" aria-expanded="false" disabled><span class="perf-toggle-icon" aria-hidden="true">+</span><span>WMA 配准输入复用</span></button><small>三次准备调用 / 记录 2026-10-20</small></th><td><span class="perf-kind implementation">同方法实现优化</span></td><td>8.90 分钟</td><td>3.01 分钟</td><td>2.96x<small>耗时减少 66.17%</small></td></tr><tr class="perf-detail-row" id="method-wma-cache" hidden><td colspan="5"><div class="perf-method-body"><dl><dt>上游核查</dt><dd>保留相同作者实现的准备阶段配对，通过源码核验后复用，未重新标为最新版本测速。</dd><dt>优化方法</dt><dd>在不同种子间复用已验证的确定性图谱和被试长度筛选结果，每次仍执行作者随机采样。</dd><dt>原始实现</dt><dd>相同输入和固定种子下，对比三次原作者准备调用与首次缓存填充加后续复用。</dd><dt>一致性验证</dt><dd>配准输入签名逐位一致，源文件哈希不变。</dd><dt>测量范围</dt><dd>三次固定种子准备调用，包含首次缓存填充；不包含完整 WMA。</dd><dt>适用范围与限制</dt><dd>单被试一组配对，包含初次缓存建立；与 WMA 筛选和完整模块计时重叠，收益不能相加。</dd></dl></div></td></tr><tr class="perf-record" data-category="inherited" data-record="surface-mapping"><th scope="row"><button class="perf-toggle" type="button" aria-controls="method-surface-mapping" aria-expanded="false" disabled><span class="perf-toggle-icon" aria-hidden="true">+</span><span>DDSurfer 表面映射复用</span></button><small>左半球四个叠加图 / 记录 2026-10-20</small></th><td><span class="perf-kind inherited">继承的上游优化</span></td><td>13.38 秒</td><td>3.52 秒</td><td>3.80x<small>耗时减少 73.70%</small></td></tr><tr class="perf-detail-row" id="method-surface-mapping" hidden><td colspan="5"><div class="perf-method-body"><dl><dt>上游核查</dt><dd>优化继承 DDSurfer 提交 c3b2d40，不列为插件原创或最新 FreeSurfer 加速结论。</dd><dt>优化方法</dt><dd>将四个叠加图打包为一次多帧 mri_surf2surf 调用，共用表面配准。</dd><dt>原始实现</dt><dd>对比四次独立 FreeSurfer 调用和一次多帧调用；此优化继承 DDSurfer 上游 c3b2d40。</dd><dt>一致性验证</dt><dd>四个 MGH 输出逐字节一致，每图 163842 个顶点，源哈希不变。</dd><dt>测量范围</dt><dd>100307 左半球，四次独立 FreeSurfer 调用对比一次多帧调用。</dd><dt>适用范围与限制</dt><dd>单被试的命令计时，不含额外打包和核验；不代表表面重建或新的 FreeSurfer 算法。</dd></dl></div></td></tr><tr class="perf-record" data-category="io" data-record="dwi-io"><th scope="row"><button class="perf-toggle" type="button" aria-controls="method-dwi-io" aria-expanded="false" disabled><span class="perf-toggle-icon" aria-hidden="true">+</span><span>压缩 DWI 分块读取</span></button><small>三个数据分块 / 记录 2026-10-20</small></th><td><span class="perf-kind io">压缩数据 I/O</span></td><td>37.25 秒</td><td>17.08 秒</td><td>2.18x<small>耗时减少 54.15%</small></td></tr><tr class="perf-detail-row" id="method-dwi-io" hidden><td colspan="5"><div class="perf-method-body"><dl><dt>上游核查</dt><dd>通用压缩及 I/O 对照，不涉及科学估计器本身的改变或上游版本新鲜度结论。</dd><dt>优化方法</dt><dd>将 gzip 一次解码到临时磁盘，再通过内存映射读取相同分块，保持源文件不变。</dd><dt>原始实现</dt><dd>对比重复读取压缩数组与一次顺序解码后按块读取；本次测量未使用 indexed_gzip。</dd><dt>一致性验证</dt><dd>三个分块的数组和仿射矩阵完全一致，输入哈希不变。</dd><dt>测量范围</dt><dd>三个真实数据分块，包含顺序解码，不代表模型拟合或完整流程加速。</dd><dt>适用范围与限制</dt><dd>单被试一组配对，未控制系统页缓存，需临时磁盘；仅测量 I/O，不外推为模型拟合或通用存储性能。</dd></dl></div></td></tr><tr class="perf-record" data-category="implementation" data-record="teem-dti-wls"><th scope="row"><button class="perf-toggle" type="button" aria-controls="method-teem-dti-wls" aria-expanded="false" disabled><span class="perf-toggle-icon" aria-hidden="true">+</span><span>Teem DTI WLS ????</span></button><small>全脑 / 记录 2026-11-09</small></th><td><span class="perf-kind implementation">同方法实现优化</span></td><td>74.09 秒</td><td>31.31 秒</td><td>2.37x<small>耗时减少 57.74%</small></td></tr><tr class="perf-detail-row" id="method-teem-dti-wls" hidden><td colspan="5"><div class="perf-method-body"><dl><dt>上游核查</dt><dd>?? Slicer 5.10.0 ?? Teem 1.12.0 ????? Teem tenEstimate WLS ???????????</dd><dt>优化方法</dt><dd>?????????????????????? Teem tenEstimateUpdate?????????????</dd><dt>原始实现</dt><dd>???????????????????? Teem tenEstimateUpdate ???????????</dd><dt>一致性验证</dt><dd>?? 3 ?????7 ???/??????? b0 ??????????????</dd><dt>测量范围</dt><dd>3,658,350 ????????1,427,977 ?????288 ????????? 3 ????????</dd><dt>适用范围与限制</dt><dd>???????? Linux ??????????? 100206??????????? DWI ????????????</dd></dl></div></td></tr><tr class="perf-record" data-category="implementation" data-record="teem-dec-fa"><th scope="row"><button class="perf-toggle" type="button" aria-controls="method-teem-dec-fa" aria-expanded="false" disabled><span class="perf-toggle-icon" aria-hidden="true">+</span><span>?????? FA?DEC-FA?</span></button><small>全脑 / 记录 2026-11-09</small></th><td><span class="perf-kind implementation">同方法实现优化</span></td><td>4.51 秒</td><td>2.63 秒</td><td>1.71x<small>耗时减少 41.56%</small></td></tr><tr class="perf-detail-row" id="method-teem-dec-fa" hidden><td colspan="5"><div class="perf-method-body"><dl><dt>上游核查</dt><dd>????????????? NumPy eigh ????????? RGB ?????????</dd><dt>优化方法</dt><dd>?????????FA????????? 3?3 ???????????????????????? RGB?</dd><dt>原始实现</dt><dd>??????????????? 3?3 ????? NumPy eigh ?????? FA ???</dd><dt>一致性验证</dt><dd>??? 3 ???????? uint8 RGB ??????????????</dd><dt>测量范围</dt><dd>? 3,658,350 ????1,427,615 ? FA &gt; 0??3 ?????? 3 ??????</dd><dt>适用范围与限制</dt><dd>?? 100206 ? 1 ???? 3 ???????????????? FA ???????</dd></dl></div></td></tr><tr class="perf-record" data-category="implementation" data-record="regional-endpoints"><th scope="row"><button class="perf-toggle" type="button" aria-controls="method-regional-endpoints" aria-expanded="false" disabled><span class="perf-toggle-icon" aria-hidden="true">+</span><span>???? ROI ??</span></button><small>100 ???? / 记录 2026-11-09</small></th><td><span class="perf-kind implementation">同方法实现优化</span></td><td>33.58 秒</td><td>1.75 秒</td><td>19.20x<small>耗时减少 94.79%</small></td></tr><tr class="perf-detail-row" id="method-regional-endpoints" hidden><td colspan="5"><div class="perf-method-body"><dl><dt>上游核查</dt><dd>?????????????????????????????????</dd><dt>优化方法</dt><dd>???????????? 4,096 ???? NumPy ??????????????????????/?????</dd><dt>原始实现</dt><dd>????? Python ?????????? 4,096 ????????????</dd><dt>一致性验证</dt><dd>??? 3 ? 100 ????????????????????????????????</dd><dt>测量范围</dt><dd>3 ? 100 ???????????/???????????????????</dd><dt>适用范围与限制</dt><dd>?? 100206 ? 4,096 ???????? 3 ?????????????????</dd></dl></div></td></tr><tr class="perf-record" data-category="implementation" data-record="connectome-radial"><th scope="row"><button class="perf-toggle" type="button" aria-controls="method-connectome-radial" aria-expanded="false" disabled><span class="perf-toggle-icon" aria-hidden="true">+</span><span>?????????</span></button><small>100 ???? / 记录 2026-11-09</small></th><td><span class="perf-kind implementation">同方法实现优化</span></td><td>120.61 秒</td><td>4.31 秒</td><td>27.97x<small>耗时减少 96.42%</small></td></tr><tr class="perf-detail-row" id="method-connectome-radial" hidden><td colspan="5"><div class="perf-method-body"><dl><dt>上游核查</dt><dd>?? SciPy 1.18.1 cKDTree ???????????? 2 mm ???????????</dd><dt>优化方法</dt><dd>? 4,096 ??????????????????? SciPy cKDTree 2 mm ?????????? Python ???</dd><dt>原始实现</dt><dd>????? KD ?? 2 mm ??????????????? cKDTree ??? 8,192 ????????</dd><dt>一致性验证</dt><dd>??? 3 ????????????????????? 84?84 ???????????</dd><dt>测量范围</dt><dd>3 ? 100 ?????84 ??????2.0 mm ?????????????</dd><dt>适用范围与限制</dt><dd>???????? 100206 ? 100 ?????200 ????????????????????</dd></dl></div></td></tr><tr class="perf-record" data-category="implementation" data-record="ddseg-cuda"><th scope="row"><button class="perf-toggle" type="button" aria-controls="method-ddseg-cuda" aria-expanded="false" disabled><span class="perf-toggle-icon" aria-hidden="true">+</span><span>DDSeg ?????CUDA?</span></button><small>???? CUDA / 记录 2026-11-10</small></th><td><span class="perf-kind implementation">同方法实现优化</span></td><td>6.20 秒</td><td>5.38 秒</td><td>1.15x<small>耗时减少 13.12%</small></td></tr><tr class="perf-detail-row" id="method-ddseg-cuda" hidden><td colspan="5"><div class="perf-method-body"><dl><dt>上游核查</dt><dd>?? Slicer 5.10.0 PyTorch 2.14.1+cu130 ??? DDSeg TorchScript ?????????? CNN ???????</dd><dt>优化方法</dt><dd>??????????????????????? torch.inference_mode() ??? TorchScript ???</dd><dt>原始实现</dt><dd>??? GPU ??? torch.no_grad() ?????? 256 ?????????? TorchScript ???</dd><dt>一致性验证</dt><dd>??????????????? 6 ?????????????????</dd><dt>测量范围</dt><dd>????? 256 ?? DTI ?????6 ?????CUDA ???</dd><dt>适用范围与限制</dt><dd>?? 100408 ? NVIDIA RTX 3090 ???? 3 ??????????????? NIfTI ?????</dd></dl></div></td></tr><tr class="perf-record" data-category="implementation" data-record="ddseg-cpu"><th scope="row"><button class="perf-toggle" type="button" aria-controls="method-ddseg-cpu" aria-expanded="false" disabled><span class="perf-toggle-icon" aria-hidden="true">+</span><span>DDSeg ?????CPU?</span></button><small>????? CPU / 记录 2026-11-10</small></th><td><span class="perf-kind implementation">同方法实现优化</span></td><td>26.31 秒</td><td>12.94 秒</td><td>2.03x<small>耗时减少 50.81%</small></td></tr><tr class="perf-detail-row" id="method-ddseg-cpu" hidden><td colspan="5"><div class="perf-method-body"><dl><dt>上游核查</dt><dd>?? Slicer 5.10.0 PyTorch 2.14.1 CPU ??? DDSeg TorchScript ?????????? CNN ???????</dd><dt>优化方法</dt><dd>?????????????? torch.inference_mode() ????? CNN ?????</dd><dt>原始实现</dt><dd>????? 256 ???????? 32 ???????????? TorchScript CPU ???</dd><dt>一致性验证</dt><dd>?????????? softmax ????????</dd><dt>测量范围</dt><dd>??????????? 32 ??????????CPU ???</dd><dt>适用范围与限制</dt><dd>?? 100408 ? CPU ???? 3 ???????????????????????????</dd></dl></div></td></tr><tr class="perf-record" data-category="implementation" data-record="ddparcel-cuda"><th scope="row"><button class="perf-toggle" type="button" aria-controls="method-ddparcel-cuda" aria-expanded="false" disabled><span class="perf-toggle-icon" aria-hidden="true">+</span><span>DDParcel ??????CUDA?</span></button><small>???? CUDA / 记录 2026-11-10</small></th><td><span class="perf-kind implementation">同方法实现优化</span></td><td>69.02 秒</td><td>42.84 秒</td><td>1.61x<small>耗时减少 37.93%</small></td></tr><tr class="perf-detail-row" id="method-ddparcel-cuda" hidden><td colspan="5"><div class="perf-method-body"><dl><dt>上游核查</dt><dd>?? Slicer 5.10.0 PyTorch 2.14.1+cu130 ??? DDSurfer FastSurferCNN ???????????????????</dd><dt>优化方法</dt><dd>????? sliding_window_view ?? 7 ???????????? 4 ?????????????????????????????</dd><dt>原始实现</dt><dd>??? GPU ????? np.append ???????? 4D ?????????????????????????</dd><dt>一致性验证</dt><dd>??? 256?256?256?82 ??????????????????????????</dd><dt>测量范围</dt><dd>??????????? FastSurferCNN ?????? 256?256?256 ??? DTI ??????</dd><dt>适用范围与限制</dt><dd>?? 100408 ? NVIDIA RTX 3090 ???? 3 ?????????????????? 10.75 GB ?? 4D ?????</dd></dl></div></td></tr><tr class="perf-record" data-category="implementation" data-record="ddparcel-cc"><th scope="row"><button class="perf-toggle" type="button" aria-controls="method-ddparcel-cc" aria-expanded="false" disabled><span class="perf-toggle-icon" aria-hidden="true">+</span><span>DDParcel 3D ?????</span></button><small>256? ????? / 记录 2026-11-10</small></th><td><span class="perf-kind implementation">同方法实现优化</span></td><td>64.06 秒</td><td>35.87 秒</td><td>1.79x<small>耗时减少 44.00%</small></td></tr><tr class="perf-detail-row" id="method-ddparcel-cc" hidden><td colspan="5"><div class="perf-method-body"><dl><dt>上游核查</dt><dd>?? scikit-image 0.25.2 measure.label/regionprops ????? FastSurferCNN ????????????</dd><dt>优化方法</dt><dd>?????? return_num=True ??????????? bincount ??????????? region.slice ????????????</dd><dt>原始实现</dt><dd>?? fastsurfercnn ????????? measure.label ?????? 256? ???????</dd><dt>一致性验证</dt><dd>???? 256?256?256 ???????? 81 ????????????????</dd><dt>测量范围</dt><dd>? 81 ?????????? 256?256?256 DDParcel ??????</dd><dt>适用范围与限制</dt><dd>?? 100408 ? CPU ???? 3 ??????????</dd></dl></div></td></tr><tr class="perf-record" data-category="port" data-record="mkcurve-ols-eigh"><th scope="row"><button class="perf-toggle" type="button" aria-controls="method-mkcurve-ols-eigh" aria-expanded="false" disabled><span class="perf-toggle-icon" aria-hidden="true">+</span><span>MK-Curve OLS QR ?????????</span></button><small>64 体素数值计算块 / 记录 2026-11-10</small></th><td><span class="perf-kind port">Python 移植版计算</span></td><td>1.35 秒</td><td>1.23 秒</td><td>1.10x<small>耗时减少 9.45%</small></td></tr><tr class="perf-detail-row" id="method-mkcurve-ols-eigh" hidden><td colspan="5"><div class="perf-method-body"><dl><dt>上游核查</dt><dd>? Python MK-Curve ?????? LAPACK dgeqp3/dormqr/dtrsm ? NumPy ?? eigh ????? WLLS ???????????</dd><dt>优化方法</dt><dd>??? b0 ????? dormqr/dtrsm ????????? dgeqp3 QR ??????? OLS ?????????????? parameter_maps ????? 3?3 ??????</dd><dt>原始实现</dt><dd>???????? QR Python ??????? b0 OLS ?????? dgelsy ?????? np.linalg.eigh??</dd><dt>一致性验证</dt><dd>??? 3 ????????????MK ??????????????????</dd><dt>测量范围</dt><dd>3 ??? 64 ????100206?149741?877168??181 ??????200 ??? b0 ????</dd><dt>适用范围与限制</dt><dd>????????? 100206?1.10???? 149741 ?? 1.37??????????? 3 ???????????????????</dd></dl></div></td></tr><tr class="perf-record" data-category="implementation" data-record="csd-qc"><th scope="row"><button class="perf-toggle" type="button" aria-controls="method-csd-qc" aria-expanded="false" disabled><span class="perf-toggle-icon" aria-hidden="true">+</span><span>CSD/ACT ??????????</span></button><small>???????? / 记录 2026-11-10</small></th><td><span class="perf-kind implementation">同方法实现优化</span></td><td>10.12 秒</td><td>5.76 秒</td><td>1.76x<small>耗时减少 43.07%</small></td></tr><tr class="perf-detail-row" id="method-csd-qc" hidden><td colspan="5"><div class="perf-method-body"><dl><dt>上游核查</dt><dd>?? NiBabel ArraySequence ?????????? CSD/ACT ???????????????????</dd><dt>优化方法</dt><dd>????? ArraySequence ???????????????????? np.add.reduceat ???????????????</dd><dt>原始实现</dt><dd>????? Python ?????????? float64 ????? np.diff ? np.linalg.norm??</dd><dt>一致性验证</dt><dd>???????????&lt;20 mm ????????????????</dd><dt>测量范围</dt><dd>CSD/ACT/SIFT2 ???????????????</dd><dt>适用范围与限制</dt><dd>?? 100408 ??? 3 ???????????????????????</dd></dl></div></td></tr><tr class="perf-record" data-category="implementation" data-record="wma-measures"><th scope="row"><button class="perf-toggle" type="button" aria-controls="method-wma-measures" aria-expanded="false" disabled><span class="perf-toggle-icon" aria-hidden="true">+</span><span>WMA ????????????</span></button><small>50,000 ??? / 记录 2026-11-10</small></th><td><span class="perf-kind implementation">同方法实现优化</span></td><td>8.94 秒</td><td>0.55 秒</td><td>16.32x<small>耗时减少 93.87%</small></td></tr><tr class="perf-detail-row" id="method-wma-measures" hidden><td colspan="5"><div class="perf-method-body"><dl><dt>上游核查</dt><dd>?? VTK 9.2 GetOffsetsArray/GetConnectivityArray ?????????? WMA ??????????????</dd><dt>优化方法</dt><dd>?? vtk_to_numpy ???? VTK ??????????????????????????????</dd><dt>原始实现</dt><dd>?? measure_polydata ???? vtkIdList ?????? math.dist ???</dd><dt>一致性验证</dt><dd>?????????????????????? IEEE-754 float64 ??????????rtol &lt; 1e-10??</dd><dt>测量范围</dt><dd>VTK polydata ??? 50,000 ??????</dd><dt>适用范围与限制</dt><dd>?? 100408 ? 50,000 ??????? 3 ??????????</dd></dl></div></td></tr><tr class="perf-record" data-category="implementation" data-record="connectome-mean-fa"><th scope="row"><button class="perf-toggle" type="button" aria-controls="method-connectome-mean-fa" aria-expanded="false" disabled><span class="perf-toggle-icon" aria-hidden="true">+</span><span>??????? FA ????</span></button><small>50,000 ??? / 记录 2026-11-10</small></th><td><span class="perf-kind implementation">同方法实现优化</span></td><td>84.25 秒</td><td>1.66 秒</td><td>50.61x<small>耗时减少 98.02%</small></td></tr><tr class="perf-detail-row" id="method-connectome-mean-fa" hidden><td colspan="5"><div class="perf-method-body"><dl><dt>上游核查</dt><dd>?? SciPy cKDTree ? NiBabel ArraySequence ????????????????????????</dd><dt>优化方法</dt><dd>?????????????/KD ????????? np.add.reduceat ??? ArraySequence ??????????????</dd><dt>原始实现</dt><dd>?? _write_python_connectome ???????????? Python ????????????</dd><dt>一致性验证</dt><dd>????????????? mean_fa ??????? float64 ????????rtol &lt; 1e-12??</dd><dt>测量范围</dt><dd>50,000 ????84 ? DDParcel ????? DTI FA ????</dd><dt>适用范围与限制</dt><dd>?? 100408 ? 50,000 ????4 mm ????????? 3 ??????????</dd></dl></div></td></tr></tbody></table></div>
+<div class="perf-table-wrap" tabindex="0" role="region" aria-label="实测性能对比，小屏幕可横向滚动"><table class="perf-table"><caption>不同模型与测量范围不作横向排名。比值为原始实现耗时除以优化实现耗时。</caption><thead><tr><th scope="col">计算内容 / 范围</th><th scope="col">优化类型</th><th scope="col">原始实现</th><th scope="col">优化实现</th><th scope="col">实测比值</th></tr></thead><tbody><tr class="perf-record" data-category="implementation" data-record="freewater"><th scope="row"><button class="perf-toggle" type="button" aria-controls="method-freewater" aria-expanded="false" disabled><span class="perf-toggle-icon" aria-hidden="true">+</span><span>自由水 WLS</span></button><small>全脑 / 记录 2026-10-29</small></th><td><span class="perf-kind implementation">同方法实现优化</span></td><td>15.64 分钟</td><td>11.89 分钟</td><td>1.32x<small>耗时减少 23.99%</small></td></tr><tr class="perf-detail-row" id="method-freewater" hidden><td colspan="5"><div class="perf-method-body"><dl><dt>上游核查</dt><dd>测量使用 DIPY 1.12.1，为 10 月 29 日的最新稳定版。稳定版与主分支的拟合定义通过哈希核验，本次全脑配对已包含有界协议缓存复用。</dd><dt>优化方法</dt><dd>在有界内部缓存中复用仅依赖采集协议的衰减、谱和网格数组，同时使用无显式对角矩阵的权重计算和经源码核验的张量辅助函数。</dd><dt>原始实现</dt><dd>参考为已安装的原始 DIPY WLS；两条路径均使用一个数值线程。</dd><dt>一致性验证</dt><dd>13 个原始拟合参数、四个参数图或掩膜、仿射矩阵、数据类型和自动 QC 均一致，同样排除 116935 个体素。</dd><dt>测量范围</dt><dd>740916 个掩膜体素、288 次测量；自动 QC 通过，待解剖复核。</dd><dt>适用范围与限制</dt><dd>共享 Linux 主机上的单被试配对，先运行优化实现；未清空操作系统缓存，两次调用均包含原始参数导出。</dd></dl></div></td></tr><tr class="perf-record" data-category="implementation" data-record="wma"><th scope="row"><button class="perf-toggle" type="button" aria-controls="method-wma" aria-expanded="false" disabled><span class="perf-toggle-icon" aria-hidden="true">+</span><span>WMA 配准与分类</span></button><small>完整模块 / 记录 2026-10-20</small></th><td><span class="perf-kind implementation">同方法实现优化</span></td><td>102.10 分钟</td><td>74.22 分钟</td><td>1.38x<small>耗时减少 27.31%</small></td></tr><tr class="perf-detail-row" id="method-wma" hidden><td colspan="5"><div class="perf-method-body"><dl><dt>上游核查</dt><dd>作者提交 4532b911386d 与核查时的主分支及测量源码字节一致。</dd><dt>优化方法</dt><dd>通过批量几何复制和已验证的配准输入复用，减少重复 Python/VTK 遍历与准备。</dd><dt>原始实现</dt><dd>对比原作者处理流程与等价的批量及缓存实现，使用完全相同的 UKF 输入和图谱。</dd><dt>一致性验证</dt><dd>74 个解剖纤维束输出文件逐字节一致，源输入和作者代码未改变。</dd><dt>测量范围</dt><dd>包含完整配准和 74 束输出，未为计时增加流线降采样。</dd><dt>适用范围与限制</dt><dd>共享 Linux 主机上的一组完整模块配对。文件一致性与小束采样、解剖有效性分别评估；本组计时未包含后续坐标变换优化。</dd></dl></div></td></tr><tr class="perf-record" data-category="parallel" data-record="noddi"><th scope="row"><button class="perf-toggle" type="button" aria-controls="method-noddi" aria-expanded="false" disabled><span class="perf-toggle-icon" aria-hidden="true">+</span><span>NODDI / AMICO</span></button><small>全脑 / 记录 2026-10-20</small></th><td><span class="perf-kind parallel">原生多线程</span></td><td>29.15 分钟</td><td>5.19 分钟</td><td>5.61x<small>耗时减少 82.19%</small></td></tr><tr class="perf-detail-row" id="method-noddi" hidden><td colspan="5"><div class="perf-method-body"><dl><dt>上游核查</dt><dd>两组计时均核验为 AMICO 2.1.1，即核查时最新稳定版。多线程为上游已有功能。</dd><dt>优化方法</dt><dd>使用 AMICO 原生多线程，对比 1 线程和 8 线程。</dd><dt>原始实现</dt><dd>使用相同作者实现和模型设置，对比线程配置。</dd><dt>一致性验证</dt><dd>NDI、ODI、IsoVF、RMSE、NRMSE 及组织有效掩膜逐体素一致，仿射矩阵也一致。</dd><dt>测量范围</dt><dd>使用原始 740916 体素脑掩膜和全新输出目录。</dd><dt>适用范围与限制</dt><dd>共享主机上的一组配对，反映该硬件的多线程收益，不外推为通用速度或完整工作流收益。</dd></dl></div></td></tr><tr class="perf-record" data-category="port" data-record="mkcurve"><th scope="row"><button class="perf-toggle" type="button" aria-controls="method-mkcurve" aria-expanded="false" disabled><span class="perf-toggle-icon" aria-hidden="true">+</span><span>MK-Curve QR / Python 移植版</span></button><small>64 体素数值计算块 / 记录 2026-10-22</small></th><td><span class="perf-kind port">Python 移植版计算</span></td><td>1.73 秒</td><td>1.09 秒</td><td>1.58x<small>耗时减少 36.70%</small></td></tr><tr class="perf-detail-row" id="method-mkcurve" hidden><td colspan="5"><div class="perf-method-body"><dl><dt>上游核查</dt><dd>MATLAB 参考提交为 9a213e1a5850，测量使用 SciPy 1.18.1 稳定版。此处仅比较 Python 移植版内部实现，不比较 MATLAB 速度，也不将上游原生批处理列为新方法。</dd><dt>优化方法</dt><dd>复用协议与设计矩阵检查及 LAPACK 工作区大小，保留相同的列主元 QR 和完整 b0 网格。</dd><dt>原始实现</dt><dd>在同一 Python 移植版中，对比 SciPy 1.18.1 公共 gelsy 求解器与经核验的底层驱动及缓存调用。</dd><dt>一致性验证</dt><dd>三个被试的原始系数、完整曲线、所有参数图和有效性判断均一致，已检查参考与批处理求解器。</dd><dt>测量范围</dt><dd>三个真实的 64 体素计算块，181 次测量、完整的 200–201 点 b0 网格，使用一个数值线程。</dd><dt>适用范围与限制</dt><dd>表中为被试 100206 默认 QR 实现的中位数，预热后交替重复三次。数值块计时不含输入准备和导出，不外推为整个 ROI 或全脑耗时；SciPy 已提供原生批处理。</dd></dl></div></td></tr><tr class="perf-record" data-category="port" data-record="mkcurve-signal"><th scope="row"><button class="perf-toggle" type="button" aria-controls="method-mkcurve-signal" aria-expanded="false" disabled><span class="perf-toggle-icon" aria-hidden="true">+</span><span>MK-Curve 信号复用</span></button><small>64 体素计算块 / QR 后续增量优化 / 记录 2026-10-29</small></th><td><span class="perf-kind port">Python 移植版计算</span></td><td>1.19 秒</td><td>1.06 秒</td><td>1.13x<small>耗时减少 11.26%</small></td></tr><tr class="perf-detail-row" id="method-mkcurve-signal" hidden><td colspan="5"><div class="perf-method-body"><dl><dt>上游核查</dt><dd>10 月 29 日使用 SciPy 1.18.1 测量，保留源码及输入校验和、单线程设置。比较的是 Python 移植版完成 QR 优化之后的增量改动。</dd><dt>优化方法</dt><dd>在每个计算块的完整合成 b0 扫描中复用非 b0 信号及其对数，只更新候选 b0 列。</dd><dt>原始实现</dt><dd>对照为先前经过核验的 QR Python 实现与新增信号复用的实现；求解器、扫描网格、校正规则和单数值线程设置一致。</dd><dt>一致性验证</dt><dd>三份采集数据、两种求解器的原始及校正系数、完整曲线、参数图、残差和有效掩膜均完全一致。</dd><dt>测量范围</dt><dd>三份采集数据，各取 64 个体素、181 次测量及 200–201 个合成 b0 采样点。reference QR 路径耗时减少 10.24%–11.26%。计时范围为数值计算，不含输入准备和文件导出。</dd><dt>适用范围与限制</dt><dd>表中使用采集数据 1，与之前 QR 记录的选取方式一致。预热一次后交替重复三次。批量求解路径的耗时变化为减少 -1.50% 至 +3.07%，因此默认仅在 reference 求解器启用信号复用。此处是之前 QR 实现上的增量对照，收益不可叠加。</dd></dl></div></td></tr><tr class="perf-record" data-category="integration" data-record="dki"><th scope="row"><button class="perf-toggle" type="button" aria-controls="method-dki" aria-expanded="false" disabled><span class="perf-toggle-icon" aria-hidden="true">+</span><span>DKI WLS 参数计算</span></button><small>原生网格 24³ ROI / 记录 2026-10-22</small></th><td><span class="perf-kind integration">上游已有能力</span></td><td>37.11 秒</td><td>11.47 秒</td><td>3.24x<small>耗时减少 69.09%</small></td></tr><tr class="perf-detail-row" id="method-dki" hidden><td colspan="5"><div class="perf-method-body"><dl><dt>上游核查</dt><dd>核查时 DIPY 1.12.1 为最新稳定版。数组参数计算已存在于上游，此项为插件接入优化。</dd><dt>优化方法</dt><dd>每个数据块一次调用作者已有的数组峰度计算，避免逐体素重复创建结果包装对象。</dd><dt>原始实现</dt><dd>对比插件原有逐体素接入和现有 DIPY 数组 API 的使用，不视为超越作者原生向量化 API。</dd><dt>一致性验证</dt><dd>三个被试的所有导出体素数组和仿射矩阵一致，各交替重复三次。</dd><dt>测量范围</dt><dd>三个被试，每条路径重复三次，使用原生网格 ROI，不重采样；DIPY 1.12.1、SciPy 1.18.1。</dd><dt>适用范围与限制</dt><dd>表中展示被试 100307 的中位数。此项采用 DIPY 已有原生功能；尚无完成的全脑 DKI 配对，ROI 耗时不外推到全脑。</dd></dl></div></td></tr><tr class="perf-record" data-category="workflow" data-record="scheduling"><th scope="row"><button class="perf-toggle" type="button" aria-controls="method-scheduling" aria-expanded="false" disabled><span class="perf-toggle-icon" aria-hidden="true">+</span><span>独立的 FW 与 DKI 任务</span></button><small>原生网格 24³ ROI / 记录 2026-10-20</small></th><td><span class="perf-kind workflow">工作流调度</span></td><td>43.95 秒</td><td>24.63 秒</td><td>1.78x<small>耗时减少 43.96%</small></td></tr><tr class="perf-detail-row" id="method-scheduling" hidden><td colspan="5"><div class="perf-method-body"><dl><dt>上游核查</dt><dd>插件调度器的历史对照，不作为最新上游算法性能结论。</dd><dt>优化方法</dt><dd>在共享输入就绪后并发运行独立模型子进程，同时保留下游依赖关系。</dd><dt>原始实现</dt><dd>相同模型计算，对比串行调度和两个并发工作进程。</dd><dt>一致性验证</dt><dd>全部导出参数和掩膜数组一致，计时包含进程启动。</dd><dt>测量范围</dt><dd>两个独立模型，受 CPU 和内存预算约束的调度；此处并非全脑计时。</dd><dt>适用范围与限制</dt><dd>一组 ROI 配对，缩短调度墙钟时间，单模型计算不变。默认并发数仍为一，内存或 CPU 预算可能限制并发。</dd></dl></div></td></tr><tr class="perf-record" data-category="workflow" data-record="cohort-microstructure"><th scope="row"><button class="perf-toggle" type="button" aria-controls="method-cohort-microstructure" aria-expanded="false" disabled><span class="perf-toggle-icon" aria-hidden="true">+</span><span>队列并发调度：微结构分析</span></button><small>16 名 HCP 受试者 / 32 核预算 / 记录 2026-11-09</small></th><td><span class="perf-kind workflow">工作流调度</span></td><td>301.79 分钟</td><td>197.44 分钟</td><td>1.53x<small>耗时减少 34.58%</small></td></tr><tr class="perf-detail-row" id="method-cohort-microstructure" hidden><td colspan="5"><div class="perf-method-body"><dl><dt>上游核查</dt><dd>插件批处理调度器对比（scripts/run_batch_pipeline.py）；上游 DIPY 1.12.1、AMICO 2.1.1 与 SciPy 1.18.1 估计器保持不变。</dd><dt>优化方法</dt><dd>跨受试者阶段级资源感知调度在共享 32 核 CPU 与内存预算下重叠单线程 Free-water/DKI 与多线程 NODDI/MK-Curve 阶段。</dd><dt>原始实现</dt><dd>受试者级固定并发（4 名并发受试者，每名 8 线程）对比相同 32 核 CPU 上限下的自适应阶段级调度。</dd><dt>一致性验证</dt><dd>全部 16 名受试者的 DTI、Free-water、NODDI、DKI 与 MK-Curve 图均通过输出与 Rule-1 数值一致性校验。</dd><dt>测量范围</dt><dd>16 名全脑 HCP 受试者；完整微结构流程（DTI + FW + NODDI + DKI + MK-Curve）。</dd><dt>适用范围与限制</dt><dd>共享 Linux 主机上的 16 名 HCP 受试者队列（每组 32 核 CPU 预算）。通过将平均 CPU 利用率从 12.6 核提升至 21.2 核缩短队列总耗时，不改变单个模型估计算法。</dd></dl></div></td></tr><tr class="perf-record" data-category="workflow" data-record="cohort-anatomy"><th scope="row"><button class="perf-toggle" type="button" aria-controls="method-cohort-anatomy" aria-expanded="false" disabled><span class="perf-toggle-icon" aria-hidden="true">+</span><span>队列并发调度：解剖先验</span></button><small>16 名 HCP 受试者 / 32 核预算 + GPU / 记录 2026-11-09</small></th><td><span class="perf-kind workflow">工作流调度</span></td><td>78.43 分钟</td><td>68.34 分钟</td><td>1.15x<small>耗时减少 12.88%</small></td></tr><tr class="perf-detail-row" id="method-cohort-anatomy" hidden><td colspan="5"><div class="perf-method-body"><dl><dt>上游核查</dt><dd>插件批处理调度器对比（scripts/run_batch_pipeline.py）；上游 DDSeg、DDParcel、DDSurfer 与 FreeSurfer 流程保持不变。</dd><dt>优化方法</dt><dd>利用分阶段 CPU、内存与 GPU 配额，跨受试者协同调度 GPU 加速的 DDSeg/DDParcel/DDSurfer 推理与 CPU 密集型皮层后处理。</dd><dt>原始实现</dt><dd>同一 16 名受试者队列上的受试者级固定并发对比自适应阶段级调度。</dd><dt>一致性验证</dt><dd>全部 16 名受试者生成一致的组织分割、脑区分割、皮层曲面及质控结果。</dd><dt>测量范围</dt><dd>16 名全脑 HCP 受试者；完整解剖先验流程（DDSeg + DDParcel + DDSurfer）。</dd><dt>适用范围与限制</dt><dd>16 名 HCP 受试者队列。加速来自跨受试者重叠 CPU 皮层后处理与 GPU 推理，而非单受试者神经网络推理本身的加速。</dd></dl></div></td></tr><tr class="perf-record" data-category="workflow" data-record="cohort-tractography"><th scope="row"><button class="perf-toggle" type="button" aria-controls="method-cohort-tractography" aria-expanded="false" disabled><span class="perf-toggle-icon" aria-hidden="true">+</span><span>队列并发调度：纤维束追踪与束提取</span></button><small>16 名 HCP 受试者 / 32 核预算 + GPU / 记录 2026-11-09</small></th><td><span class="perf-kind workflow">工作流调度</span></td><td>78.61 分钟</td><td>70.66 分钟</td><td>1.11x<small>耗时减少 10.11%</small></td></tr><tr class="perf-detail-row" id="method-cohort-tractography" hidden><td colspan="5"><div class="perf-method-body"><dl><dt>上游核查</dt><dd>插件批处理调度器对比（scripts/run_batch_pipeline.py）；上游 DDSeg、DDParcel、DIPY 确定性追踪、WMQL、TractCloud 与连接组流程保持不变。</dd><dt>优化方法</dt><dd>在统一资源预算下，跨受试者重叠 CPU 密集型 DTI 确定性追踪、WMQL 解剖查询及结构连接组生成与 GPU 辅助的 DDSeg/DDParcel/TractCloud 阶段。</dd><dt>原始实现</dt><dd>同一 16 名受试者队列上的受试者级固定并发对比自适应阶段级调度。</dd><dt>一致性验证</dt><dd>全部 16 名受试者通过纤维束图、纤维束提取（WMQL 与 TractCloud）及结构连接组一致性与质控校验。</dd><dt>测量范围</dt><dd>16 名全脑 HCP 受试者；纤维束追踪与束提取流程（DDSeg + DDParcel + DTI + DTI-Det + WMQL + TractCloud + Connectome）。</dd><dt>适用范围与限制</dt><dd>16 名 HCP 受试者队列。阶段级调度跨受试者重叠 GPU 辅助脑区分割/TractCloud 推理与 CPU 密集型追踪、WMQL 及连接组阶段。</dd></dl></div></td></tr><tr class="perf-record" data-category="implementation" data-record="wma-filter"><th scope="row"><button class="perf-toggle" type="button" aria-controls="method-wma-filter" aria-expanded="false" disabled><span class="perf-toggle-icon" aria-hidden="true">+</span><span>WMA 图谱长度筛选</span></button><small>单个子步骤 / 记录 2026-10-20</small></th><td><span class="perf-kind implementation">同方法实现优化</span></td><td>134.29 秒</td><td>2.48 秒</td><td>54.06x<small>耗时减少 98.15%</small></td></tr><tr class="perf-detail-row" id="method-wma-filter" hidden><td colspan="5"><div class="perf-method-body"><dl><dt>上游核查</dt><dd>与完整模块记录使用相同的固定 WMA 源码核查。</dd><dt>优化方法</dt><dd>用等价的批量坐标与拓扑操作替代 Python 逐点几何复制。</dd><dt>原始实现</dt><dd>在完整的 1989106 条流线配准图谱上运行未修改的作者筛选器。</dd><dt>一致性验证</dt><dd>输出坐标、拓扑及固定种子采样完全一致。</dd><dt>测量范围</dt><dd>仅包含完整配准图谱的长度筛选子步骤。</dd><dt>适用范围与限制</dt><dd>一组完整图谱子步骤配对，不包含全部 WMA；局部比值不能与完整 WMA 结果相乘或叠加。</dd></dl></div></td></tr><tr class="perf-record" data-category="implementation" data-record="freewater-nls"><th scope="row"><button class="perf-toggle" type="button" aria-controls="method-freewater-nls" aria-expanded="false" disabled><span class="perf-toggle-icon" aria-hidden="true">+</span><span>自由水 NLS 调用分派</span></button><small>1728 体素 ROI / 记录 2026-10-21</small></th><td><span class="perf-kind implementation">同方法实现优化</span></td><td>12.47 秒</td><td>5.17 秒</td><td>2.41x<small>耗时减少 58.50%</small></td></tr><tr class="perf-detail-row" id="method-freewater-nls" hidden><td colspan="5"><div class="perf-method-body"><dl><dt>上游核查</dt><dd>在 Slicer 中测量 DIPY 1.12.1，作者 NLS、残差和雅可比源码哈希与注明日期的稳定版核查一致。</dd><dt>优化方法</dt><dd>直接调用经源码核验的作者 NLS、残差和雅可比函数主体，减少重复的关键字兼容性分派。</dd><dt>原始实现</dt><dd>比较原始 DIPY 1.12.1 串行 NLS 与相同函数主体，两条路径均使用一个数值线程。</dd><dt>一致性验证</dt><dd>三个被试的 13 个原始参数、导出参数图、仿射矩阵和 QC 判断全部一致。</dd><dt>测量范围</dt><dd>三个原生网格 12³ ROI，288 次测量；包含完整 ROI 处理和全新导出。</dd><dt>适用范围与限制</dt><dd>被试 100307 的中位数，预热后交替重复三次。仅限 ROI；测量早于后续 WLS 初始化及辅助函数修改，收益不可叠加。</dd></dl></div></td></tr><tr class="perf-record" data-category="implementation" data-record="wma-transform"><th scope="row"><button class="perf-toggle" type="button" aria-controls="method-wma-transform" aria-expanded="false" disabled><span class="perf-toggle-icon" aria-hidden="true">+</span><span>WMA 点坐标变换</span></button><small>1000 条流线 × 15 个点 / 记录 2026-10-21</small></th><td><span class="perf-kind implementation">同方法实现优化</span></td><td>24.6 毫秒</td><td>0.322 毫秒</td><td>76.31x<small>耗时减少 98.69%</small></td></tr><tr class="perf-detail-row" id="method-wma-transform" hidden><td colspan="5"><div class="perf-method-body"><dl><dt>上游核查</dt><dd>作者 register_two_subjects.py 的 SHA256 与 10 月 22 日 WMA 源码核查一致，测量批量 vtkTransform 路径。</dd><dt>优化方法</dt><dd>使用相同作者 vtkTransform，按有界数据块批量变换，替代逐点 Python/VTK 调用。</dd><dt>原始实现</dt><dd>对比原作者逐点循环与批量调用，保持 float64 点顺序和变换一致。</dd><dt>一致性验证</dt><dd>三个被试的全部变换点、小规模优化器完整轨迹和最终变换均一致。</dd><dt>测量范围</dt><dd>三个真实被试样例，独立优化器检查使用明确记录的合成偏移。</dd><dt>适用范围与限制</dt><dd>被试 100206 点变换重复五次的中位数，不包含完整配准。小规模优化器收益约为 1.27–1.28 倍，点变换比值不外推到整个 WMA。</dd></dl></div></td></tr><tr class="perf-record" data-category="implementation" data-record="wma-fibers"><th scope="row"><button class="perf-toggle" type="button" aria-controls="method-wma-fibers" aria-expanded="false" disabled><span class="perf-toggle-icon" aria-hidden="true">+</span><span>WMA 纤维数组转换</span></button><small>20000 条流线 × 15 个点 / 记录 2026-10-21</small></th><td><span class="perf-kind implementation">同方法实现优化</span></td><td>0.59 秒</td><td>12.8 毫秒</td><td>45.84x<small>耗时减少 97.82%</small></td></tr><tr class="perf-detail-row" id="method-wma-fibers" hidden><td colspan="5"><div class="perf-method-body"><dl><dt>上游核查</dt><dd>独立核验作者提交 4532b911386d 的 fibers.py；使用原生 VTK 数组采样，配准算法不变。</dd><dt>优化方法</dt><dd>按有界 NumPy 数据块，从 VTK 拓扑中提取与作者规则相同的最近邻流线采样点。</dd><dt>原始实现</dt><dd>对比原作者 FiberArray 转换与等价批量转换，不新增插值或流线缩减。</dd><dt>一致性验证</dt><dd>三个被试的全部数组、半球标记及独立小规模优化器轨迹和变换均一致。</dd><dt>测量范围</dt><dd>每个被试使用相同的 20000 条采样流线，保留原始最近邻规则和顺序。</dd><dt>适用范围与限制</dt><dd>被试 100206 转换重复五次的中位数；不代表完整 WMA。小规模优化器收益约 1.02–1.05 倍，历史采样失败状态不作改写。</dd></dl></div></td></tr><tr class="perf-record" data-category="implementation" data-record="wma-cache"><th scope="row"><button class="perf-toggle" type="button" aria-controls="method-wma-cache" aria-expanded="false" disabled><span class="perf-toggle-icon" aria-hidden="true">+</span><span>WMA 配准输入复用</span></button><small>三次准备调用 / 记录 2026-10-20</small></th><td><span class="perf-kind implementation">同方法实现优化</span></td><td>8.90 分钟</td><td>3.01 分钟</td><td>2.96x<small>耗时减少 66.17%</small></td></tr><tr class="perf-detail-row" id="method-wma-cache" hidden><td colspan="5"><div class="perf-method-body"><dl><dt>上游核查</dt><dd>保留相同作者实现的准备阶段配对，通过源码核验后复用，未重新标为最新版本测速。</dd><dt>优化方法</dt><dd>在不同种子间复用已验证的确定性图谱和被试长度筛选结果，每次仍执行作者随机采样。</dd><dt>原始实现</dt><dd>相同输入和固定种子下，对比三次原作者准备调用与首次缓存填充加后续复用。</dd><dt>一致性验证</dt><dd>配准输入签名逐位一致，源文件哈希不变。</dd><dt>测量范围</dt><dd>三次固定种子准备调用，包含首次缓存填充；不包含完整 WMA。</dd><dt>适用范围与限制</dt><dd>单被试一组配对，包含初次缓存建立；与 WMA 筛选和完整模块计时重叠，收益不能相加。</dd></dl></div></td></tr><tr class="perf-record" data-category="inherited" data-record="surface-mapping"><th scope="row"><button class="perf-toggle" type="button" aria-controls="method-surface-mapping" aria-expanded="false" disabled><span class="perf-toggle-icon" aria-hidden="true">+</span><span>DDSurfer 表面映射复用</span></button><small>左半球四个叠加图 / 记录 2026-10-20</small></th><td><span class="perf-kind inherited">继承的上游优化</span></td><td>13.38 秒</td><td>3.52 秒</td><td>3.80x<small>耗时减少 73.70%</small></td></tr><tr class="perf-detail-row" id="method-surface-mapping" hidden><td colspan="5"><div class="perf-method-body"><dl><dt>上游核查</dt><dd>优化继承 DDSurfer 提交 c3b2d40，不列为插件原创或最新 FreeSurfer 加速结论。</dd><dt>优化方法</dt><dd>将四个叠加图打包为一次多帧 mri_surf2surf 调用，共用表面配准。</dd><dt>原始实现</dt><dd>对比四次独立 FreeSurfer 调用和一次多帧调用；此优化继承 DDSurfer 上游 c3b2d40。</dd><dt>一致性验证</dt><dd>四个 MGH 输出逐字节一致，每图 163842 个顶点，源哈希不变。</dd><dt>测量范围</dt><dd>100307 左半球，四次独立 FreeSurfer 调用对比一次多帧调用。</dd><dt>适用范围与限制</dt><dd>单被试的命令计时，不含额外打包和核验；不代表表面重建或新的 FreeSurfer 算法。</dd></dl></div></td></tr><tr class="perf-record" data-category="io" data-record="dwi-io"><th scope="row"><button class="perf-toggle" type="button" aria-controls="method-dwi-io" aria-expanded="false" disabled><span class="perf-toggle-icon" aria-hidden="true">+</span><span>压缩 DWI 分块读取</span></button><small>三个数据分块 / 记录 2026-10-20</small></th><td><span class="perf-kind io">压缩数据 I/O</span></td><td>37.25 秒</td><td>17.08 秒</td><td>2.18x<small>耗时减少 54.15%</small></td></tr><tr class="perf-detail-row" id="method-dwi-io" hidden><td colspan="5"><div class="perf-method-body"><dl><dt>上游核查</dt><dd>通用压缩及 I/O 对照，不涉及科学估计器本身的改变或上游版本新鲜度结论。</dd><dt>优化方法</dt><dd>将 gzip 一次解码到临时磁盘，再通过内存映射读取相同分块，保持源文件不变。</dd><dt>原始实现</dt><dd>对比重复读取压缩数组与一次顺序解码后按块读取；本次测量未使用 indexed_gzip。</dd><dt>一致性验证</dt><dd>三个分块的数组和仿射矩阵完全一致，输入哈希不变。</dd><dt>测量范围</dt><dd>三个真实数据分块，包含顺序解码，不代表模型拟合或完整流程加速。</dd><dt>适用范围与限制</dt><dd>单被试一组配对，未控制系统页缓存，需临时磁盘；仅测量 I/O，不外推为模型拟合或通用存储性能。</dd></dl></div></td></tr><tr class="perf-record" data-category="implementation" data-record="teem-dti-wls"><th scope="row"><button class="perf-toggle" type="button" aria-controls="method-teem-dti-wls" aria-expanded="false" disabled><span class="perf-toggle-icon" aria-hidden="true">+</span><span>Teem DTI WLS 张量估计</span></button><small>全脑 / 记录 2026-11-09</small></th><td><span class="perf-kind implementation">同方法实现优化</span></td><td>74.09 秒</td><td>31.31 秒</td><td>2.37x<small>耗时减少 57.74%</small></td></tr><tr class="perf-detail-row" id="method-teem-dti-wls" hidden><td colspan="5"><div class="perf-method-body"><dl><dt>上游核查</dt><dd>基于 Slicer 5.10.0 内置 Teem 1.12.0 实测；保持 Teem tenEstimate WLS 数值结果与线程数不变。</dd><dt>优化方法</dt><dd>仅评估一次全零信号模板，并仅在非零信号体素行上运行 Teem tenEstimateUpdate；零信号行直接由模板填充。</dd><dt>原始实现</dt><dd>此前遍历全部图像网格行的全脑 Teem tenEstimateUpdate 循环对比相同线程池与梯度表下的非零行估计。</dd><dt>一致性验证</dt><dd>全部 3 组采集数据中，7 个张量/掩膜分量、基线 b0 体数据及失败计数均逐体素完全一致。</dd><dt>测量范围</dt><dd>3,658,350 个图像网格体素（1,427,977 个非零体素）；288 个梯度方向；已完成 3 组真实采集验证。</dd><dt>适用范围与限制</dt><dd>展示数值基于共享 Linux 主机默认线程池下的受试者 100206。收益取决于掩膜后 DWI 体数据中背景零体素的比例。</dd></dl></div></td></tr><tr class="perf-record" data-category="implementation" data-record="teem-dec-fa"><th scope="row"><button class="perf-toggle" type="button" aria-controls="method-teem-dec-fa" aria-expanded="false" disabled><span class="perf-toggle-icon" aria-hidden="true">+</span><span>方向编码彩色 FA（DEC-FA）</span></button><small>全脑 / 记录 2026-11-09</small></th><td><span class="perf-kind implementation">同方法实现优化</span></td><td>4.51 秒</td><td>2.63 秒</td><td>1.71x<small>耗时减少 41.56%</small></td></tr><tr class="perf-detail-row" id="method-teem-dec-fa" hidden><td colspan="5"><div class="perf-method-body"><dl><dt>上游核查</dt><dd>保持相同的测量坐标系旋转与 NumPy eigh 特征向量约定；跳过 RGB 恒为零的背景体素。</dd><dt>优化方法</dt><dd>将 3×3 测量坐标系旋转与对称特征分解限制在各向异性分数（FA）为正的体素上；其余体素直接赋零 RGB。</dd><dt>原始实现</dt><dd>遍历全部图像体素的全网格 3×3 矩阵旋转与 NumPy eigh 对比单数值线程下的有效 FA 体素索引计算。</dd><dt>一致性验证</dt><dd>在全部 3 组采集数据中，导出的 uint8 RGB 方向编码彩色图逐字节完全一致。</dd><dt>测量范围</dt><dd>共 3,658,350 个体素（1,427,615 个满足 FA &gt; 0）；3 组采集数据，每组 3 次交替重复。</dd><dt>适用范围与限制</dt><dd>受试者 100206 在 1 次预热后 3 次交替重复的中位数。加速收益取决于零 FA 背景体素的比例。</dd></dl></div></td></tr><tr class="perf-record" data-category="implementation" data-record="regional-endpoints"><th scope="row"><button class="perf-toggle" type="button" aria-controls="method-regional-endpoints" aria-expanded="false" disabled><span class="perf-toggle-icon" aria-hidden="true">+</span><span>流线端点 ROI 筛选</span></button><small>100 万条流线 / 记录 2026-11-09</small></th><td><span class="perf-kind implementation">同方法实现优化</span></td><td>33.58 秒</td><td>1.75 秒</td><td>19.20x<small>耗时减少 94.79%</small></td></tr><tr class="perf-detail-row" id="method-regional-endpoints" hidden><td colspan="5"><div class="perf-method-body"><dl><dt>上游核查</dt><dd>内部区域纤维束追踪端点选择器；保持最近邻体素取整与端点配对逻辑不变。</dd><dt>优化方法</dt><dd>以 4,096 条流线为单位通过 NumPy 分块变换起止端点、检查网格边界并评估包含/目标掩膜；图谱仿射矩阵仅求逆一次。</dd><dt>原始实现</dt><dd>逐流线 Python 循环与重复仿射求逆对比 4,096 条流线端点数组的批量评估。</dd><dt>一致性验证</dt><dd>在全部 3 个 100 万条流线的纤维束图中，筛选出的流线索引与输出点数组完全一致。</dd><dt>测量范围</dt><dd>3 个 100 万条流线的全脑纤维束图；双侧丘脑/中央前回至额上回端点查询；单数值线程。</dd><dt>适用范围与限制</dt><dd>受试者 100206 在 4,096 条流线批次上预热后 3 次交替重复的中位数；不含文件读写。</dd></dl></div></td></tr><tr class="perf-record" data-category="implementation" data-record="connectome-radial"><th scope="row"><button class="perf-toggle" type="button" aria-controls="method-connectome-radial" aria-expanded="false" disabled><span class="perf-toggle-icon" aria-hidden="true">+</span><span>连接组径向端点分配</span></button><small>100 万条流线 / 记录 2026-11-09</small></th><td><span class="perf-kind implementation">同方法实现优化</span></td><td>120.61 秒</td><td>4.31 秒</td><td>27.97x<small>耗时减少 96.42%</small></td></tr><tr class="perf-detail-row" id="method-connectome-radial" hidden><td colspan="5"><div class="perf-method-body"><dl><dt>上游核查</dt><dd>基于 SciPy 1.18.1 cKDTree 实测；保持完全一致的并列消解规则与 2 mm 径向距离截断。</dd><dt>优化方法</dt><dd>在 4,096 条流线端点分块上批量执行直接体素标签查找与 SciPy cKDTree 2 mm 径向搜索，替代逐端点 Python 调用。</dd><dt>原始实现</dt><dd>使用相同 KD 树与 2 mm 半径时，逐端点 Python 体素查找与单点 cKDTree 查询对比 8,192 点数组批量查询。</dd><dt>一致性验证</dt><dd>在全部 3 组采集数据中，直接体素标签、径向分配节点标签以及全部 84×84 连接组矩阵完全一致。</dd><dt>测量范围</dt><dd>3 个 100 万条流线图；84 个灰质节点；2.0 mm 径向分配搜索；单数值线程。</dd><dt>适用范围与限制</dt><dd>展示数值基于受试者 100206 的 100 万条流线（200 万个端点）；不含纤维束文件解析与矩阵导出。</dd></dl></div></td></tr><tr class="perf-record" data-category="implementation" data-record="ddseg-cuda"><th scope="row"><button class="perf-toggle" type="button" aria-controls="method-ddseg-cuda" aria-expanded="false" disabled><span class="perf-toggle-icon" aria-hidden="true">+</span><span>DDSeg 组织分割（CUDA）</span></button><small>全三视角 CUDA / 记录 2026-11-10</small></th><td><span class="perf-kind implementation">同方法实现优化</span></td><td>6.20 秒</td><td>5.38 秒</td><td>1.15x<small>耗时减少 13.12%</small></td></tr><tr class="perf-detail-row" id="method-ddseg-cuda" hidden><td colspan="5"><div class="perf-method-body"><dl><dt>上游核查</dt><dd>基于 Slicer 5.10.0 PyTorch 2.14.1+cu130 与官方 DDSeg TorchScript 权重实测；保持逐片 CNN 输出完全一致。</dd><dt>优化方法</dt><dd>在每个解剖视角内缓存均匀背景切片的预测结果，并在 torch.inference_mode() 下执行 TorchScript 模型。</dd><dt>原始实现</dt><dd>在同一 GPU 上使用 torch.no_grad() 对每个视角全部 256 张切片进行无缓存逐片 TorchScript 评估。</dd><dt>一致性验证</dt><dd>全部三视角类别概率体数据与最终离散 6 类组织分割结果逐体素完全一致。</dd><dt>测量范围</dt><dd>完整三视角 256 切片 DTI 特征栈；6 个组织类别；CUDA 执行。</dd><dt>适用范围与限制</dt><dd>受试者 100408 在 NVIDIA RTX 3090 上预热后 3 次交替三视角重复的中位数；不含 NIfTI 文件读写。</dd></dl></div></td></tr><tr class="perf-record" data-category="implementation" data-record="ddseg-cpu"><th scope="row"><button class="perf-toggle" type="button" aria-controls="method-ddseg-cpu" aria-expanded="false" disabled><span class="perf-toggle-icon" aria-hidden="true">+</span><span>DDSeg 切片推理（CPU）</span></button><small>跨步全视角 CPU / 记录 2026-11-10</small></th><td><span class="perf-kind implementation">同方法实现优化</span></td><td>26.31 秒</td><td>12.94 秒</td><td>2.03x<small>耗时减少 50.81%</small></td></tr><tr class="perf-detail-row" id="method-ddseg-cpu" hidden><td colspan="5"><div class="perf-method-body"><dl><dt>上游核查</dt><dd>基于 Slicer 5.10.0 PyTorch 2.14.1 CPU 与官方 DDSeg TorchScript 权重实测；保持逐片 CNN 输出完全一致。</dd><dt>优化方法</dt><dd>通过单视角切片缓存与 torch.inference_mode() 跳过均匀背景切片上的冗余 CNN 前向传播。</dd><dt>原始实现</dt><dd>在跨越完整 256 张矢状面视角的 32 张跨步采样切片上进行无缓存逐片 TorchScript CPU 评估。</dd><dt>一致性验证</dt><dd>全部采样切片上的逐片 softmax 概率图完全一致。</dd><dt>测量范围</dt><dd>涵盖背景与脑组织切片的 32 张跨步矢状面采样；CPU 执行。</dd><dt>适用范围与限制</dt><dd>受试者 100408 在 CPU 上预热后 3 次交替重复的中位数。加速收益反映脑掩膜周围背景切片的比例。</dd></dl></div></td></tr><tr class="perf-record" data-category="implementation" data-record="ddparcel-cuda"><th scope="row"><button class="perf-toggle" type="button" aria-controls="method-ddparcel-cuda" aria-expanded="false" disabled><span class="perf-toggle-icon" aria-hidden="true">+</span><span>DDParcel 三视角推理（CUDA）</span></button><small>全三视角 CUDA / 记录 2026-11-10</small></th><td><span class="perf-kind implementation">同方法实现优化</span></td><td>69.02 秒</td><td>42.84 秒</td><td>1.61x<small>耗时减少 37.93%</small></td></tr><tr class="perf-detail-row" id="method-ddparcel-cuda" hidden><td colspan="5"><div class="perf-method-body"><dl><dt>上游核查</dt><dd>基于 Slicer 5.10.0 PyTorch 2.14.1+cu130 与官方 DDSurfer FastSurferCNN 权重实测；保持三视角融合概率完全一致。</dd><dt>优化方法</dt><dd>使用零拷贝 sliding_window_view 构建 7 切片窗口，按需拼接每片 4 个模态，缓存均匀背景批次并应用预计算的矢状面至全标签查找表。</dd><dt>原始实现</dt><dd>在同一 GPU 上进行迭代式 np.append 厚切片构建、全量 4D 模态拼接、无缓存背景批次及逐批次矢状面标签循环。</dd><dt>一致性验证</dt><dd>完整的 256×256×256×82 融合三视角概率体数据在全部三个视角上逐位完全一致。</dd><dt>测量范围</dt><dd>轴位、冠状位与矢状位 FastSurferCNN 网络上的完整 256×256×256 四模态 DTI 输入体数据。</dd><dt>适用范围与限制</dt><dd>受试者 100408 在 NVIDIA RTX 3090 上预热后 3 次完整三视角交替重复的中位数；消除了 10.75 GB 的临时 4D 数组分配。</dd></dl></div></td></tr><tr class="perf-record" data-category="implementation" data-record="ddparcel-cc"><th scope="row"><button class="perf-toggle" type="button" aria-controls="method-ddparcel-cc" aria-expanded="false" disabled><span class="perf-toggle-icon" aria-hidden="true">+</span><span>DDParcel 3D 连通域清理</span></button><small>256³ 体素脑区分割 / 记录 2026-11-10</small></th><td><span class="perf-kind implementation">同方法实现优化</span></td><td>64.06 秒</td><td>35.87 秒</td><td>1.79x<small>耗时减少 44.00%</small></td></tr><tr class="perf-detail-row" id="method-ddparcel-cc" hidden><td colspan="5"><div class="perf-method-body"><dl><dt>上游核查</dt><dd>基于 scikit-image 0.25.2 measure.label/regionprops 实测；保持 FastSurferCNN 连通域清理规则完全一致。</dd><dt>优化方法</dt><dd>每个脑区使用 return_num=True 仅标记一次连通域，通过 bincount 识别最大连通分量，并在局部 region.slice 边界框内清除孤立小岛。</dd><dt>原始实现</dt><dd>此前在 fastsurfercnn 后处理中对每个脑区重复调用全脑 measure.label 并重复进行 256³ 布尔数组比较。</dd><dt>一致性验证</dt><dd>清理后的 256×256×256 脑区分割体数据在全部 81 个非零标签上逐体素完全一致。</dd><dt>测量范围</dt><dd>包含 81 个非零解剖标签的完整 256×256×256 DDParcel 脑区分割体数据。</dd><dt>适用范围与限制</dt><dd>受试者 100408 在 CPU 上预热后 3 次交替重复的中位数。</dd></dl></div></td></tr><tr class="perf-record" data-category="port" data-record="mkcurve-ols-eigh"><th scope="row"><button class="perf-toggle" type="button" aria-controls="method-mkcurve-ols-eigh" aria-expanded="false" disabled><span class="perf-toggle-icon" aria-hidden="true">+</span><span>MK-Curve OLS QR 分解与批量特征分解</span></button><small>64 体素数值计算块 / 记录 2026-11-10</small></th><td><span class="perf-kind port">Python 移植版计算</span></td><td>1.35 秒</td><td>1.23 秒</td><td>1.10x<small>耗时减少 9.45%</small></td></tr><tr class="perf-detail-row" id="method-mkcurve-ols-eigh" hidden><td colspan="5"><div class="perf-method-body"><dl><dt>上游核查</dt><dd>在 Python MK-Curve 实现中基于 LAPACK dgeqp3/dormqr/dtrsm 与 NumPy 批量 eigh 实测；保持 WLLS 系数与参数图完全一致。</dd><dt>优化方法</dt><dd>在合成 b0 网格上通过 dormqr/dtrsm 复用均衡化设计矩阵的缓存 dgeqp3 QR 分解以完成无权 OLS 初始化，向量化张量基构建并在 parameter_maps 中批量执行 3×3 特征分解。</dd><dt>原始实现</dt><dd>此前在每次合成 b0 OLS 初始化时调用 dgelsy 并逐体素执行 np.linalg.eigh 的信号复用 QR Python 实现。</dd><dt>一致性验证</dt><dd>在全部 3 组采集数据中，所有拟合系数、MK 曲线、参数图及有效掩膜均完全一致。</dd><dt>测量范围</dt><dd>3 个真实 64 体素块（100206、149741、877168）；181 个测量方向；200 个合成 b0 网格采样点。</dd><dt>适用范围与限制</dt><dd>展示中位数基于受试者 100206（1.10 倍；在受试者 149741 上达 1.37 倍），单数值线程预热后 3 次交替重复。该增益叠加于信号复用之上。</dd></dl></div></td></tr><tr class="perf-record" data-category="implementation" data-record="csd-qc"><th scope="row"><button class="perf-toggle" type="button" aria-controls="method-csd-qc" aria-expanded="false" disabled><span class="perf-toggle-icon" aria-hidden="true">+</span><span>CSD/ACT 纤维束图质控校验</span></button><small>全脑纤维束图 / 记录 2026-11-10</small></th><td><span class="perf-kind implementation">同方法实现优化</span></td><td>10.12 秒</td><td>5.76 秒</td><td>1.76x<small>耗时减少 43.07%</small></td></tr><tr class="perf-detail-row" id="method-csd-qc" hidden><td colspan="5"><div class="perf-method-body"><dl><dt>上游核查</dt><dd>基于 NiBabel ArraySequence 纤维束缓冲区实测；保持 CSD/ACT 流线有限性与长度分布质控结果完全一致。</dd><dt>优化方法</dt><dd>直接在扁平 ArraySequence 坐标与偏移缓冲区上验证顶点有限性，并使用 np.add.reduceat 计算每条流线的欧氏线段长度。</dd><dt>原始实现</dt><dd>逐流线 Python 循环将每条流线转换为 float64 并分别调用 np.diff 与 np.linalg.norm。</dd><dt>一致性验证</dt><dd>流线计数、有限性标志、&lt;20 mm 比例及全部长度分位数完全一致。</dd><dt>测量范围</dt><dd>CSD/ACT/SIFT2 质量控制中的全脑纤维束图验证阶段。</dd><dt>适用范围与限制</dt><dd>受试者 100408 预热后 3 次交替重复的中位数；包含纤维束图加载与摘要生成。</dd></dl></div></td></tr><tr class="perf-record" data-category="implementation" data-record="wma-measures"><th scope="row"><button class="perf-toggle" type="button" aria-controls="method-wma-measures" aria-expanded="false" disabled><span class="perf-toggle-icon" aria-hidden="true">+</span><span>WMA 原生纤维束长度与标量统计</span></button><small>50,000 条流线 / 记录 2026-11-10</small></th><td><span class="perf-kind implementation">同方法实现优化</span></td><td>8.94 秒</td><td>0.55 秒</td><td>16.32x<small>耗时减少 93.87%</small></td></tr><tr class="perf-detail-row" id="method-wma-measures" hidden><td colspan="5"><div class="perf-method-body"><dl><dt>上游核查</dt><dd>基于 VTK 9.2 GetOffsetsArray/GetConnectivityArray 缓冲区实测；保持原生 WMA 纤维长度与标量汇总统计完全一致。</dd><dt>优化方法</dt><dd>通过 vtk_to_numpy 一次性提取 VTK 单元偏移与连接数组，并在全部流线上向量化汇总欧氏线段长度。</dd><dt>原始实现</dt><dd>此前在 measure_polydata 中逐单元遍历 vtkIdList 并对每个流线顶点逐点累加 math.dist。</dd><dt>一致性验证</dt><dd>点数、纤维数、截断排除计数与平均纤维长度在 IEEE-754 float64 求和精度内完全一致（rtol &lt; 1e-10）。</dd><dt>测量范围</dt><dd>VTK polydata 格式的 50,000 条全脑流线。</dd><dt>适用范围与限制</dt><dd>受试者 100408 在 50,000 条流线上预热后 3 次交替重复的中位数。</dd></dl></div></td></tr><tr class="perf-record" data-category="implementation" data-record="connectome-mean-fa"><th scope="row"><button class="perf-toggle" type="button" aria-controls="method-connectome-mean-fa" aria-expanded="false" disabled><span class="perf-toggle-icon" aria-hidden="true">+</span><span>连接组沿束 FA 采样统计</span></button><small>50,000 条流线 / 记录 2026-11-10</small></th><td><span class="perf-kind implementation">同方法实现优化</span></td><td>84.25 秒</td><td>1.66 秒</td><td>50.61x<small>耗时减少 98.02%</small></td></tr><tr class="perf-detail-row" id="method-connectome-mean-fa" hidden><td colspan="5"><div class="perf-method-body"><dl><dt>上游核查</dt><dd>基于 SciPy cKDTree 与 NiBabel ArraySequence 缓冲区实测；保持连接组边权重与节点分配完全一致。</dd><dt>优化方法</dt><dd>在全部流线上批量执行端点体素/KD 树节点分配，并通过 np.add.reduceat 在扁平 ArraySequence 顶点上向量化沿束标量图采样。</dd><dt>原始实现</dt><dd>此前在 _write_python_connectome 中逐流线分配端点并逐顶点执行 Python 仿射变换与标量体素查找。</dd><dt>一致性验证</dt><dd>全部导出的节点表、边列表及 mean_fa 连接矩阵元素在 float64 精度内完全一致（rtol &lt; 1e-12）。</dd><dt>测量范围</dt><dd>50,000 条流线；84 个 DDParcel 节点；全脑 DTI FA 标量图。</dd><dt>适用范围与限制</dt><dd>受试者 100408 在 50,000 条流线、4 mm 径向分配下预热后 3 次交替重复的中位数。</dd></dl></div></td></tr></tbody></table></div>
 <!-- measured-evidence:end -->
     </div>
     <p class="note"><a href="https://github.com/NeuroDMRI/SlicerDSpace/blob/main/docs/release/PERFORMANCE_OPTIMIZATIONS.md" target="_blank" rel="noopener">阅读完整优化报告</a></p>
@@ -328,6 +328,637 @@ export SUBJECT_ROOT="/path/to/sub-01"
   </div>
 </section>
 
+<!-- ============================================================ ONLINE DEMONSTRATIONS -->
+<section class="section reveal" id="demonstrations">
+  <div class="container">
+    <div class="sec-head">
+      <p class="eyebrow">Box 2 与 Box 3</p>
+      <h2>在线演示（Online Demonstrations）。</h2>
+      <p class="lead">基于论文手稿 Box 2 与 Box 3 的分步命令行工作流、扩散原生空间中间解剖先验以及最终脑区或连接组分析结果（在 Human Connectome Project 受试者 100307 上完整演示）。</p>
+    </div>
+
+    <div class="demo-stack">
+      <!-- ==================== BOX 2 ==================== -->
+      <details class="demo-box" id="demo-box-2">
+        <summary class="demo-box-summary">
+          <div class="demo-box-title-group">
+            <span class="demo-badge">Box 2</span>
+            <span class="demo-box-title">Box 2 — 解剖先验引导的区域体液与神经突分析</span>
+          </div>
+          <span class="demo-box-meta">2 个应用案例 · 皮层间质自由水 iFW · 区域 NDI 与皮层厚度</span>
+        </summary>
+
+        <div class="demo-box-body">
+          <p class="demo-box-intro">Box 2 展示了 SlicerDSpace 生成的扩散原生空间组织概率图、体素脑区分割与重建皮层曲面，如何在无需配对 T1 加权结构像的情况下，直接在扩散原生空间完成区域体液与神经突微结构分析。</p>
+
+          <!-- Box 2 Application 1 -->
+          <article class="demo-app" id="demo-box2-app1">
+            <header class="demo-app-head">
+              <span class="demo-app-tag">Box 2 · 应用案例 1</span>
+              <h3>应用案例 1：皮层间质自由水（Cortical interstitial free water, iFW）</h3>
+            </header>
+
+            <div class="demo-part">
+              <h4>1. 概览（Overview）</h4>
+              <p>由多壳层扩散 MRI 估计的胞外自由水分数（fwf）同时反映了脑实质间质液以及软脑膜边界与脑沟内的脑脊液（CSF）部分容积效应。遵循 Cho 等（Mol. Psychiatry 2024）提出的皮层间质自由水框架，SlicerDSpace 将 DIPY 双张量自由水图与原生空间 DDSeg 脑脊液概率图及 DDParcel 皮层标签相结合，从而分离出脑实质皮层间质自由水（iFW）。</p>
+              <div class="demo-formula">
+                <p><strong>基于 SlicerDSpace 输出的推导公式（Supplementary Note 1）：</strong> 首先，利用 3T WU-Minn HCP 回波时间（TE = 89.5 ms）与文献弛豫常数（T2,GM = 95 ms，T2,CSF = 1500 ms），通过 v = (f · CT) / [CC(1 − f) + f · CT]（其中 CT = exp(−TE / T2,GM)，CC = exp(−TE / T2,CSF)）将 DIPY 自由水信号分数 f（fw_fraction.nii.gz）转换为经 T2 校正的自由水体积分数 v。随后，在世界坐标对齐的扩散原生空间中逐体素减去 DDSeg 脑脊液概率体数据（CSFv，ProbabilisticMap_CSF.nii.gz），即 iFW = max(v − CSFv, 0)，并在各 DDParcel 皮层脑区内求均值。</p>
+              </div>
+              <p class="demo-scope-note"><strong>演示范围说明：</strong> Cho 等（2024）报道了早期精神病患者队列水平的皮层 iFW 升高。此处 SlicerDSpace 在示例 HCP 受试者 100307 上演示单受试者方法学流程与脑区提取步骤。</p>
+            </div>
+
+            <div class="demo-part">
+              <h4>2. 输入与依赖（Input）</h4>
+              <div class="demo-kv-grid">
+                <div class="demo-kv">
+                  <span class="demo-kv-label">受试者输入数据</span>
+                  <p>HCP 受试者 100307 的预处理多壳层 dMRI 数据（input/data.nii.gz、input/bvals、input/bvecs、input/nodif_brain_mask.nii.gz；1.25 mm 各向同性，288 个梯度体数据，壳层 b = 0, 1000, 2000, 3000 s/mm²；DIPY 自由水拟合使用 ≤2000 s/mm² 的壳层）。</p>
+                </div>
+                <div class="demo-kv">
+                  <span class="demo-kv-label">软件环境与依赖</span>
+                  <p>3D Slicer 5.10（PythonSlicer）、SlicerDMRI、PyTorch、DIPY 1.12.1，以及在 dependency_paths.json 中配置的 DDSeg 与 DDParcel 缓存模型权重。</p>
+                </div>
+              </div>
+            </div>
+
+            <div class="demo-part">
+              <h4>3. 分步 CLI 流程（Step-by-step CLI Workflow）</h4>
+              <ol class="demo-steps">
+                <li>
+                  <p><strong>步骤 1 — 生成扩散原生空间组织概率图（DDSeg）与脑区分割（DDParcel）：</strong> 直接从 DTI 特征预测 WM/GM/CSF 组织概率体数据（含 ProbabilisticMap_CSF.nii.gz）与 101 脑区体素分割（DDSurfer-wmparc.nii.gz）。</p>
+                  <div class="code" data-code>
+                    <div class="code-head"><span>终端 · 阶段 4 解剖先验生成</span><button class="copy" type="button" hidden>复制</button></div>
+                    <pre><code>"$SLICER_LAUNCHER" --launch PythonSlicer \
+  "$DSPACE_REPO/run_subject_pipeline.py" --no-user-config \
+  --dependency-config "$DEPENDENCY_CONFIG" \
+  --brain-mask-backend "$BRAIN_MASK_BACKEND" \
+  --subject-root "$SUBJECT_ROOT" --subject-id "$SUBJECT_ID" \
+  --run-name "${RUN_NAME}__box2" \
+  --targets validation,segmentation,parcellation --execute</code></pre>
+                  </div>
+                </li>
+                <li>
+                  <p><strong>步骤 2 — 拟合 DTI 与双张量自由水（Free-Water）微结构模型：</strong> 估计逐体素自由水信号分数（fw_fraction.nii.gz）、组织校正张量图（fw_tissue_fa.nii.gz、fw_tissue_md.nii.gz）及显式有效掩膜（fw_valid_mask.nii.gz）。</p>
+                  <div class="code" data-code>
+                    <div class="code-head"><span>终端 · 阶段 5 自由水模型拟合</span><button class="copy" type="button" hidden>复制</button></div>
+                    <pre><code>"$SLICER_LAUNCHER" --launch PythonSlicer \
+  "$DSPACE_REPO/run_subject_pipeline.py" --no-user-config \
+  --dependency-config "$DEPENDENCY_CONFIG" \
+  --brain-mask-backend "$BRAIN_MASK_BACKEND" \
+  --subject-root "$SUBJECT_ROOT" --subject-id "$SUBJECT_ID" \
+  --run-name "${RUN_NAME}__box2" \
+  --targets validation,microstructure \
+  --microstructure-stages dti,freewater --execute</code></pre>
+                  </div>
+                </li>
+                <li>
+                  <p><strong>步骤 3 — 导出脑区自由水与 DDSeg 组织统计并计算经 T2 校正的 iFW：</strong> scripts/analyze_regions.py 在无需重新拟合模型的情况下，直接提取所选 DDParcel 脑区（此处为双侧中央前回 1024 2024、中央后回 1022 2022 与楔前叶 1025 2025）的区域 fwf 及离散 DDSeg 组织构成。逐体素 T2 校正 iFW = max(v − CSFv, 0) 在相同 DDParcel 皮层标签内联合统计 fw_fraction.nii.gz 与 ProbabilisticMap_CSF.nii.gz。</p>
+                  <div class="code" data-code>
+                    <div class="code-head"><span>终端 · 脑区后处理统计</span><button class="copy" type="button" hidden>复制</button></div>
+                    <pre><code>"$SLICER_LAUNCHER" --launch PythonSlicer \
+  "$DSPACE_REPO/scripts/analyze_regions.py" \
+  --source-manifest "$SUBJECT_ROOT/outputs/00_run_metadata/run_orchestration_manifest.json" \
+  --regions 1024 2024 1022 2022 1025 2025 \
+  --metrics fwf --tissue \
+  --output-dir "$SUBJECT_ROOT/outputs/05_statistics/box2_ifw_regions"</code></pre>
+                  </div>
+                </li>
+              </ol>
+            </div>
+
+            <div class="demo-part">
+              <h4>4. 中间结果（Intermediate Results）</h4>
+              <div class="demo-fig-grid">
+                <figure class="demo-fig">
+                  <img src="assets/img/res-fw.jpg" width="1200" height="900" loading="lazy" alt="轴位与冠状位平面上的自由水分数图">
+                  <figcaption><strong>自由水分数（fwf）：</strong> 在 b = 0, 1000, 2000 s/mm² 壳层上的 DIPY 双张量拟合结果（02_microstructure/freewater/100307_fw_fraction.nii.gz）。</figcaption>
+                </figure>
+                <figure class="demo-fig">
+                  <img src="assets/img/res-tissue.jpg" width="1200" height="900" loading="lazy" alt="扩散原生空间中的 DDSeg 组织分割图">
+                  <figcaption><strong>DDSeg 组织先验：</strong> 扩散原生空间 GM/WM/CSF 组织分割与连续脑脊液概率体数据（03_structural/ddseg/ProbabilisticMap_CSF.nii.gz）。</figcaption>
+                </figure>
+                <figure class="demo-fig">
+                  <img src="assets/img/res-parcel.jpg" width="1200" height="900" loading="lazy" alt="DDParcel 皮层与皮层下脑区分割">
+                  <figcaption><strong>DDParcel 脑区分割：</strong> 定义脑区 ROI 掩膜的扩散原生空间皮层与皮层下标签（DDSurfer-wmparc.nii.gz）。</figcaption>
+                </figure>
+              </div>
+            </div>
+
+            <div class="demo-part">
+              <h4>5. 最终结果（Final Results）</h4>
+              <figure class="demo-fig demo-fig-wide">
+                <img src="assets/img/demo-box2-ifw.jpg" width="1607" height="432" loading="lazy" alt="Box 2a 皮层间质自由水分析流程与脑区 iFW 统计结果">
+                <figcaption><strong>Box 2a — HCP 受试者 100307 的皮层间质自由水（iFW）分析：</strong> 结合 DIPY 自由水分数图与 DDSeg 脑脊液概率图，得到经 CSF 校正的皮层 iFW 图（0–0.4 灰度局部放大图叠加 DDParcel 皮层边界）及各皮层脑区均值。</figcaption>
+              </figure>
+              <div class="table-wrap demo-table-wrap">
+                <table class="demo-table">
+                  <caption>HCP 受试者 100307 的皮层自由水分数（fwf）与经 T2/CSF 校正的间质自由水（iFW）实测统计</caption>
+                  <thead>
+                    <tr>
+                      <th scope="col">皮层脑区</th>
+                      <th scope="col">DDParcel 标签 ID（左 / 右半球）</th>
+                      <th scope="col">有效体素数（左 / 右半球）</th>
+                      <th scope="col">未校正 fwf 均值（左 / 右半球）</th>
+                      <th scope="col">皮层 iFW（Box 2a）</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td>中央前回（Precentral gyrus）</td>
+                      <td>1024 / 2024</td>
+                      <td>7,870 / 7,973</td>
+                      <td>0.273 / 0.285</td>
+                      <td><strong>0.101</strong></td>
+                    </tr>
+                    <tr>
+                      <td>中央后回（Postcentral gyrus）</td>
+                      <td>1022 / 2022</td>
+                      <td>5,700 / 5,305</td>
+                      <td>0.274 / 0.270</td>
+                      <td><strong>0.092</strong></td>
+                    </tr>
+                    <tr>
+                      <td>楔前叶（Precuneus）</td>
+                      <td>1025 / 2025</td>
+                      <td>6,498 / 6,578</td>
+                      <td>0.276 / 0.299</td>
+                      <td><strong>0.063</strong></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div class="demo-part">
+              <h4>6. 输出文件与质控（Outputs &amp; QC）</h4>
+              <div class="demo-kv-grid">
+                <div class="demo-kv">
+                  <span class="demo-kv-label">主要输出文件</span>
+                  <p>02_microstructure/freewater/{100307_fw_fraction.nii.gz, 100307_fw_valid_mask.nii.gz, fw_qc.json}、03_structural/ddseg/{SegmentationMap_GMWMCSF.nii.gz, ProbabilisticMap_CSF.nii.gz, ddseg_qc.json}，以及脑区统计表 selected_microstructure.csv、selected_tissue_statistics.csv、region_analysis_report.md。</p>
+                </div>
+                <div class="demo-kv">
+                  <span class="demo-kv-label">质控指标与可视化检查</span>
+                  <p>核查 fw_qc.json（740,916 个掩膜内体素，数值有界于 [0, 1]）、ddseg_qc.json（3 类组织概率归一化）与 region_analysis_qc.json（quantitative_inputs_unchanged: true，no_refitting: true）。可通过 3D Slicer 的 Results and QC 面板加载脑区掩膜与标量叠加图层。</p>
+                </div>
+              </div>
+            </div>
+          </article>
+
+          <!-- Box 2 Application 2 -->
+          <article class="demo-app" id="demo-box2-app2">
+            <header class="demo-app-head">
+              <span class="demo-app-tag">Box 2 · 应用案例 2</span>
+              <h3>应用案例 2：区域微结构与皮层形态学联合分析（NDI 与皮层厚度）</h3>
+            </header>
+
+            <div class="demo-part">
+              <h4>1. 概览（Overview）</h4>
+              <p>联合刻画皮层神经突微结构与宏观形态学特征需要空间对齐的体数据与皮层曲面表征。遵循 Fukutomi 等（NeuroImage 2018）的皮层微结构–形态学联合分析范式，SlicerDSpace 将 AMICO NODDI 胞内神经突密度指数（NDI）与 DDSurfer 在扩散原生空间重建并经后处理的白质/软脑膜曲面、逐顶点皮层厚度及 Desikan–Killiany（aparc）皮层分区相结合。</p>
+              <p class="demo-scope-note"><strong>演示范围说明：</strong> Fukutomi 等（2018）在健康成人队列中刻画了群体水平的皮层 NDI 与皮层厚度分布梯度。此处 SlicerDSpace 在 HCP 受试者 100307 上演示单受试者扩散原生空间的脑区级 NDI 与皮层厚度联合提取。</p>
+            </div>
+
+            <div class="demo-part">
+              <h4>2. 输入与依赖（Input）</h4>
+              <div class="demo-kv-grid">
+                <div class="demo-kv">
+                  <span class="demo-kv-label">受试者输入数据</span>
+                  <p>HCP 受试者 100307 的预处理多壳层 dMRI 数据（input/data.nii.gz、input/bvals、input/bvecs、input/nodif_brain_mask.nii.gz；AMICO NODDI 使用非零壳层 b = 1000, 2000, 3000 s/mm²）。</p>
+                </div>
+                <div class="demo-kv">
+                  <span class="demo-kv-label">软件环境与依赖</span>
+                  <p>3D Slicer 5.10、PyTorch、AMICO 2.1.1、缓存的 DDSurfer / DDParcel / DDSeg 模型权重，以及配置了有效 FREESURFER_LICENSE 的原生皮层后处理运行时。</p>
+                </div>
+              </div>
+            </div>
+
+            <div class="demo-part">
+              <h4>3. 分步 CLI 流程（Step-by-step CLI Workflow）</h4>
+              <ol class="demo-steps">
+                <li>
+                  <p><strong>步骤 1 — 重建扩散原生白质/软脑膜曲面（DDSurfer）并运行皮层后处理：</strong> 预测扩散原生空间左、右半球白质与软脑膜曲面网格（lh/rh.white、lh/rh.pial），并计算逐顶点皮层厚度（lh/rh.thickness）、球面配准及 Desikan–Killiany 脑区标注（lh/rh.aparc.annot、lh/rh.aparc.stats）。</p>
+                  <div class="code" data-code>
+                    <div class="code-head"><span>终端 · 阶段 4 皮层曲面重建与后处理</span><button class="copy" type="button" hidden>复制</button></div>
+                    <pre><code>"$SLICER_LAUNCHER" --launch PythonSlicer \
+  "$DSPACE_REPO/run_subject_pipeline.py" --no-user-config \
+  --dependency-config "$DEPENDENCY_CONFIG" \
+  --brain-mask-backend "$BRAIN_MASK_BACKEND" \
+  --subject-root "$SUBJECT_ROOT" --subject-id "$SUBJECT_ID" \
+  --run-name "${RUN_NAME}__box2" \
+  --targets validation,segmentation,parcellation,surface,surface_postprocess --execute</code></pre>
+                  </div>
+                </li>
+                <li>
+                  <p><strong>步骤 2 — 拟合 AMICO NODDI 微结构参数图：</strong> 计算胞内神经突密度指数（100307_noddi_ndi.nii.gz）、取向弥散指数（100307_noddi_odi.nii.gz）、各向同性体积分数（100307_noddi_fwf.nii.gz）以及显式组织有效掩膜（100307_noddi_tissue_valid_mask.nii.gz）。</p>
+                  <div class="code" data-code>
+                    <div class="code-head"><span>终端 · 阶段 5 NODDI 模型拟合</span><button class="copy" type="button" hidden>复制</button></div>
+                    <pre><code>"$SLICER_LAUNCHER" --launch PythonSlicer \
+  "$DSPACE_REPO/run_subject_pipeline.py" --no-user-config \
+  --dependency-config "$DEPENDENCY_CONFIG" \
+  --brain-mask-backend "$BRAIN_MASK_BACKEND" \
+  --subject-root "$SUBJECT_ROOT" --subject-id "$SUBJECT_ID" \
+  --run-name "${RUN_NAME}__box2" \
+  --targets validation,microstructure \
+  --microstructure-stages dti,noddi --execute</code></pre>
+                  </div>
+                </li>
+                <li>
+                  <p><strong>步骤 3 — 联合汇总脑区 NDI 与皮层曲面厚度统计：</strong> scripts/analyze_regions.py 将体素级 DDParcel 皮层标签与半球匹配的 aparc 曲面标注配对，联合导出脑区级 NDI、皮层厚度、表面积、曲率及双侧半球对比结果。</p>
+                  <div class="code" data-code>
+                    <div class="code-head"><span>终端 · 区域微结构与皮层曲面联合导出</span><button class="copy" type="button" hidden>复制</button></div>
+                    <pre><code>"$SLICER_LAUNCHER" --launch PythonSlicer \
+  "$DSPACE_REPO/scripts/analyze_regions.py" \
+  --source-manifest "$SUBJECT_ROOT/outputs/00_run_metadata/run_orchestration_manifest.json" \
+  --regions 1024 2024 1022 2022 1021 2021 1033 2033 \
+  --metrics fwf noddi_ndi --tissue --surface \
+  --output-dir "$SUBJECT_ROOT/outputs/05_statistics/box2_ndi_surface_regions"</code></pre>
+                  </div>
+                </li>
+              </ol>
+            </div>
+
+            <div class="demo-part">
+              <h4>4. 中间结果（Intermediate Results）</h4>
+              <div class="demo-fig-grid demo-fig-grid-2">
+                <figure class="demo-fig">
+                  <img src="assets/img/res-ndi.jpg" width="1200" height="900" loading="lazy" alt="轴位与冠状位平面上的 NODDI 神经突密度指数图">
+                  <figcaption><strong>NODDI 神经突密度（NDI）：</strong> AMICO 在扩散原生空间拟合的全脑胞内神经突密度指数（02_microstructure/noddi/100307_noddi_ndi.nii.gz）。</figcaption>
+                </figure>
+                <figure class="demo-fig">
+                  <img src="assets/img/out-surfaces.jpg" width="1200" height="900" loading="lazy" alt="DDSurfer 原生皮层曲面、皮层厚度与 Desikan-Killiany 脑区划分">
+                  <figcaption><strong>DDSurfer 皮层曲面与形态学指标：</strong> 扩散原生空间白质与软脑膜网格、逐顶点皮层厚度以及 Desikan–Killiany（aparc）皮层脑区划分。</figcaption>
+                </figure>
+              </div>
+            </div>
+
+            <div class="demo-part">
+              <h4>5. 最终结果（Final Results）</h4>
+              <figure class="demo-fig demo-fig-wide">
+                <img src="assets/img/demo-box2-ndi-thickness.jpg" width="1607" height="520" loading="lazy" alt="Box 2b 脑区 NDI 与皮层厚度曲面映射及联合散点分布">
+                <figcaption><strong>Box 2b — HCP 受试者 100307 的脑区 NDI 与皮层厚度联合分析：</strong> 映射至扩散原生皮层曲面的脑区级 NODDI NDI（0.3–0.5）与皮层厚度（0–5 mm），以及二者在全脑各皮层脑区上的联合分布。</figcaption>
+              </figure>
+              <div class="table-wrap demo-table-wrap">
+                <table class="demo-table">
+                  <caption>HCP 受试者 100307 代表性皮层脑区的 NODDI NDI 与曲面皮层厚度统计（100307_ROIWise-Microstructure.csv 与 lh/rh.aparc.stats）</caption>
+                  <thead>
+                    <tr>
+                      <th scope="col">皮层脑区（aparc）</th>
+                      <th scope="col">DDParcel 标签 ID（左 / 右半球）</th>
+                      <th scope="col">脑区 NDI 均值 ± 标准差（左 / 右半球）</th>
+                      <th scope="col">曲面皮层厚度均值 ± 标准差（左 / 右半球，mm）</th>
+                      <th scope="col">曲面顶点数（左 / 右半球）</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td>距状裂周围皮层（Pericalcarine，初级视觉）</td>
+                      <td>1021 / 2021</td>
+                      <td>0.428 ± 0.095 / 0.422 ± 0.101</td>
+                      <td>1.583 ± 0.411 / 1.696 ± 0.419</td>
+                      <td>2,097 / 2,600</td>
+                    </tr>
+                    <tr>
+                      <td>中央后回（Postcentral，初级躯体感觉）</td>
+                      <td>1022 / 2022</td>
+                      <td>0.413 ± 0.094 / 0.429 ± 0.097</td>
+                      <td>2.241 ± 0.588 / 2.170 ± 0.611</td>
+                      <td>7,229 / 6,371</td>
+                    </tr>
+                    <tr>
+                      <td>中央前回（Precentral，初级运动）</td>
+                      <td>1024 / 2024</td>
+                      <td>0.436 ± 0.095 / 0.431 ± 0.096</td>
+                      <td>2.703 ± 0.628 / 2.686 ± 0.647</td>
+                      <td>7,542 / 7,595</td>
+                    </tr>
+                    <tr>
+                      <td>额上回（Superior frontal）</td>
+                      <td>1028 / 2028</td>
+                      <td>0.374 ± 0.088 / 0.384 ± 0.091</td>
+                      <td>2.829 ± 0.571 / 2.816 ± 0.674</td>
+                      <td>13,321 / 11,175</td>
+                    </tr>
+                    <tr>
+                      <td>颞极（Temporal pole）</td>
+                      <td>1033 / 2033</td>
+                      <td>0.466 ± 0.149 / 0.424 ± 0.135</td>
+                      <td>3.508 ± 0.609 / 3.514 ± 1.284</td>
+                      <td>817 / 1,074</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div class="demo-part">
+              <h4>6. 输出文件与质控（Outputs &amp; QC）</h4>
+              <div class="demo-kv-grid">
+                <div class="demo-kv">
+                  <span class="demo-kv-label">主要输出文件</span>
+                  <p>02_microstructure/noddi/{100307_noddi_ndi.nii.gz, 100307_noddi_tissue_valid_mask.nii.gz, noddi_qc.json}、03_structural/ddsurfer/postprocess/{surf/lh.thickness, surf/rh.thickness, label/lh.aparc.annot, label/rh.aparc.annot, qc.json}，以及脑区统计表 selected_microstructure.csv、selected_surface_statistics.csv、bilateral_statistics.csv。</p>
+                </div>
+                <div class="demo-kv">
+                  <span class="demo-kv-label">质控指标与可视化检查</span>
+                  <p>核查 noddi_qc.json（显式组织有效掩膜将 CSF 主导体素排除在 NDI/ODI 统计之外）与 postprocess/qc.json（全部 14 张半球 .stats 表非空，每半球 34 个 aparc 脑区，163,842 个 fsaverage 映射顶点）。可通过 Results and QC 面板检查三维曲面叠加图与脑区统计表。</p>
+                </div>
+              </div>
+            </div>
+          </article>
+        </div>
+      </details>
+
+      <!-- ==================== BOX 3 ==================== -->
+      <details class="demo-box" id="demo-box-3">
+        <summary class="demo-box-summary">
+          <div class="demo-box-title-group">
+            <span class="demo-badge">Box 3</span>
+            <span class="demo-box-title">Box 3 — 解剖先验引导的纤维束追踪与脑连接组分析</span>
+          </div>
+          <span class="demo-box-meta">2 个应用案例 · CSD/ACT 与 SIFT2 连接组 · 基于皮层曲面的 SAF</span>
+        </summary>
+
+        <div class="demo-box-body">
+          <p class="demo-box-intro">Box 3 展示了扩散原生空间组织分割、皮层/皮层下脑区分割与重建皮层曲面，如何引导解剖约束全脑纤维束追踪（ACT）、SIFT2 结构连接组构建以及浅表白质短联合纤维（SAF）追踪。</p>
+
+          <!-- Box 3 Application 1 -->
+          <article class="demo-app" id="demo-box3-app1">
+            <header class="demo-app-head">
+              <span class="demo-app-tag">Box 3 · 应用案例 1</span>
+              <h3>应用案例 1：CSD/ACT 纤维束追踪与结构连接组</h3>
+            </header>
+
+            <div class="demo-part">
+              <h4>1. 概览（Overview）</h4>
+              <p>构建定量结构连接组需要满足解剖学合理的流线终止条件与纤维横截面积加权（Smith et al. NeuroImage 2012, 2015; Yeh et al. NeuroImage 2019），该流程广泛应用于网络神经科学与临床队列研究（Lo et al. J. Neurosci. 2010）。SlicerDSpace 直接从 DDSeg 与 DDParcel 输出构建扩散原生空间的五组织类型（5TT）先验，驱动 MRtrix3 多壳层多组织球面反卷积（MSMT-CSD）、iFOD2 解剖约束追踪（ACT）、SIFT2 加权及 84 节点连接组生成。</p>
+              <div class="demo-formula">
+                <p><strong>ACT 5TT、SIFT2 与连接组生成逻辑（tractography/act_prep.py 与 tractography/csd.py）：</strong> 在脑掩膜前景内，DDSeg 的 GM/WM/CSF 概率被重新归一化，使 5TT 通道 0（皮层灰质）、通道 2（白质）与通道 3（脑脊液）之和为 1。世界坐标对齐的 DDParcel 标签将 14 个深部灰质核团（丘脑、尾状核、壳核、苍白球、海马、杏仁核、伏隔核）按 1 − P(CSF) 分配至通道 1（皮层下灰质），将 6 个脑室标签设为纯 CSF，并将脑干/腹侧间脑/小脑白质按 1 − P(CSF) 分配至白质。通过 5ttcheck 校验与 5tt2gmwmi 灰白质交界提取后，SlicerDSpace 依次运行 Dhollander 响应函数估计（dwi2response dhollander）、dwi2fod msmt_csd、对数域多组织归一化（mtnormalise）、1,000,000 条流线的 tckgen -act（iFOD2）及 tcksift2，并在 2 mm 径向搜索半径内将流线端点分配至 84 个 DDParcel 灰质节点（68 个皮层 + 16 个皮层下）。</p>
+              </div>
+              <p class="demo-scope-note"><strong>演示范围说明：</strong> Lo 等（2010）研究了阿尔茨海默病群体的脑网络拓扑属性改变。此处 SlicerDSpace 在 HCP 受试者 100307 上演示单受试者扩散原生空间的 ACT 纤维束追踪与 SIFT2 结构连接组构建流程。</p>
+            </div>
+
+            <div class="demo-part">
+              <h4>2. 输入与依赖（Input）</h4>
+              <div class="demo-kv-grid">
+                <div class="demo-kv">
+                  <span class="demo-kv-label">受试者输入数据</span>
+                  <p>HCP 受试者 100307 的预处理多壳层 dMRI 数据（input/data.nii.gz、input/bvals、input/bvecs、input/nodif_brain_mask.nii.gz；壳层 b = 0, 1000, 2000, 3000 s/mm²）。</p>
+                </div>
+                <div class="demo-kv">
+                  <span class="demo-kv-label">软件环境与依赖</span>
+                  <p>3D Slicer 5.10、PyTorch、缓存的 DDSeg 与 DDParcel 模型权重，以及原生 MRtrix3 可执行程序（mrconvert、5ttcheck、5tt2gmwmi、dwi2response、dwi2fod、mtnormalise、tckgen、tcksift2、tck2connectome）。</p>
+                </div>
+              </div>
+            </div>
+
+            <div class="demo-part">
+              <h4>3. 分步 CLI 流程（Step-by-step CLI Workflow）</h4>
+              <ol class="demo-steps">
+                <li>
+                  <p><strong>步骤 1 — 端到端运行解剖先验、CSD/ACT 纤维束追踪与 MRtrix3 SIFT2 连接组（Box 3 CLI）：</strong> 依次执行 DDSeg 与 DDParcel，构建部分容积 5TT 与 GMWMI 体数据，估计归一化 MSMT-CSD FOD，生成 1,000,000 条带 SIFT2 权重的 iFOD2 ACT 流线，并构建对称的 84 × 84 流线计数与 SIFT2 加权连接组矩阵。</p>
+                  <div class="code" data-code>
+                    <div class="code-head"><span>终端 · Box 3 CSD/ACT 与连接组工作流</span><button class="copy" type="button" hidden>复制</button></div>
+                    <pre><code>"$SLICER_LAUNCHER" --launch PythonSlicer \
+  "$DSPACE_REPO/run_subject_pipeline.py" --no-user-config \
+  --dependency-config "$DEPENDENCY_CONFIG" \
+  --brain-mask-backend "$BRAIN_MASK_BACKEND" \
+  --subject-root "$SUBJECT_ROOT" --subject-id "$SUBJECT_ID" \
+  --run-name "${RUN_NAME}__act" \
+  --targets validation,segmentation,parcellation,tractography,connectome \
+  --tractography-backend csd_act --connectome-backend mrtrix --execute</code></pre>
+                  </div>
+                </li>
+                <li>
+                  <p><strong>步骤 2 — 可选原生 Python 连接组构建或指定节点子图提取：</strong> 传入 --connectome-backend python 可使用内置 cKDTree 2 mm 径向端点分配算法，或在已完成的运行清单上运行 scripts/analyze_regions.py，以提取指定皮层节点的导出子图与连接边列表。</p>
+                  <div class="code" data-code>
+                    <div class="code-head"><span>终端 · 区域连接组子图提取</span><button class="copy" type="button" hidden>复制</button></div>
+                    <pre><code>"$SLICER_LAUNCHER" --launch PythonSlicer \
+  "$DSPACE_REPO/scripts/analyze_regions.py" \
+  --source-manifest "$SUBJECT_ROOT/outputs/00_run_metadata/${RUN_NAME}__act_orchestration_manifest.json" \
+  --regions 1024 2024 1028 2028 \
+  --connectome connectome.mrtrix \
+  --output-dir "$SUBJECT_ROOT/outputs/05_statistics/box3_motor_frontal_subnetwork"</code></pre>
+                  </div>
+                </li>
+              </ol>
+            </div>
+
+            <div class="demo-part">
+              <h4>4. 中间结果（Intermediate Results）</h4>
+              <div class="demo-fig-grid">
+                <figure class="demo-fig">
+                  <img src="assets/img/res-tissue.jpg" width="1200" height="900" loading="lazy" alt="输入至 5TT 体数据的 DDSeg 组织分割">
+                  <figcaption><strong>用于 5TT 的 DDSeg 组织先验：</strong> 在脑掩膜内归一化的原生空间 GM/WM/CSF 组织概率（04_tractography/act_prep/100307_5tt_from_ddseg.nii.gz）。</figcaption>
+                </figure>
+                <figure class="demo-fig">
+                  <img src="assets/img/res-parcel.jpg" width="1200" height="900" loading="lazy" alt="DDParcel 皮层下先验与 84 个连接组节点">
+                  <figcaption><strong>DDParcel 先验与 84 个连接组节点：</strong> 为 5TT 提供深部灰质/脑室先验，并提供 84 个灰质连接组节点。</figcaption>
+                </figure>
+                <figure class="demo-fig">
+                  <img src="assets/img/res-tr-csd.jpg" width="1200" height="900" loading="lazy" alt="MSMT-CSD 结合 ACT 的全脑纤维束图">
+                  <figcaption><strong>MSMT-CSD / ACT 纤维束图：</strong> 带 5TT 解剖约束的 MRtrix3 iFOD2 纤维束追踪（1,000,000 条流线中的 24,000 条可视化子集）。</figcaption>
+                </figure>
+              </div>
+            </div>
+
+            <div class="demo-part">
+              <h4>5. 最终结果（Final Results）</h4>
+              <div class="demo-fig-grid demo-fig-grid-2">
+                <figure class="demo-fig">
+                  <img src="assets/img/demo-box3-csd-connectome.jpg" width="1607" height="530" loading="lazy" alt="Box 3a CSD/ACT 纤维束追踪与 SIFT2 结构连接组流程">
+                  <figcaption><strong>Box 3a — CSD/ACT 纤维束追踪与 SIFT2 连接组流程：</strong> FOD、5TT 组织分割与 DDParcel 脑区分割相结合，生成 ACT 全脑纤维束图与对数尺度 SIFT2 结构连接组矩阵（0–9.2）。</figcaption>
+                </figure>
+                <figure class="demo-fig">
+                  <img src="assets/img/res-net-sift2.jpg" width="1200" height="900" loading="lazy" alt="SIFT2 加权连接组三维网络与 84×84 矩阵">
+                  <figcaption><strong>三维脑网络与 84 × 84 SIFT2 矩阵：</strong> 在扩散原生空间渲染 2,726 条无向连接边中最强的 260 条边，并展示对称的 84 × 84 连接矩阵。</figcaption>
+                </figure>
+              </div>
+              <div class="table-wrap demo-table-wrap">
+                <table class="demo-table">
+                  <caption>HCP 受试者 100307 的 ACT 先验准备、MSMT-CSD 纤维束追踪与 SIFT2 连接组实测汇总</caption>
+                  <thead>
+                    <tr>
+                      <th scope="col">流程阶段</th>
+                      <th scope="col">核心输出文件</th>
+                      <th scope="col">HCP 100307 实测指标</th>
+                      <th scope="col">质控校验结果</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td>ACT 5TT 与灰白质交界（GMWMI）准备</td>
+                      <td>100307_5tt_from_ddseg.nii.gz, 100307_gmwmi_from_labels.nii.gz</td>
+                      <td>GM：407,630 体素 · WM：234,538 体素 · CSF：239,131 体素 · GMWMI：173,222 体素</td>
+                      <td>通过 5ttcheck 校验；世界坐标仿射对齐已验证</td>
+                    </tr>
+                    <tr>
+                      <td>MSMT-CSD 与 iFOD2 ACT</td>
+                      <td>100307_wmfod_norm.mif, 100307_csd_act_ifod2.tck</td>
+                      <td>1,000,000 条流线（长度 10–250 mm，动态 FOD 种子点）</td>
+                      <td>100% 坐标有限；SIFT2 权重数量严格匹配</td>
+                    </tr>
+                    <tr>
+                      <td>SIFT2 结构连接组</td>
+                      <td>100307-connectome-sift2_weighted_streamline_count.csv</td>
+                      <td>84 × 84 个灰质节点（68 个皮层 + 16 个皮层下）；2,726 条有效连接边（对数尺度 0–9.2）</td>
+                      <td>矩阵严格对称；零 NaN/Inf 元素</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div class="demo-part">
+              <h4>6. 输出文件与质控（Outputs &amp; QC）</h4>
+              <div class="demo-kv-grid">
+                <div class="demo-kv">
+                  <span class="demo-kv-label">主要输出文件</span>
+                  <p>04_tractography/act_prep/{100307_5tt_from_ddseg.nii.gz, 100307_gmwmi_from_labels.nii.gz, act_prep_qc.json}、04_tractography/csd/&lt;run&gt;/{100307_wmfod_norm.mif, csd_qc.json}、04_tractography/tractograms/&lt;run&gt;/{100307_csd_act_ifod2.tck, 100307_csd_act_ifod2_sift2_weights.txt}，以及 04_tractography/connectome/&lt;run&gt;/{100307-connectome-nodes.tsv, 100307-connectome-streamline_count.csv, sift2_weighted_streamline_count/100307-connectome-sift2_weighted_streamline_count.csv}。</p>
+                </div>
+                <div class="demo-kv">
+                  <span class="demo-kv-label">质控指标与可视化检查</span>
+                  <p>检查 act_prep_qc.json、csd_qc.json 与 connectome_qc.json（或 06_slicer_scene_report/report.html）。在 3D Slicer 中，Results and QC 面板可直接加载 24,000 条流线的可视化预览与三维连接组网络，且不会重复创建场景节点。</p>
+                </div>
+              </div>
+            </div>
+          </article>
+
+          <!-- Box 3 Application 2 -->
+          <article class="demo-app" id="demo-box3-app2">
+            <header class="demo-app-head">
+              <span class="demo-app-tag">Box 3 · 应用案例 2</span>
+              <h3>应用案例 2：基于皮层曲面的短联合纤维（SAF）追踪</h3>
+            </header>
+
+            <div class="demo-part">
+              <h4>1. 概览（Overview）</h4>
+              <p>紧邻皮层下方的浅表白质（SWM）主要由连接相邻皮层脑回的短联合纤维（SAF）构成（Shastin et al. NeuroImage 2022; Schilling et al. NeuroImage 2023）。SlicerDSpace 集成了基于皮层曲面的 SAF 扩散原生空间 Python 实现（tractography/saf.py），结合 DDSurfer 白质/软脑膜网格、后处理皮层标签与 CSD FOD，直接在扩散空间内进行中皮层种子点采样与皮层内终止短联合纤维的几何筛选。</p>
+              <div class="demo-formula">
+                <p><strong>受皮层曲面约束的 SAF 生成逻辑（tractography/saf.py）：</strong> 从后处理后的原生 DDSurfer 目录（_subjects/&lt;subject_id&gt;）中，SlicerDSpace 读取 lh/rh.white、lh/rh.pial、lh/rh.cortex.label 与 lh/rh.aparc.annot，构建中皮层种子曲面及逐顶点皮层半厚度（0–2.5 mm）。流线通过 tckgen 由归一化 CSD FOD 生成（或从 --saf-pregenerated-tractogram 读取），并依次经曲面三角面片相交检测、灰质–白质–灰质（GWG）皮层内终止判定、内侧壁排除（cortex.label）、同侧半球约束以及物理长度范围过滤。</p>
+              </div>
+              <p class="demo-scope-note"><strong>演示范围说明：</strong> Schilling 等（2023）在大型多中心队列中研究了浅表白质（SWM）微结构随年龄的变化轨迹。此处 SlicerDSpace 在 HCP 受试者 100307 上演示单受试者扩散原生空间的 SAF 提取流程；输出结果代表受皮层曲面约束的纤维束追踪候选流线，而非组织学金标准。</p>
+            </div>
+
+            <div class="demo-part">
+              <h4>2. 输入与依赖（Input）</h4>
+              <div class="demo-kv-grid">
+                <div class="demo-kv">
+                  <span class="demo-kv-label">受试者数据与先验</span>
+                  <p>HCP 受试者 100307 的预处理多壳层 dMRI 数据、归一化 CSD FOD 体数据（100307_wmfod_norm.mif；若不存在则自动生成），以及经后处理的原生 DDSurfer 皮层曲面目录（03_structural/ddsurfer/postprocess/_subjects/100307，含 surf/{lh,rh}.{white,pial,thickness} 与 label/{lh,rh}.{cortex.label,aparc.annot}）。</p>
+                </div>
+                <div class="demo-kv">
+                  <span class="demo-kv-label">软件环境与依赖</span>
+                  <p>3D Slicer 5.10、PyTorch、numpy、scipy、scikit-learn、nibabel、原生 MRtrix3（mrconvert、tckgen、tckstats、tckconvert）以及原生皮层后处理运行时。</p>
+                </div>
+              </div>
+            </div>
+
+            <div class="demo-part">
+              <h4>3. 分步 CLI 流程（Step-by-step CLI Workflow）</h4>
+              <ol class="demo-steps">
+                <li>
+                  <p><strong>步骤 1 — 确保已完成原生皮层曲面重建与后处理标签生成：</strong> SAF 几何筛选依赖 surface_postprocess 生成的 lh/rh.cortex.label（用于排除非皮层内侧壁）与 lh/rh.aparc.annot。</p>
+                  <div class="code" data-code>
+                    <div class="code-head"><span>终端 · 准备原生皮层曲面与皮层标签</span><button class="copy" type="button" hidden>复制</button></div>
+                    <pre><code>"$SLICER_LAUNCHER" --launch PythonSlicer \
+  "$DSPACE_REPO/run_subject_pipeline.py" --no-user-config \
+  --dependency-config "$DEPENDENCY_CONFIG" \
+  --brain-mask-backend "$BRAIN_MASK_BACKEND" \
+  --subject-root "$SUBJECT_ROOT" --subject-id "$SUBJECT_ID" \
+  --run-name "${RUN_NAME}__saf" \
+  --targets validation,segmentation,parcellation,surface,surface_postprocess --execute</code></pre>
+                  </div>
+                </li>
+                <li>
+                  <p><strong>步骤 2 — 运行基于皮层曲面的 SAF 追踪与几何筛选（Box 3 CLI）：</strong> 利用原生空间 FOD 与后处理后的 DDSurfer 皮层曲面执行 SAF 追踪流程，导出 SAF.tck、SAF.vtk（用于 3D Slicer 可视化）与 saf_qc.json。（可选参数：传入 --saf-pregenerated-tractogram /path/to/tracks.tck 对已有纤维束图重新筛选，或传入 --saf-maxlen 40 自定义最大流线长度。）</p>
+                  <div class="code" data-code>
+                    <div class="code-head"><span>终端 · Box 3 SAF 追踪工作流</span><button class="copy" type="button" hidden>复制</button></div>
+                    <pre><code>"$SLICER_LAUNCHER" --launch PythonSlicer \
+  "$DSPACE_REPO/run_subject_pipeline.py" --no-user-config \
+  --dependency-config "$DEPENDENCY_CONFIG" \
+  --brain-mask-backend "$BRAIN_MASK_BACKEND" \
+  --subject-root "$SUBJECT_ROOT" --subject-id "$SUBJECT_ID" \
+  --run-name "${RUN_NAME}__saf" \
+  --targets validation,segmentation,parcellation,surface,tractography \
+  --tractography-backend saf --execute</code></pre>
+                  </div>
+                </li>
+              </ol>
+            </div>
+
+            <div class="demo-part">
+              <h4>4. 中间结果（Intermediate Results）</h4>
+              <div class="demo-fig-grid demo-fig-grid-2">
+                <figure class="demo-fig">
+                  <img src="assets/img/out-surfaces.jpg" width="1200" height="900" loading="lazy" alt="用于 SAF 种子点生成的 DDSurfer 原生皮层曲面与厚度图">
+                  <figcaption><strong>原生白质/软脑膜曲面与皮层厚度：</strong> 在扩散原生空间重建，用于定义中皮层种子曲面、皮层半厚度（0–2.5 mm）以及 cortex.label 皮层掩膜。</figcaption>
+                </figure>
+                <figure class="demo-fig">
+                  <img src="assets/img/res-tr-csd.jpg" width="1200" height="900" loading="lazy" alt="驱动流线传播的扩散原生空间 CSD FOD 取向分布场">
+                  <figcaption><strong>CSD FOD 纤维取向分布场：</strong> 驱动相邻皮层脑回间流线传播的归一化多组织 FOD（100307_wmfod_norm.mif）。</figcaption>
+                </figure>
+              </div>
+            </div>
+
+            <div class="demo-part">
+              <h4>5. 最终结果（Final Results）</h4>
+              <figure class="demo-fig demo-fig-wide">
+                <img src="assets/img/demo-box3-saf.jpg" width="1607" height="557" loading="lazy" alt="Box 3b 基于皮层曲面的短联合纤维（SAF）追踪流程、长度直方图与脑区纤维计数">
+                <figcaption><strong>Box 3b — HCP 受试者 100307 基于皮层曲面的短联合纤维（SAF）追踪：</strong> 结合 CSD FOD、皮层标签（Cortex label，排除内侧壁）与皮层半厚度（0–2.5 mm），生成筛选后的 SAF 纤维束图、流线长度分布（0–40 mm）以及各皮层脑区的 SAF 计数（从额上回至内嗅皮层）。</figcaption>
+              </figure>
+              <div class="table-wrap demo-table-wrap">
+                <table class="demo-table">
+                  <caption>HCP 受试者 100307 基于皮层曲面的 SAF 输出文件与自动质控校验结果</caption>
+                  <thead>
+                    <tr>
+                      <th scope="col">输出项 / 指标</th>
+                      <th scope="col">文件 / saf_qc.json 字段</th>
+                      <th scope="col">HCP 100307 实测记录</th>
+                      <th scope="col">验证范围</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td>筛选后的 SAF 纤维束图</td>
+                      <td>04_tractography/saf/&lt;run&gt;/SAF.tck 与 SAF.vtk</td>
+                      <td>全种子点 Box 3b 直方图覆盖 0–40 mm（峰值位于 15–30 mm）；脑区流线计数以额上回最高（约 920 条），内嗅皮层最低</td>
+                      <td>tckstats 流线计数与 NiBabel 解码流线计数一致；已导出供 Slicer 可视化的 VTK polydata</td>
+                    </tr>
+                    <tr>
+                      <td>10 万条预生成流线重筛选基准</td>
+                      <td>saf_qc.json（scientific_output_summary）</td>
+                      <td>保留 2,505 条 SAF 流线（p05 = 0.62 mm，中位数 = 6.19 mm，p95 = 34.36 mm；阶段耗时 75.1 秒）</td>
+                      <td>all_points_finite: true；vtk_export_error: null；return_code: 0</td>
+                    </tr>
+                    <tr>
+                      <td>曲面投影与中间矩阵</td>
+                      <td>cache/{PS.mat, SD.mat, WSM_coords.txt, lengths.txt, surf_data/}</td>
+                      <td>9 个半球曲面投影文件（lh/rh.inflated、lh/rh.l.t、lh/rh.t.t、lh/rh.FA.t）</td>
+                      <td>质控通过后自动归档至可替换的 cache/ 目录</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div class="demo-part">
+              <h4>6. 输出文件与质控（Outputs &amp; QC）</h4>
+              <div class="demo-kv-grid">
+                <div class="demo-kv">
+                  <span class="demo-kv-label">主要输出文件</span>
+                  <p>04_tractography/saf/&lt;run&gt;/{SAF.tck, SAF.vtk, saf_manifest.json, saf_qc.json, log.txt} 以及缓存在 04_tractography/saf/&lt;run&gt;/cache/{PS.mat, SD.mat, WSM_coords.txt, lengths.txt, surf_data/} 中的曲面相交矩阵。</p>
+                </div>
+                <div class="demo-kv">
+                  <span class="demo-kv-label">质控指标与可视化检查</span>
+                  <p>检查 saf_qc.json 中的 status: "completed"、all_points_finite: true、length_mm 分位数（min、p05、median、p95、max）以及 vtk_export_error: null。在 3D Slicer 的 Results and QC 面板中将 SAF.vtk 与 lh.pial / rh.pial 一并加载，以检查脑回皮层内终止情况。</p>
+                </div>
+              </div>
+            </div>
+          </article>
+        </div>
+      </details>
+    </div>
+  </div>
+</section>
+
 
 </main>
 
@@ -345,6 +976,7 @@ export SUBJECT_ROOT="/path/to/sub-01"
             <li><a href="#outputs">分析结果</a></li>
             <li><a href="#performance">性能优化</a></li>
             <li><a href="#integrated">分析方法</a></li>
+            <li><a href="#demonstrations">在线演示</a></li>
           </ul>
         </div>
         <div>

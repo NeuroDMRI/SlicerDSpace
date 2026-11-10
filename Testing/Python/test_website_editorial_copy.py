@@ -42,11 +42,50 @@ class WebsiteEditorialCopyTests(unittest.TestCase):
         self.assertNotIn("fig-route-guide.png", self.source)
         self.assertIn("workflow-overview.svg", self.source)
 
-    def test_methods_are_the_last_section_without_separate_references(self):
+    def test_methods_and_demonstrations_are_last_sections_without_separate_references(self):
         main = self.source.split('<main id="main">', 1)[1].split('</main>', 1)[0]
         sections = re.findall(r'<section\b[^>]*\bid="([^"]+)"', main)
-        self.assertEqual(sections[-1], "integrated")
+        self.assertEqual(sections[-2:], ["integrated", "demonstrations"])
         self.assertNotIn('cite', sections)
+
+    def test_online_demonstrations_have_default_collapsed_box2_and_box3_modules(self):
+        demos = self.section("demonstrations")
+        details_tags = re.findall(r'<details\b([^>]*)>', demos)
+        self.assertEqual(len(details_tags), 2)
+        for attrs in details_tags:
+            self.assertNotRegex(attrs, r'\bopen\b')
+        self.assertIn('id="demo-box-2"', demos)
+        self.assertIn('id="demo-box-3"', demos)
+        self.assertIn('Box 2 — Anatomical priors for regional fluid and neurite analyses', demos)
+        self.assertIn('Box 3 — Anatomical-prior-guided tractography and brain connectivity analysis', demos)
+        for app_title in (
+            'Application 1: Cortical interstitial free water (iFW)',
+            'Application 2: Regional microstructure and cortical morphology (NDI and cortical thickness)',
+            'Application 1: CSD/ACT tractography and structural connectome',
+            'Application 2: Surface-based short association fiber (SAF) tracking',
+        ):
+            self.assertIn(app_title, demos)
+        for step_heading in (
+            '<h4>1. Overview</h4>',
+            '<h4>2. Input</h4>',
+            '<h4>3. Step-by-step CLI Workflow</h4>',
+            '<h4>4. Intermediate Results</h4>',
+            '<h4>5. Final Results</h4>',
+            '<h4>6. Outputs &amp; QC</h4>',
+        ):
+            self.assertEqual(demos.count(step_heading), 4)
+        for asset in (
+            'assets/img/demo-box2-ifw.jpg',
+            'assets/img/demo-box2-ndi-thickness.jpg',
+            'assets/img/demo-box3-csd-connectome.jpg',
+            'assets/img/demo-box3-saf.jpg',
+        ):
+            self.assertIn(asset, demos)
+            self.assertTrue((ROOT / 'docs/site' / asset).is_file())
+        zh_source = (ROOT / "docs/site/zh.html").read_text(encoding="utf-8")
+        self.assertIn('id="demonstrations"', zh_source)
+        self.assertIn('id="demo-box-2"', zh_source)
+        self.assertIn('id="demo-box-3"', zh_source)
 
     def test_header_is_navigation_only_and_footer_uses_vector_wordmark(self):
         header = self.source.split('<header class="site-header"', 1)[1].split('</header>', 1)[0]

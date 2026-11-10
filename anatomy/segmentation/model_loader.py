@@ -24,7 +24,7 @@ class TorchScriptModel:
 
     def forward(self, x: np.ndarray) -> np.ndarray:
         tensor = torch.from_numpy(x).to(self.device)
-        with torch.no_grad():
+        with torch.inference_mode():
             out = self.module(tensor)
         if isinstance(out, (tuple, list)):
             out = out[0]

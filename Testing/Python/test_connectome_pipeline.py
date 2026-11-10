@@ -709,6 +709,37 @@ class ConnectomePipelineTest(unittest.TestCase):
 
             self.assertEqual(_tck_header_streamline_count(path), 2)
 
+    def test_batched_endpoint_assignment_matches_pointwise_reference(self) -> None:
+        import numpy as np
+        from connectome.pipeline import (
+            _build_endpoint_label_assigner,
+            _label_at_point,
+            _labels_at_points,
+        )
+
+        rng = np.random.default_rng(77)
+        labels = np.zeros((16, 16, 16), dtype=np.int16)
+        labels[2:5, 2:5, 2:5] = 1001
+        labels[10:14, 10:14, 10:14] = 2002
+        labels[6:8, 6:8, 6:8] = 2  # non-allowed white matter
+        inv_affine = np.eye(4, dtype=np.float64)
+        points = rng.uniform(-2.0, 17.0, size=(300, 3))
+
+        direct_batch = _labels_at_points(points, labels, inv_affine)
+        direct_ref = np.asarray([_label_at_point(pt, labels, inv_affine) for pt in points], dtype=np.int64)
+        np.testing.assert_array_equal(direct_batch, direct_ref)
+
+        for radius in (0.0, 4.0):
+            assigner, _ = _build_endpoint_label_assigner(
+                labels,
+                inv_affine,
+                allowed_labels=[1001, 2002],
+                radius_mm=radius,
+            )
+            batch_assigned = assigner.assign_batch(points, direct_labels=direct_batch)
+            ref_assigned = np.asarray([assigner(pt) for pt in points], dtype=np.int64)
+            np.testing.assert_array_equal(batch_assigned, ref_assigned)
+
 
 if __name__ == "__main__":
     unittest.main()

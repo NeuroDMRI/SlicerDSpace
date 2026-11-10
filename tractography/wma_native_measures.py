@@ -43,17 +43,34 @@ def measure_polydata(poly):
     count = int(points.GetNumberOfPoints()) if points is not None else 0
     lines = poly.GetLines()
     line_count, total_length = 0, 0.
-    if lines is not None:
-        ids = vtk.vtkIdList()
-        lines.InitTraversal()
-        while lines.GetNextCell(ids):
-            n = ids.GetNumberOfIds()
-            if n == 0:
-                continue
-            line_count += 1
-            for index in range(1, n):
-                p, q = points.GetPoint(ids.GetId(index - 1)), points.GetPoint(ids.GetId(index))
-                total_length += math.dist(p, q)
+    if lines is not None and points is not None and count > 0:
+        offsets_vtk = lines.GetOffsetsArray() if hasattr(lines, 'GetOffsetsArray') else None
+        conn_vtk = lines.GetConnectivityArray() if hasattr(lines, 'GetConnectivityArray') else None
+        pts_data = points.GetData()
+        if offsets_vtk is not None and conn_vtk is not None and pts_data is not None:
+            point_coords = np.asarray(vtk_to_numpy(pts_data), dtype=np.float64)
+            offsets = np.asarray(vtk_to_numpy(offsets_vtk), dtype=np.int64).reshape(-1)
+            conn = np.asarray(vtk_to_numpy(conn_vtk), dtype=np.int64).reshape(-1)
+            lengths = np.diff(offsets)
+            line_count = int(np.count_nonzero(lengths > 0))
+            if conn.size >= 2 and np.any(lengths >= 2):
+                ordered = point_coords[conn]
+                seg_lengths = np.linalg.norm(ordered[1:] - ordered[:-1], axis=1)
+                bounds = offsets[1:-1] - 1
+                bounds = bounds[(bounds >= 0) & (bounds < seg_lengths.size)]
+                seg_lengths[bounds] = 0.0
+                total_length = float(np.sum(seg_lengths, dtype=np.float64))
+        else:
+            ids = vtk.vtkIdList()
+            lines.InitTraversal()
+            while lines.GetNextCell(ids):
+                n = ids.GetNumberOfIds()
+                if n == 0:
+                    continue
+                line_count += 1
+                for index in range(1, n):
+                    p, q = points.GetPoint(ids.GetId(index - 1)), points.GetPoint(ids.GetId(index))
+                    total_length += math.dist(p, q)
     row = {
         'Num_Points': count,
         'Num_Fibers': line_count,

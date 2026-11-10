@@ -1,0 +1,209 @@
+{
+  "kind": "five_module_subalgorithm_optimizations",
+  "status": "passed",
+  "measured_at": "2026-11-10T02:53:20.132379+00:00",
+  "reviewed_on": "2026-11-10",
+  "environment": {
+    "python": "3.12.10 (main, Nov 10 2025, 07:45:19) [GCC 14.2.1 20250110 (Red Hat 14.2.1-7)]",
+    "platform": "Linux-6.8.0-87-generic-x86_64-with-glibc2.35",
+    "numpy": "2.0.2",
+    "scipy": "1.13.1",
+    "torch": "2.14.1+cu130",
+    "gpu": "NVIDIA GeForce RTX 3090"
+  },
+  "records": [
+    {
+      "module": "Anatomical priors",
+      "sub_algorithm": "DDSeg",
+      "optimization": "Uniform background slice cache + inference_mode (full 3-view CUDA)",
+      "subject_id": "100408",
+      "reference_median_seconds": 6.196,
+      "optimized_median_seconds": 5.383,
+      "speed_ratio": 1.151031023592792,
+      "time_reduction_percent": 13.121368624919294,
+      "repeats": 3,
+      "warmups_per_method": 1,
+      "exact_output_parity": true,
+      "device": "cuda"
+    },
+    {
+      "module": "Anatomical priors",
+      "sub_algorithm": "DDSeg",
+      "optimization": "Uniform background slice cache + inference_mode (strided full-view CPU sample)",
+      "subject_id": "100408",
+      "reference_median_seconds": 26.312,
+      "optimized_median_seconds": 12.942,
+      "speed_ratio": 2.0330706227785504,
+      "time_reduction_percent": 50.813317117664944,
+      "repeats": 3,
+      "warmups_per_method": 1,
+      "exact_output_parity": true,
+      "device": "cpu"
+    },
+    {
+      "module": "Anatomical priors",
+      "sub_algorithm": "DDParcel",
+      "optimization": "Uniform background batch cache + zero-copy thick-slices + sagittal LUT (full 3-view CUDA)",
+      "subject_id": "100408",
+      "reference_median_seconds": 69.02,
+      "optimized_median_seconds": 42.844,
+      "speed_ratio": 1.6109606946130146,
+      "time_reduction_percent": 37.92523906114169,
+      "repeats": 3,
+      "warmups_per_method": 1,
+      "exact_output_parity": true,
+      "device": "cuda"
+    },
+    {
+      "module": "Anatomical priors",
+      "sub_algorithm": "DDParcel",
+      "optimization": "Bounding-box connected-component relabeling (256^3 volume)",
+      "subject_id": "100408",
+      "reference_median_seconds": 64.059,
+      "optimized_median_seconds": 35.871,
+      "speed_ratio": 1.7858158400936688,
+      "time_reduction_percent": 44.00318456422985,
+      "repeats": 3,
+      "warmups_per_method": 1,
+      "exact_output_parity": true,
+      "device": "cpu"
+    },
+    {
+      "module": "Microstructure",
+      "sub_algorithm": "MK-Curve",
+      "optimization": "Precomputed OLS QR + batched eigh + vectorized tensor basis (100206)",
+      "subject_id": "100206",
+      "reference_median_seconds": 1.354,
+      "optimized_median_seconds": 1.226,
+      "speed_ratio": 1.1044045676998369,
+      "time_reduction_percent": 9.453471196454954,
+      "repeats": 3,
+      "warmups_per_method": 1,
+      "exact_output_parity": true,
+      "voxels": 64,
+      "measurements": 181,
+      "grid_samples": 200
+    },
+    {
+      "module": "Microstructure",
+      "sub_algorithm": "MK-Curve",
+      "optimization": "Precomputed OLS QR + batched eigh + vectorized tensor basis (149741)",
+      "subject_id": "149741",
+      "reference_median_seconds": 1.614,
+      "optimized_median_seconds": 1.179,
+      "speed_ratio": 1.3689567430025447,
+      "time_reduction_percent": 26.951672862453535,
+      "repeats": 3,
+      "warmups_per_method": 1,
+      "exact_output_parity": true,
+      "voxels": 64,
+      "measurements": 181,
+      "grid_samples": 200
+    },
+    {
+      "module": "Microstructure",
+      "sub_algorithm": "MK-Curve",
+      "optimization": "Precomputed OLS QR + batched eigh + vectorized tensor basis (877168)",
+      "subject_id": "877168",
+      "reference_median_seconds": 1.266,
+      "optimized_median_seconds": 1.135,
+      "speed_ratio": 1.1154185022026433,
+      "time_reduction_percent": 10.347551342812011,
+      "repeats": 3,
+      "warmups_per_method": 1,
+      "exact_output_parity": true,
+      "voxels": 64,
+      "measurements": 181,
+      "grid_samples": 200
+    },
+    {
+      "module": "Tractography",
+      "sub_algorithm": "CSD / ACT / SIFT2",
+      "optimization": "Vectorized ArraySequence tractogram QC validation",
+      "subject_id": "100408",
+      "reference_median_seconds": 10.119,
+      "optimized_median_seconds": 5.761,
+      "speed_ratio": 1.7564658913383093,
+      "time_reduction_percent": 43.06749678822017,
+      "repeats": 3,
+      "warmups_per_method": 1,
+      "exact_output_parity": true,
+      "device": "cpu"
+    },
+    {
+      "reference_median_seconds": 8.93743989430368,
+      "optimized_median_seconds": 0.547551192343235,
+      "speed_ratio": 16.32256493873399,
+      "time_reduction_percent": 93.87351189133905,
+      "times_seconds": {
+        "reference": [
+          8.510136534459889,
+          8.948104731738567,
+          8.93743989430368
+        ],
+        "optimized": [
+          0.5513826757669449,
+          0.547551192343235,
+          0.4792735781520605
+        ]
+      },
+      "repeats": 3,
+      "warmups_per_method": 1,
+      "exact_output_parity": true,
+      "module": "Fibre bundles",
+      "sub_algorithm": "WMA",
+      "optimization": "Vectorized VTK polydata tract length & scalar summary (50k streamlines)",
+      "subject_id": "100408"
+    },
+    {
+      "reference_median_seconds": 9.503743479028344,
+      "optimized_median_seconds": 0.8991646757349372,
+      "speed_ratio": 10.569524955215137,
+      "time_reduction_percent": 90.53883685182475,
+      "times_seconds": {
+        "reference": [
+          9.089668578468263,
+          9.503743479028344,
+          10.076071730814874
+        ],
+        "optimized": [
+          0.828644335269928,
+          1.1812015222385526,
+          0.8991646757349372
+        ]
+      },
+      "repeats": 3,
+      "warmups_per_method": 1,
+      "exact_output_parity": true,
+      "module": "Connectome",
+      "sub_algorithm": "Connectome (streamline_count)",
+      "optimization": "Batched endpoint voxel + KD-tree radial assignment (50k streamlines)",
+      "subject_id": "100408"
+    },
+    {
+      "reference_median_seconds": 84.25377066154033,
+      "optimized_median_seconds": 1.664893719367683,
+      "speed_ratio": 50.60609556118659,
+      "time_reduction_percent": 98.02395346072308,
+      "times_seconds": {
+        "reference": [
+          84.25377066154033,
+          86.50593715719879,
+          82.74740298837423
+        ],
+        "optimized": [
+          1.6224442711099982,
+          1.6836827155202627,
+          1.664893719367683
+        ]
+      },
+      "repeats": 3,
+      "warmups_per_method": 1,
+      "exact_output_parity": true,
+      "module": "Connectome",
+      "sub_algorithm": "Connectome (mean_fa)",
+      "optimization": "Batched endpoint assignment + vectorized along-tract FA sampling (50k streamlines)",
+      "subject_id": "100408"
+    }
+  ]
+}

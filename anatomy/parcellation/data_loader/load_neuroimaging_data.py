@@ -123,15 +123,8 @@ def get_thick_slices(img_data, slice_thickness=3):
     :param int slice_thickness: number of slices to stack on top and below slice of interest (default=3) 
     :return: 
     """
-    h, w, d = img_data.shape
-    n_thick = 2 * slice_thickness + 1
-    out_dtype = np.float32 if np.issubdtype(img_data.dtype, np.floating) else img_data.dtype
     img_data_pad = np.pad(img_data, ((0, 0), (0, 0), (slice_thickness, slice_thickness)), mode='edge')
-    img_data_thick = np.empty((h, w, d, n_thick), dtype=out_dtype)
-    for slice_idx in range(n_thick):
-        img_data_thick[:, :, :, slice_idx] = img_data_pad[:, :, slice_idx:d + slice_idx]
-
-    return img_data_thick
+    return np.lib.stride_tricks.sliding_window_view(img_data_pad, 2 * slice_thickness + 1, axis=2)
 
 
 def filter_blank_slices_thick(img_vol, label_vol, weight_vol, threshold=50):
@@ -591,6 +584,19 @@ def sagittal_coronal_remap_lookup(x):
         }[x]
 
 
+_SAGITTAL_TO_FULL_IDX_DEFAULT = np.array([
+    np.where(np.array([0, 14, 15, 16, 24, 41, 43, 44, 46, 47, 49,
+                       50, 51, 52, 53, 54, 58, 60, 63, 192, 1001, 1002,
+                       1003, 1005, 1006, 1007, 1008, 1009, 1010, 1011, 1012, 1013, 1014,
+                       1015, 1016, 1017, 1018, 1019, 1020, 1021, 1022, 1023, 1024, 1025,
+                       1026, 1027, 1028, 1029, 1030, 1031, 1032, 1033, 1034, 1035]) == l)[0][0]
+    for l in [0, 41, 43, 44, 46, 47, 49, 50, 51, 52, 14, 15, 16, 53, 54, 24, 58, 60, 63, 41, 43, 44, 46, 47, 49, 50, 51, 52, 53,
+              54, 58, 60, 63, 192, 1001, 1002, 1003, 1005, 1006, 1007, 1008, 1009, 1010, 1011, 1012, 1013, 1014, 1015, 1016,
+              1017, 1018, 1019, 1020, 1021, 1022, 1023, 1024, 1025, 1026, 1027, 1028, 1029, 1030, 1031, 1032, 1033, 1034, 1035,
+              1002, 1005, 1010, 1012, 1013, 1014, 1016, 1017, 1021, 1022, 1023, 1024, 1025, 1028]
+])
+
+
 def map_prediction_sagittal2full(prediction_sag, num_classes=85):
     """
     Function to remap the prediction on the sagittal network to full label space used by coronal and axial networks
@@ -634,11 +640,7 @@ def map_prediction_sagittal2full(prediction_sag, num_classes=85):
                                1015, 1016, 1017, 1018, 1019, 1020, 1021, 1022, 1023, 1024, 1025,
                                1026, 1027, 1028, 1029, 1030, 1031, 1032, 1033, 1034, 1035])
 
-        idx = []
-        for l in labels_full_to_sag:
-            idx.append(np.where(labels_sag==l)[0][0])
-
-        idx_list = np.array(idx)
+        idx_list = _SAGITTAL_TO_FULL_IDX_DEFAULT
 
     prediction_full = prediction_sag[:, idx_list, :, :]
     return prediction_full
@@ -767,15 +769,12 @@ class OrigDataThickSlices_Fused_Input(Dataset):
 
                 # Make 4D
                 orig_thick = np.transpose(orig_thick, (2, 0, 1, 3))
-                if self.images is None:
-                    self.images = np.empty(
-                        (*orig_thick.shape[:3], len(orig) * n_thick),
-                        dtype=orig_thick.dtype,
-                    )
-                self.images[:, :, :, idx * n_thick:(idx + 1) * n_thick] = orig_thick
-                del orig_thick
+                orig_thick_list.append(orig_thick)
 
-            self.count = self.images.shape[0]
+            self._modality_views = orig_thick_list
+            self._images_cache = None
+
+            self.count = orig_thick_list[0].shape[0]
 
             self.transforms = transforms
 
@@ -785,9 +784,18 @@ class OrigDataThickSlices_Fused_Input(Dataset):
             print("Loading failed. {}".format(e))
             raise
 
+    @property
+    def images(self):
+        if self._images_cache is None:
+            self._images_cache = np.concatenate(self._modality_views, axis=3)
+        return self._images_cache
+
     def __getitem__(self, index):
 
-        img = self.images[index]
+        if self._images_cache is not None:
+            img = self._images_cache[index]
+        else:
+            img = np.concatenate([v[index] for v in self._modality_views], axis=2)
 
         if self.transforms is not None:
             img = self.transforms(img)

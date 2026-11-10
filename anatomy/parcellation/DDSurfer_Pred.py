@@ -109,6 +109,21 @@ def options_parse():
 
     return sel_option
 
+
+def _uniform_batch_key(images_batch):
+    if not isinstance(images_batch, torch.Tensor) or images_batch.ndim != 4 or images_batch.numel() == 0:
+        return None
+    _, _, h, w = images_batch.shape
+    first = float(images_batch[0, 0, 0, 0].item())
+    if not np.isfinite(first):
+        return None
+    if not bool((images_batch[:, 0, h // 2, w // 2] == first).all()):
+        return None
+    if not bool((images_batch == first).all()):
+        return None
+    return (tuple(images_batch.shape), str(images_batch.dtype), first)
+
+
 def run_network(img_filename, orig_data, prediction_probability, plane, ckpts, params_model, model, logger):
 
     # Set up DataLoader
@@ -139,7 +154,7 @@ def run_network(img_filename, orig_data, prediction_probability, plane, ckpts, p
     model.eval()
 
     logger.info("  -{} model loaded.".format(plane))
-    with torch.no_grad():
+    with torch.inference_mode():
         batch_count = len(test_data_loader)
         progress_interval = max(1, batch_count // 8)
         logger.info(
@@ -150,6 +165,7 @@ def run_network(img_filename, orig_data, prediction_probability, plane, ckpts, p
         )
         plane_start = time.time()
 
+        uniform_batch_cache = {}
         start_index = 0
         cached_constant_temps = {}
         for batch_idx, sample_batch in enumerate(test_data_loader):
@@ -162,23 +178,16 @@ def run_network(img_filename, orig_data, prediction_probability, plane, ckpts, p
                     time.time() - plane_start,
                 )
 
-            images_batch = Variable(sample_batch["image"])
-            const_key = None
-            if (
-                images_batch.shape[0] == params_model["batch_size"]
-                and bool(torch.min(images_batch) == torch.max(images_batch))
-            ):
-                const_key = float(images_batch.reshape(-1)[0].item())
-
-            if const_key is not None and const_key in cached_constant_temps:
-                temp_list = [cached_constant_temps[const_key]]
+            images_batch = sample_batch["image"]
+            cache_key = _uniform_batch_key(images_batch)
+            if cache_key is not None and cache_key in uniform_batch_cache:
+                temp_list = [uniform_batch_cache[cache_key]]
             else:
                 if params_model["use_cuda"]:
                     images_batch = images_batch.to(params_model["device"])
-
                 temp, temp_list = model(images_batch)
-                if const_key is not None and temp_list:
-                    cached_constant_temps[const_key] = temp_list[0].detach().clone()
+                if cache_key is not None and len(uniform_batch_cache) < 4 and temp_list:
+                    uniform_batch_cache[cache_key] = temp_list[0].detach().cpu().clone()
 
             # Only the fused prediction at index 0 is consumed during
             # postprocessing.  Caching every backbone prediction as a full
@@ -339,8 +348,7 @@ def fastsurfercnn(img_filename, save_as, logger, args):
         for region in regionprops(label_img):
              if region.label != 0:  # To avoid background
                 if np.linalg.norm(np.asarray(region.centroid) - centroid_rh) < np.linalg.norm(np.asarray(region.centroid) - centroid_lh):
-                    mask = label_img == region.label
-                    pred_prob[mask] = label_current + 1000
+                    pred_prob[region.slice][region.image] = label_current + 1000
 
     print(f" label_img 1 : {label_img.shape}")
 
@@ -381,8 +389,7 @@ def fastsurfercnn(img_filename, save_as, logger, args):
             for region in regionprops(label_image):
 
                 if region.area <= tolerance:
-                    mask_label = (label_image == region.label)
-                    mask[mask_label] = 1
+                    mask[region.slice][region.image] = 1
 
         pred_prob[mask == 1] = pred_prob_medfilt[mask == 1]
         logger.info("Segmentation Cleaned up in {:0.4f} seconds.".format(time.time() - start))

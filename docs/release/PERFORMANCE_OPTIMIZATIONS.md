@@ -2,7 +2,7 @@
 
 # Performance Optimizations
 
-**Reviewed 30 October 2026 · Complete-model pairs and numerically equivalent optimizations**
+**Reviewed 10 November 2026 · Complete-model pairs and numerically equivalent optimizations**
 
 [Project](../../README.md) | [Documentation](../README.md) | [Runtimes](MODULE_RUNTIMES_20261017.md) | [Author-reference CSV](benchmarks/author_wma_optimizations_20261020.csv) | [JSON](benchmarks/author_wma_optimizations_20261020.json) | [中文](PERFORMANCE_OPTIMIZATIONS.zh-CN.md)
 
@@ -32,6 +32,29 @@ JSON evidence records implementation hashes and immutable snapshots.
 
 ---
 
+## 10 November: Five-Module Sub-Algorithm Computation Optimizations
+
+Across the five canonical pipeline modules (`Anatomical priors`, `Microstructure`, `Tractography`, `Fibre bundles`, `Connectome`), additional computation-preserving optimizations eliminate redundant background-slice CNN evaluation, 4D thick-slice array duplication, full-volume connected-component relabeling, repeated unweighted OLS QR factorizations, per-streamline Python/VTK geometry loops, and per-vertex scalar connectome lookups ([source records: 9 November](benchmarks/runtime_optimizations_20261109.json), [source records: 10 November](benchmarks/five_module_subalgorithm_optimizations_20261110.json)). Every pair executes 1 warmup plus 3 alternating repetitions on real HCP Young Adult data and passes exact output equivalence checks:
+
+| Module | Sub-algorithm | Optimization & scope | Reference | Optimized | Speed ratio | Time saved |
+| --- | --- | --- | ---: | ---: | ---: | ---: |
+| Anatomical priors | DDSeg | Uniform background slice cache + `inference_mode` (full 3-view CUDA, `100408`) | 6.20 s | 5.38 s | 1.15× | 13.12% |
+| Anatomical priors | DDSeg | Uniform background slice cache + `inference_mode` (strided full-view CPU, `100408`) | 26.31 s | 12.94 s | 2.03× | 50.81% |
+| Anatomical priors | DDParcel | Zero-copy `sliding_window_view` thick-slices + uniform batch cache + sagittal LUT (full 3-view CUDA, `100408`) | 69.02 s | 42.84 s | 1.61× | 37.93% |
+| Anatomical priors | DDParcel | Bounding-box `region.slice` 3D connected-component cleanup ($256^3$ volume, `100408`) | 64.06 s | 35.87 s | 1.79× | 44.00% |
+| Microstructure | DTI (Teem WLS) | Single zero-signal template + nonzero-row `tenEstimateUpdate` (full brain, `100206`) | 74.09 s | 31.31 s | 2.37× | 57.74% |
+| Microstructure | DTI (DEC-FA) | Active-FA ($>0$) $3\times 3$ frame rotation and `eigh` (full brain, `100206`) | 4.51 s | 2.63 s | 1.71× | 41.58% |
+| Microstructure | MK-Curve | Cached `dgeqp3` OLS QR (`dormqr`/`dtrsm`) + batched `eigh` + vectorized tensor basis (64 voxels, `100206` / `149741` / `877168`) | 1.35 / 1.61 / 1.27 s | 1.23 / 1.18 / 1.14 s | 1.10–1.37× | 9.45–26.95% |
+| Tractography | CSD / ACT / SIFT2 | Vectorized flat `ArraySequence` tractogram QC validation (full-brain tractogram, `100408`) | 10.12 s | 5.76 s | 1.76× | 43.07% |
+| Tractography | Regional tractography | Batched 4,096-streamline endpoint ROI selection (1M streamlines, `100206`) | 33.58 s | 1.75 s | 19.16× | 94.78% |
+| Fibre bundles | WMA | Vectorized VTK `GetOffsetsArray`/`GetConnectivityArray` tract summary (50k streamlines, `100408`) | 8.94 s | 0.55 s | 16.32× | 93.87% |
+| Connectome | Connectome (`streamline_count`) | Batched 4,096-streamline voxel + 2 mm `cKDTree` radial assignment (1M streamlines, `100206`) | 120.61 s | 4.31 s | 27.97× | 96.42% |
+| Connectome | Connectome (`mean_fa`) | Batched endpoint assignment + vectorized `reduceat` along-tract FA sampling (50k streamlines, `100408`) | 84.25 s | 1.66 s | 50.61× | 98.02% |
+
+In `tractography/csd.py`, `run_csd_act` also records a content-verified `csd_fod_preparation.json` receipt binding input DWI/mask/5TT/GMWMI hashes and spherical-harmonic parameters so repeated tracking/SIFT2 runs on unchanged inputs can reuse verified FOD and response products when `reuse_prepared_fod=True`.
+
+---
+
 ## 9 November: Multi-Subject Cohort Stage-Level Scheduling
 
 The batch runner (scripts/run_batch_pipeline.py --scheduler adaptive) coordinates individual pipeline stages across subjects within a shared CPU, memory, GPU and I/O budget ([source records](benchmarks/cohort_multi_pipeline_20261109.json)). Under a 32-core CPU budget per arm on a 16-subject HCP cohort, Subject-level fixed concurrency (--scheduler subjects) is compared against Adaptive stage-level scheduling (--scheduler adaptive):
@@ -40,7 +63,7 @@ The batch runner (scripts/run_batch_pipeline.py --scheduler adaptive) coordinate
 | --- | ---: | ---: | ---: | ---: |
 | Microstructure (DTI + FW + NODDI + DKI + MK-Curve) | 301.79 min | 197.44 min | 1.53× | 34.58% |
 | Anatomical priors (DDSeg + DDParcel + DDSurfer) | 78.43 min | 68.33 min | 1.15× | 12.88% |
-| Tractography (CSD/ACT + SIFT2) | 78.61 min | 70.66 min | 1.11× | 10.11% |
+| Tractography & Bundles (DDSeg + DDParcel + DTI + DTI-Det + WMQL + TractCloud + Connectome) | 78.61 min | 70.66 min | 1.11× | 10.11% |
 
 All 16 subjects pass output and Rule-1 numerical equivalence checks in every arm. In the Microstructure cohort, stage-level scheduling overlaps single-thread Free-water/DKI stages with multithreaded NODDI/MK-Curve stages across subjects, raising mean CPU core utilization from 12.6 to 21.2 cores without altering individual scientific estimators.
 

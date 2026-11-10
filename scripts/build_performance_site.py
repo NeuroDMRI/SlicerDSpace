@@ -15,7 +15,61 @@ ROOT = Path(__file__).resolve().parents[1]
 BENCHMARKS = ROOT / 'docs/release/benchmarks'
 SITE = ROOT / 'docs/site'
 BEGIN, END = '<!-- measured-evidence:start -->', '<!-- measured-evidence:end -->'
-REVIEWED_ON = '2026-10-30'
+REVIEWED_ON = '2026-11-10'
+
+
+def runtime_optimizations_20261109_records(report):
+    """Qualify the three-subject Teem WLS, DEC FA, endpoint-selection and connectome-radial records."""
+    environment = report.get('environment', {})
+    if (report.get('status') != 'passed' or report.get('source_inputs_unchanged') is not True
+            or any(environment.get('thread_env', {}).get(key) != '1'
+                   for key in ('OPENBLAS_NUM_THREADS', 'OMP_NUM_THREADS', 'MKL_NUM_THREADS'))):
+        raise ValueError('Runtime optimizations 2026-11-09 report header or environment is incomplete')
+    sections = {}
+    for name in ('teem_dti_wls', 'teem_dec_fa', 'regional_endpoints', 'connectome_radial'):
+        records = (report.get(name) or {}).get('records', [])
+        if len(records) != 3 or [row.get('subject_id') for row in records] != ['100206', '100408', '149741']:
+            raise ValueError(f'Expected three ordered acquisitions in {name}')
+        for row in records:
+            if row.get('exact_output_parity') is not True:
+                raise ValueError(f'Output equivalence verification failed in {name}')
+            if 'times_seconds' in row:
+                if row.get('repeats') != 3 or row.get('warmups_per_method') != 1:
+                    raise ValueError(f'Unexpected repetition count in {name}')
+                for variant in ('reference', 'optimized'):
+                    values = row['times_seconds'][variant]
+                    if (len(values) != 3 or not all(math.isfinite(v) and v > 0 for v in values)
+                            or not math.isclose(median(values), row[variant + '_median_seconds'], rel_tol=1e-12)):
+                        raise ValueError(f'Median mismatch in {name}')
+                before, after = row['reference_median_seconds'], row['optimized_median_seconds']
+            else:
+                before, after = row['reference_seconds'], row['optimized_seconds']
+                if not all(math.isfinite(v) and v > 0 for v in (before, after)):
+                    raise ValueError(f'Invalid duration in {name}')
+            if (not math.isclose(before / after, row['speed_ratio'], rel_tol=1e-12)
+                    or not math.isclose(100 * (1 - after / before), row['time_reduction_percent'], abs_tol=1e-10)):
+                raise ValueError(f'Speed ratio or reduction mismatch in {name}')
+        sections[name] = records
+    return sections
+
+
+def five_module_subalgorithm_20261110_records(report):
+    """Qualify the 10 November 2026 five-module sub-algorithm optimization records."""
+    if report.get('status') != 'passed' or report.get('kind') != 'five_module_subalgorithm_optimizations':
+        raise ValueError('Five-module sub-algorithm optimization report header is incomplete')
+    records = report.get('records', [])
+    if len(records) != 11:
+        raise ValueError('Expected 11 five-module sub-algorithm records')
+    for row in records:
+        if row.get('exact_output_parity') is not True or row.get('repeats') != 3 or row.get('warmups_per_method') != 1:
+            raise ValueError('Five-module sub-algorithm parity or repetition check failed')
+        before, after = row['reference_median_seconds'], row['optimized_median_seconds']
+        if not all(math.isfinite(v) and v > 0 for v in (before, after)):
+            raise ValueError('Invalid five-module duration')
+        if (not math.isclose(before / after, row['speed_ratio'], rel_tol=1e-12)
+                or not math.isclose(100 * (1 - after / before), row['time_reduction_percent'], abs_tol=1e-10)):
+            raise ValueError('Five-module speed ratio or reduction mismatch')
+    return records
 
 
 def mkcurve_signal_records(report):
@@ -193,12 +247,12 @@ def build_evidence():
          'All 16 subjects produce identical tissue segmentations, parcellations, cortical surfaces and QC outcomes.',
          '16-subject HCP cohort. Speedup reflects overlapping CPU surface post-processing with GPU inference across subjects rather than shortening single-subject neural network inference.',
          '16 full-brain HCP subjects; complete Anatomical priors route (DDSeg + DDParcel + DDSurfer).'),
-        ('tractography', 'cohort-tractography', 'Cohort scheduling: Tractography', '16 HCP subjects / 32-core budget + GPU',
-         'Overlap CPU-bound response estimation, MSMT-CSD, ACT/iFOD2 tracking and SIFT2 weighting with GPU-assisted anatomical priors across subjects under a unified resource budget.',
+        ('tractography', 'cohort-tractography', 'Cohort scheduling: Tractography & Bundles', '16 HCP subjects / 32-core budget + GPU',
+         'Overlap CPU-bound DTI deterministic tracking, WMQL anatomical queries and structural connectome generation with GPU-assisted DDSeg/DDParcel/TractCloud stages across subjects under a unified resource budget.',
          'Subject-level fixed concurrency versus Adaptive stage-level scheduling across the same 16-subject cohort.',
-         'All 16 subjects pass tractogram, SIFT2 weight and structural connectome equivalence and QC checks.',
-         '16-subject HCP cohort. Because MSMT-CSD and iFOD2 already saturate multi-core CPU threads per subject, stage-level scheduling provides a moderate makespan reduction.',
-         '16 full-brain HCP subjects; complete Tractography route (CSD/ACT + SIFT2).'),
+         'All 16 subjects pass tractogram, bundle extraction (WMQL and TractCloud) and structural connectome equivalence and QC checks.',
+         '16-subject HCP cohort. Stage-level scheduling overlaps GPU-assisted parcellation/TractCloud inference with CPU-bound tracking, WMQL and connectome stages across subjects.',
+         '16 full-brain HCP subjects; Tractography & Bundles route (DDSeg + DDParcel + DTI + DTI-Det + WMQL + TractCloud + Connectome).'),
     )
     for workload, identifier, title, scope, method, baseline, unchanged, limitation, sample in cohort_specs:
         entry = cohort_by_workload.get(workload)
@@ -289,6 +343,148 @@ def build_evidence():
         add(identifier, title, category, scope, case['reference_seconds'], case['optimized_seconds'],
             method, baseline, case['output_check'], limitation, case['scope'])
 
+    rt_20261109 = load('runtime_optimizations_20261109.json')
+    rt_sections = runtime_optimizations_20261109_records(rt_20261109)
+    wls_case = rt_sections['teem_dti_wls'][0]
+    add('teem-dti-wls', 'Teem DTI WLS estimation', 'implementation', 'Full brain',
+        wls_case['reference_seconds'], wls_case['optimized_seconds'],
+        'Evaluate one all-zero signal template once and run Teem tenEstimateUpdate only on nonzero-signal voxel rows; fill zero-signal rows directly from the template.',
+        'Previous full-volume Teem tenEstimateUpdate loop across all image-grid rows versus nonzero-row estimation with the same thread pool and gradient table.',
+        'All 7 tensor/mask components, baseline b0 volume and failure counts match voxelwise across all three acquisitions.',
+        'Displayed values use subject 100206 on a shared Linux host with the default host thread pool. Gains depend on the background zero-voxel fraction of the masked DWI volume.',
+        f"{wls_case['voxels']} image-grid voxels ({wls_case['nonzero_voxels']} nonzero); {wls_case['gradients']} gradient rows; three real acquisitions verified.",
+        evidence_date=rt_20261109['reviewed_on'])
+    rows[-1]['subject_results'] = [dict(subject=item['subject_id'], reference_seconds=item['reference_seconds'],
+                                        optimized_seconds=item['optimized_seconds'], speed_ratio=item['speed_ratio'])
+                                   for item in rt_sections['teem_dti_wls']]
+
+    dec_case = rt_sections['teem_dec_fa'][0]
+    add('teem-dec-fa', 'Direction-encoded colour FA', 'implementation', 'Full brain',
+        dec_case['reference_median_seconds'], dec_case['optimized_median_seconds'],
+        'Restrict 3x3 measurement-frame rotation and symmetric eigendecomposition to voxels with positive fractional anisotropy; assign zero RGB directly elsewhere.',
+        'Full-grid 3x3 matrix rotation and NumPy eigh across every image voxel versus active-FA voxel indexing with one numerical thread.',
+        'Exported uint8 RGB direction-encoded colour maps are byte-identical in all three acquisitions.',
+        'Subject 100206 medians of three alternating repeats after one warmup. Gains depend on the proportion of zero-FA background voxels.',
+        f"{dec_case['voxels']} total voxels ({dec_case['nonzero_fa_voxels']} with FA > 0); three acquisitions, three alternating repeats each.",
+        evidence_date=rt_20261109['reviewed_on'])
+    rows[-1]['subject_results'] = [dict(subject=item['subject_id'], reference_seconds=item['reference_median_seconds'],
+                                        optimized_seconds=item['optimized_median_seconds'], speed_ratio=item['speed_ratio'])
+                                   for item in rt_sections['teem_dec_fa']]
+
+    ep_case = rt_sections['regional_endpoints'][0]
+    add('regional-endpoints', 'Streamline endpoint ROI selection', 'implementation', '1M streamlines',
+        ep_case['reference_median_seconds'], ep_case['optimized_median_seconds'],
+        'Transform start and end streamline points, check grid bounds and evaluate inclusion/target masks in 4096-streamline NumPy blocks; invert the atlas affine once.',
+        'Per-streamline Python loop and repeated affine inversion versus batched 4096-streamline endpoint array evaluation.',
+        'Selected streamline indices and output point arrays match identically in all three 1000000-streamline tractograms.',
+        'Subject 100206 medians of three alternating repeats after one warmup on 4096-streamline batches; excludes file loading and writing.',
+        'Three 1000000-streamline whole-brain tractograms; bilateral thalamus/precentral to superior-frontal endpoint query; one numerical thread.',
+        evidence_date=rt_20261109['reviewed_on'])
+    rows[-1]['subject_results'] = [dict(subject=item['subject_id'], reference_seconds=item['reference_median_seconds'],
+                                        optimized_seconds=item['optimized_median_seconds'], speed_ratio=item['speed_ratio'])
+                                   for item in rt_sections['regional_endpoints']]
+
+    conn_case = rt_sections['connectome_radial'][0]
+    add('connectome-radial', 'Connectome radial endpoint assignment', 'implementation', '1M streamlines',
+        conn_case['reference_seconds'], conn_case['optimized_seconds'],
+        'Batch direct voxel label lookup and SciPy cKDTree 2 mm radial search across 4096-streamline endpoint blocks instead of per-endpoint Python calls.',
+        'Per-endpoint Python voxel lookup and single-point cKDTree queries versus batched 8192-point array queries with the same KD-tree and 2 mm radius.',
+        'Direct voxel labels, radially assigned node labels and all 84x84 connectome matrices match identically across all three acquisitions.',
+        'Displayed values use subject 100206 on 1000000 streamlines (2000000 endpoints); excludes tractogram file parsing and matrix export.',
+        'Three 1000000-streamline tractograms; 84 grey-matter nodes; 2.0 mm radial assignment search; one numerical thread.',
+        evidence_date=rt_20261109['reviewed_on'])
+    rows[-1]['subject_results'] = [dict(subject=item['subject_id'], reference_seconds=item['reference_seconds'],
+                                        optimized_seconds=item['optimized_seconds'], speed_ratio=item['speed_ratio'])
+                                   for item in rt_sections['connectome_radial']]
+
+    fm_20261110 = load('five_module_subalgorithm_optimizations_20261110.json')
+    fm_records = five_module_subalgorithm_20261110_records(fm_20261110)
+    fm_by_opt = {(r['sub_algorithm'], r.get('device'), r['subject_id']): r for r in fm_records}
+
+    ddseg_cuda = fm_by_opt[('DDSeg', 'cuda', '100408')]
+    add('ddseg-cuda', 'DDSeg tissue segmentation (CUDA)', 'implementation', 'Full 3-view CUDA',
+        ddseg_cuda['reference_median_seconds'], ddseg_cuda['optimized_median_seconds'],
+        'Cache predictions for uniform background slices within each anatomical view and execute TorchScript models under torch.inference_mode().',
+        'Uncached per-slice TorchScript evaluation across all 256 slices per view under torch.no_grad() on the same GPU.',
+        'All 3-view class probability volumes and final discrete 6-class tissue segmentations match voxelwise.',
+        'Subject 100408 medians of three alternating 3-view repeats after warmup on NVIDIA RTX 3090; excludes NIfTI file I/O.',
+        'Full 3-view 256-slice DTI feature stacks; 6 tissue classes; CUDA execution.',
+        evidence_date=fm_20261110['reviewed_on'])
+
+    ddseg_cpu = fm_by_opt[('DDSeg', 'cpu', '100408')]
+    add('ddseg-cpu', 'DDSeg slice inference (CPU)', 'implementation', 'Strided full-view CPU',
+        ddseg_cpu['reference_median_seconds'], ddseg_cpu['optimized_median_seconds'],
+        'Skip redundant CNN forward passes on uniform background slices via per-view slice caching and torch.inference_mode().',
+        'Uncached per-slice TorchScript CPU evaluation across a 32-slice strided sample spanning the full 256-slice sagittal view.',
+        'Per-slice softmax probability maps match identically across all sampled slices.',
+        'Subject 100408 medians of three alternating repeats after warmup on CPU. Gains reflect the background slice fraction around the brain mask.',
+        '32-slice strided sagittal view sample spanning background and brain slices; CPU execution.',
+        evidence_date=fm_20261110['reviewed_on'])
+
+    ddparcel_cuda = fm_by_opt[('DDParcel', 'cuda', '100408')]
+    add('ddparcel-cuda', 'DDParcel 3-view inference (CUDA)', 'implementation', 'Full 3-view CUDA',
+        ddparcel_cuda['reference_median_seconds'], ddparcel_cuda['optimized_median_seconds'],
+        'Build 7-slice windows with zero-copy sliding_window_view, concatenate 4 modalities per slice on demand, cache uniform background batches and apply a precomputed sagittal-to-full label LUT.',
+        'Iterative np.append thick-slice construction, eager 4D modality concatenation, uncached background batches and per-batch sagittal label loops on the same GPU.',
+        'Full 256x256x256x82 fused 3-view probability volumes match bitwise across all three views.',
+        'Subject 100408 medians of three alternating full 3-view repeats after warmup on NVIDIA RTX 3090; eliminates 10.75 GB of temporary 4D array allocations.',
+        'Full 256x256x256 4-modality DTI input volumes across Axial, Coronal and Sagittal FastSurferCNN networks.',
+        evidence_date=fm_20261110['reviewed_on'])
+
+    ddparcel_cc = fm_by_opt[('DDParcel', 'cpu', '100408')]
+    add('ddparcel-cc', 'DDParcel 3D connected-component cleanup', 'implementation', '256-cubed parcellation',
+        ddparcel_cc['reference_median_seconds'], ddparcel_cc['optimized_median_seconds'],
+        'Label connected components once per parcel with return_num=True, identify the largest component via bincount and clear disconnected islands inside local region.slice bounding boxes.',
+        'Duplicate full-volume measure.label calls and repeated 256-cubed boolean array comparisons per region in fastsurfercnn post-processing.',
+        'Cleaned 256x256x256 parcellation volumes match voxelwise across all 81 non-zero labels.',
+        'Subject 100408 medians of three alternating repeats after warmup on CPU.',
+        'Full 256x256x256 DDParcel parcellation volume with 81 non-zero anatomical labels.',
+        evidence_date=fm_20261110['reviewed_on'])
+
+    mk_ols_records = [r for r in fm_records if r['sub_algorithm'] == 'MK-Curve']
+    mk_ols_case = mk_ols_records[0]
+    add('mkcurve-ols-eigh', 'MK-Curve OLS QR & batched eigh', 'port', '64-voxel numeric chunk',
+        mk_ols_case['reference_median_seconds'], mk_ols_case['optimized_median_seconds'],
+        'Reuse cached dgeqp3 QR factorizations of the equilibrated design matrix via dormqr/dtrsm for unweighted OLS initialization across the synthetic-b0 grid, vectorize tensor-basis construction and batch 3x3 eigendecomposition in parameter_maps.',
+        'Preceding signal-reuse QR Python implementation calling dgelsy on every synthetic-b0 OLS initialization and per-voxel np.linalg.eigh.',
+        'All fitted coefficients, MK-curves, parameter maps and validity masks match identically across all three acquisitions.',
+        'Displayed medians use subject 100206 (1.10x; up to 1.37x on subject 149741), three alternating repeats after warmup with one numerical thread. Incremental over signal reuse.',
+        'Three real 64-voxel chunks (100206, 149741, 877168); 181 measurements; 200 synthetic-b0 grid samples.',
+        evidence_date=fm_20261110['reviewed_on'])
+    rows[-1]['subject_results'] = [dict(subject=item['subject_id'], reference_seconds=item['reference_median_seconds'],
+                                        optimized_seconds=item['optimized_median_seconds'], speed_ratio=item['speed_ratio'])
+                                   for item in mk_ols_records]
+
+    csd_qc = fm_by_opt[('CSD / ACT / SIFT2', 'cpu', '100408')]
+    add('csd-qc', 'CSD/ACT tractogram QC validation', 'implementation', 'Full-brain tractogram',
+        csd_qc['reference_median_seconds'], csd_qc['optimized_median_seconds'],
+        'Validate vertex finiteness and compute per-streamline Euclidean segment lengths directly on flat ArraySequence coordinate and offset buffers using np.add.reduceat.',
+        'Per-streamline Python loop converting each streamline to float64 and calling np.diff and np.linalg.norm individually.',
+        'Streamline counts, finiteness flags, <20 mm fractions and all length percentiles match identically.',
+        'Subject 100408 medians of three alternating repeats after warmup; includes tractogram loading and summary generation.',
+        'Full-brain tractogram validation stage in CSD/ACT/SIFT2 quality control.',
+        evidence_date=fm_20261110['reviewed_on'])
+
+    wma_meas = next(r for r in fm_records if r['sub_algorithm'] == 'WMA')
+    add('wma-measures', 'WMA native tract length & scalar summary', 'implementation', '50000 streamlines',
+        wma_meas['reference_median_seconds'], wma_meas['optimized_median_seconds'],
+        'Extract VTK cell offsets and connectivity arrays once via vtk_to_numpy and vectorize Euclidean segment-length summation across all streamlines.',
+        'Per-cell vtkIdList traversal and pointwise math.dist accumulation across every streamline vertex in measure_polydata.',
+        'Point counts, fiber counts, clamp exclusion counts and mean tract lengths match within IEEE-754 float64 summation precision (rtol < 1e-10).',
+        'Subject 100408 medians of three alternating repeats after warmup on 50000 streamlines.',
+        '50000 whole-brain streamlines in VTK polydata format.',
+        evidence_date=fm_20261110['reviewed_on'])
+
+    conn_fa = next(r for r in fm_records if r['sub_algorithm'] == 'Connectome (mean_fa)')
+    add('connectome-mean-fa', 'Connectome along-tract FA sampling', 'implementation', '50000 streamlines',
+        conn_fa['reference_median_seconds'], conn_fa['optimized_median_seconds'],
+        'Batch endpoint voxel/KD-tree node assignment across all streamlines and vectorize along-tract scalar map sampling over flat ArraySequence vertices via np.add.reduceat.',
+        'Per-streamline endpoint assignment and per-vertex Python affine transformation and scalar voxel lookup in _write_python_connectome.',
+        'All exported node tables, edge lists and mean_fa connectivity matrix entries match within float64 precision (rtol < 1e-12).',
+        'Subject 100408 medians of three alternating repeats after warmup on 50000 streamlines with 4 mm radial assignment.',
+        '50000 streamlines; 84 DDParcel nodes; full-brain DTI FA scalar map.',
+        evidence_date=fm_20261110['reviewed_on'])
+
     audit = load('upstream_freshness_verified_20261022.json')
     upstream = audit['repositories']
     references = {
@@ -306,13 +502,25 @@ def build_evidence():
         'scheduling': 'Historical plugin scheduler comparison, not a latest-upstream algorithm performance claim.',
         'cohort-microstructure': 'Plugin batch scheduler comparison (scripts/run_batch_pipeline.py); upstream DIPY 1.12.1, AMICO 2.1.1 and SciPy 1.18.1 estimators are unchanged.',
         'cohort-anatomy': 'Plugin batch scheduler comparison (scripts/run_batch_pipeline.py); upstream DDSeg, DDParcel, DDSurfer and FreeSurfer routines are unchanged.',
-        'cohort-tractography': 'Plugin batch scheduler comparison (scripts/run_batch_pipeline.py); upstream MRtrix3 CSD/ACT/SIFT2 routines are unchanged.',
+        'cohort-tractography': 'Plugin batch scheduler comparison (scripts/run_batch_pipeline.py); upstream DDSeg, DDParcel, DIPY deterministic tracking, WMQL, TractCloud and connectome routines are unchanged.',
         'freewater-nls': 'Measured DIPY 1.12.1 in Slicer; author NLS/residual/Jacobian source hashes match the dated stable-source audit.',
         'wma-transform': 'Author register_two_subjects.py SHA256 matches the 22 October WMA source audit; measured bulk vtkTransform path.',
         'wma-fibers': 'Author fibers.py at 4532b911386d independently verified; native VTK array sampling, not a new registration algorithm.',
         'wma-cache': 'Preserved same-author preparation pair. Source-qualified reuse, not a fresh latest-version benchmark.',
         'surface-mapping': 'Optimization inherited from DDSurfer c3b2d40; no plugin-original credit or latest-FreeSurfer speed claim.',
         'dwi-io': 'Generic compression/I/O control, not an improvement to a scientific estimator or an upstream-freshness claim.',
+        'teem-dti-wls': 'Measured with Slicer 5.10.0 bundled Teem 1.12.0; preserves Teem tenEstimate WLS numerics and thread count.',
+        'teem-dec-fa': 'Same measurement-frame rotation and NumPy eigh eigenvector convention; skips zero-FA background voxels where RGB is identically zero.',
+        'regional-endpoints': 'Internal regional-tractography endpoint selector; preserves nearest-voxel rounding and endpoint-pair logic.',
+        'connectome-radial': 'Measured with SciPy 1.18.1 cKDTree; preserves exact tie-breaking and 2 mm radial distance cutoff.',
+        'ddseg-cuda': 'Measured with Slicer 5.10.0 PyTorch 2.14.1+cu130 on official DDSeg TorchScript weights; preserves exact per-slice CNN outputs.',
+        'ddseg-cpu': 'Measured with Slicer 5.10.0 PyTorch 2.14.1 CPU on official DDSeg TorchScript weights; preserves exact per-slice CNN outputs.',
+        'ddparcel-cuda': 'Measured with Slicer 5.10.0 PyTorch 2.14.1+cu130 on official DDSurfer FastSurferCNN weights; preserves exact 3-view fused probabilities.',
+        'ddparcel-cc': 'Measured with scikit-image 0.25.2 measure.label/regionprops; preserves exact FastSurferCNN connected-component cleanup rules.',
+        'mkcurve-ols-eigh': 'Measured in the Python MK-Curve port using LAPACK dgeqp3/dormqr/dtrsm and NumPy batched eigh; preserves exact WLLS coefficients and maps.',
+        'csd-qc': 'Measured with NiBabel ArraySequence tractogram buffers; preserves exactCSD/ACT streamline finiteness and length-distribution QC.',
+        'wma-measures': 'Measured with VTK 9.2 GetOffsetsArray/GetConnectivityArray buffers; preserves exact native WMA fiber length and scalar summary statistics.',
+        'connectome-mean-fa': 'Measured with SciPy cKDTree and NiBabel ArraySequence buffers; preserves exact connectome edge weights and node assignments.',
     }
     if protocol_reuse:
         latest_fw = load('freewater_protocol_upstream_20261029.json')
@@ -333,6 +541,18 @@ def build_evidence():
         'freewater-nls': 'freewater_dispatch_slicer_20261021.json', 'wma-transform': 'wma_transform_20261021.json',
         'wma-fibers': 'wma_fibers_bounded_20261021.json',
         **{identifier: 'performance_optimizations_20261020.json' for _, identifier, *_ in selected},
+        'teem-dti-wls': 'runtime_optimizations_20261109.json',
+        'teem-dec-fa': 'runtime_optimizations_20261109.json',
+        'regional-endpoints': 'runtime_optimizations_20261109.json',
+        'connectome-radial': 'runtime_optimizations_20261109.json',
+        'ddseg-cuda': 'five_module_subalgorithm_optimizations_20261110.json',
+        'ddseg-cpu': 'five_module_subalgorithm_optimizations_20261110.json',
+        'ddparcel-cuda': 'five_module_subalgorithm_optimizations_20261110.json',
+        'ddparcel-cc': 'five_module_subalgorithm_optimizations_20261110.json',
+        'mkcurve-ols-eigh': 'five_module_subalgorithm_optimizations_20261110.json',
+        'csd-qc': 'five_module_subalgorithm_optimizations_20261110.json',
+        'wma-measures': 'five_module_subalgorithm_optimizations_20261110.json',
+        'connectome-mean-fa': 'five_module_subalgorithm_optimizations_20261110.json',
     }
     for row in rows:
         row['upstream_reference'] = references[row['id']]

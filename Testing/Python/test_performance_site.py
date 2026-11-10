@@ -19,13 +19,13 @@ class PerformanceSiteTests(unittest.TestCase):
         evidence = build_evidence()
         saved = json.loads((ROOT / 'docs/site/assets/data/performance.json').read_text())
         self.assertEqual(saved, evidence)
-        self.assertEqual(len(evidence['records']), 17)
+        self.assertEqual(len(evidence['records']), 29)
         for row in evidence['records']:
             self.assertTrue(math.isclose(row['speed_ratio'], row['reference_seconds'] / row['optimized_seconds']))
             self.assertTrue(row['scope'] and row['baseline'] and row['limitation'])
             self.assertIn(row['measurement_source'], evidence['sources'])
             source = ROOT / 'docs/release/benchmarks' / row['measurement_source']['file']
-            self.assertEqual(hashlib.sha256(source.read_bytes()).hexdigest(), row['measurement_source']['sha256'])
+            self.assertEqual(hashlib.sha256(source.read_bytes().replace(b'\r\n', b'\n')).hexdigest(), row['measurement_source']['sha256'])
         self.assertEqual(next(row for row in evidence['records'] if row['id'] == 'noddi')['category'], 'parallel')
         self.assertEqual(next(row for row in evidence['records'] if row['id'] == 'mkcurve')['category'], 'port')
         self.assertEqual(next(row for row in evidence['records'] if row['id'] == 'dki')['category'], 'integration')
@@ -72,8 +72,8 @@ class PerformanceSiteTests(unittest.TestCase):
     def test_method_details_are_adjacent_rows_in_the_same_table(self):
         evidence = build_evidence()
         markup = render(evidence)
-        self.assertEqual(markup.count('class="perf-record"'), 17)
-        self.assertEqual(markup.count('class="perf-detail-row"'), 17)
+        self.assertEqual(markup.count('class="perf-record"'), 29)
+        self.assertEqual(markup.count('class="perf-detail-row"'), 29)
         self.assertNotIn('perf-methods', markup)
         self.assertNotIn('Methods &amp; verification', markup)
         self.assertNotIn('<details', markup)
@@ -102,7 +102,7 @@ class PerformanceSiteTests(unittest.TestCase):
             with self.subTest(filename=filename):
                 parser = Rows()
                 parser.feed((ROOT / 'docs/site' / filename).read_text(encoding='utf-8'))
-                self.assertEqual(len(parser.rows), 17)
+                self.assertEqual(len(parser.rows), 29)
                 self.assertTrue(all('hidden' in row for row in parser.rows))
 
     def test_new_local_optimizations_require_complete_equivalence_checks(self):

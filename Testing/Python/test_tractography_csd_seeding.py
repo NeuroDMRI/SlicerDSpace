@@ -60,7 +60,11 @@ def _config(root: Path, **overrides) -> CSDActConfig:
 
 
 def _command(commands, name: str) -> tuple[str, ...]:
-    return next(command for command in commands if Path(command[0]).name == name or command[0] == name)
+    return next(
+        command
+        for command in commands
+        if Path(command[0]).stem == name or Path(command[0]).name == name or command[0] == name
+    )
 
 
 class TckgenSeedingTest(unittest.TestCase):
@@ -116,7 +120,7 @@ class TckgenSeedingTest(unittest.TestCase):
                                                               export_vtk=True))
                     for command in commands:
                         self.assertEqual(command.count('-nthreads'), 1)
-                        expected = 0 if Path(command[0]).name == 'tckgen' and seed is not None else threads
+                        expected = 0 if Path(command[0]).stem == 'tckgen' and seed is not None else threads
                         self.assertEqual(command[command.index('-nthreads') + 1], str(expected))
 
     def test_tcksift2_writes_mu(self) -> None:

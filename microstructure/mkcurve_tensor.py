@@ -14,7 +14,8 @@ from pathlib import Path
 import numpy as np
 import scipy
 from scipy.linalg import lstsq
-from scipy.linalg.lapack import dgelsy, dgelsy_lwork
+from scipy.linalg.blas import dtrsm
+from scipy.linalg.lapack import dgelsy, dgelsy_lwork, dgeqp3, dormqr
 
 
 # These SciPy families have paired wrapper/direct-driver regression evidence.
@@ -51,6 +52,48 @@ def _prepared_design(design):
     return _design_setup(design)
 
 
+@lru_cache(maxsize=4)
+def _cached_ols_qr(shape, content, lwork):
+    scaled = np.frombuffer(content, dtype=np.float64).reshape(shape)
+    qr, jpvt, tau, _, info = dgeqp3(scaled, lwork)
+    if info != 0:
+        return None
+    columns = shape[1]
+    r_upper = np.asfortranarray(qr[:columns, :columns])
+    for array in (qr, jpvt, tau, r_upper):
+        array.setflags(write=False)
+    return qr, jpvt, tau, r_upper
+
+
+@lru_cache(maxsize=32)
+def _gelsy_workspace_nrhs(rows, columns, nrhs):
+    size, info = dgelsy_lwork(rows, columns, nrhs, np.finfo(np.float64).eps)
+    if info != 0:
+        raise ValueError('LAPACK gelsy workspace query failed')
+    return int(size)
+
+
+def _ols_initial(scaled, logs):
+    if (not _DIRECT_GELSY or scaled.dtype != np.float64 or logs.dtype != np.float64
+            or not scaled.flags.c_contiguous or scaled.ndim != 2 or logs.ndim != 2
+            or scaled.shape[0] < scaled.shape[1] or scaled.nbytes > 1024 ** 2 or not len(logs)):
+        return lstsq(scaled, logs.T, lapack_driver="gelsy")[0]
+    rows, columns = scaled.shape
+    nrhs = len(logs)
+    sub_lwork = _gelsy_workspace_nrhs(rows, columns, nrhs) - columns
+    factorization = _cached_ols_qr(scaled.shape, scaled.tobytes(), sub_lwork)
+    if factorization is None:
+        return lstsq(scaled, logs.T, lapack_driver="gelsy")[0]
+    qr, jpvt, tau, r_upper = factorization
+    qtb, _, info = dormqr("L", "T", qr, tau, np.asfortranarray(logs.T), sub_lwork)
+    if info != 0:
+        return lstsq(scaled, logs.T, lapack_driver="gelsy")[0]
+    solved = dtrsm(1.0, r_upper, qtb[:columns], side=0, lower=0, trans_a=0, diag=0)
+    b_full = np.empty((rows, nrhs), dtype=np.float64, order="F")
+    b_full[jpvt - 1] = solved
+    return b_full[:columns]
+
+
 @lru_cache(maxsize=32)
 def _gelsy_workspace(rows, columns):
     size, info = dgelsy_lwork(rows, columns, 1, np.finfo(np.float64).eps)
@@ -81,11 +124,21 @@ def _tensor_terms(order):
     return indices, counts
 
 
+@lru_cache(maxsize=8)
+def _tensor_terms_arrays(order):
+    indices, counts = _tensor_terms(order)
+    idx_array = np.asarray(indices, dtype=np.intp)
+    counts_array = np.asarray(counts, dtype=np.float64)
+    idx_array.setflags(write=False)
+    counts_array.setflags(write=False)
+    return idx_array, counts_array
+
+
 def tensor_basis(directions, order):
     directions = np.asarray(directions, dtype=np.float64)
-    indices, counts = _tensor_terms(order)
-    return np.stack([np.prod(directions[..., index], axis=-1) * count
-                     for index, count in zip(indices, counts)], axis=-1)
+    _tensor_terms(order)
+    idx_array, counts_array = _tensor_terms_arrays(order)
+    return np.ascontiguousarray(np.prod(directions[..., idx_array], axis=-1) * counts_array)
 
 
 @lru_cache(maxsize=1)
@@ -104,6 +157,14 @@ def _integration_bases():
     for basis in bases:
         basis.setflags(write=False)
     return bases
+
+
+@lru_cache(maxsize=1)
+def _equator_directions():
+    angles = np.arange(256) * (2 * np.pi / 256)
+    equator = np.column_stack((np.cos(angles), np.sin(angles), np.zeros(256)))
+    equator.setflags(write=False)
+    return equator
 
 
 def design_matrix(bvals, bvecs):
@@ -143,7 +204,7 @@ def _fit_logged_signals(logs, indices, count, scale, scaled, solver):
     output = np.full((count, 22), np.nan)
     if not len(logs):
         return output
-    initial = lstsq(scaled, logs.T, lapack_driver="gelsy")[0]
+    initial = _ols_initial(scaled, logs)
     with np.errstate(over="ignore", invalid="ignore"):
         weights = np.exp(scaled @ initial).T
     maxima = weights.max(axis=1) if solver == "reference" else None
@@ -172,12 +233,13 @@ def _fit_logged_signals(logs, indices, count, scale, scaled, solver):
             output[indices[accepted]] = beta[good]
             pending[accepted] = False
     remaining = np.flatnonzero(pending)
+    scaled_qr = np.asfortranarray(scaled) if _DIRECT_GELSY and scaled.dtype == np.float64 else scaled
     for row, index, observed, weight in zip(remaining, indices[pending], logs[pending], weights[pending]):
         if maxima is None and (not np.isfinite(weight).all() or not np.any(weight > 0)):
             continue
         # Dividing all weights by a common factor leaves WLLS unchanged.
         weight = weight / (maxima[row] if maxima is not None else weight.max())
-        fit, rank = _weighted_qr(scaled * weight[:, None], observed * weight)
+        fit, rank = _weighted_qr(scaled_qr * weight[:, None], observed * weight)
         if rank == 22:
             output[index] = fit / scale
     return output
@@ -198,6 +260,7 @@ class _SyntheticB0Fitter:
         selected = signals[self.indices].copy()
         selected[:, 0] = 1.0
         self.logs = np.log(np.maximum(selected, np.finfo(float).eps))
+        self._work_logs = self.logs.copy()
 
     def fit(self, b0):
         b0 = np.asarray(b0, dtype=np.float64)
@@ -207,10 +270,15 @@ class _SyntheticB0Fitter:
             return np.full((self.count, 22), np.nan)
         baseline = b0[self.indices]
         valid = np.isfinite(baseline)
-        indices = self.indices[valid]
-        # Fancy indexing owns C-order storage, just like signals[valid] in fit_wlls.
-        logs = self.logs[valid]
-        logs[:, 0] = np.log(np.maximum(baseline[valid], np.finfo(float).eps))
+        if valid.all():
+            indices = self.indices
+            logs = self._work_logs
+            logs[:, 0] = np.log(np.maximum(baseline, np.finfo(float).eps))
+        else:
+            indices = self.indices[valid]
+            # Fancy indexing owns C-order storage, just like signals[valid] in fit_wlls.
+            logs = self.logs[valid]
+            logs[:, 0] = np.log(np.maximum(baseline[valid], np.finfo(float).eps))
         return _fit_logged_signals(logs, indices, self.count, *self.prepared, self.solver)
 
 
@@ -231,14 +299,22 @@ def parameter_maps(coefficients):
     n = len(coefficients)
     maps = {key: np.full(n, np.nan) for key in ("fa", "md", "ad", "rd", "mk", "ak", "rk", "e1", "e2", "e3")}
     maps["mk"] = mean_kurtosis(coefficients)
-    angles = np.arange(256) * (2 * np.pi / 256)
-    equator = np.column_stack((np.cos(angles), np.sin(angles), np.zeros(256)))
-    for index, beta in enumerate(coefficients):
-        if not np.isfinite(beta).all():
-            continue
-        xx, xy, xz, yy, yz, zz = beta[1:7]
-        matrix = np.array([[xx, xy, xz], [xy, yy, yz], [xz, yz, zz]])
-        values, vectors = np.linalg.eigh(matrix)
+    finite_indices = np.flatnonzero(np.isfinite(coefficients).all(axis=1))
+    if not len(finite_indices):
+        return maps
+    equator = _equator_directions()
+    finite_betas = coefficients[finite_indices]
+    matrices = np.empty((len(finite_indices), 3, 3), dtype=np.float64)
+    matrices[:, 0, 0] = finite_betas[:, 1]
+    matrices[:, 0, 1] = matrices[:, 1, 0] = finite_betas[:, 2]
+    matrices[:, 0, 2] = matrices[:, 2, 0] = finite_betas[:, 3]
+    matrices[:, 1, 1] = finite_betas[:, 4]
+    matrices[:, 1, 2] = matrices[:, 2, 1] = finite_betas[:, 5]
+    matrices[:, 2, 2] = finite_betas[:, 6]
+    values_all, vectors_all = np.linalg.eigh(matrices)
+    for pos, index in enumerate(finite_indices):
+        beta = finite_betas[pos]
+        values, vectors = values_all[pos], vectors_all[pos]
         values, direction = values[::-1], vectors[:, -1]
         md = values.mean()
         with np.errstate(divide="ignore", invalid="ignore"):

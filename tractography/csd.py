@@ -75,6 +75,7 @@ class CSDActConfig:
     export_trk: bool = False
     export_vtk: bool = False
     mrtrix_bin_dir: Optional[Path] = None
+    reuse_prepared_fod: bool = True
     execute: bool = False
 
 
@@ -410,18 +411,57 @@ def _tractogram_summary(path: Path) -> dict[str, object]:
     import nibabel as nib
     import numpy as np
 
-    lengths: list[float] = []
-    all_points_finite = True
-    for streamline in nib.streamlines.load(str(path), lazy_load=True).streamlines:
-        points = np.asarray(streamline, dtype=np.float64)
-        if points.ndim != 2 or points.shape[0] < 2 or points.shape[1] != 3:
-            all_points_finite = False
-            continue
-        if not np.isfinite(points).all():
-            all_points_finite = False
-            continue
-        lengths.append(float(np.linalg.norm(np.diff(points, axis=0), axis=1).sum()))
-    values = np.asarray(lengths, dtype=np.float64)
+    seq = nib.streamlines.load(str(path), lazy_load=False).streamlines
+    if hasattr(seq, "_data") and hasattr(seq, "_offsets") and hasattr(seq, "_lengths"):
+        data = np.asarray(seq._data, dtype=np.float64)
+        lengths_arr = np.asarray(seq._lengths, dtype=np.int64)
+        offsets_arr = np.asarray(seq._offsets, dtype=np.int64)
+        if (
+            data.ndim == 2
+            and data.shape[1] == 3
+            and len(lengths_arr) == len(offsets_arr)
+            and bool(np.all(lengths_arr >= 2))
+            and bool(np.isfinite(data).all())
+        ):
+            all_points_finite = True
+            if len(lengths_arr):
+                diffs = data[1:] - data[:-1]
+                seg_norms = np.linalg.norm(diffs, axis=1)
+                values = np.array(
+                    [
+                        float(seg_norms[offset : offset + length - 1].sum())
+                        for offset, length in zip(offsets_arr.tolist(), lengths_arr.tolist())
+                    ],
+                    dtype=np.float64,
+                )
+            else:
+                values = np.empty(0, dtype=np.float64)
+        else:
+            lengths: list[float] = []
+            all_points_finite = True
+            for streamline in seq:
+                points = np.asarray(streamline, dtype=np.float64)
+                if points.ndim != 2 or points.shape[0] < 2 or points.shape[1] != 3:
+                    all_points_finite = False
+                    continue
+                if not np.isfinite(points).all():
+                    all_points_finite = False
+                    continue
+                lengths.append(float(np.linalg.norm(np.diff(points, axis=0), axis=1).sum()))
+            values = np.asarray(lengths, dtype=np.float64)
+    else:
+        lengths = []
+        all_points_finite = True
+        for streamline in seq:
+            points = np.asarray(streamline, dtype=np.float64)
+            if points.ndim != 2 or points.shape[0] < 2 or points.shape[1] != 3:
+                all_points_finite = False
+                continue
+            if not np.isfinite(points).all():
+                all_points_finite = False
+                continue
+            lengths.append(float(np.linalg.norm(np.diff(points, axis=0), axis=1).sum()))
+        values = np.asarray(lengths, dtype=np.float64)
     summary: dict[str, object] = {
         "file": _file_info(path),
         "streamline_count": int(values.size),
@@ -569,6 +609,81 @@ def export_tck_to_trk(tck_path: Path, reference_image_path: Path, trk_path: Path
     return trk
 
 
+def _fod_preparation_paths(subject_id: str, output_dir: Path) -> dict[str, Path]:
+    return {
+        "dwi_mif": output_dir / f"{subject_id}_dwi.mif",
+        "mask_mif": output_dir / f"{subject_id}_mask.mif",
+        "wm_response": output_dir / f"{subject_id}_response_wm.txt",
+        "gm_response": output_dir / f"{subject_id}_response_gm.txt",
+        "csf_response": output_dir / f"{subject_id}_response_csf.txt",
+        "wm_fod": output_dir / f"{subject_id}_wmfod.mif",
+        "gm": output_dir / f"{subject_id}_gm.mif",
+        "csf": output_dir / f"{subject_id}_csf.mif",
+        "wm_fod_norm": output_dir / f"{subject_id}_wmfod_norm.mif",
+        "gm_norm": output_dir / f"{subject_id}_gm_norm.mif",
+        "csf_norm": output_dir / f"{subject_id}_csf_norm.mif",
+    }
+
+
+def _fod_preparation_receipt_path(output_dir: Path) -> Path:
+    return output_dir / "csd_fod_preparation.json"
+
+
+def _fod_preparation_inputs(config: CSDActConfig) -> dict[str, object]:
+    return {
+        "subject_id": config.subject_id,
+        "dwi": _file_info(config.dwi_path),
+        "bval": _file_info(config.bval_path),
+        "bvec": _file_info(config.bvec_path),
+        "mask": _file_info(config.mask_path),
+        "random_seed": config.random_seed,
+        "pretracking_nthreads": effective_nthreads(config),
+    }
+
+
+def _prepared_fod_reusable(config: CSDActConfig, output_dir: Path) -> bool:
+    if not config.reuse_prepared_fod:
+        return False
+    receipt_path = _fod_preparation_receipt_path(output_dir)
+    if not receipt_path.is_file():
+        return False
+    try:
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    if receipt.get("kind") != "mrtrix_csd_fod_preparation" or receipt.get("version") != 1:
+        return False
+    if receipt.get("inputs") != _fod_preparation_inputs(config):
+        return False
+    paths = _fod_preparation_paths(config.subject_id, output_dir)
+    recorded_artifacts = receipt.get("artifacts")
+    if not isinstance(recorded_artifacts, dict):
+        return False
+    for key, path in paths.items():
+        if not path.is_file() or path.stat().st_size <= 0:
+            return False
+        if recorded_artifacts.get(key) != _file_info(path):
+            return False
+    return True
+
+
+def _write_fod_preparation_receipt(config: CSDActConfig, output_dir: Path) -> bool:
+    paths = _fod_preparation_paths(config.subject_id, output_dir)
+    if not all(path.is_file() and path.stat().st_size > 0 for path in paths.values()):
+        return False
+    receipt = {
+        "kind": "mrtrix_csd_fod_preparation",
+        "version": 1,
+        "inputs": _fod_preparation_inputs(config),
+        "artifacts": {key: _file_info(path) for key, path in paths.items()},
+    }
+    receipt_path = _fod_preparation_receipt_path(output_dir)
+    temporary = receipt_path.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    temporary.replace(receipt_path)
+    return True
+
+
 @scheduled_stage('csd_act')
 def run_csd_act(config: CSDActConfig, *, log: Optional[Callable[[str], None]] = None) -> CSDActResult:
     _validate_config(config)
@@ -713,13 +828,21 @@ def run_csd_act(config: CSDActConfig, *, log: Optional[Callable[[str], None]] = 
             mrtrix_bin_dir=effective_mrtrix_bin,
         )
         try:
-            for command in commands:
+            fod_reused = _prepared_fod_reusable(config, output_dir)
+            manifest["fod_preparation_reused"] = fod_reused
+            qc["fod_preparation_reused"] = fod_reused
+            active_commands = commands[5:] if fod_reused else commands
+            if fod_reused:
+                _emit(f"[Tractography] Reusing verified CSD/FOD preparation in {output_dir}", log)
+            for idx, command in enumerate(active_commands):
                 argv, env = _mrtrix_csd_invocation(command, command_env)
                 _emit(f"[Tractography] Running MRtrix CSD/ACT command: {' '.join(argv)}", log)
                 with _timed_step(phase_timings, Path(command[0]).name, persist_timings, argv) as phase:
                     completed = subprocess.run(argv, check=True, env=env, cwd=output_dir)
                     return_code = completed.returncode
                     phase['return_code'] = return_code
+                if not fod_reused and idx == 4:
+                    _write_fod_preparation_receipt(config, output_dir)
             if config.export_trk and tractogram_trk is not None:
                 _emit(f"[Tractography] Exporting ACT TCK to TRK for WMQL: {tractogram_trk}", log)
                 with _timed_step(phase_timings, 'export_tck_to_trk', persist_timings):

@@ -12,6 +12,13 @@
 
 ## 1. 结论与实施边界
 
+**11 月 10 日更新：**已完成五大模块（`Anatomical priors`、`Microstructure`、`Tractography`、`Fibre bundles`、`Connectome`）子算法的第二轮保精度计算优化与真实 HCP 数据交替重复配对测速（详见 [PERFORMANCE_OPTIMIZATIONS.zh-CN.md](PERFORMANCE_OPTIMIZATIONS.zh-CN.md) 与 [five_module_subalgorithm_optimizations_20261110.json](benchmarks/five_module_subalgorithm_optimizations_20261110.json)）：
+- **Anatomical priors**：DDSeg 引入均匀背景切片缓存与 `torch.inference_mode()`（全三视图 CUDA `1.15×`、跨步全视图 CPU `2.03×`）；DDParcel 采用零拷贝 `sliding_window_view` 厚切片构建、按需单切片模态拼接（消除三视图 10.75 GB 临时 4D 数组分配）、中心像素短路均匀批次缓存及预计算矢状面映射 LUT（全三视图 CUDA `69.02 s → 42.84 s`，`1.61×`），并将 3D 连通域清理改为单次 `return_num=True` 配合 `region.slice[region.image]` 包围盒局部归零（$256^3$ 体数据 `64.06 s → 35.87 s`，`1.79×`）。
+- **Microstructure**：Teem DTI WLS 跳过全零背景行（全脑 `74.09 s → 31.31 s`，`2.37×`），DEC-FA 仅对 $\mathrm{FA}>0$ 体素执行旋转与特征分解（`4.51 s → 2.63 s`，`1.71×`）；MK-Curve 在信号复用基础上新增平衡设计矩阵 `dgeqp3` OLS QR 预分解缓存（`dormqr` + `dtrsm`）、向量化张量基及 `parameter_maps` 批量 `np.linalg.eigh`（64 体素块再提速 `1.10×–1.37×`）。
+- **Tractography**：CSD/ACT/SIFT2 全脑流线 QC 改为直接在 `ArraySequence` 扁平缓冲区上通过 `np.add.reduceat` 向量化计算（`10.12 s → 5.76 s`，`1.76×`），并新增 `csd_fod_preparation.json` 哈希回执以支持 FOD/响应函数阶段复用；区域流线端点筛选改为 4,096 流线批量评估（100 万流线 `33.58 s → 1.75 s`，`19.16×`）。
+- **Fibre bundles**：WMA `measure_polydata` 基于 VTK `GetOffsetsArray`/`GetConnectivityArray` 向量化计算纤维长度与标量均值（50,000 条流线 `8.94 s → 0.55 s`，`16.32×`）。
+- **Connectome**：Python 连接组管线全面向量化端点体素查找、2 mm/4 mm `cKDTree` 批量径向分配（100 万流线 `120.61 s → 4.31 s`，`27.97×`）以及沿纤维束标量（如 `mean_fa`）的 `np.add.reduceat` 批量采样（50,000 条流线 `84.25 s → 1.66 s`，`50.61×`）。
+
 **10 月 30 日更新：**先完成输入执行门禁、DDSeg 输出凭据和批次终态修复，再补包含报告阶段的计时及目录扫描画像。
 验证范围与原始小型测量见[可靠性与计时复核](RELIABILITY_AND_PROFILING_20261030.zh-CN.md)。
 这些工程修复不计作新的 MRI 算法加速，下面的长模块候选仍须完整配对。

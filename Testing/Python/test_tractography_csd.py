@@ -303,6 +303,101 @@ class CSDActBackendTest(unittest.TestCase):
             self.assertEqual(status["missing_commands"], [])
             self.assertEqual(status["commands"]["tckgen"], (bin_dir / "tckgen").resolve().as_posix())
 
+    def test_tractogram_summary_fast_path_matches_reference(self) -> None:
+        from tractography.csd import _tractogram_summary
+
+        rng = np.random.default_rng(42)
+        streamlines = [
+            rng.standard_normal((int(rng.integers(5, 30)), 3)).astype(np.float32) * 5.0
+            for _ in range(120)
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            tck_path = Path(tmp) / "sample.tck"
+            tractogram = nib.streamlines.Tractogram(streamlines, affine_to_rasmm=np.eye(4))
+            nib.streamlines.save(nib.streamlines.TckFile(tractogram), str(tck_path))
+            summary = _tractogram_summary(tck_path)
+
+            ref_lengths = [
+                float(np.linalg.norm(np.diff(np.asarray(sl, dtype=np.float64), axis=0), axis=1).sum())
+                for sl in nib.streamlines.load(str(tck_path), lazy_load=False).streamlines
+            ]
+            ref_values = np.asarray(ref_lengths, dtype=np.float64)
+            self.assertEqual(summary["streamline_count"], len(streamlines))
+            self.assertTrue(summary["all_points_finite"])
+            self.assertEqual(summary["fraction_shorter_than_20mm"], float(np.mean(ref_values < 20.0)))
+            for key, expected in (
+                ("min", float(np.min(ref_values))),
+                ("p05", float(np.percentile(ref_values, 5))),
+                ("median", float(np.median(ref_values))),
+                ("mean", float(np.mean(ref_values))),
+                ("p95", float(np.percentile(ref_values, 95))),
+                ("max", float(np.max(ref_values))),
+            ):
+                self.assertEqual(summary["length_mm"][key], expected)
+
+    def test_fod_preparation_receipt_reuse_and_invalidation(self) -> None:
+        from tractography.csd import (
+            _fod_preparation_paths,
+            _prepared_fod_reusable,
+            _write_fod_preparation_receipt,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            dwi = root / "data.nii.gz"
+            mask = root / "mask.nii.gz"
+            five_tt = root / "5tt.nii.gz"
+            gmwmi = root / "gmwmi.nii.gz"
+            bval = root / "bvals"
+            bvec = root / "bvecs"
+            nib.save(nib.Nifti1Image(np.ones((2, 2, 2, 2), dtype=np.float32), np.eye(4)), str(dwi))
+            nib.save(nib.Nifti1Image(np.ones((2, 2, 2), dtype=np.uint8), np.eye(4)), str(mask))
+            nib.save(nib.Nifti1Image(np.ones((2, 2, 2, 5), dtype=np.float32), np.eye(4)), str(five_tt))
+            nib.save(nib.Nifti1Image(np.ones((2, 2, 2), dtype=np.uint8), np.eye(4)), str(gmwmi))
+            bval.write_text("0 1000\n", encoding="utf-8")
+            bvec.write_text("0 1\n0 0\n0 0\n", encoding="utf-8")
+
+            out_dir = root / "csd_out"
+            out_dir.mkdir()
+            config = CSDActConfig(
+                subject_id="100307",
+                dwi_path=dwi,
+                bval_path=bval,
+                bvec_path=bvec,
+                mask_path=mask,
+                five_tt_path=five_tt,
+                gmwmi_path=gmwmi,
+                output_dir=out_dir,
+                select_streamlines=25,
+                nthreads=8,
+            )
+            self.assertFalse(_prepared_fod_reusable(config, out_dir))
+            for path in _fod_preparation_paths("100307", out_dir).values():
+                path.write_bytes(b"mrtrix-artifact")
+            self.assertTrue(_write_fod_preparation_receipt(config, out_dir))
+            self.assertTrue(_prepared_fod_reusable(config, out_dir))
+
+            # Changing downstream tracking parameters (e.g., select_streamlines or seeding)
+            # preserves FOD preparation reuse:
+            config_more_streamlines = CSDActConfig(
+                subject_id="100307",
+                dwi_path=dwi,
+                bval_path=bval,
+                bvec_path=bvec,
+                mask_path=mask,
+                five_tt_path=five_tt,
+                gmwmi_path=gmwmi,
+                output_dir=out_dir,
+                select_streamlines=500,
+                seeding="gmwmi",
+                nthreads=8,
+            )
+            self.assertTrue(_prepared_fod_reusable(config_more_streamlines, out_dir))
+
+            # Modifying an input file invalidates the receipt:
+            bval.write_text("0 2000\n", encoding="utf-8")
+            self.assertFalse(_prepared_fod_reusable(config_more_streamlines, out_dir))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -2,7 +2,7 @@
 
 # 性能优化与实测证据
 
-**2026-10-30 复核 · 整模块配对与保持数值一致的计算优化**
+**2026-11-10 复核 · 整模块配对与保持数值一致的计算优化**
 
 [项目](../../README.zh-CN.md) | [文档](../README.zh-CN.md) | [运行时间](MODULE_RUNTIMES_20261017.zh-CN.md) | [原作者对照 CSV](benchmarks/author_wma_optimizations_20261020.csv) | [JSON](benchmarks/author_wma_optimizations_20261020.json) | [English](PERFORMANCE_OPTIMIZATIONS.md)
 
@@ -27,6 +27,29 @@ GPU 设备选择、上游继承的改动和原作者源码对照也分别标注�
 
 ---
 
+## 11 月 10 日：五大模块子算法保精度计算优化
+
+围绕五大核心流程模块（`Anatomical priors`、`Microstructure`、`Tractography`、`Fibre bundles`、`Connectome`），新增一组严格保持数值与几何结果一致的子算法计算实现优化，消除冗余背景切片 CNN 推理、4D 厚切片数组重复拷贝、全脑连通域重复标记、合成 $b_0$ 扫描中重复的无权 OLS QR 分解、逐流线 Python/VTK 几何循环以及连接组沿纤维束逐顶点标量查找（[9 日源记录](benchmarks/runtime_optimizations_20261109.json)、[10 日源记录](benchmarks/five_module_subalgorithm_optimizations_20261110.json)）。全部配对均在真实 HCP Young Adult 数据上执行 1 次预热与 3 次正反交替重复测量，并通过逐元素一致性校验：
+
+| 模块 | 子算法 | 优化内容与测量范围 | 原始实现 | 优化实现 | 实测加速比 | 耗时减少 |
+| --- | --- | --- | ---: | ---: | ---: | ---: |
+| Anatomical priors | DDSeg | 均匀背景切片缓存 + `inference_mode`（全三视图 CUDA，`100408`） | 6.20 s | 5.38 s | 1.15× | 13.12% |
+| Anatomical priors | DDSeg | 均匀背景切片缓存 + `inference_mode`（跨步全视图 CPU，`100408`） | 26.31 s | 12.94 s | 2.03× | 50.81% |
+| Anatomical priors | DDParcel | 零拷贝 `sliding_window_view` 厚切片 + 均匀背景批次缓存 + 矢状面 LUT（全三视图 CUDA，`100408`） | 69.02 s | 42.84 s | 1.61× | 37.93% |
+| Anatomical priors | DDParcel | 包围盒 `region.slice` 3D 连通域清理（$256^3$ 体数据，`100408`） | 64.06 s | 35.87 s | 1.79× | 44.00% |
+| Microstructure | DTI (Teem WLS) | 单次零信号模板 + 仅非零体素行 `tenEstimateUpdate`（全脑，`100206`） | 74.09 s | 31.31 s | 2.37× | 57.74% |
+| Microstructure | DTI (DEC-FA) | 仅对有效 FA ($>0$) 体素执行 $3\times 3$ 旋转与 `eigh`（全脑，`100206`） | 4.51 s | 2.63 s | 1.71× | 41.58% |
+| Microstructure | MK-Curve | 预分解 `dgeqp3` OLS QR 复用（`dormqr`/`dtrsm`）+ 批量 `eigh` + 向量化张量基（64 体素，`100206` / `149741` / `877168`） | 1.35 / 1.61 / 1.27 s | 1.23 / 1.18 / 1.14 s | 1.10–1.37× | 9.45–26.95% |
+| Tractography | CSD / ACT / SIFT2 | 基于扁平 `ArraySequence` 缓冲区的向量化全脑流线 QC 校验（全脑流线，`100408`） | 10.12 s | 5.76 s | 1.76× | 43.07% |
+| Tractography | 区域流线筛选 | 4,096 流线分块批量端点仿射变换与 ROI 掩膜评估（100 万条流线，`100206`） | 33.58 s | 1.75 s | 19.16× | 94.78% |
+| Fibre bundles | WMA | 基于 VTK `GetOffsetsArray`/`GetConnectivityArray` 的向量化纤维束统计（50,000 条流线，`100408`） | 8.94 s | 0.55 s | 16.32× | 93.87% |
+| Connectome | Connectome (`streamline_count`) | 4,096 流线分块体素查找 + 2 mm `cKDTree` 批量径向节点分配（100 万条流线，`100206`） | 120.61 s | 4.31 s | 27.97× | 96.42% |
+| Connectome | Connectome (`mean_fa`) | 批量端点分配 + 基于 `reduceat` 的向量化沿束 FA 标量采样（50,000 条流线，`100408`） | 84.25 s | 1.66 s | 50.61× | 98.02% |
+
+此外，`tractography/csd.py` 的 `run_csd_act` 新增带内容哈希校验的 `csd_fod_preparation.json` 阶段凭据，绑定输入 DWI、掩膜、5TT/GMWMI 及球谐参数，支持在输入不变且显式开启 `reuse_prepared_fod=True` 时安全复用已生成的响应函数与 FOD 中间产物。
+
+---
+
 ## 11 月 9 日：多受试者队列阶段级并发调度
 
 批处理调度器（scripts/run_batch_pipeline.py --scheduler adaptive）在共享 CPU、内存、GPU 与 I/O 预算下跨受试者协同调度各分析阶段（[源记录](benchmarks/cohort_multi_pipeline_20261109.json)）。在 16 名 HCP 受试者队列、每组 32 核 CPU 预算下，受试者级固定并发（--scheduler subjects）与自适应阶段级调度（--scheduler adaptive）的实测总耗时对比如下：
@@ -35,7 +58,7 @@ GPU 设备选择、上游继承的改动和原作者源码对照也分别标注�
 | --- | ---: | ---: | ---: | ---: |
 | 微结构分析（DTI + FW + NODDI + DKI + MK-Curve） | 301.79 min | 197.44 min | 1.53× | 34.58% |
 | 解剖先验（DDSeg + DDParcel + DDSurfer） | 78.43 min | 68.33 min | 1.15× | 12.88% |
-| 纤维束追踪（CSD/ACT + SIFT2） | 78.61 min | 70.66 min | 1.11× | 10.11% |
+| 追踪与纤维束分析（DDSeg + DDParcel + DTI + DTI-Det + WMQL + TractCloud + Connectome） | 78.61 min | 70.66 min | 1.11× | 10.11% |
 
 全部 16 名受试者在各流程中均通过输出与 Rule-1 数值一致性校验。在微结构队列中，阶段级调度跨受试者重叠单线程 Free-water/DKI 与多线程 NODDI/MK-Curve 阶段，在不改变单个科学估计算法的前提下将平均 CPU 核利用率从 12.6 核提升至 21.2 核。
 

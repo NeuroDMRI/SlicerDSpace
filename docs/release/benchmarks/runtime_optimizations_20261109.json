@@ -1,0 +1,287 @@
+{
+  "status": "passed",
+  "reviewed_on": "2026-11-09",
+  "source_inputs_unchanged": true,
+  "environment": {
+    "python": "3.12.10",
+    "numpy": "2.2.6",
+    "scipy": "1.13.1",
+    "teem": "1.12.0",
+    "thread_env": {
+      "OMP_NUM_THREADS": "1",
+      "OPENBLAS_NUM_THREADS": "1",
+      "MKL_NUM_THREADS": "1"
+    }
+  },
+  "teem_dti_wls": {
+    "records": [
+      {
+        "subject_id": "100206",
+        "voxels": 3658350,
+        "nonzero_voxels": 1427977,
+        "zero_voxels": 2230373,
+        "gradients": 288,
+        "threads": 144,
+        "reference_seconds": 74.08627468533814,
+        "optimized_seconds": 31.310826977714896,
+        "speed_ratio": 2.366155155789023,
+        "time_reduction_percent": 57.737344588185394,
+        "failed_voxels": 0,
+        "exact_tensors": true,
+        "exact_baseline": true,
+        "exact_output_parity": true
+      },
+      {
+        "subject_id": "100408",
+        "voxels": 3658350,
+        "nonzero_voxels": 1369002,
+        "zero_voxels": 2289348,
+        "gradients": 288,
+        "threads": 144,
+        "reference_seconds": 73.64379691146314,
+        "optimized_seconds": 31.905542386695743,
+        "speed_ratio": 2.3081819459108077,
+        "time_reduction_percent": 56.6758590339203,
+        "failed_voxels": 0,
+        "exact_tensors": true,
+        "exact_baseline": true,
+        "exact_output_parity": true
+      },
+      {
+        "subject_id": "149741",
+        "voxels": 3658350,
+        "nonzero_voxels": 1306940,
+        "zero_voxels": 2351410,
+        "gradients": 288,
+        "threads": 144,
+        "reference_seconds": 71.76310877688229,
+        "optimized_seconds": 30.869968570768833,
+        "speed_ratio": 2.3246900498899663,
+        "time_reduction_percent": 56.983512703238326,
+        "failed_voxels": 0,
+        "exact_tensors": true,
+        "exact_baseline": true,
+        "exact_output_parity": true
+      }
+    ]
+  },
+  "teem_dec_fa": {
+    "records": [
+      {
+        "subject_id": "100206",
+        "voxels": 3658350,
+        "nonzero_fa_voxels": 1427615,
+        "repeats": 3,
+        "warmups_per_method": 1,
+        "times_seconds": {
+          "reference": [
+            4.507668623700738,
+            4.2219934444874525,
+            4.662659391760826
+          ],
+          "optimized": [
+            2.634297087788582,
+            2.623939258977771,
+            2.9863908533006907
+          ]
+        },
+        "reference_median_seconds": 4.507668623700738,
+        "optimized_median_seconds": 2.634297087788582,
+        "speed_ratio": 1.7111466449992543,
+        "time_reduction_percent": 41.559655163252486,
+        "exact_rgb_bytes": true,
+        "exact_output_parity": true
+      },
+      {
+        "subject_id": "100408",
+        "voxels": 3658350,
+        "nonzero_fa_voxels": 1368928,
+        "repeats": 3,
+        "warmups_per_method": 1,
+        "times_seconds": {
+          "reference": [
+            5.353756483644247,
+            5.380347900092602,
+            5.479277539998293
+          ],
+          "optimized": [
+            2.552546974271536,
+            2.6243808027356863,
+            2.8495657313615084
+          ]
+        },
+        "reference_median_seconds": 5.380347900092602,
+        "optimized_median_seconds": 2.6243808027356863,
+        "speed_ratio": 2.050139939479843,
+        "time_reduction_percent": 51.22284187811502,
+        "exact_rgb_bytes": true,
+        "exact_output_parity": true
+      },
+      {
+        "subject_id": "149741",
+        "voxels": 3658350,
+        "nonzero_fa_voxels": 1306662,
+        "repeats": 3,
+        "warmups_per_method": 1,
+        "times_seconds": {
+          "reference": [
+            5.257732596248388,
+            5.784331837669015,
+            5.679583685472608
+          ],
+          "optimized": [
+            2.436233950778842,
+            2.952127907425165,
+            2.9837314914911985
+          ]
+        },
+        "reference_median_seconds": 5.679583685472608,
+        "optimized_median_seconds": 2.952127907425165,
+        "speed_ratio": 1.9238948526543753,
+        "time_reduction_percent": 48.02210741297469,
+        "exact_rgb_bytes": true,
+        "exact_output_parity": true
+      }
+    ]
+  },
+  "regional_endpoints": {
+    "records": [
+      {
+        "subject_id": "100206",
+        "source_streamlines": 1000000,
+        "selected_streamlines": 3409,
+        "batch_size": 4096,
+        "repeats": 3,
+        "warmups_per_method": 1,
+        "times_seconds": {
+          "reference": [
+            33.58021034114063,
+            33.26607979275286,
+            33.59577387198806
+          ],
+          "optimized": [
+            1.7487374041229486,
+            1.5995297487825155,
+            1.907520929351449
+          ]
+        },
+        "reference_median_seconds": 33.58021034114063,
+        "optimized_median_seconds": 1.7487374041229486,
+        "speed_ratio": 19.20254594084253,
+        "time_reduction_percent": 94.79235720575433,
+        "exact_selected_indices": true,
+        "exact_output_parity": true
+      },
+      {
+        "subject_id": "100408",
+        "source_streamlines": 1000000,
+        "selected_streamlines": 5023,
+        "batch_size": 4096,
+        "repeats": 3,
+        "warmups_per_method": 1,
+        "times_seconds": {
+          "reference": [
+            33.76749878376722,
+            33.53127024695277,
+            33.51860858313739
+          ],
+          "optimized": [
+            1.8995367884635925,
+            1.620161397382617,
+            1.8107743058353662
+          ]
+        },
+        "reference_median_seconds": 33.53127024695277,
+        "optimized_median_seconds": 1.8107743058353662,
+        "speed_ratio": 18.51764194957679,
+        "time_reduction_percent": 94.59974438039691,
+        "exact_selected_indices": true,
+        "exact_output_parity": true
+      },
+      {
+        "subject_id": "149741",
+        "source_streamlines": 1000000,
+        "selected_streamlines": 3047,
+        "batch_size": 4096,
+        "repeats": 3,
+        "warmups_per_method": 1,
+        "times_seconds": {
+          "reference": [
+            33.5721040610224,
+            33.1576544996351,
+            33.2755076084286
+          ],
+          "optimized": [
+            1.7632269598543644,
+            1.4876189846545458,
+            1.7858521360903978
+          ]
+        },
+        "reference_median_seconds": 33.2755076084286,
+        "optimized_median_seconds": 1.7632269598543644,
+        "speed_ratio": 18.871936719466348,
+        "time_reduction_percent": 94.70112678489166,
+        "exact_selected_indices": true,
+        "exact_output_parity": true
+      }
+    ]
+  },
+  "connectome_radial": {
+    "records": [
+      {
+        "subject_id": "100206",
+        "source_streamlines": 1000000,
+        "endpoints_evaluated": 2000000,
+        "node_count": 84,
+        "allowed_voxels": 340049,
+        "assignment_radius_mm": 2.0,
+        "batch_size": 4096,
+        "endpoint_assigned_streamlines": 845487,
+        "radially_assigned_endpoints": 869386,
+        "reference_seconds": 120.60630070231855,
+        "optimized_seconds": 4.312568271532655,
+        "speed_ratio": 27.96623568801056,
+        "time_reduction_percent": 96.4242595565741,
+        "exact_direct_labels": true,
+        "exact_radial_labels": true,
+        "exact_output_parity": true
+      },
+      {
+        "subject_id": "100408",
+        "source_streamlines": 1000000,
+        "endpoints_evaluated": 2000000,
+        "node_count": 84,
+        "allowed_voxels": 303250,
+        "assignment_radius_mm": 2.0,
+        "batch_size": 4096,
+        "endpoint_assigned_streamlines": 816570,
+        "radially_assigned_endpoints": 897064,
+        "reference_seconds": 120.8455902505666,
+        "optimized_seconds": 4.1192723494023085,
+        "speed_ratio": 29.33663521133796,
+        "time_reduction_percent": 96.59129278870563,
+        "exact_direct_labels": true,
+        "exact_radial_labels": true,
+        "exact_output_parity": true
+      },
+      {
+        "subject_id": "149741",
+        "source_streamlines": 1000000,
+        "endpoints_evaluated": 2000000,
+        "node_count": 84,
+        "allowed_voxels": 292232,
+        "assignment_radius_mm": 2.0,
+        "batch_size": 4096,
+        "endpoint_assigned_streamlines": 748234,
+        "radially_assigned_endpoints": 1025692,
+        "reference_seconds": 120.71240596100688,
+        "optimized_seconds": 4.171764105558395,
+        "speed_ratio": 28.935578068801036,
+        "time_reduction_percent": 96.54404692513047,
+        "exact_direct_labels": true,
+        "exact_radial_labels": true,
+        "exact_output_parity": true
+      }
+    ]
+  }
+}

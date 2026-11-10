@@ -245,6 +245,32 @@ def _label_at_point(point, data, inverse_affine) -> int:
     return int(data[tuple(voxel)])
 
 
+def _labels_at_points(points, data, inverse_affine):
+    import numpy as np
+
+    coords = np.asarray(points, dtype=np.float64)[:, :3]
+    if coords.size == 0:
+        return np.empty(0, dtype=np.int64)
+    inv = np.asarray(inverse_affine, dtype=np.float64)
+    voxels = np.rint(
+        inv[:3, 0] * coords[:, 0:1]
+        + inv[:3, 1] * coords[:, 1:2]
+        + inv[:3, 2] * coords[:, 2:3]
+        + inv[:3, 3]
+    ).astype(np.int64)
+    s0, s1, s2 = data.shape[:3]
+    in_bounds = (
+        (voxels[:, 0] >= 0) & (voxels[:, 0] < s0)
+        & (voxels[:, 1] >= 0) & (voxels[:, 1] < s1)
+        & (voxels[:, 2] >= 0) & (voxels[:, 2] < s2)
+    )
+    out = np.zeros(len(coords), dtype=np.int64)
+    if np.any(in_bounds):
+        valid_voxels = voxels[in_bounds]
+        out[in_bounds] = np.asarray(data[valid_voxels[:, 0], valid_voxels[:, 1], valid_voxels[:, 2]], dtype=np.int64)
+    return out
+
+
 def _build_endpoint_label_assigner(
     data,
     inverse_affine,
@@ -259,16 +285,26 @@ def _build_endpoint_label_assigner(
 
     if radius_mm <= 0:
         allowed_set = {int(label) for label in allowed}
+        allowed_int64 = np.asarray(sorted(allowed_set), dtype=np.int64)
 
         def assign_end_voxel(point: object) -> int:
             label = _label_at_point(point, data, inverse_affine)
             return label if label in allowed_set else 0
 
+        def assign_end_voxel_batch(points, direct_labels=None):
+            labels = _labels_at_points(points, data, inverse_affine) if direct_labels is None else np.asarray(direct_labels, dtype=np.int64)
+            return np.where(np.isin(labels, allowed_int64), labels, 0)
+
+        assign_end_voxel.assign_batch = assign_end_voxel_batch  # type: ignore[attr-defined]
         return assign_end_voxel, "end_voxel"
 
     allowed_voxels = np.argwhere(allowed_mask)
     if not len(allowed_voxels):
-        return lambda point: 0, "radial_search_empty"
+        def assign_empty(point: object) -> int:
+            return 0
+
+        assign_empty.assign_batch = lambda points, direct_labels=None: np.zeros(len(points), dtype=np.int64)  # type: ignore[attr-defined]
+        return assign_empty, "radial_search_empty"
 
     affine = np.linalg.inv(inverse_affine)
     world_coordinates = (
@@ -304,9 +340,14 @@ def _build_endpoint_label_assigner(
                 return 0
             return int(data[tuple(local_voxels[nearest_index])])
 
+        assign_local_search.assign_batch = lambda points, direct_labels=None: np.asarray([assign_local_search(p) for p in points], dtype=np.int64)  # type: ignore[attr-defined]
         return assign_local_search, "numpy.radial_search"
 
     tree = cKDTree(world_coordinates)
+    allowed_voxel_labels = np.asarray(
+        data[allowed_voxels[:, 0], allowed_voxels[:, 1], allowed_voxels[:, 2]],
+        dtype=np.int64,
+    )
 
     def assign_kdtree(point: object) -> int:
         distance, index = tree.query(
@@ -316,8 +357,22 @@ def _build_endpoint_label_assigner(
         )
         if not np.isfinite(distance) or int(index) >= len(allowed_voxels):
             return 0
-        return int(data[tuple(allowed_voxels[int(index)])])
+        return int(allowed_voxel_labels[int(index)])
 
+    def assign_kdtree_batch(points, direct_labels=None):
+        coords = np.asarray(points, dtype=float)[:, :3]
+        if coords.size == 0:
+            return np.empty(0, dtype=np.int64)
+        distances, indices = tree.query(coords, k=1, distance_upper_bound=radius_mm)
+        distances = np.asarray(distances, dtype=np.float64).reshape(-1)
+        indices = np.asarray(indices, dtype=np.int64).reshape(-1)
+        valid = np.isfinite(distances) & (indices >= 0) & (indices < len(allowed_voxel_labels))
+        out = np.zeros(len(coords), dtype=np.int64)
+        if np.any(valid):
+            out[valid] = allowed_voxel_labels[indices[valid]]
+        return out
+
+    assign_kdtree.assign_batch = assign_kdtree_batch  # type: ignore[attr-defined]
     return assign_kdtree, "scipy.spatial.cKDTree"
 
 
@@ -360,6 +415,26 @@ def _iter_vtk_streamlines(path: Path) -> Iterable[list[tuple[float, float, float
     polydata = reader.GetOutput()
     points = polydata.GetPoints()
     lines = polydata.GetLines()
+    if points is not None and lines is not None:
+        try:
+            from vtk.util.numpy_support import vtk_to_numpy
+            import numpy as np
+
+            pts_data = points.GetData()
+            offsets_vtk = lines.GetOffsetsArray() if hasattr(lines, "GetOffsetsArray") else None
+            conn_vtk = lines.GetConnectivityArray() if hasattr(lines, "GetConnectivityArray") else None
+            if pts_data is not None and offsets_vtk is not None and conn_vtk is not None:
+                point_coords = np.asarray(vtk_to_numpy(pts_data), dtype=np.float64)
+                offsets = np.asarray(vtk_to_numpy(offsets_vtk), dtype=np.int64).reshape(-1)
+                conn = np.asarray(vtk_to_numpy(conn_vtk), dtype=np.int64).reshape(-1)
+                for idx in range(max(0, offsets.size - 1)):
+                    start = int(offsets[idx])
+                    end = int(offsets[idx + 1])
+                    if end > start:
+                        yield point_coords[conn[start:end]]
+                return
+        except Exception:
+            pass
     lines.InitTraversal()
     id_list = vtk.vtkIdList()
     while lines.GetNextCell(id_list):
@@ -712,56 +787,100 @@ def _write_python_connectome(
     matrix_included_streamlines = 0
     self_connection_streamlines = 0
 
-    for streamline_index, streamline in enumerate(_iter_streamlines(config.tractography_path.expanduser().resolve())):
-        total_streamlines += 1
-        if len(streamline) < 2:
-            skipped_streamlines += 1
-            continue
-        direct_source = _label_at_point(streamline[0], data, inverse_affine)
-        direct_target = _label_at_point(streamline[-1], data, inverse_affine)
-        source = assign_endpoint(streamline[0])
-        target = assign_endpoint(streamline[-1])
-        radially_assigned_endpoints += int(source != 0 and source != direct_source)
-        radially_assigned_endpoints += int(target != 0 and target != direct_target)
-        if source == 0 or target == 0:
-            skipped_streamlines += 1
-            if (
-                (direct_source != 0 and direct_source not in allowed_node_labels)
-                or (direct_target != 0 and direct_target not in allowed_node_labels)
-            ):
-                skipped_non_node_streamlines += 1
-            continue
-        streamline_weight = None
-        if sift2_weights is not None:
-            if streamline_index >= len(sift2_weights):
-                skipped_streamlines += 1
-                continue
-            streamline_weight = sift2_weights[streamline_index]
-        endpoint_assigned_streamlines += 1
-        if source == target:
-            self_connection_streamlines += 1
-            if config.zero_diagonal:
-                continue
-        matrix_included_streamlines += 1
-        edge = tuple(sorted((source, target))) if config.symmetric else (source, target)
-        if streamline_weight is not None:
-            edge_counts[edge] += streamline_weight
+    requires_length = _metric_requires_length(config.metric)
+    assign_batch = getattr(assign_endpoint, "assign_batch", None)
+    streamlines = list(_iter_streamlines(config.tractography_path.expanduser().resolve()))
+    total_streamlines = len(streamlines)
+    valid_indices = [idx for idx, sl in enumerate(streamlines) if len(sl) >= 2]
+    skipped_streamlines = total_streamlines - len(valid_indices)
+
+    if valid_indices:
+        starts = np.asarray([streamlines[idx][0][:3] for idx in valid_indices], dtype=np.float64)
+        ends = np.asarray([streamlines[idx][-1][:3] for idx in valid_indices], dtype=np.float64)
+        direct_sources = _labels_at_points(starts, data, inverse_affine)
+        direct_targets = _labels_at_points(ends, data, inverse_affine)
+        if assign_batch is not None:
+            sources = assign_batch(starts, direct_labels=direct_sources)
+            targets = assign_batch(ends, direct_labels=direct_targets)
         else:
-            edge_counts[edge] += 1
-        if _metric_requires_length(config.metric):
-            edge_length_sums[edge] += _streamline_length_mm(streamline)
-            edge_length_counts[edge] += 1
-        if scalar_data is not None and scalar_inverse_affine is not None:
-            samples = [
-                value
-                for value in (_scalar_at_point(point, scalar_data, scalar_inverse_affine) for point in streamline)
-                if value is not None
-            ]
-            if samples:
-                edge_scalar_sums[edge] += float(np.mean(samples))
-                edge_scalar_counts[edge] += 1
+            sources = np.asarray([assign_endpoint(pt) for pt in starts], dtype=np.int64)
+            targets = np.asarray([assign_endpoint(pt) for pt in ends], dtype=np.int64)
+
+        scalar_queue: list[tuple[tuple[int, int], object]] = []
+        for pos, streamline_index in enumerate(valid_indices):
+            streamline = streamlines[streamline_index]
+            direct_source = int(direct_sources[pos])
+            direct_target = int(direct_targets[pos])
+            source = int(sources[pos])
+            target = int(targets[pos])
+            radially_assigned_endpoints += int(source != 0 and source != direct_source)
+            radially_assigned_endpoints += int(target != 0 and target != direct_target)
+            if source == 0 or target == 0:
+                skipped_streamlines += 1
+                if (
+                    (direct_source != 0 and direct_source not in allowed_node_labels)
+                    or (direct_target != 0 and direct_target not in allowed_node_labels)
+                ):
+                    skipped_non_node_streamlines += 1
+                continue
+            streamline_weight = None
+            if sift2_weights is not None:
+                if streamline_index >= len(sift2_weights):
+                    skipped_streamlines += 1
+                    continue
+                streamline_weight = sift2_weights[streamline_index]
+            endpoint_assigned_streamlines += 1
+            if source == target:
+                self_connection_streamlines += 1
+                if config.zero_diagonal:
+                    continue
+            matrix_included_streamlines += 1
+            edge = (source, target) if (not config.symmetric or source <= target) else (target, source)
+            if streamline_weight is not None:
+                edge_counts[edge] += streamline_weight
             else:
-                skipped_scalar_streamlines += 1
+                edge_counts[edge] += 1
+            if requires_length:
+                edge_length_sums[edge] += _streamline_length_mm(streamline)
+                edge_length_counts[edge] += 1
+            if scalar_data is not None and scalar_inverse_affine is not None:
+                scalar_queue.append((edge, streamline))
+
+        if scalar_queue and scalar_data is not None and scalar_inverse_affine is not None:
+            sl_arrays = [np.asarray(sl, dtype=np.float64)[:, :3] for _, sl in scalar_queue]
+            sl_lengths = [len(arr) for arr in sl_arrays]
+            all_pts = np.vstack(sl_arrays)
+            inv = np.asarray(scalar_inverse_affine, dtype=np.float64)
+            voxels = np.rint(
+                inv[:3, 0] * all_pts[:, 0:1]
+                + inv[:3, 1] * all_pts[:, 1:2]
+                + inv[:3, 2] * all_pts[:, 2:3]
+                + inv[:3, 3]
+            ).astype(np.int64)
+            s0, s1, s2 = scalar_data.shape[:3]
+            in_bounds = (
+                (voxels[:, 0] >= 0) & (voxels[:, 0] < s0)
+                & (voxels[:, 1] >= 0) & (voxels[:, 1] < s1)
+                & (voxels[:, 2] >= 0) & (voxels[:, 2] < s2)
+            )
+            all_values = np.full(len(all_pts), np.nan, dtype=np.float64)
+            if np.any(in_bounds):
+                valid_vox = voxels[in_bounds]
+                all_values[in_bounds] = np.asarray(
+                    scalar_data[valid_vox[:, 0], valid_vox[:, 1], valid_vox[:, 2]],
+                    dtype=np.float64,
+                )
+            all_finite = np.isfinite(all_values)
+            cursor = 0
+            for (edge, _), sl_len in zip(scalar_queue, sl_lengths):
+                end_cursor = cursor + sl_len
+                vals = all_values[cursor:end_cursor][all_finite[cursor:end_cursor]]
+                cursor = end_cursor
+                if vals.size:
+                    edge_scalar_sums[edge] += float(np.mean(vals))
+                    edge_scalar_counts[edge] += 1
+                else:
+                    skipped_scalar_streamlines += 1
 
     with matrix_path.open("w", encoding="utf-8", newline="") as stream:
         writer = csv.writer(stream)

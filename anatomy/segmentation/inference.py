@@ -3,6 +3,7 @@ from __future__ import annotations
 import numpy as np
 from typing import Dict, List
 
+
 def _softmax(x: np.ndarray) -> np.ndarray:
     exp = np.exp(x - np.max(x, axis=1, keepdims=True))
     return exp / np.sum(exp, axis=1, keepdims=True)
@@ -21,13 +22,22 @@ def normalize_class_scores(scores: np.ndarray) -> np.ndarray:
     return _softmax_nhwc(scores)
 
 
+def _uniform_slice_key(slc: np.ndarray):
+    if not isinstance(slc, np.ndarray) or slc.ndim < 2 or slc.size == 0:
+        return None
+    pixel = slc[(0,) * (slc.ndim - 1)]
+    if not np.isfinite(pixel).all() or not np.array_equal(slc, np.broadcast_to(pixel, slc.shape)):
+        return None
+    return (slc.shape, slc.dtype.str, np.ascontiguousarray(pixel).tobytes())
+
+
 def predict_view(model, slices: List[np.ndarray], apply_softmax: bool) -> np.ndarray:
     scores = []
-    cached_bg_score = None
+    uniform_cache: Dict[tuple, np.ndarray] = {}
     for slc in slices:
-        is_uniform_bg = slc.shape[0] >= 64 and bool(np.all(slc == -100.0))
-        if is_uniform_bg and cached_bg_score is not None:
-            scores.append(cached_bg_score.copy())
+        cache_key = _uniform_slice_key(slc)
+        if cache_key is not None and cache_key in uniform_cache:
+            scores.append(uniform_cache[cache_key].copy())
             continue
         if model.input_layout == "NHWC":
             x = np.expand_dims(slc, axis=0).astype(np.float32)
@@ -40,8 +50,8 @@ def predict_view(model, slices: List[np.ndarray], apply_softmax: bool) -> np.nda
         else:
             prob = _softmax(y) if apply_softmax else y
             score = prob[0].transpose(1, 2, 0)
-        if is_uniform_bg:
-            cached_bg_score = score.copy()
+        if cache_key is not None and len(uniform_cache) < 4:
+            uniform_cache[cache_key] = score.copy()
         scores.append(score)
     return np.stack(scores, axis=2)
 
@@ -54,4 +64,3 @@ def combine_views(pred_axial: np.ndarray, pred_sagittal: np.ndarray, pred_corona
     # MATLAB subtracts 1 because its indices are 1-based; NumPy argmax is 0-based already.
     labels = np.argmax(prob_maps, axis=3).astype(np.int16)
     return {"prob_maps": prob_maps, "labels": labels}
-

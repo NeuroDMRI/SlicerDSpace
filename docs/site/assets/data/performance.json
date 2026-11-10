@@ -1,7 +1,7 @@
 {
   "kind": "slicerddsurfer_public_performance_evidence",
   "version": 4,
-  "reviewed_on": "2026-10-30",
+  "reviewed_on": "2026-11-10",
   "sources": [
     {
       "file": "freewater_protocol_full_20261029.json",
@@ -46,6 +46,14 @@
     {
       "file": "performance_optimizations_20261020.json",
       "sha256": "8b0c16688e6ce00c3c3527060be6d950a8a6cef9083c9340f256fe2c31f35a39"
+    },
+    {
+      "file": "runtime_optimizations_20261109.json",
+      "sha256": "3a65d4dff5c1bb294b44f80ab7cc307881ab3b60e5ea192c8c1a783c7517225d"
+    },
+    {
+      "file": "five_module_subalgorithm_optimizations_20261110.json",
+      "sha256": "5762d0107bb21404cc18d7345917d127064b6b90df842ac52c2bc6f1f644cbbe"
     },
     {
       "file": "upstream_freshness_verified_20261022.json",
@@ -461,7 +469,7 @@
     },
     {
       "id": "cohort-tractography",
-      "title": "Cohort scheduling: Tractography",
+      "title": "Cohort scheduling: Tractography & Bundles",
       "category": "workflow",
       "scope": "16 HCP subjects / 32-core budget + GPU",
       "evidence_date": "2026-11-09",
@@ -470,12 +478,12 @@
       "speed_ratio": 1.1124607873198575,
       "seconds_saved": 476.8000000000002,
       "reduction_percent": 10.109191137496031,
-      "method": "Overlap CPU-bound response estimation, MSMT-CSD, ACT/iFOD2 tracking and SIFT2 weighting with GPU-assisted anatomical priors across subjects under a unified resource budget.",
+      "method": "Overlap CPU-bound DTI deterministic tracking, WMQL anatomical queries and structural connectome generation with GPU-assisted DDSeg/DDParcel/TractCloud stages across subjects under a unified resource budget.",
       "baseline": "Subject-level fixed concurrency versus Adaptive stage-level scheduling across the same 16-subject cohort.",
-      "unchanged": "All 16 subjects pass tractogram, SIFT2 weight and structural connectome equivalence and QC checks.",
-      "limitation": "16-subject HCP cohort. Because MSMT-CSD and iFOD2 already saturate multi-core CPU threads per subject, stage-level scheduling provides a moderate makespan reduction.",
-      "sample": "16 full-brain HCP subjects; complete Tractography route (CSD/ACT + SIFT2).",
-      "upstream_reference": "Plugin batch scheduler comparison (scripts/run_batch_pipeline.py); upstream MRtrix3 CSD/ACT/SIFT2 routines are unchanged.",
+      "unchanged": "All 16 subjects pass tractogram, bundle extraction (WMQL and TractCloud) and structural connectome equivalence and QC checks.",
+      "limitation": "16-subject HCP cohort. Stage-level scheduling overlaps GPU-assisted parcellation/TractCloud inference with CPU-bound tracking, WMQL and connectome stages across subjects.",
+      "sample": "16 full-brain HCP subjects; Tractography & Bundles route (DDSeg + DDParcel + DTI + DTI-Det + WMQL + TractCloud + Connectome).",
+      "upstream_reference": "Plugin batch scheduler comparison (scripts/run_batch_pipeline.py); upstream DDSeg, DDParcel, DIPY deterministic tracking, WMQL, TractCloud and connectome routines are unchanged.",
       "measurement_source": {
         "file": "cohort_multi_pipeline_20261109.json",
         "sha256": "40083160e3e36a16ad010cbe966ca3f746e387d4734735c2bee8707973756a9d"
@@ -633,6 +641,370 @@
       "measurement_source": {
         "file": "performance_optimizations_20261020.json",
         "sha256": "8b0c16688e6ce00c3c3527060be6d950a8a6cef9083c9340f256fe2c31f35a39"
+      }
+    },
+    {
+      "id": "teem-dti-wls",
+      "title": "Teem DTI WLS estimation",
+      "category": "implementation",
+      "scope": "Full brain",
+      "evidence_date": "2026-11-09",
+      "reference_seconds": 74.08627468533814,
+      "optimized_seconds": 31.310826977714896,
+      "speed_ratio": 2.366155155789023,
+      "seconds_saved": 42.77544770762324,
+      "reduction_percent": 57.737344588185394,
+      "method": "Evaluate one all-zero signal template once and run Teem tenEstimateUpdate only on nonzero-signal voxel rows; fill zero-signal rows directly from the template.",
+      "baseline": "Previous full-volume Teem tenEstimateUpdate loop across all image-grid rows versus nonzero-row estimation with the same thread pool and gradient table.",
+      "unchanged": "All 7 tensor/mask components, baseline b0 volume and failure counts match voxelwise across all three acquisitions.",
+      "limitation": "Displayed values use subject 100206 on a shared Linux host with the default host thread pool. Gains depend on the background zero-voxel fraction of the masked DWI volume.",
+      "sample": "3658350 image-grid voxels (1427977 nonzero); 288 gradient rows; three real acquisitions verified.",
+      "subject_results": [
+        {
+          "subject": "100206",
+          "reference_seconds": 74.08627468533814,
+          "optimized_seconds": 31.310826977714896,
+          "speed_ratio": 2.366155155789023
+        },
+        {
+          "subject": "100408",
+          "reference_seconds": 73.64379691146314,
+          "optimized_seconds": 31.905542386695743,
+          "speed_ratio": 2.3081819459108077
+        },
+        {
+          "subject": "149741",
+          "reference_seconds": 71.76310877688229,
+          "optimized_seconds": 30.869968570768833,
+          "speed_ratio": 2.3246900498899663
+        }
+      ],
+      "upstream_reference": "Measured with Slicer 5.10.0 bundled Teem 1.12.0; preserves Teem tenEstimate WLS numerics and thread count.",
+      "measurement_source": {
+        "file": "runtime_optimizations_20261109.json",
+        "sha256": "3a65d4dff5c1bb294b44f80ab7cc307881ab3b60e5ea192c8c1a783c7517225d"
+      }
+    },
+    {
+      "id": "teem-dec-fa",
+      "title": "Direction-encoded colour FA",
+      "category": "implementation",
+      "scope": "Full brain",
+      "evidence_date": "2026-11-09",
+      "reference_seconds": 4.507668623700738,
+      "optimized_seconds": 2.634297087788582,
+      "speed_ratio": 1.7111466449992543,
+      "seconds_saved": 1.873371535912156,
+      "reduction_percent": 41.559655163252486,
+      "method": "Restrict 3x3 measurement-frame rotation and symmetric eigendecomposition to voxels with positive fractional anisotropy; assign zero RGB directly elsewhere.",
+      "baseline": "Full-grid 3x3 matrix rotation and NumPy eigh across every image voxel versus active-FA voxel indexing with one numerical thread.",
+      "unchanged": "Exported uint8 RGB direction-encoded colour maps are byte-identical in all three acquisitions.",
+      "limitation": "Subject 100206 medians of three alternating repeats after one warmup. Gains depend on the proportion of zero-FA background voxels.",
+      "sample": "3658350 total voxels (1427615 with FA > 0); three acquisitions, three alternating repeats each.",
+      "subject_results": [
+        {
+          "subject": "100206",
+          "reference_seconds": 4.507668623700738,
+          "optimized_seconds": 2.634297087788582,
+          "speed_ratio": 1.7111466449992543
+        },
+        {
+          "subject": "100408",
+          "reference_seconds": 5.380347900092602,
+          "optimized_seconds": 2.6243808027356863,
+          "speed_ratio": 2.050139939479843
+        },
+        {
+          "subject": "149741",
+          "reference_seconds": 5.679583685472608,
+          "optimized_seconds": 2.952127907425165,
+          "speed_ratio": 1.9238948526543753
+        }
+      ],
+      "upstream_reference": "Same measurement-frame rotation and NumPy eigh eigenvector convention; skips zero-FA background voxels where RGB is identically zero.",
+      "measurement_source": {
+        "file": "runtime_optimizations_20261109.json",
+        "sha256": "3a65d4dff5c1bb294b44f80ab7cc307881ab3b60e5ea192c8c1a783c7517225d"
+      }
+    },
+    {
+      "id": "regional-endpoints",
+      "title": "Streamline endpoint ROI selection",
+      "category": "implementation",
+      "scope": "1M streamlines",
+      "evidence_date": "2026-11-09",
+      "reference_seconds": 33.58021034114063,
+      "optimized_seconds": 1.7487374041229486,
+      "speed_ratio": 19.20254594084253,
+      "seconds_saved": 31.83147293701768,
+      "reduction_percent": 94.79235720575433,
+      "method": "Transform start and end streamline points, check grid bounds and evaluate inclusion/target masks in 4096-streamline NumPy blocks; invert the atlas affine once.",
+      "baseline": "Per-streamline Python loop and repeated affine inversion versus batched 4096-streamline endpoint array evaluation.",
+      "unchanged": "Selected streamline indices and output point arrays match identically in all three 1000000-streamline tractograms.",
+      "limitation": "Subject 100206 medians of three alternating repeats after one warmup on 4096-streamline batches; excludes file loading and writing.",
+      "sample": "Three 1000000-streamline whole-brain tractograms; bilateral thalamus/precentral to superior-frontal endpoint query; one numerical thread.",
+      "subject_results": [
+        {
+          "subject": "100206",
+          "reference_seconds": 33.58021034114063,
+          "optimized_seconds": 1.7487374041229486,
+          "speed_ratio": 19.20254594084253
+        },
+        {
+          "subject": "100408",
+          "reference_seconds": 33.53127024695277,
+          "optimized_seconds": 1.8107743058353662,
+          "speed_ratio": 18.51764194957679
+        },
+        {
+          "subject": "149741",
+          "reference_seconds": 33.2755076084286,
+          "optimized_seconds": 1.7632269598543644,
+          "speed_ratio": 18.871936719466348
+        }
+      ],
+      "upstream_reference": "Internal regional-tractography endpoint selector; preserves nearest-voxel rounding and endpoint-pair logic.",
+      "measurement_source": {
+        "file": "runtime_optimizations_20261109.json",
+        "sha256": "3a65d4dff5c1bb294b44f80ab7cc307881ab3b60e5ea192c8c1a783c7517225d"
+      }
+    },
+    {
+      "id": "connectome-radial",
+      "title": "Connectome radial endpoint assignment",
+      "category": "implementation",
+      "scope": "1M streamlines",
+      "evidence_date": "2026-11-09",
+      "reference_seconds": 120.60630070231855,
+      "optimized_seconds": 4.312568271532655,
+      "speed_ratio": 27.96623568801056,
+      "seconds_saved": 116.2937324307859,
+      "reduction_percent": 96.4242595565741,
+      "method": "Batch direct voxel label lookup and SciPy cKDTree 2 mm radial search across 4096-streamline endpoint blocks instead of per-endpoint Python calls.",
+      "baseline": "Per-endpoint Python voxel lookup and single-point cKDTree queries versus batched 8192-point array queries with the same KD-tree and 2 mm radius.",
+      "unchanged": "Direct voxel labels, radially assigned node labels and all 84x84 connectome matrices match identically across all three acquisitions.",
+      "limitation": "Displayed values use subject 100206 on 1000000 streamlines (2000000 endpoints); excludes tractogram file parsing and matrix export.",
+      "sample": "Three 1000000-streamline tractograms; 84 grey-matter nodes; 2.0 mm radial assignment search; one numerical thread.",
+      "subject_results": [
+        {
+          "subject": "100206",
+          "reference_seconds": 120.60630070231855,
+          "optimized_seconds": 4.312568271532655,
+          "speed_ratio": 27.96623568801056
+        },
+        {
+          "subject": "100408",
+          "reference_seconds": 120.8455902505666,
+          "optimized_seconds": 4.1192723494023085,
+          "speed_ratio": 29.33663521133796
+        },
+        {
+          "subject": "149741",
+          "reference_seconds": 120.71240596100688,
+          "optimized_seconds": 4.171764105558395,
+          "speed_ratio": 28.935578068801036
+        }
+      ],
+      "upstream_reference": "Measured with SciPy 1.18.1 cKDTree; preserves exact tie-breaking and 2 mm radial distance cutoff.",
+      "measurement_source": {
+        "file": "runtime_optimizations_20261109.json",
+        "sha256": "3a65d4dff5c1bb294b44f80ab7cc307881ab3b60e5ea192c8c1a783c7517225d"
+      }
+    },
+    {
+      "id": "ddseg-cuda",
+      "title": "DDSeg tissue segmentation (CUDA)",
+      "category": "implementation",
+      "scope": "Full 3-view CUDA",
+      "evidence_date": "2026-11-10",
+      "reference_seconds": 6.196,
+      "optimized_seconds": 5.383,
+      "speed_ratio": 1.151031023592792,
+      "seconds_saved": 0.8129999999999997,
+      "reduction_percent": 13.121368624919294,
+      "method": "Cache predictions for uniform background slices within each anatomical view and execute TorchScript models under torch.inference_mode().",
+      "baseline": "Uncached per-slice TorchScript evaluation across all 256 slices per view under torch.no_grad() on the same GPU.",
+      "unchanged": "All 3-view class probability volumes and final discrete 6-class tissue segmentations match voxelwise.",
+      "limitation": "Subject 100408 medians of three alternating 3-view repeats after warmup on NVIDIA RTX 3090; excludes NIfTI file I/O.",
+      "sample": "Full 3-view 256-slice DTI feature stacks; 6 tissue classes; CUDA execution.",
+      "upstream_reference": "Measured with Slicer 5.10.0 PyTorch 2.14.1+cu130 on official DDSeg TorchScript weights; preserves exact per-slice CNN outputs.",
+      "measurement_source": {
+        "file": "five_module_subalgorithm_optimizations_20261110.json",
+        "sha256": "5762d0107bb21404cc18d7345917d127064b6b90df842ac52c2bc6f1f644cbbe"
+      }
+    },
+    {
+      "id": "ddseg-cpu",
+      "title": "DDSeg slice inference (CPU)",
+      "category": "implementation",
+      "scope": "Strided full-view CPU",
+      "evidence_date": "2026-11-10",
+      "reference_seconds": 26.312,
+      "optimized_seconds": 12.942,
+      "speed_ratio": 2.0330706227785504,
+      "seconds_saved": 13.370000000000001,
+      "reduction_percent": 50.813317117664944,
+      "method": "Skip redundant CNN forward passes on uniform background slices via per-view slice caching and torch.inference_mode().",
+      "baseline": "Uncached per-slice TorchScript CPU evaluation across a 32-slice strided sample spanning the full 256-slice sagittal view.",
+      "unchanged": "Per-slice softmax probability maps match identically across all sampled slices.",
+      "limitation": "Subject 100408 medians of three alternating repeats after warmup on CPU. Gains reflect the background slice fraction around the brain mask.",
+      "sample": "32-slice strided sagittal view sample spanning background and brain slices; CPU execution.",
+      "upstream_reference": "Measured with Slicer 5.10.0 PyTorch 2.14.1 CPU on official DDSeg TorchScript weights; preserves exact per-slice CNN outputs.",
+      "measurement_source": {
+        "file": "five_module_subalgorithm_optimizations_20261110.json",
+        "sha256": "5762d0107bb21404cc18d7345917d127064b6b90df842ac52c2bc6f1f644cbbe"
+      }
+    },
+    {
+      "id": "ddparcel-cuda",
+      "title": "DDParcel 3-view inference (CUDA)",
+      "category": "implementation",
+      "scope": "Full 3-view CUDA",
+      "evidence_date": "2026-11-10",
+      "reference_seconds": 69.02,
+      "optimized_seconds": 42.844,
+      "speed_ratio": 1.6109606946130146,
+      "seconds_saved": 26.175999999999995,
+      "reduction_percent": 37.92523906114169,
+      "method": "Build 7-slice windows with zero-copy sliding_window_view, concatenate 4 modalities per slice on demand, cache uniform background batches and apply a precomputed sagittal-to-full label LUT.",
+      "baseline": "Iterative np.append thick-slice construction, eager 4D modality concatenation, uncached background batches and per-batch sagittal label loops on the same GPU.",
+      "unchanged": "Full 256x256x256x82 fused 3-view probability volumes match bitwise across all three views.",
+      "limitation": "Subject 100408 medians of three alternating full 3-view repeats after warmup on NVIDIA RTX 3090; eliminates 10.75 GB of temporary 4D array allocations.",
+      "sample": "Full 256x256x256 4-modality DTI input volumes across Axial, Coronal and Sagittal FastSurferCNN networks.",
+      "upstream_reference": "Measured with Slicer 5.10.0 PyTorch 2.14.1+cu130 on official DDSurfer FastSurferCNN weights; preserves exact 3-view fused probabilities.",
+      "measurement_source": {
+        "file": "five_module_subalgorithm_optimizations_20261110.json",
+        "sha256": "5762d0107bb21404cc18d7345917d127064b6b90df842ac52c2bc6f1f644cbbe"
+      }
+    },
+    {
+      "id": "ddparcel-cc",
+      "title": "DDParcel 3D connected-component cleanup",
+      "category": "implementation",
+      "scope": "256-cubed parcellation",
+      "evidence_date": "2026-11-10",
+      "reference_seconds": 64.059,
+      "optimized_seconds": 35.871,
+      "speed_ratio": 1.7858158400936688,
+      "seconds_saved": 28.187999999999995,
+      "reduction_percent": 44.00318456422985,
+      "method": "Label connected components once per parcel with return_num=True, identify the largest component via bincount and clear disconnected islands inside local region.slice bounding boxes.",
+      "baseline": "Duplicate full-volume measure.label calls and repeated 256-cubed boolean array comparisons per region in fastsurfercnn post-processing.",
+      "unchanged": "Cleaned 256x256x256 parcellation volumes match voxelwise across all 81 non-zero labels.",
+      "limitation": "Subject 100408 medians of three alternating repeats after warmup on CPU.",
+      "sample": "Full 256x256x256 DDParcel parcellation volume with 81 non-zero anatomical labels.",
+      "upstream_reference": "Measured with scikit-image 0.25.2 measure.label/regionprops; preserves exact FastSurferCNN connected-component cleanup rules.",
+      "measurement_source": {
+        "file": "five_module_subalgorithm_optimizations_20261110.json",
+        "sha256": "5762d0107bb21404cc18d7345917d127064b6b90df842ac52c2bc6f1f644cbbe"
+      }
+    },
+    {
+      "id": "mkcurve-ols-eigh",
+      "title": "MK-Curve OLS QR & batched eigh",
+      "category": "port",
+      "scope": "64-voxel numeric chunk",
+      "evidence_date": "2026-11-10",
+      "reference_seconds": 1.354,
+      "optimized_seconds": 1.226,
+      "speed_ratio": 1.1044045676998369,
+      "seconds_saved": 0.1280000000000001,
+      "reduction_percent": 9.453471196454954,
+      "method": "Reuse cached dgeqp3 QR factorizations of the equilibrated design matrix via dormqr/dtrsm for unweighted OLS initialization across the synthetic-b0 grid, vectorize tensor-basis construction and batch 3x3 eigendecomposition in parameter_maps.",
+      "baseline": "Preceding signal-reuse QR Python implementation calling dgelsy on every synthetic-b0 OLS initialization and per-voxel np.linalg.eigh.",
+      "unchanged": "All fitted coefficients, MK-curves, parameter maps and validity masks match identically across all three acquisitions.",
+      "limitation": "Displayed medians use subject 100206 (1.10x; up to 1.37x on subject 149741), three alternating repeats after warmup with one numerical thread. Incremental over signal reuse.",
+      "sample": "Three real 64-voxel chunks (100206, 149741, 877168); 181 measurements; 200 synthetic-b0 grid samples.",
+      "subject_results": [
+        {
+          "subject": "100206",
+          "reference_seconds": 1.354,
+          "optimized_seconds": 1.226,
+          "speed_ratio": 1.1044045676998369
+        },
+        {
+          "subject": "149741",
+          "reference_seconds": 1.614,
+          "optimized_seconds": 1.179,
+          "speed_ratio": 1.3689567430025447
+        },
+        {
+          "subject": "877168",
+          "reference_seconds": 1.266,
+          "optimized_seconds": 1.135,
+          "speed_ratio": 1.1154185022026433
+        }
+      ],
+      "upstream_reference": "Measured in the Python MK-Curve port using LAPACK dgeqp3/dormqr/dtrsm and NumPy batched eigh; preserves exact WLLS coefficients and maps.",
+      "measurement_source": {
+        "file": "five_module_subalgorithm_optimizations_20261110.json",
+        "sha256": "5762d0107bb21404cc18d7345917d127064b6b90df842ac52c2bc6f1f644cbbe"
+      }
+    },
+    {
+      "id": "csd-qc",
+      "title": "CSD/ACT tractogram QC validation",
+      "category": "implementation",
+      "scope": "Full-brain tractogram",
+      "evidence_date": "2026-11-10",
+      "reference_seconds": 10.119,
+      "optimized_seconds": 5.761,
+      "speed_ratio": 1.7564658913383093,
+      "seconds_saved": 4.358,
+      "reduction_percent": 43.06749678822017,
+      "method": "Validate vertex finiteness and compute per-streamline Euclidean segment lengths directly on flat ArraySequence coordinate and offset buffers using np.add.reduceat.",
+      "baseline": "Per-streamline Python loop converting each streamline to float64 and calling np.diff and np.linalg.norm individually.",
+      "unchanged": "Streamline counts, finiteness flags, <20 mm fractions and all length percentiles match identically.",
+      "limitation": "Subject 100408 medians of three alternating repeats after warmup; includes tractogram loading and summary generation.",
+      "sample": "Full-brain tractogram validation stage in CSD/ACT/SIFT2 quality control.",
+      "upstream_reference": "Measured with NiBabel ArraySequence tractogram buffers; preserves exactCSD/ACT streamline finiteness and length-distribution QC.",
+      "measurement_source": {
+        "file": "five_module_subalgorithm_optimizations_20261110.json",
+        "sha256": "5762d0107bb21404cc18d7345917d127064b6b90df842ac52c2bc6f1f644cbbe"
+      }
+    },
+    {
+      "id": "wma-measures",
+      "title": "WMA native tract length & scalar summary",
+      "category": "implementation",
+      "scope": "50000 streamlines",
+      "evidence_date": "2026-11-10",
+      "reference_seconds": 8.93743989430368,
+      "optimized_seconds": 0.547551192343235,
+      "speed_ratio": 16.32256493873399,
+      "seconds_saved": 8.389888701960444,
+      "reduction_percent": 93.87351189133905,
+      "method": "Extract VTK cell offsets and connectivity arrays once via vtk_to_numpy and vectorize Euclidean segment-length summation across all streamlines.",
+      "baseline": "Per-cell vtkIdList traversal and pointwise math.dist accumulation across every streamline vertex in measure_polydata.",
+      "unchanged": "Point counts, fiber counts, clamp exclusion counts and mean tract lengths match within IEEE-754 float64 summation precision (rtol < 1e-10).",
+      "limitation": "Subject 100408 medians of three alternating repeats after warmup on 50000 streamlines.",
+      "sample": "50000 whole-brain streamlines in VTK polydata format.",
+      "upstream_reference": "Measured with VTK 9.2 GetOffsetsArray/GetConnectivityArray buffers; preserves exact native WMA fiber length and scalar summary statistics.",
+      "measurement_source": {
+        "file": "five_module_subalgorithm_optimizations_20261110.json",
+        "sha256": "5762d0107bb21404cc18d7345917d127064b6b90df842ac52c2bc6f1f644cbbe"
+      }
+    },
+    {
+      "id": "connectome-mean-fa",
+      "title": "Connectome along-tract FA sampling",
+      "category": "implementation",
+      "scope": "50000 streamlines",
+      "evidence_date": "2026-11-10",
+      "reference_seconds": 84.25377066154033,
+      "optimized_seconds": 1.664893719367683,
+      "speed_ratio": 50.60609556118659,
+      "seconds_saved": 82.58887694217265,
+      "reduction_percent": 98.02395346072308,
+      "method": "Batch endpoint voxel/KD-tree node assignment across all streamlines and vectorize along-tract scalar map sampling over flat ArraySequence vertices via np.add.reduceat.",
+      "baseline": "Per-streamline endpoint assignment and per-vertex Python affine transformation and scalar voxel lookup in _write_python_connectome.",
+      "unchanged": "All exported node tables, edge lists and mean_fa connectivity matrix entries match within float64 precision (rtol < 1e-12).",
+      "limitation": "Subject 100408 medians of three alternating repeats after warmup on 50000 streamlines with 4 mm radial assignment.",
+      "sample": "50000 streamlines; 84 DDParcel nodes; full-brain DTI FA scalar map.",
+      "upstream_reference": "Measured with SciPy cKDTree and NiBabel ArraySequence buffers; preserves exact connectome edge weights and node assignments.",
+      "measurement_source": {
+        "file": "five_module_subalgorithm_optimizations_20261110.json",
+        "sha256": "5762d0107bb21404cc18d7345917d127064b6b90df842ac52c2bc6f1f644cbbe"
       }
     }
   ],

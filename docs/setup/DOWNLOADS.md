@@ -11,7 +11,7 @@
 Running the plugin does not require website source, historical performance
 reports or tests. Keep those in the complete repository for development,
 auditing and reproducibility, not as installation prerequisites.
-Release `v0.1.1` provides unified platform archives on GitHub Releases (`SlicerDSpace-v0.1.1-Windows-x64.zip` and `SlicerDSpace-v0.1.1-Linux-x64.tar.gz`) for local installation in **3D Slicer 5.10.0** via **Extensions Manager > Install Extensions > Install Extension from File**; online Slicer Extensions Catalog listing remains a separate proposal, and macOS does not yet have a certified full release archive.
+Release `v0.1.1` provides unified platform archives on GitHub Releases (`SlicerDSpace-v0.1.1-Windows-x64.zip`, `SlicerDSpace-v0.1.1-Linux-x64.tar.gz`, and `SlicerDSpace-v0.1.1-macOS-arm64.tar.gz`) for local installation in **3D Slicer 5.10.0** via **Extensions Manager > Install Extensions > Install Extension from File**; online Slicer Extensions Catalog listing remains a separate proposal, and physical Intel (`x86_64`) Mac hardware remains unverified.
 
 ---
 
@@ -19,7 +19,7 @@ Release `v0.1.1` provides unified platform archives on GitHub Releases (`SlicerD
 
 | Purpose | Recommended route | Contents |
 | --- | --- | --- |
-| Use SlicerDSpace on Windows or Linux | `SlicerDSpace-v0.1.1-Windows-x64.zip` or `SlicerDSpace-v0.1.1-Linux-x64.tar.gz` from GitHub Releases (`Install Extension from File` in Slicer 5.10.0) | Extension runtime, UI, queries, licenses, user guides, and modular `bundled-runtimes/` (`MRtrix3 3.0.8`, `FSL 2602.0`, `Surface Runtime 0.1.0`) with `tree_sha256` auto-repair |
+| Use SlicerDSpace on Windows, Linux, or Apple Silicon macOS | `SlicerDSpace-v0.1.1-Windows-x64.zip`, `SlicerDSpace-v0.1.1-Linux-x64.tar.gz`, or `SlicerDSpace-v0.1.1-macOS-arm64.tar.gz` from GitHub Releases (`Install Extension from File` in Slicer 5.10.0) | Extension runtime, UI, queries, licenses, user guides, and modular `bundled-runtimes/` (`MRtrix3 3.0.8`, `FSL 2602.0`, `Surface Runtime 0.1.0`) with `tree_sha256` auto-repair |
 | Install source with repository access | Lightweight checkout below, then staging | Updatable runtime source without website, tests or historical optimization reports |
 | Develop or reproduce research | Complete source checkout | Tests, performance evidence, release tools, website source and documentation |
 | Inspect performance evidence | Browse the authenticated GitHub repository | No need to copy reports into the plugin installation |

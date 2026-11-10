@@ -228,6 +228,11 @@ sys.exit(3 if failed else 0)
             self.assertIn('subject_profiles', json.loads((Path(manifest['resource_schedule']) / 'config.json').read_text()))
 
     def test_actual_cli_blocked_subject_is_not_a_completed_batch(self):
+        test_dir = str(Path(__file__).resolve().parent)
+        if test_dir not in sys.path:
+            sys.path.insert(0, test_dir)
+        import user_data_isolation
+        user_data_isolation.install()
         from test_input_execution_gate import subject
         for allow_partial in (False, True):
             with self.subTest(allow_partial=allow_partial), tempfile.TemporaryDirectory() as tmp:
@@ -236,7 +241,8 @@ sys.exit(3 if failed else 0)
                 manifest = root / 'batch.json'
                 args = ['--batch-root', str(root / 'subjects'), '--output-root', str(root / 'outputs'),
                         '--manifest', str(manifest), '--execute', '--targets', 'wma',
-                        '--wma-root', str(root / 'no-wma'), '--brain-mask-backend', 'provided']
+                        '--wma-root', str(root / 'no-wma'), '--ukf-executable', str(root / 'no-ukf'),
+                        '--brain-mask-backend', 'provided']
                 if allow_partial:
                     args.append('--allow-partial-success')
                 with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):

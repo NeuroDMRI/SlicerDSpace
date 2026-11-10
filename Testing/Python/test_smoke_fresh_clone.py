@@ -28,6 +28,8 @@ class FreshCloneSmokeTest(unittest.TestCase):
             "test-fast:\n\t@echo fixture stdout\n\t@echo fixture stderr >&2\n"
             + ("\t@exit 7\n" if fail else ""), encoding="utf-8")
         env = os.environ.copy()
+        for key in ("PYTHONHOME", "PYTHONPATH", "PYTHONNOUSERSITE"):
+            env.pop(key, None)
         env.update({"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull})
         for args in (("init",), ("add", "."),
                      ("-c", "user.name=Smoke Test", "-c", "user.email=smoke@example.invalid",

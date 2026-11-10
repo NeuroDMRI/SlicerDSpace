@@ -147,13 +147,27 @@ class TeemLibraryTests(unittest.TestCase):
         self.assertEqual(report["status"], "ok")
 
 
+def _usable_slicer_python() -> Path | None:
+    from shared.external_process import _default_slicer_python
+
+    active = _default_slicer_python()
+    if active is not None and active.is_file():
+        return active
+    real = SLICER_5_12_PYTHON.parent / "python-real"
+    if SLICER_5_12_PYTHON.is_file() and real.is_file() and os.access(real, os.X_OK):
+        return SLICER_5_12_PYTHON
+    return None
+
+
 class SlicerPythonSelfCheckTests(unittest.TestCase):
     """D10: opt-in run of the script with a local Slicer's own Python (skipped when Slicer is absent)."""
 
-    @unittest.skipUnless(SLICER_5_12_PYTHON.is_file(), "no local Slicer 5.12 at /Applications/Slicer.app")
+    @unittest.skipUnless(_usable_slicer_python() is not None, "no usable local Slicer PythonSlicer")
     def test_selfcheck_command_passes_in_slicer_python(self) -> None:
+        slicer_python = _usable_slicer_python()
+        assert slicer_python is not None
         completed = subprocess.run(
-            [str(SLICER_5_12_PYTHON), str(REPO_ROOT / "shared/teem_dti.py"), "selfcheck"],
+            [str(slicer_python), str(REPO_ROOT / "shared/teem_dti.py"), "selfcheck"],
             capture_output=True, text=True, timeout=300)
         self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
         self.assertEqual(json.loads(completed.stdout)["status"], "ok")

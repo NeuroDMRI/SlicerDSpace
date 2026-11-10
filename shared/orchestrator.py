@@ -540,7 +540,10 @@ def _resolve_slicer_executable(config: ProductOrchestratorConfig) -> Optional[Pa
     env_value = Path(os.environ["SLICERDSPACE_SLICER_EXECUTABLE"]).expanduser().resolve() if os.environ.get("SLICERDSPACE_SLICER_EXECUTABLE") else None
     if env_value is not None and env_value.is_file():
         return env_value
+    import platform
+    from shared.environment import _common_slicer_executables
     candidates = [
+        *_common_slicer_executables(platform.system()),
         Path("/data/chengjin/software/Slicer-5.10.0-linux-amd64/Slicer"),
         Path("/data/chengjin/software/Slicer/Slicer"),
     ]

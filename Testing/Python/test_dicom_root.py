@@ -17,6 +17,8 @@ from shared.orchestrator import ProductOrchestratorConfig, run_subject_products
 class DicomRootTests(unittest.TestCase):
     def test_headless_converter_discovery_and_missing_backend(self):
         with patch.dict("os.environ", {"SLICERDSPACE_DWICONVERT_EXECUTABLE": ""}), \
+                patch("shared.input_import.packaged_dcm2niix", return_value=None), \
+                patch("shared.input_import.shutil.which", return_value=None), \
                 patch("shared.dicom_input.shutil.which", return_value=None), \
                 patch("tractography.ukf.resolve_executable", return_value=Path("/slicer/DWIConvert")) as discover:
             self.assertEqual(converter_path(), ("dwiconvert", Path("/slicer/DWIConvert")))

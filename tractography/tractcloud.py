@@ -149,14 +149,20 @@ def resolve_tractcloud_python(python_executable: Optional[Path] = None) -> Path:
             raise FileNotFoundError(f"TractCloud Python executable not found: {candidate}")
         return candidate
 
+    from shared.backend_sources import available_darwin_arm64_tractcloud_python, needs_darwin_arm64_tractcloud_python
+    if needs_darwin_arm64_tractcloud_python():
+        arm64_py = available_darwin_arm64_tractcloud_python()
+        if arm64_py is not None:
+            return arm64_py
+
     for executable_name in ("PythonSlicer", "python3", "python"):
         found = shutil.which(executable_name)
         if found:
             return Path(found).absolute()
 
-    from shared.external_process import find_pythonslicer, is_slicer_python
+    from shared.external_process import _default_slicer_python, is_slicer_python
     if is_slicer_python(sys.executable):
-        slicer_py = find_pythonslicer(Path(sys.executable).parent)
+        slicer_py = _default_slicer_python()
         if slicer_py is not None:
             return slicer_py.absolute()
 
@@ -439,11 +445,7 @@ def run_tractcloud_parcellation(
     staging = None
     published_archive = None
     if config.execute:
-        extra_env = _tractcloud_env(config, backend_status)
-        source_pythonpath = extra_env.pop("PYTHONPATH", None)
-        env = python_tool_environment(backend_status['python_executable'], extra_env)
-        if source_pythonpath:
-            env["PYTHONPATH"] = source_pythonpath + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+        env = python_tool_environment(backend_status['python_executable'], _tractcloud_env(config, backend_status))
         try:
             (output_dir / 'tractcloud_device.json').unlink(missing_ok=True)
             staging = new_product_staging(output_dir, 'tractcloud')

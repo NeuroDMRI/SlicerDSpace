@@ -23,6 +23,8 @@ if str(ROOT) not in sys.path:
 
 from scripts.native.prepare_mrtrix_candidate import (
     _copy_with_mode,
+    _is_macho,
+    copy_darwin_dylib_closure,
     copy_linux_so_closure,
     copy_windows_dll_closure,
     make_archive,
@@ -127,8 +129,11 @@ def build(source: Path, output: Path, *, system: str, machine: str, dll_search: 
                     raise ValueError('No Windows runtime DLLs found for FSL executables')
         else:
             elf_binaries = [p for p in staged_binaries if p.read_bytes()[:4] == b'\x7fELF']
+            macho_binaries = [p for p in staged_binaries if _is_macho(p)]
             if system == 'Linux' and elf_binaries:
                 copied_dlls = copy_linux_so_closure(elf_binaries, stage / 'lib', [source / 'lib', *dll_search])
+            elif system == 'Darwin' and macho_binaries:
+                copied_dlls = copy_darwin_dylib_closure(macho_binaries, stage / 'lib', [source / 'lib', *dll_search])
             else:
                 for lib_dir in (source / 'lib',):
                     if lib_dir.is_dir():

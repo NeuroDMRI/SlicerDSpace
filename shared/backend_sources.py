@@ -184,6 +184,56 @@ def prepare_sources(profiles, *, root=None, execute=False, accept_terms=False, o
                     (staged / ".slicerdspace-source.json").write_text(json.dumps(record, indent=2) + "\n")
                     verify_source(name, staged)
                     staged.rename(destination)
+            if name == "tractcloud" and needs_darwin_arm64_tractcloud_python():
+                ensure_darwin_arm64_tractcloud_python(root)
             result["external_dependencies"][spec["setting"]] = str(destination)
     result["status"] = "completed"
     return result
+
+
+def needs_darwin_arm64_tractcloud_python(system=None, machine=None) -> bool:
+    import platform
+    import sys
+    if (system or platform.system()) != "Darwin":
+        return False
+    from shared.platform_info import host_machine, slicer_machine
+    from shared.external_process import is_slicer_python
+    host = host_machine()
+    proc = (machine or slicer_machine()).lower()
+    return host == "arm64" and proc not in ("arm64", "aarch64") and is_slicer_python(sys.executable)
+
+
+def default_darwin_arm64_tractcloud_python(root=None) -> Path:
+    return Path(root or source_root()).expanduser().absolute() / "tractcloud-arm64" / "bin" / "python3"
+
+
+def available_darwin_arm64_tractcloud_python(root=None):
+    candidate = default_darwin_arm64_tractcloud_python(root)
+    return candidate if candidate.is_file() else None
+
+
+def ensure_darwin_arm64_tractcloud_python(root=None) -> Path:
+    import subprocess
+    from shared.external_process import external_python_environment
+    venv_dir = Path(root or source_root()).expanduser().absolute() / "tractcloud-arm64"
+    py3 = venv_dir / "bin" / "python3"
+    universal = venv_dir / "bin" / ".python3-universal"
+    if not (venv_dir / "pyvenv.cfg").is_file() or not universal.exists():
+        venv_dir.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(
+            ["/usr/bin/arch", "-arm64", "/usr/bin/python3", "-m", "venv", str(venv_dir)],
+            env=external_python_environment(),
+            check=True,
+        )
+        if py3.is_symlink() or py3.is_file():
+            if not universal.exists():
+                target = os.readlink(py3) if py3.is_symlink() else "/usr/bin/python3"
+                universal.symlink_to(target)
+    wrapper = '#!/bin/sh\nunset PYTHONHOME PYTHONNOUSERSITE\nexec /usr/bin/arch -arm64 "$(dirname "$0")/.python3-universal" "$@"\n'
+    for name in ("python3", "python"):
+        script = venv_dir / "bin" / name
+        if script.is_symlink() or script.is_file():
+            script.unlink()
+        script.write_text(wrapper, encoding="utf-8")
+        script.chmod(0o755)
+    return py3

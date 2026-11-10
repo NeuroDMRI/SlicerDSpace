@@ -10,6 +10,17 @@ ROOT = Path(__file__).resolve().parents[1]
 IMAGES = ('fig-product-map', 'fig-runtime-resources')
 
 
+def verify_lossless(source, encoded):
+    import io
+    from PIL import Image
+
+    with Image.open(source) as image:
+        original = image.convert('RGBA')
+        with Image.open(io.BytesIO(encoded)) as result:
+            if result.size != original.size or result.convert('RGBA').tobytes() != original.tobytes():
+                raise ValueError('Lossless image pixel verification failed: ' + str(source))
+
+
 def encode_lossless(source):
     import io
     from PIL import Image
@@ -19,10 +30,8 @@ def encode_lossless(source):
         buffer = io.BytesIO()
         original.save(buffer, format='WEBP', lossless=True, method=6, exact=True)
         encoded = buffer.getvalue()
-        with Image.open(io.BytesIO(encoded)) as result:
-            if result.size != original.size or result.convert('RGBA').tobytes() != original.tobytes():
-                raise ValueError('Lossless image pixel verification failed: ' + str(source))
-        return encoded
+    verify_lossless(source, encoded)
+    return encoded
 
 
 def build(root=ROOT, check=False):
@@ -33,7 +42,13 @@ def build(root=ROOT, check=False):
     for name in IMAGES:
         source = root / 'docs/site/assets/img' / (name + '.png')
         target = source.with_suffix('.webp')
-        data = encode_lossless(source)
+        if check:
+            if not target.is_file():
+                raise ValueError('Website WebP or receipt is stale: ' + name)
+            data = target.read_bytes()
+            verify_lossless(source, data)
+        else:
+            data = encode_lossless(source)
         if len(data) >= source.stat().st_size:
             raise ValueError('WebP is not smaller: ' + name)
         source_sha = hashlib.sha256(source.read_bytes()).hexdigest()
@@ -42,7 +57,7 @@ def build(root=ROOT, check=False):
                      derivative='Lossless WebP; decoded RGBA pixels and dimensions identical to PNG')
         relative = target.relative_to(root).as_posix()
         if check:
-            if not target.is_file() or target.read_bytes() != data or receipt['files'].get(relative) != entry:
+            if receipt['files'].get(relative) != entry:
                 raise ValueError('Website WebP or receipt is stale: ' + name)
         else:
             target.write_bytes(data)

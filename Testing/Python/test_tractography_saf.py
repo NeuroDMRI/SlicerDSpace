@@ -760,12 +760,13 @@ class SAFIntegrationTest(unittest.TestCase):
         from Support.sys_exec import sys_exec
 
         with tempfile.TemporaryDirectory() as tmp:
-            bin_dir = Path(tmp) / "MRtrix tools"
+            root = Path(tmp).resolve()
+            bin_dir = root / "MRtrix tools"
             executable = bin_dir / ("tckstats.exe" if sys.platform == "win32" else "tckstats")
             bin_dir.mkdir()
             executable.touch()
             executable.chmod(0o755)
-            path_with_shell_characters = str(Path(tmp) / "literal; file.tck")
+            path_with_shell_characters = str(root / "literal; file.tck")
             ps = types.SimpleNamespace(dgn=False, mrtrix_bin_dir=str(bin_dir))
             with mock.patch.dict("os.environ", {"MRTRIX_RNG_SEED": "31"}), \
                     mock.patch("Support.sys_exec.startup_environment", side_effect=lambda extra_env: dict(

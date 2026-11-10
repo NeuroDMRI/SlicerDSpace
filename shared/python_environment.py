@@ -8,7 +8,12 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from shared.external_process import interpreter_path, text_subprocess_kwargs, slicer_runtime_roots
+from shared.external_process import (
+    external_python_environment,
+    interpreter_path,
+    slicer_runtime_roots,
+    text_subprocess_kwargs,
+)
 
 
 def setup_python_command(python, *, slicer_home, launcher, current_python=None):
@@ -77,6 +82,7 @@ def resolve_python_executable(
             check=False,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            env=external_python_environment(),
             **text_subprocess_kwargs(),
         )
         if completed.returncode != 0:

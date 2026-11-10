@@ -4,13 +4,13 @@ from datetime import datetime
 import json
 from pathlib import Path
 
-from shared.environment_check import check_config, result_from_dict
 from shared.ui_selected_setup import _text
-from shared.ui_setup_jobs import start_setup_job
 
 
 def start_environment_check(owner, on_complete=None, *, on_failure=None):
     import slicer
+    from shared.environment_check import check_config, result_from_dict
+    from shared.ui_setup_jobs import start_setup_job
 
     if owner._pipelineActive or getattr(owner, '_setupJob', None) or getattr(owner, '_selectedSetupActive', False):
         owner._setStatus('warning', _text(owner, 'Wait for the active job or cancel it first.', '请先等待当前任务结束，或取消任务。'))

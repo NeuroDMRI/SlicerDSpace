@@ -161,6 +161,63 @@ def copy_linux_so_closure(programs: list[Path], lib_dest: Path, search_dirs: lis
     return sorted(copied)
 
 
+def _is_macho(path: Path) -> bool:
+    return path.read_bytes()[:4] in (
+        b'\xcf\xfa\xed\xfe',
+        b'\xfe\xed\xfa\xcf',
+        b'\xca\xfe\xba\xbe',
+        b'\xbe\xba\xfe\xca',
+        b'\xca\xfe\xba\xbf',
+        b'\xbf\xba\xfe\xca',
+    )
+
+
+def copy_darwin_dylib_closure(binaries: list[Path], lib_dest: Path, search_dirs: list[Path]) -> list[str]:
+    """Copy non-system Darwin Mach-O dynamic libraries needed by binaries into lib_dest."""
+    lib_dest.mkdir(parents=True, exist_ok=True)
+    dirs = [d.resolve() for d in search_dirs if d.is_dir()]
+    queue = [Path(b).resolve() for b in binaries]
+    seen: set[str] = set()
+    copied: list[str] = []
+    while queue:
+        binary = queue.pop(0)
+        done = subprocess.run(['otool', '-L', str(binary)], capture_output=True, text=True,
+                              errors='replace', timeout=60, check=True)
+        for line in done.stdout.splitlines()[1:]:
+            dep = line.strip().split(' (', 1)[0].strip()
+            if not dep or dep.startswith(('/usr/lib/', '/System/')):
+                continue
+            name = Path(dep).name
+            if name in seen or name == binary.name:
+                continue
+            seen.add(name)
+            resolved = None
+            for d in dirs:
+                candidate = d / name
+                if candidate.exists():
+                    resolved = candidate.resolve(strict=True)
+                    break
+            if resolved is None and Path(dep).is_absolute() and Path(dep).exists():
+                resolved = Path(dep).resolve(strict=True)
+            if resolved is None or not resolved.is_file():
+                raise FileNotFoundError(f'Missing Darwin dynamic library {name} ({dep}) for {binary.name}')
+            target = lib_dest / name
+            if not target.exists():
+                shutil.copy2(resolved, target)
+                target.chmod(0o755)
+                queue.append(resolved)
+                copied.append(name)
+    return sorted(copied)
+
+
+def _normalize_python_shebang(script: Path) -> None:
+    text = script.read_text(encoding='utf-8')
+    if text.startswith('#!/usr/bin/env python\n'):
+        script.write_text('#!/usr/bin/env python3\n' + text[len('#!/usr/bin/env python\n'):], encoding='utf-8')
+    elif text.startswith('#!/usr/bin/env python\r\n'):
+        script.write_text('#!/usr/bin/env python3\r\n' + text[len('#!/usr/bin/env python\r\n'):], encoding='utf-8')
+
+
 def _copy_with_mode(source: Path, target: Path) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source, target)
@@ -329,6 +386,7 @@ def build(source: Path, output: Path, *, system: str, machine: str, dll_search: 
                 _copy_with_mode(binary, target)
                 command_paths.append(f'bin/{target.name}')
             elf_binaries = [stage / rel for rel in command_paths if (stage / rel).read_bytes()[:4] == b'\x7fELF']
+            macho_binaries = [stage / rel for rel in command_paths if _is_macho(stage / rel)]
             if system == 'Linux' and elf_binaries:
                 copied_dlls = copy_linux_so_closure(elf_binaries, stage / 'lib', [source / 'lib'])
                 if (source / 'lib/mrtrix3').is_dir():
@@ -340,6 +398,20 @@ def build(source: Path, output: Path, *, system: str, machine: str, dll_search: 
                 for script_rel in (WINDOWS_RESPONSE_SCRIPT, WINDOWS_ACT_SCRIPT):
                     if (source / script_rel).is_file():
                         _copy_with_mode(source / script_rel, stage / script_rel)
+                        _normalize_python_shebang(stage / script_rel)
+                        command_paths.append(script_rel)
+            elif system == 'Darwin' and macho_binaries:
+                copied_dlls = copy_darwin_dylib_closure(macho_binaries, stage / 'lib', [source / 'lib', *dll_search])
+                if (source / 'lib/mrtrix3').is_dir():
+                    shutil.copytree(source / 'lib/mrtrix3', stage / 'lib/mrtrix3',
+                                    ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
+                if (source / 'share/mrtrix3').is_dir():
+                    shutil.copytree(source / 'share/mrtrix3', stage / 'share/mrtrix3', symlinks=False)
+                _patch_act_freesurfer_helper(stage)
+                for script_rel in (WINDOWS_RESPONSE_SCRIPT, WINDOWS_ACT_SCRIPT):
+                    if (source / script_rel).is_file():
+                        _copy_with_mode(source / script_rel, stage / script_rel)
+                        _normalize_python_shebang(stage / script_rel)
                         command_paths.append(script_rel)
             else:
                 # Only bundle a platform's *own* library tree. Toolchain-provided

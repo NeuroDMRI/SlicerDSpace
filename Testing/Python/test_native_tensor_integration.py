@@ -485,9 +485,10 @@ class DDParcelCompletenessTests(unittest.TestCase):
 class DetachedHeaderTests(unittest.TestCase):
     """W2: vtkTeemNRRDWriter writes a detached header plus data file for a .nhdr name; nifti_write reads it."""
 
-    slicer_python = Path("/Applications/Slicer.app/Contents/bin/PythonSlicer")
+    from shared.external_process import _default_slicer_python
+    slicer_python = _default_slicer_python() or Path("/Applications/Slicer.app/Contents/bin/PythonSlicer")
 
-    @unittest.skipUnless(slicer_python.is_file(), "no local Slicer 5.12 at /Applications/Slicer.app")
+    @unittest.skipUnless(slicer_python.is_file(), "no local Slicer PythonSlicer available")
     def test_w2_nhdr_outputs_are_detached_and_readable_by_nifti_write(self) -> None:
         import nibabel as nib
         import nrrd

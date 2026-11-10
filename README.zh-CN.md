@@ -137,14 +137,15 @@ Agent 会检查可用空间和已有资源，等你选择后再下载，并保�
 
 ## 安装
 
-### 方式一：单文件完整 Release 安装包（Windows 与 Linux 推荐）
+### 方式一：单文件完整 Release 安装包（Windows、Linux 与 Apple Silicon macOS 推荐）
 
 从 GitHub Release 页面下载对应平台的唯一完整安装包：
 
 - **Windows (`x86_64`)**：`SlicerDSpace-v0.1.1-Windows-x64.zip`
 - **Linux (`x86_64`)**：`SlicerDSpace-v0.1.1-Linux-x64.tar.gz`
+- **macOS (Apple Silicon `arm64`)**：`SlicerDSpace-v0.1.1-macOS-arm64.tar.gz`
 
-每个安装包均包含 SlicerDSpace 扩展本体及模块化内置于 `SlicerDSpace/bundled-runtimes/` 的三大原生运行环境（**MRtrix3 `3.0.8`** 共 68 个命令、**FSL `2602.0`** 含 `topup`/`applytopup`/`eddy_cpu`、**FreeSurfer Surface Runtime** 含 7 个表面命令与球面模板，不包含任何个人专属 FreeSurfer 激活文件；运行皮层表面后处理需用户自备 FreeSurfer 许可证文件）。在 **3D Slicer 5.10.0** 中通过 **View > Extensions Manager > Install Extensions > Install Extension from File** 选择该压缩包安装并重启 Slicer，首次启动会自动识别内置依赖并通过 `tree_sha256` 校验文件完整性（若内置运行包被误删或损坏，可从统一安装包自动修复）；深度学习模型权重（`DDSeg`、`DDParcel`、`DDSurfer`、`TractCloud`、`PNL`）与大型白质图谱（`ORG`）在首次使用时按需下载。（macOS 在原生依赖全部完成验收前，暂不宣称完整原生支持。）
+每个安装包均包含 SlicerDSpace 扩展本体及模块化内置于 `SlicerDSpace/bundled-runtimes/` 的三大原生运行环境（**MRtrix3 `3.0.8`**、**FSL `2602.0`** 含 `topup`/`applytopup`/`eddy_cpu`、**FreeSurfer Surface Runtime** 含 7 个表面命令与球面模板，不包含任何个人专属 FreeSurfer 激活文件；运行皮层表面后处理需用户自备 FreeSurfer 许可证文件）。在 **3D Slicer 5.10.0** 中通过 **View > Extensions Manager > Install Extensions > Install Extension from File** 选择该压缩包安装并重启 Slicer，首次启动会自动识别内置依赖并通过 `tree_sha256` 校验文件完整性（若内置运行包被误删或损坏，可从统一安装包自动修复）；深度学习模型权重（`DDSeg`、`DDParcel`、`DDSurfer`、`TractCloud`、`PNL`）与大型白质图谱（`ORG`）在首次使用时按需下载。（Intel `x86_64` Mac 真机硬件尚未实测验证。）
 
 ### 方式二：从源码部署插件
 
@@ -246,7 +247,7 @@ sub-01/
 **平台。** Linux 上 PNL 脑掩膜在带 ANTs 的 managed conda 运行环境中运行；macOS 和 Windows 上在 Slicer 自带的 Python 中运行（SimpleITK 和 PyTorch）。
 这条 native 路线为 **实验性**：在 24 个测试例中有 2 例的掩膜与 Linux 路线的差异超出一致性规则。
 设置项为高级设置中的 **PNL 路线**（`auto`、`managed`、`native`），命令行为 `--pnl-mask-route`；运行记录会写明所用掩膜的路线。
-在 Windows 上，SlicerDSpace **默认使用原生运行环境，无需 WSL**：MRtrix3（`3.0.8`，68 个命令）、FSL（`2602.0`，`topup`/`applytopup`/`eddy_cpu`）、FreeSurfer 皮层表面后处理（7 个原生命令）、WMA、WMQL、TractCloud、脑掩膜和所有 Python 微结构/解剖重建阶段均直接在 Windows 版 **3D Slicer 5.10.0** 中原生运行（WSL 2 仅作为可选回退保留）。macOS 原生依赖尚待完整科学验收。见 [Windows](docs/setup/WINDOWS.md)、[Windows 5.10.0 原生验收报告](docs/release/WINDOWS_NATIVE_ACCEPTANCE_5.10.0.zh-CN.md) 和 [macOS](docs/setup/MACOS.md)。
+在 Windows 与 Apple Silicon（`arm64`）macOS 上，SlicerDSpace **默认使用原生运行环境，无需 WSL 或 Docker**：MRtrix3（`3.0.8`）、FSL（`2602.0`，`topup`/`applytopup`/`eddy_cpu`）、FreeSurfer 皮层表面后处理（7 个原生命令）、WMA、WMQL、TractCloud、脑掩膜和所有 Python 微结构/解剖重建阶段均直接在 **3D Slicer 5.10.0** 中原生运行（Windows 下 WSL 2 仅作为可选回退保留；Intel `x86_64` Mac 真机硬件尚未实测验证）。见 [Windows](docs/setup/WINDOWS.md)、[Windows 5.10.0 原生验收报告](docs/release/WINDOWS_NATIVE_ACCEPTANCE_5.10.0.zh-CN.md)、[macOS](docs/setup/MACOS.md) 和 [macOS 5.10.0 原生验收报告](docs/release/MACOS_NATIVE_ACCEPTANCE_5.10.0.zh-CN.md)。
 
 UKF 通过已安装扩展自动运行，并可直接把结果传给 WMA。
 WMA 支持 `--wma-atlas org|east-west|naba`（默认 `org`），高级设置中也可选择。
@@ -301,9 +302,9 @@ export SLICER="/path/to/Slicer"
 
 | 范围 | 当前状态 |
 | --- | --- |
-| 参考环境 | Windows (`x86_64`) 与 Linux (`x86_64`)，目标 3D Slicer 5.10.0；macOS 完整原生依赖尚待验收 |
-| 验证 | 已记录 Windows 与 Linux 在 3D Slicer 5.10.0 下的 Extension Manager 安装、GUI 冒烟测试、损坏运行包自动修复及多被试真实数据工作流（`HCP 100307`、`HCP 100408`、临床单壳 `sub-001`） |
-| 分发 | GitHub Release `v0.1.1` 平台统一安装包（`SlicerDSpace-v0.1.1-Windows-x64.zip`、`SlicerDSpace-v0.1.1-Linux-x64.tar.gz`），通过 Slicer Extension Manager 本地文件安装（`Install Extension from File`）；在线扩展商店目录（Extension Catalog）仍为 Tier 1 申请草稿 |
+| 参考环境 | Windows (`x86_64`)、Linux (`x86_64`) 与 macOS (Apple Silicon `arm64`)，目标 3D Slicer 5.10.0；Intel (`x86_64`) Mac 真机硬件未验证 |
+| 验证 | 已记录 Windows、Linux 与 macOS (`arm64`) 在 3D Slicer 5.10.0 下的 Extension Manager 安装、GUI 冒烟测试、损坏运行包自动修复及真实数据工作流（`HCP 100307`、`HCP 100408`、临床单壳 `sub-001`） |
+| 分发 | GitHub Release `v0.1.1` 平台统一安装包（`SlicerDSpace-v0.1.1-Windows-x64.zip`、`SlicerDSpace-v0.1.1-Linux-x64.tar.gz`、`SlicerDSpace-v0.1.1-macOS-arm64.tar.gz`），通过 Slicer Extension Manager 本地文件安装（`Install Extension from File`）；在线扩展商店目录（Extension Catalog）仍为 Tier 1 申请草稿 |
 | 授权 | 项目代码采用 BSD-3-Clause；第三方运行环境与按需下载的模型资源各自保留条款与发布门禁（皮层表面后处理仍需用户自备 FreeSurfer 许可证） |
 
 执行状态、自动 QC 和人工审核分别记录或评估。

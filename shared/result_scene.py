@@ -192,8 +192,13 @@ def result_nodes(slicer):
 
 
 def owned_nodes(slicer, run_id):
+    targets = {str(run_id)}
+    try:
+        targets.add(str(Path(str(run_id)).expanduser().resolve()))
+    except OSError:
+        pass
     return [node for node in result_nodes(slicer)
-            if node.GetAttribute(PREFIX + "Run") == run_id]
+            if node.GetAttribute(PREFIX + "Run") in targets]
 
 
 def clear_run(slicer, run_id):

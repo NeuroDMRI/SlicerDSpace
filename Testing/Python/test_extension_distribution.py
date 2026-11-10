@@ -256,7 +256,7 @@ class ExtensionDistributionTest(unittest.TestCase):
             self.assertTrue(any("activation_key_included" in item for item in bad_audit["unsafe"]))
 
     def test_corrupted_bundled_runtime_repairs_from_unified_archive(self):
-        from shared.native_runtimes import bundle_tree_sha256, installed_bundle_bin_dirs, provision_bundles
+        from shared.native_runtimes import bundle_tree_sha256, host_platform, installed_bundle_bin_dirs, provision_bundles
         from shared.surface_runtime import bundled_surface_runtime
 
         with tempfile.TemporaryDirectory() as directory:
@@ -264,7 +264,7 @@ class ExtensionDistributionTest(unittest.TestCase):
             install = stage_extension(root / "install", slicer_version="Slicer-5.10", clean=True, link_mode="copy")
             ext_root = Path(install["extension_root"])
             bundled_dir = ext_root / "bundled-runtimes"
-            sys_name, arch = ("Windows", "x86_64") if os.name == "nt" else ("Linux", "x86_64")
+            sys_name, arch = host_platform()
             cmd_rel = "bin/mrconvert.exe" if os.name == "nt" else "bin/mrconvert"
             fsl_rel = "bin/eddy_cpu.exe" if os.name == "nt" else "bin/eddy_cpu"
 

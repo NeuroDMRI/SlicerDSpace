@@ -198,7 +198,8 @@ class RepositoryStructureTest(unittest.TestCase):
             events = re.search(r"(?ms)^on:\n(.*?)(?=^\S|\Z)", text)
             self.assertIsNotNone(events, workflow.name)
             self.assertIn("workflow_dispatch:", events.group(1), workflow.name)
-            self.assertNotRegex(events.group(1), r"(?m)^  (push|pull_request|schedule|workflow_run|release):")
+            forbidden = r"(?m)^  (pull_request|schedule|workflow_run|release):" if workflow.name == "pages.yml" else r"(?m)^  (push|pull_request|schedule|workflow_run|release):"
+            self.assertNotRegex(events.group(1), forbidden)
 
     def test_cache_settings_preserve_scientific_evidence(self) -> None:
         project = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")

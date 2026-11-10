@@ -15,7 +15,7 @@ class SurfaceMacCatalogTests(unittest.TestCase):
                 self.assertEqual(record['min_macos'], '15.0')
                 self.assertFalse(record['activation_key_included'])
 
-    def test_apple_silicon_selects_its_own_offline_candidate(self):
+    def test_apple_silicon_selects_its_own_published_candidate(self):
         with patch('platform.system', return_value='Darwin'):
             with patch('platform.mac_ver', return_value=('14.7', (), '')):
                 self.assertIsNone(bundle_for_platform('Darwin', 'arm64'))
@@ -24,5 +24,5 @@ class SurfaceMacCatalogTests(unittest.TestCase):
                 self.assertIsNotNone(record)
                 self.assertEqual(record['machine'], 'arm64')
                 self.assertEqual(record['asset'], 'runtime/surface/surface-runtime-darwin-arm64.tar.gz')
-                self.assertFalse(record['published'])
+                self.assertTrue(record['published'])
                 self.assertFalse(record['activation_key_included'])

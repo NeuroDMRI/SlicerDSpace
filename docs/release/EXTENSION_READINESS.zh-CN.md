@@ -9,6 +9,7 @@
 </div>
 
 Windows 5.10.0 原生全流程实测见[Windows 5.10.0 原生验收报告](WINDOWS_NATIVE_ACCEPTANCE_5.10.0.zh-CN.md)，
+macOS（Apple Silicon `arm64`）5.10.0 原生全流程实测见[macOS 5.10.0 原生验收报告](MACOS_NATIVE_ACCEPTANCE_5.10.0.zh-CN.md)，
 本机表面组件集成见[2026-10-24 实测](SURFACE_COMPONENTS_20261024.zh-CN.md)，
 GUI 后续验证见[2026-10-23 优化](GUI_RESPONSIVENESS_20261023.zh-CN.md)，
 官方集成实测见[2026-10-22 验收](OFFICIAL_SLICER_VALIDATION_20261022.zh-CN.md)，
@@ -99,6 +100,7 @@ staging、旧源码测试或已配置好的工作站不能替代这种验收。
 | 仓库公开、公开图标/截图 URL、GitHub topic | 按用户要求暂缓；公开提交前必须处理 |
 | Linux 真实 SDK／CPack 与隔离安装 | 已通过记录所述限定路线，不等于空白机器全流程 |
 | Windows 5.10.0 原生运行包及全流程真实数据验收 | 已在 3D Slicer 5.10.0（`HCP 100307`、`HCP 100408` 及临床单壳层 `sub-001`，`SLICERDSPACE_DISABLE_WSL=1`）通过，含干净环境 Extension Manager 安装与损坏运行包自动恢复验证；详见 [Windows 5.10.0 原生验收报告](WINDOWS_NATIVE_ACCEPTANCE_5.10.0.zh-CN.md) |
+| macOS（`arm64`）5.10.0 原生运行包及全流程真实数据验收 | 已在 Apple Silicon（`darwin-arm64`）3D Slicer 5.10.0（`HCP 100307`）通过，含干净环境 Extension Manager 安装（`SlicerDSpace-v0.1.1-macOS-arm64.tar.gz`）与损坏运行包自动恢复验证（Intel `x86_64` Mac 真机硬件未验证）；详见 [macOS 5.10.0 原生验收报告](MACOS_NATIVE_ACCEPTANCE_5.10.0.zh-CN.md) |
 | 第三方源码许可 | BWH conversion、MGH FreeSurfer、DDSurfer MIT 与 PyTorch3D BSD 声明已补齐并校验；不等于全面法律认证 |
 | 权重/模板/测试数据再分发 | 未确认组不能进入公开资产归档 |
 | 真实数据教程及 Sample Data 注册 | [Slicer DWIVolume 教程](../setup/SLICER_SAMPLE_DTI.zh-CN.md)已验证 DTI 路线；独立可再分发数据注册仍待完成 |

@@ -82,21 +82,21 @@ def default_user_model_assets_root() -> Path:
     return reuse_legacy_path(Path(os.environ.get("XDG_DATA_HOME") or home / ".local" / "share") / "SlicerDSpace" / "model-assets")
 
 
-def configured_model_assets_root(explicit: Path | None = None) -> Path:
+def configured_model_assets_root(explicit: Path | str | None = None) -> Path:
     """Return the explicit/env/default user asset root without legacy fallback."""
 
-    if explicit is not None:
-        return explicit.expanduser().resolve()
+    if explicit is not None and str(explicit).strip():
+        return Path(explicit).expanduser().resolve()
     env_root = os.environ.get(MODEL_ASSETS_ENV)
     if env_root:
         return Path(env_root).expanduser().resolve()
     return default_user_model_assets_root().expanduser().resolve()
 
 
-def legacy_repo_asset_roots(repo_root: Path) -> tuple[Path, ...]:
+def legacy_repo_asset_roots(repo_root: Path | str) -> tuple[Path, ...]:
     """Return checkout-relative roots used by older SlicerDSpace installs."""
 
-    root = repo_root.expanduser().resolve()
+    root = Path(repo_root).expanduser().resolve()
     return (root,)
 
 
@@ -197,7 +197,7 @@ def resolve_model_assets_root(
 ) -> Path:
     """Return the asset root used for download/verify operations."""
 
-    if explicit is not None or os.environ.get(MODEL_ASSETS_ENV):
+    if (explicit is not None and str(explicit).strip()) or os.environ.get(MODEL_ASSETS_ENV):
         return configured_model_assets_root(explicit)
     manifest_records = _load_asset_manifest_records(repo_root)
     for candidate in common_model_asset_roots():
@@ -224,7 +224,7 @@ def model_asset_path(relative: str, *, repo_root: Path, explicit_root: Path | No
     yet" from "wrong/tampered content".
     """
 
-    if explicit_root is not None or os.environ.get(MODEL_ASSETS_ENV):
+    if (explicit_root is not None and str(explicit_root).strip()) or os.environ.get(MODEL_ASSETS_ENV):
         root = resolve_model_assets_root(explicit=explicit_root, repo_root=repo_root, required_paths=(relative,))
         return root / relative
 

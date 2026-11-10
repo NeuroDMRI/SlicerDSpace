@@ -38,6 +38,7 @@ class ParcellationFusionTests(unittest.TestCase):
                 self.assertTrue(torch.equal(left, right))
 
     def test_full_network_and_logit_alias_are_unchanged(self):
+        import sys
         from anatomy.parcellation.models import networks
         torch.manual_seed(2026)
         params = dict(num_channels=7, num_modality=4, num_filters=4,
@@ -57,7 +58,8 @@ class ParcellationFusionTests(unittest.TestCase):
             for left, right in zip((expected[0], *expected[1]), (actual[0], *actual[1])):
                 self.assertTrue(torch.equal(left, right))
         finally:
-            torch.set_num_threads(before_threads)
+            if not (sys.platform == 'darwin' and 'dipy' in sys.modules):
+                torch.set_num_threads(before_threads)
 
 
 if __name__ == '__main__':

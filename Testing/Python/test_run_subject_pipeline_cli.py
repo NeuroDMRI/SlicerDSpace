@@ -563,6 +563,7 @@ class RunSubjectPipelineCliTest(unittest.TestCase):
             subject_root = Path(tmp) / "subjectA"
             subject_root.mkdir(parents=True)
             missing_wma_root = Path(tmp) / "missing-wma"
+            missing_ukf = Path(tmp) / "missing-ukf"
             env = {key: value for key, value in os.environ.items() if "WMA" not in key and "SLICERDSPACE_WMA" not in key}
 
             completed = subprocess.run(
@@ -576,6 +577,8 @@ class RunSubjectPipelineCliTest(unittest.TestCase):
                     "wma",
                     "--wma-root",
                     str(missing_wma_root),
+                    "--ukf-executable",
+                    str(missing_ukf),
                     "--execute",
                 ],
                 check=True,

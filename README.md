@@ -154,14 +154,15 @@ analysis run through your own Agent.
 
 ## Installation
 
-### Option A: Unified Release Package (Recommended for Windows & Linux)
+### Option A: Unified Release Package (Recommended for Windows, Linux & Apple Silicon macOS)
 
 Download the single platform installer from the GitHub Release page:
 
 - **Windows (`x86_64`)**: `SlicerDSpace-v0.1.1-Windows-x64.zip`
 - **Linux (`x86_64`)**: `SlicerDSpace-v0.1.1-Linux-x64.tar.gz`
+- **macOS (Apple Silicon `arm64`)**: `SlicerDSpace-v0.1.1-macOS-arm64.tar.gz`
 
-Each archive bundles the SlicerDSpace extension together with modular native runtime bundles inside `SlicerDSpace/bundled-runtimes/` (**MRtrix3 `3.0.8`** with 68 commands, **FSL `2602.0`** with `topup`/`applytopup`/`eddy_cpu`, and the **FreeSurfer Surface Runtime** with 7 commands and templates; no personal FreeSurfer activation key is bundled, so users running cortical surface postprocessing must supply their own FreeSurfer license file). Install it directly in **3D Slicer 5.10.0** via **View > Extensions Manager > Install Extensions > Install Extension from File**, restart Slicer, and open **Modules > Diffusion > SlicerDSpace**. Bundled native runtimes are discovered automatically on first launch and verified via per-file `tree_sha256` digests (automatically repairing from the release archive if a component is deleted or corrupted). Deep-learning model weights (`DDSeg`, `DDParcel`, `DDSurfer`, `TractCloud`, `PNL`) and large atlases (`ORG`) are downloaded on demand on first use. (macOS native dependencies are not yet certified for full release support.)
+Each archive bundles the SlicerDSpace extension together with modular native runtime bundles inside `SlicerDSpace/bundled-runtimes/` (**MRtrix3 `3.0.8`**, **FSL `2602.0`** with `topup`/`applytopup`/`eddy_cpu`, and the **FreeSurfer Surface Runtime** with 7 commands and templates; no personal FreeSurfer activation key is bundled, so users running cortical surface postprocessing must supply their own FreeSurfer license file). Install it directly in **3D Slicer 5.10.0** via **View > Extensions Manager > Install Extensions > Install Extension from File**, restart Slicer, and open **Modules > Diffusion > SlicerDSpace**. Bundled native runtimes are discovered automatically on first launch and verified via per-file `tree_sha256` digests (automatically repairing from the release archive if a component is deleted or corrupted). Deep-learning model weights (`DDSeg`, `DDParcel`, `DDSurfer`, `TractCloud`, `PNL`) and large atlases (`ORG`) are downloaded on demand on first use. (Physical Intel `x86_64` Mac hardware remains unverified.)
 
 ### Option B: Stage From Source
 
@@ -276,15 +277,15 @@ ANTs. On macOS and Windows it runs in Slicer's own Python (SimpleITK and PyTorch
 This native route is **experimental**: its masks did not match the Linux route
 closely enough on 2 of 24 test cases. The setting is **PNL route** (`auto`,
 `managed`, `native`) in Advanced settings or `--pnl-mask-route` on the command
-line, and the run record names the route of the mask that was used. On Windows,
-SlicerDSpace runs **natively by default without WSL**: MRtrix3 (`3.0.8`, 68 commands),
+line, and the run record names the route of the mask that was used. On Windows and Apple Silicon (`arm64`) macOS,
+SlicerDSpace runs **natively by default without WSL or Docker**: MRtrix3 (`3.0.8`),
 FSL (`2602.0`, `topup`/`applytopup`/`eddy_cpu`), FreeSurfer cortical surface
 postprocessing (7 commands), WMA, WMQL, TractCloud, brain masking and all Python
-microstructure/anatomical stages execute directly on Windows in **3D Slicer 5.10.0**
-(WSL 2 remains an optional fallback). On macOS, full native dependency acceptance
-is still pending. See [Windows](docs/setup/WINDOWS.md),
-[Windows 5.10.0 Acceptance](docs/release/WINDOWS_NATIVE_ACCEPTANCE_5.10.0.md) and
-[macOS](docs/setup/MACOS.md).
+microstructure/anatomical stages execute directly in **3D Slicer 5.10.0**
+(WSL 2 remains an optional fallback on Windows; physical Intel `x86_64` Mac hardware remains unverified). See [Windows](docs/setup/WINDOWS.md),
+[Windows 5.10.0 Acceptance](docs/release/WINDOWS_NATIVE_ACCEPTANCE_5.10.0.md),
+[macOS](docs/setup/MACOS.md) and
+[macOS 5.10.0 Acceptance](docs/release/MACOS_NATIVE_ACCEPTANCE_5.10.0.md).
 
 UKF runs automatically through its installed extension and can feed WMA directly.
 WMA supports `--wma-atlas org|east-west|naba` (default: `org`), with the same
@@ -341,9 +342,9 @@ Start with one concurrency level and budget combined RAM/VRAM use.
 
 | Area | Current scope |
 | --- | --- |
-| Reference environment | Windows (`x86_64`) and Linux (`x86_64`) on 3D Slicer 5.10.0; macOS full native runtime certification pending |
-| Validation | Recorded Windows & Linux Slicer 5.10.0 Extension Manager install, GUI smoke suites, runtime corruption auto-repair, and multi-subject real-data workflows (`HCP 100307`, `HCP 100408`, clinical `sub-001`) |
-| Distribution | GitHub Release `v0.1.1` unified platform packages (`SlicerDSpace-v0.1.1-Windows-x64.zip`, `SlicerDSpace-v0.1.1-Linux-x64.tar.gz`) installed via Slicer Extension Manager (`Install Extension from File`); online Extension Catalog listing remains a Tier 1 proposal |
+| Reference environment | Windows (`x86_64`), Linux (`x86_64`), and macOS (Apple Silicon `arm64`) on 3D Slicer 5.10.0; physical Intel (`x86_64`) Mac hardware is unverified |
+| Validation | Recorded Windows, Linux & macOS (`arm64`) Slicer 5.10.0 Extension Manager install, GUI smoke suites, runtime corruption auto-repair, and real-data workflows (`HCP 100307`, `HCP 100408`, clinical `sub-001`) |
+| Distribution | GitHub Release `v0.1.1` unified platform packages (`SlicerDSpace-v0.1.1-Windows-x64.zip`, `SlicerDSpace-v0.1.1-Linux-x64.tar.gz`, `SlicerDSpace-v0.1.1-macOS-arm64.tar.gz`) installed via Slicer Extension Manager (`Install Extension from File`); online Extension Catalog listing remains a Tier 1 proposal |
 | Licensing | BSD-3-Clause project code; third-party runtimes and on-demand model assets retain separate terms and release gates (FreeSurfer surface postprocessing requires a user-supplied license) |
 
 Execution status, automatic QC and human review are recorded or assessed separately.

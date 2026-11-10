@@ -14,9 +14,16 @@ import tempfile
 import time
 from typing import Any, Callable, Optional
 
+import sys
 from shared.pipeline import RawInputBundle
 from shared.cohort_schedule import scheduled_stage
 from shared.numeric_threads import dki_threads
+
+if sys.platform == "darwin":
+    try:
+        import torch as _darwin_preload_torch  # noqa: F401
+    except Exception:
+        pass
 
 DKI_METRICS = ("mk", "ak", "rk", "kfa", "mkt", "rtk")
 DKI_FIT_METHODS = ("WLS", "OLS", "MKCURVE", "MKCURVE_MATLAB")

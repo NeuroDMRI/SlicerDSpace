@@ -56,13 +56,17 @@ PNL_MODES = {
 
 def widget_method(name, **namespace):
     """Exercise widget methods in isolation, following the layout-contract tests."""
+    import os
+    import sys
 
     path = ROOT / "shared/module_widget.py"
     tree = ast.parse(path.read_text(encoding="utf-8"))
     method = next(node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == name)
     from shared.subject_id import effective_subject_id
     from shared.ui_run_state import gui_brain_mask_required
-    namespace.update(Any=Any, Optional=Optional, Path=Path, effective_subject_id=effective_subject_id,
+    if "sys" in namespace and not hasattr(namespace["sys"], "platform"):
+        namespace["sys"].platform = sys.platform
+    namespace.update(Any=Any, Optional=Optional, Path=Path, os=os, effective_subject_id=effective_subject_id,
                      gui_brain_mask_required=gui_brain_mask_required)
     exec(compile(ast.Module(body=[method], type_ignores=[]), str(path), "exec"), namespace)
     return namespace[name]

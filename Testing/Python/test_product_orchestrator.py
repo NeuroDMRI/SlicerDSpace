@@ -760,6 +760,7 @@ class ProductOrchestratorTest(unittest.TestCase):
                     execute=True,
                     wma_atlas_dir=atlas_dir,
                     slicer_executable=slicer_executable,
+                    ukf_executable=Path(tmp) / "missing-ukf",
                     mrtrix_bin_dir=mrtrix_bin,
                 ),
                 write=False,

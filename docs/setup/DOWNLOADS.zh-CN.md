@@ -10,7 +10,7 @@
 
 仅使用插件，不需要下载网站源码、历史性能报告或测试代码。它们保留在完整仓库中，
 供开发、审计和论文复现使用，不应成为普通用户安装的前提。
-当前 `v0.1.1` 版本在 GitHub Releases 提供 Windows 与 Linux 的单文件完整安装包（`SlicerDSpace-v0.1.1-Windows-x64.zip` 与 `SlicerDSpace-v0.1.1-Linux-x64.tar.gz`），通过 **3D Slicer 5.10.0** 的 **Extensions Manager > Install Extensions > Install Extension from File** 本地安装；在线 Slicer 扩展商店目录（Extension Catalog）上架仍为后续计划，macOS 暂未发布完整原生安装包。
+当前 `v0.1.1` 版本在 GitHub Releases 提供 Windows、Linux 与 Apple Silicon macOS 的单文件完整安装包（`SlicerDSpace-v0.1.1-Windows-x64.zip`、`SlicerDSpace-v0.1.1-Linux-x64.tar.gz` 与 `SlicerDSpace-v0.1.1-macOS-arm64.tar.gz`），通过 **3D Slicer 5.10.0** 的 **Extensions Manager > Install Extensions > Install Extension from File** 本地安装；在线 Slicer 扩展商店目录（Extension Catalog）上架仍为后续计划，Intel（`x86_64`）Mac 真机硬件尚未实测验证。
 
 ---
 
@@ -18,7 +18,7 @@
 
 | 用途 | 推荐方式 | 包含内容 |
 | --- | --- | --- |
-| 在 Windows 或 Linux 的 Slicer 5.10.0 中使用 | 从 GitHub Releases 下载 `SlicerDSpace-v0.1.1-Windows-x64.zip` 或 `SlicerDSpace-v0.1.1-Linux-x64.tar.gz`（本地文件安装） | 运行代码、UI、查询文件、许可证、使用指南，以及内置于 `bundled-runtimes/` 的模块化原生运行环境（`MRtrix3 3.0.8`、`FSL 2602.0`、`Surface Runtime 0.1.0`，支持 `tree_sha256` 损坏自动修复） |
+| 在 Windows、Linux 或 Apple Silicon macOS 的 Slicer 5.10.0 中使用 | 从 GitHub Releases 下载 `SlicerDSpace-v0.1.1-Windows-x64.zip`、`SlicerDSpace-v0.1.1-Linux-x64.tar.gz` 或 `SlicerDSpace-v0.1.1-macOS-arm64.tar.gz`（本地文件安装） | 运行代码、UI、查询文件、许可证、使用指南，以及内置于 `bundled-runtimes/` 的模块化原生运行环境（`MRtrix3 3.0.8`、`FSL 2602.0`、`Surface Runtime 0.1.0`，支持 `tree_sha256` 损坏自动修复） |
 | 有仓库权限、从源码安装 | 下文的轻量检出，再 staging | 可更新的运行源码；不检出网站、测试和历史优化报告 |
 | 开发或独立复现 | 完整源码 checkout | 测试、性能证据、发布工具、网页源码及文档 |
 | 阅读结果与性能依据 | 登录 GitHub 浏览对应报告 | 不需要把报告复制到插件目录 |

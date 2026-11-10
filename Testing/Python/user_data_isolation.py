@@ -62,6 +62,11 @@ def install() -> Path:
     os.environ.update(variables)
     _ProtectedEnviron.protected = variables
     os.environ.__class__ = _ProtectedEnviron  # same object, so `from os import environ` holders stay valid
+    if os.sys.platform == "darwin":
+        try:
+            import torch as _darwin_preload_torch  # noqa: F401
+        except Exception:
+            pass
     _installed = home
     return home
 

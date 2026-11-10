@@ -12,10 +12,16 @@ def python_setup_commands(owner, packages, *, requests=None):
 
     folder = Path(getattr(owner, "_latestEnvironmentReportDir", None) or default_user_config_path().parent / "setup-logs")
     result = getattr(owner, "_lastEnvironmentResult", None)
-    return python_package_commands(
+    commands, receipts = python_package_commands(
         packages, requests=requests, python_command=owner._setup_python_command, folder=folder,
         statuses=getattr(result, "statuses", ()),
         tract_querier_root=lambda: owner._environment_dependency_path_kwargs().get("tract_querier_root"))
+    from shared.backend_sources import default_darwin_arm64_tractcloud_python, ensure_darwin_arm64_tractcloud_python, needs_darwin_arm64_tractcloud_python
+    if needs_darwin_arm64_tractcloud_python():
+        for program, _args, _env in commands:
+            if Path(str(program)).expanduser().absolute() == default_darwin_arm64_tractcloud_python():
+                ensure_darwin_arm64_tractcloud_python()
+    return commands, receipts
 
 
 def _text(owner, english, chinese):

@@ -58,15 +58,16 @@ class ReadmePreviewTests(unittest.TestCase):
         path = preview.ROOT / 'docs/assets/readme/SlicerDSpace_preview.gif'
         self.assertLess(path.stat().st_size, 20 * 1024 ** 2)
         with Image.open(path) as animation:
-            self.assertEqual(animation.size, (800, 450))
+            self.assertEqual(animation.size, (560, 316))
             self.assertEqual(animation.info.get('loop'), 0)
             durations = []
             for index in range(animation.n_frames):
                 animation.seek(index)
                 animation.load()
                 durations.append(animation.info['duration'])
-            self.assertAlmostEqual(sum(durations) / 1000, 48, delta=.2)
-            self.assertGreaterEqual(durations.count(100), 400)
+            self.assertAlmostEqual(sum(durations) / 1000, 40.5, delta=.5)
+            self.assertGreaterEqual(len(durations), 240)
+            self.assertTrue(set(durations).issubset({160, 170}))
 
     def test_oversized_render_does_not_replace_previous_preview(self):
         with tempfile.TemporaryDirectory() as folder:

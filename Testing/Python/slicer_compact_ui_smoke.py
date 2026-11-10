@@ -157,6 +157,7 @@ def check():
         window.resize(1280, 900)
         slicer.app.processEvents()
         slicer.app.processEvents()
+        base_win = [window.width, window.height]
         jitter_steps = [
             ("advanced_open", advanced, False),
             ("prepare_open", prepare, False),
@@ -200,13 +201,13 @@ def check():
         (ROOT / "jitter_trace.json").write_text(json.dumps(jitter_trace, indent=2) + "\n")
         for item in jitter_trace:
             assert item["w_diff"] == 0, item
-            assert item["win"] == [1280, 900], item
+            assert item["win"] == base_win, item
         (ROOT / "layout_height.json").write_text(json.dumps({"height": owner._uiWidget.height,
             "minimum_height": owner._uiWidget.minimumSizeHint.height(),
             "size_hint": owner._uiWidget.sizeHint.height()}, indent=2))
         assert owner._uiWidget.height < 800, owner._uiWidget.height
         assert not window.isMaximized() and not window.isFullScreen()
-        assert window.width == 1280 and window.height == 900, (window.width, window.height)
+        assert [window.width, window.height] == base_win, (window.width, window.height, base_win)
         window.grab().save(str(ROOT / "compact_window.png"))
         sizes = {name: {"height": getattr(ui, name).height, "size_hint": getattr(ui, name).sizeHint.height()}
                  for name in ("headerFrame", "configurationCollapsibleButton", "targetsCollapsibleButton",

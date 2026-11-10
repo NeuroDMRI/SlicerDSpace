@@ -40,8 +40,9 @@ def _prepare_inputs(dwi_path, bval_path, bvec_path, mask_path, directory, b0_thr
         source_image = image
     # Upstream detects b0 strictly below 10. Make the caller's documented b0
     # convention explicit and collapse all baseline repeats, without editing input.
-    data = np.lib.format.open_memmap(directory / "selected_signals.npy", mode="w+", dtype=np.float64,
-                                   shape=(*source_image.shape[:3], len(weighted) + 1))
+    selected_signals_path = directory / "selected_signals.npy"
+    data = np.lib.format.open_memmap(selected_signals_path, mode="w+", dtype=np.float64,
+                                   fortran_order=True, shape=(*source_image.shape[:3], len(weighted) + 1))
     try:
         total = np.zeros(source_image.shape[:3], dtype=np.float64)
         for index in baseline:
@@ -66,6 +67,8 @@ def _prepare_inputs(dwi_path, bval_path, bvec_path, mask_path, directory, b0_thr
     finally:
         data._mmap.close()
         del data
+        if selected_signals_path.is_file():
+            selected_signals_path.unlink()
         if uncompressed_image is not None:
             for holder in uncompressed_image.file_map.values():
                 if getattr(holder, "fileobj", None) is not None:

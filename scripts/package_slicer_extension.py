@@ -154,13 +154,24 @@ def package_extension(
     output.parent.mkdir(parents=True, exist_ok=True)
     members = [root]
     members.extend(path for path in sorted(root.rglob("*")) if not _is_excluded(path, root))
+    is_macos_archive = bool(
+        any(r.get("system") == "Darwin" for r in bundled_runtimes)
+        or "macos" in output.name.lower()
+        or "darwin" in output.name.lower()
+    )
+    archive_prefix = (
+        Path(root.name) / "Slicer.app" / "Contents" / "Extensions-34045" / root.name
+        if is_macos_archive
+        else Path(root.name)
+    )
+
     if output.name.lower().endswith(".zip"):
         with zipfile.ZipFile(output, mode="w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
             for path in members:
                 if not path.is_file():
                     continue
                 relative = path.relative_to(root)
-                archive_name = (Path(root.name) / relative).as_posix()
+                archive_name = (archive_prefix / relative).as_posix()
                 info = zipfile.ZipInfo.from_file(path, arcname=archive_name)
                 info.compress_type = zipfile.ZIP_DEFLATED
                 mode = 0o755 if (os.access(path, os.X_OK) or path.suffix.lower() in {".exe", ".dll", ".so", ".dylib"}) else 0o644
@@ -171,7 +182,7 @@ def package_extension(
         with tarfile.open(output, mode="w:gz", format=tarfile.PAX_FORMAT) as archive:
             for path in members:
                 relative = path.relative_to(root)
-                archive_name = Path(root.name) / relative
+                archive_name = archive_prefix if relative == Path(".") else (archive_prefix / relative)
                 info = archive.gettarinfo(path.as_posix(), arcname=archive_name.as_posix())
                 info.uid = 0
                 info.gid = 0

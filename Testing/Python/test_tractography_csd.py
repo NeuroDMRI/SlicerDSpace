@@ -27,7 +27,7 @@ class CSDActBackendTest(unittest.TestCase):
         from tractography.csd import _mrtrix_csd_invocation
 
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             script = root / "runtime with spaces" / "bin" / "dwi2response"
             script.parent.mkdir(parents=True)
             script.touch()

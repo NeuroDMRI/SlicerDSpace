@@ -8,20 +8,21 @@ Choose the package for your operating system:
 
 - **Windows (x64)**: `SlicerDSpace-v0.1.1-Windows-x64.zip`
 - **Linux (x64)**: `SlicerDSpace-v0.1.1-Linux-x64.tar.gz`
+- **macOS (Apple Silicon arm64)**: `SlicerDSpace-v0.1.1-macOS-arm64.tar.gz`
 
-> Recommended version: **3D Slicer 5.10.0** (Windows 10/11 x64 or Linux x86_64).
+> Recommended version: **3D Slicer 5.10.0** (Windows 10/11 x64, Linux x86_64, or macOS Apple Silicon arm64; physical Intel x86_64 Mac hardware is unverified).
 
 ## 2. Installation
 
 1. Open **3D Slicer**.
 2. Go to **View -> Extensions Manager** (or click the Extensions Manager icon on the toolbar).
-3. Switch to the **Install Extensions** tab, click **Install Extension from File...**, and select the downloaded `SlicerDSpace-v0.1.1-Windows-x64.zip` (or `.tar.gz` on Linux).
+3. Switch to the **Install Extensions** tab, click **Install Extension from File...**, and select the downloaded `SlicerDSpace-v0.1.1-Windows-x64.zip` (or `.tar.gz` on Linux/macOS).
 4. Restart 3D Slicer when prompted.
 
 ## 3. Quick Start
 
-1. Open the **SlicerDSpace** module (**Modules -> Diffusion -> SlicerDSpace**, or press `Ctrl + F` and search `SlicerDSpace`).
-2. **First-time setup**: Expand **Environment and installation** and click **Prepare selected analysis environment** to automatically install required Python packages and download deep-learning model weights on demand. Built-in native tools (MRtrix3, FSL, Surface Runtime) are configured automatically without WSL.
+1. Open the **SlicerDSpace** module (**Modules -> Diffusion -> SlicerDSpace**, or press `Ctrl + F` / `Cmd + F` and search `SlicerDSpace`).
+2. **First-time setup**: Expand **Environment and installation** and click **Prepare selected analysis environment** to automatically install required Python packages and download deep-learning model weights on demand. Built-in native tools (MRtrix3, FSL, Surface Runtime) are configured automatically without WSL or Docker.
 3. **Run analysis**:
    - Under **1. Inputs**, select your **Subject root** (containing `input/data.nii.gz`, `input/bvals`, `input/bvecs`; or use **Advanced settings -> Input import / conversion** to convert raw DICOM/NIfTI/NRRD files).
    - Under **2. Products**, check the analyses you want to run (use `...` to choose specific algorithms).
@@ -33,10 +34,11 @@ Choose the package for your operating system:
 
 ### 1. 下载安装包
 
-请根据您的操作系统下载对应的单文件完整安装包（已内置 SlicerDSpace 插件及 MRtrix3、FSL 预处理、FreeSurfer 表面后处理原生运行组件，Windows 下无需配置 WSL）：
+请根据您的操作系统下载对应的单文件完整安装包（已内置 SlicerDSpace 插件及 MRtrix3、FSL 预处理、FreeSurfer 表面后处理原生运行组件，Windows 与 macOS 下无需配置 WSL 或 Docker；Intel `x86_64` Mac 真机硬件尚未验证）：
 
 - **Windows (64 位)**：`SlicerDSpace-v0.1.1-Windows-x64.zip`
 - **Linux (64 位)**：`SlicerDSpace-v0.1.1-Linux-x64.tar.gz`
+- **macOS (Apple Silicon arm64)**：`SlicerDSpace-v0.1.1-macOS-arm64.tar.gz`
 
 ### 2. 安装步骤
 

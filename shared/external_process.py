@@ -262,7 +262,10 @@ def _default_slicer_python() -> Optional[Path]:
     if executable.name.lower() in {"pythonslicer", "pythonslicer.exe"}:
         return executable
     if is_slicer_python(executable):
-        return find_pythonslicer(executable.parent)
+        for folder in dict.fromkeys((*executable.parents[:5], *executable.resolve().parents[:5])):
+            found_py = find_pythonslicer(folder)
+            if found_py is not None:
+                return found_py
     found = shutil.which("PythonSlicer")
     return Path(found) if found else None
 

@@ -16,6 +16,8 @@
 /docs/release/DOI_ARCHIVE_PREP.md
 /docs/release/WINDOWS_NATIVE_ACCEPTANCE_5.10.0.md
 /docs/release/WINDOWS_NATIVE_ACCEPTANCE_5.10.0.zh-CN.md
+/docs/release/MACOS_NATIVE_ACCEPTANCE_5.10.0.md
+/docs/release/MACOS_NATIVE_ACCEPTANCE_5.10.0.zh-CN.md
 /docs/release/benchmarks/
 !/docs/release/benchmarks/*
 /docs/release/benchmarks/module_runtimes_20261013.csv

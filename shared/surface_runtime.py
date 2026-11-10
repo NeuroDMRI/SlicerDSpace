@@ -42,10 +42,15 @@ def bundled_surface_runtime(system=None, machine=None):
     """Return a bundled surface-runtime directory inside the installed extension if present and complete."""
     from shared.native_runtimes import bundled_runtime_roots, host_platform
     sys_name, arch = host_platform(system, machine)
-    folder_names = (
+    folder_names = [
         f"surface-runtime-{sys_name.lower()}-{arch}",
         f"{sys_name.lower()}-{arch}",
-    )
+    ]
+    if sys_name == "Darwin" and arch == "arm64":
+        folder_names.extend((
+            "surface-runtime-darwin-x86_64",
+            "darwin-x86_64",
+        ))
     for root in bundled_runtime_roots():
         for name in folder_names:
             cand = root / name

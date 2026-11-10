@@ -17,11 +17,16 @@ CATALOG = Path(__file__).resolve().parents[1] / 'models/runtime_bundles.json'
 
 def bundle_for_platform(system=None, machine=None):
     payload = json.loads(CATALOG.read_text())
+    selected_system = system or platform.system()
     selected_machine = (machine or platform.machine()).lower()
+    if machine is None and system is None and selected_system == 'Darwin' and selected_machine in ('x86_64', 'amd64'):
+        from shared.platform_info import host_machine
+        if host_machine() == 'arm64':
+            selected_machine = 'arm64'
     machine = {'amd64': 'x86_64', 'aarch64': 'arm64'}.get(selected_machine, selected_machine)
-    record = next((record for record in payload['surface'] if record['system'] == (system or platform.system())
+    record = next((record for record in payload['surface'] if record['system'] == selected_system
                  and record['machine'] == machine), None)
-    if record and record.get('min_macos') and platform.system() == 'Darwin':
+    if record and record.get('min_macos') and selected_system == 'Darwin':
         version = platform.mac_ver()[0]
         if not version or tuple(map(int, version.split('.')[:2])) < tuple(map(int, record['min_macos'].split('.')[:2])):
             return None

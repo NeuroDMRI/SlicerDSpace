@@ -188,7 +188,10 @@ def build_setup_plan(result, *, installed_extensions=(), loaded_extensions=None,
     for name in sources_needing_requirements:
         if name == 'tractcloud':
             python = backend_paths.get('tractcloud_python_executable')
-            candidates = [item for item in result.statuses if 'tractcloud' in item.targets and item.kind == 'python']
+            candidates = [item for item in result.statuses
+                          if item.kind == 'python' and (item.key == 'python:tractcloud' or item.key.startswith('python:tractcloud:'))]
+            if not candidates:
+                candidates = [item for item in result.statuses if 'tractcloud' in item.targets and item.kind == 'python']
         elif name == 'wma':
             python = None
             candidates = [item for item in result.statuses if item.key.startswith('python:wma:')]
@@ -210,7 +213,7 @@ def build_setup_plan(result, *, installed_extensions=(), loaded_extensions=None,
                     # SC-1c: a native-route mask item whose only gaps are the model files is fixed by the pnl-cnn resources.
                     ("pnl-cnn" in optional and item.key == "brain_mask_backend")}
     for item in missing:
-        if ('wma' in source_profiles and item.install_group == 'wma' and 'atlas' not in item.key):
+        if ('wma' in source_profiles and item.install_group == 'wma' and not item.key.startswith('wma_org_atlas')):
             handled_keys.add(item.key)
         if ('wmql' in source_profiles and item.install_group == 'wmql'):
             handled_keys.add(item.key)
@@ -632,6 +635,9 @@ def run_setup_steps(steps, *, runner=None, self_check=None, log=print, after_ste
             commands, receipts = self_check(step) if self_check else ([], [])
         status, details = "completed", ""
         for program, args, extra in commands:
+            from shared.backend_sources import default_darwin_arm64_tractcloud_python, ensure_darwin_arm64_tractcloud_python, needs_darwin_arm64_tractcloud_python
+            if needs_darwin_arm64_tractcloud_python() and Path(str(program)).expanduser().absolute() == default_darwin_arm64_tractcloud_python():
+                ensure_darwin_arm64_tractcloud_python()
             environment = dict(os.environ)
             for key, value in (extra or {}).items():
                 if value is None:

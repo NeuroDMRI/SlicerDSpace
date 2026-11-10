@@ -51,6 +51,13 @@ except ImportError as exc:  # pragma: no cover - handled at runtime inside Slice
 else:
     IMPORT_ERROR = None
 
+import sys
+if sys.platform == "darwin":
+    try:
+        import torch as _darwin_preload_torch  # noqa: F401
+    except Exception:
+        pass
+
 try:
     from dipy.core.gradients import gradient_table
     from dipy.reconst.fwdti import FreeWaterTensorModel

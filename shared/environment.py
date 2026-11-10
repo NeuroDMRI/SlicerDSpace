@@ -920,11 +920,21 @@ def _common_wma_atlas_dirs(platform_name: str) -> tuple[Path, ...]:
 
 
 def _common_slicer_executables(platform_name: str) -> tuple[Path, ...]:
-    candidates: list[Path] = [
+    candidates: list[Path] = []
+    if Path(sys.executable).name.lower() in SLICER_PYTHON_NAMES:
+        for folder in tuple(interpreter_path(sys.executable).parents)[:5]:
+            for relative in ("Slicer", "Slicer.exe", "bin/Slicer", "bin/Slicer.exe", "MacOS/Slicer"):
+                candidate = folder / relative
+                try:
+                    if candidate.is_file():
+                        candidates.append(candidate.resolve())
+                except OSError:
+                    continue
+    candidates.extend([
         Path("/data/chengjin/software/Slicer-5.10.0-linux-amd64/Slicer"),
         Path("/usr/local/Slicer/Slicer"),
         Path("/opt/Slicer/Slicer"),
-    ]
+    ])
     for root in _local_software_roots():
         candidates.extend(
             [
@@ -1737,7 +1747,14 @@ def build_dependency_specs(config: EnvironmentDoctorConfig) -> tuple[DependencyS
                     "TRACTCLOUD_PYTHON_EXECUTABLE",
                     resolve=False,
                 )
-            if tractcloud_python is not None:
+            auto_darwin_tractcloud_python = False
+            if tractcloud_python is None and platform_name == "Darwin":
+                from shared.backend_sources import default_darwin_arm64_tractcloud_python, needs_darwin_arm64_tractcloud_python
+                if needs_darwin_arm64_tractcloud_python():
+                    tractcloud_python = default_darwin_arm64_tractcloud_python()
+                    tractcloud_python_source = "Apple Silicon native arm64 venv"
+                    auto_darwin_tractcloud_python = True
+            if tractcloud_python is not None and (not auto_darwin_tractcloud_python or tractcloud_python.is_file()):
                 _path(
                     specs,
                     target=target,

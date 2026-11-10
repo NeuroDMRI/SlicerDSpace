@@ -12,7 +12,7 @@ class FSLNativeTest(unittest.TestCase):
     def setUp(self):
         temp = tempfile.TemporaryDirectory(prefix="FSL subject ")
         self.addCleanup(temp.cleanup)
-        self.root = Path(temp.name)
+        self.root = Path(temp.name).resolve()
         self.scratch = self.root / "scratch dir"
         self.source = self.root / "input dwi.nii.gz"
         self.bvec = self.root / "input.bvec"

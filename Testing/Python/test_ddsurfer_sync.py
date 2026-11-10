@@ -51,8 +51,11 @@ class DDSurferSyncTests(unittest.TestCase):
         record = json.loads((BACKEND_ROOT / 'UPSTREAM.json').read_text())
         # R5 (W4-W6): the native tensor fit also patches dti.py, preflight.py and the tests that model the old CLIs.
         self.assertEqual(set(record['local_patches']), {
-            'postprocessing/core/runtime.py', 'postprocessing/environment.py', 'preprocessing/dti.sh',
-            'run_ddsurfer_pipeline.sh', 'preprocessing/dti.py', 'utils/preflight.py',
+            'postprocessing/core/archive.py', 'postprocessing/core/build.py',
+            'postprocessing/core/config.py', 'postprocessing/core/runtime.py',
+            'postprocessing/environment.py', 'postprocessing/pipeline.py',
+            'preprocessing/dti.sh', 'run_ddsurfer_pipeline.sh', 'preprocessing/dti.py',
+            'utils/preflight.py', 'utils/stages.py',
             'tests/check_environment.py', 'tests/test_environment_check.py', 'tests/test_inference.py',
             'tests/test_native_build.py', 'tests/test_pipeline_reliability.py', 'tests/test_preprocessing.py'})
         wrapper = (BACKEND_ROOT / 'run_ddsurfer_pipeline.sh').read_text()

@@ -86,16 +86,17 @@ class SurfaceRuntimeTests(unittest.TestCase):
             label='components', install_hint='prepare')
         result = SimpleNamespace(statuses=(item,))
         from shared.prebuilt_surface import bundle_for_platform
-        for system, machine in (('Linux', 'x86_64'), ('Windows', 'AMD64')):
-            bundle = dict(bundle_for_platform(system, machine), published=True)
-            with patch('shared.prebuilt_surface.bundle_for_platform', return_value=bundle):
+        with patch('platform.mac_ver', return_value=('15.8.1', (), '')):
+            for system, machine in (('Linux', 'x86_64'), ('Windows', 'AMD64'), ('Darwin', 'arm64')):
+                bundle = dict(bundle_for_platform(system, machine), published=True)
+                with patch('shared.prebuilt_surface.bundle_for_platform', return_value=bundle):
+                    plan = build_setup_plan(result, system=system, machine=machine)
+                self.assertFalse(plan['surface_build_required'])
+                self.assertTrue(plan['surface_prebuilt_required'])
+            for system, machine in (('Darwin', 'x86_64'), ('Windows', 'arm64')):
                 plan = build_setup_plan(result, system=system, machine=machine)
-            self.assertFalse(plan['surface_build_required'])
-            self.assertTrue(plan['surface_prebuilt_required'])
-        for system, machine in (('Darwin', 'arm64'), ('Windows', 'arm64')):
-            plan = build_setup_plan(result, system=system, machine=machine)
-            self.assertFalse(plan['surface_prebuilt_required'])
-            self.assertTrue(plan['manual_items'])
+                self.assertFalse(plan['surface_prebuilt_required'])
+                self.assertTrue(plan['manual_items'])
         item.details['build_required'] = False
         self.assertFalse(build_setup_plan(result, system='Linux', machine='x86_64')['surface_build_required'])
 
@@ -133,6 +134,7 @@ class SurfaceRuntimeTests(unittest.TestCase):
         for system in ('Darwin', 'Windows'):
             with tempfile.TemporaryDirectory() as tmp, patch('platform.system', return_value=system), \
                     patch('platform.machine', return_value='arm64'), \
+                    patch('platform.mac_ver', return_value=('14.5', (), '')), \
                     patch('scripts.setup_optional_assets.prepare') as resources:
                 prefix = Path(tmp) / 'components'
                 with self.assertRaisesRegex(ValueError, 'No qualified prebuilt surface bundle'):

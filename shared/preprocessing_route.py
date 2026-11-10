@@ -14,7 +14,13 @@ CACHE_KEY_VERSION = 6
 
 def resolve_preprocessing_execution_backend(selection: str | None = None) -> str:
     """Keep the validated runner as default while the shared native runner is qualified."""
-    choice = selection if selection is not None else os.environ.get("DSP_PREPROCESSING_EXECUTION_BACKEND", "legacy")
+    if selection is not None:
+        choice = selection
+    elif "DSP_PREPROCESSING_EXECUTION_BACKEND" in os.environ:
+        choice = os.environ["DSP_PREPROCESSING_EXECUTION_BACKEND"]
+    else:
+        from shared.native_runtimes import installed_bundle_bin_dirs
+        choice = "native" if installed_bundle_bin_dirs("fsl") else "legacy"
     choice = choice.strip().lower()
     if choice not in {"legacy", "native"}:
         raise ValueError("Preprocessing execution backend must be legacy or native.")

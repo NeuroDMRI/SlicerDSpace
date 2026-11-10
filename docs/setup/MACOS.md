@@ -9,20 +9,19 @@
 This page is for users who want to run SlicerDSpace from 3D Slicer on macOS.
 Use the Slicer UI first; use Terminal only when troubleshooting.
 
-Native macOS scientific execution and real SDK packaging are not certified.
-These are setup instructions, not a completed platform acceptance record.
+**Platform acceptance status**: On **Apple Silicon (`arm64`)** macOS, SlicerDSpace `v0.1.1` has completed full-workflow real-data acceptance on **3D Slicer 5.10.0** (`HCP 100307`) with the unified installer `SlicerDSpace-v0.1.1-macOS-arm64.tar.gz` (see the [macOS 5.10.0 Native Acceptance Report](../release/MACOS_NATIVE_ACCEPTANCE_5.10.0.md)). **Physical Intel (`x86_64`) Mac hardware has not been tested and remains unverified.**
 
-See the [feature/platform matrix](SUPPORT_MATRIX.md) for native candidates,
+See the [feature/platform matrix](SUPPORT_MATRIX.md) for verified routes,
 external-tool requirements and explicitly unavailable features.
 
 ---
 
-## 1. Install 3D Slicer
+## 1. Install 3D Slicer & SlicerDSpace
 
-Download and install 3D Slicer from <https://www.slicer.org/>.
-
-Install the module following the project README, open SlicerDSpace, then use
-**Environment and installation**. No automatic wizard is shown.
+1. Download and install **3D Slicer 5.10.0** (macOS `arm64`) from <https://www.slicer.org/>.
+2. Download `SlicerDSpace-v0.1.1-macOS-arm64.tar.gz` from GitHub Releases.
+3. In 3D Slicer, open **View -> Extensions Manager -> Install Extensions -> Install Extension from File...**, select `SlicerDSpace-v0.1.1-macOS-arm64.tar.gz`, and restart 3D Slicer.
+4. Open **Modules -> Diffusion -> SlicerDSpace**, then use **Environment and installation -> Prepare selected analysis environment** to install required Python packages and download deep-learning model weights on demand. No automatic wizard is shown on startup.
 
 ---
 
@@ -68,42 +67,19 @@ In SlicerDSpace:
 
 ---
 
-## 4. External Tools
+## 4. Built-In Native Runtimes & External Tools
 
-MRtrix3, FSL, FreeSurfer, WMA and TractCloud are optional depending on selected
-targets. The unified preparation entry can acquire pinned WMA/WMQL/TractCloud
-sources and Python wheels without Git. On macOS 14.5 or later, on Intel and
-on Apple Silicon, it also installs MRtrix3 3.0.8 (the official universal
-tarball, SHA-256 verified) and the FSL CPU tools eddy and topup (the official
-FSL conda channel, built for your architecture, with an architecture-matched
-Miniforge bootstrap). Apple Silicon is not silently switched to an Intel/Rosetta
-environment. Both runtimes go to the runtimes folder next to the model assets,
-for example `~/Library/Application Support/SlicerDSpace/runtimes`. If setup
-replaces an existing MRtrix3 runtime there, it renames the old folder to
-`mrtrix-3.0.8-macos.replaced-<ns>` (about 169 MB). The plugin never deletes it;
-you can delete it by hand after a successful run. FreeSurfer and other
-unqualified native routes still use an existing compatible installation; Linux
-Conda prefixes cannot be copied to macOS. The managed macOS runtimes have
-planning and unit tests; real macOS scientific acceptance is still open.
-WMA path discovery accepts `Slicer.app/Contents` libraries and installed
-SlicerDMRI modules rather than assuming Linux layout. This has app-layout
-regression tests, not real macOS scientific acceptance.
-Your own FSL installation is still accepted: use an architecture-matching one.
-[Official macOS FSL](https://fsl.fmrib.ox.ac.uk/fsl/docs/install/macos.html).
+When installed from `SlicerDSpace-v0.1.1-macOS-arm64.tar.gz`, the three native binary runtime bundles for Apple Silicon (`darwin-arm64`) are pre-packaged inside `SlicerDSpace/bundled-runtimes/` and discovered automatically without manual path configuration or separate runtime downloads:
 
-CUDA eddy is unavailable on macOS. MRtrix/FSL correction uses the CPU eddy
-executable; Auto PyTorch also currently uses CPU because this plugin has not
-implemented MPS. The PNL brain mask runs on macOS through its native route
-(SimpleITK registration and PyTorch in Slicer's Python), labelled "native
-(experimental)"; it also uses CPU and does not select MPS. [PyTorch MPS](https://docs.pytorch.org/docs/main/notes/mps.html).
+- **MRtrix3 `3.0.8`** (`mrtrix-3.0.8-darwin-arm64`, 67 commands + bundled `FreeSurferColorLUT.txt`)
+- **FSL Diffusion Preprocessing `2602.0`** (`fsl-2602.0-darwin-arm64`, `topup`, `applytopup`, `eddy_cpu` + `b02b0.cnf`)
+- **FreeSurfer Surface Postprocessing Runtime `0.1.0`** (`surface-runtime-darwin-arm64`, 7 native `arm64` surface commands + spherical registration templates; requires a user-supplied FreeSurfer license file `FS_LICENSE` because no personal activation key is bundled)
 
-For the least external dependencies, provide a reviewed native brain mask and
-select DTI without the `preprocessing` target (it needs FSL and MRtrix3). FW/NODDI/DKI/MK-Curve additionally
-need suitable acquisition and compatible numerical packages; they remain
-unverified on real macOS data. WMA, SAF and FreeSurfer-style postprocessing need
-their shell/CLI/display prerequisites and separate end-to-end validation.
+The unified preparation entry (`Prepare selected analysis environment`) also acquires pinned WMA/WMQL/TractCloud sources and Python wheels without Git, and automatically repairs any missing or corrupted bundled runtime files using `tree_sha256` verification. If you stage from source without `bundled-runtimes/`, on macOS 14.5 or later setup can also download the native runtime bundles or install MRtrix3 3.0.8 and FSL CPU tools into `~/Library/Application Support/SlicerDSpace/runtimes`. Apple Silicon is never silently switched to an Intel/Rosetta environment. Your own architecture-matching MRtrix3, FSL, or FreeSurfer installation is also accepted ([Official macOS FSL](https://fsl.fmrib.ox.ac.uk/fsl/docs/install/macos.html)).
 
-Common examples:
+CUDA `eddy` is unavailable on macOS; diffusion preprocessing uses native multi-threaded `eddy_cpu`. Auto PyTorch currently uses CPU because Apple MPS is not yet implemented or certified ([PyTorch MPS](https://docs.pytorch.org/docs/main/notes/mps.html)). The PNL brain mask runs on macOS through its native route (SimpleITK registration and PyTorch in Slicer's Python), labelled "native (experimental)"; it also uses CPU and does not select MPS.
+
+Common custom override examples (only needed if overriding the bundled runtimes):
 
 ```text
 MRtrix bin: /opt/mrtrix3/bin

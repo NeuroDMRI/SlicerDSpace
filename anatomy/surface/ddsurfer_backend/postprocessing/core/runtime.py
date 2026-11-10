@@ -60,6 +60,20 @@ def shared_libraries(binary):
     return result.stdout.strip()
 
 
+def _compatible_host(manifest_system, manifest_machine, system, machine):
+    if (manifest_system, manifest_machine) == (system, machine):
+        return True
+    if system == 'Darwin' and manifest_system == 'Darwin' and {manifest_machine, machine} <= {'arm64', 'x86_64'}:
+        try:
+            for key in ('sysctl.proc_translated', 'hw.optional.arm64'):
+                res = subprocess.run(['/usr/sbin/sysctl', '-n', key], capture_output=True, text=True, timeout=5)
+                if res.returncode == 0 and res.stdout.strip() == '1':
+                    return True
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    return False
+
+
 def validate_runtime(home, hemisphere='both', atlas_names='aparc,aparc.a2009s', check_libraries=True):
     system, machine = host()
     if home is None:
@@ -73,7 +87,7 @@ def validate_runtime(home, hemisphere='both', atlas_names='aparc,aparc.a2009s', 
     if (manifest.get('schema') != SCHEMA or manifest.get('source_revision') != FS_REVISION or
             manifest.get('activation_key_included') is not False):
         raise ValueError('Unsupported surface runtime; rebuild locally from the pinned source')
-    if (manifest.get('system'), manifest.get('machine')) != (system, machine):
+    if not _compatible_host(manifest.get('system'), manifest.get('machine'), system, machine):
         raise ValueError('Surface runtime was built for a different platform; rebuild it on this machine')
     hemis, atlases = selection(hemisphere, atlas_names)
     records = manifest.get('files', {})

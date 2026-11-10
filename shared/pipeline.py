@@ -155,6 +155,8 @@ def _slicer_home_candidates() -> list[Path]:
         candidates.append(Path(launcher).expanduser().resolve().parent)
     executable = Path(sys.executable).expanduser().resolve()
     if executable.stem.lower() in {"python-real", "pythonslicer", "python"}:
+        if executable.parent.parent.name == "Python" and executable.parent.parent.parent.name == "lib":
+            candidates.append(executable.parent.parent.parent.parent)
         candidates.append(executable.parent.parent)
     if executable.name.startswith("Slicer"):
         candidates.append(executable.parent)

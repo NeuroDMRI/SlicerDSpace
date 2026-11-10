@@ -27,8 +27,15 @@ class NativeRuntimeUnavailable(RuntimeError):
 
 
 def host_platform(system=None, machine=None):
-    system = system or platform.system()
-    machine = (machine or platform.machine()).lower()
+    actual_system = platform.system()
+    system = system or actual_system
+    if machine is None:
+        if system == "Darwin" and actual_system == "Darwin":
+            from shared.platform_info import host_machine
+            machine = host_machine()
+        else:
+            machine = platform.machine()
+    machine = machine.lower()
     arch = {"amd64": "x86_64", "aarch64": "arm64", "x64": "x86_64"}.get(machine, machine)
     return system, arch
 
@@ -122,24 +129,29 @@ def installed_bundle_bin_dirs(name, *, system=None, machine=None, root=None):
         else (*bundled_runtime_roots(), runtime_root())
     )
     prefix = f"{name}-"
-    suffix = f"-{system.lower()}-{machine}"
+    suffixes = (
+        (f"-{system.lower()}-{machine}", f"-{system.lower()}-x86_64")
+        if system == "Darwin" and machine == "arm64"
+        else (f"-{system.lower()}-{machine}",)
+    )
     dirs = []
     seen = set()
-    for base in bases:
-        if not base.is_dir():
-            continue
-        try:
-            children = sorted(base.iterdir(), reverse=True)
-        except OSError:
-            continue
-        for child in children:
-            if child.is_dir() and child.name.startswith(prefix) and child.name.endswith(suffix):
-                bin_dir = child / "bin"
-                if is_valid_installed_bundle_dir(child):
-                    resolved = bin_dir.resolve()
-                    if resolved not in seen:
-                        seen.add(resolved)
-                        dirs.append(resolved)
+    for suffix in suffixes:
+        for base in bases:
+            if not base.is_dir():
+                continue
+            try:
+                children = sorted(base.iterdir(), reverse=True)
+            except OSError:
+                continue
+            for child in children:
+                if child.is_dir() and child.name.startswith(prefix) and child.name.endswith(suffix):
+                    bin_dir = child / "bin"
+                    if is_valid_installed_bundle_dir(child):
+                        resolved = bin_dir.resolve()
+                        if resolved not in seen:
+                            seen.add(resolved)
+                            dirs.append(resolved)
     return tuple(dirs)
 
 

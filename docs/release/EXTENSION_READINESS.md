@@ -15,6 +15,7 @@ is performed by the build tools.
 
 Executed local checks and their limits are recorded in the
 [Windows 5.10.0 native acceptance report](WINDOWS_NATIVE_ACCEPTANCE_5.10.0.md),
+[macOS 5.10.0 native acceptance report](MACOS_NATIVE_ACCEPTANCE_5.10.0.md),
 [24 October local surface components validation](SURFACE_COMPONENTS_20261024.md),
 [23 October GUI follow-up](GUI_RESPONSIVENESS_20261023.md),
 [22 October official integration validation](OFFICIAL_SLICER_VALIDATION_20261022.md),
@@ -114,6 +115,7 @@ source tests and already configured workstations cannot replace this test.
 | Public repository, resolvable icon/screenshot URLs, GitHub topic | Deferred by maintainer; required before public Index submission |
 | Linux real SDK/CPack and private installation | Passed for the documented selected routes; not a blank-machine full workflow |
 | Windows native 5.10.0 runtime bundles & full-workflow real-data acceptance | Passed on 3D Slicer 5.10.0 (`HCP 100307`, `HCP 100408`, and clinical single-shell `sub-001`) with `SLICERDSPACE_DISABLE_WSL=1`, including clean-environment Extension Manager installation and corrupted-bundle auto-repair; see [Windows 5.10.0 Acceptance Report](WINDOWS_NATIVE_ACCEPTANCE_5.10.0.md) |
+| macOS (`arm64`) native 5.10.0 runtime bundles & full-workflow real-data acceptance | Passed on Apple Silicon (`darwin-arm64`) 3D Slicer 5.10.0 (`HCP 100307`), including clean-environment Extension Manager installation (`SlicerDSpace-v0.1.1-macOS-arm64.tar.gz`) and corrupted-bundle auto-repair (physical Intel `x86_64` Mac hardware remains unverified); see [macOS 5.10.0 Acceptance Report](MACOS_NATIVE_ACCEPTANCE_5.10.0.md) |
 | Recorded source licenses and LUT notices | Conversion/BWH, FreeSurfer/MGH, DDSurfer/MIT and PyTorch3D/BSD notices restored and checked; not a blanket legal clearance |
 | Model/template and fixture redistribution | Unconfirmed groups remain excluded from public asset archives |
 | Real-data tutorial and Sample Data registration | [Upstream Slicer DWIVolume walkthrough](../setup/SLICER_SAMPLE_DTI.md) tested for DTI; custom redistributable dataset registration remains pending |

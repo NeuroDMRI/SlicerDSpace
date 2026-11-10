@@ -89,7 +89,8 @@ class InputImportTest(unittest.TestCase):
             def which(name: str) -> str | None:
                 return "/slicer/DWIConvert" if name == "DWIConvert" else None
 
-            with patch("shared.input_import.shutil.which", side_effect=which):
+            with patch("shared.input_import.packaged_dcm2niix", return_value=None), \
+                    patch("shared.input_import.shutil.which", side_effect=which):
                 manifest = prepare_inputs(
                     InputImportConfig(
                         source=dicom_dir,

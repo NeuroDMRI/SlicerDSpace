@@ -205,11 +205,11 @@ def _add_tool_requests(report, groups, backend_paths):
 def _run_tool(argv, env):
     import sys
     cmd = [str(item) for item in argv]
-    if os.name == 'nt' and cmd:
+    if cmd:
         p = Path(cmd[0])
-        if not p.is_file() and p.with_suffix('.exe').is_file():
+        if os.name == 'nt' and not p.is_file() and p.with_suffix('.exe').is_file():
             cmd[0] = str(p.with_suffix('.exe'))
-        elif p.is_file():
+        elif p.is_file() and (os.name == 'nt' or (p.parent.parent / 'native-runtime.json').is_file()):
             try:
                 head = p.read_bytes()[:64]
             except OSError:
@@ -262,7 +262,7 @@ def check_mrtrix(bin_dir, fsl_bin_dir=None, *, shim_root=None):
         raise RuntimeError(f'mrconvert --version does not report {expected}: {text.strip()[:200]}')
     checks.append('mrtrix:mrconvert_version')
     scripts = ('dwi2response', 'dwifslpreproc')
-    if os.name == 'nt' and not (Path(bin_dir) / 'dwifslpreproc').is_file() and (Path(bin_dir) / '5ttgen').is_file():
+    if not (Path(bin_dir) / 'dwifslpreproc').is_file() and (Path(bin_dir) / '5ttgen').is_file():
         scripts = ('dwi2response', '5ttgen')
     for name in scripts:
         result = _run_tool([Path(bin_dir) / name, '-help'], env)
@@ -283,7 +283,9 @@ def check_fsl(fsl_bin_dir, mrtrix_bin_dir=None, *, shim_root=None):
     env = managed_tool_environment(mrtrix_bin_dir=mrtrix_bin_dir, fsl_bin_dir=fsl_bin_dir, shim_root=shim_root)
     checks = []
     managed = is_managed_prefix(fsl_bin_dir)
-    if os.name == 'nt' and not (Path(fsl_bin_dir) / 'eddy').exists() and not (Path(fsl_bin_dir) / 'eddy.exe').exists():
+    if not (Path(fsl_bin_dir) / 'eddy').exists() and not (Path(fsl_bin_dir) / 'eddy.exe').exists() and (
+        os.name == 'nt' or (Path(fsl_bin_dir).parent / 'native-runtime.json').is_file()
+    ):
         required = {'eddy_cpu', 'topup'}
     else:
         required = {'eddy', 'topup'} | ({'eddy_cpu'} if managed else set())

@@ -13,6 +13,11 @@ import unittest
 
 import nibabel as nib
 import numpy as np
+if sys.platform == "darwin":
+    try:
+        import torch as _darwin_preload_torch  # noqa: F401
+    except Exception:
+        pass
 from dipy.core.gradients import gradient_table
 from dipy.reconst.dki import DiffusionKurtosisModel, design_matrix
 from dipy.sims.voxel import dki_signal

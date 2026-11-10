@@ -228,13 +228,19 @@ def run_mkcurve(dwi_path, bval_path, bvec_path, mask_path, output_dir, *,
             mask = nib.load(str(prepared[3])).get_fdata() > 0
             repair = repair_nonpositive(data, mask)
             coords = np.unravel_index(np.flatnonzero(mask.ravel(order="F")), mask.shape, order="F")
-            b0 = data[..., 0][coords]
+            count = len(coords[0])
+            masked_signals = np.lib.format.open_memmap(
+                Path(temporary) / "masked_signals.npy", mode="w+", dtype=np.float64, shape=(count, data.shape[-1])
+            )
+            handles.callback(masked_signals._mmap.close)
+            for volume_idx in range(data.shape[-1]):
+                masked_signals[:, volume_idx] = data[..., volume_idx][coords]
+            b0 = masked_signals[:, 0].copy()
             grid = synthetic_b0_grid(b0) if grid is None else np.asarray(grid, dtype=float)
             if len(grid) < 3 or not np.isfinite(grid).all() or np.any(grid <= 0) or not np.all(np.diff(grid) > 0):
                 raise ValueError("Synthetic b0 grid must contain at least three finite positive increasing values")
             np.savetxt(root / "synthetic_b0_grid.csv", grid, delimiter=",")
             design = design_matrix(np.loadtxt(prepared[1]), np.loadtxt(prepared[2]).T)
-            count = len(b0)
             curves = np.lib.format.open_memmap(root / "mk_vs_synthetic_b0.npy", mode="w+", dtype="float64", shape=(len(grid), count))
             original_coefficients = np.lib.format.open_memmap(root / "original_coefficients.npy", mode="w+", dtype="float64", shape=(count, 22))
             corrected_coefficients = np.lib.format.open_memmap(root / "corrected_coefficients.npy", mode="w+", dtype="float64", shape=(count, 22))
@@ -266,8 +272,7 @@ def run_mkcurve(dwi_path, bval_path, bvec_path, mask_path, output_dir, *,
                     pool = None
                 def payload(start):
                     stop = min(start + voxels_per_chunk, count)
-                    chunk_coords = tuple(c[start:stop] for c in coords)
-                    return data[chunk_coords].copy(), design, grid, threshold, solver
+                    return np.asarray(masked_signals[start:stop], dtype=np.float64).copy(), design, grid, threshold, solver
                 from microstructure.chunk_dispatch import chunk_results
                 completed = 0
                 for start, stop, fitted in chunk_results(count, voxels_per_chunk, num_workers,
@@ -337,7 +342,7 @@ def run_mkcurve(dwi_path, bval_path, bvec_path, mask_path, output_dir, *,
                 _write_json(progress, {"status": "completed", "completed_voxels": count, "total_voxels": count})
                 return record
             finally:
-                for array in (curves, original_coefficients, corrected_coefficients, *results.values()):
+                for array in (curves, original_coefficients, corrected_coefficients, masked_signals, *results.values()):
                     array._mmap.close()
                 if isinstance(data, np.memmap):
                     data._mmap.close()
@@ -345,7 +350,7 @@ def run_mkcurve(dwi_path, bval_path, bvec_path, mask_path, output_dir, *,
                     if getattr(holder, "fileobj", None) is not None:
                         holder.fileobj.close()
                 results.clear()
-                del curves, original_coefficients, corrected_coefficients, data, working_image
+                del curves, original_coefficients, corrected_coefficients, masked_signals, data, working_image
                 import gc
                 gc.collect()
     except Exception as exc:

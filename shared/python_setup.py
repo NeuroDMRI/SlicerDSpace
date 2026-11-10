@@ -50,13 +50,42 @@ def restart_packages(before, after, loaded):
                    if before.get(canonicalize_name(name)) != after.get(canonicalize_name(name))})
 
 
+def _import_pytorch_utils():
+    if "PyTorchUtils" not in sys.modules:
+        from shared.external_process import find_pythonslicer
+        exe = Path(sys.executable).resolve()
+        for parent in tuple(exe.parents)[:5]:
+            for pattern in ("Extensions-*/PyTorch/lib/Slicer-*/qt-scripted-modules",
+                            "slicer.org/Extensions-*/PyTorch/lib/Slicer-*/qt-scripted-modules"):
+                for candidate in sorted(parent.glob(pattern)):
+                    if (candidate / "PyTorchUtils.py").is_file() and str(candidate) not in sys.path:
+                        sys.path.append(str(candidate))
+        try:
+            import slicer
+            import slicer.util
+            if not hasattr(slicer, "app") and not (Path(sys.executable).parent / "PythonSlicer").is_file():
+                launcher = next((find_pythonslicer(p) for p in tuple(exe.parents)[:5] if find_pythonslicer(p)), None)
+                if launcher is not None:
+                    def _macos_execute_python_module(module, args, _launcher=str(launcher), _util=slicer.util):
+                        if sys.platform == "darwin" and module == "light_the_torch":
+                            module = "pip"
+                            args = [a for a in args if not str(a).startswith("--pytorch-computation-backend")]
+                        proc = _util.launchConsoleProcess([_launcher, "-m", module, *args], useStartupEnvironment=False)
+                        _util.logProcessOutput(proc)
+                    slicer.util._executePythonModule = _macos_execute_python_module
+        except Exception:
+            pass
+    import PyTorchUtils
+    return PyTorchUtils
+
+
 def install_requirements(requirements, *, protected=True, loaded=(), torch_minimum=None, torchvision_required=False):
     """Called only by the explicitly authorized, cancellable setup worker."""
     requirements = tuple(dict.fromkeys(requirements))
     before = installed_versions()
     backend = "already_satisfied"
     if torch_minimum:
-        import PyTorchUtils
+        PyTorchUtils = _import_pytorch_utils()
         logic = PyTorchUtils.PyTorchUtilsLogic()
         if (not requirement_satisfied("torch>=" + torch_minimum)
                 or (torchvision_required and not requirement_satisfied("torchvision"))):

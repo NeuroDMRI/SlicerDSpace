@@ -15,7 +15,7 @@ from shared.selected_setup import apply_setup_receipt, build_setup_plan
 class NativeWmaEnvironmentTests(unittest.TestCase):
     def test_windows_auto_probes_the_configured_slicer_python_for_a_native_source(self):
         with TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             slicer = root / 'Slicer.exe'
             slicer_python = root / 'bin' / 'PythonSlicer.exe'
             slicer_python.parent.mkdir()
@@ -40,7 +40,7 @@ class NativeWmaEnvironmentTests(unittest.TestCase):
 
     def test_windows_auto_can_prepare_without_a_configured_checkout(self):
         with TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             config = EnvironmentDoctorConfig(
                 targets=('wma',), repo_root=root, platform_name='Windows',
             )

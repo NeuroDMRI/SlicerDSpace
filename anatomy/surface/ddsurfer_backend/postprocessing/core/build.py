@@ -158,6 +158,11 @@ def build(args):
         raise ValueError('Install prefix and build work directory must be separate')
     env = dict(os.environ, CC=cc, CXX=cxx, CMAKE_BUILD_PARALLEL_LEVEL=str(args.jobs),
                OMP_NUM_THREADS=str(args.jobs), OPENBLAS_NUM_THREADS='1')
+    if machine == 'arm64':
+        for flag_var in ('CFLAGS', 'CXXFLAGS'):
+            current_flags = env.get(flag_var, '')
+            if '-DARM64' not in current_flags.split():
+                env[flag_var] = (current_flags + ' -DARM64').strip()
     for name in ('FREESURFER_HOME', 'SUBJECTS_DIR', 'LD_LIBRARY_PATH', 'LD_PRELOAD', 'LD_AUDIT'):
         env.pop(name, None)
     work.mkdir(parents=True, exist_ok=True)

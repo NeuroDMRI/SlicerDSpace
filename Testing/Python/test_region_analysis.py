@@ -699,6 +699,62 @@ class RegionAnalysisTest(unittest.TestCase):
         self.assertEqual(record["status"], "cancelled")
         self.assertEqual(record["subjects"][0]["status"], "cancelled")
 
+    def test_ifw_metric_catalog_and_cli_export(self):
+        from microstructure.ifw import IfwConfig, run_ifw
+        from scripts import analyze_regions
+
+        fw_path = self.volume("fw_fraction.nii.gz", np.full_like(self.labels, 0.25, dtype=np.float32))
+        csf_path = self.volume("csf_prob.nii.gz", np.full_like(self.labels, 0.05, dtype=np.float32))
+        mask_path = self.mask
+        bval_path = self.root / "ifw.bval"
+        bvec_path = self.root / "ifw.bvec"
+        bval_path.write_text("0 1000 2000 2000\n", encoding="utf-8")
+        bvec_path.write_text("0 1 0 0\n0 0 1 0\n0 0 0 1\n", encoding="utf-8")
+        ifw_dir = self.root / "ifw_stage"
+        res = run_ifw(IfwConfig(
+            subject_id="synthetic",
+            fw_fraction_path=fw_path,
+            csf_probability_path=csf_path,
+            mask_path=mask_path,
+            bval_path=bval_path,
+            bvec_path=bvec_path,
+            output_dir=ifw_dir,
+            echo_time_ms=89.5,
+            roi_label_map=self.atlas,
+            lut_path=self.lut,
+        ))
+        self.tasks.append(dict(
+            name="microstructure.ifw",
+            status="completed",
+            manifest_path=str(res.record_path),
+            outputs=dict(
+                ifw=str(res.ifw_path),
+                fw_volume_fraction=str(res.fw_volume_fraction_path),
+                roi_stats_csv=str(res.roi_stats_csv_path),
+            ),
+        ))
+        self.save_parent()
+        cat = self.catalog()
+        self.assertIn("ifw", cat["metrics"])
+        self.assertIn("fw_volume_fraction", cat["metrics"])
+        out_dir = self.root / "ifw_region_cli"
+        analyze_regions.main([
+            "--source-manifest", str(self.manifest),
+            "--regions", "1001", "2001",
+            "--metrics", "ifw",
+            "--lut", str(self.lut),
+            "--output-dir", str(out_dir),
+        ])
+        with (out_dir / "selected_microstructure.csv").open(encoding="utf-8") as stream:
+            rows = list(csv.DictReader(stream))
+        self.assertEqual([int(r["label_id"]) for r in rows], [1001, 2001])
+        self.assertTrue(all(float(r["ifw_mean"]) > 0 for r in rows))
+        # Corrupting output_sha256 in ifw_record.json must reject stale iFW map
+        rec = read_json(res.record_path)
+        rec["output_sha256"]["ifw"] = "0" * 64
+        write_json(res.record_path, rec)
+        self.assertNotIn("ifw", self.catalog()["metrics"])
+
 
 if __name__ == "__main__":
     unittest.main()

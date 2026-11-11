@@ -74,7 +74,10 @@ def signatures_current(record):
 def usable_task(task):
     if task.get("status") not in {"completed", "reused", "skipped"}:
         raise ValueError("Task did not complete")
-    qc_path = file_path(task.get("qc_path") or (task.get("outputs") or {}).get("qc"))
+    raw_qc = task.get("qc_path") or (task.get("outputs") or {}).get("qc")
+    if not raw_qc and task.get("name") == "microstructure.ifw":
+        raw_qc = task.get("manifest_path")
+    qc_path = file_path(raw_qc)
     qc = read_json(qc_path)
     if not isinstance(qc, dict):
         raise ValueError("Malformed task QC record")
@@ -101,6 +104,11 @@ def usable_task(task):
         raise ValueError("Stage source/output signatures are stale")
     for key, digest in (stage.get("artifacts") or {}).items():
         source = (task.get("outputs") or {}).get(key)
+        if source and isinstance(digest, str) and len(digest) == 64:
+            if sha256(file_path(source)) != digest:
+                raise ValueError("Stage output digest is stale: " + key)
+    for key, digest in (stage.get("output_sha256") or {}).items():
+        source = (task.get("outputs") or {}).get(key) or (stage.get("outputs") or {}).get(key)
         if source and isinstance(digest, str) and len(digest) == 64:
             if sha256(file_path(source)) != digest:
                 raise ValueError("Stage output digest is stale: " + key)
@@ -153,6 +161,11 @@ def _metric_specs(task, outputs, warnings):
             validity = outputs.get(field + "_valid_mask") or outputs.get("mkcurve_corrected_valid_mask")
             if validity:
                 candidates.append((field, field, validity))
+    elif name == "microstructure.ifw":
+        candidates = [
+            ("ifw", "ifw", None),
+            ("fw_volume_fraction", "fw_volume_fraction", None),
+        ]
     result = {}
     for key, output_key, mask in candidates:
         if not outputs.get(output_key):
@@ -194,7 +207,10 @@ def inspect_run(manifest_path, *, atlas_override=None, lut_path=None):
             continue
         try:
             qc, stage = usable_task(task)
-            task = dict(task, qc_path=str(file_path(task.get("qc_path") or (task.get("outputs") or {}).get("qc"))))
+            resolved_qc = task.get("qc_path") or (task.get("outputs") or {}).get("qc")
+            if not resolved_qc and name == "microstructure.ifw":
+                resolved_qc = task.get("manifest_path")
+            task = dict(task, qc_path=str(file_path(resolved_qc)))
             outputs = task.get("outputs") or {}
             validation_files.add(task["qc_path"])
             if task.get("manifest_path"):

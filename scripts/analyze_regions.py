@@ -40,7 +40,7 @@ def main(argv=None):
     parser.add_argument("--catalog", type=Path, help='Optional JSON output for --inspect; otherwise print the catalog')
     direct = parser.add_argument_group('Direct regional analysis (no request JSON required)')
     direct.add_argument('--regions', nargs='+', action='append', help='Region names or IDs; spaces/commas and repeated flags supported')
-    direct.add_argument('--metrics', nargs='+', action='append', help='Scalar metric keys, e.g. fa md noddi_ndi; defaults to FA when no analysis is selected')
+    direct.add_argument('--metrics', nargs='+', action='append', help='Scalar metric keys, e.g. fa md ifw noddi_ndi; defaults to FA when no analysis is selected')
     direct.add_argument('--output-dir', type=Path, help='Fresh result folder; cohort root when several sources are given')
     direct.add_argument('--tissue', action='store_true', help='Include DDSeg tissue composition')
     direct.add_argument('--surface', action='store_true', help='Include matching cortical morphology')

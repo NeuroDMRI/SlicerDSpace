@@ -56,6 +56,13 @@ def predict_view(model, slices: List[np.ndarray], apply_softmax: bool) -> np.nda
     inferred_scores: Dict[int, np.ndarray] = {}
     batch_size = 8
     dev_str = str(getattr(model, "device", "cpu")).lower()
+    if not dev_str.startswith("cuda"):
+        try:
+            import torch
+
+            torch.set_flush_denormal(True)
+        except Exception:
+            pass
     if dev_str.startswith("cuda"):
         from shared.hardware_adapt import query_cuda_free_total_bytes
 

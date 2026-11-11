@@ -585,7 +585,12 @@ def progress_from_payloads(manifest: dict[str, Any], plan: Optional[dict[str, An
 
     finished = _terminal_task_names(manifest.get("tasks") or ())
     finished_names = {name for name, _status in finished}
-    finished_prefixes = {name.split(".", 1)[0] for name in finished_names}
+    finished_prefixes = {name.split(".", 1)[0] for name in finished_names if "@" not in name}
+    finished_variant_prefixes = {
+        f"{name.split('.', 1)[0]}@{name.rsplit('@', 1)[1]}"
+        for name in finished_names
+        if "@" in name
+    }
     items = [item for item in (plan or {}).get("items") or () if isinstance(item, dict)]
     runnable = [item for item in items if item.get("will_run")] or items
     total = len(runnable)
@@ -594,7 +599,14 @@ def progress_from_payloads(manifest: dict[str, Any], plan: Optional[dict[str, An
     for item in runnable:
         task_name = str(item.get("task_name") or "")
         target = str(item.get("target") or "")
-        if task_name in finished_names or (target and target in finished_prefixes):
+        if "@" in task_name:
+            variant = task_name.rsplit("@", 1)[1]
+            matched = task_name in finished_names or bool(
+                target and f"{target}@{variant}" in finished_variant_prefixes
+            )
+        else:
+            matched = task_name in finished_names or bool(target and target in finished_prefixes)
+        if matched:
             done += 1
         else:
             pending.append(task_name or target)
@@ -624,6 +636,34 @@ def progress_from_manifest(manifest_path: Path, *, not_before: Optional[float] =
         return None
     if manifest.get("kind") != SUBJECT_MANIFEST_KIND:
         return None
+    child_runs = manifest.get("child_runs")
+    if isinstance(child_runs, list) and child_runs and str(manifest.get("status") or "") == "running":
+        from shared.multi_tracking import SHARED
+
+        merged_tasks: list[dict[str, Any]] = [
+            dict(t) for t in (manifest.get("tasks") or ()) if isinstance(t, dict)
+        ]
+        seen_names = {str(t.get("name") or "") for t in merged_tasks}
+        for entry in child_runs:
+            if not isinstance(entry, dict) or not entry.get("manifest_path"):
+                continue
+            child_path = Path(str(entry["manifest_path"])).expanduser()
+            backend = str(entry.get("backend") or "")
+            try:
+                child_manifest = load_manifest_json(child_path)
+            except (OSError, ManifestError):
+                continue
+            for task in child_manifest.get("tasks") or ():
+                if not isinstance(task, dict):
+                    continue
+                tname = str(task.get("name") or "")
+                is_shared = tname.split(".", 1)[0] in SHARED or tname.startswith(("microstructure.", "surface."))
+                qual_name = tname if (is_shared or not backend or "@" in tname) else f"{tname}@{backend}"
+                if qual_name not in seen_names:
+                    seen_names.add(qual_name)
+                    merged_tasks.append(dict(task, name=qual_name))
+        if merged_tasks:
+            manifest = dict(manifest, tasks=merged_tasks)
     plan: Optional[dict[str, Any]] = None
     plan_path = manifest.get("run_plan_path")
     if isinstance(plan_path, str) and plan_path:

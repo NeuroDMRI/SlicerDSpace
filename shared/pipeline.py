@@ -656,12 +656,18 @@ def _run_cli(cmd: list[str], log: Optional[Callable[[str], None]] = None) -> Non
         stderr=subprocess.STDOUT,
         **text_subprocess_kwargs(bufsize=1),
     )
+    last_nonempty_line = ""
     if process.stdout:
         for line in process.stdout:
-            _emit(f"[Shared] {line.rstrip()}", log)
+            stripped = line.rstrip()
+            if stripped.strip():
+                last_nonempty_line = stripped.strip()
+            _emit(f"[Shared] {stripped}", log)
     return_code = process.wait()
     if return_code != 0:
-        raise RuntimeError(f"CLI command failed with exit code {return_code}")
+        cli_name = Path(cmd[0]).name if cmd else "CLI"
+        detail = f" ({cli_name}: {last_nonempty_line})" if last_nonempty_line else f" ({cli_name})"
+        raise RuntimeError(f"CLI command failed with exit code {return_code}{detail}")
 
 
 def _get_cli_executable(module_name: str) -> str:

@@ -329,9 +329,14 @@ def fastsurfercnn(img_filename, save_as, logger, args):
                 effective_batch_size = min(effective_batch_size, 2)
 
     prev_torch_threads = None
+    if not use_cuda:
+        try:
+            torch.set_flush_denormal(True)
+        except Exception:
+            pass
     if not use_cuda and not os.environ.get("SLICERDSPACE_STAGE_CPUS"):
         prev_torch_threads = torch.get_num_threads()
-        torch.set_num_threads(optimal_cpu_torch_threads(max_conv_threads=8))
+        torch.set_num_threads(optimal_cpu_torch_threads(max_conv_threads=16))
 
     params_model = {'device': device, "use_cuda": use_cuda, "batch_size": effective_batch_size, "model_parallel": model_parallel}
     logger.info("Cuda available: {}, # Available GPUS: {}, Cuda user disabled (--no_cuda flag): {}, --> Using device: {} (batch_size={})".format(torch.cuda.is_available(), torch.cuda.device_count(),  args.no_cuda, device, effective_batch_size))

@@ -686,10 +686,13 @@ class FastSurferCNN_Fuse_Unet_v2(nn.Module):
         #        [13] bottleneck, \
         #        [14] decoder_output4, [15] decoder_output3, [16] decoder_output2, [17] decoder_output1
 
+        kept_slots = {0, 1, 4, 7, 10, 13, 17}
         returns = []
         for idx in range(len(self.FastSurferCNNs)):
             fscnn = self.FastSurferCNNs[idx]
-            returns.append(fscnn(x[:, ((idx)*7):((idx+1) * 7), :, :]))
+            raw_out = fscnn(x[:, ((idx)*7):((idx+1) * 7), :, :])
+            returns.append(tuple(raw_out[slot] if slot in kept_slots else None for slot in range(len(raw_out))))
+            del raw_out
 
         encoder_output1, skip_encoder_1, indices_1 = self.encode1.forward(x[:, :, :, :])
 
@@ -835,10 +838,13 @@ class FastSurferCNN_Fuse_Unet_v2_extended(nn.Module):
         #        [13] bottleneck, \
         #        [14] decoder_output4, [15] decoder_output3, [16] decoder_output2, [17] decoder_output1
 
+        kept_slots = {0, 1, 4, 7, 10, 13, 17}
         returns = []
         for idx in range(len(self.FastSurferCNNs)):
             fscnn = self.FastSurferCNNs[idx]
-            returns.append(fscnn(x[:, ((idx)*7):((idx+1) * 7), :, :]))
+            raw_out = fscnn(x[:, ((idx)*7):((idx+1) * 7), :, :])
+            returns.append(tuple(raw_out[slot] if slot in kept_slots else None for slot in range(len(raw_out))))
+            del raw_out
 
         encoder_output1, skip_encoder_1, indices_1 = self.encode1.forward(x[:, :, :, :])
 
@@ -990,10 +996,13 @@ class FastSurferCNN_Fuse_Unet_v3(nn.Module):
         #        [13] bottleneck, \
         #        [14] decoder_output4, [15] decoder_output3, [16] decoder_output2, [17] decoder_output1
 
+        kept_slots = {0, 1, 4, 7, 10, 13, 17}
         returns = []
         for idx in range(len(self.FastSurferCNNs)):
             fscnn = self.FastSurferCNNs[idx]
-            returns.append(fscnn(x[:, ((idx)*7):((idx+1) * 7), :, :]))
+            raw_out = fscnn(x[:, ((idx)*7):((idx+1) * 7), :, :])
+            returns.append(tuple(raw_out[slot] if slot in kept_slots else None for slot in range(len(raw_out))))
+            del raw_out
 
         encoder_output1, skip_encoder_1, indices_1 = self.encode1.forward(x[:, :, :, :])
 
@@ -1156,10 +1165,13 @@ class FastSurferCNN_Fuse_Unet_v3_extended(nn.Module):
         #        [13] bottleneck, \
         #        [14] decoder_output4, [15] decoder_output3, [16] decoder_output2, [17] decoder_output1
 
+        kept_slots = {0, 1, 4, 7, 10, 13, 17}
         returns = []
         for idx in range(len(self.FastSurferCNNs)):
             fscnn = self.FastSurferCNNs[idx]
-            returns.append(fscnn(x[:, ((idx)*7):((idx+1) * 7), :, :]))
+            raw_out = fscnn(x[:, ((idx)*7):((idx+1) * 7), :, :])
+            returns.append(tuple(raw_out[slot] if slot in kept_slots else None for slot in range(len(raw_out))))
+            del raw_out
 
         encoder_output1, skip_encoder_1, indices_1 = self.encode1.forward(x[:, :, :, :])
 
@@ -1303,10 +1315,13 @@ class FastSurferCNN_Fuse_Unet_v4(nn.Module):
         #        [13] bottleneck, \
         #        [14] decoder_output4, [15] decoder_output3, [16] decoder_output2, [17] decoder_output1
 
+        kept_slots = {0, 1, 4, 7, 10, 13, 17}
         returns = []
         for idx in range(len(self.FastSurferCNNs)):
             fscnn = self.FastSurferCNNs[idx]
-            returns.append(fscnn(x[:, ((idx)*7):((idx+1) * 7), :, :]))
+            raw_out = fscnn(x[:, ((idx)*7):((idx+1) * 7), :, :])
+            returns.append(tuple(raw_out[slot] if slot in kept_slots else None for slot in range(len(raw_out))))
+            del raw_out
 
         encoder_output1, skip_encoder_1, indices_1 = self.encode1.forward(x[:, :, :, :])
 
@@ -1465,10 +1480,13 @@ class FastSurferCNN_Fuse_Unet_v4_extended(nn.Module):
         #        [13] bottleneck, \
         #        [14] decoder_output4, [15] decoder_output3, [16] decoder_output2, [17] decoder_output1
 
+        kept_slots = {0, 1, 4, 7, 10, 13, 17}
         returns = []
         for idx in range(len(self.FastSurferCNNs)):
             fscnn = self.FastSurferCNNs[idx]
-            returns.append(fscnn(x[:, ((idx)*7):((idx+1) * 7), :, :]))
+            raw_out = fscnn(x[:, ((idx)*7):((idx+1) * 7), :, :])
+            returns.append(tuple(raw_out[slot] if slot in kept_slots else None for slot in range(len(raw_out))))
+            del raw_out
 
         encoder_output1, skip_encoder_1, indices_1 = self.encode1.forward(x[:, :, :, :])
 

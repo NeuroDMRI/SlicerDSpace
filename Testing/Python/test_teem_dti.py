@@ -173,5 +173,105 @@ class SlicerPythonSelfCheckTests(unittest.TestCase):
         self.assertEqual(json.loads(completed.stdout)["status"], "ok")
 
 
+class NiftiBackedNhdrParityTests(unittest.TestCase):
+    """Verify streaming NIfTI-backed .nhdr reader matches vtkTeemNRRDReader bit-for-bit and rejects all-zero reads."""
+
+    def setUp(self) -> None:
+        try:
+            self.vtk, self.vtkTeem, self.ns, _ = teem_dti._vtk_modules()
+            teem_dti.load_teem()
+            import nibabel  # noqa: F401
+        except Exception as error:
+            self.skipTest(f"Slicer vtkTeem / nibabel unavailable in this interpreter: {error}")
+
+    def test_streamed_nifti_nhdr_matches_vtk_teem_estimate_file_bit_for_bit(self) -> None:
+        import nibabel as nib
+        from anatomy.parcellation.conversion.nhdr_write import nhdr_write
+
+        rng = np.random.default_rng(20261112)
+        nx, ny, nz, ng = 5, 6, 7, 10
+        affine = np.array([
+            [-1.25, 0.0, 0.0, 90.0],
+            [0.0, 1.25, 0.0, -126.0],
+            [0.0, 0.0, 1.25, -72.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ])
+        data = rng.uniform(80.0, 1200.0, size=(nx, ny, nz, ng)).astype(np.float32)
+        dirs = np.array([
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0],
+            [0.70710678, 0.70710678, 0.0], [0.70710678, 0.0, 0.70710678], [0.0, 0.70710678, 0.70710678],
+            [0.70710678, -0.70710678, 0.0], [0.70710678, 0.0, -0.70710678], [0.0, 0.70710678, -0.70710678],
+        ])
+        bvals = [0] + [1000] * (ng - 1)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tdir = Path(tmp)
+            nii_path = tdir / "dwi.nii.gz"
+            bval_path = tdir / "dwi.bval"
+            bvec_path = tdir / "dwi.bvec"
+            nhdr_path = tdir / "DWI.nhdr"
+            img = nib.Nifti1Image(data, affine)
+            img.header["scl_slope"] = 1.0
+            img.header["scl_inter"] = 0.0
+            nib.save(img, str(nii_path))
+            bval_path.write_text(" ".join(map(str, bvals)) + "\n", encoding="utf-8")
+            bvec_path.write_text(
+                "\n".join(" ".join(f"{dirs[g, r]:.8f}" for g in range(ng)) for r in range(3)) + "\n",
+                encoding="utf-8",
+            )
+            nhdr_write(str(nii_path), str(bval_path), str(bvec_path), str(nhdr_path))
+            self.assertEqual(teem_dti._nifti_payload_from_nhdr(nhdr_path), nii_path.resolve())
+
+            ten_stream = tdir / "dti_stream.nrrd"
+            b0_stream = tdir / "b0_stream.nrrd"
+            teem_dti.estimate_file(nhdr_path, ten_stream, b0_stream, method="WLS", threads=2, log=None)
+
+            ten_vtk = tdir / "dti_vtk.nrrd"
+            b0_vtk = tdir / "b0_vtk.nrrd"
+            with mock.patch.object(teem_dti, "_nifti_payload_from_nhdr", return_value=None):
+                teem_dti.estimate_file(nhdr_path, ten_vtk, b0_vtk, method="WLS", threads=2, log=None)
+
+            for p_a, p_b, is_tensor in ((ten_stream, ten_vtk, True), (b0_stream, b0_vtk, False)):
+                ra = self.vtkTeem.vtkTeemNRRDReader()
+                ra.SetFileName(str(p_a))
+                ra.Update()
+                rb = self.vtkTeem.vtkTeemNRRDReader()
+                rb.SetFileName(str(p_b))
+                rb.Update()
+                arr_a = self.ns.vtk_to_numpy(
+                    ra.GetOutput().GetPointData().GetTensors() if is_tensor else ra.GetOutput().GetPointData().GetScalars()
+                )
+                arr_b = self.ns.vtk_to_numpy(
+                    rb.GetOutput().GetPointData().GetTensors() if is_tensor else rb.GetOutput().GetPointData().GetScalars()
+                )
+                np.testing.assert_array_equal(arr_a, arr_b)
+                np.testing.assert_allclose(
+                    teem_dti._matrix_to_numpy(ra.GetRasToIjkMatrix()),
+                    teem_dti._matrix_to_numpy(rb.GetRasToIjkMatrix()),
+                    atol=0, rtol=0,
+                )
+
+    def test_all_zero_diffusion_volume_raises_teem_error(self) -> None:
+        import nibabel as nib
+        from anatomy.parcellation.conversion.nhdr_write import nhdr_write
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tdir = Path(tmp)
+            nii_path = tdir / "zeros.nii.gz"
+            bval_path = tdir / "zeros.bval"
+            bvec_path = tdir / "zeros.bvec"
+            nhdr_path = tdir / "DWI.nhdr"
+            img = nib.Nifti1Image(np.zeros((4, 4, 4, 7), dtype=np.float32), np.eye(4))
+            img.header["scl_slope"] = 1.0
+            img.header["scl_inter"] = 0.0
+            nib.save(img, str(nii_path))
+            bval_path.write_text("0 1000 1000 1000 1000 1000 1000\n", encoding="utf-8")
+            bvec_path.write_text("0 1 0 0 0.7 0.7 0\n0 0 1 0 0.7 0 0.7\n0 0 0 1 0 0.7 0.7\n", encoding="utf-8")
+            nhdr_write(str(nii_path), str(bval_path), str(bvec_path), str(nhdr_path))
+            with self.assertRaisesRegex(teem_dti.TeemError, "all zeros"):
+                teem_dti.estimate_file(nhdr_path, tdir / "dti.nrrd", tdir / "b0.nrrd", method="WLS", threads=1, log=None)
+
+
 if __name__ == "__main__":
     unittest.main()

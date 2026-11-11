@@ -74,10 +74,14 @@ def _logged_manifest(result):
         return None
     paths = re.findall(r'"run_manifest_path"\s*:\s*"([^"\n]+)"', tail)
     if paths:
-        return paths[-1]
+        raw_match = paths[-1]
+        try:
+            return json.loads(f'"{raw_match}"')
+        except (ValueError, TypeError):
+            return raw_match
     for line in reversed(tail.splitlines()):
         line = line.strip()
-        if line.startswith("/") and line.endswith("_orchestration_manifest.json"):
+        if (line.startswith("/") or re.match(r"^[A-Za-z]:[\\/]", line)) and line.endswith("_orchestration_manifest.json"):
             return line
     return None
 

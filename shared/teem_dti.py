@@ -604,24 +604,166 @@ def _matrix_to_numpy(matrix, size=4) -> np.ndarray:
     return np.asarray(matrix, dtype=np.float64).reshape(size, size)
 
 
+def _read_exact(stream, count: int) -> bytes:
+    """Read ``count`` bytes from ``stream``, looping over short reads until EOF."""
+    if count <= 0:
+        return b""
+    first = stream.read(count)
+    if len(first) == count:
+        return first
+    if not first:
+        raise TeemError(f"Unexpected EOF while reading {count} bytes from diffusion payload")
+    chunks = [first]
+    remaining = count - len(first)
+    while remaining > 0:
+        piece = stream.read(remaining)
+        if not piece:
+            raise TeemError(f"Unexpected EOF with {remaining} bytes remaining in diffusion payload")
+        chunks.append(piece)
+        remaining -= len(piece)
+    return b"".join(chunks)
+
+
+def _nifti_payload_from_nhdr(dwi_path: Path) -> Path | None:
+    """Return the NIfTI payload path when ``dwi_path`` is a ``byteskip: -1`` NIfTI-backed ``.nhdr``."""
+    if dwi_path.suffix.lower() != ".nhdr" or not dwi_path.is_file():
+        return None
+    byteskip: str | None = None
+    data_file: str | None = None
+    kinds: list[str] = []
+    try:
+        with dwi_path.open("r", encoding="utf-8", errors="replace") as handle:
+            for _ in range(1024):
+                raw_line = handle.readline()
+                if not raw_line:
+                    break
+                line = raw_line.strip()
+                if not line:
+                    break
+                if line.startswith("#") or ":=" in line or ":" not in line:
+                    continue
+                key, _, value = line.partition(":")
+                norm_key = key.strip().lower().replace(" ", "")
+                norm_val = value.strip()
+                if norm_key in {"byteskip", "byteskip"}:
+                    byteskip = norm_val
+                elif norm_key == "datafile":
+                    data_file = norm_val
+                elif norm_key == "kinds":
+                    kinds = norm_val.lower().split()
+    except OSError:
+        return None
+    if byteskip != "-1" or not data_file or len(kinds) != 4:
+        return None
+    if kinds[3] not in {"list", "vector", "covariant-vector"} or any(k not in {"space", "domain"} for k in kinds[:3]):
+        return None
+    candidate = Path(data_file)
+    if not candidate.is_absolute():
+        candidate = dwi_path.parent / candidate
+    if not candidate.name.lower().endswith((".nii.gz", ".nii")) or not candidate.is_file():
+        return None
+    return candidate.resolve()
+
+
+def _stream_nifti_dwi_values(nifti_path: Path, expected_dims: tuple[int, int, int],
+                             expected_gradients: int) -> np.ndarray | None:
+    """Stream a 4D unscaled NIfTI payload volume-by-volume into ``(nx*ny*nz, ng)`` voxel order.
+
+    Avoids ``vtkTeemNRRDReader``'s double 4D buffer commit and ``byteskip: -1`` gzip ``ISIZE`` issues
+    on multi-gigabyte Windows volumes while preserving bit-for-bit identical voxel values and dtype.
+    """
+    import gzip
+
+    try:
+        import nibabel as nib
+    except ImportError:
+        return None
+
+    nii_img = nib.load(str(nifti_path))
+    if len(nii_img.shape) != 4:
+        return None
+    nx, ny, nz = (int(v) for v in expected_dims)
+    ng = int(expected_gradients)
+    if tuple(int(v) for v in nii_img.shape) != (nx, ny, nz, ng):
+        return None
+    dataobj = nii_img.dataobj
+    offset = getattr(dataobj, "offset", None)
+    slope = getattr(dataobj, "slope", 1.0)
+    inter = getattr(dataobj, "inter", 0.0)
+    if offset is None or int(offset) < 0:
+        return None
+    if (slope is not None and float(slope) != 1.0) or (inter is not None and float(inter) != 0.0):
+        return None
+    raw_dtype = np.dtype(nii_img.header.get_data_dtype())
+    if raw_dtype.kind not in ("i", "u", "f") or raw_dtype.itemsize < 1:
+        return None
+    native_dtype = raw_dtype.newbyteorder("=")
+    nvox = nx * ny * nz
+    vol_bytes = nvox * raw_dtype.itemsize
+    values = np.empty((nvox, ng), dtype=native_dtype)
+    opener = gzip.open if nifti_path.name.lower().endswith(".gz") else open
+    with opener(nifti_path, "rb") as stream:
+        if int(offset) > 0:
+            _read_exact(stream, int(offset))
+        for grad_index in range(ng):
+            buf = _read_exact(stream, vol_bytes)
+            values[:, grad_index] = np.frombuffer(buf, dtype=raw_dtype).astype(native_dtype, copy=False)
+    return values
+
+
 def estimate_file(dwi_path, tensor_path, baseline_path, method="WLS", shift_negative=False,
                   threads=None, log=print) -> dict:
     """DWIToDTIEstimation: read a DWI NRRD, write the tensor NRRD and the baseline NRRD."""
     vtk, vtkTeem, numpy_support, storage_node_class = _vtk_modules()
     threads = max(1, int(threads or default_threads()))
     started = time.monotonic()
-    reader = vtkTeem.vtkTeemNRRDReader()
-    reader.SetFileName(str(dwi_path))
-    reader.Update()
-    if reader.GetReadStatus():
-        raise TeemError(f"Error reading diffusion file {dwi_path}")
-    gradients, max_b, ras_to_ijk_rotation = prepare_gradients(reader, vtk, storage_node_class)
-    image = reader.GetOutput()
-    scalars = image.GetPointData().GetScalars()
-    if scalars is None or scalars.GetNumberOfComponents() != gradients.shape[0]:
-        raise TeemError("The input has to have a number of components equal to the number of gradients")
-    values = numpy_support.vtk_to_numpy(scalars)
-    values = values.reshape(-1, gradients.shape[0])
+    dwi_path_obj = Path(dwi_path)
+    nifti_payload = _nifti_payload_from_nhdr(dwi_path_obj)
+    reader = None
+    image = None
+    values = None
+    gradients = None
+    max_b = 0.0
+    ras_to_ijk_rotation = None
+
+    if nifti_payload is not None:
+        info_reader = vtkTeem.vtkTeemNRRDReader()
+        info_reader.SetFileName(str(dwi_path))
+        info_reader.UpdateInformation()
+        if not info_reader.GetReadStatus():
+            ext = info_reader.GetDataExtent()
+            dims = (ext[1] - ext[0] + 1, ext[3] - ext[2] + 1, ext[5] - ext[4] + 1)
+            if all(dim > 0 for dim in dims):
+                cand_grads, cand_max_b, cand_rot = prepare_gradients(info_reader, vtk, storage_node_class)
+                streamed = _stream_nifti_dwi_values(nifti_payload, dims, int(cand_grads.shape[0]))
+                if streamed is not None:
+                    reader = info_reader
+                    gradients, max_b, ras_to_ijk_rotation = cand_grads, cand_max_b, cand_rot
+                    image = vtk.vtkImageData()
+                    image.SetExtent(ext)
+                    image.SetSpacing(info_reader.GetDataSpacing())
+                    image.SetOrigin(info_reader.GetDataOrigin())
+                    values = streamed
+
+    if values is None:
+        reader = vtkTeem.vtkTeemNRRDReader()
+        reader.SetFileName(str(dwi_path))
+        reader.Update()
+        if reader.GetReadStatus():
+            raise TeemError(f"Error reading diffusion file {dwi_path}")
+        gradients, max_b, ras_to_ijk_rotation = prepare_gradients(reader, vtk, storage_node_class)
+        image = reader.GetOutput()
+        scalars = image.GetPointData().GetScalars()
+        if scalars is None or scalars.GetNumberOfComponents() != gradients.shape[0]:
+            raise TeemError("The input has to have a number of components equal to the number of gradients")
+        values = numpy_support.vtk_to_numpy(scalars)
+        values = values.reshape(-1, gradients.shape[0])
+
+    if values.size > 0 and not np.any(values != 0):
+        raise TeemError(
+            f"Diffusion volume {dwi_path} read as all zeros ({values.shape[0]} voxels x {values.shape[1]} gradients); "
+            "refusing to fit an empty tensor bundle"
+        )
     read_seconds = time.monotonic() - started
 
     fit_started = time.monotonic()

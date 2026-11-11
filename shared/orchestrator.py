@@ -2328,14 +2328,29 @@ def _validate_bundle_tractography_source(config: ProductOrchestratorConfig) -> N
         raise ValueError('An explicit bundle source requires both a bundle target and tractography.')
 
 
+def _uses_multi_tracking_variants(config: ProductOrchestratorConfig) -> tuple[bool, ProductOrchestratorConfig]:
+    from shared.algorithm_selection import algorithms
+    from shared.multi_tracking import SHARED
+
+    selected_algos = algorithms(config.tractography_backend)
+    if len(selected_algos) <= 1:
+        if config.tractography_backend != selected_algos[0]:
+            config = replace(config, tractography_backend=selected_algos[0])
+        return False, config
+    targets = _normalize_targets(config)
+    if not any(target not in SHARED for target in targets):
+        return False, replace(config, tractography_backend=selected_algos[0])
+    return True, config
+
+
 def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = True) -> RunPlanResult:
     """Build a target-level run plan without executing product algorithms."""
 
     config = _with_shared_bundle_resources(_with_closure(config))
-    from shared.algorithm_selection import algorithms
     _validate_bundle_tractography_source(config)
     config = _with_preprocessing_pe_decision(config)
-    if len(algorithms(config.tractography_backend)) > 1:
+    use_multi, config = _uses_multi_tracking_variants(config)
+    if use_multi:
         from shared.multi_tracking import plan
         return plan(config, write=write)
 
@@ -5723,8 +5738,8 @@ def run_subject_products(
             if found is not None:
                 config = replace(config, subject_root=found[2])
         config = _with_preprocessing_pe_decision(config)
-        from shared.algorithm_selection import algorithms
-        if len(algorithms(config.tractography_backend)) > 1:
+        use_multi, config = _uses_multi_tracking_variants(config)
+        if use_multi:
             from shared.multi_tracking import run
             return run(config, log=log)
         return _run_subject_products_impl(config, log=log)

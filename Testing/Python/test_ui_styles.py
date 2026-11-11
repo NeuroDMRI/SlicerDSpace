@@ -4,19 +4,26 @@
 from __future__ import annotations
 
 import re
+import sys
+from types import SimpleNamespace
 import unittest
+from unittest import mock
 
 from shared.ui_styles import (
     DARK_ENVIRONMENT_READY_LABEL_STYLE,
     DARK_ENVIRONMENT_RESULTS_DIALOG_STYLE,
+    DARK_INPUT_FORMAT_POPOVER_STYLE,
     DARK_RUN_STATUS_TABLE_STYLE,
     ENVIRONMENT_READY_LABEL_STYLE,
     ENVIRONMENT_RESULTS_DIALOG_STYLE,
+    INPUT_FORMAT_POPOVER_STYLE,
     RUN_STATUS_TABLE_STYLE,
     SLICERDSPACE_DARK_UI_STYLE,
     SLICERDSPACE_UI_STYLE,
+    detect_appearance_mode,
     environment_ready_label_style,
     environment_results_dialog_style,
+    input_format_popover_style,
     run_status_table_style,
     run_summary_label_style,
     ui_stylesheet,
@@ -89,6 +96,60 @@ class UIStylesTest(unittest.TestCase):
         dark_failed = run_summary_label_style("failed", dark=True)
         self.assertIn("#3B2124", dark_failed)
         self.assertIn("#FFA8A8", dark_failed)
+
+    def test_run_button_and_toolbuttons_are_bold_and_styled_in_both_themes(self) -> None:
+        for style in (SLICERDSPACE_UI_STYLE, SLICERDSPACE_DARK_UI_STYLE):
+            self.assertIn("QToolButton {", style)
+            self.assertIn("ctkCollapsibleButton {", style)
+            self.assertIn("QDialog {", style)
+            for selectors, body in re.findall(r"([^{}]+)\{([^{}]*)\}", style):
+                if "QPushButton#runSelectedButton" in [part.strip() for part in selectors.split(",")]:
+                    self.assertIn("font-size: 15px;", body)
+                    self.assertIn("font-weight: 700;", body)
+                    break
+            else:
+                self.fail("QPushButton#runSelectedButton missing")
+        self.assertEqual(input_format_popover_style(dark=False), INPUT_FORMAT_POPOVER_STYLE)
+        self.assertEqual(input_format_popover_style(dark=True), DARK_INPUT_FORMAT_POPOVER_STYLE)
+
+    def test_appearance_detection_prioritizes_application_theme_over_mutated_widget_palette(self) -> None:
+        def _pal(win_l: int, txt_l: int, base_l: int | None = None):
+            roles = {0: win_l, 1: txt_l, 2: win_l if base_l is None else base_l}
+            return SimpleNamespace(
+                color=lambda role: SimpleNamespace(lightness=lambda: roles[role], alpha=lambda: 255)
+            )
+
+        qpal = SimpleNamespace(Window=0, WindowText=1, Base=2)
+        # Widget has a dark stylesheet-mutated palette, while Slicer switched to Light Slicer / light palette
+        mutated_dark_widget = SimpleNamespace(palette=_pal(34, 230))
+        light_app = SimpleNamespace(
+            style=lambda: SimpleNamespace(objectName="Light Slicer"),
+            palette=lambda: _pal(245, 25),
+        )
+        fake_qt_light = SimpleNamespace(QPalette=qpal, QApplication=SimpleNamespace(instance=lambda: light_app))
+        with mock.patch.dict(sys.modules, {"qt": fake_qt_light}):
+            self.assertEqual(detect_appearance_mode(mutated_dark_widget), "light")
+
+        # Generic style name ("Slicer") falls back to QApplication.palette(), not mutated widget.palette
+        generic_light_app = SimpleNamespace(
+            style=lambda: SimpleNamespace(objectName="Slicer"),
+            palette=lambda: _pal(245, 25),
+        )
+        fake_qt_generic = SimpleNamespace(
+            QPalette=qpal, QApplication=SimpleNamespace(instance=lambda: generic_light_app)
+        )
+        with mock.patch.dict(sys.modules, {"qt": fake_qt_generic}):
+            self.assertEqual(detect_appearance_mode(mutated_dark_widget), "light")
+
+        # Dark Slicer resolves to dark even if widget has light palette
+        light_widget = SimpleNamespace(palette=_pal(250, 20))
+        dark_app = SimpleNamespace(
+            style=lambda: SimpleNamespace(objectName="Dark Slicer"),
+            palette=lambda: _pal(45, 235),
+        )
+        fake_qt_dark = SimpleNamespace(QPalette=qpal, QApplication=SimpleNamespace(instance=lambda: dark_app))
+        with mock.patch.dict(sys.modules, {"qt": fake_qt_dark}):
+            self.assertEqual(detect_appearance_mode(light_widget), "dark")
 
 
 if __name__ == "__main__":

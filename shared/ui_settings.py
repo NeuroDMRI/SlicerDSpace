@@ -26,8 +26,10 @@ def consume_user_defaults_request(node: Any) -> bool:
 
 COMMON_USER_SETTING_SPECS: tuple[tuple[str, type], ...] = (
     ("subjectId", str),
+    ("inputFormat", str),
     ("inputDirectory", str),
     ("outputDirectory", str),
+    ("orchestrationPreprocessingStages", str),
     ("orchestrationRunName", str),
     ("orchestrationTractographyBackend", str),
     ("ukfParameters", str),
@@ -39,6 +41,7 @@ COMMON_USER_SETTING_SPECS: tuple[tuple[str, type], ...] = (
     ("orchestrationMicrostructureStages", str),
     ("orchestrationIfwEchoTimeMs", str),
     ("connectomeBackend", str),
+    ("orchestrationConnectomeMetrics", str),
     ("connectomeCompressMrtrixDenseState", str),
     ("autoInstallPythonDependencies", bool),
     ("batchMode", bool),

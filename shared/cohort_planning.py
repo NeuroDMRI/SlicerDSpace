@@ -120,13 +120,20 @@ def cohort_phase_encoding_blocks(subjects, arguments, *, selected=None, output_r
 
     if 'preprocessing' not in (selected_stages(arguments) if selected is None else selected):
         return {}
+    has_reverse = bool(_option(arguments, '--preprocessing-reverse-phase-b0'))
+    preproc_stages_text = (_option(arguments, '--preprocessing-stages') or '').strip()
+    if preproc_stages_text:
+        from shared.algorithm_selection import PREPROCESSING, algorithms
+        chosen_preproc = algorithms(preproc_stages_text, PREPROCESSING, 'denoise,eddy,topup')
+        has_reverse = has_reverse and ('topup' in chosen_preproc)
+        if 'eddy' not in chosen_preproc and not has_reverse:
+            return {}
     direction = _option(arguments, '--preprocessing-phase-encoding-direction') or None
     readout = _option(arguments, '--preprocessing-readout-time')
     try:
         readout = float(readout) if readout else None
     except ValueError:
         readout = None  # the subject command reports a bad value
-    has_reverse = bool(_option(arguments, '--preprocessing-reverse-phase-b0'))
     blocks = {}
     for subject in subjects:
         reason = phase_encoding_block_reason(subject.subject_root, user_phase_encoding=direction,

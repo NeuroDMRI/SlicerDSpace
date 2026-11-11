@@ -80,10 +80,17 @@ class TopupValidation:
         return not self.errors
 
 
-def route_uses_topup(preprocessing_selected: bool = True) -> bool:
-    """True when the topup fields apply (and should be shown)."""
+def route_uses_topup(preprocessing_selected: bool = True, preprocessing_stages: Optional[str] = None) -> bool:
+    """True when the topup / eddy PE fields apply (and should be shown)."""
 
-    return bool(preprocessing_selected)
+    if not preprocessing_selected:
+        return False
+    text = (preprocessing_stages or "").strip()
+    if not text:
+        return True
+    from shared.algorithm_selection import PREPROCESSING, algorithms
+    stages = algorithms(text, PREPROCESSING, "denoise,eddy,topup")
+    return bool({"eddy", "topup"} & set(stages))
 
 
 def normalize_phase_encoding_direction(value: Any) -> Optional[str]:
@@ -160,6 +167,7 @@ def validate_topup_parameters(
     batch_mode: bool = False,
     subject_root: Any = None,
     output_root: Any = None,
+    preprocessing_stages: Optional[str] = None,
 ) -> TopupValidation:
     """Validate the three GUI fields for the preprocessing route.
 
@@ -173,7 +181,7 @@ def validate_topup_parameters(
     subject by the cohort plan.
     """
 
-    if not route_uses_topup(preprocessing_selected):
+    if not route_uses_topup(preprocessing_selected, preprocessing_stages):
         return TopupValidation(parameters=TopupParameters())
 
     errors: list[str] = []
@@ -213,15 +221,27 @@ def validate_topup_parameters(
         else:
             reverse_path = candidate
 
-    if subject_root is not None and not batch_mode and not errors:
+    stages_text = (preprocessing_stages or "").strip()
+    eddy_or_reverse_needed = True
+    effective_has_reverse = bool(reverse_text)
+    if stages_text:
+        from shared.algorithm_selection import PREPROCESSING, algorithms
+        chosen_stages = algorithms(stages_text, PREPROCESSING, "denoise,eddy,topup")
+        effective_has_reverse = bool(reverse_text) and ("topup" in chosen_stages)
+        eddy_or_reverse_needed = ("eddy" in chosen_stages) or effective_has_reverse
+
+    if subject_root is not None and not batch_mode and not errors and eddy_or_reverse_needed:
         from shared.pe_resolution import phase_encoding_block_reason
 
+        root_path = Path(str(subject_root)).expanduser()
+        if root_path.is_file():
+            root_path = root_path.parent
         # F5: the orchestrator reuses selected preprocessing only by the full version-6 key of the current settings, and
         # that key holds the effective PE direction. With no direction there is no matching key, so no outputs of an
         # earlier run (version 5 or 6) make the run possible: the block does not depend on earlier outputs.
         blocked = phase_encoding_block_reason(
-            Path(str(subject_root)).expanduser(), user_phase_encoding=pe_direction, user_readout_time=readout,
-            has_reverse_b0=bool(reverse_text))
+            root_path, user_phase_encoding=pe_direction, user_readout_time=readout,
+            has_reverse_b0=effective_has_reverse)
         if blocked:
             errors.append(blocked)
     if pe_direction is None and not errors:

@@ -98,6 +98,7 @@ class ProductOrchestratorConfig:
     preprocessing_readout_time: Optional[float] = None
     preprocessing_eddy_threads: Optional[int] = None
     preprocessing_eddy_second_level_model: Optional[str] = None
+    preprocessing_stages: Optional[str] = None
     microstructure_fit_method: str = "wls"
     microstructure_run_free_water: bool = False
     microstructure_run_noddi: bool = False
@@ -161,6 +162,7 @@ class ProductOrchestratorConfig:
     wmql_python_executable: Optional[Path] = None
     connectome_backend: str = "auto"
     connectome_compress_mrtrix_dense: Optional[bool] = None
+    connectome_metrics: Optional[str] = None
     saf_fs_dir: Optional[Path] = None
     saf_pregenerated_tractogram: Optional[Path] = None
     saf_tckgen_options: str = ""
@@ -620,6 +622,7 @@ def orchestrator_closure(
     microstructure_run_noddi: bool = False,
     microstructure_run_dki: bool = False,
     microstructure_run_ifw: bool = False,
+    microstructure_run_dti: bool = True,
     wma_source_explicit: bool = False,
     provided_tractography: tuple[str, ...] = (),
     excluded: tuple[str, ...] = (),
@@ -635,6 +638,7 @@ def orchestrator_closure(
         microstructure_noddi=microstructure_run_noddi,
         microstructure_dki=microstructure_run_dki,
         microstructure_ifw=microstructure_run_ifw,
+        microstructure_dti=microstructure_run_dti,
         wma_source_explicit=wma_source_explicit,
         provided_tractography=provided_tractography,
         excluded=excluded,
@@ -1100,6 +1104,10 @@ def _task_name_for_target(target: str, config: ProductOrchestratorConfig) -> str
     if target == "bundles":
         return "bundles.wmql"
     if target == "connectome":
+        _, run_sift2 = _resolved_connectome_flags(config, _primary_tractography_backend(config))
+        run_fiber_count, _ = _resolved_connectome_flags(config, _primary_tractography_backend(config))
+        if run_sift2 and not run_fiber_count:
+            return "connectome.sift2_weighted"
         return "connectome.streamline_count"
     if target == "saf":
         return "tractography.saf"
@@ -1214,7 +1222,58 @@ def _preprocessing_outputs(subject_root: Path, subject_id: str, output_root: Opt
     }
 
 
-def _preprocessing_config(config: ProductOrchestratorConfig, subject_root: Path, output_dir: Path):
+def _resolved_preprocessing_stages(config: ProductOrchestratorConfig) -> Optional[tuple[str, ...]]:
+    if config.preprocessing_stages is None:
+        return None
+    text = str(config.preprocessing_stages).strip()
+    if not text:
+        return None
+    from shared.algorithm_selection import PREPROCESSING, algorithms
+    return algorithms(text, PREPROCESSING, "denoise,eddy,topup")
+
+
+def _has_user_supplied_mask(subject_root: Path) -> bool:
+    mask_path = _resolve_raw_inputs(subject_root)["mask"]
+    return mask_path.is_file() and not mask_path.with_name("nodif_brain_mask.manifest.json").is_file()
+
+
+def _effective_preprocessing_mask_backend(
+    config: ProductOrchestratorConfig,
+    subject_root: Path,
+    *,
+    mask_supplied: Optional[bool] = None,
+) -> str:
+    stages = _resolved_preprocessing_stages(config)
+    if stages is None:
+        return config.brain_mask_backend
+    if "brain_mask" in stages:
+        return "pnl_cnn"
+    if mask_supplied is None:
+        mask_supplied = _has_user_supplied_mask(subject_root)
+    return "provided" if mask_supplied else "pnl_cnn"
+
+
+def _resolved_connectome_flags(
+    config: ProductOrchestratorConfig,
+    primary_tractography_backend: str,
+) -> tuple[bool, bool]:
+    """Return ``(run_fiber_count, run_sift2)`` for the selected connectome mode."""
+    if config.connectome_metrics is None or not str(config.connectome_metrics).strip():
+        return True, primary_tractography_backend == "csd_act"
+    from shared.algorithm_selection import CONNECTOME, algorithms
+    metrics = algorithms(config.connectome_metrics, CONNECTOME, "sift2")
+    if primary_tractography_backend == "csd_act":
+        return ("fiber_count" in metrics), ("sift2" in metrics)
+    return True, False
+
+
+def _preprocessing_config(
+    config: ProductOrchestratorConfig,
+    subject_root: Path,
+    output_dir: Path,
+    *,
+    mask_supplied: Optional[bool] = None,
+):
     from preprocessing import DwiPreprocessingConfig
     from shared.preprocessing_route import resolve_preprocessing_execution_backend
 
@@ -1222,10 +1281,15 @@ def _preprocessing_config(config: ProductOrchestratorConfig, subject_root: Path,
     mrtrix_bin_dir = config.preprocessing_mrtrix_bin_dir
     if execution_backend == "native" and mrtrix_bin_dir is None:
         mrtrix_bin_dir = config.mrtrix_bin_dir
+    stages = _resolved_preprocessing_stages(config)
+    run_denoise = True if stages is None else ("denoise" in stages)
+    run_eddy = True if stages is None else ("eddy" in stages)
+    run_topup = True if stages is None else ("topup" in stages)
+    mask_backend = _effective_preprocessing_mask_backend(config, subject_root, mask_supplied=mask_supplied)
     return DwiPreprocessingConfig(
         subject_id=config.subject_id, input_root=subject_root, output_dir=output_dir,
         execute=True, skip=False,
-        brain_mask_backend=config.brain_mask_backend,
+        brain_mask_backend=mask_backend,
         brain_mask_device=config.brain_mask_device,
         pnl_mask_python=config.pnl_mask_python,
         pnl_mask_script=config.pnl_mask_script,
@@ -1242,6 +1306,9 @@ def _preprocessing_config(config: ProductOrchestratorConfig, subject_root: Path,
         readout_time=config.preprocessing_readout_time,
         eddy_threads=config.preprocessing_eddy_threads,
         eddy_second_level_model=config.preprocessing_eddy_second_level_model,
+        run_denoise=run_denoise,
+        run_eddy=run_eddy,
+        run_topup=run_topup,
     )
 
 
@@ -1285,11 +1352,15 @@ def _preprocessing_pe_block(config: ProductOrchestratorConfig, subject_root: Pat
     """Rule 4 (T1 D1): the message when preprocessing of this subject would run with no PE direction; else None."""
     from shared.pe_resolution import phase_encoding_block_reason
 
+    stages = _resolved_preprocessing_stages(config)
+    has_reverse_b0 = config.preprocessing_reverse_phase_b0 is not None and (stages is None or "topup" in stages)
+    if stages is not None and "eddy" not in stages and not has_reverse_b0:
+        return None
     return phase_encoding_block_reason(
         subject_root,
         user_phase_encoding=config.preprocessing_phase_encoding_direction,
         user_readout_time=config.preprocessing_readout_time,
-        has_reverse_b0=config.preprocessing_reverse_phase_b0 is not None,
+        has_reverse_b0=has_reverse_b0,
     )
 
 
@@ -2301,7 +2372,12 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
         for target, reason in (config.preflight_blocked_targets or {}).items()
         if target in selected and reason
     }
-    subject_root = config.subject_root.expanduser().resolve()
+    from shared.pipeline import resolve_subject_root_dir
+    subject_root = resolve_subject_root_dir(config.subject_root, config.subject_id).expanduser().resolve()
+    from shared.convertible_input import find_convertible_input
+    convertible = find_convertible_input(subject_root)
+    if convertible is not None:
+        subject_root = convertible[2]
     output_root = config.output_root.expanduser().resolve() if config.output_root is not None else None
     layout = subject_layout(subject_root, output_root=output_root)
     run_name = normalize_run_name(config.run_name)
@@ -2318,7 +2394,13 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
         except FileNotFoundError as exc:
             dicom_error = str(exc)
         raw_missing = ["mask"]
-    mask_can_be_generated = raw_missing == ["mask"] and mask_backend["available"] and config.brain_mask_backend != "provided"
+    elif raw_missing and convertible is not None:
+        has_conv_mask = "mask_path" in convertible[3] or raw["mask"].is_file()
+        raw_missing = [] if has_conv_mask else ["mask"]
+    effective_plan_mask_backend = (
+        "pnl_cnn" if _resolved_preprocessing_stages(config) is not None else config.brain_mask_backend
+    )
+    mask_can_be_generated = raw_missing == ["mask"] and mask_backend["available"] and effective_plan_mask_backend != "provided"
     if mask_can_be_generated:
         raw_missing = []
     model_assets_dir = config.model_assets_dir.expanduser().resolve() if config.model_assets_dir is not None else None
@@ -2483,8 +2565,9 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
                 config=config,
             )
         if target == "connectome":
+            run_fc, run_s2 = _resolved_connectome_flags(config, primary_tractography_backend)
             connectome_stem = f"{config.subject_id}-connectome-streamline_count"
-            return _connectome_complete(
+            fc_done = _connectome_complete(
                 connectome_dir / f"{connectome_stem}_qc.json",
                 connectome_dir / f"{connectome_stem}.csv",
                 connectome_dir / f"{config.subject_id}-connectome-nodes.tsv",
@@ -2494,6 +2577,22 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
                 backend=config.connectome_backend,
                 compress_mrtrix_dense=config.connectome_compress_mrtrix_dense,
             )
+            if config.connectome_metrics is None or not str(config.connectome_metrics).strip():
+                return fc_done
+            sift2_stem = f"{config.subject_id}-connectome-sift2_weighted_streamline_count"
+            s2_done = sift2_weights.is_file() and _connectome_complete(
+                sift2_connectome_dir / f"{sift2_stem}_qc.json",
+                sift2_connectome_dir / f"{sift2_stem}.csv",
+                sift2_connectome_dir / f"{config.subject_id}-connectome-nodes.tsv",
+                manifest_path=sift2_connectome_dir / f"{sift2_stem}_manifest.json",
+                tractography=tractogram,
+                parcellation=parcellation,
+                sift2_weights=sift2_weights,
+                backend=config.connectome_backend,
+                compress_mrtrix_dense=config.connectome_compress_mrtrix_dense,
+                metric="sift2_weighted_streamline_count",
+            )
+            return (not run_fc or fc_done) and (not run_s2 or s2_done)
         return False
 
     def add(
@@ -2966,30 +3065,37 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
             continue
 
         if target == "connectome":
-            conn_qc = connectome_dir / f"{config.subject_id}-connectome-streamline_count_qc.json"
-            conn_matrix = connectome_dir / f"{config.subject_id}-connectome-streamline_count.csv"
-            conn_nodes = connectome_dir / f"{config.subject_id}-connectome-nodes.tsv"
-            conn_outputs = {
-                "qc": conn_qc,
-                "manifest": connectome_dir / f"{config.subject_id}-connectome-streamline_count_manifest.json",
-                "matrix": conn_matrix,
-                "nodes": conn_nodes,
-                "output_dir": connectome_dir,
-                "sift2_output_dir": sift2_connectome_dir,
-            }
+            run_fc, run_s2 = _resolved_connectome_flags(config, primary_tractography_backend)
+            sift2_only = run_s2 and not run_fc
+            if sift2_only:
+                sift2_stem = f"{config.subject_id}-connectome-sift2_weighted_streamline_count"
+                conn_qc = sift2_connectome_dir / f"{sift2_stem}_qc.json"
+                conn_matrix = sift2_connectome_dir / f"{sift2_stem}.csv"
+                conn_nodes = sift2_connectome_dir / f"{config.subject_id}-connectome-nodes.tsv"
+                conn_outputs = {
+                    "qc": conn_qc,
+                    "manifest": sift2_connectome_dir / f"{sift2_stem}_manifest.json",
+                    "matrix": conn_matrix,
+                    "nodes": conn_nodes,
+                    "output_dir": sift2_connectome_dir,
+                    "sift2_output_dir": sift2_connectome_dir,
+                }
+            else:
+                conn_qc = connectome_dir / f"{config.subject_id}-connectome-streamline_count_qc.json"
+                conn_matrix = connectome_dir / f"{config.subject_id}-connectome-streamline_count.csv"
+                conn_nodes = connectome_dir / f"{config.subject_id}-connectome-nodes.tsv"
+                conn_outputs = {
+                    "qc": conn_qc,
+                    "manifest": connectome_dir / f"{config.subject_id}-connectome-streamline_count_manifest.json",
+                    "matrix": conn_matrix,
+                    "nodes": conn_nodes,
+                    "output_dir": connectome_dir,
+                    "sift2_output_dir": sift2_connectome_dir if run_s2 else None,
+                }
             parcellation_ready = parcellation is not None or available.get("parcellation", False)
             tractogram_ready = (available.get('tractography', False) if primary_tractography_backend == 'ukf'
                                 else tractogram.is_file() or available.get("tractography", False))
-            if config.resume and ukf_cached and _connectome_complete(
-                conn_qc,
-                conn_matrix,
-                conn_nodes,
-                manifest_path=conn_outputs["manifest"],
-                tractography=tractogram,
-                parcellation=parcellation,
-                backend=config.connectome_backend,
-                compress_mrtrix_dense=config.connectome_compress_mrtrix_dense,
-            ):
+            if config.resume and ukf_cached and target_completed("connectome"):
                 add(target, "skipped", "completed outputs found", "reuse", outputs=conn_outputs)
             elif not parcellation_ready:
                 add(target, "blocked", _upstream_reason(selected, "parcellation", "missing parcellation; select parcellation or provide existing output"), "upstream", outputs=conn_outputs, dependencies={"parcellation": "missing"}, provides=False)
@@ -3662,7 +3768,10 @@ def _run_subject_products_impl(
         raise ValueError("connectome_backend must be one of: auto, python, mrtrix.")
 
     targets = _normalize_targets(config)
-    subject_root = config.subject_root.expanduser().resolve()
+    from shared.pipeline import resolve_subject_root_dir
+    subject_root = resolve_subject_root_dir(config.subject_root, config.subject_id).expanduser().resolve()
+    if subject_root != config.subject_root:
+        config = replace(config, subject_root=subject_root)
     output_root = config.output_root.expanduser().resolve() if config.output_root is not None else None
     layout = subject_layout(subject_root, output_root=output_root)
     run_name = normalize_run_name(config.run_name)
@@ -3702,7 +3811,10 @@ def _run_subject_products_impl(
     input_started = time.monotonic()
     materialize_canonical_output_tree(subject_root, output_root=output_root, mode="symlink", archive_legacy=False)
     from shared.brain_mask import brain_mask_config_from_options
+    had_user_mask = _has_user_supplied_mask(subject_root)
     selected_mask_config = brain_mask_config_from_options(config)
+    if _resolved_preprocessing_stages(config) is not None and not had_user_mask and selected_mask_config.backend == "provided":
+        selected_mask_config = replace(selected_mask_config, backend="pnl_cnn")
     initial_raw = _resolve_raw_inputs(subject_root)
     mask_failure = ""
     if (
@@ -3743,7 +3855,7 @@ def _run_subject_products_impl(
                 input_root=subject_root,
                 output_dir=layout.run_metadata / "validation",
                 dependency_groups=("core",),
-                brain_mask_backend=config.brain_mask_backend,
+                brain_mask_backend=selected_mask_config.backend,
                 brain_mask_device=config.brain_mask_device,
                 pnl_mask_python=config.pnl_mask_python,
                 pnl_mask_script=config.pnl_mask_script,
@@ -3815,7 +3927,7 @@ def _run_subject_products_impl(
 
             _emit("[Orchestrator] Running DWI preprocessing", log)
             result = run_dwi_preprocessing(
-                _preprocessing_config(config, subject_root, layout.preproc),
+                _preprocessing_config(config, subject_root, layout.preproc, mask_supplied=had_user_mask),
                 log=log,
             )
             tasks.append(
@@ -5121,68 +5233,61 @@ def _run_subject_products_impl(
                 tasks.append(_task_from_result("bundles.tractcloud", result))
 
     if "connectome" in run_targets:
+        run_fiber_count, run_sift2 = _resolved_connectome_flags(config, primary_tractography_backend)
+        explicit_connectome_metrics = config.connectome_metrics is not None and bool(str(config.connectome_metrics).strip())
+        if explicit_connectome_metrics and primary_tractography_backend != "csd_act":
+            from shared.algorithm_selection import CONNECTOME, algorithms
+            chosen_metrics = algorithms(config.connectome_metrics, CONNECTOME, "sift2")
+            if "sift2" in chosen_metrics and "fiber_count" not in chosen_metrics:
+                _emit(
+                    f"[Orchestrator] SIFT2 connectome requires CSD/ACT weights; computing fiber-count connectome for {primary_tractography_backend}.",
+                    log,
+                )
         weighted_connectome_handled = False
-        conn_qc = connectome_dir / f"{config.subject_id}-connectome-streamline_count_qc.json"
-        conn_matrix = connectome_dir / f"{config.subject_id}-connectome-streamline_count.csv"
-        conn_nodes = connectome_dir / f"{config.subject_id}-connectome-nodes.tsv"
-        conn_manifest = connectome_dir / f"{config.subject_id}-connectome-streamline_count_manifest.json"
-        if ukf_upstream_invalid:
-            tasks.append(ProductTaskRecord(name='connectome.streamline_count', status='blocked', reason='current UKF run is not QC-valid'))
-        elif config.resume and _connectome_complete(
-            conn_qc,
-            conn_matrix,
-            conn_nodes,
-            manifest_path=conn_manifest,
-            tractography=tractogram,
-            parcellation=parcellation,
-            backend=config.connectome_backend,
-            compress_mrtrix_dense=config.connectome_compress_mrtrix_dense,
-        ):
-            tasks.append(ProductTaskRecord(
-                name="connectome.streamline_count", status="skipped", reason="completed outputs found",
-                qc_path=conn_qc, manifest_path=conn_manifest,
-                outputs={"matrix_path": conn_matrix.as_posix(), "nodes_path": conn_nodes.as_posix()},
-            ))
-        elif not config.execute:
-            tasks.append(ProductTaskRecord(name="connectome.streamline_count", status="planned", reason="execute=False"))
-        elif parcellation is None:
-            tasks.append(ProductTaskRecord(name="connectome.streamline_count", status="blocked", reason="missing parcellation"))
-        elif primary_tractography_backend == "csd_act" and not tractogram.is_file():
-            tasks.append(ProductTaskRecord(name="connectome.streamline_count", status="blocked", reason="missing TCK tractogram"))
-        elif primary_tractography_backend != "csd_act" and config.connectome_backend == "mrtrix":
-            tasks.append(ProductTaskRecord(name="connectome.streamline_count", status="blocked", reason="UKF/DTI tractography currently supports python connectome backend only"))
-        elif not tractogram.is_file():
-            tasks.append(ProductTaskRecord(name="connectome.streamline_count", status="blocked", reason="missing tractogram"))
-        else:
-            from connectome import ConnectomeConfig, run_connectome
+        if run_fiber_count:
+            conn_qc = connectome_dir / f"{config.subject_id}-connectome-streamline_count_qc.json"
+            conn_matrix = connectome_dir / f"{config.subject_id}-connectome-streamline_count.csv"
+            conn_nodes = connectome_dir / f"{config.subject_id}-connectome-nodes.tsv"
+            conn_manifest = connectome_dir / f"{config.subject_id}-connectome-streamline_count_manifest.json"
+            if ukf_upstream_invalid:
+                tasks.append(ProductTaskRecord(name='connectome.streamline_count', status='blocked', reason='current UKF run is not QC-valid'))
+            elif config.resume and _connectome_complete(
+                conn_qc,
+                conn_matrix,
+                conn_nodes,
+                manifest_path=conn_manifest,
+                tractography=tractogram,
+                parcellation=parcellation,
+                backend=config.connectome_backend,
+                compress_mrtrix_dense=config.connectome_compress_mrtrix_dense,
+            ):
+                tasks.append(ProductTaskRecord(
+                    name="connectome.streamline_count", status="skipped", reason="completed outputs found",
+                    qc_path=conn_qc, manifest_path=conn_manifest,
+                    outputs={"matrix_path": conn_matrix.as_posix(), "nodes_path": conn_nodes.as_posix()},
+                ))
+            elif not config.execute:
+                tasks.append(ProductTaskRecord(name="connectome.streamline_count", status="planned", reason="execute=False"))
+            elif parcellation is None:
+                tasks.append(ProductTaskRecord(name="connectome.streamline_count", status="blocked", reason="missing parcellation"))
+            elif primary_tractography_backend == "csd_act" and not tractogram.is_file():
+                tasks.append(ProductTaskRecord(name="connectome.streamline_count", status="blocked", reason="missing TCK tractogram"))
+            elif primary_tractography_backend != "csd_act" and config.connectome_backend == "mrtrix":
+                tasks.append(ProductTaskRecord(name="connectome.streamline_count", status="blocked", reason="UKF/DTI tractography currently supports python connectome backend only"))
+            elif not tractogram.is_file():
+                tasks.append(ProductTaskRecord(name="connectome.streamline_count", status="blocked", reason="missing tractogram"))
+            else:
+                from connectome import ConnectomeConfig, run_connectome
 
-            _emit(f"[Orchestrator] Running connectome {run_name}", log)
-            task_started = _start_task_timer(f"connectome {run_name}", log)
-            result = run_connectome(
-                ConnectomeConfig(
-                    subject_id=config.subject_id,
-                    tractography_path=tractogram,
-                    parcellation_path=parcellation,
-                    output_dir=connectome_dir,
-                    metric="streamline_count",
-                    backend=config.connectome_backend,
-                    mrtrix_bin_dir=config.mrtrix_bin_dir,
-                    compress_mrtrix_dense=config.connectome_compress_mrtrix_dense,
-                    execute=True,
-                ),
-                log=log,
-            )
-            _finish_task_timer(f"connectome {run_name}", task_started, log)
-            tasks.append(_task_from_result("connectome.streamline_count", result))
-            if primary_tractography_backend == 'csd_act' and sift2_weights.is_file():
-                weighted = run_connectome(
+                _emit(f"[Orchestrator] Running connectome {run_name}", log)
+                task_started = _start_task_timer(f"connectome {run_name}", log)
+                result = run_connectome(
                     ConnectomeConfig(
                         subject_id=config.subject_id,
                         tractography_path=tractogram,
                         parcellation_path=parcellation,
-                        output_dir=sift2_connectome_dir,
-                        metric="sift2_weighted_streamline_count",
-                        sift2_weights_path=sift2_weights,
+                        output_dir=connectome_dir,
+                        metric="streamline_count",
                         backend=config.connectome_backend,
                         mrtrix_bin_dir=config.mrtrix_bin_dir,
                         compress_mrtrix_dense=config.connectome_compress_mrtrix_dense,
@@ -5190,14 +5295,38 @@ def _run_subject_products_impl(
                     ),
                     log=log,
                 )
-                tasks.append(_task_from_result("connectome.sift2_weighted", weighted))
-                weighted_connectome_handled = True
+                _finish_task_timer(f"connectome {run_name}", task_started, log)
+                tasks.append(_task_from_result("connectome.streamline_count", result))
+                if run_sift2 and primary_tractography_backend == 'csd_act' and sift2_weights.is_file():
+                    weighted = run_connectome(
+                        ConnectomeConfig(
+                            subject_id=config.subject_id,
+                            tractography_path=tractogram,
+                            parcellation_path=parcellation,
+                            output_dir=sift2_connectome_dir,
+                            metric="sift2_weighted_streamline_count",
+                            sift2_weights_path=sift2_weights,
+                            backend=config.connectome_backend,
+                            mrtrix_bin_dir=config.mrtrix_bin_dir,
+                            compress_mrtrix_dense=config.connectome_compress_mrtrix_dense,
+                            execute=True,
+                        ),
+                        log=log,
+                    )
+                    tasks.append(_task_from_result("connectome.sift2_weighted", weighted))
+                    weighted_connectome_handled = True
 
-        if not weighted_connectome_handled and primary_tractography_backend == 'csd_act' and sift2_weights.is_file():
+        sift2_should_run = (
+            not weighted_connectome_handled
+            and run_sift2
+            and primary_tractography_backend == 'csd_act'
+            and (sift2_weights.is_file() or (explicit_connectome_metrics and not run_fiber_count))
+        )
+        if sift2_should_run:
             sift2_qc = sift2_connectome_dir / f"{config.subject_id}-connectome-sift2_weighted_streamline_count_qc.json"
             sift2_matrix = sift2_connectome_dir / f"{config.subject_id}-connectome-sift2_weighted_streamline_count.csv"
             sift2_nodes = sift2_connectome_dir / f"{config.subject_id}-connectome-nodes.tsv"
-            if config.resume and _connectome_complete(
+            if sift2_weights.is_file() and config.resume and _connectome_complete(
                 sift2_qc,
                 sift2_matrix,
                 sift2_nodes,
@@ -5225,9 +5354,14 @@ def _run_subject_products_impl(
                 tasks.append(ProductTaskRecord(name="connectome.sift2_weighted", status="blocked", reason="missing parcellation"))
             elif not tractogram.is_file():
                 tasks.append(ProductTaskRecord(name="connectome.sift2_weighted", status="blocked", reason="missing TCK tractogram"))
+            elif not sift2_weights.is_file():
+                tasks.append(ProductTaskRecord(name="connectome.sift2_weighted", status="blocked", reason="missing SIFT2 weights"))
             else:
                 from connectome import ConnectomeConfig, run_connectome
 
+                if not run_fiber_count:
+                    _emit(f"[Orchestrator] Running connectome {run_name}", log)
+                    task_started = _start_task_timer(f"connectome {run_name}", log)
                 weighted = run_connectome(
                     ConnectomeConfig(
                         subject_id=config.subject_id,
@@ -5243,6 +5377,8 @@ def _run_subject_products_impl(
                     ),
                     log=log,
                 )
+                if not run_fiber_count:
+                    _finish_task_timer(f"connectome {run_name}", task_started, log)
                 tasks.append(_task_from_result("connectome.sift2_weighted", weighted))
 
     execution_seconds = time.monotonic() - execution_started
@@ -5379,6 +5515,7 @@ def _run_subject_products_impl(
         "preprocessing_readout_time": config.preprocessing_readout_time,
         "preprocessing_eddy_threads": config.preprocessing_eddy_threads,
         "preprocessing_eddy_second_level_model": config.preprocessing_eddy_second_level_model,
+        **({"preprocessing_stages": config.preprocessing_stages} if config.preprocessing_stages is not None else {}),
         "microstructure_fit_method": config.microstructure_fit_method,
         "microstructure_run_free_water": config.microstructure_run_free_water,
         "microstructure_run_noddi": config.microstructure_run_noddi,
@@ -5441,6 +5578,7 @@ def _run_subject_products_impl(
         "anatomy_input": "preprocessed DWI when preprocessing completed, else raw input (DDSeg/DDParcel/DDSurfer)",
         "connectome_backend": config.connectome_backend,
         "connectome_compress_mrtrix_dense": config.connectome_compress_mrtrix_dense,
+        **({"connectome_metrics": config.connectome_metrics} if config.connectome_metrics is not None else {}),
         "saf_fs_dir": config.saf_fs_dir.expanduser().resolve().as_posix() if config.saf_fs_dir else None,
         "saf_pregenerated_tractogram": config.saf_pregenerated_tractogram.expanduser().resolve().as_posix() if config.saf_pregenerated_tractogram else None,
         "saf_surface_space": "native_dMRI",
@@ -5552,12 +5690,38 @@ def run_subject_products(
             # Plan-only runs keep stdout as pure JSON, so the notice is written for real runs only.
             _emit("[Targets] " + notice, log)
         _validate_bundle_tractography_source(config)
+        from shared.pipeline import resolve_subject_root_dir
+        resolved_subject_root = resolve_subject_root_dir(config.subject_root, config.subject_id)
+        if resolved_subject_root != config.subject_root:
+            config = replace(config, subject_root=resolved_subject_root)
+        from shared.convertible_input import find_convertible_input, prepare_convertible_root
         if config.execute:
             if not config.subject_id.strip() or config.select_streamlines <= 0:
                 raise ValueError("subject_id is required and select_streamlines must be positive")
             _normalize_targets(config)
             from shared.dicom_input import prepare_dicom_root
             prepare_dicom_root(config.subject_root, config.subject_id, dwiconvert=config.dwiconvert_executable, log=log)
+            if find_convertible_input(config.subject_root) is not None:
+                mrconvert_exe = None
+                if config.mrtrix_bin_dir is not None:
+                    candidate = Path(config.mrtrix_bin_dir).expanduser() / (
+                        "mrconvert.exe" if os.name == "nt" else "mrconvert"
+                    )
+                    if candidate.is_file():
+                        mrconvert_exe = candidate
+                prepared_root = prepare_convertible_root(
+                    config.subject_root,
+                    config.subject_id,
+                    dwiconvert=config.dwiconvert_executable,
+                    mrconvert=mrconvert_exe,
+                    log=log,
+                )
+                if prepared_root != config.subject_root.expanduser().resolve():
+                    config = replace(config, subject_root=prepared_root)
+        elif config.subject_root.expanduser().is_file():
+            found = find_convertible_input(config.subject_root)
+            if found is not None:
+                config = replace(config, subject_root=found[2])
         config = _with_preprocessing_pe_decision(config)
         from shared.algorithm_selection import algorithms
         if len(algorithms(config.tractography_backend)) > 1:

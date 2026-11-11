@@ -92,9 +92,129 @@ def _layout_or_fallback(owner: Any, name: str):
 
 # --------------------------------------------------------------------------- run
 
+_STAGE_ICON_PIXMAP_CACHE: dict[tuple[str, bool], Any] = {}
+
+
+def _stage_count_text(owner: Any, done: int, total: int, *, state: str, has_data: bool) -> str:
+    lang = str(getattr(owner, "_onboardingLanguage", "en") or "en").lower()
+    is_zh = lang.startswith("zh")
+    if has_data and total > 0:
+        if is_zh:
+            return f"{done} / {total} 阶段"
+        return progress_bar_format(done, total)
+    if state == "idle":
+        return ""
+    if state == "preflight":
+        return "环境检查中…" if is_zh else "Checking…"
+    if state == "running":
+        return "准备运行…" if is_zh else "Preparing…"
+    fallback_zh = {
+        "completed": "已完成",
+        "completed_with_blocks": "部分受阻",
+        "cancelled": "已取消",
+        "failed": "运行出错",
+    }
+    if is_zh and state in fallback_zh:
+        return fallback_zh[state]
+    return run_state_presentation(state).label
+
+
+def _stage_icon_svg(glyph: str, accent: str, *, dark: bool) -> bytes:
+    if glyph == "run":
+        fill_hex = "#2DD4BF" if dark else "#0D9488"
+        fill_op = "0.18" if dark else "0.13"
+        body = (
+            f'<circle cx="8" cy="8" r="6.6" fill="{fill_hex}" fill-opacity="{fill_op}" '
+            f'stroke="{accent}" stroke-width="1.6"/>'
+            f'<polygon points="6.4,5.0 11.2,8.0 6.4,11.0" fill="{fill_hex}"/>'
+        )
+    elif glyph == "check":
+        body = (
+            f'<circle cx="8" cy="8" r="7" fill="{accent}"/>'
+            '<path d="M4.6 8.3 L7.0 10.7 L11.5 5.5" fill="none" stroke="#FFFFFF" '
+            'stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>'
+        )
+    elif glyph == "warn":
+        body = (
+            f'<circle cx="8" cy="8" r="7" fill="{accent}"/>'
+            '<line x1="8" y1="4.4" x2="8" y2="8.5" stroke="#FFFFFF" '
+            'stroke-width="1.9" stroke-linecap="round"/>'
+            '<circle cx="8" cy="11.4" r="1.05" fill="#FFFFFF"/>'
+        )
+    else:
+        body = (
+            f'<circle cx="8" cy="8" r="7" fill="{accent}"/>'
+            '<path d="M5.4 5.4 L10.6 10.6 M10.6 5.4 L5.4 10.6" fill="none" '
+            'stroke="#FFFFFF" stroke-width="1.85" stroke-linecap="round"/>'
+        )
+    svg = (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 16 16">'
+        f"{body}</svg>"
+    )
+    return svg.encode("utf-8")
+
+
+def _stage_icon_pixmap(state: str, *, dark: bool) -> Any:
+    from shared.ui_styles import run_stage_indicator_palette
+
+    pal = run_stage_indicator_palette(state, dark=dark)
+    glyph = pal["glyph"]
+    cache_key = (f"{glyph}:{pal['icon_bg']}", bool(dark))
+    cached = _STAGE_ICON_PIXMAP_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+    try:
+        import qt
+
+        if not hasattr(qt, "QPixmap") or not hasattr(qt, "QByteArray"):
+            return None
+        artwork = _stage_icon_svg(glyph, pal["icon_bg"], dark=dark)
+        pix = qt.QPixmap()
+        if not pix.loadFromData(qt.QByteArray(artwork), "SVG"):
+            return None
+        pix = pix.scaled(64, 64, qt.Qt.KeepAspectRatio, qt.Qt.SmoothTransformation)
+        if hasattr(pix, "setDevicePixelRatio"):
+            pix.setDevicePixelRatio(4.0)
+        _STAGE_ICON_PIXMAP_CACHE[cache_key] = pix
+        return pix
+    except Exception:
+        return None
+
+
+def refresh_run_progress_styles(owner: Any) -> None:
+    """Apply Light/Dark semantic styling and High-DPI vector icon to the stage indicator strip."""
+
+    progress = getattr(owner, "_runProgressBar", None)
+    if progress is None:
+        return
+    from shared.ui_styles import (
+        is_dark_mode,
+        run_progress_bar_style,
+        run_stage_count_label_style,
+        set_stylesheet_if_changed,
+    )
+
+    root = getattr(owner, "_uiWidget", None)
+    dark = getattr(owner, "_lastAppliedDarkMode", None)
+    if dark is None:
+        dark = is_dark_mode(root)
+    state = str(getattr(owner, "_runState", "idle") or "idle")
+    set_stylesheet_if_changed(progress, run_progress_bar_style(state, dark=dark, widget=root))
+    count_label = getattr(owner, "_runStageCountLabel", None)
+    if count_label is not None:
+        set_stylesheet_if_changed(count_label, run_stage_count_label_style(state, dark=dark, widget=root))
+        done, total = getattr(owner, "_runProgressCounts", (0, 0))
+        has_data = bool(getattr(owner, "_runProgressHasData", False))
+        count_label.setText(_stage_count_text(owner, done, total, state=state, has_data=has_data))
+    icon_label = getattr(owner, "_runStageIconLabel", None)
+    if icon_label is not None:
+        pix = _stage_icon_pixmap(state, dark=bool(dark))
+        if pix is not None and hasattr(icon_label, "setPixmap"):
+            icon_label.setPixmap(pix)
+
 
 def install_run_progress_panel(owner: Any) -> None:
-    """Add run state, per-stage progress bar and stage/message lines to 4. Run."""
+    """Add run state, per-stage progress strip and stage/message lines to 4. Run."""
 
     if getattr(owner, "_runProgressBar", None) is not None:
         return
@@ -108,16 +228,37 @@ def install_run_progress_panel(owner: Any) -> None:
     state_label.setObjectName("runStateLabel")
     state_label.setToolTip("Run state: Idle, Checking environment, Running, Completed, Completed with errors or Cancelled.")
     state_row.addWidget(state_label)
+
+    stage_strip = qt.QWidget()
+    stage_strip.setObjectName("runStageStrip")
+    strip_layout = qt.QHBoxLayout(stage_strip)
+    strip_layout.setContentsMargins(2, 3, 2, 2)
+    strip_layout.setSpacing(8)
+
+    stage_icon = qt.QLabel()
+    stage_icon.setObjectName("runStageIconLabel")
+    stage_icon.setFixedSize(16, 16)
+    strip_layout.addWidget(stage_icon, 0, qt.Qt.AlignVCenter)
+
     progress = qt.QProgressBar()
     progress.setObjectName("runProgressBar")
     progress.setRange(0, 1)
     progress.setValue(0)
-    progress.setTextVisible(True)
+    progress.setTextVisible(False)
     progress.setFormat("No run in progress")
     progress.setToolTip("Finished stages out of the stages this run plans to execute (from the run manifest).")
     progress.setSizePolicy(qt.QSizePolicy.Expanding, qt.QSizePolicy.Fixed)
-    progress.setMinimumWidth(60)  # its text would otherwise set a wide minimum
-    state_row.addWidget(progress, 1)
+    progress.setFixedHeight(6)
+    progress.setMinimumWidth(48)
+    strip_layout.addWidget(progress, 1, qt.Qt.AlignVCenter)
+
+    count_label = qt.QLabel("")
+    count_label.setObjectName("runStageCountLabel")
+    count_label.setToolTip("Finished stages out of the stages this run plans to execute (from the run manifest).")
+    count_label.setSizePolicy(qt.QSizePolicy.Maximum, qt.QSizePolicy.Fixed)
+    strip_layout.addWidget(count_label, 0, qt.Qt.AlignVCenter)
+
+    state_row.addWidget(stage_strip, 1)
     layout.addLayout(state_row)
 
     stage_label = qt.QLabel("")
@@ -140,18 +281,22 @@ def install_run_progress_panel(owner: Any) -> None:
     timer.connect("timeout()", owner._poll_run_progress)
 
     owner._runStateLabel = state_label
+    owner._runProgressRowWidget = stage_strip
+    owner._runStageIconLabel = stage_icon
     owner._runProgressBar = progress
+    owner._runStageCountLabel = count_label
     owner._runStageLabel = stage_label
     owner._runStatusHintLabel = hint
     owner._runProgressTimer = timer
     owner._runProgressManifestPath = None
     owner._runProgressStartedAt = None
     owner._runProgressHasData = False
+    owner._runProgressCounts = (0, 0)
     set_run_state(owner, "idle")
 
 
 def set_run_state(owner: Any, state: str) -> None:
-    """Update the state chip and the progress bar mode for ``state``."""
+    """Update the state chip and the stage indicator strip for ``state``."""
 
     presentation = run_state_presentation(state)
     owner._runState = state or "idle"
@@ -166,15 +311,26 @@ def set_run_state(owner: Any, state: str) -> None:
     if progress is None:
         return
     has_data = bool(getattr(owner, "_runProgressHasData", False))
-    progress.visible = owner._runState != "idle"
+    visible = owner._runState != "idle"
+    stage_strip = getattr(owner, "_runProgressRowWidget", None)
+    was_visible = bool(getattr(stage_strip, "visible", False)) if stage_strip is not None else False
+    progress.visible = visible
+    if stage_strip is not None:
+        stage_strip.visible = visible
     if presentation.busy:
         if not has_data:
             progress.setRange(0, 0)  # busy indicator until the first manifest checkpoint
+        refresh_run_progress_styles(owner)
+        if stage_strip is not None and was_visible != visible:
+            queue_fit = getattr(owner, "_queueCompactFit", None)
+            if callable(queue_fit):
+                queue_fit()
         return
     stage = getattr(owner, "_runStageLabel", None)
     if stage is not None:
         stage.visible = False
     if owner._runState == "idle":
+        owner._runProgressCounts = (0, 0)
         progress.setRange(0, 1)
         progress.setValue(0)
         progress.setFormat(_text(owner, "no_run_in_progress", "No run in progress"))
@@ -182,10 +338,16 @@ def set_run_state(owner: Any, state: str) -> None:
         progress.setRange(0, 1)
         progress.setValue(1 if owner._runState in {"completed", "completed_with_blocks", "failed"} else 0)
         progress.setFormat(presentation.label)
+    refresh_run_progress_styles(owner)
+    if stage_strip is not None and was_visible != visible:
+        queue_fit = getattr(owner, "_queueCompactFit", None)
+        if callable(queue_fit):
+            queue_fit()
 
 
 def reset_run_progress(owner: Any) -> None:
     owner._runProgressHasData = False
+    owner._runProgressCounts = (0, 0)
     progress = getattr(owner, "_runProgressBar", None)
     if progress is not None:
         progress.setRange(0, 1)
@@ -195,6 +357,7 @@ def reset_run_progress(owner: Any) -> None:
     if stage is not None:
         stage.setText("")
         stage.visible = False
+    refresh_run_progress_styles(owner)
 
 
 def start_progress_polling(owner: Any, manifest_path: Optional[Path], *, started_at: Optional[float] = None) -> None:
@@ -231,9 +394,12 @@ def poll_run_progress(owner: Any) -> None:
         total, done = len(record.get('subjects', [])), len(record.get('results', []))
         progress = getattr(owner, '_runProgressBar', None)
         if progress is not None and total:
+            owner._runProgressHasData = True
+            owner._runProgressCounts = (done, total)
             progress.setRange(0, total)
             progress.setValue(done)
             progress.setFormat(progress_bar_format(done, total))
+            refresh_run_progress_styles(owner)
         owner._set_run_status_table_rows(rows_from_batch_manifest(Path(path), record)[0])
         return
     snapshot = progress_from_manifest(path, not_before=getattr(owner, "_runProgressStartedAt", None))
@@ -250,9 +416,11 @@ def apply_progress_snapshot(owner: Any, snapshot) -> None:
     progress = getattr(owner, "_runProgressBar", None)
     if progress is not None and snapshot.total > 0:
         owner._runProgressHasData = True
+        owner._runProgressCounts = (snapshot.done, snapshot.total)
         progress.setRange(0, snapshot.total)
         progress.setValue(snapshot.done)
         progress.setFormat(progress_bar_format(snapshot.done, snapshot.total))
+        refresh_run_progress_styles(owner)
     stage = getattr(owner, "_runStageLabel", None)
     if stage is not None:
         if snapshot.current_stage:

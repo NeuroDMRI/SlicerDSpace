@@ -62,7 +62,7 @@ def run():
             slicer.app.processEvents()
             assert node.orchestrationDkiFitMethod == method
             expect(ui.targetMicrostructureCheckBox, "Selected: DTI + FW + NODDI + " + label)
-        for backend, label in (("ukf", "UKF"), ("dti_det", "DTI deterministic"), ("saf", "CSD + SAF")):
+        for backend, label in (("ukf", "UKF"), ("dti_det", "DTI"), ("saf", "CSD + SAF")):
             ui.orchestrationTractographyBackendComboBox.setCurrentText(backend)
             slicer.app.processEvents()
             assert node.orchestrationTractographyBackend == backend

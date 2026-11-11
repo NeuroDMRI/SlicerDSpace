@@ -21,22 +21,26 @@ class MultiAlgorithmTests(unittest.TestCase):
         buttons = {family: SimpleNamespace() for family in FAMILIES}
         for button in buttons.values():
             button.setAccessibleName = lambda text, button=button: setattr(button, 'accessibleName', text)
-        node = SimpleNamespace(orchestrationMicrostructureStages='dti,noddi',
+        node = SimpleNamespace(orchestrationPreprocessingStages='denoise,eddy,topup',
+                               orchestrationMicrostructureStages='dti,noddi',
                                orchestrationTractographyBackend='csd_act,ukf',
-                               orchestrationBundleBackend='wmql,wma')
+                               orchestrationBundleBackend='wmql,wma',
+                               orchestrationConnectomeMetrics='sift2,fiber_count')
         owner = SimpleNamespace(_algorithmButtons=buttons, _parameterNode=node)
         before = vars(node).copy()
         for language in ('en', 'zh'):
             owner._onboardingLanguage = language
             refresh_picker_language(owner)
-            self.assertEqual(len({button.accessibleName for button in buttons.values()}), 3)
+            self.assertEqual(len({button.accessibleName for button in buttons.values()}), 5)
             for button in buttons.values():
                 self.assertEqual(button.text, '...')
                 self.assertIn('选择' if language == 'zh' else 'Select', button.accessibleName)
                 self.assertIn('可多选' if language == 'zh' else 'multiple allowed', button.toolTip)
+            self.assertIn('Eddy', buttons['preprocessing'].toolTip)
             self.assertIn('NODDI', buttons['microstructure'].toolTip)
             self.assertIn('UKF', buttons['tractography'].toolTip)
             self.assertIn('WMA', buttons['bundles'].toolTip)
+            self.assertIn('SIFT2', buttons['connectome'].toolTip)
             self.assertEqual(vars(node), before)
 
     def test_exact_subsets_and_invalid_values(self):

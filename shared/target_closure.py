@@ -84,7 +84,7 @@ DISPLAY_NAMES = {
     "parcellation": "DDParcel",
     "surface": "DDSurfer",
     "surface_postprocess": "Surface postprocess",
-    "microstructure": "Microstructure",
+    "microstructure": "DTI",
     "microstructure_freewater": "Free Water",
     "microstructure_noddi": "NODDI",
     "microstructure_dki": "DKI",
@@ -124,12 +124,13 @@ class Closure:
         return ",".join(self.tractography_algorithms)
 
 
-def _expand_selection(targets, bundle_backends, free_water, noddi, dki, ifw=False) -> list[str]:
+def _expand_selection(targets, bundle_backends, free_water, noddi, dki, ifw=False, dti=True) -> list[str]:
     """Product-level targets -> concrete targets (existing orchestrator semantics)."""
     expanded: list[str] = []
     for target in targets:
         if target == "microstructure":
-            expanded.append("microstructure")
+            if dti or not (free_water or noddi or dki or ifw):
+                expanded.append("microstructure")
             if free_water:
                 expanded.append("microstructure_freewater")
             if noddi:
@@ -174,6 +175,7 @@ def expand_closure(
     microstructure_noddi: bool = False,
     microstructure_dki: bool = False,
     microstructure_ifw: bool = False,
+    microstructure_dti: bool = True,
     wma_source_explicit: bool = False,
     provided_tractography: Iterable[str] = (),
     excluded: Iterable[str] = (),
@@ -195,7 +197,8 @@ def expand_closure(
     skip = frozenset(str(t).strip().lower() for t in excluded if str(t).strip())
     requested = {target for target in _expand_selection(
         tuple(t for t in requested_raw if t not in skip), tuple(bundle_backends),
-        microstructure_free_water, microstructure_noddi, microstructure_dki, microstructure_ifw) if target not in skip}
+        microstructure_free_water, microstructure_noddi, microstructure_dki, microstructure_ifw,
+        dti=microstructure_dti) if target not in skip}
     selected = set(requested)
     added_algorithms: dict = {}
     provided = frozenset(provided_tractography)
@@ -239,7 +242,7 @@ def _requester_label(requester: str, closure: Closure) -> str:
     return DISPLAY_NAMES.get(requester, requester)
 
 
-ALGORITHM_NAMES = {"csd_act": "CSD/ACT", "dti_det": "DTI deterministic", "ukf": "UKF", "saf": "SAF"}
+ALGORITHM_NAMES = {"csd_act": "CSD/ACT", "dti_det": "DTI", "ukf": "UKF", "saf": "SAF"}
 
 
 def closure_notice(closure: Closure) -> str:

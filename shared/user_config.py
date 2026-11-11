@@ -49,8 +49,8 @@ MICROSTRUCTURE_ALL_STAGES = ("dti", "freewater", "noddi", "dki")  # "all" does n
 MICROSTRUCTURE_STAGE_ORDER = MICROSTRUCTURE_ALL_STAGES + ("ifw",)
 
 
-def canonical_microstructure_stages(values: Iterable[str] | str | None) -> tuple[str, ...]:
-    """Keep DTI enabled while ordering independently selected optional stages."""
+def selected_microstructure_stages(values: Iterable[str] | str | None) -> tuple[str, ...]:
+    """Return ordered user-selected microstructure stages (defaults to ('dti',) when empty)."""
 
     if isinstance(values, str):
         values = [values]
@@ -66,6 +66,15 @@ def canonical_microstructure_stages(values: Iterable[str] | str | None) -> tuple
     unknown = stages - set(MICROSTRUCTURE_STAGE_ORDER)
     if unknown:
         raise ValueError("Unknown microstructure stages: " + ", ".join(sorted(unknown)))
+    if not stages:
+        stages.add("dti")
+    return tuple(stage for stage in MICROSTRUCTURE_STAGE_ORDER if stage in stages)
+
+
+def canonical_microstructure_stages(values: Iterable[str] | str | None) -> tuple[str, ...]:
+    """Keep DTI enabled as an execution prerequisite while ordering selected optional stages."""
+
+    stages = set(selected_microstructure_stages(values))
     stages.add("dti")
     return tuple(stage for stage in MICROSTRUCTURE_STAGE_ORDER if stage in stages)
 
@@ -166,7 +175,7 @@ def normalize_user_config(payload: Mapping[str, Any] | None) -> dict[str, Any]:
     if isinstance(targets, str):
         defaults["targets"] = [token.strip() for token in targets.split(",") if token.strip()]
     stages = defaults.get("microstructure_stages")
-    defaults["microstructure_stages"] = list(canonical_microstructure_stages(stages))
+    defaults["microstructure_stages"] = list(selected_microstructure_stages(stages))
     defaults["dki_fit_method"] = str(defaults.get("dki_fit_method") or "MKCURVE").strip().upper()
     # W5 / SC-2: a saved removed backend (synthstrip, mrtrix, dipy) loads as pnl_cnn with one note; no one is blocked.
     # The note is in config["notes"] for the GUI and the CLI. It is also logged. write_user_config does not save it.

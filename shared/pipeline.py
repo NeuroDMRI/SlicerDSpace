@@ -181,10 +181,106 @@ def is_raw_subject_root(path: Path) -> bool:
     return input_dir.is_dir() and all((input_dir / RAW_INPUT_FILES[key]).exists() for key in RAW_REQUIRED_INPUT_KEYS)
 
 
+def _safe_subject_subdir(base_dir: Path, subject_id: str) -> Optional[Path]:
+    sid = (subject_id or "").strip()
+    if not sid or sid in {".", ".."} or "/" in sid or "\\" in sid or Path(sid).name != sid:
+        return None
+    return base_dir / sid
+
+
+def detected_input_format_from_mode(mode: Optional[str]) -> Optional[str]:
+    """Map an inspected directory/file ``mode`` to canonical UI format (``nifti``, ``dicom``, ``nrrd``)."""
+
+    normalized = (mode or "").strip().lower()
+    if normalized in {"subject_root", "nifti", "legacy_registered"}:
+        return "nifti"
+    if normalized == "dicom":
+        return "dicom"
+    if normalized == "nrrd":
+        return "nrrd"
+    return None
+
+
+def resolve_subject_root_dir(base_path: Path, subject_id: str = "") -> Path:
+    """Resolve ``base_path`` across NIfTI/DICOM/NRRD folders, ``<parent>/<subject_id>``, or direct files."""
+
+    candidate = Path(base_path).expanduser()
+    if candidate.is_file():
+        expanded_file = candidate.resolve()
+        if expanded_file.parent.name == "input" and is_raw_subject_root(expanded_file.parent.parent):
+            return expanded_file.parent.parent
+        from shared.convertible_input import find_convertible_input
+
+        if find_convertible_input(expanded_file) is not None:
+            return candidate
+        from shared.dicom_input import _dicom_file
+
+        if _dicom_file(expanded_file):
+            return expanded_file.parent
+        return candidate
+
+    if not candidate.is_dir():
+        return candidate
+    expanded = candidate.resolve()
+    if expanded.name == "input" and is_raw_subject_root(expanded.parent):
+        return expanded.parent
+    sid = (subject_id or "").strip()
+    if (expanded / "input").is_dir() or (sid and _has_registered_inputs(expanded, sid)):
+        return candidate
+    from shared.convertible_input import find_convertible_input
+
+    if find_convertible_input(expanded) is not None:
+        return candidate
+    subject_dir = _safe_subject_subdir(expanded, sid)
+    if subject_dir is None or not subject_dir.is_dir():
+        return candidate
+    if is_raw_subject_root(subject_dir) or (subject_dir / "input").is_dir() or _has_registered_inputs(subject_dir, sid):
+        return subject_dir
+    conv_sub = find_convertible_input(subject_dir)
+    if conv_sub is not None:
+        return conv_sub[2]
+    from shared.dicom_input import is_dicom_root
+
+    if is_dicom_root(subject_dir):
+        return subject_dir
+    return candidate
+
+
 def inspect_subject_directory(base_path: Path, subject_id: str) -> dict[str, Any]:
-    """Classify a path as a new-style subject root or legacy registered directory."""
+    """Classify a path across NIfTI, DICOM, and NRRD (directory, parent/<subject_id>, or direct file)."""
     expanded = base_path.expanduser().resolve()
-    subject_dir = expanded / subject_id
+    if expanded.is_file():
+        if expanded.parent.name == "input" and is_raw_subject_root(expanded.parent.parent):
+            canon_root = expanded.parent.parent
+            return {
+                "mode": "subject_root",
+                "subject_root": canon_root,
+                "subject_dir": canon_root,
+            }
+        from shared.convertible_input import find_convertible_input
+
+        conv_file = find_convertible_input(expanded)
+        if conv_file is not None:
+            return {
+                "mode": conv_file[0],
+                "subject_root": conv_file[2],
+                "subject_dir": conv_file[2],
+                "has_mask": "mask_path" in conv_file[3],
+            }
+        from shared.dicom_input import _dicom_file
+
+        if _dicom_file(expanded):
+            return {"mode": "dicom", "subject_root": expanded.parent, "subject_dir": expanded.parent}
+        return {"mode": "missing", "subject_root": None, "subject_dir": expanded.parent}
+
+    if expanded.is_dir() and expanded.name == "input" and is_raw_subject_root(expanded.parent):
+        return {
+            "mode": "subject_root",
+            "subject_root": expanded.parent,
+            "subject_dir": expanded.parent,
+        }
+
+    subject_dir = _safe_subject_subdir(expanded, subject_id)
 
     if is_raw_subject_root(expanded):
         return {
@@ -193,7 +289,7 @@ def inspect_subject_directory(base_path: Path, subject_id: str) -> dict[str, Any
             "subject_dir": expanded,
         }
 
-    if subject_dir.is_dir() and is_raw_subject_root(subject_dir):
+    if subject_dir is not None and subject_dir.is_dir() and is_raw_subject_root(subject_dir):
         return {
             "mode": "subject_root",
             "subject_root": subject_dir,
@@ -207,21 +303,35 @@ def inspect_subject_directory(base_path: Path, subject_id: str) -> dict[str, Any
             "subject_dir": expanded,
         }
 
-    if subject_dir.is_dir() and _has_registered_inputs(subject_dir, subject_id):
+    if subject_dir is not None and subject_dir.is_dir() and _has_registered_inputs(subject_dir, subject_id):
         return {
             "mode": "legacy_registered",
             "subject_root": None,
             "subject_dir": subject_dir,
         }
 
+    from shared.convertible_input import find_convertible_input
+    convertible = find_convertible_input(expanded)
+    if convertible is None and subject_dir is not None and subject_dir.is_dir():
+        convertible = find_convertible_input(subject_dir)
+    if convertible is not None:
+        return {
+            "mode": convertible[0],
+            "subject_root": convertible[2],
+            "subject_dir": convertible[2],
+            "has_mask": "mask_path" in convertible[3],
+        }
+
     from shared.dicom_input import is_dicom_root
+    if subject_dir is not None and subject_dir.is_dir() and is_dicom_root(subject_dir):
+        return {"mode": "dicom", "subject_root": subject_dir, "subject_dir": subject_dir}
     if is_dicom_root(expanded):
         return {"mode": "dicom", "subject_root": expanded, "subject_dir": expanded}
 
     return {
         "mode": "missing",
         "subject_root": None,
-        "subject_dir": subject_dir if subject_dir.is_dir() else expanded,
+        "subject_dir": subject_dir if (subject_dir is not None and subject_dir.is_dir()) else expanded,
     }
 
 
@@ -441,15 +551,18 @@ def resolve_preprocessed_input_bundle(
 
 
 def _has_registered_inputs(subject_dir: Path, subject_id: str) -> bool:
+    sid = (subject_id or "").strip()
+    if not sid:
+        return False
     expected = [
-        f"{subject_id}-dti-FractionalAnisotropy-Reg.nii.gz",
-        f"{subject_id}-dti-MinEigenvalue-Reg.nii.gz",
-        f"{subject_id}-dti-MidEigenvalue-Reg.nii.gz",
-        f"{subject_id}-dti-MaxEigenvalue-Reg.nii.gz",
-        f"{subject_id}-dti-Trace-Reg.nii.gz",
-        f"{subject_id}-dti-MeanDiffusivity-Reg.nii.gz",
-        f"{subject_id}-mask-Reg.nii.gz",
-        f"{subject_id}-b0ToAtlasT2.tfm",
+        f"{sid}-dti-FractionalAnisotropy-Reg.nii.gz",
+        f"{sid}-dti-MinEigenvalue-Reg.nii.gz",
+        f"{sid}-dti-MidEigenvalue-Reg.nii.gz",
+        f"{sid}-dti-MaxEigenvalue-Reg.nii.gz",
+        f"{sid}-dti-Trace-Reg.nii.gz",
+        f"{sid}-dti-MeanDiffusivity-Reg.nii.gz",
+        f"{sid}-mask-Reg.nii.gz",
+        f"{sid}-b0ToAtlasT2.tfm",
     ]
     return subject_dir.is_dir() and all((subject_dir / name).exists() for name in expected)
 

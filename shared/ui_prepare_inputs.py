@@ -30,29 +30,28 @@ def install_prepare_inputs_panel(owner: Any, configuration_layout: Any) -> None:
 
     dark = is_dark_mode(getattr(owner, "_uiWidget", None))
     panel.setStyleSheet(
-        "QWidget#prepareInputsPanel { background: #232A2E; border: 1px solid #3B474E; border-radius: 8px; }"
+        "QWidget#prepareInputsPanel { background: #222830; border: 1px solid #394450; border-radius: 6px; }"
         if dark
-        else "QWidget#prepareInputsPanel { background: #F7FAF8; border: 1px solid #D6E4DC; border-radius: 8px; }"
+        else "QWidget#prepareInputsPanel { background: #F6F8FB; border: 1px solid #D6DFE8; border-radius: 6px; }"
     )
     owner._prepareInputWidgets["panel"] = panel
 
     form_layout = qt.QFormLayout(panel)
-    form_layout.setSpacing(8)
-    form_layout.setContentsMargins(10, 10, 10, 10)
+    form_layout.setSpacing(6)
+    form_layout.setContentsMargins(8, 8, 8, 8)
     form_layout.setRowWrapPolicy(qt.QFormLayout.WrapLongRows)
     form_layout.setFieldGrowthPolicy(qt.QFormLayout.AllNonFixedFieldsGrow)
     panel.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Preferred)
     panel.setMinimumWidth(0)
 
     summary = qt.QLabel(
-        "Use this when inputs are not already organized as input/data.nii.gz, input/bvals and input/bvecs. "
-        "The import writes input/input_import_manifest.json and the workflow continues from the canonical subject root."
+        "Organize external DICOM, NRRD, or NIfTI + bval/bvec files into <subject root>/input/."
     )
     summary.wordWrap = True
     summary.setStyleSheet(
-        "QLabel { background: #1E2C25; border: 1px solid #355042; border-radius: 6px; color: #C2E0D0; padding: 7px; }"
+        "QLabel { background: #1E2732; border: 1px solid #354658; border-radius: 5px; color: #C5D8E8; padding: 6px 8px; }"
         if dark
-        else "QLabel { background: #EEF6F1; border: 1px solid #CFE1D5; border-radius: 6px; color: #274737; padding: 7px; }"
+        else "QLabel { background: #EEF3F8; border: 1px solid #CFDCE8; border-radius: 5px; color: #243B53; padding: 6px 8px; }"
     )
     owner._prepareInputWidgets["summary"] = summary
     register_ui_language_binding(owner, summary, "text", "prepare_summary")
@@ -172,6 +171,42 @@ def install_prepare_inputs_panel(owner: Any, configuration_layout: Any) -> None:
 
     # Optional pre-step: keep it collapsed below the primary input fields.
     configuration_layout.addWidget(panel)
+    refresh_prepare_inputs_styles(owner, dark=dark)
+
+
+def refresh_prepare_inputs_styles(owner: Any, *, dark: bool | None = None) -> None:
+    """Refresh inline stylesheets inside the Prepare Inputs panel for light/dark themes."""
+
+    widgets = getattr(owner, "_prepareInputWidgets", None) or {}
+    if not widgets:
+        return
+    from shared.ui_styles import is_dark_mode
+
+    use_dark = is_dark_mode(getattr(owner, "_uiWidget", None)) if dark is None else bool(dark)
+    panel = widgets.get("panel")
+    if panel is not None:
+        if getattr(owner, "_advancedSettingsPanel", None) is not None:
+            panel.setStyleSheet("")
+        else:
+            panel.setStyleSheet(
+                "QWidget#prepareInputsPanel { background: #222830; border: 1px solid #394450; border-radius: 6px; }"
+                if use_dark
+                else "QWidget#prepareInputsPanel { background: #F6F8FB; border: 1px solid #D6DFE8; border-radius: 6px; }"
+            )
+    summary = widgets.get("summary")
+    if summary is not None:
+        summary.setStyleSheet(
+            "QLabel { background: #1E2732; border: 1px solid #354658; border-radius: 5px; color: #C5D8E8; padding: 6px 8px; }"
+            if use_dark
+            else "QLabel { background: #EEF3F8; border: 1px solid #CFDCE8; border-radius: 5px; color: #243B53; padding: 6px 8px; }"
+        )
+    sidecar_summary = widgets.get("sidecar_summary")
+    if sidecar_summary is not None:
+        sidecar_summary.setStyleSheet(
+            "QLabel { color: #9BA7B4; padding-top: 4px; }"
+            if use_dark
+            else "QLabel { color: #546E7A; padding-top: 4px; }"
+        )
 
 
 def _path_row(owner: Any, *, key: str, placeholder: str, browse_callback):

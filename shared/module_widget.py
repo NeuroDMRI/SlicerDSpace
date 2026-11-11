@@ -22,7 +22,8 @@ from shared.docs import doc_path
 from shared.input_import import InputImportConfig, detect_import_source_kind, prepare_inputs
 from shared.model_assets import model_asset_path_or_none
 from shared.ui_error_dialogs import show_actionable_error_dialog
-from shared.ui_compact import install_compact_layout
+from shared.ui_compact import close_input_format_help_popovers, install_compact_layout
+from shared.ui_algorithm_picker import disconnect_algorithm_summary_click
 from shared.ui_environment_dialog import show_environment_results_dialog
 from shared.ui_environment_paths import (
     add_environment_path_row,
@@ -88,6 +89,7 @@ from shared.ui_run_controller import (
     extract_background_manifest_path,
     is_auto_generated_run_name,
     compress_mrtrix_dense_value,
+    microstructure_dti_enabled,
     microstructure_ifw_enabled,
     microstructure_stage_flags,
     microstructure_optional_stage_flags,
@@ -120,10 +122,12 @@ from shared.ui_status_log import (
     append_log,
     apply_widget_styles,
     configure_log_widget,
+    install_theme_change_listener,
     set_existing_report_path,
     set_run_progress_message,
     set_run_summary_message,
     set_status,
+    uninstall_theme_change_listener,
 )
 from shared.ui_background_process import (
     background_process_env_overrides,
@@ -156,6 +160,7 @@ from shared.user_config import (
     canonical_microstructure_stages,
     default_user_config_path,
     load_user_config,
+    selected_microstructure_stages,
     update_user_config,
 )
 from shared.ui_environment_check import start_environment_check
@@ -176,7 +181,7 @@ class SharedWidgetMixin:
         if hasattr(self.ui, "clearLogButton"):
             self.ui.clearLogButton.connect("clicked()", self._onClearLogClicked)
         if hasattr(self.ui, "unifiedTorchDeviceComboBox"):
-            self.ui.unifiedTorchDeviceComboBox.currentTextChanged.connect(self._onUnifiedTorchDeviceChanged)
+            self.ui.unifiedTorchDeviceComboBox.currentIndexChanged.connect(self._onUnifiedTorchDeviceChanged)
         if hasattr(self.ui, "orchestrationTractographyBackendComboBox"):
             self.ui.orchestrationTractographyBackendComboBox.currentTextChanged.connect(
                 self._onTractographyBackendChanged
@@ -229,7 +234,8 @@ class SharedWidgetMixin:
         node = self._parameterNode
         if not node:
             return
-        stages = ["dti"]
+        current_selected = set(selected_microstructure_stages(node.orchestrationMicrostructureStages or "dti"))
+        stages = ["dti"] if "dti" in current_selected else []
         for name, stage in (
             ("orchestrationFreeWaterCheckBox", "freewater"),
             ("orchestrationNoddiCheckBox", "noddi"),
@@ -239,6 +245,8 @@ class SharedWidgetMixin:
             checkbox = getattr(self.ui, name, None)
             if checkbox is not None and checkbox.isChecked():
                 stages.append(stage)
+        if not stages:
+            stages = ["dti"]
         with slicer.util.NodeModify(node):
             node.orchestrationMicrostructureStages = ",".join(stages)
             node.orchestrationRunFreeWater = "freewater" in stages
@@ -366,6 +374,7 @@ class SharedWidgetMixin:
             return validate_topup_parameters(preprocessing_selected=False)
         return validate_topup_parameters(
             preprocessing_selected=bool(node.targetPreprocessing),
+            preprocessing_stages=getattr(node, "orchestrationPreprocessingStages", "") or "",
             phase_encoding_direction=getattr(node, "preprocessingPhaseEncodingDirection", "") or "",
             readout_time=float(getattr(node, "preprocessingReadoutTime", 0.0) or 0.0),
             reverse_phase_b0=getattr(node, "preprocessingReversePhaseB0", "") or "",
@@ -381,14 +390,26 @@ class SharedWidgetMixin:
         node = self._parameterNode
         validation = self._topup_validation()
         preprocessing_on = bool(node.targetPreprocessing) if node else False
+        preprocessing_stages = (getattr(node, "orchestrationPreprocessingStages", "") or "") if node else ""
         group = getattr(self.ui, "topupCollapsibleGroupBox", None)
         if group is not None:
-            group.visible = bool(node) and route_uses_topup(preprocessing_on)
+            group.visible = bool(node) and route_uses_topup(preprocessing_on, preprocessing_stages=preprocessing_stages)
         hint = getattr(self.ui, "topupHintLabel", None)
         if hint is not None:
-            text = topup_summary_text(validation)
+            full_text = topup_summary_text(validation)
+            if validation.errors or validation.warnings:
+                text = full_text
+            else:
+                zh = str(getattr(self, "_onboardingLanguage", "en") or "en").startswith("zh")
+                text = (
+                    "默认从 input/dwi.json 读取参数；提供反向相位 b=0 图像时启用 topup。"
+                    if zh
+                    else "Leave on 'From sidecar' to read input/dwi.json; set Reverse-PE b=0 to enable topup."
+                )
             if hint.text != text:
                 hint.setText(text)
+            if hasattr(hint, "setToolTip") and hint.toolTip != full_text:
+                hint.setToolTip(full_text)
             from shared.ui_styles import is_dark_mode, set_stylesheet_if_changed
 
             dark = is_dark_mode(hint)
@@ -492,6 +513,7 @@ class SharedWidgetMixin:
         from shared.ui_advanced_layout import install_advanced_categories
         install_advanced_categories(self)
         self._apply_slicerddsurfer_ui_style()
+        install_theme_change_listener(self)
         self._configure_log_widget()
         self._refresh_advanced_run_settings()
         apply_onboarding_language(self, getattr(self, "_onboardingLanguage", "en"))
@@ -688,7 +710,7 @@ class SharedWidgetMixin:
                 )
                 stages = defaults.get("microstructure_stages") or ["dti"]
                 node.wmaAtlas = str(defaults.get("wma_atlas") or "org")
-                node.orchestrationMicrostructureStages = ",".join(canonical_microstructure_stages(stages))
+                node.orchestrationMicrostructureStages = ",".join(selected_microstructure_stages(stages))
                 node.orchestrationDkiFitMethod = str(defaults.get("dki_fit_method") or "MKCURVE").upper()
                 node.connectomeBackend = str(defaults.get("connectome_backend") or node.connectomeBackend or "auto")
                 node.orchestrationSelectStreamlines = int(
@@ -724,8 +746,10 @@ class SharedWidgetMixin:
             except Exception:
                 continue
             settings.setValue(self._user_settings_key(attribute), value)
+        from shared.user_config import selected_microstructure_stages
+
         targets = list(self._requested_product_targets())  # K4: the user's ticks, not the closed set
-        stages = list(canonical_microstructure_stages(node.orchestrationMicrostructureStages or "dti"))
+        stages = list(selected_microstructure_stages(node.orchestrationMicrostructureStages or "dti"))
         external_dependencies = {
             item["id"]: self._read_environment_path_setting(item["id"]) or None
             for item in ENVIRONMENT_DEPENDENCY_PATHS
@@ -790,6 +814,16 @@ class SharedWidgetMixin:
         except Exception:
             pass
 
+    @staticmethod
+    def _is_other_slicer_installation_path(raw_value: str) -> bool:
+        """Return True when ``raw_value`` points inside a different 3D Slicer installation than the running one."""
+
+        from shared.ui_environment_panel import is_other_slicer_installation_path
+
+        slicer_home_raw = getattr(getattr(slicer, "app", None), "slicerHome", "")
+        slicer_home_val = slicer_home_raw() if callable(slicer_home_raw) else slicer_home_raw
+        return is_other_slicer_installation_path(raw_value, slicer_home_val)
+
     def _read_environment_path_setting(self, dependency_id: str) -> str:
         settings = slicer.app.userSettings()
         value = str(settings.value(self._environment_settings_key(dependency_id), "") or "").strip()
@@ -799,6 +833,19 @@ class SharedWidgetMixin:
                 value = str(ext.get(dependency_id) or "").strip()
             except Exception:
                 value = ""
+        if value and dependency_id in {
+            "python_executable",
+            "slicer_executable",
+            "wmql_python_executable",
+            "tractcloud_python_executable",
+            "fiber_tract_measurements_cli",
+        } and self._is_other_slicer_installation_path(value):
+            value = ""
+            try:
+                settings.setValue(self._environment_settings_key(dependency_id), "")
+                update_user_config({"external_dependencies": {dependency_id: ""}})
+            except Exception:
+                pass
         if value and dependency_id in {
             "mrtrix_bin_dir",
             "preprocessing_mrtrix_bin_dir",
@@ -1149,7 +1196,10 @@ class SharedWidgetMixin:
     def _set_model_assets_status_text(self, text: str) -> None:
         label = getattr(self, "_modelAssetsSummaryLabel", None)
         if label:
-            label.setText(text)
+            from shared.ui_environment_paths import compact_model_assets_summary
+
+            label.setToolTip(text)
+            label.setText(compact_model_assets_summary(text))
         self.appendLog("[Model assets] " + text)
 
     def _on_check_model_assets_status_clicked(self) -> None:
@@ -1806,16 +1856,41 @@ class SharedWidgetMixin:
         output_root_text = (output_root_text or (node.outputDirectory or "")).strip()
         targets = self._selected_environment_targets()
         mask_backend = (getattr(node, "brainMaskBackend", "pnl_cnn") or "pnl_cnn").strip()
+        preprocessing_stages = (getattr(node, "orchestrationPreprocessingStages", "") or "").strip()
         inspected = inspect_input_directory(self, subject_root_text, effective_subject_id(node.subjectId, subject_root_text)) if subject_root_text else {}
-        raw_inputs_known = inspected.get("mode") in {"subject_root", "dicom"}
+        raw_inputs_known = inspected.get("mode") in {"subject_root", "dicom", "nifti", "nrrd"}
         input_root = inspected.get("subject_root") or subject_root_text
         input_dir = Path(input_root).expanduser() / "input" if input_root else None
+        mask_file = input_dir / "nodif_brain_mask.nii.gz" if input_dir else None
+        user_mask_exists = bool(
+            (mask_file and mask_file.is_file() and not mask_file.with_name("nodif_brain_mask.manifest.json").is_file())
+            or inspected.get("has_mask")
+        )
         brain_mask_required = gui_brain_mask_required(
             targets,
             input_known=raw_inputs_known,
-            input_mask_exists=bool(input_dir and (input_dir / "nodif_brain_mask.nii.gz").is_file()),
+            input_mask_exists=user_mask_exists,
             preprocessing_on=bool(node.targetPreprocessing),
             mask_backend=mask_backend,
+            preprocessing_stages=preprocessing_stages,
+        )
+        configured_py = external_paths.get("python_executable")
+        same_interpreter = True
+        if configured_py:
+            try:
+                from shared.external_process import interpreter_path
+
+                same_interpreter = interpreter_path(Path(configured_py)).resolve() == interpreter_path(Path(sys.executable)).resolve()
+            except Exception:
+                same_interpreter = False
+        python_path_entries = (
+            tuple(
+                Path(entry).expanduser().resolve()
+                for entry in sys.path
+                if entry and Path(entry).expanduser().exists()
+            )
+            if same_interpreter
+            else (Path(__file__).resolve().parents[1],)
         )
         return {
             "targets": targets,
@@ -1831,17 +1906,14 @@ class SharedWidgetMixin:
             "connectome_backend": (node.connectomeBackend or "auto").strip(),
             "ddseg_device": (node.ddsegDevice or "auto").strip() or "auto",
             "surface_device": (node.device or "auto").strip() or "auto",
-            "python_path_entries": tuple(
-                Path(entry).expanduser().resolve()
-                for entry in sys.path
-                if entry and Path(entry).expanduser().exists()
-            ),
+            "python_path_entries": python_path_entries,
             "microstructure_run_free_water": self._microstructure_stage_flags()[0],
             "microstructure_run_noddi": self._microstructure_stage_flags()[1],
             "microstructure_run_dki": self._microstructure_dki_enabled(),
             "dki_fit_method": getattr(node, "orchestrationDkiFitMethod", "MKCURVE") or "MKCURVE",
             "preprocessing_execution_backend": os.environ.get("SLICERDSPACE_PREPROCESSING_EXECUTION_BACKEND")
             or ("native" if sys.platform == "win32" else None),
+            "preprocessing_stages": preprocessing_stages or None,
             **external_paths,
         }
 
@@ -1883,14 +1955,19 @@ class SharedWidgetMixin:
         return result
 
     def _set_environment_path_status_label(self, label, text: str, state: str) -> None:
+        from shared.ui_styles import is_dark_mode
+
         for dependency_id, candidate in (getattr(self, "_environmentPathStatusLabels", {}) or {}).items():
             if candidate is label:
                 sources = getattr(self, "_environmentPathStatusSources", None)
                 if sources is not None:
                     sources[dependency_id] = str(text or "")
+                states = getattr(self, "_environmentPathStatusStates", None)
+                if states is not None:
+                    states[dependency_id] = str(state or "")
                 break
         label.setText(translated_ui_message(getattr(self, "_onboardingLanguage", "en"), text))
-        label.setStyleSheet(environment_path_status_style(state))
+        label.setStyleSheet(environment_path_status_style(state, dark=is_dark_mode(getattr(self, "_uiWidget", None))))
 
     def _path_status_dependencies(self, result, dependency_id: str) -> list:
         return path_status_dependencies(result, dependency_id)
@@ -1914,11 +1991,82 @@ class SharedWidgetMixin:
             text, state = environment_path_status_from_dependencies(dependencies)
             self._set_environment_path_status_label(label, text, state)
 
+    def _find_slicer_module_panel(self):
+        try:
+            mw = slicer.util.mainWindow() if hasattr(slicer, "util") else None
+            if mw is not None:
+                if hasattr(mw, "modulePanel"):
+                    panel = mw.modulePanel() if callable(mw.modulePanel) else mw.modulePanel
+                    if panel is not None:
+                        return panel
+                if hasattr(slicer.util, "findChild"):
+                    panel = slicer.util.findChild(mw, "ModulePanel")
+                    if panel is not None:
+                        return panel
+        except Exception:
+            pass
+        curr = getattr(self, "parent", None)
+        while curr is not None:
+            if hasattr(curr, "setHelpAndAcknowledgmentVisible") or (
+                hasattr(curr, "inherits") and curr.inherits("qSlicerModulePanel")
+            ):
+                return curr
+            parent_fn = getattr(curr, "parentWidget", None)
+            curr = parent_fn() if callable(parent_fn) else None
+        return None
+
+    def _set_module_help_section_hidden(self, hidden: bool, *, _retry: bool = True) -> None:
+        """Hide Slicer's outer Help & Acknowledgement collapsible bar while SlicerDSpace is active."""
+
+        panel = self._find_slicer_module_panel()
+        if panel is None:
+            if hidden and _retry:
+                try:
+                    qt.QTimer.singleShot(
+                        0,
+                        lambda: (
+                            not getattr(self, "_cleanedUp", False)
+                            and self._set_module_help_section_hidden(True, _retry=False)
+                        ),
+                    )
+                except Exception:
+                    pass
+            return
+        try:
+            if hidden:
+                if getattr(self, "_savedModulePanelHelpVisible", None) is None:
+                    if hasattr(panel, "isHelpAndAcknowledgmentVisible"):
+                        vis_attr = panel.isHelpAndAcknowledgmentVisible
+                        prev = bool(vis_attr() if callable(vis_attr) else vis_attr)
+                    elif hasattr(panel, "helpAndAcknowledgmentVisible"):
+                        prev = bool(panel.helpAndAcknowledgmentVisible)
+                    else:
+                        prev = True
+                    self._savedModulePanelHelpVisible = prev
+                if hasattr(panel, "setHelpAndAcknowledgmentVisible"):
+                    panel.setHelpAndAcknowledgmentVisible(False)
+                elif hasattr(panel, "helpAndAcknowledgmentVisible"):
+                    panel.helpAndAcknowledgmentVisible = False
+            else:
+                saved = getattr(self, "_savedModulePanelHelpVisible", None)
+                if saved is not None:
+                    if hasattr(panel, "setHelpAndAcknowledgmentVisible"):
+                        panel.setHelpAndAcknowledgmentVisible(bool(saved))
+                    elif hasattr(panel, "helpAndAcknowledgmentVisible"):
+                        panel.helpAndAcknowledgmentVisible = bool(saved)
+                    self._savedModulePanelHelpVisible = None
+        except Exception:
+            pass
+
     def cleanup(self) -> None:
         self._setupResumeEnabled = False
         if getattr(self, "_cleanedUp", False):
             return
         self._cleanedUp = True
+        disconnect_algorithm_summary_click(self)
+        close_input_format_help_popovers(self, destroy=True)
+        uninstall_theme_change_listener(self)
+        self._set_module_help_section_hidden(False, _retry=False)
         try:
             slicer.app.disconnect("aboutToQuit()", self.cleanup)
         except Exception:
@@ -1963,6 +2111,14 @@ class SharedWidgetMixin:
 
     def enter(self) -> None:
         self._setupResumeEnabled = True
+        self._set_module_help_section_hidden(True)
+        try:
+            from shared.ui_styles import theme_signature
+
+            if theme_signature(getattr(self, "_uiWidget", None)) != getattr(self, "_activeAppearanceSignature", None):
+                self._apply_slicerddsurfer_ui_style()
+        except Exception:
+            pass
         self.initializeParameterNode()
         from shared.setup_resume import refresh_setup_button, offer_pending_preparation
         refresh_setup_button(self)
@@ -1972,6 +2128,8 @@ class SharedWidgetMixin:
 
     def exit(self) -> None:
         self._setupResumeEnabled = False
+        close_input_format_help_popovers(self, destroy=False)
+        self._set_module_help_section_hidden(False, _retry=False)
         if self._parameterNode:
             if self._parameterNodeGuiTag is not None:
                 self._parameterNode.disconnectGui(self._parameterNodeGuiTag)
@@ -2147,6 +2305,8 @@ class SharedWidgetMixin:
         del blocker
 
     def _checkCanApply(self, caller=None, event=None) -> None:
+        if getattr(self, "_syncingDetectedInputFormat", False):
+            return
         sync_parameter_node_to_ui(self)
         self._refresh_selected_products_summary()
         self._refresh_advanced_run_settings()
@@ -2162,13 +2322,29 @@ class SharedWidgetMixin:
             setattr(self._parameterNode, attribute, value)
         return True
 
-    def _onUnifiedTorchDeviceChanged(self, value: str) -> None:
+    def _onUnifiedTorchDeviceChanged(self, value_or_index: Any) -> None:
         if not self._parameterNode:
             return
-        device = (value or "auto").strip() or "auto"
+        combo = getattr(self.ui, "unifiedTorchDeviceComboBox", None)
+        if isinstance(value_or_index, int):
+            if combo is None or value_or_index < 0:
+                return
+            raw = combo.itemData(value_or_index) if hasattr(combo, "itemData") else None
+            if not raw:
+                raw = getattr(combo, "currentText", "auto")
+        else:
+            raw = value_or_index
+        device = str(raw or "auto").strip().lower() or "auto"
+        if device.startswith("auto"):
+            device = "auto"
+        elif device.startswith("cuda"):
+            device = device.split()[0]
+        elif device != "cpu":
+            device = "auto"
         with slicer.util.NodeModify(self._parameterNode):
             self._parameterNode.device = device
             self._parameterNode.ddsegDevice = device
+            self._parameterNode.brainMaskDevice = "cuda" if device.startswith("cuda") else device
         self._lastEnvironmentResult = None
         self._lastEnvironmentSignature = None
         self._checkCanApply()
@@ -2251,8 +2427,9 @@ class SharedWidgetMixin:
         refresh_advanced_categories(self)
 
     def _refresh_bundle_backend_highlight(self, *, bundle_backend: Optional[str] = None) -> None:
-        from shared.ui_styles import set_stylesheet_if_changed
+        from shared.ui_styles import is_dark_mode, set_stylesheet_if_changed
 
+        dark = is_dark_mode(getattr(self, "_uiWidget", None))
         active_sections = active_bundle_backend_sections(bundle_backend or self._bundle_backend_text())
         node = self._parameterNode
         for name in ("wmqlQueryPresetLabel", "wmqlQueryPresetComboBox", 'wmqlQuerySelectionLabel', 'wmqlQuerySelectionLineEdit'):
@@ -2282,7 +2459,7 @@ class SharedWidgetMixin:
         for key in ("wma", "tractcloud"):
             title_label, description_label = label_groups.get(key, (None, None))
             active = key in active_sections
-            title_style, description_style = optional_backend_label_styles(active)
+            title_style, description_style = optional_backend_label_styles(active, dark=dark)
             if title_label:
                 set_stylesheet_if_changed(title_label, title_style)
             if description_label:
@@ -2293,7 +2470,7 @@ class SharedWidgetMixin:
                     if widget is None:
                         continue
                     if hasattr(widget, "setStyleSheet"):
-                        style = optional_backend_widget_style(widget.__class__.__name__, active)
+                        style = optional_backend_widget_style(widget.__class__.__name__, active, dark=dark)
                         if style is not None:
                             set_stylesheet_if_changed(widget, style)
 
@@ -2345,6 +2522,7 @@ class SharedWidgetMixin:
             self._product_target_flags(),
             tractography_backend=self._tractography_backend_text(),
             bundle_backend=self._bundle_backend_text(),
+            microstructure_dti=self._microstructure_dti_enabled() if hasattr(self, "_microstructure_dti_enabled") else True,
             microstructure_freewater=freewater,
             microstructure_noddi=noddi,
             microstructure_dki=self._microstructure_dki_enabled(),
@@ -2417,7 +2595,7 @@ class SharedWidgetMixin:
             return "dti"
         text = (getattr(node, "orchestrationMicrostructureStages", "") or "").strip().lower()
         if text:
-            return ",".join(canonical_microstructure_stages(text))
+            return ",".join(selected_microstructure_stages(text))
         stages = ["dti"]
         if bool(getattr(node, "orchestrationRunFreeWater", False)):
             stages.append("freewater")
@@ -2428,6 +2606,13 @@ class SharedWidgetMixin:
         if bool(getattr(node, "orchestrationRunIfw", False)):
             stages.append("ifw")
         return ",".join(stages)
+
+    def _microstructure_dti_enabled(self) -> bool:
+        node = self._parameterNode
+        if not node:
+            return True
+        text = (getattr(node, "orchestrationMicrostructureStages", "") or "").strip().lower()
+        return microstructure_dti_enabled(text if text else "dti")
 
     def _microstructure_stage_flags(self) -> tuple[bool, bool]:
         node = self._parameterNode
@@ -3122,6 +3307,14 @@ class SharedWidgetMixin:
         batch_mode = False
         if not self.validateInputs(manual=True):
             return
+        raw_input_text = (self._parameterNode.inputDirectory or "").strip()
+        if raw_input_text:
+            from shared.ui_compact import sync_detected_input_format
+            from shared.ui_input_inspection import inspect_input_directory
+
+            eff_sid = self._effective_subject_id()
+            inspected = inspect_input_directory(self, Path(raw_input_text).expanduser(), eff_sid, refresh=False)
+            sync_detected_input_format(self, inspected.get("mode"), signature=(raw_input_text, eff_sid), force=True)
         selected = self._selected_workflows()
         if not selected:
             self._setStatus("error", self._summarise_missing(["Target products"]))
@@ -3191,6 +3384,8 @@ class SharedWidgetMixin:
                 getattr(self._parameterNode, "wmaInputTractography", "") or ""
             ).strip(),
             topup=topup_validation.parameters,
+            preprocessing_stages=(getattr(self._parameterNode, "orchestrationPreprocessingStages", "") or "").strip(),
+            connectome_metrics=(getattr(self._parameterNode, "orchestrationConnectomeMetrics", "") or "").strip(),
         )
 
         if batch_mode:
@@ -3419,26 +3614,34 @@ class SharedWidgetMixin:
         return environment_detail_lines(result)
 
     def _update_environment_result_label(self, result, *, error: Optional[str] = None) -> None:
+        self._lastEnvironmentError = error
         label = getattr(self.ui, "environmentResultLabel", None)
         if not label:
             return
         from shared.ui_styles import is_dark_mode
 
         dark = is_dark_mode(label)
+        lang = getattr(self, "_onboardingLanguage", "en")
+        card_bg = "#20262D" if dark else "#F4F7FA"
+        card_border = "#343E48" if dark else "#D6DFE7"
         err_color = "#FF7B72" if dark else "#C62828"
         neutral_color = "#B8C5D0" if dark else "#546E7A"
         ok_color = "#66BB6A" if dark else "#2E7D32"
+        base = (
+            f"background: {card_bg}; border: 1px solid {card_border}; "
+            "border-radius: 4px; padding: 5px 8px;"
+        )
         if error:
             label.setText(f"Environment check failed: {error}")
-            label.setStyleSheet(f"QLabel#environmentResultLabel {{ color: {err_color}; padding-top: 4px; }}")
+            label.setStyleSheet(f"QLabel#environmentResultLabel {{ {base} color: {err_color}; }}")
             return
         if result is None:
-            label.setText("No environment check has been run yet.")
-            label.setStyleSheet(f"QLabel#environmentResultLabel {{ color: {neutral_color}; padding-top: 4px; }}")
+            label.setText(onboarding_text(lang, "environment_not_checked"))
+            label.setStyleSheet(f"QLabel#environmentResultLabel {{ {base} color: {neutral_color}; }}")
             return
         color = err_color if result.blocker_count else ok_color
         label.setText(self._environment_summary_text(result))
-        label.setStyleSheet(f"QLabel#environmentResultLabel {{ color: {color}; padding-top: 4px; }}")
+        label.setStyleSheet(f"QLabel#environmentResultLabel {{ {base} color: {color}; }}")
 
     def _show_environment_results_dialog(self, result) -> None:
         show_environment_results_dialog(

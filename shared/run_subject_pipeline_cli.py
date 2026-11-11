@@ -264,12 +264,19 @@ def _environment_config_from_args(
     output_root: Path | None,
 ) -> EnvironmentDoctorConfig:
     subject_root = args.subject_root.expanduser().resolve()
-    layout = subject_layout(subject_root, output_root=output_root)
+    layout_root = subject_root.parent if subject_root.is_file() else subject_root
+    layout = subject_layout(layout_root, output_root=output_root)
     from shared.environment import run_needs_brain_mask
-    brain_mask_required = run_needs_brain_mask(subject_root, targets=targets,
-        subject_id=args.subject_id, output_root=output_root,
+    brain_mask_required = run_needs_brain_mask(
+        subject_root,
+        targets=targets,
+        subject_id=args.subject_id,
+        output_root=output_root,
         brain_mask_backend=args.brain_mask_backend,
-        force=args.preprocessing_force, resume=not args.no_resume)
+        force=args.preprocessing_force,
+        resume=not args.no_resume,
+        preprocessing_stages=getattr(args, "preprocessing_stages", None),
+    )
     return EnvironmentDoctorConfig(
         targets=targets,
         repo_root=REPO_ROOT,
@@ -311,6 +318,7 @@ def _environment_config_from_args(
         preprocessing_fsl_bin_dir=args.preprocessing_fsl_bin_dir,
         preprocessing_execution_backend=getattr(args, "preprocessing_execution_backend", None),
         preprocessing_reverse_phase=bool(getattr(args, "preprocessing_reverse_phase_b0", None)),
+        preprocessing_stages=getattr(args, "preprocessing_stages", None),
         postprocess_freesurfer_home=args.postprocess_freesurfer_home,
         postprocess_runtime=args.postprocess_runtime,
         postprocess_license_file=args.postprocess_license_file,
@@ -543,6 +551,14 @@ def build_parser() -> argparse.ArgumentParser:
     # W2a (D1): preprocessing has one route. The three removed flags stay registered only to fail with the message.
     add_removed_flags(parser)
     parser.add_argument("--preprocessing-force", action="store_true", help="Force rerun preprocessing even if outputs exist.")
+    parser.add_argument(
+        "--preprocessing-stages",
+        default=None,
+        help=(
+            "Comma-separated preprocessing stages: brain_mask, denoise, eddy, topup "
+            "(default: denoise,eddy,topup; brain_mask still runs automatically if no mask is supplied)."
+        ),
+    )
     parser.add_argument("--preprocessing-skip-gibbs", action="store_true",
                         help="Skip DIPY Gibbs removal (for partial-Fourier data). Preprocessing has one route: DIPY MP-PCA, "
                              "DIPY Gibbs removal, FSL eddy/topup through dwifslpreproc.")
@@ -597,6 +613,11 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("auto", "python", "mrtrix"),
         help=("Connectome backend. auto: MRtrix tck2connectome for a .tck source with a streamline-count "
               "metric, Python for any other source or metric; no silent fallback."),
+    )
+    parser.add_argument(
+        "--connectome-metrics",
+        default=None,
+        help="Comma-separated connectome edge weighting modes: sift2, fiber_count (default: sift2).",
     )
     parser.add_argument('--max-parallel-models', type=int, choices=(1,2,3), default=1,
                         help='Independent Free-water/NODDI/DKI processes; resource-bounded; default sequential.')
@@ -881,8 +902,10 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as exc:
         parser.error(str(exc))
 
+    from shared.pipeline import resolve_subject_root_dir
     subject_root = args.subject_root.expanduser().resolve()
     subject_id = (args.subject_id or _infer_subject_id(subject_root)).strip()
+    subject_root = resolve_subject_root_dir(subject_root, subject_id).expanduser().resolve()
     args.subject_root = subject_root
     args.subject_id = subject_id
     output_root = args.output_root.expanduser().resolve() if args.output_root else None
@@ -987,6 +1010,7 @@ def main(argv: list[str] | None = None) -> int:
         preprocessing_readout_time=args.preprocessing_readout_time,
         preprocessing_eddy_threads=args.preprocessing_eddy_threads,
         preprocessing_eddy_second_level_model=args.preprocessing_eddy_slm,
+        preprocessing_stages=getattr(args, "preprocessing_stages", None),
         microstructure_fit_method=args.micro_fit_method,
         microstructure_run_free_water=bool(args.run_free_water),
         microstructure_run_noddi=bool(args.run_noddi),
@@ -1039,6 +1063,7 @@ def main(argv: list[str] | None = None) -> int:
         tract_querier_root=args.tract_querier_root,
         wmql_python_executable=args.wmql_python_executable,
         connectome_backend=args.connectome_backend,
+        connectome_metrics=getattr(args, "connectome_metrics", None),
         connectome_compress_mrtrix_dense=args.compress_mrtrix_dense,
         saf_fs_dir=args.saf_fs_dir,
         saf_pregenerated_tractogram=args.saf_pregenerated_tractogram,
@@ -1095,8 +1120,9 @@ def main(argv: list[str] | None = None) -> int:
         # shared/process_group.py), leave a terminal "cancelled" manifest
         # instead of letting run_subject_products() vanish mid-flight with
         # the manifest stuck at "running" (or never written at all).
+        manifest_root = config.subject_root.parent if config.subject_root.is_file() else config.subject_root
         cancellation_manifest_path = orchestration_manifest_path(
-            config.subject_root, output_root=config.output_root, run_name=config.run_name
+            manifest_root, output_root=config.output_root, run_name=config.run_name
         )
         signal.signal(
             signal.SIGTERM,

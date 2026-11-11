@@ -106,17 +106,27 @@ def gui_brain_mask_required(
     input_mask_exists: bool,
     preprocessing_on: bool,
     mask_backend: str,
+    preprocessing_stages: str = "",
 ) -> bool:
     """C5: provision the brain-mask runtime whenever the closure needs a mask and none is supplied.
 
     The runtime is also required when the input folder is not chosen yet, so Prepare
-    installs it before the first run. A supplied ``input/nodif_brain_mask.nii.gz`` removes the need.
+    installs it before the first run. A supplied ``input/nodif_brain_mask.nii.gz`` removes the need
+    unless ``brain_mask`` is explicitly checked in ``preprocessing_stages`` (or legacy ``preprocessing_on``
+    with ``mask_backend != 'provided'`` when ``preprocessing_stages`` is unset).
     """
 
     from shared.target_closure import MASK_TARGETS
 
     needs_mask = bool(set(MASK_TARGETS).intersection(targets))
     has_user_mask = bool(input_known and input_mask_exists)
+    stages_text = (preprocessing_stages or "").strip()
+    if stages_text:
+        from shared.algorithm_selection import PREPROCESSING, algorithms
+        stages = algorithms(stages_text, PREPROCESSING, "denoise,eddy,topup")
+        if not has_user_mask:
+            return bool(needs_mask or preprocessing_on)
+        return bool(preprocessing_on and "brain_mask" in stages)
     missing_mask = needs_mask and not has_user_mask and (input_known or mask_backend != "provided")
     # Preprocessing (FSL eddy) changes the voxel space and may need a new mask in
     # corrected space even when a supplied input mask already exists.

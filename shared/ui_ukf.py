@@ -68,10 +68,7 @@ def refresh_ukf_controls(owner, backend):
             label = qt.QLabel(en)
             layout.addRow(label, control)
             controls[key], labels[key] = control, label
-        note = qt.QLabel(
-            "Author-module defaults, not a validated WMA sampling protocol. "
-            "No target streamline count; all supplied shells. Anatomical review remains required."
-        )
+        note = qt.QLabel("Uses UKFTractography author defaults across all shells.")
         note.wordWrap = True
         layout.addRow(note)
         reset = qt.QPushButton("Restore author defaults")
@@ -99,6 +96,9 @@ def refresh_ukf_controls(owner, backend):
     target_reset = "恢复作者默认值" if zh else "Restore author defaults"
     if owner._ukfReset.text != target_reset:
         owner._ukfReset.text = target_reset
+    target_note = "默认使用 UKFTractography 作者参数（全部壳层）。" if zh else "Uses UKFTractography author defaults across all shells."
+    if owner._ukfNote.text != target_note:
+        owner._ukfNote.text = target_note
     for key, en, chinese, *_ in CONTROLS:
         target_label = chinese if zh else en
         if owner._ukfLabels[key].text != target_label:

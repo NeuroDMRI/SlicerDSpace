@@ -43,7 +43,7 @@ TEXT = {
             "Both endpoints in selection",
             "Connect selected regions A ↔ target regions B",
         ],
-        note="Uses full quantitative files, not display previews. Invalid fits stay excluded. ROI tracks are a geometric subset, not automatically identified anatomical bundles.",
+        note="Computes regional statistics from full quantitative maps; ROI tracks are geometric subsets.",
     ),
     "zh": dict(
         title="脑区分析（可选）",
@@ -73,7 +73,7 @@ TEXT = {
         selectors="输入名称或标签号，多个用逗号分隔",
         report="打开脑区分析报告",
         rules=["经过任一所选脑区", "经过全部所选脑区", "至少一个端点在选区内", "两个端点都在选区内", "连接所选脑区 A ↔ 目标脑区 B"],
-        note="使用完整定量文件，不使用显示预览；无效拟合仍排除。选区流线是几何筛选结果，不自动等同于解剖束识别。",
+        note="基于完整定量结果计算脑区统计；选区流线为几何筛选子集。",
     ),
 }
 
@@ -221,10 +221,26 @@ def _paths(owner):
 def _status(owner, text, error=False):
     from shared.ui_styles import is_dark_mode
 
+    owner._regionStatusError = bool(error)
     label = owner._regionWidgets["status"]
     label.text = text
-    dark = is_dark_mode(label)
+    dark = is_dark_mode(getattr(owner, "_uiWidget", None) or label)
     if dark:
+        label.setStyleSheet("color: #FF7B72;" if error else "color: #B8C5D0;")
+    else:
+        label.setStyleSheet("color: #B3261E;" if error else "color: #52616B;")
+
+
+def refresh_region_styles(owner, *, dark=None):
+    widgets = getattr(owner, "_regionWidgets", None) or {}
+    label = widgets.get("status")
+    if label is None:
+        return
+    from shared.ui_styles import is_dark_mode
+
+    use_dark = is_dark_mode(getattr(owner, "_uiWidget", None) or label) if dark is None else bool(dark)
+    error = bool(getattr(owner, "_regionStatusError", False))
+    if use_dark:
         label.setStyleSheet("color: #FF7B72;" if error else "color: #B8C5D0;")
     else:
         label.setStyleSheet("color: #B3261E;" if error else "color: #52616B;")

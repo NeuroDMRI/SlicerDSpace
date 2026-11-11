@@ -73,9 +73,19 @@ def _ensure_torch_via_extension(
     try:
         import PyTorchUtils
     except ModuleNotFoundError as exc:  # pragma: no cover - surfaced at runtime
-        raise RuntimeError(
-            "PyTorch extension not detected. Please install the 'PyTorch' extension via Extension Manager and restart Slicer."
-        ) from exc
+        try:
+            import torch  # type: ignore[import-not-found]
+        except ModuleNotFoundError:
+            raise RuntimeError(
+                "PyTorch extension not detected. Please install the 'PyTorch' extension via Extension Manager and restart Slicer."
+            ) from exc
+        if _release_version(torch.__version__) < _release_version(min_version):
+            raise RuntimeError(
+                f"PyTorch {torch.__version__} is installed, but SlicerDSpace requires torch>={min_version}. "
+                "Upgrade torch with the Slicer PyTorch extension and restart Slicer before running inference."
+            )
+        _log(f"PyTorch detected (version {torch.__version__})")
+        return torch
 
     torch_logic = PyTorchUtils.PyTorchUtilsLogic()
 
@@ -324,6 +334,7 @@ class SharedLogicMixin:
         preprocessing_mrtrix_bin_dir: Optional[Path] = None,
         preprocessing_fsl_bin_dir: Optional[Path] = None,
         preprocessing_execution_backend: Optional[str] = None,
+        preprocessing_stages: Optional[str] = None,
         postprocess_freesurfer_home: Optional[Path] = None,
         postprocess_runtime: Optional[Path] = None,
         postprocess_license_file: Optional[Path] = None,
@@ -374,6 +385,7 @@ class SharedLogicMixin:
                 preprocessing_mrtrix_bin_dir=preprocessing_mrtrix_bin_dir,
                 preprocessing_fsl_bin_dir=preprocessing_fsl_bin_dir,
                 preprocessing_execution_backend=preprocessing_execution_backend,
+                preprocessing_stages=preprocessing_stages,
                 postprocess_freesurfer_home=postprocess_freesurfer_home,
                 postprocess_runtime=postprocess_runtime,
                 postprocess_license_file=postprocess_license_file,
@@ -430,6 +442,7 @@ class SharedLogicMixin:
         preprocessing_mrtrix_bin_dir: Optional[Path] = None,
         preprocessing_fsl_bin_dir: Optional[Path] = None,
         preprocessing_execution_backend: Optional[str] = None,
+        preprocessing_stages: Optional[str] = None,
         postprocess_freesurfer_home: Optional[Path] = None,
         postprocess_runtime: Optional[Path] = None,
         postprocess_license_file: Optional[Path] = None,
@@ -447,7 +460,9 @@ class SharedLogicMixin:
         """Check environment dependencies without requiring subject inputs."""
 
         if subject_root is not None and subject_root.expanduser().exists():
-            report_dir = subject_layout(subject_root.expanduser().resolve(), output_root=output_root).run_metadata / "environment"
+            resolved_subject_root = subject_root.expanduser().resolve()
+            layout_root = resolved_subject_root.parent if resolved_subject_root.is_file() else resolved_subject_root
+            report_dir = subject_layout(layout_root, output_root=output_root).run_metadata / "environment"
         elif output_root is not None:
             report_dir = output_root.expanduser().resolve() / "00_run_metadata" / "environment"
         else:
@@ -488,6 +503,7 @@ class SharedLogicMixin:
                 preprocessing_mrtrix_bin_dir=preprocessing_mrtrix_bin_dir,
                 preprocessing_fsl_bin_dir=preprocessing_fsl_bin_dir,
                 preprocessing_execution_backend=preprocessing_execution_backend,
+                preprocessing_stages=preprocessing_stages,
                 postprocess_freesurfer_home=postprocess_freesurfer_home,
                 postprocess_runtime=postprocess_runtime,
                 postprocess_license_file=postprocess_license_file,
@@ -589,6 +605,7 @@ class SharedLogicMixin:
         preprocessing_reverse_phase_b0: Optional[Path] = None,
         preprocessing_phase_encoding_direction: Optional[str] = None,
         preprocessing_readout_time: Optional[float] = None,
+        preprocessing_stages: Optional[str] = None,
         postprocess_freesurfer_home: Optional[Path] = None,
         postprocess_runtime: Optional[Path] = None,
         postprocess_license_file: Optional[Path] = None,
@@ -604,6 +621,7 @@ class SharedLogicMixin:
         tractcloud_python_executable: Optional[Path] = None,
         tractcloud_data_dir: Optional[Path] = None,
         connectome_backend: str = "auto",
+        connectome_metrics: Optional[str] = None,
         connectome_compress_mrtrix_dense: Optional[bool] = None,
         preflight_blocked_targets: Optional[dict[str, str]] = None,
         requested_targets: tuple[str, ...] = (),
@@ -648,6 +666,7 @@ class SharedLogicMixin:
                 preprocessing_reverse_phase_b0=preprocessing_reverse_phase_b0,
                 preprocessing_phase_encoding_direction=preprocessing_phase_encoding_direction,
                 preprocessing_readout_time=preprocessing_readout_time,
+                preprocessing_stages=preprocessing_stages,
                 postprocess_freesurfer_home=postprocess_freesurfer_home,
                 postprocess_runtime=postprocess_runtime,
                 postprocess_license_file=postprocess_license_file,
@@ -672,6 +691,7 @@ class SharedLogicMixin:
                 tractcloud_python_executable=tractcloud_python_executable,
                 tractcloud_data_dir=tractcloud_data_dir,
                 connectome_backend=connectome_backend,
+                connectome_metrics=connectome_metrics,
                 connectome_compress_mrtrix_dense=connectome_compress_mrtrix_dense,
                 preflight_blocked_targets=preflight_blocked_targets or {},
             ),
@@ -732,6 +752,7 @@ class SharedLogicMixin:
         preprocessing_reverse_phase_b0: Optional[Path] = None,
         preprocessing_phase_encoding_direction: Optional[str] = None,
         preprocessing_readout_time: Optional[float] = None,
+        preprocessing_stages: Optional[str] = None,
         postprocess_freesurfer_home: Optional[Path] = None,
         postprocess_runtime: Optional[Path] = None,
         postprocess_license_file: Optional[Path] = None,
@@ -747,6 +768,7 @@ class SharedLogicMixin:
         tractcloud_python_executable: Optional[Path] = None,
         tractcloud_data_dir: Optional[Path] = None,
         connectome_backend: str = "auto",
+        connectome_metrics: Optional[str] = None,
         connectome_compress_mrtrix_dense: Optional[bool] = None,
         preflight_blocked_targets: Optional[dict[str, str]] = None,
         requested_targets: tuple[str, ...] = (),
@@ -791,6 +813,7 @@ class SharedLogicMixin:
                 preprocessing_reverse_phase_b0=preprocessing_reverse_phase_b0,
                 preprocessing_phase_encoding_direction=preprocessing_phase_encoding_direction,
                 preprocessing_readout_time=preprocessing_readout_time,
+                preprocessing_stages=preprocessing_stages,
                 postprocess_freesurfer_home=postprocess_freesurfer_home,
                 postprocess_runtime=postprocess_runtime,
                 postprocess_license_file=postprocess_license_file,
@@ -815,6 +838,7 @@ class SharedLogicMixin:
                 tractcloud_python_executable=tractcloud_python_executable,
                 tractcloud_data_dir=tractcloud_data_dir,
                 connectome_backend=connectome_backend,
+                connectome_metrics=connectome_metrics,
                 connectome_compress_mrtrix_dense=connectome_compress_mrtrix_dense,
                 preflight_blocked_targets=preflight_blocked_targets or {},
             ),

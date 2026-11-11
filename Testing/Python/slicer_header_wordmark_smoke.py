@@ -15,7 +15,7 @@ def run():
         widget = slicer.modules.slicerdspace.widgetRepresentation().self()
         logo = widget._headerWordmark
         assert not logo.pixmap.isNull()
-        assert logo.width == 166 and logo.height == 30
+        assert logo.width == 208 and logo.height == 38
         assert widget.ui.logoLabel.isHidden()
         assert widget.ui.headerTextWidget.isHidden()
         assert not logo.isHidden()

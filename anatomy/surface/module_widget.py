@@ -194,35 +194,40 @@ class SurfaceWidgetMixin:
             missing.append("Subject ID")
 
         if not input_dir_str:
+            self._lastAutoDetectedInputSignature = None
             missing.append("Subject directory")
             return False, missing
 
         candidate = Path(input_dir_str).expanduser()
-        if not candidate.is_dir():
+        if not (candidate.is_dir() or candidate.is_file()):
             missing.append("Subject directory")
             return False, missing
 
-        inspected = inspect_input_directory(self, candidate, subject_id, refresh=refresh) if subject_id else {"mode": "missing"}
+        inspected = inspect_input_directory(self, candidate, subject_id, refresh=refresh)
         mode = inspected.get("mode")
         if mode == "missing":
             missing.append("Subject input layout")
-        elif mode == "legacy_registered":
-            if not output_dir_str:
-                missing.append("Output directory")
-            expected_files = [
-                f"{subject_id}-dti-FractionalAnisotropy-Reg.nii.gz",
-                f"{subject_id}-dti-MinEigenvalue-Reg.nii.gz",
-                f"{subject_id}-dti-MidEigenvalue-Reg.nii.gz",
-                f"{subject_id}-dti-MaxEigenvalue-Reg.nii.gz",
-                f"{subject_id}-dti-Trace-Reg.nii.gz",
-                f"{subject_id}-dti-MeanDiffusivity-Reg.nii.gz",
-                f"{subject_id}-mask-Reg.nii.gz",
-                f"{subject_id}-b0ToAtlasT2.tfm",
-            ]
-            subject_dir = Path(inspected["subject_dir"])
-            for name in expected_files:
-                if not (subject_dir / name).exists():
-                    missing.append(name)
+        else:
+            from shared.ui_compact import sync_detected_input_format
+
+            sync_detected_input_format(self, mode, signature=(input_dir_str, subject_id))
+            if mode == "legacy_registered":
+                if not output_dir_str:
+                    missing.append("Output directory")
+                expected_files = [
+                    f"{subject_id}-dti-FractionalAnisotropy-Reg.nii.gz",
+                    f"{subject_id}-dti-MinEigenvalue-Reg.nii.gz",
+                    f"{subject_id}-dti-MidEigenvalue-Reg.nii.gz",
+                    f"{subject_id}-dti-MaxEigenvalue-Reg.nii.gz",
+                    f"{subject_id}-dti-Trace-Reg.nii.gz",
+                    f"{subject_id}-dti-MeanDiffusivity-Reg.nii.gz",
+                    f"{subject_id}-mask-Reg.nii.gz",
+                    f"{subject_id}-b0ToAtlasT2.tfm",
+                ]
+                subject_dir = Path(inspected["subject_dir"])
+                for name in expected_files:
+                    if not (subject_dir / name).exists():
+                        missing.append(name)
 
         return (len(missing) == 0), missing
 

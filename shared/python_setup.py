@@ -84,11 +84,16 @@ def install_requirements(requirements, *, protected=True, loaded=(), torch_minim
     requirements = tuple(dict.fromkeys(requirements))
     before = installed_versions()
     backend = "already_satisfied"
-    if torch_minimum:
-        PyTorchUtils = _import_pytorch_utils()
-        logic = PyTorchUtils.PyTorchUtilsLogic()
-        if (not requirement_satisfied("torch>=" + torch_minimum)
-                or (torchvision_required and not requirement_satisfied("torchvision"))):
+    if torch_minimum and (
+        not requirement_satisfied("torch>=" + torch_minimum)
+        or (torchvision_required and not requirement_satisfied("torchvision"))
+    ):
+        try:
+            PyTorchUtils = _import_pytorch_utils()
+        except ModuleNotFoundError:
+            PyTorchUtils = None
+        if PyTorchUtils is not None:
+            logic = PyTorchUtils.PyTorchUtilsLogic()
             torch = logic.installTorch(askConfirmation=False, torchVersionRequirement=">=" + torch_minimum)
             if (torch is None or not requirement_satisfied("torch>=" + torch_minimum)
                     or (torchvision_required and not requirement_satisfied("torchvision"))):

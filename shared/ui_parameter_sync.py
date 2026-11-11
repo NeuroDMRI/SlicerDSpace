@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from shared.user_config import canonical_microstructure_stages
+from shared.user_config import selected_microstructure_stages
 
 
 def apply_preprocessing_availability(checkbox, system=None, machine=None, node=None) -> bool:
@@ -82,6 +82,10 @@ def sync_parameter_node_to_ui(widget) -> None:
             getattr(ui, "brainMaskBackendComboBox", None),
             getattr(node, "brainMaskBackend", "pnl_cnn") or "pnl_cnn",
         )
+        input_fmt = getattr(node, "inputFormat", "nifti") or "nifti"
+        sync_combo_data(getattr(ui, "inputFormatComboBox", None), input_fmt)
+        from shared.ui_compact import _apply_input_path_mode
+        _apply_input_path_mode(widget, input_fmt)
         widget._sync_combo_text(getattr(ui, "brainMaskDeviceComboBox", None),
                                 getattr(node, "brainMaskDevice", "auto") or "auto", via_index=False)
         sync_combo_data(getattr(ui, "pnlMaskRouteComboBox", None), getattr(node, "pnlMaskRoute", "auto") or "auto")
@@ -133,7 +137,7 @@ def sync_parameter_node_to_ui(widget) -> None:
         widget._microstructure_stages_text(),
         via_index=False,
     )
-    stages = set(canonical_microstructure_stages(widget._microstructure_stages_text()))
+    stages = set(selected_microstructure_stages(widget._microstructure_stages_text()))
     for name, stage in (
         ("orchestrationFreeWaterCheckBox", "freewater"),
         ("orchestrationNoddiCheckBox", "noddi"),
@@ -157,11 +161,19 @@ def sync_parameter_node_to_ui(widget) -> None:
         via_index=False,
     )
     widget._sync_combo_text(getattr(ui, "connectomeBackendComboBox", None), node.connectomeBackend or "auto", via_index=False)
-    widget._sync_combo_text(
-        getattr(ui, "unifiedTorchDeviceComboBox", None),
-        node.device or node.ddsegDevice or "auto",
-        via_index=False,
-    )
+    desired_dev = str(node.device or node.ddsegDevice or "auto").strip().lower() or "auto"
+    torch_combo = getattr(ui, "unifiedTorchDeviceComboBox", None)
+    data_idx = torch_combo.findData(desired_dev) if torch_combo is not None and hasattr(torch_combo, "findData") else None
+    if isinstance(data_idx, int):
+        if data_idx < 0 and desired_dev.startswith("cuda:") and hasattr(torch_combo, "addItem"):
+            torch_combo.addItem(desired_dev.upper(), desired_dev)
+            data_idx = torch_combo.findData(desired_dev)
+        if data_idx >= 0 and sync_combo_data is not None:
+            sync_combo_data(torch_combo, desired_dev)
+        else:
+            widget._sync_combo_text(torch_combo, desired_dev, via_index=False)
+    else:
+        widget._sync_combo_text(torch_combo, desired_dev, via_index=False)
     widget._sync_checkbox(getattr(ui, "autoInstallPythonDependenciesCheckBox", None), bool(node.autoInstallPythonDependencies))
     widget._sync_checkbox(getattr(ui, "targetSurfaceCheckBox", None), bool(node.targetSurface))
     widget._sync_checkbox(

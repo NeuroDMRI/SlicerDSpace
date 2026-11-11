@@ -117,6 +117,7 @@ class EnvironmentDoctorConfig:
     preprocessing_fsl_bin_dir: Optional[Path] = None
     preprocessing_execution_backend: Optional[str] = None
     preprocessing_reverse_phase: bool = False
+    preprocessing_stages: Optional[str] = None
     postprocess_freesurfer_home: Optional[Path] = None
     postprocess_runtime: Optional[Path] = None
     postprocess_license_file: Optional[Path] = None
@@ -135,18 +136,47 @@ class EnvironmentDoctorConfig:
 
 
 def run_needs_brain_mask(subject_root: Path, *, targets, subject_id: str, output_root=None,
-                         brain_mask_backend='pnl_cnn', force=False, resume=True) -> bool:
+                         brain_mask_backend='pnl_cnn', force=False, resume=True,
+                         preprocessing_stages: Optional[str] = None) -> bool:
     """Common CLI/API mask prerequisite policy, including stale preprocessing outputs."""
     from shared.io_layout import subject_layout
-    subject_root = subject_root.expanduser().resolve()
+    from shared.pipeline import resolve_subject_root_dir
+    subject_root = resolve_subject_root_dir(subject_root, subject_id).expanduser().resolve()
+    convertible = None
+    if subject_root.is_file() or not (subject_root / 'input' / 'data.nii.gz').is_file():
+        from shared.convertible_input import find_convertible_input
+        convertible = find_convertible_input(subject_root)
+        if convertible is not None:
+            subject_root = convertible[2]
     input_dir = subject_root / 'input'
     raw = all((input_dir / name).is_file() for name in ('data.nii.gz', 'bvals', 'bvecs'))
     if not raw:
         from shared.dicom_input import is_dicom_root
-        raw = is_dicom_root(subject_root)
+        raw = is_dicom_root(subject_root) or convertible is not None
     from shared.target_closure import MASK_TARGETS
     mask_targets = set(MASK_TARGETS)
-    required = raw and bool(mask_targets.intersection(targets)) and not (input_dir / 'nodif_brain_mask.nii.gz').is_file()
+    has_conv_mask = bool(convertible and 'mask_path' in convertible[3])
+    mask_file = input_dir / 'nodif_brain_mask.nii.gz'
+    has_any_mask = mask_file.is_file() or has_conv_mask
+    if preprocessing_stages is not None and str(preprocessing_stages).strip():
+        from shared.algorithm_selection import PREPROCESSING, algorithms
+        stages = algorithms(preprocessing_stages, PREPROCESSING, 'denoise,eddy,topup')
+        has_user_mask = (mask_file.is_file() and not mask_file.with_name('nodif_brain_mask.manifest.json').is_file()) or has_conv_mask
+        if not raw:
+            return False
+        if not has_user_mask:
+            return bool(mask_targets.intersection(targets) or 'preprocessing' in targets)
+        if 'preprocessing' in targets and 'brain_mask' in stages:
+            layout = subject_layout(subject_root, output_root=output_root)
+            stem = subject_id or subject_root.name
+            dwi, mask = layout.preproc / f'{stem}_dwi_final.nii.gz', layout.preproc / f'{stem}_brain_mask_final.nii.gz'
+            files = (dwi, mask, layout.preproc / f'{stem}_dwi_final.bval', layout.preproc / f'{stem}_dwi_final.bvec')
+            stale = force or not resume or not all(path.is_file() for path in files)
+            if not stale:
+                stale = mask.stat().st_mtime_ns < dwi.stat().st_mtime_ns
+            return bool(stale)
+        return False
+    required = raw and bool(mask_targets.intersection(targets)) and not has_any_mask
     # W2a (D1): preprocessing always runs FSL eddy, so it always writes a new corrected DWI and needs a new mask.
     if raw and 'preprocessing' in targets and brain_mask_backend != 'provided':
         layout = subject_layout(subject_root, output_root=output_root)
@@ -1200,9 +1230,26 @@ def build_dependency_specs(config: EnvironmentDoctorConfig) -> tuple[DependencyS
         if target == "preprocessing":
             from shared.preprocessing_route import resolve_preprocessing_execution_backend
 
-            _add_dipy_stack(specs, target)
+            stages_text = (config.preprocessing_stages or "").strip()
+            if stages_text:
+                from shared.algorithm_selection import PREPROCESSING, algorithms
+                chosen_preproc = algorithms(stages_text, PREPROCESSING, "denoise,eddy,topup")
+                need_denoise = "denoise" in chosen_preproc
+                need_eddy = "eddy" in chosen_preproc or ("topup" in chosen_preproc and config.preprocessing_reverse_phase)
+                effective_reverse = config.preprocessing_reverse_phase and ("topup" in chosen_preproc)
+            else:
+                need_denoise = True
+                need_eddy = True
+                effective_reverse = config.preprocessing_reverse_phase
+            if need_denoise:
+                _add_dipy_stack(specs, target)
+            else:
+                _add_core_python(specs, target)
+            if not need_eddy:
+                continue
+            effective_cfg = replace(config, preprocessing_reverse_phase=effective_reverse)
             if resolve_preprocessing_execution_backend(config.preprocessing_execution_backend) == "native":
-                _add_native_preprocessing_dependencies(specs, config, platform_name)
+                _add_native_preprocessing_dependencies(specs, effective_cfg, platform_name)
                 continue
             _add_mrtrix_commands(
                 specs,

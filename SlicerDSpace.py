@@ -13,7 +13,16 @@ from slicer.ScriptedLoadableModule import (
 )
 from slicer.parameterNodeWrapper import Choice, WithinRange, parameterNodeWrapper
 from slicer.util import VTKObservationMixin
-from shared.algorithm_selection import TRACKING, BUNDLES, selection_choices
+from shared.algorithm_selection import (
+    BUNDLES,
+    CONNECTOME,
+    MICROSTRUCTURE,
+    PREPROCESSING,
+    TRACKING,
+    selection_choices,
+)
+
+TORCH_DEVICE_CHOICES = ["auto", "cpu", *(f"cuda:{i}" for i in range(8))]
 
 from connectome.module_logic import ConnectomeLogicMixin
 from microstructure.module_logic import MicrostructureLogicMixin
@@ -42,7 +51,10 @@ class SlicerDSpace(ScriptedLoadableModule):
         # reports runnable and blocked targets after the module opens. Release
         # packaging declares recommended extension dependencies in CMake/.s4ext.
         self.parent.dependencies = []
-        self.parent.contributors = ["SlicerDSpace Team"]
+        self.parent.contributors = [
+            "Chengjin Li (Fan's Lab, UESTC)",
+            "Fan Zhang (Fan's Lab, UESTC)",
+        ]
         self.parent.helpText = (
             "Run multiple diffusion-MRI workflows inside one Slicer extension, including cortical "
             "surface reconstruction, parcellation, segmentation, microstructure analysis, "
@@ -51,7 +63,8 @@ class SlicerDSpace(ScriptedLoadableModule):
             "combined without repeating the same DTI and registration preparation steps."
         )
         self.parent.acknowledgementText = (
-            "SlicerDSpace open-source release. Portions developed at ShanghaiTech University."
+            "Developed by Chengjin Li and Fan's Lab at the University of Electronic "
+            "Science and Technology of China (UESTC)."
         )
 
 
@@ -60,10 +73,11 @@ class SlicerDSpaceParameterNode:
     """Parameter node definition stored in the MRML scene."""
 
     subjectId: str = ""
+    inputFormat: Annotated[str, Choice(["nifti", "dicom", "nrrd"])] = "nifti"
     outputDirectory: str = ""
     inputDirectory: str = ""
     predictMode: Annotated[str, Choice(["all", "wm"])] = "all"
-    device: Annotated[str, Choice(["auto", "cpu", "cuda:0"])] = "auto"
+    device: Annotated[str, Choice(TORCH_DEVICE_CHOICES)] = "auto"
     cleanupIntermediates: bool = False
     postprocessSubjectId: str = ""
     postprocessNativeDir: str = ""
@@ -86,7 +100,7 @@ class SlicerDSpaceParameterNode:
     ddsegWeightsDir: str = ""
     ddsegSlicerBase: str = ""
     ddsegSlicerExt: str = ""
-    ddsegDevice: Annotated[str, Choice(["auto", "cpu", "cuda:0"])] = "auto"
+    ddsegDevice: Annotated[str, Choice(TORCH_DEVICE_CHOICES)] = "auto"
     ddsegApplySoftmax: bool = False
     microstructureSubjectId: str = ""
     microstructureInputRoot: str = ""
@@ -97,6 +111,7 @@ class SlicerDSpaceParameterNode:
     microstructureRunNoddi: bool = False
     microstructureForceRecompute: bool = False
     targetPreprocessing: bool = True
+    orchestrationPreprocessingStages: Annotated[str, Choice(selection_choices(PREPROCESSING))] = "denoise,eddy,topup"
     brainMaskBackend: Annotated[str, Choice(["pnl_cnn", "provided"])] = "pnl_cnn"
     brainMaskDevice: Annotated[str, Choice(["auto", "cpu", "cuda"])] = "auto"
     pnlMaskRoute: Annotated[str, Choice(["auto", "managed", "native"])] = "auto"
@@ -115,13 +130,7 @@ class SlicerDSpaceParameterNode:
     wmaInputTractography: str = ""
     wmaAtlas: Annotated[str, Choice(["org", "east-west", "naba"])] = "org"
     orchestrationSelectStreamlines: int = 1000000
-    orchestrationMicrostructureStages: Annotated[str, Choice([
-        "dti", "dti,freewater", "dti,noddi", "dti,dki",
-        "dti,freewater,noddi", "dti,freewater,dki", "dti,noddi,dki", "dti,freewater,noddi,dki",
-        # iFW (T1 D3): the same combinations with ifw last, the canonical stage order.
-        "dti,ifw", "dti,freewater,ifw", "dti,noddi,ifw", "dti,dki,ifw",
-        "dti,freewater,noddi,ifw", "dti,freewater,dki,ifw", "dti,noddi,dki,ifw", "dti,freewater,noddi,dki,ifw",
-    ])] = "dti"
+    orchestrationMicrostructureStages: Annotated[str, Choice(selection_choices(MICROSTRUCTURE))] = "dti"
     # Echo time (ms) for iFW as text; empty = not set (the stage then reads EchoTime from the DWI sidecar).
     orchestrationIfwEchoTimeMs: str = ""
     orchestrationDkiFitMethod: Annotated[str, Choice(["WLS", "OLS", "MKCURVE", "MKCURVE_MATLAB"])] = "MKCURVE"
@@ -140,6 +149,7 @@ class SlicerDSpaceParameterNode:
     experimentCliOptions: str = ""
     experimentVariants: str = '[{"name": "baseline", "args": []}]'
     connectomeBackend: Annotated[str, Choice(["auto", "python", "mrtrix"])] = "auto"
+    orchestrationConnectomeMetrics: Annotated[str, Choice(selection_choices(CONNECTOME))] = "sift2"
     # Three states (T-N1): unset = not forwarded (the auto backend then compresses on the MRtrix path),
     # on = --compress-mrtrix-dense, off = --no-compress-mrtrix-dense.
     connectomeCompressMrtrixDenseState: Annotated[str, Choice(["unset", "on", "off"])] = "unset"
@@ -176,6 +186,18 @@ class SlicerDSpaceWidget(
 
     def setup(self) -> None:
         ScriptedLoadableModuleWidget.setup(self)
+        for index in range(self.layout.count()):
+            item = self.layout.itemAt(index)
+            existing = item.widget() if item is not None else None
+            if existing is not None:
+                existing.hide()
+        for attr in ("reloadCollapsibleButton", "helpCollapsibleButton"):
+            section = getattr(self, attr, None)
+            if section is not None:
+                section.hide()
+        self._set_module_help_section_hidden(True)
+        self.layout.setContentsMargins(0, 0, 0, 0)
+        self.layout.setSpacing(2)
         from shared.branding import migrate_qsettings
         migrate_qsettings(slicer.app.userSettings())
         uiWidget = slicer.util.loadUI(self.resourcePath("UI/SlicerDSpace.ui"))

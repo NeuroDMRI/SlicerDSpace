@@ -27,9 +27,20 @@ def resolve_preprocessing_execution_backend(selection: str | None = None) -> str
     return choice
 
 
-def route_id(*, gibbs: bool = True, topup: bool = False) -> str:
-    """W2b: the route id of one run: ``dipy_mppca+gibbs+fsl_eddy[+topup]``, without ``+gibbs`` when Gibbs removal is skipped."""
-    return "dipy_mppca" + ("+gibbs" if gibbs else "") + "+fsl_eddy" + ("+topup" if topup else "")
+def route_id(*, gibbs: bool = True, topup: bool = False, denoise: bool = True, eddy: bool = True) -> str:
+    """W2b: the route id of one run: ``dipy_mppca+gibbs+fsl_eddy[+topup]``, or the selected subset of stages."""
+    parts: list[str] = []
+    if denoise:
+        parts.append("dipy_mppca")
+        if gibbs:
+            parts.append("gibbs")
+    if eddy:
+        parts.append("fsl_eddy")
+        if topup:
+            parts.append("topup")
+    elif topup:
+        parts.append("topup")
+    return "+".join(parts) if parts else "brain_mask_only"
 
 ROUTE_TEXT = "DIPY MP-PCA, DIPY Gibbs removal, FSL eddy/topup through dwifslpreproc"
 # Flags of the removed route choice, the removed denoise choice and the removed between-volume motion correction.

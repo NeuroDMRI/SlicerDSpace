@@ -12,7 +12,7 @@ from typing import Any, Optional
 
 from shared.orchestrator import normalize_orchestrator_targets, orchestrator_closure
 from shared.topup_parameters import TopupParameters, topup_cli_args, topup_orchestrator_kwargs
-from shared.user_config import canonical_microstructure_stages
+from shared.user_config import canonical_microstructure_stages, selected_microstructure_stages
 
 
 @dataclass(frozen=True)
@@ -81,6 +81,8 @@ class RunSelection:
     # Algorithms after the closure (WMA adds UKF). Only used to ship UKF options; the CLI and the
     # orchestrator get the user's ``tractography_backend`` and recompute the closure with provenance.
     closure_tractography_backend: str = ""
+    preprocessing_stages: str = ""
+    connectome_metrics: str = ""
 
 
 @dataclass(frozen=True)
@@ -172,6 +174,15 @@ def microstructure_optional_stage_flags(
     return "freewater" in stages, "noddi" in stages, "dki" in stages
 
 
+def microstructure_dti_enabled(stages_text: str) -> bool:
+    """True when DTI was explicitly selected in Microstructure (defaults to True when unset)."""
+
+    text = (stages_text or "").strip().lower()
+    if not text:
+        return True
+    return "dti" in selected_microstructure_stages(text)
+
+
 def microstructure_ifw_enabled(stages_text: str, *, legacy_ifw: bool = False) -> bool:
     """True when the iFW stage is selected (T-C2). The three-flag API above keeps its shape."""
 
@@ -259,6 +270,7 @@ def selected_closure(
     microstructure_dki: bool = False,
     provided_tractography: tuple[str, ...] = (),
     microstructure_ifw: bool = False,
+    microstructure_dti: bool = True,
 ):
     """Return the prerequisite closure (C1) of the ticked targets.
 
@@ -292,6 +304,7 @@ def selected_closure(
         microstructure_run_noddi=microstructure_noddi,
         microstructure_run_dki=microstructure_dki,
         microstructure_run_ifw=microstructure_ifw,
+        microstructure_run_dti=microstructure_dti,
         provided_tractography=tuple(provided_tractography),
     )
 
@@ -306,6 +319,7 @@ def selected_product_targets(
     microstructure_dki: bool = False,
     provided_tractography: tuple[str, ...] = (),
     microstructure_ifw: bool = False,
+    microstructure_dti: bool = True,
 ) -> tuple[str, ...]:
     """Return normalized product targets after backend expansion and prerequisite closure."""
 
@@ -317,6 +331,7 @@ def selected_product_targets(
         microstructure_noddi=microstructure_noddi,
         microstructure_dki=microstructure_dki,
         microstructure_ifw=microstructure_ifw,
+        microstructure_dti=microstructure_dti,
         provided_tractography=provided_tractography,
     ).targets
 
@@ -421,7 +436,7 @@ def task_keys_for_running_line(line: str) -> tuple[str, ...]:
     if "tractcloud" in lowered:
         return ("tractcloud", "bundles.tractcloud")
     if "connectome" in lowered:
-        return ("connectome", "connectome.streamline_count")
+        return ("connectome", "connectome.streamline_count", "connectome.sift2_weighted")
     return ()
 
 
@@ -496,10 +511,13 @@ def build_single_subject_run_kwargs(
 ) -> dict[str, Any]:
     """Build product-orchestration kwargs for one subject."""
 
+    from shared.pipeline import resolve_subject_root_dir
+
+    subject_root = resolve_subject_root_dir(Path(selection.subject_root_text).expanduser(), selection.subject_id)
     return {
         **_ukf_run_options(selection),
         "subject_id": selection.subject_id,
-        "subject_root": Path(selection.subject_root_text).expanduser(),
+        "subject_root": subject_root,
         "output_root": Path(selection.output_root_text).expanduser() if selection.output_root_text else None,
         "targets": selection.selected_targets,
         "requested_targets": selection.requested_targets,
@@ -555,6 +573,8 @@ def build_single_subject_run_kwargs(
         "tractcloud_data_dir": external_paths.get("tractcloud_data_dir"),
         "connectome_backend": selection.connectome_backend,
         "connectome_compress_mrtrix_dense": selection.connectome_compress_mrtrix_dense,
+        **({"preprocessing_stages": selection.preprocessing_stages} if selection.preprocessing_stages else {}),
+        **({"connectome_metrics": selection.connectome_metrics} if selection.connectome_metrics else {}),
         "preflight_blocked_targets": dict(preflight_blocked_targets),
         **topup_orchestrator_kwargs(selection.topup),
     }
@@ -596,6 +616,8 @@ def build_batch_run_kwargs(selection: RunSelection, *, batch_root: Path) -> dict
         or ("native" if sys.platform == "win32" else None),
         "connectome_backend": selection.connectome_backend,
         "connectome_compress_mrtrix_dense": selection.connectome_compress_mrtrix_dense,
+        **({"preprocessing_stages": selection.preprocessing_stages} if selection.preprocessing_stages else {}),
+        **({"connectome_metrics": selection.connectome_metrics} if selection.connectome_metrics else {}),
         "preflight_blocked_targets": {},
         # One reverse-PE b=0 file cannot describe every subject, so batch runs
         # only forward the per-protocol values (validation blocks the file).
@@ -855,6 +877,20 @@ def _append_ifw_args(args, common_run_kwargs):
             args.extend([flag, str(value)])
 
 
+def _wmql_selection_cli_tokens(common_run_kwargs: dict[str, Any]) -> list[str]:
+    """Format ``--wmql-query-selection`` without emitting an empty argv token.
+
+    On Windows, passing an empty ``""`` token to ``Slicer.exe --launch PythonSlicer``
+    causes ``CTKAppLauncher`` to dump its ``--launcher-*`` help table to stdout.
+    """
+
+    raw = common_run_kwargs.get("wmql_query_selection", ())
+    joined = str(raw).strip() if isinstance(raw, str) else ",".join(str(item) for item in (raw or ()) if str(item))
+    if joined:
+        return ["--wmql-query-selection", joined]
+    return ["--wmql-query-selection="]
+
+
 def build_background_cli_args(
     common_run_kwargs: dict[str, Any],
     external_paths: dict[str, Optional[Path]],
@@ -882,19 +918,19 @@ def build_background_cli_args(
         "--execute",
         "--print-manifest-only",
         "--brain-mask-backend",
-        str(common_run_kwargs.get("brain_mask_backend", "pnl_cnn")),
+        str(common_run_kwargs.get("brain_mask_backend") or "pnl_cnn"),
         "--brain-mask-device",
-        str(common_run_kwargs.get("brain_mask_device", "auto")),
+        str(common_run_kwargs.get("brain_mask_device") or "auto"),
         "--pnl-mask-route",
-        str(common_run_kwargs.get("pnl_mask_route", "auto")),
+        str(common_run_kwargs.get("pnl_mask_route") or "auto"),
         "--tractography-backend",
         str(common_run_kwargs["tractography_backend"]),
         "--bundle-backend",
         str(common_run_kwargs["bundle_backend"]),
-        "--wma-atlas", str(common_run_kwargs.get("wma_atlas", "org")),
+        "--wma-atlas", str(common_run_kwargs.get("wma_atlas") or "org"),
         "--wmql-query-preset",
-        str(common_run_kwargs.get("wmql_query_preset", "official")),
-        '--wmql-query-selection', ','.join(common_run_kwargs.get('wmql_query_selection', ())),
+        str(common_run_kwargs.get("wmql_query_preset") or "official"),
+        *_wmql_selection_cli_tokens(common_run_kwargs),
         '--max-parallel-models', str(common_run_kwargs.get('max_parallel_models', 1)),
         "--connectome-backend",
         str(common_run_kwargs["connectome_backend"]),
@@ -905,17 +941,21 @@ def build_background_cli_args(
         "--surface-device",
         str(common_run_kwargs["surface_device"]),
         "--tractcloud-device",
-        str(common_run_kwargs.get("tractcloud_device", "auto")),
+        str(common_run_kwargs.get("tractcloud_device") or "auto"),
     ]
     if output_root is not None:
         args.extend(["--output-root", _path_text(output_root)])
     _append_ukf_args(args, common_run_kwargs)
     args.extend(["--microstructure-stages", microstructure_stages_arg(common_run_kwargs)])
-    args.extend(["--dki-fit-method", str(common_run_kwargs.get("microstructure_dki_fit_method", "MKCURVE"))])
+    args.extend(["--dki-fit-method", str(common_run_kwargs.get("microstructure_dki_fit_method") or "MKCURVE")])
     _append_compress_arg(args, common_run_kwargs)
     _append_ifw_args(args, common_run_kwargs)
     if common_run_kwargs.get("preprocessing_execution_backend"):
         args.extend(["--preprocessing-execution-backend", str(common_run_kwargs["preprocessing_execution_backend"])])
+    if common_run_kwargs.get("preprocessing_stages"):
+        args.extend(["--preprocessing-stages", str(common_run_kwargs["preprocessing_stages"])])
+    if common_run_kwargs.get("connectome_metrics"):
+        args.extend(["--connectome-metrics", str(common_run_kwargs["connectome_metrics"])])
     wma_input = common_run_kwargs.get("wma_input_tractography")
     if wma_input is not None:
         args.extend(["--wma-input-tractography", _path_text(wma_input)])
@@ -948,24 +988,24 @@ def build_batch_background_cli_args(
         "--run-name",
         str(common_run_kwargs["run_name"]),
         "--arrange-inputs",
-        arrange_inputs,
+        arrange_inputs or "none",
         "--execute",
         "--targets",
         ",".join(common_run_kwargs.get("requested_targets") or common_run_kwargs["targets"]),
         "--brain-mask-backend",
-        str(common_run_kwargs.get("brain_mask_backend", "pnl_cnn")),
+        str(common_run_kwargs.get("brain_mask_backend") or "pnl_cnn"),
         "--brain-mask-device",
-        str(common_run_kwargs.get("brain_mask_device", "auto")),
+        str(common_run_kwargs.get("brain_mask_device") or "auto"),
         "--pnl-mask-route",
-        str(common_run_kwargs.get("pnl_mask_route", "auto")),
+        str(common_run_kwargs.get("pnl_mask_route") or "auto"),
         "--tractography-backend",
         str(common_run_kwargs["tractography_backend"]),
         "--bundle-backend",
         str(common_run_kwargs["bundle_backend"]),
-        "--wma-atlas", str(common_run_kwargs.get("wma_atlas", "org")),
+        "--wma-atlas", str(common_run_kwargs.get("wma_atlas") or "org"),
         "--wmql-query-preset",
-        str(common_run_kwargs.get("wmql_query_preset", "official")),
-        '--wmql-query-selection', ','.join(common_run_kwargs.get('wmql_query_selection', ())),
+        str(common_run_kwargs.get("wmql_query_preset") or "official"),
+        *_wmql_selection_cli_tokens(common_run_kwargs),
         '--max-parallel-models', str(common_run_kwargs.get('max_parallel_models', 1)),
         "--connectome-backend",
         str(common_run_kwargs["connectome_backend"]),
@@ -976,17 +1016,21 @@ def build_batch_background_cli_args(
         "--surface-device",
         str(common_run_kwargs["surface_device"]),
         "--tractcloud-device",
-        str(common_run_kwargs.get("tractcloud_device", "auto")),
+        str(common_run_kwargs.get("tractcloud_device") or "auto"),
     ]
     if output_root is not None:
         args.extend(["--output-root", _path_text(output_root)])
     _append_ukf_args(args, common_run_kwargs)
     args.extend(["--microstructure-stages", microstructure_stages_arg(common_run_kwargs)])
-    args.extend(["--dki-fit-method", str(common_run_kwargs.get("microstructure_dki_fit_method", "MKCURVE"))])
+    args.extend(["--dki-fit-method", str(common_run_kwargs.get("microstructure_dki_fit_method") or "MKCURVE")])
     _append_compress_arg(args, common_run_kwargs)
     _append_ifw_args(args, common_run_kwargs)
     if common_run_kwargs.get("preprocessing_execution_backend"):
         args.extend(["--preprocessing-execution-backend", str(common_run_kwargs["preprocessing_execution_backend"])])
+    if common_run_kwargs.get("preprocessing_stages"):
+        args.extend(["--preprocessing-stages", str(common_run_kwargs["preprocessing_stages"])])
+    if common_run_kwargs.get("connectome_metrics"):
+        args.extend(["--connectome-metrics", str(common_run_kwargs["connectome_metrics"])])
     # Forwarded unchanged to every subject's run_subject_pipeline.py call.
     args.extend(topup_cli_args(topup_parameters_from_run_kwargs(common_run_kwargs)))
     _append_optional_path_args(args, external_paths)

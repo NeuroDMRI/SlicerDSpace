@@ -232,7 +232,7 @@
         <item row="1" column="0">
          <widget class="QLabel" name="targetSurfaceLabel">
           <property name="text">
-           <string>Surface (native)</string>
+           <string>Cortical surfaces</string>
           </property>
          </widget>
         </item>
@@ -278,7 +278,7 @@
         <item row="3" column="0">
          <widget class="QLabel" name="targetParcellationLabel">
           <property name="text">
-           <string>Parcellation</string>
+           <string>Brain parcellation</string>
           </property>
          </widget>
         </item>
@@ -301,7 +301,7 @@
         <item row="4" column="0">
          <widget class="QLabel" name="targetSegmentationLabel">
           <property name="text">
-           <string>Segmentation</string>
+           <string>Tissue segmentation</string>
           </property>
          </widget>
         </item>

@@ -114,6 +114,8 @@ class FakeLanguageUi:
             "targetSurfaceCheckBox",
             "targetSurfacePostprocessLabel",
             "targetSurfacePostprocessCheckBox",
+            "targetParcellationLabel",
+            "targetSegmentationLabel",
             "targetBundlesLabel",
             "targetBundlesCheckBox",
             "advancedRunCollapsibleButton",
@@ -166,13 +168,17 @@ class OnboardingHelpersTest(unittest.TestCase):
         self.assertEqual(owner._onboardingLanguage, "zh")
         self.assertEqual(owner.ui.headlineLabel.value, "SlicerDSpace 运行工作台")
         self.assertEqual(owner.ui.subjectIdLabel.value, "受试者 ID")
-        self.assertEqual(owner.ui.targetSurfaceLabel.value, "表面重建（原生）")
+        self.assertEqual(owner.ui.targetSurfaceLabel.value, "皮层表面")
         self.assertEqual(owner.ui.targetSurfacePostprocessLabel.value, "表面后处理")
+        self.assertEqual(owner.ui.targetParcellationLabel.value, "脑区分割")
+        self.assertEqual(owner.ui.targetSegmentationLabel.value, "组织分割")
         self.assertEqual(owner.ui.targetSurfacePostprocessCheckBox.value, "FreeSurfer 风格后处理")
-        self.assertIn("不会创建完整的 FreeSurfer 受试者目录", owner.ui.targetSurfaceCheckBox.tooltip)
+        self.assertIn("DDSurfer", owner.ui.targetSurfaceCheckBox.tooltip)
+        self.assertIn("双侧白质与软脑膜皮层表面", owner.ui.targetSurfaceCheckBox.tooltip)
+        self.assertEqual(owner.ui.targetSurfaceLabel.tooltip, owner.ui.targetSurfaceCheckBox.tooltip)
         self.assertIn("不强制安装完整 FreeSurfer", owner.ui.targetSurfacePostprocessCheckBox.tooltip)
-        self.assertIn("有效许可证", owner.ui.targetSurfacePostprocessCheckBox.tooltip)
-        self.assertIn("无需强制运行 DDParcel", owner.ui.targetSurfacePostprocessCheckBox.tooltip)
+        self.assertIn("需许可证", owner.ui.targetSurfacePostprocessCheckBox.tooltip)
+        self.assertEqual(owner.ui.targetSurfacePostprocessLabel.tooltip, owner.ui.targetSurfacePostprocessCheckBox.tooltip)
         self.assertEqual(owner.ui.targetBundlesLabel.value, "纤维束")
         self.assertEqual(owner.ui.runSelectedButton.value, "运行 SlicerDSpace")
         self.assertEqual(owner.ui.statusLabel.value, "等待输入")
@@ -187,13 +193,17 @@ class OnboardingHelpersTest(unittest.TestCase):
         self.assertEqual(owner._onboardingLanguage, "en")
         self.assertEqual(owner.ui.headlineLabel.value, "SlicerDSpace")
         self.assertEqual(owner.ui.subjectIdLabel.value, "Subject ID")
-        self.assertEqual(owner.ui.targetSurfaceLabel.value, "Surface (native)")
+        self.assertEqual(owner.ui.targetSurfaceLabel.value, "Cortical surfaces")
         self.assertEqual(owner.ui.targetSurfacePostprocessLabel.value, "Surface postprocess")
+        self.assertEqual(owner.ui.targetParcellationLabel.value, "Brain parcellation")
+        self.assertEqual(owner.ui.targetSegmentationLabel.value, "Tissue segmentation")
         self.assertEqual(owner.ui.targetSurfacePostprocessCheckBox.value, "FreeSurfer-style postprocess")
-        self.assertIn("does not create a complete FreeSurfer subject", owner.ui.targetSurfaceCheckBox.tooltip)
+        self.assertIn("DDSurfer", owner.ui.targetSurfaceCheckBox.tooltip)
+        self.assertIn("white and pial cortical surfaces", owner.ui.targetSurfaceCheckBox.tooltip)
+        self.assertEqual(owner.ui.targetSurfaceLabel.tooltip, owner.ui.targetSurfaceCheckBox.tooltip)
         self.assertIn("full FreeSurfer installation is optional", owner.ui.targetSurfacePostprocessCheckBox.tooltip)
-        self.assertIn("your own valid license", owner.ui.targetSurfacePostprocessCheckBox.tooltip)
-        self.assertIn("DDParcel is optional", owner.ui.targetSurfacePostprocessCheckBox.tooltip)
+        self.assertIn("license required", owner.ui.targetSurfacePostprocessCheckBox.tooltip)
+        self.assertEqual(owner.ui.targetSurfacePostprocessLabel.tooltip, owner.ui.targetSurfacePostprocessCheckBox.tooltip)
         self.assertEqual(owner.ui.targetBundlesLabel.value, "Fiber bundles")
         self.assertEqual(owner.ui.runSelectedButton.value, "Run SlicerDSpace")
         self.assertEqual(owner.ui.statusLabel.value, "Waiting for input")

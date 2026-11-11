@@ -27,25 +27,45 @@ WORKFLOW_TEXT = {
         "section_inputs": "1. Inputs",
         "section_targets": "2. Products",
         "compact_advanced": "Advanced settings",
-        "compact_advanced_hint": "Choose algorithms with the ... button beside each product. Adjust only the parameters you need below.",
+        "compact_advanced_hint": "Select algorithms via ...; optional parameters below.",
         "input_layout_found": "Input layout found. Dependencies are checked when you run.",
         "compact_algorithm_selection": "Selected: {algorithms}",
-        "compact_algorithm_tooltip": "Selected algorithms: {algorithms}. Use the ... button beside this product to choose one or more. This is the configuration, not completed results or QC status.",
+        "compact_algorithm_tooltip": "Selected: {algorithms}. Use the ... button to configure.",
         "compact_import": "Input import / conversion",
         "compact_parameters": "Analysis parameters",
         "compact_environment": "Environment and installation",
         "compact_results": "Results and QC",
         "compact_run": "Run SlicerDSpace",
         "compact_log": "Log",
-        "compact_preprocessing": "Denoise / Gibbs / motion correction",
+        "input_format_label": "Input format",
+        "input_format_nifti": "NIfTI",
+        "input_format_dicom": "DICOM",
+        "input_format_nrrd": "NRRD",
+        "input_format_placeholder_nifti": "Folder with input/data.nii.gz, bvals, bvecs (or .nii.gz + .bval/.bvec)",
+        "input_format_placeholder_dicom": "Folder containing a single diffusion DICOM series",
+        "input_format_placeholder_nrrd": "Diffusion .nrrd / .nhdr file or folder",
+        "input_format_help_title": "Input format & paths",
+        "input_format_help_close": "Close",
+        "input_format_help": (
+            "Input formats:\n"
+            "• NIfTI: Folder with input/data.nii.gz, bvals, bvecs (optional nodif_brain_mask.nii.gz, dwi.json), "
+            "or a folder with .nii(.gz) + .bval/.bvec.\n"
+            "• DICOM: Folder containing one diffusion DICOM series (.dcm/.ima); converted automatically on run.\n"
+            "• NRRD: Diffusion .nrrd/.nhdr volume or folder; converted automatically on run.\n\n"
+            "Path fields below:\n"
+            "• Subject ID: Prefix for outputs (auto-filled from folder/file name if left blank).\n"
+            "• Subject root: Select the input folder (or NRRD/NIfTI file).\n"
+            "• Output directory: Optional; defaults to <Subject root>/outputs."
+        ),
+        "compact_preprocessing": "Selected: DWI denoising + Eddy + Topup",
         "compact_surface": "DDSurfer white / pial surfaces",
-        "compact_postprocess": "Cortical metrics / atlas mapping",
+        "compact_postprocess": "Cortical morphometry / parcellation",
         "compact_parcellation": "DDParcel regional labels",
         "compact_segmentation": "DDSeg WM / GM / CSF",
         "compact_microstructure": "Selected: DTI",
         "compact_tractography": "Selected: MRtrix3 CSD / ACT",
         "compact_bundles": "Selected: WMQL",
-        "compact_connectome": "Structural connectivity matrices",
+        "compact_connectome": "Selected: SIFT2",
         "section_parameters": "3. Route and parameters",
         "section_run": "4. Run",
         "section_results": "5. Results",
@@ -110,40 +130,77 @@ WORKFLOW_TEXT = {
         "run_state_failed": "Completed with errors",
         "run_state_cancelled": "Cancelled",
         "preprocessing_tooltip": (
-            "Optional DWI denoising, Gibbs-ringing removal and motion/eddy correction. "
-            "Leave unchecked to run downstream workflows from the original subject input folder."
+            "Brain masking and optional DWI denoising, motion/eddy and distortion (topup) correction; "
+            "uncheck for externally preprocessed data."
         ),
-        "parcellation_tooltip": "DDParcel aparc and wmparc label maps in native dMRI space.",
-        "segmentation_tooltip": "DDSeg white matter, gray matter and CSF segmentation and probability maps.",
-        "microstructure_tooltip": "DTI maps and ROI statistics by default. Independently enable Free Water, NODDI or DKI under Advanced > Analysis parameters.",
-        "tractography_tooltip": "MRtrix3 CSD / ACT by default. Choose UKF, DTI deterministic or CSD + SAF under Advanced > Analysis parameters. Missing backends are reported, not silently substituted.",
-        "bundles_tooltip": "White-matter bundle extraction with WMQL presets, WMA or TractCloud.",
-        "connectome_tooltip": "Streamline-count and scalar-weighted structural connectivity matrices.",
+        "parcellation_tooltip": (
+            "Whole-brain anatomical parcellation (101 cortical and subcortical regions) in native dMRI space via DDParcel."
+        ),
+        "segmentation_tooltip": (
+            "White matter, gray matter and CSF segmentation and tissue probability maps in native dMRI space via DDSeg."
+        ),
+        "microstructure_tooltip": (
+            "Diffusion microstructure maps (DTI, FW, NODDI, DKI / MK-Curve, iFW) and regional statistics."
+        ),
+        "tractography_tooltip": (
+            "Whole-brain tractography (CSD / ACT, UKF, DTI) and surface-based short association fiber (SAF) tracking."
+        ),
+        "bundles_tooltip": (
+            "White-matter tract identification via rule-based WMQL, atlas-guided WMA or deep-learning TractCloud."
+        ),
+        "connectome_tooltip": (
+            "Structural connectivity matrices across DDParcel regions weighted by SIFT2 or fiber count."
+        ),
+        "compute_device_auto": "Auto (CUDA / CPU)",
+        "compute_device_tooltip": (
+            "Select CPU or a specific CUDA GPU for neural inference (DDSurfer, DDParcel, DDSeg, TractCloud, PNL mask). "
+            "Auto uses CUDA:0 when available."
+        ),
     },
     "zh": {
         "section_getting_started": "快速开始",
         "section_inputs": "1. 输入",
         "section_targets": "2. 分析任务",
         "compact_advanced": "高级设置",
-        "compact_advanced_hint": "通过任务旁的 ... 按钮切换算法；下面仅调整需要修改的参数。",
+        "compact_advanced_hint": "点击 ... 选择算法；下方按需调整参数。",
         "input_layout_found": "已找到输入文件结构；点击运行时将检查依赖。",
         "compact_algorithm_selection": "当前：{algorithms}",
-        "compact_algorithm_tooltip": "当前算法：{algorithms}。点击任务旁的 ... 按钮可单选或多选；这是运行配置，不代表结果已生成或 QC 已通过。",
+        "compact_algorithm_tooltip": "当前已选：{algorithms}（点击 ... 按钮配置）。",
         "compact_import": "输入导入 / 格式转换",
         "compact_parameters": "分析参数",
         "compact_environment": "环境与安装",
         "compact_results": "结果与质控",
         "compact_run": "运行 SlicerDSpace",
         "compact_log": "日志",
-        "compact_preprocessing": "降噪 / Gibbs / 运动校正",
+        "input_format_label": "输入格式",
+        "input_format_nifti": "NIfTI",
+        "input_format_dicom": "DICOM",
+        "input_format_nrrd": "NRRD",
+        "input_format_placeholder_nifti": "含 input/data.nii.gz、bvals、bvecs（或 .nii.gz + .bval/.bvec）的目录",
+        "input_format_placeholder_dicom": "含单个扩散加权 DICOM 序列的文件夹",
+        "input_format_placeholder_nrrd": "扩散加权 .nrrd / .nhdr 文件或所在目录",
+        "input_format_help_title": "输入格式与路径说明",
+        "input_format_help_close": "关闭",
+        "input_format_help": (
+            "输入格式要求：\n"
+            "• NIfTI：含 input/data.nii.gz、bvals、bvecs 的目录（可选 nodif_brain_mask.nii.gz、dwi.json），"
+            "或含同名 .nii(.gz) + .bval/.bvec 的目录。\n"
+            "• DICOM：含单个扩散加权 DICOM 序列（.dcm/.ima）的文件夹，运行时自动转换。\n"
+            "• NRRD：扩散加权 .nrrd/.nhdr 文件或所在目录，运行时自动转换。\n\n"
+            "下方路径填写说明：\n"
+            "• 受试者 ID：输出文件名前缀（留空则根据所选路径自动填入）。\n"
+            "• 受试者根目录：选择上述输入目录（或 NRRD/NIfTI 文件）。\n"
+            "• 输出目录：选填，留空默认输出至 <受试者根目录>/outputs。"
+        ),
+        "compact_preprocessing": "当前：DWI denoising + Eddy + Topup",
         "compact_surface": "DDSurfer 白质 / 软脑膜表面",
-        "compact_postprocess": "皮层指标 / 图谱映射",
+        "compact_postprocess": "皮层形态学 / 分区",
         "compact_parcellation": "DDParcel 脑区标签",
         "compact_segmentation": "DDSeg 白质 / 灰质 / 脑脊液",
         "compact_microstructure": "当前：DTI",
         "compact_tractography": "当前：MRtrix3 CSD / ACT",
         "compact_bundles": "当前：WMQL",
-        "compact_connectome": "结构连接矩阵",
+        "compact_connectome": "当前：SIFT2",
         "section_parameters": "3. 路线与参数",
         "section_run": "4. 运行",
         "section_results": "5. 结果",
@@ -206,13 +263,15 @@ WORKFLOW_TEXT = {
         "run_state_completed_with_blocks": "已完成（部分阶段被阻止）",
         "run_state_failed": "完成但有错误",
         "run_state_cancelled": "已取消",
-        "preprocessing_tooltip": "可选的 DWI 降噪、Gibbs 伪影去除及运动/涡流校正。不勾选时，下游流程直接使用原始受试者输入目录。",
-        "parcellation_tooltip": "原生 dMRI 空间中的 DDParcel aparc 与 wmparc 标签图。",
-        "segmentation_tooltip": "DDSeg 白质、灰质、脑脊液分割及概率图。",
-        "microstructure_tooltip": "默认只生成 DTI 标量图和 ROI 统计。在“高级设置 > 分析参数”中独立启用自由水、NODDI 或 DKI。",
-        "tractography_tooltip": "默认 MRtrix3 CSD / ACT。可在“高级设置 > 分析参数”中选择 UKF、DTI 确定性追踪或 CSD + SAF。依赖缺失时明确报告，不会静默替换算法。",
-        "bundles_tooltip": "使用 WMQL 预设、WMA 或 TractCloud 提取白质纤维束。",
-        "connectome_tooltip": "流线计数及标量加权的结构连接矩阵。",
+        "preprocessing_tooltip": "脑掩膜生成及可选的 DWI 降噪、运动/涡流（eddy）与畸变（topup）校正；外部已预处理数据可取消勾选。",
+        "parcellation_tooltip": "基于 DDParcel 在原生 dMRI 空间生成全脑 101 区皮层及皮层下解剖分区标签。",
+        "segmentation_tooltip": "基于 DDSeg 在原生 dMRI 空间生成白质、灰质、脑脊液分割标签及组织概率图。",
+        "microstructure_tooltip": "扩散微结构参数图（DTI、FW、NODDI、DKI / MK-Curve、iFW）及脑区统计指标。",
+        "tractography_tooltip": "全脑纤维追踪（CSD / ACT、UKF、DTI）及基于皮层表面的短联络纤维（SAF）追踪。",
+        "bundles_tooltip": "白质纤维束识别与提取（规则查询 WMQL、图谱引导 WMA 或深度学习 TractCloud）。",
+        "connectome_tooltip": "基于 DDParcel 分区的 SIFT2 加权或纤维计数（Fiber count）结构连接矩阵。",
+        "compute_device_auto": "自动 (CUDA / CPU)",
+        "compute_device_tooltip": "选择用于神经网络推理（DDSurfer、DDParcel、DDSeg、TractCloud、PNL 掩膜）的计算设备；自动模式优先使用 CUDA:0。",
     },
 }
 
@@ -252,11 +311,18 @@ WORKFLOW_TOOLTIP_BINDINGS = {
     "orchestrationIfwT2TissueLineEdit": "ifw_t2_tooltip",
     "orchestrationIfwT2CsfLineEdit": "ifw_t2_tooltip",
     "orchestrationDkiFitMethodComboBox": "dki_fit_method_tooltip",
+    "targetPreprocessingLabel": "preprocessing_tooltip",
     "targetPreprocessingCheckBox": "preprocessing_tooltip",
+    "targetParcellationLabel": "parcellation_tooltip",
     "targetParcellationCheckBox": "parcellation_tooltip",
+    "targetSegmentationLabel": "segmentation_tooltip",
     "targetSegmentationCheckBox": "segmentation_tooltip",
+    "targetMicrostructureLabel": "microstructure_tooltip",
     "targetMicrostructureCheckBox": "microstructure_tooltip",
+    "targetTractographyLabel": "tractography_tooltip",
     "targetTractographyCheckBox": "tractography_tooltip",
+    "targetBundlesLabel": "bundles_tooltip",
     "targetBundlesCheckBox": "bundles_tooltip",
+    "targetConnectomeLabel": "connectome_tooltip",
     "targetConnectomeCheckBox": "connectome_tooltip",
 }

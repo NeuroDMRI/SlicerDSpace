@@ -7,7 +7,7 @@ depends PyTorch
 build_subdirectory .
 homepage https://github.com/NeuroDMRI/SlicerDSpace
 category Diffusion
-contributors Chengjin Li
+contributors Chengjin Li, Fan Zhang (Fan's Lab, UESTC)
 description Integrated diffusion MRI workflows for anatomical reconstruction, tractography, bundle analysis, and structural connectivity.
 iconurl https://raw.githubusercontent.com/NeuroDMRI/SlicerDSpace/main/Resources/Icons/SlicerDSpace.png
 screenshoturls https://raw.githubusercontent.com/NeuroDMRI/SlicerDSpace/main/docs/images/slicerdds-compact-en.png

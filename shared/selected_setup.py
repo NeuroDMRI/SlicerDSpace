@@ -39,7 +39,20 @@ def build_setup_plan(result, *, installed_extensions=(), loaded_extensions=None,
     # native route needs PyTorch even when no segmentation, parcellation, surface or TractCloud target is selected.
     native_mask_torch = (brain_mask_backend == "pnl_cnn" and not pnl_managed and
                          any(item.key == "brain_mask_backend" and item.required for item in result.statuses))
-    required_extensions = (["PyTorch"] if need_torch or native_mask_torch else [])
+    torch_statuses = [
+        item for item in getattr(result, "statuses", ())
+        if getattr(item, "key", "") in {"python:torch", "python:tractcloud:torch"}
+        or (getattr(item, "kind", "") == "python" and (getattr(item, "details", None) or {}).get("import") == "torch")
+    ]
+    checked_targets = set(getattr(result, "targets", ()) or ())
+    closure_covered = not closure_targets or set(closure_targets) <= checked_targets
+    torch_already_ready = (
+        closure_covered
+        and bool(torch_statuses)
+        and all(getattr(item, "status", "") == "available" for item in torch_statuses)
+        and not repair
+    )
+    required_extensions = (["PyTorch"] if (need_torch or native_mask_torch) and not torch_already_ready else [])
     if need_ukf:
         required_extensions.append("UKFTractography")
     missing = [item for item in environment_missing_items(result) if item.required]
@@ -73,7 +86,7 @@ def build_setup_plan(result, *, installed_extensions=(), loaded_extensions=None,
             else:
                 source_profiles.append(name)
     source_plan = prepare_sources(source_profiles) if source_profiles else {}
-    if 'tractcloud' in source_profiles and 'PyTorch' not in required_extensions:
+    if 'tractcloud' in source_profiles and not torch_already_ready and 'PyTorch' not in required_extensions:
         required_extensions.append('PyTorch')
     groups = {item.install_group for item in missing}
     managed = list(existing_managed_profiles)

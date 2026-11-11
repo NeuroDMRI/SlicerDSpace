@@ -199,7 +199,10 @@ def check():
         require(node.brainMaskBackend == "pnl_cnn", "Fresh node defaults to pnl_cnn")
         require(node.brainMaskDevice == "auto", "Fresh node prefers GPU automatically")
         require(node.device == "auto" and node.ddsegDevice == "auto", "Fresh PyTorch defaults prefer GPU")
-        owner.ui.unifiedTorchDeviceComboBox.setCurrentIndex(owner.ui.unifiedTorchDeviceComboBox.findText("cpu"))
+        cpu_idx = owner.ui.unifiedTorchDeviceComboBox.findData("cpu")
+        if cpu_idx < 0:
+            cpu_idx = owner.ui.unifiedTorchDeviceComboBox.findText("cpu")
+        owner.ui.unifiedTorchDeviceComboBox.setCurrentIndex(cpu_idx)
         require(node.device == "cpu" and node.ddsegDevice == "cpu", "Unified CPU choice reaches both nodes")
         device_combo = owner.ui.brainMaskDeviceComboBox
         require(owner._advancedSettingsPanel.isAncestorOf(device_combo), "Mask device under Advanced")

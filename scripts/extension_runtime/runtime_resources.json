@@ -13,6 +13,7 @@
     "models/native_runtime_bundles.json",
     "Resources/Icons/SlicerDSpace.png",
     "Resources/Icons/SlicerDSpace-wordmark.svg",
+    "Resources/Icons/checkmark-white.svg",
     "Resources/UI/SlicerDSpace.ui",
     "anatomy/parcellation/conversion/data/FreeSurferColorLUT.txt",
     "anatomy/surface/ddsurfer_backend/CITATION.cff",

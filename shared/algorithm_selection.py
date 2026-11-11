@@ -1,10 +1,30 @@
 """Canonical multi-algorithm selections shared by GUI, CLI and preflight."""
 
+PREPROCESSING = ("brain_mask", "denoise", "eddy", "topup")
+MICROSTRUCTURE = ("dti", "freewater", "noddi", "dki", "ifw")
 TRACKING = ("csd_act", "ukf", "dti_det", "saf")
 BUNDLES = ("wmql", "wma", "tractcloud")
-LABELS = {"csd_act": "CSD / ACT", "ukf": "UKF", "dti_det": "DTI deterministic", "saf": "CSD + SAF",
-          "wmql": "WMQL", "wma": "WMA", "tractcloud": "TractCloud",
-          "dti": "DTI", "freewater": "FW", "noddi": "NODDI", "dki": "DKI", "ifw": "iFW"}
+CONNECTOME = ("sift2", "fiber_count")
+LABELS = {
+    "brain_mask": "Brain mask",
+    "denoise": "DWI denoising",
+    "eddy": "Eddy",
+    "topup": "Topup",
+    "csd_act": "CSD / ACT",
+    "ukf": "UKF",
+    "dti_det": "DTI",
+    "saf": "CSD + SAF",
+    "wmql": "WMQL",
+    "wma": "WMA",
+    "tractcloud": "TractCloud",
+    "dti": "DTI",
+    "freewater": "FW",
+    "noddi": "NODDI",
+    "dki": "DKI",
+    "ifw": "iFW",
+    "sift2": "SIFT2",
+    "fiber_count": "Fiber count",
+}
 
 
 def selection_choices(choices):

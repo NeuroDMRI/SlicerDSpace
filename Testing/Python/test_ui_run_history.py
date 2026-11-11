@@ -380,7 +380,7 @@ class AlgorithmDialogTest(unittest.TestCase):
 class AlgorithmRowTest(unittest.TestCase):
     def test_summary_text_aligns_with_a_plain_checkbox_and_rows_are_vertically_centred(self) -> None:
         qt = fake_qt()
-        indicator, gap = 17, 5  # deliberately unlike the old 20 and 6
+        indicator, gap = 19, 6  # deliberately unlike the old 20, while >=18px unclipped floor
         style = qt.QApplication.style.return_value
         style.pixelMetric.side_effect = lambda metric: {
             qt.QStyle.PM_IndicatorWidth: indicator, qt.QStyle.PM_CheckBoxLabelSpacing: gap,
@@ -394,7 +394,8 @@ class AlgorithmRowTest(unittest.TestCase):
             ui_algorithm_picker.install_algorithm_pickers(owner)
 
         rows = [widget for widget in qt.created if widget.kind == "QHBoxLayout"]
-        self.assertEqual(len(rows), 3)
+        self.assertEqual(len(rows), len(ui_algorithm_picker.FAMILIES))
+        self.assertEqual(len(rows), 5)
         for box, row in zip(boxes.values(), rows):
             box.setFixedWidth.assert_called_once_with(indicator)
             calls = [(call[0], call[1]) for call in row.method_calls if call[0] in {"addWidget", "addSpacing"}]

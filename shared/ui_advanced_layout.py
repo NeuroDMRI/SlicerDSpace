@@ -45,6 +45,45 @@ def _move(owner, name, form):
         return
 
 
+def _unpack_brain_mask_rows(owner, form):
+    ui = owner.ui
+    options = getattr(ui, "brainMaskOptions", None)
+    options_layout = getattr(ui, "brainMaskOptionsLayout", None)
+    params_form = getattr(ui, "parametersFormLayout", None)
+    if options is None or params_form is None:
+        _move(owner, "brainMaskOptions", form)
+        return
+    backend_label = getattr(ui, "brainMaskBackendLabel", None)
+    for item in (backend_label, options):
+        if item is not None:
+            item.removeEventFilter(ui.parametersCollapsibleButton)
+            if params_form.indexOf(item) >= 0:
+                params_form.takeAt(params_form.indexOf(item))
+    pairs = (
+        ("brainMaskBackendLabel", "brainMaskBackendComboBox"),
+        ("brainMaskDeviceLabel", "brainMaskDeviceComboBox"),
+        ("pnlMaskRouteLabel", "pnlMaskRouteComboBox"),
+    )
+    for label_name, field_name in pairs:
+        lbl = getattr(ui, label_name, None)
+        fld = getattr(ui, field_name, None)
+        if fld is None:
+            continue
+        for w in (lbl, fld):
+            if w is not None:
+                w.removeEventFilter(ui.parametersCollapsibleButton)
+                if options_layout is not None and options_layout.indexOf(w) >= 0:
+                    options_layout.removeWidget(w)
+        if lbl is not None:
+            lbl.show()
+            fld.show()
+            form.addRow(lbl, fld)
+        else:
+            fld.show()
+            form.addRow(fld)
+    options.hide()
+
+
 def install_advanced_categories(owner):
     import qt
     root = owner._advancedSettingsPanel
@@ -62,22 +101,23 @@ def install_advanced_categories(owner):
         page.objectName = "advancedPage_" + key
         page.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Maximum)
         page_layout = qt.QVBoxLayout(page)
-        page_layout.setContentsMargins(0, 6, 0, 0)
-        page_layout.setSpacing(8)
+        page_layout.setContentsMargins(0, 4, 0, 0)
+        page_layout.setSpacing(6)
         page_layout.setAlignment(qt.Qt.AlignTop)
         form = qt.QFormLayout()
         form.setFieldGrowthPolicy(qt.QFormLayout.AllNonFixedFieldsGrow)
         form.setRowWrapPolicy(qt.QFormLayout.WrapLongRows)
-        form.setVerticalSpacing(7)
+        form.setVerticalSpacing(6)
+        form.setHorizontalSpacing(10)
         page_layout.addLayout(form)
         owner._advancedCategoryForms[key] = form
         stack.addWidget(page)
     layout.insertWidget(1, selector)
     layout.insertWidget(2, stack)
+    _unpack_brain_mask_rows(owner, owner._advancedCategoryForms["processing"])
     rows = {
-        "processing": ("brainMaskOptions",),
         "models": ("orchestrationDkiFitMethodComboBox", "orchestrationIfwEchoTimeLineEdit", "orchestrationIfwT2TissueLineEdit", "orchestrationIfwT2CsfLineEdit", "wmqlQueryPresetComboBox", "wmqlQuerySelectionLineEdit", "wmaAtlasComboBox", "wmaInputTractographyPath", "orchestrationSelectStreamlinesSpinBox"),
-        "execution": ("orchestrationRunNameLineEdit", "unifiedTorchDeviceComboBox", "parallelModelsSpinBox"),
+        "execution": ("orchestrationRunNameLineEdit", "parallelModelsSpinBox"),
     }
     for key, names in rows.items():
         for name in names:
@@ -105,6 +145,7 @@ def install_advanced_categories(owner):
     # It sat in the collapsed Advanced panel, which hid it explicitly; moving it does not show it again.
     owner.ui.resultsCollapsibleButton.show()
     selector.currentIndexChanged.connect(stack.setCurrentIndex)
+    stack.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Fixed)
     def _sync_stack_height():
         page = stack.currentWidget()
         if page:
@@ -117,8 +158,10 @@ def install_advanced_categories(owner):
             page.layout().activate()
             eff_width = page.width if page.width > 120 else max(120, owner._uiWidget.width - 28)
             hfw = page.layout().totalHeightForWidth(eff_width) if eff_width > 0 and page.layout().hasHeightForWidth() else 0
-            target_stack_height = max(60, page.sizeHint.height() + 12, page.minimumSizeHint.height() + 12, hfw + 12)
-            if stack.maximumHeight != target_stack_height:
+            measured = hfw if hfw > 0 else max(page.sizeHint.height(), page.minimumSizeHint.height())
+            target_stack_height = max(44, measured + 6)
+            if stack.height != target_stack_height or stack.maximumHeight != target_stack_height:
+                stack.setMinimumHeight(target_stack_height)
                 stack.setMaximumHeight(target_stack_height)
 
     owner._syncAdvancedStackHeight = _sync_stack_height
@@ -147,6 +190,8 @@ def install_advanced_categories(owner):
     owner._fitAdvancedPage = fit
     from shared.ui_experiments import install
     install(owner, stack.widget(4))
+    from shared.ui_compact import organize_environment_section
+    organize_environment_section(owner)
     qt.QTimer.singleShot(0, fit)
     apply_advanced_language(owner)
     hide_batch_controls(owner)

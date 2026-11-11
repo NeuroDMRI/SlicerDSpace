@@ -39,7 +39,7 @@ def component_rows(owner, components, pending):
         row = "<b>%s</b> (%s)" % (html.escape(item["title"]), size)
         licence = item["licence"]
         if licence:
-            local = ('<a href="%s">%s</a>' % (Path(licence["file"]).as_uri(), html.escape(licence["file"]))
+            local = ('<a href="%s">%s</a>' % (Path(licence["file"]).as_uri(), html.escape(Path(licence["file"]).name))
                      if licence["file"] else _text(owner, "none", "无"))
             row += "<br>%s: <a href=\"%s\">%s</a> | %s: %s%s" % (
                 _text(owner, "Licence", "许可"), html.escape(licence["url"]), html.escape(licence["name"]),
@@ -50,6 +50,28 @@ def component_rows(owner, components, pending):
                             if package.get("file") else _text(owner, "no local file", "无本地文件"))
             row += '<br>&nbsp;&nbsp;<a href="%s">%s</a>: %s | %s' % (
                 html.escape(package["url"]), html.escape(package["name"]), html.escape(package["license"]), package_file)
+        rows.append(row)
+    return rows
+
+
+def _compact_component_rows(owner, components, pending):
+    """Concise, non-repetitive HTML bullet lines for the GUI confirmation dialog."""
+    from scripts.download_model_assets import _format_bytes
+    import html
+
+    rows = []
+    for item in components:
+        size_suffix = f" ({_format_bytes(item['size_bytes'])})" if item.get("size_bytes") else ""
+        row = f"• <b>{html.escape(item['title'])}</b>{size_suffix}"
+        licence = item.get("licence")
+        if licence:
+            status_tag = "" if licence["id"] in pending else _text(owner, " (accepted)", "（已接受）")
+            row += (
+                f'<br>&nbsp;&nbsp;&nbsp;<span style="font-size:12px">'
+                f'{_text(owner, "License", "许可")}: '
+                f'<a href="{html.escape(licence["url"])}">{html.escape(licence["name"])}</a>{status_tag}'
+                f"</span>"
+            )
         rows.append(row)
     return rows
 
@@ -78,89 +100,134 @@ def extension_states(manager, modules):
 
 
 def _confirm(owner, plan):
+    import html
     import qt
     import slicer
+    from scripts.download_model_assets import _format_bytes
     from shared.managed_pnl import PNL_MODEL_TERMS_URL, PNL_TEMPLATE_TERMS_URL
+    from shared.setup_components import pending_licences, plan_components, required_licences
+    from shared.setup_resume import accepted_licences
 
     dialog = qt.QDialog(slicer.util.mainWindow())
     dialog.setObjectName("selectedSetupConfirmationDialog")
+    dialog.setProperty("popupCard", True)
     dialog.setWindowTitle(_text(owner, "Prepare selected analysis", "准备所选分析环境"))
+    try:
+        from shared.ui_styles import ui_stylesheet
+
+        dialog.setStyleSheet(ui_stylesheet(widget=getattr(owner, "_uiWidget", None)))
+    except Exception:
+        pass
     layout = qt.QVBoxLayout(dialog)
-    parts = [_text(owner, "Only missing items for the selected analysis will be prepared. Existing installations are reused. No driver, shell or algorithm selection is changed.",
-                   "仅准备当前分析缺少的依赖，复用已有安装；不修改驱动、shell 或算法选择。")]
-    parts.append(_text(owner, "First-use downloads may require several GB and network access. Cancellation keeps completed files for retry.",
-                       "首次下载可能需要数 GB 空间及网络连接；取消后保留已完成文件供重试。"))
-    if plan.get("also_runs"):
-        parts.append(plan["also_runs"])
-    if plan.get("repair"):
-        parts.append(_text(owner, "Repair will reinstall selected plugin-managed tools. Existing administrator environments are not changed.",
-                           "修复将重新安装所选的插件受管工具，不修改管理员或自行配置的环境。"))
-    for key in ("extensions", "restart_extensions", "python_packages", "asset_profiles", "optional_asset_profiles", "managed_profiles", "unsupported_profiles"):
-        if plan[key]:
-            parts.append(key.replace("_", " ") + ": " + ", ".join(plan[key]))
-    parts.extend(plan.get("unsupported_notes", {}).values())
-    from scripts.download_model_assets import _format_bytes
-    parts.append(_text(owner, 'Models and resources: ', '模型和资源目录：') + plan['asset_root'])
-    if plan.get('managed_profiles'):
-        parts.append(_text(owner, 'Managed tools: ', '受管工具目录：') + plan['runtime_root'])
-    if plan.get('core_model_profile_bytes'):
-        parts.append(_text(owner, 'Selected core model profiles: ', '所选核心模型分组大小：') +
-                     _format_bytes(plan['core_model_profile_bytes']))
-    if plan["manual_items"]:
-        parts.append(_text(owner, "Some items still need attention: ", "以下项目仍需处理：") +
-                     ", ".join(item["label"] for item in plan["manual_items"]))
-    if plan.get('backend_profiles'):
-        from scripts.download_model_assets import _format_bytes
-        parts.append(_text(owner, 'Algorithm sources: ', '算法源码：') + ', '.join(plan['backend_profiles']) + '\n' +
-                     str(plan['backend_root']) + '\n' +
-                     _text(owner, 'Download: ', '下载量：') + _format_bytes(plan['backend_download_bytes']))
-        parts.extend(plan.get('backend_terms', ()))
-    if plan.get('surface_build_required') or plan.get('surface_prebuilt_required'):
-        parts.append(_text(owner,
-            'Surface postprocessing: install the qualified precompiled components in your user cache. No Git, compiler or full FreeSurfer installation is needed. Your own activation file is still required for analysis. Unpublished bundles must first be supplied as offline resources.',
-            '表面后处理：在用户缓存中安装经校验的预编译组件，无需 Git、编译器或完整版 FreeSurfer。分析仍需您自己的激活文件；尚未发布的运行包须先通过离线资源提供。'))
-    if plan.get('surface_bundle_unavailable'):
-        parts.append(_text(owner,
-            'Surface components: this bundle has not been published and is absent from your resource directory. Supply the qualified offline bundle or configure an existing runtime. Other selected resources can still be prepared.',
-            '表面处理组件：运行包尚未发布，资源目录中也没有该包。请导入合格的离线包或配置已有运行目录；其他所选资源仍可准备。'))
-    if plan["pnl_terms_required"]:
-        parts.append(_text(owner, "PNL source, model and template permissions are separate; download/hash verification is not a license grant.",
-                           "PNL 源码、模型与模板的权限须分别核对；下载及哈希验证不代表获得授权。"))
-    if plan["optional_asset_profiles"]:
-        from scripts.download_model_assets import _format_bytes
-        parts.append(_text(owner, "Selected optional resources (full profile size): ", "所选可选资源（完整分组大小）：") +
-                     _format_bytes(plan["optional_asset_size_bytes"]))
-        if plan.get("optional_asset_peak_disk_bytes", 0) > plan["optional_asset_size_bytes"]:
-            parts.append(_text(owner, "Allow disk space for download, extracted data and temporary assembly: ",
-                               "下载、解压与临时拼接所需磁盘空间上限估计：") +
-                         _format_bytes(plan["optional_asset_peak_disk_bytes"]))
-        parts.extend(plan["optional_asset_terms"])
-    label = qt.QLabel("\n\n".join(parts))
-    label.wordWrap = True
-    scroll = qt.QScrollArea()
-    scroll.setWidgetResizable(True)
-    scroll.setWidget(label)
-    scroll.setMinimumHeight(160)
-    scroll.setMaximumHeight(320)
-    layout.addWidget(scroll)
-    dialog.setMinimumWidth(500)
-    # B7: the component list (size, licence name, link, local licence file) and one action.
-    from shared.setup_components import pending_licences, plan_components, required_licences
-    from shared.setup_resume import accepted_licences
+    layout.setContentsMargins(14, 12, 14, 12)
+    layout.setSpacing(10)
+
     components = plan_components(plan)
     required = required_licences(components)
     pending = pending_licences(required, accepted_licences())
-    rows = component_rows(owner, components, pending)
-    if rows:
-        components_label = qt.QLabel("<br><br>".join(rows))
-        components_label.wordWrap = True
-        components_label.openExternalLinks = True
-        layout.addWidget(components_label)
-    if plan["pnl_terms_required"]:
-        assets = qt.QLabel(f'<a href="{PNL_MODEL_TERMS_URL}">PNL models</a> | '
-                          f'<a href="{PNL_TEMPLATE_TERMS_URL}">IIT template</a>')
-        assets.openExternalLinks = True
-        layout.addWidget(assets)
+
+    header = _text(
+        owner,
+        "Missing items to prepare (existing installations are reused):",
+        "将为当前分析准备以下缺失项（已有环境直接复用）：",
+    )
+    html_blocks = [f"<b>{html.escape(header)}</b>"]
+    if plan.get("repair"):
+        html_blocks.append(
+            html.escape(
+                _text(
+                    owner,
+                    "Reinstalling selected plugin-managed tools.",
+                    "重新安装所选的插件受管工具。",
+                )
+            )
+        )
+    if plan.get("also_runs"):
+        html_blocks.append(html.escape(str(plan["also_runs"])))
+
+    bullet_rows = []
+    if plan.get("extensions"):
+        bullet_rows.append(
+            f"• <b>{_text(owner, 'Slicer extensions', 'Slicer 扩展')}:</b> {html.escape(', '.join(plan['extensions']))}"
+        )
+    if plan.get("restart_extensions"):
+        bullet_rows.append(
+            f"• <b>{_text(owner, 'Enable & restart extensions', '启用扩展（需重启）')}:</b> "
+            f"{html.escape(', '.join(plan['restart_extensions']))}"
+        )
+    bullet_rows.extend(_compact_component_rows(owner, components, pending))
+    if plan.get("unsupported_profiles"):
+        bullet_rows.append(
+            f"• <b>{_text(owner, 'Unsupported profiles', '当前平台不支持')}:</b> "
+            f"{html.escape(', '.join(plan['unsupported_profiles']))}"
+        )
+    if bullet_rows:
+        html_blocks.append("<br>".join(bullet_rows))
+
+    notes = []
+    for note in plan.get("unsupported_notes", {}).values():
+        notes.append(html.escape(str(note)))
+    if plan.get("asset_profiles") or plan.get("optional_asset_profiles"):
+        notes.append(
+            html.escape(_text(owner, "Model directory: ", "模型目录：") + str(plan.get("asset_root", "")))
+        )
+    if plan.get("optional_asset_profiles") and plan.get("optional_asset_peak_disk_bytes", 0) > plan.get("optional_asset_size_bytes", 0):
+        notes.append(
+            html.escape(
+                _text(owner, "Peak disk space needed: ", "预计峰值磁盘空间：")
+                + _format_bytes(plan["optional_asset_peak_disk_bytes"])
+            )
+        )
+    if plan.get("manual_items"):
+        notes.append(
+            html.escape(
+                _text(owner, "Needs attention: ", "仍需手动处理：")
+                + ", ".join(item["label"] for item in plan["manual_items"])
+            )
+        )
+    if plan.get("surface_build_required") or plan.get("surface_prebuilt_required"):
+        notes.append(
+            html.escape(
+                _text(
+                    owner,
+                    "Surface postprocessing: install the qualified precompiled components in your user cache. No Git, compiler or full FreeSurfer installation is needed. Your own activation file is still required for analysis.",
+                    "表面后处理：安装经校验的预编译组件，无需编译器或完整 FreeSurfer；运行分析仍需个人激活文件。",
+                )
+            )
+        )
+    if plan.get("surface_bundle_unavailable"):
+        notes.append(
+            html.escape(
+                _text(
+                    owner,
+                    "Surface components bundle is absent locally; supply the offline bundle or configure an existing runtime.",
+                    "本地缺少表面处理组件包；请导入离线包或配置已有运行目录。",
+                )
+            )
+        )
+    if plan.get("pnl_terms_required"):
+        notes.append(
+            f'{html.escape(_text(owner, "Terms:", "许可条款："))} '
+            f'<a href="{PNL_MODEL_TERMS_URL}">PNL models</a> | '
+            f'<a href="{PNL_TEMPLATE_TERMS_URL}">IIT template</a>'
+        )
+    if notes:
+        html_blocks.append("<br>".join(notes))
+
+    body_label = qt.QLabel("<br><br>".join(html_blocks))
+    body_label.wordWrap = True
+    body_label.openExternalLinks = True
+    if len(bullet_rows) + len(notes) > 6:
+        scroll = qt.QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(body_label)
+        scroll.setMinimumHeight(140)
+        scroll.setMaximumHeight(320)
+        layout.addWidget(scroll)
+    else:
+        layout.addWidget(body_label)
+    dialog.setMinimumWidth(440)
+    dialog.setMaximumWidth(560)
     buttons = qt.QDialogButtonBox(dialog)
     buttons.setStandardButtons(qt.QDialogButtonBox.Ok | qt.QDialogButtonBox.Cancel)
     buttons.button(qt.QDialogButtonBox.Ok).setText(
@@ -302,6 +369,7 @@ def prepare_selected_environment(owner, result=None, *, repair=False):
         return False
     # Let Slicer's own manager select compatible extension builds. Installing
     # an extension does not make its modules available in the running session.
+    installed_any_extension = False
     for name in plan["extensions"]:
         try:
             success = manager is not None and manager.installExtensionFromServer(name, False)
@@ -309,10 +377,16 @@ def prepare_selected_environment(owner, result=None, *, repair=False):
             owner.appendLog("[Setup] Extension install failed: " + str(exc))
             success = False
         if not success:
+            if name == "PyTorch" and any(str(pkg).startswith("torch") for pkg in plan.get("python_packages", ())):
+                owner.appendLog(
+                    "[Setup] Slicer PyTorch extension could not be downloaded; continuing with direct Python torch installation."
+                )
+                continue
             owner._selectedSetupActive = False
             owner._setStatus("warning", _text(owner, "Extension installation did not finish: ", "扩展安装未完成：") + name)
             write_json(folder / "result.json", {"status": "blocked", "extension": name})
             return False
+        installed_any_extension = True
     for name in plan["restart_extensions"]:
         try:
             manager.setExtensionEnabled(name, True)
@@ -321,7 +395,7 @@ def prepare_selected_environment(owner, result=None, *, repair=False):
             write_json(folder / "result.json", {"status": "blocked", "extension": name, "error": str(exc)})
             owner._setStatus("warning", str(exc))
             return False
-    if plan["extensions"] or plan["restart_extensions"]:
+    if installed_any_extension or plan["restart_extensions"]:
         owner._selectedSetupActive = False
         owner._setupRestartRequired = True
         owner._setStatus("warning", _text(owner, "Restart Slicer; preparation will be offered when you reopen SlicerDSpace.", "请重启 Slicer；重新进入 SlicerDSpace 后将提示继续准备。"))

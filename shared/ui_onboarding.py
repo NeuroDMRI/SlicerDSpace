@@ -52,7 +52,7 @@ TRANSLATIONS = {
         "status_waiting_ellipsis": "Waiting for input...",
         "environment_section": "Advanced: Dependency profile",
         "environment_not_checked": "No environment check has been run yet.",
-        "torch_device": "Torch device",
+        "torch_device": "Compute device",
         "missing_python_dependencies": "First-use setup",
         "install_python_dependencies": "Offer to prepare missing dependencies before running",
         "subject_id": "Subject ID",
@@ -62,25 +62,21 @@ TRANSLATIONS = {
         "output_directory": "Output directory",
         "output_directory_placeholder": "Optional; defaults to <subject root>/outputs",
         "preprocessing": "Preprocessing",
-        "preprocessing_option": "Denoise, Gibbs, eddy",
-        "surface": "Surface (native)",
-        "surface_option": "Native white / pial STL",
+        "preprocessing_option": "DWI denoising + Eddy + Topup",
+        "surface": "Cortical surfaces",
+        "surface_option": "DDSurfer white / pial surfaces",
         "surface_tooltip": (
-            "Run DDSurfer neural surface inference and produce indexed native RAS OBJ surfaces and Slicer STL meshes. "
-            "This does not create a complete FreeSurfer subject directory or FreeSurfer-derived outputs."
+            "Bilateral white and pial cortical surfaces reconstructed in native dMRI space via DDSurfer."
         ),
         "surface_postprocess": "Surface postprocess",
         "surface_postprocess_option": "FreeSurfer-style postprocess",
         "surface_postprocess_tooltip": (
-            "Optional. Compute cortical annotations and surface metrics from DDSurfer white and pial surfaces. "
-            "This does not run recon-all or produce a complete T1-derived FreeSurfer subject. "
-            "Uses verified native FreeSurfer components or an existing installation, with your own valid license. "
-            "A full FreeSurfer installation is optional for the current native OBJ route. "
-            "Select Surface too unless native surfaces already exist; DDParcel is optional for the current backend."
+            "Cortical morphometry and parcellation from DDSurfer meshes "
+            "(uses verified native components; a full FreeSurfer installation is optional, license required)."
         ),
-        "parcellation": "Parcellation",
-        "parcellation_option": "DDParcel aparc / wmparc",
-        "segmentation": "Segmentation",
+        "parcellation": "Brain parcellation",
+        "parcellation_option": "DDParcel regional labels",
+        "segmentation": "Tissue segmentation",
         "segmentation_option": "DDSeg WM / GM / CSF",
         "microstructure": "Microstructure",
         "microstructure_option": "DTI maps; optional FW / NODDI / DKI in Advanced",
@@ -120,10 +116,7 @@ TRANSLATIONS = {
         "cancel_job": "Cancel running job",
         "prepare_inputs": "Prepare Inputs",
         "prepare_inputs_tooltip": "Normalize DICOM, NRRD/NHDR, or NIfTI+bval/bvec inputs into a SlicerDSpace subject root.",
-        "prepare_summary": (
-            "Use this when inputs are not already organized as input/data.nii.gz, input/bvals and input/bvecs. "
-            "The import writes input/input_import_manifest.json and the workflow continues from the canonical subject root."
-        ),
+        "prepare_summary": "Organize external DICOM, NRRD, or NIfTI + bval/bvec files into <subject root>/input/.",
         "source_type": "Source type",
         "source_type_tooltip": "Use auto unless you need to force a specific source type.",
         "source": "Source",
@@ -244,7 +237,7 @@ TRANSLATIONS = {
         "status_waiting_ellipsis": "等待输入…",
         "environment_section": "高级：依赖配置",
         "environment_not_checked": "尚未检查环境依赖。",
-        "torch_device": "Torch 设备",
+        "torch_device": "计算设备",
         "missing_python_dependencies": "首次使用准备",
         "install_python_dependencies": "运行前提示一键准备缺少的依赖",
         "subject_id": "受试者 ID",
@@ -254,21 +247,14 @@ TRANSLATIONS = {
         "output_directory": "输出目录",
         "output_directory_placeholder": "可选；默认为 <subject root>/outputs",
         "preprocessing": "预处理",
-        "preprocessing_option": "降噪、Gibbs、涡流校正",
-        "surface": "表面重建（原生）",
-        "surface_option": "原生白质面 / 软脑膜面",
-        "surface_tooltip": (
-            "运行 DDSurfer 神经网络表面推理，生成保留顶点索引的原生 RAS OBJ 表面及 Slicer STL 网格。"
-            "不会创建完整的 FreeSurfer 受试者目录或 FreeSurfer 派生产物。"
-        ),
+        "preprocessing_option": "DWI denoising + Eddy + Topup",
+        "surface": "皮层表面",
+        "surface_option": "DDSurfer 白质 / 软脑膜表面",
+        "surface_tooltip": "基于 DDSurfer 在原生 dMRI 空间直接重建双侧白质与软脑膜皮层表面。",
         "surface_postprocess": "表面后处理",
         "surface_postprocess_option": "FreeSurfer 风格后处理",
         "surface_postprocess_tooltip": (
-            "可选。基于 DDSurfer 白质与软脑膜表面计算皮层标注及表面指标。"
-            "它不会运行 recon-all，也不会生成基于 T1 的完整 FreeSurfer 受试者目录。"
-            "使用经校验的原生 FreeSurfer 组件或已有安装，并需您自己的有效许可证。"
-            "当前原生 OBJ 路线不强制安装完整 FreeSurfer。"
-            "未生成原生表面时请同时选择表面重建；新版后处理无需强制运行 DDParcel。"
+            "基于 DDSurfer 网格计算皮层形态学与表面分区（使用经校验的原生组件，不强制安装完整 FreeSurfer，需许可证）。"
         ),
         "parcellation": "脑区分割",
         "parcellation_option": "DDParcel aparc / wmparc 标签",
@@ -312,7 +298,7 @@ TRANSLATIONS = {
         "cancel_job": "取消正在运行的任务",
         "prepare_inputs": "准备输入",
         "prepare_inputs_tooltip": "将 DICOM、NRRD/NHDR 或 NIfTI+bval/bvec 输入规范化为 SlicerDSpace 受试者根目录。",
-        "prepare_summary": "当输入尚未整理为 input/data.nii.gz、input/bvals 和 input/bvecs 时使用此功能。导入过程会写入 input/input_import_manifest.json，工作流随后从规范受试者根目录继续。",
+        "prepare_summary": "将外部 DICOM、NRRD 或 NIfTI + bval/bvec 文件整理为标准 <subject root>/input/ 目录。",
         "source_type": "来源类型",
         "source_type_tooltip": "通常使用 auto；仅在需要强制指定来源类型时修改。",
         "source": "来源",
@@ -416,15 +402,15 @@ ENVIRONMENT_SECTION_TEXT = {
     "en": {
         "model-assets": (
             "Model Asset Paths",
-            "Configure where DDSurfer, DDSeg and DDParcel weights/templates are stored. Use a user data directory or shared lab cache rather than the Slicer extension code directory.",
+            "User-data folder for DDSurfer, DDSeg, and DDParcel weights/templates.",
         ),
         "core-runtime": (
             "Core Python & Runtime Paths",
-            "Configure the shared Python runtime and external toolchain used by preprocessing, post-process, and WMQL. Leave empty to use saved settings, environment variables, PATH, and common install paths.",
+            "Shared Python and external tools; leave empty to auto-detect from saved settings, environment variables, or PATH.",
         ),
         "bundle-backends": (
             "Optional Backend Paths",
-            "WMA and TractCloud are optional bundle-extraction backends. Keep them grouped here instead of mixing them with the core runtime toolchain.",
+            "Optional bundle-extraction backends (WMA and TractCloud).",
         ),
         "wma": ("WMA Paths", "WhiteMatterAnalysis checkout, ORG atlas, and helper Slicer/CLI paths."),
         "tractcloud": ("TractCloud Paths", "TractCloud checkout, Python runtime, and model/data directory."),
@@ -432,15 +418,15 @@ ENVIRONMENT_SECTION_TEXT = {
     "zh": {
         "model-assets": (
             "模型资源路径",
-            "配置 DDSurfer、DDSeg 和 DDParcel 权重/模板的存放位置。请使用用户数据目录或实验室共享缓存，不要放在 Slicer 扩展代码目录中。",
+            "存放 DDSurfer、DDSeg 和 DDParcel 权重与模板的用户目录。",
         ),
         "core-runtime": (
             "核心 Python 与运行环境路径",
-            "配置预处理、后处理和 WMQL 共用的 Python 环境与外部工具链。留空时将使用已保存设置、环境变量、PATH 和常见安装路径。",
+            "共用的 Python 与外部工具链；留空时自动从已保存设置、环境变量或 PATH 检测。",
         ),
         "bundle-backends": (
             "可选后端路径",
-            "WMA 和 TractCloud 是可选纤维束提取后端；这些路径集中放在这里，与核心运行工具链分开管理。",
+            "可选纤维束提取后端（WMA 与 TractCloud）。",
         ),
         "wma": ("WMA 路径", "WhiteMatterAnalysis 代码、ORG atlas 以及辅助 Slicer/CLI 路径。"),
         "tractcloud": ("TractCloud 路径", "TractCloud 代码、Python 运行环境及模型/数据目录。"),
@@ -613,7 +599,9 @@ MAIN_UI_TEXT_BINDINGS = {
 
 
 MAIN_UI_TOOLTIP_BINDINGS = {
+    "targetSurfaceLabel": "surface_tooltip",
     "targetSurfaceCheckBox": "surface_tooltip",
+    "targetSurfacePostprocessLabel": "surface_postprocess_tooltip",
     "targetSurfacePostprocessCheckBox": "surface_postprocess_tooltip",
 }
 
@@ -1094,6 +1082,44 @@ def install_onboarding_panel(owner: Any, parent_layout: Any) -> None:
         parent_layout.insertWidget(0, panel)
     except Exception:
         parent_layout.addWidget(panel)
+    refresh_onboarding_styles(owner, dark=dark)
+
+
+def refresh_onboarding_styles(owner: Any, *, dark: bool | None = None) -> None:
+    """Refresh inline stylesheets on onboarding widgets for light and dark themes."""
+
+    widgets = getattr(owner, "_onboardingWidgets", None) or {}
+    if not widgets:
+        return
+    from shared.ui_styles import is_dark_mode
+
+    use_dark = is_dark_mode(getattr(owner, "_uiWidget", None)) if dark is None else bool(dark)
+    title = widgets.get("title")
+    if title is not None:
+        title.setStyleSheet(
+            "QLabel { color: #9BE0B8; font-size: 15px; font-weight: 800; }"
+            if use_dark
+            else "QLabel { color: #173D2A; font-size: 15px; font-weight: 800; }"
+        )
+    body = widgets.get("body")
+    if body is not None:
+        body.setStyleSheet("QLabel { color: #B8C5D0; }" if use_dark else "QLabel { color: #426154; }")
+    dashboard = widgets.get("dashboard")
+    if dashboard is not None:
+        dashboard.setStyleSheet(
+            "QLabel { background: #1E2A24; border: 1px solid #354C40; border-radius: 8px; "
+            "color: #C2E0D0; padding: 8px; }"
+            if use_dark
+            else "QLabel { background: #FFFFFF; border: 1px solid #DCE8E0; border-radius: 8px; "
+            "color: #244034; padding: 8px; }"
+        )
+    examples = widgets.get("examples")
+    if examples is not None:
+        examples.setStyleSheet(
+            "QLabel { color: #9BA7B4; font-size: 11px; }"
+            if use_dark
+            else "QLabel { color: #6B7D74; font-size: 11px; }"
+        )
 
 
 def apply_onboarding_language(owner: Any, language: str) -> None:
@@ -1368,9 +1394,10 @@ def show_first_run_wizard(owner: Any) -> None:
         "scan_failed": "扫描没有完成；请复制诊断报告后重试。" if is_zh else "The scan did not complete. Copy the diagnostic report and retry.",
         "report_missing": "请先执行依赖扫描。" if is_zh else "Run the dependency scan first.",
     }
-    from shared.ui_styles import is_dark_mode
+    from shared.ui_styles import is_dark_mode, ui_stylesheet
 
-    dark = is_dark_mode(dialog)
+    dark = is_dark_mode(getattr(owner, "_uiWidget", None) or dialog)
+    dialog.setStyleSheet(ui_stylesheet(dark=dark, widget=dialog))
     intro = qt.QLabel(copy["intro"])
     intro.wordWrap = True
     intro.setStyleSheet(

@@ -433,6 +433,34 @@ def model_assets_provenance_text(repo_root: Path) -> str:
     )
 
 
+def is_other_slicer_installation_path(raw_value: str, current_slicer_home: str | Path | None) -> bool:
+    """Return True when ``raw_value`` points inside a different 3D Slicer installation than ``current_slicer_home``."""
+
+    text = str(raw_value or "").strip()
+    home_text = str(current_slicer_home or "").strip()
+    if not text or not home_text:
+        return False
+    try:
+        current_home = Path(home_text).expanduser().resolve()
+        candidate = Path(text).expanduser().resolve()
+    except OSError:
+        return False
+    if candidate == current_home or current_home in candidate.parents:
+        return False
+    for root in (candidate, *candidate.parents):
+        name_lower = root.name.lower()
+        has_slicer_marker = (
+            name_lower.startswith("slicer ")
+            or name_lower.startswith("slicer-")
+            or name_lower == "slicer.app"
+            or (root / "bin" / "PythonSlicer.exe").is_file()
+            or (root / "bin" / "PythonSlicer").is_file()
+        )
+        if has_slicer_marker and root != current_home:
+            return True
+    return False
+
+
 def python_install_target_text(python_executable: str) -> str:
     """Return the user-facing target text for Python package installs."""
 

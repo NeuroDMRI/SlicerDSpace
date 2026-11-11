@@ -107,6 +107,17 @@ class DwiPreprocessingConfig:
     pnl_mask_route: str = "auto"
     execution_backend: Optional[str] = None
     dipy_device: str = "auto"
+    run_denoise: bool = True
+    run_eddy: bool = True
+    run_topup: bool = True
+
+
+def _effective_reverse_phase_b0(config: DwiPreprocessingConfig) -> Optional[Path]:
+    return config.reverse_phase_b0 if config.run_topup else None
+
+
+def _effective_run_eddy(config: DwiPreprocessingConfig) -> bool:
+    return bool(config.run_eddy or (config.run_topup and _effective_reverse_phase_b0(config) is not None))
 
 
 @dataclass(frozen=True)
@@ -125,8 +136,14 @@ class DwiPreprocessingResult:
 
 
 def run_route_id(config: DwiPreprocessingConfig) -> str:
-    """The route id of this run: `dipy_mppca[+gibbs]+fsl_eddy[+topup]`."""
-    return _route_id(gibbs=bool(config.dipy_run_gibbs), topup=config.reverse_phase_b0 is not None)
+    """The route id of this run: `dipy_mppca[+gibbs]+fsl_eddy[+topup]` (or the active stage subset)."""
+    effective_eddy = _effective_run_eddy(config)
+    return _route_id(
+        gibbs=bool(config.run_denoise and config.dipy_run_gibbs),
+        topup=bool(effective_eddy and _effective_reverse_phase_b0(config) is not None),
+        denoise=bool(config.run_denoise),
+        eddy=effective_eddy,
+    )
 
 
 def resolve_acquisition_for(raw: RawInputBundle, config: DwiPreprocessingConfig) -> AcquisitionMetadata:
@@ -138,7 +155,7 @@ def resolve_acquisition_for(raw: RawInputBundle, config: DwiPreprocessingConfig)
     return resolve_for_inputs(
         input_dir=Path(raw.dwi_path).parent, dwi_path=raw.dwi_path,
         user_phase_encoding=config.phase_encoding_direction, user_readout_time=config.readout_time,
-        has_reverse_b0=config.reverse_phase_b0 is not None,
+        has_reverse_b0=_effective_reverse_phase_b0(config) is not None,
     )
 
 
@@ -212,15 +229,23 @@ def _external_command_environment(config: DwiPreprocessingConfig) -> dict[str, s
 
 def inspect_preprocessing_backend(config: DwiPreprocessingConfig) -> dict[str, Any]:
     """Check the selected correction runner and the common Python dependencies."""
-    python_status = {module: importlib.util.find_spec(module) is not None for module in PYTHON_MODULES}
+    active_python_modules = PYTHON_MODULES if config.run_denoise else ("nibabel", "numpy")
+    python_status = {module: importlib.util.find_spec(module) is not None for module in active_python_modules}
     missing_python = [module for module, available in python_status.items() if not available]
     execution_backend = resolve_preprocessing_execution_backend(config.execution_backend)
+    effective_eddy = _effective_run_eddy(config)
+    effective_reverse = _effective_reverse_phase_b0(config) is not None
     native = {}
-    if execution_backend == "native":
+    if not effective_eddy:
+        required_commands: list[str] = []
+        diagnostic_commands: list[str] = []
+        commands: dict[str, Optional[str]] = {}
+        missing_commands: list[str] = []
+    elif execution_backend == "native":
         from preprocessing.fsl_runtime import inspect_native_fsl_runtime
 
         native = inspect_native_fsl_runtime(
-            config.mrtrix_bin_dir, config.fsl_bin_dir, reverse_phase=config.reverse_phase_b0 is not None,
+            config.mrtrix_bin_dir, config.fsl_bin_dir, reverse_phase=effective_reverse,
         )
         required_commands = native["required_commands"]
         commands = native["commands"]
@@ -228,7 +253,7 @@ def inspect_preprocessing_backend(config: DwiPreprocessingConfig) -> dict[str, A
         diagnostic_commands = []
     else:
         required_commands = list(REQUIRED_COMMANDS)
-        if config.reverse_phase_b0 is not None:
+        if effective_reverse:
             required_commands.extend(REVERSE_PHASE_COMMANDS)
         diagnostic_commands = list(DIAGNOSTIC_COMMANDS)
         commands = {
@@ -253,10 +278,10 @@ def inspect_preprocessing_backend(config: DwiPreprocessingConfig) -> dict[str, A
         "missing_diagnostic": missing_diagnostic,
         "available": not missing_python and not missing_runtime,
         "capabilities": {
-            "denoise": "mppca",
-            "gibbs_removal": bool(config.dipy_run_gibbs),
-            "susceptibility_distortion_correction": config.reverse_phase_b0 is not None,
-            "eddy_current_modeling": True,
+            "denoise": "mppca" if config.run_denoise else False,
+            "gibbs_removal": bool(config.run_denoise and config.dipy_run_gibbs),
+            "susceptibility_distortion_correction": bool(effective_eddy and effective_reverse),
+            "eddy_current_modeling": effective_eddy,
         },
     }
 
@@ -319,7 +344,8 @@ def _preprocessing_cache_key(
 
     if acquisition is None:
         acquisition = resolve_acquisition_for(raw, config)
-    reverse_phase = config.reverse_phase_b0.expanduser().resolve() if config.reverse_phase_b0 else None
+    effective_reverse = _effective_reverse_phase_b0(config)
+    reverse_phase = effective_reverse.expanduser().resolve() if effective_reverse else None
     executables = {
         name: _file_record(Path(value))
         for name, value in dict(backend.get("commands") or {}).items()
@@ -338,7 +364,7 @@ def _preprocessing_cache_key(
             "execution_backend": "native",
             "native_dispatch": _file_record(Path(__file__).with_name("fsl_native.py")),
             "native_runtime": _file_record(Path(__file__).with_name("fsl_runtime.py")),
-            "topup_config": _file_record(Path(backend["topup_config"])) if backend["topup_config"] else None,
+            "topup_config": _file_record(Path(backend["topup_config"])) if backend.get("topup_config") else None,
         } if backend.get("execution_backend") == "native" else {}),
         "backend": run_route_id(config),
         "dwi_sidecar_sha256": acquisition.sidecar_sha256,
@@ -351,6 +377,9 @@ def _preprocessing_cache_key(
         },
         "parameters": {
             "dipy_run_gibbs": bool(config.dipy_run_gibbs),
+            **({"run_denoise": False} if not config.run_denoise else {}),
+            **({"run_eddy": False} if not config.run_eddy else {}),
+            **({"run_topup": False} if not config.run_topup else {}),
             "b0_threshold": float(config.b0_threshold),
             "phase_encoding_direction": acquisition.phase_encoding,
             "phase_encoding_source": acquisition.phase_encoding_source,
@@ -537,10 +566,12 @@ def _build_commands(raw: RawInputBundle, config: DwiPreprocessingConfig, paths: 
     denoised = paths["denoise_dir"] / f"{subject}_dwi_denoised.nii.gz"
     noise = paths["denoise_dir"] / f"{subject}_dwi_noise.nii.gz"
     degibbs = paths["denoise_dir"] / f"{subject}_dwi_degibbs.nii.gz"
+    effective_eddy = _effective_run_eddy(config)
+    effective_reverse = _effective_reverse_phase_b0(config) if effective_eddy else None
     reverse_phase_commands: list[list[str]] = []
     reverse_phase_b0 = (
-        config.reverse_phase_b0.expanduser().resolve()
-        if config.reverse_phase_b0 is not None
+        effective_reverse.expanduser().resolve()
+        if effective_reverse is not None
         else None
     )
     if reverse_phase_b0 is not None:
@@ -617,10 +648,17 @@ def _build_commands(raw: RawInputBundle, config: DwiPreprocessingConfig, paths: 
                     command.append("-force")
         reverse_phase_b0 = se_epi_pair
 
-    if backend.get("execution_backend") == "native":
+    if not effective_eddy:
+        correction_commands = [
+            ["copy", degibbs.as_posix(), paths["final_dwi"].as_posix()],
+            ["copy", raw.bval_path.as_posix(), paths["final_bval"].as_posix()],
+            ["copy", raw.bvec_path.as_posix(), paths["final_bvec"].as_posix()],
+        ]
+    elif backend.get("execution_backend") == "native":
         correction_cmd = ["native-fsl-correction", degibbs.as_posix()]
         if reverse_phase_b0 is not None:
             correction_cmd.append(reverse_phase_b0.as_posix())
+        correction_commands = [correction_cmd]
     else:
         correction_cmd = [
             backend["commands"]["dwifslpreproc"] or "dwifslpreproc",
@@ -651,18 +689,25 @@ def _build_commands(raw: RawInputBundle, config: DwiPreprocessingConfig, paths: 
             correction_cmd.extend(["-pe_dir", acquisition.phase_encoding])
         if acquisition.readout_time_for_command is not None:
             correction_cmd.extend(["-readout_time", str(acquisition.readout_time_for_command)])
+        correction_commands = [correction_cmd]
 
     # W2a (D1): DIPY MP-PCA, then DIPY Gibbs removal (a copy when skipped, so the next step reads one fixed path).
     # These two steps run in this process; the MRtrix3 and FSL steps below run as commands.
-    mppca_cmd = ["dipy", "mppca", raw.dwi_path.as_posix(), denoised.as_posix(), noise.as_posix()]
-    gibbs_cmd = ["dipy", "gibbs_removal" if config.dipy_run_gibbs else "skip_gibbs_removal",
-                 denoised.as_posix(), degibbs.as_posix()]
+    if config.run_denoise:
+        denoise_commands = [
+            ["dipy", "mppca", raw.dwi_path.as_posix(), denoised.as_posix(), noise.as_posix()],
+            ["dipy", "gibbs_removal" if config.dipy_run_gibbs else "skip_gibbs_removal",
+             denoised.as_posix(), degibbs.as_posix()],
+        ]
+    else:
+        denoise_commands = [
+            ["copy", raw.dwi_path.as_posix(), degibbs.as_posix()],
+        ]
 
     return [
-        mppca_cmd,
-        gibbs_cmd,
+        *denoise_commands,
         *reverse_phase_commands,
-        correction_cmd,
+        *correction_commands,
         [
             "optional-output",
             paths["eddy_parameters"].as_posix(),
@@ -829,13 +874,18 @@ def _mrtrix_backend_details(
     backend: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     native = backend is not None and backend.get("execution_backend") == "native"
+    effective_eddy = _effective_run_eddy(config)
+    effective_reverse = _effective_reverse_phase_b0(config) if effective_eddy else None
     if native:
-        env = {"FSLDIR": backend["fsl_root"], "FSLOUTPUTTYPE": "NIFTI_GZ"}
-        device_execution = {"resolved_device": "cpu", "executable": backend["commands"]["eddy"]}
+        env = {"FSLDIR": backend.get("fsl_root"), "FSLOUTPUTTYPE": "NIFTI_GZ"}
+        device_execution = (
+            {"resolved_device": "cpu", "executable": (backend.get("commands") or {}).get("eddy")}
+            if effective_eddy else None
+        )
     else:
         env = _external_command_environment(config)
         device_record = paths["qc_dir"] / "eddy_device.json"
-        device_execution = json.loads(device_record.read_text()) if device_record.is_file() else None
+        device_execution = json.loads(device_record.read_text()) if (effective_eddy and device_record.is_file()) else None
     return {
         "execution_backend": "native" if native else "legacy",
         "fsl_environment": {
@@ -844,17 +894,19 @@ def _mrtrix_backend_details(
         },
         "route": run_route_id(config),
         **({"acquisition": acquisition.to_record()} if acquisition is not None else {}),
-        "denoise": {"status": "completed", "method": "dipy_mppca"},
-        "gibbs": ({"status": "completed", "method": "dipy_gibbs_removal"} if config.dipy_run_gibbs
+        "denoise": ({"status": "completed", "method": "dipy_mppca"} if config.run_denoise
+                    else {"status": "skipped", "method": "dipy_mppca"}),
+        "gibbs": ({"status": "completed", "method": "dipy_gibbs_removal"} if (config.run_denoise and config.dipy_run_gibbs)
                   else {"status": "skipped", "method": "dipy_gibbs_removal"}),
-        "motion": {"status": "completed", "method": "fsl_eddy", "device_execution": device_execution},
+        "motion": ({"status": "completed", "method": "fsl_eddy", "device_execution": device_execution} if effective_eddy
+                   else {"status": "skipped", "method": "fsl_eddy", "device_execution": None}),
         "bias_correction": {
             "status": "not_run",
             "reason": "Bias-field correction is not included in the MRtrix/FSL command sequence.",
         },
         "susceptibility_distortion_correction": {
-            "status": "completed" if config.reverse_phase_b0 is not None else "not_run",
-            "method": "fsl_topup" if config.reverse_phase_b0 is not None else "rpe_none",
+            "status": "completed" if effective_reverse is not None else "not_run",
+            "method": "fsl_topup" if effective_reverse is not None else "rpe_none",
         },
         "diagnostics": _collect_dwifslpreproc_diagnostics(paths, subject_id),
         "eddy_qc_collection": _collect_eddy_qc_artifacts(paths),
@@ -875,10 +927,10 @@ def _execute_preprocessing_backend(
     force: bool = False,
 ) -> dict[str, Any]:
     native = backend.get("execution_backend") == "native"
-    if native:
+    if native and _effective_run_eddy(config):
         from preprocessing.fsl_runtime import native_fsl_environment
 
-        env = native_fsl_environment(backend["commands"], backend["fsl_root"])
+        env = native_fsl_environment(backend.get("commands") or {}, backend.get("fsl_root"))
     else:
         env = _external_command_environment(config)
 
@@ -1051,7 +1103,7 @@ def run_dwi_preprocessing(
         paths["native_scratch"] = paths["motion_dir"] / "fsl_native_tmp"
     mask_backend = inspect_brain_mask_backend(_brain_mask_config(config))
     acquisition = resolve_acquisition_for(raw, config)
-    if config.execute and not config.skip:
+    if config.execute and not config.skip and _effective_run_eddy(config):
         # Rule 4 (T1 D1): no direction, no run. Fails before the manifest, the scratch folder or any stage.
         acquisition.require_phase_encoding()
     commands = _build_commands(raw, config, paths, backend, acquisition)

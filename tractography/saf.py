@@ -76,6 +76,7 @@ class SAFConfig:
     maxlen: Optional[float] = 90.0
     random_seed: int = 12345
     scalar2surf: tuple[Path, ...] = field(default_factory=tuple)
+    device: str = "auto"
     force_recompute: bool = False
     diagnostics: bool = False
     execute: bool = False
@@ -238,6 +239,24 @@ def _validate_config(config: SAFConfig) -> None:
         raise ValueError("maxlen must be > 0 or None.")
     if config.random_seed < 0:
         raise ValueError("random_seed must be >= 0.")
+    dev = (config.device or "auto").strip().lower()
+    if dev not in {"auto", "cpu", "cuda"} and not dev.startswith("cuda:"):
+        raise ValueError("SAF device must be 'auto', 'cpu', or 'cuda'")
+
+
+def _resolve_saf_device(device: str = "auto") -> str:
+    dev = (device or "auto").strip().lower()
+    if dev == "cpu":
+        return "cpu"
+    try:
+        import torch
+
+        has_cuda = bool(torch.cuda.is_available())
+    except Exception:
+        has_cuda = False
+    if dev.startswith("cuda") and not has_cuda:
+        raise RuntimeError("SAF device='cuda' requested, but torch.cuda.is_available() is False")
+    return "cuda" if has_cuda else "cpu"
 
 
 def _effective_tckgen_options(config: SAFConfig) -> str:
@@ -468,9 +487,33 @@ def _tractogram_summary(path: Path) -> dict[str, Any]:
     import nibabel as nib
     import numpy as np
 
+    tck = nib.streamlines.load(str(path), lazy_load=False).streamlines
+    if hasattr(tck, "_data") and hasattr(tck, "_offsets") and hasattr(tck, "_lengths"):
+        data = np.asarray(tck._data, dtype=np.float64)
+        offsets = np.asarray(tck._offsets, dtype=np.int64)
+        sl_lengths = np.asarray(tck._lengths, dtype=np.int64)
+        valid_sl = sl_lengths >= 2
+        all_points_finite = bool(np.all(valid_sl)) and bool(np.isfinite(data).all())
+        if len(sl_lengths) > 0 and all_points_finite:
+            seg_counts = sl_lengths - 1
+            total_segs = int(np.sum(seg_counts))
+            if total_segs > 0:
+                group_starts = np.empty(len(seg_counts), dtype=np.int64)
+                group_starts[0] = 0
+                if len(seg_counts) > 1:
+                    np.cumsum(seg_counts[:-1], out=group_starts[1:])
+                p0_idx = np.repeat(offsets, seg_counts) + (
+                    np.arange(total_segs, dtype=np.int64) - np.repeat(group_starts, seg_counts)
+                )
+                seg_norms = np.linalg.norm(data[p0_idx + 1] - data[p0_idx], axis=1)
+                values = np.add.reduceat(seg_norms, group_starts)
+            else:
+                values = np.zeros(0, dtype=np.float64)
+            return _format_tractogram_summary(path, values, all_points_finite)
+
     lengths: list[float] = []
     all_points_finite = True
-    for streamline in nib.streamlines.load(str(path), lazy_load=True).streamlines:
+    for streamline in tck:
         points = np.asarray(streamline, dtype=np.float64)
         if points.ndim != 2 or points.shape[0] < 2 or points.shape[1] != 3:
             all_points_finite = False
@@ -480,6 +523,12 @@ def _tractogram_summary(path: Path) -> dict[str, Any]:
             continue
         lengths.append(float(np.linalg.norm(np.diff(points, axis=0), axis=1).sum()))
     values = np.asarray(lengths, dtype=np.float64)
+    return _format_tractogram_summary(path, values, all_points_finite)
+
+
+def _format_tractogram_summary(path: Path, values: Any, all_points_finite: bool) -> dict[str, Any]:
+    import numpy as np
+
     summary: dict[str, Any] = {
         "file": _file_info(path),
         "streamline_count": int(values.size),
@@ -581,6 +630,8 @@ def run_saf(config: SAFConfig, *, log: Optional[Callable[[str], None]] = None) -
             "summary": _summarize_saf_outputs(output_dir),
         },
     }
+    resolved_saf_device = _resolve_saf_device(config.device) if config.execute else (config.device or "auto")
+    manifest["parameters"]["device"] = resolved_saf_device
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
     _emit(f"[SAF] Manifest: {manifest_path}", log)
@@ -595,6 +646,8 @@ def run_saf(config: SAFConfig, *, log: Optional[Callable[[str], None]] = None) -
             execution_error = f"SAF backend is incomplete. Missing: {missing}"
         else:
             cwd = Path.cwd()
+            prev_saf_dev = os.environ.get("SLICERDSPACE_SAF_DEVICE")
+            os.environ["SLICERDSPACE_SAF_DEVICE"] = resolved_saf_device
             try:
                 with _mrtrix_rng_seed_env(config.random_seed), _saf_backend_import_path():
                     module = importlib.import_module("SAF_pipeline")
@@ -605,6 +658,10 @@ def run_saf(config: SAFConfig, *, log: Optional[Callable[[str], None]] = None) -
                 execution_error = str(exc)
                 execution_exception = exc
             finally:
+                if prev_saf_dev is None:
+                    os.environ.pop("SLICERDSPACE_SAF_DEVICE", None)
+                else:
+                    os.environ["SLICERDSPACE_SAF_DEVICE"] = prev_saf_dev
                 os.chdir(cwd)
 
     elapsed_seconds = time.monotonic() - start_time

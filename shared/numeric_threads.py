@@ -19,6 +19,16 @@ def reserved_stage_cpus():
     return count if count >= 1 else None
 
 
+def effective_cpu_threads(requested=None, *, default=8):
+    """Resolve effective CPU worker/thread count respecting stage reservations and host cores."""
+    if requested is not None and int(requested) >= 1:
+        return int(requested)
+    reserved = reserved_stage_cpus()
+    if reserved is not None:
+        return int(reserved)
+    return max(1, min(os.cpu_count() or 4, int(default)))
+
+
 @contextmanager
 def numerical_threads(threads, *, workers=1):
     if threads is None:

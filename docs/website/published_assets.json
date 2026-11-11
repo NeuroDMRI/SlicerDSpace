@@ -32,7 +32,7 @@
       "sha256": "400931d034332c54e2557e2b185ca1979fc92c76bcfc54f31be2a312eca34a3a"
     },
     "docs/site/assets/img/fig-runtime-resources.png": {
-      "sha256": "7b34ee9dad3fdf57872ef77c3b266a66e75be992ba3aebb8c55e9a6ccb325391"
+      "sha256": "515ccdc17fd97d3dc182d1149b219cafc6c87b5b3f94c5c6f6bfe2de0f741940"
     },
     "docs/site/assets/img/fig-runtime-optimizations.png": {
       "sha256": "e51323bc167818b72b32e7b52afdf0e07aeb6a958a5c75d115f588aa4d4cbbcc"
@@ -50,8 +50,8 @@
       "derivative": "Lossless WebP; decoded RGBA pixels and dimensions identical to PNG"
     },
     "docs/site/assets/img/fig-runtime-resources.webp": {
-      "sha256": "761d18b4786ff4cbd1cf86c6028cd15af82f97bbb3edf87f3e3300bf1a8966cd",
-      "source_sha256": "7b34ee9dad3fdf57872ef77c3b266a66e75be992ba3aebb8c55e9a6ccb325391",
+      "sha256": "44965e7a5771f28e54ce0ee6cbf371db245f53cbc5637f1ce2b339aaddfc1f37",
+      "source_sha256": "515ccdc17fd97d3dc182d1149b219cafc6c87b5b3f94c5c6f6bfe2de0f741940",
       "derivative": "Lossless WebP; decoded RGBA pixels and dimensions identical to PNG"
     },
     "docs/site/media/SlicerDSpace_promo_1080p.mp4": {

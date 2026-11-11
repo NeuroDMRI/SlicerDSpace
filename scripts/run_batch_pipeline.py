@@ -328,6 +328,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument('--batch-stage-memory-gb', type=float, help='Override header/model-based stage RAM estimates in GiB.')
     parser.add_argument('--batch-gpu-slots', type=_parse_jobs, default=1,
                         help='Global GPU-capable stage slots, not GPU assignment or VRAM enforcement; default: 1.')
+    parser.add_argument('--low-memory', action='store_true',
+                        help='Adaptively clamp peak stage RAM reservations and chunk sizes for modest 8-16 GiB RAM machines.')
     parser.add_argument("--execute", action="store_true", help="Actually execute each subject. Omit for dry-run planning.")
     parser.add_argument(
         "--arrange-inputs",
@@ -408,7 +410,8 @@ def main(argv: list[str] | None = None) -> int:
                 gpu_slots=args.batch_gpu_slots, adaptive=args.scheduler == 'adaptive',
                 resource_fraction=args.resource_budget,
                 history_path=args.resource_history or output_base / '00_batch_metadata/resource_history.json',
-                tuning_profile=args.compute_profile, output_root=output_base if args.output_root else None)
+                tuning_profile=args.compute_profile, output_root=output_base if args.output_root else None,
+                allow_low_memory=bool(args.low_memory))
         except (ValueError, ImportError) as exc:
             parser.error(str(exc))
         args.jobs = resource_plan['jobs']
@@ -434,7 +437,8 @@ def main(argv: list[str] | None = None) -> int:
                     stage_cpus=args.batch_stage_cpus, stage_memory_gb=args.batch_stage_memory_gb,
                     gpu_slots=args.batch_gpu_slots, adaptive=True, resource_fraction=args.resource_budget,
                     history_path=resource_plan['history_path'], tuning_profile=profile,
-                    output_root=output_base if args.output_root else None)
+                    output_root=output_base if args.output_root else None,
+                    allow_low_memory=bool(args.low_memory))
         print(f"[Batch] Resource plan: up to {args.jobs} subjects; "
               f"{resource_plan['cpu_budget']} CPU threads, {resource_plan['memory_gb']:.1f} GiB RAM; "
               f"{resource_plan['gpu_slots']} GPU-capable stage slot(s).", flush=True)

@@ -55,17 +55,17 @@ In `tractography/csd.py`, `run_csd_act` also records a content-verified `csd_fod
 
 ---
 
-## 9 November: Multi-Subject Cohort Stage-Level Scheduling
+## 11 November: Multi-Subject Cohort Stage-Level Scheduling (Post-Optimization Re-Benchmark)
 
-The batch runner (scripts/run_batch_pipeline.py --scheduler adaptive) coordinates individual pipeline stages across subjects within a shared CPU, memory, GPU and I/O budget ([source records](benchmarks/cohort_multi_pipeline_20261109.json)). Under a 32-core CPU budget per arm on a 16-subject HCP cohort, Subject-level fixed concurrency (--scheduler subjects) is compared against Adaptive stage-level scheduling (--scheduler adaptive):
+The batch runner (scripts/run_batch_pipeline.py --scheduler adaptive) coordinates individual pipeline stages across subjects within a shared CPU, memory, GPU and I/O budget ([source records](benchmarks/cohort_multi_pipeline_20261109.json)). Under a 32-core CPU budget per arm on a 16-subject HCP cohort using the fused CPU and CUDA algorithm implementations, Subject-level fixed concurrency (--scheduler subjects) is compared against Adaptive stage-level scheduling (--scheduler adaptive):
 
 | Cohort pipeline (N = 16) | Subject-level makespan | Adaptive makespan | Throughput ratio | Time saved |
 | --- | ---: | ---: | ---: | ---: |
-| Microstructure (DTI + FW + NODDI + DKI + MK-Curve) | 301.79 min | 197.44 min | 1.53× | 34.58% |
-| Anatomical priors (DDSeg + DDParcel + DDSurfer) | 78.43 min | 68.33 min | 1.15× | 12.88% |
-| Tractography & Bundles (DDSeg + DDParcel + DTI + DTI-Det + WMQL + TractCloud + Connectome) | 78.61 min | 70.66 min | 1.11× | 10.11% |
+| Microstructure (DTI + FW + NODDI + DKI + MK-Curve) | 136.22 min | 100.85 min | 1.35× | 25.96% |
+| Anatomical priors (DDSeg + DDParcel + DDSurfer) | 71.69 min | 64.23 min | 1.12× | 10.41% |
+| Tractography, Bundles & Connectome (DDSeg + DDParcel + DTI + DTI-Det + WMQL + TractCloud + Connectome) | 71.22 min | 62.46 min | 1.14× | 12.29% |
 
-All 16 subjects pass output and Rule-1 numerical equivalence checks in every arm. In the Microstructure cohort, stage-level scheduling overlaps single-thread Free-water/DKI stages with multithreaded NODDI/MK-Curve stages across subjects, raising mean CPU core utilization from 12.6 to 21.2 cores without altering individual scientific estimators.
+Decomposing the downstream connectivity run by stage family gives **1.22× (18.30% saved)** on Tractography and **1.14× (12.36% saved)** on Bundles. All 16 subjects complete and pass equivalence checks in every arm. In the Microstructure cohort, stage-level scheduling overlaps lower-thread Free-water/DKI stages with multithreaded NODDI/MK-Curve stages across subjects, raising mean CPU core utilization from 12.9 to 19.9 cores without altering individual scientific estimators. On modest personal machines ($\le 16$ GiB RAM or 4–8 GiB consumer GPUs), passing `--low-memory` caps concurrency, I/O tokens and per-stage reservations conservatively.
 
 ---
 
@@ -1103,3 +1103,15 @@ reduction in full six-map regional-export wall time with byte-identical CSV, and
 **9.46%-9.97%** lower complete 64-voxel MK-Curve chunk time with exactly equal
 compared coefficient/curve/parameter arrays and masks. The latter is not measured
 whole-brain MK-Curve or complete-plugin acceleration.
+
+---
+
+## Full-Pipeline CPU And CUDA Accelerations (2026-11-11)
+
+`docs/release/benchmarks/full_pipeline_accelerations_20261111.json` records 24 end-to-end and stage-complete optimization comparisons against initial unoptimized baselines on `Intel Xeon Platinum 8360Y` + `NVIDIA H100 PCIe 80 GB`:
+
+- **Preprocessing (`MP-PCA + Gibbs`)**: Sliding-window patch vectorization, z-slab RAM capping, and batched PyTorch/cuSOLVER `eigh` + 2D `rFFT/irFFT` CUDA kernels (`136.02 s -> 114.23 s` CPU; `136.02 s -> 7.64 s` CUDA on `sub-dicom`; `4.80 min` CUDA on 288-volume `HCP 100307`).
+- **Anatomical priors (`DDSeg`, `DDParcel`)**: VRAM-scaled multi-slice TorchScript/FastSurferCNN batching (`DDSeg` CUDA `8.72 s -> 3.45 s`; `DDParcel` 3-view CUDA `69.02 s -> 23.43 s`), uniform background slice caching, and padded-ROI 3D connected-component/filter post-processing (`97.96 s -> 15.17 s`, bitwise exact).
+- **Microstructure (`DTI`, `Free-water`, `DKI`, `MK-Curve`)**: Chunked column-scaled/equilibrated WLS, analytical 3x3 Cardano eigensolvers, vectorized analytical kurtosis invariants, coarse-to-fine synthetic-`b0` search, and FP64 PyTorch/cuSOLVER Cholesky + Gauss-Newton CUDA solvers (`Free-water` `938.28 s -> 312.66 s` CPU, `37.65 s` CUDA; `DKI` `91.60 min -> 1.94 min` CPU, `1.47 min` CUDA; `MK-Curve` `165.90 min -> 22.86 min` 1-worker CPU, `3.30 min` 8-worker CPU, `1.32 min` CUDA).
+- **Tractography, Fibre Bundles & Connectome (`DTI-Det`, `SAF`, `WMA`, `Connectome`)**: Active-mask analytical/cuSOLVER peak extraction (`DTI-Det` `68.0 s -> 21.85 s` CPU, `16.41 s` CUDA), spatial-hash BVH and batched CUDA Möller-Trumbore ray-triangle filtering (`SAF`), fused VTK bulk-geometry/input reuse with vectorized CPU and Triton/PyTorch CUDA `whitematteranalysis_gpu` kernels (`WMA` `102.10 min -> 2.75 min` CPU, `2.31 min` CUDA), and batched `cKDTree` / tiled GPU `torch.cdist` radial assignment (`Connectome` `138.0 s -> 5.75–7.57 s`).
+- **Hardware Adaptability**: `shared/hardware_adapt.py` scales CUDA batch/chunk sizes to free VRAM, caps numerical threads and z-slab RAM footprints on modest 8–16 GiB / 4–8 GiB GPU machines (`all_peak_vram_under_cap: true` verified under a `3.5 GiB` VRAM cap), halves chunks on `OutOfMemoryError`, and falls back cleanly to CPU when needed.

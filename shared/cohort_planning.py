@@ -146,7 +146,8 @@ def cohort_phase_encoding_message(blocks):
 
 def plan_cohort(subjects, arguments, *, jobs=None, cpu_budget=None, memory_gb=None,
                 stage_cpus=None, stage_memory_gb=None, gpu_slots=1, available=None,
-                adaptive=False, resource_fraction=.8, history_path=None, tuning_profile=None, output_root=None):
+                adaptive=False, resource_fraction=.8, history_path=None, tuning_profile=None,
+                output_root=None, allow_low_memory=False):
     if not math.isfinite(resource_fraction) or not 0 < resource_fraction <= 1:
         raise ValueError('Resource fraction must be greater than zero and at most one')
     cpus, memory = available if available is not None else available_cohort_resources(resource_fraction if adaptive else .7)
@@ -232,8 +233,11 @@ def plan_cohort(subjects, arguments, *, jobs=None, cpu_budget=None, memory_gb=No
             # SPEC-GAP: a table value is capped at the CPU budget (a request above it would fail validation).
             if adaptive and stage_cpus is None and stage in cpu_requests:
                 profile[stage]['cpu'] = max(1, min(int(cpu_requests[stage]), cpu))
+            if adaptive and stage_cpus is None and stage in {'dti_tracking', 'tractcloud'}:
+                profile[stage]['cpu'] = min(2, cpu)
             if adaptive and stage_cpus is None and stage in {'wmql', 'connectome', 'wma',
-                    'microstructure_dti', 'microstructure_freewater', 'microstructure_dki', 'microstructure_mkcurve'}:
+                    'microstructure_dti', 'microstructure_freewater', 'microstructure_dki', 'microstructure_mkcurve',
+                    'microstructure_ifw'}:
                 profile[stage]['cpu'] = 1
                 if stage == 'microstructure_freewater':
                     profile[stage]['cpu'] = max(1, int(_option(arguments, '--microstructure-free-water-n-jobs', '1')))
@@ -276,8 +280,20 @@ def plan_cohort(subjects, arguments, *, jobs=None, cpu_budget=None, memory_gb=No
         peaks = [profile[stage]['memory_gb'] for stage in selected if stage in profile]
         peak = max(peaks, default=stage_memory_gb or 1)
         if peak > ram:
-            raise ValueError(f'{subject.subject_id}: estimated stage RAM {peak:g} GiB exceeds budget {ram:.1f} GiB. '
-                             'Review available memory or override reservations after a pilot.')
+            if not allow_low_memory:
+                raise ValueError(
+                    f'{subject.subject_id}: estimated stage RAM {peak:g} GiB exceeds budget {ram:.1f} GiB. '
+                    'Review available memory, pass --low-memory on modest-RAM hosts, or override reservations after a pilot.'
+                )
+            for stage in selected:
+                if stage in profile and profile[stage]['memory_gb'] > ram:
+                    profile[stage]['memory_gb'] = ram
+                    profile[stage]['cpu'] = max(1, min(profile[stage]['cpu'], 4, cpu))
+            if 'microstructure_dki' in selected and not _option([*arguments, *tuned_arguments], '--dki-voxels-per-chunk'):
+                tuned_arguments += ['--dki-voxels-per-chunk', '8192']
+            if 'microstructure_mkcurve' in selected and not _option([*arguments, *tuned_arguments], '--mkcurve-voxels-per-chunk'):
+                tuned_arguments += ['--mkcurve-voxels-per-chunk', '1024']
+            peak = min(peak, ram)
         selected_peaks.append(peak)
         profiles[subject.subject_id] = profile
         subject_arguments[subject.subject_id] = tuned_arguments
@@ -287,8 +303,13 @@ def plan_cohort(subjects, arguments, *, jobs=None, cpu_budget=None, memory_gb=No
     if adaptive and jobs is None:
         # Waiters keep interpreter state: retain RAM headroom and bound the frontier.
         count = max(1, min(len(subjects), int(max(.5, ram - peak) / .5), cpu))
+    if allow_low_memory and jobs is None and any(
+            any(req.get('memory_gb', 0) >= ram for st, req in prof.items() if st in selected)
+            for prof in profiles.values()):
+        count = 1
     return dict(cpu_budget=cpu, memory_gb=ram, stage_cpus=threads, stage_memory_gb=peak,
                 memory_reservations_fixed=stage_memory_gb is not None,
+                low_memory_mode=bool(allow_low_memory),
                 gpu_slots=gpu_slots, jobs=count, jobs_automatic=jobs is None,
                 subject_profiles=profiles, input_headers=inputs, selected_stages=sorted(selected),
                 subject_arguments=subject_arguments, tuning_profile=str(tuning_profile) if tuning_profile else None,

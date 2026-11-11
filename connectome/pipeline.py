@@ -42,6 +42,7 @@ class ConnectomeConfig:
     zero_diagonal: bool = True
     # None = not set by the user: ``auto`` with the MRtrix path then compresses (D5).
     compress_mrtrix_dense: Optional[bool] = None
+    device: str = "auto"
     execute: bool = False
 
 
@@ -271,12 +272,31 @@ def _labels_at_points(points, data, inverse_affine):
     return out
 
 
+def _resolve_connectome_device(requested: str = "auto") -> str:
+    env_val = os.environ.get("SLICERDSPACE_CONNECTOME_DEVICE")
+    mode = str(env_val if env_val else requested).strip().lower()
+    if mode not in {"auto", "cpu", "cuda"}:
+        raise ValueError(f"Unsupported connectome device {mode!r}; expected 'auto', 'cpu', or 'cuda'.")
+    if mode == "cpu":
+        return "cpu"
+    try:
+        import torch
+
+        cuda_ok = bool(torch.cuda.is_available())
+    except Exception:
+        cuda_ok = False
+    if mode == "cuda" and not cuda_ok:
+        raise RuntimeError("Connectome CUDA device requested, but PyTorch CUDA is unavailable.")
+    return "cuda" if cuda_ok else "cpu"
+
+
 def _build_endpoint_label_assigner(
     data,
     inverse_affine,
     *,
     allowed_labels: Iterable[int],
     radius_mm: float,
+    device: str = "auto",
 ) -> tuple[Callable[[object], int], str]:
     import numpy as np
 
@@ -348,6 +368,8 @@ def _build_endpoint_label_assigner(
         data[allowed_voxels[:, 0], allowed_voxels[:, 1], allowed_voxels[:, 2]],
         dtype=np.int64,
     )
+    resolved_device = _resolve_connectome_device(device)
+    explicit_cuda = str(os.environ.get("SLICERDSPACE_CONNECTOME_DEVICE") or device).strip().lower() == "cuda"
 
     def assign_kdtree(point: object) -> int:
         distance, index = tree.query(
@@ -359,11 +381,14 @@ def _build_endpoint_label_assigner(
             return 0
         return int(allowed_voxel_labels[int(index)])
 
-    def assign_kdtree_batch(points, direct_labels=None):
-        coords = np.asarray(points, dtype=float)[:, :3]
-        if coords.size == 0:
-            return np.empty(0, dtype=np.int64)
-        distances, indices = tree.query(coords, k=1, distance_upper_bound=radius_mm)
+    def _assign_kdtree_cpu_batch(coords: "np.ndarray") -> "np.ndarray":
+        from shared.numeric_threads import effective_cpu_threads
+
+        n_workers = max(1, min(16, int(effective_cpu_threads(None, default=8))))
+        try:
+            distances, indices = tree.query(coords, k=1, distance_upper_bound=radius_mm, workers=n_workers)
+        except TypeError:
+            distances, indices = tree.query(coords, k=1, distance_upper_bound=radius_mm)
         distances = np.asarray(distances, dtype=np.float64).reshape(-1)
         indices = np.asarray(indices, dtype=np.int64).reshape(-1)
         valid = np.isfinite(distances) & (indices >= 0) & (indices < len(allowed_voxel_labels))
@@ -371,6 +396,97 @@ def _build_endpoint_label_assigner(
         if np.any(valid):
             out[valid] = allowed_voxel_labels[indices[valid]]
         return out
+
+    if resolved_device == "cuda":
+        # Exact FP64 world-space Euclidean grid-neighborhood search on PyTorch CUDA
+        inv_np = np.asarray(inverse_affine, dtype=np.float64)
+        aff_np = np.asarray(affine, dtype=np.float64)
+        pads = [
+            int(math.ceil(radius_mm * float(np.linalg.norm(inv_np[axis, :3])) + 0.5)) + 1
+            for axis in range(3)
+        ]
+        # Only use GPU stencil when the search ball is compact (typical <= ~2000 offsets)
+        grid_axes = [np.arange(-pads[a], pads[a] + 1, dtype=np.int64) for a in range(3)]
+        gx, gy, gz = np.meshgrid(grid_axes[0], grid_axes[1], grid_axes[2], indexing="ij")
+        offsets_all = np.stack([gx.ravel(), gy.ravel(), gz.ravel()], axis=1)
+        half_diag_mm = 0.5 * float(sum(np.linalg.norm(aff_np[:3, j]) for j in range(3)))
+        delta_mm = np.linalg.norm(offsets_all @ aff_np[:3, :3].T, axis=1)
+        offsets_ball = offsets_all[delta_mm <= (radius_mm + half_diag_mm + 1e-6)]
+
+        if 0 < len(offsets_ball) <= 4096:
+            def assign_cuda_batch(points, direct_labels=None):
+                coords = np.ascontiguousarray(np.asarray(points, dtype=np.float64)[:, :3])
+                if coords.size == 0:
+                    return np.empty(0, dtype=np.int64)
+                import torch
+                from shared.hardware_adapt import (
+                    adaptive_cuda_scaled_batch,
+                    empty_cuda_cache_safely,
+                    run_cuda_chunked_with_oom_fallback,
+                )
+
+                dev = torch.device("cuda")
+                s0, s1, s2 = int(data.shape[0]), int(data.shape[1]), int(data.shape[2])
+                allowed_vol_np = np.where(allowed_mask, data, 0).astype(np.int32, copy=False)
+                allowed_vol_t = torch.as_tensor(allowed_vol_np, device=dev, dtype=torch.int32)
+                offsets_t = torch.as_tensor(offsets_ball, device=dev, dtype=torch.long)
+                inv_a_t = torch.as_tensor(inv_np[:3, :3].T, device=dev, dtype=torch.float64)
+                inv_b_t = torch.as_tensor(inv_np[:3, 3], device=dev, dtype=torch.float64)
+                aff_a_t = torch.as_tensor(aff_np[:3, :3].T, device=dev, dtype=torch.float64)
+                aff_b_t = torch.as_tensor(aff_np[:3, 3], device=dev, dtype=torch.float64)
+                r2 = float(radius_mm) * float(radius_mm)
+                n_off = int(offsets_ball.shape[0])
+                per_pt_bytes = max(4096, n_off * 8 * 8)
+                init_chunk = adaptive_cuda_scaled_batch(
+                    per_item_bytes=per_pt_bytes,
+                    default_batch=16384,
+                    min_batch=512,
+                    max_batch=65536,
+                )
+
+                def _gpu_chunk(start: int, end: int):
+                    pts_t = torch.from_numpy(coords[start:end]).to(device=dev, dtype=torch.float64)
+                    v0 = torch.round(pts_t @ inv_a_t + inv_b_t).to(torch.long)
+                    cand_v = v0.unsqueeze(1) + offsets_t.unsqueeze(0)
+                    cx, cy, cz = cand_v[..., 0], cand_v[..., 1], cand_v[..., 2]
+                    in_b = (cx >= 0) & (cx < s0) & (cy >= 0) & (cy < s1) & (cz >= 0) & (cz < s2)
+                    cx_c = torch.clamp(cx, 0, max(0, s0 - 1))
+                    cy_c = torch.clamp(cy, 0, max(0, s1 - 1))
+                    cz_c = torch.clamp(cz, 0, max(0, s2 - 1))
+                    flat_idx = (cx_c * s1 + cy_c) * s2 + cz_c
+                    cand_lbl = allowed_vol_t.view(-1).index_select(0, flat_idx.reshape(-1)).view_as(cx)
+                    valid = in_b & (cand_lbl != 0)
+                    cand_w = cand_v.to(torch.float64) @ aff_a_t + aff_b_t
+                    diff = cand_w - pts_t.unsqueeze(1)
+                    dist2 = (diff * diff).sum(dim=-1)
+                    inf_t = torch.full_like(dist2, float("inf"))
+                    masked_d2 = torch.where(valid & (dist2 <= r2), dist2, inf_t)
+                    min_d2, best_k = torch.min(masked_d2, dim=1)
+                    chosen = cand_lbl.gather(1, best_k.unsqueeze(1)).squeeze(1).to(torch.int64)
+                    res = torch.where(torch.isfinite(min_d2), chosen, torch.zeros_like(chosen))
+                    return res.detach().cpu().numpy()
+
+                try:
+                    parts = run_cuda_chunked_with_oom_fallback(
+                        len(coords),
+                        initial_chunk_size=init_chunk,
+                        min_cuda_chunk_size=256,
+                        cuda_fn=_gpu_chunk,
+                        cpu_fallback_fn=None if explicit_cuda else (lambda s, e: _assign_kdtree_cpu_batch(coords[s:e])),
+                    )
+                    return np.concatenate(parts, axis=0) if parts else np.empty(0, dtype=np.int64)
+                finally:
+                    del allowed_vol_t, offsets_t, inv_a_t, inv_b_t, aff_a_t, aff_b_t
+                    empty_cuda_cache_safely()
+
+            assign_kdtree.assign_batch = assign_cuda_batch  # type: ignore[attr-defined]
+            return assign_kdtree, "torch.cuda.radial_search"
+
+    def assign_kdtree_batch(points, direct_labels=None):
+        coords = np.asarray(points, dtype=float)[:, :3]
+        if coords.size == 0:
+            return np.empty(0, dtype=np.int64)
+        return _assign_kdtree_cpu_batch(coords)
 
     assign_kdtree.assign_batch = assign_kdtree_batch  # type: ignore[attr-defined]
     return assign_kdtree, "scipy.spatial.cKDTree"
@@ -702,18 +818,73 @@ def _streamline_length_mm(streamline) -> float:
     return float(np.linalg.norm(np.diff(points, axis=0), axis=1).sum())
 
 
-def _read_sift2_weights(path: Path) -> list[float]:
+def _read_sift2_weights_array(path: Path):
+    import numpy as np
+
+    raw_text = path.expanduser().read_text(encoding="utf-8")
+    if "#" not in raw_text:
+        arr = np.fromstring(raw_text, sep=" ", dtype=np.float64)
+        if arr.size > 0 or not raw_text.strip():
+            return arr
+    cleaned_lines = [
+        line for line in raw_text.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    if not cleaned_lines:
+        return np.empty(0, dtype=np.float64)
+    joined = "\n".join(cleaned_lines)
+    arr = np.fromstring(joined, sep=" ", dtype=np.float64)
+    if arr.size > 0:
+        return arr
     weights: list[float] = []
-    for line in path.expanduser().read_text(encoding="utf-8").splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        for token in stripped.split():
+    for line in cleaned_lines:
+        for token in line.split():
             try:
                 weights.append(float(token))
             except ValueError:
                 continue
-    return weights
+    return np.asarray(weights, dtype=np.float64)
+
+
+def _read_sift2_weights(path: Path) -> list[float]:
+    return _read_sift2_weights_array(path).tolist()
+
+
+def _load_streamline_endpoints_fast(path: Path):
+    """Extract (total_streamlines, valid_indices, starts, ends) without materializing per-streamline objects."""
+    import numpy as np
+
+    suffix = path.suffix.lower()
+    if suffix in {".trk", ".tck"}:
+        import nibabel as nib
+        from nibabel.streamlines.array_sequence import ArraySequence
+
+        tractogram = nib.streamlines.load(path.as_posix())
+        seq = tractogram.streamlines
+        if isinstance(seq, ArraySequence):
+            total = len(seq)
+            if total == 0:
+                return 0, np.empty(0, dtype=np.int64), np.empty((0, 3), dtype=np.float64), np.empty((0, 3), dtype=np.float64)
+            lengths = np.asarray(seq._lengths, dtype=np.int64)
+            offsets = np.asarray(seq._offsets, dtype=np.int64)
+            valid_idx = np.flatnonzero(lengths >= 2)
+            if valid_idx.size == 0:
+                return total, valid_idx, np.empty((0, 3), dtype=np.float64), np.empty((0, 3), dtype=np.float64)
+            v_off = offsets[valid_idx]
+            v_len = lengths[valid_idx]
+            pts = np.asarray(seq._data, dtype=np.float64)
+            starts = np.ascontiguousarray(pts[v_off, :3])
+            ends = np.ascontiguousarray(pts[v_off + v_len - 1, :3])
+            return total, valid_idx, starts, ends
+
+    streamlines = list(_iter_streamlines(path))
+    total = len(streamlines)
+    valid_list = [idx for idx, sl in enumerate(streamlines) if len(sl) >= 2]
+    if not valid_list:
+        return total, np.empty(0, dtype=np.int64), np.empty((0, 3), dtype=np.float64), np.empty((0, 3), dtype=np.float64)
+    starts = np.asarray([streamlines[idx][0][:3] for idx in valid_list], dtype=np.float64)
+    ends = np.asarray([streamlines[idx][-1][:3] for idx in valid_list], dtype=np.float64)
+    return total, np.asarray(valid_list, dtype=np.int64), starts, ends
 
 
 def _tck_header_streamline_count(path: Path) -> Optional[int]:
@@ -753,7 +924,11 @@ def _write_python_connectome(
     label_names = _parse_label_names(lut_path)
     scalar_data = None
     scalar_inverse_affine = None
-    sift2_weights = _read_sift2_weights(config.sift2_weights_path) if config.metric == "sift2_weighted_streamline_count" and config.sift2_weights_path is not None else None
+    sift2_weights_arr = (
+        _read_sift2_weights_array(config.sift2_weights_path)
+        if config.metric == "sift2_weighted_streamline_count" and config.sift2_weights_path is not None
+        else None
+    )
     if _metric_requires_scalar(config.metric):
         if config.scalar_map_path is None:
             raise ValueError(f"metric='{config.metric}' requires scalar_map_path.")
@@ -765,11 +940,13 @@ def _write_python_connectome(
         node_filter=config.node_filter,
     )
     allowed_node_labels = set(node_labels)
+    allowed_node_arr = np.asarray(sorted(allowed_node_labels), dtype=np.int64)
     assign_endpoint, assignment_implementation = _build_endpoint_label_assigner(
         data,
         inverse_affine,
         allowed_labels=node_labels,
         radius_mm=config.assignment_radius_mm,
+        device=config.device,
     )
     named_node_count = sum(1 for label in node_labels if label in label_names)
     node_count = _write_nodes_table(nodes_path, node_labels, label_names=label_names)
@@ -789,14 +966,20 @@ def _write_python_connectome(
 
     requires_length = _metric_requires_length(config.metric)
     assign_batch = getattr(assign_endpoint, "assign_batch", None)
-    streamlines = list(_iter_streamlines(config.tractography_path.expanduser().resolve()))
-    total_streamlines = len(streamlines)
-    valid_indices = [idx for idx, sl in enumerate(streamlines) if len(sl) >= 2]
-    skipped_streamlines = total_streamlines - len(valid_indices)
+    tract_path = config.tractography_path.expanduser().resolve()
+    need_full_streamlines = bool(requires_length or (scalar_data is not None and scalar_inverse_affine is not None))
+    if need_full_streamlines:
+        streamlines = list(_iter_streamlines(tract_path))
+        total_streamlines = len(streamlines)
+        valid_indices_arr = np.asarray([idx for idx, sl in enumerate(streamlines) if len(sl) >= 2], dtype=np.int64)
+        starts = np.asarray([streamlines[idx][0][:3] for idx in valid_indices_arr], dtype=np.float64) if valid_indices_arr.size else np.empty((0, 3), dtype=np.float64)
+        ends = np.asarray([streamlines[idx][-1][:3] for idx in valid_indices_arr], dtype=np.float64) if valid_indices_arr.size else np.empty((0, 3), dtype=np.float64)
+    else:
+        streamlines = None
+        total_streamlines, valid_indices_arr, starts, ends = _load_streamline_endpoints_fast(tract_path)
+    skipped_streamlines = int(total_streamlines - len(valid_indices_arr))
 
-    if valid_indices:
-        starts = np.asarray([streamlines[idx][0][:3] for idx in valid_indices], dtype=np.float64)
-        ends = np.asarray([streamlines[idx][-1][:3] for idx in valid_indices], dtype=np.float64)
+    if valid_indices_arr.size > 0:
         direct_sources = _labels_at_points(starts, data, inverse_affine)
         direct_targets = _labels_at_points(ends, data, inverse_affine)
         if assign_batch is not None:
@@ -806,47 +989,100 @@ def _write_python_connectome(
             sources = np.asarray([assign_endpoint(pt) for pt in starts], dtype=np.int64)
             targets = np.asarray([assign_endpoint(pt) for pt in ends], dtype=np.int64)
 
-        scalar_queue: list[tuple[tuple[int, int], object]] = []
-        for pos, streamline_index in enumerate(valid_indices):
-            streamline = streamlines[streamline_index]
-            direct_source = int(direct_sources[pos])
-            direct_target = int(direct_targets[pos])
-            source = int(sources[pos])
-            target = int(targets[pos])
-            radially_assigned_endpoints += int(source != 0 and source != direct_source)
-            radially_assigned_endpoints += int(target != 0 and target != direct_target)
-            if source == 0 or target == 0:
-                skipped_streamlines += 1
-                if (
-                    (direct_source != 0 and direct_source not in allowed_node_labels)
-                    or (direct_target != 0 and direct_target not in allowed_node_labels)
-                ):
-                    skipped_non_node_streamlines += 1
-                continue
-            streamline_weight = None
-            if sift2_weights is not None:
-                if streamline_index >= len(sift2_weights):
-                    skipped_streamlines += 1
-                    continue
-                streamline_weight = sift2_weights[streamline_index]
-            endpoint_assigned_streamlines += 1
-            if source == target:
-                self_connection_streamlines += 1
-                if config.zero_diagonal:
-                    continue
-            matrix_included_streamlines += 1
-            edge = (source, target) if (not config.symmetric or source <= target) else (target, source)
-            if streamline_weight is not None:
-                edge_counts[edge] += streamline_weight
-            else:
-                edge_counts[edge] += 1
-            if requires_length:
-                edge_length_sums[edge] += _streamline_length_mm(streamline)
-                edge_length_counts[edge] += 1
-            if scalar_data is not None and scalar_inverse_affine is not None:
-                scalar_queue.append((edge, streamline))
+        if not need_full_streamlines:
+            # Fully vectorized aggregation for 1M-10M streamlines
+            radially_assigned_endpoints = int(
+                np.count_nonzero((sources != 0) & (sources != direct_sources))
+                + np.count_nonzero((targets != 0) & (targets != direct_targets))
+            )
+            unassigned = (sources == 0) | (targets == 0)
+            skipped_streamlines += int(np.count_nonzero(unassigned))
+            if np.any(unassigned):
+                ds_u = direct_sources[unassigned]
+                dt_u = direct_targets[unassigned]
+                non_node = ((ds_u != 0) & (~np.isin(ds_u, allowed_node_arr))) | (
+                    (dt_u != 0) & (~np.isin(dt_u, allowed_node_arr))
+                )
+                skipped_non_node_streamlines = int(np.count_nonzero(non_node))
 
-        if scalar_queue and scalar_data is not None and scalar_inverse_affine is not None:
+            assigned_mask = ~unassigned
+            if sift2_weights_arr is not None:
+                in_weight_range = valid_indices_arr < len(sift2_weights_arr)
+                missing_w = assigned_mask & (~in_weight_range)
+                skipped_streamlines += int(np.count_nonzero(missing_w))
+                assigned_mask = assigned_mask & in_weight_range
+
+            endpoint_assigned_streamlines = int(np.count_nonzero(assigned_mask))
+            if endpoint_assigned_streamlines > 0:
+                src_a = sources[assigned_mask]
+                tgt_a = targets[assigned_mask]
+                self_mask = src_a == tgt_a
+                self_connection_streamlines = int(np.count_nonzero(self_mask))
+                keep_mask = (~self_mask) if config.zero_diagonal else np.ones(len(src_a), dtype=bool)
+                src_k = src_a[keep_mask]
+                tgt_k = tgt_a[keep_mask]
+                matrix_included_streamlines = int(len(src_k))
+                if matrix_included_streamlines > 0:
+                    if config.symmetric:
+                        e_u = np.minimum(src_k, tgt_k)
+                        e_v = np.maximum(src_k, tgt_k)
+                    else:
+                        e_u, e_v = src_k, tgt_k
+                    max_lbl = int(max(int(e_u.max()), int(e_v.max()))) + 1
+                    pair_keys = e_u * max_lbl + e_v
+                    uniq_keys, inv_idx = np.unique(pair_keys, return_inverse=True)
+                    if sift2_weights_arr is not None:
+                        w_k = sift2_weights_arr[valid_indices_arr[assigned_mask][keep_mask]]
+                        sums = np.bincount(inv_idx, weights=w_k)
+                        for uk, total_w in zip(uniq_keys.tolist(), sums.tolist()):
+                            edge_counts[(int(uk // max_lbl), int(uk % max_lbl))] = float(total_w)
+                    else:
+                        counts_arr = np.bincount(inv_idx)
+                        for uk, cnt in zip(uniq_keys.tolist(), counts_arr.tolist()):
+                            edge_counts[(int(uk // max_lbl), int(uk % max_lbl))] = int(cnt)
+        else:
+            scalar_queue: list[tuple[tuple[int, int], object]] = []
+            assert streamlines is not None
+            for pos, streamline_index in enumerate(valid_indices_arr.tolist()):
+                streamline = streamlines[streamline_index]
+                direct_source = int(direct_sources[pos])
+                direct_target = int(direct_targets[pos])
+                source = int(sources[pos])
+                target = int(targets[pos])
+                radially_assigned_endpoints += int(source != 0 and source != direct_source)
+                radially_assigned_endpoints += int(target != 0 and target != direct_target)
+                if source == 0 or target == 0:
+                    skipped_streamlines += 1
+                    if (
+                        (direct_source != 0 and direct_source not in allowed_node_labels)
+                        or (direct_target != 0 and direct_target not in allowed_node_labels)
+                    ):
+                        skipped_non_node_streamlines += 1
+                    continue
+                streamline_weight = None
+                if sift2_weights_arr is not None:
+                    if streamline_index >= len(sift2_weights_arr):
+                        skipped_streamlines += 1
+                        continue
+                    streamline_weight = float(sift2_weights_arr[streamline_index])
+                endpoint_assigned_streamlines += 1
+                if source == target:
+                    self_connection_streamlines += 1
+                    if config.zero_diagonal:
+                        continue
+                matrix_included_streamlines += 1
+                edge = (source, target) if (not config.symmetric or source <= target) else (target, source)
+                if streamline_weight is not None:
+                    edge_counts[edge] += streamline_weight
+                else:
+                    edge_counts[edge] += 1
+                if requires_length:
+                    edge_length_sums[edge] += _streamline_length_mm(streamline)
+                    edge_length_counts[edge] += 1
+                if scalar_data is not None and scalar_inverse_affine is not None:
+                    scalar_queue.append((edge, streamline))
+
+        if need_full_streamlines and scalar_queue and scalar_data is not None and scalar_inverse_affine is not None:
             sl_arrays = [np.asarray(sl, dtype=np.float64)[:, :3] for _, sl in scalar_queue]
             sl_lengths = [len(arr) for arr in sl_arrays]
             all_pts = np.vstack(sl_arrays)
@@ -912,7 +1148,7 @@ def _write_python_connectome(
         "streamline_count_scalar_sampled": sum(edge_scalar_counts.values()) if _metric_requires_scalar(config.metric) else None,
         "streamline_count_scalar_skipped": skipped_scalar_streamlines if _metric_requires_scalar(config.metric) else None,
         "streamline_count_length_sampled": sum(edge_length_counts.values()) if _metric_requires_length(config.metric) else None,
-        "sift2_weight_count": len(sift2_weights) if sift2_weights is not None else None,
+        "sift2_weight_count": int(len(sift2_weights_arr)) if sift2_weights_arr is not None else None,
         "named_node_count": named_node_count,
         "unnamed_node_count": node_count - named_node_count,
         "node_filter": config.node_filter,
@@ -958,22 +1194,19 @@ def build_tck2connectome_command(config: ConnectomeConfig, matrix_path: Path) ->
     return tuple(cmd)
 
 
+def _unique_nonzero_int_labels(data) -> list[int]:
+    import numpy as np
+
+    if isinstance(data, np.ndarray):
+        return [int(label) for label in np.unique(data) if int(label) != 0]
+    return sorted({int(label) for label in data.ravel() if int(label) != 0})
+
+
 def _summarize_dense_connectome_matrix(matrix_path: Path, *, symmetric: bool) -> dict[str, object]:
     """Read an MRtrix tck2connectome dense CSV and report basic QC metrics."""
 
-    try:
-        import numpy as np
-    except ImportError as exc:  # pragma: no cover - environment dependent
-        raise RuntimeError("Dense connectome QC parsing requires numpy.") from exc
-
-    rows: list[list[float]] = []
-    with matrix_path.open("r", encoding="utf-8", newline="") as stream:
-        reader = csv.reader(stream)
-        for row in reader:
-            if not row:
-                continue
-            rows.append([float(value) for value in row if value != ""])
-    if not rows:
+    matrix = _load_dense_connectome_matrix(matrix_path)
+    if matrix.size == 0:
         return {
             "node_count": 0,
             "edge_count": 0,
@@ -982,9 +1215,8 @@ def _summarize_dense_connectome_matrix(matrix_path: Path, *, symmetric: bool) ->
             "streamline_count_skipped": None,
         }
 
-    matrix = np.asarray(rows, dtype=float)
-    if matrix.ndim != 2:
-        raise RuntimeError(f"Connectome matrix is not 2D: {matrix_path}")
+    import numpy as np
+
     node_count = int(matrix.shape[0])
     if symmetric and matrix.shape[0] == matrix.shape[1]:
         upper = np.triu(matrix)
@@ -1008,6 +1240,24 @@ def _load_dense_connectome_matrix(matrix_path: Path):
         import numpy as np
     except ImportError as exc:  # pragma: no cover - environment dependent
         raise RuntimeError("Dense connectome matrix parsing requires numpy.") from exc
+
+    raw_text = matrix_path.read_text(encoding="utf-8").strip()
+    if not raw_text:
+        return np.zeros((0, 0), dtype=float)
+    try:
+        lines = [line.strip().rstrip(",") for line in raw_text.splitlines() if line.strip()]
+        if not lines:
+            return np.zeros((0, 0), dtype=float)
+        first_row = np.fromstring(lines[0], sep=",", dtype=float)
+        if first_row.size > 0 and len(lines) > 1:
+            joined = ",".join(lines)
+            flat = np.fromstring(joined, sep=",", dtype=float)
+            if flat.size == len(lines) * first_row.size:
+                return flat.reshape((len(lines), first_row.size))
+        elif first_row.size > 0 and len(lines) == 1:
+            return first_row.reshape((1, first_row.size))
+    except Exception:
+        pass
 
     rows: list[list[float]] = []
     with matrix_path.open("r", encoding="utf-8", newline="") as stream:
@@ -1250,7 +1500,7 @@ def run_connectome(config: ConnectomeConfig, *, log: Optional[Callable[[str], No
             if use_mrtrix:
                 data, _ = _load_label_volume(config.parcellation_path.expanduser().resolve())
                 label_names = _parse_label_names(lut_path)
-                unique_labels = sorted({int(label) for label in data.ravel() if int(label) != 0})
+                unique_labels = _unique_nonzero_int_labels(data)
                 node_labels = _connectome_node_labels(
                     unique_labels,
                     node_filter=config.node_filter,
@@ -1320,7 +1570,7 @@ def run_connectome(config: ConnectomeConfig, *, log: Optional[Callable[[str], No
                 total_streamlines = _tck_header_streamline_count(config.tractography_path)
                 qc["streamline_count_total"] = total_streamlines
                 if config.sift2_weights_path is not None:
-                    qc["sift2_weight_count"] = len(_read_sift2_weights(config.sift2_weights_path))
+                    qc["sift2_weight_count"] = int(len(_read_sift2_weights_array(config.sift2_weights_path)))
                 if (
                     config.metric == "streamline_count"
                     and total_streamlines is not None
@@ -1375,7 +1625,7 @@ def run_connectome(config: ConnectomeConfig, *, log: Optional[Callable[[str], No
             data, _ = _load_label_volume(config.parcellation_path.expanduser().resolve())
             label_names = _parse_label_names(lut_path)
             node_labels = _connectome_node_labels(
-                data.ravel(),
+                _unique_nonzero_int_labels(data),
                 node_filter=config.node_filter,
             )
             _write_nodes_table(nodes_path, node_labels, label_names=label_names)

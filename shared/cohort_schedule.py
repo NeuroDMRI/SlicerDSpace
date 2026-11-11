@@ -17,6 +17,7 @@ ENV = 'SLICERDSPACE_COHORT_SCHEDULE'
 LEASE = 'SLICERDSPACE_COHORT_LEASE'
 _inside = ContextVar('cohort_stage_active', default=False)
 _reservation = ContextVar('cohort_stage_reservation', default=None)
+_call_context = ContextVar('cohort_call_context', default=None)
 
 
 def cohort_active():
@@ -176,6 +177,38 @@ def stage_admission(name, *, gpu=False):
                history_samples=request.get('history_samples',0),memory_floor_gb=request['memory_floor_gb'])
     if request.get('calibration'):
         row['calibration'] = request['calibration']
+    call_ctx = _call_context.get()
+    if config.get('policy') == 'fair_backfill' and call_ctx is not None:
+        _fn, _args, _kwargs = call_ctx
+        if name == 'native_dti':
+            raw = _kwargs.get('raw', _args[0] if len(_args) > 0 else None)
+            fit_method = _kwargs.get('fit_method', _args[1] if len(_args) > 1 else 'wls')
+            reuse = _kwargs.get('reuse', _args[2] if len(_args) > 2 else True)
+            try:
+                from shared.pipeline import _is_native_dti_cached
+                if raw is not None and _is_native_dti_cached(raw, fit_method, reuse):
+                    row['cpu'] = 1
+                    row['memory_gb'] = min(float(row['memory_gb']), 0.5)
+                    row['memory_floor_gb'] = min(float(row.get('memory_floor_gb', 0.5)), 0.5)
+                    row['duration_seconds'] = 0.01
+                    row['cache_hit_hint'] = True
+                elif str(fit_method).lower() == 'ls':
+                    row['cpu'] = max(1, min(4, int(row['cpu']), int(config['cpu_budget'])))
+                    row['duration_seconds'] = min(55.0, float(row.get('duration_seconds') or 55.0))
+            except Exception:
+                pass
+        elif name == 'registered_dti' and len(_args) >= 7:
+            raw, native, atlas_t2, fit_method, reuse, _log, scalar_format = _args[:7]
+            try:
+                from shared.pipeline import _is_registered_dti_cached
+                if _is_registered_dti_cached(raw, native, atlas_t2, fit_method, reuse, scalar_format):
+                    row['cpu'] = 1
+                    row['memory_gb'] = min(float(row['memory_gb']), 0.5)
+                    row['memory_floor_gb'] = min(float(row.get('memory_floor_gb', 0.5)), 0.5)
+                    row['duration_seconds'] = 0.01
+                    row['cache_hit_hint'] = True
+            except Exception:
+                pass
     validate_request(row,dict(cpu=config['cpu_budget'],memory_gb=config['memory_gb'],gpu=config['gpu_slots'],io=config['io_slots']))
     admitted, queued = False, False
     began = time.monotonic()
@@ -210,9 +243,10 @@ def stage_admission(name, *, gpu=False):
                     candidate = next((item for item in state['waiting']
                                       if all(used[key] + item.get(key, 0) <= limits[key] for key in used)), None)
                 if candidate and candidate['id'] == row['id']:
-                    for earlier in state['waiting'][:state['waiting'].index(candidate)]:
+                    idx = next(i for i, item in enumerate(state['waiting']) if item['id'] == candidate['id'])
+                    for earlier in state['waiting'][:idx]:
                         earlier['bypasses'] = earlier.get('bypasses', 0) + 1
-                    state['waiting'].remove(candidate)
+                    state['waiting'].pop(idx)
                     row.update(candidate)
                     if config.get('cpu_affinity'):
                         used_cpus = {cpu for item in state['active'] for cpu in item.get('cpu_affinity', [])}
@@ -290,23 +324,30 @@ def scheduled_stage(name, *, gpu=False):
                 requested = False
             stage = name(config) if callable(name) else name
             from shared.cohort_io import gpu_admission
-            with stage_admission(stage, gpu=requested) as reservation, gpu_admission(stage, requested):
-                try:
-                    result = function(*args, **kwargs)
-                    status = result.get('status') if isinstance(result, dict) else getattr(result, 'status', None)
-                    if reservation is not None and status in ('cached', 'reused'):
-                        reservation['cache_hit'] = True
-                    return result
-                finally:
-                    # A finished in-process inference must not retain unused CUDA
-                    # allocator blocks while another participant takes the slot.
-                    torch = sys.modules.get('torch') if requested and os.environ.get(ENV) else None
-                    cuda = getattr(torch, 'cuda', None)
-                    if cuda is not None and cuda.is_initialized():
-                        for device in range(cuda.device_count()):
-                            if cuda.memory_reserved(device):
-                                with cuda.device(device):
-                                    cuda.synchronize()
-                                    cuda.empty_cache()
+            ctx_token = _call_context.set((function, args, kwargs))
+            try:
+                with stage_admission(stage, gpu=requested) as reservation, gpu_admission(stage, requested):
+                    _call_context.reset(ctx_token)
+                    ctx_token = None
+                    try:
+                        result = function(*args, **kwargs)
+                        status = result.get('status') if isinstance(result, dict) else getattr(result, 'status', None)
+                        if reservation is not None and status in ('cached', 'reused'):
+                            reservation['cache_hit'] = True
+                        return result
+                    finally:
+                        # A finished in-process inference must not retain unused CUDA
+                        # allocator blocks while another participant takes the slot.
+                        torch = sys.modules.get('torch') if requested and os.environ.get(ENV) else None
+                        cuda = getattr(torch, 'cuda', None)
+                        if cuda is not None and cuda.is_initialized():
+                            for device in range(cuda.device_count()):
+                                if cuda.memory_reserved(device):
+                                    with cuda.device(device):
+                                        cuda.synchronize()
+                                        cuda.empty_cache()
+            finally:
+                if ctx_token is not None:
+                    _call_context.reset(ctx_token)
         return wrapped
     return decorate

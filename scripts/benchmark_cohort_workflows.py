@@ -247,6 +247,32 @@ def route_options(args, routes):
                 '--microstructure-stages', 'dti,noddi', '--tractography-backend', 'csd_act',
                 '--select-streamlines', '1000000', '--connectome-backend', 'mrtrix',
                 '--ddseg-device', 'cuda:0', '--surface-device', 'cuda:0', '--surface-precision', 'fp32']
+    if 'anatomy' in routes:
+        options['anatomy'] = ['--targets', 'validation,segmentation,parcellation,surface,microstructure',
+                '--microstructure-stages', 'dti', '--ddseg-device', 'cuda:0',
+                '--surface-device', 'cuda:0', '--surface-precision', 'fp32']
+    if 'tractography' in routes:
+        options['tractography'] = ['--targets', 'validation,segmentation,parcellation,microstructure,tractography,bundles,connectome',
+                '--microstructure-stages', 'dti', '--tractography-backend', 'dti_det',
+                '--bundle-backend', 'wmql,tractcloud', '--bundle-tractography-backend', 'dti_det',
+                '--connectome-backend', 'python', '--wmql-query-preset', 'official',
+                '--tract-querier-root', '/data04/chengjin/opt/backend-sources/wmql-5c69c594d489',
+                '--tractcloud-root', '/data04/chengjin/opt/backend-sources/tractcloud-94de6275d07d',
+                '--ddseg-device', 'cuda:0', '--tractcloud-device', 'cuda']
+    if 'regional_ifw' in routes:
+        options['regional_ifw'] = ['--targets', 'validation,segmentation,parcellation,microstructure',
+                '--microstructure-stages', 'dti,freewater,noddi,ifw', '--ifw-echo-time-ms', '89.5',
+                '--microstructure-free-water-n-jobs', '1', '--ddseg-device', 'cuda:0']
+    if 'end_to_end' in routes:
+        options['end_to_end'] = ['--targets', 'validation,segmentation,parcellation,surface,microstructure,tractography,bundles,connectome',
+                '--microstructure-stages', 'dti,freewater,noddi,ifw', '--ifw-echo-time-ms', '89.5',
+                '--microstructure-free-water-n-jobs', '1', '--tractography-backend', 'dti_det',
+                '--bundle-backend', 'wmql,tractcloud', '--bundle-tractography-backend', 'dti_det',
+                '--connectome-backend', 'python', '--wmql-query-preset', 'official',
+                '--tract-querier-root', '/data04/chengjin/opt/backend-sources/wmql-5c69c594d489',
+                '--tractcloud-root', '/data04/chengjin/opt/backend-sources/tractcloud-94de6275d07d',
+                '--ddseg-device', 'cuda:0', '--surface-device', 'cuda:0', '--surface-precision', 'fp32',
+                '--tractcloud-device', 'cuda']
     return options
 
 
@@ -281,7 +307,7 @@ def stage_snapshot(install):
 
 def external_assets(args, routes):
     assets = {}
-    for root in (args.models/name for name in MODEL_DIRECTORIES) if 'hybrid' in routes else ():
+    for root in (args.models/name for name in MODEL_DIRECTORIES) if set(routes) & {'hybrid', 'anatomy', 'tractography', 'regional_ifw', 'end_to_end'} else ():
         if not root.is_dir():
             raise ValueError('Required model directory absent: '+str(root))
         for resource in sorted(root.rglob('*')):
@@ -713,6 +739,7 @@ def run(args):
             environment[ENV] = str(create_schedule(destination/'subject_guard', cpu_budget=record['cpus'],
                 memory_gb=record['memory_gb'], stage_cpus=whole_cpu,
                 stage_memory_gb=whole_memory, cpu_affinity=allocation))
+            environment['SLICERDSPACE_STAGE_CPUS'] = str(whole_cpu)
             command += ['--pipeline-script',str(execution_snapshot/'scripts/benchmark_subject_worker.py')]
         execution_command = isolated_command(command, allocation)
         trial.update(status='running', command=command, execution_command=execution_command,
@@ -848,7 +875,7 @@ def validate_pair(args):
                               ('--mrtrix', args.mrtrix, 'dir'), ('--launcher', args.launcher, 'file')):
         if not (item.is_dir() if kind == 'dir' else item.is_file()):
             raise ValueError(f'{label} does not exist: {item}')
-    if args.workload == 'hybrid':       # fail at time zero, not after the 5-minute launch sampling
+    if args.workload != 'cpu':          # fail at time zero, not after the 5-minute launch sampling
         for name in MODEL_DIRECTORIES:
             if not (args.models/name).is_dir():
                 raise ValueError(f'Required model directory absent: {args.models/name}')
@@ -884,7 +911,7 @@ def pair(args, *, topology=None, sampler=sample_window, runner=run_bounded, slee
             (doctor_root/'input'/name).symlink_to(Path(first['source'])/name)
         except OSError:
             shutil.copy2(Path(first['source'])/name, doctor_root/'input'/name)
-    hybrid = args.workload == 'hybrid'
+    hybrid = args.workload != 'cpu'
     max_busy = getattr(args, 'max_busy_percent', MAX_BUSY_PERCENT)
     state = dict(workload=args.workload, repeat=args.repeat, started_at=time.time(), attempts=[],
                  max_busy_percent=max_busy)

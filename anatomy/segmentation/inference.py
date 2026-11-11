@@ -31,28 +31,77 @@ def _uniform_slice_key(slc: np.ndarray):
     return (slc.shape, slc.dtype.str, np.ascontiguousarray(pixel).tobytes())
 
 
+def _decode_batch_output(y: np.ndarray, output_layout: str, apply_softmax: bool) -> np.ndarray:
+    if output_layout == "NHWC":
+        return _softmax_nhwc(y) if apply_softmax else y
+    prob = _softmax(y) if apply_softmax else y
+    return prob.transpose(0, 2, 3, 1)
+
+
 def predict_view(model, slices: List[np.ndarray], apply_softmax: bool) -> np.ndarray:
-    scores = []
+    if not slices:
+        return np.empty((0,), dtype=np.float32)
+
     uniform_cache: Dict[tuple, np.ndarray] = {}
-    for slc in slices:
-        cache_key = _uniform_slice_key(slc)
-        if cache_key is not None and cache_key in uniform_cache:
-            scores.append(uniform_cache[cache_key].copy())
-            continue
-        if model.input_layout == "NHWC":
-            x = np.expand_dims(slc, axis=0).astype(np.float32)
+    slice_keys = [_uniform_slice_key(slc) for slc in slices]
+    infer_indices: List[int] = []
+    pending_uniform_keys: Dict[tuple, int] = {}
+    for idx, key in enumerate(slice_keys):
+        if key is None:
+            infer_indices.append(idx)
+        elif key not in pending_uniform_keys:
+            pending_uniform_keys[key] = len(infer_indices)
+            infer_indices.append(idx)
+
+    inferred_scores: Dict[int, np.ndarray] = {}
+    batch_size = 8
+    dev_str = str(getattr(model, "device", "cpu")).lower()
+    if dev_str.startswith("cuda"):
+        from shared.hardware_adapt import query_cuda_free_total_bytes
+
+        mem = query_cuda_free_total_bytes()
+        if mem is not None and mem[0] < int(2.0 * (1024**3)):
+            batch_size = 2
+
+    batch_supported = True
+    pos = 0
+    while pos < len(infer_indices):
+        step = batch_size if batch_supported else 1
+        chunk_idx = infer_indices[pos : pos + step]
+        arr = np.stack([slices[i] for i in chunk_idx], axis=0).astype(np.float32, copy=False)
+        x = arr if model.input_layout == "NHWC" else arr.transpose(0, 3, 1, 2)
+        if len(chunk_idx) > 1:
+            try:
+                y = model.forward(np.ascontiguousarray(x))
+                if y.shape[0] != len(chunk_idx):
+                    raise ValueError("Model did not preserve batch dimension")
+                decoded = _decode_batch_output(y, model.output_layout, apply_softmax)
+                for local_i, orig_i in enumerate(chunk_idx):
+                    inferred_scores[orig_i] = decoded[local_i]
+                pos += len(chunk_idx)
+                continue
+            except Exception:
+                from shared.hardware_adapt import empty_cuda_cache_safely
+
+                empty_cuda_cache_safely()
+                batch_supported = False
+                continue
+
+        y1 = model.forward(np.ascontiguousarray(x))
+        decoded1 = _decode_batch_output(y1, model.output_layout, apply_softmax)
+        inferred_scores[chunk_idx[0]] = decoded1[0]
+        pos += 1
+
+    for key, infer_pos in pending_uniform_keys.items():
+        if len(uniform_cache) < 16:
+            uniform_cache[key] = inferred_scores[infer_indices[infer_pos]]
+
+    scores = []
+    for idx, key in enumerate(slice_keys):
+        if key is not None and key in uniform_cache:
+            scores.append(uniform_cache[key].copy())
         else:
-            x = np.expand_dims(slc, axis=0).transpose(0, 3, 1, 2).astype(np.float32)
-        y = model.forward(x)
-        if model.output_layout == "NHWC":
-            prob = _softmax_nhwc(y) if apply_softmax else y
-            score = prob[0]
-        else:
-            prob = _softmax(y) if apply_softmax else y
-            score = prob[0].transpose(1, 2, 0)
-        if cache_key is not None and len(uniform_cache) < 4:
-            uniform_cache[cache_key] = score.copy()
-        scores.append(score)
+            scores.append(inferred_scores[idx])
     return np.stack(scores, axis=2)
 
 

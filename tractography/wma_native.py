@@ -46,6 +46,8 @@ def run_org_atlas_native(
     clean_files: int,
     transform_path: Path | None,
     run_stage: Callable[[str, list[str]], None],
+    gpu_mode: str = "auto",
+    supports_gpu_cli: bool = False,
 ) -> None:
     """Apply ORG using author Python commands and the Slicer core hardener.
 
@@ -69,6 +71,8 @@ def run_org_atlas_native(
     hemisphere_reference = clustering_atlas / "cluster_hemisphere_location.txt"
     registration_dir = case_dir / "TractRegistration"
     clustering_dir = case_dir / "FiberClustering"
+    gpu_args = ["-gpu", gpu_mode] if supports_gpu_cli else []
+    thread_args = ["-j", str(num_threads)] if supports_gpu_cli else []
 
     def harden(stage: str, tractography: Path, transform: Path, inverse: str, destination: Path) -> None:
         run_stage(stage, [
@@ -87,7 +91,7 @@ def run_org_atlas_native(
     for mode in modes:
         stage = f"registration-{mode}"
         run_stage(stage, [
-            "wm_register_to_atlas_new.py", "-mode", mode,
+            "wm_register_to_atlas_new.py", *gpu_args, "-mode", mode,
             str(registered), str(registration_atlas), str(registration_dir),
         ])
         registered_id = registered.stem
@@ -101,24 +105,27 @@ def run_org_atlas_native(
     initial_root = clustering_dir / "InitialClusters"
     initial = initial_root / registered.stem
     run_stage("clustering", [
-        "wm_cluster_from_atlas.py", "-j", str(num_threads),
+        "wm_cluster_from_atlas.py", *gpu_args, "-j", str(num_threads),
         str(registered), str(clustering_atlas), str(initial_root), "-norender",
     ])
     _require_clusters("clustering", initial)
 
     outlier_root = clustering_dir / "OutlierRemovedClusters"
     outliers = outlier_root / f"{registered.stem}_outlier_removed"
+    outlier_extra = ["--hemisphere-location-file", str(hemisphere_reference)] if supports_gpu_cli else []
     run_stage("outlier-removal", [
-        "wm_cluster_remove_outliers.py", "-j", str(num_threads),
+        "wm_cluster_remove_outliers.py", *gpu_args, "-j", str(num_threads),
+        *outlier_extra,
         str(initial), str(clustering_atlas), str(outlier_root),
     ])
     _require_clusters("outlier-removal", outliers)
 
-    run_stage("hemisphere-assessment", [
-        "wm_assess_cluster_location_by_hemisphere.py", "-clusterLocationFile",
-        str(hemisphere_reference), str(outliers),
-    ])
     hemisphere_log = outliers / _HEMISPHERE_LOG
+    if not _has_product(hemisphere_log):
+        run_stage("hemisphere-assessment", [
+            "wm_assess_cluster_location_by_hemisphere.py", *thread_args, "-clusterLocationFile",
+            str(hemisphere_reference), str(outliers),
+        ])
     _require_product("hemisphere-assessment", hemisphere_log)
     if _HEMISPHERE_DONE not in hemisphere_log.read_text(encoding="utf-8"):
         raise RuntimeError(f"WMA hemisphere assessment did not finish: {hemisphere_log}")
@@ -135,7 +142,9 @@ def run_org_atlas_native(
 
     separated = clustering_dir / "SeparatedClusters"
     run_stage("hemisphere-split", [
-        "wm_separate_clusters_by_hemisphere.py", str(transformed), str(separated),
+        "wm_separate_clusters_by_hemisphere.py",
+        *(["--reuse-complete", *thread_args] if supports_gpu_cli else []),
+        str(transformed), str(separated),
     ])
     for group in _HEMISPHERE_GROUPS:
         _require_clusters("hemisphere-split", separated / group)
@@ -150,7 +159,7 @@ def run_org_atlas_native(
 
     anatomical = case_dir / "AnatomicalTracts"
     run_stage("anatomical-tracts", [
-        "wm_append_clusters_to_anatomical_tracts.py",
+        "wm_append_clusters_to_anatomical_tracts.py", *thread_args,
         str(append_source), str(clustering_atlas), str(anatomical),
     ])
     _require_product("anatomical-tracts", anatomical / "T_UF_right.vtp")

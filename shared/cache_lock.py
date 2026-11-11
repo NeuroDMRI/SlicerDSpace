@@ -13,11 +13,15 @@ def cache_lock(path, *, timeout=1800):
     if path.is_symlink():
         raise ValueError(f'Refusing a symlinked cache lock: {path}')
     descriptor = os.open(path, os.O_CREAT | os.O_RDWR | getattr(os, 'O_NOFOLLOW', 0), 0o600)
-    with os.fdopen(descriptor, 'r+b') as stream:
-        if os.fstat(stream.fileno()).st_size == 0:
-            stream.write(b'0')
-            stream.flush()
+    with os.fdopen(descriptor, 'r+b', buffering=0) as stream:
+        try:
+            if os.fstat(stream.fileno()).st_size == 0:
+                stream.write(b'0')
+        except PermissionError:
+            # On Windows mandatory byte-range locks, another holder has already written and locked byte 0.
+            pass
         started = time.monotonic()
+        wait_s = 0.01
         while True:
             try:
                 if os.name == 'nt':
@@ -31,7 +35,8 @@ def cache_lock(path, *, timeout=1800):
             except (BlockingIOError, PermissionError):
                 if time.monotonic() - started >= timeout:
                     raise TimeoutError(f'Another process is preparing shared inputs: {path.parent}')
-                time.sleep(.1)
+                time.sleep(wait_s)
+                wait_s = min(0.05, wait_s * 1.5)
         try:
             yield
         finally:

@@ -77,26 +77,34 @@ def main(argv=None):
     try:
         import whitematteranalysis as wma
         package_dir = Path(wma.__file__).resolve().parent
-        record["compatibility"] = registration_cache_support(package_dir)
-        if record["compatibility"]["supported"]:
-            filter_module = wma.filter
-            original = filter_module.preprocess
-            bulk_filter = AuthorCompatibleLengthFilter(original)
-            cache = RegistrationPreprocessCache(bulk_filter)
-            filter_module.preprocess = cache
+        if (package_dir / "gpu" / "__init__.py").is_file():
+            record["compatibility"] = {
+                "supported": True,
+                "native_wma_gpu": True,
+                "reason": "whitematteranalysis_gpu provides built-in preprocess caching, bulk filtering, fast fiber conversion, and CPU/CUDA objectives",
+            }
             record["enabled"] = True
-        record['transform_compatibility'] = registration_transform_support(package_dir)
-        if record['transform_compatibility']['supported']:
-            transform_module = wma.register_two_subjects
-            original_transform = transform_module.transform_fiber_array_numpy
-            bulk_transform = AuthorCompatibleFiberTransform(original_transform, transform_module.convert_transform_to_vtk)
-            transform_module.transform_fiber_array_numpy = bulk_transform
-        record['conversion_compatibility'] = fiber_conversion_support(package_dir)
-        if record['conversion_compatibility']['supported']:
-            fiber_class = wma.fibers.FiberArray
-            original_conversion = fiber_class.convert_from_polydata
-            bulk_conversion = AuthorCompatibleFiberArrayConverter(fiber_class)
-            fiber_class.convert_from_polydata = bulk_conversion.method
+        else:
+            record["compatibility"] = registration_cache_support(package_dir)
+            if record["compatibility"]["supported"]:
+                filter_module = wma.filter
+                original = filter_module.preprocess
+                bulk_filter = AuthorCompatibleLengthFilter(original)
+                cache = RegistrationPreprocessCache(bulk_filter)
+                filter_module.preprocess = cache
+                record["enabled"] = True
+            record['transform_compatibility'] = registration_transform_support(package_dir)
+            if record['transform_compatibility']['supported']:
+                transform_module = wma.register_two_subjects
+                original_transform = transform_module.transform_fiber_array_numpy
+                bulk_transform = AuthorCompatibleFiberTransform(original_transform, transform_module.convert_transform_to_vtk)
+                transform_module.transform_fiber_array_numpy = bulk_transform
+            record['conversion_compatibility'] = fiber_conversion_support(package_dir)
+            if record['conversion_compatibility']['supported']:
+                fiber_class = wma.fibers.FiberArray
+                original_conversion = fiber_class.convert_from_polydata
+                bulk_conversion = AuthorCompatibleFiberArrayConverter(fiber_class)
+                fiber_class.convert_from_polydata = bulk_conversion.method
         sys.argv = [str(author), *author_args]
         runpy.run_path(str(author), run_name="__main__")
         record["status"] = "completed"

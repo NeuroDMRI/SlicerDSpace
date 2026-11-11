@@ -147,17 +147,11 @@ def establish_closest_wsm(pts, ht, V, usedv, mgn):
 
 
 def get_normals(V, F):
-    nf = F.shape[0]
     nv = V.shape[0]
-    FR = [[] for _ in range(nv)]
-    for i in range(nf):
-        for j in range(3):
-            FR[F[i, j]].append(i)
     NF = np.cross(V[F[:, 1]] - V[F[:, 0]], V[F[:, 2]] - V[F[:, 0]])
-    NV = np.zeros((nv, 3))
-    for i in range(nv):
-        if FR[i]:
-            NV[i] = np.sum(NF[FR[i]], axis=0)
+    NV = np.zeros((nv, 3), dtype=float)
+    for j in range(3):
+        np.add.at(NV, F[:, j], NF)
     D = np.linalg.norm(NV, axis=1)
     D[D < np.finfo(float).eps] = 1
     NV = NV / D[:, None]

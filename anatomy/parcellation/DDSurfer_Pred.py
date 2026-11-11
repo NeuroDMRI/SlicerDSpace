@@ -31,6 +31,12 @@ from .data_loader.load_neuroimaging_data import (
 )
 from .models.networks import FastSurferCNN_Fuse_Unet_v3_extended
 from .device import logical_cuda_index
+from shared.hardware_adapt import (
+    empty_cuda_cache_safely,
+    is_cuda_oom,
+    optimal_cpu_torch_threads,
+    query_cuda_free_total_bytes,
+)
 
 HELPTEXT = """
 DDSurfer: deep learning anatomical brain parcellation from diffusion MRI. \n
@@ -124,6 +130,39 @@ def _uniform_batch_key(images_batch):
     return (tuple(images_batch.shape), str(images_batch.dtype), first)
 
 
+def _uniform_slice_key(slice_tensor):
+    if not isinstance(slice_tensor, torch.Tensor) or slice_tensor.ndim != 3 or slice_tensor.numel() == 0:
+        return None
+    _, h, w = slice_tensor.shape
+    first = float(slice_tensor[0, 0, 0].item())
+    if not np.isfinite(first):
+        return None
+    if float(slice_tensor[0, h // 2, w // 2].item()) != first:
+        return None
+    if not bool((slice_tensor == first).all()):
+        return None
+    return (tuple(slice_tensor.shape), str(slice_tensor.dtype), first)
+
+
+def _forward_fused_logits(model, sub_batch, *, use_cuda, device):
+    """Run ``model`` with automatic single-slice CUDA OOM retry for low-VRAM GPUs."""
+    if not use_cuda:
+        _, out_list = model(sub_batch)
+        return out_list[0].detach().cpu()
+    try:
+        _, out_list = model(sub_batch.to(device, non_blocking=True))
+        return out_list[0].detach().cpu()
+    except RuntimeError as exc:
+        if not is_cuda_oom(exc) or sub_batch.shape[0] <= 1:
+            raise
+        empty_cuda_cache_safely()
+        parts = []
+        for idx in range(sub_batch.shape[0]):
+            _, single_list = model(sub_batch[idx : idx + 1].to(device))
+            parts.append(single_list[0].detach().cpu())
+        return torch.cat(parts, dim=0)
+
+
 def run_network(img_filename, orig_data, prediction_probability, plane, ckpts, params_model, model, logger):
 
     # Set up DataLoader
@@ -166,6 +205,7 @@ def run_network(img_filename, orig_data, prediction_probability, plane, ckpts, p
         plane_start = time.time()
 
         uniform_batch_cache = {}
+        uniform_slice_cache = {}
         start_index = 0
         cached_constant_temps = {}
         for batch_idx, sample_batch in enumerate(test_data_loader):
@@ -179,15 +219,43 @@ def run_network(img_filename, orig_data, prediction_probability, plane, ckpts, p
                 )
 
             images_batch = sample_batch["image"]
-            cache_key = _uniform_batch_key(images_batch)
-            if cache_key is not None and cache_key in uniform_batch_cache:
-                temp_list = [uniform_batch_cache[cache_key]]
+            bsz = int(images_batch.shape[0])
+            slice_keys = [_uniform_slice_key(images_batch[s_i]) for s_i in range(bsz)]
+            if all(k is not None and k in uniform_slice_cache for k in slice_keys):
+                temp_list = [torch.stack([uniform_slice_cache[k] for k in slice_keys], dim=0)]
             else:
-                if params_model["use_cuda"]:
-                    images_batch = images_batch.to(params_model["device"])
-                temp, temp_list = model(images_batch)
-                if cache_key is not None and len(uniform_batch_cache) < 4 and temp_list:
-                    uniform_batch_cache[cache_key] = temp_list[0].detach().cpu().clone()
+                infer_indices = []
+                pending_uniform_pos = {}
+                for s_i, s_key in enumerate(slice_keys):
+                    if s_key is None:
+                        infer_indices.append(s_i)
+                    elif s_key not in uniform_slice_cache and s_key not in pending_uniform_pos:
+                        pending_uniform_pos[s_key] = len(infer_indices)
+                        infer_indices.append(s_i)
+                sub_batch = images_batch if len(infer_indices) == bsz else images_batch[infer_indices]
+                sub_out = _forward_fused_logits(
+                    model,
+                    sub_batch,
+                    use_cuda=params_model["use_cuda"],
+                    device=params_model["device"],
+                )
+                batch_uniform_out = {s_key: sub_out[pos].clone() for s_key, pos in pending_uniform_pos.items()}
+                for s_key, cached_val in batch_uniform_out.items():
+                    if len(uniform_slice_cache) < 16:
+                        uniform_slice_cache[s_key] = cached_val
+                if len(infer_indices) == bsz:
+                    temp_list = [sub_out]
+                else:
+                    infer_pos_by_slice = {orig_idx: pos for pos, orig_idx in enumerate(infer_indices)}
+                    rebuilt = []
+                    for s_i, s_key in enumerate(slice_keys):
+                        if s_key is not None and s_key in uniform_slice_cache:
+                            rebuilt.append(uniform_slice_cache[s_key])
+                        elif s_key is not None and s_key in batch_uniform_out:
+                            rebuilt.append(batch_uniform_out[s_key])
+                        else:
+                            rebuilt.append(sub_out[infer_pos_by_slice[s_i]])
+                    temp_list = [torch.stack(rebuilt, dim=0)]
 
             # Only the fused prediction at index 0 is consumed during
             # postprocessing.  Caching every backbone prediction as a full
@@ -250,8 +318,23 @@ def fastsurfercnn(img_filename, save_as, logger, args):
     else:
         model_parallel = False
 
-    params_model = {'device': device, "use_cuda": use_cuda, "batch_size": args.batch_size, "model_parallel": model_parallel}
-    logger.info("Cuda available: {}, # Available GPUS: {}, Cuda user disabled (--no_cuda flag): {}, --> Using device: {}".format(torch.cuda.is_available(), torch.cuda.device_count(),  args.no_cuda, device))
+    effective_batch_size = int(args.batch_size)
+    if use_cuda:
+        cuda_mem = query_cuda_free_total_bytes(cuda_index)
+        if cuda_mem is not None:
+            free_gib = cuda_mem[0] / float(1024**3)
+            if free_gib < 2.2:
+                effective_batch_size = 1
+            elif free_gib < 3.8:
+                effective_batch_size = min(effective_batch_size, 2)
+
+    prev_torch_threads = None
+    if not use_cuda and not os.environ.get("SLICERDSPACE_STAGE_CPUS"):
+        prev_torch_threads = torch.get_num_threads()
+        torch.set_num_threads(optimal_cpu_torch_threads(max_conv_threads=8))
+
+    params_model = {'device': device, "use_cuda": use_cuda, "batch_size": effective_batch_size, "model_parallel": model_parallel}
+    logger.info("Cuda available: {}, # Available GPUS: {}, Cuda user disabled (--no_cuda flag): {}, --> Using device: {} (batch_size={})".format(torch.cuda.is_available(), torch.cuda.device_count(),  args.no_cuda, device, effective_batch_size))
 
     # Set up tensor to hold probabilities
     pred_prob = torch.zeros((1, 256, 256, 256, args.num_classes_ax_cor), dtype=torch.float)
@@ -305,6 +388,10 @@ def fastsurfercnn(img_filename, save_as, logger, args):
     logger.info("Sagittal View Tested in {:0.4f} seconds".format(time.time() - start))
     background_mask = orig_data[0] == -4
     del model, orig_data
+    if prev_torch_threads is not None:
+        torch.set_num_threads(prev_torch_threads)
+    if use_cuda:
+        empty_cuda_cache_safely()
     gc.collect()
 
 
@@ -328,44 +415,58 @@ def fastsurfercnn(img_filename, save_as, logger, args):
 
     print(f" pred_prob 1 : {pred_prob.shape}")
 
+    # Restrict connected-component and 3D filter passes to the padded brain ROI
+    # (padding=14 >= ceil(4*sigma)+2 for sigma=3 Gaussian & 3x3x3 median filters,
+    # guaranteeing 100% bit-for-bit identical labels in ~1/4 the volume).
+    fg_coords = np.argwhere(pred_prob != 0)
+    if fg_coords.size > 0:
+        pad_vox = 14
+        lo = np.maximum(fg_coords.min(axis=0) - pad_vox, 0)
+        hi = np.minimum(fg_coords.max(axis=0) + pad_vox + 1, np.asarray(pred_prob.shape))
+        roi_slices = (slice(int(lo[0]), int(hi[0])), slice(int(lo[1]), int(hi[1])), slice(int(lo[2]), int(hi[2])))
+    else:
+        roi_slices = (slice(None), slice(None), slice(None))
+    sub_prob = pred_prob[roi_slices]
+
     # Post processing - Splitting classes
     # Quick Fix for 2026 vs 1026; 2029 vs. 1029; 2025 vs. 1025
-    rh_wm = get_largest_cc(pred_prob == 41)
-    lh_wm = get_largest_cc(pred_prob == 2)
+    rh_wm = get_largest_cc(sub_prob == 41)
+    lh_wm = get_largest_cc(sub_prob == 2)
     rh_wm = regionprops(label(rh_wm, background=0))
     lh_wm = regionprops(label(lh_wm, background=0))
     centroid_rh = np.asarray(rh_wm[0].centroid)
     centroid_lh = np.asarray(lh_wm[0].centroid)
 
-
-
     # labels needs to be separated
     labels_list = np.array([1001, 1003, 1006, 1007, 1008, 1009, 1011,
                             1015, 1018, 1019, 1020, 1025, 1026, 1027, 1028, 1029, 1030, 1031, 1032, 1033, 1034, 1035])
 
+    label_img = sub_prob
     for label_current in labels_list:
-        label_img = label(pred_prob == label_current, connectivity=3, background=0)
+        mask_cur = sub_prob == label_current
+        if not np.any(mask_cur):
+            continue
+        label_img = label(mask_cur, connectivity=3, background=0)
         for region in regionprops(label_img):
-             if region.label != 0:  # To avoid background
+            if region.label != 0:  # To avoid background
                 if np.linalg.norm(np.asarray(region.centroid) - centroid_rh) < np.linalg.norm(np.asarray(region.centroid) - centroid_lh):
-                    pred_prob[region.slice][region.image] = label_current + 1000
+                    sub_prob[region.slice][region.image] = label_current + 1000
 
-    print(f" label_img 1 : {label_img.shape}")
+    print(f" label_img 1 : {pred_prob.shape}")
 
     # Quick Fixes for overlapping classes
-    aseg_lh = gaussian_filter(1000 * np.asarray(pred_prob == 2, dtype=np.float32), sigma=3)
-    aseg_rh = gaussian_filter(1000 * np.asarray(pred_prob == 41, dtype=np.float32), sigma=3)
-    lh_rh_split = np.argmax(np.concatenate((np.expand_dims(aseg_lh, axis=3), np.expand_dims(aseg_rh, axis=3)), axis=3), axis=3)
+    aseg_lh = gaussian_filter(1000 * np.asarray(sub_prob == 2, dtype=np.float32), sigma=3)
+    aseg_rh = gaussian_filter(1000 * np.asarray(sub_prob == 41, dtype=np.float32), sigma=3)
+    lh_rh_right = aseg_rh > aseg_lh
 
     # Problematic classes: 1026, 1011, 1029, 1019
     for prob_class_lh in [1011, 1019, 1026, 1029, 1032]:
         prob_class_rh = prob_class_lh + 1000
-
-        mask_lh = ((pred_prob == prob_class_lh) | (pred_prob == prob_class_rh)) & (lh_rh_split == 0)
-        mask_rh = ((pred_prob == prob_class_lh) | (pred_prob == prob_class_rh)) & (lh_rh_split == 1)
-
-        pred_prob[mask_lh] = prob_class_lh
-        pred_prob[mask_rh] = prob_class_rh
+        both = (sub_prob == prob_class_lh) | (sub_prob == prob_class_rh)
+        if not np.any(both):
+            continue
+        sub_prob[both & (~lh_rh_right)] = prob_class_lh
+        sub_prob[both & lh_rh_right] = prob_class_rh
 
     print(f" pred_prob 2 : {pred_prob.shape}")
 
@@ -378,20 +479,21 @@ def fastsurfercnn(img_filename, save_as, logger, args):
                   77, 1026, 2026]
 
         start = time.time()
-        pred_prob_medfilt = median_filter(pred_prob, size=(3, 3, 3))
-        mask = np.zeros_like(pred_prob)
+        sub_prob_medfilt = median_filter(sub_prob, size=(3, 3, 3))
+        mask = np.zeros_like(sub_prob)
         tolerance = 25
 
         for current_label in labels:
-            current_class = (pred_prob == current_label)
+            current_class = (sub_prob == current_label)
+            if not np.any(current_class):
+                continue
             label_image = label(current_class, connectivity=3)
 
             for region in regionprops(label_image):
-
                 if region.area <= tolerance:
                     mask[region.slice][region.image] = 1
 
-        pred_prob[mask == 1] = pred_prob_medfilt[mask == 1]
+        sub_prob[mask == 1] = sub_prob_medfilt[mask == 1]
         logger.info("Segmentation Cleaned up in {:0.4f} seconds.".format(time.time() - start))
 
     pred_prob[background_mask] = 0

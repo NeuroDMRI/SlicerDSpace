@@ -110,6 +110,7 @@ class MicrostructureConfig:
     noddi_solver_lambda2: float = 0.001
     noddi_max_isotropic_fraction_for_tissue: float = NODDI_MAX_ISOTROPIC_FRACTION_FOR_TISSUE
     max_parallel_models: int = 1
+    free_water_device: str = "cpu"
 
 
 @dataclass(frozen=True)
@@ -898,6 +899,9 @@ def _compute_free_water_maps(
         raise RuntimeError("Free Water inputs changed during fitting; results are not reusable")
 
 
+_ORIG_FW_FIT = FreeWaterTensorModel.fit if FreeWaterTensorModel is not None else None
+
+
 def _compute_free_water_maps_impl(
     *,
     config: MicrostructureConfig,
@@ -923,7 +927,23 @@ def _compute_free_water_maps_impl(
         raise ValueError(FREE_WATER_INELIGIBLE)
     fw_model = FreeWaterTensorModel(gtab, fit_method=fit_method)
     from microstructure.freewater_dispatch import configure_freewater_dispatch
+    from microstructure.freewater_wls import _resolve_fw_device, wls_batch_fit
     fit_implementation = configure_freewater_dispatch(fw_model, fit_method, engine)
+    use_batch_wls = (
+        bool(fit_implementation.get("enabled"))
+        and fit_method == "WLS"
+        and engine == "serial"
+        and _ORIG_FW_FIT is not None
+        and getattr(type(fw_model), "fit", None) is _ORIG_FW_FIT
+        and "fit" not in fw_model.__dict__
+    )
+    resolved_fw_device = _resolve_fw_device(config.free_water_device) if use_batch_wls else "cpu"
+    if use_batch_wls:
+        fit_implementation = {
+            **fit_implementation,
+            "batched_wls": True,
+            "device": resolved_fw_device,
+        }
     _emit(f"[Microstructure] Free Water dispatch: {fit_implementation}", log)
 
     rounded_shells = np.unique(np.round(bvals / 100.0) * 100.0).astype(int).tolist()
@@ -952,7 +972,12 @@ def _compute_free_water_maps_impl(
     fw_tissue_valid_mask = np.zeros(mask.shape, dtype=bool)
 
     z_size = mask.shape[2]
-    chunk_count = (z_size + chunk_size - 1) // chunk_size
+    if use_batch_wls and chunk_size == 2 and z_size >= 16:
+        from shared.hardware_adapt import adaptive_cpu_slab_z
+        step_z = adaptive_cpu_slab_z(dwi_img.shape, 16, min_step_z=2)
+    else:
+        step_z = chunk_size
+    chunk_count = (z_size + step_z - 1) // step_z
     gradient_count = dwi_img.shape[3]
     total_voxels = int(mask.sum())
     completed_chunks = 0
@@ -967,7 +992,7 @@ def _compute_free_water_maps_impl(
         "status": "running",
         "fit_method": fit_method,
         "fit_implementation": fit_implementation,
-        "chunk_size": chunk_size,
+        "chunk_size": step_z,
         "engine": engine,
         "n_jobs": n_jobs,
         "vox_per_chunk": vox_per_chunk,
@@ -988,53 +1013,31 @@ def _compute_free_water_maps_impl(
         },
     )
 
-    for chunk_index, z_start in enumerate(range(0, z_size, chunk_size), start=1):
-        z_stop = min(z_size, z_start + chunk_size)
+    last_progress_time = 0.0
+    for chunk_index, z_start in enumerate(range(0, z_size, step_z), start=1):
+        z_stop = min(z_size, z_start + step_z)
         mask_chunk = mask[:, :, z_start:z_stop]
         voxel_count = int(mask_chunk.sum())
         if voxel_count == 0:
             completed_chunks += 1
-            _write_progress(
-                progress_path,
-                {
-                    **progress_base,
-                    "completed_chunks": completed_chunks,
-                    "completed_voxels": completed_voxels,
-                    "current_chunk": chunk_index,
-                    "z_start": z_start,
-                    "z_stop": z_stop,
-                    "voxel_count": voxel_count,
-                    "elapsed_seconds": round(time.monotonic() - started, 3),
-                },
-            )
             continue
 
         _emit(
             f"[Microstructure] Free Water chunk {chunk_index}/{chunk_count}: z={z_start}:{z_stop}, voxels={voxel_count}",
             log,
         )
-        _write_progress(
-            progress_path,
-            {
-                **progress_base,
-                "completed_chunks": completed_chunks,
-                "completed_voxels": completed_voxels,
-                "current_chunk": chunk_index,
-                "z_start": z_start,
-                "z_stop": z_stop,
-                "voxel_count": voxel_count,
-                "elapsed_seconds": round(time.monotonic() - started, 3),
-            },
-        )
 
         data_chunk = np.asarray(dwi_img.dataobj[:, :, z_start:z_stop, :], dtype=np.float32)
         voxel_signals = data_chunk.reshape(-1, gradient_count)[mask_chunk.reshape(-1)]
-        fit_kwargs: dict[str, object] = {"engine": engine}
-        if n_jobs is not None:
-            fit_kwargs["n_jobs"] = int(n_jobs)
-        if vox_per_chunk is not None:
-            fit_kwargs["vox_per_chunk"] = int(vox_per_chunk)
-        fit = fw_model.fit(voxel_signals, **fit_kwargs)
+        if use_batch_wls:
+            fit, _ = wls_batch_fit(fw_model, voxel_signals, device=resolved_fw_device)
+        else:
+            fit_kwargs: dict[str, object] = {"engine": engine}
+            if n_jobs is not None:
+                fit_kwargs["n_jobs"] = int(n_jobs)
+            if vox_per_chunk is not None:
+                fit_kwargs["vox_per_chunk"] = int(vox_per_chunk)
+            fit = fw_model.fit(voxel_signals, **fit_kwargs)
 
         fwf, fw_fa, fw_md, valid_tissue, invalid_count = _sanitize_free_water_scalars(
             fit.f,
@@ -1062,20 +1065,23 @@ def _compute_free_water_maps_impl(
         fw_tissue_valid_mask[:, :, z_start:z_stop] = valid_chunk
         completed_chunks += 1
         completed_voxels += voxel_count
-        _write_progress(
-            progress_path,
-            {
-                **progress_base,
-                "completed_chunks": completed_chunks,
-                "completed_voxels": completed_voxels,
-                "current_chunk": chunk_index,
-                "z_start": z_start,
-                "z_stop": z_stop,
-                "voxel_count": voxel_count,
-                "invalid_tissue_voxels": invalid_tissue_voxels,
-                "elapsed_seconds": round(time.monotonic() - started, 3),
-            },
-        )
+        now_prog = time.monotonic()
+        if chunk_index == 1 or chunk_index == chunk_count or (now_prog - last_progress_time >= 1.0):
+            _write_progress(
+                progress_path,
+                {
+                    **progress_base,
+                    "completed_chunks": completed_chunks,
+                    "completed_voxels": completed_voxels,
+                    "current_chunk": chunk_index,
+                    "z_start": z_start,
+                    "z_stop": z_stop,
+                    "voxel_count": voxel_count,
+                    "invalid_tissue_voxels": invalid_tissue_voxels,
+                    "elapsed_seconds": round(now_prog - started, 3),
+                },
+            )
+            last_progress_time = now_prog
 
     _save_scalar_nifti(fwf_map, mask_img, paths["fwf"])
     _save_scalar_nifti(fw_tissue_fa_map, mask_img, paths["fw_tissue_fa"])

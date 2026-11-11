@@ -16,7 +16,7 @@ import subprocess
 import threading
 import time
 
-T3_ROUTES = ('cpu', 'hybrid')
+T3_ROUTES = ('cpu', 'hybrid', 'anatomy', 'tractography', 'regional_ifw', 'end_to_end')
 ARM_CPUS = 32
 ARM_THREADS = 8
 SUBJECT_JOBS = ARM_CPUS // ARM_THREADS          # S4: --jobs 4 = 32 // 8

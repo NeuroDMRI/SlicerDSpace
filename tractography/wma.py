@@ -119,8 +119,24 @@ class WMAOrgAtlasConfig:
     execute: bool = False
     registration_preprocess_cache: bool = True
     atlas_family: str = "auto"
+    device: str = "auto"
     # Keep the original optional export until the new method is explicitly selected.
     measurement_backend: str = "fibertractmeasurements"
+
+
+def _wma_supports_gpu_flag(root: Path) -> bool:
+    return (root / "whitematteranalysis" / "gpu" / "__init__.py").is_file()
+
+
+def _normalize_wma_gpu_mode(device: str) -> str:
+    normalized = (device or "auto").strip().lower()
+    if normalized == "auto":
+        return "auto"
+    if normalized in {"cpu", "off", "false", "0"}:
+        return "off"
+    if normalized in {"cuda", "gpu", "on", "true", "1"}:
+        return "on"
+    raise ValueError("WMA device must be 'auto', 'cpu', or 'cuda'.")
 
 
 @dataclass(frozen=True)
@@ -710,6 +726,8 @@ def build_wma_org_atlas_command(config: WMAOrgAtlasConfig) -> tuple[str, ...]:
         "-c",
         str(config.clean_files),
     ]
+    if _wma_supports_gpu_flag(wma_root):
+        cmd.extend(["-g", _normalize_wma_gpu_mode(config.device)])
     if config.transform_path is not None:
         cmd.extend(["-t", config.transform_path.expanduser().resolve().as_posix()])
     if config.export_diffusion_measures and config.measurement_backend == "fibertractmeasurements":
@@ -902,6 +920,8 @@ def _run_native_org(config, staging, wma_root, slicer, python, env, manifest, st
             clean_files=config.clean_files,
             transform_path=config.transform_path.expanduser().resolve() if config.transform_path else None,
             run_stage=run_stage,
+            gpu_mode=_normalize_wma_gpu_mode(config.device),
+            supports_gpu_cli=_wma_supports_gpu_flag(wma_root),
         )
 
 
@@ -979,6 +999,8 @@ def run_wma_org_atlas(
         "atlas_dir": config.atlas_dir.expanduser().resolve().as_posix(),
         "output_dir": output_dir.as_posix(),
         "registration_mode": config.registration_mode,
+        "device": config.device,
+        "gpu_mode": _normalize_wma_gpu_mode(config.device),
         "registration_preprocess_cache": {"requested": config.registration_preprocess_cache,
                                            "installed": False, "reports": []},
         "num_threads": config.num_threads,
@@ -1029,6 +1051,14 @@ def run_wma_org_atlas(
         # PythonSlicer's launcher will restore its own runtime. Never pass a
         # caller's Python stdlib overrides to an env-python author script.
         env = external_python_environment()
+        gpu_mode = _normalize_wma_gpu_mode(config.device)
+        if _wma_supports_gpu_flag(wma_root):
+            env["PYTHONNOUSERSITE"] = "1"
+            env["WMA_GPU"] = gpu_mode
+            env["WMA_CPU_FAST"] = "1"
+            env["WMA_CPU_THREADS"] = str(config.num_threads)
+            if gpu_mode == "off":
+                env["CUDA_VISIBLE_DEVICES"] = "-1"
         python_path = wma_root.as_posix()
         env["PYTHONPATH"] = (
             python_path if not env.get("PYTHONPATH") else python_path + os.pathsep + env["PYTHONPATH"]
@@ -1054,7 +1084,10 @@ def run_wma_org_atlas(
                 if slicer_python is None:
                     raise FileNotFoundError(f"Native WMA needs PythonSlicer from {runtime_executable}.")
             library_entries = [str(path) for path in _slicer_runtime_library_paths(runtime_executable)] if native_posix else []
-            if native_posix and config.export_diffusion_measures and config.measurement_backend == "fibertractmeasurements":
+            if native_posix and (
+                (config.export_diffusion_measures and config.measurement_backend == "fibertractmeasurements")
+                or _wma_supports_gpu_flag(wma_root)
+            ):
                 for extension in _slicerdmri_module_paths(runtime_executable):
                     library_entries.extend((str(extension), str(extension.parent)))
             manifest['runtime'] = {'configured_launcher': str(slicer_executable),
@@ -1083,8 +1116,10 @@ def run_wma_org_atlas(
             if not native and native_posix and (slicer_python is not None or config.use_virtual_x):
                 temp_python_dir = tempfile.TemporaryDirectory(prefix="slicerdds_wma_python_")
                 if slicer_python is not None:
-                    shim = Path(temp_python_dir.name) / "python"
-                    shim.symlink_to(slicer_python)
+                    for py_name in ("python", "python3"):
+                        shim = Path(temp_python_dir.name) / py_name
+                        if not shim.exists():
+                            shim.symlink_to(slicer_python)
                     if config.registration_preprocess_cache:
                         runner = Path(__file__).resolve().parents[1] / "scripts" / "run_wma_registration.py"
                         author_registration = wma_root / "bin" / "wm_register_to_atlas_new.py"
@@ -1098,7 +1133,7 @@ def run_wma_org_atlas(
                             manifest["registration_preprocess_cache"]["installed"] = True
                 author_harden = wma_root / "bin" / "harden_transform_with_slicer.py"
                 harden_runner = Path(__file__).resolve().parents[1] / "scripts" / "run_wma_harden_transform.py"
-                if author_harden.is_file() and harden_runner.is_file():
+                if not _wma_supports_gpu_flag(wma_root) and author_harden.is_file() and harden_runner.is_file():
                     # wm_harden_transform.py runs `Slicer --python-script $(which harden_transform_with_slicer.py)`;
                     # this shim comes first on PATH and saves fiber bundles without Slicer's default writer choice.
                     harden_shim = Path(temp_python_dir.name) / author_harden.name

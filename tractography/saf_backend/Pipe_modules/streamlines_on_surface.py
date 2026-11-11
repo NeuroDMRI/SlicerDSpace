@@ -78,12 +78,15 @@ def data_to_curv(indata, inverts, DWI, out_dir, fname=None):
     invs = getattr(DWI.saf, inverts).astype(float)
     invs[DWI.saf.h.astype(bool)] *= -1
 
-    unique_verts = np.unique(invs[invs != 0])
-    if unique_verts.size == 0:
+    nz_mask = invs != 0
+    if np.any(nz_mask):
+        unique_verts, inv_idx, counts = np.unique(invs[nz_mask], return_inverse=True, return_counts=True)
+    else:
         unique_verts = np.array([], dtype=float)
+        inv_idx = np.array([], dtype=int)
+        counts = np.array([], dtype=int)
 
     if hasattr(DWI.saf, indata) and indata == inverts:
-        counts = [np.sum(invs == uv) for uv in unique_verts]
         unique_verts = np.vstack([unique_verts, counts]) if unique_verts.size else np.zeros((2, 0))
     else:
         if hasattr(DWI.saf, indata):
@@ -98,11 +101,14 @@ def data_to_curv(indata, inverts, DWI, out_dir, fname=None):
             else:
                 indt = indata
 
-        unique_vals = []
-        for uv in unique_verts:
-            idx = np.where(invs[0, :] == uv)[0].tolist() + np.where(invs[1, :] == uv)[0].tolist()
-            unique_vals.append(np.mean(indt[idx]) if idx else 0)
-        unique_verts = np.vstack([unique_verts, unique_vals]) if unique_verts.size else np.zeros((2, 0))
+        if unique_verts.size:
+            indt_arr = np.asarray(indt, dtype=float).reshape(1, -1)
+            indt_2d = np.broadcast_to(indt_arr, invs.shape)
+            sums = np.bincount(inv_idx, weights=indt_2d[nz_mask], minlength=unique_verts.size)
+            unique_vals = sums / counts
+            unique_verts = np.vstack([unique_verts, unique_vals])
+        else:
+            unique_verts = np.zeros((2, 0))
 
     rverts_out = unique_verts[:, unique_verts[0, :] > 0] if unique_verts.size else np.zeros((2, 0))
     lverts_out = unique_verts[:, unique_verts[0, :] < 0] if unique_verts.size else np.zeros((2, 0))

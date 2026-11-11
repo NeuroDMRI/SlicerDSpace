@@ -15,7 +15,30 @@ ROOT = Path(__file__).resolve().parents[1]
 BENCHMARKS = ROOT / 'docs/release/benchmarks'
 SITE = ROOT / 'docs/site'
 BEGIN, END = '<!-- measured-evidence:start -->', '<!-- measured-evidence:end -->'
-REVIEWED_ON = '2026-11-10'
+REVIEWED_ON = '2026-11-11'
+
+
+def full_pipeline_accelerations_20261111_records(report):
+    """Qualify the 11 November 2026 full-pipeline CPU and CUDA acceleration records."""
+    if (report.get('status') != 'passed' or report.get('kind') != 'full_pipeline_cpu_and_cuda_accelerations'
+            or report.get('source_inputs_unchanged') is not True):
+        raise ValueError('Full-pipeline accelerations 2026-11-11 header is incomplete')
+    modest = report.get('modest_hardware_verification') or {}
+    if modest.get('all_peak_vram_under_cap') is not True:
+        raise ValueError('Modest-hardware VRAM cap verification failed')
+    records = report.get('records', [])
+    if len(records) != 24:
+        raise ValueError(f'Expected 24 full-pipeline acceleration records, found {len(records)}')
+    for row in records:
+        if row.get('exact_or_verified_parity') is not True:
+            raise ValueError(f"Parity check failed for {row.get('id')}")
+        before, after = row['reference_seconds'], row['optimized_seconds']
+        if not all(math.isfinite(v) and v > 0 for v in (before, after)):
+            raise ValueError(f"Invalid duration in {row.get('id')}")
+        if (not math.isclose(before / after, row['speed_ratio'], rel_tol=1e-12)
+                or not math.isclose(100 * (1 - after / before), row['time_reduction_percent'], abs_tol=1e-9)):
+            raise ValueError(f"Speed ratio or reduction mismatch in {row.get('id')}")
+    return records
 
 
 def runtime_optimizations_20261109_records(report):
@@ -239,7 +262,7 @@ def build_evidence():
          'Stage-level resource-aware scheduling across subjects overlaps single-thread Free-water/DKI and multithreaded NODDI/MK-Curve stages within a shared 32-core CPU and memory budget.',
          'Subject-level fixed concurrency (4 concurrent subjects, 8 threads each) versus Adaptive stage-level scheduling under the same 32-core CPU ceiling.',
          'All 16 subjects pass output and Rule-1 numerical equivalence checks across DTI, Free-water, NODDI, DKI and MK-Curve maps.',
-         '16-subject HCP cohort on a shared Linux host (32-core CPU budget per arm). Reduces cohort makespan by raising mean CPU utilization from 12.6 to 21.2 cores, without changing individual model estimators.',
+         '16-subject HCP cohort on a shared Linux host (32-core CPU budget per arm). Reduces cohort makespan by raising mean CPU utilization from 12.9 to 19.9 cores, without changing individual model estimators.',
          '16 full-brain HCP subjects; complete Microstructure route (DTI + FW + NODDI + DKI + MK-Curve).'),
         ('anatomy', 'cohort-anatomy', 'Cohort scheduling: Anatomical priors', '16 HCP subjects / 32-core budget + GPU',
          'Coordinate GPU-backed DDSeg/DDParcel/DDSurfer inference and CPU-bound surface post-processing across subjects using per-stage CPU, RAM and GPU tokens.',
@@ -260,7 +283,7 @@ def build_evidence():
             raise ValueError('Incomplete 16-subject cohort scheduling evidence: ' + workload)
         add(identifier, title, 'workflow', scope,
             entry['arms']['subject']['makespan_seconds'], entry['arms']['adaptive']['makespan_seconds'],
-            method, baseline, unchanged, limitation, sample, evidence_date='2026-11-09')
+            method, baseline, unchanged, limitation, sample, evidence_date='2026-11-11')
 
     filtering = load('author_wma_optimizations_20261020.json')
     sample = filtering['full_inputs']['cases'][0]
@@ -485,6 +508,159 @@ def build_evidence():
         '50000 streamlines; 84 DDParcel nodes; full-brain DTI FA scalar map.',
         evidence_date=fm_20261110['reviewed_on'])
 
+    accel_20261111 = load('full_pipeline_accelerations_20261111.json')
+    accel_by_id = {r['id']: r for r in full_pipeline_accelerations_20261111_records(accel_20261111)}
+    accel_specs = (
+        ('dipy-mppca-cpu', 'MP-PCA + Gibbs denoising (CPU)', 'implementation', 'Complete module (104x104x60x31)',
+         'Extract sliding-window 3D patch blocks, solve batched covariance eigendecompositions with automatic z-slab RAM capping and vectorize 2D rFFT/irFFT Gibbs shifts.',
+         'Initial unoptimized per-voxel DIPY localpca SVD/eigh loop and slice-by-slice FFT Gibbs suppression on the same acquisition.',
+         'Denoised and degibbsed 4D volume matches unoptimized DIPY within float32/float64 numerical tolerance; automatic QC passes.',
+         'Complete sub-dicom acquisition including NIfTI read/write; HCP 100307 (145x174x145x288) runs in 32.65 min on CPU.',
+         'Full 104x104x60x31 clinical diffusion volume; patch_radius=2; CPU 8 numerical threads.'),
+        ('dipy-mppca-cuda', 'MP-PCA + Gibbs denoising (CUDA)', 'implementation', 'Complete module (104x104x60x31; CUDA)',
+         'Execute VRAM-adaptive batched PyTorch/cuSOLVER eigh MP-PCA patch kernels and batched 2D rFFT/irFFT Gibbs sub-voxel shifts on CUDA with automatic OOM fallback.',
+         'Initial unoptimized per-voxel DIPY localpca SVD/eigh loop and slice-by-slice FFT Gibbs suppression on the same acquisition.',
+         'Denoised and degibbsed 4D volume matches both unoptimized DIPY and optimized CPU within 3.9e-6 relative mean difference.',
+         'Complete sub-dicom acquisition including NIfTI I/O on NVIDIA H100; HCP 100307 (288 volumes) completes in 4.80 min on CUDA and stays <2.4 GiB under a 3.5 GiB laptop VRAM cap.',
+         'Full 104x104x60x31 clinical diffusion volume; patch_radius=2; CUDA execution.'),
+        ('ddseg-full-cpu', 'DDSeg complete prediction (CPU)', 'implementation', 'Full 3-view predict_model_space (CPU)',
+         'Batch non-uniform brain slices (16 slices/pass on CPU), cache uniform background slice predictions per view and run TorchScript under torch.inference_mode().',
+         'Initial 3-view TorchScript slice-by-slice CPU evaluation without background caching or slice batching.',
+         'Discrete 6-class tissue segmentation matches saved reference (>99.98% voxel agreement; exact match vs single-slice CPU).',
+         'Subject 877168 median of three complete 3-view predict_model_space runs on CPU (8 threads); 4-thread laptop mode verified separately.',
+         'Full 3-view 5-channel DTI feature volume; 6 tissue classes; CPU execution.'),
+        ('ddseg-full-cuda', 'DDSeg complete prediction (CUDA)', 'implementation', 'Full 3-view predict_model_space (CUDA)',
+         'Batch up to 64 non-uniform brain slices per forward pass (scaled to available free VRAM), cache uniform background slices and fuse 3-view probabilities under inference_mode.',
+         'Initial 3-view TorchScript slice-by-slice GPU evaluation without multi-slice batching.',
+         'Discrete 6-class tissue segmentation matches saved reference (>99.98% voxel agreement) while peaking at 1.15 GiB VRAM under a 3.5 GiB cap.',
+         'Subject 877168 median of three complete 3-view predict_model_space runs including TorchScript loading on NVIDIA H100.',
+         'Full 3-view 5-channel DTI feature volume; 6 tissue classes; CUDA execution.'),
+        ('ddparcel-full-cuda', 'DDParcel complete 3-view inference (CUDA)', 'implementation', 'Full 3-view FastSurferCNN (CUDA)',
+         'Fuse zero-copy thick-slice views, VRAM-adaptive 32-slice GPU batches, uniform background batch caching, sagittal LUT remapping and GPU probability accumulation.',
+         'Initial unoptimized 3-view FastSurferCNN CUDA inference with iterative np.append thick slices, 8-slice batches and host-side sagittal label loops.',
+         'Fused 256-cubed 82-class parcellation matches saved reference wmparc-Reg.mgz (>99.99% voxel agreement).',
+         'Subject 100408 pure 3-view FastSurferCNN inference on NVIDIA H100; total time including 12-checkpoint initialization is also recorded in the benchmark file.',
+         'Full 256x256x256 4-modality DTI volumes across Axial, Coronal and Sagittal FastSurferCNN ensembles; CUDA execution.'),
+        ('ddparcel-roi-cc', 'DDParcel padded-ROI cleanup & filtering', 'implementation', 'Full 256-cubed post-processing',
+         'Crop the 256-cubed parcellation volume to a padded non-zero brain bounding box before single-pass connected-component island cleanup and 3D median/Gaussian filtering.',
+         'Unoptimized full-grid 256-cubed connected-component labeling and full-volume 3D median/Gaussian post-processing.',
+         'Exported 256x256x256 post-processed parcellation volume is bit-for-bit identical across all 16,777,216 voxels (0 differing voxels).',
+         'Subject 100408 median on CPU; gains reflect the ~85% background-voxel fraction outside the conformed brain bounding box.',
+         'Complete 256x256x256 DDParcel post-processing stage (81 non-zero anatomical labels).'),
+        ('native-dti-full', 'Fresh SlicerDMRI/Teem DTI + 6 scalars', 'implementation', 'Complete fresh DTI stage',
+         'Combine single-template zero-voxel skipping in Teem WLS estimation with active-FA DEC generation and consolidated scalar export.',
+         'Initial unoptimized fresh full-volume SlicerDMRI/Teem WLS tensor estimation and full-grid scalar/DEC export.',
+         'All exported tensor components, 6 scalar maps (FA, MD, AD, RD, Trace, DEC) and masks match reference identically (max abs diff 0.0).',
+         'Subject 100307 fresh end-to-end stage execution including compressed NIfTI/NRRD I/O on HCP 288-volume dMRI.',
+         'Full-brain HCP 100307 (145x174x145x288); fresh uncached execution.'),
+        ('freewater-full-cpu', 'Free-water complete WLS + NLS fit (CPU)', 'implementation', 'Complete full-brain fit (CPU)',
+         'Combine protocol/attenuation reuse and column-scaled WLS initialization with vectorized analytical-Jacobian Gauss-Newton/Levenberg-Marquardt NLS refinement chunks.',
+         'Initial unoptimized DIPY 1.12.1 full-brain WLS grid search and per-voxel SciPy leastsq NLS refinement.',
+         'All 4 exported maps (FWF, tissue FA, tissue MD, validity mask) and QC metrics match DIPY 1.12.1 reference across 623,981 valid tissue voxels.',
+         'Subject 100307 complete end-to-end full-brain execution including NIfTI I/O and QC.',
+         'Full-brain HCP 100307 (740,916 mask voxels; 288 volumes); CPU execution.'),
+        ('freewater-full-cuda', 'Free-water complete WLS + NLS fit (CUDA)', 'implementation', 'Complete full-brain fit (CUDA)',
+         'Execute VRAM-adaptive batched FP64 CUDA Cholesky WLS grid search, analytical Cardano 3x3 eigensolver and vectorized GPU Gauss-Newton NLS refinement.',
+         'Initial unoptimized DIPY 1.12.1 full-brain WLS grid search and per-voxel SciPy leastsq NLS refinement.',
+         'FWF, tissue MD and validity mask match CPU identically (0.0 diff); tissue FA max abs diff is 5.96e-8 across 623,981 valid voxels.',
+         'Subject 100307 complete end-to-end full-brain execution including NIfTI I/O and QC on NVIDIA H100.',
+         'Full-brain HCP 100307 (740,916 mask voxels; 288 volumes); CUDA execution.'),
+        ('dki-full-cpu', 'DKI complete WLS + 10 maps (CPU)', 'implementation', 'Complete full-brain fit (CPU)',
+         'Replace per-voxel DIPY WLS and metric loops with chunked normal-equation WLS tensor/kurtosis estimation and vectorized analytical MK/AK/RK/KFA/MKT evaluation.',
+         'Initial unoptimized full-brain DIPY 1.12.1 per-voxel WLS 22-parameter kurtosis fitting and metric wrappers (91.60 min).',
+         'All 10 exported DKI/DTI maps, residuals and 681,769-voxel validity mask pass automatic QC and match CUDA within float32 precision.',
+         'Subject 100307 complete end-to-end full-brain DKI stage including compressed 288-volume NIfTI I/O (tensor fit alone takes 24.21 s).',
+         'Full-brain HCP 100307 (740,916 mask voxels; 288 multi-shell volumes); CPU execution.'),
+        ('dki-full-cuda', 'DKI complete WLS + 10 maps (CUDA)', 'implementation', 'Complete full-brain fit (CUDA)',
+         'Solve column-equilibrated batched FP64 PyTorch/cuSOLVER Cholesky WLS normal equations and GPU-vectorized analytical kurtosis invariants in VRAM-bounded chunks.',
+         'Initial unoptimized full-brain DIPY 1.12.1 per-voxel WLS 22-parameter kurtosis fitting and metric wrappers (91.60 min).',
+         'All 10 exported maps match optimized CPU within <= 1.19e-7 (KFA, RMSE, NRMSE and masks exact); peaks at 0.47 GiB VRAM under a 3.5 GiB laptop cap.',
+         'Subject 100307 complete end-to-end full-brain DKI stage including NIfTI I/O on NVIDIA H100 (CUDA tensor fit alone takes 3.74 s).',
+         'Full-brain HCP 100307 (740,916 mask voxels; 288 multi-shell volumes); CUDA execution.'),
+        ('mkcurve-full-cpu1', 'MK-Curve complete signal correction (1-thread CPU)', 'port', 'Complete full-brain fit (1 worker)',
+         'Combine basis/signal/QR reuse with coarse-to-fine synthetic-b0 grid search and batched 3x3 Cardano/eigh eigendecomposition across 740,916 brain voxels.',
+         'Initial unoptimized Python MK-Curve full-brain implementation (165.90 min; prior basis-reuse version 153.53 min).',
+         'All 27 exported uncorrected/corrected DKI & DTI maps, synthetic-b0 thresholds and 736,294-voxel validity masks pass full QC verification.',
+         'Subject 100307 complete single-worker full-brain execution including NIfTI export of all 27 volumetric maps.',
+         'Full-brain HCP 100307 (740,916 mask voxels; 288 volumes; 200 synthetic-b0 grid samples); 1 CPU worker.'),
+        ('mkcurve-full-cpu8', 'MK-Curve complete signal correction (8-worker CPU)', 'parallel', 'Complete full-brain fit (8 workers)',
+         'Partition independent in-mask voxel chunks across 8 multi-process workers on top of the coarse-to-fine QR and batched-eigensolver CPU port.',
+         'Initial unoptimized Python MK-Curve full-brain implementation (165.90 min).',
+         'All 27 exported NIfTI volumes are bit-for-bit identical to the 1-worker CPU execution across every voxel.',
+         'Subject 100307 complete 8-worker execution including NIfTI export; combines algorithmic port speedups with 8-process chunk parallelism.',
+         'Full-brain HCP 100307 (740,916 mask voxels; 288 volumes); 8 CPU workers.'),
+        ('mkcurve-full-cuda', 'MK-Curve complete signal correction (CUDA)', 'port', 'Complete full-brain fit (CUDA)',
+         'Execute VRAM-adaptive batched FP64 PyTorch/cuSOLVER Cholesky WLS and analytical closed-form Cardano 3x3 eigensolvers across the synthetic-b0 grid on GPU.',
+         'Initial unoptimized Python MK-Curve full-brain implementation (165.90 min; prior basis-reuse version 153.53 min).',
+         'All 27 exported NIfTI maps match single-worker CPU within rtol=1e-5, atol=1e-6 (validity masks and b0 thresholds match identically).',
+         'Subject 100307 complete end-to-end CUDA execution including host-to-device streaming and export of 27 NIfTI maps on NVIDIA H100.',
+         'Full-brain HCP 100307 (740,916 mask voxels; 288 volumes); CUDA execution.'),
+        ('dti-det-cpu', 'DTI deterministic tracking (CPU)', 'implementation', 'Complete module (CPU)',
+         'Fit active-mask WLS diffusion tensors in vectorized chunks and extract exact analytical principal eigenvectors directly into DIPY EuDX tracking.',
+         'Initial DIPY TenModel full-grid tensor fit and 362-vertex discrete sphere ODF projection before EuDX tracking.',
+         'Produces the exact same 3,244 valid streamlines and automatic QC pass as the reference pipeline.',
+         'Subject 100307 complete deterministic DTI tracking stage including DWI read and TCK export.',
+         'Full-brain HCP 100307 (288 volumes); deterministic DTI EuDX tracking; CPU execution.'),
+        ('dti-det-cuda', 'DTI deterministic tracking (CUDA)', 'implementation', 'Complete module (CUDA)',
+         'Run batched CUDA Cholesky WLS tensor estimation and cuSOLVER eigh principal-direction extraction before deterministic EuDX streamline integration.',
+         'Initial DIPY TenModel full-grid tensor fit and 362-vertex discrete sphere ODF projection before EuDX tracking.',
+         'Produces the exact same 3,244 streamlines matching the optimized CPU execution.',
+         'Subject 100307 complete deterministic DTI tracking stage including DWI read and TCK export on NVIDIA H100.',
+         'Full-brain HCP 100307 (288 volumes); deterministic DTI EuDX tracking; CUDA execution.'),
+        ('saf-full-cpu', 'SAF surface-guided filtering (CPU)', 'port', 'Complete module (100k tracks; CPU)',
+         'Combine vectorized endpoint, intra-hemispheric and length prefiltering with spatial-hash bounding-volume-hierarchy (BVH) ray-triangle intersection tests.',
+         'Initial unoptimized surface-guided short association fibre geometric filtering implementation on 100,000 whole-brain streamlines.',
+         'Retains 13,043 valid superficial white-matter streamlines passing all anatomical surface-correspondence QC checks.',
+         'Subject 100307 complete SAF stage including cortical surface loading, filtering and TCK export on CPU.',
+         '100,000 CSD/ACT streamlines + DDSurfer bilateral white/pial cortical meshes; CPU execution.'),
+        ('saf-full-cuda', 'SAF surface-guided filtering (CUDA)', 'port', 'Complete module (100k tracks; CUDA)',
+         'Evaluate batched PyTorch CUDA Möller-Trumbore ray-triangle intersections across candidate cortical mesh triangles in VRAM-bounded streamline tiles.',
+         'Initial unoptimized surface-guided short association fibre geometric filtering implementation on 100,000 whole-brain streamlines.',
+         'Retains the exact same 13,043 SAF streamlines as CPU with 0.0 mm maximum vertex coordinate difference.',
+         'Subject 100307 complete SAF stage including surface loading and TCK export on NVIDIA H100; I/O and mesh setup dominate at 100k tracks while GPU scales to million-track inputs.',
+         '100,000 CSD/ACT streamlines + DDSurfer bilateral white/pial cortical meshes; CUDA execution.'),
+        ('wma-full-cpu', 'WMA complete ORG-atlas pipeline (CPU)', 'implementation', 'Complete 74-bundle pipeline (CPU)',
+         'Fuse bulk VTK geometry/input reuse and native Slicer transform hardening with vectorized bilateral registration, pairwise streamline distances and outlier removal.',
+         'Initial unmodified WhiteMatterAnalysis complete pipeline (102.10 min; prior geometry-copy optimization 74.22 min) on identical UKF tractography and ORG atlas.',
+         'All 74/74 anatomical white-matter bundles are non-empty (21,955 classified streamlines) and match CUDA per-bundle streamline counts.',
+         'Subject 100307 complete end-to-end WMA registration, clustering, outlier removal and 74-tract MRML/VTP assembly on CPU.',
+         'Full whole-brain UKF tractogram + ORG-800FC-100HCP atlas; 74 anatomical tracts; CPU execution.'),
+        ('wma-full-cuda', 'WMA complete ORG-atlas pipeline (CUDA)', 'implementation', 'Complete 74-bundle pipeline (CUDA)',
+         'Accelerate multi-scale rigid/affine fiber registration, bilateral pairwise fiber distances and cluster outlier removal via Triton and PyTorch CUDA kernels (whitematteranalysis_gpu).',
+         'Initial unmodified WhiteMatterAnalysis complete pipeline (102.10 min; prior geometry-copy optimization 74.22 min) on identical UKF tractography and ORG atlas.',
+         'All 74/74 anatomical bundles match optimized CPU per-bundle streamline counts identically (21,955 classified streamlines).',
+         'Subject 100307 complete end-to-end WMA pipeline on NVIDIA H100 with automatic VRAM batch sizing and CPU fallback on memory pressure.',
+         'Full whole-brain UKF tractogram + ORG-800FC-100HCP atlas; 74 anatomical tracts; CUDA execution.'),
+        ('connectome-count-cpu', 'Connectome streamline count (CPU)', 'implementation', 'Complete 84-node connectome (CPU)',
+         'Batch direct voxel label lookup, 4 mm SciPy cKDTree boundary radial search and flat np.add.at symmetric matrix accumulation across 1,000,000 streamlines.',
+         'Initial unbatched Python endpoint lookup and per-streamline matrix accumulation over 1,000,000 streamlines.',
+         '84x84 structural connectome matrix matches saved reference identically (max abs diff 0.0; 946,019 assigned streamlines).',
+         'Subject 100408 complete connectome stage including 1M-streamline TCK loading, 4 mm radial assignment and CSV/JSON export on CPU.',
+         '1,000,000 CSD/ACT streamlines; 84 DDParcel grey-matter nodes; 4.0 mm radial search; CPU execution.'),
+        ('connectome-count-cuda', 'Connectome streamline count (CUDA)', 'implementation', 'Complete 84-node connectome (CUDA)',
+         'Accelerate 4 mm boundary nearest-label assignment using tiled GPU torch.cdist distance kernels with automatic VRAM tile sizing.',
+         'Initial unbatched Python endpoint lookup and per-streamline matrix accumulation over 1,000,000 streamlines.',
+         '84x84 structural connectome matrix matches both CPU and saved reference identically (max abs diff 0.0).',
+         'Subject 100408 complete connectome stage including 1M-streamline TCK loading and export on NVIDIA H100.',
+         '1,000,000 CSD/ACT streamlines; 84 DDParcel grey-matter nodes; 4.0 mm radial search; CUDA execution.'),
+        ('connectome-sift2-cpu', 'Connectome SIFT2-weighted (CPU)', 'implementation', 'Complete 84-node SIFT2 connectome (CPU)',
+         'Combine batched direct voxel + 4 mm cKDTree endpoint assignment with vectorized flat np.bincount/add.at SIFT2 streamline-weight accumulation.',
+         'Initial unbatched Python endpoint lookup and per-streamline SIFT2 weight accumulation over 1,000,000 streamlines.',
+         '84x84 SIFT2-weighted connectome matrix matches saved reference within float64 machine precision (max abs diff 0.0).',
+         'Subject 100408 complete SIFT2 connectome stage including 1M-streamline TCK + weights loading and export on CPU.',
+         '1,000,000 CSD/ACT streamlines + SIFT2 weights; 84 DDParcel nodes; 4.0 mm radial search; CPU execution.'),
+        ('connectome-sift2-cuda', 'Connectome SIFT2-weighted (CUDA)', 'implementation', 'Complete 84-node SIFT2 connectome (CUDA)',
+         'Combine tiled GPU torch.cdist 4 mm radial endpoint assignment with vectorized SIFT2 weight accumulation.',
+         'Initial unbatched Python endpoint lookup and per-streamline SIFT2 weight accumulation over 1,000,000 streamlines.',
+         '84x84 SIFT2-weighted connectome matrix matches CPU and saved reference identically (max abs diff 0.0).',
+         'Subject 100408 complete SIFT2 connectome stage including 1M-streamline TCK + weights loading and export on NVIDIA H100.',
+         '1,000,000 CSD/ACT streamlines + SIFT2 weights; 84 DDParcel nodes; 4.0 mm radial search; CUDA execution.'),
+    )
+    for identifier, title, category, scope, method, baseline, unchanged, limitation, sample in accel_specs:
+        rec = accel_by_id[identifier]
+        add(identifier, title, category, scope, rec['reference_seconds'], rec['optimized_seconds'],
+            method, baseline, unchanged, limitation, sample, evidence_date=accel_20261111['reviewed_on'])
+
     audit = load('upstream_freshness_verified_20261022.json')
     upstream = audit['repositories']
     references = {
@@ -521,6 +697,30 @@ def build_evidence():
         'csd-qc': 'Measured with NiBabel ArraySequence tractogram buffers; preserves exactCSD/ACT streamline finiteness and length-distribution QC.',
         'wma-measures': 'Measured with VTK 9.2 GetOffsetsArray/GetConnectivityArray buffers; preserves exact native WMA fiber length and scalar summary statistics.',
         'connectome-mean-fa': 'Measured with SciPy cKDTree and NiBabel ArraySequence buffers; preserves exact connectome edge weights and node assignments.',
+        'dipy-mppca-cpu': 'Compared directly against unmodified DIPY 1.12.1 localpca/mppca and gibbs_removal on the same 4D dMRI volume.',
+        'dipy-mppca-cuda': 'Custom PyTorch/cuSOLVER CUDA implementation compared directly against unmodified DIPY 1.12.1 mppca and gibbs_removal.',
+        'ddseg-full-cpu': 'Measured on official DDSeg TorchScript weights (NeuroDMRI/DDSeg-Torch); preserves exact 3-view softmax fusion.',
+        'ddseg-full-cuda': 'Measured on official DDSeg TorchScript weights with VRAM-adaptive slice batching; preserves exact 3-view softmax fusion.',
+        'ddparcel-full-cuda': 'Measured on official DDSurfer FastSurferCNN weights with VRAM-adaptive GPU batching; preserves exact 3-view fusion.',
+        'ddparcel-roi-cc': 'Measured against unmodified FastSurferCNN 256-cubed post-processing; padded bounding-box crop is mathematically exact.',
+        'native-dti-full': 'Measured against Slicer 5.10.0 Teem tenEstimate full-volume baseline; preserves exact WLS tensor and scalar maps.',
+        'freewater-full-cpu': 'Compared directly against unmodified DIPY 1.12.1 fwdti WLS + NLS full-brain execution on HCP 100307.',
+        'freewater-full-cuda': 'Custom PyTorch/cuSOLVER FP64 CUDA WLS + Cardano/Gauss-Newton solver compared against unmodified DIPY 1.12.1.',
+        'dki-full-cpu': 'Compared directly against unmodified DIPY 1.12.1 DiffusionKurtosisModel WLS full-brain fit (91.60 min) on HCP 100307.',
+        'dki-full-cuda': 'Custom column-equilibrated FP64 PyTorch/cuSOLVER CUDA Cholesky WLS + kurtosis invariant kernel compared against DIPY 1.12.1.',
+        'mkcurve-full-cpu1': 'Compared against the initial full-brain Python port of zhangfanmark/MK-Curve (165.90 min) with identical synthetic-b0 grid.',
+        'mkcurve-full-cpu8': '8-worker multi-process execution of the optimized Python MK-Curve port compared against the initial 165.90 min baseline.',
+        'mkcurve-full-cuda': 'Custom batched FP64 CUDA Cholesky + analytical Cardano eigensolver port compared against the initial 165.90 min baseline.',
+        'dti-det-cpu': 'Compared against DIPY 1.12.1 TenModel + discrete sphere peak extraction + EuDX deterministic tracking on HCP 100307.',
+        'dti-det-cuda': 'Custom CUDA Cholesky WLS + cuSOLVER eigh peak extractor feeding DIPY EuDX compared against initial DIPY baseline.',
+        'saf-full-cpu': 'Compared against the initial Python port of Shastin et al. SAF surface-guided filtering on 100,000 CSD/ACT streamlines.',
+        'saf-full-cuda': 'Custom batched PyTorch CUDA Möller-Trumbore ray-triangle kernel compared against the initial SAF surface-filtering baseline.',
+        'wma-full-cpu': 'Fuses plugin bulk-geometry/input reuse with NeuroDMRI/whitematteranalysis_gpu vectorized CPU kernels vs initial WMA (102.10 min).',
+        'wma-full-cuda': 'Fuses plugin bulk-geometry/input reuse with NeuroDMRI/whitematteranalysis_gpu Triton/PyTorch CUDA kernels vs initial WMA (102.10 min).',
+        'connectome-count-cpu': 'Compared against initial unbatched 1M-streamline endpoint assignment and matrix assembly on HCP 100408.',
+        'connectome-count-cuda': 'Custom tiled PyTorch CUDA torch.cdist radial endpoint assignment compared against initial 1M-streamline baseline.',
+        'connectome-sift2-cpu': 'Compared against initial unbatched 1M-streamline SIFT2-weighted connectome assembly on HCP 100408.',
+        'connectome-sift2-cuda': 'Custom tiled PyTorch CUDA torch.cdist radial assignment + vectorized SIFT2 accumulation vs initial 1M-streamline baseline.',
     }
     if protocol_reuse:
         latest_fw = load('freewater_protocol_upstream_20261029.json')
@@ -553,6 +753,7 @@ def build_evidence():
         'csd-qc': 'five_module_subalgorithm_optimizations_20261110.json',
         'wma-measures': 'five_module_subalgorithm_optimizations_20261110.json',
         'connectome-mean-fa': 'five_module_subalgorithm_optimizations_20261110.json',
+        **{identifier: 'full_pipeline_accelerations_20261111.json' for identifier, *_ in accel_specs},
     }
     for row in rows:
         row['upstream_reference'] = references[row['id']]
@@ -564,8 +765,7 @@ def build_evidence():
                         ('dipy', 'dipy/dipy'), ('scipy', 'scipy/scipy'), ('amico', 'daducci/AMICO'))},
                     policy='Latest release and default-branch source identity are checked separately; source review is not a development-branch benchmark.'),
                 policy='Output equivalence is not anatomical or clinical validation. No whole-workflow speedup has been established.',
-                pending=['Repeated multi-subject full-module pairs', 'Completed full-brain DKI comparison',
-                         'Full-brain validation for later default-QR MK-Curve changes',
+                pending=['Repeated multi-subject full-module pairs',
                          'Matched CSD/ACT/SIFT2 complete-module baseline', 'Native Windows/macOS scientific timing',
                          'Optional persistent-model worker: proposed, not implemented or benchmarked'])
 

@@ -13,8 +13,8 @@ PAGE = ROOT / "docs/site/index.html"
 # Keep implementation scope explicit: an API-only measure is not a GUI default.
 # Each entry identifies a real entry point and its primary method/software sources.
 METHODS = (
-    ("input", "Input", "DICOM / NIfTI / NRRD", "Conversion, gradient validation and spatial checks.", "dcm2niix or Slicer DWIConvert; supplied masks accepted", [36, 27, 28], "scripts/prepare_inputs.py"),
-    ("pnl_cnn", "Brain mask", "PNL CNN (default)", "Author diffusion-CNN brain masking and registration.", "Managed PNL runtime, weights and ANTs", [37, 38], "shared/brain_mask.py"),
+    ("input", "Input", "DICOM / NIfTI / NRRD", "Convert DICOM, NIfTI and NRRD inputs into a standardised NIfTI format with corresponding b-values and b-vectors.", "dcm2niix or Slicer DWIConvert; supplied masks accepted", [36, 27, 28], "scripts/prepare_inputs.py"),
+    ("pnl_cnn", "Brain mask", "CNN-Diffusion-MRIBrain-Segmentation (default)", "Author diffusion-CNN brain masking and registration.", "Managed CNN-Diffusion-MRIBrain-Segmentation runtime, weights and ANTs", [37, 38], "shared/brain_mask.py"),
     ("mppca", "Preprocessing", "MP-PCA", "Random-matrix denoising and noise estimation.", "DIPY", [39, 52, 53, 29, 30], "preprocessing/pipeline.py"),
     ("gibbs", "Preprocessing", "Gibbs removal", "Local subvoxel-shift ringing correction.", "DIPY", [42, 29, 30], "preprocessing/pipeline.py"),
     ("eddy", "Preprocessing", "FSL eddy", "Eddy-current and motion correction.", "MRtrix3 dwifslpreproc; FSL", [43, 29], "preprocessing/pipeline.py"),

@@ -106,6 +106,7 @@ class DwiPreprocessingConfig:
     pnl_mask_ants_bin_dir: Optional[Path] = None
     pnl_mask_route: str = "auto"
     execution_backend: Optional[str] = None
+    dipy_device: str = "auto"
 
 
 @dataclass(frozen=True)
@@ -747,6 +748,8 @@ def _run_dipy_step(
     command: list[str],
     *,
     log: Optional[Callable[[str], None]],
+    device: Optional[str] = None,
+    max_workers: Optional[int] = None,
 ) -> dict[str, Any]:
     """Run one in-process DIPY step of the plan: ``mppca`` or ``gibbs_removal`` (``skip_gibbs_removal`` copies)."""
     step = command[1]
@@ -769,13 +772,27 @@ def _run_dipy_step(
     if data.ndim != 4:
         raise ValueError(f"DIPY preprocessing expects a 4D DWI image, got shape {data.shape}")
     emit(f"Loaded {command[2]} shape={data.shape}")
+    disable_accel = os.environ.get("SLICERDSPACE_DISABLE_DIPY_ACCEL", "").strip().lower() in {"1", "true", "yes"}
     if step == "mppca":
         try:
             from dipy.denoise.localpca import mppca
         except Exception as exc:
             raise RuntimeError("DIPY preprocessing requires nibabel, numpy, and dipy.") from exc
-        emit("Running MP-PCA denoising")
-        denoised, sigma = mppca(data, patch_radius=2, return_sigma=True)
+        if disable_accel:
+            emit("Running MP-PCA denoising (baseline DIPY)")
+            denoised, sigma = mppca(data, patch_radius=2, return_sigma=True)
+        else:
+            from preprocessing.dipy_accel import mppca_accelerated, resolve_dipy_accel_device
+
+            resolved_dev = resolve_dipy_accel_device(device)
+            emit(f"Running MP-PCA denoising (device={resolved_dev})")
+            denoised, sigma = mppca_accelerated(
+                data,
+                patch_radius=2,
+                return_sigma=True,
+                device=device,
+                max_workers=max_workers,
+            )
         _save_float32(denoised, source_img, Path(command[3]))
         _save_float32(sigma, source_img, Path(command[4]))
         return {"status": "completed", "method": "dipy_mppca", "noise_map": command[4]}
@@ -784,8 +801,21 @@ def _run_dipy_step(
             from dipy.denoise.gibbs import gibbs_removal
         except Exception as exc:
             raise RuntimeError("DIPY preprocessing requires nibabel, numpy, and dipy.") from exc
-        emit("Running Gibbs removal")
-        corrected = gibbs_removal(data, slice_axis=2, inplace=False, num_processes=1)
+        if disable_accel:
+            emit("Running Gibbs removal (baseline DIPY)")
+            corrected = gibbs_removal(data, slice_axis=2, inplace=False, num_processes=1)
+        else:
+            from preprocessing.dipy_accel import gibbs_removal_accelerated, resolve_dipy_accel_device
+
+            resolved_dev = resolve_dipy_accel_device(device)
+            emit(f"Running Gibbs removal (device={resolved_dev})")
+            corrected = gibbs_removal_accelerated(
+                data,
+                slice_axis=2,
+                inplace=False,
+                device=device,
+                max_workers=max_workers,
+            )
         _save_float32(corrected, source_img, Path(command[3]))
         return {"status": "completed", "method": "dipy_gibbs_removal"}
     raise ValueError(f"Unknown DIPY preprocessing step: {step}")
@@ -861,7 +891,12 @@ def _execute_preprocessing_backend(
         if command[0] == "dipy":
             if log:
                 log("[Preproc] DIPY step: " + " ".join(command[1:]))
-            _run_dipy_step(command, log=log)
+            _run_dipy_step(
+                command,
+                log=log,
+                device=config.dipy_device,
+                max_workers=_resolved_eddy_threads(config),
+            )
             continue
         if command[0] == "copy":
             shutil.copy2(command[1], command[2])

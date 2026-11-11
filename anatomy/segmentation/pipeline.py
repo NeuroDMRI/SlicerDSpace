@@ -30,15 +30,28 @@ def _feature_folder(cfg: DDSegConfig) -> Path:
 def predict_model_space(stacked: np.ndarray, cfg: DDSegConfig) -> tuple[np.ndarray, np.ndarray]:
     """Run the three view models on a padded model-orientation stack."""
 
+    import os
+    import torch
     from .model_loader import load_models  # lazy: torch is only needed for inference
     from shared.environment import resolve_auto_torch_device
+    from shared.hardware_adapt import empty_cuda_cache_safely, optimal_cpu_torch_threads
 
     cfg = replace(cfg, device=resolve_auto_torch_device(cfg.device))
     views = split_views(stacked)
-    models = load_models(cfg.weights_dir, "dti", cfg.device)
-    pred_axial = predict_view(models.axial, views["axial"], cfg.apply_softmax)
-    pred_sagittal = predict_view(models.sagittal, views["sagittal"], cfg.apply_softmax)
-    pred_coronal = predict_view(models.coronal, views["coronal"], cfg.apply_softmax)
+    prev_threads = None
+    if str(cfg.device).startswith("cpu") and not os.environ.get("SLICERDSPACE_STAGE_CPUS"):
+        prev_threads = torch.get_num_threads()
+        torch.set_num_threads(optimal_cpu_torch_threads(max_conv_threads=8))
+    try:
+        models = load_models(cfg.weights_dir, "dti", cfg.device)
+        pred_axial = predict_view(models.axial, views["axial"], cfg.apply_softmax)
+        pred_sagittal = predict_view(models.sagittal, views["sagittal"], cfg.apply_softmax)
+        pred_coronal = predict_view(models.coronal, views["coronal"], cfg.apply_softmax)
+    finally:
+        if prev_threads is not None:
+            torch.set_num_threads(prev_threads)
+        if str(cfg.device).startswith("cuda"):
+            empty_cuda_cache_safely()
     combined = combine_views(pred_axial, pred_sagittal, pred_coronal)
     prob_maps = combined["prob_maps"]
     if not cfg.apply_softmax:

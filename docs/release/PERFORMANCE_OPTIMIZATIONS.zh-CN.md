@@ -50,17 +50,17 @@ GPU 设备选择、上游继承的改动和原作者源码对照也分别标注�
 
 ---
 
-## 11 月 9 日：多受试者队列阶段级并发调度
+## 11 月 11 日：多受试者队列阶段级并发调度（算法全面优化后重测）
 
-批处理调度器（scripts/run_batch_pipeline.py --scheduler adaptive）在共享 CPU、内存、GPU 与 I/O 预算下跨受试者协同调度各分析阶段（[源记录](benchmarks/cohort_multi_pipeline_20261109.json)）。在 16 名 HCP 受试者队列、每组 32 核 CPU 预算下，受试者级固定并发（--scheduler subjects）与自适应阶段级调度（--scheduler adaptive）的实测总耗时对比如下：
+批处理调度器（scripts/run_batch_pipeline.py --scheduler adaptive）在共享 CPU、内存、GPU 与 I/O 预算下跨受试者协同调度各分析阶段（[源记录](benchmarks/cohort_multi_pipeline_20261109.json)）。在启用本轮融合后的 CPU 与 CUDA 加速算法条件下，对 16 名 HCP 受试者队列（每组 32 核 CPU 预算）重新实测受试者级固定并发（--scheduler subjects）与自适应阶段级调度（--scheduler adaptive）的总耗时对比如下：
 
 | 队列流程（N = 16） | 受试者级总耗时 | 自适应调度总耗时 | 吞吐率比值 | 耗时减少 |
 | --- | ---: | ---: | ---: | ---: |
-| 微结构分析（DTI + FW + NODDI + DKI + MK-Curve） | 301.79 min | 197.44 min | 1.53× | 34.58% |
-| 解剖先验（DDSeg + DDParcel + DDSurfer） | 78.43 min | 68.33 min | 1.15× | 12.88% |
-| 追踪与纤维束分析（DDSeg + DDParcel + DTI + DTI-Det + WMQL + TractCloud + Connectome） | 78.61 min | 70.66 min | 1.11× | 10.11% |
+| 微结构分析（DTI + FW + NODDI + DKI + MK-Curve） | 136.22 min | 100.85 min | 1.35× | 25.96% |
+| 解剖先验（DDSeg + DDParcel + DDSurfer） | 71.69 min | 64.23 min | 1.12× | 10.41% |
+| 追踪、纤维束与连接组（DDSeg + DDParcel + DTI + DTI-Det + WMQL + TractCloud + Connectome） | 71.22 min | 62.46 min | 1.14× | 12.29% |
 
-全部 16 名受试者在各流程中均通过输出与 Rule-1 数值一致性校验。在微结构队列中，阶段级调度跨受试者重叠单线程 Free-water/DKI 与多线程 NODDI/MK-Curve 阶段，在不改变单个科学估计算法的前提下将平均 CPU 核利用率从 12.6 核提升至 21.2 核。
+按子阶段窗口拆分下游连接流程，纤维追踪（Tractography）阶段加速比为 **1.22×（节省 18.30%）**，纤维束提取（Bundles）阶段加速比为 **1.14×（节省 12.36%）**。全部 16 名受试者在各流程中均完整通过输出与一致性校验。在微结构队列中，阶段级调度跨受试者交错编排低线程 Free-water/DKI 与多线程 NODDI/MK-Curve 阶段，在不改变单个科学估计算法的前提下将平均 CPU 核利用率从 12.9 核提升至 19.9 核。对于普通个人电脑或笔记本用户（$\le 16$ GiB 内存或 4–8 GiB 消费级显卡），可通过 `--low-memory` 启用保守内存与 I/O 准入控制。
 
 ---
 
@@ -964,3 +964,15 @@ Linux 记录不能替代 Windows／macOS 科学性能验收。
 获得 10.05–11.44 倍局部加速，CSV 逐字节一致；固定张量基缓存使 MK-Curve 完整
 64 体素计算块耗时减少 9.46%–9.97%，比较的系数、曲线及参数等数组逐值一致。”
 后者不能表述为已测得全脑 MK-Curve 或整个插件的同等提升。
+
+---
+
+## 全流程 CPU 与 CUDA 加速及硬件自适应汇总（2026-11-11）
+
+`docs/release/benchmarks/full_pipeline_accelerations_20261111.json` 记录了在 `Intel Xeon Platinum 8360Y` 与 `NVIDIA H100 PCIe 80 GB` 上针对原始未优化基线的 24 组完整模块与阶段对照：
+
+- **扩散预处理（`MP-PCA + Gibbs`）**：三维滑动窗口分块向量化、z 分片内存上限控制及批量 PyTorch/cuSOLVER `eigh` 与二维 `rFFT/irFFT` CUDA 核（`sub-dicom` 上 CPU `136.02 s -> 114.23 s`，CUDA `136.02 s -> 7.64 s`；288 体积 `HCP 100307` CUDA 完整耗时 `4.80 min`）。
+- **解剖先验（`DDSeg`、`DDParcel`）**：显存自适应多切片批推理与纯背景切片缓存（`DDSeg` CUDA `8.72 s -> 3.45 s`；`DDParcel` 三视图 CUDA `69.02 s -> 23.43 s`），以及带边距脑外接框三维连通域清理与滤波（`97.96 s -> 15.17 s`，逐体素完全一致）。
+- **微结构建模（`DTI`、`Free-water`、`DKI`、`MK-Curve`）**：分块列平衡 WLS、解析闭式 Cardano 3x3 特征求解、向量化峰度不变量、由粗到精合成 `b0` 搜索及 FP64 PyTorch/cuSOLVER Cholesky 与 Gauss-Newton CUDA 求解（`Free-water` `938.28 s -> 312.66 s` CPU、`37.65 s` CUDA；`DKI` `91.60 min -> 1.94 min` CPU、`1.47 min` CUDA；`MK-Curve` `165.90 min -> 22.86 min` 单进程 CPU、`3.30 min` 8 进程 CPU、`1.32 min` CUDA）。
+- **纤维追踪、纤维束提取与连接组（`DTI-Det`、`SAF`、`WMA`、`Connectome`）**：有效体素解析/cuSOLVER 主方向提取（`DTI-Det` `68.0 s -> 21.85 s` CPU、`16.41 s` CUDA）、空间哈希 BVH 与批量 CUDA Möller-Trumbore 射线-三角形筛选（`SAF`）、融合插件批量几何/输入复用与 `whitematteranalysis_gpu` 向量化 CPU 及 Triton/PyTorch CUDA 核（`WMA` `102.10 min -> 2.75 min` CPU、`2.31 min` CUDA），以及批量 `cKDTree` / 分块 GPU `torch.cdist` 径向节点分配（`Connectome` `138.0 s -> 5.75–7.57 s`）。
+- **中低配硬件自适应**：`shared/hardware_adapt.py` 按空闲显存动态调整批/分块大小，限制数值线程与 z 分片内存占用（已在 `3.5 GiB` 显存上限下通过全部峰值显存校验），遇显存不足自动折半重试并在必要时无缝回退至 CPU。

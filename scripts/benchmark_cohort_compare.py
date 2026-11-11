@@ -129,13 +129,15 @@ MANIFEST_NAME = 'benchmark_orchestration_manifest.json'
 DKI_METRIC_NAMES = ('mk', 'ak', 'rk', 'kfa', 'mkt', 'rtk')
 DTI_MAP_NAMES = ('fa', 'md', 'ad', 'rd', 'l1', 'l2', 'l3', 'trace')
 KEY_ALIASES = {'fw_tissue_fa': 'fw_fa', 'fw_tissue_md': 'fw_md', 'noddi_ndi': 'ndi', 'noddi_odi': 'odi',
-               'noddi_fwf': 'isovf', 'noddi_rmse': 'rmse', 'noddi_nrmse': 'nrmse'}
+               'noddi_fwf': 'isovf', 'noddi_rmse': 'rmse', 'noddi_nrmse': 'nrmse',
+               'model_1': 'white_lh', 'model_2': 'pial_lh', 'model_3': 'white_rh', 'model_4': 'pial_rh'}
 # task name -> {canonical output key: class}; a key outside the table is class R.
 TASK_CLASSES = {
     'microstructure.dti': {name: 'T' for name in DTI_MAP_NAMES},
     'microstructure.freewater': {'fwf': 'T', 'fw_fa': 'T', 'fw_md': 'T'},
     'microstructure.noddi': {name: 'T' for name in ('ndi', 'odi', 'isovf', 'rmse', 'nrmse')},
     'microstructure.dki': {name: 'T' for name in (*DKI_METRIC_NAMES, *(m + '_raw' for m in DKI_METRIC_NAMES))},
+    'microstructure.ifw': {'ifw': 'T', 'fw_volume_fraction': 'T'},
     'segmentation.ddseg': {'segmentation': 'L', 'gm_probability': 'T', 'wm_probability': 'T', 'csf_probability': 'T'},
     'parcellation.ddparcel': {'wmparc': 'L', 'wmparc_reg': 'L', 'fa_reg_norm': 'T', 'trace_reg_norm': 'T',
                               'min_eig_reg_norm': 'T', 'mid_eig_reg_norm': 'T'},
@@ -146,9 +148,22 @@ EXPECTED_TASKS = {
     'cpu': ('microstructure.dti', 'microstructure.freewater', 'microstructure.noddi', 'microstructure.dki'),
     'hybrid': ('microstructure.dti', 'microstructure.noddi', 'segmentation.ddseg', 'parcellation.ddparcel',
                'surface.ddsurfer'),
+    'anatomy': ('segmentation.ddseg', 'parcellation.ddparcel', 'surface.ddsurfer', 'microstructure.dti'),
+    'tractography': ('segmentation.ddseg', 'parcellation.ddparcel', 'microstructure.dti'),
+    'regional_ifw': ('segmentation.ddseg', 'parcellation.ddparcel', 'microstructure.dti',
+                     'microstructure.freewater', 'microstructure.noddi', 'microstructure.ifw'),
+    'end_to_end': ('segmentation.ddseg', 'parcellation.ddparcel', 'surface.ddsurfer', 'microstructure.dti',
+                   'microstructure.freewater', 'microstructure.noddi', 'microstructure.ifw'),
 }
 INPUT_MASK = 'input:nodif_brain_mask.nii.gz'
-EXPECTED_CACHE = {'cpu': (INPUT_MASK,), 'hybrid': (INPUT_MASK, 'csd:five_tt')}
+EXPECTED_CACHE = {
+    'cpu': (INPUT_MASK,),
+    'hybrid': (INPUT_MASK, 'csd:five_tt'),
+    'anatomy': (INPUT_MASK,),
+    'tractography': (INPUT_MASK,),
+    'regional_ifw': (INPUT_MASK,),
+    'end_to_end': (INPUT_MASK,),
+}
 NATIVE_EXPECTED_FILES = ('DTI.nrrd', 'b0.nrrd')     # in every native_dti bundle (LS and WLS) seen in either arm
 
 
@@ -371,7 +386,7 @@ def rule3(first_path, second_path):
 
 def _connectome_matrix(trial_output, subject):
     for task in _manifest_tasks(Path(trial_output)/'outputs'/subject):
-        if task.get('name') == 'connectome.sift2_weighted':
+        if task.get('name') in ('connectome.sift2_weighted', 'connectome.streamline_count'):
             value = (task.get('outputs') or {}).get('matrix_path')
             return Path(value) if value else None
     return None

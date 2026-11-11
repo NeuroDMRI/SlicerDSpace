@@ -919,6 +919,44 @@ def _convert_nrrd_to_nifti(in_path: Path, out_path: Path) -> None:
     nifti_write(in_path.as_posix(), prefix)
 
 
+def _is_native_dti_cached(raw: RawInputBundle, fit_method: str = "wls", reuse: bool = True) -> bool:
+    if not reuse:
+        return False
+    try:
+        fit_key = str(fit_method).lower()
+        if fit_key not in {"ls", "wls"}:
+            return False
+        bundle = _build_native_bundle(raw, fit_key)
+        if not bundle.manifest_path.is_file():
+            return False
+        expected_manifest = _native_manifest(raw, bundle)
+        actual_manifest = _read_manifest(bundle.manifest_path)
+        return actual_manifest == expected_manifest and _native_outputs_complete(bundle)
+    except Exception:
+        return False
+
+
+def _is_registered_dti_cached(
+    raw: RawInputBundle,
+    native: NativeDTIBundle,
+    atlas_t2: Path,
+    fit_method: str = "wls",
+    reuse: bool = True,
+    scalar_format: str = "nifti",
+) -> bool:
+    if not reuse:
+        return False
+    try:
+        bundle = _build_registered_bundle(raw, fit_method, atlas_t2, scalar_format)
+        if not bundle.manifest_path.is_file():
+            return False
+        expected_manifest = _registered_manifest(raw, native, bundle)
+        actual_manifest = _read_manifest(bundle.manifest_path)
+        return actual_manifest == expected_manifest and _registered_outputs_complete(bundle)
+    except Exception:
+        return False
+
+
 @scheduled_stage('native_dti')
 def ensure_native_dti_bundle(
     raw: RawInputBundle,

@@ -35,6 +35,7 @@ class DTITrackingConfig:
     min_fa: float = 0.2
     min_length_mm: float = 10.0
     max_length_mm: float = 250.0
+    device: str = "auto"
     force_recompute: bool = False
     execute: bool = False
 
@@ -134,10 +135,58 @@ def _validate_config(config: DTITrackingConfig) -> None:
         raise ValueError("min_length_mm must be >= 0.")
     if config.max_length_mm <= config.min_length_mm:
         raise ValueError("max_length_mm must be greater than min_length_mm.")
+    if str(config.device).strip().lower() not in {"auto", "cpu", "cuda"}:
+        raise ValueError("device must be 'auto', 'cpu', or 'cuda'.")
+
+
+def _resolve_dti_device(requested: str) -> str:
+    import os
+
+    env_override = os.environ.get("SLICERDSPACE_DTI_TRACKING_DEVICE")
+    mode = str(env_override if env_override else requested).strip().lower()
+    if mode not in {"auto", "cpu", "cuda"}:
+        raise ValueError(f"Unsupported DTI tracking device {mode!r}.")
+    if mode == "cpu":
+        return "cpu"
+    try:
+        import torch
+
+        cuda_ok = bool(torch.cuda.is_available())
+    except Exception:
+        cuda_ok = False
+    if mode == "cuda" and not cuda_ok:
+        raise RuntimeError("DTI tracking CUDA device requested, but PyTorch CUDA is unavailable.")
+    return "cuda" if cuda_ok else "cpu"
 
 
 def _streamline_lengths(streamlines: list[object]) -> list[float]:
     import numpy as np
+
+    n_sl = len(streamlines)
+    if n_sl == 0:
+        return []
+    try:
+        from nibabel.streamlines.array_sequence import ArraySequence
+
+        seq = streamlines if isinstance(streamlines, ArraySequence) else ArraySequence(streamlines)
+        pts = np.asarray(seq._data, dtype=np.float64)
+        lengths_arr = np.asarray(seq._lengths, dtype=np.int64)
+        offsets_arr = np.asarray(seq._offsets, dtype=np.int64)
+        if pts.ndim == 2 and pts.shape[0] >= 2 and len(lengths_arr) == n_sl:
+            seg_norms = np.linalg.norm(pts[1:] - pts[:-1], axis=1)
+            out = np.zeros(n_sl, dtype=np.float64)
+            valid = lengths_arr >= 2
+            if np.any(valid):
+                v_off = offsets_arr[valid]
+                v_len = lengths_arr[valid]
+                # Prefix sum of segment norms gives O(1) exact sum per streamline without boundary bleed
+                csum = np.empty(pts.shape[0], dtype=np.float64)
+                csum[0] = 0.0
+                np.cumsum(seg_norms, out=csum[1:])
+                out[valid] = csum[v_off + v_len - 1] - csum[v_off]
+            return out.tolist()
+    except Exception:
+        pass
 
     lengths: list[float] = []
     for streamline in streamlines:
@@ -233,6 +282,187 @@ def _tensor_direction_getter(
     return peaks
 
 
+def _fit_dti_fa_and_peaks(
+    data_in_mask,
+    mask,
+    gtab,
+    sphere,
+    *,
+    fit_method: str,
+    min_fa: float,
+    max_angle_deg: float,
+    device: str = "auto",
+):
+    """Hardware-adaptive vectorized CPU / PyTorch FP64 CUDA WLS & OLS DTI fitter + peak projector.
+
+    Replaces DIPY's per-voxel ``(G, 7)`` SVD ``pinv`` with batched ``7 x 7`` normal
+    equations (with exact ``pinv`` fallback on rank-deficient voxels), giving >50x
+    faster tensor fitting while matching DIPY ``TensorModel`` eigenvalues/FA/peaks.
+    """
+    import numpy as np
+    from dipy.direction.peaks import PeaksAndMetrics
+    from dipy.reconst.dti import (
+        MIN_POSITIVE_SIGNAL,
+        design_matrix,
+        fractional_anisotropy,
+        from_lower_triangular,
+    )
+    from shared.hardware_adapt import (
+        adaptive_cuda_scaled_batch,
+        empty_cuda_cache_safely,
+        run_cuda_chunked_with_oom_fallback,
+    )
+
+    resolved_device = _resolve_dti_device(device)
+    explicit_cuda = str(device).strip().lower() == "cuda"
+    w_mat = np.asarray(design_matrix(gtab), dtype=np.float64)
+    w_pinv_t = np.linalg.pinv(w_mat).T
+    w_outer = (w_mat[:, :, None] * w_mat[:, None, :]).reshape(w_mat.shape[0], 49)
+    lo_tri_idx = from_lower_triangular(np.arange(6, dtype=np.int64))
+    min_diff = 1e-6 / float(-w_mat.min())
+    is_wls = fit_method.upper() in {"WLS", "WLLS"}
+    sphere_verts = np.asarray(sphere.vertices, dtype=np.float64)
+    n_vox = int(data_in_mask.shape[0])
+
+    def _cpu_chunk(start: int, end: int):
+        sig = np.maximum(np.asarray(data_in_mask[start:end], dtype=np.float64), MIN_POSITIVE_SIGNAL)
+        log_s = np.log(sig)
+        beta_ols = log_s @ w_pinv_t
+        if is_wls:
+            w = np.exp(np.clip(beta_ols @ w_mat.T, -50.0, 50.0))
+            w2 = w * w
+            lhs = (w2 @ w_outer).reshape(-1, 7, 7)
+            rhs = (w2 * log_s) @ w_mat
+            try:
+                beta = np.linalg.solve(lhs, rhs[..., None])[..., 0]
+            except np.linalg.LinAlgError:
+                beta = np.full_like(beta_ols, np.nan)
+            bad = ~np.all(np.isfinite(beta), axis=1)
+            if np.any(bad):
+                beta[bad] = np.einsum(
+                    "...ij,...j->...i",
+                    np.linalg.pinv(w_mat * w[bad, :, None]),
+                    w[bad] * log_s[bad],
+                )
+        else:
+            beta = beta_ols
+        tensors = beta[:, lo_tri_idx]
+        evals_asc, evecs_asc = np.linalg.eigh(tensors)
+        evals = np.maximum(evals_asc[:, ::-1], min_diff)
+        principal = np.nan_to_num(evecs_asc[:, :, 2], nan=0.0, posinf=0.0, neginf=0.0)
+        fa_chunk = np.nan_to_num(fractional_anisotropy(evals), nan=0.0, posinf=0.0, neginf=0.0)
+        norms = np.linalg.norm(principal, axis=1)
+        closest = np.full(end - start, -1, dtype=np.int32)
+        valid_dir = (fa_chunk >= float(min_fa)) & (norms > 0)
+        if np.any(valid_dir):
+            normed = principal[valid_dir] / norms[valid_dir, None]
+            closest[valid_dir] = np.argmax(np.abs(normed @ sphere_verts.T), axis=1).astype(np.int32)
+        return fa_chunk, closest
+
+    if resolved_device == "cuda" and n_vox > 0:
+        import torch
+
+        dev = torch.device("cuda")
+        w_t = torch.as_tensor(w_mat, device=dev, dtype=torch.float64)
+        w_pinv_t_gpu = torch.as_tensor(w_pinv_t, device=dev, dtype=torch.float64)
+        w_outer_t = torch.as_tensor(w_outer, device=dev, dtype=torch.float64)
+        lo_idx_t = torch.as_tensor(lo_tri_idx, device=dev, dtype=torch.long)
+        sphere_t = torch.as_tensor(sphere_verts.T, device=dev, dtype=torch.float64)
+        per_vox_bytes = max(2048, int(w_mat.shape[0]) * 8 * 8)
+        init_chunk = adaptive_cuda_scaled_batch(
+            per_item_bytes=per_vox_bytes,
+            default_batch=16384,
+            min_batch=2048,
+            max_batch=16384,
+        )
+
+        def _cuda_chunk(start: int, end: int):
+            sig_np = np.ascontiguousarray(data_in_mask[start:end], dtype=np.float64)
+            sig_t = torch.clamp(torch.from_numpy(sig_np).to(dev), min=float(MIN_POSITIVE_SIGNAL))
+            log_s = torch.log(sig_t)
+            beta_ols = log_s @ w_pinv_t_gpu
+            if is_wls:
+                w = torch.exp(torch.clamp(beta_ols @ w_t.T, min=-50.0, max=50.0))
+                w2 = w * w
+                lhs = (w2 @ w_outer_t).view(-1, 7, 7)
+                rhs = ((w2 * log_s) @ w_t).unsqueeze(-1)
+                beta, info = torch.linalg.solve_ex(lhs, rhs)
+                beta = beta.squeeze(-1)
+                bad = (info != 0) | (~torch.all(torch.isfinite(beta), dim=1))
+                if bool(torch.any(bad)):
+                    bad_idx = torch.nonzero(bad, as_tuple=False).squeeze(1)
+                    wb = w.index_select(0, bad_idx)
+                    lsb = log_s.index_select(0, bad_idx)
+                    pinv_b = torch.linalg.pinv(w_t.unsqueeze(0) * wb.unsqueeze(-1))
+                    beta_bad = torch.matmul(pinv_b, (wb * lsb).unsqueeze(-1)).squeeze(-1)
+                    beta = beta.clone()
+                    beta.index_copy_(0, bad_idx, beta_bad)
+            else:
+                beta = beta_ols
+            tensors = beta[:, lo_idx_t]
+            n_t = tensors.shape[0]
+            if n_t <= 8192:
+                evals_asc, evecs_asc = torch.linalg.eigh(tensors)
+            else:
+                ev_list = []
+                ec_list = []
+                for sub_s in range(0, n_t, 8192):
+                    ev_s, ec_s = torch.linalg.eigh(tensors[sub_s : sub_s + 8192])
+                    ev_list.append(ev_s)
+                    ec_list.append(ec_s)
+                evals_asc = torch.cat(ev_list, dim=0)
+                evecs_asc = torch.cat(ec_list, dim=0)
+            evals = torch.clamp(torch.flip(evals_asc, dims=[1]), min=min_diff)
+            ev1, ev2, ev3 = evals[:, 0], evals[:, 1], evals[:, 2]
+            denom = ev1 * ev1 + ev2 * ev2 + ev3 * ev3
+            num = 0.5 * ((ev1 - ev2) ** 2 + (ev2 - ev3) ** 2 + (ev3 - ev1) ** 2)
+            fa_t = torch.where(denom > 0, torch.sqrt(num / torch.where(denom > 0, denom, torch.ones_like(denom))), torch.zeros_like(denom))
+            fa_t = torch.nan_to_num(fa_t, nan=0.0, posinf=0.0, neginf=0.0)
+            principal = torch.nan_to_num(evecs_asc[:, :, 2], nan=0.0, posinf=0.0, neginf=0.0)
+            norms = torch.linalg.norm(principal, dim=1)
+            closest_t = torch.full((end - start,), -1, device=dev, dtype=torch.int32)
+            valid_dir = (fa_t >= float(min_fa)) & (norms > 0)
+            if bool(torch.any(valid_dir)):
+                v_idx = torch.nonzero(valid_dir, as_tuple=False).squeeze(1)
+                normed = principal.index_select(0, v_idx) / norms.index_select(0, v_idx).unsqueeze(1)
+                proj = torch.abs(normed @ sphere_t)
+                closest_t.index_copy_(0, v_idx, torch.argmax(proj, dim=1).to(torch.int32))
+            return fa_t.detach().cpu().numpy(), closest_t.detach().cpu().numpy()
+
+        try:
+            results = run_cuda_chunked_with_oom_fallback(
+                n_vox,
+                initial_chunk_size=init_chunk,
+                min_cuda_chunk_size=1024,
+                cuda_fn=_cuda_chunk,
+                cpu_fallback_fn=None if explicit_cuda else _cpu_chunk,
+            )
+        finally:
+            del w_t, w_pinv_t_gpu, w_outer_t, lo_idx_t, sphere_t
+            empty_cuda_cache_safely()
+    else:
+        results = [_cpu_chunk(s, min(n_vox, s + 32768)) for s in range(0, n_vox, 32768)] if n_vox > 0 else []
+
+    fa_vol = np.zeros(mask.shape, dtype=np.float64)
+    peak_indices = np.full(mask.shape + (1,), -1, dtype=np.int32)
+    peak_values = np.zeros(mask.shape + (1,), dtype=np.float32)
+    if results:
+        fa_flat = np.concatenate([r[0] for r in results], axis=0)
+        closest_flat = np.concatenate([r[1] for r in results], axis=0)
+        fa_vol[mask] = fa_flat
+        peak_indices[mask, 0] = closest_flat
+        peak_values[mask, 0] = (closest_flat >= 0).astype(np.float32)
+
+    tracking_mask = np.logical_and(mask, fa_vol >= float(min_fa))
+    peaks = PeaksAndMetrics()
+    peaks.sphere = sphere
+    peaks.peak_indices = peak_indices
+    peaks.peak_values = peak_values
+    peaks.ang_thr = float(max_angle_deg)
+    peaks._initialize()
+    return fa_vol, tracking_mask, peaks, resolved_device
+
+
 def _run_dipy_dti_tracking(
     config: DTITrackingConfig,
     *,
@@ -264,25 +494,67 @@ def _run_dipy_dti_tracking(
     )
     _emit("[Tractography] Loading DWI, gradients, and mask for DIPY DTI tracking", log)
     dwi_img = nib.load(raw.dwi_path.as_posix())
-    data = dwi_img.get_fdata(dtype=np.float32)
-    mask = nib.load(raw.mask_path.as_posix()).get_fdata() > 0
+    dwi_shape = tuple(int(dim) for dim in dwi_img.shape)
+    mask = np.asarray(nib.load(raw.mask_path.as_posix()).get_fdata()) > 0
     bvals = np.loadtxt(raw.bval_path.as_posix(), ndmin=1)
     bvecs = np.loadtxt(raw.bvec_path.as_posix())
     if bvecs.ndim == 2 and bvecs.shape[0] == 3:
         bvecs = bvecs.T
-    if data.ndim != 4:
-        raise ValueError(f"DTI tracking expects 4D DWI data, got shape {data.shape}")
-    if data.shape[:3] != mask.shape:
-        raise ValueError(f"Mask shape {mask.shape} does not match DWI shape {data.shape[:3]}")
-    if data.shape[3] != len(bvals):
-        raise ValueError(f"DWI volume count {data.shape[3]} does not match bvals count {len(bvals)}")
+    if len(dwi_shape) != 4:
+        raise ValueError(f"DTI tracking expects 4D DWI data, got shape {dwi_shape}")
+    if dwi_shape[:3] != mask.shape:
+        raise ValueError(f"Mask shape {mask.shape} does not match DWI shape {dwi_shape[:3]}")
+    if dwi_shape[3] != len(bvals):
+        raise ValueError(f"DWI volume count {dwi_shape[3]} does not match bvals count {len(bvals)}")
+
+    # Extract masked voxels in exact C-order (`dwi_full[mask]`): use fast single-pass
+    # in-memory decode when ample host RAM is available, or bounded-RAM mmap z-slabs
+    # on modest 8-16 GiB machines / heavily loaded cohort nodes.
+    from shared.diffusion_io import diffusion_image
+    from shared.hardware_adapt import GIB, adaptive_cpu_slab_z, query_host_available_ram_bytes
+
+    n_mask_vox = int(mask.sum())
+    data_in_mask = np.empty((n_mask_vox, dwi_shape[3]), dtype=np.float32)
+    if n_mask_vox > 0:
+        full_f32_bytes = int(np.prod(dwi_shape)) * 4
+        avail_ram = query_host_available_ram_bytes()
+        can_single_pass_ram = (
+            avail_ram is not None
+            and avail_ram >= max(int(4 * GIB), full_f32_bytes * 3)
+        )
+        if can_single_pass_ram:
+            full_arr = np.asarray(dwi_img.dataobj, dtype=np.float32)
+            data_in_mask[:] = full_arr[mask]
+            del full_arr
+        else:
+            slab_z = adaptive_cpu_slab_z(dwi_shape, 16, min_step_z=4)
+            mask_rank = np.full(mask.shape, -1, dtype=np.int32)
+            mask_rank[mask] = np.arange(n_mask_vox, dtype=np.int32)
+            with diffusion_image(raw.dwi_path, streamlines_path.parent) as mm_img:
+                mm_dataobj = mm_img.dataobj
+                for z0 in range(0, dwi_shape[2], slab_z):
+                    z1 = min(dwi_shape[2], z0 + slab_z)
+                    mask_slab = mask[:, :, z0:z1]
+                    if not np.any(mask_slab):
+                        continue
+                    dest_idx = mask_rank[:, :, z0:z1][mask_slab]
+                    slab_arr = np.asarray(mm_dataobj[:, :, z0:z1, :], dtype=np.float32)
+                    data_in_mask[dest_idx] = slab_arr[mask_slab]
+            del mask_rank
 
     gtab = gradient_table(bvals, bvecs=bvecs)
-    _emit("[Tractography] Fitting DIPY TensorModel", log)
-    tenmodel = TensorModel(gtab, fit_method=config.fit_method.upper())
-    tenfit = tenmodel.fit(data, mask=mask)
-    fa = np.nan_to_num(fractional_anisotropy(tenfit.evals), nan=0.0, posinf=0.0, neginf=0.0)
-    tracking_mask = np.logical_and(mask, fa >= float(config.min_fa))
+    _emit(f"[Tractography] Fitting DTI tensor and sphere peaks (method={config.fit_method.upper()}, device={config.device})", log)
+    fa, tracking_mask, peaks, resolved_device = _fit_dti_fa_and_peaks(
+        data_in_mask,
+        mask,
+        gtab,
+        default_sphere,
+        fit_method=config.fit_method.upper(),
+        min_fa=float(config.min_fa),
+        max_angle_deg=float(config.max_angle_deg),
+        device=config.device,
+    )
+    del data_in_mask
     seed_mask = tracking_mask
     if config.max_seed_voxels is not None:
         voxel_indices = np.argwhere(seed_mask)
@@ -297,13 +569,7 @@ def _run_dipy_dti_tracking(
     if seed_voxel_count == 0:
         raise RuntimeError("No voxels passed the DTI tracking FA/mask threshold.")
 
-    _emit("[Tractography] Building tensor peaks and seeds", log)
-    peaks = _tensor_direction_getter(
-        tenfit.evecs,
-        tracking_mask,
-        default_sphere,
-        max_angle_deg=float(config.max_angle_deg),
-    )
+    _emit(f"[Tractography] Building seeds (tensor device={resolved_device})", log)
     seeds = utils.seeds_from_mask(
         seed_mask,
         dwi_img.affine,

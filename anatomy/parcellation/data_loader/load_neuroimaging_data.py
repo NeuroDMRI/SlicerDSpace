@@ -750,7 +750,7 @@ class OrigDataThickSlices_Fused_Input(Dataset):
             self.slice_thickness = slice_thickness
 
             n_thick = 2 * self.slice_thickness + 1
-            self.images = None
+            orig_thick_list = []
             for idx, orig_ in enumerate(orig):
                 # Transform Data as needed
                 if plane == 'Sagittal':

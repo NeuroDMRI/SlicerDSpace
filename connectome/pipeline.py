@@ -277,17 +277,7 @@ def _resolve_connectome_device(requested: str = "auto") -> str:
     mode = str(env_val if env_val else requested).strip().lower()
     if mode not in {"auto", "cpu", "cuda"}:
         raise ValueError(f"Unsupported connectome device {mode!r}; expected 'auto', 'cpu', or 'cuda'.")
-    if mode == "cpu":
-        return "cpu"
-    try:
-        import torch
-
-        cuda_ok = bool(torch.cuda.is_available())
-    except Exception:
-        cuda_ok = False
-    if mode == "cuda" and not cuda_ok:
-        raise RuntimeError("Connectome CUDA device requested, but PyTorch CUDA is unavailable.")
-    return "cuda" if cuda_ok else "cpu"
+    return "cpu"
 
 
 def _build_endpoint_label_assigner(
@@ -368,8 +358,7 @@ def _build_endpoint_label_assigner(
         data[allowed_voxels[:, 0], allowed_voxels[:, 1], allowed_voxels[:, 2]],
         dtype=np.int64,
     )
-    resolved_device = _resolve_connectome_device(device)
-    explicit_cuda = str(os.environ.get("SLICERDSPACE_CONNECTOME_DEVICE") or device).strip().lower() == "cuda"
+    _resolve_connectome_device(device)
 
     def assign_kdtree(point: object) -> int:
         distance, index = tree.query(
@@ -396,91 +385,6 @@ def _build_endpoint_label_assigner(
         if np.any(valid):
             out[valid] = allowed_voxel_labels[indices[valid]]
         return out
-
-    if resolved_device == "cuda":
-        # Exact FP64 world-space Euclidean grid-neighborhood search on PyTorch CUDA
-        inv_np = np.asarray(inverse_affine, dtype=np.float64)
-        aff_np = np.asarray(affine, dtype=np.float64)
-        pads = [
-            int(math.ceil(radius_mm * float(np.linalg.norm(inv_np[axis, :3])) + 0.5)) + 1
-            for axis in range(3)
-        ]
-        # Only use GPU stencil when the search ball is compact (typical <= ~2000 offsets)
-        grid_axes = [np.arange(-pads[a], pads[a] + 1, dtype=np.int64) for a in range(3)]
-        gx, gy, gz = np.meshgrid(grid_axes[0], grid_axes[1], grid_axes[2], indexing="ij")
-        offsets_all = np.stack([gx.ravel(), gy.ravel(), gz.ravel()], axis=1)
-        half_diag_mm = 0.5 * float(sum(np.linalg.norm(aff_np[:3, j]) for j in range(3)))
-        delta_mm = np.linalg.norm(offsets_all @ aff_np[:3, :3].T, axis=1)
-        offsets_ball = offsets_all[delta_mm <= (radius_mm + half_diag_mm + 1e-6)]
-
-        if 0 < len(offsets_ball) <= 4096:
-            def assign_cuda_batch(points, direct_labels=None):
-                coords = np.ascontiguousarray(np.asarray(points, dtype=np.float64)[:, :3])
-                if coords.size == 0:
-                    return np.empty(0, dtype=np.int64)
-                import torch
-                from shared.hardware_adapt import (
-                    adaptive_cuda_scaled_batch,
-                    empty_cuda_cache_safely,
-                    run_cuda_chunked_with_oom_fallback,
-                )
-
-                dev = torch.device("cuda")
-                s0, s1, s2 = int(data.shape[0]), int(data.shape[1]), int(data.shape[2])
-                allowed_vol_np = np.where(allowed_mask, data, 0).astype(np.int32, copy=False)
-                allowed_vol_t = torch.as_tensor(allowed_vol_np, device=dev, dtype=torch.int32)
-                offsets_t = torch.as_tensor(offsets_ball, device=dev, dtype=torch.long)
-                inv_a_t = torch.as_tensor(inv_np[:3, :3].T, device=dev, dtype=torch.float64)
-                inv_b_t = torch.as_tensor(inv_np[:3, 3], device=dev, dtype=torch.float64)
-                aff_a_t = torch.as_tensor(aff_np[:3, :3].T, device=dev, dtype=torch.float64)
-                aff_b_t = torch.as_tensor(aff_np[:3, 3], device=dev, dtype=torch.float64)
-                r2 = float(radius_mm) * float(radius_mm)
-                n_off = int(offsets_ball.shape[0])
-                per_pt_bytes = max(4096, n_off * 8 * 8)
-                init_chunk = adaptive_cuda_scaled_batch(
-                    per_item_bytes=per_pt_bytes,
-                    default_batch=16384,
-                    min_batch=512,
-                    max_batch=65536,
-                )
-
-                def _gpu_chunk(start: int, end: int):
-                    pts_t = torch.from_numpy(coords[start:end]).to(device=dev, dtype=torch.float64)
-                    v0 = torch.round(pts_t @ inv_a_t + inv_b_t).to(torch.long)
-                    cand_v = v0.unsqueeze(1) + offsets_t.unsqueeze(0)
-                    cx, cy, cz = cand_v[..., 0], cand_v[..., 1], cand_v[..., 2]
-                    in_b = (cx >= 0) & (cx < s0) & (cy >= 0) & (cy < s1) & (cz >= 0) & (cz < s2)
-                    cx_c = torch.clamp(cx, 0, max(0, s0 - 1))
-                    cy_c = torch.clamp(cy, 0, max(0, s1 - 1))
-                    cz_c = torch.clamp(cz, 0, max(0, s2 - 1))
-                    flat_idx = (cx_c * s1 + cy_c) * s2 + cz_c
-                    cand_lbl = allowed_vol_t.view(-1).index_select(0, flat_idx.reshape(-1)).view_as(cx)
-                    valid = in_b & (cand_lbl != 0)
-                    cand_w = cand_v.to(torch.float64) @ aff_a_t + aff_b_t
-                    diff = cand_w - pts_t.unsqueeze(1)
-                    dist2 = (diff * diff).sum(dim=-1)
-                    inf_t = torch.full_like(dist2, float("inf"))
-                    masked_d2 = torch.where(valid & (dist2 <= r2), dist2, inf_t)
-                    min_d2, best_k = torch.min(masked_d2, dim=1)
-                    chosen = cand_lbl.gather(1, best_k.unsqueeze(1)).squeeze(1).to(torch.int64)
-                    res = torch.where(torch.isfinite(min_d2), chosen, torch.zeros_like(chosen))
-                    return res.detach().cpu().numpy()
-
-                try:
-                    parts = run_cuda_chunked_with_oom_fallback(
-                        len(coords),
-                        initial_chunk_size=init_chunk,
-                        min_cuda_chunk_size=256,
-                        cuda_fn=_gpu_chunk,
-                        cpu_fallback_fn=None if explicit_cuda else (lambda s, e: _assign_kdtree_cpu_batch(coords[s:e])),
-                    )
-                    return np.concatenate(parts, axis=0) if parts else np.empty(0, dtype=np.int64)
-                finally:
-                    del allowed_vol_t, offsets_t, inv_a_t, inv_b_t, aff_a_t, aff_b_t
-                    empty_cuda_cache_safely()
-
-            assign_kdtree.assign_batch = assign_cuda_batch  # type: ignore[attr-defined]
-            return assign_kdtree, "torch.cuda.radial_search"
 
     def assign_kdtree_batch(points, direct_labels=None):
         coords = np.asarray(points, dtype=float)[:, :3]

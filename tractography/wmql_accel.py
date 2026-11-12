@@ -69,16 +69,9 @@ def _resolve_device(requested: str | None) -> str:
     req = (requested or "auto").strip().lower()
     if req == "auto":
         req = os.environ.get("SLICERDSPACE_WMQL_DEVICE", "auto").strip().lower()
-    if req == "cpu":
-        return "cpu"
-    try:
-        import torch
-        cuda_ok = bool(torch.cuda.is_available())
-    except Exception:
-        cuda_ok = False
-    if req == "cuda" and not cuda_ok:
-        raise RuntimeError("WMQL CUDA requested, but torch.cuda.is_available() is False.")
-    return "cuda" if cuda_ok else "cpu"
+    if req not in {"auto", "cpu", "cuda"} and not req.startswith("cuda:"):
+        raise ValueError(f"Unsupported WMQL device {req!r}.")
+    return "cpu"
 
 
 def _worker_budget() -> int:
@@ -449,43 +442,25 @@ class FastTractographySpatialIndexing:
         lut = np.zeros(max_lbl + lut_offset + 1, dtype=np.int32)
         lut[uniq_labels + lut_offset] = np.arange(uniq_labels.size, dtype=np.int32)
 
-        if device == "cuda":
-            (
-                pair_tracts,
-                pair_labels,
-                start_labels,
-                end_labels,
-                min_xyz,
-                max_xyz,
-                outside_any,
-            ) = self._index_cuda(
-                points=points,
-                offsets=offsets,
-                lengths=lengths,
-                img_int=img_int,
-                uniq_labels=uniq_labels,
-                lut=lut,
-                lut_offset=lut_offset,
-            )
-        else:
-            (
-                pair_tracts,
-                pair_labels,
-                start_labels,
-                end_labels,
-                min_xyz,
-                max_xyz,
-                outside_any,
-            ) = self._index_cpu(
-                points=points,
-                offsets=offsets,
-                lengths=lengths,
-                img_int=img_int,
-                uniq_labels=uniq_labels,
-                lut=lut,
-                lut_offset=lut_offset,
-                workers=workers,
-            )
+        del device
+        (
+            pair_tracts,
+            pair_labels,
+            start_labels,
+            end_labels,
+            min_xyz,
+            max_xyz,
+            outside_any,
+        ) = self._index_cpu(
+            points=points,
+            offsets=offsets,
+            lengths=lengths,
+            img_int=img_int,
+            uniq_labels=uniq_labels,
+            lut=lut,
+            lut_offset=lut_offset,
+            workers=workers,
+        )
 
         if outside_any:
             warnings.warn("Warning tract points fall outside the image")
@@ -627,106 +602,6 @@ class FastTractographySpatialIndexing:
             min_xyz,
             max_xyz,
             any(outside_flags),
-        )
-
-    def _index_cuda(
-        self,
-        *,
-        points: np.ndarray,
-        offsets: np.ndarray,
-        lengths: np.ndarray,
-        img_int: np.ndarray,
-        uniq_labels: np.ndarray,
-        lut: np.ndarray,
-        lut_offset: int,
-    ):
-        import torch
-
-        dev = torch.device("cuda:0")
-        n_tracts = int(lengths.shape[0])
-        U = int(uniq_labels.size)
-        X, Y, Z = img_int.shape
-        rel_thr = self.crossing_threshold / 100.0
-
-        with torch.no_grad():
-            img_gpu = torch.as_tensor(img_int, dtype=torch.int32, device=dev)
-            lut_gpu = torch.as_tensor(lut, dtype=torch.int64, device=dev)
-            uniq_gpu = torch.as_tensor(uniq_labels, dtype=torch.int32, device=dev)
-            AT_gpu = torch.as_tensor(
-                np.ascontiguousarray(self.affine_ras_2_ijk[:3, :3].T, dtype=np.float64),
-                dtype=torch.float64,
-                device=dev,
-            )
-            b_gpu = torch.as_tensor(
-                np.ascontiguousarray(self.affine_ras_2_ijk[:3, 3], dtype=np.float64),
-                dtype=torch.float64,
-                device=dev,
-            )
-
-            chunk_tracts = 65536
-            start_labels = np.empty(n_tracts, dtype=np.int32)
-            end_labels = np.empty(n_tracts, dtype=np.int32)
-            min_xyz = np.empty((n_tracts, 3), dtype=np.float64)
-            max_xyz = np.empty((n_tracts, 3), dtype=np.float64)
-            pair_t_parts: list[np.ndarray] = []
-            pair_l_parts: list[np.ndarray] = []
-            outside_any = False
-
-            for t0 in range(0, n_tracts, chunk_tracts):
-                t1 = min(t0 + chunk_tracts, n_tracts)
-                B = t1 - t0
-                p0 = int(offsets[t0])
-                p1 = int(offsets[t1])
-
-                pts_cpu = np.ascontiguousarray(points[p0:p1])
-                local_offs_np = offsets[t0:t1] - p0
-                min_xyz[t0:t1] = np.minimum.reduceat(pts_cpu, local_offs_np, axis=0)
-                max_xyz[t0:t1] = np.maximum.reduceat(pts_cpu, local_offs_np, axis=0)
-
-                pts_g = torch.as_tensor(pts_cpu, dtype=torch.float64, device=dev)
-                lens_g = torch.as_tensor(lengths[t0:t1], dtype=torch.int64, device=dev)
-                loffs_g = torch.as_tensor(local_offs_np, dtype=torch.int64, device=dev)
-
-                ijk = torch.round(pts_g @ AT_gpu + b_gpu).to(torch.int64)
-                if not outside_any:
-                    out_check = (
-                        (ijk < 0).any()
-                        | (ijk[:, 0] >= X).any()
-                        | (ijk[:, 1] >= Y).any()
-                        | (ijk[:, 2] >= Z).any()
-                    )
-                    if bool(out_check.item()):
-                        outside_any = True
-                ijk[:, 0].clamp_(0, X - 1)
-                ijk[:, 1].clamp_(0, Y - 1)
-                ijk[:, 2].clamp_(0, Z - 1)
-
-                pt_lbl = img_gpu[ijk[:, 0], ijk[:, 1], ijk[:, 2]]
-                start_labels[t0:t1] = pt_lbl.index_select(0, loffs_g).cpu().numpy()
-                end_labels[t0:t1] = pt_lbl.index_select(0, loffs_g + lens_g - 1).cpu().numpy()
-
-                dense_lbl = lut_gpu[(pt_lbl + lut_offset).to(torch.int64)]
-                tract_local = torch.repeat_interleave(
-                    torch.arange(B, dtype=torch.int64, device=dev),
-                    lens_g,
-                )
-                flat_bin = tract_local * U + dense_lbl
-                counts = torch.bincount(flat_bin, minlength=B * U).reshape(B, U)
-                keep = (counts.to(torch.float64) / lens_g[:, None].to(torch.float64)) >= rel_thr
-                rows, cols = torch.nonzero(keep, as_tuple=True)
-                pair_t_parts.append((rows + t0).cpu().numpy())
-                pair_l_parts.append(uniq_gpu.index_select(0, cols).cpu().numpy())
-
-        pair_tracts = np.concatenate(pair_t_parts) if pair_t_parts else np.zeros(0, dtype=np.int64)
-        pair_labels = np.concatenate(pair_l_parts) if pair_l_parts else np.zeros(0, dtype=np.int32)
-        return (
-            pair_tracts,
-            pair_labels,
-            start_labels,
-            end_labels,
-            min_xyz,
-            max_xyz,
-            outside_any,
         )
 
 

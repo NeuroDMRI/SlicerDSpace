@@ -1390,28 +1390,6 @@
       }
     },
     {
-      "id": "saf-full-cuda",
-      "title": "SAF surface-guided filtering (CUDA)",
-      "category": "port",
-      "scope": "Complete module (100k tracks; CUDA)",
-      "evidence_date": "2026-11-11",
-      "reference_seconds": 209.474,
-      "optimized_seconds": 47.951227428391576,
-      "speed_ratio": 4.36848045887501,
-      "seconds_saved": 161.5227725716084,
-      "reduction_percent": 77.10874503356428,
-      "method": "Evaluate batched PyTorch CUDA M\u00f6ller-Trumbore ray-triangle intersections across candidate cortical mesh triangles in VRAM-bounded streamline tiles.",
-      "baseline": "Initial unoptimized surface-guided short association fibre geometric filtering implementation on 100,000 whole-brain streamlines.",
-      "unchanged": "Retains the exact same 13,043 SAF streamlines as CPU with 0.0 mm maximum vertex coordinate difference.",
-      "limitation": "Subject 100307 complete SAF stage including surface loading and TCK export on NVIDIA H100; I/O and mesh setup dominate at 100k tracks while GPU scales to million-track inputs.",
-      "sample": "100,000 CSD/ACT streamlines + DDSurfer bilateral white/pial cortical meshes; CUDA execution.",
-      "upstream_reference": "Custom batched PyTorch CUDA M\u00f6ller-Trumbore ray-triangle kernel compared against the initial SAF surface-filtering baseline.",
-      "measurement_source": {
-        "file": "full_pipeline_accelerations_20261111.json",
-        "sha256": "627e1c79e8269757d8bf91b81ad1dada74c0d141153d32c31c746b26d4e5066a"
-      }
-    },
-    {
       "id": "wma-full-cpu",
       "title": "WMA complete ORG-atlas pipeline (CPU)",
       "category": "implementation",
@@ -1478,28 +1456,6 @@
       }
     },
     {
-      "id": "connectome-count-cuda",
-      "title": "Connectome streamline count (CUDA)",
-      "category": "implementation",
-      "scope": "Complete 84-node connectome (CUDA)",
-      "evidence_date": "2026-11-11",
-      "reference_seconds": 136.79600644297898,
-      "optimized_seconds": 7.6401239931583405,
-      "speed_ratio": 17.904945857616777,
-      "seconds_saved": 129.15588244982064,
-      "reduction_percent": 94.41495099760606,
-      "method": "Accelerate 4 mm boundary nearest-label assignment using tiled GPU torch.cdist distance kernels with automatic VRAM tile sizing.",
-      "baseline": "Initial unbatched Python endpoint lookup and per-streamline matrix accumulation over 1,000,000 streamlines.",
-      "unchanged": "84x84 structural connectome matrix matches both CPU and saved reference identically (max abs diff 0.0).",
-      "limitation": "Subject 100408 complete connectome stage including 1M-streamline TCK loading and export on NVIDIA H100.",
-      "sample": "1,000,000 CSD/ACT streamlines; 84 DDParcel grey-matter nodes; 4.0 mm radial search; CUDA execution.",
-      "upstream_reference": "Custom tiled PyTorch CUDA torch.cdist radial endpoint assignment compared against initial 1M-streamline baseline.",
-      "measurement_source": {
-        "file": "full_pipeline_accelerations_20261111.json",
-        "sha256": "627e1c79e8269757d8bf91b81ad1dada74c0d141153d32c31c746b26d4e5066a"
-      }
-    },
-    {
       "id": "connectome-sift2-cpu",
       "title": "Connectome SIFT2-weighted (CPU)",
       "category": "implementation",
@@ -1516,28 +1472,6 @@
       "limitation": "Subject 100408 complete SIFT2 connectome stage including 1M-streamline TCK + weights loading and export on CPU.",
       "sample": "1,000,000 CSD/ACT streamlines + SIFT2 weights; 84 DDParcel nodes; 4.0 mm radial search; CPU execution.",
       "upstream_reference": "Compared against initial unbatched 1M-streamline SIFT2-weighted connectome assembly on HCP 100408.",
-      "measurement_source": {
-        "file": "full_pipeline_accelerations_20261111.json",
-        "sha256": "627e1c79e8269757d8bf91b81ad1dada74c0d141153d32c31c746b26d4e5066a"
-      }
-    },
-    {
-      "id": "connectome-sift2-cuda",
-      "title": "Connectome SIFT2-weighted (CUDA)",
-      "category": "implementation",
-      "scope": "Complete 84-node SIFT2 connectome (CUDA)",
-      "evidence_date": "2026-11-11",
-      "reference_seconds": 136.94327402859926,
-      "optimized_seconds": 6.1971062906086445,
-      "speed_ratio": 22.097938554987973,
-      "seconds_saved": 130.74616773799062,
-      "reduction_percent": 95.47469101015182,
-      "method": "Combine tiled GPU torch.cdist 4 mm radial endpoint assignment with vectorized SIFT2 weight accumulation.",
-      "baseline": "Initial unbatched Python endpoint lookup and per-streamline SIFT2 weight accumulation over 1,000,000 streamlines.",
-      "unchanged": "84x84 SIFT2-weighted connectome matrix matches CPU and saved reference identically (max abs diff 0.0).",
-      "limitation": "Subject 100408 complete SIFT2 connectome stage including 1M-streamline TCK + weights loading and export on NVIDIA H100.",
-      "sample": "1,000,000 CSD/ACT streamlines + SIFT2 weights; 84 DDParcel nodes; 4.0 mm radial search; CUDA execution.",
-      "upstream_reference": "Custom tiled PyTorch CUDA torch.cdist radial assignment + vectorized SIFT2 accumulation vs initial 1M-streamline baseline.",
       "measurement_source": {
         "file": "full_pipeline_accelerations_20261111.json",
         "sha256": "627e1c79e8269757d8bf91b81ad1dada74c0d141153d32c31c746b26d4e5066a"
@@ -1604,28 +1538,6 @@
       "limitation": "Subject 100307 complete brain-mask stage on CPU (4 threads, fixed ANTs seed); ANTs registration accounts for ~65 s of both paths.",
       "sample": "Full HCP 100307 (288 volumes -> mean b0 -> ANTs template registration -> 3-view CompNet -> native mask + QC); CPU execution.",
       "upstream_reference": "Measured on the ChengjinLii/PNLBrainMask-Torch CompNet port alongside ANTs registration; official pretrained CompNet weights unchanged.",
-      "measurement_source": {
-        "file": "remaining_pipeline_accelerations_20261112.json",
-        "sha256": "ce65c16f8a302977a96dd0449064a2e3aea11f94df565f43f624e7cc6307273a"
-      }
-    },
-    {
-      "id": "pnl-cnn-cuda",
-      "title": "PNL CompNet brain masking (CUDA)",
-      "category": "port",
-      "scope": "Complete module incl. ANTs & QC (CUDA)",
-      "evidence_date": "2026-11-12",
-      "reference_seconds": 70.56213215179741,
-      "optimized_seconds": 67.24227379076183,
-      "speed_ratio": 1.0493715957816359,
-      "seconds_saved": 3.3198583610355854,
-      "reduction_percent": 4.70487251418893,
-      "method": "Overlap background 3-view CompNet CUDA preload/warmup with ANTs CPU registration, deduplicate empty border slices, run 32-slice IEEE FP32 batches and stream uncompressed scratch NIfTIs.",
-      "baseline": "Initial sequential b0 extraction, serial weight loading after ANTs registration and 8-slice CUDA CompNet inference.",
-      "unchanged": "Exported native-space binary brain mask matches baseline bit-for-bit (0 differing voxels; Dice = 1.000000).",
-      "limitation": "Subject 100307 complete brain-mask stage on NVIDIA H100 + 4 CPU threads; CPU ANTs registration (~65 s) dominates total wall time once CNN inference drops to 2.02 s.",
-      "sample": "Full HCP 100307 complete brain-mask module; CUDA inference + CPU ANTs registration.",
-      "upstream_reference": "Measured on the ChengjinLii/PNLBrainMask-Torch CompNet port on CUDA alongside ANTs registration; official CompNet weights unchanged.",
       "measurement_source": {
         "file": "remaining_pipeline_accelerations_20261112.json",
         "sha256": "ce65c16f8a302977a96dd0449064a2e3aea11f94df565f43f624e7cc6307273a"
@@ -1912,28 +1824,6 @@
       "limitation": "Subject 100307 complete WMQL stage on 8 CPU threads including VTK load, 48 query evaluations, 41 bundle exports and QC.",
       "sample": "Full HCP 100307 UKF tractogram + DDParcel wmparc atlas; 48 official WMQL queries; CPU execution.",
       "upstream_reference": "Custom CSR spatial indexing and parallel binary VTK export feeding upstream tract_querier query evaluation; 48 official queries unchanged.",
-      "measurement_source": {
-        "file": "remaining_pipeline_accelerations_20261112.json",
-        "sha256": "ce65c16f8a302977a96dd0449064a2e3aea11f94df565f43f624e7cc6307273a"
-      }
-    },
-    {
-      "id": "wmql-full-cuda",
-      "title": "WMQL 48-bundle rule-based queries (CUDA)",
-      "category": "implementation",
-      "scope": "Complete 48-query segmentation (CUDA)",
-      "evidence_date": "2026-11-12",
-      "reference_seconds": 22.869534820318222,
-      "optimized_seconds": 8.15598494745791,
-      "speed_ratio": 2.8040187626199935,
-      "seconds_saved": 14.713549872860312,
-      "reduction_percent": 64.33690054678418,
-      "method": "Evaluate RAS-to-IJK voxel label lookup, endpoint indexing and per-tract crossing histograms on CUDA tensors in VRAM-bounded chunks alongside lazy CSR query evaluation and parallel binary VTK export.",
-      "baseline": "Upstream tract_querier CPU per-streamline Python spatial indexing and sequential bundle export (tract_querier has no GPU backend).",
-      "unchanged": "All 48 queries and 41 non-empty bundles match both upstream baseline and optimized CPU streamline counts identically (0 mismatches).",
-      "limitation": "Subject 100307 median of three complete WMQL runs on NVIDIA H100; at ~280k tracks VTK disk I/O (~5 s) exceeds GPU kernel time, whereas GPU scales to multi-million-track tractograms.",
-      "sample": "Full HCP 100307 UKF tractogram + DDParcel wmparc atlas; 48 official WMQL queries; CUDA execution.",
-      "upstream_reference": "Custom CUDA crossing-histogram spatial indexing and parallel binary VTK export feeding upstream tract_querier query evaluation.",
       "measurement_source": {
         "file": "remaining_pipeline_accelerations_20261112.json",
         "sha256": "ce65c16f8a302977a96dd0449064a2e3aea11f94df565f43f624e7cc6307273a"

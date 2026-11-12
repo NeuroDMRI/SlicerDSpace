@@ -246,17 +246,9 @@ def _validate_config(config: SAFConfig) -> None:
 
 def _resolve_saf_device(device: str = "auto") -> str:
     dev = (device or "auto").strip().lower()
-    if dev == "cpu":
-        return "cpu"
-    try:
-        import torch
-
-        has_cuda = bool(torch.cuda.is_available())
-    except Exception:
-        has_cuda = False
-    if dev.startswith("cuda") and not has_cuda:
-        raise RuntimeError("SAF device='cuda' requested, but torch.cuda.is_available() is False")
-    return "cuda" if has_cuda else "cpu"
+    if dev not in {"auto", "cpu", "cuda"} and not dev.startswith("cuda:"):
+        raise ValueError("SAF device must be 'auto', 'cpu', or 'cuda'")
+    return "cpu"
 
 
 def _effective_tckgen_options(config: SAFConfig) -> str:

@@ -2141,7 +2141,6 @@ class SharedWidgetMixin:
             pass
 
     def cleanup(self) -> None:
-        self._setupResumeEnabled = False
         if getattr(self, "_cleanedUp", False):
             return
         self._cleanedUp = True
@@ -2191,7 +2190,6 @@ class SharedWidgetMixin:
         self.removeObservers()
 
     def enter(self) -> None:
-        self._setupResumeEnabled = True
         self._set_module_help_section_hidden(True)
         try:
             from shared.ui_styles import theme_signature
@@ -2201,14 +2199,12 @@ class SharedWidgetMixin:
         except Exception:
             pass
         self.initializeParameterNode()
-        from shared.setup_resume import refresh_setup_button, offer_pending_preparation
+        from shared.setup_resume import refresh_setup_button
         refresh_setup_button(self)
-        offer_pending_preparation(self)
         # Runs may have been produced from the command line or another session.
         self._refresh_run_history()
 
     def exit(self) -> None:
-        self._setupResumeEnabled = False
         close_input_format_help_popovers(self, destroy=False)
         self._set_module_help_section_hidden(False, _retry=False)
         if self._parameterNode:

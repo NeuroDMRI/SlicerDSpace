@@ -215,6 +215,17 @@
     });
   }
 
+  function initDemoBoxes() {
+    Array.prototype.forEach.call(document.querySelectorAll('details.demo-box'), function (box) {
+      box.addEventListener('toggle', function () {
+        if (!box.open) { return; }
+        Array.prototype.forEach.call(box.querySelectorAll('img[loading="lazy"]'), function (img) {
+          img.loading = 'eager';
+        });
+      });
+    });
+  }
+
   function init() {
     Array.prototype.forEach.call(document.querySelectorAll('.lang-btn'), function (languageLink) {
       languageLink.addEventListener('click', function (event) {
@@ -229,6 +240,7 @@
     initScrollSpy();
     initFilm();
     initCopy();
+    initDemoBoxes();
     initHashOpen();
   }
 

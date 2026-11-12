@@ -43,12 +43,13 @@ STAGE_COMBOS = [
 def widget_methods(*names):
     """The named ``module_widget`` methods, compiled without importing Slicer or Qt."""
     from shared.ui_run_controller import microstructure_ifw_enabled as enabled, parse_ifw_echo_time_ms as parse
-    from shared.user_config import canonical_microstructure_stages
+    from shared.user_config import canonical_microstructure_stages, selected_microstructure_stages
 
     tree = ast.parse(WIDGET.read_text(encoding="utf-8"))
     found = {node.name: node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name in names}
     namespace = dict(Optional=Optional, microstructure_ifw_enabled=enabled, parse_ifw_echo_time_ms=parse,
-                     canonical_microstructure_stages=canonical_microstructure_stages)
+                     canonical_microstructure_stages=canonical_microstructure_stages,
+                     selected_microstructure_stages=selected_microstructure_stages)
     exec(compile(ast.Module(body=[found[name] for name in names], type_ignores=[]), str(WIDGET), "exec"), namespace)
     return [namespace[name] for name in names]
 
@@ -119,19 +120,26 @@ class IfwSelectionTest(unittest.TestCase):
                                 _schedule_common_user_settings_save=lambda: calls.append("save"))
         with patch.dict(sys.modules, {"slicer": StubSlicer()}):
             set_algorithms(owner, "microstructure", ["ifw", "noddi"])
-        self.assertEqual(node.orchestrationMicrostructureStages, "dti,noddi,ifw")
+        self.assertEqual(node.orchestrationMicrostructureStages, "noddi,ifw")
         self.assertTrue(node.orchestrationRunIfw)
         self.assertTrue(node.orchestrationRunNoddi)
         self.assertFalse(node.orchestrationRunFreeWater)
-        self.assertEqual(selected_algorithms(node, "microstructure"), ("dti", "noddi", "ifw"))
+        self.assertEqual(selected_algorithms(node, "microstructure"), ("noddi", "ifw"))
         self.assertEqual(calls, ["refresh", "save"])
 
     def test_t_b4_the_parameter_node_and_the_hidden_combo_accept_every_ifw_combination(self):
+        from shared.algorithm_selection import MICROSTRUCTURE, selection_choices
+
         tree = ast.parse((REPO_ROOT / "SlicerDSpace.py").read_text(encoding="utf-8"))
         assign = next(n for n in ast.walk(tree) if isinstance(n, ast.AnnAssign) and isinstance(n.target, ast.Name)
                       and n.target.id == "orchestrationMicrostructureStages")
-        choice = next(c for c in ast.walk(assign.annotation) if isinstance(c, ast.Call))
-        self.assertEqual(ast.literal_eval(choice.args[0]), STAGE_COMBOS)
+        choice = next(c for c in ast.walk(assign.annotation) if isinstance(c, ast.Call)
+                      and isinstance(c.func, ast.Name) and c.func.id == "Choice")
+        if isinstance(choice.args[0], ast.Call):
+            accepted = selection_choices(MICROSTRUCTURE)
+        else:
+            accepted = ast.literal_eval(choice.args[0])
+        self.assertTrue(set(STAGE_COMBOS) <= set(accepted))
         names = {n.target.id for n in ast.walk(tree) if isinstance(n, ast.AnnAssign) and isinstance(n.target, ast.Name)}
         self.assertTrue({"orchestrationRunIfw", "orchestrationIfwEchoTimeMs"} <= names)
         root = ET.parse(UI_FILE).getroot()

@@ -19,9 +19,18 @@ from utils.surface_io import load_mesh, write_obj
 def atlas_ras_to_native_ras(vertices, transform):
     # BRAINSFit: fixed=atlas, moving=b0. The saved ITK map is atlas LPS -> native LPS.
     # Both mesh interfaces use RAS, so flip x/y before AND after TransformPoint.
-    flip = np.array([-1., -1., 1.])
-    native_lps = np.asarray([transform.TransformPoint(tuple(v)) for v in np.asarray(vertices)*flip])
-    return native_lps*flip
+    flip = np.array([-1., -1., 1.], dtype=np.float64)
+    pts_lps = np.asarray(vertices, dtype=np.float64) * flip
+    if hasattr(transform, 'IsLinear') and transform.IsLinear():
+        origin = np.asarray(transform.TransformPoint((0.0, 0.0, 0.0)), dtype=np.float64)
+        basis = np.column_stack([
+            np.asarray(transform.TransformPoint(axis), dtype=np.float64) - origin
+            for axis in ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
+        ])
+        native_lps = pts_lps @ basis.T + origin
+    else:
+        native_lps = np.asarray([transform.TransformPoint(tuple(v)) for v in pts_lps], dtype=np.float64)
+    return native_lps * flip
 
 
 def main(argv=None):

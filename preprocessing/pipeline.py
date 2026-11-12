@@ -16,6 +16,8 @@ from __future__ import annotations
 
 from shared.cohort_schedule import scheduled_stage
 
+from concurrent.futures import ThreadPoolExecutor
+import gzip
 import json
 import os
 import shutil
@@ -751,7 +753,14 @@ def _collect_eddy_qc_artifacts(paths: dict[str, Path]) -> dict[str, Any]:
         }
         if source.is_file():
             destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source, destination)
+            src_stat = source.stat()
+            if not (
+                destination.is_file()
+                and not destination.is_symlink()
+                and destination.stat().st_size == src_stat.st_size
+                and destination.stat().st_mtime_ns == src_stat.st_mtime_ns
+            ):
+                shutil.copy2(source, destination)
             record.update({"status": "copied", "size": destination.stat().st_size})
         artifact_records[key] = record
     return {
@@ -786,7 +795,67 @@ def _save_float32(array: Any, source_img: Any, path: Path) -> None:
 
     image = nib.Nifti1Image(np.asarray(array, dtype=np.float32), source_img.affine, source_img.header)
     image.set_data_dtype(np.float32)
-    nib.save(image, str(path))
+    out_str = str(path)
+    disable_accel = os.environ.get("SLICERDSPACE_DISABLE_DIPY_ACCEL", "").strip().lower() in {"1", "true", "yes"}
+    if out_str.endswith(".nii.gz") and not disable_accel:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with gzip.GzipFile(filename=out_str, mode="wb", compresslevel=1) as gz:
+            holder = nib.FileHolder(fileobj=gz)
+            image.to_file_map({"image": holder, "header": holder})
+    else:
+        nib.save(image, out_str)
+
+
+def _run_fused_mppca_gibbs(
+    mppca_cmd: list[str],
+    gibbs_cmd: list[str],
+    *,
+    log: Optional[Callable[[str], None]],
+    device: Optional[str] = None,
+    max_workers: Optional[int] = None,
+) -> None:
+    """Run consecutive MP-PCA + Gibbs removal in RAM without re-gunzipping intermediate 4D NIfTI."""
+    import nibabel as nib
+    import numpy as np
+    from preprocessing.dipy_accel import (
+        gibbs_removal_accelerated,
+        mppca_accelerated,
+        resolve_dipy_accel_device,
+    )
+
+    def emit(message: str) -> None:
+        if log:
+            log("[Preproc:DIPY] " + message)
+
+    source_img = nib.load(mppca_cmd[2])
+    data = source_img.get_fdata(dtype=np.float32)
+    if data.ndim != 4:
+        raise ValueError(f"DIPY preprocessing expects a 4D DWI image, got shape {data.shape}")
+    resolved_dev = resolve_dipy_accel_device(device)
+    emit(f"Loaded {mppca_cmd[2]} shape={data.shape}")
+    emit(f"Running fused MP-PCA denoising + Gibbs removal in RAM (device={resolved_dev})")
+    denoised, sigma = mppca_accelerated(
+        data,
+        patch_radius=2,
+        return_sigma=True,
+        device=device,
+        max_workers=max_workers,
+    )
+    del data
+    with ThreadPoolExecutor(max_workers=3) as io_pool:
+        fut_noise = io_pool.submit(_save_float32, sigma, source_img, Path(mppca_cmd[4]))
+        fut_denoised = io_pool.submit(_save_float32, denoised, source_img, Path(mppca_cmd[3]))
+        corrected = gibbs_removal_accelerated(
+            denoised,
+            slice_axis=2,
+            inplace=False,
+            device=device,
+            max_workers=max_workers,
+        )
+        fut_degibbs = io_pool.submit(_save_float32, corrected, source_img, Path(gibbs_cmd[3]))
+        fut_noise.result()
+        fut_denoised.result()
+        fut_degibbs.result()
 
 
 def _run_dipy_step(
@@ -939,21 +1008,46 @@ def _execute_preprocessing_backend(
             native_commands.append(list(argv))
         return _run_command(argv, env=env, log=log, capture=True)
 
-    for command in commands:
+    disable_accel = os.environ.get("SLICERDSPACE_DISABLE_DIPY_ACCEL", "").strip().lower() in {"1", "true", "yes"}
+    effective_threads = _resolved_eddy_threads(config)
+    idx = 0
+    while idx < len(commands):
+        command = commands[idx]
         if command[0] == "dipy":
+            if (
+                not disable_accel
+                and command[1] == "mppca"
+                and idx + 1 < len(commands)
+                and commands[idx + 1][:2] == ["dipy", "gibbs_removal"]
+                and commands[idx + 1][2] == command[3]
+            ):
+                if log:
+                    log("[Preproc] Fused DIPY steps: mppca + gibbs_removal")
+                _run_fused_mppca_gibbs(
+                    command,
+                    commands[idx + 1],
+                    log=log,
+                    device=config.dipy_device,
+                    max_workers=effective_threads,
+                )
+                idx += 2
+                continue
             if log:
                 log("[Preproc] DIPY step: " + " ".join(command[1:]))
             _run_dipy_step(
                 command,
                 log=log,
                 device=config.dipy_device,
-                max_workers=_resolved_eddy_threads(config),
+                max_workers=effective_threads,
             )
+            idx += 1
             continue
         if command[0] == "copy":
             shutil.copy2(command[1], command[2])
+            idx += 1
             continue
         if command[0] == "optional-output":
+            idx += 1
             continue
         if command[0] == "native-fsl-correction":
             from preprocessing.fsl_native import run_fsl_correction
@@ -973,8 +1067,16 @@ def _execute_preprocessing_backend(
         elif native:
             run_native_command(command)
         else:
-            runtime_command = preprocessing_launcher(command, paths["qc_dir"] / "eddy_device.json", env)
+            exec_cmd = list(command)
+            if not disable_accel and effective_threads > 1:
+                tool_name = Path(exec_cmd[0]).name.lower()
+                if tool_name in {"dwifslpreproc", "mrconvert", "dwiextract", "mrcat"} and "-nthreads" not in exec_cmd:
+                    exec_cmd.extend(["-nthreads", str(effective_threads)])
+                if tool_name == "dwifslpreproc" and "-rpe_pair" in exec_cmd and "-topup_options" not in exec_cmd:
+                    exec_cmd.extend(["-topup_options", f" --nthr={effective_threads}"])
+            runtime_command = preprocessing_launcher(exec_cmd, paths["qc_dir"] / "eddy_device.json", env)
             _run_command(runtime_command, env=env, log=log)
+        idx += 1
     return _mrtrix_backend_details(paths, raw.subject_id, config, acquisition, backend)
 
 

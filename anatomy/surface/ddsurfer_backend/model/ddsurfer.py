@@ -388,12 +388,63 @@ class TANet(nn.Module):
 
         current_vertices = vertices
         trajectory_stats = [] if return_extras else None
+        num_fields = svfs_all.shape[0]
+        use_fast_batch1 = vertices.shape[0] == 1
+        packed_cuda_fields = (
+            svfs_all.reshape(1, num_fields * 3, *svfs_all.shape[2:]).contiguous()
+            if (use_fast_batch1 and svfs_all.is_cuda)
+            else None
+        )
+        nx, ny, nz = svfs_all.shape[2], svfs_all.shape[3], svfs_all.shape[4]
+        stride_x = ny * nz
+        stride_y = nz
+        flat_cpu_cl = (
+            svfs_all.permute(2, 3, 4, 0, 1).reshape(nx * ny * nz, num_fields * 3).contiguous()
+            if (use_fast_batch1 and not svfs_all.is_cuda)
+            else None
+        )
         for step in range(self.num_steps):
             weights = attention[2 * step if self.rk4_stage_time else step]
             middle_weights = attention[2 * step + 1] if self.rk4_stage_time else weights
             end_weights = attention[2 * step + 2] if self.rk4_stage_time else weights
 
             def sample_field(sample_vertices: torch.Tensor, stage_weights: torch.Tensor) -> torch.Tensor:
+                if packed_cuda_fields is not None:
+                    coords = (2.0 * sample_vertices / self.scale - 1.0)[:, :, None, None].flip(-1)
+                    sampled = F.grid_sample(
+                        packed_cuda_fields, coords, mode="bilinear", padding_mode="border", align_corners=True
+                    )
+                    weighted = (
+                        stage_weights.view(num_fields, 1, 1)
+                        * sampled.view(num_fields, 3, -1)
+                    ).sum(0)
+                    return weighted.transpose(0, 1).unsqueeze(0)
+                if flat_cpu_cl is not None:
+                    pts = sample_vertices[0]
+                    x = pts[:, 0].clamp(0.0, float(nx - 1))
+                    y = pts[:, 1].clamp(0.0, float(ny - 1))
+                    z = pts[:, 2].clamp(0.0, float(nz - 1))
+                    x0 = torch.floor(x).long()
+                    y0 = torch.floor(y).long()
+                    z0 = torch.floor(z).long()
+                    x1 = (x0 + 1).clamp_max(nx - 1)
+                    y1 = (y0 + 1).clamp_max(ny - 1)
+                    z1 = (z0 + 1).clamp_max(nz - 1)
+                    wx = (x - x0.float()).unsqueeze(1)
+                    wy = (y - y0.float()).unsqueeze(1)
+                    wz = (z - z0.float()).unsqueeze(1)
+                    ix0 = x0 * stride_x
+                    ix1 = x1 * stride_x
+                    iy0 = y0 * stride_y
+                    iy1 = y1 * stride_y
+                    c00 = flat_cpu_cl[ix0 + iy0 + z0] * (1.0 - wz) + flat_cpu_cl[ix0 + iy0 + z1] * wz
+                    c01 = flat_cpu_cl[ix0 + iy1 + z0] * (1.0 - wz) + flat_cpu_cl[ix0 + iy1 + z1] * wz
+                    c10 = flat_cpu_cl[ix1 + iy0 + z0] * (1.0 - wz) + flat_cpu_cl[ix1 + iy0 + z1] * wz
+                    c11 = flat_cpu_cl[ix1 + iy1 + z0] * (1.0 - wz) + flat_cpu_cl[ix1 + iy1 + z1] * wz
+                    c0 = c00 * (1.0 - wy) + c01 * wy
+                    c1 = c10 * (1.0 - wy) + c11 * wy
+                    sampled_cl = c0 * (1.0 - wx) + c1 * wx
+                    return (sampled_cl.view(-1, num_fields, 3) * stage_weights.view(1, num_fields, 1)).sum(dim=1).unsqueeze(0)
                 raw = self.interpolate(sample_vertices, svfs_all)
                 return (stage_weights.view(-1, 1, 1) * raw).sum(0, keepdim=True)
 

@@ -9,7 +9,9 @@ from __future__ import annotations
 
 from shared.cohort_schedule import scheduled_stage
 
+from concurrent.futures import ThreadPoolExecutor
 import json
+import os
 import sys
 import subprocess
 import time
@@ -17,6 +19,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from threading import Lock
 from typing import Callable, Optional
 
 from shared.external_process import find_pythonslicer, managed_tool_environment, resolve_external_command
@@ -489,7 +492,12 @@ def _tractogram_summary(path: Path) -> dict[str, object]:
 def _sift2_summary(path: Path, expected_count: int) -> dict[str, object]:
     import numpy as np
 
-    values = np.asarray(np.loadtxt(path, ndmin=1), dtype=np.float64).reshape(-1)
+    raw_bytes = path.read_bytes()
+    data_lines = [ln for ln in raw_bytes.splitlines() if ln and not ln.lstrip().startswith(b"#")]
+    if data_lines:
+        values = np.fromstring(b" ".join(data_lines).decode("ascii", errors="replace"), dtype=np.float64, sep=" ")
+    else:
+        values = np.empty(0, dtype=np.float64)
     return {
         "file": _file_info(path),
         "weight_count": int(values.size),
@@ -895,10 +903,12 @@ def run_csd_act(config: CSDActConfig, *, log: Optional[Callable[[str], None]] = 
     phase_timings: list[dict[str, object]] = []
     manifest['phase_timings'] = phase_timings
     qc['phase_timings'] = phase_timings
+    timing_lock = Lock()
     def persist_timings():
-        temporary = manifest_path.with_suffix('.json.tmp')
-        temporary.write_text(json.dumps(manifest, indent=2, sort_keys=True) + '\n', encoding='utf-8')
-        temporary.replace(manifest_path)
+        with timing_lock:
+            temporary = manifest_path.with_suffix('.json.tmp')
+            temporary.write_text(json.dumps(manifest, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+            temporary.replace(manifest_path)
 
     start = time.monotonic()
     if config.execute:
@@ -916,15 +926,35 @@ def run_csd_act(config: CSDActConfig, *, log: Optional[Callable[[str], None]] = 
             mrtrix_bin_dir=effective_mrtrix_bin,
         )
         dwi_mif = output_dir / f"{config.subject_id}_dwi.mif"
+        disable_csd_accel = os.environ.get("SLICERDSPACE_DISABLE_CSD_ACCEL", "").strip().lower() in {"1", "true", "yes"}
         try:
             fod_reused = _prepared_fod_reusable(config, output_dir)
             manifest["fod_preparation_reused"] = fod_reused
             qc["fod_preparation_reused"] = fod_reused
-            active_commands = commands[5:] if fod_reused else commands
+            active_commands = list(commands[5:] if fod_reused else commands)
             if fod_reused:
                 _emit(f"[Tractography] Reusing verified CSD/FOD preparation in {output_dir}", log)
-            for idx, command in enumerate(active_commands):
-                argv, env = _mrtrix_csd_invocation(command, command_env)
+
+            # Split post-tckgen independent consumers (tcksift2, tckconvert, export_tck_to_trk)
+            # so they run concurrently once tractogram.tck is finalized.
+            tckgen_pos = next(
+                (i for i, cmd in enumerate(active_commands) if Path(cmd[0]).stem.lower() == "tckgen"),
+                len(active_commands) - 1,
+            )
+            serial_commands = active_commands if disable_csd_accel else active_commands[: tckgen_pos + 1]
+            parallel_mrtrix_commands = [] if disable_csd_accel else active_commands[tckgen_pos + 1 :]
+
+            for idx, command in enumerate(serial_commands):
+                exec_cmd = command
+                if (
+                    not disable_csd_accel
+                    and Path(command[0]).stem.lower() == "mrconvert"
+                    and len(command) > 2
+                    and Path(command[2]) == dwi_mif
+                    and "-strides" not in command
+                ):
+                    exec_cmd = (*command, "-strides", "0,0,0,1")
+                argv, env = _mrtrix_csd_invocation(exec_cmd, command_env)
                 _emit(f"[Tractography] Running MRtrix CSD/ACT command: {' '.join(argv)}", log)
                 with _timed_step(phase_timings, Path(command[0]).name, persist_timings, argv) as phase:
                     completed = subprocess.run(argv, check=True, env=env, cwd=output_dir)
@@ -934,7 +964,32 @@ def run_csd_act(config: CSDActConfig, *, log: Optional[Callable[[str], None]] = 
                         _optimize_dwi_mif_volume_strides_in_ram(dwi_mif)
                 if not fod_reused and idx == 4:
                     _write_fod_preparation_receipt(config, output_dir)
-            if config.export_trk and tractogram_trk is not None:
+
+            if not disable_csd_accel and (parallel_mrtrix_commands or (config.export_trk and tractogram_trk is not None)):
+                def _run_parallel_mrtrix(cmd_tuple: tuple[str, ...]) -> int:
+                    p_argv, p_env = _mrtrix_csd_invocation(cmd_tuple, command_env)
+                    _emit(f"[Tractography] Running MRtrix CSD/ACT command: {' '.join(p_argv)}", log)
+                    with _timed_step(phase_timings, Path(cmd_tuple[0]).name, persist_timings, p_argv) as p_phase:
+                        p_done = subprocess.run(p_argv, check=True, env=p_env, cwd=output_dir)
+                        p_phase['return_code'] = p_done.returncode
+                        return p_done.returncode
+
+                def _run_parallel_trk() -> int:
+                    _emit(f"[Tractography] Exporting ACT TCK to TRK for WMQL: {tractogram_trk}", log)
+                    with _timed_step(phase_timings, 'export_tck_to_trk', persist_timings):
+                        export_tck_to_trk(tractogram, config.dwi_path, tractogram_trk)
+                    return 0
+
+                n_jobs = len(parallel_mrtrix_commands) + (1 if (config.export_trk and tractogram_trk is not None) else 0)
+                with ThreadPoolExecutor(max_workers=max(1, n_jobs)) as post_pool:
+                    post_futs = [post_pool.submit(_run_parallel_mrtrix, cmd_t) for cmd_t in parallel_mrtrix_commands]
+                    if config.export_trk and tractogram_trk is not None:
+                        post_futs.append(post_pool.submit(_run_parallel_trk))
+                    for fut in post_futs:
+                        rc = fut.result()
+                        if return_code is None or rc != 0:
+                            return_code = rc
+            elif config.export_trk and tractogram_trk is not None:
                 _emit(f"[Tractography] Exporting ACT TCK to TRK for WMQL: {tractogram_trk}", log)
                 with _timed_step(phase_timings, 'export_tck_to_trk', persist_timings):
                     export_tck_to_trk(tractogram, config.dwi_path, tractogram_trk)

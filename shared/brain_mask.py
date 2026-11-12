@@ -5,7 +5,9 @@ from __future__ import annotations
 from shared.cohort_schedule import scheduled_stage
 
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+import gzip
 import hashlib
 import json
 import math
@@ -356,6 +358,78 @@ def validate_brain_mask(dwi_path: Path, mask_path: Path) -> dict[str, Any]:
             "human_review": "pending", "warnings": warnings}
 
 
+def _save_nifti_fast(image_obj, output_path: Path) -> None:
+    import nibabel as nib
+
+    out_str = str(output_path)
+    if out_str.endswith(".nii.gz"):
+        with gzip.GzipFile(filename=out_str, mode="wb", compresslevel=1) as gz:
+            holder = nib.FileHolder(fileobj=gz)
+            image_obj.to_file_map({"image": holder, "header": holder})
+    else:
+        nib.save(image_obj, out_str)
+
+
+def _accumulate_b0_single_pass_gzip(image, dwi_path: Path, indices) -> "Optional[Any]":
+    import numpy as np
+
+    if not str(dwi_path).endswith(".nii.gz"):
+        return None
+    offset = int(image.header.get_data_offset())
+    if offset < 352 or len(image.shape) != 4:
+        return None
+    disk_dtype = np.dtype(image.header.get_data_dtype())
+    if disk_dtype.kind not in ("i", "u", "f") or disk_dtype.itemsize < 1:
+        return None
+    shape3d = tuple(int(dim) for dim in image.shape[:3])
+    vol_elems = shape3d[0] * shape3d[1] * shape3d[2]
+    vol_bytes = vol_elems * disk_dtype.itemsize
+    slope, inter = image.header.get_slope_inter()
+    use_scale = (
+        slope is not None and np.isfinite(slope) and slope != 0.0
+        and (float(slope) != 1.0 or (inter is not None and np.isfinite(inter) and float(inter) != 0.0))
+    )
+    slope_f = float(slope) if use_scale else 1.0
+    inter_f = float(inter) if (use_scale and inter is not None and np.isfinite(inter)) else 0.0
+
+    wanted = {int(idx) for idx in indices}
+    max_idx = max(wanted)
+    total = np.zeros(shape3d, dtype=np.float64)
+    skip_chunk = 4 * 1024 * 1024
+
+    def _read_exact(stream, nbytes: int) -> bytes:
+        chunks = []
+        rem = nbytes
+        while rem > 0:
+            part = stream.read(min(rem, skip_chunk))
+            if not part:
+                raise EOFError("Truncated gzipped NIfTI payload while reading b0 volumes")
+            chunks.append(part)
+            rem -= len(part)
+        return chunks[0] if len(chunks) == 1 else b"".join(chunks)
+
+    with gzip.open(dwi_path, "rb") as stream:
+        if offset > 0:
+            _read_exact(stream, offset)
+        for vol_idx in range(max_idx + 1):
+            if vol_idx in wanted:
+                raw_bytes = _read_exact(stream, vol_bytes)
+                vol = np.ndarray(shape3d, dtype=disk_dtype, buffer=raw_bytes, order="F").astype(np.float32)
+                if use_scale:
+                    vol = vol * np.float32(slope_f) + np.float32(inter_f)
+                if not np.isfinite(vol).all():
+                    raise ValueError("Baseline images contain NaN/Inf")
+                total += vol
+            else:
+                rem = vol_bytes
+                while rem > 0:
+                    skipped = stream.read(min(rem, skip_chunk))
+                    if not skipped:
+                        raise EOFError("Truncated gzipped NIfTI payload while skipping non-b0 volume")
+                    rem -= len(skipped)
+    return total
+
+
 def _mean_b0(dwi_path, bval_path, bvec_path, output, threshold):
     import nibabel as nib
     import numpy as np
@@ -370,18 +444,25 @@ def _mean_b0(dwi_path, bval_path, bvec_path, output, threshold):
     indices = np.flatnonzero(bvals <= threshold)
     if not len(indices):
         raise ValueError(f"No baseline measurements with b <= {threshold}")
-    total = np.zeros(image.shape[:3], np.float64)
-    for index in indices:
-        volume = np.asarray(image.dataobj[..., int(index)], dtype=np.float32)
-        if not np.isfinite(volume).all():
-            raise ValueError("Baseline images contain NaN/Inf")
-        total += volume
+    disable_fast = os.environ.get("SLICERDSPACE_DISABLE_PNL_ACCEL", "").strip().lower() in {"1", "true", "yes"}
+    total = None if disable_fast else _accumulate_b0_single_pass_gzip(image, Path(dwi_path), indices)
+    if total is None:
+        total = np.zeros(image.shape[:3], np.float64)
+        for index in indices:
+            volume = np.asarray(image.dataobj[..., int(index)], dtype=np.float32)
+            if not np.isfinite(volume).all():
+                raise ValueError("Baseline images contain NaN/Inf")
+            total += volume
     mean = (total / len(indices)).astype(np.float32)
     if not np.any(mean > 0):
         raise ValueError("Mean b0 has no positive signal")
     header = image.header.copy()
     header.set_data_dtype(np.float32)
-    nib.save(nib.Nifti1Image(mean, image.affine, header), str(output))
+    out_img = nib.Nifti1Image(mean, image.affine, header)
+    if disable_fast:
+        nib.save(out_img, str(output))
+    else:
+        _save_nifti_fast(out_img, Path(output))
     return len(indices)
 
 
@@ -440,9 +521,19 @@ def generate_brain_mask(dwi_path: Path, bval_path: Path, bvec_path: Path, output
     if not backend["available"]:
         raise FileNotFoundError(f"Brain mask backend {config.backend} unavailable: " + ", ".join(backend["missing_required"]) +
                                 ". Configure Advanced > Environment and models, choose another backend, or supply a verified mask.")
+    resource_paths = [Path(p) for p in backend["resources"]]
+    all_hash_targets = [*paths, *resource_paths]
+    if len(all_hash_targets) > 1 and os.environ.get("SLICERDSPACE_DISABLE_PNL_ACCEL", "").strip().lower() not in {"1", "true", "yes"}:
+        with ThreadPoolExecutor(max_workers=min(8, len(all_hash_targets))) as pool:
+            fingerprints = list(pool.map(_fingerprint, all_hash_targets))
+        input_fps = fingerprints[:len(paths)]
+        resource_fps = fingerprints[len(paths):]
+    else:
+        input_fps = [_fingerprint(p) for p in paths]
+        resource_fps = [_fingerprint(p) for p in resource_paths]
     signature = {"backend": config.backend, "settings": brain_mask_cache_inspection(backend)["settings"],
-                 "inputs": [_fingerprint(p) for p in paths],
-                 "resources": [_fingerprint(Path(p)) for p in backend["resources"]],
+                 "inputs": input_fps,
+                 "resources": resource_fps,
                  "tool_paths": backend["tool_paths"]}
     if output.exists() and not force and existing.get("version") == 2:
         if existing.get("output", {}).get("sha256") != _sha256(output):
@@ -496,8 +587,9 @@ def generate_brain_mask(dwi_path: Path, bval_path: Path, bvec_path: Path, output
         else:
             env = python_tool_environment(tools["pythonslicer"], env_extra)
             # A6: the child reads the scheduler's CPU reservation; Slicer's startup environment does not hold it.
-            if os.environ.get("SLICERDSPACE_STAGE_CPUS"):
-                env["SLICERDSPACE_STAGE_CPUS"] = os.environ["SLICERDSPACE_STAGE_CPUS"]
+            for passthrough_key in ("SLICERDSPACE_STAGE_CPUS", "SLICERDSPACE_DISABLE_PNL_ACCEL", "CUDA_VISIBLE_DEVICES"):
+                if os.environ.get(passthrough_key):
+                    env[passthrough_key] = os.environ[passthrough_key]
         phase_started = time.monotonic()
         tail = _run(command, env, log)
         phase_seconds["external_process"] = time.monotonic() - phase_started

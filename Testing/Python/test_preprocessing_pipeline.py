@@ -46,7 +46,12 @@ def _write_nifti_subject(root: Path, subject_id: str = "100307") -> Path:
 def _write_fake_command(path: Path, body: str) -> None:
     from shared.external_process import _default_slicer_python
     python_exec = _default_slicer_python() or Path(sys.executable)
-    path.write_text(f"#!{python_exec}\n" + body, encoding="utf-8")
+    if sys.platform != "win32":
+        py_file = path.with_name(f"._{path.name}_fake.py")
+        py_file.write_text(body, encoding="utf-8")
+        path.write_text(f'#!/bin/sh\nexec "{python_exec}" "{py_file}" "$@"\n', encoding="utf-8")
+    else:
+        path.write_text(f"#!{python_exec}\n" + body, encoding="utf-8")
     path.chmod(path.stat().st_mode | stat.S_IXUSR)
 
 

@@ -497,9 +497,16 @@ def _run_current_postprocess(config, subject_root, native_dir, log):
                     destination.rename(backup)
             _symlink_canonical_output(source, destination)
         # Track the public copies too on platforms without directory symlinks.
-        integrity = validate_postprocess_outputs(structural, hemis, signature['atlases'], stats_dir=stats / 'stats')
-        if not integrity['automatic_qc_passed']:
-            raise ValueError('Published surface postprocess products failed integrity QC')
+        canonical_pairs = [(fs_subject / name, structural / name) for name in
+                           ('surf', 'label', 'mri', 'fsaverage', 'logs')] + [(fs_subject / 'stats', stats / 'stats')]
+        all_linked = all(
+            dest.is_symlink() and dest.resolve() == src.resolve()
+            for src, dest in canonical_pairs
+        )
+        if not all_linked:
+            integrity = validate_postprocess_outputs(structural, hemis, signature['atlases'], stats_dir=stats / 'stats')
+            if not integrity['automatic_qc_passed']:
+                raise ValueError('Published surface postprocess products failed integrity QC')
         manifest['status'] = 'completed'
         qc = dict(status='completed', upstream_commit=upstream_record()['commit'],
                   automatic_qc=checks, automatic_qc_passed=True, integrity=integrity, human_review='pending')

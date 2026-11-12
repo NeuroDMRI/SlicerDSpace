@@ -63,6 +63,9 @@ TRACTCLOUD_COMPAT_BOOTSTRAP = (
     "if record_path:\n"
     "    with open(record_path, 'w') as stream:\n"
     "        json.dump(record, stream)\n"
+    "if getattr(pipeline, '__file__', None):\n"
+    "    from tractography.tractcloud_accel import install_tractcloud_accelerations\n"
+    "    install_tractcloud_accelerations(pipeline, resolved)\n"
     "if resolved == 'cuda' and hasattr(pipeline, 'run_inference'):\n"
     "    original_inference = pipeline.run_inference\n"
     "    def strict_gpu_inference(model, loader, global_feat, num_classes, device, **kwargs):\n"
@@ -236,8 +239,11 @@ def _tractcloud_env(config: "TractCloudConfig", backend_status: Optional[dict[st
     env: dict[str, str] = {}
     source = backend_status.get("source") if backend_status else None
     root_value = source.get("pythonpath") if isinstance(source, dict) else None
+    repo_root = Path(__file__).resolve().parents[1].as_posix()
     if root_value:
-        env["PYTHONPATH"] = root_value
+        env["PYTHONPATH"] = root_value + os.pathsep + repo_root
+    else:
+        env["PYTHONPATH"] = repo_root
     if config.data_dir is not None:
         env["TRACTCLOUD_DATA_DIR"] = config.data_dir.expanduser().resolve().as_posix()
     env['SLICERDSPACE_TRACTCLOUD_SEED'] = str(config.random_seed)
@@ -488,7 +494,24 @@ def run_tractcloud_parcellation(
                         previous_names = ['Association', 'Projection', 'Commissural', 'Cerebellar', 'Superficial', 'Other']
                         previous_names.extend(p.name for p in output_dir.glob('*.mrb'))
                         published_archive = publish_products(staging, output_dir, previous_names)
-                        output_summary = summarize_tractcloud_outputs(output_dir)
+                        out_dirs = sorted(
+                            item.name for item in output_dir.iterdir()
+                            if item.is_dir() and not item.name.startswith('.')
+                        ) if output_dir.is_dir() else []
+                        if out_dirs == output_summary.get("category_dirs", []):
+                            src_prefix = staging.expanduser().resolve().as_posix() + "/"
+                            dst_prefix = output_dir.expanduser().resolve().as_posix() + "/"
+                            def _remap_tc_path(val: str) -> str:
+                                return dst_prefix + val[len(src_prefix):] if val.startswith(src_prefix) else val
+                            output_summary = {
+                                **output_summary,
+                                "root": output_dir.expanduser().resolve().as_posix(),
+                                "root_exists": output_dir.is_dir(),
+                                "bundle_files": [_remap_tc_path(p) for p in output_summary.get("bundle_files", [])],
+                                "mrb_files": [_remap_tc_path(p) for p in output_summary.get("mrb_files", [])],
+                            }
+                        else:
+                            output_summary = summarize_tractcloud_outputs(output_dir)
                     else:
                         staging = retain_failed_products(staging, output_dir)
                         output_summary = summarize_tractcloud_outputs(staging)

@@ -10,7 +10,9 @@ rigid, linear) and ``ImageMath FillHoles``. Normalisation, three-view inference,
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
+import gzip
 import hashlib
 import importlib
 import json
@@ -336,7 +338,7 @@ def finish_mask(filled: np.ndarray) -> np.ndarray:
     return values
 
 
-def write_mask(values: np.ndarray, baseline_image, output: Path) -> None:
+def write_mask(values: np.ndarray, baseline_image, output: Path, *, fast_gzip: bool = True) -> None:
     """int16 NIfTI with the b0 header (package ``finish_native``), staged then renamed."""
     import nibabel as nib
 
@@ -346,7 +348,13 @@ def write_mask(values: np.ndarray, baseline_image, output: Path) -> None:
     with tempfile.NamedTemporaryFile(dir=output.parent, prefix=".pnl-native-", suffix=".nii.gz", delete=False) as stream:
         staged = Path(stream.name)
     try:
-        nib.save(nib.Nifti1Image(values, baseline_image.affine, header), str(staged))
+        out_img = nib.Nifti1Image(values, baseline_image.affine, header)
+        if fast_gzip and str(staged).endswith(".nii.gz"):
+            with gzip.GzipFile(filename=str(staged), mode="wb", compresslevel=1) as gz:
+                fh = nib.FileHolder(fileobj=gz)
+                out_img.to_file_map({"image": fh, "header": fh})
+        else:
+            nib.save(out_img, str(staged))
         result = nib.load(str(staged))
         if result.shape != baseline_image.shape[:3] or not np.allclose(result.affine, baseline_image.affine,
                                                                        rtol=0, atol=1e-4):
@@ -354,6 +362,154 @@ def write_mask(values: np.ndarray, baseline_image, output: Path) -> None:
         staged.replace(output)
     finally:
         staged.unlink(missing_ok=True)
+
+
+def _install_vendored_pnl_fast_plan(pnl_mod) -> None:
+    if getattr(pnl_mod, "_sdds_fast_plan_installed", False):
+        return
+    import torch
+
+    orig_forward = pnl_mod.CompNet.forward
+
+    def _compile_plan(model_obj, segmentation_only: bool):
+        plans = getattr(model_obj, "_sdds_plans", None)
+        if plans is None:
+            plans = {}
+            model_obj._sdds_plans = plans
+        key = bool(segmentation_only)
+        if key in plans:
+            return plans[key]
+        targets = {"final_op"} if key else set(model_obj.output_names)
+        needed = set()
+
+        def require(name):
+            if name not in needed:
+                needed.add(name)
+                for parent in model_obj.parents[name]:
+                    require(parent)
+
+        for name in targets:
+            require(name)
+        uses = {name: 0 for name in needed}
+        for name in needed:
+            for parent in model_obj.parents[name]:
+                uses[parent] += 1
+        steps = []
+        for layer in model_obj.spec:
+            name, kind = layer["name"], layer["class_name"]
+            if name not in needed:
+                continue
+            parents = tuple(model_obj.parents[name])
+            op = model_obj.ops[name] if kind not in ("InputLayer", "Concatenate", "Add", "Dropout") else None
+            act = model_obj.activations.get(name) if op is not None else None
+            dead = []
+            for parent in parents:
+                uses[parent] -= 1
+                if uses[parent] == 0 and parent not in targets:
+                    dead.append(parent)
+            steps.append((name, kind, parents, op, act, tuple(dead)))
+        out_names = ("final_op",) if key else tuple(model_obj.output_names)
+        plans[key] = (tuple(steps), out_names, key)
+        return plans[key]
+
+    def _fast_forward(self, x, *, capture=(), segmentation_only=False):
+        if capture or self.training or x.ndim != 4 or tuple(x.shape[1:]) != (1, 256, 256):
+            return orig_forward(self, x, capture=capture, segmentation_only=segmentation_only)
+        steps, out_names, single = _compile_plan(self, segmentation_only)
+        values = {}
+        for name, kind, parents, op, act, dead in steps:
+            if kind == "InputLayer":
+                val = x
+            elif kind == "Concatenate":
+                val = torch.cat([values[p] for p in parents], dim=1)
+            elif kind == "Add":
+                val = values[parents[0]] + values[parents[1]]
+            elif kind == "Dropout":
+                val = values[parents[0]]
+            else:
+                val = op(values[parents[0]])
+                if act == "relu":
+                    val = torch.relu(val)
+                elif act == "sigmoid":
+                    val = torch.sigmoid(val)
+            values[name] = val
+            for parent in dead:
+                del values[parent]
+        return values[out_names[0]] if single else tuple(values[n] for n in out_names)
+
+    pnl_mod.CompNet.forward = _fast_forward
+    pnl_mod._sdds_fast_plan_installed = True
+
+
+def _preload_vendored_models(model_dir: Path, resolved_device: str, pnl_inf, pnl_mod, pnl_weights):
+    import torch
+
+    if getattr(pnl_inf, "load_model", None) is not getattr(pnl_weights, "load_model", None):
+        return None
+    if hasattr(pnl_weights, "verify_model_dir"):
+        meta = pnl_weights.verify_model_dir(model_dir)
+    else:
+        meta = json.loads((model_dir / "weights.json").read_text(encoding="utf-8"))
+    if not isinstance(meta, dict) or "views" not in meta:
+        return None
+
+    def _load_one(v: str):
+        rec = meta["views"][v]
+        w_path = model_dir / rec["file"]
+        pnl_weights.check(w_path, rec["sha256"])
+        return torch.load(w_path, map_location="cpu", weights_only=True)
+
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        futs = {v: pool.submit(_load_one, v) for v in pnl_inf.VIEWS}
+        states = {v: futs[v].result() for v in pnl_inf.VIEWS}
+    torch.backends.cudnn.allow_tf32 = False
+    torch.backends.cuda.matmul.allow_tf32 = False
+    model = pnl_mod.CompNet().to(resolved_device)
+    model.eval()
+    if str(resolved_device).startswith("cuda"):
+        torch.backends.cudnn.benchmark = True
+        with torch.inference_mode():
+            model(torch.zeros((1, 1, 256, 256), dtype=torch.float32, device=resolved_device), segmentation_only=True)
+            torch.cuda.synchronize()
+    return states, model
+
+
+def _fast_vendored_predict(volume: np.ndarray, resolved_device: str, batch_size: int, preloaded, pnl_inf):
+    import torch
+
+    if volume.shape != (256, 256, 256) or not np.isfinite(volume).all():
+        raise ValueError("Expected a finite normalized IIT-grid volume")
+    is_cuda = str(resolved_device).startswith("cuda")
+    states, model = preloaded
+    probabilities = {}
+    with torch.inference_mode():
+        for view in pnl_inf.VIEWS:
+            model.load_state_dict(states.pop(view), strict=True)
+            slices = pnl_inf.orient(volume, view)
+            output = np.empty(volume.shape, dtype=np.float32)
+            nonzero_mask = np.any(slices != 0.0, axis=(1, 2))
+            zero_idx = np.flatnonzero(~nonzero_mask)
+            nz_idx = np.flatnonzero(nonzero_mask)
+            if len(zero_idx) > 0:
+                z_in = torch.zeros((1, 1, 256, 256), dtype=torch.float32, device=resolved_device)
+                z_res = model(z_in, segmentation_only=True)
+                output[zero_idx] = z_res[0, 0].cpu().numpy()
+            if len(nz_idx) > 0:
+                nz_slices = np.ascontiguousarray(slices[nz_idx, None])
+                for start in range(0, len(nz_idx), batch_size):
+                    batch_np = nz_slices[start:start + batch_size]
+                    t_in = torch.from_numpy(batch_np)
+                    if is_cuda:
+                        t_in = t_in.pin_memory().to(resolved_device, non_blocking=True)
+                    else:
+                        t_in = t_in.to(resolved_device)
+                    res = model(t_in, segmentation_only=True)
+                    output[nz_idx[start:start + len(batch_np)]] = res[:, 0].cpu().numpy()
+            if not np.isfinite(output).all():
+                raise RuntimeError("CNN produced nonfinite probabilities")
+            probabilities[view] = pnl_inf.orient(output, view)
+    del model
+    return pnl_inf.aggregate(probabilities)[1]
 
 
 def _sha256(path: Path) -> str:
@@ -403,15 +559,34 @@ def run(baseline: Path, output: Path, model_dir: Path, template: Path, *, device
     fixed = sitk.ReadImage(str(template), sitk.sitkFloat64)
     phases["read_inputs"] = time.monotonic() - started
 
+    disable_fast = os.environ.get("SLICERDSPACE_DISABLE_PNL_ACCEL", "").strip().lower() in {"1", "true", "yes"}
+    pnl_mod = _vendor("model") if not disable_fast else None
+    if not disable_fast:
+        _install_vendored_pnl_fast_plan(pnl_mod)
+
     started = time.monotonic()
     log("[PNL native] rigid registration to the IIT template")
-    transform, _, _, registration = register(fixed, moving, parameters, log=log)
-    warped = warp(moving, fixed, transform)
+    if not disable_fast:
+        with ThreadPoolExecutor(max_workers=1) as preload_pool:
+            preload_fut = preload_pool.submit(
+                _preload_vendored_models, model_dir, selection["resolved"], inference, pnl_mod, weights
+            )
+            transform, _, _, registration = register(fixed, moving, parameters, log=log)
+            warped = warp(moving, fixed, transform)
+            preloaded = preload_fut.result()
+    else:
+        transform, _, _, registration = register(fixed, moving, parameters, log=log)
+        warped = warp(moving, fixed, transform)
+        preloaded = None
     phases["registration"] = time.monotonic() - started
 
     started = time.monotonic()
     data = inference.normalize(to_numpy(warped), percentile)
-    _, _, template_mask = inference.predict(data, model_dir, device=selection["resolved"], batch_size=1)
+    eff_bs = 1 if disable_fast else (32 if str(selection["resolved"]).startswith("cuda") else 16)
+    if not disable_fast and preloaded is not None:
+        template_mask = _fast_vendored_predict(data, selection["resolved"], eff_bs, preloaded, inference)
+    else:
+        _, _, template_mask = inference.predict(data, model_dir, device=selection["resolved"], batch_size=eff_bs)
     phases["inference"] = time.monotonic() - started
 
     started = time.monotonic()
@@ -422,7 +597,7 @@ def run(baseline: Path, output: Path, model_dir: Path, template: Path, *, device
     phases["inverse_and_fill"] = time.monotonic() - started
 
     started = time.monotonic()
-    write_mask(values, image, output)
+    write_mask(values, image, output, fast_gzip=not disable_fast)
     if keep_dir is not None:
         keep_dir = Path(keep_dir)
         keep_dir.mkdir(parents=True, exist_ok=True)

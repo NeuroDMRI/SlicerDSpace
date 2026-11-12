@@ -358,7 +358,7 @@ def cot_laplacian_smooth(vert, face, lambd=1., n_iters=1):
     return vert
 
 
-def taubin_smooth(vert, face, lambd=0.5, mu=-0.53, n_iters=1):
+def taubin_smooth(vert, face, lambd=0.5, mu=-0.53, n_iters=1, laplacian_matrix=None):
     """
     Taubin mesh smoothing.
     
@@ -372,7 +372,9 @@ def taubin_smooth(vert, face, lambd=0.5, mu=-0.53, n_iters=1):
     Returns:
     - vert: smoothed mesh vertices, (1,|V|,3) torch.Tensor
     """
-    L = laplacian(face)
+    if n_iters <= 0:
+        return vert
+    L = laplacian_matrix if laplacian_matrix is not None else laplacian(face)
     for n in range(n_iters):
         vert = vert - mu * L.bmm(vert)
         vert = vert - lambd * L.bmm(vert)

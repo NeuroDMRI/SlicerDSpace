@@ -1,7 +1,7 @@
 {
   "kind": "slicerddsurfer_public_performance_evidence",
   "version": 4,
-  "reviewed_on": "2026-11-11",
+  "reviewed_on": "2026-11-12",
   "sources": [
     {
       "file": "freewater_protocol_full_20261029.json",
@@ -58,6 +58,10 @@
     {
       "file": "full_pipeline_accelerations_20261111.json",
       "sha256": "627e1c79e8269757d8bf91b81ad1dada74c0d141153d32c31c746b26d4e5066a"
+    },
+    {
+      "file": "remaining_pipeline_accelerations_20261112.json",
+      "sha256": "ce65c16f8a302977a96dd0449064a2e3aea11f94df565f43f624e7cc6307273a"
     },
     {
       "file": "upstream_freshness_verified_20261022.json",
@@ -1538,6 +1542,446 @@
         "file": "full_pipeline_accelerations_20261111.json",
         "sha256": "627e1c79e8269757d8bf91b81ad1dada74c0d141153d32c31c746b26d4e5066a"
       }
+    },
+    {
+      "id": "input-nifti-import",
+      "title": "NIfTI import & validation (clinical 4D)",
+      "category": "io",
+      "scope": "Complete clinical 4D import (104x104x60x31)",
+      "evidence_date": "2026-11-12",
+      "reference_seconds": 2.7948251850903034,
+      "optimized_seconds": 0.18091337755322456,
+      "speed_ratio": 15.448416379645934,
+      "seconds_saved": 2.613911807537079,
+      "reduction_percent": 93.52684459413231,
+      "method": "Validate finite non-zero voxel slabs in a single sequential gzip pass and stream standardized NIfTI output with fast deflate compression (compresslevel=1).",
+      "baseline": "Repeated slice-by-slice dataobj[..., idx] random gzip seeks and default level-9 gzip recompression during NIfTI import.",
+      "unchanged": "Imported data.nii.gz, bvals and bvecs are byte-for-byte SHA-256 identical across payload values and affine matrices.",
+      "limitation": "Median of three clinical sub-dicom (104x104x60x31) imports; 288-volume HCP import verified separately.",
+      "sample": "Complete run_nifti_import execution on clinical 4D dMRI (104x104x60x31).",
+      "upstream_reference": "Plugin NIfTI import/validation optimization (shared/input_import.py); eliminates repeated gzip random-access seeks and level-9 recompression.",
+      "measurement_source": {
+        "file": "remaining_pipeline_accelerations_20261112.json",
+        "sha256": "ce65c16f8a302977a96dd0449064a2e3aea11f94df565f43f624e7cc6307273a"
+      }
+    },
+    {
+      "id": "input-nifti-hcp",
+      "title": "NIfTI import & validation (HCP 288-vol)",
+      "category": "io",
+      "scope": "Complete HCP 288-volume import (145x174x145x288)",
+      "evidence_date": "2026-11-12",
+      "reference_seconds": 1045.6670361608267,
+      "optimized_seconds": 9.585555497556925,
+      "speed_ratio": 109.0877869756569,
+      "seconds_saved": 1036.0814806632698,
+      "reduction_percent": 99.08330709814183,
+      "method": "Eliminate O(N^2) gzip random-access re-decompression across 288 diffusion volumes via single-pass sequential slab streaming and fast deflate export.",
+      "baseline": "Slice-by-slice dataobj[..., idx] validation over compressed 288-volume NIfTI (re-decompressing earlier gzip streams on every frame).",
+      "unchanged": "Exported 288-volume NIfTI payload, affine, bvals and bvecs match identically.",
+      "limitation": "Subject 100307 mean of two complete fresh imports; reflects compressed-stream I/O complexity rather than an estimator change.",
+      "sample": "Full HCP 100307 diffusion volume (145x174x145x288; ~1.2 GB gzip).",
+      "upstream_reference": "Plugin NIfTI import/validation optimization on 288-volume HCP dMRI; compressed-stream I/O fix, not an upstream estimator change.",
+      "measurement_source": {
+        "file": "remaining_pipeline_accelerations_20261112.json",
+        "sha256": "ce65c16f8a302977a96dd0449064a2e3aea11f94df565f43f624e7cc6307273a"
+      }
+    },
+    {
+      "id": "pnl-cnn-cpu",
+      "title": "PNL CompNet brain masking (CPU)",
+      "category": "port",
+      "scope": "Complete module incl. ANTs & QC (CPU)",
+      "evidence_date": "2026-11-12",
+      "reference_seconds": 128.6923259086907,
+      "optimized_seconds": 116.35914463549852,
+      "speed_ratio": 1.1059923679554928,
+      "seconds_saved": 12.333181273192167,
+      "reduction_percent": 9.58346287248143,
+      "method": "Combine single-pass gzip b0 accumulation, concurrent SHA-256 hashing, overlapped 3-view CompNet weight preloading during ANTs registration, zero-slice deduplication and 16-slice CPU batching.",
+      "baseline": "Initial sequential b0 extraction, serial weight hashing/loading and 8-slice uncached CompNet inference alongside ANTs SyN registration.",
+      "unchanged": "Exported native-space binary brain mask matches baseline bit-for-bit (0 differing voxels; Dice = 1.000000).",
+      "limitation": "Subject 100307 complete brain-mask stage on CPU (4 threads, fixed ANTs seed); ANTs registration accounts for ~65 s of both paths.",
+      "sample": "Full HCP 100307 (288 volumes -> mean b0 -> ANTs template registration -> 3-view CompNet -> native mask + QC); CPU execution.",
+      "upstream_reference": "Measured on the ChengjinLii/PNLBrainMask-Torch CompNet port alongside ANTs registration; official pretrained CompNet weights unchanged.",
+      "measurement_source": {
+        "file": "remaining_pipeline_accelerations_20261112.json",
+        "sha256": "ce65c16f8a302977a96dd0449064a2e3aea11f94df565f43f624e7cc6307273a"
+      }
+    },
+    {
+      "id": "pnl-cnn-cuda",
+      "title": "PNL CompNet brain masking (CUDA)",
+      "category": "port",
+      "scope": "Complete module incl. ANTs & QC (CUDA)",
+      "evidence_date": "2026-11-12",
+      "reference_seconds": 70.56213215179741,
+      "optimized_seconds": 67.24227379076183,
+      "speed_ratio": 1.0493715957816359,
+      "seconds_saved": 3.3198583610355854,
+      "reduction_percent": 4.70487251418893,
+      "method": "Overlap background 3-view CompNet CUDA preload/warmup with ANTs CPU registration, deduplicate empty border slices, run 32-slice IEEE FP32 batches and stream uncompressed scratch NIfTIs.",
+      "baseline": "Initial sequential b0 extraction, serial weight loading after ANTs registration and 8-slice CUDA CompNet inference.",
+      "unchanged": "Exported native-space binary brain mask matches baseline bit-for-bit (0 differing voxels; Dice = 1.000000).",
+      "limitation": "Subject 100307 complete brain-mask stage on NVIDIA H100 + 4 CPU threads; CPU ANTs registration (~65 s) dominates total wall time once CNN inference drops to 2.02 s.",
+      "sample": "Full HCP 100307 complete brain-mask module; CUDA inference + CPU ANTs registration.",
+      "upstream_reference": "Measured on the ChengjinLii/PNLBrainMask-Torch CompNet port on CUDA alongside ANTs registration; official CompNet weights unchanged.",
+      "measurement_source": {
+        "file": "remaining_pipeline_accelerations_20261112.json",
+        "sha256": "ce65c16f8a302977a96dd0449064a2e3aea11f94df565f43f624e7cc6307273a"
+      }
+    },
+    {
+      "id": "pnl-cnn-3view-cuda",
+      "title": "PNL 3-view CompNet inference (CUDA)",
+      "category": "port",
+      "scope": "3-view CompNet CNN pass (CUDA)",
+      "evidence_date": "2026-11-12",
+      "reference_seconds": 4.05285881832242,
+      "optimized_seconds": 2.021624568849802,
+      "speed_ratio": 2.0047534447151496,
+      "seconds_saved": 2.031234249472618,
+      "reduction_percent": 50.11855434711138,
+      "method": "Compile a static CompNet forward execution plan, deduplicate uniform background slices and evaluate 32-slice IEEE FP32 batches under torch.inference_mode().",
+      "baseline": "Per-step dynamic module-dict dispatch and 8-slice uncached 3-view CompNet evaluation on registered b0 volume.",
+      "unchanged": "Fused 3-view brain mask agrees on >99.998% of voxels (32 boundary voxels over 2.22M mask voxels; native warped mask is 100% identical).",
+      "limitation": "Median of three warmed 3-view CompNet forward passes on registered HCP 100307 b0 volume on NVIDIA H100; excludes ANTs registration.",
+      "sample": "Registered 3D b0 volume across axial, coronal and sagittal CompNet checkpoints; CUDA execution.",
+      "upstream_reference": "Measured on official converted CompNet weights (axial/coronal/sagittal .pt); static execution plan and slice batching preserve model math.",
+      "measurement_source": {
+        "file": "remaining_pipeline_accelerations_20261112.json",
+        "sha256": "ce65c16f8a302977a96dd0449064a2e3aea11f94df565f43f624e7cc6307273a"
+      }
+    },
+    {
+      "id": "preproc-fsl-cpu",
+      "title": "MRtrix3/FSL distortion & eddy pipeline (CPU)",
+      "category": "implementation",
+      "scope": "Complete denoising + topup + eddy (CPU)",
+      "evidence_date": "2026-11-12",
+      "reference_seconds": 3189.8589068632573,
+      "optimized_seconds": 2738.3477642945945,
+      "speed_ratio": 1.1648845148362568,
+      "seconds_saved": 451.51114256866276,
+      "reduction_percent": 14.154580367087632,
+      "method": "Fuse in-RAM vectorized MP-PCA + Gibbs preprocessing before a single fast-gzip handoff and forward explicit multi-thread flags (-nthreads / --nthr) to topup and eddy_cpu.",
+      "baseline": "Separate DIPY subprocesses with intermediate level-9 gzip NIfTI round-trips and single-threaded topup execution before eddy_cpu.",
+      "unchanged": "Final distortion- and eddy-corrected 4D DWI volume matches baseline (Pearson r = 0.99983; identical shape, affine and automatic QC pass).",
+      "limitation": "Complete sub-dicom acquisition with reverse-phase b0 topup + eddy_cpu (4 threads); iterative susceptibility/eddy solvers dominate remaining CPU runtime.",
+      "sample": "Clinical 4D dMRI (104x104x60x31) + reverse-phase b0; MP-PCA + Gibbs + topup + eddy_cpu.",
+      "upstream_reference": "Plugin workflow handoff and multi-thread forwarding around DIPY 1.12.1, MRtrix3 and FSL topup/eddy_cpu; external FSL binaries unchanged.",
+      "measurement_source": {
+        "file": "remaining_pipeline_accelerations_20261112.json",
+        "sha256": "ce65c16f8a302977a96dd0449064a2e3aea11f94df565f43f624e7cc6307273a"
+      }
+    },
+    {
+      "id": "preproc-fsl-cuda",
+      "title": "MRtrix3/FSL distortion & eddy pipeline (CUDA)",
+      "category": "implementation",
+      "scope": "Complete denoising + topup + eddy_cuda (CUDA)",
+      "evidence_date": "2026-11-12",
+      "reference_seconds": 788.2687278240919,
+      "optimized_seconds": 250.23246394470334,
+      "speed_ratio": 3.1501457300851436,
+      "seconds_saved": 538.0362638793886,
+      "reduction_percent": 68.25543686917077,
+      "method": "Execute fused in-RAM CUDA MP-PCA + 2D FFT Gibbs suppression, concurrent fast-gzip NIfTI export and multi-threaded topup (--nthr=4) feeding FSL eddy_cuda.",
+      "baseline": "Unoptimized CPU DIPY subprocesses with intermediate level-9 gzip I/O and single-threaded topup feeding FSL eddy_cuda.",
+      "unchanged": "Final corrected 4D DWI volume matches baseline (Pearson r = 0.99999; 0.28% relative mean difference within multi-threaded topup floating-point tolerance).",
+      "limitation": "Complete sub-dicom acquisition with reverse-phase b0 on NVIDIA H100 + 4 CPU threads.",
+      "sample": "Clinical 4D dMRI (104x104x60x31) + reverse-phase b0; CUDA MP-PCA/Gibbs + multi-threaded topup + eddy_cuda.",
+      "upstream_reference": "Fuses CUDA MP-PCA/Gibbs kernels with multi-threaded FSL topup and unmodified FSL eddy_cuda on reverse-phase clinical dMRI.",
+      "measurement_source": {
+        "file": "remaining_pipeline_accelerations_20261112.json",
+        "sha256": "ce65c16f8a302977a96dd0449064a2e3aea11f94df565f43f624e7cc6307273a"
+      }
+    },
+    {
+      "id": "ddsurfer-cpu",
+      "title": "DDSurfer bilateral surface reconstruction (CPU)",
+      "category": "implementation",
+      "scope": "Complete lh/rh white & pial meshes (CPU)",
+      "evidence_date": "2026-11-12",
+      "reference_seconds": 135.35034649819136,
+      "optimized_seconds": 125.49047520011663,
+      "speed_ratio": 1.078570674645637,
+      "seconds_saved": 9.859871298074722,
+      "reduction_percent": 7.28470340355315,
+      "method": "Pack 18 feature channels into a contiguous channels-last [X*Y*Z, 18] buffer for single-pass trilinear vertex gathering, reuse conformal volumes across hemispheres and buffer .obj mesh serialization.",
+      "baseline": "18 separate per-channel volume interpolations per ODE step, duplicate cross-hemisphere NIfTI loading and per-vertex Python string formatting.",
+      "unchanged": "All four cortical meshes (lh/rh white & pial) preserve exact triangle topology with <= 6.4e-4 mm maximum vertex displacement (mean 1.2e-5 mm).",
+      "limitation": "Subject 100408 complete bilateral white and pial reconstruction on CPU (4 threads).",
+      "sample": "Full HCP 100408 conformed feature volumes; bilateral white + pial ODE deformation; CPU execution.",
+      "upstream_reference": "Measured on official DDSurfer conformal feature checkpoints; channels-last trilinear gather and volume caching preserve mesh ODE integration.",
+      "measurement_source": {
+        "file": "remaining_pipeline_accelerations_20261112.json",
+        "sha256": "ce65c16f8a302977a96dd0449064a2e3aea11f94df565f43f624e7cc6307273a"
+      }
+    },
+    {
+      "id": "ddsurfer-cuda",
+      "title": "DDSurfer bilateral surface reconstruction (CUDA)",
+      "category": "implementation",
+      "scope": "Complete lh/rh white & pial meshes (CUDA)",
+      "evidence_date": "2026-11-12",
+      "reference_seconds": 12.481589939445257,
+      "optimized_seconds": 10.7565259039402,
+      "speed_ratio": 1.1603737164685441,
+      "seconds_saved": 1.7250640355050564,
+      "reduction_percent": 13.820867724979324,
+      "method": "Stack all 18 spatial feature volumes into one [1, 18, D, H, W] GPU tensor for single-kernel F.grid_sample trilinear sampling, reuse volume cache across hemispheres and vectorize native RAS transforms.",
+      "baseline": "18 separate 1-channel F.grid_sample kernel launches per ODE step, repeated NIfTI loading per hemisphere and unbuffered .obj export.",
+      "unchanged": "All four reconstructed cortical meshes (lh/rh white & pial) match baseline bit-for-bit (0.0 mm maximum vertex distance; exact topology).",
+      "limitation": "Subject 100408 median of three complete bilateral white and pial reconstructions on NVIDIA H100.",
+      "sample": "Full HCP 100408 conformed feature volumes; bilateral white + pial ODE deformation; CUDA execution.",
+      "upstream_reference": "Measured on official DDSurfer checkpoints; packed 18-channel F.grid_sample kernel matches per-channel GPU interpolation identically.",
+      "measurement_source": {
+        "file": "remaining_pipeline_accelerations_20261112.json",
+        "sha256": "ce65c16f8a302977a96dd0449064a2e3aea11f94df565f43f624e7cc6307273a"
+      }
+    },
+    {
+      "id": "ddsurfer-postproc-dag",
+      "title": "Cortical surface morphometry DAG (CPU)",
+      "category": "implementation",
+      "scope": "Complete FreeSurfer post-processing (4 threads)",
+      "evidence_date": "2026-11-12",
+      "reference_seconds": 515.56,
+      "optimized_seconds": 461.1407911553979,
+      "speed_ratio": 1.1180099654776876,
+      "seconds_saved": 54.41920884460205,
+      "reduction_percent": 10.555358996935771,
+      "method": "Schedule independent intra-hemisphere FreeSurfer C++ branches (white morphometry, pial morphometry, inflation/sphere and thickness; then cortex label, aparc/a2009s annotations and fsaverage transfer) concurrently across stage threads and skip redundant symlink re-checks.",
+      "baseline": "Strictly serial intra-hemisphere execution of all 16 FreeSurfer surface, curvature, inflation, spherical registration, annotation and stats stages.",
+      "unchanged": "All 133/133 exported surf/, label/, mri/ and stats/ files match baseline payloads identically (0 mismatches).",
+      "limitation": "Subject 100307 left-hemisphere complete post-processing (4 threads, sphere_seed=1234); single-threaded mris_register (~4 min) bounds maximum intra-hemisphere parallelism.",
+      "sample": "DDSurfer native white/pial meshes -> FreeSurfer thickness, curvature, sulc, sphere.reg, aparc + aparc.a2009s annotations/stats and fsaverage overlays.",
+      "upstream_reference": "Schedules independent FreeSurfer C++ surface/label/overlay commands concurrently within each hemisphere; FreeSurfer binaries unchanged.",
+      "measurement_source": {
+        "file": "remaining_pipeline_accelerations_20261112.json",
+        "sha256": "ce65c16f8a302977a96dd0449064a2e3aea11f94df565f43f624e7cc6307273a"
+      }
+    },
+    {
+      "id": "noddi-full-cpu",
+      "title": "NODDI active-set QP microstructure fit (CPU)",
+      "category": "implementation",
+      "scope": "Complete full-brain fit (8-thread CPU)",
+      "evidence_date": "2026-11-12",
+      "reference_seconds": 252.08285474032164,
+      "optimized_seconds": 119.70802254788578,
+      "speed_ratio": 2.1058142083959583,
+      "seconds_saved": 132.37483219243586,
+      "reduction_percent": 52.51242982344011,
+      "method": "Replace per-voxel Python/Joblib scipy.optimize.nnls loops with a batched multi-threaded C++/PyTorch FP64 active-set Lawson-Hanson QP solver over the exact AMICO dictionary and concurrent fast-gzip NIfTI writes.",
+      "baseline": "Default 8-thread AMICO 2.1.1 full-brain NODDI fit on the same 740,916 mask voxels and precomputed dictionary.",
+      "unchanged": "NDI and validity mask match AMICO within 5.96e-8 (0 voxels > 1e-6); 99.9995% of all 740,916 voxels agree within 1e-6 across ODI, IsoVF and RMSE.",
+      "limitation": "Subject 100307 complete end-to-end NODDI stage on 8 CPU threads including dictionary generation, 27-file export and QC.",
+      "sample": "Full-brain HCP 100307 (740,916 mask voxels; 288 volumes); AMICO NODDI dictionary; 8 CPU threads.",
+      "upstream_reference": "Custom multi-threaded FP64 active-set Lawson-Hanson QP solver over the exact AMICO 2.1.1 NODDI dictionary vs 8-thread AMICO.",
+      "measurement_source": {
+        "file": "remaining_pipeline_accelerations_20261112.json",
+        "sha256": "ce65c16f8a302977a96dd0449064a2e3aea11f94df565f43f624e7cc6307273a"
+      }
+    },
+    {
+      "id": "noddi-full-cuda",
+      "title": "NODDI active-set QP microstructure fit (CUDA)",
+      "category": "implementation",
+      "scope": "Complete full-brain fit (CUDA)",
+      "evidence_date": "2026-11-12",
+      "reference_seconds": 252.08285474032164,
+      "optimized_seconds": 29.34911341033876,
+      "speed_ratio": 8.589113109342541,
+      "seconds_saved": 222.73374132998288,
+      "reduction_percent": 88.357354394224,
+      "method": "Execute a vectorized FP64 CUDA active-set Lawson-Hanson NNLS solver across all 121x12 dictionary atoms per voxel in VRAM-bounded chunks alongside concurrent fast-gzip NIfTI export.",
+      "baseline": "Default 8-thread AMICO 2.1.1 CPU full-brain NODDI fit on the same 740,916 mask voxels (AMICO provides no GPU solver).",
+      "unchanged": "Matches optimized CPU identically on NDI, RMSE, NRMSE and validity mask (0.0 max diff) and within 5.96e-8 on ODI/IsoVF (0 voxels > 1e-6 across 740,916 voxels).",
+      "limitation": "Subject 100307 complete end-to-end NODDI stage on NVIDIA H100 including AMICO LUT setup, GPU solve and 27 NIfTI exports.",
+      "sample": "Full-brain HCP 100307 (740,916 mask voxels; 288 volumes); AMICO NODDI dictionary; CUDA execution.",
+      "upstream_reference": "Custom batched FP64 PyTorch CUDA active-set Lawson-Hanson QP solver over the exact AMICO 2.1.1 NODDI dictionary vs 8-thread AMICO.",
+      "measurement_source": {
+        "file": "remaining_pipeline_accelerations_20261112.json",
+        "sha256": "ce65c16f8a302977a96dd0449064a2e3aea11f94df565f43f624e7cc6307273a"
+      }
+    },
+    {
+      "id": "ukf-full",
+      "title": "UKF 2-tensor whole-brain tractography (CPU)",
+      "category": "implementation",
+      "scope": "Complete 16-thread UKF stage",
+      "evidence_date": "2026-11-12",
+      "reference_seconds": 710.583358142525,
+      "optimized_seconds": 659.066497605294,
+      "speed_ratio": 1.07816640767573,
+      "seconds_saved": 51.51686053723097,
+      "reduction_percent": 7.249939074269451,
+      "method": "Stream uncompressed scratch NRRDs into UKFTractography and reuse a single validated VTK polydata buffer across streamline validation, vectorized mask-overlap QC, flat ArraySequence TRK export and TRK verification.",
+      "baseline": "Gzip-compressed temporary NRRD staging and four redundant full-file VTK/TRK parses with per-streamline Python QC loops around UKFTractography.",
+      "unchanged": "Produces the exact same 276,924 whole-brain streamlines and passes all automatic QC checks.",
+      "limitation": "Subject 100307 complete 16-thread 2-tensor UKF stage; C++ UKFTractography Kalman filtering (~10.3 min) accounts for >93% of runtime.",
+      "sample": "HCP 100307 b0+b1000 shell; 2-tensor UKF (1 seed/voxel, 16 threads) + QC + VTK/TRK export.",
+      "upstream_reference": "Plugin staging, VTK validation, QC and TRK export around unmodified C++ UKFTractography (16 threads, 2-tensor model).",
+      "measurement_source": {
+        "file": "remaining_pipeline_accelerations_20261112.json",
+        "sha256": "ce65c16f8a302977a96dd0449064a2e3aea11f94df565f43f624e7cc6307273a"
+      }
+    },
+    {
+      "id": "ukf-adapter-io",
+      "title": "UKF NRRD staging, QC & TRK export",
+      "category": "implementation",
+      "scope": "Adapter pre/post-CLI I/O & QC (277,875 tracks)",
+      "evidence_date": "2026-11-12",
+      "reference_seconds": 84.39384777657688,
+      "optimized_seconds": 39.49316613189876,
+      "speed_ratio": 2.1369228158289313,
+      "seconds_saved": 44.900681644678116,
+      "reduction_percent": 53.203737982829715,
+      "method": "Write uncompressed scratch NRRDs, parse output VTK polydata once in memory, vectorize streamline length/mask-overlap QC and build TRK ArraySequence buffers directly from flat VTK offset/connectivity arrays.",
+      "baseline": "Compressed temporary NRRD writes plus separate VTK reads for contract check, Python per-streamline QC, nibabel GeneratorWrapper TRK export and TRK re-verification.",
+      "unchanged": "Exported 100307_ukf.trk file is byte-for-byte SHA-256 identical (277,875 streamlines) with identical QC metrics.",
+      "limitation": "Isolated deterministic adapter staging + post-CLI validation/QC/TRK export on saved HCP 100307 UKF tractogram (excludes C++ UKFTractography tracking).",
+      "sample": "HCP 100307 DWI staging + 277,875-streamline UKF VTK validation, QC and TRK conversion.",
+      "upstream_reference": "Plugin pre/post-CLI NRRD/VTK/TRK I/O and vectorized QC around saved UKFTractography output; produces byte-identical TRK.",
+      "measurement_source": {
+        "file": "remaining_pipeline_accelerations_20261112.json",
+        "sha256": "ce65c16f8a302977a96dd0449064a2e3aea11f94df565f43f624e7cc6307273a"
+      }
+    },
+    {
+      "id": "csd-act-full",
+      "title": "MRtrix3 CSD/ACT + SIFT2 whole-brain pipeline",
+      "category": "implementation",
+      "scope": "Complete 8-thread 1M-streamline stage",
+      "evidence_date": "2026-11-12",
+      "reference_seconds": 2106.028580604121,
+      "optimized_seconds": 2039.1262250877917,
+      "speed_ratio": 1.032809325236082,
+      "seconds_saved": 66.90235551632941,
+      "reduction_percent": 3.1767069133097015,
+      "method": "Stage contiguous volume-axis strides (-strides 0,0,0,1) on dwi.mif, overlap post-tckgen tcksift2, tckconvert (.vtk) and TRK export concurrently, and vectorize 1M-streamline validation and SIFT2 weight parsing.",
+      "baseline": "Default dwi.mif strides, sequential post-tracking execution of tcksift2 -> tckconvert -> export_tck_to_trk and Python-loop SIFT2/streamline validation.",
+      "unchanged": "Generates 1,000,000 valid ACT iFOD2 streamlines (.tck, .vtk, .trk) and 1,000,000 finite positive SIFT2 weights passing all QC checks.",
+      "limitation": "Subject 100408 complete 8-thread MSMT-CSD + ACT iFOD2 (1M tracks) + SIFT2 + VTK/TRK export; stochastic iFOD2 tckgen (~21 min) dominates total time.",
+      "sample": "Full HCP 100408 (288 volumes) + ACT 5TT/GMWMI; 1,000,000 dynamic-seed iFOD2 streamlines; 8 CPU threads.",
+      "upstream_reference": "Plugin stride staging, concurrent post-tracking SIFT2/VTK/TRK export and vectorized QC around unmodified MRtrix3 binaries.",
+      "measurement_source": {
+        "file": "remaining_pipeline_accelerations_20261112.json",
+        "sha256": "ce65c16f8a302977a96dd0449064a2e3aea11f94df565f43f624e7cc6307273a"
+      }
+    },
+    {
+      "id": "csd-post-export",
+      "title": "CSD/ACT post-tracking SIFT2 & VTK/TRK export",
+      "category": "implementation",
+      "scope": "Post-tckgen SIFT2 + dual export (1M tracks)",
+      "evidence_date": "2026-11-12",
+      "reference_seconds": 259.610068,
+      "optimized_seconds": 124.416886,
+      "speed_ratio": 2.0866144166315173,
+      "seconds_saved": 135.193182,
+      "reduction_percent": 52.075477288500224,
+      "method": "Execute independent consumers of the finished 1M-streamline .tck file (tcksift2, multi-threaded tckconvert to VTK and streaming TCK-to-TRK conversion) concurrently in a bounded thread pool.",
+      "baseline": "Sequential execution of tcksift2 followed by tckconvert (.vtk) followed by Python TCK-to-TRK export on the same 1,000,000-streamline tractogram.",
+      "unchanged": "All three outputs (SIFT2 weights/mu, 3.44 GB VTK polydata and 1.21 GB TRK tractogram) pass full 1,000,000-streamline integrity validation.",
+      "limitation": "Measured phase wall time from tckgen completion to completion of SIFT2, VTK and TRK exports on HCP 100408 (8-thread budget).",
+      "sample": "1,000,000 whole-brain ACT streamlines + MSMT-CSD wmfod.mif on HCP 100408.",
+      "upstream_reference": "Concurrent execution of unmodified MRtrix3 tcksift2, tckconvert and streaming TRK export after tckgen completes.",
+      "measurement_source": {
+        "file": "remaining_pipeline_accelerations_20261112.json",
+        "sha256": "ce65c16f8a302977a96dd0449064a2e3aea11f94df565f43f624e7cc6307273a"
+      }
+    },
+    {
+      "id": "wmql-full-cpu",
+      "title": "WMQL 48-bundle rule-based queries (CPU)",
+      "category": "implementation",
+      "scope": "Complete 48-query segmentation (CPU)",
+      "evidence_date": "2026-11-12",
+      "reference_seconds": 22.869534820318222,
+      "optimized_seconds": 6.460302848368883,
+      "speed_ratio": 3.540009711168942,
+      "seconds_saved": 16.40923197194934,
+      "reduction_percent": 71.75148992261404,
+      "method": "Load VTK/TRK streamlines into flat CSR arrays, compute voxel-label crossings via multi-threaded vectorized bincount histograms with lazy CSR sets and export binary VTK bundles concurrently.",
+      "baseline": "Upstream tract_querier per-streamline Python point loops, dense dict/set construction and sequential VTK bundle writing.",
+      "unchanged": "All 48 official queries and 41 non-empty white-matter bundles match upstream tract_querier streamline counts identically (0 mismatches).",
+      "limitation": "Subject 100307 complete WMQL stage on 8 CPU threads including VTK load, 48 query evaluations, 41 bundle exports and QC.",
+      "sample": "Full HCP 100307 UKF tractogram + DDParcel wmparc atlas; 48 official WMQL queries; CPU execution.",
+      "upstream_reference": "Custom CSR spatial indexing and parallel binary VTK export feeding upstream tract_querier query evaluation; 48 official queries unchanged.",
+      "measurement_source": {
+        "file": "remaining_pipeline_accelerations_20261112.json",
+        "sha256": "ce65c16f8a302977a96dd0449064a2e3aea11f94df565f43f624e7cc6307273a"
+      }
+    },
+    {
+      "id": "wmql-full-cuda",
+      "title": "WMQL 48-bundle rule-based queries (CUDA)",
+      "category": "implementation",
+      "scope": "Complete 48-query segmentation (CUDA)",
+      "evidence_date": "2026-11-12",
+      "reference_seconds": 22.869534820318222,
+      "optimized_seconds": 8.15598494745791,
+      "speed_ratio": 2.8040187626199935,
+      "seconds_saved": 14.713549872860312,
+      "reduction_percent": 64.33690054678418,
+      "method": "Evaluate RAS-to-IJK voxel label lookup, endpoint indexing and per-tract crossing histograms on CUDA tensors in VRAM-bounded chunks alongside lazy CSR query evaluation and parallel binary VTK export.",
+      "baseline": "Upstream tract_querier CPU per-streamline Python spatial indexing and sequential bundle export (tract_querier has no GPU backend).",
+      "unchanged": "All 48 queries and 41 non-empty bundles match both upstream baseline and optimized CPU streamline counts identically (0 mismatches).",
+      "limitation": "Subject 100307 median of three complete WMQL runs on NVIDIA H100; at ~280k tracks VTK disk I/O (~5 s) exceeds GPU kernel time, whereas GPU scales to multi-million-track tractograms.",
+      "sample": "Full HCP 100307 UKF tractogram + DDParcel wmparc atlas; 48 official WMQL queries; CUDA execution.",
+      "upstream_reference": "Custom CUDA crossing-histogram spatial indexing and parallel binary VTK export feeding upstream tract_querier query evaluation.",
+      "measurement_source": {
+        "file": "remaining_pipeline_accelerations_20261112.json",
+        "sha256": "ce65c16f8a302977a96dd0449064a2e3aea11f94df565f43f624e7cc6307273a"
+      }
+    },
+    {
+      "id": "tractcloud-full-cpu",
+      "title": "TractCloud point-cloud parcellation (CPU)",
+      "category": "implementation",
+      "scope": "Complete 42-tract parcellation (CPU)",
+      "evidence_date": "2026-11-12",
+      "reference_seconds": 46.05965726822615,
+      "optimized_seconds": 42.42961900122464,
+      "speed_ratio": 1.0855543451120016,
+      "seconds_saved": 3.6300382670015097,
+      "reduction_percent": 7.88116647473549,
+      "method": "Vectorize CSR polyline arc-length resampling for 15-point local + 20-neighbor global features, pre-stage contiguous batches and write compressed .vtp bundles concurrently from cached CSR coordinates.",
+      "baseline": "Per-streamline DIPY set_number_of_points loops, per-batch NumPy/tensor re-packing, duplicate whole-brain tractogram reload and serial level-9 VTP compression.",
+      "unchanged": "All 39/39 non-empty anatomical bundles match baseline per-bundle streamline counts identically (exact_bundle_count = 39/39).",
+      "limitation": "Subject 100307 complete TractCloud stage on 4 CPU threads with fixed random_seed=0.",
+      "sample": "HCP 100307 CSD/ACT tractogram + TractCloud 800-cluster atlas; 42 target tracts; CPU execution.",
+      "upstream_reference": "Vectorized CSR streamline resampling and parallel fast-zlib VTP export around official TractCloud DGCNN+PointNet weights.",
+      "measurement_source": {
+        "file": "remaining_pipeline_accelerations_20261112.json",
+        "sha256": "ce65c16f8a302977a96dd0449064a2e3aea11f94df565f43f624e7cc6307273a"
+      }
+    },
+    {
+      "id": "tractcloud-full-cuda",
+      "title": "TractCloud point-cloud parcellation (CUDA)",
+      "category": "implementation",
+      "scope": "Complete 42-tract parcellation (CUDA)",
+      "evidence_date": "2026-11-12",
+      "reference_seconds": 16.05204522050917,
+      "optimized_seconds": 10.219877259805799,
+      "speed_ratio": 1.5706690806983525,
+      "seconds_saved": 5.832167960703373,
+      "reduction_percent": 36.33286525539937,
+      "method": "Combine vectorized CSR feature resampling with GPU-resident dataset slicing (preserving exact torch.Generator batch order), IEEE FP32 cuDNN DGCNN+PointNet forward passes and parallel fast-zlib .vtp export.",
+      "baseline": "Unoptimized TractCloud pipeline with Python per-streamline resampling, per-batch host-to-GPU DataLoader collation, disabled cuDNN and serial VTP export.",
+      "unchanged": "All 39/39 non-empty anatomical bundles match baseline CUDA streamline counts identically (exact_bundle_count = 39/39).",
+      "limitation": "Subject 100307 median of three complete TractCloud runs on NVIDIA H100 + 4 CPU threads (random_seed=0).",
+      "sample": "HCP 100307 CSD/ACT tractogram + TractCloud 800-cluster atlas; 42 target tracts; CUDA execution.",
+      "upstream_reference": "Vectorized CSR resampling, GPU-resident batching and IEEE FP32 cuDNN execution on official TractCloud weights.",
+      "measurement_source": {
+        "file": "remaining_pipeline_accelerations_20261112.json",
+        "sha256": "ce65c16f8a302977a96dd0449064a2e3aea11f94df565f43f624e7cc6307273a"
+      }
     }
   ],
   "upstream_review": {
@@ -1552,7 +1996,6 @@
   "policy": "Output equivalence is not anatomical or clinical validation. No whole-workflow speedup has been established.",
   "pending": [
     "Repeated multi-subject full-module pairs",
-    "Matched CSD/ACT/SIFT2 complete-module baseline",
     "Native Windows/macOS scientific timing",
     "Optional persistent-model worker: proposed, not implemented or benchmarked"
   ]

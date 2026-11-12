@@ -33,7 +33,7 @@ def nearest_labels(tree, seed_labels, points):
     """Exact physical nearest neighbour; equal-distance ties choose the lowest ID."""
     import numpy as np
 
-    distances, indices = tree.query(points, k=2, eps=0, workers=1)
+    distances, indices = tree.query(points, k=2, eps=0, workers=-1)
     labels = seed_labels[indices[:, 0]].copy()
     ties = np.isclose(distances[:, 0], distances[:, 1], atol=1e-10, rtol=0)
     for index in np.flatnonzero(ties & (distances[:, 0] <= RADIUS_MM)):
@@ -78,7 +78,7 @@ def derive_territories(image):
     callosal = np.argwhere(data == 192)
     if len(callosal):
         points = nib.affines.apply_affine(affine, callosal)
-        dl, dr = (tree.query(points, eps=0, workers=1)[0] for tree in wm_trees)
+        dl, dr = (tree.query(points, eps=0, workers=-1)[0] for tree in wm_trees)
         # Equidistant central voxels retain the original label rather than an arbitrary side.
         equal = np.isclose(dl, dr, atol=1e-10, rtol=0)
         labels = np.where(equal, 192, np.where(dl < dr, 3004, 4004))

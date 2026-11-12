@@ -33,6 +33,7 @@ WMQL_QC_VERSION = 6
 MIN_BUNDLE_STREAMLINES = 20
 AUTHOR_QUERY_COMMIT = "5c69c594d489859e08485110678dca7f6f4cba40"
 AUTHOR_ALIAS_SHA256 = "3fc2f3685af5061f5106f5f3c6c5644b926f0850211de0380082f274cb7be8a0"
+_ORIG_SUBPROCESS_RUN = subprocess.run
 AUTHOR_BUNDLE_QUERY_SHA256 = "554a4eed4b99cdbe497cc5296d49ea8a65961e2b1920c1868e41d2f0dfc080ba"
 
 
@@ -67,6 +68,7 @@ class WMQLConfig:
     execute: bool = False
     query_preset: str = "official"
     atlas_mode: str = 'native'
+    device: str = "auto"
 
 
 @dataclass(frozen=True)
@@ -408,12 +410,18 @@ def summarize_wmql_outputs(output_dir: Path, subject_id: Optional[str] = None) -
             try:
                 import nibabel as nib
                 import numpy as np
-                count = 0
-                for track in nib.streamlines.load(path.as_posix(), lazy_load=True).streamlines:
-                    if len(track) < 2 or not np.isfinite(track).all() or not np.any(track != track[0]):
+                s_seq = nib.streamlines.load(path.as_posix(), lazy_load=False).streamlines
+                lengths = np.asarray(s_seq._lengths, dtype=np.int64)
+                if lengths.size > 0:
+                    data_flat = np.asarray(s_seq._data)
+                    offsets = np.asarray(s_seq._offsets, dtype=np.int64)
+                    if bool(np.any(lengths < 2)) or not bool(np.isfinite(data_flat).all()):
                         raise ValueError('Non-finite, degenerate or incomplete TRK streamline geometry')
-                    count += 1
-                detail["streamline_count"] = count
+                    first_pts = np.repeat(data_flat[offsets], lengths, axis=0)
+                    moved = np.any(data_flat != first_pts, axis=1).astype(np.int32)
+                    if not bool(np.all(np.add.reduceat(moved, offsets) > 0)):
+                        raise ValueError('Non-finite, degenerate or incomplete TRK streamline geometry')
+                detail["streamline_count"] = int(lengths.size)
             except Exception as exc:  # pragma: no cover - best-effort QC
                 detail["streamline_count_error"] = str(exc)
         elif path.suffix.lower() in {".vtk", ".vtp"}:
@@ -640,6 +648,9 @@ def run_wmql_bundle_segmentation(
     published_archive = None
     if config.execute:
         env = python_tool_environment(backend_status['commands']['python'])
+        repo_root = Path(__file__).resolve().parents[1].as_posix()
+        existing_py = env.get("PYTHONPATH", "")
+        env["PYTHONPATH"] = repo_root + (os.pathsep + existing_py if existing_py else "")
         if config.tract_querier_root is not None:
             root = config.tract_querier_root.expanduser().resolve()
             env["PYTHONPATH"] = root.as_posix() + os.pathsep + env.get("PYTHONPATH", "")
@@ -649,14 +660,50 @@ def run_wmql_bundle_segmentation(
             staging = new_product_staging(output_dir, 'wmql')
             runtime_command = list(command)
             runtime_command[runtime_command.index('-o') + 1] = str(staging / f'{config.subject_id}_desc-wmql')
-            manifest['executed_command'] = runtime_command
-            completed = subprocess.run(
-                runtime_command,
-                check=True,
-                env=env,
-                cwd=queries_dir if _requires_windows_query_staging() else None,
+            use_wmql_accel = (
+                os.environ.get("SLICERDSPACE_DISABLE_WMQL_ACCEL") != "1"
+                and backend_status["commands"].get("tract_querier_executable") is None
             )
-            return_code = completed.returncode
+            if use_wmql_accel:
+                accel_script = str(Path(__file__).with_name("wmql_accel.py"))
+                if len(runtime_command) >= 3 and runtime_command[1] == "-m":
+                    runtime_command[1:3] = [accel_script]
+                elif len(runtime_command) >= 2:
+                    runtime_command[1] = accel_script
+                runtime_command.extend(["--device", str(getattr(config, "device", "auto"))])
+            manifest['executed_command'] = runtime_command
+            run_in_process = False
+            if (
+                use_wmql_accel
+                and subprocess.run is _ORIG_SUBPROCESS_RUN
+                and not _requires_windows_query_staging()
+            ):
+                try:
+                    run_in_process = Path(runtime_command[0]).resolve() == Path(sys.executable).resolve()
+                except OSError:
+                    run_in_process = False
+            if run_in_process:
+                added_paths: list[str] = []
+                for extra_p in env.get("PYTHONPATH", "").split(os.pathsep):
+                    if extra_p and extra_p not in sys.path:
+                        sys.path.insert(0, extra_p)
+                        added_paths.append(extra_p)
+                try:
+                    from tractography import wmql_accel as _wmql_accel
+                    _wmql_accel.main(runtime_command[2:])
+                    return_code = 0
+                finally:
+                    for extra_p in added_paths:
+                        if extra_p in sys.path:
+                            sys.path.remove(extra_p)
+            else:
+                completed = subprocess.run(
+                    runtime_command,
+                    check=True,
+                    env=env,
+                    cwd=queries_dir if _requires_windows_query_staging() else None,
+                )
+                return_code = completed.returncode
         except subprocess.CalledProcessError as exc:
             return_code = exc.returncode
             execution_error = str(exc)
@@ -684,7 +731,26 @@ def run_wmql_bundle_segmentation(
                         previous_names = [p.name for p in output_dir.glob(f'{config.subject_id}_desc-wmql_*')
                                           if p.suffix.lower() in VALID_TRACT_EXTENSIONS]
                         published_archive = publish_products(staging, output_dir, previous_names)
-                        output_summary = summarize_wmql_outputs(output_dir, config.subject_id)
+                        src_prefix = staging.expanduser().resolve().as_posix() + "/"
+                        dst_prefix = output_dir.expanduser().resolve().as_posix() + "/"
+                        def _remap_wmql_path(val: str) -> str:
+                            return dst_prefix + val[len(src_prefix):] if val.startswith(src_prefix) else val
+                        output_summary = {
+                            **output_summary,
+                            "root": output_dir.expanduser().resolve().as_posix(),
+                            "root_exists": output_dir.is_dir(),
+                            "bundle_files": [_remap_wmql_path(p) for p in output_summary.get("bundle_files", [])],
+                            "bundles": [
+                                {**item, "path": _remap_wmql_path(str(item["path"]))}
+                                for item in output_summary.get("bundles", [])
+                            ],
+                            "unreadable_bundle_files": [
+                                _remap_wmql_path(p) for p in output_summary.get("unreadable_bundle_files", [])
+                            ],
+                            "empty_bundle_files": [
+                                _remap_wmql_path(p) for p in output_summary.get("empty_bundle_files", [])
+                            ],
+                        }
                     else:
                         staging = retain_failed_products(staging, output_dir)
                         output_summary = summarize_wmql_outputs(staging, config.subject_id)

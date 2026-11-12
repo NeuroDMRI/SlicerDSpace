@@ -111,6 +111,7 @@ class MicrostructureConfig:
     noddi_max_isotropic_fraction_for_tissue: float = NODDI_MAX_ISOTROPIC_FRACTION_FOR_TISSUE
     max_parallel_models: int = 1
     free_water_device: str = "cpu"
+    noddi_device: str = "auto"
 
 
 @dataclass(frozen=True)
@@ -695,17 +696,19 @@ def _load_bvals_bvecs(raw_input_bundle: RawInputBundle) -> tuple[np.ndarray, np.
 
 
 def _save_scalar_nifti(data: np.ndarray, reference_img: nib.Nifti1Image, output_path: Path) -> None:
+    from microstructure.noddi_accel import save_nifti_fast
     header = reference_img.header.copy()
     header.set_data_dtype(np.float32)
     image = nib.Nifti1Image(data.astype(np.float32), reference_img.affine, header)
-    nib.save(image, str(output_path))
+    save_nifti_fast(image, output_path, compresslevel=1)
 
 
 def _save_mask_nifti(data: np.ndarray, reference_img: nib.Nifti1Image, output_path: Path) -> None:
+    from microstructure.noddi_accel import save_nifti_fast
     header = reference_img.header.copy()
     header.set_data_dtype(np.uint8)
     image = nib.Nifti1Image(data.astype(np.uint8), reference_img.affine, header)
-    nib.save(image, str(output_path))
+    save_nifti_fast(image, output_path, compresslevel=1)
 
 
 def _sanitize_free_water_scalars(
@@ -1322,84 +1325,120 @@ def _compute_noddi_maps(
         f"shells={nonzero_shells}",
         log,
     )
-    amico.set_verbose(2)
-    write_noddi_progress(
-        "running",
-        "loading_data",
-        nonzero_shells=nonzero_shells,
-        study_dir=study_dir.as_posix(),
-        amico_output_dir=amico_output_dir.as_posix(),
+    use_noddi_accel = (
+        not bool(config.noddi_directional_average)
+        and os.environ.get("SLICERDSPACE_DISABLE_NODDI_ACCEL") != "1"
     )
-    evaluation = amico.Evaluation(
-        study_path=str(_amico_cache_root(config)),
-        subject=config.subject_id,
-        output_path=str(amico_output_dir),
-    )
-    evaluation.set_config("doDirectionalAverage", bool(config.noddi_directional_average))
-    evaluation.set_config("doSaveModulatedMaps", False)
-    evaluation.set_config("doComputeRMSE", True)
-    evaluation.set_config("doComputeNRMSE", True)
-    evaluation.set_config("nthreads", _noddi_threads(config))
-    evaluation.set_config("BLAS_nthreads", 1)
-    evaluation.load_data(
-        dwi_filename=dwi_path.name,
-        scheme_filename=scheme_path.name,
-        mask_filename=mask_path.name,
-        b0_thr=int(config.noddi_b0_threshold),
-    )
-    evaluation.set_model("NODDI")
-    evaluation.set_solver(
-        lambda1=float(config.noddi_solver_lambda1),
-        lambda2=float(config.noddi_solver_lambda2),
-    )
-    write_noddi_progress("running", "generating_kernels", nonzero_shells=nonzero_shells)
-    _ensure_amico_rotation_matrices(int(config.noddi_lmax), int(config.noddi_ndirs), log)
-    try:
-        evaluation.generate_kernels(
-            regenerate=False,
-            lmax=int(config.noddi_lmax),
-            ndirs=int(config.noddi_ndirs),
-        )
-    except Exception as exc:
-        message = str(exc)
-        if "Auxiliary matrices not found" not in message and "amico.setup()" not in message:
-            raise
-        _emit("[Microstructure] AMICO kernels missing; running amico.setup() once and retrying.", log)
-        amico.setup(lmax=int(config.noddi_lmax))
-        evaluation.generate_kernels(
-            regenerate=False,
-            lmax=int(config.noddi_lmax),
-            ndirs=int(config.noddi_ndirs),
-        )
-    write_noddi_progress("running", "loading_kernels", nonzero_shells=nonzero_shells)
-    evaluation.load_kernels()
-    write_noddi_progress("running", "fitting_model", nonzero_shells=nonzero_shells)
-    evaluation.fit()
-    write_noddi_progress("running", "saving_results", nonzero_shells=nonzero_shells)
-    evaluation.save_results()
+    if use_noddi_accel:
+        from concurrent.futures import ThreadPoolExecutor
+        from microstructure.noddi_accel import resolve_noddi_device, run_accelerated_noddi_fit
 
-    source_dir = amico_output_dir
-    noddi_sources = {
-        "noddi_ndi": source_dir / "fit_NDI.nii.gz",
-        "noddi_odi": source_dir / "fit_ODI.nii.gz",
-        "noddi_fwf": source_dir / "fit_FWF.nii.gz",
-        "noddi_rmse": source_dir / "fit_RMSE.nii.gz",
-        "noddi_nrmse": source_dir / "fit_NRMSE.nii.gz",
-    }
-    for key, src in noddi_sources.items():
-        if not src.is_file():
-            raise FileNotFoundError(f"AMICO did not produce expected NODDI map: {src}")
+        resolved_noddi_device = resolve_noddi_device(getattr(config, "noddi_device", "auto"))
+        noddi_threads = _noddi_threads(config)
+        _emit(
+            f"[Microstructure] Accelerated NODDI solver: device={resolved_noddi_device}, nthreads={noddi_threads}",
+            log,
+        )
+        mask_img, mask, noddi_sources, source_arrays, _ = run_accelerated_noddi_fit(
+            amico_mod=amico,
+            config=config,
+            cache_root=_amico_cache_root(config),
+            dwi_path=dwi_path,
+            mask_path=mask_path,
+            scheme_path=scheme_path,
+            amico_output_dir=amico_output_dir,
+            nthreads=noddi_threads,
+            resolved_device=resolved_noddi_device,
+            ensure_rotations_fn=_ensure_amico_rotation_matrices,
+            progress_cb=lambda status, step: write_noddi_progress(
+                status,
+                step,
+                nonzero_shells=nonzero_shells,
+                study_dir=study_dir.as_posix(),
+                amico_output_dir=amico_output_dir.as_posix(),
+            ),
+            log=log,
+        )
+    else:
+        amico.set_verbose(2)
+        write_noddi_progress(
+            "running",
+            "loading_data",
+            nonzero_shells=nonzero_shells,
+            study_dir=study_dir.as_posix(),
+            amico_output_dir=amico_output_dir.as_posix(),
+        )
+        evaluation = amico.Evaluation(
+            study_path=str(_amico_cache_root(config)),
+            subject=config.subject_id,
+            output_path=str(amico_output_dir),
+        )
+        evaluation.set_config("doDirectionalAverage", bool(config.noddi_directional_average))
+        evaluation.set_config("doSaveModulatedMaps", False)
+        evaluation.set_config("doComputeRMSE", True)
+        evaluation.set_config("doComputeNRMSE", True)
+        evaluation.set_config("nthreads", _noddi_threads(config))
+        evaluation.set_config("BLAS_nthreads", 1)
+        evaluation.load_data(
+            dwi_filename=dwi_path.name,
+            scheme_filename=scheme_path.name,
+            mask_filename=mask_path.name,
+            b0_thr=int(config.noddi_b0_threshold),
+        )
+        evaluation.set_model("NODDI")
+        evaluation.set_solver(
+            lambda1=float(config.noddi_solver_lambda1),
+            lambda2=float(config.noddi_solver_lambda2),
+        )
+        write_noddi_progress("running", "generating_kernels", nonzero_shells=nonzero_shells)
+        _ensure_amico_rotation_matrices(int(config.noddi_lmax), int(config.noddi_ndirs), log)
+        try:
+            evaluation.generate_kernels(
+                regenerate=False,
+                lmax=int(config.noddi_lmax),
+                ndirs=int(config.noddi_ndirs),
+            )
+        except Exception as exc:
+            message = str(exc)
+            if "Auxiliary matrices not found" not in message and "amico.setup()" not in message:
+                raise
+            _emit("[Microstructure] AMICO kernels missing; running amico.setup() once and retrying.", log)
+            amico.setup(lmax=int(config.noddi_lmax))
+            evaluation.generate_kernels(
+                regenerate=False,
+                lmax=int(config.noddi_lmax),
+                ndirs=int(config.noddi_ndirs),
+            )
+        write_noddi_progress("running", "loading_kernels", nonzero_shells=nonzero_shells)
+        evaluation.load_kernels()
+        write_noddi_progress("running", "fitting_model", nonzero_shells=nonzero_shells)
+        evaluation.fit()
+        write_noddi_progress("running", "saving_results", nonzero_shells=nonzero_shells)
+        evaluation.save_results()
 
-    mask_img = nib.load(str(config.raw_input_bundle.mask_path))
-    mask = mask_img.get_fdata(dtype=np.float32) > 0.0
-    source_images = {key: nib.load(str(src)) for key, src in noddi_sources.items()}
-    source_arrays = {
-        key: image.get_fdata(dtype=np.float32)
-        for key, image in source_images.items()
-    }
-    for key, image in source_images.items():
-        if image.shape != mask.shape or not np.allclose(image.affine, mask_img.affine, atol=1e-4):
-            raise ValueError(f"AMICO {key} output does not match the NODDI input mask grid.")
+        source_dir = amico_output_dir
+        noddi_sources = {
+            "noddi_ndi": source_dir / "fit_NDI.nii.gz",
+            "noddi_odi": source_dir / "fit_ODI.nii.gz",
+            "noddi_fwf": source_dir / "fit_FWF.nii.gz",
+            "noddi_rmse": source_dir / "fit_RMSE.nii.gz",
+            "noddi_nrmse": source_dir / "fit_NRMSE.nii.gz",
+        }
+        for key, src in noddi_sources.items():
+            if not src.is_file():
+                raise FileNotFoundError(f"AMICO did not produce expected NODDI map: {src}")
+
+        mask_img = nib.load(str(config.raw_input_bundle.mask_path))
+        mask = mask_img.get_fdata(dtype=np.float32) > 0.0
+        source_images = {key: nib.load(str(src)) for key, src in noddi_sources.items()}
+        source_arrays = {
+            key: image.get_fdata(dtype=np.float32)
+            for key, image in source_images.items()
+        }
+        for key, image in source_images.items():
+            if image.shape != mask.shape or not np.allclose(image.affine, mask_img.affine, atol=1e-4):
+                raise ValueError(f"AMICO {key} output does not match the NODDI input mask grid.")
+
     clean_ndi, clean_odi, clean_isovf, valid_tissue, validity_qc = _sanitize_noddi_maps(
         source_arrays["noddi_ndi"],
         source_arrays["noddi_odi"],
@@ -1407,10 +1446,23 @@ def _compute_noddi_maps(
         mask,
         max_isotropic_fraction=config.noddi_max_isotropic_fraction_for_tissue,
     )
-    _save_scalar_nifti(clean_ndi, mask_img, paths["noddi_ndi"])
-    _save_scalar_nifti(clean_odi, mask_img, paths["noddi_odi"])
-    _save_scalar_nifti(clean_isovf, mask_img, paths["noddi_fwf"])
-    _save_mask_nifti(valid_tissue, mask_img, paths["noddi_tissue_valid_mask"])
+    if use_noddi_accel:
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            futs = [
+                pool.submit(_save_scalar_nifti, clean_ndi, mask_img, paths["noddi_ndi"]),
+                pool.submit(_save_scalar_nifti, clean_odi, mask_img, paths["noddi_odi"]),
+                pool.submit(_save_scalar_nifti, clean_isovf, mask_img, paths["noddi_fwf"]),
+                pool.submit(_save_mask_nifti, valid_tissue, mask_img, paths["noddi_tissue_valid_mask"]),
+            ]
+            for fut in futs:
+                fut.result()
+    else:
+        _save_scalar_nifti(clean_ndi, mask_img, paths["noddi_ndi"])
+        _save_scalar_nifti(clean_odi, mask_img, paths["noddi_odi"])
+        _save_scalar_nifti(clean_isovf, mask_img, paths["noddi_fwf"])
+        _save_mask_nifti(valid_tissue, mask_img, paths["noddi_tissue_valid_mask"])
     shutil.copy2(noddi_sources["noddi_rmse"], paths["noddi_rmse"])
     shutil.copy2(noddi_sources["noddi_nrmse"], paths["noddi_nrmse"])
     if signature != _expected_noddi_manifest(config):

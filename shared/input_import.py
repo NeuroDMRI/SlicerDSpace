@@ -480,6 +480,54 @@ def _copy_canonical_source(source: Path, targets: dict[str, Path], *, force: boo
             _copy_file(src, dst, force=force)
 
 
+def _validate_nifti_voxels_single_pass(image, source: Path) -> None:
+    """Decode the full 4D NIfTI payload in one sequential stream pass."""
+    import numpy as np
+
+    dtype = image.get_data_dtype()
+    itemsize = int(dtype.itemsize)
+    total_voxels = int(np.prod(image.shape, dtype=np.int64))
+    expected_bytes = total_voxels * itemsize
+    offset = max(0, int(getattr(image.dataobj, "offset", 0)))
+    slope = getattr(image.dataobj, "slope", 1.0)
+    inter = getattr(image.dataobj, "inter", 0.0)
+    if (slope is not None and not np.isfinite(slope)) or (inter is not None and not np.isfinite(inter)):
+        raise ValueError("DWI contains non-finite values")
+    needs_float_check = dtype.kind in ("f", "c")
+    elems_per_chunk = max(1, (4 * 1024 * 1024) // max(1, itemsize))
+    chunk_bytes = elems_per_chunk * itemsize
+    opener = gzip.open if source.name.lower().endswith(".gz") else open
+
+    with opener(source, "rb") as stream:
+        remaining_skip = offset
+        while remaining_skip > 0:
+            skipped = stream.read(min(remaining_skip, 1024 * 1024))
+            if not skipped:
+                raise EOFError("Truncated NIfTI header before voxel payload")
+            remaining_skip -= len(skipped)
+        remaining = expected_bytes
+        carry = b""
+        while remaining > 0:
+            buf = stream.read(min(remaining, chunk_bytes))
+            if not buf:
+                raise EOFError("Truncated NIfTI voxel payload")
+            remaining -= len(buf)
+            if needs_float_check:
+                if carry:
+                    buf = carry + buf
+                    carry = b""
+                usable = (len(buf) // itemsize) * itemsize
+                if usable < len(buf):
+                    carry = buf[usable:]
+                    buf = buf[:usable]
+                if buf and not np.isfinite(np.frombuffer(buf, dtype=dtype)).all():
+                    raise ValueError("DWI contains non-finite values")
+        if carry:
+            raise EOFError("Unaligned NIfTI voxel payload")
+        while stream.read(262144):
+            pass
+
+
 def _copy_nifti_source(
     source: Path,
     targets: dict[str, Path],
@@ -505,10 +553,13 @@ def _copy_nifti_source(
         raise ValueError("Gradient count/shape does not match the DWI volumes (expected 3 x N bvecs)")
     if not np.isfinite(bvals).all() or not np.isfinite(bvecs).all():
         raise ValueError("Gradients contain non-finite values")
-    # Force voxel decoding before committing anything, catching truncated data.
-    for index in range(image.shape[3]):
-        if not np.isfinite(np.asanyarray(image.dataobj[..., index])).all():
-            raise ValueError("DWI contains non-finite values")
+    # Force voxel decoding in one sequential stream pass before committing anything, catching truncated data.
+    if isinstance(image, (nib.Nifti1Image, nib.Nifti2Image)) and hasattr(image.dataobj, "offset"):
+        _validate_nifti_voxels_single_pass(image, source)
+    else:
+        for index in range(image.shape[3]):
+            if not np.isfinite(np.asanyarray(image.dataobj[..., index])).all():
+                raise ValueError("DWI contains non-finite values")
     target = targets["dwi"]
     for path in (target, targets["bvals"], targets["bvecs"]):
         if path.exists() and not force:
@@ -521,8 +572,8 @@ def _copy_nifti_source(
         if source.name.lower().endswith(".nii.gz"):
             shutil.copyfile(source, temporary)
         else:
-            with source.open("rb") as src, gzip.open(temporary, "wb") as dst:
-                shutil.copyfileobj(src, dst)
+            with source.open("rb") as src, gzip.open(temporary, "wb", compresslevel=1) as dst:
+                shutil.copyfileobj(src, dst, length=4 * 1024 * 1024)
         nib.load(str(temporary))
         os.replace(temporary, target)
     finally:

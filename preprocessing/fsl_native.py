@@ -195,9 +195,11 @@ def run_fsl_correction(
         _require_file(topup_datain)
         field = scratch / "field"
         field_map = scratch / "field_map.nii.gz"
+        topup_nthr = [opt for opt in eddy_options if opt.startswith("--nthr=")]
         topup_stdout = call(
             "topup", f"--imain={topup_image}", f"--datain={topup_datain}", f"--out={field}",
             f"--fout={field_map}", f"--config={topup_config}", f"--logout={scratch / 'topup_in.topup_log'}",
+            *topup_nthr[:1],
             "--verbose",
         )
         (scratch / "topup_output.txt").write_text(topup_stdout or "", encoding="utf-8")

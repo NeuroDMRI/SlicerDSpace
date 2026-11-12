@@ -282,35 +282,95 @@ def write_effective_mask(raw, effective, target):
     return replace(raw, mask_path=target)
 
 
-def output_qc(path, raw, selected=None):
-    import nibabel as nib
+def _load_validated_vtk_polydata(path):
+    """Read and validate a legacy VTK streamline file in a single pass."""
+    import re
     import numpy as np
-    from connectome.pipeline import _iter_streamlines
-    import vtk  # Require the full polyline reader, never an endpoint-only fallback.
-    from shared.output_contracts import polydata_streamline_count
+    import vtk
     from vtk.util.numpy_support import vtk_to_numpy
 
-    count = polydata_streamline_count(path)
-    if count is None or count < 1:
+    path = Path(path)
+    if not path.is_file() or path.stat().st_size == 0 or path.suffix.lower() != ".vtk":
         raise ValueError("UKF output is empty or malformed")
+    reader = vtk.vtkPolyDataReader()
+    errors = []
+    reader.AddObserver("ErrorEvent", lambda *_: errors.append(True))
+    reader.AddObserver("WarningEvent", lambda *_: errors.append(True))
+    reader.SetFileName(str(path))
+    reader.Update()
+    if errors or reader.GetErrorCode():
+        raise ValueError("UKF output is empty or malformed")
+    data = reader.GetOutput()
+    with path.open("rb") as stream:
+        head_bytes = stream.read(65536)
+    header = head_bytes.split(b"\n", 4)
+    if len(header) < 4 or header[2].strip().upper() not in {b"ASCII", b"BINARY"}:
+        raise ValueError("UKF output is empty or malformed")
+    is_ascii = header[2].strip().upper() == b"ASCII"
+    raw_bytes = path.read_bytes() if is_ascii else head_bytes
+    declared = re.search(rb"\bPOINTS\s+(\d+)\s+\w+\s", raw_bytes)
+    if declared is None and not is_ascii:
+        raw_bytes = path.read_bytes()
+        declared = re.search(rb"\bPOINTS\s+(\d+)\s+\w+\s", raw_bytes)
+    if declared is None or int(declared.group(1)) != data.GetNumberOfPoints():
+        raise ValueError("UKF output is empty or malformed")
+    if is_ascii:
+        raw_tokens = raw_bytes[declared.end():].split(maxsplit=3 * data.GetNumberOfPoints())
+        values = np.asarray(raw_tokens[: 3 * data.GetNumberOfPoints()], dtype=float)
+        if values.size != 3 * data.GetNumberOfPoints() or not np.isfinite(values).all():
+            raise ValueError("UKF output is empty or malformed")
+    pts_obj = data.GetPoints()
+    if pts_obj is None or data.GetNumberOfVerts() or data.GetNumberOfPolys() or data.GetNumberOfStrips():
+        raise ValueError("UKF output is empty or malformed")
+    points = vtk_to_numpy(pts_obj.GetData())
+    if not np.isfinite(points).all():
+        raise ValueError("UKF output has nonfinite coordinates")
+    lines = data.GetLines()
+    count = int(data.GetNumberOfLines())
+    offsets = vtk_to_numpy(lines.GetOffsetsArray())
+    connectivity = vtk_to_numpy(lines.GetConnectivityArray())
+    if count < 1 or len(offsets) != count + 1 or offsets[0] != 0 or offsets[-1] != len(connectivity):
+        raise ValueError("UKF output is empty or malformed")
+    if np.any(np.diff(offsets) < 2) or np.any(connectivity < 0) or np.any(connectivity >= data.GetNumberOfPoints()):
+        raise ValueError("UKF output is empty or malformed")
+    ordered = points[connectivity]
+    if not np.isfinite(ordered).all():
+        raise ValueError("UKF output has nonfinite coordinates")
+    changes = np.any(np.diff(ordered, axis=0) != 0, axis=1)
+    if count > 1:
+        changes[offsets[1:-1] - 1] = False
+    if np.any(np.add.reduceat(changes.astype(np.int64), offsets[:-1]) == 0):
+        raise ValueError("UKF output is empty or malformed")
+    return data, ordered, offsets
+
+
+def output_qc(path, raw, selected=None, *, _polydata_bundle=None):
+    import nibabel as nib
+    import numpy as np
+    from vtk.util.numpy_support import vtk_to_numpy
+
+    data, ordered, offsets = _polydata_bundle if _polydata_bundle is not None else _load_validated_vtk_polydata(path)
+    count = int(len(offsets) - 1)
     image = nib.load(raw.mask_path)
     inverse = np.linalg.inv(image.affine)
     mask = np.asanyarray(image.dataobj) > 0
-    lengths = []
-    inside = total = 0
-    for line in _iter_streamlines(path):
-        points = np.asarray(line)
-        if not np.isfinite(points).all():
-            raise ValueError("UKF output has nonfinite coordinates")
-        lengths.append(float(np.linalg.norm(np.diff(points, axis=0), axis=1).sum()))
-        voxels = np.rint(points @ inverse[:3, :3].T + inverse[:3, 3]).astype(int)
-        valid = ((voxels >= 0) & (voxels < mask.shape)).all(axis=1)
-        inside += int(mask[tuple(voxels[valid].T)].sum())
-        total += len(points)
-    reader = vtk.vtkPolyDataReader()
-    reader.SetFileName(str(path))
-    reader.Update()
-    data = reader.GetOutput()
+    seg_norms = np.linalg.norm(np.diff(ordered, axis=0), axis=1)
+    csum = np.empty(len(ordered), dtype=np.float64)
+    csum[0] = 0.0
+    csum[1:] = np.cumsum(seg_norms, dtype=np.float64)
+    lengths = csum[offsets[1:] - 1] - csum[offsets[:-1]]
+    total = int(len(ordered))
+    inside = 0
+    inv_rot_t = np.ascontiguousarray(inverse[:3, :3].T, dtype=np.float64)
+    inv_trans = np.asarray(inverse[:3, 3], dtype=np.float64)
+    shape_arr = np.asarray(mask.shape, dtype=np.intp)
+    chunk = 2_000_000
+    for start in range(0, total, chunk):
+        pts_chunk = np.asarray(ordered[start : start + chunk], dtype=np.float64)
+        voxels = np.rint(pts_chunk @ inv_rot_t + inv_trans).astype(np.intp)
+        valid = ((voxels >= 0) & (voxels < shape_arr)).all(axis=1)
+        if np.any(valid):
+            inside += int(mask[voxels[valid, 0], voxels[valid, 1], voxels[valid, 2]].sum())
     arrays_valid = True
     for index in range(1, (selected or parameters()).numTensor + 1):
         for name, components in ((f"tensor{index}", 9), (f"FA{index}", 1)):
@@ -328,7 +388,7 @@ def output_qc(path, raw, selected=None):
             arrays_valid = arrays_valid and valid_array
     checks = dict(
         nonempty_geometry=count == len(lengths),
-        positive_lengths=bool(np.all(np.asarray(lengths) > 0)),
+        positive_lengths=bool(np.all(lengths > 0)),
         native_mask_overlap=inside / max(1, total) >= 0.9,
         requested_tensor_and_fa_arrays=arrays_valid,
     )
@@ -386,11 +446,10 @@ def inspect_schema(binary, env):
     return ET.fromstring(xml), xml, description.returncode
 
 
-def export_trk(source, reference, target):
+def export_trk(source, reference, target, *, _polydata_bundle=None):
     import nibabel as nib
     import numpy as np
-    from nibabel.streamlines import Field
-    from connectome.pipeline import _iter_streamlines
+    from nibabel.streamlines import ArraySequence, Field
 
     image = nib.load(reference)
     header = nib.streamlines.TrkFile.create_empty_header()
@@ -398,16 +457,39 @@ def export_trk(source, reference, target):
     header[Field.VOXEL_SIZES] = image.header.get_zooms()[:3]
     header[Field.DIMENSIONS] = image.shape[:3]
     header[Field.VOXEL_ORDER] = "RAS"
-    tractogram = nib.streamlines.LazyTractogram(
-        streamlines=lambda: _iter_streamlines(source), affine_to_rasmm=np.eye(4)
-    )
+    if _polydata_bundle is not None or Path(source).suffix.lower() == ".vtk":
+        _, ordered, offsets = _polydata_bundle if _polydata_bundle is not None else _load_validated_vtk_polydata(source)
+        seq = ArraySequence()
+        seq._data = np.ascontiguousarray(ordered, dtype=np.float32)
+        seq._offsets = np.ascontiguousarray(offsets[:-1], dtype=np.intp)
+        seq._lengths = np.ascontiguousarray(np.diff(offsets), dtype=np.intp)
+        tractogram = nib.streamlines.Tractogram(seq, affine_to_rasmm=np.eye(4))
+    else:
+        from connectome.pipeline import _iter_streamlines
+
+        tractogram = nib.streamlines.LazyTractogram(
+            streamlines=lambda: _iter_streamlines(source), affine_to_rasmm=np.eye(4)
+        )
     nib.streamlines.save(nib.streamlines.TrkFile(tractogram, header), str(target))
 
 
-def verify_trk(source, target):
+def verify_trk(source, target, *, _polydata_bundle=None):
     import itertools
     import nibabel as nib
     import numpy as np
+
+    if _polydata_bundle is not None or Path(source).suffix.lower() == ".vtk":
+        _, ordered, offsets = _polydata_bundle if _polydata_bundle is not None else _load_validated_vtk_polydata(source)
+        expected_lengths = np.diff(offsets)
+        count = int(len(expected_lengths))
+        if count == 0:
+            raise ValueError("Empty UKF TRK conversion")
+        converted = nib.streamlines.load(str(target), lazy_load=False).streamlines
+        if len(converted) != count or not np.array_equal(converted._lengths, expected_lengths):
+            raise ValueError("UKF VTK/TRK streamline count or point count changed")
+        if not np.allclose(ordered, converted._data, atol=1e-4, rtol=0):
+            raise ValueError("UKF VTK/TRK native RAS coordinates changed beyond 0.0001 mm")
+        return count
     from connectome.pipeline import _iter_streamlines
 
     count = 0
@@ -509,17 +591,17 @@ def restore_lossless_payload(raw, probe, converted, dwi, mask):
     header["space origin"] = to_ras @ origin_ras
     for key in ("data file", "sizes", "type", "endian"):
         header.pop(key, None)
-    header["encoding"] = "gzip"
+    header["encoding"] = "raw"
     data = np.asanyarray(image.dataobj)
-    nrrd.write(str(dwi), np.moveaxis(reorder(data), -1, channel), header)
+    nrrd.write(str(dwi), np.ascontiguousarray(np.moveaxis(reorder(data), -1, channel)), header)
     mask_header = {
         "space": header["space"],
         "space directions": directions[spatial],
         "space origin": header["space origin"],
         "kinds": ["domain"] * 3,
-        "encoding": "gzip",
+        "encoding": "raw",
     }
-    nrrd.write(str(mask), reorder(np.asanyarray(nib.load(raw.mask_path).dataobj)).astype(np.uint8), mask_header)
+    nrrd.write(str(mask), np.ascontiguousarray(reorder(np.asanyarray(nib.load(raw.mask_path).dataobj)).astype(np.uint8)), mask_header)
     return dict(
         policy="lossless-native-payload",
         probe_voxels=8,
@@ -623,7 +705,8 @@ def run_ukf(raw, directory, *, options=None, executable=None, converter=None, fo
                 if index == 0:
                     record["conversion"] = restore_lossless_payload(tracking_raw, probe, converted_probe, dwi, mask)
                     save()
-            qc = output_qc(tracts, tracking_raw, selected)
+            polydata_bundle = _load_validated_vtk_polydata(tracts)
+            qc = output_qc(tracts, tracking_raw, selected, _polydata_bundle=polydata_bundle)
             qc['input_validation'] = inputs
             qc['effective_mask'] = record['effective_mask']
             if not qc["automatic_qc_passed"]:
@@ -632,8 +715,8 @@ def run_ukf(raw, directory, *, options=None, executable=None, converter=None, fo
                 shutil.copyfile(tracts, failed)
                 record["failed_tractogram"] = str(failed)
                 raise RuntimeError("UKF geometry/native-mask QC failed; see " + str(failed))
-            export_trk(tracts, raw.dwi_path, work / "tracts.trk")
-            qc["vtk_trk_verified_streamlines"] = verify_trk(tracts, work / "tracts.trk")
+            export_trk(tracts, raw.dwi_path, work / "tracts.trk", _polydata_bundle=polydata_bundle)
+            qc["vtk_trk_verified_streamlines"] = verify_trk(tracts, work / "tracts.trk", _polydata_bundle=polydata_bundle)
             if signature(raw, options, binary, converter) != before:
                 raise RuntimeError("UKF inputs or executable changed during execution")
             shutil.move(tracts, products["tractogram"])

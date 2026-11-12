@@ -15,7 +15,41 @@ ROOT = Path(__file__).resolve().parents[1]
 BENCHMARKS = ROOT / 'docs/release/benchmarks'
 SITE = ROOT / 'docs/site'
 BEGIN, END = '<!-- measured-evidence:start -->', '<!-- measured-evidence:end -->'
-REVIEWED_ON = '2026-11-11'
+REVIEWED_ON = '2026-11-12'
+
+
+def remaining_pipeline_accelerations_20261112_records(report):
+    """Qualify the 12 November 2026 remaining-pipeline CPU and CUDA acceleration records."""
+    if report.get('status') != 'completed' or report.get('kind') != 'remaining_pipeline_accelerations_benchmark':
+        raise ValueError('Remaining-pipeline accelerations 2026-11-12 header is incomplete')
+    rcpts = report.get('receipts') or {}
+    expected_keys = {
+        'input_nifti', 'brainmask_pnl_cnn', 'preprocessing_mrtrix_fsl',
+        'surface_ddsurfer', 'surface_ddsurfer_postprocess', 'microstructure_noddi',
+        'tractography_ukf', 'tractography_csd_act', 'bundles_wmql', 'bundles_tractcloud',
+    }
+    if set(rcpts.keys()) != expected_keys:
+        raise ValueError('Unexpected receipt keys in remaining_pipeline_accelerations_20261112.json')
+    for key, val in rcpts.items():
+        if val.get('status') != 'completed':
+            raise ValueError(f'Incomplete stage benchmark in {key}')
+    if not (rcpts['input_nifti']['sub_dicom']['parity']['dwi_sha256_exact']
+            and rcpts['input_nifti']['hcp_100307']['parity']['dwi_sha256_exact']):
+        raise ValueError('NIfTI import parity check failed')
+    if not (rcpts['brainmask_pnl_cnn']['cpu']['parity_vs_baseline']['exact_voxels']
+            and rcpts['brainmask_pnl_cnn']['cuda']['parity_vs_baseline']['exact_voxels']):
+        raise ValueError('PNL brain-mask binary parity check failed')
+    if not rcpts['surface_ddsurfer_postprocess']['all_payloads_equal']:
+        raise ValueError('DDSurfer post-processing payload parity check failed')
+    if not rcpts['tractography_ukf']['adapter_io_qc_trk_pair']['trk_sha256_exact']:
+        raise ValueError('UKF TRK export parity check failed')
+    if not (rcpts['bundles_wmql']['parity']['cpu_counts_exact_vs_baseline']
+            and rcpts['bundles_wmql']['parity']['cuda_counts_exact_vs_baseline']):
+        raise ValueError('WMQL bundle streamline-count parity check failed')
+    if not (rcpts['bundles_tractcloud']['cpu']['parity_vs_baseline']['counts_exact_all']
+            and rcpts['bundles_tractcloud']['cuda']['parity_vs_baseline']['counts_exact_all']):
+        raise ValueError('TractCloud bundle streamline-count parity check failed')
+    return rcpts
 
 
 def full_pipeline_accelerations_20261111_records(report):
@@ -661,6 +695,181 @@ def build_evidence():
         add(identifier, title, category, scope, rec['reference_seconds'], rec['optimized_seconds'],
             method, baseline, unchanged, limitation, sample, evidence_date=accel_20261111['reviewed_on'])
 
+    accel_20261112 = load('remaining_pipeline_accelerations_20261112.json')
+    rem = remaining_pipeline_accelerations_20261112_records(accel_20261112)
+    rem_specs = (
+        ('input-nifti-import', 'NIfTI import & validation (clinical 4D)', 'io',
+         'Complete clinical 4D import (104x104x60x31)',
+         rem['input_nifti']['sub_dicom']['baseline_seconds'], rem['input_nifti']['sub_dicom']['optimized_seconds'],
+         'Validate finite non-zero voxel slabs in a single sequential gzip pass and stream standardized NIfTI output with fast deflate compression (compresslevel=1).',
+         'Repeated slice-by-slice dataobj[..., idx] random gzip seeks and default level-9 gzip recompression during NIfTI import.',
+         'Imported data.nii.gz, bvals and bvecs are byte-for-byte SHA-256 identical across payload values and affine matrices.',
+         'Median of three clinical sub-dicom (104x104x60x31) imports; 288-volume HCP import verified separately.',
+         'Complete run_nifti_import execution on clinical 4D dMRI (104x104x60x31).'),
+        ('input-nifti-hcp', 'NIfTI import & validation (HCP 288-vol)', 'io',
+         'Complete HCP 288-volume import (145x174x145x288)',
+         rem['input_nifti']['hcp_100307']['baseline_seconds'], rem['input_nifti']['hcp_100307']['optimized_seconds'],
+         'Eliminate O(N^2) gzip random-access re-decompression across 288 diffusion volumes via single-pass sequential slab streaming and fast deflate export.',
+         'Slice-by-slice dataobj[..., idx] validation over compressed 288-volume NIfTI (re-decompressing earlier gzip streams on every frame).',
+         'Exported 288-volume NIfTI payload, affine, bvals and bvecs match identically.',
+         'Subject 100307 mean of two complete fresh imports; reflects compressed-stream I/O complexity rather than an estimator change.',
+         'Full HCP 100307 diffusion volume (145x174x145x288; ~1.2 GB gzip).'),
+        ('pnl-cnn-cpu', 'PNL CompNet brain masking (CPU)', 'port',
+         'Complete module incl. ANTs & QC (CPU)',
+         rem['brainmask_pnl_cnn']['cpu']['baseline_seconds'], rem['brainmask_pnl_cnn']['cpu']['optimized_seconds'],
+         'Combine single-pass gzip b0 accumulation, concurrent SHA-256 hashing, overlapped 3-view CompNet weight preloading during ANTs registration, zero-slice deduplication and 16-slice CPU batching.',
+         'Initial sequential b0 extraction, serial weight hashing/loading and 8-slice uncached CompNet inference alongside ANTs SyN registration.',
+         'Exported native-space binary brain mask matches baseline bit-for-bit (0 differing voxels; Dice = 1.000000).',
+         'Subject 100307 complete brain-mask stage on CPU (4 threads, fixed ANTs seed); ANTs registration accounts for ~65 s of both paths.',
+         'Full HCP 100307 (288 volumes -> mean b0 -> ANTs template registration -> 3-view CompNet -> native mask + QC); CPU execution.'),
+        ('pnl-cnn-cuda', 'PNL CompNet brain masking (CUDA)', 'port',
+         'Complete module incl. ANTs & QC (CUDA)',
+         rem['brainmask_pnl_cnn']['cuda']['baseline_seconds'], rem['brainmask_pnl_cnn']['cuda']['optimized_seconds'],
+         'Overlap background 3-view CompNet CUDA preload/warmup with ANTs CPU registration, deduplicate empty border slices, run 32-slice IEEE FP32 batches and stream uncompressed scratch NIfTIs.',
+         'Initial sequential b0 extraction, serial weight loading after ANTs registration and 8-slice CUDA CompNet inference.',
+         'Exported native-space binary brain mask matches baseline bit-for-bit (0 differing voxels; Dice = 1.000000).',
+         'Subject 100307 complete brain-mask stage on NVIDIA H100 + 4 CPU threads; CPU ANTs registration (~65 s) dominates total wall time once CNN inference drops to 2.02 s.',
+         'Full HCP 100307 complete brain-mask module; CUDA inference + CPU ANTs registration.'),
+        ('pnl-cnn-3view-cuda', 'PNL 3-view CompNet inference (CUDA)', 'port',
+         '3-view CompNet CNN pass (CUDA)',
+         rem['brainmask_pnl_cnn']['cnn_3view_predict']['cuda']['baseline_seconds'],
+         rem['brainmask_pnl_cnn']['cnn_3view_predict']['cuda']['optimized_seconds'],
+         'Compile a static CompNet forward execution plan, deduplicate uniform background slices and evaluate 32-slice IEEE FP32 batches under torch.inference_mode().',
+         'Per-step dynamic module-dict dispatch and 8-slice uncached 3-view CompNet evaluation on registered b0 volume.',
+         'Fused 3-view brain mask agrees on >99.998% of voxels (32 boundary voxels over 2.22M mask voxels; native warped mask is 100% identical).',
+         'Median of three warmed 3-view CompNet forward passes on registered HCP 100307 b0 volume on NVIDIA H100; excludes ANTs registration.',
+         'Registered 3D b0 volume across axial, coronal and sagittal CompNet checkpoints; CUDA execution.'),
+        ('preproc-fsl-cpu', 'MRtrix3/FSL distortion & eddy pipeline (CPU)', 'implementation',
+         'Complete denoising + topup + eddy (CPU)',
+         rem['preprocessing_mrtrix_fsl']['cpu']['baseline_seconds'],
+         rem['preprocessing_mrtrix_fsl']['cpu']['optimized_seconds'],
+         'Fuse in-RAM vectorized MP-PCA + Gibbs preprocessing before a single fast-gzip handoff and forward explicit multi-thread flags (-nthreads / --nthr) to topup and eddy_cpu.',
+         'Separate DIPY subprocesses with intermediate level-9 gzip NIfTI round-trips and single-threaded topup execution before eddy_cpu.',
+         'Final distortion- and eddy-corrected 4D DWI volume matches baseline (Pearson r = 0.99983; identical shape, affine and automatic QC pass).',
+         'Complete sub-dicom acquisition with reverse-phase b0 topup + eddy_cpu (4 threads); iterative susceptibility/eddy solvers dominate remaining CPU runtime.',
+         'Clinical 4D dMRI (104x104x60x31) + reverse-phase b0; MP-PCA + Gibbs + topup + eddy_cpu.'),
+        ('preproc-fsl-cuda', 'MRtrix3/FSL distortion & eddy pipeline (CUDA)', 'implementation',
+         'Complete denoising + topup + eddy_cuda (CUDA)',
+         rem['preprocessing_mrtrix_fsl']['cuda']['baseline_seconds'],
+         rem['preprocessing_mrtrix_fsl']['cuda']['optimized_seconds'],
+         'Execute fused in-RAM CUDA MP-PCA + 2D FFT Gibbs suppression, concurrent fast-gzip NIfTI export and multi-threaded topup (--nthr=4) feeding FSL eddy_cuda.',
+         'Unoptimized CPU DIPY subprocesses with intermediate level-9 gzip I/O and single-threaded topup feeding FSL eddy_cuda.',
+         'Final corrected 4D DWI volume matches baseline (Pearson r = 0.99999; 0.28% relative mean difference within multi-threaded topup floating-point tolerance).',
+         'Complete sub-dicom acquisition with reverse-phase b0 on NVIDIA H100 + 4 CPU threads.',
+         'Clinical 4D dMRI (104x104x60x31) + reverse-phase b0; CUDA MP-PCA/Gibbs + multi-threaded topup + eddy_cuda.'),
+        ('ddsurfer-cpu', 'DDSurfer bilateral surface reconstruction (CPU)', 'implementation',
+         'Complete lh/rh white & pial meshes (CPU)',
+         rem['surface_ddsurfer']['cpu']['baseline_seconds'], rem['surface_ddsurfer']['cpu']['optimized_seconds'],
+         'Pack 18 feature channels into a contiguous channels-last [X*Y*Z, 18] buffer for single-pass trilinear vertex gathering, reuse conformal volumes across hemispheres and buffer .obj mesh serialization.',
+         '18 separate per-channel volume interpolations per ODE step, duplicate cross-hemisphere NIfTI loading and per-vertex Python string formatting.',
+         'All four cortical meshes (lh/rh white & pial) preserve exact triangle topology with <= 6.4e-4 mm maximum vertex displacement (mean 1.2e-5 mm).',
+         'Subject 100408 complete bilateral white and pial reconstruction on CPU (4 threads).',
+         'Full HCP 100408 conformed feature volumes; bilateral white + pial ODE deformation; CPU execution.'),
+        ('ddsurfer-cuda', 'DDSurfer bilateral surface reconstruction (CUDA)', 'implementation',
+         'Complete lh/rh white & pial meshes (CUDA)',
+         rem['surface_ddsurfer']['cuda']['baseline_seconds'], rem['surface_ddsurfer']['cuda']['optimized_seconds'],
+         'Stack all 18 spatial feature volumes into one [1, 18, D, H, W] GPU tensor for single-kernel F.grid_sample trilinear sampling, reuse volume cache across hemispheres and vectorize native RAS transforms.',
+         '18 separate 1-channel F.grid_sample kernel launches per ODE step, repeated NIfTI loading per hemisphere and unbuffered .obj export.',
+         'All four reconstructed cortical meshes (lh/rh white & pial) match baseline bit-for-bit (0.0 mm maximum vertex distance; exact topology).',
+         'Subject 100408 median of three complete bilateral white and pial reconstructions on NVIDIA H100.',
+         'Full HCP 100408 conformed feature volumes; bilateral white + pial ODE deformation; CUDA execution.'),
+        ('ddsurfer-postproc-dag', 'Cortical surface morphometry DAG (CPU)', 'implementation',
+         'Complete FreeSurfer post-processing (4 threads)',
+         rem['surface_ddsurfer_postprocess']['baseline_seconds'],
+         rem['surface_ddsurfer_postprocess']['optimized_seconds'],
+         'Schedule independent intra-hemisphere FreeSurfer C++ branches (white morphometry, pial morphometry, inflation/sphere and thickness; then cortex label, aparc/a2009s annotations and fsaverage transfer) concurrently across stage threads and skip redundant symlink re-checks.',
+         'Strictly serial intra-hemisphere execution of all 16 FreeSurfer surface, curvature, inflation, spherical registration, annotation and stats stages.',
+         'All 133/133 exported surf/, label/, mri/ and stats/ files match baseline payloads identically (0 mismatches).',
+         'Subject 100307 left-hemisphere complete post-processing (4 threads, sphere_seed=1234); single-threaded mris_register (~4 min) bounds maximum intra-hemisphere parallelism.',
+         'DDSurfer native white/pial meshes -> FreeSurfer thickness, curvature, sulc, sphere.reg, aparc + aparc.a2009s annotations/stats and fsaverage overlays.'),
+        ('noddi-full-cpu', 'NODDI active-set QP microstructure fit (CPU)', 'implementation',
+         'Complete full-brain fit (8-thread CPU)',
+         rem['microstructure_noddi']['baseline_8t_seconds'], rem['microstructure_noddi']['cpu_seconds'],
+         'Replace per-voxel Python/Joblib scipy.optimize.nnls loops with a batched multi-threaded C++/PyTorch FP64 active-set Lawson-Hanson QP solver over the exact AMICO dictionary and concurrent fast-gzip NIfTI writes.',
+         'Default 8-thread AMICO 2.1.1 full-brain NODDI fit on the same 740,916 mask voxels and precomputed dictionary.',
+         'NDI and validity mask match AMICO within 5.96e-8 (0 voxels > 1e-6); 99.9995% of all 740,916 voxels agree within 1e-6 across ODI, IsoVF and RMSE.',
+         'Subject 100307 complete end-to-end NODDI stage on 8 CPU threads including dictionary generation, 27-file export and QC.',
+         'Full-brain HCP 100307 (740,916 mask voxels; 288 volumes); AMICO NODDI dictionary; 8 CPU threads.'),
+        ('noddi-full-cuda', 'NODDI active-set QP microstructure fit (CUDA)', 'implementation',
+         'Complete full-brain fit (CUDA)',
+         rem['microstructure_noddi']['baseline_8t_seconds'], rem['microstructure_noddi']['cuda_seconds'],
+         'Execute a vectorized FP64 CUDA active-set Lawson-Hanson NNLS solver across all 121x12 dictionary atoms per voxel in VRAM-bounded chunks alongside concurrent fast-gzip NIfTI export.',
+         'Default 8-thread AMICO 2.1.1 CPU full-brain NODDI fit on the same 740,916 mask voxels (AMICO provides no GPU solver).',
+         'Matches optimized CPU identically on NDI, RMSE, NRMSE and validity mask (0.0 max diff) and within 5.96e-8 on ODI/IsoVF (0 voxels > 1e-6 across 740,916 voxels).',
+         'Subject 100307 complete end-to-end NODDI stage on NVIDIA H100 including AMICO LUT setup, GPU solve and 27 NIfTI exports.',
+         'Full-brain HCP 100307 (740,916 mask voxels; 288 volumes); AMICO NODDI dictionary; CUDA execution.'),
+        ('ukf-full', 'UKF 2-tensor whole-brain tractography (CPU)', 'implementation',
+         'Complete 16-thread UKF stage',
+         rem['tractography_ukf']['full_task_pair']['baseline_seconds'],
+         rem['tractography_ukf']['full_task_pair']['optimized_seconds'],
+         'Stream uncompressed scratch NRRDs into UKFTractography and reuse a single validated VTK polydata buffer across streamline validation, vectorized mask-overlap QC, flat ArraySequence TRK export and TRK verification.',
+         'Gzip-compressed temporary NRRD staging and four redundant full-file VTK/TRK parses with per-streamline Python QC loops around UKFTractography.',
+         'Produces the exact same 276,924 whole-brain streamlines and passes all automatic QC checks.',
+         'Subject 100307 complete 16-thread 2-tensor UKF stage; C++ UKFTractography Kalman filtering (~10.3 min) accounts for >93% of runtime.',
+         'HCP 100307 b0+b1000 shell; 2-tensor UKF (1 seed/voxel, 16 threads) + QC + VTK/TRK export.'),
+        ('ukf-adapter-io', 'UKF NRRD staging, QC & TRK export', 'implementation',
+         'Adapter pre/post-CLI I/O & QC (277,875 tracks)',
+         rem['tractography_ukf']['adapter_io_qc_trk_pair']['baseline_seconds'],
+         rem['tractography_ukf']['adapter_io_qc_trk_pair']['optimized_seconds'],
+         'Write uncompressed scratch NRRDs, parse output VTK polydata once in memory, vectorize streamline length/mask-overlap QC and build TRK ArraySequence buffers directly from flat VTK offset/connectivity arrays.',
+         'Compressed temporary NRRD writes plus separate VTK reads for contract check, Python per-streamline QC, nibabel GeneratorWrapper TRK export and TRK re-verification.',
+         'Exported 100307_ukf.trk file is byte-for-byte SHA-256 identical (277,875 streamlines) with identical QC metrics.',
+         'Isolated deterministic adapter staging + post-CLI validation/QC/TRK export on saved HCP 100307 UKF tractogram (excludes C++ UKFTractography tracking).',
+         'HCP 100307 DWI staging + 277,875-streamline UKF VTK validation, QC and TRK conversion.'),
+        ('csd-act-full', 'MRtrix3 CSD/ACT + SIFT2 whole-brain pipeline', 'implementation',
+         'Complete 8-thread 1M-streamline stage',
+         rem['tractography_csd_act']['baseline_seconds'], rem['tractography_csd_act']['optimized_seconds'],
+         'Stage contiguous volume-axis strides (-strides 0,0,0,1) on dwi.mif, overlap post-tckgen tcksift2, tckconvert (.vtk) and TRK export concurrently, and vectorize 1M-streamline validation and SIFT2 weight parsing.',
+         'Default dwi.mif strides, sequential post-tracking execution of tcksift2 -> tckconvert -> export_tck_to_trk and Python-loop SIFT2/streamline validation.',
+         'Generates 1,000,000 valid ACT iFOD2 streamlines (.tck, .vtk, .trk) and 1,000,000 finite positive SIFT2 weights passing all QC checks.',
+         'Subject 100408 complete 8-thread MSMT-CSD + ACT iFOD2 (1M tracks) + SIFT2 + VTK/TRK export; stochastic iFOD2 tckgen (~21 min) dominates total time.',
+         'Full HCP 100408 (288 volumes) + ACT 5TT/GMWMI; 1,000,000 dynamic-seed iFOD2 streamlines; 8 CPU threads.'),
+        ('csd-post-export', 'CSD/ACT post-tracking SIFT2 & VTK/TRK export', 'implementation',
+         'Post-tckgen SIFT2 + dual export (1M tracks)',
+         rem['tractography_csd_act']['post_tracking_sift2_export_pair']['baseline_seconds'],
+         rem['tractography_csd_act']['post_tracking_sift2_export_pair']['optimized_seconds'],
+         'Execute independent consumers of the finished 1M-streamline .tck file (tcksift2, multi-threaded tckconvert to VTK and streaming TCK-to-TRK conversion) concurrently in a bounded thread pool.',
+         'Sequential execution of tcksift2 followed by tckconvert (.vtk) followed by Python TCK-to-TRK export on the same 1,000,000-streamline tractogram.',
+         'All three outputs (SIFT2 weights/mu, 3.44 GB VTK polydata and 1.21 GB TRK tractogram) pass full 1,000,000-streamline integrity validation.',
+         'Measured phase wall time from tckgen completion to completion of SIFT2, VTK and TRK exports on HCP 100408 (8-thread budget).',
+         '1,000,000 whole-brain ACT streamlines + MSMT-CSD wmfod.mif on HCP 100408.'),
+        ('wmql-full-cpu', 'WMQL 48-bundle rule-based queries (CPU)', 'implementation',
+         'Complete 48-query segmentation (CPU)',
+         rem['bundles_wmql']['baseline_seconds'], rem['bundles_wmql']['cpu_seconds'],
+         'Load VTK/TRK streamlines into flat CSR arrays, compute voxel-label crossings via multi-threaded vectorized bincount histograms with lazy CSR sets and export binary VTK bundles concurrently.',
+         'Upstream tract_querier per-streamline Python point loops, dense dict/set construction and sequential VTK bundle writing.',
+         'All 48 official queries and 41 non-empty white-matter bundles match upstream tract_querier streamline counts identically (0 mismatches).',
+         'Subject 100307 complete WMQL stage on 8 CPU threads including VTK load, 48 query evaluations, 41 bundle exports and QC.',
+         'Full HCP 100307 UKF tractogram + DDParcel wmparc atlas; 48 official WMQL queries; CPU execution.'),
+        ('wmql-full-cuda', 'WMQL 48-bundle rule-based queries (CUDA)', 'implementation',
+         'Complete 48-query segmentation (CUDA)',
+         rem['bundles_wmql']['baseline_seconds'], rem['bundles_wmql']['cuda_seconds'],
+         'Evaluate RAS-to-IJK voxel label lookup, endpoint indexing and per-tract crossing histograms on CUDA tensors in VRAM-bounded chunks alongside lazy CSR query evaluation and parallel binary VTK export.',
+         'Upstream tract_querier CPU per-streamline Python spatial indexing and sequential bundle export (tract_querier has no GPU backend).',
+         'All 48 queries and 41 non-empty bundles match both upstream baseline and optimized CPU streamline counts identically (0 mismatches).',
+         'Subject 100307 median of three complete WMQL runs on NVIDIA H100; at ~280k tracks VTK disk I/O (~5 s) exceeds GPU kernel time, whereas GPU scales to multi-million-track tractograms.',
+         'Full HCP 100307 UKF tractogram + DDParcel wmparc atlas; 48 official WMQL queries; CUDA execution.'),
+        ('tractcloud-full-cpu', 'TractCloud point-cloud parcellation (CPU)', 'implementation',
+         'Complete 42-tract parcellation (CPU)',
+         rem['bundles_tractcloud']['cpu']['baseline_seconds'], rem['bundles_tractcloud']['cpu']['optimized_seconds'],
+         'Vectorize CSR polyline arc-length resampling for 15-point local + 20-neighbor global features, pre-stage contiguous batches and write compressed .vtp bundles concurrently from cached CSR coordinates.',
+         'Per-streamline DIPY set_number_of_points loops, per-batch NumPy/tensor re-packing, duplicate whole-brain tractogram reload and serial level-9 VTP compression.',
+         'All 39/39 non-empty anatomical bundles match baseline per-bundle streamline counts identically (exact_bundle_count = 39/39).',
+         'Subject 100307 complete TractCloud stage on 4 CPU threads with fixed random_seed=0.',
+         'HCP 100307 CSD/ACT tractogram + TractCloud 800-cluster atlas; 42 target tracts; CPU execution.'),
+        ('tractcloud-full-cuda', 'TractCloud point-cloud parcellation (CUDA)', 'implementation',
+         'Complete 42-tract parcellation (CUDA)',
+         rem['bundles_tractcloud']['cuda']['baseline_seconds'], rem['bundles_tractcloud']['cuda']['optimized_seconds'],
+         'Combine vectorized CSR feature resampling with GPU-resident dataset slicing (preserving exact torch.Generator batch order), IEEE FP32 cuDNN DGCNN+PointNet forward passes and parallel fast-zlib .vtp export.',
+         'Unoptimized TractCloud pipeline with Python per-streamline resampling, per-batch host-to-GPU DataLoader collation, disabled cuDNN and serial VTP export.',
+         'All 39/39 non-empty anatomical bundles match baseline CUDA streamline counts identically (exact_bundle_count = 39/39).',
+         'Subject 100307 median of three complete TractCloud runs on NVIDIA H100 + 4 CPU threads (random_seed=0).',
+         'HCP 100307 CSD/ACT tractogram + TractCloud 800-cluster atlas; 42 target tracts; CUDA execution.'),
+    )
+    for identifier, title, category, scope, before, after, method, baseline, unchanged, limitation, sample in rem_specs:
+        add(identifier, title, category, scope, before, after, method, baseline, unchanged, limitation, sample,
+            evidence_date=accel_20261112['reviewed_on'])
+
     audit = load('upstream_freshness_verified_20261022.json')
     upstream = audit['repositories']
     references = {
@@ -721,6 +930,26 @@ def build_evidence():
         'connectome-count-cuda': 'Custom tiled PyTorch CUDA torch.cdist radial endpoint assignment compared against initial 1M-streamline baseline.',
         'connectome-sift2-cpu': 'Compared against initial unbatched 1M-streamline SIFT2-weighted connectome assembly on HCP 100408.',
         'connectome-sift2-cuda': 'Custom tiled PyTorch CUDA torch.cdist radial assignment + vectorized SIFT2 accumulation vs initial 1M-streamline baseline.',
+        'input-nifti-import': 'Plugin NIfTI import/validation optimization (shared/input_import.py); eliminates repeated gzip random-access seeks and level-9 recompression.',
+        'input-nifti-hcp': 'Plugin NIfTI import/validation optimization on 288-volume HCP dMRI; compressed-stream I/O fix, not an upstream estimator change.',
+        'pnl-cnn-cpu': 'Measured on the ChengjinLii/PNLBrainMask-Torch CompNet port alongside ANTs registration; official pretrained CompNet weights unchanged.',
+        'pnl-cnn-cuda': 'Measured on the ChengjinLii/PNLBrainMask-Torch CompNet port on CUDA alongside ANTs registration; official CompNet weights unchanged.',
+        'pnl-cnn-3view-cuda': 'Measured on official converted CompNet weights (axial/coronal/sagittal .pt); static execution plan and slice batching preserve model math.',
+        'preproc-fsl-cpu': 'Plugin workflow handoff and multi-thread forwarding around DIPY 1.12.1, MRtrix3 and FSL topup/eddy_cpu; external FSL binaries unchanged.',
+        'preproc-fsl-cuda': 'Fuses CUDA MP-PCA/Gibbs kernels with multi-threaded FSL topup and unmodified FSL eddy_cuda on reverse-phase clinical dMRI.',
+        'ddsurfer-cpu': 'Measured on official DDSurfer conformal feature checkpoints; channels-last trilinear gather and volume caching preserve mesh ODE integration.',
+        'ddsurfer-cuda': 'Measured on official DDSurfer checkpoints; packed 18-channel F.grid_sample kernel matches per-channel GPU interpolation identically.',
+        'ddsurfer-postproc-dag': 'Schedules independent FreeSurfer C++ surface/label/overlay commands concurrently within each hemisphere; FreeSurfer binaries unchanged.',
+        'noddi-full-cpu': 'Custom multi-threaded FP64 active-set Lawson-Hanson QP solver over the exact AMICO 2.1.1 NODDI dictionary vs 8-thread AMICO.',
+        'noddi-full-cuda': 'Custom batched FP64 PyTorch CUDA active-set Lawson-Hanson QP solver over the exact AMICO 2.1.1 NODDI dictionary vs 8-thread AMICO.',
+        'ukf-full': 'Plugin staging, VTK validation, QC and TRK export around unmodified C++ UKFTractography (16 threads, 2-tensor model).',
+        'ukf-adapter-io': 'Plugin pre/post-CLI NRRD/VTK/TRK I/O and vectorized QC around saved UKFTractography output; produces byte-identical TRK.',
+        'csd-act-full': 'Plugin stride staging, concurrent post-tracking SIFT2/VTK/TRK export and vectorized QC around unmodified MRtrix3 binaries.',
+        'csd-post-export': 'Concurrent execution of unmodified MRtrix3 tcksift2, tckconvert and streaming TRK export after tckgen completes.',
+        'wmql-full-cpu': 'Custom CSR spatial indexing and parallel binary VTK export feeding upstream tract_querier query evaluation; 48 official queries unchanged.',
+        'wmql-full-cuda': 'Custom CUDA crossing-histogram spatial indexing and parallel binary VTK export feeding upstream tract_querier query evaluation.',
+        'tractcloud-full-cpu': 'Vectorized CSR streamline resampling and parallel fast-zlib VTP export around official TractCloud DGCNN+PointNet weights.',
+        'tractcloud-full-cuda': 'Vectorized CSR resampling, GPU-resident batching and IEEE FP32 cuDNN execution on official TractCloud weights.',
     }
     if protocol_reuse:
         latest_fw = load('freewater_protocol_upstream_20261029.json')
@@ -754,6 +983,7 @@ def build_evidence():
         'wma-measures': 'five_module_subalgorithm_optimizations_20261110.json',
         'connectome-mean-fa': 'five_module_subalgorithm_optimizations_20261110.json',
         **{identifier: 'full_pipeline_accelerations_20261111.json' for identifier, *_ in accel_specs},
+        **{identifier: 'remaining_pipeline_accelerations_20261112.json' for identifier, *_ in rem_specs},
     }
     for row in rows:
         row['upstream_reference'] = references[row['id']]
@@ -766,7 +996,7 @@ def build_evidence():
                     policy='Latest release and default-branch source identity are checked separately; source review is not a development-branch benchmark.'),
                 policy='Output equivalence is not anatomical or clinical validation. No whole-workflow speedup has been established.',
                 pending=['Repeated multi-subject full-module pairs',
-                         'Matched CSD/ACT/SIFT2 complete-module baseline', 'Native Windows/macOS scientific timing',
+                         'Native Windows/macOS scientific timing',
                          'Optional persistent-model worker: proposed, not implemented or benchmarked'])
 
 

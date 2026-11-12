@@ -113,14 +113,20 @@ def polydata_streamline_count(path: str | Path) -> int | None:
         data = reader.GetOutput()
         if path.suffix.lower() == '.vtk':
             import re
-            raw_bytes = path.read_bytes()
-            header = raw_bytes.split(b'\n', 4)
+            with path.open('rb') as stream:
+                head_bytes = stream.read(65536)
+            header = head_bytes.split(b'\n', 4)
             if len(header) < 4 or header[2].strip().upper() not in {b'ASCII', b'BINARY'}:
                 return None
+            is_ascii = header[2].strip().upper() == b'ASCII'
+            raw_bytes = path.read_bytes() if is_ascii else head_bytes
             declared = re.search(rb'\bPOINTS\s+(\d+)\s+\w+\s', raw_bytes)
+            if declared is None and not is_ascii:
+                raw_bytes = path.read_bytes()
+                declared = re.search(rb'\bPOINTS\s+(\d+)\s+\w+\s', raw_bytes)
             if declared is None or int(declared.group(1)) != data.GetNumberOfPoints():
                 return None
-            if header[2].strip().upper() == b'ASCII':
+            if is_ascii:
                 # vtkDataReader may replace malformed ASCII coordinates with
                 # zeros without setting an error code. Validate the original.
                 raw = raw_bytes[declared.end():].split(maxsplit=3 * data.GetNumberOfPoints())

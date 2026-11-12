@@ -112,24 +112,34 @@ class SurfacePredictor:
                        for surface, entry in self.entries.items()}
         LOG.info('Predicting %s hemisphere with %s precision', args.surf_hemi, self.precision)
 
-    def load_volumes(self, folder):
+    def load_volumes(self, folder, volume_cache=None):
+        cache_key = folder.resolve()
+        full_volumes = volume_cache.get(cache_key) if volume_cache is not None else None
+        if full_volumes is None:
+            full_volumes = {}
+            for modality in MODALITIES:
+                path = folder / f'{folder.name}-{modality}.nii.gz'
+                image = nib.load(path)
+                self.geometry.check_image(image, path)
+                full_volumes[modality] = (path, image.get_fdata(dtype=np.float32, caching='unchanged'))
+            if volume_cache is not None:
+                volume_cache[cache_key] = full_volumes
         volumes = []
         for modality in MODALITIES:
-            path = folder / f'{folder.name}-{modality}.nii.gz'
-            image = nib.load(path)
-            self.geometry.check_image(image, path)
-            data = image.get_fdata(dtype=np.float32, caching='unchanged')[self.geometry.x_slice]
+            path, full_data = full_volumes[modality]
+            data = full_data[self.geometry.x_slice]
             if not np.isfinite(data).all() or data.std() < 1e-8:
                 raise ValueError(f'Nonfinite/constant feature: {path}')
             volumes.append(data)
         return torch.from_numpy(np.ascontiguousarray(np.stack(volumes)))[None].to(self.device)
 
     @torch.inference_mode()
-    def predict(self, folder):
+    def predict(self, folder, volume_cache=None):
         started = time.perf_counter()
-        volumes = self.load_volumes(folder)
+        volumes = self.load_volumes(folder, volume_cache=volume_cache)
         vertices = torch.from_numpy(self.vertices.copy())[None].to(self.device)
         faces = torch.from_numpy(self.faces.copy())[None].to(self.device)
+        laplacian_matrix = None
         directory = self.args.output_dir / 'mni' / folder.name
         directory.mkdir(parents=True, exist_ok=True)
         for surface in ('white', 'pial'):
@@ -140,7 +150,10 @@ class SurfacePredictor:
             if not torch.isfinite(raw).all():
                 raise FloatingPointError(f'Nonfinite {surface} prediction: {folder.name}')
             iterations = self.entries[surface]['postprocess_iters']
-            processed = taubin_smooth(raw, faces, n_iters=iterations)
+            if iterations > 0 and laplacian_matrix is None:
+                from utils.mesh import laplacian
+                laplacian_matrix = laplacian(faces)
+            processed = taubin_smooth(raw, faces, n_iters=iterations, laplacian_matrix=laplacian_matrix)
             kind = 'wm' if surface == 'white' else 'pial'
             output = directory / f'{folder.name}_predicted_{kind}_surface_{self.args.surf_hemi}.obj'
             export_crop_mesh(output, processed[0].float().cpu().numpy(), self.faces, self.geometry)
@@ -198,10 +211,12 @@ def main(default_hemisphere, argv=None):
     if not folders or any(not p.is_dir() for p in folders):
         raise FileNotFoundError('No subjects or missing explicitly requested subject directories')
     hemispheres = ('left', 'right') if args.surf_hemi == 'both' else (args.surf_hemi,)
+    volume_cache = {} if len(hemispheres) > 1 and len(folders) == 1 else None
     for hemisphere in hemispheres:
         settings = argparse.Namespace(**vars(args))
         settings.surf_hemi = hemisphere
         predictor = SurfacePredictor(settings)
         for folder in folders:
-            predictor.predict(folder)
+            subject_cache = volume_cache if volume_cache is not None else None
+            predictor.predict(folder, volume_cache=subject_cache)
         del predictor

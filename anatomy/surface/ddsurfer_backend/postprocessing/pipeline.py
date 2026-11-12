@@ -211,8 +211,9 @@ def run_locked(args):
         if any((path.stat().st_ino, path.stat().st_mtime_ns, path.stat().st_ctime_ns) == before.get(path)
                for path in outputs):
             raise RuntimeError(f'{key} did not refresh the expected outputs; see {stage_log}')
+        output_digests = {str(path): preparation.digest(path) for path in outputs}
         with state_lock:
-            done[key] = {str(path): sha256_file(path) for path in outputs}
+            done[key] = output_digests
             dependencies[key] = signature
             atomic_json(completed_path, done)
             atomic_json(dependencies_path, dependencies)
@@ -260,114 +261,171 @@ def run_locked(args):
         fallback_pair = []
         white_vertices = None
         measurements = None
+        hemi_lock = Lock()
+        serial_dag = args.serial or os.environ.get('SLICERDSPACE_DISABLE_POSTPROC_DAG', '').strip().lower() in {'1', 'true', 'yes'}
+        stage_workers = 1 if serial_dag else min(4, max(2, per_hemi_threads))
 
         def write_fallback_area(staged, name):
-            if not fallback_pair:
-                fallback_pair.extend(load_pair(surfaces[hemi]['white'], surfaces[hemi]['pial']))
-            mesh = fallback_pair[0 if name == 'white' else 1]
+            with hemi_lock:
+                if not fallback_pair:
+                    fallback_pair.extend(load_pair(surfaces[hemi]['white'], surfaces[hemi]['pial']))
+                mesh = fallback_pair[0 if name == 'white' else 1]
             nib.freesurfer.write_morph_data(str(staged[0]), vertex_area(mesh.vertices, mesh.faces), fnum=len(mesh.faces))
 
-        for name in ('white', 'pial'):
+        def _surface_morph_branch(name: str) -> None:
             path = surf / f'{hemi}.{name}'
             area_path = surf / (f'{hemi}.area' + ('.pial' if name == 'pial' else ''))
             if modern_metrics:
                 execute(f'{hemi}.{name}.area', ['mris_place_surface', '--area-map', path, area_path], [area_path], [path])
             else:
                 preparation.run(f'{hemi}.{name}.area', [surfaces[hemi][name], ROOT / 'postprocessing/geometry.py'],
-                                [area_path], lambda staged: write_fallback_area(staged, name))
+                                [area_path], lambda staged, _n=name: write_fallback_area(staged, _n))
             execute(f'{hemi}.{name}.curvature', ['mris_curvature', '-w', path],
                     [surf / f'{hemi}.{name}.H', surf / f'{hemi}.{name}.K'], [path])
-        fallback_pair.clear()
-        if modern_metrics:
-            for name in ('white', 'pial'):
-                output = surf / (f'{hemi}.curv' + ('.pial' if name == 'pial' else ''))
-                execute(f'{hemi}.{name}.curv', ['mris_place_surface', '--curv-map', surf / f'{hemi}.{name}',
-                        '2', '10', output], [output], [surf / f'{hemi}.{name}'])
-        else:
-            for name, suffix in (('white', ''), ('pial', '.pial')):
+            suffix = '.pial' if name == 'pial' else ''
+            if modern_metrics:
+                output = surf / f'{hemi}.curv{suffix}'
+                execute(f'{hemi}.{name}.curv', ['mris_place_surface', '--curv-map', path,
+                        '2', '10', output], [output], [path])
+            else:
                 source = surf / f'{hemi}.{name}.H'
                 python_stage(f'{hemi}.{name}.curv', [source], [surf / f'{hemi}.curv{suffix}'],
-                             lambda staged: shutil.copyfile(source, staged[0]))
-        execute(f'{hemi}.inflate', ['mris_inflate', surf / f'{hemi}.white', surf / f'{hemi}.inflated'],
-                [surf / f'{hemi}.inflated', surf / f'{hemi}.sulc'], [surf / f'{hemi}.white'])
-        execute(f'{hemi}.inflated.curvature', ['mris_curvature', '-w', surf / f'{hemi}.inflated'],
-                [surf / f'{hemi}.inflated.H', surf / f'{hemi}.inflated.K'], [surf / f'{hemi}.inflated'])
-        sphere_command = ['mris_sphere']
-        if sphere_seed is not None:
-            sphere_command += ['-seed', str(sphere_seed)]
-        execute(f'{hemi}.sphere', sphere_command + [surf / f'{hemi}.inflated', surf / f'{hemi}.sphere'],
-                [surf / f'{hemi}.sphere'], [surf / f'{hemi}.inflated'])
+                             lambda staged, _src=source: shutil.copyfile(_src, staged[0]))
+
+        def _inflate_sphere_branch() -> None:
+            execute(f'{hemi}.inflate', ['mris_inflate', surf / f'{hemi}.white', surf / f'{hemi}.inflated'],
+                    [surf / f'{hemi}.inflated', surf / f'{hemi}.sulc'], [surf / f'{hemi}.white'])
+            execute(f'{hemi}.inflated.curvature', ['mris_curvature', '-w', surf / f'{hemi}.inflated'],
+                    [surf / f'{hemi}.inflated.H', surf / f'{hemi}.inflated.K'], [surf / f'{hemi}.inflated'])
+            sphere_command = ['mris_sphere']
+            if sphere_seed is not None:
+                sphere_command += ['-seed', str(sphere_seed)]
+            execute(f'{hemi}.sphere', sphere_command + [surf / f'{hemi}.inflated', surf / f'{hemi}.sphere'],
+                    [surf / f'{hemi}.sphere'], [surf / f'{hemi}.inflated'])
+
+        def _thickness_branch() -> None:
+            if modern_metrics:
+                thickness_command = ['mris_place_surface', '--thickness', surf / f'{hemi}.white',
+                                     surf / f'{hemi}.pial', '20', '5', surf / f'{hemi}.thickness']
+            else:
+                thickness_command = ['mris_thickness', args.subject, hemi, 'thickness']
+            execute(f'{hemi}.thickness', thickness_command, [surf / f'{hemi}.thickness'],
+                    [surf / f'{hemi}.white', surf / f'{hemi}.pial'])
+
+        if stage_workers > 1:
+            with ThreadPoolExecutor(max_workers=stage_workers) as wave1:
+                wave1_futs = [
+                    wave1.submit(_inflate_sphere_branch),
+                    wave1.submit(_surface_morph_branch, 'white'),
+                    wave1.submit(_surface_morph_branch, 'pial'),
+                    wave1.submit(_thickness_branch),
+                ]
+                for fut in wave1_futs:
+                    fut.result()
+        else:
+            _surface_morph_branch('white')
+            _surface_morph_branch('pial')
+            _inflate_sphere_branch()
+            _thickness_branch()
+        fallback_pair.clear()
+
         execute(f'{hemi}.register', ['mris_register', '-curv', surf / f'{hemi}.sphere',
                 home / 'average' / f'{hemi}.average.curvature.filled.buckner40.tif', surf / f'{hemi}.sphere.reg'],
                 [surf / f'{hemi}.sphere.reg'], [surf / f'{hemi}.sphere', surf / f'{hemi}.sulc',
                 surf / f'{hemi}.smoothwm', surf / f'{hemi}.inflated.H', surf / f'{hemi}.curv',
                 home / 'average' / f'{hemi}.average.curvature.filled.buckner40.tif'])
-        if modern_metrics:
-            thickness_command = ['mris_place_surface', '--thickness', surf / f'{hemi}.white',
-                                 surf / f'{hemi}.pial', '20', '5', surf / f'{hemi}.thickness']
-        else:
-            thickness_command = ['mris_thickness', args.subject, hemi, 'thickness']
-        execute(f'{hemi}.thickness', thickness_command, [surf / f'{hemi}.thickness'],
-                [surf / f'{hemi}.white', surf / f'{hemi}.pial'])
-        execute(f'{hemi}.cortex', ['mri_label2label', '--srclabel', fsaverage / 'label' / f'{hemi}.cortex.label',
-                '--srcsubject', 'fsaverage', '--trgsubject', args.subject, '--trglabel', label / f'{hemi}.cortex.label',
-                '--regmethod', 'surface', '--hemi', hemi], [label / f'{hemi}.cortex.label'],
-                [fsaverage / 'label' / f'{hemi}.cortex.label', fsaverage / 'surf' / f'{hemi}.sphere.reg',
-                 surf / f'{hemi}.sphere.reg', surf / f'{hemi}.white'])
 
         # Share immutable inputs across atlases only when their stages need rebuilding.
         def export_labels(staged, vertex_count, regions):
             nonlocal white_vertices
-            if white_vertices is None:
-                white_vertices, _ = nib.freesurfer.read_geometry(str(surf / f'{hemi}.white'))
-            write_labels(surf / f'{hemi}.white', args.subject, vertex_count, regions, staged, vertices=white_vertices)
+            with hemi_lock:
+                if white_vertices is None:
+                    white_vertices, _ = nib.freesurfer.read_geometry(str(surf / f'{hemi}.white'))
+                verts = white_vertices
+            write_labels(surf / f'{hemi}.white', args.subject, vertex_count, regions, staged, vertices=verts)
+
+        def get_measurements():
+            nonlocal measurements
+            with hemi_lock:
+                if measurements is None:
+                    measurements = read_measurements(subject_dir, hemi)
+                return measurements
 
         def export_stats(staged, atlas):
-            nonlocal measurements
-            if measurements is None:
-                measurements = read_measurements(subject_dir, hemi)
-            write_stats(subject_dir, hemi, atlas, output=staged[0], measurements=measurements)
+            meas = get_measurements()
+            write_stats(subject_dir, hemi, atlas, output=staged[0], measurements=meas)
+
+        def _cortex_branch() -> None:
+            execute(f'{hemi}.cortex', ['mri_label2label', '--srclabel', fsaverage / 'label' / f'{hemi}.cortex.label',
+                    '--srcsubject', 'fsaverage', '--trgsubject', args.subject, '--trglabel', label / f'{hemi}.cortex.label',
+                    '--regmethod', 'surface', '--hemi', hemi], [label / f'{hemi}.cortex.label'],
+                    [fsaverage / 'label' / f'{hemi}.cortex.label', fsaverage / 'surf' / f'{hemi}.sphere.reg',
+                     surf / f'{hemi}.sphere.reg', surf / f'{hemi}.white'])
+
+        def _atlas_annot_labels_branch(atlas_name: str) -> None:
+            annot = label / f'{hemi}.{atlas_name}.annot'
+            execute(f'{hemi}.{atlas_name}.annot', ['mri_surf2surf', '--srcsubject', 'fsaverage', '--trgsubject', args.subject,
+                    '--hemi', hemi, '--sval-annot', fsaverage / 'label' / f'{hemi}.{atlas_name}.annot', '--tval', annot], [annot],
+                    [fsaverage / 'label' / f'{hemi}.{atlas_name}.annot', fsaverage / 'surf' / f'{hemi}.sphere.reg',
+                     surf / f'{hemi}.sphere.reg'])
+            regions_dir = label / f'{hemi}.{atlas_name}'
+            vertex_count, regions = read_regions(annot)
+            if not any(name.lower() not in ('unknown', '???', 'medial_wall') for name, _ in regions):
+                raise ValueError(f'{hemi}.{atlas_name} annotation contains no cortical regions')
+            expected = [regions_dir / f'{hemi}.{name}.label' for name, _ in regions]
+            python_stage(f'{hemi}.{atlas_name}.labels', [annot, surf / f'{hemi}.white',
+                         ROOT / 'postprocessing/labels.py'], expected,
+                         lambda staged, _vc=vertex_count, _reg=regions: export_labels(staged, _vc, _reg))
+
+        def transfer_overlays(staged):
+            with hemi_lock:
+                meas = measurements
+            with tempfile.TemporaryDirectory(prefix=f'.{hemi}-overlays-', dir=subject_dir / 'logs') as temporary:
+                stack, mapped = Path(temporary) / 'source.mgh', Path(temporary) / 'mapped.mgh'
+                write_stack(surf, hemi, stack, hemi_qc['white']['vertices'],
+                            fields=meas[1] if meas is not None else None)
+                run_command(f'{hemi}.fsaverage', ['mri_surf2surf', '--srcsubject', args.subject, '--trgsubject',
+                            'fsaverage', '--hemi', hemi, '--sval', stack, '--tval', mapped, '--split'])
+                copy_frames(mapped, staged)
+
+        def _fsaverage_branch() -> None:
+            python_stage(f'{hemi}.fsaverage',
+                         [surf / f'{hemi}.{field}' for field in FIELDS] +
+                         [surf / f'{hemi}.sphere.reg', fsaverage / 'surf' / f'{hemi}.sphere.reg',
+                          _resolve_bin('mri_surf2surf'), ROOT / 'postprocessing/overlays.py'],
+                         [subject_dir / 'fsaverage' / f'{hemi}.{field}.mgh' for field in FIELDS], transfer_overlays)
+
+        if stage_workers > 1:
+            with ThreadPoolExecutor(max_workers=stage_workers) as wave3:
+                wave3_futs = [wave3.submit(_cortex_branch)]
+                for atlas in atlases:
+                    wave3_futs.append(wave3.submit(_atlas_annot_labels_branch, atlas))
+                wave3_futs.append(wave3.submit(_fsaverage_branch))
+                for fut in wave3_futs:
+                    fut.result()
+        else:
+            _cortex_branch()
+            for atlas in atlases:
+                _atlas_annot_labels_branch(atlas)
 
         for atlas in atlases:
             annot = label / f'{hemi}.{atlas}.annot'
-            execute(f'{hemi}.{atlas}.annot', ['mri_surf2surf', '--srcsubject', 'fsaverage', '--trgsubject', args.subject,
-                    '--hemi', hemi, '--sval-annot', fsaverage / 'label' / f'{hemi}.{atlas}.annot', '--tval', annot], [annot],
-                    [fsaverage / 'label' / f'{hemi}.{atlas}.annot', fsaverage / 'surf' / f'{hemi}.sphere.reg',
-                     surf / f'{hemi}.sphere.reg'])
-            regions_dir = label / f'{hemi}.{atlas}'
-            vertex_count, regions = read_regions(annot)
-            if not any(name.lower() not in ('unknown', '???', 'medial_wall') for name, _ in regions):
-                raise ValueError(f'{hemi}.{atlas} annotation contains no cortical regions')
-            expected = [regions_dir / f'{hemi}.{name}.label' for name, _ in regions]
-            python_stage(f'{hemi}.{atlas}.labels', [annot, surf / f'{hemi}.white',
-                         ROOT / 'postprocessing/labels.py'], expected,
-                         lambda staged: export_labels(staged, vertex_count, regions))
             stats = subject_dir / 'stats' / f'{hemi}.{atlas}.stats'
             python_stage(f'{hemi}.{atlas}.stats',
                          [annot, label / f'{hemi}.cortex.label', surf / f'{hemi}.area', surf / f'{hemi}.area.pial',
                           surf / f'{hemi}.thickness', surf / f'{hemi}.curv', surf / f'{hemi}.white.K',
                           ROOT / 'postprocessing/stats.py'], [stats],
-                         lambda staged: export_stats(staged, atlas))
+                         lambda staged, _at=atlas: export_stats(staged, _at))
 
-        def transfer_overlays(staged):
-            with tempfile.TemporaryDirectory(prefix=f'.{hemi}-overlays-', dir=subject_dir / 'logs') as temporary:
-                stack, mapped = Path(temporary) / 'source.mgh', Path(temporary) / 'mapped.mgh'
-                write_stack(surf, hemi, stack, hemi_qc['white']['vertices'],
-                            fields=measurements[1] if measurements is not None else None)
-                run_command(f'{hemi}.fsaverage', ['mri_surf2surf', '--srcsubject', args.subject, '--trgsubject',
-                            'fsaverage', '--hemi', hemi, '--sval', stack, '--tval', mapped, '--split'])
-                copy_frames(mapped, staged)
+        if stage_workers <= 1:
+            _fsaverage_branch()
 
-        python_stage(f'{hemi}.fsaverage',
-                     [surf / f'{hemi}.{field}' for field in FIELDS] +
-                     [surf / f'{hemi}.sphere.reg', fsaverage / 'surf' / f'{hemi}.sphere.reg',
-                      _resolve_bin('mri_surf2surf'), ROOT / 'postprocessing/overlays.py'],
-                     [subject_dir / 'fsaverage' / f'{hemi}.{field}.mgh' for field in FIELDS], transfer_overlays)
         thickness = (measurements[1]['thickness'] if measurements is not None
                      else nib.freesurfer.read_morph_data(str(surf / f'{hemi}.thickness')))
         if len(thickness) != hemi_qc['white']['vertices'] or not np.isfinite(thickness).all():
             raise ValueError('Invalid thickness output')
-        qc['hemispheres'][hemi] = hemi_qc
+        with state_lock:
+            qc['hemispheres'][hemi] = hemi_qc
     with ThreadPoolExecutor(max_workers=workers) as executor:
         list(executor.map(process_hemi, hemis))
     atomic_json(subject_dir / 'logs/qc.json', qc)

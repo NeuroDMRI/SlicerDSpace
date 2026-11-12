@@ -44,18 +44,20 @@ def write_obj(path, vertices, faces):
         raise ValueError('Expected finite Nx3 vertices')
     if faces.ndim != 2 or faces.shape[1] != 3 or not len(faces) or faces.min() < 0 or faces.max() >= len(vertices):
         raise ValueError('Invalid triangle indices')
+    rounded = np.round(vertices, 8)
+    error = float(np.max(np.abs(rounded - vertices)))
+    if error > 1e-5:
+        raise ValueError('OBJ export changed millimetre coordinates')
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_name(f'.{path.stem}.{os.getpid()}.tmp.obj')
     try:
         # Slicer assumes LPS for unmarked OBJ files; declare RAS without changing geometry.
-        trimesh.Trimesh(vertices=vertices, faces=faces, process=False).export(
-            temp, header='DDSurfer surface. SPACE=RAS')
-        stored = load_mesh(temp)
-        if stored.vertices.shape != vertices.shape or not np.array_equal(stored.faces, faces):
-            raise ValueError('OBJ export changed vertex indices or connectivity')
-        error = float(np.max(np.abs(stored.vertices - vertices)))
-        if error > 1e-5:
-            raise ValueError('OBJ export changed millimetre coordinates')
+        with temp.open('wb', buffering=4 * 1024 * 1024) as handle:
+            handle.write(b'# DDSurfer surface. SPACE=RAS\n')
+            np.savetxt(handle, vertices, fmt='v %.8f %.8f %.8f', newline='\n')
+            np.savetxt(handle, faces + 1, fmt='f %d %d %d', newline='\n')
+        if not temp.is_file() or temp.stat().st_size <= 32:
+            raise ValueError('OBJ export produced an empty file')
         os.replace(temp, path)
         return error
     finally:

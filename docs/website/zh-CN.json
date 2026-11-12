@@ -1200,5 +1200,16 @@
   "Vectorized CSR streamline resampling and parallel fast-zlib VTP export around official TractCloud DGCNN+PointNet weights.": "围绕官方 TractCloud DGCNN+PointNet 权重的向量化 CSR 流线重采样与并行快速 zlib VTP 导出。",
   "WMQL 48-bundle rule-based queries (CPU)": "WMQL 48 束规则查询提取（CPU）",
   "WMQL 48-bundle rule-based queries (CUDA)": "WMQL 48 束规则查询提取（CUDA）",
-  "Write uncompressed scratch NRRDs, parse output VTK polydata once in memory, vectorize streamline length/mask-overlap QC and build TRK ArraySequence buffers directly from flat VTK offset/connectivity arrays.": "写出非压缩临时 NRRD，在内存中单次解析输出 VTK 多边形数据，向量化流线长度与掩膜重叠质控，并直接由扁平 VTK 偏移/连接数组构建 TRK ArraySequence 缓冲区。"
+  "Write uncompressed scratch NRRDs, parse output VTK polydata once in memory, vectorize streamline length/mask-overlap QC and build TRK ArraySequence buffers directly from flat VTK offset/connectivity arrays.": "写出非压缩临时 NRRD，在内存中单次解析输出 VTK 多边形数据，向量化流线长度与掩膜重叠质控，并直接由扁平 VTK 偏移/连接数组构建 TRK ArraySequence 缓冲区。",
+  "Runtime and parallel optimizations.": "运行时间与并行优化。",
+  "Single-subject computation comparisons across all six stages and multi-subject resource-aware cohort scheduling. Method-specific implementation details are documented in the repository index.": "覆盖全部六个工作流阶段的单受试者计算对比及多受试者资源感知队列调度。各方法的具体实现细节记录于仓库索引文档。",
+  "Performance optimization index (Markdown)": "性能优化索引目录（Markdown）",
+  "Open the full-size runtime optimizations figure": "打开完整尺寸的运行时间优化图",
+  "Thirty-nine paired single-subject runtime benchmarks across all twenty-two protocol tasks, showing initial reference open circles and optimized filled circles on a shared log-time axis with aligned Reference, Optimized and Ratio columns.": "覆盖全部 22 项协议任务的 39 组单受试者运行时间配对基准，在共享对数时间轴上展示初始参考空心圆与优化后实心圆，并在右侧对齐列出参考耗时、优化耗时与加速比列。",
+  "Single-subject runtime comparisons across all six workflow stages (rows 01–39). Open circles mark initial or reference baselines and filled circles mark optimized paths on the same input acquisition; ratios give reference time divided by optimized time.": "覆盖全部六个工作流阶段的单受试者运行时间对比（第 01–39 行）。空心圆标记同一输入采集上的初始或参考基线，实心圆标记优化路径；比值为参考耗时除以优化耗时。",
+  "Open the full-size parallel and cohort scheduling figure": "打开完整尺寸的并行与队列调度优化图",
+  "Three-panel parallel execution summary: stage-specific CPU scaling across 2 to 16 allocated CPUs, schematic subject-level waiting versus adaptive task backfilling, and 16-subject cohort time savings across all five downstream modules under a 32-CPU budget.": "三联并行执行摘要图：展示 2 至 16 个分配 CPU 核下的分阶段扩展曲线、受试者级等待与自适应任务回填示意，以及 32 核预算下 16 名受试者在五大下游模块中的总耗时节省比例。",
+  "Parallel core scaling and multi-subject cohort scheduling. Panel a profiles per-stage runtime across 2–16 allocated CPUs and marks selected core quotas; panel b illustrates adaptive stage-level task backfilling across subjects; panel c reports measured makespan reductions across 16 Human Connectome Project subjects under a shared 32-CPU budget.": "并行核心扩展与多受试者队列调度。子图 a 展示 2–16 个分配 CPU 核下的分阶段耗时曲线并标出选定配额；子图 b 示意跨受试者的自适应阶段级任务回填；子图 c 给出共享 32 核预算下 16 名 Human Connectome Project 受试者队列的实测完工时间缩减比例。",
+  "Every paired comparison verifies numerical or output equivalence against its reference path; automatic quality-control checks pass and do not replace manual anatomical review.": "每组配对对比均相对其参考路径验证数值或输出等价性；自动质控检查均已通过，但不替代人工解剖审核。",
+  "Open the complete optimization index on GitHub": "在 GitHub 上打开完整优化索引文档"
 }

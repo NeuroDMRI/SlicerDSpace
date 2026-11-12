@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-IMAGES = ('fig-product-map', 'fig-runtime-resources')
+IMAGES = ('fig-product-map', 'fig-runtime-resources', 'fig-runtime-optimizations', 'fig-cohort-scheduling')
 
 
 def verify_lossless(source, encoded):
@@ -53,19 +53,22 @@ def build(root=ROOT, check=False):
             raise ValueError('WebP is not smaller: ' + name)
         source_sha = hashlib.sha256(source.read_bytes()).hexdigest()
         output_sha = hashlib.sha256(data).hexdigest()
+        source_entry = dict(sha256=source_sha)
         entry = dict(sha256=output_sha, source_sha256=source_sha,
                      derivative='Lossless WebP; decoded RGBA pixels and dimensions identical to PNG')
+        source_relative = source.relative_to(root).as_posix()
         relative = target.relative_to(root).as_posix()
         if check:
-            if receipt['files'].get(relative) != entry:
+            if receipt['files'].get(source_relative) != source_entry or receipt['files'].get(relative) != entry:
                 raise ValueError('Website WebP or receipt is stale: ' + name)
         else:
             target.write_bytes(data)
+            receipt['files'][source_relative] = source_entry
             receipt['files'][relative] = entry
         records.append(dict(image=name, source_bytes=source.stat().st_size, webp_bytes=len(data),
                             decoded_pixels_equal=True, reduction_percent=round(100 * (1 - len(data) / source.stat().st_size), 2)))
     if not check:
-        receipt_path.write_text(json.dumps(receipt, indent=2) + '\n')
+        receipt_path.write_text(json.dumps(receipt, indent=2) + '\n', encoding='utf-8', newline='\n')
     return records
 
 

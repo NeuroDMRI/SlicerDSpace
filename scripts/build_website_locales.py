@@ -85,6 +85,8 @@ class ChinesePage(HTMLParser):
                     value = '切换到英文' if original.get('data-lang') == 'en' else '切换到中文'
                 elif tag == 'link' and original.get('rel') == 'canonical' and name == 'href':
                     value += 'zh.html'
+                elif tag == 'a' and name == 'href' and value.endswith('/docs/release/PERFORMANCE_OPTIMIZATIONS.md'):
+                    value = value[:-len('.md')] + '.zh-CN.md'
                 elif tag == 'meta' and original.get('property') == 'og:url' and name == 'content':
                     value += 'zh.html'
                 elif name == 'title' and 'method-reference' in original.get('class', '').split():
@@ -148,7 +150,7 @@ def main():
         if not TARGET.is_file() or TARGET.read_text(encoding='utf-8') != page:
             raise SystemExit('Chinese homepage is stale; run scripts/build_website_locales.py')
     else:
-        TARGET.write_text(page, encoding='utf-8')
+        TARGET.write_text(page, encoding='utf-8', newline='\n')
     print('PASS static Chinese homepage, translations, shared structure and assets')
 
 

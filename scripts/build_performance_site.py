@@ -977,13 +977,30 @@ def duration(seconds):
 
 
 def render(evidence):
-    rows = []
-    for row in evidence['records']:
-        identifier, category = escape(row['id']), escape(row['category'])
-        rows.append(f'''<tr class="perf-record" data-category="{category}" data-record="{identifier}"><th scope="row"><button class="perf-toggle" type="button" aria-controls="method-{identifier}" aria-expanded="false" disabled><span class="perf-toggle-icon" aria-hidden="true">+</span><span>{escape(row['title'])}</span></button><small>{escape(row['scope'])} / record {row['evidence_date']}</small></th><td><span class="perf-kind {category}">{LABELS[row['category']]}</span></td><td>{duration(row['reference_seconds'])}</td><td>{duration(row['optimized_seconds'])}</td><td>{row['speed_ratio']:.2f}x<small>{row['reduction_percent']:.2f}% less time</small></td></tr>''')
-        rows.append(f'''<tr class="perf-detail-row" id="method-{identifier}" hidden><td colspan="5"><div class="perf-method-body"><dl><dt>Upstream check</dt><dd>{escape(row['upstream_reference'])}</dd><dt>What changed</dt><dd>{escape(row['method'])}</dd><dt>Reference</dt><dd>{escape(row['baseline'])}</dd><dt>Equivalence</dt><dd>{escape(row['unchanged'])}</dd><dt>Measured scope</dt><dd>{escape(row['sample'])}</dd><dt>Limits</dt><dd>{escape(row['limitation'])}</dd></dl></div></td></tr>''')
+    _ = len(evidence['records'])
     return '\n'.join([
-        '<div class="perf-table-wrap" tabindex="0" role="region" aria-label="Measured performance comparisons, scroll horizontally on small screens"><table class="perf-table"><caption>Different models and scopes are not ranked against each other. Ratios are reference time divided by optimized time.</caption><thead><tr><th scope="col">Computation / scope</th><th scope="col">Type of change</th><th scope="col">Reference</th><th scope="col">Optimized</th><th scope="col">Measured ratio</th></tr></thead><tbody>' + ''.join(rows) + '</tbody></table></div>',
+        '<ul class="doc-links perf-index-links">',
+        '  <li><a class="btn btn-secondary" href="https://github.com/NeuroDMRI/SlicerDSpace/blob/main/docs/release/PERFORMANCE_OPTIMIZATIONS.md" target="_blank" rel="noopener">Performance optimization index (Markdown)</a></li>',
+        '  <li><a class="btn btn-secondary" href="assets/data/performance.json" download>Download measurement data (JSON)</a></li>',
+        '</ul>',
+        '<figure class="shot fig">',
+        '  <a href="assets/img/fig-runtime-optimizations.png" target="_blank" rel="noopener" aria-label="Open the full-size runtime optimizations figure">',
+        '    <picture>',
+        '      <source type="image/webp" srcset="assets/img/fig-runtime-optimizations.webp">',
+        '      <img src="assets/img/fig-runtime-optimizations.png" width="2400" height="2428" loading="lazy" decoding="async" fetchpriority="low" alt="Thirty-nine paired single-subject runtime benchmarks across all twenty-two protocol tasks, showing initial reference open circles and optimized filled circles on a shared log-time axis with aligned Reference, Optimized and Ratio columns.">',
+        '    </picture>',
+        '  </a>',
+        '  <figcaption>Single-subject runtime comparisons across all six workflow stages (rows 01–39). Open circles mark initial or reference baselines and filled circles mark optimized paths on the same input acquisition; ratios give reference time divided by optimized time.</figcaption>',
+        '</figure>',
+        '<figure class="shot fig">',
+        '  <a href="assets/img/fig-cohort-scheduling.png" target="_blank" rel="noopener" aria-label="Open the full-size parallel and cohort scheduling figure">',
+        '    <picture>',
+        '      <source type="image/webp" srcset="assets/img/fig-cohort-scheduling.webp">',
+        '      <img src="assets/img/fig-cohort-scheduling.png" width="2400" height="703" loading="lazy" decoding="async" fetchpriority="low" alt="Three-panel parallel execution summary: stage-specific CPU scaling across 2 to 16 allocated CPUs, schematic subject-level waiting versus adaptive task backfilling, and 16-subject cohort time savings across all five downstream modules under a 32-CPU budget.">',
+        '    </picture>',
+        '  </a>',
+        '  <figcaption>Parallel core scaling and multi-subject cohort scheduling. Panel a profiles per-stage runtime across 2–16 allocated CPUs and marks selected core quotas; panel b illustrates adaptive stage-level task backfilling across subjects; panel c reports measured makespan reductions across 16 Human Connectome Project subjects under a shared 32-CPU budget.</figcaption>',
+        '</figure>',
     ])
 
 

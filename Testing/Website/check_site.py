@@ -43,6 +43,7 @@ ALLOWED_URLS = {
     BLOB + "docs/assets/MODEL_ASSET_TERMS.md",
     BLOB + "docs/architecture/IMPLEMENTATION_PROVENANCE.md",
     BLOB + "docs/release/PERFORMANCE_OPTIMIZATIONS.md",
+    BLOB + "docs/release/PERFORMANCE_OPTIMIZATIONS.zh-CN.md",
     "https://doi.org/10.1002/advs.76596",
     "https://doi.org/10.1016/j.neuroimage.2021.117934",
     "https://doi.org/10.1109/TMI.2023.3331691",

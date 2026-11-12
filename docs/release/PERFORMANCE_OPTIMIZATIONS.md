@@ -2,13 +2,165 @@
 
 # Performance Optimizations
 
-**Reviewed 10 November 2026 · Complete-model pairs and numerically equivalent optimizations**
+**Reviewed 12 November 2026 · Complete 39-benchmark single-subject optimization catalogue and 16-subject parallel scheduling reference**
 
-[Project](../../README.md) | [Documentation](../README.md) | [Runtimes](MODULE_RUNTIMES_20261017.md) | [Author-reference CSV](benchmarks/author_wma_optimizations_20261020.csv) | [JSON](benchmarks/author_wma_optimizations_20261020.json) | [中文](PERFORMANCE_OPTIMIZATIONS.zh-CN.md)
+[Project](../../README.md) | [Documentation](../README.md) | [Runtimes](MODULE_RUNTIMES_20261017.md) | [Public Evidence JSON](../site/assets/data/performance.json) | [中文](PERFORMANCE_OPTIMIZATIONS.zh-CN.md)
 
 [Next bottlenecks and measured follow-up (中文)](PERFORMANCE_BOTTLENECKS_AND_PLAN.zh-CN.md)
 
 </div>
+
+## Index
+
+1. [Hardware-Adaptive Execution, CUDA Policy & Equivalence Guarantees](#1-hardware-adaptive-execution-cuda-policy--equivalence-guarantees)
+2. [Single-Subject Runtime Optimizations (39 Paired Benchmarks Across All 22 Tasks)](#2-single-subject-runtime-optimizations-39-paired-benchmarks-across-all-22-tasks)
+   - [2.1 Preprocessing (`01`–`07`)](#21-preprocessing-0107)
+   - [2.2 Anatomical Priors (`08`–`15`)](#22-anatomical-priors-0815)
+   - [2.3 Microstructure (`16`–`25`)](#23-microstructure-1625)
+   - [2.4 Tractography (`26`–`32`)](#24-tractography-2632)
+   - [2.5 Fibre Bundles (`33`–`37`)](#25-fibre-bundles-3337)
+   - [2.6 Structural Connectome (`38`–`39`)](#26-structural-connectome-3839)
+3. [Parallel Execution & Multi-Subject Cohort Scheduling](#3-parallel-execution--multi-subject-cohort-scheduling)
+   - [3.1 Per-Stage CPU Core Scaling (`2`–`16` CPUs)](#31-per-stage-cpu-core-scaling-216-cpus)
+   - [3.2 Adaptive Stage-Level Backfilling (`N = 16` HCP Subjects)](#32-adaptive-stage-level-backfilling-n--16-hcp-subjects)
+4. [Shared Workflow Preparation & Reuse Boundaries](#4-shared-workflow-preparation--reuse-boundaries)
+5. [Historical Incremental Audit Log](#5-historical-incremental-audit-log)
+
+---
+
+## 1. Hardware-Adaptive Execution, CUDA Policy & Equivalence Guarantees
+
+SlicerDSpace optimizes computational throughput across both CPU and CUDA paths while keeping the underlying scientific estimators, anatomical definitions and quality-control rules unchanged ([2026-11-11 full-pipeline records](benchmarks/full_pipeline_accelerations_20261111.json), [2026-11-12 remaining-pipeline records](benchmarks/remaining_pipeline_accelerations_20261112.json), [public summary JSON](../site/assets/data/performance.json)):
+
+- **VRAM- and RAM-adaptive chunking (`shared/hardware_accel.py`)**: Every GPU and vectorized CPU kernel queries free device VRAM (`torch.cuda.mem_get_info`) and host RAM before sizing voxel chunks or 2D slice batches, caps working-set allocations under `--low-memory` (tested under a 3.5 GiB laptop VRAM cap with peak usage $\le 2.4$ GiB), and automatically halves batch sizes or falls back to the verified CPU path on out-of-memory exceptions.
+- **Selective CUDA routing (13 positive-gain GPU routes)**: CUDA acceleration is exposed only for the **13 protocol routes** with verified wall-clock gains over the optimized CPU path:
+  - *Preprocessing*: Brain masking (`CNN-Diffusion-MRIBrain-Segmentation`), DWI denoising (`MP-PCA + Gibbs`), Eddy/motion & EPI correction (`FSL topup + eddy_cuda`).
+  - *Anatomical priors*: Tissue segmentation (`DDSeg`), Brain parcellation (`DDParcel`), Surface reconstruction (`DDSurfer`).
+  - *Microstructure*: Free-water modelling (`DIPY`), Neurite microstructure (`AMICO NODDI`), Diffusion kurtosis modelling (`DIPY`, **1.28×** over optimized CPU / **62.39×** over initial baseline), Kurtosis signal correction (`MK-Curve`).
+  - *Tractography*: DTI deterministic tractography (`SlicerDMRI`, **1.35×** over optimized CPU / **4.19×** over initial baseline).
+  - *Fibre bundles*: Tractography fibre clustering (`WMA`, **1.18×** over optimized CPU / **44.39×** over initial baseline), Fibre bundle identification (`TractCloud`).
+  - Stages whose host-to-device transfer overhead exceeds GPU kernel savings against the optimized multi-threaded CSR/KD-tree/BVH CPU kernels (`SAF`, `WMQL`, `Connectome streamline count`, `SIFT2-weighted connectome`) run exclusively on the optimized CPU path.
+- **Provenance and equivalence discipline**: Original-author comparisons execute unmodified upstream code; Python-port, multi-threading, workflow-handoff and inherited upstream optimizations are labeled separately. Every paired benchmark verifies exact or floating-point-equivalent outputs and automatic QC parity; numerical equivalence does not replace manual anatomical review.
+
+---
+
+## 2. Single-Subject Runtime Optimizations (39 Paired Benchmarks Across All 22 Tasks)
+
+The 39 paired benchmarks below correspond directly to rows `01`–`39` of the website **Runtime optimizations** figure (`fig-runtime-optimizations.png`), spanning all 22 protocol tasks across the six analysis stages. Ratios report reference time divided by optimized time on the same input acquisition.
+
+### 2.1 Preprocessing (`01`–`07`)
+
+| # | Task | Benchmark / device | Reference | Optimized | Ratio | Reference implementation | Optimization summary |
+| :---: | --- | --- | ---: | ---: | ---: | --- | --- |
+| `01` | DWI import & conversion | NIfTI validation & import | 2.79 s | 0.181 s | **15.45×** | Repeated slice-by-slice gzip random seeks and level-9 deflate recompression | Validate finite non-zero voxel slabs in one sequential gzip pass and stream standardized NIfTI with fast deflate (`compresslevel=1`). |
+| `02` | Brain masking | PNL CompNet complete, CPU | 2.14 min | 1.94 min | **1.11×** | Sequential $b_0$ extraction, serial weight hashing/loading and uncached 8-slice CPU CompNet inference | Single-pass $b_0$ accumulation, concurrent hashing, overlapped model preload behind ANTs, zero-slice skipping and 16-slice batches. |
+| `03` | Brain masking | 3-view CompNet pass, CUDA | 4.05 s | 2.02 s | **2.00×** | Dynamic module-dict dispatch and uncached 8-slice 3-view CompNet GPU forward passes | Static CompNet execution plan, uniform border-slice deduplication and 32-slice IEEE FP32 batches under `torch.inference_mode()`. |
+| `04` | DWI denoising | DIPY MP-PCA + Gibbs, CPU | 6.30 min | 1.91 min | **3.29×** | Per-voxel DIPY `localpca` SVD/`eigh` loop and per-slice FFT Gibbs suppression | Sliding-window 3D patch blocks, batched covariance `eigh` with $z$-slab RAM capping and batched 2D `rFFT`/`irFFT` Gibbs shifts. |
+| `05` | DWI denoising | DIPY MP-PCA + Gibbs, CUDA | 6.30 min | 7.56 s | **50.02×** | Per-voxel DIPY `localpca` SVD/`eigh` loop and per-slice FFT Gibbs suppression | VRAM-adaptive batched PyTorch/cuSOLVER `eigh` MP-PCA patch kernels and batched 2D `rFFT`/`irFFT` Gibbs kernels on CUDA. |
+| `06` | Eddy/motion & EPI correction | FSL `topup` + `eddy`, CPU | 53.2 min | 45.6 min | **1.16×** | Separate DIPY subprocesses with level-9 gzip round-trips and single-threaded `topup` before `eddy_cpu` | Fuse in-RAM vectorized MP-PCA + Gibbs before fast-gzip handoff and forward explicit multi-thread flags (`-nthreads` / `--nthr`) to `topup` and `eddy`. |
+| `07` | Eddy/motion & EPI correction | FSL `topup` + `eddy`, CUDA | 13.1 min | 4.17 min | **3.15×** | Unoptimized CPU DIPY subprocesses, level-9 gzip I/O and single-threaded `topup` before `eddy_cuda` | Combine fused in-RAM CUDA MP-PCA + Gibbs kernels and concurrent fast-gzip export with multi-threaded `topup` and `eddy_cuda`. |
+
+### 2.2 Anatomical Priors (`08`–`15`)
+
+| # | Task | Benchmark / device | Reference | Optimized | Ratio | Reference implementation | Optimization summary |
+| :---: | --- | --- | ---: | ---: | ---: | --- | --- |
+| `08` | Tissue segmentation | DDSeg, CPU | 11.2 min | 10.6 min | **1.06×** | Initial 3-view TorchScript slice-by-slice CPU evaluation without caching or batching | Batch 16 non-uniform brain slices per pass and cache uniform background slice predictions under `torch.inference_mode()`. |
+| `09` | Tissue segmentation | DDSeg, CUDA | 7.83 s | 3.39 s | **2.31×** | Initial 3-view TorchScript slice-by-slice GPU evaluation without batching | Batch up to 64 non-uniform brain slices per forward pass (scaled to free VRAM) and cache uniform background slices under `inference_mode`. |
+| `10` | Brain parcellation | DDParcel, CUDA | 56.8 s | 23.4 s | **2.42×** | Initial 3-view FastSurferCNN GPU inference with iterative thick-slice concatenation and small batches | Zero-copy `sliding_window_view` thick slices, VRAM-scaled 32-slice batches, background caching, sagittal LUT and GPU probability accumulation. |
+| `11` | Brain parcellation | DDParcel ROI cleanup | 15.7 s | 5.03 s | **3.12×** | Full $256^3$ connected-component labelling and full-volume 3D median/Gaussian filtering | Crop to padded non-zero brain bounding box before single-pass connected-component cleanup and 3D filtering. |
+| `12` | Surface reconstruction | DDSurfer, CPU | 2.26 min | 2.09 min | **1.08×** | 18 separate per-channel trilinear interpolations per ODE step and unbuffered mesh text formatting | Gather all 18 channels from one channels-last `[X*Y*Z, 18]` buffer, cache conformal volumes across hemispheres and buffer `.obj` writes. |
+| `13` | Surface reconstruction | DDSurfer, CUDA | 12.5 s | 10.8 s | **1.16×** | 18 separate 1-channel `F.grid_sample` GPU kernel launches per ODE step and repeated volume loads | Pack all 18 feature volumes into one `[1, 18, D, H, W]` CUDA tensor for single-kernel `F.grid_sample` interpolation and cache across hemispheres. |
+| `14` | Surface morphometry | FreeSurfer DAG, CPU | 8.59 min | 7.69 min | **1.12×** | Strictly serial intra-hemisphere execution of 16 FreeSurfer surface, registration, label and stats commands | Schedule independent intra-hemisphere morphometry, inflation/sphere, annotation and `fsaverage` branches concurrently across stage threads. |
+| `15` | Surface morphometry | DDSurfer overlay mapping | 13.4 s | 3.52 s | **3.80×** | Separate FreeSurfer `mri_surf2surf` commands for each scalar overlay | Pack four overlays into the inherited upstream DDSurfer multi-frame `mri_surf2surf` operation (`c3b2d40`). |
+
+### 2.3 Microstructure (`16`–`25`)
+
+| # | Task | Benchmark / device | Reference | Optimized | Ratio | Reference implementation | Optimization summary |
+| :---: | --- | --- | ---: | ---: | ---: | --- | --- |
+| `16` | Diffusion tensor modelling | SlicerDMRI, complete | 2.27 min | 1.90 min | **1.20×** | Initial fresh full-volume SlicerDMRI/Teem WLS tensor estimation and full-grid scalar/DEC export | Combine single-template zero-voxel skipping in Teem WLS with active-FA (`FA > 0`) DEC generation and consolidated export. |
+| `17` | Diffusion tensor modelling | Teem WLS | 74.1 s | 31.3 s | **2.37×** | Full-grid Teem `tenEstimateUpdate` loop across all image-grid rows | Evaluate one all-zero signal template once and fit only nonzero-signal voxel rows. |
+| `18` | Free-water modelling | DIPY WLS + NLS, CPU | 15.6 min | 5.16 min | **3.03×** | Initial DIPY 1.12.1 full-brain WLS grid search and per-voxel SciPy NLS refinement | Combine protocol/attenuation array reuse, column-scaled WLS and analytical-Jacobian Gauss–Newton/LM NLS chunks. |
+| `19` | Free-water modelling | DIPY WLS + NLS, CUDA | 15.6 min | 37.6 s | **24.94×** | Initial DIPY 1.12.1 full-brain WLS grid search and per-voxel SciPy NLS refinement | Batched FP64 CUDA Cholesky WLS, analytical Cardano $3\times 3$ eigensolver and vectorized GPU Gauss–Newton NLS. |
+| `20` | Neurite microstructure | AMICO NODDI, CPU | 4.20 min | 2.00 min | **2.11×** | Per-voxel Joblib Python loops calling `scipy.optimize.nnls` across $121\times 12$ AMICO dictionary atoms | Exact active-set Lawson–Hanson FP64 NNLS in batched multi-threaded chunks with concurrent fast-gzip export. |
+| `21` | Neurite microstructure | AMICO NODDI, CUDA | 4.20 min | 29.3 s | **8.59×** | Default 8-thread CPU AMICO 2.1.1 per-voxel `scipy.optimize.nnls` fit over 740,916 brain voxels | Batched FP64 PyTorch CUDA active-set Lawson–Hanson NNLS across all $121\times 12$ dictionary atoms per voxel. |
+| `22` | Diffusion kurtosis modelling | DIPY WLS, CPU | 91.6 min | 1.88 min | **48.73×** | Initial per-voxel DIPY WLS 22-parameter kurtosis fitting and per-voxel metric wrappers | Solve chunked normal-equation WLS and evaluate vectorized analytical kurtosis metrics across in-mask voxels. |
+| `23` | Diffusion kurtosis modelling | DIPY WLS, CUDA | 91.6 min | 88.1 s | **62.39×** | Initial per-voxel DIPY WLS 22-parameter kurtosis fitting and per-voxel metric wrappers | Column-equilibrated batched FP64 CUDA Cholesky WLS and GPU-vectorized kurtosis invariants (**1.28×** over optimized CPU). |
+| `24` | Kurtosis signal correction | MK-Curve, 1-thread CPU | 166 min | 13.5 min | **12.33×** | Initial Python port repeating full 200-point synthetic-$b_0$ WLS sweeps and scalar eigendecompositions | Basis/signal/QR reuse, coarse-to-fine synthetic-$b_0$ search and batched $3\times 3$ eigendecomposition (3.31 min on 8 CPU workers). |
+| `25` | Kurtosis signal correction | MK-Curve, CUDA | 166 min | 79.3 s | **125.49×** | Initial Python port repeating full 200-point synthetic-$b_0$ WLS sweeps and scalar eigendecompositions | VRAM-adaptive batched FP64 CUDA Cholesky WLS and analytical Cardano $3\times 3$ eigensolvers across chunks. |
+
+### 2.4 Tractography (`26`–`32`)
+
+| # | Task | Benchmark / device | Reference | Optimized | Ratio | Reference implementation | Optimization summary |
+| :---: | --- | --- | ---: | ---: | ---: | --- | --- |
+| `26` | DTI tractography | SlicerDMRI, CPU | 67.9 s | 21.9 s | **3.10×** | Initial DIPY `TenModel` full-grid tensor fit and 362-vertex discrete sphere projection | Active-mask chunked WLS tensor fit and exact analytical principal eigenvectors feeding EuDX integration. |
+| `27` | DTI tractography | SlicerDMRI, CUDA | 67.9 s | 16.2 s | **4.19×** | Initial DIPY `TenModel` full-grid tensor fit and 362-vertex discrete sphere projection | Batched CUDA Cholesky WLS and cuSOLVER `eigh` peak extraction before EuDX integration (**1.35×** over optimized CPU). |
+| `28` | UKF tractography | UKFTractography, complete | 11.8 min | 11 min | **1.08×** | Compressed scratch NRRD staging and four separate full-file VTK/TRK parses around C++ `UKFTractography` | Uncompressed scratch NRRD staging and single-buffer VTK reuse across vectorized QC and flat `ArraySequence` TRK export. |
+| `29` | UKF tractography | Staging, QC & TRK export | 84.4 s | 39.5 s | **2.14×** | Gzip scratch NRRDs, per-streamline Python QC loops and generator-based VTK-to-TRK serialization | Raw scratch NRRD streaming, vectorized mask-overlap/length QC and flat-array TRK serialization (byte-identical `.trk`). |
+| `30` | ACT tractography | MRtrix3 CSD/ACT, complete | 35.1 min | 34 min | **1.03×** | Default `dwi.mif` strides, sequential post-`tckgen` SIFT2/VTK/TRK export and Python-loop QC | Contiguous volume strides (`-strides 0,0,0,1`), overlapped SIFT2 + VTK/TRK exports and vectorized 1M-streamline validation. |
+| `31` | ACT tractography | Concurrent SIFT2 & export | 4.33 min | 2.07 min | **2.09×** | Sequential `tcksift2`, `tckconvert` (`.vtk`) and Python TCK-to-TRK export after `tckgen` | Concurrent execution of `tcksift2`, multi-threaded `tckconvert` and streaming TRK export in a bounded thread pool. |
+| `32` | SAF tractography | SAF package, CPU | 3.49 min | 46.7 s | **4.49×** | Initial unoptimized surface-guided short-association fibre geometric intersection loop (100k tracks) | Vectorized endpoint/hemisphere/length prefiltering combined with spatial-hash BVH Möller–Trumbore ray–triangle tests. |
+
+### 2.5 Fibre Bundles (`33`–`37`)
+
+| # | Task | Benchmark / device | Reference | Optimized | Ratio | Reference implementation | Optimization summary |
+| :---: | --- | --- | ---: | ---: | ---: | --- | --- |
+| `33` | Query-based bundle extraction | WMQL, CPU | 22.9 s | 6.46 s | **3.54×** | Upstream `tract_querier` per-streamline Python point loops, dense dict/set construction and serial VTK export | Multi-threaded flat CSR voxel-label crossing histograms, lazy CSR sets and concurrent binary VTK bundle writers. |
+| `34` | Tractography fibre clustering | WMA, CPU | 102 min | 2.71 min | **37.65×** | Initial unmodified ORG-atlas registration, bilateral clustering, outlier removal and 74-tract assembly | Bulk VTK geometry/input reuse fused with vectorized CPU multi-scale registration, bilateral clustering and native hardening. |
+| `35` | Tractography fibre clustering | WMA, CUDA | 102 min | 2.30 min | **44.39×** | Initial unmodified ORG-atlas registration, bilateral clustering, outlier removal and 74-tract assembly | Triton/PyTorch CUDA kernels for multi-scale registration, pairwise fibre distances and outlier removal (**1.18×** over optimized CPU). |
+| `36` | Fibre bundle identification | TractCloud, CPU | 46.1 s | 42.4 s | **1.09×** | Per-streamline DIPY resampling loops, per-batch re-collation, duplicate tractogram reload and level-9 VTP writes | Vectorized CSR arc-length polyline resampling, pre-staged contiguous batches and parallel fast-zlib `.vtp` bundle export. |
+| `37` | Fibre bundle identification | TractCloud, CUDA | 16.1 s | 10.2 s | **1.57×** | Per-streamline Python resampling, per-batch host-to-GPU collation, disabled cuDNN and serial VTP export | Vectorized CSR resampling, GPU-resident dataset slicing, IEEE FP32 cuDNN DGCNN+PointNet execution and parallel `.vtp` export. |
+
+### 2.6 Structural Connectome (`38`–`39`)
+
+| # | Task | Benchmark / device | Reference | Optimized | Ratio | Reference implementation | Optimization summary |
+| :---: | --- | --- | ---: | ---: | ---: | --- | --- |
+| `38` | Connectome construction | Streamline count, CPU | 2.28 min | 5.71 s | **23.96×** | Initial unbatched Python endpoint lookup and 1M-streamline matrix accumulation | Batched direct voxel lookup, 4 mm `cKDTree` radial node assignment and flat `np.add.at` edge accumulation. |
+| `39` | SIFT2-weighted connectome | SIFT2 weights, CPU | 2.28 min | 5.91 s | **23.16×** | Initial unbatched Python endpoint lookup and SIFT2-weighted matrix accumulation | Batched direct voxel + 4 mm `cKDTree` endpoint assignment combined with vectorized SIFT2 weight summation. |
+
+---
+
+## 3. Parallel Execution & Multi-Subject Cohort Scheduling
+
+The parallel scheduling figure on the website (`fig-cohort-scheduling.png`) summarizes stage-level CPU scaling and multi-subject resource-aware backfilling in `scripts/run_batch_pipeline.py` ([scaling records](benchmarks/cohort_multi_pipeline_20261109.json)).
+
+### 3.1 Per-Stage CPU Core Scaling (`2`–`16` CPUs)
+
+Allocating more CPU threads to a single subject does not speed up every stage uniformly. Profiling six representative stages across `2`, `4`, `8` and `16` CPU cores shows two distinct scaling regimes:
+
+| Profiled stage | 2 CPUs | 4 CPUs | 8 CPUs | 16 CPUs | Selected quota | Scaling behaviour |
+| --- | ---: | ---: | ---: | ---: | :---: | --- |
+| **DDSeg** (tissue segmentation) | 14.3 s (100.0%) | 15.1 s (105.5%) | 13.1 s (91.3%) | 17.5 s (121.9%) | **2 CPUs** | Early saturation / thread contention above 2 cores |
+| **DDSurfer** (surface reconstruction) | 77.9 s (100.0%) | 74.5 s (95.7%) | 72.6 s (93.2%) | 77.0 s (98.9%) | **2 CPUs** | GPU/I/O-dominated; <7% change from 2 to 16 cores |
+| **DDParcel** (brain parcellation) | 176.8 s (100.0%) | 144.8 s (81.9%) | 138.8 s (78.5%) | 150.3 s (85.0%) | **2 CPUs** | Diminishing returns past 2–4 cores; better throughput via cross-subject concurrency |
+| **DTI registration** (`BRAINSFit`) | 36.8 s (100.0%) | 26.3 s (71.4%) | 26.6 s (72.2%) | 22.7 s (61.7%) | **2 CPUs** | Sub-linear gain beyond 2–4 cores; kept lightweight for cohort packing |
+| **NODDI** (`AMICO` / active-set NNLS) | 1615.6 s (100.0%) | 809.1 s (50.1%) | 418.6 s (25.9%) | 594.3 s (36.8%) | **8 CPUs** | Near-linear scaling to 8 cores (3.86×), followed by contention at 16 cores |
+| **DTI fitting** (multi-threaded WLS) | 4920.2 s (100.0%) | 2440.1 s (49.6%) | 1220.1 s (24.8%) | 652.4 s (13.3%) | **16 CPUs** | Continues scaling cleanly to 16 cores (7.54× faster than 2 CPUs) |
+
+### 3.2 Adaptive Stage-Level Backfilling (`N = 16` HCP Subjects)
+
+Under `Subject-level` fixed concurrency (`--scheduler subjects`), each worker reserves a uniform core slice for an entire subject, leaving CPU cores idle whenever a subject enters lightweight I/O, registration or GPU-bound stages. Under `Adaptive` stage-level scheduling (`--scheduler adaptive`), the scheduler tracks explicit per-stage CPU, RAM, GPU and I/O tokens and **backfills** waiting tasks from subsequent subjects as soon as resources free up. Across 16 full-brain HCP Young Adult subjects under an identical **32-CPU budget** (with Rule-1 numerical equivalence passing for all 16/16 subjects in every module):
+
+| Module cohort (`N = 16` HCP subjects, 32-CPU budget) | Subject-level makespan | Adaptive makespan | Throughput ratio | Time saved |
+| --- | ---: | ---: | ---: | ---: |
+| **Anatomical priors** (`DDSeg + DDParcel + DDSurfer`) | 71.69 min | 64.23 min | **1.12×** | **10.4%** |
+| **Microstructure** (`DTI + Free-water + NODDI + DKI + MK-Curve`) | 136.22 min | 100.85 min | **1.35×** | **26.0%** |
+| **Tractography** (`DTI-Det` downstream tracking window) | 67.19 min | 54.91 min | **1.22×** | **18.3%** |
+| **Fibre bundles** (`WMQL + TractCloud` bundle extraction route) | 71.09 min | 62.32 min | **1.14×** | **12.3%** |
+| **Connectome** (`DDSeg + DDParcel + DTI-Det + Bundles + Connectome`) | 71.16 min | 62.41 min | **1.14×** | **12.3%** |
+
+In the Microstructure cohort, adaptive backfilling raises mean active CPU utilization from **12.9 to 19.9 cores** without modifying any scientific estimator. On personal workstations or laptops ($\le 16$ GiB RAM or 4–8 GiB consumer GPUs), passing `--low-memory` enforces conservative concurrency, I/O and memory reservations.
+
+---
+
+## 4. Shared Workflow Preparation & Reuse Boundaries
+
+SlicerDSpace eliminates redundant intermediate preparation across co-selected downstream stages via OS-locked, SHA-256-verified stage receipts (detailed in [25 October: Shared Preparation Across Products](#25-october-shared-preparation-across-products) below):
+- **Detached DWI/mask headers & native WLS/LS tensors**: Computed once per input acquisition and fitting convention (`LS` for DDSeg; shared `WLS` across DDParcel, DDSurfer and compatible microstructure routes).
+- **Template registrations & CSD FODs**: Cached independently by target template and spherical-harmonic contract (`csd_fod_preparation.json`), never merging distinct neural-network normalization pipelines or model parameters.
+
+---
+
+## 5. Historical Incremental Audit Log
 
 **Original-author comparisons execute author code; Python-port, threading and
 scheduling comparisons are labeled separately.** WMA bulk copying preserves

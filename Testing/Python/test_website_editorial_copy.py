@@ -107,14 +107,14 @@ class WebsiteEditorialCopyTests(unittest.TestCase):
         self.assertNotIn('class="tile', section)
         self.assertEqual(len(re.findall(r'<img\b', section)), 1)
         self.assertRegex(section, r'src="assets/img/results-overview\.svg\?v=[^"]+"')
-        self.assertIn('width="1830" height="2036"', section)
+        self.assertIn('width="1830" height="2080"', section)
         self.assertIn('Open full-size SVG', section)
         receipt = json.loads((ROOT / "docs/website/published_assets.json").read_text())
         published = ROOT / "docs/site/assets/img/results-overview.svg"
         entry = receipt['files']['docs/site/assets/img/results-overview.svg']
         self.assertEqual(hashlib.sha256(published.read_bytes()).hexdigest(), entry['sha256'])
-        self.assertEqual(entry['query_preset'], 'official_cerebellar')
-        self.assertRegex(entry['query_provenance_sha256'], r'^[a-f0-9]{64}$')
+        self.assertEqual(entry['query_preset'], 'official_multibundle')
+        self.assertRegex(entry['source_sha256'], r'^[a-f0-9]{64}$')
         self.assertNotIn('res-wmql-csd.jpg', self.source)
 
     def test_integration_is_standalone_and_source_backed(self):
@@ -270,7 +270,7 @@ class WebsiteEditorialCopyTests(unittest.TestCase):
     def test_figure_wrappers_are_unframed_and_result_assets_remain_available(self):
         self.assertNotIn('class="panel shot', self.source)
         self.assertIn('<figure class="results-overview">', self.section('outputs'))
-        for name in ('choose', 'runtime'):
+        for name in ('choose', 'runtime', 'performance'):
             self.assertIn('<figure class="shot fig">', self.section(name))
         styles = (ROOT / 'docs/site/assets/css/site.css').read_text(encoding='utf-8')
         self.assertIn('.results-scroll { overflow-x: auto;', styles)

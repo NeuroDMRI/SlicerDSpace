@@ -171,7 +171,7 @@ async function runViewport(browser, origin, name, width, height, opts) {
   const bad = imgs.filter((i) => !i.ok).map((i) => i.src);
   record(bad.length === 0, `${tag}: all ${imgs.length} images loaded`, 'not loaded: ' + bad.join(', '));
   const webpSources = await page.locator('picture > img').evaluateAll(items => items.map(image => image.currentSrc));
-  record(webpSources.length === 1 && webpSources.every(source => source.endsWith('.webp')),
+  record(webpSources.length === 3 && webpSources.every(source => source.endsWith('.webp')),
     `${tag}: lossless WebP alternatives are selected for PNG figures`, JSON.stringify(webpSources));
   record((await page.locator('#choose img').getAttribute('src')).split('?')[0] === 'assets/img/workflow-overview.svg',
     `${tag}: route overview uses the paper workflow as a vector image`);
@@ -235,8 +235,8 @@ async function runViewport(browser, origin, name, width, height, opts) {
     return { src: img.getAttribute('src'), width: img.naturalWidth, height: img.naturalHeight,
       fit: getComputedStyle(img).objectFit, ratio: box.width / box.height };
   });
-  record(overview.src === 'assets/img/results-overview.svg?v=ukf-coverage-2' && overview.width > 0
-      && Math.abs(overview.ratio - 1830 / 2036) < .01,
+  record(overview.src === 'assets/img/results-overview.svg?v=results-20261112' && overview.width > 0
+      && Math.abs(overview.ratio - 1830 / 2080) < .01,
     `${tag}: complete vector results overview is uncropped`, JSON.stringify(overview));
   record(await page.locator('#outputs article.tile').count() === 0,
     `${tag}: results are one scientific plate, not separate gallery cards`);
@@ -436,9 +436,9 @@ async function run404AndNoJs(browser, origin) {
   await c2.close();
 }
 
-// Method details expand directly underneath their measurement row.
+// Optimization and parallel figures plus the repository Markdown index stay visible without inline method tables.
 async function runPerformance(browser, origin, width, noJs = false) {
-  const context = await browser.newContext({ viewport: { width, height: 900 }, javaScriptEnabled: !noJs });
+  const context = await browser.newContext({ viewport: { width, height: 900 }, javaScriptEnabled: !noJs, reducedMotion: 'reduce' });
   const page = await context.newPage();
   const errors = [];
   page.on('pageerror', (error) => errors.push(String(error)));
@@ -455,67 +455,39 @@ async function runPerformance(browser, origin, width, noJs = false) {
   const prefix = `performance ${width}px${noJs ? ' no JS' : ''}`;
   const evidence = page.locator('#performance-evidence');
   await evidence.scrollIntoViewIfNeeded();
-  record(await evidence.evaluate(el => el.tagName === 'DIV' && !el.closest('details')) &&
-    await page.locator('#performance-evidence .perf-table').isVisible(), prefix + ': complete comparison table is visible by default');
-  record(await page.locator('.perf-table .perf-record').count() === PERF_COUNT &&
-    await page.locator('.perf-table .perf-record').evaluateAll(rows => rows.every(row => getComputedStyle(row).display !== 'none')),
-    prefix + ': all timing rows are visible without expanding anything');
-  record(await page.locator('.perf-chart, .perf-filters, #perf-count').count() === 0,
-    prefix + ': no filter controls, count or highlighted bar charts');
-  record(await page.locator('.perf-methods').count() === 0, prefix + ': no separate method-details section');
-  record(await page.locator('.perf-toggle[aria-expanded="false"]').count() === PERF_COUNT &&
-    await page.locator('.perf-detail-row.is-open').count() === 0 &&
-    await page.locator('.perf-detail-row').evaluateAll(rows => rows.every(row => row.hidden && getComputedStyle(row).display === 'none')),
-    prefix + ': all method and verification details start hidden, including without JavaScript');
-  record(await page.locator('.perf-toggle-icon').evaluateAll(icons => icons.every(icon => icon.textContent === '+')),
-    prefix + ': each timing row has an explicit plus control');
-  if (noJs) {
-    record(await page.locator('.perf-toggle:disabled').count() === PERF_COUNT,
-      prefix + ': failed or disabled scripting does not expose details or leave active broken buttons');
+  for (const img of await evidence.locator('img').all()) {
+    await img.scrollIntoViewIfNeeded();
   }
-  record(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), prefix + ': no page overflow with the table visible');
+  await page.waitForFunction(() => [...document.querySelectorAll('#performance-evidence img')].every(i => i.complete && i.naturalWidth > 0), null, { timeout: 10000 });
+  record(await evidence.evaluate(el => el.tagName === 'DIV' && !el.closest('details')) &&
+    await evidence.locator('figure.shot img').count() === 2,
+    prefix + ': runtime-optimization and cohort-scheduling figures are visible by default');
+  record(await page.locator('.perf-table, .perf-record, .perf-detail-row, .perf-toggle, .perf-chart, .perf-filters, #perf-count, .perf-methods').count() === 0,
+    prefix + ': no inline method table, filter controls or expandable method rows');
+  record(await page.locator('#performance a[href="https://github.com/NeuroDMRI/SlicerDSpace/blob/main/docs/release/PERFORMANCE_OPTIMIZATIONS.md"]').count() === 2,
+    prefix + ': index link jumps to the GitHub repository Markdown report');
+  record(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), prefix + ': no page overflow with optimization figures visible');
   if (!noJs) {
-    await page.locator('.perf-toggle[aria-controls="method-freewater"] .perf-toggle-icon').click();
-    record(await page.locator('#method-freewater').isVisible() &&
-      await page.locator('#method-freewater').evaluate(el => el.previousElementSibling.dataset.record === 'freewater'),
-      prefix + ': measurement expands inside the table below its own row');
-    const bodyWidth = await page.locator('#method-freewater .perf-method-body').evaluate(el => el.getBoundingClientRect().width);
-    record(bodyWidth <= width - 32, prefix + ': expanded description fits the viewport', String(bodyWidth));
-    record(await page.locator('.perf-toggle[aria-controls="method-freewater"] .perf-toggle-icon').innerText() === '-',
-      prefix + ': opening a record changes its plus to minus');
-    await page.locator('.perf-toggle[aria-controls="method-freewater"]').focus();
-    await page.keyboard.press('Enter');
-    record(await page.locator('#method-freewater').isHidden(), prefix + ': Enter collapses inline details');
-    await page.keyboard.press('Space');
-    record(await page.locator('#method-freewater').isVisible(), prefix + ': Space reopens inline details');
-    await page.locator('.perf-toggle[aria-controls="method-wma"]').click();
-    record(await page.locator('#method-wma').isVisible() && await page.locator('#method-freewater').isVisible(),
-      prefix + ': independent records can be compared inline');
-    await page.locator('.perf-toggle[aria-controls="method-wma"]').click();
-    record(await page.locator('#method-wma').isHidden(), prefix + ': clicking again closes that record');
-    await page.goto(origin + '/SlicerDSpace/index.html#method-dki', { waitUntil: 'load' });
-    await page.reload({ waitUntil: 'load' });
-    record(await page.locator('.perf-detail-row').evaluateAll(rows => rows.every(row => row.hidden)) &&
-      await page.locator('.perf-toggle[aria-controls="method-dki"]').getAttribute('aria-expanded') === 'false',
-      prefix + ': a fresh load never expands details from a retained URL fragment');
     const response = await context.request.get(origin + '/SlicerDSpace/assets/data/performance.json');
     const data = await response.json();
     record(response.ok() && data.records.length === PERF_COUNT && !JSON.stringify(data).includes('/data/chengjin/'), prefix + ': sanitized evidence download');
-    // Both the direct fragment and footer navigate to the already-visible table.
     await page.goto(origin + '/SlicerDSpace/index.html#performance', { waitUntil: 'load' });
-    record(await page.locator('#performance-evidence .perf-table').isVisible(), prefix + ': #performance shows the complete table');
+    record(await page.locator('#performance-evidence figure.shot img').first().isVisible(), prefix + ': #performance shows the optimization figures');
     await page.locator('footer a[href="#performance"]').click();
-    record(await page.locator('#performance-evidence .perf-table').isVisible(), prefix + ': footer link reaches the visible table');
+    record(await page.locator('#performance-evidence figure.shot img').first().isVisible(), prefix + ': footer link reaches the optimization figures');
   }
+  await evidence.screenshot({ path: path.join(OUT, `performance-section-${width}${noJs ? '-nojs' : ''}.png`),
+    style: '.site-header { visibility: hidden !important; }' });
   await page.evaluate(() => window.scrollTo(0, 0));
   await page.screenshot({ path: path.join(OUT, `performance-${width}${noJs ? '-nojs' : ''}.png`), fullPage: true });
   record(errors.length === 0, prefix + ': no errors or foreign requests', errors.join('; '));
   await context.close();
 }
 
-// A failed stylesheet, script, or root-class initializer must never expose details.
+// A failed stylesheet, script, or root-class initializer must keep optimization figures and Markdown index accessible.
 async function runPerformanceFailures(browser, origin) {
   for (const file of ['index.html', 'zh.html']) {
+    const expectedMd = file === 'zh.html' ? 'PERFORMANCE_OPTIMIZATIONS.zh-CN.md' : 'PERFORMANCE_OPTIMIZATIONS.md';
     for (const mode of ['no scripts or styles', 'failed performance script', 'no root JS class']) {
       const context = await browser.newContext({ viewport: { width: 390, height: 900 },
         javaScriptEnabled: mode !== 'no scripts or styles', reducedMotion: 'reduce' });
@@ -529,24 +501,10 @@ async function runPerformanceFailures(browser, origin) {
       if (mode === 'no root JS class') {
         await page.evaluate(() => document.documentElement.classList.remove('js'));
       }
-      record(await page.locator('.perf-record').count() === PERF_COUNT &&
-        await page.locator('.perf-table').isVisible() &&
-        await page.locator('.perf-detail-row').evaluateAll((rows, expected) => rows.length === expected &&
-          rows.every(row => row.hidden && getComputedStyle(row).display === 'none'), PERF_COUNT),
-        `${file} ${mode}: timing table remains visible and every detail stays hidden`);
-      if (mode === 'no root JS class') {
-        const toggle = page.locator('.perf-toggle[aria-controls="method-freewater"]');
-        await toggle.locator('.perf-toggle-icon').click();
-        record(await page.locator('#method-freewater').isVisible() &&
-          await page.locator('.perf-detail-row[hidden]').count() === PERF_COUNT - 1,
-          `${file} ${mode}: explicit plus opens only the selected detail`);
-        await toggle.click();
-        record(await page.locator('.perf-detail-row[hidden]').count() === PERF_COUNT,
-          `${file} ${mode}: minus restores the compact timing-only table`);
-      } else {
-        record(await page.locator('.perf-toggle:disabled').count() === PERF_COUNT,
-          `${file} ${mode}: unavailable toggles are safely disabled`);
-      }
+      record(await page.locator('#performance-evidence figure.shot img').count() === 2 &&
+        await page.locator('.perf-table, .perf-detail-row').count() === 0 &&
+        await page.locator(`#performance a[href$="${expectedMd}"]`).count() === 2,
+        `${file} ${mode}: optimization figures and GitHub Markdown index remain accessible without inline method rows`);
       await context.close();
     }
   }
@@ -557,7 +515,7 @@ async function runReferenceLinks(browser, origin) {
   const refs = JSON.parse(fs.readFileSync(path.resolve(DOCS, '../website/references.json'), 'utf8')).references;
   const referenceById = new Map(refs.map(item => [String(item.id), item]));
   for (const [width, noJs] of [[1440, false], [390, false], [390, true]]) {
-    const context = await browser.newContext({ viewport: { width, height: 900 }, javaScriptEnabled: !noJs });
+    const context = await browser.newContext({ viewport: { width, height: 900 }, javaScriptEnabled: !noJs, reducedMotion: 'reduce' });
     const page = await context.newPage();
     await page.goto(origin + '/index.html#integrated', { waitUntil: 'load' });
     const links = await page.locator('.int-table .method-reference').evaluateAll(items => items.map(a => ({
@@ -576,6 +534,9 @@ async function runReferenceLinks(browser, origin) {
     record(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
       `references ${width}px${noJs ? ' no JS' : ''}: linked methods table does not widen the page`);
     const footer = page.locator('.site-footer');
+    await footer.scrollIntoViewIfNeeded();
+    await page.evaluate(() => document.fonts.ready);
+    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
     record(await footer.locator('.foot-nav').count() === 1 &&
       !/About the film|Rosetta|pre-release/.test(await footer.innerText()),
       `footer ${width}px${noJs ? ' no JS' : ''}: compact public-facing links and no production notes`);
@@ -637,18 +598,19 @@ async function runFooter(browser, origin) {
   }
 }
 
-// Run times and the optimization table stay on the home page.
+// Run times and the optimization figures stay on the home page.
 async function runHomePerformanceNavigation(browser, origin) {
-  const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, reducedMotion: 'reduce' });
   const page = await context.newPage();
   await page.goto(origin + '/SlicerDSpace/index.html#runtime', { waitUntil: 'load' });
   const images = page.locator('#runtime img');
-  record(await images.count() === 1 && await page.locator('img[src*="fig-runtime-optimizations"]').count() === 0,
-    'home page: only the stage-time figure remains, without the optimization image');
+  record(await images.count() === 1 && await page.locator('#performance img').count() === 2,
+    'home page: stage-time figure is in #runtime and optimization + parallel figures are in #performance');
   await page.locator('footer a[href="#performance"]').click();
   record(new URL(page.url()).pathname === '/SlicerDSpace/index.html' &&
-    new URL(page.url()).hash === '#performance' && await page.locator('.perf-table').isVisible(),
-    'home page: evidence link reaches the visible table on the same page', page.url());
+    new URL(page.url()).hash === '#performance' &&
+    await page.locator('#performance-evidence figure.shot img').first().isVisible(),
+    'home page: evidence link reaches the optimization figures on the same page', page.url());
   const retired = await context.request.get(origin + '/SlicerDSpace/performance.html');
   record(retired.status() === 404, 'retired performance page is not published', String(retired.status()));
   await context.close();
@@ -817,13 +779,14 @@ async function runLanguages(browser, origin) {
     record(copied === expected && copied.includes('配置需要的依赖环境'),
       `language ${width}px: copy uses the Chinese Agent prompt`);
     await page.goto(origin + '/SlicerDSpace/zh.html#performance', { waitUntil: 'load' });
-    const count = await page.locator('.perf-table .perf-record').count();
-    record(count === PERF_COUNT && await page.locator('.perf-table').isVisible() &&
+    record(await page.locator('#performance-evidence figure.shot img').count() === 2 &&
+        await page.locator('.perf-table, .perf-record, .perf-detail-row').count() === 0 &&
+        await page.locator('#performance a[href$="PERFORMANCE_OPTIMIZATIONS.zh-CN.md"]').count() === 2 &&
         await page.locator('[data-perf-filter], #perf-count').count() === 0 &&
         await page.locator('#integrated tr[data-method]').count() === 30 &&
         await page.locator('.int-table .method-reference').count() > 35 &&
         await page.locator('#cite').count() === 0,
-      `language ${width}px: full translated performance table and complete method/reference catalogs`);
+      `language ${width}px: translated optimization figures, Chinese Markdown index and complete method/reference catalogs`);
     await page.locator('.lang-btn[data-lang="en"]').click();
     await page.waitForURL(url => url.pathname.endsWith('/index.html'));
     record(new URL(page.url()).hash === '#performance' &&

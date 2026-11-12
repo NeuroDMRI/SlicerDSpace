@@ -32,17 +32,16 @@
       "sha256": "400931d034332c54e2557e2b185ca1979fc92c76bcfc54f31be2a312eca34a3a"
     },
     "docs/site/assets/img/fig-runtime-resources.png": {
-      "sha256": "75c4f96f2c310e0ad6b8201802962e65120118273ad1fb44fb5804f21a8cb26f"
+      "sha256": "62e33031c2cff4c0cefd552aa9afc460d3236c7baecb9cda83dde0fc57323120"
     },
     "docs/site/assets/img/fig-runtime-optimizations.png": {
-      "sha256": "e51323bc167818b72b32e7b52afdf0e07aeb6a958a5c75d115f588aa4d4cbbcc"
+      "sha256": "bdd432eb567bbef998dfb6310e19b00cce5baab9d2c5a68ea9773e2173be03d3"
     },
     "docs/site/assets/img/results-overview.svg": {
-      "sha256": "1cd2ad30989a74f33fc0c5edceff2f2ddb7f2890ead5e367b038eae4335ec91e",
-      "source_sha256": "e1fbe66beacde6928683cda82011add2ebd071cb91a9e04437326bb1ee5b4476",
+      "sha256": "28bb8eeef209cbc5c99877417d27a42e7a9e0ccb811dae9f289dd95df455ec94",
+      "source_sha256": "8880fc943fc6dc5fb9756bab8afdb7810af225e551cd1aef76b54cdaacd2758b",
       "derivative": "Black website gutters and white panel outlines; scientific artwork unchanged",
-      "query_preset": "official_cerebellar",
-      "query_provenance_sha256": "9c68b93eb8b2711cd03fb9e3c31db566b1c8d02f78aa5ea2729632e9e1c70a06"
+      "query_preset": "official_multibundle"
     },
     "docs/site/assets/img/fig-product-map.webp": {
       "sha256": "c939ed72a4e7519d56816859aa15f8798e2ce717ba06e095da740f0a329b5838",
@@ -50,8 +49,8 @@
       "derivative": "Lossless WebP; decoded RGBA pixels and dimensions identical to PNG"
     },
     "docs/site/assets/img/fig-runtime-resources.webp": {
-      "sha256": "ffd186fca6602cec33475b19fc444226b644e9ee2f9651c1725b162cb535db30",
-      "source_sha256": "1d7809f504991e3fd64946993da5d8f652c7c1cad4deba1f48d852beaccb6b3a",
+      "sha256": "7cce0d470e254ec39dd2ed1aec76c2d3b5ae8955eb8e2146df3321c9fb1cb501",
+      "source_sha256": "62e33031c2cff4c0cefd552aa9afc460d3236c7baecb9cda83dde0fc57323120",
       "derivative": "Lossless WebP; decoded RGBA pixels and dimensions identical to PNG"
     },
     "docs/site/media/SlicerDSpace_promo_1080p.mp4": {
@@ -116,8 +115,8 @@
       "faststart": true
     },
     "docs/site/assets/img/workflow-overview.svg": {
-      "sha256": "8e47eb90cba0ccf71265ebced8361bed41f071333d851584cd77511eac638be9",
-      "source_sha256": "1a31282c1e822cc3afe9f057d5e7fffa04328c2e8fd0dfe62711bfec106c7e52",
+      "sha256": "0c3abef641402478e194d1ed87f100892d48e8ff56118b8d223e84891b0e7d8e",
+      "source_sha256": "538795a09bb2de47e4d61f5ea5918bb2f70c5295000c51376290d518ebfcbd29",
       "derivative": "Dark website palette and white image outlines; original workflow layout, labels and embedded result images retained"
     },
     "docs/site/assets/img/fans-lab-wordmark.svg": {
@@ -129,6 +128,19 @@
       "sha256": "70489246b3db85802c4007ac0cc62daa4968e3de26631f349d97fb4732c21d10",
       "source_sha256": "fb33b3ab399b4a7697cd72de4c40f2655e0de2473593f7eb48c5702dc411281d",
       "derivative": "Reference-traced cubic outlines; transparent background; no fonts or embedded raster"
+    },
+    "docs/site/assets/img/fig-runtime-optimizations.webp": {
+      "sha256": "bc636a04dd24c077723b8cf3c492ac3199ab2d9b17be9b1ece4f971de2f0209b",
+      "source_sha256": "bdd432eb567bbef998dfb6310e19b00cce5baab9d2c5a68ea9773e2173be03d3",
+      "derivative": "Lossless WebP; decoded RGBA pixels and dimensions identical to PNG"
+    },
+    "docs/site/assets/img/fig-cohort-scheduling.png": {
+      "sha256": "90f57ffd88c53e13b84e71b34da775419b334e01ab9a3750f7004ba39e84317a"
+    },
+    "docs/site/assets/img/fig-cohort-scheduling.webp": {
+      "sha256": "0d0667a4aeeabf3588598820fd66937c60ba18929504df42dee45d7fc6beb4b9",
+      "source_sha256": "90f57ffd88c53e13b84e71b34da775419b334e01ab9a3750f7004ba39e84317a",
+      "derivative": "Lossless WebP; decoded RGBA pixels and dimensions identical to PNG"
     }
   }
 }

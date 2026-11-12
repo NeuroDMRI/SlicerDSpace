@@ -46,7 +46,14 @@ class PerformanceSiteTests(unittest.TestCase):
         self.assertIn('id="performance-evidence"', page)
         self.assertIn('href="#performance"', page)
         self.assertIn('assets/img/fig-runtime-resources.png', page)
-        self.assertNotIn('assets/img/fig-runtime-optimizations.png', page)
+        self.assertIn('assets/img/fig-runtime-optimizations.png', page)
+        self.assertIn('assets/img/fig-runtime-optimizations.webp', page)
+        self.assertIn('assets/img/fig-cohort-scheduling.png', page)
+        self.assertIn('assets/img/fig-cohort-scheduling.webp', page)
+        self.assertIn('https://github.com/NeuroDMRI/SlicerDSpace/blob/main/docs/release/PERFORMANCE_OPTIMIZATIONS.md', page)
+        self.assertNotIn('perf-table', page)
+        self.assertNotIn('perf-record', page)
+        self.assertNotIn('perf-detail-row', page)
         self.assertNotIn('perf-chart', page)
         self.assertNotIn('perf-filters', page)
         self.assertNotIn('id="perf-count"', page)
@@ -69,41 +76,32 @@ class PerformanceSiteTests(unittest.TestCase):
             with patch('scripts.build_performance_site.BENCHMARKS', folder), self.assertRaises(ValueError):
                 build_evidence()
 
-    def test_method_details_are_adjacent_rows_in_the_same_table(self):
+    def test_optimization_section_displays_figures_and_index_link_without_inline_method_table(self):
         evidence = build_evidence()
         markup = render(evidence)
-        self.assertEqual(markup.count('class="perf-record"'), 68)
-        self.assertEqual(markup.count('class="perf-detail-row"'), 68)
+        self.assertEqual(markup.count('<figure class="shot fig">'), 2)
+        self.assertIn('assets/img/fig-runtime-optimizations.png', markup)
+        self.assertIn('assets/img/fig-cohort-scheduling.png', markup)
+        self.assertIn('docs/release/PERFORMANCE_OPTIMIZATIONS.md', markup)
+        self.assertNotIn('perf-table', markup)
+        self.assertNotIn('perf-record', markup)
+        self.assertNotIn('perf-detail-row', markup)
         self.assertNotIn('perf-methods', markup)
-        self.assertNotIn('Methods &amp; verification', markup)
         self.assertNotIn('<details', markup)
-        for row in evidence['records']:
-            before = markup.index('data-record="' + row['id'] + '"')
-            main_end = markup.index('</tr>', before) + len('</tr>')
-            self.assertTrue(markup[main_end:].startswith('<tr class="perf-detail-row" id="method-' + row['id'] + '" hidden>'))
-            self.assertIn('<button class="perf-toggle" type="button"', markup[before:main_end])
-            self.assertIn('aria-controls="method-' + row['id'] + '" aria-expanded="false"', markup[before:main_end])
-            self.assertIn('<span class="perf-toggle-icon" aria-hidden="true">+</span>', markup[before:main_end])
 
-    def test_details_start_hidden_in_both_pages_without_javascript_or_css(self):
-        from html.parser import HTMLParser
-
-        class Rows(HTMLParser):
-            def __init__(self):
-                super().__init__()
-                self.rows = []
-
-            def handle_starttag(self, tag, attrs):
-                attrs = dict(attrs)
-                if tag == 'tr' and attrs.get('class') == 'perf-detail-row':
-                    self.rows.append(attrs)
-
-        for filename in ('index.html', 'zh.html'):
+    def test_both_locales_omit_inline_method_rows_and_link_to_markdown_index(self):
+        expected_links = (
+            ('index.html', 'docs/release/PERFORMANCE_OPTIMIZATIONS.md'),
+            ('zh.html', 'docs/release/PERFORMANCE_OPTIMIZATIONS.zh-CN.md'),
+        )
+        for filename, md_link in expected_links:
             with self.subTest(filename=filename):
-                parser = Rows()
-                parser.feed((ROOT / 'docs/site' / filename).read_text(encoding='utf-8'))
-                self.assertEqual(len(parser.rows), 68)
-                self.assertTrue(all('hidden' in row for row in parser.rows))
+                text = (ROOT / 'docs/site' / filename).read_text(encoding='utf-8')
+                self.assertIn(md_link, text)
+                self.assertIn('assets/img/fig-runtime-optimizations.png', text)
+                self.assertIn('assets/img/fig-cohort-scheduling.png', text)
+                self.assertNotIn('class="perf-table"', text)
+                self.assertNotIn('class="perf-detail-row"', text)
 
     def test_new_local_optimizations_require_complete_equivalence_checks(self):
         import copy

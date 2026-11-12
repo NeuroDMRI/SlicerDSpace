@@ -1,8 +1,10 @@
 /* Always-visible measurements using the existing project type and colour tokens. */
 .perf-evidence { max-width: none; margin-top: 24px; }
-.perf-evidence > .perf-intro-line { margin: 24px 0; }
+.perf-evidence > .perf-intro-line { margin: 16px 0 0; }
 .perf-intro-line { display: flex; flex-wrap: wrap; gap: 12px 36px; color: var(--muted); font-size: 14px; }
 .perf-intro-line p { margin: 0; }
+.perf-index-links { margin: 16px 0 28px; }
+.perf-evidence .shot + .shot { margin-top: 44px; }
 .perf-kind { display: inline-block; font: 400 12px/1.6 var(--f-mono); color: #b6cce4; text-transform: uppercase; letter-spacing: .025em; }
 .perf-kind.parallel { color: #ddbc88; }
 .perf-kind.workflow { color: #97c6b3; }

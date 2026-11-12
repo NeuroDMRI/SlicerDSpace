@@ -18,39 +18,19 @@ def run():
         with slicer.util.NodeModify(node):
             node.targetTractography = True
             node.orchestrationTractographyBackend = "ukf"
-        owner._advancedSettingsPanel.collapsed = False
-        ui.parametersCollapsibleButton.collapsed = False
-        ui.advancedRunCollapsibleButton.collapsed = False
-        owner._refresh_advanced_run_settings()
-        owner._ukfGroup.collapsed = False
-        slicer.app.processEvents()
-        assert owner._ukfGroup.visible
-        from shared.ui_onboarding import apply_onboarding_language
+        from shared.ui_ukf import add_staged_ukf_fields
 
-        apply_onboarding_language(owner, "zh")
-        assert "作者" in owner._ukfGroup.title
-        apply_onboarding_language(owner, "en")
-        assert not ui.orchestrationSelectStreamlinesSpinBox.visible
-        controls = owner._ukfControls
-        assert controls["numTensor"].value == 2
-        assert controls["seedsPerVoxel"].value == 1
-        assert controls["seedingThreshold"].value == 0.18
-        assert controls["stepLength"].value == 0.3
-        assert controls["numThreads"].value == 0  # UI zero maps to author -1 automatic.
-        controls["seedsPerVoxel"].setValue(2)
-        assert json.loads(node.ukfParameters)["seedsPerVoxel"] == 2
-        node.ukfParameters = '{"stepLength":0.4}'
-        slicer.app.processEvents()
-        assert controls["stepLength"].value == 0.4
-        assert controls["seedsPerVoxel"].value == 1
-        owner._ukfReset.click()
+        draft = qt.QWidget()
+        read_settings = add_staged_ukf_fields(qt.QFormLayout(draft), node, False)
+        controls = slicer.util.childWidgetVariables(draft)
+        assert controls.ukf_numTensor.value == 2
+        assert controls.ukf_seedsPerVoxel.value == 1
+        assert controls.ukf_numThreads.value == 0
+        controls.ukf_seedsPerVoxel.setValue(2)
         assert node.ukfParameters == "{}"
-        node.orchestrationTractographyBackend = "csd_act"
-        owner._refresh_advanced_run_settings()
-        assert owner._ukfGroup.isHidden()
-        assert ui.orchestrationSelectStreamlinesSpinBox.visible
-        node.orchestrationTractographyBackend = "ukf"
-        owner._refresh_advanced_run_settings()
+        assert json.loads(read_settings())["seedsPerVoxel"] == 2
+        controls.ukf_seedsPerVoxel.setValue(1)
+        assert read_settings() == "{}"
         from shared.ui_run_controller import _ukf_run_options, RunSelection, _append_ukf_args
 
         selection = RunSelection(

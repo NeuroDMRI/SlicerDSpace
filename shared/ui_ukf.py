@@ -24,95 +24,53 @@ CONTROLS = (
 )
 
 
-def refresh_ukf_controls(owner, backend):
-    import ctk
+def add_staged_ukf_fields(layout, node, zh):
     import qt
 
-    node = owner._parameterNode
-    if not hasattr(owner, "_ukfControls"):
-        group = ctk.ctkCollapsibleGroupBox()
-        group.objectName = "ukfParametersGroup"
-        group.collapsed = True
-        group.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Preferred)
-        group.setMinimumWidth(0)
-        layout = qt.QFormLayout(group)
-        layout.setRowWrapPolicy(qt.QFormLayout.WrapLongRows)
-        layout.setFieldGrowthPolicy(qt.QFormLayout.AllNonFixedFieldsGrow)
-        controls, labels = {}, {}
-        owner._ukfUpdating = True
+    controls = {}
+    for key, en, chinese, minimum, maximum, step in CONTROLS:
+        if key == "freeWater":
+            control = qt.QCheckBox()
+        else:
+            control = qt.QSpinBox() if isinstance(minimum, int) else qt.QDoubleSpinBox()
+            control.setRange(minimum, maximum)
+            control.setSingleStep(step)
+            if not isinstance(minimum, int):
+                control.setDecimals(5 if key in {"Qm", "Qw", "Rs"} else 3)
+        control.setObjectName("ukf_" + key)
+        layout.addRow(chinese if zh else en, control)
+        controls[key] = control
 
-        def changed(*_):
-            if owner._ukfUpdating or not owner._parameterNode:
-                return
-            values = {
-                key: (bool(control.checked) if key == "freeWater" else control.value)
-                for key, control in controls.items()
-            }
-            if values["numThreads"] == 0:
-                values["numThreads"] = -1
-            parameters(values)
-            owner._update_parameter_node("ukfParameters", json.dumps(values, sort_keys=True))
+    saved = {}
 
-        for key, en, zh, minimum, maximum, step in CONTROLS:
+    def show_values(values):
+        validated = asdict(parameters(values))
+        saved.clear()
+        saved.update({key: value for key, value in values.items() if key not in controls})
+        for key, control in controls.items():
+            value = validated[key]
             if key == "freeWater":
-                control = qt.QCheckBox()
-                control.toggled.connect(changed)
+                control.setChecked(value)
             else:
-                control = qt.QSpinBox() if isinstance(minimum, int) else qt.QDoubleSpinBox()
-                control.setRange(minimum, maximum)
-                control.setSingleStep(step)
-                if not isinstance(minimum, int):
-                    control.decimals = 5 if key in {"Qm", "Qw", "Rs"} else 3
-                control.valueChanged.connect(changed)
-            control.objectName = "ukf_" + key
-            label = qt.QLabel(en)
-            layout.addRow(label, control)
-            controls[key], labels[key] = control, label
-        note = qt.QLabel("Uses UKFTractography author defaults across all shells.")
-        note.wordWrap = True
-        layout.addRow(note)
-        reset = qt.QPushButton("Restore author defaults")
-        reset.clicked.connect(lambda: owner._update_parameter_node("ukfParameters", "{}"))
-        layout.addRow(reset)
-        owner.ui.parametersCollapsibleButton.layout().insertWidget(1, group)
-        owner._ukfControls, owner._ukfLabels = controls, labels
-        owner._ukfGroup, owner._ukfNote, owner._ukfReset = group, note, reset
-        if hasattr(owner, '_fitAdvancedPage'):
-            group.toggled.connect(owner._fitAdvancedPage)
+                control.setValue(0 if key == "numThreads" and value == -1 else value)
 
-    from shared.algorithm_selection import contains_tracking
-    target_visible = contains_tracking(backend, "ukf") and bool(
-        node and (node.targetTractography or node.targetBundles or node.targetConnectome)
-    )
-    if owner._ukfGroup.visible != target_visible:
-        owner._ukfGroup.visible = target_visible
-    if hasattr(owner, '_advancedCategoryStack') and owner._ukfGroup.parent() != owner._advancedCategoryStack.widget(1):
-        owner.ui.parametersLayout.removeWidget(owner._ukfGroup)
-        owner._advancedCategoryStack.widget(1).layout().addWidget(owner._ukfGroup)
-    zh = getattr(owner, "_onboardingLanguage", "en").startswith("zh")
-    target_title = "UKF 参数 · 作者默认值" if zh else "UKF parameters · author defaults"
-    if owner._ukfGroup.title != target_title:
-        owner._ukfGroup.title = target_title
-    target_reset = "恢复作者默认值" if zh else "Restore author defaults"
-    if owner._ukfReset.text != target_reset:
-        owner._ukfReset.text = target_reset
-    target_note = "默认使用 UKFTractography 作者参数（全部壳层）。" if zh else "Uses UKFTractography author defaults across all shells."
-    if owner._ukfNote.text != target_note:
-        owner._ukfNote.text = target_note
-    for key, en, chinese, *_ in CONTROLS:
-        target_label = chinese if zh else en
-        if owner._ukfLabels[key].text != target_label:
-            owner._ukfLabels[key].text = target_label
-    owner._ukfUpdating = True
-    try:
-        values = asdict(parameters(json.loads(getattr(node, "ukfParameters", "{}") or "{}")))
-        for key, control in owner._ukfControls.items():
-            if key == "freeWater":
-                if control.checked != values[key]:
-                    control.checked = values[key]
-            else:
-                target_val = 0 if key == "numThreads" and values[key] == -1 else values[key]
-                if abs(float(control.value) - float(target_val)) > 1e-9:
-                    control.value = target_val
-    finally:
-        owner._ukfUpdating = False
+    def read_values():
+        values = {key: control.checked if key == "freeWater" else control.value
+                  for key, control in controls.items()}
+        if values["numThreads"] == 0:
+            values["numThreads"] = -1
+        values.update(saved)
+        parameters(values)
+        return json.dumps(values, sort_keys=True)
+
+    original = node.ukfParameters or "{}"
+    show_values(json.loads(original))
+    initial = read_values()
+
+    def staged_value():
+        value = read_values()
+        return original if value == initial else value
+    reset = qt.QPushButton("恢复作者默认值" if zh else "Restore author defaults")
+    reset.clicked.connect(lambda: show_values({}))
+    layout.addRow(reset)
+    return staged_value

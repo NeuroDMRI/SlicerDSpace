@@ -1096,6 +1096,7 @@ class SharedLogicMixin:
 
     def loadKeyResultsFromManifest(
         self, manifest_path: Path, *, max_items: int = 40, mode: str = "reuse", automatic: bool = False,
+        source_path: Path | None = None,
     ) -> dict[str, Any]:
         """Load only explicitly successful manifest outputs, grouped by subject/run."""
         from shared.result_scene import result_candidates, result_nodes, owned_nodes, clear_run, register_node, scalar_preset, source_stamp
@@ -1136,6 +1137,9 @@ class SharedLogicMixin:
                         existing[source] = retained
         else:
             candidates, skipped = result_candidates(manifest)
+            if source_path is not None:
+                identity = str(source_path.expanduser().resolve())
+                candidates = [item for item in candidates if item["path"] == identity]
             deferred = candidates[max(0, max_items):]
             candidates = candidates[:max(0, max_items)]
         loaded, reused = [], []

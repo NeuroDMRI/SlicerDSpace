@@ -3,7 +3,7 @@
 CATEGORIES = (("processing", "Preprocessing & mask", "预处理与掩膜"),
               ("models", "Model parameters", "模型参数"),
               ("execution", "Run & performance", "运行与性能"),
-              ("tools", "Regions & input import", "脑区与输入导入"),
+              ("tools", "Regions", "脑区分析"),
               ("experiments", "Experiments & batch", "实验与批处理"))
 
 BATCH_CONTROLS = ("batchModeLabel", "batchModeCheckBox", "batchRootLabel", "batchRootPath",
@@ -116,7 +116,7 @@ def install_advanced_categories(owner):
     layout.insertWidget(2, stack)
     _unpack_brain_mask_rows(owner, owner._advancedCategoryForms["processing"])
     rows = {
-        "models": ("orchestrationDkiFitMethodComboBox", "orchestrationIfwEchoTimeLineEdit", "orchestrationIfwT2TissueLineEdit", "orchestrationIfwT2CsfLineEdit", "wmqlQueryPresetComboBox", "wmqlQuerySelectionLineEdit", "wmaAtlasComboBox", "wmaInputTractographyPath", "orchestrationSelectStreamlinesSpinBox"),
+        "models": ("orchestrationIfwT2TissueLineEdit", "orchestrationIfwT2CsfLineEdit", "wmaInputTractographyPath", "orchestrationSelectStreamlinesSpinBox"),
         "execution": ("orchestrationRunNameLineEdit", "parallelModelsSpinBox"),
     }
     for key, names in rows.items():
@@ -124,26 +124,16 @@ def install_advanced_categories(owner):
             _move(owner, name, owner._advancedCategoryForms[key])
     owner.ui.parametersFormLayout.takeAt(owner.ui.parametersFormLayout.indexOf(owner.ui.topupCollapsibleGroupBox))
     stack.widget(0).layout().addWidget(owner.ui.topupCollapsibleGroupBox)
-    for key, panel in (("tools", owner._prepareInputWidgets["panel"]), ("tools", owner._regionWidgets["panel"])):
+    for key, panel in (("tools", owner._regionWidgets["panel"]),):
         layout.removeWidget(panel)
         stack.widget([item[0] for item in CATEGORIES].index(key)).layout().addWidget(panel)
         panel.collapsed = True
     owner.ui.parametersCollapsibleButton.hide()
     layout.removeWidget(owner.ui.parametersCollapsibleButton)
-    if hasattr(owner, "_ukfGroup"):
-        owner.ui.parametersLayout.removeWidget(owner._ukfGroup)
-        stack.widget(1).layout().addWidget(owner._ukfGroup)
     for name in ("orchestrationTractographyBackendLabel", "orchestrationTractographyBackendComboBox",
                  "orchestrationBundleBackendLabel", "orchestrationBundleBackendComboBox",
                  "orchestrationMicrostructureStagesLabel", "orchestrationMicrostructureStageOptions"):
         getattr(owner.ui, name).hide()
-    # Scene/result controls are a separate workflow, not an algorithm parameter.
-    root_layout = owner._uiWidget.layout()
-    layout.removeWidget(owner.ui.resultsCollapsibleButton)
-    root_layout.insertWidget(root_layout.indexOf(owner.ui.logCollapsibleButton), owner.ui.resultsCollapsibleButton)
-    owner.ui.resultsCollapsibleButton.collapsed = True
-    # It sat in the collapsed Advanced panel, which hid it explicitly; moving it does not show it again.
-    owner.ui.resultsCollapsibleButton.show()
     selector.currentIndexChanged.connect(stack.setCurrentIndex)
     stack.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Fixed)
     def _sync_stack_height():
@@ -183,10 +173,6 @@ def install_advanced_categories(owner):
     owner.ui.topupCollapsibleGroupBox.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Preferred)
     owner.ui.topupCollapsibleGroupBox.setMinimumWidth(0)
     owner.ui.topupCollapsibleGroupBox.toggled.connect(fit)
-    if hasattr(owner, '_ukfGroup'):
-        owner._ukfGroup.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Preferred)
-        owner._ukfGroup.setMinimumWidth(0)
-        owner._ukfGroup.toggled.connect(fit)
     owner._fitAdvancedPage = fit
     from shared.ui_experiments import install
     install(owner, stack.widget(4))

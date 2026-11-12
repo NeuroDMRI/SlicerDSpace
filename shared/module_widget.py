@@ -23,7 +23,6 @@ from shared.input_import import InputImportConfig, detect_import_source_kind, pr
 from shared.model_assets import model_asset_path_or_none
 from shared.ui_error_dialogs import show_actionable_error_dialog
 from shared.ui_compact import close_input_format_help_popovers, install_compact_layout
-from shared.ui_algorithm_picker import disconnect_algorithm_summary_click
 from shared.ui_environment_dialog import show_environment_results_dialog
 from shared.ui_environment_paths import (
     add_environment_path_row,
@@ -445,7 +444,9 @@ class SharedWidgetMixin:
             batch_root_text=(getattr(node, 'experimentRoot', '') if cohort_experiments else getattr(node, "batchRoot", "")) or "",
             topup_errors=validation.errors,
         )
-        button.enabled = state.enabled
+        has_source = bool(self._prepare_inputs_widget_text("source"))
+        can_import = has_source and bool(self._selected_product_targets()) and not self._pipelineActive
+        button.enabled = (state.enabled or can_import) and not getattr(self, "_inputImportPending", False)
         button.setToolTip(state.tooltip)
 
     def _schedule_run_history_refresh(self) -> None:
@@ -484,8 +485,6 @@ class SharedWidgetMixin:
         self._populateDeviceCombo()
         self._lastProcessEventsAt = 0.0
         self._logLineLimit = 4000
-        self._autoResultManifestSignatures = {}
-        self._autoResultLoading = False
         self._logAppendCount = 0
         self._environmentCacheTtlSeconds = 300.0
         self._lastEnvironmentSignature = None
@@ -543,6 +542,7 @@ class SharedWidgetMixin:
 
         self.addObserver(slicer.mrmlScene, slicer.mrmlScene.StartCloseEvent, self.onSceneStartClose)
         self.addObserver(slicer.mrmlScene, slicer.mrmlScene.EndCloseEvent, self.onSceneEndClose)
+        self.addObserver(slicer.mrmlScene, slicer.mrmlScene.NodeRemovedEvent, self._queue_output_visibility_refresh)
 
         progress = getattr(self.ui, "statusProgressBar", None)
         if progress:
@@ -557,7 +557,6 @@ class SharedWidgetMixin:
 
         text_updates = {
             "environmentCollapsibleButton": "Advanced: Dependency profile",
-            "configurationCollapsibleButton": "1. Inputs",
             "advancedRunCollapsibleButton": "Analysis settings",
             "runSelectedButton": "Run SlicerDSpace",
         }
@@ -579,11 +578,8 @@ class SharedWidgetMixin:
                 except Exception:
                     pass
         for widget_name in (
-            "configurationCollapsibleButton",
-            "targetsCollapsibleButton",
             "parametersCollapsibleButton",
             "runCollapsibleButton",
-            "resultsCollapsibleButton",
         ):
             section = getattr(self.ui, widget_name, None)
             if section:
@@ -1409,12 +1405,10 @@ class SharedWidgetMixin:
         widget = (getattr(self, "_prepareInputWidgets", {}) or {}).get(key)
         if not widget:
             return default
+        if hasattr(widget, "tabData"):
+            return str(widget.tabData(widget.currentIndex) or default)
         value = getattr(widget, "currentText", "")
         return str(value() if callable(value) else value or default).strip() or default
-
-    def _prepare_inputs_checked(self, key: str) -> bool:
-        widget = (getattr(self, "_prepareInputWidgets", {}) or {}).get(key)
-        return bool(widget and widget.isChecked())
 
     def _set_prepare_inputs_widget_text(self, key: str, value: str) -> None:
         widget = (getattr(self, "_prepareInputWidgets", {}) or {}).get(key)
@@ -1482,17 +1476,6 @@ class SharedWidgetMixin:
         if selected_text:
             self._set_prepare_inputs_widget_text(key, selected_text)
 
-    def _browse_prepare_input_subject_root(self, key: str) -> None:
-        start_dir = self._prepare_inputs_widget_text(key) or self._shared_input_directory_text() or os.path.expanduser("~")
-        selected = qt.QFileDialog.getExistingDirectory(
-            slicer.util.mainWindow(),
-            "Select destination subject root",
-            start_dir,
-        )
-        selected_text = str(selected or "").strip()
-        if selected_text:
-            self._set_prepare_inputs_widget_text(key, selected_text)
-
     def _browse_prepare_input_file(self, key: str) -> None:
         start_dir = self._prepare_inputs_widget_text(key) or self._prepare_inputs_widget_text("source") or os.path.expanduser("~")
         selected = qt.QFileDialog.getOpenFileName(
@@ -1508,16 +1491,19 @@ class SharedWidgetMixin:
 
     def _prepare_inputs_config(self, *, force_dry_run: bool = False) -> InputImportConfig:
         source_text = self._prepare_inputs_widget_text("source")
-        subject_root_text = self._prepare_inputs_widget_text("subject_root") or self._shared_input_directory_text()
-        subject_id = self._prepare_inputs_widget_text("subject_id") or self._shared_subject_id_text()
         if not source_text:
             raise ValueError("Select a DICOM folder, NIfTI file, NRRD/NHDR file, or canonical subject root.")
-        if not subject_root_text:
-            raise ValueError("Select the destination subject root.")
-        if not subject_id:
-            raise ValueError("Enter a subject ID.")
+        from uuid import uuid4
+        from shared.subject_id import derive_subject_id
+        from shared.user_config import default_user_config_path
 
-        source = Path(source_text).expanduser()
+        source = Path(source_text).expanduser().resolve()
+        subject_id = self._shared_subject_id_text() or derive_subject_id(str(source))
+        safe_id = derive_subject_id(subject_id)
+        if not safe_id:
+            raise ValueError("Enter a valid subject ID.")
+        workspace = default_user_config_path().parent / "subjects"
+        subject_root = workspace / f"{safe_id}-{uuid4().hex[:12]}"
         source_kind_text = self._prepare_inputs_combo_text("source_kind", "auto")
         source_kind = detect_import_source_kind(source) if source_kind_text == "auto" else source_kind_text
         backend = self._prepare_inputs_combo_text("backend", "auto")
@@ -1533,18 +1519,17 @@ class SharedWidgetMixin:
 
         return InputImportConfig(
             source=source,
-            subject_root=Path(subject_root_text).expanduser(),
+            subject_root=subject_root,
             subject_id=subject_id,
             source_kind=source_kind,
             backend=backend,
             output_kind=output_kind,
-            bval_path=optional_path("bval"),
-            bvec_path=optional_path("bvec"),
+            bval_path=optional_path("bval") if source_kind == "nifti" else None,
+            bvec_path=optional_path("bvec") if source_kind == "nifti" else None,
             metadata_path=optional_path("metadata"),
             mask_path=optional_path("mask"),
             mrconvert_executable=mrconvert,
-            dry_run=force_dry_run or self._prepare_inputs_checked("dry_run"),
-            force=self._prepare_inputs_checked("force"),
+            dry_run=force_dry_run,
         )
 
     def _on_prepare_inputs_preview_clicked(self) -> None:
@@ -1563,42 +1548,140 @@ class SharedWidgetMixin:
         self.appendLog("[Prepare Inputs] Dry-run plan:\n" + json.dumps(manifest, indent=2, sort_keys=True))
         slicer.util.infoDisplay("Input import plan created. See the SlicerDSpace log for details.", parent=self.parent)
 
-    def _on_prepare_inputs_clicked(self) -> None:
+    def _input_import_selection(self) -> tuple:
+        source_kind = self._prepare_inputs_combo_text("source_kind", "nifti")
+        file_fields = ["source", "mask", "metadata"]
+        if source_kind == "nifti":
+            file_fields += ["bval", "bvec"]
+        elif source_kind == "nrrd":
+            file_fields.append("raw")
+        return (source_kind, self._shared_subject_id_text(), self._prepare_inputs_combo_text("backend", "auto"),
+                self._prepare_inputs_combo_text("output_kind", "canonical-nifti"),
+                *(self._prepare_inputs_widget_text(key) for key in file_fields))
+
+    def _on_prepare_inputs_clicked(self, *, run_after: bool = False) -> None:
+        from concurrent.futures import Future
+        from threading import Thread
+
+        if getattr(self, "_inputImportPending", False) or self._pipelineActive:
+            return
         try:
-            config = self._prepare_inputs_config(force_dry_run=False)
-            manifest = prepare_inputs(config)
-        except Exception as exc:
-            self._show_actionable_error(
-                title="Input Import Failed",
-                what="SlicerDSpace could not prepare the selected external inputs.",
-                why="The import backend failed, sidecar files are missing, or the destination already contains files without overwrite enabled.",
-                next_step="Review the selected paths and backend. Enable overwrite only if replacing the destination input files is intended.",
-                auto_fix="Not available. External converters such as dcm2niix, MRtrix3 mrconvert, and SlicerDMRI DWIConvert must be installed separately.",
-                details=exc,
-            )
+            config = self._prepare_inputs_config()
+        except ValueError as exc:
+            slicer.util.errorDisplay(str(exc), parent=self.parent)
+            return
+        selection = self._input_import_selection()
+        self._inputImportPending = True
+        zh = getattr(self, "_onboardingLanguage", "en").startswith("zh")
+        status_label = self._prepareInputWidgets["status"]
+        status_label.setText("正在检查并导入影像…" if zh else "Checking and importing images…")
+        button = self._prepareInputWidgets["prepare_button"]
+        button.enabled = False
+        self._refresh_run_button_state()
+        def start(job, callback):
+            future = Future()
+
+            def work():
+                try:
+                    future.set_result(job())
+                except Exception as exc:
+                    future.set_exception(exc)
+
+            def poll():
+                if getattr(self, "_cleanedUp", False):
+                    return
+                if future.done():
+                    callback(future)
+                else:
+                    qt.QTimer.singleShot(100, poll)
+
+            Thread(target=work, daemon=True).start()
+            qt.QTimer.singleShot(100, poll)
+
+        def finish(future):
+            self._inputImportPending = False
+            if getattr(self, "_cleanedUp", False):
+                return
+            button.enabled = True
+            self._refresh_run_button_state()
+            try:
+                manifest = future.result()
+            except Exception as exc:
+                status_label.setText(str(exc))
+                return
+            self.appendLog("[Prepare Inputs] Result:\n" + json.dumps(manifest, indent=2, sort_keys=True))
+            if (manifest.get("status") == "completed" and self._parameterNode is not None
+                    and selection == self._input_import_selection()):
+                status_label.setText("影像已导入" if zh else "Inputs ready")
+                with slicer.util.NodeModify(self._parameterNode):
+                    self._parameterNode.inputDirectory = config.subject_root.as_posix()
+                    self._parameterNode.subjectId = config.subject_id
+                self._preparedInputSelection = self._input_import_selection()
+                self._apply_shared_inputs_to_workflow_fields()
+                self._checkCanApply()
+                if run_after:
+                    self._onRunSelectedClicked()
+            else:
+                status_label.clear()
+
+        if config.source_kind != "dicom":
+            raw = self._prepare_inputs_widget_text("raw")
+            if config.source_kind == "nrrd" and raw:
+                from shared.ui_prepare_inputs import import_detached_nrrd
+                start(lambda: import_detached_nrrd(config, Path(raw).expanduser().resolve()), finish)
+            else:
+                start(lambda: prepare_inputs(config), finish)
             return
 
-        status = str(manifest.get("status") or "completed")
-        subject_root = Path(config.subject_root).expanduser().resolve()
-        self.appendLog("[Prepare Inputs] Result:\n" + json.dumps(manifest, indent=2, sort_keys=True))
-        if status == "completed":
-            self._sync_path_widget(getattr(self.ui, "inputDirectoryPath", None), subject_root.as_posix())
-            self._sync_line_edit(getattr(self.ui, "subjectIdLineEdit", None), config.subject_id)
-            if self._parameterNode:
-                with slicer.util.NodeModify(self._parameterNode):
-                    self._parameterNode.inputDirectory = subject_root.as_posix()
-                    self._parameterNode.subjectId = config.subject_id
-            self._apply_shared_inputs_to_workflow_fields()
-            self._checkCanApply()
-            slicer.util.infoDisplay(
-                f"Inputs prepared for {config.subject_id}:\n{subject_root / 'input' / 'input_import_manifest.json'}",
-                parent=self.parent,
-            )
-        else:
-            slicer.util.infoDisplay("Dry-run completed. No files were written; see the log for the planned import.", parent=self.parent)
+        from shared.dicom_input import scan_series
+        from shared.ui_prepare_inputs import import_dicom_series
+
+        def choose_series(future):
+            try:
+                series = future.result()
+                if not series:
+                    raise ValueError("No DICOM series found in the selected folder.")
+            except Exception:
+                finish(future if future.exception() else _failed_import(ValueError(
+                    "No DICOM series found in the selected folder.")))
+                return
+            if selection != self._input_import_selection():
+                self._inputImportPending = False
+                button.enabled = True
+                status_label.clear()
+                self._refresh_run_button_state()
+                return
+            index = 0
+            if len(series) > 1:
+                zh = getattr(self, "_onboardingLanguage", "en").startswith("zh")
+                labels = [
+                    f"{index + 1}. {entry['description']} · {entry['frames']} "
+                    + ("幅影像" if zh else "images")
+                    + (f" · {entry['acquisition_time']}" if entry["acquisition_time"] else "")
+                    for index, entry in enumerate(series)
+                ]
+                picked = qt.QInputDialog.getItem(
+                    self.parent, "DICOM", "选择序列" if zh else "Select series", labels, 0, False,
+                )
+                label = picked[0] if isinstance(picked, tuple) else picked
+                if not label:
+                    self._inputImportPending = False
+                    button.enabled = True
+                    status_label.clear()
+                    self._refresh_run_button_state()
+                    return
+                index = labels.index(str(label))
+            start(lambda: import_dicom_series(config, series[index]), finish)
+
+        def _failed_import(exc):
+            failed = Future()
+            failed.set_exception(exc)
+            return failed
+
+        start(lambda: scan_series(config.source), choose_series)
 
     def _on_open_prepare_input_manifest_clicked(self) -> None:
-        subject_root_text = self._prepare_inputs_widget_text("subject_root") or self._shared_input_directory_text()
+        subject_root_text = self._shared_input_directory_text()
         if not subject_root_text:
             slicer.util.infoDisplay("Select a subject root first.", parent=self.parent)
             return
@@ -1775,8 +1858,7 @@ class SharedWidgetMixin:
         if manifest_data:
             self._set_run_summary_from_manifest(manifest_data, fallback=f"Run finished. Manifest: {result.run_manifest_path}")
         self._set_run_progress_message(f"Run finished. Manifest: {result.run_manifest_path}")
-        if manifest_data.get("execute"):
-            self._auto_load_key_results(Path(result.run_manifest_path))
+        self._refresh_run_history(select_path=Path(result.run_manifest_path))
 
     def _on_run_status_table_double_clicked(self, row: int, column: int) -> None:
         table = getattr(self, "_runStatusTable", None)
@@ -2063,7 +2145,6 @@ class SharedWidgetMixin:
         if getattr(self, "_cleanedUp", False):
             return
         self._cleanedUp = True
-        disconnect_algorithm_summary_click(self)
         close_input_format_help_popovers(self, destroy=True)
         uninstall_theme_change_listener(self)
         self._set_module_help_section_hidden(False, _retry=False)
@@ -2140,7 +2221,21 @@ class SharedWidgetMixin:
     def onSceneStartClose(self, caller, event) -> None:
         self.setParameterNode(None)
 
+    def _queue_output_visibility_refresh(self, caller=None, event=None) -> None:
+        if getattr(self, "_outputVisibilityRefreshPending", False):
+            return
+        self._outputVisibilityRefreshPending = True
+
+        def refresh():
+            self._outputVisibilityRefreshPending = False
+            if not getattr(self, "_cleanedUp", False):
+                from shared.ui_run_history import _refresh_output_visibility
+                _refresh_output_visibility(self)
+
+        qt.QTimer.singleShot(0, refresh)
+
     def onSceneEndClose(self, caller, event) -> None:
+        self._queue_output_visibility_refresh()
         if self.parent.isEntered:
             self.initializeParameterNode()
 
@@ -2220,8 +2315,6 @@ class SharedWidgetMixin:
         if target == "LOCAL_DDSURFER":
             try:
                 slicer.util.selectModule("SlicerDSpace")
-                if hasattr(self, "ui") and getattr(self.ui, "configurationCollapsibleButton", None):
-                    self.ui.configurationCollapsibleButton.collapsed = False
             except Exception:
                 pass
             slicer.util.showStatusMessage("Jumped to DDSurfer configuration", 3000)
@@ -2393,8 +2486,6 @@ class SharedWidgetMixin:
             if legacy_combo is not None and legacy_combo.visible:
                 legacy_combo.visible = False
         backend = (backend or self._tractography_backend_text() or "csd_act").strip() or "csd_act"
-        from shared.ui_ukf import refresh_ukf_controls
-        refresh_ukf_controls(self, backend)
         run_name_edit = getattr(self.ui, "orchestrationRunNameLineEdit", None)
         current_run_name = self._line_edit_text(run_name_edit) if run_name_edit else ""
         desired_default = self._default_run_name_for_backend(backend)
@@ -2723,6 +2814,9 @@ class SharedWidgetMixin:
 
     def _reset_result_scene_actions(self) -> None:
         self._latestResultManifestPath = None
+        files = getattr(self, "_runOutputFiles", None)
+        if files is not None:
+            files.clear()
         for button in getattr(self, "_resultSceneButtons", []):
             button.enabled = False
         review = getattr(self, "_reviewStateLabel", None)
@@ -2951,14 +3045,6 @@ class SharedWidgetMixin:
             return
         if manifest.get("kind") == "slicerdsurfer_batch_run":
             self._load_background_batch_manifest_result(manifest_path, manifest)
-            if manifest.get('experiment'):
-                successful = [result['run_manifest_path'] for result in manifest.get('results', [])
-                              if result.get('returncode') == 0 and result.get('run_manifest_path')]
-                if successful:
-                    self._auto_load_key_results(Path(successful[-1]))
-                    self.appendLog('[Experiments] Showing one completed run. Browse individual run records to review other variants.')
-            else:
-                self._auto_load_key_results(manifest_path)
             self._tableShowsLiveRun = False
             set_run_state(self, "failed" if rows_from_batch_manifest(manifest_path, manifest)[1]["failed"] else "completed")
             self._refresh_run_history(select_path=manifest_path)
@@ -2996,13 +3082,7 @@ class SharedWidgetMixin:
             output_tree_path = str(output_tree_report_paths.get("report_html_latest") or output_tree_report_paths.get("report_html") or "")
         self._set_latest_output_tree_path(output_tree_path)
         self._set_run_summary_from_manifest(manifest, fallback=f"Run finished. Manifest: {manifest_path}")
-        self._set_run_progress_message("Run finished. Loading key products for visual review...")
-        loaded_count = self._auto_load_key_results(manifest_path)
         message = f"Run finished. Manifest: {manifest_path}"
-        if loaded_count:
-            message += (
-                f" Auto-loaded {loaded_count} key result node(s). Visual review remains pending."
-            )
         if report_path:
             message += f" Report: {report_path}"
         if output_tree_path:
@@ -3010,37 +3090,6 @@ class SharedWidgetMixin:
         self._set_run_progress_message(message)
         self._tableShowsLiveRun = False
         self._refresh_run_history(select_path=manifest_path)
-
-    def _auto_load_key_results(self, manifest_path: Path) -> int:
-        """Load newly completed run products on the GUI thread, without replacing the scene."""
-        if not self.logic or getattr(self, "_autoResultLoading", False):
-            return 0
-        from shared.auto_results import automatic_manifest_paths
-        paths = automatic_manifest_paths(Path(manifest_path),
-                                         not_before=getattr(self, "_runProgressStartedAt", None))
-        signatures = getattr(self, "_autoResultManifestSignatures", {})
-        count = 0
-        self._autoResultLoading = True
-        try:
-            for path in paths:
-                try:
-                    payload = json.loads(path.read_text(encoding="utf-8"))
-                    signature = json.dumps(payload.get("tasks") or [], sort_keys=True)
-                    identity = str(path.resolve())
-                    if signatures.get(identity) == signature:
-                        continue
-                    result = self.logic.loadKeyResultsFromManifest(path, automatic=True, mode="reuse")
-                    count += len(result.get("loaded", []))
-                    signatures[identity] = signature
-                    for item in result.get("skipped", []):
-                        if "path" in item:
-                            self.appendLog("[Auto-load] " + str(item))
-                except Exception as exc:
-                    self.appendLog(f"[Auto-load] Could not load {path}: {exc}")
-            self._autoResultManifestSignatures = signatures
-        finally:
-            self._autoResultLoading = False
-        return count
 
     def _manage_result_scene(self, mode: str) -> None:
         if not self.logic:
@@ -3284,8 +3333,14 @@ class SharedWidgetMixin:
 
     def _onRunSelectedClicked(self) -> None:
         if (not self._parameterNode or not self.logic or self._pipelineActive
-                or getattr(self, "_selectedSetupActive", False)):
+                or getattr(self, "_selectedSetupActive", False)
+                or getattr(self, "_inputImportPending", False)):
             return
+        if self._prepare_inputs_widget_text("source"):
+            prepared = getattr(self, "_preparedInputSelection", None)
+            if prepared != self._input_import_selection():
+                self._on_prepare_inputs_clicked(run_after=True)
+                return
         if getattr(self, "_setupRestartRequired", False):
             self._setStatus("warning", onboarding_text(getattr(self, "_onboardingLanguage", "en"), "setup_restart_required"))
             return
@@ -3475,6 +3530,9 @@ class SharedWidgetMixin:
         self._startBackgroundPipeline(common_run_kwargs, external_paths, selected)
 
     def _show_topup_error(self, validation: TopupValidation) -> None:
+        tools = getattr(self, "_workflowToolsDialog", None)
+        if tools is not None:
+            tools.show()
         section = getattr(self, "_advancedSettingsPanel", None)
         if section is not None:
             section.collapsed = False
@@ -3493,7 +3551,7 @@ class SharedWidgetMixin:
             what="The run was not started because a topup setting is invalid.",
             why="\n".join(validation.errors),
             next_step=(
-                "Open Advanced settings > Preprocessing & mask > Distortion correction (topup), "
+                "Open Products > Preprocessing > … > topup > Settings, "
                 "and correct or clear the invalid value."
             ),
             auto_fix="Not available; nothing was written.",

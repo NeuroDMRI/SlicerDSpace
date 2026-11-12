@@ -102,8 +102,8 @@
     </widget>
    </item>
    <item>
-    <widget class="ctkCollapsibleButton" name="configurationCollapsibleButton">
-     <property name="text">
+    <widget class="QGroupBox" name="configurationCollapsibleButton">
+     <property name="title">
       <string>1. Inputs</string>
      </property>
      <property name="toolTip">
@@ -187,12 +187,9 @@
     </widget>
    </item>
    <item>
-    <widget class="ctkCollapsibleButton" name="targetsCollapsibleButton">
-     <property name="text">
+    <widget class="QGroupBox" name="targetsCollapsibleButton">
+     <property name="title">
       <string>2. Products</string>
-     </property>
-     <property name="collapsed">
-      <bool>false</bool>
      </property>
      <property name="toolTip">
       <string>Products to compute. Unchecked products are not run; existing outputs are reused.</string>
@@ -1082,12 +1079,9 @@
     </widget>
    </item>
    <item>
-    <widget class="ctkCollapsibleButton" name="resultsCollapsibleButton">
-     <property name="text">
+    <widget class="QGroupBox" name="resultsCollapsibleButton">
+     <property name="title">
       <string>5. Results</string>
-     </property>
-     <property name="collapsed">
-      <bool>false</bool>
      </property>
      <property name="toolTip">
       <string>Pick any earlier run (GUI, command line or batch) and load its results into the scene.</string>

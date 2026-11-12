@@ -43,6 +43,38 @@ def _files(root, max_folders=None):
                 yield path
 
 
+def scan_series(root):
+    """Read DICOM headers and group instance paths by Series Instance UID."""
+    import pydicom
+    from pydicom.errors import InvalidDicomError
+
+    tags = ["SeriesInstanceUID", "SeriesDescription", "SeriesNumber",
+            "ProtocolName", "AcquisitionTime", "NumberOfFrames"]
+    series = {}
+    root = Path(root)
+    if not root.is_dir():
+        raise ValueError(f"DICOM source is not a directory: {root}")
+    for path in _files(root):
+        try:
+            header = pydicom.dcmread(path, stop_before_pixels=True, specific_tags=tags)
+        except InvalidDicomError:
+            continue
+        uid = str(header.get("SeriesInstanceUID") or "")
+        if not uid:
+            continue
+        entry = series.setdefault(uid, {
+            "uid": uid,
+            "description": str(header.get("SeriesDescription") or header.get("ProtocolName") or uid),
+            "number": str(header.get("SeriesNumber") or ""),
+            "acquisition_time": str(header.get("AcquisitionTime") or ""),
+            "frames": 0,
+            "paths": [],
+        })
+        entry["frames"] += int(header.get("NumberOfFrames") or 1)
+        entry["paths"].append(path)
+    return tuple(series.values())
+
+
 def is_dicom_root(root):
     root = Path(root).expanduser()
     if not root.is_dir() or all((root / "input" / name).is_file() for name in REQUIRED):

@@ -1318,9 +1318,6 @@ def apply_onboarding_language(owner: Any, language: str) -> None:
     apply_compact_language(owner, lang)
     from shared.ui_regions import apply_region_language
     apply_region_language(owner, lang)
-    if hasattr(owner, '_ukfControls'):
-        from shared.ui_ukf import refresh_ukf_controls
-        refresh_ukf_controls(owner, getattr(getattr(owner, '_parameterNode', None), 'orchestrationTractographyBackend', None) or 'csd_act')
 
 
 def maybe_show_first_run_wizard(owner: Any) -> None:

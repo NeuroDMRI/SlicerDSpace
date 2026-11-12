@@ -63,6 +63,90 @@ def set_algorithms(owner, family, values):
     owner._schedule_common_user_settings_save()
 
 
+# Reuse the translated labels and allowed values of the established controls.
+ALGORITHM_SETTINGS = {
+    ("preprocessing", "brain_mask"): (
+        ("brainMaskBackend", "brainMaskBackendComboBox", "brainMaskBackendLabel"),
+        ("pnlMaskRoute", "pnlMaskRouteComboBox", "pnlMaskRouteLabel"),
+    ),
+    ("preprocessing", "topup"): (
+        ("preprocessingPhaseEncodingDirection", "preprocessingPhaseEncodingDirectionComboBox", "preprocessingPhaseEncodingDirectionLabel"),
+        ("preprocessingReadoutTime", "preprocessingReadoutTimeSpinBox", "preprocessingReadoutTimeLabel"),
+        ("preprocessingReversePhaseB0", "preprocessingReversePhaseB0Path", "preprocessingReversePhaseB0Label"),
+    ),
+    ("microstructure", "dki"): (
+        ("orchestrationDkiFitMethod", "orchestrationDkiFitMethodComboBox", "orchestrationDkiFitMethodLabel"),
+    ),
+    ("microstructure", "ifw"): (
+        ("orchestrationIfwEchoTimeMs", "orchestrationIfwEchoTimeLineEdit", "orchestrationIfwEchoTimeLabel"),
+    ),
+    ("bundles", "wmql"): (
+        ("orchestrationWmqlPreset", "wmqlQueryPresetComboBox", "wmqlQueryPresetLabel"),
+        ("orchestrationWmqlSelection", "wmqlQuerySelectionLineEdit", "wmqlQuerySelectionLabel"),
+    ),
+    ("bundles", "wma"): (
+        ("wmaAtlas", "wmaAtlasComboBox", "wmaAtlasLabel"),
+    ),
+}
+
+
+def _add_algorithm_row(qt, owner, layout, box, family, algorithm, staged, zh):
+    specs = ALGORITHM_SETTINGS.get((family, algorithm), ())
+    fields = [(attribute, getattr(owner.ui, control, None), getattr(owner.ui, label, None))
+              for attribute, control, label in specs]
+    fields = [(attribute, control, label) for attribute, control, label in fields
+              if control is not None and label is not None]
+    ukf = (family, algorithm) == ("tractography", "ukf")
+    if not fields and not ukf:
+        layout.addWidget(box)
+        return
+    row = qt.QHBoxLayout()
+    row.addWidget(box, 1)
+    button = qt.QToolButton()
+    button.setText("设置" if zh else "Settings")
+    button.setCheckable(True)
+    row.addWidget(button)
+    layout.addLayout(row)
+    panel = qt.QWidget()
+    form = qt.QFormLayout(panel)
+    for attribute, original, label in fields:
+        if isinstance(original, qt.QComboBox):
+            editor = qt.QComboBox()
+            for index in range(original.count):
+                editor.addItem(original.itemText(index), original.itemData(index))
+            editor.setCurrentIndex(original.currentIndex)
+            def choice(editor=editor):
+                value = editor.itemData(editor.currentIndex)
+                return str(editor.currentText if value is None else value)
+            staged[attribute] = choice
+        elif isinstance(original, qt.QDoubleSpinBox):
+            editor = qt.QDoubleSpinBox()
+            editor.setRange(original.minimum, original.maximum)
+            editor.setDecimals(original.decimals)
+            editor.setSingleStep(original.singleStep)
+            editor.setValue(original.value)
+            staged[attribute] = lambda editor=editor: float(editor.value)
+        elif hasattr(original, "currentPath"):
+            import ctk
+            editor = ctk.ctkPathLineEdit()
+            editor.filters = original.filters
+            editor.nameFilters = original.nameFilters
+            editor.setCurrentPath(original.currentPath)
+            staged[attribute] = lambda editor=editor: str(editor.currentPath)
+        else:
+            editor = qt.QLineEdit()
+            editor.setText(str(getattr(owner._parameterNode, attribute)))
+            staged[attribute] = lambda editor=editor: str(editor.text).strip()
+        editor.setToolTip(original.toolTip)
+        form.addRow(str(label.text), editor)
+    if ukf:
+        from shared.ui_ukf import add_staged_ukf_fields
+        staged["ukfParameters"] = add_staged_ukf_fields(form, owner._parameterNode, zh)
+    layout.addWidget(panel)
+    panel.hide()
+    button.toggled.connect(panel.setVisible)
+
+
 def choose_algorithms(owner, family):
     import qt
     import slicer
@@ -130,6 +214,7 @@ def choose_algorithms(owner, family):
         layout.addLayout(header_row)
 
     boxes = {}
+    staged = {}
     current = selected_algorithms(owner._parameterNode, family)
     pointing_cursor = getattr(qt.Qt, "PointingHandCursor", None)
     for value in choices:
@@ -139,7 +224,7 @@ def choose_algorithms(owner, family):
         if pointing_cursor is not None and hasattr(box, "setCursor"):
             box.setCursor(pointing_cursor)
         boxes[value] = box
-        layout.addWidget(box)
+        _add_algorithm_row(qt, owner, layout, box, family, value, staged, zh)
 
     if family == "tractography":
         note_text = (
@@ -167,9 +252,9 @@ def choose_algorithms(owner, family):
         )
     else:
         note_text = (
-            "可在高级设置按需调整参数。"
+            "可展开各算法的设置。"
             if zh
-            else "Optional parameters are in Advanced settings."
+            else "Open an algorithm’s settings to adjust its parameters."
         )
     note = qt.QLabel(note_text)
     if hasattr(note, "setObjectName"):
@@ -192,7 +277,26 @@ def choose_algorithms(owner, family):
     for box in boxes.values():
         box.toggled.connect(update)
     update()
-    apply.connect("clicked()", dialog.accept)
+    def validate_and_accept():
+        try:
+            if "orchestrationIfwEchoTimeMs" in staged:
+                echo_time = staged["orchestrationIfwEchoTimeMs"]()
+                if echo_time:
+                    from math import isfinite
+                    number = float(echo_time)
+                    if not isfinite(number) or number <= 0:
+                        raise ValueError("Echo time must be a positive number in milliseconds.")
+            if "ukfParameters" in staged:
+                staged["ukfParameters"]()
+            if "orchestrationWmqlSelection" in staged:
+                from tractography.wmql_protocol import canonical_wmql_selection
+                canonical_wmql_selection(staged["orchestrationWmqlSelection"](), staged["orchestrationWmqlPreset"]())
+        except ValueError as exc:
+            note.setText(str(exc))
+            return
+        dialog.accept()
+
+    apply.connect("clicked()", validate_and_accept)
     buttons.rejected.connect(dialog.reject)
     layout.addWidget(buttons)
 
@@ -241,27 +345,12 @@ def choose_algorithms(owner, family):
             except Exception:
                 pass
     if accepted:
-        set_algorithms(owner, family, [value for value, box in boxes.items() if box.checked])
+        with slicer.util.NodeModify(owner._parameterNode):
+            for attribute, value in staged.items():
+                setattr(owner._parameterNode, attribute, value())
+            set_algorithms(owner, family, [value for value, box in boxes.items() if box.checked])
     dialog.deleteLater()
     return accepted
-
-
-def disconnect_algorithm_summary_click(owner):
-    """Disconnect the focus-based summary click listener on widget teardown."""
-
-    cb = getattr(owner, "_algorithmSummaryFocusCallback", None)
-    app = getattr(owner, "_algorithmSummaryFocusApp", None)
-    if cb is not None and app is not None:
-        try:
-            sig = getattr(app, "focusChanged", None)
-            if sig is not None and hasattr(sig, "disconnect"):
-                sig.disconnect(cb)
-            elif hasattr(app, "disconnect"):
-                app.disconnect("focusChanged(QWidget*,QWidget*)", cb)
-        except Exception:
-            pass
-    owner._algorithmSummaryFocusCallback = None
-    owner._algorithmSummaryFocusApp = None
 
 
 def install_algorithm_pickers(owner):
@@ -269,8 +358,6 @@ def install_algorithm_pickers(owner):
 
     owner._algorithmButtons = {}
     owner._algorithmSummaryLabels = {}
-    summary_to_checkbox = {}
-    owner._algorithmSummaryToCheckBox = summary_to_checkbox
     form = owner.ui.targetProductsFormLayout
     form.setVerticalSpacing(4)
     # Match a plain QCheckBox row without clipping the 16px styled indicator box on any DPI scale.
@@ -278,7 +365,6 @@ def install_algorithm_pickers(owner):
     indicator_width = max(18, style.pixelMetric(qt.QStyle.PM_IndicatorWidth))
     label_gap = max(5, style.pixelMetric(qt.QStyle.PM_CheckBoxLabelSpacing))
     pointing_cursor = getattr(qt.Qt, "PointingHandCursor", None)
-    click_focus = getattr(qt.Qt, "ClickFocus", None)
 
     for plain_name in (
         "targetSurfaceCheckBox",
@@ -301,10 +387,6 @@ def install_algorithm_pickers(owner):
         role = qt.QFormLayout.FieldRole
         form.takeAt(form.indexOf(checkbox))
         container = qt.QWidget()
-        if click_focus is not None and hasattr(container, "setFocusPolicy"):
-            container.setFocusPolicy(click_focus)
-        if pointing_cursor is not None and hasattr(container, "setCursor"):
-            container.setCursor(pointing_cursor)
         layout = qt.QHBoxLayout(container)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
@@ -322,14 +404,8 @@ def install_algorithm_pickers(owner):
         summary.wordWrap = True
         summary.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Preferred)
         summary.setMinimumWidth(0)
-        if click_focus is not None and hasattr(summary, "setFocusPolicy"):
-            summary.setFocusPolicy(click_focus)
-        if pointing_cursor is not None and hasattr(summary, "setCursor"):
-            summary.setCursor(pointing_cursor)
         layout.addWidget(summary, 1)
         owner._algorithmSummaryLabels[name] = summary
-        summary_to_checkbox[summary] = checkbox
-        summary_to_checkbox[container] = checkbox
         button = qt.QToolButton()
         button.objectName = family + "AlgorithmSelectButton"
         button.setFixedSize(28, 22)
@@ -340,45 +416,6 @@ def install_algorithm_pickers(owner):
         layout.addWidget(button, 0, qt.Qt.AlignVCenter)
         form.setWidget(row, role, container)
         owner._algorithmButtons[family] = button
-
-    app_cls = getattr(qt, "QApplication", None)
-    app_instance = app_cls.instance() if app_cls is not None and hasattr(app_cls, "instance") else None
-    if app_instance is not None and click_focus is not None:
-        disconnect_algorithm_summary_click(owner)
-        toggle_guard = {"busy": False}
-
-        def _on_focus_changed(_old_widget, new_widget) -> None:
-            if getattr(owner, "_cleanedUp", False) or toggle_guard["busy"]:
-                return
-            target_cb = summary_to_checkbox.get(new_widget)
-            if target_cb is None:
-                return
-            toggle_guard["busy"] = True
-            try:
-                if hasattr(new_widget, "clearFocus"):
-                    new_widget.clearFocus()
-                is_en = target_cb.isEnabled() if callable(getattr(target_cb, "isEnabled", None)) else bool(getattr(target_cb, "enabled", True))
-                if is_en:
-                    if hasattr(target_cb, "click"):
-                        target_cb.click()
-                    elif hasattr(target_cb, "setChecked"):
-                        cur = target_cb.isChecked() if callable(getattr(target_cb, "isChecked", None)) else bool(getattr(target_cb, "checked", False))
-                        target_cb.setChecked(not cur)
-            finally:
-                toggle_guard["busy"] = False
-
-        try:
-            sig = getattr(app_instance, "focusChanged", None)
-            if sig is not None and hasattr(sig, "connect"):
-                sig.connect(_on_focus_changed)
-                owner._algorithmSummaryFocusCallback = _on_focus_changed
-                owner._algorithmSummaryFocusApp = app_instance
-            elif hasattr(app_instance, "connect"):
-                app_instance.connect("focusChanged(QWidget*,QWidget*)", _on_focus_changed)
-                owner._algorithmSummaryFocusCallback = _on_focus_changed
-                owner._algorithmSummaryFocusApp = app_instance
-        except Exception:
-            pass
 
     refresh_picker_language(owner)
 

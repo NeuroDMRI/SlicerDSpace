@@ -29,12 +29,14 @@ def run():
 
         slicer.util.selectModule("SlicerDSpace")
         widget = slicer.modules.slicerdspace.widgetRepresentation().self()
-        widget._latestResultManifestPath = "previous-run.json"
-        for button in widget._resultSceneButtons:
-            button.enabled = True
+        for section in (widget.ui.configurationCollapsibleButton,
+                        widget.ui.targetsCollapsibleButton,
+                        widget.ui.resultsCollapsibleButton):
+            assert isinstance(section, qt.QGroupBox)
+        widget._latestResultManifestPath = ROOT / "previous-run.json"
         widget._reset_result_scene_actions()
         assert widget._latestResultManifestPath is None
-        assert not any(button.enabled for button in widget._resultSceneButtons)
+        assert widget._runOutputFiles.topLevelItemCount == 0
         print("GUI_RESULT_ACTION_RESET=True", flush=True)
         STATE["widget"] = widget
         with slicer.util.NodeModify(widget._parameterNode):
@@ -58,6 +60,25 @@ def run():
         manifest.write_text(json.dumps({"subject_id": "gui-test", "run_name": "Test1", "tasks": [
             {"name": "microstructure.dti", "status": "completed", "outputs": {"fa": str(image), "regional_statistics": str(table)}},
             {"name": "microstructure.noddi", "status": "failed", "outputs": {"ndi": str(image)}}]}))
+        from shared.ui_run_history import _show_output_files, _toggle_output
+
+        widget._latestResultManifestPath = manifest
+        _show_output_files(widget, json.loads(manifest.read_text()))
+        assert not owned_nodes(slicer, str(manifest))
+        group = widget._runOutputFiles.topLevelItem(0)
+        item = next(group.child(i) for i in range(group.childCount()) if group.child(i).text(0) == image.name)
+        _toggle_output(widget, item)
+        nodes = owned_nodes(slicer, str(manifest))
+        assert len(nodes) == 1
+        identity = nodes[0].GetID()
+        red = slicer.app.layoutManager().sliceWidget("Red").mrmlSliceCompositeNode()
+        assert red.GetBackgroundVolumeID() == identity
+        _toggle_output(widget, item)
+        assert red.GetBackgroundVolumeID() is None
+        _toggle_output(widget, item)
+        assert red.GetBackgroundVolumeID() == identity
+        assert widget.logic.clearResultsFromManifest(manifest) == 1
+        print("GUI_LAZY_RESULT_VISIBILITY=True", flush=True)
         logic = SharedLogicMixin()
         logic.log = print
         first = logic.loadKeyResultsFromManifest(manifest)

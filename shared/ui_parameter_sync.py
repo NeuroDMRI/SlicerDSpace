@@ -113,9 +113,6 @@ def sync_parameter_node_to_ui(widget) -> None:
         node.orchestrationTractographyBackend or "csd_act",
         via_index=False,
     )
-    if hasattr(widget, '_ukfControls'):
-        from shared.ui_ukf import refresh_ukf_controls
-        refresh_ukf_controls(widget, node.orchestrationTractographyBackend or 'csd_act')
     widget._sync_combo_text(
         getattr(ui, "orchestrationBundleBackendComboBox", None),
         getattr(node, "orchestrationBundleBackend", "wmql") or "wmql",

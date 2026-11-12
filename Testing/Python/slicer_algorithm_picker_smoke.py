@@ -109,6 +109,7 @@ def run():
         dock.setFixedWidth(480)
         slicer.app.processEvents()
         slicer.util.mainWindow().grab().save(str(ROOT / 'main_multiselect.png'))
+        owner._workflowToolsDialog.show()
         owner._advancedSettingsPanel.collapsed = False
         for index in range(len(CATEGORIES)):
             owner._advancedCategorySelector.setCurrentIndex(index)
@@ -116,22 +117,11 @@ def run():
             owner._fitAdvancedPage()
             owner._advancedSettingsPanel.grab().save(str(ROOT / f'advanced_{index}.png'))
             assert owner._uiWidget.width <= 480, (index, owner._uiWidget.width)
-            if index == 1:
-                slicer.util.mainWindow().grab().save(str(ROOT / 'advanced_models_window.png'))
-                label = owner._advancedCategoryForms['models'].labelForField(owner.ui.orchestrationDkiFitMethodComboBox)
-                assert label.visible and label.text
-                group = owner._ukfGroup
-                group.collapsed = False
-                slicer.app.processEvents()
-                slicer.app.processEvents()
-                assert owner._ukfControls['Rs'].visible
-                assert owner._advancedCategoryStack.height > 250
-                group.collapsed = True
         checks.append('compact_parameter_categories_and_opt_in_experiments')
         combo.setCurrentIndex(combo.findData('zh'))
         assert all(button.text == '...' and button.width == 28 and '选择' in button.accessibleName
                    and '可多选' in button.toolTip for button in owner._algorithmButtons.values())
-        assert owner.ui.environmentCollapsibleButton.text == '环境与安装'
+        assert owner._dependencyDialogButton.text == '依赖与诊断'
         checks.append('chinese_picker_and_setup_labels')
         record = {'status': 'passed', 'checks': checks}
         code = 0

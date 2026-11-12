@@ -38,9 +38,8 @@ def start():
                 continue
             slicer.mrmlScene.Clear(0)
             slicer.app.processEvents()
-            widget._autoResultManifestSignatures = {}
             started = time.monotonic()
-            loaded = widget._auto_load_key_results(path)
+            loaded = widget.logic.loadKeyResultsFromManifest(path, automatic=True)
             nodes = owned_nodes(slicer, str(path))
             actual = {node.GetAttribute("SlicerDDSurfer.SourcePath") for node in nodes}
             required = {candidate["path"] for candidate in expected}
@@ -48,7 +47,7 @@ def start():
                 raise AssertionError({"manifest": str(path), "missing": sorted(required - actual),
                                       "unexpected": sorted(actual - required), "loaded": loaded})
             before = {node.GetID() for node in nodes}
-            widget._auto_load_key_results(path)
+            widget.logic.loadKeyResultsFromManifest(path, automatic=True)
             assert before == {node.GetID() for node in owned_nodes(slicer, str(path))}, "Duplicate nodes on repeat poll"
             slicer.app.processEvents()
             slicer.app.processEvents()

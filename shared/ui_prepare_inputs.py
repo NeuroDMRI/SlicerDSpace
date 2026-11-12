@@ -44,26 +44,15 @@ def install_prepare_inputs_panel(owner: Any, configuration_layout: Any) -> None:
     panel.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Preferred)
     panel.setMinimumWidth(0)
 
-    summary = qt.QLabel(
-        "Organize external DICOM, NRRD, or NIfTI + bval/bvec files into <subject root>/input/."
-    )
-    summary.wordWrap = True
-    summary.setStyleSheet(
-        "QLabel { background: #1E2732; border: 1px solid #354658; border-radius: 5px; color: #C5D8E8; padding: 6px 8px; }"
-        if dark
-        else "QLabel { background: #EEF3F8; border: 1px solid #CFDCE8; border-radius: 5px; color: #243B53; padding: 6px 8px; }"
-    )
-    owner._prepareInputWidgets["summary"] = summary
-    register_ui_language_binding(owner, summary, "text", "prepare_summary")
-    form_layout.addRow(summary)
-
-    source_kind = qt.QComboBox()
-    for label in ("auto", "dicom", "nifti", "nrrd", "canonical"):
-        source_kind.addItem(label)
-    source_kind.setToolTip("Use auto unless you need to force a specific source type.")
+    source_kind = qt.QTabBar()
+    source_kind.setExpanding(False)
+    source_kind.setUsesScrollButtons(True)
+    for kind, label in (("nifti", "NIfTI"), ("nrrd", "NRRD / NHDR"),
+                        ("dicom", "DICOM"), ("canonical", "Prepared folder")):
+        index = source_kind.addTab(label)
+        source_kind.setTabData(index, kind)
     owner._prepareInputWidgets["source_kind"] = source_kind
-    register_ui_language_binding(owner, source_kind, "tooltip", "source_type_tooltip")
-    _add_labeled_row(owner, form_layout, "source_type", source_kind)
+    form_layout.addRow(source_kind)
 
     source_row, source_edit = _path_row(
         owner,
@@ -73,33 +62,20 @@ def install_prepare_inputs_panel(owner: Any, configuration_layout: Any) -> None:
     )
     _add_labeled_row(owner, form_layout, "source", source_row)
     owner._prepareInputWidgets["source"] = source_edit
-
-    subject_root_row, subject_root_edit = _path_row(
-        owner,
-        key="subject_root",
-        placeholder="Destination subject root, e.g. /data/study/sub-01",
-        browse_callback=owner._browse_prepare_input_subject_root,
+    source_edit.textChanged.connect(lambda *_: owner._refresh_run_button_state())
+    raw_row, raw_edit = _path_row(
+        owner, key="raw", placeholder="Detached NHDR data (.raw, .raw.gz)",
+        browse_callback=owner._browse_prepare_input_file,
     )
-    _add_labeled_row(owner, form_layout, "subject_root", subject_root_row)
-    owner._prepareInputWidgets["subject_root"] = subject_root_edit
+    raw_label = qt.QLabel()
+    raw_label.setText("Detached data (.raw, .raw.gz)")
+    form_layout.addRow(raw_label, raw_row)
+    owner._prepareInputWidgets["raw"] = raw_edit
+    owner._prepareInputWidgets["raw_label"] = raw_label
+    raw_row.hide()
+    raw_label.hide()
 
-    subject_id = qt.QLineEdit()
-    subject_id.setPlaceholderText("sub-01")
-    subject_id.setToolTip("Subject identifier recorded in input/input_import_manifest.json.")
-    owner._prepareInputWidgets["subject_id"] = subject_id
-    register_ui_language_binding(owner, subject_id, "tooltip", "prepare_subject_id_tooltip")
-    _add_labeled_row(owner, form_layout, "subject_id", subject_id)
-
-    sidecar_summary = qt.QLabel("Optional sidecars for NIfTI inputs or externally generated masks.")
-    sidecar_summary.setStyleSheet(
-        "QLabel { color: #B8C5D0; padding-top: 4px; }"
-        if dark
-        else "QLabel { color: #5B7167; padding-top: 4px; }"
-    )
-    owner._prepareInputWidgets["sidecar_summary"] = sidecar_summary
-    register_ui_language_binding(owner, sidecar_summary, "text", "sidecar_summary")
-    form_layout.addRow(sidecar_summary)
-
+    sidecar_rows = []
     for key, label_key, placeholder in (
         ("bval", "bval", "Optional .bval sidecar"),
         ("bvec", "bvec", "Optional .bvec sidecar"),
@@ -107,7 +83,9 @@ def install_prepare_inputs_panel(owner: Any, configuration_layout: Any) -> None:
         ("mask", "brain_mask", "Optional nodif_brain_mask.nii.gz"),
     ):
         row, edit = _path_row(owner, key=key, placeholder=placeholder, browse_callback=owner._browse_prepare_input_file)
-        _add_labeled_row(owner, form_layout, label_key, row, storage_key=f"{key}_label")
+        label = _add_labeled_row(owner, form_layout, label_key, row, storage_key=f"{key}_label")
+        if key in {"bval", "bvec"}:
+            sidecar_rows.extend((label, row))
         owner._prepareInputWidgets[key] = edit
 
     backend = qt.QComboBox()
@@ -125,24 +103,6 @@ def install_prepare_inputs_panel(owner: Any, configuration_layout: Any) -> None:
     owner._prepareInputWidgets["output_kind"] = output_kind
     register_ui_language_binding(owner, output_kind, "tooltip", "output_tooltip")
     _add_labeled_row(owner, form_layout, "output", output_kind)
-
-    options_row = qt.QWidget()
-    options_layout = qt.QHBoxLayout(options_row)
-    options_layout.setContentsMargins(0, 0, 0, 0)
-    dry_run = qt.QCheckBox("Dry run")
-    dry_run.setToolTip("Plan the import without writing files.")
-    force = qt.QCheckBox("Overwrite existing files")
-    force.setToolTip("Allow replacing existing files in the destination input folder.")
-    owner._prepareInputWidgets["dry_run"] = dry_run
-    owner._prepareInputWidgets["force"] = force
-    register_ui_language_binding(owner, dry_run, "text", "dry_run")
-    register_ui_language_binding(owner, dry_run, "tooltip", "dry_run_tooltip")
-    register_ui_language_binding(owner, force, "text", "overwrite_files")
-    register_ui_language_binding(owner, force, "tooltip", "overwrite_files_tooltip")
-    options_layout.addWidget(dry_run)
-    options_layout.addWidget(force)
-    options_layout.addStretch(1)
-    _add_labeled_row(owner, form_layout, "options", options_row)
 
     buttons = qt.QHBoxLayout()
     preview_button = qt.QPushButton("Preview plan")
@@ -168,8 +128,27 @@ def install_prepare_inputs_panel(owner: Any, configuration_layout: Any) -> None:
     buttons.addWidget(manifest_button)
     buttons.addStretch(1)
     _add_labeled_row(owner, form_layout, "actions", buttons)
+    status = qt.QLabel()
+    status.setWordWrap(True)
+    status.setTextFormat(qt.Qt.PlainText)
+    owner._prepareInputWidgets["status"] = status
+    form_layout.addRow(status)
+    for key in ("source", "bval", "bvec", "raw", "metadata", "mask"):
+        owner._prepareInputWidgets[key].textChanged.connect(lambda *_: status.clear())
 
-    # Optional pre-step: keep it collapsed below the primary input fields.
+    def update_format(index):
+        raw_row.setVisible(index == 1)
+        raw_label.setVisible(index == 1)
+        for widget in sidecar_rows:
+            widget.setVisible(index == 0)
+        fit = getattr(owner, "_queueCompactFit", None)
+        if callable(fit):
+            fit()
+
+    source_kind.currentChanged.connect(update_format)
+    for key in ("source", "raw", "bval", "bvec"):
+        edit = owner._prepareInputWidgets[key]
+        edit.textChanged.connect(lambda value, key=key: _assign_dropped_paths(owner, key, value))
     configuration_layout.addWidget(panel)
     refresh_prepare_inputs_styles(owner, dark=dark)
 
@@ -193,20 +172,6 @@ def refresh_prepare_inputs_styles(owner: Any, *, dark: bool | None = None) -> No
                 if use_dark
                 else "QWidget#prepareInputsPanel { background: #F6F8FB; border: 1px solid #D6DFE8; border-radius: 6px; }"
             )
-    summary = widgets.get("summary")
-    if summary is not None:
-        summary.setStyleSheet(
-            "QLabel { background: #1E2732; border: 1px solid #354658; border-radius: 5px; color: #C5D8E8; padding: 6px 8px; }"
-            if use_dark
-            else "QLabel { background: #EEF3F8; border: 1px solid #CFDCE8; border-radius: 5px; color: #243B53; padding: 6px 8px; }"
-        )
-    sidecar_summary = widgets.get("sidecar_summary")
-    if sidecar_summary is not None:
-        sidecar_summary.setStyleSheet(
-            "QLabel { color: #9BA7B4; padding-top: 4px; }"
-            if use_dark
-            else "QLabel { color: #546E7A; padding-top: 4px; }"
-        )
 
 
 def _path_row(owner: Any, *, key: str, placeholder: str, browse_callback):
@@ -220,19 +185,21 @@ def _path_row(owner: Any, *, key: str, placeholder: str, browse_callback):
     edit.setToolTip(placeholder)
     placeholder_key = {
         "source": "source_placeholder",
-        "subject_root": "prepare_subject_root_placeholder",
+        "raw": None,
         "bval": "bval_placeholder",
         "bvec": "bvec_placeholder",
         "metadata": "metadata_placeholder",
         "mask": "brain_mask_placeholder",
     }[key]
-    register_ui_language_binding(owner, edit, "placeholder", placeholder_key)
-    register_ui_language_binding(owner, edit, "tooltip", placeholder_key)
+    if placeholder_key:
+        register_ui_language_binding(owner, edit, "placeholder", placeholder_key)
+        register_ui_language_binding(owner, edit, "tooltip", placeholder_key)
     row_layout.addWidget(edit, 1)
     browse = qt.QPushButton("Browse...")
     browse.setToolTip(placeholder)
     register_ui_language_binding(owner, browse, "text", "browse")
-    register_ui_language_binding(owner, browse, "tooltip", placeholder_key)
+    if placeholder_key:
+        register_ui_language_binding(owner, browse, "tooltip", placeholder_key)
     browse.connect("clicked()", lambda key=key: browse_callback(key))
     row_layout.addWidget(browse)
     clear = qt.QPushButton("Clear")
@@ -261,3 +228,114 @@ def _add_labeled_row(
     owner._prepareInputWidgets[storage_key or f"{translation_key}_label"] = label
     form_layout.addRow(label, field)
     return label
+
+
+def import_dicom_series(config, series):
+    """Convert only the chosen series using the standard input importer."""
+    from dataclasses import replace
+    import json
+    import os
+    from pathlib import Path
+    import shutil
+    from tempfile import TemporaryDirectory
+
+    from shared.dicom_input import _validate_converted, converter_path
+    from shared.input_import import prepare_inputs
+
+    if config.backend == "auto":
+        backend, executable = converter_path()
+        config = replace(config, backend=backend,
+                         dcm2niix_executable=executable if backend == "dcm2niix" else None,
+                         dwiconvert_executable=executable if backend == "dwiconvert" else None)
+    with TemporaryDirectory(prefix="slicerdspace-series-") as temporary:
+        staged = Path(temporary)
+        for index, original in enumerate(series["paths"]):
+            target = staged / f"{index:08d}.dcm"
+            try:
+                os.link(original, target)
+            except OSError:
+                shutil.copyfile(original, target)
+        manifest = prepare_inputs(replace(config, source=staged))
+    manifest["plan"]["dicom_series"] = {
+        "source": str(config.source),
+        "series_instance_uid": series["uid"],
+        "instances": [str(path.relative_to(config.source)) for path in series["paths"]],
+    }
+    if not config.dry_run:
+        input_dir = config.subject_root / "input"
+        receipt = input_dir / "input_import_manifest.json"
+        try:
+            if config.output_kind == "canonical-nifti":
+                _validate_converted(input_dir)
+        except Exception:
+            receipt.unlink(missing_ok=True)
+            raise
+        receipt.write_text(
+            json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8",
+        )
+    return manifest
+
+
+def _assign_dropped_paths(owner, field, text):
+    """Route local-file URLs supplied by Qt's native text drop support."""
+    import re
+    from pathlib import Path
+    import qt
+
+    urls = re.findall(r"file:/+[^\s]+?(?=file:/+|\s|$)", str(text))
+    if not urls:
+        return
+    paths = [Path(qt.QUrl(url).toLocalFile()) for url in urls]
+    assigned = {}
+    detected_kind = None
+    for path in paths:
+        name = path.name.lower()
+        if name.endswith(".bval") or name == "bvals":
+            assigned["bval"] = path
+        elif name.endswith(".bvec") or name == "bvecs":
+            assigned["bvec"] = path
+        elif name.endswith((".raw", ".raw.gz")):
+            assigned["raw"] = path
+        elif path.is_dir() or name.endswith((".nii", ".nii.gz", ".nrrd", ".nhdr")):
+            assigned["source"] = path
+            detected_kind = "dicom" if path.is_dir() else "nrrd" if name.endswith((".nrrd", ".nhdr")) else "nifti"
+    owner._set_prepare_inputs_widget_text(field, "")
+    if detected_kind:
+        source_kind = owner._prepareInputWidgets["source_kind"]
+        for index in range(source_kind.count):
+            if source_kind.tabData(index) == detected_kind:
+                source_kind.setCurrentIndex(index)
+                break
+    for key, path in assigned.items():
+        owner._set_prepare_inputs_widget_text(key, str(path))
+
+
+def import_detached_nrrd(config, raw):
+    """Use the selected detached data with a temporary copy of the NHDR."""
+    from dataclasses import replace
+    import json
+    from pathlib import Path
+    import re
+    from tempfile import TemporaryDirectory
+
+    from shared.input_import import prepare_inputs
+
+    if config.source.suffix.lower() != ".nhdr" or not raw.is_file():
+        raise ValueError("Select an NHDR header and an existing detached data file.")
+    header = config.source.read_text(encoding="ascii")
+    pattern = r"^data\s*file\s*:\s*(.+)$"
+    match = re.search(pattern, header, re.IGNORECASE | re.MULTILINE)
+    if match is None or match.group(1).upper().startswith("LIST") or "%" in match.group(1):
+        raise ValueError("A single detached data file is required for this header override.")
+    with TemporaryDirectory(prefix="slicerdspace-nhdr-") as temporary:
+        staged = Path(temporary) / config.source.name
+        header = re.sub(pattern, lambda _: f"data file: {raw.as_posix()}", header,
+                        count=1, flags=re.IGNORECASE | re.MULTILINE)
+        staged.write_text(header, encoding="ascii")
+        manifest = prepare_inputs(replace(config, source=staged))
+    manifest["plan"]["detached_nrrd"] = {"header": str(config.source), "data": str(raw)}
+    if not config.dry_run:
+        (config.subject_root / "input" / "input_import_manifest.json").write_text(
+            json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8",
+        )
+    return manifest

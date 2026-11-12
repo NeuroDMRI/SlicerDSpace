@@ -366,7 +366,6 @@ def start_progress_polling(owner: Any, manifest_path: Optional[Path], *, started
     owner._runProgressManifestPath = Path(manifest_path) if manifest_path else None
     owner._runProgressStartedAt = started_at if started_at is not None else time.time()
     owner._tableShowsLiveRun = True
-    owner._autoResultManifestSignatures = {}
     reset_run_progress(owner)
     timer = getattr(owner, "_runProgressTimer", None)
     if timer is not None and owner._runProgressManifestPath is not None:
@@ -405,9 +404,6 @@ def poll_run_progress(owner: Any) -> None:
     snapshot = progress_from_manifest(path, not_before=getattr(owner, "_runProgressStartedAt", None))
     if snapshot is not None:
         apply_progress_snapshot(owner, snapshot)
-        loader = getattr(owner, "_auto_load_key_results", None)
-        if callable(loader):
-            loader(Path(path))
 
 
 def apply_progress_snapshot(owner: Any, snapshot) -> None:
@@ -447,23 +443,50 @@ def install_results_panel(owner: Any) -> None:
         return
     import qt
 
+    columns = qt.QSplitter(qt.Qt.Horizontal)
+    layout.addWidget(columns)
+    runs = qt.QWidget()
+    outputs = qt.QWidget()
+    columns.addWidget(runs)
+    columns.addWidget(outputs)
+    columns.setStretchFactor(1, 1)
+    run_layout = qt.QVBoxLayout(runs)
+    layout = qt.QVBoxLayout(outputs)
+
     run_row = qt.QHBoxLayout()
     run_label = qt.QLabel("Run")
     run_label.setObjectName("runHistoryLabel")
-    combo = qt.QComboBox()
+    combo = qt.QComboBox(runs)
     combo.setObjectName("runHistoryComboBox")
     combo.setSizeAdjustPolicy(qt.QComboBox.AdjustToMinimumContentsLengthWithIcon)
     combo.setMinimumContentsLength(14)
     combo.setSizePolicy(qt.QSizePolicy.Expanding, qt.QSizePolicy.Fixed)
+    combo.hide()
+    history = qt.QTreeWidget()
+    history.setObjectName("subjectRunHistory")
+    history.setHeaderHidden(True)
+    history.setMinimumHeight(150)
+    history.setMinimumWidth(0)
+    owner._runHistoryTree = history
+    add_folder = qt.QPushButton("Add a run folder…")
+    add_folder.clicked.connect(owner._on_browse_run_directory_clicked)
+    _bind(owner, add_folder, "text", "add_run_folder")
+
+    def select_run(item, _column):
+        index = item.data(0, qt.Qt.UserRole)
+        if index is not None:
+            combo.setCurrentIndex(int(index))
+
+    history.itemClicked.connect(select_run)
     combo.setToolTip(
         "Runs found under the output directory, the subject root, the batch root and folders added with "
         "“Add a run folder…”, newest first. GUI, command-line and batch runs all appear here, "
-        "also from earlier Slicer sessions. The list is rescanned whenever this section is opened."
+        "also from earlier Slicer sessions."
     )
-    run_label.setBuddy(combo)
     run_row.addWidget(run_label)
-    run_row.addWidget(combo, 1)
-    layout.addLayout(run_row)
+    run_layout.addLayout(run_row)
+    run_layout.addWidget(history)
+    run_layout.addWidget(add_folder)
 
     summary = qt.QLabel("Run summary will appear after a plan or run completes.")
     summary.wordWrap = True
@@ -477,12 +500,26 @@ def install_results_panel(owner: Any) -> None:
         details.setTextInteractionFlags(qt.Qt.TextSelectableByMouse | qt.Qt.TextSelectableByKeyboard)
     except Exception:
         pass
-    layout.addWidget(details)
+    run_layout.addWidget(details)
+    run_layout.addStretch(1)
 
     review = qt.QLabel("Recorded QC: consult report\nVisual review: pending")
     review.wordWrap = True
     review.setObjectName("reviewStateLabel")
     layout.addWidget(review)
+
+    files = qt.QTreeWidget()
+    files.setObjectName("runOutputFiles")
+    files.setHeaderHidden(True)
+    files.setColumnCount(2)
+    files.setMinimumHeight(150)
+    files.header().setSectionResizeMode(0, qt.QHeaderView.Stretch)
+    files.header().setSectionResizeMode(1, qt.QHeaderView.ResizeToContents)
+    owner._runOutputFiles = files
+    layout.addWidget(files)
+    files.itemClicked.connect(lambda item, column: _toggle_output(owner, item) if column == 1 else None)
+    files.setContextMenuPolicy(qt.Qt.CustomContextMenu)
+    files.customContextMenuRequested.connect(lambda position: _output_menu(owner, position))
 
     table = qt.QTableWidget()
     table.setObjectName("runStatusTable")
@@ -535,16 +572,7 @@ def install_results_panel(owner: Any) -> None:
     table.customContextMenuRequested.connect(result_menu)
     layout.addWidget(table)
 
-    scene_row = qt.QHBoxLayout()
     owner._resultSceneButtons = []
-    for label, mode in SCENE_ACTIONS:
-        button = qt.QPushButton(label)
-        button.enabled = False
-        button.setToolTip(SCENE_ACTION_TOOLTIPS[mode])
-        button.connect("clicked()", lambda mode=mode: owner._manage_result_scene(mode))
-        scene_row.addWidget(button)
-        owner._resultSceneButtons.append(button)
-    layout.addLayout(scene_row)
 
     report_row = qt.QHBoxLayout()
     report_button = qt.QPushButton("Open report")
@@ -560,9 +588,6 @@ def install_results_panel(owner: Any) -> None:
     layout.addLayout(report_row)
 
     combo.currentIndexChanged.connect(lambda _index: owner._on_run_history_selection_changed())
-    section = getattr(owner.ui, "resultsCollapsibleButton", None)
-    if section is not None:
-        section.connect("contentsCollapsed(bool)", lambda collapsed: on_results_section_toggled(owner, collapsed))
 
     _bind(owner, run_label, "text", "run_selector_label")
 
@@ -579,6 +604,212 @@ def install_results_panel(owner: Any) -> None:
     owner._latestOutputTreePath = None
     owner._latestResultManifestPath = None
     owner._tableShowsLiveRun = False
+
+
+def _populate_run_tree(owner, records, current_index):
+    tree = getattr(owner, "_runHistoryTree", None)
+    if tree is None:
+        return
+    import qt
+
+    tree.clear()
+    subjects = {}
+    for index, record in enumerate(records):
+        subject = record.subject_id or _text(owner, "run_selector_label", "Runs")
+        if subject not in subjects:
+            subjects[subject] = qt.QTreeWidgetItem(tree, [subject])
+        group = subjects[subject]
+        name = record.run_name or record.manifest_path.parent.name
+        item = qt.QTreeWidgetItem(group, [f"{name} · {status_label(record.status)}"])
+        item.setData(0, qt.Qt.UserRole, index)
+        item.setToolTip(0, run_record_details(record))
+        group.setExpanded(True)
+        if index == current_index:
+            tree.setCurrentItem(item)
+
+
+def _output_nodes(slicer, manifest_path, path):
+    from shared.result_scene import owned_nodes
+
+    return [node for node in owned_nodes(slicer, str(manifest_path.resolve()))
+            if node.GetAttribute("SlicerDDSurfer.SourcePath") == str(path)]
+
+
+def _slice_connections(slicer, node):
+    layer = "Label" if node.IsA("vtkMRMLLabelMapVolumeNode") else "Background"
+    return [(composite, layer) for composite in slicer.util.getNodesByClass("vtkMRMLSliceCompositeNode")
+            if getattr(composite, f"Get{layer}VolumeID")() == node.GetID()]
+
+
+def _output_visible(slicer, nodes):
+    for node in nodes:
+        if node.IsA("vtkMRMLVolumeNode"):
+            if _slice_connections(slicer, node):
+                return True
+        elif node.GetDisplayVisibility():
+            return True
+    return False
+
+
+def _toggle_output(owner, item):
+    import qt
+    import slicer
+
+    raw_path = item.data(0, qt.Qt.UserRole)
+    manifest_path = getattr(owner, "_latestResultManifestPath", None)
+    if not raw_path or manifest_path is None:
+        return
+    path = Path(raw_path)
+    if item.text(1) == "↗":
+        owner._open_local_path(path, missing_message="The result file is missing.")
+        return
+    try:
+        from shared.result_scene import source_stamp
+
+        nodes = _output_nodes(slicer, manifest_path, path)
+        visible = _output_visible(slicer, nodes)
+        if not visible and nodes and path.is_file():
+            stamp = source_stamp(path)
+            if any(node.GetAttribute("SlicerDDSurfer.SourceStamp") != stamp for node in nodes):
+                for node in nodes:
+                    slicer.mrmlScene.RemoveNode(node)
+                nodes = []
+        if not nodes:
+            result = owner.logic.loadKeyResultsFromManifest(manifest_path, source_path=path)
+            nodes = _output_nodes(slicer, manifest_path, path)
+            if not nodes:
+                error = next((entry["reason"] for entry in result["skipped"] if entry.get("path") == str(path)),
+                             "This output is missing or no longer available in the run.")
+                raise RuntimeError(error)
+        for node in nodes:
+            if node.IsA("vtkMRMLVolumeNode"):
+                if visible:
+                    for composite, layer in _slice_connections(slicer, node):
+                        getattr(composite, f"Set{layer}VolumeID")(None)
+                else:
+                    layer = "label" if node.IsA("vtkMRMLLabelMapVolumeNode") else "background"
+                    slicer.util.setSliceViewerLayers(**{layer: node})
+            else:
+                node.SetDisplayVisibility(not visible)
+        _refresh_output_visibility(owner)
+    except Exception as exc:
+        slicer.util.errorDisplay(str(exc), parent=owner.parent)
+
+
+def _output_menu(owner, position):
+    import qt
+    import slicer
+
+    tree = owner._runOutputFiles
+    item = tree.itemAt(position)
+    raw_path = item.data(0, qt.Qt.UserRole) if item is not None else None
+    manifest_path = owner._latestResultManifestPath
+    if not raw_path or manifest_path is None:
+        return
+    nodes = _output_nodes(slicer, manifest_path, Path(raw_path))
+    if not nodes:
+        return
+    menu = qt.QMenu(tree)
+    zh = str(getattr(owner, "_onboardingLanguage", "en")).startswith("zh")
+    unload = menu.addAction("从场景卸载" if zh else "Unload from scene")
+    if menu.exec_(tree.viewport().mapToGlobal(position)) == unload:
+        for node in nodes:
+            slicer.mrmlScene.RemoveNode(node)
+        _refresh_output_visibility(owner)
+
+
+def _eye_icon(qt, visible):
+    key = bool(visible)
+    if key not in _EYE_ICONS:
+        color = "#27824d" if visible else "#728195"
+        slash = '' if visible else '<path d="M3 3l18 18"/>'
+        svg = (f'<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24">'
+               f'<g fill="none" stroke="{color}" stroke-width="2" stroke-linecap="round">'
+               '<path d="M2 12s3.6-6 10-6 10 6 10 6-3.6 6-10 6-10-6-10-6z"/>'
+               f'<circle cx="12" cy="12" r="2.5"/>{slash}</g></svg>')
+        pixmap = qt.QPixmap()
+        pixmap.loadFromData(qt.QByteArray(svg.encode("utf-8")))
+        _EYE_ICONS[key] = qt.QIcon(pixmap)
+    return _EYE_ICONS[key]
+
+
+_EYE_ICONS = {}
+
+
+def _refresh_output_visibility(owner):
+    import slicer
+
+    tree = getattr(owner, "_runOutputFiles", None)
+    manifest_path = getattr(owner, "_latestResultManifestPath", None)
+    if tree is None or manifest_path is None:
+        return
+    import qt
+    from shared.result_scene import owned_nodes
+
+    by_path = {}
+    for node in owned_nodes(slicer, str(manifest_path.resolve())):
+        by_path.setdefault(node.GetAttribute("SlicerDDSurfer.SourcePath"), []).append(node)
+    zh = str(getattr(owner, "_onboardingLanguage", "en")).startswith("zh")
+    for index in range(tree.topLevelItemCount):
+        group = tree.topLevelItem(index)
+        for child_index in range(group.childCount()):
+            item = group.child(child_index)
+            if item.text(1) == "↗":
+                continue
+            path = str(item.data(0, qt.Qt.UserRole))
+            visible = _output_visible(slicer, by_path.get(path, ()))
+            item.setIcon(1, _eye_icon(qt, visible))
+            item.setText(1, "")
+            item.setToolTip(1, ("隐藏" if zh else "Hide") if visible else ("显示" if zh else "Show"))
+
+
+def _show_output_files(owner, manifest):
+    tree = getattr(owner, "_runOutputFiles", None)
+    if tree is None:
+        return
+    import qt
+    from shared.result_scene import result_candidates
+
+    tree.clear()
+    candidates, _ = result_candidates(manifest, allow_bundle_directory_scan=False)
+    visual_paths = {item["path"] for item in candidates
+                    if Path(item["path"]).suffix.lower() not in {".csv", ".tsv"}}
+    groups = {}
+    for candidate in candidates:
+        path = candidate["path"]
+        groups.setdefault(candidate["product"], {})[path] = path in visual_paths
+    for task in manifest.get("tasks") or []:
+        if not isinstance(task, dict) or not isinstance(task.get("outputs"), dict):
+            continue
+        for value in task["outputs"].values():
+            if not isinstance(value, str):
+                continue
+            path = Path(value)
+            if path.suffix.lower() == ".json" and path.is_absolute() and path.is_file():
+                groups.setdefault(str(task.get("name") or "QC"), {})[str(path.resolve())] = False
+    zh = str(getattr(owner, "_onboardingLanguage", "en")).startswith("zh")
+    titles = {
+        "anatomy": ("Anatomical priors", "解剖先验"),
+        "preprocessing": ("Preprocessing", "预处理"),
+        "microstructure": ("Microstructure", "微结构"),
+        "tractography": ("Tractography", "纤维追踪"),
+        "bundles": ("Fibre bundles", "纤维束"),
+        "connectome": ("Connectome", "连接组"),
+    }
+    families = {}
+    for product, paths in groups.items():
+        family = product.split(".", 1)[0]
+        if family in {"surface", "segmentation", "parcellation", "postprocess"}:
+            family = "anatomy"
+        families.setdefault(family, {}).update(paths)
+    for family, paths in families.items():
+        caption = titles.get(family, (family, family))[int(zh)]
+        group = qt.QTreeWidgetItem(tree, [f"{caption} ({len(paths)})"])
+        for path, visual in paths.items():
+            item = qt.QTreeWidgetItem(group, [Path(path).name, "○" if visual else "↗"])
+            item.setData(0, qt.Qt.UserRole, path)
+            item.setToolTip(0, path)
+    _refresh_output_visibility(owner)
 
 
 def load_history_directories() -> tuple[str, ...]:
@@ -657,6 +888,7 @@ def refresh_run_history(owner: Any, select_path: Optional[Path] = None) -> None:
         owner._runHistoryPreviousIndex = target_index
     finally:
         combo.blockSignals(False)
+    _populate_run_tree(owner, discovery.records, target_index)
     notes = []
     if discovery.skipped:
         notes.append(f"{len(discovery.skipped)} unreadable manifest(s) skipped; first: {discovery.skipped[0][1]}")
@@ -702,13 +934,6 @@ def on_run_combo_changed(owner: Any) -> None:
     on_run_selection_changed(owner)
 
 
-def on_results_section_toggled(owner: Any, collapsed: bool) -> None:
-    """Rescan for runs each time the Results and QC section is opened, keeping the selection."""
-
-    if not collapsed:
-        owner._refresh_run_history()
-
-
 def _set_scene_actions(owner: Any, *, has_subject_run: bool, is_batch: bool, error: str = "") -> None:
     state = result_actions_state(has_subject_run=has_subject_run, is_batch=is_batch, error=error)
     # An enabled button explains its own action; a disabled one gives the reason for all four.
@@ -723,6 +948,7 @@ def on_run_selection_changed(owner: Any, *, from_refresh: bool = False) -> None:
     details = getattr(owner, "_runDetailsLabel", None)
     path = selected_manifest_path(owner)
     notes = "\n".join(getattr(owner, "_runHistoryNotes", ()) or ())
+    _show_output_files(owner, {})
     if path is None:
         owner._latestResultManifestPath = None
         _set_scene_actions(owner, has_subject_run=False, is_batch=False)
@@ -776,6 +1002,7 @@ def show_record(owner: Any, record: RunRecord, manifest: dict[str, Any]) -> None
     rows, counts = rows_from_single_subject_manifest(manifest)
     owner._set_run_status_table_rows(rows)
     owner._latestResultManifestPath = record.manifest_path
+    _show_output_files(owner, manifest)
     _set_scene_actions(owner, has_subject_run=True, is_batch=False)
     report_paths = manifest.get("report_paths") or {}
     tree_paths = manifest.get("output_tree_report_paths") or {}

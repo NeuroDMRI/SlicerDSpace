@@ -832,7 +832,7 @@ class UiAndPipelineSelectionsTest(unittest.TestCase):
         self.assertIn("microstructure_noddi", closure.targets)
         self.assertIn("DTI (needed by NODDI)", closure_notice(closure))
 
-    def test_algorithm_picker_row_unclipped_click_to_toggle_and_popup_dismiss(self) -> None:
+    def test_algorithm_picker_row_has_independent_checkbox_and_popup(self) -> None:
         from shared import ui_algorithm_picker
 
         focus_callbacks = []
@@ -900,12 +900,8 @@ class UiAndPipelineSelectionsTest(unittest.TestCase):
             ui_algorithm_picker.install_algorithm_pickers(owner)
             for cb in boxes.values():
                 cb.setFixedWidth.assert_called_once_with(18)
-            self.assertEqual(len(focus_callbacks), 1)
-            summary_label = owner._algorithmSummaryLabels["targetMicrostructureCheckBox"]
-            focus_callbacks[0](None, summary_label)
-            boxes["targetMicrostructureCheckBox"].click.assert_called_once()
             ui_algorithm_picker.choose_algorithms(owner, "microstructure")
-            ui_algorithm_picker.disconnect_algorithm_summary_click(owner)
+            boxes["targetMicrostructureCheckBox"].click.assert_not_called()
 
         self.assertEqual(len(focus_callbacks), 0)
         self.assertEqual(len(created_dialogs), 1)

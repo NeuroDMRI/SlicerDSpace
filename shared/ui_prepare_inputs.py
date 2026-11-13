@@ -79,10 +79,21 @@ def install_prepare_inputs_panel(owner: Any, configuration_layout: Any) -> None:
     batch_root.filters = ctk.ctkPathLineEdit.Dirs
     batch_root.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Preferred)
     batch_root.currentPathChanged.connect(owner._onBatchRootPathChanged)
-    owner.ui.configurationFormLayout.insertRow(1, batch_label, batch_root)
-    batch_label.hide()
-    batch_root.hide()
-    fields.update(batch_root=batch_root, batch_label=batch_label)
+    form = owner.ui.configurationFormLayout
+    for control in (owner.ui.subjectIdLabel, owner.ui.subjectIdLineEdit):
+        form.takeAt(form.indexOf(control))
+    subject_labels = qt.QStackedWidget(section)
+    subject_fields = qt.QStackedWidget(section)
+    subject_labels.addWidget(owner.ui.subjectIdLabel)
+    subject_labels.addWidget(batch_label)
+    subject_fields.addWidget(owner.ui.subjectIdLineEdit)
+    subject_fields.addWidget(batch_root)
+    subject_fields.setMinimumWidth(0)
+    subject_fields.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Preferred)
+    form.setWidget(0, qt.QFormLayout.LabelRole, subject_labels)
+    form.setWidget(0, qt.QFormLayout.FieldRole, subject_fields)
+    fields.update(batch_root=batch_root, batch_label=batch_label,
+                  subject_labels=subject_labels, subject_fields=subject_fields)
     status = qt.QLabel()
     status.setWordWrap(True)
     status.setTextFormat(qt.Qt.PlainText)
@@ -95,7 +106,7 @@ def install_prepare_inputs_panel(owner: Any, configuration_layout: Any) -> None:
         tile.setProperty("standalone", key == "mask")
         tile.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Fixed)
         tile_layout = qt.QVBoxLayout(tile)
-        tile_layout.setContentsMargins(9, 6, 8, 5)
+        tile_layout.setContentsMargins(12, 9, 11, 8)
         tile_layout.setSpacing(1)
 
         heading = qt.QHBoxLayout()
@@ -130,8 +141,10 @@ def install_prepare_inputs_panel(owner: Any, configuration_layout: Any) -> None:
         heading.addWidget(clear)
 
         browse = qt.QToolButton(tile)
-        browse.setObjectName("dspaceInputAction")
+        browse.setObjectName("dspaceInputBrowse")
         browse.setText("…")
+        browse.setToolButtonStyle(qt.Qt.ToolButtonIconOnly)
+        browse.setIconSize(qt.QSize(16, 16))
         browse.setAutoRaise(True)
         browse.setCursor(qt.Qt.PointingHandCursor)
         browse.setFixedSize(22, 20)
@@ -152,12 +165,6 @@ def install_prepare_inputs_panel(owner: Any, configuration_layout: Any) -> None:
         file_layout.setCurrentWidget(hint)
         tile_layout.addLayout(heading)
         tile_layout.addWidget(file_row)
-        if parent_layout.count():
-            divider = qt.QFrame()
-            divider.setObjectName("dspaceInputDivider")
-            divider.setFixedWidth(1)
-            divider.setSizePolicy(qt.QSizePolicy.Fixed, qt.QSizePolicy.Expanding)
-            parent_layout.addWidget(divider)
         parent_layout.addWidget(tile, 1)
 
         fields[key] = edit
@@ -187,8 +194,8 @@ def install_prepare_inputs_panel(owner: Any, configuration_layout: Any) -> None:
         page = qt.QWidget()
         page.setObjectName("dspaceFileStrip")
         row = qt.QHBoxLayout(page)
-        row.setContentsMargins(1, 1, 1, 1)
-        row.setSpacing(0)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(5)
         fields[kind + "_page"] = pages.addWidget(page)
         return row
 
@@ -246,15 +253,18 @@ def sync_input_mode(owner):
     batch = bool(getattr(node, "batchMode", False))
     fields["batch_mode" if batch else "single_mode"].setChecked(True)
     fields["panel"].setVisible(not batch)
-    fields["batch_root"].setVisible(batch)
-    fields["batch_label"].setVisible(batch)
+    fields["subject_labels"].setCurrentIndex(int(batch))
+    fields["subject_fields"].setCurrentIndex(int(batch))
     fields["mask_tile"].setVisible(not batch and getattr(node, "brainMaskBackend", "") == "provided")
-    owner.ui.subjectIdLabel.setVisible(not batch)
-    owner.ui.subjectIdLineEdit.setVisible(not batch)
     owner._sync_path_widget(fields["batch_root"], getattr(node, "batchRoot", "") or "")
     fields["single_mode"].setEnabled(not owner._pipelineActive)
     fields["batch_mode"].setEnabled(not owner._pipelineActive)
     fields["batch_root"].setEnabled(not owner._pipelineActive)
+    if fields.get("active_batch_mode") != batch:
+        fields["active_batch_mode"] = batch
+        fit = getattr(owner, "_queueCompactFit", None)
+        if callable(fit):
+            fit()
 
 
 def _update_drop_hint(owner):
@@ -315,6 +325,7 @@ def apply_input_language(owner):
 
 
 def refresh_prepare_inputs_styles(owner: Any, *, dark: bool | None = None) -> None:
+    import qt
     from shared.ui_styles import is_dark_mode
 
     fields = getattr(owner, "_prepareInputWidgets", {})
@@ -330,7 +341,24 @@ def refresh_prepare_inputs_styles(owner: Any, *, dark: bool | None = None) -> No
         base, line, muted, ink, hover, action = (
             "#fcfcfc", "#dedfdf", "#606367", "#222426", "#f2f3f3", "#f0f1f1"
         )
+    drop_line = "#85898d" if dark else "#969b9f"
     section = owner.ui.configurationCollapsibleButton
+    from shared.ui_algorithm_picker import ellipsis_icon
+
+    icon = ellipsis_icon("#f2f2f2" if dark else "#334155")
+    for key in ("nifti_source", "bval", "bvec", "nrrd_source", "raw", "dicom_source", "mask"):
+        for button in fields[key + "_tile"].findChildren(qt.QToolButton):
+            if button.objectName == "dspaceInputBrowse":
+                button.setIcon(icon)
+    output_icon = ellipsis_icon("#8CD2F5" if dark else "#326A8A")
+    for path_widget in (owner.ui.outputDirectoryPath, fields["batch_root"]):
+        for button in path_widget.findChildren(qt.QToolButton):
+            button.setObjectName("dspaceFolderBrowse")
+            button.setToolButtonStyle(qt.Qt.ToolButtonIconOnly)
+            button.setIconSize(qt.QSize(16, 16))
+            button.setIcon(output_icon)
+            button.setFixedSize(28, 22)
+            button.setCursor(qt.Qt.PointingHandCursor)
     section.setStyleSheet(
         f"QWidget#dspaceInputMode {{ background: {action}; border: 1px solid {line}; border-radius: 12px; }}"
         f"QToolButton#dspaceModeOption {{ color: {muted}; background: transparent; border: 1px solid transparent;"
@@ -344,17 +372,18 @@ def refresh_prepare_inputs_styles(owner: Any, *, dark: bool | None = None) -> No
         f"QTabBar#dspaceFormatTabs::tab:hover {{ background: {hover}; }}"
         f"QTabBar#dspaceFormatTabs::tab:selected {{ color: {ink}; border-bottom-color: {ink}; font-weight: 600; }}"
         f"QLabel#dspaceInputsTitle {{ color: {ink}; font-size: 16px; font-weight: 700; }}"
-        'QWidget#dspaceFileStrip, QWidget#dspaceInputTile[standalone="true"]'
-        f" {{ background: {base}; border: 1px solid {line}; border-radius: 6px; }}"
-        f"QFrame#dspaceInputDivider {{ background: {line}; border: 0; }}"
+        "QWidget#dspaceFileStrip { background: transparent; border: 0; }"
+        f"QWidget#dspaceInputTile {{ background: {base}; border: 2px dashed {drop_line}; border-radius: 10px; }}"
         f"QLabel#dspaceInputName {{ background: transparent; color: {ink}; border: 0; font-weight: 600; }}"
         f"QLabel#dspaceInputHint, QLabel#dspaceDropHint {{ background: transparent; color: {muted}; border: 0; font-size: 11px; }}"
         f"QWidget#dspaceInputTile QPlainTextEdit {{ background: transparent; color: {ink};"
         " border: 0; padding: 0; margin: 0; font-size: 11px; }"
-        f"QToolButton#dspaceInputAction {{ background: {action}; color: {ink}; border: 1px solid transparent;"
+        f"QToolButton#dspaceInputAction, QToolButton#dspaceInputBrowse, QToolButton#dspaceFolderBrowse {{ background: {action}; color: {ink}; border: 1px solid transparent;"
         " border-radius: 4px; padding: 0; }"
-        f"QToolButton#dspaceInputAction:hover, QToolButton#dspaceInputAction:focus"
-        f" {{ background: {hover}; border-color: {line}; }}"
+        f"QToolButton#dspaceInputAction:hover, QToolButton#dspaceInputAction:focus,"
+        " QToolButton#dspaceInputBrowse:hover, QToolButton#dspaceInputBrowse:focus,"
+        " QToolButton#dspaceFolderBrowse:hover, QToolButton#dspaceFolderBrowse:focus"
+        f" {{ background: {hover}; border-color: #478CB3; }}"
     )
 
 

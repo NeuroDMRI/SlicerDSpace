@@ -2165,6 +2165,9 @@ class SharedWidgetMixin:
         refresh_setup_button(self)
         # Runs may have been produced from the command line or another session.
         self._refresh_run_history()
+        fit = getattr(self, "_queueCompactFit", None)
+        if callable(fit):
+            fit()
 
     def exit(self) -> None:
         close_input_format_help_popovers(self, destroy=False)

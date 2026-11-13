@@ -278,10 +278,7 @@ def choose_algorithms(owner, family):
             close_btn.setFocusPolicy(qt.Qt.NoFocus)
         if hasattr(close_btn, "setToolTip"):
             close_btn.setToolTip("关闭" if zh else "Close")
-        if hasattr(close_btn, "clicked") and hasattr(close_btn.clicked, "connect"):
-            close_btn.clicked.connect(dialog.reject)
-        elif hasattr(close_btn, "connect"):
-            close_btn.connect("clicked()", dialog.reject)
+        close_btn.connect("clicked(bool)", lambda _checked=False: dialog.reject())
         header_row.addWidget(title_label)
         if hasattr(header_row, "addStretch"):
             header_row.addStretch(1)
@@ -594,12 +591,9 @@ def install_algorithm_pickers(owner):
     refresh_picker_icons(owner)
 
 
-def refresh_picker_icons(owner, *, dark=None):
+def ellipsis_icon(ink):
     import qt
-    from shared.ui_styles import is_dark_mode
 
-    dark = is_dark_mode(getattr(owner, "_uiWidget", None)) if dark is None else dark
-    ink = "#8CD2F5" if dark else "#326A8A"
     pixmap = qt.QPixmap(32, 32)
     pixmap.fill(qt.Qt.transparent)
     painter = qt.QPainter(pixmap)
@@ -610,7 +604,14 @@ def refresh_picker_icons(owner, *, dark=None):
         painter.drawEllipse(qt.QPointF(x, 16), 2.2, 2.2)
     painter.end()
     pixmap.setDevicePixelRatio(2)
-    icon = qt.QIcon(pixmap)
+    return qt.QIcon(pixmap)
+
+
+def refresh_picker_icons(owner, *, dark=None):
+    from shared.ui_styles import is_dark_mode
+
+    dark = is_dark_mode(getattr(owner, "_uiWidget", None)) if dark is None else dark
+    icon = ellipsis_icon("#8CD2F5" if dark else "#326A8A")
     for button in getattr(owner, "_algorithmButtons", {}).values():
         button.setIcon(icon)
     row = getattr(owner, "_anatomicalPriorsRow", None)

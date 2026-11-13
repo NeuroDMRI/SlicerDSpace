@@ -35,6 +35,50 @@ FAMILIES = {
 }
 
 
+ANATOMICAL_PRIORS = {
+    "targetSurface": ("Surfaces", "皮层表面"),
+    "targetSegmentation": ("Segmentation", "组织分割"),
+    "targetParcellation": ("Parcellation", "大脑分区"),
+}
+
+
+def _set_anatomical_priors(owner, selected):
+    import slicer
+
+    node = owner._parameterNode
+    if node is None:
+        return
+    with slicer.util.NodeModify(node):
+        for field in ANATOMICAL_PRIORS:
+            setattr(node, field, field in selected)
+    owner._lastEnvironmentResult = owner._lastEnvironmentSignature = None
+    owner._refresh_advanced_run_settings()
+    owner._schedule_common_user_settings_save()
+
+
+def _refresh_anatomical_priors(owner, zh):
+    row = getattr(owner, "_anatomicalPriorsRow", None)
+    if row is None:
+        return
+    import qt
+
+    label, label_button, checkbox, summary, arrow = row
+    title = "解剖先验" if zh else "Anatomical priors"
+    label.setText(title)
+    label_button.setMinimumWidth(label.sizeHint.width())
+    checkbox.setAccessibleName(title)
+    selected = [names[int(zh)] for field, names in ANATOMICAL_PRIORS.items()
+                if getattr(owner._parameterNode, field, False)]
+    checkbox.setCheckState({
+        0: qt.Qt.Unchecked,
+        len(ANATOMICAL_PRIORS): qt.Qt.Checked,
+    }.get(len(selected), qt.Qt.PartiallyChecked))
+    summary.setText(" · ".join(selected) if selected else ("未选择" if zh else "None selected"))
+    tip = "选择解剖先验（可多选）" if zh else "Select anatomical priors (multiple allowed)"
+    arrow.setAccessibleName(tip)
+    arrow.setToolTip(tip)
+
+
 def selected_algorithms(node, family):
     _, choices, attribute = FAMILIES[family]
     return algorithms(getattr(node, attribute, ""), choices, DEFAULT_CHOICES[family])
@@ -90,7 +134,7 @@ ALGORITHM_SETTINGS = {
 }
 
 
-def _add_algorithm_row(qt, owner, layout, box, family, algorithm, staged, zh):
+def _add_algorithm_row(qt, owner, layout, box, family, algorithm, staged, zh, resize_popup):
     specs = ALGORITHM_SETTINGS.get((family, algorithm), ())
     fields = [(attribute, getattr(owner.ui, control, None), getattr(owner.ui, label, None))
               for attribute, control, label in specs]
@@ -103,12 +147,32 @@ def _add_algorithm_row(qt, owner, layout, box, family, algorithm, staged, zh):
     row = qt.QHBoxLayout()
     row.addWidget(box, 1)
     button = qt.QToolButton()
-    button.setText("设置" if zh else "Settings")
+    button.setObjectName("algorithmSettings_" + algorithm)
+    caption = "设置" if zh else "Settings"
+    button.setAccessibleName(caption)
+    button.setToolTip(caption)
+    from shared.ui_styles import is_dark_mode
+
+    ink = "#E6EDF3" if is_dark_mode(owner._uiWidget) else "#334155"
+    artwork = (
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20">'
+        f'<g fill="none" stroke="{ink}" stroke-width="1.7" stroke-linejoin="round">'
+        '<path d="m10 2-.6 2.6-1.9.8-2.3-1.4-2.2 2.2 1.4 2.3-.8 1.9-2.6.6v3l2.6.6.8 1.9'
+        '-1.4 2.3 2.2 2.2 2.3-1.4 1.9.8.6 2.6h3l.6-2.6 1.9-.8 2.3 1.4 2.2-2.2-1.4-2.3.8-1.9'
+        ' 2.6-.6v-3l-2.6-.6-.8-1.9 1.4-2.3-2.2-2.2-2.3 1.4-1.9-.8-.6-2.6z"/>'
+        '<circle cx="11.5" cy="12.5" r="3.1"/></g></svg>'
+    )
+    pixmap = qt.QPixmap()
+    pixmap.loadFromData(qt.QByteArray(artwork.encode("ascii")), "SVG")
+    button.setIcon(qt.QIcon(pixmap))
+    button.setIconSize(qt.QSize(15, 15))
+    button.setFixedSize(28, 24)
     button.setCheckable(True)
     row.addWidget(button)
     layout.addLayout(row)
     panel = qt.QWidget()
     form = qt.QFormLayout(panel)
+    form.setRowWrapPolicy(qt.QFormLayout.WrapLongRows)
     for attribute, original, label in fields:
         if isinstance(original, qt.QComboBox):
             editor = qt.QComboBox()
@@ -144,7 +208,11 @@ def _add_algorithm_row(qt, owner, layout, box, family, algorithm, staged, zh):
         staged["ukfParameters"] = add_staged_ukf_fields(form, owner._parameterNode, zh)
     layout.addWidget(panel)
     panel.hide()
-    button.toggled.connect(panel.setVisible)
+    def toggle_settings(visible):
+        panel.setVisible(visible)
+        resize_popup()
+
+    button.toggled.connect(toggle_settings)
 
 
 def choose_algorithms(owner, family):
@@ -154,8 +222,15 @@ def choose_algorithms(owner, family):
     if getattr(owner, "_pipelineActive", False) or getattr(owner, "_selectedSetupActive", False):
         return False
     zh = getattr(owner, "_onboardingLanguage", "en").startswith("zh")
-    _, choices, _ = FAMILIES[family]
-    title_text = "选择算法（可多选）" if zh else "Select algorithms (multiple allowed)"
+    is_anatomical = family == "anatomical_priors"
+    if is_anatomical:
+        choices = tuple(ANATOMICAL_PRIORS)
+        title_text = "解剖先验" if zh else "Anatomical priors"
+        current = tuple(field for field in choices if getattr(owner._parameterNode, field, False))
+    else:
+        _, choices, _ = FAMILIES[family]
+        title_text = "选择算法（可多选）" if zh else "Select algorithms (multiple allowed)"
+        current = selected_algorithms(owner._parameterNode, family)
     dialog = qt.QDialog(slicer.util.mainWindow())
     dialog.objectName = "algorithmPicker_" + family
     dialog.windowTitle = title_text
@@ -213,20 +288,62 @@ def choose_algorithms(owner, family):
         header_row.addWidget(close_btn)
         layout.addLayout(header_row)
 
+    anchor = (owner._anatomicalPriorsRow[-1] if is_anatomical else
+              (getattr(owner, "_algorithmButtons", None) or {}).get(family))
+    scroll = qt.QScrollArea(dialog)
+    scroll.setObjectName("algorithmPickerScrollArea")
+    scroll.setFrameShape(qt.QFrame.NoFrame)
+    scroll.setWidgetResizable(True)
+    scroll.setHorizontalScrollBarPolicy(qt.Qt.ScrollBarAlwaysOff)
+    body = qt.QWidget()
+    body_layout = qt.QVBoxLayout(body)
+    body_layout.setContentsMargins(0, 0, 4, 0)
+    body_layout.setSpacing(6)
+    scroll.setWidget(body)
+    # QScrollArea uses QPalette.Base for its viewport, unlike the popup.
+    # Let the popup paint the background behind all of the choices.
+    for surface in (scroll, scroll.viewport(), body):
+        surface.setAutoFillBackground(False)
+        surface.setStyleSheet("background: transparent;")
+    layout.addWidget(scroll)
+
+    from shared.ui_compact import _position_input_help_card, _qt_int, _qt_val
+
+    def resize_popup():
+        anchor_visible = anchor is not None and anchor.isVisible()
+        screen = qt.QApplication.screenAt(anchor.mapToGlobal(qt.QPoint(0, 0))) if anchor_visible else None
+        if screen is None:
+            screen = qt.QApplication.primaryScreen()
+        available = _qt_val(screen, "availableGeometry")
+        available_height = _qt_int(available, "height", 800)
+        body_layout.invalidate()
+        content_size = body_layout.sizeHint()
+        content_height = _qt_int(content_size, "height", 0)
+        max_body_height = min(480, max(80, available_height - 108))
+        scroll.setFixedHeight(min(content_height, max_body_height))
+        scroll.setMinimumWidth(min(_qt_int(content_size, "width", 0) + 20,
+                                   max(100, _qt_int(available, "width", 800) - 40)))
+        layout.activate()
+        dialog.adjustSize()
+        if anchor_visible:
+            _position_input_help_card(anchor, dialog, qt)
+
     boxes = {}
     staged = {}
-    current = selected_algorithms(owner._parameterNode, family)
     pointing_cursor = getattr(qt.Qt, "PointingHandCursor", None)
     for value in choices:
-        box = qt.QCheckBox(LABELS[value])
+        label = ANATOMICAL_PRIORS[value][int(zh)] if is_anatomical else LABELS[value]
+        box = qt.QCheckBox(label)
         box.objectName = "algorithm_" + value
         box.checked = value in current
         if pointing_cursor is not None and hasattr(box, "setCursor"):
             box.setCursor(pointing_cursor)
         boxes[value] = box
-        _add_algorithm_row(qt, owner, layout, box, family, value, staged, zh)
+        _add_algorithm_row(qt, owner, body_layout, box, family, value, staged, zh, resize_popup)
 
-    if family == "tractography":
+    if is_anatomical:
+        note_text = ""
+    elif family == "tractography":
         note_text = (
             "每种方法分别输出流线；束分析和连接组按方法分别计算。"
             if zh
@@ -261,8 +378,9 @@ def choose_algorithms(owner, family):
         note.setObjectName("algorithmPickerNote")
     note.wordWrap = True
     note.setMaximumWidth(360)
-    layout.addWidget(note)
-    layout.addSpacing(8)
+    if note_text:
+        body_layout.addWidget(note)
+    layout.addSpacing(4)
     buttons = qt.QDialogButtonBox(dialog)
     buttons.setStandardButtons(qt.QDialogButtonBox.Apply | qt.QDialogButtonBox.Cancel)
     apply = buttons.button(qt.QDialogButtonBox.Apply)
@@ -272,7 +390,7 @@ def choose_algorithms(owner, family):
         cancel_btn.text = "取消"
 
     def update(*_):
-        apply.enabled = any(box.checked for box in boxes.values())
+        apply.enabled = is_anatomical or any(box.checked for box in boxes.values())
 
     for box in boxes.values():
         box.toggled.connect(update)
@@ -293,6 +411,8 @@ def choose_algorithms(owner, family):
                 canonical_wmql_selection(staged["orchestrationWmqlSelection"](), staged["orchestrationWmqlPreset"]())
         except ValueError as exc:
             note.setText(str(exc))
+            resize_popup()
+            scroll.ensureWidgetVisible(note)
             return
         dialog.accept()
 
@@ -300,18 +420,7 @@ def choose_algorithms(owner, family):
     buttons.rejected.connect(dialog.reject)
     layout.addWidget(buttons)
 
-    anchor = (getattr(owner, "_algorithmButtons", None) or {}).get(family)
-    if anchor is not None and hasattr(anchor, "mapToGlobal"):
-        try:
-            vis = anchor.isVisible() if callable(getattr(anchor, "isVisible", None)) else bool(getattr(anchor, "visible", False))
-            if vis:
-                from shared.ui_compact import _position_input_help_card
-
-                if hasattr(dialog, "adjustSize"):
-                    dialog.adjustSize()
-                _position_input_help_card(anchor, dialog, qt)
-        except Exception:
-            pass
+    resize_popup()
 
     popup_watch = None
     if hasattr(qt, "QTimer") and popup_flag:
@@ -345,10 +454,14 @@ def choose_algorithms(owner, family):
             except Exception:
                 pass
     if accepted:
-        with slicer.util.NodeModify(owner._parameterNode):
-            for attribute, value in staged.items():
-                setattr(owner._parameterNode, attribute, value())
-            set_algorithms(owner, family, [value for value, box in boxes.items() if box.checked])
+        selection = [value for value, box in boxes.items() if box.checked]
+        if is_anatomical:
+            _set_anatomical_priors(owner, selection)
+        else:
+            with slicer.util.NodeModify(owner._parameterNode):
+                for attribute, value in staged.items():
+                    setattr(owner._parameterNode, attribute, value())
+                set_algorithms(owner, family, selection)
     dialog.deleteLater()
     return accepted
 
@@ -358,6 +471,7 @@ def install_algorithm_pickers(owner):
 
     owner._algorithmButtons = {}
     owner._algorithmSummaryLabels = {}
+    owner._productLabelButtons = []
     form = owner.ui.targetProductsFormLayout
     form.setVerticalSpacing(4)
     # Match a plain QCheckBox row without clipping the 16px styled indicator box on any DPI scale.
@@ -366,25 +480,89 @@ def install_algorithm_pickers(owner):
     label_gap = max(5, style.pixelMetric(qt.QStyle.PM_CheckBoxLabelSpacing))
     pointing_cursor = getattr(qt.Qt, "PointingHandCursor", None)
 
-    for plain_name in (
-        "targetSurfaceCheckBox",
-        "targetSurfacePostprocessCheckBox",
-        "targetParcellationCheckBox",
-        "targetSegmentationCheckBox",
-    ):
-        plain_cb = getattr(owner.ui, plain_name, None)
-        if plain_cb is not None:
-            if hasattr(plain_cb, "setSizePolicy"):
-                plain_cb.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Fixed)
-            if hasattr(plain_cb, "setMinimumWidth"):
-                plain_cb.setMinimumWidth(0)
-            if pointing_cursor is not None and hasattr(plain_cb, "setCursor"):
-                plain_cb.setCursor(pointing_cursor)
+    def picker_button(name, family):
+        button = qt.QToolButton()
+        button.setObjectName(name)
+        button.setProperty("algorithmPickerButton", True)
+        button.setText("...")
+        button.setToolButtonStyle(qt.Qt.ToolButtonIconOnly)
+        button.setIconSize(qt.QSize(16, 16))
+        button.setFixedSize(28, 22)
+        button.setCursor(qt.Qt.PointingHandCursor)
+        button.clicked.connect(lambda: choose_algorithms(owner, family))
+        return button
+
+    def click_area(content, checkbox, *, expand=False, inset=0):
+        button = qt.QPushButton()
+        button.setFlat(True)
+        button.setFocusPolicy(qt.Qt.NoFocus)
+        button.setStyleSheet("QPushButton { border: none; background: transparent; }")
+        button.setSizePolicy(qt.QSizePolicy.Ignored if expand else qt.QSizePolicy.Preferred,
+                             qt.QSizePolicy.Preferred)
+        if pointing_cursor is not None:
+            button.setCursor(pointing_cursor)
+        button.clicked.connect(lambda _checked=False: checkbox.click())
+        layout = qt.QVBoxLayout(button)
+        layout.setContentsMargins(inset, 0, 0, 0)
+        content.setAttribute(qt.Qt.WA_TransparentForMouseEvents)
+        layout.addWidget(content)
+        return button
+
+    def make_label_clickable(row, checkbox):
+        label = form.labelForField(checkbox)
+        if label is not None:
+            form.takeAt(form.indexOf(label))
+            button = click_area(label, checkbox)
+            owner._productLabelButtons.append((label, button))
+            form.setWidget(row, qt.QFormLayout.LabelRole, button)
+
+    old_anatomical_rows = ("targetSurfaceCheckBox", "targetSegmentationCheckBox", "targetParcellationCheckBox")
+    if all(getattr(owner.ui, name, None) is not None for name in old_anatomical_rows):
+        for name in old_anatomical_rows:
+            control = getattr(owner.ui, name)
+            for widget in (form.labelForField(control), control):
+                if widget is not None:
+                    form.takeAt(form.indexOf(widget))
+                    widget.hide()
+
+        checkbox = qt.QCheckBox()
+        checkbox.setObjectName("anatomicalPriorsCheckBox")
+        checkbox.setTristate(True)
+        checkbox.setFixedWidth(indicator_width)
+        checkbox.setMinimumHeight(18)
+        checkbox.clicked.connect(lambda checked: _set_anatomical_priors(
+            owner, ANATOMICAL_PRIORS if checked else (),
+        ))
+        label = qt.QLabel()
+        label_button = click_area(label, checkbox)
+        form.setWidget(1, qt.QFormLayout.LabelRole, label_button)
+        container = qt.QWidget()
+        row_layout = qt.QHBoxLayout(container)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(0)
+        row_layout.addWidget(checkbox, 0, qt.Qt.AlignVCenter)
+        summary = qt.QLabel()
+        summary.setWordWrap(True)
+        summary.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Preferred)
+        row_layout.addWidget(click_area(summary, checkbox, expand=True, inset=label_gap), 1)
+        arrow = picker_button("anatomicalPriorsSelectButton", "anatomical_priors")
+        row_layout.addWidget(arrow, 0, qt.Qt.AlignVCenter)
+        form.setWidget(1, qt.QFormLayout.FieldRole, container)
+        owner._anatomicalPriorsRow = (label, label_button, checkbox, summary, arrow)
+
+    checkbox = getattr(owner.ui, "targetSurfacePostprocessCheckBox", None)
+    if checkbox is not None:
+        make_label_clickable(2, checkbox)
+        form.takeAt(form.indexOf(checkbox))
+        checkbox.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Fixed)
+        checkbox.setMinimumWidth(0)
+        form.setWidget(2, qt.QFormLayout.FieldRole, click_area(checkbox, checkbox, expand=True))
 
     for family, (name, _, _) in FAMILIES.items():
         row = ROW_INDICES[family]
         checkbox = getattr(owner.ui, name)
         role = qt.QFormLayout.FieldRole
+        make_label_clickable(row, checkbox)
         form.takeAt(form.indexOf(checkbox))
         container = qt.QWidget()
         layout = qt.QHBoxLayout(container)
@@ -399,29 +577,52 @@ def install_algorithm_pickers(owner):
         if pointing_cursor is not None and hasattr(checkbox, "setCursor"):
             checkbox.setCursor(pointing_cursor)
         layout.addWidget(checkbox, 0, qt.Qt.AlignVCenter)
-        layout.addSpacing(label_gap)
         summary = qt.QLabel()
         summary.wordWrap = True
         summary.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Preferred)
         summary.setMinimumWidth(0)
-        layout.addWidget(summary, 1)
+        summary_button = click_area(summary, checkbox, expand=True, inset=label_gap)
+        summary_button.objectName = family + "AlgorithmRow"
+        layout.addWidget(summary_button, 1)
         owner._algorithmSummaryLabels[name] = summary
-        button = qt.QToolButton()
-        button.objectName = family + "AlgorithmSelectButton"
-        button.setFixedSize(28, 22)
-        if pointing_cursor is not None and hasattr(button, "setCursor"):
-            button.setCursor(pointing_cursor)
-        button.clicked.connect(lambda _checked=False, family=family: choose_algorithms(owner, family))
-        layout.addSpacing(6)
+        button = picker_button(family + "AlgorithmSelectButton", family)
         layout.addWidget(button, 0, qt.Qt.AlignVCenter)
         form.setWidget(row, role, container)
         owner._algorithmButtons[family] = button
 
     refresh_picker_language(owner)
+    refresh_picker_icons(owner)
+
+
+def refresh_picker_icons(owner, *, dark=None):
+    import qt
+    from shared.ui_styles import is_dark_mode
+
+    dark = is_dark_mode(getattr(owner, "_uiWidget", None)) if dark is None else dark
+    ink = "#8CD2F5" if dark else "#326A8A"
+    pixmap = qt.QPixmap(32, 32)
+    pixmap.fill(qt.Qt.transparent)
+    painter = qt.QPainter(pixmap)
+    painter.setRenderHint(qt.QPainter.Antialiasing)
+    painter.setPen(qt.Qt.NoPen)
+    painter.setBrush(qt.QColor(ink))
+    for x in (8, 16, 24):
+        painter.drawEllipse(qt.QPointF(x, 16), 2.2, 2.2)
+    painter.end()
+    pixmap.setDevicePixelRatio(2)
+    icon = qt.QIcon(pixmap)
+    for button in getattr(owner, "_algorithmButtons", {}).values():
+        button.setIcon(icon)
+    row = getattr(owner, "_anatomicalPriorsRow", None)
+    if row is not None:
+        row[-1].setIcon(icon)
 
 
 def refresh_picker_language(owner):
+    for label, button in getattr(owner, "_productLabelButtons", ()):
+        button.setMinimumWidth(label.sizeHint.width())
     zh = getattr(owner, "_onboardingLanguage", "en").startswith("zh")
+    _refresh_anatomical_priors(owner, zh)
     for family, button in getattr(owner, "_algorithmButtons", {}).items():
         selected = selected_algorithms(getattr(owner, "_parameterNode", None), family)
         name = {

@@ -151,6 +151,10 @@ def _apply_input_path_mode(owner: Any, fmt: str, language: str | None = None) ->
 
     from shared.ui_onboarding import onboarding_text
 
+    # The compact panel gives each file format its own controls. The shared
+    # folder field stays a directory picker even when a folder contains NRRD.
+    if "nifti_source" in getattr(owner, "_prepareInputWidgets", {}):
+        return
     ui = getattr(owner, "ui", None)
     if ui is None:
         return
@@ -276,6 +280,7 @@ def _position_input_help_card(anchor: Any, card: Any, qt_mod: Any) -> None:
                 above_y = _qt_int(above_pt, "y", by) - card_h
                 if above_y >= top + 8:
                     y = above_y
+            y = max(top + 8, min(y, bottom - card_h - 8))
     except Exception:
         pass
     if hasattr(card, "move"):
@@ -969,7 +974,6 @@ def install_compact_layout(owner: Any) -> None:
     advanced_layout.addWidget(advanced_hint)
     owner._advancedSettingsHintLabel = advanced_hint
     prepare_inputs = owner._prepareInputWidgets["panel"]
-    prepare_inputs.collapsed = False
     prepare_inputs.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Preferred)
     prepare_inputs.setMinimumWidth(0)
     for name in ("inputDirectoryLabel", "inputDirectoryPath"):
@@ -982,55 +986,15 @@ def install_compact_layout(owner: Any) -> None:
         section.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Preferred)
         section.setMinimumWidth(0)
 
-    utilities = qt.QHBoxLayout()
-    for name in ("diagnostic_button", "config_button"):
-        button = owner._onboardingWidgets[name]
-        button.setMinimumWidth(0)
-        utilities.addWidget(button)
-        button.show()
-    advanced_layout.addLayout(utilities)
-    tools_dialog = qt.QDialog(root)
-    tools_layout = qt.QVBoxLayout(tools_dialog)
-    tools_layout.addWidget(advanced)
-    advanced.collapsed = False
-    advanced.show()
-    tools_button = qt.QToolButton(root)
-    tools_button.clicked.connect(lambda: tools_dialog.show())
-    ui.headerLayout.addWidget(tools_button)
-    owner._workflowToolsDialog = tools_dialog
-    owner._workflowToolsButton = tools_button
+    advanced.hide()
     owner._advancedSettingsPanel = advanced
-    environment = ui.environmentCollapsibleButton
-    layout.removeWidget(environment)
-    dependency_dialog = qt.QDialog(root)
-    dependency_dialog.setWindowTitle("Dependencies")
-    dependency_layout = qt.QVBoxLayout(dependency_dialog)
-    dependency_layout.addWidget(environment)
-    environment.collapsed = False
-    environment.show()
-    owner._dependencyDialog = dependency_dialog
-    dependency_button = qt.QToolButton(root)
-    dependency_button.setText("Dependencies")
-    dependency_button.clicked.connect(lambda: dependency_dialog.show())
-    ui.headerLayout.addWidget(dependency_button)
-    owner._dependencyDialogButton = dependency_button
+    ui.environmentCollapsibleButton.hide()
     from shared.ui_algorithm_picker import install_algorithm_pickers
     install_algorithm_pickers(owner)
     install_compute_device_selector(owner)
 
     layout.removeWidget(ui.runCollapsibleButton)
     ui.targetsLayout.addWidget(ui.runCollapsibleButton)
-    layout.removeWidget(ui.logCollapsibleButton)
-    log_dialog = qt.QDialog(root)
-    log_dialog.resize(640, 320)
-    log_layout = qt.QVBoxLayout(log_dialog)
-    log_layout.addWidget(ui.logCollapsibleButton)
-    log_button = qt.QPushButton(root)
-    log_button.clicked.connect(lambda: log_dialog.show())
-    ui.resultsCollapsibleButton.layout().addWidget(log_button)
-    owner._runLogDialog = log_dialog
-    owner._runLogButton = log_button
-
     layout.removeWidget(ui.statusFrame)
     ui.statusLayout.setContentsMargins(0, 0, 0, 0)
     ui.runLayout.addWidget(ui.statusFrame)
@@ -1040,10 +1004,11 @@ def install_compact_layout(owner: Any) -> None:
     ui.runCollapsibleButton.setMinimumWidth(0)
     ui.logLayout.setContentsMargins(0, 0, 0, 0)
     ui.logLayout.setSpacing(4)
-    ui.logPlainTextEdit.setMinimumHeight(64)
+    ui.logPlainTextEdit.setMinimumHeight(86)
+    ui.logPlainTextEdit.setMaximumHeight(140)
+    ui.clearLogButton.setSizePolicy(qt.QSizePolicy.Maximum, qt.QSizePolicy.Fixed)
     ui.logCollapsibleButton.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Expanding)
     ui.logCollapsibleButton.setMinimumWidth(0)
-    owner._prepareInputWidgets["panel"].setStyleSheet("")
     for section in (ui.configurationCollapsibleButton, ui.targetsCollapsibleButton):
         # Preferred, not Maximum: Maximum caps a section at its size hint, which leaves out wrapped
         # form rows; the trailing stretch below keeps sections from growing beyond their content.
@@ -1132,7 +1097,6 @@ def install_compact_layout(owner: Any) -> None:
         ui.parametersCollapsibleButton,
         ui.environmentCollapsibleButton,
         ui.advancedRunCollapsibleButton,
-        owner._prepareInputWidgets["panel"],
         getattr(owner, "_environmentMoreOptions", None),
         getattr(owner, "_environmentAdvancedPathsWidget", None),
     ]
@@ -1151,15 +1115,6 @@ def apply_compact_language(owner: Any, language: str) -> None:
         return
     from shared.ui_onboarding import onboarding_text
 
-    log_title = "运行日志" if language.startswith("zh") else "Run log"
-    owner._runLogDialog.setWindowTitle(log_title)
-    owner._runLogButton.setText(log_title)
-    tools_title = "工作流工具" if language.startswith("zh") else "Workflow tools"
-    owner._workflowToolsDialog.setWindowTitle(tools_title)
-    owner._workflowToolsButton.setText(tools_title)
-    dependency_title = "依赖与诊断" if language.startswith("zh") else "Dependencies"
-    owner._dependencyDialog.setWindowTitle(dependency_title)
-    owner._dependencyDialogButton.setText(dependency_title)
     owner._advancedSettingsPanel.setText(onboarding_text(language, "compact_advanced"))
     owner._advancedSettingsPanel.setToolTip(onboarding_text(language, "compact_advanced_hint"))
     advanced_hint = getattr(owner, "_advancedSettingsHintLabel", None)
@@ -1167,15 +1122,9 @@ def apply_compact_language(owner: Any, language: str) -> None:
         advanced_hint.setText(onboarding_text(language, "compact_advanced_hint"))
     owner.ui.headlineLabel.setText("SlicerDSpace")
     owner._onboardingWidgets["language_combo"].setToolTip(onboarding_text(language, "language"))
-    prepare_inputs = (getattr(owner, "_prepareInputWidgets", {}) or {}).get("panel")
-    if prepare_inputs is not None:
-        prepare_inputs.setText(onboarding_text(language, "compact_import"))
-        source_tabs = owner._prepareInputWidgets["source_kind"]
-        source_tabs.setTabText(3, "已准备的文件夹" if language.startswith("zh") else "Prepared folder")
-        raw_label = owner._prepareInputWidgets["raw_label"]
-        raw_label.setText("分离数据 (.raw, .raw.gz)" if language.startswith("zh") else "Detached data (.raw, .raw.gz)")
+    from shared.ui_prepare_inputs import apply_input_language
+    apply_input_language(owner)
     for name, key in {
-        "configurationCollapsibleButton": "section_inputs",
         "targetsCollapsibleButton": "section_targets",
         "parametersCollapsibleButton": "compact_parameters",
         "environmentCollapsibleButton": "compact_environment",

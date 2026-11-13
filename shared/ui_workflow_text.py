@@ -25,7 +25,7 @@ WORKFLOW_TEXT = {
     "en": {
         "section_getting_started": "Getting started",
         "section_inputs": "1. Inputs",
-        "section_targets": "2. Products",
+        "section_targets": "2. Analysis",
         "compact_advanced": "Advanced settings",
         "compact_advanced_hint": "Select algorithms via ...; optional parameters below.",
         "input_layout_found": "Input layout found. Dependencies are checked when you run.",

@@ -17,6 +17,9 @@ class Text:
     def setToolTip(self, value):
         self.tooltip = value
 
+    def setAccessibleName(self, value):
+        self.accessible_name = value
+
 
 class CompactUiTest(unittest.TestCase):
     def test_language_changes_presentation_not_analysis_state(self):
@@ -25,22 +28,34 @@ class CompactUiTest(unittest.TestCase):
                  "runSelectedButton", "logHintLabel", "targetPreprocessingCheckBox", "targetSurfaceCheckBox",
                  "targetSurfacePostprocessCheckBox", "targetParcellationCheckBox", "targetSegmentationCheckBox",
                  "targetMicrostructureCheckBox", "targetTractographyCheckBox", "targetBundlesCheckBox",
-                 "targetConnectomeCheckBox")
+                 "targetConnectomeCheckBox", "outputDirectoryLabel", "outputDirectoryPath")
         ui = SimpleNamespace(**{name: Text() for name in names})
         ui.targetSurfaceCheckBox.checked = True
         node = SimpleNamespace(orchestrationSelectStreamlines=1000000)
         owner = SimpleNamespace(ui=ui, _advancedSettingsPanel=Text(), _parameterNode=node,
                                 _advancedSettingsHintLabel=Text(),
                                 _onboardingWidgets={"language_combo": Text()},
-                                _prepareInputWidgets={"panel": Text()})
+                                _prepareInputWidgets={
+                                    "source_kind": "nifti",
+                                    "drop_hint": Text(),
+                                    "raw_tile": Text(),
+                                })
+        for key in ("nifti_source", "bval", "bvec", "nrrd_source", "raw", "dicom_source", "mask"):
+            owner._prepareInputWidgets.update({key: Text(), key + "_label": Text(), key + "_hint": Text()})
+            owner._prepareInputWidgets[key + "_label"].setText(key)
+        owner._prepareInputWidgets["raw"].toPlainText = lambda: ""
         for language, advanced, run, log in (("en", "Advanced settings", "Run SlicerDSpace", "Log"),
                                            ("zh", "高级设置", "运行 SlicerDSpace", "日志")):
+            owner._onboardingLanguage = language
             apply_compact_language(owner, language)
             self.assertEqual(owner._advancedSettingsPanel.text, advanced)
             self.assertEqual(ui.runSelectedButton.text, run)
             self.assertEqual(ui.logHintLabel.text, log)
             self.assertEqual(ui.headlineLabel.text, "SlicerDSpace")
-            self.assertIn("import" if language == "en" else "导入", owner._prepareInputWidgets["panel"].text)
+            self.assertEqual(ui.outputDirectoryLabel.text, "Output folder" if language == "en" else "输出文件夹")
+            self.assertIn("Drop files" if language == "en" else "拖入文件", owner._prepareInputWidgets["drop_hint"].text)
+            self.assertEqual(owner._prepareInputWidgets["raw_hint"].text,
+                             "Required for NHDR" if language == "en" else "NHDR 必需")
             self.assertTrue(ui.targetSurfaceCheckBox.checked)
             self.assertEqual(node.orchestrationSelectStreamlines, 1000000)
             self.assertEqual(ui.targetMicrostructureCheckBox.text,
@@ -160,6 +175,7 @@ class CompactUiTest(unittest.TestCase):
         validations = []
         owner = SimpleNamespace(_pipelineActive=False, logic=object(),
             _parameterNode=SimpleNamespace(batchMode=False, inputDirectory=""),
+            _prepare_inputs_widget_text=lambda _key: "",
             validateInputs=lambda **kwargs: validations.append(kwargs) or False,
             _setStatus=lambda *args: statuses.append(args),
             _summarise_missing=lambda entries: "Waiting: " + "; ".join(entries))
@@ -168,7 +184,7 @@ class CompactUiTest(unittest.TestCase):
         self.assertEqual(validations, [{"manual": True}])
         owner._parameterNode.batchMode = True
         click(owner)
-        self.assertFalse(owner._parameterNode.batchMode)
+        self.assertTrue(owner._parameterNode.batchMode)
         self.assertEqual(validations, [{"manual": True}, {"manual": True}])
         owner._parameterNode.batchMode = False
         owner.validateInputs = lambda **kwargs: True

@@ -107,7 +107,7 @@
       <string>1. Inputs</string>
      </property>
      <property name="toolTip">
-      <string>Subject identifier, subject root and output directory for this run.</string>
+      <string>Select an input folder or import diffusion files.</string>
      </property>
      <layout class="QVBoxLayout" name="configurationLayout">
       <item>
@@ -144,7 +144,7 @@
         <item row="1" column="0">
          <widget class="QLabel" name="inputDirectoryLabel">
           <property name="text">
-           <string>Subject root</string>
+           <string>Input folder</string>
           </property>
          </widget>
         </item>
@@ -154,17 +154,17 @@
            <set>ctkPathLineEdit::Dirs</set>
           </property>
           <property name="toolTip">
-           <string>Folder that contains input/data.nii.gz, input/bvals and input/bvecs (brain mask optional). Use Prepare Inputs to convert DICOM or NRRD first.</string>
+           <string>Drop diffusion files below and choose where to save results.</string>
           </property>
           <property name="placeholderText" stdset="0">
-           <string>Folder with input/data.nii.gz, bvals, bvecs</string>
+           <string>Select a data folder</string>
           </property>
          </widget>
         </item>
         <item row="2" column="0">
          <widget class="QLabel" name="outputDirectoryLabel">
           <property name="text">
-           <string>Output directory</string>
+           <string>Output folder</string>
           </property>
          </widget>
         </item>
@@ -189,7 +189,7 @@
    <item>
     <widget class="QGroupBox" name="targetsCollapsibleButton">
      <property name="title">
-      <string>2. Products</string>
+      <string>2. Analysis</string>
      </property>
      <property name="toolTip">
       <string>Products to compute. Unchecked products are not run; existing outputs are reused.</string>

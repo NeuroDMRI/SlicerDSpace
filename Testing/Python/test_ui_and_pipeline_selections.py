@@ -168,13 +168,13 @@ def _write_raw_subject(root: Path, *, with_mask: bool = False, auto_mask_receipt
 class UiAndPipelineSelectionsTest(unittest.TestCase):
     def test_header_logo_enlarged_and_top_collapsible_buttons_hidden(self) -> None:
         branding_source = (Path(__file__).resolve().parents[2] / "shared" / "ui_branding.py").read_text(encoding="utf-8")
-        self.assertIn("setFixedSize(208, 38)", branding_source)
+        self.assertIn("setFixedSize(176, 32)", branding_source)
         self.assertTrue(callable(install_header_wordmark))
         sheet = SLICERDSPACE_UI_STYLE
         self.assertIn("font-size: 17px;", sheet)
         self.assertIn("QToolButton#inputFormatHelpButton", sheet)
-        self.assertIn("QToolButton#preprocessingAlgorithmSelectButton", sheet)
-        self.assertIn("QToolButton#connectomeAlgorithmSelectButton", sheet)
+        self.assertIn('QToolButton[algorithmPickerButton="true"]', sheet)
+        self.assertIn('QToolButton[algorithmPickerButton="true"]:hover:!disabled', sheet)
 
         source = (Path(__file__).resolve().parents[2] / "SlicerDSpace.py").read_text(encoding="utf-8")
         self.assertIn('"reloadCollapsibleButton"', source)
@@ -862,23 +862,37 @@ class UiAndPipelineSelectionsTest(unittest.TestCase):
             created_boxes.append(cb)
             return cb
 
+        click_areas = []
+
+        def make_click_area():
+            button = mock.MagicMock()
+            click_areas.append(button)
+            return button
+
         fake_qt = SimpleNamespace(
-            QApplication=SimpleNamespace(style=lambda: style_mock, instance=lambda: app_instance),
+            QApplication=SimpleNamespace(style=lambda: style_mock, instance=lambda: app_instance, primaryScreen=lambda: None),
             QStyle=SimpleNamespace(PM_IndicatorWidth=1, PM_CheckBoxLabelSpacing=2),
-            QFormLayout=SimpleNamespace(FieldRole=1),
+            QFormLayout=SimpleNamespace(FieldRole=1, LabelRole=0),
             QSizePolicy=SimpleNamespace(Fixed=0, Ignored=1, Preferred=2),
             Qt=SimpleNamespace(
                 AlignVCenter=4,
+                WA_TransparentForMouseEvents=51,
                 PointingHandCursor=13,
                 ClickFocus=2,
                 NoFocus=0,
                 Popup=8,
+                ToolButtonIconOnly=0,
+                ScrollBarAlwaysOff=1,
                 FramelessWindowHint=2048,
             ),
+            QSize=lambda *args: args,
+            QFrame=SimpleNamespace(NoFrame=0),
+            QScrollArea=lambda _parent: mock.MagicMock(name="QScrollArea"),
             QWidget=lambda: mock.MagicMock(name="QWidget"),
             QHBoxLayout=lambda _p=None: mock.MagicMock(name="QHBoxLayout"),
             QVBoxLayout=lambda _p=None: mock.MagicMock(name="QVBoxLayout"),
             QLabel=lambda *a: mock.MagicMock(name="QLabel", ctor_args=a),
+            QPushButton=make_click_area,
             QToolButton=lambda: mock.MagicMock(name="QToolButton"),
             QDialog=_make_dialog,
             QDialogButtonBox=mock.MagicMock(Accepted=1, Apply=2, Cancel=4),
@@ -896,12 +910,19 @@ class UiAndPipelineSelectionsTest(unittest.TestCase):
             _onboardingLanguage="en",
         )
         fake_slicer = SimpleNamespace(util=SimpleNamespace(mainWindow=lambda: None))
-        with mock.patch.dict(sys.modules, {"qt": fake_qt, "slicer": fake_slicer}):
+        with mock.patch.dict(sys.modules, {"qt": fake_qt, "slicer": fake_slicer}), mock.patch.object(
+            ui_algorithm_picker, "refresh_picker_icons"
+        ):
             ui_algorithm_picker.install_algorithm_pickers(owner)
             for cb in boxes.values():
                 cb.setFixedWidth.assert_called_once_with(18)
+            owner._algorithmButtons["microstructure"].isVisible.return_value = False
             ui_algorithm_picker.choose_algorithms(owner, "microstructure")
             boxes["targetMicrostructureCheckBox"].click.assert_not_called()
+            row = next(button for button in click_areas if button.objectName == "microstructureAlgorithmRow")
+            on_click = row.clicked.connect.call_args.args[0]
+            on_click(False)
+            boxes["targetMicrostructureCheckBox"].click.assert_called_once_with()
 
         self.assertEqual(len(focus_callbacks), 0)
         self.assertEqual(len(created_dialogs), 1)

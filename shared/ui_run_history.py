@@ -443,8 +443,21 @@ def install_results_panel(owner: Any) -> None:
         return
     import qt
 
+    empty_row = qt.QWidget()
+    empty_layout = qt.QHBoxLayout(empty_row)
+    empty_layout.setContentsMargins(0, 0, 0, 0)
+    empty_label = qt.QLabel("No runs yet")
+    owner._resultsEmptyLabel = empty_label
+    _bind(owner, empty_label, "text", "no_runs_found")
+    empty_layout.addWidget(empty_label, 1)
+    layout.addWidget(empty_row)
+
     columns = qt.QSplitter(qt.Qt.Horizontal)
+    columns.setChildrenCollapsible(False)
+    columns.hide()
     layout.addWidget(columns)
+    owner._resultsEmptyRow = empty_row
+    owner._resultsColumns = columns
     runs = qt.QWidget()
     outputs = qt.QWidget()
     columns.addWidget(runs)
@@ -452,6 +465,8 @@ def install_results_panel(owner: Any) -> None:
     columns.setStretchFactor(1, 1)
     run_layout = qt.QVBoxLayout(runs)
     layout = qt.QVBoxLayout(outputs)
+    run_layout.setContentsMargins(0, 0, 3, 0)
+    layout.setContentsMargins(3, 0, 0, 0)
 
     run_row = qt.QHBoxLayout()
     run_label = qt.QLabel("Run")
@@ -465,7 +480,9 @@ def install_results_panel(owner: Any) -> None:
     history = qt.QTreeWidget()
     history.setObjectName("subjectRunHistory")
     history.setHeaderHidden(True)
-    history.setMinimumHeight(150)
+    history.setMinimumHeight(85)
+    history.setMaximumHeight(160)
+    history.setFrameShape(qt.QFrame.NoFrame)
     history.setMinimumWidth(0)
     owner._runHistoryTree = history
     add_folder = qt.QPushButton("Add a run folder…")
@@ -486,11 +503,12 @@ def install_results_panel(owner: Any) -> None:
     run_row.addWidget(run_label)
     run_layout.addLayout(run_row)
     run_layout.addWidget(history)
-    run_layout.addWidget(add_folder)
+    empty_layout.addWidget(add_folder)
 
     summary = qt.QLabel("Run summary will appear after a plan or run completes.")
     summary.wordWrap = True
     summary.setObjectName("runSummaryLabel")
+    summary.hide()
     layout.addWidget(summary)
 
     details = qt.QLabel("No run selected.")
@@ -500,6 +518,7 @@ def install_results_panel(owner: Any) -> None:
         details.setTextInteractionFlags(qt.Qt.TextSelectableByMouse | qt.Qt.TextSelectableByKeyboard)
     except Exception:
         pass
+    details.hide()
     run_layout.addWidget(details)
     run_layout.addStretch(1)
 
@@ -512,7 +531,9 @@ def install_results_panel(owner: Any) -> None:
     files.setObjectName("runOutputFiles")
     files.setHeaderHidden(True)
     files.setColumnCount(2)
-    files.setMinimumHeight(150)
+    files.setMinimumHeight(85)
+    files.setMaximumHeight(190)
+    files.setFrameShape(qt.QFrame.NoFrame)
     files.header().setSectionResizeMode(0, qt.QHeaderView.Stretch)
     files.header().setSectionResizeMode(1, qt.QHeaderView.ResizeToContents)
     owner._runOutputFiles = files
@@ -612,6 +633,9 @@ def _populate_run_tree(owner, records, current_index):
         return
     import qt
 
+    columns = owner._resultsColumns
+    columns.setVisible(bool(records))
+    owner._resultsEmptyLabel.setVisible(not records)
     tree.clear()
     subjects = {}
     for index, record in enumerate(records):

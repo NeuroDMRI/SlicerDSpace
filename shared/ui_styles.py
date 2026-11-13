@@ -416,11 +416,7 @@ QToolButton#algorithmPickerCloseButton:hover {
   background: #EEF2F5;
   border-color: #CCD5DC;
 }
-QToolButton#preprocessingAlgorithmSelectButton,
-QToolButton#microstructureAlgorithmSelectButton,
-QToolButton#tractographyAlgorithmSelectButton,
-QToolButton#bundlesAlgorithmSelectButton,
-QToolButton#connectomeAlgorithmSelectButton {
+QToolButton[algorithmPickerButton="true"] {
   color: #335B70;
   background: #FFFFFF;
   border: 1px solid #CCD5DC;
@@ -428,6 +424,11 @@ QToolButton#connectomeAlgorithmSelectButton {
   font-weight: 600;
   padding: 0;
   min-height: 18px;
+}
+QToolButton[algorithmPickerButton="true"]:hover:!disabled,
+QToolButton[algorithmPickerButton="true"]:focus:!disabled {
+  background: #EEF6FB;
+  border-color: #478CB3;
 }
 QToolButton#inputFormatHelpButton {
   color: #335B70;
@@ -773,11 +774,7 @@ QToolButton#algorithmPickerCloseButton:hover {
   background: #323842;
   border-color: #636E7B;
 }
-QToolButton#preprocessingAlgorithmSelectButton,
-QToolButton#microstructureAlgorithmSelectButton,
-QToolButton#tractographyAlgorithmSelectButton,
-QToolButton#bundlesAlgorithmSelectButton,
-QToolButton#connectomeAlgorithmSelectButton {
+QToolButton[algorithmPickerButton="true"] {
   color: #8CD2F5;
   background: #323842;
   border: 1px solid #525C68;
@@ -785,6 +782,11 @@ QToolButton#connectomeAlgorithmSelectButton {
   font-weight: 600;
   padding: 0;
   min-height: 18px;
+}
+QToolButton[algorithmPickerButton="true"]:hover:!disabled,
+QToolButton[algorithmPickerButton="true"]:focus:!disabled {
+  background: #374755;
+  border-color: #7CC4EA;
 }
 QToolButton#inputFormatHelpButton {
   color: #8CD2F5;
@@ -1145,11 +1147,46 @@ def set_stylesheet_if_changed(widget: Any, style: str) -> None:
         pass
 
 
+MODULE_STRUCTURE_STYLE = """
+QLabel, QGroupBox, QCheckBox, QRadioButton, QComboBox, QLineEdit, QTabBar,
+QToolButton, QPushButton, QTreeWidget, QTableWidget {
+  font-family: "Segoe UI", "Microsoft YaHei UI", "Helvetica Neue", "Noto Sans", sans-serif;
+}
+QGroupBox#configurationCollapsibleButton { border: 0; margin-top: 0; }
+QGroupBox#targetsCollapsibleButton {
+  border: 0;
+  margin-top: 22px;
+  font-size: 16px;
+  font-weight: 700;
+}
+QGroupBox#targetsCollapsibleButton::title {
+  subcontrol-origin: margin;
+  subcontrol-position: top left;
+  left: 4px;
+}
+QGroupBox#resultsCollapsibleButton {
+  border: 1px solid __SECTION_LINE__;
+  border-radius: 7px;
+  margin-top: 8px;
+}
+QGroupBox#resultsCollapsibleButton::title {
+  subcontrol-origin: margin;
+  left: 8px;
+  padding: 0 3px;
+}
+QCheckBox#anatomicalPriorsCheckBox::indicator:indeterminate {
+  background: __SECTION_LINE__;
+  border-color: #777b7d;
+}
+"""
+
+
 def ui_stylesheet(*, dark: bool | None = None, widget: Any = None) -> str:
     """Return the main SlicerDSpace stylesheet for the active light or dark theme."""
 
     use_dark = is_dark_mode(widget) if dark is None else bool(dark)
-    return SLICERDSPACE_DARK_UI_STYLE if use_dark else SLICERDSPACE_UI_STYLE
+    theme = SLICERDSPACE_DARK_UI_STYLE if use_dark else SLICERDSPACE_UI_STYLE
+    return theme + MODULE_STRUCTURE_STYLE.replace("__SECTION_LINE__", "#444547" if use_dark else "#dedfdf")
 
 
 def run_status_table_style(*, dark: bool | None = None, widget: Any = None) -> str:

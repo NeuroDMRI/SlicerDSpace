@@ -109,7 +109,7 @@ class SlicerUiLayoutContractTest(unittest.TestCase):
         expected = [
             ("gettingStartedCollapsibleButton", "Getting started"),
             ("configurationCollapsibleButton", "1. Inputs"),
-            ("targetsCollapsibleButton", "2. Products"),
+            ("targetsCollapsibleButton", "2. Analysis"),
             ("parametersCollapsibleButton", "3. Route and parameters"),
             ("resultsCollapsibleButton", "5. Results"),
             ("environmentCollapsibleButton", "Advanced: Dependency profile"),

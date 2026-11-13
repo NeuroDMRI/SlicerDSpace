@@ -58,8 +58,8 @@ TRANSLATIONS = {
         "subject_id": "Subject ID",
         "subject_id_placeholder": "e.g. 100307",
         "subject_root": "Subject root",
-        "subject_root_placeholder": "Folder with input/data.nii.gz, bvals, bvecs",
-        "output_directory": "Output directory",
+        "subject_root_placeholder": "Select a data folder",
+        "output_directory": "Output folder",
         "output_directory_placeholder": "Optional; defaults to <subject root>/outputs",
         "preprocessing": "Preprocessing",
         "preprocessing_option": "DWI denoising + Eddy + Topup",
@@ -243,7 +243,7 @@ TRANSLATIONS = {
         "subject_id": "受试者 ID",
         "subject_id_placeholder": "例如 100307",
         "subject_root": "受试者根目录",
-        "subject_root_placeholder": "包含 input/data.nii.gz、bvals、bvecs 的文件夹",
+        "subject_root_placeholder": "选择数据文件夹",
         "output_directory": "输出目录",
         "output_directory_placeholder": "可选；默认为 <subject root>/outputs",
         "preprocessing": "预处理",
@@ -752,7 +752,7 @@ def translated_ui_message(language: str, message: str) -> str:
     if pending:
         fields = pending.group("fields")
         names = {"Subject ID": "受试者 ID", "Subject directory": "受试者目录",
-                 "Subject input layout": "输入文件结构", "Output directory": "输出目录",
+                 "Subject input layout": "输入文件结构", "Batch folder": "批量输入目录", "Output directory": "输出目录",
                  "Batch root": "批处理根目录", "Target products": "分析任务"}
         chinese = normalized_language(language) == "zh"
         for english, translated in names.items():

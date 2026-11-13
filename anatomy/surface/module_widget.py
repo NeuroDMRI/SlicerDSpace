@@ -185,6 +185,10 @@ class SurfaceWidgetMixin:
             root = str(getattr(node, 'experimentRoot', '')).strip()
             return (True, []) if root and Path(root).expanduser().is_dir() else (False, ['Cohort root'])
 
+        if getattr(node, "batchMode", False):
+            root = (getattr(node, "batchRoot", "") or "").strip()
+            return (True, []) if root and Path(root).expanduser().is_dir() else (False, ["Batch folder"])
+
         missing: List[str] = []
         subject_id = node.subjectId.strip()
         input_dir_str = node.inputDirectory.strip()

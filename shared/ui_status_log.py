@@ -172,6 +172,7 @@ def apply_widget_styles(owner: Any) -> None:
 
     for module_name, fn_name in (
         ("shared.ui_prepare_inputs", "refresh_prepare_inputs_styles"),
+        ("shared.ui_algorithm_picker", "refresh_picker_icons"),
         ("shared.ui_environment_paths", "refresh_environment_paths_styles"),
         ("shared.ui_onboarding", "refresh_onboarding_styles"),
         ("shared.ui_regions", "refresh_region_styles"),

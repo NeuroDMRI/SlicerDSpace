@@ -208,7 +208,7 @@ class OnboardingHelpersTest(unittest.TestCase):
         self.assertEqual(owner.ui.runSelectedButton.value, "Run SlicerDSpace")
         self.assertEqual(owner.ui.statusLabel.value, "Waiting for input")
         self.assertEqual(owner.ui.configurationCollapsibleButton.value, "1. Inputs")
-        self.assertEqual(owner.ui.targetsCollapsibleButton.value, "2. Products")
+        self.assertEqual(owner.ui.targetsCollapsibleButton.value, "2. Analysis")
         self.assertEqual(owner.ui.parametersCollapsibleButton.value, "3. Route and parameters")
         self.assertEqual(owner.ui.resultsCollapsibleButton.value, "5. Results")
         self.assertEqual(owner.ui.preprocessingReadoutTimeLabel.value, "Total readout time (s)")

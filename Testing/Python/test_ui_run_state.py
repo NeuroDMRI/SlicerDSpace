@@ -56,7 +56,7 @@ class RunButtonTest(unittest.TestCase):
 
     def test_pending_inputs_keep_button_clickable_with_actionable_tooltips(self) -> None:
         cases = {
-            "selected_targets": (("validation",), "2. Products"),
+            "selected_targets": (("validation",), "2. Analysis"),
             "subject_root_text": ("", "Subject root"),
         }
         for key, (value, expected) in cases.items():
@@ -79,7 +79,7 @@ class RunButtonTest(unittest.TestCase):
         self.assertTrue(run_button_state(**{**self.BASE, "batch_mode": True, "subject_id": ""}).enabled)
         state = run_button_state(**{**self.BASE, "batch_mode": True, "subject_root_text": "", "batch_root_text": ""})
         self.assertTrue(state.enabled)
-        self.assertIn("Batch root", state.tooltip)
+        self.assertIn("Batch folder", state.tooltip)
 
     def test_topup_errors_keep_button_clickable_with_first_error(self) -> None:
         state = run_button_state(**self.BASE, topup_errors=("Reverse-PE b=0 image not found: /x", "other"))

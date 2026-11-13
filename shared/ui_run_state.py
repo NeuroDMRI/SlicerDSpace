@@ -85,10 +85,10 @@ def run_button_state(
     if pipeline_active:
         return ButtonState(False, "A run is in progress. Use 'Cancel running job' to stop it.")
     if not [target for target in selected_targets if target and target != "validation"]:
-        return ButtonState(True, "Select at least one product under 2. Products.")
+        return ButtonState(True, "Select at least one product under 2. Analysis.")
     if batch_mode:
         if not (batch_root_text or subject_root_text).strip():
-            return ButtonState(True, "Set 'Batch root' under Analysis settings (or a Subject root) for batch mode.")
+            return ButtonState(True, "Select a Batch folder under Inputs.")
     else:
         # C6: an empty Subject ID is derived from the input path, so only the input is required.
         if not (subject_root_text or "").strip():

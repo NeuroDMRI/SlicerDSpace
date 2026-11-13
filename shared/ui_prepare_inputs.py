@@ -2,232 +2,360 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from shared.ui_onboarding import register_ui_language_binding
 
 
 def install_prepare_inputs_panel(owner: Any, configuration_layout: Any) -> None:
-    """Install a compact Prepare Inputs panel into the main workflow section."""
-
+    import ctk
     import qt
 
-    owner._prepareInputWidgets = {}
-
-    try:
-        import ctk
-
-        panel = ctk.ctkCollapsibleButton()
-        panel.text = "Prepare Inputs"
-        panel.collapsed = True
-    except Exception:
-        panel = qt.QGroupBox("Prepare Inputs")
+    panel = qt.QWidget()
     panel.setObjectName("prepareInputsPanel")
-    panel.setToolTip("Normalize DICOM, NRRD/NHDR, or NIfTI+bval/bvec inputs into a SlicerDSpace subject root.")
-    register_ui_language_binding(owner, panel, "text", "prepare_inputs")
-    register_ui_language_binding(owner, panel, "tooltip", "prepare_inputs_tooltip")
-    from shared.ui_styles import is_dark_mode
+    layout = qt.QVBoxLayout(panel)
+    layout.setContentsMargins(0, 5, 0, 0)
+    layout.setSpacing(5)
+    fields = {"panel": panel}
+    owner._prepareInputWidgets = fields
 
-    dark = is_dark_mode(getattr(owner, "_uiWidget", None))
-    panel.setStyleSheet(
-        "QWidget#prepareInputsPanel { background: #222830; border: 1px solid #394450; border-radius: 6px; }"
-        if dark
-        else "QWidget#prepareInputsPanel { background: #F6F8FB; border: 1px solid #D6DFE8; border-radius: 6px; }"
-    )
-    owner._prepareInputWidgets["panel"] = panel
+    section = owner.ui.configurationCollapsibleButton
+    header = qt.QWidget(section)
+    header_layout = qt.QHBoxLayout(header)
+    header_layout.setContentsMargins(2, 0, 0, 0)
+    title = qt.QLabel(header)
+    title.setObjectName("dspaceInputsTitle")
+    header_layout.addWidget(title, 1)
+    fields["title"] = title
 
-    form_layout = qt.QFormLayout(panel)
-    form_layout.setSpacing(6)
-    form_layout.setContentsMargins(8, 8, 8, 8)
-    form_layout.setRowWrapPolicy(qt.QFormLayout.WrapLongRows)
-    form_layout.setFieldGrowthPolicy(qt.QFormLayout.AllNonFixedFieldsGrow)
-    panel.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Preferred)
-    panel.setMinimumWidth(0)
+    tabs = qt.QTabBar(panel)
+    tabs.setObjectName("dspaceFormatTabs")
+    tabs.setDrawBase(False)
+    tabs.setExpanding(False)
+    tabs.setUsesScrollButtons(True)
+    formats = (("nifti", "NIfTI"), ("nrrd", "NRRD"), ("dicom", "DICOM"))
+    for kind, caption in formats:
+        tabs.setTabData(tabs.addTab(caption), kind)
+    fields["format_tabs"] = tabs
 
-    source_kind = qt.QTabBar()
-    source_kind.setExpanding(False)
-    source_kind.setUsesScrollButtons(True)
-    for kind, label in (("nifti", "NIfTI"), ("nrrd", "NRRD / NHDR"),
-                        ("dicom", "DICOM"), ("canonical", "Prepared folder")):
-        index = source_kind.addTab(label)
-        source_kind.setTabData(index, kind)
-    owner._prepareInputWidgets["source_kind"] = source_kind
-    form_layout.addRow(source_kind)
+    format_header = qt.QHBoxLayout()
+    format_header.setSpacing(8)
+    format_header.addWidget(tabs, 0, qt.Qt.AlignVCenter)
+    drop_hint = qt.QLabel(panel)
+    drop_hint.setObjectName("dspaceDropHint")
+    drop_hint.setWordWrap(True)
+    fields["drop_hint"] = drop_hint
+    drop_hint.setMinimumWidth(0)
+    drop_hint.setAlignment(qt.Qt.AlignRight | qt.Qt.AlignVCenter)
+    format_header.addWidget(drop_hint, 1)
+    layout.addLayout(format_header)
+    mode_switch = qt.QWidget(header)
+    mode_switch.setObjectName("dspaceInputMode")
+    mode_layout = qt.QHBoxLayout(mode_switch)
+    mode_layout.setContentsMargins(2, 2, 2, 2)
+    mode_layout.setSpacing(0)
+    mode_group = qt.QButtonGroup(mode_switch)
+    for batch in (False, True):
+        mode = qt.QToolButton(mode_switch)
+        mode.setObjectName("dspaceModeOption")
+        mode.setCheckable(True)
+        mode.setChecked(not batch)
+        mode.setCursor(qt.Qt.PointingHandCursor)
+        mode.clicked.connect(lambda _checked=False, batch=batch: owner._update_parameter_node("batchMode", batch))
+        mode_group.addButton(mode)
+        mode_layout.addWidget(mode)
+        fields["batch_mode" if batch else "single_mode"] = mode
+    header_layout.addWidget(mode_switch, 0, qt.Qt.AlignVCenter)
+    configuration_layout.insertWidget(0, header)
 
-    source_row, source_edit = _path_row(
-        owner,
-        key="source",
-        placeholder="DICOM folder, DWI NIfTI, NRRD/NHDR, or canonical subject root",
-        browse_callback=owner._browse_prepare_input_source_path,
-    )
-    _add_labeled_row(owner, form_layout, "source", source_row)
-    owner._prepareInputWidgets["source"] = source_edit
-    source_edit.textChanged.connect(lambda *_: owner._refresh_run_button_state())
-    raw_row, raw_edit = _path_row(
-        owner, key="raw", placeholder="Detached NHDR data (.raw, .raw.gz)",
-        browse_callback=owner._browse_prepare_input_file,
-    )
-    raw_label = qt.QLabel()
-    raw_label.setText("Detached data (.raw, .raw.gz)")
-    form_layout.addRow(raw_label, raw_row)
-    owner._prepareInputWidgets["raw"] = raw_edit
-    owner._prepareInputWidgets["raw_label"] = raw_label
-    raw_row.hide()
-    raw_label.hide()
-
-    sidecar_rows = []
-    for key, label_key, placeholder in (
-        ("bval", "bval", "Optional .bval sidecar"),
-        ("bvec", "bvec", "Optional .bvec sidecar"),
-        ("metadata", "metadata_json", "Optional BIDS-style .json sidecar"),
-        ("mask", "brain_mask", "Optional nodif_brain_mask.nii.gz"),
-    ):
-        row, edit = _path_row(owner, key=key, placeholder=placeholder, browse_callback=owner._browse_prepare_input_file)
-        label = _add_labeled_row(owner, form_layout, label_key, row, storage_key=f"{key}_label")
-        if key in {"bval", "bvec"}:
-            sidecar_rows.extend((label, row))
-        owner._prepareInputWidgets[key] = edit
-
-    backend = qt.QComboBox()
-    for label in ("auto", "copy", "dcm2niix", "mrconvert", "dwiconvert"):
-        backend.addItem(label)
-    backend.setToolTip("Use auto unless you need to force dcm2niix, MRtrix3 mrconvert, SlicerDMRI DWIConvert, or copy.")
-    owner._prepareInputWidgets["backend"] = backend
-    register_ui_language_binding(owner, backend, "tooltip", "backend_tooltip")
-    _add_labeled_row(owner, form_layout, "backend", backend)
-
-    output_kind = qt.QComboBox()
-    for label in ("canonical-nifti", "compat-nrrd"):
-        output_kind.addItem(label)
-    output_kind.setToolTip("canonical-nifti is preferred. compat-nrrd is available for legacy DWIConvert routes.")
-    owner._prepareInputWidgets["output_kind"] = output_kind
-    register_ui_language_binding(owner, output_kind, "tooltip", "output_tooltip")
-    _add_labeled_row(owner, form_layout, "output", output_kind)
-
-    buttons = qt.QHBoxLayout()
-    preview_button = qt.QPushButton("Preview plan")
-    preview_button.setToolTip("Build and show the input import plan without writing files.")
-    preview_button.connect("clicked()", owner._on_prepare_inputs_preview_clicked)
-    prepare_button = qt.QPushButton("Prepare inputs")
-    prepare_button.setToolTip("Create the canonical subject-root input folder and write input_import_manifest.json.")
-    prepare_button.connect("clicked()", owner._on_prepare_inputs_clicked)
-    manifest_button = qt.QPushButton("Open manifest")
-    manifest_button.setToolTip("Open input/input_import_manifest.json for the selected subject root.")
-    manifest_button.connect("clicked()", owner._on_open_prepare_input_manifest_clicked)
-    owner._prepareInputWidgets["preview_button"] = preview_button
-    owner._prepareInputWidgets["prepare_button"] = prepare_button
-    owner._prepareInputWidgets["manifest_button"] = manifest_button
-    register_ui_language_binding(owner, preview_button, "text", "preview_plan")
-    register_ui_language_binding(owner, preview_button, "tooltip", "preview_plan_tooltip")
-    register_ui_language_binding(owner, prepare_button, "text", "prepare_inputs_action")
-    register_ui_language_binding(owner, prepare_button, "tooltip", "prepare_inputs_action_tooltip")
-    register_ui_language_binding(owner, manifest_button, "text", "open_manifest")
-    register_ui_language_binding(owner, manifest_button, "tooltip", "open_prepare_manifest_tooltip")
-    buttons.addWidget(preview_button)
-    buttons.addWidget(prepare_button)
-    buttons.addWidget(manifest_button)
-    buttons.addStretch(1)
-    _add_labeled_row(owner, form_layout, "actions", buttons)
+    pages = qt.QStackedWidget(panel)
+    pages.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Fixed)
+    layout.addWidget(pages)
+    fields["format_pages"] = pages
+    batch_label = qt.QLabel(section)
+    batch_root = ctk.ctkPathLineEdit(section)
+    batch_root.setObjectName("dspaceBatchFolder")
+    batch_root.filters = ctk.ctkPathLineEdit.Dirs
+    batch_root.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Preferred)
+    batch_root.currentPathChanged.connect(owner._onBatchRootPathChanged)
+    owner.ui.configurationFormLayout.insertRow(1, batch_label, batch_root)
+    batch_label.hide()
+    batch_root.hide()
+    fields.update(batch_root=batch_root, batch_label=batch_label)
     status = qt.QLabel()
     status.setWordWrap(True)
     status.setTextFormat(qt.Qt.PlainText)
-    owner._prepareInputWidgets["status"] = status
-    form_layout.addRow(status)
-    for key in ("source", "bval", "bvec", "raw", "metadata", "mask"):
-        owner._prepareInputWidgets[key].textChanged.connect(lambda *_: status.clear())
+    status.hide()
+    fields["status"] = status
+
+    def add_field(parent_layout, key, title, callback):
+        tile = qt.QWidget()
+        tile.setObjectName("dspaceInputTile")
+        tile.setProperty("standalone", key == "mask")
+        tile.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Fixed)
+        tile_layout = qt.QVBoxLayout(tile)
+        tile_layout.setContentsMargins(9, 6, 8, 5)
+        tile_layout.setSpacing(1)
+
+        heading = qt.QHBoxLayout()
+        heading.setSpacing(1)
+        label = qt.QLabel(title, tile)
+        label.setObjectName("dspaceInputName")
+        label.setMinimumWidth(0)
+        label.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Fixed)
+        heading.addWidget(label, 1)
+
+        edit = qt.QPlainTextEdit(tile)
+        edit.setObjectName("dspaceInput_" + key)
+        edit.setAcceptDrops(True)
+        edit.viewport().setAcceptDrops(True)
+        edit.setFrameShape(qt.QFrame.NoFrame)
+        edit.setLineWrapMode(qt.QPlainTextEdit.NoWrap)
+        edit.setTabChangesFocus(True)
+        edit.setVerticalScrollBarPolicy(qt.Qt.ScrollBarAlwaysOff)
+        edit.setHorizontalScrollBarPolicy(qt.Qt.ScrollBarAlwaysOff)
+        edit.document().setDocumentMargin(0)
+        edit.setMinimumWidth(0)
+        edit.setFixedHeight(20)
+
+        clear = qt.QToolButton(tile)
+        clear.setObjectName("dspaceInputAction")
+        clear.setText("×")
+        clear.setAutoRaise(True)
+        clear.setFixedSize(15, 18)
+        register_ui_language_binding(owner, clear, "tooltip", "clear")
+        clear.clicked.connect(lambda: edit.clear())
+        clear.hide()
+        heading.addWidget(clear)
+
+        browse = qt.QToolButton(tile)
+        browse.setObjectName("dspaceInputAction")
+        browse.setText("…")
+        browse.setAutoRaise(True)
+        browse.setCursor(qt.Qt.PointingHandCursor)
+        browse.setFixedSize(22, 20)
+        register_ui_language_binding(owner, browse, "tooltip", "browse")
+        browse.clicked.connect(lambda: callback(key))
+        heading.addWidget(browse)
+        file_row = qt.QWidget(tile)
+        file_row.setFixedHeight(20)
+        file_layout = qt.QStackedLayout(file_row)
+        file_layout.setContentsMargins(0, 0, 0, 0)
+        file_layout.setStackingMode(qt.QStackedLayout.StackAll)
+        file_layout.addWidget(edit)
+        hint = qt.QLabel(file_row)
+        hint.setObjectName("dspaceInputHint")
+        hint.setAttribute(qt.Qt.WA_TransparentForMouseEvents)
+        hint.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Preferred)
+        file_layout.addWidget(hint)
+        file_layout.setCurrentWidget(hint)
+        tile_layout.addLayout(heading)
+        tile_layout.addWidget(file_row)
+        if parent_layout.count():
+            divider = qt.QFrame()
+            divider.setObjectName("dspaceInputDivider")
+            divider.setFixedWidth(1)
+            divider.setSizePolicy(qt.QSizePolicy.Fixed, qt.QSizePolicy.Expanding)
+            parent_layout.addWidget(divider)
+        parent_layout.addWidget(tile, 1)
+
+        fields[key] = edit
+        fields[key + "_tile"] = tile
+        fields[key + "_label"] = label
+        fields[key + "_hint"] = hint
+
+        def text_changed():
+            text = edit.toPlainText()
+            if _assign_dropped_paths(owner, key, text):
+                return
+            path = edit.property("dspaceSelectedPath") or ""
+            if not path or text != Path(path).name:
+                path = text.strip()
+                edit.setProperty("dspaceSelectedPath", path)
+            tooltip = path or (hint.toolTip if key == "raw" else "")
+            tile.setToolTip(tooltip)
+            edit.setToolTip(tooltip)
+            clear.setVisible(bool(path))
+            hint.setVisible(not path)
+            status.hide()
+            owner._refresh_run_button_state()
+
+        edit.textChanged.connect(text_changed)
+
+    def format_row(kind):
+        page = qt.QWidget()
+        page.setObjectName("dspaceFileStrip")
+        row = qt.QHBoxLayout(page)
+        row.setContentsMargins(1, 1, 1, 1)
+        row.setSpacing(0)
+        fields[kind + "_page"] = pages.addWidget(page)
+        return row
+
+    nifti = format_row("nifti")
+    add_field(nifti, "nifti_source", "DWI", owner._browse_prepare_input_source_path)
+    add_field(nifti, "bval", "bval", owner._browse_prepare_input_file)
+    add_field(nifti, "bvec", "bvec", owner._browse_prepare_input_file)
+    nrrd = format_row("nrrd")
+    add_field(nrrd, "nrrd_source", "NRRD / NHDR", owner._browse_prepare_input_source_path)
+    add_field(nrrd, "raw", "Detached data", owner._browse_prepare_input_file)
+    dicom = format_row("dicom")
+    add_field(dicom, "dicom_source", "DICOM folder", owner._browse_prepare_input_source_path)
+    optional = qt.QHBoxLayout()
+    add_field(optional, "mask", "Brain mask", owner._browse_prepare_input_file)
+    layout.addLayout(optional)
+    fields["mask_tile"].hide()
+    layout.addWidget(status)
 
     def update_format(index):
-        raw_row.setVisible(index == 1)
-        raw_label.setVisible(index == 1)
-        for widget in sidecar_rows:
-            widget.setVisible(index == 0)
-        fit = getattr(owner, "_queueCompactFit", None)
-        if callable(fit):
-            fit()
+        show_input_format(owner, tabs.tabData(index))
+        owner._refresh_run_button_state()
 
-    source_kind.currentChanged.connect(update_format)
-    for key in ("source", "raw", "bval", "bvec"):
-        edit = owner._prepareInputWidgets[key]
-        edit.textChanged.connect(lambda value, key=key: _assign_dropped_paths(owner, key, value))
+    tabs.currentChanged.connect(update_format)
+    show_input_format(owner, "nifti")
+
+    def use_folder(_path):
+        for key in ("nifti_source", "nrrd_source", "dicom_source", "bval", "bvec", "raw"):
+            fields[key].clear()
+
+    owner.ui.inputDirectoryPath.currentPathChanged.connect(use_folder)
     configuration_layout.addWidget(panel)
-    refresh_prepare_inputs_styles(owner, dark=dark)
+    apply_input_language(owner)
+    refresh_prepare_inputs_styles(owner)
+
+
+def show_input_format(owner, kind):
+    fields = owner._prepareInputWidgets
+    fields["source_kind"] = kind
+    fields["source"] = fields[kind + "_source"]
+    page = fields[kind + "_page"]
+    fields["format_pages"].setCurrentIndex(page)
+    tabs = fields["format_tabs"]
+    if tabs.currentIndex != page:
+        blocked = tabs.blockSignals(True)
+        tabs.setCurrentIndex(page)
+        tabs.blockSignals(blocked)
+    _update_drop_hint(owner)
+
+
+def sync_input_mode(owner):
+    fields = getattr(owner, "_prepareInputWidgets", {})
+    if "batch_root" not in fields:
+        return
+    node = owner._parameterNode
+    batch = bool(getattr(node, "batchMode", False))
+    fields["batch_mode" if batch else "single_mode"].setChecked(True)
+    fields["panel"].setVisible(not batch)
+    fields["batch_root"].setVisible(batch)
+    fields["batch_label"].setVisible(batch)
+    fields["mask_tile"].setVisible(not batch and getattr(node, "brainMaskBackend", "") == "provided")
+    owner.ui.subjectIdLabel.setVisible(not batch)
+    owner.ui.subjectIdLineEdit.setVisible(not batch)
+    owner._sync_path_widget(fields["batch_root"], getattr(node, "batchRoot", "") or "")
+    fields["single_mode"].setEnabled(not owner._pipelineActive)
+    fields["batch_mode"].setEnabled(not owner._pipelineActive)
+    fields["batch_root"].setEnabled(not owner._pipelineActive)
+
+
+def _update_drop_hint(owner):
+    fields = owner._prepareInputWidgets
+    zh = str(getattr(owner, "_onboardingLanguage", "en")).startswith("zh")
+    dicom = fields["source_kind"] == "dicom"
+    if zh:
+        text = "拖入文件夹，或点 …" if dicom else "拖入文件，或点 …"
+    else:
+        text = "Drop a folder below or click …" if dicom else "Drop files below or click …"
+    fields["drop_hint"].setText(text)
+
+
+def apply_input_language(owner):
+    _update_drop_hint(owner)
+    fields = owner._prepareInputWidgets
+    zh = str(getattr(owner, "_onboardingLanguage", "en")).startswith("zh")
+    if "batch_root" in fields:
+        from shared.ui_onboarding import onboarding_text
+
+        fields["title"].setText(onboarding_text("zh" if zh else "en", "section_inputs"))
+        owner.ui.configurationCollapsibleButton.setTitle("")
+        fields["single_mode"].setText("单个" if zh else "Single")
+        fields["batch_mode"].setText("批量" if zh else "Batch")
+        fields["batch_label"].setText("批量输入目录" if zh else "Batch Folder")
+        fields["batch_root"].setToolTip("选择包含多个受试者文件夹的目录。" if zh else
+                                        "Select the folder containing the subject folders.")
+    owner.ui.outputDirectoryLabel.setText("输出文件夹" if zh else "Output folder")
+    owner.ui.outputDirectoryPath.setToolTip(
+        "选择结果保存位置。留空则使用默认位置。" if zh else
+        "Choose where to save results. Leave blank to use the default location."
+    )
+    for key, en, cn in (
+        ("raw", "Detached data", "分离数据"),
+        ("dicom_source", "DICOM folder", "DICOM 文件夹"),
+        ("mask", "Brain mask", "脑掩膜"),
+    ):
+        fields[key + "_label"].setText(cn if zh else en)
+    for key, en, cn in (
+        ("nifti_source", ".nii / .nii.gz", ".nii / .nii.gz"),
+        ("bval", ".bval / bvals", ".bval / bvals"),
+        ("bvec", ".bvec / bvecs", ".bvec / bvecs"),
+        ("nrrd_source", ".nrrd / .nhdr", ".nrrd / .nhdr"),
+        ("raw", "Required for NHDR", "NHDR 必需"),
+        ("dicom_source", "DICOM series", "DICOM 序列"),
+        ("mask", "Drop or browse", "拖入或选择"),
+    ):
+        fields[key + "_hint"].setText(cn if zh else en)
+        fields[key].setAccessibleName(fields[key + "_label"].text)
+    raw_help = (
+        "可按 NHDR 头文件中的路径自动定位；找不到时再选择数据文件。" if zh else
+        "The NHDR header points to its data file. Select it here if the referenced file cannot be found."
+    )
+    fields["raw_hint"].setToolTip(raw_help)
+    if not fields["raw"].toPlainText():
+        fields["raw"].setToolTip(raw_help)
+        fields["raw_tile"].setToolTip(raw_help)
 
 
 def refresh_prepare_inputs_styles(owner: Any, *, dark: bool | None = None) -> None:
-    """Refresh inline stylesheets inside the Prepare Inputs panel for light/dark themes."""
-
-    widgets = getattr(owner, "_prepareInputWidgets", None) or {}
-    if not widgets:
-        return
     from shared.ui_styles import is_dark_mode
 
-    use_dark = is_dark_mode(getattr(owner, "_uiWidget", None)) if dark is None else bool(dark)
-    panel = widgets.get("panel")
-    if panel is not None:
-        if getattr(owner, "_advancedSettingsPanel", None) is not None:
-            panel.setStyleSheet("")
-        else:
-            panel.setStyleSheet(
-                "QWidget#prepareInputsPanel { background: #222830; border: 1px solid #394450; border-radius: 6px; }"
-                if use_dark
-                else "QWidget#prepareInputsPanel { background: #F6F8FB; border: 1px solid #D6DFE8; border-radius: 6px; }"
-            )
-
-
-def _path_row(owner: Any, *, key: str, placeholder: str, browse_callback):
-    import qt
-
-    row = qt.QWidget()
-    row_layout = qt.QHBoxLayout(row)
-    row_layout.setContentsMargins(0, 0, 0, 0)
-    edit = qt.QLineEdit()
-    edit.setPlaceholderText(placeholder)
-    edit.setToolTip(placeholder)
-    placeholder_key = {
-        "source": "source_placeholder",
-        "raw": None,
-        "bval": "bval_placeholder",
-        "bvec": "bvec_placeholder",
-        "metadata": "metadata_placeholder",
-        "mask": "brain_mask_placeholder",
-    }[key]
-    if placeholder_key:
-        register_ui_language_binding(owner, edit, "placeholder", placeholder_key)
-        register_ui_language_binding(owner, edit, "tooltip", placeholder_key)
-    row_layout.addWidget(edit, 1)
-    browse = qt.QPushButton("Browse...")
-    browse.setToolTip(placeholder)
-    register_ui_language_binding(owner, browse, "text", "browse")
-    if placeholder_key:
-        register_ui_language_binding(owner, browse, "tooltip", placeholder_key)
-    browse.connect("clicked()", lambda key=key: browse_callback(key))
-    row_layout.addWidget(browse)
-    clear = qt.QPushButton("Clear")
-    register_ui_language_binding(owner, clear, "text", "clear")
-    clear.connect("clicked()", lambda edit=edit: edit.setText(""))
-    row_layout.addWidget(clear)
-    owner._prepareInputWidgets[f"{key}_browse"] = browse
-    owner._prepareInputWidgets[f"{key}_clear"] = clear
-    return row, edit
-
-
-def _add_labeled_row(
-    owner: Any,
-    form_layout: Any,
-    translation_key: str,
-    field: Any,
-    *,
-    storage_key: str | None = None,
-) -> Any:
-    """Add an explicit form label so its text can change at runtime."""
-
-    import qt
-
-    label = qt.QLabel()
-    register_ui_language_binding(owner, label, "text", translation_key)
-    owner._prepareInputWidgets[storage_key or f"{translation_key}_label"] = label
-    form_layout.addRow(label, field)
-    return label
+    fields = getattr(owner, "_prepareInputWidgets", {})
+    panel = fields.get("panel")
+    if panel is None:
+        return
+    dark = is_dark_mode(panel) if dark is None else dark
+    if dark:
+        base, line, muted, ink, hover, action = (
+            "#292a2b", "#444547", "#b7b8ba", "#f2f2f2", "#363739", "#393a3b"
+        )
+    else:
+        base, line, muted, ink, hover, action = (
+            "#fcfcfc", "#dedfdf", "#606367", "#222426", "#f2f3f3", "#f0f1f1"
+        )
+    section = owner.ui.configurationCollapsibleButton
+    section.setStyleSheet(
+        f"QWidget#dspaceInputMode {{ background: {action}; border: 1px solid {line}; border-radius: 12px; }}"
+        f"QToolButton#dspaceModeOption {{ color: {muted}; background: transparent; border: 1px solid transparent;"
+        " border-radius: 9px; padding: 1px 7px; min-height: 16px; font-size: 11px; }"
+        f"QToolButton#dspaceModeOption:checked {{ background: {base}; color: {ink}; border-color: {line}; }}"
+        f"QToolButton#dspaceModeOption:hover:!disabled {{ color: {ink}; }}"
+        f"QLabel#subjectIdLabel, QLabel#inputDirectoryLabel {{ color: {ink}; font-weight: 400; }}"
+        f"QLineEdit#subjectIdLineEdit, ctkPathLineEdit#outputDirectoryPath QComboBox {{ border-color: {line}; }}"
+        f"QTabBar#dspaceFormatTabs::tab {{ background: transparent; color: {muted};"
+        " border: 0; border-bottom: 2px solid transparent; padding: 5px 9px 4px; }"
+        f"QTabBar#dspaceFormatTabs::tab:hover {{ background: {hover}; }}"
+        f"QTabBar#dspaceFormatTabs::tab:selected {{ color: {ink}; border-bottom-color: {ink}; font-weight: 600; }}"
+        f"QLabel#dspaceInputsTitle {{ color: {ink}; font-size: 16px; font-weight: 700; }}"
+        'QWidget#dspaceFileStrip, QWidget#dspaceInputTile[standalone="true"]'
+        f" {{ background: {base}; border: 1px solid {line}; border-radius: 6px; }}"
+        f"QFrame#dspaceInputDivider {{ background: {line}; border: 0; }}"
+        f"QLabel#dspaceInputName {{ background: transparent; color: {ink}; border: 0; font-weight: 600; }}"
+        f"QLabel#dspaceInputHint, QLabel#dspaceDropHint {{ background: transparent; color: {muted}; border: 0; font-size: 11px; }}"
+        f"QWidget#dspaceInputTile QPlainTextEdit {{ background: transparent; color: {ink};"
+        " border: 0; padding: 0; margin: 0; font-size: 11px; }"
+        f"QToolButton#dspaceInputAction {{ background: {action}; color: {ink}; border: 1px solid transparent;"
+        " border-radius: 4px; padding: 0; }"
+        f"QToolButton#dspaceInputAction:hover, QToolButton#dspaceInputAction:focus"
+        f" {{ background: {hover}; border-color: {line}; }}"
+    )
 
 
 def import_dicom_series(config, series):
@@ -279,13 +407,12 @@ def import_dicom_series(config, series):
 def _assign_dropped_paths(owner, field, text):
     """Route local-file URLs supplied by Qt's native text drop support."""
     import re
-    from pathlib import Path
     import qt
 
-    urls = re.findall(r"file:/+[^\s]+?(?=file:/+|\s|$)", str(text))
+    urls = re.findall(r"file:/+[^\r\n]+?(?=file:/+|[\r\n]|$)", str(text))
     if not urls:
-        return
-    paths = [Path(qt.QUrl(url).toLocalFile()) for url in urls]
+        return False
+    paths = [Path(qt.QUrl(url.strip()).toLocalFile()) for url in urls]
     assigned = {}
     detected_kind = None
     for path in paths:
@@ -299,15 +426,13 @@ def _assign_dropped_paths(owner, field, text):
         elif path.is_dir() or name.endswith((".nii", ".nii.gz", ".nrrd", ".nhdr")):
             assigned["source"] = path
             detected_kind = "dicom" if path.is_dir() else "nrrd" if name.endswith((".nrrd", ".nhdr")) else "nifti"
-    owner._set_prepare_inputs_widget_text(field, "")
+    previous = owner._prepare_inputs_widget_text(field)
+    owner._set_prepare_inputs_widget_text(field, previous)
     if detected_kind:
-        source_kind = owner._prepareInputWidgets["source_kind"]
-        for index in range(source_kind.count):
-            if source_kind.tabData(index) == detected_kind:
-                source_kind.setCurrentIndex(index)
-                break
+        show_input_format(owner, detected_kind)
     for key, path in assigned.items():
         owner._set_prepare_inputs_widget_text(key, str(path))
+    return True
 
 
 def import_detached_nrrd(config, raw):

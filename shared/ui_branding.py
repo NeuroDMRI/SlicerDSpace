@@ -25,10 +25,10 @@ def install_header_wordmark(owner, *, dark=None):
     pixmap = qt.QPixmap()
     if not pixmap.loadFromData(qt.QByteArray(artwork), 'SVG'):
         raise ValueError('Cannot decode the packaged SlicerDSpace wordmark')
-    pixmap = pixmap.scaled(832, 152, qt.Qt.KeepAspectRatio, qt.Qt.SmoothTransformation)
+    pixmap = pixmap.scaled(704, 128, qt.Qt.KeepAspectRatio, qt.Qt.SmoothTransformation)
     pixmap.setDevicePixelRatio(4.0)
     wordmark.setPixmap(pixmap)
-    wordmark.setFixedSize(208, 38)
+    wordmark.setFixedSize(176, 32)
     wordmark.setAccessibleName('SlicerDSpace')
     wordmark.setToolTip('SlicerDSpace')
     owner.ui.logoLabel.hide()

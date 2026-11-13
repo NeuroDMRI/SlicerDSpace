@@ -19,7 +19,7 @@ from qt import QPixmap, QSignalBlocker
 
 from shared.dependency_config import UI_DEPENDENCY_PATHS
 from shared.docs import doc_path
-from shared.input_import import InputImportConfig, detect_import_source_kind, prepare_inputs
+from shared.input_import import InputImportConfig, prepare_inputs
 from shared.model_assets import model_asset_path_or_none
 from shared.ui_error_dialogs import show_actionable_error_dialog
 from shared.ui_compact import close_input_format_help_popovers, install_compact_layout
@@ -432,6 +432,8 @@ class SharedWidgetMixin:
             button.enabled = False
             return
         validation = validation or self._topup_validation()
+        from shared.ui_prepare_inputs import sync_input_mode
+        sync_input_mode(self)
         self._refresh_subject_id_placeholder()
         cohort_experiments = bool(getattr(node, 'experimentsEnabled', False) and
                                   getattr(node, 'experimentScope', 'subject') == 'cohort')
@@ -1399,21 +1401,15 @@ class SharedWidgetMixin:
         widget = (getattr(self, "_prepareInputWidgets", {}) or {}).get(key)
         if not widget:
             return ""
-        return self._line_edit_text(widget)
-
-    def _prepare_inputs_combo_text(self, key: str, default: str) -> str:
-        widget = (getattr(self, "_prepareInputWidgets", {}) or {}).get(key)
-        if not widget:
-            return default
-        if hasattr(widget, "tabData"):
-            return str(widget.tabData(widget.currentIndex) or default)
-        value = getattr(widget, "currentText", "")
-        return str(value() if callable(value) else value or default).strip() or default
+        return str(widget.property("dspaceSelectedPath") or "").strip()
 
     def _set_prepare_inputs_widget_text(self, key: str, value: str) -> None:
         widget = (getattr(self, "_prepareInputWidgets", {}) or {}).get(key)
         if widget:
-            widget.setText(value)
+            widget.setProperty("dspaceSelectedPath", value)
+            widget.setPlainText(Path(value).name if value else "")
+            widget.setToolTip(value)
+            self._refresh_run_button_state()
 
     def _shared_input_directory_text(self) -> str:
         widget = getattr(self.ui, "inputDirectoryPath", None)
@@ -1455,26 +1451,26 @@ class SharedWidgetMixin:
         return str((node.subjectId if node else "") or "").strip()
 
     def _browse_prepare_input_source_path(self, key: str) -> None:
-        source_kind = self._prepare_inputs_combo_text("source_kind", "auto")
+        from shared.ui_prepare_inputs import show_input_format
+
         start_dir = self._prepare_inputs_widget_text(key) or self._shared_input_directory_text() or os.path.expanduser("~")
-        if source_kind in {"dicom", "canonical"}:
-            selected = qt.QFileDialog.getExistingDirectory(
-                slicer.util.mainWindow(),
-                "Select DWI source folder",
-                start_dir,
-            )
-            selected_text = str(selected or "").strip()
+        zh = self._onboardingLanguage.startswith("zh")
+        if key == "dicom_source":
+            caption = "DICOM 文件夹" if zh else "DICOM folder"
+            selected = qt.QFileDialog.getExistingDirectory(slicer.util.mainWindow(), caption, start_dir)
+            kind = "dicom"
         else:
+            caption = "选择影像文件" if zh else "Select image file"
             selected = qt.QFileDialog.getOpenFileName(
-                slicer.util.mainWindow(),
-                "Select DWI source file",
-                start_dir,
-                "DWI files (*.nii *.nii.gz *.nrrd *.nhdr);;All files (*)",
+                slicer.util.mainWindow(), caption, start_dir,
+                "DWI files (*.nii *.nii.gz *.nrrd *.nhdr)",
             )
-            selected_text = selected[0] if isinstance(selected, tuple) else selected
-            selected_text = str(selected_text or "").strip()
-        if selected_text:
-            self._set_prepare_inputs_widget_text(key, selected_text)
+            if isinstance(selected, tuple):
+                selected = selected[0]
+            kind = "nrrd" if str(selected).lower().endswith((".nrrd", ".nhdr")) else "nifti"
+        if selected:
+            show_input_format(self, kind)
+            self._set_prepare_inputs_widget_text("source", str(selected))
 
     def _browse_prepare_input_file(self, key: str) -> None:
         start_dir = self._prepare_inputs_widget_text(key) or self._prepare_inputs_widget_text("source") or os.path.expanduser("~")
@@ -1489,10 +1485,10 @@ class SharedWidgetMixin:
         if selected_text:
             self._set_prepare_inputs_widget_text(key, selected_text)
 
-    def _prepare_inputs_config(self, *, force_dry_run: bool = False) -> InputImportConfig:
+    def _prepare_inputs_config(self) -> InputImportConfig:
         source_text = self._prepare_inputs_widget_text("source")
         if not source_text:
-            raise ValueError("Select a DICOM folder, NIfTI file, NRRD/NHDR file, or canonical subject root.")
+            raise ValueError("Select a NIfTI or NRRD/NHDR file, or a DICOM folder.")
         from uuid import uuid4
         from shared.subject_id import derive_subject_id
         from shared.user_config import default_user_config_path
@@ -1504,10 +1500,7 @@ class SharedWidgetMixin:
             raise ValueError("Enter a valid subject ID.")
         workspace = default_user_config_path().parent / "subjects"
         subject_root = workspace / f"{safe_id}-{uuid4().hex[:12]}"
-        source_kind_text = self._prepare_inputs_combo_text("source_kind", "auto")
-        source_kind = detect_import_source_kind(source) if source_kind_text == "auto" else source_kind_text
-        backend = self._prepare_inputs_combo_text("backend", "auto")
-        output_kind = self._prepare_inputs_combo_text("output_kind", "canonical-nifti")
+        source_kind = self._prepareInputWidgets["source_kind"]
 
         def optional_path(key: str) -> Optional[Path]:
             value = self._prepare_inputs_widget_text(key)
@@ -1522,41 +1515,20 @@ class SharedWidgetMixin:
             subject_root=subject_root,
             subject_id=subject_id,
             source_kind=source_kind,
-            backend=backend,
-            output_kind=output_kind,
             bval_path=optional_path("bval") if source_kind == "nifti" else None,
             bvec_path=optional_path("bvec") if source_kind == "nifti" else None,
-            metadata_path=optional_path("metadata"),
-            mask_path=optional_path("mask"),
+            mask_path=optional_path("mask") if self._parameterNode.brainMaskBackend == "provided" else None,
             mrconvert_executable=mrconvert,
-            dry_run=force_dry_run,
         )
 
-    def _on_prepare_inputs_preview_clicked(self) -> None:
-        try:
-            manifest = prepare_inputs(self._prepare_inputs_config(force_dry_run=True))
-        except Exception as exc:
-            self._show_actionable_error(
-                title="Input Import Preview Failed",
-                what="SlicerDSpace could not build an input import plan.",
-                why="The selected source path, sidecars, source type, backend, or destination subject root is invalid.",
-                next_step="Check the source path and sidecar paths, or set Source type explicitly instead of auto.",
-                auto_fix="Not available. The preview does not mutate files.",
-                details=exc,
-            )
-            return
-        self.appendLog("[Prepare Inputs] Dry-run plan:\n" + json.dumps(manifest, indent=2, sort_keys=True))
-        slicer.util.infoDisplay("Input import plan created. See the SlicerDSpace log for details.", parent=self.parent)
-
     def _input_import_selection(self) -> tuple:
-        source_kind = self._prepare_inputs_combo_text("source_kind", "nifti")
-        file_fields = ["source", "mask", "metadata"]
+        source_kind = self._prepareInputWidgets["source_kind"]
+        file_fields = ["source", "mask"]
         if source_kind == "nifti":
             file_fields += ["bval", "bvec"]
         elif source_kind == "nrrd":
             file_fields.append("raw")
-        return (source_kind, self._shared_subject_id_text(), self._prepare_inputs_combo_text("backend", "auto"),
-                self._prepare_inputs_combo_text("output_kind", "canonical-nifti"),
+        return (source_kind, self._shared_subject_id_text(), self._parameterNode.brainMaskBackend,
                 *(self._prepare_inputs_widget_text(key) for key in file_fields))
 
     def _on_prepare_inputs_clicked(self, *, run_after: bool = False) -> None:
@@ -1575,8 +1547,9 @@ class SharedWidgetMixin:
         zh = getattr(self, "_onboardingLanguage", "en").startswith("zh")
         status_label = self._prepareInputWidgets["status"]
         status_label.setText("正在检查并导入影像…" if zh else "Checking and importing images…")
-        button = self._prepareInputWidgets["prepare_button"]
-        button.enabled = False
+        status_label.show()
+        input_panel = self._prepareInputWidgets["panel"]
+        input_panel.enabled = False
         self._refresh_run_button_state()
         def start(job, callback):
             future = Future()
@@ -1602,7 +1575,7 @@ class SharedWidgetMixin:
             self._inputImportPending = False
             if getattr(self, "_cleanedUp", False):
                 return
-            button.enabled = True
+            input_panel.enabled = True
             self._refresh_run_button_state()
             try:
                 manifest = future.result()
@@ -1622,11 +1595,11 @@ class SharedWidgetMixin:
                 if run_after:
                     self._onRunSelectedClicked()
             else:
-                status_label.clear()
+                status_label.hide()
 
         if config.source_kind != "dicom":
             raw = self._prepare_inputs_widget_text("raw")
-            if config.source_kind == "nrrd" and raw:
+            if config.source_kind == "nrrd" and config.source.suffix.lower() == ".nhdr" and raw:
                 from shared.ui_prepare_inputs import import_detached_nrrd
                 start(lambda: import_detached_nrrd(config, Path(raw).expanduser().resolve()), finish)
             else:
@@ -1647,8 +1620,8 @@ class SharedWidgetMixin:
                 return
             if selection != self._input_import_selection():
                 self._inputImportPending = False
-                button.enabled = True
-                status_label.clear()
+                input_panel.enabled = True
+                status_label.hide()
                 self._refresh_run_button_state()
                 return
             index = 0
@@ -1666,8 +1639,8 @@ class SharedWidgetMixin:
                 label = picked[0] if isinstance(picked, tuple) else picked
                 if not label:
                     self._inputImportPending = False
-                    button.enabled = True
-                    status_label.clear()
+                    input_panel.enabled = True
+                    status_label.hide()
                     self._refresh_run_button_state()
                     return
                 index = labels.index(str(label))
@@ -1679,17 +1652,6 @@ class SharedWidgetMixin:
             return failed
 
         start(lambda: scan_series(config.source), choose_series)
-
-    def _on_open_prepare_input_manifest_clicked(self) -> None:
-        subject_root_text = self._shared_input_directory_text()
-        if not subject_root_text:
-            slicer.util.infoDisplay("Select a subject root first.", parent=self.parent)
-            return
-        manifest_path = Path(subject_root_text).expanduser() / "input" / "input_import_manifest.json"
-        self._open_local_path(
-            manifest_path,
-            missing_message="input/input_import_manifest.json is not available for the selected subject root.",
-        )
 
     def _initialize_run_status_panel(self) -> None:
         install_run_status_panel(self)
@@ -3332,7 +3294,8 @@ class SharedWidgetMixin:
                 or getattr(self, "_selectedSetupActive", False)
                 or getattr(self, "_inputImportPending", False)):
             return
-        if self._prepare_inputs_widget_text("source"):
+        batch_mode = bool(getattr(self._parameterNode, "batchMode", False))
+        if not batch_mode and self._prepare_inputs_widget_text("source"):
             prepared = getattr(self, "_preparedInputSelection", None)
             if prepared != self._input_import_selection():
                 self._on_prepare_inputs_clicked(run_after=True)
@@ -3348,18 +3311,11 @@ class SharedWidgetMixin:
             from shared.ui_environment_check import request_prepare_environment
             request_prepare_environment(self)
             return
-        if getattr(self._parameterNode, 'experimentsEnabled', False):
-            from shared.ui_experiments import submit
-            submit(self)
-            return
         # Validate before saving settings, checking dependencies or starting a job.
-        from shared.ui_advanced_layout import enforce_single_subject_gui
-        enforce_single_subject_gui(self._parameterNode)
-        batch_mode = False
         if not self.validateInputs(manual=True):
             return
         raw_input_text = (self._parameterNode.inputDirectory or "").strip()
-        if raw_input_text:
+        if raw_input_text and not batch_mode:
             from shared.ui_compact import sync_detected_input_format
             from shared.ui_input_inspection import inspect_input_directory
 
@@ -3440,10 +3396,10 @@ class SharedWidgetMixin:
         )
 
         if batch_mode:
-            batch_root_text = (getattr(self._parameterNode, "batchRoot", "") or subject_root_text).strip()
+            batch_root_text = (getattr(self._parameterNode, "batchRoot", "") or "").strip()
             batch_options, error = validate_batch_run_options(
                 batch_root_text,
-                fallback_subject_root_text=subject_root_text,
+                fallback_subject_root_text="",
                 batch_size=int(getattr(self._parameterNode, "batchSize", 1) or 1),
                 arrange_inputs=getattr(self._parameterNode, "batchArrangeInputs", "none") or "none",
             )
@@ -3526,28 +3482,13 @@ class SharedWidgetMixin:
         self._startBackgroundPipeline(common_run_kwargs, external_paths, selected)
 
     def _show_topup_error(self, validation: TopupValidation) -> None:
-        tools = getattr(self, "_workflowToolsDialog", None)
-        if tools is not None:
-            tools.show()
-        section = getattr(self, "_advancedSettingsPanel", None)
-        if section is not None:
-            section.collapsed = False
-        selector = getattr(self, "_advancedCategorySelector", None)
-        if selector is not None:
-            selector.setCurrentIndex(0)
-        group = getattr(self.ui, "topupCollapsibleGroupBox", None)
-        if group is not None:
-            try:
-                group.collapsed = False
-            except Exception:
-                pass
         show_actionable_error_dialog(
             parent=self.parent,
             title="Distortion-correction settings need attention",
             what="The run was not started because a topup setting is invalid.",
             why="\n".join(validation.errors),
             next_step=(
-                "Open Products > Preprocessing > … > topup > Settings, "
+                "Open Analysis > Preprocessing > … > topup > Settings, "
                 "and correct or clear the invalid value."
             ),
             auto_fix="Not available; nothing was written.",

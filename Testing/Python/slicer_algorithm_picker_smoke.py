@@ -109,19 +109,13 @@ def run():
         dock.setFixedWidth(480)
         slicer.app.processEvents()
         slicer.util.mainWindow().grab().save(str(ROOT / 'main_multiselect.png'))
-        owner._workflowToolsDialog.show()
-        owner._advancedSettingsPanel.collapsed = False
-        for index in range(len(CATEGORIES)):
-            owner._advancedCategorySelector.setCurrentIndex(index)
-            slicer.app.processEvents()
-            owner._fitAdvancedPage()
-            owner._advancedSettingsPanel.grab().save(str(ROOT / f'advanced_{index}.png'))
-            assert owner._uiWidget.width <= 480, (index, owner._uiWidget.width)
-        checks.append('compact_parameter_categories_and_opt_in_experiments')
+        assert not owner._advancedSettingsPanel.isVisible()
+        assert not owner.ui.environmentCollapsibleButton.isVisible()
+        assert owner.ui.logCollapsibleButton.isVisible()
+        checks.append('compact_workflow_and_inline_log')
         combo.setCurrentIndex(combo.findData('zh'))
         assert all(button.text == '...' and button.width == 28 and '选择' in button.accessibleName
                    and '可多选' in button.toolTip for button in owner._algorithmButtons.values())
-        assert owner._dependencyDialogButton.text == '依赖与诊断'
         checks.append('chinese_picker_and_setup_labels')
         record = {'status': 'passed', 'checks': checks}
         code = 0

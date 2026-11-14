@@ -92,7 +92,6 @@ def run():
         record = json.loads(path.read_text())
         assert record['experiment'] and record['status'] == 'failed', record
         assert len(record['results']) == 2 and all(item['returncode'] for item in record['results'])
-        assert owner._runStatusTable.rowCount >= 2
         assert 'failed' in owner._statusMessageSource.lower(), owner._statusMessageSource
         checks.append('real_background_worker_retains_dependency_failures_per_subject')
         # Cancellation must address the owned process, not another Slicer session.

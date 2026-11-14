@@ -70,7 +70,7 @@ def install_run_status_panel(widget) -> None:
     actions live together under 5. Results.
     """
 
-    if getattr(widget, "_runStatusTable", None) is not None:
+    if getattr(widget, "_runHistoryComboBox", None) is not None or getattr(widget, "_runProgressBar", None) is not None:
         return
     from shared.ui_run_history import install_results_panel, install_run_progress_panel
 

@@ -132,7 +132,6 @@ def _check() -> None:
         or "runnable" not in environment_label.lower()
         or len(path_widgets) < 8
         or len(status_widgets) < len(path_widgets)
-        or not run_status_table
         or not run_status_panel
         or not any(text != "not checked" for text in status_texts.values())
         or not advanced_collapsed

@@ -32,7 +32,6 @@ from shared.ui_run_state import (
     run_state_from_manifest_status,
     run_state_presentation,
 )
-from shared.ui_run_status_panel import fit_table_height
 
 
 RUN_HISTORY_SETTING = "SlicerDSpace/UserSettings/runHistoryDirectories"
@@ -542,57 +541,6 @@ def install_results_panel(owner: Any) -> None:
     files.setContextMenuPolicy(qt.Qt.CustomContextMenu)
     files.customContextMenuRequested.connect(lambda position: _output_menu(owner, position))
 
-    table = qt.QTableWidget()
-    table.setObjectName("runStatusTable")
-    table.setColumnCount(6)
-    table.setHorizontalHeaderLabels(["Target", "State", "Reason", "Manifest", "QC", "Logs"])
-    table.setAlternatingRowColors(True)
-    table.setEditTriggers(qt.QAbstractItemView.NoEditTriggers)
-    table.setSelectionBehavior(qt.QAbstractItemView.SelectRows)
-    table.setHorizontalScrollMode(qt.QAbstractItemView.ScrollPerPixel)
-    # One text line per row. Prose cells elide on the right; the manifest, QC and log paths sit in hidden
-    # columns and show in the Target cell's tooltip. The height follows the rows (see fit_table_height).
-    table.setWordWrap(False)
-    table.setTextElideMode(qt.Qt.ElideRight)
-    table.setHorizontalScrollBarPolicy(qt.Qt.ScrollBarAlwaysOff)
-    table.verticalHeader().setVisible(False)
-    # Some supported PythonQt builds cannot wrap QWidget.fontMetrics().
-    # Keep the style's row height as a fallback so panel setup can complete.
-    try:
-        row_height = table.fontMetrics().height() + 8
-    except (TypeError, ValueError, AttributeError):
-        row_height = max(24, table.verticalHeader().defaultSectionSize)
-    table.verticalHeader().setDefaultSectionSize(row_height)
-    for column in (3, 4, 5):
-        table.setColumnHidden(column, True)
-    table.setToolTip("Per-stage outcome of the selected run. Double-click a row to open its QC file or logs.")
-    try:
-        header = table.horizontalHeader()
-        header.setStretchLastSection(False)
-        header.setSectionResizeMode(0, qt.QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(1, qt.QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(2, qt.QHeaderView.Stretch)
-    except Exception:
-        pass
-    fit_table_height(table)
-    table.cellDoubleClicked.connect(owner._on_run_status_table_double_clicked)
-    table.setContextMenuPolicy(qt.Qt.CustomContextMenu)
-
-    def result_menu(position):
-        index = table.indexAt(position)
-        target = table.item(index.row(), 0) if index.isValid() else None
-        if target is None or not target.text().startswith("segmentation."):
-            return
-        caption = ("编辑组织分割副本" if str(getattr(owner, "_onboardingLanguage", "en")).startswith("zh")
-                   else "Edit tissue copy in Segment Editor")
-        menu = qt.QMenu(table)
-        action = menu.addAction(caption)
-        action.connect("triggered()", lambda: owner._manage_result_scene("edit_tissue"))
-        menu.exec_(table.viewport().mapToGlobal(position))
-
-    table.customContextMenuRequested.connect(result_menu)
-    layout.addWidget(table)
-
     owner._resultSceneButtons = []
 
     report_row = qt.QHBoxLayout()
@@ -612,13 +560,13 @@ def install_results_panel(owner: Any) -> None:
 
     _bind(owner, run_label, "text", "run_selector_label")
 
-    owner._runStatusPanel = getattr(owner.ui, "resultsCollapsibleButton", None) or table
+    owner._runStatusPanel = getattr(owner.ui, "resultsCollapsibleButton", None) or columns
     owner._runHistoryComboBox = combo
     owner._runHistoryRecords = ()
     owner._runDetailsLabel = details
     owner._runSummaryLabel = summary
     owner._reviewStateLabel = review
-    owner._runStatusTable = table
+    owner._runStatusTable = None
     owner._runReportButton = report_button
     owner._runOutputTreeButton = output_tree_button
     owner._latestReportPath = None
@@ -731,12 +679,21 @@ def _output_menu(owner, position):
     if not raw_path or manifest_path is None:
         return
     nodes = _output_nodes(slicer, manifest_path, Path(raw_path))
-    if not nodes:
+    is_seg = item is not None and item.data(0, qt.Qt.UserRole + 1) == "segmentation"
+    if not nodes and not is_seg:
         return
     menu = qt.QMenu(tree)
     zh = str(getattr(owner, "_onboardingLanguage", "en")).startswith("zh")
-    unload = menu.addAction("从场景卸载" if zh else "Unload from scene")
-    if menu.exec_(tree.viewport().mapToGlobal(position)) == unload:
+    edit_action = (
+        menu.addAction("编辑组织分割副本" if zh else "Edit tissue copy in Segment Editor")
+        if is_seg
+        else None
+    )
+    unload = menu.addAction("从场景卸载" if zh else "Unload from scene") if nodes else None
+    chosen = menu.exec_(tree.viewport().mapToGlobal(position))
+    if edit_action is not None and chosen == edit_action:
+        owner._manage_result_scene("edit_tissue")
+    elif unload is not None and chosen == unload:
         for node in nodes:
             slicer.mrmlScene.RemoveNode(node)
         _refresh_output_visibility(owner)
@@ -798,6 +755,8 @@ def _show_output_files(owner, manifest):
     candidates, _ = result_candidates(manifest, allow_bundle_directory_scan=False)
     visual_paths = {item["path"] for item in candidates
                     if Path(item["path"]).suffix.lower() not in {".csv", ".tsv"}}
+    seg_paths = {item["path"] for item in candidates
+                 if str(item.get("product") or "").startswith("segmentation")}
     groups = {}
     for candidate in candidates:
         path = candidate["path"]
@@ -832,6 +791,8 @@ def _show_output_files(owner, manifest):
         for path, visual in paths.items():
             item = qt.QTreeWidgetItem(group, [Path(path).name, "○" if visual else "↗"])
             item.setData(0, qt.Qt.UserRole, path)
+            if path in seg_paths:
+                item.setData(0, qt.Qt.UserRole + 1, "segmentation")
             item.setToolTip(0, path)
     _refresh_output_visibility(owner)
 

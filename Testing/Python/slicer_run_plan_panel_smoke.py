@@ -85,22 +85,18 @@ def _poll(count: int) -> None:
 def _ui_result_ready(widget) -> bool:
     summary = getattr(widget, "_runSummaryLabel", None)
     summary_text = summary.text if summary else ""
-    if PLAN_ONLY:
-        table = getattr(widget, "_runStatusTable", None)
-        statuses = []
-        if table:
-            for row in range(table.rowCount):
-                status_item = table.item(row, 1)
-                statuses.append(status_item.text() if status_item else "")
-        return summary_text.startswith("Plan:") and any(status in {"queued", "will_run", "blocked"} for status in statuses)
-    report_button = getattr(widget, "_runReportButton", None)
-    latest_report = getattr(widget, "_latestReportPath", None)
     table = getattr(widget, "_runStatusTable", None)
     statuses = []
     if table:
         for row in range(table.rowCount):
             status_item = table.item(row, 1)
             statuses.append(status_item.text() if status_item else "")
+    if PLAN_ONLY:
+        if table is None:
+            return summary_text.startswith("Plan:")
+        return summary_text.startswith("Plan:") and any(status in {"queued", "will_run", "blocked"} for status in statuses)
+    report_button = getattr(widget, "_runReportButton", None)
+    latest_report = getattr(widget, "_latestReportPath", None)
     unfinished = {"queued", "running", "will_run"}
     from shared.ui_run_controller import summary_names_run_status
 
@@ -145,10 +141,11 @@ def _check() -> None:
     print(f"SLICERDSPACE_RUN_PANEL_PLAN_EXISTS={plan.is_file()}", flush=True)
     print(f"SLICERDSPACE_RUN_PANEL_REPORT_BUTTON_ENABLED={bool(report_button and report_button.enabled)}", flush=True)
     print(f"SLICERDSPACE_RUN_PANEL_LATEST_REPORT={latest_report}", flush=True)
+    table_present = table is not None
     bad = (
-        row_count < 4
+        (table_present and row_count < 4)
         or (not PLAN_ONLY and status_label == "Ready to run.")
-        or not any(status in {"queued", "will_run", "blocked", "skipped", "passed", "completed"} for status in statuses)
+        or (table_present and not any(status in {"queued", "will_run", "blocked", "skipped", "passed", "completed"} for status in statuses))
         or (not PLAN_ONLY and not manifest.is_file())
         or (not PLAN_ONLY and not plan.is_file())
         or not summary_text

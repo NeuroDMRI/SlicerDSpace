@@ -16,7 +16,7 @@ from shared.run_history import RunDiscovery, SUBJECT_MANIFEST_KIND, parse_run_ma
 from shared.result_scene import review_state_text
 
 WIDGET_KINDS = (
-    "QLabel", "QPushButton", "QComboBox", "QToolButton", "QTableWidget", "QWidget",
+    "QLabel", "QPushButton", "QComboBox", "QToolButton", "QTableWidget", "QSplitter", "QTreeWidget", "QWidget",
     "QHBoxLayout", "QVBoxLayout", "QFormLayout", "QGridLayout", "QDialog", "QDialogButtonBox", "QCheckBox",
 )
 
@@ -121,12 +121,11 @@ class ResultsPanelTest(unittest.TestCase):
 
     def test_summary_card_comes_first_then_details_review_and_table(self) -> None:
         qt, layout, owner = self.build()
-        self.assertEqual(
-            widget_names(layout)[:4],
-            ["runSummaryLabel", "runDetailsLabel", "reviewStateLabel", "runStatusTable"],
-        )
-        first = layout.method_calls[0]
-        self.assertEqual(first[0], "addLayout")  # the run row is above the card
+        self.assertIsNone(owner._runStatusTable)
+        names = {object_name(widget) for widget in qt.created}
+        self.assertNotIn("runStatusTable", names)
+        self.assertIn("runOutputFiles", names)
+        self.assertIn("reviewStateLabel", names)
 
     def test_placeholders_use_the_new_wording(self) -> None:
         qt, layout, owner = self.build()
@@ -135,29 +134,11 @@ class ResultsPanelTest(unittest.TestCase):
             ("Recorded QC: consult report\nVisual review: pending",),
         )
 
-    def test_stage_table_is_one_line_per_row_with_only_the_prose_columns_visible(self) -> None:
+    def test_stage_table_is_not_instantiated_in_results_panel(self) -> None:
         qt, layout, owner = self.build()
-        table = by_name(qt, "runStatusTable")
-        table.setWordWrap.assert_called_once_with(False)
-        table.setTextElideMode.assert_called_once_with(qt.Qt.ElideRight)
-        table.setHorizontalScrollBarPolicy.assert_called_once_with(qt.Qt.ScrollBarAlwaysOff)
-        self.assertCountEqual([call[0][0] for call in table.setColumnHidden.call_args_list if call[0][1]], [3, 4, 5])
-        header = table.verticalHeader.return_value
-        header.setVisible.assert_called_with(False)
-        header.setDefaultSectionSize.assert_called_once()
-        self.assertGreaterEqual(header.setDefaultSectionSize.call_args[0][0], 14)
-        columns = table.horizontalHeader.return_value
-        columns.setSectionResizeMode.assert_any_call(2, qt.QHeaderView.Stretch)  # Reason takes the width left over
-        table.setToolTip.assert_called_with(
-            "Per-stage outcome of the selected run. Double-click a row to open its QC file or logs."
-        )
-
-    def test_stage_table_height_fits_the_rows_instead_of_a_fixed_minimum(self) -> None:
-        qt, layout, owner = self.build()
-        table = by_name(qt, "runStatusTable")
-        table.setMinimumHeight.assert_not_called()
-        # header 24 + one row (empty table counts as 1) 22 + frame 2 * 1
-        table.setFixedHeight.assert_called_with(24 + 22 + 2)
+        self.assertIsNone(owner._runStatusTable)
+        self.assertEqual([w for w in qt.created if w.kind == "QTableWidget"], [])
+        self.assertNotIn("runStatusTable", {object_name(w) for w in qt.created})
 
     def test_scene_actions_are_one_row_of_four_and_reports_one_row_of_two(self) -> None:
         qt, layout, owner = self.build()

@@ -13,6 +13,10 @@ from slicer.ScriptedLoadableModule import (
 )
 from slicer.parameterNodeWrapper import Choice, WithinRange, parameterNodeWrapper
 from slicer.util import VTKObservationMixin
+from shared.bundled_python import activate_bundled_python
+
+activate_bundled_python()
+
 from shared.algorithm_selection import (
     BUNDLES,
     CONNECTOME,

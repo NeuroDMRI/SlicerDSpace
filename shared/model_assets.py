@@ -24,6 +24,7 @@ from shared.model_asset_integrity import (
 
 
 MODEL_ASSETS_ENV = "SLICERDSPACE_MODEL_ASSETS_DIR"
+BUNDLED_MODEL_ASSETS_ENV = "SLICERDSPACE_BUNDLED_MODEL_ASSETS_ROOT"
 
 # In-process cache of verified sha256 digests, lazily loaded from and
 # persisted to disk (see _sha256_cache()) so a file is only re-hashed when
@@ -93,11 +94,37 @@ def configured_model_assets_root(explicit: Path | str | None = None) -> Path:
     return default_user_model_assets_root().expanduser().resolve()
 
 
+def bundled_model_asset_roots(repo_root: Path | str | None = None) -> tuple[Path, ...]:
+    """Return existing ``bundled-model-assets`` directories inside an installed extension."""
+
+    env_override = os.environ.get(BUNDLED_MODEL_ASSETS_ENV)
+    candidates: list[Path] = []
+    if env_override:
+        candidates.append(Path(env_override).expanduser().resolve())
+    else:
+        resolved = Path(repo_root or Path(__file__).resolve().parents[1]).expanduser().resolve()
+        if resolved.name == "qt-scripted-modules" and len(resolved.parents) >= 3:
+            candidates.append(resolved.parents[2] / "bundled-model-assets")
+        candidates.append(resolved / "bundled-model-assets")
+    valid: list[Path] = []
+    for cand in candidates:
+        if cand.is_dir():
+            real = cand.resolve()
+            if real not in valid:
+                valid.append(real)
+    return tuple(valid)
+
+
 def legacy_repo_asset_roots(repo_root: Path | str) -> tuple[Path, ...]:
-    """Return checkout-relative roots used by older SlicerDSpace installs."""
+    """Return bundled extension asset roots and checkout-relative roots."""
 
     root = Path(repo_root).expanduser().resolve()
-    return (root,)
+    roots = [*bundled_model_asset_roots(root), root]
+    deduped: list[Path] = []
+    for item in roots:
+        if item not in deduped:
+            deduped.append(item)
+    return tuple(deduped)
 
 
 def common_model_asset_roots() -> tuple[Path, ...]:

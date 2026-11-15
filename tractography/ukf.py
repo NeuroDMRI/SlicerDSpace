@@ -104,7 +104,12 @@ def resolve_executable(explicit=None, name="UKFTractography"):
         return Path(resolve_cli_executable(name.lower())).resolve()
     except (RuntimeError, AttributeError, ImportError, FileNotFoundError) as exc:
         # Background PythonSlicer does not instantiate the GUI module registry.
-        roots = [Path(value) for key in ("SLICER_HOME", "Slicer_HOME") if (value := os.environ.get(key))]
+        roots = []
+        module_root = Path(__file__).resolve().parents[1]
+        if module_root.name == "qt-scripted-modules" and len(module_root.parents) >= 3:
+            roots.append(module_root.parents[2])
+        roots.append(module_root)
+        roots.extend(Path(value) for key in ("SLICER_HOME", "Slicer_HOME") if (value := os.environ.get(key)))
         roots.append(Path(sys.executable).resolve().parent.parent)
         for root in roots:
             for pattern in ("lib/Slicer-*/cli-modules/*", "slicer.org/Extensions-*/*/lib/Slicer-*/cli-modules/*"):

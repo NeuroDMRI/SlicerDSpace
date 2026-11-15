@@ -215,9 +215,12 @@ def _run_tool(argv, env):
             except OSError:
                 head = b''
             if head.startswith(b'#!') and b'python' in head.lower():
-                cmd = [sys.executable, *cmd]
+                from shared.external_process import _default_slicer_python
+                launcher = _default_slicer_python()
+                py_cmd = str(launcher) if launcher is not None else sys.executable
+                cmd = [py_cmd, *cmd]
                 env = dict(env)
-                if os.environ.get('PYTHONHOME'):
+                if launcher is None and os.environ.get('PYTHONHOME'):
                     env['PYTHONHOME'] = os.environ['PYTHONHOME']
                 lib_dir = p.parent.parent / 'lib'
                 if lib_dir.is_dir():

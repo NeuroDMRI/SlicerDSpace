@@ -2,6 +2,8 @@
 
 from .branding import mirror_environment
 mirror_environment()
+from .bundled_python import activate_bundled_python
+activate_bundled_python()
 
 from .pipeline import (
     RawInputBundle,

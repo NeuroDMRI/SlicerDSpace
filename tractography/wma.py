@@ -861,7 +861,9 @@ def _run_native_org(config, staging, wma_root, slicer, python, env, manifest, st
         worker = Path(temp_dir) / "harden.py"
         worker.write_text(
             "import sys, traceback, slicer\n"
+            f"sys.path.insert(0, {str(scripts.parent)!r})\n"
             f"sys.path.insert(0, {str(scripts)!r})\n"
+            "from shared.bundled_python import activate_bundled_python; activate_bundled_python()\n"
             "from run_wma_harden_transform import main\n"
             "try:\n"
             "    result = main(sys.argv[1:])\n"
@@ -1083,6 +1085,10 @@ def run_wma_org_atlas(
                 slicer_python = find_pythonslicer(runtime_executable.parent)
                 if slicer_python is None:
                     raise FileNotFoundError(f"Native WMA needs PythonSlicer from {runtime_executable}.")
+            if slicer_python is not None or not native_posix:
+                from shared.bundled_python import inject_bundled_python_env
+
+                inject_bundled_python_env(env)
             library_entries = [str(path) for path in _slicer_runtime_library_paths(runtime_executable)] if native_posix else []
             if native_posix and (
                 (config.export_diffusion_measures and config.measurement_backend == "fibertractmeasurements")

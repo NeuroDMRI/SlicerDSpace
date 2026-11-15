@@ -235,7 +235,9 @@ def python_tool_environment(python_executable: Path | str,
     """
     path = Path(python_executable).expanduser().absolute()
     if is_slicer_python(path):
-        return startup_environment(extra_env)
+        from shared.bundled_python import inject_bundled_python_env
+
+        return dict(inject_bundled_python_env(startup_environment(extra_env)))
     return external_python_environment(extra_env, path_prepend=[path.parent])
 
 

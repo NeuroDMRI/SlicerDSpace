@@ -52,8 +52,33 @@ def build_setup_plan(result, *, installed_extensions=(), loaded_extensions=None,
         and all(getattr(item, "status", "") == "available" for item in torch_statuses)
         and not repair
     )
-    required_extensions = (["PyTorch"] if (need_torch or native_mask_torch) and not torch_already_ready else [])
-    if need_ukf:
+    native_mask_statuses = [
+        item for item in getattr(result, "statuses", ())
+        if getattr(item, "key", "") == "brain_mask_backend" and getattr(item, "required", False)
+    ]
+    native_mask_ready = (
+        closure_covered
+        and bool(native_mask_statuses)
+        and all(getattr(item, "status", "") == "available" for item in native_mask_statuses)
+        and not repair
+    )
+    torch_ready = (
+        (torch_already_ready if need_torch else True)
+        and ((native_mask_ready or torch_already_ready) if native_mask_torch else True)
+        and (bool(torch_statuses) or bool(native_mask_statuses))
+    )
+    required_extensions = (["PyTorch"] if (need_torch or native_mask_torch) and not torch_ready else [])
+    ukf_statuses = [
+        item for item in getattr(result, "statuses", ())
+        if getattr(item, "key", "") == "command:UKFTractography"
+    ]
+    ukf_already_ready = (
+        closure_covered
+        and bool(ukf_statuses)
+        and all(getattr(item, "status", "") == "available" for item in ukf_statuses)
+        and not repair
+    )
+    if need_ukf and not ukf_already_ready:
         required_extensions.append("UKFTractography")
     missing = [item for item in environment_missing_items(result) if item.required]
     from shared.backend_sources import SOURCES, source_root, prepare_sources

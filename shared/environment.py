@@ -823,6 +823,12 @@ def _common_command_dirs(group: str, platform_name: str) -> tuple[Path, ...]:
     elif group == "freesurfer":
         candidates.extend(home / "bin" for home in _common_freesurfer_homes(platform_name))
     elif group == "wma":
+        if platform_name != "Windows":
+            from shared.backend_sources import available_source
+
+            prepared_wma = available_source("wma")
+            if prepared_wma is not None:
+                candidates.extend([prepared_wma / "bin", prepared_wma / "utilities"])
         candidates.extend(
             [
                 Path("/usr/local/whitematteranalysis/bin"),

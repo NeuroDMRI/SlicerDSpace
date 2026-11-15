@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from shared.environment import resolve_freesurfer_home
-from shared.external_process import interpreter_path, merged_startup_environment, text_subprocess_kwargs
+from shared.external_process import interpreter_path, is_slicer_python, merged_startup_environment, text_subprocess_kwargs
 
 import nibabel as nib
 import numpy as np
@@ -386,6 +386,10 @@ def run_ddsurfer_postprocess(
 
     _emit("[DDSurfer Postprocess] Running: " + " ".join(cmd), log)
     env = merged_startup_environment()
+    if is_slicer_python(python_bin):
+        from shared.bundled_python import inject_bundled_python_env
+
+        inject_bundled_python_env(env)
     env["SLICERDSPACE_ANATOMY_DIRNAME"] = ANATOMY_OUTPUT_NAME
     if os.name == "nt":
         wslenv = env.get("WSLENV", "").strip(":")

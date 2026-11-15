@@ -98,7 +98,7 @@ def inspect_surface_runtime(runtime=None, freesurfer_home=None, license_file=Non
         )
         if license_file is not None:
             command += ['--license-file', str(license_file)]
-        result = subprocess.run(command, env=backend_environment(), capture_output=True, text=True, timeout=60)
+        result = subprocess.run(command, env=backend_environment(python_bin=python_bin), capture_output=True, text=True, timeout=60)
         if result.returncode:
             raise RuntimeError(result.stderr[-2000:] or result.stdout[-2000:])
         return json.loads(result.stdout.strip().splitlines()[-1])

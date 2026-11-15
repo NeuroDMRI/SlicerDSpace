@@ -10,7 +10,7 @@ from pathlib import Path
 import subprocess
 import sys
 
-from shared.external_process import external_python_environment, text_subprocess_kwargs
+from shared.external_process import external_python_environment, is_slicer_python, text_subprocess_kwargs
 
 BACKEND_ROOT = Path(__file__).resolve().parent / 'ddsurfer_backend'
 
@@ -59,20 +59,24 @@ def python_executable(explicit=None):
     return str(current)
 
 
-def backend_environment(extra=None):
+def backend_environment(extra=None, *, python_bin=None):
     environment = external_python_environment()
     # Slicer ITK factories can crash SimpleITK from a different Python runtime.
     for key in ('ITK_AUTOLOAD_PATH', 'QT_PLUGIN_PATH'):
         environment.pop(key, None)
     if extra:
         environment.update({str(k): str(v) for k, v in extra.items() if v is not None})
+    if is_slicer_python(python_executable(python_bin)):
+        from shared.bundled_python import inject_bundled_python_env
+
+        inject_bundled_python_env(environment)
     return environment
 
 
 def run_backend(arguments, *, python_bin=None, env=None, log=None, log_path=None):
     command = [python_executable(python_bin), *map(str, arguments)]
     # PythonSlicer rebuilds its own runtime; external Python must not inherit it.
-    environment = backend_environment(env)
+    environment = backend_environment(env, python_bin=python_bin)
     environment['PYTHONUNBUFFERED'] = '1'
     if log:
         log('[DDSurfer] ' + ' '.join(command))
@@ -135,7 +139,7 @@ def runtime_info(python_bin=None):
         "print(json.dumps(dict(python=sys.version,executable=sys.executable,"
         "torch=torch.__version__,cuda=torch.version.cuda,numpy=numpy.__version__,"
         "nibabel=nibabel.__version__,SimpleITK=SimpleITK.Version_VersionString(),trimesh=trimesh.__version__)))"]
-    completed = subprocess.run(command, cwd=str(BACKEND_ROOT), env=backend_environment(),
+    completed = subprocess.run(command, cwd=str(BACKEND_ROOT), env=backend_environment(python_bin=python_bin),
                                capture_output=True, timeout=60, **text_subprocess_kwargs())
     if completed.returncode:
         raise RuntimeError('DDSurfer Python runtime probe failed: ' + completed.stderr)

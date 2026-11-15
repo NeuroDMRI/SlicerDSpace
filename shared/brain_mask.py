@@ -134,20 +134,42 @@ def pnl_native_resources() -> list[Path]:
             *(PNL_VENDOR_DIR / relative for relative in sorted(record["files"]))]
 
 
+def _has_bundled_native_pnl_assets() -> bool:
+    from shared.model_assets import bundled_model_asset_roots
+
+    repo_root = Path(__file__).resolve().parents[1]
+    for root in bundled_model_asset_roots(repo_root):
+        model_dir = root / "brain_mask" / "pnl_cnn_torch"
+        if all((model_dir / name).is_file() for name in ("weights.json", PNL_TEMPLATE_NAME, "axial.pt", "coronal.pt", "sagittal.pt")):
+            return True
+    return False
+
+
 def resolve_pnl_mask_route(route: str | None = "auto", system: str | None = None) -> str:
     """SC-1a: ``managed`` or ``native`` for the setting ``auto`` | ``managed`` | ``native``.
 
-    ``auto`` is ``managed`` on Linux and ``native`` on macOS and Windows. On Windows the mask runs in Windows Slicer's
-    Python (only the MRtrix and FSL tools go through WSL), and the managed route is refused there; the managed ``pnl_cnn``
-    runtime has no macOS or Windows build, so native is the only PNL route on those systems.
+    ``auto`` is ``managed`` on Linux and ``native`` on macOS and Windows. When an All-in-One Linux package bundles
+    verified ``pnl_cnn_torch`` weights and no external Conda ``pnl_cnn`` runtime is configured, ``auto`` uses ``native``
+    so clean offline installs run out-of-the-box without Conda/ANTs.
     """
     route = route or "auto"
     if route not in PNL_MASK_ROUTES:
         raise ValueError("pnl_mask_route must be one of: " + ", ".join(PNL_MASK_ROUTES))
     if route != "auto":
         return route
-    # S1 (SC-1 fix round): Windows resolves auto to native (spec SC-1a); managed only on Linux.
-    return "managed" if (system or platform.system()) == "Linux" else "native"
+    eff_system = system or platform.system()
+    if eff_system != "Linux":
+        return "native"
+    if not os.environ.get("SLICERDSPACE_PNL_MASK_PYTHON") and _has_bundled_native_pnl_assets():
+        try:
+            from shared.managed_runtimes import PROFILES, runtime_root
+
+            managed_script = runtime_root() / PROFILES["pnl_cnn"]["directory"] / "bin" / "pnl-brain-mask"
+            if not managed_script.is_file():
+                return "native"
+        except Exception:
+            return "native"
+    return "managed"
 
 
 def pnl_route_record(route: str) -> dict[str, str]:

@@ -3,17 +3,23 @@
 import json
 from pathlib import Path
 
-from shared.model_assets import configured_model_assets_root, _sha256_cache, _persist_sha256_cache
+import os
+
+from shared.model_assets import (
+    MODEL_ASSETS_ENV,
+    bundled_model_asset_roots,
+    configured_model_assets_root,
+    _sha256_cache,
+    _persist_sha256_cache,
+)
 from shared.model_asset_integrity import ModelAssetIntegrityError, verify_against_manifest
 
 
 MANIFEST = Path(__file__).resolve().parents[1] / "models/external_assets_manifest.json"
 
 
-def verified_resource_directory(profile, *, asset_root=None):
-    manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+def _verify_profile_in_root(profile, root: Path, manifest: dict, *, allow_omitted_wma_archives: bool = False):
     definition = manifest["profiles"][profile]
-    root = configured_model_assets_root(asset_root)
     paths, visited = [], set()
 
     def collect(name):
@@ -26,12 +32,17 @@ def verified_resource_directory(profile, *, asset_root=None):
         paths.extend(item.get("required_paths", []))
 
     collect(profile)
-    if not paths or any(not (root / path).is_file() for path in paths):
+    if not paths:
+        return None
+    has_index = profile == "wma" or bool(definition.get("extracted_index"))
+    index_relative = definition.get("extracted_index", "bundles/wma/extracted_resource_index.json")
+    if allow_omitted_wma_archives and has_index and (root / index_relative).is_file():
+        paths = [p for p in paths if not ("/archives/" in p and not (root / p).is_file())]
+    if any(not (root / path).is_file() for path in paths):
         return None
     cache = _sha256_cache()
     records = {relative: manifest["asset_records"][relative] for relative in dict.fromkeys(paths)}
-    if profile == "wma" or definition.get("extracted_index"):
-        index_relative = definition.get("extracted_index", "bundles/wma/extracted_resource_index.json")
+    if has_index:
         index_path = root / index_relative
         ok, reason = verify_against_manifest(index_path, index_relative,
                                             records, cache=cache)
@@ -55,6 +66,21 @@ def verified_resource_directory(profile, *, asset_root=None):
             raise ModelAssetIntegrityError(f"Optional resource integrity check failed: {relative}: {reason}")
     _persist_sha256_cache()
     return root / definition["directory"]
+
+
+def verified_resource_directory(profile, *, asset_root=None):
+    manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    root = configured_model_assets_root(asset_root)
+    verified = _verify_profile_in_root(profile, root, manifest, allow_omitted_wma_archives=False)
+    if verified is not None:
+        return verified
+    if asset_root is None and not os.environ.get(MODEL_ASSETS_ENV):
+        repo_root = Path(__file__).resolve().parents[1]
+        for bundled_root in bundled_model_asset_roots(repo_root):
+            verified = _verify_profile_in_root(profile, bundled_root, manifest, allow_omitted_wma_archives=True)
+            if verified is not None:
+                return verified
+    return None
 
 
 def resolve_wma_atlas_directory(explicit=None, *, asset_root=None, atlas_family="org"):

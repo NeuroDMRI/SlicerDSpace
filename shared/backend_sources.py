@@ -29,9 +29,31 @@ SOURCES = {
 }
 
 
+BUNDLED_SOURCES_ENV = "SLICERDSPACE_BUNDLED_SOURCES_ROOT"
+
+
 def source_root():
     from shared.model_assets import default_user_model_assets_root
     return default_user_model_assets_root().parent / "algorithm-sources"
+
+
+def bundled_source_roots():
+    env_override = os.environ.get(BUNDLED_SOURCES_ENV)
+    candidates = []
+    if env_override:
+        candidates.append(Path(env_override).expanduser().resolve())
+    else:
+        resolved = Path(__file__).resolve().parents[1]
+        if resolved.name == "qt-scripted-modules" and len(resolved.parents) >= 3:
+            candidates.append(resolved.parents[2] / "bundled-sources")
+        candidates.append(resolved / "bundled-sources")
+    valid = []
+    for cand in candidates:
+        if cand.is_dir():
+            real = cand.resolve()
+            if real not in valid:
+                valid.append(real)
+    return tuple(valid)
 
 
 def file_hash(path):
@@ -76,12 +98,20 @@ def verify_source(name, directory):
 
 def available_source(name, root=None):
     directory = profile_path(name, root)
-    if not directory.exists():
-        return None
-    try:
-        return verify_source(name, directory)
-    except (OSError, ValueError, KeyError, TypeError):
-        return None
+    if directory.exists():
+        try:
+            return verify_source(name, directory)
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
+    if root is None:
+        for bundled_root in bundled_source_roots():
+            bundled_dir = profile_path(name, bundled_root)
+            if bundled_dir.exists():
+                try:
+                    return verify_source(name, bundled_dir)
+                except (OSError, ValueError, KeyError, TypeError):
+                    continue
+    return None
 
 
 @contextmanager

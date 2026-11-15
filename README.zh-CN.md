@@ -145,7 +145,7 @@ Agent 会检查可用空间和已有资源，等你选择后再下载，并保�
 - **Linux (`x86_64`)**：`SlicerDSpace-v0.1.1-Linux-x64.tar.gz`
 - **macOS (Apple Silicon `arm64`)**：`SlicerDSpace-v0.1.1-macOS-arm64.tar.gz`
 
-每个安装包均包含 SlicerDSpace 扩展本体及模块化内置于 `SlicerDSpace/bundled-runtimes/` 的三大原生运行环境（**MRtrix3 `3.0.8`**、**FSL `2602.0`** 含 `topup`/`applytopup`/`eddy_cpu`、**FreeSurfer Surface Runtime** 含 7 个表面命令与球面模板，不包含任何个人专属 FreeSurfer 激活文件；运行皮层表面后处理需用户自备 FreeSurfer 许可证文件）。在 **3D Slicer 5.10.0** 中通过 **View > Extensions Manager > Install Extensions > Install Extension from File** 选择该压缩包安装并重启 Slicer，首次启动会自动识别内置依赖并通过 `tree_sha256` 校验文件完整性（若内置运行包被误删或损坏，可从统一安装包自动修复）；深度学习模型权重（`DDSeg`、`DDParcel`、`DDSurfer`、`TractCloud`、`PNL`）与大型白质图谱（`ORG`）在首次使用时按需下载。（Intel `x86_64` Mac 真机硬件尚未实测验证。）
+每个安装包均包含 SlicerDSpace 扩展本体及模块化内置于 `SlicerDSpace/bundled-runtimes/` 的三大原生运行环境（**MRtrix3 `3.0.8`**、**FSL `2602.0`** 含 `topup`/`applytopup`/`eddy_cpu`、**FreeSurfer Surface Runtime** 含 7 个表面命令与球面模板，不包含任何个人专属 FreeSurfer 激活文件；运行皮层表面后处理需用户自备 FreeSurfer 许可证文件）。其中 **Windows (`x86_64`)** 与 **Linux (`x86_64`)** 安装包为全量离线开箱即用一体包（All-in-One），已同时内置全部 Python 3.12 依赖库（`bundled-python/`）、全部深度学习模型权重与大型图谱（`bundled-model-assets/`：`DDSeg`、`DDParcel`、`DDSurfer`、`TractCloud`、`PNL` 与已解压 `ORG`）、算法源码（`bundled-sources/`）及 `UKFTractography` CLI，安装重启后即可直接运行全部工作流，无需额外拉取模型权重或配置外部环境。在 **3D Slicer 5.10.0** 中通过 **View > Extensions Manager > Install Extensions > Install Extension from File** 选择该压缩包安装并重启 Slicer 即可。（macOS `arm64` 版本在首次使用时按需准备 Python 依赖与模型权重；Intel `x86_64` Mac 真机硬件尚未实测验证。）
 
 ### 方式二：从源码部署插件
 

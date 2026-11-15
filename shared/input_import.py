@@ -98,7 +98,13 @@ def packaged_dcm2niix() -> Path | None:
     module_file = getattr(dcm2niix, "__file__", None)
     if isinstance(module_file, (str, os.PathLike)) and str(module_file):
         folder = Path(module_file).parent
-        candidates.extend([folder.parent / "bin" / "dcm2niix", folder / "bin" / "dcm2niix"])
+        candidates.extend([
+            folder.parent / "bin" / "dcm2niix",
+            folder.parent / "Scripts" / "dcm2niix",
+            folder.parent.parent / "bin" / "dcm2niix",
+            folder.parent.parent / "Scripts" / "dcm2niix",
+            folder / "bin" / "dcm2niix",
+        ])
     for path in candidates:
         for candidate in (path, path.with_name(path.name + ".exe")):
             if candidate.is_file() and os.access(candidate, os.X_OK):

@@ -42,7 +42,7 @@ METHODS = (
     ("count", "Connectome", "Streamline count", "Endpoint assignment to DDParcel nodes.", "Python or eligible MRtrix3 backend", [50, 29], "connectome/pipeline.py"),
     ("sift2", "Connectome", "SIFT2-weighted count", "FOD-informed weighting and matrix construction with matched tracks.", "MRtrix3; corresponding tractogram and weights", [16, 29, 50], "connectome/pipeline.py"),
     ("scalar_length", "Connectome", "Scalar / length summaries", "Mean FA, MD, ODI or another scalar; mean and total streamline length.", "Python API; matched maps, nodes and tracks", [50, 29, 30], "connectome/pipeline.py"),
-    ("regional", "Regional analysis", "Selected-region analysis", "Reuse maps for ROI statistics, filter tracks and extract node submatrices.", "Advanced settings; workflow utility using completed outputs", [3, 30, 50], "shared/region_analysis.py"),
+    ("regional", "Regional analysis", "Selected-region analysis", "Reuse maps for ROI statistics, filter tracks and extract node submatrices.", "CLI / Python workflow utility using completed outputs", [3, 30, 50], "shared/region_analysis.py"),
 )
 
 

@@ -15,36 +15,33 @@ shown; this project is not yet in the official Extensions Catalog.
 
 ## Prepare A Subject
 
-Use authorized, de-identified DWI with matching bval/bvec, or a DICOM series.
-A brain mask is optional: without one, the selected mask backend (PNL CNN by
-default) makes it. Follow the canonical input layout in the README. DICOM/NRRD
-conversion is under **Advanced settings > Regions & input import > Input import / conversion**; preview
-before writing. The DTI fit runs inside Slicer; no extra extension is needed for it.
+Use authorized, de-identified DWI in NIfTI (with matching bval/bvec), NRRD/NHDR,
+or a DICOM folder (choosing the target series if multiple series are present).
+Under **Inputs**, select the DWI source directly; import and validation into
+`<subject>/input/` run automatically when execution starts. A brain mask is optional:
+supply an existing mask under **Inputs** or let the selected mask backend (PNL CNN by
+default) generate one. The DTI fit runs inside Slicer; no extra extension is needed for it.
 
-Tick the products you need. The plugin adds the prerequisites of each product
-by itself; preprocessing is never added without your tick.
-Check the runtime in the separate **Environment and installation** section.
-Choose **Prepare selected analysis environment**. One dialog lists the downloads
-with their licences; press **Accept licences and install** once.
-Restart when requested, then click Prepare again to continue. After the install,
-a self-check runs for each feature.
-Checks run in a cancellable background process and update the inline summary.
+Under **Analysis**, tick the stages you need. The plugin adds required upstream
+prerequisites automatically; preprocessing is never added unless ticked.
+When you click **Run SlicerDSpace**, preflight dependency checks run for the selected
+stages first. If required packages, external tools or model weights are missing,
+use **Prepare selected analysis environment** when prompted: one dialog lists the
+required downloads and licences, and pressing **Accept licences and install** downloads,
+verifies and caches them for reuse (restart Slicer if requested, then run again).
 Preparing an already-ready environment does not prompt, download or reinstall.
-Dependency details, offline import, repair and manual paths are under
-**More options (offline, repair, paths)** in the Environment section.
-Use **Use offline model resources** for a predownloaded model directory, or
-**Repair selected managed tools** for a damaged plugin-managed runtime.
-See [managed setup](MANAGED_SETUP.md) for coverage and platform limits.
+Dependency details, **Use offline model resources**, **Repair selected managed tools**,
+and manual path overrides are available under **More options (offline, repair, paths)**
+in the setup prompt (see [managed setup](MANAGED_SETUP.md) for coverage and platform limits).
 MRtrix3, FSL and FreeSurfer are not needed just to try a DTI-only route.
-Missing dependencies are reported, not silently replaced by a different method.
+Missing dependencies are reported rather than silently replaced by a different method.
 
-The Microstructure, Tractography and Fiber bundles rows show the current algorithm
-selection: **DTI**, **MRtrix3 CSD / ACT** and **WMQL** by default. These labels
-update when settings change; they describe the configuration, not completed or
-QC-approved results. Click **...** beside each of these three products to
-choose one or several methods. DTI remains required preparation; FW, NODDI, DKI and
-iFW are independent options (iFW needs the echo time, and also runs FW and DDSeg). Advanced settings uses categories, showing
-only the selected category's parameters. Environment installation is separate.
+Each stage row under **Analysis** shows the current algorithm configuration (with **DTI**,
+**MRtrix3 CSD / ACT** and **WMQL** as defaults); these labels reflect settings rather than
+completed or QC-approved results. Click **...** beside a stage to choose one or several
+algorithms and adjust stage parameters (for example, FW, NODDI, DKI and iFW alongside DTI;
+iFW requires the echo time and also runs FW and DDSeg), and use **Compute device** to select
+Auto, CPU or a specific CUDA GPU.
 
 Multiple tracking methods run sequentially as separate `<run>__<backend>`
 variants. Shared anatomical priors/microstructure runs once; selected bundle methods and
@@ -55,15 +52,20 @@ dependency checks and QC gates still apply. More methods require more time and d
 
 ## Run DTI Only
 
-1. Select Subject root. An empty subject ID is filled from the folder name;
-   an existing custom ID is preserved. Selecting its canonical `input/` directory
-   resolves to the subject root. An empty output directory uses `<subject>/outputs/`.
-2. Select **Microstructure** and uncheck all other products, including preprocessing.
-3. Click **...** beside Microstructure and retain only DTI.
+1. Under **Inputs**, select the Subject root (or direct NIfTI/NRRD/DICOM source).
+   An empty subject ID is filled from the folder name; an existing custom ID is
+   preserved. Selecting its canonical `input/` directory resolves to the subject root,
+   and an empty output directory defaults to `<subject>/outputs/`.
+2. Under **Analysis**, select **Microstructure** and uncheck all other stages, including preprocessing.
+3. Click **...** beside **Microstructure** and retain only DTI.
 4. Click **Run SlicerDSpace** and inspect the log. Necessary preflight checks
-   run in the background. Missing dependencies stop submission and open the
-   Environment section; prepare them and retry rather than silently omitting products.
-5. FA/MD automatically load as successful stages finish. In the separate **Results and QC** section, select the completed run to inspect QC or use **Load** again without duplicating nodes.
+   run first; if any dependency is missing, prepare it via the setup prompt and
+   retry rather than silently omitting selected stages.
+5. Completed outputs remain on disk for on-demand inspection rather than loading
+   automatically into the scene. In **Results and QC**, select the completed run,
+   click the eye icon beside FA or MD to load or toggle them in 3D Slicer (right-click
+   to `Unload from scene` or open table/JSON files), and click **Open report** to view
+   the HTML QC summary.
 6. Inspect the mask, finite-value checks, spatial alignment and QC summary before accepting results.
 
 Generate a plan without execution:
@@ -89,7 +91,7 @@ cohorts and reports, use the [command-line templates](CLI_TEMPLATES.md).
 
 For GUI parameter overrides and named variants across subjects, see
 [Lightweight setup and experiments](EXPERIMENTS.md). Default GUI runs remain
-single-subject; experiments are opt-in under Advanced settings.
+single-subject (or toggle **Batch** under **Inputs** to process a cohort root; see the CLI/experiment guide for named parameter variants).
 
 The CLI can choose the whole-brain tracking source independently of the bundle
 methods. For example, run CSD/ACT and UKF, then apply WMQL and TractCloud only
@@ -138,6 +140,5 @@ Registration of a separately redistributable SlicerDSpace dataset remains pendin
 
 ## If A Run Fails
 
-Missing fields turn the waiting message red. Configure missing dependencies in
-Environment and installation before retrying. Cancel stops active jobs; installed packages are not
+Missing fields turn the waiting message red. Resolve missing dependencies via the preflight setup prompt before retrying. Cancel stops active jobs; installed packages are not
 rolled back and partial downloads may resume. Redact identifiers before sharing logs.

@@ -202,22 +202,22 @@ python3 scripts/stage_slicer_extension.py \
     bvecs
     nodif_brain_mask.nii.gz   # optional; supply or generate</code></pre>
           <p>DWI 与脑掩膜必须使用相同体素网格。梯度数量应匹配 DWI 的体积数，运动校正后的影像需要配套旋转后的梯度。</p>
-          <p>对于 DICOM 或 NRRD/NHDR，在 Advanced settings › Regions &amp; input import › Input import / conversion 中预览导入，再准备标准化输入。</p>
+          <p>在 Inputs 下也可直接选择 NIfTI 文件（含匹配的 .bval/.bvec 文件）、NRRD/NHDR 体数据或 DICOM 文件夹（含多序列时按提示选择目标序列）；开始运行时系统会自动将其导入并校验至标准化被试目录。</p>
         </div>
       </li>
       <li class="start-step">
         <div class="start-body">
           <h4>选择方法并准备环境</h4>
-          <p>首次试运行可只选择 Microstructure，取消其他产品，并在其“...”选择器中保留 DTI。需要更多分析时，可在各产品旁选择一种或多种算法；模型和追踪参数位于 Advanced settings。</p>
-          <p>打开 Environment and installation › Prepare selected analysis environment，确认所需工具、模型和资源许可。下载资源会校验并缓存；如提示重启，重启后再次选择 Prepare 继续。</p>
-          <p>离线模型导入、修复和手动路径设置位于 More options。只运行 DTI 时，提供已复核的脑掩膜即可省去掩膜生成后端。</p>
+          <p>在 Analysis 下，首次小规模试运行可只勾选 Microstructure、取消其他阶段，并在其“...”选择器中保留 DTI；完整流程可通过各阶段旁的“...”选择一种或多种算法并配置阶段参数，同时在 Compute device 中选择计算设备（Auto、CPU 或指定 CUDA GPU）。</p>
+          <p>点击 Run SlicerDSpace 后，系统会先对所选分析执行运行前依赖检查；若缺少所需软件包、工具或模型权重，按提示通过 Prepare selected analysis environment 确认所需资源与许可条款后即可下载、校验并缓存复用（若提示重启，请重启 Slicer 后再次运行）。</p>
+          <p>环境准备提示中的 More options 仍提供离线模型资源导入、运行时修复与手动路径配置；在 Inputs 下提供已审阅的脑掩膜即可在仅运行 DTI 时免装掩膜生成后端。</p>
         </div>
       </li>
       <li class="start-step">
         <div class="start-body">
           <h4>运行并检查</h4>
-          <p>点击 Run SlicerDSpace。未填写的必需项会高亮，日志显示进度或具体修正提示。成功生成的关键结果自动加载到场景；DTI 提供 FA 和 MD 供检查。</p>
-          <p>在 Results and QC 中选择运行记录，查看检查结果并重新加载或替换输出，避免重复场景节点。接受结果前应复核掩膜覆盖、对齐及方法对应的 QC。</p>
+          <p>点击 Run SlicerDSpace。未填写的必填项会高亮提示，日志实时报告进度或具体修正建议。运行生成的输出按需加载而不会自动载入场景；DTI 会生成 FA、MD 及张量参数图。</p>
+          <p>在 Results and QC 中选择已完成的运行，点击输出项旁的眼睛图标即可按需加载至 3D Slicer 场景或切换显隐（右键可从场景卸载或直接打开表格与 JSON 文件），点击 Open report 查看 HTML 质控摘要。接受结果前请核查脑掩膜覆盖、空间对齐及各方法质控指标。</p>
         </div>
       </li>
     </ol>
@@ -338,12 +338,12 @@ export SUBJECT_ROOT="/path/to/sub-01"
             <tr data-method="count" class="stage-start"><th scope="row">连接组</th><td>流线计数</td><td>将流线端点分配到 DDParcel 节点。</td><td class="st-cell">Python 或适用的 MRtrix3 后端。</td><td class="ref-cell"><a class="method-reference" data-reference="50" href="https://doi.org/10.1016/j.neuroimage.2019.05.005" title="Yeh CH, et al. Connectomes from streamlines tractography: Assigning streamlines to brain parcellations is not trivial but highly consequential. NeuroImage 199:160-171, 2019." aria-label="参考文献 50" target="_blank" rel="noopener">[50]</a> <a class="method-reference" data-reference="29" href="https://doi.org/10.1016/j.neuroimage.2019.116137" title="Tournier JD, et al. MRtrix3: A fast, flexible and open software framework for medical image processing and visualisation. NeuroImage 202:116137, 2019." aria-label="参考文献 29" target="_blank" rel="noopener">[29]</a></td></tr>
             <tr data-method="sift2"><th scope="row">连接组</th><td>SIFT2 加权计数</td><td>利用 FOD 计算权重，并使用匹配流线构建矩阵。</td><td class="st-cell">MRtrix3；对应的流线文件及权重。</td><td class="ref-cell"><a class="method-reference" data-reference="16" href="https://doi.org/10.1016/j.neuroimage.2015.06.092" title="Smith RE, et al. SIFT2: Enabling dense quantitative assessment of brain white matter connectivity using streamlines tractography. NeuroImage 119:338–351, 2015." aria-label="参考文献 16" target="_blank" rel="noopener">[16]</a> <a class="method-reference" data-reference="29" href="https://doi.org/10.1016/j.neuroimage.2019.116137" title="Tournier JD, et al. MRtrix3: A fast, flexible and open software framework for medical image processing and visualisation. NeuroImage 202:116137, 2019." aria-label="参考文献 29" target="_blank" rel="noopener">[29]</a> <a class="method-reference" data-reference="50" href="https://doi.org/10.1016/j.neuroimage.2019.05.005" title="Yeh CH, et al. Connectomes from streamlines tractography: Assigning streamlines to brain parcellations is not trivial but highly consequential. NeuroImage 199:160-171, 2019." aria-label="参考文献 50" target="_blank" rel="noopener">[50]</a></td></tr>
             <tr data-method="scalar_length"><th scope="row">连接组</th><td>标量与长度统计</td><td>FA、MD、ODI 等参数均值，以及流线平均长度和总长度。</td><td class="st-cell">Python API；需匹配参数图、节点及流线。</td><td class="ref-cell"><a class="method-reference" data-reference="50" href="https://doi.org/10.1016/j.neuroimage.2019.05.005" title="Yeh CH, et al. Connectomes from streamlines tractography: Assigning streamlines to brain parcellations is not trivial but highly consequential. NeuroImage 199:160-171, 2019." aria-label="参考文献 50" target="_blank" rel="noopener">[50]</a> <a class="method-reference" data-reference="29" href="https://doi.org/10.1016/j.neuroimage.2019.116137" title="Tournier JD, et al. MRtrix3: A fast, flexible and open software framework for medical image processing and visualisation. NeuroImage 202:116137, 2019." aria-label="参考文献 29" target="_blank" rel="noopener">[29]</a> <a class="method-reference" data-reference="30" href="https://doi.org/10.3389/fninf.2014.00008" title="Garyfallidis E, et al. Dipy, a library for the analysis of diffusion MRI data. Frontiers in Neuroinformatics 8:8, 2014." aria-label="参考文献 30" target="_blank" rel="noopener">[30]</a></td></tr>
-            <tr data-method="regional" class="stage-start"><th scope="row">区域分析</th><td>指定脑区分析</td><td>复用参数图进行 ROI 统计、筛选流线并提取节点子矩阵。</td><td class="st-cell">Advanced settings；基于已完成输出的工作流工具。</td><td class="ref-cell"><a class="method-reference" data-reference="3" href="https://doi.org/10.1109/TMI.2023.3331691" title="Zhang F, et al. DDParcel: Deep Learning Anatomical Brain Parcellation From Diffusion MRI. IEEE Transactions on Medical Imaging 43(3):1191–1202, 2024." aria-label="参考文献 3" target="_blank" rel="noopener">[3]</a> <a class="method-reference" data-reference="30" href="https://doi.org/10.3389/fninf.2014.00008" title="Garyfallidis E, et al. Dipy, a library for the analysis of diffusion MRI data. Frontiers in Neuroinformatics 8:8, 2014." aria-label="参考文献 30" target="_blank" rel="noopener">[30]</a> <a class="method-reference" data-reference="50" href="https://doi.org/10.1016/j.neuroimage.2019.05.005" title="Yeh CH, et al. Connectomes from streamlines tractography: Assigning streamlines to brain parcellations is not trivial but highly consequential. NeuroImage 199:160-171, 2019." aria-label="参考文献 50" target="_blank" rel="noopener">[50]</a></td></tr>
+            <tr data-method="regional" class="stage-start"><th scope="row">区域分析</th><td>指定脑区分析</td><td>复用参数图进行 ROI 统计、筛选流线并提取节点子矩阵。</td><td class="st-cell">CLI / Python 工作流工具；复用已完成输出。</td><td class="ref-cell"><a class="method-reference" data-reference="3" href="https://doi.org/10.1109/TMI.2023.3331691" title="Zhang F, et al. DDParcel: Deep Learning Anatomical Brain Parcellation From Diffusion MRI. IEEE Transactions on Medical Imaging 43(3):1191–1202, 2024." aria-label="参考文献 3" target="_blank" rel="noopener">[3]</a> <a class="method-reference" data-reference="30" href="https://doi.org/10.3389/fninf.2014.00008" title="Garyfallidis E, et al. Dipy, a library for the analysis of diffusion MRI data. Frontiers in Neuroinformatics 8:8, 2014." aria-label="参考文献 30" target="_blank" rel="noopener">[30]</a> <a class="method-reference" data-reference="50" href="https://doi.org/10.1016/j.neuroimage.2019.05.005" title="Yeh CH, et al. Connectomes from streamlines tractography: Assigning streamlines to brain parcellations is not trivial but highly consequential. NeuroImage 199:160-171, 2019." aria-label="参考文献 50" target="_blank" rel="noopener">[50]</a></td></tr>
 <!-- methods-catalog:end -->
           </tbody>
         </table>
       </div>
-      <p class="note">默认使用 DTI、CSD/ACT 和 WMQL。详细参数位于 Advanced settings，所选依赖在 Environment and installation 中单独准备。外部工具和模型安装前会请求确认。</p>
+      <p class="note">默认使用 DTI、CSD/ACT 和 WMQL。各阶段参数通过对应阶段旁的“...”配置，所选路线的缺失依赖会在运行前检查并经用户确认后准备；外部工具和模型资源不会静默安装。</p>
       <p class="note"><a href="https://github.com/NeuroDMRI/SlicerDSpace/blob/main/docs/architecture/IMPLEMENTATION_PROVENANCE.md" target="_blank" rel="noopener">实现来源与验证记录</a> 记录各后端版本及单项测试范围。</p>
     </div>
   </div>

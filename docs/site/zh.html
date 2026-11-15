@@ -171,8 +171,32 @@
     <ol class="start-steps">
       <li class="start-step">
         <div class="start-body">
-          <h4>安装插件</h4>
-          <p>先安装 3D Slicer，本方案参考版本为 5.10。克隆源码并创建独立的插件安装目录：</p>
+          <h4>安装 3D Slicer 5.10.0</h4>
+          <p>请前往 <a href="https://download.slicer.org/" target="_blank" rel="noopener">download.slicer.org 下载页面</a>下载并安装对应操作系统的 3D Slicer 5.10.0（支持 Windows x86_64、Linux x86_64 与 Apple Silicon macOS arm64），默认安装与启动器路径如下：</p>
+          <ul>
+            <li>Windows： <code>%LOCALAPPDATA%\slicer.org\Slicer 5.10.0\Slicer.exe</code> （或 <code>C:\Program Files\Slicer 5.10.0\Slicer.exe</code>）</li>
+            <li>Linux：解压后的目录，如 <code>~/Slicer-5.10.0-linux-amd64/Slicer</code> （或 <code>/opt/Slicer-5.10.0-linux-amd64/Slicer</code>）</li>
+            <li>macOS： <code>/Applications/Slicer.app</code> （命令行启动器路径： <code>/Applications/Slicer.app/Contents/MacOS/Slicer</code>）</li>
+          </ul>
+        </div>
+      </li>
+      <li class="start-step">
+        <div class="start-body">
+          <h4>安装 SlicerDSpace 发布包</h4>
+          <p>前往 <a href="https://github.com/NeuroDMRI/SlicerDSpace/releases" target="_blank" rel="noopener">GitHub Releases 页面</a> 下载对应系统的发布包（<code>SlicerDSpace-v*-Windows-x64.zip</code>, <code>SlicerDSpace-v*-Linux-x64.tar.gz</code>或 <code>SlicerDSpace-v*-macOS-arm64.tar.gz</code>；请勿使用 GitHub 自动生成的 Source code 源码归档）。</p>
+          <p>在 3D Slicer 5.10.0 中依次打开 View › Extensions Manager，点击右上角扳手图标，选择 Install Extension from File…，选中下载好的发布包并重启 Slicer；重启后打开 Modules › Diffusion › SlicerDSpace。</p>
+          <p>Slicer 会将扩展（内含 <code>lib/Slicer-5.10/qt-scripted-modules/shared/run_subject_pipeline_cli.py</code> 与内置运行时）解压至对应修订版本的扩展目录（也可在 Edit › Application Settings › Modules 中查看）：</p>
+          <ul>
+            <li>Windows： <code>%LOCALAPPDATA%\slicer.org\Slicer 5.10.0\slicer.org\Extensions-34045\SlicerDSpace</code></li>
+            <li>Linux： <code>&lt;Slicer-5.10.0-dir&gt;/slicer.org/Extensions-34045/SlicerDSpace</code></li>
+            <li>macOS： <code>/Applications/Slicer.app/Contents/Extensions-34045/SlicerDSpace</code> （或 <code>~/Library/Application Support/slicer.org/Extensions-34045/SlicerDSpace</code>）</li>
+          </ul>
+        </div>
+      </li>
+      <li class="start-step">
+        <div class="start-body">
+          <h4>或从源码部署（开发者选项）</h4>
+          <p>如需基于本地 Git 源码克隆进行开发调试而非使用发布包，可按当前 Slicer 版本部署模块：</p>
           <div class="code" data-code>
             <div class="code-head"><span>bash</span><button class="copy" type="button" hidden>复制</button></div>
             <pre><code>git clone https://github.com/NeuroDMRI/SlicerDSpace.git
@@ -182,11 +206,6 @@ python3 scripts/stage_slicer_extension.py \
   --link-mode copy</code></pre>
           </div>
           <p>将 <code>5.10</code> 替换为 Slicer“关于”窗口中显示的主次版本号。脚本会部署模块并报告安装目录。</p>
-        </div>
-      </li>
-      <li class="start-step">
-        <div class="start-body">
-          <h4>添加模块路径</h4>
           <p>打开 Edit › Application Settings › Modules › Additional module paths，添加以下目录展开后的绝对路径： <code>~/SlicerDSpace-extension/SlicerDSpace/lib/Slicer-5.10/qt-scripted-modules</code>，并与部署时选择的版本号保持一致。</p>
           <p>通过 Slicer 的扩展管理器安装 SlicerDMRI 和 PyTorch。如需使用 UKF，还要安装独立的 UKFTractography 扩展。重启 Slicer 后打开 Modules › Diffusion › SlicerDSpace。</p>
         </div>
@@ -223,12 +242,13 @@ python3 scripts/stage_slicer_extension.py \
     </ol>
     <div class="start-cli" id="cli" aria-labelledby="cli-title">
       <h3 class="start-route-title" id="cli-title"><span class="start-route-marker" aria-hidden="true">C</span><span class="start-route-label start-route-text">命令行运行与队列批处理</span></h3>
-      <p>在代码目录中使用 Slicer 的 Python 检查 DTI 路线，先替换以下两个绝对路径：</p>
+      <p>将 <code>SLICER_LAUNCHER</code> 指向本机 3D Slicer 5.10.0 可执行文件，将 <code>DSPACE_REPO</code> 指向已安装扩展的 <code>lib/Slicer-5.10/qt-scripted-modules</code> 目录（或本地源码目录），再运行最小 DTI 环境检查：</p>
       <div class="code" data-code>
         <div class="code-head"><span>bash</span><button class="copy" type="button" hidden>复制</button></div>
         <pre><code>export SLICER_LAUNCHER="/path/to/Slicer"
+export DSPACE_REPO="/path/to/Extensions-34045/SlicerDSpace/lib/Slicer-5.10/qt-scripted-modules"
 export SUBJECT_ROOT="/path/to/sub-01"
-"$SLICER_LAUNCHER" --launch PythonSlicer run_subject_pipeline.py \
+"$SLICER_LAUNCHER" --launch PythonSlicer "$DSPACE_REPO/shared/run_subject_pipeline_cli.py" \
   --subject-root "$SUBJECT_ROOT" --subject-id sub-01 --no-user-config \
   --targets microstructure --microstructure-stages dti --doctor</code></pre>
       </div>
@@ -237,6 +257,7 @@ export SUBJECT_ROOT="/path/to/sub-01"
       <p>对于独立被试，可使用 <code>scripts/run_batch_pipeline.py --batch-root /path/to/study --jobs 2</code> 并添加所选分析参数。GUI 处理当前被试，批处理命令为各被试维护独立输出和日志。</p>
     </div>
     <ul class="doc-links">
+      <li><a class="btn btn-secondary" href="https://github.com/NeuroDMRI/SlicerDSpace/releases" target="_blank" rel="noopener">发布包下载</a></li>
       <li><a class="btn btn-secondary" href="https://github.com/NeuroDMRI/SlicerDSpace/blob/main/docs/setup/QUICKSTART.md" target="_blank" rel="noopener">快速开始</a></li>
       <li><a class="btn btn-secondary" href="https://github.com/NeuroDMRI/SlicerDSpace/blob/main/docs/setup/SUPPORT_MATRIX.md" target="_blank" rel="noopener">平台与功能支持</a></li>
       <li><a class="btn btn-secondary" href="https://github.com/NeuroDMRI/SlicerDSpace/blob/main/docs/assets/MODEL_ASSET_TERMS.md" target="_blank" rel="noopener">模型资源许可</a></li>

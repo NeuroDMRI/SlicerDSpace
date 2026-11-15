@@ -8,8 +8,22 @@
 
 </div>
 
-Use the source installation in the README. No automatic first-run wizard is
-shown; this project is not yet in the official Extensions Catalog.
+## Install 3D Slicer 5.10.0 & SlicerDSpace
+
+No automatic first-run wizard is shown; this project is not yet in the official Extensions Catalog.
+
+1. **Install 3D Slicer 5.10.0** from <https://download.slicer.org/> for Windows (`x86_64`), Linux (`x86_64`), or Apple Silicon macOS (`arm64`). Default application and launcher locations:
+   - **Windows**: `%LOCALAPPDATA%\slicer.org\Slicer 5.10.0\Slicer.exe` (or `C:\Program Files\Slicer 5.10.0\Slicer.exe`; Python launcher: `bin\PythonSlicer.exe` or `PythonSlicer.exe`)
+   - **Linux**: extracted folder such as `~/Slicer-5.10.0-linux-amd64/Slicer` (or `/opt/Slicer-5.10.0-linux-amd64/Slicer`; Python launcher: `bin/PythonSlicer`)
+   - **macOS**: `/Applications/Slicer.app` (CLI launcher: `/Applications/Slicer.app/Contents/MacOS/Slicer`; Python launcher: `/Applications/Slicer.app/Contents/bin/PythonSlicer`)
+2. **Download the SlicerDSpace release archive** from <https://github.com/NeuroDMRI/SlicerDSpace/releases> (`SlicerDSpace-v*-Windows-x64.zip`, `SlicerDSpace-v*-Linux-x64.tar.gz`, or `SlicerDSpace-v*-macOS-arm64.tar.gz`; do not use GitHub's automatic `Source code` archive).
+3. **Install in 3D Slicer 5.10.0**: open **View > Extensions Manager**, click the top-right wrench icon, choose **Install Extension from File...**, select the downloaded archive, and restart 3D Slicer. Open **Modules > Diffusion > SlicerDSpace**.
+4. **Unpacked extension paths on disk** (containing `lib/Slicer-5.10/qt-scripted-modules/shared/run_subject_pipeline_cli.py` and `bundled-runtimes/`, also shown under **Edit > Application Settings > Modules**):
+   - **Windows**: `%LOCALAPPDATA%\slicer.org\Slicer 5.10.0\slicer.org\Extensions-34045\SlicerDSpace`
+   - **Linux**: `<Slicer-5.10.0-dir>/slicer.org/Extensions-34045/SlicerDSpace`
+   - **macOS**: `/Applications/Slicer.app/Contents/Extensions-34045/SlicerDSpace` (or `~/Library/Application Support/slicer.org/Extensions-34045/SlicerDSpace`)
+
+For developer source staging instead of a release archive, see [the project README](../../README.md#installation).
 
 ---
 

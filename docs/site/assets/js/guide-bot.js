@@ -29,7 +29,7 @@
         dependencies: 'Dependencies', results: 'Results & QC', references: 'References' },
       answers: {
         welcome: { text: 'Hello! I can help you explore SlicerDSpace. Choose a topic or ask a question about the project. I use a small, curated set of answers from this website.' },
-        start: { text: 'Start with 3D Slicer, stage the module, and add its module path in Slicer. In the GUI, configure the subject and data under Inputs, choose stages, algorithms and Compute device under Analysis, and click Run SlicerDSpace (which runs dependency preflight checks and prompts setup when needed).', href: '#start' },
+        start: { text: 'Install 3D Slicer 5.10.0 from https://download.slicer.org/ (typical paths: /Applications/Slicer.app on macOS, %LOCALAPPDATA%\\slicer.org\\Slicer 5.10.0 on Windows, ~/Slicer-5.10.0-linux-amd64 on Linux), then download the platform archive from https://github.com/NeuroDMRI/SlicerDSpace/releases and install it via View › Extensions Manager › Install Extension from File…. Restart Slicer, open Modules › Diffusion › SlicerDSpace, configure Inputs and Analysis, and click Run SlicerDSpace.', href: '#start' },
         skills: { text: 'We provide an install-and-use Agent Skill. Give its SKILL.md to your local Agent for installation, input preparation, method selection, plan review, requested analyses or batch experiments, and result/QC inspection. Get started includes the Skill and copyable installation and analysis prompts.', href: '#skills' },
         inputs: { text: 'Under Inputs, you can select diffusion MRI in NIfTI (with matching .bval/.bvec), NRRD/NHDR or DICOM folder formats; a compatible brain mask can be supplied or generated. Conversion and validation into the standardised subject directory run when execution starts.', href: '#start' },
         methods: { text: 'The module combines DDSeg, DDParcel and DDSurfer with microstructure, tractography, bundle identification and connectome analyses. DTI is the default microstructure model; use ... beside each stage under Analysis to choose algorithms and adjust stage parameters.', href: '#integrated' },
@@ -52,7 +52,7 @@
         dependencies: '环境依赖', results: '结果与 QC', references: '参考文献' },
       answers: {
         welcome: { text: '你好！我是 SlicerDSpace 项目助手。可以选择下方问题，或输入有关项目的问题。我根据本网页整理的内容回答。' },
-        start: { text: '先安装 3D Slicer，部署插件并添加模块路径。在界面中通过 Inputs 配置被试与输入数据、在 Analysis 下选择阶段、算法与 Compute device；点击 Run SlicerDSpace 后会先检查依赖，必要时按提示准备环境再执行。', href: '#start' },
+        start: { text: '请先从 https://download.slicer.org/ 安装 3D Slicer 5.10.0（常见路径：macOS 为 /Applications/Slicer.app，Windows 为 %LOCALAPPDATA%\\slicer.org\\Slicer 5.10.0，Linux 为 ~/Slicer-5.10.0-linux-amd64）；随后从 https://github.com/NeuroDMRI/SlicerDSpace/releases 下载对应系统的发布包，在 Slicer 中打开 View › Extensions Manager › Install Extension from File… 完成安装并重启，再于 Modules › Diffusion › SlicerDSpace 中配置 Inputs、Analysis 与运行前检查。', href: '#start' },
         skills: { text: '我们提供安装与使用 Agent Skill。将 SKILL.md 交给自己的本地 Agent，可按指南完成安装、输入准备、方法选择、计划检查、按请求分析或批量实验，以及结果与 QC 检查。Get started 内提供文件入口和可复制的安装、分析指令。', href: '#skills' },
         inputs: { text: '支持 NIfTI（含匹配的 .bval/.bvec）、NRRD/NHDR 或 DICOM 文件夹输入；脑掩膜可自行提供或生成。在 Inputs 下选好数据后，点击运行会自动完成转换并校验至标准化被试目录。', href: '#start' },
         methods: { text: '插件将 DDSeg、DDParcel 和 DDSurfer 与微结构、纤维追踪、纤维束识别及连接组分析结合。微结构默认使用 DTI；可通过 Analysis 各阶段旁的“...”按钮选择算法并配置阶段参数。', href: '#integrated' },

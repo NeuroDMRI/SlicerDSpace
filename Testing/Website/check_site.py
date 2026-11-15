@@ -32,6 +32,10 @@ BLOB = REPO + "/blob/main/"
 ALLOWED_URLS = {
     REPO,
     REPO + ".git",
+    REPO + "/releases",
+    BLOB + "docs/setup/DOWNLOADS.md",
+    "https://download.slicer.org/",
+    "https://www.slicer.org/",
     BLOB + "CITATION.cff",
     BLOB + "LICENSE.txt",
     BLOB + "THIRD_PARTY_NOTICES.md",

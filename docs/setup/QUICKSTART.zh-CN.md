@@ -8,8 +8,22 @@
 
 </div>
 
-先按 README 完成源码安装。默认界面不显示首次向导；
-当前项目尚未进入官方 Extensions Catalog。
+## 安装 3D Slicer 5.10.0 与 SlicerDSpace
+
+默认界面不显示首次向导；当前项目尚未进入官方 Extensions Catalog。
+
+1. **安装 3D Slicer 5.10.0**：从 <https://download.slicer.org/> 下载对应操作系统的安装包（Windows `x86_64`、Linux `x86_64` 或 Apple Silicon macOS `arm64`），默认安装与启动器路径如下：
+   - **Windows**：`%LOCALAPPDATA%\slicer.org\Slicer 5.10.0\Slicer.exe`（或 `C:\Program Files\Slicer 5.10.0\Slicer.exe`；内置 Python 为 `bin\PythonSlicer.exe` 或 `PythonSlicer.exe`）
+   - **Linux**：解压目录如 `~/Slicer-5.10.0-linux-amd64/Slicer`（或 `/opt/Slicer-5.10.0-linux-amd64/Slicer`；内置 Python 为 `bin/PythonSlicer`）
+   - **macOS**：`/Applications/Slicer.app`（CLI 启动器为 `/Applications/Slicer.app/Contents/MacOS/Slicer`；内置 Python 为 `/Applications/Slicer.app/Contents/bin/PythonSlicer`）
+2. **下载 SlicerDSpace 发布包**：前往 <https://github.com/NeuroDMRI/SlicerDSpace/releases> 下载对应系统的发布归档（`SlicerDSpace-v*-Windows-x64.zip`、`SlicerDSpace-v*-Linux-x64.tar.gz` 或 `SlicerDSpace-v*-macOS-arm64.tar.gz`；请勿下载 GitHub 自动生成的 `Source code` 归档）。
+3. **在 3D Slicer 中安装**：打开 **View > Extensions Manager**，点击右上角扳手图标并选择 **Install Extension from File...**，选中下载好的发布包，重启 3D Slicer 后打开 **Modules > Diffusion > SlicerDSpace**。
+4. **发布包解压后的磁盘路径**（内含 `lib/Slicer-5.10/qt-scripted-modules/shared/run_subject_pipeline_cli.py` 与 `bundled-runtimes/`，也可在 **Edit > Application Settings > Modules** 中查看）：
+   - **Windows**：`%LOCALAPPDATA%\slicer.org\Slicer 5.10.0\slicer.org\Extensions-34045\SlicerDSpace`
+   - **Linux**：`<Slicer-5.10.0-dir>/slicer.org/Extensions-34045/SlicerDSpace`
+   - **macOS**：`/Applications/Slicer.app/Contents/Extensions-34045/SlicerDSpace`（或 `~/Library/Application Support/slicer.org/Extensions-34045/SlicerDSpace`）
+
+若需开发者本地源码部署而非发布包安装，请参见[项目中文主说明](../../README.zh-CN.md#installation)。
 
 ---
 

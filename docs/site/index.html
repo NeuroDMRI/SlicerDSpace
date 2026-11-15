@@ -171,8 +171,32 @@ Show me the plan and wait for confirmation before running. Afterwards, summarize
     <ol class="start-steps">
       <li class="start-step">
         <div class="start-body">
-          <h4>Install the module</h4>
-          <p>Start with 3D Slicer; the protocol reference is version 5.10. Clone the source and create a separate extension installation:</p>
+          <h4>Install 3D Slicer 5.10.0</h4>
+          <p>Download and install 3D Slicer 5.10.0 for your operating system (Windows x86_64, Linux x86_64, or Apple Silicon macOS arm64) from <a href="https://download.slicer.org/" target="_blank" rel="noopener">download.slicer.org</a>. Typical installation and launcher paths:</p>
+          <ul>
+            <li>Windows: <code>%LOCALAPPDATA%\slicer.org\Slicer 5.10.0\Slicer.exe</code> (or <code>C:\Program Files\Slicer 5.10.0\Slicer.exe</code>)</li>
+            <li>Linux: extracted folder such as <code>~/Slicer-5.10.0-linux-amd64/Slicer</code> (or <code>/opt/Slicer-5.10.0-linux-amd64/Slicer</code>)</li>
+            <li>macOS: <code>/Applications/Slicer.app</code> (CLI launcher: <code>/Applications/Slicer.app/Contents/MacOS/Slicer</code>)</li>
+          </ul>
+        </div>
+      </li>
+      <li class="start-step">
+        <div class="start-body">
+          <h4>Install the SlicerDSpace release package</h4>
+          <p>Open <a href="https://github.com/NeuroDMRI/SlicerDSpace/releases" target="_blank" rel="noopener">GitHub Releases</a> and download the archive matching your system (<code>SlicerDSpace-v*-Windows-x64.zip</code>, <code>SlicerDSpace-v*-Linux-x64.tar.gz</code>, or <code>SlicerDSpace-v*-macOS-arm64.tar.gz</code>; do not use GitHub’s automatic Source code archive).</p>
+          <p>In 3D Slicer 5.10.0, open View › Extensions Manager, click the top-right wrench icon, choose Install Extension from File…, select the downloaded archive, and restart Slicer. Then open Modules › Diffusion › SlicerDSpace.</p>
+          <p>Slicer unpacks the extension (containing <code>lib/Slicer-5.10/qt-scripted-modules/shared/run_subject_pipeline_cli.py</code> and bundled runtimes) into its revision-specific extensions folder (also shown in Edit › Application Settings › Modules):</p>
+          <ul>
+            <li>Windows: <code>%LOCALAPPDATA%\slicer.org\Slicer 5.10.0\slicer.org\Extensions-34045\SlicerDSpace</code></li>
+            <li>Linux: <code>&lt;Slicer-5.10.0-dir&gt;/slicer.org/Extensions-34045/SlicerDSpace</code></li>
+            <li>macOS: <code>/Applications/Slicer.app/Contents/Extensions-34045/SlicerDSpace</code> (or <code>~/Library/Application Support/slicer.org/Extensions-34045/SlicerDSpace</code>)</li>
+          </ul>
+        </div>
+      </li>
+      <li class="start-step">
+        <div class="start-body">
+          <h4>Or stage from source (developers)</h4>
+          <p>If developing from a local repository clone instead of a release archive, stage the module with Slicer’s version:</p>
           <div class="code" data-code>
             <div class="code-head"><span>bash</span><button class="copy" type="button" hidden>Copy</button></div>
             <pre><code>git clone https://github.com/NeuroDMRI/SlicerDSpace.git
@@ -182,11 +206,6 @@ python3 scripts/stage_slicer_extension.py \
   --link-mode copy</code></pre>
           </div>
           <p>Replace <code>5.10</code> with the major/minor version shown in Slicer’s About dialog. The script stages the module and reports its installation directory.</p>
-        </div>
-      </li>
-      <li class="start-step">
-        <div class="start-body">
-          <h4>Add the module path</h4>
           <p>Open Edit › Application Settings › Modules › Additional module paths. Add the expanded absolute path of <code>~/SlicerDSpace-extension/SlicerDSpace/lib/Slicer-5.10/qt-scripted-modules</code>, matching the version you staged.</p>
           <p>Install SlicerDMRI and PyTorch from Slicer’s Extension Manager. Add the separate UKFTractography extension if you plan to use UKF. Restart Slicer, then open Modules › Diffusion › SlicerDSpace.</p>
         </div>
@@ -223,12 +242,13 @@ python3 scripts/stage_slicer_extension.py \
     </ol>
     <div class="start-cli" id="cli" aria-labelledby="cli-title">
       <h3 class="start-route-title" id="cli-title"><span class="start-route-marker" aria-hidden="true">C</span><span class="start-route-label start-route-text">Command-line execution and cohort processing</span></h3>
-      <p>From the checkout, use Slicer’s Python to check a DTI-only route. Replace the two absolute paths below:</p>
+      <p>Point <code>SLICER_LAUNCHER</code> to your 3D Slicer 5.10.0 executable and <code>DSPACE_REPO</code> to the installed extension’s <code>lib/Slicer-5.10/qt-scripted-modules</code> directory (or local checkout), then run a DTI-only check:</p>
       <div class="code" data-code>
         <div class="code-head"><span>bash</span><button class="copy" type="button" hidden>Copy</button></div>
         <pre><code>export SLICER_LAUNCHER="/path/to/Slicer"
+export DSPACE_REPO="/path/to/Extensions-34045/SlicerDSpace/lib/Slicer-5.10/qt-scripted-modules"
 export SUBJECT_ROOT="/path/to/sub-01"
-"$SLICER_LAUNCHER" --launch PythonSlicer run_subject_pipeline.py \
+"$SLICER_LAUNCHER" --launch PythonSlicer "$DSPACE_REPO/shared/run_subject_pipeline_cli.py" \
   --subject-root "$SUBJECT_ROOT" --subject-id sub-01 --no-user-config \
   --targets microstructure --microstructure-stages dti --doctor</code></pre>
       </div>
@@ -237,6 +257,7 @@ export SUBJECT_ROOT="/path/to/sub-01"
       <p>For independent subjects, use <code>scripts/run_batch_pipeline.py --batch-root /path/to/study --jobs 2</code> with your chosen analysis options. The GUI processes the current subject; the batch CLI manages separate outputs and logs.</p>
     </div>
     <ul class="doc-links">
+      <li><a class="btn btn-secondary" href="https://github.com/NeuroDMRI/SlicerDSpace/releases" target="_blank" rel="noopener">Releases</a></li>
       <li><a class="btn btn-secondary" href="https://github.com/NeuroDMRI/SlicerDSpace/blob/main/docs/setup/QUICKSTART.md" target="_blank" rel="noopener">Quick Start</a></li>
       <li><a class="btn btn-secondary" href="https://github.com/NeuroDMRI/SlicerDSpace/blob/main/docs/setup/SUPPORT_MATRIX.md" target="_blank" rel="noopener">Support matrix</a></li>
       <li><a class="btn btn-secondary" href="https://github.com/NeuroDMRI/SlicerDSpace/blob/main/docs/assets/MODEL_ASSET_TERMS.md" target="_blank" rel="noopener">Model asset terms</a></li>

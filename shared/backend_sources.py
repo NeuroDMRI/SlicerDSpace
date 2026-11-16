@@ -230,7 +230,18 @@ def needs_darwin_arm64_tractcloud_python(system=None, machine=None) -> bool:
     from shared.external_process import is_slicer_python
     host = host_machine()
     proc = (machine or slicer_machine()).lower()
-    return host == "arm64" and proc not in ("arm64", "aarch64") and is_slicer_python(sys.executable)
+    if not (host == "arm64" and proc not in ("arm64", "aarch64") and is_slicer_python(sys.executable)):
+        return False
+    if available_darwin_arm64_tractcloud_python() is not None:
+        return True
+    try:
+        from shared.bundled_python import bundled_site_packages_dirs
+
+        if bundled_site_packages_dirs():
+            return False
+    except Exception:
+        pass
+    return True
 
 
 def default_darwin_arm64_tractcloud_python(root=None) -> Path:

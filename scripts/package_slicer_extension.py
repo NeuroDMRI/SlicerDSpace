@@ -164,13 +164,64 @@ def _stage_bundled_runtimes(
     return staged
 
 
+def _is_macho_binary(path: Path) -> bool:
+    try:
+        magic = path.read_bytes()[:4]
+    except OSError:
+        return False
+    return magic in {
+        b"\xcf\xfa\xed\xfe",
+        b"\xfe\xed\xfa\xcf",
+        b"\xce\xfa\xed\xfe",
+        b"\xfe\xed\xfa\xce",
+        b"\xca\xfe\xba\xbe",
+        b"\xbe\xba\xfe\xca",
+    }
+
+
+def _relink_macos_cli_libs(dest: Path, lib_dest: Path, copied_names: list[str]) -> None:
+    if sys.platform != "darwin":
+        return
+    lib_ukf = lib_dest / "libUKFBase.dylib"
+    install_name_tool = shutil.which("install_name_tool")
+    otool = shutil.which("otool")
+    if not lib_ukf.is_file() or not install_name_tool or not otool or not _is_macho_binary(lib_ukf):
+        return
+    codesign = shutil.which("codesign")
+    subprocess.run([install_name_tool, "-id", "@rpath/libUKFBase.dylib", str(lib_ukf)], check=True)
+    if codesign:
+        subprocess.run([codesign, "--force", "--sign", "-", str(lib_ukf)], check=True)
+    for name in copied_names:
+        if name.lower().endswith(".xml"):
+            continue
+        target = dest / name
+        if not target.is_file() or not _is_macho_binary(target):
+            continue
+        otool_out = subprocess.check_output([otool, "-L", str(target)], text=True, encoding="utf-8", errors="replace")
+        old_refs: list[str] = []
+        for line in otool_out.splitlines()[1:]:
+            dep = line.strip().split(" (", 1)[0].strip()
+            if dep.endswith("/libUKFBase.dylib") and dep not in old_refs:
+                old_refs.append(dep)
+        if not old_refs:
+            continue
+        for old_ref in old_refs:
+            subprocess.run(
+                [install_name_tool, "-change", old_ref, "@loader_path/../libUKFBase.dylib", str(target)],
+                check=True,
+            )
+        if codesign:
+            subprocess.run([codesign, "--force", "--sign", "-", str(target)], check=True)
+
+
 def _stage_cli_modules(extension_root: Path, cli_modules_dir: Path | None, slicer_subdir: str) -> list[str]:
     if cli_modules_dir is None:
         return []
     src = cli_modules_dir.expanduser().resolve()
     if not src.is_dir():
         raise FileNotFoundError(f"CLI modules directory does not exist: {src}")
-    dest = extension_root / "lib" / slicer_subdir / "cli-modules"
+    lib_dest = extension_root / "lib" / slicer_subdir
+    dest = lib_dest / "cli-modules"
     dest.mkdir(parents=True, exist_ok=True)
     copied: list[str] = []
     for item in sorted(src.iterdir()):
@@ -182,6 +233,20 @@ def _stage_cli_modules(extension_root: Path, cli_modules_dir: Path | None, slice
         if _should_mark_executable(target, Path("cli-modules") / target.name):
             target.chmod(0o755)
         copied.append(item.name)
+
+    for search_dir in (src.parent, src):
+        if not search_dir.is_dir():
+            continue
+        for pattern in ("lib*UKF*.dylib", "lib*UKF*.so*"):
+            for lib_file in sorted(search_dir.glob(pattern)):
+                if not lib_file.is_file():
+                    continue
+                lib_target = lib_dest / lib_file.name
+                if lib_target.resolve() != lib_file.resolve():
+                    shutil.copy2(lib_file, lib_target)
+                lib_target.chmod(0o755)
+
+    _relink_macos_cli_libs(dest, lib_dest, copied)
     return copied
 
 

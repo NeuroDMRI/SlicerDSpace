@@ -117,6 +117,8 @@ def inject_bundled_python_env(
                 if cand.is_dir():
                     py_dirs.append(cand.resolve())
         _append_env_paths(env, "PYTHONPATH", tuple(py_dirs))
+        if any((site_dir / "numpy").is_dir() for site_dir in py_dirs):
+            env["SLICERDSPACE_BUNDLED_SITE_PACKAGES"] = os.pathsep.join(str(p) for p in py_dirs)
     _append_env_paths(env, "PATH", bundled_script_dirs(module_root))
     return env
 
@@ -127,11 +129,20 @@ def activate_bundled_python(module_root: Path | None = None) -> tuple[Path, ...]
     if not site_dirs:
         return ()
     norm_sys_path = {os.path.normcase(os.path.normpath(entry)) for entry in sys.path if entry}
+    prepend: list[str] = []
     for site_dir in site_dirs:
         rendered = str(site_dir)
         norm_rendered = os.path.normcase(os.path.normpath(rendered))
         if norm_rendered not in norm_sys_path:
             site.addsitedir(rendered)
             norm_sys_path.add(norm_rendered)
+        if (site_dir / "numpy").is_dir() and "numpy" not in sys.modules:
+            prepend.append(rendered)
+    if prepend:
+        prepend_norms = {os.path.normcase(os.path.normpath(p)) for p in prepend}
+        sys.path[:] = [
+            *prepend,
+            *(entry for entry in sys.path if os.path.normcase(os.path.normpath(entry)) not in prepend_norms),
+        ]
     inject_bundled_python_env(os.environ, module_root=module_root, include_pythonpath=True)
     return site_dirs

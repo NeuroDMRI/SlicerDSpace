@@ -54,7 +54,7 @@ Every workflow below was executed natively on macOS (`darwin-arm64`) in **3D Sli
 
 ## 3. Native Runtime Bundles & Checksum Registration
 
-In `v0.1.1`, each verified platform is distributed as a **single user-facing installer package** (`SlicerDSpace-v0.1.1-Windows-x64.zip`, `SlicerDSpace-v0.1.1-Linux-x64.tar.gz`, and `SlicerDSpace-v0.1.1-macOS-arm64.tar.gz`) that embeds the modular native runtime bundles inside `SlicerDSpace/bundled-runtimes/`. Internally, all native binary dependencies are registered in [`models/native_runtime_bundles.json`](../../models/native_runtime_bundles.json) and [`models/runtime_bundles.json`](../../models/runtime_bundles.json):
+In `v0.1.1`, each verified platform is distributed as a **self-contained All-in-One offline bundle** (`SlicerDSpace-v0.1.1-Windows-x64.zip`, `SlicerDSpace-v0.1.1-Linux-x64.tar.gz`, and `SlicerDSpace-v0.1.1-macOS-arm64.tar.gz`, each published as `.001` + `.002` split volumes under GitHub Releases' `2.0 GiB` limit and merged prior to installation) that embeds `bundled-python/`, `bundled-model-assets/`, `bundled-sources/`, companion `UKFTractography` CLI (with relinked `libUKFBase.dylib`), `depends NA` in the packaged `SlicerDSpace.s4ext`, and the modular native runtime bundles inside `SlicerDSpace/bundled-runtimes/`. Internally, all native binary dependencies are registered in [`models/native_runtime_bundles.json`](../../models/native_runtime_bundles.json) and [`models/runtime_bundles.json`](../../models/runtime_bundles.json):
 
 | Bundle ID | Platform | Archive Filename | Compressed Size (Bytes) | Unpacked Size (Bytes) | SHA-256 Checksum |
 | --- | --- | --- | --- | --- | --- |

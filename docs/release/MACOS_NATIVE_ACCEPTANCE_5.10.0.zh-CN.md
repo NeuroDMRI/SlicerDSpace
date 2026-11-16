@@ -52,7 +52,7 @@
 
 ## 3. macOS 原生运行依赖包登记与 SHA-256 校验表
 
-在 `v0.1.1` 中，Apple Silicon macOS 仅向用户提供一个完整的统一安装包（`SlicerDSpace-v0.1.1-macOS-arm64.tar.gz`），内部将 MRtrix3、FSL 与 FreeSurfer Surface Runtime 模块化置于 `SlicerDSpace/bundled-runtimes/` 下，首次启动即自动识别，无需手动配置路径或分别下载多个依赖包。内部各模块归档的大小与 SHA-256 校验值登记于 [`models/native_runtime_bundles.json`](../../models/native_runtime_bundles.json) 与 [`models/runtime_bundles.json`](../../models/runtime_bundles.json)：
+在 `v0.1.1` 中，Apple Silicon macOS 与 Windows、Linux 统一提供**全量离线开箱即用一体包（All-in-One）**（`SlicerDSpace-v0.1.1-macOS-arm64.tar.gz`，按 GitHub Releases 单文件 `2.0 GiB` 上限切分为 `.001` + `.002` 双分卷，`cat` 合并后安装），包内完整内置 `bundled-python/`、`bundled-model-assets/`、`bundled-sources/`、配套 `UKFTractography` CLI（含重定位后的 `libUKFBase.dylib`）、`depends NA` 离线配置，并将 MRtrix3、FSL 与 FreeSurfer Surface Runtime 模块化置于 `SlicerDSpace/bundled-runtimes/` 下，安装重启后即可全流程离线开箱即用。内部各原生二进制运行包归档的大小与 SHA-256 校验值登记于 [`models/native_runtime_bundles.json`](../../models/native_runtime_bundles.json) 与 [`models/runtime_bundles.json`](../../models/runtime_bundles.json)：
 
 | 运行包标识 | 平台 | 归档文件名 | 压缩包大小（字节） | 解压后大小（字节） | SHA-256 校验值 |
 | --- | --- | --- | --- | --- | --- |

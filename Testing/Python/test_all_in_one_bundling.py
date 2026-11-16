@@ -279,6 +279,75 @@ class AllInOneBundlingTests(unittest.TestCase):
             self.assertNotIn("PYTHONHOME", captured[0][1])
             self.assertIn(str(rt / "lib"), captured[0][1].get("PYTHONPATH", ""))
 
+    def test_stage_cli_modules_bundles_companion_ukf_library(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            install = stage_extension(root / "install", slicer_version="Slicer-5.10", clean=True, link_mode="copy")
+            ext_root = Path(install["extension_root"])
+
+            fake_slicer_lib = root / "UKFExtension" / "lib" / "Slicer-5.10"
+            fake_cli = fake_slicer_lib / "cli-modules"
+            fake_cli.mkdir(parents=True)
+            ukf_bin = fake_cli / ("UKFTractography.exe" if os.name == "nt" else "UKFTractography")
+            ukf_bin.write_bytes(b"UKFBIN")
+            (fake_cli / "UKFTractography.xml").write_text("<executable/>", encoding="utf-8")
+            (fake_slicer_lib / "libUKFBase.dylib").write_bytes(b"DYLIB")
+
+            archive = root / "SlicerDSpace-macOS-test.tar.gz"
+            pkg = package_extension(ext_root, archive, cli_modules_dir=fake_cli)
+            self.assertIn(ukf_bin.name, pkg["bundled_cli_modules"])
+            self.assertTrue((ext_root / "lib" / "Slicer-5.10" / "libUKFBase.dylib").is_file())
+            self.assertFalse((ext_root / "lib" / "Slicer-5.10" / "cli-modules" / "libUKFBase.dylib").exists())
+
+            layout = inspect_archive_layout(archive)
+            self.assertEqual(layout["status"], "pass", layout)
+            audit = audit_package(archive, ROOT)
+            self.assertEqual(audit["status"], "pass", audit)
+
+    def test_needs_darwin_arm64_tractcloud_python_skips_venv_when_bundled_python_active(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fake_sp = Path(tmp).resolve() / "site-packages"
+            fake_sp.mkdir()
+            with patch("shared.platform_info.host_machine", return_value="arm64"), \
+                    patch("shared.platform_info.slicer_machine", return_value="x86_64"), \
+                    patch("shared.external_process.is_slicer_python", return_value=True), \
+                    patch.object(backend_sources, "available_darwin_arm64_tractcloud_python", return_value=None):
+                with patch.object(bundled_python, "bundled_site_packages_dirs", return_value=(fake_sp,)):
+                    self.assertFalse(backend_sources.needs_darwin_arm64_tractcloud_python(system="Darwin", machine="x86_64"))
+                with patch.object(bundled_python, "bundled_site_packages_dirs", return_value=()):
+                    self.assertTrue(backend_sources.needs_darwin_arm64_tractcloud_python(system="Darwin", machine="x86_64"))
+
+
+    def test_activate_bundled_python_prepends_when_bundling_numpy_and_unloaded(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp).resolve()
+            ext_no_np = base / "ext_no_np"
+            sp_no_np = ext_no_np / "bundled-python" / "site-packages"
+            sp_no_np.mkdir(parents=True)
+            ext_np = base / "ext_np"
+            sp_np = ext_np / "bundled-python" / "site-packages"
+            (sp_np / "numpy").mkdir(parents=True)
+
+            orig_path = list(sys.path)
+            orig_numpy = sys.modules.pop("numpy", None)
+            try:
+                sys.path[:] = ["/existing/slicer/site-packages"]
+                with patch.dict(os.environ, {}, clear=False):
+                    os.environ.pop(bundled_python.BUNDLED_PYTHON_ENV, None)
+                    bundled_python.activate_bundled_python(ext_no_np)
+                    self.assertNotEqual(sys.path[0], str(sp_no_np.resolve()))
+                    self.assertIn(str(sp_no_np.resolve()), sys.path)
+                    self.assertNotIn("SLICERDSPACE_BUNDLED_SITE_PACKAGES", os.environ)
+
+                    sys.path[:] = ["/existing/slicer/site-packages"]
+                    bundled_python.activate_bundled_python(ext_np)
+                    self.assertEqual(sys.path[0], str(sp_np.resolve()))
+                    self.assertEqual(os.environ.get("SLICERDSPACE_BUNDLED_SITE_PACKAGES"), str(sp_np.resolve()))
+            finally:
+                sys.path[:] = orig_path
+                if orig_numpy is not None:
+                    sys.modules["numpy"] = orig_numpy
+
 
 if __name__ == "__main__":
     unittest.main()

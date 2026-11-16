@@ -774,10 +774,19 @@ def build_cli_environment(cli_executable: str) -> dict[str, str]:
                     break
             return result
 
+        if (cli_dir.parent / "libUKFBase.dylib").is_file():
+            extra_lib_dirs.append(str(cli_dir.parent))
+        module_root = Path(__file__).resolve().parents[1]
+        installed_ext_root = (
+            module_root.parents[2]
+            if module_root.name == "qt-scripted-modules" and len(module_root.parents) >= 3
+            else None
+        )
         runtime_root = next((root for root in bounded_parents(Path(sys.executable).resolve())
                              if any(root.glob("lib/Slicer-*"))), None)
         belongs_to_slicer = (
             (runtime_root is not None and runtime_root in cli_path.parents)
+            or (installed_ext_root is not None and installed_ext_root in cli_path.parents)
             or any(parent.parent.name == "slicer.org" and parent.name.startswith("Extensions-")
                    for parent in cli_path.parents)
         )

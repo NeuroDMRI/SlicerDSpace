@@ -33,7 +33,10 @@ TRACTCLOUD_QC_VERSION = 4
 MIN_BUNDLE_SAMPLING_SCREEN = 20  # Local sanity screen, not an author accuracy guarantee.
 VALID_TRACTCLOUD_DEVICES = {"auto", "cpu", "cuda"}
 TRACTCLOUD_COMPAT_BOOTSTRAP = (
-    "import json, logging, os, random, runpy, sys; import numpy as np; import torch; "
+    "import json, logging, os, random, runpy, sys; "
+    "_bsp = os.environ.get('SLICERDSPACE_BUNDLED_SITE_PACKAGES', ''); "
+    "sys.path[:0] = [p for p in _bsp.split(os.pathsep) if p]; "
+    "import numpy as np; import torch; "
     "seed = int(os.environ.get('SLICERDSPACE_TRACTCLOUD_SEED', '0')); "
     "random.seed(seed); np.random.seed(seed); torch.manual_seed(seed); "
     "torch.cuda.manual_seed_all(seed); import tractcloud.pipeline as pipeline; "

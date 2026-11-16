@@ -75,8 +75,27 @@ def backend_environment(extra=None, *, python_bin=None):
     return environment
 
 
+def _bundled_numpy_site_dirs(python_bin=None) -> list[str]:
+    if not is_slicer_python(python_executable(python_bin)):
+        return []
+    from shared.bundled_python import bundled_site_packages_dirs
+
+    return [str(d) for d in bundled_site_packages_dirs() if (d / 'numpy').is_dir()]
+
+
 def run_backend(arguments, *, python_bin=None, env=None, log=None, log_path=None):
-    command = [python_executable(python_bin), *map(str, arguments)]
+    sp_dirs = _bundled_numpy_site_dirs(python_bin)
+    args_list = [str(item) for item in arguments]
+    if sp_dirs and args_list and args_list[0].endswith('.py'):
+        script_dir = str((BACKEND_ROOT / args_list[0]).resolve().parent)
+        prepend = list(dict.fromkeys([str(BACKEND_ROOT), script_dir, *sp_dirs]))
+        command = [
+            python_executable(python_bin),
+            '-c',
+            f"import runpy, sys; sys.path[:0] = {prepend!r}; sys.argv = {args_list!r}; runpy.run_path(sys.argv[0], run_name='__main__')",
+        ]
+    else:
+        command = [python_executable(python_bin), *args_list]
     # PythonSlicer rebuilds its own runtime; external Python must not inherit it.
     environment = backend_environment(env, python_bin=python_bin)
     environment['PYTHONUNBUFFERED'] = '1'
@@ -136,8 +155,12 @@ def run_backend(arguments, *, python_bin=None, env=None, log=None, log_path=None
 
 
 def runtime_info(python_bin=None):
+    sp_dirs = _bundled_numpy_site_dirs(python_bin)
+    prefix = f"sys.path[:0] = {sp_dirs!r}; " if sp_dirs else ""
     command = [python_executable(python_bin), '-c',
-        "import json,sys,torch,numpy,nibabel,SimpleITK,trimesh; "
+        "import json,sys; "
+        + prefix
+        + "import torch,numpy,nibabel,SimpleITK,trimesh; "
         "print(json.dumps(dict(python=sys.version,executable=sys.executable,"
         "torch=torch.__version__,cuda=torch.version.cuda,numpy=numpy.__version__,"
         "nibabel=nibabel.__version__,SimpleITK=SimpleITK.Version_VersionString(),trimesh=trimesh.__version__)))"]

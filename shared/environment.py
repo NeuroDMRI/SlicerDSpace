@@ -1856,13 +1856,13 @@ def build_dependency_specs(config: EnvironmentDoctorConfig) -> tuple[DependencyS
                 python_executable=tractcloud_python,
                 python_path_entries=python_path_entries,
             )
-            # Slicer 5.6 embeds Python 3.9, where torch 2.2.2 is the latest release
-            # and supports all TractCloud APIs including torch.load(..., weights_only=True).
+            # Slicer 5.6 (Python 3.9) and macOS x86_64 Slicer 5.10 (Python 3.12)
+            # use torch 2.2.2, which supports torch.load(..., weights_only=True).
             _python(
                 specs,
                 target=target,
                 import_name="torch",
-                package="torch>=2.0.0" if sys.version_info < (3, 10) else "torch>=2.3.1",
+                package="torch>=2.0.0" if (sys.version_info < (3, 10) or platform_name == "Darwin") else "torch>=2.3.1",
                 python_executable=tractcloud_python,
                 key='python:tractcloud:torch',
                 notes="Inside Slicer, prefer installing torch via the Slicer PyTorch extension.",
@@ -2003,6 +2003,16 @@ def _python_distribution_name(package: str) -> Optional[str]:
         return None
 
 
+def _bundled_prepend_paths(python_path: Path) -> list[str]:
+    from shared.external_process import is_slicer_python
+
+    if not is_slicer_python(python_path):
+        return []
+    from shared.bundled_python import bundled_site_packages_dirs
+
+    return [str(d) for d in bundled_site_packages_dirs() if (d / "numpy").is_dir()]
+
+
 def _check_cuda_device(
     device: str,
     python_executable: Optional[Path],
@@ -2010,9 +2020,10 @@ def _check_cuda_device(
 ) -> tuple[bool, dict[str, Any]]:
     python_path = python_executable or Path(sys.executable)
     resolved_python_paths = tuple(path.expanduser().resolve() for path in python_path_entries if path)
+    prepend_paths = [*_bundled_prepend_paths(python_path), *(path.as_posix() for path in resolved_python_paths)]
     probe = (
         "import json, sys; "
-        f"sys.path[:0] = {[path.as_posix() for path in resolved_python_paths]!r}; "
+        f"sys.path[:0] = {prepend_paths!r}; "
         "payload = {'torch_importable': False, 'cuda_available': False, 'device_count': 0, 'torch_version': None, 'error': None}; "
         "\ntry:\n"
         "    import torch\n"
@@ -2137,9 +2148,10 @@ def _check_spec(spec: DependencySpec, platform_name: str) -> DependencyStatus:
             env = python_tool_environment(python_path)
             if python_path_entries:
                 env["PYTHONPATH"] = os.pathsep.join(path.as_posix() for path in python_path_entries) + os.pathsep + env.get("PYTHONPATH", "")
+            prepend_paths = [*_bundled_prepend_paths(python_path), *(path.as_posix() for path in python_path_entries)]
             probe = (
                 "import importlib.metadata, importlib.util, json, sys\n"
-                f"sys.path[:0] = {[path.as_posix() for path in python_path_entries]!r}\n"
+                f"sys.path[:0] = {prepend_paths!r}\n"
                 f"available = importlib.util.find_spec({spec.python_import!r}) is not None\n"
                 f"distribution = {(distribution_name if requirement_specifier else None)!r}\n"
                 "version = importlib.metadata.version(distribution) if available and distribution else None\n"

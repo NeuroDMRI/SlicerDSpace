@@ -70,6 +70,8 @@ def backend_environment(extra=None, *, python_bin=None):
         from shared.bundled_python import inject_bundled_python_env
 
         inject_bundled_python_env(environment)
+    if os.name == 'nt' and not any(environment.get(k) for k in ('LOGNAME', 'USER', 'LNAME', 'USERNAME')):
+        environment['USERNAME'] = 'slicer'
     return environment
 
 

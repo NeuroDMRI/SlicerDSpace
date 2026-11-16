@@ -203,6 +203,11 @@ class AllInOneBundlingTests(unittest.TestCase):
             (fake_sp / "nibabel" / "tests").mkdir(parents=True)
             (fake_sp / "nibabel" / "__init__.py").write_text("__version__ = '5.3.0'\n", encoding="utf-8")
             (fake_sp / "nibabel" / "tests" / "test_pkg.py").write_text("x = 1\n", encoding="utf-8")
+            # Ensure unused long-path C++ headers under torch/include are pruned
+            (fake_sp / "torch" / "include" / "ATen").mkdir(parents=True)
+            (fake_sp / "torch" / "include" / "ATen" / "long_header.h").write_text("// hdr\n", encoding="utf-8")
+            (fake_sp / "bin").mkdir(parents=True)
+            (fake_sp / "bin" / "helper_cli.py").write_text("#!/usr/bin/env python\n", encoding="utf-8")
 
             fake_cli = root / "cli-modules"
             fake_cli.mkdir()
@@ -232,6 +237,21 @@ class AllInOneBundlingTests(unittest.TestCase):
             audit = audit_package(archive, ROOT)
             self.assertEqual(audit["status"], "pass", audit)
             self.assertGreaterEqual(audit["bundled_python_file_count"], 2)
+
+            tar_archive = root / "SlicerDSpace-allinone.tar.gz"
+            package_extension(
+                ext_root,
+                tar_archive,
+                cli_modules_dir=fake_cli,
+                python_site_packages=fake_sp,
+                python_version="3.12",
+            )
+            import tarfile
+            with tarfile.open(tar_archive, "r:gz") as tf:
+                names = set(tf.getnames())
+                self.assertFalse(any("torch/include" in n for n in names))
+                cli_py_info = tf.getmember("SlicerDSpace/bundled-python/site-packages/bin/helper_cli.py")
+                self.assertEqual(cli_py_info.mode & 0o777, 0o755)
 
     def test_setup_selftest_native_runtime_script_prefers_pythonslicer_launcher(self):
         from shared import setup_selftest as selftest

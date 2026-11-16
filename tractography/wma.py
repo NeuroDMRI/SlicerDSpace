@@ -904,7 +904,7 @@ def _run_native_org(config, staging, wma_root, slicer, python, env, manifest, st
             stderr.write(f"\n[WMA] {stage}\n")
             stderr.flush()
             stage_output_start = stdout.tell()
-            completed = subprocess.run(command, cwd=wma_root, env=env, stdout=stdout, stderr=stderr)
+            completed = subprocess.run(command, cwd=staging, env=env, stdout=stdout, stderr=stderr)
             record["return_code"] = completed.returncode
             completed.check_returncode()
             if stage == "registration-nonrigid":
@@ -1126,6 +1126,17 @@ def run_wma_org_atlas(
                         shim = Path(temp_python_dir.name) / py_name
                         if not shim.exists():
                             shim.symlink_to(slicer_python)
+                    for cmd_name in (*REQUIRED_WMA_COMMANDS, "wm_diffusion_measurements.py"):
+                        if cmd_name == "wm_register_to_atlas_new.py" and config.registration_preprocess_cache:
+                            continue
+                        cmd_src = wma_root / "bin" / cmd_name
+                        if cmd_src.is_file():
+                            cmd_shim = Path(temp_python_dir.name) / cmd_name
+                            cmd_shim.write_text(
+                                f"#!/bin/sh\nexec {shlex.quote(str(slicer_python))} -u {shlex.quote(str(cmd_src))} \"$@\"\n",
+                                encoding="utf-8",
+                            )
+                            cmd_shim.chmod(0o755)
                     if config.registration_preprocess_cache:
                         runner = Path(__file__).resolve().parents[1] / "scripts" / "run_wma_registration.py"
                         author_registration = wma_root / "bin" / "wm_register_to_atlas_new.py"
@@ -1185,7 +1196,7 @@ def run_wma_org_atlas(
                 completed = subprocess.run(
                     runtime_command,
                     check=True,
-                    cwd=wma_root.as_posix(),
+                    cwd=staging.as_posix(),
                     env=env,
                     capture_output=True,
                     **text_subprocess_kwargs(),

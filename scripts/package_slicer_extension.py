@@ -24,7 +24,7 @@ if str(REPO_ROOT) not in sys.path:
 EXCLUDED_DIR_NAMES = {"__pycache__", ".pytest_cache", ".mypy_cache"}
 EXCLUDED_FILE_NAMES = {"extension_staging_manifest.json"}
 EXCLUDED_FILE_SUFFIXES = {".pyc", ".pyo"}
-NON_EXEC_SUFFIXES = {".xml", ".json", ".txt", ".md", ".rst", ".py", ".pth", ".cfg", ".toml", ".yml", ".yaml", ".csv", ".tsv", ".ini"}
+NON_EXEC_SUFFIXES = {".xml", ".json", ".txt", ".md", ".rst", ".pth", ".cfg", ".toml", ".yml", ".yaml", ".csv", ".tsv", ".ini"}
 
 
 def _is_excluded(path: Path, extension_root: Path) -> bool:
@@ -48,6 +48,8 @@ def _should_mark_executable(path: Path, relative: Path) -> bool:
     suffix = path.suffix.lower()
     if suffix in NON_EXEC_SUFFIXES:
         return False
+    if suffix == ".py":
+        return bool(set(relative.parts) & {"bin", "Scripts", "utilities"})
     if suffix in {".exe", ".dll", ".so", ".dylib", ".sh"} or ".so." in path.name:
         return True
     parts = set(relative.parts)
@@ -317,9 +319,19 @@ def _stage_python_site_packages(
             symlinks=False,
             ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo"),
         )
-    else:
-        for pycache in list(dest_sp.rglob("__pycache__")):
-            shutil.rmtree(pycache, ignore_errors=True)
+    for pycache in list(dest_sp.rglob("__pycache__")):
+        shutil.rmtree(pycache, ignore_errors=True)
+    # Remove unused C++ headers and deeply nested test/third_party trees that exceed Windows 260-char MAX_PATH
+    for prune_rel in (
+        Path("torch") / "include",
+        Path("statsmodels") / "tsa" / "vector_ar" / "tests" / "JMulTi_results",
+    ):
+        prune_target = dest_sp / prune_rel
+        if prune_target.is_dir():
+            shutil.rmtree(prune_target, ignore_errors=True)
+    for dist_tp in list(dest_sp.glob("*.dist-info/licenses/third_party")):
+        if dist_tp.is_dir():
+            shutil.rmtree(dist_tp, ignore_errors=True)
 
     for script_sub in ("bin", "Scripts"):
         sdir = dest_sp / script_sub

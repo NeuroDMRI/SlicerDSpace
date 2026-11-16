@@ -20,7 +20,7 @@
 <link rel="apple-touch-icon" href="assets/img/icon-180.png">
 <link rel="preload" href="assets/fonts/InterTight.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="assets/fonts/Inter.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="assets/css/site.css?v=slicer-links-20261117">
+<link rel="stylesheet" href="assets/css/site.css?v=slicer-first-only-20261117">
 <link rel="stylesheet" href="assets/css/performance.css?v=hidden-details-1">
 <link rel="stylesheet" href="assets/css/guide-bot.css">
 <script>document.documentElement.classList.add('js');</script>
@@ -130,8 +130,8 @@
     <ol class="start-steps">
       <li class="start-step">
         <div class="start-body">
-          <h4><span>Install </span><a class="slicer-link" href="https://download.slicer.org/" target="_blank" rel="noopener"><img class="slicer-logo" src="assets/img/slicer-logo.png" alt="3D Slicer logo" width="64" height="64" loading="lazy" decoding="async"><span>3D Slicer 5.10.0</span></a></h4>
-          <p>Download and install <a class="slicer-link" href="https://download.slicer.org/" target="_blank" rel="noopener"><img class="slicer-logo" src="assets/img/slicer-logo.png" alt="3D Slicer logo" width="64" height="64" loading="lazy" decoding="async"><span>3D Slicer 5.10.0</span></a> for your operating system (Windows x86_64, Linux x86_64, or Apple Silicon macOS arm64) from <a class="url-link" href="https://download.slicer.org/" target="_blank" rel="noopener">https://download.slicer.org/</a>. Typical installation and launcher paths:</p>
+          <h4>Install 3D Slicer 5.10.0</h4>
+          <p>Download and install 3D Slicer 5.10.0 for your operating system (Windows x86_64, Linux x86_64, or Apple Silicon macOS arm64) from <a class="url-link" href="https://download.slicer.org/" target="_blank" rel="noopener">https://download.slicer.org/</a>. Typical installation and launcher paths:</p>
           <ul>
             <li>Windows: <code>%LOCALAPPDATA%\slicer.org\Slicer 5.10.0\Slicer.exe</code> (or <code>C:\Program Files\Slicer 5.10.0\Slicer.exe</code>)</li>
             <li>Linux: extracted folder such as <code>~/Slicer-5.10.0-linux-amd64/Slicer</code> (or <code>/opt/Slicer-5.10.0-linux-amd64/Slicer</code>)</li>
@@ -143,7 +143,7 @@
         <div class="start-body">
           <h4>Install the SlicerDSpace release package</h4>
           <p>Download the release archive matching your system from SlicerDSpace GitHub Releases (<a class="url-link" href="https://github.com/NeuroDMRI/SlicerDSpace/releases" target="_blank" rel="noopener">https://github.com/NeuroDMRI/SlicerDSpace/releases</a>): <code>SlicerDSpace-v*-Windows-x64.zip</code>, <code>SlicerDSpace-v*-Linux-x64.tar.gz</code>, or <code>SlicerDSpace-v*-macOS-arm64.tar.gz</code> (do not use GitHub’s automatic Source code archive).</p>
-          <p>In <a class="slicer-link" href="https://download.slicer.org/" target="_blank" rel="noopener"><img class="slicer-logo" src="assets/img/slicer-logo.png" alt="3D Slicer logo" width="64" height="64" loading="lazy" decoding="async"><span>3D Slicer 5.10.0</span></a>, open View › Extensions Manager, click the top-right wrench icon, choose Install Extension from File…, select the downloaded archive, and restart Slicer. Then open Modules › Diffusion › SlicerDSpace.</p>
+          <p>In 3D Slicer 5.10.0, open View › Extensions Manager, click the top-right wrench icon, choose Install Extension from File…, select the downloaded archive, and restart Slicer. Then open Modules › Diffusion › SlicerDSpace.</p>
           <p>Slicer unpacks the extension (containing <code>lib/Slicer-5.10/qt-scripted-modules/shared/run_subject_pipeline_cli.py</code> and bundled runtimes) into its revision-specific extensions folder (also shown in Edit › Application Settings › Modules):</p>
           <ul>
             <li>Windows: <code>%LOCALAPPDATA%\slicer.org\Slicer 5.10.0\slicer.org\Extensions-34045\SlicerDSpace</code></li>
@@ -242,7 +242,7 @@ Show me the plan and wait for confirmation before running. Afterwards, summarize
     </div>
     <div class="start-cli" id="cli" aria-labelledby="cli-title">
       <h3 class="start-route-title" id="cli-title"><span class="start-route-marker" aria-hidden="true">C</span><span class="start-route-label start-route-text">Command-line execution and cohort processing</span></h3>
-      <p>Point <code>SLICER_LAUNCHER</code> to your <a class="slicer-link" href="https://download.slicer.org/" target="_blank" rel="noopener"><img class="slicer-logo" src="assets/img/slicer-logo.png" alt="3D Slicer logo" width="64" height="64" loading="lazy" decoding="async"><span>3D Slicer 5.10.0</span></a> executable and <code>DSPACE_REPO</code> to the installed extension’s <code>lib/Slicer-5.10/qt-scripted-modules</code> directory (or local checkout), then run a DTI-only check:</p>
+      <p>Point <code>SLICER_LAUNCHER</code> to your 3D Slicer 5.10.0 executable and <code>DSPACE_REPO</code> to the installed extension’s <code>lib/Slicer-5.10/qt-scripted-modules</code> directory (or local checkout), then run a DTI-only check:</p>
       <div class="code" data-code>
         <div class="code-head"><span>bash</span><button class="copy" type="button" hidden>Copy</button></div>
         <pre><code>export SLICER_LAUNCHER="/path/to/Slicer"
@@ -1026,7 +1026,7 @@ export SUBJECT_ROOT="/path/to/sub-01"
     <div class="foot-grid">
       <div class="foot-identity">
         <a class="foot-brand" href="#top"><img src="assets/img/slicerdspace-wordmark-light.svg" alt="SlicerDSpace" width="1324" height="239" loading="lazy" decoding="async"></a>
-        <p><span>Built for </span><a class="slicer-link" href="https://download.slicer.org/" target="_blank" rel="noopener"><img class="slicer-logo" src="assets/img/slicer-logo.png" alt="3D Slicer logo" width="64" height="64" loading="lazy" decoding="async"><span>3D Slicer</span></a><span> — native diffusion MRI workflows.</span></p>
+        <p>Diffusion MRI workflows in 3D Slicer.</p>
       </div>
       <nav class="foot-nav" aria-label="Resources">
         <div>

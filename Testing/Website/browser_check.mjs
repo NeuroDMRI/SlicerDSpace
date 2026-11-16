@@ -395,6 +395,8 @@ async function runViewport(browser, origin, name, width, height, opts) {
     const slicerImg = slicerLink?.querySelector('img.slicer-logo');
     return !document.getElementById('transcript') &&
       document.querySelectorAll('#film .meta-row a').length === 3 &&
+      document.querySelectorAll('a.slicer-link').length === 1 &&
+      document.querySelectorAll('img.slicer-logo').length === 1 &&
       meta.firstElementChild.matches('span.meta-slicer') &&
       meta.children[1].matches('a.source-link') &&
       !!slicerLink &&

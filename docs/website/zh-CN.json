@@ -1213,7 +1213,7 @@
   "In Results and QC, select the completed run, click the eye icon beside an output to load or toggle it in the 3D Slicer scene (or right-click to unload from the scene or open table and JSON files), and click Open report to view the HTML QC summary. Review mask coverage, alignment and method-specific QC before accepting results.": "在 Results and QC 中选择已完成的运行，点击输出项旁的眼睛图标即可按需加载至 3D Slicer 场景或切换显隐（右键可从场景卸载或直接打开表格与 JSON 文件），点击 Open report 查看 HTML 质控摘要。接受结果前请核查脑掩膜覆盖、空间对齐及各方法质控指标。",
   "Defaults: DTI, CSD/ACT and WMQL. Stage parameters are configured in each stage’s ... settings, and missing dependencies for selected routes are checked before execution and prepared on confirmation. External tools and model assets are not installed silently.": "默认使用 DTI、CSD/ACT 和 WMQL。各阶段参数通过对应阶段旁的“...”配置，所选路线的缺失依赖会在运行前检查并经用户确认后准备；外部工具和模型资源不会静默安装。",
   "Install 3D Slicer 5.10.0": "安装 3D Slicer 5.10.0",
-  "Download and install 3D Slicer 5.10.0 for your operating system (Windows x86_64, Linux x86_64, or Apple Silicon macOS arm64) from": "请前往",
+  "Download and install 3D Slicer 5.10.0 for your operating system (Windows x86_64, Linux x86_64, or Apple Silicon macOS arm64) from": "下载并安装对应操作系统的 3D Slicer 5.10.0（支持 Windows x86_64、Linux x86_64 与 Apple Silicon macOS arm64），官方安装地址：",
   "download.slicer.org": "download.slicer.org 下载页面",
   ". Typical installation and launcher paths:": "。默认安装与启动器路径如下：",
   "Windows:": "Windows：",
@@ -1244,14 +1244,7 @@
   "3D Slicer logo": "3D Slicer 图标",
   "Set up manually": "手动安装与配置",
   "Install, run and review with your Agent": "使用 Agent 协助安装、分析与结果检查",
-  "Install": "安装",
-  "Download and install": "下载并安装",
-  "for your operating system (Windows x86_64, Linux x86_64, or Apple Silicon macOS arm64) from": "（支持 Windows x86_64、Linux x86_64 与 Apple Silicon macOS arm64），官方安装地址：",
   "Download the release archive matching your system from SlicerDSpace GitHub Releases (": "前往 SlicerDSpace GitHub Releases（",
   "):": "）下载对应系统的发布包：",
-  "(do not use GitHub’s automatic Source code archive).": "（请勿使用 GitHub 自动生成的 Source code 源码归档）。",
-  "In": "在",
-  ", open View › Extensions Manager, click the top-right wrench icon, choose Install Extension from File…, select the downloaded archive, and restart Slicer. Then open Modules › Diffusion › SlicerDSpace.": "中依次打开 View › Extensions Manager，点击右上角扳手图标，选择 Install Extension from File…，选中下载好的发布包并重启 Slicer；重启后打开 Modules › Diffusion › SlicerDSpace。",
-  "to your": "指向本机",
-  "executable and": "可执行文件，将"
+  "(do not use GitHub’s automatic Source code archive).": "（请勿使用 GitHub 自动生成的 Source code 源码归档）。"
 }

@@ -20,7 +20,7 @@
 <link rel="apple-touch-icon" href="assets/img/icon-180.png">
 <link rel="preload" href="assets/fonts/InterTight.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="assets/fonts/Inter.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="assets/css/site.css?v=slicer-links-20261117">
+<link rel="stylesheet" href="assets/css/site.css?v=slicer-first-only-20261117">
 <link rel="stylesheet" href="assets/css/performance.css?v=hidden-details-1">
 <link rel="stylesheet" href="assets/css/guide-bot.css">
 <script>document.documentElement.classList.add('js');</script>
@@ -130,8 +130,8 @@
     <ol class="start-steps">
       <li class="start-step">
         <div class="start-body">
-          <h4><span>安装 </span><a class="slicer-link" href="https://download.slicer.org/" target="_blank" rel="noopener"><img class="slicer-logo" src="assets/img/slicer-logo.png" alt="3D Slicer 图标" width="64" height="64" loading="lazy" decoding="async"><span>3D Slicer 5.10.0</span></a></h4>
-          <p>下载并安装 <a class="slicer-link" href="https://download.slicer.org/" target="_blank" rel="noopener"><img class="slicer-logo" src="assets/img/slicer-logo.png" alt="3D Slicer 图标" width="64" height="64" loading="lazy" decoding="async"><span>3D Slicer 5.10.0</span></a> （支持 Windows x86_64、Linux x86_64 与 Apple Silicon macOS arm64），官方安装地址： <a class="url-link" href="https://download.slicer.org/" target="_blank" rel="noopener">https://download.slicer.org/</a>。默认安装与启动器路径如下：</p>
+          <h4>安装 3D Slicer 5.10.0</h4>
+          <p>下载并安装对应操作系统的 3D Slicer 5.10.0（支持 Windows x86_64、Linux x86_64 与 Apple Silicon macOS arm64），官方安装地址： <a class="url-link" href="https://download.slicer.org/" target="_blank" rel="noopener">https://download.slicer.org/</a>。默认安装与启动器路径如下：</p>
           <ul>
             <li>Windows： <code>%LOCALAPPDATA%\slicer.org\Slicer 5.10.0\Slicer.exe</code> （或 <code>C:\Program Files\Slicer 5.10.0\Slicer.exe</code>）</li>
             <li>Linux：解压后的目录，如 <code>~/Slicer-5.10.0-linux-amd64/Slicer</code> （或 <code>/opt/Slicer-5.10.0-linux-amd64/Slicer</code>）</li>
@@ -143,7 +143,7 @@
         <div class="start-body">
           <h4>安装 SlicerDSpace 发布包</h4>
           <p>前往 SlicerDSpace GitHub Releases（<a class="url-link" href="https://github.com/NeuroDMRI/SlicerDSpace/releases" target="_blank" rel="noopener">https://github.com/NeuroDMRI/SlicerDSpace/releases</a>）下载对应系统的发布包： <code>SlicerDSpace-v*-Windows-x64.zip</code>, <code>SlicerDSpace-v*-Linux-x64.tar.gz</code>或 <code>SlicerDSpace-v*-macOS-arm64.tar.gz</code> （请勿使用 GitHub 自动生成的 Source code 源码归档）。</p>
-          <p>在 <a class="slicer-link" href="https://download.slicer.org/" target="_blank" rel="noopener"><img class="slicer-logo" src="assets/img/slicer-logo.png" alt="3D Slicer 图标" width="64" height="64" loading="lazy" decoding="async"><span>3D Slicer 5.10.0</span></a>中依次打开 View › Extensions Manager，点击右上角扳手图标，选择 Install Extension from File…，选中下载好的发布包并重启 Slicer；重启后打开 Modules › Diffusion › SlicerDSpace。</p>
+          <p>在 3D Slicer 5.10.0 中依次打开 View › Extensions Manager，点击右上角扳手图标，选择 Install Extension from File…，选中下载好的发布包并重启 Slicer；重启后打开 Modules › Diffusion › SlicerDSpace。</p>
           <p>Slicer 会将扩展（内含 <code>lib/Slicer-5.10/qt-scripted-modules/shared/run_subject_pipeline_cli.py</code> 与内置运行时）解压至对应修订版本的扩展目录（也可在 Edit › Application Settings › Modules 中查看）：</p>
           <ul>
             <li>Windows： <code>%LOCALAPPDATA%\slicer.org\Slicer 5.10.0\slicer.org\Extensions-34045\SlicerDSpace</code></li>
@@ -242,7 +242,7 @@ python3 scripts/stage_slicer_extension.py \
     </div>
     <div class="start-cli" id="cli" aria-labelledby="cli-title">
       <h3 class="start-route-title" id="cli-title"><span class="start-route-marker" aria-hidden="true">C</span><span class="start-route-label start-route-text">命令行运行与队列批处理</span></h3>
-      <p>将 <code>SLICER_LAUNCHER</code> 指向本机 <a class="slicer-link" href="https://download.slicer.org/" target="_blank" rel="noopener"><img class="slicer-logo" src="assets/img/slicer-logo.png" alt="3D Slicer 图标" width="64" height="64" loading="lazy" decoding="async"><span>3D Slicer 5.10.0</span></a> 可执行文件，将 <code>DSPACE_REPO</code> 指向已安装扩展的 <code>lib/Slicer-5.10/qt-scripted-modules</code> 目录（或本地源码目录），再运行最小 DTI 环境检查：</p>
+      <p>将 <code>SLICER_LAUNCHER</code> 指向本机 3D Slicer 5.10.0 可执行文件，将 <code>DSPACE_REPO</code> 指向已安装扩展的 <code>lib/Slicer-5.10/qt-scripted-modules</code> 目录（或本地源码目录），再运行最小 DTI 环境检查：</p>
       <div class="code" data-code>
         <div class="code-head"><span>bash</span><button class="copy" type="button" hidden>复制</button></div>
         <pre><code>export SLICER_LAUNCHER="/path/to/Slicer"
@@ -1026,7 +1026,7 @@ export SUBJECT_ROOT="/path/to/sub-01"
     <div class="foot-grid">
       <div class="foot-identity">
         <a class="foot-brand" href="#top"><img src="assets/img/slicerdspace-wordmark-light.svg" alt="SlicerDSpace" width="1324" height="239" loading="lazy" decoding="async"></a>
-        <p><span>面向 </span><a class="slicer-link" href="https://download.slicer.org/" target="_blank" rel="noopener"><img class="slicer-logo" src="assets/img/slicer-logo.png" alt="3D Slicer 图标" width="64" height="64" loading="lazy" decoding="async"><span>3D Slicer</span></a><span> 的原生扩散 MRI 分析工作流。</span></p>
+        <p>3D Slicer 中的扩散 MRI 分析工作流。</p>
       </div>
       <nav class="foot-nav" aria-label="资源">
         <div>

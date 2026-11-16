@@ -854,13 +854,11 @@ figcaption {
   transition: color .18s, text-decoration-color .18s;
 }
 .slicer-link:hover,
-.meta-row a.slicer-link:hover,
-.site-footer a.slicer-link:hover {
+.meta-row a.slicer-link:hover {
   color: #9be0ff;
   text-decoration-color: rgba(155, 224, 255, .9);
 }
-.meta-row a.slicer-link,
-.site-footer a.slicer-link {
+.meta-row a.slicer-link {
   color: #63c7ff;
   text-decoration: underline;
   text-decoration-color: rgba(99, 199, 255, .42);

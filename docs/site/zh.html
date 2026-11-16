@@ -20,7 +20,7 @@
 <link rel="apple-touch-icon" href="assets/img/icon-180.png">
 <link rel="preload" href="assets/fonts/InterTight.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="assets/fonts/Inter.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="assets/css/site.css?v=footer-clean-20261031">
+<link rel="stylesheet" href="assets/css/site.css?v=slicer-links-20261117">
 <link rel="stylesheet" href="assets/css/performance.css?v=hidden-details-1">
 <link rel="stylesheet" href="assets/css/guide-bot.css">
 <script>document.documentElement.classList.add('js');</script>
@@ -83,7 +83,7 @@
       </div>
     </div>
     <p class="meta-row">
-      <span>3D Slicer 中的扩散 MRI 分析工作流。</span>
+      <span class="meta-slicer"><span>面向 </span><a class="slicer-link" href="https://download.slicer.org/" target="_blank" rel="noopener"><img class="slicer-logo" src="assets/img/slicer-logo.png" alt="3D Slicer 图标" width="64" height="64" loading="lazy" decoding="async"><span>3D Slicer</span></a><span> 的原生扩散 MRI 分析工作流。</span></span>
       <a class="source-link" href="https://github.com/NeuroDMRI/SlicerDSpace" target="_blank" rel="noopener">
         <svg viewbox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false"><path fill="currentColor" d="M12 .5a12 12 0 0 0-3.794 23.384c.6.111.82-.261.82-.577v-2.234c-3.338.726-4.043-1.416-4.043-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.09-.745.083-.729.083-.729 1.205.085 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.108-.775.418-1.305.762-1.605-2.665-.303-5.467-1.334-5.467-5.931 0-1.31.469-2.381 1.236-3.221-.124-.303-.536-1.524.117-3.176 0 0 1.008-.323 3.301 1.23A11.51 11.51 0 0 1 12 6.3c1.02.005 2.047.138 3.006.404 2.291-1.553 3.297-1.23 3.297-1.23.655 1.652.243 2.873.119 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.625-5.479 5.922.43.372.823 1.102.823 2.222v3.292c0 .319.216.694.825.576A12.001 12.001 0 0 0 12 .5Z"/></svg>
         源码
@@ -126,53 +126,12 @@
   <div class="container">
     <p class="eyebrow">开始使用</p>
     <h2>从安装到获得第一份结果。</h2>
-    <div class="start-skills" id="skills" aria-labelledby="skills-title">
-      <h3 class="start-route-title" id="skills-title"><span class="start-route-marker" aria-hidden="true">A</span><span class="start-route-label"><span class="start-route-text">让 Agent 协助安装、分析与结果检查。</span> <span class="start-recommended">（推荐）</span></span></h3>
-      <ol class="start-steps agent-steps">
-        <li class="start-step">
-          <div class="start-body">
-            <h4>查看 Skill</h4>
-            <p>我们为 SlicerDSpace 提供安装与使用 Skill。将 SKILL.md 交给本地 Agent，即可按照指南准备环境、执行分析并检查结果。</p>
-            <p class="note">下方指令以 SKILL.md 为入口。如需安装 Skill，请一并保留 slicerdspace 文件夹中的参考资料、脚本和模板。</p>
-            <ul class="doc-links">
-              <li><a class="btn btn-secondary" href="https://github.com/NeuroDMRI/SlicerDSpace/blob/main/.agents/skills/slicerdspace/SKILL.md" target="_blank" rel="noopener">查看 Skill</a></li>
-              <li><a class="btn btn-secondary" href="https://github.com/NeuroDMRI/SlicerDSpace/blob/main/.agents/skills/slicerdspace/references/usage.md" target="_blank" rel="noopener">Agent 使用指南</a></li>
-              <li><a class="btn btn-secondary" href="https://github.com/NeuroDMRI/SlicerDSpace/blob/main/docs/setup/CLI_TEMPLATES.md" target="_blank" rel="noopener">命令行模板</a></li>
-            </ul>
-          </div>
-        </li>
-        <li class="start-step">
-          <div class="start-body skill-prompt">
-            <h4>安装并启用</h4>
-            <div class="code" data-code>
-              <div class="code-head"><span>Agent 安装指令</span><button class="copy" type="button" hidden>复制</button></div>
-              <pre><code id="agent-install-prompt">参考 https://github.com/NeuroDMRI/SlicerDSpace/blob/main/.agents/skills/slicerdspace/SKILL.md
-帮我将 SlicerDSpace 安装并启用到本机的 3D Slicer 中，
-配置需要的依赖环境，并下载相应的模型权重。</code></pre>
-            </div>
-            <p class="note">Agent 会检查存储空间和已有资源，在你选定存放位置后保存路径，并按所选分析准备环境。遇到许可或重启提示时请确认。</p>
-          </div>
-        </li>
-        <li class="start-step">
-          <div class="start-body skill-prompt">
-            <h4>使用已安装的插件</h4>
-            <p>替换输入与输出路径，并选择研究所需的方法。以下示例运行 DDParcel、CSD/ACT 纤维追踪和结构连接组分析。</p>
-            <div class="code" data-code>
-              <div class="code-head"><span>Agent 分析指令</span><button class="copy" type="button" hidden>复制</button></div>
-              <pre><code id="agent-analysis-prompt">参考 https://github.com/NeuroDMRI/SlicerDSpace/blob/main/.agents/skills/slicerdspace/SKILL.md
-使用 SlicerDSpace 对 /path/to/subject 运行 DDParcel 脑区分区、CSD/ACT 纤维追踪和结构连接组分析，结果保存到 /path/to/results。
-先展示计划，等我确认后再运行；完成后汇总输出与 QC 结果。</code></pre>
-            </div>
-          </div>
-        </li>
-      </ol>
-    </div>
-    <h3 class="start-route-title start-manual-title"><span class="start-route-marker" aria-hidden="true">B</span><span class="start-route-label start-route-text">也可以手动配置</span></h3>
+    <h3 class="start-route-title" id="manual-title"><span class="start-route-marker" aria-hidden="true">A</span><span class="start-route-label start-route-text">手动安装与配置</span></h3>
     <ol class="start-steps">
       <li class="start-step">
         <div class="start-body">
-          <h4>安装 3D Slicer 5.10.0</h4>
-          <p>请前往 <a href="https://download.slicer.org/" target="_blank" rel="noopener">download.slicer.org 下载页面</a>下载并安装对应操作系统的 3D Slicer 5.10.0（支持 Windows x86_64、Linux x86_64 与 Apple Silicon macOS arm64），默认安装与启动器路径如下：</p>
+          <h4><span>安装 </span><a class="slicer-link" href="https://download.slicer.org/" target="_blank" rel="noopener"><img class="slicer-logo" src="assets/img/slicer-logo.png" alt="3D Slicer 图标" width="64" height="64" loading="lazy" decoding="async"><span>3D Slicer 5.10.0</span></a></h4>
+          <p>下载并安装 <a class="slicer-link" href="https://download.slicer.org/" target="_blank" rel="noopener"><img class="slicer-logo" src="assets/img/slicer-logo.png" alt="3D Slicer 图标" width="64" height="64" loading="lazy" decoding="async"><span>3D Slicer 5.10.0</span></a> （支持 Windows x86_64、Linux x86_64 与 Apple Silicon macOS arm64），官方安装地址： <a class="url-link" href="https://download.slicer.org/" target="_blank" rel="noopener">https://download.slicer.org/</a>。默认安装与启动器路径如下：</p>
           <ul>
             <li>Windows： <code>%LOCALAPPDATA%\slicer.org\Slicer 5.10.0\Slicer.exe</code> （或 <code>C:\Program Files\Slicer 5.10.0\Slicer.exe</code>）</li>
             <li>Linux：解压后的目录，如 <code>~/Slicer-5.10.0-linux-amd64/Slicer</code> （或 <code>/opt/Slicer-5.10.0-linux-amd64/Slicer</code>）</li>
@@ -183,8 +142,8 @@
       <li class="start-step">
         <div class="start-body">
           <h4>安装 SlicerDSpace 发布包</h4>
-          <p>前往 <a href="https://github.com/NeuroDMRI/SlicerDSpace/releases" target="_blank" rel="noopener">GitHub Releases 页面</a> 下载对应系统的发布包（<code>SlicerDSpace-v*-Windows-x64.zip</code>, <code>SlicerDSpace-v*-Linux-x64.tar.gz</code>或 <code>SlicerDSpace-v*-macOS-arm64.tar.gz</code>；请勿使用 GitHub 自动生成的 Source code 源码归档）。</p>
-          <p>在 3D Slicer 5.10.0 中依次打开 View › Extensions Manager，点击右上角扳手图标，选择 Install Extension from File…，选中下载好的发布包并重启 Slicer；重启后打开 Modules › Diffusion › SlicerDSpace。</p>
+          <p>前往 SlicerDSpace GitHub Releases（<a class="url-link" href="https://github.com/NeuroDMRI/SlicerDSpace/releases" target="_blank" rel="noopener">https://github.com/NeuroDMRI/SlicerDSpace/releases</a>）下载对应系统的发布包： <code>SlicerDSpace-v*-Windows-x64.zip</code>, <code>SlicerDSpace-v*-Linux-x64.tar.gz</code>或 <code>SlicerDSpace-v*-macOS-arm64.tar.gz</code> （请勿使用 GitHub 自动生成的 Source code 源码归档）。</p>
+          <p>在 <a class="slicer-link" href="https://download.slicer.org/" target="_blank" rel="noopener"><img class="slicer-logo" src="assets/img/slicer-logo.png" alt="3D Slicer 图标" width="64" height="64" loading="lazy" decoding="async"><span>3D Slicer 5.10.0</span></a>中依次打开 View › Extensions Manager，点击右上角扳手图标，选择 Install Extension from File…，选中下载好的发布包并重启 Slicer；重启后打开 Modules › Diffusion › SlicerDSpace。</p>
           <p>Slicer 会将扩展（内含 <code>lib/Slicer-5.10/qt-scripted-modules/shared/run_subject_pipeline_cli.py</code> 与内置运行时）解压至对应修订版本的扩展目录（也可在 Edit › Application Settings › Modules 中查看）：</p>
           <ul>
             <li>Windows： <code>%LOCALAPPDATA%\slicer.org\Slicer 5.10.0\slicer.org\Extensions-34045\SlicerDSpace</code></li>
@@ -240,9 +199,50 @@ python3 scripts/stage_slicer_extension.py \
         </div>
       </li>
     </ol>
+    <div class="start-skills" id="skills" aria-labelledby="skills-title">
+      <h3 class="start-route-title" id="skills-title"><span class="start-route-marker" aria-hidden="true">B</span><span class="start-route-label"><span class="start-route-text">使用 Agent 协助安装、分析与结果检查</span></span></h3>
+      <ol class="start-steps agent-steps">
+        <li class="start-step">
+          <div class="start-body">
+            <h4>查看 Skill</h4>
+            <p>我们为 SlicerDSpace 提供安装与使用 Skill。将 SKILL.md 交给本地 Agent，即可按照指南准备环境、执行分析并检查结果。</p>
+            <p class="note">下方指令以 SKILL.md 为入口。如需安装 Skill，请一并保留 slicerdspace 文件夹中的参考资料、脚本和模板。</p>
+            <ul class="doc-links">
+              <li><a class="btn btn-secondary" href="https://github.com/NeuroDMRI/SlicerDSpace/blob/main/.agents/skills/slicerdspace/SKILL.md" target="_blank" rel="noopener">查看 Skill</a></li>
+              <li><a class="btn btn-secondary" href="https://github.com/NeuroDMRI/SlicerDSpace/blob/main/.agents/skills/slicerdspace/references/usage.md" target="_blank" rel="noopener">Agent 使用指南</a></li>
+              <li><a class="btn btn-secondary" href="https://github.com/NeuroDMRI/SlicerDSpace/blob/main/docs/setup/CLI_TEMPLATES.md" target="_blank" rel="noopener">命令行模板</a></li>
+            </ul>
+          </div>
+        </li>
+        <li class="start-step">
+          <div class="start-body skill-prompt">
+            <h4>安装并启用</h4>
+            <div class="code" data-code>
+              <div class="code-head"><span>Agent 安装指令</span><button class="copy" type="button" hidden>复制</button></div>
+              <pre><code id="agent-install-prompt">参考 https://github.com/NeuroDMRI/SlicerDSpace/blob/main/.agents/skills/slicerdspace/SKILL.md
+帮我将 SlicerDSpace 安装并启用到本机的 3D Slicer 中，
+配置需要的依赖环境，并下载相应的模型权重。</code></pre>
+            </div>
+            <p class="note">Agent 会检查存储空间和已有资源，在你选定存放位置后保存路径，并按所选分析准备环境。遇到许可或重启提示时请确认。</p>
+          </div>
+        </li>
+        <li class="start-step">
+          <div class="start-body skill-prompt">
+            <h4>使用已安装的插件</h4>
+            <p>替换输入与输出路径，并选择研究所需的方法。以下示例运行 DDParcel、CSD/ACT 纤维追踪和结构连接组分析。</p>
+            <div class="code" data-code>
+              <div class="code-head"><span>Agent 分析指令</span><button class="copy" type="button" hidden>复制</button></div>
+              <pre><code id="agent-analysis-prompt">参考 https://github.com/NeuroDMRI/SlicerDSpace/blob/main/.agents/skills/slicerdspace/SKILL.md
+使用 SlicerDSpace 对 /path/to/subject 运行 DDParcel 脑区分区、CSD/ACT 纤维追踪和结构连接组分析，结果保存到 /path/to/results。
+先展示计划，等我确认后再运行；完成后汇总输出与 QC 结果。</code></pre>
+            </div>
+          </div>
+        </li>
+      </ol>
+    </div>
     <div class="start-cli" id="cli" aria-labelledby="cli-title">
       <h3 class="start-route-title" id="cli-title"><span class="start-route-marker" aria-hidden="true">C</span><span class="start-route-label start-route-text">命令行运行与队列批处理</span></h3>
-      <p>将 <code>SLICER_LAUNCHER</code> 指向本机 3D Slicer 5.10.0 可执行文件，将 <code>DSPACE_REPO</code> 指向已安装扩展的 <code>lib/Slicer-5.10/qt-scripted-modules</code> 目录（或本地源码目录），再运行最小 DTI 环境检查：</p>
+      <p>将 <code>SLICER_LAUNCHER</code> 指向本机 <a class="slicer-link" href="https://download.slicer.org/" target="_blank" rel="noopener"><img class="slicer-logo" src="assets/img/slicer-logo.png" alt="3D Slicer 图标" width="64" height="64" loading="lazy" decoding="async"><span>3D Slicer 5.10.0</span></a> 可执行文件，将 <code>DSPACE_REPO</code> 指向已安装扩展的 <code>lib/Slicer-5.10/qt-scripted-modules</code> 目录（或本地源码目录），再运行最小 DTI 环境检查：</p>
       <div class="code" data-code>
         <div class="code-head"><span>bash</span><button class="copy" type="button" hidden>复制</button></div>
         <pre><code>export SLICER_LAUNCHER="/path/to/Slicer"
@@ -1026,7 +1026,7 @@ export SUBJECT_ROOT="/path/to/sub-01"
     <div class="foot-grid">
       <div class="foot-identity">
         <a class="foot-brand" href="#top"><img src="assets/img/slicerdspace-wordmark-light.svg" alt="SlicerDSpace" width="1324" height="239" loading="lazy" decoding="async"></a>
-        <p>3D Slicer 中的扩散 MRI 分析工作流。</p>
+        <p><span>面向 </span><a class="slicer-link" href="https://download.slicer.org/" target="_blank" rel="noopener"><img class="slicer-logo" src="assets/img/slicer-logo.png" alt="3D Slicer 图标" width="64" height="64" loading="lazy" decoding="async"><span>3D Slicer</span></a><span> 的原生扩散 MRI 分析工作流。</span></p>
       </div>
       <nav class="foot-nav" aria-label="资源">
         <div>
@@ -1043,6 +1043,7 @@ export SUBJECT_ROOT="/path/to/sub-01"
           <ul>
             <li><a href="#start">开始使用</a></li>
             <li><a href="https://github.com/NeuroDMRI/SlicerDSpace" target="_blank" rel="noopener">GitHub</a></li>
+            <li><a href="https://github.com/NeuroDMRI/SlicerDSpace/releases" target="_blank" rel="noopener">发布包下载</a></li>
             <li><a href="https://github.com/NeuroDMRI/SlicerDSpace/blob/main/.agents/skills/slicerdspace/SKILL.md" target="_blank" rel="noopener">Agent Skill</a></li>
             <li><a href="https://github.com/NeuroDMRI/SlicerDSpace/blob/main/CITATION.cff" target="_blank" rel="noopener">引用本软件</a></li>
           </ul>

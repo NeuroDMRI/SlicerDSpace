@@ -840,8 +840,54 @@ figcaption {
   border-left-color: var(--blue);
 }
 
+/* ---------- Inline 3D Slicer & URL links ---------- */
+.slicer-link {
+  display: inline-flex;
+  align-items: center;
+  gap: .34em;
+  color: #63c7ff;
+  font-weight: 600;
+  text-decoration: underline;
+  text-decoration-color: rgba(99, 199, 255, .42);
+  text-underline-offset: 3px;
+  vertical-align: -.06em;
+  transition: color .18s, text-decoration-color .18s;
+}
+.slicer-link:hover,
+.meta-row a.slicer-link:hover,
+.site-footer a.slicer-link:hover {
+  color: #9be0ff;
+  text-decoration-color: rgba(155, 224, 255, .9);
+}
+.meta-row a.slicer-link,
+.site-footer a.slicer-link {
+  color: #63c7ff;
+  text-decoration: underline;
+  text-decoration-color: rgba(99, 199, 255, .42);
+}
+.slicer-logo {
+  display: inline-block;
+  width: 1.08em;
+  height: 1.08em;
+  flex: 0 0 auto;
+  object-fit: contain;
+}
+.url-link {
+  font-family: var(--f-mono);
+  font-size: .92em;
+  color: #7cb3ff;
+  text-decoration: underline;
+  text-decoration-color: rgba(124, 179, 255, .45);
+  text-underline-offset: 3px;
+  overflow-wrap: anywhere;
+}
+.url-link:hover {
+  color: #a8ceff;
+  text-decoration-color: currentColor;
+}
+
 /* ---------- Agent Skills ---------- */
-.start-skills { padding-bottom: 36px; }
+.start-skills { margin-top: 32px; padding-top: 32px; padding-bottom: 8px; border-top: 1px solid var(--line-2); }
 .skill-prompt { max-width: 54em; }
 .skill-prompt pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 .agent-steps .doc-links { margin-top: 20px; margin-bottom: 4px; }
@@ -875,16 +921,6 @@ figcaption {
   letter-spacing: 0;
 }
 .start-route-label { min-width: 0; }
-.start-recommended {
-  display: inline-block;
-  color: var(--route-accent);
-  font-family: var(--f-body);
-  font-size: .56em;
-  font-weight: 500;
-  letter-spacing: 0;
-  vertical-align: .12em;
-}
-.start-manual-title { padding-top: 32px; border-top: 1px solid var(--line-2); }
 .start-steps {
   list-style: none;
   counter-reset: start;

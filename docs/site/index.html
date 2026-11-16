@@ -20,7 +20,7 @@
 <link rel="apple-touch-icon" href="assets/img/icon-180.png">
 <link rel="preload" href="assets/fonts/InterTight.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="assets/fonts/Inter.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="assets/css/site.css?v=footer-clean-20261031">
+<link rel="stylesheet" href="assets/css/site.css?v=slicer-links-20261117">
 <link rel="stylesheet" href="assets/css/performance.css?v=hidden-details-1">
 <link rel="stylesheet" href="assets/css/guide-bot.css">
 <script>document.documentElement.classList.add('js');</script>
@@ -83,7 +83,7 @@
       </div>
     </div>
     <p class="meta-row">
-      <span>Diffusion MRI workflows in 3D Slicer.</span>
+      <span class="meta-slicer"><span>Built for </span><a class="slicer-link" href="https://download.slicer.org/" target="_blank" rel="noopener"><img class="slicer-logo" src="assets/img/slicer-logo.png" alt="3D Slicer logo" width="64" height="64" loading="lazy" decoding="async"><span>3D Slicer</span></a><span> — native diffusion MRI workflows.</span></span>
       <a class="source-link" href="https://github.com/NeuroDMRI/SlicerDSpace" target="_blank" rel="noopener">
         <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false"><path fill="currentColor" d="M12 .5a12 12 0 0 0-3.794 23.384c.6.111.82-.261.82-.577v-2.234c-3.338.726-4.043-1.416-4.043-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.09-.745.083-.729.083-.729 1.205.085 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.108-.775.418-1.305.762-1.605-2.665-.303-5.467-1.334-5.467-5.931 0-1.31.469-2.381 1.236-3.221-.124-.303-.536-1.524.117-3.176 0 0 1.008-.323 3.301 1.23A11.51 11.51 0 0 1 12 6.3c1.02.005 2.047.138 3.006.404 2.291-1.553 3.297-1.23 3.297-1.23.655 1.652.243 2.873.119 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.625-5.479 5.922.43.372.823 1.102.823 2.222v3.292c0 .319.216.694.825.576A12.001 12.001 0 0 0 12 .5Z"/></svg>
         Source code
@@ -126,53 +126,12 @@
   <div class="container">
     <p class="eyebrow">Get started</p>
     <h2>From installation to your first result.</h2>
-    <div class="start-skills" id="skills" aria-labelledby="skills-title">
-      <h3 class="start-route-title" id="skills-title"><span class="start-route-marker" aria-hidden="true">A</span><span class="start-route-label"><span class="start-route-text">Install, run and review with your Agent.</span> <span class="start-recommended">(Recommended)</span></span></h3>
-      <ol class="start-steps agent-steps">
-        <li class="start-step">
-          <div class="start-body">
-            <h4>Read the Skill</h4>
-            <p>We provide an install-and-use Skill for SlicerDSpace. Give its SKILL.md to your local Agent to follow the project's setup, analysis and result-review workflow.</p>
-            <p class="note">The prompts link to SKILL.md as the entry point. To install the Skill in your Agent, copy the complete slicerdspace folder with its references, scripts and templates.</p>
-            <ul class="doc-links">
-              <li><a class="btn btn-secondary" href="https://github.com/NeuroDMRI/SlicerDSpace/blob/main/.agents/skills/slicerdspace/SKILL.md" target="_blank" rel="noopener">Open Skill</a></li>
-              <li><a class="btn btn-secondary" href="https://github.com/NeuroDMRI/SlicerDSpace/blob/main/.agents/skills/slicerdspace/references/usage.md" target="_blank" rel="noopener">Agent usage guide</a></li>
-              <li><a class="btn btn-secondary" href="https://github.com/NeuroDMRI/SlicerDSpace/blob/main/docs/setup/CLI_TEMPLATES.md" target="_blank" rel="noopener">CLI templates</a></li>
-            </ul>
-          </div>
-        </li>
-        <li class="start-step">
-          <div class="start-body skill-prompt">
-            <h4>Install and enable</h4>
-            <div class="code" data-code>
-              <div class="code-head"><span>Agent prompt</span><button class="copy" type="button" hidden>Copy</button></div>
-              <pre><code id="agent-install-prompt">Read https://github.com/NeuroDMRI/SlicerDSpace/blob/main/.agents/skills/slicerdspace/SKILL.md.
-Install and enable SlicerDSpace in my local 3D Slicer.
-Set up the required dependencies and download the corresponding model weights.</code></pre>
-            </div>
-            <p class="note">Your Agent checks storage space and existing resources, waits for your choice and saves the path for later use. It prepares only the selected analyses. Confirm licenses and restarts when requested.</p>
-          </div>
-        </li>
-        <li class="start-step">
-          <div class="start-body skill-prompt">
-            <h4>Use an existing installation</h4>
-            <p>Replace the input and output paths, and choose the methods your study needs. This example requests DDParcel, CSD/ACT tractography and a structural connectome.</p>
-            <div class="code" data-code>
-              <div class="code-head"><span>Analysis prompt</span><button class="copy" type="button" hidden>Copy</button></div>
-              <pre><code id="agent-analysis-prompt">Read https://github.com/NeuroDMRI/SlicerDSpace/blob/main/.agents/skills/slicerdspace/SKILL.md.
-Use SlicerDSpace to run DDParcel brain parcellation, CSD/ACT tractography and structural connectome construction for /path/to/subject; save results to /path/to/results.
-Show me the plan and wait for confirmation before running. Afterwards, summarize the outputs and QC findings.</code></pre>
-            </div>
-          </div>
-        </li>
-      </ol>
-    </div>
-    <h3 class="start-route-title start-manual-title"><span class="start-route-marker" aria-hidden="true">B</span><span class="start-route-label start-route-text">Or set up manually</span></h3>
+    <h3 class="start-route-title" id="manual-title"><span class="start-route-marker" aria-hidden="true">A</span><span class="start-route-label start-route-text">Set up manually</span></h3>
     <ol class="start-steps">
       <li class="start-step">
         <div class="start-body">
-          <h4>Install 3D Slicer 5.10.0</h4>
-          <p>Download and install 3D Slicer 5.10.0 for your operating system (Windows x86_64, Linux x86_64, or Apple Silicon macOS arm64) from <a href="https://download.slicer.org/" target="_blank" rel="noopener">download.slicer.org</a>. Typical installation and launcher paths:</p>
+          <h4><span>Install </span><a class="slicer-link" href="https://download.slicer.org/" target="_blank" rel="noopener"><img class="slicer-logo" src="assets/img/slicer-logo.png" alt="3D Slicer logo" width="64" height="64" loading="lazy" decoding="async"><span>3D Slicer 5.10.0</span></a></h4>
+          <p>Download and install <a class="slicer-link" href="https://download.slicer.org/" target="_blank" rel="noopener"><img class="slicer-logo" src="assets/img/slicer-logo.png" alt="3D Slicer logo" width="64" height="64" loading="lazy" decoding="async"><span>3D Slicer 5.10.0</span></a> for your operating system (Windows x86_64, Linux x86_64, or Apple Silicon macOS arm64) from <a class="url-link" href="https://download.slicer.org/" target="_blank" rel="noopener">https://download.slicer.org/</a>. Typical installation and launcher paths:</p>
           <ul>
             <li>Windows: <code>%LOCALAPPDATA%\slicer.org\Slicer 5.10.0\Slicer.exe</code> (or <code>C:\Program Files\Slicer 5.10.0\Slicer.exe</code>)</li>
             <li>Linux: extracted folder such as <code>~/Slicer-5.10.0-linux-amd64/Slicer</code> (or <code>/opt/Slicer-5.10.0-linux-amd64/Slicer</code>)</li>
@@ -183,8 +142,8 @@ Show me the plan and wait for confirmation before running. Afterwards, summarize
       <li class="start-step">
         <div class="start-body">
           <h4>Install the SlicerDSpace release package</h4>
-          <p>Open <a href="https://github.com/NeuroDMRI/SlicerDSpace/releases" target="_blank" rel="noopener">GitHub Releases</a> and download the archive matching your system (<code>SlicerDSpace-v*-Windows-x64.zip</code>, <code>SlicerDSpace-v*-Linux-x64.tar.gz</code>, or <code>SlicerDSpace-v*-macOS-arm64.tar.gz</code>; do not use GitHub’s automatic Source code archive).</p>
-          <p>In 3D Slicer 5.10.0, open View › Extensions Manager, click the top-right wrench icon, choose Install Extension from File…, select the downloaded archive, and restart Slicer. Then open Modules › Diffusion › SlicerDSpace.</p>
+          <p>Download the release archive matching your system from SlicerDSpace GitHub Releases (<a class="url-link" href="https://github.com/NeuroDMRI/SlicerDSpace/releases" target="_blank" rel="noopener">https://github.com/NeuroDMRI/SlicerDSpace/releases</a>): <code>SlicerDSpace-v*-Windows-x64.zip</code>, <code>SlicerDSpace-v*-Linux-x64.tar.gz</code>, or <code>SlicerDSpace-v*-macOS-arm64.tar.gz</code> (do not use GitHub’s automatic Source code archive).</p>
+          <p>In <a class="slicer-link" href="https://download.slicer.org/" target="_blank" rel="noopener"><img class="slicer-logo" src="assets/img/slicer-logo.png" alt="3D Slicer logo" width="64" height="64" loading="lazy" decoding="async"><span>3D Slicer 5.10.0</span></a>, open View › Extensions Manager, click the top-right wrench icon, choose Install Extension from File…, select the downloaded archive, and restart Slicer. Then open Modules › Diffusion › SlicerDSpace.</p>
           <p>Slicer unpacks the extension (containing <code>lib/Slicer-5.10/qt-scripted-modules/shared/run_subject_pipeline_cli.py</code> and bundled runtimes) into its revision-specific extensions folder (also shown in Edit › Application Settings › Modules):</p>
           <ul>
             <li>Windows: <code>%LOCALAPPDATA%\slicer.org\Slicer 5.10.0\slicer.org\Extensions-34045\SlicerDSpace</code></li>
@@ -240,9 +199,50 @@ python3 scripts/stage_slicer_extension.py \
         </div>
       </li>
     </ol>
+    <div class="start-skills" id="skills" aria-labelledby="skills-title">
+      <h3 class="start-route-title" id="skills-title"><span class="start-route-marker" aria-hidden="true">B</span><span class="start-route-label"><span class="start-route-text">Install, run and review with your Agent</span></span></h3>
+      <ol class="start-steps agent-steps">
+        <li class="start-step">
+          <div class="start-body">
+            <h4>Read the Skill</h4>
+            <p>We provide an install-and-use Skill for SlicerDSpace. Give its SKILL.md to your local Agent to follow the project's setup, analysis and result-review workflow.</p>
+            <p class="note">The prompts link to SKILL.md as the entry point. To install the Skill in your Agent, copy the complete slicerdspace folder with its references, scripts and templates.</p>
+            <ul class="doc-links">
+              <li><a class="btn btn-secondary" href="https://github.com/NeuroDMRI/SlicerDSpace/blob/main/.agents/skills/slicerdspace/SKILL.md" target="_blank" rel="noopener">Open Skill</a></li>
+              <li><a class="btn btn-secondary" href="https://github.com/NeuroDMRI/SlicerDSpace/blob/main/.agents/skills/slicerdspace/references/usage.md" target="_blank" rel="noopener">Agent usage guide</a></li>
+              <li><a class="btn btn-secondary" href="https://github.com/NeuroDMRI/SlicerDSpace/blob/main/docs/setup/CLI_TEMPLATES.md" target="_blank" rel="noopener">CLI templates</a></li>
+            </ul>
+          </div>
+        </li>
+        <li class="start-step">
+          <div class="start-body skill-prompt">
+            <h4>Install and enable</h4>
+            <div class="code" data-code>
+              <div class="code-head"><span>Agent prompt</span><button class="copy" type="button" hidden>Copy</button></div>
+              <pre><code id="agent-install-prompt">Read https://github.com/NeuroDMRI/SlicerDSpace/blob/main/.agents/skills/slicerdspace/SKILL.md.
+Install and enable SlicerDSpace in my local 3D Slicer.
+Set up the required dependencies and download the corresponding model weights.</code></pre>
+            </div>
+            <p class="note">Your Agent checks storage space and existing resources, waits for your choice and saves the path for later use. It prepares only the selected analyses. Confirm licenses and restarts when requested.</p>
+          </div>
+        </li>
+        <li class="start-step">
+          <div class="start-body skill-prompt">
+            <h4>Use an existing installation</h4>
+            <p>Replace the input and output paths, and choose the methods your study needs. This example requests DDParcel, CSD/ACT tractography and a structural connectome.</p>
+            <div class="code" data-code>
+              <div class="code-head"><span>Analysis prompt</span><button class="copy" type="button" hidden>Copy</button></div>
+              <pre><code id="agent-analysis-prompt">Read https://github.com/NeuroDMRI/SlicerDSpace/blob/main/.agents/skills/slicerdspace/SKILL.md.
+Use SlicerDSpace to run DDParcel brain parcellation, CSD/ACT tractography and structural connectome construction for /path/to/subject; save results to /path/to/results.
+Show me the plan and wait for confirmation before running. Afterwards, summarize the outputs and QC findings.</code></pre>
+            </div>
+          </div>
+        </li>
+      </ol>
+    </div>
     <div class="start-cli" id="cli" aria-labelledby="cli-title">
       <h3 class="start-route-title" id="cli-title"><span class="start-route-marker" aria-hidden="true">C</span><span class="start-route-label start-route-text">Command-line execution and cohort processing</span></h3>
-      <p>Point <code>SLICER_LAUNCHER</code> to your 3D Slicer 5.10.0 executable and <code>DSPACE_REPO</code> to the installed extension’s <code>lib/Slicer-5.10/qt-scripted-modules</code> directory (or local checkout), then run a DTI-only check:</p>
+      <p>Point <code>SLICER_LAUNCHER</code> to your <a class="slicer-link" href="https://download.slicer.org/" target="_blank" rel="noopener"><img class="slicer-logo" src="assets/img/slicer-logo.png" alt="3D Slicer logo" width="64" height="64" loading="lazy" decoding="async"><span>3D Slicer 5.10.0</span></a> executable and <code>DSPACE_REPO</code> to the installed extension’s <code>lib/Slicer-5.10/qt-scripted-modules</code> directory (or local checkout), then run a DTI-only check:</p>
       <div class="code" data-code>
         <div class="code-head"><span>bash</span><button class="copy" type="button" hidden>Copy</button></div>
         <pre><code>export SLICER_LAUNCHER="/path/to/Slicer"
@@ -1026,7 +1026,7 @@ export SUBJECT_ROOT="/path/to/sub-01"
     <div class="foot-grid">
       <div class="foot-identity">
         <a class="foot-brand" href="#top"><img src="assets/img/slicerdspace-wordmark-light.svg" alt="SlicerDSpace" width="1324" height="239" loading="lazy" decoding="async"></a>
-        <p>Diffusion MRI workflows in 3D Slicer.</p>
+        <p><span>Built for </span><a class="slicer-link" href="https://download.slicer.org/" target="_blank" rel="noopener"><img class="slicer-logo" src="assets/img/slicer-logo.png" alt="3D Slicer logo" width="64" height="64" loading="lazy" decoding="async"><span>3D Slicer</span></a><span> — native diffusion MRI workflows.</span></p>
       </div>
       <nav class="foot-nav" aria-label="Resources">
         <div>
@@ -1043,6 +1043,7 @@ export SUBJECT_ROOT="/path/to/sub-01"
           <ul>
             <li><a href="#start">Get started</a></li>
             <li><a href="https://github.com/NeuroDMRI/SlicerDSpace" target="_blank" rel="noopener">GitHub</a></li>
+            <li><a href="https://github.com/NeuroDMRI/SlicerDSpace/releases" target="_blank" rel="noopener">Releases</a></li>
             <li><a href="https://github.com/NeuroDMRI/SlicerDSpace/blob/main/.agents/skills/slicerdspace/SKILL.md" target="_blank" rel="noopener">Agent Skill</a></li>
             <li><a href="https://github.com/NeuroDMRI/SlicerDSpace/blob/main/CITATION.cff" target="_blank" rel="noopener">Cite the software</a></li>
           </ul>

@@ -156,13 +156,15 @@ class WebsiteEditorialCopyTests(unittest.TestCase):
         self.assertIn('preload="none"', film)
         self.assertIn('poster="assets/img/poster.jpg"', film)
         meta = re.search(r'<p class="meta-row">(.*?)</p>', film, re.S).group(1)
-        self.assertEqual(len(re.findall(r'<a\b', meta)), 2)
+        self.assertEqual(len(re.findall(r'<a\b', meta)), 3)
+        self.assertIn('class="slicer-link"', meta)
+        self.assertIn('href="https://download.slicer.org/"', meta)
+        self.assertIn('src="assets/img/slicer-logo.png"', meta)
         self.assertIn('class="source-link"', meta)
         self.assertIn('https://github.com/NeuroDMRI/SlicerDSpace', meta)
         self.assertIn('Download video', meta)
-        self.assertIn('<span>Diffusion MRI workflows in 3D Slicer.</span>', meta)
-        self.assertLess(meta.index('Diffusion MRI workflows'), meta.index('Download video'))
-        self.assertLess(meta.index('Diffusion MRI workflows'), meta.index('class="source-link"'))
+        self.assertIn('native diffusion MRI workflows.', meta)
+        self.assertLess(meta.index('class="slicer-link"'), meta.index('class="source-link"'))
         self.assertLess(meta.index('class="source-link"'), meta.index('Download video'))
         for removed in ('72.0 s', '1920 × 1080', '.srt', 'id="transcript"', 'narrated', 'subtitles in the picture'):
             self.assertNotIn(removed, film)
@@ -221,7 +223,7 @@ class WebsiteEditorialCopyTests(unittest.TestCase):
 
     def test_skills_are_within_get_started_and_link_to_existing_guides(self):
         start = self.section('start')
-        section = start.split('<div class="start-skills"', 1)[1].split('<h3 class="start-route-title start-manual-title">', 1)[0]
+        section = start.split('<div class="start-skills"', 1)[1].split('<div class="start-cli"', 1)[0]
         self.assertIn('id="skills"', section)
         self.assertNotIn('<section class="section reveal" id="skills"', self.source)
         self.assertNotIn('href="#skills">Agent Skills</a>', self.source)
@@ -258,14 +260,22 @@ class WebsiteEditorialCopyTests(unittest.TestCase):
         for heading, marker in zip(headings, 'ABC'):
             self.assertIn(f'class="start-route-marker" aria-hidden="true">{marker}</span>', heading)
             self.assertIn('start-route-text', heading)
-        self.assertIn('class="start-recommended">(Recommended)</span>', headings[0])
+        self.assertIn('Set up manually', headings[0])
+        self.assertIn('Install, run and review with your Agent', headings[1])
+        self.assertIn('Command-line execution and cohort processing', headings[2])
+        self.assertNotIn('start-recommended', self.source)
+        self.assertNotIn('(Recommended)', self.source)
+        self.assertLess(start.index('id="manual-title"'), start.index('id="skills"'))
+        self.assertLess(start.index('id="skills"'), start.index('id="cli"'))
+        self.assertIn('>https://download.slicer.org/</a>', start)
+        self.assertIn('>https://github.com/NeuroDMRI/SlicerDSpace/releases</a>', start)
+        self.assertIn('src="assets/img/slicer-logo.png"', start)
         styles = (ROOT / 'docs/site/assets/css/site.css').read_text(encoding='utf-8')
         self.assertNotIn('.start-skills > h3', styles)
         self.assertNotIn('.start-cli > h3', styles)
-        for selector in ('.start-route-marker', '.start-recommended'):
-            rule = re.search(re.escape(selector) + r'\s*\{([^}]+)\}', styles).group(1)
-            self.assertIn('color: var(--route-accent)', rule)
-            self.assertNotIn('var(--orange)', rule)
+        rule = re.search(r'\.start-route-marker\s*\{([^}]+)\}', styles).group(1)
+        self.assertIn('color: var(--route-accent)', rule)
+        self.assertNotIn('var(--orange)', rule)
 
     def test_figure_wrappers_are_unframed_and_result_assets_remain_available(self):
         self.assertNotIn('class="panel shot', self.source)

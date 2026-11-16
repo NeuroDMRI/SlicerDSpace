@@ -389,15 +389,24 @@ async function runViewport(browser, origin, name, width, height, opts) {
 
   // The description comes first, followed by source code and the video download.
   await page.evaluate(() => { document.getElementById('film-video').pause(); });
-  const minimalFilm = await page.evaluate(() => !document.getElementById('transcript') &&
-    document.querySelectorAll('#film .meta-row a').length === 2 &&
-    document.querySelector('#film .meta-row').firstElementChild.matches('span') &&
-    document.querySelector('#film .meta-row').children[1].matches('a.source-link') &&
-    document.querySelector('#film .source-link').href === 'https://github.com/NeuroDMRI/SlicerDSpace' &&
-    document.querySelector('#film .source-link').textContent.trim() === 'Source code' &&
-    !!document.querySelector('#film .source-link svg[aria-hidden="true"]') &&
-    document.querySelector('#film .meta-row span').textContent === 'Diffusion MRI workflows in 3D Slicer.' &&
-    document.querySelectorAll('#film a[href$=".srt"]').length === 0);
+  const minimalFilm = await page.evaluate(() => {
+    const meta = document.querySelector('#film .meta-row');
+    const slicerLink = meta?.querySelector('a.slicer-link');
+    const slicerImg = slicerLink?.querySelector('img.slicer-logo');
+    return !document.getElementById('transcript') &&
+      document.querySelectorAll('#film .meta-row a').length === 3 &&
+      meta.firstElementChild.matches('span.meta-slicer') &&
+      meta.children[1].matches('a.source-link') &&
+      !!slicerLink &&
+      slicerLink.href === 'https://download.slicer.org/' &&
+      !!slicerImg && slicerImg.getAttribute('src') === 'assets/img/slicer-logo.png' &&
+      getComputedStyle(slicerLink).color !== getComputedStyle(meta).color &&
+      document.querySelector('#film .source-link').href === 'https://github.com/NeuroDMRI/SlicerDSpace' &&
+      document.querySelector('#film .source-link').textContent.trim() === 'Source code' &&
+      !!document.querySelector('#film .source-link svg[aria-hidden="true"]') &&
+      meta.firstElementChild.textContent.replace(/\s+/g, ' ').trim() === 'Built for 3D Slicer — native diffusion MRI workflows.' &&
+      document.querySelectorAll('#film a[href$=".srt"]').length === 0;
+  });
   record(minimalFilm, `${tag}: workflow description precedes source code and video download`);
 
   record(consoleErrors.length === 0 && failed.length === 0 && foreign.length === 0,
@@ -624,9 +633,19 @@ async function runSkills(browser, origin) {
     const skills = page.locator('#skills');
     await skills.scrollIntoViewIfNeeded();
     await page.waitForFunction(() => document.getElementById('start').classList.contains('in'));
-    record(await skills.locator('.start-route-text').innerText() === 'Install, run and review with your Agent.' &&
-      await skills.locator('.start-recommended').innerText() === '(Recommended)',
-      `skills ${width}px: visible install-and-use introduction`);
+    const manualAboveSkills = await page.evaluate(() => {
+      const manual = document.getElementById('manual-title');
+      const sk = document.getElementById('skills');
+      return !!manual && !!sk &&
+        manual.querySelector('.start-route-marker')?.textContent === 'A' &&
+        manual.querySelector('.start-route-text')?.textContent.trim() === 'Set up manually' &&
+        sk.querySelector('.start-route-marker')?.textContent === 'B' &&
+        manual.getBoundingClientRect().top < sk.getBoundingClientRect().top;
+    });
+    record(manualAboveSkills &&
+      await skills.locator('.start-route-text').innerText() === 'Install, run and review with your Agent' &&
+      await page.locator('.start-recommended').count() === 0,
+      `skills ${width}px: manual route A appears first and Agent route B has no Recommended tag`);
     const headings = await page.locator('#start .start-route-title').evaluateAll(elements => {
       const styles = elements.map(el => getComputedStyle(el));
       return elements.length === 3 && elements.every(el => el.tagName === 'H3') &&
@@ -635,9 +654,9 @@ async function runSkills(browser, origin) {
           style.fontWeight === styles[0].fontWeight && style.lineHeight === styles[0].lineHeight);
     });
     record(headings, `skills ${width}px: A/B/C routes have matching heading typography and hierarchy`);
-    const accents = await page.locator('#start .start-route-marker, #start .start-recommended')
-      .evaluateAll(elements => elements.length === 4 && elements.every(el => getComputedStyle(el).color === 'rgb(169, 191, 208)'));
-    record(accents, `skills ${width}px: route markers and recommendation share the muted blue-grey accent`);
+    const accents = await page.locator('#start .start-route-marker')
+      .evaluateAll(elements => elements.length === 3 && elements.every(el => getComputedStyle(el).color === 'rgb(169, 191, 208)'));
+    record(accents, `skills ${width}px: route markers share the muted blue-grey accent`);
     const timeline = await skills.locator('.agent-steps').evaluate(el => {
       const steps = [...el.children];
       const first = getComputedStyle(steps[0], '::before');
@@ -755,8 +774,8 @@ async function runLanguages(browser, origin) {
       `language ${width}px: Chinese link keeps the current section under a project base path`);
     record(await page.locator('.lang-btn.is-active').getAttribute('data-lang') === 'zh' &&
         await page.locator('#top .btn-primary').innerText() === '观看宣传片' &&
-        await page.locator('#skills-title .start-route-text').innerText() === '让 Agent 协助安装、分析与结果检查。' &&
-        await page.locator('#skills-title .start-recommended').innerText() === '（推荐）' &&
+        await page.locator('#skills-title .start-route-text').innerText() === '使用 Agent 协助安装、分析与结果检查' &&
+        await page.locator('.start-recommended').count() === 0 &&
         await page.locator('.guide-bot__header h2').innerText() === '问问项目助手',
       `language ${width}px: capsule, homepage, Skills and bot use Chinese`);
     const header = await page.evaluate(() => {
@@ -804,8 +823,8 @@ async function runLanguages(browser, origin) {
   await page.locator('.lang-btn[data-lang="zh"]').click();
   await page.waitForURL(url => url.pathname.endsWith('/zh.html'));
   record(await page.locator('html').getAttribute('lang') === 'zh-CN' &&
-      await page.locator('#skills-title .start-route-text').innerText() === '让 Agent 协助安装、分析与结果检查。' &&
-      await page.locator('#skills-title .start-recommended').innerText() === '（推荐）' &&
+      await page.locator('#skills-title .start-route-text').innerText() === '使用 Agent 协助安装、分析与结果检查' &&
+      await page.locator('.start-recommended').count() === 0 &&
       await page.locator('#integrated tr[data-method]').count() === 30,
     'language no JS: Chinese content, commands and all methods are available without scripting');
   record(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),

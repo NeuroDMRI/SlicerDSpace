@@ -14,7 +14,8 @@ TARGET = ROOT / 'docs/site/zh.html'
 CATALOG = ROOT / 'docs/website/zh-CN.json'
 VOID = {'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link',
         'meta', 'param', 'source', 'track', 'wbr', 'path'}
-KEEP = {'SlicerDSpace', 'SLICERDSPACE', 'DDSeg', 'DDParcel', 'DDSurfer', 'DTI', 'DKI', 'NODDI',
+KEEP = {'SlicerDSpace', 'SLICERDSPACE', '3D Slicer', '3D Slicer 5.10.0',
+        'https://download.slicer.org/', 'https://github.com/NeuroDMRI/SlicerDSpace/releases', 'DDSeg', 'DDParcel', 'DDSurfer', 'DTI', 'DKI', 'NODDI',
         'SAF', 'UKF', 'WMA', 'WMQL', 'TractCloud', 'SIFT2', 'MK-Curve', 'MP-PCA',
         'MRtrix3', 'DIPY', 'SlicerDMRI', 'CSD/ACT', 'CSD / MSMT-CSD', 'NODDI / AMICO',
         'MRtrix3 dwi2mask', 'MRtrix3 mtnormalise', 'FSL eddy', 'FSL topup',

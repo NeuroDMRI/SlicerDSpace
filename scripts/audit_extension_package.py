@@ -38,6 +38,7 @@ def audit_package(archive: Path, source_root: Path) -> dict:
     bundled_runtimes = set()
     bundled_sources = set()
     bundled_cli_modules = set()
+    bundled_wma_atlases = set()
     bundled_python_files = 0
     bundled_model_asset_files = 0
 
@@ -73,6 +74,15 @@ def audit_package(archive: Path, source_root: Path) -> dict:
             return
         if "bundled-model-assets" in parts:
             bundled_model_asset_files += 1
+            idx = parts.index("bundled-model-assets")
+            rel_parts = parts[idx + 1:]
+            if len(rel_parts) >= 3 and rel_parts[:2] == ("bundles", "wma"):
+                if rel_parts[2] == "ORG-RegAtlas-100HCP":
+                    bundled_wma_atlases.add("org")
+                elif len(rel_parts) >= 4 and rel_parts[2:4] == ("east-west", "East-West_WM_Atlas_Reg"):
+                    bundled_wma_atlases.add("east-west")
+                elif len(rel_parts) >= 4 and rel_parts[2:4] == ("naba", "NABA-RegAtlas"):
+                    bundled_wma_atlases.add("naba")
             return
         if "cli-modules" in parts:
             idx = parts.index("cli-modules")
@@ -125,6 +135,7 @@ def audit_package(archive: Path, source_root: Path) -> dict:
         "bundled_cli_modules": sorted(bundled_cli_modules),
         "bundled_python_file_count": bundled_python_files,
         "bundled_model_asset_file_count": bundled_model_asset_files,
+        "bundled_wma_atlases": sorted(bundled_wma_atlases),
         "missing": missing,
         "changed": changed,
         "unexpected": sorted(unexpected),

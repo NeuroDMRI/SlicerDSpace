@@ -10,7 +10,7 @@
 
 仅使用插件，不需要下载网站源码、历史性能报告或测试代码。它们保留在完整仓库中，
 供开发、审计和论文复现使用，不应成为普通用户安装的前提。
-当前 `v0.1.1` 版本在 GitHub Releases 为 Windows、Linux 与 Apple Silicon macOS 均提供**全量离线开箱即用一体包（All-in-One）**（`SlicerDSpace-v0.1.1-Windows-x64.zip`、`SlicerDSpace-v0.1.1-Linux-x64.tar.gz` 与 `SlicerDSpace-v0.1.1-macOS-arm64.tar.gz`；受 GitHub Releases 单文件 `2.0 GiB` 限制，各平台以 `.001` + `.002` 双分卷形式提供，合并后通过 **3D Slicer 5.10.0** 的 **Extensions Manager > Install Extensions > Install Extension from File** 本地安装）；在线 Slicer 扩展商店目录（Extension Catalog）上架仍为后续计划，Intel（`x86_64`）Mac 真机硬件尚未实测验证。
+当前 `v0.1.1` 版本在 GitHub Releases 为 Windows、Linux 与 Apple Silicon macOS 均提供**全量离线开箱即用一体包（All-in-One）**（`SlicerDSpace-v0.1.1-Windows-x64.zip`、`SlicerDSpace-v0.1.1-Linux-x64.tar.gz` 与 `SlicerDSpace-v0.1.1-macOS-arm64.tar.gz`；受 GitHub Releases 单文件 `2.0 GiB` 限制，各平台以 `.001`、`.002` ... 分卷形式提供，合并后通过 **3D Slicer 5.10.0** 的 **Extensions Manager > Install Extensions > Install Extension from File** 本地安装）；在线 Slicer 扩展商店目录（Extension Catalog）上架仍为后续计划，Intel（`x86_64`）Mac 真机硬件尚未实测验证。
 
 ---
 
@@ -18,7 +18,7 @@
 
 | 用途 | 推荐方式 | 包含内容 |
 | --- | --- | --- |
-| 在 Windows、Linux 或 Apple Silicon macOS 的 Slicer 5.10.0 中使用 | 从 GitHub Releases 下载并合并 `.001` + `.002` 分卷还原 `SlicerDSpace-v0.1.1-Windows-x64.zip`、`SlicerDSpace-v0.1.1-Linux-x64.tar.gz` 或 `SlicerDSpace-v0.1.1-macOS-arm64.tar.gz`（本地文件安装） | 运行代码（`depends NA`）、UI、查询文件、许可证、使用指南、`bundled-python/`（Python 3.12 科学计算依赖）、`bundled-model-assets/`（全部模型权重与已解压 `ORG` 图谱）、`bundled-sources/`（`WMQL`/`WMA`/`TractCloud`）、配套 `UKFTractography` CLI 以及内置于 `bundled-runtimes/` 的模块化原生运行环境（`MRtrix3 3.0.8`、`FSL 2602.0`、`Surface Runtime 0.1.0`，支持 `tree_sha256` 损坏自动修复） |
+| 在 Windows、Linux 或 Apple Silicon macOS 的 Slicer 5.10.0 中使用 | 从 GitHub Releases 下载并合并 `.001`、`.002` ... 分卷还原 `SlicerDSpace-v0.1.1-Windows-x64.zip`、`SlicerDSpace-v0.1.1-Linux-x64.tar.gz` 或 `SlicerDSpace-v0.1.1-macOS-arm64.tar.gz`（本地文件安装） | 运行代码（`depends NA`）、UI、查询文件、许可证、使用指南、`bundled-python/`（Python 3.12 科学计算依赖）、`bundled-model-assets/`（全部模型权重与已解压 `ORG`、`East-West`、`NABA` 三套白质图谱）、`bundled-sources/`（`WMQL`/`WMA`/`TractCloud`）、配套 `UKFTractography` CLI 以及内置于 `bundled-runtimes/` 的模块化原生运行环境（`MRtrix3 3.0.8`、`FSL 2602.0`、`Surface Runtime 0.1.0`，支持 `tree_sha256` 损坏自动修复） |
 | 有仓库权限、从源码安装 | 下文的轻量检出，再 staging | 可更新的运行源码；不检出网站、测试和历史优化报告 |
 | 开发或独立复现 | 完整源码 checkout | 测试、性能证据、发布工具、网页源码及文档 |
 | 阅读结果与性能依据 | 登录 GitHub 浏览对应报告 | 不需要把报告复制到插件目录 |
@@ -27,7 +27,7 @@
 历史优化与 QC 报告、原始基准 JSON 或测速脚本。
 少数发布说明和运行时间 CSV 是显式保留的参考文件；第三方许可证、
 WMQL 查询、WSL 辅助文件及模型资源清单不会因此删除。
-`v0.1.1` 全平台 All-in-One 安装包已内置 Python 3.12 依赖、**深度学习模型权重**（`DDSeg`、`DDParcel`、`DDSurfer`、`TractCloud`、`PNL`）、**大型白质图谱**（`ORG`）、算法源码、`UKFTractography` CLI 以及三大 C/C++ 原生运行环境（`MRtrix3`、`FSL` 扩散预处理与 `FreeSurfer Surface Runtime`），仅 **FreeSurfer 皮层表面后处理**仍需用户自备免费的个人 FreeSurfer 许可证文件（`FS_LICENSE`，安装包内不含任何个人激活密钥）。若通过轻量源码检出而不包含 `bundled-*` 目录安装，模型权重与 Python 依赖仍将在首次使用时按需获取。
+`v0.1.1` 全平台 All-in-One 安装包已内置 Python 3.12 依赖、**深度学习模型权重**（`DDSeg`、`DDParcel`、`DDSurfer`、`TractCloud`、`PNL`）、**大型白质图谱**（`ORG`、`East-West`、`NABA`）、算法源码、`UKFTractography` CLI 以及三大 C/C++ 原生运行环境（`MRtrix3`、`FSL` 扩散预处理与 `FreeSurfer Surface Runtime`），仅 **FreeSurfer 皮层表面后处理**仍需用户自备免费的个人 FreeSurfer 许可证文件（`FS_LICENSE`，安装包内不含任何个人激活密钥）。若通过轻量源码检出而不包含 `bundled-*` 目录安装，模型权重与 Python 依赖仍将在首次使用时按需获取。
 
 ---
 

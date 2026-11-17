@@ -215,6 +215,15 @@ class AllInOneBundlingTests(unittest.TestCase):
             ukf_bin.write_bytes(b"UKFBIN")
             (fake_cli / "UKFTractography.xml").write_text("<executable/>", encoding="utf-8")
 
+            wma_base = ext_root / "bundled-model-assets" / "bundles" / "wma"
+            for atlas_marker in (
+                wma_base / "ORG-RegAtlas-100HCP" / "registration_atlas.vtk",
+                wma_base / "east-west" / "East-West_WM_Atlas_Reg" / "registration_atlas.vtk",
+                wma_base / "naba" / "NABA-RegAtlas" / "registration_atlas.vtk",
+            ):
+                atlas_marker.parent.mkdir(parents=True, exist_ok=True)
+                atlas_marker.write_bytes(b"VTK")
+
             archive = root / "SlicerDSpace-allinone.zip"
             pkg = package_extension(
                 ext_root,
@@ -233,10 +242,12 @@ class AllInOneBundlingTests(unittest.TestCase):
             self.assertEqual(layout["status"], "pass", layout)
             self.assertTrue(layout["bundled_python"])
             self.assertIn(ukf_bin.name, layout["bundled_cli_modules"])
+            self.assertEqual(layout["bundled_wma_atlases"], ["east-west", "naba", "org"])
 
             audit = audit_package(archive, ROOT)
             self.assertEqual(audit["status"], "pass", audit)
             self.assertGreaterEqual(audit["bundled_python_file_count"], 2)
+            self.assertEqual(audit["bundled_wma_atlases"], ["east-west", "naba", "org"])
 
             tar_archive = root / "SlicerDSpace-allinone.tar.gz"
             package_extension(

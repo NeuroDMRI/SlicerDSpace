@@ -1,25 +1,25 @@
 # SlicerDSpace v0.1.1
 
-SlicerDSpace `v0.1.1` provides **100% self-contained, offline-ready All-in-One extension packages** for **Windows (`x64`)**, **Linux (`x64`)**, and **macOS (Apple Silicon `arm64`)** on **3D Slicer 5.10.0**. Each package bundles the SlicerDSpace module (`depends NA`), all required Python 3.12 packages (`bundled-python/`: CPU PyTorch, nibabel, DIPY, AMICO, scikit-image, scikit-learn, trimesh, dcm2niix, etc.), all deep-learning model weights and atlases (`bundled-model-assets/`: `DDSeg`, `DDParcel`, `DDSurfer`, `PNL` brain mask, `TractCloud`, FreeSurfer `atlas.tar.gz`, HCP T2 template, and extracted `ORG` white-matter atlas), pinned algorithm sources (`bundled-sources/`: `WMQL`, `WMA`, `TractCloud`), companion `UKFTractography` CLI, and native binary runtimes (`bundled-runtimes/`: `MRtrix3 3.0.8`, `FSL 2602.0` `topup`/`applytopup`/`eddy_cpu`, and FreeSurfer 7-command surface runtime; no personal FreeSurfer activation key is bundled).
+SlicerDSpace `v0.1.1` provides **100% self-contained, offline-ready All-in-One extension packages** for **Windows (`x64`)**, **Linux (`x64`)**, and **macOS (Apple Silicon `arm64`)** on **3D Slicer 5.10.0**. Each package bundles the SlicerDSpace module (`depends NA`), all required Python 3.12 packages (`bundled-python/`: CPU PyTorch, nibabel, DIPY, AMICO, scikit-image, scikit-learn, trimesh, dcm2niix, etc.), all deep-learning model weights and atlases (`bundled-model-assets/`: `DDSeg`, `DDParcel`, `DDSurfer`, `PNL` brain mask, `TractCloud`, FreeSurfer `atlas.tar.gz`, HCP T2 template, and all three extracted WMA white-matter atlases—`ORG`, `East-West`, and `NABA`), pinned algorithm sources (`bundled-sources/`: `WMQL`, `WMA`, `TractCloud`), companion `UKFTractography` CLI, and native binary runtimes (`bundled-runtimes/`: `MRtrix3 3.0.8`, `FSL 2602.0` `topup`/`applytopup`/`eddy_cpu`, and FreeSurfer 7-command surface runtime; no personal FreeSurfer activation key is bundled).
 
-> Because the full All-in-One archives exceed GitHub Releases' **2.0 GiB per-file limit**, each platform package is split into `.001` + `.002` volumes. Download both volumes for your platform, merge them with one command below, verify SHA-256 against `SHA256SUMS.txt` (optional), and install the merged archive in 3D Slicer 5.10.0.
+> Because the full All-in-One archives exceed GitHub Releases' **2.0 GiB per-file limit**, each platform package is split into `.001`, `.002`, ... volumes. Download all volumes for your platform into the same folder, merge them with one command below, verify SHA-256 against `SHA256SUMS.txt` (optional), and install the merged archive in 3D Slicer 5.10.0.
 
 ## 1. Download & Merge Split Volumes
 
 - **Windows (`x64`, All-in-One offline bundle)**:
-  Download `SlicerDSpace-v0.1.1-Windows-x64.zip.001` and `SlicerDSpace-v0.1.1-Windows-x64.zip.002` into the same folder, then merge them in **cmd** or **PowerShell**:
-  ```bat
-  cmd /c "copy /b SlicerDSpace-v0.1.1-Windows-x64.zip.001+SlicerDSpace-v0.1.1-Windows-x64.zip.002 SlicerDSpace-v0.1.1-Windows-x64.zip"
+  Download all `SlicerDSpace-v0.1.1-Windows-x64.zip.001`, `.002`, ... volumes into the same folder, then merge them in **PowerShell** (or right-click `.001` in **7-Zip -> Combine Files...**):
+  ```powershell
+  cmd /c ("copy /b " + ((Get-ChildItem SlicerDSpace-v0.1.1-Windows-x64.zip.[0-9]* | Sort-Object Name | ForEach-Object Name) -join "+") + " SlicerDSpace-v0.1.1-Windows-x64.zip")
   ```
 - **Linux (`x64`, All-in-One offline bundle)**:
-  Download `SlicerDSpace-v0.1.1-Linux-x64.tar.gz.001` and `SlicerDSpace-v0.1.1-Linux-x64.tar.gz.002` into the same directory, then merge:
+  Download all `SlicerDSpace-v0.1.1-Linux-x64.tar.gz.001`, `.002`, ... volumes into the same directory, then merge:
   ```bash
-  cat SlicerDSpace-v0.1.1-Linux-x64.tar.gz.001 SlicerDSpace-v0.1.1-Linux-x64.tar.gz.002 > SlicerDSpace-v0.1.1-Linux-x64.tar.gz
+  cat SlicerDSpace-v0.1.1-Linux-x64.tar.gz.[0-9]* > SlicerDSpace-v0.1.1-Linux-x64.tar.gz
   ```
 - **macOS (Apple Silicon `arm64`, All-in-One offline bundle)**:
-  Download `SlicerDSpace-v0.1.1-macOS-arm64.tar.gz.001` and `SlicerDSpace-v0.1.1-macOS-arm64.tar.gz.002` into the same directory, then merge:
+  Download all `SlicerDSpace-v0.1.1-macOS-arm64.tar.gz.001`, `.002`, ... volumes into the same directory, then merge:
   ```bash
-  cat SlicerDSpace-v0.1.1-macOS-arm64.tar.gz.001 SlicerDSpace-v0.1.1-macOS-arm64.tar.gz.002 > SlicerDSpace-v0.1.1-macOS-arm64.tar.gz
+  cat SlicerDSpace-v0.1.1-macOS-arm64.tar.gz.[0-9]* > SlicerDSpace-v0.1.1-macOS-arm64.tar.gz
   ```
 
 > Recommended version: **3D Slicer 5.10.0** (Windows 10/11 x64, Linux x86_64, or macOS Apple Silicon arm64; physical Intel x86_64 Mac hardware is unverified). Do **not** extract the merged archive before installing.
@@ -44,26 +44,26 @@ SlicerDSpace `v0.1.1` provides **100% self-contained, offline-ready All-in-One e
 
 ## 中文安装与使用说明
 
-**Windows (`x64`)**、**Linux (`x64`)** 与 **macOS (Apple Silicon `arm64`)** 三个平台现已全部提供**全量离线开箱即用一体包（All-in-One）**，包内已完整内置 SlicerDSpace 模块（`depends NA`）、全部 Python 3.12 科学计算依赖（含 CPU 版 PyTorch、nibabel、DIPY、AMICO、dcm2niix 等）、全部深度学习模型权重与图谱（`DDSeg`、`DDParcel`、`DDSurfer`、`PNL` 脑掩膜、`TractCloud` 及解压就绪的 `ORG` 白质图谱）、算法源码（`WMQL`、`WMA`、`TractCloud`）、`UKFTractography` CLI 以及原生二进制运行组件（`MRtrix3 3.0.8`、`FSL 2602.0` 预处理、FreeSurfer 表面后处理组件；不含任何个人 FreeSurfer 激活密钥）。
+**Windows (`x64`)**、**Linux (`x64`)** 与 **macOS (Apple Silicon `arm64`)** 三个平台现已全部提供**全量离线开箱即用一体包（All-in-One）**，包内已完整内置 SlicerDSpace 模块（`depends NA`）、全部 Python 3.12 科学计算依赖（含 CPU 版 PyTorch、nibabel、DIPY、AMICO、dcm2niix 等）、全部深度学习模型权重与图谱（`DDSeg`、`DDParcel`、`DDSurfer`、`PNL` 脑掩膜、`TractCloud` 及全部三套解压就绪的 WMA 白质图谱：`ORG`、`East-West` 与 `NABA`）、算法源码（`WMQL`、`WMA`、`TractCloud`）、`UKFTractography` CLI 以及原生二进制运行组件（`MRtrix3 3.0.8`、`FSL 2602.0` 预处理、FreeSurfer 表面后处理组件；不含任何个人 FreeSurfer 激活密钥）。
 
-由于完整安装包体积超过 GitHub Releases 单文件 `2.0 GiB` 上传限制，每个平台安装包均已切分为 `.001` 与 `.002` 两个分卷：
+由于完整安装包体积超过 GitHub Releases 单文件 `2.0 GiB` 上传限制，每个平台安装包均已切分为 `.001`、`.002` ... 分卷：
 
-### 1. 下载并合并双分卷
+### 1. 下载并合并分卷
 
 - **Windows (`x64`，全量开箱即用包)**：
-  将 `.001` 与 `.002` 下载到同一文件夹后在 CMD / PowerShell 执行：
-  ```bat
-  cmd /c "copy /b SlicerDSpace-v0.1.1-Windows-x64.zip.001+SlicerDSpace-v0.1.1-Windows-x64.zip.002 SlicerDSpace-v0.1.1-Windows-x64.zip"
+  将同平台全部 `.001`、`.002` ... 分卷下载到同一文件夹后在 PowerShell 执行（或使用 7-Zip 右键 `.001` 选择“合并文件”）：
+  ```powershell
+  cmd /c ("copy /b " + ((Get-ChildItem SlicerDSpace-v0.1.1-Windows-x64.zip.[0-9]* | Sort-Object Name | ForEach-Object Name) -join "+") + " SlicerDSpace-v0.1.1-Windows-x64.zip")
   ```
 - **Linux (`x64`，全量开箱即用包)**：
-  将 `.001` 与 `.002` 下载到同一目录后执行：
+  将同平台全部 `.001`、`.002` ... 分卷下载到同一目录后执行：
   ```bash
-  cat SlicerDSpace-v0.1.1-Linux-x64.tar.gz.001 SlicerDSpace-v0.1.1-Linux-x64.tar.gz.002 > SlicerDSpace-v0.1.1-Linux-x64.tar.gz
+  cat SlicerDSpace-v0.1.1-Linux-x64.tar.gz.[0-9]* > SlicerDSpace-v0.1.1-Linux-x64.tar.gz
   ```
 - **macOS (`Apple Silicon arm64`，全量开箱即用包，Intel 真机硬件未验证)**：
-  将 `.001` 与 `.002` 下载到同一目录后在终端（Terminal）执行：
+  将同平台全部 `.001`、`.002` ... 分卷下载到同一目录后在终端（Terminal）执行：
   ```bash
-  cat SlicerDSpace-v0.1.1-macOS-arm64.tar.gz.001 SlicerDSpace-v0.1.1-macOS-arm64.tar.gz.002 > SlicerDSpace-v0.1.1-macOS-arm64.tar.gz
+  cat SlicerDSpace-v0.1.1-macOS-arm64.tar.gz.[0-9]* > SlicerDSpace-v0.1.1-macOS-arm64.tar.gz
   ```
   *（注：合并还原 `.zip` / `.tar.gz` 后**请勿手动解压**，直接在 3D Slicer 中选择合并后的文件安装即可。）*
 

@@ -191,17 +191,19 @@ def resolve_wma_execution_backend(
     measurement_backend: str = "fibertractmeasurements",
     platform: Optional[str] = None,
 ) -> str:
-    """Select an ORG native source or the existing author/WSL route."""
+    """Select a native Python WMA route or the existing author/WSL route."""
+    if atlas_family != "auto":
+        atlas_definition(atlas_family)
     choice = os.environ.get("DSP_WMA_EXECUTION_BACKEND", "auto").strip().lower()
     if choice not in {"auto", "native", "legacy"}:
         raise ValueError("DSP_WMA_EXECUTION_BACKEND must be auto, native or legacy.")
     needs_legacy_measurements = export_diffusion_measures and measurement_backend == "fibertractmeasurements"
     if choice == "native":
-        if atlas_family != "org" or needs_legacy_measurements:
-            raise ValueError("Native WMA supports ORG without the legacy FiberTractMeasurements export.")
+        if needs_legacy_measurements:
+            raise ValueError("Native WMA does not support the legacy FiberTractMeasurements export.")
         return choice
     if (choice == "legacy" or (platform or sys.platform).lower() not in {"win32", "windows"}
-            or atlas_family != "org" or needs_legacy_measurements):
+            or needs_legacy_measurements):
         return "legacy"
     root = wma_root or _configured_wma_root() or _wma_root_on_path()
     return "legacy" if root is not None and _has_wma_bridge(root.expanduser()) else "native"
@@ -840,10 +842,13 @@ def _inspect_wma_run(config: WMAOrgAtlasConfig) -> tuple[dict[str, Any], dict[st
 
 
 def _run_native_org(config, staging, wma_root, slicer, python, env, manifest, stdout_log, stderr_log, log):
+    from tractography.wma_atlases import atlas_hemisphere_source
     from tractography.wma_native import run_org_atlas_native
 
     xvfb = _command_path("xvfb-run", wma_root) if config.use_virtual_x else None
     scripts = Path(__file__).resolve().parents[1] / "scripts"
+    atlas_dir_resolved = config.atlas_dir.expanduser().resolve()
+    family = detect_atlas_family(atlas_dir_resolved, config.atlas_family)
     env = dict(env, PYTHONUTF8="1")
     with tempfile.TemporaryDirectory(prefix="wma-worker-", dir=staging) as temp_dir, \
             stdout_log.open("w", encoding="utf-8") as stdout, \
@@ -873,6 +878,19 @@ def _run_native_org(config, staging, wma_root, slicer, python, env, manifest, st
             "slicer.util.exit(result)\n",
             encoding="utf-8",
         )
+        hemisphere_worker = None
+        groups_json = None
+        if family != "org":
+            author_assess = wma_root / "bin" / "wm_assess_cluster_location_by_hemisphere.py"
+            hemisphere_worker = Path(temp_dir) / "assessment.py"
+            hemisphere_worker.write_text(
+                atlas_hemisphere_source(author_assess.read_text(encoding="utf-8")),
+                encoding="utf-8",
+            )
+            cluster_dir = atlas_dir_resolved / atlas_definition(family)["directories"][1]
+            contract = atlas_output_contract(family, cluster_dir)
+            groups_json = Path(temp_dir) / "groups.json"
+            groups_json.write_text(json.dumps(contract["groups"]), encoding="utf-8")
 
         def run_stage(stage, argv):
             script, *args = argv
@@ -880,6 +898,14 @@ def _run_native_org(config, staging, wma_root, slicer, python, env, manifest, st
                 command = [str(slicer), "--no-main-window", "--python-script", str(worker), *args]
                 if xvfb is not None:
                     command[:0] = [str(xvfb), "-a"]
+            elif script == "run_wma_atlas_hemisphere.py":
+                command = [str(python), "-u", str(hemisphere_worker), *args]
+            elif script == "run_wma_atlas_append.py":
+                command = [
+                    str(python), "-u", str(scripts / "run_wma_atlas.py"),
+                    "--append-author", str(wma_root / "bin" / "wm_append_clusters_to_anatomical_tracts.py"),
+                    "--groups", str(groups_json), "--", *args,
+                ]
             elif stage == "registration-nonrigid":
                 command = [
                     str(python), "-u", str(scripts / "run_wma_registration.py"),
@@ -916,7 +942,7 @@ def _run_native_org(config, staging, wma_root, slicer, python, env, manifest, st
         run_org_atlas_native(
             input_tractography=config.input_tractography.resolve(),
             output_dir=staging,
-            atlas_dir=config.atlas_dir.expanduser().resolve(),
+            atlas_dir=atlas_dir_resolved,
             registration_mode=config.registration_mode,
             num_threads=config.num_threads,
             clean_files=config.clean_files,
@@ -924,6 +950,7 @@ def _run_native_org(config, staging, wma_root, slicer, python, env, manifest, st
             run_stage=run_stage,
             gpu_mode=_normalize_wma_gpu_mode(config.device),
             supports_gpu_cli=_wma_supports_gpu_flag(wma_root),
+            atlas_family=family,
         )
 
 
@@ -1125,7 +1152,11 @@ def run_wma_org_atlas(
                     for py_name in ("python", "python3"):
                         shim = Path(temp_python_dir.name) / py_name
                         if not shim.exists():
-                            shim.symlink_to(slicer_python)
+                            shim.write_text(
+                                f"#!/bin/sh\nexec {shlex.quote(str(slicer_python))} \"$@\"\n",
+                                encoding="utf-8",
+                            )
+                            shim.chmod(0o755)
                     for cmd_name in (*REQUIRED_WMA_COMMANDS, "wm_diffusion_measurements.py"):
                         if cmd_name == "wm_register_to_atlas_new.py" and config.registration_preprocess_cache:
                             continue

@@ -6,7 +6,12 @@ from collections.abc import Callable
 from pathlib import Path
 import shutil
 
-from tractography.wma_atlases import atlas_definition
+from tractography.wma_atlases import (
+    atlas_definition,
+    atlas_output_contract,
+    detect_atlas_family,
+    validate_group_hemispheres,
+)
 
 
 _HEMISPHERE_GROUPS = ("tracts_commissural", "tracts_left_hemisphere", "tracts_right_hemisphere")
@@ -48,8 +53,9 @@ def run_org_atlas_native(
     run_stage: Callable[[str, list[str]], None],
     gpu_mode: str = "auto",
     supports_gpu_cli: bool = False,
+    atlas_family: str = "org",
 ) -> None:
-    """Apply ORG using author Python commands and the Slicer core hardener.
+    """Apply a supported WMA atlas using author Python commands and the Slicer core hardener.
 
     The callback launches the named script in the proper runtime and raises on
     subprocess failure. Each stage also checks its output because some author
@@ -62,12 +68,19 @@ def run_org_atlas_native(
     if clean_files not in {0, 1, 2}:
         raise ValueError("clean_files must be 0, 1, or 2.")
 
+    family = detect_atlas_family(atlas_dir, atlas_family)
+    definition = atlas_definition(family)
+    registration_name, clustering_name = definition["directories"]
+    registration_atlas = atlas_dir / registration_name / "registration_atlas.vtk"
+    clustering_atlas = atlas_dir / clustering_name
+    contract = None
+    if family != "org":
+        contract = atlas_output_contract(family, clustering_atlas)
+        validate_group_hemispheres(clustering_atlas, contract["groups"])
+
     source = input_tractography
     case_dir = output_dir / source.stem
     case_dir.mkdir(parents=True)
-    registration_name, clustering_name = atlas_definition("org")["directories"]
-    registration_atlas = atlas_dir / registration_name / "registration_atlas.vtk"
-    clustering_atlas = atlas_dir / clustering_name
     hemisphere_reference = clustering_atlas / "cluster_hemisphere_location.txt"
     registration_dir = case_dir / "TractRegistration"
     clustering_dir = case_dir / "FiberClustering"
@@ -122,8 +135,13 @@ def run_org_atlas_native(
 
     hemisphere_log = outliers / _HEMISPHERE_LOG
     if not _has_product(hemisphere_log):
+        hemisphere_script = (
+            "wm_assess_cluster_location_by_hemisphere.py"
+            if family == "org"
+            else "run_wma_atlas_hemisphere.py"
+        )
         run_stage("hemisphere-assessment", [
-            "wm_assess_cluster_location_by_hemisphere.py", *thread_args, "-clusterLocationFile",
+            hemisphere_script, *thread_args, "-clusterLocationFile",
             str(hemisphere_reference), str(outliers),
         ])
     _require_product("hemisphere-assessment", hemisphere_log)
@@ -158,16 +176,25 @@ def run_org_atlas_native(
             _require_clusters(stage, append_source / group)
 
     anatomical = case_dir / "AnatomicalTracts"
+    append_script = (
+        "wm_append_clusters_to_anatomical_tracts.py"
+        if family == "org"
+        else "run_wma_atlas_append.py"
+    )
     run_stage("anatomical-tracts", [
-        "wm_append_clusters_to_anatomical_tracts.py", *thread_args,
+        append_script, *thread_args,
         str(append_source), str(clustering_atlas), str(anatomical),
     ])
-    _require_product("anatomical-tracts", anatomical / "T_UF_right.vtp")
-    _require_product("anatomical-tracts", anatomical / "T_MCP.vtp")
-    # The author shell checks a minimum of 73 files. The append script
-    # determines the exact bundle inventory from its ORG definitions.
-    if sum(_has_product(path) for path in anatomical.glob("*.vtp")) < 73:
-        raise RuntimeError(f"WMA anatomical-tracts produced fewer than 73 tract files in {anatomical}")
+    if contract is not None:
+        for tract_file in contract["expected_tract_files"]:
+            _require_product("anatomical-tracts", anatomical / tract_file)
+    else:
+        _require_product("anatomical-tracts", anatomical / "T_UF_right.vtp")
+        _require_product("anatomical-tracts", anatomical / "T_MCP.vtp")
+        # The author shell checks a minimum of 73 files. The append script
+        # determines the exact bundle inventory from its ORG definitions.
+        if sum(_has_product(path) for path in anatomical.glob("*.vtp")) < 73:
+            raise RuntimeError(f"WMA anatomical-tracts produced fewer than 73 tract files in {anatomical}")
 
     if clean_files == 1:
         shutil.rmtree(initial_root)

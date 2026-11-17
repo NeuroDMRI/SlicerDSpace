@@ -36,6 +36,7 @@ def inspect_archive_layout(archive: Path):
     bundled_runtimes = set()
     bundled_sources = set()
     bundled_cli_modules = set()
+    bundled_wma_atlases = set()
     has_bundled_python = False
     has_bundled_model_assets = False
     development = []
@@ -65,6 +66,15 @@ def inspect_archive_layout(archive: Path):
             has_bundled_python = True
         if "bundled-model-assets" in path.parts:
             has_bundled_model_assets = True
+            idx = path.parts.index("bundled-model-assets")
+            rel_parts = path.parts[idx + 1:]
+            if len(rel_parts) >= 3 and rel_parts[:2] == ("bundles", "wma"):
+                if rel_parts[2] == "ORG-RegAtlas-100HCP":
+                    bundled_wma_atlases.add("org")
+                elif len(rel_parts) >= 4 and rel_parts[2:4] == ("east-west", "East-West_WM_Atlas_Reg"):
+                    bundled_wma_atlases.add("east-west")
+                elif len(rel_parts) >= 4 and rel_parts[2:4] == ("naba", "NABA-RegAtlas"):
+                    bundled_wma_atlases.add("naba")
         if "cli-modules" in path.parts:
             idx = path.parts.index("cli-modules")
             if len(path.parts) > idx + 1:
@@ -83,6 +93,7 @@ def inspect_archive_layout(archive: Path):
         "bundled_cli_modules": sorted(bundled_cli_modules),
         "bundled_python": has_bundled_python,
         "bundled_model_assets": has_bundled_model_assets,
+        "bundled_wma_atlases": sorted(bundled_wma_atlases),
         "unsafe": unsafe,
         "development_artifacts": development,
         "bytecode_count": sum(name.endswith((".pyc", ".pyo")) for name in members),

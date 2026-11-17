@@ -268,21 +268,30 @@ def _stage_model_assets(extension_root: Path, model_assets_root: Path | None) ->
         for rel in ext_manifest["profiles"][prof].get("required_paths", ()):
             expected_hashes[rel] = ext_manifest["asset_records"][rel]["sha256"]
 
-    wma_license = "bundles/wma/LICENSE.txt"
-    wma_index_rel = "bundles/wma/extracted_resource_index.json"
-    expected_hashes[wma_license] = ext_manifest["asset_records"][wma_license]["sha256"]
-    expected_hashes[wma_index_rel] = ext_manifest["asset_records"][wma_index_rel]["sha256"]
     if (src / "surface/postprocessing/atlas.tar.gz").is_file():
         atlas_rel = "surface/postprocessing/atlas.tar.gz"
         expected_hashes[atlas_rel] = ext_manifest["asset_records"][atlas_rel]["sha256"]
 
-    wma_index_path = src / wma_index_rel
-    if not wma_index_path.is_file():
-        raise FileNotFoundError(f"Missing WMA index file: {wma_index_path}")
-    wma_index = json.loads(wma_index_path.read_text(encoding="utf-8"))
-    for entry in wma_index["files"]:
-        rel = "bundles/wma/" + entry["path"]
-        expected_hashes[rel] = entry["sha256"]
+    wma_profiles = (
+        ("org", "wma"),
+        ("east-west", "wma-east-west"),
+        ("naba", "wma-naba"),
+    )
+    for _, prof_name in wma_profiles:
+        prof_def = ext_manifest["profiles"][prof_name]
+        prof_dir = prof_def["directory"]
+        for rel in prof_def.get("required_paths", ()):
+            if "/archives/" in rel:
+                continue
+            expected_hashes[rel] = ext_manifest["asset_records"][rel]["sha256"]
+        index_rel = prof_def.get("extracted_index", "bundles/wma/extracted_resource_index.json")
+        index_path = src / index_rel
+        if not index_path.is_file():
+            raise FileNotFoundError(f"Missing WMA index file for {prof_name}: {index_path}")
+        wma_index = json.loads(index_path.read_text(encoding="utf-8"))
+        for entry in wma_index["files"]:
+            rel = f"{prof_dir}/{entry['path']}"
+            expected_hashes[rel] = entry["sha256"]
 
     dest_root = extension_root / "bundled-model-assets"
     if dest_root.resolve() != src:
@@ -313,6 +322,7 @@ def _stage_model_assets(extension_root: Path, model_assets_root: Path | None) ->
         "directory": "bundled-model-assets",
         "file_count": len(expected_hashes),
         "total_bytes": total_bytes,
+        "wma_atlases": [name for name, _ in wma_profiles],
     }
 
 

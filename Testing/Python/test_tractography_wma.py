@@ -232,7 +232,9 @@ exit 0
             self.assertEqual(resolve_wma_execution_backend(self.wma_root, platform='win32'), 'native')
             self.assertEqual(resolve_wma_execution_backend(self.wma_root, platform='linux'), 'legacy')
             self.assertEqual(resolve_wma_execution_backend(
-                self.wma_root, platform='win32', atlas_family='naba'), 'legacy')
+                self.wma_root, platform='win32', atlas_family='naba'), 'native')
+            self.assertEqual(resolve_wma_execution_backend(
+                self.wma_root, platform='win32', atlas_family='east-west'), 'native')
             self.assertEqual(resolve_wma_execution_backend(
                 self.wma_root, platform='win32', export_diffusion_measures=True), 'legacy')
             self.assertEqual(resolve_wma_execution_backend(

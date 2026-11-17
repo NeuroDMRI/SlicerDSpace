@@ -193,6 +193,64 @@ class WMANativeTest(unittest.TestCase):
             self.assertEqual(list((self.clustering / dirname).iterdir()), [])
         self.assertTrue((self.case / "AnatomicalTracts" / "T_UF_right.vtp").is_file())
 
+    def test_native_supports_east_west_and_naba_atlas_contracts(self):
+        from tractography.wma_atlases import ATLAS_DEFINITIONS, atlas_output_contract
+
+        for family, expected_count in (("east-west", 76), ("naba", 78)):
+            with self.subTest(family=family):
+                fam_atlas = self.root / f"atlas-{family}"
+                reg_name, cluster_name = ATLAS_DEFINITIONS[family]["directories"]
+                self.write(fam_atlas / reg_name / "registration_atlas.vtk")
+                cluster_dir = fam_atlas / cluster_name
+                self.write(cluster_dir / "atlas.p")
+                self.write(cluster_dir / "atlas.vtp")
+                hemi_rows = ["cluster_name\tlocation"]
+                for idx in range(1, 801):
+                    label = "c" if idx <= 10 else "h"
+                    hemi_rows.append(f"cluster_{idx:05d}.vtp\t{label}")
+                self.write(cluster_dir / "cluster_hemisphere_location.txt", "\n".join(hemi_rows) + "\n")
+                for tname in ATLAS_DEFINITIONS[family]["hemispheric"]:
+                    self.write(cluster_dir / f"{tname}.mrml", "<MRML>cluster_00011.vtp</MRML>")
+                for tname in ATLAS_DEFINITIONS[family]["commissural"]:
+                    self.write(cluster_dir / f"{tname}.mrml", "<MRML>cluster_00001.vtp</MRML>")
+                contract = atlas_output_contract(family, cluster_dir)
+                self.assertEqual(len(contract["expected_tract_files"]), expected_count)
+
+                fam_out = self.root / f"output-{family}"
+                calls = []
+
+                def stage_runner(stage, argv):
+                    calls.append(tuple(argv))
+                    script, *args = argv
+                    if script == "run_wma_atlas_hemisphere.py":
+                        self.write(
+                            Path(args[2]) / "cluster_location_by_hemisphere.log",
+                            "<wm_assess_cluster_location_by_hemisphere.py> Done!!!",
+                        )
+                    elif script == "run_wma_atlas_append.py":
+                        for tract_file in contract["expected_tract_files"]:
+                            self.write(Path(args[2]) / tract_file)
+                    else:
+                        self.simulate_stage(stage, argv)
+
+                run_org_atlas_native(
+                    input_tractography=self.source,
+                    output_dir=fam_out,
+                    atlas_dir=fam_atlas,
+                    registration_mode="rig",
+                    num_threads=2,
+                    clean_files=0,
+                    transform_path=None,
+                    run_stage=stage_runner,
+                    atlas_family=family,
+                )
+                self.assertEqual(calls[3][0], "run_wma_atlas_hemisphere.py")
+                self.assertEqual(calls[6][0], "run_wma_atlas_append.py")
+                self.assertEqual(
+                    len(list((fam_out / "case.v1" / "AnatomicalTracts").glob("*.vtp"))),
+                    expected_count,
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

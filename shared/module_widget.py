@@ -852,6 +852,10 @@ class SharedWidgetMixin:
         }:
             if not Path(value).expanduser().exists():
                 value = ""
+        if value and dependency_id == "postprocess_license_file":
+            from shared.surface_license import usable_license
+            if not usable_license(value):
+                value = ""
         if value and dependency_id in {"mrtrix_bin_dir", "preprocessing_mrtrix_bin_dir"}:
             tckedit_name = "tckedit.exe" if sys.platform == "win32" else "tckedit"
             if not (Path(value).expanduser() / tckedit_name).is_file():
@@ -882,9 +886,21 @@ class SharedWidgetMixin:
                     bundled = bundled_surface_runtime()
                     if bundled is not None:
                         value = bundled.as_posix()
+                elif dependency_id == "postprocess_license_file":
+                    from shared.surface_license import managed_surface_license_path, usable_license
+                    managed = managed_surface_license_path()
+                    if usable_license(managed):
+                        value = managed.resolve().as_posix()
                 if value:
                     settings.setValue(self._environment_settings_key(dependency_id), value)
                     update_user_config({"external_dependencies": {dependency_id: value}})
+            except Exception:
+                pass
+        if value and dependency_id == "postprocess_license_file":
+            try:
+                from shared.surface_license import usable_license
+                if usable_license(value):
+                    os.environ.setdefault("FS_LICENSE", str(Path(value).expanduser().resolve()))
             except Exception:
                 pass
         return value
@@ -896,6 +912,13 @@ class SharedWidgetMixin:
         clean_value = (value or "").strip()
         if clean_value:
             settings.setValue(self._environment_settings_key(dependency_id), clean_value)
+            if dependency_id == "postprocess_license_file":
+                try:
+                    from shared.surface_license import usable_license
+                    if usable_license(clean_value):
+                        os.environ["FS_LICENSE"] = str(Path(clean_value).expanduser().resolve())
+                except Exception:
+                    pass
         else:
             settings.remove(self._environment_settings_key(dependency_id))
         try:

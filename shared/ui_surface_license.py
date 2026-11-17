@@ -1,6 +1,14 @@
-"""Surface-only activation assistance; never download or copy private keys."""
+"""Surface-only activation assistance; copies imported user license to private user config."""
 
-from shared.surface_license import REGISTRATION_URL, resolve_surface_license, usable_license
+import os
+
+from shared.surface_license import (
+    REGISTRATION_URL,
+    import_surface_license,
+    managed_surface_license_path,
+    resolve_surface_license,
+    usable_license,
+)
 
 
 def choose_license(owner):
@@ -13,9 +21,11 @@ def choose_license(owner):
     dialog.setWindowTitle(_text(owner, 'Surface postprocessing license', '表面后处理许可证'))
     layout = qt.QVBoxLayout(dialog)
     label = qt.QLabel(_text(owner,
-        'Import your FreeSurfer license.txt, or register for a free license. The path is saved for later runs. '
+        'Import your FreeSurfer license.txt once, or register for a free license. SlicerDSpace copies it to '
+        'your private user configuration and sets FS_LICENSE automatically for future runs and upgrades. '
         'Other analyses do not require this file.',
-        '请选择您自己的 FreeSurfer license.txt，或免费申请。路径保存后可重复使用；其他分析不需要此文件。'))
+        '首次导入您自己的 FreeSurfer license.txt，或免费注册获取。SlicerDSpace 会将其保存至用户私有配置目录'
+        '并自动配置 FS_LICENSE，后续启动与软件升级均可自动识别；其他分析不需要此文件。'))
     label.wordWrap = True
     layout.addWidget(label)
     selected = []
@@ -49,7 +59,7 @@ def choose_license(owner):
 
 
 def prepare_surface_license(owner, result):
-    """Discover or ask only for selected surface postprocessing; refresh its report."""
+    """Discover or import once for selected surface postprocessing; configure FS_LICENSE and refresh."""
     if 'surface_postprocess' not in result.targets:
         return result
     config = owner._environment_dependency_path_kwargs()
@@ -64,11 +74,18 @@ def prepare_surface_license(owner, result):
     missing = any(item.key == 'surface_postprocess_license' and item.status != 'available'
                   for item in result.statuses)
     if usable_license(path) and not missing and explicit:
+        os.environ.setdefault('FS_LICENSE', str(path))
         return result
     if not usable_license(path):
-        path = choose_license(owner)
-        if path is None:
-            return None
+        managed = managed_surface_license_path()
+        if usable_license(managed):
+            path = managed.resolve()
+        else:
+            chosen = choose_license(owner)
+            if chosen is None:
+                return None
+            path = import_surface_license(chosen)
+    os.environ['FS_LICENSE'] = str(path)
     # Recheck even when an explicit file has been fixed since the previous report.
     edit = (getattr(owner, '_environmentPathLineEdits', {}) or {}).get('postprocess_license_file')
     if edit is not None:

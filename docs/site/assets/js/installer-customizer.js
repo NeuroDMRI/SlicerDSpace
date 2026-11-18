@@ -21,47 +21,103 @@
         id: 'wma_org',
         filename: 'SlicerDSpace-v0.1.1-WMA-ORG.tar.gz',
         url: RELEASE_BASE + '/SlicerDSpace-v0.1.1-WMA-ORG.tar.gz',
-        size_bytes: 1500000000,
-        sha256: '',
+        size_bytes: 1804334817,
+        sha256: 'e1bb6f42218c80705746bc677ba7962468801585af31f9ce712b2164c298e6cd',
         parts: []
       },
       wma_naba: {
         id: 'wma_naba',
         filename: 'SlicerDSpace-v0.1.1-WMA-NABA.tar.gz',
         url: '',
-        size_bytes: 2900000000,
-        sha256: '',
-        parts: []
+        size_bytes: 3365003883,
+        sha256: '88a810213c5c3a047e712eb2f1a2a49f3de98000c6e7ca056ffe9dac43dacbc8',
+        parts: [
+          {
+            filename: 'SlicerDSpace-v0.1.1-WMA-NABA.tar.gz.001',
+            size_bytes: 1900000000,
+            sha256: 'a948e9d82eedcb3daec6ed7a0c5e5ec866d10d4070373aa7cbf4baeb2e3cf0c1',
+            url: RELEASE_BASE + '/SlicerDSpace-v0.1.1-WMA-NABA.tar.gz.001'
+          },
+          {
+            filename: 'SlicerDSpace-v0.1.1-WMA-NABA.tar.gz.002',
+            size_bytes: 1465003883,
+            sha256: 'bdc60b267630cd737a6a9e8cf22db771147a5daba6c9e623998d0b5f4c5985c1',
+            url: RELEASE_BASE + '/SlicerDSpace-v0.1.1-WMA-NABA.tar.gz.002'
+          }
+        ]
       },
       wma_east_west: {
         id: 'wma_east_west',
         filename: 'SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz',
         url: '',
-        size_bytes: 9900000000,
-        sha256: '',
-        parts: []
+        size_bytes: 11405353584,
+        sha256: '506cf84e1608a5975e72b83af4d5e25f7986849d12159d7a94d2def9681e33c1',
+        parts: [
+          {
+            filename: 'SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz.001',
+            size_bytes: 1900000000,
+            sha256: '6daf10aba6b3bc530dc136c67e4da2d8b45f7b89d8cd4203de28bdf71b703d8f',
+            url: RELEASE_BASE + '/SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz.001'
+          },
+          {
+            filename: 'SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz.002',
+            size_bytes: 1900000000,
+            sha256: '805e74a323dac63573759c362c3de81296ac1712482858d021dff8d986b2b670',
+            url: RELEASE_BASE + '/SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz.002'
+          },
+          {
+            filename: 'SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz.003',
+            size_bytes: 1900000000,
+            sha256: '24c27591a46c54f387fd86045a564ee4241abf9a51d4cd8f30066a7b712e0071',
+            url: RELEASE_BASE + '/SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz.003'
+          },
+          {
+            filename: 'SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz.004',
+            size_bytes: 1900000000,
+            sha256: '4a060647f641c12309953bb3ba887a23ba51ef4dac9d911ac42428fdda1f3932',
+            url: RELEASE_BASE + '/SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz.004'
+          },
+          {
+            filename: 'SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz.005',
+            size_bytes: 1900000000,
+            sha256: '4fd4650b67bc51d49869e10363dba988fcad2e071ffce5fea6e1c3254680fb95',
+            url: RELEASE_BASE + '/SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz.005'
+          },
+          {
+            filename: 'SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz.006',
+            size_bytes: 1900000000,
+            sha256: '5ad69210366044801eb3be30ad26a1744c3bf658f8b1388ec3dfe0a607039a44',
+            url: RELEASE_BASE + '/SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz.006'
+          },
+          {
+            filename: 'SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz.007',
+            size_bytes: 5353584,
+            sha256: '2663479e6cd9fddaa0df5360646c86e7b2a31643c78c5a0eae3af715370cb455',
+            url: RELEASE_BASE + '/SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz.007'
+          }
+        ]
       }
     },
     bundles: {
       windows_x64_base: {
         filename: 'SlicerDSpace-v0.1.1-Windows-x64.zip',
         url: RELEASE_BASE + '/SlicerDSpace-v0.1.1-Windows-x64.zip',
-        size_bytes: 1600000000,
-        sha256: '',
+        size_bytes: 1468658118,
+        sha256: '80999ea3caf471ea320ba3d39877ae6877cf12c0d364916243beb1f687d28cc6',
         parts: []
       },
       linux_x64_base: {
         filename: 'SlicerDSpace-v0.1.1-Linux-x64.tar.gz',
         url: RELEASE_BASE + '/SlicerDSpace-v0.1.1-Linux-x64.tar.gz',
-        size_bytes: 1400000000,
-        sha256: '',
+        size_bytes: 1613567466,
+        sha256: '729895ff7c3103d75a9104d4c99ee86cf5173f936d81b39f42ae97c73c91cb59',
         parts: []
       },
       macos_arm64_base: {
         filename: 'SlicerDSpace-v0.1.1-macOS-arm64.tar.gz',
         url: RELEASE_BASE + '/SlicerDSpace-v0.1.1-macOS-arm64.tar.gz',
-        size_bytes: 1400000000,
-        sha256: '',
+        size_bytes: 1463899429,
+        sha256: 'aa634ea07b6e4708f8d53091d9dc726a6441e1b52cf74198031959bc28a4648b',
         parts: []
       }
     }
@@ -74,7 +130,7 @@
       slicerPlaceholder: '/Applications/Slicer.app',
       modelPlaceholder: '~/Library/Application Support/SlicerDSpace/model-assets',
       scriptName: 'Install-SlicerDSpace.command',
-      baseEstimateBytes: 1400000000
+      baseEstimateBytes: 1463899429
     },
     windows: {
       label: 'Windows',
@@ -82,7 +138,7 @@
       slicerPlaceholder: '%LOCALAPPDATA%\\slicer.org\\Slicer 5.10.0',
       modelPlaceholder: '%LOCALAPPDATA%\\SlicerDSpace\\model-assets',
       scriptName: 'Install-SlicerDSpace.bat',
-      baseEstimateBytes: 1600000000
+      baseEstimateBytes: 1468658118
     },
     linux: {
       label: 'Linux',
@@ -90,7 +146,7 @@
       slicerPlaceholder: '~/Slicer-5.10.0-linux-amd64',
       modelPlaceholder: '~/.local/share/SlicerDSpace/model-assets',
       scriptName: 'Install-SlicerDSpace.sh',
-      baseEstimateBytes: 1400000000
+      baseEstimateBytes: 1613567466
     }
   };
 

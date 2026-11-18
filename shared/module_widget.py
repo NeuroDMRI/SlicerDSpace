@@ -1549,6 +1549,12 @@ class SharedWidgetMixin:
         external_paths = self._environment_dependency_path_kwargs()
         mrtrix_bin_dir = external_paths.get("mrtrix_bin_dir") or external_paths.get("preprocessing_mrtrix_bin_dir")
         mrconvert = (Path(mrtrix_bin_dir) / "mrconvert") if mrtrix_bin_dir else None
+        try:
+            from tractography.ukf import resolve_executable
+
+            dwiconvert = resolve_executable(name="DWIConvert")
+        except Exception:
+            dwiconvert = None
 
         return InputImportConfig(
             source=source,
@@ -1559,6 +1565,7 @@ class SharedWidgetMixin:
             bvec_path=optional_path("bvec") if source_kind == "nifti" else None,
             mask_path=optional_path("mask") if self._parameterNode.brainMaskBackend == "provided" else None,
             mrconvert_executable=mrconvert,
+            dwiconvert_executable=dwiconvert,
         )
 
     def _input_import_selection(self) -> tuple:
@@ -1582,10 +1589,13 @@ class SharedWidgetMixin:
             "bvec_path": str(config.bvec_path) if config.bvec_path else None,
             "mask_path": str(config.mask_path) if config.mask_path else None,
             "mrconvert_executable": str(config.mrconvert_executable) if config.mrconvert_executable else None,
+            "dwiconvert_executable": str(config.dwiconvert_executable) if config.dwiconvert_executable else None,
         }
 
     def _cleanup_import_process_resources(self, *, terminate: bool = False) -> None:
         process = getattr(self, "_importProcess", None)
+        grouped = bool(getattr(self, "_importProcessGrouped", False))
+        pgid = getattr(self, "_importProcessGroupId", None)
         if process is not None:
             callbacks = getattr(self, "_importProcessCallbacks", ())
             for signal_name, callback in callbacks:
@@ -1598,9 +1608,9 @@ class SharedWidgetMixin:
                     pid = int(process.processId())
                 except Exception:
                     pid = 0
-                if pid > 0:
+                if pid > 0 or (grouped and pgid):
                     try:
-                        kill_process_tree(pid, grouped=False, force=False)
+                        kill_process_tree(pid, grouped=grouped, force=False, pgid=pgid)
                     except OSError:
                         pass
                 try:
@@ -1610,9 +1620,13 @@ class SharedWidgetMixin:
                 if hasattr(qt, "QTimer"):
                     qt.QTimer.singleShot(
                         2000,
-                        lambda p=process, proc_pid=pid: self._kill_import_process_if_running(p, proc_pid),
+                        lambda p=process, proc_pid=pid, proc_grouped=grouped, proc_pgid=pgid: self._kill_import_process_if_running(
+                            p, proc_pid, grouped=proc_grouped, pgid=proc_pgid
+                        ),
                     )
         self._importProcess = None
+        self._importProcessGrouped = False
+        self._importProcessGroupId = None
         self._importProcessCallbacks = ()
         temp_dir = getattr(self, "_importTempDir", None)
         if temp_dir is not None:
@@ -1620,10 +1634,17 @@ class SharedWidgetMixin:
             self._importTempDir = None
         self._importOutputBuffer = ""
 
-    def _kill_import_process_if_running(self, process, pid: int = 0) -> None:
-        if pid > 0:
+    def _kill_import_process_if_running(
+        self,
+        process,
+        pid: int = 0,
+        *,
+        grouped: bool = False,
+        pgid: Optional[int] = None,
+    ) -> None:
+        if pid > 0 or (grouped and pgid):
             try:
-                kill_process_tree(pid, grouped=False, force=True)
+                kill_process_tree(pid, grouped=grouped, force=True, pgid=pgid)
             except OSError:
                 pass
         try:
@@ -1737,6 +1758,7 @@ class SharedWidgetMixin:
                 "--result",
                 str(result_path),
             ]
+            program, launch_args, grouped = grouped_launch_command(launcher, args)
             process = qt.QProcess(self.parent)
             if hasattr(process, "setWorkingDirectory"):
                 process.setWorkingDirectory(Path(__file__).resolve().parent.parent.as_posix())
@@ -1749,6 +1771,8 @@ class SharedWidgetMixin:
                 process.setProcessEnvironment(env)
 
             self._importProcess = process
+            self._importProcessGrouped = grouped
+            self._importProcessGroupId = None
             self._importTempDir = tmp_dir
             self._importOutputBuffer = ""
             completed = {"done": False}
@@ -1764,6 +1788,21 @@ class SharedWidgetMixin:
                         if len(last_output_lines) > 20:
                             del last_output_lines[0]
                         self.appendLog(cleaned)
+
+            def on_started() -> None:
+                if getattr(self, "_importProcessGroupId", None) is None:
+                    self._importProcessGroupId = self._capture_background_process_group_id(process, grouped)
+                if getattr(self, "_inputImportCancelRequested", False):
+                    pgid = getattr(self, "_importProcessGroupId", None)
+                    try:
+                        pid = int(process.processId())
+                    except Exception:
+                        pid = 0
+                    if pid > 0 or (grouped and pgid):
+                        try:
+                            kill_process_tree(pid, grouped=grouped, force=False, pgid=pgid)
+                        except OSError:
+                            pass
 
             def on_ready_read() -> None:
                 if getattr(self, "_cleanedUp", False) or getattr(self, "_inputImportCancelRequested", False):
@@ -1829,6 +1868,7 @@ class SharedWidgetMixin:
                 on_result(None, RuntimeError(err_msg))
 
             callbacks = (
+                ("started()", on_started),
                 ("readyReadStandardOutput()", on_ready_read),
                 ("finished(int,QProcess::ExitStatus)", on_finished),
                 ("errorOccurred(QProcess::ProcessError)", on_error),
@@ -1836,8 +1876,10 @@ class SharedWidgetMixin:
             self._importProcessCallbacks = callbacks
             for signal_name, callback in callbacks:
                 process.connect(signal_name, callback)
-            self.appendLog(f"[Prepare Inputs] Launching subprocess: {launcher} {' '.join(args)}")
-            process.start(launcher, args)
+            self.appendLog(f"[Prepare Inputs] Launching subprocess: {program} {' '.join(launch_args)}")
+            process.start(program, launch_args)
+            if grouped and getattr(self, "_importProcessGroupId", None) is None:
+                self._importProcessGroupId = self._capture_background_process_group_id(process, grouped)
 
         def finish_with_result(manifest: Optional[dict[str, Any]], exc: Optional[Exception]) -> None:
             if getattr(self, "_cleanedUp", False) or getattr(self, "_inputImportCancelRequested", False):

@@ -928,9 +928,20 @@ class EnvironmentAndWidgetFlowTests(unittest.TestCase):
                     self.assertTrue(widget._cancelRunButton.enabled)
                     self.assertEqual(len(created_processes), 1)
                     proc = created_processes[0]
-                    self.assertEqual(proc.started_with[0], "/Applications/Slicer.app/Contents/Slicer")
-                    self.assertEqual(proc.started_with[1][:3], ["--launch", "PythonSlicer", "-u"])
-                    self.assertIn("prepare_inputs_cli.py", proc.started_with[1][3])
+
+                    def _unwrap_grouped(started_with):
+                        prog, argv = started_with
+                        if Path(prog).name == "perl" and "--" in argv:
+                            idx = argv.index("--")
+                            return argv[idx + 1], argv[idx + 2 :]
+                        if Path(prog).name == "setsid" and argv:
+                            return argv[0], argv[1:]
+                        return prog, argv
+
+                    unwrapped_prog, unwrapped_args = _unwrap_grouped(proc.started_with)
+                    self.assertEqual(unwrapped_prog, "/Applications/Slicer.app/Contents/Slicer")
+                    self.assertEqual(unwrapped_args[:3], ["--launch", "PythonSlicer", "-u"])
+                    self.assertIn("prepare_inputs_cli.py", unwrapped_args[3])
 
                     # 2. Cancel import -> terminates QProcess cleanly and resets to "cancelled"
                     widget._onCancelRunClicked()
@@ -945,6 +956,24 @@ class EnvironmentAndWidgetFlowTests(unittest.TestCase):
                     proc2._signals["finished(int,QProcess::ExitStatus)"].emit(1, 0)
                     self.assertEqual(widget._runState, "failed")
                     self.assertEqual(len(errors), 1)
+
+                    # 3b. Real macOS .app bundle layout uses Contents/bin/PythonSlicer directly (never Contents/MacOS/Slicer --launch)
+                    bundle_root = Path(tmp) / "Slicer.app" / "Contents"
+                    (bundle_root / "MacOS").mkdir(parents=True, exist_ok=True)
+                    (bundle_root / "bin").mkdir(parents=True, exist_ok=True)
+                    macos_launcher = bundle_root / "MacOS" / "Slicer"
+                    python_slicer = bundle_root / "bin" / "PythonSlicer"
+                    macos_launcher.write_text("", encoding="utf-8")
+                    python_slicer.write_text("", encoding="utf-8")
+                    widget._slicer_launcher_program = lambda: str(macos_launcher)
+                    widget._on_prepare_inputs_clicked(run_after=False)
+                    proc3 = created_processes[2]
+                    mac_prog, mac_args = _unwrap_grouped(proc3.started_with)
+                    self.assertEqual(mac_prog, str(python_slicer))
+                    self.assertEqual(mac_args[0], "-u")
+                    self.assertIn("prepare_inputs_cli.py", mac_args[1])
+                    self.assertNotIn("--launch", mac_args)
+                    widget._onCancelRunClicked()
 
                 # 4. Install Python dependencies enters "setup" and resets to "idle" on success
                 setup_captures = {}

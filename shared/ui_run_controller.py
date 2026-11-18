@@ -503,6 +503,26 @@ def preflight_blockers_for_targets(doctor_result: Any, selected_targets: tuple[s
     return {target: reason for target, reason in blocked_target_reasons(doctor_result).items() if target in selected}
 
 
+def resolve_single_subject_output_root(output_root_text: str, subject_id: str = "") -> Optional[Path]:
+    """Resolve the single-subject output directory under ``<output_root>/<subject_id>``.
+
+    When ``output_root_text`` already ends with ``<subject_id>`` (or ``<subject_id>/outputs``),
+    it is returned as-is instead of nesting another ``<subject_id>`` subfolder. Empty input
+    returns ``None`` so callers fall back to ``<subject_root>/outputs``.
+    """
+
+    raw = str(output_root_text or "").strip()
+    if not raw:
+        return None
+    base = Path(raw).expanduser()
+    clean_sid = str(subject_id or "").strip().replace("/", "_").replace("\\", "_")
+    if not clean_sid:
+        return base
+    if base.name == clean_sid or (base.name.lower() in {"output", "outputs"} and base.parent.name == clean_sid):
+        return base
+    return base / clean_sid
+
+
 def build_single_subject_run_kwargs(
     selection: RunSelection,
     external_paths: dict[str, Optional[Path]],
@@ -518,7 +538,7 @@ def build_single_subject_run_kwargs(
         **_ukf_run_options(selection),
         "subject_id": selection.subject_id,
         "subject_root": subject_root,
-        "output_root": Path(selection.output_root_text).expanduser() if selection.output_root_text else None,
+        "output_root": resolve_single_subject_output_root(selection.output_root_text, selection.subject_id),
         "targets": selection.selected_targets,
         "requested_targets": selection.requested_targets,
         "run_name": selection.run_name,

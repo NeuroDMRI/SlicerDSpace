@@ -108,6 +108,7 @@ from shared.ui_run_controller import (
     environment_blockers_from_plan,
     partial_run_notice_text,
     preflight_blockers_for_targets,
+    resolve_single_subject_output_root,
     runnable_targets_from_plan,
     rows_from_batch_manifest,
     rows_from_plan,
@@ -384,20 +385,45 @@ class SharedWidgetMixin:
         widget.value = float(desired)
         del blocker
 
+    def _effective_output_root_text(
+        self,
+        output_root_text: str = "",
+        *,
+        batch_mode: Optional[bool] = None,
+    ) -> str:
+        node = getattr(self, "_parameterNode", None)
+        raw = (output_root_text or ((node.outputDirectory or "") if node else "")).strip()
+        if not raw:
+            return ""
+        if batch_mode is None:
+            cohort_experiments = bool(
+                node
+                and getattr(node, "experimentsEnabled", False)
+                and getattr(node, "experimentScope", "subject") == "cohort"
+            )
+            is_batch = bool(node and (cohort_experiments or getattr(node, "batchMode", False)))
+        else:
+            is_batch = bool(batch_mode)
+        if is_batch:
+            return raw
+        resolved = resolve_single_subject_output_root(raw, self._effective_subject_id())
+        return str(resolved) if resolved is not None else raw
+
     def _topup_validation(self, *, batch_mode: Optional[bool] = None) -> TopupValidation:
         node = self._parameterNode
         if not node:
             return validate_topup_parameters(preprocessing_selected=False)
+        effective_batch_mode = bool(getattr(node, "batchMode", False)) if batch_mode is None else bool(batch_mode)
         return validate_topup_parameters(
             preprocessing_selected=bool(node.targetPreprocessing),
             preprocessing_stages=getattr(node, "orchestrationPreprocessingStages", "") or "",
             phase_encoding_direction=getattr(node, "preprocessingPhaseEncodingDirection", "") or "",
             readout_time=float(getattr(node, "preprocessingReadoutTime", 0.0) or 0.0),
             reverse_phase_b0=getattr(node, "preprocessingReversePhaseB0", "") or "",
-            batch_mode=bool(getattr(node, "batchMode", False)) if batch_mode is None else batch_mode,
+            batch_mode=effective_batch_mode,
             # W2b rule 4: the sidecar of the chosen subject decides whether a direction exists.
             subject_root=(getattr(node, "inputDirectory", "") or "").strip() or None,
-            output_root=(getattr(node, "outputDirectory", "") or "").strip() or None,
+            output_root=self._effective_output_root_text(batch_mode=effective_batch_mode) or None,
         )
 
     def _refresh_topup_controls(self) -> TopupValidation:
@@ -472,7 +498,13 @@ class SharedWidgetMixin:
         node = self._parameterNode
         if not node:
             return
-        key = (node.inputDirectory or "", node.outputDirectory or "", getattr(node, "batchRoot", "") or "")
+        key = (
+            node.inputDirectory or "",
+            node.outputDirectory or "",
+            self._effective_subject_id(),
+            bool(getattr(node, "batchMode", False)),
+            getattr(node, "batchRoot", "") or "",
+        )
         if key == getattr(self, "_runHistoryRootsKey", None):
             return
         self._runHistoryRootsKey = key
@@ -1356,7 +1388,8 @@ class SharedWidgetMixin:
     def _remember_environment_report_dir(self, subject_root_text: str, output_root_text: str) -> None:
         try:
             subject_root = Path(subject_root_text).expanduser().resolve() if subject_root_text else None
-            output_root = Path(output_root_text).expanduser().resolve() if output_root_text else None
+            effective_output = self._effective_output_root_text(output_root_text)
+            output_root = Path(effective_output).expanduser().resolve() if effective_output else None
             if subject_root is not None and subject_root.exists():
                 from shared.io_layout import subject_layout
 
@@ -2263,7 +2296,7 @@ class SharedWidgetMixin:
             return {}
         external_paths = external_paths if external_paths is not None else self._environment_dependency_path_kwargs()
         subject_root_text = (subject_root_text or (node.inputDirectory or "")).strip()
-        output_root_text = (output_root_text or (node.outputDirectory or "")).strip()
+        output_root_text = self._effective_output_root_text(output_root_text)
         targets = self._selected_environment_targets()
         mask_backend = (getattr(node, "brainMaskBackend", "pnl_cnn") or "pnl_cnn").strip()
         preprocessing_stages = (getattr(node, "orchestrationPreprocessingStages", "") or "").strip()
@@ -3444,7 +3477,7 @@ class SharedWidgetMixin:
                 what="The selected run could not be loaded into the scene.",
                 why=error,
                 next_step=(
-                    "Open Results and QC again to rescan run folders, or choose “Add a run folder…” "
+                    "Open Results again to rescan run folders, or choose “Add a run folder…” "
                     "in the Run list."
                 ),
                 auto_fix="Not available; no scene nodes were changed.",
@@ -3530,6 +3563,31 @@ class SharedWidgetMixin:
             cancelled_at=datetime.utcnow().isoformat(timespec="seconds") + "Z",
         )
         manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        existing_orch_path = manifest_path.with_name(f"{payload['run_name']}_orchestration_manifest.json")
+        if existing_orch_path.is_file():
+            try:
+                existing_payload = json.loads(existing_orch_path.read_text(encoding="utf-8"))
+                if isinstance(existing_payload, dict):
+                    for key in (
+                        "tasks",
+                        "report_paths",
+                        "output_tree_report_paths",
+                        "previous_run_records",
+                        "run_plan_path",
+                        "started_at",
+                        "completed_at",
+                    ):
+                        if key in existing_payload and existing_payload[key]:
+                            payload[key] = existing_payload[key]
+                    existing_payload["status"] = "cancelled"
+                    existing_payload["cancelled_at"] = payload["cancelled_at"]
+                    existing_payload.setdefault("reason", payload["reason"])
+                    existing_orch_path.write_text(
+                        json.dumps(existing_payload, indent=2, sort_keys=True) + "\n",
+                        encoding="utf-8",
+                    )
+            except (OSError, ValueError):
+                pass
         manifest_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         return manifest_path
 

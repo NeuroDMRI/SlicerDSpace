@@ -637,9 +637,12 @@ def poll_run_progress(owner: Any) -> None:
             refresh_run_progress_styles(owner)
         owner._set_run_status_table_rows(rows_from_batch_manifest(Path(path), record)[0])
         return
+    prev_done = (getattr(owner, "_runProgressCounts", None) or (0, 0))[0]
     snapshot = progress_from_manifest(path, not_before=getattr(owner, "_runProgressStartedAt", None))
     if snapshot is not None:
         apply_progress_snapshot(owner, snapshot)
+        if snapshot.done > prev_done and Path(path).is_file() and hasattr(owner, "_refresh_run_history"):
+            owner._refresh_run_history(select_path=Path(path))
 
 
 def apply_progress_snapshot(owner: Any, snapshot) -> None:
@@ -683,10 +686,17 @@ def install_results_panel(owner: Any) -> None:
 
     if getattr(owner, "_runHistoryComboBox", None) is not None:
         return
-    layout = _layout_or_fallback(owner, "resultsLayout")
-    if layout is None:
+    results_layout = _layout_or_fallback(owner, "resultsLayout")
+    if results_layout is None:
         return
     import qt
+
+    section_box = getattr(getattr(owner, "ui", None), "resultsCollapsibleButton", None)
+    if section_box is not None and hasattr(section_box, "connect"):
+        section_box.connect(
+            "contentsCollapsed(bool)",
+            lambda collapsed: None if collapsed else owner._refresh_run_history(),
+        )
 
     empty_row = qt.QWidget()
     empty_layout = qt.QHBoxLayout(empty_row)
@@ -695,12 +705,12 @@ def install_results_panel(owner: Any) -> None:
     owner._resultsEmptyLabel = empty_label
     _bind(owner, empty_label, "text", "no_runs_found")
     empty_layout.addWidget(empty_label, 1)
-    layout.addWidget(empty_row)
+    results_layout.addWidget(empty_row)
 
     columns = qt.QSplitter(qt.Qt.Horizontal)
     columns.setChildrenCollapsible(False)
     columns.hide()
-    layout.addWidget(columns)
+    results_layout.addWidget(columns)
     owner._resultsEmptyRow = empty_row
     owner._resultsColumns = columns
     runs = qt.QWidget()
@@ -709,9 +719,9 @@ def install_results_panel(owner: Any) -> None:
     columns.addWidget(outputs)
     columns.setStretchFactor(1, 1)
     run_layout = qt.QVBoxLayout(runs)
-    layout = qt.QVBoxLayout(outputs)
+    outputs_layout = qt.QVBoxLayout(outputs)
     run_layout.setContentsMargins(0, 0, 3, 0)
-    layout.setContentsMargins(3, 0, 0, 0)
+    outputs_layout.setContentsMargins(3, 0, 0, 0)
 
     run_row = qt.QHBoxLayout()
     run_label = qt.QLabel("Run")
@@ -725,14 +735,16 @@ def install_results_panel(owner: Any) -> None:
     history = qt.QTreeWidget()
     history.setObjectName("subjectRunHistory")
     history.setHeaderHidden(True)
-    history.setMinimumHeight(85)
-    history.setMaximumHeight(160)
+    history.setMinimumHeight(105)
+    history.setMaximumHeight(165)
     history.setFrameShape(qt.QFrame.NoFrame)
     history.setMinimumWidth(0)
     owner._runHistoryTree = history
     add_folder = qt.QPushButton("Add a run folder…")
+    add_folder.setObjectName("addRunFolderButton")
     add_folder.clicked.connect(owner._on_browse_run_directory_clicked)
     _bind(owner, add_folder, "text", "add_run_folder")
+    add_folder.hide()
 
     def select_run(item, _column):
         index = item.data(0, qt.Qt.UserRole)
@@ -750,11 +762,17 @@ def install_results_panel(owner: Any) -> None:
     run_layout.addWidget(history)
     empty_layout.addWidget(add_folder)
 
+    outputs_row = qt.QHBoxLayout()
+    outputs_header = qt.QLabel(" ")
+    outputs_header.setObjectName("outputsHeaderLabel")
+    outputs_row.addWidget(outputs_header)
+    outputs_layout.addLayout(outputs_row)
+
     summary = qt.QLabel("Run summary will appear after a plan or run completes.")
     summary.wordWrap = True
     summary.setObjectName("runSummaryLabel")
     summary.hide()
-    layout.addWidget(summary)
+    outputs_layout.addWidget(summary)
 
     details = qt.QLabel("No run selected.")
     details.setObjectName("runDetailsLabel")
@@ -770,19 +788,21 @@ def install_results_panel(owner: Any) -> None:
     review = qt.QLabel("Recorded QC: consult report\nVisual review: pending")
     review.wordWrap = True
     review.setObjectName("reviewStateLabel")
-    layout.addWidget(review)
+    review.hide()
+    outputs_layout.addWidget(review)
 
     files = qt.QTreeWidget()
     files.setObjectName("runOutputFiles")
     files.setHeaderHidden(True)
     files.setColumnCount(2)
-    files.setMinimumHeight(85)
-    files.setMaximumHeight(190)
+    files.setMinimumHeight(105)
+    files.setMaximumHeight(165)
     files.setFrameShape(qt.QFrame.NoFrame)
     files.header().setSectionResizeMode(0, qt.QHeaderView.Stretch)
     files.header().setSectionResizeMode(1, qt.QHeaderView.ResizeToContents)
     owner._runOutputFiles = files
-    layout.addWidget(files)
+    outputs_layout.addWidget(files)
+    outputs_layout.addStretch(1)
     files.itemClicked.connect(lambda item, column: _toggle_output(owner, item) if column == 1 else None)
     if hasattr(files, "itemDoubleClicked"):
         files.itemDoubleClicked.connect(
@@ -793,7 +813,10 @@ def install_results_panel(owner: Any) -> None:
 
     owner._resultSceneButtons = []
 
-    report_row = qt.QHBoxLayout()
+    report_bar = qt.QWidget()
+    report_bar.setObjectName("resultsReportBar")
+    report_row = qt.QHBoxLayout(report_bar)
+    report_row.setContentsMargins(0, 4, 0, 0)
     report_button = qt.QPushButton("Open report")
     report_button.enabled = False
     report_button.setToolTip("Open the HTML report of the selected run.")
@@ -804,7 +827,9 @@ def install_results_panel(owner: Any) -> None:
     output_tree_button.connect("clicked()", owner._on_open_output_tree_report_clicked)
     report_row.addWidget(report_button)
     report_row.addWidget(output_tree_button)
-    layout.addLayout(report_row)
+    report_bar.hide()
+    owner._resultsReportBar = report_bar
+    results_layout.addWidget(report_bar)
 
     combo.currentIndexChanged.connect(lambda _index: owner._on_run_history_selection_changed())
 
@@ -834,6 +859,12 @@ def _populate_run_tree(owner, records, current_index):
     columns = owner._resultsColumns
     columns.setVisible(bool(records))
     owner._resultsEmptyLabel.setVisible(not records)
+    empty_row = getattr(owner, "_resultsEmptyRow", None)
+    if empty_row is not None:
+        empty_row.setVisible(not records)
+    report_bar = getattr(owner, "_resultsReportBar", None)
+    if report_bar is not None:
+        report_bar.setVisible(bool(records))
     tree.clear()
     subjects = {}
     for index, record in enumerate(records):
@@ -1095,6 +1126,7 @@ def _show_output_files(owner, manifest):
             if path in seg_paths:
                 item.setData(0, qt.Qt.UserRole + 1, "segmentation")
             item.setToolTip(0, path)
+        group.setExpanded(True)
     _refresh_output_visibility(owner)
 
 
@@ -1129,12 +1161,51 @@ def _node_text(owner: Any, attribute: str) -> str:
     return str(getattr(node, attribute, "") or "").strip() if node else ""
 
 
+def _effective_subject_id_for_owner(owner: Any) -> str:
+    if hasattr(owner, "_effective_subject_id"):
+        try:
+            return str(owner._effective_subject_id() or "").strip()
+        except Exception:
+            pass
+    sid = _node_text(owner, "subjectId")
+    if sid:
+        return sid
+    subj = _node_text(owner, "inputDirectory")
+    if subj:
+        from shared.subject_id import derive_subject_id
+
+        return str(derive_subject_id(subj) or "").strip()
+    return ""
+
+
+def _is_batch_mode_for_owner(owner: Any) -> bool:
+    node = getattr(owner, "_parameterNode", None)
+    if not node:
+        return False
+    cohort = bool(
+        getattr(node, "experimentsEnabled", False)
+        and getattr(node, "experimentScope", "subject") == "cohort"
+    )
+    return cohort or bool(getattr(node, "batchMode", False))
+
+
 def history_roots(owner: Any):
+    subject_root_text = _node_text(owner, "inputDirectory")
+    output_root_text = _node_text(owner, "outputDirectory")
+    batch_root_text = _node_text(owner, "batchRoot")
+    has_configured_root = bool(subject_root_text or output_root_text or batch_root_text)
+    extra_dirs = (
+        getattr(owner, "_manualRunHistoryDirs", ())
+        if has_configured_root
+        else load_history_directories()
+    )
     return candidate_run_roots(
-        subject_root_text=_node_text(owner, "inputDirectory"),
-        output_root_text=_node_text(owner, "outputDirectory"),
-        batch_root_text=_node_text(owner, "batchRoot"),
-        extra_dirs=load_history_directories(),
+        subject_root_text=subject_root_text,
+        output_root_text=output_root_text,
+        batch_root_text=batch_root_text,
+        subject_id=_effective_subject_id_for_owner(owner),
+        batch_mode=_is_batch_mode_for_owner(owner),
+        extra_dirs=extra_dirs,
     )
 
 
@@ -1259,6 +1330,8 @@ def on_run_selection_changed(owner: Any, *, from_refresh: bool = False) -> None:
         details.setText(run_record_brief(record) + (f"\n{notes}" if notes else ""))
         details.setToolTip(run_record_details(record))
     if live:
+        if not record.is_batch:
+            _show_output_files(owner, manifest)
         # Keep showing the live run's stage table while it executes.
         return
     owner._tableShowsLiveRun = False
@@ -1366,6 +1439,10 @@ def browse_run_directory(owner: Any) -> None:
         )
         return
     save_history_directory(directory)
+    manual = list(getattr(owner, "_manualRunHistoryDirs", ()) or ())
+    if directory not in manual:
+        manual.append(directory)
+        owner._manualRunHistoryDirs = tuple(manual)
     refresh_run_history(owner, select_path=discovery.records[0].manifest_path)
     slicer.util.showStatusMessage(
         f"Found {len(discovery.records)} run(s) under {directory}; selected the newest.", 4000

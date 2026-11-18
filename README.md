@@ -247,7 +247,7 @@ Other profiles and offline import are documented in [model setup](docs/assets/MO
 2. Set **Subject root**, **Subject ID** and, optionally, an **Output directory**.
 3. For a first DTI run, select only **Microstructure** and retain **DTI** in its **...** selector.
 4. Prepare the selected environment, then click **Run SlicerDSpace**.
-5. Inspect FA/MD in the scene and open **Results and QC** for the run's checks, logs and loading controls.
+5. Inspect FA/MD in the scene and open **Results** for the run's checks, logs and loading controls.
 
 Prepared inputs use this layout:
 

@@ -219,7 +219,7 @@ class WebsiteEditorialCopyTests(unittest.TestCase):
         start = self.section("start")
         for requirement in ("--slicer-version 5.10", "Additional module paths", "UKFTractography",
                             "nodif_brain_mask.nii.gz", "Prepare selected analysis environment",
-                            "Results and QC", "--doctor", "--plan", "--execute", "--jobs 2"):
+                            "Results", "--doctor", "--plan", "--execute", "--jobs 2"):
             self.assertIn(requirement, start)
         self.assertNotIn("Advanced settings › Results and QC", self.source)
 

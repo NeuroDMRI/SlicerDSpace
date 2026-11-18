@@ -29,6 +29,7 @@ from shared.ui_run_controller import (
     microstructure_stage_flags,
     parse_manifest_line,
     partial_run_notice_text,
+    resolve_single_subject_output_root,
     rows_from_batch_manifest,
     rows_from_plan,
     rows_from_result,
@@ -613,6 +614,33 @@ class UIRunControllerTest(unittest.TestCase):
             self.assertEqual(payload["status"], "cancelled")
             self.assertEqual(payload["targets"], ["validation", "tractography"])
             self.assertEqual(payload["cancelled_at"], "2026-06-23T00:01:00Z")
+
+    def test_resolve_single_subject_output_root_nests_subject_id_idempotently(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp) / "Downloads"
+            self.assertIsNone(resolve_single_subject_output_root("", "try1"))
+            self.assertEqual(resolve_single_subject_output_root(str(base), ""), base)
+            self.assertEqual(resolve_single_subject_output_root(str(base), "try1"), base / "try1")
+            self.assertEqual(resolve_single_subject_output_root(str(base / "try1"), "try1"), base / "try1")
+            self.assertEqual(
+                resolve_single_subject_output_root(str(base / "try1" / "outputs"), "try1"),
+                base / "try1" / "outputs",
+            )
+            subj_dir = Path(tmp) / "subj"
+            (subj_dir / "input").mkdir(parents=True)
+            sel = replace(
+                self._run_selection(Path(tmp)),
+                subject_id="try1",
+                subject_root_text=str(subj_dir),
+                output_root_text=str(base),
+                selected_targets=("microstructure",),
+            )
+            single_kwargs = build_single_subject_run_kwargs(sel, {}, preflight_blocked_targets={})
+            self.assertEqual(single_kwargs["output_root"], base / "try1")
+            batch_root = Path(tmp) / "cohort"
+            batch_root.mkdir()
+            batch_kwargs = build_batch_run_kwargs(sel, batch_root=batch_root)
+            self.assertEqual(batch_kwargs["output_root"], base)
 
 
 if __name__ == "__main__":

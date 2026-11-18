@@ -1147,7 +1147,8 @@ def apply_compact_language(owner: Any, language: str) -> None:
     }.items():
         widget = getattr(owner.ui, name)
         text = onboarding_text(language, key)
-        if isinstance(widget, qt.QGroupBox):
+        qgroupbox_cls = getattr(qt, "QGroupBox", None)
+        if isinstance(qgroupbox_cls, type) and isinstance(widget, qgroupbox_cls):
             widget.setTitle(text)
         else:
             widget.setText(text)

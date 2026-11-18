@@ -17,6 +17,7 @@ from shared.ui_styles import (
     ENVIRONMENT_READY_LABEL_STYLE,
     ENVIRONMENT_RESULTS_DIALOG_STYLE,
     INPUT_FORMAT_POPOVER_STYLE,
+    MODULE_STRUCTURE_STYLE,
     RUN_STATUS_TABLE_STYLE,
     SLICERDSPACE_DARK_UI_STYLE,
     SLICERDSPACE_UI_STYLE,
@@ -84,12 +85,17 @@ class UIStylesTest(unittest.TestCase):
         self.assertIn("border: 1px solid", body)
 
     def test_dark_mode_stylesheets_provide_high_contrast_inputs_and_labels(self) -> None:
-        self.assertEqual(ui_stylesheet(dark=False), SLICERDSPACE_UI_STYLE)
-        self.assertEqual(ui_stylesheet(dark=True), SLICERDSPACE_DARK_UI_STYLE)
+        self.assertEqual(ui_stylesheet(dark=False), SLICERDSPACE_UI_STYLE + MODULE_STRUCTURE_STYLE.replace("__SECTION_LINE__", "#dedfdf"))
+        self.assertEqual(ui_stylesheet(dark=True), SLICERDSPACE_DARK_UI_STYLE + MODULE_STRUCTURE_STYLE.replace("__SECTION_LINE__", "#444547"))
         self.assertEqual(run_status_table_style(dark=True), DARK_RUN_STATUS_TABLE_STYLE)
         self.assertEqual(environment_results_dialog_style(dark=True), DARK_ENVIRONMENT_RESULTS_DIALOG_STYLE)
         self.assertEqual(environment_ready_label_style(dark=True), DARK_ENVIRONMENT_READY_LABEL_STYLE)
         self.assertIn("background: #22272E;", SLICERDSPACE_DARK_UI_STYLE)
+        self.assertIn("background: #303030;", SLICERDSPACE_DARK_UI_STYLE)
+        self.assertIn("QPushButton#algorithmPickerCancelButton", SLICERDSPACE_DARK_UI_STYLE)
+        self.assertIn("QPushButton#algorithmPickerApplyButton", SLICERDSPACE_DARK_UI_STYLE)
+        self.assertIn("QPushButton#algorithmPickerCancelButton", SLICERDSPACE_UI_STYLE)
+        self.assertIn("QPushButton#algorithmPickerApplyButton", SLICERDSPACE_UI_STYLE)
         self.assertIn("color: #F0F6FC;", SLICERDSPACE_DARK_UI_STYLE)
         self.assertIn("color: #7CC4EA;", SLICERDSPACE_DARK_UI_STYLE)
         self.assertIn("color: #1E293B;", SLICERDSPACE_UI_STYLE)

@@ -249,7 +249,7 @@ def load_manifest_json(path: Path) -> dict[str, Any]:
     except FileNotFoundError as exc:
         raise ManifestError(
             f"Run manifest not found: {path}. The run folder may have been moved or deleted; "
-            "open Results and QC again to rescan, or choose “Add a run folder…” to pick its new location."
+            "open Results again to rescan, or choose “Add a run folder…” to pick its new location."
         ) from exc
     except OSError as exc:
         raise ManifestError(f"Cannot read run manifest {path}: {exc}. Check file permissions.") from exc
@@ -401,6 +401,8 @@ def discover_manifest_paths(
                 entries = sorted(os.scandir(directory), key=lambda item: item.name)
             except OSError:
                 continue
+            priority_dirs: list[Path] = []
+            regular_dirs: list[Path] = []
             for entry in entries:
                 if entry.name.startswith("."):
                     continue
@@ -408,8 +410,20 @@ def discover_manifest_paths(
                     is_dir = entry.is_dir()
                 except OSError:
                     continue
-                if is_dir:
-                    queue.append((Path(entry.path), depth + 1))
+                if not is_dir:
+                    continue
+                sub = Path(entry.path)
+                if entry.name in {RUN_METADATA_DIR, BATCH_METADATA_DIR} or (
+                    depth + 1 < max_depth
+                    and ((sub / RUN_METADATA_DIR).is_dir() or (sub / BATCH_METADATA_DIR).is_dir())
+                ):
+                    priority_dirs.append(sub)
+                else:
+                    regular_dirs.append(sub)
+            for sub in reversed(priority_dirs):
+                queue.appendleft((sub, depth + 1))
+            for sub in regular_dirs:
+                queue.append((sub, depth + 1))
         if truncated:
             break
     return found, truncated
@@ -418,6 +432,23 @@ def discover_manifest_paths(
 def _sort_key(record: RunRecord) -> tuple[float, str]:
     stamp = record.timestamp.timestamp() if record.timestamp is not None else float("-inf")
     return (stamp, record.manifest_path.as_posix())
+
+
+def _pick_preferred_manifest_record(
+    current: tuple[RunRecord, int, bool],
+    candidate: tuple[RunRecord, int, bool],
+) -> tuple[RunRecord, int, bool]:
+    cur_rec, cur_tasks, cur_cancelled = current
+    cand_rec, cand_tasks, cand_cancelled = candidate
+    cur_stamp = cur_rec.timestamp.timestamp() if cur_rec.timestamp is not None else float("-inf")
+    cand_stamp = cand_rec.timestamp.timestamp() if cand_rec.timestamp is not None else float("-inf")
+    if cand_stamp > cur_stamp + 10.0:
+        return candidate
+    if cur_stamp > cand_stamp + 10.0:
+        return current
+    cur_rank = (1 if cur_tasks > 0 else 0, cur_tasks, 1 if cur_cancelled else 0, cur_stamp, cur_rec.manifest_path.as_posix())
+    cand_rank = (1 if cand_tasks > 0 else 0, cand_tasks, 1 if cand_cancelled else 0, cand_stamp, cand_rec.manifest_path.as_posix())
+    return candidate if cand_rank > cur_rank else current
 
 
 def discover_runs(
@@ -429,13 +460,33 @@ def discover_runs(
     """Discover and validate runs under ``roots``; newest first."""
 
     paths, truncated = discover_manifest_paths(roots, max_depth=max_depth, max_dirs=max_dirs)
-    records: list[RunRecord] = []
+    grouped: dict[tuple[str, ...], tuple[RunRecord, int, bool]] = {}
     skipped: list[tuple[Path, str]] = []
     for path in paths:
         try:
-            records.append(parse_run_manifest(path))
+            payload = load_manifest_json(path)
+            record = record_from_manifest(payload, path)
         except ManifestError as exc:
             skipped.append((path, str(exc)))
+            continue
+        tasks = payload.get("tasks")
+        task_count = len(tasks) if isinstance(tasks, dict) else 0
+        name = record.manifest_path.name
+        is_cancelled_companion = name.endswith("_cancelled_orchestration_manifest.json")
+        if record.kind == "subject":
+            if is_cancelled_companion:
+                base = name[: -len("_cancelled_orchestration_manifest.json")]
+            elif name.endswith(SUBJECT_MANIFEST_SUFFIX):
+                base = name[: -len(SUBJECT_MANIFEST_SUFFIX)]
+            else:
+                base = name
+            group_key: tuple[str, ...] = ("subject", os.path.realpath(record.manifest_path.parent), base)
+        else:
+            group_key = ("batch", os.path.realpath(record.manifest_path))
+        entry = (record, task_count, is_cancelled_companion)
+        existing = grouped.get(group_key)
+        grouped[group_key] = entry if existing is None else _pick_preferred_manifest_record(existing, entry)
+    records = [item[0] for item in grouped.values()]
     records.sort(key=_sort_key, reverse=True)
     return RunDiscovery(records=tuple(records), skipped=tuple(skipped), truncated=truncated)
 
@@ -445,11 +496,14 @@ def candidate_run_roots(
     subject_root_text: str = "",
     output_root_text: str = "",
     batch_root_text: str = "",
+    subject_id: str = "",
+    batch_mode: bool = False,
     extra_dirs: Iterable[str] = (),
 ) -> tuple[Path, ...]:
     """Return de-duplicated directories to scan for runs.
 
-    Covers the GUI's output directory (or ``<subject root>/outputs``), the
+    Covers the single-subject subfolder ``<output_root>/<subject_id>`` (when
+    applicable) and GUI output directory (or ``<subject root>/outputs``), the
     subject root, the batch root and its default ``batch_outputs`` folder, and
     any folders the user added with “Add a run folder…” in this or an earlier session.
     """
@@ -459,6 +513,12 @@ def candidate_run_roots(
     subject_text = (subject_root_text or "").strip()
     batch_text = (batch_root_text or "").strip()
     if output_text:
+        if not batch_mode and (subject_id or "").strip():
+            from shared.ui_run_controller import resolve_single_subject_output_root
+
+            resolved_output = resolve_single_subject_output_root(output_text, subject_id)
+            if resolved_output is not None:
+                candidates.append(resolved_output)
         candidates.append(Path(output_text).expanduser())
     if subject_text:
         subject_root = Path(subject_text).expanduser()

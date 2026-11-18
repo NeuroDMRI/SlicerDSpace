@@ -196,7 +196,7 @@
             <dt>启动运行</dt>
             <dd>点击 <span class="ui-chip">Run SlicerDSpace</span>。运行前会自动执行依赖预检；若缺少可选包、模型权重或（启用皮层后处理时）需一次性导入个人 FreeSurfer 许可证，按提示使用 <span class="ui-chip">Prepare selected analysis environment</span> 或许可证导入窗口完成即可。</dd>
             <dt>查看结果</dt>
-            <dd>在 <span class="ui-chip">Results and QC</span>中选择已完成运行，点击输出项旁眼睛图标即可加载或切换显示（右键可从场景卸载或打开表格/JSON），点击 <span class="ui-chip">Open report</span> 即可查看 HTML 质控报告，核验脑掩膜、对齐与方法 QC 指标。</dd>
+            <dd>在 <span class="ui-chip">Results</span>中选择已完成运行，点击输出项旁眼睛图标即可加载或切换显示（右键可从场景卸载或打开表格/JSON），点击 <span class="ui-chip">Open report</span> 即可查看 HTML 质控报告，核验脑掩膜、对齐与方法 QC 指标。</dd>
           </dl>
         </div>
       </li>
@@ -574,7 +574,7 @@ export SUBJECT_ROOT="/path/to/sub-01"
                 </div>
                 <div class="demo-kv">
                   <span class="demo-kv-label">质控指标与可视化检查</span>
-                  <p>核查 fw_qc.json（740,916 个掩膜内体素，数值有界于 [0, 1]）、ddseg_qc.json（3 类组织概率归一化）与 region_analysis_qc.json（quantitative_inputs_unchanged: true，no_refitting: true）。可通过 3D Slicer 的 Results and QC 面板加载脑区掩膜与标量叠加图层。</p>
+                  <p>核查 fw_qc.json（740,916 个掩膜内体素，数值有界于 [0, 1]）、ddseg_qc.json（3 类组织概率归一化）与 region_analysis_qc.json（quantitative_inputs_unchanged: true，no_refitting: true）。可通过 3D Slicer 的 Results 面板加载脑区掩膜与标量叠加图层。</p>
                 </div>
               </div>
             </div>
@@ -745,7 +745,7 @@ export SUBJECT_ROOT="/path/to/sub-01"
                 </div>
                 <div class="demo-kv">
                   <span class="demo-kv-label">质控指标与可视化检查</span>
-                  <p>核查 noddi_qc.json（显式组织有效掩膜将 CSF 主导体素排除在 NDI/ODI 统计之外）与 postprocess/qc.json（全部 14 张半球 .stats 表非空，每半球 34 个 aparc 脑区，163,842 个 fsaverage 映射顶点）。可通过 Results and QC 面板检查三维曲面叠加图与脑区统计表。</p>
+                  <p>核查 noddi_qc.json（显式组织有效掩膜将 CSF 主导体素排除在 NDI/ODI 统计之外）与 postprocess/qc.json（全部 14 张半球 .stats 表非空，每半球 34 个 aparc 脑区，163,842 个 fsaverage 映射顶点）。可通过 Results 面板检查三维曲面叠加图与脑区统计表。</p>
                 </div>
               </div>
             </div>
@@ -902,7 +902,7 @@ export SUBJECT_ROOT="/path/to/sub-01"
                 </div>
                 <div class="demo-kv">
                   <span class="demo-kv-label">质控指标与可视化检查</span>
-                  <p>检查 06_qc/ 汇总、各阶段内部质控 JSON（act_prep_qc.json、csd_qc.json、connectome_qc.json）或 cache/reports/report.html。在 3D Slicer 中，Results and QC 面板可直接加载流线可视化预览与三维连接组网络，且不会重复创建场景节点。</p>
+                  <p>检查 06_qc/ 汇总、各阶段内部质控 JSON（act_prep_qc.json、csd_qc.json、connectome_qc.json）或 cache/reports/report.html。在 3D Slicer 中，Results 面板可直接加载流线可视化预览与三维连接组网络，且不会重复创建场景节点。</p>
                 </div>
               </div>
             </div>
@@ -1041,7 +1041,7 @@ export SUBJECT_ROOT="/path/to/sub-01"
                 </div>
                 <div class="demo-kv">
                   <span class="demo-kv-label">质控指标与可视化检查</span>
-                  <p>检查 saf_qc.json 中的 status: "completed"、all_points_finite: true、length_mm 分位数（min、p05、median、p95、max）以及 vtk_export_error: null。在 3D Slicer 的 Results and QC 面板中将 SAF.vtk 与 lh.pial / rh.pial 一并加载，以检查脑回皮层内终止情况。</p>
+                  <p>检查 saf_qc.json 中的 status: "completed"、all_points_finite: true、length_mm 分位数（min、p05、median、p95、max）以及 vtk_export_error: null。在 3D Slicer 的 Results 面板中将 SAF.vtk 与 lh.pial / rh.pial 一并加载，以检查脑回皮层内终止情况。</p>
                 </div>
               </div>
             </div>

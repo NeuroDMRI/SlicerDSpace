@@ -18,6 +18,7 @@ from shared.result_scene import review_state_text
 WIDGET_KINDS = (
     "QLabel", "QPushButton", "QComboBox", "QToolButton", "QTableWidget", "QSplitter", "QTreeWidget", "QWidget",
     "QHBoxLayout", "QVBoxLayout", "QFormLayout", "QGridLayout", "QDialog", "QDialogButtonBox", "QCheckBox",
+    "QSpinBox", "QDoubleSpinBox", "QScrollArea", "QLineEdit",
 )
 
 
@@ -32,7 +33,13 @@ def fake_qt() -> mock.MagicMock:
             widget = mock.MagicMock(name=kind)
             widget.kind = kind
             widget.ctor_args = args
-            if kind == "QTableWidget":
+            if kind in {"QSpinBox", "QDoubleSpinBox"}:
+                widget.value = 0
+                widget.setValue.side_effect = lambda v, w=widget: setattr(w, "value", v)
+            elif kind == "QCheckBox":
+                widget.checked = False
+                widget.setChecked.side_effect = lambda v, w=widget: setattr(w, "checked", bool(v))
+            elif kind == "QTableWidget":
                 widget.fontMetrics.return_value.height.return_value = 14
                 widget.horizontalHeader.return_value.sizeHint.return_value.height.return_value = 24
                 widget.verticalHeader.return_value.defaultSectionSize.return_value = 22
@@ -86,17 +93,20 @@ class ResultsPanelTest(unittest.TestCase):
             ui_run_history.install_results_panel(owner)
         return qt, layout, owner
 
-    def test_run_row_holds_only_the_label_and_the_stretching_combo(self) -> None:
+    def test_two_column_splitter_aligns_runs_and_outputs_and_hides_browse_and_review(self) -> None:
         qt, layout, owner = self.build()
-        row = next(
-            widget for widget in qt.created
-            if widget.kind == "QHBoxLayout" and "runHistoryComboBox" in widget_names(widget)
-        )
-        self.assertEqual(widget_names(row), ["runHistoryLabel", "runHistoryComboBox"])
-        combo_call = next(call for call in row.method_calls if call[0] == "addWidget"
-                          and object_name(call[1][0]) == "runHistoryComboBox")
-        self.assertEqual(combo_call[1][1], 1)  # the combo stretches
-        by_name(qt, "runHistoryLabel").setBuddy.assert_called_once_with(by_name(qt, "runHistoryComboBox"))
+        names = {object_name(widget) for widget in qt.created}
+        self.assertIn("subjectRunHistory", names)
+        self.assertIn("outputsHeaderLabel", names)
+        self.assertIn("addRunFolderButton", names)
+        self.assertIn("resultsReportBar", names)
+        by_name(qt, "addRunFolderButton").hide.assert_called_once_with()
+        by_name(qt, "reviewStateLabel").hide.assert_called_once_with()
+        by_name(qt, "resultsReportBar").hide.assert_called_once_with()
+        self.assertEqual(widget_names(layout), ["", "", "resultsReportBar"])
+        top_names = [call[1][0].kind if call[1][0].kind != "QSplitter" else "QSplitter"
+                     for call in layout.method_calls if call[0] == "addWidget"]
+        self.assertEqual(len(top_names), 3)
 
     def test_there_are_no_refresh_or_browse_buttons(self) -> None:
         qt, layout, owner = self.build()
@@ -140,22 +150,16 @@ class ResultsPanelTest(unittest.TestCase):
         self.assertEqual([w for w in qt.created if w.kind == "QTableWidget"], [])
         self.assertNotIn("runStatusTable", {object_name(w) for w in qt.created})
 
-    def test_scene_actions_are_one_row_of_four_and_reports_one_row_of_two(self) -> None:
+    def test_report_bar_holds_open_report_and_open_output_tree(self) -> None:
         qt, layout, owner = self.build()
 
         def labels(row) -> list[str]:
             return [call[1][0].ctor_args[0] if call[1][0].ctor_args else "" for call in row.method_calls if call[0] == "addWidget"]
 
         rows = [widget for widget in qt.created if widget.kind == "QHBoxLayout"]
-        scene_row = next(row for row in rows if labels(row) == ["Load", "Replace", "Append", "Clear"])
         report_row = next(row for row in rows if labels(row) == ["Open report", "Open output tree"])
-        tips = [call[1][0].setToolTip.call_args[0][0] for call in scene_row.method_calls if call[0] == "addWidget"]
-        self.assertIn("reuse", tips[0].lower())
-        self.assertIn("remove", tips[1].lower())
-        self.assertIn("another copy", tips[2].lower())
-        self.assertIn("source files are never deleted", tips[3].lower())
-        self.assertEqual(len(owner._resultSceneButtons), 4)
-        self.assertEqual([call[0] for call in layout.method_calls if call[0] == "addLayout"], ["addLayout"] * 3)
+        self.assertIsNotNone(report_row)
+        self.assertEqual(owner._resultSceneButtons, [])
 
     def test_scene_buttons_show_their_meaning_when_enabled_and_the_reason_when_disabled(self) -> None:
         buttons = [mock.MagicMock() for _ in range(4)]
@@ -286,7 +290,7 @@ class AddRunFolderItemTest(unittest.TestCase):
     def test_empty_list_keeps_the_add_item_and_stays_enabled(self) -> None:
         self.refresh()
         texts = [item["text"] for item in self.combo.items if not item["separator"]]
-        self.assertEqual(texts, ["No runs found", "Add a run folder…"])
+        self.assertEqual(texts, ["No runs in output folder yet", "Add a run folder…"])
         self.assertTrue(self.combo.enabled)
 
     def test_selected_manifest_path_ignores_the_add_item(self) -> None:
@@ -328,7 +332,7 @@ class ModuleWidgetWordingTest(unittest.TestCase):
     def test_load_error_dialog_points_to_the_run_list_not_to_removed_buttons(self) -> None:
         source = (Path(__file__).resolve().parents[2] / "shared" / "module_widget.py").read_text(encoding="utf-8")
         self.assertNotIn("Click Refresh", source)
-        self.assertIn("Open Results and QC again to rescan run folders", source)
+        self.assertIn("Open Results again to rescan run folders", source)
         self.assertIn("(\"Rescan\", self._refresh_run_history)", source)
         self.assertIn("(\"Add a run folder…\", self._on_browse_run_directory_clicked)", source)
 
@@ -337,25 +341,34 @@ class AlgorithmDialogTest(unittest.TestCase):
     def open_dialog(self, language: str):
         qt = fake_qt()
         slicer = mock.MagicMock()
-        owner = SimpleNamespace(_onboardingLanguage=language, _parameterNode=SimpleNamespace())
+        owner = SimpleNamespace(
+            _onboardingLanguage=language,
+            _parameterNode=SimpleNamespace(ukfParameters="{}"),
+        )
         with mock.patch.dict(sys.modules, {"qt": qt, "slicer": slicer}):
             ui_algorithm_picker.choose_algorithms(owner, "tractography")
         dialog_layout = next(widget for widget in qt.created if widget.kind == "QVBoxLayout")
         return qt, dialog_layout
 
-    def test_tractography_note_is_short_and_the_buttons_have_room(self) -> None:
-        for language, text in (
-            ("en", "Each method writes its own tractogram. Fiber bundles and connectomes are computed for each method separately."),
-            ("zh", "每种方法分别输出流线；束分析和连接组按方法分别计算。"),
-        ):
+    def test_picker_hides_note_until_error_and_aligns_cancel_apply_on_right(self) -> None:
+        for language, cancel_text, apply_text in (("en", "Cancel", "Apply"), ("zh", "取消", "应用")):
             with self.subTest(language=language):
                 qt, layout = self.open_dialog(language)
-                notes = [widget for widget in qt.created if widget.kind == "QLabel" and widget.ctor_args == (text,)]
-                self.assertEqual(len(notes), 1)
-                calls = [(call[0], call[1]) for call in layout.method_calls if call[0] in {"addWidget", "addSpacing"}]
-                note_index = next(i for i, call in enumerate(calls) if call[1] and call[1][0] is notes[0])
-                self.assertEqual(calls[note_index + 1], ("addSpacing", (8,)))
-                self.assertEqual(calls[note_index + 2][0], "addWidget")  # the Apply/Cancel box
+                note = by_name(qt, "algorithmPickerNote")
+                note.hide.assert_called_once_with()
+                cancel_btn = by_name(qt, "algorithmPickerCancelButton")
+                apply_btn = by_name(qt, "algorithmPickerApplyButton")
+                self.assertEqual(cancel_btn.ctor_args, (cancel_text,))
+                self.assertEqual(apply_btn.ctor_args, (apply_text,))
+                btn_row = next(
+                    widget for widget in qt.created
+                    if widget.kind == "QHBoxLayout" and "algorithmPickerApplyButton" in widget_names(widget)
+                )
+                self.assertEqual(
+                    widget_names(btn_row),
+                    ["algorithmPickerCancelButton", "algorithmPickerApplyButton"],
+                )
+                self.assertTrue(any(call[0] == "addStretch" for call in btn_row.method_calls))
 
 
 class AlgorithmRowTest(unittest.TestCase):
@@ -374,17 +387,25 @@ class AlgorithmRowTest(unittest.TestCase):
         with mock.patch.dict(sys.modules, {"qt": qt}):
             ui_algorithm_picker.install_algorithm_pickers(owner)
 
-        rows = [widget for widget in qt.created if widget.kind == "QHBoxLayout"]
+        rows = [
+            widget for widget in qt.created
+            if widget.kind == "QHBoxLayout"
+            and [call[0] for call in widget.method_calls if call[0] == "addWidget"] == ["addWidget", "addWidget", "addWidget"]
+        ]
         self.assertEqual(len(rows), len(ui_algorithm_picker.FAMILIES))
         self.assertEqual(len(rows), 5)
         for box, row in zip(boxes.values(), rows):
             box.setFixedWidth.assert_called_once_with(indicator)
-            calls = [(call[0], call[1]) for call in row.method_calls if call[0] in {"addWidget", "addSpacing"}]
-            self.assertEqual([name for name, _ in calls], ["addWidget", "addSpacing", "addWidget", "addSpacing", "addWidget"])
+            calls = [(call[0], call[1]) for call in row.method_calls if call[0] == "addWidget"]
+            self.assertEqual(len(calls), 3)
             self.assertEqual(calls[0][1], (box, 0, qt.Qt.AlignVCenter))
-            self.assertEqual(calls[1][1], (gap,))
-            self.assertEqual(calls[4][1][1:], (0, qt.Qt.AlignVCenter))
+            self.assertEqual(calls[2][1][1:], (0, qt.Qt.AlignVCenter))
             row.setSpacing.assert_called_once_with(0)
+        summary_insets = [
+            call[1] for widget in qt.created if widget.kind == "QVBoxLayout"
+            for call in widget.method_calls if call[0] == "setContentsMargins" and call[1][0] == gap
+        ]
+        self.assertEqual(len(summary_insets), 5)
 
 
 if __name__ == "__main__":

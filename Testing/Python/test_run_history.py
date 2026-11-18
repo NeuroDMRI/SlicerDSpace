@@ -329,6 +329,47 @@ class CancelledManifestRowsTest(unittest.TestCase):
         self.assertIn("cancelled", rows[0]["reason"])
         self.assertEqual(counts["failed"], 0)
 
+    def test_candidate_roots_prioritize_subject_subfolder_when_subject_id_given(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "Downloads"
+            roots = candidate_run_roots(output_root_text=str(out), subject_id="try1")
+            self.assertEqual(roots[0], out / "try1")
+            self.assertIn(out, roots)
+            batch_roots = candidate_run_roots(output_root_text=str(out), subject_id="try1", batch_mode=True)
+            self.assertEqual(batch_roots[0], out)
+
+    def test_discovery_prioritizes_metadata_folders_and_deduplicates_cancelled_companion(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for i in range(12):
+                (root / f"a{i:02d}" / "nested").mkdir(parents=True)
+            meta = root / "try1" / "00_run_metadata"
+            primary = _write(
+                meta / "Test1_orchestration_manifest.json",
+                _subject_manifest(
+                    subject_id="try1",
+                    run_name="Test1",
+                    status="cancelled",
+                    tasks=[{"name": "microstructure.dti", "status": "completed"}],
+                    completed_at="2026-11-18T18:57:20Z",
+                ),
+            )
+            _write(
+                meta / "Test1_cancelled_orchestration_manifest.json",
+                {
+                    "kind": SUBJECT_MANIFEST_KIND,
+                    "version": 1,
+                    "subject_id": "try1",
+                    "run_name": "Test1",
+                    "status": "cancelled",
+                    "targets": ["microstructure"],
+                    "cancelled_at": "2026-11-18T18:57:21Z",
+                },
+            )
+            discovery = discover_runs([root], max_depth=3, max_dirs=5)
+            self.assertEqual(len(discovery.records), 1)
+            self.assertEqual(discovery.records[0].manifest_path, primary)
+
 
 class ProgressTest(unittest.TestCase):
     PLAN = {

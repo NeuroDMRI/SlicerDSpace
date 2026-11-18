@@ -196,7 +196,7 @@
             <dt>Run</dt>
             <dd>Click <span class="ui-chip">Run SlicerDSpace</span>. Preflight checks verify resources first; if optional packages, weights or a one-time personal FreeSurfer license (for Surface postprocess) are needed, follow <span class="ui-chip">Prepare selected analysis environment</span> or the one-time license import prompt.</dd>
             <dt>Inspect</dt>
-            <dd>In <span class="ui-chip">Results and QC</span>, select the completed run, click the eye icon beside any output to toggle it in the 3D Slicer scene (right-click to unload or open tables/JSON), and click <span class="ui-chip">Open report</span> to review mask coverage, alignment and method QC.</dd>
+            <dd>In <span class="ui-chip">Results</span>, select the completed run, click the eye icon beside any output to toggle it in the 3D Slicer scene (right-click to unload or open tables/JSON), and click <span class="ui-chip">Open report</span> to review mask coverage, alignment and method QC.</dd>
           </dl>
         </div>
       </li>
@@ -574,7 +574,7 @@ export SUBJECT_ROOT="/path/to/sub-01"
                 </div>
                 <div class="demo-kv">
                   <span class="demo-kv-label">QC metrics &amp; inspection</span>
-                  <p>Verify fw_qc.json (740,916 mask voxels, finite bounds in [0, 1]), ddseg_qc.json (3-class probability normalization), and region_analysis_qc.json (quantitative_inputs_unchanged: true, no_refitting: true). Load regional masks and scalar overlays in 3D Slicer via Results and QC.</p>
+                  <p>Verify fw_qc.json (740,916 mask voxels, finite bounds in [0, 1]), ddseg_qc.json (3-class probability normalization), and region_analysis_qc.json (quantitative_inputs_unchanged: true, no_refitting: true). Load regional masks and scalar overlays in 3D Slicer via Results.</p>
                 </div>
               </div>
             </div>
@@ -745,7 +745,7 @@ export SUBJECT_ROOT="/path/to/sub-01"
                 </div>
                 <div class="demo-kv">
                   <span class="demo-kv-label">QC metrics &amp; inspection</span>
-                  <p>Verify noddi_qc.json (explicit tissue-validity mask excludes CSF-dominated voxels from NDI/ODI summaries) and postprocess/qc.json (all 14 hemisphere .stats tables non-empty, 34 aparc parcels per hemisphere, 163,842 fsaverage overlay vertices). Inspect 3D surface overlays and regional tables via Results and QC.</p>
+                  <p>Verify noddi_qc.json (explicit tissue-validity mask excludes CSF-dominated voxels from NDI/ODI summaries) and postprocess/qc.json (all 14 hemisphere .stats tables non-empty, 34 aparc parcels per hemisphere, 163,842 fsaverage overlay vertices). Inspect 3D surface overlays and regional tables via Results.</p>
                 </div>
               </div>
             </div>
@@ -902,7 +902,7 @@ export SUBJECT_ROOT="/path/to/sub-01"
                 </div>
                 <div class="demo-kv">
                   <span class="demo-kv-label">QC metrics &amp; inspection</span>
-                  <p>Inspect 06_qc/ summaries, internal stage QC JSONs (act_prep_qc.json, csd_qc.json, connectome_qc.json), or cache/reports/report.html. In 3D Slicer, Results and QC loads the display streamline preview and 3D connectome graph without duplicating scene nodes.</p>
+                  <p>Inspect 06_qc/ summaries, internal stage QC JSONs (act_prep_qc.json, csd_qc.json, connectome_qc.json), or cache/reports/report.html. In 3D Slicer, Results loads the display streamline preview and 3D connectome graph without duplicating scene nodes.</p>
                 </div>
               </div>
             </div>
@@ -1041,7 +1041,7 @@ export SUBJECT_ROOT="/path/to/sub-01"
                 </div>
                 <div class="demo-kv">
                   <span class="demo-kv-label">QC metrics &amp; inspection</span>
-                  <p>Check saf_qc.json for status: "completed", all_points_finite: true, length_mm percentiles (min, p05, median, p95, max) and vtk_export_error: null. Load SAF.vtk alongside lh.pial / rh.pial in 3D Slicer via Results and QC to inspect gyral termination.</p>
+                  <p>Check saf_qc.json for status: "completed", all_points_finite: true, length_mm percentiles (min, p05, median, p95, max) and vtk_export_error: null. Load SAF.vtk alongside lh.pial / rh.pial in 3D Slicer via Results to inspect gyral termination.</p>
                 </div>
               </div>
             </div>

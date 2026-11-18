@@ -393,10 +393,38 @@ QLabel#algorithmPickerTitle {
   border: none;
 }
 QLabel#algorithmPickerNote {
-  color: #63727D;
+  color: #B91C1C;
   font-size: 11px;
   background: transparent;
   border: none;
+}
+QPushButton#algorithmPickerCancelButton {
+  background: #F8FAFC;
+  color: #334155;
+  border: 1px solid #CBD5E1;
+  border-radius: 4px;
+  padding: 4px 14px;
+  font-weight: 500;
+}
+QPushButton#algorithmPickerCancelButton:hover {
+  background: #F1F5F9;
+  border-color: #94A3B8;
+}
+QPushButton#algorithmPickerApplyButton {
+  background: #2B6CB0;
+  color: #FFFFFF;
+  border: 1px solid #1E4E8C;
+  border-radius: 4px;
+  padding: 4px 14px;
+  font-weight: 700;
+}
+QPushButton#algorithmPickerApplyButton:hover {
+  background: #2C5282;
+}
+QPushButton#algorithmPickerApplyButton:disabled {
+  background: #CBD5E1;
+  color: #64748B;
+  border-color: #CBD5E1;
 }
 QToolButton#algorithmPickerCloseButton {
   color: #63727D;
@@ -738,9 +766,9 @@ QLineEdit QToolButton:disabled {
   min-height: 0;
 }
 QDialog[popupCard="true"] {
-  background: #1C2128;
+  background: #303030;
   color: #E6EDF3;
-  border: 1px solid #525C68;
+  border: 1px solid #4C5662;
   border-radius: 6px;
 }
 QLabel#algorithmPickerTitle {
@@ -751,10 +779,40 @@ QLabel#algorithmPickerTitle {
   border: none;
 }
 QLabel#algorithmPickerNote {
-  color: #B8C5D0;
+  color: #FFA8A8;
   font-size: 11px;
   background: transparent;
   border: none;
+}
+QPushButton#algorithmPickerCancelButton {
+  background: #272C33;
+  color: #C9D1D9;
+  border: 1px solid #4C5662;
+  border-radius: 4px;
+  padding: 4px 14px;
+  font-weight: 500;
+}
+QPushButton#algorithmPickerCancelButton:hover {
+  background: #323842;
+  color: #FFFFFF;
+  border-color: #636E7B;
+}
+QPushButton#algorithmPickerApplyButton {
+  background: #2F6B8A;
+  color: #FFFFFF;
+  border: 1px solid #4889AB;
+  border-radius: 4px;
+  padding: 4px 14px;
+  font-weight: 700;
+}
+QPushButton#algorithmPickerApplyButton:hover {
+  background: #387DA0;
+  border-color: #63A4C7;
+}
+QPushButton#algorithmPickerApplyButton:disabled {
+  background: #272C33;
+  color: #6E7681;
+  border-color: #3D444D;
 }
 QToolButton#algorithmPickerCloseButton {
   color: #9BA7B4;

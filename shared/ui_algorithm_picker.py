@@ -136,8 +136,9 @@ ALGORITHM_SETTINGS = {
 
 def _add_algorithm_row(qt, owner, layout, box, family, algorithm, staged, zh, resize_popup):
     specs = ALGORITHM_SETTINGS.get((family, algorithm), ())
-    fields = [(attribute, getattr(owner.ui, control, None), getattr(owner.ui, label, None))
-              for attribute, control, label in specs]
+    ui_root = getattr(owner, "ui", None)
+    fields = [(attribute, getattr(ui_root, control, None), getattr(ui_root, label, None))
+              for attribute, control, label in specs] if ui_root is not None else []
     fields = [(attribute, control, label) for attribute, control, label in fields
               if control is not None and label is not None]
     ukf = (family, algorithm) == ("tractography", "ukf")
@@ -153,7 +154,7 @@ def _add_algorithm_row(qt, owner, layout, box, family, algorithm, staged, zh, re
     button.setToolTip(caption)
     from shared.ui_styles import is_dark_mode
 
-    ink = "#E6EDF3" if is_dark_mode(owner._uiWidget) else "#334155"
+    ink = "#E6EDF3" if is_dark_mode(getattr(owner, "_uiWidget", None)) else "#334155"
     artwork = (
         '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20">'
         f'<g fill="none" stroke="{ink}" stroke-width="1.7" stroke-linejoin="round">'
@@ -338,53 +339,27 @@ def choose_algorithms(owner, family):
         boxes[value] = box
         _add_algorithm_row(qt, owner, body_layout, box, family, value, staged, zh, resize_popup)
 
-    if is_anatomical:
-        note_text = ""
-    elif family == "tractography":
-        note_text = (
-            "每种方法分别输出流线；束分析和连接组按方法分别计算。"
-            if zh
-            else "Each method writes its own tractogram. Fiber bundles and connectomes are computed for each method separately."
-        )
-    elif family == "preprocessing":
-        note_text = (
-            "Brain mask 默认不勾选；未勾选且无现成掩膜时仍会自动计算。"
-            if zh
-            else "Brain mask is off by default; if unchecked and no mask is provided, it runs automatically."
-        )
-    elif family == "microstructure":
-        note_text = (
-            "若未勾选 DTI 但所选模型需要其预处理结果，运行时会自动计算 DTI。"
-            if zh
-            else "If DTI is unchecked, it still runs automatically whenever required by selected models."
-        )
-    elif family == "connectome":
-        note_text = (
-            "默认 SIFT2 加权连接组；也可切换或同时勾选 Fiber count。"
-            if zh
-            else "Defaults to SIFT2-weighted connectome; Fiber count can also be selected."
-        )
-    else:
-        note_text = (
-            "可展开各算法的设置。"
-            if zh
-            else "Open an algorithm’s settings to adjust its parameters."
-        )
-    note = qt.QLabel(note_text)
+    note = qt.QLabel("")
     if hasattr(note, "setObjectName"):
         note.setObjectName("algorithmPickerNote")
     note.wordWrap = True
     note.setMaximumWidth(360)
-    if note_text:
-        body_layout.addWidget(note)
-    layout.addSpacing(4)
-    buttons = qt.QDialogButtonBox(dialog)
-    buttons.setStandardButtons(qt.QDialogButtonBox.Apply | qt.QDialogButtonBox.Cancel)
-    apply = buttons.button(qt.QDialogButtonBox.Apply)
-    apply.text = "应用" if zh else "Apply"
-    cancel_btn = buttons.button(qt.QDialogButtonBox.Cancel) if hasattr(buttons, "button") else None
-    if cancel_btn is not None and zh:
-        cancel_btn.text = "取消"
+    note.hide()
+    body_layout.addWidget(note)
+    btn_row = qt.QHBoxLayout()
+    if hasattr(btn_row, "setContentsMargins"):
+        btn_row.setContentsMargins(0, 4, 0, 0)
+    if hasattr(btn_row, "setSpacing"):
+        btn_row.setSpacing(8)
+    if hasattr(btn_row, "addStretch"):
+        btn_row.addStretch(1)
+    cancel_btn = qt.QPushButton("取消" if zh else "Cancel")
+    cancel_btn.setObjectName("algorithmPickerCancelButton")
+    apply = qt.QPushButton("应用" if zh else "Apply")
+    apply.setObjectName("algorithmPickerApplyButton")
+    for btn in (cancel_btn, apply):
+        if pointing_cursor is not None and hasattr(btn, "setCursor"):
+            btn.setCursor(pointing_cursor)
 
     def update(*_):
         apply.enabled = is_anatomical or any(box.checked for box in boxes.values())
@@ -392,6 +367,7 @@ def choose_algorithms(owner, family):
     for box in boxes.values():
         box.toggled.connect(update)
     update()
+
     def validate_and_accept():
         try:
             if "orchestrationIfwEchoTimeMs" in staged:
@@ -408,14 +384,17 @@ def choose_algorithms(owner, family):
                 canonical_wmql_selection(staged["orchestrationWmqlSelection"](), staged["orchestrationWmqlPreset"]())
         except ValueError as exc:
             note.setText(str(exc))
+            note.show()
             resize_popup()
             scroll.ensureWidgetVisible(note)
             return
         dialog.accept()
 
+    cancel_btn.connect("clicked()", dialog.reject)
     apply.connect("clicked()", validate_and_accept)
-    buttons.rejected.connect(dialog.reject)
-    layout.addWidget(buttons)
+    btn_row.addWidget(cancel_btn)
+    btn_row.addWidget(apply)
+    layout.addLayout(btn_row)
 
     resize_popup()
 

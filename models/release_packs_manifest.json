@@ -8,48 +8,122 @@
       "id": "wma_org",
       "filename": "SlicerDSpace-v0.1.1-WMA-ORG.tar.gz",
       "url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v0.1.1/SlicerDSpace-v0.1.1-WMA-ORG.tar.gz",
-      "size_bytes": 1500000000,
-      "sha256": "",
-      "published": false,
+      "size_bytes": 1804334817,
+      "sha256": "e1bb6f42218c80705746bc677ba7962468801585af31f9ce712b2164c298e6cd",
+      "published": true,
       "profiles": [
         "wma"
       ],
       "title_en": "WMA ORG 800-Cluster White-Matter Atlas (74 Tracts)",
       "title_zh": "WMA ORG 800 \u7c07\u6807\u51c6\u767d\u8d28\u7ea4\u7ef4\u56fe\u8c31\uff0874 \u675f\uff09",
-      "files": {},
+      "files": {
+        "bundles/wma/LICENSE.txt": "a889bd80409a5128d8146474e0eabdb29f7c9a1402415f589e364cfb55109662",
+        "bundles/wma/extracted_resource_index.json": "b9b506e9b61628e84be4791b4532c8c88be7c3f335ba1d0f481c124a8752cada",
+        "bundles/wma/ORG-800FC-100HCP/atlas.p": "13ecf6e3c1aaadde78e1547e48175d61fc0c9112ebcc5d7ec8adc90f4b3a5267",
+        "bundles/wma/ORG-800FC-100HCP/cluster_hemisphere_location.txt": "a33b94dc6b5f43852eca3368c9e51c079fc7c6b5e5ae98fb398edd0e4bb0ebc9",
+        "bundles/wma/ORG-800FC-100HCP/TractAnatomicalProfile.csv": "83fe7143e7642d5c8283abaa3b49d96d94d1607914dbd4c3005666298616cc46"
+      },
       "upstream_files": {}
     },
     "wma_naba": {
       "id": "wma_naba",
       "filename": "SlicerDSpace-v0.1.1-WMA-NABA.tar.gz",
       "url": "",
-      "size_bytes": 2900000000,
-      "sha256": "",
-      "published": false,
+      "size_bytes": 3365003883,
+      "sha256": "88a810213c5c3a047e712eb2f1a2a49f3de98000c6e7ca056ffe9dac43dacbc8",
+      "published": true,
       "profiles": [
         "wma-naba"
       ],
       "title_en": "WMA NABA Lifespan White-Matter Atlas",
       "title_zh": "WMA NABA \u5168\u5e74\u9f84\u6bb5\u767d\u8d28\u7ea4\u7ef4\u56fe\u8c31",
-      "files": {},
+      "files": {
+        "bundles/wma/naba/extracted_resource_index.json": "fd79e58b94ac841f21faab5a6ba8a4e4bd387c8f81e8c4b0a6342636856f9a80",
+        "bundles/wma/naba/ATTRIBUTION.md": "a21a61022e225a99e73c5c626ba8767f5d923c66deb77edc4ef8bbf0a75cfbf1",
+        "bundles/wma/naba/ATLAS.json": "466df9a9379dc176054b3fd25b5d07e00f53eae06388adb0099ab6503751513d",
+        "bundles/wma/naba/NABA-800FC/atlas.p": "1fb0675a8229d1c1b4dbe8876ae2d4b92cc7934d46454665b91b84be26021fb0",
+        "bundles/wma/naba/NABA-800FC/cluster_hemisphere_location.txt": "0853b9e7f333c652eb7e8461598bda26ec4bfd65f8109947867c5d7b0d47108f"
+      },
       "upstream_files": {},
-      "parts": []
+      "parts": [
+        {
+          "filename": "SlicerDSpace-v0.1.1-WMA-NABA.tar.gz.001",
+          "size_bytes": 1900000000,
+          "sha256": "a948e9d82eedcb3daec6ed7a0c5e5ec866d10d4070373aa7cbf4baeb2e3cf0c1",
+          "url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v0.1.1/SlicerDSpace-v0.1.1-WMA-NABA.tar.gz.001"
+        },
+        {
+          "filename": "SlicerDSpace-v0.1.1-WMA-NABA.tar.gz.002",
+          "size_bytes": 1465003883,
+          "sha256": "bdc60b267630cd737a6a9e8cf22db771147a5daba6c9e623998d0b5f4c5985c1",
+          "url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v0.1.1/SlicerDSpace-v0.1.1-WMA-NABA.tar.gz.002"
+        }
+      ]
     },
     "wma_east_west": {
       "id": "wma_east_west",
       "filename": "SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz",
       "url": "",
-      "size_bytes": 9900000000,
-      "sha256": "",
-      "published": false,
+      "size_bytes": 11405353584,
+      "sha256": "506cf84e1608a5975e72b83af4d5e25f7986849d12159d7a94d2def9681e33c1",
+      "published": true,
       "profiles": [
         "wma-east-west"
       ],
       "title_en": "WMA East-West Cross-Population White-Matter Atlas",
       "title_zh": "WMA East-West \u4e1c\u897f\u65b9\u4eba\u7fa4\u767d\u8d28\u56fe\u8c31",
-      "files": {},
+      "files": {
+        "bundles/wma/east-west/extracted_resource_index.json": "acc6e8d4a56e1dd0c60078cdc8e599d0f8912152760ef0c4e69cbb107fa19cd2",
+        "bundles/wma/east-west/ATTRIBUTION.md": "baa8f25ab237cea89ea5b9f92d742bd9bc3e9d4d2a0d9880df04ef9f73b74e2f",
+        "bundles/wma/east-west/ATLAS.json": "68295ca356c759e2c7cff0d03c0a3a2786c7d746c41b30a8daf37e2363904da8",
+        "bundles/wma/east-west/East-West_WM_Atlas_800FC/atlas.p": "ed062d5fdace999df1c23819c091ae3bf1998fa59e602abe87e4fae9374d2c00",
+        "bundles/wma/east-west/East-West_WM_Atlas_800FC/cluster_hemisphere_location.txt": "f9f24eb8cea4744bf2d3dc0ea81f3447d4f7236f3aae2e15f257e0171ae8b1a6"
+      },
       "upstream_files": {},
-      "parts": []
+      "parts": [
+        {
+          "filename": "SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz.001",
+          "size_bytes": 1900000000,
+          "sha256": "6daf10aba6b3bc530dc136c67e4da2d8b45f7b89d8cd4203de28bdf71b703d8f",
+          "url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v0.1.1/SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz.001"
+        },
+        {
+          "filename": "SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz.002",
+          "size_bytes": 1900000000,
+          "sha256": "805e74a323dac63573759c362c3de81296ac1712482858d021dff8d986b2b670",
+          "url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v0.1.1/SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz.002"
+        },
+        {
+          "filename": "SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz.003",
+          "size_bytes": 1900000000,
+          "sha256": "24c27591a46c54f387fd86045a564ee4241abf9a51d4cd8f30066a7b712e0071",
+          "url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v0.1.1/SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz.003"
+        },
+        {
+          "filename": "SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz.004",
+          "size_bytes": 1900000000,
+          "sha256": "4a060647f641c12309953bb3ba887a23ba51ef4dac9d911ac42428fdda1f3932",
+          "url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v0.1.1/SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz.004"
+        },
+        {
+          "filename": "SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz.005",
+          "size_bytes": 1900000000,
+          "sha256": "4fd4650b67bc51d49869e10363dba988fcad2e071ffce5fea6e1c3254680fb95",
+          "url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v0.1.1/SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz.005"
+        },
+        {
+          "filename": "SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz.006",
+          "size_bytes": 1900000000,
+          "sha256": "5ad69210366044801eb3be30ad26a1744c3bf658f8b1388ec3dfe0a607039a44",
+          "url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v0.1.1/SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz.006"
+        },
+        {
+          "filename": "SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz.007",
+          "size_bytes": 5353584,
+          "sha256": "2663479e6cd9fddaa0df5360646c86e7b2a31643c78c5a0eae3af715370cb455",
+          "url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v0.1.1/SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz.007"
+        }
+      ]
     }
   },
   "bundles": {

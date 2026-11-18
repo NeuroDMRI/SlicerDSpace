@@ -303,12 +303,17 @@ class InstallerScriptBuilderTests(unittest.TestCase):
                         self.assertIsInstance(node.args[0], ast.Tuple)
                         self.assertEqual(len(node.args[0].elts), 2)
                     self.assertIn("Network Mirror && Offline Directory", py_src)
+                    self.assertTrue(all(ord(ch) < 128 or ch == "·" for ch in py_src))
                     self.assertIn(expected_hashes[os_key], py_src)
                     self.assertIn("https://ghfast.top/", py_src)
 
                 cli_block = row["script"].split("# __SLICERDSPACE_PY_BEGIN__", 1)[1].split("# __SLICERDSPACE_PY_END__", 1)[0]
                 ast.parse(cli_block)
                 self.assertIn(expected_hashes[os_key], cli_block)
+
+        js_text = js_path.read_text(encoding="utf-8")
+        for forbidden in ("国内", "国外", "海外", "大陆"):
+            self.assertNotIn(forbidden, js_text)
 
     def test_parallel_range_downloader_migrates_legacy_part_and_verifies_sha256(self) -> None:
         node_bin = shutil.which("node")

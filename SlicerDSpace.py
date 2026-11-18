@@ -26,7 +26,7 @@ from shared.algorithm_selection import (
     selection_choices,
 )
 
-TORCH_DEVICE_CHOICES = ["auto", "cpu", *(f"cuda:{i}" for i in range(8))]
+TORCH_DEVICE_CHOICES = ["auto", "cpu", "mps", *(f"cuda:{i}" for i in range(8))]
 
 from connectome.module_logic import ConnectomeLogicMixin
 from microstructure.module_logic import MicrostructureLogicMixin
@@ -117,7 +117,7 @@ class SlicerDSpaceParameterNode:
     targetPreprocessing: bool = True
     orchestrationPreprocessingStages: Annotated[str, Choice(selection_choices(PREPROCESSING))] = "denoise,eddy,topup"
     brainMaskBackend: Annotated[str, Choice(["pnl_cnn", "provided"])] = "pnl_cnn"
-    brainMaskDevice: Annotated[str, Choice(["auto", "cpu", "cuda"])] = "auto"
+    brainMaskDevice: Annotated[str, Choice(["auto", "cpu", "cuda", "mps"])] = "auto"
     pnlMaskRoute: Annotated[str, Choice(["auto", "managed", "native"])] = "auto"
     # Topup / distortion correction for the MRtrix3/FSL route. Empty/0 means
     # "not set", so nothing is forwarded and dwifslpreproc defaults apply.

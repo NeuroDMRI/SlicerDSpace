@@ -724,11 +724,18 @@ def _compute_maps(config: DkiConfig, paths: dict[str, Path], log):
         work = Path(work)
         source_path = config.raw_input_bundle.dwi_path.resolve()
         if source_path.name.endswith(".gz"):
-            uncompressed = work / "dwi.nii"
-            from shared.cohort_io import io_admission
-            with io_admission('dki_decompression'), gzip.open(source_path, "rb") as source, uncompressed.open("wb") as destination:
-                shutil.copyfileobj(source, destination, length=1024 * 1024)
-            input_image = nib.load(str(uncompressed), mmap="r")
+            from shared.diffusion_io import ensure_cached_uncompressed_nifti, open_fast_gzip_reader
+
+            cached = ensure_cached_uncompressed_nifti(source_path)
+            if cached is not None:
+                input_image = nib.load(str(cached), mmap="r")
+            else:
+                uncompressed = work / "dwi.nii"
+                from shared.cohort_io import io_admission
+
+                with io_admission('dki_decompression'), open_fast_gzip_reader(source_path) as source, uncompressed.open("wb") as destination:
+                    shutil.copyfileobj(source, destination, length=4 * 1024 * 1024)
+                input_image = nib.load(str(uncompressed), mmap="r")
         else:
             input_image = nib.load(str(source_path), mmap="r")
         proxy = input_image.dataobj

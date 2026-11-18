@@ -125,11 +125,30 @@ class EnvironmentCheckTests(unittest.TestCase):
 
     def test_invalid_device_does_not_allocate_tensors(self):
         torch = Mock()
-        for device in ('mps', 'cpu:1', 'cuda:-1'):
+        for device in ('xpu', 'cpu:1', 'cuda:-1'):
             diagnostic.check_device(self.report, torch, device, 'fp32')
         self.assertEqual(self.report.counts['FAIL'], 3)
         torch.cuda.is_available.assert_not_called()
         torch.empty.assert_not_called()
+
+    def test_mps_device_status(self):
+        torch = SimpleNamespace(
+            cuda=Mock(),
+            backends=SimpleNamespace(mps=SimpleNamespace(is_available=lambda: True)),
+            device=lambda value: value,
+            empty=Mock(),
+        )
+        report = diagnostic.Report(self.output)
+        diagnostic.check_device(report, torch, 'mps', 'fp32')
+        self.assertEqual(report.finish(), 0)
+        torch.empty.assert_called_once_with(1, device='mps')
+        bad_report = diagnostic.Report(self.output)
+        torch_no_mps = SimpleNamespace(
+            cuda=Mock(),
+            backends=SimpleNamespace(mps=SimpleNamespace(is_available=lambda: False)),
+        )
+        diagnostic.check_device(bad_report, torch_no_mps, 'mps', 'fp32')
+        self.assertEqual(bad_report.counts['FAIL'], 1)
 
     def test_selected_cuda_index_and_bf16_capability(self):
         torch = SimpleNamespace(cuda=Mock(), version=SimpleNamespace(cuda='11.8'))

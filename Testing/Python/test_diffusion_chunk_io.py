@@ -45,6 +45,65 @@ class DiffusionChunkIoTest(unittest.TestCase):
                 with diffusion_image(root / "data.nii", root / "work") as opened:
                     self.assertEqual(opened.shape, (2, 2, 2, 4))
 
+    def test_open_fast_gzip_reader_threaded_fallback_and_corruption(self):
+        import gzip
+        import os
+        from shared.diffusion_io import open_fast_gzip_reader
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "data.nii.gz"
+            arr = np.arange(3 * 4 * 5 * 6, dtype=np.float32).reshape(3, 4, 5, 6)
+            nib.save(nib.Nifti1Image(arr, np.eye(4)), source)
+            expected_raw = gzip.decompress(source.read_bytes())
+
+            with patch("shared.diffusion_io.shutil.which", return_value=None):
+                with open_fast_gzip_reader(source) as stream:
+                    chunks = []
+                    while True:
+                        part = stream.read(128)
+                        if not part:
+                            break
+                        chunks.append(part)
+                self.assertEqual(b"".join(chunks), expected_raw)
+
+            truncated = root / "truncated.nii.gz"
+            raw_gz = source.read_bytes()
+            truncated.write_bytes(raw_gz[: len(raw_gz) // 2])
+            with self.assertRaises((EOFError, gzip.BadGzipFile, OSError)):
+                with open_fast_gzip_reader(truncated) as stream:
+                    while stream.read(256):
+                        pass
+
+    def test_uncompressed_cache_lifecycle_and_invalidation(self):
+        import os
+        from shared.diffusion_io import ensure_cached_uncompressed_nifti
+
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(
+            os.environ, {"SLICERDSPACE_UNCOMPRESSED_CACHE_MIN_BYTES": "1"}
+        ):
+            subject = Path(tmp) / "sub-01"
+            source = subject / "input" / "data.nii.gz"
+            source.parent.mkdir(parents=True)
+            arr1 = np.arange(2 * 3 * 4 * 5, dtype=np.float32).reshape(2, 3, 4, 5)
+            nib.save(nib.Nifti1Image(arr1, np.eye(4)), source)
+
+            cached1 = ensure_cached_uncompressed_nifti(source)
+            self.assertIsNotNone(cached1)
+            self.assertTrue(cached1.is_file())
+            self.assertEqual(cached1.parent.name, "uncompressed_nifti")
+
+            work = subject / "work"
+            with diffusion_image(source, work) as opened:
+                np.testing.assert_array_equal(np.asarray(opened.dataobj), arr1)
+            self.assertEqual(list(work.iterdir()), [])
+
+            # Modify source and verify cache invalidates & updates bit-for-bit.
+            arr2 = arr1 + 10.0
+            nib.save(nib.Nifti1Image(arr2, np.eye(4)), source)
+            with diffusion_image(source, work) as opened2:
+                np.testing.assert_array_equal(np.asarray(opened2.dataobj), arr2)
+
 
 if __name__ == "__main__":
     unittest.main()

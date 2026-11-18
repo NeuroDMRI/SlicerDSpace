@@ -486,9 +486,15 @@ def _copy_canonical_source(source: Path, targets: dict[str, Path], *, force: boo
             _copy_file(src, dst, force=force)
 
 
-def _validate_nifti_voxels_single_pass(image, source: Path) -> None:
+def _validate_nifti_voxels_single_pass(
+    image,
+    source: Path,
+    *,
+    tee_path: Path | None = None,
+) -> None:
     """Decode the full 4D NIfTI payload in one sequential stream pass."""
     import numpy as np
+    from shared.diffusion_io import open_fast_gzip_reader
 
     dtype = image.get_data_dtype()
     itemsize = int(dtype.itemsize)
@@ -500,38 +506,50 @@ def _validate_nifti_voxels_single_pass(image, source: Path) -> None:
     if (slope is not None and not np.isfinite(slope)) or (inter is not None and not np.isfinite(inter)):
         raise ValueError("DWI contains non-finite values")
     needs_float_check = dtype.kind in ("f", "c")
-    elems_per_chunk = max(1, (4 * 1024 * 1024) // max(1, itemsize))
+    elems_per_chunk = max(1, (8 * 1024 * 1024) // max(1, itemsize))
     chunk_bytes = elems_per_chunk * itemsize
-    opener = gzip.open if source.name.lower().endswith(".gz") else open
 
-    with opener(source, "rb") as stream:
-        remaining_skip = offset
-        while remaining_skip > 0:
-            skipped = stream.read(min(remaining_skip, 1024 * 1024))
-            if not skipped:
-                raise EOFError("Truncated NIfTI header before voxel payload")
-            remaining_skip -= len(skipped)
-        remaining = expected_bytes
-        carry = b""
-        while remaining > 0:
-            buf = stream.read(min(remaining, chunk_bytes))
-            if not buf:
-                raise EOFError("Truncated NIfTI voxel payload")
-            remaining -= len(buf)
-            if needs_float_check:
-                if carry:
-                    buf = carry + buf
-                    carry = b""
-                usable = (len(buf) // itemsize) * itemsize
-                if usable < len(buf):
-                    carry = buf[usable:]
-                    buf = buf[:usable]
-                if buf and not np.isfinite(np.frombuffer(buf, dtype=dtype)).all():
-                    raise ValueError("DWI contains non-finite values")
-        if carry:
-            raise EOFError("Unaligned NIfTI voxel payload")
-        while stream.read(262144):
-            pass
+    tee_fh = tee_path.open("wb") if tee_path is not None else None
+    try:
+        with open_fast_gzip_reader(source) as stream:
+            remaining_skip = offset
+            while remaining_skip > 0:
+                skipped = stream.read(min(remaining_skip, 4 * 1024 * 1024))
+                if not skipped:
+                    raise EOFError("Truncated NIfTI header before voxel payload")
+                if tee_fh is not None:
+                    tee_fh.write(skipped)
+                remaining_skip -= len(skipped)
+            remaining = expected_bytes
+            carry = b""
+            while remaining > 0:
+                buf = stream.read(min(remaining, chunk_bytes))
+                if not buf:
+                    raise EOFError("Truncated NIfTI voxel payload")
+                if tee_fh is not None:
+                    tee_fh.write(buf)
+                remaining -= len(buf)
+                if needs_float_check:
+                    if carry:
+                        buf = carry + buf
+                        carry = b""
+                    usable = (len(buf) // itemsize) * itemsize
+                    if usable < len(buf):
+                        carry = buf[usable:]
+                        buf = buf[:usable]
+                    if buf and not np.isfinite(np.frombuffer(buf, dtype=dtype)).all():
+                        raise ValueError("DWI contains non-finite values")
+            if carry:
+                raise EOFError("Unaligned NIfTI voxel payload")
+            while True:
+                tail = stream.read(1024 * 1024)
+                if not tail:
+                    break
+                if tee_fh is not None:
+                    tee_fh.write(tail)
+    finally:
+        if tee_fh is not None:
+            tee_fh.close()
 
 
 def _copy_nifti_source(
@@ -549,6 +567,7 @@ def _copy_nifti_source(
         return
     import nibabel as nib
     import numpy as np
+    from shared.diffusion_io import commit_predecoded_nifti_cache, prepare_uncompressed_cache_target
 
     image = nib.load(str(source))
     if len(image.shape) != 4 or not np.isfinite(image.affine).all():
@@ -559,17 +578,30 @@ def _copy_nifti_source(
         raise ValueError("Gradient count/shape does not match the DWI volumes (expected 3 x N bvecs)")
     if not np.isfinite(bvals).all() or not np.isfinite(bvecs).all():
         raise ValueError("Gradients contain non-finite values")
-    # Force voxel decoding in one sequential stream pass before committing anything, catching truncated data.
-    if isinstance(image, (nib.Nifti1Image, nib.Nifti2Image)) and hasattr(image.dataobj, "offset"):
-        _validate_nifti_voxels_single_pass(image, source)
-    else:
-        for index in range(image.shape[3]):
-            if not np.isfinite(np.asanyarray(image.dataobj[..., index])).all():
-                raise ValueError("DWI contains non-finite values")
     target = targets["dwi"]
     for path in (target, targets["bvals"], targets["bvecs"]):
         if path.exists() and not force:
             raise FileExistsError(f"Refusing to overwrite existing file: {path}")
+    # Force voxel decoding in one sequential stream pass before committing anything, catching truncated data.
+    staged_cache_nii: Path | None = None
+    expected_cache_bytes = 0
+    if isinstance(image, (nib.Nifti1Image, nib.Nifti2Image)) and hasattr(image.dataobj, "offset"):
+        offset = max(0, int(getattr(image.dataobj, "offset", 0)))
+        expected_cache_bytes = (
+            int(np.prod(image.shape, dtype=np.int64)) * int(image.get_data_dtype().itemsize) + offset
+        )
+        if source.name.lower().endswith(".nii.gz"):
+            staged_cache_nii = prepare_uncompressed_cache_target(target, expected_cache_bytes)
+        try:
+            _validate_nifti_voxels_single_pass(image, source, tee_path=staged_cache_nii)
+        except Exception:
+            if staged_cache_nii is not None:
+                staged_cache_nii.unlink(missing_ok=True)
+            raise
+    else:
+        for index in range(image.shape[3]):
+            if not np.isfinite(np.asanyarray(image.dataobj[..., index])).all():
+                raise ValueError("DWI contains non-finite values")
     target.parent.mkdir(parents=True, exist_ok=True)
     fd, name = tempfile.mkstemp(suffix=".nii.gz", dir=target.parent)
     os.close(fd)
@@ -582,8 +614,14 @@ def _copy_nifti_source(
                 shutil.copyfileobj(src, dst, length=4 * 1024 * 1024)
         nib.load(str(temporary))
         os.replace(temporary, target)
+    except Exception:
+        if staged_cache_nii is not None:
+            staged_cache_nii.unlink(missing_ok=True)
+        raise
     finally:
         temporary.unlink(missing_ok=True)
+    if staged_cache_nii is not None:
+        commit_predecoded_nifti_cache(target, staged_cache_nii, expected_cache_bytes)
     _copy_file(bval, targets["bvals"], force=force)
     _copy_file(bvec, targets["bvecs"], force=force)
     if metadata.is_file():

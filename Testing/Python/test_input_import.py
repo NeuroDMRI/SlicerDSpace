@@ -37,14 +37,22 @@ class InputImportTest(unittest.TestCase):
             (root / "dwi.json").write_text('{"PhaseEncodingDirection": "j"}\n', encoding="utf-8")
             subject_root = root / "prepared" / "sub-01"
 
-            manifest = prepare_inputs(
-                InputImportConfig(
-                    source=source,
-                    subject_root=subject_root,
-                    subject_id="sub-01",
-                    source_kind="nifti",
+            import os
+            from shared.diffusion_io import get_cached_uncompressed_nifti
+
+            with patch.dict(os.environ, {"SLICERDSPACE_UNCOMPRESSED_CACHE_MIN_BYTES": "1"}):
+                manifest = prepare_inputs(
+                    InputImportConfig(
+                        source=source,
+                        subject_root=subject_root,
+                        subject_id="sub-01",
+                        source_kind="nifti",
+                    )
                 )
-            )
+                cached_nii = get_cached_uncompressed_nifti(subject_root / "input" / "data.nii.gz")
+                self.assertIsNotNone(cached_nii)
+                self.assertTrue(cached_nii.is_file())
+                np.testing.assert_array_equal(np.asarray(nib.load(str(cached_nii), mmap="r").dataobj), source_data)
 
             self.assertEqual(manifest["status"], "completed")
             imported = nib.load(str(subject_root / "input" / "data.nii.gz"))

@@ -1,10 +1,386 @@
-"""Bounded-memory sequential decompression for repeated DWI chunk reads."""
+"""Bounded-memory fast streaming decompression and verified uncompressed NIfTI stage cache."""
 
 from contextlib import contextmanager
 import gzip
+import hashlib
+import json
+import os
 from pathlib import Path
+import queue
 import shutil
+import subprocess
+import sys
 import tempfile
+import threading
+from typing import Optional
+
+_STREAM_CHUNK_BYTES = 8 * 1024 * 1024
+_DEFAULT_CACHE_MIN_BYTES = 16 * 1024 * 1024
+_CACHE_ELIGIBLE_PARENTS = frozenset({"input", "preprocessed", "01_preprocessing"})
+
+
+class _ProcessStreamReader:
+    """Binary stream wrapper over a decompressor subprocess pipe with EOF exit checks."""
+
+    def __init__(self, proc: subprocess.Popen, path: Path) -> None:
+        assert proc.stdout is not None
+        self._proc = proc
+        self._stdout = proc.stdout
+        self._path = path
+        self.saw_eof = False
+        self.verified = False
+
+    def read(self, size: int = -1) -> bytes:
+        chunk = self._stdout.read(size)
+        if not chunk:
+            self.saw_eof = True
+            self.finish()
+        return chunk
+
+    def finish(self) -> None:
+        if self.verified:
+            return
+        try:
+            self._stdout.close()
+        except Exception:
+            pass
+        rc = self._proc.wait()
+        self.verified = True
+        if rc != 0:
+            raise EOFError(f"Corrupted or truncated gzip NIfTI stream: {self._path} (exit {rc})")
+
+
+class _ThreadedGzipReader:
+    """Background-thread gzip reader feeding an 8 MiB chunk queue (cross-platform fallback)."""
+
+    def __init__(self, path: Path, chunk_bytes: int = _STREAM_CHUNK_BYTES) -> None:
+        self._path = path
+        self._chunk_bytes = chunk_bytes
+        self._queue: queue.Queue[tuple[Optional[bytes], Optional[BaseException]]] = queue.Queue(maxsize=4)
+        self._stop = threading.Event()
+        self._buffer = b""
+        self._offset = 0
+        self._done = False
+        self._thread = threading.Thread(target=self._produce, name="slicerdspace-gzip", daemon=True)
+        self._thread.start()
+
+    def _produce(self) -> None:
+        try:
+            with gzip.open(self._path, "rb") as stream:
+                while not self._stop.is_set():
+                    data = stream.read(self._chunk_bytes)
+                    if not data:
+                        self._queue.put((b"", None))
+                        return
+                    while not self._stop.is_set():
+                        try:
+                            self._queue.put((data, None), timeout=0.1)
+                            break
+                        except queue.Full:
+                            continue
+        except BaseException as exc:
+            while not self._stop.is_set():
+                try:
+                    self._queue.put((None, exc), timeout=0.1)
+                    break
+                except queue.Full:
+                    continue
+
+    def read(self, size: int = -1) -> bytes:
+        if size == 0:
+            return b""
+        if size is None or size < 0:
+            parts = []
+            while True:
+                piece = self.read(self._chunk_bytes)
+                if not piece:
+                    return b"".join(parts)
+                parts.append(piece)
+        out = bytearray()
+        while len(out) < size:
+            if self._offset >= len(self._buffer):
+                if self._done:
+                    break
+                data, exc = self._queue.get()
+                if exc is not None:
+                    self._done = True
+                    raise exc
+                if not data:
+                    self._done = True
+                    break
+                self._buffer = data
+                self._offset = 0
+            avail = len(self._buffer) - self._offset
+            take = min(avail, size - len(out))
+            out.extend(self._buffer[self._offset : self._offset + take])
+            self._offset += take
+        return bytes(out)
+
+    def close(self) -> None:
+        self._stop.set()
+        while not self._queue.empty():
+            try:
+                self._queue.get_nowait()
+            except queue.Empty:
+                break
+        if self._thread.is_alive():
+            self._thread.join(timeout=2.0)
+
+
+@contextmanager
+def open_fast_gzip_reader(path: Path):
+    """Yield a fast binary reader for ``.nii`` or ``.nii.gz``.
+
+    On macOS/Linux, spawns native ``pigz -dc`` or ``gzip -dc`` in a separate OS
+    process (escaping Python's GIL and Rosetta x86_64 emulation overhead on Apple
+    Silicon when using system ``/usr/bin/gzip``). On Windows or when unavailable,
+    runs ``gzip.open`` on a background producer thread.
+    """
+
+    source = Path(path)
+    if not source.name.lower().endswith(".gz"):
+        with source.open("rb", buffering=_STREAM_CHUNK_BYTES) as handle:
+            yield handle
+        return
+
+    decompressor = shutil.which("pigz") or (shutil.which("gzip") if sys.platform != "win32" else None)
+    if decompressor:
+        proc = subprocess.Popen(
+            [decompressor, "-dc", str(source)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            bufsize=_STREAM_CHUNK_BYTES,
+        )
+        reader = _ProcessStreamReader(proc, source)
+        exc_active = False
+        try:
+            yield reader
+        except BaseException:
+            exc_active = True
+            raise
+        finally:
+            if not reader.verified:
+                try:
+                    if reader._stdout and not reader._stdout.closed:
+                        reader._stdout.close()
+                except Exception:
+                    pass
+                if exc_active or not reader.saw_eof:
+                    try:
+                        proc.terminate()
+                        proc.wait(timeout=2.0)
+                    except Exception:
+                        try:
+                            proc.kill()
+                            proc.wait(timeout=2.0)
+                        except Exception:
+                            pass
+                else:
+                    reader.finish()
+        return
+
+    reader = _ThreadedGzipReader(source)
+    try:
+        yield reader
+    finally:
+        reader.close()
+
+
+def _cache_disabled() -> bool:
+    return os.environ.get("SLICERDSPACE_DISABLE_UNCOMPRESSED_CACHE", "").strip().lower() in {"1", "true", "yes"}
+
+
+def _cache_min_bytes() -> int:
+    raw = os.environ.get("SLICERDSPACE_UNCOMPRESSED_CACHE_MIN_BYTES", "").strip()
+    if raw.isdigit():
+        return max(1, int(raw))
+    return _DEFAULT_CACHE_MIN_BYTES
+
+
+def _has_cache_disk_budget(probe_dir: Path, needed_bytes: int) -> bool:
+    check_dir = probe_dir
+    while not check_dir.exists() and check_dir != check_dir.parent:
+        check_dir = check_dir.parent
+    margin = 16 * 1024 * 1024 if os.environ.get("SLICERDSPACE_UNCOMPRESSED_CACHE_MIN_BYTES") else 2 * (1024 ** 3)
+    return shutil.disk_usage(check_dir).free >= max(0, int(needed_bytes)) * 2 + margin
+
+
+def _cache_paths_for_source(source: Path) -> Optional[tuple[Path, Path, Path]]:
+    resolved = Path(source).expanduser().resolve()
+    if _cache_disabled():
+        return None
+    if not resolved.name.lower().endswith(".nii.gz"):
+        return None
+    if resolved.parent.name not in _CACHE_ELIGIBLE_PARENTS:
+        return None
+    cache_dir = resolved.parent.parent / "cache" / "uncompressed_nifti"
+    digest = hashlib.sha256(resolved.as_posix().encode("utf-8")).hexdigest()[:20]
+    return cache_dir, cache_dir / f"{digest}.nii", cache_dir / f"{digest}.json"
+
+
+def _prune_old_cache_entries(cache_dir: Path, *, keep_name: str, max_entries: int = 2) -> None:
+    try:
+        entries = sorted(
+            (p for p in cache_dir.glob("*.nii") if p.is_file() and not p.name.startswith(".")),
+            key=lambda p: p.stat().st_mtime_ns,
+            reverse=True,
+        )
+    except OSError:
+        return
+    kept = 0
+    for item in entries:
+        if item.name == keep_name or kept < max_entries:
+            kept += 1
+            continue
+        item.unlink(missing_ok=True)
+        item.with_suffix(".json").unlink(missing_ok=True)
+
+
+def get_cached_uncompressed_nifti(path: Path) -> Optional[Path]:
+    """Return a validated cached uncompressed ``.nii`` path for ``path`` if one is fresh."""
+
+    source = Path(path)
+    targets = _cache_paths_for_source(source)
+    if targets is None or not source.is_file():
+        return None
+    _, cached_nii, meta_path = targets
+    try:
+        src_stat = source.stat()
+    except OSError:
+        return None
+    if src_stat.st_size < _cache_min_bytes():
+        return None
+    if not (cached_nii.is_file() and meta_path.is_file()):
+        return None
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        if int(meta.get("source_size", -1)) != int(src_stat.st_size):
+            return None
+        if int(meta.get("source_mtime_ns", -1)) != int(src_stat.st_mtime_ns):
+            return None
+        expected_bytes = int(meta.get("expected_bytes", 0))
+        if expected_bytes <= 0 or cached_nii.stat().st_size < expected_bytes:
+            return None
+        import nibabel as nib
+
+        img = nib.load(str(cached_nii), mmap="r", keep_file_open=False)
+        if not img.shape:
+            return None
+    except Exception:
+        return None
+    return cached_nii
+
+
+def prepare_uncompressed_cache_target(target_gz_path: Path, expected_bytes: int) -> Optional[Path]:
+    """Create a staging path under ``cache/uncompressed_nifti`` when caching is eligible and safe."""
+
+    targets = _cache_paths_for_source(target_gz_path)
+    if targets is None:
+        return None
+    cache_dir, _, _ = targets
+    try:
+        if not _has_cache_disk_budget(target_gz_path.parent.parent, expected_bytes):
+            return None
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        fd, name = tempfile.mkstemp(prefix=".staging-", suffix=".nii", dir=cache_dir)
+        os.close(fd)
+        return Path(name)
+    except Exception:
+        return None
+
+
+def commit_predecoded_nifti_cache(
+    target_gz_path: Path,
+    staged_nii: Optional[Path],
+    expected_bytes: int,
+) -> Optional[Path]:
+    """Atomically promote a pre-decoded ``.nii`` staging file after ``target_gz_path`` is committed."""
+
+    if staged_nii is None or not staged_nii.is_file():
+        return None
+    targets = _cache_paths_for_source(target_gz_path)
+    if targets is None or not target_gz_path.is_file():
+        staged_nii.unlink(missing_ok=True)
+        return None
+    cache_dir, cached_nii, meta_path = targets
+    try:
+        src_stat = target_gz_path.stat()
+        if src_stat.st_size < _cache_min_bytes() or staged_nii.stat().st_size < expected_bytes:
+            staged_nii.unlink(missing_ok=True)
+            return None
+        import nibabel as nib
+
+        nib.load(str(staged_nii), mmap="r", keep_file_open=False)
+        os.replace(staged_nii, cached_nii)
+        fd, tmp_meta_name = tempfile.mkstemp(prefix=".meta-", suffix=".json", dir=cache_dir)
+        os.close(fd)
+        tmp_meta = Path(tmp_meta_name)
+        try:
+            tmp_meta.write_text(
+                json.dumps(
+                    {
+                        "source_path": str(target_gz_path.resolve()),
+                        "source_size": int(src_stat.st_size),
+                        "source_mtime_ns": int(src_stat.st_mtime_ns),
+                        "expected_bytes": int(expected_bytes),
+                    },
+                    indent=2,
+                    sort_keys=True,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            os.replace(tmp_meta, meta_path)
+        finally:
+            tmp_meta.unlink(missing_ok=True)
+        _prune_old_cache_entries(cache_dir, keep_name=cached_nii.name)
+        return cached_nii
+    except Exception:
+        staged_nii.unlink(missing_ok=True)
+        return None
+
+
+def ensure_cached_uncompressed_nifti(path: Path) -> Optional[Path]:
+    """Return an existing verified cached ``.nii`` or create one once for large stage inputs."""
+
+    source = Path(path)
+    cached = get_cached_uncompressed_nifti(source)
+    if cached is not None:
+        return cached
+    targets = _cache_paths_for_source(source)
+    if targets is None or not source.is_file():
+        return None
+    try:
+        src_stat = source.stat()
+        if src_stat.st_size < _cache_min_bytes():
+            return None
+        import nibabel as nib
+        import numpy as np
+
+        image = nib.load(str(source), mmap="r", keep_file_open=False)
+        offset = int(getattr(image.dataobj, "offset", 0) or image.header.get_data_offset())
+        expected_bytes = int(np.prod(image.shape, dtype=np.int64)) * int(image.header.get_data_dtype().itemsize) + offset
+        if expected_bytes <= 0 or not _has_cache_disk_budget(source.parent.parent, expected_bytes):
+            return None
+        cache_dir, _, _ = targets
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        fd, name = tempfile.mkstemp(prefix=".staging-", suffix=".nii", dir=cache_dir)
+        os.close(fd)
+        staged = Path(name)
+        try:
+            from shared.cohort_io import io_admission
+
+            with io_admission("dwi_decompression"), open_fast_gzip_reader(source) as reader, staged.open("wb") as dst:
+                while True:
+                    chunk = reader.read(_STREAM_CHUNK_BYTES)
+                    if not chunk:
+                        break
+                    dst.write(chunk)
+            return commit_predecoded_nifti_cache(source, staged, expected_bytes)
+        finally:
+            staged.unlink(missing_ok=True)
+    except Exception:
+        return None
 
 
 @contextmanager
@@ -22,9 +398,13 @@ def diffusion_image(path, work_dir):
     needed = int(np.prod(image.shape)) * image.dataobj.dtype.itemsize + int(image.dataobj.offset)
     if shutil.disk_usage(work_dir).free < needed + 16 * 1024 * 1024:
         raise RuntimeError(f"Insufficient temporary disk space for one-pass DWI decompression ({needed} bytes required)")
+    cached = ensure_cached_uncompressed_nifti(path)
+    if cached is not None:
+        yield nib.load(str(cached), mmap="r", keep_file_open=False)
+        return
     with tempfile.TemporaryDirectory(prefix=".dwi-read-", dir=work_dir) as temporary:
         uncompressed = Path(temporary) / "data.nii"
         from shared.cohort_io import io_admission
-        with io_admission('dwi_decompression'), gzip.open(path, "rb") as source, uncompressed.open("wb") as destination:
-            shutil.copyfileobj(source, destination, length=1024 * 1024)
+        with io_admission('dwi_decompression'), open_fast_gzip_reader(path) as source, uncompressed.open("wb") as destination:
+            shutil.copyfileobj(source, destination, length=_STREAM_CHUNK_BYTES)
         yield nib.load(str(uncompressed), mmap="r", keep_file_open=False)

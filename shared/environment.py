@@ -417,7 +417,7 @@ def _device(
             device=normalized,
             discovery_source="device",
             install_group="device",
-            notes="Requested CUDA device must be visible to the selected Python torch runtime.",
+            notes="Requested GPU/accelerator device must be visible to the selected Python torch runtime.",
         ),
     )
 
@@ -1960,7 +1960,10 @@ def _install_hint(spec: DependencySpec, platform_name: str) -> str:
     if spec.install_group == 'ukf':
         return 'Install UKFTractography through Slicer Extension Manager and restart Slicer. UKF is optional; no automatic algorithm fallback.'
     if spec.install_group == "device":
-        return "Use CPU, or install a CUDA-capable PyTorch runtime and NVIDIA driver visible to the selected Python/Slicer environment."
+        return (
+            "Use CPU, or ensure CUDA (NVIDIA) or Apple Silicon Metal (MPS) PyTorch acceleration "
+            "is available in the selected Python/Slicer environment."
+        )
     return spec.notes
 
 
@@ -2045,13 +2048,17 @@ def _check_cuda_device(
         probe = (
             "import json, sys; "
             f"sys.path[:0] = {prepend_paths!r}; "
-            "payload = {'torch_importable': False, 'cuda_available': False, 'device_count': 0, 'torch_version': None, 'error': None}; "
+            "payload = {'torch_importable': False, 'cuda_available': False, 'device_count': 0, "
+            "'mps_available': False, 'torch_version': None, 'error': None}; "
             "\ntry:\n"
             "    import torch\n"
             "    payload['torch_importable'] = True\n"
             "    payload['torch_version'] = getattr(torch, '__version__', None)\n"
             "    payload['cuda_available'] = bool(torch.cuda.is_available())\n"
             "    payload['device_count'] = int(torch.cuda.device_count()) if payload['cuda_available'] else 0\n"
+            "    mps_mod = getattr(getattr(torch, 'backends', None), 'mps', None)\n"
+            "    mps_fn = getattr(mps_mod, 'is_available', None)\n"
+            "    payload['mps_available'] = bool(callable(mps_fn) and mps_fn() is True)\n"
             "except Exception as exc:\n"
             "    payload['error'] = str(exc)\n"
             "print(json.dumps(payload))"
@@ -2071,6 +2078,7 @@ def _check_cuda_device(
                 "torch_importable": False,
                 "cuda_available": False,
                 "device_count": 0,
+                "mps_available": False,
                 "torch_version": None,
                 "error": _probe_timeout_error(exc),
             }
@@ -2079,6 +2087,7 @@ def _check_cuda_device(
                 "torch_importable": False,
                 "cuda_available": False,
                 "device_count": 0,
+                "mps_available": False,
                 "torch_version": None,
                 "error": str(exc),
             }
@@ -2101,6 +2110,17 @@ def _check_cuda_device(
     return available, details
 
 
+def _check_mps_device(
+    python_executable: Optional[Path],
+    python_path_entries: Iterable[Path] = (),
+) -> tuple[bool, dict[str, Any]]:
+    _, details = _check_cuda_device("mps", python_executable, python_path_entries)
+    available = bool(details.get("mps_available") is True)
+    details["requested_device"] = "mps"
+    details["requested_index"] = None
+    return available, details
+
+
 def resolve_auto_torch_device(
     device: str = "auto",
     python_executable: Optional[Path] = None,
@@ -2114,9 +2134,15 @@ def resolve_auto_torch_device(
         if details.get("error"):
             raise RuntimeError("Cannot determine PyTorch GPU availability in the selected runtime: " + str(details["error"]) +
                                ". Fix that runtime or explicitly choose CPU; no silent CPU fallback.")
-        return "cuda:0" if available and int(details.get("device_count") or 0) > 0 else "cpu"
+        if available and int(details.get("device_count") or 0) > 0:
+            return "cuda:0"
+        if details.get("mps_available") is True:
+            return "mps"
+        return "cpu"
     if normalized == "cuda":
         return "cuda:0"
+    if normalized in {"mps", "mps:0"}:
+        return "mps"
     return normalized
 
 
@@ -2283,6 +2309,13 @@ def _check_spec(spec: DependencySpec, platform_name: str) -> DependencyStatus:
                 details = {"requested_device": requested_device, "resolved_device": "unavailable",
                            "python_executable": (spec.python_executable or Path(sys.executable)).as_posix(),
                            "detected_source": "probe failed", "error": str(exc)}
+        elif requested_device in {"mps", "mps:0"}:
+            available, details = _check_mps_device(
+                spec.python_executable,
+                spec.python_path_entries,
+            )
+            details["requested_device"] = requested_device
+            details["detected_source"] = "MPS runtime" if available else "not found"
         elif requested_device.startswith("cuda"):
             available, details = _check_cuda_device(
                 requested_device,
@@ -2296,7 +2329,7 @@ def _check_spec(spec: DependencySpec, platform_name: str) -> DependencyStatus:
                 "requested_device": requested_device,
                 "python_executable": (spec.python_executable or Path(sys.executable)).as_posix(),
                 "detected_source": "not found",
-                "error": "Only cpu, auto, cuda, and cuda:N are supported by the environment doctor.",
+                "error": "Only cpu, auto, mps, cuda, and cuda:N are supported by the environment doctor.",
             }
     elif spec.kind == "path" and spec.path_kind == "wma_native_source":
         from tractography.wma import inspect_wma_backend

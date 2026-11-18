@@ -22,6 +22,8 @@ import sys
 import tempfile
 import time
 
+os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+
 import numpy as np
 
 ROUTE = "native-sitk"
@@ -471,6 +473,11 @@ def _preload_vendored_models(model_dir: Path, resolved_device: str, pnl_inf, pnl
         with torch.inference_mode():
             model(torch.zeros((1, 1, 256, 256), dtype=torch.float32, device=resolved_device), segmentation_only=True)
             torch.cuda.synchronize()
+    elif str(resolved_device).startswith("mps"):
+        with torch.inference_mode():
+            model(torch.zeros((1, 1, 256, 256), dtype=torch.float32, device=resolved_device), segmentation_only=True)
+            if hasattr(torch, "mps") and hasattr(torch.mps, "synchronize"):
+                torch.mps.synchronize()
     return states, model
 
 
@@ -630,7 +637,7 @@ def main(argv=None) -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--model-dir", type=Path, required=True)
     parser.add_argument("--template", type=Path, default=None)
-    parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
+    parser.add_argument("--device", choices=("auto", "cpu", "cuda", "mps"), default="auto")
     parser.add_argument("--threads", type=int, default=None,
                         help="override the A6 default (SLICERDSPACE_STAGE_CPUS, affinity, cpu_count)")
     parser.add_argument("--keep-dir", type=Path, default=None, help="also write transform and intermediates here")

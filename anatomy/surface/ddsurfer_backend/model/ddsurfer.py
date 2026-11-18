@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from functools import partial
+from contextlib import nullcontext
+from functools import lru_cache, partial
 from typing import Sequence
 
 import torch
@@ -315,6 +316,23 @@ class TemporalAttentionNet(nn.Module):
 
 # ------------------------- TANet -------------------------
 
+@lru_cache(maxsize=1)
+def _mps_supports_conv3d() -> bool:
+    """Return True if the active PyTorch MPS runtime executes Conv3D and ConvTranspose3D."""
+    try:
+        mps_mod = getattr(getattr(torch, "backends", None), "mps", None)
+        fn = getattr(mps_mod, "is_available", None)
+        if not (callable(fn) and fn() is True):
+            return False
+        x = torch.zeros((1, 1, 2, 2, 2), dtype=torch.float32, device="mps")
+        w = torch.zeros((1, 1, 1, 1, 1), dtype=torch.float32, device="mps")
+        _ = F.conv3d(x, w)
+        _ = F.conv_transpose3d(x, w)
+        return True
+    except Exception:
+        return False
+
+
 class TANet(nn.Module):
     """Temporal attention network with RK4 integration over stationary fields."""
 
@@ -355,6 +373,13 @@ class TANet(nn.Module):
         self.register_buffer("timesteps", times, persistent=False)
         self.register_buffer("scale", torch.as_tensor(inshape, dtype=torch.float32)[None, None, :] - 1.0, persistent=False)
 
+    def to(self, *args, **kwargs):
+        result = super().to(*args, **kwargs)
+        target_device = next((param.device for param in self.att_net.parameters()), None)
+        if target_device is not None and target_device.type == "mps" and not _mps_supports_conv3d():
+            self.vf_net.to("cpu")
+        return result
+
     def forward(self, vertices: torch.Tensor, volumes: torch.Tensor, return_extras: bool = False):
         if vertices.ndim != 3 or vertices.shape[-1] != 3 or volumes.ndim != 5:
             raise ValueError("Expected vertices [1,N,3] and volumes [1,C,X,Y,Z]")
@@ -363,10 +388,17 @@ class TANet(nn.Module):
         if tuple(volumes.shape[2:]) != self.inshape:
             raise ValueError("Volume shape does not match the model's crop-voxel geometry")
         context = None
+        vf_param = next(self.vf_net.parameters(), None)
+        vf_device = vf_param.device if vf_param is not None else volumes.device
+        vf_volumes = volumes if volumes.device == vf_device else volumes.to(vf_device)
         if self.conditioned_attention:
-            svfs_all, context = self.vf_net(volumes, return_context=True)
+            svfs_all, context = self.vf_net(vf_volumes, return_context=True)
         else:
-            svfs_all = self.vf_net(volumes)
+            svfs_all = self.vf_net(vf_volumes)
+        if svfs_all.device != vertices.device:
+            svfs_all = svfs_all.to(vertices.device)
+        if context is not None and context.device != vertices.device:
+            context = context.to(vertices.device)
         expected = self.M * self.R
         if svfs_all.dim() != 5:
             msg = f"vf_net output expects 5D, got {svfs_all.shape}"
@@ -378,7 +410,12 @@ class TANet(nn.Module):
             raise RuntimeError(msg)
 
         # Keep velocity interpolation and all 50 RK4 steps in FP32 under AMP.
-        with torch.autocast(device_type=volumes.device.type, enabled=False):
+        autocast_ctx = (
+            torch.autocast(device_type=vertices.device.type, enabled=False)
+            if vertices.device.type in ("cuda", "cpu")
+            else nullcontext()
+        )
+        with autocast_ctx:
             return self._integrate(vertices.float(), svfs_all.float(), return_extras,
                                    context.float() if context is not None else None)
 

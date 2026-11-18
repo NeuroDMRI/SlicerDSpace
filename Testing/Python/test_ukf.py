@@ -315,6 +315,70 @@ class GeometryTests(unittest.TestCase):
         self.assertFalse(report["allow_lossy_conversion"])
         self.assertFalse(report["resampled"])
 
+    def test_streaming_writer_matches_reference_across_cached_nii_and_channel3(self):
+        import os
+        import nibabel as nib
+        import nrrd
+        import numpy as np
+        from shared.pipeline import RawInputBundle
+
+        data = np.random.default_rng(7).normal(50.0, 10.0, (5, 4, 6, 7)).astype(np.float32)
+        subj = self.root / "subj_cached"
+        in_dir = subj / "input"
+        in_dir.mkdir(parents=True)
+        cached_dwi = in_dir / "data.nii.gz"
+        cached_mask = in_dir / "nodif_brain_mask.nii.gz"
+        nib.save(nib.Nifti1Image(data, self.affine), cached_dwi)
+        mask_data = np.ones((5, 4, 6), np.uint8)
+        nib.save(nib.Nifti1Image(mask_data, self.affine), cached_mask)
+        bvals = subj / "input" / "bvals"
+        bvecs = subj / "input" / "bvecs"
+        bvals.write_text("0 " + "1000 " * 6 + "\n", encoding="utf-8")
+        bvecs.write_text("0 1 0 0 1 0 0\n" * 3, encoding="utf-8")
+        cached_raw = RawInputBundle(subj, "subj_cached", in_dir, cached_dwi, bvals, bvecs, cached_mask)
+        probe = ukf.write_conversion_probe(cached_raw, self.root / "probe_c3.nii.gz")
+
+        signed = np.array([[0, 1, 0], [0, 0, -1], [-1, 0, 0]])
+        shift = np.array([0, 1, 1])
+        to_lps = np.diag([-1, -1, 1])
+        affine = self.affine.copy()
+        affine[:3, :3] = self.affine[:3, :3] @ signed
+        affine[:3, 3] = self.affine[:3, :3] @ shift + self.affine[:3, 3]
+        directions_c3 = np.vstack(((to_lps @ affine[:3, :3]).T, [np.nan] * 3))
+        header_c3 = {
+            "space": "left-posterior-superior",
+            "space directions": directions_c3,
+            "space origin": to_lps @ affine[:3, 3],
+            "kinds": ["domain", "domain", "domain", "list"],
+            "DWMRI_b-value": "1000",
+            "measurement frame": np.eye(3),
+        }
+        header_c3.update({f"DWMRI_gradient_{index:04d}": "0 0 0" for index in range(7)})
+
+        def reorder(array):
+            return np.flip(np.flip(array.transpose((2, 0, 1) + tuple(range(3, array.ndim))), 0), 2)
+
+        converted = self.root / "probe_c3.nrrd"
+        nrrd.write(str(converted), reorder(probe), header_c3)
+        dwi_c3, mask = self.root / "out_c3.nrrd", self.root / "mask_c3.nrrd"
+        with mock.patch.dict(os.environ, {"SLICERDSPACE_UNCOMPRESSED_CACHE_MIN_BYTES": "1"}):
+            report = ukf.restore_lossless_payload(cached_raw, probe, converted, dwi_c3, mask)
+        restored, _ = nrrd.read(str(dwi_c3))
+        self.assertTrue(np.array_equal(restored, reorder(data)))
+        self.assertEqual(report["native_dtype"], "float32")
+        self.assertTrue((subj / "cache" / "uncompressed_nifti").is_dir())
+
+        directions_c0 = np.vstack(([np.nan] * 3, (to_lps @ affine[:3, :3]).T))
+        header_c0 = {**header_c3, "space directions": directions_c0, "kinds": ["list", "domain", "domain", "domain"]}
+        converted_c0 = self.root / "probe_c0.nrrd"
+        nrrd.write(str(converted_c0), np.moveaxis(reorder(probe), -1, 0), header_c0)
+        dwi_c0 = self.root / "out_c0.nrrd"
+        with mock.patch.dict(os.environ, {"SLICERDSPACE_UNCOMPRESSED_CACHE_MIN_BYTES": "1"}):
+            report_c0 = ukf.restore_lossless_payload(cached_raw, probe, converted_c0, dwi_c0, mask)
+        restored_c0, _ = nrrd.read(str(dwi_c0))
+        self.assertTrue(np.array_equal(np.moveaxis(restored_c0, 0, -1), reorder(data)))
+        self.assertEqual(report_c0["native_dtype"], "float32")
+
     def test_shifted_geometry_fails_mask_qc(self):
         import nibabel as nib
         import numpy as np

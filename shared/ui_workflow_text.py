@@ -75,7 +75,7 @@ WORKFLOW_TEXT = {
         "reverse_phase_b0": "Reverse-PE b=0 image",
         "brain_mask_backend": "Brain masking",
         "brain_mask_device": "Mask device",
-        "brain_mask_device_tooltip": "PNL CNN: auto prefers the first visible CUDA GPU in the selected runtime. CUDA requires a GPU; CPU explicitly disables it. Runtime GPU failures are not silently retried.",
+        "brain_mask_device_tooltip": "PNL CNN: auto prefers CUDA, then Apple Metal (MPS), then CPU in the selected runtime. Explicit CUDA/MPS fails if unavailable; CPU explicitly disables GPU. Runtime GPU failures are not silently retried.",
         "pnl_mask_route": "PNL route",
         "pnl_mask_route_tooltip": (
             "PNL CNN route. auto: managed (conda runner with ANTs) on Linux, native on macOS and Windows. "
@@ -151,10 +151,10 @@ WORKFLOW_TEXT = {
         "connectome_tooltip": (
             "Structural connectivity matrices across DDParcel regions weighted by SIFT2 or fiber count."
         ),
-        "compute_device_auto": "Auto (CUDA / CPU)",
+        "compute_device_auto": "Auto (CUDA / MPS / CPU)",
         "compute_device_tooltip": (
-            "Select CPU or a specific CUDA GPU for neural inference (DDSurfer, DDParcel, DDSeg, TractCloud, PNL mask). "
-            "Auto uses CUDA:0 when available."
+            "Select CPU, Apple Metal (MPS), or a specific CUDA GPU for neural inference "
+            "(DDSurfer, DDParcel, DDSeg, TractCloud, PNL mask). Auto prefers CUDA:0, then MPS, then CPU."
         ),
     },
     "zh": {
@@ -210,7 +210,7 @@ WORKFLOW_TEXT = {
         "reverse_phase_b0": "反向相位编码 b=0 图像",
         "brain_mask_backend": "脑掩膜方法",
         "brain_mask_device": "掩膜计算设备",
-        "brain_mask_device_tooltip": "PNL CNN：Auto 优先使用所选运行环境中可见的第一个 CUDA GPU；CUDA 要求 GPU 可用，CPU 显式禁用 GPU。GPU 运行错误不会静默重试。",
+        "brain_mask_device_tooltip": "PNL CNN：Auto 依次优先使用 CUDA GPU 或 Apple Metal (MPS)；显式选择 CUDA/MPS 且不可用时直接报错，CPU 显式禁用 GPU。GPU 运行错误不会静默重试。",
         "pnl_mask_route": "PNL 路线",
         "pnl_mask_route_tooltip": (
             "PNL CNN 路线。auto：Linux 用 managed（conda 运行环境，含 ANTs），macOS 和 Windows 用 native。"
@@ -270,8 +270,8 @@ WORKFLOW_TEXT = {
         "tractography_tooltip": "全脑纤维追踪（CSD / ACT、UKF、DTI）及基于皮层表面的短联络纤维（SAF）追踪。",
         "bundles_tooltip": "白质纤维束识别与提取（规则查询 WMQL、图谱引导 WMA 或深度学习 TractCloud）。",
         "connectome_tooltip": "基于 DDParcel 分区的 SIFT2 加权或纤维计数（Fiber count）结构连接矩阵。",
-        "compute_device_auto": "自动 (CUDA / CPU)",
-        "compute_device_tooltip": "选择用于神经网络推理（DDSurfer、DDParcel、DDSeg、TractCloud、PNL 掩膜）的计算设备；自动模式优先使用 CUDA:0。",
+        "compute_device_auto": "自动 (CUDA / MPS / CPU)",
+        "compute_device_tooltip": "选择用于神经网络推理（DDSurfer、DDParcel、DDSeg、TractCloud、PNL 掩膜）的计算设备；自动模式依次优先使用 CUDA:0、Apple MPS、CPU。",
     },
 }
 

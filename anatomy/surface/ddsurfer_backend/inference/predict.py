@@ -4,9 +4,12 @@ from __future__ import annotations
 import argparse
 from contextlib import nullcontext
 import logging
+import os
 from pathlib import Path
 import sys
 import time
+
+os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
 import nibabel as nib
 import numpy as np
@@ -97,7 +100,9 @@ class SurfacePredictor:
             raise ValueError('Invalid transformed template')
         if ((self.vertices < 0) | (self.vertices > np.array(self.geometry.crop_shape)-1)).any():
             raise ValueError('Template is outside the trained crop')
-        if self.device.type == 'cuda':
+        if self.device.type == 'mps':
+            torch.empty(1, device=self.device)
+        elif self.device.type == 'cuda':
             torch.cuda.set_device(self.device)
             free, total = torch.cuda.mem_get_info(self.device)
             cap = min(args.max_gpu_gib, free/1024**3 - 4)
@@ -150,10 +155,18 @@ class SurfacePredictor:
             if not torch.isfinite(raw).all():
                 raise FloatingPointError(f'Nonfinite {surface} prediction: {folder.name}')
             iterations = self.entries[surface]['postprocess_iters']
-            if iterations > 0 and laplacian_matrix is None:
-                from utils.mesh import laplacian
-                laplacian_matrix = laplacian(faces)
-            processed = taubin_smooth(raw, faces, n_iters=iterations, laplacian_matrix=laplacian_matrix)
+            if self.device.type == 'mps':
+                raw_smooth = raw.cpu()
+                faces_smooth = faces.cpu()
+                if iterations > 0 and laplacian_matrix is None:
+                    from utils.mesh import laplacian
+                    laplacian_matrix = laplacian(faces_smooth)
+                processed = taubin_smooth(raw_smooth, faces_smooth, n_iters=iterations, laplacian_matrix=laplacian_matrix)
+            else:
+                if iterations > 0 and laplacian_matrix is None:
+                    from utils.mesh import laplacian
+                    laplacian_matrix = laplacian(faces)
+                processed = taubin_smooth(raw, faces, n_iters=iterations, laplacian_matrix=laplacian_matrix)
             kind = 'wm' if surface == 'white' else 'pial'
             output = directory / f'{folder.name}_predicted_{kind}_surface_{self.args.surf_hemi}.obj'
             export_crop_mesh(output, processed[0].float().cpu().numpy(), self.faces, self.geometry)
@@ -167,7 +180,7 @@ class SurfacePredictor:
                 np.savez_compressed(directory / f'{self.args.surf_hemi}_{kind}_crop_voxel.npz',
                                     raw=raw[0].float().cpu().numpy(), postprocessed=processed[0].float().cpu().numpy(), faces=self.faces)
             # Initialize pial prediction from the white-matter surface.
-            vertices = processed.detach().float()
+            vertices = processed.detach().float().to(self.device)
             LOG.info('Saved %s (scanner RAS mm)', output)
         LOG.info('Finished %s (%s) in %.1fs', folder.name, self.args.surf_hemi, time.perf_counter()-started)
 
@@ -201,7 +214,10 @@ def main(default_hemisphere, argv=None):
     if args.cpu_threads < 1 or args.max_gpu_gib <= 0:
         parser.error('Resource limits must be positive')
     logging.basicConfig(level=getattr(logging,args.log_level), format='[%(levelname)s] %(message)s')
-    torch.set_num_threads(args.cpu_threads)
+    torch_threads = args.cpu_threads
+    if str(args.device).startswith('mps') and not os.environ.get('SLICERDSPACE_STAGE_CPUS'):
+        torch_threads = max(args.cpu_threads, min(8, os.cpu_count() or 4))
+    torch.set_num_threads(torch_threads)
     if args.subjects:
         if len(args.subjects) != len(set(args.subjects)) or any(Path(s).name != s or s in ('.','..') for s in args.subjects):
             parser.error('Subject IDs must be unique directory names')

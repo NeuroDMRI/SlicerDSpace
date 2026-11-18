@@ -31,9 +31,10 @@ TRACTCLOUD_REPOSITORY = "https://github.com/SlicerDMRI/TractCloud"
 ADAPTER_REVISION = 'seeded-gpu-preferred-strict-runtime-20261013'
 TRACTCLOUD_QC_VERSION = 4
 MIN_BUNDLE_SAMPLING_SCREEN = 20  # Local sanity screen, not an author accuracy guarantee.
-VALID_TRACTCLOUD_DEVICES = {"auto", "cpu", "cuda"}
+VALID_TRACTCLOUD_DEVICES = {"auto", "cpu", "cuda", "mps"}
 TRACTCLOUD_COMPAT_BOOTSTRAP = (
     "import json, logging, os, random, runpy, sys; "
+    "os.environ.setdefault('PYTORCH_ENABLE_MPS_FALLBACK', '1'); "
     "_bsp = os.environ.get('SLICERDSPACE_BUNDLED_SITE_PACKAGES', ''); "
     "sys.path[:0] = [p for p in _bsp.split(os.pathsep) if p]; "
     "import numpy as np; import torch; "
@@ -42,10 +43,15 @@ TRACTCLOUD_COMPAT_BOOTSTRAP = (
     "torch.cuda.manual_seed_all(seed); import tractcloud.pipeline as pipeline; "
     "pipeline.__dict__.setdefault('logging', logging); "
     "\nrequested = sys.argv[sys.argv.index('--device') + 1] if '--device' in sys.argv else 'auto'\n"
-    "available = torch.cuda.is_available() if requested != 'cpu' else False\n"
-    "if requested == 'cuda' and not available:\n"
+    "cuda_ok = bool(torch.cuda.is_available()) if requested not in ('cpu', 'mps') else False\n"
+    "_mps_mod = getattr(getattr(torch, 'backends', None), 'mps', None)\n"
+    "_mps_fn = getattr(_mps_mod, 'is_available', None)\n"
+    "mps_ok = bool(callable(_mps_fn) and _mps_fn() is True) if (requested in ('auto', 'mps') and not cuda_ok) else False\n"
+    "if requested == 'cuda' and not cuda_ok:\n"
     "    raise RuntimeError('TractCloud CUDA requested but unavailable in its selected Python')\n"
-    "resolved = 'cuda' if available else 'cpu'\n"
+    "if requested == 'mps' and not mps_ok:\n"
+    "    raise RuntimeError('TractCloud MPS requested but unavailable in its selected Python')\n"
+    "resolved = 'cuda' if cuda_ok else ('mps' if mps_ok else 'cpu')\n"
     "if resolved == 'cuda':\n"
     "    torch.empty(1, device='cuda:0')\n"
     "    try:\n"
@@ -58,8 +64,17 @@ TRACTCLOUD_COMPAT_BOOTSTRAP = (
     "                sys.argv[bs_i] = str(cap_bs)\n"
     "    except Exception:\n"
     "        pass\n"
+    "elif resolved == 'mps':\n"
+    "    torch.empty(1, device='mps')\n"
     "if '--device' in sys.argv:\n"
-    "    sys.argv[sys.argv.index('--device') + 1] = resolved\n"
+    "    sys.argv[sys.argv.index('--device') + 1] = 'auto' if resolved == 'mps' else resolved\n"
+    "if resolved == 'mps' and hasattr(pipeline, 'TractCloudPipeline'):\n"
+    "    _orig_tc_init = pipeline.TractCloudPipeline.__init__\n"
+    "    def _mps_tc_init(self, reporter=None, device=None, *a, **kw):\n"
+    "        if device is None:\n"
+    "            device = 'mps'\n"
+    "        return _orig_tc_init(self, reporter=reporter, device=device, *a, **kw)\n"
+    "    pipeline.TractCloudPipeline.__init__ = _mps_tc_init\n"
     "record = {'requested': requested, 'resolved': resolved, 'torch_version': str(torch.__version__)}\n"
     "print('TractCloud device: ' + json.dumps(record), flush=True)\n"
     "record_path = os.environ.get('SLICERDSPACE_TRACTCLOUD_DEVICE_RECORD')\n"
@@ -69,11 +84,11 @@ TRACTCLOUD_COMPAT_BOOTSTRAP = (
     "if getattr(pipeline, '__file__', None):\n"
     "    from tractography.tractcloud_accel import install_tractcloud_accelerations\n"
     "    install_tractcloud_accelerations(pipeline, resolved)\n"
-    "if resolved == 'cuda' and hasattr(pipeline, 'run_inference'):\n"
+    "if resolved in ('cuda', 'mps') and hasattr(pipeline, 'run_inference'):\n"
     "    original_inference = pipeline.run_inference\n"
     "    def strict_gpu_inference(model, loader, global_feat, num_classes, device, **kwargs):\n"
     "        if str(device).startswith('cpu'):\n"
-    "            raise RuntimeError('TractCloud GPU failed; automatic CPU retry disabled; fix CUDA or explicitly select CPU')\n"
+    "            raise RuntimeError('TractCloud GPU failed; automatic CPU retry disabled; fix CUDA/MPS or explicitly select CPU')\n"
     "        return original_inference(model, loader, global_feat, num_classes, device, **kwargs)\n"
     "    pipeline.run_inference = strict_gpu_inference\n"
     "runpy.run_module('tractcloud', run_name='__main__')"
@@ -308,7 +323,7 @@ def validate_tractcloud_inputs(config: TractCloudConfig) -> None:
     if not config.input_tractography.expanduser().is_file():
         raise FileNotFoundError(f"Input tractography not found: {config.input_tractography}")
     if config.device not in VALID_TRACTCLOUD_DEVICES:
-        raise ValueError("device must be one of: auto, cpu, cuda.")
+        raise ValueError("device must be one of: auto, cpu, cuda, mps.")
     if config.batch_size < 64:
         raise ValueError("batch_size must be >= 64.")
     if isinstance(config.random_seed, bool) or not isinstance(config.random_seed, int) or not 0 <= config.random_seed < 2**32:

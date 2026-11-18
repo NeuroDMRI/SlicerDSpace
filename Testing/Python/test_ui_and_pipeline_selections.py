@@ -864,7 +864,7 @@ class UiAndPipelineSelectionsTest(unittest.TestCase):
 
         click_areas = []
 
-        def make_click_area():
+        def make_click_area(*_args):
             button = mock.MagicMock()
             click_areas.append(button)
             return button
@@ -968,6 +968,7 @@ class UiAndPipelineSelectionsTest(unittest.TestCase):
         )
         with (
             mock.patch.dict(sys.modules, {"qt": fake_qt}),
+            mock.patch("shared.ui_compact._detect_mps_devices", return_value=()),
             mock.patch("shared.ui_compact._detect_cuda_devices", return_value=(("cuda:0", "CUDA:0"), ("cuda:1", "CUDA:1"))),
         ):
             install_compute_device_selector(owner)
@@ -978,6 +979,21 @@ class UiAndPipelineSelectionsTest(unittest.TestCase):
             refresh_compute_device_selector(owner, "zh")
             self.assertEqual(label.text, "计算设备")
             self.assertIn("自动", combo.items[0][0])
+
+        owner._parameterNode.device = "mps"
+        owner._parameterNode.ddsegDevice = "mps"
+        with (
+            mock.patch.dict(sys.modules, {"qt": fake_qt}),
+            mock.patch("shared.ui_compact._detect_mps_devices", return_value=(("mps", "MPS (Apple M4)"),)),
+            mock.patch("shared.ui_compact._detect_cuda_devices", return_value=()),
+        ):
+            refresh_compute_device_selector(owner, "en")
+            self.assertEqual([item[1] for item in combo.items], ["auto", "cpu", "mps"])
+            self.assertEqual(combo.items[0][0], "Auto (CUDA / MPS / CPU)")
+            self.assertEqual(combo.items[2][0], "MPS (Apple M4)")
+            self.assertEqual(combo.currentIndex, 2)
+            refresh_compute_device_selector(owner, "zh")
+            self.assertEqual(combo.items[0][0], "自动 (CUDA / MPS / CPU)")
 
     def test_available_torch_skips_pytorch_extension_and_stale_slicer_paths_are_ignored(self) -> None:
         import types

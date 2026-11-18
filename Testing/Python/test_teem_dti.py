@@ -272,6 +272,31 @@ class NiftiBackedNhdrParityTests(unittest.TestCase):
             with self.assertRaisesRegex(teem_dti.TeemError, "all zeros"):
                 teem_dti.estimate_file(nhdr_path, tdir / "dti.nrrd", tdir / "b0.nrrd", method="WLS", threads=1, log=None)
 
+    def test_stream_nifti_dwi_values_mmap_cache_and_batch_fallback_match_bit_for_bit(self) -> None:
+        import nibabel as nib
+
+        rng = np.random.default_rng(123)
+        data = rng.normal(100.0, 25.0, (12, 11, 10, 20)).astype(np.float32)
+        expected = data.transpose(3, 2, 1, 0).reshape(20, -1).T
+        with tempfile.TemporaryDirectory() as tmp:
+            subject = Path(tmp) / "sub-01"
+            nii_path = subject / "input" / "data.nii.gz"
+            nii_path.parent.mkdir(parents=True)
+            img = nib.Nifti1Image(data, np.eye(4))
+            img.header["scl_slope"] = 1.0
+            img.header["scl_inter"] = 0.0
+            nib.save(img, str(nii_path))
+
+            with mock.patch.dict(os.environ, {"SLICERDSPACE_UNCOMPRESSED_CACHE_MIN_BYTES": "1"}):
+                cached_vals = teem_dti._stream_nifti_dwi_values(nii_path, (12, 11, 10), 20)
+            self.assertIsNotNone(cached_vals)
+            np.testing.assert_array_equal(cached_vals, expected)
+
+            with mock.patch.dict(os.environ, {"SLICERDSPACE_DISABLE_UNCOMPRESSED_CACHE": "1"}):
+                stream_vals = teem_dti._stream_nifti_dwi_values(nii_path, (12, 11, 10), 20)
+            self.assertIsNotNone(stream_vals)
+            np.testing.assert_array_equal(stream_vals, expected)
+
 
 if __name__ == "__main__":
     unittest.main()

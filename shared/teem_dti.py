@@ -667,12 +667,19 @@ def _nifti_payload_from_nhdr(dwi_path: Path) -> Path | None:
 
 def _stream_nifti_dwi_values(nifti_path: Path, expected_dims: tuple[int, int, int],
                              expected_gradients: int) -> np.ndarray | None:
-    """Stream a 4D unscaled NIfTI payload volume-by-volume into ``(nx*ny*nz, ng)`` voxel order.
+    """Stream a 4D unscaled NIfTI payload into ``(nx*ny*nz, ng)`` voxel order.
 
-    Avoids ``vtkTeemNRRDReader``'s double 4D buffer commit and ``byteskip: -1`` gzip ``ISIZE`` issues
-    on multi-gigabyte Windows volumes while preserving bit-for-bit identical voxel values and dtype.
+    Prefers an mmap'd uncompressed NIfTI stage cache plus multi-threaded L1/L2
+    cache-blocked tile transpose (~30x faster than single-column strided writes),
+    falling back to fast external ``gzip``/threaded streaming into tiled batches.
     """
-    import gzip
+    try:
+        from shared.diffusion_io import ensure_cached_uncompressed_nifti, open_fast_gzip_reader
+    except ImportError:
+        repo_root = str(Path(__file__).resolve().parents[1])
+        if repo_root not in sys.path:
+            sys.path.insert(0, repo_root)
+        from shared.diffusion_io import ensure_cached_uncompressed_nifti, open_fast_gzip_reader
 
     try:
         import nibabel as nib
@@ -701,13 +708,57 @@ def _stream_nifti_dwi_values(nifti_path: Path, expected_dims: tuple[int, int, in
     nvox = nx * ny * nz
     vol_bytes = nvox * raw_dtype.itemsize
     values = np.empty((nvox, ng), dtype=native_dtype)
-    opener = gzip.open if nifti_path.name.lower().endswith(".gz") else open
-    with opener(nifti_path, "rb") as stream:
+
+    tile_voxels = 16384
+    worker_count = max(1, min(8, os.cpu_count() or 4))
+    uncompressed_nii = nifti_path if nifti_path.name.lower().endswith(".nii") else ensure_cached_uncompressed_nifti(nifti_path)
+    if uncompressed_nii is not None and uncompressed_nii.is_file():
+        expected_size = int(offset) + ng * vol_bytes
+        if uncompressed_nii.stat().st_size >= expected_size:
+            raw_2d = np.memmap(
+                uncompressed_nii,
+                dtype=raw_dtype,
+                mode="r",
+                offset=int(offset),
+                shape=(ng, nvox),
+                order="C",
+            )
+            try:
+                def _transpose_tile(start: int) -> None:
+                    end = min(start + tile_voxels, nvox)
+                    values[start:end, :] = raw_2d[:, start:end].T.astype(native_dtype, copy=False)
+
+                starts = range(0, nvox, tile_voxels)
+                if worker_count == 1 or nvox <= tile_voxels:
+                    for pos in starts:
+                        _transpose_tile(pos)
+                else:
+                    with ThreadPoolExecutor(max_workers=worker_count) as pool:
+                        list(pool.map(_transpose_tile, starts))
+                return values
+            finally:
+                del raw_2d
+
+    batch_g = 16
+    with open_fast_gzip_reader(nifti_path) as stream:
         if int(offset) > 0:
             _read_exact(stream, int(offset))
-        for grad_index in range(ng):
-            buf = _read_exact(stream, vol_bytes)
-            values[:, grad_index] = np.frombuffer(buf, dtype=raw_dtype).astype(native_dtype, copy=False)
+        for g0 in range(0, ng, batch_g):
+            count = min(batch_g, ng - g0)
+            raw_chunk = _read_exact(stream, count * vol_bytes)
+            block = np.frombuffer(raw_chunk, dtype=raw_dtype).reshape(count, nvox)
+
+            def _copy_batch_tile(start: int) -> None:
+                end = min(start + tile_voxels, nvox)
+                values[start:end, g0 : g0 + count] = block[:, start:end].T.astype(native_dtype, copy=False)
+
+            starts = range(0, nvox, tile_voxels)
+            if worker_count == 1 or nvox <= tile_voxels:
+                for pos in starts:
+                    _copy_batch_tile(pos)
+            else:
+                with ThreadPoolExecutor(max_workers=worker_count) as pool:
+                    list(pool.map(_copy_batch_tile, starts))
     return values
 
 

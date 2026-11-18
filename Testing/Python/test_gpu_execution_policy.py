@@ -16,13 +16,14 @@ from shared.pnl_mask_runner import select_device as pnl_device, main as pnl_main
 
 
 class GPUExecutionPolicyTests(unittest.TestCase):
-    def fake_torch(self, available):
+    def fake_torch(self, available, *, mps_available=False):
         torch = Mock()
         torch.__version__ = "test-double"
         torch.version.cuda = "12.1" if available else None
         torch.cuda.is_available.return_value = available
         torch.cuda.get_device_capability.return_value = (9, 0)
         torch.cuda.get_arch_list.return_value = ["sm_90"]
+        torch.backends.mps.is_available.return_value = mps_available
         return torch
 
     def test_pnl_auto_prefers_gpu_and_preserves_caller_visibility(self):
@@ -119,14 +120,60 @@ class GPUExecutionPolicyTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 select("invalid", runtime)
 
+    def test_pnl_auto_and_explicit_mps(self):
+        torch_mps = self.fake_torch(False, mps_available=True)
+        self.assertEqual(pnl_device("auto", torch_mps)["resolved"], "mps")
+        torch_mps.empty.assert_called_with(1, device="mps")
+        self.assertEqual(pnl_device("mps", torch_mps)["resolved"], "mps")
+        with self.assertRaisesRegex(RuntimeError, "Apple Metal"):
+            pnl_device("mps", self.fake_torch(False, mps_available=False))
+
+    def test_torch_auto_mps_fallback_order(self):
+        with patch("shared.environment._check_cuda_device",
+                   return_value=(False, {"device_count": 0, "mps_available": True})):
+            self.assertEqual(resolve_auto_torch_device("auto"), "mps")
+        with patch("shared.environment._check_cuda_device",
+                   return_value=(True, {"device_count": 1, "mps_available": True})):
+            self.assertEqual(resolve_auto_torch_device("auto"), "cuda:0")
+        with patch("shared.environment._check_cuda_device") as probe:
+            self.assertEqual(resolve_auto_torch_device("mps"), "mps")
+            probe.assert_not_called()
+
+    def test_tractcloud_mps_keeps_auto_cli_arg_and_pins_pipeline_device(self):
+        from tractography.tractcloud import TRACTCLOUD_COMPAT_BOOTSTRAP
+
+        init_calls = []
+        package = ModuleType("tractcloud")
+        pipeline = ModuleType("tractcloud.pipeline")
+
+        class FakePipeline:
+            def __init__(self, reporter=None, device=None, *args, **kwargs):
+                init_calls.append(device)
+
+        pipeline.TractCloudPipeline = FakePipeline
+        pipeline.run_inference = Mock(return_value="prediction")
+        package.pipeline = pipeline
+        torch = self.fake_torch(False, mps_available=True)
+        with patch.dict(sys.modules, {"tractcloud": package, "tractcloud.pipeline": pipeline, "torch": torch}), \
+                patch("runpy.run_module"), patch.object(sys, "argv", ["tractcloud", "--device", "auto"]), \
+                patch.dict(os.environ, {"SLICERDSPACE_TRACTCLOUD_DEVICE_RECORD": ""}):
+            exec(TRACTCLOUD_COMPAT_BOOTSTRAP, {})
+            self.assertEqual(sys.argv[-1], "auto")
+            pipeline.TractCloudPipeline(device=None)
+            self.assertEqual(init_calls, ["mps"])
+            self.assertEqual(pipeline.run_inference(None, None, None, 3, "mps"), "prediction")
+            with self.assertRaisesRegex(RuntimeError, "automatic CPU retry disabled"):
+                pipeline.run_inference(None, None, None, 3, "cpu")
+
     def test_cli_defaults_and_explicit_devices(self):
         from shared.run_subject_pipeline_cli import build_parser
         parser = build_parser()
         defaults = parser.parse_args([])
         for key in ("brain_mask_device", "ddseg_device", "surface_device", "tractcloud_device"):
             self.assertEqual(getattr(defaults, key), "auto")
-        for value in ("auto", "cpu", "cuda"):
+        for value in ("auto", "cpu", "cuda", "mps"):
             self.assertEqual(parser.parse_args(["--brain-mask-device", value]).brain_mask_device, value)
+            self.assertEqual(parser.parse_args(["--tractcloud-device", value]).tractcloud_device, value)
 
     def test_eddy_gpu_success_cannot_fall_back_to_cpu_on_failure(self):
         from shared.mrtrix_preproc_runner import configure_eddy

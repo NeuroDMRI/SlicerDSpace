@@ -304,7 +304,18 @@ def install_tractcloud_accelerations(pipeline_mod, resolved_device: str = "cpu")
     import tractcloud.inference as inference_mod
     import tractcloud.vtk_io as vtk_io_mod
 
-    _ACTIVE_DEVICE_STR = "cuda:0" if str(resolved_device).startswith("cuda") else "cpu"
+    def _is_mps_available(torch_mod) -> bool:
+        mps_mod = getattr(getattr(torch_mod, "backends", None), "mps", None)
+        fn = getattr(mps_mod, "is_available", None)
+        return bool(callable(fn) and fn() is True)
+
+    dev_str = str(resolved_device or "cpu").lower()
+    if dev_str.startswith("cuda"):
+        _ACTIVE_DEVICE_STR = "cuda:0"
+    elif dev_str.startswith("mps"):
+        _ACTIVE_DEVICE_STR = "mps"
+    else:
+        _ACTIVE_DEVICE_STR = "cpu"
 
     if str(resolved_device).startswith("cuda"):
         torch.backends.cuda.matmul.allow_tf32 = False
@@ -340,11 +351,9 @@ def install_tractcloud_accelerations(pipeline_mod, resolved_device: str = "cpu")
                     self.feat[rand_idx].transpose(1, 2, 0)[None, :, :, :].astype(np.float32)
                 )
 
-            dev = torch.device(
-                _ACTIVE_DEVICE_STR
-                if (_ACTIVE_DEVICE_STR.startswith("cuda") and torch.cuda.is_available())
-                else "cpu"
-            )
+            cuda_ok = _ACTIVE_DEVICE_STR.startswith("cuda") and torch.cuda.is_available()
+            mps_ok = _ACTIVE_DEVICE_STR.startswith("mps") and _is_mps_available(torch)
+            dev = torch.device(_ACTIVE_DEVICE_STR if (cuda_ok or mps_ok) else "cpu")
             self._compute_device = dev
             # (N, 3, num_point) contiguous tensor on compute device
             self._feat_transposed = torch.as_tensor(
@@ -441,8 +450,9 @@ def install_tractcloud_accelerations(pipeline_mod, resolved_device: str = "cpu")
         batch_size = int(getattr(data_loader, "batch_size", 2048) or 2048)
         total_batches = (n_total + batch_size - 1) // batch_size
 
-        feat_t = ds._feat_transposed.to(target_dev, non_blocking=True)
-        knn_idx = ds._knn_global_idx.to(target_dev, non_blocking=True) if ds._knn_global_idx is not None else None
+        non_blocking = target_dev.type == "cuda"
+        feat_t = ds._feat_transposed.to(target_dev, non_blocking=non_blocking)
+        knn_idx = ds._knn_global_idx.to(target_dev, non_blocking=non_blocking) if ds._knn_global_idx is not None else None
         # global_feat is (1, P, 3, k_global) -> transpose(2, 1) -> (1, 3, P, k_global)
         global_t = torch.as_tensor(global_feat, dtype=torch.float32, device=target_dev).transpose(2, 1).contiguous()
 

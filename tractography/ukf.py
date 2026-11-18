@@ -597,8 +597,63 @@ def restore_lossless_payload(raw, probe, converted, dwi, mask):
     for key in ("data file", "sizes", "type", "endian"):
         header.pop(key, None)
     header["encoding"] = "raw"
-    data = np.asanyarray(image.dataobj)
-    nrrd.write(str(dwi), np.ascontiguousarray(np.moveaxis(reorder(data), -1, channel)), header)
+
+    import tempfile
+    import nrrd.writer as _nrrd_writer
+    from shared.diffusion_io import ensure_cached_uncompressed_nifti, open_fast_gzip_reader
+
+    def _stream_write_raw_nrrd(target_path: Path, src_image, nrrd_header: dict) -> np.dtype:
+        out_shape = reorder(np.broadcast_to(np.zeros((), dtype=np.uint8), src_image.shape)).shape
+        # Move axis -1 (volumes) to `channel` for shape/dtype calculation.
+        dummy_moved = np.moveaxis(np.broadcast_to(np.zeros((), dtype=np.uint8), out_shape), -1, channel)
+        target_shape = dummy_moved.shape
+        sample = np.asanyarray(src_image.dataobj[0:1, 0:1, 0:1, 0:1])
+        sample_dtype = sample.dtype
+        stub = np.broadcast_to(np.zeros((), dtype=sample_dtype), target_shape)
+        formatted = _nrrd_writer._handle_header(stub, dict(nrrd_header), index_order="F")
+        nrrd_header.update(formatted)
+
+        # In NRRD Fortran order, the last axis varies slowest; write contiguous slabs along it.
+        last_total = target_shape[-1]
+        elem_per_slice = max(1, int(np.prod(target_shape[:-1], dtype=np.int64))) * max(1, sample_dtype.itemsize)
+        step = max(1, min(last_total, (48 * 1024 * 1024) // elem_per_slice))
+        last_src_axis = 3 if channel == 3 else order[2]
+        reverse_last = False if channel == 3 else negative[2]
+
+        with target_path.open("wb") as fh:
+            _nrrd_writer._write_header(fh, formatted)
+            for out_start in range(0, last_total, step):
+                out_end = min(last_total, out_start + step)
+                if reverse_last:
+                    in_slice = slice(last_total - out_end, last_total - out_start)
+                else:
+                    in_slice = slice(out_start, out_end)
+                selectors = [slice(None), slice(None), slice(None), slice(None)]
+                selectors[last_src_axis] = in_slice
+                raw_slab = np.asanyarray(src_image.dataobj[tuple(selectors)])
+                moved_slab = np.moveaxis(reorder(raw_slab), -1, channel)
+                fh.write(moved_slab.tobytes(order="F"))
+        return sample_dtype
+
+    dwi_path = Path(raw.dwi_path)
+    cached_nii = ensure_cached_uncompressed_nifti(dwi_path) if dwi_path.name.lower().endswith(".nii.gz") else None
+    if cached_nii is not None or not dwi_path.name.lower().endswith(".nii.gz"):
+        src_img = nib.load(str(cached_nii or dwi_path), mmap="r", keep_file_open=False)
+        native_dtype = _stream_write_raw_nrrd(Path(dwi), src_img, header)
+    else:
+        expected_uncompressed = int(np.prod(image.shape, dtype=np.int64)) * max(1, image.get_data_dtype().itemsize)
+        if expected_uncompressed <= 128 * 1024 * 1024:
+            data = np.asanyarray(image.dataobj)
+            native_dtype = data.dtype
+            nrrd.write(str(dwi), np.ascontiguousarray(np.moveaxis(reorder(data), -1, channel)), header)
+        else:
+            with tempfile.TemporaryDirectory(prefix=".ukf-nii-", dir=Path(dwi).parent) as tmp_dir:
+                tmp_nii = Path(tmp_dir) / "data.nii"
+                with open_fast_gzip_reader(dwi_path) as src_fh, tmp_nii.open("wb") as dst_fh:
+                    shutil.copyfileobj(src_fh, dst_fh, length=8 * 1024 * 1024)
+                src_img = nib.load(str(tmp_nii), mmap="r", keep_file_open=False)
+                native_dtype = _stream_write_raw_nrrd(Path(dwi), src_img, header)
+
     mask_header = {
         "space": header["space"],
         "space directions": directions[spatial],
@@ -611,7 +666,7 @@ def restore_lossless_payload(raw, probe, converted, dwi, mask):
         policy="lossless-native-payload",
         probe_voxels=8,
         gradient_count=len(gradients),
-        native_dtype=str(data.dtype),
+        native_dtype=str(native_dtype),
         axis_order=list(order),
         reversed_axes=negative,
         output_origin_ras=origin_ras.tolist(),

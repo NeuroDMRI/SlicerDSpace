@@ -17,10 +17,18 @@ import shutil
 import sys
 import tempfile
 
+os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+
+
+def _is_mps_available(torch_mod) -> bool:
+    mps = getattr(getattr(torch_mod, "backends", None), "mps", None)
+    fn = getattr(mps, "is_available", None)
+    return bool(callable(fn) and fn() is True)
+
 
 def select_device(requested: str, torch=None) -> dict:
-    if requested not in ("auto", "cpu", "cuda"):
-        raise ValueError("PNL device must be auto, cpu or cuda")
+    if requested not in ("auto", "cpu", "cuda", "mps"):
+        raise ValueError("PNL device must be auto, cpu, cuda or mps")
     if requested == "cpu":
         os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
         return {"requested": requested, "resolved": "cpu", "framework": "pytorch",
@@ -30,17 +38,29 @@ def select_device(requested: str, torch=None) -> dict:
             import torch
         except ImportError as exc:
             raise RuntimeError("PNL requires PyTorch in the selected external Python") from exc
-    available = torch.cuda.is_available()
+    available = bool(torch.cuda.is_available()) if requested != "mps" else False
+    mps_available = _is_mps_available(torch) if (requested in ("auto", "mps") and not available) else False
     if requested == "cuda" and not available:
         raise RuntimeError("PNL GPU requested but external PyTorch has no visible CUDA GPU")
+    if requested == "mps" and not mps_available:
+        raise RuntimeError("PNL MPS requested but external PyTorch has no available Apple Metal (MPS) GPU")
     if available:
         # Never unmask scheduler-restricted devices; force initialization to fail
         # here rather than silently accepting a broken CUDA runtime.
         torch.empty(1, device="cuda:0")
-    return {"requested": requested, "resolved": "cuda" if available else "cpu",
+        resolved = "cuda"
+        reason = "First caller-visible CUDA GPU"
+    elif mps_available:
+        torch.empty(1, device="mps")
+        resolved = "mps"
+        reason = "Apple Silicon Metal (MPS) GPU"
+    else:
+        resolved = "cpu"
+        reason = "No CUDA or MPS GPU visible to external PyTorch"
+    return {"requested": requested, "resolved": resolved,
             "framework": "pytorch", "torch_version": torch.__version__,
             "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES"),
-            "reason": "First caller-visible CUDA GPU" if available else "No CUDA GPU visible to external PyTorch"}
+            "reason": reason}
 
 
 def _install_pnl_runtime_accelerations() -> None:
@@ -325,7 +345,7 @@ def _install_pnl_runtime_accelerations() -> None:
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
+    parser.add_argument("--device", choices=("auto", "cpu", "cuda", "mps"), default="auto")
     parser.add_argument("--record", type=Path, required=True)
     parser.add_argument("--script", type=Path, required=True)
     parser.add_argument("upstream_args", nargs=argparse.REMAINDER)

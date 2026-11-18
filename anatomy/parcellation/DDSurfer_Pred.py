@@ -7,6 +7,9 @@ import logging
 import os
 import copy
 import gc
+
+os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+
 import nibabel as nib
 import numpy as np
 
@@ -144,21 +147,29 @@ def _uniform_slice_key(slice_tensor):
     return (tuple(slice_tensor.shape), str(slice_tensor.dtype), first)
 
 
+def _is_mps_available(torch_mod) -> bool:
+    mps = getattr(getattr(torch_mod, "backends", None), "mps", None)
+    fn = getattr(mps, "is_available", None)
+    return bool(callable(fn) and fn() is True)
+
+
 def _forward_fused_logits(model, sub_batch, *, use_cuda, device):
     """Run ``model`` with automatic single-slice CUDA OOM retry for low-VRAM GPUs."""
-    if not use_cuda:
+    target_device = device if isinstance(device, torch.device) else torch.device(device)
+    if target_device.type == "cpu":
         _, out_list = model(sub_batch)
         return out_list[0].detach().cpu()
+    non_blocking = target_device.type == "cuda"
     try:
-        _, out_list = model(sub_batch.to(device, non_blocking=True))
+        _, out_list = model(sub_batch.to(target_device, non_blocking=non_blocking))
         return out_list[0].detach().cpu()
     except RuntimeError as exc:
-        if not is_cuda_oom(exc) or sub_batch.shape[0] <= 1:
+        if not use_cuda or not is_cuda_oom(exc) or sub_batch.shape[0] <= 1:
             raise
         empty_cuda_cache_safely()
         parts = []
         for idx in range(sub_batch.shape[0]):
-            _, single_list = model(sub_batch[idx : idx + 1].to(device))
+            _, single_list = model(sub_batch[idx : idx + 1].to(target_device))
             parts.append(single_list[0].detach().cpu())
         return torch.cat(parts, dim=0)
 
@@ -177,7 +188,8 @@ def run_network(img_filename, orig_data, prediction_probability, plane, ckpts, p
     # weights_only=True restricts unpickling to a safe allow-list (tensors,
     # OrderedDict, basic scalars); only model_state["model_state_dict"] is
     # ever read below, so a full unpickle is never needed here.
-    model_state = torch.load(ckpts, map_location=params_model["device"], weights_only=True)
+    map_loc = torch.device("cpu") if params_model["device"].type == "mps" else params_model["device"]
+    model_state = torch.load(ckpts, map_location=map_loc, weights_only=True)
     new_state_dict = OrderedDict()
     for k, v in model_state["model_state_dict"].items():
         if k[:7] == "module." and not params_model["model_parallel"]:
@@ -299,18 +311,28 @@ def fastsurfercnn(img_filename, save_as, logger, args):
                       'kernel_c': 1, 'kernel_d': 1}
 
     # Put it onto the GPU or CPU
-    use_cuda = not args.no_cuda and torch.cuda.is_available()
+    require_mps = bool(getattr(args, "require_mps", False))
+    allow_mps = bool(getattr(args, "use_mps", not args.no_cuda))
+    use_cuda = (not args.no_cuda) and (not require_mps) and torch.cuda.is_available()
     if getattr(args, "require_cuda", False) and not use_cuda:
         raise RuntimeError("DDParcel CUDA requested but no CUDA GPU is visible; fix the runtime or explicitly select CPU")
-    print("On GPU!") if use_cuda else print("On CPU ...")
+    use_mps = (not use_cuda) and allow_mps and _is_mps_available(torch)
+    if require_mps and not use_mps:
+        raise RuntimeError("DDParcel MPS requested but Apple Metal (MPS) is unavailable; fix the runtime or explicitly select CPU")
     if use_cuda:
+        print("On GPU (CUDA)!")
         cuda_index = logical_cuda_index(args.gpu)
         if cuda_index >= torch.cuda.device_count():
             raise RuntimeError(
                 f"Requested CUDA device {args.gpu}, but only {torch.cuda.device_count()} logical device(s) are visible."
             )
         device = torch.device(f"cuda:{cuda_index}")
+    elif use_mps:
+        print("On GPU (Apple MPS)!")
+        device = torch.device("mps")
+        torch.empty(1, device=device)
     else:
+        print("On CPU ...")
         device = torch.device("cpu")
 
     if use_cuda and torch.cuda.device_count() > 1:
@@ -329,12 +351,12 @@ def fastsurfercnn(img_filename, save_as, logger, args):
                 effective_batch_size = min(effective_batch_size, 2)
 
     prev_torch_threads = None
-    if not use_cuda:
+    if device.type == "cpu":
         try:
             torch.set_flush_denormal(True)
         except Exception:
             pass
-    if not use_cuda and not os.environ.get("SLICERDSPACE_STAGE_CPUS"):
+    if device.type == "cpu" and not os.environ.get("SLICERDSPACE_STAGE_CPUS"):
         prev_torch_threads = torch.get_num_threads()
         torch.set_num_threads(optimal_cpu_torch_threads(max_conv_threads=16))
 

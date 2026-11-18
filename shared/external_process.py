@@ -104,6 +104,7 @@ def startup_environment(extra_env: Optional[Mapping[str, str]] = None) -> dict[s
         env.update({str(key): str(value) for key, value in extra_env.items() if value is not None})
     if sys.platform == "win32" and not env.get("HOME"):
         env["HOME"] = env.get("USERPROFILE") or str(Path.home())
+    env.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
     return env
 
 
@@ -210,6 +211,7 @@ def external_python_environment(
         env.update({str(key): str(value) for key, value in extra_env.items() if value is not None})
     if sys.platform == "win32" and not env.get("HOME"):
         env["HOME"] = env.get("USERPROFILE") or str(Path.home())
+    env.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
     return env
 
 

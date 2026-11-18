@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
+
+os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(REPO_ROOT) not in sys.path:
@@ -24,7 +27,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", required=True, help="Output directory")
     parser.add_argument("--weights-dir", required=True, help="DDSeg weights directory")
     parser.add_argument("--parameter-type", default="DTI", help="Feature bundle type")
-    parser.add_argument("--device", default="auto", help="Torch device; auto prefers the first visible CUDA GPU")
+    parser.add_argument("--device", default="auto", help="Torch device; auto prefers CUDA, then Apple MPS, else CPU")
     parser.add_argument("--apply-softmax", action="store_true", help="Apply softmax to model outputs")
     parser.add_argument("--dti-feature-dir", help="Existing DTI feature bundle directory")
     parser.add_argument("--dwi-nii", help="Raw DWI NIfTI")

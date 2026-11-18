@@ -325,12 +325,29 @@ def native_mask_module_present():
     return Path(__file__).with_name('pnl_mask_native.py').is_file()
 
 
+def _is_mps_available(torch_mod) -> bool:
+    mps = getattr(getattr(torch_mod, 'backends', None), 'mps', None)
+    fn = getattr(mps, 'is_available', None)
+    return bool(callable(fn) and fn() is True)
+
+
+def _resolve_torch_device(torch_mod, requested: str) -> str:
+    if requested != 'auto':
+        return requested
+    if torch_mod.cuda.is_available():
+        return 'cuda'
+    if _is_mps_available(torch_mod):
+        return 'mps'
+    return 'cpu'
+
+
 def check_native_mask(spec, *, torch=None, inference=None, weights=None):
     """PNL native mask: the three views load and one 256x256 slice per view runs on the selected device.
 
     Returns the check names. R-B5: a requested check with `shared/pnl_mask_native.py` absent is a failure.
     It uses the W-A API `shared.pnl_cnn.weights.load_model(dir, view, device)` and `inference.select_device`.
     """
+    os.environ.setdefault('PYTORCH_ENABLE_MPS_FALLBACK', '1')
     if not native_mask_module_present():
         raise RuntimeError('PNL native mask is selected but shared/pnl_mask_native.py is not present in this install')
     if torch is None:
@@ -404,12 +421,12 @@ def run_checks(request):
                 raise RuntimeError('VTK streamline round-trip changed its geometry')
             checks.append('vtk:streamline_write_read')
         if 'torch' in names:
+            os.environ.setdefault('PYTORCH_ENABLE_MPS_FALLBACK', '1')
             import torch
             torch.set_num_threads(2)
             devices = request.get('devices') or [request.get('device', 'auto')]
             for device in devices:
-                if device == 'auto':
-                    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+                device = _resolve_torch_device(torch, device)
                 tensor = torch.ones((2, 2), device=device)
                 if not torch.equal(tensor @ tensor, tensor * 2):
                     raise RuntimeError('PyTorch tensor operation failed')
@@ -421,9 +438,7 @@ def run_checks(request):
                 if file_hash(path) != model['sha256']:
                     raise ValueError('Model checksum changed before loading: ' + path.name)
                 if model['torchscript']:
-                    model_device = model.get('device', device)
-                    if model_device == 'auto':
-                        model_device = 'cuda' if torch.cuda.is_available() else 'cpu'
+                    model_device = _resolve_torch_device(torch, model.get('device', device))
                     module = torch.jit.load(str(path), map_location=model_device).eval()
                     with torch.inference_mode():
                         output = module(torch.zeros((1, 5, 256, 256), device=model_device))
@@ -443,9 +458,7 @@ def run_checks(request):
                 for path, item in zip(paths, request['tractcloud_resources']):
                     if file_hash(path) != item['sha256']:
                         raise ValueError('TractCloud resource changed before loading: ' + path.name)
-                device = request.get('tractcloud_device', device)
-                if device == 'auto':
-                    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+                device = _resolve_torch_device(torch, request.get('tractcloud_device', device))
                 model, options = load_model(str(paths[0]), str(paths[1]), torch.device(device))
                 center = np.load(paths[2], allow_pickle=False)
                 if center.size == 0 or not np.isfinite(center).all():

@@ -865,6 +865,50 @@ class ModelAssetIntegrityDoesNotAbortTheDoctorScanTest(unittest.TestCase):
             [(s.key, s.status, s.details) for s in device_statuses],
         )
 
+    def test_mps_probe_reuses_single_doctor_cache_for_auto_and_explicit_mps(self) -> None:
+        from types import SimpleNamespace
+        from shared.environment import run_environment_doctor
+
+        probe_calls = []
+
+        def fake_run(cmd, *args, **kwargs):
+            code = cmd[2] if len(cmd) > 2 else ""
+            if "torch.cuda.is_available" in code:
+                probe_calls.append(cmd)
+                return SimpleNamespace(
+                    returncode=0,
+                    stdout=json.dumps(
+                        {
+                            "torch_importable": True,
+                            "cuda_available": False,
+                            "device_count": 0,
+                            "mps_available": True,
+                            "torch_version": "2.2.2",
+                            "error": None,
+                        }
+                    ),
+                    stderr="",
+                )
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            config = EnvironmentDoctorConfig(
+                targets=("segmentation", "surface"),
+                repo_root=Path(tmp),
+                ddseg_device="auto",
+                surface_device="mps",
+                python_executable=Path(sys.executable),
+            )
+            with mock.patch("shared.environment.subprocess.run", side_effect=fake_run):
+                result = run_environment_doctor(config)
+
+        self.assertEqual(len(probe_calls), 1, probe_calls)
+        by_key = {s.key: s for s in result.statuses if s.kind == "device"}
+        self.assertEqual(by_key["device:segmentation:auto"].status, "available")
+        self.assertEqual(by_key["device:segmentation:auto"].details.get("resolved_device"), "mps")
+        self.assertEqual(by_key["device:surface:mps"].status, "available")
+        self.assertEqual(by_key["device:surface:mps"].details.get("detected_source"), "MPS runtime")
+
 
 if __name__ == "__main__":
     unittest.main()

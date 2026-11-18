@@ -117,17 +117,19 @@ def _run_ddsurfer_pred(
 
     normalized_device = (device or "auto").strip().lower() or "auto"
     options.require_cuda = normalized_device == "cuda" or normalized_device.startswith("cuda:")
+    options.require_mps = normalized_device in {"mps", "mps:0"}
+    options.use_mps = normalized_device in {"auto", "mps", "mps:0"}
     if normalized_device == "cpu":
         options.no_cuda = True
         options.gpu = "-1"
-    elif normalized_device in {"auto", "cuda"}:
+    elif normalized_device in {"auto", "cuda", "mps", "mps:0"}:
         options.no_cuda = False
         options.gpu = "0"
     elif normalized_device.startswith("cuda:"):
         options.no_cuda = False
         options.gpu = normalized_device.split(":", 1)[1]
     else:
-        raise ValueError("DDParcel device must be one of: auto, cpu, cuda, or cuda:N.")
+        raise ValueError("DDParcel device must be one of: auto, cpu, mps, cuda, or cuda:N.")
 
     logger = logging.getLogger("ddparcel.ddsurfer")
     logger.setLevel(logging.INFO)

@@ -5,11 +5,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import signal
 import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+
+os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -542,8 +545,8 @@ def build_parser() -> argparse.ArgumentParser:
             "provided requires an existing input mask. synthstrip, mrtrix and dipy were removed (W5)."
         ),
     )
-    parser.add_argument("--brain-mask-device", choices=("auto", "cpu", "cuda"), default="auto",
-                        help="PNL device: auto prefers the first visible GPU in that runtime; cuda requires GPU; cpu disables CUDA.")
+    parser.add_argument("--brain-mask-device", choices=("auto", "cpu", "cuda", "mps"), default="auto",
+                        help="PNL device: auto prefers CUDA, then Apple MPS, else CPU; cuda/mps require that GPU; cpu disables GPU.")
     parser.add_argument("--pnl-mask-route", choices=PNL_MASK_ROUTES, default="auto",
                         help=("Route of the pnl_cnn brain mask. auto: managed on Linux (conda runner with ANTs), native on macOS and Windows. "
                               "managed: the conda runner. native (experimental): SimpleITK registration in Slicer's Python; it "
@@ -780,8 +783,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--surface-cpu-threads", type=int, default=None,
                         help="DDSurfer inference CPU thread budget. Default: the stage CPU reservation of a cohort run, else 4.")
     parser.add_argument("--surface-max-gpu-gib", type=float, default=24., help="DDSurfer inference GPU allocation budget in GiB.")
-    parser.add_argument("--ddseg-device", default="auto", help="DDSeg torch device. auto uses cuda:0 when available, otherwise cpu.")
-    parser.add_argument("--surface-device", default="auto", help="DDSurfer torch device. auto uses cuda:0 when available, otherwise cpu.")
+    parser.add_argument("--ddseg-device", default="auto", help="DDSeg torch device. auto prefers cuda:0, then mps, otherwise cpu.")
+    parser.add_argument("--surface-device", default="auto", help="DDSurfer torch device. auto prefers cuda:0, then mps, otherwise cpu.")
     parser.add_argument(
         "--compress-mrtrix-dense",
         action=argparse.BooleanOptionalAction,
@@ -824,7 +827,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--tractcloud-root", type=Path, help="Optional TractCloud source checkout root.")
     parser.add_argument("--tractcloud-python-executable", type=Path, help="Optional Python executable for TractCloud.")
     parser.add_argument("--tractcloud-data-dir", type=Path, help="Optional model/data directory for TractCloud.")
-    parser.add_argument("--tractcloud-device", default="auto", choices=("auto", "cpu", "cuda"), help="TractCloud device.")
+    parser.add_argument("--tractcloud-device", default="auto", choices=("auto", "cpu", "cuda", "mps"), help="TractCloud device.")
     parser.add_argument("--tractcloud-batch-size", type=int, default=2048, help="TractCloud batch size.")
     add_dependency_config_arguments(
         parser,

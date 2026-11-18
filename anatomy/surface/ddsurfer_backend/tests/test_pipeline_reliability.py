@@ -90,9 +90,20 @@ class PreflightTests(unittest.TestCase):
         args.precision = 'bf16'
         with self.assertRaisesRegex(ValueError, 'BF16'):
             check_device(args, config)
-        for name in ('mps', 'cpu:1'):
+        for name in ('xpu', 'cpu:1'):
             args.device = name
             with self.assertRaisesRegex(ValueError, 'device cpu'):
+                check_device(args, config)
+        args.precision = 'fp32'
+        args.device = 'mps'
+        with patch('torch.backends.mps.is_available', return_value=False):
+            with self.assertRaisesRegex(RuntimeError, 'MPS'):
+                check_device(args, config)
+        with patch('torch.backends.mps.is_available', return_value=True), patch('torch.empty'):
+            self.assertEqual(check_device(args, config), 'fp32')
+        args.precision = 'bf16'
+        with patch('torch.backends.mps.is_available', return_value=True):
+            with self.assertRaisesRegex(ValueError, 'BF16'):
                 check_device(args, config)
 
     def test_unavailable_and_invalid_cuda(self):

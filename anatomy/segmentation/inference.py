@@ -56,7 +56,7 @@ def predict_view(model, slices: List[np.ndarray], apply_softmax: bool) -> np.nda
     inferred_scores: Dict[int, np.ndarray] = {}
     batch_size = 8
     dev_str = str(getattr(model, "device", "cpu")).lower()
-    if not dev_str.startswith("cuda"):
+    if dev_str.startswith("cpu"):
         try:
             import torch
 

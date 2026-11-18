@@ -2793,6 +2793,8 @@ class SharedWidgetMixin:
         device = str(raw or "auto").strip().lower() or "auto"
         if device.startswith("auto"):
             device = "auto"
+        elif device.startswith("mps"):
+            device = "mps"
         elif device.startswith("cuda"):
             device = device.split()[0]
         elif device != "cpu":
@@ -3984,6 +3986,7 @@ class SharedWidgetMixin:
         combo.clear()
         combo.addItem("auto")
         combo.addItem("cpu")
+        combo.addItem("mps")
         combo.addItem("cuda:0")
         index = combo.findText(current)
         if index >= 0:

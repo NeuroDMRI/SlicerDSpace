@@ -714,9 +714,10 @@
            <item>
             <widget class="QComboBox" name="brainMaskDeviceComboBox">
              <property name="SlicerParameterName" stdset="0"><string>brainMaskDevice</string></property>
-             <property name="toolTip"><string>PNL CNN: auto prefers the first CUDA GPU visible to its runtime. CUDA requires a GPU; CPU explicitly disables it. GPU errors are reported, not silently retried.</string></property>
+             <property name="toolTip"><string>PNL CNN: auto prefers CUDA, then Apple Metal (MPS), then CPU in its runtime. CUDA/MPS require a GPU; CPU explicitly disables it. GPU errors are reported, not silently retried.</string></property>
              <item><property name="text"><string>auto</string></property></item>
              <item><property name="text"><string>cuda</string></property></item>
+             <item><property name="text"><string>mps</string></property></item>
              <item><property name="text"><string>cpu</string></property></item>
             </widget>
            </item>
@@ -1120,7 +1121,7 @@
         <item row="0" column="1">
          <widget class="QComboBox" name="unifiedTorchDeviceComboBox">
           <property name="toolTip">
-           <string>auto uses cuda:0 when the selected Python/Slicer environment can see CUDA, otherwise CPU. Only one device path is run.</string>
+           <string>auto uses cuda:0 when CUDA is visible, mps on Apple Silicon when Metal is visible, otherwise CPU. Only one device path is run.</string>
           </property>
           <item>
            <property name="text">
@@ -1130,6 +1131,11 @@
           <item>
            <property name="text">
             <string>cpu</string>
+           </property>
+          </item>
+          <item>
+           <property name="text">
+            <string>mps</string>
            </property>
           </item>
           <item>
@@ -1888,6 +1894,11 @@
           <item>
            <property name="text">
             <string>cpu</string>
+           </property>
+          </item>
+          <item>
+           <property name="text">
+            <string>mps</string>
            </property>
           </item>
           <item>

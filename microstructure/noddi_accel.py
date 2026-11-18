@@ -60,9 +60,32 @@ def save_nifti_fast(image: nib.Nifti1Image, output_path: Path, compresslevel: in
 
 
 def _try_fast_gunzip_nifti1_4d(dwi_path: Path) -> tuple[nib.Nifti1Image, np.ndarray] | None:
-    """Fast streaming gunzip for standard little-endian NIfTI-1 .nii.gz files."""
+    """Fast streaming gunzip or mmap cache reuse for standard little-endian NIfTI-1 .nii.gz files."""
     if not dwi_path.name.endswith(".nii.gz"):
         return None
+    try:
+        from shared.diffusion_io import ensure_cached_uncompressed_nifti
+
+        cached_nii = ensure_cached_uncompressed_nifti(dwi_path)
+        if cached_nii is not None and cached_nii.is_file():
+            hdr_img = nib.load(str(cached_nii), mmap="r", keep_file_open=False)
+            if isinstance(hdr_img, nib.Nifti1Image) and hdr_img.header.endianness == "<" and len(hdr_img.shape) == 4:
+                vox_offset = int(hdr_img.header["vox_offset"])
+                dtype = np.dtype(hdr_img.header.get_data_dtype()).newbyteorder("<")
+                expected_voxels = int(np.prod(hdr_img.shape, dtype=np.int64))
+                expected_bytes = vox_offset + expected_voxels * dtype.itemsize
+                if vox_offset >= 352 and cached_nii.stat().st_size >= expected_bytes:
+                    raw_arr = np.memmap(
+                        cached_nii,
+                        dtype=dtype,
+                        mode="r",
+                        offset=vox_offset,
+                        shape=hdr_img.shape,
+                        order="F",
+                    )
+                    return hdr_img, raw_arr
+    except Exception:
+        pass
     decompressor = shutil.which("pigz") or shutil.which("gzip")
     if not decompressor:
         return None

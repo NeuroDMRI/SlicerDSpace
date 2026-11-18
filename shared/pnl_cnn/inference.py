@@ -10,17 +10,35 @@ from .weights import load_model
 VIEWS = ("sagittal", "coronal", "axial")
 
 
+def _is_mps_available(torch_mod) -> bool:
+    mps = getattr(getattr(torch_mod, "backends", None), "mps", None)
+    fn = getattr(mps, "is_available", None)
+    return bool(callable(fn) and fn() is True)
+
+
 def select_device(requested="auto"):
-    if requested not in ("auto", "cpu", "cuda"):
-        raise ValueError("Device must be auto, cpu or cuda")
-    if requested == "cuda" and not torch.cuda.is_available():
+    if requested not in ("auto", "cpu", "cuda", "mps"):
+        raise ValueError("Device must be auto, cpu, cuda or mps")
+    cuda_ok = requested != "cpu" and requested != "mps" and torch.cuda.is_available()
+    mps_ok = requested != "cpu" and requested != "cuda" and not cuda_ok and _is_mps_available(torch)
+    if requested == "cuda" and not cuda_ok:
         raise RuntimeError("CUDA requested but unavailable in the selected PyTorch runtime")
-    resolved = "cuda" if requested != "cpu" and torch.cuda.is_available() else "cpu"
+    if requested == "mps" and not mps_ok:
+        raise RuntimeError("MPS requested but unavailable in the selected PyTorch runtime")
+    if cuda_ok:
+        resolved = "cuda"
+        reason = "First caller-visible CUDA device"
+    elif mps_ok:
+        resolved = "mps"
+        reason = "Apple Silicon Metal (MPS) GPU"
+    else:
+        resolved = "cpu"
+        reason = "CPU selected or GPU unavailable"
     torch.backends.cudnn.allow_tf32 = False
     torch.backends.cuda.matmul.allow_tf32 = False
     return {"requested": requested, "resolved": resolved, "framework": "pytorch",
             "torch_version": torch.__version__, "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES"),
-            "reason": "First caller-visible CUDA device" if resolved == "cuda" else "CPU selected or CUDA unavailable"}
+            "reason": reason}
 
 
 def normalize(volume, percentile=99):

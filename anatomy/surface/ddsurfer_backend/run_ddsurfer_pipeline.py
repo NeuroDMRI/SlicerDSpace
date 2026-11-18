@@ -6,6 +6,8 @@ import argparse
 import json
 import logging
 import os
+
+os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 import shlex
 import signal
 import subprocess

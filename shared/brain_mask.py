@@ -32,7 +32,7 @@ def unsupported_backend_message(backend: str) -> str:
     """SC-2: the text for a brain mask backend that is removed or unknown; it names the two that remain."""
     kind = "was removed" if backend in REMOVED_BRAIN_MASK_BACKENDS else "is not known"
     return f"Brain mask backend {backend!r} {kind}. Use pnl_cnn (PNL CNN) or provided (a supplied mask)."
-BRAIN_MASK_DEVICES = ("auto", "cpu", "cuda")
+BRAIN_MASK_DEVICES = ("auto", "cpu", "cuda", "mps")
 # T2 design SC-1a: route of the pnl_cnn backend. auto -> managed on Linux (WSL included), native elsewhere.
 PNL_MASK_ROUTES = ("auto", "managed", "native")
 PNL_ROUTE_NAMES = {"managed": "managed-ants", "native": "native-sitk"}
@@ -393,7 +393,9 @@ def _save_nifti_fast(image_obj, output_path: Path) -> None:
 
 
 def _accumulate_b0_single_pass_gzip(image, dwi_path: Path, indices) -> "Optional[Any]":
+    import nibabel as nib
     import numpy as np
+    from shared.diffusion_io import ensure_cached_uncompressed_nifti, open_fast_gzip_reader
 
     if not str(dwi_path).endswith(".nii.gz"):
         return None
@@ -417,6 +419,17 @@ def _accumulate_b0_single_pass_gzip(image, dwi_path: Path, indices) -> "Optional
     wanted = {int(idx) for idx in indices}
     max_idx = max(wanted)
     total = np.zeros(shape3d, dtype=np.float64)
+
+    cached_nii = ensure_cached_uncompressed_nifti(Path(dwi_path))
+    if cached_nii is not None:
+        cached_img = nib.load(str(cached_nii), mmap="r", keep_file_open=False)
+        for vol_idx in sorted(wanted):
+            vol = np.asarray(cached_img.dataobj[..., vol_idx], dtype=np.float32)
+            if not np.isfinite(vol).all():
+                raise ValueError("Baseline images contain NaN/Inf")
+            total += vol
+        return total
+
     skip_chunk = 4 * 1024 * 1024
 
     def _read_exact(stream, nbytes: int) -> bytes:
@@ -430,7 +443,7 @@ def _accumulate_b0_single_pass_gzip(image, dwi_path: Path, indices) -> "Optional
             rem -= len(part)
         return chunks[0] if len(chunks) == 1 else b"".join(chunks)
 
-    with gzip.open(dwi_path, "rb") as stream:
+    with open_fast_gzip_reader(dwi_path) as stream:
         if offset > 0:
             _read_exact(stream, offset)
         for vol_idx in range(max_idx + 1):

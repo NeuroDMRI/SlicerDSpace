@@ -366,7 +366,8 @@ def run_surface(config: SurfaceConfig, *, log: Optional[Callable[[str], None]] =
                         mask_path = output_dir / 'native_brain_mask.nii.gz'
                         mask_record = generate_brain_mask(raw.dwi_path, raw.bval_path, raw.bvec_path, mask_path,
                             config=BrainMaskConfig(backend='pnl_cnn',  # W5 (D2): the one mask generator
-                                brain_mask_device='cuda' if config.device.startswith('cuda') else 'cpu', threads=config.mask_threads), log=log)
+                                brain_mask_device=('cuda' if config.device.startswith('cuda') else ('mps' if config.device.startswith('mps') else 'cpu')),
+                                threads=config.mask_threads), log=log)
                         manifest['mask_generation'] = mask_record
                         config = replace(config, input_bundle=replace(raw, mask_path=mask_path))
                     # Supply the native mask explicitly, bypassing the pinned

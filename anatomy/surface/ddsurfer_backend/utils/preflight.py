@@ -191,13 +191,21 @@ def inspect_run(args, files):
     return dict(signature=signature, config=config, models=models)
 
 
+def _is_mps_available(torch_mod) -> bool:
+    mps = getattr(getattr(torch_mod, 'backends', None), 'mps', None)
+    fn = getattr(mps, 'is_available', None)
+    return bool(callable(fn) and fn() is True)
+
+
 def check_device(args, config):
     import torch
     from inference.predict import resolve_precision
 
     device = torch.device(args.device)
-    if device.type not in ('cpu', 'cuda') or (device.type == 'cpu' and device.index is not None):
-        raise ValueError('Use --device cpu or cuda:<index>')
+    if (device.type not in ('cpu', 'cuda', 'mps')
+            or (device.type == 'cpu' and device.index is not None)
+            or (device.type == 'mps' and device.index not in (None, 0))):
+        raise ValueError('Use --device cpu, mps, or cuda:<index>')
     if device.type == 'cuda':
         if not torch.cuda.is_available():
             raise RuntimeError('CUDA is unavailable; select --device cpu or install a compatible CUDA runtime')
@@ -210,6 +218,11 @@ def check_device(args, config):
             if min(args.max_gpu_gib, free / 1024**3 - 4) < 8:
                 raise RuntimeError('Inference requires an 8-GiB GPU budget plus 4 GiB of free-memory margin')
             torch.empty(1, device=device)
+    elif device.type == 'mps':
+        if not _is_mps_available(torch):
+            raise RuntimeError('Apple Metal (MPS) is unavailable; select --device cpu or run on Apple Silicon macOS')
+        precision = resolve_precision(args.precision, device, config['precision'])
+        torch.empty(1, device=device)
     else:
         precision = resolve_precision(args.precision, device, config['precision'])
     return precision

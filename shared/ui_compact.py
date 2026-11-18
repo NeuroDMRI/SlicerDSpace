@@ -680,7 +680,69 @@ def refresh_input_format_selector(owner: Any, language: str | None = None) -> No
     _apply_input_path_mode(owner, fmt, lang)
 
 
+_DETECTED_MPS_DEVICES_CACHE: tuple[tuple[str, str], ...] | None = None
 _DETECTED_CUDA_DEVICES_CACHE: tuple[tuple[str, str], ...] | None = None
+
+
+def _detect_mps_devices() -> tuple[tuple[str, str], ...]:
+    """Return ``(('mps', 'MPS (...)'),)`` on Apple Silicon Macs without importing torch."""
+
+    global _DETECTED_MPS_DEVICES_CACHE
+    if _DETECTED_MPS_DEVICES_CACHE is not None:
+        return _DETECTED_MPS_DEVICES_CACHE
+
+    import platform
+    import subprocess
+    import sys
+
+    if sys.platform != "darwin":
+        _DETECTED_MPS_DEVICES_CACHE = ()
+        return _DETECTED_MPS_DEVICES_CACHE
+
+    available = False
+    torch_mod = sys.modules.get("torch")
+    if torch_mod is not None:
+        try:
+            mps_mod = getattr(getattr(torch_mod, "backends", None), "mps", None)
+            fn = getattr(mps_mod, "is_available", None)
+            if callable(fn):
+                available = bool(fn() is True)
+        except Exception:
+            available = False
+    if not available:
+        if platform.machine() == "arm64":
+            available = True
+        else:
+            try:
+                proc = subprocess.run(
+                    ["sysctl", "-n", "hw.optional.arm64"],
+                    capture_output=True,
+                    text=True,
+                    timeout=1.5,
+                )
+                available = proc.returncode == 0 and proc.stdout.strip() == "1"
+            except Exception:
+                available = False
+
+    if not available:
+        _DETECTED_MPS_DEVICES_CACHE = ()
+        return _DETECTED_MPS_DEVICES_CACHE
+
+    chip = ""
+    try:
+        proc = subprocess.run(
+            ["sysctl", "-n", "machdep.cpu.brand_string"],
+            capture_output=True,
+            text=True,
+            timeout=1.5,
+        )
+        if proc.returncode == 0:
+            chip = proc.stdout.strip()
+    except Exception:
+        chip = ""
+    label = f"MPS ({chip})" if chip.startswith("Apple") else "MPS (Apple Metal)"
+    _DETECTED_MPS_DEVICES_CACHE = (("mps", label),)
+    return _DETECTED_MPS_DEVICES_CACHE
 
 
 def _detect_cuda_devices() -> tuple[tuple[str, str], ...]:
@@ -736,7 +798,7 @@ def _detect_cuda_devices() -> tuple[tuple[str, str], ...]:
             except Exception:
                 entries.clear()
 
-    if not entries:
+    if not entries and sys.platform != "darwin":
         entries = [("cuda:0", "CUDA:0"), ("cuda:1", "CUDA:1")]
     _DETECTED_CUDA_DEVICES_CACHE = tuple(entries)
     return _DETECTED_CUDA_DEVICES_CACHE
@@ -820,9 +882,13 @@ def refresh_compute_device_selector(owner: Any, language: str | None = None) -> 
     items: list[tuple[str, str]] = [
         ("auto", onboarding_text(lang, "compute_device_auto")),
         ("cpu", "CPU"),
+        *_detect_mps_devices(),
         *_detect_cuda_devices(),
     ]
     seen_values = {val for val, _ in items}
+    if current == "mps" and current not in seen_values:
+        items.append(("mps", "MPS"))
+        seen_values.add("mps")
     if current not in seen_values and current.startswith("cuda:"):
         items.append((current, current.upper()))
 

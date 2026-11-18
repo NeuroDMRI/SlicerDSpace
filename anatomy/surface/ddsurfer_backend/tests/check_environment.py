@@ -109,6 +109,12 @@ def check_packages(report):
     return loaded
 
 
+def _is_mps_available(torch_mod) -> bool:
+    mps = getattr(getattr(torch_mod, 'backends', None), 'mps', None)
+    fn = getattr(mps, 'is_available', None)
+    return bool(callable(fn) and fn() is True)
+
+
 def check_device(report, torch, device, precision):
     if device == 'cpu':
         if precision == 'bf16':
@@ -118,10 +124,28 @@ def check_device(report, torch, device, precision):
             report.add('OK', 'Inference device', 'CPU / FP32 selected')
         report.add('SKIP', 'CUDA', 'Not required for CPU; use --device cuda:0 to check a GPU')
         return
+    if re.fullmatch(r'mps(?::0)?', device):
+        if torch is None:
+            report.add('SKIP', 'MPS', 'Install/fix PyTorch first')
+            return
+        if not _is_mps_available(torch):
+            report.add('FAIL', 'MPS', 'Apple Metal (MPS) is unavailable in this Python environment',
+                       ('Use --device cpu --precision fp32, or run on Apple Silicon macOS with PyTorch MPS.',))
+            return
+        if precision == 'bf16':
+            report.add('FAIL', 'Precision', 'BF16 requires a supported CUDA GPU; use --precision fp32 on MPS')
+            return
+        try:
+            torch.empty(1, device=torch.device(device))
+            report.add('OK', 'MPS', 'Apple Silicon Metal (MPS) available; FP32 precision selected')
+        except Exception as error:
+            report.add('FAIL', 'MPS', f'{type(error).__name__}: {error}',
+                       ('Use --device cpu --precision fp32.',))
+        return
     match = re.fullmatch(r'cuda(?::(\d+))?', device)
     if not match:
         report.add('FAIL', 'Inference device', f'Unsupported device: {device}',
-                   ('Use --device cpu or --device cuda:0.',))
+                   ('Use --device cpu, --device mps, or --device cuda:0.',))
         return
     if torch is None:
         report.add('SKIP', 'CUDA', 'Install/fix PyTorch first')

@@ -108,6 +108,7 @@ def inject_bundled_python_env(
     include_pythonpath: bool = True,
 ) -> MutableMapping[str, str]:
     """Append bundled ``site-packages`` and script directories to ``env`` for Slicer Python subprocesses."""
+    env.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
     if include_pythonpath:
         py_dirs: list[Path] = []
         for site_dir in bundled_site_packages_dirs(module_root):
@@ -125,6 +126,7 @@ def inject_bundled_python_env(
 
 def activate_bundled_python(module_root: Path | None = None) -> tuple[Path, ...]:
     """Activate bundled ``site-packages`` in the running Slicer Python process and its child env."""
+    os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
     site_dirs = bundled_site_packages_dirs(module_root)
     if not site_dirs:
         return ()

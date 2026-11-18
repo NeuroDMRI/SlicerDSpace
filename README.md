@@ -154,12 +154,13 @@ analysis run through your own Agent.
 
 ## Installation
 
-### Option A: Interactive Website Installer Customizer (Recommended)
+### Option A: One-Click Graphical Setup Extension (GitHub Releases or Website Customizer)
 
-Open the [SlicerDSpace Project Site](https://neurodmri.github.io/SlicerDSpace/#start) (or [中文页面](https://neurodmri.github.io/SlicerDSpace/zh.html#start)) to generate a double-click custom installer script (`Install-SlicerDSpace.bat` / `.command` / `.sh`):
-- Enter your **3D Slicer 5.10.0** path (or leave blank for standard locations). Every script installs the **unified OS Base extension package** containing Preprocessing, **PNL** Brain Mask weights, **Anatomical Priors (`DDSeg`, `DDParcel`, `DDSurfer` + FreeSurfer surface atlas)**, Microstructure (`DTI`, `Free-Water`, `NODDI`, `DKI`), Tractography (`CSD/ACT`, `UKF`, `SAF`), `WMQL`, `TractCloud`, Connectome, Python 3.12 dependencies, `UKFTractography` CLI, and native binary runtimes (`MRtrix3 3.0.8`, `FSL 2602.0`, and `FreeSurfer Surface Runtime` with `activation_key_included: false`).
-- Under **WMA White-Matter Atlas Clustering**, pick whichever WMA atlases you need (**`ORG`** checked by default as a single `< 2.0 GiB` pack; huge optional **`NABA`** and **`East-West`** atlases unchecked by default, or uncheck **WMA** altogether to skip WMA atlases completely).
-- Optional hospital-network controls let you choose a **GitHub download mirror** (`ghfast.top` / `gh-proxy.com` / custom prefix), set an **HTTP/HTTPS proxy**, or point to a **local offline folder**; **upstream-only** `IITmean_b0_256.nii.gz` is fetched from NITRC when online.
+Download the lightweight **universal Setup archive** directly from [GitHub Releases](https://github.com/NeuroDMRI/SlicerDSpace/releases) (`SlicerDSpaceSetup-macOS.zip`, `SlicerDSpaceSetup-Windows.zip`, or `SlicerDSpaceSetup-Linux.zip`), or customize options first on the [SlicerDSpace Project Site](https://neurodmri.github.io/SlicerDSpace/#start) (or [中文页面](https://neurodmri.github.io/SlicerDSpace/zh.html#start)):
+- Import the `SlicerDSpaceSetup-<OS>.zip` file in **3D Slicer 5.10.0** via **View > Extensions Manager > wrench icon > Install Extension from File...** and restart Slicer. The **SlicerDSpace Setup** window opens automatically and waits for your confirmation (`Start Install`) before downloading.
+- Core workflows (**SlicerDSpace Base Features**, `~1.4–1.7 GB`, locked/required) bundle Preprocessing, **PNL** Brain Mask weights, **Anatomical Priors (`DDSeg`, `DDParcel`, `DDSurfer` + FreeSurfer surface atlas)**, Microstructure (`DTI`, `Free-Water`, `NODDI`, `DKI`), Tractography (`CSD/ACT`, `UKF`, `SAF`), `WMQL`, `TractCloud`, Connectome, Python 3.12 dependencies, `UKFTractography` CLI, and native binary runtimes (`MRtrix3 3.0.8`, `FSL 2602.0`, and `FreeSurfer Surface Runtime` with `activation_key_included: false`).
+- Under **Optional WMA White-Matter Atlases**, review or toggle atlases (**`ORG`** checked by default as a single `< 2.0 GiB` pack; huge **`NABA`** and **`East-West`** unchecked by default).
+- Built-in multi-threaded HTTP Range resume, **GitHub download mirror** (`ghfast.top` / `gh-proxy.com` / custom prefix), **HTTP/HTTPS proxy**, and **local offline folder** controls let you configure network access cleanly before clicking **`Start Install`** (a headless CLI script is also offered on the website for SSH/server setups).
 - If you select an omitted WMA atlas (`ORG`, `NABA`, or `East-West`) later inside 3D Slicer, SlicerDSpace immediately offers a one-click **hot on-demand download or offline folder import** without reinstalling the extension or restarting Slicer.
 
 ### Option B: Manual Unified OS Base Package + Optional WMA Atlases

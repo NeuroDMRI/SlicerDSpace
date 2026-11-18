@@ -104,6 +104,9 @@ for bundle in (INSTALLER_ARTIFACTS.get("bundles") or {}).values():
     for part in bundle.get("parts") or ():
         if part.get("url"):
             ALLOWED_URLS.add(part["url"])
+for setup_pkg in (INSTALLER_ARTIFACTS.get("setup_installers") or {}).values():
+    if setup_pkg.get("url"):
+        ALLOWED_URLS.add(setup_pkg["url"])
 for url in ((INSTALLER_ARTIFACTS.get("iit_template") or {}).get("urls") or ()):
     ALLOWED_URLS.add(url)
 

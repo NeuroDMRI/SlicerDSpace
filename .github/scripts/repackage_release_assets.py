@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import json
 import os
@@ -69,14 +70,19 @@ SOURCE_BUNDLES: dict[str, dict[str, str]] = {
 }
 
 
-def _upload_release_files(files: list[Path]) -> None:
+def _upload_release_files(
+    files: list[Path],
+    *,
+    release_tag: str = RELEASE_TAG,
+    repo: str = GITHUB_REPO,
+) -> None:
     cmd = [
         "gh",
         "release",
         "upload",
-        RELEASE_TAG,
+        release_tag,
         "--repo",
-        GITHUB_REPO,
+        repo,
         "--clobber",
         *[str(f) for f in files],
     ]
@@ -372,6 +378,11 @@ def cmd_repack_os_base(args: argparse.Namespace) -> int:
 
 
 _BUNDLE_ORDER = ("windows_x64_base", "linux_x64_base", "macos_arm64_base")
+SETUP_OS_ORDER = (
+    ("windows", "SlicerDSpaceSetup-Windows.zip", "windows_x64_base", "win"),
+    ("linux", "SlicerDSpaceSetup-Linux.zip", "linux_x64_base", "linux"),
+    ("macos", "SlicerDSpaceSetup-macOS.zip", "macos_arm64_base", "macosx"),
+)
 
 
 def _render_js_bundles_block(bundles: dict[str, dict[str, Any]]) -> str:
@@ -408,6 +419,148 @@ def _render_js_bundles_block(bundles: dict[str, dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def _sync_customizer_js_bundles(bundles: dict[str, dict[str, Any]]) -> Path:
+    js_path = REPO_ROOT / "docs" / "site" / "assets" / "js" / "installer-customizer.js"
+    js_src = js_path.read_text(encoding="utf-8")
+    pattern = re.compile(
+        r"^[ \t]*// __ARTIFACTS_BUNDLES_BEGIN__.*?^[ \t]*// __ARTIFACTS_BUNDLES_END__",
+        flags=re.MULTILINE | re.DOTALL,
+    )
+    if not pattern.search(js_src):
+        raise RuntimeError(f"Missing __ARTIFACTS_BUNDLES_BEGIN__/__ARTIFACTS_BUNDLES_END__ markers in {js_path}")
+    new_js = pattern.sub(lambda _m: _render_js_bundles_block(bundles), js_src, count=1)
+
+    for os_key, _, bundle_key, _ in SETUP_OS_ORDER:
+        if bundle_key in bundles:
+            sz = int(bundles[bundle_key]["size_bytes"])
+            est_pat = re.compile(
+                rf"(bundleKey:\s*'{re.escape(bundle_key)}'.*?baseEstimateBytes:\s*)\d+",
+                flags=re.DOTALL,
+            )
+            new_js, count = est_pat.subn(rf"\g<1>{sz}", new_js, count=1)
+            if count != 1:
+                raise RuntimeError(f"Could not update baseEstimateBytes for {os_key} ({bundle_key}) in {js_path}")
+
+    if new_js != js_src:
+        js_path.write_text(new_js, encoding="utf-8")
+        print(f"[sync-metadata] Updated {js_path}", flush=True)
+    return js_path
+
+
+def _extract_embedded_setup_config(py_src: str) -> dict[str, Any]:
+    tree = ast.parse(py_src)
+    for node in tree.body:
+        if (
+            isinstance(node, ast.Assign)
+            and any(isinstance(t, ast.Name) and t.id == "CONFIG" for t in node.targets)
+            and isinstance(node.value, ast.Call)
+            and len(node.value.args) == 1
+            and isinstance(node.value.args[0], ast.Constant)
+            and isinstance(node.value.args[0].value, str)
+        ):
+            return json.loads(node.value.args[0].value)
+    raise RuntimeError("Could not extract embedded CONFIG JSON literal from SlicerDSpaceSetup.py")
+
+
+def build_setup_zips(
+    out_dir: Path,
+    installer_artifacts: dict[str, Any],
+    *,
+    release_tag: str = RELEASE_TAG,
+    published: bool = True,
+) -> tuple[dict[str, dict[str, Any]], list[Path]]:
+    node_bin = shutil.which("node")
+    if node_bin is None:
+        raise RuntimeError("node is required in PATH to build SlicerDSpaceSetup-<OS>.zip packages")
+
+    out_dir = out_dir.expanduser().resolve()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    js_path = REPO_ROOT / "docs" / "site" / "assets" / "js" / "installer-customizer.js"
+
+    node_script = (
+        "const fs = require('fs');\n"
+        "const path = require('path');\n"
+        "const ic = require(process.argv[1]);\n"
+        "const outDir = process.argv[2];\n"
+        "(async () => {\n"
+        "  for (const osKey of ['windows', 'linux', 'macos']) {\n"
+        "    const bytes = await ic.buildSetupZip({\n"
+        "      os: osKey,\n"
+        "      wmaEnabled: true,\n"
+        "      wmaAtlases: ['wma_org'],\n"
+        "      autoStart: false,\n"
+        "    });\n"
+        "    const outFile = path.join(outDir, ic.OS_DEFAULTS[osKey].setupZipName);\n"
+        "    fs.writeFileSync(outFile, Buffer.from(bytes));\n"
+        "  }\n"
+        "})().catch((err) => { console.error(err); process.exit(1); });\n"
+    )
+    proc = subprocess.run([node_bin, "-e", node_script, str(js_path), str(out_dir)], capture_output=True, text=True)
+    if proc.returncode != 0:
+        raise RuntimeError(f"Failed generating setup zips via node:\n{proc.stderr or proc.stdout}")
+
+    base_url = str(
+        installer_artifacts.get("release_base_url")
+        or f"https://github.com/{GITHUB_REPO}/releases/download/{release_tag}"
+    ).rstrip("/")
+    bundles = installer_artifacts.get("bundles") or {}
+    setup_meta: dict[str, dict[str, Any]] = {}
+    written_paths: list[Path] = []
+
+    for os_key, filename, bundle_key, expected_s4ext_os in SETUP_OS_ORDER:
+        zip_path = out_dir / filename
+        if not zip_path.is_file():
+            raise RuntimeError(f"Missing generated setup archive: {zip_path}")
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            bad = zf.testzip()
+            if bad is not None:
+                raise RuntimeError(f"Corrupt entry {bad} inside {zip_path}")
+            prefix = (
+                "SlicerDSpaceSetup/Slicer.app/Contents/Extensions-34045/SlicerDSpaceSetup"
+                if os_key == "macos"
+                else "SlicerDSpaceSetup"
+            )
+            names = set(zf.namelist())
+            s4ext_rel = f"{prefix}/share/Slicer-5.10/SlicerDSpaceSetup.s4ext"
+            root_s4ext_rel = f"{prefix}/SlicerDSpaceSetup.s4ext"
+            py_rel = f"{prefix}/lib/Slicer-5.10/qt-scripted-modules/SlicerDSpaceSetup.py"
+            for required in (s4ext_rel, root_s4ext_rel, py_rel):
+                if required not in names:
+                    raise RuntimeError(f"Missing {required} inside {zip_path}")
+            s4ext_text = zf.read(s4ext_rel).decode("utf-8")
+            if f"os {expected_s4ext_os}" not in s4ext_text or "slicer_revision 34045" not in s4ext_text:
+                raise RuntimeError(f"Unexpected .s4ext metadata inside {zip_path}")
+            py_src = zf.read(py_rel).decode("utf-8")
+            if not all(ord(ch) < 128 or ch == "·" for ch in py_src):
+                raise RuntimeError(f"Non-ASCII wording detected in {zip_path}")
+            cfg = _extract_embedded_setup_config(py_src)
+            if cfg.get("auto_start") is not False:
+                raise RuntimeError(f"Expected auto_start=False inside {zip_path}, got {cfg.get('auto_start')!r}")
+            if cfg.get("os") != os_key or cfg.get("selected_packs") != ["wma_org"]:
+                raise RuntimeError(f"Unexpected OS/pack defaults inside {zip_path}")
+            expected_bundle_sha = str((bundles.get(bundle_key) or {}).get("sha256") or "")
+            actual_bundle_sha = str((((cfg.get("artifacts") or {}).get("bundles") or {}).get(bundle_key) or {}).get("sha256") or "")
+            if expected_bundle_sha and actual_bundle_sha != expected_bundle_sha:
+                raise RuntimeError(
+                    f"Embedded {bundle_key} sha256 mismatch in {zip_path}: {actual_bundle_sha} != {expected_bundle_sha}"
+                )
+
+        size_bytes = zip_path.stat().st_size
+        digest = sha256_file(zip_path)
+        setup_meta[os_key] = {
+            "os": os_key,
+            "filename": filename,
+            "url": f"{base_url}/{filename}",
+            "size_bytes": size_bytes,
+            "sha256": digest,
+            "published": published,
+        }
+        written_paths.append(zip_path)
+        print(f"[setup-zip] Verified {zip_path.name} ({size_bytes:,} bytes, sha256={digest})", flush=True)
+
+    return setup_meta, written_paths
+
+
 def _format_sha256sums(artifacts: dict[str, Any], packs_manifest: dict[str, Any]) -> str:
     entries: list[tuple[str, str]] = []
     merged_entries: list[tuple[str, str]] = []
@@ -422,6 +575,11 @@ def _format_sha256sums(artifacts: dict[str, Any], packs_manifest: dict[str, Any]
                 merged_entries.append((str(b["sha256"]), str(b["filename"])))
         elif b.get("sha256"):
             entries.append((str(b["sha256"]), str(b["filename"])))
+    setup_installers = artifacts.get("setup_installers") or {}
+    for os_key, _, _, _ in SETUP_OS_ORDER:
+        rec = setup_installers.get(os_key)
+        if rec and rec.get("sha256") and rec.get("filename"):
+            entries.append((str(rec["sha256"]), str(rec["filename"])))
     packs = packs_manifest.get("packs") or {}
     pack_order = [k for k in ("wma_org", "wma_naba", "wma_east_west") if k in packs] + [
         k for k in packs if k not in ("wma_org", "wma_naba", "wma_east_west")
@@ -459,36 +617,19 @@ def cmd_sync_metadata(args: argparse.Namespace) -> int:
             rec_copy = {k: rec[k] for k in allowed_keys if k in rec}
             bundles[key] = rec_copy
 
+    _sync_customizer_js_bundles(bundles)
+
+    setup_dir = (args.setup_out_dir or (receipts_dir / "setup-zips")).expanduser().resolve()
+    setup_meta, setup_paths = build_setup_zips(
+        setup_dir,
+        artifacts,
+        release_tag=args.release_tag,
+        published=not args.dry_run,
+    )
+    artifacts["setup_installers"] = setup_meta
+
     artifacts_path.write_text(json.dumps(artifacts, indent=2) + "\n", encoding="utf-8")
     print(f"[sync-metadata] Updated {artifacts_path}", flush=True)
-
-    js_path = REPO_ROOT / "docs" / "site" / "assets" / "js" / "installer-customizer.js"
-    js_src = js_path.read_text(encoding="utf-8")
-    pattern = re.compile(
-        r"^[ \t]*// __ARTIFACTS_BUNDLES_BEGIN__.*?^[ \t]*// __ARTIFACTS_BUNDLES_END__",
-        flags=re.MULTILINE | re.DOTALL,
-    )
-    if not pattern.search(js_src):
-        raise RuntimeError(f"Missing __ARTIFACTS_BUNDLES_BEGIN__/__ARTIFACTS_BUNDLES_END__ markers in {js_path}")
-    new_js = pattern.sub(lambda _m: _render_js_bundles_block(bundles), js_src, count=1)
-
-    for os_key, bundle_key in (
-        ("macos", "macos_arm64_base"),
-        ("windows", "windows_x64_base"),
-        ("linux", "linux_x64_base"),
-    ):
-        if bundle_key in bundles:
-            sz = int(bundles[bundle_key]["size_bytes"])
-            est_pat = re.compile(
-                rf"(bundleKey:\s*'{re.escape(bundle_key)}'.*?baseEstimateBytes:\s*)\d+",
-                flags=re.DOTALL,
-            )
-            new_js, count = est_pat.subn(rf"\g<1>{sz}", new_js, count=1)
-            if count != 1:
-                raise RuntimeError(f"Could not update baseEstimateBytes for {os_key} ({bundle_key}) in {js_path}")
-
-    js_path.write_text(new_js, encoding="utf-8")
-    print(f"[sync-metadata] Updated {js_path}", flush=True)
 
     packs_manifest_path = REPO_ROOT / "models" / "release_packs_manifest.json"
     packs_manifest = json.loads(packs_manifest_path.read_text(encoding="utf-8"))
@@ -498,7 +639,44 @@ def cmd_sync_metadata(args: argparse.Namespace) -> int:
     print(f"[sync-metadata] Wrote {sha_out}", flush=True)
 
     if args.upload_sha256sums and not args.dry_run:
-        _upload_release_files([sha_out])
+        _upload_release_files(
+            [*setup_paths, sha_out],
+            release_tag=args.release_tag,
+            repo=args.repo,
+        )
+    return 0
+
+
+def cmd_sync_setup_zips(args: argparse.Namespace) -> int:
+    artifacts_path = REPO_ROOT / "docs" / "website" / "installer_artifacts.json"
+    artifacts = json.loads(artifacts_path.read_text(encoding="utf-8"))
+    bundles = artifacts.get("bundles") or {}
+    _sync_customizer_js_bundles(bundles)
+
+    out_dir = args.out_dir.expanduser().resolve()
+    setup_meta, setup_paths = build_setup_zips(
+        out_dir,
+        artifacts,
+        release_tag=args.release_tag,
+        published=not args.dry_run,
+    )
+    artifacts["setup_installers"] = setup_meta
+    artifacts_path.write_text(json.dumps(artifacts, indent=2) + "\n", encoding="utf-8")
+    print(f"[sync-setup-zips] Updated {artifacts_path}", flush=True)
+
+    packs_manifest_path = REPO_ROOT / "models" / "release_packs_manifest.json"
+    packs_manifest = json.loads(packs_manifest_path.read_text(encoding="utf-8"))
+    sha_out = (args.sha256sums_out or (out_dir / "SHA256SUMS.txt")).expanduser().resolve()
+    sha_out.parent.mkdir(parents=True, exist_ok=True)
+    sha_out.write_text(_format_sha256sums(artifacts, packs_manifest), encoding="utf-8")
+    print(f"[sync-setup-zips] Wrote {sha_out}", flush=True)
+
+    if not args.dry_run:
+        _upload_release_files(
+            [*setup_paths, sha_out],
+            release_tag=args.release_tag,
+            repo=args.repo,
+        )
     return 0
 
 
@@ -520,18 +698,33 @@ def main(argv: list[str] | None = None) -> int:
 
     p_sync = sub.add_parser(
         "sync-metadata",
-        help="Sync os-base-receipt-*.json checksums into installer_artifacts.json, website JS, and SHA256SUMS.txt.",
+        help="Sync os-base-receipt-*.json checksums into installer_artifacts.json, website JS, setup zips, and SHA256SUMS.txt.",
     )
     p_sync.add_argument("--receipts-dir", required=True, type=Path)
+    p_sync.add_argument("--setup-out-dir", default=None, type=Path)
     p_sync.add_argument("--sha256sums-out", default=None, type=Path)
+    p_sync.add_argument("--release-tag", default=RELEASE_TAG)
+    p_sync.add_argument("--repo", default=GITHUB_REPO)
     p_sync.add_argument("--upload-sha256sums", action="store_true")
     p_sync.add_argument("--dry-run", action="store_true")
+
+    p_setup = sub.add_parser(
+        "sync-setup-zips",
+        help="Build and upload universal SlicerDSpaceSetup-<OS>.zip packages plus updated SHA256SUMS.txt.",
+    )
+    p_setup.add_argument("--out-dir", required=True, type=Path)
+    p_setup.add_argument("--sha256sums-out", default=None, type=Path)
+    p_setup.add_argument("--release-tag", default=RELEASE_TAG)
+    p_setup.add_argument("--repo", default=GITHUB_REPO)
+    p_setup.add_argument("--dry-run", action="store_true")
 
     args = parser.parse_args(argv)
     if args.command == "build-atlas":
         return cmd_build_atlas(args)
     if args.command == "sync-metadata":
         return cmd_sync_metadata(args)
+    if args.command == "sync-setup-zips":
+        return cmd_sync_setup_zips(args)
     return cmd_repack_os_base(args)
 
 

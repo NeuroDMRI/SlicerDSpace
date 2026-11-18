@@ -137,12 +137,13 @@ Agent 会检查可用空间和已有资源，等你选择后再下载，并保�
 
 ## 安装
 
-### 方式一：官网可视化定制安装器（推荐临床用户）
+### 方式一：一键图形化安装引导扩展（GitHub Release 直下或官网预配置，推荐）
 
-访问 [SlicerDSpace 官网安装向导](https://neurodmri.github.io/SlicerDSpace/zh.html#start)（或 [英文版](https://neurodmri.github.io/SlicerDSpace/#start)），填写本机 **3D Slicer 5.10.0** 路径（默认位置可留空），一键下载定制安装脚本（`Install-SlicerDSpace.bat` / `.command` / `.sh`）：
-- **全功能底座默认一体内置**：包含基础预处理、`PNL` 自动脑掩膜权重、**Anatomical Priors 三大深度学习算法**（`DDSeg`、`DDParcel`、`DDSurfer` + FreeSurfer 表面图谱）、微结构（`DTI` / `Free-Water` / `NODDI` / `DKI`）、全脑纤维追踪（`CSD/ACT` / `UKF` / `SAF`）、`WMQL`、`TractCloud` 与连接组、Python 3.12 科学计算依赖、`UKFTractography` CLI 及三大原生运行环境（`MRtrix3 3.0.8`、`FSL 2602.0`、`FreeSurfer Surface Runtime`）。
-- **WMA 白质纤维图谱按需三选**：默认仅勾选标准 **`ORG` 图谱**（单文件 `< 2.0 GiB`），超大的 **`NABA`**（`~3 GB`）与 **`East-West`**（`~10 GB`）默认不勾选；若日常不用 WMA，可直接取消勾选 **WMA**（会自动一并关闭 `ORG`）。
-- **医院内网三选一加速**：内置 GitHub 国内加速镜像（`ghfast.top` / `gh-proxy.com` / 自定义前缀）、HTTP/HTTPS 代理与本地离线包目录选项；`upstream-only` 的 NITRC `IITmean_b0_256.nii.gz` 模板将在联网安装时自动拉取并校验。
+直接从 [GitHub Releases](https://github.com/NeuroDMRI/SlicerDSpace/releases) 下载对应平台的通用轻量引导包（**`SlicerDSpaceSetup-macOS.zip`** / **`SlicerDSpaceSetup-Windows.zip`** / **`SlicerDSpaceSetup-Linux.zip`**），或在 [SlicerDSpace 官网安装向导](https://neurodmri.github.io/SlicerDSpace/zh.html#start)（[英文版](https://neurodmri.github.io/SlicerDSpace/#start)）预先配置选项并下载（亦附带服务器命令行脚本备用）：
+- 在 **3D Slicer 5.10.0** 中通过 **View > Extensions Manager > 右上角小扳手 > Install Extension from File...** 选择该 `.zip` 导入并重启 Slicer；重启后会自动弹出 **SlicerDSpace Setup** 图形安装窗口并等待确认，点击 **`Start Install`** 后即开始安装。
+- **插件基础核心功能默认锁定内置**（约 `1.4–1.7 GB`）：包含基础预处理、`PNL` 自动脑掩膜权重、**Anatomical Priors 三大深度学习算法**（`DDSeg`、`DDParcel`、`DDSurfer` + FreeSurfer 表面图谱）、微结构（`DTI` / `Free-Water` / `NODDI` / `DKI`）、全脑纤维追踪（`CSD/ACT` / `UKF` / `SAF`）、`WMQL`、`TractCloud` 与连接组、Python 3.12 科学计算依赖、`UKFTractography` CLI 及三大原生运行环境（`MRtrix3 3.0.8`、`FSL 2602.0`、`FreeSurfer Surface Runtime`）。
+- **WMA 白质纤维图谱按需三选**：默认仅勾选标准 **`ORG` 图谱**（单文件 `< 2.0 GiB`），超大的 **`NABA`**（`~3 GB`）与 **`East-West`**（`~10 GB`）默认不勾选，可在安装弹窗内按需增减。
+- **多线程分片断点续传与网络加速**：内置 12 线程 HTTP Range 分片并发加速与断点续传，支持 GitHub 下载加速镜像（`ghfast.top` / `gh-proxy.com` / 自定义前缀）、HTTP/HTTPS 代理与本地离线包目录选项；`upstream-only` 的 NITRC `IITmean_b0_256.nii.gz` 模板将在联网安装时自动拉取并校验。
 - 后续在 Slicer 内切换或补用任意未装 WMA 图谱（`ORG` / `NABA` / `East-West`）时，弹窗一键热下载或从本地目录导入即可，无需重装扩展或重启 Slicer。
 
 ### 方式二：手工安装各系统精简底座包 + 独立 WMA 图谱包

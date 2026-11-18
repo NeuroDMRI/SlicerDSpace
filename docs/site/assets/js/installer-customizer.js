@@ -761,7 +761,7 @@
     '            em = slicer.app.extensionsManagerModel()',
     '            if em and em.isExtensionInstalled("SlicerDSpace"): return',
     '        except Exception: pass',
-    '        qt.QTimer.singleShot(600, lambda: show_setup_dialog(auto_start=True))',
+    '        qt.QTimer.singleShot(600, lambda: show_setup_dialog(auto_start=bool(CONFIG.get("auto_start", False))))',
     'class SlicerDSpaceSetupWidget(ScriptedLoadableModuleWidget):',
     '    def setup(self):',
     '        ScriptedLoadableModuleWidget.setup(self)',
@@ -1058,6 +1058,7 @@
       proxy_url: String(state.proxyUrl || '').trim(),
       offline_dir: String(state.offlineDir || '').trim(),
       check_script_dir: state.checkScriptDir !== false,
+      auto_start: Boolean(state.autoStart),
       language: 'en',
       artifacts: ARTIFACTS
     };
@@ -1249,6 +1250,7 @@
       proxyUrl: '',
       offlineDir: '',
       checkScriptDir: true,
+      autoStart: false,
       moreOpen: false,
       previewOpen: false
     };
@@ -1282,7 +1284,7 @@
       html.push('<div class="ic-top">');
       html.push('<div class="ic-top-copy">');
       html.push('<h3 class="ic-heading">' + t('One-Click Graphical Setup', '一键图形化安装器') + '</h3>');
-      html.push('<p class="ic-sub">' + t('Base workflows and anatomical priors are included; import the tiny setup .zip inside 3D Slicer 5.10.0 to install without any terminal.', '核心功能与解剖先验模型均默认内置；在 3D Slicer 5.10.0 中导入极小的引导包即可全自动装完，全程无需打开终端或命令行。') + '</p>');
+      html.push('<p class="ic-sub">' + t('Base workflows and anatomical priors are included; import the tiny setup .zip inside 3D Slicer 5.10.0 to review options and install without any terminal.', '核心功能与解剖先验模型均默认内置；在 3D Slicer 5.10.0 中导入极小的引导包即可图形化确认并一键装完，全程无需打开终端或命令行。') + '</p>');
       html.push('</div></div>');
 
       html.push('<div class="ic-os-row">');
@@ -1340,7 +1342,7 @@
       html.push('<div class="ic-steps">');
       html.push('<span class="ic-step-item"><span class="ic-step-num">1.</span>' + t('Download setup <strong>.zip</strong> below', '下载下方 <strong>一键引导包 (.zip)</strong>') + '</span>');
       html.push('<span class="ic-step-item"><span class="ic-step-num">2.</span>' + t('Open 3D Slicer › Extensions Manager › wrench icon › <strong>Install from file…</strong> &amp; restart', '打开 <strong>3D Slicer</strong> › 右上角 <strong>Extensions Manager</strong> › 右上角小扳手 <strong>Install from file…</strong> 选中并重启') + '</span>');
-      html.push('<span class="ic-step-item"><span class="ic-step-num">3.</span>' + t('Auto-wizard finishes setup', '重启后自动弹窗装完，全程 0 命令') + '</span>');
+      html.push('<span class="ic-step-item"><span class="ic-step-num">3.</span>' + t('Setup wizard opens on restart — click <strong>Start Install</strong>', '重启后自动弹出安装向导，确认选项后点击 <strong>Start Install</strong>') + '</span>');
       html.push('</div>');
 
       html.push('<div class="ic-bar">');

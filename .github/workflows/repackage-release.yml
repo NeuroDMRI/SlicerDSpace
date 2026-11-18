@@ -4,13 +4,19 @@ on:
   workflow_dispatch:
     inputs:
       phase:
-        description: "Phase to execute: 'os-bases' (repack code into all 3 OS base packages + sync website) or 'atlases'"
+        description: "Phase to execute: 'os-bases' (repack code into all 3 OS base packages + sync website), 'setup-zips' (build & upload 3 universal SlicerDSpaceSetup zips + SHA256SUMS), or 'atlases'"
         required: true
         type: choice
         default: "os-bases"
         options:
           - "os-bases"
+          - "setup-zips"
           - "atlases"
+      release_tag:
+        description: "Release tag to update (used by setup-zips)"
+        required: false
+        type: string
+        default: "v0.1.1"
       os_targets:
         description: "JSON array of OS targets when phase is 'os-bases'"
         required: false
@@ -112,20 +118,27 @@ jobs:
         with:
           python-version: "3.12"
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
       - uses: actions/download-artifact@v4
         with:
           pattern: os-base-receipt-*
           path: ${{ runner.temp }}/receipts
           merge-multiple: true
 
-      - name: Sync Release SHA256SUMS.txt, website metadata & GitHub Pages
+      - name: Sync Release SHA256SUMS.txt, setup zips, website metadata & GitHub Pages
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           git pull --rebase origin main
           python .github/scripts/repackage_release_assets.py sync-metadata \
             --receipts-dir "${{ runner.temp }}/receipts" \
+            --setup-out-dir "${{ runner.temp }}/setup-zips" \
             --sha256sums-out "${{ runner.temp }}/SHA256SUMS.txt" \
+            --release-tag "${{ inputs.release_tag }}" \
+            --repo "${GITHUB_REPOSITORY}" \
             --upload-sha256sums
           python scripts/build_website_locales.py
           python -I Testing/Website/check_site.py
@@ -133,7 +146,47 @@ jobs:
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git add docs/website/installer_artifacts.json docs/site/assets/js/installer-customizer.js docs/site/zh.html
-            git commit -m "chore(release): sync repacked v0.1.1 OS base checksums to website"
+            git commit -m "chore(release): sync repacked ${{ inputs.release_tag }} checksums and setup zips to website"
+            git push origin HEAD:main
+            gh workflow run pages.yml --repo "$GITHUB_REPOSITORY"
+          fi
+
+  publish-setup-zips:
+    if: github.event.inputs.phase == 'setup-zips'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          lfs: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Build & upload 3 universal SlicerDSpaceSetup-<OS>.zip packages + SHA256SUMS.txt
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git pull --rebase origin main
+          python .github/scripts/repackage_release_assets.py sync-setup-zips \
+            --out-dir "${{ runner.temp }}/setup-zips" \
+            --sha256sums-out "${{ runner.temp }}/SHA256SUMS.txt" \
+            --release-tag "${{ inputs.release_tag }}" \
+            --repo "${GITHUB_REPOSITORY}"
+          python scripts/build_website_locales.py
+          python -I Testing/Website/check_site.py
+          if [ -n "$(git status --porcelain docs/website/installer_artifacts.json docs/site/)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add docs/website/installer_artifacts.json docs/site/assets/js/installer-customizer.js docs/site/zh.html
+            git commit -m "chore(release): publish ${{ inputs.release_tag }} universal SlicerDSpaceSetup zips"
             git push origin HEAD:main
             gh workflow run pages.yml --repo "$GITHUB_REPOSITORY"
           fi

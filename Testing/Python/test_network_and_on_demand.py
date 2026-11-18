@@ -234,6 +234,12 @@ class InstallerScriptBuilderTests(unittest.TestCase):
             "      offlineDir: '/custom/offline',\n"
             "      language: 'zh',\n"
             "    });\n"
+            "    const zGeneric = await ic.buildSetupZip({\n"
+            "      os,\n"
+            "      wmaEnabled: true,\n"
+            "      wmaAtlases: ['wma_org'],\n"
+            "      autoStart: false,\n"
+            "    });\n"
             "    const script = ic.buildScript({\n"
             "      os,\n"
             "      wmaEnabled: true,\n"
@@ -243,7 +249,12 @@ class InstallerScriptBuilderTests(unittest.TestCase):
             "      offlineDir: '/custom/offline',\n"
             "      language: 'zh',\n"
             "    });\n"
-            "    out.push({ os, b64: Buffer.from(z).toString('base64'), script });\n"
+            "    out.push({\n"
+            "      os,\n"
+            "      b64: Buffer.from(z).toString('base64'),\n"
+            "      b64Generic: Buffer.from(zGeneric).toString('base64'),\n"
+            "      script,\n"
+            "    });\n"
             "  }\n"
             "  process.stdout.write(JSON.stringify(out));\n"
             "})().catch((err) => { console.error(err); process.exit(1); });\n"
@@ -255,10 +266,12 @@ class InstallerScriptBuilderTests(unittest.TestCase):
             check=True,
         )
         rows = json.loads(proc.stdout)
+        artifacts_doc = json.loads((REPO_ROOT / "docs" / "website" / "installer_artifacts.json").read_text(encoding="utf-8"))
+        bundles_doc = artifacts_doc["bundles"]
         expected_hashes = {
-            "macos": "aa634ea07b6e4708f8d53091d9dc726a6441e1b52cf74198031959bc28a4648b",
-            "windows": "80999ea3caf471ea320ba3d39877ae6877cf12c0d364916243beb1f687d28cc6",
-            "linux": "729895ff7c3103d75a9104d4c99ee86cf5173f936d81b39f42ae97c73c91cb59",
+            "macos": bundles_doc["macos_arm64_base"]["sha256"],
+            "windows": bundles_doc["windows_x64_base"]["sha256"],
+            "linux": bundles_doc["linux_x64_base"]["sha256"],
         }
         expected_s4ext_os = {"macos": "macosx", "windows": "win", "linux": "linux"}
 
@@ -310,6 +323,16 @@ class InstallerScriptBuilderTests(unittest.TestCase):
                     self.assertTrue(all(ord(ch) < 128 or ch == "·" for ch in py_src))
                     self.assertIn(expected_hashes[os_key], py_src)
                     self.assertIn("https://ghfast.top/", py_src)
+                    self.assertIn('"auto_start":false', py_src)
+                    self.assertIn('auto_start=bool(CONFIG.get("auto_start", False))', py_src)
+
+                raw_generic = base64.b64decode(row["b64Generic"])
+                with zipfile.ZipFile(io.BytesIO(raw_generic), "r") as zfg:
+                    self.assertIsNone(zfg.testzip())
+                    generic_py = zfg.read(py_rel).decode("utf-8")
+                    self.assertIn('"auto_start":false', generic_py)
+                    self.assertIn('"selected_packs":["wma_org"]', generic_py)
+                    self.assertIn(expected_hashes[os_key], generic_py)
 
                 cli_block = row["script"].split("# __SLICERDSPACE_PY_BEGIN__", 1)[1].split("# __SLICERDSPACE_PY_END__", 1)[0]
                 ast.parse(cli_block)
@@ -422,6 +445,214 @@ class InstallerScriptBuilderTests(unittest.TestCase):
         finally:
             srv.shutdown()
             srv.server_close()
+
+    def test_setup_extension_startup_opens_dialog_without_auto_starting(self) -> None:
+        node_bin = shutil.which("node")
+        if node_bin is None:
+            self.skipTest("node is not installed in PATH")
+
+        import types
+
+        js_path = REPO_ROOT / "docs" / "site" / "assets" / "js" / "installer-customizer.js"
+        for label, node_state_js in (
+            ("website_customizer_defaults", "{ os: 'macos', wmaEnabled: true, wmaAtlases: ['wma_org'], mirrorPrefix: 'https://ghfast.top/' }"),
+            ("release_generic_defaults", "{ os: 'macos', wmaEnabled: true, wmaAtlases: ['wma_org'], autoStart: false }"),
+        ):
+            with self.subTest(mode=label):
+                node_script = (
+                    "const ic = require(process.argv[1]);\n"
+                    f"const files = ic.buildSetupExtensionFiles({node_state_js});\n"
+                    "const py = files.find((f) => f.name.endsWith('SlicerDSpaceSetup.py')).data;\n"
+                    "process.stdout.write(py);\n"
+                )
+                py_src = subprocess.run([node_bin, "-e", node_script, str(js_path)], capture_output=True, text=True, check=True).stdout
+
+                class _Signal:
+                    def __init__(self) -> None:
+                        self.callbacks: list[object] = []
+
+                    def connect(self, fn: object) -> None:
+                        self.callbacks.append(fn)
+
+                    def emit(self, *a: object) -> None:
+                        for cb in list(self.callbacks):
+                            cb(*a)
+
+                class _Widget:
+                    def __init__(self, *args: object, **_kwargs: object) -> None:
+                        self.args = args
+                        self.text = str(args[0]) if args and isinstance(args[0], str) else ""
+                        self.checked = False
+                        self.enabled = True
+                        self.visible = True
+                        self.shown = False
+                        self.currentIndex = 0
+                        self.items: list[tuple[str, object]] = []
+                        self.clicked = _Signal()
+                        self.finished = _Signal()
+                        self.currentIndexChanged = _Signal()
+
+                    def __getattr__(self, name: str) -> object:
+                        if name in {"setSpacing", "setWordWrap", "setStyleSheet", "setWindowTitle", "setMinimumWidth", "addWidget", "addLayout", "addStretch", "setContentsMargins", "addRow", "setRange", "setValue", "setReadOnly", "setMaximumHeight", "setPlaceholderText", "setDefault", "appendPlainText", "raise_", "activateWindow"}:
+                            return lambda *a, **kw: None
+                        raise AttributeError(name)
+
+                    def show(self) -> None:
+                        self.shown = True
+
+                    def close(self) -> None:
+                        self.shown = False
+
+                    def setText(self, val: object) -> None:
+                        self.text = str(val)
+
+                    def setChecked(self, val: bool) -> None:
+                        self.checked = bool(val)
+
+                    def isChecked(self) -> bool:
+                        return self.checked
+
+                    def setEnabled(self, val: bool) -> None:
+                        self.enabled = bool(val)
+
+                    def setVisible(self, val: bool) -> None:
+                        self.visible = bool(val)
+
+                    def addItem(self, lbl: str, val: object = None) -> None:
+                        self.items.append((lbl, val))
+
+                    def itemData(self, idx: int) -> object:
+                        return self.items[idx][1] if 0 <= idx < len(self.items) else ""
+
+                    def setCurrentIndex(self, idx: int) -> None:
+                        self.currentIndex = idx
+
+                single_shots: list[tuple[int, object]] = []
+                dialogs_created: list[_Widget] = []
+                buttons_created: list[_Widget] = []
+
+                class _Dialog(_Widget):
+                    def __init__(self, *args: object, **kwargs: object) -> None:
+                        super().__init__(*args, **kwargs)
+                        dialogs_created.append(self)
+
+                class _Button(_Widget):
+                    def __init__(self, *args: object, **kwargs: object) -> None:
+                        super().__init__(*args, **kwargs)
+                        buttons_created.append(self)
+
+                class _Timer:
+                    def __init__(self, *_a: object) -> None:
+                        self.timeout = _Signal()
+                        self.running = False
+
+                    def setInterval(self, _ms: int) -> None:
+                        pass
+
+                    def start(self) -> None:
+                        self.running = True
+
+                    def stop(self) -> None:
+                        self.running = False
+
+                    @staticmethod
+                    def singleShot(ms: int, fn: object) -> None:
+                        single_shots.append((ms, fn))
+
+                qt_stub = types.ModuleType("qt")
+                for cname in ("QVBoxLayout", "QHBoxLayout", "QFormLayout", "QLabel", "QGroupBox", "QCheckBox", "QComboBox", "QLineEdit", "QWidget", "QProgressBar", "QPlainTextEdit"):
+                    setattr(qt_stub, cname, _Widget)
+                qt_stub.QDialog = _Dialog
+                qt_stub.QPushButton = _Button
+                qt_stub.QTimer = _Timer
+                qt_stub.QApplication = type("_App", (), {"processEvents": staticmethod(lambda: None)})
+                qt_stub.QFileDialog = type("_FD", (), {"getExistingDirectory": staticmethod(lambda *a: "")})
+
+                slicer_stub = types.ModuleType("slicer")
+                slm_stub = types.ModuleType("slicer.ScriptedLoadableModule")
+
+                class _BaseSLM:
+                    def __init__(self, parent: object) -> None:
+                        self.parent = parent
+
+                slm_stub.ScriptedLoadableModule = _BaseSLM
+                slm_stub.ScriptedLoadableModuleWidget = _BaseSLM
+                slicer_stub.ScriptedLoadableModule = slm_stub
+                slicer_stub.util = type("_Util", (), {"mainWindow": staticmethod(lambda: None)})()
+                em_stub = type("_EM", (), {"isExtensionInstalled": staticmethod(lambda _name: False)})()
+                slicer_stub.app = type(
+                    "_SlicerApp",
+                    (),
+                    {
+                        "applicationVersion": "5.10.0",
+                        "majorVersion": 5,
+                        "minorVersion": 10,
+                        "commandOptions": staticmethod(lambda: type("_Opt", (), {"noMainWindow": False})()),
+                        "connect": staticmethod(lambda *_a: None),
+                        "extensionsManagerModel": staticmethod(lambda: em_stub),
+                    },
+                )()
+
+                saved_mods = {k: sys.modules.get(k) for k in ("qt", "slicer", "slicer.ScriptedLoadableModule")}
+                ns: dict[str, object] = {}
+                try:
+                    sys.modules["qt"] = qt_stub
+                    sys.modules["slicer"] = slicer_stub
+                    sys.modules["slicer.ScriptedLoadableModule"] = slm_stub
+                    exec(compile(py_src, "SlicerDSpaceSetup.py", "exec"), ns)
+                    parent_obj = types.SimpleNamespace()
+                    setup_mod = ns["SlicerDSpaceSetup"](parent_obj)
+                    setup_mod._onStartupCompleted()
+                    self.assertEqual(len(single_shots), 1)
+                    _, startup_cb = single_shots.pop(0)
+                    startup_cb()
+                    self.assertEqual(len(dialogs_created), 1)
+                    self.assertTrue(dialogs_created[0].shown)
+                    self.assertEqual(single_shots, [])
+                    start_btns = [b for b in buttons_created if b.text == "Start Install"]
+                    self.assertEqual(len(start_btns), 1)
+                    self.assertTrue(start_btns[0].enabled)
+
+                    # Calling show_setup_dialog(auto_start=True) explicitly schedules _on_start.
+                    ns["_ACTIVE_DIALOG"] = None
+                    ns["show_setup_dialog"](auto_start=True)
+                    self.assertEqual(len(single_shots), 1)
+                finally:
+                    for k, orig in saved_mods.items():
+                        if orig is None:
+                            sys.modules.pop(k, None)
+                        else:
+                            sys.modules[k] = orig
+
+    def test_repackage_script_builds_three_release_setup_zips(self) -> None:
+        node_bin = shutil.which("node")
+        if node_bin is None:
+            self.skipTest("node is not installed in PATH")
+
+        import importlib.util
+
+        script_path = REPO_ROOT / ".github" / "scripts" / "repackage_release_assets.py"
+        spec = importlib.util.spec_from_file_location("repackage_release_assets_test", script_path)
+        assert spec is not None and spec.loader is not None
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        artifacts = json.loads((REPO_ROOT / "docs" / "website" / "installer_artifacts.json").read_text(encoding="utf-8"))
+        packs_manifest = json.loads((REPO_ROOT / "models" / "release_packs_manifest.json").read_text(encoding="utf-8"))
+        with tempfile.TemporaryDirectory() as td:
+            setup_meta, written = mod.build_setup_zips(Path(td), artifacts, published=False)
+            self.assertEqual([p.name for p in written], [
+                "SlicerDSpaceSetup-Windows.zip",
+                "SlicerDSpaceSetup-Linux.zip",
+                "SlicerDSpaceSetup-macOS.zip",
+            ])
+            self.assertEqual(set(setup_meta.keys()), {"windows", "linux", "macos"})
+            merged_artifacts = dict(artifacts)
+            merged_artifacts["setup_installers"] = setup_meta
+            sums_text = mod._format_sha256sums(merged_artifacts, packs_manifest)
+            for os_key in ("windows", "linux", "macos"):
+                rec = setup_meta[os_key]
+                self.assertIn(f"{rec['sha256']}  {rec['filename']}", sums_text)
 
 
 if __name__ == "__main__":

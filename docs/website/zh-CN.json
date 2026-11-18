@@ -1304,5 +1304,10 @@
   "Run independent subjects in parallel with": "多受试者并行批处理可调用",
   "using your chosen analysis flags.": "并附带所选分析参数。",
   "From SlicerDSpace GitHub Releases (": "前往 SlicerDSpace GitHub Releases（",
-  "), download the archive for your system:": "）下载对应系统的发布包："
+  "), download the archive for your system:": "）下载对应系统的发布包：",
+  "), download either the lightweight setup bootstrapper for your system (": "）下载对应系统的轻量图形安装引导包（",
+  ") or the standalone OS Base archive (": "）或完整系统底座包（",
+  ", select the downloaded archive, and restart Slicer. If you installed a": "，选中下载的压缩包并重启 Slicer；若安装的是",
+  "archive, the setup window opens automatically after restart so you can review options and click": "引导包，重启后会自动弹出安装向导窗口，确认所需选项并点击",
+  "; afterwards open": "完成安装，随后打开"
 }

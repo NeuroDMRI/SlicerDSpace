@@ -818,6 +818,53 @@ class ModelAssetIntegrityDoesNotAbortTheDoctorScanTest(unittest.TestCase):
             self.assertEqual(status.status, "missing")
             self.assertIn("Integrity check failed", status.details["notes"])
 
+    def test_cuda_probe_is_cached_across_auto_device_targets_in_one_doctor_scan(self) -> None:
+        from types import SimpleNamespace
+        from shared.environment import run_environment_doctor
+
+        self.assertGreaterEqual(DEPENDENCY_PROBE_TIMEOUT_SECONDS, 90)
+        cuda_probe_calls = []
+
+        def fake_run(cmd, *args, **kwargs):
+            code = cmd[2] if len(cmd) > 2 else ""
+            if "torch.cuda.is_available" in code:
+                cuda_probe_calls.append((cmd, kwargs.get("timeout")))
+                return SimpleNamespace(
+                    returncode=0,
+                    stdout=json.dumps(
+                        {
+                            "torch_importable": True,
+                            "cuda_available": False,
+                            "device_count": 0,
+                            "torch_version": "2.2.2",
+                            "error": None,
+                        }
+                    ),
+                    stderr="",
+                )
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            config = EnvironmentDoctorConfig(
+                targets=("segmentation", "surface", "tractcloud"),
+                repo_root=Path(tmp),
+                ddseg_device="auto",
+                surface_device="auto",
+                tractcloud_device="auto",
+                python_executable=Path(sys.executable),
+                tractcloud_python_executable=Path(sys.executable),
+            )
+            with mock.patch("shared.environment.subprocess.run", side_effect=fake_run):
+                result = run_environment_doctor(config)
+
+        self.assertEqual(len(cuda_probe_calls), 1, cuda_probe_calls)
+        device_statuses = [s for s in result.statuses if s.kind == "device"]
+        self.assertEqual(len(device_statuses), 3)
+        self.assertTrue(
+            all(s.status == "available" and s.details.get("resolved_device") == "cpu" for s in device_statuses),
+            [(s.key, s.status, s.details) for s in device_statuses],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

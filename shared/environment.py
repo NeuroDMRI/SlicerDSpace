@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextvars
 import importlib.metadata
 import importlib.util
 import json
@@ -22,8 +23,13 @@ from shared.model_assets import model_asset_candidates, model_asset_path_or_none
 # whether a package imports, or whether CUDA is available) and must never
 # block the caller indefinitely: environment discovery can run on Slicer's
 # main thread, and a hung probe (e.g. a broken CUDA driver making `import
-# torch` never return) would freeze the whole application.
-DEPENDENCY_PROBE_TIMEOUT_SECONDS = 30
+# torch` never return) would freeze the whole application. Allow enough headroom
+# for cold-start dynamic-library verification on macOS/Windows (first import of torch).
+DEPENDENCY_PROBE_TIMEOUT_SECONDS = 90
+_ACTIVE_CUDA_PROBE_CACHE: contextvars.ContextVar[Optional[dict[Any, Any]]] = contextvars.ContextVar(
+    "_ACTIVE_CUDA_PROBE_CACHE",
+    default=None,
+)
 
 
 def _probe_timeout_error(exc: subprocess.TimeoutExpired) -> str:
@@ -2027,46 +2033,57 @@ def _check_cuda_device(
     python_path = python_executable or Path(sys.executable)
     resolved_python_paths = tuple(path.expanduser().resolve() for path in python_path_entries if path)
     prepend_paths = [*_bundled_prepend_paths(python_path), *(path.as_posix() for path in resolved_python_paths)]
-    probe = (
-        "import json, sys; "
-        f"sys.path[:0] = {prepend_paths!r}; "
-        "payload = {'torch_importable': False, 'cuda_available': False, 'device_count': 0, 'torch_version': None, 'error': None}; "
-        "\ntry:\n"
-        "    import torch\n"
-        "    payload['torch_importable'] = True\n"
-        "    payload['torch_version'] = getattr(torch, '__version__', None)\n"
-        "    payload['cuda_available'] = bool(torch.cuda.is_available())\n"
-        "    payload['device_count'] = int(torch.cuda.device_count()) if payload['cuda_available'] else 0\n"
-        "except Exception as exc:\n"
-        "    payload['error'] = str(exc)\n"
-        "print(json.dumps(payload))"
+    probe_cache = _ACTIVE_CUDA_PROBE_CACHE.get()
+    cache_key = (
+        "cuda_runtime_probe",
+        python_path.as_posix(),
+        tuple(path.as_posix() for path in resolved_python_paths),
     )
-    try:
-        completed = subprocess.run(
-            [python_path.as_posix(), "-c", probe],
-            check=True,
-            capture_output=True,
-            timeout=DEPENDENCY_PROBE_TIMEOUT_SECONDS,
-            env=python_tool_environment(python_path),
-            **text_subprocess_kwargs(),
+    if probe_cache is not None and cache_key in probe_cache:
+        details = dict(probe_cache[cache_key])
+    else:
+        probe = (
+            "import json, sys; "
+            f"sys.path[:0] = {prepend_paths!r}; "
+            "payload = {'torch_importable': False, 'cuda_available': False, 'device_count': 0, 'torch_version': None, 'error': None}; "
+            "\ntry:\n"
+            "    import torch\n"
+            "    payload['torch_importable'] = True\n"
+            "    payload['torch_version'] = getattr(torch, '__version__', None)\n"
+            "    payload['cuda_available'] = bool(torch.cuda.is_available())\n"
+            "    payload['device_count'] = int(torch.cuda.device_count()) if payload['cuda_available'] else 0\n"
+            "except Exception as exc:\n"
+            "    payload['error'] = str(exc)\n"
+            "print(json.dumps(payload))"
         )
-        details = _parse_json_probe_output(completed.stdout)
-    except subprocess.TimeoutExpired as exc:
-        details = {
-            "torch_importable": False,
-            "cuda_available": False,
-            "device_count": 0,
-            "torch_version": None,
-            "error": _probe_timeout_error(exc),
-        }
-    except Exception as exc:
-        details = {
-            "torch_importable": False,
-            "cuda_available": False,
-            "device_count": 0,
-            "torch_version": None,
-            "error": str(exc),
-        }
+        try:
+            completed = subprocess.run(
+                [python_path.as_posix(), "-c", probe],
+                check=True,
+                capture_output=True,
+                timeout=DEPENDENCY_PROBE_TIMEOUT_SECONDS,
+                env=python_tool_environment(python_path),
+                **text_subprocess_kwargs(),
+            )
+            details = _parse_json_probe_output(completed.stdout)
+        except subprocess.TimeoutExpired as exc:
+            details = {
+                "torch_importable": False,
+                "cuda_available": False,
+                "device_count": 0,
+                "torch_version": None,
+                "error": _probe_timeout_error(exc),
+            }
+        except Exception as exc:
+            details = {
+                "torch_importable": False,
+                "cuda_available": False,
+                "device_count": 0,
+                "torch_version": None,
+                "error": str(exc),
+            }
+        if probe_cache is not None:
+            probe_cache[cache_key] = dict(details)
 
     requested_index: Optional[int] = None
     if ":" in device:
@@ -2464,7 +2481,11 @@ def run_environment_doctor(config: EnvironmentDoctorConfig, *, _probe_cache=None
             return checked
         return replace(checked, targets=spec.targets, required=spec.required)
 
-    statuses = tuple(check(spec) for spec in specs)
+    token = _ACTIVE_CUDA_PROBE_CACHE.set(_probe_cache)
+    try:
+        statuses = tuple(check(spec) for spec in specs)
+    finally:
+        _ACTIVE_CUDA_PROBE_CACHE.reset(token)
     if 'surface_postprocess' in targets:
         from shared.surface_runtime import inspect_surface_runtime
         surface = inspect_surface_runtime(config.postprocess_runtime, config.postprocess_freesurfer_home,

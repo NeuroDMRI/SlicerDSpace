@@ -24,8 +24,8 @@ OFFLINE_DIR_ENV = "SLICERDSPACE_OFFLINE_DIR"
 
 PRESET_MIRRORS: tuple[tuple[str, str, str, str], ...] = (
     ("direct", "", "GitHub Official (Direct)", "GitHub 官方直连"),
-    ("ghfast", "https://ghfast.top/", "China Mirror 1 (ghfast.top)", "国内加速镜像 1 (ghfast.top)"),
-    ("ghproxy", "https://gh-proxy.com/", "China Mirror 2 (gh-proxy.com)", "国内加速镜像 2 (gh-proxy.com)"),
+    ("ghfast", "https://ghfast.top/", "Mirror 1 (ghfast.top)", "加速镜像 1 (ghfast.top)"),
+    ("ghproxy", "https://gh-proxy.com/", "Mirror 2 (gh-proxy.com)", "加速镜像 2 (gh-proxy.com)"),
 )
 
 _GITHUB_ORIGIN_PREFIXES = (

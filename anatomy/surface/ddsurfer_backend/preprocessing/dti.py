@@ -78,7 +78,8 @@ def run(args):
     folder = args.output_dir.resolve()
     stem = args.subject
     cache = StageCache(folder / '.stages.json', related_files, validate_output)
-    slicer = [str(slicer_launcher(args.slicer_path)), '--launch']
+    launcher = slicer_launcher(args.slicer_path)
+    slicer = [] if (sys.platform == 'darwin' and launcher.parent.name == 'MacOS') else [str(launcher), '--launch']
     helper_env = dict(os.environ)
     for name, value in (('OMP_NUM_THREADS', '1'), ('OPENBLAS_NUM_THREADS', '1'),
                         ('MKL_NUM_THREADS', '1'), ('NUMEXPR_NUM_THREADS', '1'),
@@ -97,7 +98,9 @@ def run(args):
         if tool:
             implementation += tool
         else:
-            implementation += [Path(command[1])] if helper else [Path(command[0]), Path(command[2])]
+            implementation += [Path(command[1])] if helper else (
+                [Path(command[0])] if not slicer else [Path(command[0]), Path(command[2])]
+            )
         cache.run(key, list(inputs) + implementation, outputs, action, settings=list(map(str, command)))
 
     # PythonSlicer builds its own runtime; it must not inherit an outer Python home.

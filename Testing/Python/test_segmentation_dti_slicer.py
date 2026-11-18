@@ -39,8 +39,11 @@ class DtiSlicerCommandConstructionTest(unittest.TestCase):
                         run_dti_feature_extraction(root / "data.nii.gz", root / "bvals", root / "bvecs",
                                                    root / "output", root, None)
                 self.assertEqual(run.call_count, 2)
-                self.assertEqual(run.call_args_list[0].args[0][:3],
-                                 [str(launcher), "--launch", str(cli / ("DWIConvert" + suffix))])
+                if sys.platform == "darwin" and layout == "macos":
+                    self.assertEqual(run.call_args_list[0].args[0][:1], [str(cli / ("DWIConvert" + suffix))])
+                else:
+                    self.assertEqual(run.call_args_list[0].args[0][:3],
+                                     [str(launcher), "--launch", str(cli / ("DWIConvert" + suffix))])
                 teem = run.call_args_list[1].args[0]
                 self.assertEqual(teem[0], str(python))
                 self.assertEqual(Path(teem[1]), REPO_ROOT / "shared/teem_dti.py")

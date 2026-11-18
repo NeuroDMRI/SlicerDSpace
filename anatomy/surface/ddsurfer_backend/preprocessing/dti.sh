@@ -248,8 +248,13 @@ if [[ -n "${CONDA_PREFIX:-}" ]]; then
   prepend_ld_library_path "$CONDA_PREFIX/lib"
 fi
 
-BRAINS_FIT=("$SLICER_LAUNCHER" --launch "$CLI_MODULES_PATH2/BRAINSFit")
-RESAMPLE_VOLUME=("$SLICER_LAUNCHER" --launch "$CLI_MODULES_PATH2/ResampleScalarVectorDWIVolume")
+if [[ "$(uname -s)" == "Darwin" && "$(basename "$(dirname "$SLICER_LAUNCHER")")" == "MacOS" ]]; then
+  BRAINS_FIT=("$CLI_MODULES_PATH2/BRAINSFit")
+  RESAMPLE_VOLUME=("$CLI_MODULES_PATH2/ResampleScalarVectorDWIVolume")
+else
+  BRAINS_FIT=("$SLICER_LAUNCHER" --launch "$CLI_MODULES_PATH2/BRAINSFit")
+  RESAMPLE_VOLUME=("$SLICER_LAUNCHER" --launch "$CLI_MODULES_PATH2/ResampleScalarVectorDWIVolume")
+fi
 
 log "Starting DTI processing for $SUBJECT_ID"
 log "Raw diffusion input: $DWI_SOURCE"

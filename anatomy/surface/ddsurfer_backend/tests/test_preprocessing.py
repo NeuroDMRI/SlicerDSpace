@@ -235,32 +235,42 @@ class PythonSlicerLayoutTests(unittest.TestCase):
             launcher = self.tree(app, 'Contents/MacOS/Slicer')
             launcher.chmod(0o755)
             self.tree(app, 'Contents/bin/PythonSlicer')
+            linux_home = root / 'LinuxSlicer'
+            linux_launcher = self.tree(linux_home, 'Slicer')
+            linux_launcher.chmod(0o755)
+            self.tree(linux_home, 'bin/PythonSlicer')
             core = root / 'core'; core.mkdir()
             for name in ('BRAINSFit', 'ResampleScalarVectorDWIVolume'):
                 (core / name).write_text('fixture')
-            folder = root / 'dti'; folder.mkdir()
-            args = argparse.Namespace(subject='x', output_dir=folder, slicer_path=app, core_cli=core,
-                                      reference_image=files['mask'], mask_flip=1, jobs=1, minimal=True, **files)
-            launched = []
+            for idx, (platform_name, slicer_root, expected_prefix) in enumerate([
+                ('darwin', app, [str(core / 'BRAINSFit')]),
+                ('linux', linux_home, [str(linux_launcher), '--launch', str(core / 'BRAINSFit')]),
+            ]):
+                folder = root / f'dti_{idx}'; folder.mkdir()
+                args = argparse.Namespace(subject='x', output_dir=folder, slicer_path=slicer_root, core_cli=core,
+                                          reference_image=files['mask'], mask_flip=1, jobs=1, minimal=True, **files)
+                launched = []
 
-            def command(argv, **kwargs):
-                if argv[1:2] == ['--launch']:
-                    launched.append(argv[0])
-                    raise RuntimeError('stop after the first Slicer command')
-                if Path(argv[1]).name == 'nhdr_write.py':
-                    values = {argv[i]: argv[i + 1] for i in range(2, len(argv), 2)}
-                    write_nhdr(values['--nifti'], values.get('--bval'), values.get('--bvec'), values['--nhdr'])
-                    return
-                outputs = [argv[-1]]
-                if Path(argv[1]).name == 'teem_dti.py':
-                    outputs = argv[-2:] + [item.partition('=')[2] for i, item in enumerate(argv) if argv[i - 1] == '--scalar']
-                for output in outputs:
-                    sitk.WriteImage(sitk.GetImageFromArray(np.ones((5, 6, 7), np.float32)), output, True)
+                def command(argv, **kwargs):
+                    if Path(argv[0]).name == 'BRAINSFit' or argv[1:2] == ['--launch']:
+                        launched.append(list(argv))
+                        raise RuntimeError('stop after the first Slicer command')
+                    if Path(argv[1]).name == 'nhdr_write.py':
+                        values = {argv[i]: argv[i + 1] for i in range(2, len(argv), 2)}
+                        write_nhdr(values['--nifti'], values.get('--bval'), values.get('--bvec'), values['--nhdr'])
+                        return
+                    outputs = [argv[-1]]
+                    if Path(argv[1]).name == 'teem_dti.py':
+                        outputs = argv[-2:] + [item.partition('=')[2] for i, item in enumerate(argv) if argv[i - 1] == '--scalar']
+                    for output in outputs:
+                        sitk.WriteImage(sitk.GetImageFromArray(np.ones((5, 6, 7), np.float32)), output, True)
 
-            with patch('preprocessing.dti.subprocess.run', side_effect=command):
-                with self.assertRaises(RuntimeError):
-                    dti.run(args)
-            self.assertEqual(launched[:1], [str(launcher)])
+                with patch.object(dti.sys, 'platform', platform_name), \
+                        patch('preprocessing.dti.subprocess.run', side_effect=command):
+                    with self.assertRaises(RuntimeError):
+                        dti.run(args)
+                self.assertTrue(launched)
+                self.assertEqual(launched[0][:len(expected_prefix)], expected_prefix)
 
     def test_f2_dti_sh_finds_the_macos_app_layout_of_pythonslicer(self):
         text = (ROOT / 'preprocessing/dti.sh').read_text()

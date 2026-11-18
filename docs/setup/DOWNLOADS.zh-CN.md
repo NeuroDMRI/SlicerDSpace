@@ -11,7 +11,7 @@
 仅使用插件，不需要下载网站源码、历史性能报告或测试代码。它们保留在完整仓库中，
 供开发、审计和论文复现使用，不应成为普通用户安装的前提。
 `v0.1.1` 将超大型 WMA 白质图谱与各平台扩展底座包解耦，告别 8–10 卷手工合并：
-1. **官网可视化安装脚本定制器**（<https://neurodmri.github.io/SlicerDSpace/zh.html#start>）：一键生成双击脚本（`Install-SlicerDSpace.bat` / `.command` / `.sh`），自动安装平台底座包与按需勾选的 WMA 图谱（默认勾选 **`ORG`**；大体积的 **`NABA`** 与 **`East-West`** 默认不勾选；取消勾选 **WMA** 则全部跳过），内置国内镜像（`ghfast.top` / `gh-proxy.com`）、代理与本地离线包目录选项，并支持在 Slicer 内切换图谱时热补装。
+1. **官网可视化安装脚本定制器**（<https://neurodmri.github.io/SlicerDSpace/zh.html#start>）：一键生成双击脚本（`Install-SlicerDSpace.bat` / `.command` / `.sh`），自动安装平台底座包与按需勾选的 WMA 图谱（默认勾选 **`ORG`**；大体积的 **`NABA`** 与 **`East-West`** 默认不勾选；取消勾选 **WMA** 则全部跳过），内置加速镜像（`ghfast.top` / `gh-proxy.com`）、代理与本地离线包目录选项，并支持在 Slicer 内切换图谱时热补装。
 2. **精简统一平台底座包**（`SlicerDSpace-v0.1.1-Windows-x64.zip`、`SlicerDSpace-v0.1.1-Linux-x64.tar.gz`、`SlicerDSpace-v0.1.1-macOS-arm64.tar.gz`）：完整内置模块本体（`depends NA`）、Python 3.12 依赖库（`bundled-python/`）、原生运行组件（`MRtrix3 3.0.8`、`FSL 2602.0`、`FreeSurfer Surface Runtime`，不含任何个人 FreeSurfer 激活密钥）、`UKFTractography` CLI、算法源码与全部非 WMA 模型权重（`DDSeg`、`DDParcel`、`DDSurfer`、`TractCloud` 与 `PNL` 权重 [不含 `upstream-only` NITRC 模板 `IITmean_b0_256.nii.gz`]）。Intel (`x86_64`) Mac 真机硬件尚未实测验证。
 3. **独立按需 WMA 白质纤维图谱包**：`SlicerDSpace-v0.1.1-WMA-ORG.tar.gz`（单文件 `< 2.0 GiB`）、`SlicerDSpace-v0.1.1-WMA-NABA.tar.gz.001`..、`SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz.001`..（仅超大包按 `2.0 GiB` 上限分卷，由安装脚本或 Slicer 自动合包解压）。
 

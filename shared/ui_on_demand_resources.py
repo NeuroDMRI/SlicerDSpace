@@ -308,7 +308,7 @@ def build_network_and_offline_panel(parent: Any, *, zh: bool) -> tuple[Any, Call
 
     settings = load_network_settings()
     group = qt.QGroupBox(
-        _text(zh, "Network acceleration, proxy & offline pack folder", "网络加速镜像 / 代理 / 本地离线包目录"),
+        _text(zh, "Network acceleration, proxy and offline pack folder", "网络加速镜像 / 代理 / 本地离线包目录"),
         parent,
     )
     form = qt.QFormLayout(group)
@@ -465,7 +465,7 @@ def maybe_prompt_on_demand_install(owner: Any, *, force: bool = False) -> bool:
         for item in missing
     )
     sub_note = (
-        "无需重装扩展或重启 3D Slicer；如使用医院内网，可在下方选择国内镜像、代理或本地离线包目录。"
+        "无需重装扩展或重启 3D Slicer；可在下方选择加速镜像、代理或本地离线包目录。"
         if zh
         else "No extension reinstall or Slicer restart needed. Configure a mirror, proxy, or local offline pack folder below if needed."
     )
@@ -478,7 +478,7 @@ def maybe_prompt_on_demand_install(owner: Any, *, force: bool = False) -> bool:
 
     buttons = qt.QDialogButtonBox(dialog)
     install_btn = buttons.addButton(
-        _text(zh, "Download & Install", "一键下载补齐"),
+        _text(zh, "Download and Install", "一键下载补齐"),
         qt.QDialogButtonBox.AcceptRole,
     )
     later_btn = buttons.addButton(

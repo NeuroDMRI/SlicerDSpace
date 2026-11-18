@@ -10,6 +10,11 @@ on:
         options:
           - "atlases"
           - "os-bases"
+      os_targets:
+        description: "JSON array of OS targets when phase is 'os-bases'"
+        required: false
+        type: string
+        default: '["windows-x64","linux-x64","macos-arm64"]'
 
 permissions:
   contents: write
@@ -59,7 +64,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [windows-x64, linux-x64, macos-arm64]
+        target: ${{ fromJson(inputs.os_targets || '["windows-x64","linux-x64","macos-arm64"]') }}
     steps:
       - name: Free runner disk space
         run: |

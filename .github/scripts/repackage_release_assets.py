@@ -290,7 +290,7 @@ def cmd_repack_os_base(args: argparse.Namespace) -> int:
                     shutil.copyfileobj(src_fh, dst_fh, length=1024 * 1024)
     else:
         written_dirs: set[str] = set()
-        with tarfile.open(old_archive, "r:gz") as old_tf, tarfile.open(
+        with tarfile.open(old_archive, "r:*") as old_tf, tarfile.open(
             tmp_new, mode="w:gz", format=tarfile.PAX_FORMAT, compresslevel=6
         ) as new_tf:
             for member in old_tf:

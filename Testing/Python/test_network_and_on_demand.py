@@ -310,6 +310,110 @@ class InstallerScriptBuilderTests(unittest.TestCase):
                 ast.parse(cli_block)
                 self.assertIn(expected_hashes[os_key], cli_block)
 
+    def test_parallel_range_downloader_migrates_legacy_part_and_verifies_sha256(self) -> None:
+        node_bin = shutil.which("node")
+        if node_bin is None:
+            self.skipTest("node is not installed in PATH")
+
+        import http.server
+        import threading
+        import types
+
+        js_path = REPO_ROOT / "docs" / "site" / "assets" / "js" / "installer-customizer.js"
+        node_script = (
+            "const ic = require(process.argv[1]);\n"
+            "const files = ic.buildSetupExtensionFiles({ os: 'linux', wmaEnabled: true, wmaAtlases: ['wma_org'], language: 'zh' });\n"
+            "const py = files.find((f) => f.name.endsWith('SlicerDSpaceSetup.py')).data;\n"
+            "process.stdout.write(py);\n"
+        )
+        py_src = subprocess.run([node_bin, "-e", node_script, str(js_path)], capture_output=True, text=True, check=True).stdout
+
+        qt_stub = types.ModuleType("qt")
+        slicer_stub = types.ModuleType("slicer")
+        slm_stub = types.ModuleType("slicer.ScriptedLoadableModule")
+        slm_stub.ScriptedLoadableModule = object
+        slm_stub.ScriptedLoadableModuleWidget = object
+        slicer_stub.ScriptedLoadableModule = slm_stub
+        saved_mods = {k: sys.modules.get(k) for k in ("qt", "slicer", "slicer.ScriptedLoadableModule")}
+        ns: dict[str, object] = {}
+        try:
+            sys.modules["qt"] = qt_stub
+            sys.modules["slicer"] = slicer_stub
+            sys.modules["slicer.ScriptedLoadableModule"] = slm_stub
+            exec(compile(py_src, "SlicerDSpaceSetup.py", "exec"), ns)
+        finally:
+            for k, orig in saved_mods.items():
+                if orig is None:
+                    sys.modules.pop(k, None)
+                else:
+                    sys.modules[k] = orig
+
+        chunk_sz = int(ns["_PAR_CHUNK"])
+        self.assertEqual(int(ns["_PAR_WORKERS"]), 12)
+        payload = (b"SLICERDSPACE-TEST-BLOCK!" * ((chunk_sz * 5 // 2) // 24 + 1))[: chunk_sz * 5 // 2]
+        expected_sha = hashlib.sha256(payload).hexdigest()
+        recorded_ranges: list[str] = []
+        range_lock = threading.Lock()
+
+        class RangeHandler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, format: str, *args: object) -> None:  # noqa: A002
+                pass
+
+            def do_GET(self) -> None:  # noqa: N802
+                rng = str(self.headers.get("Range") or "")
+                with range_lock:
+                    recorded_ranges.append(rng)
+                if not rng.startswith("bytes="):
+                    self.send_response(200)
+                    self.send_header("Content-Length", str(len(payload)))
+                    self.end_headers()
+                    self.wfile.write(payload)
+                    return
+                s_str, e_str = rng[6:].split("-", 1)
+                start = int(s_str)
+                end = int(e_str) if e_str else len(payload) - 1
+                data = payload[start : end + 1]
+                self.send_response(206)
+                self.send_header("Content-Range", f"bytes {start}-{start + len(data) - 1}/{len(payload)}")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+        srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), RangeHandler)
+        srv_thread = threading.Thread(target=srv.serve_forever, daemon=True)
+        srv_thread.start()
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                dest = Path(td) / "pkg.bin"
+                part = Path(td) / "pkg.bin.part"
+                meta = Path(td) / "pkg.bin.part.json"
+                # Seed legacy sequential partial download covering chunk 0 + partial chunk 1.
+                part.write_bytes(payload[: chunk_sz + 524288])
+                progress_events: list[tuple[int, int, str]] = []
+                logs: list[str] = []
+                got = ns["_download"](
+                    [f"http://127.0.0.1:{srv.server_address[1]}/pkg.bin"],
+                    dest,
+                    expected_sha256=expected_sha,
+                    expected_size=len(payload),
+                    allow_mirror=False,
+                    progress_cb=lambda d, t, n: progress_events.append((d, t, n)),
+                    log_cb=logs.append,
+                )
+                self.assertEqual(got, dest)
+                self.assertEqual(dest.read_bytes(), payload)
+                self.assertFalse(part.exists())
+                self.assertFalse(meta.exists())
+                self.assertIn("bytes=0-0", recorded_ranges)
+                self.assertIn(f"bytes={chunk_sz}-{chunk_sz * 2 - 1}", recorded_ranges)
+                self.assertIn(f"bytes={chunk_sz * 2}-{len(payload) - 1}", recorded_ranges)
+                self.assertNotIn(f"bytes=0-{chunk_sz - 1}", recorded_ranges)
+                self.assertTrue(any("Migrating 1/3 cached chunks" in line for line in logs))
+                self.assertTrue(progress_events and progress_events[-1][0] == len(payload))
+        finally:
+            srv.shutdown()
+            srv.server_close()
+
 
 if __name__ == "__main__":
     unittest.main()

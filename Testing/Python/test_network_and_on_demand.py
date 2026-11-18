@@ -289,7 +289,20 @@ class InstallerScriptBuilderTests(unittest.TestCase):
                     self.assertIn(f"os {expected_s4ext_os[os_key]}", s4ext_text)
 
                     py_src = zf.read(py_rel).decode("utf-8")
-                    ast.parse(py_src)
+                    tree = ast.parse(py_src)
+                    put_calls = [
+                        node
+                        for node in ast.walk(tree)
+                        if isinstance(node, ast.Call)
+                        and isinstance(node.func, ast.Attribute)
+                        and node.func.attr == "put"
+                    ]
+                    self.assertGreater(len(put_calls), 0)
+                    for node in put_calls:
+                        self.assertEqual(len(node.args), 1)
+                        self.assertIsInstance(node.args[0], ast.Tuple)
+                        self.assertEqual(len(node.args[0].elts), 2)
+                    self.assertIn("Network Mirror && Offline Directory", py_src)
                     self.assertIn(expected_hashes[os_key], py_src)
                     self.assertIn("https://ghfast.top/", py_src)
 

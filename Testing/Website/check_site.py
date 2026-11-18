@@ -104,18 +104,30 @@ for bundle in (INSTALLER_ARTIFACTS.get("bundles") or {}).values():
     for part in bundle.get("parts") or ():
         if part.get("url"):
             ALLOWED_URLS.add(part["url"])
+for url in ((INSTALLER_ARTIFACTS.get("iit_template") or {}).get("urls") or ()):
+    ALLOWED_URLS.add(url)
 
 with open(os.path.join(ROOT, "models", "release_packs_manifest.json"), encoding="utf-8") as packs_file:
     RELEASE_PACKS = json.load(packs_file)
 for pack in (RELEASE_PACKS.get("packs") or {}).values():
     if pack.get("url"):
         ALLOWED_URLS.add(pack["url"])
+    for part in pack.get("parts") or ():
+        if part.get("url"):
+            ALLOWED_URLS.add(part["url"])
     for urec in (pack.get("upstream_files") or {}).values():
         ALLOWED_URLS.update(urec.get("urls") or ())
+for bundle in (RELEASE_PACKS.get("bundles") or {}).values():
+    if bundle.get("url"):
+        ALLOWED_URLS.add(bundle["url"])
+    for part in bundle.get("parts") or ():
+        if part.get("url"):
+            ALLOWED_URLS.add(part["url"])
 
 ALLOWED_URLS.update({
     REPO + "/releases/download/",
     REPO + "/releases/download/v0.1.1",
+    "https://www.nitrc.org/frs/download.php/11290/IITmean_b0_256.nii.gz",
     "https://github.com/",
     "https://raw.githubusercontent.com/",
     "https://objects.githubusercontent.com/",

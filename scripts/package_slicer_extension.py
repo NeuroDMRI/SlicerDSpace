@@ -250,7 +250,27 @@ def _stage_cli_modules(extension_root: Path, cli_modules_dir: Path | None, slice
     return copied
 
 
-def _stage_model_assets(extension_root: Path, model_assets_root: Path | None) -> dict[str, object] | None:
+def _parse_wma_atlases_arg(raw: str | Iterable[str] | None) -> tuple[str, ...]:
+    if raw is None:
+        return ("org", "east-west", "naba")
+    tokens = raw.split(",") if isinstance(raw, str) else list(raw)
+    cleaned = [tok.strip().lower() for tok in tokens if str(tok).strip()]
+    if not cleaned or cleaned == ["none"]:
+        return ()
+    valid = {"org", "east-west", "naba"}
+    invalid = [tok for tok in cleaned if tok not in valid]
+    if invalid:
+        raise ValueError(f"Unsupported WMA atlas names: {invalid}")
+    return tuple(dict.fromkeys(cleaned))
+
+
+def _stage_model_assets(
+    extension_root: Path,
+    model_assets_root: Path | None,
+    *,
+    include_wma_atlases: tuple[str, ...] = ("org", "east-west", "naba"),
+    include_upstream_only: bool = False,
+) -> dict[str, object] | None:
     if model_assets_root is None:
         return None
     src = model_assets_root.expanduser().resolve()
@@ -264,18 +284,27 @@ def _stage_model_assets(extension_root: Path, model_assets_root: Path | None) ->
     for prof in ("surface", "segmentation", "parcellation"):
         for rel in core_manifest["profiles"][prof]["required_paths"]:
             expected_hashes[rel] = core_manifest["asset_records"][rel]["sha256"]
-    for prof in ("pnl-cnn", "pnl-cnn-weights", "tractcloud"):
+    ext_profiles = ("pnl-cnn", "pnl-cnn-weights", "tractcloud") if include_upstream_only else ("pnl-cnn-weights", "tractcloud")
+    for prof in ext_profiles:
         for rel in ext_manifest["profiles"][prof].get("required_paths", ()):
-            expected_hashes[rel] = ext_manifest["asset_records"][rel]["sha256"]
+            rec = ext_manifest["asset_records"][rel]
+            if not include_upstream_only and rec.get("redistribution") == "upstream-only":
+                continue
+            expected_hashes[rel] = rec["sha256"]
 
     if (src / "surface/postprocessing/atlas.tar.gz").is_file():
         atlas_rel = "surface/postprocessing/atlas.tar.gz"
         expected_hashes[atlas_rel] = ext_manifest["asset_records"][atlas_rel]["sha256"]
 
-    wma_profiles = (
-        ("org", "wma"),
-        ("east-west", "wma-east-west"),
-        ("naba", "wma-naba"),
+    selected_wma = set(include_wma_atlases)
+    wma_profiles = tuple(
+        (family, prof_name)
+        for family, prof_name in (
+            ("org", "wma"),
+            ("east-west", "wma-east-west"),
+            ("naba", "wma-naba"),
+        )
+        if family in selected_wma
     )
     for _, prof_name in wma_profiles:
         prof_def = ext_manifest["profiles"][prof_name]
@@ -442,6 +471,8 @@ def package_extension(
     extra_runtime_dirs: list[Path] | None = None,
     cli_modules_dir: Path | None = None,
     model_assets_root: Path | None = None,
+    include_wma_atlases: tuple[str, ...] = ("org", "east-west", "naba"),
+    include_upstream_only: bool = False,
     sources_root: Path | None = None,
     python_site_packages: Path | None = None,
     python_version: str = "3.12",
@@ -468,7 +499,12 @@ def package_extension(
         extra_runtime_dirs=extra_runtime_dirs,
     )
     bundled_cli = _stage_cli_modules(root, cli_modules_dir, slicer_subdir)
-    bundled_assets = _stage_model_assets(root, model_assets_root)
+    bundled_assets = _stage_model_assets(
+        root,
+        model_assets_root,
+        include_wma_atlases=_parse_wma_atlases_arg(include_wma_atlases),
+        include_upstream_only=include_upstream_only,
+    )
     bundled_sources = _stage_sources(root, sources_root)
     bundled_python = _stage_python_site_packages(root, python_site_packages, python_version=python_version)
 
@@ -594,6 +630,16 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Additional runtime directory to copy into bundled-runtimes/ (repeatable).")
     parser.add_argument("--cli-modules-dir", type=Path, help="Companion CLI modules directory (e.g. UKFTractography).")
     parser.add_argument("--model-assets-root", type=Path, help="Verified model-assets root to bundle.")
+    parser.add_argument(
+        "--wma-atlases",
+        default="org,east-west,naba",
+        help="Comma-separated WMA atlases to bundle (org,east-west,naba) or 'none' to omit all WMA atlases.",
+    )
+    parser.add_argument(
+        "--include-upstream-only",
+        action="store_true",
+        help="Include upstream-only files (such as IITmean_b0_256.nii.gz) when building local non-release bundles.",
+    )
     parser.add_argument("--sources-root", type=Path, help="Verified algorithm-sources root (or downloads dir) to bundle.")
     parser.add_argument("--python-site-packages", type=Path, help="Prepared Slicer Python site-packages directory to bundle.")
     parser.add_argument("--python-version", default="3.12", help="Target Slicer Python major.minor version (default: 3.12).")
@@ -615,6 +661,8 @@ def main(argv: list[str] | None = None) -> int:
         extra_runtime_dirs=args.extra_runtime_dir,
         cli_modules_dir=args.cli_modules_dir,
         model_assets_root=args.model_assets_root,
+        include_wma_atlases=_parse_wma_atlases_arg(args.wma_atlases),
+        include_upstream_only=args.include_upstream_only,
         sources_root=args.sources_root,
         python_site_packages=args.python_site_packages,
         python_version=args.python_version,

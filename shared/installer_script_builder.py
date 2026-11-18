@@ -15,13 +15,14 @@ RELEASE_TAG = "v0.1.1"
 RELEASE_BASE_URL = f"https://github.com/NeuroDMRI/SlicerDSpace/releases/download/{RELEASE_TAG}"
 
 SUPPORTED_OS = ("windows", "macos", "linux")
-SUPPORTED_MODES = ("modular", "all_in_one")
-PACK_ORDER = ("brain_mask_pnl", "anatomy", "surface", "tractcloud", "wma_org")
+SUPPORTED_MODES = ("base", "modular", "all_in_one")
+PACK_ORDER = ("wma_org", "wma_naba", "wma_east_west")
 
-# Maps pack IDs to user_config run_defaults targets / bundle backends.
-PACK_TO_TARGETS = {
-    "anatomy": ("segmentation", "parcellation"),
-    "surface": ("surface", "saf"),
+DEFAULT_IIT_TEMPLATE: dict[str, Any] = {
+    "relpath": "brain_mask/pnl_cnn_torch/IITmean_b0_256.nii.gz",
+    "sha256": "2bb1a7bbe448702033a515e76164df6472828422ecef5cb4f996d91ec126dead",
+    "size_bytes": 7830929,
+    "urls": ["https://www.nitrc.org/frs/download.php/11290/IITmean_b0_256.nii.gz"],
 }
 
 _BOOTSTRAP_BODY = textwrap.dedent(
@@ -29,17 +30,13 @@ _BOOTSTRAP_BODY = textwrap.dedent(
     import hashlib
     import json
     import os
-    import platform
     import shutil
-    import stat
     import subprocess
     import sys
-    import tarfile
     import tempfile
     import urllib.error
     import urllib.request
-    import zipfile
-    from pathlib import Path, PurePosixPath
+    from pathlib import Path
 
     _GITHUB_PREFIXES = (
         "https://github.com/",
@@ -55,7 +52,7 @@ _BOOTSTRAP_BODY = textwrap.dedent(
     def _sha256(path: Path) -> str:
         h = hashlib.sha256()
         with path.open("rb") as fh:
-            for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            for chunk in iter(lambda: fh.read(1048576), b""):
                 h.update(chunk)
         return h.hexdigest()
 
@@ -80,7 +77,7 @@ _BOOTSTRAP_BODY = textwrap.dedent(
                 out.append(u)
         return out
 
-    def _open_url(req, timeout=90):
+    def _open_url(req, timeout=120):
         proxy = str(CONFIG.get("proxy_url", "") or "").strip()
         if proxy:
             opener = urllib.request.build_opener(
@@ -122,7 +119,7 @@ _BOOTSTRAP_BODY = textwrap.dedent(
                     next_log = done + 32 * 1024 * 1024
                     with part.open("ab" if append else "wb") as fh:
                         while True:
-                            chunk = resp.read(1024 * 1024)
+                            chunk = resp.read(1048576)
                             if not chunk:
                                 break
                             fh.write(chunk)
@@ -162,29 +159,27 @@ _BOOTSTRAP_BODY = textwrap.dedent(
                 dirs.append(here)
         return dirs
 
-    def _acquire_spec(spec, cache_dir: Path) -> Path:
+    def _acquire_spec(spec, cache_dir: Path):
         filename = spec["filename"]
         expected_sha = str(spec.get("sha256") or "")
         expected_size = int(spec.get("size_bytes") or 0)
         parts = spec.get("parts") or []
         dirs = _search_dirs()
 
-        # 1. Single archive in offline/script directories
         for d in dirs:
             cand = d / filename
             if cand.is_file() and (not expected_sha or _sha256(cand) == expected_sha):
                 _log(f"Found verified offline archive: {cand}")
-                return cand
+                return cand, []
 
-        # 2. Merged archive already cached
         cached = cache_dir / filename
         if cached.is_file() and expected_sha and _sha256(cached) == expected_sha:
             _log(f"Reusing verified cache: {cached}")
-            return cached
+            return cached, [cached]
 
-        # 3. Split volumes (.001, .002, ...)
         if parts:
             part_paths = []
+            downloaded_parts = []
             for pspec in parts:
                 pname = pspec["filename"]
                 psha = str(pspec.get("sha256") or "")
@@ -203,6 +198,7 @@ _BOOTSTRAP_BODY = textwrap.dedent(
                         expected_sha256=psha,
                         expected_size=psize,
                     )
+                    downloaded_parts.append(found)
                 part_paths.append(found)
             _log(f"Merging {len(part_paths)} volumes into {filename}...")
             merging = cache_dir / (filename + ".merging")
@@ -215,21 +211,30 @@ _BOOTSTRAP_BODY = textwrap.dedent(
                 raise RuntimeError(f"Merged archive SHA-256 mismatch: {filename}")
             os.replace(merging, cached)
             _log(f"Merged and verified {filename}")
-            return cached
+            return cached, [*downloaded_parts, cached]
 
-        # 4. Online single archive download
-        return _download(
+        if not spec.get("url"):
+            raise RuntimeError(f"Download URL is not configured yet for {filename}")
+        archive = _download(
             spec["url"],
             cached,
             expected_sha256=expected_sha,
             expected_size=expected_size,
         )
+        return archive, [archive]
+
+    def _cleanup_temp_files(paths):
+        for p in paths:
+            try:
+                Path(p).unlink(missing_ok=True)
+            except OSError:
+                pass
 
     def _strip_quarantine_macos(path: Path):
         if sys.platform == "darwin" and shutil.which("xattr"):
             subprocess.run(["xattr", "-dr", "com.apple.quarantine", str(path)], capture_output=True)
 
-    def _install_extension_in_slicer(slicer_exe: str, archive_path: Path, extra_extensions=()):
+    def _install_extension_in_slicer(slicer_exe: str, archive_path: Path):
         _strip_quarantine_macos(archive_path)
         receipt = Path(tempfile.mkdtemp(prefix="slicerdspace-inst-")) / "receipt.json"
         helper = receipt.with_name("install_ext.py")
@@ -239,20 +244,13 @@ _BOOTSTRAP_BODY = textwrap.dedent(
             "def _run():\n"
             "    archive = sys.argv[1]\n"
             "    receipt = Path(sys.argv[2])\n"
-            "    extras = [x for x in (sys.argv[3].split(',') if len(sys.argv) > 3 else []) if x]\n"
             "    try:\n"
             "        em = slicer.app.extensionsManagerModel()\n"
             "        em.setInteractive(False)\n"
             "        meta = {'extensionname': 'SlicerDSpace', 'depends': 'NA', 'slicer_revision': str(em.slicerRevision), 'os': str(em.slicerOs), 'arch': str(em.slicerArch)}\n"
             "        ok = bool(em.installExtension('SlicerDSpace', meta, archive, False, True))\n"
-            "        extra_results = {}\n"
-            "        for name in extras:\n"
-            "            try:\n"
-            "                extra_results[name] = True if em.isExtensionInstalled(name) else bool(em.installExtensionFromServer(name, False))\n"
-            "            except Exception as exc:\n"
-            "                extra_results[name] = str(exc)\n"
             "        paths = [str(p) for p in em.extensionModulePaths('SlicerDSpace')]\n"
-            "        receipt.write_text(json.dumps({'installed': ok, 'module_paths': paths, 'extras': extra_results}), encoding='utf-8')\n"
+            "        receipt.write_text(json.dumps({'installed': ok, 'module_paths': paths}), encoding='utf-8')\n"
             "        slicer.app.exit(0 if ok else 1)\n"
             "    except Exception as exc:\n"
             "        receipt.write_text(json.dumps({'installed': False, 'error': str(exc), 'traceback': traceback.format_exc()}), encoding='utf-8')\n"
@@ -260,7 +258,7 @@ _BOOTSTRAP_BODY = textwrap.dedent(
             "qt.QTimer.singleShot(500, _run)\n",
             encoding="utf-8",
         )
-        cmd = [slicer_exe, "--no-splash", "--no-main-window", "--python-script", str(helper), str(archive_path), str(receipt), ",".join(extra_extensions)]
+        cmd = [slicer_exe, "--no-splash", "--no-main-window", "--python-script", str(helper), str(archive_path), str(receipt)]
         env = os.environ.copy()
         if sys.platform.startswith("linux") and not env.get("DISPLAY"):
             xvfb = shutil.which("xvfb-run")
@@ -268,7 +266,7 @@ _BOOTSTRAP_BODY = textwrap.dedent(
                 cmd = [xvfb, "-a", *cmd]
             else:
                 env.setdefault("QT_QPA_PLATFORM", "offscreen")
-        _log("Installing extension into 3D Slicer (headless)...")
+        _log("Installing SlicerDSpace base extension into 3D Slicer...")
         proc = subprocess.run(cmd, env=env)
         if proc.returncode != 0 or not receipt.is_file():
             raise RuntimeError(f"Slicer extension installation failed with exit code {proc.returncode}")
@@ -296,32 +294,77 @@ _BOOTSTRAP_BODY = textwrap.dedent(
                 return c.resolve()
         raise FileNotFoundError("Could not locate installed SlicerDSpace module directory")
 
+    def _sync_iit_template(iit_spec: dict, work_dir: Path, bundled_assets: Path, asset_root: Path):
+        if not iit_spec:
+            return
+        relpath = str(iit_spec.get("relpath") or "brain_mask/pnl_cnn_torch/IITmean_b0_256.nii.gz")
+        expected_sha = str(iit_spec.get("sha256") or "")
+        expected_size = int(iit_spec.get("size_bytes") or 0)
+        targets = []
+        if bundled_assets.is_dir():
+            targets.append(bundled_assets / relpath)
+        targets.append(asset_root / relpath)
+        if all(t.is_file() and _sha256(t) == expected_sha for t in targets):
+            return
+
+        source_file = None
+        for existing in targets:
+            if existing.is_file() and _sha256(existing) == expected_sha:
+                source_file = existing
+                break
+        if source_file is None:
+            for d in _search_dirs():
+                for cand in (d / relpath, d / Path(relpath).name):
+                    if cand.is_file() and _sha256(cand) == expected_sha:
+                        _log(f"Using local NITRC IIT template: {cand}")
+                        source_file = cand
+                        break
+                if source_file is not None:
+                    break
+        temp_dl = None
+        if source_file is None:
+            try:
+                temp_dl = work_dir / Path(relpath).name
+                source_file = _download(
+                    iit_spec.get("urls") or (),
+                    temp_dl,
+                    expected_sha256=expected_sha,
+                    expected_size=expected_size,
+                    allow_mirror=False,
+                )
+            except Exception as exc:
+                _log(f"[WARN] Could not fetch optional NITRC IIT template ({exc}); PNL mask will fetch or prompt on first run.")
+                return
+        try:
+            for dst in targets:
+                if dst.is_file() and _sha256(dst) == expected_sha:
+                    continue
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source_file, dst)
+        finally:
+            if temp_dl is not None:
+                temp_dl.unlink(missing_ok=True)
+
     def main() -> int:
         slicer_exe = str(os.environ.get("SLICERDSPACE_RESOLVED_SLICER") or CONFIG.get("slicer_path") or "").strip()
         if not slicer_exe or not Path(slicer_exe).exists():
             raise FileNotFoundError(f"3D Slicer executable not found: {slicer_exe}")
 
         os_name = CONFIG["os"]
-        mode = CONFIG["mode"]
         artifacts = CONFIG["artifacts"]
         work_dir = Path(tempfile.gettempdir()) / "slicerdspace-installer-cache"
         work_dir.mkdir(parents=True, exist_ok=True)
 
-        # Acquire and install base extension
-        if mode == "all_in_one":
-            bundle_key = {"windows": "windows_x64_all_in_one", "linux": "linux_x64_all_in_one", "macos": "macos_arm64_all_in_one"}[os_name]
-        else:
-            bundle_key = "macos_arm64_core" if os_name == "macos" else "core_scripted"
+        bundle_key = {
+            "windows": "windows_x64_base",
+            "linux": "linux_x64_base",
+            "macos": "macos_arm64_base",
+        }[os_name]
         ext_spec = artifacts["bundles"][bundle_key]
-        ext_archive = _acquire_spec(ext_spec, work_dir)
-        extras = ()
-        if mode == "modular" and os_name != "macos":
-            needed_ext = []
-            sel = set(CONFIG.get("selected_packs") or ())
-            if sel & {"brain_mask_pnl", "anatomy", "surface", "tractcloud"}:
-                needed_ext.append("PyTorch")
-            extras = tuple(needed_ext)
-        receipt = _install_extension_in_slicer(slicer_exe, ext_archive, extra_extensions=extras)
+        ext_archive, ext_temps = _acquire_spec(ext_spec, work_dir)
+        receipt = _install_extension_in_slicer(slicer_exe, ext_archive)
+        _cleanup_temp_files(ext_temps)
+
         module_root = _find_module_root(slicer_exe, receipt)
         _log(f"SlicerDSpace extension installed at: {module_root}")
 
@@ -338,7 +381,6 @@ _BOOTSTRAP_BODY = textwrap.dedent(
             offline_assets_dir=CONFIG.get("offline_dir", ""),
         )
 
-        # Pass network environment vars to child setup helpers
         if CONFIG.get("mirror_prefix"):
             os.environ["SLICERDSPACE_MIRROR_PREFIX"] = _clean_mirror(CONFIG["mirror_prefix"])
         if CONFIG.get("proxy_url"):
@@ -351,79 +393,67 @@ _BOOTSTRAP_BODY = textwrap.dedent(
         custom_assets_dir = str(CONFIG.get("model_assets_dir") or "").strip()
         asset_root = configured_model_assets_root(custom_assets_dir or None)
         asset_root.mkdir(parents=True, exist_ok=True)
-        selected_packs = list(CONFIG.get("selected_packs") or ())
+        bundled_assets = module_root.parents[2] / "bundled-model-assets"
 
-        if mode == "modular":
-            packs = artifacts.get("packs") or {}
-            dirs = _search_dirs()
-            for pack_id in selected_packs:
-                pspec = packs.get(pack_id)
-                if not pspec:
+        if custom_assets_dir and bundled_assets.is_dir() and bundled_assets.resolve() != asset_root.resolve():
+            _log(f"Staging bundled base model weights -> {asset_root}")
+            for src_file in bundled_assets.rglob("*"):
+                if not src_file.is_file():
                     continue
-                archive = _acquire_spec(pspec, work_dir)
-                _log(f"Extracting {pspec['filename']} -> {asset_root}")
-                extract_modular_pack(archive, asset_root, expected_sha256=str(pspec.get("sha256") or ""))
-                for rel, urec in (pspec.get("upstream_files") or {}).items():
-                    dest_file = asset_root / rel
-                    if dest_file.is_file() and _sha256(dest_file) == urec["sha256"]:
-                        continue
-                    imported = False
-                    for d in dirs:
-                        for cand in (d / rel, d / Path(rel).name):
-                            if cand.is_file() and _sha256(cand) == urec["sha256"]:
-                                dest_file.parent.mkdir(parents=True, exist_ok=True)
-                                shutil.copy2(cand, dest_file)
-                                imported = True
-                                break
-                        if imported:
-                            break
-                    if not imported:
-                        _download(
-                            urec["urls"],
-                            dest_file,
-                            expected_sha256=urec["sha256"],
-                            expected_size=int(urec.get("size_bytes") or 0),
-                            allow_mirror=False,
-                        )
+                rel = src_file.relative_to(bundled_assets)
+                dst = asset_root / rel
+                if dst.exists():
+                    continue
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    os.link(src_file, dst)
+                except OSError:
+                    shutil.copy2(src_file, dst)
+
+        _sync_iit_template(artifacts.get("iit_template") or {}, work_dir, bundled_assets, asset_root)
+
+        selected_packs = [p for p in ("wma_org", "wma_naba", "wma_east_west") if p in set(CONFIG.get("selected_packs") or ())]
+        packs = artifacts.get("packs") or {}
+        for pack_id in selected_packs:
+            pspec = packs.get(pack_id)
+            if not pspec:
+                continue
+            archive, pack_temps = _acquire_spec(pspec, work_dir)
+            _log(f"Extracting {pspec['filename']} -> {asset_root}")
+            extract_modular_pack(archive, asset_root, expected_sha256=str(pspec.get("sha256") or ""))
+            _cleanup_temp_files(pack_temps)
 
         cfg = load_user_config()
         cfg["ui"]["language"] = CONFIG.get("language", "en")
         deps = cfg.setdefault("external_dependencies", {})
         if custom_assets_dir:
             deps["model_assets_dir"] = str(asset_root)
-        if "tractcloud" in selected_packs:
-            deps["tractcloud_data_dir"] = str((asset_root / "bundles/tractcloud").resolve())
-        if "wma_org" in selected_packs:
-            deps["wma_atlas_dir"] = str((asset_root / "bundles/wma").resolve())
-        if "brain_mask_pnl" in selected_packs:
-            deps["pnl_mask_model_dir"] = str((asset_root / "brain_mask/pnl_cnn_torch").resolve())
+        else:
+            deps.pop("model_assets_dir", None)
+        deps.pop("wma_atlas_dir", None)
 
         defaults = cfg.setdefault("run_defaults", {})
-        targets = ["microstructure", "tractography", "connectome"]
-        if "anatomy" in selected_packs:
-            targets.extend(["segmentation", "parcellation"])
-        if "surface" in selected_packs:
-            targets.extend(["surface", "saf"])
-        if "tractcloud" in selected_packs or "wma_org" in selected_packs:
-            targets.append("bundles")
-            bundle_list = []
-            if "wma_org" in selected_packs:
-                bundle_list.append("wma")
-            if "tractcloud" in selected_packs:
-                bundle_list.append("tractcloud")
-            bundle_list.append("wmql")
-            defaults["bundle_backend"] = ",".join(bundle_list)
+        targets = [
+            "microstructure",
+            "segmentation",
+            "parcellation",
+            "surface",
+            "tractography",
+            "saf",
+            "bundles",
+            "tractcloud",
+            "connectome",
+        ]
+        if selected_packs:
+            targets.append("wma")
+            defaults["bundle_backend"] = "wma,tractcloud,wmql"
+            defaults["wma_atlas"] = (
+                "org" if "wma_org" in selected_packs else ("naba" if "wma_naba" in selected_packs else "east-west")
+            )
+        else:
+            defaults["bundle_backend"] = "tractcloud,wmql"
         defaults["targets"] = list(dict.fromkeys(targets))
         write_user_config(cfg)
-
-        if mode == "modular" and os_name != "macos":
-            setup_script = module_root / "scripts" / "setup_selected.py"
-            if setup_script.is_file():
-                _log("Completing platform Python/runtime dependencies via setup_selected.py...")
-                subprocess.run(
-                    [sys.executable, str(setup_script), "--targets", ",".join(defaults["targets"]), "--execute", "--accept-licences"],
-                    check=True,
-                )
 
         try:
             from shared.environment import EnvironmentDoctorConfig, run_environment_doctor
@@ -432,9 +462,9 @@ _BOOTSTRAP_BODY = textwrap.dedent(
                 EnvironmentDoctorConfig(
                     repo_root=module_root,
                     targets=tuple(defaults["targets"]),
-                    bundle_backend=defaults.get("bundle_backend", "wmql"),
-                    brain_mask_backend="provided" if ("brain_mask_pnl" not in selected_packs and mode == "modular") else "pnl_cnn",
-                    model_assets_dir=asset_root if (mode == "modular" or custom_assets_dir) else None,
+                    wma_atlas=defaults.get("wma_atlas", "org"),
+                    brain_mask_backend="pnl_cnn",
+                    model_assets_dir=asset_root if custom_assets_dir else None,
                     python_executable=Path(sys.executable),
                     slicer_executable=Path(slicer_exe),
                 )
@@ -457,7 +487,7 @@ def load_installer_artifacts(
     packs_manifest_path: Path | None = None,
     artifacts_path: Path | None = None,
 ) -> dict[str, Any]:
-    """Load merged pack & extension artifact metadata for script generation."""
+    """Load merged WMA atlas pack & OS base bundle metadata for script generation."""
 
     packs_manifest = load_release_packs_manifest(packs_manifest_path or RELEASE_PACKS_MANIFEST)
     packs = dict(packs_manifest.get("packs") or {})
@@ -467,39 +497,31 @@ def load_installer_artifacts(
     if art_file.is_file():
         extra = json.loads(art_file.read_text(encoding="utf-8"))
         bundles.update(extra.get("bundles") or {})
+        iit_template = dict(extra.get("iit_template") or DEFAULT_IIT_TEMPLATE)
+    else:
+        iit_template = dict(DEFAULT_IIT_TEMPLATE)
 
-    # Provide safe structural defaults if an artifact entry has not been populated yet.
     bundle_defaults = {
-        "core_scripted": {
-            "filename": f"SlicerDSpace-{RELEASE_TAG}-Core-Scripted.zip",
-            "url": f"{RELEASE_BASE_URL}/SlicerDSpace-{RELEASE_TAG}-Core-Scripted.zip",
+        "windows_x64_base": {
+            "filename": f"SlicerDSpace-{RELEASE_TAG}-Windows-x64.zip",
+            "url": f"{RELEASE_BASE_URL}/SlicerDSpace-{RELEASE_TAG}-Windows-x64.zip",
             "size_bytes": 0,
             "sha256": "",
+            "parts": [],
         },
-        "macos_arm64_core": {
-            "filename": f"SlicerDSpace-{RELEASE_TAG}-macOS-arm64-Core.tar.gz",
-            "url": f"{RELEASE_BASE_URL}/SlicerDSpace-{RELEASE_TAG}-macOS-arm64-Core.tar.gz",
+        "linux_x64_base": {
+            "filename": f"SlicerDSpace-{RELEASE_TAG}-Linux-x64.tar.gz",
+            "url": f"{RELEASE_BASE_URL}/SlicerDSpace-{RELEASE_TAG}-Linux-x64.tar.gz",
             "size_bytes": 0,
             "sha256": "",
+            "parts": [],
         },
-        "macos_arm64_all_in_one": {
+        "macos_arm64_base": {
             "filename": f"SlicerDSpace-{RELEASE_TAG}-macOS-arm64.tar.gz",
+            "url": f"{RELEASE_BASE_URL}/SlicerDSpace-{RELEASE_TAG}-macOS-arm64.tar.gz",
             "size_bytes": 0,
             "sha256": "",
-            "parts": [
-                {
-                    "filename": f"SlicerDSpace-{RELEASE_TAG}-macOS-arm64.tar.gz.001",
-                    "size_bytes": 0,
-                    "sha256": "",
-                    "url": f"{RELEASE_BASE_URL}/SlicerDSpace-{RELEASE_TAG}-macOS-arm64.tar.gz.001",
-                },
-                {
-                    "filename": f"SlicerDSpace-{RELEASE_TAG}-macOS-arm64.tar.gz.002",
-                    "size_bytes": 0,
-                    "sha256": "",
-                    "url": f"{RELEASE_BASE_URL}/SlicerDSpace-{RELEASE_TAG}-macOS-arm64.tar.gz.002",
-                },
-            ],
+            "parts": [],
         },
     }
     for key, val in bundle_defaults.items():
@@ -508,6 +530,7 @@ def load_installer_artifacts(
     return {
         "release_tag": packs_manifest.get("release_tag", RELEASE_TAG),
         "release_base_url": packs_manifest.get("release_base_url", RELEASE_BASE_URL),
+        "iit_template": iit_template,
         "packs": packs,
         "bundles": bundles,
     }
@@ -518,17 +541,20 @@ def _compact_artifacts(artifacts: dict[str, Any]) -> dict[str, Any]:
 
     compact_packs = {}
     for pid, spec in (artifacts.get("packs") or {}).items():
-        compact_packs[pid] = {
+        entry: dict[str, Any] = {
             "id": pid,
             "filename": spec["filename"],
-            "url": spec["url"],
+            "url": spec.get("url", ""),
             "size_bytes": int(spec.get("size_bytes") or 0),
             "sha256": spec.get("sha256", ""),
-            "upstream_files": spec.get("upstream_files") or {},
         }
+        if spec.get("parts"):
+            entry["parts"] = list(spec["parts"])
+        compact_packs[pid] = entry
     return {
         "release_tag": artifacts.get("release_tag", RELEASE_TAG),
         "release_base_url": artifacts.get("release_base_url", RELEASE_BASE_URL),
+        "iit_template": dict(artifacts.get("iit_template") or DEFAULT_IIT_TEMPLATE),
         "packs": compact_packs,
         "bundles": artifacts.get("bundles") or {},
     }
@@ -582,10 +608,10 @@ def script_filename_for_os(target_os: str) -> str:
 def generate_installer_script(
     *,
     target_os: str,
-    mode: str = "modular",
+    mode: str = "base",
     slicer_path: str = "",
     model_assets_dir: str = "",
-    selected_packs: Iterable[str] = ("brain_mask_pnl", "anatomy"),
+    selected_packs: Iterable[str] = ("wma_org",),
     mirror_prefix: str = "",
     proxy_url: str = "",
     offline_dir: str = "",
@@ -599,11 +625,12 @@ def generate_installer_script(
         raise ValueError(f"Unsupported target OS: {target_os}")
     if mode not in SUPPORTED_MODES:
         raise ValueError(f"Unsupported install mode: {mode}")
+    normalized_mode = "base"
 
     art = artifacts or load_installer_artifacts()
     py_payload = _build_python_payload(
         target_os=target_os,
-        mode=mode,
+        mode=normalized_mode,
         slicer_path=slicer_path,
         model_assets_dir=model_assets_dir,
         selected_packs=selected_packs,
@@ -672,7 +699,6 @@ def generate_installer_script(
         script = header + "\n" + py_payload
         return script.replace("\r\n", "\n").replace("\n", "\r\n")
 
-    # POSIX (.command on macOS / .sh on Linux)
     escaped_slicer = slicer_path.strip().replace('"', '\\"')
     if target_os == "macos":
         resolve_fn = textwrap.dedent(

@@ -71,7 +71,7 @@ def _verify_profile_in_root(profile, root: Path, manifest: dict, *, allow_omitte
 def verified_resource_directory(profile, *, asset_root=None):
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
     root = configured_model_assets_root(asset_root)
-    verified = _verify_profile_in_root(profile, root, manifest, allow_omitted_wma_archives=False)
+    verified = _verify_profile_in_root(profile, root, manifest, allow_omitted_wma_archives=True)
     if verified is not None:
         return verified
     if asset_root is None and not os.environ.get(MODEL_ASSETS_ENV):

@@ -5,248 +5,64 @@
   var zh = document.documentElement.lang.toLowerCase().indexOf('zh') === 0;
   var RELEASE_TAG = 'v0.1.1';
   var RELEASE_BASE = 'https://github.com/NeuroDMRI/SlicerDSpace/releases/download/' + RELEASE_TAG;
+  var IIT_BYTES = 7830929;
 
   var ARTIFACTS = {
     release_tag: RELEASE_TAG,
     release_base_url: RELEASE_BASE,
+    iit_template: {
+      relpath: 'brain_mask/pnl_cnn_torch/IITmean_b0_256.nii.gz',
+      sha256: '2bb1a7bbe448702033a515e76164df6472828422ecef5cb4f996d91ec126dead',
+      size_bytes: IIT_BYTES,
+      urls: ['https://www.nitrc.org/frs/download.php/11290/IITmean_b0_256.nii.gz']
+    },
     packs: {
-      brain_mask_pnl: {
-        id: 'brain_mask_pnl',
-        filename: 'SlicerDSpace-v0.1.1-Pack-BrainMask-PNL.zip',
-        url: RELEASE_BASE + '/SlicerDSpace-v0.1.1-Pack-BrainMask-PNL.zip',
-        size_bytes: 200177953,
-        sha256: '08129054bada6639b45228609389b857e84470eb6952eaa7e0a57471adc1b333',
-        upstream_files: {
-          'brain_mask/pnl_cnn_torch/IITmean_b0_256.nii.gz': {
-            sha256: '2bb1a7bbe448702033a515e76164df6472828422ecef5cb4f996d91ec126dead',
-            size_bytes: 7830929,
-            urls: ['https://www.nitrc.org/frs/download.php/11290/IITmean_b0_256.nii.gz'],
-            redistribution: 'upstream-only'
-          }
-        }
-      },
-      anatomy: {
-        id: 'anatomy',
-        filename: 'SlicerDSpace-v0.1.1-Pack-Anatomy.zip',
-        url: RELEASE_BASE + '/SlicerDSpace-v0.1.1-Pack-Anatomy.zip',
-        size_bytes: 670899381,
-        sha256: '5a81ee528a5485106e8537b71dce53659359d008404486353ae76edd6bcda9ae',
-        upstream_files: {}
-      },
-      surface: {
-        id: 'surface',
-        filename: 'SlicerDSpace-v0.1.1-Pack-Surface.zip',
-        url: RELEASE_BASE + '/SlicerDSpace-v0.1.1-Pack-Surface.zip',
-        size_bytes: 222419412,
-        sha256: '9432aea60a3919cda5a6361c77cc9dd9944b17a003cd7811973c5f8984ea1563',
-        upstream_files: {}
-      },
-      tractcloud: {
-        id: 'tractcloud',
-        filename: 'SlicerDSpace-v0.1.1-Pack-TractCloud.zip',
-        url: RELEASE_BASE + '/SlicerDSpace-v0.1.1-Pack-TractCloud.zip',
-        size_bytes: 8217555,
-        sha256: 'a34095caed89764c2043aa7598e60f14d9befdcb6fe46666ee1f4c599faa0078',
-        upstream_files: {}
-      },
       wma_org: {
         id: 'wma_org',
-        filename: 'SlicerDSpace-v0.1.1-Pack-WMA-ORG.zip',
-        url: RELEASE_BASE + '/SlicerDSpace-v0.1.1-Pack-WMA-ORG.zip',
-        size_bytes: 1804782008,
-        sha256: '531bc914f27298f82a87cfac03701ca79eb973ceec65e831498f0b2d9d684370',
-        upstream_files: {}
+        filename: 'SlicerDSpace-v0.1.1-WMA-ORG.tar.gz',
+        url: RELEASE_BASE + '/SlicerDSpace-v0.1.1-WMA-ORG.tar.gz',
+        size_bytes: 1500000000,
+        sha256: '',
+        parts: []
+      },
+      wma_naba: {
+        id: 'wma_naba',
+        filename: 'SlicerDSpace-v0.1.1-WMA-NABA.tar.gz',
+        url: '',
+        size_bytes: 2900000000,
+        sha256: '',
+        parts: []
+      },
+      wma_east_west: {
+        id: 'wma_east_west',
+        filename: 'SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz',
+        url: '',
+        size_bytes: 9900000000,
+        sha256: '',
+        parts: []
       }
     },
     bundles: {
-      core_scripted: {
-        filename: 'SlicerDSpace-v0.1.1-Core-Scripted.zip',
-        url: RELEASE_BASE + '/SlicerDSpace-v0.1.1-Core-Scripted.zip',
-        size_bytes: 4039964,
-        sha256: '97089ee639a066cdd6dd14686ca8fabea8b9244a6f1c72c851999a44fc742b42'
-      },
-      macos_arm64_core: {
-        filename: 'SlicerDSpace-v0.1.1-macOS-arm64-Core.tar.gz',
-        url: RELEASE_BASE + '/SlicerDSpace-v0.1.1-macOS-arm64-Core.tar.gz',
-        size_bytes: 367848476,
-        sha256: 'c7366961ff42b1b42c387e0b7563d8de28215f1a972bcd9e6749ef7fdda72c79'
-      },
-      windows_x64_all_in_one: {
+      windows_x64_base: {
         filename: 'SlicerDSpace-v0.1.1-Windows-x64.zip',
-        size_bytes: 18124374419,
-        sha256: 'b38d612ad000c6a86b78cc1db10c58c7422c3cd1ca506a65285d7d7598f2feae',
-        parts: [
-          {
-            filename: 'SlicerDSpace-v0.1.1-Windows-x64.zip.001',
-            size_bytes: 1900000000,
-            sha256: '816a9e730f75d7673dc2f1f4f2b9fc6caf13867939e8ab93feb94cd57838f7ee',
-            url: RELEASE_BASE + '/SlicerDSpace-v0.1.1-Windows-x64.zip.001'
-          },
-          {
-            filename: 'SlicerDSpace-v0.1.1-Windows-x64.zip.002',
-            size_bytes: 1900000000,
-            sha256: '514f8cfe930ef54b3e7d63171eb2ffbf0ce4efc8ef0f888d5e2abe44685931e4',
-            url: RELEASE_BASE + '/SlicerDSpace-v0.1.1-Windows-x64.zip.002'
-          },
-          {
-            filename: 'SlicerDSpace-v0.1.1-Windows-x64.zip.003',
-            size_bytes: 1900000000,
-            sha256: 'ccf65e829384e13ba1925bff1f87860030f406ed96b640d024ed22dc742df337',
-            url: RELEASE_BASE + '/SlicerDSpace-v0.1.1-Windows-x64.zip.003'
-          },
-          {
-            filename: 'SlicerDSpace-v0.1.1-Windows-x64.zip.004',
-            size_bytes: 1900000000,
-            sha256: '20300c3bef02e9f4a79fafb76c8f4d46994a18d5ee9ce5745be8db2e90ed3a13',
-            url: RELEASE_BASE + '/SlicerDSpace-v0.1.1-Windows-x64.zip.004'
-          },
-          {
-            filename: 'SlicerDSpace-v0.1.1-Windows-x64.zip.005',
-            size_bytes: 1900000000,
-            sha256: 'b14d457459979741583ba7139317394333dc2fb0cfc1c4c5e921d73a7da25d7b',
-            url: RELEASE_BASE + '/SlicerDSpace-v0.1.1-Windows-x64.zip.005'
-          },
-          {
-            filename: 'SlicerDSpace-v0.1.1-Windows-x64.zip.006',
-            size_bytes: 1900000000,
-            sha256: '4021369d1e9433c02e9eb51efe7d417721781d6545672b059511d51e99e34600',
-            url: RELEASE_BASE + '/SlicerDSpace-v0.1.1-Windows-x64.zip.006'
-          },
-          {
-            filename: 'SlicerDSpace-v0.1.1-Windows-x64.zip.007',
-            size_bytes: 1900000000,
-            sha256: 'ab317ff156cc9cd444f1c5f88e91ee886dfbef2f3b172973ff498ed93c2e5692',
-            url: RELEASE_BASE + '/SlicerDSpace-v0.1.1-Windows-x64.zip.007'
-          },
-          {
-            filename: 'SlicerDSpace-v0.1.1-Windows-x64.zip.008',
-            size_bytes: 1900000000,
-            sha256: '9002830250981f09aecd9936142f6924e5dfb265daa82bc360ead30f297a8368',
-            url: RELEASE_BASE + '/SlicerDSpace-v0.1.1-Windows-x64.zip.008'
-          },
-          {
-            filename: 'SlicerDSpace-v0.1.1-Windows-x64.zip.009',
-            size_bytes: 1900000000,
-            sha256: '5a7e8c8ce83c96b89f247a375c24fa0e0d23a10ee96c3da7c194cb31a1cd037c',
-            url: RELEASE_BASE + '/SlicerDSpace-v0.1.1-Windows-x64.zip.009'
-          },
-          {
-            filename: 'SlicerDSpace-v0.1.1-Windows-x64.zip.010',
-            size_bytes: 1024374419,
-            sha256: '97ef58d4da44ab62d28d597c17b8f3e7c0173df6f835852905206aca1050a7e2',
-            url: RELEASE_BASE + '/SlicerDSpace-v0.1.1-Windows-x64.zip.010'
-          }
-        ]
+        url: RELEASE_BASE + '/SlicerDSpace-v0.1.1-Windows-x64.zip',
+        size_bytes: 1600000000,
+        sha256: '',
+        parts: []
       },
-      linux_x64_all_in_one: {
+      linux_x64_base: {
         filename: 'SlicerDSpace-v0.1.1-Linux-x64.tar.gz',
-        size_bytes: 14416513720,
-        sha256: '86cc9cb5ef34dbede12c9abdbe110b972ff0fc873d9cef34df3bc8cbad36d403',
-        parts: [
-          {
-            filename: 'SlicerDSpace-v0.1.1-Linux-x64.tar.gz.001',
-            size_bytes: 1900000000,
-            sha256: '01b7fd7c39941e8c3757042fbdce0a14e3ced752cd0672cbc847f7fbeb04f4f8',
-            url: RELEASE_BASE + '/SlicerDSpace-v0.1.1-Linux-x64.tar.gz.001'
-          },
-          {
-            filename: 'SlicerDSpace-v0.1.1-Linux-x64.tar.gz.002',
-            size_bytes: 1900000000,
-            sha256: '476aefe2f555f629241f62b10636c8431272581ea2fb91c2b3606a036c5e3ee8',
-            url: RELEASE_BASE + '/SlicerDSpace-v0.1.1-Linux-x64.tar.gz.002'
-          },
-          {
-            filename: 'SlicerDSpace-v0.1.1-Linux-x64.tar.gz.003',
-            size_bytes: 1900000000,
-            sha256: '0b0b8a9bd3a955b44cf9b3016f5e84dd5c3a2fdf45464fcbe9e872379b701639',
-            url: RELEASE_BASE + '/SlicerDSpace-v0.1.1-Linux-x64.tar.gz.003'
-          },
-          {
-            filename: 'SlicerDSpace-v0.1.1-Linux-x64.tar.gz.004',
-            size_bytes: 1900000000,
-            sha256: '358c0b66de302e7b64fb63d3ada4a22bf690374852d8874e49552d813e562515',
-            url: RELEASE_BASE + '/SlicerDSpace-v0.1.1-Linux-x64.tar.gz.004'
-          },
-          {
-            filename: 'SlicerDSpace-v0.1.1-Linux-x64.tar.gz.005',
-            size_bytes: 1900000000,
-            sha256: '3284c0b811ccf10e5c907fc152e1e49a98640a1a13be693fb3d94b7d35d5b436',
-            url: RELEASE_BASE + '/SlicerDSpace-v0.1.1-Linux-x64.tar.gz.005'
-          },
-          {
-            filename: 'SlicerDSpace-v0.1.1-Linux-x64.tar.gz.006',
-            size_bytes: 1900000000,
-            sha256: '5a65b97b8f16bc88fef9826fc1e7f68804545d18ddf966a0bc5126e9a2ab9a50',
-            url: RELEASE_BASE + '/SlicerDSpace-v0.1.1-Linux-x64.tar.gz.006'
-          },
-          {
-            filename: 'SlicerDSpace-v0.1.1-Linux-x64.tar.gz.007',
-            size_bytes: 1900000000,
-            sha256: 'c27bca4aafb1ccd4e5b6c50b78a374e5d4c49483d33bef03c401792678c45dd8',
-            url: RELEASE_BASE + '/SlicerDSpace-v0.1.1-Linux-x64.tar.gz.007'
-          },
-          {
-            filename: 'SlicerDSpace-v0.1.1-Linux-x64.tar.gz.008',
-            size_bytes: 1116513720,
-            sha256: 'd6488d61641cc5ea6c85db778b00266851378e77b012990ad28ddc095effe5c0',
-            url: RELEASE_BASE + '/SlicerDSpace-v0.1.1-Linux-x64.tar.gz.008'
-          }
-        ]
+        url: RELEASE_BASE + '/SlicerDSpace-v0.1.1-Linux-x64.tar.gz',
+        size_bytes: 1400000000,
+        sha256: '',
+        parts: []
       },
-      macos_arm64_all_in_one: {
+      macos_arm64_base: {
         filename: 'SlicerDSpace-v0.1.1-macOS-arm64.tar.gz',
-        size_bytes: 14326384768,
-        sha256: 'ca27a69813c9f988ad13dad0d01244ca907cfdfc981db5a445bf4f1ec1aa5d9a',
-        parts: [
-          {
-            filename: 'SlicerDSpace-v0.1.1-macOS-arm64.tar.gz.001',
-            size_bytes: 1900000000,
-            sha256: '719e3e6150a70291f44b20386c02f023e04edb9893160d7b2ff4935862fdb620',
-            url: RELEASE_BASE + '/SlicerDSpace-v0.1.1-macOS-arm64.tar.gz.001'
-          },
-          {
-            filename: 'SlicerDSpace-v0.1.1-macOS-arm64.tar.gz.002',
-            size_bytes: 1900000000,
-            sha256: '51d69f43c3ed140d56ab7516d3791bc213b4a80d037045bdec107d400748b4c7',
-            url: RELEASE_BASE + '/SlicerDSpace-v0.1.1-macOS-arm64.tar.gz.002'
-          },
-          {
-            filename: 'SlicerDSpace-v0.1.1-macOS-arm64.tar.gz.003',
-            size_bytes: 1900000000,
-            sha256: '2b3a00198601c9c6d7b6088388e508f788a4bf968a13ecf9f7bb969bc54e6cbc',
-            url: RELEASE_BASE + '/SlicerDSpace-v0.1.1-macOS-arm64.tar.gz.003'
-          },
-          {
-            filename: 'SlicerDSpace-v0.1.1-macOS-arm64.tar.gz.004',
-            size_bytes: 1900000000,
-            sha256: '1aeed976ad2a100c5c98f35087c2ff14e3f1ee8851721187b89935c73e574079',
-            url: RELEASE_BASE + '/SlicerDSpace-v0.1.1-macOS-arm64.tar.gz.004'
-          },
-          {
-            filename: 'SlicerDSpace-v0.1.1-macOS-arm64.tar.gz.005',
-            size_bytes: 1900000000,
-            sha256: '1d31624e6637ba2b6a2b8f6fcd9d7477c98c55c28320921cbc3a8e1d3d4044a9',
-            url: RELEASE_BASE + '/SlicerDSpace-v0.1.1-macOS-arm64.tar.gz.005'
-          },
-          {
-            filename: 'SlicerDSpace-v0.1.1-macOS-arm64.tar.gz.006',
-            size_bytes: 1900000000,
-            sha256: '698e7c963a6fbd5004f14a5e30ceebd9deb665a4c2d702bd37ceaf45c643eec7',
-            url: RELEASE_BASE + '/SlicerDSpace-v0.1.1-macOS-arm64.tar.gz.006'
-          },
-          {
-            filename: 'SlicerDSpace-v0.1.1-macOS-arm64.tar.gz.007',
-            size_bytes: 1900000000,
-            sha256: '82a779a2d9c86281bf1fb51207d0da6a2d0c630682bb06164491f63f67a938de',
-            url: RELEASE_BASE + '/SlicerDSpace-v0.1.1-macOS-arm64.tar.gz.007'
-          },
-          {
-            filename: 'SlicerDSpace-v0.1.1-macOS-arm64.tar.gz.008',
-            size_bytes: 1026384768,
-            sha256: 'e78c500f2eab4102ab9d45d4d7f1a7506cd6cc3ed50841f0bab639a9c20f691b',
-            url: RELEASE_BASE + '/SlicerDSpace-v0.1.1-macOS-arm64.tar.gz.008'
-          }
-        ]
+        url: RELEASE_BASE + '/SlicerDSpace-v0.1.1-macOS-arm64.tar.gz',
+        size_bytes: 1400000000,
+        sha256: '',
+        parts: []
       }
     }
   };
@@ -254,43 +70,57 @@
   var OS_DEFAULTS = {
     macos: {
       label: 'macOS',
+      bundleKey: 'macos_arm64_base',
       slicerPlaceholder: '/Applications/Slicer.app',
       modelPlaceholder: '~/Library/Application Support/SlicerDSpace/model-assets',
       scriptName: 'Install-SlicerDSpace.command',
-      coreEstimateBytes: 367848476
+      baseEstimateBytes: 1400000000
     },
     windows: {
       label: 'Windows',
+      bundleKey: 'windows_x64_base',
       slicerPlaceholder: '%LOCALAPPDATA%\\slicer.org\\Slicer 5.10.0',
       modelPlaceholder: '%LOCALAPPDATA%\\SlicerDSpace\\model-assets',
       scriptName: 'Install-SlicerDSpace.bat',
-      coreEstimateBytes: 4039964
+      baseEstimateBytes: 1600000000
     },
     linux: {
       label: 'Linux',
+      bundleKey: 'linux_x64_base',
       slicerPlaceholder: '~/Slicer-5.10.0-linux-amd64',
       modelPlaceholder: '~/.local/share/SlicerDSpace/model-assets',
       scriptName: 'Install-SlicerDSpace.sh',
-      coreEstimateBytes: 4039964
+      baseEstimateBytes: 1400000000
     }
   };
 
-  var PACK_META = [
-    { id: 'brain_mask_pnl', title: zh ? 'PNL 自动脑掩膜' : 'PNL Brain Mask' },
-    { id: 'anatomy', title: zh ? 'DDSeg 分割 + DDParcel 分区' : 'DDSeg + DDParcel' },
-    { id: 'surface', title: zh ? 'DDSurfer 皮层表面 + SAF' : 'DDSurfer + SAF' },
-    { id: 'tractcloud', title: zh ? 'TractCloud 纤维束分割' : 'TractCloud Bundles' },
-    { id: 'wma_org', title: zh ? 'WMA ORG 白质图谱' : 'WMA ORG Atlas' }
+  var BASE_MODULES = [
+    {
+      title: zh ? '基础预处理与 PNL 自动脑掩膜' : 'Preprocessing & PNL Brain Mask',
+      tag: zh ? '内置' : 'Included'
+    },
+    {
+      title: zh ? '解剖先验 · DDSeg / DDParcel / DDSurfer' : 'Anatomical Priors · DDSeg / DDParcel / DDSurfer',
+      tag: zh ? '内置' : 'Included'
+    },
+    {
+      title: zh ? '微结构与全脑追踪 · DTI / NODDI / DKI / CSD / UKF / SAF' : 'Microstructure & Tractography · DTI / NODDI / DKI / CSD / UKF / SAF',
+      tag: zh ? '内置' : 'Included'
+    },
+    {
+      title: zh ? '纤维束与脑连接组 · WMQL / TractCloud / 连接矩阵' : 'Bundles & Connectome · WMQL / TractCloud / Network',
+      tag: zh ? '内置' : 'Included'
+    }
   ];
 
-  var PRESETS = {
-    minimal: ['brain_mask_pnl'],
-    clinical: ['brain_mask_pnl', 'anatomy', 'surface', 'tractcloud'],
-    full: ['brain_mask_pnl', 'anatomy', 'surface', 'tractcloud', 'wma_org']
-  };
+  var WMA_ATLAS_META = [
+    { id: 'wma_org', title: zh ? 'ORG · 标准 74 束图谱' : 'ORG · Standard 74-Tract' },
+    { id: 'wma_naba', title: zh ? 'NABA · 跨年龄段图谱' : 'NABA · Lifespan Atlas' },
+    { id: 'wma_east_west', title: zh ? 'East-West · 东西方人群图谱' : 'East-West · Cross-Population' }
+  ];
 
   var BOOTSTRAP_PY = [
-    'import hashlib, json, os, platform, shutil, stat, subprocess, sys, tarfile, tempfile, urllib.error, urllib.request, zipfile',
+    'import hashlib, json, os, shutil, subprocess, sys, tempfile, urllib.error, urllib.request',
     'from pathlib import Path',
     '_GITHUB_PREFIXES = ("https://github.com/", "https://raw.githubusercontent.com/", "https://objects.githubusercontent.com/", "https://media.githubusercontent.com/", "https://codeload.github.com/")',
     'def _log(msg): print(f"[SlicerDSpace Installer] {msg}", flush=True)',
@@ -374,18 +204,20 @@
     '    for d in dirs:',
     '        c = d / filename',
     '        if c.is_file() and (not expected_sha or _sha256(c) == expected_sha):',
-    '            _log(f"Using offline archive: {c}"); return c',
+    '            _log(f"Using offline archive: {c}"); return c, []',
     '    cached = cache_dir / filename',
     '    if cached.is_file() and expected_sha and _sha256(cached) == expected_sha:',
-    '        _log(f"Reusing cache: {cached}"); return cached',
+    '        _log(f"Reusing cache: {cached}"); return cached, [cached]',
     '    if parts:',
-    '        part_paths = []',
+    '        part_paths = []; dl_parts = []',
     '        for ps in parts:',
     '            pn = ps["filename"]; psha = str(ps.get("sha256") or ""); psize = int(ps.get("size_bytes") or 0); found = None',
     '            for d in dirs:',
     '                c = d / pn',
     '                if c.is_file() and (not psha or _sha256(c) == psha): _log(f"Using offline part: {c}"); found = c; break',
-    '            if found is None: found = _download(ps["url"], cache_dir / pn, expected_sha256=psha, expected_size=psize)',
+    '            if found is None:',
+    '                found = _download(ps["url"], cache_dir / pn, expected_sha256=psha, expected_size=psize)',
+    '                dl_parts.append(found)',
     '            part_paths.append(found)',
     '        _log(f"Merging {len(part_paths)} volumes into {filename}...")',
     '        merging = cache_dir / (filename + ".merging")',
@@ -393,20 +225,26 @@
     '            for pp in part_paths:',
     '                with pp.open("rb") as in_fh: shutil.copyfileobj(in_fh, out_fh, length=16777216)',
     '        if expected_sha and _sha256(merging) != expected_sha: merging.unlink(missing_ok=True); raise RuntimeError(f"Merged SHA-256 mismatch: {filename}")',
-    '        os.replace(merging, cached); _log(f"Merged and verified {filename}"); return cached',
-    '    return _download(spec["url"], cached, expected_sha256=expected_sha, expected_size=expected_size)',
-    'def _install_extension(slicer_exe, archive_path, extra_extensions=()):',
+    '        os.replace(merging, cached); _log(f"Merged and verified {filename}"); return cached, [*dl_parts, cached]',
+    '    if not spec.get("url"): raise RuntimeError(f"Download URL is not configured yet for {filename}")',
+    '    arc = _download(spec["url"], cached, expected_sha256=expected_sha, expected_size=expected_size)',
+    '    return arc, [arc]',
+    'def _cleanup_temp_files(paths):',
+    '    for p in paths:',
+    '        try: Path(p).unlink(missing_ok=True)',
+    '        except OSError: pass',
+    'def _install_extension(slicer_exe, archive_path):',
     '    if sys.platform == "darwin" and shutil.which("xattr"): subprocess.run(["xattr", "-dr", "com.apple.quarantine", str(archive_path)], capture_output=True)',
     '    receipt = Path(tempfile.mkdtemp(prefix="slicerdspace-inst-")) / "receipt.json"',
     '    helper = receipt.with_name("install_ext.py")',
-    '    helper.write_text("import json, sys, traceback, qt, slicer\\nfrom pathlib import Path\\ndef _run():\\n  a=sys.argv[1]; r=Path(sys.argv[2]); ex=[x for x in (sys.argv[3].split(\',\') if len(sys.argv)>3 else []) if x]\\n  try:\\n    em=slicer.app.extensionsManagerModel(); em.setInteractive(False)\\n    meta={\'extensionname\':\'SlicerDSpace\',\'depends\':\'NA\',\'slicer_revision\':str(em.slicerRevision),\'os\':str(em.slicerOs),\'arch\':str(em.slicerArch)}\\n    ok=bool(em.installExtension(\'SlicerDSpace\', meta, a, False, True))\\n    er={}\\n    for n in ex:\\n      try: er[n]=True if em.isExtensionInstalled(n) else bool(em.installExtensionFromServer(n, False))\\n      except Exception as e: er[n]=str(e)\\n    r.write_text(json.dumps({\'installed\':ok,\'module_paths\':[str(p) for p in em.extensionModulePaths(\'SlicerDSpace\')],\'extras\':er}),encoding=\'utf-8\')\\n    slicer.app.exit(0 if ok else 1)\\n  except Exception as e:\\n    r.write_text(json.dumps({\'installed\':False,\'error\':str(e),\'traceback\':traceback.format_exc()}),encoding=\'utf-8\')\\n    slicer.app.exit(1)\\nqt.QTimer.singleShot(500, _run)\\n", encoding="utf-8")',
-    '    cmd = [slicer_exe, "--no-splash", "--no-main-window", "--python-script", str(helper), str(archive_path), str(receipt), ",".join(extra_extensions)]',
+    '    helper.write_text("import json, sys, traceback, qt, slicer\\nfrom pathlib import Path\\ndef _run():\\n  a=sys.argv[1]; r=Path(sys.argv[2])\\n  try:\\n    em=slicer.app.extensionsManagerModel(); em.setInteractive(False)\\n    meta={\'extensionname\':\'SlicerDSpace\',\'depends\':\'NA\',\'slicer_revision\':str(em.slicerRevision),\'os\':str(em.slicerOs),\'arch\':str(em.slicerArch)}\\n    ok=bool(em.installExtension(\'SlicerDSpace\', meta, a, False, True))\\n    r.write_text(json.dumps({\'installed\':ok,\'module_paths\':[str(p) for p in em.extensionModulePaths(\'SlicerDSpace\')]}),encoding=\'utf-8\')\\n    slicer.app.exit(0 if ok else 1)\\n  except Exception as e:\\n    r.write_text(json.dumps({\'installed\':False,\'error\':str(e),\'traceback\':traceback.format_exc()}),encoding=\'utf-8\')\\n    slicer.app.exit(1)\\nqt.QTimer.singleShot(500, _run)\\n", encoding="utf-8")',
+    '    cmd = [slicer_exe, "--no-splash", "--no-main-window", "--python-script", str(helper), str(archive_path), str(receipt)]',
     '    env = os.environ.copy()',
     '    if sys.platform.startswith("linux") and not env.get("DISPLAY"):',
     '        xvfb = shutil.which("xvfb-run")',
     '        if xvfb: cmd = [xvfb, "-a", *cmd]',
     '        else: env.setdefault("QT_QPA_PLATFORM", "offscreen")',
-    '    _log("Installing extension into 3D Slicer...")',
+    '    _log("Installing SlicerDSpace base extension into 3D Slicer...")',
     '    proc = subprocess.run(cmd, env=env)',
     '    if proc.returncode != 0 or not receipt.is_file(): raise RuntimeError(f"Slicer install exited {proc.returncode}")',
     '    data = json.loads(receipt.read_text(encoding="utf-8")); shutil.rmtree(receipt.parent, ignore_errors=True)',
@@ -423,16 +261,36 @@
     '    for c in cands:',
     '        if (c / "SlicerDSpace.py").is_file(): return c.resolve()',
     '    raise FileNotFoundError("Installed SlicerDSpace module directory not found")',
+    'def _sync_iit_template(iit_spec, work_dir, bundled_assets, asset_root):',
+    '    if not iit_spec: return',
+    '    relpath = str(iit_spec.get("relpath") or "brain_mask/pnl_cnn_torch/IITmean_b0_256.nii.gz")',
+    '    sha = str(iit_spec.get("sha256") or ""); sz = int(iit_spec.get("size_bytes") or 0)',
+    '    targets = ([bundled_assets / relpath] if bundled_assets.is_dir() else []) + [asset_root / relpath]',
+    '    if all(t.is_file() and _sha256(t) == sha for t in targets): return',
+    '    src = next((t for t in targets if t.is_file() and _sha256(t) == sha), None)',
+    '    if src is None:',
+    '        for d in _search_dirs():',
+    '            for cand in (d / relpath, d / Path(relpath).name):',
+    '                if cand.is_file() and _sha256(cand) == sha: _log(f"Using local NITRC IIT template: {cand}"); src = cand; break',
+    '            if src is not None: break',
+    '    tmp_dl = None',
+    '    if src is None:',
+    '        try: tmp_dl = work_dir / Path(relpath).name; src = _download(iit_spec.get("urls") or (), tmp_dl, expected_sha256=sha, expected_size=sz, allow_mirror=False)',
+    '        except Exception as exc: _log(f"[WARN] Optional NITRC IIT template download skipped ({exc})"); return',
+    '    try:',
+    '        for dst in targets:',
+    '            if dst.is_file() and _sha256(dst) == sha: continue',
+    '            dst.parent.mkdir(parents=True, exist_ok=True); shutil.copy2(src, dst)',
+    '    finally:',
+    '        if tmp_dl is not None: tmp_dl.unlink(missing_ok=True)',
     'def main():',
     '    slicer_exe = str(os.environ.get("SLICERDSPACE_RESOLVED_SLICER") or CONFIG.get("slicer_path") or "").strip()',
     '    if not slicer_exe or not Path(slicer_exe).exists(): raise FileNotFoundError(f"Slicer not found: {slicer_exe}")',
-    '    os_name, mode, artifacts = CONFIG["os"], CONFIG["mode"], CONFIG["artifacts"]',
+    '    os_name, artifacts = CONFIG["os"], CONFIG["artifacts"]',
     '    work_dir = Path(tempfile.gettempdir()) / "slicerdspace-installer-cache"; work_dir.mkdir(parents=True, exist_ok=True)',
-    '    bkey = {"windows":"windows_x64_all_in_one","linux":"linux_x64_all_in_one","macos":"macos_arm64_all_in_one"}[os_name] if mode=="all_in_one" else ("macos_arm64_core" if os_name=="macos" else "core_scripted")',
-    '    ext_archive = _acquire_spec(artifacts["bundles"][bkey], work_dir)',
-    '    sel = set(CONFIG.get("selected_packs") or ())',
-    '    extras = ("PyTorch",) if (mode=="modular" and os_name!="macos" and (sel & {"brain_mask_pnl","anatomy","surface","tractcloud"})) else ()',
-    '    receipt = _install_extension(slicer_exe, ext_archive, extras)',
+    '    bkey = {"windows":"windows_x64_base","linux":"linux_x64_base","macos":"macos_arm64_base"}[os_name]',
+    '    ext_archive, ext_temps = _acquire_spec(artifacts["bundles"][bkey], work_dir)',
+    '    receipt = _install_extension(slicer_exe, ext_archive); _cleanup_temp_files(ext_temps)',
     '    mod_root = _find_module_root(slicer_exe, receipt); _log(f"Extension installed at: {mod_root}")',
     '    if str(mod_root) not in sys.path: sys.path.insert(0, str(mod_root))',
     '    from shared.network_config import extract_modular_pack, save_network_settings',
@@ -444,40 +302,41 @@
     '    if CONFIG.get("offline_dir"): os.environ["SLICERDSPACE_OFFLINE_DIR"] = str(CONFIG["offline_dir"]).strip()',
     '    custom_assets = str(CONFIG.get("model_assets_dir") or "").strip()',
     '    asset_root = configured_model_assets_root(custom_assets or None); asset_root.mkdir(parents=True, exist_ok=True)',
-    '    selected_packs = list(CONFIG.get("selected_packs") or ()); dirs = _search_dirs()',
-    '    if mode == "modular":',
-    '        for pid in selected_packs:',
-    '            pspec = (artifacts.get("packs") or {}).get(pid)',
-    '            if not pspec: continue',
-    '            arc = _acquire_spec(pspec, work_dir); _log(f"Extracting {pspec[\'filename\']} -> {asset_root}")',
-    '            extract_modular_pack(arc, asset_root, expected_sha256=str(pspec.get("sha256") or ""))',
-    '            for rel, urec in (pspec.get("upstream_files") or {}).items():',
-    '                dst = asset_root / rel',
-    '                if dst.is_file() and _sha256(dst) == urec["sha256"]: continue',
-    '                got = False',
-    '                for d in dirs:',
-    '                    for cand in (d / rel, d / Path(rel).name):',
-    '                        if cand.is_file() and _sha256(cand) == urec["sha256"]: dst.parent.mkdir(parents=True, exist_ok=True); shutil.copy2(cand, dst); got = True; break',
-    '                    if got: break',
-    '                if not got: _download(urec["urls"], dst, expected_sha256=urec["sha256"], expected_size=int(urec.get("size_bytes") or 0), allow_mirror=False)',
+    '    bundled_assets = mod_root.parents[2] / "bundled-model-assets"',
+    '    if custom_assets and bundled_assets.is_dir() and bundled_assets.resolve() != asset_root.resolve():',
+    '        _log(f"Staging bundled base model weights -> {asset_root}")',
+    '        for src_file in bundled_assets.rglob("*"):',
+    '            if not src_file.is_file(): continue',
+    '            dst = asset_root / src_file.relative_to(bundled_assets)',
+    '            if dst.exists(): continue',
+    '            dst.parent.mkdir(parents=True, exist_ok=True)',
+    '            try: os.link(src_file, dst)',
+    '            except OSError: shutil.copy2(src_file, dst)',
+    '    _sync_iit_template(artifacts.get("iit_template") or {}, work_dir, bundled_assets, asset_root)',
+    '    selected_packs = [p for p in ("wma_org", "wma_naba", "wma_east_west") if p in set(CONFIG.get("selected_packs") or ())]',
+    '    packs = artifacts.get("packs") or {}',
+    '    for pid in selected_packs:',
+    '        pspec = packs.get(pid)',
+    '        if not pspec: continue',
+    '        arc, ptemps = _acquire_spec(pspec, work_dir); _log(f"Extracting {pspec[\'filename\']} -> {asset_root}")',
+    '        extract_modular_pack(arc, asset_root, expected_sha256=str(pspec.get("sha256") or "")); _cleanup_temp_files(ptemps)',
     '    cfg = load_user_config(); cfg["ui"]["language"] = CONFIG.get("language", "en")',
     '    deps = cfg.setdefault("external_dependencies", {})',
     '    if custom_assets: deps["model_assets_dir"] = str(asset_root)',
-    '    if "tractcloud" in selected_packs: deps["tractcloud_data_dir"] = str((asset_root / "bundles/tractcloud").resolve())',
-    '    if "wma_org" in selected_packs: deps["wma_atlas_dir"] = str((asset_root / "bundles/wma").resolve())',
-    '    if "brain_mask_pnl" in selected_packs: deps["pnl_mask_model_dir"] = str((asset_root / "brain_mask/pnl_cnn_torch").resolve())',
-    '    defaults = cfg.setdefault("run_defaults", {}); targets = ["microstructure", "tractography", "connectome"]',
-    '    if "anatomy" in selected_packs: targets.extend(["segmentation", "parcellation"])',
-    '    if "surface" in selected_packs: targets.extend(["surface", "saf"])',
-    '    if "tractcloud" in selected_packs or "wma_org" in selected_packs:',
-    '        targets.append("bundles"); bl = []',
-    '        if "wma_org" in selected_packs: bl.append("wma")',
-    '        if "tractcloud" in selected_packs: bl.append("tractcloud")',
-    '        bl.append("wmql"); defaults["bundle_backend"] = ",".join(bl)',
+    '    else: deps.pop("model_assets_dir", None)',
+    '    deps.pop("wma_atlas_dir", None)',
+    '    defaults = cfg.setdefault("run_defaults", {})',
+    '    targets = ["microstructure", "segmentation", "parcellation", "surface", "tractography", "saf", "bundles", "tractcloud", "connectome"]',
+    '    if selected_packs:',
+    '        targets.append("wma"); defaults["bundle_backend"] = "wma,tractcloud,wmql"',
+    '        defaults["wma_atlas"] = "org" if "wma_org" in selected_packs else ("naba" if "wma_naba" in selected_packs else "east-west")',
+    '    else: defaults["bundle_backend"] = "tractcloud,wmql"',
     '    defaults["targets"] = list(dict.fromkeys(targets)); write_user_config(cfg)',
-    '    if mode == "modular" and os_name != "macos":',
-    '        ss = mod_root / "scripts" / "setup_selected.py"',
-    '        if ss.is_file(): subprocess.run([sys.executable, str(ss), "--targets", ",".join(defaults["targets"]), "--execute", "--accept-licences"], check=True)',
+    '    try:',
+    '        from shared.environment import EnvironmentDoctorConfig, run_environment_doctor',
+    '        doc = run_environment_doctor(EnvironmentDoctorConfig(repo_root=mod_root, targets=tuple(defaults["targets"]), wma_atlas=defaults.get("wma_atlas", "org"), brain_mask_backend="pnl_cnn", model_assets_dir=asset_root if custom_assets else None, python_executable=Path(sys.executable), slicer_executable=Path(slicer_exe)))',
+    '        _log(f"Environment doctor check: {len(doc.statuses)} items, blockers={doc.blocker_count}")',
+    '    except Exception as exc: _log(f"Post-install check note: {exc}")',
     '    _log("Installation completed successfully."); return 0',
     'if __name__ == "__main__": raise SystemExit(main())'
   ].join('\n');
@@ -506,12 +365,13 @@
   }
 
   function buildScript(state) {
+    var selectedPacks = state.wmaEnabled ? state.wmaAtlases.slice() : [];
     var cfg = {
       os: state.os,
-      mode: state.mode,
+      mode: 'base',
       slicer_path: state.slicerPath.trim(),
       model_assets_dir: state.modelAssetsDir.trim(),
-      selected_packs: state.packs.slice(),
+      selected_packs: selectedPacks,
       mirror_prefix: state.mirrorPrefix.trim(),
       proxy_url: state.proxyUrl.trim(),
       offline_dir: state.offlineDir.trim(),
@@ -627,10 +487,10 @@
 
     var state = {
       os: detectOS(),
-      mode: 'modular',
       slicerPath: '',
       modelAssetsDir: '',
-      packs: PRESETS.clinical.slice(),
+      wmaEnabled: true,
+      wmaAtlases: ['wma_org'],
       mirrorPreset: 'direct',
       mirrorPrefix: '',
       proxyUrl: '',
@@ -642,34 +502,34 @@
 
     function t(en, cn) { return zh ? cn : en; }
 
+    function baseBytes() {
+      var def = OS_DEFAULTS[state.os];
+      var bundle = ARTIFACTS.bundles[def.bundleKey];
+      return ((bundle && bundle.size_bytes) ? bundle.size_bytes : def.baseEstimateBytes) + IIT_BYTES;
+    }
+
     function totalBytes() {
-      if (state.mode === 'all_in_one') {
-        var bkey = state.os === 'windows' ? 'windows_x64_all_in_one' : (state.os === 'linux' ? 'linux_x64_all_in_one' : 'macos_arm64_all_in_one');
-        var b = ARTIFACTS.bundles[bkey];
-        return (b && b.size_bytes) ? b.size_bytes : 3300000000;
+      var sum = baseBytes();
+      if (state.wmaEnabled) {
+        state.wmaAtlases.forEach(function (aid) {
+          var p = ARTIFACTS.packs[aid];
+          if (p) { sum += p.size_bytes || 0; }
+        });
       }
-      var ckey = state.os === 'macos' ? 'macos_arm64_core' : 'core_scripted';
-      var core = ARTIFACTS.bundles[ckey];
-      var sum = (core && core.size_bytes) ? core.size_bytes : OS_DEFAULTS[state.os].coreEstimateBytes;
-      state.packs.forEach(function (pid) {
-        var p = ARTIFACTS.packs[pid];
-        if (p) { sum += p.size_bytes || 0; }
-      });
       return sum;
+    }
+
+    function escapeAttr(v) {
+      return String(v || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     }
 
     function render() {
       var def = OS_DEFAULTS[state.os];
-      var coreBytes = (state.os === 'macos' ? (ARTIFACTS.bundles.macos_arm64_core.size_bytes || def.coreEstimateBytes) : (ARTIFACTS.bundles.core_scripted.size_bytes || def.coreEstimateBytes));
       var html = [];
       html.push('<div class="ic-top">');
       html.push('<div class="ic-top-copy">');
       html.push('<h3 class="ic-heading">' + t('Custom Installer', '定制安装脚本') + '</h3>');
-      html.push('<p class="ic-sub">' + t('Pick your Slicer path and workflows; extra models can be added later inside Slicer.', '选好系统与常用模块即可下载脚本运行；未装功能日后可在 Slicer 内按需补齐。') + '</p>');
-      html.push('</div>');
-      html.push('<div class="ic-seg" role="group" aria-label="' + t('Install mode', '安装模式') + '">');
-      html.push('<button type="button" class="ic-seg-btn" data-mode="modular" aria-pressed="' + (state.mode === 'modular' ? 'true' : 'false') + '">' + t('Modular', '按需精简') + '</button>');
-      html.push('<button type="button" class="ic-seg-btn" data-mode="all_in_one" aria-pressed="' + (state.mode === 'all_in_one' ? 'true' : 'false') + '">' + t('All-in-One', '全量一体') + '</button>');
+      html.push('<p class="ic-sub">' + t('Base workflows and anatomical priors are included; pick optional WMA atlases below.', '核心分析与解剖先验模型均默认内置，下方按需选择 WMA 白质图谱即可生成安装脚本。') + '</p>');
       html.push('</div></div>');
 
       html.push('<div class="ic-row">');
@@ -683,26 +543,25 @@
       html.push('<input id="ic-slicer-path" class="ic-input" type="text" value="' + escapeAttr(state.slicerPath) + '" placeholder="' + escapeAttr(def.slicerPlaceholder) + '"></div>');
       html.push('</div>');
 
-      if (state.mode === 'modular') {
-        html.push('<div class="ic-mod-head"><span class="ic-k">' + t('Modules', '功能模块') + '</span>');
-        html.push('<div class="ic-presets">');
-        html.push('<button type="button" class="ic-link-btn" data-preset="minimal">' + t('Core only', '仅基础') + '</button>');
-        html.push('<button type="button" class="ic-link-btn" data-preset="clinical">' + t('Standard', '常规') + '</button>');
-        html.push('<button type="button" class="ic-link-btn" data-preset="full">' + t('All', '全选') + '</button></div></div>');
+      html.push('<div class="ic-mod-head"><span class="ic-k">' + t('Base Package (Included · ', '统一底座套件（全部内置 · 约 ') + formatBytes(baseBytes()) + (zh ? '）' : ')') + '</span></div>');
+      html.push('<div class="ic-packs">');
+      BASE_MODULES.forEach(function (mod) {
+        html.push('<div class="ic-pack is-locked"><input type="checkbox" checked disabled><span class="ic-pack-title">' + mod.title + '</span><span class="ic-pack-size">' + mod.tag + '</span></div>');
+      });
+      html.push('</div>');
 
-        html.push('<div class="ic-packs">');
-        html.push('<div class="ic-pack is-locked"><input type="checkbox" checked disabled><span class="ic-pack-title">' + t('Core · Preprocessing, DTI/DKI/NODDI, CSD/UKF, Connectome', '核心套件（预处理 / 微结构 / 追踪 / 连接组）') + '</span><span class="ic-pack-size">' + formatBytes(coreBytes) + '</span></div>');
-
-        PACK_META.forEach(function (meta) {
-          var pspec = ARTIFACTS.packs[meta.id] || {};
-          var checked = state.packs.indexOf(meta.id) !== -1;
-          var extraIit = meta.id === 'brain_mask_pnl' ? 7830929 : 0;
-          html.push('<label class="ic-pack ' + (checked ? 'is-selected' : '') + '"><input type="checkbox" data-pack="' + meta.id + '"' + (checked ? ' checked' : '') + '><span class="ic-pack-title">' + meta.title + '</span><span class="ic-pack-size">' + formatBytes((pspec.size_bytes || 0) + extraIit) + '</span></label>');
-        });
-        html.push('</div>');
-      } else {
-        html.push('<p class="ic-allinone-note">' + t('Automatically fetches and merges split archives (.001, .002, ...), verifies SHA-256, and installs the full offline extension into Slicer.', '自动拉取或合并全部分卷（.001, .002, ...），校验完整性后直接装入 3D Slicer。') + '</p>');
-      }
+      html.push('<div class="ic-wma-box ' + (state.wmaEnabled ? '' : 'is-disabled') + '">');
+      html.push('<div class="ic-wma-head">');
+      html.push('<label class="ic-wma-master"><input type="checkbox" id="ic-wma-toggle"' + (state.wmaEnabled ? ' checked' : '') + '><span>' + t('WMA White-Matter Atlas Clustering', 'WMA 白质纤维图谱分割') + '</span></label>');
+      html.push('<span class="ic-wma-note">' + t('Uncheck WMA to skip all atlases; NABA / East-West optional', '取消 WMA 则关闭所有图谱；后两套大图谱默认不下载') + '</span>');
+      html.push('</div>');
+      html.push('<div class="ic-wma-grid">');
+      WMA_ATLAS_META.forEach(function (atlas) {
+        var pspec = ARTIFACTS.packs[atlas.id] || {};
+        var checked = state.wmaEnabled && state.wmaAtlases.indexOf(atlas.id) !== -1;
+        html.push('<label class="ic-pack ' + (checked ? 'is-selected' : '') + '"><input type="checkbox" data-atlas="' + atlas.id + '"' + (checked ? ' checked' : '') + '><span class="ic-pack-title">' + atlas.title + '</span><span class="ic-pack-size">' + formatBytes(pspec.size_bytes || 0) + '</span></label>');
+      });
+      html.push('</div></div>');
 
       html.push('<details id="ic-more" class="ic-more"' + (state.moreOpen ? ' open' : '') + '>');
       html.push('<summary class="ic-more-summary">' + t('Mirror, proxy & offline pack options', '镜像源 / 代理 / 本地离线目录') + '</summary>');
@@ -743,31 +602,38 @@
       bindEvents();
     }
 
-    function escapeAttr(v) {
-      return String(v || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    }
-
     function bindEvents() {
       Array.prototype.forEach.call(root.querySelectorAll('[data-os]'), function (btn) {
         btn.addEventListener('click', function () { state.os = btn.getAttribute('data-os'); render(); });
       });
-      Array.prototype.forEach.call(root.querySelectorAll('[data-mode]'), function (btn) {
-        btn.addEventListener('click', function () { state.mode = btn.getAttribute('data-mode'); render(); });
-      });
-      Array.prototype.forEach.call(root.querySelectorAll('[data-preset]'), function (btn) {
-        btn.addEventListener('click', function () {
-          state.packs = PRESETS[btn.getAttribute('data-preset')].slice();
+
+      var wmaToggle = document.getElementById('ic-wma-toggle');
+      if (wmaToggle) {
+        wmaToggle.addEventListener('change', function () {
+          state.wmaEnabled = wmaToggle.checked;
+          if (!state.wmaEnabled) {
+            state.wmaAtlases = [];
+          } else if (state.wmaAtlases.length === 0) {
+            state.wmaAtlases = ['wma_org'];
+          }
           render();
         });
-      });
-      Array.prototype.forEach.call(root.querySelectorAll('[data-pack]'), function (cb) {
+      }
+
+      Array.prototype.forEach.call(root.querySelectorAll('[data-atlas]'), function (cb) {
         cb.addEventListener('change', function () {
-          var pid = cb.getAttribute('data-pack');
-          if (cb.checked && state.packs.indexOf(pid) === -1) { state.packs.push(pid); }
-          if (!cb.checked) { state.packs = state.packs.filter(function (x) { return x !== pid; }); }
+          var aid = cb.getAttribute('data-atlas');
+          if (cb.checked) {
+            state.wmaEnabled = true;
+            if (state.wmaAtlases.indexOf(aid) === -1) { state.wmaAtlases.push(aid); }
+          } else {
+            state.wmaAtlases = state.wmaAtlases.filter(function (x) { return x !== aid; });
+            if (state.wmaAtlases.length === 0) { state.wmaEnabled = false; }
+          }
           render();
         });
       });
+
       var slicerInput = document.getElementById('ic-slicer-path');
       if (slicerInput) { slicerInput.addEventListener('input', function () { state.slicerPath = slicerInput.value; }); }
       var modelInput = document.getElementById('ic-model-dir');

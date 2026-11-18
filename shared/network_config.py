@@ -36,8 +36,8 @@ _GITHUB_ORIGIN_PREFIXES = (
     "https://codeload.github.com/",
 )
 
-_PACK_LIMIT_FILES = 5000
-_PACK_LIMIT_BYTES = 8 * 1024 * 1024 * 1024
+_PACK_LIMIT_FILES = 20000
+_PACK_LIMIT_BYTES = 24 * 1024 * 1024 * 1024
 
 
 def _clean_mirror_prefix(value: Any) -> str:
@@ -341,15 +341,18 @@ def extract_modular_pack(
                 extracted.append(posix.as_posix())
     else:
         with tarfile.open(archive, "r:*") as tf:
-            members = tf.getmembers()
-            if len(members) > _PACK_LIMIT_FILES or sum(m.size for m in members) > _PACK_LIMIT_BYTES:
-                raise ValueError(f"Pack archive exceeds extraction limits: {archive.name}")
-            for member in members:
+            file_count = 0
+            total_bytes = 0
+            for member in tf:
                 if member.issym() or member.islnk() or member.isdev():
                     raise ValueError(f"Link/device entries are forbidden in pack archives: {member.name}")
                 posix = _safe_extract_member(member.name)
                 if not member.isfile() or posix is None:
                     continue
+                file_count += 1
+                total_bytes += max(0, int(member.size))
+                if file_count > _PACK_LIMIT_FILES or total_bytes > _PACK_LIMIT_BYTES:
+                    raise ValueError(f"Pack archive exceeds extraction limits: {archive.name}")
                 target = root.joinpath(*posix.parts)
                 target.parent.mkdir(parents=True, exist_ok=True)
                 src = tf.extractfile(member)

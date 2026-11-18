@@ -29,9 +29,9 @@ _DEFAULT_PACK_SIZES_BYTES = {
     "surface": 255_000_000,
     "surface_postprocess": 70_000_000,
     "tractcloud": 35_000_000,
-    "wma_org": 700_000_000,
-    "wma_naba": 1_200_000_000,
-    "wma_east_west": 4_100_000_000,
+    "wma_org": 1_500_000_000,
+    "wma_naba": 2_900_000_000,
+    "wma_east_west": 9_900_000_000,
 }
 
 _RESOURCE_LABELS = {
@@ -289,9 +289,11 @@ def detect_missing_task_resources(
             explicit_wma = backend_paths.get("wma_atlas_dir")
             if not _wma_atlas_ready(roots, wma_family, explicit_wma_dir=explicit_wma):
                 if wma_family == "naba":
-                    add_item("wma_naba", _DEFAULT_PACK_SIZES_BYTES["wma_naba"], None)
+                    pack_size = int((packs.get("wma_naba") or {}).get("size_bytes") or 0)
+                    add_item("wma_naba", pack_size or _DEFAULT_PACK_SIZES_BYTES["wma_naba"], "wma_naba")
                 elif wma_family == "east-west":
-                    add_item("wma_east_west", _DEFAULT_PACK_SIZES_BYTES["wma_east_west"], None)
+                    pack_size = int((packs.get("wma_east_west") or {}).get("size_bytes") or 0)
+                    add_item("wma_east_west", pack_size or _DEFAULT_PACK_SIZES_BYTES["wma_east_west"], "wma_east_west")
                 else:
                     pack_size = int((packs.get("wma_org") or {}).get("size_bytes") or 0)
                     add_item("wma_org", pack_size or _DEFAULT_PACK_SIZES_BYTES["wma_org"], "wma_org")

@@ -1,0 +1,90 @@
+name: Repackage Release Assets
+
+on:
+  workflow_dispatch:
+    inputs:
+      phase:
+        description: "Phase to execute: 'atlases' or 'os-bases'"
+        required: true
+        type: choice
+        options:
+          - "atlases"
+          - "os-bases"
+
+permissions:
+  contents: write
+
+jobs:
+  atlases:
+    if: github.event.inputs.phase == 'atlases'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        atlas: [org, naba, east-west]
+    steps:
+      - name: Free runner disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          df -h /
+
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build & upload WMA ${{ matrix.atlas }} archive
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python .github/scripts/repackage_release_assets.py build-atlas \
+            --atlas "${{ matrix.atlas }}" \
+            --work-dir "${{ runner.temp }}/wma-work" \
+            --out-dir "${{ runner.temp }}/wma-out"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: atlas-receipt-${{ matrix.atlas }}
+          path: ${{ runner.temp }}/wma-out/atlas-receipt-${{ matrix.atlas }}.json
+          if-no-files-found: error
+
+  os-bases:
+    if: github.event.inputs.phase == 'os-bases'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [windows-x64, linux-x64, macos-arm64]
+    steps:
+      - name: Free runner disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          df -h /
+
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Repack & upload ${{ matrix.target }} Base package
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python .github/scripts/repackage_release_assets.py repack-os-base \
+            --target "${{ matrix.target }}" \
+            --work-dir "${{ runner.temp }}/base-work" \
+            --out-dir "${{ runner.temp }}/base-out"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: os-base-receipt-${{ matrix.target }}
+          path: ${{ runner.temp }}/base-out/os-base-receipt-${{ matrix.target }}.json
+          if-no-files-found: error

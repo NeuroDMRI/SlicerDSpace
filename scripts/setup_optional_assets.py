@@ -13,13 +13,109 @@ from scripts.download_model_assets import download_asset_plan, load_manifest, re
 from scripts.import_external_resources import extract_org, import_file
 from shared.managed_runtimes import write_json
 from shared.model_assets import configured_model_assets_root, _sha256_cache
-from shared.network_config import extract_modular_pack, find_local_pack_archive, load_release_packs_manifest
+from shared.network_config import (
+    download_file_verified,
+    extract_modular_pack,
+    find_local_pack_archive,
+    load_network_settings,
+    load_release_packs_manifest,
+    merge_split_archive,
+)
 from shared.optional_assets import MANIFEST, verified_resource_directory
 from shared.model_asset_integrity import verify_against_manifest
 
 PROFILES = ("pnl-cnn", "tractcloud", "wma", "wma-east-west", "wma-naba", "surface-postprocess")
 PATH_SETTINGS = {"pnl-cnn": "pnl_mask_model_dir", "tractcloud": "tractcloud_data_dir", "wma": "wma_atlas_dir",
                  "wma-east-west": "wma_atlas_dir", "wma-naba": "wma_atlas_dir"}
+_RELEASE_PACK_BY_PROFILE = {
+    "wma": "wma_org",
+    "wma-naba": "wma_naba",
+    "wma-east-west": "wma_east_west",
+}
+
+
+def _try_prepare_from_release_pack(profile: str, root: Path, *, offline_root=None) -> bool:
+    """Install a WMA atlas from a published single/split GitHub Release archive or offline pack."""
+    pack_id = _RELEASE_PACK_BY_PROFILE.get(profile)
+    if not pack_id:
+        return False
+    repo_manifest = (Path(__file__).resolve().parents[1] / "models/external_assets_manifest.json").resolve()
+    if Path(MANIFEST).resolve() != repo_manifest:
+        return False
+    pack = (load_release_packs_manifest().get("packs") or {}).get(pack_id)
+    if not isinstance(pack, dict):
+        return False
+    filename = str(pack.get("filename") or "")
+    expected_sha = str(pack.get("sha256") or "")
+    if not filename or not expected_sha:
+        return False
+
+    search_dir = offline_root or load_network_settings().get("offline_assets_dir") or ""
+    if search_dir:
+        local_pack = find_local_pack_archive(search_dir, filename, expected_sha256=expected_sha)
+        if local_pack is not None:
+            print(f"[Resources] Extracting offline release pack {local_pack.name} -> {root}", flush=True)
+            extract_modular_pack(local_pack, root, expected_sha256=expected_sha)
+            return verified_resource_directory(profile, asset_root=root) is not None
+
+    if offline_root or not pack.get("published"):
+        return False
+
+    cache_dir = root / ".release-pack-cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    parts = list(pack.get("parts") or ())
+    downloaded_files: list[Path] = []
+    try:
+        if parts:
+            for part in parts:
+                part_name = str(part.get("filename") or "")
+                part_url = str(part.get("url") or "")
+                part_sha = str(part.get("sha256") or "")
+                part_size = int(part.get("size_bytes") or 0)
+                if not part_name or not part_url:
+                    return False
+                dest = cache_dir / part_name
+                download_file_verified(
+                    part_url,
+                    dest,
+                    expected_sha256=part_sha,
+                    expected_size=part_size,
+                )
+                downloaded_files.append(dest)
+            merged = merge_split_archive(cache_dir, filename, expected_sha256=expected_sha, output_dir=cache_dir)
+            if merged is None:
+                return False
+            downloaded_files.append(merged)
+            print(f"[Resources] Extracting merged atlas pack {merged.name} -> {root}", flush=True)
+            extract_modular_pack(merged, root, expected_sha256=expected_sha)
+        elif pack.get("url"):
+            dest = cache_dir / filename
+            download_file_verified(
+                str(pack["url"]),
+                dest,
+                expected_sha256=expected_sha,
+                expected_size=int(pack.get("size_bytes") or 0),
+            )
+            downloaded_files.append(dest)
+            print(f"[Resources] Extracting atlas pack {dest.name} -> {root}", flush=True)
+            extract_modular_pack(dest, root, expected_sha256=expected_sha)
+        else:
+            return False
+        return verified_resource_directory(profile, asset_root=root) is not None
+    except Exception as exc:
+        print(f"[Resources] Release pack acquisition fallback ({filename}: {exc})", file=sys.stderr, flush=True)
+        return False
+    finally:
+        for path in downloaded_files:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        try:
+            if cache_dir.is_dir() and not any(cache_dir.iterdir()):
+                cache_dir.rmdir()
+        except OSError:
+            pass
 
 
 def prepare(profiles, *, asset_root=None, execute=False, accept_terms=False, offline_root=None):
@@ -77,6 +173,13 @@ def prepare(profiles, *, asset_root=None, execute=False, accept_terms=False, off
                 disk = disk.parent
             if shutil.disk_usage(disk).free < required:
                 raise OSError(f"Insufficient atlas storage: allow {required} additional bytes for download, extraction and scratch files under {root}")
+        if _try_prepare_from_release_pack(profile, root, offline_root=offline_root):
+            directory = verified_resource_directory(profile, asset_root=root)
+            if directory is None:
+                raise RuntimeError("Resources are incomplete after preparation: " + profile)
+            if profile in PATH_SETTINGS:
+                result["external_dependencies"][PATH_SETTINGS[profile]] = str(directory)
+            continue
         if offline_root:
             offline_path = Path(offline_root)
             packs = (load_release_packs_manifest().get("packs") or {}).values()

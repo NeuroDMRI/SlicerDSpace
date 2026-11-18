@@ -154,17 +154,24 @@ analysis run through your own Agent.
 
 ## Installation
 
-### Option A: Unified Release Package (Recommended for Windows, Linux & Apple Silicon macOS)
+### Option A: Interactive Website Customizer & Modular Packs (Recommended for Clinicians)
 
-Download the single platform installer from the GitHub Release page:
+Open the [SlicerDSpace Project Site](https://neurodmri.github.io/SlicerDSpace/#start) (or [中文页面](https://neurodmri.github.io/SlicerDSpace/zh.html#start)) to generate a double-click custom installer script (`Install-SlicerDSpace.bat` / `.command` / `.sh`):
+- Enter your **3D Slicer 5.10.0** path (or leave blank for standard locations) and select **only the workflows you use day-to-day** (or choose **Full All-in-One Auto-Merge** mode to download and merge `.001`, `.002`, ... split volumes without terminal commands).
+- Optional hospital-network controls let you choose a **GitHub download mirror** (`ghfast.top` / `gh-proxy.com` / custom prefix), set an **HTTP/HTTPS proxy**, or point to a **local offline folder** with `Pack-*.zip` or `.001`, `.002`, ... volumes.
+- If you add a skipped workflow later inside 3D Slicer (for example ticking **WMA ORG Atlas** or **DDSurfer**), SlicerDSpace immediately offers a one-click **hot on-demand download or offline folder import** without reinstalling the extension or restarting Slicer.
+
+### Option B: Manual Unified Release Package (All-in-One Offline Bundles)
+
+Download the platform installer from the GitHub Release page:
 
 - **Windows (`x86_64`)**: `SlicerDSpace-v0.1.1-Windows-x64.zip`
 - **Linux (`x86_64`)**: `SlicerDSpace-v0.1.1-Linux-x64.tar.gz`
-- **macOS (Apple Silicon `arm64`)**: `SlicerDSpace-v0.1.1-macOS-arm64.tar.gz`
+- **macOS (Apple Silicon `arm64`)**: `SlicerDSpace-v0.1.1-macOS-arm64.tar.gz` (plus lightweight `SlicerDSpace-v0.1.1-macOS-arm64-Core.tar.gz` and cross-platform `Core-Scripted.zip` + modular single-file `Pack-*.zip` archives for customizer/on-demand setup)
 
-Each archive is a complete, self-contained **All-in-One offline bundle** packaging the SlicerDSpace module (`depends NA`), Python 3.12 packages (`bundled-python/`), all deep-learning model weights and atlases (`bundled-model-assets/`: `DDSeg`, `DDParcel`, `DDSurfer`, `TractCloud`, `PNL`, and all three extracted WMA white-matter atlases—`ORG`, `East-West`, and `NABA`), pinned algorithm sources (`bundled-sources/`: `WMQL`, `WMA`, `TractCloud`), companion `UKFTractography` CLI, and modular native binary runtimes inside `SlicerDSpace/bundled-runtimes/` (**MRtrix3 `3.0.8`**, **FSL `2602.0`** with `topup`/`applytopup`/`eddy_cpu`, and the **FreeSurfer Surface Runtime** with 7 commands and templates; no personal FreeSurfer activation key is bundled, so optional cortical surface postprocessing still requires your own FreeSurfer `license.txt`). Because the offline bundles exceed GitHub Releases' `2.0 GiB` single-file limit, each platform archive is distributed on GitHub Releases as `.001`, `.002`, ... split volumes—download all volumes for your platform, merge them into the single `.zip` or `.tar.gz` (`copy /b` or 7-Zip on Windows, `cat` on Linux/macOS), install directly in **3D Slicer 5.10.0** via **View > Extensions Manager > Install Extensions > Install Extension from File**, restart Slicer, and open **Modules > Diffusion > SlicerDSpace**—ready out of the box with zero extra weight downloads or external setup. (Bundled native runtimes are verified via per-file `tree_sha256` digests; physical Intel `x86_64` Mac hardware remains unverified.)
+Each full archive is a complete, self-contained **All-in-One offline bundle** packaging the SlicerDSpace module (`depends NA`), Python 3.12 packages (`bundled-python/`), all deep-learning model weights and atlases (`bundled-model-assets/`: `DDSeg`, `DDParcel`, `DDSurfer`, `TractCloud`, `PNL`, and all three extracted WMA white-matter atlases—`ORG`, `East-West`, and `NABA`), pinned algorithm sources (`bundled-sources/`: `WMQL`, `WMA`, `TractCloud`), companion `UKFTractography` CLI, and modular native binary runtimes inside `SlicerDSpace/bundled-runtimes/` (**MRtrix3 `3.0.8`**, **FSL `2602.0`** with `topup`/`applytopup`/`eddy_cpu`, and the **FreeSurfer Surface Runtime** with 7 commands and templates; no personal FreeSurfer activation key is bundled, so optional cortical surface postprocessing still requires your own FreeSurfer `license.txt`). Because the offline bundles exceed GitHub Releases' `2.0 GiB` single-file limit, each platform archive is distributed on GitHub Releases as `.001`, `.002`, ... split volumes—download all volumes for your platform, merge them into the single `.zip` or `.tar.gz` (`copy /b` or 7-Zip on Windows, `cat` on Linux/macOS), install directly in **3D Slicer 5.10.0** via **View > Extensions Manager > Install Extensions > Install Extension from File**, restart Slicer, and open **Modules > Diffusion > SlicerDSpace**—ready out of the box with zero extra weight downloads or external setup. (Bundled native runtimes are verified via per-file `tree_sha256` digests; physical Intel `x86_64` Mac hardware remains unverified.)
 
-### Option B: Stage From Source
+### Option C: Stage From Source
 
 Use an authorized checkout while the repository is private. This lightweight
 source installation omits the website and historical reports; a full checkout

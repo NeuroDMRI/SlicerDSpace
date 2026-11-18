@@ -9,6 +9,7 @@ import hashlib
 import http.client
 import json
 import os
+import shutil
 import subprocess
 import sys
 import urllib.error
@@ -28,6 +29,15 @@ if str(REPO_ROOT) not in sys.path:
 
 from shared.external_process import text_subprocess_kwargs
 from shared.model_assets import MODEL_ASSETS_ENV, configured_model_assets_root, resolve_model_assets_root
+from shared.network_config import (
+    download_file_verified,
+    expand_candidate_urls,
+    extract_modular_pack,
+    find_local_pack_archive,
+    load_network_settings,
+    load_release_packs_manifest,
+    open_url,
+)
 
 
 @dataclass(frozen=True)
@@ -574,7 +584,16 @@ def _url_candidates_for_asset(
         allow_planned_sources=allow_planned_sources,
     ):
         candidates.append((source_id, _format_url_template(template, relative=relative, record=record)))
-    return candidates
+    expanded: list[tuple[str, str]] = []
+    seen_urls: set[str] = set()
+    for src_id, url in candidates:
+        for candidate_url in expand_candidate_urls([url], allow_mirror=True):
+            if candidate_url in seen_urls:
+                continue
+            seen_urls.add(candidate_url)
+            tag = src_id if candidate_url == url else f"{src_id}:mirror"
+            expanded.append((tag, candidate_url))
+    return expanded
 
 
 def _download_url_to_path(
@@ -619,7 +638,7 @@ def _download_url_to_path(
         headers["Range"] = f"bytes={resume_from}-"
     request = urllib.request.Request(url, headers=headers)
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with open_url(request, timeout=timeout, urlopen_fn=urllib.request.urlopen) as response:
             status = getattr(response, "status", None)
             append = bool(resume_from and status == 206)
             if append:
@@ -818,6 +837,99 @@ def download_asset_urls(
             raise RuntimeError(f"Could not download {relative} from any configured source. Errors: {errors}")
 
 
+def _plan_needs_download(repo_root: Path, plan: AssetPlan) -> bool:
+    for relative in plan.required_paths:
+        record = plan.asset_records.get(relative, {})
+        if not _asset_record_ok(repo_root / relative, record):
+            return True
+    return False
+
+
+def _matching_release_packs(plan: AssetPlan) -> list[dict[str, Any]]:
+    packs = (load_release_packs_manifest().get("packs") or {}).values()
+    plan_profiles = set(plan.resolved_profiles) | {plan.profile}
+    matched: list[dict[str, Any]] = []
+    for pack in packs:
+        if not isinstance(pack, dict):
+            continue
+        covered = set(pack.get("profiles") or ())
+        if not covered or not (covered & plan_profiles):
+            continue
+        pack_files = pack.get("files") or {}
+        if not pack_files:
+            continue
+        # Only match when the resolved AssetPlan uses the same production SHA-256 digests.
+        if any(
+            rel in plan.asset_records
+            and str(plan.asset_records[rel].get("sha256") or "") == str(expected_sha)
+            for rel, expected_sha in pack_files.items()
+        ):
+            matched.append(pack)
+    return matched
+
+
+def _try_prepare_from_packs(
+    repo_root: Path,
+    plan: AssetPlan,
+    *,
+    force: bool = False,
+    allow_network: bool = True,
+) -> None:
+    if force or not _plan_needs_download(repo_root, plan):
+        return
+    packs = _matching_release_packs(plan)
+    if not packs:
+        return
+    settings = load_network_settings()
+    offline_dir = settings.get("offline_assets_dir") or ""
+    for pack in packs:
+        filename = str(pack.get("filename") or "")
+        expected_sha = str(pack.get("sha256") or "")
+        if not filename:
+            continue
+        # Step 1: check offline directory for local Pack-*.zip or .001/.002 parts
+        local_pack = find_local_pack_archive(offline_dir, filename, expected_sha256=expected_sha) if offline_dir else None
+        if local_pack is not None:
+            print(f"[model-assets] Extracting offline pack {local_pack.name} into {repo_root}")
+            extract_modular_pack(local_pack, repo_root, expected_sha256=expected_sha)
+            continue
+        # Step 2: check offline directory for unpacked raw asset files matching required_paths
+        if offline_dir:
+            offline_root = Path(offline_dir).expanduser()
+            for relative in pack.get("files") or ():
+                if relative in plan.asset_records and not _asset_record_ok(repo_root / relative, plan.asset_records[relative]):
+                    candidate = offline_root / relative
+                    if _asset_record_ok(candidate, plan.asset_records[relative]):
+                        dst = repo_root / relative
+                        dst.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(candidate, dst)
+        if not _plan_needs_download(repo_root, plan):
+            continue
+        # Step 3: download single-file published pack over network if available
+        if allow_network and pack.get("published") and expected_sha and pack.get("url"):
+            cache_dir = repo_root / ".release-pack-cache"
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            cached = cache_dir / filename
+            try:
+                print(f"[model-assets] Downloading modular pack {filename}")
+                download_file_verified(
+                    str(pack["url"]),
+                    cached,
+                    expected_sha256=expected_sha,
+                    expected_size=int(pack.get("size_bytes") or 0),
+                )
+                extract_modular_pack(cached, repo_root, expected_sha256=expected_sha)
+                cached.unlink(missing_ok=True)
+            except Exception as exc:
+                print(f"[model-assets] Modular pack download fallback to per-file URLs ({filename}: {exc})", file=sys.stderr)
+            finally:
+                try:
+                    if cache_dir.is_dir() and not any(cache_dir.iterdir()):
+                        cache_dir.rmdir()
+                except OSError:
+                    pass
+
+
 def download_asset_plan(
     repo_root: Path,
     plan: AssetPlan,
@@ -837,6 +949,10 @@ def download_asset_plan(
         if source == "git-lfs":
             raise RuntimeError("Upstream-only resources cannot be acquired from Git LFS mirrors")
         source = "url"
+    if not force and not source_ids and not base_urls:
+        _try_prepare_from_packs(repo_root, plan, force=force, allow_network=True)
+    if not force and not _plan_needs_download(repo_root, plan):
+        return
     if source in {"auto", "git-lfs"}:
         try:
             download_asset_plan_from_git_lfs(repo_root, plan)

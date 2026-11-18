@@ -226,8 +226,19 @@ def _confirm(owner, plan):
         layout.addWidget(scroll)
     else:
         layout.addWidget(body_label)
-    dialog.setMinimumWidth(440)
-    dialog.setMaximumWidth(560)
+    read_net_values = None
+    try:
+        from shared.ui_on_demand_resources import build_network_and_offline_panel
+
+        net_panel, read_net_values = build_network_and_offline_panel(
+            dialog,
+            zh=str(getattr(owner, "_onboardingLanguage", "en")).startswith("zh"),
+        )
+        layout.addWidget(net_panel)
+    except Exception:
+        read_net_values = None
+    dialog.setMinimumWidth(460)
+    dialog.setMaximumWidth(580)
     buttons = qt.QDialogButtonBox(dialog)
     buttons.setStandardButtons(qt.QDialogButtonBox.Ok | qt.QDialogButtonBox.Cancel)
     buttons.button(qt.QDialogButtonBox.Ok).setText(
@@ -236,7 +247,15 @@ def _confirm(owner, plan):
     buttons.connect("rejected()", dialog.reject)
     layout.addWidget(buttons)
     accepted = dialog.exec_() == qt.QDialog.Accepted
+    net_values = read_net_values() if (accepted and callable(read_net_values)) else None
     dialog.deleteLater()
+    if accepted and net_values is not None:
+        try:
+            from shared.network_config import save_network_settings
+
+            save_network_settings(**net_values)
+        except Exception:
+            pass
     if accepted and pending:
         from shared.setup_components import accept_licences
         # id, version and time, in the user config. Version: SHA-256 of the local licence file;
@@ -321,7 +340,7 @@ def selected_setup_plan(owner, result, *, repair=False):
     return plan
 
 
-def prepare_selected_environment(owner, result=None, *, repair=False):
+def prepare_selected_environment(owner, result=None, *, repair=False, skip_confirm=False):
     import slicer
     from shared.selected_setup import complete_step
     from shared.ui_managed_runtimes import apply_setup_settings
@@ -348,7 +367,15 @@ def prepare_selected_environment(owner, result=None, *, repair=False):
     pending_actions = bool((plan.get('windows_runtime') or {}).get('command')) or plan.get('surface_build_required', False) or plan.get('surface_prebuilt_required', False) or any(plan.get(key) for key in (
         "extensions", "restart_extensions", "python_packages", "asset_profiles", "optional_asset_profiles",
         "managed_profiles", "native_bundles", "unsupported_profiles", "manual_items", "backend_profiles"))
-    if pending_actions and not _confirm(owner, plan):
+    needs_confirm = not skip_confirm
+    if skip_confirm and pending_actions:
+        from shared.setup_components import pending_licences, plan_components, required_licences
+        from shared.setup_resume import accepted_licences
+
+        pending_lic = pending_licences(required_licences(plan_components(plan)), accepted_licences())
+        if pending_lic or plan.get("extensions") or plan.get("manual_items") or plan.get("unsupported_profiles"):
+            needs_confirm = True
+    if pending_actions and needs_confirm and not _confirm(owner, plan):
         return False
     owner._selectedSetupActive = True
     folder = default_user_config_path().parent / "setup-history" / datetime.now().strftime("%Y%m%d-%H%M%S-%f")

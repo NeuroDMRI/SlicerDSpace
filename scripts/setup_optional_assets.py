@@ -13,6 +13,7 @@ from scripts.download_model_assets import download_asset_plan, load_manifest, re
 from scripts.import_external_resources import extract_org, import_file
 from shared.managed_runtimes import write_json
 from shared.model_assets import configured_model_assets_root, _sha256_cache
+from shared.network_config import extract_modular_pack, find_local_pack_archive, load_release_packs_manifest
 from shared.optional_assets import MANIFEST, verified_resource_directory
 from shared.model_asset_integrity import verify_against_manifest
 
@@ -77,8 +78,25 @@ def prepare(profiles, *, asset_root=None, execute=False, accept_terms=False, off
             if shutil.disk_usage(disk).free < required:
                 raise OSError(f"Insufficient atlas storage: allow {required} additional bytes for download, extraction and scratch files under {root}")
         if offline_root:
+            offline_path = Path(offline_root)
+            packs = (load_release_packs_manifest().get("packs") or {}).values()
+            extracted_from_pack = False
+            for pack in packs:
+                if profile not in (pack.get("profiles") or ()):
+                    continue
+                local_pack = find_local_pack_archive(
+                    offline_path,
+                    str(pack.get("filename") or ""),
+                    expected_sha256=str(pack.get("sha256") or ""),
+                )
+                if local_pack is not None:
+                    extract_modular_pack(local_pack, root, expected_sha256=str(pack.get("sha256") or ""))
+                    extracted_from_pack = True
             for relative, record in plan.asset_records.items():
-                import_file(Path(offline_root) / relative, root / relative, record)
+                if (offline_path / relative).is_file():
+                    import_file(offline_path / relative, root / relative, record)
+                elif not extracted_from_pack:
+                    import_file(offline_path / relative, root / relative, record)
         else:
             download_asset_plan(root, plan, manifest, source="url",
                                 progress_callback=lambda event: print(json.dumps(event), flush=True))

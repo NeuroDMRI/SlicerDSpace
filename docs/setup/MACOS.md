@@ -16,15 +16,17 @@ external-tool requirements and explicitly unavailable features.
 
 ---
 
-## 1. Install 3D Slicer & SlicerDSpace (All-in-One Offline Bundle)
+## 1. Install 3D Slicer & SlicerDSpace (One-Click Customizer or All-in-One Offline Bundle)
 
-1. Download and install **3D Slicer 5.10.0** for macOS from <https://www.slicer.org/>.
-2. Download **both** split volumes `SlicerDSpace-v0.1.1-macOS-arm64.tar.gz.001` and `SlicerDSpace-v0.1.1-macOS-arm64.tar.gz.002` from GitHub Releases into the same folder, then merge them in Terminal (do **not** extract the merged archive):
-   ```bash
-   cat SlicerDSpace-v0.1.1-macOS-arm64.tar.gz.001 SlicerDSpace-v0.1.1-macOS-arm64.tar.gz.002 > SlicerDSpace-v0.1.1-macOS-arm64.tar.gz
-   ```
-3. In 3D Slicer 5.10.0, open **View -> Extensions Manager -> Install Extensions -> Install Extension from File...**, select the merged `SlicerDSpace-v0.1.1-macOS-arm64.tar.gz`, and restart 3D Slicer.
-4. Open **Modules -> Diffusion -> SlicerDSpace**—the All-in-One Apple Silicon bundle includes Python 3.12 packages (`bundled-python/`), all deep-learning weights and the extracted `ORG` atlas (`bundled-model-assets/`), pinned `WMQL`/`WMA`/`TractCloud` sources (`bundled-sources/`), `UKFTractography` CLI, and native `MRtrix3`/`FSL`/`Surface Runtime` binaries (`bundled-runtimes/`), so workflows run out of the box with zero extra downloads or Conda/Docker setup. *(Source-staged installs without bundled assets can still use **Environment and installation -> Prepare selected analysis environment** on demand.)*
+- **Recommended interactive path (no manual `cat` merge)**: Use the [SlicerDSpace Website Customizer](https://neurodmri.github.io/SlicerDSpace/#start) to enter your `/Applications/Slicer.app` path, select either **On-Demand Modular Install** (`SlicerDSpace-v0.1.1-macOS-arm64-Core.tar.gz` + only your chosen `Pack-*.zip` weights/atlases, with mirror/proxy/offline folder options and in-Slicer hot supplement later) or **All-in-One Auto-Merge**, and run the generated `Install-SlicerDSpace.command` script.
+- **Manual air-gapped installation**:
+  1. Download and install **3D Slicer 5.10.0** for macOS from <https://www.slicer.org/>.
+  2. Download **both** split volumes `SlicerDSpace-v0.1.1-macOS-arm64.tar.gz.001` and `SlicerDSpace-v0.1.1-macOS-arm64.tar.gz.002` from GitHub Releases into the same folder, then merge them in Terminal (do **not** extract the merged archive):
+     ```bash
+     cat SlicerDSpace-v0.1.1-macOS-arm64.tar.gz.001 SlicerDSpace-v0.1.1-macOS-arm64.tar.gz.002 > SlicerDSpace-v0.1.1-macOS-arm64.tar.gz
+     ```
+  3. In 3D Slicer 5.10.0, open **View -> Extensions Manager -> Install Extensions -> Install Extension from File...**, select the merged `SlicerDSpace-v0.1.1-macOS-arm64.tar.gz`, and restart 3D Slicer.
+  4. Open **Modules -> Diffusion -> SlicerDSpace**—the All-in-One Apple Silicon bundle includes Python 3.12 packages (`bundled-python/`), all deep-learning weights and the extracted `ORG` atlas (`bundled-model-assets/`), pinned `WMQL`/`WMA`/`TractCloud` sources (`bundled-sources/`), `UKFTractography` CLI, and native `MRtrix3`/`FSL`/`Surface Runtime` binaries (`bundled-runtimes/`), so workflows run out of the box with zero extra downloads or Conda/Docker setup. *(Modular core or source-staged installs automatically offer in-app hot downloads/offline imports whenever you tick additional models or atlases.)*
 
 ---
 

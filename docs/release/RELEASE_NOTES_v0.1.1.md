@@ -2,7 +2,7 @@
 
 SlicerDSpace `v0.1.1` provides **100% self-contained, offline-ready All-in-One extension packages** for **Windows (`x64`)**, **Linux (`x64`)**, and **macOS (Apple Silicon `arm64`)** on **3D Slicer 5.10.0**. Each package bundles the SlicerDSpace module (`depends NA`), all required Python 3.12 packages (`bundled-python/`: CPU PyTorch, nibabel, DIPY, AMICO, scikit-image, scikit-learn, trimesh, dcm2niix, etc.), all deep-learning model weights and atlases (`bundled-model-assets/`: `DDSeg`, `DDParcel`, `DDSurfer`, `PNL` brain mask, `TractCloud`, FreeSurfer `atlas.tar.gz`, HCP T2 template, and all three extracted WMA white-matter atlases—`ORG`, `East-West`, and `NABA`), pinned algorithm sources (`bundled-sources/`: `WMQL`, `WMA`, `TractCloud`), companion `UKFTractography` CLI, and native binary runtimes (`bundled-runtimes/`: `MRtrix3 3.0.8`, `FSL 2602.0` `topup`/`applytopup`/`eddy_cpu`, and FreeSurfer 7-command surface runtime; no personal FreeSurfer activation key is bundled).
 
-> Because the full All-in-One archives exceed GitHub Releases' **2.0 GiB per-file limit**, each platform package is split into `.001`, `.002`, ... volumes. Download all volumes for your platform into the same folder, merge them with one command below, verify SHA-256 against `SHA256SUMS.txt` (optional), and install the merged archive in 3D Slicer 5.10.0.
+> **Recommended for clinicians**: Use the **[Interactive Website Installer Customizer](https://neurodmri.github.io/SlicerDSpace/#start)** ([中文版](https://neurodmri.github.io/SlicerDSpace/zh.html#start)) to generate a double-click `Install-SlicerDSpace.bat` / `.command` / `.sh` script that configures your 3D Slicer path, selects only the single-file modular weight packs (`Pack-BrainMask-PNL.zip`, `Pack-Anatomy.zip`, `Pack-Surface.zip`, `Pack-TractCloud.zip`, `Pack-WMA-ORG.zip`) you need, or auto-merges All-in-One `.001`, `.002`, ... split volumes—with built-in mirror (`ghfast.top` / `gh-proxy.com`), HTTP/HTTPS proxy, and offline folder support, plus hot in-Slicer on-demand supplement whenever new analyses are ticked later. Because the full All-in-One archives exceed GitHub Releases' **2.0 GiB per-file limit**, each platform full package is split into `.001`, `.002`, ... volumes below. Verify SHA-256 against `SHA256SUMS.txt` (optional).
 
 ## 1. Download & Merge Split Volumes
 
@@ -46,7 +46,7 @@ SlicerDSpace `v0.1.1` provides **100% self-contained, offline-ready All-in-One e
 
 **Windows (`x64`)**、**Linux (`x64`)** 与 **macOS (Apple Silicon `arm64`)** 三个平台现已全部提供**全量离线开箱即用一体包（All-in-One）**，包内已完整内置 SlicerDSpace 模块（`depends NA`）、全部 Python 3.12 科学计算依赖（含 CPU 版 PyTorch、nibabel、DIPY、AMICO、dcm2niix 等）、全部深度学习模型权重与图谱（`DDSeg`、`DDParcel`、`DDSurfer`、`PNL` 脑掩膜、`TractCloud` 及全部三套解压就绪的 WMA 白质图谱：`ORG`、`East-West` 与 `NABA`）、算法源码（`WMQL`、`WMA`、`TractCloud`）、`UKFTractography` CLI 以及原生二进制运行组件（`MRtrix3 3.0.8`、`FSL 2602.0` 预处理、FreeSurfer 表面后处理组件；不含任何个人 FreeSurfer 激活密钥）。
 
-由于完整安装包体积超过 GitHub Releases 单文件 `2.0 GiB` 上传限制，每个平台安装包均已切分为 `.001`、`.002` ... 分卷：
+此外，在项目官网（<https://neurodmri.github.io/SlicerDSpace/zh.html#start>）提供了面向临床用户的**可视化安装脚本定制器**，支持填写 Slicer 路径、按日常需要勾选单文件模块化功能包（免手工合并分卷）或全自动合并 `.001`、`.002` ... 分卷，内置加速镜像源 / 代理 / 本地离线目录选项，并在 Slicer 内勾选未装模型/图谱时支持随时热补装。如需手工合并离线一体包，完整安装包因超过 GitHub Releases 单文件 `2.0 GiB` 上传限制，已切分为 `.001`、`.002` ... 分卷：
 
 ### 1. 下载并合并分卷
 

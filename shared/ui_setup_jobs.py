@@ -51,6 +51,13 @@ class SetupJob:
             return
         program, args, environment = self.commands[self.index]
         env = qt.QProcessEnvironment.systemEnvironment()
+        try:
+            from shared.network_config import network_env_overrides
+
+            for key, value in network_env_overrides().items():
+                env.insert(key, str(value))
+        except Exception:
+            pass
         for key, value in environment.items():
             if value is None:
                 env.remove(key)

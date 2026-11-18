@@ -10,7 +10,9 @@
 
 仅使用插件，不需要下载网站源码、历史性能报告或测试代码。它们保留在完整仓库中，
 供开发、审计和论文复现使用，不应成为普通用户安装的前提。
-当前 `v0.1.1` 版本在 GitHub Releases 为 Windows、Linux 与 Apple Silicon macOS 均提供**全量离线开箱即用一体包（All-in-One）**（`SlicerDSpace-v0.1.1-Windows-x64.zip`、`SlicerDSpace-v0.1.1-Linux-x64.tar.gz` 与 `SlicerDSpace-v0.1.1-macOS-arm64.tar.gz`；受 GitHub Releases 单文件 `2.0 GiB` 限制，各平台以 `.001`、`.002` ... 分卷形式提供，合并后通过 **3D Slicer 5.10.0** 的 **Extensions Manager > Install Extensions > Install Extension from File** 本地安装）；在线 Slicer 扩展商店目录（Extension Catalog）上架仍为后续计划，Intel（`x86_64`）Mac 真机硬件尚未实测验证。
+当前 `v0.1.1` 版本在 GitHub Releases 同时提供两套互补方案：
+1. **可视化按需安装定制器 + 模块化功能包**（<https://neurodmri.github.io/SlicerDSpace/zh.html#start>）：网页一键生成 `Install-SlicerDSpace.bat` / `.command` / `.sh` 脚本，自动定位本机 **3D Slicer 5.10.0**、按日常需要只下载所选单文件功能包（`Pack-BrainMask-PNL.zip`、`Pack-Anatomy.zip`、`Pack-Surface.zip`、`Pack-TractCloud.zip`、`Pack-WMA-ORG.zip`，免手工合并分卷）或全自动合并 `.001`, `.002`, ... 分卷；内置镜像源（`ghfast.top` / `gh-proxy.com`）、代理与本地离线包目录选项，并支持日后在 Slicer 界面勾选新功能时直接热补装。
+2. **全量离线开箱即用一体包（All-in-One）**（`SlicerDSpace-v0.1.1-Windows-x64.zip`、`SlicerDSpace-v0.1.1-Linux-x64.tar.gz` 与 `SlicerDSpace-v0.1.1-macOS-arm64.tar.gz`；受 GitHub Releases 单文件 `2.0 GiB` 限制，各平台以 `.001`、`.002` ... 分卷形式提供，合并后通过 **3D Slicer 5.10.0** 的 **Extensions Manager > Install Extensions > Install Extension from File** 本地安装）；在线 Slicer 扩展商店目录（Extension Catalog）上架仍为后续计划，Intel（`x86_64`）Mac 真机硬件尚未实测验证。
 
 ---
 
@@ -18,7 +20,8 @@
 
 | 用途 | 推荐方式 | 包含内容 |
 | --- | --- | --- |
-| 在 Windows、Linux 或 Apple Silicon macOS 的 Slicer 5.10.0 中使用 | 从 GitHub Releases 下载并合并 `.001`、`.002` ... 分卷还原 `SlicerDSpace-v0.1.1-Windows-x64.zip`、`SlicerDSpace-v0.1.1-Linux-x64.tar.gz` 或 `SlicerDSpace-v0.1.1-macOS-arm64.tar.gz`（本地文件安装） | 运行代码（`depends NA`）、UI、查询文件、许可证、使用指南、`bundled-python/`（Python 3.12 科学计算依赖）、`bundled-model-assets/`（全部模型权重与已解压 `ORG`、`East-West`、`NABA` 三套白质图谱）、`bundled-sources/`（`WMQL`/`WMA`/`TractCloud`）、配套 `UKFTractography` CLI 以及内置于 `bundled-runtimes/` 的模块化原生运行环境（`MRtrix3 3.0.8`、`FSL 2602.0`、`Surface Runtime 0.1.0`，支持 `tree_sha256` 损坏自动修复） |
+| 日常按需安装、免手工合并分卷 | 使用[官网可视化安装定制器](https://neurodmri.github.io/SlicerDSpace/zh.html#start)（核心包 + 按需 `Pack-*.zip`，或一键全自动合并 `.001`, `.002`, ... 分卷） | 核心扩展本体（`SlicerDSpace-v0.1.1-macOS-arm64-Core.tar.gz` 或 `Core-Scripted.zip`）+ 仅勾选的单文件功能权重包（`Pack-*.zip`）+ Slicer 内随时热补装能力 |
+| 在 Windows、Linux 或 Apple Silicon macOS 的 Slicer 5.10.0 中全离线使用 | 从 GitHub Releases 下载并合并 `.001`、`.002` ... 分卷还原 `SlicerDSpace-v0.1.1-Windows-x64.zip`、`SlicerDSpace-v0.1.1-Linux-x64.tar.gz` 或 `SlicerDSpace-v0.1.1-macOS-arm64.tar.gz`（本地文件安装） | 运行代码（`depends NA`）、UI、查询文件、许可证、使用指南、`bundled-python/`（Python 3.12 科学计算依赖）、`bundled-model-assets/`（全部模型权重与已解压 `ORG`、`East-West`、`NABA` 三套白质图谱）、`bundled-sources/`（`WMQL`/`WMA`/`TractCloud`）、配套 `UKFTractography` CLI 以及内置于 `bundled-runtimes/` 的模块化原生运行环境（`MRtrix3 3.0.8`、`FSL 2602.0`、`Surface Runtime 0.1.0`，支持 `tree_sha256` 损坏自动修复） |
 | 有仓库权限、从源码安装 | 下文的轻量检出，再 staging | 可更新的运行源码；不检出网站、测试和历史优化报告 |
 | 开发或独立复现 | 完整源码 checkout | 测试、性能证据、发布工具、网页源码及文档 |
 | 阅读结果与性能依据 | 登录 GitHub 浏览对应报告 | 不需要把报告复制到插件目录 |

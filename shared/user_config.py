@@ -125,6 +125,11 @@ def empty_user_config() -> dict[str, Any]:
             "subject_root": "",
             "output_root": "",
         },
+        "network": {
+            "mirror_prefix": "",
+            "proxy_url": "",
+            "offline_assets_dir": "",
+        },
         "run_defaults": deepcopy(RUN_DEFAULTS),
         "external_dependencies": {},
         "accepted_licences": {},
@@ -151,10 +156,13 @@ def normalize_user_config(payload: Mapping[str, Any] | None) -> dict[str, Any]:
     for section, fallback in (
         ("ui", empty_user_config()["ui"]),
         ("recent", empty_user_config()["recent"]),
+        ("network", empty_user_config()["network"]),
         ("run_defaults", empty_user_config()["run_defaults"]),
     ):
         if not isinstance(config.get(section), Mapping):
             config[section] = deepcopy(fallback)
+    for key in ("mirror_prefix", "proxy_url", "offline_assets_dir"):
+        config["network"][key] = str(config["network"].get(key) or "").strip()
     language = str(config["ui"].get("language") or "en").lower()
     config["ui"]["language"] = "zh" if language.startswith("zh") else "en"
     dependencies = config.get("external_dependencies")

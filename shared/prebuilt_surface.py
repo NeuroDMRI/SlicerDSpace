@@ -101,10 +101,22 @@ def prepare(*, prefix=None, asset_root=None, execute=False, accept_terms=False, 
                 partial = archive.with_suffix(archive.suffix + '.part')
                 if partial.is_symlink():
                     raise ValueError('Refusing linked runtime download')
-                with urllib.request.urlopen(record['url'], timeout=60) as response, partial.open('wb') as output:
-                    shutil.copyfileobj(response, output)
-                if file_hash(partial) != record['sha256']:
-                    raise ValueError('Prebuilt runtime archive checksum mismatch')
+                from shared.network_config import expand_candidate_urls, open_url
+
+                last_exc = None
+                for candidate_url in expand_candidate_urls(record['url'], allow_mirror=True):
+                    try:
+                        with open_url(candidate_url, timeout=60) as response, partial.open('wb') as output:
+                            shutil.copyfileobj(response, output)
+                        if file_hash(partial) != record['sha256']:
+                            raise ValueError('Prebuilt runtime archive checksum mismatch')
+                        last_exc = None
+                        break
+                    except Exception as exc:
+                        last_exc = exc
+                        partial.unlink(missing_ok=True)
+                if last_exc is not None:
+                    raise last_exc
                 partial.replace(archive)
             with tempfile.TemporaryDirectory(dir=prefix.parent, prefix='.native-install-') as temporary:
                 staged = Path(temporary) / 'runtime'

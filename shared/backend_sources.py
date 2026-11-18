@@ -176,19 +176,30 @@ def prepare_sources(profiles, *, root=None, execute=False, accept_terms=False, o
                         shutil.copyfile(source, archive)
                     else:
                         url = "https://codeload.github.com/" + spec["repository"] + "/tar.gz/" + spec["revision"]
+                        from shared.network_config import expand_candidate_urls, open_url
+
                         print("[Sources] Downloading " + name, flush=True)
-                        with tempfile.NamedTemporaryFile(dir=downloads, delete=False) as stream:
-                            partial = Path(stream.name)
-                            try:
-                                with urllib.request.urlopen(url, timeout=60) as response:
-                                    shutil.copyfileobj(response, stream)
-                                stream.close()
-                                if file_hash(partial) != spec["sha256"]:
-                                    raise ValueError("Downloaded algorithm archive checksum mismatch")
-                                partial.replace(archive)
-                            finally:
-                                stream.close()
-                                partial.unlink(missing_ok=True)
+                        downloaded_ok = False
+                        last_exc = None
+                        for candidate_url in expand_candidate_urls(url, allow_mirror=True):
+                            with tempfile.NamedTemporaryFile(dir=downloads, delete=False) as stream:
+                                partial = Path(stream.name)
+                                try:
+                                    with open_url(candidate_url, timeout=60) as response:
+                                        shutil.copyfileobj(response, stream)
+                                    stream.close()
+                                    if file_hash(partial) != spec["sha256"]:
+                                        raise ValueError("Downloaded algorithm archive checksum mismatch")
+                                    partial.replace(archive)
+                                    downloaded_ok = True
+                                    break
+                                except Exception as exc:
+                                    last_exc = exc
+                                finally:
+                                    stream.close()
+                                    partial.unlink(missing_ok=True)
+                        if not downloaded_ok and last_exc is not None:
+                            raise last_exc
                 with tempfile.TemporaryDirectory(dir=root, prefix=".extract-") as temporary:
                     staged = Path(temporary) / "source"
                     staged.mkdir()

@@ -459,6 +459,10 @@ def choose_algorithms(owner, family):
                 for attribute, value in staged.items():
                     setattr(owner._parameterNode, attribute, value())
                 set_algorithms(owner, family, selection)
+        if hasattr(qt, "QTimer"):
+            from shared.ui_on_demand_resources import maybe_prompt_on_demand_install
+
+            qt.QTimer.singleShot(0, lambda: maybe_prompt_on_demand_install(owner))
     dialog.deleteLater()
     return accepted
 
@@ -527,9 +531,14 @@ def install_algorithm_pickers(owner):
         checkbox.setTristate(True)
         checkbox.setFixedWidth(indicator_width)
         checkbox.setMinimumHeight(18)
-        checkbox.clicked.connect(lambda checked: _set_anatomical_priors(
-            owner, ANATOMICAL_PRIORS if checked else (),
-        ))
+        def _on_anatomical_clicked(checked: bool) -> None:
+            _set_anatomical_priors(owner, ANATOMICAL_PRIORS if checked else ())
+            if checked and hasattr(qt, "QTimer"):
+                from shared.ui_on_demand_resources import maybe_prompt_on_demand_install
+
+                qt.QTimer.singleShot(0, lambda: maybe_prompt_on_demand_install(owner))
+
+        checkbox.clicked.connect(_on_anatomical_clicked)
         label = qt.QLabel()
         label_button = click_area(label, checkbox)
         form.setWidget(1, qt.QFormLayout.LabelRole, label_button)
@@ -554,6 +563,14 @@ def install_algorithm_pickers(owner):
         checkbox.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Fixed)
         checkbox.setMinimumWidth(0)
         form.setWidget(2, qt.QFormLayout.FieldRole, click_area(checkbox, checkbox, expand=True))
+        if hasattr(checkbox, "clicked"):
+            def _on_surface_post_clicked(checked: bool) -> None:
+                if checked and hasattr(qt, "QTimer"):
+                    from shared.ui_on_demand_resources import maybe_prompt_on_demand_install
+
+                    qt.QTimer.singleShot(0, lambda: maybe_prompt_on_demand_install(owner))
+
+            checkbox.clicked.connect(_on_surface_post_clicked)
 
     for family, (name, _, _) in FAMILIES.items():
         row = ROW_INDICES[family]
@@ -573,6 +590,14 @@ def install_algorithm_pickers(owner):
             checkbox.setMinimumHeight(18)
         if pointing_cursor is not None and hasattr(checkbox, "setCursor"):
             checkbox.setCursor(pointing_cursor)
+        if hasattr(checkbox, "clicked"):
+            def _on_family_clicked(checked: bool, _family=family) -> None:
+                if checked and hasattr(qt, "QTimer"):
+                    from shared.ui_on_demand_resources import maybe_prompt_on_demand_install
+
+                    qt.QTimer.singleShot(0, lambda: maybe_prompt_on_demand_install(owner))
+
+            checkbox.clicked.connect(_on_family_clicked)
         layout.addWidget(checkbox, 0, qt.Qt.AlignVCenter)
         summary = qt.QLabel()
         summary.wordWrap = True

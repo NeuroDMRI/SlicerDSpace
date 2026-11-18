@@ -9,7 +9,12 @@ from shared.external_process import find_pythonslicer, slicer_runtime_roots
 from shared.teem_dti import estimate_command
 
 
+import sys
+
+
 def _launcher(cli: Path, slicer_exe: Optional[Path]) -> list[str]:
+    if sys.platform == "darwin" and slicer_exe and slicer_exe.parent.name == "MacOS":
+        return [str(cli)]
     if slicer_exe and slicer_exe.exists():
         return [str(slicer_exe), "--launch", str(cli)]
     return [str(cli)]

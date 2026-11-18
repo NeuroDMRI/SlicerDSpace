@@ -263,11 +263,23 @@ def install_bundle(record, *, archive=None, root=None, accept_terms=False):
         if archive is None:
             if not record.get("url", "").startswith("https://"):
                 raise NativeRuntimeUnavailable("No HTTPS download URL for native runtime")
+            from shared.network_config import expand_candidate_urls, open_url
+
             suffix = ".zip" if record["url"].lower().endswith(".zip") else ".part"
             fd, download = tempfile.mkstemp(prefix="native-download-", suffix=suffix, dir=root)
             os.close(fd)
-            with urllib.request.urlopen(record["url"], timeout=90) as src, open(download, "wb") as out:
-                shutil.copyfileobj(src, out)
+            candidates = expand_candidate_urls(record["url"], allow_mirror=True)
+            last_exc = None
+            for candidate_url in candidates:
+                try:
+                    with open_url(candidate_url, timeout=90) as src, open(download, "wb") as out:
+                        shutil.copyfileobj(src, out)
+                    last_exc = None
+                    break
+                except Exception as exc:
+                    last_exc = exc
+            if last_exc is not None:
+                raise last_exc
             archive = download
         digest = _sha256(archive)
         valid_digests = {record["sha256"]}
@@ -385,12 +397,23 @@ def provision_bundles(names, *, root=None, archive_dir=None, accept_terms=False,
                     if url in downloaded_by_url and Path(downloaded_by_url[url]).is_file():
                         archive = downloaded_by_url[url]
                     else:
+                        from shared.network_config import expand_candidate_urls, open_url
+
                         base.mkdir(parents=True, exist_ok=True)
                         suffix = ".zip" if url.lower().endswith(".zip") else (".tar.gz" if url.lower().endswith((".tar.gz", ".tgz")) else ".part")
                         fd, shared_dl = tempfile.mkstemp(prefix="native-shared-download-", suffix=suffix, dir=base)
                         os.close(fd)
-                        with urllib.request.urlopen(url, timeout=90) as src, open(shared_dl, "wb") as out:
-                            shutil.copyfileobj(src, out)
+                        last_exc = None
+                        for candidate_url in expand_candidate_urls(url, allow_mirror=True):
+                            try:
+                                with open_url(candidate_url, timeout=90) as src, open(shared_dl, "wb") as out:
+                                    shutil.copyfileobj(src, out)
+                                last_exc = None
+                                break
+                            except Exception as exc:
+                                last_exc = exc
+                        if last_exc is not None:
+                            raise last_exc
                         downloaded_by_url[url] = Path(shared_dl)
                         archive = downloaded_by_url[url]
                 dest = install_bundle(record, archive=archive, root=base, accept_terms=True)

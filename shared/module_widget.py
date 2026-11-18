@@ -276,6 +276,14 @@ class SharedWidgetMixin:
         combo.setMinimumContentsLength(8)
         del blocker
         combo.currentIndexChanged.connect(self._onBrainMaskBackendChanged)
+        if hasattr(combo, "activated"):
+            def _on_mask_activated(_index: int) -> None:
+                if hasattr(qt, "QTimer"):
+                    from shared.ui_on_demand_resources import maybe_prompt_on_demand_install
+
+                    qt.QTimer.singleShot(0, lambda: maybe_prompt_on_demand_install(self))
+
+            combo.activated.connect(_on_mask_activated)
         self._update_pnl_route_visibility("pnl_cnn")
 
     def _update_pnl_route_visibility(self, backend: str) -> None:

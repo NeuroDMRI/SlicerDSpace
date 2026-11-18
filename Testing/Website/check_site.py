@@ -96,6 +96,37 @@ with open(os.path.join(ROOT, "docs", "website", "references.json"), encoding="ut
     REFERENCE_CATALOG = json.load(catalog)
 ALLOWED_URLS.update(row["url"] for row in REFERENCE_CATALOG["references"])
 
+with open(os.path.join(ROOT, "docs", "website", "installer_artifacts.json"), encoding="utf-8") as art_file:
+    INSTALLER_ARTIFACTS = json.load(art_file)
+for bundle in (INSTALLER_ARTIFACTS.get("bundles") or {}).values():
+    if bundle.get("url"):
+        ALLOWED_URLS.add(bundle["url"])
+    for part in bundle.get("parts") or ():
+        if part.get("url"):
+            ALLOWED_URLS.add(part["url"])
+
+with open(os.path.join(ROOT, "models", "release_packs_manifest.json"), encoding="utf-8") as packs_file:
+    RELEASE_PACKS = json.load(packs_file)
+for pack in (RELEASE_PACKS.get("packs") or {}).values():
+    if pack.get("url"):
+        ALLOWED_URLS.add(pack["url"])
+    for urec in (pack.get("upstream_files") or {}).values():
+        ALLOWED_URLS.update(urec.get("urls") or ())
+
+ALLOWED_URLS.update({
+    REPO + "/releases/download/",
+    REPO + "/releases/download/v0.1.1",
+    "https://github.com/",
+    "https://raw.githubusercontent.com/",
+    "https://objects.githubusercontent.com/",
+    "https://media.githubusercontent.com/",
+    "https://codeload.github.com/",
+    "https://ghfast.top/",
+    "https://gh-proxy.com/",
+    "http://127.0.0.1:7890",
+    "https://your-mirror.example/",
+})
+
 VOID = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link",
         "meta", "source", "track", "wbr"}
 SKIP_TEXT = {"script", "style", "head", "title", "noscript"}

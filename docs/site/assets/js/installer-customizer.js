@@ -682,7 +682,7 @@
       var coreBytes = (state.os === 'macos' ? (ARTIFACTS.bundles.macos_arm64_core.size_bytes || def.coreEstimateBytes) : (ARTIFACTS.bundles.core_scripted.size_bytes || def.coreEstimateBytes));
       var html = [];
       html.push('<div class="ic-header">');
-      html.push('<h5>' + t('Custom One-Click Installer Generator (Recommended for Clinicians)', '自定义一键安装脚本生成器（面向临床用户）') + '</h5>');
+      html.push('<h3 class="ic-heading">' + t('Custom One-Click Installer Generator (Recommended for Clinicians)', '自定义一键安装脚本生成器（面向临床用户）') + '</h3>');
       html.push('<span class="ic-badge">' + t('Uses Slicer built-in Python · Auto-merges split packs · Mirror & offline ready', '调用 Slicer 内置 Python · 免手动合并分卷 · 支持镜像与离线导入') + '</span>');
       html.push('</div>');
 
@@ -757,7 +757,7 @@
         : t('Run in Terminal after downloading (or click "Copy Run Command"): <code>chmod +x ~/Downloads/' + def.scriptName + ' && ~/Downloads/' + def.scriptName + '</code>', '下载后可直接点击“复制终端运行命令”粘贴到终端运行（Mac 也支持加执行权限后双击）：<code>chmod +x ~/Downloads/' + def.scriptName + ' && ~/Downloads/' + def.scriptName + '</code>');
       html.push('<p class="ic-run-tip">' + runTip + '</p>');
 
-      html.push('<div class="ic-preview code"' + (state.previewOpen ? '' : ' hidden') + '><div class="code-head"><span>' + escapeAttr(def.scriptName) + '</span><button type="button" class="copy" id="ic-copy-script-btn">' + t('Copy', '复制') + '</button></div><pre><code id="ic-script-code"></code></pre></div>');
+      html.push('<div class="ic-preview code"' + (state.previewOpen ? '' : ' hidden') + '><div class="code-head"><span>' + escapeAttr(def.scriptName) + '</span><button type="button" class="ic-btn-secondary" id="ic-copy-script-btn">' + t('Copy', '复制') + '</button></div><pre><code id="ic-script-code"></code></pre></div>');
 
       root.innerHTML = html.join('');
       if (state.previewOpen) {

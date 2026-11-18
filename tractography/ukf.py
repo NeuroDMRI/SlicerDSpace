@@ -43,13 +43,43 @@ class UKFParameters:
     Rs: float = 0.0
 
 
+GPU_OPTION_KEYS = ("useGPU", "gpuDevice", "gpuPrecision")
+_GPU_EXECUTABLES = ("ukf-gpu", "UKFTractography_gpu.exe")
+
+
+def parse_gpu_options(values=None):
+    """Extract and validate optional NeuroDMRI/ukftractography_gpu CLI controls."""
+    if values is None:
+        return {}
+    if not isinstance(values, dict):
+        raise ValueError("UKF parameters must be a JSON object")
+    gpu_options = {}
+    if "useGPU" in values:
+        if not isinstance(values["useGPU"], bool):
+            raise ValueError("UKF useGPU must be boolean")
+        gpu_options["useGPU"] = values["useGPU"]
+    if "gpuDevice" in values:
+        dev = values["gpuDevice"]
+        if isinstance(dev, bool) or not isinstance(dev, int) or dev < -1:
+            raise ValueError("UKF gpuDevice must be an integer >= -1")
+        gpu_options["gpuDevice"] = dev
+    if "gpuPrecision" in values:
+        prec = values["gpuPrecision"]
+        if isinstance(prec, bool) or not isinstance(prec, int) or prec not in (0, 1):
+            raise ValueError("UKF gpuPrecision must be 0 (FP64) or 1 (guarded mixed precision)")
+        gpu_options["gpuPrecision"] = prec
+    return gpu_options
+
+
 def parameters(values=None):
     if values is not None and not isinstance(values, dict):
         raise ValueError("UKF parameters must be a JSON object")
-    unknown = set(values or {}) - {field.name for field in fields(UKFParameters)}
+    parse_gpu_options(values)
+    cpu_values = {k: v for k, v in (values or {}).items() if k not in GPU_OPTION_KEYS}
+    unknown = set(cpu_values) - {field.name for field in fields(UKFParameters)}
     if unknown:
         raise ValueError("Unknown UKF parameters: " + ", ".join(sorted(unknown)))
-    result = UKFParameters(**(values or {}))
+    result = UKFParameters(**cpu_values)
     for key, value in asdict(result).items():
         if key in ("freeWater", "recordFA", "recordTensors"):
             if not isinstance(value, bool):
@@ -84,10 +114,21 @@ def parameters(values=None):
     return result
 
 
+def _extension_search_roots():
+    roots = []
+    module_root = Path(__file__).resolve().parents[1]
+    if module_root.name == "qt-scripted-modules" and len(module_root.parents) >= 3:
+        roots.append(module_root.parents[2])
+    roots.append(module_root)
+    roots.extend(Path(value) for key in ("SLICER_HOME", "Slicer_HOME") if (value := os.environ.get(key)))
+    roots.append(Path(sys.executable).resolve().parent.parent)
+    return roots
+
+
 def resolve_executable(explicit=None, name="UKFTractography"):
     candidate = explicit
     if not candidate and name == "UKFTractography":
-        candidate = os.environ.get("SLICERDSPACE_UKF_EXECUTABLE")
+        candidate = os.environ.get("SLICERDSPACE_UKF_EXECUTABLE") or os.environ.get("UKF_GPU_EXECUTABLE")
     if not candidate and name == "DWIConvert":
         candidate = os.environ.get("SLICERDSPACE_DWICONVERT_EXECUTABLE")
     if candidate:
@@ -95,6 +136,25 @@ def resolve_executable(explicit=None, name="UKFTractography"):
         if path.is_file():
             return path
         raise FileNotFoundError(str(path))
+    if name == "UKFTractography":
+        roots = _extension_search_roots()
+        gpu_names_lower = tuple(n.lower() for n in _GPU_EXECUTABLES)
+        for gpu_name in _GPU_EXECUTABLES:
+            found_gpu = shutil.which(gpu_name)
+            if found_gpu:
+                return Path(found_gpu).resolve()
+        for root in roots:
+            for pattern in (
+                "Runtime/bin/*",
+                "lib/Slicer-*/qt-scripted-modules/Runtime/bin/*",
+                "slicer.org/Extensions-*/*/lib/Slicer-*/qt-scripted-modules/Runtime/bin/*",
+                "Extensions-*/*/lib/Slicer-*/qt-scripted-modules/Runtime/bin/*",
+                "lib/Slicer-*/cli-modules/*",
+                "slicer.org/Extensions-*/*/lib/Slicer-*/cli-modules/*",
+            ):
+                for path in root.glob(pattern):
+                    if path.is_file() and path.name.lower() in gpu_names_lower:
+                        return path.resolve()
     found = shutil.which(name)
     if found:
         return Path(found).resolve()
@@ -104,13 +164,7 @@ def resolve_executable(explicit=None, name="UKFTractography"):
         return Path(resolve_cli_executable(name.lower())).resolve()
     except (RuntimeError, AttributeError, ImportError, FileNotFoundError) as exc:
         # Background PythonSlicer does not instantiate the GUI module registry.
-        roots = []
-        module_root = Path(__file__).resolve().parents[1]
-        if module_root.name == "qt-scripted-modules" and len(module_root.parents) >= 3:
-            roots.append(module_root.parents[2])
-        roots.append(module_root)
-        roots.extend(Path(value) for key in ("SLICER_HOME", "Slicer_HOME") if (value := os.environ.get(key)))
-        roots.append(Path(sys.executable).resolve().parent.parent)
+        roots = _extension_search_roots()
         for root in roots:
             for pattern in ("lib/Slicer-*/cli-modules/*", "slicer.org/Extensions-*/*/lib/Slicer-*/cli-modules/*"):
                 for path in root.glob(pattern):
@@ -145,9 +199,11 @@ def digest(path):
 def executable_identity(executable):
     executable = Path(executable).resolve()
     libraries = {}
-    roots = {executable.parent, *list(executable.parents)[:3]}
+    roots = {executable.parent, executable.parent.parent / "lib", *list(executable.parents)[:3]}
     for root in roots:
-        for pattern in ("*UKF*", "*DWIConvert*"):
+        if not root.is_dir():
+            continue
+        for pattern in ("*UKF*", "*ukf*", "*DWIConvert*", "libcudart*", "cudart64_*"):
             for path in root.glob(pattern):
                 name = path.name.lower()
                 if path.is_file() and (name.endswith((".dll", ".dylib", ".so")) or ".so." in name):
@@ -159,7 +215,8 @@ def executable_identity(executable):
 
 def signature(raw, options, executable, converter=None):
     converter = converter or resolve_executable(name="DWIConvert")
-    return dict(
+    gpu_opts = parse_gpu_options(options)
+    payload = dict(
         version=5,
         subject_id=raw.subject_id,
         parameters=asdict(parameters(options)),
@@ -175,15 +232,26 @@ def signature(raw, options, executable, converter=None):
         mask_policy=MASK_POLICY,
         max_excluded_mask_fraction=MAX_EXCLUDED_MASK_FRACTION,
     )
+    gpu_sig = {}
+    if "useGPU" in gpu_opts and gpu_opts["useGPU"] is False:
+        gpu_sig["useGPU"] = False
+    if gpu_opts.get("gpuPrecision", 0) != 0:
+        gpu_sig["gpuPrecision"] = gpu_opts["gpuPrecision"]
+    if gpu_sig:
+        payload["gpu"] = gpu_sig
+    return payload
 
 
-def current(raw, directory, options=None, executable=None, converter=None):
+def current(raw, directory, options=None, executable=None, converter=None, *, _signature=None):
     try:
         products = paths(raw.subject_id, directory)
         record = json.loads(products["manifest"].read_text())
-        if record["status"] != "completed" or record["signature"] != signature(
-            raw, options, resolve_executable(executable), resolve_executable(converter, name="DWIConvert")
-        ):
+        expected_signature = (
+            _signature
+            if _signature is not None
+            else signature(raw, options, resolve_executable(executable), resolve_executable(converter, name="DWIConvert"))
+        )
+        if record["status"] != "completed" or record["signature"] != expected_signature:
             return False
         qc = json.loads(products["qc"].read_text())
         return qc.get("automatic_qc_passed") is True and all(
@@ -240,10 +308,27 @@ def _validated_inputs(raw):
     mask = np.asanyarray(mask_image.dataobj)
     if not np.isfinite(mask).all() or not np.isin(mask, (0, 1)).all() or not mask.any():
         raise ValueError("UKF mask must be nonempty, finite and binary")
-    data = image.get_fdata(dtype=np.float32)
-    if not np.isfinite(data).all():
-        raise ValueError("UKF DWI contains NaN or Inf; repair the source data before fitting")
-    baseline = data[..., ~nonzero].mean(axis=3)
+    from shared.diffusion_io import ensure_cached_uncompressed_nifti
+
+    dwi_path = Path(raw.dwi_path)
+    is_gz = dwi_path.name.lower().endswith(".nii.gz")
+    cached_nii = ensure_cached_uncompressed_nifti(dwi_path) if is_gz else None
+    non_b0 = ~nonzero
+    if cached_nii is not None or not is_gz:
+        src_image = nib.load(str(cached_nii or dwi_path), mmap="r", keep_file_open=False) if cached_nii is not None else image
+        nx, ny, nz = src_image.shape[:3]
+        baseline = np.empty((nx, ny, nz), dtype=np.float32)
+        for z0 in range(0, nz, 16):
+            z1 = min(nz, z0 + 16)
+            slab = np.asarray(src_image.dataobj[:, :, z0:z1, :], dtype=np.float32)
+            if not np.isfinite(slab).all():
+                raise ValueError("UKF DWI contains NaN or Inf; repair the source data before fitting")
+            baseline[:, :, z0:z1] = slab[..., non_b0].mean(axis=3)
+    else:
+        data = image.get_fdata(dtype=np.float32)
+        if not np.isfinite(data).all():
+            raise ValueError("UKF DWI contains NaN or Inf; repair the source data before fitting")
+        baseline = data[..., non_b0].mean(axis=3)
     effective = (mask > 0) & np.isfinite(baseline) & (baseline > 0)
     original_count = int(np.count_nonzero(mask))
     excluded = original_count - int(effective.sum())
@@ -409,7 +494,137 @@ def output_qc(path, raw, selected=None, *, _polydata_bundle=None):
     )
 
 
-def build_command(binary, dwi, mask, target, selected, schema):
+def schema_supports_gpu(schema) -> bool:
+    """Return True when the installed UKF CLI exposes NeuroDMRI/ukftractography_gpu flags."""
+    names = {node.findtext("name") for node in schema.findall("./parameters/*") if node.find("name") is not None}
+    return {"useGPU", "gpuDevice", "gpuPrecision"}.issubset(names)
+
+
+def ukf_gpu_process_environment(startup_environment, executable):
+    """Isolate bundled ukf-gpu binaries from Slicer's Qt/Python/runtime libraries."""
+    exe_path = Path(executable)
+    is_gpu_bundle = exe_path.name.lower().startswith(("ukf-gpu", "ukftractography_gpu")) or (
+        exe_path.parent.name.lower() == "bin" and exe_path.parent.parent.name.lower() == "runtime"
+    )
+    env = dict(startup_environment)
+    if not is_gpu_bundle:
+        return env
+    removed = {
+        "LD_LIBRARY_PATH",
+        "LD_PRELOAD",
+        "PYTHONHOME",
+        "PYTHONPATH",
+        "QT_PLUGIN_PATH",
+        "QT_QPA_PLATFORM_PLUGIN_PATH",
+        "UKF_GPU_DEVICES",
+        "UKF_GPU_PROGRESS",
+    }
+    for key in list(env):
+        if key.upper() in removed:
+            del env[key]
+    if sys.platform == "win32":
+        from pathlib import PureWindowsPath
+
+        windows = next((value for key, value in env.items() if key.upper() == "SYSTEMROOT"), None)
+        if windows:
+            for key in list(env):
+                if key.upper() == "PATH":
+                    del env[key]
+            env["PATH"] = ";".join((str(PureWindowsPath(str(exe_path)).parent), windows + r"\System32", windows))
+    return env
+
+
+def _cuda_runtime_available_for_ukf(binary: Path) -> bool:
+    torch_mod = sys.modules.get("torch")
+    if torch_mod is not None:
+        try:
+            if bool(torch_mod.cuda.is_available()):
+                return True
+        except Exception:
+            pass
+    try:
+        import ctypes
+        import ctypes.util
+
+        candidates = []
+        lib_dir = Path(binary).parent.parent / "lib"
+        if sys.platform == "win32":
+            candidates.extend(sorted(Path(binary).parent.glob("cudart64_*.dll")))
+        elif sys.platform.startswith("linux"):
+            if lib_dir.is_dir():
+                candidates.extend(sorted(lib_dir.glob("libcudart.so*")))
+        found_sys = ctypes.util.find_library("cudart")
+        if found_sys:
+            candidates.append(Path(found_sys))
+        for cand in candidates:
+            try:
+                lib = ctypes.CDLL(str(cand))
+                count = ctypes.c_int(0)
+                if lib.cudaGetDeviceCount(ctypes.byref(count)) == 0 and count.value > 0:
+                    return True
+            except OSError:
+                continue
+        if sys.platform.startswith("linux"):
+            try:
+                driver = ctypes.CDLL("libcuda.so.1")
+                if driver.cuInit(0) == 0:
+                    count = ctypes.c_int(0)
+                    if driver.cuDeviceGetCount(ctypes.byref(count)) == 0 and count.value > 0:
+                        return True
+            except OSError:
+                pass
+    except Exception:
+        pass
+    return False
+
+
+def resolve_ukf_gpu_dispatch(device: str, gpu_opts: dict, schema, binary: Path) -> tuple[bool, int, int]:
+    """Decide whether to pass ``--useGPU --gpuDevice ... --gpuPrecision ...`` to UKF CLI."""
+    req = str(device or "auto").strip().lower() or "auto"
+    if req.startswith("auto"):
+        req = "auto"
+    elif req.startswith("cuda"):
+        req = req.split()[0]
+    supports_gpu = schema_supports_gpu(schema)
+    if gpu_opts.get("useGPU") is True and not supports_gpu:
+        raise RuntimeError(
+            "Installed UKF CLI lacks --useGPU; install NeuroDMRI/ukftractography_gpu or omit useGPU."
+        )
+    if not supports_gpu or gpu_opts.get("useGPU") is False or req in {"cpu", "mps"}:
+        return False, 0, 0
+
+    if "gpuDevice" in gpu_opts:
+        gpu_device = int(gpu_opts["gpuDevice"])
+    elif req == "cuda:all":
+        gpu_device = -1
+    elif req.startswith("cuda:"):
+        try:
+            gpu_device = int(req.split(":", 1)[1])
+        except ValueError as exc:
+            raise ValueError(f"Unsupported UKF CUDA device: {device}") from exc
+    else:
+        gpu_device = 0
+    gpu_precision = int(gpu_opts.get("gpuPrecision", 0))
+
+    if req.startswith("cuda") or gpu_opts.get("useGPU") is True:
+        return True, gpu_device, gpu_precision
+    if _cuda_runtime_available_for_ukf(binary):
+        return True, gpu_device, gpu_precision
+    return False, 0, 0
+
+
+def build_command(
+    binary,
+    dwi,
+    mask,
+    target,
+    selected,
+    schema,
+    *,
+    use_gpu: bool = False,
+    gpu_device: int = 0,
+    gpu_precision: int = 0,
+):
     """Use SEM switches explicitly: XML GUI defaults do not enable CLI switches."""
     nodes = {node.findtext("name"): node for node in schema.findall("./parameters/*") if node.find("name") is not None}
     if not set(asdict(selected)).union(("dwiFile", "maskFile", "tracts")).issubset(nodes):
@@ -425,6 +640,10 @@ def build_command(binary, dwi, mask, target, selected, schema):
                 command.append("--" + key)
         else:
             command.extend(("--" + key, str(value)))
+    if use_gpu:
+        if not schema_supports_gpu(schema):
+            raise RuntimeError("Installed UKF CLI lacks --useGPU; install NeuroDMRI/ukftractography_gpu.")
+        command.extend(("--useGPU", "--gpuDevice", str(gpu_device), "--gpuPrecision", str(gpu_precision)))
     return command
 
 
@@ -676,23 +895,35 @@ def restore_lossless_payload(raw, probe, converted, dwi, mask):
 
 
 @scheduled_stage('ukf')
-def run_ukf(raw, directory, *, options=None, executable=None, converter=None, force=False, log=None):
+def run_ukf(raw, directory, *, options=None, executable=None, converter=None, device="auto", force=False, log=None):
     from shared.external_process import merged_startup_environment
     from shared.pipeline import build_cli_environment
 
+    gpu_opts = parse_gpu_options(options)
     selected = parameters(options)
     binary = resolve_executable(executable)
     converter = resolve_executable(converter, name="DWIConvert")
     products = paths(raw.subject_id, Path(directory).expanduser().resolve())
     products["manifest"].parent.mkdir(parents=True, exist_ok=True)
-    if not force and current(raw, directory, options, binary, converter):
+    before = signature(raw, options, binary, converter)
+    if not force and current(raw, directory, options, binary, converter, _signature=before):
         return dict(status="cached", outputs=products)
     started = time.monotonic()
-    env = merged_startup_environment(build_cli_environment(str(binary)))
+    env = ukf_gpu_process_environment(merged_startup_environment(build_cli_environment(str(binary))), binary)
     schema, xml, probe_code = inspect_schema(binary, env)
-    build_command(binary, "DWI.nrrd", "Mask.nrrd", "tracts.vtk", selected, schema)
+    use_gpu, gpu_device, gpu_precision = resolve_ukf_gpu_dispatch(device, gpu_opts, schema, binary)
+    build_command(
+        binary,
+        "DWI.nrrd",
+        "Mask.nrrd",
+        "tracts.vtk",
+        selected,
+        schema,
+        use_gpu=use_gpu,
+        gpu_device=gpu_device,
+        gpu_precision=gpu_precision,
+    )
     inputs, effective = _validated_inputs(raw)
-    before = signature(raw, options, binary, converter)
     record = dict(
         status="running",
         signature=before,
@@ -700,6 +931,7 @@ def run_ukf(raw, directory, *, options=None, executable=None, converter=None, fo
         reference=REFERENCE,
         schema_sha256=hashlib.sha256(xml.encode()).hexdigest(),
         schema_probe_exit_code=probe_code,
+        gpu=dict(enabled=use_gpu, device=gpu_device if use_gpu else None, precision=gpu_precision if use_gpu else None),
         commands=[],
         started_at=datetime.now(timezone.utc).isoformat(),
     )
@@ -738,16 +970,28 @@ def run_ukf(raw, directory, *, options=None, executable=None, converter=None, fo
                 "--outputVolume",
                 str(converted_probe),
             ]
-            command = build_command(binary, dwi, mask, tracts, selected, schema)
+            command = build_command(
+                binary,
+                dwi,
+                mask,
+                tracts,
+                selected,
+                schema,
+                use_gpu=use_gpu,
+                gpu_device=gpu_device,
+                gpu_precision=gpu_precision,
+            )
             record["commands"] = [conversion, command]
             save()
             for index, cmd in enumerate((conversion, command)):
                 log_path = products["manifest"].parent / ("ukf_" + str(index) + ".log")
                 if log:
-                    log(
-                        "[UKF] "
-                        + ("Converting gradients with DWIConvert" if index == 0 else "Running official UKFTractography")
-                    )
+                    if index == 0:
+                        log("[UKF] Converting gradients with DWIConvert")
+                    elif use_gpu:
+                        log(f"[UKF] Running UKFTractography (GPU device={gpu_device}, precision={gpu_precision})")
+                    else:
+                        log("[UKF] Running official UKFTractography")
                 with log_path.open("wb") as stream:
                     process = subprocess.Popen(cmd, stdout=stream, stderr=subprocess.STDOUT,
                                                env=converter_env if index == 0 else env)
@@ -765,6 +1009,13 @@ def run_ukf(raw, directory, *, options=None, executable=None, converter=None, fo
                 if index == 0:
                     record["conversion"] = restore_lossless_payload(tracking_raw, probe, converted_probe, dwi, mask)
                     save()
+                elif use_gpu:
+                    gpu_log = log_path.read_text(encoding="utf-8", errors="replace").lower()
+                    if "falling back" in gpu_log or (
+                        binary.name.lower().startswith(("ukf-gpu", "ukftractography_gpu"))
+                        and "tractography done on device" not in gpu_log
+                    ):
+                        raise RuntimeError("UKF GPU execution was not confirmed or fell back to CPU; see " + str(log_path))
             polydata_bundle = _load_validated_vtk_polydata(tracts)
             qc = output_qc(tracts, tracking_raw, selected, _polydata_bundle=polydata_bundle)
             qc['input_validation'] = inputs

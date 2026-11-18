@@ -32,10 +32,10 @@
       "sha256": "400931d034332c54e2557e2b185ca1979fc92c76bcfc54f31be2a312eca34a3a"
     },
     "docs/site/assets/img/fig-runtime-resources.png": {
-      "sha256": "62e33031c2cff4c0cefd552aa9afc460d3236c7baecb9cda83dde0fc57323120"
+      "sha256": "dc3257e2849e46e2b1514f56dbdfe694cde21509794aaf7abd8ae6cfd12defe4"
     },
     "docs/site/assets/img/fig-runtime-optimizations.png": {
-      "sha256": "bdd432eb567bbef998dfb6310e19b00cce5baab9d2c5a68ea9773e2173be03d3"
+      "sha256": "0c91f6b5b17b94f4ff926d5ea07946cc967987faa3637d675ad48226c038bd4a"
     },
     "docs/site/assets/img/results-overview.svg": {
       "sha256": "28bb8eeef209cbc5c99877417d27a42e7a9e0ccb811dae9f289dd95df455ec94",
@@ -44,13 +44,13 @@
       "query_preset": "official_multibundle"
     },
     "docs/site/assets/img/fig-product-map.webp": {
-      "sha256": "c939ed72a4e7519d56816859aa15f8798e2ce717ba06e095da740f0a329b5838",
+      "sha256": "578e66f508f8b3e798a6169993fdb65eafeb854d0f60be9a63ae669cceb47919",
       "source_sha256": "b0da2ea13bc32b1fb04dfb1ed0472f2427711a1062d3cccf354efdb142326a90",
       "derivative": "Lossless WebP; decoded RGBA pixels and dimensions identical to PNG"
     },
     "docs/site/assets/img/fig-runtime-resources.webp": {
-      "sha256": "7cce0d470e254ec39dd2ed1aec76c2d3b5ae8955eb8e2146df3321c9fb1cb501",
-      "source_sha256": "62e33031c2cff4c0cefd552aa9afc460d3236c7baecb9cda83dde0fc57323120",
+      "sha256": "2e3bd6d2a07333b35baf63c759069ded2a8a55c18b980db5016e8858369e520d",
+      "source_sha256": "dc3257e2849e46e2b1514f56dbdfe694cde21509794aaf7abd8ae6cfd12defe4",
       "derivative": "Lossless WebP; decoded RGBA pixels and dimensions identical to PNG"
     },
     "docs/site/media/SlicerDSpace_promo_1080p.mp4": {
@@ -130,16 +130,16 @@
       "derivative": "Reference-traced cubic outlines; transparent background; no fonts or embedded raster"
     },
     "docs/site/assets/img/fig-runtime-optimizations.webp": {
-      "sha256": "bc636a04dd24c077723b8cf3c492ac3199ab2d9b17be9b1ece4f971de2f0209b",
-      "source_sha256": "bdd432eb567bbef998dfb6310e19b00cce5baab9d2c5a68ea9773e2173be03d3",
+      "sha256": "a96986e1df4e3b50bfba0d2577ba57360103770c4569b34e3c0748491a2397f0",
+      "source_sha256": "0c91f6b5b17b94f4ff926d5ea07946cc967987faa3637d675ad48226c038bd4a",
       "derivative": "Lossless WebP; decoded RGBA pixels and dimensions identical to PNG"
     },
     "docs/site/assets/img/fig-cohort-scheduling.png": {
-      "sha256": "90f57ffd88c53e13b84e71b34da775419b334e01ab9a3750f7004ba39e84317a"
+      "sha256": "dbd009e5ea723a491461fb34bf8cc5903414cae8ef4f9bac82ee9122edfaaab6"
     },
     "docs/site/assets/img/fig-cohort-scheduling.webp": {
-      "sha256": "0d0667a4aeeabf3588598820fd66937c60ba18929504df42dee45d7fc6beb4b9",
-      "source_sha256": "90f57ffd88c53e13b84e71b34da775419b334e01ab9a3750f7004ba39e84317a",
+      "sha256": "b19202c81768cff060f51424c10dbec4ee80c1ac89e6de1f673eb4a3b5fe0eda",
+      "source_sha256": "dbd009e5ea723a491461fb34bf8cc5903414cae8ef4f9bac82ee9122edfaaab6",
       "derivative": "Lossless WebP; decoded RGBA pixels and dimensions identical to PNG"
     }
   }

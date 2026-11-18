@@ -30,13 +30,12 @@
       answers: {
         welcome: { text: 'Hello! I can help you explore SlicerDSpace. Choose a topic or ask a question about the project. I use a small, curated set of answers from this website.' },
         start: { text: 'Install 3D Slicer 5.10.0 from https://download.slicer.org/ (typical paths: /Applications/Slicer.app on macOS, %LOCALAPPDATA%\\slicer.org\\Slicer 5.10.0 on Windows, ~/Slicer-5.10.0-linux-amd64 on Linux), then download the platform archive from https://github.com/NeuroDMRI/SlicerDSpace/releases and install it via View › Extensions Manager › Install Extension from File…. Restart Slicer, open Modules › Diffusion › SlicerDSpace, configure Inputs and Analysis, and click Run SlicerDSpace.', href: '#start' },
-        skills: { text: 'We provide an install-and-use Agent Skill. Give its SKILL.md to your local Agent for installation, input preparation, method selection, plan review, requested analyses or batch experiments, and result/QC inspection. Get started includes the Skill and copyable installation and analysis prompts.', href: '#skills' },
         inputs: { text: 'Under Inputs, you can select diffusion MRI in NIfTI (with matching .bval/.bvec), NRRD/NHDR or DICOM folder formats; a compatible brain mask can be supplied or generated. Conversion and validation into the standardised subject directory run when execution starts.', href: '#start' },
         methods: { text: 'The module combines DDSeg, DDParcel and DDSurfer with microstructure, tractography, bundle identification and connectome analyses. DTI is the default microstructure model; use ... beside each stage under Analysis to choose algorithms and adjust stage parameters.', href: '#integrated' },
         dependencies: { text: 'Install SlicerDMRI and PyTorch in Slicer. UKF also needs the separate UKFTractography extension. Other tools, models and licences depend on the selected route; clicking Run SlicerDSpace checks dependencies first and opens Prepare selected analysis environment if anything is missing.', href: '#start' },
         results: { text: 'Completed outputs are recorded for on-demand inspection rather than loaded automatically. In Results, select a run and use the eye icon to load or toggle outputs in the Slicer scene, right-click to unload or open table/JSON files, and click Open report for the HTML QC summary.', href: '#outputs' },
         references: { text: 'Each entry in What is integrated links directly to its primary paper, DOI or official software documentation.', href: '#integrated' },
-        gpu: { text: 'Hardware support depends on the selected method and installed backend. Set Auto, CPU or a specific CUDA GPU via Compute device under Analysis; some stages still use CPU tools even on a machine with a GPU.', href: '#start' },
+        gpu: { text: 'Hardware support depends on the selected method and installed backend. Set Auto, CPU, Apple MPS or a specific CUDA GPU via Compute device under Analysis; some stages still use CPU tools even on a machine with a GPU.', href: '#start' },
         performance: { text: 'The performance section reports measured comparisons for specific operations and inputs. The results should be interpreted at their recorded scope rather than as a single whole-workflow speedup.', href: '#performance' },
         identity: { text: 'I am a local site guide, inspired by Chengjin Bot. I match questions to curated project information; I am not a live AI model, and your questions stay in this browser tab.' },
         fallback: { text: 'I do not have a reliable answer for that yet. Try a suggested topic, or browse the methods and references on this page.', href: '#integrated' }
@@ -53,13 +52,12 @@
       answers: {
         welcome: { text: '你好！我是 SlicerDSpace 项目助手。可以选择下方问题，或输入有关项目的问题。我根据本网页整理的内容回答。' },
         start: { text: '请先从 https://download.slicer.org/ 安装 3D Slicer 5.10.0（常见路径：macOS 为 /Applications/Slicer.app，Windows 为 %LOCALAPPDATA%\\slicer.org\\Slicer 5.10.0，Linux 为 ~/Slicer-5.10.0-linux-amd64）；随后从 https://github.com/NeuroDMRI/SlicerDSpace/releases 下载对应系统的发布包，在 Slicer 中打开 View › Extensions Manager › Install Extension from File… 完成安装并重启，再于 Modules › Diffusion › SlicerDSpace 中配置 Inputs、Analysis 与运行前检查。', href: '#start' },
-        skills: { text: '我们提供安装与使用 Agent Skill。将 SKILL.md 交给自己的本地 Agent，可按指南完成安装、输入准备、方法选择、计划检查、按请求分析或批量实验，以及结果与 QC 检查。Get started 内提供文件入口和可复制的安装、分析指令。', href: '#skills' },
         inputs: { text: '支持 NIfTI（含匹配的 .bval/.bvec）、NRRD/NHDR 或 DICOM 文件夹输入；脑掩膜可自行提供或生成。在 Inputs 下选好数据后，点击运行会自动完成转换并校验至标准化被试目录。', href: '#start' },
         methods: { text: '插件将 DDSeg、DDParcel 和 DDSurfer 与微结构、纤维追踪、纤维束识别及连接组分析结合。微结构默认使用 DTI；可通过 Analysis 各阶段旁的“...”按钮选择算法并配置阶段参数。', href: '#integrated' },
         dependencies: { text: '在 Slicer 中安装 SlicerDMRI 和 PyTorch。UKF 还需要独立的 UKFTractography 扩展。其他工具、模型及许可取决于所选路线；点击 Run SlicerDSpace 时会自动执行运行前检查，缺少依赖时弹出 Prepare selected analysis environment 供确认准备。', href: '#start' },
         results: { text: '运行生成的输出按需加载，不会自动载入 Slicer 场景。请在 Results 中选择运行记录，点击输出项旁的眼睛图标在场景中按需加载或切换显隐（右键可从场景卸载或直接打开表格与 JSON 文件），点击 Open report 查看 HTML QC 报告。', href: '#outputs' },
         references: { text: '已集成的方法表为各条分析路线提供论文、DOI 或官方软件文档的直接链接。', href: '#integrated' },
-        gpu: { text: '硬件支持取决于所选方法和已安装的后端。可在 Analysis 下的 Compute device 中选择 Auto、CPU 或指定 CUDA GPU；即使设备有 GPU，部分步骤仍使用 CPU 工具。', href: '#start' },
+        gpu: { text: '硬件支持取决于所选方法和已安装的后端。可在 Analysis 下的 Compute device 中选择 Auto、CPU、Apple MPS 或指定 CUDA GPU；即使设备有 GPU，部分步骤仍使用 CPU 工具。', href: '#start' },
         performance: { text: '性能部分展示了特定操作和输入条件下的实测对照，应按各自记录的范围理解，不能直接当作完整工作流的统一加速比。', href: '#performance' },
         identity: { text: '我是参考 Chengjin Bot 设计的本地项目助手，根据预设项目资料匹配问题，不是在线大模型；输入只留在当前浏览器页面中。' },
         fallback: { text: '这个问题暂时没有可靠的预设回答。可以试试推荐问题，或浏览页面中的方法与参考文献。', href: '#integrated' }
@@ -175,11 +173,10 @@
   function match(text) {
     var q = text.toLowerCase();
     var rules = [
-      ['skills', /\b(skills?|skill\.md)\b|技能|agent.*安装|安装.*agent/],
       ['identity', /\b(who are you|what are you|bot|assistant|ai)\b|你是谁|你是(什么|谁)|助手|机器人/],
       ['references', /\b(reference|references|citation|citations|paper|papers|cite)\b|引用|参考文献|论文/],
       ['performance', /\b(performance|speed|benchmark|runtime|optimization)\b|性能|速度|耗时|加速|优化/],
-      ['gpu', /\b(gpu|cuda|cpu|graphics card)\b|显卡|算力|显存/],
+      ['gpu', /\b(gpu|cuda|mps|cpu|graphics card)\b|显卡|算力|显存/],
       ['results', /\b(result|results|output|outputs|quality|qc|inspect)\b|结果|质控|质量|加载|查看/],
       ['dependencies', /\b(dependenc(?:y|ies)|environment|extension|ukf|install tools)\b|依赖|环境|扩展|权重|模型下载/],
       ['start', /\b(install|installation|setup|start|begin|run|first)\b|安装|入门|开始|运行|怎么用|如何用/],

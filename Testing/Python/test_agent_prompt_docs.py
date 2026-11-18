@@ -56,12 +56,10 @@ class AgentPromptDocsTests(unittest.TestCase):
             self.assertIn("/path/to/subject", prompts[1])
             self.assertIn("/path/to/results", prompts[1])
 
-    def test_homepage_exposes_separate_complete_copy_targets(self):
+    def test_homepage_does_not_expose_agent_skill_prompts(self):
         source = (ROOT / "docs/site/index.html").read_text(encoding="utf-8")
-        for index, identity in enumerate(("agent-install-prompt", "agent-analysis-prompt")):
-            matches = re.findall(r'<code id="' + identity + r'">(.*?)</code>', source, re.S)
-            self.assertEqual(len(matches), 1, identity)
-            self.assertEqual(normalized(unescape(matches[0])), normalized(self.examples[index]))
+        for identity in ("skills", "agent-install-prompt", "agent-analysis-prompt"):
+            self.assertNotIn('id="' + identity + '"', source)
 
 
     def test_analysis_example_has_input_output_and_plan_confirmation(self):

@@ -42,50 +42,23 @@ class WebsiteEditorialCopyTests(unittest.TestCase):
         self.assertNotIn("fig-route-guide.png", self.source)
         self.assertIn("workflow-overview.svg", self.source)
 
-    def test_methods_and_demonstrations_are_last_sections_without_separate_references(self):
+    def test_methods_is_last_section_without_separate_references(self):
         main = self.source.split('<main id="main">', 1)[1].split('</main>', 1)[0]
         sections = re.findall(r'<section\b[^>]*\bid="([^"]+)"', main)
-        self.assertEqual(sections[-2:], ["integrated", "demonstrations"])
+        self.assertEqual(sections[-1], "integrated")
+        self.assertNotIn("demonstrations", sections)
         self.assertNotIn('cite', sections)
 
-    def test_online_demonstrations_have_default_collapsed_box2_and_box3_modules(self):
-        demos = self.section("demonstrations")
-        details_tags = re.findall(r'<details\b([^>]*)>', demos)
-        self.assertEqual(len(details_tags), 2)
-        for attrs in details_tags:
-            self.assertNotRegex(attrs, r'\bopen\b')
-        self.assertIn('id="demo-box-2"', demos)
-        self.assertIn('id="demo-box-3"', demos)
-        self.assertIn('Box 2 — Anatomical priors for regional fluid and neurite analyses', demos)
-        self.assertIn('Box 3 — Anatomical-prior-guided tractography and brain connectivity analysis', demos)
-        for app_title in (
-            'Application 1: Cortical interstitial free water (iFW)',
-            'Application 2: Regional microstructure and cortical morphology (NDI and cortical thickness)',
-            'Application 1: CSD/ACT tractography and structural connectome',
-            'Application 2: Surface-based short association fiber (SAF) tracking',
-        ):
-            self.assertIn(app_title, demos)
-        for step_heading in (
-            '<h4>1. Overview</h4>',
-            '<h4>2. Input</h4>',
-            '<h4>3. Step-by-step CLI Workflow</h4>',
-            '<h4>4. Intermediate Results</h4>',
-            '<h4>5. Final Results</h4>',
-            '<h4>6. Outputs &amp; QC</h4>',
-        ):
-            self.assertEqual(demos.count(step_heading), 4)
-        for asset in (
-            'assets/img/demo-box2-ifw.jpg',
-            'assets/img/demo-box2-ndi-thickness.jpg',
-            'assets/img/demo-box3-csd-connectome.jpg',
-            'assets/img/demo-box3-saf.jpg',
-        ):
-            self.assertIn(asset, demos)
-            self.assertTrue((ROOT / 'docs/site' / asset).is_file())
+    def test_online_demonstrations_and_demo_box_assets_are_removed(self):
+        self.assertNotIn('id="demonstrations"', self.source)
+        self.assertNotIn('href="#demonstrations"', self.source)
+        self.assertNotIn('id="demo-box-2"', self.source)
+        self.assertNotIn('id="demo-box-3"', self.source)
+        self.assertEqual(list((ROOT / 'docs/site/assets/img').glob('demo-box*.jpg')), [])
         zh_source = (ROOT / "docs/site/zh.html").read_text(encoding="utf-8")
-        self.assertIn('id="demonstrations"', zh_source)
-        self.assertIn('id="demo-box-2"', zh_source)
-        self.assertIn('id="demo-box-3"', zh_source)
+        self.assertNotIn('id="demonstrations"', zh_source)
+        self.assertNotIn('id="demo-box-2"', zh_source)
+        self.assertNotIn('id="demo-box-3"', zh_source)
 
     def test_header_is_navigation_only_and_footer_uses_vector_wordmark(self):
         header = self.source.split('<header class="site-header"', 1)[1].split('</header>', 1)[0]
@@ -223,30 +196,16 @@ class WebsiteEditorialCopyTests(unittest.TestCase):
             self.assertIn(requirement, start)
         self.assertNotIn("Advanced settings › Results and QC", self.source)
 
-    def test_skills_are_within_get_started_and_link_to_existing_guides(self):
+    def test_agent_skills_section_is_removed_from_website(self):
         start = self.section('start')
-        section = start.split('<div class="start-skills"', 1)[1].split('<div class="start-cli"', 1)[0]
-        self.assertIn('id="skills"', section)
-        self.assertNotIn('<section class="section reveal" id="skills"', self.source)
-        self.assertNotIn('href="#skills">Agent Skills</a>', self.source)
-        self.assertIn('href="#start">Get started</a>', self.source)
-        self.assertIn('id="skills-title"', section)
-        agent_steps = section.split('<ol class="start-steps agent-steps">', 1)[1].rsplit('</ol>', 1)[0]
-        self.assertEqual(agent_steps.count('<li class="start-step">'), 3)
-        self.assertIn('<h4>Read the Skill</h4>', agent_steps)
-        self.assertIn('<h4>Install and enable</h4>', agent_steps)
-        self.assertIn('<h4>Use an existing installation</h4>', agent_steps)
-        self.assertNotIn('skill-capabilities', section)
-        self.assertNotIn('skills-grid', section)
-        self.assertIn('Show me the plan and wait for confirmation before running', section)
-        self.assertIn('id="agent-install-prompt"', section)
-        self.assertIn('id="agent-analysis-prompt"', section)
-        self.assertNotIn('<details', section)
-        for relative in ('.agents/skills/slicerdspace/SKILL.md',
-                         '.agents/skills/slicerdspace/references/usage.md',
-                         'docs/setup/CLI_TEMPLATES.md'):
-            self.assertIn('href="https://github.com/NeuroDMRI/SlicerDSpace/blob/main/' + relative + '"', section)
-            self.assertTrue((ROOT / relative).is_file())
+        self.assertNotIn('id="skills"', self.source)
+        self.assertNotIn('href="#skills"', self.source)
+        self.assertNotIn('id="agent-install-prompt"', start)
+        self.assertNotIn('id="agent-analysis-prompt"', start)
+        self.assertNotIn('Agent Skill', self.source)
+        zh_source = (ROOT / "docs/site/zh.html").read_text(encoding="utf-8")
+        self.assertNotIn('id="skills"', zh_source)
+        self.assertNotIn('href="#skills"', zh_source)
 
     def test_output_heading_and_cli_are_direct_and_visible(self):
         self.assertIn('<h2>Outputs from SlicerDSpace.</h2>', self.section('outputs'))
@@ -258,17 +217,15 @@ class WebsiteEditorialCopyTests(unittest.TestCase):
     def test_setup_routes_have_one_heading_level_and_matching_visual_markers(self):
         start = self.section('start')
         headings = re.findall(r'<h3 class="start-route-title[^\"]*"[^>]*>(.*?)</h3>', start)
-        self.assertEqual(len(headings), 3)
-        for heading, marker in zip(headings, 'ABC'):
+        self.assertEqual(len(headings), 2)
+        for heading, marker in zip(headings, 'AB'):
             self.assertIn(f'class="start-route-marker" aria-hidden="true">{marker}</span>', heading)
             self.assertIn('start-route-text', heading)
         self.assertIn('Set up manually', headings[0])
-        self.assertIn('Install, run and review with your Agent', headings[1])
-        self.assertIn('Command-line execution and cohort processing', headings[2])
+        self.assertIn('Command-line execution and cohort processing', headings[1])
         self.assertNotIn('start-recommended', self.source)
         self.assertNotIn('(Recommended)', self.source)
-        self.assertLess(start.index('id="manual-title"'), start.index('id="skills"'))
-        self.assertLess(start.index('id="skills"'), start.index('id="cli"'))
+        self.assertLess(start.index('id="manual-title"'), start.index('id="cli"'))
         self.assertIn('>https://download.slicer.org/</a>', start)
         self.assertIn('>https://github.com/NeuroDMRI/SlicerDSpace/releases</a>', start)
         self.assertNotIn('slicer-logo.png', start)
@@ -294,7 +251,8 @@ class WebsiteEditorialCopyTests(unittest.TestCase):
         script = (ROOT / 'docs/site/assets/js/guide-bot.js').read_text(encoding='utf-8')
         self.assertNotIn('is-docked', script)
         self.assertNotIn('positionLauncher', script)
-        self.assertIn('Get started includes the Skill', script)
+        self.assertNotIn('skills:', script)
+        self.assertIn('Apple MPS', script)
         for name in ('assets/css/guide-bot.css', 'assets/js/guide-bot.js', 'assets/img/guide-bot-hat.svg'):
             self.assertTrue((ROOT / 'docs/site' / name).is_file())
 

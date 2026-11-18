@@ -28,6 +28,20 @@ def schema():
     return root
 
 
+def gpu_schema():
+    root = schema()
+    group = root.find("./parameters")
+    for tag, key, default in (
+        ("boolean", "useGPU", "false"),
+        ("integer", "gpuDevice", "0"),
+        ("integer-enumeration", "gpuPrecision", "0"),
+    ):
+        node = ET.SubElement(group, tag)
+        ET.SubElement(node, "name").text = key
+        ET.SubElement(node, "default").text = default
+    return root
+
+
 class ProtocolTests(unittest.TestCase):
     def test_author_defaults(self):
         selected = ukf.parameters()
@@ -112,6 +126,62 @@ class ProtocolTests(unittest.TestCase):
                 mock.patch("shared.pipeline.resolve_cli_executable", side_effect=RuntimeError("no GUI")),
             ):
                 self.assertEqual(ukf.resolve_executable(name="DWIConvert"), binary)
+
+    def test_gpu_schema_dispatch_environment_and_discovery(self):
+        self.assertFalse(ukf.schema_supports_gpu(schema()))
+        self.assertTrue(ukf.schema_supports_gpu(gpu_schema()))
+        self.assertEqual(
+            ukf.parse_gpu_options({"useGPU": True, "gpuDevice": 1, "gpuPrecision": 1, "seedsPerVoxel": 2}),
+            {"useGPU": True, "gpuDevice": 1, "gpuPrecision": 1},
+        )
+        self.assertEqual(ukf.parameters({"useGPU": True, "gpuDevice": 0, "gpuPrecision": 1}).numTensor, 2)
+        for bad in ({"useGPU": "yes"}, {"gpuDevice": -2}, {"gpuPrecision": 2}):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                ukf.parse_gpu_options(bad)
+
+        cmd = ukf.build_command(
+            "ukf-gpu", "dwi", "mask", "out", ukf.parameters(), gpu_schema(),
+            use_gpu=True, gpu_device=1, gpu_precision=1,
+        )
+        self.assertIn("--useGPU", cmd)
+        self.assertEqual(cmd[cmd.index("--gpuDevice") + 1], "1")
+        self.assertEqual(cmd[cmd.index("--gpuPrecision") + 1], "1")
+        with self.assertRaisesRegex(RuntimeError, "--useGPU"):
+            ukf.build_command("ukf", "dwi", "mask", "out", ukf.parameters(), schema(), use_gpu=True)
+
+        gschema = gpu_schema()
+        self.assertEqual(ukf.resolve_ukf_gpu_dispatch("cpu", {}, gschema, Path("ukf-gpu")), (False, 0, 0))
+        self.assertEqual(ukf.resolve_ukf_gpu_dispatch("mps", {}, gschema, Path("ukf-gpu")), (False, 0, 0))
+        self.assertEqual(ukf.resolve_ukf_gpu_dispatch("cuda:1", {"gpuPrecision": 1}, gschema, Path("ukf-gpu")), (True, 1, 1))
+        self.assertEqual(ukf.resolve_ukf_gpu_dispatch("cuda:all", {}, gschema, Path("ukf-gpu")), (True, -1, 0))
+        with mock.patch.object(ukf, "_cuda_runtime_available_for_ukf", return_value=True):
+            self.assertEqual(ukf.resolve_ukf_gpu_dispatch("auto", {}, gschema, Path("ukf-gpu")), (True, 0, 0))
+        with mock.patch.object(ukf, "_cuda_runtime_available_for_ukf", return_value=False):
+            self.assertEqual(ukf.resolve_ukf_gpu_dispatch("auto", {}, gschema, Path("ukf-gpu")), (False, 0, 0))
+        with self.assertRaisesRegex(RuntimeError, "--useGPU"):
+            ukf.resolve_ukf_gpu_dispatch("auto", {"useGPU": True}, schema(), Path("UKFTractography"))
+
+        with tempfile.TemporaryDirectory() as tmp_name:
+            tmp = Path(tmp_name).resolve()
+            gpu_bin = tmp / "Runtime" / "bin" / "ukf-gpu"
+            gpu_bin.parent.mkdir(parents=True)
+            gpu_bin.write_text("gpu binary")
+            with (
+                mock.patch.dict(os.environ, {"SLICER_HOME": str(tmp)}, clear=True),
+                mock.patch("shutil.which", return_value=None),
+                mock.patch("shared.pipeline.resolve_cli_executable", side_effect=RuntimeError("no GUI")),
+            ):
+                self.assertEqual(ukf.resolve_executable(name="UKFTractography"), gpu_bin)
+            sanitized = ukf.ukf_gpu_process_environment(
+                {"LD_LIBRARY_PATH": "/slicer/lib", "PYTHONHOME": "/slicer", "PYTHONPATH": "/slicer",
+                 "QT_PLUGIN_PATH": "/slicer/qt", "CUDA_VISIBLE_DEVICES": "0"},
+                gpu_bin,
+            )
+            self.assertNotIn("LD_LIBRARY_PATH", sanitized)
+            self.assertNotIn("PYTHONHOME", sanitized)
+            self.assertNotIn("PYTHONPATH", sanitized)
+            self.assertNotIn("QT_PLUGIN_PATH", sanitized)
+            self.assertEqual(sanitized["CUDA_VISIBLE_DEVICES"], "0")
 
 
 class GeometryTests(unittest.TestCase):
@@ -523,6 +593,73 @@ class GeometryTests(unittest.TestCase):
         self.assertTrue(_audit_tractography(record, checks))
         self.assertIn('tractography.ukf.current_artifacts',
                       {check['name'] for check in checks if not check['passed']})
+
+    def test_slab_streamed_validation_matches_reference_float32_and_rejects_nan(self):
+        import nibabel as nib
+        import numpy as np
+
+        rng = np.random.default_rng(7)
+        arr = rng.uniform(0.5, 5.0, size=(6, 6, 20, 7)).astype(np.float32)
+        arr[1, 2, 17, 0] = 0.0
+        nii_gz = self.root / "slab_dwi.nii.gz"
+        nii_uncomp = self.root / "slab_dwi.nii"
+        mask_p = self.root / "slab_mask.nii.gz"
+        nib.save(nib.Nifti1Image(arr, self.affine), nii_gz)
+        nib.save(nib.Nifti1Image(arr, self.affine), nii_uncomp)
+        nib.save(nib.Nifti1Image(np.ones((6, 6, 20), np.uint8), self.affine), mask_p)
+        raw_gz = ukf.RawInputBundle(self.root, "slab", self.root, nii_gz, self.bval, self.bvec, mask_p) if hasattr(ukf, "RawInputBundle") else None
+        from shared.pipeline import RawInputBundle
+        raw_gz = RawInputBundle(self.root, "slab", self.root, nii_gz, self.bval, self.bvec, mask_p)
+        raw_nii = RawInputBundle(self.root, "slab", self.root, nii_uncomp, self.bval, self.bvec, mask_p)
+        rep_gz, eff_gz = ukf._validated_inputs(raw_gz)
+        rep_nii, eff_nii = ukf._validated_inputs(raw_nii)
+        self.assertEqual(rep_gz["excluded_nonpositive_b0_voxels"], 1)
+        self.assertEqual(rep_nii["excluded_nonpositive_b0_voxels"], 1)
+        self.assertTrue(np.array_equal(eff_gz, eff_nii))
+        arr[0, 0, 18, 3] = np.nan
+        nib.save(nib.Nifti1Image(arr, self.affine), nii_uncomp)
+        with self.assertRaisesRegex(ValueError, "NaN"):
+            ukf._validated_inputs(raw_nii)
+
+    def test_run_ukf_gpu_dispatch_and_cpu_fallback_rejection(self):
+        fixture = self.vtk_fixture()
+        gpu_bin = self.root / "ukf-gpu"
+        gpu_bin.write_text("gpu binary")
+        captured_cmds = []
+
+        def make_stage(log_text):
+            def stage(cmd, stdout=None, **kwargs):
+                captured_cmds.append(cmd)
+                if "--tracts" in cmd:
+                    shutil.copyfile(fixture, cmd[cmd.index("--tracts") + 1])
+                    if stdout is not None:
+                        stdout.write(log_text.encode("utf-8"))
+                else:
+                    Path(cmd[cmd.index("--outputVolume") + 1]).write_text("mock conversion")
+                return mock.Mock(wait=mock.Mock(return_value=0), poll=mock.Mock(return_value=0))
+            return stage
+
+        with (
+            mock.patch.object(ukf, "resolve_executable", side_effect=lambda explicit=None, name="UKFTractography": gpu_bin if name == "UKFTractography" else self.converter),
+            mock.patch.object(ukf.subprocess, "run", return_value=mock.Mock(returncode=0, stdout='<?xml version="1.0"?>' + ET.tostring(gpu_schema(), encoding="unicode"))),
+            mock.patch("shared.pipeline.build_cli_environment", return_value={}),
+            mock.patch.object(ukf, "restore_lossless_payload", return_value={"policy": "mock conversion"}),
+        ):
+            with mock.patch.object(ukf.subprocess, "Popen", side_effect=make_stage("Tractography done on device 0")):
+                res = ukf.run_ukf(self.raw, self.root / "gpu_ok", options={"gpuPrecision": 1}, device="cuda:0")
+            self.assertEqual(res["status"], "completed")
+            ukf_cmd = next(c for c in captured_cmds if "--tracts" in c)
+            self.assertIn("--useGPU", ukf_cmd)
+            self.assertEqual(ukf_cmd[ukf_cmd.index("--gpuPrecision") + 1], "1")
+            manifest = json.loads(ukf.paths("test", self.root / "gpu_ok")["manifest"].read_text())
+            self.assertTrue(manifest["gpu"]["enabled"])
+            self.assertEqual(manifest["gpu"]["precision"], 1)
+
+            with (
+                mock.patch.object(ukf.subprocess, "Popen", side_effect=make_stage("Warning: falling back to CPU")),
+                self.assertRaisesRegex(RuntimeError, "fell back to CPU"),
+            ):
+                ukf.run_ukf(self.raw, self.root / "gpu_fallback", device="cuda:0")
 
 
 class IntegrationTests(unittest.TestCase):

@@ -156,10 +156,7 @@ async function runViewport(browser, origin, name, width, height, opts) {
 
   // 3. images
   await scrollThrough(page);
-  const demoBoxesStartClosed = await page.locator('details.demo-box').evaluateAll(items =>
-    items.length === 2 && items.every(d => !d.open && getComputedStyle(d.querySelector('.demo-box-body')).display === 'none'));
-  record(demoBoxesStartClosed, `${tag}: demonstration Box 2 and Box 3 modules start collapsed by default`);
-  await page.locator('details.demo-box').evaluateAll(items => items.forEach(d => { d.open = true; }));
+  record(await page.locator('#demonstrations, details.demo-box').count() === 0, `${tag}: online demonstrations section removed`);
   for (const image of await page.locator('img').all()) {
     if (await image.evaluate(i => !i.complete || i.naturalWidth === 0)) await image.scrollIntoViewIfNeeded();
   }
@@ -167,7 +164,6 @@ async function runViewport(browser, origin, name, width, height, opts) {
   const imgs = await page.evaluate(() => [...document.images].map((i) => ({
     src: i.getAttribute('src'), ok: i.complete && i.naturalWidth > 0,
   })));
-  await page.locator('details.demo-box').evaluateAll(items => items.forEach(d => { d.open = false; }));
   const bad = imgs.filter((i) => !i.ok).map((i) => i.src);
   record(bad.length === 0, `${tag}: all ${imgs.length} images loaded`, 'not loaded: ' + bad.join(', '));
   const webpSources = await page.locator('picture > img').evaluateAll(items => items.map(image => image.currentSrc));
@@ -627,110 +623,40 @@ async function runHomePerformanceNavigation(browser, origin) {
   await context.close();
 }
 
-async function runSkills(browser, origin) {
+async function runStartRoutes(browser, origin) {
   for (const width of [1440, 390, 320]) {
     const context = await browser.newContext({ viewport: { width, height: 900 } });
     const page = await context.newPage();
-    await page.goto(origin + '/index.html#skills', { waitUntil: 'load' });
-    const skills = page.locator('#skills');
-    await skills.scrollIntoViewIfNeeded();
+    await page.goto(origin + '/index.html#start', { waitUntil: 'load' });
     await page.waitForFunction(() => document.getElementById('start').classList.contains('in'));
-    const manualAboveSkills = await page.evaluate(() => {
+    const routeCheck = await page.evaluate(() => {
       const manual = document.getElementById('manual-title');
-      const sk = document.getElementById('skills');
-      return !!manual && !!sk &&
+      const cli = document.getElementById('cli-title');
+      return !!manual && !!cli &&
+        !document.getElementById('skills') &&
+        !document.getElementById('demonstrations') &&
         manual.querySelector('.start-route-marker')?.textContent === 'A' &&
         manual.querySelector('.start-route-text')?.textContent.trim() === 'Set up manually' &&
-        sk.querySelector('.start-route-marker')?.textContent === 'B' &&
-        manual.getBoundingClientRect().top < sk.getBoundingClientRect().top;
+        cli.querySelector('.start-route-marker')?.textContent === 'B' &&
+        cli.querySelector('.start-route-text')?.textContent.trim() === 'Command-line execution and cohort processing' &&
+        manual.getBoundingClientRect().top < cli.getBoundingClientRect().top;
     });
-    record(manualAboveSkills &&
-      await skills.locator('.start-route-text').innerText() === 'Install, run and review with your Agent' &&
-      await page.locator('.start-recommended').count() === 0,
-      `skills ${width}px: manual route A appears first and Agent route B has no Recommended tag`);
+    record(routeCheck && await page.locator('.start-recommended').count() === 0,
+      `start ${width}px: manual route A appears first, CLI route B second, no Agent or Demonstrations sections`);
     const headings = await page.locator('#start .start-route-title').evaluateAll(elements => {
       const styles = elements.map(el => getComputedStyle(el));
-      return elements.length === 3 && elements.every(el => el.tagName === 'H3') &&
-        elements.map(el => el.querySelector('.start-route-marker').textContent).join('') === 'ABC' &&
+      return elements.length === 2 && elements.every(el => el.tagName === 'H3') &&
+        elements.map(el => el.querySelector('.start-route-marker').textContent).join('') === 'AB' &&
         styles.every(style => style.fontSize === styles[0].fontSize &&
           style.fontWeight === styles[0].fontWeight && style.lineHeight === styles[0].lineHeight);
     });
-    record(headings, `skills ${width}px: A/B/C routes have matching heading typography and hierarchy`);
+    record(headings, `start ${width}px: A/B routes have matching heading typography and hierarchy`);
     const accents = await page.locator('#start .start-route-marker')
-      .evaluateAll(elements => elements.length === 3 && elements.every(el => getComputedStyle(el).color === 'rgb(169, 191, 208)'));
-    record(accents, `skills ${width}px: route markers share the muted blue-grey accent`);
-    const timeline = await skills.locator('.agent-steps').evaluate(el => {
-      const steps = [...el.children];
-      const first = getComputedStyle(steps[0], '::before');
-      const manual = getComputedStyle(document.querySelector('#start > .container > .start-steps .start-step'), '::before');
-      return steps.length === 3 && steps.every(step => step.classList.contains('start-step')) &&
-        first.width === manual.width && first.borderRadius === manual.borderRadius &&
-        getComputedStyle(steps[0], '::after').width === '1px' &&
-        getComputedStyle(steps[2], '::after').display === 'none';
-    });
-    record(timeline, `skills ${width}px: three numbered steps reuse the manual setup's rail and markers`);
-    record(await skills.locator('.doc-links a').count() === 3 &&
-      await page.locator('#start #skills').count() === 1 &&
-      await page.locator('#site-nav a[href="#start"]').count() === 1 &&
-      await page.locator('#site-nav a[href="#skills"]').count() === 0,
-      `skills ${width}px: prompts and reference links are part of Get started`);
-    const fit = await page.evaluate(() => {
-      return [...document.querySelectorAll('#skills .code pre')].every(
-        (el) => el.scrollWidth <= el.clientWidth) && document.documentElement.scrollWidth <= innerWidth;
-    });
-    record(fit, `skills ${width}px: prompt wraps without horizontal overflow`);
-    await context.grantPermissions(['clipboard-read', 'clipboard-write']);
-    record(await skills.locator('[data-code]').count() === 2,
-      `skills ${width}px: installation and analysis have separate prompts`);
-    record(await page.locator('.skill-capabilities, .skills-grid').count() === 0 &&
-      await page.locator('#cli').evaluate(el => !el.closest('details')),
-      `skills ${width}px: no capability panels; CLI instructions are always expanded`);
-    for (const id of ['agent-install-prompt', 'agent-analysis-prompt']) {
-      const copyBtn = skills.locator('[data-code]').filter({ has: page.locator('#' + id) }).locator('.copy');
-      await copyBtn.click();
-      await page.waitForTimeout(80);
-      const copied = (await page.evaluate(() => navigator.clipboard.readText())).replace(/\r\n/g, '\n');
-      const expected = (await page.locator('#' + id).textContent()).replace(/\r\n/g, '\n');
-      record(copied === expected &&
-        copied.includes('https://github.com/NeuroDMRI/SlicerDSpace/blob/main/.agents/skills/slicerdspace/SKILL.md'),
-        `skills ${width}px: ${id} copies intact with its Skill URL`);
-    }
-    await skills.screenshot({ path: path.join(OUT, `skills-${width}.png`) });
-    await context.close();
-  }
-}
-
-async function runDemonstrations(browser, origin) {
-  for (const [file, width] of [['index.html', 1440], ['index.html', 390], ['zh.html', 1440], ['zh.html', 390]]) {
-    const context = await browser.newContext({ viewport: { width, height: 900 }, reducedMotion: 'reduce' });
-    const page = await context.newPage();
-    await page.route('**/*.mp4', route => route.abort());
-    await page.goto(`${origin}/${file}#demonstrations`, { waitUntil: 'load' });
-    const section = page.locator('#demonstrations');
-    await section.scrollIntoViewIfNeeded();
-    const box2 = page.locator('#demo-box-2');
-    const box3 = page.locator('#demo-box-3');
-    const prefix = `demonstrations ${file} ${width}px`;
-    record(await box2.evaluate(d => !d.open) && await box3.evaluate(d => !d.open) &&
-      await box2.locator('.demo-box-body').isHidden() && await box3.locator('.demo-box-body').isHidden(),
-      `${prefix}: Box 2 and Box 3 start collapsed by default`);
-    await box2.locator('.demo-box-summary').click();
-    record(await box2.evaluate(d => d.open) && await box2.locator('#demo-box2-app1').isVisible() &&
-      await box2.locator('#demo-box2-app2').isVisible() && await box3.evaluate(d => !d.open),
-      `${prefix}: clicking Box 2 expands only Box 2`);
-    await box3.locator('.demo-box-summary').click();
-    record(await box3.evaluate(d => d.open) && await box3.locator('#demo-box3-app1').isVisible() &&
-      await box3.locator('#demo-box3-app2').isVisible(),
-      `${prefix}: clicking Box 3 expands Box 3`);
-    await page.waitForFunction(() => [...document.querySelectorAll('#demonstrations img')].every(i => i.complete && i.naturalWidth > 0), null, { timeout: 10000 });
-    record(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
-      `${prefix}: expanded Box 2 and Box 3 fit viewport without horizontal scroll`);
-    await section.screenshot({ path: path.join(OUT, `demonstrations-${file.replace('.html', '')}-${width}.png`) });
-    await box2.locator('.demo-box-summary').click();
-    await box3.locator('.demo-box-summary').click();
-    record(await box2.evaluate(d => !d.open) && await box3.evaluate(d => !d.open) &&
-      await box2.locator('.demo-box-body').isHidden() && await box3.locator('.demo-box-body').isHidden(),
-      `${prefix}: clicking Box 2 and Box 3 summaries again collapses both modules`);
+      .evaluateAll(elements => elements.length === 2 && elements.every(el => getComputedStyle(el).color === 'rgb(169, 191, 208)'));
+    record(accents, `start ${width}px: route markers share the muted blue-grey accent`);
+    record(await page.locator('#cli').evaluate(el => !el.closest('details')) &&
+      await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
+      `start ${width}px: CLI instructions expanded without horizontal overflow`);
     await context.close();
   }
 }
@@ -769,17 +695,17 @@ async function runLanguages(browser, origin) {
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
     await page.route('**/*.mp4', route => route.abort());
-    await page.goto(origin + '/SlicerDSpace/index.html#skills', { waitUntil: 'load' });
+    await page.goto(origin + '/SlicerDSpace/index.html#start', { waitUntil: 'load' });
     await page.locator('.lang-btn[data-lang="zh"]').click();
     await page.waitForURL(url => url.pathname.endsWith('/zh.html'));
-    record(new URL(page.url()).hash === '#skills' && await page.locator('html').getAttribute('lang') === 'zh-CN',
+    record(new URL(page.url()).hash === '#start' && await page.locator('html').getAttribute('lang') === 'zh-CN',
       `language ${width}px: Chinese link keeps the current section under a project base path`);
     record(await page.locator('.lang-btn.is-active').getAttribute('data-lang') === 'zh' &&
         await page.locator('#top .btn-primary').innerText() === '观看宣传片' &&
-        await page.locator('#skills-title .start-route-text').innerText() === '使用 Agent 协助安装、分析与结果检查' &&
+        await page.locator('#cli-title .start-route-text').innerText() === '命令行运行与队列批处理' &&
         await page.locator('.start-recommended').count() === 0 &&
         await page.locator('.guide-bot__header h2').innerText() === '问问项目助手',
-      `language ${width}px: capsule, homepage, Skills and bot use Chinese`);
+      `language ${width}px: capsule, homepage, routes and bot use Chinese`);
     const header = await page.evaluate(() => {
       const capsule = document.querySelector('.language-switch').getBoundingClientRect();
       const menu = document.getElementById('menu-btn').getBoundingClientRect();
@@ -793,12 +719,12 @@ async function runLanguages(browser, origin) {
     record(header.fits && header.separate && header.centered && header.radius >= 999 && !header.overflow,
       `language ${width}px: capsule stays at the right without moving or covering navigation`, JSON.stringify(header));
     await context.grantPermissions(['clipboard-read', 'clipboard-write']);
-    await page.locator('#skills [data-code]').filter({ has: page.locator('#agent-install-prompt') }).locator('.copy').click();
+    await page.locator('#cli [data-code]').first().locator('.copy').click();
     await page.waitForTimeout(80);
     const copied = (await page.evaluate(() => navigator.clipboard.readText())).replace(/\r\n/g, '\n');
-    const expected = (await page.locator('#agent-install-prompt').textContent()).replace(/\r\n/g, '\n');
-    record(copied === expected && copied.includes('配置需要的依赖环境'),
-      `language ${width}px: copy uses the Chinese Agent prompt`);
+    const expected = (await page.locator('#cli [data-code] code').first().textContent()).replace(/\r\n/g, '\n');
+    record(copied === expected && copied.includes('--doctor'),
+      `language ${width}px: copy preserves literal CLI command`);
     await page.goto(origin + '/SlicerDSpace/zh.html#performance', { waitUntil: 'load' });
     record(await page.locator('#performance-evidence figure.shot img').count() === 2 &&
         await page.locator('.perf-table, .perf-record, .perf-detail-row').count() === 0 &&
@@ -825,7 +751,7 @@ async function runLanguages(browser, origin) {
   await page.locator('.lang-btn[data-lang="zh"]').click();
   await page.waitForURL(url => url.pathname.endsWith('/zh.html'));
   record(await page.locator('html').getAttribute('lang') === 'zh-CN' &&
-      await page.locator('#skills-title .start-route-text').innerText() === '使用 Agent 协助安装、分析与结果检查' &&
+      await page.locator('#cli-title .start-route-text').innerText() === '命令行运行与队列批处理' &&
       await page.locator('.start-recommended').count() === 0 &&
       await page.locator('#integrated tr[data-method]').count() === 30,
     'language no JS: Chinese content, commands and all methods are available without scripting');
@@ -875,16 +801,13 @@ try {
       await ctx.close();
     }
     await run404AndNoJs(browser, origin);
-    await runSkills(browser, origin);
-    await runDemonstrations(browser, origin);
+    await runStartRoutes(browser, origin);
     await runLanguages(browser, origin);
     await runReadmeWordmarks(browser, origin);
     await runReferenceLinks(browser, origin);
   }
-  if (process.argv.includes('--demonstrations')) await runDemonstrations(browser, origin);
-  if (process.argv.includes('--skills')) await runSkills(browser, origin);
-  if (!process.argv.includes('--performance') && !process.argv.includes('--skills')) await runFooter(browser, origin);
-  if (!process.argv.includes('--footer') && !process.argv.includes('--skills')) {
+  if (!process.argv.includes('--performance')) await runFooter(browser, origin);
+  if (!process.argv.includes('--footer')) {
     for (const width of [1440, 390, 360, 320]) await runPerformance(browser, origin, width);
     await runPerformance(browser, origin, 390, true);
     await runPerformanceFailures(browser, origin);

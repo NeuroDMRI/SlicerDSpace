@@ -108,10 +108,10 @@ try {
     await page.locator('.guide-bot__form').evaluate(form => form.requestSubmit());
     await page.waitForFunction(() => document.querySelector('.guide-bot__message:last-child').textContent.includes('DICOM'));
     assert.match(await page.locator('.guide-bot__message').last().innerText(), /DICOM/);
-    await page.locator('#guide-bot-input').fill('如何使用 Skills 协助安装？');
+    await page.locator('#guide-bot-input').fill('如何使用 Apple MPS 或显卡？');
     await page.locator('.guide-bot__form').evaluate(form => form.requestSubmit());
-    await page.waitForFunction(() => document.querySelector('.guide-bot__message:last-child').textContent.includes('安装与使用 Agent Skill'));
-    assert.equal(await page.locator('.guide-bot__message').last().locator('a').getAttribute('href'), '#skills');
+    await page.waitForFunction(() => document.querySelector('.guide-bot__message:last-child').textContent.includes('Compute device'));
+    assert.equal(await page.locator('.guide-bot__message').last().locator('a').getAttribute('href'), '#start');
     await page.locator('#guide-bot-input').fill('<img src=x onerror=window.injected=1>');
     await page.locator('.guide-bot__form').evaluate(form => form.requestSubmit());
     await page.waitForFunction(() => document.querySelector('.guide-bot__message:last-child').textContent.includes('没有可靠的预设回答'));

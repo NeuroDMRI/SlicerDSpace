@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 BENCHMARKS = ROOT / 'docs/release/benchmarks'
 SITE = ROOT / 'docs/site'
 BEGIN, END = '<!-- measured-evidence:start -->', '<!-- measured-evidence:end -->'
-REVIEWED_ON = '2026-11-12'
+REVIEWED_ON = '2026-11-19'
 
 
 def remaining_pipeline_accelerations_20261112_records(report):
@@ -996,10 +996,10 @@ def render(evidence):
         '  <a href="assets/img/fig-cohort-scheduling.png" target="_blank" rel="noopener" aria-label="Open the full-size parallel and cohort scheduling figure">',
         '    <picture>',
         '      <source type="image/webp" srcset="assets/img/fig-cohort-scheduling.webp">',
-        '      <img src="assets/img/fig-cohort-scheduling.png" width="2400" height="703" loading="lazy" decoding="async" fetchpriority="low" alt="Three-panel parallel execution summary: stage-specific CPU scaling across 2 to 16 allocated CPUs, schematic subject-level waiting versus adaptive task backfilling, and 16-subject cohort time savings across all five downstream modules under a 32-CPU budget.">',
+        '      <img src="assets/img/fig-cohort-scheduling.png" width="2400" height="784" loading="lazy" decoding="async" fetchpriority="low" alt="Three-panel cohort execution summary: stage-level backfilling schematic comparing subject-level waiting with adaptive early task admission, 16-subject HCP microstructure completion curves (1.7 h adaptive versus 2.3 h subject-level), and sampled 32-core CPU usage alongside single RTX 3090 GPU stage-slot occupancy (92.8% adaptive versus 58.2% subject-level).">',
         '    </picture>',
         '  </a>',
-        '  <figcaption>Parallel core scaling and multi-subject cohort scheduling. Panel a profiles per-stage runtime across 2–16 allocated CPUs and marks selected core quotas; panel b illustrates adaptive stage-level task backfilling across subjects; panel c reports measured makespan reductions across 16 Human Connectome Project subjects under a shared 32-CPU budget.</figcaption>',
+        '  <figcaption>Multi-subject batch scheduling under shared CPU and single-GPU resource budgets. Panel a illustrates stage-level backfilling (Subject-level waiting versus Adaptive early admission); panel b tracks cumulative completion for a 16-subject Human Connectome Project microstructure cohort (1.7 h versus 2.3 h); panel c shows sampled 32-core CPU usage and single-GPU stage-slot occupancy (1 RTX 3090, raising slot occupancy from 58.2% to 92.8% on the plotted anatomical + DTI run; median across three paired 16-subject runs: 14.4% shorter completion time and 58.8% to 92.3% GPU slot occupancy).</figcaption>',
         '</figure>',
     ])
 

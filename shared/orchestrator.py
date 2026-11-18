@@ -5200,7 +5200,9 @@ def _run_subject_products_impl(
             else:
                 result = run_ukf(_ukf_raw(config, analysis_inputs), ukf_dir,
                     options=config.ukf_parameters, executable=config.ukf_executable,
-                    converter=config.dwiconvert_executable, force=not config.resume, log=log)
+                    converter=config.dwiconvert_executable,
+                    device=getattr(config, "ddseg_device", "auto") or getattr(config, "surface_device", "auto") or "auto",
+                    force=not config.resume, log=log)
                 published_ukf = _publish_tractography_outputs("ukf", ukf_outputs, layout, config.subject_id)
                 tasks.append(ProductTaskRecord(name='tractography.ukf',
                     status='skipped' if result['status'] == 'cached' else 'completed',

@@ -18,7 +18,7 @@ class WebsiteLocaleTests(unittest.TestCase):
         self.assertEqual(missing, [])
         self.assertEqual((SITE / 'zh.html').read_text(encoding='utf-8'), expected)
         self.assertIn('<html lang="zh-CN">', expected)
-        for text in ('观看宣传片', '开始使用', '配置需要的依赖环境', '已集成的方法', '参考文献'):
+        for text in ('观看宣传片', '开始使用', 'Apple MPS', '已集成的方法', '参考文献'):
             self.assertIn(text, expected)
 
     def test_language_links_and_selected_capsule_match_each_page(self):
@@ -43,14 +43,13 @@ class WebsiteLocaleTests(unittest.TestCase):
                 self.assertIn(html.escape(citation['citation']), chinese)
                 self.assertIn(html.escape(citation['url']), chinese)
 
-    def test_shell_commands_are_literal_but_agent_prompts_are_translated(self):
+    def test_shell_commands_are_literal_and_agent_prompts_are_removed(self):
         english = (SITE / 'index.html').read_text(encoding='utf-8')
         chinese = (SITE / 'zh.html').read_text(encoding='utf-8')
         self.assertEqual(re.findall(r'<pre[^>]*><code>(.*?)</code></pre>', english, re.S),
                          re.findall(r'<pre[^>]*><code>(.*?)</code></pre>', chinese, re.S))
         prompts = re.findall(r'<code id="agent-[^"]+">(.*?)</code>', chinese, re.S)
-        self.assertEqual(len(prompts), 2)
-        self.assertTrue(all('SKILL.md' in text and '参考' in text for text in prompts))
+        self.assertEqual(prompts, [])
 
     def test_unknown_new_copy_is_not_silently_left_english(self):
         parser = ChinesePage({})

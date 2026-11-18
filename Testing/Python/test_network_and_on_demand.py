@@ -6,6 +6,8 @@ import ast
 import hashlib
 import io
 import json
+import shutil
+import subprocess
 import sys
 import tarfile
 import tempfile
@@ -211,6 +213,89 @@ class InstallerScriptBuilderTests(unittest.TestCase):
                 self.assertIn({"windows": "windows_x64_base", "macos": "macos_arm64_base", "linux": "linux_x64_base"}[os_name], py_block)
                 for p in selected:
                     self.assertIn(p, py_block)
+
+    def test_website_setup_zip_generator_produces_valid_slicer_extension_archives(self) -> None:
+        node_bin = shutil.which("node")
+        if node_bin is None:
+            self.skipTest("node is not installed in PATH")
+
+        js_path = REPO_ROOT / "docs" / "site" / "assets" / "js" / "installer-customizer.js"
+        node_script = (
+            "const ic = require(process.argv[1]);\n"
+            "(async () => {\n"
+            "  const out = [];\n"
+            "  for (const os of ['macos', 'windows', 'linux']) {\n"
+            "    const z = await ic.buildSetupZip({\n"
+            "      os,\n"
+            "      wmaEnabled: true,\n"
+            "      wmaAtlases: ['wma_org'],\n"
+            "      mirrorPrefix: 'https://ghfast.top/',\n"
+            "      proxyUrl: 'http://127.0.0.1:7890',\n"
+            "      offlineDir: '/custom/offline',\n"
+            "      language: 'zh',\n"
+            "    });\n"
+            "    const script = ic.buildScript({\n"
+            "      os,\n"
+            "      wmaEnabled: true,\n"
+            "      wmaAtlases: ['wma_org'],\n"
+            "      mirrorPrefix: 'https://ghfast.top/',\n"
+            "      proxyUrl: 'http://127.0.0.1:7890',\n"
+            "      offlineDir: '/custom/offline',\n"
+            "      language: 'zh',\n"
+            "    });\n"
+            "    out.push({ os, b64: Buffer.from(z).toString('base64'), script });\n"
+            "  }\n"
+            "  process.stdout.write(JSON.stringify(out));\n"
+            "})().catch((err) => { console.error(err); process.exit(1); });\n"
+        )
+        proc = subprocess.run(
+            [node_bin, "-e", node_script, str(js_path)],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        rows = json.loads(proc.stdout)
+        expected_hashes = {
+            "macos": "aa634ea07b6e4708f8d53091d9dc726a6441e1b52cf74198031959bc28a4648b",
+            "windows": "80999ea3caf471ea320ba3d39877ae6877cf12c0d364916243beb1f687d28cc6",
+            "linux": "729895ff7c3103d75a9104d4c99ee86cf5173f936d81b39f42ae97c73c91cb59",
+        }
+        expected_s4ext_os = {"macos": "macosx", "windows": "win", "linux": "linux"}
+
+        import base64
+
+        for row in rows:
+            os_key = row["os"]
+            with self.subTest(os=os_key):
+                raw_zip = base64.b64decode(row["b64"])
+                with zipfile.ZipFile(io.BytesIO(raw_zip), "r") as zf:
+                    self.assertIsNone(zf.testzip())
+                    for info in zf.infolist():
+                        self.assertEqual(info.compress_type, zipfile.ZIP_DEFLATED)
+                    prefix = (
+                        "SlicerDSpaceSetup/Slicer.app/Contents/Extensions-34045/SlicerDSpaceSetup"
+                        if os_key == "macos"
+                        else "SlicerDSpaceSetup"
+                    )
+                    names = set(zf.namelist())
+                    s4ext_rel = f"{prefix}/share/Slicer-5.10/SlicerDSpaceSetup.s4ext"
+                    py_rel = f"{prefix}/lib/Slicer-5.10/qt-scripted-modules/SlicerDSpaceSetup.py"
+                    self.assertIn(s4ext_rel, names)
+                    self.assertIn(f"{prefix}/SlicerDSpaceSetup.s4ext", names)
+                    self.assertIn(py_rel, names)
+
+                    s4ext_text = zf.read(s4ext_rel).decode("utf-8")
+                    self.assertIn("slicer_revision 34045", s4ext_text)
+                    self.assertIn(f"os {expected_s4ext_os[os_key]}", s4ext_text)
+
+                    py_src = zf.read(py_rel).decode("utf-8")
+                    ast.parse(py_src)
+                    self.assertIn(expected_hashes[os_key], py_src)
+                    self.assertIn("https://ghfast.top/", py_src)
+
+                cli_block = row["script"].split("# __SLICERDSPACE_PY_BEGIN__", 1)[1].split("# __SLICERDSPACE_PY_END__", 1)[0]
+                ast.parse(cli_block)
+                self.assertIn(expected_hashes[os_key], cli_block)
 
 
 if __name__ == "__main__":

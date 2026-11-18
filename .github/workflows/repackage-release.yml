@@ -4,12 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       phase:
-        description: "Phase to execute: 'atlases' or 'os-bases'"
+        description: "Phase to execute: 'os-bases' (repack code into all 3 OS base packages + sync website) or 'atlases'"
         required: true
         type: choice
+        default: "os-bases"
         options:
-          - "atlases"
           - "os-bases"
+          - "atlases"
       os_targets:
         description: "JSON array of OS targets when phase is 'os-bases'"
         required: false
@@ -18,6 +19,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 jobs:
   atlases:
@@ -93,3 +95,45 @@ jobs:
           name: os-base-receipt-${{ matrix.target }}
           path: ${{ runner.temp }}/base-out/os-base-receipt-${{ matrix.target }}.json
           if-no-files-found: error
+
+  sync-metadata:
+    if: github.event.inputs.phase == 'os-bases'
+    needs: [os-bases]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          lfs: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: os-base-receipt-*
+          path: ${{ runner.temp }}/receipts
+          merge-multiple: true
+
+      - name: Sync Release SHA256SUMS.txt, website metadata & GitHub Pages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git pull --rebase origin main
+          python .github/scripts/repackage_release_assets.py sync-metadata \
+            --receipts-dir "${{ runner.temp }}/receipts" \
+            --sha256sums-out "${{ runner.temp }}/SHA256SUMS.txt" \
+            --upload-sha256sums
+          python scripts/build_website_locales.py
+          python -I Testing/Website/check_site.py
+          if [ -n "$(git status --porcelain docs/website/installer_artifacts.json docs/site/)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add docs/website/installer_artifacts.json docs/site/assets/js/installer-customizer.js docs/site/zh.html
+            git commit -m "chore(release): sync repacked v0.1.1 OS base checksums to website"
+            git push origin HEAD:main
+            gh workflow run pages.yml --repo "$GITHUB_REPOSITORY"
+          fi

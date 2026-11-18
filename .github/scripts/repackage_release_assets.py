@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -40,7 +41,7 @@ from scripts.package_slicer_extension import _should_mark_executable
 
 GITHUB_REPO = "NeuroDMRI/SlicerDSpace"
 
-SOURCE_BUNDLES: dict[str, dict[str, Any]] = {
+SOURCE_BUNDLES: dict[str, dict[str, str]] = {
     "windows-x64": {
         "bundle_key": "windows_x64_base",
         "os": "windows",
@@ -48,21 +49,6 @@ SOURCE_BUNDLES: dict[str, dict[str, Any]] = {
         "out_name": f"SlicerDSpace-{RELEASE_TAG}-Windows-x64.zip",
         "ext_prefix": "SlicerDSpace",
         "slicer_subdir": "Slicer-5.10",
-        "source_filename": f"SlicerDSpace-{RELEASE_TAG}-Windows-x64.zip",
-        "source_size_bytes": 18124374419,
-        "source_sha256": "b38d612ad000c6a86b78cc1db10c58c7422c3cd1ca506a65285d7d7598f2feae",
-        "parts": [
-            ("SlicerDSpace-v0.1.1-Windows-x64.zip.001", 1900000000, "816a9e730f75d7673dc2f1f4f2b9fc6caf13867939e8ab93feb94cd57838f7ee"),
-            ("SlicerDSpace-v0.1.1-Windows-x64.zip.002", 1900000000, "514f8cfe930ef54b3e7d63171eb2ffbf0ce4efc8ef0f888d5e2abe44685931e4"),
-            ("SlicerDSpace-v0.1.1-Windows-x64.zip.003", 1900000000, "ccf65e829384e13ba1925bff1f87860030f406ed96b640d024ed22dc742df337"),
-            ("SlicerDSpace-v0.1.1-Windows-x64.zip.004", 1900000000, "20300c3bef02e9f4a79fafb76c8f4d46994a18d5ee9ce5745be8db2e90ed3a13"),
-            ("SlicerDSpace-v0.1.1-Windows-x64.zip.005", 1900000000, "b14d457459979741583ba7139317394333dc2fb0cfc1c4c5e921d73a7da25d7b"),
-            ("SlicerDSpace-v0.1.1-Windows-x64.zip.006", 1900000000, "4021369d1e9433c02e9eb51efe7d417721781d6545672b059511d51e99e34600"),
-            ("SlicerDSpace-v0.1.1-Windows-x64.zip.007", 1900000000, "ab317ff156cc9cd444f1c5f88e91ee886dfbef2f3b172973ff498ed93c2e5692"),
-            ("SlicerDSpace-v0.1.1-Windows-x64.zip.008", 1900000000, "9002830250981f09aecd9936142f6924e5dfb265daa82bc360ead30f297a8368"),
-            ("SlicerDSpace-v0.1.1-Windows-x64.zip.009", 1900000000, "5a7e8c8ce83c96b89f247a375c24fa0e0d23a10ee96c3da7c194cb31a1cd037c"),
-            ("SlicerDSpace-v0.1.1-Windows-x64.zip.010", 1024374419, "97ef58d4da44ab62d28d597c17b8f3e7c0173df6f835852905206aca1050a7e2"),
-        ],
     },
     "linux-x64": {
         "bundle_key": "linux_x64_base",
@@ -71,19 +57,6 @@ SOURCE_BUNDLES: dict[str, dict[str, Any]] = {
         "out_name": f"SlicerDSpace-{RELEASE_TAG}-Linux-x64.tar.gz",
         "ext_prefix": "SlicerDSpace",
         "slicer_subdir": "Slicer-5.10",
-        "source_filename": f"SlicerDSpace-{RELEASE_TAG}-Linux-x64.tar.gz",
-        "source_size_bytes": 14416513720,
-        "source_sha256": "86cc9cb5ef34dbede12c9abdbe110b972ff0fc873d9cef34df3bc8cbad36d403",
-        "parts": [
-            ("SlicerDSpace-v0.1.1-Linux-x64.tar.gz.001", 1900000000, "01b7fd7c39941e8c3757042fbdce0a14e3ced752cd0672cbc847f7fbeb04f4f8"),
-            ("SlicerDSpace-v0.1.1-Linux-x64.tar.gz.002", 1900000000, "476aefe2f555f629241f62b10636c8431272581ea2fb91c2b3606a036c5e3ee8"),
-            ("SlicerDSpace-v0.1.1-Linux-x64.tar.gz.003", 1900000000, "0b0b8a9bd3a955b44cf9b3016f5e84dd5c3a2fdf45464fcbe9e872379b701639"),
-            ("SlicerDSpace-v0.1.1-Linux-x64.tar.gz.004", 1900000000, "358c0b66de302e7b64fb63d3ada4a22bf690374852d8874e49552d813e562515"),
-            ("SlicerDSpace-v0.1.1-Linux-x64.tar.gz.005", 1900000000, "3284c0b811ccf10e5c907fc152e1e49a98640a1a13be693fb3d94b7d35d5b436"),
-            ("SlicerDSpace-v0.1.1-Linux-x64.tar.gz.006", 1900000000, "5a65b97b8f16bc88fef9826fc1e7f68804545d18ddf966a0bc5126e9a2ab9a50"),
-            ("SlicerDSpace-v0.1.1-Linux-x64.tar.gz.007", 1900000000, "c27bca4aafb1ccd4e5b6c50b78a374e5d4c49483d33bef03c401792678c45dd8"),
-            ("SlicerDSpace-v0.1.1-Linux-x64.tar.gz.008", 1116513720, "d6488d61641cc5ea6c85db778b00266851378e77b012990ad28ddc095effe5c0"),
-        ],
     },
     "macos-arm64": {
         "bundle_key": "macos_arm64_base",
@@ -92,19 +65,6 @@ SOURCE_BUNDLES: dict[str, dict[str, Any]] = {
         "out_name": f"SlicerDSpace-{RELEASE_TAG}-macOS-arm64.tar.gz",
         "ext_prefix": "SlicerDSpace/Slicer.app/Contents/Extensions-34045/SlicerDSpace",
         "slicer_subdir": "Slicer-5.10",
-        "source_filename": f"SlicerDSpace-{RELEASE_TAG}-macOS-arm64.tar.gz",
-        "source_size_bytes": 14326384768,
-        "source_sha256": "ca27a69813c9f988ad13dad0d01244ca907cfdfc981db5a445bf4f1ec1aa5d9a",
-        "parts": [
-            ("SlicerDSpace-v0.1.1-macOS-arm64.tar.gz.001", 1900000000, "719e3e6150a70291f44b20386c02f023e04edb9893160d7b2ff4935862fdb620"),
-            ("SlicerDSpace-v0.1.1-macOS-arm64.tar.gz.002", 1900000000, "51d69f43c3ed140d56ab7516d3791bc213b4a80d037045bdec107d400748b4c7"),
-            ("SlicerDSpace-v0.1.1-macOS-arm64.tar.gz.003", 1900000000, "2b3a00198601c9c6d7b6088388e508f788a4bf968a13ecf9f7bb969bc54e6cbc"),
-            ("SlicerDSpace-v0.1.1-macOS-arm64.tar.gz.004", 1900000000, "1aeed976ad2a100c5c98f35087c2ff14e3f1ee8851721187b89935c73e574079"),
-            ("SlicerDSpace-v0.1.1-macOS-arm64.tar.gz.005", 1900000000, "1d31624e6637ba2b6a2b8f6fcd9d7477c98c55c28320921cbc3a8e1d3d4044a9"),
-            ("SlicerDSpace-v0.1.1-macOS-arm64.tar.gz.006", 1900000000, "698e7c963a6fbd5004f14a5e30ceebd9deb665a4c2d702bd37ceaf45c643eec7"),
-            ("SlicerDSpace-v0.1.1-macOS-arm64.tar.gz.007", 1900000000, "82a779a2d9c86281bf1fb51207d0da6a2d0c630682bb06164491f63f67a938de"),
-            ("SlicerDSpace-v0.1.1-macOS-arm64.tar.gz.008", 1026384768, "e78c500f2eab4102ab9d45d4d7f1a7506cd6cc3ed50841f0bab639a9c20f691b"),
-        ],
     },
 }
 
@@ -228,28 +188,42 @@ def cmd_repack_os_base(args: argparse.Namespace) -> int:
     work_dir.mkdir(parents=True, exist_ok=True)
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    artifacts_path = REPO_ROOT / "docs" / "website" / "installer_artifacts.json"
+    artifacts = json.loads(artifacts_path.read_text(encoding="utf-8"))
+    bundle_spec = artifacts["bundles"][spec["bundle_key"]]
+    source_filename = str(bundle_spec["filename"])
+    source_sha256 = str(bundle_spec["sha256"])
+    source_size = int(bundle_spec["size_bytes"])
+    source_parts = list(bundle_spec.get("parts") or ())
+
     parts_dir = work_dir / f"parts-{target}"
-    old_archive = work_dir / spec["source_filename"]
-    if not (old_archive.is_file() and sha256_file(old_archive) == spec["source_sha256"]):
-        part_paths = []
-        for pname, psize, psha in spec["parts"]:
-            part_paths.append(_download_verified_part(pname, psize, psha, parts_dir / pname))
-        merging = old_archive.with_name(old_archive.name + ".merging")
-        h = hashlib.sha256()
-        with merging.open("wb") as out_fh:
-            for pp in part_paths:
-                with pp.open("rb") as in_fh:
-                    while True:
-                        buf = in_fh.read(16 * 1024 * 1024)
-                        if not buf:
-                            break
-                        out_fh.write(buf)
-                        h.update(buf)
-        if h.hexdigest() != spec["source_sha256"]:
-            merging.unlink(missing_ok=True)
-            raise RuntimeError(f"Merged source SHA-256 mismatch for {spec['source_filename']}")
-        os.replace(merging, old_archive)
-        shutil.rmtree(parts_dir, ignore_errors=True)
+    old_archive = work_dir / f"{source_filename}.source"
+    if not (old_archive.is_file() and sha256_file(old_archive) == source_sha256):
+        if source_parts:
+            part_paths = []
+            for pspec in source_parts:
+                pname = str(pspec["filename"])
+                psize = int(pspec["size_bytes"])
+                psha = str(pspec["sha256"])
+                part_paths.append(_download_verified_part(pname, psize, psha, parts_dir / pname))
+            merging = old_archive.with_name(old_archive.name + ".merging")
+            h = hashlib.sha256()
+            with merging.open("wb") as out_fh:
+                for pp in part_paths:
+                    with pp.open("rb") as in_fh:
+                        while True:
+                            buf = in_fh.read(16 * 1024 * 1024)
+                            if not buf:
+                                break
+                            out_fh.write(buf)
+                            h.update(buf)
+            if h.hexdigest() != source_sha256:
+                merging.unlink(missing_ok=True)
+                raise RuntimeError(f"Merged source SHA-256 mismatch for {source_filename}")
+            os.replace(merging, old_archive)
+            shutil.rmtree(parts_dir, ignore_errors=True)
+        else:
+            _download_verified_part(source_filename, source_size, source_sha256, old_archive)
 
     ext_prefix = spec["ext_prefix"]
     qt_root = f"{ext_prefix}/lib/{spec['slicer_subdir']}/qt-scripted-modules"
@@ -397,6 +371,137 @@ def cmd_repack_os_base(args: argparse.Namespace) -> int:
     return 0
 
 
+_BUNDLE_ORDER = ("windows_x64_base", "linux_x64_base", "macos_arm64_base")
+
+
+def _render_js_bundles_block(bundles: dict[str, dict[str, Any]]) -> str:
+    keys = [k for k in _BUNDLE_ORDER if k in bundles] + [k for k in bundles if k not in _BUNDLE_ORDER]
+    lines = ["    // __ARTIFACTS_BUNDLES_BEGIN__", "    bundles: {"]
+    for idx, key in enumerate(keys):
+        b = bundles[key]
+        fn = str(b["filename"])
+        parts = list(b.get("parts") or ())
+        url_expr = "''" if parts else f"RELEASE_BASE + '/{fn}'"
+        lines.append(f"      {key}: {{")
+        lines.append(f"        filename: '{fn}',")
+        lines.append(f"        url: {url_expr},")
+        lines.append(f"        size_bytes: {int(b['size_bytes'])},")
+        lines.append(f"        sha256: '{b['sha256']}',")
+        if not parts:
+            lines.append("        parts: []")
+        else:
+            lines.append("        parts: [")
+            for p_idx, p in enumerate(parts):
+                pfn = str(p["filename"])
+                pcomma = "," if p_idx + 1 < len(parts) else ""
+                lines.append("          {")
+                lines.append(f"            filename: '{pfn}',")
+                lines.append(f"            size_bytes: {int(p['size_bytes'])},")
+                lines.append(f"            sha256: '{p['sha256']}',")
+                lines.append(f"            url: RELEASE_BASE + '/{pfn}'")
+                lines.append(f"          }}{pcomma}")
+            lines.append("        ]")
+        comma = "," if idx + 1 < len(keys) else ""
+        lines.append(f"      }}{comma}")
+    lines.append("    }")
+    lines.append("    // __ARTIFACTS_BUNDLES_END__")
+    return "\n".join(lines)
+
+
+def _format_sha256sums(artifacts: dict[str, Any], packs_manifest: dict[str, Any]) -> str:
+    entries: list[tuple[str, str]] = []
+    merged_entries: list[tuple[str, str]] = []
+    bundles = artifacts.get("bundles") or {}
+    for key in [k for k in _BUNDLE_ORDER if k in bundles] + [k for k in bundles if k not in _BUNDLE_ORDER]:
+        b = bundles[key]
+        parts = list(b.get("parts") or ())
+        if parts:
+            for p in parts:
+                entries.append((str(p["sha256"]), str(p["filename"])))
+            if b.get("sha256") and b.get("filename"):
+                merged_entries.append((str(b["sha256"]), str(b["filename"])))
+        elif b.get("sha256"):
+            entries.append((str(b["sha256"]), str(b["filename"])))
+    packs = packs_manifest.get("packs") or {}
+    pack_order = [k for k in ("wma_org", "wma_naba", "wma_east_west") if k in packs] + [
+        k for k in packs if k not in ("wma_org", "wma_naba", "wma_east_west")
+    ]
+    for key in pack_order:
+        p = packs[key]
+        parts = list(p.get("parts") or ())
+        if parts:
+            for sp in parts:
+                entries.append((str(sp["sha256"]), str(sp["filename"])))
+            if p.get("sha256") and p.get("filename"):
+                merged_entries.append((str(p["sha256"]), str(p["filename"])))
+        elif p.get("sha256"):
+            entries.append((str(p["sha256"]), str(p["filename"])))
+    out = "".join(f"{sha}  {name}\n" for sha, name in entries if sha and name)
+    if merged_entries:
+        out += "\n# Merged multi-part archive SHA-256 (after concatenating .001..N parts):\n"
+        out += "".join(f"# {sha}  {name}\n" for sha, name in merged_entries)
+    return out
+
+
+def cmd_sync_metadata(args: argparse.Namespace) -> int:
+    receipts_dir = args.receipts_dir.expanduser().resolve()
+    receipt_files = sorted(receipts_dir.rglob("os-base-receipt-*.json"))
+    if not receipt_files:
+        raise RuntimeError(f"No os-base-receipt-*.json files found under {receipts_dir}")
+
+    artifacts_path = REPO_ROOT / "docs" / "website" / "installer_artifacts.json"
+    artifacts = json.loads(artifacts_path.read_text(encoding="utf-8"))
+    bundles = artifacts.setdefault("bundles", {})
+    allowed_keys = ("os", "arch", "mode", "filename", "url", "size_bytes", "sha256", "published", "parts")
+    for rf in receipt_files:
+        data = json.loads(rf.read_text(encoding="utf-8"))
+        for key, rec in data.items():
+            rec_copy = {k: rec[k] for k in allowed_keys if k in rec}
+            bundles[key] = rec_copy
+
+    artifacts_path.write_text(json.dumps(artifacts, indent=2) + "\n", encoding="utf-8")
+    print(f"[sync-metadata] Updated {artifacts_path}", flush=True)
+
+    js_path = REPO_ROOT / "docs" / "site" / "assets" / "js" / "installer-customizer.js"
+    js_src = js_path.read_text(encoding="utf-8")
+    pattern = re.compile(
+        r"^[ \t]*// __ARTIFACTS_BUNDLES_BEGIN__.*?^[ \t]*// __ARTIFACTS_BUNDLES_END__",
+        flags=re.MULTILINE | re.DOTALL,
+    )
+    if not pattern.search(js_src):
+        raise RuntimeError(f"Missing __ARTIFACTS_BUNDLES_BEGIN__/__ARTIFACTS_BUNDLES_END__ markers in {js_path}")
+    new_js = pattern.sub(lambda _m: _render_js_bundles_block(bundles), js_src, count=1)
+
+    for os_key, bundle_key in (
+        ("macos", "macos_arm64_base"),
+        ("windows", "windows_x64_base"),
+        ("linux", "linux_x64_base"),
+    ):
+        if bundle_key in bundles:
+            sz = int(bundles[bundle_key]["size_bytes"])
+            est_pat = re.compile(
+                rf"(bundleKey:\s*'{re.escape(bundle_key)}'.*?baseEstimateBytes:\s*)\d+",
+                flags=re.DOTALL,
+            )
+            new_js, count = est_pat.subn(rf"\g<1>{sz}", new_js, count=1)
+            if count != 1:
+                raise RuntimeError(f"Could not update baseEstimateBytes for {os_key} ({bundle_key}) in {js_path}")
+
+    js_path.write_text(new_js, encoding="utf-8")
+    print(f"[sync-metadata] Updated {js_path}", flush=True)
+
+    packs_manifest_path = REPO_ROOT / "models" / "release_packs_manifest.json"
+    packs_manifest = json.loads(packs_manifest_path.read_text(encoding="utf-8"))
+    sha_out = (args.sha256sums_out or (receipts_dir / "SHA256SUMS.txt")).expanduser().resolve()
+    sha_out.parent.mkdir(parents=True, exist_ok=True)
+    sha_out.write_text(_format_sha256sums(artifacts, packs_manifest), encoding="utf-8")
+    print(f"[sync-metadata] Wrote {sha_out}", flush=True)
+
+    if args.upload_sha256sums and not args.dry_run:
+        _upload_release_files([sha_out])
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -413,9 +518,20 @@ def main(argv: list[str] | None = None) -> int:
     p_base.add_argument("--out-dir", required=True, type=Path)
     p_base.add_argument("--dry-run", action="store_true")
 
+    p_sync = sub.add_parser(
+        "sync-metadata",
+        help="Sync os-base-receipt-*.json checksums into installer_artifacts.json, website JS, and SHA256SUMS.txt.",
+    )
+    p_sync.add_argument("--receipts-dir", required=True, type=Path)
+    p_sync.add_argument("--sha256sums-out", default=None, type=Path)
+    p_sync.add_argument("--upload-sha256sums", action="store_true")
+    p_sync.add_argument("--dry-run", action="store_true")
+
     args = parser.parse_args(argv)
     if args.command == "build-atlas":
         return cmd_build_atlas(args)
+    if args.command == "sync-metadata":
+        return cmd_sync_metadata(args)
     return cmd_repack_os_base(args)
 
 

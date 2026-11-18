@@ -84,12 +84,59 @@
   color: var(--ivory);
 }
 
-.ic-row {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 14px 18px;
-  align-items: end;
-  margin-bottom: 16px;
+.ic-os-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 16px;
+  margin-bottom: 14px;
+}
+
+.ic-os-row .ic-field {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+.ic-os-row .ic-k {
+  margin-bottom: 0;
+}
+
+.ic-steps {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 16px;
+  margin: 0 0 14px;
+  padding: 10px 13px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: rgba(0, 0, 0, .24);
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.ic-step-item {
+  display: inline-block;
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.ic-step-num {
+  margin-right: 5px;
+  font-family: var(--f-mono);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ivory);
+}
+
+.ic-step-item strong {
+  color: var(--text);
+  font-weight: 500;
 }
 
 .ic-field {
@@ -355,7 +402,7 @@
 
 .ic-more-sub {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px 16px;
   align-items: end;
   margin-top: 10px;
@@ -408,6 +455,10 @@
 
 .ic-btn-primary {
   padding: 9px 16px;
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
   border-radius: 8px;
   border: 1px solid var(--text);
   background: var(--text);
@@ -425,6 +476,10 @@
 
 .ic-btn-secondary {
   padding: 9px 13px;
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
   border-radius: 8px;
   border: 1px solid var(--line-2);
   background: rgba(236, 232, 223, .04);
@@ -470,7 +525,6 @@
 }
 
 @media (max-width: 760px) {
-  .ic-row,
   .ic-packs,
   .ic-wma-grid,
   .ic-net-grid,

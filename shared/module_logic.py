@@ -868,17 +868,22 @@ class SharedLogicMixin:
         return resolved
 
     def _load_model_node(self, stl_path: Path, surface: str, subject_id: str) -> bool:
-        is_ras_companion = "_predicted_" in stl_path.name and stl_path.name.endswith("_orig.stl")
-        stem = stl_path.stem.removesuffix("_orig") if is_ras_companion else stl_path.stem
-        name = f"{subject_id}_{surface}_{stem.split('_')[-1]}"
-        coordinates = (slicer.vtkMRMLStorageNode.CoordinateSystemRAS if is_ras_companion
+        is_obj = stl_path.suffix.lower() == ".obj"
+        is_orig_stl = "_predicted_" in stl_path.name and stl_path.name.endswith("_orig.stl")
+        is_ras = is_obj or is_orig_stl
+        if is_obj:
+            name = f"{subject_id}_{surface}_{stl_path.stem.replace('.', '_')}"
+        else:
+            stem = stl_path.stem.removesuffix("_orig") if is_orig_stl else stl_path.stem
+            name = f"{subject_id}_{surface}_{stem.split('_')[-1]}"
+        coordinates = (slicer.vtkMRMLStorageNode.CoordinateSystemRAS if is_ras
                        else slicer.vtkMRMLStorageNode.CoordinateSystemLPS)
         success, model_node = slicer.util.loadNodeFromFile(
             stl_path.as_posix(), "ModelFile", properties={"coordinateSystem": coordinates}, returnNode=True,
         )
         if success and model_node:
             model_node.SetName(name)
-            model_node.SetAttribute("SlicerDDSurfer.SourceCoordinateSystem", "RAS" if is_ras_companion else "LPS")
+            model_node.SetAttribute("SlicerDDSurfer.SourceCoordinateSystem", "RAS" if is_ras else "LPS")
             return True
         return False
 
@@ -1183,13 +1188,20 @@ class SharedLogicMixin:
                     success = self._load_scalar_volume_node(path, name)  # D6: RGB DEC map loads as a vector volume
                 elif suffix in {".csv", ".tsv"}:
                     success = self._load_table_node(path, name)
-                elif suffix == ".stl":
+                elif suffix in {".stl", ".obj"}:
                     success = self._load_model_node(path, candidate["product"], subject)
                 else:
                     if automatic:
+                        from shared.io_layout import subject_layout
+                        subj_root = manifest.get("subject_root")
                         output_root = Path(manifest.get("output_root") or manifest_path.parent.parent)
+                        preview_dir = (
+                            subject_layout(Path(subj_root), output_root=output_root).display_previews
+                            if subj_root
+                            else (output_root.parent / "cache" / "display_previews")
+                        )
                         success = self._load_fiber_bundle_node(
-                            path, name, preview_dir=output_root / "06_slicer_scene_report" / "display_previews",
+                            path, name, preview_dir=preview_dir,
                         )
                     else:
                         success = self._load_fiber_bundle_node(path, name)

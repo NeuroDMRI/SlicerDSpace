@@ -110,35 +110,43 @@ def _collect_output_tree(output_root: Path, *, max_files: int = 2500) -> dict[st
     }
 
 
-def _collect_qc_files(output_root: Path) -> list[dict[str, Any]]:
+def _collect_qc_files(output_root: Path, *, extra_roots: tuple[Path, ...] = ()) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
-    if not output_root.exists():
-        return records
-    for path in sorted(output_root.rglob("*qc.json")):
-        payload = _read_json(path)
-        records.append(
-            {
-                "path": _relative(path, output_root),
-                "status": payload.get("status"),
-                "kind": payload.get("kind"),
-                "summary": {
-                    key: value
-                    for key, value in payload.items()
-                    if key
-                    in {
-                        "status",
-                        "streamline_count",
-                        "assigned_streamlines",
-                        "edge_count",
-                        "node_count",
-                        "bundle_count",
-                        "anatomical_tract_count",
-                        "warnings",
-                        "errors",
-                    }
-                },
-            }
-        )
+    seen: set[str] = set()
+    roots = (output_root, *extra_roots)
+    for root in roots:
+        if not root or not root.exists():
+            continue
+        base = output_root.parent if root != output_root else output_root
+        for path in sorted(root.rglob("*qc.json")):
+            resolved = str(path.resolve())
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            payload = _read_json(path)
+            records.append(
+                {
+                    "path": _relative(path, base),
+                    "status": payload.get("status"),
+                    "kind": payload.get("kind"),
+                    "summary": {
+                        key: value
+                        for key, value in payload.items()
+                        if key
+                        in {
+                            "status",
+                            "streamline_count",
+                            "assigned_streamlines",
+                            "edge_count",
+                            "node_count",
+                            "bundle_count",
+                            "anatomical_tract_count",
+                            "warnings",
+                            "errors",
+                        }
+                    },
+                }
+            )
     return records
 
 
@@ -338,21 +346,25 @@ def _collect_key_outputs(manifest: dict[str, Any], output_tree: dict[str, Any], 
         if match:
             add(Path(match).parent.as_posix(), label, source)
 
-    add_parent("DTI scalar maps", "microstructure", "02_microstructure/dti/")
+    add_parent("DTI scalar maps", "microstructure", "02_microstructure/diffusion_tensor/")
+    if not any("02_microstructure/diffusion_tensor/" in p for p in outputs):
+        add_parent("DTI scalar maps", "microstructure", "02_microstructure/dti/")
     add_first("ROI-wise microstructure table", "microstructure", "ROIWise-Microstructure.csv")
-    add_first("DDParcel wmparc", "parcellation", "DDSurfer-wmparc.nii.gz")
-    add_first("DDSeg segmentation", "segmentation", "SegmentationMap_GMWMCSF")
-    add_first("DDSurfer surface manifest", "surface", "surface_manifest.json")
-    add_first("Normalized WM FOD", "tractography", "wmfod_norm.mif")
-    add_first("ACT tractogram TCK", "tractography", "csd_act_ifod2.tck")
-    add_first("ACT tractogram TRK", "tractography", "csd_act_ifod2.trk")
-    add_first("SIFT2 weights", "tractography", "sift2_weights.txt")
-    add_parent("WMQL AF/CST bundles", "bundles", "bundles/wmql")
-    add_first("Streamline-count connectome", "connectome", "connectome-streamline_count.csv")
-    add_first("SIFT2-weighted connectome", "connectome", "sift2_weighted_streamline_count.csv")
-    add_first("Annotated output tree", "report", "06_slicer_scene_report/output_tree.html")
-    add_first("Latest HTML report", "report", "06_slicer_scene_report/report.html")
-    add_first("Latest Markdown summary", "report", "06_slicer_scene_report/summary.md")
+    add_first("Brain parcellation", "parcellation", "_parcellation.nii.gz")
+    if not any(item.get("source") == "parcellation" for item in outputs.values()):
+        add_first("DDParcel wmparc", "parcellation", "DDSurfer-wmparc.nii.gz")
+    add_first("Tissue segmentation", "segmentation", "SegmentationMap_GMWMCSF")
+    add_first("Cortical surface mesh", "surface", "cortical_surface/lh.white.obj")
+    add_first("ACT tractogram TCK", "tractography", "_act.tck")
+    if not any(item.get("label") == "ACT tractogram TCK" for item in outputs.values()):
+        add_first("ACT tractogram TCK", "tractography", "csd_act_ifod2.tck")
+    add_first("ACT tractogram TRK", "tractography", "_act.trk")
+    if not any(item.get("label") == "ACT tractogram TRK" for item in outputs.values()):
+        add_first("ACT tractogram TRK", "tractography", "csd_act_ifod2.trk")
+    add_parent("WMQL bundles", "bundles", "04_bundles/query_bundle_extraction")
+    add_first("Streamline-count connectome", "connectome", "_streamline_count.csv")
+    add_first("SIFT2-weighted connectome", "connectome", "_sift2_weighted.csv")
+    add_first("Per-stage QC summary", "qc", "06_qc/")
 
     for task in manifest.get("tasks", []):
         source = str(task.get("name") or "task")
@@ -859,6 +871,7 @@ def _build_html_report(
     <h2>Report Artifacts</h2>
     <ul class=\"paths\">
       <li><span class=\"path-label\">Markdown summary</span><code>{html.escape(paths.summary_md.as_posix())}</code><span class=\"source\">human-readable</span></li>
+      <li><span class=\"path-label\">Annotated output tree</span><code>{html.escape((paths.report_html.parent / 'output_tree.html').as_posix())}</code><span class=\"source\">human-readable</span></li>
       <li><span class=\"path-label\">Provenance</span><code>{html.escape(paths.provenance_json.as_posix())}</code><span class=\"source\">machine-readable</span></li>
       <li><span class=\"path-label\">QC summary</span><code>{html.escape(paths.qc_summary_json.as_posix())}</code><span class=\"source\">machine-readable</span></li>
     </ul>
@@ -899,7 +912,7 @@ def write_subject_reports(
         summary_md_latest=report_dir / "summary.md",
     )
     output_tree = _collect_output_tree(layout.outputs)
-    qc_records = _collect_qc_files(layout.outputs)
+    qc_records = _collect_qc_files(layout.outputs, extra_roots=(layout.cache_stages,))
     provenance = _build_provenance(
         manifest_path=manifest_path,
         manifest=manifest,

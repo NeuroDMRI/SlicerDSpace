@@ -169,8 +169,11 @@ def run_needs_brain_mask(subject_root: Path, *, targets, subject_id: str, output
         if 'preprocessing' in targets and 'brain_mask' in stages:
             layout = subject_layout(subject_root, output_root=output_root)
             stem = subject_id or subject_root.name
-            dwi, mask = layout.preproc / f'{stem}_dwi_final.nii.gz', layout.preproc / f'{stem}_brain_mask_final.nii.gz'
-            files = (dwi, mask, layout.preproc / f'{stem}_dwi_final.bval', layout.preproc / f'{stem}_dwi_final.bvec')
+            preproc_dir = layout.preproc
+            if not (preproc_dir / f'{stem}_dwi_final.nii.gz').is_file() and (layout.preproc_legacy / f'{stem}_dwi_final.nii.gz').is_file():
+                preproc_dir = layout.preproc_legacy
+            dwi, mask = preproc_dir / f'{stem}_dwi_final.nii.gz', preproc_dir / f'{stem}_brain_mask_final.nii.gz'
+            files = (dwi, mask, preproc_dir / f'{stem}_dwi_final.bval', preproc_dir / f'{stem}_dwi_final.bvec')
             stale = force or not resume or not all(path.is_file() for path in files)
             if not stale:
                 stale = mask.stat().st_mtime_ns < dwi.stat().st_mtime_ns
@@ -181,8 +184,11 @@ def run_needs_brain_mask(subject_root: Path, *, targets, subject_id: str, output
     if raw and 'preprocessing' in targets and brain_mask_backend != 'provided':
         layout = subject_layout(subject_root, output_root=output_root)
         stem = subject_id or subject_root.name
-        dwi, mask = layout.preproc / f'{stem}_dwi_final.nii.gz', layout.preproc / f'{stem}_brain_mask_final.nii.gz'
-        files = (dwi, mask, layout.preproc / f'{stem}_dwi_final.bval', layout.preproc / f'{stem}_dwi_final.bvec')
+        preproc_dir = layout.preproc
+        if not (preproc_dir / f'{stem}_dwi_final.nii.gz').is_file() and (layout.preproc_legacy / f'{stem}_dwi_final.nii.gz').is_file():
+            preproc_dir = layout.preproc_legacy
+        dwi, mask = preproc_dir / f'{stem}_dwi_final.nii.gz', preproc_dir / f'{stem}_brain_mask_final.nii.gz'
+        files = (dwi, mask, preproc_dir / f'{stem}_dwi_final.bval', preproc_dir / f'{stem}_dwi_final.bvec')
         stale = force or not resume or not all(path.is_file() for path in files)
         if not stale:
             stale = mask.stat().st_mtime_ns < dwi.stat().st_mtime_ns

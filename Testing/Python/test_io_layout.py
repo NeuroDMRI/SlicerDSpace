@@ -22,39 +22,60 @@ class IOLayoutTest(unittest.TestCase):
             subject_root = Path(tmp) / "100307"
             layout = subject_layout(subject_root)
 
+            self.assertEqual(default_task_output_dir(subject_root, "preproc"), layout.subject_root / "preprocessed")
             self.assertEqual(default_task_output_dir(subject_root, "microstructure"), layout.outputs / "02_microstructure")
-            self.assertEqual(default_task_output_dir(subject_root, "ddseg"), layout.outputs / "03_anatomy" / "ddseg")
-            self.assertEqual(default_task_output_dir(subject_root, "ddsurfer"), layout.outputs / "03_anatomy" / "ddsurfer")
-            self.assertEqual(default_task_output_dir(subject_root, "ddparcel"), layout.outputs / "03_anatomy" / "ddparcel")
+            self.assertEqual(
+                default_task_output_dir(subject_root, "ddseg"),
+                layout.outputs / "01_anatomical_priors" / "tissue_segmentation",
+            )
+            self.assertEqual(
+                default_task_output_dir(subject_root, "ddsurfer"),
+                layout.outputs / "01_anatomical_priors" / "cortical_surface",
+            )
+            self.assertEqual(
+                default_task_output_dir(subject_root, "ddparcel"),
+                layout.outputs / "01_anatomical_priors" / "brain_parcellation",
+            )
+            self.assertEqual(
+                default_task_output_dir(subject_root, "surface_morphometry"),
+                layout.outputs / "01_anatomical_priors" / "surface_morphometry",
+            )
             self.assertEqual(
                 default_task_output_dir(subject_root, "tractography_dti"),
-                layout.outputs / "04_tractography" / "tractograms" / "dti_det",
+                layout.outputs / "03_tractography" / "single_tensor_tractography",
             )
-            self.assertEqual(default_task_output_dir(subject_root, "saf"), layout.outputs / "04_tractography" / "saf")
-            self.assertEqual(default_task_output_dir(subject_root, "connectome"), layout.outputs / "04_tractography" / "connectome")
             self.assertEqual(
-                default_task_output_dir(subject_root, "regional_microstructure"),
-                layout.outputs / "05_statistics" / "regional_microstructure",
+                default_task_output_dir(subject_root, "saf"),
+                layout.outputs / "03_tractography" / "short_association_fibers",
             )
+            self.assertEqual(default_task_output_dir(subject_root, "connectome"), layout.outputs / "05_connectome")
+            self.assertEqual(default_task_output_dir(subject_root, "qc"), layout.outputs / "06_qc")
+            self.assertEqual(default_task_output_dir(subject_root, "regional_microstructure"), layout.outputs / "02_microstructure")
 
     def test_dependency_path_can_infer_same_subject_output_tree(self) -> None:
         from shared import default_task_output_dir_for_dependency
 
         with tempfile.TemporaryDirectory() as tmp:
             subject_root = Path(tmp) / "100307"
-            tractogram = subject_root / "outputs" / "04_tractography" / "tractograms" / "dti_det" / "wholebrain.vtk"
+            tractogram = (
+                subject_root
+                / "outputs"
+                / "03_tractography"
+                / "single_tensor_tractography"
+                / "100307_dti.trk"
+            )
 
             self.assertEqual(
                 default_task_output_dir_for_dependency(tractogram, "connectome"),
-                subject_root.resolve() / "outputs" / "04_tractography" / "connectome",
+                subject_root.resolve() / "outputs" / "05_connectome",
             )
             self.assertEqual(
                 default_task_output_dir_for_dependency(tractogram, "tractcloud"),
-                subject_root.resolve() / "outputs" / "04_tractography" / "bundles" / "tract_cloud_dl",
+                subject_root.resolve() / "outputs" / "04_bundles" / "bundle_identification",
             )
             self.assertEqual(
                 default_task_output_dir_for_dependency(tractogram, "wmql"),
-                subject_root.resolve() / "outputs" / "04_tractography" / "bundles" / "wmql",
+                subject_root.resolve() / "outputs" / "04_bundles" / "query_bundle_extraction",
             )
 
     def test_legacy_outputs_can_be_materialized_under_canonical_tree(self) -> None:
@@ -62,68 +83,63 @@ class IOLayoutTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             subject_root = Path(tmp) / "100307"
-            legacy_micro = subject_root / "outputs" / "microstructure"
-            legacy_ddparcel = subject_root / "outputs" / "ddparcel"
-            legacy_validation = subject_root / "outputs" / "validation"
-            legacy_tractography_out = subject_root / "outputs" / "tractography"
-            legacy_tractcloud = subject_root / "AnatomicalTracts"
-            legacy_micro.mkdir(parents=True)
-            legacy_ddparcel.mkdir(parents=True)
-            legacy_validation.mkdir(parents=True)
-            legacy_tractography_out.mkdir(parents=True)
-            legacy_tractcloud.mkdir(parents=True)
-            (legacy_micro / "100307-dti-FractionalAnisotropy.nii.gz").write_text("fa", encoding="utf-8")
+            legacy_preproc = subject_root / "outputs" / "01_preproc"
+            legacy_dti = subject_root / "outputs" / "02_microstructure" / "dti"
+            legacy_ddparcel = subject_root / "outputs" / "03_structural" / "ddparcel"
+            legacy_tract = subject_root / "outputs" / "04_tractography" / "tractograms" / "dti_det"
+            legacy_tractcloud = subject_root / "outputs" / "04_tractography" / "bundles" / "tract_cloud_dl" / "AnatomicalTracts"
+            legacy_report = subject_root / "outputs" / "06_slicer_scene_report"
+            for folder in (legacy_preproc, legacy_dti, legacy_ddparcel, legacy_tract, legacy_tractcloud, legacy_report):
+                folder.mkdir(parents=True)
+            (legacy_preproc / "100307_dwi_final.nii.gz").write_text("dwi", encoding="utf-8")
+            (legacy_dti / "100307_dti_FA.nii.gz").write_text("fa", encoding="utf-8")
             (legacy_ddparcel / "100307-DDSurfer-wmparc.nii.gz").write_text("wmparc", encoding="utf-8")
-            (legacy_validation / "100307_input_validation.json").write_text("{}", encoding="utf-8")
-            (legacy_tractography_out / "100307-dti-deterministic_manifest.json").write_text("{}", encoding="utf-8")
+            (legacy_tract / "100307-dti-deterministic.trk").write_text("trk", encoding="utf-8")
             (legacy_tractcloud / "AF_left.vtp").write_text("tract", encoding="utf-8")
+            (legacy_report / "report.html").write_text("<html></html>", encoding="utf-8")
 
             created = materialize_canonical_output_tree(subject_root, mode="copy", archive_legacy=True)
             layout = subject_layout(subject_root)
 
-            self.assertTrue((layout.microstructure_dti / "100307_dti_FA.nii.gz").is_file())
-            self.assertTrue((layout.ddparcel / "100307-DDSurfer-wmparc.nii.gz").is_file())
-            self.assertTrue((layout.run_metadata / "validation" / "100307_input_validation.json").is_file())
-            self.assertTrue((layout.tractograms_dti_det / "100307-dti-deterministic_manifest.json").is_file())
-            self.assertTrue((layout.bundles_tractcloud / "AnatomicalTracts" / "AF_left.vtp").is_file())
-            self.assertTrue((subject_root / ".legacy_flat_outputs" / "microstructure").is_dir())
-            self.assertTrue((subject_root / ".legacy_flat_outputs" / "tractography").is_dir())
-            self.assertTrue((subject_root / ".legacy_flat_outputs" / "AnatomicalTracts").is_dir())
-            self.assertIn("100307-dti-FractionalAnisotropy.nii.gz", created)
+            self.assertTrue((layout.preproc / "100307_dwi_final.nii.gz").is_file())
+            self.assertTrue((layout.diffusion_tensor / "100307_FA.nii.gz").is_file())
+            self.assertTrue((layout.brain_parcellation / "100307_parcellation.nii.gz").is_file())
+            self.assertTrue((layout.single_tensor_tractography / "100307_dti.trk").is_file())
+            self.assertTrue((layout.bundle_identification / "AF_left.vtp").is_file())
+            self.assertTrue((layout.cache_reports / "report.html").is_file())
+            self.assertFalse((subject_root / "outputs" / "03_structural").exists())
+            self.assertFalse((subject_root / "outputs" / "04_tractography").exists())
+            self.assertFalse((subject_root / "outputs" / "06_slicer_scene_report").exists())
+            self.assertFalse(any(path.is_symlink() for path in layout.outputs.rglob("*")))
+            self.assertTrue(created)
 
-    def test_archived_legacy_microstructure_can_rehydrate_canonical_freewater_noddi(self) -> None:
+    def test_legacy_freewater_noddi_and_stats_migrate_without_symlinks(self) -> None:
         from shared import materialize_canonical_output_tree, subject_layout
 
         with tempfile.TemporaryDirectory() as tmp:
             subject_root = Path(tmp) / "100307"
             layout = subject_layout(subject_root)
-            archived_micro = subject_root / ".legacy_flat_outputs" / "microstructure"
-            archived_micro.mkdir(parents=True)
-            (layout.microstructure / "manifest.json").parent.mkdir(parents=True, exist_ok=True)
-            (layout.microstructure / "manifest.json").write_text('{"old": true}\n', encoding="utf-8")
-            (archived_micro / "100307-freewater-Fraction.nii.gz").write_text("fwf", encoding="utf-8")
-            (archived_micro / "100307-freewater-TissueFA.nii.gz").write_text("fa", encoding="utf-8")
-            (archived_micro / "100307-freewater-TissueMD.nii.gz").write_text("md", encoding="utf-8")
-            (archived_micro / "100307-noddi-NDI.nii.gz").write_text("ndi", encoding="utf-8")
-            (archived_micro / "100307-noddi-ODI.nii.gz").write_text("odi", encoding="utf-8")
-            (archived_micro / "100307-noddi-FWF.nii.gz").write_text("fwf", encoding="utf-8")
-            (archived_micro / "100307-ROIWise-Microstructure.csv").write_text("csv", encoding="utf-8")
-            (archived_micro / "100307-ROIWise-Microstructure.json").write_text("{}", encoding="utf-8")
-            (archived_micro / "freewater_manifest.json").write_text("{}", encoding="utf-8")
-            (archived_micro / "noddi_manifest.json").write_text("{}", encoding="utf-8")
-            (archived_micro / "manifest.json").write_text('{"run_noddi": true}\n', encoding="utf-8")
-            amico_dir = archived_micro / "_amico_noddi"
-            amico_dir.mkdir()
-            (amico_dir / "fit_NDI.nii.gz").write_text("fit", encoding="utf-8")
+            legacy_fw = layout.outputs / "02_microstructure" / "freewater"
+            legacy_noddi = layout.outputs / "02_microstructure" / "noddi"
+            legacy_stats = layout.outputs / "05_statistics" / "regional_microstructure"
+            for folder in (legacy_fw, legacy_noddi, legacy_stats, legacy_noddi / "_amico_noddi"):
+                folder.mkdir(parents=True)
+            (legacy_fw / "100307_fw_fraction.nii.gz").write_text("fwf", encoding="utf-8")
+            (legacy_noddi / "100307_noddi_NDI.nii.gz").write_text("ndi", encoding="utf-8")
+            (legacy_noddi / "_amico_noddi" / "fit_NDI.nii.gz").write_text("fit", encoding="utf-8")
+            (legacy_stats / "100307_ROIWise-Microstructure.csv").write_text("roi,val\n1,0.5\n", encoding="utf-8")
 
-            created = materialize_canonical_output_tree(subject_root, mode="copy", archive_legacy=False)
+            materialize_canonical_output_tree(subject_root, mode="copy", archive_legacy=True)
 
-            self.assertTrue((layout.microstructure_freewater / "100307_fw_fraction.nii.gz").is_file())
-            self.assertTrue((layout.microstructure_noddi / "100307_noddi_NDI.nii.gz").is_file())
-            self.assertTrue((layout.microstructure / "cache" / "noddi" / "_amico_noddi" / "fit_NDI.nii.gz").is_file())
-            self.assertTrue((layout.regional_microstructure / "100307_ROIWise-Microstructure.csv").is_file())
-            self.assertIn('"run_noddi": true', (layout.microstructure / "manifest.json").read_text(encoding="utf-8"))
-            self.assertIn("microstructure_manifest", created)
+            self.assertTrue((layout.free_water / "100307_FW.nii.gz").is_file())
+            self.assertTrue((layout.neurite_microstructure / "100307_NDI.nii.gz").is_file())
+            self.assertTrue((layout.microstructure / "100307_ROIWise-Microstructure.csv").is_file())
+            self.assertTrue(
+                (layout.stage_cache("02_microstructure/noddi/_amico_noddi") / "fit_NDI.nii.gz").is_file()
+            )
+            self.assertFalse((layout.outputs / "05_statistics").exists())
+            self.assertFalse((layout.outputs / "02_microstructure" / "freewater").exists())
+            self.assertFalse((layout.outputs / "02_microstructure" / "noddi").exists())
 
     def test_development_outputs_can_be_archived_outside_canonical_tree(self) -> None:
         from shared import archive_development_outputs, subject_layout
@@ -145,10 +161,10 @@ class IOLayoutTest(unittest.TestCase):
             self.assertFalse(check_dir.exists())
             self.assertFalse(saf_dir.exists())
             self.assertFalse(smoke_dir.exists())
-            self.assertTrue((subject_root / ".debug_outputs" / "04_tractography" / "bundles" / "wmql_probe_af_cst").is_dir())
-            self.assertTrue((subject_root / ".debug_outputs" / "04_tractography" / "connectome" / "csd_act_mean_fa_check").is_dir())
-            self.assertTrue((subject_root / ".debug_outputs" / "04_tractography" / "saf_python_execute_fastsurfer").is_dir())
-            self.assertTrue((subject_root / ".debug_outputs" / "legacy_outputs_root" / "connectome_execute_smoke").is_dir())
+            self.assertTrue((layout.cache / "legacy_outputs" / "04_bundles" / "wmql_probe_af_cst").is_dir())
+            self.assertTrue((layout.cache / "legacy_outputs" / "05_connectome" / "csd_act_mean_fa_check").is_dir())
+            self.assertTrue((layout.cache / "legacy_outputs" / "03_tractography" / "saf_python_execute_fastsurfer").is_dir())
+            self.assertTrue((layout.cache / "legacy_outputs" / "connectome_execute_smoke").is_dir())
             self.assertGreaterEqual(len(moved), 4)
 
     def test_alternate_tractogram_backend_runs_move_to_cache(self) -> None:
@@ -170,7 +186,7 @@ class IOLayoutTest(unittest.TestCase):
                 current_tractography_backend="csd_act",
             )
 
-            cached = layout.tractography / "cache" / "alternate_runs" / "tractograms" / "dti_det"
+            cached = layout.cache / "alternate_runs" / "tractograms" / "dti_det"
             self.assertTrue(main_dir.is_dir())
             self.assertFalse(alternate_dir.exists())
             self.assertTrue((cached / "alt.trk").is_file())
@@ -182,7 +198,7 @@ class IOLayoutTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             subject_root = Path(tmp) / "100307"
             layout = subject_layout(subject_root)
-            existing_run = layout.tractograms_dti_det / "windows_full"
+            existing_run = layout.tractograms / "windows_full"
             existing_run.mkdir(parents=True)
             tractogram = existing_run / "100307-dti-deterministic.trk"
             tractogram.write_text("tractogram", encoding="utf-8")
@@ -202,61 +218,48 @@ class IOLayoutTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             subject_root = Path(tmp) / "149741"
-            legacy_wma = subject_root / ".debug_outputs" / "legacy_outputs_root" / "wma_org_execute_20260531_ldfix"
-            case_dir = legacy_wma / "149741_ukf_pp_downsampled" / "FiberClustering"
-            case_dir.mkdir(parents=True)
-            (legacy_wma / "wma_org_atlas_qc.json").write_text("{}", encoding="utf-8")
+            legacy_wma = (
+                subject_root
+                / "outputs"
+                / "04_tractography"
+                / "bundles"
+                / "wma_org_atlas"
+                / "wma_org_execute"
+                / "AnatomicalTracts"
+            )
+            legacy_wma.mkdir(parents=True)
+            (legacy_wma / "AF_left.vtp").write_text("vtp", encoding="utf-8")
+            (legacy_wma.parent / "wma_org_atlas_qc.json").write_text("{}", encoding="utf-8")
 
-            created = materialize_canonical_output_tree(subject_root, mode="copy", archive_legacy=False)
+            created = materialize_canonical_output_tree(subject_root, mode="copy", archive_legacy=True)
             layout = subject_layout(subject_root)
 
-            self.assertTrue((layout.bundles_wma / "wma_org_execute_20260531_ldfix").is_dir())
-            self.assertTrue((layout.bundles_wma / "wma_org_execute_20260531_ldfix" / "wma_org_atlas_qc.json").is_file())
-            self.assertIn("wma_org_execute_20260531_ldfix", created)
+            self.assertTrue((layout.fiber_clustering / "AF_left.vtp").is_file())
+            self.assertTrue(
+                (layout.stage_cache("04_bundles/wma_org_atlas") / "wma_org_execute" / "wma_org_atlas_qc.json").is_file()
+            )
+            self.assertIn("wma:AF_left.vtp", created)
 
-    def test_primary_legacy_csd_run_dirs_can_be_materialized_under_canonical_csd_tree(self) -> None:
-        from shared import archive_development_outputs, materialize_canonical_output_tree, subject_layout
-
-        with tempfile.TemporaryDirectory() as tmp:
-            # Resolve so comparisons against the archiver's returned paths
-            # (which resolve symlinks, e.g. macOS's /tmp -> /private/tmp)
-            # use the same canonical form.
-            subject_root = Path(tmp).resolve() / "100307"
-            legacy_csd = subject_root / "outputs" / "04_tractography" / "csd_act"
-            legacy_csd.mkdir(parents=True)
-            (legacy_csd / "csd_act_qc.json").write_text("{}", encoding="utf-8")
-
-            created = materialize_canonical_output_tree(subject_root, mode="copy", archive_legacy=False)
-            layout = subject_layout(subject_root)
-            self.assertTrue((layout.csd / "csd_act" / "csd_act_qc.json").is_file())
-            self.assertIn("csd_act", created)
-
-            moved = archive_development_outputs(subject_root)
-            self.assertFalse(legacy_csd.exists())
-            self.assertTrue((subject_root / ".debug_outputs" / "04_tractography" / "legacy_csd_runs" / "csd_act").is_dir())
-            self.assertIn(legacy_csd.as_posix(), moved)
-
-    def test_legacy_connectome_metric_dirs_can_be_materialized_under_run_metric_tree(self) -> None:
-        from shared import archive_development_outputs, materialize_canonical_output_tree, subject_layout
+    def test_legacy_connectome_metric_dirs_can_be_migrated_under_canonical_connectome_and_cache(self) -> None:
+        from shared import migrate_subject_output_tree, subject_layout
 
         with tempfile.TemporaryDirectory() as tmp:
             subject_root = Path(tmp).resolve() / "100307"
             legacy_metric_dir = subject_root / "outputs" / "04_tractography" / "connectome" / "csd_act_mean_fa"
             legacy_metric_dir.mkdir(parents=True)
+            (legacy_metric_dir / "100307-connectome-mean_fa.csv").write_text("a,b\n1,2\n", encoding="utf-8")
             (legacy_metric_dir / "100307-connectome-mean_fa_qc.json").write_text("{}", encoding="utf-8")
 
-            created = materialize_canonical_output_tree(subject_root, mode="copy", archive_legacy=False)
+            migrate_subject_output_tree(subject_root, clean_legacy=True)
             layout = subject_layout(subject_root)
-            target = layout.connectome / "csd_act" / "mean_fa" / "100307-connectome-mean_fa_qc.json"
-            self.assertTrue(target.is_file())
-            self.assertIn("csd_act_mean_fa", created)
 
-            moved = archive_development_outputs(subject_root)
+            self.assertTrue((layout.connectome / "100307_mean_fa.csv").is_file())
+            self.assertTrue(
+                (layout.stage_cache("05_connectome") / "csd_act" / "mean_fa" / "100307-connectome-mean_fa_qc.json").is_file()
+            )
             self.assertFalse(legacy_metric_dir.exists())
-            self.assertTrue((subject_root / ".debug_outputs" / "04_tractography" / "connectome_legacy_layout" / "csd_act_mean_fa").is_dir())
-            self.assertIn(legacy_metric_dir.as_posix(), moved)
 
-    def test_legacy_connectome_root_files_can_be_archived(self) -> None:
+    def test_legacy_connectome_root_qc_files_can_be_archived(self) -> None:
         from shared import archive_development_outputs, subject_layout
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -270,83 +273,9 @@ class IOLayoutTest(unittest.TestCase):
 
             self.assertFalse(root_file.exists())
             self.assertTrue(
-                (subject_root / ".debug_outputs" / "04_tractography" / "connectome_legacy_root_files" / "100307-connectome-streamline_count_qc.json").is_file()
+                (layout.cache / "legacy_outputs" / "05_connectome" / "100307-connectome-streamline_count_qc.json").is_file()
             )
             self.assertIn(root_file.as_posix(), moved)
-
-    def test_materialize_repairs_broken_csd_symlink_from_debug_archive(self) -> None:
-        from shared import materialize_canonical_output_tree, subject_layout
-
-        with tempfile.TemporaryDirectory() as tmp:
-            subject_root = Path(tmp) / "100307"
-            layout = subject_layout(subject_root)
-            archived_run = subject_root / ".debug_outputs" / "04_tractography" / "legacy_csd_runs" / "csd_act"
-            archived_run.mkdir(parents=True)
-            (archived_run / "csd_act_qc.json").write_text("{}", encoding="utf-8")
-
-            broken_target = subject_root / "outputs" / "04_tractography" / "missing_csd_act"
-            broken_target.parent.mkdir(parents=True, exist_ok=True)
-            layout.csd.mkdir(parents=True, exist_ok=True)
-            (layout.csd / "csd_act").symlink_to(broken_target, target_is_directory=True)
-
-            materialize_canonical_output_tree(subject_root, mode="symlink", archive_legacy=False)
-
-            repaired = layout.csd / "csd_act"
-            self.assertTrue(repaired.is_symlink())
-            self.assertTrue((repaired / "csd_act_qc.json").is_file())
-
-    def test_materialize_rehydrates_connectome_run_from_debug_archive(self) -> None:
-        from shared import materialize_canonical_output_tree, subject_layout
-
-        with tempfile.TemporaryDirectory() as tmp:
-            subject_root = Path(tmp) / "100307"
-            layout = subject_layout(subject_root)
-            archived_root = subject_root / ".debug_outputs" / "04_tractography" / "connectome_legacy_layout"
-            run_root = archived_root / "csd_act"
-            mean_md_root = archived_root / "csd_act_mean_md"
-            run_root.mkdir(parents=True)
-            mean_md_root.mkdir(parents=True)
-            (run_root / "100307-connectome-streamline_count_qc.json").write_text("{}", encoding="utf-8")
-            (run_root / "100307-connectome-streamline_count_manifest.json").write_text("{}", encoding="utf-8")
-            (mean_md_root / "100307-connectome-mean_md_qc.json").write_text("{}", encoding="utf-8")
-
-            materialize_canonical_output_tree(subject_root, mode="symlink", archive_legacy=False)
-
-            self.assertTrue((layout.connectome / "csd_act" / "100307-connectome-streamline_count_qc.json").is_file())
-            self.assertTrue((layout.connectome / "csd_act" / "mean_md" / "100307-connectome-mean_md_qc.json").is_file())
-
-    def test_materialize_does_not_rehydrate_alternate_debug_runs(self) -> None:
-        from shared import materialize_canonical_output_tree, subject_layout
-
-        with tempfile.TemporaryDirectory() as tmp:
-            subject_root = Path(tmp) / "100307"
-            layout = subject_layout(subject_root)
-            archived_csd = subject_root / ".debug_outputs" / "04_tractography" / "legacy_csd_runs" / "csd_act_100k"
-            archived_conn = subject_root / ".debug_outputs" / "04_tractography" / "connectome_legacy_layout" / "csd_act_100k"
-            archived_csd.mkdir(parents=True)
-            archived_conn.mkdir(parents=True)
-            (archived_csd / "csd_act_qc.json").write_text("{}", encoding="utf-8")
-            (archived_conn / "100307-connectome-streamline_count_qc.json").write_text("{}", encoding="utf-8")
-
-            materialize_canonical_output_tree(subject_root, mode="symlink", archive_legacy=False)
-
-            self.assertFalse((layout.csd / "csd_act_100k").exists())
-            self.assertFalse((layout.connectome / "csd_act_100k").exists())
-
-    def test_materialize_removes_self_referential_connectome_metric_link(self) -> None:
-        from shared import materialize_canonical_output_tree, subject_layout
-
-        with tempfile.TemporaryDirectory() as tmp:
-            subject_root = Path(tmp) / "100307"
-            layout = subject_layout(subject_root)
-            run_dir = layout.connectome / "csd_act"
-            run_dir.mkdir(parents=True)
-            (run_dir / "100307-connectome-streamline_count_qc.json").write_text("{}", encoding="utf-8")
-            (run_dir / "streamline_count").symlink_to(run_dir, target_is_directory=True)
-
-            materialize_canonical_output_tree(subject_root, mode="symlink", archive_legacy=False)
-
-            self.assertFalse((run_dir / "streamline_count").exists())
 
 
 if __name__ == "__main__":

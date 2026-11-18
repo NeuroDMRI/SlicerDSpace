@@ -1237,6 +1237,8 @@ def run_summary_label_style(state: str, *, dark: bool | None = None, widget: Any
 RUN_STAGE_INDICATOR_PALETTE: dict[str, dict[str, str]] = {
     "running": {"icon_bg": "#0D9488", "chunk": "#0D9488", "groove": "#DCE4EC", "text": "#0F766E", "glyph": "run"},
     "preflight": {"icon_bg": "#0D9488", "chunk": "#0D9488", "groove": "#DCE4EC", "text": "#0F766E", "glyph": "run"},
+    "importing": {"icon_bg": "#0D9488", "chunk": "#0D9488", "groove": "#DCE4EC", "text": "#0F766E", "glyph": "run"},
+    "setup": {"icon_bg": "#0D9488", "chunk": "#0D9488", "groove": "#DCE4EC", "text": "#0F766E", "glyph": "run"},
     "completed": {"icon_bg": "#16A34A", "chunk": "#16A34A", "groove": "#DCE4EC", "text": "#15803D", "glyph": "check"},
     "completed_with_blocks": {
         "icon_bg": "#D97706",
@@ -1252,6 +1254,8 @@ RUN_STAGE_INDICATOR_PALETTE: dict[str, dict[str, str]] = {
 DARK_RUN_STAGE_INDICATOR_PALETTE: dict[str, dict[str, str]] = {
     "running": {"icon_bg": "#14B8A6", "chunk": "#14B8A6", "groove": "#1C2128", "text": "#5EEAD4", "glyph": "run"},
     "preflight": {"icon_bg": "#14B8A6", "chunk": "#14B8A6", "groove": "#1C2128", "text": "#5EEAD4", "glyph": "run"},
+    "importing": {"icon_bg": "#14B8A6", "chunk": "#14B8A6", "groove": "#1C2128", "text": "#5EEAD4", "glyph": "run"},
+    "setup": {"icon_bg": "#14B8A6", "chunk": "#14B8A6", "groove": "#1C2128", "text": "#5EEAD4", "glyph": "run"},
     "completed": {"icon_bg": "#2EA043", "chunk": "#2EA043", "groove": "#1C2128", "text": "#56D364", "glyph": "check"},
     "completed_with_blocks": {
         "icon_bg": "#D9822B",

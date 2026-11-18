@@ -80,7 +80,9 @@ def main():
         streamlines=5000, expected_tasks=["tractography.dti_det", "connectome.streamline_count"])
     cases[-1]["run_name"] = "acceptance_dti_det"
     if args.check_run_retention:
-        previous = root / "subjects/100307/outputs/04_tractography/tractograms/acceptance_science"
+        previous = root / "subjects/100307/cache/stages/03_tractography/tractograms/acceptance_science"
+        if not previous.is_dir():
+            previous = root / "subjects/100307/outputs/04_tractography/tractograms/acceptance_science"
         files = sorted(previous.glob("100307_csd_act_ifod2*"))
         if len(files) != 5 or not all(path.is_file() for path in files):
             raise FileNotFoundError(f"Expected the completed CSD run's five outputs in {previous}")

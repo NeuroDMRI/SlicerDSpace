@@ -12,10 +12,12 @@ class AnatomyLayoutCompatibilityTests(unittest.TestCase):
     def test_new_writers_and_python_alias_use_anatomy(self):
         with tempfile.TemporaryDirectory() as tmp:
             layout = subject_layout(Path(tmp))
-            self.assertEqual(layout.anatomy, layout.outputs / '03_anatomy')
+            self.assertEqual(layout.anatomy, layout.outputs / '01_anatomical_priors')
             self.assertEqual(layout.structural, layout.anatomy)
-            for name in ('ddseg', 'ddparcel', 'ddsurfer', 'registered_to_dwi'):
-                self.assertEqual(getattr(layout, name), layout.anatomy / name)
+            self.assertEqual(layout.ddseg, layout.anatomy / 'tissue_segmentation')
+            self.assertEqual(layout.ddparcel, layout.anatomy / 'brain_parcellation')
+            self.assertEqual(layout.ddsurfer, layout.anatomy / 'cortical_surface')
+            self.assertEqual(layout.registered_to_dwi, layout.stage_cache('01_anatomical_priors/registered_to_dwi'))
 
     def test_legacy_reads_do_not_move_or_copy_outputs(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -43,7 +45,8 @@ class AnatomyLayoutCompatibilityTests(unittest.TestCase):
             (layout.ddparcel / 'partial.log').write_text('new run')
             from shared.orchestrator import _resolve_parcellation, _parcellation_outputs
             self.assertIsNone(_resolve_parcellation(layout.subject_root, 's'))
-            self.assertTrue(all(path.parent == layout.ddparcel for path in
+            expected_stage_dir = layout.stage_cache('01_anatomical_priors/brain_parcellation')
+            self.assertTrue(all(path.parent == expected_stage_dir for path in
                                 _parcellation_outputs(layout.subject_root, 's').values()))
             self.assertEqual((old / 's-DDSurfer-wmparc.nii.gz').read_bytes(), b'old')
 
@@ -59,9 +62,9 @@ class AnatomyLayoutCompatibilityTests(unittest.TestCase):
             (flat / name).write_bytes(b'older flat result')
             for mode in ('copy', 'symlink'):
                 created = materialize_canonical_output_tree(layout.subject_root, mode=mode)
-                self.assertNotIn('ddseg', created)
-                self.assertFalse(layout.ddseg.exists())
-                self.assertEqual(layout.anatomy_input_dir('ddseg'), old)
+                self.assertIn('tissue_segmentation:SegmentationMap_GMWMCSF.nii.gz', created)
+                self.assertFalse((layout.ddseg / name).is_symlink())
+                self.assertEqual((layout.ddseg / name).read_bytes(), b'numbered result')
                 self.assertEqual((old / name).read_bytes(), b'numbered result')
                 self.assertEqual((flat / name).read_bytes(), b'older flat result')
 
@@ -138,9 +141,10 @@ class AnatomyLayoutCompatibilityTests(unittest.TestCase):
             (layout.outputs / '03_structural').mkdir(parents=True)
             layout.run_metadata.mkdir()
             report = _audit_output_tree(layout, subject_id='s', selected_targets=('segmentation',))
-            self.assertIn('03_anatomy', report['expected_top_dirs'])
-            self.assertEqual(report['status'], 'passed')
+            self.assertIn('01_anatomical_priors', report['expected_top_dirs'])
+            self.assertFalse(any("missing canonical output directory" in w for w in report['warnings']))
+            self.assertEqual(report['status'], 'warning')
             semantics = _write_output_tree_semantics(layout=layout, subject_id='s',
                 requested_targets=('segmentation',), run_targets=('segmentation',), tasks=[])
             paths = {item['path'] for item in semantics['entries']}
-            self.assertTrue({'03_anatomy', '03_structural'} <= paths)
+            self.assertIn('01_anatomical_priors', paths)

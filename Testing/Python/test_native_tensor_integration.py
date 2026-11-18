@@ -354,7 +354,7 @@ class SurfaceRouteAdmissionTests(unittest.TestCase):
             patch("shared.environment.resolve_auto_torch_device", return_value="cpu"),
         ]
         out_root = Path(tmp.name) / "out"
-        self.surface_dir = subject_layout(root, output_root=out_root).ddsurfer
+        self.surface_dir = subject_layout(root, output_root=out_root).stage_cache("01_anatomical_priors/cortical_surface")
         if previous_completed:
             self.surface_dir.mkdir(parents=True)
             (self.surface_dir / "surface_manifest.json").write_text(json.dumps({"status": "completed"}))

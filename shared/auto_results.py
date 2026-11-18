@@ -204,9 +204,9 @@ def _role(candidate):
     if product.startswith(("segmentation.", "parcellation.")) and suffix in {".nii", ".nii.gz", ".mgz"}:
         if key in {"segmentation", "labels", "label_map", "wmparc", "wmparc_labels", "parcellation"}:
             return "categorical"
-    if product == "surface.ddsurfer" and suffix == ".stl":
+    if product == "surface.ddsurfer" and suffix in {".stl", ".obj"}:
         for hemisphere in ("lh", "rh"):
-            if hemisphere in key or re.search(r"[_\.]" + hemisphere + r"[_\.]", path.name.lower()):
+            if hemisphere in key or re.search(r"(^|[_\.])" + hemisphere + r"([_\.]|$)", path.name.lower()):
                 if any(token in key or token in path.name.lower() for token in ("white", "wm")):
                     return "surface:white:" + hemisphere
                 if "pial" in key or "pial" in path.name.lower():

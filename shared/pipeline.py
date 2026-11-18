@@ -455,18 +455,43 @@ def current_preprocessed_outputs(
     from shared.io_layout import subject_layout
 
     root = Path(subject_root).expanduser().resolve()
-    preproc_dir = subject_layout(root, output_root=Path(output_root) if output_root is not None else None).preproc
-    found = _latest_preprocessing_manifest(preproc_dir, subject_id)
+    layout = subject_layout(root, output_root=Path(output_root) if output_root is not None else None)
+    candidates = [
+        (layout.stage_cache("00_preprocessing"), layout.preproc),
+        (layout.stage_cache("00_preprocessing"), layout.stage_cache("00_preprocessing")),
+        (layout.preproc, layout.preproc),
+        (layout.preproc_legacy, layout.preproc_legacy),
+    ]
+    found = None
+    manifest_dir = layout.preproc
+    files_dir = layout.preproc
+    for cand_manifest_dir, cand_files_dir in candidates:
+        maybe = _latest_preprocessing_manifest(cand_manifest_dir, subject_id)
+        if maybe is not None:
+            found_id, _ = maybe
+            cand_paths = {
+                "dwi": cand_files_dir / f"{found_id}_dwi_final.nii.gz",
+                "bval": cand_files_dir / f"{found_id}_dwi_final.bval",
+                "bvec": cand_files_dir / f"{found_id}_dwi_final.bvec",
+                "mask": cand_files_dir / f"{found_id}_brain_mask_final.nii.gz",
+            }
+            if all(path.is_file() for path in cand_paths.values()):
+                found = maybe
+                manifest_dir = cand_manifest_dir
+                files_dir = cand_files_dir
+                break
     if found is None:
         return None
     found_id, manifest_path = found
     paths = {
-        "dwi": preproc_dir / f"{found_id}_dwi_final.nii.gz",
-        "bval": preproc_dir / f"{found_id}_dwi_final.bval",
-        "bvec": preproc_dir / f"{found_id}_dwi_final.bvec",
-        "mask": preproc_dir / f"{found_id}_brain_mask_final.nii.gz",
+        "dwi": files_dir / f"{found_id}_dwi_final.nii.gz",
+        "bval": files_dir / f"{found_id}_dwi_final.bval",
+        "bvec": files_dir / f"{found_id}_dwi_final.bvec",
+        "mask": files_dir / f"{found_id}_brain_mask_final.nii.gz",
     }
-    qc_path = preproc_dir / "05_qc" / f"{found_id}_preproc_qc.json"
+    qc_path = manifest_dir / "05_qc" / f"{found_id}_preproc_qc.json"
+    if not qc_path.is_file() and (files_dir / "05_qc" / f"{found_id}_preproc_qc.json").is_file():
+        qc_path = files_dir / "05_qc" / f"{found_id}_preproc_qc.json"
     if not all(path.is_file() for path in paths.values()):
         return None
     try:
@@ -490,7 +515,7 @@ def current_preprocessed_outputs(
         if not _input_record_matches(record, input_dir / name):
             return None
     return PreprocessedOutputs(
-        subject_id=found_id, preproc_dir=preproc_dir, dwi_path=paths["dwi"], bval_path=paths["bval"],
+        subject_id=found_id, preproc_dir=files_dir, dwi_path=paths["dwi"], bval_path=paths["bval"],
         bvec_path=paths["bvec"], mask_path=paths["mask"], manifest_path=manifest_path, qc_path=qc_path,
         manifest=manifest,
     )

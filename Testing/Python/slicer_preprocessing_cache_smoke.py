@@ -32,7 +32,7 @@ def start():
         deps = config["external_dependencies"]
         settings = DwiPreprocessingConfig(
             subject_id=case["subject_id"], input_root=Path(case["subject_root"]),
-            output_dir=Path(case["output_root"]) / "01_preproc",
+            output_dir=Path(case["subject_root"]) / "preprocessed",
             execute=True, force=False,
             mrtrix_bin_dir=Path(deps["mrtrix_bin_dir"]),
             fsl_bin_dir=Path(deps["preprocessing_fsl_bin_dir"]),

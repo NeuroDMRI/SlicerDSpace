@@ -139,8 +139,10 @@ class SubjectReportingTest(unittest.TestCase):
             self.assertEqual(paths.symlink_count, 1)
             html = paths.report_html.read_text(encoding="utf-8")
             self.assertIn("DTI scalar map", html)
-            self.assertIn("04_bias_normalize/", html)
-            self.assertIn("DIPY backend", html)
+            self.assertIn("01_anatomical_priors/", html)
+            self.assertIn("surface_morphometry/", html)
+            self.assertIn("02_microstructure/", html)
+            self.assertIn("diffusion_tensor/", html)
             self.assertIn("symlink", html)
             self.assertIn("annot=2", html)
 

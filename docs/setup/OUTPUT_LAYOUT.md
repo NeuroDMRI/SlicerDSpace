@@ -11,18 +11,38 @@
 ## Canonical Directories
 
 ```text
-outputs/
-  00_run_metadata/
-  01_preproc/
-  02_microstructure/
-  03_anatomy/
-    ddseg/
-    ddparcel/
-    ddsurfer/
-      postprocess/
-  04_tractography/
-  05_statistics/
-  06_slicer_scene_report/
+<subject_root>/
+  input/
+  preprocessed/                         # Created when preprocessing runs (<sub_id>_dwi_final.*, <sub_id>_brain_mask_final.nii.gz)
+  cache/                                # Internal stage workspaces, logs, manifests, HTML reports, display previews
+    stages/
+    reports/
+    display_previews/
+  outputs/
+    00_run_metadata/
+    01_anatomical_priors/
+      tissue_segmentation/              # SegmentationMap_GMWMCSF.nii.gz, ProbabilisticMap_{WM,GM,CSF}.nii.gz
+      brain_parcellation/               # <sub_id>_parcellation.nii.gz
+      cortical_surface/                 # lh.white.obj, lh.pial.obj, rh.white.obj, rh.pial.obj
+      surface_morphometry/              # {lh,rh}.{aparc,aparc.a2009s}.stats, {thickness,curv,sulc,area,inflated}, *.annot
+    02_microstructure/
+      <sub_id>_ROIWise-Microstructure.csv
+      diffusion_tensor/                 # <sub_id>_{FA,MD,AD,RD}.nii.gz, <sub_id>_DEC.nrrd
+      free_water/                       # <sub_id>_FW.nii.gz, <sub_id>_fw_FA.nii.gz, <sub_id>_fw_MD.nii.gz
+      interstitial_free_water/          # <sub_id>_ifw.nii.gz, <sub_id>_ROIWise-iFW.csv
+      neurite_microstructure/           # <sub_id>_{NDI,ODI,IsoVF}.nii.gz
+      diffusion_kurtosis/               # <sub_id>_{MK,AK,RK,KFA,MKT,RTK}.nii.gz
+    03_tractography/
+      single_tensor_tractography/       # <sub_id>_dti.trk[, .vtk]
+      multi_tensor_tractography/        # <sub_id>_ukf.trk, <sub_id>_ukf.vtk
+      anatomically_constrained_tractography/ # <sub_id>_act.{tck,trk,vtk}
+      short_association_fibers/         # <sub_id>_saf.{tck,vtk}
+    04_bundles/
+      query_bundle_extraction/          # *.trk
+      fiber_clustering/                 # T_*.vtp, bundle_measurements.csv
+      bundle_identification/            # *.vtp
+    05_connectome/                      # <sub_id>_{streamline_count,sift2_weighted,<metric>}.csv, <sub_id>_nodes.tsv, <sub_id>_node_parcellation.nii.gz
+    06_qc/                              # Concise per-algorithm plain-text QC summaries for tasks that ran/reused
 ```
 
 `00_run_metadata/run_record.json` is written at the end of every run. It lists the run
@@ -32,19 +52,13 @@ mask that the run used), a QC summary and the SHA-256 of every final product fil
 It copies no output file. A re-run keeps the previous record as
 `run_record-<started_at>.json` and nothing is deleted.
 
-New anatomical results use `03_anatomy`. Segmentation, parcellation and surface
-reconstruction remain separate products. The directory name does not prescribe
-the execution order or imply that all products were selected or passed QC.
+Primary deliverables under `outputs/` are published as flat, symlink-free real files or hardlinks organized by scientific stage (`01_anatomical_priors` through `05_connectome`), while concise `.txt` quality-control summaries sit under `06_qc/`. Internal workspaces, intermediate files, and HTML/Markdown reports reside under `cache/`.
 
 ---
 
 ## Existing Results
 
-The previous `03_structural` name remains supported for reading and eligible
-cache reuse. Existing files, manifests and scientific provenance are not moved,
-copied or rewritten merely to rename the directory. Explicit output paths remain
-honoured. The Python `SubjectIOLayout.structural` attribute is retained as an
-alias for the new canonical `anatomy` path.
+Previous `03_anatomy`, `03_structural`, `01_preproc`, `04_tractography`, `05_statistics`, and `06_slicer_scene_report` layouts remain supported for reading and cache reuse, and `migrate_subject_output_tree` migrates legacy subjects cleanly without symlinks. The Python `SubjectIOLayout` retains legacy property aliases (`anatomy`, `structural`, `ddseg`, `ddparcel`, `ddsurfer`, etc.).
 
 Selection is per product directory: use the new directory if it exists;
 otherwise consider its legacy counterpart. An incomplete new product is not

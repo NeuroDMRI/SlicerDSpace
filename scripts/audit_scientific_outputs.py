@@ -1442,7 +1442,20 @@ def _audit_structural(manifest: dict[str, Any], checks: list[dict[str, Any]]) ->
 
     ddparcel_outputs = _task_outputs(manifest, task_names["ddparcel"])
     parcellation_path = Path(
-        str(ddparcel_outputs.get("wmparc") or ddparcel_dir / f"{subject_id}-DDSurfer-wmparc.nii.gz")
+        str(
+            ddparcel_outputs.get("wmparc")
+            or next(
+                (
+                    cand
+                    for cand in (
+                        ddparcel_dir / f"{subject_id}_parcellation.nii.gz",
+                        ddparcel_dir / f"{subject_id}-DDSurfer-wmparc.nii.gz",
+                    )
+                    if cand.is_file()
+                ),
+                ddparcel_dir / f"{subject_id}_parcellation.nii.gz",
+            )
+        )
     )
     if "ddparcel" in selected:
         _record_check(
@@ -1488,22 +1501,23 @@ def _audit_structural(manifest: dict[str, Any], checks: list[dict[str, Any]]) ->
         )
 
     ddsurfer_outputs = _task_outputs(manifest, task_names["ddsurfer"])
-    expected_models = {
-        f"{surface}_{hemi}": Path(
-            str(
-                ddsurfer_outputs.get(
-                    {"wm": "white", "pial": "pial"}[surface] + f"_{hemi}"
+    expected_models = {}
+    for surface, obj_surface in (("wm", "white"), ("pial", "pial")):
+        for hemi in ("lh", "rh"):
+            out_val = ddsurfer_outputs.get(f"{obj_surface}_{hemi}")
+            if out_val:
+                model_p = Path(str(out_val))
+            elif (surface_dir / f"{hemi}.{obj_surface}.obj").is_file():
+                model_p = surface_dir / f"{hemi}.{obj_surface}.obj"
+            else:
+                model_p = (
+                    surface_dir
+                    / "pred_results_SlicerDSpace"
+                    / "native"
+                    / subject_id
+                    / f"{subject_id}_predicted_{surface}_{hemi}.stl"
                 )
-                or surface_dir
-                / "pred_results_SlicerDSpace"
-                / "native"
-                / subject_id
-                / f"{subject_id}_predicted_{surface}_{hemi}.stl"
-            )
-        )
-        for surface in ("wm", "pial")
-        for hemi in ("lh", "rh")
-    }
+            expected_models[f"{surface}_{hemi}"] = model_p
     surface_meshes: dict[str, Any] = {}
     for name, model_path in expected_models.items():
         if "ddsurfer" not in selected:

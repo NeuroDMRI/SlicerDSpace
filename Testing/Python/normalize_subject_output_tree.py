@@ -12,8 +12,9 @@ from pathlib import Path
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--subject-root", required=True)
-    parser.add_argument("--mode", choices=("symlink", "copy"), default="symlink")
+    parser.add_argument("--mode", choices=("symlink", "copy"), default="copy")
     parser.add_argument("--archive-legacy", action="store_true")
+    parser.add_argument("--keep-legacy", action="store_true")
     parser.add_argument("--current-run-name", default="csd_act")
     parser.add_argument("--current-tractography-backend", default="csd_act", choices=("csd_act", "dti_det", "saf"))
     return parser.parse_args()
@@ -25,15 +26,16 @@ def main() -> int:
     if str(repo_root) not in sys.path:
         sys.path.insert(0, str(repo_root))
 
-    from shared import archive_development_outputs, materialize_canonical_output_tree, subject_layout
+    from shared import archive_development_outputs, migrate_subject_output_tree, subject_layout
 
     subject_root = Path(args.subject_root).expanduser().resolve()
     layout = subject_layout(subject_root)
-    created = materialize_canonical_output_tree(
+    clean_legacy = bool(args.archive_legacy or not args.keep_legacy)
+    migrated = migrate_subject_output_tree(
         subject_root,
-        mode=args.mode,
-        archive_legacy=args.archive_legacy,
+        clean_legacy=clean_legacy,
     )
+    created = migrated.get("published") or {}
     moved = archive_development_outputs(
         subject_root,
         current_run_name=args.current_run_name,

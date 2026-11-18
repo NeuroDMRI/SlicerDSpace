@@ -6,15 +6,16 @@ from shared.bundle_qc import bundle_record_error
 
 PREFIX = "SlicerDDSurfer."
 FREESURFER_LUT = Path(__file__).resolve().parents[1] / "anatomy/parcellation/conversion/data/FreeSurferColorLUT.txt"
-SUFFIXES = (".nii.gz", ".nii", ".mgz", ".csv", ".tsv", ".stl", ".vtk", ".vtp", ".trk", ".tck")
+SUFFIXES = (".nii.gz", ".nii", ".mgz", ".csv", ".tsv", ".stl", ".obj", ".vtk", ".vtp", ".trk", ".tck")
 # D6: the DEC colour FA map is the only NRRD result; other .nrrd files in the tree stay intermediates.
 DEC_SUFFIX = "-dti-dec.nrrd"
+DEC_SUFFIXES = ("-dti-dec.nrrd", "_dec.nrrd")
 
 
 def result_file_suffix(path):
     """Compound extensions must not absorb dots in product/subject filenames."""
     name = Path(path).name.lower()
-    if name.endswith(DEC_SUFFIX):
+    if name.endswith(DEC_SUFFIXES):
         return ".nrrd"
     return next((suffix for suffix in sorted(SUFFIXES, key=len, reverse=True) if name.endswith(suffix)), "")
 
@@ -62,8 +63,18 @@ def bundle_outputs(task, *, allow_directory_scan=True):
                     return {}
         empty = set(summary.get("empty_bundle_files") or [])
         empty_names = set(summary.get("anatomical_empty_tracts") or [])
-        return {"bundle_" + Path(value).name: value for value in files
-                if isinstance(value, str) and value not in empty and Path(value).name not in empty_names}
+        published_dir = (task.get("outputs") or {}).get("output_dir")
+        published_dir_path = Path(str(published_dir)) if published_dir else None
+        resolved_files: dict[str, str] = {}
+        for value in files:
+            if not isinstance(value, str) or value in empty or Path(value).name in empty_names:
+                continue
+            name_only = Path(value).name
+            if published_dir_path is not None and published_dir_path.is_dir() and (published_dir_path / name_only).is_file():
+                resolved_files["bundle_" + name_only] = str(published_dir_path / name_only)
+            else:
+                resolved_files["bundle_" + name_only] = value
+        return resolved_files
     except (OSError, ValueError, TypeError, AttributeError):
         return {}
 
@@ -128,6 +139,22 @@ def review_state_text(qc, *, issues_found):
     return "Execution: issues found\n" + text if issues_found else text
 
 
+def _is_internal_cache_path(path: Path, manifest: dict) -> bool:
+    subject_root = str(manifest.get("subject_root") or "").strip()
+    if subject_root:
+        cache_root = Path(subject_root) / "cache"
+        try:
+            path.relative_to(cache_root)
+            return True
+        except ValueError:
+            try:
+                path.resolve().relative_to(cache_root.resolve())
+                return True
+            except (OSError, ValueError):
+                pass
+    return False
+
+
 def result_candidates(manifest, *, allow_bundle_directory_scan=True, include_preprocessing=False):
     candidates, skipped, seen = [], [], set()
     for task in manifest.get("tasks", []) or []:
@@ -165,7 +192,9 @@ def result_candidates(manifest, *, allow_bundle_directory_scan=True, include_pre
             if not path.is_absolute():
                 skipped.append({"path": value, "reason": "Relative output path needs an explicit source root"})
                 continue
-            if not path.name.lower().endswith(SUFFIXES + (DEC_SUFFIX,)):
+            if not path.name.lower().endswith(SUFFIXES + DEC_SUFFIXES):
+                continue
+            if _is_internal_cache_path(path, manifest):
                 continue
             if path.name.endswith("_orig.stl") and path.with_name(path.name.replace("_orig.stl", ".stl")).is_file():
                 continue
@@ -177,7 +206,8 @@ def result_candidates(manifest, *, allow_bundle_directory_scan=True, include_pre
                 skipped.append({"path": value, "reason": "Manifest output is missing"})
                 continue
             # Prefer small anatomical/scalar products before expensive tractograms.
-            priority = 2 if path.suffix in {".tck", ".trk", ".vtk", ".vtp"} else 1 if path.suffix == ".stl" else 0
+            suffix_lower = path.suffix.lower()
+            priority = 2 if suffix_lower in {".tck", ".trk", ".vtk", ".vtp"} else 1 if suffix_lower in {".stl", ".obj"} else 0
             candidates.append({"path": identity, "label": name + "_" + str(key), "key": str(key), "product": name, "priority": priority})
     return sorted(candidates, key=lambda item: (item["priority"], item["label"])), skipped
 

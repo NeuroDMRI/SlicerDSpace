@@ -380,7 +380,7 @@ class IfwClosureAndCliTest(unittest.TestCase):
         from shared.io_layout import subject_layout
         from shared.run_history import TARGET_LABELS
         self.assertEqual(TARGET_LABELS["microstructure_ifw"], "iFW")
-        self.assertEqual(subject_layout(Path("/subject")).microstructure_ifw.name, "ifw")
+        self.assertEqual(subject_layout(Path("/subject")).microstructure_ifw.name, "interstitial_free_water")
         tree = ast.parse((REPO_ROOT / "shared/module_logic.py").read_text(encoding="utf-8"))
         wanted = {"microstructure_run_ifw", "microstructure_ifw_echo_time_ms", "microstructure_ifw_t2_gm_ms",
                   "microstructure_ifw_t2_csf_ms"}

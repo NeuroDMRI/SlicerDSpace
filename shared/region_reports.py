@@ -42,16 +42,30 @@ def tissue_statistics(path, image, labels, regions):
     return result
 
 
+def _find_surface_file(outputs: dict, sub_dir_key: str, filename: str):
+    if outputs.get(filename):
+        cand = Path(outputs[filename])
+        if cand.is_file():
+            return cand
+    if outputs.get(sub_dir_key):
+        cand = Path(outputs[sub_dir_key]) / filename
+        if cand.is_file():
+            return cand
+    if outputs.get("structural_root"):
+        cand = Path(outputs["structural_root"]) / sub_dir_key / filename
+        if cand.is_file():
+            return cand
+    return None
+
+
 def discover_surfaces(task, regions):
     """Only exact cortex-name matches to recorded DK aparc annotations are linked."""
     outputs = task.get("outputs") or {}
-    if not outputs.get("surf") or not outputs.get("label"):
-        return {}
     result = {}
     for hemi, side in (("lh", "left"), ("rh", "right")):
-        annotation = Path(outputs["label"]) / f"{hemi}.aparc.annot"
-        morphs = {key: Path(outputs["surf"]) / f"{hemi}.{key}" for key in ("thickness", "area", "curv")}
-        if not annotation.is_file() or not all(path.is_file() for path in morphs.values()):
+        annotation = _find_surface_file(outputs, "label", f"{hemi}.aparc.annot")
+        morphs = {key: _find_surface_file(outputs, "surf", f"{hemi}.{key}") for key in ("thickness", "area", "curv")}
+        if annotation is None or any(path is None for path in morphs.values()):
             continue
         vertex_labels, _, names = nib.freesurfer.read_annot(str(annotation))
         names = [name.decode("utf-8") for name in names]

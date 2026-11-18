@@ -477,7 +477,7 @@ def analyze_regions(owner):
         return
     source, atlas, lut = _paths(owner)
     root = str(widgets["output"].currentPath or "").strip()
-    root = Path(root) if root else Path(catalog["output_root"]) / "05_statistics/selected_regions"
+    root = Path(root) if root else Path(catalog["output_root"]) / "02_microstructure/selected_regions"
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:8]
     run_name = re.sub(r"[^A-Za-z0-9_.-]", "_", catalog["run_name"])[:80].strip(".") or "run"
     directory = root.expanduser().resolve() / run_name / stamp

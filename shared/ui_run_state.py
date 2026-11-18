@@ -7,9 +7,10 @@ Kept free of Qt so the rules can be unit tested; the Qt glue lives in
 from __future__ import annotations
 
 import html
+import math
 import re
 from dataclasses import dataclass
-from typing import Iterable
+from typing import Iterable, Optional
 
 
 @dataclass(frozen=True)
@@ -23,7 +24,9 @@ class RunStatePresentation:
 # Completed with errors, Cancelled) so the module reads like a core module.
 RUN_STATES: dict[str, RunStatePresentation] = {
     "idle": RunStatePresentation("Idle", "#607D8B"),
+    "importing": RunStatePresentation("Importing inputs", "#1565C0", busy=True),
     "preflight": RunStatePresentation("Checking environment", "#1565C0", busy=True),
+    "setup": RunStatePresentation("Preparing environment", "#1565C0", busy=True),
     "running": RunStatePresentation("Running", "#1565C0", busy=True),
     "completed": RunStatePresentation("Completed", "#2E7D32"),
     "completed_with_blocks": RunStatePresentation("Completed with blocked stages", "#E65100"),
@@ -44,9 +47,145 @@ def run_state_from_manifest_status(status: str) -> str:
     value = (status or "").strip()
     if value == "partial_failed":
         return "failed"
-    if value in RUN_STATES and value not in {"preflight"}:
+    if value in RUN_STATES and value not in {"preflight", "importing", "setup"}:
         return value
     return "idle"
+
+
+def format_elapsed_mmss(seconds: float) -> str:
+    """Format an elapsed duration in seconds as ``MM:SS`` or ``HH:MM:SS``."""
+
+    try:
+        numeric = float(seconds)
+    except (TypeError, ValueError):
+        numeric = 0.0
+    if not math.isfinite(numeric) or numeric < 0.0:
+        numeric = 0.0
+    total_seconds = int(numeric)
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours > 0:
+        return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+    return f"{minutes:02d}:{secs:02d}"
+
+
+_LIVE_STAGE_TAG_RE = re.compile(
+    r"^\[(?:Orchestrator|Preprocessing|BrainMask|DDSeg|DDParcel|DDSurfer(?:\s+Postprocess)?|"
+    r"Microstructure|Tractography|SAF|UKF|Bundles|WMQL|WMA|TractCloud|Connectome|QC|Report)\]\s*",
+    re.IGNORECASE,
+)
+
+_LIVE_STAGE_LABELS: dict[str, tuple[str, str]] = {
+    "preprocessing": ("00 · Preprocessing", "00 · 预处理"),
+    "brain_mask": ("00 · Preprocessing (Brain mask)", "00 · 预处理（脑掩膜）"),
+    "ddseg": ("01 · Tissue segmentation (DDSeg)", "01 · 组织分割 (DDSeg)"),
+    "ddparcel": ("01 · Brain parcellation (DDParcel)", "01 · 脑区分割 (DDParcel)"),
+    "ddsurfer": ("01 · Cortical surface (DDSurfer)", "01 · 皮层表面 (DDSurfer)"),
+    "surface_postprocess": ("01 · Surface morphometry", "01 · 表面形态学后处理"),
+    "microstructure": ("02 · Microstructure", "02 · 微结构分析"),
+    "tractography": ("03 · Tractography", "03 · 纤维追踪"),
+    "bundles": ("04 · Fiber bundles", "04 · 纤维束提取"),
+    "connectome": ("05 · Connectome", "05 · 连接组"),
+    "qc": ("06 · QC & reports", "06 · 质控与报告"),
+    "pipeline": ("Pipeline", "流水线执行"),
+}
+
+_POSTPROCESS_RE = re.compile(r"(?:^|[\W_])(postprocess|freesurfer|recon-all|surface_morphometry)(?:$|[\W_])", re.IGNORECASE)
+_BRAIN_MASK_RE = re.compile(r"(?:^|[\W_])(brainmask|brain_mask|brain mask|dwi_masking)(?:$|[\W_])", re.IGNORECASE)
+_PREPROC_RE = re.compile(r"(?:^|[\W_])(preprocessing|dwifslpreproc)(?:$|[\W_])", re.IGNORECASE)
+_DDSEG_RE = re.compile(r"(?:^|[\W_])ddseg(?:$|[\W_])", re.IGNORECASE)
+_DDPARCEL_RE = re.compile(r"(?:^|[\W_])ddparcel(?:$|[\W_])", re.IGNORECASE)
+_DDSURFER_RE = re.compile(r"(?:^|[\W_])ddsurfer(?:$|[\W_])", re.IGNORECASE)
+_BUNDLES_RE = re.compile(r"(?:^|[\W_])(wmql|wma|tractcloud|fiber bundles|fibre bundles)(?:$|[\W_])", re.IGNORECASE)
+_CONNECTOME_RE = re.compile(r"(?:^|[\W_])(connectome|tck2connectome)(?:$|[\W_])", re.IGNORECASE)
+_TRACTOGRAPHY_RE = re.compile(
+    r"(?:^|[\W_])(?:tractography|ukf|csd|csd_act|dti_det|saf|tckgen|act_prep)(?:$|[\W_])",
+    re.IGNORECASE,
+)
+_ACT_UPPER_RE = re.compile(r"(?:^|[\W_])ACT(?:$|[\W_])")
+_MICROSTRUCTURE_RE = re.compile(
+    r"(?:^|[\W_])(microstructure|dti|free\s*water|freewater|free_water|noddi|dki|ifw)(?:$|[\W_])",
+    re.IGNORECASE,
+)
+_QC_RE = re.compile(r"(?:^|[\W_])(qc|report|reports|manifest)(?:$|[\W_])", re.IGNORECASE)
+
+
+def _concise_log_detail(line: str, limit: int = 96) -> str:
+    stripped = _LIVE_STAGE_TAG_RE.sub("", line.strip())
+    compact = " ".join(stripped.split())
+    if len(compact) <= limit:
+        return compact
+    return compact[: limit - 1].rstrip() + "…"
+
+
+def _classify_live_stage_key(text: str) -> Optional[str]:
+    lowered = text.lower()
+    if lowered.startswith("[background] starting") or lowered.startswith("[setup] ["):
+        return None
+    if lowered.startswith("[orchestrator] plan ") or lowered.startswith("[orchestrator] run plan:"):
+        return None
+
+    # Check explicit surface postprocess before generic [DDSurfer] / DDSurfer tags.
+    if lowered.startswith("[ddsurfer postprocess]") or _POSTPROCESS_RE.search(text):
+        return "surface_postprocess"
+    if lowered.startswith("[brainmask]"):
+        return "brain_mask"
+    if lowered.startswith("[preprocessing]"):
+        return "preprocessing"
+    if lowered.startswith("[ddseg]"):
+        return "ddseg"
+    if lowered.startswith("[ddparcel]"):
+        return "ddparcel"
+    if lowered.startswith("[ddsurfer]"):
+        return "ddsurfer"
+    if lowered.startswith("[microstructure]"):
+        return "microstructure"
+    if lowered.startswith(("[tractography]", "[saf]", "[ukf]")):
+        return "tractography"
+    if lowered.startswith(("[bundles]", "[wmql]", "[wma]", "[tractcloud]")):
+        return "bundles"
+    if lowered.startswith("[connectome]"):
+        return "connectome"
+    if lowered.startswith(("[qc]", "[report]")):
+        return "qc"
+
+    if _DDSEG_RE.search(text):
+        return "ddseg"
+    if _DDPARCEL_RE.search(text):
+        return "ddparcel"
+    if _DDSURFER_RE.search(text):
+        return "ddsurfer"
+    if _BRAIN_MASK_RE.search(text):
+        return "brain_mask"
+    if _PREPROC_RE.search(text):
+        return "preprocessing"
+    if _CONNECTOME_RE.search(text):
+        return "connectome"
+    if _BUNDLES_RE.search(text):
+        return "bundles"
+    if _TRACTOGRAPHY_RE.search(text) or _ACT_UPPER_RE.search(text):
+        return "tractography"
+    if _MICROSTRUCTURE_RE.search(text):
+        return "microstructure"
+    if _QC_RE.search(text):
+        return "qc"
+    if text.startswith("[Orchestrator] Running "):
+        return "pipeline"
+    return None
+
+
+def parse_live_stage_from_log_line(line: str, language: str = "en") -> Optional[tuple[str, str]]:
+    """Map a real-time stdout log line to ``(localized_stage_label, concise_detail)`` or ``None``."""
+
+    text = (line or "").strip()
+    if not text:
+        return None
+    stage_key = _classify_live_stage_key(text)
+    if stage_key is None:
+        return None
+    is_zh = str(language or "en").strip().lower().startswith("zh")
+    en_label, zh_label = _LIVE_STAGE_LABELS[stage_key]
+    return (zh_label if is_zh else en_label, _concise_log_detail(text))
 
 
 def progress_bar_format(done: int, total: int) -> str:

@@ -38,39 +38,33 @@ DIR_NOTES = {
     "00_run_metadata/environment": "依赖 doctor 结果和自动安装/外部工具安装提示",
     "00_run_metadata/tasks": "按 run profile 和 task 归档的 manifest、qc、log",
     "00_run_metadata/validation": "统一输入契约校验结果",
-    "01_preproc": "DWI 预处理阶段目录；部分条目可能是输入或最终产物 symlink",
-    "01_preproc/00_import": "导入/标准化输入副本",
-    "01_preproc/01_gradients": "梯度表检查和修正产物",
-    "01_preproc/02_denoise_degibbs": "去噪和 Gibbs ringing 修正产物",
-    "01_preproc/03_distortion_motion": "畸变/运动校正产物",
-    "01_preproc/04_bias_normalize": "bias field 和强度归一化产物；DIPY backend 可能留空，MRtrix/FSL backend 会写入相关中间产物",
-    "01_preproc/05_qc": "预处理质量控制输出",
-    "02_microstructure": "微结构模型输出：DTI、free-water、NODDI",
-    "02_microstructure/dti": "DTI tensor 拟合后的标量图",
-    "02_microstructure/freewater": "Free-water 校正模型输出",
-    "02_microstructure/noddi": "NODDI 模型输出与 AMICO 后端缓存",
-    "02_microstructure/noddi/_amico_noddi": "AMICO NODDI 内部拟合缓存",
-    "03_anatomy": "解剖重建：组织分割、DDSurfer 表面、DDParcel 分区和 post-process",
-    "03_anatomy/cache": "解剖重建阶段缓存",
-    "03_anatomy/cache/ddsurfer_postprocess_runtime": "DDSurfer post-process 运行时 staging/cache",
-    "03_anatomy/ddparcel": "DDParcel 白质分区和配准后的 DTI 输入",
-    "03_anatomy/ddseg": "DDSeg 组织概率图和硬分割图",
-    "03_anatomy/ddsurfer": "DDSurfer 表面重建、预处理、原始配准和 post-process",
-    "03_anatomy/ddsurfer/postprocess": "DDSurfer post-process 正式输出",
-    "03_anatomy/ddsurfer/postprocess/_subjects": "FreeSurfer SUBJECTS_DIR 风格输出根",
-    "03_anatomy/ddsurfer/postprocess/fsaverage": "同步到正式目录的 fsaverage overlay",
-    "03_anatomy/ddsurfer/postprocess/logs": "post-process 后端日志",
-    "04_tractography": "纤维追踪、束分割、connectome 和 SAF 结果",
-    "04_tractography/act_prep": "ACT 追踪需要的 5TT 和 GMWMI 准备产物",
-    "04_tractography/bundles": "束分割结果集合",
-    "04_tractography/cache": "追踪和 connectome 的替代运行缓存",
-    "04_tractography/connectome": "结构连接矩阵输出",
-    "04_tractography/csd": "CSD 建模结果",
-    "04_tractography/saf": "Surface-aware fasciculus 相关输出",
-    "04_tractography/tractograms": "主 tractogram 正式位置；旧 run 或替代 run 可能归档在 cache/alternate_runs/tractograms",
-    "05_statistics": "统计结果目录",
-    "05_statistics/regional_microstructure": "按 ROI 汇总的微结构统计",
-    "06_slicer_scene_report": "Slicer 场景报告、QC 摘要、provenance 和输出树 HTML",
+    "01_anatomical_priors": "解剖先验：组织分割、脑区分割、皮层表面与表面形态学分析",
+    "01_anatomical_priors/tissue_segmentation": "GM/WM/CSF 组织概率图与硬分割结果",
+    "01_anatomical_priors/brain_parcellation": "受试者空间脑区分割图",
+    "01_anatomical_priors/cortical_surface": "受试者原生空间皮层表面网格 (.obj)",
+    "01_anatomical_priors/surface_morphometry": "FreeSurfer 风格表面形态学统计、厚度/曲率与注释",
+    "02_microstructure": "微结构标量图与 ROI 汇总统计",
+    "02_microstructure/diffusion_tensor": "DTI 扩散张量标量图 (FA/MD/AD/RD/DEC)",
+    "02_microstructure/free_water": "Free-water 校正标量图与游离水分数",
+    "02_microstructure/interstitial_free_water": "Interstitial free-water 结果与 ROI 统计",
+    "02_microstructure/neurite_microstructure": "NODDI 神经突微结构标量图 (NDI/ODI/IsoVF)",
+    "02_microstructure/diffusion_kurtosis": "DKI 扩散峰度标量图 (MK/AK/RK/KFA/MKT/RTK)",
+    "03_tractography": "纤维束追踪主结果",
+    "03_tractography/single_tensor_tractography": "单张量确定性 DTI 纤维束追踪",
+    "03_tractography/multi_tensor_tractography": "多张量 UKF 纤维束追踪",
+    "03_tractography/anatomically_constrained_tractography": "解剖约束 CSD-ACT 纤维束追踪",
+    "03_tractography/short_association_fibers": "浅层联合纤维 (SAF) 追踪",
+    "04_bundles": "白质纤维束提取、聚类与识别结果",
+    "04_bundles/query_bundle_extraction": "WMQL 查询提取的纤维束 (.trk)",
+    "04_bundles/fiber_clustering": "WMA 图谱聚类白质束与测量表 (.vtp/.csv)",
+    "04_bundles/bundle_identification": "TractCloud 纤维束识别结果 (.vtp)",
+    "05_connectome": "结构连接组矩阵、节点表与分区参考图",
+    "06_qc": "各阶段各算法的简洁 TXT 质量控制摘要",
+    "06_qc/01_anatomical_priors": "解剖先验阶段 QC TXT 摘要",
+    "06_qc/02_microstructure": "微结构建模阶段 QC TXT 摘要",
+    "06_qc/03_tractography": "纤维束追踪阶段 QC TXT 摘要",
+    "06_qc/04_bundles": "纤维束分束阶段 QC TXT 摘要",
+    "06_qc/05_connectome": "连接组构建阶段 QC TXT 摘要",
 }
 
 
@@ -212,48 +206,36 @@ def _describe_file(path: str, *, symlink: bool) -> str:
         return prefix + "输出树结构审计"
     if name.endswith("_input_validation.json"):
         return prefix + "统一输入契约校验结果"
-    if "_dti_" in name and name.endswith(".nii.gz"):
+    if path.startswith("02_microstructure/diffusion_tensor/") or ("_dti_" in name and name.endswith(".nii.gz")):
         return prefix + "DTI scalar map"
-    if "_fw_" in name and name.endswith(".nii.gz"):
+    if path.startswith("02_microstructure/free_water/") or ("_fw_" in name and name.endswith(".nii.gz")):
         return prefix + "Free-water 微结构图"
-    if "_noddi_" in name and name.endswith(".nii.gz"):
+    if path.startswith("02_microstructure/interstitial_free_water/"):
+        return prefix + "Interstitial free-water 结果图或统计表"
+    if path.startswith("02_microstructure/neurite_microstructure/") or ("_noddi_" in name and name.endswith(".nii.gz")):
         return prefix + "NODDI 微结构图"
-    if path.startswith("02_microstructure/noddi/_amico_noddi/"):
-        return prefix + "AMICO NODDI 后端内部拟合缓存"
-    if name.endswith("DDSurfer-wmparc-Reg.mgz"):
-        return prefix + "DDParcel/DDSurfer 白质分区 MGZ，已配准"
-    if name.endswith("DDSurfer-wmparc.nii.gz"):
-        return prefix + "DDParcel/DDSurfer 白质分区标签图"
+    if path.startswith("02_microstructure/diffusion_kurtosis/"):
+        return prefix + "DKI 扩散峰度微结构图"
+    if name.endswith("_parcellation.nii.gz") or name.endswith("DDSurfer-wmparc.nii.gz"):
+        return prefix + "受试者空间脑区分割标签图"
     if "ProbabilisticMap_" in name:
-        return prefix + "DDSeg 组织概率图"
+        return prefix + "组织概率图 (GM/WM/CSF)"
     if name == "SegmentationMap_GMWMCSF.nii.gz":
-        return prefix + "DDSeg GM/WM/CSF 硬分割标签图"
-    if "predicted_" in name:
-        return prefix + "DDSurfer 预测表面网格"
-    if path.startswith("03_anatomy/ddsurfer/postprocess/_subjects/"):
+        return prefix + "GM/WM/CSF 硬分割标签图"
+    if path.startswith("01_anatomical_priors/cortical_surface/") or "predicted_" in name:
+        return prefix + "受试者原生空间皮层表面网格"
+    if path.startswith("01_anatomical_priors/surface_morphometry/"):
         return prefix + _describe_postprocess_file(path)
-    if path.startswith("03_anatomy/ddsurfer/postprocess/fsaverage/"):
-        return prefix + "post-process fsaverage overlay 同步入口"
-    if path.startswith("03_anatomy/cache/ddsurfer_postprocess_runtime/"):
-        return prefix + "DDSurfer post-process staging/runtime 缓存"
-    if name.endswith("_5tt_from_labels.nii.gz"):
-        return prefix + "从标签图生成的 ACT 5TT 图"
-    if name.endswith("_gmwmi_from_labels.nii.gz"):
-        return prefix + "从标签图生成的 GMWMI seed 图"
-    if path.startswith("04_tractography/csd/"):
-        return prefix + "MRtrix CSD/ACT 响应函数、FOD、DWI 或 mask"
-    if path.startswith("04_tractography/connectome/"):
-        return prefix + "connectome 节点表、矩阵、manifest 或 QC"
-    if path.startswith("04_tractography/bundles/tract_cloud_dl/"):
-        return prefix + "TractCloud bundle 分割输出或 QC"
-    if path.startswith("04_tractography/bundles/wmql/"):
-        return prefix + "WMQL 查询、bundle tractogram、manifest 或 QC"
-    if path.startswith("04_tractography/saf/"):
-        return prefix + "SAF 主结果、日志、manifest、QC 或缓存"
+    if path.startswith("03_tractography/"):
+        return prefix + "纤维束追踪主结果文件"
+    if path.startswith("04_bundles/"):
+        return prefix + "解剖纤维束分割/聚类结果文件"
+    if path.startswith("05_connectome/"):
+        return prefix + "结构连接组矩阵、节点表或分区图"
+    if path.startswith("06_qc/") and name.endswith(".txt"):
+        return prefix + "算法质量控制 (QC) TXT 摘要"
     if name.endswith("_ROIWise-Microstructure.csv") or name.endswith("_ROIWise-Microstructure.json"):
         return prefix + "ROI 级微结构统计表"
-    if path.startswith("06_slicer_scene_report/"):
-        return prefix + "Slicer 场景报告、QC summary、provenance、Markdown 摘要或输出树 HTML"
     if name.endswith(".json"):
         return prefix + "JSON metadata / manifest / QC"
     if name.endswith((".nii.gz", ".mgz", ".mgh")):
@@ -274,7 +256,7 @@ def _css_class(kind: str, path: str) -> str:
         return "optional"
     if path.startswith("00_run_metadata/") or name.endswith((".json", ".log", ".md", ".txt", ".tsv")):
         return "metadata"
-    if path.startswith("03_anatomy/ddsurfer/postprocess/"):
+    if path.startswith("01_anatomical_priors/surface_morphometry/") or path.startswith("03_anatomy/ddsurfer/postprocess/"):
         return "generated"
     if name.endswith((".nii.gz", ".mgz", ".mgh", ".tck", ".trk", ".vtk", ".vtp", ".stl", ".obj", ".mif", ".csv", ".annot", ".label", ".stats")):
         return "generated"
@@ -346,7 +328,13 @@ def _render_tree(tree: dict[str, Any]) -> str:
 
 
 def _postprocess_summary(output_root: Path) -> dict[str, Any]:
-    directory = anatomy_input_dir(output_root, "ddsurfer/postprocess")
+    cache_struct = (
+        output_root.parent / "cache" / "stages" / "01_anatomical_priors" / "surface_morphometry" / "structural"
+    )
+    if (cache_struct / "qc.json").is_file() or (cache_struct / "manifest.json").is_file():
+        directory = cache_struct
+    else:
+        directory = anatomy_input_dir(output_root, "ddsurfer/postprocess")
     manifest = _read_json(directory / "manifest.json")
     qc = _read_json(directory / "qc.json")
     core_outputs = qc.get("core_outputs") if isinstance(qc.get("core_outputs"), dict) else {}

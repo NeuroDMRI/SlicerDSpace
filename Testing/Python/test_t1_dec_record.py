@@ -396,8 +396,8 @@ class RunRecordWiringTest(unittest.TestCase):
             # The record hashes the manifest as it is on disk after the last write.
             self.assertEqual(record["run_manifest"]["sha256"], hashlib.sha256(manifest_path.read_bytes()).hexdigest())
             by_name = {Path(item["path"]).name: item for item in record["products"]}
-            self.assertEqual(by_name["100307-dti-DEC.nrrd"]["sha256"], hashlib.sha256(b"dec").hexdigest())
-            self.assertEqual(by_name["fa.nii.gz"]["sha256"], hashlib.sha256(b"fa").hexdigest())
+            self.assertEqual(by_name["100307_DEC.nrrd"]["sha256"], hashlib.sha256(b"dec").hexdigest())
+            self.assertEqual(by_name["100307_FA.nii.gz"]["sha256"], hashlib.sha256(b"fa").hexdigest())
             self.assertNotIn("run_record.json", by_name)
 
 

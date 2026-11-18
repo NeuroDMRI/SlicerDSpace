@@ -1450,7 +1450,7 @@
            <set>ctkPathLineEdit::Dirs</set>
           </property>
           <property name="placeholderText" stdset="0">
-           <string>Optional. Defaults to &lt;subject_root&gt;/outputs/03_anatomy/ddparcel. Existing 03_structural results remain readable.</string>
+           <string>Optional. Defaults to &lt;subject_root&gt;/outputs/01_anatomical_priors/brain_parcellation. Existing 03_anatomy/03_structural results remain readable.</string>
           </property>
          </widget>
         </item>
@@ -1531,7 +1531,7 @@
       <item>
        <widget class="QLabel" name="microstructureHintLabel">
         <property name="text">
-         <string>Export native-space DTI scalar maps and run selected optional microstructure models. If ROI labels are left empty, use &lt;subject_root&gt;/outputs/03_anatomy/ddparcel, with compatible reading of existing 03_structural products. Each enabled model checks its acquisition requirements; optional multi-shell models are not run on ineligible data. Model outputs and cache records are kept separately for selective reruns.</string>
+         <string>Export native-space DTI scalar maps and run selected optional microstructure models. If ROI labels are left empty, use &lt;subject_root&gt;/outputs/01_anatomical_priors/brain_parcellation, with compatible reading of existing 03_anatomy/03_structural products. Each enabled model checks its acquisition requirements; optional multi-shell models are not run on ineligible data. Model outputs and cache records are kept separately for selective reruns.</string>
         </property>
         <property name="wordWrap">
          <bool>true</bool>
@@ -1816,7 +1816,7 @@
            <set>ctkPathLineEdit::Dirs</set>
           </property>
           <property name="placeholderText" stdset="0">
-           <string>Optional in subject-root mode. Defaults to &lt;subject_root&gt;/outputs/03_anatomy/ddseg. Existing 03_structural results remain readable.</string>
+           <string>Optional in subject-root mode. Defaults to &lt;subject_root&gt;/outputs/01_anatomical_priors/tissue_segmentation. Existing 03_anatomy/03_structural results remain readable.</string>
           </property>
          </widget>
         </item>

@@ -38,7 +38,7 @@ def _make_synthetic_inputs(subject_root: Path, fs_dir: Path) -> tuple[Path, Path
     from Filters.filters_label import filters_label
     from Support.get_surface_transform import get_surface_transform
 
-    input_dir = subject_root / "outputs" / "04_tractography" / "saf_test_inputs"
+    input_dir = subject_root / "cache" / "stages" / "03_tractography" / "saf_test_inputs"
     input_dir.mkdir(parents=True, exist_ok=True)
     streamlines = []
     for hemi in ("rh", "lh"):
@@ -92,7 +92,7 @@ def main() -> int:
     output_dir = (
         args.output_dir.expanduser().resolve()
         if args.output_dir is not None
-        else subject_root / "outputs" / "04_tractography" / "saf_fastsurfer_smoke"
+        else subject_root / "cache" / "stages" / "03_tractography" / "saf_fastsurfer_smoke"
     )
     tck_path, fod_path = _make_synthetic_inputs(subject_root, fs_dir)
     _write_dummy_brain_t1(output_dir)

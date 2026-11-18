@@ -111,19 +111,25 @@ def main() -> int:
     repo_root = Path(__file__).resolve().parents[2]
     if str(repo_root) not in sys.path:
         sys.path.insert(0, str(repo_root))
-    from shared import normalize_run_name
+    from shared import normalize_run_name, subject_layout
 
     subject_root = Path(args.subject_root).expanduser().resolve()
     subject_id = args.subject_id
     run_name = normalize_run_name(args.run_name)
-    outputs = subject_root / "outputs"
-    tractography_root = outputs / "04_tractography"
-    metadata_root = outputs / "00_run_metadata"
+    layout = subject_layout(subject_root)
+    outputs = layout.outputs
+    metadata_root = layout.run_metadata
 
-    csd_dir = (tractography_root / "csd") if run_name == "csd_act" else (tractography_root / "csd" / run_name)
-    tractogram_dir = tractography_root / "tractograms" / run_name
-    wmql_dir = tractography_root / "bundles" / "wmql" / run_name
-    connectome_root = tractography_root / "connectome"
+    csd_dir = layout.stage_cache("03_tractography/csd" if run_name == "csd_act" else f"03_tractography/csd/{run_name}")
+    tractogram_dir = layout.tractograms / run_name
+    wmql_dir = layout.stage_cache("04_bundles/wmql") / run_name
+    connectome_root = layout.stage_cache("05_connectome")
+    if not (csd_dir / "csd_act_qc.json").is_file() and (outputs / "04_tractography").is_dir():
+        legacy_tract = outputs / "04_tractography"
+        csd_dir = (legacy_tract / "csd") if run_name == "csd_act" else (legacy_tract / "csd" / run_name)
+        tractogram_dir = legacy_tract / "tractograms" / run_name
+        wmql_dir = legacy_tract / "bundles" / "wmql" / run_name
+        connectome_root = legacy_tract / "connectome"
 
     csd_qc_path = csd_dir / "csd_act_qc.json"
     wmql_qc_path = wmql_dir / "wmql_qc.json"

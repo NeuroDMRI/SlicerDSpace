@@ -131,12 +131,13 @@ class RegionalValidityTest(unittest.TestCase):
 
         subject = self.root / 'subject'
         layout = subject_layout(subject)
-        regional = layout.regional_microstructure
+        micro_stage = layout.stage_cache('02_microstructure')
+        regional = micro_stage / 'regional_microstructure'
         scalar = self.volume('scalar', [1, 2, 3, 4])
         json_path = regional / 'test_ROIWise-Microstructure.json'
         csv_path = regional / 'test_ROIWise-Microstructure.csv'
         brain = self.volume('brain', [1, 1, 1, 1])
-        dec = layout.microstructure_dti / 'test-dti-DEC.nrrd'  # D6: the DTI stage is complete only with the DEC map
+        dec = micro_stage / 'dti' / 'test-dti-DEC.nrrd'  # D6: the DTI stage is complete only with the DEC map
         dec.parent.mkdir(parents=True, exist_ok=True)
         dec.write_bytes(b'dec')
         with patch('shared.orchestrator._resolve_parcellation', return_value=self.roi), \

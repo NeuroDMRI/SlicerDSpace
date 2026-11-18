@@ -225,7 +225,7 @@ class PreprocessingMaskIntegrationTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "native 3D voxel grid"):
                 run_dwi_preprocessing(config)
             self.assertEqual(canonical.read_bytes(), original)
-            qc = json.loads((subject / "outputs/01_preproc/05_qc/100307_preproc_qc.json").read_text())
+            qc = json.loads((subject / "preprocessed/05_qc/100307_preproc_qc.json").read_text())
             self.assertEqual(qc["status"], "failed")
 
     def test_provided_missing_mask_fails_without_fallback(self):
@@ -267,7 +267,7 @@ class PreprocessingMaskIntegrationTest(unittest.TestCase):
                 config = _config(subject, bin_dir, brain_mask_backend=removed)
                 with self.assertRaisesRegex(ValueError, "pnl_cnn.*provided"):
                     run_dwi_preprocessing(config)
-                self.assertFalse((subject / "outputs/01_preproc/mask_calls.txt").exists())
+                self.assertFalse((subject / "preprocessed/mask_calls.txt").exists())
 
     def test_unavailable_selected_backend_never_falls_back_to_mrtrix(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -278,8 +278,8 @@ class PreprocessingMaskIntegrationTest(unittest.TestCase):
             config = _config(subject, bin_dir)
             with self.assertRaisesRegex(FileNotFoundError, "pnl_cnn unavailable"):
                 run_dwi_preprocessing(config)
-            self.assertFalse((subject / "outputs/01_preproc/mask_calls.txt").exists())
-            qc = json.loads((subject / "outputs/01_preproc/05_qc/100307_preproc_qc.json").read_text())
+            self.assertFalse((subject / "preprocessed/mask_calls.txt").exists())
+            qc = json.loads((subject / "preprocessed/05_qc/100307_preproc_qc.json").read_text())
             self.assertEqual(qc["status"], "failed")
             self.assertEqual(qc["brain_mask_backend"]["backend"], "pnl_cnn")
 

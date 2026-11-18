@@ -83,7 +83,7 @@ def discover_stage_metrics(inputs: Iterable[Path]) -> list[dict[str, Any]]:
                 continue
             seen.add(path)
             relative_parts = set(path.relative_to(search_root).parts)
-            if relative_parts & {"00_run_metadata", "06_slicer_scene_report", ".debug_outputs"}:
+            if relative_parts & {"00_run_metadata", "06_slicer_scene_report", "06_qc", "reports", "display_previews", "legacy_outputs", ".debug_outputs"}:
                 continue
             if not (path.name.endswith("_qc.json") or path.name.endswith("_progress.json")):
                 continue
@@ -249,13 +249,18 @@ def _pretty_stage_name(value: str) -> str:
 def _pretty_directory_name(value: str) -> str:
     return {
         "00_run_metadata": "Run metadata",
-        "01_preproc": "Preprocessing",
+        "01_anatomical_priors": "Anatomical priors",
+        "01_preproc": "Preprocessing (legacy directory)",
         "02_microstructure": "Microstructure",
-        "03_anatomy": "Anatomical reconstruction",
+        "03_anatomy": "Anatomical reconstruction (legacy directory)",
         "03_structural": "Anatomical reconstruction (legacy directory)",
-        "04_tractography": "Tractography, bundles and connectomes",
-        "05_statistics": "Statistics",
-        "06_slicer_scene_report": "Slicer scene and report",
+        "03_tractography": "Tractography",
+        "04_bundles": "Bundles",
+        "04_tractography": "Tractography, bundles and connectomes (legacy directory)",
+        "05_connectome": "Connectome",
+        "05_statistics": "Statistics (legacy directory)",
+        "06_qc": "QC summaries",
+        "06_slicer_scene_report": "Slicer scene and report (legacy directory)",
     }.get(str(value), str(value).replace("_", " "))
 
 

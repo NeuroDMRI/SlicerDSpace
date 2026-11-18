@@ -545,9 +545,9 @@ class ProductOrchestratorTest(unittest.TestCase):
             manifest = json.loads(result.run_manifest_path.read_text(encoding="utf-8"))
             audit = json.loads(Path(manifest["output_tree_audit_path"]).read_text(encoding="utf-8"))
             semantics = json.loads(Path(manifest["output_tree_semantics_path"]).read_text(encoding="utf-8"))
-            self.assertNotIn("04_tractography", audit["expected_top_dirs"])
+            self.assertNotIn("03_tractography", audit["expected_top_dirs"])
             by_path = {entry["path"]: entry for entry in semantics["entries"]}
-            self.assertEqual(by_path["04_tractography"]["state"], "not_selected_absent")
+            self.assertEqual(by_path["03_tractography"]["state"], "not_selected_absent")
             self.assertTrue(by_path["02_microstructure"]["selected"])
 
     def test_dry_run_honors_output_root_and_advanced_connectome_options(self) -> None:
@@ -1029,7 +1029,7 @@ class ProductOrchestratorTest(unittest.TestCase):
             self.assertIn("-select 1000000", captured["tckgen_options"])
             self.assertIn("-seed_image", captured["tckgen_options"])
             self.assertEqual(result.tasks[0].outputs["streamline_count"], "63589")
-            self.assertTrue(result.tasks[0].outputs["tractogram_vtk"].endswith("SAF.vtk"))
+            self.assertTrue(result.tasks[0].outputs["tractogram_vtk"].endswith("100307_saf.vtk"))
 
     def test_dry_run_supports_surface_postprocess_target(self) -> None:
         from shared import ProductOrchestratorConfig, run_subject_products
@@ -1229,6 +1229,7 @@ class ProductOrchestratorTest(unittest.TestCase):
 
     def test_resume_skips_completed_existing_outputs(self) -> None:
         from shared import ProductOrchestratorConfig, run_subject_products, subject_layout
+        from shared.io_layout import connectome_stage_cache_dir
 
         with tempfile.TemporaryDirectory() as tmp:
             subject_root = Path(tmp) / "100307"
@@ -1239,13 +1240,14 @@ class ProductOrchestratorTest(unittest.TestCase):
             _write_valid_raw_subject(subject_root, shape=(2, 2, 2))
             layout = subject_layout(subject_root)
             run_name = "csd_act_test"
-            csd_dir = layout.csd / run_name
+            csd_dir = layout.stage_cache(f"03_tractography/csd/{run_name}")
             tract_dir = layout.tractograms / run_name
-            wmql_dir = layout.bundles_wmql / run_name
-            conn_dir = layout.connectome / run_name
-            seg_dir = layout.ddseg
-            parcel_dir = layout.ddparcel
-            surface_dir = layout.ddsurfer / "pred_results_SlicerDSpace" / "native" / "100307"
+            wmql_dir = layout.stage_cache("04_bundles/wmql") / run_name
+            conn_dir = connectome_stage_cache_dir(subject_root, run_name, "streamline_count")
+            seg_dir = layout.stage_cache("01_anatomical_priors/tissue_segmentation")
+            parcel_dir = layout.stage_cache("01_anatomical_priors/brain_parcellation")
+            surface_root = layout.stage_cache("01_anatomical_priors/cortical_surface")
+            surface_dir = surface_root / "pred_results_SlicerDSpace" / "native" / "100307"
             for directory in (csd_dir, tract_dir, wmql_dir, conn_dir, seg_dir, parcel_dir, surface_dir):
                 directory.mkdir(parents=True)
             for name in (
@@ -1291,9 +1293,9 @@ class ProductOrchestratorTest(unittest.TestCase):
                 _write_test_surface(surface_dir / name)
             csd_tck = tract_dir / "100307_csd_act_ifod2.tck"
             from anatomy.surface.backend_bridge import upstream_record
-            (layout.ddsurfer / 'surface_manifest.json').write_text(json.dumps(
+            (surface_root / 'surface_manifest.json').write_text(json.dumps(
                 dict(status='completed', upstream_commit=upstream_record()['commit'])))
-            (layout.ddsurfer / 'surface_qc.json').write_text(json.dumps(dict(automatic_qc_passed=True)))
+            (surface_root / 'surface_qc.json').write_text(json.dumps(dict(automatic_qc_passed=True)))
             csd_trk = tract_dir / "100307_csd_act_ifod2.trk"
             csd_vtk = tract_dir / "100307_csd_act_ifod2.vtk"
             csd_weights = tract_dir / "100307_csd_act_ifod2_sift2_weights.txt"
@@ -1448,7 +1450,8 @@ class ProductOrchestratorTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            micro_dir = layout.microstructure_dti
+            micro_stage = layout.stage_cache("02_microstructure")
+            micro_dir = micro_stage / "dti"
             micro_dir.mkdir(parents=True)
             for suffix in ("FA", "MD", "AD", "RD", "L1", "L2", "L3", "Trace"):
                 _write_test_volume(micro_dir / f"100307_dti_{suffix}.nii.gz")
@@ -1457,7 +1460,7 @@ class ProductOrchestratorTest(unittest.TestCase):
                 "status": "completed", "automatic_qc_passed": True, "checks": {"synthetic_fixture": True},
                 "output_artifacts": {str(path.resolve()): _file_signature(path) for path in micro_dir.glob("*.nii.gz")},
             }))
-            (layout.microstructure / "manifest.json").write_text(
+            (micro_stage / "manifest.json").write_text(
                 json.dumps(
                     {
                         "status": "completed",
@@ -1470,20 +1473,22 @@ class ProductOrchestratorTest(unittest.TestCase):
             )
             from microstructure.pipeline import DTI_KEYS, _compute_roi_stats
 
+            roi_dir = micro_stage / "regional_microstructure"
+            roi_dir.mkdir(parents=True, exist_ok=True)
             _compute_roi_stats(
                 metric_paths={key: micro_dir / f"100307_dti_{'Trace' if key == 'trace' else key.upper()}.nii.gz"
                               for key in DTI_KEYS},
                 roi_label_map=parcellation_path,
                 brain_mask_path=raw_paths['mask'],
                 lut_path=None,
-                csv_path=layout.regional_microstructure / "100307_ROIWise-Microstructure.csv",
-                json_path=layout.regional_microstructure / "100307_ROIWise-Microstructure.json",
+                csv_path=roi_dir / "100307_ROIWise-Microstructure.csv",
+                json_path=roi_dir / "100307_ROIWise-Microstructure.json",
             )
 
             from types import SimpleNamespace
             verified_surface = SimpleNamespace(
-                manifest_path=layout.ddsurfer / 'surface_manifest.json',
-                qc_path=layout.ddsurfer / 'surface_qc.json',
+                manifest_path=surface_root / 'surface_manifest.json',
+                qc_path=surface_root / 'surface_qc.json',
                 generated_models=tuple(surface_dir.glob('*.stl')),
             )
             with mock.patch('anatomy.surface.inspect_surface_resources', return_value=dict(available=True)), \
@@ -1515,6 +1520,7 @@ class ProductOrchestratorTest(unittest.TestCase):
 
     def test_resume_rejects_deleted_wmql_and_connectome_products(self) -> None:
         from shared import ProductOrchestratorConfig, plan_subject_products, subject_layout
+        from shared.io_layout import connectome_stage_cache_dir
 
         with tempfile.TemporaryDirectory() as tmp:
             subject_root = Path(tmp) / "100307"
@@ -1525,15 +1531,16 @@ class ProductOrchestratorTest(unittest.TestCase):
 
             run_name = "resume_artifacts"
             layout = subject_layout(subject_root)
-            layout.ddparcel.mkdir(parents=True)
-            parcellation = layout.ddparcel / "100307-DDSurfer-wmparc.nii.gz"
+            parcel_dir = layout.stage_cache("01_anatomical_priors/brain_parcellation")
+            parcel_dir.mkdir(parents=True)
+            parcellation = parcel_dir / "100307-DDSurfer-wmparc.nii.gz"
             parcellation.write_text("parcel", encoding="utf-8")
-            tract_dir = layout.tractograms_dti_det / run_name
+            tract_dir = layout.stage_cache(f"03_tractography/dti_det/{run_name}")
             tract_dir.mkdir(parents=True)
             tractogram = tract_dir / "100307-dti-deterministic.trk"
             _write_test_tractogram(tractogram)
 
-            wmql_dir = layout.bundles_wmql / run_name
+            wmql_dir = layout.stage_cache("04_bundles/wmql") / run_name
             wmql_dir.mkdir(parents=True)
             bundle = wmql_dir / "100307_desc-wmql_CST.left.trk"
             _write_test_tractogram(bundle, count=20)
@@ -1567,7 +1574,7 @@ class ProductOrchestratorTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            conn_dir = layout.connectome / run_name
+            conn_dir = connectome_stage_cache_dir(subject_root, run_name, "streamline_count")
             conn_dir.mkdir(parents=True)
             conn_qc = conn_dir / "100307-connectome-streamline_count_qc.json"
             conn_matrix = conn_dir / "100307-connectome-streamline_count.csv"
@@ -1604,8 +1611,9 @@ class ProductOrchestratorTest(unittest.TestCase):
             result = run_subject_products(config)
             payload = json.loads(result.run_manifest_path.read_text(encoding="utf-8"))
             candidates, _ = result_candidates(payload)
-            self.assertTrue({conn_matrix.resolve().as_posix(), conn_nodes.resolve().as_posix()} <=
-                            {candidate["path"] for candidate in candidates})
+            published_matrix = (layout.connectome / "100307_streamline_count.csv").resolve().as_posix()
+            published_nodes = (layout.connectome / "100307_nodes.tsv").resolve().as_posix()
+            self.assertTrue({published_matrix, published_nodes} <= {candidate["path"] for candidate in candidates})
 
             conn_matrix.write_text("source_node,target_node,streamline_count\n", encoding="utf-8")
             conn_nodes.write_text("node_id\tlabel\tname\n", encoding="utf-8")
@@ -1641,22 +1649,23 @@ class ProductOrchestratorTest(unittest.TestCase):
                 (input_dir / name).write_text("x", encoding="utf-8")
 
             layout = subject_layout(subject_root, output_root=output_root)
-            layout.ddseg.mkdir(parents=True)
+            seg_dir = layout.stage_cache("01_anatomical_priors/tissue_segmentation")
+            seg_dir.mkdir(parents=True)
             for name in (
                 "SegmentationMap_GMWMCSF.nii.gz",
                 "ProbabilisticMap_GM.nii.gz",
                 "ProbabilisticMap_WM.nii.gz",
                 "ProbabilisticMap_CSF.nii.gz",
             ):
-                (layout.ddseg / name).write_text(name, encoding="utf-8")
-            (layout.ddseg / "ddseg_qc.json").write_text(
+                (seg_dir / name).write_text(name, encoding="utf-8")
+            (seg_dir / "ddseg_qc.json").write_text(
                 json.dumps(
                     {
                         "status": "completed",
                         "schema_version": 2,
                         "orientation_convention": "affine_reoriented_ras_model_input_v2",
                         "probability_semantics": "four_class_softmax_tissue_channels_v1",
-                        "output_artifacts": _ddseg_artifact_fixture(layout.ddseg),
+                        "output_artifacts": _ddseg_artifact_fixture(seg_dir),
                         "probability_qc": {
                             "finite_and_bounded": True,
                             "tissue_mass_valid_fraction": 1.0,
@@ -1668,7 +1677,8 @@ class ProductOrchestratorTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            layout.ddparcel.mkdir(parents=True)
+            parcel_dir = layout.stage_cache("01_anatomical_priors/brain_parcellation")
+            parcel_dir.mkdir(parents=True)
             for name in (
                 "100307-DDSurfer-wmparc.nii.gz",
                 "100307-DDSurfer-wmparc-Reg.mgz",
@@ -1677,18 +1687,19 @@ class ProductOrchestratorTest(unittest.TestCase):
                 "100307-dti-MinEigenvalue-Reg-NormMasked.nii.gz",
                 "100307-dti-MidEigenvalue-Reg-NormMasked.nii.gz",
             ):
-                _write_test_volume(layout.ddparcel / name)
+                _write_test_volume(parcel_dir / name)
 
             from microstructure.pipeline import _file_signature
             from shared.orchestrator import _parcellation_outputs
 
-            (layout.ddparcel / "ddparcel_qc.json").write_text(json.dumps({
+            (parcel_dir / "ddparcel_qc.json").write_text(json.dumps({
                 "status": "completed", "automatic_qc_passed": True, "checks": {"synthetic_fixture": True},
                 "output_artifacts": {str(path.resolve()): _file_signature(path)
                     for path in _parcellation_outputs(subject_root, "100307", output_root).values()},
             }))
 
-            surface_dir = layout.ddsurfer / "pred_results_SlicerDSpace" / "native" / "100307"
+            surface_root = layout.stage_cache("01_anatomical_priors/cortical_surface")
+            surface_dir = surface_root / "pred_results_SlicerDSpace" / "native" / "100307"
             surface_dir.mkdir(parents=True)
             for name in (
                 "100307_predicted_wm_lh.stl",
@@ -1698,9 +1709,9 @@ class ProductOrchestratorTest(unittest.TestCase):
             ):
                 _write_test_surface(surface_dir / name)
             from anatomy.surface.backend_bridge import upstream_record
-            (layout.ddsurfer / 'surface_manifest.json').write_text(json.dumps(
+            (surface_root / 'surface_manifest.json').write_text(json.dumps(
                 dict(status='completed', upstream_commit=upstream_record()['commit'])))
-            (layout.ddsurfer / 'surface_qc.json').write_text(json.dumps(dict(automatic_qc_passed=True)))
+            (surface_root / 'surface_qc.json').write_text(json.dumps(dict(automatic_qc_passed=True)))
 
             plan = plan_subject_products(
                 ProductOrchestratorConfig(

@@ -6,7 +6,9 @@ import importlib.util
 import os
 import json
 import platform
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 from datetime import datetime
 from time import monotonic
@@ -61,13 +63,20 @@ from shared.ui_run_history import (
     on_run_combo_changed,
     poll_run_progress,
     refresh_run_history,
+    set_live_stage_text,
     set_run_state,
     start_progress_polling,
     stop_progress_polling,
+    stop_run_animation,
     validated_selected_manifest,
 )
 from shared.subject_id import effective_subject_id
-from shared.ui_run_state import gui_brain_mask_required, run_button_state, run_state_from_manifest_status
+from shared.ui_run_state import (
+    gui_brain_mask_required,
+    parse_live_stage_from_log_line,
+    run_button_state,
+    run_state_from_manifest_status,
+)
 from shared.ui_output_loading import qbytearray_to_text
 from shared.ui_input_inspection import inspect_input_directory
 from shared.ui_parameter_sync import sync_parameter_node_to_ui
@@ -1562,6 +1571,90 @@ class SharedWidgetMixin:
         return (source_kind, self._shared_subject_id_text(), self._parameterNode.brainMaskBackend,
                 *(self._prepare_inputs_widget_text(key) for key in file_fields))
 
+    @staticmethod
+    def _prepare_config_payload(config: InputImportConfig) -> dict[str, Any]:
+        return {
+            "source": str(config.source),
+            "subject_root": str(config.subject_root),
+            "subject_id": config.subject_id,
+            "source_kind": config.source_kind,
+            "bval_path": str(config.bval_path) if config.bval_path else None,
+            "bvec_path": str(config.bvec_path) if config.bvec_path else None,
+            "mask_path": str(config.mask_path) if config.mask_path else None,
+            "mrconvert_executable": str(config.mrconvert_executable) if config.mrconvert_executable else None,
+        }
+
+    def _cleanup_import_process_resources(self, *, terminate: bool = False) -> None:
+        process = getattr(self, "_importProcess", None)
+        if process is not None:
+            callbacks = getattr(self, "_importProcessCallbacks", ())
+            for signal_name, callback in callbacks:
+                try:
+                    process.disconnect(signal_name, callback)
+                except Exception:
+                    pass
+            if terminate and qprocess_is_running(process):
+                try:
+                    pid = int(process.processId())
+                except Exception:
+                    pid = 0
+                if pid > 0:
+                    try:
+                        kill_process_tree(pid, grouped=False, force=False)
+                    except OSError:
+                        pass
+                try:
+                    process.terminate()
+                except Exception:
+                    pass
+                if hasattr(qt, "QTimer"):
+                    qt.QTimer.singleShot(
+                        2000,
+                        lambda p=process, proc_pid=pid: self._kill_import_process_if_running(p, proc_pid),
+                    )
+        self._importProcess = None
+        self._importProcessCallbacks = ()
+        temp_dir = getattr(self, "_importTempDir", None)
+        if temp_dir is not None:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            self._importTempDir = None
+        self._importOutputBuffer = ""
+
+    def _kill_import_process_if_running(self, process, pid: int = 0) -> None:
+        if pid > 0:
+            try:
+                kill_process_tree(pid, grouped=False, force=True)
+            except OSError:
+                pass
+        try:
+            if process is not None and qprocess_is_running(process):
+                process.kill()
+        except Exception:
+            pass
+
+    def _set_import_cancel_visible(self, visible: bool) -> None:
+        cancel_button = getattr(self, "_cancelRunButton", None)
+        if cancel_button is not None:
+            cancel_button.enabled = bool(visible)
+            cancel_button.visible = bool(visible)
+
+    def _cancel_input_import(self) -> None:
+        zh = getattr(self, "_onboardingLanguage", "en").startswith("zh")
+        self._inputImportCancelRequested = True
+        self._inputImportPending = False
+        self.appendLog("[Prepare Inputs] Cancellation requested by user.")
+        self._cleanup_import_process_resources(terminate=True)
+        panel = (getattr(self, "_prepareInputWidgets", None) or {}).get("panel")
+        if panel is not None:
+            panel.enabled = True
+        status_label = (getattr(self, "_prepareInputWidgets", None) or {}).get("status")
+        if status_label is not None:
+            status_label.setText("已取消导入" if zh else "Import cancelled")
+        self._set_import_cancel_visible(False)
+        self._refresh_run_button_state()
+        set_run_state(self, "cancelled")
+        self._setStatus("warning", "已取消影像导入。" if zh else "Input import cancelled.")
+
     def _on_prepare_inputs_clicked(self, *, run_after: bool = False) -> None:
         from concurrent.futures import Future
         from threading import Thread
@@ -1575,14 +1668,34 @@ class SharedWidgetMixin:
             return
         selection = self._input_import_selection()
         self._inputImportPending = True
+        self._inputImportCancelRequested = False
         zh = getattr(self, "_onboardingLanguage", "en").startswith("zh")
         status_label = self._prepareInputWidgets["status"]
         status_label.setText("正在检查并导入影像…" if zh else "Checking and importing images…")
         status_label.show()
         input_panel = self._prepareInputWidgets["panel"]
         input_panel.enabled = False
+        self._set_import_cancel_visible(True)
         self._refresh_run_button_state()
-        def start(job, callback):
+        set_run_state(self, "importing")
+        set_live_stage_text(
+            self,
+            "正在导入并校验弥散影像…" if zh else "Importing and validating diffusion images…",
+        )
+
+        launcher = str(self._slicer_launcher_program() or "").strip() if hasattr(self, "_slicer_launcher_program") else ""
+        use_qprocess = bool(launcher) and hasattr(qt, "QProcess")
+
+        def reset_import_controls() -> None:
+            self._inputImportPending = False
+            self._cleanup_import_process_resources(terminate=False)
+            if not getattr(self, "_cleanedUp", False):
+                input_panel.enabled = True
+                if not self._pipelineActive:
+                    self._set_import_cancel_visible(False)
+                self._refresh_run_button_state()
+
+        def start_thread_job(job, callback) -> None:
             future = Future()
 
             def work():
@@ -1592,7 +1705,7 @@ class SharedWidgetMixin:
                     future.set_exception(exc)
 
             def poll():
-                if getattr(self, "_cleanedUp", False):
+                if getattr(self, "_cleanedUp", False) or getattr(self, "_inputImportCancelRequested", False):
                     return
                 if future.done():
                     callback(future)
@@ -1602,17 +1715,145 @@ class SharedWidgetMixin:
             Thread(target=work, daemon=True).start()
             qt.QTimer.singleShot(100, poll)
 
-        def finish(future):
-            self._inputImportPending = False
-            if getattr(self, "_cleanedUp", False):
+        def start_subprocess_job(mode: str, extra_payload: dict[str, Any], on_result) -> None:
+            tmp_dir = Path(tempfile.mkdtemp(prefix="slicerdsurfer_import_"))
+            request_path = tmp_dir / "request.json"
+            result_path = tmp_dir / "result.json"
+            request_payload = {
+                "mode": mode,
+                "config": self._prepare_config_payload(config),
+                **extra_payload,
+            }
+            request_path.write_text(json.dumps(request_payload, indent=2, default=str), encoding="utf-8")
+
+            cli_script = Path(__file__).resolve().parent / "prepare_inputs_cli.py"
+            args = [
+                "--launch",
+                "PythonSlicer",
+                "-u",
+                str(cli_script),
+                "--request",
+                str(request_path),
+                "--result",
+                str(result_path),
+            ]
+            process = qt.QProcess(self.parent)
+            if hasattr(process, "setWorkingDirectory"):
+                process.setWorkingDirectory(Path(__file__).resolve().parent.parent.as_posix())
+            if hasattr(qt.QProcess, "MergedChannels") and hasattr(process, "setProcessChannelMode"):
+                process.setProcessChannelMode(qt.QProcess.MergedChannels)
+            if hasattr(qt, "QProcessEnvironment") and hasattr(process, "setProcessEnvironment"):
+                env = qt.QProcessEnvironment.systemEnvironment()
+                for key, value in background_process_env_overrides().items():
+                    env.insert(key, value)
+                process.setProcessEnvironment(env)
+
+            self._importProcess = process
+            self._importTempDir = tmp_dir
+            self._importOutputBuffer = ""
+            completed = {"done": False}
+            last_output_lines: list[str] = []
+
+            def flush_output(text: str) -> None:
+                self._importOutputBuffer += text
+                while "\n" in self._importOutputBuffer:
+                    line, self._importOutputBuffer = self._importOutputBuffer.split("\n", 1)
+                    cleaned = line.rstrip()
+                    if cleaned:
+                        last_output_lines.append(cleaned)
+                        if len(last_output_lines) > 20:
+                            del last_output_lines[0]
+                        self.appendLog(cleaned)
+
+            def on_ready_read() -> None:
+                if getattr(self, "_cleanedUp", False) or getattr(self, "_inputImportCancelRequested", False):
+                    return
+                flush_output(self._qbytearray_to_text(process.readAllStandardOutput()))
+
+            def on_finished(exit_code: int, _exit_status: int = 0) -> None:
+                if completed["done"]:
+                    return
+                completed["done"] = True
+                if getattr(self, "_importProcess", None) is process and hasattr(process, "readAllStandardOutput"):
+                    try:
+                        flush_output(self._qbytearray_to_text(process.readAllStandardOutput()))
+                    except Exception:
+                        pass
+                if self._importOutputBuffer.strip():
+                    cleaned = self._importOutputBuffer.strip()
+                    last_output_lines.append(cleaned)
+                    self.appendLog(cleaned)
+                    self._importOutputBuffer = ""
+                if getattr(self, "_cleanedUp", False) or getattr(self, "_inputImportCancelRequested", False):
+                    self._cleanup_import_process_resources(terminate=False)
+                    return
+                payload = None
+                read_error: Optional[Exception] = None
+                if result_path.is_file():
+                    try:
+                        payload = json.loads(result_path.read_text(encoding="utf-8"))
+                    except (OSError, ValueError) as exc:
+                        read_error = exc
+                self._cleanup_import_process_resources(terminate=False)
+                if read_error is not None:
+                    on_result(None, RuntimeError(f"Could not read input import result: {read_error}"))
+                    return
+                if isinstance(payload, dict) and payload.get("status") == "failed":
+                    err_text = str(payload.get("error") or f"Input import failed (exit code {exit_code}).")
+                    on_result(None, RuntimeError(err_text))
+                    return
+                if int(exit_code) != 0:
+                    tail = last_output_lines[-1] if last_output_lines else ""
+                    err_msg = tail or f"Input import subprocess failed (exit code {exit_code})."
+                    on_result(None, RuntimeError(err_msg))
+                    return
+                if not isinstance(payload, dict):
+                    on_result(None, RuntimeError("Input import subprocess did not write a result manifest."))
+                    return
+                on_result(payload, None)
+
+            def on_error(error_code: Any = None) -> None:
+                if completed["done"]:
+                    return
+                if getattr(self, "_cleanedUp", False) or getattr(self, "_inputImportCancelRequested", False):
+                    completed["done"] = True
+                    self._cleanup_import_process_resources(terminate=False)
+                    return
+                running = qprocess_is_running(process)
+                if running:
+                    return
+                completed["done"] = True
+                self._cleanup_import_process_resources(terminate=False)
+                tail = last_output_lines[-1] if last_output_lines else ""
+                err_msg = tail or f"Failed to run input import subprocess (Qt error {error_code})."
+                on_result(None, RuntimeError(err_msg))
+
+            callbacks = (
+                ("readyReadStandardOutput()", on_ready_read),
+                ("finished(int,QProcess::ExitStatus)", on_finished),
+                ("errorOccurred(QProcess::ProcessError)", on_error),
+            )
+            self._importProcessCallbacks = callbacks
+            for signal_name, callback in callbacks:
+                process.connect(signal_name, callback)
+            self.appendLog(f"[Prepare Inputs] Launching subprocess: {launcher} {' '.join(args)}")
+            process.start(launcher, args)
+
+        def finish_with_result(manifest: Optional[dict[str, Any]], exc: Optional[Exception]) -> None:
+            if getattr(self, "_cleanedUp", False) or getattr(self, "_inputImportCancelRequested", False):
+                reset_import_controls()
                 return
-            input_panel.enabled = True
-            self._refresh_run_button_state()
-            try:
-                manifest = future.result()
-            except Exception as exc:
-                status_label.setText(str(exc))
+            reset_import_controls()
+            if exc is not None:
+                err_text = str(exc)
+                status_label.setText(err_text)
+                self.appendLog(f"[Prepare Inputs] Failed: {err_text}")
+                set_run_state(self, "failed")
+                self._setStatus("error", err_text)
+                if run_after:
+                    slicer.util.errorDisplay(err_text, parent=self.parent)
                 return
+            assert manifest is not None
             self.appendLog("[Prepare Inputs] Result:\n" + json.dumps(manifest, indent=2, sort_keys=True))
             if (manifest.get("status") == "completed" and self._parameterNode is not None
                     and selection == self._input_import_selection()):
@@ -1625,64 +1866,116 @@ class SharedWidgetMixin:
                 self._checkCanApply()
                 if run_after:
                     self._onRunSelectedClicked()
+                    if (
+                        getattr(self, "_runState", None) == "importing"
+                        and not self._pipelineActive
+                        and getattr(self, "_setupJob", None) is None
+                        and not getattr(self, "_inputImportPending", False)
+                    ):
+                        set_run_state(self, "idle")
+                else:
+                    set_run_state(self, "idle")
             else:
-                status_label.hide()
+                if manifest.get("status") != "completed":
+                    err_text = str(manifest.get("error") or manifest.get("message") or "Input import failed.")
+                    status_label.setText(err_text)
+                    set_run_state(self, "failed")
+                    self._setStatus("error", err_text)
+                    if run_after:
+                        slicer.util.errorDisplay(err_text, parent=self.parent)
+                else:
+                    status_label.hide()
+                    set_run_state(self, "idle")
+
+        def finish_future(future) -> None:
+            try:
+                manifest = future.result()
+            except Exception as exc:
+                finish_with_result(None, exc)
+            else:
+                finish_with_result(manifest, None)
 
         if config.source_kind != "dicom":
             raw = self._prepare_inputs_widget_text("raw")
             if config.source_kind == "nrrd" and config.source.suffix.lower() == ".nhdr" and raw:
-                from shared.ui_prepare_inputs import import_detached_nrrd
-                start(lambda: import_detached_nrrd(config, Path(raw).expanduser().resolve()), finish)
+                resolved_raw = Path(raw).expanduser().resolve()
+                if use_qprocess:
+                    start_subprocess_job("detached_nrrd", {"raw_path": str(resolved_raw)}, finish_with_result)
+                else:
+                    from shared.ui_prepare_inputs import import_detached_nrrd
+                    start_thread_job(lambda: import_detached_nrrd(config, resolved_raw), finish_future)
             else:
-                start(lambda: prepare_inputs(config), finish)
+                if use_qprocess:
+                    start_subprocess_job("prepare", {}, finish_with_result)
+                else:
+                    start_thread_job(lambda: prepare_inputs(config), finish_future)
             return
 
-        from shared.dicom_input import scan_series
-        from shared.ui_prepare_inputs import import_dicom_series
-
-        def choose_series(future):
-            try:
-                series = future.result()
-                if not series:
-                    raise ValueError("No DICOM series found in the selected folder.")
-            except Exception:
-                finish(future if future.exception() else _failed_import(ValueError(
-                    "No DICOM series found in the selected folder.")))
+        def choose_series_from_list(series_raw: Any, exc: Optional[Exception]) -> None:
+            if getattr(self, "_cleanedUp", False) or getattr(self, "_inputImportCancelRequested", False):
+                reset_import_controls()
+                return
+            if exc is not None:
+                finish_with_result(None, exc)
+                return
+            series = list(series_raw or [])
+            if not series:
+                finish_with_result(None, ValueError("No DICOM series found in the selected folder."))
                 return
             if selection != self._input_import_selection():
-                self._inputImportPending = False
-                input_panel.enabled = True
+                reset_import_controls()
                 status_label.hide()
-                self._refresh_run_button_state()
+                set_run_state(self, "idle")
                 return
             index = 0
             if len(series) > 1:
-                zh = getattr(self, "_onboardingLanguage", "en").startswith("zh")
                 labels = [
-                    f"{index + 1}. {entry['description']} · {entry['frames']} "
+                    f"{idx + 1}. {entry['description']} · {entry['frames']} "
                     + ("幅影像" if zh else "images")
                     + (f" · {entry['acquisition_time']}" if entry["acquisition_time"] else "")
-                    for index, entry in enumerate(series)
+                    for idx, entry in enumerate(series)
                 ]
                 picked = qt.QInputDialog.getItem(
                     self.parent, "DICOM", "选择序列" if zh else "Select series", labels, 0, False,
                 )
                 label = picked[0] if isinstance(picked, tuple) else picked
                 if not label:
-                    self._inputImportPending = False
-                    input_panel.enabled = True
+                    reset_import_controls()
                     status_label.hide()
-                    self._refresh_run_button_state()
+                    set_run_state(self, "idle")
                     return
                 index = labels.index(str(label))
-            start(lambda: import_dicom_series(config, series[index]), finish)
+            selected_entry = dict(series[index])
+            if use_qprocess:
+                selected_entry["paths"] = [Path(p).as_posix() for p in (selected_entry.get("paths") or ())]
+                start_subprocess_job("dicom", {"series_entry": selected_entry}, finish_with_result)
+            else:
+                from shared.ui_prepare_inputs import import_dicom_series
+                selected_entry["paths"] = [Path(str(p)) for p in (selected_entry.get("paths") or ())]
+                start_thread_job(lambda: import_dicom_series(config, selected_entry), finish_future)
 
-        def _failed_import(exc):
-            failed = Future()
-            failed.set_exception(exc)
-            return failed
-
-        start(lambda: scan_series(config.source), choose_series)
+        if use_qprocess:
+            set_live_stage_text(
+                self,
+                "正在扫描 DICOM 序列…" if zh else "Scanning DICOM series…",
+            )
+            start_subprocess_job(
+                "scan_dicom",
+                {},
+                lambda payload, exc: choose_series_from_list(
+                    (payload or {}).get("series") if payload is not None else None,
+                    exc,
+                ),
+            )
+        else:
+            from shared.dicom_input import scan_series
+            start_thread_job(
+                lambda: scan_series(config.source),
+                lambda future: choose_series_from_list(
+                    future.result() if not future.exception() else None,
+                    future.exception(),
+                ),
+            )
 
     def _initialize_run_status_panel(self) -> None:
         install_run_status_panel(self)
@@ -2147,6 +2440,8 @@ class SharedWidgetMixin:
         job = getattr(self, "_setupJob", None)
         if job:
             job.shutdown()
+        self._inputImportPending = False
+        self._cleanup_import_process_resources(terminate=True)
         process = getattr(self, "_backgroundProcess", None)
         if process is not None and qprocess_is_running(process):
             # Teardown cannot rely on timers or callbacks into deleted widgets.
@@ -2174,6 +2469,7 @@ class SharedWidgetMixin:
             finish_process_group(pgid, grace_seconds=15)
         self._pendingCancelledProcessGroups = set()
         stop_progress_polling(self)
+        stop_run_animation(self)
         timer = getattr(self, "_runHistoryRefreshTimer", None)
         if timer is not None:
             timer.stop()
@@ -2863,6 +3159,8 @@ class SharedWidgetMixin:
         self._pendingRunManifestPath = None
         start_progress_polling(self, manifest_path)
         set_run_state(self, "running")
+        zh = getattr(self, "_onboardingLanguage", "en").startswith("zh")
+        set_live_stage_text(self, "正在启动后台计算…" if zh else "Starting background pipeline…")
         process.start(program, args)
         if not process.waitForStarted(5000):
             stop_progress_polling(self)
@@ -2930,6 +3228,8 @@ class SharedWidgetMixin:
         # Batch runs write their manifest only at the end: show a busy bar.
         start_progress_polling(self, None)
         set_run_state(self, "running")
+        zh = getattr(self, "_onboardingLanguage", "en").startswith("zh")
+        set_live_stage_text(self, "正在启动批量后台计算…" if zh else "Starting background batch pipeline…")
         process.start(program, args)
         if not process.waitForStarted(5000):
             self._setPipelineActive(False)
@@ -2956,6 +3256,13 @@ class SharedWidgetMixin:
         if not line:
             return
         self.appendLog(line)
+        parsed_stage = parse_live_stage_from_log_line(
+            line,
+            getattr(self, "_onboardingLanguage", "en"),
+        )
+        if parsed_stage is not None:
+            stage_label, detail = parsed_stage
+            set_live_stage_text(self, stage_label, detail)
         if line.startswith("[Orchestrator] Running "):
             keys = self._task_keys_for_running_line(line)
             self._update_run_status_table_item(keys, "running", line.replace("[Orchestrator] ", "", 1))
@@ -2980,6 +3287,7 @@ class SharedWidgetMixin:
         cancelled = bool(getattr(self, "_backgroundCancelRequested", False))
         self._poll_run_progress()
         stop_progress_polling(self)
+        stop_run_animation(self)
         manifest_path = self._extract_background_manifest_path()
         manifest_available = bool(manifest_path and manifest_path.is_file())
         outcome = classify_background_run_outcome(
@@ -3184,6 +3492,9 @@ class SharedWidgetMixin:
         return manifest_path
 
     def _onCancelRunClicked(self) -> None:
+        if getattr(self, "_inputImportPending", False) or getattr(self, "_importProcess", None) is not None:
+            self._cancel_input_import()
+            return
         job = getattr(self, "_setupJob", None)
         if job:
             job.cancel()
@@ -3768,7 +4079,21 @@ class SharedWidgetMixin:
                         "for packages already imported.", parent=self.parent)
             if on_complete:
                 on_complete(status == "completed")
-        start_setup_job(self, "Install Python dependencies", commands, done)
+            if (
+                getattr(self, "_runState", None) == "setup"
+                and not self._pipelineActive
+                and getattr(self, "_setupJob", None) is None
+            ):
+                set_run_state(
+                    self,
+                    "idle" if status == "completed" else ("cancelled" if status == "cancelled" else "failed"),
+                )
+        zh = getattr(self, "_onboardingLanguage", "en").startswith("zh")
+        set_run_state(self, "setup")
+        set_live_stage_text(self, "正在安装 Python 依赖…" if zh else "Installing Python dependencies…")
+        started = start_setup_job(self, "Install Python dependencies", commands, done)
+        if not started and getattr(self, "_runState", None) == "setup" and not self._pipelineActive:
+            set_run_state(self, "idle")
 
     def _show_environment_install_notes(self, result) -> None:
         missing = [item for item in self._missing_environment_items(result) if item.kind != "python"]
@@ -3917,7 +4242,22 @@ class SharedWidgetMixin:
                     details=details + "\\nLog: " + str(log_path))
             if on_complete:
                 on_complete(status == "completed", message)
-        return start_setup_job(self, "Download and verify model assets", commands, done)
+            if (
+                getattr(self, "_runState", None) == "setup"
+                and not self._pipelineActive
+                and getattr(self, "_setupJob", None) is None
+            ):
+                set_run_state(
+                    self,
+                    "idle" if status == "completed" else ("cancelled" if status == "cancelled" else "failed"),
+                )
+        zh = getattr(self, "_onboardingLanguage", "en").startswith("zh")
+        set_run_state(self, "setup")
+        set_live_stage_text(self, "正在下载并校验模型资源…" if zh else "Downloading and verifying model assets…")
+        started = start_setup_job(self, "Download and verify model assets", commands, done)
+        if not started and getattr(self, "_runState", None) == "setup" and not self._pipelineActive:
+            set_run_state(self, "idle")
+        return started
 
     def _setPipelineActive(self, active: bool, *, preserve_status: bool = False) -> None:
         self._pipelineActive = active

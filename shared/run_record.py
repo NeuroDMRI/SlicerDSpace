@@ -92,6 +92,24 @@ def _iter_output_paths(value: Any):
             yield from _iter_output_paths(item)
 
 
+def _is_subject_cache_path(path: Path, manifest: dict) -> bool:
+    subject_root = str(manifest.get("subject_root") or "").strip()
+    if not subject_root:
+        return False
+    cache_root = Path(subject_root) / "cache"
+    for candidate, root in ((path, cache_root),):
+        try:
+            candidate.relative_to(root)
+            return True
+        except ValueError:
+            pass
+    try:
+        path.resolve().relative_to(cache_root.resolve())
+        return True
+    except (OSError, ValueError):
+        return False
+
+
 def product_inventory(manifest: dict, run_record_path: Path, output_root: Optional[Path] = None) -> list[dict]:
     """SHA-256 inventory of the final product files in the task outputs of the run manifest."""
     if output_root is None:
@@ -101,7 +119,11 @@ def product_inventory(manifest: dict, run_record_path: Path, output_root: Option
         for key, value in (task.get("outputs") or {}).items():
             for text in _iter_output_paths(value):
                 path = Path(text)
-                if not path.is_absolute() or not _is_final_product(path, run_record_path, output_root):
+                if (
+                    not path.is_absolute()
+                    or _is_subject_cache_path(path, manifest)
+                    or not _is_final_product(path, run_record_path, output_root)
+                ):
                     continue
                 if path.is_file():
                     products.setdefault(path.as_posix(), {

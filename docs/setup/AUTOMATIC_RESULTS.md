@@ -36,7 +36,7 @@ folder discovery remains manual-only.
 TRK/TCK loading uses lazy RAS-mm coordinates and at most 30,000 uniformly
 distributed streamlines. Automatic loading persists a binary RAS VTK preview
 and JSON provenance under
-`<outputs>/06_slicer_scene_report/display_previews`, then loads that VTK.
+`<subject_root>/cache/display_previews`, then loads that VTK.
 The original tractogram is unchanged and remains the ownership/deduplication
 source. Node attributes identify preview paths, original source/stamp,
 original/display counts, and display-only sampling. Measurements must use the

@@ -4,6 +4,7 @@ from datetime import datetime
 import json
 from pathlib import Path
 
+from shared.ui_run_history import set_live_stage_text, set_run_state
 from shared.ui_selected_setup import _text
 
 
@@ -43,6 +44,15 @@ def start_environment_check(owner, on_complete=None, *, on_failure=None):
     owner._latestEnvironmentReportDir = folder
     script = Path(__file__).resolve().parents[1] / 'scripts/check_environment.py'
 
+    def _reset_preflight_state(next_state: str = 'idle') -> None:
+        if (
+            getattr(owner, '_runState', None) == 'preflight'
+            and not getattr(owner, '_pipelineActive', False)
+            and not getattr(owner, '_setupJob', None)
+            and not getattr(owner, '_selectedSetupActive', False)
+        ):
+            set_run_state(owner, next_state)
+
     def done(status, details, log_path):
         if status != 'completed':
             owner._update_environment_result_label(None, error=None if status == 'cancelled' else 'Check failed')
@@ -50,12 +60,14 @@ def start_environment_check(owner, on_complete=None, *, on_failure=None):
                                             '已取消检查。' if status == 'cancelled' else '检查失败，请查看日志。'))
             if on_failure:
                 on_failure(status, details)
+            _reset_preflight_state('cancelled' if status == 'cancelled' else 'failed')
             return
         if signature != owner._environment_check_signature(owner._environment_check_kwargs()):
             owner._lastEnvironmentResult = owner._lastEnvironmentSignature = None
             owner._setStatus('warning', _text(owner, 'Selection changed during the check. Check again.', '检查期间配置已改变，请重新检查。'))
             if on_failure:
                 on_failure('stale', 'Configuration changed during the final check')
+            _reset_preflight_state('idle')
             return
         try:
             report = result_from_dict(json.loads(result_path.read_text()))
@@ -64,6 +76,7 @@ def start_environment_check(owner, on_complete=None, *, on_failure=None):
             owner.appendLog('[Check] ' + str(exc))
             if on_failure:
                 on_failure('failed', str(exc))
+            _reset_preflight_state('failed')
             return
         owner._cache_environment_result(report, signature)
         owner._update_environment_result_label(report)
@@ -71,10 +84,16 @@ def start_environment_check(owner, on_complete=None, *, on_failure=None):
         owner._update_environment_status(report)
         if on_complete:
             on_complete(report)
+        _reset_preflight_state('idle')
 
     args = ['--launch', 'PythonSlicer', '-u', str(script), '--request', str(request), '--result', str(result_path)]
-    return start_setup_job(owner, _text(owner, 'Checking environment', '检查环境'),
-                           [(owner._slicer_launcher_program(), args, {})], done)
+    set_run_state(owner, 'preflight')
+    set_live_stage_text(owner, _text(owner, 'Checking environment dependencies…', '正在检查环境依赖…'))
+    started = start_setup_job(owner, _text(owner, 'Checking environment', '检查环境'),
+                              [(owner._slicer_launcher_program(), args, {})], done)
+    if not started:
+        _reset_preflight_state('idle')
+    return started
 
 
 def request_prepare_environment(owner, *, repair=False):

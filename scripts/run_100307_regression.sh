@@ -103,11 +103,20 @@ if not manifest_path.is_file():
     fail(f"missing run manifest: {manifest_path}")
 
 manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-required_top_dirs = ["00_run_metadata", "01_preproc", "02_microstructure", "03_anatomy", "04_tractography", "05_statistics"]
+required_top_dirs = [
+    "00_run_metadata",
+    "01_anatomical_priors",
+    "02_microstructure",
+    "03_tractography",
+    "04_bundles",
+    "05_connectome",
+    "06_qc",
+]
 output_root = Path(manifest["output_root"])
 for dirname in required_top_dirs:
     if not (output_root / dirname).exists() and not (
-        dirname == "03_anatomy" and (output_root / "03_structural").is_dir()
+        dirname == "01_anatomical_priors"
+        and ((output_root / "03_anatomy").is_dir() or (output_root / "03_structural").is_dir())
     ):
         fail(f"missing canonical output directory: {output_root / dirname}")
 

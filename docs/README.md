@@ -26,7 +26,7 @@ lightweight source checkout or complete development/research repository.
 | [Cohort resource scheduling](setup/COHORT_RESOURCES.md) | Optional cross-subject compute-stage admission and resource reservations |
 | [Experiments](setup/EXPERIMENTS.md) | Advanced parameter overrides, named variants and cohort concurrency |
 | [Agent skill](../.agents/skills/slicerdspace/SKILL.md) | Installation, input preparation, requested analyses and result review |
-| [Output layout](setup/OUTPUT_LAYOUT.md) | New `03_anatomy` products and read-only compatibility with historical `03_structural` results |
+| [Output layout](setup/OUTPUT_LAYOUT.md) | Canonical `01_anatomical_priors`–`06_qc` deliverables, `cache/`, `preprocessed/`, and legacy read-only compatibility |
 | [Capabilities and platforms](setup/SUPPORT_MATRIX.md) | Configure only the selected backend |
 | [Result review](setup/GUI_RESULT_REVIEW.md) | Run-scoped loading, cancellation and QC |
 | [Brain masking](setup/brain_mask_gui_config.md) | PNL CNN default (managed on Linux, native and experimental on macOS and Windows), explicit alternatives |

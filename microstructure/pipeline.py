@@ -261,7 +261,13 @@ def _resolve_roi_label_map(config: MicrostructureConfig) -> Path | None:
     from shared.io_layout import subject_layout
     layout = subject_layout(config.native_bundle.subject_root)
     directory = layout.anatomy_input_dir("ddparcel")
+    stage_parcel_dir = layout.stage_cache("01_anatomical_priors/brain_parcellation")
     default_candidates = [
+        layout.brain_parcellation / f"{config.subject_id}_parcellation.nii.gz",
+        stage_parcel_dir / f"{config.subject_id}_parcellation.nii.gz",
+        stage_parcel_dir / f"{config.subject_id}-DDSurfer-wmparc.nii.gz",
+        stage_parcel_dir / f"{config.subject_id}_ddparcel_wmparc_labels.nii.gz",
+        directory / f"{config.subject_id}_parcellation.nii.gz",
         directory / f"{config.subject_id}_ddparcel_wmparc_labels.nii.gz",
         directory / f"{config.subject_id}-DDSurfer-wmparc.nii.gz",
     ]
@@ -310,10 +316,7 @@ def _output_paths(
     dti_dir = output_dir / "dti"
     freewater_dir = output_dir / "freewater"
     noddi_dir = output_dir / "noddi"
-    if output_dir.name == "02_microstructure":
-        roi_dir = output_dir.parent / "05_statistics" / "regional_microstructure"
-    else:
-        roi_dir = output_dir / "regional_microstructure"
+    roi_dir = output_dir / "regional_microstructure"
     return {
         "fa": dti_dir / f"{subject_id}_dti_FA.nii.gz",
         "md": dti_dir / f"{subject_id}_dti_MD.nii.gz",

@@ -496,7 +496,7 @@ export SUBJECT_ROOT="/path/to/sub-01"
   --source-manifest "$SUBJECT_ROOT/outputs/00_run_metadata/run_orchestration_manifest.json" \
   --regions 1024 2024 1022 2022 1025 2025 \
   --metrics fwf --tissue \
-  --output-dir "$SUBJECT_ROOT/outputs/05_statistics/box2_ifw_regions"</code></pre>
+  --output-dir "$SUBJECT_ROOT/outputs/02_microstructure/box2_ifw_regions"</code></pre>
                   </div>
                 </li>
               </ol>
@@ -507,11 +507,11 @@ export SUBJECT_ROOT="/path/to/sub-01"
               <div class="demo-fig-grid">
                 <figure class="demo-fig">
                   <img src="assets/img/res-fw.jpg" width="1200" height="900" loading="lazy" alt="Free-water fraction map on axial and coronal planes">
-                  <figcaption><strong>Free-water fraction (fwf):</strong> DIPY bi-tensor fit on b = 0, 1000, 2000 s/mm² (02_microstructure/freewater/100307_fw_fraction.nii.gz).</figcaption>
+                  <figcaption><strong>Free-water fraction (fwf):</strong> DIPY bi-tensor fit on b = 0, 1000, 2000 s/mm² (02_microstructure/free_water/100307_FW.nii.gz).</figcaption>
                 </figure>
                 <figure class="demo-fig">
                   <img src="assets/img/res-tissue.jpg" width="1200" height="900" loading="lazy" alt="DDSeg tissue segmentation map in native diffusion space">
-                  <figcaption><strong>DDSeg tissue priors:</strong> Native-space GM/WM/CSF segmentation and continuous CSF probability volume (03_structural/ddseg/ProbabilisticMap_CSF.nii.gz).</figcaption>
+                  <figcaption><strong>DDSeg tissue priors:</strong> Native-space GM/WM/CSF segmentation and continuous CSF probability volume (01_anatomical_priors/tissue_segmentation/ProbabilisticMap_CSF.nii.gz).</figcaption>
                 </figure>
                 <figure class="demo-fig">
                   <img src="assets/img/demo-box2-app1-steps.jpg" width="1200" height="900" loading="lazy" alt="Derived cortical iFW axial slice and enlarged cortical ROI with DDParcel boundaries">
@@ -570,7 +570,7 @@ export SUBJECT_ROOT="/path/to/sub-01"
               <div class="demo-kv-grid">
                 <div class="demo-kv">
                   <span class="demo-kv-label">Primary output files</span>
-                  <p>02_microstructure/freewater/{100307_fw_fraction.nii.gz, 100307_fw_valid_mask.nii.gz, fw_qc.json}, 03_structural/ddseg/{SegmentationMap_GMWMCSF.nii.gz, ProbabilisticMap_CSF.nii.gz, ddseg_qc.json}, and regional tables selected_microstructure.csv, selected_tissue_statistics.csv, region_analysis_report.md.</p>
+                  <p>02_microstructure/free_water/100307_FW.nii.gz, 01_anatomical_priors/tissue_segmentation/{SegmentationMap_GMWMCSF.nii.gz, ProbabilisticMap_CSF.nii.gz}, 06_qc/{01_anatomical_priors/tissue_segmentation.txt, 02_microstructure/free_water.txt}, and regional tables selected_microstructure.csv, selected_tissue_statistics.csv, region_analysis_report.md.</p>
                 </div>
                 <div class="demo-kv">
                   <span class="demo-kv-label">QC metrics &amp; inspection</span>
@@ -646,7 +646,7 @@ export SUBJECT_ROOT="/path/to/sub-01"
   --source-manifest "$SUBJECT_ROOT/outputs/00_run_metadata/run_orchestration_manifest.json" \
   --regions 1024 2024 1022 2022 1021 2021 1032 2032 1033 2033 \
   --metrics fwf noddi_ndi --tissue --surface \
-  --output-dir "$SUBJECT_ROOT/outputs/05_statistics/box2_ndi_surface_regions"</code></pre>
+  --output-dir "$SUBJECT_ROOT/outputs/02_microstructure/box2_ndi_surface_regions"</code></pre>
                   </div>
                 </li>
               </ol>
@@ -657,7 +657,7 @@ export SUBJECT_ROOT="/path/to/sub-01"
               <div class="demo-fig-grid">
                 <figure class="demo-fig">
                   <img src="assets/img/res-ndi.jpg" width="1200" height="900" loading="lazy" alt="NODDI neurite density index map on axial and coronal planes">
-                  <figcaption><strong>NODDI neurite density (NDI):</strong> Whole-brain intracellular neurite density fitted by AMICO in native diffusion space (02_microstructure/noddi/100307_noddi_ndi.nii.gz).</figcaption>
+                  <figcaption><strong>NODDI neurite density (NDI):</strong> Whole-brain intracellular neurite density fitted by AMICO in native diffusion space (02_microstructure/neurite_microstructure/100307_NDI.nii.gz).</figcaption>
                 </figure>
                 <figure class="demo-fig">
                   <img src="assets/img/demo-box2-app2-surface-priors.jpg" width="1200" height="900" loading="lazy" alt="DDSurfer native surface Desikan-Killiany parcellation and vertex-wise cortical thickness">
@@ -741,7 +741,7 @@ export SUBJECT_ROOT="/path/to/sub-01"
               <div class="demo-kv-grid">
                 <div class="demo-kv">
                   <span class="demo-kv-label">Primary output files</span>
-                  <p>02_microstructure/noddi/{100307_noddi_ndi.nii.gz, 100307_noddi_tissue_valid_mask.nii.gz, noddi_qc.json}, 03_structural/ddsurfer/postprocess/{surf/lh.thickness, surf/rh.thickness, label/lh.aparc.annot, label/rh.aparc.annot, qc.json}, and regional tables selected_microstructure.csv, selected_surface_statistics.csv, bilateral_statistics.csv.</p>
+                  <p>02_microstructure/neurite_microstructure/100307_NDI.nii.gz, 01_anatomical_priors/surface_morphometry/{lh.thickness, rh.thickness, lh.aparc.annot, rh.aparc.annot}, 06_qc/{01_anatomical_priors/surface_morphometry.txt, 02_microstructure/neurite_microstructure.txt}, and regional tables selected_microstructure.csv, selected_surface_statistics.csv, bilateral_statistics.csv.</p>
                 </div>
                 <div class="demo-kv">
                   <span class="demo-kv-label">QC metrics &amp; inspection</span>
@@ -822,7 +822,7 @@ export SUBJECT_ROOT="/path/to/sub-01"
   --source-manifest "$SUBJECT_ROOT/outputs/00_run_metadata/${RUN_NAME}__act_orchestration_manifest.json" \
   --regions 1024 2024 1028 2028 \
   --connectome connectome.mrtrix \
-  --output-dir "$SUBJECT_ROOT/outputs/05_statistics/box3_motor_frontal_subnetwork"</code></pre>
+  --output-dir "$SUBJECT_ROOT/outputs/05_connectome/box3_motor_frontal_subnetwork"</code></pre>
                   </div>
                 </li>
               </ol>
@@ -898,11 +898,11 @@ export SUBJECT_ROOT="/path/to/sub-01"
               <div class="demo-kv-grid">
                 <div class="demo-kv">
                   <span class="demo-kv-label">Primary output files</span>
-                  <p>04_tractography/act_prep/{100307_5tt_from_ddseg.nii.gz, 100307_gmwmi_from_labels.nii.gz, act_prep_qc.json}, 04_tractography/csd/&lt;run&gt;/{100307_wmfod_norm.mif, csd_qc.json}, 04_tractography/tractograms/&lt;run&gt;/{100307_csd_act_ifod2.tck, 100307_csd_act_ifod2_sift2_weights.txt}, and 04_tractography/connectome/&lt;run&gt;/{100307-connectome-nodes.tsv, 100307-connectome-streamline_count.csv, sift2_weighted_streamline_count/100307-connectome-sift2_weighted_streamline_count.csv}.</p>
+                  <p>03_tractography/anatomically_constrained_tractography/100307_act.tck, 05_connectome/{100307_nodes.tsv, 100307_streamline_count.csv, 100307_sift2_weighted.csv}, 06_qc/{03_tractography/anatomically_constrained_tractography.txt, 05_connectome/sift2_weighted.txt}, and cached ACT/CSD/SIFT2 intermediates under cache/stages/.</p>
                 </div>
                 <div class="demo-kv">
                   <span class="demo-kv-label">QC metrics &amp; inspection</span>
-                  <p>Inspect act_prep_qc.json, csd_qc.json and connectome_qc.json (or 06_slicer_scene_report/report.html). In 3D Slicer, Results and QC loads the 24,000-streamline display preview and 3D connectome graph without duplicating scene nodes.</p>
+                  <p>Inspect 06_qc/ summaries, internal stage QC JSONs (act_prep_qc.json, csd_qc.json, connectome_qc.json), or cache/reports/report.html. In 3D Slicer, Results and QC loads the display streamline preview and 3D connectome graph without duplicating scene nodes.</p>
                 </div>
               </div>
             </div>
@@ -929,7 +929,7 @@ export SUBJECT_ROOT="/path/to/sub-01"
               <div class="demo-kv-grid">
                 <div class="demo-kv">
                   <span class="demo-kv-label">Subject data &amp; priors</span>
-                  <p>Preprocessed multi-shell dMRI for HCP subject 100307, normalized CSD FOD volume (100307_wmfod_norm.mif; prepared automatically if absent), and post-processed native DDSurfer surfaces (03_structural/ddsurfer/postprocess/_subjects/100307 containing surf/{lh,rh}.{white,pial,thickness} and label/{lh,rh}.{cortex.label,aparc.annot}).</p>
+                  <p>Preprocessed multi-shell dMRI for HCP subject 100307, normalized CSD FOD volume (100307_wmfod_norm.mif; prepared automatically if absent), and post-processed native DDSurfer surfaces (01_anatomical_priors/cortical_surface/{lh,rh}.{white,pial}.obj and 01_anatomical_priors/surface_morphometry/{lh,rh}.{thickness,aparc.annot}, backed by cache/stages/01_anatomical_priors/surface_morphometry/structural/_subjects/100307).</p>
                 </div>
                 <div class="demo-kv">
                   <span class="demo-kv-label">Environment &amp; dependencies</span>
@@ -1005,7 +1005,7 @@ export SUBJECT_ROOT="/path/to/sub-01"
                   <tbody>
                     <tr>
                       <td>Full-seed SAF tractogram (Box 3b)</td>
-                      <td>04_tractography/saf/&lt;run&gt;/SAF.tck &amp; SAF.vtk</td>
+                      <td>03_tractography/short_association_fibers/100307_saf.tck &amp; 100307_saf.vtk</td>
                       <td>13,043 streamlines (6,525 LH / 6,518 RH; median = 19.78 mm, p05 = 3.70 mm, p95 = 34.63 mm; 10–40 mm bins: 1,841, 1,988, 1,987, 1,956, 1,880, 577)</td>
                       <td>tckstats count matches decoded NiBabel streamline count; VTK polydata exported for Slicer</td>
                     </tr>
@@ -1037,7 +1037,7 @@ export SUBJECT_ROOT="/path/to/sub-01"
               <div class="demo-kv-grid">
                 <div class="demo-kv">
                   <span class="demo-kv-label">Primary output files</span>
-                  <p>04_tractography/saf/&lt;run&gt;/{SAF.tck, SAF.vtk, saf_manifest.json, saf_qc.json, log.txt} and cached surface-intersection matrices in 04_tractography/saf/&lt;run&gt;/cache/{PS.mat, SD.mat, WSM_coords.txt, lengths.txt, surf_data/}.</p>
+                  <p>03_tractography/short_association_fibers/{100307_saf.tck, 100307_saf.vtk}, 06_qc/03_tractography/short_association_fibers.txt, and cached intermediates/matrices in cache/stages/03_tractography/short_association_fibers/&lt;run&gt;/cache/{PS.mat, SD.mat, WSM_coords.txt, lengths.txt, surf_data/}.</p>
                 </div>
                 <div class="demo-kv">
                   <span class="demo-kv-label">QC metrics &amp; inspection</span>

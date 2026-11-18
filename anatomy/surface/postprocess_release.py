@@ -23,7 +23,7 @@ import numpy as np
 from nibabel.freesurfer.mghformat import MGHImage
 from nibabel.processing import resample_from_to
 
-from shared.io_layout import ANATOMY_OUTPUT_NAME, anatomy_input_dir, subject_layout
+from shared.io_layout import ANATOMY_OUTPUT_NAME, anatomy_input_dir, publish_output_file, subject_layout
 from shared.staging_paths import resolve_staging_subject_dir
 
 REQUIRED_MRI_FILES = ("brain.mgz", "DDSurfer-wmparc.nii.gz")
@@ -154,11 +154,23 @@ def _resolve_native_dir(config: DDSurferPostprocessConfig, subject_root: Path) -
     if config.native_dir is not None:
         return config.native_dir.expanduser().resolve()
     layout = subject_layout(subject_root, output_root=config.output_root)
-    return (layout.anatomy_input_dir("ddsurfer") / "pred_results_SlicerDSpace" / "native" / config.subject_id).resolve()
+    candidates = [
+        layout.stage_cache("01_anatomical_priors/cortical_surface") / "pred_results_SlicerDSpace" / "native" / config.subject_id,
+        layout.cortical_surface,
+        layout.anatomy_input_dir("ddsurfer") / "pred_results_SlicerDSpace" / "native" / config.subject_id,
+    ]
+    for cand in candidates:
+        if cand.is_dir() and any((cand / f"{h}.{k}.obj").is_file() for h in ("lh", "rh") for k in ("white", "pial")):
+            return cand.resolve()
+    for cand in candidates:
+        if cand.is_dir():
+            return cand.resolve()
+    return candidates[0].resolve()
 
 
 def _resolve_wmparc_path(subject_id: str, mri_dir: Path) -> Path:
     candidates = [
+        mri_dir / f"{subject_id}_parcellation.nii.gz",
         mri_dir / "DDSurfer-wmparc.nii.gz",
         mri_dir / f"{subject_id}-DDSurfer-wmparc.nii.gz",
     ]
@@ -168,29 +180,72 @@ def _resolve_wmparc_path(subject_id: str, mri_dir: Path) -> Path:
     raise FileNotFoundError(f"Required wmparc file missing under {mri_dir}. Expected one of: {', '.join(str(p) for p in candidates)}")
 
 
+def publish_surface_morphometry_deliverables(
+    *,
+    fs_subject: Path,
+    dest_dir: Path,
+    hemis: tuple[str, ...],
+    atlases: Optional[tuple[str, ...] | list[str]] = None,
+    stats_dir: Optional[Path] = None,
+) -> dict[str, Path]:
+    """Publish flat surface morphometry deliverables without symlinks."""
+
+    published: dict[str, Path] = {}
+    resolved_atlases = tuple(atlases or ("aparc", "aparc.a2009s"))
+    resolved_stats = stats_dir or (fs_subject / "stats")
+    surf_dir = fs_subject / "surf"
+    label_dir = fs_subject / "label"
+    for hemi in hemis:
+        for atlas in resolved_atlases:
+            stats_file = resolved_stats / f"{hemi}.{atlas}.stats"
+            if stats_file.is_file():
+                dest = dest_dir / stats_file.name
+                publish_output_file(stats_file, dest, replace=True)
+                published[stats_file.name] = dest
+            annot_file = label_dir / f"{hemi}.{atlas}.annot"
+            if annot_file.is_file():
+                dest = dest_dir / annot_file.name
+                publish_output_file(annot_file, dest, replace=True)
+                published[annot_file.name] = dest
+        for measure in ("thickness", "curv", "sulc", "area", "inflated"):
+            surf_file = surf_dir / f"{hemi}.{measure}"
+            if surf_file.is_file():
+                dest = dest_dir / surf_file.name
+                publish_output_file(surf_file, dest, replace=True)
+                published[surf_file.name] = dest
+    return published
+
+
 def _load_b0_or_fa_source(subject_root: Path, subject_id: str, output_root: Path) -> tuple[nib.spatialimages.SpatialImage, str]:
     layout = subject_layout(subject_root, output_root=output_root)
-    fa_path = layout.microstructure_dti / f"{subject_id}_dti_FA.nii.gz"
-    if fa_path.is_file():
-        return nib.load(str(fa_path)), "fa"
+    fa_candidates = [
+        layout.diffusion_tensor / f"{subject_id}_FA.nii.gz",
+        layout.diffusion_tensor / f"{subject_id}_dti_FA.nii.gz",
+        layout.stage_cache("02_microstructure") / "dti" / f"{subject_id}_dti_FA.nii.gz",
+        output_root / "02_microstructure" / "dti" / f"{subject_id}_dti_FA.nii.gz",
+    ]
+    for fa_path in fa_candidates:
+        if fa_path.is_file():
+            return nib.load(str(fa_path)), "fa"
 
-    preproc_dwi = layout.preproc / f"{subject_id}_dwi_final.nii.gz"
-    preproc_bval = layout.preproc / f"{subject_id}_dwi_final.bval"
-    if preproc_dwi.is_file():
-        dwi_img = nib.load(str(preproc_dwi))
-        if len(dwi_img.shape) == 4:
-            dwi = np.asarray(dwi_img.dataobj, dtype=np.float32)
-            if preproc_bval.is_file():
-                bvals = np.loadtxt(preproc_bval, dtype=np.float32, ndmin=1)
-                b0_idx = np.where(bvals <= 50.0)[0]
-                if b0_idx.size == 0:
+    for preproc_dir in (layout.preproc, layout.stage_cache("00_preprocessing"), layout.preproc_legacy):
+        preproc_dwi = preproc_dir / f"{subject_id}_dwi_final.nii.gz"
+        preproc_bval = preproc_dir / f"{subject_id}_dwi_final.bval"
+        if preproc_dwi.is_file():
+            dwi_img = nib.load(str(preproc_dwi))
+            if len(dwi_img.shape) == 4:
+                dwi = np.asarray(dwi_img.dataobj, dtype=np.float32)
+                if preproc_bval.is_file():
+                    bvals = np.loadtxt(preproc_bval, dtype=np.float32, ndmin=1)
+                    b0_idx = np.where(bvals <= 50.0)[0]
+                    if b0_idx.size == 0:
+                        b0_idx = np.array([0], dtype=int)
+                else:
                     b0_idx = np.array([0], dtype=int)
+                brain = dwi[..., b0_idx].mean(axis=-1, dtype=np.float32)
             else:
-                b0_idx = np.array([0], dtype=int)
-            brain = dwi[..., b0_idx].mean(axis=-1, dtype=np.float32)
-        else:
-            brain = np.asarray(dwi_img.dataobj, dtype=np.float32)
-        return nib.Nifti1Image(brain, dwi_img.affine), "b0_mean"
+                brain = np.asarray(dwi_img.dataobj, dtype=np.float32)
+            return nib.Nifti1Image(brain, dwi_img.affine), "b0_mean"
 
     raw_dwi = subject_root / "input" / "data.nii.gz"
     raw_bval = subject_root / "input" / "bvals"
@@ -334,11 +389,18 @@ def run_ddsurfer_postprocess(
     layout = subject_layout(subject_root, output_root=output_root)
     native_dir = _resolve_native_dir(config, subject_root)
     mri_dir = config.mri_dir.expanduser().resolve() if config.mri_dir is not None else layout.anatomy_input_dir("ddparcel")
+    if not mri_dir.is_dir():
+        stage_parcel = layout.stage_cache("01_anatomical_priors/brain_parcellation")
+        if stage_parcel.is_dir():
+            mri_dir = stage_parcel
     wmparc_path = _resolve_wmparc_path(config.subject_id, mri_dir)
     brain_mgz_path = mri_dir / "brain.mgz"
 
-    runtime_root = layout.anatomy / "cache" / "ddsurfer_postprocess_runtime"
+    stage_cache_root = layout.stage_cache("01_anatomical_priors/surface_morphometry")
+    runtime_root = stage_cache_root / "runtime"
     generated_mri_dir = runtime_root / "generated_mri" / config.subject_id
+    stage_outputs_root = stage_cache_root / "legacy_outputs"
+    stage_outputs_root.mkdir(parents=True, exist_ok=True)
     if not brain_mgz_path.is_file():
         brain_mgz_path = _generate_brain_mgz(
             subject_root=subject_root,
@@ -371,7 +433,7 @@ def run_ddsurfer_postprocess(
         "--inputs-dir",
         str(staging_inputs_root),
         "--outputs-dir",
-        str(output_root),
+        str(stage_outputs_root),
         "--nest-subject-outputs",
         "0",
         "--stage-mode",
@@ -414,8 +476,17 @@ def run_ddsurfer_postprocess(
     if return_code != 0:
         raise RuntimeError(f"DDSurfer postprocess failed with exit code {return_code}")
 
-    structural_root = anatomy_input_dir(output_root, "ddsurfer/postprocess")
-    stats_root = output_root / "05_statistics" / "ddsurfer" / "postprocess"
+    structural_root = anatomy_input_dir(stage_outputs_root, "ddsurfer/postprocess")
+    stats_root = stage_outputs_root / "05_statistics" / "ddsurfer" / "postprocess"
+    hemis = ("lh",) if config.mode == "left" else ("rh",) if config.mode == "right" else ("lh", "rh")
+    atlases = config.atlases or ("aparc", "aparc.a2009s")
+    publish_surface_morphometry_deliverables(
+        fs_subject=structural_root,
+        dest_dir=layout.surface_morphometry,
+        hemis=hemis,
+        atlases=atlases,
+        stats_dir=stats_root / "stats",
+    )
     return DDSurferPostprocessResult(
         manifest_path=structural_root / "manifest.json",
         qc_path=structural_root / "qc.json",
@@ -443,7 +514,8 @@ def _run_current_postprocess(config, subject_root, native_dir, log):
     cache_key = hashlib.sha256(json.dumps(signature, sort_keys=True).encode()).hexdigest()[:20]
     if config.force:
         cache_key += '-' + uuid4().hex[:12]
-    runtime = layout.anatomy / 'cache/ddsurfer_surface_only' / cache_key
+    stage_cache_root = layout.stage_cache("01_anatomical_priors/surface_morphometry")
+    runtime = stage_cache_root / 'ddsurfer_surface_only' / cache_key
     fs_subject = runtime / config.subject_id
     command = [BACKEND_ROOT / 'postprocessing/pipeline.py', '--subject', config.subject_id,
                '--output-root', runtime, '--hemi', 'both' if config.mode == 'whole' else config.mode,
@@ -461,8 +533,8 @@ def _run_current_postprocess(config, subject_root, native_dir, log):
         command += ['--sphere-seed', str(config.sphere_seed)]
     if brain is not None:
         command += ['--brain-source', brain]
-    structural = layout.ddsurfer_postprocess
-    stats = layout.ddsurfer_postprocess_stats
+    structural = stage_cache_root / "structural"
+    stats = stage_cache_root / "stats"
     structural.mkdir(parents=True, exist_ok=True)
     stats.mkdir(parents=True, exist_ok=True)
     manifest = dict(kind='ddsurfer_surface_only_postprocess', upstream_commit=upstream_record()['commit'],
@@ -511,6 +583,13 @@ def _run_current_postprocess(config, subject_root, native_dir, log):
             integrity = validate_postprocess_outputs(structural, hemis, signature['atlases'], stats_dir=stats / 'stats')
             if not integrity['automatic_qc_passed']:
                 raise ValueError('Published surface postprocess products failed integrity QC')
+        publish_surface_morphometry_deliverables(
+            fs_subject=fs_subject,
+            dest_dir=layout.surface_morphometry,
+            hemis=hemis,
+            atlases=signature['atlases'],
+            stats_dir=fs_subject / 'stats',
+        )
         manifest['status'] = 'completed'
         qc = dict(status='completed', upstream_commit=upstream_record()['commit'],
                   automatic_qc=checks, automatic_qc_passed=True, integrity=integrity, human_review='pending')

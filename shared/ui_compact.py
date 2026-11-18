@@ -996,7 +996,11 @@ def install_compact_layout(owner: Any) -> None:
     layout.removeWidget(ui.runCollapsibleButton)
     ui.targetsLayout.addWidget(ui.runCollapsibleButton)
     layout.removeWidget(ui.statusFrame)
+    if ui.runLayout.indexOf(ui.statusFrame) >= 0:
+        ui.runLayout.removeWidget(ui.statusFrame)
     ui.statusLayout.setContentsMargins(0, 0, 0, 0)
+    # Keep statusFrame below _runProgressRowWidget and _runStageLabel so live progress
+    # sits directly beneath Run SlicerDSpace.
     ui.runLayout.addWidget(ui.statusFrame)
     ui.runLayout.setContentsMargins(0, 0, 0, 0)
     ui.runLayout.setSpacing(4)

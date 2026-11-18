@@ -88,7 +88,7 @@ the current scene, grouped by subject, regional run and product. Repeated loads
 reuse existing result nodes. The main run's latest-result reference is retained.
 
 By default, new uniquely named output folders are created under
-`05_statistics/selected_regions/<parent-run>/<timestamp-id>/`:
+`02_microstructure/selected_regions/<parent-run>/<timestamp-id>/`:
 
 ```text
 request.json

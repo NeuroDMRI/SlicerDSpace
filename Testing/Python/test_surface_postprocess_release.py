@@ -228,20 +228,15 @@ printf '{"status":"completed"}' > "${structural_root}/qc.json"
                 )
             )
 
-            self.assertEqual(
-                result.structural_root,
-                output_root / "03_anatomy" / "ddsurfer" / "postprocess",
-            )
-            self.assertEqual(
-                result.stats_root,
-                output_root / "05_statistics" / "ddsurfer" / "postprocess",
-            )
+            stage_morph = root / "cache" / "stages" / "01_anatomical_priors" / "surface_morphometry"
+            self.assertEqual(result.structural_root, stage_morph / "legacy_outputs" / "01_anatomical_priors" / "ddsurfer" / "postprocess")
+            self.assertEqual(result.stats_root, stage_morph / "legacy_outputs" / "05_statistics" / "ddsurfer" / "postprocess")
             self.assertTrue(result.manifest_path.is_file())
             self.assertTrue(result.qc_path.is_file())
             self.assertTrue((result.staged_input_dir / "surf" / "877168_predicted_wm_lh_orig.stl").exists())
-            self.assertTrue((output_root / "03_anatomy").is_dir())
+            self.assertTrue((stage_morph).is_dir())
             self.assertFalse((output_root / "03_structural").exists())
-            self.assertTrue((output_root / "05_statistics").is_dir())
+            self.assertFalse((output_root / "05_statistics").exists())
             manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
             qc = json.loads(result.qc_path.read_text(encoding="utf-8"))
             self.assertEqual(manifest["kind"], "ddsurfer_postprocess")
@@ -315,7 +310,7 @@ printf '{"status":"completed"}' > "${structural_root}/qc.json"
                     )
                 )
 
-            generated = output_root / "03_anatomy" / "cache" / "ddsurfer_postprocess_runtime" / "generated_mri" / "100307" / "brain.mgz"
+            generated = subject_root / "cache" / "stages" / "01_anatomical_priors" / "surface_morphometry" / "runtime" / "generated_mri" / "100307" / "brain.mgz"
             staged = result.staged_input_dir / "mri" / "brain.mgz"
             self.assertTrue(generated.is_file())
             self.assertTrue(staged.exists())

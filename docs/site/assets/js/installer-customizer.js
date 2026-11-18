@@ -253,21 +253,21 @@
 
   var OS_DEFAULTS = {
     macos: {
-      label: 'macOS (Apple Silicon)',
+      label: 'macOS',
       slicerPlaceholder: '/Applications/Slicer.app',
       modelPlaceholder: '~/Library/Application Support/SlicerDSpace/model-assets',
       scriptName: 'Install-SlicerDSpace.command',
       coreEstimateBytes: 367848476
     },
     windows: {
-      label: 'Windows (x64)',
+      label: 'Windows',
       slicerPlaceholder: '%LOCALAPPDATA%\\slicer.org\\Slicer 5.10.0',
       modelPlaceholder: '%LOCALAPPDATA%\\SlicerDSpace\\model-assets',
       scriptName: 'Install-SlicerDSpace.bat',
       coreEstimateBytes: 4039964
     },
     linux: {
-      label: 'Linux (x64)',
+      label: 'Linux',
       slicerPlaceholder: '~/Slicer-5.10.0-linux-amd64',
       modelPlaceholder: '~/.local/share/SlicerDSpace/model-assets',
       scriptName: 'Install-SlicerDSpace.sh',
@@ -276,31 +276,11 @@
   };
 
   var PACK_META = [
-    {
-      id: 'brain_mask_pnl',
-      title: zh ? 'PNL CNN 自动脑掩膜' : 'PNL CNN Brain Mask',
-      desc: zh ? '原始 dMRI 自动去颅骨掩膜（不勾选时可直接使用已有掩膜运行）' : 'Automatic brain mask from raw dMRI (optional if you supply a mask)'
-    },
-    {
-      id: 'anatomy',
-      title: zh ? 'DDSeg 分割 + DDParcel 101 脑区分区' : 'DDSeg Segmentation + DDParcel 101-ROI Parcellation',
-      desc: zh ? '灰白质/脑脊液分割、101 脑区标签、ROI 定量及 WMQL 查询基础' : 'Tissue maps, 101 anatomical ROIs, regional stats, and WMQL prerequisites'
-    },
-    {
-      id: 'surface',
-      title: zh ? 'DDSurfer 皮层表面重建 + SAF 浅表纤维' : 'DDSurfer Cortical Surfaces + SAF Tracking',
-      desc: zh ? '双半球白质面/软脑膜面重建、FreeSurfer 图谱与皮层浅表纤维' : 'Hemispheric white/pial meshes, surface atlas, and short association fibers'
-    },
-    {
-      id: 'tractcloud',
-      title: zh ? 'TractCloud 深度学习白质束分割' : 'TractCloud Deep-Learning Bundle Parcellation',
-      desc: zh ? '基于 PointNet+DGCNN 快速标注 42 条常见解剖纤维束' : 'Fast automated labeling of 42 anatomical white-matter tracts'
-    },
-    {
-      id: 'wma_org',
-      title: zh ? 'WMA ORG 800 簇大型白质图谱（按需大包）' : 'WMA ORG 800-Cluster White-Matter Atlas (Large Pack)',
-      desc: zh ? '74 条全脑 ORG 精细白质束配准图谱；若日常无需此项可不勾选，日后 Slicer 内随时热补装' : '74-tract ORG atlas; skip now if unused and hot-install later inside Slicer anytime'
-    }
+    { id: 'brain_mask_pnl', title: zh ? 'PNL 自动脑掩膜' : 'PNL Brain Mask' },
+    { id: 'anatomy', title: zh ? 'DDSeg 分割 + DDParcel 分区' : 'DDSeg + DDParcel' },
+    { id: 'surface', title: zh ? 'DDSurfer 皮层表面 + SAF' : 'DDSurfer + SAF' },
+    { id: 'tractcloud', title: zh ? 'TractCloud 纤维束分割' : 'TractCloud Bundles' },
+    { id: 'wma_org', title: zh ? 'WMA ORG 白质图谱' : 'WMA ORG Atlas' }
   ];
 
   var PRESETS = {
@@ -656,6 +636,7 @@
       proxyUrl: '',
       offlineDir: '',
       checkScriptDir: true,
+      moreOpen: false,
       previewOpen: false
     };
 
@@ -681,81 +662,77 @@
       var def = OS_DEFAULTS[state.os];
       var coreBytes = (state.os === 'macos' ? (ARTIFACTS.bundles.macos_arm64_core.size_bytes || def.coreEstimateBytes) : (ARTIFACTS.bundles.core_scripted.size_bytes || def.coreEstimateBytes));
       var html = [];
-      html.push('<div class="ic-header">');
-      html.push('<h3 class="ic-heading">' + t('Custom One-Click Installer Generator (Recommended for Clinicians)', '自定义一键安装脚本生成器（面向临床用户）') + '</h3>');
-      html.push('<span class="ic-badge">' + t('Uses Slicer built-in Python · Auto-merges split packs · Mirror & offline ready', '调用 Slicer 内置 Python · 免手动合并分卷 · 支持镜像与离线导入') + '</span>');
+      html.push('<div class="ic-top">');
+      html.push('<div class="ic-top-copy">');
+      html.push('<h3 class="ic-heading">' + t('Custom Installer', '定制安装脚本') + '</h3>');
+      html.push('<p class="ic-sub">' + t('Pick your Slicer path and workflows; extra models can be added later inside Slicer.', '选好系统与常用模块即可下载脚本运行；未装功能日后可在 Slicer 内按需补齐。') + '</p>');
       html.push('</div>');
+      html.push('<div class="ic-seg" role="group" aria-label="' + t('Install mode', '安装模式') + '">');
+      html.push('<button type="button" class="ic-seg-btn" data-mode="modular" aria-pressed="' + (state.mode === 'modular' ? 'true' : 'false') + '">' + t('Modular', '按需精简') + '</button>');
+      html.push('<button type="button" class="ic-seg-btn" data-mode="all_in_one" aria-pressed="' + (state.mode === 'all_in_one' ? 'true' : 'false') + '">' + t('All-in-One', '全量一体') + '</button>');
+      html.push('</div></div>');
 
-      html.push('<div class="ic-grid">');
-      html.push('<div class="ic-field"><span class="ic-label">' + t('1. Operating System', '1. 操作系统') + '</span><div class="ic-pills">');
+      html.push('<div class="ic-row">');
+      html.push('<div class="ic-field"><span class="ic-k">' + t('System', '系统') + '</span><div class="ic-seg" role="group">');
       ['macos', 'windows', 'linux'].forEach(function (osKey) {
-        html.push('<button type="button" class="ic-pill" data-os="' + osKey + '" aria-pressed="' + (state.os === osKey ? 'true' : 'false') + '">' + OS_DEFAULTS[osKey].label + '</button>');
+        html.push('<button type="button" class="ic-seg-btn" data-os="' + osKey + '" aria-pressed="' + (state.os === osKey ? 'true' : 'false') + '">' + OS_DEFAULTS[osKey].label + '</button>');
       });
       html.push('</div></div>');
 
-      html.push('<div class="ic-field"><label for="ic-slicer-path">' + t('2. 3D Slicer 5.10.0 Path (leave blank for standard path)', '2. 本机 3D Slicer 5.10.0 路径（默认位置可留空自动查找）') + '</label>');
-      html.push('<input id="ic-slicer-path" class="ic-input" type="text" value="' + escapeAttr(state.slicerPath) + '" placeholder="' + escapeAttr(def.slicerPlaceholder) + '">');
-      html.push('<span class="ic-hint">' + t('Supports .app / install folder or Slicer executable path.', '支持填写安装目录或 Slicer 可执行文件路径。') + '</span></div>');
+      html.push('<div class="ic-field"><label class="ic-k" for="ic-slicer-path">' + t('3D Slicer 5.10.0 path (blank = auto)', 'Slicer 路径（默认位置可留空）') + '</label>');
+      html.push('<input id="ic-slicer-path" class="ic-input" type="text" value="' + escapeAttr(state.slicerPath) + '" placeholder="' + escapeAttr(def.slicerPlaceholder) + '"></div>');
       html.push('</div>');
 
-      html.push('<div class="ic-field" style="margin-bottom:14px;"><span class="ic-label">' + t('3. Installation Mode', '3. 安装模式') + '</span>');
-      html.push('<div class="ic-modes">');
-      html.push('<button type="button" class="ic-mode-btn" data-mode="modular" aria-pressed="' + (state.mode === 'modular' ? 'true' : 'false') + '"><span class="ic-mode-title">' + t('On-Demand Modular Install', '按需模块化安装（轻量快速）') + '</span><span class="ic-mode-desc">' + t('Installs core + only selected model/atlas packs. Extra packs can be hot-installed later inside Slicer.', '先装核心运行环境 + 勾选的模型/图谱；以后想用新功能直接在 Slicer 内一键补装。') + '</span></button>');
-      html.push('<button type="button" class="ic-mode-btn" data-mode="all_in_one" aria-pressed="' + (state.mode === 'all_in_one' ? 'true' : 'false') + '"><span class="ic-mode-title">' + t('Full All-in-One Auto-Merge (.001, .002, ...)', '全量一体包自动合并（免手工合并）') + '</span><span class="ic-mode-desc">' + t('Automatically downloads or reads local .001/.002/... split volumes, merges & verifies them, and installs everything offline.', '自动拉取或读取本地目录中的 .001/.002/... 全部分卷，后台流式合并校验并直接装入 Slicer。') + '</span></button>');
-      html.push('</div></div>');
-
       if (state.mode === 'modular') {
-        html.push('<div class="ic-presets"><span class="ic-label">' + t('4. Daily Workflows Needed:', '4. 勾选日常常用分析模块：') + '</span>');
-        html.push('<button type="button" class="ic-preset-btn" data-preset="minimal">' + t('Microstructure / CSD / UKF only', '仅预处理 + DTI/DKI/NODDI + 追踪') + '</button>');
-        html.push('<button type="button" class="ic-preset-btn" data-preset="clinical">' + t('Routine Clinical Research (without large ORG)', '常规临床科研（含分割/分区/皮层/TractCloud）') + '</button>');
-        html.push('<button type="button" class="ic-preset-btn" data-preset="full">' + t('Complete Suite (with WMA ORG)', '全功能（含 WMA ORG 大图谱）') + '</button></div>');
+        html.push('<div class="ic-mod-head"><span class="ic-k">' + t('Modules', '功能模块') + '</span>');
+        html.push('<div class="ic-presets">');
+        html.push('<button type="button" class="ic-link-btn" data-preset="minimal">' + t('Core only', '仅基础') + '</button>');
+        html.push('<button type="button" class="ic-link-btn" data-preset="clinical">' + t('Standard', '常规') + '</button>');
+        html.push('<button type="button" class="ic-link-btn" data-preset="full">' + t('All', '全选') + '</button></div></div>');
 
         html.push('<div class="ic-packs">');
-        html.push('<div class="ic-pack is-locked"><input type="checkbox" checked disabled><div class="ic-pack-body"><div class="ic-pack-top"><span class="ic-pack-title">' + t('Core Module + Preprocessing, DTI/DKI/NODDI, CSD/UKF & Connectome (Required)', '基础核心包：预处理 / DTI / FW / NODDI / DKI / CSD / UKF / Connectome（必选）') + '</span><span class="ic-pack-size">~' + formatBytes(coreBytes) + '</span></div><div class="ic-pack-desc">' + t('Always included; ready for diffusion fitting and tractography immediately.', '包含 MRtrix3、FSL 预处理及全部定量与连接组分析。') + '</div></div></div>');
+        html.push('<div class="ic-pack is-locked"><input type="checkbox" checked disabled><span class="ic-pack-title">' + t('Core · Preprocessing, DTI/DKI/NODDI, CSD/UKF, Connectome', '核心套件（预处理 / 微结构 / 追踪 / 连接组）') + '</span><span class="ic-pack-size">' + formatBytes(coreBytes) + '</span></div>');
 
         PACK_META.forEach(function (meta) {
           var pspec = ARTIFACTS.packs[meta.id] || {};
           var checked = state.packs.indexOf(meta.id) !== -1;
           var extraIit = meta.id === 'brain_mask_pnl' ? 7830929 : 0;
-          html.push('<label class="ic-pack ' + (checked ? 'is-selected' : '') + '"><input type="checkbox" data-pack="' + meta.id + '"' + (checked ? ' checked' : '') + '><div class="ic-pack-body"><div class="ic-pack-top"><span class="ic-pack-title">' + meta.title + '</span><span class="ic-pack-size">~' + formatBytes((pspec.size_bytes || 0) + extraIit) + '</span></div><div class="ic-pack-desc">' + meta.desc + '</div></div></label>');
+          html.push('<label class="ic-pack ' + (checked ? 'is-selected' : '') + '"><input type="checkbox" data-pack="' + meta.id + '"' + (checked ? ' checked' : '') + '><span class="ic-pack-title">' + meta.title + '</span><span class="ic-pack-size">' + formatBytes((pspec.size_bytes || 0) + extraIit) + '</span></label>');
         });
         html.push('</div>');
+      } else {
+        html.push('<p class="ic-allinone-note">' + t('Automatically fetches and merges split archives (.001, .002, ...), verifies SHA-256, and installs the full offline extension into Slicer.', '自动拉取或合并全部分卷（.001, .002, ...），校验完整性后直接装入 3D Slicer。') + '</p>');
       }
 
-      html.push('<div class="ic-network"><p class="ic-network-title">' + t('5. Download Mirror, Proxy & Local Offline Folder (Optional)', '5. 网络加速镜像、代理与本地离线包目录（医院网络可按需选填）') + '</p>');
+      html.push('<details id="ic-more" class="ic-more"' + (state.moreOpen ? ' open' : '') + '>');
+      html.push('<summary class="ic-more-summary">' + t('Mirror, proxy & offline pack options', '镜像源 / 代理 / 本地离线目录') + '</summary>');
+      html.push('<div class="ic-more-body">');
       html.push('<div class="ic-net-grid">');
-      html.push('<div class="ic-field"><label for="ic-mirror">' + t('GitHub Download Mirror', '下载镜像源') + '</label><select id="ic-mirror" class="ic-select">');
-      html.push('<option value="direct"' + (state.mirrorPreset === 'direct' ? ' selected' : '') + '>' + t('GitHub Official (Direct)', 'GitHub 官方直连') + '</option>');
-      html.push('<option value="https://ghfast.top/"' + (state.mirrorPreset === 'https://ghfast.top/' ? ' selected' : '') + '>' + t('China Mirror 1 (ghfast.top)', '国内加速镜像 1 (ghfast.top)') + '</option>');
-      html.push('<option value="https://gh-proxy.com/"' + (state.mirrorPreset === 'https://gh-proxy.com/' ? ' selected' : '') + '>' + t('China Mirror 2 (gh-proxy.com)', '国内加速镜像 2 (gh-proxy.com)') + '</option>');
-      html.push('<option value="custom"' + (state.mirrorPreset === 'custom' ? ' selected' : '') + '>' + t('Custom mirror prefix...', '自定义镜像前缀...') + '</option>');
+      html.push('<div class="ic-field"><label class="ic-k" for="ic-mirror">' + t('Mirror', '镜像源') + '</label><select id="ic-mirror" class="ic-select">');
+      html.push('<option value="direct"' + (state.mirrorPreset === 'direct' ? ' selected' : '') + '>' + t('GitHub Direct', 'GitHub 直连') + '</option>');
+      html.push('<option value="https://ghfast.top/"' + (state.mirrorPreset === 'https://ghfast.top/' ? ' selected' : '') + '>ghfast.top</option>');
+      html.push('<option value="https://gh-proxy.com/"' + (state.mirrorPreset === 'https://gh-proxy.com/' ? ' selected' : '') + '>gh-proxy.com</option>');
+      html.push('<option value="custom"' + (state.mirrorPreset === 'custom' ? ' selected' : '') + '>' + t('Custom...', '自定义...') + '</option>');
       html.push('</select>');
       if (state.mirrorPreset === 'custom') {
-        html.push('<input id="ic-custom-mirror" class="ic-input" type="text" value="' + escapeAttr(state.mirrorPrefix) + '" placeholder="https://your-mirror.example/">');
+        html.push('<input id="ic-custom-mirror" class="ic-input" style="margin-top:6px;" type="text" value="' + escapeAttr(state.mirrorPrefix) + '" placeholder="https://your-mirror.example/">');
       }
       html.push('</div>');
-
-      html.push('<div class="ic-field"><label for="ic-proxy">' + t('HTTP/HTTPS Proxy', 'HTTP/HTTPS 代理') + '</label><input id="ic-proxy" class="ic-input" type="text" value="' + escapeAttr(state.proxyUrl) + '" placeholder="http://127.0.0.1:7890"></div>');
-      html.push('<div class="ic-field"><label for="ic-offline-dir">' + t('Offline Pack / Split Folder', '本地离线包/分卷目录') + '</label><input id="ic-offline-dir" class="ic-input" type="text" value="' + escapeAttr(state.offlineDir) + '" placeholder="' + t('Optional folder path', '可选：存放 Pack-*.zip 或 .001/.002/... 分卷的目录') + '"></div>');
+      html.push('<div class="ic-field"><label class="ic-k" for="ic-proxy">' + t('Proxy', 'HTTP/HTTPS 代理') + '</label><input id="ic-proxy" class="ic-input" type="text" value="' + escapeAttr(state.proxyUrl) + '" placeholder="http://127.0.0.1:7890"></div>');
+      html.push('<div class="ic-field"><label class="ic-k" for="ic-offline-dir">' + t('Offline folder', '本地离线包目录') + '</label><input id="ic-offline-dir" class="ic-input" type="text" value="' + escapeAttr(state.offlineDir) + '" placeholder="' + t('Optional folder', '可选目录路径') + '"></div>');
       html.push('</div>');
+      html.push('<div class="ic-more-sub">');
+      html.push('<div class="ic-field"><label class="ic-k" for="ic-model-dir">' + t('Model directory (optional)', '模型存放目录（可选）') + '</label><input id="ic-model-dir" class="ic-input" type="text" value="' + escapeAttr(state.modelAssetsDir) + '" placeholder="' + escapeAttr(def.modelPlaceholder) + '"></div>');
+      html.push('<label class="ic-check-inline"><input id="ic-check-script-dir" type="checkbox"' + (state.checkScriptDir ? ' checked' : '') + '><span>' + t('Check script folder for offline packs', '优先读取脚本同目录离线包') + '</span></label>');
+      html.push('</div></div></details>');
 
-      html.push('<div class="ic-grid" style="margin-top:10px;margin-bottom:0;">');
-      html.push('<label class="ic-check-inline"><input id="ic-check-script-dir" type="checkbox"' + (state.checkScriptDir ? ' checked' : '') + '><span>' + t('Auto-detect downloaded Pack-*.zip or .001/.002/... volumes in the same folder as this installer script', '自动识别安装脚本同目录下的离线 Pack-*.zip 或 .001/.002/... 分卷') + '</span></label>');
-      html.push('<div class="ic-field"><label for="ic-model-dir">' + t('Custom Model Storage Directory (Optional)', '自定义模型保存目录（可选，留空用系统默认目录）') + '</label><input id="ic-model-dir" class="ic-input" type="text" value="' + escapeAttr(state.modelAssetsDir) + '" placeholder="' + escapeAttr(def.modelPlaceholder) + '"></div>');
-      html.push('</div></div>');
-
-      html.push('<div class="ic-summary">');
-      html.push('<div class="ic-total">' + t('Estimated transfer:', '预计下载总体积：') + ' <strong>~' + formatBytes(totalBytes()) + '</strong></div>');
+      html.push('<div class="ic-bar">');
+      html.push('<div class="ic-total">' + t('Download', '预计下载') + ' <strong>~' + formatBytes(totalBytes()) + '</strong></div>');
       html.push('<div class="ic-actions">');
-      html.push('<button type="button" class="ic-btn-primary" id="ic-download-btn">' + t('Download ', '下载安装脚本 ') + def.scriptName + '</button>');
-      html.push('<button type="button" class="ic-btn-secondary" id="ic-copy-cmd-btn">' + t('Copy Run Command', '复制终端运行命令') + '</button>');
-      html.push('<button type="button" class="ic-btn-secondary" id="ic-toggle-preview">' + (state.previewOpen ? t('Hide Script', '收起脚本内容') : t('Inspect Script', '查看脚本内容')) + '</button>');
+      html.push('<button type="button" class="ic-btn-ghost" id="ic-toggle-preview">' + (state.previewOpen ? t('Hide code', '收起脚本') : t('Preview', '预览')) + '</button>');
+      html.push('<button type="button" class="ic-btn-secondary" id="ic-copy-cmd-btn">' + t('Copy command', '复制命令') + '</button>');
+      html.push('<button type="button" class="ic-btn-primary" id="ic-download-btn">' + t('Download ', '下载 ') + def.scriptName + '</button>');
       html.push('</div></div>');
-
-      var runTip = state.os === 'windows'
-        ? t('After downloading <code>Install-SlicerDSpace.bat</code>, double-click it to install automatically.', '下载后直接双击 <code>Install-SlicerDSpace.bat</code> 即可全自动完成拉取、合并与 Slicer 安装。')
-        : t('Run in Terminal after downloading (or click "Copy Run Command"): <code>chmod +x ~/Downloads/' + def.scriptName + ' && ~/Downloads/' + def.scriptName + '</code>', '下载后可直接点击“复制终端运行命令”粘贴到终端运行（Mac 也支持加执行权限后双击）：<code>chmod +x ~/Downloads/' + def.scriptName + ' && ~/Downloads/' + def.scriptName + '</code>');
-      html.push('<p class="ic-run-tip">' + runTip + '</p>');
 
       html.push('<div class="ic-preview code"' + (state.previewOpen ? '' : ' hidden') + '><div class="code-head"><span>' + escapeAttr(def.scriptName) + '</span><button type="button" class="ic-btn-secondary" id="ic-copy-script-btn">' + t('Copy', '复制') + '</button></div><pre><code id="ic-script-code"></code></pre></div>');
 
@@ -811,6 +788,8 @@
       if (offlineEl) { offlineEl.addEventListener('input', function () { state.offlineDir = offlineEl.value; }); }
       var checkHere = document.getElementById('ic-check-script-dir');
       if (checkHere) { checkHere.addEventListener('change', function () { state.checkScriptDir = checkHere.checked; }); }
+      var moreEl = document.getElementById('ic-more');
+      if (moreEl) { moreEl.addEventListener('toggle', function () { state.moreOpen = moreEl.open; }); }
 
       var dlBtn = document.getElementById('ic-download-btn');
       if (dlBtn) {
@@ -836,8 +815,8 @@
           if (navigator.clipboard && navigator.clipboard.writeText) {
             navigator.clipboard.writeText(cmd);
           }
-          copyCmdBtn.textContent = zh ? '已复制命令' : 'Command Copied';
-          setTimeout(function () { copyCmdBtn.textContent = zh ? '复制终端运行命令' : 'Copy Run Command'; }, 1800);
+          copyCmdBtn.textContent = zh ? '已复制' : 'Copied';
+          setTimeout(function () { copyCmdBtn.textContent = zh ? '复制命令' : 'Copy command'; }, 1800);
         });
       }
       var prevBtn = document.getElementById('ic-toggle-preview');

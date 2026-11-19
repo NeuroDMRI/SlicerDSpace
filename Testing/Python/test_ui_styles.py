@@ -27,6 +27,7 @@ from shared.ui_styles import (
     input_format_popover_style,
     run_status_table_style,
     run_summary_label_style,
+    style_combobox_popup,
     ui_stylesheet,
 )
 
@@ -156,6 +157,68 @@ class UIStylesTest(unittest.TestCase):
         fake_qt_dark = SimpleNamespace(QPalette=qpal, QApplication=SimpleNamespace(instance=lambda: dark_app))
         with mock.patch.dict(sys.modules, {"qt": fake_qt_dark}):
             self.assertEqual(detect_appearance_mode(light_widget), "dark")
+
+    def test_combobox_popup_styles_and_delegate_enforce_opaque_contrast(self) -> None:
+        self.assertIn("QComboBox QAbstractItemView::item {", SLICERDSPACE_UI_STYLE)
+        self.assertIn("QComboBox QAbstractItemView::item {", SLICERDSPACE_DARK_UI_STYLE)
+        self.assertIn("background-color: #FFFFFF;", SLICERDSPACE_UI_STYLE)
+        self.assertIn("background-color: #22272E;", SLICERDSPACE_DARK_UI_STYLE)
+        self.assertIn("color: #F0F6FC;", SLICERDSPACE_DARK_UI_STYLE)
+        self.assertIn("background-color: #335B70;", SLICERDSPACE_DARK_UI_STYLE)
+
+        class _FakePalette:
+            Window, Base, AlternateBase, Button = 0, 1, 2, 3
+            Text, WindowText, ButtonText, Highlight, HighlightedText = 4, 5, 6, 7, 8
+
+            def __init__(self) -> None:
+                self.colors: dict[int, str] = {}
+
+            def setColor(self, role: int, color: str) -> None:
+                self.colors[role] = color
+
+        class _FakeTarget:
+            def __init__(self) -> None:
+                self.auto_fill = False
+                self.palette_obj = None
+                self.stylesheet = ""
+
+            def setAutoFillBackground(self, flag: bool) -> None:
+                self.auto_fill = flag
+
+            def setPalette(self, pal: _FakePalette) -> None:
+                self.palette_obj = pal
+
+            def setStyleSheet(self, css: str) -> None:
+                self.stylesheet = css
+
+        viewport = _FakeTarget()
+        popup_container = _FakeTarget()
+        view = _FakeTarget()
+        view.viewport = lambda: viewport
+        view.parentWidget = lambda: popup_container
+        combo = SimpleNamespace(
+            delegate=None,
+            setItemDelegate=lambda d: setattr(combo, "delegate", d),
+            view=lambda: view,
+        )
+        fake_qt = SimpleNamespace(
+            QStyledItemDelegate=lambda parent: ("delegate", parent),
+            QPalette=_FakePalette,
+            QColor=lambda hex_str: hex_str,
+        )
+        with mock.patch.dict(sys.modules, {"qt": fake_qt}):
+            style_combobox_popup(combo, dark=True)
+
+        self.assertEqual(combo.delegate, ("delegate", combo))
+        for target in (view, viewport, popup_container):
+            self.assertTrue(target.auto_fill)
+            self.assertIsNotNone(target.palette_obj)
+            self.assertEqual(target.palette_obj.colors[_FakePalette.Base], "#22272E")
+            self.assertEqual(target.palette_obj.colors[_FakePalette.Text], "#F0F6FC")
+            self.assertEqual(target.palette_obj.colors[_FakePalette.Highlight], "#335B70")
+        self.assertIn("background-color: #22272E;", view.stylesheet)
+        self.assertIn("color: #F0F6FC;", view.stylesheet)
+        self.assertIn("QAbstractItemView::item:selected", view.stylesheet)
 
 
 if __name__ == "__main__":

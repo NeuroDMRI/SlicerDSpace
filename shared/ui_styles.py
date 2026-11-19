@@ -322,11 +322,24 @@ QLineEdit:read-only {
   color: #52616D;
 }
 QComboBox QAbstractItemView {
-  background: #FFFFFF;
+  background-color: #FFFFFF;
+  alternate-background-color: #F6F8FA;
   color: #1E293B;
   border: 1px solid #CCD5DC;
   selection-background-color: #D4E2EA;
   selection-color: #1E293B;
+  outline: 0;
+}
+QComboBox QAbstractItemView::item {
+  background-color: #FFFFFF;
+  color: #1E293B;
+  padding: 4px 8px;
+  min-height: 22px;
+}
+QComboBox QAbstractItemView::item:hover,
+QComboBox QAbstractItemView::item:selected {
+  background-color: #D4E2EA;
+  color: #1E293B;
 }
 QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus {
   border: 1px solid #476E83;
@@ -708,11 +721,24 @@ QLineEdit:read-only {
   color: #B8C5D0;
 }
 QComboBox QAbstractItemView {
-  background: #22272E;
+  background-color: #22272E;
+  alternate-background-color: #262C34;
   color: #F0F6FC;
   border: 1px solid #525C68;
   selection-background-color: #335B70;
   selection-color: #FFFFFF;
+  outline: 0;
+}
+QComboBox QAbstractItemView::item {
+  background-color: #22272E;
+  color: #F0F6FC;
+  padding: 4px 8px;
+  min-height: 22px;
+}
+QComboBox QAbstractItemView::item:hover,
+QComboBox QAbstractItemView::item:selected {
+  background-color: #335B70;
+  color: #FFFFFF;
 }
 QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus {
   border: 1px solid #6CB6FF;
@@ -1245,6 +1271,110 @@ def ui_stylesheet(*, dark: bool | None = None, widget: Any = None) -> str:
     use_dark = is_dark_mode(widget) if dark is None else bool(dark)
     theme = SLICERDSPACE_DARK_UI_STYLE if use_dark else SLICERDSPACE_UI_STYLE
     return theme + MODULE_STRUCTURE_STYLE.replace("__SECTION_LINE__", "#444547" if use_dark else "#dedfdf")
+
+
+def style_combobox_popup(combo: Any, *, dark: bool | None = None) -> None:
+    """Ensure ``QComboBox`` dropdown popups keep an opaque high-contrast palette in dark and light modes."""
+
+    if combo is None:
+        return
+    use_dark = is_dark_mode(combo) if dark is None else bool(dark)
+    bg = "#22272E" if use_dark else "#FFFFFF"
+    alt_bg = "#262C34" if use_dark else "#F6F8FA"
+    fg = "#F0F6FC" if use_dark else "#1E293B"
+    border = "#525C68" if use_dark else "#CCD5DC"
+    sel_bg = "#335B70" if use_dark else "#D4E2EA"
+    sel_fg = "#FFFFFF" if use_dark else "#1E293B"
+
+    try:
+        import qt
+    except Exception:
+        qt = None
+
+    if qt is not None:
+        delegate_cls = getattr(qt, "QStyledItemDelegate", None)
+        set_delegate = getattr(combo, "setItemDelegate", None)
+        if delegate_cls is not None and callable(set_delegate):
+            try:
+                set_delegate(delegate_cls(combo))
+            except Exception:
+                pass
+
+    view_attr = getattr(combo, "view", None)
+    try:
+        view = view_attr() if callable(view_attr) else view_attr
+    except Exception:
+        view = None
+    if view is None:
+        return
+
+    popup_style = (
+        "QAbstractItemView { "
+        f"background-color: {bg}; alternate-background-color: {alt_bg}; color: {fg}; "
+        f"border: 1px solid {border}; selection-background-color: {sel_bg}; "
+        f"selection-color: {sel_fg}; outline: 0; "
+        "} "
+        "QAbstractItemView::item { "
+        f"background-color: {bg}; color: {fg}; padding: 4px 8px; min-height: 22px; "
+        "} "
+        "QAbstractItemView::item:hover, QAbstractItemView::item:selected { "
+        f"background-color: {sel_bg}; color: {sel_fg}; "
+        "}"
+    )
+
+    targets = [view]
+    for sub_name in ("viewport", "parentWidget"):
+        sub_attr = getattr(view, sub_name, None)
+        try:
+            sub = sub_attr() if callable(sub_attr) else sub_attr
+        except Exception:
+            sub = None
+        if sub is not None and sub not in targets:
+            targets.append(sub)
+
+    palette_obj = None
+    if qt is not None:
+        qpalette_cls = getattr(qt, "QPalette", None)
+        qcolor_cls = getattr(qt, "QColor", None)
+        if qpalette_cls is not None and qcolor_cls is not None:
+            try:
+                palette_obj = qpalette_cls()
+                bg_color = qcolor_cls(bg)
+                alt_color = qcolor_cls(alt_bg)
+                fg_color = qcolor_cls(fg)
+                sel_bg_color = qcolor_cls(sel_bg)
+                sel_fg_color = qcolor_cls(sel_fg)
+                for role_name, color_val in (
+                    ("Window", bg_color),
+                    ("Base", bg_color),
+                    ("AlternateBase", alt_color),
+                    ("Button", bg_color),
+                    ("Text", fg_color),
+                    ("WindowText", fg_color),
+                    ("ButtonText", fg_color),
+                    ("Highlight", sel_bg_color),
+                    ("HighlightedText", sel_fg_color),
+                ):
+                    role = getattr(qpalette_cls, role_name, None)
+                    if role is not None:
+                        palette_obj.setColor(role, color_val)
+            except Exception:
+                palette_obj = None
+
+    for target in targets:
+        set_auto_fill = getattr(target, "setAutoFillBackground", None)
+        if callable(set_auto_fill):
+            try:
+                set_auto_fill(True)
+            except Exception:
+                pass
+        if palette_obj is not None and callable(getattr(target, "setPalette", None)):
+            try:
+                target.setPalette(palette_obj)
+            except Exception:
+                pass
+
+    set_stylesheet_if_changed(view, popup_style)
 
 
 def run_status_table_style(*, dark: bool | None = None, widget: Any = None) -> str:

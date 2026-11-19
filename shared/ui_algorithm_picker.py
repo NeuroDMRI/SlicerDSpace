@@ -134,7 +134,7 @@ ALGORITHM_SETTINGS = {
 }
 
 
-def _add_algorithm_row(qt, owner, layout, box, family, algorithm, staged, zh, resize_popup):
+def _add_algorithm_row(qt, owner, layout, box, family, algorithm, staged, zh, resize_popup, dark=None):
     specs = ALGORITHM_SETTINGS.get((family, algorithm), ())
     ui_root = getattr(owner, "ui", None)
     fields = [(attribute, getattr(ui_root, control, None), getattr(ui_root, label, None))
@@ -152,9 +152,10 @@ def _add_algorithm_row(qt, owner, layout, box, family, algorithm, staged, zh, re
     caption = "设置" if zh else "Settings"
     button.setAccessibleName(caption)
     button.setToolTip(caption)
-    from shared.ui_styles import is_dark_mode
+    from shared.ui_styles import is_dark_mode, style_combobox_popup
 
-    ink = "#E6EDF3" if is_dark_mode(getattr(owner, "_uiWidget", None)) else "#334155"
+    use_dark = is_dark_mode(getattr(owner, "_uiWidget", None)) if dark is None else bool(dark)
+    ink = "#E6EDF3" if use_dark else "#334155"
     artwork = (
         '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20">'
         f'<g fill="none" stroke="{ink}" stroke-width="1.7" stroke-linejoin="round">'
@@ -180,6 +181,7 @@ def _add_algorithm_row(qt, owner, layout, box, family, algorithm, staged, zh, re
             for index in range(original.count):
                 editor.addItem(original.itemText(index), original.itemData(index))
             editor.setCurrentIndex(original.currentIndex)
+            style_combobox_popup(editor, dark=use_dark)
             def choice(editor=editor):
                 value = editor.itemData(editor.currentIndex)
                 return str(editor.currentText if value is None else value)
@@ -197,6 +199,14 @@ def _add_algorithm_row(qt, owner, layout, box, family, algorithm, staged, zh, re
             editor.filters = original.filters
             editor.nameFilters = original.nameFilters
             editor.setCurrentPath(original.currentPath)
+            path_combo = getattr(editor, "comboBox", None)
+            if callable(path_combo):
+                try:
+                    path_combo = path_combo()
+                except Exception:
+                    path_combo = None
+            if path_combo is not None:
+                style_combobox_popup(path_combo, dark=use_dark)
             staged[attribute] = lambda editor=editor: str(editor.currentPath)
         else:
             editor = qt.QLineEdit()
@@ -251,7 +261,7 @@ def choose_algorithms(owner, family):
         dark = is_dark_mode(getattr(owner, "_uiWidget", None))
         dialog.setStyleSheet(ui_stylesheet(dark=dark, widget=dialog))
     except Exception:
-        pass
+        dark = None
 
     layout = qt.QVBoxLayout(dialog)
     if hasattr(layout, "setContentsMargins"):
@@ -293,16 +303,26 @@ def choose_algorithms(owner, family):
     scroll.setFrameShape(qt.QFrame.NoFrame)
     scroll.setWidgetResizable(True)
     scroll.setHorizontalScrollBarPolicy(qt.Qt.ScrollBarAlwaysOff)
+    viewport = scroll.viewport()
+    if viewport is not None and hasattr(viewport, "setObjectName"):
+        viewport.setObjectName("algorithmPickerViewport")
     body = qt.QWidget()
+    if hasattr(body, "setObjectName"):
+        body.setObjectName("algorithmPickerBody")
     body_layout = qt.QVBoxLayout(body)
     body_layout.setContentsMargins(0, 0, 4, 0)
     body_layout.setSpacing(6)
     scroll.setWidget(body)
     # QScrollArea uses QPalette.Base for its viewport, unlike the popup.
-    # Let the popup paint the background behind all of the choices.
-    for surface in (scroll, scroll.viewport(), body):
-        surface.setAutoFillBackground(False)
-        surface.setStyleSheet("background: transparent;")
+    # Use ID-scoped selectors so background transparency never cascades to QComboBox popups.
+    for surface, selector in (
+        (scroll, "QScrollArea#algorithmPickerScrollArea"),
+        (viewport, "QWidget#algorithmPickerViewport"),
+        (body, "QWidget#algorithmPickerBody"),
+    ):
+        if surface is not None:
+            surface.setAutoFillBackground(False)
+            surface.setStyleSheet(f"{selector} {{ background: transparent; }}")
     layout.addWidget(scroll)
 
     from shared.ui_compact import _position_input_help_card, _qt_int, _qt_val
@@ -337,7 +357,7 @@ def choose_algorithms(owner, family):
         if pointing_cursor is not None and hasattr(box, "setCursor"):
             box.setCursor(pointing_cursor)
         boxes[value] = box
-        _add_algorithm_row(qt, owner, body_layout, box, family, value, staged, zh, resize_popup)
+        _add_algorithm_row(qt, owner, body_layout, box, family, value, staged, zh, resize_popup, dark=dark)
 
     note = qt.QLabel("")
     if hasattr(note, "setObjectName"):

@@ -370,6 +370,75 @@ class AlgorithmDialogTest(unittest.TestCase):
                 )
                 self.assertTrue(any(call[0] == "addStretch" for call in btn_row.method_calls))
 
+    def test_picker_uses_scoped_scroll_transparency_and_styles_gear_comboboxes(self) -> None:
+        source = (Path(__file__).resolve().parents[2] / "shared" / "ui_algorithm_picker.py").read_text(encoding="utf-8")
+        self.assertNotIn('setStyleSheet("background: transparent;")', source)
+        self.assertIn("QScrollArea#algorithmPickerScrollArea", source)
+        self.assertIn("QWidget#algorithmPickerViewport", source)
+        self.assertIn("QWidget#algorithmPickerBody", source)
+
+        qt = fake_qt()
+        slicer = mock.MagicMock(name="slicer")
+        combo_factory = qt.QComboBox.side_effect
+        spin_factory = qt.QDoubleSpinBox.side_effect
+
+        class _FakeCombo:
+            def __new__(cls, *args, **kwargs):
+                return combo_factory(*args, **kwargs)
+
+        class _FakeSpin:
+            def __new__(cls, *args, **kwargs):
+                return spin_factory(*args, **kwargs)
+
+        qt.QComboBox = _FakeCombo
+        qt.QDoubleSpinBox = _FakeSpin
+        orig_combo = object.__new__(_FakeCombo)
+        orig_combo.count = 2
+        orig_combo.itemText = lambda idx: ("From sidecar (input/dwi.json)", "AP (anterior -> posterior)")[idx]
+        orig_combo.itemData = lambda idx: ("auto", "AP")[idx]
+        orig_combo.currentIndex = 0
+        orig_combo.toolTip = "PE direction"
+        orig_spin = object.__new__(_FakeSpin)
+        orig_spin.minimum, orig_spin.maximum, orig_spin.decimals, orig_spin.singleStep, orig_spin.value = 0.0, 1.0, 4, 0.005, 0.05
+        orig_spin.toolTip = "Readout time"
+        orig_path = SimpleNamespace(currentPath="", filters=0, nameFilters=["*"], toolTip="Reverse PE")
+        ui_ns = SimpleNamespace(
+            preprocessingPhaseEncodingDirectionComboBox=orig_combo,
+            preprocessingPhaseEncodingDirectionLabel=SimpleNamespace(text="Phase-encoding direction"),
+            preprocessingReadoutTimeSpinBox=orig_spin,
+            preprocessingReadoutTimeLabel=SimpleNamespace(text="Total readout time (s)"),
+            preprocessingReversePhaseB0Path=orig_path,
+            preprocessingReversePhaseB0Label=SimpleNamespace(text="Reverse-PE b=0 image"),
+        )
+        owner = SimpleNamespace(
+            ui=ui_ns,
+            _uiWidget=None,
+            _pipelineActive=False,
+            _selectedSetupActive=False,
+            _onboardingLanguage="en",
+            _parameterNode=SimpleNamespace(
+                preprocessingPhaseEncodingDirection="auto",
+                preprocessingReadoutTime=0.05,
+                preprocessingReversePhaseB0="",
+            ),
+        )
+        with (
+            mock.patch.dict(sys.modules, {"qt": qt, "slicer": slicer, "ctk": mock.MagicMock()}),
+            mock.patch("shared.ui_styles.style_combobox_popup") as style_popup_mock,
+            mock.patch("shared.ui_styles.is_dark_mode", return_value=True),
+        ):
+            ui_algorithm_picker.choose_algorithms(owner, "preprocessing")
+
+        style_popup_mock.assert_called()
+        combo_editors = [w for w in qt.created if getattr(w, "kind", None) == "QComboBox"]
+        self.assertEqual(len(combo_editors), 1)
+        self.assertIn(mock.call(combo_editors[0], dark=True), style_popup_mock.call_args_list)
+        scroll = by_name(qt, "algorithmPickerScrollArea")
+        self.assertTrue(any(
+            call[0] == "setStyleSheet" and call[1] == ("QScrollArea#algorithmPickerScrollArea { background: transparent; }",)
+            for call in scroll.method_calls
+        ))
+
 
 class AlgorithmRowTest(unittest.TestCase):
     def test_summary_text_aligns_with_a_plain_checkbox_and_rows_are_vertically_centred(self) -> None:

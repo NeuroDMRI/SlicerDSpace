@@ -123,7 +123,10 @@ class PreparedBackendDiscoveryTest(unittest.TestCase):
         self.assertEqual(len(run.call_args_list), 3)
         for call in run.call_args_list[:2]:
             self.assertEqual(call.kwargs["env"]["PYTHONPATH"], source_path + os.pathsep + "retained")
-        self.assertEqual(run.call_args.kwargs["env"]["PYTHONPATH"], source_path)
+        self.assertEqual(
+            run.call_args.kwargs["env"]["PYTHONPATH"],
+            source_path + os.pathsep + Path(tractcloud.__file__).resolve().parents[1].as_posix(),
+        )
         manifest = json.loads(result.manifest_path.read_text())
         self.assertEqual(manifest["tractcloud_root"], prepared.as_posix())
 
@@ -143,11 +146,27 @@ class PreparedBackendDiscoveryTest(unittest.TestCase):
                 mock.patch("tractography.wmql.subprocess.run", return_value=subprocess.CompletedProcess([], 0)) as run:
             result = wmql.run_wmql_bundle_segmentation(self.wmql_config(execute=True))
         self.assertEqual(result.backend_status["root"], prepared.as_posix())
-        self.assertEqual(run.call_args.args[0][1], (prepared / "scripts/cli_tract_querier.py").as_posix())
-        self.assertEqual(run.call_args.kwargs["env"]["PYTHONPATH"], prepared.as_posix() + os.pathsep + "retained")
+        self.assertEqual(run.call_args.args[0][1], Path(wmql.__file__).resolve().with_name("wmql_accel.py").as_posix())
+        self.assertEqual(
+            run.call_args.kwargs["env"]["PYTHONPATH"],
+            os.pathsep.join([
+                prepared.as_posix(),
+                Path(wmql.__file__).resolve().parents[1].as_posix(),
+                "retained",
+            ]),
+        )
         manifest = json.loads(result.manifest_path.read_text())
         self.assertIn((prepared / "tract_querier/data/prepared.qry").as_posix(), manifest["query_dependencies"])
         self.assertTrue((Path(manifest["staged_query"]).parent / "prepared.qry").is_file())
+        self.available.assert_called_once_with("wmql")
+
+        self.available.reset_mock()
+        with mock.patch.dict(os.environ, {"SLICERDSPACE_DISABLE_WMQL_ACCEL": "1"}), \
+                mock.patch("tractography.wmql.python_tool_environment", return_value={"PYTHONPATH": "retained"}), \
+                mock.patch("tractography.wmql.subprocess.run", return_value=subprocess.CompletedProcess([], 0)) as direct_run:
+            direct_result = wmql.run_wmql_bundle_segmentation(self.wmql_config(execute=True))
+        self.assertEqual(direct_result.backend_status["root"], prepared.as_posix())
+        self.assertEqual(direct_run.call_args.args[0][1], (prepared / "scripts/cli_tract_querier.py").as_posix())
         self.available.assert_called_once_with("wmql")
 
     def test_wmql_cached_root_supports_windows_query_staging(self):

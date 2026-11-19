@@ -157,8 +157,8 @@ class BrainMaskGuiConfigTest(unittest.TestCase):
         for name in ("configurationCollapsibleButton", "targetsCollapsibleButton"):
             self.assertIsNone(root.find(f".//widget[@name='{name}']//widget[@name='brainMaskBackendComboBox']"))
         layout = (ROOT / "shared/ui_compact.py").read_text(encoding="utf-8")
-        self.assertIn('"parametersCollapsibleButton", "resultsCollapsibleButton"', layout)
-        self.assertIn('layout.insertWidget(layout.indexOf(advanced) + 1, environment)', layout)
+        self.assertIn('for name in ("parametersCollapsibleButton",):', layout)
+        self.assertIn("ui.environmentCollapsibleButton.hide()", layout)
         self.assertIn('"parametersCollapsibleButton": "compact_parameters"', layout)
 
     def test_user_config_roundtrip_preserves_each_backend_and_external_paths(self):
@@ -336,7 +336,8 @@ class BrainMaskGuiConfigTest(unittest.TestCase):
                                    connectomeBackend="python", ddsegDevice="cpu", device="cpu")
             owner = SimpleNamespace(_parameterNode=node, _selected_environment_targets=lambda: ("microstructure",),
                                     _tractography_backend_text=lambda: "dti_det", _microstructure_stage_flags=lambda: (False, False),
-                                    _closure_tractography_backend_text=lambda: "dti_det")
+                                    _closure_tractography_backend_text=lambda: "dti_det",
+                                    _effective_output_root_text=lambda text="": text)
             paths = {key: root / key for key in PNL_MODES}
             owner._microstructure_dki_enabled = lambda: False
             kwargs = doctor_kwargs(owner, external_paths=paths)
@@ -381,7 +382,8 @@ class BrainMaskGuiConfigTest(unittest.TestCase):
                 connectomeBackend="python", ddsegDevice="auto", device="auto")
             owner = SimpleNamespace(_parameterNode=node, _selected_environment_targets=lambda: ("microstructure",),
                 _tractography_backend_text=lambda: "dti_det", _microstructure_stage_flags=lambda: (False, False),
-                _microstructure_dki_enabled=lambda: False, _closure_tractography_backend_text=lambda: "dti_det")
+                _microstructure_dki_enabled=lambda: False, _closure_tractography_backend_text=lambda: "dti_det",
+                _effective_output_root_text=lambda text="": text)
             self.assertFalse(doctor_kwargs(owner, external_paths={})["brain_mask_required"])
             (folder / "nodif_brain_mask.nii.gz").unlink()
             self.assertTrue(doctor_kwargs(owner, external_paths={})["brain_mask_required"])

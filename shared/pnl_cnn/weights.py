@@ -1,4 +1,4 @@
-# Modified version of PNLBrainMask-Torch @ 8d201a5 (Brigham and Women's Hospital licence, see shared/pnl_cnn/LICENSE.txt); modified by SlicerDSpace: only the checked weight loader is kept (constants, sha256, check, load_model); download, acquire_author_weights and convert are removed with their imports.
+# Modified version of PNLBrainMask-Torch @ 8d201a5 (Brigham and Women's Hospital licence, see shared/pnl_cnn/LICENSE.txt); modified by SlicerDSpace: only the checked weight loader is kept (constants, sha256, check, load_model); download, acquire_author_weights and convert are removed with their imports; explicit UTF-8 decoding for weights.json.
 """Checked author assets and deterministic, TensorFlow-free weight conversion."""
 
 import hashlib

@@ -117,12 +117,14 @@ class SlicerUiLayoutContractTest(unittest.TestCase):
         top_level = [
             element.attrib.get("name")
             for element in _layout(root, "verticalLayout").findall("item/widget")
-            if element.attrib.get("class") == "ctkCollapsibleButton"
+            if element.attrib.get("class") in {"ctkCollapsibleButton", "QGroupBox"}
         ]
         ordered = [name for name in top_level if name in {name for name, _ in expected}]
         self.assertEqual(ordered, [name for name, _ in expected])
         for name, text in expected:
-            self.assertEqual(_property_text(_widget(root, name), "text"), text)
+            widget = _widget(root, name)
+            prop_name = "title" if widget.attrib.get("class") == "QGroupBox" else "text"
+            self.assertEqual(_property_text(widget, prop_name), text)
         self.assertEqual(_property_text(_widget(root, "runSelectedButton"), "text"), "Run SlicerDSpace")
         self.assertEqual(_property_text(_widget(root, "runSelectedButton"), "styleSheet"), "")
 

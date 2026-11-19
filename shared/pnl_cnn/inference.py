@@ -1,3 +1,4 @@
+# Modified version of PNLBrainMask-Torch @ 8d201a5 (Brigham and Women's Hospital licence, see shared/pnl_cnn/LICENSE.txt); modified by SlicerDSpace: added Apple Silicon Metal (MPS) device selection in select_device.
 """Original normalization, slice orientation, and weighted-view mask contract."""
 
 import os

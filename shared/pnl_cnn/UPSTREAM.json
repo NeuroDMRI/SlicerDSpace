@@ -21,8 +21,11 @@
     "inference.py": {
       "upstream_path": "src/pnl_brain_mask/inference.py",
       "upstream_sha256": "db7313dace57ef0461e7818f958652320b44e5335efcb64267123af1793b055a",
-      "sha256": "db7313dace57ef0461e7818f958652320b44e5335efcb64267123af1793b055a",
-      "patches": []
+      "sha256": "c533d1ba1a3419a06062ea15f2ab902f3833f491edbe354559750b2e1e823907",
+      "patches": [
+        "added Apple Silicon Metal (MPS) device selection in select_device",
+        "clause-(d) modification comment added as line 1"
+      ]
     },
     "model.py": {
       "upstream_path": "src/pnl_brain_mask/model.py",
@@ -37,10 +40,11 @@
     "weights.py": {
       "upstream_path": "src/pnl_brain_mask/weights.py",
       "upstream_sha256": "209504dc55c742590a35dc70da0fe724c62db3d426c83b5e241175003967984e",
-      "sha256": "750c5db8a404b89a1eb33f5617a58aebc302512363f77350dfb8bd5fcbba3e34",
+      "sha256": "4e72a814361cc15258ea012428b95ff040229b6c6bacf474d22f702977020871",
       "patches": [
         "only the checked weight loader is kept (constants, sha256, check, load_model)",
         "download, acquire_author_weights and convert are removed with their imports",
+        "explicit UTF-8 decoding for weights.json",
         "clause-(d) modification comment added as line 1"
       ]
     },

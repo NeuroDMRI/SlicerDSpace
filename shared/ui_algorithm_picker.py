@@ -83,7 +83,7 @@ def _set_anatomical_priors(owner, selected, *, clear_memory: bool = False):
 
 def _refresh_anatomical_priors(owner, zh):
     row = getattr(owner, "_anatomicalPriorsRow", None)
-    if row is None:
+    if not isinstance(row, tuple) or len(row) != 5:
         return
     import qt
 
@@ -779,21 +779,30 @@ def refresh_picker_icons(owner, *, dark=None):
 
     dark = is_dark_mode(getattr(owner, "_uiWidget", None)) if dark is None else dark
     icon = ellipsis_icon("#8CD2F5" if dark else "#326A8A")
-    for button in getattr(owner, "_algorithmButtons", {}).values():
-        button.setIcon(icon)
+    buttons = getattr(owner, "_algorithmButtons", None)
+    if isinstance(buttons, dict):
+        for button in buttons.values():
+            button.setIcon(icon)
     row = getattr(owner, "_anatomicalPriorsRow", None)
-    if row is not None:
+    if isinstance(row, tuple) and len(row) == 5:
         row[-1].setIcon(icon)
 
 
 def refresh_picker_language(owner):
-    for label, button in getattr(owner, "_productLabelButtons", ()):
-        button.setMinimumWidth(label.sizeHint.width())
-    zh = getattr(owner, "_onboardingLanguage", "en").startswith("zh")
+    label_buttons = getattr(owner, "_productLabelButtons", None)
+    if isinstance(label_buttons, (list, tuple)):
+        for label, button in label_buttons:
+            button.setMinimumWidth(label.sizeHint.width())
+    raw_lang = getattr(owner, "_onboardingLanguage", "en")
+    zh = isinstance(raw_lang, str) and raw_lang.startswith("zh")
     _refresh_anatomical_priors(owner, zh)
-    cleared = getattr(owner, "_clearedAlgorithmFamilies", None) or ()
+    raw_cleared = getattr(owner, "_clearedAlgorithmFamilies", None)
+    cleared = raw_cleared if isinstance(raw_cleared, (set, frozenset, list, tuple)) else ()
     node = getattr(owner, "_parameterNode", None)
-    for family, button in getattr(owner, "_algorithmButtons", {}).items():
+    buttons = getattr(owner, "_algorithmButtons", None)
+    if not isinstance(buttons, dict):
+        return
+    for family, button in buttons.items():
         selected = selected_algorithms(node, family)
         name = {
             "preprocessing": ("预处理", "preprocessing"),

@@ -20,21 +20,23 @@
 <link rel="apple-touch-icon" href="assets/img/icon-180.png">
 <link rel="preload" href="assets/fonts/InterTight.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="assets/fonts/Inter.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="assets/css/site.css?v=start-redesign-20261117">
+<link rel="stylesheet" href="assets/css/site.css?v=start-redesign-20261119-6">
 <link rel="stylesheet" href="assets/css/performance.css?v=hidden-details-1">
-<link rel="stylesheet" href="assets/css/guide-bot.css">
-<link rel="stylesheet" href="assets/css/installer-customizer.css?v=slicer-setup-5">
+<link rel="stylesheet" href="assets/css/installer-customizer.css?v=slicer-setup-15">
 <script>document.documentElement.classList.add('js');</script>
 <script src="assets/js/site.js" defer></script>
 <script src="assets/js/performance.js?v=hidden-details-1" defer></script>
-<script src="assets/js/guide-bot.js" defer></script>
-<script src="assets/js/installer-customizer.js?v=slicer-setup-5" defer></script>
+<script src="assets/js/installer-customizer.js?v=slicer-setup-16" defer></script>
 </head>
 <body>
 <a class="skip-link" href="#main">Skip to content</a>
 
 <header class="site-header" id="site-header">
   <div class="header-inner">
+    <a class="header-github" href="https://github.com/NeuroDMRI/SlicerDSpace" target="_blank" rel="noopener" aria-label="Source code on GitHub" title="Source code on GitHub">
+      <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><path fill="currentColor" d="M12 .5a12 12 0 0 0-3.794 23.384c.6.111.82-.261.82-.577v-2.234c-3.338.726-4.043-1.416-4.043-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.09-.745.083-.729.083-.729 1.205.085 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.108-.775.418-1.305.762-1.605-2.665-.303-5.467-1.334-5.467-5.931 0-1.31.469-2.381 1.236-3.221-.124-.303-.536-1.524.117-3.176 0 0 1.008-.323 3.301 1.23A11.51 11.51 0 0 1 12 6.3c1.02.005 2.047.138 3.006.404 2.291-1.553 3.297-1.23 3.297-1.23.655 1.652.243 2.873.119 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.625-5.479 5.922.43.372.823 1.102.823 2.222v3.292c0 .319.216.694.825.576A12.001 12.001 0 0 0 12 .5Z"/></svg>
+      <span class="header-github-label">Source Code</span>
+    </a>
     <button class="menu-btn" id="menu-btn" type="button" aria-expanded="false" aria-controls="site-nav">
       <span class="menu-icon" aria-hidden="true"></span>
       <span>Menu</span>
@@ -128,21 +130,8 @@
   <div class="container">
     <p class="eyebrow">Get started</p>
     <h2>From installation to your first result.</h2>
-    <div class="installer-customizer" id="installer-customizer"></div>
-    <div class="start-overview-grid" aria-label="Setup and execution routes">
-      <a class="start-route-card" href="#manual-title">
-        <span class="start-card-badge">A · GUI</span>
-        <span class="start-card-title">Manual setup</span>
-        <span class="start-card-desc">Install 3D Slicer 5.10.0 and the offline release package, load dMRI data, and run in the interface.</span>
-      </a>
-      <a class="start-route-card" href="#cli">
-        <span class="start-card-badge">B · CLI</span>
-        <span class="start-card-title">CLI &amp; batch</span>
-        <span class="start-card-desc">Run reproducible doctor, plan and execute commands or multi-subject cohort schedules.</span>
-      </a>
-    </div>
 
-    <h3 class="start-route-title" id="manual-title"><span class="start-route-marker" aria-hidden="true">A</span><span class="start-route-label start-route-text">Set up manually</span></h3>
+    <h3 class="start-route-title" id="manual-title"><span class="start-route-marker" aria-hidden="true">A</span><span class="start-route-label start-route-text">Graphical setup and execution</span></h3>
     <ol class="start-steps">
       <li class="start-step">
         <div class="start-body">
@@ -160,67 +149,47 @@
       </li>
       <li class="start-step">
         <div class="start-body">
-          <h4>Install the SlicerDSpace release package</h4>
-          <dl class="start-kv-list">
-            <dt>Download</dt>
-            <dd>From SlicerDSpace GitHub Releases (<a class="url-link" href="https://github.com/NeuroDMRI/SlicerDSpace/releases" target="_blank" rel="noopener">https://github.com/NeuroDMRI/SlicerDSpace/releases</a>), download either the lightweight setup bootstrapper for your system (<span class="pkg-list"><code class="pkg-pill">SlicerDSpaceSetup-Windows.zip</code> <code class="pkg-pill">SlicerDSpaceSetup-Linux.zip</code> <code class="pkg-pill">SlicerDSpaceSetup-macOS.zip</code></span>) or the standalone OS Base archive (<span class="pkg-list"><code class="pkg-pill">SlicerDSpace-v*-Windows-x64.zip</code> <code class="pkg-pill">SlicerDSpace-v*-Linux-x64.tar.gz</code> <code class="pkg-pill">SlicerDSpace-v*-macOS-arm64.tar.gz</code></span>) <span class="muted-inline">(do not use GitHub’s automatic Source code archive).</span></dd>
-            <dt>Install</dt>
-            <dd>In 3D Slicer 5.10.0, open <span class="ui-chip">View › Extensions Manager</span>, click the top-right wrench icon, choose <span class="ui-chip">Install Extension from File…</span>, select the downloaded archive, and restart Slicer. If you installed a <span class="ui-chip">SlicerDSpaceSetup</span> archive, the setup window opens automatically after restart so you can review options and click <span class="ui-chip">Start Install</span>; afterwards open <span class="ui-chip">Modules › Diffusion › SlicerDSpace</span>.</dd>
-          </dl>
+          <h4>Customize your setup installer</h4>
+          <p>Core workflows, bundled runtimes and anatomical prior models are included in the unified base package. Select your operating system, optional WMA white-matter atlases, and optional mirror, proxy or offline paths below to generate a tailored setup archive (universal setup archives and standalone base bundles are also available at <a class="url-link" href="https://github.com/NeuroDMRI/SlicerDSpace/releases" target="_blank" rel="noopener">https://github.com/NeuroDMRI/SlicerDSpace/releases</a>).</p>
+          <div class="installer-customizer is-embedded" id="installer-customizer"></div>
         </div>
       </li>
       <li class="start-step">
         <div class="start-body">
-          <h4>Prepare the subject inputs</h4>
-          <p>Under <span class="ui-chip">Inputs</span>, enter a Subject ID and Subject root, then select NIfTI files (with matching <code>.bval</code>/<code>.bvec</code>), an NRRD/NHDR volume, or a DICOM folder directly. Selected files are imported and validated into the standardised folder when execution starts:</p>
-          <pre class="code-block"><code>sub-01/
-  input/
-    data.nii.gz
-    bvals
-    bvecs
-    nodif_brain_mask.nii.gz   # optional; supply or generate</code></pre>
-          <p class="start-callout">DWI and mask must share one voxel grid. Gradient entry counts must match the 4D volume count, and motion-corrected images need the rotated gradients.</p>
+          <h4>Install the full extension via the setup archive</h4>
+          <ol class="start-substeps">
+            <li class="start-substep">
+              <span class="start-substep-num" aria-hidden="true">1</span>
+              <div class="start-substep-body">Download the setup <code>.zip</code> archive generated above (<span class="pkg-list"><code class="pkg-pill">SlicerDSpaceSetup-macOS.zip</code> <code class="pkg-pill">SlicerDSpaceSetup-Windows.zip</code> <code class="pkg-pill">SlicerDSpaceSetup-Linux.zip</code></span>).</div>
+            </li>
+            <li class="start-substep">
+              <span class="start-substep-num" aria-hidden="true">2</span>
+              <div class="start-substep-body">Open 3D Slicer 5.10.0 › top-right <span class="ui-chip">Extensions Manager</span> (<span class="ui-chip">View › Extensions Manager</span>) › top-right wrench icon › <span class="ui-chip">Install Extension from File…</span>, select the downloaded <code>.zip</code>, and restart Slicer.</div>
+            </li>
+            <li class="start-substep">
+              <span class="start-substep-num" aria-hidden="true">3</span>
+              <div class="start-substep-body">After restarting, the setup wizard opens automatically — confirm your options and click <span class="ui-chip">Start Install</span>. Once deployment finishes, restart Slicer and open <span class="ui-chip">Modules › Diffusion › SlicerDSpace</span>.</div>
+            </li>
+          </ol>
+          <p class="start-note-inline">For offline machines, standalone OS Base bundles (<code class="pkg-pill">SlicerDSpace-v*-Windows-x64.zip</code> <code class="pkg-pill">SlicerDSpace-v*-Linux-x64.tar.gz</code> <code class="pkg-pill">SlicerDSpace-v*-macOS-arm64.tar.gz</code>) can also be loaded from the same file menu <span class="muted-inline">(do not use GitHub’s automatic Source code archive).</span></p>
         </div>
       </li>
       <li class="start-step">
         <div class="start-body">
-          <h4>Select methods, run and review QC</h4>
+          <h4>Use SlicerDSpace and key details</h4>
           <dl class="start-kv-list">
-            <dt>Select</dt>
-            <dd>Under <span class="ui-chip">Analysis</span>, check the desired stages (for a small first run, keep only <span class="ui-chip">Microstructure › DTI</span>). Click <code>...</code> beside a stage to pick algorithms and adjust gear parameters, and set <span class="ui-chip">Compute device</span> (Auto, CPU, Apple MPS or CUDA GPU).</dd>
-            <dt>Run</dt>
-            <dd>Click <span class="ui-chip">Run SlicerDSpace</span>. Preflight checks verify resources first; if optional packages, weights or a one-time personal FreeSurfer license (for Surface postprocess) are needed, follow <span class="ui-chip">Prepare selected analysis environment</span> or the one-time license import prompt.</dd>
-            <dt>Inspect</dt>
-            <dd>In <span class="ui-chip">Results</span>, select the completed run, click the eye icon beside any output to toggle it in the 3D Slicer scene (right-click to unload or open tables/JSON), and click <span class="ui-chip">Open report</span> to review mask coverage, alignment and method QC.</dd>
+            <dt>Inputs</dt>
+            <dd>Enter a <span class="ui-chip">Subject ID</span> and <span class="ui-chip">Output folder</span> (results write automatically under <code>&lt;Output folder&gt;/&lt;Subject ID&gt;/</code>), then load your DWI data.</dd>
+            <dt>Analysis</dt>
+            <dd>Check the desired stages (for a quick check, keep only <span class="ui-chip">Microstructure › DTI</span>). Click <code>...</code> beside a stage to pick algorithms and adjust gear parameters, and set <span class="ui-chip">Compute device</span> (Auto, CPU, Apple MPS or CUDA GPU).</dd>
+            <dt>Run &amp; preflight</dt>
+            <dd>Click <span class="ui-chip">Run SlicerDSpace</span>. Live stage progress and elapsed time appear beneath the button. Preflight checks verify required resources first; if optional atlases or a one-time personal FreeSurfer license (for <span class="ui-chip">Surface postprocess</span>) are needed, follow <span class="ui-chip">Prepare selected analysis environment</span> or the license prompt.</dd>
+            <dt>Results &amp; QC</dt>
+            <dd>Completed runs link automatically to the active output folder under <span class="ui-chip">Results</span>. Click the eye icon beside an output to toggle it in the 3D Slicer scene (right-click to unload or open tables/JSON), and click <span class="ui-chip">Open report</span> to review mask coverage, alignment and per-stage QC summaries under <code>06_qc/</code>.</dd>
           </dl>
         </div>
       </li>
     </ol>
-
-    <details class="start-advanced">
-      <summary class="start-advanced-summary"><span>Installed CLI paths &amp; developer source staging</span></summary>
-      <div class="start-advanced-body">
-        <p>Release archives unpack <code>lib/Slicer-5.10/qt-scripted-modules/shared/run_subject_pipeline_cli.py</code> and bundled runtimes into Slicer’s revision-specific extensions folder (also shown under <span class="ui-chip">Edit › Application Settings › Modules</span>):</p>
-        <dl class="start-kv-list">
-          <dt>Windows</dt>
-          <dd><code>%LOCALAPPDATA%\slicer.org\Slicer 5.10.0\slicer.org\Extensions-34045\SlicerDSpace</code></dd>
-          <dt>Linux</dt>
-          <dd><code>&lt;Slicer-5.10.0-dir&gt;/slicer.org/Extensions-34045/SlicerDSpace</code></dd>
-          <dt>macOS</dt>
-          <dd><code>/Applications/Slicer.app/Contents/Extensions-34045/SlicerDSpace</code> <span class="muted-inline">(or <code>~/Library/Application Support/slicer.org/Extensions-34045/SlicerDSpace</code>)</span></dd>
-        </dl>
-        <p>If developing from a local repository checkout instead of a release archive, stage the module with Slicer’s version:</p>
-        <div class="code" data-code>
-          <div class="code-head"><span>bash</span><button class="copy" type="button" hidden>Copy</button></div>
-          <pre><code>git clone https://github.com/NeuroDMRI/SlicerDSpace.git
-cd SlicerDSpace
-python3 scripts/stage_slicer_extension.py \
-  --install-root ~/SlicerDSpace-extension --slicer-version 5.10 \
-  --link-mode copy</code></pre>
-        </div>
-        <p>Add the expanded absolute path of <code>~/SlicerDSpace-extension/SlicerDSpace/lib/Slicer-5.10/qt-scripted-modules</code> under <span class="ui-chip">Edit › Application Settings › Modules › Additional module paths</span>. Install SlicerDMRI and PyTorch from Slicer’s Extension Manager. Add the separate UKFTractography extension if you plan to use UKF, restart Slicer, and open <span class="ui-chip">Modules › Diffusion › SlicerDSpace</span>.</p>
-      </div>
-    </details>
 
     <div class="start-cli" id="cli" aria-labelledby="cli-title">
       <h3 class="start-route-title" id="cli-title"><span class="start-route-marker" aria-hidden="true">B</span><span class="start-route-label start-route-text">Command-line execution and cohort processing</span></h3>
@@ -398,43 +367,6 @@ export SUBJECT_ROOT="/path/to/sub-01"
     </div>
   </div>
 </footer>
-
-<button class="guide-bot__backdrop" type="button" hidden aria-label="Close guide"></button>
-<aside class="guide-bot" id="guide-bot" aria-label="SlicerDSpace site guide">
-  <button class="guide-bot__launcher" type="button" hidden aria-label="Open SlicerDSpace guide"
-          aria-expanded="false" aria-controls="guide-bot-panel" title="Open site guide">
-    <span class="guide-bot__hat" aria-hidden="true"></span>
-    <span class="guide-bot__face" aria-hidden="true"></span>
-  </button>
-  <section class="guide-bot__panel" id="guide-bot-panel" role="dialog" aria-labelledby="guide-bot-title" hidden>
-    <header class="guide-bot__header">
-      <div class="guide-bot__identity">
-        <span class="guide-bot__eyebrow"><span aria-hidden="true"></span>SLICERDSPACE</span>
-        <h2 id="guide-bot-title">Ask the guide</h2>
-        <p class="guide-bot__description">A local guide to the project</p>
-      </div>
-      <div class="guide-bot__controls">
-        <button class="guide-bot__language" type="button" aria-label="Switch to Chinese">中文</button>
-        <button class="guide-bot__close" type="button" aria-label="Close guide">×</button>
-      </div>
-    </header>
-    <div class="guide-bot__messages" role="log" aria-live="polite" aria-label="Guide conversation"></div>
-    <div class="guide-bot__starters" aria-label="Suggested questions">
-      <button type="button" data-guide-question="start">Getting started</button>
-      <button type="button" data-guide-question="inputs">Inputs</button>
-      <button type="button" data-guide-question="methods">Methods</button>
-      <button type="button" data-guide-question="dependencies">Dependencies</button>
-      <button type="button" data-guide-question="results">Results &amp; QC</button>
-      <button type="button" data-guide-question="references">References</button>
-    </div>
-    <form class="guide-bot__form">
-      <label class="sr-only" for="guide-bot-input">Ask the site guide</label>
-      <input id="guide-bot-input" type="text" maxlength="240" autocomplete="off" placeholder="Ask about the workflow…">
-      <button type="submit">Ask</button>
-    </form>
-    <p class="guide-bot__privacy">Local answers · Nothing is sent</p>
-  </section>
-</aside>
 
 </body>
 </html>

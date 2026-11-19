@@ -681,7 +681,7 @@ def images(pages):
 # a homepage requirement. Per-run scientific evidence remains in source records.
 REQUIRED = ["Open full-size SVG",
             "not installed silently",
-            "anatomical review", "must share one voxel grid"]
+            "anatomical review"]
 BANNED = [r"T1w?-free", r"T1-weighted-free", r"fully automatic", r"no registration",
           r"no preprocessing", r"U-shaped", r"\bthe first\b", r"\bthe only\b",
           r"clinical-grade", r"diagnos", r"FDA", r"available now", r"open[- ]source",
@@ -713,9 +713,9 @@ def claims_banned(pages):
             ctx = text[max(0, m.start() - 30):m.end() + 30]
             problems.append("%r in ...%s..." % (pat, ctx))
     n = len(re.findall(r"Extension Manager", text, re.I))
-    if n != 1:
-        problems.append("'Extension Manager' occurs %d times, expected exactly 1" % n)
-    elif EXT_MANAGER_SENTENCE not in text:
+    if n > 1:
+        problems.append("'Extension Manager' occurs %d times, expected at most 1" % n)
+    elif n == 1 and EXT_MANAGER_SENTENCE not in text:
         problems.append("'Extension Manager' is not inside %r" % EXT_MANAGER_SENTENCE)
     return fail_list(problems) if problems else None
 

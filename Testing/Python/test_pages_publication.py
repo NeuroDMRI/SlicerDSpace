@@ -18,7 +18,9 @@ class PagesPublicationTest(unittest.TestCase):
         self.assertEqual(result["status"], "pass", result)
         self.assertGreaterEqual(result["file_count"], 42)
         self.assertTrue((ROOT / 'docs/site/assets/img/fig-runtime-optimizations.png').is_file())
-        self.assertTrue((ROOT / 'docs/site/assets/img/guide-bot-hat.svg').is_file())
+        self.assertFalse((ROOT / 'docs/site/assets/img/guide-bot-hat.svg').exists())
+        self.assertFalse((ROOT / 'docs/site/assets/js/guide-bot.js').exists())
+        self.assertFalse((ROOT / 'docs/site/assets/css/guide-bot.css').exists())
 
     def test_standalone_performance_page_is_not_publishable(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -53,7 +55,7 @@ class PagesPublicationTest(unittest.TestCase):
             images = site / 'assets/img'
             images.mkdir(parents=True)
             (images / 'guide-bot-hat.svg').write_text('<svg/>')
-            self.assertIn('Unapproved guide asset: assets/img/guide-bot-hat.svg', audit(root)['findings'])
+            self.assertIn('Unexpected public file: assets/img/guide-bot-hat.svg', audit(root)['findings'])
             (images / 'guide-bot-hat.svg').unlink()
             (images / 'unapproved.svg').write_text('<svg/>')
             self.assertIn('Unexpected public file: assets/img/unapproved.svg', audit(root)['findings'])

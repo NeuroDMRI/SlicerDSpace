@@ -190,10 +190,12 @@ class WebsiteEditorialCopyTests(unittest.TestCase):
 
     def test_setup_describes_current_gui_and_first_execution(self):
         start = self.section("start")
-        for requirement in ("--slicer-version 5.10", "Additional module paths", "UKFTractography",
-                            "nodif_brain_mask.nii.gz", "Prepare selected analysis environment",
-                            "Results", "--doctor", "--plan", "--execute", "--jobs 2"):
+        for requirement in ("Subject ID", "Output folder",
+                            "Prepare selected analysis environment", "Results",
+                            "Open report", "--doctor", "--plan", "--execute", "--jobs 2"):
             self.assertIn(requirement, start)
+        self.assertNotIn("start-advanced", start)
+        self.assertNotIn("start-callout", start)
         self.assertNotIn("Advanced settings › Results and QC", self.source)
 
     def test_agent_skills_section_is_removed_from_website(self):
@@ -221,7 +223,7 @@ class WebsiteEditorialCopyTests(unittest.TestCase):
         for heading, marker in zip(headings, 'AB'):
             self.assertIn(f'class="start-route-marker" aria-hidden="true">{marker}</span>', heading)
             self.assertIn('start-route-text', heading)
-        self.assertIn('Set up manually', headings[0])
+        self.assertIn('Graphical setup and execution', headings[0])
         self.assertIn('Command-line execution and cohort processing', headings[1])
         self.assertNotIn('start-recommended', self.source)
         self.assertNotIn('(Recommended)', self.source)
@@ -245,16 +247,14 @@ class WebsiteEditorialCopyTests(unittest.TestCase):
         styles = (ROOT / 'docs/site/assets/css/site.css').read_text(encoding='utf-8')
         self.assertIn('.results-scroll { overflow-x: auto;', styles)
 
-    def test_guide_floats_without_header_docking(self):
-        self.assertIn('id="guide-bot"', self.source)
-        self.assertNotIn('guide-bot__dock', self.source)
-        script = (ROOT / 'docs/site/assets/js/guide-bot.js').read_text(encoding='utf-8')
-        self.assertNotIn('is-docked', script)
-        self.assertNotIn('positionLauncher', script)
-        self.assertNotIn('skills:', script)
-        self.assertIn('Apple MPS', script)
+    def test_guide_bot_is_removed_from_website(self):
+        zh_source = (ROOT / "docs/site/zh.html").read_text(encoding="utf-8")
+        for doc in (self.source, zh_source):
+            self.assertNotIn('id="guide-bot"', doc)
+            self.assertNotIn('guide-bot.css', doc)
+            self.assertNotIn('guide-bot.js', doc)
         for name in ('assets/css/guide-bot.css', 'assets/js/guide-bot.js', 'assets/img/guide-bot-hat.svg'):
-            self.assertTrue((ROOT / 'docs/site' / name).is_file())
+            self.assertFalse((ROOT / 'docs/site' / name).exists())
 
     def test_both_readmes_promote_installation_and_use_skills(self):
         for name, templates in (('README.md', 'CLI_TEMPLATES.md'), ('README.zh-CN.md', 'CLI_TEMPLATES.zh-CN.md')):

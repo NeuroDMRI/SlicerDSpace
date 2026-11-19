@@ -1251,11 +1251,69 @@
       offlineDir: '',
       checkScriptDir: true,
       autoStart: false,
-      moreOpen: false,
-      previewOpen: false
+      openHelp: null
+    };
+
+    var HELP_COPY = {
+      mirror: {
+        title: zh ? '镜像源说明' : 'Download mirror',
+        body: zh
+          ? '下载 GitHub Release 资源包时使用的加速前缀。可直连 GitHub 时保持「GitHub 直连」；若下载较慢可切换为 <code>ghfast.top</code>、<code>gh-proxy.com</code> 或自定义镜像前缀。'
+          : 'Optional mirror prefix used when downloading GitHub Release assets. Keep <strong>GitHub Direct</strong> when GitHub is reachable, or select <code>ghfast.top</code>, <code>gh-proxy.com</code>, or a custom mirror.'
+      },
+      proxy: {
+        title: zh ? 'HTTP/HTTPS 代理说明' : 'HTTP/HTTPS proxy',
+        body: zh
+          ? '可选的本地 HTTP/HTTPS 代理地址（如 <code>http://127.0.0.1:7890</code>），安装器联网拉取资源包时会通过该代理转发。日常直连或走系统默认网络时留空即可。'
+          : 'Optional local HTTP/HTTPS proxy URL (for example <code>http://127.0.0.1:7890</code>) routed by the installer when fetching release packages. Leave blank for direct connections.'
+      },
+      offline: {
+        title: zh ? '本地离线包目录说明' : 'Offline package folder',
+        body: zh
+          ? '若已提前把发行版压缩包（<code>.zip</code> / <code>.tar.gz</code>）拷贝到本地或内网磁盘，填写该文件夹路径后安装器会直接校验 SHA-256 并离线部署，无需联网下载。在线安装请留空。'
+          : 'Optional directory containing pre-downloaded SlicerDSpace release archives (<code>.zip</code> / <code>.tar.gz</code>). Files are verified with SHA-256 and installed without internet access. Leave blank for online setup.'
+      },
+      model: {
+        title: zh ? '模型存放目录说明' : 'Model directory',
+        body: zh
+          ? '可选的模型与白质图谱存储路径（适合系统盘空间紧张或多人共享只读模型库时指定）。留空则默认存入用户应用数据目录。'
+          : 'Optional custom directory where anatomical priors and WMA white-matter atlases are stored (useful when system drive space is limited). Leave blank to use the default data folder.'
+      }
     };
 
     function t(en, cn) { return zh ? cn : en; }
+
+    function escapeAttr(v) {
+      return String(v || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    function helpBtnHtml(key, labelText) {
+      var open = state.openHelp === key;
+      var tip = zh ? ('查看「' + labelText + '」说明') : ('Explain ' + labelText);
+      return '<button type="button" class="ic-help-btn' + (open ? ' is-open' : '') + '" data-help="' + key + '" aria-expanded="' + (open ? 'true' : 'false') + '" aria-controls="ic-help-' + key + '" aria-label="' + escapeAttr(tip) + '" title="' + escapeAttr(tip) + '">?</button>';
+    }
+
+    function helpPopoverHtml(key) {
+      var info = HELP_COPY[key];
+      if (!info) { return ''; }
+      var open = state.openHelp === key;
+      var closeLabel = zh ? '关闭说明' : 'Close explanation';
+      return '<div class="ic-popover" id="ic-help-' + key + '" data-help-popover="' + key + '" role="region" aria-label="' + escapeAttr(info.title) + '"' + (open ? '' : ' hidden') + '>' +
+        '<div class="ic-popover-head"><span>' + info.title + '</span><button type="button" class="ic-popover-close" data-help-close="' + key + '" aria-label="' + escapeAttr(closeLabel) + '">×</button></div>' +
+        '<p class="ic-popover-body">' + info.body + '</p></div>';
+    }
+
+    function syncHelpPopovers() {
+      Array.prototype.forEach.call(root.querySelectorAll('[data-help]'), function (btn) {
+        var open = state.openHelp === btn.getAttribute('data-help');
+        btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+        btn.classList.toggle('is-open', open);
+      });
+      Array.prototype.forEach.call(root.querySelectorAll('[data-help-popover]'), function (pop) {
+        var open = state.openHelp === pop.getAttribute('data-help-popover');
+        pop.hidden = !open;
+      });
+    }
 
     function baseBytes() {
       var def = OS_DEFAULTS[state.os];
@@ -1274,38 +1332,51 @@
       return sum;
     }
 
-    function escapeAttr(v) {
-      return String(v || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    }
-
     function render() {
       var def = OS_DEFAULTS[state.os];
+      var embedded = root.classList.contains('is-embedded');
       var html = [];
-      html.push('<div class="ic-top">');
-      html.push('<div class="ic-top-copy">');
-      html.push('<h3 class="ic-heading">' + t('One-Click Graphical Setup', '一键图形化安装器') + '</h3>');
-      html.push('<p class="ic-sub">' + t('Base workflows and anatomical priors are included; import the tiny setup .zip inside 3D Slicer 5.10.0 to review options and install without any terminal.', '核心功能与解剖先验模型均默认内置；在 3D Slicer 5.10.0 中导入极小的引导包即可图形化确认并一键装完，全程无需打开终端或命令行。') + '</p>');
-      html.push('</div></div>');
+      if (!embedded) {
+        html.push('<div class="ic-top">');
+        html.push('<div class="ic-top-copy">');
+        html.push('<h3 class="ic-heading">' + t('One-Click Graphical Setup', '一键图形化安装器') + '</h3>');
+        html.push('<p class="ic-sub">' + t('Base workflows and anatomical priors are included; import the tiny setup .zip inside 3D Slicer 5.10.0 to review options and install without any terminal.', '核心功能与解剖先验模型均默认内置；在 3D Slicer 5.10.0 中导入极小的引导包即可图形化确认并一键装完，全程无需打开终端或命令行。') + '</p>');
+        html.push('</div></div>');
+      }
 
+      html.push('<div class="ic-band ic-band-choose ic-band-os">');
+      html.push('<div class="ic-band-head">');
+      html.push('<span class="ic-band-title">' + t('1. Operating System', '1. 操作系统') + '</span>');
+      html.push('<span class="ic-badge is-required">' + t('Required · Select', '必选 · 点选') + '</span>');
+      html.push('</div>');
       html.push('<div class="ic-os-row">');
-      html.push('<div class="ic-field"><span class="ic-k">' + t('System', '当前系统') + '</span><div class="ic-seg" role="group">');
+      html.push('<div class="ic-seg" role="group" aria-label="' + escapeAttr(t('Operating System', '操作系统')) + '">');
+      var OS_ARCH = { macos: 'arm64', windows: 'x86_64', linux: 'x86_64' };
       ['macos', 'windows', 'linux'].forEach(function (osKey) {
-        html.push('<button type="button" class="ic-seg-btn" data-os="' + osKey + '" aria-pressed="' + (state.os === osKey ? 'true' : 'false') + '">' + OS_DEFAULTS[osKey].label + '</button>');
+        html.push('<button type="button" class="ic-seg-btn" data-os="' + osKey + '" aria-pressed="' + (state.os === osKey ? 'true' : 'false') + '"><span>' + OS_DEFAULTS[osKey].label + '</span><span class="ic-seg-arch">' + OS_ARCH[osKey] + '</span></button>');
       });
       html.push('</div></div>');
       html.push('</div>');
 
-      html.push('<div class="ic-mod-head"><span class="ic-k">' + t('Base Package (Included · ', '统一底座套件（全部内置 · 约 ') + formatBytes(baseBytes()) + (zh ? '）' : ')') + '</span></div>');
-      html.push('<div class="ic-packs">');
-      BASE_MODULES.forEach(function (mod) {
-        html.push('<div class="ic-pack is-locked"><input type="checkbox" checked disabled><span class="ic-pack-title">' + mod.title + '</span><span class="ic-pack-size">' + mod.tag + '</span></div>');
-      });
+      html.push('<div class="ic-band ic-band-readonly">');
+      html.push('<div class="ic-band-head">');
+      html.push('<span class="ic-band-title">' + t('Included Base Package', '内置底座套件') + ' <span class="ic-size-pill">~' + formatBytes(baseBytes()) + '</span></span>');
+      html.push('<span class="ic-badge is-readonly">' + t('Included · Read-only', '自动内置 · 仅查看') + '</span>');
       html.push('</div>');
+      html.push('<p class="ic-band-hint">' + t('Bundled automatically — no selection or input needed.', '以下核心模块均默认内置，无需勾选或填写。') + '</p>');
+      html.push('<div class="ic-ro-panel"><div class="ic-ro-grid">');
+      BASE_MODULES.forEach(function (mod) {
+        html.push('<div class="ic-ro-item"><span class="ic-ro-check" aria-hidden="true">✓</span><span class="ic-ro-title">' + mod.title + '</span><span class="ic-ro-tag">' + mod.tag + '</span></div>');
+      });
+      html.push('</div></div></div>');
 
-      html.push('<div class="ic-wma-box ' + (state.wmaEnabled ? '' : 'is-disabled') + '">');
+      html.push('<div class="ic-band ic-band-choose ic-wma-box' + (state.wmaEnabled ? '' : ' is-disabled') + '">');
+      html.push('<div class="ic-band-head">');
+      html.push('<span class="ic-band-title">' + t('2. White-Matter Atlases (WMA)', '2. 白质纤维图谱 (WMA)') + '</span>');
+      html.push('<span class="ic-badge is-select">' + t('Optional · Select', '可选 · 按需勾选') + '</span>');
+      html.push('</div>');
       html.push('<div class="ic-wma-head">');
-      html.push('<label class="ic-wma-master"><input type="checkbox" id="ic-wma-toggle"' + (state.wmaEnabled ? ' checked' : '') + '><span>' + t('WMA White-Matter Atlas Clustering', 'WMA 白质纤维图谱分割') + '</span></label>');
-      html.push('<span class="ic-wma-note">' + t('Uncheck WMA to skip all atlases; NABA / East-West optional', '取消 WMA 则关闭所有图谱；后两套大图谱默认不下载') + '</span>');
+      html.push('<label class="ic-wma-master"><input type="checkbox" id="ic-wma-toggle"' + (state.wmaEnabled ? ' checked' : '') + '><span>' + t('Enable WMA white-matter atlas clustering', '启用 WMA 白质纤维图谱分割') + '</span></label>');
       html.push('</div>');
       html.push('<div class="ic-wma-grid">');
       WMA_ATLAS_META.forEach(function (atlas) {
@@ -1315,11 +1386,18 @@
       });
       html.push('</div></div>');
 
-      html.push('<details id="ic-more" class="ic-more"' + (state.moreOpen ? ' open' : '') + '>');
-      html.push('<summary class="ic-more-summary">' + t('Mirror, proxy, offline folder & CLI path', '镜像源 / 代理 / 本地离线目录 / 服务器路径') + '</summary>');
+      html.push('<div id="ic-more" class="ic-band ic-band-inputs">');
+      html.push('<div class="ic-band-head">');
+      html.push('<span class="ic-band-title">' + t('3. Mirror, proxy & local folders', '3. 镜像源、代理与本地目录') + '</span>');
+      html.push('<span class="ic-badge is-optional">' + t('Optional · Leave blank by default', '选填 · 留空用默认') + '</span>');
+      html.push('</div>');
       html.push('<div class="ic-more-body">');
-      html.push('<div class="ic-net-grid">');
-      html.push('<div class="ic-field"><label class="ic-k" for="ic-mirror">' + t('Mirror', '镜像源') + '</label><select id="ic-mirror" class="ic-select">');
+
+      html.push('<div class="ic-subblock">');
+      html.push('<div class="ic-net-row">');
+
+      var mirrorLabel = t('Mirror', '镜像源');
+      html.push('<div class="ic-field"><div class="ic-k"><span class="ic-k-left"><label class="ic-k-label" for="ic-mirror">' + mirrorLabel + '</label>' + helpBtnHtml('mirror', mirrorLabel) + '</span><span class="ic-field-tag is-select">' + t('Select', '下拉选择') + '</span></div><select id="ic-mirror" class="ic-select">');
       html.push('<option value="direct"' + (state.mirrorPreset === 'direct' ? ' selected' : '') + '>' + t('GitHub Direct', 'GitHub 直连') + '</option>');
       html.push('<option value="https://ghfast.top/"' + (state.mirrorPreset === 'https://ghfast.top/' ? ' selected' : '') + '>ghfast.top</option>');
       html.push('<option value="https://gh-proxy.com/"' + (state.mirrorPreset === 'https://gh-proxy.com/' ? ' selected' : '') + '>gh-proxy.com</option>');
@@ -1328,37 +1406,46 @@
       if (state.mirrorPreset === 'custom') {
         html.push('<input id="ic-custom-mirror" class="ic-input" style="margin-top:6px;" type="text" value="' + escapeAttr(state.mirrorPrefix) + '" placeholder="https://your-mirror.example/">');
       }
-      html.push('</div>');
-      html.push('<div class="ic-field"><label class="ic-k" for="ic-proxy">' + t('Proxy', 'HTTP/HTTPS 代理') + '</label><input id="ic-proxy" class="ic-input" type="text" value="' + escapeAttr(state.proxyUrl) + '" placeholder="http://127.0.0.1:7890"></div>');
-      html.push('<div class="ic-field"><label class="ic-k" for="ic-offline-dir">' + t('Offline folder', '本地离线包目录') + '</label><input id="ic-offline-dir" class="ic-input" type="text" value="' + escapeAttr(state.offlineDir) + '" placeholder="' + t('Optional folder', '可选目录路径') + '"></div>');
-      html.push('</div>');
-      html.push('<div class="ic-more-sub">');
-      html.push('<div class="ic-field"><label class="ic-k" for="ic-model-dir">' + t('Model directory (optional)', '模型存放目录（可选）') + '</label><input id="ic-model-dir" class="ic-input" type="text" value="' + escapeAttr(state.modelAssetsDir) + '" placeholder="' + escapeAttr(def.modelPlaceholder) + '"></div>');
-      html.push('<div class="ic-field"><label class="ic-k" for="ic-slicer-path">' + t('Slicer CLI path (headless only)', 'Slicer 路径（仅命令行脚本备用）') + '</label><input id="ic-slicer-path" class="ic-input" type="text" value="' + escapeAttr(state.slicerPath) + '" placeholder="' + escapeAttr(def.slicerPlaceholder) + '"></div>');
-      html.push('</div>');
-      html.push('<label class="ic-check-inline"><input id="ic-check-script-dir" type="checkbox"' + (state.checkScriptDir ? ' checked' : '') + '><span>' + t('Check script folder for offline packs (CLI script)', '命令行脚本优先读取同目录离线包') + '</span></label>');
-      html.push('</div></details>');
+      html.push(helpPopoverHtml('mirror') + '</div>');
 
-      html.push('<div class="ic-steps">');
-      html.push('<span class="ic-step-item"><span class="ic-step-num">1.</span>' + t('Download setup <strong>.zip</strong> below', '下载下方 <strong>一键引导包 (.zip)</strong>') + '</span>');
-      html.push('<span class="ic-step-item"><span class="ic-step-num">2.</span>' + t('Open 3D Slicer › Extensions Manager › wrench icon › <strong>Install from file…</strong> &amp; restart', '打开 <strong>3D Slicer</strong> › 右上角 <strong>Extensions Manager</strong> › 右上角小扳手 <strong>Install from file…</strong> 选中并重启') + '</span>');
-      html.push('<span class="ic-step-item"><span class="ic-step-num">3.</span>' + t('Setup wizard opens on restart — click <strong>Start Install</strong>', '重启后自动弹出安装向导，确认选项后点击 <strong>Start Install</strong>') + '</span>');
+      var proxyLabel = t('HTTP/HTTPS Proxy', 'HTTP/HTTPS 代理');
+      html.push('<div class="ic-field"><div class="ic-k"><span class="ic-k-left"><label class="ic-k-label" for="ic-proxy">' + proxyLabel + '</label>' + helpBtnHtml('proxy', proxyLabel) + '</span><span class="ic-field-tag is-fill">' + t('Optional · Fill', '选填') + '</span></div><input id="ic-proxy" class="ic-input" type="text" value="' + escapeAttr(state.proxyUrl) + '" placeholder="http://127.0.0.1:7890">' + helpPopoverHtml('proxy') + '</div>');
+      html.push('</div>');
       html.push('</div>');
 
-      html.push('<div class="ic-bar">');
-      html.push('<div class="ic-total">' + t('Later in Slicer', '装机预计拉取') + ' <strong>~' + formatBytes(totalBytes()) + '</strong></div>');
-      html.push('<div class="ic-actions">');
-      html.push('<button type="button" class="ic-btn-ghost" id="ic-toggle-preview">' + (state.previewOpen ? t('Hide code', '收起脚本') : t('Preview', '预览')) + '</button>');
-      html.push('<button type="button" class="ic-btn-secondary" id="ic-download-cli-btn">' + t('CLI Script (Server)', '命令行脚本 (服务器备用)') + '</button>');
-      html.push('<button type="button" class="ic-btn-primary" id="ic-download-btn">' + t('Download Slicer Setup (', '下载 Slicer 一键安装包 (') + def.setupZipName + ')</button>');
+      html.push('<div class="ic-subblock">');
+      html.push('<div class="ic-subblock-label">' + t('Local directories — leave blank to use automatic defaults', '自定义本地目录（全部选填，留空自动使用默认路径）') + '</div>');
+      html.push('<div class="ic-paths-grid">');
+
+      var offlineLabel = t('Offline folder', '本地离线包目录');
+      html.push('<div class="ic-field"><div class="ic-k"><span class="ic-k-left"><label class="ic-k-label" for="ic-offline-dir">' + offlineLabel + '</label>' + helpBtnHtml('offline', offlineLabel) + '</span><span class="ic-field-tag is-fill">' + t('Optional · Fill', '选填') + '</span></div><input id="ic-offline-dir" class="ic-input" type="text" value="' + escapeAttr(state.offlineDir) + '" placeholder="' + t('Leave blank if online', '在线安装请留空') + '">' + helpPopoverHtml('offline') + '</div>');
+
+      var modelLabel = t('Model directory', '模型存放目录');
+      html.push('<div class="ic-field"><div class="ic-k"><span class="ic-k-left"><label class="ic-k-label" for="ic-model-dir">' + modelLabel + '</label>' + helpBtnHtml('model', modelLabel) + '</span><span class="ic-field-tag is-fill">' + t('Optional · Fill', '选填') + '</span></div><input id="ic-model-dir" class="ic-input" type="text" value="' + escapeAttr(state.modelAssetsDir) + '" placeholder="' + escapeAttr(def.modelPlaceholder) + '">' + helpPopoverHtml('model') + '</div>');
+      html.push('</div>');
+      html.push('</div>');
+
       html.push('</div></div>');
 
-      html.push('<div class="ic-preview code"' + (state.previewOpen ? '' : ' hidden') + '><div class="code-head"><span>' + escapeAttr(def.scriptName) + '</span><button type="button" class="ic-btn-secondary" id="ic-copy-script-btn">' + t('Copy', '复制') + '</button></div><pre><code id="ic-script-code"></code></pre></div>');
+      if (!embedded) {
+        html.push('<div class="ic-steps">');
+        html.push('<span class="ic-step-item"><span class="ic-step-num">1.</span>' + t('Download setup <strong>.zip</strong> below', '下载下方 <strong>一键引导包 (.zip)</strong>') + '</span>');
+        html.push('<span class="ic-step-item"><span class="ic-step-num">2.</span>' + t('Open 3D Slicer › Extensions Manager › wrench icon › <strong>Install from file…</strong> &amp; restart', '打开 <strong>3D Slicer</strong> › 右上角 <strong>Extensions Manager</strong> › 右上角小扳手 <strong>Install from file…</strong> 选中并重启') + '</span>');
+        html.push('<span class="ic-step-item"><span class="ic-step-num">3.</span>' + t('Setup wizard opens on restart — click <strong>Start Install</strong>', '重启后自动弹出安装向导，确认选项后点击 <strong>Start Install</strong>') + '</span>');
+        html.push('</div>');
+      }
+
+      html.push('<div class="ic-bar">');
+      html.push('<div class="ic-total">' +
+        '<span class="ic-total-item">Setup Installer <strong>~13 KB</strong></span>' +
+        '<span class="ic-total-sep" aria-hidden="true">·</span>' +
+        '<span class="ic-total-item">' + t('Additional download in Slicer', '装机预计额外拉取') + ' <strong>~' + formatBytes(totalBytes()) + '</strong></span>' +
+        '</div>');
+      html.push('<div class="ic-actions">');
+      html.push('<button type="button" class="ic-btn-primary" id="ic-download-btn">' + t('Download Slicer Setup', '下载 Slicer 一键安装包') + '</button>');
+      html.push('</div></div>');
 
       root.innerHTML = html.join('');
-      if (state.previewOpen) {
-        document.getElementById('ic-script-code').textContent = buildScript(state);
-      }
       bindEvents();
     }
 
@@ -1394,8 +1481,6 @@
         });
       });
 
-      var slicerInput = document.getElementById('ic-slicer-path');
-      if (slicerInput) { slicerInput.addEventListener('input', function () { state.slicerPath = slicerInput.value; }); }
       var modelInput = document.getElementById('ic-model-dir');
       if (modelInput) { modelInput.addEventListener('input', function () { state.modelAssetsDir = modelInput.value; }); }
       var mirrorSel = document.getElementById('ic-mirror');
@@ -1412,10 +1497,24 @@
       if (proxyEl) { proxyEl.addEventListener('input', function () { state.proxyUrl = proxyEl.value; }); }
       var offlineEl = document.getElementById('ic-offline-dir');
       if (offlineEl) { offlineEl.addEventListener('input', function () { state.offlineDir = offlineEl.value; }); }
-      var checkHere = document.getElementById('ic-check-script-dir');
-      if (checkHere) { checkHere.addEventListener('change', function () { state.checkScriptDir = checkHere.checked; }); }
-      var moreEl = document.getElementById('ic-more');
-      if (moreEl) { moreEl.addEventListener('toggle', function () { state.moreOpen = moreEl.open; }); }
+
+      Array.prototype.forEach.call(root.querySelectorAll('[data-help]'), function (btn) {
+        btn.addEventListener('click', function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          var key = btn.getAttribute('data-help');
+          state.openHelp = state.openHelp === key ? null : key;
+          syncHelpPopovers();
+        });
+      });
+      Array.prototype.forEach.call(root.querySelectorAll('[data-help-close]'), function (btn) {
+        btn.addEventListener('click', function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          state.openHelp = null;
+          syncHelpPopovers();
+        });
+      });
 
       var dlBtn = document.getElementById('ic-download-btn');
       if (dlBtn) {
@@ -1435,26 +1534,23 @@
           });
         });
       }
-      var cliBtn = document.getElementById('ic-download-cli-btn');
-      if (cliBtn) {
-        cliBtn.addEventListener('click', function () {
-          triggerBlobDownload(encodeUtf8(buildScript(state)), 'text/plain;charset=utf-8', OS_DEFAULTS[state.os].scriptName);
-        });
-      }
-      var prevBtn = document.getElementById('ic-toggle-preview');
-      if (prevBtn) {
-        prevBtn.addEventListener('click', function () { state.previewOpen = !state.previewOpen; render(); });
-      }
-      var copyScriptBtn = document.getElementById('ic-copy-script-btn');
-      if (copyScriptBtn) {
-        copyScriptBtn.addEventListener('click', function () {
-          var txt = buildScript(state);
-          if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(txt); }
-          copyScriptBtn.textContent = zh ? '已复制' : 'Copied';
-          setTimeout(function () { copyScriptBtn.textContent = zh ? '复制' : 'Copy'; }, 1600);
-        });
-      }
     }
+
+    document.addEventListener('click', function (e) {
+      if (!state.openHelp) { return; }
+      if (e.target && e.target.closest && (e.target.closest('.ic-popover') || e.target.closest('.ic-help-btn'))) {
+        return;
+      }
+      state.openHelp = null;
+      syncHelpPopovers();
+    });
+
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && state.openHelp) {
+        state.openHelp = null;
+        syncHelpPopovers();
+      }
+    });
 
     render();
   }

@@ -222,9 +222,8 @@ async function runViewport(browser, origin, name, width, height, opts) {
       await page.locator('#top .btn-row a').count() === 2 &&
       await page.locator('#top + #film video').count() === 1,
     `${tag}: wordmark, two actions and film have no intervening intro copy`, JSON.stringify(heroContents));
-  record(await page.locator('.guide-bot__launcher').isVisible() &&
-      await page.locator('.guide-bot__dock, .guide-bot.is-docked').count() === 0,
-    `${tag}: guide stays floating without header docking`);
+  record(await page.locator('#guide-bot, .guide-bot, .guide-bot__launcher').count() === 0,
+    `${tag}: guide bot is removed from the page`);
 
   const overview = await page.locator('.results-overview img').evaluate((img) => {
     const box = img.getBoundingClientRect();
@@ -581,17 +580,6 @@ async function runFooter(browser, origin) {
       });
       record(layout.rainbow, prefix + ': full-width rainbow line matches the header');
       record(layout.fits && !layout.overlaps, prefix + ': wordmark, navigation and legal links fit without overlap');
-      if (width <= 680 && !noJs) {
-        const clearOfGuide = await footer.evaluate(el => {
-          const launcher = document.querySelector('.guide-bot__launcher').getBoundingClientRect();
-          return [...el.querySelectorAll('a')].every(a => {
-            const r = a.getBoundingClientRect();
-            return r.right <= launcher.left || r.left >= launcher.right ||
-              r.bottom <= launcher.top || r.top >= launcher.bottom;
-          });
-        });
-        record(clearOfGuide, prefix + ': floating guide leaves footer links unobstructed at the page end');
-      }
       record(await footer.locator('.foot-nav ul').count() === 2 &&
         await footer.locator('.foot-links a').count() === 2 &&
         await footer.locator('.foot-top-link').count() === 1,
@@ -636,7 +624,7 @@ async function runStartRoutes(browser, origin) {
         !document.getElementById('skills') &&
         !document.getElementById('demonstrations') &&
         manual.querySelector('.start-route-marker')?.textContent === 'A' &&
-        manual.querySelector('.start-route-text')?.textContent.trim() === 'Set up manually' &&
+        manual.querySelector('.start-route-text')?.textContent.trim() === 'Graphical setup and execution' &&
         cli.querySelector('.start-route-marker')?.textContent === 'B' &&
         cli.querySelector('.start-route-text')?.textContent.trim() === 'Command-line execution and cohort processing' &&
         manual.getBoundingClientRect().top < cli.getBoundingClientRect().top;
@@ -657,6 +645,24 @@ async function runStartRoutes(browser, origin) {
     record(await page.locator('#cli').evaluate(el => !el.closest('details')) &&
       await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
       `start ${width}px: CLI instructions expanded without horizontal overflow`);
+    const icMoreTag = await page.locator('#ic-more').evaluate(el => el.tagName);
+    const helpButtons = await page.locator('#installer-customizer [data-help]').count();
+    const removedCliCount = await page.locator('#ic-slicer-path, #ic-check-script-dir, #ic-download-cli-btn, #ic-toggle-preview').count();
+    let popoverOk = icMoreTag === 'DIV' && helpButtons === 4 && removedCliCount === 0;
+    if (popoverOk) {
+      await page.locator('#installer-customizer [data-help="mirror"]').click();
+      const pop = page.locator('#ic-help-mirror');
+      const popVisible = await pop.isVisible();
+      const popFits = await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth);
+      await page.keyboard.press('Escape');
+      const popHidden = await pop.isHidden();
+      popoverOk = popVisible && popFits && popHidden;
+    }
+    record(popoverOk, `start ${width}px: GUI-only installer section 3 stays open with working help popovers`);
+    const removedUiCount = await page.locator('.start-jump-bar, #ic-preview-btn, #ic-preview-modal').count();
+    const archLabels = await page.locator('#installer-customizer [data-os] .ic-seg-arch').allTextContents();
+    record(removedUiCount === 0 && JSON.stringify(archLabels) === JSON.stringify(['arm64', 'x86_64', 'x86_64']),
+      `start ${width}px: OS arch labels shown and jump-bar / script preview removed`, JSON.stringify(archLabels));
     await context.close();
   }
 }
@@ -704,8 +710,8 @@ async function runLanguages(browser, origin) {
         await page.locator('#top .btn-primary').innerText() === '观看宣传片' &&
         await page.locator('#cli-title .start-route-text').innerText() === '命令行运行与队列批处理' &&
         await page.locator('.start-recommended').count() === 0 &&
-        await page.locator('.guide-bot__header h2').innerText() === '问问项目助手',
-      `language ${width}px: capsule, homepage, routes and bot use Chinese`);
+        await page.locator('#guide-bot, .guide-bot, .guide-bot__launcher').count() === 0,
+      `language ${width}px: capsule, homepage and routes use Chinese without guide bot`);
     const header = await page.evaluate(() => {
       const capsule = document.querySelector('.language-switch').getBoundingClientRect();
       const menu = document.getElementById('menu-btn').getBoundingClientRect();
@@ -785,7 +791,7 @@ try {
       const hdr = await pg.evaluate(() => {
         const inner = document.querySelector('.header-inner');
         const shown = (el) => { const s = getComputedStyle(el), r = el.getBoundingClientRect(); return s.display !== 'none' && s.visibility !== 'hidden' && r.width > 0 && r.height > 0; };
-        const items = [document.getElementById('menu-btn'),
+        const items = [document.querySelector('.header-github'), document.getElementById('menu-btn'),
           ...document.querySelectorAll('#site-nav a, .lang-btn')].filter(shown);
         const rects = items.map((el) => ({ name: (el.textContent || '').trim().slice(0, 20), r: el.getBoundingClientRect() }));
         const hits = [];

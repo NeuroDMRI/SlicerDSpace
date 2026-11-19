@@ -20,21 +20,23 @@
 <link rel="apple-touch-icon" href="assets/img/icon-180.png">
 <link rel="preload" href="assets/fonts/InterTight.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="assets/fonts/Inter.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="assets/css/site.css?v=start-redesign-20261117">
+<link rel="stylesheet" href="assets/css/site.css?v=start-redesign-20261119-6">
 <link rel="stylesheet" href="assets/css/performance.css?v=hidden-details-1">
-<link rel="stylesheet" href="assets/css/guide-bot.css">
-<link rel="stylesheet" href="assets/css/installer-customizer.css?v=slicer-setup-5">
+<link rel="stylesheet" href="assets/css/installer-customizer.css?v=slicer-setup-15">
 <script>document.documentElement.classList.add('js');</script>
 <script src="assets/js/site.js" defer></script>
 <script src="assets/js/performance.js?v=hidden-details-1" defer></script>
-<script src="assets/js/guide-bot.js" defer></script>
-<script src="assets/js/installer-customizer.js?v=slicer-setup-5" defer></script>
+<script src="assets/js/installer-customizer.js?v=slicer-setup-16" defer></script>
 </head>
 <body>
 <a class="skip-link" href="#main">跳到正文</a>
 
 <header class="site-header" id="site-header">
   <div class="header-inner">
+    <a class="header-github" href="https://github.com/NeuroDMRI/SlicerDSpace" target="_blank" rel="noopener" aria-label="GitHub 源代码仓库" title="GitHub 源代码仓库">
+      <svg viewbox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><path fill="currentColor" d="M12 .5a12 12 0 0 0-3.794 23.384c.6.111.82-.261.82-.577v-2.234c-3.338.726-4.043-1.416-4.043-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.09-.745.083-.729.083-.729 1.205.085 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.108-.775.418-1.305.762-1.605-2.665-.303-5.467-1.334-5.467-5.931 0-1.31.469-2.381 1.236-3.221-.124-.303-.536-1.524.117-3.176 0 0 1.008-.323 3.301 1.23A11.51 11.51 0 0 1 12 6.3c1.02.005 2.047.138 3.006.404 2.291-1.553 3.297-1.23 3.297-1.23.655 1.652.243 2.873.119 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.625-5.479 5.922.43.372.823 1.102.823 2.222v3.292c0 .319.216.694.825.576A12.001 12.001 0 0 0 12 .5Z"/></svg>
+      <span class="header-github-label">源码</span>
+    </a>
     <button class="menu-btn" id="menu-btn" type="button" aria-expanded="false" aria-controls="site-nav">
       <span class="menu-icon" aria-hidden="true"></span>
       <span>菜单</span>
@@ -128,21 +130,8 @@
   <div class="container">
     <p class="eyebrow">开始使用</p>
     <h2>从安装到获得第一份结果。</h2>
-    <div class="installer-customizer" id="installer-customizer"></div>
-    <div class="start-overview-grid" aria-label="安装与运行方式">
-      <a class="start-route-card" href="#manual-title">
-        <span class="start-card-badge">A · 图形界面</span>
-        <span class="start-card-title">手动安装</span>
-        <span class="start-card-desc">安装 3D Slicer 5.10.0 与离线发布包，导入 dMRI 数据并在图形界面中运行。</span>
-      </a>
-      <a class="start-route-card" href="#cli">
-        <span class="start-card-badge">B · 命令行</span>
-        <span class="start-card-title">命令行与批处理</span>
-        <span class="start-card-desc">执行 doctor / plan / execute 命令流，或启动多受试者队列并行批处理。</span>
-      </a>
-    </div>
 
-    <h3 class="start-route-title" id="manual-title"><span class="start-route-marker" aria-hidden="true">A</span><span class="start-route-label start-route-text">手动安装与配置</span></h3>
+    <h3 class="start-route-title" id="manual-title"><span class="start-route-marker" aria-hidden="true">A</span><span class="start-route-label start-route-text">图形界面安装与运行</span></h3>
     <ol class="start-steps">
       <li class="start-step">
         <div class="start-body">
@@ -160,67 +149,47 @@
       </li>
       <li class="start-step">
         <div class="start-body">
-          <h4>安装 SlicerDSpace 发布包</h4>
-          <dl class="start-kv-list">
-            <dt>下载包体</dt>
-            <dd>前往 SlicerDSpace GitHub Releases（<a class="url-link" href="https://github.com/NeuroDMRI/SlicerDSpace/releases" target="_blank" rel="noopener">https://github.com/NeuroDMRI/SlicerDSpace/releases</a>）下载对应系统的轻量图形安装引导包（<span class="pkg-list"><code class="pkg-pill">SlicerDSpaceSetup-Windows.zip</code> <code class="pkg-pill">SlicerDSpaceSetup-Linux.zip</code> <code class="pkg-pill">SlicerDSpaceSetup-macOS.zip</code></span>）或完整系统底座包（<span class="pkg-list"><code class="pkg-pill">SlicerDSpace-v*-Windows-x64.zip</code> <code class="pkg-pill">SlicerDSpace-v*-Linux-x64.tar.gz</code> <code class="pkg-pill">SlicerDSpace-v*-macOS-arm64.tar.gz</code></span>） <span class="muted-inline">（请勿使用 GitHub 自动生成的 Source code 源码归档）。</span></dd>
-            <dt>导入安装</dt>
-            <dd>在 3D Slicer 5.10.0 中依次打开 <span class="ui-chip">View › Extensions Manager</span>，点击右上角扳手图标，选择 <span class="ui-chip">Install Extension from File…</span>，选中下载的压缩包并重启 Slicer；若安装的是 <span class="ui-chip">SlicerDSpaceSetup</span> 引导包，重启后会自动弹出安装向导窗口，确认所需选项并点击 <span class="ui-chip">Start Install</span>完成安装，随后打开 <span class="ui-chip">Modules › Diffusion › SlicerDSpace</span>.</dd>
-          </dl>
+          <h4>定制一键安装器</h4>
+          <p>核心工作流、内置运行环境与解剖先验模型均已包含在统一底座套件中。请在下方选择操作系统、按需勾选 WMA 白质图谱以及镜像源/代理/离线路径，生成专属引导安装包（通用引导包与独立离线底座包亦可在以下页面获取： <a class="url-link" href="https://github.com/NeuroDMRI/SlicerDSpace/releases" target="_blank" rel="noopener">https://github.com/NeuroDMRI/SlicerDSpace/releases</a>).</p>
+          <div class="installer-customizer is-embedded" id="installer-customizer"></div>
         </div>
       </li>
       <li class="start-step">
         <div class="start-body">
-          <h4>准备被试输入</h4>
-          <p>在 <span class="ui-chip">Inputs</span>栏填写 Subject ID 与 Subject root，直接选择 NIfTI 文件（含对应 <code>.bval</code>/<code>.bvec</code> 文件）、NRRD/NHDR 体数据或 DICOM 文件夹。点击运行后系统会自动导入并校验至标准化目录结构：</p>
-          <pre class="code-block"><code>sub-01/
-  input/
-    data.nii.gz
-    bvals
-    bvecs
-    nodif_brain_mask.nii.gz   # optional; supply or generate</code></pre>
-          <p class="start-callout">DWI 与脑掩膜须处于同一体素网格；梯度表条目数须与 4D 体数据帧数一致，若经过头动校正须匹配旋转后的梯度方向。</p>
+          <h4>通过一键引导包安装完整插件</h4>
+          <ol class="start-substeps">
+            <li class="start-substep">
+              <span class="start-substep-num" aria-hidden="true">1</span>
+              <div class="start-substep-body">下载上方定制的 <code>.zip</code> 一键引导包（如<span class="pkg-list"><code class="pkg-pill">SlicerDSpaceSetup-macOS.zip</code> <code class="pkg-pill">SlicerDSpaceSetup-Windows.zip</code> <code class="pkg-pill">SlicerDSpaceSetup-Linux.zip</code></span>).</div>
+            </li>
+            <li class="start-substep">
+              <span class="start-substep-num" aria-hidden="true">2</span>
+              <div class="start-substep-body">打开 3D Slicer 5.10.0 › 右上角 <span class="ui-chip">Extensions Manager</span> (<span class="ui-chip">View › Extensions Manager</span>）› 右上角小扳手 <span class="ui-chip">Install Extension from File…</span>，选中已下载的 <code>.zip</code> 并重启 Slicer。</div>
+            </li>
+            <li class="start-substep">
+              <span class="start-substep-num" aria-hidden="true">3</span>
+              <div class="start-substep-body">重启后将自动弹出安装向导 — 确认选项后点击 <span class="ui-chip">Start Install</span>；安装完成后重启 Slicer，在顶部打开 <span class="ui-chip">Modules › Diffusion › SlicerDSpace</span>.</div>
+            </li>
+          </ol>
+          <p class="start-note-inline">若在离线机器安装，也可通过同一入口导入独立分平台全量底座包（<code class="pkg-pill">SlicerDSpace-v*-Windows-x64.zip</code> <code class="pkg-pill">SlicerDSpace-v*-Linux-x64.tar.gz</code> <code class="pkg-pill">SlicerDSpace-v*-macOS-arm64.tar.gz</code>） <span class="muted-inline">（请勿使用 GitHub 自动生成的 Source code 源码归档）。</span></p>
         </div>
       </li>
       <li class="start-step">
         <div class="start-body">
-          <h4>选择方法、运行并检查 QC</h4>
+          <h4>使用 SlicerDSpace 与关键细节说明</h4>
           <dl class="start-kv-list">
-            <dt>选择方法</dt>
-            <dd>在 <span class="ui-chip">Analysis</span>下勾选目标阶段（初次试运行可仅保留 <span class="ui-chip">Microstructure › DTI</span>）；点击阶段旁的 <code>...</code> 可选择具体算法并通过齿轮按钮调整参数，随后设置 <span class="ui-chip">Compute device</span> （Auto、CPU、Apple MPS 或 CUDA GPU）。</dd>
-            <dt>启动运行</dt>
-            <dd>点击 <span class="ui-chip">Run SlicerDSpace</span>。运行前会自动执行依赖预检；若缺少可选包、模型权重或（启用皮层后处理时）需一次性导入个人 FreeSurfer 许可证，按提示使用 <span class="ui-chip">Prepare selected analysis environment</span> 或许可证导入窗口完成即可。</dd>
-            <dt>查看结果</dt>
-            <dd>在 <span class="ui-chip">Results</span>中选择已完成运行，点击输出项旁眼睛图标即可加载或切换显示（右键可从场景卸载或打开表格/JSON），点击 <span class="ui-chip">Open report</span> 即可查看 HTML 质控报告，核验脑掩膜、对齐与方法 QC 指标。</dd>
+            <dt>Inputs</dt>
+            <dd>填写 <span class="ui-chip">Subject ID</span> 与 <span class="ui-chip">Output folder</span> （分析结果将自动创建并写入 <code>&lt;Output folder&gt;/&lt;Subject ID&gt;/</code> 子目录中），再载入您的 DWI 影像数据。</dd>
+            <dt>Analysis</dt>
+            <dd>勾选需要的分析阶段（首次快速验证可仅保留 <span class="ui-chip">Microstructure › DTI</span>）；点击阶段旁的 <code>...</code> 可选择具体算法并通过齿轮按钮调整参数，随后设置 <span class="ui-chip">Compute device</span> （Auto、CPU、Apple MPS 或 CUDA GPU）。</dd>
+            <dt>运行与预检</dt>
+            <dd>点击 <span class="ui-chip">Run SlicerDSpace</span>。运行按钮正下方会实时显示当前阶段进度与已用耗时；启动前会自动校验依赖与模型资源，如缺少可选图谱或仅在启用 <span class="ui-chip">Surface postprocess</span>时才需的一次性个人 FreeSurfer 许可，按提示通过 <span class="ui-chip">Prepare selected analysis environment</span> 或许可证导入窗口配置即可。</dd>
+            <dt>结果与 QC</dt>
+            <dd>运行结果会自动关联当前输出文件夹并列在 <span class="ui-chip">Results</span>面板中；点击结果项旁的眼睛图标即可在 3D Slicer 中按需加载或切换显隐（右键可卸载或打开统计表/JSON），点击 <span class="ui-chip">Open report</span> 即可查看脑掩膜覆盖率、空间配准与各阶段 QC 报告，同时各阶段简明 QC 文本保存在 <code>06_qc/</code>.</dd>
           </dl>
         </div>
       </li>
     </ol>
-
-    <details class="start-advanced">
-      <summary class="start-advanced-summary"><span>已安装扩展命令行路径与开发者源码部署</span></summary>
-      <div class="start-advanced-body">
-        <p>发布包会将 <code>lib/Slicer-5.10/qt-scripted-modules/shared/run_subject_pipeline_cli.py</code> 及内置运行时解压至 Slicer 对应修订版本的扩展目录（也可在 <span class="ui-chip">Edit › Application Settings › Modules</span>查看）：</p>
-        <dl class="start-kv-list">
-          <dt>Windows</dt>
-          <dd><code>%LOCALAPPDATA%\slicer.org\Slicer 5.10.0\slicer.org\Extensions-34045\SlicerDSpace</code></dd>
-          <dt>Linux</dt>
-          <dd><code>&lt;Slicer-5.10.0-dir&gt;/slicer.org/Extensions-34045/SlicerDSpace</code></dd>
-          <dt>macOS</dt>
-          <dd><code>/Applications/Slicer.app/Contents/Extensions-34045/SlicerDSpace</code> <span class="muted-inline">（或 <code>~/Library/Application Support/slicer.org/Extensions-34045/SlicerDSpace</code>）</span></dd>
-        </dl>
-        <p>如需基于本地源码仓库进行开发调试而非使用发布包，按当前 Slicer 版本部署模块：</p>
-        <div class="code" data-code>
-          <div class="code-head"><span>bash</span><button class="copy" type="button" hidden>复制</button></div>
-          <pre><code>git clone https://github.com/NeuroDMRI/SlicerDSpace.git
-cd SlicerDSpace
-python3 scripts/stage_slicer_extension.py \
-  --install-root ~/SlicerDSpace-extension --slicer-version 5.10 \
-  --link-mode copy</code></pre>
-        </div>
-        <p>将展开后的绝对路径 <code>~/SlicerDSpace-extension/SlicerDSpace/lib/Slicer-5.10/qt-scripted-modules</code> 添加至 <span class="ui-chip">Edit › Application Settings › Modules › Additional module paths</span>；若采用源码部署，请在 Slicer 的扩展管理器安装 SlicerDMRI 与 PyTorch（如需使用 UKF，请另装 UKFTractography），重启后打开 <span class="ui-chip">Modules › Diffusion › SlicerDSpace</span>.</p>
-      </div>
-    </details>
 
     <div class="start-cli" id="cli" aria-labelledby="cli-title">
       <h3 class="start-route-title" id="cli-title"><span class="start-route-marker" aria-hidden="true">B</span><span class="start-route-label start-route-text">命令行运行与队列批处理</span></h3>
@@ -398,42 +367,6 @@ export SUBJECT_ROOT="/path/to/sub-01"
     </div>
   </div>
 </footer>
-
-<button class="guide-bot__backdrop" type="button" hidden aria-label="关闭助手"></button>
-<aside class="guide-bot" id="guide-bot" aria-label="SlicerDSpace 项目助手">
-  <button class="guide-bot__launcher" type="button" hidden aria-label="打开 SlicerDSpace 助手" aria-expanded="false" aria-controls="guide-bot-panel" title="打开项目助手">
-    <span class="guide-bot__hat" aria-hidden="true"></span>
-    <span class="guide-bot__face" aria-hidden="true"></span>
-  </button>
-  <section class="guide-bot__panel" id="guide-bot-panel" role="dialog" aria-labelledby="guide-bot-title" hidden>
-    <header class="guide-bot__header">
-      <div class="guide-bot__identity">
-        <span class="guide-bot__eyebrow"><span aria-hidden="true"></span>SLICERDSPACE</span>
-        <h2 id="guide-bot-title">问问项目助手</h2>
-        <p class="guide-bot__description">SlicerDSpace 本地导览</p>
-      </div>
-      <div class="guide-bot__controls">
-        <button class="guide-bot__language" type="button" aria-label="切换到中文">中文</button>
-        <button class="guide-bot__close" type="button" aria-label="关闭助手">×</button>
-      </div>
-    </header>
-    <div class="guide-bot__messages" role="log" aria-live="polite" aria-label="助手对话"></div>
-    <div class="guide-bot__starters" aria-label="推荐问题">
-      <button type="button" data-guide-question="start">如何开始</button>
-      <button type="button" data-guide-question="inputs">Inputs</button>
-      <button type="button" data-guide-question="methods">分析方法</button>
-      <button type="button" data-guide-question="dependencies">环境依赖</button>
-      <button type="button" data-guide-question="results">结果与 QC</button>
-      <button type="button" data-guide-question="references">参考文献</button>
-    </div>
-    <form class="guide-bot__form">
-      <label class="sr-only" for="guide-bot-input">向项目助手提问</label>
-      <input id="guide-bot-input" type="text" maxlength="240" autocomplete="off" placeholder="输入有关使用流程的问题…">
-      <button type="submit">提问</button>
-    </form>
-    <p class="guide-bot__privacy">本地回答 · 不会发送输入</p>
-  </section>
-</aside>
 
 </body>
 </html>

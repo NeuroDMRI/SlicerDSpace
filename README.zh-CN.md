@@ -76,13 +76,11 @@ SlicerDSpace 将无需 T1 加权影像的解剖重建、微结构定量和白质
 | 科学计算 | Python、NumPy、SciPy、nibabel、SimpleITK | 影像、几何、数值拟合与数据交换 |
 | 神经网络推理 | PyTorch、DDSeg/DDParcel/DDSurfer 模型 | 组织、脑区与皮层表面重建 |
 | 微结构 | DIPY、AMICO、Python MK-Curve | 张量、自由水、神经突和峰度模型 |
-| 扩散工具 | Teem 张量拟合（Slicer 内核）；可选 UKFTractography、MRtrix3、FSL；SlicerDMRI 仅用于 WMA | DTI 拟合、追踪及相应校正路线 |
+| 扩散工具 | Teem 张量拟合（Slicer 内核）；可选 UKFTractography、MRtrix3、FSL 与 SlicerDMRI | DTI 拟合、追踪及相应校正路线 |
 | 可选后端 | PNL CNN/ANTs、原生 FreeSurfer 组件、WMQL、WMA、TractCloud | 掩膜、皮层后处理与束识别 |
 | 自动化 | Python CLI、JSON 运行计划、批量调度器、Agent Skill | 命令执行、参数组合及多被试调度 |
 
-依赖按路线配置：DTI 拟合在 Slicer 内部完成，不需要额外扩展。默认 CSD/ACT 需要 MRtrix3；提供已有掩膜的 DTI-only 路线
-无需 PNL、FSL 或 FreeSurfer。也可明确选择 Slicer 原生轻量预设，以减少外部环境。
-详见[能力与平台矩阵](docs/setup/SUPPORT_MATRIX.zh-CN.md)。
+通过官网一键引导包或离线底座包安装时，插件本体已自包含（`depends NA`）Python 3.12 依赖库（含 **PyTorch** 与 `torchvision`）、核心模型权重、`UKFTractography` 及 `MRtrix3`/`FSL`/`FreeSurfer Surface Runtime` 三大原生运行环境，**无需用户单独安装 Slicer 的 PyTorch 扩展或 SlicerDMRI**。仅在源码部署或按需拆分环境下，依赖随所选路线解析：DTI 拟合在 Slicer 内直接完成，默认 CSD/ACT 需要 MRtrix3，提供已有掩膜的 DTI-only 路线无需 PNL、FSL 或 FreeSurfer。详见[能力与平台矩阵](docs/setup/SUPPORT_MATRIX.zh-CN.md)。
 
 **实现来源：** DDSeg 使用转换后的 Python/PyTorch 模型；SAF、MK-Curve 为作者
 MATLAB 方法的非官方 Python 移植；PNL CNN 掩膜运行作者 PNL 推理代码的修改副本（许可条款见 [PNL 许可页](docs/licenses/pnl_brain_mask.md)）。
@@ -130,33 +128,33 @@ Agent 会检查可用空间和已有资源，等你选择后再下载，并保�
 ```
 
 可按研究需求修改所选方法；其他路线和批处理见 [Agent 使用指南](.agents/skills/slicerdspace/references/usage.md)
-及[命令行模板](docs/setup/CLI_TEMPLATES.zh-CN.md)。安装与分析由自己的 Agent 执行，
-网页导览 Bot 负责导航和预设信息问答。
+及[命令行模板](docs/setup/CLI_TEMPLATES.zh-CN.md)。
 
 ---
 
 ## 安装
 
-### 方式一：一键图形化安装引导扩展（GitHub Release 直下或官网预配置，推荐）
+### 方式一：一键图形化安装引导扩展（官网定制或 Release 直下，推荐）
 
-直接从 [GitHub Releases](https://github.com/NeuroDMRI/SlicerDSpace/releases) 下载对应平台的通用轻量引导包（**`SlicerDSpaceSetup-macOS.zip`** / **`SlicerDSpaceSetup-Windows.zip`** / **`SlicerDSpaceSetup-Linux.zip`**），或在 [SlicerDSpace 官网安装向导](https://neurodmri.github.io/SlicerDSpace/zh.html#start)（[英文版](https://neurodmri.github.io/SlicerDSpace/#start)）预先配置选项并下载（亦附带服务器命令行脚本备用）：
-- 在 **3D Slicer 5.10.0** 中通过 **View > Extensions Manager > 右上角小扳手 > Install Extension from File...** 选择该 `.zip` 导入并重启 Slicer；重启后会自动弹出 **SlicerDSpace Setup** 图形安装窗口并等待确认，点击 **`Start Install`** 后即开始安装。
-- **插件基础核心功能默认锁定内置**（约 `1.4–1.7 GB`）：包含基础预处理、`PNL` 自动脑掩膜权重、**Anatomical Priors 三大深度学习算法**（`DDSeg`、`DDParcel`、`DDSurfer` + FreeSurfer 表面图谱）、微结构（`DTI` / `Free-Water` / `NODDI` / `DKI`）、全脑纤维追踪（`CSD/ACT` / `UKF` / `SAF`）、`WMQL`、`TractCloud` 与连接组、Python 3.12 科学计算依赖、`UKFTractography` CLI 及三大原生运行环境（`MRtrix3 3.0.8`、`FSL 2602.0`、`FreeSurfer Surface Runtime`）。
-- **WMA 白质纤维图谱按需三选**：默认仅勾选标准 **`ORG` 图谱**（单文件 `< 2.0 GiB`），超大的 **`NABA`**（`~3 GB`）与 **`East-West`**（`~10 GB`）默认不勾选，可在安装弹窗内按需增减。
-- **多线程分片断点续传与网络加速**：内置 12 线程 HTTP Range 分片并发加速与断点续传，支持 GitHub 下载加速镜像（`ghfast.top` / `gh-proxy.com` / 自定义前缀）、HTTP/HTTPS 代理与本地离线包目录选项；`upstream-only` 的 NITRC `IITmean_b0_256.nii.gz` 模板将在联网安装时自动拉取并校验。
-- 后续在 Slicer 内切换或补用任意未装 WMA 图谱（`ORG` / `NABA` / `East-West`）时，弹窗一键热下载或从本地目录导入即可，无需重装扩展或重启 Slicer。
+1. **安装 3D Slicer 5.10.0**：从 [download.slicer.org](https://download.slicer.org/) 下载并安装对应平台（Windows `x86_64`、Linux `x86_64` 或 Apple Silicon macOS `arm64`）的 3D Slicer 5.10.0。
+2. **定制并下载约 `13 KB` 的一键引导安装包**（`SlicerDSpaceSetup-macOS.zip`、`SlicerDSpaceSetup-Windows.zip` 或 `SlicerDSpaceSetup-Linux.zip`）：在 [SlicerDSpace 官网安装向导](https://neurodmri.github.io/SlicerDSpace/zh.html#start)（[英文版](https://neurodmri.github.io/SlicerDSpace/#start)）依次选择操作系统（`macOS arm64`、`Windows x86_64`、`Linux x86_64`）、按需勾选 WMA 白质纤维图谱，以及可选的 **GitHub 下载加速镜像**（`ghfast.top` / `gh-proxy.com` / 自定义前缀）、**HTTP/HTTPS 代理**、**本地离线包目录** 或 **模型保存目录**；也可直接前往 [GitHub Releases](https://github.com/NeuroDMRI/SlicerDSpace/releases) 下载通用 `.zip` 引导包。
+3. **在 3D Slicer 5.10.0 中安装并启动**：打开 **View > Extensions Manager > 右上角小扳手 > Install Extension from File...**，选中 `SlicerDSpaceSetup-<OS>.zip` 后重启 Slicer。重启后会自动弹出 **SlicerDSpace Setup** 图形安装窗口，核对配置后点击 **`Start Install`**（支持 12 线程 HTTP Range 分片并发加速与断点续传，并自动拉取、校验 NITRC `IITmean_b0_256.nii.gz` 模板）；部署完成后再次重启 Slicer，在顶部打开 **Modules > Diffusion > SlicerDSpace** 即可使用。
 
-### 方式二：手工安装各系统精简底座包 + 独立 WMA 图谱包
+默认自动包含以下完整内容（**无需单独安装 Slicer PyTorch、UKFTractography 或 SlicerDMRI 扩展**）：
+- **Included Base Package（约 `1.4–1.7 GB`，内置自包含，`depends NA`）**：包含 SlicerDSpace 主模块、Python 3.12 依赖库（**内置 PyTorch 与 torchvision**）、全部非 WMA 深度学习权重与模板（`DDSeg`、`DDParcel`、`DDSurfer` + FreeSurfer 表面图谱、`PNL` 脑掩膜权重、`TractCloud`）、锁定版本的算法源码（`WMQL`、`WMA`、`TractCloud`）、`UKFTractography` CLI 以及三大原生二进制运行环境（`MRtrix3 3.0.8`、`FSL 2602.0`、`FreeSurfer Surface Runtime`，其中 `activation_key_included: false`，可选皮层表面后处理仍需用户自备个人 FreeSurfer `license.txt`）。
+- **Optional WMA White-Matter Atlases（按需勾选）**：默认仅勾选 **`ORG` 图谱**（单包 `< 2.0 GiB`），超大的 **`NABA`**（`~3 GB`）与 **`East-West`**（`~10 GB`）默认不勾选。后续在 Slicer 内切换使用未装的 WMA 图谱时，界面会直接弹出**一键热下载或本地目录导入**窗口，无需重装扩展或重启 Slicer。
 
-从 GitHub Release 页面下载对应平台的精简统一底座包（免去 8–10 卷手工合并，体积约 `1.4–1.7 GB`）：
+### 方式二：离线分平台底座包 + 独立 WMA 图谱包
 
-- **Windows (`x64`)**：`SlicerDSpace-v0.1.1-Windows-x64.zip`
-- **Linux (`x64`)**：`SlicerDSpace-v0.1.1-Linux-x64.tar.gz`
+适合完全离线环境或手动安装。从 [GitHub Releases](https://github.com/NeuroDMRI/SlicerDSpace/releases) 下载对应系统的统一底座包（约 `1.4–1.7 GB`）：
+
+- **Windows (`x86_64`)**：`SlicerDSpace-v0.1.1-Windows-x64.zip`
+- **Linux (`x86_64`)**：`SlicerDSpace-v0.1.1-Linux-x64.tar.gz`
 - **macOS (Apple Silicon `arm64`)**：`SlicerDSpace-v0.1.1-macOS-arm64.tar.gz`
 
-各平台底座包内置 SlicerDSpace 扩展本体（`depends NA`）、Python 3.12 依赖库（`bundled-python/`）、全部非 WMA 模型权重（`bundled-model-assets/`：`DDSeg`、`DDParcel`、`DDSurfer`、`TractCloud` 及 `PNL` 权重 [不含 `upstream-only` NITRC 模板 `IITmean_b0_256.nii.gz`]）、算法源码（`bundled-sources/`：`WMQL`、`WMA`、`TractCloud`）、配套 `UKFTractography` CLI 以及 `bundled-runtimes/` 中的三大原生运行环境（**MRtrix3 `3.0.8`**、**FSL `2602.0`**、**FreeSurfer Surface Runtime**，`activation_key_included: false`，不含任何个人 FreeSurfer 激活密钥，运行可选皮层表面后处理仍需用户自备 `license.txt`）。在 **3D Slicer 5.10.0** 中通过 **View > Extensions Manager > Install Extensions > Install Extension from File** 安装并重启 Slicer 即可运行除 WMA 外全部流程。三套 WMA 图谱包（`WMA-ORG.tar.gz`、`WMA-NABA.tar.gz.001`..、`WMA-EastWest.tar.gz.001`..）独立挂在 GitHub Releases 供网页安装脚本或在 Slicer 界面按需拉取。（内置原生运行包支持 `tree_sha256` 校验；Intel `x86_64` Mac 真机硬件尚未实测验证。）
+在 **3D Slicer 5.10.0** 中通过 **View > Extensions Manager > 右上角小扳手 > Install Extension from File...** 导入并重启 Slicer（**请勿使用 GitHub 自动生成的 Source code 源码归档**），打开 **Modules > Diffusion > SlicerDSpace** 即可直接运行除 WMA 图谱外的全部流程。各底座包已自包含（`depends NA`）Python 3.12 依赖（含 **PyTorch + torchvision**）、非 WMA 核心模型权重（`DDSeg`、`DDParcel`、`DDSurfer` + `atlas.tar.gz`、`PNL`、`TractCloud`）、算法源码、`UKFTractography` CLI 及经过 `tree_sha256` 校验的原生 `MRtrix3`/`FSL`/`FreeSurfer Surface Runtime` 运行包（可选皮层表面后处理仍需用户自备 FreeSurfer `license.txt`；NITRC `IITmean_b0_256.nii.gz` 与三套独立 WMA 图谱 `WMA-ORG.tar.gz`、`WMA-NABA.tar.gz.001`..、`WMA-EastWest.tar.gz.001`.. 需按需单独获取；Intel `x86_64` Mac 真机硬件尚未实测验证）。
 
-### 方式三：从源码部署插件
+### 方式三：从源码部署插件（开发者）
 
 仓库暂为私有，需要已有访问权限。以下轻量源码安装不下载网站和历史报告；
 开发测试与科研材料保留在完整仓库中。
@@ -181,29 +179,22 @@ Slicer 5.10 用户在 **Edit > Application Settings > Modules > Additional modul
 `--slicer-version` 应与实际安装版本一致。更新源码后重新部署并重启 Slicer。
 其他下载方式见[安装指南](docs/setup/DOWNLOADS.zh-CN.md)。
 
-### 准备所选环境
+### 按需资源与源码部署环境准备
 
-进入模块，勾选所需产品；插件会自动加入每个产品的前置步骤。然后点击 **环境与安装 > 准备所选分析环境**。
-一个对话框列出每项下载的大小及其许可（名称、链接和本地文件）。点击一次 **接受许可并安装** 即可。
-如提示重启，重启后再点击准备以继续。安装结束后，会用合成数据对每项功能做自检；
-自检失败会显示出来，且不会标记为就绪。
-Slicer 扩展仅在产品需要时添加：神经网络模型和 native 脑掩膜需要 PyTorch，UKF 需要 UKFTractography，
-WMA 需要 SlicerDMRI。张量拟合不需要扩展。
+**采用方式一或方式二安装时，插件已内置 PyTorch、Python 依赖、核心权重、`UKFTractography` 及原生运行包**——用户无需手动安装 Slicer 的 PyTorch 扩展，也无需预先运行“准备所选分析环境”。仅当从源码部署（方式三）、修复损坏运行包、导入 FreeSurfer `license.txt` 或按需补装可选 WMA 图谱/模型时，才会用到 **环境与安装 > 准备所选分析环境**。
 
-权重、模板和图谱单独存放于 [**SlicerDSpace-models**](https://github.com/ChengjinLii/SlicerDSpace-models)。配置过程校验 SHA256、
-缓存下载并保存路径；**更多选项** 提供已有环境、离线模型和修复入口。
-详见[自动配置](docs/setup/MANAGED_SETUP.zh-CN.md)与[资源条款](docs/assets/MODEL_ASSET_TERMS.md)。
+触发后，弹窗会一次性列出缺失项的体积与许可（名称、链接和本地文件），点击一次 **接受许可并安装**，按提示重启并再次准备即可；安装结束会自动以合成数据自检。对于源码部署，插件按实际勾选流程按需安装缺失的扩展（神经网络模型与 native 脑掩膜需要 PyTorch，UKF 需要 UKFTractography，SlicerDMRI 按需可选；张量拟合不需要额外扩展）。
 
-不使用图形界面时，可在 Slicer 自带的 Python 中运行同样的准备。`PythonSlicer` 位于 Slicer 的 `bin` 文件夹，
-无需系统 Python。第一条命令列出计划（含大小和许可）；第二条执行安装并接受所列全部许可：
+可选权重、模板与图谱存放在 [**SlicerDSpace-models**](https://github.com/ChengjinLii/SlicerDSpace-models)。配置流程会校验 SHA256、缓存下载并在 **更多选项** 中保存路径；详见[自动配置](docs/setup/MANAGED_SETUP.zh-CN.md)与[资源条款](docs/assets/MODEL_ASSET_TERMS.md)。
+
+不使用图形界面时，也可直接在 Slicer 自带的 `PythonSlicer` 中完成上述按需准备（无需系统 Python）：
 
 ```bash
 PythonSlicer scripts/setup_selected.py --targets microstructure,tractography
 PythonSlicer scripts/setup_selected.py --targets microstructure,tractography --execute --accept-licences
 ```
 
-准备过程会自动运行自检（`scripts/check_setup_functionality.py`）。
-需要显式使用 CLI 准备表面模型时：
+自检通过 `scripts/check_setup_functionality.py` 运行；如需命令行显式拉取表面模型资源：
 
 ```bash
 PythonSlicer scripts/download_model_assets.py --profile surface \
@@ -218,13 +209,13 @@ PythonSlicer scripts/download_model_assets.py --profile surface \
 
 ## 快速开始
 
-1. 打开 **Modules > Diffusion > SlicerDSpace**，在标题栏选择中文或英文。
-2. 设置 **Subject root**、**Subject ID**，按需另选 **Output directory**。
-3. 首次 DTI 分析仅勾选 **Microstructure**，在旁边 **...** 中保留 **DTI**。
-4. 准备所选环境后，点击 **Run SlicerDSpace**。
-5. 在场景中检查 FA/MD，通过 **结果与 QC** 查看本次运行的检查、日志及加载操作。
+1. 打开 **Modules > Diffusion > SlicerDSpace**，在顶部切换中文或英文。
+2. 在 **Inputs** 中填写 **Subject ID** 与 **Output folder**（分析结果将自动写入 `<Output folder>/<Subject ID>/`），然后在 **NIfTI / NRRD / DICOM** 标签页拖入或浏览选择 DWI 影像数据。
+3. 在 **Analysis** 中勾选所需分析阶段（首次快速验证可仅保留 **Microstructure › DTI**；点击阶段旁 `...` 可选具体算法），并选择 **Compute device**（`Auto`、`CPU`、`Apple MPS` 或 `CUDA GPU`）。
+4. 点击 **Run SlicerDSpace**（按钮下方实时显示阶段进度与耗时；一键包/底座包可直接使用，若缺少可选图谱或首次使用皮层后处理会按需提示补充或导入 FreeSurfer 许可）。
+5. 在场景中检查自动加载的影像与模型，并在 **Results** 面板通过眼睛图标控制显隐（右键可卸载或查看统计表/JSON），点击 **Open report** 查看 `06_qc/` 下的 QC 总结报告。
 
-准备好的输入采用以下结构：
+命令行与队列批处理使用如下标准准备好的被试目录结构（图形界面导入 NIfTI、NRRD/NHDR 或 DICOM 时会自动整理成该结构）：
 
 ```text
 sub-01/
@@ -235,8 +226,6 @@ sub-01/
     nodif_brain_mask.nii.gz   # 可选；自行提供或生成
 ```
 
-掩膜与 DWI 使用同一体素网格，梯度数量与 DWI 体积数一致；
-运动校正后的 DWI 使用配套旋转梯度。DICOM/NRRD 导入位于 **高级设置 > 脑区与输入导入**。
 [首次工作流教程](docs/setup/QUICKSTART.zh-CN.md)另含合成安装测试。
 
 ### 默认方法与替代选项
@@ -313,7 +302,7 @@ export SLICER="/path/to/Slicer"
 | --- | --- |
 | 参考环境 | Windows (`x86_64`)、Linux (`x86_64`) 与 macOS (Apple Silicon `arm64`)，目标 3D Slicer 5.10.0；Intel (`x86_64`) Mac 真机硬件未验证 |
 | 验证 | 已记录 Windows、Linux 与 macOS (`arm64`) 在 3D Slicer 5.10.0 下的 Extension Manager 安装、GUI 冒烟测试、损坏运行包自动修复及真实数据工作流（`HCP 100307`、`HCP 100408`、临床单壳 `sub-001`） |
-| 分发 | GitHub Release `v0.1.1` 平台统一安装包（`SlicerDSpace-v0.1.1-Windows-x64.zip`、`SlicerDSpace-v0.1.1-Linux-x64.tar.gz`、`SlicerDSpace-v0.1.1-macOS-arm64.tar.gz`），通过 Slicer Extension Manager 本地文件安装（`Install Extension from File`）；在线扩展商店目录（Extension Catalog）仍为 Tier 1 申请草稿 |
+| 分发 | GitHub Release `v0.1.1` 一键安装引导包（`SlicerDSpaceSetup-macOS.zip`、`SlicerDSpaceSetup-Windows.zip`、`SlicerDSpaceSetup-Linux.zip`，可在[官网向导](https://neurodmri.github.io/SlicerDSpace/zh.html#start)预配置）及分平台离线底座包（`SlicerDSpace-v0.1.1-Windows-x64.zip`、`SlicerDSpace-v0.1.1-Linux-x64.tar.gz`、`SlicerDSpace-v0.1.1-macOS-arm64.tar.gz`）+ 独立 WMA 图谱包；在线扩展商店目录（Extension Catalog）仍为 Tier 1 申请草稿 |
 | 授权 | 项目代码采用 BSD-3-Clause；第三方运行环境与按需下载的模型资源各自保留条款与发布门禁（皮层表面后处理仍需用户自备 FreeSurfer 许可证） |
 
 执行状态、自动 QC 和人工审核分别记录或评估。

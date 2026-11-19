@@ -83,15 +83,11 @@ configured resource budget. See [experiments](docs/setup/EXPERIMENTS.md) and
 | Scientific Python | Python, NumPy, SciPy, nibabel, SimpleITK | Images, geometry, numerical fitting and data exchange |
 | Neural inference | PyTorch, DDSeg/DDParcel/DDSurfer models | Tissue, regional and surface reconstruction |
 | Microstructure | DIPY, AMICO, Python MK-Curve | Tensor, free-water, neurite and kurtosis models |
-| Diffusion tools | Teem tensor fit (Slicer core); optional UKFTractography, MRtrix3 and FSL; SlicerDMRI for WMA only | DTI fit, tracking and selected correction routes |
+| Diffusion tools | Teem tensor fit (Slicer core); optional UKFTractography, MRtrix3, FSL and SlicerDMRI | DTI fit, tracking and selected correction routes |
 | Optional backends | PNL CNN/ANTs, native FreeSurfer components, WMQL, WMA, TractCloud | Masking, cortical postprocessing and bundle identification |
 | Automation | Python CLI, JSON run plans, batch runner, Agent Skill | Reproducible commands, parameter variants and cohort scheduling |
 
-Dependencies follow the selected route. The DTI fit runs inside Slicer and needs
-no extra extension. The default CSD/ACT route needs MRtrix3; a DTI-only route
-with a supplied mask avoids PNL, FSL and FreeSurfer.
-The explicit Slicer-native preset offers fewer external environments.
-See the [capability/platform matrix](docs/setup/SUPPORT_MATRIX.md).
+Unified one-click setup archives and standalone OS Base packages are self-contained (`depends NA`) and already bundle Python 3.12 (including **PyTorch** and `torchvision`), core model weights, `UKFTractography`, and native `MRtrix3`/`FSL`/`FreeSurfer Surface Runtime` binaries—no separate Slicer PyTorch or SlicerDMRI extension install is needed. For source-staged or modular installs, dependencies follow the selected route: DTI fitting runs inside Slicer without extra extensions, CSD/ACT uses MRtrix3, and a DTI-only route with a supplied mask avoids PNL, FSL and FreeSurfer. See the [capability/platform matrix](docs/setup/SUPPORT_MATRIX.md).
 
 **Implementation origins:** DDSeg uses converted Python/PyTorch models; SAF
 and MK-Curve are unofficial Python ports of author MATLAB methods. PNL CNN
@@ -147,33 +143,32 @@ Show me the plan and wait for confirmation before running. Afterwards, summarize
 
 Change the requested methods to suit your study; the [usage guide](.agents/skills/slicerdspace/references/usage.md)
 and [CLI templates](docs/setup/CLI_TEMPLATES.md) cover other routes and batch execution.
-The website guide bot provides navigation and curated answers; installation and
-analysis run through your own Agent.
 
 ---
 
 ## Installation
 
-### Option A: One-Click Graphical Setup Extension (GitHub Releases or Website Customizer)
+### Option A: One-Click Graphical Setup Extension (Recommended)
 
-Download the lightweight **universal Setup archive** directly from [GitHub Releases](https://github.com/NeuroDMRI/SlicerDSpace/releases) (`SlicerDSpaceSetup-macOS.zip`, `SlicerDSpaceSetup-Windows.zip`, or `SlicerDSpaceSetup-Linux.zip`), or customize options first on the [SlicerDSpace Project Site](https://neurodmri.github.io/SlicerDSpace/#start) (or [中文页面](https://neurodmri.github.io/SlicerDSpace/zh.html#start)):
-- Import the `SlicerDSpaceSetup-<OS>.zip` file in **3D Slicer 5.10.0** via **View > Extensions Manager > wrench icon > Install Extension from File...** and restart Slicer. The **SlicerDSpace Setup** window opens automatically and waits for your confirmation (`Start Install`) before downloading.
-- Core workflows (**SlicerDSpace Base Features**, `~1.4–1.7 GB`, locked/required) bundle Preprocessing, **PNL** Brain Mask weights, **Anatomical Priors (`DDSeg`, `DDParcel`, `DDSurfer` + FreeSurfer surface atlas)**, Microstructure (`DTI`, `Free-Water`, `NODDI`, `DKI`), Tractography (`CSD/ACT`, `UKF`, `SAF`), `WMQL`, `TractCloud`, Connectome, Python 3.12 dependencies, `UKFTractography` CLI, and native binary runtimes (`MRtrix3 3.0.8`, `FSL 2602.0`, and `FreeSurfer Surface Runtime` with `activation_key_included: false`).
-- Under **Optional WMA White-Matter Atlases**, review or toggle atlases (**`ORG`** checked by default as a single `< 2.0 GiB` pack; huge **`NABA`** and **`East-West`** unchecked by default).
-- Built-in multi-threaded HTTP Range resume, **GitHub download mirror** (`ghfast.top` / `gh-proxy.com` / custom prefix), **HTTP/HTTPS proxy**, and **local offline folder** controls let you configure network access cleanly before clicking **`Start Install`** (a headless CLI script is also offered on the website for SSH/server setups).
-- If you select an omitted WMA atlas (`ORG`, `NABA`, or `East-West`) later inside 3D Slicer, SlicerDSpace immediately offers a one-click **hot on-demand download or offline folder import** without reinstalling the extension or restarting Slicer.
+1. **Install 3D Slicer 5.10.0** for Windows (`x86_64`), Linux (`x86_64`) or Apple Silicon macOS (`arm64`) from [download.slicer.org](https://download.slicer.org/).
+2. **Customize and download the `~13 KB` setup archive** (`SlicerDSpaceSetup-macOS.zip`, `SlicerDSpaceSetup-Windows.zip` or `SlicerDSpaceSetup-Linux.zip`) on the [SlicerDSpace Project Website](https://neurodmri.github.io/SlicerDSpace/#start) ([中文页面](https://neurodmri.github.io/SlicerDSpace/zh.html#start)) — choose your operating system (`macOS arm64`, `Windows x86_64`, `Linux x86_64`), optional WMA white-matter atlases, and optional **GitHub mirror** (`ghfast.top` / `gh-proxy.com` / custom prefix), **HTTP/HTTPS proxy**, **local offline folder** or **model directory** — or download the universal setup `.zip` directly from [GitHub Releases](https://github.com/NeuroDMRI/SlicerDSpace/releases).
+3. **Install in 3D Slicer 5.10.0** via **View > Extensions Manager > top-right wrench icon > Install Extension from File...**, select `SlicerDSpaceSetup-<OS>.zip`, and restart Slicer. After restarting, the **SlicerDSpace Setup** wizard opens automatically; confirm your options and click **Start Install** (12-thread HTTP Range resume; automatically fetches and verifies the NITRC `IITmean_b0_256.nii.gz` template). Once deployment finishes, restart Slicer and open **Modules > Diffusion > SlicerDSpace**.
 
-### Option B: Manual Unified OS Base Package + Optional WMA Atlases
+What is included automatically (no separate Slicer `PyTorch`, `UKFTractography`, or `SlicerDMRI` installation needed):
+- **Included Base Package (`~1.4–1.7 GB`, self-contained, `depends NA`)**: SlicerDSpace module, bundled Python 3.12 packages (**including PyTorch and torchvision**), all non-WMA deep-learning weights and templates (`DDSeg`, `DDParcel`, `DDSurfer` + FreeSurfer surface atlas, `PNL` brain mask weights, `TractCloud`), pinned algorithm sources (`WMQL`, `WMA`, `TractCloud`), `UKFTractography` CLI, and native binary runtimes (`MRtrix3 3.0.8`, `FSL 2602.0`, `FreeSurfer Surface Runtime` with `activation_key_included: false` — optional cortical surface postprocessing still requires your own FreeSurfer `license.txt`).
+- **Optional WMA White-Matter Atlases**: `ORG` checked by default (`< 2.0 GiB`); large `NABA` (`~3 GB`) and `East-West` (`~10 GB`) unchecked by default. Any omitted atlas (`ORG`, `NABA` or `East-West`) can be hot-downloaded or imported offline later inside Slicer without reinstalling or restarting.
 
-From the [GitHub Releases](https://github.com/NeuroDMRI/SlicerDSpace/releases) page, download the compact unified **OS Base package** (`~1.4–1.7 GB`) for your platform:
+### Option B: Standalone Offline OS Base Package + Optional WMA Atlases
+
+For offline machines or manual installation from [GitHub Releases](https://github.com/NeuroDMRI/SlicerDSpace/releases), download the compact unified **OS Base package** (`~1.4–1.7 GB`) for your platform:
 
 - **Windows (`x86_64`)**: `SlicerDSpace-v0.1.1-Windows-x64.zip`
 - **Linux (`x86_64`)**: `SlicerDSpace-v0.1.1-Linux-x64.tar.gz`
 - **macOS (Apple Silicon `arm64`)**: `SlicerDSpace-v0.1.1-macOS-arm64.tar.gz`
 
-Each OS Base package is self-contained with the SlicerDSpace module (`depends NA`), Python 3.12 packages (`bundled-python/`), all non-WMA deep-learning weights and templates (`bundled-model-assets/`: `DDSeg`, `DDParcel`, `DDSurfer` + `atlas.tar.gz`, `PNL` weights [excluding `upstream-only` NITRC `IITmean_b0_256.nii.gz`], and `TractCloud`), pinned algorithm sources (`bundled-sources/`: `WMQL`, `WMA`, `TractCloud`), companion `UKFTractography` CLI, and native binary runtimes inside `SlicerDSpace/bundled-runtimes/` (**MRtrix3 `3.0.8`**, **FSL `2602.0`** with `topup`/`applytopup`/`eddy_cpu`, and the **FreeSurfer Surface Runtime** with `activation_key_included: false`, so optional cortical surface postprocessing still requires your own FreeSurfer `license.txt`). Install directly in **3D Slicer 5.10.0** via **View > Extensions Manager > Install Extensions > Install Extension from File**, restart Slicer, and open **Modules > Diffusion > SlicerDSpace**—ready for all workflows except WMA atlases. The three optional WMA white-matter atlases (`WMA-ORG.tar.gz`, `WMA-NABA.tar.gz.001`.., `WMA-EastWest.tar.gz.001`..) are distributed separately on GitHub Releases and installed either via the Website Customizer or inside Slicer on first selection. (Bundled native runtimes are verified via per-file `tree_sha256` digests; physical Intel `x86_64` Mac hardware remains unverified.)
+Install via **View > Extensions Manager > top-right wrench icon > Install Extension from File...** (**do not use GitHub's automatic Source code archive**), restart Slicer and open **Modules > Diffusion > SlicerDSpace**. Each Base package is self-contained (`depends NA`) with bundled Python 3.12 (**PyTorch + torchvision**), core model weights (`DDSeg`, `DDParcel`, `DDSurfer` + `atlas.tar.gz`, `PNL`, `TractCloud`), algorithm sources (`WMQL`, `WMA`, `TractCloud`), `UKFTractography` CLI, and native `MRtrix3`/`FSL`/`FreeSurfer Surface Runtime` binaries verified by per-file `tree_sha256` digests (`activation_key_included: false`, so optional cortical surface postprocessing requires your own FreeSurfer `license.txt`; NITRC `IITmean_b0_256.nii.gz` and the three optional WMA atlases `WMA-ORG.tar.gz`, `WMA-NABA.tar.gz.001`.., `WMA-EastWest.tar.gz.001`.. remain separate; physical Intel `x86_64` Mac hardware remains unverified).
 
-### Option C: Stage From Source
+### Option C: Stage From Source (Developers)
 
 Use an authorized checkout while the repository is private. This lightweight
 source installation omits the website and historical reports; a full checkout
@@ -196,39 +191,25 @@ Settings > Modules > Additional module paths**, then restart:
 ~/SlicerDSpace-extension/SlicerDSpace/lib/Slicer-5.10/qt-scripted-modules
 ```
 
-Match `--slicer-version` to your installation. After a source update, restage
-the extension and restart Slicer. More options: [download and installation guide](docs/setup/DOWNLOADS.md).
+`--slicer-version` applies to your installed Slicer release. After a source update,
+restage the extension and restart Slicer. More options: [download and installation guide](docs/setup/DOWNLOADS.md).
 
-### Prepare The Selected Environment
+### On-Demand Resources And Source-Staged Environment
 
-In the module, tick the products you need. The plugin adds the prerequisites of
-each ticked product by itself. Then open **Environment and installation >
-Prepare selected analysis environment**. One dialog lists every download with
-its size and its licence (name, link and local file). Press **Accept licences
-and install** once. Restart if Slicer asks, then select Prepare again to
-continue. When the install ends, a self-check runs for each feature on synthetic
-data; a failed self-check is shown and the setup is not marked ready.
-Slicer extensions are added only when a product needs them: PyTorch for the
-neural models and the native brain mask, UKFTractography for UKF and
-SlicerDMRI for WMA. The tensor fit needs no extension.
+**Option A and Option B already bundle PyTorch, Python packages, core weights, `UKFTractography`, and native runtimes** — you do not need to install Slicer's separate PyTorch extension or run **Prepare selected analysis environment** for bundled workflows. Use **Environment and installation > Prepare selected analysis environment** only for source-staged installs (Option C), runtime repair, supplying a FreeSurfer `license.txt`, or adding optional WMA atlases/models on demand.
 
-Weights, templates and atlases live separately in [**SlicerDSpace-models**](https://github.com/ChengjinLii/SlicerDSpace-models).
-The setup checks SHA256, caches downloads and saves paths. Existing installations,
-offline models and repair are available under **More options**.
-See [managed setup](docs/setup/MANAGED_SETUP.md) and
-[resource terms](docs/assets/MODEL_ASSET_TERMS.md).
+When triggered, one dialog lists every missing component with its size and licence (name, link and local file); press **Accept licences and install** once, restart if Slicer asks, and select Prepare again to continue. A synthetic self-check runs per feature before it is marked ready. For source-staged installs, Slicer extensions are added only when required (`PyTorch` for neural models and the native brain mask, `UKFTractography` for UKF, and optional `SlicerDMRI`; tensor fitting needs no extension).
 
-Without the GUI, run the same setup in Slicer's own Python. `PythonSlicer` is in
-the Slicer `bin` folder; no system Python is needed. The first command lists the
-plan with sizes and licences; the second installs and accepts every listed licence:
+Optional weights, templates and atlases reside in [**SlicerDSpace-models**](https://github.com/ChengjinLii/SlicerDSpace-models). Setup verifies SHA256 digests, caches downloads and saves configured paths under **More options**. See [managed setup](docs/setup/MANAGED_SETUP.md) and [resource terms](docs/assets/MODEL_ASSET_TERMS.md).
+
+Without the GUI, run the same setup in Slicer's own `PythonSlicer` (no system Python is needed); the first command inspects the plan and the second installs with licence acceptance:
 
 ```bash
 PythonSlicer scripts/setup_selected.py --targets microstructure,tractography
 PythonSlicer scripts/setup_selected.py --targets microstructure,tractography --execute --accept-licences
 ```
 
-The setup runs the self-checks (`scripts/check_setup_functionality.py`) for you.
-For explicit CLI surface-model preparation:
+Self-checks run through `scripts/check_setup_functionality.py`. For explicit CLI model downloads:
 
 ```bash
 PythonSlicer scripts/download_model_assets.py --profile surface \
@@ -244,12 +225,12 @@ Other profiles and offline import are documented in [model setup](docs/assets/MO
 ## Quick Start
 
 1. Open **Modules > Diffusion > SlicerDSpace** and choose English or Chinese.
-2. Set **Subject root**, **Subject ID** and, optionally, an **Output directory**.
-3. For a first DTI run, select only **Microstructure** and retain **DTI** in its **...** selector.
-4. Prepare the selected environment, then click **Run SlicerDSpace**.
-5. Inspect FA/MD in the scene and open **Results** for the run's checks, logs and loading controls.
+2. Under **Inputs**, enter **Subject ID** and **Output folder** (outputs write automatically under `<Output folder>/<Subject ID>/`), then drop or browse your DWI data in the **NIfTI / NRRD / DICOM** tabs.
+3. Under **Analysis**, tick desired stages (for a quick check, keep only **Microstructure** with **DTI** selected under `...`) and set **Compute device** (`Auto`, `CPU`, `Apple MPS` or `CUDA GPU`).
+4. Click **Run SlicerDSpace** (live stage progress and elapsed time appear beneath the button; one-click / base-package installs run directly, while omitted atlases or a one-time FreeSurfer license prompt on demand).
+5. Inspect loaded volumes/models in the scene and open **Results** to toggle visibility (eye icon; right-click to unload or open tables/JSON) or click **Open report** for QC summaries under `06_qc/`.
 
-Prepared inputs use this layout:
+CLI and batch runs use the canonical prepared subject layout below (GUI imports from NIfTI, NRRD/NHDR or DICOM normalize files into this structure automatically):
 
 ```text
 sub-01/
@@ -260,9 +241,6 @@ sub-01/
     nodif_brain_mask.nii.gz   # optional; supply or generate
 ```
 
-The mask shares the DWI voxel grid. Gradients match the DWI volume count;
-motion-corrected data use the corresponding rotated gradients.
-DICOM/NRRD import is under **Advanced settings > Regions & input import**.
 The [first-workflow tutorial](docs/setup/QUICKSTART.md) includes a synthetic installation check.
 
 ### Default Methods And Alternatives
@@ -353,7 +331,7 @@ Start with one concurrency level and budget combined RAM/VRAM use.
 | --- | --- |
 | Reference environment | Windows (`x86_64`), Linux (`x86_64`), and macOS (Apple Silicon `arm64`) on 3D Slicer 5.10.0; physical Intel (`x86_64`) Mac hardware is unverified |
 | Validation | Recorded Windows, Linux & macOS (`arm64`) Slicer 5.10.0 Extension Manager install, GUI smoke suites, runtime corruption auto-repair, and real-data workflows (`HCP 100307`, `HCP 100408`, clinical `sub-001`) |
-| Distribution | GitHub Release `v0.1.1` unified platform packages (`SlicerDSpace-v0.1.1-Windows-x64.zip`, `SlicerDSpace-v0.1.1-Linux-x64.tar.gz`, `SlicerDSpace-v0.1.1-macOS-arm64.tar.gz`) installed via Slicer Extension Manager (`Install Extension from File`); online Extension Catalog listing remains a Tier 1 proposal |
+| Distribution | GitHub Release `v0.1.1` one-click setup archives (`SlicerDSpaceSetup-macOS.zip`, `SlicerDSpaceSetup-Windows.zip`, `SlicerDSpaceSetup-Linux.zip`, customizable via the [Project Website](https://neurodmri.github.io/SlicerDSpace/#start)) and standalone OS Base packages (`SlicerDSpace-v0.1.1-Windows-x64.zip`, `SlicerDSpace-v0.1.1-Linux-x64.tar.gz`, `SlicerDSpace-v0.1.1-macOS-arm64.tar.gz`) + separate WMA atlases; online Extension Catalog listing remains a Tier 1 proposal |
 | Licensing | BSD-3-Clause project code; third-party runtimes and on-demand model assets retain separate terms and release gates (FreeSurfer surface postprocessing requires a user-supplied license) |
 
 Execution status, automatic QC and human review are recorded or assessed separately.

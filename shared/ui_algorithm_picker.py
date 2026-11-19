@@ -34,6 +34,14 @@ FAMILIES = {
     "connectome": ("targetConnectomeCheckBox", CONNECTOME, "orchestrationConnectomeMetrics"),
 }
 
+FAMILY_TARGET_ATTRS = {
+    "preprocessing": "targetPreprocessing",
+    "microstructure": "targetMicrostructure",
+    "tractography": "targetTractography",
+    "bundles": "targetBundles",
+    "connectome": "targetConnectome",
+}
+
 
 ANATOMICAL_PRIORS = {
     "targetSurface": ("Surfaces", "皮层表面"),
@@ -42,18 +50,35 @@ ANATOMICAL_PRIORS = {
 }
 
 
-def _set_anatomical_priors(owner, selected):
+def _remembered_anatomical_priors(owner) -> tuple[str, ...]:
+    raw = getattr(owner, "_lastAnatomicalPriorsSelection", None) or ()
+    return tuple(field for field in ANATOMICAL_PRIORS if field in raw)
+
+
+def _set_anatomical_priors(owner, selected, *, clear_memory: bool = False):
     import slicer
 
     node = owner._parameterNode
     if node is None:
         return
+    ordered = tuple(field for field in ANATOMICAL_PRIORS if field in selected)
+    if ordered:
+        owner._lastAnatomicalPriorsSelection = ordered
+    elif clear_memory:
+        owner._lastAnatomicalPriorsSelection = ()
     with slicer.util.NodeModify(node):
         for field in ANATOMICAL_PRIORS:
-            setattr(node, field, field in selected)
+            setattr(node, field, field in ordered)
     owner._lastEnvironmentResult = owner._lastEnvironmentSignature = None
-    owner._refresh_advanced_run_settings()
-    owner._schedule_common_user_settings_save()
+    refresh_adv = getattr(owner, "_refresh_advanced_run_settings", None)
+    if callable(refresh_adv):
+        refresh_adv()
+    lang = getattr(owner, "_onboardingLanguage", "en")
+    zh = isinstance(lang, str) and lang.startswith("zh")
+    _refresh_anatomical_priors(owner, zh)
+    schedule_save = getattr(owner, "_schedule_common_user_settings_save", None)
+    if callable(schedule_save):
+        schedule_save()
 
 
 def _refresh_anatomical_priors(owner, zh):
@@ -67,13 +92,26 @@ def _refresh_anatomical_priors(owner, zh):
     label.setText(title)
     label_button.setMinimumWidth(label.sizeHint.width())
     checkbox.setAccessibleName(title)
-    selected = [names[int(zh)] for field, names in ANATOMICAL_PRIORS.items()
-                if getattr(owner._parameterNode, field, False)]
-    checkbox.setCheckState({
-        0: qt.Qt.Unchecked,
-        len(ANATOMICAL_PRIORS): qt.Qt.Checked,
-    }.get(len(selected), qt.Qt.PartiallyChecked))
-    summary.setText(" · ".join(selected) if selected else ("未选择" if zh else "None selected"))
+    active = tuple(
+        field for field in ANATOMICAL_PRIORS
+        if getattr(owner._parameterNode, field, False)
+    )
+    if active:
+        owner._lastAnatomicalPriorsSelection = active
+    display_fields = active or _remembered_anatomical_priors(owner)
+    display_labels = [ANATOMICAL_PRIORS[field][int(zh)] for field in display_fields]
+    checked = bool(active)
+    block = getattr(checkbox, "blockSignals", None)
+    was_blocked = block(True) if callable(block) else False
+    try:
+        if hasattr(checkbox, "setChecked"):
+            checkbox.setChecked(checked)
+        elif hasattr(checkbox, "setCheckState"):
+            checkbox.setCheckState(qt.Qt.Checked if checked else qt.Qt.Unchecked)
+    finally:
+        if callable(block):
+            block(was_blocked if isinstance(was_blocked, bool) else False)
+    summary.setText(" · ".join(display_labels) if display_labels else ("未选择" if zh else "None selected"))
     tip = "选择解剖先验（可多选）" if zh else "Select anatomical priors (multiple allowed)"
     arrow.setAccessibleName(tip)
     arrow.setToolTip(tip)
@@ -237,7 +275,8 @@ def choose_algorithms(owner, family):
     if is_anatomical:
         choices = tuple(ANATOMICAL_PRIORS)
         title_text = "解剖先验" if zh else "Anatomical priors"
-        current = tuple(field for field in choices if getattr(owner._parameterNode, field, False))
+        active = tuple(field for field in choices if getattr(owner._parameterNode, field, False))
+        current = active or _remembered_anatomical_priors(owner)
     else:
         _, choices, _ = FAMILIES[family]
         title_text = "选择算法（可多选）" if zh else "Select algorithms (multiple allowed)"
@@ -452,12 +491,28 @@ def choose_algorithms(owner, family):
     if accepted:
         selection = [value for value, box in boxes.items() if box.checked]
         if is_anatomical:
-            _set_anatomical_priors(owner, selection)
+            _set_anatomical_priors(owner, selection, clear_memory=not selection)
         else:
+            target_attr = FAMILY_TARGET_ATTRS.get(family)
+            box_name, _, _ = FAMILIES[family]
+            ui_box = getattr(getattr(owner, "ui", None), box_name, None)
+            can_enable = True
+            if ui_box is not None and callable(getattr(ui_box, "isEnabled", None)):
+                enabled_val = ui_box.isEnabled()
+                if isinstance(enabled_val, bool):
+                    can_enable = enabled_val
             with slicer.util.NodeModify(owner._parameterNode):
                 for attribute, value in staged.items():
                     setattr(owner._parameterNode, attribute, value())
+                if selection and target_attr and can_enable:
+                    setattr(owner._parameterNode, target_attr, True)
                 set_algorithms(owner, family, selection)
+            if selection and target_attr and can_enable and ui_box is not None:
+                sync_checkbox = getattr(owner, "_sync_checkbox", None)
+                if callable(sync_checkbox):
+                    sync_checkbox(ui_box, True)
+                elif hasattr(ui_box, "setChecked"):
+                    ui_box.setChecked(True)
         if hasattr(qt, "QTimer"):
             from shared.ui_on_demand_resources import maybe_prompt_on_demand_install
 
@@ -527,11 +582,14 @@ def install_algorithm_pickers(owner):
 
         checkbox = qt.QCheckBox()
         checkbox.setObjectName("anatomicalPriorsCheckBox")
-        checkbox.setTristate(True)
         checkbox.setFixedWidth(indicator_width)
         checkbox.setMinimumHeight(18)
         def _on_anatomical_clicked(checked: bool) -> None:
-            _set_anatomical_priors(owner, ANATOMICAL_PRIORS if checked else ())
+            if checked:
+                fields = _remembered_anatomical_priors(owner) or tuple(ANATOMICAL_PRIORS)
+                _set_anatomical_priors(owner, fields)
+            else:
+                _set_anatomical_priors(owner, (), clear_memory=False)
             if checked and hasattr(qt, "QTimer"):
                 from shared.ui_on_demand_resources import maybe_prompt_on_demand_install
 

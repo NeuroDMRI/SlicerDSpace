@@ -476,6 +476,154 @@ class AlgorithmRowTest(unittest.TestCase):
         ]
         self.assertEqual(len(summary_insets), 5)
 
+    def _build_full_picker_owner(self, qt):
+        qt.QDialog.Accepted = 1
+        qt.Qt.Checked = 2
+        qt.Qt.Unchecked = 0
+        qt.Qt.PartiallyChecked = 1
+        qt.QApplication.style.return_value.pixelMetric.side_effect = lambda _m: 18
+        form = mock.MagicMock(name="targetProductsFormLayout")
+        form.indexOf.return_value = 0
+        form.labelForField.side_effect = lambda w: mock.MagicMock(name=f"label_for_{getattr(w, 'objectName', 'ctrl')}")
+
+        def make_ui_checkbox(obj_name: str):
+            cb = mock.MagicMock(name=obj_name)
+            cb.objectName = obj_name
+            cb.checked = False
+            cb.isEnabled.return_value = True
+            cb.setChecked.side_effect = lambda v, w=cb: setattr(w, "checked", bool(v))
+            return cb
+
+        ui_fields = {
+            "targetProductsFormLayout": form,
+            "targetSurfaceCheckBox": make_ui_checkbox("targetSurfaceCheckBox"),
+            "targetSegmentationCheckBox": make_ui_checkbox("targetSegmentationCheckBox"),
+            "targetParcellationCheckBox": make_ui_checkbox("targetParcellationCheckBox"),
+            "targetSurfacePostprocessCheckBox": make_ui_checkbox("targetSurfacePostprocessCheckBox"),
+        }
+        for _, (box_name, _, _) in ui_algorithm_picker.FAMILIES.items():
+            ui_fields[box_name] = make_ui_checkbox(box_name)
+
+        node = SimpleNamespace(
+            targetSurface=False,
+            targetSegmentation=False,
+            targetParcellation=False,
+            targetSurfacePostprocess=False,
+            targetPreprocessing=False,
+            targetMicrostructure=False,
+            targetTractography=False,
+            targetBundles=False,
+            targetConnectome=False,
+            orchestrationPreprocessingStages="denoise,eddy,topup",
+            orchestrationMicrostructureStages="dti",
+            orchestrationTractographyBackend="csd_act",
+            orchestrationBundleBackend="wmql",
+            orchestrationConnectomeMetrics="sift2",
+            ukfParameters="{}",
+        )
+        owner = SimpleNamespace(
+            ui=SimpleNamespace(**ui_fields),
+            _uiWidget=None,
+            _parameterNode=node,
+            _onboardingLanguage="en",
+            _lastEnvironmentResult=None,
+            _lastEnvironmentSignature=None,
+            _refresh_advanced_run_settings=lambda: None,
+            _schedule_common_user_settings_save=lambda: None,
+            _sync_checkbox=lambda box, desired: box.setChecked(bool(desired)),
+        )
+        slicer = mock.MagicMock(name="slicer")
+        with (
+            mock.patch.dict(sys.modules, {"qt": qt, "slicer": slicer}),
+            mock.patch.object(ui_algorithm_picker, "refresh_picker_icons"),
+        ):
+            ui_algorithm_picker.install_algorithm_pickers(owner)
+        return owner, slicer
+
+    def _run_picker_accept(self, qt, slicer, owner, family: str, chosen: set[str], *, cancel: bool = False):
+        def fake_exec():
+            if cancel:
+                return 0
+            for widget in qt.created:
+                if widget.kind == "QCheckBox" and str(getattr(widget, "objectName", "")).startswith("algorithm_"):
+                    key = widget.objectName.removeprefix("algorithm_")
+                    widget.checked = key in chosen
+            return qt.QDialog.Accepted
+
+        orig_qdialog = qt.QDialog.side_effect
+
+        def make_dialog(*args, **kwargs):
+            dlg = orig_qdialog(*args, **kwargs)
+            dlg.exec_.side_effect = fake_exec
+            return dlg
+
+        qt.QDialog.side_effect = make_dialog
+        with mock.patch.dict(sys.modules, {"qt": qt, "slicer": slicer}):
+            return ui_algorithm_picker.choose_algorithms(owner, family)
+
+    def test_selecting_surfaces_only_checks_outer_box_and_preserves_subset_on_toggle(self) -> None:
+        qt = fake_qt()
+        owner, slicer = self._build_full_picker_owner(qt)
+        outer_checkbox = owner._anatomicalPriorsRow[2]
+        summary_label = owner._anatomicalPriorsRow[3]
+        outer_checkbox.setTristate.assert_not_called()
+
+        accepted = self._run_picker_accept(qt, slicer, owner, "anatomical_priors", {"targetSurface"})
+        self.assertTrue(accepted)
+        node = owner._parameterNode
+        self.assertTrue(node.targetSurface)
+        self.assertFalse(node.targetSegmentation)
+        self.assertFalse(node.targetParcellation)
+        self.assertTrue(outer_checkbox.checked)
+        self.assertEqual(summary_label.setText.call_args[0][0], "Surfaces")
+
+        # Clicking the checked box disables all 3 while remembering ("targetSurface",)
+        on_clicked = outer_checkbox.clicked.connect.call_args.args[0]
+        with mock.patch.dict(sys.modules, {"qt": qt, "slicer": slicer}):
+            on_clicked(False)
+        self.assertFalse(any((node.targetSurface, node.targetSegmentation, node.targetParcellation)))
+        self.assertFalse(outer_checkbox.checked)
+        self.assertEqual(summary_label.setText.call_args[0][0], "Surfaces")
+
+        # Re-checking restores ONLY Surfaces, never Segmentation or Parcellation
+        with mock.patch.dict(sys.modules, {"qt": qt, "slicer": slicer}):
+            on_clicked(True)
+        self.assertTrue(node.targetSurface)
+        self.assertFalse(node.targetSegmentation)
+        self.assertFalse(node.targetParcellation)
+        self.assertTrue(outer_checkbox.checked)
+
+        # Unchecking everything inside the popup and applying clears memory too
+        accepted = self._run_picker_accept(qt, slicer, owner, "anatomical_priors", set())
+        self.assertTrue(accepted)
+        self.assertFalse(any((node.targetSurface, node.targetSegmentation, node.targetParcellation)))
+        self.assertFalse(outer_checkbox.checked)
+        self.assertEqual(summary_label.setText.call_args[0][0], "None selected")
+
+        # Direct check with no remembered subset enables all 3 priors
+        with mock.patch.dict(sys.modules, {"qt": qt, "slicer": slicer}):
+            on_clicked(True)
+        self.assertTrue(all((node.targetSurface, node.targetSegmentation, node.targetParcellation)))
+
+    def test_accepting_family_picker_auto_checks_outer_checkbox_and_cancel_leaves_unchecked(self) -> None:
+        qt = fake_qt()
+        owner, slicer = self._build_full_picker_owner(qt)
+        node = owner._parameterNode
+
+        self.assertFalse(self._run_picker_accept(qt, slicer, owner, "tractography", {"ukf"}, cancel=True))
+        self.assertFalse(node.targetTractography)
+        self.assertFalse(owner.ui.targetTractographyCheckBox.checked)
+
+        self.assertTrue(self._run_picker_accept(qt, slicer, owner, "tractography", {"ukf"}))
+        self.assertEqual(node.orchestrationTractographyBackend, "ukf")
+        self.assertTrue(node.targetTractography)
+        self.assertTrue(owner.ui.targetTractographyCheckBox.checked)
+
+        self.assertTrue(self._run_picker_accept(qt, slicer, owner, "bundles", {"wma"}))
+        self.assertEqual(node.orchestrationBundleBackend, "wma")
+        self.assertTrue(node.targetBundles)
+        self.assertTrue(owner.ui.targetBundlesCheckBox.checked)
+
 
 if __name__ == "__main__":
     unittest.main()

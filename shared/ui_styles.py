@@ -1258,10 +1258,6 @@ QGroupBox#resultsCollapsibleButton::title {
   left: 8px;
   padding: 0 3px;
 }
-QCheckBox#anatomicalPriorsCheckBox::indicator:indeterminate {
-  background: __SECTION_LINE__;
-  border-color: #777b7d;
-}
 """
 
 

@@ -69,9 +69,15 @@ def _file_info(path: Path) -> dict[str, object]:
     }
 
 
-def _native_bundle_from_expected_cache(subject_root: Path, subject_id: str, fit_method: str) -> NativeDTIBundle:
+def _native_bundle_from_expected_cache(
+    subject_root: Path,
+    subject_id: str,
+    fit_method: str,
+    *,
+    cache_root: Optional[Path] = None,
+) -> NativeDTIBundle:
     fit_key = fit_method.lower()
-    bundle_dir = subject_root / "cache" / "native_dti" / fit_key
+    bundle_dir = (cache_root if cache_root is not None else subject_root / "cache") / "native_dti" / fit_key
     return NativeDTIBundle(
         subject_root=subject_root,
         subject_id=subject_id,
@@ -673,7 +679,12 @@ def run_dti_tracking(config: DTITrackingConfig, *, log: Optional[Callable[[str],
         else default_task_output_dir(raw.subject_root, "tractography_dti")
     )
     output_dir.mkdir(parents=True, exist_ok=True)
-    native_bundle = _native_bundle_from_expected_cache(raw.subject_root, raw.subject_id, fit_method)
+    native_bundle = _native_bundle_from_expected_cache(
+        raw.subject_root,
+        raw.subject_id,
+        fit_method,
+        cache_root=raw.effective_cache_root,
+    )
     native_available = _native_cache_available(native_bundle)
     stem = f"{raw.subject_id}-dti-{tracking_method}"
     streamlines_path = output_dir / f"{stem}.{output_format}"

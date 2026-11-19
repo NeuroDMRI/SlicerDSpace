@@ -140,9 +140,19 @@ def review_state_text(qc, *, issues_found):
 
 
 def _is_internal_cache_path(path: Path, manifest: dict) -> bool:
+    roots: list[Path] = []
     subject_root = str(manifest.get("subject_root") or "").strip()
+    output_root_raw = str(manifest.get("output_root") or "").strip()
     if subject_root:
-        cache_root = Path(subject_root) / "cache"
+        roots.append(Path(subject_root) / "cache")
+        if output_root_raw:
+            from shared.io_layout import subject_layout
+
+            roots.append(subject_layout(Path(subject_root), output_root=Path(output_root_raw)).cache)
+    elif output_root_raw:
+        out = Path(output_root_raw)
+        roots.append((out.parent if out.name.lower() in {"output", "outputs"} else out) / "cache")
+    for cache_root in roots:
         try:
             path.relative_to(cache_root)
             return True

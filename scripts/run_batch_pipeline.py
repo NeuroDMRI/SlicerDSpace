@@ -70,10 +70,11 @@ def _direct_raw_files(path: Path) -> bool:
     return path.is_dir() and all((path / filename).exists() for filename in RAW_INPUT_FILES.values())
 
 
-def _arrange_subject_input(subject_dir: Path, mode: str) -> bool:
-    if mode == "none" or is_raw_subject_root(subject_dir) or not _direct_raw_files(subject_dir):
+def _arrange_subject_input(subject_dir: Path, mode: str, *, target_subject_root: Path | None = None) -> bool:
+    dest_subject = target_subject_root if target_subject_root is not None else subject_dir
+    if mode == "none" or is_raw_subject_root(subject_dir) or is_raw_subject_root(dest_subject) or not _direct_raw_files(subject_dir):
         return False
-    input_dir = subject_dir / "input"
+    input_dir = dest_subject / "input"
     input_dir.mkdir(parents=True, exist_ok=True)
     for filename in RAW_INPUT_FILES.values():
         source = subject_dir / filename
@@ -113,8 +114,10 @@ def discover_subjects(
     subject_list: Path | None = None,
     arrange_inputs: str = "none",
     include_missing: bool = False,
+    output_root: Path | None = None,
 ) -> tuple[list[BatchSubject], list[dict[str, str]]]:
     root = batch_root.expanduser().resolve()
+    resolved_output_root = output_root.expanduser().resolve() if output_root is not None else None
     if not root.is_dir():
         raise FileNotFoundError(f"Batch root does not exist or is not a directory: {root}")
 
@@ -127,9 +130,13 @@ def discover_subjects(
     subjects: list[BatchSubject] = []
     skipped: list[dict[str, str]] = []
     for candidate in candidates:
-        arranged = _arrange_subject_input(candidate, arrange_inputs)
         subject_id = candidate.name
-        inspected = inspect_subject_directory(candidate, subject_id)
+        target_subject_root = (resolved_output_root / subject_id) if resolved_output_root is not None else candidate
+        arranged = _arrange_subject_input(candidate, arrange_inputs, target_subject_root=target_subject_root)
+        inspect_dir = target_subject_root if (arranged and resolved_output_root is not None) else candidate
+        inspected = inspect_subject_directory(inspect_dir, subject_id)
+        if inspected["mode"] == "missing" and resolved_output_root is not None:
+            inspected = inspect_subject_directory(target_subject_root, subject_id)
         if inspected["mode"] == "missing":
             inspected = inspect_subject_directory(root, subject_id)
         if inspected["mode"] == "missing":
@@ -172,7 +179,7 @@ def build_subject_command(
         run_name,
     ]
     if output_root is not None:
-        command.extend(["--output-root", (output_root.expanduser().resolve() / subject.subject_id).as_posix()])
+        command.extend(["--output-root", (output_root.expanduser().resolve() / subject.subject_id / "outputs").as_posix()])
     if execute:
         command.append("--execute")
     command.extend(forwarded_args)
@@ -310,7 +317,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--subject-glob", default="*", help="Glob used under --batch-root when --subject-list is omitted.")
     parser.add_argument("--subject-list", type=Path, help="Optional text file listing subject directories or relative IDs.")
     parser.add_argument('--subject-limit', type=_parse_jobs, help='Process the first N eligible subjects; default: all.')
-    parser.add_argument("--output-root", type=Path, help="Batch output root. Each subject writes under <output-root>/<subject-id>.")
+    parser.add_argument("--output-root", type=Path, help="Batch output root. Each subject writes under <output-root>/<subject-id>/{input,preprocessed,cache,outputs}.")
     parser.add_argument("--run-name", default="Test1", help="Run name forwarded to each subject. Defaults to Test1.")
     parser.add_argument("--jobs", "--batch-size", dest="jobs", type=_parse_jobs,
                         help="Concurrent subjects; automatic in resource mode, otherwise 1.")
@@ -369,6 +376,7 @@ def main(argv: list[str] | None = None) -> int:
             subject_list=args.subject_list,
             arrange_inputs=args.arrange_inputs,
             include_missing=args.include_missing,
+            output_root=args.output_root.expanduser().resolve() if args.output_root else None,
         )
     except Exception as exc:
         parser.error(str(exc))

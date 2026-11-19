@@ -109,6 +109,7 @@ from shared.ui_run_controller import (
     partial_run_notice_text,
     preflight_blockers_for_targets,
     resolve_single_subject_output_root,
+    resolve_single_subject_workspace_root,
     runnable_targets_from_plan,
     rows_from_batch_manifest,
     rows_from_plan,
@@ -1562,7 +1563,6 @@ class SharedWidgetMixin:
         source_text = self._prepare_inputs_widget_text("source")
         if not source_text:
             raise ValueError("Select a NIfTI or NRRD/NHDR file, or a DICOM folder.")
-        from uuid import uuid4
         from shared.subject_id import derive_subject_id
         from shared.user_config import default_user_config_path
 
@@ -1571,8 +1571,12 @@ class SharedWidgetMixin:
         safe_id = derive_subject_id(subject_id)
         if not safe_id:
             raise ValueError("Enter a valid subject ID.")
-        workspace = default_user_config_path().parent / "subjects"
-        subject_root = workspace / f"{safe_id}-{uuid4().hex[:12]}"
+        output_dir_text = (getattr(self._parameterNode, "outputDirectory", "") or "").strip() if self._parameterNode else ""
+        workspace_root = resolve_single_subject_workspace_root(output_dir_text, safe_id)
+        if workspace_root is not None:
+            subject_root = workspace_root.expanduser().resolve()
+        else:
+            subject_root = default_user_config_path().parent / "subjects" / safe_id
         source_kind = self._prepareInputWidgets["source_kind"]
 
         def optional_path(key: str) -> Optional[Path]:
@@ -1599,6 +1603,7 @@ class SharedWidgetMixin:
             mask_path=optional_path("mask") if self._parameterNode.brainMaskBackend == "provided" else None,
             mrconvert_executable=mrconvert,
             dwiconvert_executable=dwiconvert,
+            force=True,
         )
 
     def _input_import_selection(self) -> tuple:
@@ -1608,7 +1613,8 @@ class SharedWidgetMixin:
             file_fields += ["bval", "bvec"]
         elif source_kind == "nrrd":
             file_fields.append("raw")
-        return (source_kind, self._shared_subject_id_text(), self._parameterNode.brainMaskBackend,
+        output_dir_text = (getattr(self._parameterNode, "outputDirectory", "") or "").strip() if self._parameterNode else ""
+        return (source_kind, self._shared_subject_id_text(), output_dir_text, self._parameterNode.brainMaskBackend,
                 *(self._prepare_inputs_widget_text(key) for key in file_fields))
 
     @staticmethod
@@ -1623,6 +1629,7 @@ class SharedWidgetMixin:
             "mask_path": str(config.mask_path) if config.mask_path else None,
             "mrconvert_executable": str(config.mrconvert_executable) if config.mrconvert_executable else None,
             "dwiconvert_executable": str(config.dwiconvert_executable) if config.dwiconvert_executable else None,
+            "force": bool(config.force),
         }
 
     def _cleanup_import_process_resources(self, *, terminate: bool = False) -> None:

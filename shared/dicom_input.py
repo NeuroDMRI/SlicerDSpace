@@ -144,9 +144,10 @@ def _validate_converted(folder):
         raise ValueError("Converted DWI contains nonfinite values")
 
 
-def prepare_dicom_root(root, subject_id, *, dwiconvert=None, log=None):
+def prepare_dicom_root(root, subject_id, *, dwiconvert=None, log=None, target_root=None):
     root = Path(root).expanduser().resolve()
-    target = root / "input"
+    dest_root = Path(target_root).expanduser().resolve() if target_root is not None else root
+    target = dest_root / "input"
     receipt = target / RECEIPT
     if receipt.is_file():
         saved = json.loads(receipt.read_text())
@@ -163,12 +164,13 @@ def prepare_dicom_root(root, subject_id, *, dwiconvert=None, log=None):
         return None
     if target.exists() or target.is_symlink():
         raise FileExistsError("DICOM import will not replace an existing input directory: " + str(target))
+    dest_root.mkdir(parents=True, exist_ok=True)
     original = _inventory(root)
     backend, executable = converter_path(dwiconvert)
     if log:
         log("[Input] Converting DICOM using " + backend + "; original files remain unchanged")
     from shared.input_import import InputImportConfig, prepare_inputs
-    with tempfile.TemporaryDirectory(prefix=".dds-dicom-", dir=root.parent) as temporary:
+    with tempfile.TemporaryDirectory(prefix=".dds-dicom-", dir=dest_root) as temporary:
         staging = Path(temporary)
         result = prepare_inputs(InputImportConfig(source=root, subject_root=staging, subject_id=subject_id,
             source_kind="dicom", backend=backend,
@@ -178,10 +180,10 @@ def prepare_dicom_root(root, subject_id, *, dwiconvert=None, log=None):
         _validate_converted(prepared)
         if _inventory(root) != original:
             raise ValueError("DICOM source changed during conversion; prepared input was not published")
-        result["plan"]["subject_root"] = str(root)
-        result["plan"]["canonical_layout"] = {key: str(root / Path(value).relative_to(staging))
+        result["plan"]["subject_root"] = str(dest_root)
+        result["plan"]["canonical_layout"] = {key: str(dest_root / Path(value).relative_to(staging))
                                               for key, value in result["plan"]["canonical_layout"].items()}
-        result["outputs"] = {key: str(root / Path(value).relative_to(staging)) if value else None
+        result["outputs"] = {key: str(dest_root / Path(value).relative_to(staging)) if value else None
                              for key, value in result["outputs"].items()}
         (prepared / "input_import_manifest.json").write_text(json.dumps(result, indent=2) + "\n")
         record = {"kind": "slicerdsurfer_auto_dicom_input", "status": "completed", "backend": backend,

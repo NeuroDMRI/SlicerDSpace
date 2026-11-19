@@ -92,12 +92,20 @@ class SubjectIOLayout:
     output_root: Optional[Path] = None
 
     @property
+    def workspace_root(self) -> Path:
+        if self.output_root is None:
+            return self.subject_root
+        if self.output_root.name.lower() in {"output", "outputs"}:
+            return self.output_root.parent
+        return self.output_root
+
+    @property
     def outputs(self) -> Path:
         return self.output_root if self.output_root is not None else self.subject_root / "outputs"
 
     @property
     def cache(self) -> Path:
-        return self.subject_root / "cache"
+        return self.workspace_root / "cache"
 
     @property
     def cache_stages(self) -> Path:
@@ -120,7 +128,7 @@ class SubjectIOLayout:
 
     @property
     def preproc(self) -> Path:
-        return self.subject_root / "preprocessed"
+        return self.workspace_root / "preprocessed"
 
     @property
     def preproc_legacy(self) -> Path:
@@ -401,10 +409,15 @@ def _parse_legacy_connectome_dir_name(name: str) -> tuple[str, str] | None:
     return None
 
 
-def default_task_output_dir(subject_root: Path, task_name: str) -> Path:
+def default_task_output_dir(
+    subject_root: Path,
+    task_name: str,
+    *,
+    output_root: Optional[Path] = None,
+) -> Path:
     """Return the canonical output folder for a named SlicerDSpace task."""
 
-    layout = subject_layout(subject_root)
+    layout = subject_layout(subject_root, output_root=output_root)
     mapping = {
         "validation": layout.run_metadata / "validation",
         "preproc": layout.preproc,
@@ -1244,6 +1257,9 @@ def archive_development_outputs(
     outputs = layout.outputs
     archive_root = layout.cache / "legacy_outputs"
     preserved_top_dirs = set(CANONICAL_OUTPUT_TOP_DIRS) | {
+        "input",
+        "cache",
+        "preprocessed",
         "01_preproc",
         "03_anatomy",
         "03_structural",

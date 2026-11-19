@@ -14,7 +14,7 @@ import sys
 import time
 from uuid import uuid4
 from contextlib import redirect_stderr, redirect_stdout
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import lru_cache
 from io import StringIO
 from pathlib import Path
@@ -73,6 +73,11 @@ class RawInputBundle:
     bval_path: Path
     bvec_path: Path
     mask_path: Path
+    cache_root: Optional[Path] = None
+
+    @property
+    def effective_cache_root(self) -> Path:
+        return self.cache_root if self.cache_root is not None else self.subject_root / "cache"
 
 
 @dataclass(frozen=True)
@@ -341,6 +346,7 @@ def find_subject_root(
     *,
     brain_mask_config: Optional[BrainMaskConfig] = None,
     generate_missing_mask: bool = True,
+    output_root: Optional[Path] = None,
 ) -> RawInputBundle:
     inspected = inspect_subject_directory(base_path, subject_id)
     if inspected["mode"] != "subject_root":
@@ -348,9 +354,19 @@ def find_subject_root(
             f"Could not resolve a subject root with input/data.nii.gz under '{base_path}' for subject '{subject_id}'."
         )
 
-    subject_root = Path(inspected["subject_root"])
+    from shared.io_layout import subject_layout
+
+    subject_root = Path(inspected["subject_root"]).expanduser().resolve()
+    layout = subject_layout(subject_root, output_root=output_root)
     input_dir = subject_root / "input"
-    mask_path = input_dir / RAW_INPUT_FILES["mask"]
+    input_mask = input_dir / RAW_INPUT_FILES["mask"]
+    external_workspace = output_root is not None and layout.workspace_root != subject_root
+    if input_mask.exists() and not input_mask.with_name("nodif_brain_mask.manifest.json").is_file():
+        mask_path = input_mask
+    elif external_workspace:
+        mask_path = layout.cache / "brain_mask" / RAW_INPUT_FILES["mask"]
+    else:
+        mask_path = input_mask
     generated_record = mask_path.with_name("nodif_brain_mask.manifest.json")
     verify_generated = False
     if generated_record.is_file():
@@ -359,6 +375,7 @@ def find_subject_root(
         except (OSError, ValueError, AttributeError):
             verify_generated = True
     if generate_missing_mask and (not mask_path.exists() or verify_generated):
+        mask_path.parent.mkdir(parents=True, exist_ok=True)
         generate_brain_mask(
             input_dir / RAW_INPUT_FILES["dwi"],
             input_dir / RAW_INPUT_FILES["bval"],
@@ -374,6 +391,7 @@ def find_subject_root(
         bval_path=input_dir / RAW_INPUT_FILES["bval"],
         bvec_path=input_dir / RAW_INPUT_FILES["bvec"],
         mask_path=mask_path,
+        cache_root=layout.cache,
     )
 
 
@@ -512,7 +530,12 @@ def current_preprocessed_outputs(
     input_dir = root / "input"
     for key, name in RAW_INPUT_FILES.items():
         record = inputs.get(key)
-        if not _input_record_matches(record, input_dir / name):
+        expected_path = input_dir / name
+        if key == "mask" and not expected_path.is_file():
+            cached_mask = layout.cache / "brain_mask" / name
+            if cached_mask.is_file():
+                expected_path = cached_mask
+        if not _input_record_matches(record, expected_path):
             return None
     return PreprocessedOutputs(
         subject_id=found_id, preproc_dir=files_dir, dwi_path=paths["dwi"], bval_path=paths["bval"],
@@ -561,9 +584,12 @@ def resolve_preprocessed_input_bundle(
     (``preprocessed_outputs_usable``), the canonical input bundle is the explicit
     fallback, for every stage alike.
     """
+    from shared.io_layout import subject_layout
+
+    cache_root = subject_layout(raw.subject_root, output_root=output_root).cache if output_root is not None else raw.cache_root
     outputs = current_preprocessed_outputs(raw.subject_root, output_root, raw.subject_id)
     if outputs is None:
-        return raw
+        return replace(raw, cache_root=cache_root) if raw.cache_root != cache_root else raw
     return RawInputBundle(
         subject_root=raw.subject_root,
         subject_id=raw.subject_id,
@@ -572,6 +598,7 @@ def resolve_preprocessed_input_bundle(
         bval_path=outputs.bval_path,
         bvec_path=outputs.bvec_path,
         mask_path=outputs.mask_path,
+        cache_root=cache_root,
     )
 
 
@@ -944,7 +971,7 @@ def ensure_diffusion_headers(raw: RawInputBundle, *, log=None) -> tuple[Path, Pa
     from tempfile import TemporaryDirectory
     from anatomy.parcellation.conversion.nhdr_write import nhdr_write
 
-    directory = raw.subject_root / 'cache/diffusion_inputs' / (input_source_cache_prefix(raw) + 'native')
+    directory = raw.effective_cache_root / 'diffusion_inputs' / (input_source_cache_prefix(raw) + 'native')
     headers = (directory / 'DWI.nhdr', directory / 'Mask.nhdr')
     manifest = directory / 'manifest.json'
     signature = dict(kind='diffusion_headers', version=2, subject_id=raw.subject_id,
@@ -988,7 +1015,7 @@ def ensure_diffusion_headers(raw: RawInputBundle, *, log=None) -> tuple[Path, Pa
 
 def _build_native_bundle(raw: RawInputBundle, fit_method: str) -> NativeDTIBundle:
     fit_key = fit_method.lower()
-    bundle_dir = raw.subject_root / "cache" / "native_dti" / f"{input_source_cache_prefix(raw)}{fit_key}"
+    bundle_dir = raw.effective_cache_root / "native_dti" / f"{input_source_cache_prefix(raw)}{fit_key}"
     subject = raw.subject_id
     return NativeDTIBundle(
         subject_root=raw.subject_root,
@@ -1207,7 +1234,7 @@ def _build_registered_bundle(raw: RawInputBundle, fit_method: str, atlas_path: P
                              scalar_format: str = 'nifti') -> RegisteredDTIBundle:
     fit_key = fit_method.lower()
     bundle_dir = (
-        raw.subject_root / "cache" / "registered_dti" / f"{input_source_cache_prefix(raw)}{_atlas_key(atlas_path)}__{fit_key}"
+        raw.effective_cache_root / "registered_dti" / f"{input_source_cache_prefix(raw)}{_atlas_key(atlas_path)}__{fit_key}"
     )
     if scalar_format == 'nrrd':
         bundle_dir = bundle_dir.with_name(bundle_dir.name + '__nrrd')

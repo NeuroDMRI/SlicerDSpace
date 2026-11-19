@@ -975,6 +975,25 @@ class EnvironmentAndWidgetFlowTests(unittest.TestCase):
                     self.assertNotIn("--launch", mac_args)
                     widget._onCancelRunClicked()
 
+                    # 3c. _prepare_inputs_config colocates under <Output>/<Subject ID>, or <config_dir>/subjects/<Subject ID> when Output blank.
+                    src_dwi = Path(tmp) / "src" / "dwi.nii.gz"
+                    src_dwi.parent.mkdir(parents=True, exist_ok=True)
+                    src_dwi.write_text("x", encoding="utf-8")
+                    out_dir = Path(tmp).resolve() / "user_out"
+                    cfg_widget = mw.SharedWidgetMixin()
+                    cfg_widget._parameterNode = SimpleNamespace(outputDirectory=str(out_dir), brainMaskBackend="pnl_cnn")
+                    cfg_widget._prepareInputWidgets = {"source_kind": "nifti"}
+                    cfg_widget._prepare_inputs_widget_text = lambda key: str(src_dwi) if key == "source" else ""
+                    cfg_widget._shared_subject_id_text = lambda: "sub-gui"
+                    cfg_widget._environment_dependency_path_kwargs = lambda: {}
+                    cfg_with_out = cfg_widget._prepare_inputs_config()
+                    self.assertEqual(cfg_with_out.subject_root, out_dir / "sub-gui")
+                    self.assertTrue(cfg_with_out.force)
+                    cfg_widget._parameterNode.outputDirectory = ""
+                    with patch("shared.user_config.default_user_config_path", return_value=Path(tmp).resolve() / "cfg" / "user_config.json"):
+                        cfg_blank = cfg_widget._prepare_inputs_config()
+                    self.assertEqual(cfg_blank.subject_root, (Path(tmp).resolve() / "cfg" / "subjects" / "sub-gui"))
+
                 # 4. Install Python dependencies enters "setup" and resets to "idle" on success
                 setup_captures = {}
 

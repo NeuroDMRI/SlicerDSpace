@@ -204,6 +204,7 @@ def format_task_qc_text(
     subject_id: str,
     run_name: Optional[str] = None,
     subject_root: Optional[Path] = None,
+    cache_root: Optional[Path] = None,
 ) -> str:
     """Format a concise plain-text QC summary for one executed/reused task."""
 
@@ -254,9 +255,12 @@ def format_task_qc_text(
                 continue
             displayed = _display_path(text, subject_root)
             rel_parts = Path(displayed).parts
-            if (rel_parts and rel_parts[0] == "cache") or (
+            in_cache = (rel_parts and rel_parts[0] == "cache") or (
                 subject_root is not None and _is_inside_dir(Path(text), subject_root / "cache")
-            ):
+            ) or (
+                cache_root is not None and _is_inside_dir(Path(text), cache_root)
+            )
+            if in_cache:
                 continue
             output_lines.append(f"  - {key}: {displayed}")
         if output_lines:
@@ -274,8 +278,16 @@ def write_qc_text_summaries(
     subject_id: str,
     run_name: Optional[str] = None,
     subject_root: Optional[Path] = None,
+    cache_root: Optional[Path] = None,
 ) -> dict[str, Path]:
     """Write concise ``.txt`` QC summaries for all executed or reused tasks."""
+
+    effective_cache_root = cache_root
+    if effective_cache_root is None:
+        for candidate in (qc_root.parent.parent / "cache", qc_root.parent / "cache"):
+            if candidate.is_dir():
+                effective_cache_root = candidate
+                break
 
     written: dict[str, Path] = {}
     for task in tasks:
@@ -291,6 +303,7 @@ def write_qc_text_summaries(
             subject_id=subject_id,
             run_name=run_name,
             subject_root=subject_root,
+            cache_root=effective_cache_root,
         )
         target_path.parent.mkdir(parents=True, exist_ok=True)
         target_path.write_text(content, encoding="utf-8")

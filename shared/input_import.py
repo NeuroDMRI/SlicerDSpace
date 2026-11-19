@@ -135,8 +135,14 @@ def _sidecar_for(source: Path, suffix: str) -> Path:
 
 
 def _copy_file(source: Path, target: Path, *, force: bool) -> None:
-    if target.exists() and not force:
-        raise FileExistsError(f"Refusing to overwrite existing file: {target}")
+    if target.exists():
+        try:
+            if source.expanduser().resolve() == target.expanduser().resolve():
+                return
+        except OSError:
+            pass
+        if not force:
+            raise FileExistsError(f"Refusing to overwrite existing file: {target}")
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source, target)
 
@@ -403,12 +409,94 @@ def _select_backend(
     raise ValueError(f"Unsupported source kind: {source_kind}")
 
 
+def _path_signature(path: Path | None) -> dict[str, Any] | None:
+    if path is None:
+        return None
+    try:
+        resolved = path.expanduser().resolve()
+        if not resolved.is_file():
+            return None
+        stat = resolved.stat()
+    except OSError:
+        return None
+    return {
+        "path": resolved.as_posix(),
+        "size": int(stat.st_size),
+        "mtime_ns": int(stat.st_mtime_ns),
+    }
+
+
+def _import_source_signatures(
+    config: InputImportConfig,
+    source: Path,
+    source_kind: ImportSourceKind,
+) -> dict[str, Any] | None:
+    if source_kind == "dicom" or config.output_kind != "canonical-nifti":
+        return None
+    mask_sig = _path_signature(config.mask_path)
+    if source_kind == "canonical":
+        src_input = source / "input" if (source / "input").is_dir() else source
+        return {
+            "dwi": _path_signature(src_input / "data.nii.gz"),
+            "bvals": _path_signature(src_input / "bvals"),
+            "bvecs": _path_signature(src_input / "bvecs"),
+            "metadata": _path_signature(src_input / "dwi.json"),
+            "mask": mask_sig if config.mask_path is not None else _path_signature(src_input / "nodif_brain_mask.nii.gz"),
+        }
+    if source_kind == "nifti":
+        bval = (config.bval_path or _sidecar_for(source, ".bval")).expanduser().resolve()
+        bvec = (config.bvec_path or _sidecar_for(source, ".bvec")).expanduser().resolve()
+        metadata = (config.metadata_path or _sidecar_for(source, ".json")).expanduser().resolve()
+        return {
+            "dwi": _path_signature(source),
+            "bval": _path_signature(bval),
+            "bvec": _path_signature(bvec),
+            "metadata": _path_signature(metadata),
+            "mask": mask_sig,
+        }
+    return {
+        "dwi": _path_signature(source),
+        "mask": mask_sig,
+    }
+
+
+def _output_signatures(targets: dict[str, Path]) -> dict[str, Any]:
+    signatures = {
+        key: _path_signature(targets[key])
+        for key in ("dwi", "bvals", "bvecs", "metadata")
+    }
+    auto_mask_manifest = targets["mask"].with_name("nodif_brain_mask.manifest.json")
+    signatures["mask"] = None if auto_mask_manifest.is_file() else _path_signature(targets["mask"])
+    return signatures
+
+
 def prepare_inputs(config: InputImportConfig) -> dict[str, Any]:
     """Prepare external inputs and write input/input_import_manifest.json."""
 
     started = time.monotonic()
     plan = build_import_plan(config)
     targets = _canonical_targets(config.subject_root.expanduser().resolve())
+    source = config.source.expanduser().resolve()
+    source_kind = plan["source_kind"]
+    backend = plan["backend"]
+    source_sigs = (
+        _import_source_signatures(config, source, source_kind)
+        if (not config.dry_run and config.output_kind == "canonical-nifti" and source_kind != "dicom")
+        else None
+    )
+    if not config.dry_run and config.force and source_sigs is not None and targets["manifest"].is_file():
+        try:
+            saved = json.loads(targets["manifest"].read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            saved = None
+        if (
+            isinstance(saved, dict)
+            and saved.get("status") == "completed"
+            and saved.get("source_signatures") == source_sigs
+            and isinstance(saved.get("output_signatures"), dict)
+            and saved.get("output_signatures") == _output_signatures(targets)
+        ):
+            return {**saved, "status": "completed", "reused": True, "runtime_seconds": 0.0}
     if not config.dry_run and not config.force:
         if config.output_kind == 'compat-nrrd':
             candidates = (targets['compat_nrrd'], targets['compat_nrrd'].with_suffix('.raw.gz'))
@@ -421,10 +509,21 @@ def prepare_inputs(config: InputImportConfig) -> dict[str, Any]:
                                   ', '.join(path.as_posix() for path in conflicts))
     if not config.dry_run:
         targets["input_dir"].mkdir(parents=True, exist_ok=True)
+        if config.force and config.mask_path is None:
+            src_input = (source / "input" if (source / "input").is_dir() else source) if source_kind == "canonical" else None
+            same_canonical = False
+            if src_input is not None:
+                try:
+                    same_canonical = src_input.resolve() == targets["input_dir"].resolve()
+                except OSError:
+                    same_canonical = False
+            if not same_canonical and (source_kind != "canonical" or not (src_input / "nodif_brain_mask.nii.gz").is_file()):
+                targets["mask"].unlink(missing_ok=True)
+                targets["mask"].with_name("nodif_brain_mask.manifest.json").unlink(missing_ok=True)
+        if config.force and backend != "copy" and config.output_kind == "canonical-nifti":
+            for stale_name in ("data.nii.gz", "data.nii", "bvals", "bvecs", "dwi.json", "data.bval", "data.bvec", "data.json"):
+                (targets["input_dir"] / stale_name).unlink(missing_ok=True)
     command_result: dict[str, Any] | None = None
-    source = config.source.expanduser().resolve()
-    source_kind = plan["source_kind"]
-    backend = plan["backend"]
 
     if backend == "copy":
         if source_kind == "canonical":
@@ -443,7 +542,9 @@ def prepare_inputs(config: InputImportConfig) -> dict[str, Any]:
         if backend == "dcm2niix":
             plan["postprocess"] = _normalize_dcm2niix_outputs(targets["input_dir"], force=config.force, dry_run=config.dry_run)
     if config.mask_path:
-        _copy_file(config.mask_path.expanduser().resolve(), targets["mask"], force=config.force) if not config.dry_run else None
+        if not config.dry_run:
+            targets["mask"].with_name("nodif_brain_mask.manifest.json").unlink(missing_ok=True)
+            _copy_file(config.mask_path.expanduser().resolve(), targets["mask"], force=config.force)
 
     manifest = {
         "kind": "slicerdsurfer_input_import_manifest",
@@ -460,6 +561,8 @@ def prepare_inputs(config: InputImportConfig) -> dict[str, Any]:
             "metadata": targets["metadata"].as_posix(),
             "mask": targets["mask"].as_posix() if targets["mask"].exists() or config.mask_path else None,
         },
+        **({"source_signatures": source_sigs} if source_sigs is not None else {}),
+        **({"output_signatures": _output_signatures(targets)} if not config.dry_run else {}),
     }
     if not config.dry_run:
         targets["manifest"].write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")

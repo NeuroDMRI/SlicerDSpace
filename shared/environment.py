@@ -162,8 +162,10 @@ def run_needs_brain_mask(subject_root: Path, *, targets, subject_id: str, output
     from shared.target_closure import MASK_TARGETS
     mask_targets = set(MASK_TARGETS)
     has_conv_mask = bool(convertible and 'mask_path' in convertible[3])
+    layout = subject_layout(subject_root, output_root=output_root)
     mask_file = input_dir / 'nodif_brain_mask.nii.gz'
-    has_any_mask = mask_file.is_file() or has_conv_mask
+    cached_mask = layout.cache / 'brain_mask' / 'nodif_brain_mask.nii.gz'
+    has_any_mask = mask_file.is_file() or cached_mask.is_file() or has_conv_mask
     if preprocessing_stages is not None and str(preprocessing_stages).strip():
         from shared.algorithm_selection import PREPROCESSING, algorithms
         stages = algorithms(preprocessing_stages, PREPROCESSING, 'denoise,eddy,topup')
@@ -173,7 +175,6 @@ def run_needs_brain_mask(subject_root: Path, *, targets, subject_id: str, output
         if not has_user_mask:
             return bool(mask_targets.intersection(targets) or 'preprocessing' in targets)
         if 'preprocessing' in targets and 'brain_mask' in stages:
-            layout = subject_layout(subject_root, output_root=output_root)
             stem = subject_id or subject_root.name
             preproc_dir = layout.preproc
             if not (preproc_dir / f'{stem}_dwi_final.nii.gz').is_file() and (layout.preproc_legacy / f'{stem}_dwi_final.nii.gz').is_file():
@@ -188,7 +189,6 @@ def run_needs_brain_mask(subject_root: Path, *, targets, subject_id: str, output
     required = raw and bool(mask_targets.intersection(targets)) and not has_any_mask
     # W2a (D1): preprocessing always runs FSL eddy, so it always writes a new corrected DWI and needs a new mask.
     if raw and 'preprocessing' in targets and brain_mask_backend != 'provided':
-        layout = subject_layout(subject_root, output_root=output_root)
         stem = subject_id or subject_root.name
         preproc_dir = layout.preproc
         if not (preproc_dir / f'{stem}_dwi_final.nii.gz').is_file() and (layout.preproc_legacy / f'{stem}_dwi_final.nii.gz').is_file():

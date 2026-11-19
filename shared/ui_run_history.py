@@ -1025,7 +1025,11 @@ def _refresh_output_visibility(owner):
             item.setToolTip(1, ("隐藏" if zh else "Hide") if visible else ("显示" if zh else "Show"))
 
 
-def _is_internal_cache_path(path: Path, subject_root: Optional[Path]) -> bool:
+def _is_internal_cache_path(
+    path: Path,
+    subject_root: Optional[Path],
+    output_root: Optional[Path] = None,
+) -> bool:
     try:
         resolved = path.resolve()
     except OSError:
@@ -1033,8 +1037,17 @@ def _is_internal_cache_path(path: Path, subject_root: Optional[Path]) -> bool:
     if subject_root is not None:
         try:
             rel = resolved.relative_to(subject_root)
-            return "cache" in rel.parts
+            if "cache" in rel.parts:
+                return True
         except ValueError:
+            pass
+    if output_root is not None:
+        workspace = output_root.parent if output_root.name.lower() in {"output", "outputs"} else output_root
+        cache_dir = workspace / "cache"
+        try:
+            resolved.relative_to(cache_dir.resolve())
+            return True
+        except (OSError, ValueError):
             pass
     posix = resolved.as_posix()
     return "/cache/stages/" in posix or "/cache/reports/" in posix
@@ -1060,10 +1073,18 @@ def _show_output_files(owner, manifest):
         except OSError:
             subject_root = Path(str(subject_root_raw)).expanduser()
 
+    output_root_raw = manifest.get("output_root")
+    output_root: Optional[Path] = None
+    if output_root_raw:
+        try:
+            output_root = Path(str(output_root_raw)).expanduser().resolve()
+        except OSError:
+            output_root = Path(str(output_root_raw)).expanduser()
+
     candidates, _ = result_candidates(manifest, allow_bundle_directory_scan=False)
     filtered_candidates = [
         item for item in candidates
-        if not _is_internal_cache_path(Path(item["path"]), subject_root)
+        if not _is_internal_cache_path(Path(item["path"]), subject_root, output_root=output_root)
     ]
     visual_paths = {item["path"] for item in filtered_candidates
                     if Path(item["path"]).suffix.lower() not in {".csv", ".tsv"}}

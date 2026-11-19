@@ -108,7 +108,7 @@ keys = ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "SLICERDSP
             flags = ['--scheduler', scheduler, '--batch-cpus', '4', '--batch-memory-gb', '8',
                      '--batch-stage-memory-gb', '1']
             status, manifest = case.run_fake_batch(root, *flags, *extra, jobs=1)
-            receipt = json.loads((root / 'outputs/sub-01/receipt.json').read_text())
+            receipt = json.loads((root / 'outputs/sub-01/outputs/receipt.json').read_text())
         self.assertEqual(status, 0)
         return manifest['planned_commands'][0], receipt
 
@@ -138,7 +138,7 @@ keys = ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "SLICERDSP
              patch.object(RunBatchPipelineCliTest, 'FAKE_PIPELINE', self.FAKE_PIPELINE_ENV), \
              patch.dict(os.environ, {'OMP_NUM_THREADS': '7'}):
             status, manifest = case.run_fake_batch(Path(tmp), jobs=1)
-            receipt = json.loads((Path(tmp) / 'outputs/sub-01/receipt.json').read_text())
+            receipt = json.loads((Path(tmp) / 'outputs/sub-01/outputs/receipt.json').read_text())
         self.assertEqual(status, 0)
         for flag in self.THREAD_FLAGS:
             self.assertNotIn(flag, manifest['planned_commands'][0])

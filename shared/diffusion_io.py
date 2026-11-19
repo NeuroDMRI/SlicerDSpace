@@ -1,6 +1,7 @@
 """Bounded-memory fast streaming decompression and verified uncompressed NIfTI stage cache."""
 
 from contextlib import contextmanager
+import contextvars
 import gzip
 import hashlib
 import json
@@ -12,11 +13,52 @@ import subprocess
 import sys
 import tempfile
 import threading
-from typing import Optional
+from typing import Iterator, Optional
 
 _STREAM_CHUNK_BYTES = 8 * 1024 * 1024
 _DEFAULT_CACHE_MIN_BYTES = 16 * 1024 * 1024
 _CACHE_ELIGIBLE_PARENTS = frozenset({"input", "preprocessed", "01_preprocessing"})
+_SUBJECT_CACHE_ENV_VAR = "SLICERDSPACE_SUBJECT_CACHE_ROOT"
+_ACTIVE_SUBJECT_CACHE_ROOT: contextvars.ContextVar[Optional[Path]] = contextvars.ContextVar(
+    "slicerdspace_active_subject_cache_root",
+    default=None,
+)
+_SUBJECT_CACHE_ENV_LOCK = threading.RLock()
+
+
+def active_subject_cache_root() -> Optional[Path]:
+    """Return the active subject cache root from context or subprocess environment."""
+
+    scoped = _ACTIVE_SUBJECT_CACHE_ROOT.get()
+    if scoped is not None:
+        return scoped
+    env_value = (os.environ.get(_SUBJECT_CACHE_ENV_VAR) or "").strip()
+    if not env_value:
+        return None
+    return Path(env_value).expanduser().resolve()
+
+
+@contextmanager
+def subject_cache_root(cache_root: Optional[Path]) -> Iterator[Optional[Path]]:
+    """Scope uncompressed NIfTI cache writes to ``cache_root`` for threads and subprocesses."""
+
+    resolved = Path(cache_root).expanduser().resolve() if cache_root is not None else None
+    token = _ACTIVE_SUBJECT_CACHE_ROOT.set(resolved)
+    with _SUBJECT_CACHE_ENV_LOCK:
+        previous_env = os.environ.get(_SUBJECT_CACHE_ENV_VAR)
+        if resolved is None:
+            os.environ.pop(_SUBJECT_CACHE_ENV_VAR, None)
+        else:
+            os.environ[_SUBJECT_CACHE_ENV_VAR] = resolved.as_posix()
+    try:
+        yield resolved
+    finally:
+        with _SUBJECT_CACHE_ENV_LOCK:
+            if previous_env is None:
+                os.environ.pop(_SUBJECT_CACHE_ENV_VAR, None)
+            else:
+                os.environ[_SUBJECT_CACHE_ENV_VAR] = previous_env
+        _ACTIVE_SUBJECT_CACHE_ROOT.reset(token)
 
 
 class _ProcessStreamReader:
@@ -213,7 +255,12 @@ def _cache_paths_for_source(source: Path) -> Optional[tuple[Path, Path, Path]]:
         return None
     if resolved.parent.name not in _CACHE_ELIGIBLE_PARENTS:
         return None
-    cache_dir = resolved.parent.parent / "cache" / "uncompressed_nifti"
+    active = active_subject_cache_root()
+    cache_dir = (
+        (active / "uncompressed_nifti")
+        if active is not None
+        else (resolved.parent.parent / "cache" / "uncompressed_nifti")
+    )
     digest = hashlib.sha256(resolved.as_posix().encode("utf-8")).hexdigest()[:20]
     return cache_dir, cache_dir / f"{digest}.nii", cache_dir / f"{digest}.json"
 
@@ -279,7 +326,7 @@ def prepare_uncompressed_cache_target(target_gz_path: Path, expected_bytes: int)
         return None
     cache_dir, _, _ = targets
     try:
-        if not _has_cache_disk_budget(target_gz_path.parent.parent, expected_bytes):
+        if not _has_cache_disk_budget(cache_dir.parent, expected_bytes):
             return None
         cache_dir.mkdir(parents=True, exist_ok=True)
         fd, name = tempfile.mkstemp(prefix=".staging-", suffix=".nii", dir=cache_dir)
@@ -360,9 +407,9 @@ def ensure_cached_uncompressed_nifti(path: Path) -> Optional[Path]:
         image = nib.load(str(source), mmap="r", keep_file_open=False)
         offset = int(getattr(image.dataobj, "offset", 0) or image.header.get_data_offset())
         expected_bytes = int(np.prod(image.shape, dtype=np.int64)) * int(image.header.get_data_dtype().itemsize) + offset
-        if expected_bytes <= 0 or not _has_cache_disk_budget(source.parent.parent, expected_bytes):
-            return None
         cache_dir, _, _ = targets
+        if expected_bytes <= 0 or not _has_cache_disk_budget(cache_dir.parent, expected_bytes):
+            return None
         cache_dir.mkdir(parents=True, exist_ok=True)
         fd, name = tempfile.mkstemp(prefix=".staging-", suffix=".nii", dir=cache_dir)
         os.close(fd)

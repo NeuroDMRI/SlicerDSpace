@@ -277,6 +277,107 @@ class IOLayoutTest(unittest.TestCase):
             )
             self.assertIn(root_file.as_posix(), moved)
 
+    def test_scheme_a_external_output_colocates_workspace_and_preserves_cache(self) -> None:
+        from shared import archive_development_outputs, default_task_output_dir, subject_layout
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            readonly_subj = root / "readonly_disk" / "sub-01"
+            (readonly_subj / "input").mkdir(parents=True)
+            out_dir = root / "user_out" / "sub-01" / "outputs"
+
+            layout = subject_layout(readonly_subj, output_root=out_dir)
+            self.assertEqual(layout.workspace_root, root / "user_out" / "sub-01")
+            self.assertEqual(layout.outputs, out_dir)
+            self.assertEqual(layout.cache, root / "user_out" / "sub-01" / "cache")
+            self.assertEqual(layout.preproc, root / "user_out" / "sub-01" / "preprocessed")
+            self.assertEqual(
+                default_task_output_dir(readonly_subj, "preproc", output_root=out_dir),
+                root / "user_out" / "sub-01" / "preprocessed",
+            )
+            self.assertEqual(
+                default_task_output_dir(readonly_subj, "connectome", output_root=out_dir),
+                out_dir / "05_connectome",
+            )
+
+            # Custom non-"outputs"-named output_root keeps cache/preproc alongside it and never archives them.
+            custom_out = root / "custom_out"
+            custom_layout = subject_layout(readonly_subj, output_root=custom_out)
+            self.assertEqual(custom_layout.workspace_root, custom_out)
+            self.assertEqual(custom_layout.cache, custom_out / "cache")
+            self.assertEqual(custom_layout.preproc, custom_out / "preprocessed")
+            (custom_layout.cache / "marker.txt").parent.mkdir(parents=True, exist_ok=True)
+            (custom_layout.cache / "marker.txt").write_text("cached", encoding="utf-8")
+            (custom_layout.preproc / "preproc.txt").parent.mkdir(parents=True, exist_ok=True)
+            (custom_layout.preproc / "preproc.txt").write_text("preproc", encoding="utf-8")
+            (custom_out / "input").mkdir(parents=True, exist_ok=True)
+            (custom_out / "input" / "in.txt").write_text("in", encoding="utf-8")
+
+            archived = archive_development_outputs(readonly_subj, output_root=custom_out)
+            self.assertEqual(archived, {})
+            self.assertTrue((custom_layout.cache / "marker.txt").is_file())
+            self.assertTrue((custom_layout.preproc / "preproc.txt").is_file())
+            self.assertTrue((custom_out / "input" / "in.txt").is_file())
+
+    def test_external_output_never_writes_to_readonly_source_disk(self) -> None:
+        import os
+        from unittest.mock import patch
+        import nibabel as nib
+        import numpy as np
+        from shared.convertible_input import prepare_convertible_root
+        from shared.diffusion_io import ensure_cached_uncompressed_nifti, subject_cache_root
+        from shared.io_layout import subject_layout
+        from shared.pipeline import find_subject_root
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            src_canon = root / "src_canonical" / "sub-01"
+            (src_canon / "input").mkdir(parents=True)
+            dwi_path = src_canon / "input" / "data.nii.gz"
+            nib.save(nib.Nifti1Image(np.ones((4, 4, 4, 2), dtype=np.float32), np.eye(4)), str(dwi_path))
+            (src_canon / "input" / "bvals").write_text("0 1000\n", encoding="utf-8")
+            (src_canon / "input" / "bvecs").write_text("0 1\n0 0\n0 0\n", encoding="utf-8")
+            before_files = sorted(p.relative_to(src_canon).as_posix() for p in src_canon.rglob("*"))
+
+            out_root = root / "user_out" / "sub-01" / "outputs"
+            layout = subject_layout(src_canon, output_root=out_root)
+
+            def fake_mask(dwi, bval, bvec, mask_out, **_kwargs):
+                Path(mask_out).parent.mkdir(parents=True, exist_ok=True)
+                nib.save(nib.Nifti1Image(np.ones((4, 4, 4), dtype=np.uint8), np.eye(4)), str(mask_out))
+                Path(mask_out).with_name("nodif_brain_mask.manifest.json").write_text('{"version": 2}\n', encoding="utf-8")
+                return {"status": "completed"}
+
+            with patch("shared.pipeline.generate_brain_mask", side_effect=fake_mask):
+                bundle = find_subject_root(src_canon, "sub-01", output_root=out_root)
+            self.assertEqual(bundle.mask_path, layout.cache / "brain_mask" / "nodif_brain_mask.nii.gz")
+            self.assertEqual(bundle.effective_cache_root, layout.cache)
+            self.assertTrue(bundle.mask_path.is_file())
+
+            with patch.dict(os.environ, {"SLICERDSPACE_UNCOMPRESSED_CACHE_MIN_BYTES": "1"}):
+                with subject_cache_root(layout.cache):
+                    cached_nii = ensure_cached_uncompressed_nifti(bundle.dwi_path)
+            self.assertIsNotNone(cached_nii)
+            self.assertTrue(cached_nii.is_relative_to(layout.cache / "uncompressed_nifti"))
+            self.assertFalse((src_canon / "cache").exists())
+            self.assertFalse((src_canon / "preprocessed").exists())
+            self.assertFalse((src_canon / "outputs").exists())
+            after_files = sorted(p.relative_to(src_canon).as_posix() for p in src_canon.rglob("*"))
+            self.assertEqual(before_files, after_files)
+
+            # Convertible raw NIfTI + bval/bvec also stages into target_root without touching raw dir.
+            raw_dir = root / "src_raw" / "sub-02"
+            raw_dir.mkdir(parents=True)
+            nib.save(nib.Nifti1Image(np.ones((2, 2, 2, 2), dtype=np.float32), np.eye(4)), str(raw_dir / "dwi.nii.gz"))
+            (raw_dir / "dwi.bval").write_text("0 1000\n", encoding="utf-8")
+            (raw_dir / "dwi.bvec").write_text("0 1\n0 0\n0 0\n", encoding="utf-8")
+            raw_before = sorted(p.relative_to(raw_dir).as_posix() for p in raw_dir.rglob("*"))
+            dest_ws = root / "user_out" / "sub-02"
+            prepared = prepare_convertible_root(raw_dir, "sub-02", target_root=dest_ws)
+            self.assertEqual(prepared, dest_ws)
+            self.assertTrue((dest_ws / "input" / "data.nii.gz").is_file())
+            self.assertEqual(raw_before, sorted(p.relative_to(raw_dir).as_posix() for p in raw_dir.rglob("*")))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -84,7 +84,7 @@ sys.exit(3 if failed else 0)
             self.assertEqual(manifest["status"], "completed")
             self.assertEqual(len(manifest["results"]), 3)
             self.assertEqual(manifest["not_launched"], [])
-            rows = [json.loads((root / "outputs" / name / "receipt.json").read_text())
+            rows = [json.loads((root / "outputs" / name / "outputs" / "receipt.json").read_text())
                     for name in ("sub-01", "sub-02")]
             self.assertLess(max(r["start"] for r in rows), min(r["end"] for r in rows))
             for row in rows:
@@ -146,6 +146,25 @@ sys.exit(3 if failed else 0)
             self.assertEqual(subjects[0].mode, "subject_root+arranged")
             self.assertTrue((subject_root / "input" / "data.nii.gz").is_file())
 
+    def test_arrange_direct_raw_files_writes_to_output_root_not_source_disk(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_subj = root / "raw_batch" / "sub-01"
+            _write_raw_subject(source_subj, nested_input=False)
+            out_base = root / "batch_out"
+
+            subjects, skipped = batch_cli.discover_subjects(
+                root / "raw_batch",
+                arrange_inputs="copy",
+                output_root=out_base,
+            )
+
+            self.assertEqual(skipped, [])
+            self.assertEqual(len(subjects), 1)
+            self.assertEqual(subjects[0].subject_root, (out_base / "sub-01").resolve())
+            self.assertTrue((out_base / "sub-01" / "input" / "data.nii.gz").is_file())
+            self.assertFalse((source_subj / "input").exists())
+
     def test_build_subject_command_defaults_to_test1_and_subject_output_subdir(self) -> None:
         subject = batch_cli.BatchSubject(
             subject_id="100307",
@@ -168,7 +187,7 @@ sys.exit(3 if failed else 0)
         self.assertEqual(command[command.index("--run-name") + 1], "Test1")
         # build_subject_command() resolves the output root (e.g. macOS's
         # /tmp -> /private/tmp symlink); compare against the resolved form.
-        expected_output_root = (Path("/tmp/outputs").resolve() / "100307").as_posix()
+        expected_output_root = (Path("/tmp/outputs").resolve() / "100307" / "outputs").as_posix()
         self.assertEqual(command[command.index("--output-root") + 1], expected_output_root)
         self.assertIn("--execute", command)
         self.assertEqual(command[-3:], ["--all", "--bundle-backend", "all"])

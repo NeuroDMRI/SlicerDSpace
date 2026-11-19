@@ -222,6 +222,44 @@ class InputImportTest(unittest.TestCase):
             self.assertIn("DicomToNrrd", plan["command"])
             self.assertTrue(plan["canonical_layout"]["compat_nrrd"].endswith("cache/imported_nrrd/data.nhdr"))
 
+    def test_force_import_reuses_unchanged_inputs_and_overwrites_on_change(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "dwi.nii.gz"
+            data1 = np.arange(16, dtype=np.float32).reshape(2, 2, 2, 2)
+            nib.save(nib.Nifti1Image(data1, np.eye(4)), str(source))
+            (root / "dwi.bval").write_text("0 1000\n", encoding="utf-8")
+            (root / "dwi.bvec").write_text("0 1\n0 0\n0 0\n", encoding="utf-8")
+            subject_root = root / "out" / "sub-01"
+
+            cfg = InputImportConfig(
+                source=source,
+                subject_root=subject_root,
+                subject_id="sub-01",
+                source_kind="nifti",
+                force=True,
+            )
+            first = prepare_inputs(cfg)
+            self.assertEqual(first["status"], "completed")
+            self.assertFalse(first.get("reused", False))
+            target_dwi = subject_root / "input" / "data.nii.gz"
+            first_mtime = target_dwi.stat().st_mtime_ns
+
+            # An auto-generated brain mask + manifest inside input/ must not invalidate reuse.
+            (subject_root / "input" / "nodif_brain_mask.nii.gz").write_text("mask", encoding="utf-8")
+            (subject_root / "input" / "nodif_brain_mask.manifest.json").write_text('{"version": 2}\n', encoding="utf-8")
+
+            second = prepare_inputs(cfg)
+            self.assertTrue(second.get("reused"))
+            self.assertEqual(target_dwi.stat().st_mtime_ns, first_mtime)
+
+            # Updating source overwrites cleanly even when target already exists.
+            data2 = data1 + 10.0
+            nib.save(nib.Nifti1Image(data2, np.eye(4)), str(source))
+            third = prepare_inputs(cfg)
+            self.assertFalse(third.get("reused", False))
+            np.testing.assert_array_equal(np.asarray(nib.load(str(target_dwi)).dataobj), data2)
+
 
 if __name__ == "__main__":
     unittest.main()

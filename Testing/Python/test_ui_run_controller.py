@@ -30,6 +30,7 @@ from shared.ui_run_controller import (
     parse_manifest_line,
     partial_run_notice_text,
     resolve_single_subject_output_root,
+    resolve_single_subject_workspace_root,
     rows_from_batch_manifest,
     rows_from_plan,
     rows_from_result,
@@ -618,10 +619,24 @@ class UIRunControllerTest(unittest.TestCase):
     def test_resolve_single_subject_output_root_nests_subject_id_idempotently(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp) / "Downloads"
+            self.assertIsNone(resolve_single_subject_workspace_root("", "try1"))
             self.assertIsNone(resolve_single_subject_output_root("", "try1"))
-            self.assertEqual(resolve_single_subject_output_root(str(base), ""), base)
-            self.assertEqual(resolve_single_subject_output_root(str(base), "try1"), base / "try1")
-            self.assertEqual(resolve_single_subject_output_root(str(base / "try1"), "try1"), base / "try1")
+            self.assertEqual(resolve_single_subject_workspace_root(str(base), ""), base)
+            self.assertEqual(resolve_single_subject_output_root(str(base), ""), base / "outputs")
+            self.assertEqual(resolve_single_subject_output_root(str(base / "outputs"), ""), base / "outputs")
+
+            self.assertEqual(resolve_single_subject_workspace_root(str(base), "try1"), base / "try1")
+            self.assertEqual(resolve_single_subject_workspace_root(str(base / "try1"), "try1"), base / "try1")
+            self.assertEqual(
+                resolve_single_subject_workspace_root(str(base / "try1" / "outputs"), "try1"),
+                base / "try1",
+            )
+
+            self.assertEqual(resolve_single_subject_output_root(str(base), "try1"), base / "try1" / "outputs")
+            self.assertEqual(
+                resolve_single_subject_output_root(str(base / "try1"), "try1"),
+                base / "try1" / "outputs",
+            )
             self.assertEqual(
                 resolve_single_subject_output_root(str(base / "try1" / "outputs"), "try1"),
                 base / "try1" / "outputs",
@@ -636,7 +651,7 @@ class UIRunControllerTest(unittest.TestCase):
                 selected_targets=("microstructure",),
             )
             single_kwargs = build_single_subject_run_kwargs(sel, {}, preflight_blocked_targets={})
-            self.assertEqual(single_kwargs["output_root"], base / "try1")
+            self.assertEqual(single_kwargs["output_root"], base / "try1" / "outputs")
             batch_root = Path(tmp) / "cohort"
             batch_root.mkdir()
             batch_kwargs = build_batch_run_kwargs(sel, batch_root=batch_root)

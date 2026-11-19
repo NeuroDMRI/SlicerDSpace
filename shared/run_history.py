@@ -404,7 +404,7 @@ def discover_manifest_paths(
             priority_dirs: list[Path] = []
             regular_dirs: list[Path] = []
             for entry in entries:
-                if entry.name.startswith("."):
+                if entry.name.startswith(".") or entry.name in {"cache", "input", "preprocessed"}:
                     continue
                 try:
                     is_dir = entry.is_dir()
@@ -415,7 +415,11 @@ def discover_manifest_paths(
                 sub = Path(entry.path)
                 if entry.name in {RUN_METADATA_DIR, BATCH_METADATA_DIR} or (
                     depth + 1 < max_depth
-                    and ((sub / RUN_METADATA_DIR).is_dir() or (sub / BATCH_METADATA_DIR).is_dir())
+                    and (
+                        (sub / RUN_METADATA_DIR).is_dir()
+                        or (sub / "outputs" / RUN_METADATA_DIR).is_dir()
+                        or (sub / BATCH_METADATA_DIR).is_dir()
+                    )
                 ):
                     priority_dirs.append(sub)
                 else:
@@ -514,11 +518,17 @@ def candidate_run_roots(
     batch_text = (batch_root_text or "").strip()
     if output_text:
         if not batch_mode and (subject_id or "").strip():
-            from shared.ui_run_controller import resolve_single_subject_output_root
+            from shared.ui_run_controller import (
+                resolve_single_subject_output_root,
+                resolve_single_subject_workspace_root,
+            )
 
             resolved_output = resolve_single_subject_output_root(output_text, subject_id)
             if resolved_output is not None:
                 candidates.append(resolved_output)
+            resolved_workspace = resolve_single_subject_workspace_root(output_text, subject_id)
+            if resolved_workspace is not None:
+                candidates.append(resolved_workspace)
         candidates.append(Path(output_text).expanduser())
     if subject_text:
         subject_root = Path(subject_text).expanduser()

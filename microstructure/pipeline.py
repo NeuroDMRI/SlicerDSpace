@@ -259,7 +259,13 @@ def _resolve_roi_label_map(config: MicrostructureConfig) -> Path | None:
         return roi_path
 
     from shared.io_layout import subject_layout
-    layout = subject_layout(config.native_bundle.subject_root)
+    raw_bundle = getattr(config, "raw_input_bundle", None)
+    raw_cache_root = getattr(raw_bundle, "cache_root", None) if raw_bundle is not None else None
+    fallback_output = raw_cache_root.parent / "outputs" if raw_cache_root is not None else None
+    layout = subject_layout(
+        config.native_bundle.subject_root,
+        output_root=fallback_output if (fallback_output is not None and fallback_output.is_dir()) else None,
+    )
     directory = layout.anatomy_input_dir("ddparcel")
     stage_parcel_dir = layout.stage_cache("01_anatomical_priors/brain_parcellation")
     default_candidates = [
@@ -1121,7 +1127,7 @@ def _amico_cache_root(config: MicrostructureConfig) -> Path:
     # directions or dictionaries must never share that upstream kernel path.
     payload = {"stage": _expected_noddi_manifest(config), "amico_version": getattr(amico, "__version__", None)}
     key = hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()[:24]
-    return config.raw_input_bundle.subject_root / "cache" / "microstructure" / "amico" / key
+    return config.raw_input_bundle.effective_cache_root / "microstructure" / "amico" / key
 
 
 def _noddi_threads(config) -> int:

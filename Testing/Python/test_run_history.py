@@ -333,10 +333,25 @@ class CancelledManifestRowsTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp) / "Downloads"
             roots = candidate_run_roots(output_root_text=str(out), subject_id="try1")
-            self.assertEqual(roots[0], out / "try1")
+            self.assertEqual(roots[0], out / "try1" / "outputs")
+            self.assertIn(out / "try1", roots)
             self.assertIn(out, roots)
             batch_roots = candidate_run_roots(output_root_text=str(out), subject_id="try1", batch_mode=True)
             self.assertEqual(batch_roots[0], out)
+
+    def test_discovery_finds_scheme_a_outputs_and_skips_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            # Deep cache dirs must be skipped so max_dirs budget is not exhausted.
+            for i in range(12):
+                (root / "cache" / f"dir_{i:02d}" / "nested").mkdir(parents=True)
+            scheme_a_manifest = _write(
+                root / "sub-01" / "outputs" / "00_run_metadata" / "Test1_orchestration_manifest.json",
+                _subject_manifest(subject_id="sub-01", run_name="Test1", status="completed"),
+            )
+            discovery = discover_runs([root], max_depth=3, max_dirs=5)
+            self.assertEqual(len(discovery.records), 1)
+            self.assertEqual(discovery.records[0].manifest_path, scheme_a_manifest)
 
     def test_discovery_prioritizes_metadata_folders_and_deduplicates_cancelled_companion(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

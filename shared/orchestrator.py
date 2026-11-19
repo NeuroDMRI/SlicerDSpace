@@ -1539,13 +1539,20 @@ def _task_name_for_target(target: str, config: ProductOrchestratorConfig) -> str
     return target
 
 
-def _resolve_raw_inputs(subject_root: Path) -> dict[str, Path]:
+def _resolve_raw_inputs(subject_root: Path, output_root: Optional[Path] = None) -> dict[str, Path]:
     input_dir = subject_root / "input"
+    mask_path = input_dir / "nodif_brain_mask.nii.gz"
+    if not mask_path.is_file() and output_root is not None:
+        layout = subject_layout(subject_root, output_root=output_root)
+        if layout.workspace_root != subject_root.expanduser().resolve():
+            cached_mask = layout.cache / "brain_mask" / "nodif_brain_mask.nii.gz"
+            if cached_mask.is_file() or not mask_path.exists():
+                mask_path = cached_mask
     return {
         "dwi": input_dir / "data.nii.gz",
         "bval": input_dir / "bvals",
         "bvec": input_dir / "bvecs",
-        "mask": input_dir / "nodif_brain_mask.nii.gz",
+        "mask": mask_path,
     }
 
 
@@ -1559,7 +1566,7 @@ def _resolve_analysis_inputs(
     if _preprocessing_complete(subject_root, subject_id, output_root):
         outputs = _preprocessing_outputs(subject_root, subject_id, output_root)
         return {key: outputs[key] for key in ("dwi", "bval", "bvec", "mask")}
-    return _resolve_raw_inputs(subject_root)
+    return _resolve_raw_inputs(subject_root, output_root)
 
 
 def _file_record_matches(record: object, path: Path) -> bool:
@@ -1731,6 +1738,7 @@ def _preprocessing_config(
         run_denoise=run_denoise,
         run_eddy=run_eddy,
         run_topup=run_topup,
+        output_root=config.output_root,
     )
 
 
@@ -1760,10 +1768,11 @@ def _preprocessing_complete(
         expected = _preprocessing_config(config, subject_root, current.preproc_dir)
         if expected.force:
             return False
-        raw = _resolve_raw_inputs(subject_root)
+        raw = _resolve_raw_inputs(subject_root, output_root)
         bundle = RawInputBundle(
             subject_root=subject_root, subject_id=subject_id, input_dir=subject_root / "input",
             dwi_path=raw["dwi"], bval_path=raw["bval"], bvec_path=raw["bvec"], mask_path=raw["mask"],
+            cache_root=subject_layout(subject_root, output_root=output_root).cache,
         )
         return current.cache_key == _preprocessing_cache_key(bundle, expected, inspect_preprocessing_backend(expected))
     except (OSError, ValueError, TypeError, AttributeError):
@@ -1848,7 +1857,12 @@ def _anatomy_input_bundle(
 
     from shared.pipeline import find_subject_root, resolve_preprocessed_input_bundle
 
-    raw_bundle = find_subject_root(subject_root, subject_id, brain_mask_config=brain_mask_config)
+    raw_bundle = find_subject_root(
+        subject_root,
+        subject_id,
+        brain_mask_config=brain_mask_config,
+        output_root=output_root,
+    )
     return resolve_preprocessed_input_bundle(raw_bundle, output_root=output_root)
 
 
@@ -2846,7 +2860,7 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
     layout = subject_layout(subject_root, output_root=output_root)
     run_name = normalize_run_name(config.run_name)
     primary_tractography_backend = _primary_tractography_backend(config)
-    raw = _resolve_raw_inputs(subject_root)
+    raw = _resolve_raw_inputs(subject_root, output_root)
     analysis_inputs = _resolve_analysis_inputs(subject_root, config.subject_id, output_root)
     raw_missing = _missing_file_labels(raw)
     from shared.dicom_input import is_dicom_root, converter_path
@@ -4165,7 +4179,8 @@ def _parallel_model_products(config, targets, parcellation, log):
     from shared.brain_mask import brain_mask_config_from_options
 
     raw = find_subject_root(config.subject_root, config.subject_id,
-        brain_mask_config=brain_mask_config_from_options(config))
+        brain_mask_config=brain_mask_config_from_options(config),
+        output_root=config.output_root)
     raw = resolve_preprocessed_input_bundle(raw, output_root=config.output_root)
     native = ensure_native_dti_bundle(raw, fit_method=config.microstructure_fit_method, reuse=True, log=log)
     layout = subject_layout(config.subject_root, output_root=config.output_root)
@@ -4293,7 +4308,7 @@ def _run_subject_products_impl(
     selected_mask_config = brain_mask_config_from_options(config)
     if _resolved_preprocessing_stages(config) is not None and not had_user_mask and selected_mask_config.backend == "provided":
         selected_mask_config = replace(selected_mask_config, backend="pnl_cnn")
-    initial_raw = _resolve_raw_inputs(subject_root)
+    initial_raw = _resolve_raw_inputs(subject_root, output_root)
     mask_failure = ""
     if (
         config.execute
@@ -4307,11 +4322,12 @@ def _run_subject_products_impl(
                 subject_root,
                 config.subject_id,
                 brain_mask_config=selected_mask_config,
+                output_root=output_root,
             )
         except (FileNotFoundError, RuntimeError) as exc:
             mask_failure = mask_failure_message(str(exc))
             _emit(f"[Brain mask] {mask_failure}", log)
-    raw = _resolve_raw_inputs(subject_root)
+    raw = _resolve_raw_inputs(subject_root, output_root)
 
     for target in targets:
         if target in preflight_blocked_targets:
@@ -4340,6 +4356,7 @@ def _run_subject_products_impl(
                 pnl_mask_model_dir=config.pnl_mask_model_dir,
                 pnl_mask_ants_bin_dir=config.pnl_mask_ants_bin_dir,
                 pnl_mask_route=config.pnl_mask_route,
+                output_root=output_root,
             )
         )
         input_validation_path = validation.report_path
@@ -4906,6 +4923,7 @@ def _run_subject_products_impl(
                 subject_root,
                 config.subject_id,
                 brain_mask_config=selected_mask_config,
+                output_root=output_root,
             )
             analysis_input_bundle = resolve_preprocessed_input_bundle(raw_bundle, output_root=output_root)
             native_bundle = ensure_native_dti_bundle(
@@ -4999,6 +5017,7 @@ def _run_subject_products_impl(
                 subject_root,
                 config.subject_id,
                 brain_mask_config=selected_mask_config,
+                output_root=output_root,
             )
             analysis_input_bundle = resolve_preprocessed_input_bundle(raw_bundle, output_root=output_root)
             native_bundle = ensure_native_dti_bundle(
@@ -5076,6 +5095,7 @@ def _run_subject_products_impl(
                 subject_root,
                 config.subject_id,
                 brain_mask_config=selected_mask_config,
+                output_root=output_root,
             )
             analysis_input_bundle = resolve_preprocessed_input_bundle(raw_bundle, output_root=output_root)
             native_bundle = ensure_native_dti_bundle(
@@ -6030,6 +6050,7 @@ def _run_subject_products_impl(
             subject_id=config.subject_id,
             run_name=run_name,
             subject_root=subject_root,
+            cache_root=layout.cache,
         )
     output_tree_audit = _audit_output_tree(layout, subject_id=config.subject_id, selected_targets=targets)
     output_tree_semantics = _write_output_tree_semantics(
@@ -6326,12 +6347,25 @@ def run_subject_products(
         if resolved_subject_root != config.subject_root:
             config = replace(config, subject_root=resolved_subject_root)
         from shared.convertible_input import find_convertible_input, prepare_convertible_root
+        target_workspace = (
+            subject_layout(config.subject_root, output_root=config.output_root).workspace_root
+            if config.output_root is not None
+            else None
+        )
         if config.execute:
             if not config.subject_id.strip() or config.select_streamlines <= 0:
                 raise ValueError("subject_id is required and select_streamlines must be positive")
             _normalize_targets(config)
             from shared.dicom_input import prepare_dicom_root
-            prepare_dicom_root(config.subject_root, config.subject_id, dwiconvert=config.dwiconvert_executable, log=log)
+            dicom_record = prepare_dicom_root(
+                config.subject_root,
+                config.subject_id,
+                dwiconvert=config.dwiconvert_executable,
+                log=log,
+                target_root=target_workspace,
+            )
+            if dicom_record is not None and target_workspace is not None:
+                config = replace(config, subject_root=target_workspace)
             if find_convertible_input(config.subject_root) is not None:
                 mrconvert_exe = None
                 if config.mrtrix_bin_dir is not None:
@@ -6346,6 +6380,7 @@ def run_subject_products(
                     dwiconvert=config.dwiconvert_executable,
                     mrconvert=mrconvert_exe,
                     log=log,
+                    target_root=target_workspace,
                 )
                 if prepared_root != config.subject_root.expanduser().resolve():
                     config = replace(config, subject_root=prepared_root)
@@ -6354,11 +6389,14 @@ def run_subject_products(
             if found is not None:
                 config = replace(config, subject_root=found[2])
         config = _with_preprocessing_pe_decision(config)
-        use_multi, config = _uses_multi_tracking_variants(config)
-        if use_multi:
-            from shared.multi_tracking import run
-            return run(config, log=log)
-        return _run_subject_products_impl(config, log=log)
+        from shared.diffusion_io import subject_cache_root
+        cache_root = subject_layout(config.subject_root, output_root=config.output_root).cache
+        with subject_cache_root(cache_root):
+            use_multi, config = _uses_multi_tracking_variants(config)
+            if use_multi:
+                from shared.multi_tracking import run
+                return run(config, log=log)
+            return _run_subject_products_impl(config, log=log)
     except Exception as exc:
         _mark_orchestration_failed(config, exc)
         raise

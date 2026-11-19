@@ -63,6 +63,7 @@ class InputValidationConfig:
     pnl_mask_model_dir: Optional[Path] = None
     pnl_mask_ants_bin_dir: Optional[Path] = None
     pnl_mask_route: str = "auto"
+    output_root: Optional[Path] = None
 
 
 @dataclass(frozen=True)
@@ -456,6 +457,7 @@ def validate_subject_inputs(config: InputValidationConfig) -> InputValidationRes
                 config.input_root.expanduser().resolve(),
                 config.subject_id,
                 brain_mask_config=mask_config,
+                output_root=config.output_root,
             )
         except Exception as exc:
             metrics["brain_mask_qc"] = {"status": "not_run", "error": str(exc)}
@@ -502,7 +504,11 @@ def validate_subject_inputs(config: InputValidationConfig) -> InputValidationRes
         output_dir = (
             config.output_dir.expanduser().resolve()
             if config.output_dir is not None
-            else (default_task_output_dir(subject_root, "validation") if subject_root else config.input_root / "validation")
+            else (
+                default_task_output_dir(subject_root, "validation", output_root=config.output_root)
+                if subject_root
+                else config.input_root / "validation"
+            )
         )
         report_path = output_dir / f"{config.subject_id or 'unknown'}_input_validation.json"
         _write_report(

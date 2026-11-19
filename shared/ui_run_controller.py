@@ -503,12 +503,13 @@ def preflight_blockers_for_targets(doctor_result: Any, selected_targets: tuple[s
     return {target: reason for target, reason in blocked_target_reasons(doctor_result).items() if target in selected}
 
 
-def resolve_single_subject_output_root(output_root_text: str, subject_id: str = "") -> Optional[Path]:
-    """Resolve the single-subject output directory under ``<output_root>/<subject_id>``.
+def resolve_single_subject_workspace_root(output_root_text: str, subject_id: str = "") -> Optional[Path]:
+    """Resolve the single-subject workspace directory under ``<output_root>/<subject_id>``.
 
-    When ``output_root_text`` already ends with ``<subject_id>`` (or ``<subject_id>/outputs``),
-    it is returned as-is instead of nesting another ``<subject_id>`` subfolder. Empty input
-    returns ``None`` so callers fall back to ``<subject_root>/outputs``.
+    Strips a trailing ``output``/``outputs`` component when already present so
+    Scheme A colocates ``input/``, ``preprocessed/``, ``cache/``, and ``outputs/``
+    under the same ``<output_root>/<subject_id>`` parent directory. Empty input
+    returns ``None`` so callers fall back to the default workspace/subject root.
     """
 
     raw = str(output_root_text or "").strip()
@@ -517,10 +518,35 @@ def resolve_single_subject_output_root(output_root_text: str, subject_id: str = 
     base = Path(raw).expanduser()
     clean_sid = str(subject_id or "").strip().replace("/", "_").replace("\\", "_")
     if not clean_sid:
-        return base
-    if base.name == clean_sid or (base.name.lower() in {"output", "outputs"} and base.parent.name == clean_sid):
+        return base.parent if base.name.lower() in {"output", "outputs"} else base
+    if base.name.lower() in {"output", "outputs"} and base.parent.name == clean_sid:
+        return base.parent
+    if base.name == clean_sid:
         return base
     return base / clean_sid
+
+
+def resolve_single_subject_output_root(output_root_text: str, subject_id: str = "") -> Optional[Path]:
+    """Resolve the single-subject output directory under ``<output_root>/<subject_id>/outputs``.
+
+    When ``output_root_text`` already ends with ``<subject_id>`` or
+    ``<subject_id>/outputs``, duplicate ``<subject_id>``/``outputs`` segments are
+    not nested. Empty input returns ``None`` so callers fall back to
+    ``<subject_root>/outputs``.
+    """
+
+    raw = str(output_root_text or "").strip()
+    if not raw:
+        return None
+    base = Path(raw).expanduser()
+    clean_sid = str(subject_id or "").strip().replace("/", "_").replace("\\", "_")
+    if not clean_sid:
+        return base if base.name.lower() in {"output", "outputs"} else (base / "outputs")
+    if base.name.lower() in {"output", "outputs"} and base.parent.name == clean_sid:
+        return base
+    if base.name == clean_sid:
+        return base / "outputs"
+    return base / clean_sid / "outputs"
 
 
 def build_single_subject_run_kwargs(

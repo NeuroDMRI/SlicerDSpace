@@ -112,6 +112,7 @@ class DwiPreprocessingConfig:
     run_denoise: bool = True
     run_eddy: bool = True
     run_topup: bool = True
+    output_root: Optional[Path] = None
 
 
 def _effective_reverse_phase_b0(config: DwiPreprocessingConfig) -> Optional[Path]:
@@ -174,13 +175,14 @@ def _resolve_raw_inputs(config: DwiPreprocessingConfig) -> RawInputBundle:
     return find_subject_root(
         config.input_root, config.subject_id,
         brain_mask_config=_brain_mask_config(config), generate_missing_mask=False,
+        output_root=config.output_root,
     )
 
 
-def _resolve_output_dir(raw: RawInputBundle, output_dir: Optional[Path]) -> Path:
+def _resolve_output_dir(raw: RawInputBundle, output_dir: Optional[Path], *, output_root: Optional[Path] = None) -> Path:
     if output_dir is not None:
         return output_dir.expanduser().resolve()
-    return default_task_output_dir(raw.subject_root, "preproc")
+    return default_task_output_dir(raw.subject_root, "preproc", output_root=output_root)
 
 
 def _command_search_path(config: DwiPreprocessingConfig) -> str:
@@ -1197,7 +1199,7 @@ def run_dwi_preprocessing(
     log: Optional[Callable[[str], None]] = None,
 ) -> DwiPreprocessingResult:
     raw = _resolve_raw_inputs(config)
-    output_dir = _resolve_output_dir(raw, config.output_dir)
+    output_dir = _resolve_output_dir(raw, config.output_dir, output_root=config.output_root)
     paths = _planned_paths(output_dir, raw.subject_id)
     backend = inspect_preprocessing_backend(config)
     native = backend["execution_backend"] == "native"

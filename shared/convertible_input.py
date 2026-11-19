@@ -147,6 +147,7 @@ def prepare_convertible_root(
     dwiconvert: Optional[Path] = None,
     mrconvert: Optional[Path] = None,
     log: Optional[Callable[[str], None]] = None,
+    target_root: Optional[Path] = None,
 ) -> Path:
     """Normalize a raw NIfTI or NRRD file/folder into ``<subject_root>/input`` if needed."""
 
@@ -156,7 +157,8 @@ def prepare_convertible_root(
         return resolved if resolved.is_dir() else resolved.parent
 
     kind, source_file, subject_root, extra = found
-    input_dir = subject_root / "input"
+    dest_root = Path(target_root).expanduser().resolve() if target_root is not None else subject_root
+    input_dir = dest_root / "input"
     receipt_path = input_dir / RECEIPT
     signature = _source_signature(source_file, extra)
     if (
@@ -167,18 +169,18 @@ def prepare_convertible_root(
         try:
             saved = json.loads(receipt_path.read_text(encoding="utf-8"))
             if saved.get("kind") == kind and saved.get("signature") == signature:
-                return subject_root
+                return dest_root
         except (OSError, ValueError, TypeError):
             pass
 
-    from shared.input_import import InputImportConfig, import_dwi_input
+    from shared.input_import import InputImportConfig, prepare_inputs
 
     if log:
         log(f"[Input] Preparing {kind.upper()} input '{source_file.name}' into {input_dir}")
-    import_dwi_input(
+    prepare_inputs(
         InputImportConfig(
             source=source_file,
-            subject_root=subject_root,
+            subject_root=dest_root,
             subject_id=subject_id,
             source_kind=kind,  # type: ignore[arg-type]
             dwiconvert_executable=dwiconvert,
@@ -191,4 +193,4 @@ def prepare_convertible_root(
         json.dumps({"kind": kind, "signature": signature}, indent=2) + "\n",
         encoding="utf-8",
     )
-    return subject_root
+    return dest_root

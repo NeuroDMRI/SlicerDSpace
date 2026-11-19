@@ -93,21 +93,30 @@ def _iter_output_paths(value: Any):
 
 
 def _is_subject_cache_path(path: Path, manifest: dict) -> bool:
+    roots: list[Path] = []
     subject_root = str(manifest.get("subject_root") or "").strip()
-    if not subject_root:
-        return False
-    cache_root = Path(subject_root) / "cache"
-    for candidate, root in ((path, cache_root),):
+    output_root_raw = str(manifest.get("output_root") or "").strip()
+    if subject_root:
+        roots.append(Path(subject_root) / "cache")
+        if output_root_raw:
+            from shared.io_layout import subject_layout
+
+            roots.append(subject_layout(Path(subject_root), output_root=Path(output_root_raw)).cache)
+    elif output_root_raw:
+        out = Path(output_root_raw)
+        roots.append((out.parent if out.name.lower() in {"output", "outputs"} else out) / "cache")
+    for cache_root in roots:
         try:
-            candidate.relative_to(root)
+            path.relative_to(cache_root)
             return True
         except ValueError:
             pass
-    try:
-        path.resolve().relative_to(cache_root.resolve())
-        return True
-    except (OSError, ValueError):
-        return False
+        try:
+            path.resolve().relative_to(cache_root.resolve())
+            return True
+        except (OSError, ValueError):
+            pass
+    return False
 
 
 def product_inventory(manifest: dict, run_record_path: Path, output_root: Optional[Path] = None) -> list[dict]:

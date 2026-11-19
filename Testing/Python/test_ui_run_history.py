@@ -266,6 +266,50 @@ class ResultsPanelTest(unittest.TestCase):
                 self.assertEqual(subj_item.childCount(), 2)
                 self.assertTrue(run1_item.childCount() >= 1)
 
+    def test_populate_manifest_output_items_renders_preprocessing_mask_group(self) -> None:
+        qt = fake_qt()
+        children_by_parent: list[Any] = []
+
+        class _Item:
+            def __init__(self, parent, labels):
+                self.parent_obj = parent
+                self.labels = list(labels)
+                self._data = {}
+                self.children = []
+                self.expanded = False
+                self.tooltip = ""
+                if hasattr(parent, "children"):
+                    parent.children.append(self)
+                else:
+                    children_by_parent.append(self)
+
+            def text(self, col): return self.labels[col] if col < len(self.labels) else ""
+            def setData(self, col, role, value): self._data[(col, role)] = value
+            def setExpanded(self, val): self.expanded = bool(val)
+            def setToolTip(self, col, tip): self.tooltip = tip
+
+        qt.QTreeWidgetItem = lambda parent, labels: _Item(parent, labels)
+        owner = SimpleNamespace(_onboardingLanguage="en")
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(sys.modules, {"qt": qt}):
+            subj = Path(tmp).resolve() / "sub1"
+            preproc_mask = subj / "preprocessed" / "nodif_brain_mask.nii.gz"
+            fa_path = subj / "outputs" / "02_microstructure" / "diffusion_tensor" / "sub1_FA.nii.gz"
+            preproc_mask.parent.mkdir(parents=True)
+            fa_path.parent.mkdir(parents=True)
+            preproc_mask.touch()
+            fa_path.touch()
+            manifest = {
+                "subject_id": "sub1",
+                "subject_root": str(subj),
+                "output_root": str(subj / "outputs"),
+                "brain_mask_path": str(preproc_mask),
+                "tasks": [{"name": "microstructure.dti", "status": "completed", "outputs": {"fa": str(fa_path)}}],
+            }
+            parent = _Item(None, ["run1"])
+            ui_run_history._populate_manifest_output_items(owner, parent, manifest)
+            self.assertEqual([c.text(0) for c in parent.children], ["Preprocessing (1)", "Microstructure (1)"])
+            self.assertEqual(parent.children[0].children[0].text(0), "nodif_brain_mask.nii.gz")
+
     def test_there_are_no_refresh_or_browse_buttons(self) -> None:
         qt, layout, owner = self.build()
         names = {object_name(widget) for widget in qt.created}

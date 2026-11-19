@@ -13,7 +13,7 @@
 ```text
 <subject_root>/
   input/
-  preprocessed/                         # 仅在运行预处理时创建 (<sub_id>_dwi_final.*, <sub_id>_brain_mask_final.nii.gz)
+  preprocessed/                         # 在自动生成脑掩膜 (nodif_brain_mask.nii.gz) 或运行预处理 (<sub_id>_dwi_final.*、<sub_id>_brain_mask_final.nii.gz) 时创建
   cache/                                # 阶段工作区、日志、manifest、HTML 报告与 Slicer 降采样预览
     stages/
     reports/

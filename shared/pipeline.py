@@ -11,6 +11,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from uuid import uuid4
 from contextlib import redirect_stderr, redirect_stdout
@@ -340,6 +341,85 @@ def inspect_subject_directory(base_path: Path, subject_id: str) -> dict[str, Any
     }
 
 
+def _is_user_supplied_mask(mask_path: Path) -> bool:
+    return mask_path.is_file() and not mask_path.with_name("nodif_brain_mask.manifest.json").is_file()
+
+
+def resolve_raw_brain_mask_path(subject_root: Path, output_root: Optional[Path] = None) -> Path:
+    """Resolve native DWI brain mask path, preferring user input then ``preprocessed/``."""
+    from shared.io_layout import subject_layout
+
+    resolved_root = Path(subject_root).expanduser().resolve()
+    layout = subject_layout(resolved_root, output_root=output_root)
+    mask_name = RAW_INPUT_FILES["mask"]
+    input_mask = resolved_root / "input" / mask_name
+    preproc_mask = layout.preproc / mask_name
+    legacy_cached_mask = layout.cache / "brain_mask" / mask_name
+    external_workspace = output_root is not None and layout.workspace_root != resolved_root
+
+    if _is_user_supplied_mask(input_mask):
+        return input_mask
+    if preproc_mask.is_file() or preproc_mask.with_name("nodif_brain_mask.manifest.json").is_file():
+        return preproc_mask
+    if not external_workspace and (
+        input_mask.is_file() or input_mask.with_name("nodif_brain_mask.manifest.json").is_file()
+    ):
+        return input_mask
+    if legacy_cached_mask.is_file():
+        return legacy_cached_mask
+    return preproc_mask
+
+
+def _migrate_legacy_generated_mask(src_mask: Path, dest_mask: Path) -> bool:
+    """Copy a verified legacy v2 auto-generated mask and receipt into ``dest_mask``."""
+    src_receipt = src_mask.with_name("nodif_brain_mask.manifest.json")
+    if src_mask.is_symlink() or src_receipt.is_symlink():
+        return False
+    if not src_mask.is_file() or not src_receipt.is_file():
+        return False
+    record = json.loads(src_receipt.read_text(encoding="utf-8"))
+    if not isinstance(record, dict) or record.get("version") != 2:
+        return False
+    from shared.brain_mask import _sha256
+
+    recorded_sha = (record.get("output") or {}).get("sha256") if isinstance(record.get("output"), dict) else None
+    if not recorded_sha or recorded_sha != _sha256(src_mask):
+        raise ValueError("Generated brain mask was edited; select provided after review, or explicitly regenerate")
+
+    dest_mask.parent.mkdir(parents=True, exist_ok=True)
+    dest_resolved = dest_mask.resolve()
+    dest_receipt = dest_mask.with_name("nodif_brain_mask.manifest.json")
+    updated = dict(record)
+    updated["mask_path"] = str(dest_resolved)
+    updated["manifest_path"] = str(dest_resolved.with_name("nodif_brain_mask.manifest.json"))
+    output_meta = dict(updated.get("output") or {})
+    output_meta["path"] = str(dest_resolved)
+    updated["output"] = output_meta
+
+    with tempfile.NamedTemporaryFile(prefix=".brain-mask-", suffix=".nii.gz", dir=dest_mask.parent, delete=False) as tmp:
+        staged_mask = Path(tmp.name)
+    staged_receipt: Optional[Path] = None
+    try:
+        shutil.copyfile(src_mask, staged_mask)
+        with tempfile.NamedTemporaryFile(
+            mode="w", prefix=".mask-record-", suffix=".json", dir=dest_receipt.parent, encoding="utf-8", delete=False
+        ) as tmp:
+            staged_receipt = Path(tmp.name)
+            json.dump(updated, tmp, indent=2, sort_keys=True)
+            tmp.write("\n")
+        os.replace(staged_mask, dest_mask)
+        try:
+            os.replace(staged_receipt, dest_receipt)
+        except BaseException:
+            dest_mask.unlink(missing_ok=True)
+            raise
+    finally:
+        staged_mask.unlink(missing_ok=True)
+        if staged_receipt is not None:
+            staged_receipt.unlink(missing_ok=True)
+    return True
+
+
 def find_subject_root(
     base_path: Path,
     subject_id: str,
@@ -359,14 +439,27 @@ def find_subject_root(
     subject_root = Path(inspected["subject_root"]).expanduser().resolve()
     layout = subject_layout(subject_root, output_root=output_root)
     input_dir = subject_root / "input"
-    input_mask = input_dir / RAW_INPUT_FILES["mask"]
+    mask_name = RAW_INPUT_FILES["mask"]
+    input_mask = input_dir / mask_name
+    preproc_mask = layout.preproc / mask_name
+    legacy_cached_mask = layout.cache / "brain_mask" / mask_name
     external_workspace = output_root is not None and layout.workspace_root != subject_root
-    if input_mask.exists() and not input_mask.with_name("nodif_brain_mask.manifest.json").is_file():
+
+    if _is_user_supplied_mask(input_mask):
         mask_path = input_mask
-    elif external_workspace:
-        mask_path = layout.cache / "brain_mask" / RAW_INPUT_FILES["mask"]
     else:
-        mask_path = input_mask
+        if not external_workspace and input_mask.with_name("nodif_brain_mask.manifest.json").is_file():
+            json.loads(input_mask.with_name("nodif_brain_mask.manifest.json").read_text(encoding="utf-8"))
+        if generate_missing_mask:
+            mask_path = preproc_mask
+            if not preproc_mask.exists():
+                legacy_sources = [legacy_cached_mask] if external_workspace else [input_mask, legacy_cached_mask]
+                for legacy_mask in legacy_sources:
+                    if _migrate_legacy_generated_mask(legacy_mask, preproc_mask):
+                        break
+        else:
+            mask_path = resolve_raw_brain_mask_path(subject_root, output_root=output_root)
+
     generated_record = mask_path.with_name("nodif_brain_mask.manifest.json")
     verify_generated = False
     if generated_record.is_file():
@@ -375,7 +468,6 @@ def find_subject_root(
         except (OSError, ValueError, AttributeError):
             verify_generated = True
     if generate_missing_mask and (not mask_path.exists() or verify_generated):
-        mask_path.parent.mkdir(parents=True, exist_ok=True)
         generate_brain_mask(
             input_dir / RAW_INPUT_FILES["dwi"],
             input_dir / RAW_INPUT_FILES["bval"],
@@ -531,11 +623,12 @@ def current_preprocessed_outputs(
     for key, name in RAW_INPUT_FILES.items():
         record = inputs.get(key)
         expected_path = input_dir / name
-        if key == "mask" and not expected_path.is_file():
-            cached_mask = layout.cache / "brain_mask" / name
-            if cached_mask.is_file():
-                expected_path = cached_mask
-        if not _input_record_matches(record, expected_path):
+        if key == "mask":
+            candidates = (input_dir / name, layout.preproc / name, layout.cache / "brain_mask" / name)
+            matched = next((cand for cand in candidates if cand.is_file() and _input_record_matches(record, cand)), None)
+            if matched is None:
+                return None
+        elif not _input_record_matches(record, expected_path):
             return None
     return PreprocessedOutputs(
         subject_id=found_id, preproc_dir=files_dir, dwi_path=paths["dwi"], bval_path=paths["bval"],

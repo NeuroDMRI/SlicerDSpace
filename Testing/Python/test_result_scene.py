@@ -180,6 +180,48 @@ class ResultSelectionTest(unittest.TestCase):
                     "reason": reason, "outputs": {"fa": str(path)}}]})
                 self.assertEqual(len(candidates), expected)
 
+    def test_include_brain_mask_surfaces_preprocessed_mask_only_when_requested(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            subj = Path(tmp).resolve() / "sub-01"
+            (subj / "input").mkdir(parents=True)
+            (subj / "preprocessed").mkdir(parents=True)
+            input_mask = subj / "input" / "nodif_brain_mask.nii.gz"
+            preproc_mask = subj / "preprocessed" / "nodif_brain_mask.nii.gz"
+            final_mask = subj / "preprocessed" / "sub-01_brain_mask_final.nii.gz"
+            fa_path = subj / "outputs" / "02_microstructure" / "diffusion_tensor" / "sub-01_FA.nii.gz"
+            fa_path.parent.mkdir(parents=True)
+            for p in (input_mask, preproc_mask, final_mask, fa_path):
+                p.touch()
+
+            manifest = {
+                "subject_root": str(subj),
+                "output_root": str(subj / "outputs"),
+                "brain_mask_path": str(preproc_mask),
+                "tasks": [{"name": "microstructure.dti", "status": "completed", "outputs": {"fa": str(fa_path)}}],
+            }
+            # Default: excluded
+            default_cands, _ = result_candidates(manifest)
+            self.assertEqual([c["path"] for c in default_cands], [str(fa_path)])
+            # include_brain_mask=True: includes preprocessed mask
+            mask_cands, _ = result_candidates(manifest, include_brain_mask=True)
+            self.assertEqual(
+                {(c["product"], c["path"]) for c in mask_cands},
+                {("microstructure.dti", str(fa_path)), ("preprocessing.brain_mask", str(preproc_mask))},
+            )
+            # input/ mask is never surfaced as preprocessing output
+            input_manifest = dict(manifest, brain_mask_path=str(input_mask))
+            self.assertEqual([c["path"] for c in result_candidates(input_manifest, include_brain_mask=True)[0]], [str(fa_path)])
+            # If preprocessing.dwi already emitted final_mask, no duplicate nodif_brain_mask
+            dwi_manifest = dict(manifest, tasks=[
+                {"name": "preprocessing.dwi", "status": "completed", "outputs": {"mask": str(final_mask)}},
+                {"name": "microstructure.dti", "status": "completed", "outputs": {"fa": str(fa_path)}},
+            ])
+            with_dwi, _ = result_candidates(dwi_manifest, include_preprocessing=True, include_brain_mask=True)
+            self.assertEqual(
+                {(c["product"], c["path"]) for c in with_dwi},
+                {("preprocessing.dwi", str(final_mask)), ("microstructure.dti", str(fa_path))},
+            )
+
 
 class ReviewStateTextTest(unittest.TestCase):
     def test_review_state_text_has_no_pipes_and_one_format(self):

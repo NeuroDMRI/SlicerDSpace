@@ -1163,7 +1163,12 @@ def _populate_manifest_output_items(
         except OSError:
             output_root = Path(str(output_root_raw)).expanduser()
 
-    candidates, _ = result_candidates(manifest, allow_bundle_directory_scan=False)
+    candidates, _ = result_candidates(
+        manifest,
+        allow_bundle_directory_scan=False,
+        include_preprocessing=True,
+        include_brain_mask=True,
+    )
     filtered_candidates = [
         item for item in candidates
         if not _is_internal_cache_path(Path(item["path"]), subject_root, output_root=output_root)
@@ -1222,7 +1227,13 @@ def _populate_manifest_output_items(
     role_manifest = _user_role(qt, 2)
     role_run = _user_role(qt, 3)
     manifest_str = str(resolved_manifest) if resolved_manifest is not None else None
-    for family, paths in families.items():
+    family_order = ("preprocessing", "anatomy", "microstructure", "tractography", "bundles", "connectome", "qc")
+    ordered_families = [
+        *[family for family in family_order if family in families],
+        *[family for family in families if family not in family_order],
+    ]
+    for family in ordered_families:
+        paths = families[family]
         caption = titles.get(family, (family, family))[int(zh)]
         group = qt.QTreeWidgetItem(parent, [f"{caption} ({len(paths)})"])
         if run_index is not None:

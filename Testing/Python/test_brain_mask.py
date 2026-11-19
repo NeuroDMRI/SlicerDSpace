@@ -48,11 +48,15 @@ class BrainMaskTest(unittest.TestCase):
             config = self.fake_pnl(root)
             subject_root = make_subject(root)
             input_dir = subject_root / "input"
+            preproc_dir = subject_root / "preprocessed"
 
             raw = find_subject_root(subject_root, "sub-01", brain_mask_config=config)
 
+            self.assertEqual(raw.mask_path, preproc_dir / "nodif_brain_mask.nii.gz")
             self.assertTrue(raw.mask_path.is_file())
-            self.assertTrue((input_dir / "nodif_brain_mask.manifest.json").is_file())
+            self.assertTrue((preproc_dir / "nodif_brain_mask.manifest.json").is_file())
+            self.assertFalse((input_dir / "nodif_brain_mask.nii.gz").exists())
+            self.assertFalse((subject_root / "cache" / "brain_mask").exists())
             np.testing.assert_array_equal(nib.load(str(raw.mask_path)).dataobj, mask_data())
 
     def test_missing_subject_mask_without_pnl_files_fails_with_setup_message(self) -> None:
@@ -81,7 +85,8 @@ class BrainMaskTest(unittest.TestCase):
             )
 
             self.assertTrue(result.passed, result.messages)
-            self.assertTrue((input_dir / "nodif_brain_mask.nii.gz").is_file())
+            self.assertTrue((subject_root / "preprocessed" / "nodif_brain_mask.nii.gz").is_file())
+            self.assertFalse((input_dir / "nodif_brain_mask.nii.gz").exists())
             self.assertTrue(result.metrics["brain_mask_qc"]["geometry_pass"])
 
     def test_default_pnl_missing_dependencies_fails_without_a_fallback(self) -> None:
@@ -100,6 +105,7 @@ class BrainMaskTest(unittest.TestCase):
             self.assertEqual(result.metrics["brain_mask_selection"]["backend"], "pnl_cnn")
             self.assertTrue(any("pnl_cnn" in issue.message for issue in result.messages))
             self.assertFalse((subject / "input/nodif_brain_mask.nii.gz").exists())
+            self.assertFalse((subject / "preprocessed").exists())
 
     def test_valid_supplied_mask_is_preserved_and_passes_qc_without_pnl_dependencies(self) -> None:
         from shared import InputValidationConfig, validate_subject_inputs
@@ -185,6 +191,39 @@ class BrainMaskTest(unittest.TestCase):
                     self.assertFalse(result.passed)
                     self.assertTrue(any(issue.category == "brain_mask" for issue in result.messages))
                     self.assertEqual(mask.read_bytes(), original)
+
+    def test_legacy_cached_brain_mask_is_migrated_to_preprocessed_without_reinference(self) -> None:
+        from shared.pipeline import find_subject_root
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            config = self.fake_pnl(root)
+            tool = fake_pythonslicer(root)
+            subject = make_subject(root)
+            raw_first = find_subject_root(subject, "sub-01", brain_mask_config=config)
+            self.assertEqual(len(command_record(tool).read_text(encoding="utf-8").splitlines()), 1)
+
+            legacy_dir = subject / "cache" / "brain_mask"
+            legacy_dir.mkdir(parents=True, exist_ok=True)
+            legacy_mask = legacy_dir / "nodif_brain_mask.nii.gz"
+            legacy_receipt = legacy_dir / "nodif_brain_mask.manifest.json"
+            legacy_mask.write_bytes(raw_first.mask_path.read_bytes())
+            receipt_data = json.loads(raw_first.mask_path.with_name("nodif_brain_mask.manifest.json").read_text(encoding="utf-8"))
+            receipt_data["mask_path"] = str(legacy_mask)
+            receipt_data["manifest_path"] = str(legacy_receipt)
+            receipt_data["output"]["path"] = str(legacy_mask)
+            legacy_receipt.write_text(json.dumps(receipt_data, indent=2) + "\n", encoding="utf-8")
+
+            raw_first.mask_path.unlink()
+            raw_first.mask_path.with_name("nodif_brain_mask.manifest.json").unlink()
+
+            with patch("shared.brain_mask._run") as run:
+                raw_migrated = find_subject_root(subject, "sub-01", brain_mask_config=config)
+            run.assert_not_called()
+            self.assertEqual(raw_migrated.mask_path, subject / "preprocessed" / "nodif_brain_mask.nii.gz")
+            self.assertTrue(raw_migrated.mask_path.is_file())
+            self.assertTrue(raw_migrated.mask_path.with_name("nodif_brain_mask.manifest.json").is_file())
+            self.assertEqual(len(command_record(tool).read_text(encoding="utf-8").splitlines()), 1)
 
 
 if __name__ == "__main__":

@@ -13,7 +13,7 @@
 ```text
 <subject_root>/
   input/
-  preprocessed/                         # Created when preprocessing runs (<sub_id>_dwi_final.*, <sub_id>_brain_mask_final.nii.gz)
+  preprocessed/                         # Created when brain mask is generated (nodif_brain_mask.nii.gz) or preprocessing runs (<sub_id>_dwi_final.*, <sub_id>_brain_mask_final.nii.gz)
   cache/                                # Internal stage workspaces, logs, manifests, HTML reports, display previews
     stages/
     reports/

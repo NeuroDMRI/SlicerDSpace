@@ -1141,7 +1141,11 @@ class SharedLogicMixin:
                                 retained.append(node)
                         existing[source] = retained
         else:
-            candidates, skipped = result_candidates(manifest)
+            candidates, skipped = result_candidates(
+                manifest,
+                include_preprocessing=source_path is not None,
+                include_brain_mask=source_path is not None,
+            )
             if source_path is not None:
                 identity = str(source_path.expanduser().resolve())
                 candidates = [item for item in candidates if item["path"] == identity]
@@ -1178,8 +1182,19 @@ class SharedLogicMixin:
                 suffix = result_file_suffix(path)
                 name = f"{subject}_{label}"
                 if suffix in {".nii", ".nii.gz", ".mgz"}:
-                    categorical = candidate.get("display_role", "").startswith("categorical") or candidate["product"].startswith(("segmentation.", "parcellation.")) and any(
-                        word in candidate["key"].lower() for word in ("label", "segmentation", "wmparc", "aparc"))
+                    key_clean = candidate["key"].lower().removesuffix("_path")
+                    is_preproc_mask = (
+                        candidate["product"].startswith("preprocessing.")
+                        and key_clean in {"mask", "brain_mask", "brainmask", "final_mask", "brain_mask_final"}
+                    )
+                    categorical = (
+                        candidate.get("display_role", "").startswith("categorical")
+                        or is_preproc_mask
+                        or (
+                            candidate["product"].startswith(("segmentation.", "parcellation."))
+                            and any(word in candidate["key"].lower() for word in ("label", "segmentation", "wmparc", "aparc"))
+                        )
+                    )
                     if categorical:
                         success = bool(slicer.util.loadLabelVolume(str(path), properties={"name": name, "show": False}))
                     else:

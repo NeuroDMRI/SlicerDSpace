@@ -1540,19 +1540,14 @@ def _task_name_for_target(target: str, config: ProductOrchestratorConfig) -> str
 
 
 def _resolve_raw_inputs(subject_root: Path, output_root: Optional[Path] = None) -> dict[str, Path]:
+    from shared.pipeline import resolve_raw_brain_mask_path
+
     input_dir = subject_root / "input"
-    mask_path = input_dir / "nodif_brain_mask.nii.gz"
-    if not mask_path.is_file() and output_root is not None:
-        layout = subject_layout(subject_root, output_root=output_root)
-        if layout.workspace_root != subject_root.expanduser().resolve():
-            cached_mask = layout.cache / "brain_mask" / "nodif_brain_mask.nii.gz"
-            if cached_mask.is_file() or not mask_path.exists():
-                mask_path = cached_mask
     return {
         "dwi": input_dir / "data.nii.gz",
         "bval": input_dir / "bvals",
         "bvec": input_dir / "bvecs",
-        "mask": mask_path,
+        "mask": resolve_raw_brain_mask_path(subject_root, output_root=output_root),
     }
 
 
@@ -1662,7 +1657,7 @@ def _resolved_preprocessing_stages(config: ProductOrchestratorConfig) -> Optiona
 
 
 def _has_user_supplied_mask(subject_root: Path) -> bool:
-    mask_path = _resolve_raw_inputs(subject_root)["mask"]
+    mask_path = subject_root / "input" / "nodif_brain_mask.nii.gz"
     return mask_path.is_file() and not mask_path.with_name("nodif_brain_mask.manifest.json").is_file()
 
 
@@ -4310,9 +4305,13 @@ def _run_subject_products_impl(
         selected_mask_config = replace(selected_mask_config, backend="pnl_cnn")
     initial_raw = _resolve_raw_inputs(subject_root, output_root)
     mask_failure = ""
+    preproc_mask = layout.preproc / "nodif_brain_mask.nii.gz"
+    needs_mask_resolve = (not had_user_mask) and (
+        not initial_raw["mask"].is_file() or not preproc_mask.is_file()
+    )
     if (
         config.execute
-        and not initial_raw["mask"].is_file()
+        and needs_mask_resolve
         and all(initial_raw[key].is_file() for key in ("dwi", "bval", "bvec"))
     ):
         from shared.pipeline import find_subject_root
@@ -6148,6 +6147,11 @@ def _run_subject_products_impl(
         "resume": config.resume,
         "brain_mask_backend": config.brain_mask_backend,
         "brain_mask_device": config.brain_mask_device,
+        "brain_mask_path": (
+            Path(analysis_inputs["mask"]).as_posix()
+            if analysis_inputs.get("mask") and Path(analysis_inputs["mask"]).is_file()
+            else None
+        ),
         "pnl_mask_route": config.pnl_mask_route,
         # SC-1b / F2: the route that this run requested for the pnl_cnn backend. It is not the route of the mask
         # that was consumed (a supplied or cached mask has its own); the run record reads that from the mask receipt.

@@ -29,7 +29,7 @@ NON_PARAMETER_KEYS = frozenset({
     "tasks", "performance_profile", "performance_profile_path", "phase_timings_seconds", "elapsed_seconds",
     "wall_time_seconds", "wall_time_scope", "report_paths", "report_error", "output_tree_report_paths",
     "output_tree_report_error", "output_tree_audit_path", "output_tree_warnings", "output_tree_semantics_path",
-    "output_tree_semantics_summary", "failure", "ended_at", "status",
+    "output_tree_semantics_summary", "brain_mask_path", "failure", "ended_at", "status",
 })
 PACKAGES = ("numpy", "scipy", "nibabel", "dipy", "SimpleITK", "torch", "amico")
 

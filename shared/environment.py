@@ -164,8 +164,9 @@ def run_needs_brain_mask(subject_root: Path, *, targets, subject_id: str, output
     has_conv_mask = bool(convertible and 'mask_path' in convertible[3])
     layout = subject_layout(subject_root, output_root=output_root)
     mask_file = input_dir / 'nodif_brain_mask.nii.gz'
+    preproc_mask = layout.preproc / 'nodif_brain_mask.nii.gz'
     cached_mask = layout.cache / 'brain_mask' / 'nodif_brain_mask.nii.gz'
-    has_any_mask = mask_file.is_file() or cached_mask.is_file() or has_conv_mask
+    has_any_mask = mask_file.is_file() or preproc_mask.is_file() or cached_mask.is_file() or has_conv_mask
     if preprocessing_stages is not None and str(preprocessing_stages).strip():
         from shared.algorithm_selection import PREPROCESSING, algorithms
         stages = algorithms(preprocessing_stages, PREPROCESSING, 'denoise,eddy,topup')

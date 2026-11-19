@@ -350,7 +350,8 @@ class IOLayoutTest(unittest.TestCase):
 
             with patch("shared.pipeline.generate_brain_mask", side_effect=fake_mask):
                 bundle = find_subject_root(src_canon, "sub-01", output_root=out_root)
-            self.assertEqual(bundle.mask_path, layout.cache / "brain_mask" / "nodif_brain_mask.nii.gz")
+            self.assertEqual(bundle.mask_path, layout.preproc / "nodif_brain_mask.nii.gz")
+            self.assertFalse((layout.cache / "brain_mask").exists())
             self.assertEqual(bundle.effective_cache_root, layout.cache)
             self.assertTrue(bundle.mask_path.is_file())
 

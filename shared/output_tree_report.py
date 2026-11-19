@@ -192,6 +192,8 @@ def _describe_file(path: str, *, symlink: bool) -> str:
         return prefix + "统一最终 DWI 对应梯度文件"
     if path.endswith("_brain_mask_final.nii.gz"):
         return prefix + "统一最终 brain mask"
+    if name == "nodif_brain_mask.nii.gz":
+        return prefix + "原生空间自动生成 brain mask"
     if name == "environment_doctor.json":
         return prefix + "依赖自动发现/环境 doctor JSON 结果"
     if name.startswith("install_missing_python"):

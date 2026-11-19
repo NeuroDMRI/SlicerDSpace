@@ -197,12 +197,13 @@ class InputValidationTest(unittest.TestCase):
                     )
                 )
 
-            expected_mask = tmp_path / "external_out" / SUBJECT_ID / "cache" / "brain_mask" / "nodif_brain_mask.nii.gz"
+            expected_mask = tmp_path / "external_out" / SUBJECT_ID / "preprocessed" / "nodif_brain_mask.nii.gz"
             self.assertTrue(result.passed, result.messages)
             self.assertEqual(result.error_count, 0)
             self.assertTrue(result.metrics["files"]["mask"]["exists"])
             self.assertEqual(Path(result.metrics["files"]["mask"]["path"]).resolve(), expected_mask.resolve())
             self.assertFalse((subject_root / "input" / "nodif_brain_mask.nii.gz").exists())
+            self.assertFalse((tmp_path / "external_out" / SUBJECT_ID / "cache" / "brain_mask").exists())
 
 
 if __name__ == "__main__":

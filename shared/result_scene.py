@@ -2,6 +2,7 @@
 
 from pathlib import Path
 import json
+from typing import Optional
 from shared.bundle_qc import bundle_record_error
 
 PREFIX = "SlicerDDSurfer."
@@ -165,7 +166,70 @@ def _is_internal_cache_path(path: Path, manifest: dict) -> bool:
     return False
 
 
-def result_candidates(manifest, *, allow_bundle_directory_scan=True, include_preprocessing=False):
+def _is_under_input_dir(path: Path, manifest: dict) -> bool:
+    subject_root_raw = str(manifest.get("subject_root") or "").strip()
+    if not subject_root_raw:
+        return False
+    input_dir = Path(subject_root_raw).expanduser() / "input"
+    try:
+        path.resolve().relative_to(input_dir.resolve())
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def _has_preprocessing_mask_candidate(candidates: list[dict]) -> bool:
+    for item in candidates:
+        product = str(item.get("product") or "")
+        key = str(item.get("key") or "").lower().removesuffix("_path")
+        if product.startswith("preprocessing.") and key in {
+            "mask", "brain_mask", "brainmask", "final_mask", "brain_mask_final"
+        }:
+            return True
+    return False
+
+
+def _resolve_manifest_brain_mask_candidate(manifest: dict) -> Optional[Path]:
+    raw_mask_path = manifest.get("brain_mask_path")
+    if isinstance(raw_mask_path, str) and raw_mask_path.strip():
+        cand = Path(raw_mask_path).expanduser()
+        if (
+            cand.is_absolute()
+            and cand.name.lower().endswith((".nii.gz", ".nii", ".mgz"))
+            and cand.is_file()
+            and not _is_internal_cache_path(cand, manifest)
+            and not _is_under_input_dir(cand, manifest)
+        ):
+            return cand
+        return None
+    if manifest.get("execute") is False:
+        return None
+    subject_root_raw = str(manifest.get("subject_root") or "").strip()
+    output_root_raw = str(manifest.get("output_root") or "").strip()
+    cand_preproc: Optional[Path] = None
+    if subject_root_raw:
+        from shared.io_layout import subject_layout
+
+        layout = subject_layout(
+            Path(subject_root_raw),
+            output_root=Path(output_root_raw) if output_root_raw else None,
+        )
+        cand_preproc = layout.preproc / "nodif_brain_mask.nii.gz"
+    elif output_root_raw:
+        out = Path(output_root_raw)
+        workspace = out.parent if out.name.lower() in {"output", "outputs"} else out
+        cand_preproc = workspace / "preprocessed" / "nodif_brain_mask.nii.gz"
+    if (
+        cand_preproc is not None
+        and cand_preproc.is_absolute()
+        and cand_preproc.is_file()
+        and not _is_internal_cache_path(cand_preproc, manifest)
+    ):
+        return cand_preproc
+    return None
+
+
+def result_candidates(manifest, *, allow_bundle_directory_scan=True, include_preprocessing=False, include_brain_mask=False):
     candidates, skipped, seen = [], [], set()
     for task in manifest.get("tasks", []) or []:
         if not isinstance(task, dict):
@@ -219,6 +283,19 @@ def result_candidates(manifest, *, allow_bundle_directory_scan=True, include_pre
             suffix_lower = path.suffix.lower()
             priority = 2 if suffix_lower in {".tck", ".trk", ".vtk", ".vtp"} else 1 if suffix_lower in {".stl", ".obj"} else 0
             candidates.append({"path": identity, "label": name + "_" + str(key), "key": str(key), "product": name, "priority": priority})
+    if include_brain_mask and not _has_preprocessing_mask_candidate(candidates):
+        mask_path = _resolve_manifest_brain_mask_candidate(manifest)
+        if mask_path is not None:
+            identity = str(mask_path.resolve())
+            if identity not in seen:
+                seen.add(identity)
+                candidates.append({
+                    "path": identity,
+                    "label": "preprocessing.brain_mask_mask",
+                    "key": "brain_mask",
+                    "product": "preprocessing.brain_mask",
+                    "priority": 0,
+                })
     return sorted(candidates, key=lambda item: (item["priority"], item["label"])), skipped
 
 

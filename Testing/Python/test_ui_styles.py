@@ -216,9 +216,58 @@ class UIStylesTest(unittest.TestCase):
             self.assertEqual(target.palette_obj.colors[_FakePalette.Base], "#22272E")
             self.assertEqual(target.palette_obj.colors[_FakePalette.Text], "#F0F6FC")
             self.assertEqual(target.palette_obj.colors[_FakePalette.Highlight], "#335B70")
+        import re
+
         self.assertIn("background-color: #22272E;", view.stylesheet)
         self.assertIn("color: #F0F6FC;", view.stylesheet)
         self.assertIn("QAbstractItemView::item:selected", view.stylesheet)
+        for theme in (SLICERDSPACE_UI_STYLE, SLICERDSPACE_DARK_UI_STYLE):
+            match = re.search(r"QComboBox QAbstractItemView::item\s*\{([^}]*)\}", theme)
+            self.assertIsNotNone(match)
+            rule_body = match.group(1)
+            self.assertIn("padding: 0px 8px;", rule_body)
+            self.assertNotIn("min-height:", rule_body)
+        self.assertIn("padding: 0px 8px;", view.stylesheet)
+        self.assertNotIn("min-height:", view.stylesheet)
+
+    def test_combobox_popup_sets_uniform_item_sizes_and_size_hint_role(self) -> None:
+        recorded: dict[tuple[int, int], tuple[object, int]] = {}
+        inserted_hooks: list[object] = []
+
+        class _FakeModel:
+            def rowCount(self) -> int:
+                return 3
+
+            def index(self, row: int, col: int) -> tuple[int, int]:
+                return (row, col)
+
+            def setData(self, idx: tuple[int, int], val: object, role: int) -> bool:
+                recorded[idx] = (val, role)
+                return True
+
+            class _Signal:
+                def connect(self, cb: object) -> None:
+                    inserted_hooks.append(cb)
+
+            rowsInserted = _Signal()
+
+        view = SimpleNamespace(
+            uniform=False,
+            setUniformItemSizes=lambda flag: setattr(view, "uniform", bool(flag)),
+            setStyleSheet=lambda _css: None,
+        )
+        combo = SimpleNamespace(view=lambda: view, model=lambda: _FakeModel())
+        fake_qt = SimpleNamespace(
+            Qt=SimpleNamespace(SizeHintRole=13),
+            QSize=lambda w, h: (w, h),
+        )
+        with mock.patch.dict(sys.modules, {"qt": fake_qt}):
+            style_combobox_popup(combo, dark=True)
+
+        self.assertTrue(view.uniform)
+        self.assertEqual(recorded[(0, 0)], ((0, 26), 13))
+        self.assertEqual(recorded[(2, 0)], ((0, 26), 13))
+        self.assertEqual(len(inserted_hooks), 1)
 
 
 if __name__ == "__main__":

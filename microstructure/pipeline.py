@@ -571,6 +571,80 @@ def _compute_rd_map(l2_path: Path, l3_path: Path, output_path: Path) -> None:
     nib.save(nib.Nifti1Image(rd, l2_img.affine, l2_img.header), str(output_path))
 
 
+def _load_native_brain_mask(mask_path: Path) -> tuple[Any, np.ndarray]:
+    """Load and validate the 3D native-space binary brain mask."""
+
+    _ensure_base_imports_ready()
+    mask_img = nib.load(str(mask_path))
+    mask_data = np.asarray(mask_img.dataobj)
+    if mask_data.ndim != 3 or not np.isfinite(mask_data).all() or not np.any(mask_data > 0):
+        raise ValueError("DTI export requires a finite, nonempty 3D brain mask")
+    return mask_img, mask_data > 0
+
+
+def _write_masked_scalar_nifti(src: Path, mask: np.ndarray, mask_affine: np.ndarray, dest: Path) -> None:
+    """Export one native DTI scalar NIfTI with non-brain background zeroed out."""
+
+    img = nib.load(str(src))
+    if img.shape != mask.shape or not np.allclose(img.affine, mask_affine, rtol=0, atol=1e-4):
+        raise ValueError(f"{src.name} does not match the native mask grid")
+    data = np.asarray(img.get_fdata(dtype=np.float32), dtype=np.float32)
+    masked = np.where(mask, data, np.float32(0.0))
+    header = img.header.copy()
+    header.set_data_dtype(np.float32)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    nib.save(nib.Nifti1Image(masked, img.affine, header), str(dest))
+
+
+def _write_masked_dec_nrrd(src: Path, mask: np.ndarray, dest: Path) -> None:
+    """Export a 4D uchar DEC NRRD with voxels outside ``mask`` zeroed, or copy non-NRRD stubs."""
+
+    import gzip
+
+    raw = src.read_bytes()
+    sep_bytes = None
+    sep_idx = -1
+    for candidate in (b"\n\n", b"\r\n\r\n"):
+        idx = raw.find(candidate)
+        if idx != -1 and (sep_idx == -1 or idx < sep_idx):
+            sep_idx = idx
+            sep_bytes = candidate
+    if sep_bytes is None or not raw.startswith(b"NRRD"):
+        _copy_if_needed(src, dest)
+        return
+    header_bytes = raw[:sep_idx]
+    body_bytes = raw[sep_idx + len(sep_bytes):]
+    fields: dict[str, str] = {}
+    for line in header_bytes.decode("ascii", errors="ignore").splitlines():
+        if line.startswith("#") or ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        fields[key.strip().lower()] = value.strip()
+    try:
+        sizes = [int(part) for part in fields.get("sizes", "").split()]
+    except ValueError:
+        sizes = []
+    encoding = fields.get("encoding", "").lower()
+    if (
+        fields.get("type", "").lower() != "uchar"
+        or fields.get("dimension", "") != "4"
+        or len(sizes) != 4
+        or sizes[0] != 3
+        or tuple(sizes[1:]) != tuple(mask.shape)
+        or encoding not in {"gzip", "gz", "raw"}
+    ):
+        _copy_if_needed(src, dest)
+        return
+
+    payload = gzip.decompress(body_bytes) if encoding in {"gzip", "gz"} else body_bytes
+    nx, ny, nz = (int(v) for v in mask.shape)
+    rgb = np.frombuffer(payload, dtype=np.uint8).copy().reshape(nz, ny, nx, 3)
+    rgb[~np.ascontiguousarray(mask.transpose(2, 1, 0))] = 0
+    out_body = gzip.compress(rgb.tobytes(), compresslevel=6) if encoding in {"gzip", "gz"} else rgb.tobytes()
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(header_bytes + sep_bytes + out_body)
+
+
 @scheduled_stage('microstructure_dti')
 def _export_dti_scalar_maps(config: MicrostructureConfig, paths: dict[str, Path]) -> None:
     # Selected FW/NODDI/DKI fits may be forced; immutable DTI prerequisites
@@ -581,14 +655,18 @@ def _export_dti_scalar_maps(config: MicrostructureConfig, paths: dict[str, Path]
         return
     source_before = _dti_source_signature(config)
     native = config.native_bundle
-    _copy_if_needed(native.fa_nii_path, paths["fa"])
-    _copy_if_needed(native.mean_diffusivity_nii_path, paths["md"])
-    _copy_if_needed(native.max_eig_nii_path, paths["l1"])
-    _copy_if_needed(native.mid_eig_nii_path, paths["l2"])
-    _copy_if_needed(native.min_eig_nii_path, paths["l3"])
-    _copy_if_needed(native.trace_nii_path, paths["trace"])
-    _copy_if_needed(native.dec_nrrd_path, paths["dec"])
-    _copy_if_needed(native.max_eig_nii_path, paths["ad"])
+    mask_img, mask = _load_native_brain_mask(config.raw_input_bundle.mask_path)
+    for src, dest_key in (
+        (native.fa_nii_path, "fa"),
+        (native.mean_diffusivity_nii_path, "md"),
+        (native.max_eig_nii_path, "l1"),
+        (native.mid_eig_nii_path, "l2"),
+        (native.min_eig_nii_path, "l3"),
+        (native.trace_nii_path, "trace"),
+        (native.max_eig_nii_path, "ad"),
+    ):
+        _write_masked_scalar_nifti(src, mask, mask_img.affine, paths[dest_key])
+    _write_masked_dec_nrrd(native.dec_nrrd_path, mask, paths["dec"])
     # RD belongs to the current eigenvalue export, never to a previous input.
     _compute_rd_map(paths["l2"], paths["l3"], paths["rd"])
     _write_dti_qc(config, paths)
@@ -608,9 +686,13 @@ def _dti_source_signature(config: MicrostructureConfig) -> dict[str, object]:
 
 def _dti_outputs_current(config: MicrostructureConfig, paths: dict[str, Path]) -> bool:
     try:
-        return (scalar_qc_current(paths["dti_qc"], [paths[key] for key in DTI_KEYS])
-                and paths["dec"].is_file()
-                and (_read_json(paths["dti_qc"]) or {}).get("source_signature") == _dti_source_signature(config))
+        qc = _read_json(paths["dti_qc"]) or {}
+        return (
+            scalar_qc_current(paths["dti_qc"], [paths[key] for key in DTI_KEYS])
+            and paths["dec"].is_file()
+            and bool(qc.get("masked_export"))
+            and qc.get("source_signature") == _dti_source_signature(config)
+        )
     except OSError:
         return False
 
@@ -659,6 +741,7 @@ def _write_dti_qc(config, paths):
     checks = {
         "native_grid_matches": True,
         "all_values_finite": all(bool(np.isfinite(array).all()) for array in arrays.values()),
+        "background_masked": all(bool(np.all(array[~mask] == 0)) for array in arrays.values()),
         "fa_in_range": bool(np.all((arrays["fa"][mask] >= 0) & (arrays["fa"][mask] <= 1.00001))),
         "nonempty_brain_signal": bool(np.any(arrays["md"][mask] > 0)),
         "ad_equals_l1": bool(np.allclose(arrays["ad"], arrays["l1"], rtol=1e-4, atol=1e-8)),
@@ -670,6 +753,7 @@ def _write_dti_qc(config, paths):
     }
     return _finish_scalar_qc(paths, "dti_qc", DTI_KEYS, {
         "kind": "dti_export_qc", "version": 1, "subject_id": config.subject_id,
+        "masked_export": True,
         "source_signature": _dti_source_signature(config), "checks": checks,
         "warnings": ["Scalar integrity/relations are checked; this is not an anatomical or model-fit accuracy certification."],
         "trace_clamp_boundary_voxels": int(np.count_nonzero(mask & ~trace_close)),

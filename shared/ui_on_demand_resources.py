@@ -319,6 +319,12 @@ def build_network_and_offline_panel(parent: Any, *, zh: bool) -> tuple[Any, Call
     for preset_id, prefix, en_label, zh_label in PRESET_MIRRORS:
         mirror_combo.addItem(_text(zh, en_label, zh_label), prefix)
     mirror_combo.addItem(_text(zh, "Custom mirror prefix...", "自定义镜像前缀..."), "__custom__")
+    try:
+        from shared.ui_styles import style_combobox_popup
+
+        style_combobox_popup(mirror_combo)
+    except Exception:
+        pass
 
     custom_mirror = qt.QLineEdit(group)
     custom_mirror.setPlaceholderText("https://ghfast.top/")

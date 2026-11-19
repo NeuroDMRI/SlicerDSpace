@@ -110,6 +110,16 @@ def apply_widget_styles(owner: Any) -> None:
             set_stylesheet_if_changed(owner.parent, style)
         except Exception:
             pass
+    if root_widget is not None:
+        try:
+            import qt
+            from shared.ui_styles import style_combobox_popup
+
+            if hasattr(root_widget, "findChildren") and hasattr(qt, "QComboBox"):
+                for combo in root_widget.findChildren(qt.QComboBox):
+                    style_combobox_popup(combo, dark=dark)
+        except Exception:
+            pass
 
     ui = getattr(owner, "ui", None)
     run_btn = getattr(ui, "runSelectedButton", None) if ui is not None else None

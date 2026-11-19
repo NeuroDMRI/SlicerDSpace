@@ -333,8 +333,7 @@ QComboBox QAbstractItemView {
 QComboBox QAbstractItemView::item {
   background-color: #FFFFFF;
   color: #1E293B;
-  padding: 4px 8px;
-  min-height: 22px;
+  padding: 0px 8px;
 }
 QComboBox QAbstractItemView::item:hover,
 QComboBox QAbstractItemView::item:selected {
@@ -732,8 +731,7 @@ QComboBox QAbstractItemView {
 QComboBox QAbstractItemView::item {
   background-color: #22272E;
   color: #F0F6FC;
-  padding: 4px 8px;
-  min-height: 22px;
+  padding: 0px 8px;
 }
 QComboBox QAbstractItemView::item:hover,
 QComboBox QAbstractItemView::item:selected {
@@ -1269,6 +1267,48 @@ def ui_stylesheet(*, dark: bool | None = None, widget: Any = None) -> str:
     return theme + MODULE_STRUCTURE_STYLE.replace("__SECTION_LINE__", "#444547" if use_dark else "#dedfdf")
 
 
+def _apply_combobox_item_heights(combo: Any, qt_mod: Any, row_height: int = 26) -> None:
+    """Apply explicit ``Qt.SizeHintRole`` row heights so Qt5 popup ``QListView`` never overlaps items."""
+
+    model_attr = getattr(combo, "model", None)
+    try:
+        model = model_attr() if callable(model_attr) else model_attr
+    except Exception:
+        model = None
+    qsize_cls = getattr(qt_mod, "QSize", None)
+    qt_ns = getattr(qt_mod, "Qt", None)
+    size_hint_role = getattr(qt_ns, "SizeHintRole", None) if qt_ns is not None else None
+    if model is None or qsize_cls is None or size_hint_role is None:
+        return
+    if not (callable(getattr(model, "index", None)) and callable(getattr(model, "setData", None))):
+        return
+
+    def _set_rows(first: int, last: int) -> None:
+        hint = qsize_cls(0, row_height)
+        for row in range(first, last + 1):
+            try:
+                model.setData(model.index(row, 0), hint, size_hint_role)
+            except Exception:
+                break
+
+    row_count_attr = getattr(model, "rowCount", None)
+    try:
+        total = row_count_attr() if callable(row_count_attr) else int(row_count_attr or 0)
+    except Exception:
+        total = 0
+    if isinstance(total, int) and total > 0:
+        _set_rows(0, total - 1)
+
+    if not getattr(combo, "_slicerdspacePopupRowsHooked", False):
+        rows_inserted = getattr(model, "rowsInserted", None)
+        if rows_inserted is not None and hasattr(rows_inserted, "connect"):
+            try:
+                rows_inserted.connect(lambda _parent=None, first=0, last=-1: _set_rows(first, last))
+                combo._slicerdspacePopupRowsHooked = True
+            except Exception:
+                pass
+
+
 def style_combobox_popup(combo: Any, *, dark: bool | None = None) -> None:
     """Ensure ``QComboBox`` dropdown popups keep an opaque high-contrast palette in dark and light modes."""
 
@@ -1295,6 +1335,7 @@ def style_combobox_popup(combo: Any, *, dark: bool | None = None) -> None:
                 set_delegate(delegate_cls(combo))
             except Exception:
                 pass
+        _apply_combobox_item_heights(combo, qt, row_height=26)
 
     view_attr = getattr(combo, "view", None)
     try:
@@ -1304,6 +1345,13 @@ def style_combobox_popup(combo: Any, *, dark: bool | None = None) -> None:
     if view is None:
         return
 
+    set_uniform = getattr(view, "setUniformItemSizes", None)
+    if callable(set_uniform):
+        try:
+            set_uniform(True)
+        except Exception:
+            pass
+
     popup_style = (
         "QAbstractItemView { "
         f"background-color: {bg}; alternate-background-color: {alt_bg}; color: {fg}; "
@@ -1311,7 +1359,7 @@ def style_combobox_popup(combo: Any, *, dark: bool | None = None) -> None:
         f"selection-color: {sel_fg}; outline: 0; "
         "} "
         "QAbstractItemView::item { "
-        f"background-color: {bg}; color: {fg}; padding: 4px 8px; min-height: 22px; "
+        f"background-color: {bg}; color: {fg}; padding: 0px 8px; "
         "} "
         "QAbstractItemView::item:hover, QAbstractItemView::item:selected { "
         f"background-color: {sel_bg}; color: {sel_fg}; "

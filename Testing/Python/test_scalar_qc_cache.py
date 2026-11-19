@@ -130,6 +130,60 @@ class ScalarQcCacheTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 _noddi_threads(SimpleNamespace(noddi_nthreads=0))
 
+    def test_dti_export_masks_all_scalars_and_dec_nrrd_without_altering_native_cache(self):
+        import gzip
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config, paths = self.fixture(root)
+            mask = np.zeros((3, 3, 3), dtype=np.uint8)
+            mask[1:, 1:, 1:] = 1
+            nib.save(nib.Nifti1Image(mask, np.eye(4)), config.raw_input_bundle.mask_path)
+
+            dec_rgb = np.full((3, 3, 3, 3), 200, dtype=np.uint8)
+            header = (
+                "NRRD0004\n"
+                "type: uchar\n"
+                "dimension: 4\n"
+                "sizes: 3 3 3 3\n"
+                "encoding: gzip\n\n"
+            ).encode("ascii")
+            config.native_bundle.dec_nrrd_path.write_bytes(header + gzip.compress(dec_rgb.tobytes()))
+
+            _export_dti_scalar_maps(config, paths)
+
+            qc = json.loads(paths["dti_qc"].read_text(encoding="utf-8"))
+            self.assertTrue(qc["checks"]["background_masked"])
+            self.assertTrue(qc["automatic_qc_passed"])
+
+            bool_mask = mask > 0
+            for key in DTI_KEYS:
+                exported = nib.load(paths[key]).get_fdata()
+                np.testing.assert_array_equal(exported[~bool_mask], 0.0)
+                self.assertTrue(np.any(exported[bool_mask] > 0))
+
+            # Verify exported DEC NRRD zeros out background while native cache DEC stays unmasked.
+            out_raw = paths["dec"].read_bytes()
+            sep = out_raw.index(b"\n\n") + 2
+            out_rgb = np.frombuffer(gzip.decompress(out_raw[sep:]), dtype=np.uint8).reshape(3, 3, 3, 3)
+            mask_zyx = mask.transpose(2, 1, 0) > 0
+            np.testing.assert_array_equal(out_rgb[~mask_zyx], 0)
+            np.testing.assert_array_equal(out_rgb[mask_zyx], 200)
+
+            nat_raw = config.native_bundle.dec_nrrd_path.read_bytes()
+            nat_sep = nat_raw.index(b"\n\n") + 2
+            nat_rgb = np.frombuffer(gzip.decompress(nat_raw[nat_sep:]), dtype=np.uint8).reshape(3, 3, 3, 3)
+            np.testing.assert_array_equal(nat_rgb[~mask_zyx], 200)
+
+            # Changing the mask must invalidate cached DTI export and re-mask outputs.
+            self.save(paths["fa"], 9.0)  # sentinel that will only disappear if cache misses and regenerates
+            mask[0, 0, 0] = 1
+            nib.save(nib.Nifti1Image(mask, np.eye(4)), config.raw_input_bundle.mask_path)
+            _export_dti_scalar_maps(config, paths)
+            regenerated_fa = nib.load(paths["fa"]).get_fdata()
+            self.assertAlmostEqual(float(regenerated_fa[0, 0, 0]), 0.5, places=6)
+            self.assertEqual(float(regenerated_fa[0, 0, 1]), 0.0)
+
 
 if __name__ == "__main__":
     unittest.main()

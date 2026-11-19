@@ -897,7 +897,7 @@ def _populate_run_tree(owner, records, current_index):
         empty_row.setVisible(not records)
     report_bar = getattr(owner, "_resultsReportBar", None)
     if report_bar is not None:
-        report_bar.setVisible(bool(records))
+        report_bar.setVisible(False)
     tree.clear()
     run_items = {}
     owner._runTreeItems = run_items

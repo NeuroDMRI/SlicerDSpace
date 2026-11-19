@@ -122,18 +122,17 @@ def _write_current_act_prep(layout, subject_id: str, segmentation: Path) -> dict
 
 
 class ProductOrchestratorTest(unittest.TestCase):
-    def test_report_time_is_included_in_wall_clock_but_not_legacy_elapsed(self):
-        import time
-        from shared import ProductOrchestratorConfig, run_subject_products
-        def delayed_report(**kwargs):
-            time.sleep(.03)
-            raise RuntimeError('synthetic report failure')
-        with tempfile.TemporaryDirectory() as tmp, mock.patch('shared.reporting.write_subject_reports', side_effect=delayed_report):
-            result = run_subject_products(ProductOrchestratorConfig('timing', Path(tmp), targets=('validation',), execute=False))
-            manifest = json.loads(result.run_manifest_path.read_text())
-            self.assertGreaterEqual(manifest['wall_time_seconds'] - manifest['elapsed_seconds'], .03)
-            self.assertGreaterEqual(manifest['phase_timings_seconds']['subject_reports_and_refresh'], .03)
-            self.assertEqual(manifest['report_error'], 'synthetic report failure')
+    def test_orchestrator_skips_cache_reports_and_records_wall_clock(self):
+        from shared import ProductOrchestratorConfig, run_subject_products, subject_layout
+
+        with tempfile.TemporaryDirectory() as tmp:
+            subject_root = Path(tmp) / "timing"
+            result = run_subject_products(ProductOrchestratorConfig('timing', subject_root, targets=('validation',), execute=False))
+            manifest = json.loads(result.run_manifest_path.read_text(encoding='utf-8'))
+            self.assertGreaterEqual(manifest['wall_time_seconds'], manifest['elapsed_seconds'])
+            self.assertNotIn('report_paths', manifest)
+            self.assertNotIn('output_tree_report_paths', manifest)
+            self.assertFalse(subject_layout(subject_root).cache_reports.exists())
 
     def test_reusing_run_name_archives_previous_manifest_and_plan(self) -> None:
         from shared import ProductOrchestratorConfig, run_subject_products
@@ -551,7 +550,7 @@ class ProductOrchestratorTest(unittest.TestCase):
             self.assertTrue(by_path["02_microstructure"]["selected"])
 
     def test_dry_run_honors_output_root_and_advanced_connectome_options(self) -> None:
-        from shared import ProductOrchestratorConfig, run_subject_products
+        from shared import ProductOrchestratorConfig, run_subject_products, subject_layout
 
         with tempfile.TemporaryDirectory() as tmp:
             subject_root = Path(tmp) / "100307"
@@ -588,22 +587,14 @@ class ProductOrchestratorTest(unittest.TestCase):
             profile = manifest["performance_profile"]
             self.assertEqual(profile["schema"], "slicerddsurfer.performance_profile.v1")
             self.assertGreaterEqual(manifest['wall_time_seconds'], manifest['elapsed_seconds'])
-            self.assertGreaterEqual(manifest['phase_timings_seconds']['subject_reports_and_refresh'], 0)
             self.assertEqual(profile['wall_time_seconds'], manifest['wall_time_seconds'])
             self.assertTrue(Path(manifest["performance_profile_path"]).is_file())
             self.assertIn("slowest_tasks", profile)
             self.assertIn("largest_top_dirs", profile)
             self.assertTrue(any(row["path"] == "00_run_metadata" for row in profile["top_dirs"]))
-            report_paths = manifest["report_paths"]
-            output_tree_report_paths = manifest["output_tree_report_paths"]
-            report_html = Path(report_paths["report_html"])
-            output_tree_html = Path(output_tree_report_paths["report_html_latest"])
-            qc_summary = json.loads(Path(report_paths["qc_summary_json"]).read_text(encoding="utf-8"))
-            self.assertIn("Performance Profile", report_html.read_text(encoding="utf-8"))
-            self.assertTrue(output_tree_html.is_file())
-            self.assertIn("Annotated output tree", report_html.read_text(encoding="utf-8"))
-            self.assertEqual(qc_summary["performance_profile"]["schema"], "slicerddsurfer.performance_profile.v1")
-            self.assertIn("00_run_metadata", qc_summary["output_tree"]["top_dirs"])
+            self.assertFalse(subject_layout(subject_root, output_root=output_root).cache_reports.exists())
+            self.assertNotIn("report_paths", manifest)
+            self.assertNotIn("output_tree_report_paths", manifest)
 
     def test_dry_run_does_not_probe_auto_torch_devices(self) -> None:
         from shared import ProductOrchestratorConfig, run_subject_products

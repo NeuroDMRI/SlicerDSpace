@@ -14,9 +14,8 @@
 <subject_root>/
   input/
   preprocessed/                         # 在自动生成脑掩膜 (nodif_brain_mask.nii.gz) 或运行预处理 (<sub_id>_dwi_final.*、<sub_id>_brain_mask_final.nii.gz) 时创建
-  cache/                                # 阶段工作区、日志、manifest、HTML 报告与 Slicer 降采样预览
+  cache/                                # 阶段工作区、日志、manifest 与 Slicer 降采样预览
     stages/
-    reports/
     display_previews/
   outputs/
     00_run_metadata/
@@ -49,7 +48,7 @@
 已接受的许可、脑掩膜来源（请求的后端及本次运行所用掩膜的路线）、QC 摘要，以及每个最终产品文件的 SHA-256。
 它不复制任何输出文件。重新运行时，上一次的记录保存为 `run_record-<started_at>.json`，不删除任何文件。
 
-`outputs/` 下仅保留扁平、无 symlink 的最终科学交付物与 `06_qc/` 的简洁 TXT 质控文件；阶段缓存、日志与 HTML 报告均统一存放于 `cache/`。
+`outputs/` 下仅保留扁平、无 symlink 的最终科学交付物与 `06_qc/` 的简洁 TXT 质控文件；阶段缓存、日志与降采样预览统一存放于 `cache/`。
 
 ---
 

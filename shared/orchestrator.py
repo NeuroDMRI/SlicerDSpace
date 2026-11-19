@@ -6261,60 +6261,8 @@ def _run_subject_products_impl(
         "tasks": task_payloads,
     }
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
-    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    report_started = time.monotonic()
-    try:
-        from shared.output_tree_report import write_output_tree_report
-
-        output_tree_report_paths = write_output_tree_report(
-            output_root=layout.outputs,
-            destination=layout.slicer_scene_report / f"{run_name}_output_tree.html",
-            latest_destination=layout.slicer_scene_report / "output_tree.html",
-            subject_id=config.subject_id,
-            run_name=run_name,
-        )
-        manifest["output_tree_report_paths"] = output_tree_report_paths.to_dict()
-    except Exception as exc:  # pragma: no cover - report generation must not break pipeline execution
-        manifest["output_tree_report_error"] = str(exc)
-    phase_timings['output_tree_report'] = time.monotonic() - report_started
-    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    subject_report_started = time.monotonic()
-    try:
-        from shared.reporting import write_subject_reports
-
-        report_paths = write_subject_reports(
-            subject_root=subject_root,
-            output_root=output_root,
-            manifest_path=manifest_path,
-            run_name=run_name,
-        )
-        manifest["report_paths"] = report_paths.to_dict()
-        refreshed_output_tree_audit = _audit_output_tree(layout, subject_id=config.subject_id, selected_targets=targets)
-        refreshed_output_tree_semantics = _write_output_tree_semantics(
-            layout=layout,
-            subject_id=config.subject_id,
-            requested_targets=targets,
-            run_targets=run_targets,
-            tasks=tasks,
-        )
-        manifest["output_tree_audit_path"] = refreshed_output_tree_audit.get("path")
-        manifest["output_tree_warnings"] = refreshed_output_tree_audit.get("warnings", [])
-        manifest["output_tree_semantics_path"] = refreshed_output_tree_semantics.get("path")
-        manifest["output_tree_semantics_summary"] = {
-            "states": {
-                state: sum(
-                    1
-                    for entry in refreshed_output_tree_semantics.get("entries", [])
-                    if entry.get("state") == state
-                )
-                for state in sorted({entry.get("state") for entry in refreshed_output_tree_semantics.get("entries", [])})
-            }
-        }
-    except Exception as exc:  # pragma: no cover - reporting must not break pipeline execution
-        manifest["report_error"] = str(exc)
-    phase_timings['subject_reports_and_refresh'] = time.monotonic() - subject_report_started
     manifest['wall_time_seconds'] = time.monotonic() - start
-    manifest['wall_time_scope'] = 'Orchestrator planning through product execution and report generation; final telemetry write, CLI preflight and GUI loading are outside this interval.'
+    manifest['wall_time_scope'] = 'Orchestrator planning through product execution; final telemetry write, CLI preflight and GUI loading are outside this interval.'
     performance_profile['phase_timings_seconds'] = dict(phase_timings)
     performance_profile['wall_time_seconds'] = manifest['wall_time_seconds']
     performance_profile['wall_time_scope'] = manifest['wall_time_scope']

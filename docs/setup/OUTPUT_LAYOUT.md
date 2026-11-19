@@ -14,9 +14,8 @@
 <subject_root>/
   input/
   preprocessed/                         # Created when brain mask is generated (nodif_brain_mask.nii.gz) or preprocessing runs (<sub_id>_dwi_final.*, <sub_id>_brain_mask_final.nii.gz)
-  cache/                                # Internal stage workspaces, logs, manifests, HTML reports, display previews
+  cache/                                # Internal stage workspaces, logs, manifests, display previews
     stages/
-    reports/
     display_previews/
   outputs/
     00_run_metadata/
@@ -52,7 +51,7 @@ mask that the run used), a QC summary and the SHA-256 of every final product fil
 It copies no output file. A re-run keeps the previous record as
 `run_record-<started_at>.json` and nothing is deleted.
 
-Primary deliverables under `outputs/` are published as flat, symlink-free real files or hardlinks organized by scientific stage (`01_anatomical_priors` through `05_connectome`), while concise `.txt` quality-control summaries sit under `06_qc/`. Internal workspaces, intermediate files, and HTML/Markdown reports reside under `cache/`.
+Primary deliverables under `outputs/` are published as flat, symlink-free real files or hardlinks organized by scientific stage (`01_anatomical_priors` through `05_connectome`), while concise `.txt` quality-control summaries sit under `06_qc/`. Internal workspaces and intermediate files reside under `cache/`.
 
 ---
 

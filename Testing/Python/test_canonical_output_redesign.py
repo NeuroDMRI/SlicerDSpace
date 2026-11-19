@@ -182,7 +182,7 @@ class CanonicalOutputRedesignTest(unittest.TestCase):
             self.assertTrue(dec_out.is_file())
             self.assertTrue(qc_txt.is_file())
             self.assertFalse(any(p.is_symlink() for p in layout.outputs.rglob("*")))
-            self.assertTrue((layout.cache_reports / "report.html").is_file())
+            self.assertFalse(layout.cache_reports.exists())
             self.assertFalse((layout.outputs / "06_slicer_scene_report").exists())
 
     def test_migrate_subject_output_tree_converts_legacy_tree_without_symlinks(self) -> None:

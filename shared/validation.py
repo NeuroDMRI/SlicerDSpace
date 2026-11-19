@@ -160,9 +160,15 @@ def _normalise_bvec_shape(rows: list[list[float]], n_gradients: int) -> list[lis
 
 
 def _check_file_layout(raw: RawInputBundle, messages: list[ValidationIssue], metrics: dict[str, Any]) -> None:
+    resolved_paths = {
+        "dwi": raw.dwi_path,
+        "bval": raw.bval_path,
+        "bvec": raw.bvec_path,
+        "mask": raw.mask_path,
+    }
     file_metrics: dict[str, Any] = {}
     for key, filename in RAW_INPUT_FILES.items():
-        path = raw.input_dir / filename
+        path = resolved_paths.get(key, raw.input_dir / filename)
         info = _file_info(path)
         file_metrics[key] = info
         if not path.is_file():

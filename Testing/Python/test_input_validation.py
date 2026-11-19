@@ -161,6 +161,49 @@ class InputValidationTest(unittest.TestCase):
             self.assertFalse(result.passed)
             self.assertTrue(any(issue.category == 'dwi' for issue in result.messages))
 
+    def test_external_output_root_auto_generated_mask_passes_file_layout(self):
+        from unittest import mock
+        import nibabel as nib
+        import numpy as np
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            subject_root = _make_subject_root(tmp_path)
+            (subject_root / "input" / "nodif_brain_mask.nii.gz").unlink()
+            output_root = tmp_path / "external_out" / SUBJECT_ID / "outputs"
+
+            def fake_generate_mask(dwi_path, bval_path, bvec_path, mask_path, config=None):
+                mask_path.parent.mkdir(parents=True, exist_ok=True)
+                mask = np.zeros((5, 5, 5), dtype=np.uint8)
+                mask[1:4, 1:4, 1:4] = 1
+                nib.save(nib.Nifti1Image(mask, np.eye(4)), mask_path)
+                mask_path.with_name("nodif_brain_mask.manifest.json").write_text(
+                    json.dumps({"backend": "pnl_cnn", "version": 1}),
+                    encoding="utf-8",
+                )
+                return mask_path
+
+            with (
+                mock.patch("shared.validation.inspect_brain_mask_backend", return_value={"available": True, "backend": "pnl_cnn"}),
+                mock.patch("shared.pipeline.generate_brain_mask", side_effect=fake_generate_mask),
+            ):
+                result = validate_subject_inputs(
+                    InputValidationConfig(
+                        subject_id=SUBJECT_ID,
+                        input_root=subject_root,
+                        output_root=output_root,
+                        dependency_groups=(),
+                        brain_mask_backend="pnl_cnn",
+                    )
+                )
+
+            expected_mask = tmp_path / "external_out" / SUBJECT_ID / "cache" / "brain_mask" / "nodif_brain_mask.nii.gz"
+            self.assertTrue(result.passed, result.messages)
+            self.assertEqual(result.error_count, 0)
+            self.assertTrue(result.metrics["files"]["mask"]["exists"])
+            self.assertEqual(Path(result.metrics["files"]["mask"]["path"]).resolve(), expected_mask.resolve())
+            self.assertFalse((subject_root / "input" / "nodif_brain_mask.nii.gz").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

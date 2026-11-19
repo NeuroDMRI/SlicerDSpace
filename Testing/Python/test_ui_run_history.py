@@ -93,20 +93,178 @@ class ResultsPanelTest(unittest.TestCase):
             ui_run_history.install_results_panel(owner)
         return qt, layout, owner
 
-    def test_two_column_splitter_aligns_runs_and_outputs_and_hides_browse_and_review(self) -> None:
+    def test_unified_results_tree_replaces_splitter_and_hides_browse_and_review(self) -> None:
         qt, layout, owner = self.build()
         names = {object_name(widget) for widget in qt.created}
-        self.assertIn("subjectRunHistory", names)
-        self.assertIn("outputsHeaderLabel", names)
+        self.assertEqual([w for w in qt.created if w.kind == "QSplitter"], [])
+        self.assertNotIn("subjectRunHistory", names)
+        self.assertNotIn("outputsHeaderLabel", names)
+        self.assertIn("resultsTreeContainer", names)
+        self.assertIn("runOutputFiles", names)
+        self.assertIs(owner._runHistoryTree, owner._runOutputFiles)
         self.assertIn("addRunFolderButton", names)
         self.assertIn("resultsReportBar", names)
+        by_name(qt, "resultsTreeContainer").hide.assert_called_once_with()
         by_name(qt, "addRunFolderButton").hide.assert_called_once_with()
         by_name(qt, "reviewStateLabel").hide.assert_called_once_with()
         by_name(qt, "resultsReportBar").hide.assert_called_once_with()
-        self.assertEqual(widget_names(layout), ["", "", "resultsReportBar"])
-        top_names = [call[1][0].kind if call[1][0].kind != "QSplitter" else "QSplitter"
-                     for call in layout.method_calls if call[0] == "addWidget"]
-        self.assertEqual(len(top_names), 3)
+        self.assertEqual(widget_names(layout), ["", "resultsTreeContainer", "resultsReportBar"])
+
+    def test_unified_tree_populates_expanded_subject_run_category_files_and_preserves_siblings(self) -> None:
+        qt = fake_qt()
+        qt.Qt.UserRole = 256
+        items_by_parent = []
+
+        class _Tree:
+            def __init__(self) -> None:
+                self.objectName = ""
+                self.items = []
+                self.expanded_all = False
+                self.current = None
+                self.clicked_cb = None
+                self.itemClicked = SimpleNamespace(connect=lambda cb: setattr(self, "clicked_cb", cb))
+                self.itemDoubleClicked = SimpleNamespace(connect=lambda cb: None)
+                self.customContextMenuRequested = SimpleNamespace(connect=lambda cb: None)
+                self._hdr = SimpleNamespace(
+                    setStretchLastSection=lambda _v: None,
+                    setSectionResizeMode=lambda *_a: None,
+                )
+
+            def setObjectName(self, n): self.objectName = n
+            def setHeaderHidden(self, _v): pass
+            def setColumnCount(self, _v): pass
+            def setIndentation(self, _v): pass
+            def setMinimumHeight(self, _v): pass
+            def setMaximumHeight(self, _v): pass
+            def setFrameShape(self, _v): pass
+            def setMinimumWidth(self, _v): pass
+            def setContextMenuPolicy(self, _v): pass
+            def header(self): return self._hdr
+            def clear(self): self.items.clear()
+            def expandAll(self): self.expanded_all = True
+            def setCurrentItem(self, item): self.current = item
+            @property
+            def topLevelItemCount(self): return len(self.items)
+            def topLevelItem(self, i): return self.items[i]
+
+        class _Item:
+            def __init__(self, parent, labels) -> None:
+                self.parent_obj = parent
+                self.labels = list(labels)
+                self.children = []
+                self._data = {}
+                self.expanded = None
+                self.tooltip = ""
+                if isinstance(parent, _Tree):
+                    parent.items.append(self)
+                else:
+                    parent.children.append(self)
+                items_by_parent.append(self)
+
+            def text(self, col): return self.labels[col] if col < len(self.labels) else ""
+            def setText(self, col, text):
+                while len(self.labels) <= col:
+                    self.labels.append("")
+                self.labels[col] = text
+            def setData(self, col, role, value): self._data[(col, role)] = value
+            def data(self, col, role): return self._data.get((col, role))
+            def setExpanded(self, val): self.expanded = bool(val)
+            def setToolTip(self, col, tip):
+                if col == 0:
+                    self.tooltip = tip
+            def setIcon(self, *_a): pass
+            def childCount(self): return len(self.children)
+            def child(self, i): return self.children[i]
+            def takeChildren(self): self.children.clear()
+            def parent(self): return None if isinstance(self.parent_obj, _Tree) else self.parent_obj
+
+        tree_holder = []
+        qt.QTreeWidget.side_effect = lambda *_a: tree_holder.append(_Tree()) or tree_holder[-1]
+        qt.QTreeWidgetItem = lambda parent, labels: _Item(parent, labels)
+        combo_holder = []
+
+        class _Combo:
+            def __init__(self, *_a):
+                self.currentIndex = 0
+                self.index_changed_cb = None
+                self.currentIndexChanged = SimpleNamespace(connect=lambda cb: setattr(self, "index_changed_cb", cb))
+            def setObjectName(self, *_a): pass
+            def setSizeAdjustPolicy(self, *_a): pass
+            def setMinimumContentsLength(self, *_a): pass
+            def setSizePolicy(self, *_a): pass
+            def hide(self): pass
+            def setToolTip(self, *_a): pass
+            def setCurrentIndex(self, idx):
+                self.currentIndex = idx
+                if self.index_changed_cb:
+                    self.index_changed_cb(idx)
+
+        qt.QComboBox.side_effect = lambda *_a: combo_holder.append(_Combo()) or combo_holder[-1]
+        layout = mock.MagicMock(name="resultsLayout")
+        section = mock.MagicMock(name="resultsCollapsibleButton")
+        opened = []
+        owner = SimpleNamespace(
+            ui=SimpleNamespace(resultsLayout=layout, resultsCollapsibleButton=section),
+            _onboardingLanguage="en",
+            _on_browse_run_directory_clicked=lambda *a: None,
+            _on_open_latest_report_clicked=lambda *a: None,
+            _on_open_output_tree_report_clicked=lambda *a: None,
+            _refresh_run_history=lambda *a: None,
+            _open_local_path=lambda p, **_kw: opened.append(Path(p)),
+            _set_run_status_table_rows=lambda _r: None,
+            _set_latest_report_path=lambda _p: None,
+            _set_latest_output_tree_path=lambda _p: None,
+            _set_run_summary_message=lambda *_a: None,
+            _run_summary_from_manifest=lambda _m: ("ok", "completed"),
+        )
+        owner._on_run_history_selection_changed = lambda: None
+        slicer_mod = mock.MagicMock(name="slicer")
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(sys.modules, {"qt": qt, "slicer": slicer_mod}):
+            ui_run_history.install_results_panel(owner)
+            m1 = Path(tmp) / "sub1" / "outputs" / "00_run_metadata" / "run1_orchestration_manifest.json"
+            m2 = Path(tmp) / "sub1" / "outputs" / "00_run_metadata" / "run2_orchestration_manifest.json"
+            qc1 = m1.parent.parent / "06_qc" / "r1.txt"
+            qc2 = m2.parent.parent / "06_qc" / "r2.txt"
+            for p in (m1, m2, qc1, qc2):
+                p.parent.mkdir(parents=True, exist_ok=True)
+            qc1.write_text("ok1", encoding="utf-8")
+            qc2.write_text("ok2", encoding="utf-8")
+            m1.write_text(json.dumps({
+                "kind": SUBJECT_MANIFEST_KIND, "version": 1, "subject_id": "sub1", "run_name": "run1",
+                "output_root": str(m1.parent.parent), "tasks": [],
+            }), encoding="utf-8")
+            m2.write_text(json.dumps({
+                "kind": SUBJECT_MANIFEST_KIND, "version": 1, "subject_id": "sub1", "run_name": "run2",
+                "output_root": str(m2.parent.parent), "tasks": [],
+            }), encoding="utf-8")
+            r1 = parse_run_manifest(m1)
+            r2 = parse_run_manifest(m2)
+            with mock.patch("shared.result_scene.result_candidates", return_value=([], {})), \
+                 mock.patch("shared.result_scene.owned_nodes", return_value=[]):
+                ui_run_history._populate_run_tree(owner, (r1, r2), 0)
+                tree = owner._runOutputFiles
+                self.assertTrue(tree.expanded_all)
+                self.assertEqual(tree.topLevelItemCount, 1)
+                subj_item = tree.topLevelItem(0)
+                self.assertEqual(subj_item.text(0), "sub1")
+                self.assertTrue(subj_item.expanded)
+                self.assertEqual(subj_item.childCount(), 2)
+                run1_item, run2_item = subj_item.child(0), subj_item.child(1)
+                self.assertTrue(run1_item.expanded)
+                self.assertTrue(run2_item.expanded)
+                cat2 = run2_item.child(0)
+                self.assertTrue(cat2.expanded)
+                leaf2 = next(cat2.child(i) for i in range(cat2.childCount()) if cat2.child(i).text(0) == "r2.txt")
+                self.assertEqual(leaf2.data(0, qt.Qt.UserRole + 2), str(m2))
+                # Clicking column 1 on leaf2 opens r2.txt even though run1 (index 0) was initially selected
+                tree.clicked_cb(leaf2, 1)
+                self.assertEqual(opened, [qc2.resolve()])
+                self.assertEqual(combo_holder[0].currentIndex, 1)
+                self.assertEqual(subj_item.childCount(), 2)
+                # Programmatic show_record on run2 preserves run1 sibling intact
+                ui_run_history.show_record(owner, r2, json.loads(m2.read_text(encoding="utf-8")))
+                self.assertEqual(subj_item.childCount(), 2)
+                self.assertTrue(run1_item.childCount() >= 1)
 
     def test_there_are_no_refresh_or_browse_buttons(self) -> None:
         qt, layout, owner = self.build()
@@ -623,6 +781,107 @@ class AlgorithmRowTest(unittest.TestCase):
         self.assertEqual(node.orchestrationBundleBackend, "wma")
         self.assertTrue(node.targetBundles)
         self.assertTrue(owner.ui.targetBundlesCheckBox.checked)
+
+
+    def test_all_non_anatomical_pickers_link_outer_checkbox_and_summary_and_allow_empty_apply(self) -> None:
+        from shared import ui_compact
+
+        qt = fake_qt()
+        owner, slicer = self._build_full_picker_owner(qt)
+        node = owner._parameterNode
+        node.orchestrationDkiFitMethod = "WLS"
+        cases = [
+            ("preprocessing", {"denoise", "eddy"}, "DWI denoising + Eddy"),
+            ("microstructure", {"noddi"}, "NODDI"),
+            ("tractography", {"ukf"}, "UKF"),
+            ("bundles", {"wmql", "wma"}, "WMQL + WMA"),
+            ("connectome", {"sift2", "fiber_count"}, "SIFT2 + Fiber count"),
+        ]
+        for family, chosen, expected_summary in cases:
+            with self.subTest(family=family):
+                box_name, _, _ = ui_algorithm_picker.FAMILIES[family]
+                target_attr = ui_algorithm_picker.FAMILY_TARGET_ATTRS[family]
+                outer_cb = getattr(owner.ui, box_name)
+                summary_lbl = owner._algorithmSummaryLabels[box_name]
+
+                self.assertTrue(self._run_picker_accept(qt, slicer, owner, family, chosen))
+                self.assertTrue(getattr(node, target_attr))
+                self.assertTrue(outer_cb.checked)
+                self.assertEqual(summary_lbl.setText.call_args[0][0], expected_summary)
+
+                # Uncheck all items inside popup -> Apply remains enabled, unchecks outer row, shows None selected / 未选择
+                self.assertTrue(self._run_picker_accept(qt, slicer, owner, family, set()))
+                self.assertFalse(getattr(node, target_attr))
+                self.assertFalse(outer_cb.checked)
+                self.assertEqual(summary_lbl.setText.call_args[0][0], "None selected")
+
+                with mock.patch.dict(sys.modules, {"qt": qt, "slicer": slicer}):
+                    owner._onboardingLanguage = "zh"
+                    ui_compact.refresh_compact_algorithms(owner, "zh")
+                self.assertEqual(summary_lbl.setText.call_args[0][0], "未选择")
+                owner._onboardingLanguage = "en"
+
+                # Re-checking outer checkbox restores remembered summary algorithms
+                setattr(node, target_attr, True)
+                outer_cb.setChecked(True)
+                on_clicked = outer_cb.clicked.connect.call_args.args[0]
+                with mock.patch.dict(sys.modules, {"qt": qt, "slicer": slicer}):
+                    on_clicked(True)
+                self.assertEqual(summary_lbl.setText.call_args[0][0], expected_summary)
+
+    def test_popup_watch_does_not_reject_accepted_dialog_and_handles_screen_property(self) -> None:
+        qt = fake_qt()
+        # Simulate PythonQt where primaryScreen is a QScreen property rather than a callable
+        qt.QApplication.primaryScreen = SimpleNamespace(
+            availableGeometry=SimpleNamespace(height=900, width=1440)
+        )
+        owner, slicer = self._build_full_picker_owner(qt)
+
+        created_timers = []
+        orig_qtimer = qt.QTimer
+
+        def make_timer(*args, **kwargs):
+            timer = mock.MagicMock(name="QTimer")
+            created_timers.append(timer)
+            return timer
+
+        qt.QTimer = make_timer
+        qt.QTimer.singleShot = orig_qtimer.singleShot
+
+        orig_qdialog = qt.QDialog.side_effect
+        dialogs = []
+
+        def make_dialog(*args, **kwargs):
+            dlg = orig_qdialog(*args, **kwargs)
+            dlg.isVisible.return_value = False
+            dlg.result.return_value = 0
+
+            def fake_exec():
+                # Simulate popup becoming visible, user clicking Apply (which triggers validate_and_accept),
+                # then _watch_popup firing right before exec_ returns.
+                watch_cb = created_timers[-1].timeout.connect.call_args.args[0]
+                dlg.isVisible.return_value = True
+                watch_cb()
+                apply_cb = next(
+                    c.args[1] for c in by_name(qt, "algorithmPickerApplyButton").connect.call_args_list
+                    if c.args[0] == "clicked()"
+                )
+                dlg.isVisible.return_value = False
+                apply_cb()
+                watch_cb()
+                return qt.QDialog.Accepted
+
+            dlg.exec_.side_effect = fake_exec
+            dialogs.append(dlg)
+            return dlg
+
+        qt.QDialog.side_effect = make_dialog
+        with mock.patch.dict(sys.modules, {"qt": qt, "slicer": slicer}):
+            accepted = ui_algorithm_picker.choose_algorithms(owner, "preprocessing")
+
+        self.assertTrue(accepted)
+        dialogs[-1].accept.assert_called_once_with()
+        dialogs[-1].reject.assert_not_called()
 
 
 if __name__ == "__main__":

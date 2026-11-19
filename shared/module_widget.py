@@ -3189,6 +3189,7 @@ class SharedWidgetMixin:
         files = getattr(self, "_runOutputFiles", None)
         if files is not None:
             files.clear()
+        self._runTreeItems = {}
         for button in getattr(self, "_resultSceneButtons", []):
             button.enabled = False
         review = getattr(self, "_reviewStateLabel", None)

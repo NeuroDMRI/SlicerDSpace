@@ -681,8 +681,51 @@ def apply_progress_snapshot(owner: Any, snapshot) -> None:
 # ----------------------------------------------------------------------- results
 
 
+def _set_expanded(item: Any, expanded: bool = True) -> None:
+    if item is not None and hasattr(item, "setExpanded"):
+        item.setExpanded(bool(expanded))
+
+
+def _tree_count(obj: Any, attr: str) -> int:
+    val = getattr(obj, attr, 0)
+    val = val() if callable(val) else val
+    return val if isinstance(val, int) else 0
+
+
+def _iter_tree_items(tree: Any):
+    def _walk(item: Any):
+        yield item
+        for child_index in range(_tree_count(item, "childCount")):
+            child = item.child(child_index)
+            if child is not None:
+                yield from _walk(child)
+
+    for top_index in range(_tree_count(tree, "topLevelItemCount")):
+        top_item = tree.topLevelItem(top_index)
+        if top_item is not None:
+            yield from _walk(top_item)
+
+
+def _clear_item_children(item: Any) -> None:
+    if item is None:
+        return
+    if hasattr(item, "takeChildren"):
+        item.takeChildren()
+        return
+    if hasattr(item, "removeChild"):
+        for child_index in range(_tree_count(item, "childCount") - 1, -1, -1):
+            child = item.child(child_index)
+            if child is not None:
+                item.removeChild(child)
+
+
+def _user_role(qt_mod: Any, offset: int = 0):
+    base = getattr(getattr(qt_mod, "Qt", None), "UserRole", 0)
+    return base + offset if offset else base
+
+
 def install_results_panel(owner: Any) -> None:
-    """Build the run selector, stage table, scene actions and report buttons."""
+    """Build the unified Results directory tree, hidden run selector state and report buttons."""
 
     if getattr(owner, "_runHistoryComboBox", None) is not None:
         return
@@ -707,72 +750,40 @@ def install_results_panel(owner: Any) -> None:
     empty_layout.addWidget(empty_label, 1)
     results_layout.addWidget(empty_row)
 
-    columns = qt.QSplitter(qt.Qt.Horizontal)
-    columns.setChildrenCollapsible(False)
-    columns.hide()
-    results_layout.addWidget(columns)
+    results_box = qt.QWidget()
+    results_box.setObjectName("resultsTreeContainer")
+    results_box.hide()
+    results_layout.addWidget(results_box)
     owner._resultsEmptyRow = empty_row
-    owner._resultsColumns = columns
-    runs = qt.QWidget()
-    outputs = qt.QWidget()
-    columns.addWidget(runs)
-    columns.addWidget(outputs)
-    columns.setStretchFactor(1, 1)
-    run_layout = qt.QVBoxLayout(runs)
-    outputs_layout = qt.QVBoxLayout(outputs)
-    run_layout.setContentsMargins(0, 0, 3, 0)
-    outputs_layout.setContentsMargins(3, 0, 0, 0)
+    owner._resultsColumns = results_box
+    results_box_layout = qt.QVBoxLayout(results_box)
+    results_box_layout.setContentsMargins(0, 0, 0, 0)
+    results_box_layout.setSpacing(4)
 
-    run_row = qt.QHBoxLayout()
-    run_label = qt.QLabel("Run")
-    run_label.setObjectName("runHistoryLabel")
-    combo = qt.QComboBox(runs)
+    combo = qt.QComboBox(results_box)
     combo.setObjectName("runHistoryComboBox")
     combo.setSizeAdjustPolicy(qt.QComboBox.AdjustToMinimumContentsLengthWithIcon)
     combo.setMinimumContentsLength(14)
     combo.setSizePolicy(qt.QSizePolicy.Expanding, qt.QSizePolicy.Fixed)
     combo.hide()
-    history = qt.QTreeWidget()
-    history.setObjectName("subjectRunHistory")
-    history.setHeaderHidden(True)
-    history.setMinimumHeight(105)
-    history.setMaximumHeight(165)
-    history.setFrameShape(qt.QFrame.NoFrame)
-    history.setMinimumWidth(0)
-    owner._runHistoryTree = history
-    add_folder = qt.QPushButton("Add a run folder…")
-    add_folder.setObjectName("addRunFolderButton")
-    add_folder.clicked.connect(owner._on_browse_run_directory_clicked)
-    _bind(owner, add_folder, "text", "add_run_folder")
-    add_folder.hide()
-
-    def select_run(item, _column):
-        index = item.data(0, qt.Qt.UserRole)
-        if index is not None:
-            combo.setCurrentIndex(int(index))
-
-    history.itemClicked.connect(select_run)
     combo.setToolTip(
         "Runs found under the output directory, the subject root, the batch root and folders added with "
         "“Add a run folder…”, newest first. GUI, command-line and batch runs all appear here, "
         "also from earlier Slicer sessions."
     )
-    run_row.addWidget(run_label)
-    run_layout.addLayout(run_row)
-    run_layout.addWidget(history)
-    empty_layout.addWidget(add_folder)
 
-    outputs_row = qt.QHBoxLayout()
-    outputs_header = qt.QLabel(" ")
-    outputs_header.setObjectName("outputsHeaderLabel")
-    outputs_row.addWidget(outputs_header)
-    outputs_layout.addLayout(outputs_row)
+    add_folder = qt.QPushButton("Add a run folder…")
+    add_folder.setObjectName("addRunFolderButton")
+    add_folder.clicked.connect(owner._on_browse_run_directory_clicked)
+    _bind(owner, add_folder, "text", "add_run_folder")
+    add_folder.hide()
+    empty_layout.addWidget(add_folder)
 
     summary = qt.QLabel("Run summary will appear after a plan or run completes.")
     summary.wordWrap = True
     summary.setObjectName("runSummaryLabel")
     summary.hide()
-    outputs_layout.addWidget(summary)
+    results_box_layout.addWidget(summary)
 
     details = qt.QLabel("No run selected.")
     details.setObjectName("runDetailsLabel")
@@ -782,32 +793,56 @@ def install_results_panel(owner: Any) -> None:
     except Exception:
         pass
     details.hide()
-    run_layout.addWidget(details)
-    run_layout.addStretch(1)
+    results_box_layout.addWidget(details)
 
     review = qt.QLabel("Recorded QC: consult report\nVisual review: pending")
     review.wordWrap = True
     review.setObjectName("reviewStateLabel")
     review.hide()
-    outputs_layout.addWidget(review)
+    results_box_layout.addWidget(review)
 
     files = qt.QTreeWidget()
     files.setObjectName("runOutputFiles")
     files.setHeaderHidden(True)
     files.setColumnCount(2)
-    files.setMinimumHeight(105)
-    files.setMaximumHeight(165)
+    if hasattr(files, "setIndentation"):
+        files.setIndentation(14)
+    files.setMinimumHeight(150)
+    files.setMaximumHeight(280)
     files.setFrameShape(qt.QFrame.NoFrame)
-    files.header().setSectionResizeMode(0, qt.QHeaderView.Stretch)
-    files.header().setSectionResizeMode(1, qt.QHeaderView.ResizeToContents)
+    files.setMinimumWidth(0)
+    header = files.header()
+    if hasattr(header, "setStretchLastSection"):
+        header.setStretchLastSection(False)
+    header.setSectionResizeMode(0, qt.QHeaderView.Stretch)
+    header.setSectionResizeMode(1, qt.QHeaderView.ResizeToContents)
     owner._runOutputFiles = files
-    outputs_layout.addWidget(files)
-    outputs_layout.addStretch(1)
-    files.itemClicked.connect(lambda item, column: _toggle_output(owner, item) if column == 1 else None)
+    owner._runHistoryTree = files
+    owner._runTreeItems = {}
+    owner._selectingTreeItem = False
+    results_box_layout.addWidget(files)
+
+    def _on_tree_item_clicked(item, column) -> None:
+        raw_path = item.data(0, _user_role(qt, 0))
+        run_idx = item.data(0, _user_role(qt, 3))
+        if isinstance(raw_path, (str, Path)) and raw_path and column == 1:
+            _toggle_output(owner, item)
+        if isinstance(run_idx, int) and not isinstance(run_idx, bool):
+            if combo.currentIndex != run_idx:
+                owner._selectingTreeItem = True
+                try:
+                    combo.setCurrentIndex(run_idx)
+                finally:
+                    owner._selectingTreeItem = False
+
+    def _on_tree_item_double_clicked(item, _column) -> None:
+        raw_path = item.data(0, _user_role(qt, 0))
+        if isinstance(raw_path, (str, Path)) and raw_path:
+            _toggle_output(owner, item)
+
+    files.itemClicked.connect(_on_tree_item_clicked)
     if hasattr(files, "itemDoubleClicked"):
-        files.itemDoubleClicked.connect(
-            lambda item, _column: _toggle_output(owner, item) if item.text(1) == "↗" else None
-        )
+        files.itemDoubleClicked.connect(_on_tree_item_double_clicked)
     files.setContextMenuPolicy(qt.Qt.CustomContextMenu)
     files.customContextMenuRequested.connect(lambda position: _output_menu(owner, position))
 
@@ -833,9 +868,7 @@ def install_results_panel(owner: Any) -> None:
 
     combo.currentIndexChanged.connect(lambda _index: owner._on_run_history_selection_changed())
 
-    _bind(owner, run_label, "text", "run_selector_label")
-
-    owner._runStatusPanel = getattr(owner.ui, "resultsCollapsibleButton", None) or columns
+    owner._runStatusPanel = getattr(owner.ui, "resultsCollapsibleButton", None) or results_box
     owner._runHistoryComboBox = combo
     owner._runHistoryRecords = ()
     owner._runDetailsLabel = details
@@ -851,7 +884,7 @@ def install_results_panel(owner: Any) -> None:
 
 
 def _populate_run_tree(owner, records, current_index):
-    tree = getattr(owner, "_runHistoryTree", None)
+    tree = getattr(owner, "_runOutputFiles", None) or getattr(owner, "_runHistoryTree", None)
     if tree is None:
         return
     import qt
@@ -866,19 +899,45 @@ def _populate_run_tree(owner, records, current_index):
     if report_bar is not None:
         report_bar.setVisible(bool(records))
     tree.clear()
+    run_items = {}
+    owner._runTreeItems = run_items
     subjects = {}
     for index, record in enumerate(records):
         subject = record.subject_id or _text(owner, "run_selector_label", "Runs")
         if subject not in subjects:
-            subjects[subject] = qt.QTreeWidgetItem(tree, [subject])
+            subject_item = qt.QTreeWidgetItem(tree, [subject])
+            _set_expanded(subject_item, True)
+            subjects[subject] = subject_item
         group = subjects[subject]
         name = record.run_name or record.manifest_path.parent.name
         item = qt.QTreeWidgetItem(group, [f"{name} · {status_label(record.status)}"])
-        item.setData(0, qt.Qt.UserRole, index)
+        item.setData(0, _user_role(qt, 2), str(record.manifest_path))
+        item.setData(0, _user_role(qt, 3), index)
         item.setToolTip(0, run_record_details(record))
-        group.setExpanded(True)
+        run_items[index] = item
+        if not record.is_batch:
+            try:
+                manifest = json.loads(record.manifest_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                manifest = None
+            if isinstance(manifest, dict) and manifest:
+                _populate_manifest_output_items(
+                    owner,
+                    item,
+                    manifest,
+                    manifest_path=record.manifest_path,
+                    run_index=index,
+                )
+        _set_expanded(item, True)
+        _set_expanded(group, True)
         if index == current_index:
             tree.setCurrentItem(item)
+    if hasattr(tree, "expandAll"):
+        tree.expandAll()
+    _refresh_output_visibility(owner)
+    queue_fit = getattr(owner, "_queueCompactFit", None)
+    if callable(queue_fit):
+        queue_fit()
 
 
 def _output_nodes(slicer, manifest_path, path):
@@ -904,13 +963,25 @@ def _output_visible(slicer, nodes):
     return False
 
 
+def _item_manifest_path(owner: Any, item: Any, qt_mod: Any) -> Optional[Path]:
+    raw_item_manifest = item.data(0, _user_role(qt_mod, 2))
+    if isinstance(raw_item_manifest, Path):
+        return raw_item_manifest
+    if isinstance(raw_item_manifest, str) and raw_item_manifest:
+        return Path(raw_item_manifest)
+    fallback = getattr(owner, "_latestResultManifestPath", None)
+    return Path(fallback) if isinstance(fallback, (str, Path)) and fallback else None
+
+
 def _toggle_output(owner, item):
     import qt
     import slicer
 
-    raw_path = item.data(0, qt.Qt.UserRole)
-    manifest_path = getattr(owner, "_latestResultManifestPath", None)
-    if not raw_path or manifest_path is None:
+    raw_path = item.data(0, _user_role(qt, 0))
+    if not isinstance(raw_path, (str, Path)) or not raw_path:
+        return
+    manifest_path = _item_manifest_path(owner, item, qt)
+    if manifest_path is None:
         return
     path = Path(raw_path)
     if item.text(1) == "↗":
@@ -955,12 +1026,12 @@ def _output_menu(owner, position):
 
     tree = owner._runOutputFiles
     item = tree.itemAt(position)
-    raw_path = item.data(0, qt.Qt.UserRole) if item is not None else None
-    manifest_path = owner._latestResultManifestPath
-    if not raw_path or manifest_path is None:
+    raw_path = item.data(0, _user_role(qt, 0)) if item is not None else None
+    manifest_path = _item_manifest_path(owner, item, qt) if item is not None else getattr(owner, "_latestResultManifestPath", None)
+    if not isinstance(raw_path, (str, Path)) or not raw_path or manifest_path is None:
         return
     nodes = _output_nodes(slicer, manifest_path, Path(raw_path))
-    is_seg = item is not None and item.data(0, qt.Qt.UserRole + 1) == "segmentation"
+    is_seg = item is not None and item.data(0, _user_role(qt, 1)) == "segmentation"
     if not nodes and not is_seg:
         return
     menu = qt.QMenu(tree)
@@ -1002,27 +1073,39 @@ def _refresh_output_visibility(owner):
     import slicer
 
     tree = getattr(owner, "_runOutputFiles", None)
-    manifest_path = getattr(owner, "_latestResultManifestPath", None)
-    if tree is None or manifest_path is None:
+    if tree is None:
         return
     import qt
     from shared.result_scene import owned_nodes
 
-    by_path = {}
-    for node in owned_nodes(slicer, str(manifest_path.resolve())):
-        by_path.setdefault(node.GetAttribute("SlicerDDSurfer.SourcePath"), []).append(node)
+    fallback_manifest = getattr(owner, "_latestResultManifestPath", None)
+    by_path_by_manifest = {}
+
+    def _nodes_for_manifest(mpath: Optional[Path]):
+        if mpath is None:
+            return {}
+        key = str(mpath.resolve())
+        cached = by_path_by_manifest.get(key)
+        if cached is None:
+            cached = {}
+            for node in owned_nodes(slicer, key):
+                cached.setdefault(node.GetAttribute("SlicerDDSurfer.SourcePath"), []).append(node)
+            by_path_by_manifest[key] = cached
+        return cached
+
     zh = str(getattr(owner, "_onboardingLanguage", "en")).startswith("zh")
-    for index in range(tree.topLevelItemCount):
-        group = tree.topLevelItem(index)
-        for child_index in range(group.childCount()):
-            item = group.child(child_index)
-            if item.text(1) == "↗":
-                continue
-            path = str(item.data(0, qt.Qt.UserRole))
-            visible = _output_visible(slicer, by_path.get(path, ()))
-            item.setIcon(1, _eye_icon(qt, visible))
-            item.setText(1, "")
-            item.setToolTip(1, ("隐藏" if zh else "Hide") if visible else ("显示" if zh else "Show"))
+    for item in _iter_tree_items(tree):
+        raw_path = item.data(0, _user_role(qt, 0))
+        if not isinstance(raw_path, (str, Path)) or not raw_path:
+            continue
+        if item.text(1) == "↗":
+            continue
+        mpath = _item_manifest_path(owner, item, qt) or (Path(fallback_manifest) if fallback_manifest else None)
+        by_path = _nodes_for_manifest(mpath)
+        visible = _output_visible(slicer, by_path.get(str(raw_path), ()))
+        item.setIcon(1, _eye_icon(qt, visible))
+        item.setText(1, "")
+        item.setToolTip(1, ("隐藏" if zh else "Hide") if visible else ("显示" if zh else "Show"))
 
 
 def _is_internal_cache_path(
@@ -1053,17 +1136,16 @@ def _is_internal_cache_path(
     return "/cache/stages/" in posix or "/cache/reports/" in posix
 
 
-def _show_output_files(owner, manifest):
-    tree = getattr(owner, "_runOutputFiles", None)
-    if tree is None:
-        return
+def _populate_manifest_output_items(
+    owner: Any,
+    parent: Any,
+    manifest: dict[str, Any],
+    *,
+    manifest_path: Optional[Path] = None,
+    run_index: Optional[int] = None,
+) -> None:
     import qt
     from shared.result_scene import result_candidates
-
-    tree.clear()
-    if not isinstance(manifest, dict) or not manifest:
-        _refresh_output_visibility(owner)
-        return
 
     subject_root_raw = manifest.get("subject_root")
     subject_root: Optional[Path] = None
@@ -1105,21 +1187,20 @@ def _show_output_files(owner, manifest):
                 path.suffix.lower() == ".json"
                 and path.is_absolute()
                 and path.is_file()
-                and not _is_internal_cache_path(path, subject_root)
+                and not _is_internal_cache_path(path, subject_root, output_root=output_root)
             ):
                 groups.setdefault(str(task.get("name") or "qc"), {})[str(path.resolve())] = False
 
-    manifest_path = getattr(owner, "_latestResultManifestPath", None)
-    output_root_raw = manifest.get("output_root")
-    output_root = Path(str(output_root_raw)).expanduser() if output_root_raw else None
-    qc_dir = (output_root / "06_qc") if output_root is not None else None
-    if (qc_dir is None or not qc_dir.is_dir()) and manifest_path is not None:
-        fallback_qc_dir = Path(manifest_path).parent.parent / "06_qc"
+    resolved_manifest = manifest_path if manifest_path is not None else getattr(owner, "_latestResultManifestPath", None)
+    qc_base = Path(str(output_root_raw)).expanduser() if output_root_raw else None
+    qc_dir = (qc_base / "06_qc") if qc_base is not None else None
+    if (qc_dir is None or not qc_dir.is_dir()) and resolved_manifest is not None:
+        fallback_qc_dir = Path(resolved_manifest).parent.parent / "06_qc"
         if fallback_qc_dir.is_dir():
             qc_dir = fallback_qc_dir
     if qc_dir is not None and qc_dir.is_dir():
         for txt_path in sorted(qc_dir.rglob("*.txt")):
-            if txt_path.is_file() and not _is_internal_cache_path(txt_path, subject_root):
+            if txt_path.is_file() and not _is_internal_cache_path(txt_path, subject_root, output_root=output_root):
                 groups.setdefault("qc", {})[str(txt_path.resolve())] = False
 
     zh = str(getattr(owner, "_onboardingLanguage", "en")).startswith("zh")
@@ -1138,16 +1219,80 @@ def _show_output_files(owner, manifest):
         if family in {"surface", "segmentation", "parcellation", "postprocess"}:
             family = "anatomy"
         families.setdefault(family, {}).update(paths)
+    role_manifest = _user_role(qt, 2)
+    role_run = _user_role(qt, 3)
+    manifest_str = str(resolved_manifest) if resolved_manifest is not None else None
     for family, paths in families.items():
         caption = titles.get(family, (family, family))[int(zh)]
-        group = qt.QTreeWidgetItem(tree, [f"{caption} ({len(paths)})"])
+        group = qt.QTreeWidgetItem(parent, [f"{caption} ({len(paths)})"])
+        if run_index is not None:
+            group.setData(0, role_run, run_index)
         for path, visual in paths.items():
             item = qt.QTreeWidgetItem(group, [Path(path).name, "○" if visual else "↗"])
-            item.setData(0, qt.Qt.UserRole, path)
+            item.setData(0, _user_role(qt, 0), path)
             if path in seg_paths:
-                item.setData(0, qt.Qt.UserRole + 1, "segmentation")
+                item.setData(0, _user_role(qt, 1), "segmentation")
+            if manifest_str is not None:
+                item.setData(0, role_manifest, manifest_str)
+            if run_index is not None:
+                item.setData(0, role_run, run_index)
             item.setToolTip(0, path)
-        group.setExpanded(True)
+        _set_expanded(group, True)
+
+
+def _show_output_files(owner, manifest, *, run_index: Optional[int] = None):
+    tree = getattr(owner, "_runOutputFiles", None)
+    if tree is None:
+        return
+    import qt
+
+    run_items = getattr(owner, "_runTreeItems", None)
+    if isinstance(run_items, dict) and run_items:
+        if not isinstance(manifest, dict) or not manifest:
+            if run_index is not None and run_index in run_items:
+                _clear_item_children(run_items[run_index])
+            _refresh_output_visibility(owner)
+            return
+        target_idx = run_index if run_index in run_items else None
+        target_item = run_items.get(target_idx) if target_idx is not None else None
+        if target_item is None:
+            latest = getattr(owner, "_latestResultManifestPath", None)
+            if latest is not None:
+                wanted = str(latest)
+                role_manifest = _user_role(qt, 2)
+                for idx, candidate in run_items.items():
+                    if str(candidate.data(0, role_manifest) or "") == wanted:
+                        target_idx, target_item = idx, candidate
+                        break
+        if target_item is None:
+            combo = getattr(owner, "_runHistoryComboBox", None)
+            combo_idx = getattr(combo, "currentIndex", None)
+            if isinstance(combo_idx, int) and combo_idx in run_items:
+                target_idx, target_item = combo_idx, run_items[combo_idx]
+        if target_item is not None:
+            _clear_item_children(target_item)
+            resolved_manifest = _item_manifest_path(owner, target_item, qt)
+            _populate_manifest_output_items(
+                owner,
+                target_item,
+                manifest,
+                manifest_path=resolved_manifest,
+                run_index=target_idx,
+            )
+            _set_expanded(target_item, True)
+            if hasattr(target_item, "parent") and target_item.parent() is not None:
+                _set_expanded(target_item.parent(), True)
+            _refresh_output_visibility(owner)
+            return
+
+    tree.clear()
+    if isinstance(manifest, dict) and manifest:
+        _populate_manifest_output_items(
+            owner,
+            tree,
+            manifest,
+            manifest_path=getattr(owner, "_latestResultManifestPath", None),
+        )
     _refresh_output_visibility(owner)
 
 
@@ -1326,8 +1471,9 @@ def on_run_selection_changed(owner: Any, *, from_refresh: bool = False) -> None:
     details = getattr(owner, "_runDetailsLabel", None)
     path = selected_manifest_path(owner)
     notes = "\n".join(getattr(owner, "_runHistoryNotes", ()) or ())
-    _show_output_files(owner, {})
     if path is None:
+        if not getattr(owner, "_runTreeItems", None):
+            _show_output_files(owner, {})
         owner._latestResultManifestPath = None
         _set_scene_actions(owner, has_subject_run=False, is_batch=False)
         if details is not None:
@@ -1382,7 +1528,10 @@ def show_record(owner: Any, record: RunRecord, manifest: dict[str, Any]) -> None
     rows, counts = rows_from_single_subject_manifest(manifest)
     owner._set_run_status_table_rows(rows)
     owner._latestResultManifestPath = record.manifest_path
-    _show_output_files(owner, manifest)
+    if getattr(owner, "_selectingTreeItem", False):
+        _refresh_output_visibility(owner)
+    else:
+        _show_output_files(owner, manifest)
     _set_scene_actions(owner, has_subject_run=True, is_batch=False)
     report_paths = manifest.get("report_paths") or {}
     tree_paths = manifest.get("output_tree_report_paths") or {}

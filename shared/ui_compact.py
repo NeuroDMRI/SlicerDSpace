@@ -108,6 +108,7 @@ def compact_algorithm_labels(node: Any) -> dict[str, str]:
 def refresh_compact_algorithms(owner: Any, language: str | None = None) -> None:
     """Refresh the product rows after parameter or language changes."""
 
+    from shared.ui_algorithm_picker import FAMILIES, FAMILY_TARGET_ATTRS
     from shared.ui_onboarding import onboarding_text
 
     ui = getattr(owner, "ui", None)
@@ -115,10 +116,20 @@ def refresh_compact_algorithms(owner: Any, language: str | None = None) -> None:
         return
     raw_lang = language or getattr(owner, "_onboardingLanguage", "en")
     language = raw_lang if isinstance(raw_lang, str) else "en"
+    zh = language.startswith("zh")
     summary_map = getattr(owner, "_algorithmSummaryLabels", None)
     if not isinstance(summary_map, dict):
         summary_map = {}
-    for name, algorithms in compact_algorithm_labels(getattr(owner, "_parameterNode", None)).items():
+    node = getattr(owner, "_parameterNode", None)
+    cleared = getattr(owner, "_clearedAlgorithmFamilies", None)
+    box_to_family = {box_name: family for family, (box_name, _, _) in FAMILIES.items()}
+    for name, algorithms in compact_algorithm_labels(node).items():
+        family = box_to_family.get(name)
+        if family and isinstance(cleared, set) and family in cleared:
+            if node is not None and bool(getattr(node, FAMILY_TARGET_ATTRS[family], False)):
+                cleared.discard(family)
+            else:
+                algorithms = "未选择" if zh else "None selected"
         control = getattr(ui, name, None)
         if control is not None:
             text = onboarding_text(language, "compact_algorithm_selection").format(algorithms=algorithms)

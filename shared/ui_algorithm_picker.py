@@ -117,32 +117,57 @@ def _refresh_anatomical_priors(owner, zh):
     arrow.setToolTip(tip)
 
 
+def _cleared_algorithm_families(owner) -> set[str]:
+    cleared = getattr(owner, "_clearedAlgorithmFamilies", None)
+    if not isinstance(cleared, set):
+        cleared = set()
+        owner._clearedAlgorithmFamilies = cleared
+    return cleared
+
+
 def selected_algorithms(node, family):
     _, choices, attribute = FAMILIES[family]
     return algorithms(getattr(node, attribute, ""), choices, DEFAULT_CHOICES[family])
 
 
-def set_algorithms(owner, family, values):
+def _apply_family_selection_to_node(node, family, values):
     _, choices, attribute = FAMILIES[family]
+    selected = algorithms(",".join(values), choices, DEFAULT_CHOICES[family]) if values else ()
+    if not selected:
+        raise ValueError("Select at least one algorithm")
+    selected = tuple(value for value in choices if value in selected)
+    setattr(node, attribute, ",".join(selected))
+    if family == "microstructure":
+        for stage, field in (
+            ("freewater", "orchestrationRunFreeWater"),
+            ("noddi", "orchestrationRunNoddi"),
+            ("dki", "orchestrationRunDki"),
+            ("ifw", "orchestrationRunIfw"),
+        ):
+            setattr(node, field, stage in selected)
+    return selected
+
+
+def set_algorithms(owner, family, values):
+    _, choices, _ = FAMILIES[family]
     selected = algorithms(",".join(values), choices, DEFAULT_CHOICES[family]) if values else ()
     if not selected:
         raise ValueError("Select at least one algorithm")
     import slicer
 
-    selected = tuple(value for value in choices if value in selected)
+    _cleared_algorithm_families(owner).discard(family)
     with slicer.util.NodeModify(owner._parameterNode):
-        setattr(owner._parameterNode, attribute, ",".join(selected))
-        if family == "microstructure":
-            for stage, field in (
-                ("freewater", "orchestrationRunFreeWater"),
-                ("noddi", "orchestrationRunNoddi"),
-                ("dki", "orchestrationRunDki"),
-                ("ifw", "orchestrationRunIfw"),
-            ):
-                setattr(owner._parameterNode, field, stage in selected)
+        _apply_family_selection_to_node(owner._parameterNode, family, values)
     owner._lastEnvironmentResult = owner._lastEnvironmentSignature = None
-    owner._refresh_advanced_run_settings()
-    owner._schedule_common_user_settings_save()
+    from shared.ui_compact import refresh_compact_algorithms
+
+    refresh_compact_algorithms(owner)
+    refresh_adv = getattr(owner, "_refresh_advanced_run_settings", None)
+    if callable(refresh_adv):
+        refresh_adv()
+    schedule_save = getattr(owner, "_schedule_common_user_settings_save", None)
+    if callable(schedule_save):
+        schedule_save()
 
 
 # Reuse the translated labels and allowed values of the established controls.
@@ -280,7 +305,11 @@ def choose_algorithms(owner, family):
     else:
         _, choices, _ = FAMILIES[family]
         title_text = "选择算法（可多选）" if zh else "Select algorithms (multiple allowed)"
-        current = selected_algorithms(owner._parameterNode, family)
+        target_attr = FAMILY_TARGET_ATTRS.get(family)
+        if family in _cleared_algorithm_families(owner) and target_attr and not getattr(owner._parameterNode, target_attr, False):
+            current = ()
+        else:
+            current = selected_algorithms(owner._parameterNode, family)
     dialog = qt.QDialog(slicer.util.mainWindow())
     dialog.objectName = "algorithmPicker_" + family
     dialog.windowTitle = title_text
@@ -301,6 +330,32 @@ def choose_algorithms(owner, family):
         dialog.setStyleSheet(ui_stylesheet(dark=dark, widget=dialog))
     except Exception:
         dark = None
+
+    popup_state = {"seen_visible": False, "finished": False}
+    popup_watch_ref = [None]
+
+    def _stop_popup_watch() -> None:
+        watch = popup_watch_ref[0]
+        if watch is not None:
+            try:
+                watch.stop()
+            except Exception:
+                pass
+
+    def _finish_popup(accept: bool) -> None:
+        popup_state["finished"] = True
+        _stop_popup_watch()
+        if accept:
+            dialog.accept()
+        else:
+            dialog.reject()
+
+    finished_sig = getattr(dialog, "finished", None)
+    if finished_sig is not None and hasattr(finished_sig, "connect"):
+        try:
+            finished_sig.connect(lambda _result=0: (popup_state.__setitem__("finished", True), _stop_popup_watch()))
+        except Exception:
+            pass
 
     layout = qt.QVBoxLayout(dialog)
     if hasattr(layout, "setContentsMargins"):
@@ -328,7 +383,7 @@ def choose_algorithms(owner, family):
             close_btn.setFocusPolicy(qt.Qt.NoFocus)
         if hasattr(close_btn, "setToolTip"):
             close_btn.setToolTip("关闭" if zh else "Close")
-        close_btn.connect("clicked(bool)", lambda _checked=False: dialog.reject())
+        close_btn.connect("clicked(bool)", lambda _checked=False: _finish_popup(False))
         header_row.addWidget(title_label)
         if hasattr(header_row, "addStretch"):
             header_row.addStretch(1)
@@ -370,7 +425,7 @@ def choose_algorithms(owner, family):
         anchor_visible = anchor is not None and anchor.isVisible()
         screen = qt.QApplication.screenAt(anchor.mapToGlobal(qt.QPoint(0, 0))) if anchor_visible else None
         if screen is None:
-            screen = qt.QApplication.primaryScreen()
+            screen = _qt_val(qt.QApplication, "primaryScreen")
         available = _qt_val(screen, "availableGeometry")
         available_height = _qt_int(available, "height", 800)
         body_layout.invalidate()
@@ -421,7 +476,7 @@ def choose_algorithms(owner, family):
             btn.setCursor(pointing_cursor)
 
     def update(*_):
-        apply.enabled = is_anatomical or any(box.checked for box in boxes.values())
+        apply.enabled = True
 
     for box in boxes.values():
         box.toggled.connect(update)
@@ -447,9 +502,9 @@ def choose_algorithms(owner, family):
             resize_popup()
             scroll.ensureWidgetVisible(note)
             return
-        dialog.accept()
+        _finish_popup(True)
 
-    cancel_btn.connect("clicked()", dialog.reject)
+    cancel_btn.connect("clicked()", lambda: _finish_popup(False))
     apply.connect("clicked()", validate_and_accept)
     btn_row.addWidget(cancel_btn)
     btn_row.addWidget(apply)
@@ -460,16 +515,26 @@ def choose_algorithms(owner, family):
     popup_watch = None
     if hasattr(qt, "QTimer") and popup_flag:
         try:
-            seen_visible = {"flag": False}
             popup_watch = qt.QTimer()
+            popup_watch_ref[0] = popup_watch
             popup_watch.setInterval(50)
 
             def _watch_popup() -> None:
+                if popup_state["finished"]:
+                    _stop_popup_watch()
+                    return
+                res_fn = getattr(dialog, "result", None)
+                res = res_fn() if callable(res_fn) else 0
+                if isinstance(res, int) and res != 0:
+                    popup_state["finished"] = True
+                    _stop_popup_watch()
+                    return
                 vis = dialog.isVisible() if callable(getattr(dialog, "isVisible", None)) else bool(getattr(dialog, "visible", True))
                 if vis:
-                    seen_visible["flag"] = True
-                elif seen_visible["flag"]:
-                    popup_watch.stop()
+                    popup_state["seen_visible"] = True
+                elif popup_state["seen_visible"]:
+                    popup_state["finished"] = True
+                    _stop_popup_watch()
                     dialog.reject()
 
             if hasattr(popup_watch, "timeout") and hasattr(popup_watch.timeout, "connect"):
@@ -483,11 +548,8 @@ def choose_algorithms(owner, family):
     try:
         accepted = dialog.exec_() == qt.QDialog.Accepted
     finally:
-        if popup_watch is not None:
-            try:
-                popup_watch.stop()
-            except Exception:
-                pass
+        popup_state["finished"] = True
+        _stop_popup_watch()
     if accepted:
         selection = [value for value, box in boxes.items() if box.checked]
         if is_anatomical:
@@ -497,22 +559,40 @@ def choose_algorithms(owner, family):
             box_name, _, _ = FAMILIES[family]
             ui_box = getattr(getattr(owner, "ui", None), box_name, None)
             can_enable = True
-            if ui_box is not None and callable(getattr(ui_box, "isEnabled", None)):
-                enabled_val = ui_box.isEnabled()
+            if ui_box is not None:
+                enabled_attr = getattr(ui_box, "isEnabled", None)
+                enabled_val = enabled_attr() if callable(enabled_attr) else getattr(ui_box, "enabled", True)
                 if isinstance(enabled_val, bool):
                     can_enable = enabled_val
             with slicer.util.NodeModify(owner._parameterNode):
                 for attribute, value in staged.items():
                     setattr(owner._parameterNode, attribute, value())
-                if selection and target_attr and can_enable:
-                    setattr(owner._parameterNode, target_attr, True)
-                set_algorithms(owner, family, selection)
-            if selection and target_attr and can_enable and ui_box is not None:
+                if selection:
+                    _cleared_algorithm_families(owner).discard(family)
+                    if target_attr and can_enable:
+                        setattr(owner._parameterNode, target_attr, True)
+                    _apply_family_selection_to_node(owner._parameterNode, family, selection)
+                else:
+                    _cleared_algorithm_families(owner).add(family)
+                    if target_attr:
+                        setattr(owner._parameterNode, target_attr, False)
+            owner._lastEnvironmentResult = owner._lastEnvironmentSignature = None
+            desired_checked = bool(selection and target_attr and can_enable)
+            if ui_box is not None and (not selection or can_enable):
                 sync_checkbox = getattr(owner, "_sync_checkbox", None)
                 if callable(sync_checkbox):
-                    sync_checkbox(ui_box, True)
+                    sync_checkbox(ui_box, desired_checked)
                 elif hasattr(ui_box, "setChecked"):
-                    ui_box.setChecked(True)
+                    ui_box.setChecked(desired_checked)
+            from shared.ui_compact import refresh_compact_algorithms
+
+            refresh_compact_algorithms(owner)
+            refresh_adv = getattr(owner, "_refresh_advanced_run_settings", None)
+            if callable(refresh_adv):
+                refresh_adv()
+            schedule_save = getattr(owner, "_schedule_common_user_settings_save", None)
+            if callable(schedule_save):
+                schedule_save()
         if hasattr(qt, "QTimer"):
             from shared.ui_on_demand_resources import maybe_prompt_on_demand_install
 
@@ -649,6 +729,11 @@ def install_algorithm_pickers(owner):
             checkbox.setCursor(pointing_cursor)
         if hasattr(checkbox, "clicked"):
             def _on_family_clicked(checked: bool, _family=family) -> None:
+                if checked:
+                    _cleared_algorithm_families(owner).discard(_family)
+                    from shared.ui_compact import refresh_compact_algorithms
+
+                    refresh_compact_algorithms(owner)
                 if checked and hasattr(qt, "QTimer"):
                     from shared.ui_on_demand_resources import maybe_prompt_on_demand_install
 
@@ -706,8 +791,10 @@ def refresh_picker_language(owner):
         button.setMinimumWidth(label.sizeHint.width())
     zh = getattr(owner, "_onboardingLanguage", "en").startswith("zh")
     _refresh_anatomical_priors(owner, zh)
+    cleared = getattr(owner, "_clearedAlgorithmFamilies", None) or ()
+    node = getattr(owner, "_parameterNode", None)
     for family, button in getattr(owner, "_algorithmButtons", {}).items():
-        selected = selected_algorithms(getattr(owner, "_parameterNode", None), family)
+        selected = selected_algorithms(node, family)
         name = {
             "preprocessing": ("预处理", "preprocessing"),
             "microstructure": ("微结构分析", "microstructure"),
@@ -716,7 +803,10 @@ def refresh_picker_language(owner):
             "connectome": ("连接组", "connectome"),
         }[family][0 if zh else 1]
         action = "选择" + name + "算法" if zh else "Select " + name + " algorithms"
-        tip = action + ("（可多选）。当前：" if zh else " (multiple allowed). Current: ") + ", ".join(LABELS[value] for value in selected)
+        target_attr = FAMILY_TARGET_ATTRS.get(family)
+        is_cleared = family in cleared and not (node is not None and target_attr and getattr(node, target_attr, False))
+        current_text = ("未选择" if zh else "None selected") if is_cleared else ", ".join(LABELS[value] for value in selected)
+        tip = action + ("（可多选）。当前：" if zh else " (multiple allowed). Current: ") + current_text
         if getattr(button, "text", None) != "...":
             button.text = "..."
         if getattr(button, "accessibleName", None) != action:

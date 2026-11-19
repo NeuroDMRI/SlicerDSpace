@@ -106,6 +106,112 @@ class EnvironmentCheckTests(unittest.TestCase):
             self.assertEqual(subject_folder_defaults(str(inputs), batch=True), (str(inputs), ''))
             self.assertEqual(subject_folder_defaults('/not/a/directory', 'custom'), ('/not/a/directory', 'custom'))
 
+    def test_doctor_progress_callback_and_batched_external_python_probes(self):
+        from shared.environment import run_environment_doctor
+
+        progress_events = []
+        specs = (
+            DependencySpec(
+                key='python:json',
+                kind='python',
+                label='json mod',
+                required=True,
+                targets=('validation',),
+                python_import='json',
+                python_package='json',
+                python_executable=Path(sys.executable),
+            ),
+            DependencySpec(
+                key='python:math',
+                kind='python',
+                label='math mod',
+                required=True,
+                targets=('validation',),
+                python_import='math',
+                python_package='math',
+                python_executable=Path(sys.executable),
+            ),
+        )
+        config = EnvironmentDoctorConfig(targets=('validation',), repo_root=Path('.'), brain_mask_required=False)
+        with patch('shared.environment.build_dependency_specs', return_value=specs):
+            result = run_environment_doctor(config, progress_callback=lambda idx, tot, lbl: progress_events.append((idx, tot, lbl)))
+        self.assertEqual(progress_events, [(1, 2, 'json mod'), (2, 2, 'math mod')])
+        self.assertEqual([st.status for st in result.statuses], ['available', 'available'])
+
+    def test_clear_macos_quarantine_once_respects_platform_and_runs_xattr(self):
+        from shared import bundled_python
+
+        with tempfile.TemporaryDirectory() as tmp:
+            ext_root = Path(tmp) / 'SlicerDSpace'
+            (ext_root / 'bundled-python' / 'site-packages').mkdir(parents=True)
+            mod_root = ext_root / 'lib' / 'Slicer-5.10' / 'qt-scripted-modules'
+            mod_root.mkdir(parents=True)
+            bundled_python._DEQUARANTINED_ROOTS.clear()
+            calls = []
+
+            def fake_run(cmd, **_kwargs):
+                calls.append(cmd)
+                if cmd[1] == '-p':
+                    return SimpleNamespace(returncode=0)
+                return SimpleNamespace(returncode=0)
+
+            with patch.object(bundled_python.sys, 'platform', 'linux'):
+                self.assertFalse(bundled_python._clear_macos_quarantine_once(mod_root))
+
+            bundled_python._DEQUARANTINED_ROOTS.clear()
+            with patch.object(bundled_python.sys, 'platform', 'darwin'), \
+                    patch.dict('os.environ', {'SLICERDSPACE_SKIP_DEQUARANTINE': '0'}), \
+                    patch('shared.bundled_python.shutil.which', return_value='/usr/bin/xattr'), \
+                    patch('shared.bundled_python.subprocess.run', side_effect=fake_run):
+                self.assertTrue(bundled_python._clear_macos_quarantine_once(mod_root))
+                # Repeated calls in same process are no-ops.
+                self.assertFalse(bundled_python._clear_macos_quarantine_once(mod_root))
+            self.assertTrue(any(cmd[:3] == ['/usr/bin/xattr', '-dr', 'com.apple.quarantine'] for cmd in calls))
+
+    def test_start_environment_check_resets_preflight_state_on_callback_error(self):
+        from shared.ui_environment_check import start_environment_check
+
+        with tempfile.TemporaryDirectory() as tmp:
+            report_dir = Path(tmp) / 'reports'
+            report_dir.mkdir()
+            owner = SimpleNamespace(
+                _pipelineActive=False,
+                _setupJob=None,
+                _selectedSetupActive=False,
+                _runState='idle',
+                _onboardingLanguage='en',
+                logic=SimpleNamespace(module_dir=Path('.')),
+                _environment_check_kwargs=lambda: {'targets': ('validation',)},
+                _environment_check_signature=lambda _opts: ('validation',),
+                _environment_report_dir_from_kwargs=lambda _opts: report_dir,
+                _update_environment_result_label=lambda *_a, **_kw: None,
+                _update_environment_path_status_labels=lambda *_a: None,
+                _update_environment_status=lambda *_a: None,
+                _cache_environment_result=lambda *_a: None,
+                _slicer_launcher_program=lambda: 'Slicer',
+                _setStatus=lambda *_a: None,
+                appendLog=lambda *_a: None,
+            )
+
+            def fake_start(_owner, _title, cmds, done):
+                args = cmds[0][1]
+                result_path = Path(args[args.index('--result') + 1])
+                result_path.write_text(json.dumps(EnvironmentDoctorResult(
+                    'linux', 'Linux', '/python', ('validation',), (), (), 0, (), (),
+                ).to_dict()), encoding='utf-8')
+                try:
+                    done('completed', '', Path(tmp) / 'log.txt')
+                except RuntimeError:
+                    pass
+                return True
+
+            import json
+            with patch.dict(sys.modules, {'slicer': SimpleNamespace(modules=SimpleNamespace())}), \
+                    patch('shared.ui_setup_jobs.start_setup_job', side_effect=fake_start), \
+                    patch('shared.environment_check.check_config', return_value={}):
+                start_environment_check(owner, on_complete=lambda _r: (_ for _ in ()).throw(RuntimeError('boom')))
+            self.assertEqual(owner._runState, 'idle')
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -22,11 +22,11 @@
 <link rel="preload" href="assets/fonts/Inter.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="assets/css/site.css?v=start-redesign-20261119-6">
 <link rel="stylesheet" href="assets/css/performance.css?v=hidden-details-1">
-<link rel="stylesheet" href="assets/css/installer-customizer.css?v=slicer-setup-15">
+<link rel="stylesheet" href="assets/css/installer-customizer.css?v=slicer-setup-16">
 <script>document.documentElement.classList.add('js');</script>
 <script src="assets/js/site.js" defer></script>
 <script src="assets/js/performance.js?v=hidden-details-1" defer></script>
-<script src="assets/js/installer-customizer.js?v=slicer-setup-16" defer></script>
+<script src="assets/js/installer-customizer.js?v=slicer-setup-18" defer></script>
 </head>
 <body>
 <a class="skip-link" href="#main">Skip to content</a>
@@ -149,8 +149,8 @@
       </li>
       <li class="start-step">
         <div class="start-body">
-          <h4>Customize your setup installer</h4>
-          <p>Core workflows, bundled runtimes and anatomical prior models are included in the unified base package. Select your operating system, optional WMA white-matter atlases, and optional mirror, proxy or offline paths below to generate a tailored setup archive (universal setup archives and standalone base bundles are also available at <a class="url-link" href="https://github.com/NeuroDMRI/SlicerDSpace/releases" target="_blank" rel="noopener">https://github.com/NeuroDMRI/SlicerDSpace/releases</a>).</p>
+          <h4>Download the setup installer</h4>
+          <p>Core workflows, bundled runtimes and anatomical prior models are included in the unified base package. Select your operating system below to download the setup archive, then configure optional WMA white-matter atlases, mirror, proxy or offline paths inside 3D Slicer after restarting (universal setup archives and standalone base bundles are also available at <a class="url-link" href="https://github.com/NeuroDMRI/SlicerDSpace/releases" target="_blank" rel="noopener">https://github.com/NeuroDMRI/SlicerDSpace/releases</a>).</p>
           <div class="installer-customizer is-embedded" id="installer-customizer"></div>
         </div>
       </li>
@@ -168,7 +168,7 @@
             </li>
             <li class="start-substep">
               <span class="start-substep-num" aria-hidden="true">3</span>
-              <div class="start-substep-body">After restarting, the setup wizard opens automatically — confirm your options and click <span class="ui-chip">Start Install</span>. Once deployment finishes, restart Slicer and open <span class="ui-chip">Modules › Diffusion › SlicerDSpace</span>.</div>
+              <div class="start-substep-body">After restarting, the setup wizard opens automatically — choose any optional WMA atlases or network settings and click <span class="ui-chip">Start Install</span>. Once deployment finishes, restart Slicer and open <span class="ui-chip">Modules › Diffusion › SlicerDSpace</span>.</div>
             </li>
           </ol>
           <p class="start-note-inline">For offline machines, standalone OS Base bundles (<code class="pkg-pill">SlicerDSpace-v*-Windows-x64.zip</code> <code class="pkg-pill">SlicerDSpace-v*-Linux-x64.tar.gz</code> <code class="pkg-pill">SlicerDSpace-v*-macOS-arm64.tar.gz</code>) can also be loaded from the same file menu <span class="muted-inline">(do not use GitHub’s automatic Source code archive).</span></p>
@@ -180,6 +180,8 @@
           <dl class="start-kv-list">
             <dt>Inputs</dt>
             <dd>Enter a <span class="ui-chip">Subject ID</span> and <span class="ui-chip">Output folder</span> (results write automatically under <code>&lt;Output folder&gt;/&lt;Subject ID&gt;/</code>), then load your DWI data.</dd>
+            <dt>Example data</dt>
+            <dd>Download preprocessed multi-shell HCP subject 100307 NIfTI inputs (<a class="url-link" href="https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v0.1.1/SlicerDSpace-Example-HCP-100307-NIfTI.zip" target="_blank" rel="noopener"><code>SlicerDSpace-Example-HCP-100307-NIfTI.zip</code></a>, ~1.17 GB; includes <code>data.nii.gz</code>, <code>bvals</code>, <code>bvecs</code>, and <code>nodif_brain_mask.nii.gz</code>; redistributed under the WU-Minn HCP Open Access Data Use Terms included in the archive).</dd>
             <dt>Analysis</dt>
             <dd>Check the desired stages (for a quick check, keep only <span class="ui-chip">Microstructure › DTI</span>). Click <code>...</code> beside a stage to pick algorithms and adjust gear parameters, and set <span class="ui-chip">Compute device</span> (Auto, CPU, Apple MPS or CUDA GPU).</dd>
             <dt>Run &amp; preflight</dt>

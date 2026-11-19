@@ -28,6 +28,67 @@ def _text(owner, english, chinese):
     return chinese if str(getattr(owner, "_onboardingLanguage", "en")).startswith("zh") else english
 
 
+def _safe_set_run_state(owner, state):
+    """Best-effort UI run-state update that also works cleanly with lightweight test stubs."""
+    try:
+        from shared.ui_run_history import set_run_state
+
+        set_run_state(owner, state)
+    except Exception:
+        try:
+            owner._runState = state
+        except Exception:
+            pass
+
+
+def _safe_set_live_stage_text(owner, text):
+    """Best-effort live stage label update that never fails on test stubs."""
+    try:
+        from shared.ui_run_history import set_live_stage_text
+
+        set_live_stage_text(owner, text)
+    except Exception:
+        pass
+
+
+def _sync_owner_busy_controls(owner):
+    """Sync stage selection lock and Run button state cleanly."""
+    busy = bool(
+        getattr(owner, "_pipelineActive", False)
+        or getattr(owner, "_selectedSetupActive", False)
+        or getattr(owner, "_inputImportPending", False)
+    )
+    setter = getattr(owner, "_set_selection_controls_enabled", None)
+    if callable(setter):
+        try:
+            setter(not busy)
+        except Exception:
+            pass
+    refresher = getattr(owner, "_refresh_run_button_state", None)
+    if callable(refresher):
+        try:
+            refresher()
+        except Exception:
+            pass
+
+
+def _schedule_auto_run(owner):
+    """Resume Run SlicerDSpace cleanly once automatic preparation reaches ready."""
+    run_cb = getattr(owner, "_onRunSelectedClicked", None)
+    if not callable(run_cb):
+        return
+    try:
+        import qt
+
+        single_shot = getattr(getattr(qt, "QTimer", None), "singleShot", None)
+        if callable(single_shot):
+            single_shot(0, run_cb)
+            return
+    except Exception:
+        pass
+    run_cb()
+
+
 def component_rows(owner, components, pending):
     """HTML rows of the licence dialog: size, licence with link and local file, and each Python package with its file."""
     from scripts.download_model_assets import _format_bytes
@@ -340,13 +401,18 @@ def selected_setup_plan(owner, result, *, repair=False):
     return plan
 
 
-def prepare_selected_environment(owner, result=None, *, repair=False, skip_confirm=False):
+def prepare_selected_environment(owner, result=None, *, repair=False, skip_confirm=False, auto_run_after=False):
     import slicer
     from shared.selected_setup import complete_step
     from shared.ui_managed_runtimes import apply_setup_settings
     from shared.managed_runtimes import write_json
     from shared.user_config import default_user_config_path
     from shared.setup_resume import pending_setup
+
+    def _clear_busy_preflight_or_setup(target_state="idle"):
+        if getattr(owner, "_runState", None) in ("preflight", "setup"):
+            _safe_set_run_state(owner, target_state)
+        _sync_owner_busy_controls(owner)
 
     pending_before = pending_setup()
     if (getattr(owner, "_setupJob", None) or getattr(owner, "_pipelineActive", False)
@@ -355,10 +421,12 @@ def prepare_selected_environment(owner, result=None, *, repair=False, skip_confi
         return False
     result = result or owner._run_environment_dependency_check()
     if result is None:
+        _clear_busy_preflight_or_setup("idle")
         return False
     from shared.ui_surface_license import prepare_surface_license
     result = prepare_surface_license(owner, result)
     if result is None:
+        _clear_busy_preflight_or_setup("idle")
         return False
     manager = slicer.app.extensionsManagerModel()
     config = owner._environment_dependency_path_kwargs()
@@ -376,8 +444,12 @@ def prepare_selected_environment(owner, result=None, *, repair=False, skip_confi
         if pending_lic or plan.get("extensions") or plan.get("manual_items") or plan.get("unsupported_profiles"):
             needs_confirm = True
     if pending_actions and needs_confirm and not _confirm(owner, plan):
+        _clear_busy_preflight_or_setup("idle")
         return False
     owner._selectedSetupActive = True
+    _safe_set_run_state(owner, "setup")
+    _safe_set_live_stage_text(owner, _text(owner, "Preparing selected environment…", "正在准备所选分析环境…"))
+    _sync_owner_busy_controls(owner)
     folder = default_user_config_path().parent / "setup-history" / datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     try:
         folder.mkdir(parents=True, exist_ok=True)
@@ -392,6 +464,8 @@ def prepare_selected_environment(owner, result=None, *, repair=False, skip_confi
             refresh_setup_button(owner)
     except OSError as exc:
         owner._selectedSetupActive = False
+        _safe_set_run_state(owner, "failed")
+        _sync_owner_busy_controls(owner)
         owner._setStatus("warning", str(exc))
         return False
     # Let Slicer's own manager select compatible extension builds. Installing
@@ -410,6 +484,8 @@ def prepare_selected_environment(owner, result=None, *, repair=False, skip_confi
                 )
                 continue
             owner._selectedSetupActive = False
+            _safe_set_run_state(owner, "failed")
+            _sync_owner_busy_controls(owner)
             owner._setStatus("warning", _text(owner, "Extension installation did not finish: ", "扩展安装未完成：") + name)
             write_json(folder / "result.json", {"status": "blocked", "extension": name})
             return False
@@ -419,12 +495,16 @@ def prepare_selected_environment(owner, result=None, *, repair=False, skip_confi
             manager.setExtensionEnabled(name, True)
         except Exception as exc:
             owner._selectedSetupActive = False
+            _safe_set_run_state(owner, "failed")
+            _sync_owner_busy_controls(owner)
             write_json(folder / "result.json", {"status": "blocked", "extension": name, "error": str(exc)})
             owner._setStatus("warning", str(exc))
             return False
     if installed_any_extension or plan["restart_extensions"]:
         owner._selectedSetupActive = False
         owner._setupRestartRequired = True
+        _safe_set_run_state(owner, "idle")
+        _sync_owner_busy_controls(owner)
         owner._setStatus("warning", _text(owner, "Restart Slicer; preparation will be offered when you reopen SlicerDSpace.", "请重启 Slicer；重新进入 SlicerDSpace 后将提示继续准备。"))
         write_json(folder / "result.json", {"status": "restart_required", "extensions": plan["extensions"] + plan["restart_extensions"]})
         slicer.util.infoDisplay(_text(owner, "Required extensions were installed. Save your work and restart Slicer. Reopen SlicerDSpace to continue preparation with the installed extensions.",
@@ -436,6 +516,8 @@ def prepare_selected_environment(owner, result=None, *, repair=False, skip_confi
             owner._selectedSetupActive = False
             owner._latestEnvironmentReportDir = folder
             write_json(folder / "result.json", {"status": status, "details": details})
+            _safe_set_run_state(owner, "cancelled" if status == "cancelled" else "failed")
+            _sync_owner_busy_controls(owner)
             owner._setStatus("warning", _text(owner, "Preparation stopped; inspect setup logs.", "环境准备已停止，请查看安装日志。"))
             return
         owner._selectedSetupActive = False
@@ -445,8 +527,12 @@ def prepare_selected_environment(owner, result=None, *, repair=False, skip_confi
         from shared.ui_environment_check import start_environment_check
         def check_failed(state, details):
             write_json(folder / "result.json", {"status": state, "details": details})
+            _safe_set_run_state(owner, "cancelled" if state == "cancelled" else "failed")
+            _sync_owner_busy_controls(owner)
         if not start_environment_check(owner, functional_check, on_failure=check_failed):
             write_json(folder / "result.json", {"status": "blocked", "details": "Final environment check could not start"})
+            _safe_set_run_state(owner, "failed")
+            _sync_owner_busy_controls(owner)
 
     def functional_check(current):
         if current is None or current.blocker_count or getattr(owner, '_setupRestartRequired', False):
@@ -493,6 +579,9 @@ def prepare_selected_environment(owner, result=None, *, repair=False, skip_confi
                              environment))
             receipts.append(receipt)
         owner._selectedSetupActive = True
+        _safe_set_run_state(owner, "setup")
+        _safe_set_live_stage_text(owner, _text(owner, "Testing selected installation…", "正在校验所选安装…"))
+        _sync_owner_busy_controls(owner)
 
         def done(status, details, _log):
             owner._selectedSetupActive = False
@@ -526,6 +615,8 @@ def prepare_selected_environment(owner, result=None, *, repair=False, skip_confi
         if current:
             owner._update_environment_result_label(current)
             owner._update_environment_path_status_labels(current)
+        _safe_set_run_state(owner, "idle" if state in ("ready", "restart_required") else "failed")
+        _sync_owner_busy_controls(owner)
         note = " " + " ".join(warnings) if warnings and state == "ready" else ""  # A2: a warning does not block "ready"
         owner._setStatus("warning" if warnings or state != "ready" else "ready", _text(owner,
             "Selected environment is ready." + note if state == "ready" else
@@ -534,6 +625,8 @@ def prepare_selected_environment(owner, result=None, *, repair=False, skip_confi
             "请重启 Slicer 后再运行分析。" if pending else "自动准备已结束，仍有依赖需要处理。"))
         if current and state == "blocked":
             owner._show_environment_results_dialog(current)
+        if auto_run_after and state == "ready" and current is not None and current.blocker_count == 0 and not pending:
+            _schedule_auto_run(owner)
 
     ZH_TITLES = {"backend_sources": "准备算法源码", "python_packages": "安装 Python 依赖", "model_assets": "下载并校验模型资源",
                  "optional_resources": "准备所选资源", "managed_runtime": "准备外部计算工具",
@@ -591,7 +684,9 @@ def prepare_selected_environment(owner, result=None, *, repair=False, skip_confi
                 return
             run_step(index + 1)
 
-        start_setup_job(owner, _text(owner, step["title"], ZH_TITLES.get(step["id"], step["title"])), step["commands"], done)
+        step_title = _text(owner, step["title"], ZH_TITLES.get(step["id"], step["title"]))
+        _safe_set_live_stage_text(owner, f"{step_title}…")
+        start_setup_job(owner, step_title, step["commands"], done)
 
     from shared.setup_components import LicenceNotAccepted
     try:

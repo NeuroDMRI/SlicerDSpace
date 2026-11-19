@@ -22,6 +22,7 @@ KEEP = {'SlicerDSpace', 'SLICERDSPACE', '3D Slicer',
         'Prepare selected analysis environment', 'Results', 'Open report',
         'SlicerDSpaceSetup', 'Start Install',
         'SlicerDSpaceSetup-Windows.zip', 'SlicerDSpaceSetup-Linux.zip', 'SlicerDSpaceSetup-macOS.zip',
+        'SlicerDSpace-Example-HCP-100307-NIfTI.zip',
         'SlicerDSpace-v*-Windows-x64.zip', 'SlicerDSpace-v*-Linux-x64.tar.gz', 'SlicerDSpace-v*-macOS-arm64.tar.gz',
         'Windows', 'Linux', 'macOS', 'SKILL.md', 'DDSeg', 'DDParcel', 'DDSurfer', 'DTI', 'DKI', 'NODDI',
         'SAF', 'UKF', 'WMA', 'WMQL', 'TractCloud', 'SIFT2', 'MK-Curve', 'MP-PCA',
@@ -159,7 +160,8 @@ def main():
         if not TARGET.is_file() or TARGET.read_text(encoding='utf-8') != page:
             raise SystemExit('Chinese homepage is stale; run scripts/build_website_locales.py')
     else:
-        TARGET.write_text(page, encoding='utf-8', newline='\n')
+        with TARGET.open('w', encoding='utf-8', newline='\n') as fh:
+            fh.write(page)
     print('PASS static Chinese homepage, translations, shared structure and assets')
 
 

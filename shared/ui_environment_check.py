@@ -54,37 +54,41 @@ def start_environment_check(owner, on_complete=None, *, on_failure=None):
             set_run_state(owner, next_state)
 
     def done(status, details, log_path):
-        if status != 'completed':
-            owner._update_environment_result_label(None, error=None if status == 'cancelled' else 'Check failed')
-            owner._setStatus('warning', _text(owner, 'Check cancelled.' if status == 'cancelled' else 'Check failed; open the install log for details.',
-                                            '已取消检查。' if status == 'cancelled' else '检查失败，请查看日志。'))
-            if on_failure:
-                on_failure(status, details)
-            _reset_preflight_state('cancelled' if status == 'cancelled' else 'failed')
-            return
-        if signature != owner._environment_check_signature(owner._environment_check_kwargs()):
-            owner._lastEnvironmentResult = owner._lastEnvironmentSignature = None
-            owner._setStatus('warning', _text(owner, 'Selection changed during the check. Check again.', '检查期间配置已改变，请重新检查。'))
-            if on_failure:
-                on_failure('stale', 'Configuration changed during the final check')
-            _reset_preflight_state('idle')
-            return
+        next_preflight_state = 'idle'
         try:
-            report = result_from_dict(json.loads(result_path.read_text()))
-        except (OSError, ValueError, KeyError, TypeError) as exc:
-            owner._setStatus('error', _text(owner, 'Could not read the environment report.', '无法读取环境检查报告。'))
-            owner.appendLog('[Check] ' + str(exc))
-            if on_failure:
-                on_failure('failed', str(exc))
-            _reset_preflight_state('failed')
-            return
-        owner._cache_environment_result(report, signature)
-        owner._update_environment_result_label(report)
-        owner._update_environment_path_status_labels(report)
-        owner._update_environment_status(report)
-        if on_complete:
-            on_complete(report)
-        _reset_preflight_state('idle')
+            if status != 'completed':
+                owner._update_environment_result_label(None, error=None if status == 'cancelled' else 'Check failed')
+                owner._setStatus('warning', _text(owner, 'Check cancelled.' if status == 'cancelled' else 'Check failed; open the install log for details.',
+                                                '已取消检查。' if status == 'cancelled' else '检查失败，请查看日志。'))
+                if on_failure:
+                    on_failure(status, details)
+                next_preflight_state = 'cancelled' if status == 'cancelled' else 'failed'
+                return
+            if signature != owner._environment_check_signature(owner._environment_check_kwargs()):
+                owner._lastEnvironmentResult = owner._lastEnvironmentSignature = None
+                owner._setStatus('warning', _text(owner, 'Selection changed during the check. Check again.', '检查期间配置已改变，请重新检查。'))
+                if on_failure:
+                    on_failure('stale', 'Configuration changed during the final check')
+                next_preflight_state = 'idle'
+                return
+            try:
+                report = result_from_dict(json.loads(result_path.read_text()))
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                owner._setStatus('error', _text(owner, 'Could not read the environment report.', '无法读取环境检查报告。'))
+                owner.appendLog('[Check] ' + str(exc))
+                if on_failure:
+                    on_failure('failed', str(exc))
+                next_preflight_state = 'failed'
+                return
+            owner._cache_environment_result(report, signature)
+            owner._update_environment_result_label(report)
+            owner._update_environment_path_status_labels(report)
+            owner._update_environment_status(report)
+            if on_complete:
+                on_complete(report)
+            next_preflight_state = 'idle'
+        finally:
+            _reset_preflight_state(next_preflight_state)
 
     args = ['--launch', 'PythonSlicer', '-u', str(script), '--request', str(request), '--result', str(result_path)]
     set_run_state(owner, 'preflight')

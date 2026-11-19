@@ -30,6 +30,10 @@ _ACTIVE_CUDA_PROBE_CACHE: contextvars.ContextVar[Optional[dict[Any, Any]]] = con
     "_ACTIVE_CUDA_PROBE_CACHE",
     default=None,
 )
+_ACTIVE_PYTHON_PROBE_CACHE: contextvars.ContextVar[Optional[dict[tuple[Any, ...], dict[str, Any]]]] = contextvars.ContextVar(
+    "_ACTIVE_PYTHON_PROBE_CACHE",
+    default=None,
+)
 
 
 def _probe_timeout_error(exc: subprocess.TimeoutExpired) -> str:
@@ -2195,37 +2199,47 @@ def _check_spec(spec: DependencySpec, platform_name: str) -> DependencyStatus:
             }
         else:
             python_path = python_executable or Path(sys.executable)
-            env = python_tool_environment(python_path)
-            if python_path_entries:
-                env["PYTHONPATH"] = os.pathsep.join(path.as_posix() for path in python_path_entries) + os.pathsep + env.get("PYTHONPATH", "")
-            prepend_paths = [*_bundled_prepend_paths(python_path), *(path.as_posix() for path in python_path_entries)]
-            probe = (
-                "import importlib.metadata, importlib.util, json, sys\n"
-                f"sys.path[:0] = {prepend_paths!r}\n"
-                f"available = importlib.util.find_spec({spec.python_import!r}) is not None\n"
-                f"distribution = {(distribution_name if requirement_specifier else None)!r}\n"
-                "version = importlib.metadata.version(distribution) if available and distribution else None\n"
-                "print(json.dumps({'available': available, 'version': version}))\n"
-            )
-            try:
-                completed = subprocess.run(
-                    [python_path.as_posix(), "-c", probe],
-                    check=True,
-                    capture_output=True,
-                    env=env,
-                    timeout=DEPENDENCY_PROBE_TIMEOUT_SECONDS,
-                    **text_subprocess_kwargs(),
-                )
-                probe_details = _parse_json_probe_output(completed.stdout)
+            python_path_strs = tuple(path.as_posix() for path in python_path_entries)
+            dist_for_req = distribution_name if requirement_specifier else None
+            batch_cache = _ACTIVE_PYTHON_PROBE_CACHE.get()
+            batch_key = (python_path.as_posix(), python_path_strs, spec.python_import, dist_for_req)
+            if batch_cache is not None and batch_key in batch_cache:
+                probe_details = batch_cache[batch_key]
                 available = bool(probe_details.get("available"))
                 installed_version = probe_details.get("version")
-                error = None
-            except subprocess.TimeoutExpired as exc:
-                available = False
-                error = _probe_timeout_error(exc)
-            except Exception as exc:
-                available = False
-                error = str(exc)
+                error = probe_details.get("error")
+            else:
+                env = python_tool_environment(python_path)
+                if python_path_entries:
+                    env["PYTHONPATH"] = os.pathsep.join(python_path_strs) + os.pathsep + env.get("PYTHONPATH", "")
+                prepend_paths = [*_bundled_prepend_paths(python_path), *python_path_strs]
+                probe = (
+                    "import importlib.metadata, importlib.util, json, sys\n"
+                    f"sys.path[:0] = {prepend_paths!r}\n"
+                    f"available = importlib.util.find_spec({spec.python_import!r}) is not None\n"
+                    f"distribution = {dist_for_req!r}\n"
+                    "version = importlib.metadata.version(distribution) if available and distribution else None\n"
+                    "print(json.dumps({'available': available, 'version': version}))\n"
+                )
+                try:
+                    completed = subprocess.run(
+                        [python_path.as_posix(), "-c", probe],
+                        check=True,
+                        capture_output=True,
+                        env=env,
+                        timeout=DEPENDENCY_PROBE_TIMEOUT_SECONDS,
+                        **text_subprocess_kwargs(),
+                    )
+                    probe_details = _parse_json_probe_output(completed.stdout)
+                    available = bool(probe_details.get("available"))
+                    installed_version = probe_details.get("version")
+                    error = None
+                except subprocess.TimeoutExpired as exc:
+                    available = False
+                    error = _probe_timeout_error(exc)
+                except Exception as exc:
+                    available = False
+                    error = str(exc)
             requirement_specifier, requirement_satisfied = _python_requirement_details(
                 spec.python_package or "",
                 installed_version,
@@ -2388,6 +2402,68 @@ def _check_spec(spec: DependencySpec, platform_name: str) -> DependencyStatus:
     )
 
 
+_DEFAULT_CHECK_SPEC = _check_spec
+
+
+def _batch_probe_python_specs(specs: Iterable[DependencySpec]) -> dict[tuple[Any, ...], dict[str, Any]]:
+    """Batch external Python package probes per interpreter so one startup covers multiple imports."""
+    grouped: dict[tuple[Path, tuple[Path, ...]], dict[tuple[str, Optional[str]], None]] = {}
+    for spec in specs:
+        if spec.kind != "python" or not spec.python_import:
+            continue
+        python_path_entries = tuple(path for path in spec.python_path_entries if path)
+        if spec.python_executable is None and not python_path_entries:
+            continue
+        python_path = spec.python_executable or Path(sys.executable)
+        distribution_name = _python_distribution_name(spec.python_package or "")
+        requirement_specifier, _ = _python_requirement_details(spec.python_package or "", None)
+        dist_for_req = distribution_name if requirement_specifier else None
+        grouped.setdefault((python_path, python_path_entries), {})[(spec.python_import, dist_for_req)] = None
+
+    results: dict[tuple[Any, ...], dict[str, Any]] = {}
+    for (python_path, python_path_entries), query_map in grouped.items():
+        if len(query_map) < 2:
+            continue
+        queries = list(query_map.keys())
+        python_path_strs = tuple(path.as_posix() for path in python_path_entries)
+        env = python_tool_environment(python_path)
+        if python_path_entries:
+            env["PYTHONPATH"] = os.pathsep.join(python_path_strs) + os.pathsep + env.get("PYTHONPATH", "")
+        prepend_paths = [*_bundled_prepend_paths(python_path), *python_path_strs]
+        probe = (
+            "import importlib.metadata, importlib.util, json, sys\n"
+            f"sys.path[:0] = {prepend_paths!r}\n"
+            "out = {}\n"
+            f"for mod_name, dist_name in {queries!r}:\n"
+            "    try:\n"
+            "        avail = importlib.util.find_spec(mod_name) is not None\n"
+            "        ver = importlib.metadata.version(dist_name) if avail and dist_name else None\n"
+            "        out[f'{mod_name}|{dist_name or \"\"}'] = {'available': avail, 'version': ver, 'error': None}\n"
+            "    except Exception as exc:\n"
+            "        out[f'{mod_name}|{dist_name or \"\"}'] = {'available': False, 'version': None, 'error': str(exc)}\n"
+            "print(json.dumps(out))\n"
+        )
+        try:
+            completed = subprocess.run(
+                [python_path.as_posix(), "-c", probe],
+                check=True,
+                capture_output=True,
+                env=env,
+                timeout=DEPENDENCY_PROBE_TIMEOUT_SECONDS,
+                **text_subprocess_kwargs(),
+            )
+            payload = _parse_json_probe_output(completed.stdout)
+            if isinstance(payload, dict):
+                for mod_name, dist_name in queries:
+                    entry = payload.get(f"{mod_name}|{dist_name or ''}")
+                    if isinstance(entry, dict):
+                        results[(python_path.as_posix(), python_path_strs, mod_name, dist_name)] = entry
+        except Exception:
+            # Leave uncached so individual per-spec fallback captures the exact per-spec error cleanly.
+            continue
+    return results
+
+
 def _teem_info_in_process() -> dict[str, str]:
     """Load Slicer's Teem library in this interpreter; return version, library path and error text."""
     try:
@@ -2495,7 +2571,7 @@ def _native_tensor_status(targets: tuple[str, ...], config: Optional["Environmen
     )
 
 
-def run_environment_doctor(config: EnvironmentDoctorConfig, *, _probe_cache=None) -> EnvironmentDoctorResult:
+def run_environment_doctor(config: EnvironmentDoctorConfig, *, _probe_cache=None, progress_callback=None) -> EnvironmentDoctorResult:
     platform_name = _effective_platform_name(config)
     host_platform = platform.system() or "unknown"
     targets = _clean_targets(config.targets)
@@ -2504,9 +2580,23 @@ def run_environment_doctor(config: EnvironmentDoctorConfig, *, _probe_cache=None
     specs = build_dependency_specs(config)
     if _probe_cache is None:
         _probe_cache = {}
+    post_checks = (
+        int('surface_postprocess' in targets)
+        + int("microstructure_dki" in targets and config.dki_fit_method.upper().startswith("MKCURVE"))
+        + int(bool(config.brain_mask_required))
+    )
+    total_steps = max(1, len(specs) + post_checks)
+    step_index = 0
+
+    def report_progress(label: str) -> None:
+        nonlocal step_index
+        step_index += 1
+        if callable(progress_callback):
+            progress_callback(min(step_index, total_steps), total_steps, label)
 
     def check(spec):
         # Targets and requiredness affect reporting, not the actual probe.
+        report_progress(spec.label or spec.key)
         key = replace(spec, targets=(), required=False)
         if key not in _probe_cache:
             _probe_cache[key] = _check_spec(spec, platform_name)
@@ -2515,12 +2605,16 @@ def run_environment_doctor(config: EnvironmentDoctorConfig, *, _probe_cache=None
             return checked
         return replace(checked, targets=spec.targets, required=spec.required)
 
+    batch_probe_results = _batch_probe_python_specs(specs) if _check_spec is _DEFAULT_CHECK_SPEC else {}
     token = _ACTIVE_CUDA_PROBE_CACHE.set(_probe_cache)
+    batch_token = _ACTIVE_PYTHON_PROBE_CACHE.set(batch_probe_results)
     try:
         statuses = tuple(check(spec) for spec in specs)
     finally:
+        _ACTIVE_PYTHON_PROBE_CACHE.reset(batch_token)
         _ACTIVE_CUDA_PROBE_CACHE.reset(token)
     if 'surface_postprocess' in targets:
+        report_progress('Surface postprocessing components')
         from shared.surface_runtime import inspect_surface_runtime
         surface = inspect_surface_runtime(config.postprocess_runtime, config.postprocess_freesurfer_home,
                                           config.postprocess_license_file, python_bin=checked_python_path)
@@ -2542,6 +2636,7 @@ def run_environment_doctor(config: EnvironmentDoctorConfig, *, _probe_cache=None
             statuses += (_native_tensor_status(
                 native_targets, config, in_process=config.loaded_slicer_modules is not None),)
     if "microstructure_dki" in targets and config.dki_fit_method.upper().startswith("MKCURVE"):
+        report_progress('MK-Curve backend')
         matlab_reference = config.dki_fit_method.upper() == "MKCURVE_MATLAB"
         if matlab_reference:
             from microstructure.mkcurve_matlab import inspect_mkcurve_backend
@@ -2556,6 +2651,7 @@ def run_environment_doctor(config: EnvironmentDoctorConfig, *, _probe_cache=None
                           if matlab_reference else "Bundled Python port uses NumPy/SciPy/nibabel; verify runtime resource installation."),
         ),)
     if config.brain_mask_required:
+        report_progress('Selected brain-mask backend')
         from shared.brain_mask import brain_mask_config_from_options, inspect_brain_mask_backend
         masking = inspect_brain_mask_backend(brain_mask_config_from_options(config), system=platform_name)
         mask_targets = tuple(target for target in targets if target in {

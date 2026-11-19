@@ -79,6 +79,10 @@
   border-top: 0;
 }
 
+.ic-band:last-child {
+  padding-bottom: 0;
+}
+
 .ic-band-head {
   display: flex;
   flex-wrap: wrap;

@@ -269,8 +269,31 @@ def detect_missing_task_resources(
             if not pnl_ok and pnl_paths and _all_files_nonempty(roots, pnl_paths):
                 pnl_ok = True
             if not pnl_ok:
-                size = sum(ext_sizes.get(p, 0) for p in pnl_paths) or _DEFAULT_PACK_SIZES_BYTES["pnl_cnn"]
-                add_item("pnl_cnn", size, "brain_mask_pnl")
+                pnl_dir = Path(explicit_pnl).expanduser() if explicit_pnl else None
+                truly_missing = [
+                    p
+                    for p in pnl_paths
+                    if not (pnl_dir is not None and (pnl_dir / Path(p).name).is_file())
+                    and not any((r / p).is_file() and (r / p).stat().st_size > 0 for r in roots)
+                ]
+                iit_rel = "brain_mask/pnl_cnn_torch/IITmean_b0_256.nii.gz"
+                if truly_missing == [iit_rel]:
+                    size = ext_sizes.get(iit_rel, 7_830_929)
+                    missing.append(
+                        {
+                            "id": "pnl_cnn",
+                            "title_zh": "PNL 脑掩膜参考模板（IITmean_b0_256.nii.gz）",
+                            "title_en": "PNL Brain-Mask Template (IITmean_b0_256.nii.gz)",
+                            "size_bytes": int(size),
+                            "pack_id": "brain_mask_pnl",
+                        }
+                    )
+                elif truly_missing and len(truly_missing) < len(pnl_paths):
+                    size = sum(ext_sizes.get(p, 0) for p in truly_missing)
+                    add_item("pnl_cnn", size or _DEFAULT_PACK_SIZES_BYTES["pnl_cnn"], "brain_mask_pnl")
+                else:
+                    size = sum(ext_sizes.get(p, 0) for p in pnl_paths) or _DEFAULT_PACK_SIZES_BYTES["pnl_cnn"]
+                    add_item("pnl_cnn", size, "brain_mask_pnl")
 
     # 3. Bundles: TractCloud / WMA
     if "bundles" in target_set:
@@ -475,6 +498,13 @@ def maybe_prompt_on_demand_install(owner: Any, *, force: bool = False) -> bool:
         if zh
         else "No extension reinstall or Slicer restart needed. Configure a mirror, proxy, or local offline pack folder below if needed."
     )
+    if "pnl_cnn" in new_ids:
+        extra_pnl = (
+            " 若无法连接 NITRC 下载模板，也可在 Inputs 下提供已有脑掩膜（Provided mask）。"
+            if zh
+            else " If NITRC is unreachable, you may also supply an existing brain mask under Inputs (Provided mask)."
+        )
+        sub_note += extra_pnl
     info = qt.QLabel(f"{headline}{bullets}<br><br><span style='font-size:12px'>{html.escape(sub_note)}</span>", dialog)
     info.wordWrap = True
     layout.addWidget(info)

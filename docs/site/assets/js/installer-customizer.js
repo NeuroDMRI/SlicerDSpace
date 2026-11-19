@@ -159,36 +159,13 @@
     }
   };
 
-  var BASE_MODULES = [
-    {
-      title: zh ? '基础预处理与 PNL 自动脑掩膜' : 'Preprocessing & PNL Brain Mask',
-      tag: zh ? '内置' : 'Included'
-    },
-    {
-      title: zh ? '解剖先验 · DDSeg / DDParcel / DDSurfer' : 'Anatomical Priors · DDSeg / DDParcel / DDSurfer',
-      tag: zh ? '内置' : 'Included'
-    },
-    {
-      title: zh ? '微结构与全脑追踪 · DTI / NODDI / DKI / CSD / UKF / SAF' : 'Microstructure & Tractography · DTI / NODDI / DKI / CSD / UKF / SAF',
-      tag: zh ? '内置' : 'Included'
-    },
-    {
-      title: zh ? '纤维束与脑连接组 · WMQL / TractCloud / 连接矩阵' : 'Bundles & Connectome · WMQL / TractCloud / Network',
-      tag: zh ? '内置' : 'Included'
-    }
-  ];
-
-  var WMA_ATLAS_META = [
-    { id: 'wma_org', title: zh ? 'ORG · 标准 74 束图谱' : 'ORG · Standard 74-Tract' },
-    { id: 'wma_naba', title: zh ? 'NABA · 跨年龄段图谱' : 'NABA · Lifespan Atlas' },
-    { id: 'wma_east_west', title: zh ? 'East-West · 东西方人群图谱' : 'East-West · Cross-Population' }
-  ];
-
   // Shared parallel HTTP Range downloader + SHA-256 verification reused by GUI and CLI installers.
   var SHARED_DOWNLOAD_PY = [
     '_GITHUB_PREFIXES = ("https://github.com/", "https://raw.githubusercontent.com/", "https://objects.githubusercontent.com/", "https://media.githubusercontent.com/", "https://codeload.github.com/")',
+    '_AUTO_FALLBACK_MIRRORS = ("https://ghfast.top/", "https://gh-proxy.com/")',
     '_PAR_CHUNK = 4194304',
     '_PAR_WORKERS = 12',
+    '_SYS_PROXY_CACHE = [None]',
     'def _sha256(path, cancel_event=None):',
     '    h = hashlib.sha256()',
     '    with path.open("rb") as fh:',
@@ -213,29 +190,65 @@
     '                if m not in out: out.append(m)',
     '    for u in raw:',
     '        if u and u not in out: out.append(u)',
+    '    if allow_mirror and not mirror:',
+    '        for fb in _AUTO_FALLBACK_MIRRORS:',
+    '            for u in raw:',
+    '                if u.startswith(_GITHUB_PREFIXES) and not u.startswith(fb):',
+    '                    m = fb + u',
+    '                    if m not in out: out.append(m)',
     '    return out',
+    'def _detect_system_proxy():',
+    '    if _SYS_PROXY_CACHE[0] is not None: return _SYS_PROXY_CACHE[0]',
+    '    found = ""',
+    '    try:',
+    '        px = urllib.request.getproxies() or {}',
+    '        found = str(px.get("https") or px.get("http") or px.get("all") or "").strip()',
+    '    except Exception:',
+    '        found = ""',
+    '    if not found and sys.platform == "darwin" and shutil.which("scutil"):',
+    '        try:',
+    '            proc = subprocess.run(["scutil", "--proxy"], capture_output=True, text=True, timeout=3)',
+    '            if proc.returncode == 0:',
+    '                kv = {}',
+    '                for ln in (proc.stdout or "").splitlines():',
+    '                    if ":" in ln:',
+    '                        k, v = ln.split(":", 1)',
+    '                        kv[k.strip()] = v.strip()',
+    '                if kv.get("HTTPSEnable") == "1" and kv.get("HTTPSProxy") and kv.get("HTTPSPort"):',
+    '                    found = "http" + "://" + kv["HTTPSProxy"] + ":" + kv["HTTPSPort"]',
+    '                elif kv.get("HTTPEnable") == "1" and kv.get("HTTPProxy") and kv.get("HTTPPort"):',
+    '                    found = "http" + "://" + kv["HTTPProxy"] + ":" + kv["HTTPPort"]',
+    '        except Exception:',
+    '            found = ""',
+    '    _SYS_PROXY_CACHE[0] = found',
+    '    return found',
+    'def _is_loopback_url(req):',
+    '    u = str(getattr(req, "full_url", req) or "").lower()',
+    '    host = u.split("://", 1)[1].split("/", 1)[0].split(":", 1)[0] if "://" in u else ""',
+    '    return host in ("127.0.0.1", "localhost")',
     'def _open_url(req, proxy_url="", timeout=60):',
-    '    proxy = str(proxy_url or "").strip()',
+    '    explicit_proxy = str(proxy_url or "").strip()',
+    '    proxy = explicit_proxy or ("" if _is_loopback_url(req) else _detect_system_proxy())',
     '    if proxy:',
     '        return urllib.request.build_opener(urllib.request.ProxyHandler({"http": proxy, "https": proxy})).open(req, timeout=timeout)',
     '    return urllib.request.urlopen(req, timeout=timeout)',
-    'def _probe_range(url, proxy_url="", expected_size=0):',
+    'def _probe_range(url, proxy_url="", expected_size=0, timeout=12):',
     '    total = int(expected_size or 0)',
-    '    if expected_size and total <= _PAR_CHUNK: return False, total',
+    '    if expected_size and total <= _PAR_CHUNK: return False, total, None',
     '    try:',
     '        req = urllib.request.Request(url, headers={"User-Agent": "SlicerDSpace-installer", "Range": "bytes=0-0"})',
-    '        with _open_url(req, proxy_url=proxy_url, timeout=20) as resp:',
-    '            if getattr(resp, "status", 200) != 206: return False, total',
+    '        with _open_url(req, proxy_url=proxy_url, timeout=timeout) as resp:',
+    '            if getattr(resp, "status", 200) != 206: return False, total, None',
     '            cr = str((resp.headers.get("Content-Range") if hasattr(resp, "headers") else "") or "")',
     '            if "/" in cr:',
     '                tot_s = cr.rsplit("/", 1)[1].strip()',
     '                if tot_s.isdigit():',
     '                    ptot = int(tot_s)',
-    '                    if total and ptot != total: return False, total',
+    '                    if total and ptot != total: return False, total, None',
     '                    total = ptot',
-    '            return total > _PAR_CHUNK, total',
-    '    except Exception:',
-    '        return False, total',
+    '            return total > _PAR_CHUNK, total, None',
+    '    except Exception as exc:',
+    '        return False, total, exc',
     'def _download_parallel(url, part, meta_path, total, proxy_url="", progress_cb=None, cancel_event=None, log_cb=None, name=""):',
     '    num_chunks = (total + _PAR_CHUNK - 1) // _PAR_CHUNK',
     '    done_set = set()',
@@ -334,7 +347,7 @@
     '            try: part_fh.flush(); part_fh.close()',
     '            except Exception: pass',
     '            _save_meta(strict=False)',
-    'def _download_stream(url, part, meta_path, expected_size=0, proxy_url="", progress_cb=None, cancel_event=None, log_cb=None, name=""):',
+    'def _download_stream(url, part, meta_path, expected_size=0, proxy_url="", timeout=60, progress_cb=None, cancel_event=None, log_cb=None, name=""):',
     '    if meta_path.is_file():',
     '        try:',
     '            m = json.loads(meta_path.read_text(encoding="utf-8"))',
@@ -350,7 +363,7 @@
     '    if expected_size and resume_from > expected_size: part.unlink(missing_ok=True); resume_from = 0',
     '    headers = {"User-Agent": "SlicerDSpace-installer"}',
     '    if resume_from: headers["Range"] = f"bytes={resume_from}-"',
-    '    with _open_url(urllib.request.Request(url, headers=headers), proxy_url=proxy_url, timeout=60) as resp:',
+    '    with _open_url(urllib.request.Request(url, headers=headers), proxy_url=proxy_url, timeout=timeout) as resp:',
     '        append = bool(resume_from and getattr(resp, "status", 200) == 206)',
     '        if resume_from and not append: resume_from = 0',
     '        clen = resp.headers.get("Content-Length") if hasattr(resp, "headers") else None',
@@ -367,7 +380,7 @@
     '                if progress_cb and (now - last_t >= 0.15 or (total and done >= total)):',
     '                    progress_cb(done, total, name); last_t = now',
     '    if total and done < total: raise RuntimeError(f"Short read {done}/{total}")',
-    'def _download(urls, dest, expected_sha256="", expected_size=0, mirror_prefix=None, proxy_url=None, allow_mirror=True, progress_cb=None, cancel_event=None, log_cb=None):',
+    'def _download(urls, dest, expected_sha256="", expected_size=0, mirror_prefix=None, proxy_url=None, allow_mirror=True, timeout=60, progress_cb=None, cancel_event=None, log_cb=None):',
     '    if mirror_prefix is None: mirror_prefix = CONFIG.get("mirror_prefix", "")',
     '    if proxy_url is None: proxy_url = CONFIG.get("proxy_url", "")',
     '    if log_cb is None and "_log" in globals(): log_cb = globals()["_log"]',
@@ -385,9 +398,14 @@
     '    for url in _expand_urls(urls, mirror_prefix=mirror_prefix, allow_mirror=allow_mirror):',
     '        if cancel_event is not None and cancel_event.is_set(): raise InterruptedError("Cancelled")',
     '        try:',
-    '            probe_ok, total = _probe_range(url, proxy_url=proxy_url, expected_size=expected_size)',
+    '            if log_cb: log_cb(f"Connecting: {url}")',
+    '            probe_ok, total, probe_err = _probe_range(url, proxy_url=proxy_url, expected_size=expected_size, timeout=min(timeout, 12))',
+    '            if probe_err is not None:',
+    '                if isinstance(probe_err, urllib.error.HTTPError) and probe_err.code == 416:',
+    '                    meta_path.unlink(missing_ok=True); part.unlink(missing_ok=True)',
+    '                raise probe_err',
     '            if probe_ok: _download_parallel(url, part, meta_path, total, proxy_url=proxy_url, progress_cb=progress_cb, cancel_event=cancel_event, log_cb=log_cb, name=dest.name)',
-    '            else: _download_stream(url, part, meta_path, expected_size=expected_size, proxy_url=proxy_url, progress_cb=progress_cb, cancel_event=cancel_event, log_cb=log_cb, name=dest.name)',
+    '            else: _download_stream(url, part, meta_path, expected_size=expected_size, proxy_url=proxy_url, timeout=timeout, progress_cb=progress_cb, cancel_event=cancel_event, log_cb=log_cb, name=dest.name)',
     '            if expected_sha256:',
     '                if log_cb: log_cb(f"Verifying SHA-256: {dest.name}")',
     '                actual = _sha256(part, cancel_event=cancel_event)',
@@ -398,8 +416,10 @@
     '        except InterruptedError: raise',
     '        except urllib.error.HTTPError as exc:',
     '            if exc.code == 416: meta_path.unlink(missing_ok=True); part.unlink(missing_ok=True)',
+    '            if log_cb: log_cb(f"Source failed ({exc}); trying next...")',
     '            errors.append(f"{url}: {exc}")',
     '        except Exception as exc:',
+    '            if log_cb: log_cb(f"Source failed ({exc}); trying next...")',
     '            errors.append(f"{url}: {exc}")',
     '    raise RuntimeError(f"Failed downloading {dest.name}: {errors}")'
   ].join('\n');
@@ -594,6 +614,11 @@
     '                    t_prev[0] = now; b_prev[0] = overall',
     '                pct_f = 100.0 * overall / max(1, total_all)',
     '                q.put(("progress", (int(900 * overall / max(1, total_all)), f"{fname} · {overall/1048576:.1f} / {total_all/1048576:.1f} MB ({pct_f:.1f}%, {spd_mb[0]:.2f} MB/s)")))',
+    '            q.put(("progress", (5, "Connecting to download server...")))',
+    '            log_cb("Checking network & local cache...")',
+    '            if not str(proxy or "").strip():',
+    '                detected_proxy = _detect_system_proxy()',
+    '                if detected_proxy: log_cb(f"Using system proxy: {detected_proxy}")',
     '            work_dir = Path(tempfile.gettempdir()) / "slicerdspace-installer-cache"; work_dir.mkdir(parents=True, exist_ok=True)',
     '            ext_arc, ext_temps = _acquire_spec(ext_spec, work_dir, offline_dir=offdir, mirror_prefix=mirror, proxy_url=proxy, progress_cb=prog_cb, cancel_event=cancel, log_cb=log_cb)',
     '            completed_base[0] += int(ext_spec.get("size_bytes") or 0)',
@@ -606,7 +631,7 @@
     '                            if cand.is_file() and _sha256(cand, cancel_event=cancel) == iit_spec["sha256"]: iit_file = cand; break',
     '                        if iit_file is not None: break',
     '                    if iit_file is None:',
-    '                        iit_file = _download(iit_spec.get("urls") or (), iit_dl, expected_sha256=str(iit_spec.get("sha256") or ""), expected_size=int(iit_spec.get("size_bytes") or 0), proxy_url=proxy, allow_mirror=False, progress_cb=prog_cb, cancel_event=cancel, log_cb=log_cb)',
+    '                        iit_file = _download(iit_spec.get("urls") or (), iit_dl, expected_sha256=str(iit_spec.get("sha256") or ""), expected_size=int(iit_spec.get("size_bytes") or 0), proxy_url=proxy, allow_mirror=False, timeout=20, progress_cb=prog_cb, cancel_event=cancel, log_cb=log_cb)',
     '                except InterruptedError: raise',
     '                except Exception as exc: log_cb(f"[WARN] NITRC IIT template skipped ({exc})")',
     '            completed_base[0] += int(iit_spec.get("size_bytes") or 0)',
@@ -861,7 +886,7 @@
     '            if src is not None: break',
     '    tmp_dl = None',
     '    if src is None:',
-    '        try: tmp_dl = work_dir / Path(relpath).name; src = _download(iit_spec.get("urls") or (), tmp_dl, expected_sha256=sha, expected_size=sz, allow_mirror=False)',
+    '        try: tmp_dl = work_dir / Path(relpath).name; src = _download(iit_spec.get("urls") or (), tmp_dl, expected_sha256=sha, expected_size=sz, allow_mirror=False, timeout=20)',
     '        except Exception as exc: _log(f"[WARN] Optional NITRC IIT template download skipped ({exc})"); return',
     '    try:',
     '        for dst in targets:',
@@ -1208,15 +1233,6 @@
     ].join('\n');
   }
 
-  function formatBytes(n) {
-    if (!n || n <= 0) { return '0 MB'; }
-    var u = ['B', 'KB', 'MB', 'GB'];
-    var i = 0;
-    var val = Number(n);
-    while (val >= 1024 && i < u.length - 1) { val /= 1024; i += 1; }
-    return (i === 0 ? String(Math.round(val)) : val.toFixed(i >= 3 ? 2 : 1)) + ' ' + u[i];
-  }
-
   function detectOS() {
     if (typeof navigator === 'undefined') { return 'macos'; }
     var ua = (navigator.platform || navigator.userAgent || '').toLowerCase();
@@ -1243,42 +1259,14 @@
       os: detectOS(),
       slicerPath: '',
       modelAssetsDir: '',
-      wmaEnabled: true,
-      wmaAtlases: ['wma_org'],
+      wmaEnabled: false,
+      wmaAtlases: [],
       mirrorPreset: 'direct',
       mirrorPrefix: '',
       proxyUrl: '',
       offlineDir: '',
       checkScriptDir: true,
-      autoStart: false,
-      openHelp: null
-    };
-
-    var HELP_COPY = {
-      mirror: {
-        title: zh ? '镜像源说明' : 'Download mirror',
-        body: zh
-          ? '下载 GitHub Release 资源包时使用的加速前缀。可直连 GitHub 时保持「GitHub 直连」；若下载较慢可切换为 <code>ghfast.top</code>、<code>gh-proxy.com</code> 或自定义镜像前缀。'
-          : 'Optional mirror prefix used when downloading GitHub Release assets. Keep <strong>GitHub Direct</strong> when GitHub is reachable, or select <code>ghfast.top</code>, <code>gh-proxy.com</code>, or a custom mirror.'
-      },
-      proxy: {
-        title: zh ? 'HTTP/HTTPS 代理说明' : 'HTTP/HTTPS proxy',
-        body: zh
-          ? '可选的本地 HTTP/HTTPS 代理地址（如 <code>http://127.0.0.1:7890</code>），安装器联网拉取资源包时会通过该代理转发。日常直连或走系统默认网络时留空即可。'
-          : 'Optional local HTTP/HTTPS proxy URL (for example <code>http://127.0.0.1:7890</code>) routed by the installer when fetching release packages. Leave blank for direct connections.'
-      },
-      offline: {
-        title: zh ? '本地离线包目录说明' : 'Offline package folder',
-        body: zh
-          ? '若已提前把发行版压缩包（<code>.zip</code> / <code>.tar.gz</code>）拷贝到本地或内网磁盘，填写该文件夹路径后安装器会直接校验 SHA-256 并离线部署，无需联网下载。在线安装请留空。'
-          : 'Optional directory containing pre-downloaded SlicerDSpace release archives (<code>.zip</code> / <code>.tar.gz</code>). Files are verified with SHA-256 and installed without internet access. Leave blank for online setup.'
-      },
-      model: {
-        title: zh ? '模型存放目录说明' : 'Model directory',
-        body: zh
-          ? '可选的模型与白质图谱存储路径（适合系统盘空间紧张或多人共享只读模型库时指定）。留空则默认存入用户应用数据目录。'
-          : 'Optional custom directory where anatomical priors and WMA white-matter atlases are stored (useful when system drive space is limited). Leave blank to use the default data folder.'
-      }
+      autoStart: false
     };
 
     function t(en, cn) { return zh ? cn : en; }
@@ -1287,67 +1275,20 @@
       return String(v || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     }
 
-    function helpBtnHtml(key, labelText) {
-      var open = state.openHelp === key;
-      var tip = zh ? ('查看「' + labelText + '」说明') : ('Explain ' + labelText);
-      return '<button type="button" class="ic-help-btn' + (open ? ' is-open' : '') + '" data-help="' + key + '" aria-expanded="' + (open ? 'true' : 'false') + '" aria-controls="ic-help-' + key + '" aria-label="' + escapeAttr(tip) + '" title="' + escapeAttr(tip) + '">?</button>';
-    }
-
-    function helpPopoverHtml(key) {
-      var info = HELP_COPY[key];
-      if (!info) { return ''; }
-      var open = state.openHelp === key;
-      var closeLabel = zh ? '关闭说明' : 'Close explanation';
-      return '<div class="ic-popover" id="ic-help-' + key + '" data-help-popover="' + key + '" role="region" aria-label="' + escapeAttr(info.title) + '"' + (open ? '' : ' hidden') + '>' +
-        '<div class="ic-popover-head"><span>' + info.title + '</span><button type="button" class="ic-popover-close" data-help-close="' + key + '" aria-label="' + escapeAttr(closeLabel) + '">×</button></div>' +
-        '<p class="ic-popover-body">' + info.body + '</p></div>';
-    }
-
-    function syncHelpPopovers() {
-      Array.prototype.forEach.call(root.querySelectorAll('[data-help]'), function (btn) {
-        var open = state.openHelp === btn.getAttribute('data-help');
-        btn.setAttribute('aria-expanded', open ? 'true' : 'false');
-        btn.classList.toggle('is-open', open);
-      });
-      Array.prototype.forEach.call(root.querySelectorAll('[data-help-popover]'), function (pop) {
-        var open = state.openHelp === pop.getAttribute('data-help-popover');
-        pop.hidden = !open;
-      });
-    }
-
-    function baseBytes() {
-      var def = OS_DEFAULTS[state.os];
-      var bundle = ARTIFACTS.bundles[def.bundleKey];
-      return ((bundle && bundle.size_bytes) ? bundle.size_bytes : def.baseEstimateBytes) + IIT_BYTES;
-    }
-
-    function totalBytes() {
-      var sum = baseBytes();
-      if (state.wmaEnabled) {
-        state.wmaAtlases.forEach(function (aid) {
-          var p = ARTIFACTS.packs[aid];
-          if (p) { sum += p.size_bytes || 0; }
-        });
-      }
-      return sum;
-    }
-
     function render() {
-      var def = OS_DEFAULTS[state.os];
       var embedded = root.classList.contains('is-embedded');
       var html = [];
       if (!embedded) {
         html.push('<div class="ic-top">');
         html.push('<div class="ic-top-copy">');
         html.push('<h3 class="ic-heading">' + t('One-Click Graphical Setup', '一键图形化安装器') + '</h3>');
-        html.push('<p class="ic-sub">' + t('Base workflows and anatomical priors are included; import the tiny setup .zip inside 3D Slicer 5.10.0 to review options and install without any terminal.', '核心功能与解剖先验模型均默认内置；在 3D Slicer 5.10.0 中导入极小的引导包即可图形化确认并一键装完，全程无需打开终端或命令行。') + '</p>');
+        html.push('<p class="ic-sub">' + t('Select your operating system and download the lightweight setup archive for 3D Slicer 5.10.0.', '选择操作系统并直接下载 3D Slicer 5.10.0 轻量安装引导包。') + '</p>');
         html.push('</div></div>');
       }
 
       html.push('<div class="ic-band ic-band-choose ic-band-os">');
       html.push('<div class="ic-band-head">');
-      html.push('<span class="ic-band-title">' + t('1. Operating System', '1. 操作系统') + '</span>');
-      html.push('<span class="ic-badge is-required">' + t('Required · Select', '必选 · 点选') + '</span>');
+      html.push('<span class="ic-band-title">' + t('Operating System', '操作系统') + '</span>');
       html.push('</div>');
       html.push('<div class="ic-os-row">');
       html.push('<div class="ic-seg" role="group" aria-label="' + escapeAttr(t('Operating System', '操作系统')) + '">');
@@ -1355,95 +1296,12 @@
       ['macos', 'windows', 'linux'].forEach(function (osKey) {
         html.push('<button type="button" class="ic-seg-btn" data-os="' + osKey + '" aria-pressed="' + (state.os === osKey ? 'true' : 'false') + '"><span>' + OS_DEFAULTS[osKey].label + '</span><span class="ic-seg-arch">' + OS_ARCH[osKey] + '</span></button>');
       });
-      html.push('</div></div>');
       html.push('</div>');
-
-      html.push('<div class="ic-band ic-band-readonly">');
-      html.push('<div class="ic-band-head">');
-      html.push('<span class="ic-band-title">' + t('Included Base Package', '内置底座套件') + ' <span class="ic-size-pill">~' + formatBytes(baseBytes()) + '</span></span>');
-      html.push('<span class="ic-badge is-readonly">' + t('Included · Read-only', '自动内置 · 仅查看') + '</span>');
-      html.push('</div>');
-      html.push('<p class="ic-band-hint">' + t('Bundled automatically — no selection or input needed.', '以下核心模块均默认内置，无需勾选或填写。') + '</p>');
-      html.push('<div class="ic-ro-panel"><div class="ic-ro-grid">');
-      BASE_MODULES.forEach(function (mod) {
-        html.push('<div class="ic-ro-item"><span class="ic-ro-check" aria-hidden="true">✓</span><span class="ic-ro-title">' + mod.title + '</span><span class="ic-ro-tag">' + mod.tag + '</span></div>');
-      });
-      html.push('</div></div></div>');
-
-      html.push('<div class="ic-band ic-band-choose ic-wma-box' + (state.wmaEnabled ? '' : ' is-disabled') + '">');
-      html.push('<div class="ic-band-head">');
-      html.push('<span class="ic-band-title">' + t('2. White-Matter Atlases (WMA)', '2. 白质纤维图谱 (WMA)') + '</span>');
-      html.push('<span class="ic-badge is-select">' + t('Optional · Select', '可选 · 按需勾选') + '</span>');
-      html.push('</div>');
-      html.push('<div class="ic-wma-head">');
-      html.push('<label class="ic-wma-master"><input type="checkbox" id="ic-wma-toggle"' + (state.wmaEnabled ? ' checked' : '') + '><span>' + t('Enable WMA white-matter atlas clustering', '启用 WMA 白质纤维图谱分割') + '</span></label>');
-      html.push('</div>');
-      html.push('<div class="ic-wma-grid">');
-      WMA_ATLAS_META.forEach(function (atlas) {
-        var pspec = ARTIFACTS.packs[atlas.id] || {};
-        var checked = state.wmaEnabled && state.wmaAtlases.indexOf(atlas.id) !== -1;
-        html.push('<label class="ic-pack ' + (checked ? 'is-selected' : '') + '"><input type="checkbox" data-atlas="' + atlas.id + '"' + (checked ? ' checked' : '') + '><span class="ic-pack-title">' + atlas.title + '</span><span class="ic-pack-size">' + formatBytes(pspec.size_bytes || 0) + '</span></label>');
-      });
-      html.push('</div></div>');
-
-      html.push('<div id="ic-more" class="ic-band ic-band-inputs">');
-      html.push('<div class="ic-band-head">');
-      html.push('<span class="ic-band-title">' + t('3. Mirror, proxy & local folders', '3. 镜像源、代理与本地目录') + '</span>');
-      html.push('<span class="ic-badge is-optional">' + t('Optional · Leave blank by default', '选填 · 留空用默认') + '</span>');
-      html.push('</div>');
-      html.push('<div class="ic-more-body">');
-
-      html.push('<div class="ic-subblock">');
-      html.push('<div class="ic-net-row">');
-
-      var mirrorLabel = t('Mirror', '镜像源');
-      html.push('<div class="ic-field"><div class="ic-k"><span class="ic-k-left"><label class="ic-k-label" for="ic-mirror">' + mirrorLabel + '</label>' + helpBtnHtml('mirror', mirrorLabel) + '</span><span class="ic-field-tag is-select">' + t('Select', '下拉选择') + '</span></div><select id="ic-mirror" class="ic-select">');
-      html.push('<option value="direct"' + (state.mirrorPreset === 'direct' ? ' selected' : '') + '>' + t('GitHub Direct', 'GitHub 直连') + '</option>');
-      html.push('<option value="https://ghfast.top/"' + (state.mirrorPreset === 'https://ghfast.top/' ? ' selected' : '') + '>ghfast.top</option>');
-      html.push('<option value="https://gh-proxy.com/"' + (state.mirrorPreset === 'https://gh-proxy.com/' ? ' selected' : '') + '>gh-proxy.com</option>');
-      html.push('<option value="custom"' + (state.mirrorPreset === 'custom' ? ' selected' : '') + '>' + t('Custom...', '自定义...') + '</option>');
-      html.push('</select>');
-      if (state.mirrorPreset === 'custom') {
-        html.push('<input id="ic-custom-mirror" class="ic-input" style="margin-top:6px;" type="text" value="' + escapeAttr(state.mirrorPrefix) + '" placeholder="https://your-mirror.example/">');
-      }
-      html.push(helpPopoverHtml('mirror') + '</div>');
-
-      var proxyLabel = t('HTTP/HTTPS Proxy', 'HTTP/HTTPS 代理');
-      html.push('<div class="ic-field"><div class="ic-k"><span class="ic-k-left"><label class="ic-k-label" for="ic-proxy">' + proxyLabel + '</label>' + helpBtnHtml('proxy', proxyLabel) + '</span><span class="ic-field-tag is-fill">' + t('Optional · Fill', '选填') + '</span></div><input id="ic-proxy" class="ic-input" type="text" value="' + escapeAttr(state.proxyUrl) + '" placeholder="http://127.0.0.1:7890">' + helpPopoverHtml('proxy') + '</div>');
-      html.push('</div>');
-      html.push('</div>');
-
-      html.push('<div class="ic-subblock">');
-      html.push('<div class="ic-subblock-label">' + t('Local directories — leave blank to use automatic defaults', '自定义本地目录（全部选填，留空自动使用默认路径）') + '</div>');
-      html.push('<div class="ic-paths-grid">');
-
-      var offlineLabel = t('Offline folder', '本地离线包目录');
-      html.push('<div class="ic-field"><div class="ic-k"><span class="ic-k-left"><label class="ic-k-label" for="ic-offline-dir">' + offlineLabel + '</label>' + helpBtnHtml('offline', offlineLabel) + '</span><span class="ic-field-tag is-fill">' + t('Optional · Fill', '选填') + '</span></div><input id="ic-offline-dir" class="ic-input" type="text" value="' + escapeAttr(state.offlineDir) + '" placeholder="' + t('Leave blank if online', '在线安装请留空') + '">' + helpPopoverHtml('offline') + '</div>');
-
-      var modelLabel = t('Model directory', '模型存放目录');
-      html.push('<div class="ic-field"><div class="ic-k"><span class="ic-k-left"><label class="ic-k-label" for="ic-model-dir">' + modelLabel + '</label>' + helpBtnHtml('model', modelLabel) + '</span><span class="ic-field-tag is-fill">' + t('Optional · Fill', '选填') + '</span></div><input id="ic-model-dir" class="ic-input" type="text" value="' + escapeAttr(state.modelAssetsDir) + '" placeholder="' + escapeAttr(def.modelPlaceholder) + '">' + helpPopoverHtml('model') + '</div>');
-      html.push('</div>');
-      html.push('</div>');
-
-      html.push('</div></div>');
-
-      if (!embedded) {
-        html.push('<div class="ic-steps">');
-        html.push('<span class="ic-step-item"><span class="ic-step-num">1.</span>' + t('Download setup <strong>.zip</strong> below', '下载下方 <strong>一键引导包 (.zip)</strong>') + '</span>');
-        html.push('<span class="ic-step-item"><span class="ic-step-num">2.</span>' + t('Open 3D Slicer › Extensions Manager › wrench icon › <strong>Install from file…</strong> &amp; restart', '打开 <strong>3D Slicer</strong> › 右上角 <strong>Extensions Manager</strong> › 右上角小扳手 <strong>Install from file…</strong> 选中并重启') + '</span>');
-        html.push('<span class="ic-step-item"><span class="ic-step-num">3.</span>' + t('Setup wizard opens on restart — click <strong>Start Install</strong>', '重启后自动弹出安装向导，确认选项后点击 <strong>Start Install</strong>') + '</span>');
-        html.push('</div>');
-      }
-
-      html.push('<div class="ic-bar">');
-      html.push('<div class="ic-total">' +
-        '<span class="ic-total-item">Setup Installer <strong>~13 KB</strong></span>' +
-        '<span class="ic-total-sep" aria-hidden="true">·</span>' +
-        '<span class="ic-total-item">' + t('Additional download in Slicer', '装机预计额外拉取') + ' <strong>~' + formatBytes(totalBytes()) + '</strong></span>' +
-        '</div>');
       html.push('<div class="ic-actions">');
       html.push('<button type="button" class="ic-btn-primary" id="ic-download-btn">' + t('Download Slicer Setup', '下载 Slicer 一键安装包') + '</button>');
-      html.push('</div></div>');
+      html.push('</div>');
+      html.push('</div>');
+      html.push('</div>');
 
       root.innerHTML = html.join('');
       bindEvents();
@@ -1452,68 +1310,6 @@
     function bindEvents() {
       Array.prototype.forEach.call(root.querySelectorAll('[data-os]'), function (btn) {
         btn.addEventListener('click', function () { state.os = btn.getAttribute('data-os'); render(); });
-      });
-
-      var wmaToggle = document.getElementById('ic-wma-toggle');
-      if (wmaToggle) {
-        wmaToggle.addEventListener('change', function () {
-          state.wmaEnabled = wmaToggle.checked;
-          if (!state.wmaEnabled) {
-            state.wmaAtlases = [];
-          } else if (state.wmaAtlases.length === 0) {
-            state.wmaAtlases = ['wma_org'];
-          }
-          render();
-        });
-      }
-
-      Array.prototype.forEach.call(root.querySelectorAll('[data-atlas]'), function (cb) {
-        cb.addEventListener('change', function () {
-          var aid = cb.getAttribute('data-atlas');
-          if (cb.checked) {
-            state.wmaEnabled = true;
-            if (state.wmaAtlases.indexOf(aid) === -1) { state.wmaAtlases.push(aid); }
-          } else {
-            state.wmaAtlases = state.wmaAtlases.filter(function (x) { return x !== aid; });
-            if (state.wmaAtlases.length === 0) { state.wmaEnabled = false; }
-          }
-          render();
-        });
-      });
-
-      var modelInput = document.getElementById('ic-model-dir');
-      if (modelInput) { modelInput.addEventListener('input', function () { state.modelAssetsDir = modelInput.value; }); }
-      var mirrorSel = document.getElementById('ic-mirror');
-      if (mirrorSel) {
-        mirrorSel.addEventListener('change', function () {
-          state.mirrorPreset = mirrorSel.value;
-          state.mirrorPrefix = mirrorSel.value === 'custom' ? state.mirrorPrefix : (mirrorSel.value === 'direct' ? '' : mirrorSel.value);
-          render();
-        });
-      }
-      var customMir = document.getElementById('ic-custom-mirror');
-      if (customMir) { customMir.addEventListener('input', function () { state.mirrorPrefix = customMir.value; }); }
-      var proxyEl = document.getElementById('ic-proxy');
-      if (proxyEl) { proxyEl.addEventListener('input', function () { state.proxyUrl = proxyEl.value; }); }
-      var offlineEl = document.getElementById('ic-offline-dir');
-      if (offlineEl) { offlineEl.addEventListener('input', function () { state.offlineDir = offlineEl.value; }); }
-
-      Array.prototype.forEach.call(root.querySelectorAll('[data-help]'), function (btn) {
-        btn.addEventListener('click', function (e) {
-          e.preventDefault();
-          e.stopPropagation();
-          var key = btn.getAttribute('data-help');
-          state.openHelp = state.openHelp === key ? null : key;
-          syncHelpPopovers();
-        });
-      });
-      Array.prototype.forEach.call(root.querySelectorAll('[data-help-close]'), function (btn) {
-        btn.addEventListener('click', function (e) {
-          e.preventDefault();
-          e.stopPropagation();
-          state.openHelp = null;
-          syncHelpPopovers();
-        });
       });
 
       var dlBtn = document.getElementById('ic-download-btn');
@@ -1535,22 +1331,6 @@
         });
       }
     }
-
-    document.addEventListener('click', function (e) {
-      if (!state.openHelp) { return; }
-      if (e.target && e.target.closest && (e.target.closest('.ic-popover') || e.target.closest('.ic-help-btn'))) {
-        return;
-      }
-      state.openHelp = null;
-      syncHelpPopovers();
-    });
-
-    document.addEventListener('keydown', function (e) {
-      if (e.key === 'Escape' && state.openHelp) {
-        state.openHelp = null;
-        syncHelpPopovers();
-      }
-    });
 
     render();
   }

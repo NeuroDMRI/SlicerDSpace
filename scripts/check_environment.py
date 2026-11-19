@@ -19,7 +19,10 @@ def main():
     args = parser.parse_args()
     config = config_from_dict(json.loads(args.request.read_text()))
     print('[Check] Checking selected dependencies; no installation or scientific processing.', flush=True)
-    report = run_environment_doctor(config)
+    report = run_environment_doctor(
+        config,
+        progress_callback=lambda idx, total, label: print(f'[Check] ({idx}/{total}) {label}', flush=True),
+    )
     write_environment_report(report, config.output_dir)
     temporary = args.result.with_suffix('.tmp')
     temporary.write_text(json.dumps(report.to_dict(), indent=2) + '\n')

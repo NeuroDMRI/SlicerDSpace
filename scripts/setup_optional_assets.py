@@ -3,6 +3,7 @@
 
 import argparse
 import json
+import os
 from pathlib import Path
 import shutil
 import sys
@@ -12,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scripts.download_model_assets import download_asset_plan, load_manifest, resolve_asset_plan, verify_asset_plan
 from scripts.import_external_resources import extract_org, import_file
 from shared.managed_runtimes import write_json
-from shared.model_assets import configured_model_assets_root, _sha256_cache
+from shared.model_assets import bundled_model_asset_roots, configured_model_assets_root, _sha256_cache
 from shared.network_config import (
     download_file_verified,
     extract_modular_pack,
@@ -118,6 +119,78 @@ def _try_prepare_from_release_pack(profile: str, root: Path, *, offline_root=Non
             pass
 
 
+def _stage_bundled_assets(root: Path, plan, *, repo_root: Path | None = None) -> int:
+    """Copy or hardlink verified files from extension ``bundled-model-assets`` into ``root`` so only truly missing files are downloaded."""
+    resolved_repo = (repo_root or Path(__file__).resolve().parents[1]).resolve()
+    repo_manifest = (resolved_repo / "models/external_assets_manifest.json").resolve()
+    if Path(MANIFEST).resolve() != repo_manifest:
+        return 0
+    bundled_roots = bundled_model_asset_roots(resolved_repo)
+    if not bundled_roots:
+        return 0
+    resolved_root = root.expanduser().resolve()
+    cache = _sha256_cache()
+    staged = 0
+    for relative, _record in plan.asset_records.items():
+        dst = resolved_root / relative
+        if dst.is_file():
+            continue
+        rel_parts = Path(relative).parts
+        cur = resolved_root
+        has_symlink = cur.is_symlink()
+        for part in rel_parts:
+            cur = cur / part
+            if cur.is_symlink():
+                has_symlink = True
+                break
+        if has_symlink:
+            continue
+        for bundled_root in bundled_roots:
+            try:
+                if bundled_root.resolve() == resolved_root:
+                    continue
+            except OSError:
+                pass
+            cand = bundled_root / relative
+            if not cand.is_file() or cand.is_symlink():
+                continue
+            ok, _reason = verify_against_manifest(cand, relative, plan.asset_records, cache=cache)
+            if not ok:
+                continue
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                os.link(cand, dst)
+            except OSError:
+                shutil.copy2(cand, dst)
+            print(f"[Resources] Reusing bundled {relative}", flush=True)
+            staged += 1
+            break
+    return staged
+
+
+def _sync_iit_to_bundled(root: Path, *, repo_root: Path | None = None) -> None:
+    """Best-effort mirror of downloaded ``IITmean_b0_256.nii.gz`` into a writable ``bundled-model-assets`` dir that already holds PNL .pt weights."""
+    rel = Path("brain_mask/pnl_cnn_torch/IITmean_b0_256.nii.gz")
+    src = root / rel
+    if not src.is_file():
+        return
+    resolved_repo = (repo_root or Path(__file__).resolve().parents[1]).resolve()
+    for bundled_root in bundled_model_asset_roots(resolved_repo):
+        try:
+            if bundled_root.resolve() == root.resolve():
+                continue
+        except OSError:
+            continue
+        weights = bundled_root / "brain_mask/pnl_cnn_torch/axial.pt"
+        dst = bundled_root / rel
+        if weights.is_file() and not dst.exists():
+            try:
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, dst)
+            except OSError:
+                pass
+
+
 def prepare(profiles, *, asset_root=None, execute=False, accept_terms=False, offline_root=None):
     profiles = list(dict.fromkeys(profiles))
     if not profiles or set(profiles) - set(PROFILES):
@@ -156,9 +229,12 @@ def prepare(profiles, *, asset_root=None, execute=False, accept_terms=False, off
             raise ValueError("Existing resource differs; inspect it or choose a clean asset root: " + relative)
     for profile, plan in zip(profiles, plans):
         print("[Resources] Preparing " + profile, flush=True)
+        _stage_bundled_assets(root, plan)
         existing = verified_resource_directory(profile, asset_root=root)
         if existing is not None:
             print("[Resources] Reusing verified " + profile, flush=True)
+            if profile == "pnl-cnn":
+                _sync_iit_to_bundled(root)
             if profile in PATH_SETTINGS:
                 result["external_dependencies"][PATH_SETTINGS[profile]] = str(existing)
             continue
@@ -218,6 +294,8 @@ def prepare(profiles, *, asset_root=None, execute=False, accept_terms=False, off
         directory = verified_resource_directory(profile, asset_root=root)
         if directory is None:
             raise RuntimeError("Resources are incomplete after preparation: " + profile)
+        if profile == "pnl-cnn":
+            _sync_iit_to_bundled(root)
         if profile in PATH_SETTINGS:
             result["external_dependencies"][PATH_SETTINGS[profile]] = str(directory)
     result["external_dependencies"]["model_assets_dir"] = str(root)

@@ -5,11 +5,66 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import shutil
 import site
+import subprocess
 import sys
 from typing import MutableMapping
 
 BUNDLED_PYTHON_ENV = "SLICERDSPACE_BUNDLED_PYTHON_ROOT"
+_DEQUARANTINED_ROOTS: set[Path] = set()
+
+
+def _clear_macos_quarantine_once(module_root: Path | None = None) -> bool:
+    """Clear macOS quarantine xattrs once per process so manual extension installs avoid Gatekeeper stalls."""
+    if sys.platform != "darwin" or os.environ.get("SLICERDSPACE_SKIP_DEQUARANTINE") == "1":
+        return False
+    xattr_bin = shutil.which("xattr")
+    if not xattr_bin:
+        return False
+    cleared = False
+    for ext_root in _default_extension_roots(module_root):
+        if ext_root in _DEQUARANTINED_ROOTS:
+            continue
+        if not ((ext_root / "bundled-python").is_dir() or (ext_root / "bundled-runtimes").is_dir()):
+            continue
+        _DEQUARANTINED_ROOTS.add(ext_root)
+        probe_targets = [
+            cand
+            for cand in (
+                ext_root,
+                ext_root / "bundled-python",
+                ext_root / "bundled-python" / "site-packages",
+                ext_root / "bundled-runtimes",
+            )
+            if cand.exists()
+        ]
+        has_quarantine = False
+        for target in probe_targets:
+            try:
+                probe = subprocess.run(
+                    [xattr_bin, "-p", "com.apple.quarantine", str(target)],
+                    capture_output=True,
+                    timeout=5,
+                )
+                if probe.returncode == 0:
+                    has_quarantine = True
+                    break
+            except Exception:
+                continue
+        if not has_quarantine:
+            continue
+        try:
+            proc = subprocess.run(
+                [xattr_bin, "-dr", "com.apple.quarantine", str(ext_root)],
+                capture_output=True,
+                timeout=60,
+            )
+            if proc.returncode == 0:
+                cleared = True
+        except Exception:
+            pass
+    return cleared
 
 
 def _default_extension_roots(module_root: Path | None = None) -> tuple[Path, ...]:
@@ -127,6 +182,7 @@ def inject_bundled_python_env(
 def activate_bundled_python(module_root: Path | None = None) -> tuple[Path, ...]:
     """Activate bundled ``site-packages`` in the running Slicer Python process and its child env."""
     os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+    _clear_macos_quarantine_once(module_root)
     site_dirs = bundled_site_packages_dirs(module_root)
     if not site_dirs:
         return ()

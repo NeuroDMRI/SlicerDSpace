@@ -492,7 +492,11 @@ class SharedWidgetMixin:
         )
         has_source = bool(self._prepare_inputs_widget_text("source"))
         can_import = has_source and bool(self._selected_product_targets()) and not self._pipelineActive
-        button.enabled = (state.enabled or can_import) and not getattr(self, "_inputImportPending", False)
+        button.enabled = (
+            (state.enabled or can_import)
+            and not getattr(self, "_inputImportPending", False)
+            and not getattr(self, "_selectedSetupActive", False)
+        )
         button.setToolTip(state.tooltip)
 
     def _schedule_run_history_refresh(self) -> None:
@@ -3897,7 +3901,7 @@ class SharedWidgetMixin:
         if preflight_blockers:
             if auto_install_python:
                 from shared.ui_selected_setup import prepare_selected_environment
-                prepare_selected_environment(self, doctor_result)
+                prepare_selected_environment(self, doctor_result, auto_run_after=True)
                 return
             self.ui.environmentCollapsibleButton.collapsed = False
             self._update_environment_result_label(doctor_result)
@@ -4370,14 +4374,48 @@ class SharedWidgetMixin:
             set_run_state(self, "idle")
         return started
 
+    def _set_selection_controls_enabled(self, enabled: bool) -> None:
+        checkbox_names = (
+            "targetPreprocessingCheckBox",
+            "targetSegmentationCheckBox",
+            "targetParcellationCheckBox",
+            "targetSurfaceCheckBox",
+            "targetSurfacePostprocessCheckBox",
+            "targetMicrostructureCheckBox",
+            "targetTractographyCheckBox",
+            "targetBundlesCheckBox",
+            "targetConnectomeCheckBox",
+        )
+        for name in checkbox_names:
+            cb = getattr(self.ui, name, None)
+            if cb is not None:
+                cb.enabled = enabled
+        for button in getattr(self, "_algorithmButtons", {}).values():
+            button.enabled = enabled
+        device_combo = getattr(self.ui, "unifiedTorchDeviceComboBox", None) or getattr(self, "_computeDeviceComboBox", None)
+        if device_combo is not None:
+            device_combo.enabled = enabled
+
     def _setPipelineActive(self, active: bool, *, preserve_status: bool = False) -> None:
         self._pipelineActive = active
         if getattr(self, '_experimentWidgets', None):
             for key in ('enabled', 'scope', 'root', 'jobs', 'options', 'variants', 'preview', 'export'):
                 self._experimentWidgets[key].enabled = not active
-        for button in getattr(self, '_algorithmButtons', {}).values():
-            button.enabled = not active
+        controls_enabled = (
+            not active
+            and not getattr(self, "_selectedSetupActive", False)
+            and not getattr(self, "_inputImportPending", False)
+        )
+        self._set_selection_controls_enabled(controls_enabled)
         self._refresh_run_button_state()
+        if (
+            not active
+            and getattr(self, "_setupJob", None) is None
+            and not getattr(self, "_selectedSetupActive", False)
+            and not getattr(self, "_inputImportPending", False)
+            and getattr(self, "_runState", None) in ("preflight", "setup")
+        ):
+            set_run_state(self, "idle")
         if active:
             if hasattr(self.ui, "applyButton"):
                 self.ui.applyButton.enabled = False

@@ -22,11 +22,11 @@
 <link rel="preload" href="assets/fonts/Inter.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="assets/css/site.css?v=start-redesign-20261119-6">
 <link rel="stylesheet" href="assets/css/performance.css?v=hidden-details-1">
-<link rel="stylesheet" href="assets/css/installer-customizer.css?v=slicer-setup-15">
+<link rel="stylesheet" href="assets/css/installer-customizer.css?v=slicer-setup-16">
 <script>document.documentElement.classList.add('js');</script>
 <script src="assets/js/site.js" defer></script>
 <script src="assets/js/performance.js?v=hidden-details-1" defer></script>
-<script src="assets/js/installer-customizer.js?v=slicer-setup-16" defer></script>
+<script src="assets/js/installer-customizer.js?v=slicer-setup-18" defer></script>
 </head>
 <body>
 <a class="skip-link" href="#main">跳到正文</a>
@@ -149,8 +149,8 @@
       </li>
       <li class="start-step">
         <div class="start-body">
-          <h4>定制一键安装器</h4>
-          <p>核心工作流、内置运行环境与解剖先验模型均已包含在统一底座套件中。请在下方选择操作系统、按需勾选 WMA 白质图谱以及镜像源/代理/离线路径，生成专属引导安装包（通用引导包与独立离线底座包亦可在以下页面获取： <a class="url-link" href="https://github.com/NeuroDMRI/SlicerDSpace/releases" target="_blank" rel="noopener">https://github.com/NeuroDMRI/SlicerDSpace/releases</a>).</p>
+          <h4>下载一键安装器</h4>
+          <p>核心工作流、内置运行环境与解剖先验模型均已包含在统一底座套件中。请在下方选择操作系统直接下载引导安装包；重启 3D Slicer 后，可在弹出的安装向导中按需勾选 WMA 白质图谱及镜像源、代理或离线目录（通用引导包与独立离线底座包亦可在以下页面获取： <a class="url-link" href="https://github.com/NeuroDMRI/SlicerDSpace/releases" target="_blank" rel="noopener">https://github.com/NeuroDMRI/SlicerDSpace/releases</a>).</p>
           <div class="installer-customizer is-embedded" id="installer-customizer"></div>
         </div>
       </li>
@@ -168,7 +168,7 @@
             </li>
             <li class="start-substep">
               <span class="start-substep-num" aria-hidden="true">3</span>
-              <div class="start-substep-body">重启后将自动弹出安装向导 — 确认选项后点击 <span class="ui-chip">Start Install</span>；安装完成后重启 Slicer，在顶部打开 <span class="ui-chip">Modules › Diffusion › SlicerDSpace</span>.</div>
+              <div class="start-substep-body">重启后将自动弹出安装向导 — 按需勾选可选 WMA 图谱或网络选项并点击 <span class="ui-chip">Start Install</span>；安装完成后重启 Slicer，在顶部打开 <span class="ui-chip">Modules › Diffusion › SlicerDSpace</span>.</div>
             </li>
           </ol>
           <p class="start-note-inline">若在离线机器安装，也可通过同一入口导入独立分平台全量底座包（<code class="pkg-pill">SlicerDSpace-v*-Windows-x64.zip</code> <code class="pkg-pill">SlicerDSpace-v*-Linux-x64.tar.gz</code> <code class="pkg-pill">SlicerDSpace-v*-macOS-arm64.tar.gz</code>） <span class="muted-inline">（请勿使用 GitHub 自动生成的 Source code 源码归档）。</span></p>
@@ -180,6 +180,8 @@
           <dl class="start-kv-list">
             <dt>Inputs</dt>
             <dd>填写 <span class="ui-chip">Subject ID</span> 与 <span class="ui-chip">Output folder</span> （分析结果将自动创建并写入 <code>&lt;Output folder&gt;/&lt;Subject ID&gt;/</code> 子目录中），再载入您的 DWI 影像数据。</dd>
+            <dt>示例数据</dt>
+            <dd>下载已完成预处理的 HCP 受试者 100307 多壳层 NIfTI 示例数据（<a class="url-link" href="https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v0.1.1/SlicerDSpace-Example-HCP-100307-NIfTI.zip" target="_blank" rel="noopener"><code>SlicerDSpace-Example-HCP-100307-NIfTI.zip</code></a>，约 1.17 GB；包含 <code>data.nii.gz</code>, <code>bvals</code>, <code>bvecs</code> 与 <code>nodif_brain_mask.nii.gz</code>；按压缩包内附带的 WU-Minn HCP 开放获取数据使用条款再分发）。</dd>
             <dt>Analysis</dt>
             <dd>勾选需要的分析阶段（首次快速验证可仅保留 <span class="ui-chip">Microstructure › DTI</span>）；点击阶段旁的 <code>...</code> 可选择具体算法并通过齿轮按钮调整参数，随后设置 <span class="ui-chip">Compute device</span> （Auto、CPU、Apple MPS 或 CUDA GPU）。</dd>
             <dt>运行与预检</dt>

@@ -645,20 +645,10 @@ async function runStartRoutes(browser, origin) {
     record(await page.locator('#cli').evaluate(el => !el.closest('details')) &&
       await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
       `start ${width}px: CLI instructions expanded without horizontal overflow`);
-    const icMoreTag = await page.locator('#ic-more').evaluate(el => el.tagName);
-    const helpButtons = await page.locator('#installer-customizer [data-help]').count();
-    const removedCliCount = await page.locator('#ic-slicer-path, #ic-check-script-dir, #ic-download-cli-btn, #ic-toggle-preview').count();
-    let popoverOk = icMoreTag === 'DIV' && helpButtons === 4 && removedCliCount === 0;
-    if (popoverOk) {
-      await page.locator('#installer-customizer [data-help="mirror"]').click();
-      const pop = page.locator('#ic-help-mirror');
-      const popVisible = await pop.isVisible();
-      const popFits = await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth);
-      await page.keyboard.press('Escape');
-      const popHidden = await pop.isHidden();
-      popoverOk = popVisible && popFits && popHidden;
-    }
-    record(popoverOk, `start ${width}px: GUI-only installer section 3 stays open with working help popovers`);
+    const removedWebOptionsCount = await page.locator('#ic-more, #ic-wma-toggle, [data-atlas], #ic-mirror, #ic-proxy, #ic-offline-dir, #ic-model-dir, #ic-slicer-path, #ic-check-script-dir, #ic-download-cli-btn, #ic-toggle-preview, .ic-band-readonly, .ic-ro-panel, .ic-total, .ic-bar').count();
+    const dlVisible = await page.locator('#ic-download-btn').isVisible();
+    record(removedWebOptionsCount === 0 && dlVisible,
+      `start ${width}px: simplified website installer shows OS selection and direct download only`);
     const removedUiCount = await page.locator('.start-jump-bar, #ic-preview-btn, #ic-preview-modal').count();
     const archLabels = await page.locator('#installer-customizer [data-os] .ic-seg-arch').allTextContents();
     record(removedUiCount === 0 && JSON.stringify(archLabels) === JSON.stringify(['arm64', 'x86_64', 'x86_64']),

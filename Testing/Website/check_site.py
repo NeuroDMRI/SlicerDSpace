@@ -130,6 +130,7 @@ for bundle in (RELEASE_PACKS.get("bundles") or {}).values():
 ALLOWED_URLS.update({
     REPO + "/releases/download/",
     REPO + "/releases/download/v0.1.1",
+    REPO + "/releases/download/v0.1.1/SlicerDSpace-Example-HCP-100307-NIfTI.zip",
     "https://www.nitrc.org/frs/download.php/11290/IITmean_b0_256.nii.gz",
     "https://github.com/",
     "https://raw.githubusercontent.com/",

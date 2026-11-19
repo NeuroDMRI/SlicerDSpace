@@ -666,6 +666,30 @@ class SelectedSetupTests(unittest.TestCase):
             for key, value in written.items():
                 self.assertEqual(kept.get(key), value, key)
 
+    def test_prepare_resets_run_state_and_supports_auto_run_after_ready(self):
+        initial = result(item("numpy"))
+        owner = self.owner(result())
+        owner._runState = "preflight"
+        context, _ = self.run_preparation(owner, initial)
+        with context, patch("shared.ui_selected_setup._confirm", return_value=False):
+            self.assertFalse(prepare_selected_environment(owner, initial))
+        self.assertEqual(owner._runState, "idle")
+
+        owner_ok = self.owner(result())
+        owner_ok._runState = "preflight"
+        context_ok, _ = self.run_preparation(owner_ok, initial)
+        started = []
+        with tempfile.TemporaryDirectory() as temp, context_ok, \
+                patch("shared.ui_selected_setup._confirm", side_effect=accepting_confirm), \
+                patch("shared.ui_environment_check.start_environment_check", side_effect=lambda widget, callback, **kwargs: callback(owner_ok._run_environment_dependency_check()) or True), \
+                patch("shared.ui_setup_jobs.start_setup_job", side_effect=fake_jobs(started)), \
+                patch("scripts.setup_python_packages.dcm2niix_pending", return_value=False), \
+                patch("shared.user_config.default_user_config_path", return_value=Path(temp) / "config.json"), \
+                patch.dict("os.environ", {"SLICERDSPACE_USER_CONFIG": str(Path(temp) / "config.json")}):
+            self.assertTrue(prepare_selected_environment(owner_ok, initial, auto_run_after=True))
+        self.assertEqual(owner_ok._runState, "idle")
+        owner_ok._onRunSelectedClicked.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

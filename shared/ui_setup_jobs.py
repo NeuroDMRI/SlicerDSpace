@@ -176,6 +176,34 @@ class SetupJob:
         try:
             self.on_done(status, self.tail, self.log_path)
         finally:
+            if (
+                getattr(self.owner, "_setupJob", None) is None
+                and not getattr(self.owner, "_pipelineActive", False)
+                and not getattr(self.owner, "_selectedSetupActive", False)
+                and not getattr(self.owner, "_inputImportPending", False)
+            ):
+                setter = getattr(self.owner, "_set_selection_controls_enabled", None)
+                if callable(setter):
+                    try:
+                        setter(True)
+                    except Exception:
+                        pass
+                refresher = getattr(self.owner, "_refresh_run_button_state", None)
+                if callable(refresher):
+                    try:
+                        refresher()
+                    except Exception:
+                        pass
+                if getattr(self.owner, "_runState", None) in ("preflight", "setup"):
+                    try:
+                        from shared.ui_run_history import set_run_state
+
+                        set_run_state(self.owner, "idle")
+                    except Exception:
+                        try:
+                            self.owner._runState = "idle"
+                        except Exception:
+                            pass
             self.process.deleteLater()
             self.dialog.deleteLater()
 

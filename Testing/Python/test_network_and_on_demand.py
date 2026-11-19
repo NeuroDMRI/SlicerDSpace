@@ -654,6 +654,105 @@ class InstallerScriptBuilderTests(unittest.TestCase):
                 rec = setup_meta[os_key]
                 self.assertIn(f"{rec['sha256']}  {rec['filename']}", sums_text)
 
+    def test_detect_missing_pnl_template_only_reports_accurate_7_8mb_size(self) -> None:
+        from shared.ui_on_demand_resources import detect_missing_task_resources
+
+        with tempfile.TemporaryDirectory() as tmp:
+            asset_root = Path(tmp) / "model-assets"
+            pnl_dir = asset_root / "brain_mask" / "pnl_cnn_torch"
+            pnl_dir.mkdir(parents=True)
+            for fname in ("axial.pt", "coronal.pt", "sagittal.pt", "weights.json", "LICENSE.txt"):
+                (pnl_dir / fname).write_bytes(b"weights")
+            node = SimpleNamespace(
+                targetSurface=False,
+                targetSurfacePostprocess=False,
+                targetSegmentation=False,
+                targetParcellation=False,
+                targetBundles=False,
+                orchestrationBundleBackend="wmql",
+                wmaAtlas="org",
+                brainMaskBackend="pnl_cnn",
+                pnlMaskRoute="native",
+            )
+            owner = SimpleNamespace(_parameterNode=node)
+            missing = detect_missing_task_resources(
+                owner,
+                targets=("microstructure",),
+                bundle_backends=("wmql",),
+                brain_mask_backend="pnl_cnn",
+                pnl_mask_route="native",
+                backend_paths={"model_assets_dir": str(asset_root)},
+            )
+            self.assertEqual(len(missing), 1)
+            self.assertEqual(missing[0]["id"], "pnl_cnn")
+            self.assertIn("IITmean_b0_256.nii.gz", missing[0]["title_en"])
+            self.assertLess(missing[0]["size_bytes"], 10_000_000)
+
+    def test_stage_bundled_assets_reuses_matching_extension_files(self) -> None:
+        from unittest.mock import patch
+        from scripts.setup_optional_assets import _stage_bundled_assets
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            bundled = repo / "bundled-model-assets" / "brain_mask" / "pnl_cnn_torch"
+            bundled.mkdir(parents=True)
+            sample_rel = "brain_mask/pnl_cnn_torch/weights.json"
+            sample_payload = b"{}"
+            sha = hashlib.sha256(sample_payload).hexdigest()
+            (bundled / "weights.json").write_bytes(sample_payload)
+            dest_root = (Path(tmp) / "user-assets").resolve()
+            dest_root.mkdir()
+            plan = SimpleNamespace(asset_records={sample_rel: {"sha256": sha, "size_bytes": len(sample_payload)}})
+            with patch(
+                "scripts.setup_optional_assets.bundled_model_asset_roots",
+                return_value=(repo / "bundled-model-assets",),
+            ):
+                count = _stage_bundled_assets(dest_root, plan, repo_root=REPO_ROOT)
+            self.assertEqual(count, 1)
+            self.assertEqual((dest_root / sample_rel).read_bytes(), sample_payload)
+
+    def test_setup_py_expand_urls_appends_auto_fallback_mirrors_for_github_only(self) -> None:
+        node_bin = shutil.which("node")
+        if node_bin is None:
+            self.skipTest("node is not installed in PATH")
+
+        import types
+
+        js_path = REPO_ROOT / "docs" / "site" / "assets" / "js" / "installer-customizer.js"
+        node_script = (
+            "const ic = require(process.argv[1]);\n"
+            "const files = ic.buildSetupExtensionFiles({ os: 'macos' });\n"
+            "process.stdout.write(files.find((f) => f.name.endsWith('SlicerDSpaceSetup.py')).data);\n"
+        )
+        py_src = subprocess.run([node_bin, "-e", node_script, str(js_path)], capture_output=True, text=True, check=True).stdout
+        qt_stub = types.ModuleType("qt")
+        slicer_stub = types.ModuleType("slicer")
+        slm_stub = types.ModuleType("slicer.ScriptedLoadableModule")
+        slm_stub.ScriptedLoadableModule = object
+        slm_stub.ScriptedLoadableModuleWidget = object
+        slicer_stub.ScriptedLoadableModule = slm_stub
+        saved = {k: sys.modules.get(k) for k in ("qt", "slicer", "slicer.ScriptedLoadableModule")}
+        ns: dict[str, object] = {}
+        try:
+            sys.modules["qt"] = qt_stub
+            sys.modules["slicer"] = slicer_stub
+            sys.modules["slicer.ScriptedLoadableModule"] = slm_stub
+            exec(compile(py_src, "SlicerDSpaceSetup.py", "exec"), ns)
+        finally:
+            for k, v in saved.items():
+                if v is None:
+                    sys.modules.pop(k, None)
+                else:
+                    sys.modules[k] = v
+        gh = "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v0.1.1/a.tar.gz"
+        nitrc = "https://www.nitrc.org/frs/download.php/11290/IITmean_b0_256.nii.gz"
+        self.assertEqual(
+            ns["_expand_urls"]([gh], mirror_prefix="", allow_mirror=True),
+            [gh, f"https://ghfast.top/{gh}", f"https://gh-proxy.com/{gh}"],
+        )
+        self.assertEqual(ns["_expand_urls"]([nitrc], mirror_prefix="", allow_mirror=True), [nitrc])
+        self.assertEqual(ns["_expand_urls"]([gh], mirror_prefix="", allow_mirror=False), [gh])
+
 
 if __name__ == "__main__":
     unittest.main()

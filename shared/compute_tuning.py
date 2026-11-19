@@ -102,7 +102,7 @@ def read_profile(path):
     try:
         if Path(path).stat().st_size > 8 * 1024**2:
             return {}
-        record = json.loads(Path(path).read_text())
+        record = json.loads(Path(path).read_text(encoding='utf-8'))
         return record if (record.get('version') == 1 and record.get('status') == 'passed'
                           and isinstance(record.get('profiles'),dict)) else {}
     except (ValueError, OSError, AttributeError):

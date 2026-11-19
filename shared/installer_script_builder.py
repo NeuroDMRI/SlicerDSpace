@@ -30,7 +30,10 @@ _BOOTSTRAP_BODY = textwrap.dedent(
     import hashlib
     import json
     import os
+    import platform
     import shutil
+    import socket
+    import ssl
     import subprocess
     import sys
     import tempfile
@@ -77,14 +80,144 @@ _BOOTSTRAP_BODY = textwrap.dedent(
                 out.append(u)
         return out
 
+    def _clean_proxy(raw):
+        s = str(raw or "").strip()
+        if not s:
+            return ""
+        if "://" not in s and "=" in s:
+            mapping = {}
+            for item in s.split(";"):
+                part = item.strip()
+                if "=" in part:
+                    k, v = part.split("=", 1)
+                    if k.strip() and v.strip():
+                        mapping[k.strip().lower()] = v.strip()
+            s = mapping.get("https") or mapping.get("http") or next(iter(mapping.values()), "")
+            if not s:
+                return ""
+        return s if "://" in s else ("http" + "://" + s)
+
+    def _ssl_context():
+        for env_k in ("SSL_CERT_FILE", "REQUESTS_CA_BUNDLE"):
+            cf = str(os.environ.get(env_k) or "").strip()
+            if cf and Path(cf).is_file():
+                try:
+                    return ssl.create_default_context(cafile=cf)
+                except Exception:
+                    pass
+        try:
+            import certifi
+
+            cf = certifi.where()
+            if cf and Path(cf).is_file():
+                return ssl.create_default_context(cafile=cf)
+        except Exception:
+            pass
+        return ssl.create_default_context()
+
+    def _detect_system_proxy():
+        try:
+            proxies = urllib.request.getproxies() or {}
+            found = _clean_proxy(proxies.get("https") or proxies.get("http") or proxies.get("all") or "")
+            if found:
+                return found
+        except Exception:
+            pass
+        if sys.platform == "darwin" and shutil.which("scutil"):
+            try:
+                proc = subprocess.run(["scutil", "--proxy"], capture_output=True, text=True, timeout=3)
+                if proc.returncode == 0:
+                    kv = {}
+                    for ln in (proc.stdout or "").splitlines():
+                        if ":" in ln:
+                            k, v = ln.split(":", 1)
+                            kv[k.strip()] = v.strip()
+                    if kv.get("HTTPSEnable") == "1" and kv.get("HTTPSProxy") and kv.get("HTTPSPort"):
+                        return _clean_proxy(f"{kv['HTTPSProxy']}:{kv['HTTPSPort']}")
+                    if kv.get("HTTPEnable") == "1" and kv.get("HTTPProxy") and kv.get("HTTPPort"):
+                        return _clean_proxy(f"{kv['HTTPProxy']}:{kv['HTTPPort']}")
+            except Exception:
+                pass
+        elif sys.platform == "win32":
+            try:
+                import winreg
+
+                key_path = r"Software\Microsoft\Windows\CurrentVersion\Internet Settings"
+                with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path) as rk:
+                    enabled, _ = winreg.QueryValueEx(rk, "ProxyEnable")
+                    server, _ = winreg.QueryValueEx(rk, "ProxyServer")
+                    if int(enabled or 0) == 1 and server:
+                        return _clean_proxy(server)
+            except Exception:
+                pass
+        return ""
+
+    def _is_loopback_url(req):
+        u = str(getattr(req, "full_url", req) or "").lower()
+        host = u.split("://", 1)[1].split("/", 1)[0].split(":", 1)[0] if "://" in u else ""
+        return host in ("127.0.0.1", "localhost", "[::1]")
+
+    def _is_intel_mac():
+        if sys.platform != "darwin":
+            return False
+        if str(platform.machine() or "").lower() not in ("x86_64", "amd64"):
+            return False
+        try:
+            out = subprocess.check_output(
+                ["sysctl", "-n", "sysctl.proc_translated"],
+                stderr=subprocess.DEVNULL,
+                text=True,
+                timeout=2,
+            ).strip()
+            if out == "1":
+                return False
+        except Exception:
+            pass
+        return True
+
+    def _pick_cache_dir(need_bytes=0):
+        cands = [Path(tempfile.gettempdir()) / "slicerdspace-installer-cache"]
+        if sys.platform == "win32":
+            fb = Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "SlicerDSpace" / "installer-cache"
+        else:
+            fb = Path.home() / ".cache" / "slicerdspace-installer-cache"
+        if fb not in cands:
+            cands.append(fb)
+        min_pref = max(int(need_bytes or 0), 2147483648)
+        best = None
+        best_free = -1
+        for cand in cands:
+            try:
+                cand.mkdir(parents=True, exist_ok=True)
+                free = int(shutil.disk_usage(cand).free)
+                if free >= min_pref:
+                    return cand
+                if free > best_free:
+                    best, best_free = cand, free
+            except OSError:
+                pass
+        if best is None:
+            raise OSError("No writable installer cache directory available")
+        if need_bytes and best_free < int(need_bytes):
+            raise RuntimeError(
+                f"Insufficient disk space in {best}: {best_free / 1073741824.0:.2f} GB free, "
+                f"need {need_bytes / 1073741824.0:.2f} GB"
+            )
+        return best
+
     def _open_url(req, timeout=120):
-        proxy = str(CONFIG.get("proxy_url", "") or "").strip()
+        explicit = _clean_proxy(CONFIG.get("proxy_url", ""))
+        proxy = explicit or ("" if _is_loopback_url(req) else _detect_system_proxy())
+        if proxy.lower().startswith("socks"):
+            raise RuntimeError(f"SOCKS proxy {proxy!r} is not supported without PySocks; use an HTTP/HTTPS proxy URL.")
+        ctx = _ssl_context()
         if proxy:
             opener = urllib.request.build_opener(
-                urllib.request.ProxyHandler({"http": proxy, "https": proxy})
+                urllib.request.ProxyHandler({"http": proxy, "https": proxy}),
+                urllib.request.HTTPSHandler(context=ctx),
             )
             return opener.open(req, timeout=timeout)
-        return urllib.request.urlopen(req, timeout=timeout)
+        return urllib.request.urlopen(req, timeout=timeout, context=ctx)
 
     def _download(urls, dest: Path, expected_sha256="", expected_size=0, allow_mirror=True):
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -108,7 +241,17 @@ _BOOTSTRAP_BODY = textwrap.dedent(
                 if resume_from:
                     headers["Range"] = f"bytes={resume_from}-"
                 req = urllib.request.Request(url, headers=headers)
-                with _open_url(req, timeout=120) as resp:
+                try:
+                    resp_cm = _open_url(req, timeout=120)
+                except urllib.error.HTTPError as range_exc:
+                    if resume_from and range_exc.code in (400, 405, 501):
+                        part.unlink(missing_ok=True)
+                        resume_from = 0
+                        req = urllib.request.Request(url, headers={"User-Agent": "SlicerDSpace-custom-installer"})
+                        resp_cm = _open_url(req, timeout=120)
+                    else:
+                        raise
+                with resp_cm as resp:
                     status = getattr(resp, "status", 200)
                     append = bool(resume_from and status == 206)
                     if resume_from and not append:
@@ -351,16 +494,17 @@ _BOOTSTRAP_BODY = textwrap.dedent(
             raise FileNotFoundError(f"3D Slicer executable not found: {slicer_exe}")
 
         os_name = CONFIG["os"]
+        if _is_intel_mac():
+            raise RuntimeError("Intel x86_64 Macs are not supported by the macOS bundle; Apple Silicon (M1-M4) is required.")
         artifacts = CONFIG["artifacts"]
-        work_dir = Path(tempfile.gettempdir()) / "slicerdspace-installer-cache"
-        work_dir.mkdir(parents=True, exist_ok=True)
-
         bundle_key = {
             "windows": "windows_x64_base",
             "linux": "linux_x64_base",
             "macos": "macos_arm64_base",
         }[os_name]
         ext_spec = artifacts["bundles"][bundle_key]
+        need_b = int(ext_spec.get("size_bytes") or 0) + int((artifacts.get("iit_template") or {}).get("size_bytes") or 0)
+        work_dir = _pick_cache_dir(int(need_b * 1.15) + 536870912 if need_b else 0)
         ext_archive, ext_temps = _acquire_spec(ext_spec, work_dir)
         receipt = _install_extension_in_slicer(slicer_exe, ext_archive)
         _cleanup_temp_files(ext_temps)
@@ -424,7 +568,8 @@ _BOOTSTRAP_BODY = textwrap.dedent(
             _cleanup_temp_files(pack_temps)
 
         cfg = load_user_config()
-        cfg["ui"]["language"] = CONFIG.get("language", "en")
+        ui_cfg = cfg.setdefault("ui", {})
+        ui_cfg["language"] = ui_cfg.get("language") or str(CONFIG.get("language") or "en")
         deps = cfg.setdefault("external_dependencies", {})
         if custom_assets_dir:
             deps["model_assets_dir"] = str(asset_root)

@@ -54,8 +54,9 @@ def _stop(process):
     except Exception:
         children = []
     if os.name == 'nt':
+        no_win = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
         subprocess.run(['taskkill', '/PID', str(process.pid), '/T', '/F'],
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False, creationflags=no_win)
     else:
         for child in reversed(children):
             try:
@@ -142,7 +143,9 @@ def run_independent_jobs(jobs, *, directory, max_workers=1, cpu_budget=None,
                 handles.append(stream)
                 environment = os.environ.copy()
                 environment.update(job.environment or {})
-                process = subprocess.Popen(job.command, env=environment, stdout=stream, stderr=subprocess.STDOUT)
+                no_win = getattr(subprocess, 'CREATE_NO_WINDOW', 0) if os.name == 'nt' else 0
+                process = subprocess.Popen(job.command, env=environment, stdout=stream, stderr=subprocess.STDOUT,
+                                           creationflags=no_win)
                 active[executor.submit(process.wait)] = job, process, time.monotonic()
                 waiting.remove(job)
                 rows[job.name].update(status='running', started_at=datetime.now(timezone.utc).isoformat(),

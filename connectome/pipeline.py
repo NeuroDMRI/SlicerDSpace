@@ -275,8 +275,8 @@ def _labels_at_points(points, data, inverse_affine):
 def _resolve_connectome_device(requested: str = "auto") -> str:
     env_val = os.environ.get("SLICERDSPACE_CONNECTOME_DEVICE")
     mode = str(env_val if env_val else requested).strip().lower()
-    if mode not in {"auto", "cpu", "cuda"}:
-        raise ValueError(f"Unsupported connectome device {mode!r}; expected 'auto', 'cpu', or 'cuda'.")
+    if mode not in {"auto", "cpu", "cuda", "mps"} and not mode.startswith("cuda:"):
+        raise ValueError(f"Unsupported connectome device {mode!r}; expected 'auto', 'cpu', 'mps', or 'cuda'.")
     return "cpu"
 
 

@@ -478,7 +478,17 @@ def install_tractcloud_accelerations(pipeline_mod, resolved_device: str = "cpu")
                 if progress_callback:
                     progress_callback((b_idx + 1) / total_batches)
 
-        return torch.cat(preds_gpu, dim=0).cpu().numpy().tolist()
+        out_preds = torch.cat(preds_gpu, dim=0).cpu().numpy().tolist()
+        del preds_gpu, feat_t, knn_idx, global_t
+        if target_dev.type == "mps":
+            mps_ns = getattr(torch, "mps", None)
+            if callable(getattr(mps_ns, "synchronize", None)):
+                mps_ns.synchronize()
+            if callable(getattr(mps_ns, "empty_cache", None)):
+                mps_ns.empty_cache()
+        elif target_dev.type == "cuda" and torch.cuda.is_initialized():
+            torch.cuda.empty_cache()
+        return out_preds
 
     inference_mod.extract_ras_features = fast_extract_ras_features
     inference_mod.RealDataDataset = FastRealDataDataset

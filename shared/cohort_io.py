@@ -21,7 +21,7 @@ def _admission(phase, folder, resource):
         return
     import psutil
     folder = Path(folder)
-    config = json.loads((folder/'config.json').read_text())
+    config = json.loads((folder/'config.json').read_text(encoding='utf-8'))
     path = folder/(resource+'_state.json')
     row = dict(id=uuid4().hex, pid=os.getpid(), created=psutil.Process().create_time(),
                subject=os.environ.get('SLICERDSPACE_COHORT_SUBJECT', ''), phase=phase,
@@ -30,7 +30,7 @@ def _admission(phase, folder, resource):
     try:
         while not admitted:
             with cache_lock(folder/(resource+'_lock')):
-                state = json.loads(path.read_text()) if path.exists() else dict(active=[], waiting=[])
+                state = json.loads(path.read_text(encoding='utf-8')) if path.exists() else dict(active=[], waiting=[])
                 for key in state:
                     state[key] = [item for item in state[key] if _alive(item)]
                 if not queued:
@@ -42,20 +42,20 @@ def _admission(phase, folder, resource):
                     admitted = True
                     row['started_at'] = time.time()
                 temporary = path.with_suffix('.tmp')
-                temporary.write_text(json.dumps(state))
+                temporary.write_text(json.dumps(state), encoding='utf-8')
                 temporary.replace(path)
             if not admitted:
                 time.sleep(.05)
         yield
     finally:
         with cache_lock(folder/(resource+'_lock')):
-            state = json.loads(path.read_text()) if path.exists() else dict(active=[], waiting=[])
+            state = json.loads(path.read_text(encoding='utf-8')) if path.exists() else dict(active=[], waiting=[])
             for key in state:
                 state[key] = [item for item in state[key] if item['id'] != row['id']]
             temporary = path.with_suffix('.tmp')
-            temporary.write_text(json.dumps(state))
+            temporary.write_text(json.dumps(state), encoding='utf-8')
             temporary.replace(path)
-            with (folder/(resource+'_events.jsonl')).open('a') as stream:
+            with (folder/(resource+'_events.jsonl')).open('a', encoding='utf-8') as stream:
                 stream.write(json.dumps({**row, 'ended_at':time.time(), 'admitted':admitted})+'\n')
 
 

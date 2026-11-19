@@ -11,6 +11,7 @@ import platform
 import re
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 import time
@@ -58,8 +59,18 @@ MRTRIX_TARBALL = {
 
 
 def runtime_root():
-    return Path(os.environ.get("SLICERDSPACE_RUNTIME_ROOT") or
-                default_user_model_assets_root().parent / "runtimes").expanduser().resolve()
+    configured = os.environ.get("SLICERDSPACE_RUNTIME_ROOT")
+    if configured:
+        return Path(configured).expanduser().resolve()
+    legacy = (default_user_model_assets_root().parent / "runtimes").expanduser().resolve()
+    if sys.platform == "darwin":
+        try:
+            if legacy.is_dir() and any(legacy.iterdir()):
+                return legacy
+        except OSError:
+            pass
+        return (Path.home() / ".local" / "share" / "SlicerDSpace" / "runtimes").expanduser().resolve()
+    return legacy
 
 
 def conda_subdir(system=None, machine=None):
@@ -191,7 +202,7 @@ def verify_prefix(profile, prefix):
         # No conda-meta: the pinned version is read from the tool itself.
         installed = {"mrtrix3": _tarball_version(prefix, spec["tarball"]["version"])}
     else:
-        records = [json.loads(path.read_text()) for path in (prefix / "conda-meta").glob("*.json")]
+        records = [json.loads(path.read_text(encoding="utf-8")) for path in (prefix / "conda-meta").glob("*.json")]
         expected_subdir = conda_subdir()
         if any(record.get("subdir") not in {expected_subdir, "noarch"} for record in records):
             raise RuntimeError(f"Runtime built for another architecture; use Repair (expected {expected_subdir})")
@@ -333,7 +344,7 @@ def _migration(base, profiles, settings, user_config):
     old_dir = PROFILES["mrtrix"]["directory"]
     old_prefix, old_receipt = base / old_dir, base / (old_dir + ".json")
     try:
-        owned = json.loads(old_receipt.read_text()).get("kind") == "slicerdsurfer_managed_runtime"
+        owned = json.loads(old_receipt.read_text(encoding="utf-8")).get("kind") == "slicerdsurfer_managed_runtime"
     except (OSError, ValueError):
         owned = False
     if not owned or not old_prefix.is_dir():
@@ -418,7 +429,7 @@ def ensure_conda(root, explicit=None):
     if bootstrap.is_symlink():
         raise ValueError("Managed bootstrap prefix cannot be a symlink")
     if bootstrap.exists():
-        receipt = json.loads(marker.read_text()) if marker.is_file() else {}
+        receipt = json.loads(marker.read_text(encoding="utf-8")) if marker.is_file() else {}
         if receipt.get("kind") != "slicerdsurfer_miniforge_bootstrap" or receipt.get("prefix") != str(bootstrap):
             raise RuntimeError("Refusing to repair an unmanaged bootstrap directory: " + str(bootstrap))
         if receipt.get("subdir") != subdir:
@@ -493,7 +504,7 @@ def provision(profiles, *, root=None, conda=None, accept_fsl_license=False, acce
             if prefix.is_symlink():
                 raise ValueError("Managed runtime prefix cannot be a symlink")
             receipt_path = base / (spec["directory"] + ".json")
-            old = json.loads(receipt_path.read_text()) if receipt_path.is_file() else {}
+            old = json.loads(receipt_path.read_text(encoding="utf-8")) if receipt_path.is_file() else {}
             if prefix.exists() and (old.get("kind") != "slicerdsurfer_managed_runtime" or old.get("profile") != profile):
                 raise RuntimeError("Refusing to modify an unmanaged environment: " + str(prefix))
             if old.get("status") == "ready" and not repair:
@@ -542,14 +553,14 @@ def provision(profiles, *, root=None, conda=None, accept_fsl_license=False, acce
                     from shared.managed_pnl import verify_assets
                     record.update(verify_assets(prefix, asset_root=asset_root))
                 locked = subprocess.run([manager, "list", "--explicit", "-p", str(prefix)],
-                                        capture_output=True, text=True, check=True,
+                                        capture_output=True, text=True, encoding="utf-8", errors="replace", check=True,
                                         env=external_python_environment())
-                (base / (spec["directory"] + ".explicit.txt")).write_text(locked.stdout)
+                (base / (spec["directory"] + ".explicit.txt")).write_text(locked.stdout, encoding="utf-8")
                 if profile == "pnl_cnn":
                     pip_lock = subprocess.run([str(prefix / "bin/python"), "-m", "pip", "freeze", "--all"],
-                                              capture_output=True, text=True, check=True,
+                                              capture_output=True, text=True, encoding="utf-8", errors="replace", check=True,
                                               env=external_python_environment())
-                    (base / (spec["directory"] + ".pip-freeze.txt")).write_text(pip_lock.stdout)
+                    (base / (spec["directory"] + ".pip-freeze.txt")).write_text(pip_lock.stdout, encoding="utf-8")
                 write_json(receipt_path, dict(pending, **record, status="ready", completed_at=time.time()))
             settings.update(record["external_dependencies"])
             records[profile] = str(receipt_path)

@@ -207,11 +207,12 @@ def _resolve_command(command: str, config: DwiPreprocessingConfig) -> Optional[s
 
 
 def _resolved_eddy_threads(config: DwiPreprocessingConfig) -> int:
-    if config.eddy_threads is None:
+    eddy_threads = getattr(config, "eddy_threads", None)
+    if eddy_threads is None:
         return _default_eddy_threads()
-    if config.eddy_threads < 1:
+    if eddy_threads < 1:
         raise ValueError("eddy_threads must be >= 1.")
-    return int(config.eddy_threads)
+    return int(eddy_threads)
 
 
 def _resolved_eddy_options(config: DwiPreprocessingConfig) -> str:

@@ -76,7 +76,8 @@ class DDParcelPipelineTest(unittest.TestCase):
     def test_inference_moves_batches_to_selected_device(self) -> None:
         source = (REPO_ROOT / "anatomy" / "parcellation" / "DDSurfer_Pred.py").read_text(encoding="utf-8")
 
-        self.assertIn('images_batch.to(params_model["device"])', source)
+        self.assertIn('device=params_model["device"]', source)
+        self.assertIn("sub_batch.to(target_device", source)
         self.assertNotIn("images_batch = images_batch.cuda()", source)
 
 

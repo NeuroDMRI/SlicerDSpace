@@ -139,12 +139,12 @@ def _candidate_metadata_paths(raw: RawInputBundle, explicit: Optional[Path]) -> 
 
 
 def _parse_bvals(path: Path) -> list[float]:
-    return [float(token) for token in path.read_text(encoding="utf-8").split()]
+    return [float(token) for token in path.read_text(encoding="utf-8-sig").split()]
 
 
 def _parse_bvecs(path: Path) -> list[list[float]]:
     rows: list[list[float]] = []
-    for line in path.read_text(encoding="utf-8").splitlines():
+    for line in path.read_text(encoding="utf-8-sig").splitlines():
         stripped = line.strip()
         if stripped:
             rows.append([float(token) for token in stripped.split()])

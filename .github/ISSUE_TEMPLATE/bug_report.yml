@@ -1,0 +1,71 @@
+name: Bug Report / 问题反馈
+description: Report a bug, installation failure, GPU (CUDA/MPS) error, or pipeline issue in SlicerDSpace.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting an issue with **SlicerDSpace**! Please check the pinned **[FAQ]** issue first, and fill in the environment details below so we can reproduce and resolve it quickly.
+        感谢反馈问题！提交前可先查阅置顶的 **[FAQ]** 常见排查指南，并尽量附上环境自检与运行日志。
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Operating System & Architecture / 操作系统与架构
+      options:
+        - macOS Apple Silicon (arm64)
+        - Windows (x86_64)
+        - Linux (x86_64)
+        - macOS Intel (x86_64)
+    validations:
+      required: true
+  - type: input
+    id: slicer_version
+    attributes:
+      label: 3D Slicer Version / 3D Slicer 版本
+      description: SlicerDSpace v0.1.1 targets 3D Slicer 5.10.0.
+      placeholder: "3D Slicer 5.10.0 (r34045)"
+    validations:
+      required: true
+  - type: dropdown
+    id: install_method
+    attributes:
+      label: Installation Method / 安装方式
+      options:
+        - Website One-Click Setup Zip (SlicerDSpaceSetup-<OS>.zip)
+        - GitHub Release Base Package (Windows-x64.zip / Linux-x64.tar.gz / macOS-arm64.tar.gz)
+        - Source-Staged Install (stage_slicer_extension.py)
+        - CLI Script (Install-SlicerDSpace.bat / .command / .sh)
+    validations:
+      required: true
+  - type: dropdown
+    id: compute_device
+    attributes:
+      label: Compute Device / 计算设备
+      options:
+        - Auto
+        - CUDA GPU
+        - Apple MPS
+        - CPU
+    validations:
+      required: true
+  - type: input
+    id: stage
+    attributes:
+      label: Affected Stage / 出错环节
+      placeholder: "e.g., Installer, Environment Check, Input Import, Preprocessing, DDSeg/DDParcel/DDSurfer, DTI/DKI/NODDI, CSD/UKF/SAF, WMA/TractCloud, Connectome"
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: What Happened & Reproduction Steps / 问题描述与复现步骤
+      placeholder: Describe what you selected, what happened, and any error dialog text.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Environment Check & Run Log / 环境检查报告与运行日志
+      description: Paste relevant lines from the Environment Check output, Slicer Python Console, or `<output>/<subject>/06_qc/` logs.
+      render: text

@@ -18,7 +18,7 @@ def pending_setup():
         path = pending_path()
         if path.is_symlink():
             return None
-        record = json.loads(path.read_text())
+        record = json.loads(path.read_text(encoding="utf-8"))
         token = record.get("request", "")
         if record.get("kind") != KIND or not token or token in {'.', '..'} or Path(token).name != token:
             return None

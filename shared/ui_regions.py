@@ -391,7 +391,7 @@ def inspect_regions(owner):
             invalidate_catalog(owner)
             return
         try:
-            data = json.loads(catalog.read_text())
+            data = json.loads(catalog.read_text(encoding="utf-8"))
             widgets["regions"].clear()
             widgets["metric_list"].clear()
             for region in data["regions"]:
@@ -535,7 +535,7 @@ def analyze_regions(owner):
                 return
             try:
                 manifest = directory / "region_analysis_manifest.json"
-                record = json.loads(manifest.read_text())
+                record = json.loads(manifest.read_text(encoding="utf-8"))
                 if record.get("status") != "completed":
                     raise RuntimeError("Regional job did not publish completed outputs")
                 loaded = owner.logic.loadKeyResultsFromManifest(manifest, automatic=True)

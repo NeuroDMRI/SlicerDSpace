@@ -42,13 +42,104 @@ def query_cuda_free_total_bytes(device: Any = None) -> tuple[int, int] | None:
         return None
 
 
+def is_mps_available(torch_mod: Any = None) -> bool:
+    """Return True when PyTorch Apple Metal (MPS) backend is available."""
+    try:
+        mod = torch_mod
+        if mod is None:
+            import torch as mod
+
+        mps_mod = getattr(getattr(mod, "backends", None), "mps", None)
+        fn = getattr(mps_mod, "is_available", None)
+        return bool(callable(fn) and fn() is True)
+    except Exception:
+        return False
+
+
+def query_mps_free_total_bytes() -> tuple[int, int] | None:
+    """Return conservative ``(free_bytes, total_bytes)`` for Apple MPS unified memory."""
+    try:
+        import torch
+
+        if not is_mps_available(torch):
+            return None
+        mps_ns = getattr(torch, "mps", None)
+        rec_fn = getattr(mps_ns, "recommended_max_memory", None)
+        total_b = int(rec_fn()) if callable(rec_fn) else 0
+        if total_b <= 0:
+            total_b = max(int(2 * GIB), int(query_host_available_ram_bytes() * 0.60))
+        cur_fn = getattr(mps_ns, "current_allocated_memory", None)
+        drv_fn = getattr(mps_ns, "driver_allocated_memory", None)
+        used_cur = int(cur_fn()) if callable(cur_fn) else 0
+        used_drv = int(drv_fn()) if callable(drv_fn) else 0
+        used_b = max(0, used_cur, used_drv)
+        cap_env = os.environ.get("SLICERDSPACE_MAX_VRAM_GIB", "").strip()
+        if cap_env:
+            try:
+                cap_b = int(float(cap_env) * GIB)
+                if cap_b > 0:
+                    total_b = min(total_b, cap_b)
+            except ValueError:
+                pass
+        free_b = max(int(64 * MIB), total_b - used_b)
+        return int(free_b), int(total_b)
+    except Exception:
+        return None
+
+
+def query_gpu_free_total_bytes(device: Any = None) -> tuple[int, int] | None:
+    """Return ``(free_bytes, total_bytes)`` for CUDA or MPS ``device``."""
+    try:
+        import torch
+
+        if device is not None:
+            dev = device if isinstance(device, torch.device) else torch.device(str(device))
+            if dev.type == "mps":
+                return query_mps_free_total_bytes()
+            if dev.type == "cuda":
+                return query_cuda_free_total_bytes(dev)
+            return None
+    except Exception:
+        pass
+    info = query_cuda_free_total_bytes(device)
+    if info is not None:
+        return info
+    return query_mps_free_total_bytes()
+
+
 def is_cuda_oom(exc: BaseException) -> bool:
-    """Return True when ``exc`` represents a CUDA out-of-memory condition."""
+    """Return True when ``exc`` represents a CUDA or Apple MPS out-of-memory condition."""
     msg = str(exc).lower()
-    if "out of memory" in msg and ("cuda" in msg or "cublas" in msg or "cudnn" in msg or "alloc" in msg):
+    if "out of memory" in msg and ("cuda" in msg or "cublas" in msg or "cudnn" in msg or "alloc" in msg or "mps" in msg):
+        return True
+    if "mps backend out of memory" in msg or "invalid buffer size" in msg or "mtlbuffer" in msg:
+        return True
+    if "metal" in msg and "memory" in msg:
         return True
     cls_name = type(exc).__name__.lower()
     return "outofmemory" in cls_name
+
+
+is_gpu_oom = is_cuda_oom
+
+
+def empty_gpu_cache_safely() -> None:
+    """Synchronize/release cached GPU allocator blocks on initialized CUDA or MPS backends."""
+    try:
+        import torch
+
+        if torch.cuda.is_available() and torch.cuda.is_initialized():
+            torch.cuda.empty_cache()
+        if is_mps_available(torch):
+            mps_ns = getattr(torch, "mps", None)
+            sync_fn = getattr(mps_ns, "synchronize", None)
+            empty_fn = getattr(mps_ns, "empty_cache", None)
+            if callable(sync_fn):
+                sync_fn()
+            if callable(empty_fn):
+                empty_fn()
+    except Exception:
+        pass
 
 
 def empty_cuda_cache_safely() -> None:
@@ -80,6 +171,26 @@ def adaptive_cuda_batch_size(
     denom = max(1, int(per_item_bytes))
     fitted = budget // denom
     return max(int(min_batch), min(int(max_batch), min(base, int(fitted)) if free_b < 12 * GIB else min(int(max_batch), max(base, min(base, int(fitted))))))
+
+
+def adaptive_gpu_scaled_batch(
+    per_item_bytes: int,
+    default_batch: int,
+    *,
+    min_batch: int = 64,
+    max_batch: int = 131072,
+    safety_fraction: float = 0.30,
+    device: Any = None,
+) -> int:
+    """Scale batch size down on low-memory CUDA or MPS GPUs while preserving ``default_batch`` when memory suffices."""
+    base = max(int(min_batch), min(int(max_batch), int(default_batch)))
+    info = query_gpu_free_total_bytes(device)
+    if info is None:
+        return base
+    free_b, _ = info
+    budget = max(int(32 * MIB), int(free_b * float(safety_fraction)))
+    max_safe = max(int(min_batch), budget // max(1, int(per_item_bytes)))
+    return max(int(min_batch), min(base, max_safe))
 
 
 def adaptive_cuda_scaled_batch(

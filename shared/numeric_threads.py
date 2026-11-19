@@ -40,7 +40,13 @@ def numerical_threads(threads, *, workers=1):
     if reservation and threads * workers > int(reservation):
         raise ValueError('Numerical workers/threads exceed the admitted CPU reservation')
     from threadpoolctl import threadpool_limits
-    keys = ('OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'MKL_NUM_THREADS')
+    keys = (
+        'OMP_NUM_THREADS',
+        'OPENBLAS_NUM_THREADS',
+        'MKL_NUM_THREADS',
+        'VECLIB_MAXIMUM_THREADS',
+        'NUMEXPR_NUM_THREADS',
+    )
     previous = {key: os.environ.get(key) for key in keys}
     try:
         os.environ.update({key: str(threads) for key in keys})

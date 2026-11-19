@@ -105,8 +105,14 @@ def install_requirements(requirements, *, protected=True, loaded=(), torch_minim
             constraints = Path(temporary) / "constraints.txt"
             pinned = installed_versions() if protected else {}
             _, _, canonicalize_name = _packaging_api()
-            constraints.write_text("".join(f"{name}=={pinned[canonicalize_name(name)]}\n"
-                                           for name in PROTECTED_PACKAGES if canonicalize_name(name) in pinned))
+            constraints.write_text(
+                "".join(
+                    f"{name}=={pinned[canonicalize_name(name)]}\n"
+                    for name in PROTECTED_PACKAGES
+                    if canonicalize_name(name) in pinned
+                ),
+                encoding="utf-8",
+            )
             try:
                 packaging = importlib.import_module("slicer.packaging")
             except ModuleNotFoundError as exc:

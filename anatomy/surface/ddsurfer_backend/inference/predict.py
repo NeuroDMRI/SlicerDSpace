@@ -113,8 +113,12 @@ class SurfacePredictor:
             torch.backends.cuda.matmul.allow_tf32 = False
             torch.backends.cudnn.allow_tf32 = False
         self.precision = resolve_precision(args.precision, self.device, self.config['precision'])
-        self.models = {surface: load_model(self.checkpoint_dir / entry['checkpoint_file'], entry['sha256'], architecture, self.device)
-                       for surface, entry in self.entries.items()}
+        self.architecture = architecture
+        self._lazy_mps_models = self.device.type == 'mps' and len(self.entries) > 1
+        self.models = {} if self._lazy_mps_models else {
+            surface: load_model(self.checkpoint_dir / entry['checkpoint_file'], entry['sha256'], architecture, self.device)
+            for surface, entry in self.entries.items()
+        }
         LOG.info('Predicting %s hemisphere with %s precision', args.surf_hemi, self.precision)
 
     def load_volumes(self, folder, volume_cache=None):
@@ -148,10 +152,26 @@ class SurfacePredictor:
         directory = self.args.output_dir / 'mni' / folder.name
         directory.mkdir(parents=True, exist_ok=True)
         for surface in ('white', 'pial'):
-            if surface not in self.models:
+            if surface not in self.entries:
                 continue
+            model = self.models.get(surface)
+            if model is None:
+                entry = self.entries[surface]
+                model = load_model(self.checkpoint_dir / entry['checkpoint_file'], entry['sha256'], self.architecture, self.device)
             with precision_context(self.precision, self.device):
-                raw = self.models[surface](vertices, volumes)
+                raw = model(vertices, volumes)
+            if self._lazy_mps_models:
+                del model
+                if hasattr(torch, 'mps'):
+                    if hasattr(torch.mps, 'synchronize'):
+                        torch.mps.synchronize()
+                    if hasattr(torch.mps, 'empty_cache'):
+                        torch.mps.empty_cache()
+            elif self.device.type == 'mps' and hasattr(torch, 'mps'):
+                if hasattr(torch.mps, 'empty_cache'):
+                    torch.mps.empty_cache()
+            elif self.device.type == 'cuda' and torch.cuda.is_initialized():
+                torch.cuda.empty_cache()
             if not torch.isfinite(raw).all():
                 raise FloatingPointError(f'Nonfinite {surface} prediction: {folder.name}')
             iterations = self.entries[surface]['postprocess_iters']

@@ -121,7 +121,12 @@ class AcceleratedNumericsParityTests(unittest.TestCase):
 
         ref_gibbs = gibbs_removal(vol[..., :4].copy(), slice_axis=2, n_points=3, inplace=False)
         opt_gibbs = gibbs_removal_accelerated(vol[..., :4].copy(), slice_axis=2, n_points=3, device="cpu", max_workers=2)
-        np.testing.assert_allclose(opt_gibbs, ref_gibbs, rtol=1e-5, atol=1e-4)
+        # In float32 under Rosetta 2 NumPy complex64 np.abs() 1-ULP alignment jitter can flip a discrete TV tie.
+        np.testing.assert_allclose(opt_gibbs, ref_gibbs, rtol=5e-4, atol=5e-2)
+        self.assertGreaterEqual(float(np.mean(np.isclose(opt_gibbs, ref_gibbs, rtol=1e-5, atol=1e-4))), 0.99)
+        ref_gibbs64 = gibbs_removal(vol[..., :4].astype(np.float64), slice_axis=2, n_points=3, inplace=False)
+        opt_gibbs64 = gibbs_removal_accelerated(vol[..., :4].astype(np.float64), slice_axis=2, n_points=3, device="cpu", max_workers=2)
+        np.testing.assert_allclose(opt_gibbs64, ref_gibbs64, rtol=1e-12, atol=1e-12)
 
         # Dual covariance path (dim > num_samples, e.g. 5x5x5=125 < 140) + constant/zero-patch short-circuit
         vol_dual_64 = (80.0 + 12.0 * rng.standard_normal((8, 8, 7, 140))).astype(np.float64)

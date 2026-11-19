@@ -729,6 +729,8 @@ def _detect_mps_devices() -> tuple[tuple[str, str], ...]:
                     ["sysctl", "-n", "hw.optional.arm64"],
                     capture_output=True,
                     text=True,
+                    encoding="utf-8",
+                    errors="replace",
                     timeout=1.5,
                 )
                 available = proc.returncode == 0 and proc.stdout.strip() == "1"
@@ -745,6 +747,8 @@ def _detect_mps_devices() -> tuple[tuple[str, str], ...]:
             ["sysctl", "-n", "machdep.cpu.brand_string"],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=1.5,
         )
         if proc.returncode == 0:
@@ -791,7 +795,13 @@ def _detect_cuda_devices() -> tuple[tuple[str, str], ...]:
                 smi = cand
         if smi:
             try:
-                kwargs: dict[str, Any] = {"capture_output": True, "text": True, "timeout": 1.5}
+                kwargs: dict[str, Any] = {
+                    "capture_output": True,
+                    "text": True,
+                    "encoding": "utf-8",
+                    "errors": "replace",
+                    "timeout": 1.5,
+                }
                 if sys.platform == "win32":
                     kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
                 proc = subprocess.run([smi, "--query-gpu=index,name", "--format=csv,noheader"], **kwargs)

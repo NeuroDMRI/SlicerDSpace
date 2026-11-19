@@ -318,7 +318,7 @@ class TemporalAttentionNet(nn.Module):
 
 @lru_cache(maxsize=1)
 def _mps_supports_conv3d() -> bool:
-    """Return True if the active PyTorch MPS runtime executes Conv3D and ConvTranspose3D."""
+    """Return True if the active PyTorch MPS runtime executes Conv3D."""
     try:
         mps_mod = getattr(getattr(torch, "backends", None), "mps", None)
         fn = getattr(mps_mod, "is_available", None)
@@ -327,7 +327,6 @@ def _mps_supports_conv3d() -> bool:
         x = torch.zeros((1, 1, 2, 2, 2), dtype=torch.float32, device="mps")
         w = torch.zeros((1, 1, 1, 1, 1), dtype=torch.float32, device="mps")
         _ = F.conv3d(x, w)
-        _ = F.conv_transpose3d(x, w)
         return True
     except Exception:
         return False

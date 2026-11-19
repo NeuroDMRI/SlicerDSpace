@@ -132,11 +132,11 @@ def _normalize_wma_gpu_mode(device: str) -> str:
     normalized = (device or "auto").strip().lower()
     if normalized == "auto":
         return "auto"
-    if normalized in {"cpu", "off", "false", "0"}:
+    if normalized in {"cpu", "mps", "off", "false", "0"}:
         return "off"
-    if normalized in {"cuda", "gpu", "on", "true", "1"}:
+    if normalized in {"cuda", "gpu", "on", "true", "1"} or normalized.startswith("cuda:"):
         return "on"
-    raise ValueError("WMA device must be 'auto', 'cpu', or 'cuda'.")
+    raise ValueError("WMA device must be 'auto', 'cpu', 'mps', or 'cuda'.")
 
 
 @dataclass(frozen=True)

@@ -129,8 +129,8 @@ Set up the required dependencies and download the corresponding model weights.
 
 The Agent checks storage space and existing resources, waits for your choice,
 and saves the selected path for GUI and CLI use. It downloads only the resources
-needed by your selected analyses. Repository access is required while it is private;
-you can provide an authorized local checkout if the Agent cannot open the URL.
+needed by your selected analyses. If the local network cannot reach GitHub directly,
+you can provide a mirror, proxy, or local checkout.
 Confirm licenses and restarts when requested.
 
 **Use an existing installation.** Replace the input and output paths in this example:
@@ -170,8 +170,7 @@ Install via **View > Extensions Manager > top-right wrench icon > Install Extens
 
 ### Option C: Stage From Source (Developers)
 
-Use an authorized checkout while the repository is private. This lightweight
-source installation omits the website and historical reports; a full checkout
+This lightweight source installation omits the website and historical reports; a full checkout
 retains development tests and research materials.
 
 ```bash

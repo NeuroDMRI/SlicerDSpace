@@ -42,26 +42,55 @@ def interruptible_run():
             signal.signal(signal.SIGTERM, previous)
 
 
+def _terminate_process_tree(process):
+    if os.name == "posix":
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        try:
+            process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            pass
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.wait()
+        return
+    if process.poll() is None:
+        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+        try:
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(process.pid)],
+                check=False,
+                capture_output=True,
+                creationflags=creationflags,
+            )
+        except OSError:
+            pass
+    if process.poll() is None:
+        try:
+            process.terminate()
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+    process.wait()
+
+
 def wait_command(command, **kwargs):
-    process = subprocess.Popen(command, start_new_session=True, **kwargs)
+    if os.name == "posix":
+        kwargs.setdefault("start_new_session", True)
+    elif os.name == "nt":
+        creationflags = int(kwargs.get("creationflags", 0) or 0)
+        kwargs["creationflags"] = creationflags | getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    process = subprocess.Popen(command, **kwargs)
     try:
         status = process.wait()
     except BaseException:
         # Stop the whole stage before releasing the subject lock, including shell children.
         with interruptible_cleanup():
-            try:
-                os.killpg(process.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-            try:
-                process.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                pass
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            process.wait()
+            _terminate_process_tree(process)
         raise
     return status
 

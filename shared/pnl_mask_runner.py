@@ -300,6 +300,13 @@ def _install_pnl_runtime_accelerations() -> None:
                     dummy = torch.zeros((32, 1, 256, 256), dtype=torch.float32, device=resolved_dev)
                     _ = mdl(dummy, segmentation_only=True)
                     torch.cuda.synchronize()
+                elif str(resolved_dev).startswith("mps"):
+                    dummy = torch.zeros((16, 1, 256, 256), dtype=torch.float32, device=resolved_dev)
+                    _ = mdl(dummy, segmentation_only=True)
+                    mps_ns = getattr(torch, "mps", None)
+                    sync_fn = getattr(mps_ns, "synchronize", None)
+                    if callable(sync_fn):
+                        sync_fn()
                 return states, mdl
 
             with ThreadPoolExecutor(max_workers=1) as preload_pool:
@@ -326,15 +333,20 @@ def _install_pnl_runtime_accelerations() -> None:
                 staged.unlink(missing_ok=True)
         receipt = {**selection, "package_version": pnl_pipe.__version__, "source_commit": pnl_weights.SOURCE_COMMIT,
                    "input_sha256": pnl_weights.sha256(input_path), "output_sha256": pnl_weights.sha256(output_path),
-                   "weights": json.loads((Path(model_dir) / "weights.json").read_text()),
+                   "weights": json.loads((Path(model_dir) / "weights.json").read_text(encoding="utf-8")),
                    "template_sha256": pnl_weights.TEMPLATE_SHA256, "percentile": percentile,
                    "view_weights": [0.1, 0.4, 0.5], "threshold": 0.45,
                    "inverse_interpolation": "ANTs default linear then FillHoles and uint8 cast",
                    "human_anatomical_review": "pending"}
         if record:
-            Path(record).write_text(json.dumps(receipt, indent=2) + "\n")
+            Path(record).write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
         return receipt
 
+    def _patched_select_device(requested_arg: str, torch_mod=None):
+        eff = os.environ.get("SLICERDSPACE_PNL_REQUESTED_DEVICE") or requested_arg
+        return select_device(eff, torch=torch_mod)
+
+    pnl_inf.select_device = _patched_select_device
     pnl_mod.CompNet.forward = _fast_forward
     pnl_inf.predict = _fast_predict
     pnl_pipe.predict = _fast_predict
@@ -359,8 +371,10 @@ def main(argv=None):
             script_args = script_args[1:]
         if script_args[:1] != ["mask"]:
             raise ValueError("PNL Torch launcher requires the standalone 'mask' subcommand")
+        os.environ["SLICERDSPACE_PNL_REQUESTED_DEVICE"] = args.device
         _install_pnl_runtime_accelerations()
-        sys.argv = [str(args.script), *script_args, "--device", args.device, "--record", str(args.record)]
+        cli_device = "auto" if args.device == "mps" else args.device
+        sys.argv = [str(args.script), *script_args, "--device", cli_device, "--record", str(args.record)]
         runpy.run_path(str(args.script), run_name="__main__")
     except Exception as exc:
         record.update(status="blocked", error=str(exc))

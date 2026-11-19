@@ -11,12 +11,13 @@ import tempfile
 import urllib.request
 
 from shared.backend_sources import file_hash, source_lock
+from shared.external_process import subprocess_no_window_kwargs, text_subprocess_kwargs
 
 CATALOG = Path(__file__).resolve().parents[1] / 'models/runtime_bundles.json'
 
 
 def bundle_for_platform(system=None, machine=None):
-    payload = json.loads(CATALOG.read_text())
+    payload = json.loads(CATALOG.read_text(encoding='utf-8'))
     selected_system = system or platform.system()
     selected_machine = (machine or platform.machine()).lower()
     if machine is None and system is None and selected_system == 'Darwin' and selected_machine in ('x86_64', 'amd64'):
@@ -63,20 +64,31 @@ def prepare(*, prefix=None, asset_root=None, execute=False, accept_terms=False, 
     script = Path(__file__).resolve().parents[1] / 'scripts/probe_surface_runtime.py'
 
     def validate(path):
-        probe = subprocess.run([python_executable(sys.executable), str(script), '--backend', 'native', '--home', str(path)],
-                               env=backend_environment(), capture_output=True, text=True, check=True, timeout=180)
+        probe = subprocess.run(
+            [python_executable(sys.executable), str(script), '--backend', 'native', '--home', str(path)],
+            env=backend_environment(),
+            capture_output=True,
+            check=True,
+            timeout=180,
+            **subprocess_no_window_kwargs(**text_subprocess_kwargs()),
+        )
         checked = json.loads(probe.stdout.strip().splitlines()[-1])
         if not checked.get('components_available'):
             raise ValueError(checked.get('error', 'Prebuilt runtime functionality check failed'))
-        manifest = json.loads((path / 'runtime.json').read_text())
+        manifest = json.loads((path / 'runtime.json').read_text(encoding='utf-8'))
         if manifest.get('recipe_sha256') != record['recipe_sha256'] or manifest.get('activation_key_included') is not False:
             raise ValueError('Prebuilt runtime recipe or activation policy differs')
         checked_commands = []
         for relative in sorted(manifest['files']):
             if not relative.startswith('bin/') or relative.lower().endswith('.dll'):
                 continue
-            command = subprocess.run([str(path / relative), '--version'], env=backend_environment(),
-                                     capture_output=True, text=True, timeout=30)
+            command = subprocess.run(
+                [str(path / relative), '--version'],
+                env=backend_environment(),
+                capture_output=True,
+                timeout=30,
+                **subprocess_no_window_kwargs(**text_subprocess_kwargs()),
+            )
             if command.returncode or not (command.stdout or command.stderr).strip():
                 raise RuntimeError('Prebuilt native command could not start: ' + relative)
             checked_commands.append(relative + ':version')

@@ -10,6 +10,7 @@ import threading
 import time
 
 from shared.cohort_profile import StageMonitor
+from shared.external_process import subprocess_no_window_kwargs, text_subprocess_kwargs
 
 
 def gpu_sample(pids, executable=None):
@@ -17,8 +18,13 @@ def gpu_sample(pids, executable=None):
     if not executable:
         return dict(available=False, reason='nvidia-smi unavailable', owned_vram_mib=None, devices=[])
     def query(kind, fields):
-        result = subprocess.run([executable, '--query-'+kind+'='+fields, '--format=csv,noheader,nounits'],
-                                capture_output=True, text=True, timeout=2, check=True)
+        result = subprocess.run(
+            [executable, '--query-'+kind+'='+fields, '--format=csv,noheader,nounits'],
+            capture_output=True,
+            timeout=2,
+            check=True,
+            **subprocess_no_window_kwargs(**text_subprocess_kwargs()),
+        )
         return list(csv.reader(io.StringIO(result.stdout), skipinitialspace=True))
     try:
         devices = [dict(uuid=row[0], utilization_percent=float(row[1]), used_mib=float(row[2]))

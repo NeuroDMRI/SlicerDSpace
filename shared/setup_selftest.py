@@ -18,7 +18,7 @@ def receipt_warnings(receipt_paths):
     found = []
     for path in receipt_paths:
         try:
-            found.extend(str(text) for text in json.loads(Path(path).read_text()).get('warnings') or ())
+            found.extend(str(text) for text in json.loads(Path(path).read_text(encoding='utf-8')).get('warnings') or ())
         except (OSError, ValueError, AttributeError):
             continue
     return found
@@ -71,7 +71,7 @@ def requests_for_report(report, *, asset_root=None, repo_root=None, backend_path
             group['devices'] = ['cpu']
     if groups and repo_root is not None:
         from shared.model_assets import model_asset_path_or_none
-        manifest = json.loads((Path(repo_root) / 'models/assets_manifest.json').read_text())
+        manifest = json.loads((Path(repo_root) / 'models/assets_manifest.json').read_text(encoding='utf-8'))
         torch_groups = [g for g in groups.values() if 'torch' in g['imports']]
         if torch_groups:
             for profile in ('segmentation', 'parcellation', 'surface'):
@@ -227,8 +227,15 @@ def _run_tool(argv, env):
                     existing = env.get('PYTHONPATH', '')
                     env['PYTHONPATH'] = f'{lib_dir}{os.pathsep}{existing}' if existing else str(lib_dir)
     try:
-        return subprocess.run(cmd, capture_output=True, text=True,
-                              timeout=TOOL_TIMEOUT_SECONDS, env=env)
+        from shared.external_process import subprocess_no_window_kwargs, text_subprocess_kwargs
+
+        return subprocess.run(
+            cmd,
+            capture_output=True,
+            timeout=TOOL_TIMEOUT_SECONDS,
+            env=env,
+            **subprocess_no_window_kwargs(**text_subprocess_kwargs()),
+        )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise RuntimeError(f'{Path(str(argv[0])).name} could not run: {type(exc).__name__}: {exc}') from exc
 

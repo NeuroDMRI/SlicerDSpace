@@ -187,39 +187,47 @@ def open_fast_gzip_reader(path: Path):
 
     decompressor = shutil.which("pigz") or (shutil.which("gzip") if sys.platform != "win32" else None)
     if decompressor:
-        proc = subprocess.Popen(
-            [decompressor, "-dc", str(source)],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            bufsize=_STREAM_CHUNK_BYTES,
-        )
-        reader = _ProcessStreamReader(proc, source)
-        exc_active = False
+        from shared.external_process import external_python_environment, subprocess_no_window_kwargs
+
         try:
-            yield reader
-        except BaseException:
-            exc_active = True
-            raise
-        finally:
-            if not reader.verified:
-                try:
-                    if reader._stdout and not reader._stdout.closed:
-                        reader._stdout.close()
-                except Exception:
-                    pass
-                if exc_active or not reader.saw_eof:
+            proc = subprocess.Popen(
+                [decompressor, "-dc", str(source)],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                env=external_python_environment(),
+                bufsize=_STREAM_CHUNK_BYTES,
+                **subprocess_no_window_kwargs(),
+            )
+        except OSError:
+            proc = None
+        if proc is not None:
+            reader = _ProcessStreamReader(proc, source)
+            exc_active = False
+            try:
+                yield reader
+            except BaseException:
+                exc_active = True
+                raise
+            finally:
+                if not reader.verified:
                     try:
-                        proc.terminate()
-                        proc.wait(timeout=2.0)
+                        if reader._stdout and not reader._stdout.closed:
+                            reader._stdout.close()
                     except Exception:
+                        pass
+                    if exc_active or not reader.saw_eof:
                         try:
-                            proc.kill()
+                            proc.terminate()
                             proc.wait(timeout=2.0)
                         except Exception:
-                            pass
-                else:
-                    reader.finish()
-        return
+                            try:
+                                proc.kill()
+                                proc.wait(timeout=2.0)
+                            except Exception:
+                                pass
+                    else:
+                        reader.finish()
+            return
 
     reader = _ThreadedGzipReader(source)
     try:

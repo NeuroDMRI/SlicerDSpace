@@ -70,9 +70,9 @@ def wls_iter(design_matrix, sig, S0, *, Diso=3e-3, mdreg=2.7e-3,
 
 def _resolve_fw_device(device: str) -> str:
     requested = (device or "cpu").strip().lower()
-    if requested not in {"cpu", "cuda", "auto"}:
-        raise ValueError(f"Unsupported Free Water device '{device}'; expected 'cpu', 'cuda', or 'auto'")
-    if requested == "cpu":
+    if requested not in {"cpu", "cuda", "mps", "auto"} and not requested.startswith("cuda:"):
+        raise ValueError(f"Unsupported Free Water device '{device}'; expected 'cpu', 'cuda', 'mps', or 'auto'")
+    if requested in {"cpu", "mps"}:
         return "cpu"
     try:
         import torch
@@ -80,6 +80,8 @@ def _resolve_fw_device(device: str) -> str:
     except ImportError:
         has_cuda = False
     if requested == "cuda" and not has_cuda:
+        raise RuntimeError("CUDA device requested for Free Water WLS, but torch.cuda.is_available() is False")
+    if requested.startswith("cuda:") and not has_cuda:
         raise RuntimeError("CUDA device requested for Free Water WLS, but torch.cuda.is_available() is False")
     return "cuda" if has_cuda else "cpu"
 

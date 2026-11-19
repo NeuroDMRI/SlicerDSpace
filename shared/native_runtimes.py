@@ -320,7 +320,7 @@ def install_bundle(record, *, archive=None, root=None, accept_terms=False):
             }
             if has_tree_sha256:
                 receipt["tree_sha256"] = tree_sha256
-            (stage / "native-runtime.json").write_text(json.dumps(receipt, indent=2) + "\n")
+            (stage / "native-runtime.json").write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
             stage.rename(dest)
         return dest
     finally:

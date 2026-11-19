@@ -69,7 +69,7 @@ def _resolve_device(requested: str | None) -> str:
     req = (requested or "auto").strip().lower()
     if req == "auto":
         req = os.environ.get("SLICERDSPACE_WMQL_DEVICE", "auto").strip().lower()
-    if req not in {"auto", "cpu", "cuda"} and not req.startswith("cuda:"):
+    if req not in {"auto", "cpu", "cuda", "mps"} and not req.startswith("cuda:"):
         raise ValueError(f"Unsupported WMQL device {req!r}.")
     return "cpu"
 

@@ -70,8 +70,8 @@ def create_schedule(directory, *, cpu_budget, memory_gb, stage_cpus, stage_memor
                   cpu_affinity=affinity[:int(cpu_budget)],
                   scope='Linux stage CPU affinity; declared RAM/GPU reservations, not cgroup or per-device VRAM limits',
                   parent_pid=os.getpid(), parent_created=psutil.Process().create_time())
-    (folder / 'config.json').write_text(json.dumps(config, indent=2) + '\n')
-    (folder / 'state.json').write_text(json.dumps(dict(waiting=[], active=[])))
+    (folder / 'config.json').write_text(json.dumps(config, indent=2) + '\n', encoding='utf-8')
+    (folder / 'state.json').write_text(json.dumps(dict(waiting=[], active=[])), encoding='utf-8')
     return folder
 
 
@@ -93,7 +93,7 @@ def _event(folder, row, event, **extra):
 
 def _write(folder, state):
     tmp = folder / 'state.tmp'
-    tmp.write_text(json.dumps(state))
+    tmp.write_text(json.dumps(state), encoding='utf-8')
     tmp.replace(folder / 'state.json')
 
 
@@ -130,7 +130,7 @@ def _inherited_lease(folder):
         return False
     ancestors = {process.pid for process in psutil.Process().parents()}
     with cache_lock(folder / 'lock'):
-        state = json.loads((folder / 'state.json').read_text())
+        state = json.loads((folder / 'state.json').read_text(encoding='utf-8'))
         return any(row['id'] == token and row['pid'] in ancestors and _alive(row) for row in state['active'])
 
 
@@ -158,7 +158,7 @@ def stage_admission(name, *, gpu=False):
         return
     folder = Path(selected)
     import psutil
-    config = json.loads((folder / 'config.json').read_text())
+    config = json.loads((folder / 'config.json').read_text(encoding='utf-8'))
     parent=dict(pid=config['parent_pid'],created=config['parent_created'])
     if not _alive(parent):
         raise InterruptedError('Cohort coordinator exited; no new computation admitted')
@@ -223,7 +223,7 @@ def stage_admission(name, *, gpu=False):
             if not _alive(parent):
                 raise InterruptedError('Cohort coordinator exited while waiting for resources')
             with cache_lock(folder / 'lock'):
-                state = json.loads((folder / 'state.json').read_text())
+                state = json.loads((folder / 'state.json').read_text(encoding='utf-8'))
                 for key in ('active', 'waiting'):
                     for dead in [item for item in state[key] if not _alive(item)]:
                         _event(folder, dead, 'abandoned')
@@ -299,7 +299,7 @@ def stage_admission(name, *, gpu=False):
             else:
                 os.environ[LEASE] = previous
         with cache_lock(folder / 'lock'):
-            state = json.loads((folder / 'state.json').read_text())
+            state = json.loads((folder / 'state.json').read_text(encoding='utf-8'))
             for key in ('active', 'waiting'):
                 state[key] = [item for item in state[key] if item['id'] != row['id']]
             _event(folder, row, outcome if admitted else 'cancelled', elapsed_seconds=time.monotonic() - began,
@@ -320,9 +320,19 @@ def scheduled_stage(name, *, gpu=False):
         def wrapped(*args, **kwargs):
             requested = gpu
             config = kwargs.get('config') or kwargs.get('cfg') or (args[0] if args else None)
-            if str(getattr(config, 'device', 'auto')).lower() == 'cpu':
-                requested = False
             stage = name(config) if callable(name) else name
+            dev_attrs = {
+                'brain_mask': ('brain_mask_device', 'device'),
+                'preprocessing': ('dipy_device', 'brain_mask_device', 'device'),
+                'microstructure_freewater': ('free_water_device', 'device'),
+                'microstructure_noddi': ('noddi_device', 'device'),
+            }.get(stage, ('device',))
+            resolved_dev = next(
+                (str(getattr(config, attr)).strip().lower() for attr in dev_attrs if getattr(config, attr, None) is not None),
+                'auto',
+            )
+            if resolved_dev == 'cpu':
+                requested = False
             from shared.cohort_io import gpu_admission
             ctx_token = _call_context.set((function, args, kwargs))
             try:
@@ -336,7 +346,7 @@ def scheduled_stage(name, *, gpu=False):
                             reservation['cache_hit'] = True
                         return result
                     finally:
-                        # A finished in-process inference must not retain unused CUDA
+                        # A finished in-process inference must not retain unused GPU
                         # allocator blocks while another participant takes the slot.
                         torch = sys.modules.get('torch') if requested and os.environ.get(ENV) else None
                         cuda = getattr(torch, 'cuda', None)
@@ -346,6 +356,14 @@ def scheduled_stage(name, *, gpu=False):
                                     with cuda.device(device):
                                         cuda.synchronize()
                                         cuda.empty_cache()
+                        mps_backend = getattr(getattr(torch, 'backends', None), 'mps', None)
+                        mps_fn = getattr(mps_backend, 'is_available', None)
+                        if torch is not None and callable(mps_fn) and mps_fn() is True:
+                            mps_ns = getattr(torch, 'mps', None)
+                            if callable(getattr(mps_ns, 'synchronize', None)):
+                                mps_ns.synchronize()
+                            if callable(getattr(mps_ns, 'empty_cache', None)):
+                                mps_ns.empty_cache()
             finally:
                 if ctx_token is not None:
                     _call_context.reset(ctx_token)

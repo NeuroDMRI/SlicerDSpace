@@ -94,7 +94,7 @@ def run(config, *, log=None):
     def publish():
         destination.parent.mkdir(parents=True, exist_ok=True)
         temporary = destination.with_suffix('.json.tmp')
-        temporary.write_text(json.dumps(payload, indent=2, default=str) + "\n")
+        temporary.write_text(json.dumps(payload, indent=2, default=str) + "\n", encoding="utf-8")
         temporary.replace(destination)
 
     publish()
@@ -108,7 +108,7 @@ def run(config, *, log=None):
             log("[Algorithms] Starting tracking variant: " + child.tractography_backend)
         try:
             result = run_subject_products(child, log=log)
-            record = json.loads(result.run_manifest_path.read_text())
+            record = json.loads(result.run_manifest_path.read_text(encoding="utf-8"))
             entry.update(manifest_path=str(result.run_manifest_path), status=record.get('status', 'finished'))
             for task in record.get("tasks", []):
                 shared = task["name"].split('.', 1)[0] in SHARED or task["name"].startswith(("microstructure.", "surface."))
@@ -117,7 +117,7 @@ def run(config, *, log=None):
         except Exception as exc:
             entry['status'] = 'failed'
             try:
-                failed = json.loads(child_path.read_text())
+                failed = json.loads(child_path.read_text(encoding='utf-8'))
                 for task in failed.get('tasks', []):
                     shared = task['name'].split('.', 1)[0] in SHARED or task['name'].startswith(('microstructure.', 'surface.'))
                     tasks.append(dict(task, name=task['name'] + ('' if shared else '@' + child.tractography_backend),

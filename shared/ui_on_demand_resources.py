@@ -149,10 +149,22 @@ def _surface_runtime_ready(explicit_fs_home: str | None = None) -> bool:
     except Exception:
         pass
     try:
-        from shared.prebuilt_surface import install_prefix
+        from shared.surface_runtime import (
+            bundled_surface_runtime,
+            default_surface_runtime,
+            is_valid_surface_runtime_dir,
+            resolve_surface_runtime,
+        )
 
-        prefix = install_prefix()
-        if (prefix / "runtime.json").is_file():
+        if bundled_surface_runtime() is not None:
+            return True
+        prefix = default_surface_runtime()
+        if (prefix / "runtime.json").is_file() or is_valid_surface_runtime_dir(prefix):
+            return True
+        backend, home = resolve_surface_runtime(freesurfer_home=explicit_fs_home or None)
+        if backend == "native" and is_valid_surface_runtime_dir(home):
+            return True
+        if backend == "freesurfer" and (home / "build-stamp.txt").is_file():
             return True
     except Exception:
         pass
@@ -244,7 +256,12 @@ def detect_missing_task_resources(
     if "surface_postprocess" in target_set:
         atlas_paths = _ext_profile_paths("surface-postprocess")
         atlas_ok = bool(atlas_paths) and _all_files_nonempty(roots, atlas_paths)
-        runtime_ok = _surface_runtime_ready(backend_paths.get("freesurfer_home"))
+        fs_candidate = (
+            backend_paths.get("postprocess_freesurfer_home")
+            or backend_paths.get("postprocess_runtime")
+            or backend_paths.get("freesurfer_home")
+        )
+        runtime_ok = _surface_runtime_ready(fs_candidate)
         if not atlas_ok or not runtime_ok:
             size = (sum(ext_sizes.get(p, 0) for p in atlas_paths) if not atlas_ok else 0) + (
                 40_000_000 if not runtime_ok else 0

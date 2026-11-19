@@ -11,6 +11,7 @@ estimation, and concurrent fast-gzip NIfTI export.
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 import gzip
 import hashlib
 import os
@@ -18,6 +19,7 @@ from pathlib import Path
 import pickle
 import shutil
 import subprocess
+import sys
 import time
 from typing import Callable, Optional
 
@@ -30,7 +32,16 @@ except ImportError:  # pragma: no cover - optional runtime dependency
     torch = None  # type: ignore[assignment]
 
 
-VALID_NODDI_DEVICES = {"auto", "cpu", "cuda"}
+def _single_thread_blas():
+    """Avoid BLAS/OpenMP oversubscription inside CPU ThreadPoolExecutor workers."""
+    try:
+        from threadpoolctl import threadpool_limits
+        return threadpool_limits(limits=1)
+    except Exception:
+        return nullcontext()
+
+
+VALID_NODDI_DEVICES = {"auto", "cpu", "cuda", "mps"}
 _KERNEL_MEM_CACHE: dict[str, dict[str, object]] = {}
 
 
@@ -38,12 +49,12 @@ def resolve_noddi_device(requested: str | None = "auto") -> str:
     req = (requested or "auto").strip().lower()
     if req == "auto":
         req = os.environ.get("SLICERDSPACE_NODDI_DEVICE", "auto").strip().lower()
-    if req not in VALID_NODDI_DEVICES:
+    if req not in VALID_NODDI_DEVICES and not req.startswith("cuda:"):
         raise ValueError(f"noddi_device must be one of {sorted(VALID_NODDI_DEVICES)}, got {requested!r}")
-    if req == "cpu":
+    if req in {"cpu", "mps"}:
         return "cpu"
     cuda_ok = bool(torch is not None and torch.cuda.is_available())
-    if req == "cuda" and not cuda_ok:
+    if (req == "cuda" or req.startswith("cuda:")) and not cuda_ok:
         raise RuntimeError("NODDI CUDA requested, but torch.cuda.is_available() is False.")
     return "cuda" if cuda_ok else "cpu"
 
@@ -86,7 +97,7 @@ def _try_fast_gunzip_nifti1_4d(dwi_path: Path) -> tuple[nib.Nifti1Image, np.ndar
                     return hdr_img, raw_arr
     except Exception:
         pass
-    decompressor = shutil.which("pigz") or shutil.which("gzip")
+    decompressor = shutil.which("pigz") or (shutil.which("gzip") if sys.platform != "win32" else None)
     if not decompressor:
         return None
     try:
@@ -102,11 +113,15 @@ def _try_fast_gunzip_nifti1_4d(dwi_path: Path) -> tuple[nib.Nifti1Image, np.ndar
         dtype = np.dtype(hdr.get_data_dtype()).newbyteorder("<")
         expected_voxels = int(np.prod(hdr_img.shape, dtype=np.int64))
         expected_bytes = vox_offset + expected_voxels * dtype.itemsize
+        from shared.external_process import external_python_environment, subprocess_no_window_kwargs
+
         proc = subprocess.run(
             [decompressor, "-dc", str(dwi_path)],
             check=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
+            env=external_python_environment(),
+            **subprocess_no_window_kwargs(),
         )
         buf = proc.stdout
         if len(buf) < expected_bytes:
@@ -222,7 +237,7 @@ def _estimate_principal_directions_ols(
             _, _, chunk_dirs = _solve_chunk(0, pos_idx.size)
             dirs[pos_idx] = chunk_dirs
         else:
-            with ThreadPoolExecutor(max_workers=workers) as pool:
+            with _single_thread_blas(), ThreadPoolExecutor(max_workers=workers) as pool:
                 futs = [
                     pool.submit(_solve_chunk, s, min(s + chunk_sz, pos_idx.size))
                     for s in range(0, pos_idx.size, chunk_sz)
@@ -604,7 +619,7 @@ def _fit_noddi_cpu(
         for d in nonempty_dirs:
             _solve_direction_bucket(d)
     else:
-        with ThreadPoolExecutor(max_workers=workers) as pool:
+        with _single_thread_blas(), ThreadPoolExecutor(max_workers=workers) as pool:
             list(pool.map(_solve_direction_bucket, nonempty_dirs))
 
     return estimates, rmse, nrmse

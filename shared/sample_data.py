@@ -109,5 +109,12 @@ def fetch_sample_source(entry: SampleDataEntry, destination: Path, *, overwrite:
             os.replace(staged, destination)
         else:
             # A second downloader must not replace a destination created meanwhile.
-            os.link(staged, destination)
+            try:
+                os.link(staged, destination)
+            except FileExistsError:
+                raise
+            except OSError:
+                if destination.exists():
+                    raise FileExistsError(f"Destination already exists: {destination}")
+                shutil.copy2(staged, destination)
     return destination

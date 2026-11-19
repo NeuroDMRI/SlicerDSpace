@@ -192,7 +192,7 @@ def build_setup_plan(result, *, installed_extensions=(), loaded_extensions=None,
     assets = tuple(name for name in ("surface", "segmentation", "parcellation")
                    if any(name in item.targets and item.install_group == "model-resources" for item in missing))
     import json
-    model_manifest = json.loads((Path(__file__).resolve().parents[1] / 'models/assets_manifest.json').read_text())
+    model_manifest = json.loads((Path(__file__).resolve().parents[1] / 'models/assets_manifest.json').read_text(encoding='utf-8'))
     model_names = {relative for name in assets for relative in model_manifest['profiles'][name]['required_paths']}
     core_model_bytes = sum(model_manifest['asset_records'].get(name, {}).get('size_bytes', 0) for name in model_names)
     packages = tuple(dict.fromkeys((item.details or {}).get("install_requirement") or (item.details or {}).get("package")
@@ -631,7 +631,7 @@ def complete_step(step):
         records = []
         for path in step.get("receipts", ()):
             try:
-                records.append(json.loads(Path(path).read_text()))
+                records.append(json.loads(Path(path).read_text(encoding="utf-8")))
             except (OSError, ValueError):
                 records.append({})
         if any(record.get("status") != "completed" for record in records):
@@ -644,7 +644,7 @@ def complete_step(step):
         # legacy SlicerDDSurfer folder existed, the path chosen when the step was built pointed there.
         from shared.user_config import default_user_config_path
         path = default_user_config_path()
-    receipt = json.loads(Path(path).read_text()) if path else None
+    receipt = json.loads(Path(path).read_text(encoding="utf-8")) if path else None
     settings = apply_setup_receipt(step, receipt)
     if step["id"] == "windows_runtime":
         # S-B2: the ps1 wrote more paths than the receipt checks. Return them all, so the GUI loads them into
@@ -689,7 +689,7 @@ def run_setup_steps(steps, *, runner=None, self_check=None, log=print, after_ste
         if status == "completed":
             try:
                 if step["id"] == "self_check":
-                    if any(json.loads(Path(path).read_text()).get("status") != "passed" for path in receipts):
+                    if any(json.loads(Path(path).read_text(encoding="utf-8")).get("status") != "passed" for path in receipts):
                         raise ValueError("Installation functionality check failed")
                     from shared.setup_selftest import receipt_warnings
                     for warning in receipt_warnings(receipts):  # A2: a warning does not block "ready"

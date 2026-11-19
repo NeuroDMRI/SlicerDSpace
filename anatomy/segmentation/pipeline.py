@@ -34,7 +34,7 @@ def predict_model_space(stacked: np.ndarray, cfg: DDSegConfig) -> tuple[np.ndarr
     import torch
     from .model_loader import load_models  # lazy: torch is only needed for inference
     from shared.environment import resolve_auto_torch_device
-    from shared.hardware_adapt import empty_cuda_cache_safely, optimal_cpu_torch_threads
+    from shared.hardware_adapt import empty_gpu_cache_safely, optimal_cpu_torch_threads
 
     cfg = replace(cfg, device=resolve_auto_torch_device(cfg.device))
     views = split_views(stacked)
@@ -50,8 +50,8 @@ def predict_model_space(stacked: np.ndarray, cfg: DDSegConfig) -> tuple[np.ndarr
     finally:
         if prev_threads is not None:
             torch.set_num_threads(prev_threads)
-        if str(cfg.device).startswith("cuda"):
-            empty_cuda_cache_safely()
+        if str(cfg.device).startswith(("cuda", "mps")):
+            empty_gpu_cache_safely()
     combined = combine_views(pred_axial, pred_sagittal, pred_coronal)
     prob_maps = combined["prob_maps"]
     if not cfg.apply_softmax:

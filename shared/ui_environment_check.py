@@ -35,7 +35,7 @@ def start_environment_check(owner, on_complete=None, *, on_failure=None):
     config = check_config(options, repo_root=owner.logic.module_dir, output_dir=folder, loaded_modules=modules)
     try:
         folder.mkdir(parents=True, exist_ok=True)
-        request.write_text(json.dumps(config, default=str))
+        request.write_text(json.dumps(config, default=str), encoding='utf-8')
     except (OSError, ValueError) as exc:
         owner._setStatus('error', _text(owner, 'Cannot write the check report; choose a writable output directory.',
                                       '无法写入检查报告，请选择可写的输出目录。'))
@@ -72,7 +72,7 @@ def start_environment_check(owner, on_complete=None, *, on_failure=None):
                 next_preflight_state = 'idle'
                 return
             try:
-                report = result_from_dict(json.loads(result_path.read_text()))
+                report = result_from_dict(json.loads(result_path.read_text(encoding='utf-8')))
             except (OSError, ValueError, KeyError, TypeError) as exc:
                 owner._setStatus('error', _text(owner, 'Could not read the environment report.', '无法读取环境检查报告。'))
                 owner.appendLog('[Check] ' + str(exc))

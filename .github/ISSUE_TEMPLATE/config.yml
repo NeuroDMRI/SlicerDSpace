@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Project Website & One-Click Installer
+    url: https://neurodmri.github.io/SlicerDSpace/#start
+    about: Customize installer packages, GitHub mirror, proxy, offline cache, and example HCP data.
+  - name: Documentation & Installation Guides
+    url: https://github.com/NeuroDMRI/SlicerDSpace/blob/main/docs/README.md
+    about: Read EN / ZH guides for Windows, Linux, macOS, GPU acceleration, and troubleshooting.

@@ -182,12 +182,15 @@ def kill_process_tree(
     if system == "Windows":
         if pid is None or pid <= 0:
             return
+        from shared.external_process import subprocess_no_window_kwargs
+
+        no_win = subprocess_no_window_kwargs()
         command = ["taskkill", "/PID", str(pid), "/T"]
         if force:
             command.append("/F")
-        result = subprocess.run(command, check=False, capture_output=True)
+        result = subprocess.run(command, check=False, capture_output=True, **no_win)
         if not force and platform_name is None and getattr(result, "returncode", 0) != 0:
-            subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], check=False, capture_output=True)
+            subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], check=False, capture_output=True, **no_win)
         return
     if grouped:
         target_pgid = pgid if pgid is not None else pid

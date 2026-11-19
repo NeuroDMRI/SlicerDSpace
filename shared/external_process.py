@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import logging
 import os
+import subprocess
 import sys
 import shutil
 import tempfile
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
-from typing import Iterable, Mapping, Optional
+from typing import Any, Iterable, Mapping, Optional
 
 
 def resolve_external_command(name: str, bin_dir: Optional[Path] = None, *, require_executable=False) -> Optional[str]:
@@ -126,6 +127,7 @@ def _looks_like_slicer_runtime_path(path: str) -> bool:
         marker in normalized
         for marker in (
             "/slicer-",
+            "/opt/slicer",
             "/slicer.app/",
             "/slicer.org/extensions",
             "/lib/slicer-",
@@ -170,6 +172,17 @@ def text_subprocess_kwargs(**overrides: object) -> dict[str, object]:
     return {"text": True, "encoding": "utf-8", "errors": "replace", **overrides}
 
 
+def subprocess_no_window_kwargs(**overrides: Any) -> dict[str, Any]:
+    """Return Windows CREATE_NO_WINDOW subprocess kwargs merged with ``overrides``."""
+
+    kwargs = dict(overrides)
+    if os.name == "nt":
+        flag = int(getattr(subprocess, "CREATE_NO_WINDOW", 0) or 0)
+        if flag:
+            kwargs["creationflags"] = int(kwargs.get("creationflags", 0) or 0) | flag
+    return kwargs
+
+
 def external_python_environment(
     extra_env: Optional[Mapping[str, str]] = None,
     *,
@@ -196,7 +209,10 @@ def external_python_environment(
     ):
         env.pop(key, None)
 
-    prepend = [Path(path).expanduser().as_posix() for path in (path_prepend or [])]
+    prepend = [
+        str(Path(path).expanduser()) if os.name == "nt" else Path(path).expanduser().as_posix()
+        for path in (path_prepend or [])
+    ]
     for key in ("PATH", "LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH", "DYLD_FALLBACK_LIBRARY_PATH"):
         sep = os.pathsep if key == "PATH" else ":"
         raw_val = env.get(key)

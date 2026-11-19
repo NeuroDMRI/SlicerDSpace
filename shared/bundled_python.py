@@ -39,6 +39,19 @@ def _clear_macos_quarantine_once(module_root: Path | None = None) -> bool:
             )
             if cand.exists()
         ]
+        for payload_dir in (ext_root / "bundled-python", ext_root / "bundled-runtimes"):
+            if not payload_dir.is_dir():
+                continue
+            added = 0
+            for suffix in ("*.so", "*.dylib"):
+                for binary in payload_dir.rglob(suffix):
+                    if binary.is_file():
+                        probe_targets.append(binary)
+                        added += 1
+                        if added >= 3:
+                            break
+                if added >= 3:
+                    break
         has_quarantine = False
         for target in probe_targets:
             try:
@@ -67,8 +80,9 @@ def _clear_macos_quarantine_once(module_root: Path | None = None) -> bool:
     return cleared
 
 
-def _default_extension_roots(module_root: Path | None = None) -> tuple[Path, ...]:
-    resolved = (module_root or Path(__file__).resolve().parents[1]).expanduser().resolve()
+def _default_extension_roots(module_root: Path | str | None = None) -> tuple[Path, ...]:
+    base_root = Path(module_root) if module_root is not None else Path(__file__).resolve().parents[1]
+    resolved = base_root.expanduser().resolve()
     roots: list[Path] = []
     if resolved.name == "qt-scripted-modules" and len(resolved.parents) >= 3:
         roots.append(resolved.parents[2])

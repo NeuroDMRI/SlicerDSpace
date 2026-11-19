@@ -29,7 +29,7 @@ def readable_output(path: Path) -> bool:
             mesh = trimesh.load(str(path), process=False)
             return bool(len(mesh.vertices) and len(mesh.faces) and np.isfinite(mesh.vertices).all())
         if name.endswith(".json"):
-            record = json.loads(path.read_text())
+            record = json.loads(path.read_text(encoding="utf-8"))
             return isinstance(record, dict) and bool(record) and record.get("status") not in {
                 "failed", "running", "planned", "partial_failed", "cancelled"
             }

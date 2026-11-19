@@ -30,7 +30,7 @@ def main():
     parser.add_argument("--request", type=Path, required=True)
     parser.add_argument("--result", type=Path, required=True)
     args = parser.parse_args()
-    request = json.loads(args.request.read_text())
+    request = json.loads(args.request.read_text(encoding="utf-8"))
     for path in request.get("python_path_entries", ()):
         if Path(path).is_dir():
             sys.path.append(path)

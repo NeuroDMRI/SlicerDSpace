@@ -38,7 +38,7 @@ def load_model(directory, view, device="cpu"):
     import torch
 
     directory = Path(directory)
-    receipt = json.loads((directory / "weights.json").read_text())
+    receipt = json.loads((directory / "weights.json").read_text(encoding="utf-8"))
     if receipt["format"] != 1 or receipt["architecture_sha256"] != ARCHITECTURE_SHA256:
         raise ValueError("Unrecognized converted model")
     record = receipt["views"][view]

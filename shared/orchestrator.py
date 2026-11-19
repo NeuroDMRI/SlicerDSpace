@@ -1318,7 +1318,7 @@ def _tractcloud_complete(
         if bundle_record_error('bundles.tractcloud', _read_json(qc_path)):
             return False
 
-        manifest = json.loads(manifest_path.read_text())
+        manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
         if manifest.get('status') != 'completed' or manifest.get('executed') is not True:
             return False
         if manifest.get('random_seed') != random_seed:
@@ -1691,6 +1691,26 @@ def _resolved_connectome_flags(
     return True, False
 
 
+def _stage_compute_device(config: ProductOrchestratorConfig, *, primary: str = "ddseg_device") -> str:
+    """Resolve user-selected compute device for stages lacking explicit per-stage device flags."""
+    order = (
+        (primary, "ddseg_device", "surface_device", "brain_mask_device")
+        if primary != "ddseg_device"
+        else ("ddseg_device", "surface_device", "brain_mask_device")
+    )
+    chosen = "auto"
+    for attr in order:
+        raw = str(getattr(config, attr, "auto") or "auto").strip().lower()
+        if raw and raw != "auto":
+            chosen = raw
+            break
+    if chosen.startswith("cuda:"):
+        return "cuda"
+    if chosen in {"mps:0", "mps"}:
+        return "mps"
+    return chosen
+
+
 def _preprocessing_config(
     config: ProductOrchestratorConfig,
     subject_root: Path,
@@ -1722,6 +1742,7 @@ def _preprocessing_config(
         pnl_mask_route=config.pnl_mask_route,
         force=config.preprocessing_force or (not config.resume),
         dipy_run_gibbs=config.preprocessing_dipy_run_gibbs,
+        dipy_device=_stage_compute_device(config, primary="brain_mask_device"),
         mrtrix_bin_dir=mrtrix_bin_dir,
         fsl_bin_dir=config.preprocessing_fsl_bin_dir,
         execution_backend=execution_backend,
@@ -2090,8 +2111,8 @@ def _surface_complete(subject_root: Path, subject_id: str, output_root: Optional
     from anatomy.surface.backend_bridge import sha256, upstream_record
     surface_root = _ddsurfer_stage_dir(subject_layout(subject_root, output_root=output_root))
     try:
-        manifest = json.loads((surface_root / 'surface_manifest.json').read_text())
-        qc = json.loads((surface_root / 'surface_qc.json').read_text())
+        manifest = json.loads((surface_root / 'surface_manifest.json').read_text(encoding='utf-8'))
+        qc = json.loads((surface_root / 'surface_qc.json').read_text(encoding='utf-8'))
         if (manifest.get('upstream_commit') != upstream_record()['commit']
                 or manifest.get('status') != 'completed' or not qc.get('automatic_qc_passed')):
             return False
@@ -2211,7 +2232,7 @@ def _surface_postprocess_complete(
     outputs = _surface_postprocess_outputs(subject_root, subject_id, output_root)
     structural_root = outputs["manifest"].parent
     try:
-        manifest = json.loads(outputs['manifest'].read_text())
+        manifest = json.loads(outputs['manifest'].read_text(encoding='utf-8'))
     except (OSError, ValueError):
         return False
     native_dir = native_dir or Path(manifest.get('native_dir') or
@@ -2639,6 +2660,7 @@ def _dki_config(config: ProductOrchestratorConfig, inputs: dict[str, Path]):
     from shared.pipeline import RawInputBundle
 
     root = config.subject_root.expanduser().resolve()
+    dki_exec = {"device": _stage_compute_device(config), **dict(config.microstructure_dki_execution or {})}
     return DkiConfig(
         subject_id=config.subject_id,
         raw_input_bundle=RawInputBundle(
@@ -2650,7 +2672,7 @@ def _dki_config(config: ProductOrchestratorConfig, inputs: dict[str, Path]):
         matlab_executable=config.microstructure_dki_matlab_executable,
         mkcurve_root=config.microstructure_dki_mkcurve_root,
         force_recompute=not config.resume,
-        **config.microstructure_dki_execution,
+        **dki_exec,
     )
 
 
@@ -4180,18 +4202,21 @@ def _parallel_model_products(config, targets, parcellation, log):
     native = ensure_native_dti_bundle(raw, fit_method=config.microstructure_fit_method, reuse=True, log=log)
     layout = subject_layout(config.subject_root, output_root=config.output_root)
     micro_stage_dir = layout.stage_cache("02_microstructure")
+    stage_device = _stage_compute_device(config)
     result = run_microstructure(MicrostructureConfig(config.subject_id,raw,native,micro_stage_dir,
         roi_label_map=parcellation,run_free_water='microstructure_freewater' in targets,
         run_noddi='microstructure_noddi' in targets,run_dki='microstructure_dki' in targets,
         dki_fit_method=config.microstructure_dki_fit_method,
         dki_matlab_executable=config.microstructure_dki_matlab_executable,
         dki_mkcurve_root=config.microstructure_dki_mkcurve_root,
-        dki_execution=config.microstructure_dki_execution,
+        dki_execution={"device": stage_device, **dict(config.microstructure_dki_execution or {})},
         free_water_chunk_size=config.microstructure_free_water_chunk_size,
         free_water_engine=config.microstructure_free_water_engine,
         free_water_n_jobs=config.microstructure_free_water_n_jobs,
         free_water_vox_per_chunk=config.microstructure_free_water_vox_per_chunk,
         free_water_max_fraction_for_tissue=config.microstructure_free_water_max_fraction_for_tissue,
+        free_water_device=stage_device,
+        noddi_device=stage_device,
         force_recompute=not config.resume,max_parallel_models=config.max_parallel_models),log=log)
     if getattr(result, "roi_stats_csv_path", None) is not None:
         _publish_optional(result.roi_stats_csv_path, layout.microstructure / f"{config.subject_id}_ROIWise-Microstructure.csv")
@@ -4947,6 +4972,8 @@ def _run_subject_products_impl(
                     free_water_n_jobs=config.microstructure_free_water_n_jobs,
                     free_water_vox_per_chunk=config.microstructure_free_water_vox_per_chunk,
                     free_water_max_fraction_for_tissue=config.microstructure_free_water_max_fraction_for_tissue,
+                    free_water_device=_stage_compute_device(config),
+                    noddi_device=_stage_compute_device(config),
                     force_recompute=not config.resume,
                 ),
                 log=log,
@@ -5039,6 +5066,8 @@ def _run_subject_products_impl(
                     free_water_n_jobs=config.microstructure_free_water_n_jobs,
                     free_water_vox_per_chunk=config.microstructure_free_water_vox_per_chunk,
                     free_water_max_fraction_for_tissue=config.microstructure_free_water_max_fraction_for_tissue,
+                    free_water_device=_stage_compute_device(config),
+                    noddi_device=_stage_compute_device(config),
                     force_recompute=not config.resume,
                 ),
                 log=log,
@@ -5119,6 +5148,8 @@ def _run_subject_products_impl(
                     free_water_n_jobs=config.microstructure_free_water_n_jobs,
                     free_water_vox_per_chunk=config.microstructure_free_water_vox_per_chunk,
                     free_water_max_fraction_for_tissue=config.microstructure_free_water_max_fraction_for_tissue,
+                    free_water_device=_stage_compute_device(config),
+                    noddi_device=_stage_compute_device(config),
                     force_recompute=not config.resume,
                 ),
                 log=log,
@@ -5403,6 +5434,7 @@ def _run_subject_products_impl(
                         max_seed_voxels=config.select_streamlines,
                         min_length_mm=config.dti_min_length_mm,
                         max_length_mm=config.dti_max_length_mm,
+                        device=_stage_compute_device(config),
                         execute=True,
                     ),
                     log=log,
@@ -5734,6 +5766,7 @@ def _run_subject_products_impl(
                         use_virtual_x=config.wma_use_virtual_x,
                         export_diffusion_measures=config.wma_export_diffusion_measures,
                         fiber_tract_measurements_cli=config.fiber_tract_measurements_cli,
+                        device=_stage_compute_device(config),
                         execute=True,
                     ),
                     log=log,

@@ -116,8 +116,11 @@ def _validate_options(config: DkiConfig) -> None:
         raise ValueError('DKI num_threads must be a positive integer')
     if config.mkcurve_chunk_schedule not in ('dynamic', 'ordered'):
         raise ValueError('MK-Curve chunk schedule must be dynamic or ordered')
-    if not isinstance(config.device, str) or config.device.strip().lower() not in ('cpu', 'cuda', 'auto'):
-        raise ValueError("DKI device must be 'cpu', 'cuda', or 'auto'")
+    if not isinstance(config.device, str):
+        raise ValueError("DKI device must be 'cpu', 'cuda', 'mps', or 'auto'")
+    req_dev = config.device.strip().lower()
+    if req_dev not in ('cpu', 'cuda', 'mps', 'auto') and not req_dev.startswith('cuda:'):
+        raise ValueError("DKI device must be 'cpu', 'cuda', 'mps', or 'auto'")
     for name in ("b0_threshold", "shell_tolerance", "max_bvalue", "display_min_kurtosis", "display_max_kurtosis"):
         if not np.isfinite(getattr(config, name)):
             raise ValueError(f"DKI {name} must be finite")
@@ -561,14 +564,16 @@ def _predict_dki_chunk(model, params, s0):
 
 def _resolve_dki_device(device: str) -> str:
     req = (device or "cpu").strip().lower()
-    if req == "cpu":
+    if req not in ("cpu", "cuda", "mps", "auto") and not req.startswith("cuda:"):
+        raise ValueError("DKI device must be 'cpu', 'cuda', 'mps', or 'auto'")
+    if req in ("cpu", "mps"):
         return "cpu"
     try:
         import torch
         has_cuda = bool(torch.cuda.is_available())
     except ImportError:
         has_cuda = False
-    if req == "cuda" and not has_cuda:
+    if (req == "cuda" or req.startswith("cuda:")) and not has_cuda:
         raise RuntimeError("DKI CUDA requested, but torch.cuda.is_available() is False")
     return "cuda" if has_cuda else "cpu"
 

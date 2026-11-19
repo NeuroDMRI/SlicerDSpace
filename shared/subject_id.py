@@ -1,5 +1,6 @@
 """Derive a safe subject ID from the chosen input (C6)."""
 
+import hashlib
 import re
 from pathlib import Path
 
@@ -31,8 +32,13 @@ def derive_subject_id(input_text: str) -> str:
             if lowered.endswith(suffix):
                 name = name[: -len(suffix)]
                 break
+    raw_name = name
     name = _UNSAFE.sub("_", name)
-    return "" if name in (".", "..") else name  # Q6: again after the suffix strip and sanitising
+    if name in ("", ".", ".."):  # Q6: again after the suffix strip and sanitising
+        return ""
+    if any(ch.isalnum() for ch in raw_name) and not any(ch.isascii() and ch.isalnum() for ch in name):
+        return f"sub_{hashlib.sha256(raw_name.encode('utf-8')).hexdigest()[:8]}"
+    return name
 
 
 def effective_subject_id(typed_id: str, input_text: str) -> str:

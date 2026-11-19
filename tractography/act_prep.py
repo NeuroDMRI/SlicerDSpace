@@ -24,7 +24,12 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Mapping, Optional
-from shared.external_process import managed_tool_environment, resolve_external_command
+from shared.external_process import (
+    managed_tool_environment,
+    resolve_external_command,
+    subprocess_no_window_kwargs,
+    text_subprocess_kwargs,
+)
 
 ACT_PREP_VERSION = 3
 ACT_PREP_METHOD = "ddseg_partial_volume_ddparcel_tissue_priors_5tt2gmwmi_v3"
@@ -243,8 +248,8 @@ def _run_mrtrix(
     completed = subprocess.run(
         command,
         capture_output=True,
-        text=True,
         env=managed_tool_environment(mrtrix_bin_dir=effective_bin),
+        **subprocess_no_window_kwargs(**text_subprocess_kwargs()),
     )
     record = {
         "command": command,

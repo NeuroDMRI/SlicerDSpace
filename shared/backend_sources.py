@@ -75,7 +75,7 @@ def verify_source(name, directory):
     receipt = directory / ".slicerdspace-source.json"
     if receipt.is_symlink():
         raise ValueError("Algorithm source receipt must not be a symlink")
-    record = json.loads(receipt.read_text())
+    record = json.loads(receipt.read_text(encoding="utf-8"))
     if record.get("profile") != name or record.get("archive_sha256") != SOURCES[name]["sha256"]:
         raise ValueError("Unrecognized algorithm source receipt")
     if not record.get("files") or SOURCES[name]["entry"] not in record["files"]:
@@ -222,7 +222,7 @@ def prepare_sources(profiles, *, root=None, execute=False, accept_terms=False, o
                             target.chmod(0o755 if member.mode & 0o111 else 0o644)
                     files = {p.relative_to(staged).as_posix(): file_hash(p) for p in staged.rglob("*") if p.is_file()}
                     record = dict(profile=name, revision=spec["revision"], archive_sha256=spec["sha256"], files=files)
-                    (staged / ".slicerdspace-source.json").write_text(json.dumps(record, indent=2) + "\n")
+                    (staged / ".slicerdspace-source.json").write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
                     verify_source(name, staged)
                     staged.rename(destination)
             if name == "tractcloud" and needs_darwin_arm64_tractcloud_python():

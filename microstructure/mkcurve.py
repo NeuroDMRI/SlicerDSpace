@@ -173,16 +173,16 @@ def _fit_chunk(payload, *, reuse_signal_logs=None):
 
 def _resolve_mkcurve_device(device: str) -> str:
     dev = (device or "cpu").strip().lower()
-    if dev not in ("cpu", "cuda", "auto"):
-        raise ValueError("MK-Curve device must be 'cpu', 'cuda', or 'auto'")
-    if dev == "cpu":
+    if dev not in ("cpu", "cuda", "mps", "auto") and not dev.startswith("cuda:"):
+        raise ValueError("MK-Curve device must be 'cpu', 'cuda', 'mps', or 'auto'")
+    if dev in ("cpu", "mps"):
         return "cpu"
     try:
         import torch
         has_cuda = bool(torch.cuda.is_available())
     except Exception:
         has_cuda = False
-    if dev == "cuda" and not has_cuda:
+    if (dev == "cuda" or dev.startswith("cuda:")) and not has_cuda:
         raise RuntimeError("MK-Curve device='cuda' requested, but torch.cuda.is_available() is False")
     return "cuda" if has_cuda else "cpu"
 
@@ -364,7 +364,7 @@ def run_mkcurve(dwi_path, bval_path, bvec_path, mask_path, output_dir, *,
                         and bool(main_file)
                         and Path(main_file).is_file()
                     )
-                    if os.name == "nt" and not (can_spawn and count >= 256):
+                    if not can_spawn or (os.name == "nt" and count < 256):
                         from concurrent.futures import ThreadPoolExecutor
                         pool = ThreadPoolExecutor(max_workers=eff_workers,
                             initializer=_initialize_worker, initargs=(worker_threads,))

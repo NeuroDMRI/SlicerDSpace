@@ -150,7 +150,7 @@ def prepare_dicom_root(root, subject_id, *, dwiconvert=None, log=None, target_ro
     target = dest_root / "input"
     receipt = target / RECEIPT
     if receipt.is_file():
-        saved = json.loads(receipt.read_text())
+        saved = json.loads(receipt.read_text(encoding="utf-8"))
         if saved.get("kind") != "slicerdsurfer_auto_dicom_input" or saved.get("source_inventory") != _inventory(root):
             raise ValueError("DICOM source changed after conversion; preserve the old input and use a new subject root")
         if (not set(REQUIRED) <= set(saved.get("output_sha256", {})) or
@@ -185,12 +185,12 @@ def prepare_dicom_root(root, subject_id, *, dwiconvert=None, log=None, target_ro
                                               for key, value in result["plan"]["canonical_layout"].items()}
         result["outputs"] = {key: str(dest_root / Path(value).relative_to(staging)) if value else None
                              for key, value in result["outputs"].items()}
-        (prepared / "input_import_manifest.json").write_text(json.dumps(result, indent=2) + "\n")
+        (prepared / "input_import_manifest.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
         record = {"kind": "slicerdsurfer_auto_dicom_input", "status": "completed", "backend": backend,
                   "source_inventory": original, "output_sha256": {
                       path.name: _sha(path) for path in prepared.iterdir() if path.is_file()},
                   "runtime_seconds": result["runtime_seconds"]}
-        (prepared / RECEIPT).write_text(json.dumps(record, indent=2) + "\n")
+        (prepared / RECEIPT).write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
         if target.exists() or target.is_symlink():
             raise FileExistsError("Input directory appeared during conversion; refusing to replace it")
         prepared.rename(target)

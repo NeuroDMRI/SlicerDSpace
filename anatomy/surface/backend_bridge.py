@@ -10,7 +10,12 @@ from pathlib import Path
 import subprocess
 import sys
 
-from shared.external_process import external_python_environment, is_slicer_python, text_subprocess_kwargs
+from shared.external_process import (
+    external_python_environment,
+    is_slicer_python,
+    subprocess_no_window_kwargs,
+    text_subprocess_kwargs,
+)
 
 BACKEND_ROOT = Path(__file__).resolve().parent / 'ddsurfer_backend'
 
@@ -111,7 +116,7 @@ def run_backend(arguments, *, python_bin=None, env=None, log=None, log_path=None
         process = subprocess.Popen(command, cwd=str(BACKEND_ROOT), env=environment,
                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                    start_new_session=os.name == 'posix',
-                                   **text_subprocess_kwargs(bufsize=1))
+                                   **subprocess_no_window_kwargs(**text_subprocess_kwargs(bufsize=1)))
     except BaseException:
         if stream:
             stream.close()
@@ -132,7 +137,15 @@ def run_backend(arguments, *, python_bin=None, env=None, log=None, log_path=None
             except ProcessLookupError:
                 pass
         elif process.poll() is None:
-            process.terminate()
+            try:
+                subprocess.run(
+                    ['taskkill', '/F', '/T', '/PID', str(process.pid)],
+                    check=False,
+                    capture_output=True,
+                    **subprocess_no_window_kwargs(),
+                )
+            except OSError:
+                process.terminate()
         try:
             # Upstream needs up to 10 seconds to reap an interrupted stage tree.
             process.wait(timeout=12)
@@ -143,7 +156,17 @@ def run_backend(arguments, *, python_bin=None, env=None, log=None, log_path=None
                 except ProcessLookupError:
                     pass
             else:
-                process.kill()
+                try:
+                    subprocess.run(
+                        ['taskkill', '/F', '/T', '/PID', str(process.pid)],
+                        check=False,
+                        capture_output=True,
+                        **subprocess_no_window_kwargs(),
+                    )
+                except OSError:
+                    pass
+                if process.poll() is None:
+                    process.kill()
             process.wait()
         raise
     finally:
@@ -165,7 +188,7 @@ def runtime_info(python_bin=None):
         "torch=torch.__version__,cuda=torch.version.cuda,numpy=numpy.__version__,"
         "nibabel=nibabel.__version__,SimpleITK=SimpleITK.Version_VersionString(),trimesh=trimesh.__version__)))"]
     completed = subprocess.run(command, cwd=str(BACKEND_ROOT), env=backend_environment(python_bin=python_bin),
-                               capture_output=True, timeout=60, **text_subprocess_kwargs())
+                               capture_output=True, timeout=60, **subprocess_no_window_kwargs(**text_subprocess_kwargs()))
     if completed.returncode:
         raise RuntimeError('DDSurfer Python runtime probe failed: ' + completed.stderr)
     return json.loads(completed.stdout.strip().splitlines()[-1])

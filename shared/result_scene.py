@@ -123,7 +123,7 @@ def recorded_qc_summary(manifest):
         try:
             if not value or not Path(value).is_absolute():
                 raise ValueError("Missing absolute QC path")
-            record = json.loads(Path(value).read_text())
+            record = json.loads(Path(value).read_text(encoding='utf-8'))
             status = record_qc_state(record)
             issue = status in {'failed', 'warning'} or bundle_record_error(task.get('name'), record)
             key = "issues" if issue else "passed" if status in {"passed", "completed", "pass", "success"} else "unavailable"
@@ -250,7 +250,7 @@ def result_candidates(manifest, *, allow_bundle_directory_scan=True, include_pre
         if name.split('@', 1)[0] in {'bundles.wmql', 'bundles.wma', 'bundles.tractcloud'}:
             value = task.get('qc_path') or (task.get('outputs') or {}).get('qc_path')
             try:
-                record = json.loads(Path(str(value)).read_text()) if value else {}
+                record = json.loads(Path(str(value)).read_text(encoding='utf-8')) if value else {}
                 error = bundle_record_error(name, record)
             except (OSError, ValueError, TypeError):
                 error = 'Unreadable bundle QC'

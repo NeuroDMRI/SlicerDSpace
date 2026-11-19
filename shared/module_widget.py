@@ -3321,6 +3321,7 @@ class SharedWidgetMixin:
         set_live_stage_text(self, "正在启动批量后台计算…" if zh else "Starting background batch pipeline…")
         process.start(program, args)
         if not process.waitForStarted(5000):
+            stop_progress_polling(self)
             self._setPipelineActive(False)
             set_run_state(self, "failed")
             self._setStatus("error", "Failed to start batch job")
@@ -4164,7 +4165,7 @@ class SharedWidgetMixin:
             if status == "completed":
                 for receipt in receipts:
                     try:
-                        record = json.loads(receipt.read_text())
+                        record = json.loads(receipt.read_text(encoding="utf-8"))
                     except (OSError, ValueError):
                         record = {}
                     if record.get("status") != "completed":

@@ -27,9 +27,9 @@ def install_selected_runtimes(owner, profiles=None):
         slicer.util.infoDisplay("当前所选路线不需要 MRtrix/FSL。" if language else
                                "The selected routes do not need MRtrix/FSL.", parent=owner.parent)
         return False
-    if not supported_platform():
-        slicer.util.infoDisplay("自动配置暂支持 Linux x86_64；其他平台保留高级路径配置。" if language else
-                               "Managed setup currently supports Linux x86_64; use Advanced paths on other platforms.", parent=owner.parent)
+    if not supported_platform(profiles=profiles):
+        slicer.util.infoDisplay("当前平台或所选路线暂不支持自动配置；请使用高级路径配置。" if language else
+                               "Managed setup is not available for the selected routes on this platform; use Advanced paths.", parent=owner.parent)
         return False
     plan = install_plan(profiles)
     dialog = qt.QDialog(slicer.util.mainWindow())
@@ -90,7 +90,7 @@ def install_selected_runtimes(owner, profiles=None):
     def done(status, details, log_path):
         if status == "completed":
             try:
-                apply_runtime_result(owner, json.loads(result_path.read_text()))
+                apply_runtime_result(owner, json.loads(result_path.read_text(encoding='utf-8')))
                 owner._setStatus("ready", "工具已配置；运行前重新检查依赖。" if language else
                                  "Tools configured; check dependencies before running.")
             except Exception as exc:

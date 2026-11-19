@@ -6,9 +6,14 @@ import hashlib
 import json
 import os
 import shutil
+import socket
+import ssl
 import stat
+import subprocess
+import sys
 import tempfile
 import urllib.error
+import urllib.parse
 import urllib.request
 import zipfile
 import tarfile
@@ -50,7 +55,25 @@ def _clean_mirror_prefix(value: Any) -> str:
 
 
 def _clean_proxy_url(value: Any) -> str:
-    return str(value or "").strip()
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if "://" not in raw and "=" in raw:
+        mapping: dict[str, str] = {}
+        for item in raw.split(";"):
+            part = item.strip()
+            if "=" in part:
+                k, v = part.split("=", 1)
+                k_clean = k.strip().lower()
+                v_clean = v.strip()
+                if k_clean and v_clean:
+                    mapping[k_clean] = v_clean
+        raw = mapping.get("https") or mapping.get("http") or next(iter(mapping.values()), "")
+        if not raw:
+            return ""
+    if "://" not in raw:
+        return f"http://{raw}"
+    return raw
 
 
 def _clean_offline_dir(value: Any) -> str:
@@ -177,6 +200,72 @@ def expand_candidate_urls(
     return expanded
 
 
+def _detect_system_proxy() -> str:
+    try:
+        proxies = urllib.request.getproxies() or {}
+        found = _clean_proxy_url(proxies.get("https") or proxies.get("http") or proxies.get("all") or "")
+        if found:
+            return found
+    except Exception:
+        pass
+    if sys.platform == "darwin" and shutil.which("scutil"):
+        try:
+            proc = subprocess.run(["scutil", "--proxy"], capture_output=True, text=True, timeout=3)
+            if proc.returncode == 0:
+                kv: dict[str, str] = {}
+                for line in (proc.stdout or "").splitlines():
+                    if ":" in line:
+                        k, v = line.split(":", 1)
+                        kv[k.strip()] = v.strip()
+                if kv.get("HTTPSEnable") == "1" and kv.get("HTTPSProxy") and kv.get("HTTPSPort"):
+                    return _clean_proxy_url(f"{kv['HTTPSProxy']}:{kv['HTTPSPort']}")
+                if kv.get("HTTPEnable") == "1" and kv.get("HTTPProxy") and kv.get("HTTPPort"):
+                    return _clean_proxy_url(f"{kv['HTTPProxy']}:{kv['HTTPPort']}")
+        except Exception:
+            pass
+    elif sys.platform == "win32":
+        try:
+            import winreg
+
+            key_path = r"Software\Microsoft\Windows\CurrentVersion\Internet Settings"
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path) as key:
+                enabled, _ = winreg.QueryValueEx(key, "ProxyEnable")
+                server, _ = winreg.QueryValueEx(key, "ProxyServer")
+                if int(enabled or 0) == 1 and server:
+                    return _clean_proxy_url(server)
+        except Exception:
+            pass
+    return ""
+
+
+def _is_loopback_url(request_or_url: str | urllib.request.Request) -> bool:
+    raw = str(getattr(request_or_url, "full_url", request_or_url) or "")
+    try:
+        host = (urllib.parse.urlparse(raw).hostname or "").lower()
+    except Exception:
+        return False
+    return host in ("127.0.0.1", "localhost", "::1")
+
+
+def _ssl_context() -> ssl.SSLContext:
+    for env_key in ("SSL_CERT_FILE", "REQUESTS_CA_BUNDLE"):
+        ca_file = (os.environ.get(env_key) or "").strip()
+        if ca_file and Path(ca_file).is_file():
+            try:
+                return ssl.create_default_context(cafile=ca_file)
+            except Exception:
+                pass
+    try:
+        import certifi
+
+        ca_file = certifi.where()
+        if ca_file and Path(ca_file).is_file():
+            return ssl.create_default_context(cafile=ca_file)
+    except Exception:
+        pass
+    return ssl.create_default_context()
+
+
 def open_url(
     request_or_url: str | urllib.request.Request,
     *,
@@ -184,19 +273,29 @@ def open_url(
     proxy_url: str | None = None,
     urlopen_fn: Callable[..., Any] | None = None,
 ):
-    """Open a URL honoring any configured HTTP/HTTPS proxy without breaking mocked urlopen."""
+    """Open a URL honoring configured/system HTTP(S) proxy and CA bundle without breaking mocked urlopen."""
 
     effective_proxy = (
         _clean_proxy_url(proxy_url)
         if proxy_url is not None
         else load_network_settings()["proxy_url"]
     )
+    if not effective_proxy and urlopen_fn is None and not _is_loopback_url(request_or_url):
+        effective_proxy = _detect_system_proxy()
+    if effective_proxy.lower().startswith("socks"):
+        raise RuntimeError(
+            f"SOCKS proxy {effective_proxy!r} is not supported without PySocks; "
+            "please specify an HTTP/HTTPS proxy URL (e.g. http://127.0.0.1:7890)."
+        )
     if effective_proxy:
         opener = urllib.request.build_opener(
-            urllib.request.ProxyHandler({"http": effective_proxy, "https": effective_proxy})
+            urllib.request.ProxyHandler({"http": effective_proxy, "https": effective_proxy}),
+            urllib.request.HTTPSHandler(context=_ssl_context()),
         )
         return opener.open(request_or_url, timeout=timeout)
-    return (urlopen_fn or urllib.request.urlopen)(request_or_url, timeout=timeout)
+    if urlopen_fn is not None:
+        return urlopen_fn(request_or_url, timeout=timeout)
+    return urllib.request.urlopen(request_or_url, timeout=timeout, context=_ssl_context())
 
 
 def _sha256_file(path: Path) -> str:

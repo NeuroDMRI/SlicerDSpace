@@ -35,10 +35,11 @@ from .data_loader.load_neuroimaging_data import (
 from .models.networks import FastSurferCNN_Fuse_Unet_v3_extended
 from .device import logical_cuda_index
 from shared.hardware_adapt import (
-    empty_cuda_cache_safely,
-    is_cuda_oom,
+    empty_gpu_cache_safely,
+    is_gpu_oom,
     optimal_cpu_torch_threads,
     query_cuda_free_total_bytes,
+    query_gpu_free_total_bytes,
 )
 
 HELPTEXT = """
@@ -86,7 +87,7 @@ def options_parse():
 
     # 3. Clean up and GPU/CPU options (disable cuda, change batchsize)
     parser.add_argument('--clean', dest='cleanup', help="Flag to clean up segmentation", action='store_true')
-    parser.add_argument('--batch_size', type=int, default=8, help="Batch size for inference. Default: 8")
+    parser.add_argument('--batch_size', type=int, default=4, help="Batch size for inference. Default: 4")
     parser.add_argument('--simple_run', action='store_true', default=True, help='Simplified run: only analyse one given image specified by --in_name (output: --out_name). Need to specify absolute path to both --in_name and --out_name if this option is chosen.')
 
     parser.add_argument('--no_cuda', action='store_true', default=False, help='disables CUDA training')
@@ -114,7 +115,6 @@ def options_parse():
     sel_option.num_classes_sag = 54
     sel_option.num_channels = 7
     sel_option.num_modality = len(sel_option.iname)
-    sel_option.batch_size = 4
 
     return sel_option
 
@@ -154,7 +154,7 @@ def _is_mps_available(torch_mod) -> bool:
 
 
 def _forward_fused_logits(model, sub_batch, *, use_cuda, device):
-    """Run ``model`` with automatic single-slice CUDA OOM retry for low-VRAM GPUs."""
+    """Run ``model`` with automatic single-slice CUDA/MPS OOM retry for low-memory GPUs."""
     target_device = device if isinstance(device, torch.device) else torch.device(device)
     if target_device.type == "cpu":
         _, out_list = model(sub_batch)
@@ -164,9 +164,9 @@ def _forward_fused_logits(model, sub_batch, *, use_cuda, device):
         _, out_list = model(sub_batch.to(target_device, non_blocking=non_blocking))
         return out_list[0].detach().cpu()
     except RuntimeError as exc:
-        if not use_cuda or not is_cuda_oom(exc) or sub_batch.shape[0] <= 1:
+        if target_device.type not in ("cuda", "mps") or not is_gpu_oom(exc) or sub_batch.shape[0] <= 1:
             raise
-        empty_cuda_cache_safely()
+        empty_gpu_cache_safely()
         parts = []
         for idx in range(sub_batch.shape[0]):
             _, single_list = model(sub_batch[idx : idx + 1].to(target_device))
@@ -180,16 +180,16 @@ def run_network(img_filename, orig_data, prediction_probability, plane, ckpts, p
     test_dataset = OrigDataThickSlices_Fused_Input(img_filename, orig_data, plane=plane, transforms=transforms.Compose([ToTensorTest()]))
     test_data_loader = DataLoader(dataset=test_dataset, shuffle=False, batch_size=params_model["batch_size"])
 
-    # Set up state dict for model
+    # Set up state dict for model while still on CPU so GPU/unified memory does not hold duplicate backbones.
     logger.info("  -Loading {} Net from {}".format(plane, ckpts))
 
-    backbones = copy.deepcopy(model.FastSurferCNNs) # Somthing related to parallel: may need to be "model.module.FastSurferCNNs"
+    backbones = model.FastSurferCNNs
+    model.FastSurferCNNs = nn.ModuleList()
 
     # weights_only=True restricts unpickling to a safe allow-list (tensors,
     # OrderedDict, basic scalars); only model_state["model_state_dict"] is
     # ever read below, so a full unpickle is never needed here.
-    map_loc = torch.device("cpu") if params_model["device"].type == "mps" else params_model["device"]
-    model_state = torch.load(ckpts, map_location=map_loc, weights_only=True)
+    model_state = torch.load(ckpts, map_location=torch.device("cpu"), weights_only=True)
     new_state_dict = OrderedDict()
     for k, v in model_state["model_state_dict"].items():
         if k[:7] == "module." and not params_model["model_parallel"]:
@@ -198,10 +198,11 @@ def run_network(img_filename, orig_data, prediction_probability, plane, ckpts, p
             new_state_dict["module." + k] = v
         else:
             new_state_dict[k] = v
-    model.load_state_dict(new_state_dict)
+    model.load_state_dict(new_state_dict, strict=False)
 
     print('Load backbones!')
     model.FastSurferCNNs = backbones
+    model.to(params_model["device"])
     model.eval()
 
     logger.info("  -{} model loaded.".format(plane))
@@ -349,6 +350,16 @@ def fastsurfercnn(img_filename, save_as, logger, args):
                 effective_batch_size = 1
             elif free_gib < 3.8:
                 effective_batch_size = min(effective_batch_size, 2)
+    elif use_mps:
+        mps_mem = query_gpu_free_total_bytes(device)
+        if mps_mem is not None:
+            free_gib = mps_mem[0] / float(1024**3)
+            if free_gib < 4.0:
+                effective_batch_size = 1
+            elif free_gib < 8.0:
+                effective_batch_size = min(effective_batch_size, 2)
+            elif free_gib < 14.0:
+                effective_batch_size = min(effective_batch_size, 4)
 
     prev_torch_threads = None
     if device.type == "cpu":
@@ -377,15 +388,15 @@ def fastsurfercnn(img_filename, save_as, logger, args):
     params_network["num_classes"] = args.num_classes_ax_cor
     params_network["num_channels"] = args.num_channels
     params_network["backbone_model"] = args.backbone_axial_path
-    params_network["use_cuda"] = use_cuda
+    params_network["use_cuda"] = False
     model = FastSurferCNN_Fuse_Unet_v3_extended(params_network)
     if model_parallel:
         model = nn.DataParallel(model)
-    model.to(device)
     start = time.time()
     pred_prob = run_network(img_filename, orig_data, pred_prob, "Axial", args.network_axial_path, params_model, model, logger)
     logger.info("Axial View Tested in {:0.4f} seconds".format(time.time() - start))
     del model
+    empty_gpu_cache_safely()
     gc.collect()
 
     # Coronal
@@ -395,11 +406,11 @@ def fastsurfercnn(img_filename, save_as, logger, args):
     model = FastSurferCNN_Fuse_Unet_v3_extended(params_network)
     if model_parallel:
         model = nn.DataParallel(model)
-    model.to(device)
     start = time.time()
     pred_prob = run_network(img_filename,  orig_data, pred_prob, "Coronal", args.network_coronal_path, params_model, model, logger)
     logger.info("Coronal View Tested in {:0.4f} seconds".format(time.time() - start))
     del model
+    empty_gpu_cache_safely()
     gc.collect()
 
     # Sagittal
@@ -409,7 +420,6 @@ def fastsurfercnn(img_filename, save_as, logger, args):
     model = FastSurferCNN_Fuse_Unet_v3_extended(params_network)
     if model_parallel:
         model = nn.DataParallel(model)
-    model.to(device)
     start = time.time()
     pred_prob = run_network(img_filename, orig_data, pred_prob, "Sagittal", args.network_sagittal_path, params_model, model, logger)
     logger.info("Sagittal View Tested in {:0.4f} seconds".format(time.time() - start))
@@ -417,8 +427,8 @@ def fastsurfercnn(img_filename, save_as, logger, args):
     del model, orig_data
     if prev_torch_threads is not None:
         torch.set_num_threads(prev_torch_threads)
-    if use_cuda:
-        empty_cuda_cache_safely()
+    if use_cuda or use_mps:
+        empty_gpu_cache_safely()
     gc.collect()
 
 

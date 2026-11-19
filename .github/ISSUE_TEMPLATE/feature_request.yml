@@ -1,0 +1,26 @@
+name: Feature Request / 功能建议
+description: Suggest an improvement, new diffusion model, workflow option, or UX enhancement.
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Feature Summary / 功能概述
+      placeholder: Describe what capability, option, or platform support you would like added.
+    validations:
+      required: true
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Scientific or Workflow Use Case / 科研或工作流场景
+      placeholder: Why would this help your dMRI analysis or clinical research workflow?
+  - type: dropdown
+    id: target_platform
+    attributes:
+      label: Target Platform(s) / 适用平台
+      multiple: true
+      options:
+        - macOS Apple Silicon (arm64)
+        - Windows (x86_64)
+        - Linux (x86_64)

@@ -292,7 +292,15 @@ class CompetitiveDecoderBlock(CompetitiveDenseBlock):
         :param tensor indices: indices for unpooling from the corresponding Encoder (maxpool op)
         :return: processed feature maps
         """
-        unpool = self.unpool(x, indices)
+        if x.device.type == "mps":
+            # Native Metal scatter_ avoids ~3,840 MaxUnpool2d CPU fallback syncs per subject on MPS.
+            n, c = x.shape[0], x.shape[1]
+            h_out, w_out = out_block.shape[2], out_block.shape[3]
+            unpool = x.new_zeros((n, c, h_out * w_out))
+            unpool.scatter_(2, indices.reshape(n, c, -1), x.reshape(n, c, -1))
+            unpool = unpool.view(n, c, h_out, w_out)
+        else:
+            unpool = self.unpool(x, indices)
         unpool = torch.unsqueeze(unpool, 4)
 
         out_block = torch.unsqueeze(out_block, 4)

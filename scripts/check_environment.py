@@ -17,7 +17,7 @@ def main():
     parser.add_argument('--request', type=Path, required=True)
     parser.add_argument('--result', type=Path, required=True)
     args = parser.parse_args()
-    config = config_from_dict(json.loads(args.request.read_text()))
+    config = config_from_dict(json.loads(args.request.read_text(encoding='utf-8')))
     print('[Check] Checking selected dependencies; no installation or scientific processing.', flush=True)
     report = run_environment_doctor(
         config,
@@ -25,7 +25,7 @@ def main():
     )
     write_environment_report(report, config.output_dir)
     temporary = args.result.with_suffix('.tmp')
-    temporary.write_text(json.dumps(report.to_dict(), indent=2) + '\n')
+    temporary.write_text(json.dumps(report.to_dict(), indent=2) + '\n', encoding='utf-8')
     temporary.replace(args.result)
     print(f'[Check] Complete: {report.blocker_count} required item(s) missing.', flush=True)
 

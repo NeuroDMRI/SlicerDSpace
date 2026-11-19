@@ -140,7 +140,14 @@ def run_locked(args):
                OPENBLAS_NUM_THREADS='1')
     if environment['minimal_runtime']:
         # Avoid private libraries and commands from an unrelated full installation.
-        for name in ('LD_LIBRARY_PATH', 'LD_PRELOAD', 'LD_AUDIT'):
+        for name in (
+            'LD_LIBRARY_PATH',
+            'LD_PRELOAD',
+            'LD_AUDIT',
+            'DYLD_LIBRARY_PATH',
+            'DYLD_FALLBACK_LIBRARY_PATH',
+            'DYLD_INSERT_LIBRARIES',
+        ):
             env.pop(name, None)
         if os.name == 'nt':
             sys_root = Path(os.environ.get('SystemRoot', r'C:\Windows'))
@@ -149,13 +156,13 @@ def run_locked(args):
             env['PATH'] = str(home / 'bin') + os.pathsep + os.defpath
     log_path = subject_dir / 'logs/postprocess.log'
     completed_path = subject_dir / 'logs/completed.json'
-    done = json.loads(completed_path.read_text()) if completed_path.exists() else {}
+    done = json.loads(completed_path.read_text(encoding='utf-8')) if completed_path.exists() else {}
     dependencies_path = subject_dir / 'logs/stage_inputs.json'
-    dependencies = json.loads(dependencies_path.read_text()) if dependencies_path.exists() else {}
+    dependencies = json.loads(dependencies_path.read_text(encoding='utf-8')) if dependencies_path.exists() else {}
     preparation = StageCache(subject_dir / 'logs/preparation.json')
     state_lock = Lock()
     timings_path = subject_dir / 'logs/timings.json'
-    timings = json.loads(timings_path.read_text()) if timings_path.exists() else {}
+    timings = json.loads(timings_path.read_text(encoding='utf-8')) if timings_path.exists() else {}
     qc = dict(coordinate_space='native_scanner_RAS_mm', surface_storage='FreeSurfer_surface_RAS_mm',
               reference_content=signature['reference_content'], hemispheres={})
 
@@ -173,14 +180,15 @@ def run_locked(args):
             command[0] = _resolve_bin(command[0])
         argv = [str(command[0]), *(_arg_str(v) for v in command[1:])]
         stage_log = subject_dir / 'logs' / f'{key.split(".")[0]}.log'
-        with stage_log.open('a') as log:
+        with stage_log.open('a', encoding='utf-8') as log:
             message = f'[run] {key}: {shlex.join(argv)}'
             print(message, flush=True)
             log.write(message + '\n'); log.flush()
-            with state_lock, log_path.open('a') as summary:
+            with state_lock, log_path.open('a', encoding='utf-8') as summary:
                 summary.write(message + '\n')
             try:
-                subprocess.run(argv, check=True, env=env, cwd=subject_dir, stdout=log, stderr=log)
+                no_win = getattr(subprocess, 'CREATE_NO_WINDOW', 0) if os.name == 'nt' else 0
+                subprocess.run(argv, check=True, env=env, cwd=subject_dir, stdout=log, stderr=log, creationflags=no_win)
             except subprocess.CalledProcessError as error:
                 raise RuntimeError(f'{key} failed (exit {error.returncode}); see {stage_log}') from error
 

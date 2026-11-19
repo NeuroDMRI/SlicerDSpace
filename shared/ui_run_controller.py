@@ -993,7 +993,7 @@ def build_background_cli_args(
         args.extend(["--output-root", _path_text(output_root)])
     _append_ukf_args(args, common_run_kwargs)
     args.extend(["--microstructure-stages", microstructure_stages_arg(common_run_kwargs)])
-    args.extend(["--dki-fit-method", str(common_run_kwargs.get("microstructure_dki_fit_method") or "MKCURVE")])
+    args.extend(["--dki-fit-method", str(common_run_kwargs.get("microstructure_dki_fit_method", "MKCURVE") or "MKCURVE")])
     _append_compress_arg(args, common_run_kwargs)
     _append_ifw_args(args, common_run_kwargs)
     if common_run_kwargs.get("preprocessing_execution_backend"):
@@ -1068,7 +1068,7 @@ def build_batch_background_cli_args(
         args.extend(["--output-root", _path_text(output_root)])
     _append_ukf_args(args, common_run_kwargs)
     args.extend(["--microstructure-stages", microstructure_stages_arg(common_run_kwargs)])
-    args.extend(["--dki-fit-method", str(common_run_kwargs.get("microstructure_dki_fit_method") or "MKCURVE")])
+    args.extend(["--dki-fit-method", str(common_run_kwargs.get("microstructure_dki_fit_method", "MKCURVE") or "MKCURVE")])
     _append_compress_arg(args, common_run_kwargs)
     _append_ifw_args(args, common_run_kwargs)
     if common_run_kwargs.get("preprocessing_execution_backend"):

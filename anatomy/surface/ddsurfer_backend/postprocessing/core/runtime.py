@@ -42,7 +42,16 @@ def required_files(hemis, atlases):
 def shared_libraries(binary):
     system, _ = host()
     if system == 'Windows':
-        result = subprocess.run([str(binary), '--version'], capture_output=True, text=True, timeout=30)
+        no_win = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+        result = subprocess.run(
+            [str(binary), '--version'],
+            capture_output=True,
+            text=True,
+            encoding='utf-8',
+            errors='replace',
+            timeout=30,
+            creationflags=no_win,
+        )
         if result.returncode or not (result.stdout or result.stderr).strip():
             raise RuntimeError(f'Unresolved shared libraries or failed startup for {Path(binary).name}:\n{result.stdout}{result.stderr}')
         return (result.stdout or result.stderr).strip()
@@ -52,9 +61,9 @@ def shared_libraries(binary):
         raise FileNotFoundError(f'Install {name} to check native library dependencies')
     command = [tool, str(binary)] if system == 'Linux' else [tool, '-L', str(binary)]
     env = dict(os.environ)
-    for key in ('LD_LIBRARY_PATH', 'LD_PRELOAD', 'LD_AUDIT', 'DYLD_LIBRARY_PATH', 'DYLD_INSERT_LIBRARIES'):
+    for key in ('LD_LIBRARY_PATH', 'LD_PRELOAD', 'LD_AUDIT', 'DYLD_LIBRARY_PATH', 'DYLD_FALLBACK_LIBRARY_PATH', 'DYLD_INSERT_LIBRARIES'):
         env.pop(key, None)
-    result = subprocess.run(command, env=env, capture_output=True, text=True, timeout=30)
+    result = subprocess.run(command, env=env, capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=30)
     if result.returncode or 'not found' in result.stdout or 'not found' in result.stderr:
         raise RuntimeError(f'Unresolved shared libraries for {Path(binary).name}:\n{result.stdout}{result.stderr}')
     return result.stdout.strip()

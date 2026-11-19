@@ -63,12 +63,14 @@ def predict_view(model, slices: List[np.ndarray], apply_softmax: bool) -> np.nda
             torch.set_flush_denormal(True)
         except Exception:
             pass
-    if dev_str.startswith("cuda"):
-        from shared.hardware_adapt import query_cuda_free_total_bytes
+    if dev_str.startswith(("cuda", "mps")):
+        from shared.hardware_adapt import query_gpu_free_total_bytes
 
-        mem = query_cuda_free_total_bytes()
-        if mem is not None and mem[0] < int(2.0 * (1024**3)):
-            batch_size = 2
+        mem = query_gpu_free_total_bytes(dev_str)
+        if mem is not None:
+            min_bytes = int(4.0 * (1024**3)) if dev_str.startswith("mps") else int(2.0 * (1024**3))
+            if mem[0] < min_bytes:
+                batch_size = 2
 
     batch_supported = True
     pos = 0
@@ -88,9 +90,9 @@ def predict_view(model, slices: List[np.ndarray], apply_softmax: bool) -> np.nda
                 pos += len(chunk_idx)
                 continue
             except Exception:
-                from shared.hardware_adapt import empty_cuda_cache_safely
+                from shared.hardware_adapt import empty_gpu_cache_safely
 
-                empty_cuda_cache_safely()
+                empty_gpu_cache_safely()
                 batch_supported = False
                 continue
 

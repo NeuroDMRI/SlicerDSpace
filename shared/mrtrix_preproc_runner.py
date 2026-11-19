@@ -65,7 +65,16 @@ def main(argv=None):
         try:
             smi = shutil.which("nvidia-smi") or (
                 "/usr/lib/wsl/lib/nvidia-smi" if Path("/usr/lib/wsl/lib/nvidia-smi").is_file() else "nvidia-smi")
-            probe = subprocess.run([smi, "-L"], capture_output=True, text=True, timeout=10)
+            no_win = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+            probe = subprocess.run(
+                [smi, "-L"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=10,
+                creationflags=no_win,
+            )
             gpu_visible = probe.returncode == 0 and "GPU " in probe.stdout
         except (OSError, subprocess.TimeoutExpired):
             if fsl.eddy_binary(True):

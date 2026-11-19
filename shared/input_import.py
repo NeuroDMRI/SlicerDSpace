@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import json
 import gzip
+import io
+import json
 import os
 import shutil
 import subprocess
@@ -13,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
-from shared.external_process import text_subprocess_kwargs
+from shared.external_process import subprocess_no_window_kwargs, text_subprocess_kwargs
 
 
 ImportSourceKind = Literal["canonical", "dicom", "nifti", "nrrd"]
@@ -147,6 +148,13 @@ def _copy_file(source: Path, target: Path, *, force: bool) -> None:
     shutil.copy2(source, target)
 
 
+def _write_text_file(content: str, target: Path, *, force: bool) -> None:
+    if target.exists() and not force:
+        raise FileExistsError(f"Refusing to overwrite existing file: {target}")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(content, encoding="utf-8")
+
+
 def _run(command: list[str], *, dry_run: bool, cwd: Path | None = None) -> dict[str, Any]:
     if dry_run:
         return {"command": command, "returncode": None, "stdout": "", "stderr": "", "dry_run": True}
@@ -157,7 +165,7 @@ def _run(command: list[str], *, dry_run: bool, cwd: Path | None = None) -> dict[
             check=False,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            **text_subprocess_kwargs(),
+            **subprocess_no_window_kwargs(**text_subprocess_kwargs()),
         )
     except FileNotFoundError as exc:
         raise RuntimeError(
@@ -675,8 +683,18 @@ def _copy_nifti_source(
     image = nib.load(str(source))
     if len(image.shape) != 4 or not np.isfinite(image.affine).all():
         raise ValueError("DWI must be a four-dimensional NIfTI with a finite affine")
-    bvals = np.loadtxt(bval).reshape(-1)
-    bvecs = np.loadtxt(bvec, ndmin=2)
+    bval_bytes = bval.read_bytes()
+    bvec_bytes = bvec.read_bytes()
+    bval_has_bom = bval_bytes.startswith(b"\xef\xbb\xbf")
+    bvec_has_bom = bvec_bytes.startswith(b"\xef\xbb\xbf")
+    bval_raw = bval_bytes.decode("utf-8-sig")
+    bvec_raw = bvec_bytes.decode("utf-8-sig")
+    bvals = np.loadtxt(io.StringIO(bval_raw)).reshape(-1)
+    bvecs = np.loadtxt(io.StringIO(bvec_raw), ndmin=2)
+    bvecs_transposed = False
+    if bvecs.ndim == 2 and bvals.size != 3 and bvecs.shape == (bvals.size, 3):
+        bvecs = bvecs.T
+        bvecs_transposed = True
     if bvals.size != image.shape[3] or bvecs.shape != (3, bvals.size):
         raise ValueError("Gradient count/shape does not match the DWI volumes (expected 3 x N bvecs)")
     if not np.isfinite(bvals).all() or not np.isfinite(bvecs).all():
@@ -725,7 +743,16 @@ def _copy_nifti_source(
         temporary.unlink(missing_ok=True)
     if staged_cache_nii is not None:
         commit_predecoded_nifti_cache(target, staged_cache_nii, expected_cache_bytes)
-    _copy_file(bval, targets["bvals"], force=force)
-    _copy_file(bvec, targets["bvecs"], force=force)
+    if bval_has_bom:
+        _write_text_file(bval_raw, targets["bvals"], force=force)
+    else:
+        _copy_file(bval, targets["bvals"], force=force)
+    if bvecs_transposed:
+        transposed_text = "\n".join(" ".join(f"{float(v):.15g}" for v in row) for row in bvecs) + "\n"
+        _write_text_file(transposed_text, targets["bvecs"], force=force)
+    elif bvec_has_bom:
+        _write_text_file(bvec_raw, targets["bvecs"], force=force)
+    else:
+        _copy_file(bvec, targets["bvecs"], force=force)
     if metadata.is_file():
         _copy_file(metadata, targets["metadata"], force=force)

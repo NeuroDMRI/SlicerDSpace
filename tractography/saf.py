@@ -240,14 +240,14 @@ def _validate_config(config: SAFConfig) -> None:
     if config.random_seed < 0:
         raise ValueError("random_seed must be >= 0.")
     dev = (config.device or "auto").strip().lower()
-    if dev not in {"auto", "cpu", "cuda"} and not dev.startswith("cuda:"):
-        raise ValueError("SAF device must be 'auto', 'cpu', or 'cuda'")
+    if dev not in {"auto", "cpu", "cuda", "mps"} and not dev.startswith("cuda:"):
+        raise ValueError("SAF device must be 'auto', 'cpu', 'cuda', or 'mps'")
 
 
 def _resolve_saf_device(device: str = "auto") -> str:
     dev = (device or "auto").strip().lower()
-    if dev not in {"auto", "cpu", "cuda"} and not dev.startswith("cuda:"):
-        raise ValueError("SAF device must be 'auto', 'cpu', or 'cuda'")
+    if dev not in {"auto", "cpu", "cuda", "mps"} and not dev.startswith("cuda:"):
+        raise ValueError("SAF device must be 'auto', 'cpu', 'cuda', or 'mps'")
     return "cpu"
 
 

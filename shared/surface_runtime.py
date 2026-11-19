@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 
 from anatomy.surface.backend_bridge import BACKEND_ROOT, backend_environment, python_executable, sha256
+from shared.external_process import subprocess_no_window_kwargs, text_subprocess_kwargs
 
 
 def default_surface_runtime():
@@ -98,7 +99,13 @@ def inspect_surface_runtime(runtime=None, freesurfer_home=None, license_file=Non
         )
         if license_file is not None:
             command += ['--license-file', str(license_file)]
-        result = subprocess.run(command, env=backend_environment(python_bin=python_bin), capture_output=True, text=True, timeout=60)
+        result = subprocess.run(
+            command,
+            env=backend_environment(python_bin=python_bin),
+            capture_output=True,
+            timeout=60,
+            **subprocess_no_window_kwargs(**text_subprocess_kwargs()),
+        )
         if result.returncode:
             raise RuntimeError(result.stderr[-2000:] or result.stdout[-2000:])
         return json.loads(result.stdout.strip().splitlines()[-1])

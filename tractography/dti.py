@@ -141,8 +141,9 @@ def _validate_config(config: DTITrackingConfig) -> None:
         raise ValueError("min_length_mm must be >= 0.")
     if config.max_length_mm <= config.min_length_mm:
         raise ValueError("max_length_mm must be greater than min_length_mm.")
-    if str(config.device).strip().lower() not in {"auto", "cpu", "cuda"}:
-        raise ValueError("device must be 'auto', 'cpu', or 'cuda'.")
+    dev_norm = str(config.device).strip().lower()
+    if dev_norm not in {"auto", "cpu", "cuda", "mps"} and not dev_norm.startswith("cuda:"):
+        raise ValueError("device must be 'auto', 'cpu', 'cuda', or 'mps'.")
 
 
 def _resolve_dti_device(requested: str) -> str:
@@ -150,9 +151,9 @@ def _resolve_dti_device(requested: str) -> str:
 
     env_override = os.environ.get("SLICERDSPACE_DTI_TRACKING_DEVICE")
     mode = str(env_override if env_override else requested).strip().lower()
-    if mode not in {"auto", "cpu", "cuda"}:
+    if mode not in {"auto", "cpu", "cuda", "mps"} and not mode.startswith("cuda:"):
         raise ValueError(f"Unsupported DTI tracking device {mode!r}.")
-    if mode == "cpu":
+    if mode in {"cpu", "mps"}:
         return "cpu"
     try:
         import torch
@@ -160,7 +161,7 @@ def _resolve_dti_device(requested: str) -> str:
         cuda_ok = bool(torch.cuda.is_available())
     except Exception:
         cuda_ok = False
-    if mode == "cuda" and not cuda_ok:
+    if (mode == "cuda" or mode.startswith("cuda:")) and not cuda_ok:
         raise RuntimeError("DTI tracking CUDA device requested, but PyTorch CUDA is unavailable.")
     return "cuda" if cuda_ok else "cpu"
 

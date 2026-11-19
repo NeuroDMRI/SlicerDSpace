@@ -586,7 +586,7 @@ def prepare_selected_environment(owner, result=None, *, repair=False, skip_confi
         def done(status, details, _log):
             owner._selectedSetupActive = False
             try:
-                if status != 'completed' or any(json.loads(path.read_text()).get('status') != 'passed' for path in receipts):
+                if status != 'completed' or any(json.loads(path.read_text(encoding='utf-8')).get('status') != 'passed' for path in receipts):
                     raise RuntimeError(details or 'Installation functionality check failed')
             except Exception as exc:
                 failed(str(exc))
@@ -747,7 +747,7 @@ def use_offline_assets(owner):
 
     def done(status, details, log):
         try:
-            record = json.loads(receipt.read_text()) if receipt.is_file() else {}
+            record = json.loads(receipt.read_text(encoding='utf-8')) if receipt.is_file() else {}
         except (OSError, ValueError):
             record = {}
         if status == "completed" and record.get("status") == "completed":

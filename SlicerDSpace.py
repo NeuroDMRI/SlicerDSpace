@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import os
 from typing import Annotated, Optional
+
+os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
 import slicer
 from slicer.ScriptedLoadableModule import (

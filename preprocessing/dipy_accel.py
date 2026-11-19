@@ -31,8 +31,11 @@ from numpy.lib.stride_tricks import sliding_window_view
 from shared.hardware_adapt import (
     MIB,
     adaptive_cuda_scaled_batch,
+    adaptive_gpu_scaled_batch,
     empty_cuda_cache_safely,
+    empty_gpu_cache_safely,
     is_cuda_oom,
+    is_mps_available,
     query_cuda_free_total_bytes,
     run_cuda_chunked_with_oom_fallback,
 )
@@ -251,15 +254,43 @@ def _eigh_cuda_batched(sym):
         return torch.linalg.eigh(sym)
 
 
-def resolve_dipy_accel_device(requested: Optional[str] = None) -> str:
+_MPS_FFT_FP32_SUPPORTED: Optional[bool] = None
+
+
+def _mps_supports_fft_float32() -> bool:
+    """Return True if the active PyTorch MPS runtime supports float32/complex64 FFT."""
+    global _MPS_FFT_FP32_SUPPORTED
+    if _MPS_FFT_FP32_SUPPORTED is not None:
+        return _MPS_FFT_FP32_SUPPORTED
+    try:
+        import torch
+
+        if not is_mps_available(torch):
+            _MPS_FFT_FP32_SUPPORTED = False
+            return False
+        probe = torch.zeros((2, 2), dtype=torch.float32, device="mps")
+        freq = torch.fft.fft2(probe, dim=(-2, -1))
+        _ = torch.fft.ifft2(freq, dim=(-2, -1)).real
+        _ = torch.as_tensor(np.zeros((2,), dtype=np.complex64), device="mps", dtype=torch.complex64)
+        _MPS_FFT_FP32_SUPPORTED = True
+    except Exception:
+        _MPS_FFT_FP32_SUPPORTED = False
+    return _MPS_FFT_FP32_SUPPORTED
+
+
+def resolve_dipy_accel_device(requested: Optional[str] = None, *, for_gibbs: bool = False) -> str:
     value = str(
         requested
         if requested is not None
         else os.environ.get("SLICERDSPACE_DIPY_DEVICE", "auto")
     ).strip().lower()
-    if value not in {"auto", "cpu", "cuda"}:
-        raise ValueError(f"Unsupported DIPY preprocessing device {value!r}; expected 'auto', 'cpu', or 'cuda'.")
+    if value not in {"auto", "cpu", "cuda", "mps"} and not value.startswith("cuda:"):
+        raise ValueError(f"Unsupported DIPY preprocessing device {value!r}; expected 'auto', 'cpu', 'mps', or 'cuda'.")
     if value == "cpu":
+        return "cpu"
+    if value == "mps":
+        if for_gibbs and _mps_supports_fft_float32():
+            return "mps"
         return "cpu"
     try:
         import torch
@@ -267,9 +298,13 @@ def resolve_dipy_accel_device(requested: Optional[str] = None) -> str:
         cuda_ok = bool(torch.cuda.is_available())
     except Exception:
         cuda_ok = False
-    if value == "cuda" and not cuda_ok:
+    if (value == "cuda" or value.startswith("cuda:")) and not cuda_ok:
         raise RuntimeError("DIPY CUDA acceleration was explicitly requested, but PyTorch CUDA is unavailable.")
-    return "cuda" if cuda_ok else "cpu"
+    if cuda_ok:
+        return "cuda"
+    if for_gibbs and _mps_supports_fft_float32():
+        return "mps"
+    return "cpu"
 
 
 def _solve_mppca_core_numpy_fp64(
@@ -923,8 +958,9 @@ def gibbs_removal_accelerated(
     n_slices = int(flat.shape[0])
     g0, g1 = _gibbs_weights_numpy((h_dim, w_dim))
 
-    resolved = resolve_dipy_accel_device(device)
-    explicit_cuda = str(device or os.environ.get("SLICERDSPACE_DIPY_DEVICE", "auto")).strip().lower() == "cuda"
+    resolved = resolve_dipy_accel_device(device, for_gibbs=True)
+    req_raw = str(device or os.environ.get("SLICERDSPACE_DIPY_DEVICE", "auto")).strip().lower()
+    explicit_cuda = req_raw == "cuda" or req_raw.startswith("cuda:")
 
     def _run_cpu_batches(indices_slice: slice) -> np.ndarray:
         sub = np.ascontiguousarray(flat[indices_slice])
@@ -949,18 +985,19 @@ def gibbs_removal_accelerated(
                     out_sub[b0:b1] = res
         return out_sub
 
-    if resolved == "cuda":
+    if resolved in {"cuda", "mps"}:
         import torch
 
-        dev = torch.device("cuda")
-        torch_dtype = torch.float64 if flat.dtype == np.float64 else torch.float32
+        dev = torch.device(resolved)
+        torch_dtype = torch.float64 if (resolved == "cuda" and flat.dtype == np.float64) else torch.float32
         elem_bytes = 8 if torch_dtype == torch.float64 else 4
         per_slice_bytes = max(4096, h_dim * w_dim * elem_bytes * 24)
-        init_batch = adaptive_cuda_scaled_batch(
+        init_batch = adaptive_gpu_scaled_batch(
             per_item_bytes=per_slice_bytes,
-            default_batch=512,
-            min_batch=32,
-            max_batch=1024,
+            default_batch=512 if resolved == "cuda" else 128,
+            min_batch=16 if resolved == "mps" else 32,
+            max_batch=1024 if resolved == "cuda" else 256,
+            device=dev,
         )
         g0_t = torch.as_tensor(g0, device=dev, dtype=torch_dtype).unsqueeze(0)
         g1_t = torch.as_tensor(g1, device=dev, dtype=torch_dtype).unsqueeze(0)
@@ -992,7 +1029,7 @@ def gibbs_removal_accelerated(
             flat[:, :, :] = np.concatenate(chunks, axis=0) if chunks else flat
         finally:
             del g0_t, g1_t
-            empty_cuda_cache_safely()
+            empty_gpu_cache_safely()
     else:
         flat[:, :, :] = _run_cpu_batches(slice(0, n_slices))
 

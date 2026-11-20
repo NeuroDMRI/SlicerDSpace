@@ -230,7 +230,7 @@ jobs:
         shell: bash
         env:
           SLICER_EXE: ${{ steps.slicer.outputs.slicer_exe }}
-        run: python .github/scripts/ci_debug_state.py --label pre-install --slicer-exe "$SLICER_EXE"
+        run: python .github/scripts/ci_debug_state.py --label pre-install --probe --slicer-exe "$SLICER_EXE"
 
       - name: Install SlicerDSpace v0.1.1 with the website installer, then overlay this checkout
         id: dspace
@@ -251,6 +251,13 @@ jobs:
         run: |
           python .github/scripts/ci_run_slicer_smoke.py --slicer-exe "$SLICER_EXE" --module-dir "$MODULE_DIR" \
             --mode full-install --pipeline required
+
+      - name: Fail - the website installer left SlicerDSpace scheduled for uninstall
+        if: ${{ !cancelled() && fromJSON(steps.dspace.outputs.scheduled_uninstall_cancelled || '0') > 0 }}
+        shell: bash
+        run: |
+          echo "::error title=Product installer bug::After a clean install the Slicer settings list SlicerDSpace under Extensions/ScheduledForUninstall; the next Slicer start deletes the extension. The smoke below ran only because CI removed that entry (see the installer step log)."
+          exit 1
 
       - name: Diagnostics - extension state after the smoke
         if: ${{ !cancelled() }}

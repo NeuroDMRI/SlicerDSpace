@@ -154,7 +154,8 @@ def install_macos(archive, install_dir):
     install_dir.mkdir(parents=True, exist_ok=True)
     dmg = archive.with_suffix(".dmg")
     shutil.copyfile(str(archive), str(dmg))
-    run(["hdiutil", "attach", "-nobrowse", "-readonly", "-mountpoint", mount, dmg])
+    # The Slicer dmg carries a license agreement; without "Y" on stdin hdiutil prints it and cancels the attach.
+    run(["hdiutil", "attach", "-nobrowse", "-readonly", "-mountpoint", mount, dmg], input=b"Y\n")
     try:
         apps = sorted(mount.glob("Slicer*.app"))
         if not apps:

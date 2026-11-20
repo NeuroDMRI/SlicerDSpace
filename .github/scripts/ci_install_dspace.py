@@ -107,7 +107,10 @@ def run_website_installer(python_slicer, slicer_exe, target_os, offline_dir, bun
                SLICERDSPACE_INSTALLER_NONINTERACTIVE="1", PYTHONNOUSERSITE="1")
     command = [str(python_slicer), "-u", "-c", EXEC_SNIPPET, str(script_path)]
     log("run: %s -u -c <installer payload> %s" % (python_slicer, script_path))
-    process = subprocess.Popen(command, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace")
+    # cwd = the download folder, not the checkout: the checkout holds SlicerDSpace.s4ext and SlicerDSpace.py at its
+    # root, and a user never runs the installer from inside a source tree.
+    process = subprocess.Popen(command, env=env, cwd=str(offline_dir), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                               text=True, errors="replace")
     lines = []
     for line in process.stdout:
         lines.append(line)

@@ -26,6 +26,13 @@ from shared.model_assets import model_asset_candidates, model_asset_path_or_none
 # torch` never return) would freeze the whole application. Allow enough headroom
 # for cold-start dynamic-library verification on macOS/Windows (first import of torch).
 DEPENDENCY_PROBE_TIMEOUT_SECONDS = 90
+# D4: one worker that imports torch and exchanges an array with NumPy; a probe, so it keeps a timeout.
+TORCH_ABI_PROBE_TIMEOUT_SECONDS = 120
+_TORCH_ABI_CACHE: dict[tuple[Any, ...], dict[str, Any]] = {}
+WINDOWS_GPU_NOTE = (
+    "On Windows, GPU use needs the CUDA build of torch that the Slicer PyTorch extension installs; "
+    "the bundled torch runs on CPU."
+)
 _ACTIVE_CUDA_PROBE_CACHE: contextvars.ContextVar[Optional[dict[Any, Any]]] = contextvars.ContextVar(
     "_ACTIVE_CUDA_PROBE_CACHE",
     default=None,
@@ -984,7 +991,6 @@ def _common_slicer_executables(platform_name: str) -> tuple[Path, ...]:
                 except OSError:
                     continue
     candidates.extend([
-        Path("/data/chengjin/software/Slicer-5.10.0-linux-amd64/Slicer"),
         Path("/usr/local/Slicer/Slicer"),
         Path("/opt/Slicer/Slicer"),
     ])
@@ -1128,7 +1134,25 @@ def _model_asset_spec_path(config: EnvironmentDoctorConfig, relative: str) -> tu
             f"Integrity check failed: {error} Delete the file and re-download it with "
             "scripts/download_model_assets.py (or the Slicer UI's model-asset download button)."
         )
+        if "is incomplete" in str(error):
+            # LE-2: an incomplete weights folder names the missing files and the 'Install models' action.
+            notes = str(error)
         return placeholder, (), notes
+    if resolved is not None and relative.endswith("weights") and resolved.is_dir():
+        # LE-2: an explicit asset root skips the resolver check; a weights folder with only some of the
+        # manifest-recorded files (interrupted download) must still read as "missing" in the doctor.
+        from shared.model_assets import (
+            _load_asset_manifest_records,
+            incomplete_asset_message,
+            incomplete_manifest_files,
+        )
+
+        depth = len(Path(relative).parts)
+        problems = incomplete_manifest_files(
+            resolved.parents[depth - 1], relative, _load_asset_manifest_records(repo_root)
+        )
+        if problems:
+            return repo_root / (relative + ".incomplete"), (), incomplete_asset_message(resolved, problems)
     return resolved, candidates, ""
 
 
@@ -1474,7 +1498,8 @@ def build_dependency_specs(config: EnvironmentDoctorConfig) -> tuple[DependencyS
             _add_mrtrix_commands(
                 specs,
                 target,
-                ("mrconvert", "dwi2response", "dwi2fod", "mtnormalise", "tckgen", "tcksift2"),
+                ("mrconvert", "dwi2response", "dwi2fod", "mtnormalise", "tckgen", "tcksift2",
+                 "5ttcheck", "5tt2gmwmi"),  # LE-9
                 config.mrtrix_bin_dir,
             )
 
@@ -1608,13 +1633,14 @@ def build_dependency_specs(config: EnvironmentDoctorConfig) -> tuple[DependencyS
             _add_core_python(specs, target)
             if platform_name == "Linux" and not any(os.environ.get(name) for name in (
                     "DISPLAY", "SLICERDSPACE_DISPLAY")):
-                from tractography.wma import EXTRA_TOOL_DIRS
+                from tractography.wma import dev_xvfb_tool_dirs, headless_linux_hint
                 for command in ("xvfb-run", "Xvfb", "xauth"):
                     _put(specs, DependencySpec(
                         key=f"command:{command}", kind="command", label=command,
                         required=True, targets=(target,), command=command, install_group="wma",
-                        common_paths=EXTRA_TOOL_DIRS,
-                        notes="WMA automatically uses a virtual X display for Slicer on headless Linux."))
+                        common_paths=dev_xvfb_tool_dirs(),
+                        notes="WMA automatically uses a virtual X display for Slicer on headless Linux. "
+                              + headless_linux_hint()))
             _python(specs, target=target, import_name="vtk", package="vtk",
                     notes="Required by the pipeline host to decode bundle geometry; bundled with Slicer.")
             # The author scripts run in Slicer's Python and `import whitematteranalysis` loads these at import time
@@ -1952,10 +1978,17 @@ def _install_hint(spec: DependencySpec, platform_name: str) -> str:
     if spec.path_kind == "wma_native_source":
         return "Prepare the pinned WhiteMatterAnalysis source or select its native Python checkout with --wma-root."
     if spec.install_group == "wma":
-        return "Install/configure external WhiteMatterAnalysis and ORG atlas; pass --wma-root/--wma-atlas-dir or set SLICERDSPACE_WMA_ROOT."
+        hint = "Install/configure external WhiteMatterAnalysis and ORG atlas; pass --wma-root/--wma-atlas-dir or set SLICERDSPACE_WMA_ROOT."
+        if spec.kind == "command" and spec.command in {"xvfb-run", "Xvfb", "xauth"}:
+            from tractography.wma import headless_linux_hint  # X10: name the packages a headless host needs
+
+            hint += " " + headless_linux_hint()
+        return hint
     if spec.install_group == "tractcloud":
         return "Install/configure external TractCloud package/check-out and model data; pass --tractcloud-root/--tractcloud-data-dir."
     if spec.install_group == "model-resources":
+        if "is incomplete" in spec.notes:
+            return spec.notes  # LE-2: names the missing files and the 'Install models' action
         return "Choose a model asset root in the Slicer UI, or run scripts/download_model_assets.py --profile core --asset-root <path>."
     if spec.install_group == "slicer":
         return "Pass --slicer-executable or set SLICERDSPACE_SLICER_EXECUTABLE to the local Slicer executable."
@@ -1964,10 +1997,11 @@ def _install_hint(spec: DependencySpec, platform_name: str) -> str:
     if spec.install_group == 'ukf':
         return 'Install UKFTractography through Slicer Extension Manager and restart Slicer. UKF is optional; no automatic algorithm fallback.'
     if spec.install_group == "device":
-        return (
+        hint = (
             "Use CPU, or ensure CUDA (NVIDIA) or Apple Silicon Metal (MPS) PyTorch acceleration "
             "is available in the selected Python/Slicer environment."
         )
+        return hint + " " + WINDOWS_GPU_NOTE if platform_name == "Windows" else hint
     return spec.notes
 
 
@@ -2121,6 +2155,142 @@ def _check_cuda_device(
     return available, details
 
 
+def torch_numpy_abi_probe(
+    python_executable: Optional[Path] = None,
+    python_path_entries: Iterable[Path] = (),
+) -> dict[str, Any]:
+    """D4: run ``torch.from_numpy(numpy.zeros(1))`` in a short worker with the bundle activated like a pipeline worker.
+
+    The GUI process always holds Slicer's NumPy, so the check never imports the bundled torch in process.
+    Returns ``numpy_version``, ``torch_version``, ``ok`` (the array exchange worked), ``abi_mismatch`` and
+    ``error``. A completed result is cached for the session; a timeout or a launch failure is not.
+    """
+    python_path = python_executable or Path(sys.executable)
+    entries = tuple(path.expanduser().resolve() for path in python_path_entries if path)
+    cache_key = (python_path.as_posix(), tuple(path.as_posix() for path in entries))
+    cached = _TORCH_ABI_CACHE.get(cache_key)
+    if cached is not None:
+        return dict(cached)
+    prepend_paths = [*_bundled_prepend_paths(python_path), *(path.as_posix() for path in entries)]
+    probe = (
+        "import json, sys\n"
+        f"sys.path[:0] = {prepend_paths!r}\n"
+        "payload = {'numpy_version': None, 'torch_version': None, 'ok': False, 'abi_mismatch': False, 'error': None}\n"
+        "try:\n"
+        "    import numpy\n"
+        "    payload['numpy_version'] = numpy.__version__\n"
+        "except Exception as exc:\n"
+        "    payload['error'] = 'NumPy: ' + str(exc)\n"
+        "else:\n"
+        "    try:\n"
+        "        import torch\n"
+        "        payload['torch_version'] = getattr(torch, '__version__', None)\n"
+        "        torch.from_numpy(numpy.zeros(1))\n"
+        "        payload['ok'] = True\n"
+        "    except ImportError as exc:\n"
+        "        payload['error'] = str(exc)\n"
+        "        payload['abi_mismatch'] = 'numpy' in str(exc).lower() and payload['torch_version'] is None\n"
+        "    except Exception as exc:\n"
+        "        payload['error'] = str(exc)\n"
+        "        payload['abi_mismatch'] = payload['torch_version'] is not None\n"
+        "print(json.dumps(payload))\n"
+    )
+    try:
+        completed = subprocess.run(
+            [python_path.as_posix(), "-c", probe],
+            check=True,
+            capture_output=True,
+            timeout=TORCH_ABI_PROBE_TIMEOUT_SECONDS,
+            env=python_tool_environment(python_path),
+            **text_subprocess_kwargs(),
+        )
+        details = _parse_json_probe_output(completed.stdout)
+    except subprocess.TimeoutExpired as exc:
+        return {"numpy_version": None, "torch_version": None, "ok": False, "abi_mismatch": False,
+                "error": f"PyTorch check timed out after {exc.timeout:g}s"}
+    except Exception as exc:
+        return {"numpy_version": None, "torch_version": None, "ok": False, "abi_mismatch": False,
+                "error": str(exc)}
+    _TORCH_ABI_CACHE[cache_key] = dict(details)
+    return dict(details)
+
+
+def _bundle_runtime_numpy_floor() -> Optional[str]:
+    """D8: the lowest Slicer NumPy the bundle needs, from ``python-runtime.json`` next to the bundle, or None."""
+    from shared.bundled_python import bundled_python_roots
+
+    for root in bundled_python_roots():
+        try:
+            meta = json.loads((root / "python-runtime.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        floor = meta.get("slicer_numpy_minimum") if isinstance(meta, dict) else None
+        if isinstance(floor, str) and floor.strip():
+            return floor.strip()
+    return None
+
+
+def _numpy_below_floor(version: Optional[str], floor: str) -> bool:
+    try:
+        from packaging.version import Version
+
+        return bool(version) and Version(version) < Version(floor)
+    except Exception:  # a missing packaging module or an unparsable version must not block the run
+        return False
+
+
+def _runtime_compatibility_statuses(
+    specs: Iterable[DependencySpec],
+    statuses: Iterable[DependencyStatus],
+) -> tuple[DependencyStatus, ...]:
+    """F3, D4 and D8: blocking rows for a skipped bundle, a torch/NumPy ABI mismatch and a Slicer NumPy below the floor."""
+    specs = tuple(specs)
+    rows: list[DependencyStatus] = []
+    python_targets = tuple(dict.fromkeys(target for spec in specs if spec.kind == "python" for target in spec.targets))
+    from shared.bundled_python import activation_problem
+
+    problem = activation_problem()
+    if problem and python_targets:
+        rows.append(DependencyStatus(
+            key="bundled_python_activation", kind="setting", label="Bundled Python packages",
+            status="missing", required=True, targets=python_targets,
+            details={"notes": problem, "error": problem, "detected_source": "bundle compatibility check"},
+            install_hint=problem, install_group="slicerdspace-package",
+        ))
+    available_torch = {item.key for item in statuses if item.kind == "python" and item.status == "available"}
+    torch_specs = [spec for spec in specs if spec.kind == "python" and spec.python_import == "torch"
+                   and spec.key in available_torch]
+    groups: dict[tuple[Any, ...], list[DependencySpec]] = {}
+    for spec in torch_specs:
+        groups.setdefault((spec.python_executable, spec.python_path_entries), []).append(spec)
+    for (python_executable, entries), group in groups.items():
+        targets = tuple(dict.fromkeys(target for spec in group for target in spec.targets))
+        probe = torch_numpy_abi_probe(python_executable, entries)
+        if probe.get("abi_mismatch"):
+            numpy_version = probe.get("numpy_version") or "unknown"
+            message = (f"PyTorch cannot exchange arrays with NumPy {numpy_version} in this Slicer; "
+                       "reinstall the SlicerDSpace package for this Slicer")
+            rows.append(DependencyStatus(
+                key="torch_numpy_abi", kind="setting", label="PyTorch and NumPy compatibility",
+                status="missing", required=True, targets=targets,
+                details={"notes": message, "error": probe.get("error"), "numpy_version": numpy_version,
+                         "torch_version": probe.get("torch_version"), "detected_source": "torch.from_numpy probe"},
+                install_hint=message, install_group="slicerdspace-package",
+            ))
+        floor = _bundle_runtime_numpy_floor()
+        if floor and _numpy_below_floor(probe.get("numpy_version"), floor):
+            message = (f"Slicer's NumPy {probe['numpy_version']} is older than the NumPy {floor} that the bundled "
+                       "packages need; use a Slicer release that ships NumPy " + floor + " or newer")
+            rows.append(DependencyStatus(
+                key="slicer_numpy_floor", kind="setting", label="Slicer NumPy version",
+                status="missing", required=True, targets=targets,
+                details={"notes": message, "numpy_version": probe["numpy_version"], "numpy_minimum": floor,
+                         "detected_source": "python-runtime.json"},
+                install_hint=message, install_group="slicerdspace-package",
+            ))
+    return tuple(rows)
+
+
 def _check_mps_device(
     python_executable: Optional[Path],
     python_path_entries: Iterable[Path] = (),
@@ -2155,6 +2325,103 @@ def resolve_auto_torch_device(
     if normalized in {"mps", "mps:0"}:
         return "mps"
     return normalized
+
+
+SURFACE_MIN_FREE_GPU_GIB = 12.0  # LE-3: 8 GiB for the network plus the 4 GiB margin of ddsurfer_backend predict.py
+_CUDA_FREE_CACHE: dict[tuple[str, str], tuple[float, Optional[float]]] = {}
+_CUDA_FREE_CACHE_SECONDS = 60.0
+
+
+def cuda_free_gib(
+    device: str = "cuda:0", python_executable: Optional[Path] = None, *, cached_only: bool = False
+) -> Optional[float]:
+    """LE-3: free GPU memory in GiB from ``torch.cuda.mem_get_info`` in the selected runtime, or None if unknown.
+
+    The torch import runs in a child process (the selected interpreter may not be this one) and the answer is
+    cached for one minute, so a plan and the run that follows it ask the GPU once. ``cached_only`` (plan time, GUI
+    thread) never starts the probe: it returns the cached value or None.
+    """
+
+    import time
+
+    python_path = python_executable or Path(sys.executable)
+    key = (python_path.as_posix(), device)
+    now = time.monotonic()
+    cached = _CUDA_FREE_CACHE.get(key)
+    if cached is not None and now - cached[0] < _CUDA_FREE_CACHE_SECONDS:
+        return cached[1]
+    if cached_only:
+        return None
+    index = 0
+    if ":" in device:
+        try:
+            index = int(device.split(":", 1)[1])
+        except ValueError:
+            index = 0
+    probe = (
+        "import json, sys; "
+        f"sys.path[:0] = {_bundled_prepend_paths(python_path)!r}; "
+        "\ntry:\n"
+        "    import torch\n"
+        f"    free, _total = torch.cuda.mem_get_info({index})\n"
+        "    print(json.dumps({'free_gib': free / 1024**3}))\n"
+        "except Exception as exc:\n"
+        "    print(json.dumps({'free_gib': None, 'error': str(exc)}))\n"
+    )
+    value: Optional[float] = None
+    try:
+        completed = subprocess.run(
+            [python_path.as_posix(), "-c", probe],
+            check=True,
+            capture_output=True,
+            timeout=DEPENDENCY_PROBE_TIMEOUT_SECONDS,
+            env=python_tool_environment(python_path),
+            **text_subprocess_kwargs(),
+        )
+        payload = _parse_json_probe_output(completed.stdout)
+        raw = payload.get("free_gib") if isinstance(payload, dict) else None
+        value = float(raw) if isinstance(raw, (int, float)) and not isinstance(raw, bool) else None
+    except Exception:
+        value = None
+    _CUDA_FREE_CACHE[key] = (now, value)
+    return value
+
+
+def _is_macos() -> bool:
+    return sys.platform == "darwin"
+
+
+def surface_gpu_memory_decision(
+    device: str, python_executable: Optional[Path] = None, *, cached_only: bool = False
+) -> tuple[str, str]:
+    """LE-3: decide before the run whether DDSurfer has the GPU memory it needs.
+
+    Returns ``("ok", "")``, ``("cpu", note)`` (device ``auto`` with too little free GPU memory: run the surface
+    stage on CPU) or ``("block", reason)`` (an explicit CUDA device with too little free memory).
+    Anything unknown (no CUDA, probe failed) returns ``ok``: predict.py keeps its own check at run time.
+    """
+
+    normalized = (device or "auto").strip().lower()
+    explicit = normalized == "cuda" or normalized.startswith("cuda:")
+    if normalized == "auto":
+        if _is_macos():
+            return "ok", ""  # no CUDA on macOS
+        normalized = "cuda:0"  # one cached probe: it returns None without CUDA, which means "ok"
+    elif not explicit:
+        return "ok", ""
+    free = cuda_free_gib("cuda:0" if normalized == "cuda" else normalized, python_executable, cached_only=cached_only)
+    if free is None or free >= SURFACE_MIN_FREE_GPU_GIB:
+        return "ok", ""
+    found = f"{free:.1f}"
+    if explicit:
+        return "block", (
+            f"DDSurfer needs at least {SURFACE_MIN_FREE_GPU_GIB:g} GiB free GPU memory (found {found} GiB). "
+            "Set the surface device to CPU or free GPU memory."
+        )
+    return "cpu", (
+        f"DDSurfer needs at least {SURFACE_MIN_FREE_GPU_GIB:g} GiB free GPU memory but only {found} GiB is free; "
+        "the surface stage runs on CPU. Free GPU memory to use the GPU."
+    )
 
 
 def _check_spec(spec: DependencySpec, platform_name: str) -> DependencyStatus:
@@ -2395,6 +2662,8 @@ def _check_spec(spec: DependencySpec, platform_name: str) -> DependencyStatus:
     else:
         details = {"notes": spec.notes, "detected_source": spec.discovery_source or "unknown"}
 
+    if spec.kind == "device" and platform_name == "Windows":
+        details["windows_gpu_note"] = WINDOWS_GPU_NOTE  # D8
     return DependencyStatus(
         key=spec.key,
         kind=spec.kind,
@@ -2642,6 +2911,8 @@ def run_environment_doctor(config: EnvironmentDoctorConfig, *, _probe_cache=None
             # GUI session: the interpreter is Slicer's own, so the check runs in process.
             statuses += (_native_tensor_status(
                 native_targets, config, in_process=config.loaded_slicer_modules is not None),)
+    if _check_spec is _DEFAULT_CHECK_SPEC:
+        statuses += _runtime_compatibility_statuses(specs, statuses)
     if "microstructure_dki" in targets and config.dki_fit_method.upper().startswith("MKCURVE"):
         report_progress('MK-Curve backend')
         matlab_reference = config.dki_fit_method.upper() == "MKCURVE_MATLAB"

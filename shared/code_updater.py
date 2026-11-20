@@ -12,6 +12,7 @@ import stat
 import sys
 import tarfile
 import tempfile
+import time
 import urllib.request
 from typing import Any, Callable
 
@@ -26,6 +27,22 @@ from shared.network_config import (
     find_local_pack_archive,
     load_network_settings,
     open_url,
+)
+# U1: the journal code lives in a standard-library-only module that SlicerDSpace.py loads before `shared`.
+from shared.update_journal import (
+    JOURNAL_DIRNAME,
+    JOURNAL_FILENAME as _JOURNAL_FILENAME,
+    acquire_update_lock,
+    clear_stale_pyc as _clear_stale_pyc,
+    current_process_identity as _current_process_identity,
+    discard_journal as _discard_journal,
+    journal_dir as _journal_dir,
+    journal_owner_is_running as _journal_owner_is_running,
+    recover_interrupted_update,
+    release_update_lock,
+    rollback_apply as _rollback_apply,
+    write_json_atomic as _write_json_atomic,
+    write_update_journal as _write_update_journal,
 )
 
 REPO_ROOT = _PACKAGE_ROOT
@@ -42,6 +59,10 @@ _MAX_OVERLAY_FILES = 5000
 _MAX_OVERLAY_UNPACKED_BYTES = 256 * 1024 * 1024
 
 ProgressCallback = Callable[[int, int], None]
+PhaseCallback = Callable[[str], None]
+
+_REPLACE_RETRY_SECONDS = 5.0
+_REPLACE_RETRY_INTERVAL = 0.1
 
 
 def _sha256_file(path: Path) -> str:
@@ -373,40 +394,18 @@ def _extract_overlay_safely(archive_path: Path, staging_dir: Path) -> dict[str, 
     return file_modes
 
 
-def _clear_stale_pyc(root: Path, python_relatives: set[str]) -> None:
-    for rel in python_relatives:
-        if not rel.endswith(".py"):
-            continue
-        py_path = root / rel
-        cache_dir = py_path.parent / "__pycache__"
-        if not cache_dir.is_dir():
-            continue
-        stem = py_path.stem
-        for pyc in cache_dir.glob(f"{stem}.*.pyc"):
-            try:
-                pyc.unlink()
-            except OSError:
-                pass
+def _replace_with_retry(src: Path, dst: Path) -> None:
+    """os.replace that retries PermissionError for a few seconds (X5: Windows scanners lock new files)."""
 
-
-def _rollback_apply(
-    module_root: Path,
-    backup_dir: Path,
-    backed_up_relatives: list[str],
-    created_relatives: list[str],
-) -> None:
-    for rel in created_relatives:
-        dst = module_root / rel
+    deadline = time.monotonic() + _REPLACE_RETRY_SECONDS
+    while True:
         try:
-            dst.unlink(missing_ok=True)
-        except OSError:
-            pass
-    for rel in backed_up_relatives:
-        src = backup_dir / rel
-        dst = module_root / rel
-        if src.is_file():
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, dst)
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(_REPLACE_RETRY_INTERVAL)
 
 
 def download_and_apply_code_overlay(
@@ -420,6 +419,7 @@ def download_and_apply_code_overlay(
     proxy_url: str | None = None,
     urlopen_fn: Callable[..., Any] | None = None,
     progress_callback: ProgressCallback | None = None,
+    phase_callback: PhaseCallback | None = None,
     allow_git_checkout: bool = False,
     _apply_hook: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
@@ -463,14 +463,41 @@ def download_and_apply_code_overlay(
             f"Extension directory is not writable: {resolved_root}"
         )
 
-    tmp_root = Path(tempfile.mkdtemp(prefix="slicerdspace_code_update_"))
+    # U2: one updater at a time. The OS frees the lock when its process dies, so a killed worker never blocks.
+    lock_status, update_lock = acquire_update_lock(resolved_root)
+    if lock_status == "busy":
+        raise RuntimeError(
+            "Another SlicerDSpace update is running for this installation; wait until it finishes, then check again."
+        )
+    if lock_status != "acquired":
+        # R3-U2: without the lock a second worker could interleave its apply or recovery with this one.
+        raise RuntimeError(
+            f"Cannot take the SlicerDSpace update lock in {resolved_root}; no file was changed. "
+            "Check that the extension folder is writable, then check again."
+        )
+    try:
+        # A leftover journal means an earlier apply was killed half way; restore the old files first.
+        recovery = recover_interrupted_update(resolved_root, lock_held=True)
+        if recovery is not None and recovery.get("status") != "rolled_back":
+            # Going on would delete the journal and its backup, the only copy of the old files.
+            raise RuntimeError(
+                f"An earlier SlicerDSpace update is not finished ({recovery.get('status')}); "
+                f"restart Slicer, or reinstall the SlicerDSpace package if this message stays."
+            )
+        tmp_root = Path(tempfile.mkdtemp(prefix="slicerdspace_code_update_"))
+    except BaseException:
+        release_update_lock(update_lock)
+        raise
+    journal_dir = _journal_dir(resolved_root)
+
     try:
         archive_path = tmp_root / remote["overlay"]["filename"]
         staging_dir = tmp_root / "staging"
-        backup_dir = tmp_root / "backup"
+        backup_dir = journal_dir / "backup"
         staging_dir.mkdir(parents=True, exist_ok=True)
-        backup_dir.mkdir(parents=True, exist_ok=True)
 
+        if phase_callback is not None:
+            phase_callback("downloading")
         _download_verified_overlay(
             remote["overlay"],
             archive_path,
@@ -481,6 +508,8 @@ def download_and_apply_code_overlay(
             urlopen_fn=urlopen_fn,
             progress_callback=progress_callback,
         )
+        if phase_callback is not None:
+            phase_callback("verifying")
         file_modes = _extract_overlay_safely(archive_path, staging_dir)
         if not (staging_dir / "SlicerDSpace.py").is_file():
             raise ValueError("Overlay archive does not contain SlicerDSpace.py at its root.")
@@ -497,6 +526,11 @@ def download_and_apply_code_overlay(
         new_files = set(new_files_list)
         obsolete_files = sorted(old_files - new_files)
 
+        # From here on files change in place: a kill must not stop the worker (H6/X5).
+        if phase_callback is not None:
+            phase_callback("applying")
+        shutil.rmtree(journal_dir, ignore_errors=True)
+        backup_dir.mkdir(parents=True, exist_ok=True)
         backed_up: list[str] = []
         created: list[str] = []
         for rel in sorted(old_files | new_files):
@@ -506,9 +540,23 @@ def download_and_apply_code_overlay(
                 b_dst.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(existing, b_dst)
                 backed_up.append(rel)
+        created_planned = [rel for rel in sorted(new_files) if not (resolved_root / rel).exists()]
+        _write_update_journal(
+            journal_dir,
+            target_version=str(remote["version"]),
+            backed_up=backed_up,
+            created=created_planned,
+        )
 
         try:
-            for rel in sorted(new_files):
+            # R3-N1: SlicerDSpace.py goes last, after the obsolete files are removed, so a kill before that point
+            # leaves the old entry file, which matches the tree that its startup recovery restores.
+            for rel in [*(rel for rel in sorted(new_files) if rel != "SlicerDSpace.py"), "SlicerDSpace.py"]:
+                if rel == "SlicerDSpace.py":
+                    for obsolete in obsolete_files:
+                        target = resolved_root / obsolete
+                        if target.is_file():
+                            target.unlink()
                 if _apply_hook is not None:
                     _apply_hook(rel)
                 src = staging_dir / rel
@@ -522,14 +570,9 @@ def download_and_apply_code_overlay(
                         tmp_dst.chmod(file_modes.get(rel, 0o644))
                     except OSError:
                         pass
-                os.replace(tmp_dst, dst)
+                _replace_with_retry(tmp_dst, dst)
                 if not was_present:
                     created.append(rel)
-
-            for rel in obsolete_files:
-                target = resolved_root / rel
-                if target.is_file():
-                    target.unlink()
 
             _clear_stale_pyc(resolved_root, old_files | new_files)
 
@@ -541,8 +584,10 @@ def download_and_apply_code_overlay(
         except Exception:
             _rollback_apply(resolved_root, backup_dir, backed_up, created)
             _clear_stale_pyc(resolved_root, old_files | new_files)
+            _discard_journal(journal_dir)
             raise
 
+        _discard_journal(journal_dir)
         return {
             "status": "applied",
             "version": remote["version"],
@@ -555,13 +600,7 @@ def download_and_apply_code_overlay(
         }
     finally:
         shutil.rmtree(tmp_root, ignore_errors=True)
-
-
-def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_name(path.name + ".tmp")
-    tmp_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-    os.replace(tmp_path, path)
+        release_update_lock(update_lock)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -608,12 +647,15 @@ def main(argv: list[str] | None = None) -> int:
                     last_pct[0] = pct
                     print(f"SLICERDSPACE_UPDATE_PROGRESS:{pct}", flush=True)
 
-            print("SLICERDSPACE_UPDATE_STAGE:downloading", flush=True)
+            def _on_phase(phase: str) -> None:
+                print(f"SLICERDSPACE_UPDATE_STAGE:{phase}", flush=True)
+
             res = download_and_apply_code_overlay(
                 module_root=module_root,
                 manifest=manifest_payload,
                 timeout=int(args.timeout),
                 progress_callback=_on_progress,
+                phase_callback=_on_phase,
             )
         _write_json_atomic(result_file, {"ok": True, "result": res})
         return 0

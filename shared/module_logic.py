@@ -275,6 +275,7 @@ class SharedLogicMixin:
         pnl_mask_model_dir: Optional[Path] = None,
         pnl_mask_ants_bin_dir: Optional[Path] = None,
         pnl_mask_route: str = "auto",
+        selected_targets: tuple[str, ...] = (),
     ) -> InputValidationResult:
         config = InputValidationConfig(
             subject_id=subject_id,
@@ -291,6 +292,7 @@ class SharedLogicMixin:
             pnl_mask_model_dir=pnl_mask_model_dir,
             pnl_mask_ants_bin_dir=pnl_mask_ants_bin_dir,
             pnl_mask_route=pnl_mask_route,
+            selected_targets=tuple(selected_targets),  # LE-10: a missing b0 or shell is an error for these targets
         )
         result = validate_subject_inputs(config)
         report = result.report_path.as_posix() if result.report_path else "not written"
@@ -304,7 +306,7 @@ class SharedLogicMixin:
         self,
         *,
         targets: tuple[str, ...],
-        subject_root: Path,
+        subject_root: Optional[Path],
         output_root: Optional[Path] = None,
         brain_mask_backend: str = "pnl_cnn",
         brain_mask_device: str = "auto",
@@ -349,12 +351,19 @@ class SharedLogicMixin:
         tractcloud_python_executable: Optional[Path] = None,
         tractcloud_data_dir: Optional[Path] = None,
     ) -> EnvironmentDoctorResult:
-        layout = subject_layout(subject_root.expanduser().resolve(), output_root=output_root)
+        # U3: a batch run has no single subject root; the report then goes under the output root or the temp folder.
+        if subject_root is not None:
+            layout = subject_layout(subject_root.expanduser().resolve(), output_root=output_root)
+            report_dir = layout.run_metadata / "environment"
+        elif output_root is not None:
+            report_dir = output_root.expanduser().resolve() / "00_run_metadata" / "environment"
+        else:
+            report_dir = Path(str(slicer.app.temporaryPath)) / "SlicerDSpace" / "00_run_metadata" / "environment"
         result = run_environment_doctor(
             EnvironmentDoctorConfig(
                 targets=targets,
                 repo_root=self.module_dir,
-                output_dir=layout.run_metadata / "environment",
+                output_dir=report_dir,
                 python_executable=python_executable,
                 python_path_entries=python_path_entries,
                 loaded_slicer_modules=(tuple(name for name in ('dwiconvert', 'ukftractography')
@@ -401,7 +410,7 @@ class SharedLogicMixin:
                 tractcloud_data_dir=tractcloud_data_dir,
             )
         )
-        written = write_environment_report(result, layout.run_metadata / "environment")
+        written = write_environment_report(result, report_dir)
         self.log("[Environment] " + summarize_environment_doctor(result).replace("\n", "\n[Environment] "))
         self.log(f"[Environment] Report: {written['json']}")
         self.log(f"[Environment] Python install helper: {written['python_sh']}")

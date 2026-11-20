@@ -62,7 +62,9 @@ def plan(config, *, write=True):
     layout = subject_layout(config.subject_root, output_root=config.output_root)
     result = RunPlanResult(config.subject_id, config.subject_root.resolve(), layout.outputs,
                            normalize_run_name(config.run_name), tuple(dict.fromkeys(item.target for item in items)),
-                           _run_plan_path(layout, normalize_run_name(config.run_name)), tuple(items))
+                           _run_plan_path(layout, normalize_run_name(config.run_name)), tuple(items),
+                           # LE-4: advice from every variant plan (the same text once) must reach the caller.
+                           warnings=tuple(dict.fromkeys(text for child in children for text in child.warnings)))
     if write:
         _write_run_plan(result)
     return result

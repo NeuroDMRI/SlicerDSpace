@@ -9,7 +9,21 @@ See licenses/WMA.txt for the applicable terms and conditions.
 
 import hashlib
 from pathlib import Path
+import sys
 import time
+
+
+QUALIFIED_VTK = '9.5.2'
+_REPORTED_UNQUALIFIED_VTK = set()
+
+
+def _report_unqualified_vtk(version):
+    """F6: say once per run why the faster transform path is off."""
+    if version in _REPORTED_UNQUALIFIED_VTK:
+        return
+    _REPORTED_UNQUALIFIED_VTK.add(version)
+    print('WMA fast path qualified only for VTK %s; this Slicer has VTK %s; using the reference path '
+          '(same results, slower)' % (QUALIFIED_VTK, version), file=sys.stderr, flush=True)
 
 
 AUTHOR_SHA256 = 'eb6cb9293df3fe3e2d783e096ea979ae279e94c7f3e9f335b3fc34818a93920f'
@@ -22,6 +36,8 @@ def registration_transform_support(package_dir):
         return {'supported': False, 'source_sha256': digest, 'reason': 'Unverified registration source'}
     import vtk
     version = vtk.vtkVersion.GetVTKVersion()
+    if version != QUALIFIED_VTK:
+        _report_unqualified_vtk(version)
     return {'supported': version == '9.5.2', 'source_sha256': digest, 'vtk': version,
             'reason': 'Verified author source and VTK' if version == '9.5.2' else 'Unqualified VTK; retain author transform'}
 

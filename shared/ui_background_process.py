@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import codecs
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -15,9 +16,47 @@ def background_process_env_overrides() -> dict[str, str]:
     to full block buffering for a non-tty stdout), so the widget's status
     table keeps updating live instead of only after large buffered chunks
     or process exit.
+
+    ``PYTHONUTF8=1`` and ``PYTHONIOENCODING=utf-8`` (X1) make the worker write UTF-8 to stdout and
+    stderr. Without them, Slicer 5.10 on Windows uses the ANSI code page (cp1252) with strict errors,
+    so a print of a non-ASCII path raises ``UnicodeEncodeError`` and ends the worker. The widget
+    decodes the output as UTF-8 (see :class:`Utf8StreamDecoder`).
     """
 
-    return {"PYTHONUNBUFFERED": "1"}
+    return {"PYTHONUNBUFFERED": "1", "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
+
+
+def _qbytearray_to_bytes(value: Any) -> bytes:
+    if value is None:
+        return b""
+    if isinstance(value, str):
+        return value.encode("utf-8", errors="replace")
+    if isinstance(value, (bytes, bytearray)):
+        return bytes(value)
+    try:
+        return bytes(value)
+    except Exception:
+        pass
+    try:
+        raw = value.data()
+    except Exception:
+        return b""
+    if isinstance(raw, str):
+        return raw.encode("utf-8", errors="replace")
+    return bytes(raw) if isinstance(raw, (bytes, bytearray)) else b""
+
+
+class Utf8StreamDecoder:
+    """Decode worker output chunk by chunk as UTF-8 without corrupting a character split across reads (X1)."""
+
+    def __init__(self) -> None:
+        self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+
+    def decode(self, value: Any) -> str:
+        return self._decoder.decode(_qbytearray_to_bytes(value))
+
+    def flush(self) -> str:
+        return self._decoder.decode(b"", final=True)
 
 
 def qprocess_is_running(process: Any) -> bool:

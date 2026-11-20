@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -1018,8 +1019,12 @@ def build_batch_background_cli_args(
     batch_root: Path,
     batch_size: int,
     arrange_inputs: str,
+    progress_file: Optional[Path] = None,
 ) -> list[str]:
-    """Build the Slicer launcher args for batch background execution."""
+    """Build the Slicer launcher args for batch background execution.
+
+    ``progress_file`` (H3) is where the batch script writes its per-subject progress record for the GUI to poll.
+    """
 
     batch_script = repo_root / "scripts" / "run_batch_pipeline.py"
     output_root = common_run_kwargs.get("output_root")
@@ -1066,6 +1071,8 @@ def build_batch_background_cli_args(
     ]
     if output_root is not None:
         args.extend(["--output-root", _path_text(output_root)])
+    if progress_file is not None:
+        args.extend(["--progress-file", _path_text(progress_file)])
     _append_ukf_args(args, common_run_kwargs)
     args.extend(["--microstructure-stages", microstructure_stages_arg(common_run_kwargs)])
     args.extend(["--dki-fit-method", str(common_run_kwargs.get("microstructure_dki_fit_method", "MKCURVE") or "MKCURVE")])
@@ -1164,7 +1171,72 @@ def extract_background_manifest_path(buffer_text: str, explicit_path: Optional[P
     return next((path for path in reversed(candidates) if path.is_file()), None)
 
 
-def classify_background_run_outcome(*, exit_code: int, cancelled: bool, manifest_available: bool) -> str:
+# H4: the launcher (CTK app launcher behind PythonSlicer) turns a worker that a signal killed into exit code 1
+# plus this line ("error: [<path>/python-real] exit abnormally - Report the problem."), checked on macOS.
+WORKER_ABNORMAL_EXIT_MARKER = "exit abnormally"
+_MAX_SIGNAL = 64
+
+
+def _exit_status_is_crash(exit_status: Any) -> bool:
+    """True for ``QProcess.CrashExit`` (an int, an enum or its name); ``None`` and ``NormalExit`` are False."""
+
+    if exit_status is None:
+        return False
+    for convert in (int, lambda value: int(getattr(value, "value"))):
+        try:
+            return convert(exit_status) == 1
+        except (TypeError, ValueError, AttributeError):
+            continue
+    return "crash" in str(exit_status).lower()
+
+
+def worker_kill_info(exit_code: int, exit_status: Any = None, *, abnormal_exit_seen: bool = False) -> Optional[dict[str, Any]]:
+    """Return ``{"signal": N or None}`` when the worker was killed (by a signal, a crash or the OOM killer), else None.
+
+    Signals show as ``CrashExit``, a negative exit code, ``128 + N`` (a shell or wrapper), or the launcher's
+    "exit abnormally" line. Large codes (Windows NTSTATUS such as 0xC0000005) are crashes without a signal number.
+    A normal exit with a small positive code (1, 2, ...) is a failure, not a kill.
+    """
+
+    try:
+        code = int(exit_code)
+    except (TypeError, ValueError):
+        code = 0
+    if _exit_status_is_crash(exit_status):
+        number = abs(code) if 0 < abs(code) <= _MAX_SIGNAL else None
+        return {"signal": number}
+    if -_MAX_SIGNAL <= code < 0:
+        return {"signal": -code}
+    if 128 < code <= 128 + _MAX_SIGNAL:
+        return {"signal": code - 128}
+    if abnormal_exit_seen and code != 0:
+        return {"signal": None}
+    return None
+
+
+def worker_killed_message(info: dict[str, Any]) -> str:
+    number = info.get("signal")
+    where = f" (signal {number})" if number else ""
+    return (f"The worker was killed{where}, possibly out of memory. "
+            "Lower the number of parallel models or close other apps, then run again.")
+
+
+def format_last_output(lines: Any, limit: int = 20) -> str:
+    """The last ``limit`` non-empty output lines as one block for a failure message (H4)."""
+
+    tail = [str(line) for line in list(lines or ()) if str(line).strip()][-limit:]
+    return "\n".join(tail)
+
+
+def classify_background_run_outcome(
+    *,
+    exit_code: int,
+    cancelled: bool,
+    manifest_available: bool,
+    exit_status: Any = None,
+    manifest_final: bool = True,
+    abnormal_exit_seen: bool = False,
+) -> str:
     """Classify how a finished background pipeline QProcess should be handled.
 
     A manifest, when present, is authoritative: the single-subject pipeline
@@ -1176,11 +1248,20 @@ def classify_background_run_outcome(*, exit_code: int, cancelled: bool, manifest
     means: the process exited non-zero and produced no manifest to explain
     why (e.g. a crash before any task ran).
 
-    Returns one of "cancelled", "manifest", "process_failed", "no_manifest".
+    H4: a worker that a signal killed (see :func:`worker_kill_info`) is "worker_killed". A cancel wins over it
+    (Cancel itself ends in a crash exit) and so does a final manifest (a crash while the process shut down after
+    it wrote its result). A manifest that still says "running" is only a checkpoint, so it does not hide a kill:
+    pass ``manifest_final=False`` for it.
+
+    Returns one of "cancelled", "manifest", "worker_killed", "process_failed", "no_manifest".
     """
 
     if cancelled:
         return "cancelled"
+    if manifest_available and manifest_final:
+        return "manifest"
+    if worker_kill_info(exit_code, exit_status, abnormal_exit_seen=abnormal_exit_seen) is not None:
+        return "worker_killed"
     if manifest_available:
         return "manifest"
     if exit_code != 0:
@@ -1214,3 +1295,233 @@ def cancelled_manifest_path_and_payload(
         "reason": "User cancelled the background SlicerDSpace job from the UI.",
     }
     return manifest_path, payload
+
+
+# ------------------------------------------------------------------ worker liveness (H2)
+# The CLI prints "[Heartbeat] ..." every 60 s and "[Stall warning] ..." lines (shared/run_heartbeat.py). A batch
+# relays those lines of each subject with a "[<subject id>] " prefix (scripts/run_batch_pipeline.py). The GUI keeps
+# heartbeats out of the log, shows them in the stage label, shows a stall as a warning and never kills anything.
+
+HEARTBEAT_SECONDS_ENV_NAME = "SLICERDSPACE_HEARTBEAT_SECONDS"
+DEFAULT_HEARTBEAT_INTERVAL_SECONDS = 60.0
+SILENT_HEARTBEAT_INTERVALS = 3
+_RELAYED_PREFIX = re.compile(r"^\[(?P<subject>[^\]\s][^\]]*)\] (?=\[(?:Heartbeat|Stall warning)\])")
+_LAST_OUTPUT_SHOWN_AFTER_SECONDS = 30.0
+
+
+def heartbeat_interval_seconds() -> float:
+    """The heartbeat interval the worker uses: ``SLICERDSPACE_HEARTBEAT_SECONDS`` or 60 s."""
+
+    try:
+        value = float(os.environ.get(HEARTBEAT_SECONDS_ENV_NAME, ""))
+    except ValueError:
+        return DEFAULT_HEARTBEAT_INTERVAL_SECONDS
+    return value if value > 0 else DEFAULT_HEARTBEAT_INTERVAL_SECONDS
+
+
+def split_relayed_subject(line: str) -> tuple[Optional[str], str]:
+    """Split ``"[sub-01] [Heartbeat] ..."`` into ``("sub-01", "[Heartbeat] ...")``; a plain line gives ``(None, line)``."""
+
+    text = line.strip()
+    match = _RELAYED_PREFIX.match(text)
+    if not match:
+        return None, text
+    return match.group("subject"), text[match.end():]
+
+
+def format_duration(seconds: float) -> str:
+    seconds = max(0, int(seconds))
+    return f"{seconds}s" if seconds < 60 else f"{seconds // 60}m"
+
+
+def worker_silence_seconds(now: float, last_output_at: float, interval_seconds: float,
+                           intervals: int = SILENT_HEARTBEAT_INTERVALS) -> Optional[float]:
+    """Seconds without any output line when that reaches ``intervals`` heartbeat intervals, else None (pure)."""
+
+    silent = now - last_output_at
+    return silent if silent >= intervals * interval_seconds else None
+
+
+def worker_silence_message(silent_seconds: float) -> str:
+    minutes = max(1, int(silent_seconds // 60))
+    return (f"No output from the worker for {minutes} min (no heartbeat). "
+            "It may be hung; press Cancel to stop it.")
+
+
+def format_heartbeat_status(fields: dict[str, Any], *, subject: Optional[str] = None, cpu_active: Optional[bool] = None,
+                            last_output_age: Optional[float] = None, zh: bool = False) -> str:
+    """The stage-label text for one heartbeat: ``<stage> - running for Xm, CPU active``."""
+
+    stage = str(fields.get("stage") or "").strip()
+    if not stage or stage == "-":
+        stage = "流程" if zh else "Pipeline"
+    if subject:
+        stage = f"{subject}: {stage}"
+    try:
+        elapsed = format_duration(float(fields.get("elapsed") or 0))
+    except (TypeError, ValueError):
+        elapsed = "0s"
+    stalled = fields.get("stalled_min")
+    show_age = last_output_age is not None and last_output_age >= _LAST_OUTPUT_SHOWN_AFTER_SECONDS
+    if zh:
+        parts = [f"{stage} - 已运行 {elapsed}"]
+        if stalled is not None:
+            parts.append(f"{stalled} 分钟无进展")
+        elif cpu_active is not None:
+            parts.append("CPU 活跃" if cpu_active else "CPU 空闲")
+        if show_age:
+            parts.append(f"最后输出在 {format_duration(last_output_age)}前")
+        return "，".join(parts)
+    parts = [f"{stage} - running for {elapsed}"]
+    if stalled is not None:
+        parts.append(f"no progress for {stalled} min")
+    elif cpu_active is not None:
+        parts.append("CPU active" if cpu_active else "CPU idle")
+    if show_age:
+        parts.append(f"last output {format_duration(last_output_age)} ago")
+    return ", ".join(parts)
+
+
+class WorkerLiveness:
+    """Track the output of one background worker (pure: the caller passes the clock value).
+
+    ``observe`` classifies a line and returns a dict with ``kind`` (``heartbeat``, ``stall`` or ``output``),
+    the parsed fields, the relayed subject and ``resumed`` (True when the line ends a stall or a silence
+    warning). A heartbeat without ``stalled_min`` also ends a stall.
+    """
+
+    def __init__(self, started_at: float, interval_seconds: Optional[float] = None) -> None:
+        self.interval_seconds = float(interval_seconds) if interval_seconds else heartbeat_interval_seconds()
+        self.last_line_at = started_at      # any line, heartbeat included: "is the worker alive?"
+        self.last_output_at = started_at    # a line that is not a heartbeat: "is it making visible progress?"
+        self.silent = False
+        self._stalled: set = set()          # subjects with an open stall (None = the single run)
+        self._cpu: dict[Optional[str], float] = {}
+
+    @property
+    def stalled(self) -> bool:
+        return bool(self._stalled)
+
+    def observe(self, line: str, now: float) -> dict[str, Any]:
+        from shared.run_heartbeat import parse_heartbeat_line, parse_stall_warning
+
+        subject, bare = split_relayed_subject(line)
+        was_warning = bool(self._stalled) or self.silent
+        self.last_line_at = now
+        self.silent = False
+        heartbeat = parse_heartbeat_line(bare)
+        if heartbeat is not None:
+            cpu = heartbeat.get("cpu_s")
+            cpu_active = None
+            if isinstance(cpu, (int, float)):
+                before = self._cpu.get(subject)
+                cpu_active = before is None or cpu > before
+                self._cpu[subject] = float(cpu)
+            if heartbeat.get("stalled_min") is not None:
+                self._stalled.add(subject)
+            else:
+                self._stalled.discard(subject)
+            return {"kind": "heartbeat", "fields": heartbeat, "subject": subject, "cpu_active": cpu_active,
+                    "resumed": was_warning and not self._stalled}
+        stall = parse_stall_warning(bare)
+        if stall is not None:
+            self._stalled.add(subject)
+            return {"kind": "stall", "stall": stall, "subject": subject, "resumed": False}
+        self.last_output_at = now
+        # Output of one subject (or of the single run) ends only that subject's stall; a finished subject ends its own.
+        self._stalled.discard(subject)
+        finished = re.match(r"^\[Batch\] done (\S+)", bare)
+        if finished:
+            self._stalled.discard(finished.group(1))
+        return {"kind": "output", "subject": subject, "resumed": was_warning and not self._stalled}
+
+    def silence(self, now: float) -> Optional[float]:
+        """Seconds of silence when the worker has been silent for three heartbeat intervals, else None."""
+
+        return worker_silence_seconds(now, self.last_line_at, self.interval_seconds)
+
+    def last_output_age(self, now: float) -> float:
+        return max(0.0, now - self.last_output_at)
+
+
+# --------------------------------------------------------------- batch progress (H3)
+
+def rows_from_batch_progress(record: dict[str, Any]) -> tuple[list[dict[str, str]], int, int]:
+    """Status-table rows plus ``(done, total)`` from the batch script's progress record."""
+
+    results = {str(item.get("subject_id")): item for item in record.get("results") or () if isinstance(item, dict)}
+    running = {str(item) for item in record.get("running") or ()}
+    subjects = [str(item) for item in record.get("subjects") or ()]
+    rows = []
+    for subject_id in subjects:
+        result = results.get(subject_id)
+        if result is not None:
+            try:
+                code = int(result.get("returncode", 1))
+            except (TypeError, ValueError):
+                code = 1
+            status = str(result.get("status") or "")
+            state = "cancelled" if status == "cancelled" else ("completed" if code == 0 else "failed")
+            reason = status or f"return code {code}"
+        elif subject_id in running:
+            state, reason = "running", ""
+        else:
+            state, reason = "queued", ""
+        rows.append({"target": subject_id, "status": state, "reason": reason, "manifest_path": "", "qc_path": "", "logs_dir": ""})
+    try:
+        total = int(record.get("total") or len(subjects))
+    except (TypeError, ValueError):
+        total = len(subjects)
+    return rows, len(results), total
+
+
+def read_batch_progress(path: Path) -> Optional[dict[str, Any]]:
+    """The batch progress record, or None while it is missing, half-written or of another kind."""
+
+    try:
+        record = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if isinstance(record, dict) and record.get("kind") == "slicerdsurfer_batch_progress":
+        return record
+    return None
+
+
+# ------------------------------------------------------------------ plan notices (LE hooks)
+# Plan blockers of these categories hold a reason the user can act on (LE-1 NODDI shells are
+# "acquisition_or_backend", LE-2 incomplete weights are "data", LE-3 GPU memory is "environment").
+USER_ACTIONABLE_BLOCK_CATEGORIES = frozenset({"environment", "data", "acquisition_or_backend"})
+
+
+def actionable_plan_blockers(plan: Any) -> dict[str, str]:
+    """Blocked plan items whose reason the user can act on, as ``{target: reason}``."""
+
+    return {
+        item.target: item.reason
+        for item in blocked_plan_items(plan)
+        if getattr(item, "reason_category", "") in USER_ACTIONABLE_BLOCK_CATEGORIES
+    }
+
+
+def plan_warning_lines(plan: Any) -> list[str]:
+    """``plan.warnings`` (LE-4 low disk space and similar advice) as clean text lines."""
+
+    return [str(text).strip() for text in (getattr(plan, "warnings", ()) or ()) if str(text).strip()]
+
+
+def plan_notice_text(blockers: dict[str, str], runnable_targets: tuple[str, ...], warnings: list[str]) -> str:
+    """The notice shown before a run starts: blocked products with their reasons, then warnings."""
+
+    parts = []
+    if blockers:
+        blocked_text = "\n".join(f"- {target}: {reason}" for target, reason in blockers.items())
+        runnable_text = ", ".join(target for target in runnable_targets if target != "validation") or "none"
+        parts.append(
+            "Some selected products cannot run with the current inputs or setup. "
+            "Runnable targets will still run.\n\n"
+            f"Blocked:\n{blocked_text}\n\n"
+            f"Runnable targets: {runnable_text}"
+        )
+    if warnings:
+        parts.append("Warnings:\n" + "\n".join(f"- {text}" for text in warnings))
+    return "\n\n".join(parts)

@@ -48,9 +48,35 @@ def _native_binary(path: Path, system: str) -> str | None:
     return str(resolved) if matched else None
 
 
+def _is_wsl_bridge_dir(directory: Path) -> bool:
+    """True when a directory holds only plugin-owned WSL bridge wrappers (X4)."""
+    suffix = ".slicerdsurfer-owner"
+    try:
+        entries = [entry for entry in directory.iterdir() if entry.is_file()]
+    except OSError:
+        return False
+    names = {entry.name for entry in entries}
+    if not any(name.endswith(suffix) for name in names):
+        return False
+    for name in names:
+        if name.endswith(suffix) or name.endswith(".conf"):
+            continue
+        if name + suffix not in names:
+            return False
+    return True
+
+
 def _candidate_dirs(configured: Path | str | None, tool: str, system: str) -> tuple[Path, ...]:
     if configured is not None:
-        return (Path(configured).expanduser().resolve(),)
+        configured_dir = Path(configured).expanduser().resolve()
+        # X4: the Windows WSL setup saves WSL bridge folders in these settings. The native route
+        # cannot run them, so it searches the installed native bundles instead.
+        if not _is_wsl_bridge_dir(configured_dir):
+            return (configured_dir,)
+        from shared.native_runtimes import installed_bundle_bin_dirs
+
+        host_sys = {"windows": "Windows", "darwin": "Darwin", "linux": "Linux"}.get(system, system)
+        return tuple(dict.fromkeys(directory.resolve() for directory in installed_bundle_bin_dirs(tool, system=host_sys)))
 
     from shared.managed_runtimes import MRTRIX_TARBALL, PROFILES, runtime_root
 

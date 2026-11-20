@@ -12,11 +12,13 @@ used for setup jobs in ``shared/ui_setup_jobs.py``.
 
 from __future__ import annotations
 
+import logging
 import os
 import platform
 import shutil
 import signal
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Optional
@@ -31,6 +33,32 @@ _PERL_SETPGRP_PATH = "/usr/bin/perl"
 # metacharacters (e.g. a path with a space), it would be misinterpreted.
 # "or die" makes a failed exec exit non-zero; perl would otherwise exit 0.
 _PERL_SETPGRP_SCRIPT = 'setpgrp(0, 0); exec { $ARGV[0] } @ARGV or die "exec failed: $!\\n"'
+
+
+# Third fallback (H9): the current Python makes itself a session leader, then execs the target in place
+# (same pid, so pgid == pid like setsid(1) and the perl trick). os.execvp never goes through a shell.
+_PYTHON_SETSID_SCRIPT = "import os,sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])"
+_logger = logging.getLogger(__name__)
+_warned_ungrouped = False
+
+
+def _python_setsid_launcher() -> Optional[str]:
+    """Return the current Python interpreter when it can run :data:`_PYTHON_SETSID_SCRIPT`, else None.
+
+    The launched target must keep the launcher's pid, because Cancel signals ``killpg(<that pid>)``. Slicer's
+    own interpreters do not qualify: ``PythonSlicer`` starts ``python-real`` as a child (pid differs, so
+    ``killpg`` would miss the group), and ``python-real`` alone cannot start without the launcher's environment.
+    The Slicer application binary does not accept ``-c`` either. Only a plain interpreter whose file name says
+    it is a Python is accepted.
+    """
+
+    from shared.external_process import is_slicer_python
+
+    executable = sys.executable
+    if (executable and "python" in os.path.basename(executable).lower() and os.path.isfile(executable)
+            and not is_slicer_python(executable)):
+        return executable
+    return None
 
 
 def _perl_setpgrp_launcher() -> Optional[str]:
@@ -77,6 +105,16 @@ def grouped_launch_command(program: str, args: list[str]) -> tuple[str, list[str
         perl = _perl_setpgrp_launcher()
         if perl:
             return perl, ["-e", _PERL_SETPGRP_SCRIPT, "--", program, *args], True
+        python = _python_setsid_launcher()
+        if python:
+            return python, ["-c", _PYTHON_SETSID_SCRIPT, program, *args], True
+        global _warned_ungrouped
+        if not _warned_ungrouped:
+            _warned_ungrouped = True
+            _logger.warning(
+                "Cannot put the job in its own process group: setsid, perl and a Python interpreter are all "
+                "unavailable. Cancel will stop only the launcher, not its child tools. "
+                "Install util-linux (setsid) or perl to fix this.")
     return program, args, False
 
 

@@ -7,6 +7,34 @@ from typing import Annotated, Optional
 
 os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
+
+def _recover_interrupted_update() -> None:
+    """H6/U1: roll back an update whose worker was killed half way, before any `shared` or `scripts` import.
+
+    shared/update_journal.py imports only the standard library, so it loads by file path even when the
+    half-written `shared` package cannot import.
+    """
+
+    try:
+        import importlib
+        import importlib.util
+
+        module_root = os.path.dirname(os.path.abspath(__file__))
+        journal_py = os.path.join(module_root, "shared", "update_journal.py")
+        if not os.path.isfile(journal_py):
+            return
+        spec = importlib.util.spec_from_file_location("_slicerdspace_update_journal", journal_py)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        result = module.recover_interrupted_update(module_root)
+        if isinstance(result, dict) and result.get("status") == "rolled_back":
+            importlib.invalidate_caches()
+    except Exception as exc:  # never block module loading
+        print(f"SlicerDSpace: update recovery check failed: {exc}", flush=True)
+
+
+_recover_interrupted_update()
+
 import slicer
 from slicer.ScriptedLoadableModule import (
     ScriptedLoadableModule,

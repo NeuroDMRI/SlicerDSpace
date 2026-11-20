@@ -1214,6 +1214,19 @@ def _amico_cache_root(config: MicrostructureConfig) -> Path:
     return config.raw_input_bundle.effective_cache_root / "microstructure" / "amico" / key
 
 
+def noddi_nonzero_shells(bvals, b0_threshold: int) -> list[int]:
+    """Sorted non-zero b-shells (rounded to 100 s/mm^2) above ``b0_threshold``; shared with the run planner (LE-1)."""
+    import numpy as np
+
+    return sorted(
+        {
+            int(shell)
+            for shell in np.unique(np.round(np.asarray(bvals, dtype=float) / 100.0) * 100.0)
+            if int(shell) > int(b0_threshold)
+        }
+    )
+
+
 def _noddi_threads(config) -> int:
     if config.noddi_nthreads is not None:
         count = int(config.noddi_nthreads)
@@ -1394,13 +1407,7 @@ def _compute_noddi_maps(
     write_noddi_progress("running", "checking_shells")
 
     bvals, _ = _load_bvals_bvecs(config.raw_input_bundle)
-    nonzero_shells = sorted(
-        {
-            int(shell)
-            for shell in np.unique(np.round(bvals / 100.0) * 100.0)
-            if int(shell) > int(config.noddi_b0_threshold)
-        }
-    )
+    nonzero_shells = noddi_nonzero_shells(bvals, config.noddi_b0_threshold)
     if len(nonzero_shells) < 2:
         raise ValueError(
             "NODDI requires multi-shell diffusion data with at least two non-zero shells."

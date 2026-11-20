@@ -75,13 +75,36 @@ REQUIRED_WMA_COMMANDS = (
 )
 NATIVE_WMA_COMMANDS = tuple(name for name in REQUIRED_WMA_COMMANDS if name != "wm_harden_transform.py")
 OPTIONAL_WMA_COMMANDS = ("wm_diffusion_measurements.py", "xvfb-run")
-EXTRA_TOOL_DIRS = (
-    Path("/data/chengjin/software/xvfb/usr/bin"),
-)
-EXTRA_LIBRARY_DIRS = (
-    Path("/data/chengjin/software/libpcre2-16-0/usr/lib/x86_64-linux-gnu"),
-    Path("/data/chengjin/software/libxcb-xinerama0/usr/lib/x86_64-linux-gnu"),
-)
+DEV_XVFB_DIR_ENV = "SLICERDSPACE_DEV_XVFB_DIR"
+HEADLESS_LINUX_PACKAGES = ("xvfb", "libxcb-xinerama0", "libgl1", "libpcre2-16-0")
+
+
+def headless_linux_hint() -> str:
+    """X10: the packages a headless Linux host needs for Slicer under a virtual display."""
+    return (
+        "Headless Linux needs these packages for the virtual display: " + ", ".join(HEADLESS_LINUX_PACKAGES)
+        + " (for example: sudo apt install " + " ".join(HEADLESS_LINUX_PACKAGES) + ")."
+    )
+
+
+def dev_xvfb_tool_dirs() -> tuple[Path, ...]:
+    """X10: developer-only xvfb tool folder, read from SLICERDSPACE_DEV_XVFB_DIR only (no hard-coded path)."""
+    root = os.environ.get(DEV_XVFB_DIR_ENV, "").strip()
+    return (Path(root).expanduser() / "usr" / "bin",) if root else ()
+
+
+def dev_xvfb_library_dirs() -> tuple[Path, ...]:
+    """X10: developer-only library folders next to the xvfb package folder (same environment variable)."""
+    root = os.environ.get(DEV_XVFB_DIR_ENV, "").strip()
+    if not root:
+        return ()
+    base = Path(root).expanduser()
+    arch = Path("usr") / "lib" / "x86_64-linux-gnu"
+    return (base / arch, base.parent / "libpcre2-16-0" / arch, base.parent / "libxcb-xinerama0" / arch)
+
+
+EXTRA_TOOL_DIRS = dev_xvfb_tool_dirs()
+EXTRA_LIBRARY_DIRS = dev_xvfb_library_dirs()
 
 
 def _file_info(path: Path) -> dict[str, object]:

@@ -34,7 +34,7 @@ class SurfaceNoticeCaseTests(unittest.TestCase):
                         patch.object(runtime, 'required_files', return_value=['LICENSE.txt']), \
                         patch.object(runtime, 'COMMANDS', ()), patch.object(Path, 'exists', insensitive_exists):
                     self.assertEqual(runtime.validate_runtime(root), manifest)
-                    (root / '.license').write_text('synthetic private activation fixture')
+                    (root / '.license').write_text('user@example.edu\n12345\n*Cexample\n FSexample\n')
                     with self.assertRaisesRegex(ValueError, 'private activation key'):
                         runtime.validate_runtime(root)
 

@@ -10,6 +10,11 @@ import hashlib
 from pathlib import Path
 import time
 
+from tractography.wma_transform import _report_unqualified_vtk
+
+
+QUALIFIED_VTK = '9.5.2'
+
 
 AUTHOR_SHA256 = '5f1164336b32c01e3d5372bdebb7a4ba5a6cde92b589228c162242eaacdee82d'
 
@@ -23,6 +28,8 @@ def fiber_conversion_support(package_dir: Path) -> dict:
     import vtk
     version = vtk.vtkVersion.GetVTKVersion()
     supported = digest == AUTHOR_SHA256 and version == '9.5.2'
+    if version != QUALIFIED_VTK:
+        _report_unqualified_vtk(version)
     return dict(supported=supported, source_sha256=digest, vtk_version=version,
                 reason='verified author sampling and VTK arrays' if supported else 'unverified source/VTK; original conversion retained')
 

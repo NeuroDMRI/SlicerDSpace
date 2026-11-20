@@ -140,25 +140,33 @@ def _macho_arches(path: Path) -> set[str]:
     return arches
 
 
-def _runtime_compatible(bundled_root: Path) -> bool:
+_PROBLEMS: dict[str, str] = {}
+_LOGGED_PROBLEMS: set[str] = set()
+
+
+def _incompatibility_reason(bundled_root: Path) -> str | None:
+    """Return why the bundle cannot run in this Slicer Python, or None when it is compatible (F3)."""
     meta_file = bundled_root / "python-runtime.json"
     meta: dict[str, object] = {}
+    fix = "install the SlicerDSpace package built for this Slicer"
     if meta_file.is_file():
         try:
             loaded = json.loads(meta_file.read_text(encoding="utf-8"))
             if not isinstance(loaded, dict):
-                return False
+                return "bundled Python metadata (python-runtime.json) is not a JSON object; reinstall the SlicerDSpace package"
             meta = loaded
         except (OSError, ValueError, TypeError):
-            return False
+            return "bundled Python metadata (python-runtime.json) cannot be read; reinstall the SlicerDSpace package"
     expected_py = meta.get("python_version")
     current_py = f"{sys.version_info[0]}.{sys.version_info[1]}"
-    if expected_py and str(expected_py) != current_py:
-        return False
     host_arch = _normalize_arch()
     expected_arch = meta.get("arch")
-    if expected_arch and _normalize_arch(str(expected_arch)) != host_arch:
-        return False
+    expected_arch_text = _normalize_arch(str(expected_arch)) if expected_arch else host_arch
+    if (expected_py and str(expected_py) != current_py) or expected_arch_text != host_arch:
+        return (
+            f"bundled Python stack is for Python {expected_py or current_py} {expected_arch_text}; "
+            f"this Slicer runs Python {current_py} on {host_arch}; {fix}"
+        )
     if sys.platform == "darwin":
         sp = bundled_root / "site-packages"
         if sp.is_dir():
@@ -170,11 +178,46 @@ def _runtime_compatible(bundled_root: Path) -> bool:
                 if not arches:
                     continue
                 if host_arch not in arches:
-                    return False
+                    return (
+                        f"bundled Python stack is for {'/'.join(sorted(arches))} "
+                        f"(for example {ext.name}); this Slicer runs Python {current_py} on {host_arch}; {fix}"
+                    )
                 sampled += 1
                 if sampled >= 10:
                     break
-    return True
+    return None
+
+
+def _runtime_compatible(bundled_root: Path) -> bool:
+    reason = _incompatibility_reason(bundled_root)
+    key = str(bundled_root)
+    if reason is None:
+        _PROBLEMS.pop(key, None)
+        return True
+    _PROBLEMS[key] = reason
+    return False
+
+
+def activation_problem() -> str | None:
+    """Return the reason a bundled Python stack was skipped, or None; the doctor shows it as a blocking row.
+
+    None when a valid bundled root is active, even if another candidate root was skipped (P-g).
+    """
+    if not _PROBLEMS:
+        return None
+    if bundled_python_roots():  # P-g: another bundled root is valid and active; a skipped stale one is not a problem
+        return None
+    return next(iter(_PROBLEMS.values()), None)
+
+
+def _log_activation_problem() -> None:
+    for key, reason in _PROBLEMS.items():
+        if key in _LOGGED_PROBLEMS:
+            continue
+        _LOGGED_PROBLEMS.add(key)
+        import logging
+
+        logging.getLogger(__name__).warning("SlicerDSpace: bundled Python at %s is not used: %s", key, reason)
 
 
 def bundled_python_roots(module_root: Path | None = None) -> tuple[Path, ...]:
@@ -282,6 +325,7 @@ def activate_bundled_python(module_root: Path | None = None) -> tuple[Path, ...]
     os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
     _clear_macos_quarantine_once(module_root)
     site_dirs = bundled_site_packages_dirs(module_root)
+    _log_activation_problem()
     if not site_dirs:
         return ()
     norm_sys_path = {os.path.normcase(os.path.normpath(entry)) for entry in sys.path if entry}

@@ -59,10 +59,13 @@ def _run_cli(cmd: list[str], log: Optional[Callable[[str], None]] = None) -> Non
         stderr=subprocess.STDOUT,
         **text_subprocess_kwargs(bufsize=1),
     )
-    if process.stdout:
-        for line in process.stdout:
-            _log_message(f"[DDParcel] {line.rstrip()}", log)
-    return_code = process.wait()
+    # H8: a surviving grandchild must not keep the stage open after the direct child has exited.
+    from shared.line_stream import stream_process_lines
+    return_code = stream_process_lines(
+        process,
+        lambda line: _log_message(f"[DDParcel] {line.rstrip()}", log),
+        notice=lambda message: _log_message(f"[DDParcel] {message}", log),
+    )
     if return_code != 0:
         raise RuntimeError(f"CLI command failed with exit code {return_code}")
 

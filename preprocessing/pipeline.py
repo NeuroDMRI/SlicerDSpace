@@ -470,14 +470,17 @@ def _run_command(
         **text_subprocess_kwargs(bufsize=1),
     )
     output = []
-    if process.stdout:
-        for line in process.stdout:
-            if capture:
-                output.append(line)
-            if log:
-                log("[Preproc] " + line.rstrip())
-        process.stdout.close()
-    return_code = process.wait()
+
+    def on_line(line):
+        if capture:
+            output.append(line)
+        if log:
+            log("[Preproc] " + line.rstrip())
+
+    # H8: a surviving grandchild must not keep the stage open after the direct child has exited.
+    from shared.line_stream import stream_process_lines
+    return_code = stream_process_lines(process, on_line,
+                                       notice=(lambda message: log("[Preproc] " + message)) if log else None)
     if return_code != 0:
         raise RuntimeError(f"Preprocessing command failed with exit code {return_code}: {' '.join(cmd)}")
     return "".join(output)

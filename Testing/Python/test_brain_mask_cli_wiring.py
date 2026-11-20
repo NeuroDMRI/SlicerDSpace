@@ -303,7 +303,7 @@ class BrainMaskCliWiringTest(unittest.TestCase):
                     (input_dir / name).touch()
             paths = _path_options(root)
 
-            def run_subject(command, subject, log_dir):
+            def run_subject(command, subject, log_dir, **_kwargs):  # R3-N3: --jobs 2 passes parallel_subjects
                 return batch_cli.SubjectRunResult(
                     subject.subject_id, subject.subject_root, command, 0,
                     log_dir / "stdout", log_dir / "stderr", 0.0,

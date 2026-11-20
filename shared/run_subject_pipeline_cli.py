@@ -19,6 +19,36 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+
+def _preload_torch_for_openmp() -> bool:
+    """D3: on macOS, import torch before any DIPY/scikit-learn import so libiomp5 initializes first.
+
+    torch ships libiomp5 and DIPY/scikit-learn ship libomp. When libomp loads first, a later torch call
+    hangs at 0% CPU or segfaults (probed in PythonSlicer, both orders). The bundled packages must be active
+    first so torch finds the bundled NumPy; ``shared/__init__.py`` activates them too, but it imports the
+    pipeline modules right after, which is too late. ``bundled_python.py`` uses only the standard library,
+    so it loads from its file here without running ``shared/__init__.py``. Do not set KMP_DUPLICATE_LIB_OK.
+    """
+    if sys.platform != "darwin":
+        return False
+    try:
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "_sdds_bundled_python_boot", REPO_ROOT / "shared" / "bundled_python.py")
+        if spec is not None and spec.loader is not None:
+            boot = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(boot)
+            boot.activate_bundled_python()
+    except Exception:
+        pass
+    try:
+        import torch  # noqa: F401
+    except Exception:
+        return False
+    return True
+
+
 from shared import (
     EnvironmentDoctorConfig,
     EnvironmentDoctorResult,
@@ -397,7 +427,9 @@ def _cli_log(message: str) -> None:
     W2b: so do the notice that no current preprocessed DWI is used and the rule-4 phase-encoding block message.
     """
     to_stderr = message.startswith(("[Targets]", "[Orchestrator] No current preprocessed DWI", "[Orchestrator] Phase-encoding"))
-    print(message, file=sys.stderr if to_stderr else sys.stdout)
+    # P-c: one write call per line, as the heartbeat does, so a heartbeat line cannot land between the text and
+    # the newline that print() writes separately.
+    (sys.stderr if to_stderr else sys.stdout).write(str(message) + "\n")
 
 
 def _phase_encoding_block(plan) -> str:
@@ -853,6 +885,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # P-b: only a real CLI run loads torch. Importing this module (the GUI does, through shared.experiments)
+    # must not put torch into the GUI process. Nothing here has imported DIPY or scikit-learn yet.
+    _preload_torch_for_openmp()
     cli_started = time.monotonic()
     parser = build_parser()
     raw_argv = list(sys.argv[1:] if argv is None else argv)
@@ -948,11 +983,24 @@ def main(argv: list[str] | None = None) -> int:
     doctor_paths: dict[str, str] = {}
     environment_started = time.monotonic()
     if (args.execute or args.plan) and not args.skip_environment_check:
-        doctor_result, doctor_paths = _run_environment_doctor_from_args(
-            args,
-            targets=targets,
-            output_root=output_root,
-        )
+        # P-d: the doctor can run for minutes (the torch/NumPy probe waits up to 120 s) before the orchestration
+        # heartbeat starts. Heartbeat lines in that time keep a healthy run from looking silent to the GUI.
+        doctor_heartbeat = None
+        if args.execute:
+            from shared.run_heartbeat import Heartbeat
+            doctor_heartbeat = Heartbeat(log_root=output_root or (
+                args.subject_root.parent if args.subject_root.is_file() else args.subject_root))
+            doctor_heartbeat.set_stage("doctor")
+            doctor_heartbeat.start()
+        try:
+            doctor_result, doctor_paths = _run_environment_doctor_from_args(
+                args,
+                targets=targets,
+                output_root=output_root,
+            )
+        finally:
+            if doctor_heartbeat is not None:
+                doctor_heartbeat.stop()
         print(summarize_environment_doctor(doctor_result), file=sys.stderr)
         print(f"Environment report: {doctor_paths['json']}", file=sys.stderr)
         print(f"Python install helper: {doctor_paths['python_sh']}", file=sys.stderr)
@@ -1137,7 +1185,20 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     orchestration_started = time.monotonic()
-    result = run_subject_products(config, log=_cli_log)
+    # H2: a silent stage must be distinguishable from a hung one; the heartbeat only prints, it never kills.
+    heartbeat = None
+    run_log = _cli_log
+    if args.execute:
+        from shared.run_heartbeat import Heartbeat
+        heartbeat_root = config.output_root or (
+            config.subject_root.parent if config.subject_root.is_file() else config.subject_root)
+        heartbeat = Heartbeat(log_root=heartbeat_root).start()
+        run_log = heartbeat.wrap_log(_cli_log)
+    try:
+        result = run_subject_products(config, log=run_log)
+    finally:
+        if heartbeat is not None:
+            heartbeat.stop()
     orchestration_seconds = time.monotonic() - orchestration_started
     cli_timing = dict(main_wall_seconds=time.monotonic() - cli_started,
                       environment_check_seconds=environment_seconds, orchestration_call_seconds=orchestration_seconds,

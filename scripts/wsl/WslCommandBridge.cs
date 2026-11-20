@@ -182,6 +182,8 @@ namespace SlicerDSpace.WslBridge
             return null;
         }
 
+        private const int WslPathTimeoutMilliseconds = 30000;
+
         private static string ConvertDrivePath(string value, BridgeConfig config)
         {
             var portablePath = value.Replace('\\', '/');
@@ -195,19 +197,40 @@ namespace SlicerDSpace.WslBridge
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
+                // X2: wslpath prints UTF-8. The default OEM code page turns a non-ASCII user or temp path into mojibake.
+                StandardOutputEncoding = new UTF8Encoding(false),
+                StandardErrorEncoding = new UTF8Encoding(false),
                 CreateNoWindow = true,
             };
             using (var process = Process.Start(startInfo))
             {
-                var stdout = process.StandardOutput.ReadToEnd();
-                var stderr = process.StandardError.ReadToEnd();
+                var stdoutBuilder = new StringBuilder();
+                var stderrBuilder = new StringBuilder();
+                process.OutputDataReceived += (sender, e) =>
+                {
+                    if (e.Data != null) { lock (stdoutBuilder) { stdoutBuilder.AppendLine(e.Data); } }
+                };
+                process.ErrorDataReceived += (sender, e) =>
+                {
+                    if (e.Data != null) { lock (stderrBuilder) { stderrBuilder.AppendLine(e.Data); } }
+                };
+                process.BeginOutputReadLine();
+                process.BeginErrorReadLine();
+                if (!process.WaitForExit(WslPathTimeoutMilliseconds))
+                {
+                    try { process.Kill(); } catch (Exception) { }
+                    throw new InvalidOperationException(
+                        "wslpath did not finish within 30 s for '" + value + "'. Check that WSL distribution '"
+                        + config.Distribution + "' starts (run: wsl.exe --distribution " + config.Distribution
+                        + " --exec true), then retry.");
+                }
                 process.WaitForExit();
                 if (process.ExitCode != 0)
                 {
                     throw new InvalidOperationException(
-                        "wslpath failed for '" + value + "': " + stderr.Trim());
+                        "wslpath failed for '" + value + "': " + stderrBuilder.ToString().Trim());
                 }
-                return stdout.TrimEnd('\r', '\n');
+                return stdoutBuilder.ToString().TrimEnd('\r', '\n');
             }
         }
 

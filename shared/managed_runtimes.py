@@ -120,7 +120,7 @@ def cuda_visible():
     if os.environ.get("CUDA_VISIBLE_DEVICES") in {"", "-1"}:
         return False
     try:
-        check = subprocess.run(["nvidia-smi", "-L"], capture_output=True, text=True,
+        check = subprocess.run(["nvidia-smi", "-L"], capture_output=True, text=True, encoding="utf-8", errors="replace",
                                timeout=10, env=external_python_environment())
         return check.returncode == 0 and "GPU " in check.stdout
     except (OSError, subprocess.TimeoutExpired):
@@ -182,7 +182,7 @@ def write_json(path, payload):
 
 
 def _tarball_version(prefix, expected):
-    probe = subprocess.run([str(prefix / "bin/mrconvert"), "--version"], capture_output=True, text=True,
+    probe = subprocess.run([str(prefix / "bin/mrconvert"), "--version"], capture_output=True, text=True, encoding="utf-8", errors="replace",
                            timeout=60, env=external_python_environment(path_prepend=[prefix / "bin"]))
     output = probe.stdout + probe.stderr
     if probe.returncode != 0 or not re.search(r"(?<![\d.])" + re.escape(expected) + r"(?![\d.])", output):
@@ -216,7 +216,7 @@ def verify_prefix(profile, prefix):
         with command.open("rb") as stream:
             elf = stream.read(4) == b"\x7fELF"
         if elf:
-            probe = subprocess.run(["ldd", str(command)], capture_output=True, text=True,
+            probe = subprocess.run(["ldd", str(command)], capture_output=True, text=True, encoding="utf-8", errors="replace",
                                    timeout=30, env=external_python_environment())
             if probe.returncode or "not found" in probe.stdout:
                 raise RuntimeError(f"Runtime libraries unavailable for {name}: {probe.stdout} {probe.stderr}")
@@ -402,7 +402,7 @@ def setup_lock(root):
 def _path_conda_platform(executable):
     """Conda platform reported by ``conda info --json``; None when it cannot be read."""
     try:
-        check = subprocess.run([executable, "info", "--json"], capture_output=True, text=True,
+        check = subprocess.run([executable, "info", "--json"], capture_output=True, text=True, encoding="utf-8", errors="replace",
                                timeout=60, env=external_python_environment())
         return json.loads(check.stdout).get("platform") if check.returncode == 0 else None
     except (OSError, subprocess.TimeoutExpired, ValueError, AttributeError):

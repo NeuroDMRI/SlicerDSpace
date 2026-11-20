@@ -150,6 +150,34 @@ def _torch_threads(count):
         setter(previous)
 
 
+WAIT_LOG_SECONDS = 60.0
+
+
+def _wait_description(row, state, used, limits):
+    """(resource, queued ahead of this stage): the first resource that does not fit now, else the queue itself."""
+    ahead = next((i for i, item in enumerate(state['waiting']) if item['id'] == row['id']), 0)
+    resource = next((key for key in ('cpu', 'memory_gb', 'gpu', 'io')
+                     if used[key] + row.get(key, 0) > limits[key]), 'queue')
+    return resource, ahead
+
+
+def _call_log(call_ctx):
+    """The wrapped stage's own ``log`` keyword when it has one, else None."""
+    log = call_ctx[2].get('log') if call_ctx is not None else None
+    return log if callable(log) else None
+
+
+def _log_wait(stage, wait_info, log):
+    """H7: say once, then every WAIT_LOG_SECONDS, that a stage is queued for a cohort resource."""
+    resource, ahead = wait_info
+    message = f'[Cohort] {stage} waiting for {resource} ({ahead} ahead)'
+    if log is not None:
+        log(message)
+    else:
+        # stderr, like the cache-lock wait notice: stdout stays the machine-readable result of a CLI run.
+        print(message, file=sys.stderr, flush=True)
+
+
 @contextmanager
 def stage_admission(name, *, gpu=False):
     selected = os.environ.get(ENV)
@@ -211,6 +239,7 @@ def stage_admission(name, *, gpu=False):
                 pass
     validate_request(row,dict(cpu=config['cpu_budget'],memory_gb=config['memory_gb'],gpu=config['gpu_slots'],io=config['io_slots']))
     admitted, queued = False, False
+    next_wait_log, wait_info = None, ('queue', 0)
     began = time.monotonic()
     token, reservation_token, previous = None, None, os.environ.get(LEASE)
     thread_keys = ('SLICERDSPACE_STAGE_CPUS', 'OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS',
@@ -256,7 +285,13 @@ def stage_admission(name, *, gpu=False):
                     admitted = True
                     _event(folder, row, 'started', wait_seconds=time.monotonic() - began)
                 _write(folder, state)
+                if not admitted:
+                    wait_info = _wait_description(row, state, used, limits)
             if not admitted:
+                now = time.monotonic()
+                if next_wait_log is None or now >= next_wait_log:
+                    next_wait_log = now + WAIT_LOG_SECONDS
+                    _log_wait(name, wait_info, _call_log(call_ctx))
                 time.sleep(.05)
         token = _inside.set(True)
         reservation_token = _reservation.set(row)

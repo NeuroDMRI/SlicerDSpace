@@ -59,7 +59,7 @@ class SurfaceRuntimeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             activation = root / 'activation.txt'
-            activation.write_text('synthetic nonempty activation fixture; not a valid key')
+            activation.write_text('user@example.edu\n12345\n*Cexample\n FSexample\n')  # LE-8: FreeSurfer layout, not a valid key
             missing = root / 'not-built'
             record = inspect_surface_runtime(missing, license_file=activation)
             self.assertFalse(record['components_available'])

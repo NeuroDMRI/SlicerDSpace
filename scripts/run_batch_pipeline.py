@@ -10,6 +10,7 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -204,7 +205,93 @@ def _manifest_identity(path: Path):
         return None
 
 
-def _run_subject(command: list[str], subject: BatchSubject, log_dir: Path, *, environment=None) -> SubjectRunResult:
+# H3: the GUI reads this process's stdout and a small progress file while a batch runs. Lines of several
+# worker threads must not interleave, so every print goes through one lock.
+_OUT_LOCK = threading.Lock()
+_RELAY_PREFIXES = ("[Heartbeat]", "[Stall warning]")
+PROGRESS_KIND = "slicerdsurfer_batch_progress"
+_RELAY_POLL_SECONDS = 0.5
+
+
+def _emit(line: str) -> None:
+    with _OUT_LOCK:
+        try:
+            print(line, flush=True)
+        except (OSError, ValueError):
+            pass  # a closed stdout must not fail a batch that is still running
+
+
+def relay_line(subject_id: str, line: str) -> str:
+    """Format a subject's heartbeat or stall line for the batch output: ``[<id>] [Heartbeat] ...``."""
+    return f"[{subject_id}] {line}"
+
+
+def write_progress_file(path: Path | None, payload: dict[str, object]) -> None:
+    """Write the batch progress file atomically. A write error never fails the batch (H3)."""
+    if path is None:
+        return
+    try:
+        path = path.expanduser()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_name(path.name + ".tmp")
+        temporary.write_text(json.dumps(payload, ensure_ascii=False) + "\n", encoding="utf-8")
+        os.replace(temporary, path)
+    except OSError:
+        pass
+
+
+class _LogTail:
+    """Relay the ``[Heartbeat]`` and ``[Stall warning]`` lines of a subject's stdout log while it runs (H3).
+
+    The subject process writes to a file, so the GUI would otherwise see nothing until the batch ends.
+    A thread follows the file; ``stop`` reads what is left, so a short subject still relays its last lines.
+    """
+
+    def __init__(self, path: Path, subject_id: str, relay) -> None:
+        self._path, self._subject_id, self._relay = path, subject_id, relay
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, name=f"batch-tail-{subject_id}", daemon=True)
+        self._offset = 0
+        self._partial = b""
+
+    def start(self) -> "_LogTail":
+        self._thread.start()
+        return self
+
+    def _drain(self) -> None:
+        try:
+            with self._path.open("rb") as handle:
+                handle.seek(self._offset)
+                chunk = handle.read()
+        except OSError:
+            return
+        self._offset += len(chunk)
+        data = self._partial + chunk
+        *lines, self._partial = data.split(b"\n")
+        for raw in lines:
+            text = raw.decode("utf-8", errors="replace").rstrip("\r")
+            if text.startswith(_RELAY_PREFIXES):
+                try:
+                    self._relay(self._subject_id, text)
+                except Exception:
+                    pass
+
+    def _run(self) -> None:
+        while not self._stop.wait(_RELAY_POLL_SECONDS):
+            self._drain()
+
+    def stop(self) -> None:
+        self._stop.set()
+        self._thread.join(timeout=5)
+        self._drain()
+
+
+def _emit_relayed(subject_id: str, line: str) -> None:
+    _emit(relay_line(subject_id, line))
+
+
+def _run_subject(command: list[str], subject: BatchSubject, log_dir: Path, *, environment=None,
+                 relay=_emit_relayed, parallel_subjects: int = 1) -> SubjectRunResult:
     log_dir.mkdir(parents=True, exist_ok=True)
     safe_id = "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in subject.subject_id)
     stdout_log = log_dir / f"{safe_id}.stdout.log"
@@ -217,14 +304,24 @@ def _run_subject(command: list[str], subject: BatchSubject, log_dir: Path, *, en
     # Stream independent logs so a long cohort does not retain every process's
     # output in the batch driver's memory, and logs are readable during a run.
     with stdout_log.open("w", encoding="utf-8") as stdout, stderr_log.open("w", encoding="utf-8") as stderr:
+        tail = _LogTail(stdout_log, subject.subject_id, relay).start() if relay is not None else None
         try:
             options = text_subprocess_kwargs()
             if environment is not None:
                 options['env'] = {**os.environ, **environment, 'SLICERDSPACE_COHORT_SUBJECT': subject.subject_id}
+            # P-a: the child's heartbeat must not read growth of its own stdout log as stage progress.
+            options['env'] = {**(options.get('env') or os.environ), 'SLICERDSPACE_HEARTBEAT_EXCLUDE': os.pathsep.join(
+                [item for item in (os.environ.get('SLICERDSPACE_HEARTBEAT_EXCLUDE'), str(stdout_log)) if item])}
+            if parallel_subjects > 1:
+                # R3-N3: other subjects share the GPU, so the child skips the LE-3 free-memory check.
+                options['env']['SLICERDSPACE_PARALLEL_SUBJECTS'] = str(parallel_subjects)
             completed = subprocess.run(command, stdout=stdout, stderr=stderr, **options)
         except OSError as exc:
             stderr.write(f"Could not start subject process: {exc}\n")
             completed = subprocess.CompletedProcess(command, 127)
+        finally:
+            if tail is not None:
+                tail.stop()
     process_elapsed_seconds = round(time.monotonic() - started, 3)
     task_counts = None
     manifest_error = None
@@ -349,6 +446,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument('--allow-partial-success', action='store_true', help='Allow exit code 0 when child runs are blocked; the batch still records completed_with_blocks.')
     parser.add_argument("--manifest", type=Path, help="Batch manifest path. Defaults under output root or batch root.")
     parser.add_argument("--log-dir", type=Path, help="Per-subject stdout/stderr log directory.")
+    parser.add_argument("--progress-file", type=Path,
+                        help="Write a small JSON progress record here after each subject starts and finishes (read by the Slicer widget).")
     parser.add_argument(
         "--pipeline-script",
         type=Path,
@@ -514,8 +613,29 @@ def main(argv: list[str] | None = None) -> int:
             child_environment.update({key: '1' for key in ('OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'MKL_NUM_THREADS')})
     failures = 0
     started = time.time()
+    total_subjects = len(subject_commands)
+    progress_path = args.progress_file.expanduser().resolve() if args.progress_file else None
+    started_ids: list[str] = []
+    running_ids: set[str] = set()
+
+    def write_progress(status: str = "running") -> None:
+        # H3: one record the GUI polls; "results" holds the finished subjects only.
+        write_progress_file(progress_path, {
+            "kind": PROGRESS_KIND,
+            "version": 1,
+            "status": status,
+            "total": total_subjects,
+            "subjects": [subject.subject_id for subject, _command in subject_commands],
+            "running": sorted(running_ids),
+            "results": [{"subject_id": item["subject_id"], "returncode": item["returncode"], "status": item["status"],
+                         "elapsed_seconds": item["elapsed_seconds"]} for item in result_payloads],
+            "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        })
+
+    write_progress()
     if subject_commands:
         pending_subjects = iter(subject_commands)
+        parallel_subjects = min(args.jobs, len(subject_commands))
         with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as executor:
             future_to_subject: dict[concurrent.futures.Future[SubjectRunResult], BatchSubject] = {}
 
@@ -525,6 +645,12 @@ def main(argv: list[str] | None = None) -> int:
                 except StopIteration:
                     return False
                 kwargs = {'environment': child_environment} if child_environment is not None else {}
+                if parallel_subjects > 1:
+                    kwargs['parallel_subjects'] = parallel_subjects
+                started_ids.append(subject.subject_id)
+                running_ids.add(subject.subject_id)
+                _emit(f"[Batch] start {subject.subject_id} ({len(started_ids)}/{total_subjects})")
+                write_progress()
                 future_to_subject[executor.submit(_run_subject, command, subject, log_dir, **kwargs)] = subject
                 return True
 
@@ -540,6 +666,7 @@ def main(argv: list[str] | None = None) -> int:
                 for future in done:
                     future_to_subject.pop(future)
                     result = future.result()
+                    running_ids.discard(result.subject_id)
                     unsuccessful = result.run_status in {'failed', 'cancelled', 'unknown'} or (
                         result.run_status == 'completed_with_blocks' and not args.allow_partial_success)
                     if result.returncode != 0 or unsuccessful:
@@ -561,11 +688,15 @@ def main(argv: list[str] | None = None) -> int:
                             "manifest_error": result.manifest_error,
                         }
                     )
+                    _emit(f"[Batch] done {result.subject_id} status={result.run_status} "
+                          f"elapsed={int(result.elapsed_seconds)}s ({len(result_payloads)}/{total_subjects})")
+                    write_progress()
                 # Drain active processes after a failure so their outputs and
                 # exit states remain in the batch record; stop only new launches.
                 while not stop_submitting and len(future_to_subject) < args.jobs and submit_next():
                     pass
 
+    write_progress("finished")
     subject_counts: dict[str, int] = {}
     task_counts: dict[str, int] = {}
     for item in result_payloads:

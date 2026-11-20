@@ -77,7 +77,7 @@ class Ps1CommandTests(unittest.TestCase):
     def test_runtime_plan_covers_the_freesurfer_cases(self):
         with tempfile.TemporaryDirectory() as folder:
             licence = Path(folder) / "license.txt"
-            licence.write_text("user@example.org\n12345\n")
+            licence.write_text("user@example.org\n12345\n *Cabc123\n FSxyz\n")  # LE-8: FreeSurfer layout, 3+ lines
             with patch.dict("os.environ", {"FS_LICENSE": "", "FREESURFER_LICENSE": ""}):
                 # needed + file found: the file is passed, no skip switches
                 found = windows_runtime_plan({"mrtrix", "freesurfer"}, ("tractography",), wsl_distributions=UBUNTU,

@@ -68,6 +68,45 @@ def _load_asset_manifest_records(repo_root: Path | None) -> dict[str, Any]:
 _FALLBACK_HOME = Path.home()
 
 
+class ModelAssetIncompleteError(ModelAssetIntegrityError):
+    """LE-2: a model-asset folder exists but lacks files the manifest records (an interrupted download)."""
+
+
+def incomplete_manifest_files(root: Path, relative: str, manifest_records: dict[str, Any]) -> list[str]:
+    """LE-2: list the manifest-recorded files under the folder ``relative`` that are missing or have the wrong size.
+
+    Every file the manifest records under the prefix must exist in ``root`` and, when the record holds
+    ``size_bytes``, have exactly that size. Only a stat() is used; sha256 stays in the cached check of the caller.
+    Returns an empty list when the manifest records nothing under the prefix (nothing to compare against).
+    """
+
+    keys = [key for key in _relative_manifest_keys(relative, manifest_records) if key != relative]
+    prefix = relative.rstrip("/") + "/"
+    problems: list[str] = []
+    for key in sorted(keys):
+        name = key[len(prefix):] if key.startswith(prefix) else key
+        path = root / key
+        try:
+            if not path.is_file():
+                problems.append(f"{name} (missing)")
+                continue
+            record = manifest_records.get(key)
+            expected = record.get("size_bytes") if isinstance(record, dict) else None
+            if isinstance(expected, int) and not isinstance(expected, bool) and path.stat().st_size != expected:
+                problems.append(f"{name} (size {path.stat().st_size} B, expected {expected} B)")
+        except OSError:
+            problems.append(f"{name} (unreadable)")
+    return problems
+
+
+def incomplete_asset_message(directory: Path, problems: list[str]) -> str:
+    shown = ", ".join(problems[:6]) + (f" and {len(problems) - 6} more" if len(problems) > 6 else "")
+    return (
+        f"{directory} is incomplete (an interrupted download?): {shown}. "
+        "Use 'Install models' (or scripts/download_model_assets.py --profile core) to finish the download."
+    )
+
+
 def default_user_model_assets_root() -> Path:
     """Return the per-user default model-asset root."""
 
@@ -171,10 +210,9 @@ def _has_verified_required_asset(
     substituted ones would be accepted wholesale, and the caller only
     verifies at the directory level (individual files loaded from it later,
     e.g. one of several backbone checkpoints picked at runtime, are never
-    re-checked). A manifest-recorded file that is simply not present yet
-    (not downloaded) does not by itself fail the directory -- but if none of
-    the recorded files are present at all, the directory does not count as
-    verified either. A directory with no manifest coverage at all falls
+    re-checked). LE-2: a manifest-recorded file
+    that is missing (or has the wrong size) fails the directory too: a folder
+    left by an interrupted download is not accepted. A directory with no manifest coverage at all falls
     back to plain non-emptiness, since there is nothing recorded to verify
     it against.
     """
@@ -201,6 +239,9 @@ def _has_verified_required_asset(
             continue
         existing_keys = [key for key in manifest_keys if (root / key).is_file()]
         if not existing_keys:
+            continue
+        if incomplete_manifest_files(root, relative, manifest_records):
+            # LE-2: a folder with only some of the recorded files (interrupted download) is not usable.
             continue
         all_verified = True
         for key in existing_keys:
@@ -237,6 +278,20 @@ def resolve_model_assets_root(
     return configured_model_assets_root()
 
 
+def _unverified_asset_error(
+    root: Path, relative: str, candidate: Path, manifest_records: dict[str, Any]
+) -> ModelAssetIntegrityError:
+    """LE-2: name the missing files of an incomplete folder; otherwise the sha256 mismatch."""
+
+    if candidate.is_dir():
+        problems = incomplete_manifest_files(root, relative, manifest_records)
+        if problems:
+            return ModelAssetIncompleteError(incomplete_asset_message(candidate, problems))
+    return ModelAssetIntegrityError(
+        f"{candidate} exists but does not match its recorded sha256 in models/assets_manifest.json"
+    )
+
+
 def model_asset_path(relative: str, *, repo_root: Path, explicit_root: Path | None = None) -> Path:
     """Return the best existing, verified path for one model asset, or its default target.
 
@@ -261,17 +316,13 @@ def model_asset_path(relative: str, *, repo_root: Path, explicit_root: Path | No
     if candidate.exists():
         if _has_verified_required_asset(root, (relative,), manifest_records=manifest_records):
             return candidate
-        raise ModelAssetIntegrityError(
-            f"{candidate} exists but does not match its recorded sha256 in models/assets_manifest.json"
-        )
+        raise _unverified_asset_error(root, relative, candidate, manifest_records)
     for legacy_root in legacy_repo_asset_roots(repo_root):
         legacy = legacy_root / relative
         if legacy.exists():
             if _has_verified_required_asset(legacy_root, (relative,), manifest_records=manifest_records):
                 return legacy
-            raise ModelAssetIntegrityError(
-                f"{legacy} exists but does not match its recorded sha256 in models/assets_manifest.json"
-            )
+            raise _unverified_asset_error(legacy_root, relative, legacy, manifest_records)
     return candidate
 
 

@@ -7,6 +7,7 @@ own scientific details and manifest/QC files.
 
 from __future__ import annotations
 
+import contextvars
 import json
 import math
 import os
@@ -262,6 +263,7 @@ class RunPlanResult:
     targets: tuple[str, ...]
     run_plan_path: Path
     items: tuple[RunPlanItem, ...]
+    warnings: tuple[str, ...] = ()  # LE-4: advice that never blocks a run (for example a low free-disk estimate)
 
     @property
     def blocked_items(self) -> tuple[RunPlanItem, ...]:
@@ -290,6 +292,7 @@ class RunPlanResult:
                 "blocked": len(self.blocked_items),
             },
             "items": [item.to_dict() for item in self.items],
+            "warnings": list(self.warnings),
         }
 
 
@@ -302,9 +305,88 @@ class ProductOrchestratorResult:
     run_plan_path: Optional[Path] = None
 
 
+_RUNNING_PREFIX = "[Orchestrator] Running "
+# LE-6: the stage that started last and has not recorded a task yet; one value per context, so cohort threads do not mix.
+_CURRENT_STAGE: contextvars.ContextVar[str] = contextvars.ContextVar("slicerdspace_current_stage", default="")
+_STAGE_LABEL_TARGETS = (  # log label prefix -> target id
+    ("DWI preprocessing", "preprocessing"), ("DDSeg", "segmentation"), ("DDParcel", "parcellation"),
+    ("DDSurfer surface", "surface"), ("DDSurfer postprocess", "surface_postprocess"),
+    ("Microstructure DTI", "microstructure"), ("Microstructure Free Water", "microstructure_freewater"),
+    ("Microstructure NODDI", "microstructure_noddi"), ("guarded Microstructure DKI", "microstructure_dki"),
+    ("Microstructure iFW", "microstructure_ifw"), ("CSD/ACT", "tractography"), ("DTI tractography", "tractography"),
+    ("WMQL bundles", "bundles"), ("SAF", "saf"), ("WMA", "wma"), ("TractCloud", "tractcloud"),
+    ("connectome", "connectome"),
+)
+
+
 def _emit(message: str, log: Optional[Callable[[str], None]] = None) -> None:
+    if message.startswith(_RUNNING_PREFIX):
+        label = message[len(_RUNNING_PREFIX):]
+        _CURRENT_STAGE.set(next((target for prefix, target in _STAGE_LABEL_TARGETS if label.startswith(prefix)), label))
     if log:
         log(message)
+
+
+_MISSING_COMMAND_NAMES = (
+    "mrconvert", "dwi2response", "dwi2fod", "mtnormalise", "tckgen", "tcksift2", "tckstats", "tckconvert",
+    "tcksample", "tck2connectome", "tckedit", "dwi2mask", "dwifslpreproc", "dwiextract", "mrcat",
+    "5ttgen", "5ttcheck", "5tt2gmwmi", "eddy", "topup", "flirt", "fnirt", "bet", "fslmaths", "applytopup",
+)
+
+
+def _missing_command_name(error: BaseException) -> str:
+    """LE-6: the MRtrix/FSL command a stage could not start, or an empty string.
+
+    Matches the real signals only: a FileNotFoundError whose ``filename`` is one of the commands (subprocess could
+    not start it), "Missing command(s): [...]" (tractography/act.py) and "Missing native executable: X"
+    (shared/native_runtimes.py). A path that merely contains a command name (".../eddy/", "eddy.nii.gz") does not match.
+    """
+    import re
+
+    name_pattern = "|".join(re.escape(name) for name in _MISSING_COMMAND_NAMES)
+    filename = getattr(error, "filename", None)
+    if isinstance(error, FileNotFoundError) and filename:
+        base = Path(str(filename).replace("\\", "/")).name
+        stem = base[:-4] if base.lower().endswith((".exe", ".cmd", ".bat")) else base
+        return stem if stem in _MISSING_COMMAND_NAMES else ""
+    text = str(error)
+    match = re.search(r"Missing command\(s\):[^\n]*?['\"]?(" + name_pattern + r")(?![\w.-])", text)
+    match = match or re.search(r"Missing native executable: (" + name_pattern + r")(?![\w.-])", text)
+    return match.group(1) if match else ""
+
+
+def explain_stage_error(error: BaseException, output_root: Optional[Path] = None) -> str:
+    """LE-6: a cause and fix sentence for a known stage error, or an empty string."""
+    import errno
+    import re
+
+    text = str(error)
+    lowered = text.lower()
+    if isinstance(error, OSError) and getattr(error, "errno", None) == errno.ENOSPC or "no space left on device" in lowered:
+        where = output_root.as_posix() if output_root is not None else "the output folder"
+        return f"Output disk is full: free space on {where} and run again."
+    if "out of memory" in lowered and ("cuda" in lowered or "gpu" in lowered or type(error).__name__ == "OutOfMemoryError"):
+        return "The GPU ran out of memory. Free GPU memory or set the device to CPU, then run again."
+    if type(error).__name__ in {"ModelAssetIncompleteError", "ModelAssetIntegrityError"}:
+        return "A model file is missing or damaged. Use 'Install models' to download it again."
+    command = _missing_command_name(error)
+    if command:
+        return (
+            f"The command '{command}' was not found. Use Environment > Prepare to install MRtrix/FSL, "
+            "or set the tool folder in the settings."
+        )
+    if isinstance(error, FileNotFoundError):
+        name = str(getattr(error, "filename", "") or text).lower()
+        if re.search(r"\.(pt|pth|pkl|ckpt|onnx|safetensors)$", name) or "/weights" in name.replace("\\", "/"):
+            return "A model file is missing. Use 'Install models' to download it, then run again."
+    return ""
+
+
+def stage_failure_text(stage: str, error: BaseException, output_root: Optional[Path] = None) -> str:
+    """LE-6: 'Stage <name> failed: <cause and fix> (<original message>)'."""
+    original = str(error) or type(error).__name__
+    explanation = explain_stage_error(error, output_root)
+    return f"Stage {stage} failed: {explanation} ({original})" if explanation else f"Stage {stage} failed: {original}"
 
 
 def _start_task_timer(label: str, log: Optional[Callable[[str], None]] = None) -> float:
@@ -2504,6 +2586,115 @@ def _free_water_ineligible(inputs: dict[str, Path]) -> str:
     return free_water_eligibility(bvals)[1]
 
 
+# LE-4: rough disk need of each product as a multiple of the DWI file size (an estimate: it only warns, never blocks).
+_DISK_FACTOR_BY_TARGET = {
+    "preprocessing": 3.0, "segmentation": 1.0, "parcellation": 1.0, "surface": 3.0, "surface_postprocess": 1.0,
+    "microstructure": 1.0, "microstructure_freewater": 1.0, "microstructure_noddi": 2.0, "microstructure_dki": 1.0,
+    "microstructure_ifw": 0.2, "tractography": 6.0, "bundles": 1.0, "connectome": 0.5,
+}
+_STREAMLINE_EXPORT_BYTES = 2048  # one streamline of about 150 points in one export format
+_STREAMLINE_EXPORTS = 3  # tck, trk and vtk
+
+
+def estimate_run_disk_bytes(dwi_bytes: int, targets: Iterable[str], select_streamlines: int) -> int:
+    """LE-4: DWI file size times a per-product factor, plus streamlines x bytes x exports for tractography."""
+    chosen = set(targets)
+    total = sum(_DISK_FACTOR_BY_TARGET.get(target, 0.0) for target in chosen) * max(int(dwi_bytes), 0)
+    if "tractography" in chosen:
+        total += max(int(select_streamlines), 0) * _STREAMLINE_EXPORT_BYTES * _STREAMLINE_EXPORTS
+    return int(total)
+
+
+def _disk_space_warning(dwi: Path, targets: Iterable[str], select_streamlines: int, output_root: Path) -> str:
+    """LE-4: a warning when the free space on ``output_root`` is below the estimate, else an empty string."""
+    try:
+        dwi_bytes = Path(dwi).stat().st_size
+        probe = Path(output_root)
+        while not probe.exists() and probe != probe.parent:
+            probe = probe.parent
+        free = shutil.disk_usage(probe).free
+    except OSError:
+        return ""
+    needed = estimate_run_disk_bytes(dwi_bytes, targets, select_streamlines)
+    if needed <= 0 or free >= needed:
+        return ""
+    gib = 1024 ** 3
+    return (
+        f"Disk space: the selected products need about {needed / gib:.1f} GB (estimate) but {probe.as_posix()} has "
+        f"{free / gib:.1f} GB free. Free space or choose another output folder; the run is not blocked."
+    )
+
+
+def _incomplete_weights_reason(relative: str, model_assets_dir: Optional[Path]) -> str:
+    """LE-2: a block reason when the weights folder exists but lacks manifest-recorded files (interrupted download).
+
+    A folder that is not there at all is left to the run (it fails with the install hint); only a partial one is
+    caught here, with a stat-only check. An explicit asset root skips the resolver's check, so it is made here too.
+    """
+    from shared.model_assets import (
+        ModelAssetIntegrityError, _load_asset_manifest_records, incomplete_asset_message, incomplete_manifest_files)
+
+    try:
+        folder = model_asset_path(relative, repo_root=_repo_root(), explicit_root=model_assets_dir)
+    except ModelAssetIntegrityError as exc:
+        return str(exc)
+    if not folder.is_dir():
+        return ""
+    depth = len(Path(relative).parts)
+    problems = incomplete_manifest_files(folder.parents[depth - 1], relative, _load_asset_manifest_records(_repo_root()))
+    return incomplete_asset_message(folder, problems) if problems else ""
+
+
+def _surface_gpu_decision(config: ProductOrchestratorConfig, *, planning: bool = False) -> tuple[str, str]:
+    """LE-3: ("ok"|"cpu"|"block", message) for the DDSurfer GPU memory need; unknown means ok.
+
+    U5: under a cohort schedule another subject may hold the GPU, and the surface stage's own GPU admission waits for
+    it, so the check is skipped. R3-N3: the same holds when the batch runner starts several subjects at once without a
+    schedule (SLICERDSPACE_PARALLEL_SUBJECTS > 1): the free memory it would see includes another subject's use. A plan
+    (``planning=True``, GUI thread) never starts the torch probe; it uses only a result that an earlier probe cached.
+    """
+    try:
+        parallel_subjects = int(os.environ.get("SLICERDSPACE_PARALLEL_SUBJECTS", "") or 1)
+    except ValueError:
+        parallel_subjects = 1
+    try:
+        from shared.cohort_schedule import cohort_active
+
+        if cohort_active() or parallel_subjects > 1:
+            return "ok", ""
+        from anatomy.surface.backend_bridge import python_executable
+        from shared.environment import surface_gpu_memory_decision
+
+        return surface_gpu_memory_decision(
+            config.surface_device,
+            Path(python_executable(_optional_interpreter(config.surface_python_bin))),
+            cached_only=planning,
+        )
+    except Exception:
+        return "ok", ""
+
+
+def _noddi_ineligible(inputs: dict[str, Path]) -> str:
+    """LE-1: empty when the DWI has at least two non-zero b-shells, else the user message (same rounding as the NODDI stage)."""
+    from microstructure.pipeline import MicrostructureConfig, noddi_nonzero_shells
+    import numpy as np
+
+    if not Path(inputs["bval"]).is_file():
+        return ""  # a missing input is reported by the raw-input check
+    try:
+        bvals = np.loadtxt(inputs["bval"], dtype=float).ravel()
+    except ValueError:
+        return ""  # an unreadable b-value file is reported by input validation
+    shells = noddi_nonzero_shells(bvals, MicrostructureConfig.noddi_b0_threshold)
+    if len(shells) >= 2:
+        return ""
+    found = ", ".join(f"{shell:g}" for shell in shells) or "none"
+    return (
+        f"NODDI needs at least 2 non-zero b-shells; this DWI has {len(shells)} (b={found}). "
+        "Deselect NODDI or use multi-shell data."
+    )
+
+
 def _microstructure_noddi_outputs(subject_root: Path, subject_id: str, output_root: Optional[Path] = None) -> dict[str, Path]:
     layout = subject_layout(subject_root, output_root=output_root)
     noddi_dir = _microstructure_stage_dir(layout) / "noddi"
@@ -3181,6 +3372,8 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
         if target == "segmentation":
             if config.resume and _segmentation_complete(subject_root, output_root):
                 add(target, "skipped", "completed outputs found", "reuse", inputs=raw, outputs=segmentation_outputs)
+            elif weights_reason := _incomplete_weights_reason("segmentation/weights", model_assets_dir):  # LE-2
+                add(target, "blocked", weights_reason, "data", inputs=raw, outputs=segmentation_outputs, provides=False)
             elif not raw_input_block(target, segmentation_outputs):
                 add(target, "will_run", "ready to run DDSeg", "runnable", inputs=raw, outputs=segmentation_outputs)
             continue
@@ -3198,6 +3391,8 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
                     outputs=parcellation_outputs,
                     provides=False,
                 )
+            elif weights_reason := _incomplete_weights_reason("parcellation/weights", model_assets_dir):  # LE-2
+                add(target, "blocked", weights_reason, "data", inputs={**raw, "atlas_t2": atlas_t2}, outputs=parcellation_outputs, provides=False)
             elif not raw_input_block(target, parcellation_outputs):
                 add(target, "will_run", "ready to run DDParcel", "runnable", inputs={**raw, "atlas_t2": atlas_t2}, outputs=parcellation_outputs)
             continue
@@ -3206,7 +3401,13 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
             if config.resume and _surface_complete(subject_root, config.subject_id, output_root, config=config):
                 add(target, "skipped", "completed outputs found", "reuse", inputs=raw, outputs=surface_outputs)
             elif not raw_input_block(target, surface_outputs):
-                add(target, "will_run", "ready to run DDSurfer surface", "runnable", inputs=raw, outputs=surface_outputs)
+                gpu_action, gpu_message = _surface_gpu_decision(config, planning=True)  # LE-3: before the shared DTI fit and registration
+                if gpu_action == "block":
+                    add(target, "blocked", gpu_message, "environment", inputs=raw, outputs=surface_outputs, provides=False)
+                else:
+                    add(target, "will_run",
+                        "ready to run DDSurfer surface" if gpu_action == "ok" else "ready to run DDSurfer surface on CPU: " + gpu_message,
+                        "runnable", inputs=raw, outputs=surface_outputs)
             continue
 
         if target == "surface_postprocess":
@@ -3305,6 +3506,8 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
                 add(target, "skipped", "completed NODDI outputs found", "reuse", inputs=analysis_inputs, outputs=noddi_outputs, dependencies={"microstructure": "available" if dti_ready else None})
             elif not dti_ready:
                 add(target, "blocked", _upstream_reason(selected, "microstructure", "missing Microstructure DTI outputs; select microstructure or provide existing output"), "upstream", inputs=raw, outputs=noddi_outputs, dependencies={"microstructure": "missing"}, provides=False)
+            elif noddi_ineligible := _noddi_ineligible(analysis_inputs):  # LE-1: fail before the hours of earlier stages
+                add(target, "blocked", noddi_ineligible, "acquisition_or_backend", inputs=analysis_inputs, outputs=noddi_outputs, provides=False)
             elif not raw_input_block(target, noddi_outputs):
                 add(target, "will_run", "ready to run Microstructure NODDI", "runnable", inputs=analysis_inputs, outputs=noddi_outputs, dependencies={"microstructure": "available" if _microstructure_dti_complete(subject_root, config.subject_id, output_root) else "will_run"})
             continue
@@ -3608,6 +3811,11 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
                 )
             continue
 
+    plan_warnings: list[str] = []
+    disk_warning = _disk_space_warning(  # LE-4
+        analysis_inputs["dwi"], [item.target for item in items if item.will_run], config.select_streamlines, layout.outputs)
+    if disk_warning:
+        plan_warnings.append(disk_warning)
     plan = RunPlanResult(
         subject_id=config.subject_id,
         subject_root=subject_root,
@@ -3616,6 +3824,7 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
         targets=targets,
         run_plan_path=_run_plan_path(layout, run_name),
         items=tuple(items),
+        warnings=tuple(plan_warnings),
     )
     if write:
         _write_run_plan(plan)
@@ -3664,6 +3873,7 @@ class _TimedTaskList(list):
         self._on_append = on_append
 
     def append(self, task: ProductTaskRecord) -> None:  # type: ignore[override]
+        _CURRENT_STAGE.set("")  # LE-6: a recorded task ends the running stage; a later error is not blamed on it
         now = time.monotonic()
         now_wall = datetime.now(timezone.utc)
         runtime = max(0.0, now - self._last_monotonic)
@@ -3739,7 +3949,7 @@ def _write_orchestration_checkpoint(
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def _mark_orchestration_failed(config: ProductOrchestratorConfig, error: BaseException) -> Path:
+def _mark_orchestration_failed(config: ProductOrchestratorConfig, error: BaseException, stage: str = "") -> Path:
     subject_root = config.subject_root.expanduser().resolve()
     output_root = config.output_root.expanduser().resolve() if config.output_root is not None else None
     layout = subject_layout(subject_root, output_root=output_root)
@@ -3765,7 +3975,8 @@ def _mark_orchestration_failed(config: ProductOrchestratorConfig, error: BaseExc
             "ended_at": _now_utc(),
             "failure": {
                 "type": type(error).__name__,
-                "message": str(error),
+                "message": stage_failure_text(stage, error, output_root) if stage else str(error),  # LE-6
+                **({"stage": stage, "error": str(error)} if stage else {}),
             },
         }
     )
@@ -4293,6 +4504,8 @@ def _run_subject_products_impl(
     previous_run_records = _archive_existing_run_records(layout, run_name)
     plan = plan_subject_products(config, write=True)
     planning_seconds = time.monotonic() - start
+    for plan_warning in plan.warnings:
+        _emit("[Orchestrator] WARNING: " + plan_warning, log)  # LE-4
     manifest_path = layout.run_metadata / f"{run_name}_orchestration_manifest.json"
     tasks: list[ProductTaskRecord] = _TimedTaskList(
         start,
@@ -4381,6 +4594,7 @@ def _run_subject_products_impl(
                 pnl_mask_ants_bin_dir=config.pnl_mask_ants_bin_dir,
                 pnl_mask_route=config.pnl_mask_route,
                 output_root=output_root,
+                selected_targets=tuple(run_targets),  # LE-10
             )
         )
         input_validation_path = validation.report_path
@@ -4718,7 +4932,12 @@ def _run_subject_products_impl(
             )
         elif not config.execute:
             tasks.append(ProductTaskRecord(name="surface.ddsurfer", status="planned", reason="execute=False"))
+        elif (surface_gpu := _surface_gpu_decision(config))[0] == "block":  # LE-3
+            tasks.append(ProductTaskRecord(name="surface.ddsurfer", status="blocked", reason=surface_gpu[1]))
         else:
+            if surface_gpu[0] == "cpu":
+                surface_device = "cpu"  # this run only; the configured device stays "auto"
+                _emit("[Orchestrator] " + surface_gpu[1], log)
             from anatomy.surface import SurfaceConfig, inspect_surface_resources, run_surface
 
             surf_stage_dir = layout.stage_cache("01_anatomical_priors/cortical_surface")
@@ -5114,6 +5333,8 @@ def _run_subject_products_impl(
         elif any(not path.is_file() for path in raw.values()):
             missing = [label for label, path in raw.items() if not path.is_file()]
             tasks.append(ProductTaskRecord(name="microstructure.noddi", status="blocked", reason="missing raw input: " + ", ".join(missing)))
+        elif noddi_ineligible := _noddi_ineligible(_resolve_analysis_inputs(subject_root, config.subject_id, output_root)):  # LE-1
+            tasks.append(ProductTaskRecord(name="microstructure.noddi", status="blocked", reason=noddi_ineligible))
         else:
             from microstructure import MicrostructureConfig, run_microstructure
             from shared.pipeline import ensure_native_dti_bundle, find_subject_root, resolve_preprocessed_input_bundle
@@ -5202,8 +5423,8 @@ def _run_subject_products_impl(
                     manifest_path=result.manifest_path, qc_path=result.qc_path, outputs=published_dki,
                 ))
             except Exception as exc:
-                tasks.append(ProductTaskRecord(name="microstructure.dki", status="failed", reason=str(exc)))
-                _emit(f"[Orchestrator] DKI failed; other selected products can continue: {exc}", log)
+                tasks.append(ProductTaskRecord(name="microstructure.dki", status="failed", reason=stage_failure_text("microstructure_dki", exc, output_root)))  # LE-6
+                _emit(f"[Orchestrator] DKI failed; other selected products can continue: {stage_failure_text('microstructure_dki', exc, output_root)}", log)
 
     if "microstructure_ifw" in run_targets:
         from microstructure.ifw import IfwBlocked, run_ifw
@@ -5239,8 +5460,8 @@ def _run_subject_products_impl(
                 tasks.append(ProductTaskRecord(name="microstructure.ifw", status="blocked", reason=str(exc)))
                 _emit(f"[Orchestrator] iFW stopped; other selected products can continue: {exc}", log)
             except Exception as exc:
-                tasks.append(ProductTaskRecord(name="microstructure.ifw", status="failed", reason=str(exc)))
-                _emit(f"[Orchestrator] iFW failed; other selected products can continue: {exc}", log)
+                tasks.append(ProductTaskRecord(name="microstructure.ifw", status="failed", reason=stage_failure_text("microstructure_ifw", exc, output_root)))  # LE-6
+                _emit(f"[Orchestrator] iFW failed; other selected products can continue: {stage_failure_text('microstructure_ifw', exc, output_root)}", log)
 
     if "tractography" in run_targets and primary_tractography_backend == 'ukf':
         from tractography.ukf import run_ukf
@@ -5259,10 +5480,10 @@ def _run_subject_products_impl(
                     qc_path=ukf_outputs['qc'], manifest_path=ukf_outputs['manifest'],
                     outputs={key: value for key, value in published_ukf.items() if key not in {'qc', 'manifest'}}))
         except Exception as exc:
-            tasks.append(ProductTaskRecord(name='tractography.ukf', status='failed', reason=str(exc),
+            tasks.append(ProductTaskRecord(name='tractography.ukf', status='failed', reason=stage_failure_text('tractography', exc, output_root),  # LE-6
                 qc_path=ukf_outputs['qc'] if ukf_outputs['qc'].is_file() else None,
                 manifest_path=ukf_outputs['manifest'] if ukf_outputs['manifest'].is_file() else None))
-            _emit('[Orchestrator] UKF failed; downstream UKF consumers blocked: ' + str(exc), log)
+            _emit('[Orchestrator] UKF failed; downstream UKF consumers blocked: ' + stage_failure_text('tractography', exc, output_root), log)
 
     ukf_upstream_invalid = (primary_tractography_backend == 'ukf' and config.execute and
         (any(task.name == 'tractography.ukf' and task.status not in {'completed', 'skipped'} for task in tasks)
@@ -6319,6 +6540,7 @@ def run_subject_products(
 ) -> ProductOrchestratorResult:
     """Run products while preserving a failed manifest if any stage raises."""
 
+    _CURRENT_STAGE.set("")
     try:
         fresh_closure = not config.closure_applied  # Q1: multi-tracking children arrive already closed
         config = _with_closure(config)
@@ -6383,5 +6605,8 @@ def run_subject_products(
                 return run(config, log=log)
             return _run_subject_products_impl(config, log=log)
     except Exception as exc:
-        _mark_orchestration_failed(config, exc)
+        stage = _CURRENT_STAGE.get()
+        _mark_orchestration_failed(config, exc, stage)
+        if stage:
+            _emit(stage_failure_text(stage, exc, config.output_root), log)  # LE-6: the log line names the stage
         raise

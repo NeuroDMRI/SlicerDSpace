@@ -27,3 +27,18 @@ real-MPS tests). Opus: one blocking item (stale `UPSTREAM.json` hashes), fixed. 
 | Opus s1121 P2-3 | P2 | No automatic fallback when an arm64 slice cannot load; recovery needs `SLICERDSPACE_DISABLE_ARM64_EXEC=1`. | Name the kill switch in the `CalledProcessError` message, or retry once without the prefix. |
 | Opus s1121 P2-5 | P2 | `_running_vtk_version()` reads the current interpreter's `vtk`; a headless non-Slicer Python with another pip `vtk` can reject a working cli-modules UKF. | Read the VTK version from Slicer's lib folder, or skip the check outside Slicer. |
 | Opus s1121 P2-7 | P2 | `anatomy/surface/pipeline.py` is in the shared-raw surface `input_sha256`, so the first surface run after the overlay recomputes DDSurfer. | Say so in the release note. |
+
+## 21 November 2026: batches 2 and 4 (preview, FSL gate, liveness, early errors, dependencies)
+
+Scope: batch 2 (`a745d24a`) and batch 4 on branch `fix/mps-rosetta-compat`. Every blocking item and every P2 from the
+Opus and Codex rounds was fixed in the fix rounds, with tests. These items stay open. Decide by 5 December 2026.
+
+| Source | Label | Item | Proposed fix |
+|---|---|---|---|
+| W6 D8 | P2 | The worker NumPy floor check reads `slicer_numpy_minimum` from `python-runtime.json`, but `scripts/package_slicer_extension.py` does not write that key yet, so the check does nothing. | Write `slicer_numpy_minimum` (Windows bundle: `2.0.2`) in the packager at the next full release. |
+| Audit LE-7 | P2 | `msmt_csd` on single-shell data is a method choice, not a compatibility item. | Decision for the spec owner. |
+| W6 LE-3 | P2 | The surface resume key compares `device` and `resolved_device`; a run that fell back to CPU may not be reused by a later `auto` run. Not measured. | Measure whether it forces a recompute; drop `resolved_device` from the key only if the outputs are equivalent. |
+| W1 H4 | P2 | On macOS the CTK launcher turns a signal kill into exit code 1, so the kill message has no signal number. Linux and Windows launcher exit codes are not checked on real systems. | Check in the GitHub Actions matrix. |
+| MPS probe | P2 | MPS batch-size scaling (DDSeg, DDParcel, PNL mask, TractCloud) gives at most 1.16x; vf_net Conv3d emulation needs 6.45 GiB, over the 4.87 GiB budget; Gibbs matmul DFT gives 1.1x. | No change. The real gain needs a native arm64 worker with a newer torch, or a native arm64 Slicer. |
+| Opus r3 P2-1 | P2 | On a mount whose `flock` fails with an errno outside EAGAIN/EACCES/EDEADLK (ENOLCK/ENOTSUP on some NFS/SMB), every overlay apply refuses with "check that the extension folder is writable". | Put the errno in the message, or say that file locking is not supported there. |
+| Opus r3 P2-2 | P2 | `--jobs 1` does not clear an inherited `SLICERDSPACE_PARALLEL_SUBJECTS`; in a `--jobs > 1` run the last subject can run alone and still skips the LE-3 GPU check. | Pop the variable when one subject runs; accept the tail case. |

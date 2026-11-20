@@ -137,6 +137,11 @@ def _emit(message: str, log: Optional[Callable[[str], None]] = None) -> None:
         log(message)
 
 
+def _lock_log(log: Optional[Callable[[str], None]]) -> Optional[Callable[[str], None]]:
+    """H7: route a cache-lock wait notice into the caller's run log; None keeps the lock's stderr default."""
+    return (lambda message: _emit("[Shared] " + message, log)) if log else None
+
+
 def _require_slicer() -> None:
     if SLICER_IMPORT_ERROR is not None or slicer is None:
         raise RuntimeError("Shared DTI bundle generation requires the Slicer Python environment.") from SLICER_IMPORT_ERROR
@@ -802,13 +807,17 @@ def _run_cli(cmd: list[str], log: Optional[Callable[[str], None]] = None) -> Non
         **text_subprocess_kwargs(bufsize=1),
     )
     last_nonempty_line = ""
-    if process.stdout:
-        for line in process.stdout:
-            stripped = line.rstrip()
-            if stripped.strip():
-                last_nonempty_line = stripped.strip()
-            _emit(f"[Shared] {stripped}", log)
-    return_code = process.wait()
+
+    def on_line(line):
+        nonlocal last_nonempty_line
+        stripped = line.rstrip()
+        if stripped.strip():
+            last_nonempty_line = stripped.strip()
+        _emit(f"[Shared] {stripped}", log)
+
+    # H8: a surviving grandchild must not keep the stage open after the direct child has exited.
+    from shared.line_stream import stream_process_lines
+    return_code = stream_process_lines(process, on_line, notice=lambda message: _emit(f"[Shared] {message}", log))
     if return_code != 0:
         cli_name = Path(cmd[0]).name if cmd else "CLI"
         detail = f" ({cli_name}: {last_nonempty_line})" if last_nonempty_line else f" ({cli_name})"
@@ -1070,7 +1079,7 @@ def ensure_diffusion_headers(raw: RawInputBundle, *, log=None) -> tuple[Path, Pa
     signature = dict(kind='diffusion_headers', version=2, subject_id=raw.subject_id,
         implementation=_conversion_implementation(),
         sources={key: _cache_file_signature(getattr(raw, key + '_path')) for key in ('dwi', 'bval', 'bvec', 'mask')})
-    with cache_lock(directory / '.lock'):
+    with cache_lock(directory / '.lock', log=_lock_log(log)):
         signature['sources'] = {key: _cache_file_signature(getattr(raw, key + '_path'))
                                 for key in ('dwi', 'bval', 'bvec', 'mask')}
         if _read_manifest(manifest) == signature:
@@ -1241,7 +1250,7 @@ def ensure_native_dti_bundle(
     if fit_method.lower() not in ('ls', 'wls'):
         raise ValueError(f'Unsupported fit method: {fit_method}')
     bundle = _build_native_bundle(raw, fit_method)
-    with cache_lock(bundle.bundle_dir / '.lock'):
+    with cache_lock(bundle.bundle_dir / '.lock', log=_lock_log(log)):
         return _ensure_native_dti_bundle(raw, fit_method, reuse, log)
 
 
@@ -1422,7 +1431,7 @@ def ensure_registered_dti_bundle(
 @scheduled_stage('registered_dti')
 def _registered_dti_stage(raw, native, atlas_t2, fit_method, reuse, log, scalar_format):
     bundle = _build_registered_bundle(raw, fit_method, atlas_t2, scalar_format)
-    with cache_lock(bundle.bundle_dir / '.lock'):
+    with cache_lock(bundle.bundle_dir / '.lock', log=_lock_log(log)):
         return _ensure_registered_dti_bundle(raw, native, atlas_t2, fit_method, reuse, log, scalar_format)
 
 

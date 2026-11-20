@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import math
+import os
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -64,6 +65,8 @@ class InputValidationConfig:
     pnl_mask_ants_bin_dir: Optional[Path] = None
     pnl_mask_route: str = "auto"
     output_root: Optional[Path] = None
+    # LE-10: the targets of this run; a missing b0 or diffusion shell is an error when one of them needs it.
+    selected_targets: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -284,7 +287,46 @@ def _check_dwi(raw: RawInputBundle, messages: list[ValidationIssue], metrics: di
         _add_issue(messages, 'error', 'dwi', 'Failed to read the DWI image header.', error=str(exc))
 
 
-def _check_gradients(raw: RawInputBundle, messages: list[ValidationIssue], metrics: dict[str, Any]) -> None:
+GRADIENT_ERROR_TARGETS = frozenset({
+    "preprocessing", "microstructure", "microstructure_freewater", "microstructure_noddi", "microstructure_dki",
+    "microstructure_ifw", "tractography",
+})
+WINDOWS_PATH_LIMIT = 240
+
+
+def _is_windows() -> bool:
+    return os.name == "nt"
+
+
+def _ansi_encodable(text: str) -> bool:
+    """True when ``text`` fits the ANSI code page ('mbcs', strict) that native Windows tools use."""
+    try:
+        text.encode("mbcs")
+    except (LookupError, UnicodeEncodeError):
+        return False
+    return True
+
+
+def _windows_path_warnings(paths: Iterable[Any]) -> list[str]:
+    """X7: one message per path that native Windows tools (FSL/MRtrix) may fail to open."""
+    warnings: list[str] = []
+    seen: set[str] = set()
+    for path in paths:
+        if path is None:
+            continue
+        text = str(path)
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        if len(text) > WINDOWS_PATH_LIMIT or not _ansi_encodable(text):
+            warnings.append(
+                f"Native Windows tools (FSL/MRtrix) may not open this path: {text}. Use a short ASCII-only folder."
+            )
+    return warnings
+
+
+def _check_gradients(raw: RawInputBundle, messages: list[ValidationIssue], metrics: dict[str, Any],
+                     *, strict: bool = False) -> None:
     try:
         bvals = _parse_bvals(raw.bval_path)
         bvec_rows = _parse_bvecs(raw.bvec_path)
@@ -348,10 +390,17 @@ def _check_gradients(raw: RawInputBundle, messages: list[ValidationIssue], metri
             bval_indices=nonfinite_bvals[:20],
             bvec_indices=nonfinite_bvecs[:20],
         )
+    # LE-10: the selected products cannot run without a b0 volume or a diffusion shell, so it is an error then.
+    gradient_level = "error" if strict else "warning"
+    found_bvals = ", ".join(f"{value:g}" for value in sorted({value for value in bvals if math.isfinite(value)})) or "none"
     if not any(value <= 50 for value in bvals):
-        _add_issue(messages, "warning", "gradient", "No b0 volume detected using b<=50 threshold.")
+        _add_issue(messages, gradient_level, "gradient",
+                   f"No b0 volume detected using b<=50 threshold in {Path(raw.bval_path).name} (found b-values: {found_bvals}).",
+                   bval_file=Path(raw.bval_path).as_posix())
     if not shells:
-        _add_issue(messages, "warning", "gradient", "No diffusion-weighted shell detected.")
+        _add_issue(messages, gradient_level, "gradient",
+                   f"No diffusion-weighted shell detected (b>50) in {Path(raw.bval_path).name} (found b-values: {found_bvals}).",
+                   bval_file=Path(raw.bval_path).as_posix())
     if diffusion_norm_outliers:
         _add_issue(
             messages,
@@ -480,7 +529,7 @@ def validate_subject_inputs(config: InputValidationConfig) -> InputValidationRes
             subject_root = raw.subject_root
             _check_file_layout(raw, messages, metrics)
             _check_dwi(raw, messages, metrics)
-            _check_gradients(raw, messages, metrics)
+            _check_gradients(raw, messages, metrics, strict=bool(GRADIENT_ERROR_TARGETS.intersection(config.selected_targets)))
             _check_metadata(raw, config, messages, metrics)
             _check_brain_mask(raw, config, messages, metrics)
     else:
@@ -498,6 +547,9 @@ def validate_subject_inputs(config: InputValidationConfig) -> InputValidationRes
             mode=inspected["mode"],
         )
 
+    if _is_windows():  # X7: warn before a native Windows tool fails on a long or non-ANSI path
+        for text in _windows_path_warnings((config.input_root, subject_root, config.output_root, config.output_dir, config.t1w_path)):
+            _add_issue(messages, "warning", "path", text)
     _check_t1w(config.t1w_path, messages, metrics)
     _check_dependencies(config.dependency_groups, messages, metrics)
 

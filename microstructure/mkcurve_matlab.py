@@ -98,14 +98,18 @@ def run_mkcurve(dwi_path, bval_path, bvec_path, mask_path, output_dir, *,
         process = subprocess.Popen(command, env=external_python_environment(),
                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                    **text_subprocess_kwargs(bufsize=1))
+        def on_line(line):
+            handle.write(line)
+            handle.flush()
+            tail.append(line.rstrip())
+            if log:
+                log("[MK-Curve] " + line.rstrip())
+
         try:
-            for line in process.stdout:
-                handle.write(line)
-                handle.flush()
-                tail.append(line.rstrip())
-                if log:
-                    log("[MK-Curve] " + line.rstrip())
-            code = process.wait()
+            # H8: a surviving grandchild must not keep the stage open after MATLAB has exited.
+            from shared.line_stream import stream_process_lines
+            code = stream_process_lines(process, on_line,
+                                        notice=(lambda message: log("[MK-Curve] " + message)) if log else None)
         except BaseException:
             process.terminate()
             try:
@@ -114,8 +118,8 @@ def run_mkcurve(dwi_path, bval_path, bvec_path, mask_path, output_dir, *,
                 process.kill()
                 process.wait()
             raise
-        finally:
-            process.stdout.close()
+        # stream_process_lines closes the pipe itself once its reader has finished; a surviving
+        # descendant keeps it open (held by the daemon reader), so no close here.
     if code:
         raise RuntimeError(f"MK-Curve MATLAB failed ({code}): " + "\n".join(tail))
     original_mat = work / "out" / "original_parameters.mat"

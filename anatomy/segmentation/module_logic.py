@@ -135,9 +135,12 @@ class SegmentationLogicMixin:
             env=child_env,
             **text_subprocess_kwargs(bufsize=1),
         )
-        if process.stdout:
-            for line in process.stdout:
-                self.log(f"[DDSeg] {line.rstrip()}")
-        return_code = process.wait()
+        # H8: a surviving grandchild must not keep the stage open after the direct child has exited.
+        from shared.line_stream import stream_process_lines
+        return_code = stream_process_lines(
+            process,
+            lambda line: self.log(f"[DDSeg] {line.rstrip()}"),
+            notice=lambda message: self.log(f"[DDSeg] {message}"),
+        )
         if return_code != 0:
             raise RuntimeError(f"DDSeg subprocess failed with exit code {return_code}")

@@ -22,7 +22,7 @@ class SurfaceLicenseTests(unittest.TestCase):
             home = Path(tmp).resolve()  # F4: macOS /var is a symlink to /private/var
             activation = home / '.freesurfer/license.txt'
             activation.parent.mkdir()
-            activation.write_text('synthetic activation fixture')
+            activation.write_text('user@example.edu\n12345\n*Cexample\n FSexample\n')
             self.assertEqual(resolve_surface_license(home=home, environ={}), activation)
             wrong = home / 'missing-license.txt'
             self.assertEqual(resolve_surface_license(wrong, home=home, environ={}), wrong)
@@ -34,7 +34,7 @@ class SurfaceLicenseTests(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             root = Path(tmp).resolve()  # F4: macOS /var is a symlink to /private/var
             activation = root / '.license'
-            activation.write_text('synthetic activation fixture')
+            activation.write_text('user@example.edu\n12345\n*Cexample\n FSexample\n')
             self.assertEqual(resolve_surface_license(freesurfer_home=root, home=root, environ={}), activation)
             self.assertEqual(resolve_surface_license(home=root, environ={'FREESURFER_LICENSE': str(activation)}), activation)
 
@@ -46,6 +46,8 @@ class SurfaceLicenseTests(unittest.TestCase):
                 path.write_bytes(data)
                 self.assertFalse(usable_license(path))
             path.write_text('synthetic nonempty text; not an activation key')
+            self.assertFalse(usable_license(path))  # LE-8: not the FreeSurfer layout
+            path.write_text('user@example.edu\n12345\n*Cexample\n FSexample\n')
             self.assertTrue(usable_license(path))
             self.assertFalse(usable_license(Path(tmp)))
 
@@ -87,7 +89,7 @@ class SurfaceLicenseTests(unittest.TestCase):
             root = Path(tmp).resolve()
             src = root / 'Downloads/license.txt'
             src.parent.mkdir()
-            src.write_text('synthetic private content')
+            src.write_text('user@example.edu\n12345\n*Cexample\n FSexample\n')
             cfg_file = root / 'cfg/user_config.json'
             expected_dest = (cfg_file.parent / 'freesurfer/license.txt').resolve()
             owner, report = self.owner_and_report()
@@ -103,7 +105,7 @@ class SurfaceLicenseTests(unittest.TestCase):
                 owner._run_environment_dependency_check.assert_called_once_with()
                 src.unlink()
                 self.assertTrue(usable_license(expected_dest))
-                self.assertEqual(expected_dest.read_text(), 'synthetic private content')
+                self.assertEqual(expected_dest.read_text(), 'user@example.edu\n12345\n*Cexample\n FSexample\n')
                 # Next run when stale explicit path is passed automatically recovers the private copy without prompting.
                 owner2, report2 = self.owner_and_report(explicit=str(src), available=False)
                 with patch('shared.ui_surface_license.choose_license') as ask2:
@@ -126,7 +128,7 @@ class SurfaceLicenseTests(unittest.TestCase):
     def test_auto_discovery_is_saved_and_existing_configuration_is_reused(self):
         with TemporaryDirectory() as tmp:
             path = Path(tmp).resolve() / 'license.txt'
-            path.write_text('synthetic activation fixture')
+            path.write_text('user@example.edu\n12345\n*Cexample\n FSexample\n')
             owner, report = self.owner_and_report(available=True)
             with patch.dict(os.environ, {'FS_LICENSE': str(path)}, clear=False), \
                  patch('shared.ui_surface_license.resolve_surface_license', return_value=path), \

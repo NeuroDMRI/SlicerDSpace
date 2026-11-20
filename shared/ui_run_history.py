@@ -589,10 +589,16 @@ def reset_run_progress(owner: Any) -> None:
     refresh_run_progress_styles(owner)
 
 
-def start_progress_polling(owner: Any, manifest_path: Optional[Path], *, started_at: Optional[float] = None) -> None:
-    """Poll the orchestration checkpoint manifest while the background run is alive."""
+def start_progress_polling(owner: Any, manifest_path: Optional[Path], *, started_at: Optional[float] = None,
+                           batch_progress: bool = False) -> None:
+    """Poll the orchestration checkpoint manifest while the background run is alive.
+
+    ``batch_progress`` (H3): ``manifest_path`` is the progress file that ``scripts/run_batch_pipeline.py``
+    writes after each subject, not an orchestration manifest.
+    """
 
     owner._runProgressManifestPath = Path(manifest_path) if manifest_path else None
+    owner._runProgressIsBatch = bool(batch_progress)
     resolved_started_at = started_at if started_at is not None else time.time()
     owner._runProgressStartedAt = resolved_started_at
     owner._runBusyStartedAt = resolved_started_at
@@ -612,6 +618,9 @@ def stop_progress_polling(owner: Any) -> None:
 def poll_run_progress(owner: Any) -> None:
     path = getattr(owner, "_runProgressManifestPath", None)
     if path is None:
+        return
+    if getattr(owner, "_runProgressIsBatch", False):
+        apply_batch_progress(owner, Path(path))
         return
     record = {}
     if (getattr(owner, '_backgroundRunContext', {}) or {}).get('experiment_manifest_path'):
@@ -643,6 +652,30 @@ def poll_run_progress(owner: Any) -> None:
         apply_progress_snapshot(owner, snapshot)
         if snapshot.done > prev_done and Path(path).is_file() and hasattr(owner, "_refresh_run_history"):
             owner._refresh_run_history(select_path=Path(path))
+
+
+def apply_batch_progress(owner: Any, path: Path) -> None:
+    """Show the done/total subjects and one status row per subject from a batch progress file (H3)."""
+
+    from shared.ui_run_controller import read_batch_progress, rows_from_batch_progress
+
+    record = read_batch_progress(path)
+    if record is None:
+        return
+    rows, done, total = rows_from_batch_progress(record)
+    progress = getattr(owner, "_runProgressBar", None)
+    if progress is not None and total > 0:
+        busy = run_state_presentation(str(getattr(owner, "_runState", "idle") or "idle")).busy
+        owner._runProgressHasData = True
+        owner._runProgressCounts = (done, total)
+        if busy and done <= 0:
+            progress.setRange(0, 0)
+        else:
+            progress.setRange(0, total)
+            progress.setValue(done)
+        progress.setFormat(progress_bar_format(done, total))
+        refresh_run_progress_styles(owner)
+    owner._set_run_status_table_rows(rows)
 
 
 def apply_progress_snapshot(owner: Any, snapshot) -> None:

@@ -10,7 +10,8 @@ import shutil
 import sys
 import tempfile
 from pathlib import Path
-from datetime import datetime
+from collections import deque
+from datetime import datetime, timezone
 from time import monotonic
 from typing import Any, List, Optional
 
@@ -91,8 +92,13 @@ from shared.ui_run_controller import (
     build_batch_run_kwargs,
     build_batch_background_cli_args,
     build_single_subject_run_kwargs,
+    WORKER_ABNORMAL_EXIT_MARKER,
+    WorkerLiveness,
+    actionable_plan_blockers,
     cancelled_manifest_path_and_payload,
     classify_background_run_outcome,
+    format_heartbeat_status,
+    format_last_output,
     default_run_name_for_backend,
     extract_background_manifest_path,
     is_auto_generated_run_name,
@@ -107,6 +113,8 @@ from shared.ui_run_controller import (
     blocked_plan_log_text,
     environment_blockers_from_plan,
     partial_run_notice_text,
+    plan_notice_text,
+    plan_warning_lines,
     preflight_blockers_for_targets,
     resolve_single_subject_output_root,
     resolve_single_subject_workspace_root,
@@ -126,6 +134,9 @@ from shared.ui_run_controller import (
     task_keys_for_running_line,
     validate_batch_run_options,
     validate_single_subject_inputs,
+    worker_kill_info,
+    worker_killed_message,
+    worker_silence_message,
 )
 from shared.ui_settings import coerce_user_setting_value, common_user_setting_specs, consume_user_defaults_request
 from shared.ui_status_log import (
@@ -140,6 +151,7 @@ from shared.ui_status_log import (
     uninstall_theme_change_listener,
 )
 from shared.ui_background_process import (
+    Utf8StreamDecoder,
     background_process_env_overrides,
     build_background_run_context,
     qprocess_is_running,
@@ -2520,6 +2532,45 @@ class SharedWidgetMixin:
             kwargs.get("wma_atlas_dir"), selected_atlas, kwargs.get("model_assets_dir"))
         return kwargs
 
+    def _batch_mask_state(self, batch_root_text: str, output_root_text: str = "") -> tuple[int, bool]:
+        """U3: ``(subjects found, every subject has a user mask)``. A filesystem scan only; no image is read.
+
+        Subjects come from the batch script's own discovery, without arranging inputs, so the GUI and the
+        batch run see the same subjects. Any error counts as no subject found.
+        """
+        if not batch_root_text:
+            return 0, False
+        try:
+            import importlib.util
+
+            from shared.pipeline import inspect_subject_directory
+
+            module = sys.modules.get("_sdds_batch_discovery")
+            if module is None:
+                script = Path(__file__).resolve().parents[1] / "scripts" / "run_batch_pipeline.py"
+                spec = importlib.util.spec_from_file_location("_sdds_batch_discovery", script)
+                module = importlib.util.module_from_spec(spec)
+                sys.modules["_sdds_batch_discovery"] = module  # dataclasses look their module up here
+                try:
+                    spec.loader.exec_module(module)
+                except BaseException:
+                    sys.modules.pop("_sdds_batch_discovery", None)
+                    raise
+            subjects, _skipped = module.discover_subjects(
+                Path(batch_root_text).expanduser(), arrange_inputs="none",
+                output_root=Path(output_root_text).expanduser() if output_root_text else None)
+            masked = 0
+            for subject in subjects:
+                mask_file = Path(subject.subject_root) / "input" / "nodif_brain_mask.nii.gz"
+                has_mask = (mask_file.is_file()
+                            and not mask_file.with_name("nodif_brain_mask.manifest.json").is_file())
+                if not has_mask and not str(subject.mode).startswith("subject_root"):
+                    has_mask = bool(inspect_subject_directory(subject.subject_root, subject.subject_id).get("has_mask"))
+                masked += bool(has_mask)
+            return len(subjects), masked == len(subjects)
+        except Exception:
+            return 0, False
+
     def _environment_check_kwargs(
         self,
         *,
@@ -2531,7 +2582,9 @@ class SharedWidgetMixin:
         if not node:
             return {}
         external_paths = external_paths if external_paths is not None else self._environment_dependency_path_kwargs()
-        subject_root_text = (subject_root_text or (node.inputDirectory or "")).strip()
+        batch_mode = bool(getattr(node, "batchMode", False))
+        # U3: in batch mode the single-subject field is not an input; the subjects come from the batch root.
+        subject_root_text = "" if batch_mode else (subject_root_text or (node.inputDirectory or "")).strip()
         output_root_text = self._effective_output_root_text(output_root_text)
         targets = self._selected_environment_targets()
         mask_backend = (getattr(node, "brainMaskBackend", "pnl_cnn") or "pnl_cnn").strip()
@@ -2545,14 +2598,28 @@ class SharedWidgetMixin:
             (mask_file and mask_file.is_file() and not mask_file.with_name("nodif_brain_mask.manifest.json").is_file())
             or inspected.get("has_mask")
         )
-        brain_mask_required = gui_brain_mask_required(
-            targets,
-            input_known=raw_inputs_known,
-            input_mask_exists=user_mask_exists,
-            preprocessing_on=bool(node.targetPreprocessing),
-            mask_backend=mask_backend,
-            preprocessing_stages=preprocessing_stages,
-        )
+        if batch_mode:
+            # U3: a mask runtime is required only when a discovered subject lacks a mask. With no discoverable
+            # subject nothing is demanded here: each subject CLI run checks its own inputs.
+            subjects_found, every_subject_has_mask = self._batch_mask_state(
+                str(getattr(node, "batchRoot", "") or "").strip(), output_root_text)
+            brain_mask_required = bool(subjects_found) and gui_brain_mask_required(
+                targets,
+                input_known=True,
+                input_mask_exists=every_subject_has_mask,
+                preprocessing_on=bool(node.targetPreprocessing),
+                mask_backend=mask_backend,
+                preprocessing_stages=preprocessing_stages,
+            )
+        else:
+            brain_mask_required = gui_brain_mask_required(
+                targets,
+                input_known=raw_inputs_known,
+                input_mask_exists=user_mask_exists,
+                preprocessing_on=bool(node.targetPreprocessing),
+                mask_backend=mask_backend,
+                preprocessing_stages=preprocessing_stages,
+            )
         configured_py = external_paths.get("python_executable")
         same_interpreter = True
         if configured_py:
@@ -2779,7 +2846,7 @@ class SharedWidgetMixin:
             pgid = getattr(self, "_backgroundProcessGroupId", None)
             if getattr(self, "_backgroundProcessGrouped", False) and pgid:
                 finish_process_group(pgid, grace_seconds=15)
-            self._write_cancelled_manifest()
+            self._write_cancelled_manifest_safe()
         # Cancelled launchers can exit before their children. The event loop
         # may stop before the delayed force-kill callback gets its turn.
         for pgid in list(getattr(self, "_pendingCancelledProcessGroups", set())):
@@ -2787,6 +2854,7 @@ class SharedWidgetMixin:
         self._pendingCancelledProcessGroups = set()
         stop_progress_polling(self)
         stop_run_animation(self)
+        self._end_worker_tracking()
         timer = getattr(self, "_runHistoryRefreshTimer", None)
         if timer is not None:
             timer.stop()
@@ -3407,6 +3475,7 @@ class SharedWidgetMixin:
         batch_root: Path,
         batch_size: int,
         arrange_inputs: str,
+        progress_file: Optional[Path] = None,
     ) -> list[str]:
         node = self._parameterNode
         repo_root = Path(__file__).resolve().parent.parent
@@ -3417,6 +3486,7 @@ class SharedWidgetMixin:
             batch_root=batch_root,
             batch_size=batch_size,
             arrange_inputs=arrange_inputs,
+            progress_file=progress_file,
         )
 
     def _reset_result_scene_actions(self) -> None:
@@ -3470,6 +3540,8 @@ class SharedWidgetMixin:
         self._backgroundOutputBuffer = ""
         self._backgroundManifestPath = None
         self._backgroundCancelRequested = False
+        # An experiment campaign (launch_args) prints a line only when a job starts or ends, so a quiet worker is normal.
+        self._begin_worker_tracking(silence_check=launch_args is None)
         self._backgroundRunContext = build_background_run_context(common_run_kwargs, selected_workflows)
         self._backgroundRunContext.update(run_context or {})
         self.appendLog("[Background] Starting: " + program + " " + " ".join(args))
@@ -3483,6 +3555,7 @@ class SharedWidgetMixin:
         set_live_stage_text(self, "正在启动后台计算…" if zh else "Starting background pipeline…")
         process.start(program, args)
         if not process.waitForStarted(5000):
+            self._end_worker_tracking()
             stop_progress_polling(self)
             self._setPipelineActive(False)
             set_run_state(self, "failed")
@@ -3519,12 +3592,19 @@ class SharedWidgetMixin:
         process.connect("errorOccurred(QProcess::ProcessError)", self._onBackgroundProcessError)
 
         program = self._slicer_launcher_program()
+        # H3: the batch script writes its per-subject progress here; the GUI polls it. The file stays out of
+        # the output tree because run history lists every .json in a 00_batch_metadata folder.
+        progress_file = (
+            Path(tempfile.gettempdir()) / "SlicerDSpace"
+            / f"batch_progress_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{os.getpid()}.json"
+        )
         args = self._build_batch_background_cli_args(
             common_run_kwargs,
             external_paths,
             batch_root=batch_root,
             batch_size=batch_size,
             arrange_inputs=arrange_inputs,
+            progress_file=progress_file,
         )
         # Run the CLI in its own process group so Cancel can kill the whole
         # descendant tree, not just the launcher process.
@@ -3536,6 +3616,8 @@ class SharedWidgetMixin:
         self._backgroundOutputBuffer = ""
         self._backgroundManifestPath = None
         self._backgroundCancelRequested = False
+        self._begin_worker_tracking()
+        self._backgroundBatchProgressPath = progress_file
         self._backgroundRunContext = build_background_run_context(
             common_run_kwargs,
             selected_workflows,
@@ -3545,13 +3627,14 @@ class SharedWidgetMixin:
         self.appendLog("[Background] Starting batch: " + program + " " + " ".join(args))
         self._setPipelineActive(True)
         self._set_run_progress_message(f"Batch execution submitted for {batch_root}.")
-        # Batch runs write their manifest only at the end: show a busy bar.
-        start_progress_polling(self, None)
+        # Batch runs write their manifest only at the end; the progress file shows done/total per subject (H3).
+        start_progress_polling(self, progress_file, batch_progress=True)
         set_run_state(self, "running")
         zh = getattr(self, "_onboardingLanguage", "en").startswith("zh")
         set_live_stage_text(self, "正在启动批量后台计算…" if zh else "Starting background batch pipeline…")
         process.start(program, args)
         if not process.waitForStarted(5000):
+            self._end_worker_tracking()
             stop_progress_polling(self)
             self._setPipelineActive(False)
             set_run_state(self, "failed")
@@ -3564,7 +3647,10 @@ class SharedWidgetMixin:
         process = getattr(self, "_backgroundProcess", None)
         if process is None:
             return
-        data = self._qbytearray_to_text(process.readAllStandardOutput())
+        raw = process.readAllStandardOutput()
+        # X1: decode chunk by chunk with one incremental UTF-8 decoder, so a character split across two reads survives.
+        decoder = getattr(self, "_backgroundOutputDecoder", None)
+        data = decoder.decode(raw) if decoder is not None else self._qbytearray_to_text(raw)
         self._backgroundOutputBuffer += data
         while "\n" in self._backgroundOutputBuffer:
             line, self._backgroundOutputBuffer = self._backgroundOutputBuffer.split("\n", 1)
@@ -3573,9 +3659,112 @@ class SharedWidgetMixin:
     def _qbytearray_to_text(self, value) -> str:
         return qbytearray_to_text(value)
 
+    # ---- H2: worker liveness. Heartbeats go to the stage label, a stall is a visible warning, nothing is killed.
+    def _begin_worker_tracking(self, silence_check: bool = True) -> None:
+        self._workerLiveness = WorkerLiveness(monotonic())
+        self._workerRecentLines = deque(maxlen=20)
+        self._workerAbnormalExit = False
+        self._workerWarningActive = False
+        self._workerSilenceLogged = False
+        self._backgroundOutputDecoder = Utf8StreamDecoder()
+        timer = getattr(self, "_workerLivenessTimer", None)
+        if not silence_check:
+            if timer is not None:
+                timer.stop()
+            return
+        try:
+            if timer is None and hasattr(qt, "QTimer"):
+                timer = qt.QTimer()
+                timer.connect("timeout()", self._check_worker_silence)
+                self._workerLivenessTimer = timer
+            if timer is not None:
+                timer.setInterval(max(1000, min(15000, int(self._workerLiveness.interval_seconds * 250))))
+                timer.start()
+        except Exception as exc:
+            self.appendLog(f"[Background] Silence check unavailable: {exc}")
+
+    def _end_worker_tracking(self) -> None:
+        timer = getattr(self, "_workerLivenessTimer", None)
+        if timer is not None:
+            try:
+                timer.stop()
+            except Exception:
+                pass
+        self._workerWarningActive = False
+        self._workerSilenceLogged = False
+
+    def _check_worker_silence(self) -> None:
+        """Warn when no line at all (not even a heartbeat) came for three heartbeat intervals while the worker lives."""
+        liveness = getattr(self, "_workerLiveness", None)
+        process = getattr(self, "_backgroundProcess", None)
+        if liveness is None or process is None or getattr(self, "_backgroundCancelRequested", False):
+            return
+        if not qprocess_is_running(process):
+            return
+        silent = liveness.silence(monotonic())
+        if silent is None:
+            return
+        message = worker_silence_message(silent)
+        liveness.silent = True
+        self._workerWarningActive = True
+        self._setStatus("warning", message)
+        if not getattr(self, "_workerSilenceLogged", False):
+            self._workerSilenceLogged = True
+            self.appendLog("[Background] " + message)
+
+    def _clear_worker_warning(self) -> None:
+        if not getattr(self, "_workerWarningActive", False):
+            return
+        self._workerWarningActive = False
+        self._workerSilenceLogged = False
+        if getattr(self, "_pipelineActive", False):
+            self._setStatus("running", "Running pipeline...")
+            self.appendLog("[Background] Output resumed; the step is making progress again.")
+
+    def _show_worker_heartbeat(self, event: dict) -> None:
+        if event.get("resumed"):
+            self._clear_worker_warning()
+        liveness = getattr(self, "_workerLiveness", None)
+        age = liveness.last_output_age(monotonic()) if liveness is not None else None
+        text = format_heartbeat_status(
+            event["fields"],
+            subject=event.get("subject"),
+            cpu_active=event.get("cpu_active"),
+            last_output_age=age,
+            zh=str(getattr(self, "_onboardingLanguage", "en")).startswith("zh"),
+        )
+        set_live_stage_text(self, "", text)
+
+    def _show_worker_stall(self, event: dict, line: str) -> None:
+        from shared.ui_run_controller import split_relayed_subject
+
+        subject, bare = split_relayed_subject(line)
+        message = bare.replace("[Stall warning] ", "", 1)
+        if subject:
+            message = f"{subject}: {message}"
+        self.appendLog(line.strip())
+        self._workerWarningActive = True
+        self._setStatus("warning", message)
+
     def _handleBackgroundOutputLine(self, line: str) -> None:
         if not line:
             return
+        liveness = getattr(self, "_workerLiveness", None)
+        if liveness is not None:
+            event = liveness.observe(line, monotonic())
+            if event["kind"] == "heartbeat":
+                self._show_worker_heartbeat(event)
+                return
+            if event["kind"] == "stall":
+                self._show_worker_stall(event, line)
+                return
+            if event.get("resumed"):
+                self._clear_worker_warning()
+        if line.startswith("error: [") and WORKER_ABNORMAL_EXIT_MARKER in line:
+            self._workerAbnormalExit = True
+        recent = getattr(self, "_workerRecentLines", None)
+        if recent is not None:
+            recent.append(line)
         self.appendLog(line)
         parsed_stage = parse_live_stage_from_log_line(
             line,
@@ -3599,63 +3788,155 @@ class SharedWidgetMixin:
             explicit_path=getattr(self, "_backgroundManifestPath", None),
         )
 
-    def _onBackgroundProcessFinished(self, exit_code: int, exit_status) -> None:
-        if getattr(self, "_backgroundOutputBuffer", ""):
-            tail = self._backgroundOutputBuffer
-            self._backgroundOutputBuffer = ""
-            for line in tail.splitlines():
-                self._handleBackgroundOutputLine(line.rstrip())
-        cancelled = bool(getattr(self, "_backgroundCancelRequested", False))
-        self._poll_run_progress()
-        stop_progress_polling(self)
-        stop_run_animation(self)
-        manifest_path = self._extract_background_manifest_path()
-        manifest_available = bool(manifest_path and manifest_path.is_file())
-        outcome = classify_background_run_outcome(
-            exit_code=exit_code,
-            cancelled=cancelled,
-            manifest_available=manifest_available,
-        )
-        if outcome == "cancelled":
-            cancel_manifest = self._write_cancelled_manifest()
-            self._mark_unfinished_rows("cancelled", "User cancelled the background job.")
-            self.appendLog(f"[Background] Cancelled. Manifest: {cancel_manifest}")
-            self._setStatus("warning", "Pipeline cancelled")
-            self._set_latest_report_path(None)
-            self._set_latest_output_tree_path(None)
-            self._set_run_progress_message(f"Pipeline cancelled. Manifest: {cancel_manifest}")
-            self._set_run_summary_message("Status: cancelled | User cancelled the background job.", "cancelled")
-            set_run_state(self, "cancelled")
-            # Keep the live rows (completed stages + cancelled ones) visible.
-            self._refresh_run_history(select_path=cancel_manifest)
-            self._tableShowsLiveRun = False
-        elif outcome == "manifest":
-            # A manifest was written even though the process may have exited
-            # non-zero (e.g. exit code 2 for "some tasks failed"): it is
-            # authoritative, so load per-task status from it rather than
-            # treating a non-zero exit as a blanket process failure.
-            self._load_background_manifest_result(manifest_path)
-        elif outcome == "process_failed":
-            self._mark_unfinished_rows("failed", f"Background process exited with code {exit_code}")
-            self._setStatus("error", f"Pipeline failed: exit code {exit_code}")
-            self._set_latest_report_path(None)
-            self._set_latest_output_tree_path(None)
-            self._set_run_progress_message(f"Pipeline failed: exit code {exit_code}")
-            self._set_run_summary_message(f"Status: failed | Background process exited with code {exit_code}.", "failed")
-            set_run_state(self, "failed")
-        else:
-            self._mark_unfinished_rows("failed", "Background process finished without a manifest path.")
-            self._setStatus("error", "Pipeline failed: no manifest")
-            self._set_latest_report_path(None)
-            self._set_latest_output_tree_path(None)
-            self._set_run_progress_message("Pipeline failed: no manifest path was reported.")
-            self._set_run_summary_message("Status: failed | Background process finished without a manifest path.", "failed")
-            set_run_state(self, "failed")
-        self._backgroundProcess = None
-        self._backgroundCancelRequested = False
-        # Loading volumes/fibers can process Qt events. Keep Run disabled until
-        # the old callback has released its handle, so it cannot erase a new job.
-        self._setPipelineActive(False, preserve_status=True)
+    @staticmethod
+    def _manifest_is_final(manifest_path: Optional[Path]) -> bool:
+        """A checkpoint manifest says "running" while the worker lives; only a final one may override a kill (H4)."""
+        try:
+            status = str(json.loads(Path(manifest_path).read_text(encoding="utf-8")).get("status") or "")
+        except Exception:
+            return False
+        return status not in ("", "running", "pending")
+
+    def _write_cancelled_manifest_safe(self) -> Optional[Path]:
+        """H1: a full or unmounted disk must not leave the UI stuck on Running after Cancel."""
+        try:
+            return self._write_cancelled_manifest()
+        except OSError as exc:
+            self.appendLog(f"[Background] Could not write the cancellation manifest: {exc}")
+            return None
+
+    def _show_background_failure(self, headline: str, tail_text: str) -> None:
+        """H4: log the last output lines and show them with the failure message."""
+        if tail_text:
+            self.appendLog("[Background] Last output lines:\n" + tail_text)
+        try:
+            self._show_actionable_error(
+                title="SlicerDSpace run failed",
+                what=headline,
+                why="The background worker ended before it could write a result.",
+                next_step="Read the last output lines below, fix the cause, then run again.",
+                auto_fix="Not available.",
+                details=tail_text or "No output was received from the worker.",
+            )
+        except Exception as exc:
+            self.appendLog(f"[Background] Could not show the failure dialog: {exc}")
+
+    def _onBackgroundProcessFinished(self, exit_code: int, exit_status=None) -> None:
+        # H1: whatever fails below, the run must end here: Run enabled, Cancel inert, no process handle kept.
+        # P-e: the failure dialog is modal; show it only after the handle is released, not inside this callback.
+        failure_notice = None
+        try:
+            decoder = getattr(self, "_backgroundOutputDecoder", None)
+            if decoder is not None:
+                self._backgroundOutputBuffer = getattr(self, "_backgroundOutputBuffer", "") + decoder.flush()
+            if getattr(self, "_backgroundOutputBuffer", ""):
+                tail = self._backgroundOutputBuffer
+                self._backgroundOutputBuffer = ""
+                for line in tail.splitlines():
+                    self._handleBackgroundOutputLine(line.rstrip())
+            cancelled = bool(getattr(self, "_backgroundCancelRequested", False))
+            self._poll_run_progress()
+            stop_progress_polling(self)
+            stop_run_animation(self)
+            manifest_path = self._extract_background_manifest_path()
+            manifest_available = bool(manifest_path and manifest_path.is_file())
+            abnormal_exit = bool(getattr(self, "_workerAbnormalExit", False))
+            outcome = classify_background_run_outcome(
+                exit_code=exit_code,
+                cancelled=cancelled,
+                manifest_available=manifest_available,
+                exit_status=exit_status,
+                manifest_final=self._manifest_is_final(manifest_path) if manifest_available else True,
+                abnormal_exit_seen=abnormal_exit,
+            )
+            last_output = format_last_output(getattr(self, "_workerRecentLines", ()))
+            if outcome == "cancelled":
+                cancel_manifest = self._write_cancelled_manifest_safe()
+                self._mark_unfinished_rows("cancelled", "User cancelled the background job.")
+                if cancel_manifest is not None:
+                    self.appendLog(f"[Background] Cancelled. Manifest: {cancel_manifest}")
+                    self._set_run_progress_message(f"Pipeline cancelled. Manifest: {cancel_manifest}")
+                else:
+                    self._set_run_progress_message("Pipeline cancelled. The cancellation manifest could not be written.")
+                self._setStatus("warning", "Pipeline cancelled")
+                self._set_latest_report_path(None)
+                self._set_latest_output_tree_path(None)
+                self._set_run_summary_message("Status: cancelled | User cancelled the background job.", "cancelled")
+                set_run_state(self, "cancelled")
+                # Keep the live rows (completed stages + cancelled ones) visible.
+                self._refresh_run_history(select_path=cancel_manifest)
+                self._tableShowsLiveRun = False
+            elif outcome == "manifest":
+                # A manifest was written even though the process may have exited
+                # non-zero (e.g. exit code 2 for "some tasks failed"): it is
+                # authoritative, so load per-task status from it rather than
+                # treating a non-zero exit as a blanket process failure.
+                self._load_background_manifest_result(manifest_path)
+            elif outcome == "worker_killed":
+                message = worker_killed_message(worker_kill_info(exit_code, exit_status, abnormal_exit_seen=abnormal_exit) or {})
+                self._mark_unfinished_rows("failed", message)
+                self._setStatus("error", "Pipeline failed: the worker was killed")
+                self._set_latest_report_path(None)
+                self._set_latest_output_tree_path(None)
+                self._set_run_progress_message("Pipeline failed: the worker was killed.")
+                self._set_run_summary_message("Status: failed | " + message, "failed")
+                set_run_state(self, "failed")
+                failure_notice = (message, last_output)
+            elif outcome == "process_failed":
+                self._mark_unfinished_rows("failed", f"Background process exited with code {exit_code}")
+                self._setStatus("error", f"Pipeline failed: exit code {exit_code}")
+                self._set_latest_report_path(None)
+                self._set_latest_output_tree_path(None)
+                self._set_run_progress_message(f"Pipeline failed: exit code {exit_code}")
+                self._set_run_summary_message(f"Status: failed | Background process exited with code {exit_code}.", "failed")
+                set_run_state(self, "failed")
+                failure_notice = (f"The worker exited with code {exit_code}.", last_output)
+            else:
+                self._mark_unfinished_rows("failed", "Background process finished without a manifest path.")
+                self._setStatus("error", "Pipeline failed: no manifest")
+                self._set_latest_report_path(None)
+                self._set_latest_output_tree_path(None)
+                self._set_run_progress_message("Pipeline failed: no manifest path was reported.")
+                self._set_run_summary_message("Status: failed | Background process finished without a manifest path.", "failed")
+                set_run_state(self, "failed")
+                failure_notice = ("The worker finished without reporting a manifest path.", last_output)
+        except Exception as exc:
+            self._report_run_finish_error(exc)
+        finally:
+            self._end_worker_tracking()
+            stop_progress_polling(self)
+            stop_run_animation(self)
+            self._runProgressIsBatch = False
+            self._discard_batch_progress_file()
+            self._backgroundProcess = None
+            self._backgroundCancelRequested = False
+            # Loading volumes/fibers can process Qt events. Keep Run disabled until
+            # the old callback has released its handle, so it cannot erase a new job.
+            self._setPipelineActive(False, preserve_status=True)
+            if failure_notice is not None:
+                try:
+                    qt.QTimer.singleShot(0, lambda: self._show_background_failure(*failure_notice))
+                except Exception as exc:
+                    self.appendLog(f"[Background] Could not schedule the failure dialog: {exc}")
+
+    def _report_run_finish_error(self, exc: Exception) -> None:
+        """H1: an error while finishing a run is shown, and the run state becomes failed unless it is already final."""
+        try:
+            self.appendLog(f"[Background] Error while finishing the run: {exc!r}")
+            self._setStatus("error", f"Pipeline finished with an error: {exc}")
+            if getattr(self, "_runState", None) not in ("cancelled", "completed", "completed_with_blocks", "failed"):
+                set_run_state(self, "failed")
+        except Exception:
+            pass
+
+    def _discard_batch_progress_file(self) -> None:
+        path = getattr(self, "_backgroundBatchProgressPath", None)
+        self._backgroundBatchProgressPath = None
+        if path:
+            try:
+                Path(path).unlink()
+            except OSError:
+                pass
 
     def _load_background_manifest_result(self, manifest_path: Path) -> None:
         try:
@@ -4086,6 +4367,7 @@ class SharedWidgetMixin:
             connectome_metrics=(getattr(self._parameterNode, "orchestrationConnectomeMetrics", "") or "").strip(),
         )
 
+        batch_options = None
         if batch_mode:
             batch_root_text = (getattr(self._parameterNode, "batchRoot", "") or "").strip()
             batch_options, error = validate_batch_run_options(
@@ -4097,25 +4379,14 @@ class SharedWidgetMixin:
             if error or batch_options is None:
                 slicer.util.errorDisplay(error, parent=self.parent)
                 return
-            common_run_kwargs = build_batch_run_kwargs(selection, batch_root=batch_options.batch_root)
-            self.appendLog(
-                f"Submitting batch products to background runner: root={batch_options.batch_root}, "
-                f"batch_size={batch_options.batch_size}, targets={', '.join(selected)}"
-            )
-            self._startBackgroundBatchPipeline(
-                common_run_kwargs,
-                external_paths,
-                selected,
-                batch_root=batch_options.batch_root,
-                batch_size=batch_options.batch_size,
-                arrange_inputs=batch_options.arrange_inputs,
-            )
-            return
-
-        input_error = validate_single_subject_inputs(subject_root_text, subject_id)
-        if input_error:
-            slicer.util.errorDisplay(input_error, parent=self.parent)
-            return
+        else:
+            input_error = validate_single_subject_inputs(subject_root_text, subject_id)
+            if input_error:
+                slicer.util.errorDisplay(input_error, parent=self.parent)
+                return
+        # LE-5: a batch gets the same dependency check and preflight as one subject, before any worker starts.
+        # The check uses the shared settings (the same kwargs and signature as start_environment_check), so the
+        # re-entry below finds the cached result. Each subject is still checked by its own CLI run.
         doctor_kwargs = self._environment_check_kwargs(
             subject_root_text=subject_root_text,
             output_root_text=output_root_text,
@@ -4141,6 +4412,22 @@ class SharedWidgetMixin:
             self.appendLog("Selected analysis needs dependencies. Use Environment > Prepare selected analysis environment.")
             self._show_environment_results_dialog(doctor_result)
             return
+        if batch_mode:
+            common_run_kwargs = build_batch_run_kwargs(selection, batch_root=batch_options.batch_root)
+            self.appendLog(
+                f"Submitting batch products to background runner: root={batch_options.batch_root}, "
+                f"batch_size={batch_options.batch_size}, targets={', '.join(selected)}"
+            )
+            self._startBackgroundBatchPipeline(
+                common_run_kwargs,
+                external_paths,
+                selected,
+                batch_root=batch_options.batch_root,
+                batch_size=batch_options.batch_size,
+                arrange_inputs=batch_options.arrange_inputs,
+            )
+            return
+
         common_run_kwargs = build_single_subject_run_kwargs(
             selection,
             external_paths,
@@ -4152,9 +4439,14 @@ class SharedWidgetMixin:
             blocked_items = blocked_plan_items(plan)
             if blocked_items:
                 self.appendLog("Run plan blocked target(s): " + blocked_plan_log_text(blocked_items))
-                environment_blockers = environment_blockers_from_plan(plan)
-                if environment_blockers:
-                    self._show_partial_run_notice(environment_blockers, runnable_targets_from_plan(plan))
+            # LE hooks: show the blocked reasons the user can act on (LE-1 NODDI shells, LE-2 incomplete
+            # weights, LE-3 GPU memory) and plan.warnings (LE-4 low disk space) before the run starts.
+            plan_blockers = actionable_plan_blockers(plan)
+            plan_warnings = plan_warning_lines(plan)
+            for warning_text in plan_warnings:
+                self.appendLog("[Plan] WARNING: " + warning_text)
+            if plan_blockers or plan_warnings:
+                self._show_partial_run_notice(plan_blockers, runnable_targets_from_plan(plan), plan_warnings)
         except Exception as exc:
             self.appendLog(f"Run planning failed: {exc}")
             self._show_actionable_error(
@@ -4186,8 +4478,13 @@ class SharedWidgetMixin:
             details="dwifslpreproc options: -pe_dir, -readout_time, -rpe_pair -se_epi",
         )
 
-    def _show_partial_run_notice(self, blockers: dict[str, str], runnable_targets: tuple[str, ...]) -> None:
-        message = partial_run_notice_text(blockers, runnable_targets)
+    def _show_partial_run_notice(
+        self,
+        blockers: dict[str, str],
+        runnable_targets: tuple[str, ...],
+        warnings: Optional[list[str]] = None,
+    ) -> None:
+        message = plan_notice_text(blockers, runnable_targets, list(warnings or []))
         slicer.util.infoDisplay(message, windowTitle="SlicerDSpace partial run", parent=self.parent)
 
     def _setStatus(self, kind: str, message: str) -> None:

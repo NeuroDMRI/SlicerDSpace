@@ -161,7 +161,7 @@ def verify_assets(prefix, *, asset_root=None):
         raise RuntimeError("PNL Torch console entry point is missing")
     probe = Path(__file__).with_name("pnl_runtime_probe.py")
     result = subprocess.run([str(prefix / "bin/python"), str(probe), str(models)], check=True,
-                            capture_output=True, text=True,
+                            capture_output=True, text=True, encoding="utf-8", errors="replace",
                             env=pnl_python_environment(prefix / "bin/python"), timeout=180)
     details = json.loads(result.stdout)
     return {"external_dependencies": {"pnl_mask_python": str(prefix / "bin/python"),

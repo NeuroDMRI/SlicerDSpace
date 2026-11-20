@@ -374,6 +374,15 @@ def _drain_worker_output(owner: Any, job: dict[str, Any]) -> None:
     state = getattr(owner, "_codeUpdateState", None)
     for raw_line in lines:
         line = raw_line.strip()
+        if line.startswith("SLICERDSPACE_UPDATE_STAGE:"):
+            stage = line.split(":", 1)[1].strip()
+            job["last_activity_monotonic"] = time.monotonic()
+            if stage == "applying":
+                # H6/X5: files change in place from now on, so the watchdog never kills the worker.
+                job["applying"] = True
+                job["applying_since"] = time.monotonic()
+        if line.startswith("SLICERDSPACE_UPDATE_PROGRESS:"):
+            job["last_activity_monotonic"] = time.monotonic()
         if line.startswith("SLICERDSPACE_UPDATE_PROGRESS:") and isinstance(state, dict):
             try:
                 pct = max(0, min(100, int(line.split(":", 1)[1].strip())))
@@ -402,6 +411,8 @@ def _on_watchdog_tick(owner: Any) -> None:
     if not isinstance(job, dict) or job.get("completed"):
         _stop_timer(owner)
         return
+    # Read pending worker output first, so a fresh "applying" marker is seen before any kill decision.
+    _drain_worker_output(owner, job)
     elapsed_exact = time.monotonic() - float(job["started_monotonic"])
     elapsed_sec = max(0, int(elapsed_exact))
     state = getattr(owner, "_codeUpdateState", None)
@@ -410,14 +421,26 @@ def _on_watchdog_tick(owner: Any) -> None:
         if state.get("phase") == "checking":
             _sync_idle_texts(owner)
     watchdog = float(job.get("watchdog_seconds") or _CHECK_WATCHDOG_SECONDS)
-    if elapsed_exact >= watchdog:
+    if job.get("applying"):
+        # A kill during the file replace would leave a half-updated plugin: only warn (H6/X5).
+        waited = time.monotonic() - float(job.get("applying_since") or job["started_monotonic"])
+        if waited >= watchdog and not job.get("applying_warned"):
+            job["applying_warned"] = True
+            _log(
+                owner,
+                f"Update is still applying files after {int(waited)}s (slow disk or antivirus scan). "
+                "Waiting; do not close Slicer. If it was interrupted, the next Slicer start restores the old files.",
+            )
+        return
+    idle = time.monotonic() - float(job.get("last_activity_monotonic") or job["started_monotonic"])
+    if idle >= watchdog:
         job["timed_out"] = True
         _kill_job_process(job, force=True)
         _finalize_worker(
             owner,
             job,
             exit_code=-1,
-            reason=f"Update worker timed out after {int(watchdog)}s.",
+            reason=f"Update worker made no progress for {int(watchdog)}s (check the network or mirror setting).",
         )
 
 
@@ -570,6 +593,8 @@ def _start_worker_process(
         "grouped": grouped,
         "watchdog_seconds": watchdog_seconds,
         "started_monotonic": time.monotonic(),
+        "last_activity_monotonic": time.monotonic(),
+        "applying": False,
         "timed_out": False,
         "completed": False,
     }
@@ -743,7 +768,8 @@ def cleanup_update_panel(owner: Any) -> None:
     job = getattr(owner, "_codeUpdateJob", None)
     if isinstance(job, dict) and not job.get("completed"):
         job["completed"] = True
-        _kill_job_process(job, force=True)
+        if not job.get("applying"):
+            _kill_job_process(job, force=True)
         tmp_dir = job.get("tmp_dir")
         if tmp_dir is not None:
             shutil.rmtree(tmp_dir, ignore_errors=True)

@@ -2,9 +2,12 @@
 
 import importlib
 import importlib.metadata
+import os
 from pathlib import Path
+import site
 import subprocess
 import sys
+import sysconfig
 import tempfile
 
 PROTECTED_PACKAGES = ("numpy", "scipy", "vtk", "SimpleITK", "torch", "torchvision", "requests")
@@ -42,6 +45,86 @@ def requirement_satisfied(value):
         return not requirement.url and importlib.metadata.version(requirement.name) in requirement.specifier
     except importlib.metadata.PackageNotFoundError:
         return False
+
+
+def _norm_path(value):
+    return os.path.normcase(os.path.realpath(str(value)))
+
+
+def _bundle_dirs_ahead_of_slicer(bundle_dirs):
+    """P-f: the bundle dirs that come before Slicer's own site-packages on ``sys.path``.
+
+    Only such a bundle shadows a package that pip installs into Slicer's site-packages. A bundle that is appended
+    after it (Windows, where the bundle has no numpy) loses to the pip install, so no refusal applies. A bundle
+    that is not on ``sys.path`` at all is not active.
+    """
+    order = {}
+    for index, entry in enumerate(sys.path):
+        if entry:
+            order.setdefault(_norm_path(entry), index)
+    slicer_dirs = set()
+    try:
+        slicer_dirs.update(_norm_path(item) for item in site.getsitepackages())
+    except Exception:
+        pass
+    for key in ("purelib", "platlib"):
+        try:
+            slicer_dirs.add(_norm_path(sysconfig.get_paths()[key]))
+        except Exception:
+            pass
+    slicer_index = min((order[item] for item in slicer_dirs if item in order), default=None)
+    ahead = []
+    for item in bundle_dirs:
+        index = order.get(_norm_path(item))
+        if index is None:
+            continue
+        if slicer_index is None or index < slicer_index:
+            ahead.append(item)
+    return ahead
+
+
+def bundled_shortfalls(requirements):
+    """D5: messages for requests that the bundled copy of a package cannot satisfy.
+
+    The check judges satisfaction from the first-found copy (the bundle, which comes first on ``sys.path``),
+    but pip installs into Slicer's site-packages, where the bundled copy still wins. A request above the
+    bundled version can therefore never pass; pip would download it and the post-check would then fail.
+    """
+    try:
+        from shared.bundled_python import bundled_site_packages_dirs
+
+        bundle_dirs = _bundle_dirs_ahead_of_slicer(str(path) for path in bundled_site_packages_dirs())
+    except Exception:
+        return []
+    if not bundle_dirs:
+        return []
+    InvalidRequirement, Requirement, canonicalize_name = _packaging_api()
+    bundled = {}
+    for dist in importlib.metadata.distributions(path=bundle_dirs):
+        name = dist.metadata.get("Name") if dist.metadata else None
+        if name:
+            bundled.setdefault(canonicalize_name(name), dist.version)
+    messages = []
+    for value in requirements:
+        try:
+            requirement = Requirement(value)
+        except InvalidRequirement:
+            continue
+        if requirement.url or (requirement.marker and not requirement.marker.evaluate()):
+            continue
+        version = bundled.get(canonicalize_name(requirement.name))
+        if version is None or requirement.specifier.contains(version, prereleases=True):
+            continue
+        messages.append(
+            f"bundled {requirement.name} {version} is older than required ({value}); "
+            "reinstall the SlicerDSpace package")
+    return messages
+
+
+def _refuse_bundled_shortfalls(requirements):
+    shortfalls = bundled_shortfalls(requirements)
+    if shortfalls:
+        raise RuntimeError("; ".join(shortfalls))
 
 
 def restart_packages(before, after, loaded):
@@ -88,6 +171,7 @@ def install_requirements(requirements, *, protected=True, loaded=(), torch_minim
         not requirement_satisfied("torch>=" + torch_minimum)
         or (torchvision_required and not requirement_satisfied("torchvision"))
     ):
+        _refuse_bundled_shortfalls(["torch>=" + torch_minimum])  # D5: the PyTorch extension installs outside the bundle
         try:
             PyTorchUtils = _import_pytorch_utils()
         except ModuleNotFoundError:
@@ -101,6 +185,7 @@ def install_requirements(requirements, *, protected=True, loaded=(), torch_minim
             backend = "PyTorch_extension"
     missing = [item for item in requirements if not requirement_satisfied(item)]
     if missing:
+        _refuse_bundled_shortfalls(missing)  # D5: before pip, so no long download ends in a failed post-check
         with tempfile.TemporaryDirectory(prefix="sdds-pip-") as temporary:
             constraints = Path(temporary) / "constraints.txt"
             pinned = installed_versions() if protected else {}

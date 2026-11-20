@@ -19,7 +19,8 @@ class UIBackgroundProcessTest(unittest.TestCase):
 
     def test_background_process_env_overrides_forces_unbuffered_stdout(self) -> None:
         overrides = background_process_env_overrides()
-        self.assertEqual(overrides, {"PYTHONUNBUFFERED": "1"})
+        # X1: workers also get UTF-8 stdout so a non-ASCII path cannot crash a cp1252 console.
+        self.assertEqual(overrides, {"PYTHONUNBUFFERED": "1", "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"})
 
     def test_build_single_subject_background_context(self) -> None:
         context = build_background_run_context(

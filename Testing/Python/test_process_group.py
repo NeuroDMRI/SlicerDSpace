@@ -83,7 +83,9 @@ class GroupedLaunchCommandTest(unittest.TestCase):
     def test_leaves_command_unchanged_when_neither_setsid_nor_perl_available(self) -> None:
         with mock.patch("shared.process_group.os.name", "posix"), mock.patch(
             "shared.process_group.shutil.which", return_value=None
-        ), mock.patch("shared.process_group.os.path.exists", return_value=False):
+        ), mock.patch("shared.process_group.os.path.exists", return_value=False), mock.patch(
+            "shared.process_group._python_setsid_launcher", return_value=None  # H9: third fallback also absent
+        ):
             program, args, grouped = grouped_launch_command("/usr/bin/python3", ["-m", "pipeline"])
 
         self.assertEqual(program, "/usr/bin/python3")

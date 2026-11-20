@@ -506,14 +506,16 @@ def _run(command, env, log):
     process = subprocess.Popen(command, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                **text_subprocess_kwargs(bufsize=1))
     tail = deque(maxlen=50)
-    try:
-        for line in process.stdout:
-            tail.append(line.rstrip())
-            if log:
-                log("[Brain mask] " + line.rstrip())
-        code = process.wait()
-    finally:
-        process.stdout.close()
+
+    def on_line(line):
+        tail.append(line.rstrip())
+        if log:
+            log("[Brain mask] " + line.rstrip())
+
+    # H8: a surviving grandchild must not keep the stage open after the direct child has exited.
+    from shared.line_stream import stream_process_lines
+    code = stream_process_lines(process, on_line,
+                                notice=(lambda message: log("[Brain mask] " + message)) if log else None)
     if code:
         raise RuntimeError(f"Brain-mask command failed ({code}): " + "\n".join(tail))
     return "\n".join(tail)

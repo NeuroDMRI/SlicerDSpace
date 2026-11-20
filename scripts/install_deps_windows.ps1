@@ -276,6 +276,9 @@ $installedDistros = @(& wsl.exe --list --quiet) | ForEach-Object { ($_ -replace 
 if ($Distro -notin $installedDistros) {
     throw "WSL distribution '$Distro' is not installed. Installed: $($installedDistros -join ', ')"
 }
+# X2: wsl.exe tools print UTF-8. Decode their output as UTF-8 so a non-ASCII Windows user or temp path survives wslpath.
+# This comes after `wsl.exe --list`, which prints UTF-16 and is decoded above.
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
 $defaultUid = (& wsl.exe --distribution $Distro --exec id -u).Trim()
 if ($LASTEXITCODE -ne 0 -or $defaultUid -eq "0") {
     throw "The default user for '$Distro' must be a non-root user. apt is invoked separately with --user root."
@@ -434,7 +437,7 @@ $mrtrixBridge = Join-Path $bridgeRoot "mrtrix"
 $mrtrixCommands = @(
     "mrconvert", "dwi2response", "dwi2fod", "mtnormalise", "tckgen", "tcksift2",
     "tckstats", "tckconvert", "tcksample", "tck2connectome", "tckedit", "dwi2mask",
-    "dwifslpreproc", "5ttgen", "5tt2gmwmi",
+    "dwifslpreproc", "5ttgen", "5ttcheck", "5tt2gmwmi",
     "dwiextract", "mrcat", "python"
 )
 foreach ($command in $mrtrixCommands) {
@@ -617,7 +620,37 @@ if (-not $SkipUserConfigUpdate) {
             $mergedExternal[$property.Name] = $property.Value
         }
     }
+    # X4: the WSL bridge folders must not replace the native FSL/MRtrix settings. The native route
+    # cannot run a bridge, so keep a saved native folder, or leave the key unset when a native bundle is installed.
+    function Test-NativeBundleInstalled([string]$Name) {
+        # Same roots as shared/native_runtimes.py: bundled-runtimes in the extension, then the user runtime root.
+        $roots = @()
+        if ($env:SLICERDSPACE_BUNDLED_RUNTIMES_ROOT) { $roots += $env:SLICERDSPACE_BUNDLED_RUNTIMES_ROOT }
+        $roots += (Join-Path $RepoRoot "SlicerDSpace\bundled-runtimes")
+        $roots += (Join-Path $RepoRoot "bundled-runtimes")
+        $extensionRoot = $RepoRoot
+        for ($level = 0; $level -lt 3 -and $extensionRoot; $level++) { $extensionRoot = Split-Path -Parent $extensionRoot }
+        if ($extensionRoot) { $roots += (Join-Path $extensionRoot "bundled-runtimes") }
+        if ($env:SLICERDSPACE_RUNTIME_ROOT) { $roots += $env:SLICERDSPACE_RUNTIME_ROOT }
+        if ($env:LOCALAPPDATA) {
+            foreach ($product in @("SlicerDSpace", "SlicerDDSurfer")) {
+                $roots += (Join-Path $env:LOCALAPPDATA "$product\runtimes")
+            }
+        }
+        foreach ($root in $roots) {
+            if (-not (Test-Path -LiteralPath $root -PathType Container)) { continue }
+            $match = Get-ChildItem -LiteralPath $root -Directory -Filter "$Name-*-windows-*" -ErrorAction SilentlyContinue |
+                Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName "native-runtime.json") -PathType Leaf }
+            if ($match) { return $true }
+        }
+        return $false
+    }
+    $nativeKeyTools = @{ mrtrix_bin_dir = "mrtrix"; preprocessing_mrtrix_bin_dir = "mrtrix"; preprocessing_fsl_bin_dir = "fsl" }
     foreach ($entry in $externalDependencies.GetEnumerator()) {
+        if ($nativeKeyTools.ContainsKey($entry.Key) -and (Test-NativeBundleInstalled $nativeKeyTools[$entry.Key])) {
+            Write-Host "Native $($nativeKeyTools[$entry.Key]) bundle is installed; keeping '$($entry.Key)' unchanged (WSL bridge not saved there)."
+            continue
+        }
         if ($PreserveWmaSettings -and $entry.Key -in @("wma_root", "wma_atlas_dir")) {
             continue
         }

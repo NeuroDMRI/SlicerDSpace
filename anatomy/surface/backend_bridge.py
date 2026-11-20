@@ -64,6 +64,13 @@ def python_executable(explicit=None):
     return str(current)
 
 
+def _bundle_first_pythonpath(existing, bundled):
+    norm = lambda part: os.path.normcase(os.path.normpath(part))
+    first = {norm(part) for part in bundled}
+    rest = [part for part in existing.split(os.pathsep) if part and norm(part) not in first]
+    return os.pathsep.join([*bundled, *rest])
+
+
 def backend_environment(extra=None, *, python_bin=None):
     environment = external_python_environment()
     # Slicer ITK factories can crash SimpleITK from a different Python runtime.
@@ -75,6 +82,11 @@ def backend_environment(extra=None, *, python_bin=None):
         from shared.bundled_python import inject_bundled_python_env
 
         inject_bundled_python_env(environment)
+        # D1: inject_bundled_python_env appends. Put the bundle (it holds the NumPy that matches its torch) first.
+        bundled = _bundled_numpy_site_dirs(python_bin)
+        if bundled:
+            environment['PYTHONPATH'] = _bundle_first_pythonpath(environment.get('PYTHONPATH', ''), bundled)
+            environment['SLICERDSPACE_BUNDLED_SITE_PACKAGES'] = os.pathsep.join(bundled)
     if os.name == 'nt' and not any(environment.get(k) for k in ('LOGNAME', 'USER', 'LNAME', 'USERNAME')):
         environment['USERNAME'] = 'slicer'
     return environment
@@ -97,7 +109,15 @@ def run_backend(arguments, *, python_bin=None, env=None, log=None, log_path=None
         command = [
             python_executable(python_bin),
             '-c',
-            f"import runpy, sys; sys.path[:0] = {prepend!r}; sys.argv = {args_list!r}; runpy.run_path(sys.argv[0], run_name='__main__')",
+            # D1: the PythonSlicer launcher puts its own paths before PYTHONPATH, so the children that the
+            # upstream script starts with sys.executable would get Slicer's NumPy first. Rewrite PYTHONPATH
+            # here, after the launcher ran, so every child puts the bundle first.
+            "import os, runpy, sys; "
+            f"bundle = {sp_dirs!r}; "
+            f"sys.path[:0] = {prepend!r}; "
+            "os.environ['PYTHONPATH'] = os.pathsep.join(bundle + [p for p in os.environ.get('PYTHONPATH', '').split(os.pathsep) if p and p not in bundle]); "
+            "os.environ['SLICERDSPACE_BUNDLED_SITE_PACKAGES'] = os.pathsep.join(bundle); "
+            f"sys.argv = {args_list!r}; runpy.run_path(sys.argv[0], run_name='__main__')",
         ]
     else:
         command = [python_executable(python_bin), *args_list]
@@ -121,15 +141,19 @@ def run_backend(arguments, *, python_bin=None, env=None, log=None, log_path=None
         if stream:
             stream.close()
         raise
+    def on_line(line):
+        tail.append(line.rstrip())
+        if stream:
+            stream.write(line)
+            stream.flush()
+        if log:
+            log(line.rstrip())
+
     try:
-        for line in process.stdout:
-            tail.append(line.rstrip())
-            if stream:
-                stream.write(line)
-                stream.flush()
-            if log:
-                log(line.rstrip())
-        code = process.wait()
+        # H8: a surviving grandchild must not keep the stage open after the direct child has exited.
+        from shared.line_stream import stream_process_lines
+        code = stream_process_lines(process, on_line,
+                                    notice=(lambda message: log('[DDSurfer] ' + message)) if log else None)
     except BaseException:
         if os.name == 'posix':
             try:
@@ -170,7 +194,7 @@ def run_backend(arguments, *, python_bin=None, env=None, log=None, log_path=None
             process.wait()
         raise
     finally:
-        process.stdout.close()
+        # stream_process_lines closes the pipe itself once its reader has finished.
         if stream:
             stream.close()
     if code:

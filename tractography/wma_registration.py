@@ -23,9 +23,11 @@ SUPPORTED_SOURCES = {
 def default_cache_bytes() -> int:
     """Leave most currently available RAM to the author's other operations."""
     try:
-        import psutil
-        available = int(psutil.virtual_memory().available)
-    except (ImportError, OSError, AttributeError):
+        from shared.platform_info import available_host_ram_bytes
+        available = available_host_ram_bytes()  # M1/F2: corrected for the Rosetta page-size mismatch
+    except ImportError:
+        available = None
+    if available is None:
         return 256 * 1024 ** 2
     return max(1, min(4 * 1024 ** 3, available // 4))
 

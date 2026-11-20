@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from contextlib import nullcontext
 from functools import lru_cache, partial
 from typing import Sequence
@@ -316,6 +317,17 @@ class TemporalAttentionNet(nn.Module):
 
 # ------------------------- TANet -------------------------
 
+LOG = logging.getLogger(__name__)
+_VF_NET_CPU_WARNED = False  # one warning per process, not one per model load
+
+
+def _warn_vf_net_on_cpu() -> None:
+    global _VF_NET_CPU_WARNED
+    if not _VF_NET_CPU_WARNED:
+        _VF_NET_CPU_WARNED = True
+        LOG.warning('The DDSurfer volume network (vf_net) runs on the CPU because torch %s has no MPS Conv3d; '
+                    'the attention network and the surface integration stay on MPS.', torch.__version__)
+
 @lru_cache(maxsize=1)
 def _mps_supports_conv3d() -> bool:
     """Return True if the active PyTorch MPS runtime executes Conv3D."""
@@ -377,6 +389,11 @@ class TANet(nn.Module):
         target_device = next((param.device for param in self.att_net.parameters()), None)
         if target_device is not None and target_device.type == "mps" and not _mps_supports_conv3d():
             self.vf_net.to("cpu")
+            _warn_vf_net_on_cpu()
+        # Record where each part really runs; the surface manifest reads this (F1).
+        vf_device = next((param.device for param in self.vf_net.parameters()), None)
+        self.execution_devices = {name: device.type for name, device in
+                                  (("vf_net", vf_device), ("att_net", target_device)) if device is not None}
         return result
 
     def forward(self, vertices: torch.Tensor, volumes: torch.Tensor, return_extras: bool = False):

@@ -22,7 +22,12 @@ from pathlib import Path
 from threading import Lock
 from typing import Callable, Optional
 
-from shared.external_process import find_pythonslicer, managed_tool_environment, resolve_external_command
+from shared.external_process import (
+    find_pythonslicer,
+    managed_tool_environment,
+    native_arm64_argv,
+    resolve_external_command,
+)
 
 
 SEEDING_MODES = ("dynamic", "gmwmi")
@@ -149,13 +154,14 @@ def _resolve_command(name: str, bin_dir: Optional[Path] = None) -> Optional[str]
 def _mrtrix_csd_invocation(command: tuple[str, ...], env: dict[str, str]) -> tuple[tuple[str, ...], dict[str, str]]:
     script = Path(command[0])
     if script.name.lower() not in {"dwi2response", "5ttgen"}:
-        return command, env
+        # C6/D8: a universal MRtrix binary runs natively when Slicer itself runs under Rosetta.
+        return tuple(native_arm64_argv(command, env)), env
 
     # The native MRtrix package ships dwi2response and 5ttgen as Python scripts.
     # The WSL bridge is an executable and continues to launch directly.
     library = script.resolve().parent.parent / "lib"
     if sys.platform != "win32" and not (library / "mrtrix3" / "__init__.py").is_file():
-        return command, env
+        return tuple(native_arm64_argv(command, env)), env
     if not (library / "mrtrix3" / "__init__.py").is_file():
         raise RuntimeError(f"Native MRtrix Python package is missing from {library}")
     current = Path(sys.executable).resolve()

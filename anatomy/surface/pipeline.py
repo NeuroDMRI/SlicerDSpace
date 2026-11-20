@@ -172,6 +172,26 @@ def _raw_command(config, resources, output_dir):
     return command, env
 
 
+def _merge_execution_devices(records):
+    """One ``{part: device}`` map from prediction records (F1); None for records from before the field existed."""
+    merged = {}
+    for record in records:
+        for part, device in ((record or {}).get('execution_devices') or {}).items():
+            merged.setdefault(part, [])
+            if device not in merged[part]:
+                merged[part].append(device)
+    return {part: ','.join(devices) for part, devices in merged.items()} or None
+
+
+def _execution_device_note(requested, resolved_device, devices):
+    """The log line for a run whose volume network did not run on the resolved device, else ''."""
+    vf_device = (devices or {}).get('vf_net')
+    if not vf_device or vf_device == str(resolved_device).split(':')[0]:
+        return ''
+    reason = 'no MPS Conv3d in this torch build' if str(resolved_device).startswith('mps') else 'see the backend log'
+    return f'[DDSurfer] Requested {requested}; resolved {resolved_device} (volume network on {vf_device}: {reason})'
+
+
 def _run_registered(config, resources, output_dir, subject_dir):
     from .preprocessing import SubjectPreprocessingConfig, preprocess_subject
     from .prediction import PredictionStageConfig, predict_subject
@@ -181,12 +201,18 @@ def _run_registered(config, resources, output_dir, subject_dir):
         subject_dir / f'{config.subject_id}-mask-Reg.nii.gz',
         subject_dir / f'{config.subject_id}-b0ToAtlasT2.tfm', output_dir,
         Path(resources['registration_atlas']), python_bin=config.python_bin))
+    records = []
     for hemi in ('left', 'right'):
-        predict_subject(PredictionStageConfig(config.subject_id, hemi, config.predict_mode,
+        predicted = predict_subject(PredictionStageConfig(config.subject_id, hemi, config.predict_mode,
             config.device, 0.02, 2, 3, Path(resources['template_dir']), Path(resources['checkpoint_root']),
             prepared.preprocessed_dir.parent, output_dir / 'pred_results_SlicerDSpace',
             precision=config.precision, python_bin=config.python_bin,
             cpu_threads=config.cpu_threads, max_gpu_gib=config.max_gpu_gib))
+        for mesh in (predicted.wm_mesh_path, predicted.pial_mesh_path):  # read before cleanup deletes them (F1)
+            try:
+                records.append(json.loads(Path(mesh).with_suffix('.json').read_text()))
+            except (OSError, ValueError, TypeError):
+                pass
     run_backend([BACKEND_ROOT / 'inference/native.py', '--subject', config.subject_id,
         '--data-root', prepared.preprocessed_dir.parent, '--pred-root', output_dir / 'pred_results_SlicerDSpace',
         '--predict-mode', config.predict_mode, '--output-dir',
@@ -195,6 +221,7 @@ def _run_registered(config, resources, output_dir, subject_dir):
         for path in (prepared.raw_dir, prepared.preprocessed_dir,
                      output_dir / 'pred_results_SlicerDSpace/mni' / config.subject_id):
             shutil.rmtree(path, ignore_errors=True)
+    return _merge_execution_devices(records)
 
 
 def uses_shared_raw_route(config):
@@ -257,8 +284,12 @@ def _run_shared_raw(config, resources, output_dir, manifest, previous, log):
     if reusable:
         if log:
             log('[DDSurfer] Reusing verified native surfaces and shared preprocessing')
+        if previous.get('execution_devices'):
+            manifest['execution_devices'] = previous['execution_devices']
     else:
-        _run_registered(config, resources, output_dir, registered.bundle_dir)
+        devices = _run_registered(config, resources, output_dir, registered.bundle_dir)
+        if isinstance(devices, dict):
+            manifest['execution_devices'] = devices
     if manifest['input_sha256'] != {str(path.resolve()): sha256(path) for path in paths}:
         raise RuntimeError('Shared surface inputs changed during prediction')
 
@@ -381,6 +412,9 @@ def run_surface(config: SurfaceConfig, *, log: Optional[Callable[[str], None]] =
                     for kind in ('white', 'pial') if config.predict_mode == 'all' else ('white',):
                         shutil.copy2(upstream / 'ddsurfer' / f'{hemi}.{kind}.obj', native_dir / f'{hemi}.{kind}.obj')
                 manifest['upstream_pipeline'] = json.loads((upstream / 'logs/pipeline.json').read_text())
+                devices = _merge_execution_devices(manifest['upstream_pipeline'].get('surfaces', {}).values())
+                if devices:
+                    manifest['execution_devices'] = devices
                 manifest['outputs']['native_dti'] = str(upstream / 'dti')
             elif inspected['mode'] != 'missing':
                 manifest['input_mode'] = 'registered'
@@ -396,9 +430,14 @@ def run_surface(config: SurfaceConfig, *, log: Optional[Callable[[str], None]] =
                 paths += [Path(resources['template_dir']) / resources['model_config']['templates'][hemi]['file']
                           for hemi in ('left', 'right')]
                 manifest['input_sha256'] = {str(p.resolve()): sha256(p) for p in paths}
-                _run_registered(config, resources, output_dir, Path(inspected['subject_dir']))
+                devices = _run_registered(config, resources, output_dir, Path(inspected['subject_dir']))
+                if isinstance(devices, dict):
+                    manifest['execution_devices'] = devices
             else:
                 raise FileNotFoundError(f'No DDSurfer subject input: {config.subject_root}')
+            note = _execution_device_note(manifest['device'], config.device, manifest.get('execution_devices'))
+            if note and log:
+                log(note)
             products, checks = native_products(native_dir, config.subject_id, config.predict_mode)
             qc.update(status='completed', executed=True, model_count=len(products), surfaces=checks,
                       automatic_qc_passed=all(c['finite'] and c['watertight'] and c['euler_number'] == 2 for c in checks.values()))

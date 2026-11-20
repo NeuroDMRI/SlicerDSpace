@@ -5,7 +5,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from shared.external_process import resolve_external_command, startup_environment, text_subprocess_kwargs
+from shared.external_process import native_arm64_argv, resolve_external_command, startup_environment, text_subprocess_kwargs
 
 
 def _mrtrix_seed_extra_env(PS):
@@ -52,6 +52,7 @@ def sys_exec(cmd, PS):
             if not executable:
                 raise FileNotFoundError(f"SAF command {cmd[0]} was not found. Configure the MRtrix bin directory.")
             cmd[0] = os.path.abspath(executable)
+            cmd = native_arm64_argv(cmd, env)  # C6/D8: native arm64 MRtrix under a Rosetta Slicer
 
     shell = isinstance(cmd, str)
     if shell and sys.platform == "win32":

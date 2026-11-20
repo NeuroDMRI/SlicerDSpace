@@ -755,6 +755,50 @@ class InstallerScriptBuilderTests(unittest.TestCase):
         self.assertEqual(ns["_expand_urls"]([gh], mirror_prefix="", allow_mirror=False), [gh])
 
 
+    def test_task_e_c2_installer_script_gate_rejects_slicer_before_5_10(self) -> None:
+        """Task E C2/CP-2: the generated installer helper gate requires 3D Slicer 5.10+ (5.8 and 5.9 rejected)."""
+        import ast
+        import textwrap
+        from shared.installer_script_builder import generate_installer_script
+
+        script = generate_installer_script(target_os="linux", mode="base", slicer_path="/custom/Slicer", language="en")
+        self.assertNotIn("5.8+", script)
+        lines = script.splitlines()
+        idx = next(i for i, ln in enumerate(lines) if "maj < 5 or" in ln)
+        gate = textwrap.dedent(
+            "\n".join(ast.literal_eval(lines[j].strip().rstrip(",")) for j in (idx, idx + 1))
+        )
+        for maj, minv, ok in ((5, 8, False), (5, 9, False), (5, 10, True), (5, 12, True), (6, 0, True), (4, 13, False)):
+            with self.subTest(version=(maj, minv)):
+                ns = {"maj": maj, "minv": minv}
+                code = "if True:\n" + textwrap.indent(gate, "    ")
+                if ok:
+                    exec(code, ns)
+                else:
+                    with self.assertRaisesRegex(RuntimeError, r"Requires 3D Slicer 5\.10\+ \(found %d\.%d\)" % (maj, minv)):
+                        exec(code, ns)
+
+
+    def test_task_e_c5_cp9_slicer_5_8_is_dropped_from_setup_tables_and_copy(self) -> None:
+        """Task E C5/CP-9: no 5.8 (or 5.9) rows or copy in the website customizer and the setup-zip builder."""
+        import importlib.util
+
+        js_text = (REPO_ROOT / "docs" / "site" / "assets" / "js" / "installer-customizer.js").read_text(encoding="utf-8")
+        for stale in ("5.8+", "5.8\u2013", "'5.8'", "33241", "33216", "minv < 8", "minv >= 8"):
+            self.assertNotIn(stale, js_text)
+        self.assertIn("compatible with 5.10\u20135.12.4", js_text)
+
+        script_path = REPO_ROOT / ".github" / "scripts" / "repackage_release_assets.py"
+        spec = importlib.util.spec_from_file_location("repackage_release_assets_task_e", script_path)
+        assert spec is not None and spec.loader is not None
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        self.assertNotIn("5.8", [m for m, _ in mod.MACOS_SLICER_REVISIONS])
+        self.assertNotIn("5.8", mod.GENERIC_SLICER_MINORS)
+        self.assertNotIn("5.9", mod.GENERIC_SLICER_MINORS)
+        self.assertEqual(mod.GENERIC_SLICER_MINORS, ("5.10", "5.12", "5.11", "5.13", "5.14"))
+
+
 class FastInstallerOptimizationTests(unittest.TestCase):
     """Cross-OS tests for Keep-Alive, single-redirect Range, smart mirror bypass, and worker CLI."""
 
@@ -1395,8 +1439,6 @@ class FastInstallerOptimizationTests(unittest.TestCase):
                     ("5.12", "34625"),
                     ("5.12", "34624"),
                     ("5.12", "34621"),
-                    ("5.8", "33241"),
-                    ("5.8", "33216"),
                 ):
                     pfx = f"SlicerDSpaceSetup/Slicer.app/Contents/Extensions-{rev}/SlicerDSpaceSetup"
                     self.assertIn(f"{pfx}/SlicerDSpaceSetup.s4ext", names)
@@ -1410,7 +1452,7 @@ class FastInstallerOptimizationTests(unittest.TestCase):
                 with zipfile.ZipFile(Path(tmp) / os_zip, "r") as zf:
                     names = set(zf.namelist())
                     self.assertIn("SlicerDSpaceSetup/SlicerDSpaceSetup.s4ext", names)
-                    for minor in ("5.8", "5.9", "5.10", "5.11", "5.12", "5.13", "5.14"):
+                    for minor in ("5.10", "5.11", "5.12", "5.13", "5.14"):
                         self.assertIn(f"SlicerDSpaceSetup/share/Slicer-{minor}/SlicerDSpaceSetup.s4ext", names)
                         self.assertIn(f"SlicerDSpaceSetup/lib/Slicer-{minor}/qt-scripted-modules/SlicerDSpaceSetup.py", names)
 
@@ -1419,8 +1461,8 @@ class FastInstallerOptimizationTests(unittest.TestCase):
             "process.stdout.write(JSON.stringify({ macTargets: ic.MACOS_SLICER_TARGETS.length, genericMinors: ic.GENERIC_SLICER_MINORS.length }));\n"
         )
         counts = json.loads(subprocess.run([node_bin, "-e", node_script, str(js_path)], capture_output=True, text=True, check=True).stdout)
-        self.assertEqual(counts["macTargets"], 8)
-        self.assertEqual(counts["genericMinors"], 7)
+        self.assertEqual(counts["macTargets"], 6)
+        self.assertEqual(counts["genericMinors"], 5)
 
     def test_setup_module_version_check_and_remapped_tar_extraction(self) -> None:
         node_bin = shutil.which("node")
@@ -1460,7 +1502,7 @@ class FastInstallerOptimizationTests(unittest.TestCase):
             sys.modules["slicer.ScriptedLoadableModule"] = slm_stub
             exec(compile(py_src, "SlicerDSpaceSetup.py", "exec"), ns)
 
-            for maj, minv, expected in ((5, 8, True), (5, 10, True), (5, 12, True), (6, 0, True), (5, 6, False)):
+            for maj, minv, expected in ((5, 8, False), (5, 9, False), (5, 10, True), (5, 12, True), (6, 0, True), (5, 6, False)):
                 slicer_stub.app.majorVersion = maj
                 slicer_stub.app.minorVersion = minv
                 self.assertEqual(ns["_is_supported_slicer"](), expected, (maj, minv))

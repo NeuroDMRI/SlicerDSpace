@@ -31,11 +31,9 @@ def available_resources():
         cpus = len(os.sched_getaffinity(0))
     except (AttributeError, OSError):
         cpus = os.cpu_count() or 1
-    try:
-        import psutil
-        memory = int(psutil.virtual_memory().available * .7)
-    except ImportError:
-        memory = 0
+    from shared.platform_info import available_host_ram_bytes
+    available = available_host_ram_bytes()  # M1/F2: corrected for the Rosetta page-size mismatch
+    memory = int(available * .7) if available is not None else 0
     return cpus, memory
 
 

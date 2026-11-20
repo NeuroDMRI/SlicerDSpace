@@ -8,6 +8,7 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -125,6 +126,91 @@ def _extension_search_roots():
     return roots
 
 
+# CP-1: a UKF CLI built against another Slicer's VTK cannot load. Scan the CLI and its
+# UKFBase library for versioned VTK library names (vtkcommon-9.5.dll, libvtkCommonCore-9.5.so).
+_VTK_VERSIONED_NAME = re.compile(rb"vtk[A-Za-z]*-(\d+)\.(\d+)")
+_VTK_SCAN_CACHE = {}
+
+
+def _running_vtk_version():
+    """(major, minor) of the VTK in this Slicer, or None when it cannot be read."""
+    try:
+        import vtk
+
+        return int(vtk.vtkVersion.GetVTKMajorVersion()), int(vtk.vtkVersion.GetVTKMinorVersion())
+    except Exception:
+        return None
+
+
+def _scan_vtk_versions(path):
+    versions = set()
+    tail = b""
+    with open(str(path), "rb") as stream:
+        for chunk in iter(lambda: stream.read(4 * 1024 * 1024), b""):
+            data = tail + chunk
+            for match in _VTK_VERSIONED_NAME.finditer(data):
+                versions.add((int(match.group(1)), int(match.group(2))))
+            tail = data[-128:]
+    return versions
+
+
+def _ukf_vtk_versions(executable):
+    """VTK (major, minor) versions named by the CLI and its sibling UKFBase library (cached per path)."""
+    executable = Path(executable)
+    candidates = [executable]
+    for directory in (executable.parent, executable.parent.parent):
+        try:
+            for sibling in sorted(directory.glob("*UKFBase*")):
+                name = sibling.name.lower()
+                if sibling.is_file() and (name.endswith((".dll", ".dylib", ".so")) or ".so." in name):
+                    candidates.append(sibling)
+        except OSError:
+            continue
+    versions = set()
+    for path in candidates:
+        try:
+            info = path.stat()
+            key = (str(path), info.st_mtime_ns, info.st_size)
+            if key not in _VTK_SCAN_CACHE:
+                _VTK_SCAN_CACHE[key] = frozenset(_scan_vtk_versions(path))
+            versions |= _VTK_SCAN_CACHE[key]
+        except OSError:
+            continue
+    return versions
+
+
+def ukf_vtk_mismatch(executable):
+    """Return (found, running) version strings when a Slicer-built UKF CLI targets another VTK, else None.
+
+    Only a CLI inside a cli-modules folder is checked. A standalone runtime, an unreadable
+    file, a file with no versioned VTK name or an unreadable running VTK never blocks.
+    """
+    executable = Path(executable)
+    if executable.parent.name != "cli-modules":
+        return None
+    running = _running_vtk_version()
+    if running is None:
+        return None
+    found = _ukf_vtk_versions(executable)
+    if not found or running in found:
+        return None
+    return (
+        ", ".join("%d.%d" % version for version in sorted(found)),
+        "%d.%d" % running,
+    )
+
+
+def _ukf_vtk_error(rejected):
+    lines = [
+        "UKFTractography in this package was built for a different 3D Slicer version (its VTK differs from the "
+        "running 3D Slicer, so the CLI cannot load). Install UKFTractography for this 3D Slicer from the Extension "
+        "Manager, use 3D Slicer 5.10, or use a SlicerDSpace package rebuilt for this version."
+    ]
+    for path, (found, running) in rejected:
+        lines.append("  %s links VTK %s; running Slicer uses VTK %s" % (path, found, running))
+    return "\n".join(lines)
+
+
 def resolve_executable(explicit=None, name="UKFTractography"):
     candidate = explicit
     if not candidate and name == "UKFTractography":
@@ -136,12 +222,24 @@ def resolve_executable(explicit=None, name="UKFTractography"):
         if path.is_file():
             return path
         raise FileNotFoundError(str(path))
+    rejected = []
+
+    def usable(path):
+        if name != "UKFTractography":
+            return True
+        mismatch = ukf_vtk_mismatch(path)
+        if mismatch is None:
+            return True
+        if (str(path), mismatch) not in [(str(p), m) for p, m in rejected]:
+            rejected.append((path, mismatch))
+        return False
+
     if name == "UKFTractography":
         roots = _extension_search_roots()
         gpu_names_lower = tuple(n.lower() for n in _GPU_EXECUTABLES)
         for gpu_name in _GPU_EXECUTABLES:
             found_gpu = shutil.which(gpu_name)
-            if found_gpu:
+            if found_gpu and usable(Path(found_gpu).resolve()):
                 return Path(found_gpu).resolve()
         for root in roots:
             for pattern in (
@@ -153,7 +251,7 @@ def resolve_executable(explicit=None, name="UKFTractography"):
                 "slicer.org/Extensions-*/*/lib/Slicer-*/cli-modules/*",
             ):
                 for path in root.glob(pattern):
-                    if path.is_file() and path.name.lower() in gpu_names_lower:
+                    if path.is_file() and path.name.lower() in gpu_names_lower and usable(path.resolve()):
                         return path.resolve()
         standalone_names_lower = (name.lower(), name.lower() + ".exe")
         for root in roots:
@@ -166,24 +264,30 @@ def resolve_executable(explicit=None, name="UKFTractography"):
                     if path.is_file() and path.name.lower() in standalone_names_lower:
                         return path.resolve()
     found = shutil.which(name)
-    if found:
+    if found and usable(Path(found).resolve()):
         return Path(found).resolve()
+    cause = None
     try:
         from shared.pipeline import resolve_cli_executable
 
-        return Path(resolve_cli_executable(name.lower())).resolve()
+        cli = Path(resolve_cli_executable(name.lower())).resolve()
+        if usable(cli):
+            return cli
     except (RuntimeError, AttributeError, ImportError, FileNotFoundError) as exc:
-        # Background PythonSlicer does not instantiate the GUI module registry.
-        roots = _extension_search_roots()
-        for root in roots:
-            for pattern in ("lib/Slicer-*/cli-modules/*", "slicer.org/Extensions-*/*/lib/Slicer-*/cli-modules/*"):
-                for path in root.glob(pattern):
-                    if path.is_file() and path.name.lower() in (name.lower(), name.lower() + ".exe"):
-                        return path.resolve()
-        raise RuntimeError(
-            "Install UKFTractography and SlicerDMRI through Slicer Extension Manager, restart Slicer, "
-            "and select UKF again. Headless users may pass --ukf-executable. Missing CLI: " + name
-        ) from exc
+        cause = exc
+    # Background PythonSlicer does not instantiate the GUI module registry.
+    roots = _extension_search_roots()
+    for root in roots:
+        for pattern in ("lib/Slicer-*/cli-modules/*", "slicer.org/Extensions-*/*/lib/Slicer-*/cli-modules/*"):
+            for path in root.glob(pattern):
+                if path.is_file() and path.name.lower() in (name.lower(), name.lower() + ".exe") and usable(path.resolve()):
+                    return path.resolve()
+    if rejected:
+        raise RuntimeError(_ukf_vtk_error(rejected))
+    raise RuntimeError(
+        "Install UKFTractography and SlicerDMRI through Slicer Extension Manager, restart Slicer, "
+        "and select UKF again. Headless users may pass --ukf-executable. Missing CLI: " + name
+    ) from cause
 
 
 def paths(subject, directory):

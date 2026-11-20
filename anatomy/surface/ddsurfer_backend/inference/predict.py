@@ -158,6 +158,7 @@ class SurfacePredictor:
             if model is None:
                 entry = self.entries[surface]
                 model = load_model(self.checkpoint_dir / entry['checkpoint_file'], entry['sha256'], self.architecture, self.device)
+            execution_devices = dict(model.execution_devices)  # read before a lazy MPS model is released
             with precision_context(self.precision, self.device):
                 raw = model(vertices, volumes)
             if self._lazy_mps_models:
@@ -194,7 +195,8 @@ class SurfacePredictor:
             metadata.update(checkpoint_file=self.entries[surface]['checkpoint_file'],
                             checkpoint_sha256=self.entries[surface]['sha256'],
                             precision=self.precision, postprocess_iters=iterations, surface=surface,
-                            template_sha256=self.entries[surface]['template_output_sha256'])
+                            template_sha256=self.entries[surface]['template_output_sha256'],
+                            execution_devices=execution_devices)
             atomic_json(output.with_suffix('.json'), metadata)
             if self.args.save_debug:
                 np.savez_compressed(directory / f'{self.args.surf_hemi}_{kind}_crop_voxel.npz',

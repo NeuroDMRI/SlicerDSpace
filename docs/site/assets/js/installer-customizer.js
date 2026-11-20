@@ -165,15 +165,11 @@
     { version: '5.12.3', minor: '5.12', revision: '34627' },
     { version: '5.12.2', minor: '5.12', revision: '34625' },
     { version: '5.12.1', minor: '5.12', revision: '34624' },
-    { version: '5.12.0', minor: '5.12', revision: '34621' },
-    { version: '5.8.1', minor: '5.8', revision: '33241' },
-    { version: '5.8.0', minor: '5.8', revision: '33216' }
+    { version: '5.12.0', minor: '5.12', revision: '34621' }
   ];
   var GENERIC_SLICER_MINORS = [
     { minor: '5.10', revision: '34045' },
     { minor: '5.12', revision: '34645' },
-    { minor: '5.8', revision: '33241' },
-    { minor: '5.9', revision: '' },
     { minor: '5.11', revision: '' },
     { minor: '5.13', revision: '' },
     { minor: '5.14', revision: '' }
@@ -653,7 +649,7 @@
     '    raise RuntimeError(f"Failed downloading {dest.name}: {errors}")'
   ].join('\n');
 
-  // Pure-ASCII helpers to remap SlicerDSpace base archives across 3D Slicer versions (5.8-5.12+).
+  // Pure-ASCII helpers to remap SlicerDSpace base archives across 3D Slicer versions (5.10-5.12+).
   var SHARED_REMAP_PY = [
     'def _remap_s4ext_text(raw_text, rev, slicer_os="", slicer_arch=""):',
     '    lines = []; saw_rev = False; saw_os = False; saw_arch = False',
@@ -1046,7 +1042,7 @@
     '    try:',
     '        maj = int(getattr(slicer.app, "majorVersion", 0))',
     '        minv = int(getattr(slicer.app, "minorVersion", 0))',
-    '        return (maj > 5) or (maj == 5 and minv >= 8)',
+    '        return (maj > 5) or (maj == 5 and minv >= 10)',
     '    except Exception: return True',
     'def _slicer_version_str():',
     '    try: return f"{int(getattr(slicer.app, \'majorVersion\', 0))}.{int(getattr(slicer.app, \'minorVersion\', 0))}.{int(getattr(slicer.app, \'patchVersion\', 0))}"',
@@ -1075,7 +1071,7 @@
     '    intel_mac = _is_intel_mac()',
     '    ver_ok = slicer_ok and (not intel_mac)',
     '    if not slicer_ok:',
-    '        warn = qt.QLabel(f"This setup requires 3D Slicer 5.8+ (detected {_slicer_version_str()}).")',
+    '        warn = qt.QLabel(f"This setup requires 3D Slicer 5.10+ (detected {_slicer_version_str()}).")',
     '        warn.setWordWrap(True); warn.setStyleSheet("color: #f87171; font-weight: bold;")',
     '        layout.addWidget(warn)',
     '    if sys.version_info[:2] != (3, 12):',
@@ -1466,7 +1462,7 @@
     '        "        rev = str(em.slicerRevision); sos = str(em.slicerOs); sarch = str(em.slicerArch)",',
     '        "        maj = int(getattr(slicer.app, \'majorVersion\', 5)); minv = int(getattr(slicer.app, \'minorVersion\', 10))",',
     '        "        tsub = f\'Slicer-{maj}.{minv}\'",',
-    '        "        if maj < 5 or (maj == 5 and minv < 8): raise RuntimeError(f\'Requires 3D Slicer 5.8+ (found {maj}.{minv})\')",',
+    '        "        if maj < 5 or (maj == 5 and minv < 10): raise RuntimeError(f\'Requires 3D Slicer 5.10+ (found {maj}.{minv})\')",',
     '        "        needs_remap = (rev != \'34045\' or tsub != \'Slicer-5.10\')",',
     '        "        if em.isExtensionInstalled(\'SlicerDSpace\'):",',
     '        "            em.scheduleExtensionForUninstall(\'SlicerDSpace\'); em.uninstallScheduledExtensions(); em.updateModel()",',
@@ -1775,7 +1771,7 @@
       return lines.join('\n');
     };
     var setupPy = [
-      '# SlicerDSpace One-Click Graphical Setup Extension for 3D Slicer 5.8+',
+      '# SlicerDSpace One-Click Graphical Setup Extension for 3D Slicer 5.10+',
       'import json as _json',
       'CONFIG = _json.loads(' + asciiJsonLiteral(cfg) + ')',
       SETUP_MODULE_PY,
@@ -1963,7 +1959,7 @@
         html.push('<div class="ic-top">');
         html.push('<div class="ic-top-copy">');
         html.push('<h3 class="ic-heading">' + t('One-Click Graphical Setup', '一键图形化安装器') + '</h3>');
-        html.push('<p class="ic-sub">' + t('Select your operating system and download the universal setup archive (recommended: 3D Slicer 5.10.0; compatible with 5.8–5.12.4).', '选择操作系统并下载通用一键安装引导包（推荐 3D Slicer 5.10.0，同时兼容 5.8–5.12.4）。') + '</p>');
+        html.push('<p class="ic-sub">' + t('Select your operating system and download the universal setup archive (recommended: 3D Slicer 5.10.0; compatible with 5.10–5.12.4).', '选择操作系统并下载通用一键安装引导包（推荐 3D Slicer 5.10.0，同时兼容 5.10–5.12.4）。') + '</p>');
         html.push('</div></div>');
       }
 

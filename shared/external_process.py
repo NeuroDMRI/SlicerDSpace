@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import functools
 import logging
 import os
 import subprocess
 import sys
 import shutil
+import struct
 import tempfile
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
@@ -36,6 +38,102 @@ def resolve_external_command(name: str, bin_dir: Optional[Path] = None, *, requi
     except Exception:
         pass
     return None
+
+
+# --- C6/D8: run universal (x86_64 + arm64) native runtime binaries as arm64 under Rosetta ---------------------
+
+ARM64_EXEC_DISABLE_ENV = "SLICERDSPACE_DISABLE_ARM64_EXEC"
+_ARCH = "/usr/bin/arch"
+_MACHO_ARM64_CPUTYPE = 0x0100000C
+# Big-endian fat-header magic -> size of one fat_arch (0xcafebabe) or fat_arch_64 (0xcafebabf) record.
+_MACHO_FAT_RECORD_SIZE = {0xCAFEBABE: 20, 0xCAFEBABF: 32}
+
+
+def macho_has_arm64_slice(path: Path | str) -> bool:
+    """True when ``path`` is a Mach-O universal (fat) binary that holds an arm64 slice.
+
+    A thin binary, a script and a missing file give False. No ``lipo`` is needed.
+    """
+    try:
+        with open(path, "rb") as handle:
+            head = handle.read(8)
+            if len(head) < 8:
+                return False
+            magic, count = struct.unpack(">II", head)
+            record = _MACHO_FAT_RECORD_SIZE.get(magic)
+            if record is None or not 0 < count <= 32:  # a Java class file shares 0xcafebabe; its count is large
+                return False
+            table = handle.read(record * count)
+    except OSError:
+        return False
+    return any(
+        struct.unpack(">I", table[index * record:index * record + 4])[0] == _MACHO_ARM64_CPUTYPE
+        for index in range(count) if len(table) >= index * record + 4
+    )
+
+
+@functools.lru_cache(maxsize=1)
+def process_is_translated() -> bool:
+    """True when this process runs translated by Rosetta 2 (macOS only; the answer cannot change)."""
+    if sys.platform != "darwin":
+        return False
+    try:
+        from shared.platform_info import _sysctl_is_one
+
+        return bool(_sysctl_is_one("sysctl.proc_translated"))
+    except ImportError:  # platform_info renamed its helper: ask sysctl directly
+        try:
+            result = subprocess.run(["/usr/sbin/sysctl", "-n", "sysctl.proc_translated"],
+                                    capture_output=True, text=True, timeout=10)
+            return result.returncode == 0 and result.stdout.strip() == "1"
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+    except Exception:
+        return False
+
+
+def _arm64_exec_disabled(env: Optional[Mapping[str, str]]) -> bool:
+    for source in (os.environ, env or {}):
+        if str(source.get(ARM64_EXEC_DISABLE_ENV, "")).strip().lower() in {"1", "true", "yes", "on"}:
+            return True
+    return False
+
+
+def native_arm64_argv(argv: Iterable[Any], env: Optional[Mapping[str, str]] = None) -> list[str]:
+    """Prefix ``argv`` with ``/usr/bin/arch -arm64`` when a Rosetta-translated Slicer launches a universal binary.
+
+    A child of a translated process inherits the x86_64 preference, so a universal binary (the bundled MRtrix)
+    runs translated although it has an arm64 slice. The prefix is added only when the process is translated, the
+    executable is a fat Mach-O with an arm64 slice, and ``SLICERDSPACE_DISABLE_ARM64_EXEC`` is not set. Any other
+    argv is returned unchanged (as a new list). Arm64-only binaries already run natively and need no prefix.
+
+    ``/usr/bin/arch`` is SIP-protected and drops ``DYLD_*`` variables from its own environment, so those that
+    ``env`` (default ``os.environ``) holds are passed again with ``arch -e``. The bundled MRtrix does not need them
+    (it uses ``@loader_path/../lib``); the pass-through only keeps a user-set variable working.
+    """
+    command = [str(part) for part in argv]
+    if not command or sys.platform != "darwin" or command[0] == _ARCH or _arm64_exec_disabled(env):
+        return command
+    try:
+        program = command[0]
+        if os.sep not in program:
+            program = shutil.which(program, path=(env or os.environ).get("PATH")) or program
+        # Cheap file checks first: the sysctl probe in process_is_translated() runs only for a real fat binary.
+        if not os.path.isfile(program) or not macho_has_arm64_slice(program):
+            return command
+        base = os.path.basename(program).lower()
+        if base in SLICER_PYTHON_NAMES or base.startswith("python"):
+            return command  # an interpreter keeps its own architecture: its packages must match it
+        if not os.path.exists(_ARCH) or not process_is_translated():
+            return command
+        forwarded = [
+            part for key, value in (env if env is not None else os.environ).items()
+            if str(key).startswith("DYLD_") and value
+            for part in ("-e", "%s=%s" % (key, value))
+        ]
+        return [_ARCH, "-arm64", *forwarded, os.path.abspath(program), *command[1:]]
+    except Exception:
+        return command
 
 
 def interpreter_path(path: Path | str) -> Path:

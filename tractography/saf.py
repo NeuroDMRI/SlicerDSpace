@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterator, Optional
 
 from shared import default_task_output_dir, find_subject_root
-from shared.external_process import startup_environment, text_subprocess_kwargs, resolve_external_command
+from shared.external_process import native_arm64_argv, startup_environment, text_subprocess_kwargs, resolve_external_command
 from .saf_backend.provenance import implementation_record
 
 
@@ -320,7 +320,7 @@ def _run_mrtrix_command(
         if bin_dir is not None:
             env["PATH"] = os.pathsep.join(filter(None, (str(bin_dir), env.get("PATH"))))
     return subprocess.run(
-        args, check=True, capture_output=True, env=env, **text_subprocess_kwargs()
+        native_arm64_argv(args, env), check=True, capture_output=True, env=env, **text_subprocess_kwargs()
     )
 
 

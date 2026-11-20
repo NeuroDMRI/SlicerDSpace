@@ -1002,7 +1002,7 @@ def gibbs_removal_accelerated(
         g0_t = torch.as_tensor(g0, device=dev, dtype=torch_dtype).unsqueeze(0)
         g1_t = torch.as_tensor(g1, device=dev, dtype=torch_dtype).unsqueeze(0)
 
-        def _cuda_chunk(start: int, end: int) -> np.ndarray:
+        def _gpu_chunk(start: int, end: int) -> np.ndarray:
             sub_np = np.ascontiguousarray(flat[start:end])
             x_t = torch.from_numpy(sub_np).to(device=dev, dtype=torch_dtype)
             img_c1 = _gibbs_1d_batch_torch(x_t, axis=1, n_points=n_points)
@@ -1012,6 +1012,15 @@ def gibbs_removal_accelerated(
             comb = torch.fft.fftshift(c1, dim=(-2, -1)) * g1_t + torch.fft.fftshift(c0, dim=(-2, -1)) * g0_t
             res = torch.abs(torch.fft.ifft2(comb, dim=(-2, -1)))
             return res.detach().cpu().numpy().astype(flat.dtype, copy=False)
+
+        def _cuda_chunk(start: int, end: int) -> np.ndarray:
+            try:
+                return _gpu_chunk(start, end)
+            except Exception as exc:
+                if is_cuda_oom(exc):
+                    # C6/D8: release the CUDA and the MPS allocator cache before the chunk is halved and retried.
+                    empty_gpu_cache_safely()
+                raise
 
         def _cpu_fallback_chunk(start: int, end: int) -> np.ndarray:
             if explicit_cuda:

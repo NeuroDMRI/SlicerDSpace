@@ -590,10 +590,8 @@ MACOS_SLICER_REVISIONS: tuple[tuple[str, str], ...] = (
     ("5.12", "34625"),
     ("5.12", "34624"),
     ("5.12", "34621"),
-    ("5.8", "33241"),
-    ("5.8", "33216"),
 )
-GENERIC_SLICER_MINORS: tuple[str, ...] = ("5.10", "5.12", "5.8", "5.9", "5.11", "5.13", "5.14")
+GENERIC_SLICER_MINORS: tuple[str, ...] = ("5.10", "5.12", "5.11", "5.13", "5.14")
 
 
 def _verify_setup_py(

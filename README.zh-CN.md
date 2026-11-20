@@ -135,7 +135,7 @@ Agent 会检查可用空间和已有资源，等你选择后再下载，并保�
 
 ### 方式一：一键图形化安装引导扩展（官网定制或 Release 直下，推荐）
 
-1. **安装 3D Slicer 5.10.0**：从 [download.slicer.org](https://download.slicer.org/) 下载并安装对应平台（Windows `x86_64`、Linux `x86_64` 或 Apple Silicon macOS `arm64`）的 3D Slicer 5.10.0。
+1. **安装 3D Slicer 5.10.0**：从 [download.slicer.org](https://download.slicer.org/) 下载并安装对应平台（Windows `x86_64`、Linux `x86_64` 或 macOS）的 3D Slicer 5.10.0（支持 5.10 至 5.12.4）。在 Apple Silicon 上请安装 macOS `x86_64` 版 Slicer；它在 Rosetta 2 下运行，并使用原生 `arm64` 命令行运行时。
 2. **定制并下载约 `13 KB` 的一键引导安装包**（`SlicerDSpaceSetup-macOS.zip`、`SlicerDSpaceSetup-Windows.zip` 或 `SlicerDSpaceSetup-Linux.zip`）：在 [SlicerDSpace 官网安装向导](https://neurodmri.github.io/SlicerDSpace/#start) 依次选择操作系统（`macOS arm64`、`Windows x86_64`、`Linux x86_64`）、按需勾选 WMA 白质纤维图谱，以及可选的 **GitHub 下载加速镜像**（`ghfast.top` / `gh-proxy.com` / 自定义前缀）、**HTTP/HTTPS 代理**、**本地离线包目录** 或 **模型保存目录**；也可直接前往 [GitHub Releases](https://github.com/NeuroDMRI/SlicerDSpace/releases) 下载通用 `.zip` 引导包。
 3. **在 3D Slicer 5.10.0 中安装并启动**：打开 **View > Extensions Manager > 右上角小扳手 > Install Extension from File...**，选中 `SlicerDSpaceSetup-<OS>.zip` 后重启 Slicer。重启后会自动弹出 **SlicerDSpace Setup** 图形安装窗口，核对配置后点击 **`Start Install`**（支持 12 线程 HTTP Range 分片并发加速与断点续传，并自动拉取、校验 NITRC `IITmean_b0_256.nii.gz` 模板）；部署完成后再次重启 Slicer，在顶部打开 **Modules > Diffusion > SlicerDSpace** 即可使用。
 
@@ -299,7 +299,7 @@ export SLICER="/path/to/Slicer"
 
 | 范围 | 当前状态 |
 | --- | --- |
-| 参考环境 | Windows (`x86_64`)、Linux (`x86_64`) 与 macOS (Apple Silicon `arm64`)，目标 3D Slicer 5.10.0 |
+| 参考环境 | Windows (`x86_64`)、Linux (`x86_64`) 与 macOS（Apple Silicon 主机、Rosetta 2 下的 Slicer、原生 `arm64` 命令行运行时），目标 3D Slicer 5.10.0；支持范围 5.10 至 5.12.4 |
 | 验证 | 已记录 Windows、Linux 与 macOS (`arm64`) 在 3D Slicer 5.10.0 下的 Extension Manager 安装、GUI 冒烟测试、损坏运行包自动修复及真实多壳与临床单壳数据工作流 |
 | 分发 | GitHub Release `v0.1.1` 一键安装引导包（`SlicerDSpaceSetup-macOS.zip`、`SlicerDSpaceSetup-Windows.zip`、`SlicerDSpaceSetup-Linux.zip`，可在[官网向导](https://neurodmri.github.io/SlicerDSpace/#start)预配置）及分平台离线底座包（`SlicerDSpace-v0.1.1-Windows-x64.zip`、`SlicerDSpace-v0.1.1-Linux-x64.tar.gz`、`SlicerDSpace-v0.1.1-macOS-arm64.tar.gz`）+ 独立 WMA 图谱包；在线扩展商店目录（Extension Catalog）仍为 Tier 1 申请草稿 |
 | 授权 | 项目代码采用 BSD-3-Clause；第三方运行环境与按需下载的模型资源各自保留条款与发布门禁（皮层表面后处理仍需用户自备 FreeSurfer 许可证） |

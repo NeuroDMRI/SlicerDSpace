@@ -29,7 +29,12 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from shared.io_layout import default_task_output_dir
-from shared.external_process import fsl_root_from_bin_dir, managed_tool_environment, text_subprocess_kwargs
+from shared.external_process import (
+    fsl_root_from_bin_dir,
+    managed_tool_environment,
+    native_arm64_argv,
+    text_subprocess_kwargs,
+)
 from shared.wsl_bridge import preprocessing_launcher
 from shared.brain_mask import (
     BrainMaskConfig,
@@ -458,7 +463,7 @@ def _run_command(
     if log:
         log("[Preproc] Running: " + " ".join(cmd))
     process = subprocess.Popen(
-        cmd,
+        native_arm64_argv(cmd, env),  # C6/D8: native arm64 MRtrix under a Rosetta Slicer
         env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,

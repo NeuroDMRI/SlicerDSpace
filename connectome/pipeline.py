@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Callable, Iterable, Optional
 
 from shared import default_task_output_dir_for_dependency
-from shared.external_process import startup_environment, resolve_external_command
+from shared.external_process import native_arm64_argv, startup_environment, resolve_external_command
 
 
 SUPPORTED_TRACTOGRAPHY_EXTENSIONS = {".trk", ".tck", ".vtk", ".vtp"}
@@ -1439,7 +1439,7 @@ def run_connectome(config: ConnectomeConfig, *, log: Optional[Callable[[str], No
                     command_env["PATH"] = os.pathsep.join(
                         filter(None, (str(effective_bin), command_env.get("PATH")))
                     )
-                completed = subprocess.run(command, check=True, env=command_env)
+                completed = subprocess.run(native_arm64_argv(command, command_env), check=True, env=command_env)
                 return_code = completed.returncode
                 try:
                     _write_nodes_table(nodes_path, node_labels, label_names=label_names)

@@ -993,7 +993,6 @@ def _common_slicer_executables(platform_name: str) -> tuple[Path, ...]:
             [
                 root / "Slicer" / "Slicer",
                 root / "Slicer-5.10.0-linux-amd64" / "Slicer",
-                root / "Slicer-5.8.1-linux-amd64" / "Slicer",
             ]
         )
     if platform_name == "Darwin":

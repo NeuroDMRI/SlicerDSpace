@@ -60,16 +60,32 @@ PythonSlicer shared/run_subject_pipeline_cli.py \
   --surface-device auto --tractcloud-device auto
 ```
 
-Generated mask manifests contain `device_execution`; surface manifests record
-`resolved_device`; DDSeg QC records the executing device; TractCloud writes a
-device receipt and includes it in its manifest. Source/model hashes remain in
-the corresponding scientific provenance.
+Generated mask manifests contain `device_execution`; DDSeg QC records the executing
+device; TractCloud writes a device receipt and includes it in its manifest. Surface
+manifests record `resolved_device` (the device that `auto` or the user's choice resolved to) and
+`execution_devices`, the device where each DDSurfer network really ran (for example
+`{"vf_net": "cpu", "att_net": "mps"}`). Source/model hashes remain in the
+corresponding scientific provenance.
+
+**DDSurfer on MPS runs partly on the CPU.** Some PyTorch builds (for example torch
+2.2.2 under Rosetta) have no MPS `Conv3d`, even with `PYTORCH_ENABLE_MPS_FALLBACK=1`.
+DDSurfer detects this with a small probe. It then keeps the volume network
+(`vf_net`, all 3D convolutions and most of the compute) on the CPU. The attention
+network and the surface integration stay on MPS. The results are the same; only the
+speed differs. The backend logs one warning for this, the surface log shows
+`resolved mps (volume network on cpu: no MPS Conv3d in this torch build)`, and the
+manifest field `execution_devices` records `vf_net` as `cpu`. Use `execution_devices`,
+not `resolved_device`, to see where the compute ran. Each per-surface prediction
+record and the upstream `logs/pipeline.json` carry the same field. Older runs
+have no `execution_devices` field.
 
 PNL's known undefined `DEVICE_ID_LIST` startup branch is replaced **in memory**
 by the launcher. This adjustment does not change weights, CNN operations,
-registration or cleanup. The pinned DDSurfer snapshot remains unmodified;
-the facade supplies its generated native mask (made by PNL CNN) explicitly so the standalone
-CPU-only helper of that snapshot is not used by SlicerDSpace.
+registration or cleanup. The vendored DDSurfer snapshot carries local patches
+(recorded in `UPSTREAM.json`): the MPS `Conv3d` probe and the `TANet.to()` override
+described above, which place the volume network on the CPU when MPS lacks `Conv3d`
+and report that placement. The facade supplies its generated native mask (made by PNL CNN)
+explicitly so the standalone CPU-only helper of that snapshot is not used by SlicerDSpace.
 
 ---
 

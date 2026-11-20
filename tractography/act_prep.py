@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Callable, Mapping, Optional
 from shared.external_process import (
     managed_tool_environment,
+    native_arm64_argv,
     resolve_external_command,
     subprocess_no_window_kwargs,
     text_subprocess_kwargs,
@@ -245,10 +246,11 @@ def _run_mrtrix(
     effective_bin = mrtrix_bin_dir
     if effective_bin is None and command and Path(command[0]).is_file():
         effective_bin = Path(command[0]).resolve().parent
+    command_env = managed_tool_environment(mrtrix_bin_dir=effective_bin)
     completed = subprocess.run(
-        command,
+        native_arm64_argv(command, command_env),  # C6/D8: native arm64 MRtrix under a Rosetta Slicer
         capture_output=True,
-        env=managed_tool_environment(mrtrix_bin_dir=effective_bin),
+        env=command_env,
         **subprocess_no_window_kwargs(**text_subprocess_kwargs()),
     )
     record = {

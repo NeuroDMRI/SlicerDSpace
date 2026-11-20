@@ -369,7 +369,8 @@ def finalize_outputs(args, signature=None):
             surfaces[name] = dict(file=f'ddsurfer/{name}.obj', sha256=native['output_sha256'],
                                   checkpoint=prediction['checkpoint_file'],
                                   checkpoint_sha256=prediction['checkpoint_sha256'],
-                                  precision=prediction['precision'])
+                                  precision=prediction['precision'],
+                                  execution_devices=prediction.get('execution_devices'))
     summary = dict(subject=args.subject, coordinate_space='native_scanner_RAS_mm',
                    postprocess=args.freesurfer, completed=True, surfaces=surfaces)
     if signature is not None:

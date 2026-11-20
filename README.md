@@ -150,7 +150,7 @@ and [CLI templates](docs/setup/CLI_TEMPLATES.md) cover other routes and batch ex
 
 ### Option A: One-Click Graphical Setup Extension (Recommended)
 
-1. **Install 3D Slicer 5.10.0** for Windows (`x86_64`), Linux (`x86_64`) or Apple Silicon macOS (`arm64`) from [download.slicer.org](https://download.slicer.org/).
+1. **Install 3D Slicer 5.10.0** (supported: 5.10 to 5.12.4) for Windows (`x86_64`), Linux (`x86_64`) or macOS from [download.slicer.org](https://download.slicer.org/). On Apple Silicon, install the macOS `x86_64` Slicer build; it runs under Rosetta 2 and uses native `arm64` CLI runtimes.
 2. **Customize and download the `~13 KB` setup archive** (`SlicerDSpaceSetup-macOS.zip`, `SlicerDSpaceSetup-Windows.zip` or `SlicerDSpaceSetup-Linux.zip`) on the [SlicerDSpace Project Website](https://neurodmri.github.io/SlicerDSpace/#start) — choose your operating system (`macOS arm64`, `Windows x86_64`, `Linux x86_64`), optional WMA white-matter atlases, and optional **GitHub mirror** (`ghfast.top` / `gh-proxy.com` / custom prefix), **HTTP/HTTPS proxy**, **local offline folder** or **model directory** — or download the universal setup `.zip` directly from [GitHub Releases](https://github.com/NeuroDMRI/SlicerDSpace/releases).
 3. **Install in 3D Slicer 5.10.0** via **View > Extensions Manager > top-right wrench icon > Install Extension from File...**, select `SlicerDSpaceSetup-<OS>.zip`, and restart Slicer. After restarting, the **SlicerDSpace Setup** wizard opens automatically; confirm your options and click **Start Install** (12-thread HTTP Range resume; automatically fetches and verifies the NITRC `IITmean_b0_256.nii.gz` template). Once deployment finishes, restart Slicer and open **Modules > Diffusion > SlicerDSpace**.
 
@@ -328,7 +328,7 @@ Start with one concurrency level and budget combined RAM/VRAM use.
 
 | Area | Current scope |
 | --- | --- |
-| Reference environment | Windows (`x86_64`), Linux (`x86_64`), and macOS (Apple Silicon `arm64`) on 3D Slicer 5.10.0 |
+| Reference environment | Windows (`x86_64`), Linux (`x86_64`), and macOS (Apple Silicon host, Slicer under Rosetta 2, native `arm64` CLI runtimes) on 3D Slicer 5.10.0; supported range 5.10 to 5.12.4 |
 | Validation | Recorded Windows, Linux & macOS (`arm64`) Slicer 5.10.0 Extension Manager install, GUI smoke suites, runtime corruption auto-repair, and real-data multi-shell and clinical single-shell workflows |
 | Distribution | GitHub Release `v0.1.1` one-click setup archives (`SlicerDSpaceSetup-macOS.zip`, `SlicerDSpaceSetup-Windows.zip`, `SlicerDSpaceSetup-Linux.zip`, customizable via the [Project Website](https://neurodmri.github.io/SlicerDSpace/#start)) and standalone OS Base packages (`SlicerDSpace-v0.1.1-Windows-x64.zip`, `SlicerDSpace-v0.1.1-Linux-x64.tar.gz`, `SlicerDSpace-v0.1.1-macOS-arm64.tar.gz`) + separate WMA atlases; online Extension Catalog listing remains a Tier 1 proposal |
 | Licensing | BSD-3-Clause project code; third-party runtimes and on-demand model assets retain separate terms and release gates (FreeSurfer surface postprocessing requires a user-supplied license) |

@@ -82,7 +82,9 @@ class CacheTests(unittest.TestCase):
         with mock.patch.dict(sys.modules, {'psutil': None}):
             self.assertEqual(default_cache_bytes(), 256 * 1024 ** 2)
         psutil = types.SimpleNamespace(virtual_memory=lambda: types.SimpleNamespace(available=8 * 1024 ** 3))
-        with mock.patch.dict(sys.modules, {'psutil': psutil}):
+        # M1/F2: pin the Rosetta page ratio so the result does not depend on the host running this test
+        with mock.patch.dict(sys.modules, {'psutil': psutil}), \
+                mock.patch('shared.platform_info.rosetta_page_ratio', return_value=1):
             self.assertEqual(default_cache_bytes(), 2 * 1024 ** 3)
 
     def test_input_modification_invalidates(self):

@@ -975,6 +975,11 @@ _BOOTSTRAP_BODY = textwrap.dedent(
             "            em.scheduleExtensionForUninstall('SlicerDSpace')",
             "            em.uninstallScheduledExtensions()",
             "            em.updateModel()",
+            "            if em.isExtensionInstalled('SlicerDSpace'):",
+            "                cancel = getattr(em, 'cancelExtensionScheduledForUninstall', None)",
+            "                if callable(cancel):",
+            "                    cancel('SlicerDSpace')",
+            "                raise RuntimeError('The installed SlicerDSpace extension could not be removed because it is loaded. Close all 3D Slicer windows and run the installer again.')",
             "        target_arc = archive",
             "        stub = None",
             "        if needs_remap:",
@@ -991,6 +996,13 @@ _BOOTSTRAP_BODY = textwrap.dedent(
             "        ok = bool(em.installExtension('SlicerDSpace', meta, target_arc, False, True))",
             "        if stub is not None:",
             "            stub.unlink(missing_ok=True)",
+            "        sched_cancelled = False",
+            "        is_sched = getattr(em, 'isExtensionScheduledForUninstall', None)",
+            "        if callable(is_sched) and is_sched('SlicerDSpace'):",
+            "            sched_cancelled = True",
+            "            cancel = getattr(em, 'cancelExtensionScheduledForUninstall', None)",
+            "            if callable(cancel):",
+            "                cancel('SlicerDSpace')",
             "        paths = [str(p) for p in (em.extensionModulePaths('SlicerDSpace') or ())]",
             "        ext_root = ''",
             "        for mp in paths:",
@@ -1004,7 +1016,7 @@ _BOOTSTRAP_BODY = textwrap.dedent(
             "                if (c / 'SlicerDSpace.py').is_file():",
             "                    ext_root = str(c.parents[2].resolve())",
             "                    break",
-            "        receipt.write_text(json.dumps({'installed': ok, 'module_paths': paths, 'ext_root': ext_root, 'needs_remap': needs_remap, 'rev': rev, 'target_subdir': tsub, 'slicer_os': sos, 'slicer_arch': sarch, 'slicer_major': maj, 'slicer_minor': minv, 'py_minor': f'{sys.version_info[0]}.{sys.version_info[1]}'}), encoding='utf-8')",
+            "        receipt.write_text(json.dumps({'installed': ok, 'module_paths': paths, 'ext_root': ext_root, 'needs_remap': needs_remap, 'scheduled_uninstall_cancelled': sched_cancelled, 'rev': rev, 'target_subdir': tsub, 'slicer_os': sos, 'slicer_arch': sarch, 'slicer_major': maj, 'slicer_minor': minv, 'py_minor': f'{sys.version_info[0]}.{sys.version_info[1]}'}), encoding='utf-8')",
             "        slicer.app.exit(0 if ok else 1)",
             "    except Exception as exc:",
             "        receipt.write_text(json.dumps({'installed': False, 'error': str(exc), 'traceback': traceback.format_exc()}), encoding='utf-8')",
@@ -1012,7 +1024,7 @@ _BOOTSTRAP_BODY = textwrap.dedent(
             "qt.QTimer.singleShot(500, _run)",
         ]
         helper.write_text("\n".join(helper_lines) + "\n", encoding="utf-8")
-        cmd = [slicer_exe, "--no-splash", "--no-main-window", "--python-script", str(helper), str(archive_path), str(receipt)]
+        cmd = [slicer_exe, "--no-splash", "--no-main-window", "--modules-to-ignore", "SlicerDSpace", "--python-script", str(helper), str(archive_path), str(receipt)]
         env = os.environ.copy()
         if sys.platform.startswith("linux") and not env.get("DISPLAY"):
             xvfb = shutil.which("xvfb-run")
@@ -1028,6 +1040,8 @@ _BOOTSTRAP_BODY = textwrap.dedent(
         shutil.rmtree(receipt.parent, ignore_errors=True)
         if proc.returncode != 0 or not data.get("installed"):
             raise RuntimeError(data.get("error") or f"Slicer ExtensionManager rejected archive: {archive_path}")
+        if data.get("scheduled_uninstall_cancelled"):
+            _log("[WARN] 3D Slicer had SlicerDSpace scheduled for removal at its next start; the installer cancelled that schedule so the new copy stays installed.")
         if data.get("py_minor") and data.get("py_minor") != "3.12":
             _log(f"[WARN] 3D Slicer Python is {data['py_minor']}; bundled Python tools target 3.12.")
         if data.get("needs_remap"):

@@ -2,17 +2,28 @@
 
 from __future__ import annotations
 
-import threading
+import json
+import shutil
+import sys
+import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
-from shared.code_updater import (
-    EXTENSION_VERSION,
-    check_for_code_update,
-    download_and_apply_code_overlay,
+from shared.code_updater import EXTENSION_VERSION
+from shared.external_process import find_pythonslicer, normalize_slicer_python_launch
+from shared.network_config import network_env_overrides
+from shared.process_group import (
+    capture_process_group_id,
+    grouped_launch_command,
+    kill_process_tree,
 )
+from shared.ui_output_loading import qbytearray_to_text
 
-_POLL_INTERVAL_MS = 120
+_POLL_INTERVAL_MS = 500
+_CHECK_WATCHDOG_SECONDS = 60
+_APPLY_WATCHDOG_SECONDS = 240
+_MAX_OUTPUT_TAIL_CHARS = 4000
 
 
 def _is_zh(owner: Any, language: str | None = None) -> bool:
@@ -80,7 +91,9 @@ def _sync_idle_texts(owner: Any, *, zh: bool | None = None) -> None:
         button.setText(_t(use_zh, "Restart Slicer", "重启 Slicer"))
         button.setEnabled(True)
     elif phase == "checking":
-        label.setText(_t(use_zh, "Checking for code updates...", "正在检查代码更新..."))
+        elapsed = int(state.get("elapsed_sec") or 0)
+        suffix = f" ({elapsed}s)" if elapsed > 0 else ""
+        label.setText(_t(use_zh, f"Checking for code updates...{suffix}", f"正在检查代码更新...{suffix}"))
         button.setText(_t(use_zh, "Checking...", "正在检查..."))
         button.setEnabled(False)
     elif phase == "downloading":
@@ -166,6 +179,7 @@ def _handle_check_result(owner: Any, result: dict[str, Any]) -> None:
     if bool(result.get("is_git_checkout")):
         state["phase"] = "update_available"
         _sync_idle_texts(owner, zh=zh)
+        _log(owner, "[Updater] Update available, skipped because installation is a Git checkout.")
         qt.QMessageBox.information(
             _parent_window(owner),
             _t(zh, "Git Checkout Detected", "检测到 Git 开发源码仓库"),
@@ -181,6 +195,7 @@ def _handle_check_result(owner: Any, result: dict[str, Any]) -> None:
         state["phase"] = "update_available"
         _sync_idle_texts(owner, zh=zh)
         mod_root = str((result.get("local") or {}).get("module_root") or "")
+        _log(owner, f"[Updater] Update available ({_format_mb(size_bytes)}), but module directory is read-only: {mod_root}")
         qt.QMessageBox.warning(
             _parent_window(owner),
             _t(zh, "Directory Not Writable", "插件目录不可写"),
@@ -195,6 +210,7 @@ def _handle_check_result(owner: Any, result: dict[str, Any]) -> None:
     state["phase"] = "update_available"
     _sync_idle_texts(owner, zh=zh)
     ver_line = f"v{version}" + (f" ({short_sha})" if short_sha else "")
+    _log(owner, f"[Updater] Update available: {ver_line}, size {_format_mb(size_bytes)}.")
     notes_line = f"\n{summary}\n" if summary else "\n"
     prompt = _t(
         zh,
@@ -233,6 +249,7 @@ def _handle_apply_result(owner: Any, result: dict[str, Any]) -> None:
     if str(result.get("status") or "") == "up_to_date":
         state["phase"] = "up_to_date"
         _sync_idle_texts(owner, zh=zh)
+        _log(owner, f"[Updater] Already up to date (v{version}{', ' + short_sha if short_sha else ''}).")
         return
 
     state["phase"] = "restart_required"
@@ -259,52 +276,42 @@ def _handle_apply_result(owner: Any, result: dict[str, Any]) -> None:
         _restart_slicer()
 
 
-def _poll_worker(owner: Any) -> None:
-    state = getattr(owner, "_codeUpdateState", None)
-    if not isinstance(state, dict):
-        _stop_timer(owner)
-        return
-    if not state.get("done"):
-        if state.get("phase") == "downloading":
-            _sync_idle_texts(owner)
-        return
+def _show_error(owner: Any, error_msg: str) -> None:
+    zh = _is_zh(owner)
+    state = owner._codeUpdateState
+    state["phase"] = "error"
+    _sync_idle_texts(owner, zh=zh)
+    _log(owner, f"[Updater] {error_msg}")
+    try:
+        import qt
 
-    _stop_timer(owner)
-    state["busy"] = False
-    kind = state.get("kind")
-    error = state.get("error")
-    result = state.get("result")
-    state["done"] = False
-    state["result"] = None
-    state["error"] = None
+        qt.QMessageBox.warning(
+            _parent_window(owner),
+            _t(zh, "Update Failed", "更新失败"),
+            _t(
+                zh,
+                f"Could not complete update check:\n{error_msg}\n\nYou can adjust mirror or proxy settings under Advanced settings.",
+                f"更新操作未能完成：\n{error_msg}\n\n如有网络访问困难，可在高级设置中调整镜像或代理地址后重试。",
+            ),
+        )
+    except Exception:
+        pass
 
-    if error:
-        zh = _is_zh(owner)
-        state["phase"] = "error"
-        _sync_idle_texts(owner, zh=zh)
-        _log(owner, f"[Updater] {error}")
-        try:
-            import qt
 
-            qt.QMessageBox.warning(
-                _parent_window(owner),
-                _t(zh, "Update Failed", "更新失败"),
-                _t(
-                    zh,
-                    f"Could not complete update check:\n{error}\n\nYou can adjust mirror or proxy settings under Advanced settings.",
-                    f"更新操作未能完成：\n{error}\n\n如有网络访问困难，可在高级设置中调整镜像或代理地址后重试。",
-                ),
+def _resolve_worker_command(owner: Any, worker_args: list[str]) -> tuple[str, list[str]]:
+    updater_script = Path(__file__).resolve().with_name("code_updater.py")
+    launcher_fn = getattr(owner, "_slicer_launcher_program", None)
+    if callable(launcher_fn):
+        raw_program = str(launcher_fn() or "").strip()
+        if raw_program:
+            program, args = normalize_slicer_python_launch(
+                raw_program,
+                ["--launch", "PythonSlicer", "-u", str(updater_script), *worker_args],
             )
-        except Exception:
-            pass
-        return
-
-    if kind == "check" and isinstance(result, dict):
-        _handle_check_result(owner, result)
-    elif kind == "apply" and isinstance(result, dict):
-        _handle_apply_result(owner, result)
-    else:
-        _sync_idle_texts(owner)
+            return program, [arg for arg in args if arg != ""]
+    candidate = find_pythonslicer(Path(sys.executable).resolve().parent.parent)
+    program = str(candidate) if candidate is not None else sys.executable
+    return program, ["-u", str(updater_script), *worker_args]
 
 
 def _ensure_timer(owner: Any) -> Any:
@@ -314,9 +321,272 @@ def _ensure_timer(owner: Any) -> Any:
     if timer is None:
         timer = qt.QTimer(_parent_window(owner))
         timer.setInterval(_POLL_INTERVAL_MS)
-        timer.timeout.connect(lambda: _poll_worker(owner))
+        cb = lambda: _on_watchdog_tick(owner)
+        timeout_sig = getattr(timer, "timeout", None)
+        if timeout_sig is not None and hasattr(timeout_sig, "connect"):
+            timeout_sig.connect(cb)
+        else:
+            timer.connect("timeout()", cb)
         owner._codeUpdatePollTimer = timer
+        owner._codeUpdateTimerCallback = cb
     return timer
+
+
+def _kill_job_process(job: dict[str, Any], *, force: bool = True) -> None:
+    process = job.get("process")
+    pid = 0
+    if process is not None:
+        try:
+            pid = int(process.processId())
+        except Exception:
+            pid = 0
+    if pid > 0 or job.get("pgid"):
+        try:
+            kill_process_tree(pid, grouped=bool(job.get("grouped")), force=force, pgid=job.get("pgid"))
+        except Exception:
+            pass
+    if process is not None:
+        try:
+            process.kill()
+        except Exception:
+            pass
+
+
+def _drain_worker_output(owner: Any, job: dict[str, Any]) -> None:
+    process = job.get("process")
+    if process is None:
+        return
+    try:
+        chunk = qbytearray_to_text(process.readAllStandardOutput())
+    except Exception:
+        return
+    if not chunk:
+        return
+    job["output_tail"] = (str(job.get("output_tail") or "") + chunk)[-_MAX_OUTPUT_TAIL_CHARS:]
+    buf = str(job.get("line_buffer") or "") + chunk
+    lines = buf.splitlines(keepends=True)
+    if lines and not lines[-1].endswith(("\n", "\r")):
+        job["line_buffer"] = lines.pop()
+    else:
+        job["line_buffer"] = ""
+
+    progress_updated = False
+    state = getattr(owner, "_codeUpdateState", None)
+    for raw_line in lines:
+        line = raw_line.strip()
+        if line.startswith("SLICERDSPACE_UPDATE_PROGRESS:") and isinstance(state, dict):
+            try:
+                pct = max(0, min(100, int(line.split(":", 1)[1].strip())))
+                if pct != int(state.get("percent") or 0):
+                    state["percent"] = pct
+                    progress_updated = True
+            except ValueError:
+                pass
+    if progress_updated and isinstance(state, dict) and state.get("phase") == "downloading":
+        _sync_idle_texts(owner)
+
+
+def _on_worker_started(owner: Any, job: dict[str, Any]) -> None:
+    if job.get("completed"):
+        return
+    process = job.get("process")
+    if process is not None and job.get("grouped"):
+        try:
+            job["pgid"] = capture_process_group_id(int(process.processId()))
+        except Exception:
+            job["pgid"] = None
+
+
+def _on_watchdog_tick(owner: Any) -> None:
+    job = getattr(owner, "_codeUpdateJob", None)
+    if not isinstance(job, dict) or job.get("completed"):
+        _stop_timer(owner)
+        return
+    elapsed_exact = time.monotonic() - float(job["started_monotonic"])
+    elapsed_sec = max(0, int(elapsed_exact))
+    state = getattr(owner, "_codeUpdateState", None)
+    if isinstance(state, dict) and elapsed_sec != int(state.get("elapsed_sec") or 0):
+        state["elapsed_sec"] = elapsed_sec
+        if state.get("phase") == "checking":
+            _sync_idle_texts(owner)
+    watchdog = float(job.get("watchdog_seconds") or _CHECK_WATCHDOG_SECONDS)
+    if elapsed_exact >= watchdog:
+        job["timed_out"] = True
+        _kill_job_process(job, force=True)
+        _finalize_worker(
+            owner,
+            job,
+            exit_code=-1,
+            reason=f"Update worker timed out after {int(watchdog)}s.",
+        )
+
+
+def _read_result_payload(result_file: Path) -> dict[str, Any] | None:
+    if not result_file.is_file():
+        return None
+    try:
+        payload = json.loads(result_file.read_text(encoding="utf-8"))
+        return payload if isinstance(payload, dict) else None
+    except Exception:
+        return None
+
+
+def _summarize_failure(job: dict[str, Any], exit_code: int, reason: str | None) -> str:
+    if reason:
+        base = reason
+    else:
+        base = f"Update worker exited with status {exit_code}."
+    tail_lines = [
+        ln.strip()
+        for ln in str(job.get("output_tail") or "").splitlines()
+        if ln.strip() and not ln.strip().startswith("SLICERDSPACE_UPDATE_")
+    ]
+    if tail_lines:
+        return base + "\n" + "\n".join(tail_lines[-4:])
+    return base
+
+
+def _finalize_worker(
+    owner: Any,
+    job: dict[str, Any],
+    *,
+    exit_code: int,
+    reason: str | None = None,
+) -> None:
+    if job.get("completed"):
+        return
+    job["completed"] = True
+    _stop_timer(owner)
+    _drain_worker_output(owner, job)
+
+    result_file = Path(job["result_file"])
+    payload = _read_result_payload(result_file)
+
+    tmp_dir = job.get("tmp_dir")
+    if tmp_dir is not None:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    process = job.get("process")
+    if process is not None and hasattr(process, "deleteLater"):
+        try:
+            process.deleteLater()
+        except Exception:
+            pass
+    if getattr(owner, "_codeUpdateJob", None) is job:
+        owner._codeUpdateJob = None
+
+    state = getattr(owner, "_codeUpdateState", None)
+    if not isinstance(state, dict):
+        return
+    state["busy"] = False
+    kind = job.get("kind")
+
+    if isinstance(payload, dict) and payload.get("ok") is True and isinstance(payload.get("result"), dict):
+        result = payload["result"]
+        if kind == "check":
+            _handle_check_result(owner, result)
+        elif kind == "apply":
+            _handle_apply_result(owner, result)
+        else:
+            _sync_idle_texts(owner)
+        return
+
+    if isinstance(payload, dict) and payload.get("ok") is False:
+        _show_error(owner, str(payload.get("error") or "Update operation failed."))
+        return
+
+    _show_error(owner, _summarize_failure(job, exit_code, reason))
+
+
+def _on_worker_error(owner: Any, job: dict[str, Any], proc_err: Any) -> None:
+    if job.get("completed"):
+        return
+    try:
+        err_code = int(proc_err)
+    except Exception:
+        err_code = -1
+    # FailedToStart (0) does not emit QProcess::finished.
+    if err_code == 0:
+        _finalize_worker(
+            owner,
+            job,
+            exit_code=-1,
+            reason="Failed to start external PythonSlicer update worker.",
+        )
+        return
+    try:
+        import qt
+
+        qt.QTimer.singleShot(
+            50,
+            lambda: _finalize_worker(
+                owner,
+                job,
+                exit_code=-1,
+                reason=f"Update worker process error ({err_code}).",
+            ),
+        )
+    except Exception:
+        _finalize_worker(owner, job, exit_code=-1, reason=f"Update worker process error ({err_code}).")
+
+
+def _start_worker_process(
+    owner: Any,
+    *,
+    kind: str,
+    worker_args: list[str],
+    watchdog_seconds: int,
+    tmp_dir: Path,
+    result_file: Path,
+) -> None:
+    import qt
+
+    program, args = _resolve_worker_command(owner, worker_args)
+    launch_program, launch_args, grouped = grouped_launch_command(program, args)
+
+    process = qt.QProcess(_parent_window(owner))
+    process.setProcessChannelMode(qt.QProcess.MergedChannels)
+    try:
+        env = qt.QProcessEnvironment.systemEnvironment()
+        try:
+            for key, value in network_env_overrides().items():
+                env.insert(key, str(value))
+        except Exception:
+            pass
+        env.insert("PYTHONUNBUFFERED", "1")
+        env.insert("PYTHONIOENCODING", "utf-8")
+        process.setProcessEnvironment(env)
+    except Exception:
+        pass
+
+    job: dict[str, Any] = {
+        "kind": kind,
+        "process": process,
+        "tmp_dir": tmp_dir,
+        "result_file": result_file,
+        "output_tail": "",
+        "line_buffer": "",
+        "pgid": None,
+        "grouped": grouped,
+        "watchdog_seconds": watchdog_seconds,
+        "started_monotonic": time.monotonic(),
+        "timed_out": False,
+        "completed": False,
+    }
+    cb_started = lambda: _on_worker_started(owner, job)
+    cb_output = lambda: _drain_worker_output(owner, job)
+    cb_finished = lambda code, _exit_status=0: _finalize_worker(owner, job, exit_code=int(code))
+    cb_error = lambda proc_err: _on_worker_error(owner, job, proc_err)
+    job["callbacks"] = (cb_started, cb_output, cb_finished, cb_error)
+
+    owner._codeUpdateJob = job
+    process.connect("started()", cb_started)
+    process.connect("readyReadStandardOutput()", cb_output)
+    process.connect("finished(int,QProcess::ExitStatus)", cb_finished)
+    process.connect("errorOccurred(QProcess::ProcessError)", cb_error)
+
+    _ensure_timer(owner).start()
+    process.start(launch_program, launch_args)
 
 
 def _start_check_worker(owner: Any) -> None:
@@ -324,23 +594,28 @@ def _start_check_worker(owner: Any) -> None:
     if state.get("busy"):
         return
     state["busy"] = True
-    state["done"] = False
-    state["kind"] = "check"
     state["phase"] = "checking"
-    state["result"] = None
-    state["error"] = None
+    state["elapsed_sec"] = 0
     _sync_idle_texts(owner)
-    _ensure_timer(owner).start()
+    _log(owner, "[Updater] Checking for code updates...")
 
-    def _run() -> None:
-        try:
-            state["result"] = check_for_code_update()
-        except Exception as exc:
-            state["error"] = str(exc)
-        finally:
-            state["done"] = True
-
-    threading.Thread(target=_run, daemon=True, name="SlicerDSpaceUpdateCheck").start()
+    tmp_dir = Path(tempfile.mkdtemp(prefix="slicerdspace_upd_chk_"))
+    result_file = tmp_dir / "result.json"
+    module_root = Path(__file__).resolve().parents[1]
+    _start_worker_process(
+        owner,
+        kind="check",
+        worker_args=[
+            "check",
+            "--module-root",
+            str(module_root),
+            "--result-file",
+            str(result_file),
+        ],
+        watchdog_seconds=_CHECK_WATCHDOG_SECONDS,
+        tmp_dir=tmp_dir,
+        result_file=result_file,
+    )
 
 
 def _start_apply_worker(owner: Any, remote_manifest: dict[str, Any]) -> None:
@@ -348,31 +623,33 @@ def _start_apply_worker(owner: Any, remote_manifest: dict[str, Any]) -> None:
     if state.get("busy"):
         return
     state["busy"] = True
-    state["done"] = False
-    state["kind"] = "apply"
     state["phase"] = "downloading"
     state["percent"] = 0
-    state["result"] = None
-    state["error"] = None
     _sync_idle_texts(owner)
-    _ensure_timer(owner).start()
+    version = str(remote_manifest.get("version") or EXTENSION_VERSION)
+    _log(owner, f"[Updater] Downloading and applying code update v{version}...")
 
-    def _on_progress(downloaded: int, total: int) -> None:
-        if total > 0:
-            state["percent"] = max(0, min(100, int(downloaded * 100 / total)))
-
-    def _run() -> None:
-        try:
-            state["result"] = download_and_apply_code_overlay(
-                manifest=remote_manifest,
-                progress_callback=_on_progress,
-            )
-        except Exception as exc:
-            state["error"] = str(exc)
-        finally:
-            state["done"] = True
-
-    threading.Thread(target=_run, daemon=True, name="SlicerDSpaceUpdateApply").start()
+    tmp_dir = Path(tempfile.mkdtemp(prefix="slicerdspace_upd_app_"))
+    manifest_file = tmp_dir / "manifest.json"
+    result_file = tmp_dir / "result.json"
+    manifest_file.write_text(json.dumps(remote_manifest, ensure_ascii=False), encoding="utf-8")
+    module_root = Path(__file__).resolve().parents[1]
+    _start_worker_process(
+        owner,
+        kind="apply",
+        worker_args=[
+            "apply",
+            "--module-root",
+            str(module_root),
+            "--manifest-file",
+            str(manifest_file),
+            "--result-file",
+            str(result_file),
+        ],
+        watchdog_seconds=_APPLY_WATCHDOG_SECONDS,
+        tmp_dir=tmp_dir,
+        result_file=result_file,
+    )
 
 
 def _on_check_updates_clicked(owner: Any) -> None:
@@ -438,16 +715,14 @@ def install_update_panel(owner: Any) -> Any:
     owner._codeUpdateBar = bar
     owner._codeUpdateStatusLabel = status_label
     owner._checkUpdatesButton = check_btn
+    owner._codeUpdateJob = None
     owner._codeUpdateState = {
         "phase": "idle",
         "version": EXTENSION_VERSION,
         "size_bytes": 0,
         "percent": 0,
+        "elapsed_sec": 0,
         "busy": False,
-        "done": False,
-        "kind": None,
-        "result": None,
-        "error": None,
     }
     _sync_idle_texts(owner)
     return bar
@@ -462,6 +737,17 @@ def refresh_update_panel_language(owner: Any, language: str | None = None) -> No
 
 
 def cleanup_update_panel(owner: Any) -> None:
-    """Stop any active update polling timer when closing the module."""
+    """Stop active update timer/worker process when closing the module."""
 
     _stop_timer(owner)
+    job = getattr(owner, "_codeUpdateJob", None)
+    if isinstance(job, dict) and not job.get("completed"):
+        job["completed"] = True
+        _kill_job_process(job, force=True)
+        tmp_dir = job.get("tmp_dir")
+        if tmp_dir is not None:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+        owner._codeUpdateJob = None
+    state = getattr(owner, "_codeUpdateState", None)
+    if isinstance(state, dict):
+        state["busy"] = False

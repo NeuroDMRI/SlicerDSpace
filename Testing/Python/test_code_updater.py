@@ -8,7 +8,10 @@ import http.server
 import importlib.util
 import io
 import json
+import os
 import shutil
+import subprocess
+import sys
 import tarfile
 import tempfile
 import threading
@@ -250,6 +253,151 @@ class CodeUpdaterTests(unittest.TestCase):
             self.assertEqual(res2["status"], "applied")
             self.assertEqual(compute_code_tree_sha256(old2)[0], new_sha)
 
+    def test_cli_worker_check_apply_and_error_json(self) -> None:
+        from shared.code_updater import RUNTIME_ABI_VERSION, compute_code_tree_sha256
+
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            old_root = _copy_minimal_install(tmp / "installed")
+            new_tree = _copy_minimal_install(
+                tmp / "new_src",
+                extra_files={
+                    "SlicerDSpace.py": b"# entry v2\nVALUE = 2\n",
+                    "shared/helper.py": b"def version():\n    return 'v2'\n",
+                },
+            )
+            new_sha, new_files = compute_code_tree_sha256(new_tree)
+            overlay_bytes_map = {rel: (new_tree / rel).read_bytes() for rel in new_files}
+            overlay_tgz = tmp / "srv" / "SlicerDSpace-v0.1.2-CodeOverlay.tar.gz"
+            size_bytes, tar_sha = _build_tar_gz(overlay_tgz, overlay_bytes_map)
+
+            class Handler(http.server.BaseHTTPRequestHandler):
+                def log_message(self, format: str, *args: object) -> None:  # noqa: A002
+                    pass
+
+                def do_GET(self) -> None:  # noqa: N802
+                    if self.path.endswith("/update_manifest.json"):
+                        body = json.dumps(manifest).encode("utf-8")
+                    elif self.path.endswith(f"/{overlay_tgz.name}"):
+                        body = overlay_tgz.read_bytes()
+                    else:
+                        self.send_response(404)
+                        self.end_headers()
+                        return
+                    self.send_response(200)
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+
+            srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+            port = srv.server_address[1]
+            manifest = {
+                "schema_version": 1,
+                "version": "0.1.2",
+                "release_tag": "v0.1.2",
+                "runtime_abi_version": RUNTIME_ABI_VERSION,
+                "git_commit": "abcdef1234567",
+                "summary": "CLI worker test",
+                "overlay": {
+                    "filename": overlay_tgz.name,
+                    "url": f"http://127.0.0.1:{port}/{overlay_tgz.name}",
+                    "sha256": tar_sha,
+                    "size_bytes": size_bytes,
+                },
+                "code_sha256": new_sha,
+            }
+            worker_script = str(REPO_ROOT / "shared" / "code_updater.py")
+            chk_res = tmp / "chk_result.json"
+            app_res = tmp / "app_result.json"
+            err_res = tmp / "err_result.json"
+            man_file = tmp / "manifest.json"
+            clean_env = dict(os.environ)
+            clean_env.pop("SLICERDSPACE_OFFLINE_DIR", None)
+
+            t = threading.Thread(target=srv.serve_forever, daemon=True)
+            t.start()
+            try:
+                chk_proc = subprocess.run(
+                    [
+                        sys.executable,
+                        "-u",
+                        worker_script,
+                        "check",
+                        "--module-root",
+                        str(old_root),
+                        "--result-file",
+                        str(chk_res),
+                        "--manifest-url",
+                        f"http://127.0.0.1:{port}/update_manifest.json",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    env=clean_env,
+                )
+                self.assertEqual(chk_proc.returncode, 0, chk_proc.stdout + chk_proc.stderr)
+                self.assertIn("SLICERDSPACE_UPDATE_STAGE:checking", chk_proc.stdout)
+                chk_payload = json.loads(chk_res.read_text(encoding="utf-8"))
+                self.assertTrue(chk_payload["ok"])
+                self.assertEqual(chk_payload["result"]["status"], "update_available")
+
+                man_file.write_text(
+                    json.dumps(chk_payload["result"]["remote"]),
+                    encoding="utf-8",
+                )
+                app_proc = subprocess.run(
+                    [
+                        sys.executable,
+                        "-u",
+                        worker_script,
+                        "apply",
+                        "--module-root",
+                        str(old_root),
+                        "--manifest-file",
+                        str(man_file),
+                        "--result-file",
+                        str(app_res),
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    env=clean_env,
+                )
+                self.assertEqual(app_proc.returncode, 0, app_proc.stdout + app_proc.stderr)
+                self.assertIn("SLICERDSPACE_UPDATE_PROGRESS:", app_proc.stdout)
+                app_payload = json.loads(app_res.read_text(encoding="utf-8"))
+                self.assertTrue(app_payload["ok"])
+                self.assertEqual(app_payload["result"]["status"], "applied")
+                self.assertEqual(compute_code_tree_sha256(old_root)[0], new_sha)
+            finally:
+                srv.shutdown()
+                srv.server_close()
+
+            err_proc = subprocess.run(
+                [
+                    sys.executable,
+                    "-u",
+                    worker_script,
+                    "check",
+                    "--module-root",
+                    str(old_root),
+                    "--result-file",
+                    str(err_res),
+                    "--manifest-url",
+                    f"http://127.0.0.1:{port}/update_manifest.json",
+                    "--timeout",
+                    "2",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                env=clean_env,
+            )
+            self.assertNotEqual(err_proc.returncode, 0)
+            err_payload = json.loads(err_res.read_text(encoding="utf-8"))
+            self.assertFalse(err_payload["ok"])
+            self.assertTrue(err_payload["error"])
+
     def test_security_rejections_and_rollback(self) -> None:
         from shared.code_updater import RUNTIME_ABI_VERSION, compute_code_tree_sha256, download_and_apply_code_overlay
 
@@ -378,6 +526,9 @@ class CodeUpdaterTests(unittest.TestCase):
 
         update_panel_src = (REPO_ROOT / "shared/ui_update_panel.py").read_text(encoding="utf-8")
         self.assertIn("layout.indexOf(log_box)", update_panel_src)
+        self.assertIn("QProcess", update_panel_src)
+        self.assertNotIn("import threading", update_panel_src)
+        self.assertNotIn("threading.Thread", update_panel_src)
 
 
 if __name__ == "__main__":

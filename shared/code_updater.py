@@ -2,16 +2,22 @@
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
 import shutil
 import stat
+import sys
 import tarfile
 import tempfile
 import urllib.request
 from typing import Any, Callable
+
+_PACKAGE_ROOT = Path(__file__).resolve().parents[1]
+if str(_PACKAGE_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PACKAGE_ROOT))
 
 from scripts.extension_runtime.runtime_resources import runtime_files
 from shared.network_config import (
@@ -22,7 +28,7 @@ from shared.network_config import (
     open_url,
 )
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = _PACKAGE_ROOT
 
 EXTENSION_VERSION = "0.1.1"
 RUNTIME_ABI_VERSION = 1
@@ -161,7 +167,7 @@ def _validate_manifest_payload(payload: Any) -> dict[str, Any]:
 def fetch_update_manifest(
     *,
     manifest_url: str | None = None,
-    timeout: int = 20,
+    timeout: int = 12,
     offline_dir: Path | str | None = None,
     mirror_prefix: str | None = None,
     proxy_url: str | None = None,
@@ -204,7 +210,7 @@ def check_for_code_update(
     module_root: Path | None = None,
     manifest_url: str | None = None,
     manifest: dict[str, Any] | None = None,
-    timeout: int = 20,
+    timeout: int = 12,
     offline_dir: Path | str | None = None,
     mirror_prefix: str | None = None,
     proxy_url: str | None = None,
@@ -549,3 +555,76 @@ def download_and_apply_code_overlay(
         }
     finally:
         shutil.rmtree(tmp_root, ignore_errors=True)
+
+
+def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(path.name + ".tmp")
+    tmp_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp_path, path)
+
+
+def main(argv: list[str] | None = None) -> int:
+    """CLI worker entrypoint so Slicer UI runs update checks/applies out-of-process."""
+
+    parser = argparse.ArgumentParser(description="SlicerDSpace incremental code updater worker")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    check_p = sub.add_parser("check", help="Check whether an incremental code update is available")
+    check_p.add_argument("--module-root", required=True)
+    check_p.add_argument("--result-file", required=True)
+    check_p.add_argument("--manifest-url", default=None)
+    check_p.add_argument("--timeout", type=int, default=12)
+
+    apply_p = sub.add_parser("apply", help="Download and apply an incremental code overlay")
+    apply_p.add_argument("--module-root", required=True)
+    apply_p.add_argument("--manifest-file", required=True)
+    apply_p.add_argument("--result-file", required=True)
+    apply_p.add_argument("--timeout", type=int, default=60)
+
+    args = parser.parse_args(argv)
+    result_file = Path(args.result_file).expanduser()
+    module_root = Path(args.module_root).expanduser()
+
+    try:
+        if args.command == "check":
+            print("SLICERDSPACE_UPDATE_STAGE:checking", flush=True)
+            res = check_for_code_update(
+                module_root=module_root,
+                manifest_url=args.manifest_url,
+                timeout=int(args.timeout),
+            )
+        else:
+            manifest_payload = json.loads(
+                Path(args.manifest_file).expanduser().read_text(encoding="utf-8")
+            )
+            last_pct = [-1]
+
+            def _on_progress(downloaded: int, total: int) -> None:
+                if total <= 0:
+                    return
+                pct = max(0, min(100, int(downloaded * 100 / total)))
+                if pct != last_pct[0]:
+                    last_pct[0] = pct
+                    print(f"SLICERDSPACE_UPDATE_PROGRESS:{pct}", flush=True)
+
+            print("SLICERDSPACE_UPDATE_STAGE:downloading", flush=True)
+            res = download_and_apply_code_overlay(
+                module_root=module_root,
+                manifest=manifest_payload,
+                timeout=int(args.timeout),
+                progress_callback=_on_progress,
+            )
+        _write_json_atomic(result_file, {"ok": True, "result": res})
+        return 0
+    except Exception as exc:
+        try:
+            _write_json_atomic(result_file, {"ok": False, "error": str(exc)})
+        except Exception:
+            pass
+        print(f"SLICERDSPACE_UPDATE_ERROR:{exc}", flush=True)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

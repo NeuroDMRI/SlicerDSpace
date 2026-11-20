@@ -159,29 +159,25 @@
     }
   };
 
-  var SLICER_PRESET_ORDER = ['5.10.0', 'universal'];
-  var SLICER_PRESETS = {
-    '5.10.0': {
-      version: '5.10.0',
-      minor: '5.10',
-      revision: '34045',
-      labelEn: '3D Slicer 5.10.0',
-      labelZh: '3D Slicer 5.10.0',
-      subEn: 'Recommended',
-      subZh: '推荐',
-      zipSuffix: ''
-    },
-    'universal': {
-      version: 'universal',
-      minor: '',
-      revision: '',
-      labelEn: 'Other Versions (5.8+)',
-      labelZh: '其他版本 (5.8+ 通用)',
-      subEn: 'Auto-adapt script',
-      subZh: '通用自动适配脚本',
-      zipSuffix: ''
-    }
-  };
+  var MACOS_SLICER_TARGETS = [
+    { version: '5.10.0', minor: '5.10', revision: '34045' },
+    { version: '5.12.4', minor: '5.12', revision: '34645' },
+    { version: '5.12.3', minor: '5.12', revision: '34627' },
+    { version: '5.12.2', minor: '5.12', revision: '34625' },
+    { version: '5.12.1', minor: '5.12', revision: '34624' },
+    { version: '5.12.0', minor: '5.12', revision: '34621' },
+    { version: '5.8.1', minor: '5.8', revision: '33241' },
+    { version: '5.8.0', minor: '5.8', revision: '33216' }
+  ];
+  var GENERIC_SLICER_MINORS = [
+    { minor: '5.10', revision: '34045' },
+    { minor: '5.12', revision: '34645' },
+    { minor: '5.8', revision: '33241' },
+    { minor: '5.9', revision: '' },
+    { minor: '5.11', revision: '' },
+    { minor: '5.13', revision: '' },
+    { minor: '5.14', revision: '' }
+  ];
 
   // Shared Keep-Alive single-redirect HTTP Range downloader + SHA-256 verification reused by GUI and CLI installers.
   var SHARED_DOWNLOAD_PY = [
@@ -1310,7 +1306,7 @@
     '                    _dequarantine(ext_arc)',
     '                    em = slicer.app.extensionsManagerModel(); em.setInteractive(False)',
     '                    if em.isExtensionInstalled("SlicerDSpace"):',
-    '                        em.uninstallExtension("SlicerDSpace"); em.updateModel()',
+    '                        em.scheduleExtensionForUninstall("SlicerDSpace"); em.uninstallScheduledExtensions(); em.updateModel()',
     '                    rev = str(em.slicerRevision); sos = str(em.slicerOs); sarch = str(em.slicerArch)',
     '                    maj = int(getattr(slicer.app, "majorVersion", 5)); minv = int(getattr(slicer.app, "minorVersion", 10))',
     '                    target_subdir = f"Slicer-{maj}.{minv}"',
@@ -1472,7 +1468,8 @@
     '        "        tsub = f\'Slicer-{maj}.{minv}\'",',
     '        "        if maj < 5 or (maj == 5 and minv < 8): raise RuntimeError(f\'Requires 3D Slicer 5.8+ (found {maj}.{minv})\')",',
     '        "        needs_remap = (rev != \'34045\' or tsub != \'Slicer-5.10\')",',
-    '        "        if em.isExtensionInstalled(\'SlicerDSpace\'): em.uninstallExtension(\'SlicerDSpace\'); em.updateModel()",',
+    '        "        if em.isExtensionInstalled(\'SlicerDSpace\'):",',
+    '        "            em.scheduleExtensionForUninstall(\'SlicerDSpace\'); em.uninstallScheduledExtensions(); em.updateModel()",',
     '        "        target_arc = a; stub = None",',
     '        "        if needs_remap:",',
     '        "            stub = r.with_name(\'SlicerDSpace-stub.zip\')",',
@@ -1756,41 +1753,51 @@
   function buildSetupExtensionFiles(state) {
     var osKey = state.os || 'macos';
     var def = OS_DEFAULTS[osKey] || OS_DEFAULTS.macos;
-    var preset = SLICER_PRESETS[state.slicerVersion] || SLICER_PRESETS['5.10.0'];
-    if (!preset.revision) { preset = SLICER_PRESETS['5.10.0']; }
-    var rev = preset.revision;
-    var sub = 'Slicer-' + preset.minor;
     var cfg = buildConfig(state);
-    var prefix = osKey === 'macos'
-      ? ('SlicerDSpaceSetup/Slicer.app/Contents/Extensions-' + rev + '/SlicerDSpaceSetup')
-      : 'SlicerDSpaceSetup';
-    var s4ext = [
-      'arch amd64',
-      'category Diffusion',
-      "contributors Chengjin Li, Fan Zhang (Fan's Lab, UESTC)",
-      'depends NA',
-      'description SlicerDSpace One-Click Graphical Installer',
-      'enabled 1',
-      'homepage https://neurodmri.github.io/SlicerDSpace/',
-      'os ' + def.s4extOs,
-      'scm git',
-      'scmrevision ' + RELEASE_TAG,
-      'scmurl https://github.com/NeuroDMRI/SlicerDSpace.git',
-      'slicer_revision ' + rev,
-      ''
-    ].join('\n');
+    var makeS4ext = function (rev) {
+      var lines = [
+        'arch amd64',
+        'category Diffusion',
+        "contributors Chengjin Li, Fan Zhang (Fan's Lab, UESTC)",
+        'depends NA',
+        'description SlicerDSpace One-Click Graphical Installer',
+        'enabled 1',
+        'homepage https://neurodmri.github.io/SlicerDSpace/',
+        'os ' + def.s4extOs,
+        'scm git',
+        'scmrevision ' + RELEASE_TAG,
+        'scmurl https://github.com/NeuroDMRI/SlicerDSpace.git'
+      ];
+      if (rev) {
+        lines.push('slicer_revision ' + rev);
+      }
+      lines.push('');
+      return lines.join('\n');
+    };
     var setupPy = [
-      '# SlicerDSpace One-Click Graphical Setup Extension for 3D Slicer ' + preset.version,
+      '# SlicerDSpace One-Click Graphical Setup Extension for 3D Slicer 5.8+',
       'import json as _json',
       'CONFIG = _json.loads(' + asciiJsonLiteral(cfg) + ')',
       SETUP_MODULE_PY,
       ''
     ].join('\n');
-    return [
-      { name: prefix + '/share/' + sub + '/SlicerDSpaceSetup.s4ext', data: s4ext },
-      { name: prefix + '/SlicerDSpaceSetup.s4ext', data: s4ext },
-      { name: prefix + '/lib/' + sub + '/qt-scripted-modules/SlicerDSpaceSetup.py', data: setupPy }
-    ];
+    var entries = [];
+    if (osKey === 'macos') {
+      MACOS_SLICER_TARGETS.forEach(function (tgt) {
+        var prefix = 'SlicerDSpaceSetup/Slicer.app/Contents/Extensions-' + tgt.revision + '/SlicerDSpaceSetup';
+        var s4ext = makeS4ext(tgt.revision);
+        entries.push({ name: prefix + '/share/Slicer-' + tgt.minor + '/SlicerDSpaceSetup.s4ext', data: s4ext });
+        entries.push({ name: prefix + '/SlicerDSpaceSetup.s4ext', data: s4ext });
+        entries.push({ name: prefix + '/lib/Slicer-' + tgt.minor + '/qt-scripted-modules/SlicerDSpaceSetup.py', data: setupPy });
+      });
+    } else {
+      entries.push({ name: 'SlicerDSpaceSetup/SlicerDSpaceSetup.s4ext', data: makeS4ext('34045') });
+      GENERIC_SLICER_MINORS.forEach(function (tgt) {
+        entries.push({ name: 'SlicerDSpaceSetup/share/Slicer-' + tgt.minor + '/SlicerDSpaceSetup.s4ext', data: makeS4ext(tgt.revision) });
+        entries.push({ name: 'SlicerDSpaceSetup/lib/Slicer-' + tgt.minor + '/qt-scripted-modules/SlicerDSpaceSetup.py', data: setupPy });
+      });
+    }
+    return entries;
   }
 
   async function buildSetupZip(state) {
@@ -1931,7 +1938,6 @@
 
     var state = {
       os: detectOS(),
-      slicerVersion: '5.10.0',
       slicerPath: '',
       modelAssetsDir: '',
       wmaEnabled: false,
@@ -1957,7 +1963,7 @@
         html.push('<div class="ic-top">');
         html.push('<div class="ic-top-copy">');
         html.push('<h3 class="ic-heading">' + t('One-Click Graphical Setup', '一键图形化安装器') + '</h3>');
-        html.push('<p class="ic-sub">' + t('Select your operating system and 3D Slicer version to download the installer.', '选择操作系统和 3D Slicer 版本，下载一键安装引导包。') + '</p>');
+        html.push('<p class="ic-sub">' + t('Select your operating system and download the universal setup archive (recommended: 3D Slicer 5.10.0; compatible with 5.8–5.12.4).', '选择操作系统并下载通用一键安装引导包（推荐 3D Slicer 5.10.0，同时兼容 5.8–5.12.4）。') + '</p>');
         html.push('</div></div>');
       }
 
@@ -1972,28 +1978,10 @@
         html.push('<button type="button" class="ic-seg-btn" data-os="' + osKey + '" aria-pressed="' + (state.os === osKey ? 'true' : 'false') + '"><span>' + OS_DEFAULTS[osKey].label + '</span><span class="ic-seg-arch">' + OS_ARCH[osKey] + '</span></button>');
       });
       html.push('</div>');
-      var dlLabel = state.slicerVersion === 'universal'
-        ? t('Download Universal Installer (.' + (OS_DEFAULTS[state.os].scriptName.split('.').pop()) + ')', '下载通用自动适配脚本')
-        : t('Download Slicer Setup', '下载 Slicer 一键安装包');
       html.push('<div class="ic-actions">');
-      html.push('<button type="button" class="ic-btn-primary" id="ic-download-btn">' + dlLabel + '</button>');
+      html.push('<button type="button" class="ic-btn-primary" id="ic-download-btn">' + t('Download Slicer Setup', '下载 Slicer 一键安装包') + '</button>');
       html.push('</div>');
       html.push('</div>');
-      html.push('<div class="ic-ver-row">');
-      html.push('<span class="ic-ver-label">' + t('3D Slicer Version', '3D Slicer 版本') + '</span>');
-      html.push('<div class="ic-ver-seg" role="group" aria-label="' + escapeAttr(t('3D Slicer Version', '3D Slicer 版本')) + '">');
-      SLICER_PRESET_ORDER.forEach(function (vKey) {
-        var pr = SLICER_PRESETS[vKey];
-        html.push('<button type="button" class="ic-seg-btn ic-ver-btn" data-slicer-ver="' + vKey + '" aria-pressed="' + (state.slicerVersion === vKey ? 'true' : 'false') + '"><span>' + t(pr.labelEn, pr.labelZh) + '</span><span class="ic-ver-sub">' + t(pr.subEn, pr.subZh) + '</span></button>');
-      });
-      html.push('</div>');
-      html.push('</div>');
-      if (state.slicerVersion === 'universal') {
-        var uniNote = state.os === 'windows'
-          ? t('Auto-detects installed 3D Slicer (5.8+) and adapts the extension layout. Double-click the downloaded .bat file.', '自动识别本机 3D Slicer (5.8+ 通用) 并自动重映射扩展目录。下载后直接双击 .bat 运行。')
-          : t('Auto-detects installed 3D Slicer (5.8+) and adapts the extension layout. Run in Terminal: bash ' + OS_DEFAULTS[state.os].scriptName, '自动识别本机 3D Slicer (5.8+ 通用) 并自动重映射扩展目录。在终端运行：bash ' + OS_DEFAULTS[state.os].scriptName);
-        html.push('<p class="ic-ver-note">' + uniNote + '</p>');
-      }
       html.push('</div>');
 
       root.innerHTML = html.join('');
@@ -2004,19 +1992,11 @@
       Array.prototype.forEach.call(root.querySelectorAll('[data-os]'), function (btn) {
         btn.addEventListener('click', function () { state.os = btn.getAttribute('data-os'); render(); });
       });
-      Array.prototype.forEach.call(root.querySelectorAll('[data-slicer-ver]'), function (btn) {
-        btn.addEventListener('click', function () { state.slicerVersion = btn.getAttribute('data-slicer-ver'); render(); });
-      });
 
       var dlBtn = document.getElementById('ic-download-btn');
       if (dlBtn) {
         dlBtn.addEventListener('click', function () {
-          if (state.slicerVersion === 'universal') {
-            triggerBlobDownload(encodeUtf8(buildScript(state)), 'text/plain;charset=utf-8', OS_DEFAULTS[state.os].scriptName);
-            return;
-          }
-          var preset = SLICER_PRESETS[state.slicerVersion] || SLICER_PRESETS['5.10.0'];
-          var filename = OS_DEFAULTS[state.os].setupZipName.replace(/\.zip$/i, (preset.zipSuffix || '') + '.zip');
+          var filename = OS_DEFAULTS[state.os].setupZipName;
           var orig = dlBtn.textContent;
           dlBtn.disabled = true;
           dlBtn.textContent = zh ? '正在打包...' : 'Packaging...';
@@ -2040,8 +2020,8 @@
     module.exports = {
       ARTIFACTS: ARTIFACTS,
       OS_DEFAULTS: OS_DEFAULTS,
-      SLICER_PRESET_ORDER: SLICER_PRESET_ORDER,
-      SLICER_PRESETS: SLICER_PRESETS,
+      MACOS_SLICER_TARGETS: MACOS_SLICER_TARGETS,
+      GENERIC_SLICER_MINORS: GENERIC_SLICER_MINORS,
       buildSetupExtensionFiles: buildSetupExtensionFiles,
       buildSetupZip: buildSetupZip,
       buildScript: buildScript

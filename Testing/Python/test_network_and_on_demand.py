@@ -1359,52 +1359,68 @@ class FastInstallerOptimizationTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
 
-    def test_recommended_510_setup_and_universal_auto_adapt_scripts(self) -> None:
+    def test_unified_multi_version_setup_zips_cover_all_slicer_releases(self) -> None:
         node_bin = shutil.which("node")
         if node_bin is None:
             self.skipTest("node is not installed in PATH")
 
+        import zipfile
         from importlib.util import module_from_spec, spec_from_file_location
 
         js_path = REPO_ROOT / "docs" / "site" / "assets" / "js" / "installer-customizer.js"
-        node_script = (
-            "const ic = require(process.argv[1]);\n"
-            "const f510 = ic.buildSetupExtensionFiles({ os: 'macos', wmaEnabled: true, wmaAtlases: ['wma_org'] });\n"
-            "const scripts = { win: ic.buildScript({ os: 'windows' }), mac: ic.buildScript({ os: 'macos' }), lin: ic.buildScript({ os: 'linux' }) };\n"
-            "process.stdout.write(JSON.stringify({ order: ic.SLICER_PRESET_ORDER, f510, scripts }));\n"
-        )
-        out = subprocess.run([node_bin, "-e", node_script, str(js_path)], capture_output=True, text=True, check=True).stdout
-        payload = json.loads(out)
-        self.assertEqual(payload["order"], ["5.10.0", "universal"])
-        names = {item["name"]: item["data"] for item in payload["f510"]}
-        prefix = "SlicerDSpaceSetup/Slicer.app/Contents/Extensions-34045/SlicerDSpaceSetup"
-        self.assertIn(f"{prefix}/share/Slicer-5.10/SlicerDSpaceSetup.s4ext", names)
-        self.assertIn(f"{prefix}/SlicerDSpaceSetup.s4ext", names)
-        self.assertIn(f"{prefix}/lib/Slicer-5.10/qt-scripted-modules/SlicerDSpaceSetup.py", names)
-        self.assertIn("slicer_revision 34045", names[f"{prefix}/SlicerDSpaceSetup.s4ext"])
-        py_src = names[f"{prefix}/lib/Slicer-5.10/qt-scripted-modules/SlicerDSpaceSetup.py"]
-        self.assertTrue(all(ord(ch) < 128 or ch == "·" for ch in py_src))
-        self.assertIn("/Applications/Slicer*.app", payload["scripts"]["mac"])
-        self.assertIn("Slicer*", payload["scripts"]["win"])
-        self.assertIn("Slicer*", payload["scripts"]["lin"])
-        for scr in payload["scripts"].values():
-            self.assertIn("_extract_base_archive_remapped", scr)
-
-        spec = spec_from_file_location("rra_uni", str(REPO_ROOT / ".github" / "scripts" / "repackage_release_assets.py"))
+        spec = spec_from_file_location("rra_zip", str(REPO_ROOT / ".github" / "scripts" / "repackage_release_assets.py"))
         rra = module_from_spec(spec)
         spec.loader.exec_module(rra)
         art = json.loads((REPO_ROOT / "docs" / "website" / "installer_artifacts.json").read_text(encoding="utf-8"))
+
         with tempfile.TemporaryDirectory() as tmp:
-            uni_meta, uni_paths = rra.build_universal_installer_scripts(Path(tmp), art, published=False)
+            setup_meta, setup_paths = rra.build_setup_zips(Path(tmp), art, published=False)
             self.assertEqual(
-                sorted(p.name for p in uni_paths),
+                sorted(p.name for p in setup_paths),
                 [
-                    "Install-SlicerDSpace-Linux.sh",
-                    "Install-SlicerDSpace-Windows.bat",
-                    "Install-SlicerDSpace-macOS.command",
+                    "SlicerDSpaceSetup-Linux.zip",
+                    "SlicerDSpaceSetup-Windows.zip",
+                    "SlicerDSpaceSetup-macOS.zip",
                 ],
             )
-            self.assertEqual(set(uni_meta.keys()), {"windows", "linux", "macos"})
+            self.assertEqual(set(setup_meta.keys()), {"windows", "linux", "macos"})
+
+            mac_zip = Path(tmp) / "SlicerDSpaceSetup-macOS.zip"
+            with zipfile.ZipFile(mac_zip, "r") as zf:
+                names = set(zf.namelist())
+                for minor, rev in (
+                    ("5.10", "34045"),
+                    ("5.12", "34645"),
+                    ("5.12", "34627"),
+                    ("5.12", "34625"),
+                    ("5.12", "34624"),
+                    ("5.12", "34621"),
+                    ("5.8", "33241"),
+                    ("5.8", "33216"),
+                ):
+                    pfx = f"SlicerDSpaceSetup/Slicer.app/Contents/Extensions-{rev}/SlicerDSpaceSetup"
+                    self.assertIn(f"{pfx}/SlicerDSpaceSetup.s4ext", names)
+                    self.assertIn(f"{pfx}/share/Slicer-{minor}/SlicerDSpaceSetup.s4ext", names)
+                    py_rel = f"{pfx}/lib/Slicer-{minor}/qt-scripted-modules/SlicerDSpaceSetup.py"
+                    self.assertIn(py_rel, names)
+                    py_src = zf.read(py_rel).decode("utf-8")
+                    self.assertTrue(all(ord(ch) < 128 or ch == "·" for ch in py_src))
+
+            for os_zip in ("SlicerDSpaceSetup-Windows.zip", "SlicerDSpaceSetup-Linux.zip"):
+                with zipfile.ZipFile(Path(tmp) / os_zip, "r") as zf:
+                    names = set(zf.namelist())
+                    self.assertIn("SlicerDSpaceSetup/SlicerDSpaceSetup.s4ext", names)
+                    for minor in ("5.8", "5.9", "5.10", "5.11", "5.12", "5.13", "5.14"):
+                        self.assertIn(f"SlicerDSpaceSetup/share/Slicer-{minor}/SlicerDSpaceSetup.s4ext", names)
+                        self.assertIn(f"SlicerDSpaceSetup/lib/Slicer-{minor}/qt-scripted-modules/SlicerDSpaceSetup.py", names)
+
+        node_script = (
+            "const ic = require(process.argv[1]);\n"
+            "process.stdout.write(JSON.stringify({ macTargets: ic.MACOS_SLICER_TARGETS.length, genericMinors: ic.GENERIC_SLICER_MINORS.length }));\n"
+        )
+        counts = json.loads(subprocess.run([node_bin, "-e", node_script, str(js_path)], capture_output=True, text=True, check=True).stdout)
+        self.assertEqual(counts["macTargets"], 8)
+        self.assertEqual(counts["genericMinors"], 7)
 
     def test_setup_module_version_check_and_remapped_tar_extraction(self) -> None:
         node_bin = shutil.which("node")

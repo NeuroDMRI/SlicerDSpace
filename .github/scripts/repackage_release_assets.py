@@ -583,13 +583,46 @@ def _extract_embedded_setup_config(py_src: str) -> dict[str, Any]:
     raise RuntimeError("Could not extract embedded CONFIG JSON literal from SlicerDSpaceSetup.py")
 
 
+MACOS_SLICER_REVISIONS: tuple[tuple[str, str], ...] = (
+    ("5.10", "34045"),
+    ("5.12", "34645"),
+    ("5.12", "34627"),
+    ("5.12", "34625"),
+    ("5.12", "34624"),
+    ("5.12", "34621"),
+    ("5.8", "33241"),
+    ("5.8", "33216"),
+)
+GENERIC_SLICER_MINORS: tuple[str, ...] = ("5.10", "5.12", "5.8", "5.9", "5.11", "5.13", "5.14")
+
+
+def _verify_setup_py(
+    py_src: str,
+    zip_path: Path,
+    os_key: str,
+    bundle_key: str,
+    bundles: dict[str, dict[str, Any]],
+) -> None:
+    if not all(ord(ch) < 128 or ch == "·" for ch in py_src):
+        raise RuntimeError(f"Non-ASCII wording detected in {zip_path}")
+    cfg = _extract_embedded_setup_config(py_src)
+    if cfg.get("auto_start") is not False:
+        raise RuntimeError(f"Expected auto_start=False inside {zip_path}, got {cfg.get('auto_start')!r}")
+    if cfg.get("os") != os_key or cfg.get("selected_packs") != ["wma_org"]:
+        raise RuntimeError(f"Unexpected OS/pack defaults inside {zip_path}")
+    expected_bundle_sha = str((bundles.get(bundle_key) or {}).get("sha256") or "")
+    actual_bundle_sha = str((((cfg.get("artifacts") or {}).get("bundles") or {}).get(bundle_key) or {}).get("sha256") or "")
+    if expected_bundle_sha and actual_bundle_sha != expected_bundle_sha:
+        raise RuntimeError(
+            f"Embedded {bundle_key} sha256 mismatch in {zip_path}: {actual_bundle_sha} != {expected_bundle_sha}"
+        )
+
+
 def _verify_generated_setup_zip(
     zip_path: Path,
     os_key: str,
     bundle_key: str,
     expected_s4ext_os: str,
-    expected_rev: str,
-    expected_subdir: str,
     bundles: dict[str, dict[str, Any]],
 ) -> None:
     if not zip_path.is_file():
@@ -598,35 +631,38 @@ def _verify_generated_setup_zip(
         bad = zf.testzip()
         if bad is not None:
             raise RuntimeError(f"Corrupt entry {bad} inside {zip_path}")
-        prefix = (
-            f"SlicerDSpaceSetup/Slicer.app/Contents/Extensions-{expected_rev}/SlicerDSpaceSetup"
-            if os_key == "macos"
-            else "SlicerDSpaceSetup"
-        )
         names = set(zf.namelist())
-        s4ext_rel = f"{prefix}/share/{expected_subdir}/SlicerDSpaceSetup.s4ext"
-        root_s4ext_rel = f"{prefix}/SlicerDSpaceSetup.s4ext"
-        py_rel = f"{prefix}/lib/{expected_subdir}/qt-scripted-modules/SlicerDSpaceSetup.py"
-        for required in (s4ext_rel, root_s4ext_rel, py_rel):
-            if required not in names:
-                raise RuntimeError(f"Missing {required} inside {zip_path}")
-        s4ext_text = zf.read(s4ext_rel).decode("utf-8")
-        if f"os {expected_s4ext_os}" not in s4ext_text or f"slicer_revision {expected_rev}" not in s4ext_text:
-            raise RuntimeError(f"Unexpected .s4ext metadata inside {zip_path}")
-        py_src = zf.read(py_rel).decode("utf-8")
-        if not all(ord(ch) < 128 or ch == "·" for ch in py_src):
-            raise RuntimeError(f"Non-ASCII wording detected in {zip_path}")
-        cfg = _extract_embedded_setup_config(py_src)
-        if cfg.get("auto_start") is not False:
-            raise RuntimeError(f"Expected auto_start=False inside {zip_path}, got {cfg.get('auto_start')!r}")
-        if cfg.get("os") != os_key or cfg.get("selected_packs") != ["wma_org"]:
-            raise RuntimeError(f"Unexpected OS/pack defaults inside {zip_path}")
-        expected_bundle_sha = str((bundles.get(bundle_key) or {}).get("sha256") or "")
-        actual_bundle_sha = str((((cfg.get("artifacts") or {}).get("bundles") or {}).get(bundle_key) or {}).get("sha256") or "")
-        if expected_bundle_sha and actual_bundle_sha != expected_bundle_sha:
-            raise RuntimeError(
-                f"Embedded {bundle_key} sha256 mismatch in {zip_path}: {actual_bundle_sha} != {expected_bundle_sha}"
-            )
+        verified_py = False
+        if os_key == "macos":
+            for minor, rev in MACOS_SLICER_REVISIONS:
+                prefix = f"SlicerDSpaceSetup/Slicer.app/Contents/Extensions-{rev}/SlicerDSpaceSetup"
+                s4ext_rel = f"{prefix}/share/Slicer-{minor}/SlicerDSpaceSetup.s4ext"
+                root_s4ext_rel = f"{prefix}/SlicerDSpaceSetup.s4ext"
+                py_rel = f"{prefix}/lib/Slicer-{minor}/qt-scripted-modules/SlicerDSpaceSetup.py"
+                for required in (s4ext_rel, root_s4ext_rel, py_rel):
+                    if required not in names:
+                        raise RuntimeError(f"Missing {required} inside {zip_path}")
+                s4ext_text = zf.read(s4ext_rel).decode("utf-8")
+                if f"os {expected_s4ext_os}" not in s4ext_text or f"slicer_revision {rev}" not in s4ext_text:
+                    raise RuntimeError(f"Unexpected .s4ext metadata inside {zip_path} ({s4ext_rel})")
+                if not verified_py:
+                    _verify_setup_py(zf.read(py_rel).decode("utf-8"), zip_path, os_key, bundle_key, bundles)
+                    verified_py = True
+        else:
+            if "SlicerDSpaceSetup/SlicerDSpaceSetup.s4ext" not in names:
+                raise RuntimeError(f"Missing SlicerDSpaceSetup/SlicerDSpaceSetup.s4ext inside {zip_path}")
+            for minor in GENERIC_SLICER_MINORS:
+                s4ext_rel = f"SlicerDSpaceSetup/share/Slicer-{minor}/SlicerDSpaceSetup.s4ext"
+                py_rel = f"SlicerDSpaceSetup/lib/Slicer-{minor}/qt-scripted-modules/SlicerDSpaceSetup.py"
+                for required in (s4ext_rel, py_rel):
+                    if required not in names:
+                        raise RuntimeError(f"Missing {required} inside {zip_path}")
+                s4ext_text = zf.read(s4ext_rel).decode("utf-8")
+                if f"os {expected_s4ext_os}" not in s4ext_text:
+                    raise RuntimeError(f"Unexpected .s4ext metadata inside {zip_path} ({s4ext_rel})")
+                if not verified_py:
+                    _verify_setup_py(zf.read(py_rel).decode("utf-8"), zip_path, os_key, bundle_key, bundles)
+                    verified_py = True
 
 
 def build_setup_zips(
@@ -676,7 +712,7 @@ def build_setup_zips(
 
     for os_key, filename, bundle_key, expected_s4ext_os in SETUP_OS_ORDER:
         zip_path = out_dir / filename
-        _verify_generated_setup_zip(zip_path, os_key, bundle_key, expected_s4ext_os, "34045", "Slicer-5.10", bundles)
+        _verify_generated_setup_zip(zip_path, os_key, bundle_key, expected_s4ext_os, bundles)
         size_bytes = zip_path.stat().st_size
         digest = sha256_file(zip_path)
         setup_meta[os_key] = {
@@ -691,86 +727,6 @@ def build_setup_zips(
         print(f"[setup-zip] Verified {zip_path.name} ({size_bytes:,} bytes, sha256={digest})", flush=True)
 
     return setup_meta, written_paths
-
-
-_UNIVERSAL_SCRIPT_SPECS = (
-    ("windows", "Install-SlicerDSpace-Windows.bat", "windows_x64_base", False),
-    ("linux", "Install-SlicerDSpace-Linux.sh", "linux_x64_base", True),
-    ("macos", "Install-SlicerDSpace-macOS.command", "macos_arm64_base", True),
-)
-
-
-def build_universal_installer_scripts(
-    out_dir: Path,
-    installer_artifacts: dict[str, Any],
-    *,
-    release_tag: str = RELEASE_TAG,
-    published: bool = True,
-) -> tuple[dict[str, dict[str, Any]], list[Path]]:
-    """Build version-agnostic auto-adapt installer scripts for Windows/Linux/macOS."""
-    node_bin = shutil.which("node")
-    if node_bin is None:
-        raise RuntimeError("node is required in PATH to build universal installer scripts")
-
-    out_dir = out_dir.expanduser().resolve()
-    out_dir.mkdir(parents=True, exist_ok=True)
-    js_path = REPO_ROOT / "docs" / "site" / "assets" / "js" / "installer-customizer.js"
-
-    node_script = (
-        "const fs = require('fs');\n"
-        "const path = require('path');\n"
-        "const ic = require(process.argv[1]);\n"
-        "const outDir = process.argv[2];\n"
-        "const scriptNames = { windows: 'Install-SlicerDSpace-Windows.bat', linux: 'Install-SlicerDSpace-Linux.sh', macos: 'Install-SlicerDSpace-macOS.command' };\n"
-        "for (const osKey of ['windows', 'linux', 'macos']) {\n"
-        "  const scr = ic.buildScript({ os: osKey, slicerVersion: 'universal', wmaEnabled: true, wmaAtlases: ['wma_org'], autoStart: false });\n"
-        "  fs.writeFileSync(path.join(outDir, scriptNames[osKey]), scr, 'utf8');\n"
-        "}\n"
-    )
-    proc = subprocess.run([node_bin, "-e", node_script, str(js_path), str(out_dir)], capture_output=True, text=True)
-    if proc.returncode != 0:
-        raise RuntimeError(f"Failed generating universal installer scripts via node:\n{proc.stderr or proc.stdout}")
-
-    base_url = str(
-        installer_artifacts.get("release_base_url")
-        or f"https://github.com/{GITHUB_REPO}/releases/download/{release_tag}"
-    ).rstrip("/")
-    bundles = installer_artifacts.get("bundles") or {}
-    uni_meta: dict[str, dict[str, Any]] = {}
-    written_paths: list[Path] = []
-
-    for os_key, script_name, bundle_key, make_exec in _UNIVERSAL_SCRIPT_SPECS:
-        script_path = out_dir / script_name
-        if not script_path.is_file():
-            raise RuntimeError(f"Missing generated universal installer script: {script_path}")
-        if make_exec:
-            os.chmod(script_path, 0o755)
-        raw_script = script_path.read_text(encoding="utf-8")
-        if "# __SLICERDSPACE_PY_BEGIN__" not in raw_script or "# __SLICERDSPACE_PY_END__" not in raw_script:
-            raise RuntimeError(f"Missing embedded Python payload markers in {script_path}")
-        py_body = raw_script.split("# __SLICERDSPACE_PY_BEGIN__", 1)[1].split("# __SLICERDSPACE_PY_END__", 1)[0]
-        cfg = _extract_embedded_setup_config(py_body)
-        if cfg.get("os") != os_key or cfg.get("selected_packs") != ["wma_org"]:
-            raise RuntimeError(f"Unexpected OS/pack defaults inside {script_path}")
-        expected_bundle_sha = str((bundles.get(bundle_key) or {}).get("sha256") or "")
-        actual_bundle_sha = str((((cfg.get("artifacts") or {}).get("bundles") or {}).get(bundle_key) or {}).get("sha256") or "")
-        if expected_bundle_sha and actual_bundle_sha != expected_bundle_sha:
-            raise RuntimeError(f"Embedded {bundle_key} sha256 mismatch in {script_path}")
-        size_bytes = script_path.stat().st_size
-        digest = sha256_file(script_path)
-        uni_meta[os_key] = {
-            "os": os_key,
-            "slicer_version": "universal",
-            "filename": script_name,
-            "url": f"{base_url}/{script_name}",
-            "size_bytes": size_bytes,
-            "sha256": digest,
-            "published": published,
-        }
-        written_paths.append(script_path)
-        print(f"[universal-script] Verified {script_path.name} ({size_bytes:,} bytes, sha256={digest})", flush=True)
-
-    return uni_meta, written_paths
 
 
 def build_code_overlay(
@@ -877,11 +833,6 @@ def _format_sha256sums(artifacts: dict[str, Any], packs_manifest: dict[str, Any]
         rec = setup_installers.get(os_key)
         if rec and rec.get("sha256") and rec.get("filename"):
             entries.append((str(rec["sha256"]), str(rec["filename"])))
-    uni_installers = artifacts.get("universal_installers") or {}
-    for os_key, _, _, _ in SETUP_OS_ORDER:
-        rec = uni_installers.get(os_key)
-        if rec and rec.get("sha256") and rec.get("filename"):
-            entries.append((str(rec["sha256"]), str(rec["filename"])))
     packs = packs_manifest.get("packs") or {}
     pack_order = [k for k in ("wma_org", "wma_naba", "wma_east_west") if k in packs] + [
         k for k in packs if k not in ("wma_org", "wma_naba", "wma_east_west")
@@ -929,14 +880,8 @@ def cmd_sync_metadata(args: argparse.Namespace) -> int:
         published=not args.dry_run,
     )
     artifacts["setup_installers"] = setup_meta
-    uni_meta, uni_paths = build_universal_installer_scripts(
-        setup_dir,
-        artifacts,
-        release_tag=args.release_tag,
-        published=not args.dry_run,
-    )
     artifacts.pop("cross_version_installers", None)
-    artifacts["universal_installers"] = uni_meta
+    artifacts.pop("universal_installers", None)
 
     overlay_manifest, overlay_paths = build_code_overlay(
         setup_dir / "overlay",
@@ -962,7 +907,7 @@ def cmd_sync_metadata(args: argparse.Namespace) -> int:
 
     if args.upload_sha256sums and not args.dry_run:
         _upload_release_files(
-            [*overlay_paths, *setup_paths, *uni_paths, sha_out],
+            [*overlay_paths, *setup_paths, sha_out],
             release_tag=args.release_tag,
             repo=args.repo,
         )
@@ -1017,14 +962,8 @@ def cmd_sync_setup_zips(args: argparse.Namespace) -> int:
         published=not args.dry_run,
     )
     artifacts["setup_installers"] = setup_meta
-    uni_meta, uni_paths = build_universal_installer_scripts(
-        out_dir,
-        artifacts,
-        release_tag=args.release_tag,
-        published=not args.dry_run,
-    )
     artifacts.pop("cross_version_installers", None)
-    artifacts["universal_installers"] = uni_meta
+    artifacts.pop("universal_installers", None)
     artifacts_path.write_text(json.dumps(artifacts, indent=2) + "\n", encoding="utf-8")
     print(f"[sync-setup-zips] Updated {artifacts_path}", flush=True)
 
@@ -1037,7 +976,7 @@ def cmd_sync_setup_zips(args: argparse.Namespace) -> int:
 
     if not args.dry_run:
         _upload_release_files(
-            [*setup_paths, *uni_paths, sha_out],
+            [*setup_paths, sha_out],
             release_tag=args.release_tag,
             repo=args.repo,
         )

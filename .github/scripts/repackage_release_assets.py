@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import gzip
 import hashlib
 import json
 import os
@@ -17,6 +18,7 @@ import tarfile
 import time
 import urllib.request
 import zipfile
+from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -39,6 +41,7 @@ from scripts.package_modular_assets import (
     write_deterministic_tar_gz,
 )
 from scripts.package_slicer_extension import _should_mark_executable
+from shared.code_updater import EXTENSION_VERSION, RUNTIME_ABI_VERSION, compute_code_tree_sha256
 
 GITHUB_REPO = "NeuroDMRI/SlicerDSpace"
 
@@ -561,6 +564,88 @@ def build_setup_zips(
     return setup_meta, written_paths
 
 
+def build_code_overlay(
+    out_dir: Path,
+    *,
+    release_tag: str = RELEASE_TAG,
+    repo: str = GITHUB_REPO,
+) -> tuple[dict[str, Any], list[Path]]:
+    """Build deterministic SlicerDSpace-<tag>-CodeOverlay.tar.gz and update_manifest.json."""
+
+    out_dir = out_dir.expanduser().resolve()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    code_sha256, rel_files = compute_code_tree_sha256(REPO_ROOT)
+    filename = f"SlicerDSpace-{release_tag}-CodeOverlay.tar.gz"
+    overlay_path = out_dir / filename
+    tmp_path = overlay_path.with_name(overlay_path.name + ".tmp")
+
+    try:
+        with gzip.GzipFile(filename=tmp_path, mode="wb", compresslevel=6, mtime=DETERMINISTIC_MTIME) as gz_fh:
+            with tarfile.open(fileobj=gz_fh, mode="w", format=tarfile.PAX_FORMAT) as tf:
+                for rel in rel_files:
+                    src = REPO_ROOT / rel
+                    info = tf.gettarinfo(src.as_posix(), arcname=rel)
+                    info.mode = 0o755 if _should_mark_executable(src, Path(rel)) else 0o644
+                    info.mtime = DETERMINISTIC_MTIME
+                    info.uid = 0
+                    info.gid = 0
+                    info.uname = "root"
+                    info.gname = "root"
+                    with src.open("rb") as in_fh:
+                        tf.addfile(info, in_fh)
+        os.replace(tmp_path, overlay_path)
+    except Exception:
+        tmp_path.unlink(missing_ok=True)
+        raise
+
+    overlay_size = overlay_path.stat().st_size
+    overlay_sha = sha256_file(overlay_path)
+
+    git_commit = ""
+    summary = ""
+    try:
+        git_commit = subprocess.check_output(
+            ["git", "-C", str(REPO_ROOT), "rev-parse", "HEAD"],
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).strip()
+        summary = subprocess.check_output(
+            ["git", "-C", str(REPO_ROOT), "log", "-1", "--pretty=%s"],
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).strip()
+    except Exception:
+        pass
+
+    base_download = f"https://github.com/{repo}/releases/download/{release_tag}"
+    manifest = {
+        "schema_version": 1,
+        "version": EXTENSION_VERSION,
+        "release_tag": release_tag,
+        "runtime_abi_version": RUNTIME_ABI_VERSION,
+        "git_commit": git_commit,
+        "git_short_commit": git_commit[:7] if git_commit else "",
+        "code_sha256": code_sha256,
+        "file_count": len(rel_files),
+        "published_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "summary": summary,
+        "release_url": f"https://github.com/{repo}/releases/tag/{release_tag}",
+        "overlay": {
+            "filename": filename,
+            "url": f"{base_download}/{filename}",
+            "size_bytes": overlay_size,
+            "sha256": overlay_sha,
+        },
+    }
+    manifest_path = out_dir / "update_manifest.json"
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    print(
+        f"[code-overlay] Built {filename} ({overlay_size:,} bytes, {len(rel_files)} files, tree={code_sha256[:12]})",
+        flush=True,
+    )
+    return manifest, [overlay_path, manifest_path]
+
+
 def _format_sha256sums(artifacts: dict[str, Any], packs_manifest: dict[str, Any]) -> str:
     entries: list[tuple[str, str]] = []
     merged_entries: list[tuple[str, str]] = []
@@ -575,6 +660,9 @@ def _format_sha256sums(artifacts: dict[str, Any], packs_manifest: dict[str, Any]
                 merged_entries.append((str(b["sha256"]), str(b["filename"])))
         elif b.get("sha256"):
             entries.append((str(b["sha256"]), str(b["filename"])))
+    code_overlay = artifacts.get("code_overlay") or {}
+    if code_overlay.get("sha256") and code_overlay.get("filename"):
+        entries.append((str(code_overlay["sha256"]), str(code_overlay["filename"])))
     setup_installers = artifacts.get("setup_installers") or {}
     for os_key, _, _, _ in SETUP_OS_ORDER:
         rec = setup_installers.get(os_key)
@@ -628,6 +716,18 @@ def cmd_sync_metadata(args: argparse.Namespace) -> int:
     )
     artifacts["setup_installers"] = setup_meta
 
+    overlay_manifest, overlay_paths = build_code_overlay(
+        setup_dir / "overlay",
+        release_tag=args.release_tag,
+        repo=args.repo,
+    )
+    artifacts["code_overlay"] = {
+        **overlay_manifest["overlay"],
+        "code_sha256": overlay_manifest["code_sha256"],
+        "runtime_abi_version": overlay_manifest["runtime_abi_version"],
+        "version": overlay_manifest["version"],
+    }
+
     artifacts_path.write_text(json.dumps(artifacts, indent=2) + "\n", encoding="utf-8")
     print(f"[sync-metadata] Updated {artifacts_path}", flush=True)
 
@@ -640,7 +740,41 @@ def cmd_sync_metadata(args: argparse.Namespace) -> int:
 
     if args.upload_sha256sums and not args.dry_run:
         _upload_release_files(
-            [*setup_paths, sha_out],
+            [*overlay_paths, *setup_paths, sha_out],
+            release_tag=args.release_tag,
+            repo=args.repo,
+        )
+    return 0
+
+
+def cmd_sync_code_overlay(args: argparse.Namespace) -> int:
+    artifacts_path = REPO_ROOT / "docs" / "website" / "installer_artifacts.json"
+    artifacts = json.loads(artifacts_path.read_text(encoding="utf-8"))
+    out_dir = args.out_dir.expanduser().resolve()
+    overlay_manifest, overlay_paths = build_code_overlay(
+        out_dir,
+        release_tag=args.release_tag,
+        repo=args.repo,
+    )
+    artifacts["code_overlay"] = {
+        **overlay_manifest["overlay"],
+        "code_sha256": overlay_manifest["code_sha256"],
+        "runtime_abi_version": overlay_manifest["runtime_abi_version"],
+        "version": overlay_manifest["version"],
+    }
+    artifacts_path.write_text(json.dumps(artifacts, indent=2) + "\n", encoding="utf-8")
+    print(f"[sync-code-overlay] Updated {artifacts_path}", flush=True)
+
+    packs_manifest_path = REPO_ROOT / "models" / "release_packs_manifest.json"
+    packs_manifest = json.loads(packs_manifest_path.read_text(encoding="utf-8"))
+    sha_out = (args.sha256sums_out or (out_dir / "SHA256SUMS.txt")).expanduser().resolve()
+    sha_out.parent.mkdir(parents=True, exist_ok=True)
+    sha_out.write_text(_format_sha256sums(artifacts, packs_manifest), encoding="utf-8")
+    print(f"[sync-code-overlay] Wrote {sha_out}", flush=True)
+
+    if not args.dry_run:
+        _upload_release_files(
+            [*overlay_paths, sha_out],
             release_tag=args.release_tag,
             repo=args.repo,
         )
@@ -718,6 +852,16 @@ def main(argv: list[str] | None = None) -> int:
     p_setup.add_argument("--repo", default=GITHUB_REPO)
     p_setup.add_argument("--dry-run", action="store_true")
 
+    p_overlay = sub.add_parser(
+        "sync-code-overlay",
+        help="Build and upload lightweight SlicerDSpace-<tag>-CodeOverlay.tar.gz and update_manifest.json.",
+    )
+    p_overlay.add_argument("--out-dir", required=True, type=Path)
+    p_overlay.add_argument("--sha256sums-out", default=None, type=Path)
+    p_overlay.add_argument("--release-tag", default=RELEASE_TAG)
+    p_overlay.add_argument("--repo", default=GITHUB_REPO)
+    p_overlay.add_argument("--dry-run", action="store_true")
+
     args = parser.parse_args(argv)
     if args.command == "build-atlas":
         return cmd_build_atlas(args)
@@ -725,6 +869,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_sync_metadata(args)
     if args.command == "sync-setup-zips":
         return cmd_sync_setup_zips(args)
+    if args.command == "sync-code-overlay":
+        return cmd_sync_code_overlay(args)
     return cmd_repack_os_base(args)
 
 

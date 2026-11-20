@@ -4,12 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       phase:
-        description: "Phase to execute: 'os-bases' (repack code into all 3 OS base packages + sync website), 'setup-zips' (build & upload 3 universal SlicerDSpaceSetup zips + SHA256SUMS), or 'atlases'"
+        description: "Phase to execute: 'os-bases' (repack code into all 3 OS base packages + overlay + website), 'code-overlay' (fast ~20s incremental code update + manifest), 'setup-zips', or 'atlases'"
         required: true
         type: choice
         default: "os-bases"
         options:
           - "os-bases"
+          - "code-overlay"
           - "setup-zips"
           - "atlases"
       release_tag:
@@ -151,6 +152,39 @@ jobs:
             gh workflow run pages.yml --repo "$GITHUB_REPOSITORY"
           fi
 
+  publish-code-overlay:
+    if: github.event.inputs.phase == 'code-overlay'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          lfs: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build & upload incremental CodeOverlay + update_manifest.json + SHA256SUMS.txt
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git pull --rebase origin main
+          python .github/scripts/repackage_release_assets.py sync-code-overlay \
+            --out-dir "${{ runner.temp }}/code-overlay" \
+            --sha256sums-out "${{ runner.temp }}/SHA256SUMS.txt" \
+            --release-tag "${{ inputs.release_tag }}" \
+            --repo "${GITHUB_REPOSITORY}"
+          if [ -n "$(git status --porcelain docs/website/installer_artifacts.json)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add docs/website/installer_artifacts.json
+            git commit -m "chore(release): publish ${{ inputs.release_tag }} incremental code overlay"
+            git push origin HEAD:main
+          fi
+
   publish-setup-zips:
     if: github.event.inputs.phase == 'setup-zips'
     runs-on: ubuntu-latest
@@ -189,4 +223,37 @@ jobs:
             git commit -m "chore(release): publish ${{ inputs.release_tag }} universal SlicerDSpaceSetup zips"
             git push origin HEAD:main
             gh workflow run pages.yml --repo "$GITHUB_REPOSITORY"
+          fi
+
+  publish-code-overlay:
+    if: github.event.inputs.phase == 'code-overlay'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          lfs: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build & upload incremental CodeOverlay + update_manifest.json + SHA256SUMS.txt
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git pull --rebase origin main
+          python .github/scripts/repackage_release_assets.py sync-code-overlay \
+            --out-dir "${{ runner.temp }}/code-overlay" \
+            --sha256sums-out "${{ runner.temp }}/SHA256SUMS.txt" \
+            --release-tag "${{ inputs.release_tag }}" \
+            --repo "${GITHUB_REPOSITORY}"
+          if [ -n "$(git status --porcelain docs/website/installer_artifacts.json)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add docs/website/installer_artifacts.json
+            git commit -m "chore(release): publish ${{ inputs.release_tag }} incremental code overlay"
+            git push origin HEAD:main
           fi

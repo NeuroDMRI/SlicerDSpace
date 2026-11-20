@@ -2517,6 +2517,12 @@ class SharedWidgetMixin:
             return
         self._cleanedUp = True
         close_input_format_help_popovers(self, destroy=True)
+        try:
+            from shared.ui_update_panel import cleanup_update_panel
+
+            cleanup_update_panel(self)
+        except Exception:
+            pass
         uninstall_theme_change_listener(self)
         self._set_module_help_section_hidden(False, _retry=False)
         try:

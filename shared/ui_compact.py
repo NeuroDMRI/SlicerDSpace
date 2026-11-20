@@ -1118,6 +1118,8 @@ def install_compact_layout(owner: Any) -> None:
         owner._runProgressRowWidget.hide()
     owner._cancelRunButton.hide()
     owner._selectedProductsSummaryLabel.hide()
+    from shared.ui_update_panel import install_update_panel
+    install_update_panel(owner)
     layout.addStretch(1)
     owner._fitHeightQueued = False
 
@@ -1244,5 +1246,7 @@ def apply_compact_language(owner: Any, language: str) -> None:
     refresh_compact_algorithms(owner, language)
     from shared.ui_run_history import refresh_run_progress_styles
     refresh_run_progress_styles(owner)
+    from shared.ui_update_panel import refresh_update_panel_language
+    refresh_update_panel_language(owner, language)
     from shared.ui_advanced_layout import apply_advanced_language
     apply_advanced_language(owner)

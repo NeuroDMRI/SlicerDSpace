@@ -544,6 +544,32 @@ QPushButton#clearLogButton {
   color: #63727D;
   padding: 3px 6px;
 }
+QFrame#codeUpdateBarFrame {
+  background: transparent;
+  border: none;
+  padding: 2px 0 0 0;
+}
+QLabel#codeUpdateStatusLabel {
+  color: #63727D;
+  font-size: 11px;
+}
+QPushButton#checkUpdatesButton {
+  background: #F4F7FA;
+  color: #2B5B78;
+  border: 1px solid #C8D6E2;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 10px;
+}
+QPushButton#checkUpdatesButton:hover {
+  background: #E8F0F6;
+  border-color: #8EB2C9;
+}
+QPushButton#checkUpdatesButton:disabled {
+  color: #8A99A4;
+  background: #F4F6F8;
+}
 QProgressBar {
   background: #E8EDF1;
   border: 1px solid #D8DEE3;
@@ -943,6 +969,32 @@ QPushButton#clearLogButton {
   border: none;
   color: #9BA7B4;
   padding: 3px 6px;
+}
+QFrame#codeUpdateBarFrame {
+  background: transparent;
+  border: none;
+  padding: 2px 0 0 0;
+}
+QLabel#codeUpdateStatusLabel {
+  color: #9BA7B4;
+  font-size: 11px;
+}
+QPushButton#checkUpdatesButton {
+  background: #27313B;
+  color: #8CD2F5;
+  border: 1px solid #3D4E5E;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 10px;
+}
+QPushButton#checkUpdatesButton:hover {
+  background: #303D4A;
+  border-color: #5D89A8;
+}
+QPushButton#checkUpdatesButton:disabled {
+  color: #6E7A85;
+  background: #222830;
 }
 QProgressBar {
   background: #22272E;

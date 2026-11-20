@@ -138,6 +138,65 @@ def overlay_checkout(module_dir):
     return len(files)
 
 
+def strip_scheduled_uninstall(text, extension="SlicerDSpace"):
+    """Remove one extension from the Qt ini key ScheduledForUninstall; return (new text, changed).
+
+    Slicer keeps a list of extensions to delete at the next start in the settings key
+    Extensions/ScheduledForUninstall. Slicer reads it before any script runs, so it cannot be cancelled
+    from a Slicer script that starts afterwards; the ini file has to be edited first."""
+    changed = False
+    lines = []
+    for line in text.splitlines(keepends=True):
+        key, sep, value = line.partition("=")
+        if sep and key.strip().replace("\\", "/").endswith("ScheduledForUninstall"):
+            body = value.strip().strip('"')
+            names = [n.strip() for n in body.split(",") if n.strip()]
+            if extension in names:
+                names = [n for n in names if n != extension]
+                ending = line[len(line.rstrip("\r\n")):]
+                line = "%s=%s%s" % (key, ",".join(names), ending)
+                changed = True
+        lines.append(line)
+    return "".join(lines), changed
+
+
+def settings_files_near(slicer_exe):
+    """Qt ini files that Slicer may use for this install (next to the install, or in the user's profile)."""
+    roots = [parent / "slicer.org" for parent in Path(slicer_exe).resolve().parents[:4]]
+    home = Path.home()
+    roots += [home / ".config" / "slicer.org", home / "Library" / "Preferences", home / "Library" / "Application Support" / "slicer.org"]
+    for variable in ("APPDATA", "LOCALAPPDATA"):
+        if os.environ.get(variable):
+            roots += [Path(os.environ[variable]) / "slicer.org", Path(os.environ[variable]) / "NA-MIC"]
+    found = []
+    for root in roots:
+        if root.is_dir():
+            found += [p for p in root.glob("*.ini") if p not in found]
+    return found
+
+
+def cancel_scheduled_uninstall(slicer_exe):
+    """Product-installer workaround for CI: if the website installer left SlicerDSpace scheduled for
+    uninstall, the next Slicer start deletes the extension it just installed. Edit the ini files so the
+    smoke test sees the installed layout, and print a GitHub warning with the evidence."""
+    cancelled = []
+    for ini in settings_files_near(slicer_exe):
+        text = ini.read_text(encoding="utf-8", errors="replace")
+        if "ScheduledForUninstall" in text:
+            log("settings file %s: %s" % (ini, [l for l in text.splitlines() if "ScheduledForUninstall" in l]))
+        new_text, changed = strip_scheduled_uninstall(text)
+        if changed:
+            ini.write_text(new_text, encoding="utf-8", newline="")
+            cancelled.append(str(ini))
+    if cancelled:
+        print("::warning title=Product installer leaves SlicerDSpace scheduled for uninstall::"
+              "After the website installer finished, %s listed SlicerDSpace under Extensions/ScheduledForUninstall, "
+              "so the next Slicer start deletes the extension. CI cancelled the schedule to keep testing." % ", ".join(cancelled), flush=True)
+    else:
+        log("no ScheduledForUninstall entry for SlicerDSpace after the installer (nothing to cancel)")
+    return cancelled
+
+
 def write_outputs(values):
     for key, value in values.items():
         log("%s=%s" % (key, value))
@@ -164,8 +223,10 @@ def main(argv=None):
     if module_dir is None or not (module_dir / "SlicerDSpace.py").is_file():
         raise SystemExit("Could not find the installed module directory in the installer output (got %r)" % (module_dir,))
     count = overlay_checkout(module_dir)
+    cancelled = cancel_scheduled_uninstall(args.slicer_exe)
     (args.offline_dir / filename).unlink()  # free about 1.5 GB of runner disk
-    write_outputs({"module_dir": module_dir, "ext_root": module_dir.parents[2], "overlay_files": count})
+    write_outputs({"module_dir": module_dir, "ext_root": module_dir.parents[2], "overlay_files": count,
+                   "scheduled_uninstall_cancelled": len(cancelled)})
     return 0
 
 

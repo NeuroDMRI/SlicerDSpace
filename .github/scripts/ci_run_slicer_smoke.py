@@ -76,6 +76,9 @@ def main(argv=None):
     log("Slicer exit code %d; its output follows (full copy: %s)" % (code, slicer_log))
     text = slicer_log.read_text(encoding="utf-8", errors="replace")
     print(text[-20000:], flush=True)
+    if 'uninstalled extension "SlicerDSpace"' in text:
+        log("ERROR: Slicer deleted the SlicerDSpace extension at startup (it was scheduled for uninstall); "
+            "the code under test is gone, so the checks below cannot be trusted")
     smoke_log = work / "ci_smoke.log"
     if smoke_log.is_file():
         log("smoke log:\n" + smoke_log.read_text(encoding="utf-8", errors="replace")[-20000:])

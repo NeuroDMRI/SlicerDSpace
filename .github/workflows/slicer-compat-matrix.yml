@@ -37,7 +37,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04, windows-2022, macos-14]
+        os: [ubuntu-22.04, windows-2022, macos-15]
         slicer: ['5.10.0', '5.12.4']
     steps:
       - uses: actions/checkout@v4
@@ -153,7 +153,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04, windows-2022, macos-14]
+        os: [ubuntu-22.04, windows-2022, macos-15]
         slicer: ['5.10.0', '5.12.4']
     steps:
       - uses: actions/checkout@v4
@@ -225,6 +225,13 @@ jobs:
             ldd "$exe" | grep "not found" || echo "no missing libraries"
           done
 
+      - name: Diagnostics - extension state before the installer
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          SLICER_EXE: ${{ steps.slicer.outputs.slicer_exe }}
+        run: python .github/scripts/ci_debug_state.py --label pre-install --slicer-exe "$SLICER_EXE"
+
       - name: Install SlicerDSpace v0.1.1 with the website installer, then overlay this checkout
         id: dspace
         shell: bash
@@ -244,6 +251,14 @@ jobs:
         run: |
           python .github/scripts/ci_run_slicer_smoke.py --slicer-exe "$SLICER_EXE" --module-dir "$MODULE_DIR" \
             --mode full-install --pipeline required
+
+      - name: Diagnostics - extension state after the smoke
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          SLICER_EXE: ${{ steps.slicer.outputs.slicer_exe }}
+          EXT_ROOT: ${{ steps.dspace.outputs.ext_root }}
+        run: python .github/scripts/ci_debug_state.py --label post-smoke --slicer-exe "$SLICER_EXE" --ext-root "$EXT_ROOT"
 
       - name: Linux - X8 GLIBC scan of bundled-runtimes and bundled-python (fails above GLIBC 2.28)
         if: ${{ runner.os == 'Linux' && !cancelled() }}

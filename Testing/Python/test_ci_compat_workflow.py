@@ -17,7 +17,7 @@ REPO = Path(__file__).resolve().parents[2]
 WORKFLOW = REPO / ".github" / "workflows" / "slicer-compat-matrix.yml"
 SCRIPTS = REPO / ".github" / "scripts"
 SMOKE = REPO / "Testing" / "Python" / "slicer_ci_compat_smoke.py"
-HELPERS = ("ci_install_slicer.py", "ci_install_dspace.py", "ci_run_slicer_smoke.py", "ci_glibc_scan.py")
+HELPERS = ("ci_install_slicer.py", "ci_install_dspace.py", "ci_run_slicer_smoke.py", "ci_glibc_scan.py", "ci_debug_state.py")
 
 try:
     import yaml
@@ -60,10 +60,10 @@ class WorkflowStaticTests(unittest.TestCase):
             if jobs is not None:
                 strategy = jobs[job]["strategy"]
                 self.assertIs(strategy["fail-fast"], False)
-                self.assertEqual(set(strategy["matrix"]["os"]), {"ubuntu-22.04", "windows-2022", "macos-14"})
+                self.assertEqual(set(strategy["matrix"]["os"]), {"ubuntu-22.04", "windows-2022", "macos-15"})
                 self.assertEqual(set(strategy["matrix"]["slicer"]), {"5.10.0", "5.12.4"})
                 self.assertEqual(jobs[job]["timeout-minutes"], 90)
-        self.assertEqual(self.text.count("os: [ubuntu-22.04, windows-2022, macos-14]"), 2)
+        self.assertEqual(self.text.count("os: [ubuntu-22.04, windows-2022, macos-15]"), 2)
         self.assertEqual(self.text.count("slicer: ['5.10.0', '5.12.4']"), 2)
         self.assertEqual(self.text.count("fail-fast: false"), 2)
         self.assertEqual(self.text.count("timeout-minutes: 90"), 2)
@@ -181,6 +181,18 @@ class DspaceInstallTests(unittest.TestCase):
         out = "x\n[SlicerDSpace Installer] SlicerDSpace extension installed at: /a/b/lib/Slicer-5.12/qt-scripted-modules\ny\n"
         self.assertEqual(self.mod.find_installed_module_dir(out), Path("/a/b/lib/Slicer-5.12/qt-scripted-modules"))
         self.assertIsNone(self.mod.find_installed_module_dir("nothing"))
+
+    def test_scheduled_uninstall_of_the_extension_is_cancelled_in_the_ini(self):
+        # Run 44816716788: the smoke start printed 'Successfully uninstalled extension "SlicerDSpace"'.
+        text = "[Extensions]\nScheduledForUninstall=SlicerDSpace, Other\nInstallPath=Extensions-34645\n"
+        new, changed = self.mod.strip_scheduled_uninstall(text)
+        self.assertTrue(changed)
+        self.assertIn("ScheduledForUninstall=Other\n", new)
+        self.assertIn("InstallPath=Extensions-34645", new)
+        new, changed = self.mod.strip_scheduled_uninstall("ScheduledForUninstall=SlicerDSpace\r\n")
+        self.assertEqual((new, changed), ("ScheduledForUninstall=\r\n", True))
+        for untouched in ("ScheduledForUninstall=@Invalid()\n", "ScheduledForUninstall=SlicerDMRI\n", "x=1\n"):
+            self.assertEqual(self.mod.strip_scheduled_uninstall(untouched), (untouched, False))
 
     def test_website_installer_generates_for_all_three_systems(self):
         sys.path.insert(0, str(REPO))
@@ -310,6 +322,30 @@ class SmokeScriptTests(unittest.TestCase):
         for key in ("numpy", "torch", "dipy", "vtk"):
             self.assertIn('"%s"' % key, text)
         self.assertIn("environment_doctor", text)
+
+    def test_blocked_task_is_accepted_only_for_documented_missing_dependencies(self):
+        # Run 44816716788 repo-only: exit 0, no FA, task blocked "preflight missing dependencies: dipy ...".
+        # The CLI documents partial execution as the default (--strict-environment aborts instead).
+        reason = "preflight missing dependencies: dipy (not found), nibabel (not found), nrrd (not found)"
+        self.assertEqual(self.mod.missing_packages_from_reason(reason), ["dipy", "nibabel", "nrrd"])
+        self.assertEqual(self.mod.missing_packages_from_reason("something else"), [])
+        absent = {n: {"present": False} for n in ("dipy", "nibabel", "nrrd")}
+        self.assertTrue(self.mod.judge_blocked_task("blocked", reason, absent)[0])
+        present = dict(absent, dipy={"present": True})
+        self.assertFalse(self.mod.judge_blocked_task("blocked", reason, present)[0])  # block is not explained
+        self.assertFalse(self.mod.judge_blocked_task("blocked", reason, {})[0])  # packages were not probed
+        self.assertFalse(self.mod.judge_blocked_task("blocked", "no GPU", absent)[0])
+        self.assertFalse(self.mod.judge_blocked_task("completed", "", absent)[0])
+
+    def test_task_outcome_is_read_from_the_orchestration_manifest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(self.mod.read_task_outcome(tmp)[0], "")
+            meta = Path(tmp) / "outputs" / "00_run_metadata"
+            meta.mkdir(parents=True)
+            (meta / "Test1_orchestration_manifest.json").write_text(json.dumps(
+                {"status": "completed_with_blocks", "tasks": [{"name": "microstructure.dti", "status": "blocked", "reason": "r"}]}))
+            self.assertEqual(self.mod.read_task_outcome(tmp), ("blocked", "r"))
+            self.assertEqual(self.mod.read_task_outcome(tmp, "other")[0], "")
 
     def test_missing_environment_fails_without_slicer(self):
         report = self.mod.REPORT

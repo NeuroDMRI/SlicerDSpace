@@ -1417,7 +1417,7 @@ def generate_installer_script(
 
             call :resolve_slicer "%SLICER_INPUT%"
             if not defined PYTHON_SLICER (
-              for %%D in ("%LOCALAPPDATA%\\slicer.org\\Slicer 5.10.0" "%LOCALAPPDATA%\\slicer.org\\Slicer 5.12.4" "C:\\Program Files\\Slicer 5.10.0" "C:\\Program Files\\Slicer 5.12.4") do (
+              for %%D in ("%LOCALAPPDATA%\\slicer.org\\Slicer 5.10.0" "C:\\Program Files\\Slicer 5.10.0") do (
                 if not defined PYTHON_SLICER call :resolve_slicer "%%~D"
               )
             )

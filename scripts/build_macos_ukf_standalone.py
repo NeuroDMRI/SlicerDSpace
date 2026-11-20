@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import xml.etree.ElementTree as ET
 
 DEFAULT_REPO_URL = "https://github.com/NeuroDMRI/ukftractography_gpu.git"
 DEFAULT_REPO_REF = "main"
@@ -258,12 +259,26 @@ def verify_binary_dependencies(binary: Path) -> dict[str, object]:
         )
 
     xml_proc = subprocess.run([str(binary), "--xml"], capture_output=True, text=True, timeout=30)
-    if xml_proc.returncode != 0:
+    if xml_proc.returncode not in (0, 1):
         raise RuntimeError(f"{binary} --xml failed ({xml_proc.returncode}): {xml_proc.stderr}")
-    if "<executable>" not in xml_proc.stdout or "<name>dwiFile</name>" not in xml_proc.stdout:
-        raise RuntimeError(f"Unexpected --xml output from {binary}: {xml_proc.stdout[:400]}")
+    stdout = xml_proc.stdout or ""
+    start = stdout.find("<?xml")
+    if start < 0:
+        start = stdout.find("<executable")
+    end = stdout.find("</executable>", max(0, start))
+    if start < 0 or end < 0:
+        raise RuntimeError(f"Incomplete --xml output from {binary} (rc={xml_proc.returncode}): {stdout[:400]} | {xml_proc.stderr[:400]}")
+    xml_text = stdout[start : end + len("</executable>")]
+    root = ET.fromstring(xml_text)
+    if root.tag != "executable" or "dwiFile" not in {n.text for n in root.findall("./parameters/*/name") if n.text}:
+        raise RuntimeError(f"Unexpected --xml schema from {binary}: {xml_text[:400]}")
 
-    return {"file": file_out, "deps": deps}
+    return {
+        "file": file_out,
+        "deps": deps,
+        "xml_returncode": xml_proc.returncode,
+        "xml_bytes": len(xml_text),
+    }
 
 
 def package_standalone_tarball(

@@ -693,24 +693,24 @@ def build_setup_zips(
     return setup_meta, written_paths
 
 
-_CROSS_VERSION_SCRIPT_SPECS = (
+_UNIVERSAL_SCRIPT_SPECS = (
     ("windows", "Install-SlicerDSpace-Windows.bat", "windows_x64_base", False),
     ("linux", "Install-SlicerDSpace-Linux.sh", "linux_x64_base", True),
     ("macos", "Install-SlicerDSpace-macOS.command", "macos_arm64_base", True),
 )
 
 
-def build_cross_version_setup_assets(
+def build_universal_installer_scripts(
     out_dir: Path,
     installer_artifacts: dict[str, Any],
     *,
     release_tag: str = RELEASE_TAG,
     published: bool = True,
 ) -> tuple[dict[str, dict[str, Any]], list[Path]]:
-    """Build Slicer 5.12.4 setup zips and universal auto-adapt scripts for Windows/Linux/macOS."""
+    """Build version-agnostic auto-adapt installer scripts for Windows/Linux/macOS."""
     node_bin = shutil.which("node")
     if node_bin is None:
-        raise RuntimeError("node is required in PATH to build cross-version installer assets")
+        raise RuntimeError("node is required in PATH to build universal installer scripts")
 
     out_dir = out_dir.expanduser().resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -722,48 +722,24 @@ def build_cross_version_setup_assets(
         "const ic = require(process.argv[1]);\n"
         "const outDir = process.argv[2];\n"
         "const scriptNames = { windows: 'Install-SlicerDSpace-Windows.bat', linux: 'Install-SlicerDSpace-Linux.sh', macos: 'Install-SlicerDSpace-macOS.command' };\n"
-        "(async () => {\n"
-        "  for (const osKey of ['windows', 'linux', 'macos']) {\n"
-        "    const state512 = { os: osKey, slicerVersion: '5.12.4', wmaEnabled: true, wmaAtlases: ['wma_org'], autoStart: false };\n"
-        "    const bytes = await ic.buildSetupZip(state512);\n"
-        "    const zipName = ic.OS_DEFAULTS[osKey].setupZipName.replace(/\\.zip$/i, '-Slicer5.12.4.zip');\n"
-        "    fs.writeFileSync(path.join(outDir, zipName), Buffer.from(bytes));\n"
-        "    const scr = ic.buildScript(state512);\n"
-        "    fs.writeFileSync(path.join(outDir, scriptNames[osKey]), scr, 'utf8');\n"
-        "  }\n"
-        "})().catch((err) => { console.error(err); process.exit(1); });\n"
+        "for (const osKey of ['windows', 'linux', 'macos']) {\n"
+        "  const scr = ic.buildScript({ os: osKey, slicerVersion: 'universal', wmaEnabled: true, wmaAtlases: ['wma_org'], autoStart: false });\n"
+        "  fs.writeFileSync(path.join(outDir, scriptNames[osKey]), scr, 'utf8');\n"
+        "}\n"
     )
     proc = subprocess.run([node_bin, "-e", node_script, str(js_path), str(out_dir)], capture_output=True, text=True)
     if proc.returncode != 0:
-        raise RuntimeError(f"Failed generating cross-version assets via node:\n{proc.stderr or proc.stdout}")
+        raise RuntimeError(f"Failed generating universal installer scripts via node:\n{proc.stderr or proc.stdout}")
 
     base_url = str(
         installer_artifacts.get("release_base_url")
         or f"https://github.com/{GITHUB_REPO}/releases/download/{release_tag}"
     ).rstrip("/")
     bundles = installer_artifacts.get("bundles") or {}
-    cross_meta: dict[str, dict[str, Any]] = {}
+    uni_meta: dict[str, dict[str, Any]] = {}
     written_paths: list[Path] = []
 
-    for os_key, base_filename, bundle_key, expected_s4ext_os in SETUP_OS_ORDER:
-        filename = base_filename.replace(".zip", "-Slicer5.12.4.zip")
-        zip_path = out_dir / filename
-        _verify_generated_setup_zip(zip_path, os_key, bundle_key, expected_s4ext_os, "34645", "Slicer-5.12", bundles)
-        size_bytes = zip_path.stat().st_size
-        digest = sha256_file(zip_path)
-        cross_meta[f"{os_key}_512"] = {
-            "os": os_key,
-            "slicer_version": "5.12.4",
-            "filename": filename,
-            "url": f"{base_url}/{filename}",
-            "size_bytes": size_bytes,
-            "sha256": digest,
-            "published": published,
-        }
-        written_paths.append(zip_path)
-        print(f"[setup-zip-5.12] Verified {zip_path.name} ({size_bytes:,} bytes, sha256={digest})", flush=True)
-
-    for os_key, script_name, bundle_key, make_exec in _CROSS_VERSION_SCRIPT_SPECS:
+    for os_key, script_name, bundle_key, make_exec in _UNIVERSAL_SCRIPT_SPECS:
         script_path = out_dir / script_name
         if not script_path.is_file():
             raise RuntimeError(f"Missing generated universal installer script: {script_path}")
@@ -782,7 +758,7 @@ def build_cross_version_setup_assets(
             raise RuntimeError(f"Embedded {bundle_key} sha256 mismatch in {script_path}")
         size_bytes = script_path.stat().st_size
         digest = sha256_file(script_path)
-        cross_meta[f"{os_key}_universal"] = {
+        uni_meta[os_key] = {
             "os": os_key,
             "slicer_version": "universal",
             "filename": script_name,
@@ -794,7 +770,7 @@ def build_cross_version_setup_assets(
         written_paths.append(script_path)
         print(f"[universal-script] Verified {script_path.name} ({size_bytes:,} bytes, sha256={digest})", flush=True)
 
-    return cross_meta, written_paths
+    return uni_meta, written_paths
 
 
 def build_code_overlay(
@@ -901,10 +877,9 @@ def _format_sha256sums(artifacts: dict[str, Any], packs_manifest: dict[str, Any]
         rec = setup_installers.get(os_key)
         if rec and rec.get("sha256") and rec.get("filename"):
             entries.append((str(rec["sha256"]), str(rec["filename"])))
-    cross_installers = artifacts.get("cross_version_installers") or {}
-    cross_order = ("windows_512", "linux_512", "macos_512", "windows_universal", "linux_universal", "macos_universal")
-    for key in [k for k in cross_order if k in cross_installers] + [k for k in cross_installers if k not in cross_order]:
-        rec = cross_installers.get(key)
+    uni_installers = artifacts.get("universal_installers") or {}
+    for os_key, _, _, _ in SETUP_OS_ORDER:
+        rec = uni_installers.get(os_key)
         if rec and rec.get("sha256") and rec.get("filename"):
             entries.append((str(rec["sha256"]), str(rec["filename"])))
     packs = packs_manifest.get("packs") or {}
@@ -954,13 +929,14 @@ def cmd_sync_metadata(args: argparse.Namespace) -> int:
         published=not args.dry_run,
     )
     artifacts["setup_installers"] = setup_meta
-    cross_meta, cross_paths = build_cross_version_setup_assets(
+    uni_meta, uni_paths = build_universal_installer_scripts(
         setup_dir,
         artifacts,
         release_tag=args.release_tag,
         published=not args.dry_run,
     )
-    artifacts["cross_version_installers"] = cross_meta
+    artifacts.pop("cross_version_installers", None)
+    artifacts["universal_installers"] = uni_meta
 
     overlay_manifest, overlay_paths = build_code_overlay(
         setup_dir / "overlay",
@@ -986,7 +962,7 @@ def cmd_sync_metadata(args: argparse.Namespace) -> int:
 
     if args.upload_sha256sums and not args.dry_run:
         _upload_release_files(
-            [*overlay_paths, *setup_paths, *cross_paths, sha_out],
+            [*overlay_paths, *setup_paths, *uni_paths, sha_out],
             release_tag=args.release_tag,
             repo=args.repo,
         )
@@ -1041,13 +1017,14 @@ def cmd_sync_setup_zips(args: argparse.Namespace) -> int:
         published=not args.dry_run,
     )
     artifacts["setup_installers"] = setup_meta
-    cross_meta, cross_paths = build_cross_version_setup_assets(
+    uni_meta, uni_paths = build_universal_installer_scripts(
         out_dir,
         artifacts,
         release_tag=args.release_tag,
         published=not args.dry_run,
     )
-    artifacts["cross_version_installers"] = cross_meta
+    artifacts.pop("cross_version_installers", None)
+    artifacts["universal_installers"] = uni_meta
     artifacts_path.write_text(json.dumps(artifacts, indent=2) + "\n", encoding="utf-8")
     print(f"[sync-setup-zips] Updated {artifacts_path}", flush=True)
 
@@ -1060,7 +1037,7 @@ def cmd_sync_setup_zips(args: argparse.Namespace) -> int:
 
     if not args.dry_run:
         _upload_release_files(
-            [*setup_paths, *cross_paths, sha_out],
+            [*setup_paths, *uni_paths, sha_out],
             release_tag=args.release_tag,
             repo=args.repo,
         )

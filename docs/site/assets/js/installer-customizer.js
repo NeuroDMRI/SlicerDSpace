@@ -159,7 +159,7 @@
     }
   };
 
-  var SLICER_PRESET_ORDER = ['5.10.0', '5.12.4', 'universal'];
+  var SLICER_PRESET_ORDER = ['5.10.0', 'universal'];
   var SLICER_PRESETS = {
     '5.10.0': {
       version: '5.10.0',
@@ -167,28 +167,18 @@
       revision: '34045',
       labelEn: '3D Slicer 5.10.0',
       labelZh: '3D Slicer 5.10.0',
-      subEn: 'r34045 (Default)',
-      subZh: 'r34045（默认推荐）',
+      subEn: 'Recommended',
+      subZh: '推荐',
       zipSuffix: ''
-    },
-    '5.12.4': {
-      version: '5.12.4',
-      minor: '5.12',
-      revision: '34645',
-      labelEn: '3D Slicer 5.12.4',
-      labelZh: '3D Slicer 5.12.4',
-      subEn: 'r34645',
-      subZh: 'r34645',
-      zipSuffix: '-Slicer5.12.4'
     },
     'universal': {
       version: 'universal',
       minor: '',
       revision: '',
-      labelEn: 'All Versions (5.8 – 5.12+)',
-      labelZh: '通用适配 (5.8 – 5.12+)',
+      labelEn: 'Other Versions (5.8+)',
+      labelZh: '其他版本 (5.8+ 通用)',
       subEn: 'Auto-adapt script',
-      subZh: '自动适配脚本',
+      subZh: '通用自动适配脚本',
       zipSuffix: ''
     }
   };
@@ -1826,7 +1816,7 @@
         'set "SLICER_INPUT=' + cleanSlicer + '"',
         'call :resolve_slicer "%SLICER_INPUT%"',
         'if not defined PYTHON_SLICER (',
-        '  for %%D in ("%LOCALAPPDATA%\\slicer.org\\Slicer 5.10.0" "%LOCALAPPDATA%\\slicer.org\\Slicer 5.12.4" "C:\\Program Files\\Slicer 5.10.0" "C:\\Program Files\\Slicer 5.12.4") do (',
+        '  for %%D in ("%LOCALAPPDATA%\\slicer.org\\Slicer 5.10.0" "C:\\Program Files\\Slicer 5.10.0") do (',
         '    if not defined PYTHON_SLICER call :resolve_slicer "%%~D"',
         '  )',
         ')',
@@ -1984,9 +1974,7 @@
       html.push('</div>');
       var dlLabel = state.slicerVersion === 'universal'
         ? t('Download Universal Installer (.' + (OS_DEFAULTS[state.os].scriptName.split('.').pop()) + ')', '下载通用自动适配脚本')
-        : (state.slicerVersion === '5.12.4'
-          ? t('Download Setup (Slicer 5.12.4)', '下载 Slicer 5.12.4 安装包')
-          : t('Download Slicer Setup', '下载 Slicer 一键安装包'));
+        : t('Download Slicer Setup', '下载 Slicer 一键安装包');
       html.push('<div class="ic-actions">');
       html.push('<button type="button" class="ic-btn-primary" id="ic-download-btn">' + dlLabel + '</button>');
       html.push('</div>');
@@ -2002,8 +1990,8 @@
       html.push('</div>');
       if (state.slicerVersion === 'universal') {
         var uniNote = state.os === 'windows'
-          ? t('Auto-detects installed 3D Slicer (5.8-5.12+) and adapts the extension layout. Double-click the downloaded .bat file.', '自动识别本机 3D Slicer (5.8–5.12+) 并自动重映射扩展目录。下载后直接双击 .bat 运行。')
-          : t('Auto-detects installed 3D Slicer (5.8-5.12+) and adapts the extension layout. Run in Terminal: bash ' + OS_DEFAULTS[state.os].scriptName, '自动识别本机 3D Slicer (5.8–5.12+) 并自动重映射扩展目录。在终端运行：bash ' + OS_DEFAULTS[state.os].scriptName);
+          ? t('Auto-detects installed 3D Slicer (5.8+) and adapts the extension layout. Double-click the downloaded .bat file.', '自动识别本机 3D Slicer (5.8+ 通用) 并自动重映射扩展目录。下载后直接双击 .bat 运行。')
+          : t('Auto-detects installed 3D Slicer (5.8+) and adapts the extension layout. Run in Terminal: bash ' + OS_DEFAULTS[state.os].scriptName, '自动识别本机 3D Slicer (5.8+ 通用) 并自动重映射扩展目录。在终端运行：bash ' + OS_DEFAULTS[state.os].scriptName);
         html.push('<p class="ic-ver-note">' + uniNote + '</p>');
       }
       html.push('</div>');

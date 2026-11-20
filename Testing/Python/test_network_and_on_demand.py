@@ -1359,33 +1359,52 @@ class FastInstallerOptimizationTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
 
-    def test_cross_version_setup_zip_512_and_universal_scripts(self) -> None:
+    def test_recommended_510_setup_and_universal_auto_adapt_scripts(self) -> None:
         node_bin = shutil.which("node")
         if node_bin is None:
             self.skipTest("node is not installed in PATH")
 
+        from importlib.util import module_from_spec, spec_from_file_location
+
         js_path = REPO_ROOT / "docs" / "site" / "assets" / "js" / "installer-customizer.js"
         node_script = (
             "const ic = require(process.argv[1]);\n"
-            "const f512 = ic.buildSetupExtensionFiles({ os: 'macos', slicerVersion: '5.12.4', wmaEnabled: true, wmaAtlases: ['wma_org'] });\n"
+            "const f510 = ic.buildSetupExtensionFiles({ os: 'macos', wmaEnabled: true, wmaAtlases: ['wma_org'] });\n"
             "const scripts = { win: ic.buildScript({ os: 'windows' }), mac: ic.buildScript({ os: 'macos' }), lin: ic.buildScript({ os: 'linux' }) };\n"
-            "process.stdout.write(JSON.stringify({ f512, scripts }));\n"
+            "process.stdout.write(JSON.stringify({ order: ic.SLICER_PRESET_ORDER, f510, scripts }));\n"
         )
         out = subprocess.run([node_bin, "-e", node_script, str(js_path)], capture_output=True, text=True, check=True).stdout
         payload = json.loads(out)
-        names = {item["name"]: item["data"] for item in payload["f512"]}
-        prefix = "SlicerDSpaceSetup/Slicer.app/Contents/Extensions-34645/SlicerDSpaceSetup"
-        self.assertIn(f"{prefix}/share/Slicer-5.12/SlicerDSpaceSetup.s4ext", names)
+        self.assertEqual(payload["order"], ["5.10.0", "universal"])
+        names = {item["name"]: item["data"] for item in payload["f510"]}
+        prefix = "SlicerDSpaceSetup/Slicer.app/Contents/Extensions-34045/SlicerDSpaceSetup"
+        self.assertIn(f"{prefix}/share/Slicer-5.10/SlicerDSpaceSetup.s4ext", names)
         self.assertIn(f"{prefix}/SlicerDSpaceSetup.s4ext", names)
-        self.assertIn(f"{prefix}/lib/Slicer-5.12/qt-scripted-modules/SlicerDSpaceSetup.py", names)
-        self.assertIn("slicer_revision 34645", names[f"{prefix}/SlicerDSpaceSetup.s4ext"])
-        py_src = names[f"{prefix}/lib/Slicer-5.12/qt-scripted-modules/SlicerDSpaceSetup.py"]
+        self.assertIn(f"{prefix}/lib/Slicer-5.10/qt-scripted-modules/SlicerDSpaceSetup.py", names)
+        self.assertIn("slicer_revision 34045", names[f"{prefix}/SlicerDSpaceSetup.s4ext"])
+        py_src = names[f"{prefix}/lib/Slicer-5.10/qt-scripted-modules/SlicerDSpaceSetup.py"]
         self.assertTrue(all(ord(ch) < 128 or ch == "·" for ch in py_src))
         self.assertIn("/Applications/Slicer*.app", payload["scripts"]["mac"])
         self.assertIn("Slicer*", payload["scripts"]["win"])
         self.assertIn("Slicer*", payload["scripts"]["lin"])
         for scr in payload["scripts"].values():
             self.assertIn("_extract_base_archive_remapped", scr)
+
+        spec = spec_from_file_location("rra_uni", str(REPO_ROOT / ".github" / "scripts" / "repackage_release_assets.py"))
+        rra = module_from_spec(spec)
+        spec.loader.exec_module(rra)
+        art = json.loads((REPO_ROOT / "docs" / "website" / "installer_artifacts.json").read_text(encoding="utf-8"))
+        with tempfile.TemporaryDirectory() as tmp:
+            uni_meta, uni_paths = rra.build_universal_installer_scripts(Path(tmp), art, published=False)
+            self.assertEqual(
+                sorted(p.name for p in uni_paths),
+                [
+                    "Install-SlicerDSpace-Linux.sh",
+                    "Install-SlicerDSpace-Windows.bat",
+                    "Install-SlicerDSpace-macOS.command",
+                ],
+            )
+            self.assertEqual(set(uni_meta.keys()), {"windows", "linux", "macos"})
 
     def test_setup_module_version_check_and_remapped_tar_extraction(self) -> None:
         node_bin = shutil.which("node")
@@ -1400,7 +1419,7 @@ class FastInstallerOptimizationTests(unittest.TestCase):
         js_path = REPO_ROOT / "docs" / "site" / "assets" / "js" / "installer-customizer.js"
         node_script = (
             "const ic = require(process.argv[1]);\n"
-            "const f = ic.buildSetupExtensionFiles({ os: 'macos', slicerVersion: '5.12.4' });\n"
+            "const f = ic.buildSetupExtensionFiles({ os: 'macos' });\n"
             "process.stdout.write(f.find((x) => x.name.endsWith('SlicerDSpaceSetup.py')).data);\n"
         )
         py_src = subprocess.run([node_bin, "-e", node_script, str(js_path)], capture_output=True, text=True, check=True).stdout
@@ -1557,6 +1576,69 @@ class FastInstallerOptimizationTests(unittest.TestCase):
                 self.assertIs(meta["activation_key_included"], False)
                 self.assertIs(meta["slicer_independent"], True)
                 self.assertEqual(meta["arch"], "arm64")
+
+    def test_verify_macos_ukf_binary_accepts_upstream_xml_rc1_and_rejects_bad_dylibs(self) -> None:
+        from unittest.mock import patch
+        from scripts import build_macos_ukf_standalone as ukf_build
+
+        sample_xml = (
+            '<?xml version="1.0" encoding="utf-8"?>\n'
+            "<executable>\n"
+            "  <parameters><image><name>dwiFile</name></image></parameters>\n"
+            "</executable>\n"
+        )
+        ok_otool = (
+            "/tmp/UKFTractography:\n"
+            "\t/usr/lib/libc++.1.dylib (compatibility version 1.0.0, current version 1.0.0)\n"
+            "\t/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation (compatibility version 150.0.0)\n"
+            "\t/usr/lib/libSystem.B.dylib (compatibility version 1.0.0, current version 1.0.0)\n"
+        )
+
+        def _fake_check_output(cmd, **_kw):
+            return "/tmp/UKFTractography: Mach-O 64-bit executable arm64" if cmd[0] == "file" else ok_otool
+
+        def _fake_run(_cmd, **_kw):
+            return subprocess.CompletedProcess(["/tmp/UKFTractography", "--xml"], 1, stdout=sample_xml, stderr="LoadFiles failed")
+
+        with (
+            patch.object(ukf_build.subprocess, "check_output", side_effect=_fake_check_output),
+            patch.object(ukf_build.subprocess, "run", side_effect=_fake_run),
+        ):
+            info = ukf_build.verify_binary_dependencies(Path("/tmp/UKFTractography"))
+        self.assertEqual(info["xml_returncode"], 1)
+        self.assertGreater(info["xml_bytes"], 0)
+
+        for bad_dep in (
+            "/opt/homebrew/lib/libX11.dylib (compatibility version 1.0.0)",
+            "@rpath/lib/Slicer-5.10/libITKCommon-5.4.1.dylib (compatibility version 1.0.0)",
+        ):
+            with patch.object(
+                ukf_build.subprocess,
+                "check_output",
+                side_effect=lambda cmd, bd=bad_dep, **_kw: (
+                    "/tmp/UKFTractography: Mach-O 64-bit executable arm64"
+                    if cmd[0] == "file"
+                    else f"/tmp/UKFTractography:\n\t{bd}\n"
+                ),
+            ):
+                with self.assertRaises(RuntimeError):
+                    ukf_build.verify_binary_dependencies(Path("/tmp/UKFTractography"))
+
+        with (
+            patch.object(ukf_build.subprocess, "check_output", side_effect=_fake_check_output),
+            patch.object(
+                ukf_build.subprocess,
+                "run",
+                side_effect=[
+                    subprocess.CompletedProcess(["/tmp/UKFTractography", "--xml"], -11, stdout=sample_xml, stderr="segfault"),
+                    subprocess.CompletedProcess(["/tmp/UKFTractography", "--xml"], 1, stdout="<executable>", stderr=""),
+                ],
+            ),
+        ):
+            with self.assertRaises(RuntimeError):
+                ukf_build.verify_binary_dependencies(Path("/tmp/UKFTractography"))
+            with self.assertRaises(RuntimeError):
+                ukf_build.verify_binary_dependencies(Path("/tmp/UKFTractography"))
 
 
 if __name__ == "__main__":

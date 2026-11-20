@@ -102,7 +102,7 @@ def synchronize(upstream, assets, *, source_only=False):
             required.append(relative)
             manifest['asset_records'][relative] = {
                 'sha256': digest(source), 'size_bytes': source.stat().st_size,
-                'source_ids': ['slicerdsurfer_models_git'],
+                'source_ids': ['slicerdsurfer_models_release'],
             }
     manifest['ddsurfer_upstream_commit'] = revision
     profile = manifest['profiles']['surface']

@@ -2,11 +2,10 @@
   "kind": "slicerdsurfer_model_asset_manifest",
   "version": 1,
   "default_profile": "core",
-  "asset_source_policy": "The independent SlicerDSpace-models repository is the preferred external URL source for code-only checkouts. Git LFS support is retained for direct model-repository clones and legacy asset checkouts. Hugging Face and Zenodo entries are reserved mirrors until public asset terms are confirmed.",
+  "asset_source_policy": "Verified model assets are hosted on NeuroDMRI/SlicerDSpace GitHub Releases (model-assets-v0.1.1 for core/optional weights and v0.1.1 for WMA atlases), requiring zero Git LFS. Git LFS support is retained only as a legacy compatibility fallback.",
   "default_asset_source_ids": [
-    "slicerdsurfer_models_git",
-    "github_lfs",
     "slicerdsurfer_models_release",
+    "github_lfs",
     "huggingface",
     "zenodo"
   ],
@@ -18,17 +17,17 @@
     },
     "slicerdsurfer_models_git": {
       "kind": "url-template",
-      "status": "active",
-      "description": "Independent Git LFS asset repository preserving SlicerDSpace-relative paths.",
-      "base_url": "https://github.com/ChengjinLii/SlicerDSpace-models/raw/main",
-      "url_template": "https://github.com/ChengjinLii/SlicerDSpace-models/raw/main/{path_urlencoded}"
+      "status": "legacy",
+      "description": "Retired Git LFS source alias redirected to NeuroDMRI/SlicerDSpace GitHub Release model-assets-v0.1.1.",
+      "base_url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/model-assets-v0.1.1",
+      "url_template": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/model-assets-v0.1.1/{sha256}-{filename}"
     },
     "slicerdsurfer_models_release": {
       "kind": "url-template",
-      "status": "planned",
-      "description": "Planned independent GitHub release repository for model assets.",
-      "base_url": "https://github.com/ChengjinLii/SlicerDSpace-models/releases/download/v0.1.0",
-      "url_template": "https://github.com/ChengjinLii/SlicerDSpace-models/releases/download/v0.1.0/{path_urlencoded}"
+      "status": "active",
+      "description": "Official NeuroDMRI/SlicerDSpace GitHub Release mirror for verified model weights and templates (no Git LFS required).",
+      "base_url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/model-assets-v0.1.1",
+      "url_template": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/model-assets-v0.1.1/{sha256}-{filename}"
     },
     "huggingface": {
       "kind": "url-template",
@@ -142,70 +141,70 @@
       "sha256": "3a7dfbbf9ef3f95b485e5a412160a689448a6d31dd79202833f8c30ba6cc66f2",
       "size_bytes": 150,
       "source_ids": [
-        "slicerdsurfer_models_git"
+        "slicerdsurfer_models_release"
       ]
     },
     "surface/weights/manifest.json": {
       "sha256": "f5cc5bb23375937feab1075dea2f06e8965f627285eb6a9fac295247ae21a01c",
       "size_bytes": 1641,
       "source_ids": [
-        "slicerdsurfer_models_git"
+        "slicerdsurfer_models_release"
       ]
     },
     "surface/weights/SHA256SUMS": {
       "sha256": "bccb1efa6cba8bc251e38f24dab2159cc13ffcd3163d549d953aeb836a1fe927",
       "size_bytes": 340,
       "source_ids": [
-        "slicerdsurfer_models_git"
+        "slicerdsurfer_models_release"
       ]
     },
     "surface/weights/ddsurfer_lh_wm.pt": {
       "sha256": "0441f8991d2be2aa65c68fa7454b068d92f73089bdbd548b45f61a867ed5fa8f",
       "size_bytes": 45716667,
       "source_ids": [
-        "slicerdsurfer_models_git"
+        "slicerdsurfer_models_release"
       ]
     },
     "surface/weights/ddsurfer_rh_wm.pt": {
       "sha256": "ec6e2c6844fae44a61cda92ae369c3f19b5c2d0c9452e4391ed142e2ab4c0030",
       "size_bytes": 45716667,
       "source_ids": [
-        "slicerdsurfer_models_git"
+        "slicerdsurfer_models_release"
       ]
     },
     "surface/weights/ddsurfer_lh_pial.pt": {
       "sha256": "ac5a5f5b30fbb27627372447295e34f614e4b71e3f70551e44af88a635d97c27",
       "size_bytes": 45718165,
       "source_ids": [
-        "slicerdsurfer_models_git"
+        "slicerdsurfer_models_release"
       ]
     },
     "surface/weights/ddsurfer_rh_pial.pt": {
       "sha256": "d22ed9df70e618f5e2c2319619aab3418388ce271427925bf15baf5bf3216a24",
       "size_bytes": 45718165,
       "source_ids": [
-        "slicerdsurfer_models_git"
+        "slicerdsurfer_models_release"
       ]
     },
     "surface/template/ddsurfer_lh_template.obj": {
       "sha256": "4da63ee7b02bd3b45a1164c6c030fdd0e18903c821b47cdd7fc9d492b0a9ed1c",
       "size_bytes": 13275275,
       "source_ids": [
-        "slicerdsurfer_models_git"
+        "slicerdsurfer_models_release"
       ]
     },
     "surface/template/ddsurfer_rh_template.obj": {
       "sha256": "74186754cdac0510a595bab82818329703c9906384f1e6a8d1c8cad4eddaf1fe",
       "size_bytes": 13420964,
       "source_ids": [
-        "slicerdsurfer_models_git"
+        "slicerdsurfer_models_release"
       ]
     },
     "surface/template/100HCP-population-mean-T2-1mm.nii.gz": {
       "sha256": "9c0f03a07b0967052d2be81bc359d188940f89794cd95c1369c48bc3a14e644a",
       "size_bytes": 13803987,
       "source_ids": [
-        "slicerdsurfer_models_git"
+        "slicerdsurfer_models_release"
       ]
     }
   },

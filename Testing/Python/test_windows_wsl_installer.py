@@ -75,7 +75,7 @@ class WindowsWslInstallerContractTest(unittest.TestCase):
         self.assertIn("[switch]$SkipLargeDownloads", powershell)
         self.assertIn("[switch]$SkipModelAssets", powershell)
         self.assertIn("download_model_assets.py", powershell)
-        self.assertIn("slicerdsurfer_models_git", powershell)
+        self.assertIn("slicerdsurfer_models_release", powershell)
         self.assertIn("if ($PlanOnly)", powershell)
         self.assertIn("--skip-large-downloads", powershell)
         self.assertIn("SKIP_LARGE_DOWNLOADS", bash)

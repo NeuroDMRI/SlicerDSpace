@@ -44,7 +44,7 @@
       "asset": "runtime/surface/surface-runtime-darwin-x86_64.tar.gz",
       "published": false,
       "min_macos": "15.0",
-      "url": "https://media.githubusercontent.com/media/ChengjinLii/SlicerDSpace-models/main/runtime/surface/surface-runtime-darwin-x86_64.tar.gz",
+      "url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v0.1.1/surface-runtime-darwin-x86_64.tar.gz",
       "terms": "https://surfer.nmr.mgh.harvard.edu/fswiki/FreeSurferSoftwareLicense"
     },
     {

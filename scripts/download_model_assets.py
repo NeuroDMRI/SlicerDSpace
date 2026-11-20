@@ -467,7 +467,7 @@ def model_asset_setup_guidance(
     sha256_mismatches = list((verification or {}).get("sha256_mismatches", []))
     total_size = sum(int(record.get("size_bytes") or 0) for record in plan.asset_records.values())
     active_url_sources = _active_url_source_ids(manifest, plan)
-    preferred_source = active_url_sources[0] if active_url_sources else "slicerdsurfer_models_git"
+    preferred_source = active_url_sources[0] if active_url_sources else "slicerdsurfer_models_release"
     default_root = configured_model_assets_root()
     target_root = asset_root.expanduser().resolve() if asset_root is not None else default_root
     command = (

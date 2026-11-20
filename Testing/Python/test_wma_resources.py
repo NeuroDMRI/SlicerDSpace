@@ -143,7 +143,7 @@ class WMAResourceTests(unittest.TestCase):
         from scripts.download_model_assets import load_manifest, resolve_asset_plan
         manifest = load_manifest(optional_assets.MANIFEST)
         source = manifest['asset_sources']['wma_atlases_mirror']
-        self.assertRegex(source['url_template'], r'/raw/[0-9a-f]{40}/\{path_urlencoded\}$')
+        self.assertRegex(source['url_template'], r'^https://github\.com/NeuroDMRI/SlicerDSpace/releases/download/')
         self.assertEqual(source['access'], 'public')
         for family in ('east-west', 'naba'):
             plan = resolve_asset_plan(manifest, atlas_definition(family)['profile'])

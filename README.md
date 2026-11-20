@@ -199,7 +199,7 @@ restage the extension and restart Slicer. More options: [download and installati
 
 When triggered, one dialog lists every missing component with its size and licence (name, link and local file); press **Accept licences and install** once, restart if Slicer asks, and select Prepare again to continue. A synthetic self-check runs per feature before it is marked ready. For source-staged installs, Slicer extensions are added only when required (`PyTorch` for neural models and the native brain mask, `UKFTractography` for UKF, and optional `SlicerDMRI`; tensor fitting needs no extension).
 
-Optional weights, templates and atlases reside in [**SlicerDSpace-models**](https://github.com/ChengjinLii/SlicerDSpace-models). Setup verifies SHA256 digests, caches downloads and saves configured paths under **More options**. See [managed setup](docs/setup/MANAGED_SETUP.md) and [resource terms](docs/assets/MODEL_ASSET_TERMS.md).
+Optional weights, templates and atlases reside in [**NeuroDMRI/SlicerDSpace Releases**](https://github.com/NeuroDMRI/SlicerDSpace/releases) (`model-assets-v0.1.1` for model weights and `v0.1.1` for WMA atlases). Setup verifies SHA256 digests, caches downloads and saves configured paths under **More options**. See [managed setup](docs/setup/MANAGED_SETUP.md) and [resource terms](docs/assets/MODEL_ASSET_TERMS.md).
 
 Without the GUI, run the same setup in Slicer's own `PythonSlicer` (no system Python is needed); the first command inspects the plan and the second installs with licence acceptance:
 
@@ -213,7 +213,7 @@ Self-checks run through `scripts/check_setup_functionality.py`. For explicit CLI
 ```bash
 PythonSlicer scripts/download_model_assets.py --profile surface \
   --asset-root ~/SlicerDSpace-model-assets --source url \
-  --source-id slicerdsurfer_models_git
+  --source-id slicerdsurfer_models_release
 ```
 
 For all anatomical model groups, use `scripts/download_model_assets.sh --profile core`.

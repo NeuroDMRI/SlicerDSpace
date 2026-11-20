@@ -184,7 +184,7 @@ Slicer 5.10 用户在 **Edit > Application Settings > Modules > Additional modul
 
 触发后，弹窗会一次性列出缺失项的体积与许可（名称、链接和本地文件），点击一次 **接受许可并安装**，按提示重启并再次准备即可；安装结束会自动以合成数据自检。对于源码部署，插件按实际勾选流程按需安装缺失的扩展（神经网络模型与 native 脑掩膜需要 PyTorch，UKF 需要 UKFTractography，SlicerDMRI 按需可选；张量拟合不需要额外扩展）。
 
-可选权重、模板与图谱存放在 [**SlicerDSpace-models**](https://github.com/ChengjinLii/SlicerDSpace-models)。配置流程会校验 SHA256、缓存下载并在 **更多选项** 中保存路径；详见[自动配置](docs/setup/MANAGED_SETUP.zh-CN.md)与[资源条款](docs/assets/MODEL_ASSET_TERMS.md)。
+可选权重、模板与图谱均托管在 [**NeuroDMRI/SlicerDSpace Releases**](https://github.com/NeuroDMRI/SlicerDSpace/releases)（`model-assets-v0.1.1` 存放模型权重，`v0.1.1` 存放 WMA 图谱）。配置流程会校验 SHA256、缓存下载并在 **更多选项** 中保存路径；详见[自动配置](docs/setup/MANAGED_SETUP.zh-CN.md)与[资源条款](docs/assets/MODEL_ASSET_TERMS.md)。
 
 不使用图形界面时，也可直接在 Slicer 自带的 `PythonSlicer` 中完成上述按需准备（无需系统 Python）：
 
@@ -198,7 +198,7 @@ PythonSlicer scripts/setup_selected.py --targets microstructure,tractography --e
 ```bash
 PythonSlicer scripts/download_model_assets.py --profile surface \
   --asset-root ~/SlicerDSpace-model-assets --source url \
-  --source-id slicerdsurfer_models_git
+  --source-id slicerdsurfer_models_release
 ```
 
 全套解剖模型资源可用 `scripts/download_model_assets.sh --profile core`。

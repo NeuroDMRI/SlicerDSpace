@@ -40,7 +40,7 @@ class FakePlan:
     profile = "core"
     required_paths = ("segmentation/weights/dti_axial.pt",)
     asset_records = {}
-    source_ids = ("slicerdsurfer_models_git",)
+    source_ids = ("slicerdsurfer_models_release",)
     external_overrides = ()
     asset_groups = ()
     terms_notices = ()

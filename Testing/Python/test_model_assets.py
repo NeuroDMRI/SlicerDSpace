@@ -62,7 +62,7 @@ class ModelAssetsTest(unittest.TestCase):
         self.assertIn("segmentation/weights/dti_axial.pt", plan.asset_records)
         self.assertIn("sha256", plan.asset_records["segmentation/weights/dti_axial.pt"])
         self.assertIn("github_lfs", plan.source_ids)
-        self.assertIn("slicerdsurfer_models_git", plan.source_ids)
+        self.assertIn("slicerdsurfer_models_release", plan.source_ids)
         self.assertIn("DDSURFER_CHECKPOINT_DIR", plan.external_overrides)
         self.assertIn("DDSurfer TANet surface model weights", plan.asset_groups)
         self.assertIn("surface/weights/ddsurfer_lh_wm.pt", plan.required_paths)
@@ -75,19 +75,19 @@ class ModelAssetsTest(unittest.TestCase):
         manifest = module.load_manifest(REPO_ROOT / "models" / "assets_manifest.json")
         sources = manifest["asset_sources"]
 
-        self.assertEqual(manifest["default_asset_source_ids"][0], "slicerdsurfer_models_git")
-        self.assertEqual(sources["slicerdsurfer_models_git"]["status"], "active")
-        self.assertIn(
-            "https://github.com/ChengjinLii/SlicerDSpace-models/raw/main",
-            sources["slicerdsurfer_models_git"]["url_template"],
+        self.assertEqual(manifest["default_asset_source_ids"][0], "slicerdsurfer_models_release")
+        self.assertEqual(sources["slicerdsurfer_models_release"]["status"], "active")
+        self.assertEqual(
+            sources["slicerdsurfer_models_release"]["url_template"],
+            "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/model-assets-v0.1.1/{sha256}-{filename}",
         )
 
     def test_external_resource_mirror_uses_new_repository_and_retains_pinned_revision(self) -> None:
         manifest = json.loads((REPO_ROOT / 'models/external_assets_manifest.json').read_text(encoding='utf-8'))
         source = manifest['asset_sources']['optional_models_mirror']
         self.assertEqual(source['url_template'],
-                         'https://github.com/ChengjinLii/SlicerDSpace-models/raw/'
-                         '11167a58aaced67a69b3e0bc45656aea2abc1c8d/{path_urlencoded}')
+                         'https://github.com/NeuroDMRI/SlicerDSpace/releases/download/model-assets-v0.1.1/'
+                         '{sha256}-{filename}')
         self.assertEqual(source['status'], 'active')
 
     def test_quick_gate_alias_resolves_to_core_profile(self) -> None:
@@ -578,8 +578,8 @@ class ModelAssetsTest(unittest.TestCase):
 
         self.assertEqual(guidance["profile"], "core")
         self.assertGreater(guidance["required_file_count"], 0)
-        self.assertIn("slicerdsurfer_models_git", guidance["active_url_sources"])
-        self.assertIn("--source-id slicerdsurfer_models_git", guidance["recommended_command"])
+        self.assertIn("slicerdsurfer_models_release", guidance["active_url_sources"])
+        self.assertIn("--source-id slicerdsurfer_models_release", guidance["recommended_command"])
         self.assertIn("--asset-root", guidance["recommended_command"])
         # S-N2 (guard): setup commands in messages run with PythonSlicer, not a system Python.
         self.assertTrue(guidance["recommended_command"].startswith("PythonSlicer scripts/download_model_assets.py "))
@@ -598,7 +598,7 @@ class ModelAssetsTest(unittest.TestCase):
         self.assertEqual(plan.required_paths, ("sentinel/slicerdsurfer_sentinel.txt",))
         self.assertEqual(plan.asset_groups, ("download sentinel",))
         self.assertLess(plan.asset_records["sentinel/slicerdsurfer_sentinel.txt"]["size_bytes"], 1024)
-        self.assertEqual(plan.source_ids, ("slicerdsurfer_models_git",))
+        self.assertEqual(plan.source_ids, ("slicerdsurfer_models_release",))
 
 
 class ModelAssetRootSecurityTest(unittest.TestCase):

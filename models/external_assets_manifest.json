@@ -18,62 +18,86 @@
       "status": "active",
       "access": "public",
       "public": true,
-      "description": "Version-pinned East-West and NABA runtime subsets, retaining original data bytes and CC BY 4.0 attribution.",
-      "url_template": "https://github.com/ChengjinLii/SlicerDSpace-models/raw/137e8bbddc3bcee821e13d1e4aabf3a44171c209/{path_urlencoded}"
+      "description": "Legacy split-archive mirror superseded by NeuroDMRI/SlicerDSpace Release v0.1.1 packs in models/release_packs_manifest.json (SlicerDSpace-v0.1.1-WMA-{ORG,NABA,EastWest}.tar.gz*; no Git LFS).",
+      "url_template": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v0.1.1/{filename}"
     },
     "optional_models_mirror": {
       "kind": "url-template",
       "status": "active",
       "access": "public",
       "public": true,
-      "description": "Public resource mirror pinned to the uploaded resource commit; every downloaded file requires size and SHA256 verification.",
-      "url_template": "https://github.com/ChengjinLii/SlicerDSpace-models/raw/11167a58aaced67a69b3e0bc45656aea2abc1c8d/{path_urlencoded}"
+      "description": "Official NeuroDMRI/SlicerDSpace GitHub Release mirror for optional model resources (no Git LFS); every downloaded file requires size and SHA256 verification.",
+      "url_template": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/model-assets-v0.1.1/{sha256}-{filename}"
     }
   },
   "asset_records": {
     "brain_mask/pnl_cnn_torch/axial.pt": {
       "sha256": "27bf8c38a38dfef44f1bb25ab2d180803d9a5794e5dcdb69c4ab0692f2744287",
       "size_bytes": 74989746,
-      "urls": ["https://raw.githubusercontent.com/ChengjinLii/PNLBrainMask-Torch/8d201a50447ebea8b10a4f252bfd262931603970/weights/axial.pt"],
-      "source_ids": ["pnl_torch_release"],
+      "urls": [
+        "https://raw.githubusercontent.com/ChengjinLii/PNLBrainMask-Torch/8d201a50447ebea8b10a4f252bfd262931603970/weights/axial.pt"
+      ],
+      "source_ids": [
+        "pnl_torch_release"
+      ],
       "redistribution": "with-notice",
       "license": "PNL/BWH software and data agreement, modified PyTorch conversion"
     },
     "brain_mask/pnl_cnn_torch/coronal.pt": {
       "sha256": "a11da30afb41d8db1afa7c447ff94260e7421b0e00c4dd1018825408059a2feb",
       "size_bytes": 75012598,
-      "urls": ["https://raw.githubusercontent.com/ChengjinLii/PNLBrainMask-Torch/8d201a50447ebea8b10a4f252bfd262931603970/weights/coronal.pt"],
-      "source_ids": ["pnl_torch_release"],
+      "urls": [
+        "https://raw.githubusercontent.com/ChengjinLii/PNLBrainMask-Torch/8d201a50447ebea8b10a4f252bfd262931603970/weights/coronal.pt"
+      ],
+      "source_ids": [
+        "pnl_torch_release"
+      ],
       "redistribution": "with-notice",
       "license": "PNL/BWH software and data agreement, modified PyTorch conversion"
     },
     "brain_mask/pnl_cnn_torch/sagittal.pt": {
       "sha256": "7dd553b55a4d1d108ddd3e0bad99d6275a4c3a9c833dd469a0ad026d393afdcc",
       "size_bytes": 75013528,
-      "urls": ["https://raw.githubusercontent.com/ChengjinLii/PNLBrainMask-Torch/8d201a50447ebea8b10a4f252bfd262931603970/weights/sagittal.pt"],
-      "source_ids": ["pnl_torch_release"],
+      "urls": [
+        "https://raw.githubusercontent.com/ChengjinLii/PNLBrainMask-Torch/8d201a50447ebea8b10a4f252bfd262931603970/weights/sagittal.pt"
+      ],
+      "source_ids": [
+        "pnl_torch_release"
+      ],
       "redistribution": "with-notice",
       "license": "PNL/BWH software and data agreement, modified PyTorch conversion"
     },
     "brain_mask/pnl_cnn_torch/weights.json": {
       "sha256": "b1af9575253ec94aa5e52b22a14731745e07fac4fb9453c70074e9e2cae48baa",
       "size_bytes": 1529,
-      "urls": ["https://raw.githubusercontent.com/ChengjinLii/PNLBrainMask-Torch/8d201a50447ebea8b10a4f252bfd262931603970/weights/weights.json"],
-      "source_ids": ["pnl_torch_release"],
+      "urls": [
+        "https://raw.githubusercontent.com/ChengjinLii/PNLBrainMask-Torch/8d201a50447ebea8b10a4f252bfd262931603970/weights/weights.json"
+      ],
+      "source_ids": [
+        "pnl_torch_release"
+      ],
       "redistribution": "with-notice"
     },
     "brain_mask/pnl_cnn_torch/LICENSE.txt": {
       "sha256": "2586e5953fa5a9bd8d700c21db9503ed448a57209f6e4f24ec3f8d5381715902",
       "size_bytes": 11374,
-      "urls": ["https://raw.githubusercontent.com/ChengjinLii/PNLBrainMask-Torch/8d201a50447ebea8b10a4f252bfd262931603970/LICENSE"],
-      "source_ids": ["pnl_torch_release"],
+      "urls": [
+        "https://raw.githubusercontent.com/ChengjinLii/PNLBrainMask-Torch/8d201a50447ebea8b10a4f252bfd262931603970/LICENSE"
+      ],
+      "source_ids": [
+        "pnl_torch_release"
+      ],
       "redistribution": "with-notice"
     },
     "brain_mask/pnl_cnn_torch/IITmean_b0_256.nii.gz": {
       "sha256": "2bb1a7bbe448702033a515e76164df6472828422ecef5cb4f996d91ec126dead",
       "size_bytes": 7830929,
-      "urls": ["https://www.nitrc.org/frs/download.php/11290/IITmean_b0_256.nii.gz"],
-      "source_ids": ["iit_upstream_only"],
+      "urls": [
+        "https://www.nitrc.org/frs/download.php/11290/IITmean_b0_256.nii.gz"
+      ],
+      "source_ids": [
+        "iit_upstream_only"
+      ],
       "redistribution": "upstream-only",
       "license_url": "https://www.nitrc.org/projects/iit/",
       "reason": "IIT remains an original-site-only acquisition; the PyTorch port does not mirror the template."
@@ -190,7 +214,9 @@
       "redistribution": "with-notice"
     },
     "bundles/wma/naba/archives/runtime.zip.part-000": {
-      "source_ids": ["wma_atlases_mirror"],
+      "source_ids": [
+        "wma_atlases_mirror"
+      ],
       "sha256": "3b7decaa531051740c9454f4584a16ff7ea2fcce76c0a03e1ef018d3417276a1",
       "size_bytes": 536870912,
       "redistribution": "with-notice",
@@ -199,7 +225,9 @@
       "attribution": "https://doi.org/10.1016/j.fmre.2025.12.030"
     },
     "bundles/wma/naba/archives/runtime.zip.part-001": {
-      "source_ids": ["wma_atlases_mirror"],
+      "source_ids": [
+        "wma_atlases_mirror"
+      ],
       "sha256": "3af376eb0b2f270ba05b45f1c478ceee16de00fc5c7339388a69ed5c5be107ae",
       "size_bytes": 536870912,
       "redistribution": "with-notice",
@@ -208,7 +236,9 @@
       "attribution": "https://doi.org/10.1016/j.fmre.2025.12.030"
     },
     "bundles/wma/naba/archives/runtime.zip.part-002": {
-      "source_ids": ["wma_atlases_mirror"],
+      "source_ids": [
+        "wma_atlases_mirror"
+      ],
       "sha256": "a44645427dda05edd9bc5c0a617319d7ee886955bf3ca8adcd638ef7e227c01e",
       "size_bytes": 536870912,
       "redistribution": "with-notice",
@@ -217,7 +247,9 @@
       "attribution": "https://doi.org/10.1016/j.fmre.2025.12.030"
     },
     "bundles/wma/naba/archives/runtime.zip.part-003": {
-      "source_ids": ["wma_atlases_mirror"],
+      "source_ids": [
+        "wma_atlases_mirror"
+      ],
       "sha256": "8111845306b44be92f61849e30c6439307052ef1bc565eb958e620d725c51017",
       "size_bytes": 536870912,
       "redistribution": "with-notice",
@@ -226,7 +258,9 @@
       "attribution": "https://doi.org/10.1016/j.fmre.2025.12.030"
     },
     "bundles/wma/naba/archives/runtime.zip.part-004": {
-      "source_ids": ["wma_atlases_mirror"],
+      "source_ids": [
+        "wma_atlases_mirror"
+      ],
       "sha256": "5f5b2b13f685818fdb7483782c06eb81706dde35a40751a5f6d31ee9063b3615",
       "size_bytes": 536870912,
       "redistribution": "with-notice",
@@ -235,7 +269,9 @@
       "attribution": "https://doi.org/10.1016/j.fmre.2025.12.030"
     },
     "bundles/wma/naba/archives/runtime.zip.part-005": {
-      "source_ids": ["wma_atlases_mirror"],
+      "source_ids": [
+        "wma_atlases_mirror"
+      ],
       "sha256": "22deeac27715ef7ca5779d9ebb644b9488580b918fdc0ab6fba733df309e8f52",
       "size_bytes": 536870912,
       "redistribution": "with-notice",
@@ -244,7 +280,9 @@
       "attribution": "https://doi.org/10.1016/j.fmre.2025.12.030"
     },
     "bundles/wma/naba/archives/runtime.zip.part-006": {
-      "source_ids": ["wma_atlases_mirror"],
+      "source_ids": [
+        "wma_atlases_mirror"
+      ],
       "sha256": "486d834b3a08294eb841b9cce30837b89c029173f3628dd42db37c3148395f69",
       "size_bytes": 38897925,
       "redistribution": "with-notice",
@@ -253,7 +291,9 @@
       "attribution": "https://doi.org/10.1016/j.fmre.2025.12.030"
     },
     "bundles/wma/naba/extracted_resource_index.json": {
-      "source_ids": ["wma_atlases_mirror"],
+      "source_ids": [
+        "wma_atlases_mirror"
+      ],
       "sha256": "fd79e58b94ac841f21faab5a6ba8a4e4bd387c8f81e8c4b0a6342636856f9a80",
       "size_bytes": 144730,
       "redistribution": "with-notice",
@@ -262,7 +302,9 @@
       "attribution": "https://doi.org/10.1016/j.fmre.2025.12.030"
     },
     "bundles/wma/naba/ATTRIBUTION.md": {
-      "source_ids": ["wma_atlases_mirror"],
+      "source_ids": [
+        "wma_atlases_mirror"
+      ],
       "sha256": "a21a61022e225a99e73c5c626ba8767f5d923c66deb77edc4ef8bbf0a75cfbf1",
       "size_bytes": 442,
       "redistribution": "with-notice",
@@ -271,7 +313,9 @@
       "attribution": "https://doi.org/10.1016/j.fmre.2025.12.030"
     },
     "bundles/wma/east-west/archives/runtime.zip.part-000": {
-      "source_ids": ["wma_atlases_mirror"],
+      "source_ids": [
+        "wma_atlases_mirror"
+      ],
       "sha256": "bd8f0bfcfc19df84dab6cf0ec0cb859f1b7eaac40bdb21b741f7ebdf7d7c818e",
       "size_bytes": 536870912,
       "redistribution": "with-notice",
@@ -280,7 +324,9 @@
       "attribution": "https://doi.org/10.1038/s41597-024-03624-2"
     },
     "bundles/wma/east-west/archives/runtime.zip.part-001": {
-      "source_ids": ["wma_atlases_mirror"],
+      "source_ids": [
+        "wma_atlases_mirror"
+      ],
       "sha256": "5952934a335bb6d52c892beaa91ec3caa61a5abc285de3e89b1041f86682b141",
       "size_bytes": 536870912,
       "redistribution": "with-notice",
@@ -289,7 +335,9 @@
       "attribution": "https://doi.org/10.1038/s41597-024-03624-2"
     },
     "bundles/wma/east-west/archives/runtime.zip.part-002": {
-      "source_ids": ["wma_atlases_mirror"],
+      "source_ids": [
+        "wma_atlases_mirror"
+      ],
       "sha256": "ba63f4edef858c08b8c3ffa202347cdc465c5d578cc4878e98644be0d334dea8",
       "size_bytes": 536870912,
       "redistribution": "with-notice",
@@ -298,7 +346,9 @@
       "attribution": "https://doi.org/10.1038/s41597-024-03624-2"
     },
     "bundles/wma/east-west/archives/runtime.zip.part-003": {
-      "source_ids": ["wma_atlases_mirror"],
+      "source_ids": [
+        "wma_atlases_mirror"
+      ],
       "sha256": "8cae68c08350106af1117aadadf01e64f5400e1d931ea78b79d795391a00a607",
       "size_bytes": 536870912,
       "redistribution": "with-notice",
@@ -307,7 +357,9 @@
       "attribution": "https://doi.org/10.1038/s41597-024-03624-2"
     },
     "bundles/wma/east-west/archives/runtime.zip.part-004": {
-      "source_ids": ["wma_atlases_mirror"],
+      "source_ids": [
+        "wma_atlases_mirror"
+      ],
       "sha256": "292d52426ba90a478ae3ebbafd94b7761d41b71f083b46553f8fc6ae9942ca52",
       "size_bytes": 536870912,
       "redistribution": "with-notice",
@@ -316,7 +368,9 @@
       "attribution": "https://doi.org/10.1038/s41597-024-03624-2"
     },
     "bundles/wma/east-west/archives/runtime.zip.part-005": {
-      "source_ids": ["wma_atlases_mirror"],
+      "source_ids": [
+        "wma_atlases_mirror"
+      ],
       "sha256": "d922c005b9beb30b018b0b56c9ce68020a31933bbb9fc8b7ee5179a748a0ae4d",
       "size_bytes": 536870912,
       "redistribution": "with-notice",
@@ -325,7 +379,9 @@
       "attribution": "https://doi.org/10.1038/s41597-024-03624-2"
     },
     "bundles/wma/east-west/archives/runtime.zip.part-006": {
-      "source_ids": ["wma_atlases_mirror"],
+      "source_ids": [
+        "wma_atlases_mirror"
+      ],
       "sha256": "0209cd78bbfff5f06e628983a5f20bc49f55a02835a2bbd10edbf8deb0c1261b",
       "size_bytes": 536870912,
       "redistribution": "with-notice",
@@ -334,7 +390,9 @@
       "attribution": "https://doi.org/10.1038/s41597-024-03624-2"
     },
     "bundles/wma/east-west/archives/runtime.zip.part-007": {
-      "source_ids": ["wma_atlases_mirror"],
+      "source_ids": [
+        "wma_atlases_mirror"
+      ],
       "sha256": "b189d27b34d8db84240a38afb77182fc560299a99ed93d8e9ae7c1ce6f8fedc1",
       "size_bytes": 536870912,
       "redistribution": "with-notice",
@@ -343,7 +401,9 @@
       "attribution": "https://doi.org/10.1038/s41597-024-03624-2"
     },
     "bundles/wma/east-west/archives/runtime.zip.part-008": {
-      "source_ids": ["wma_atlases_mirror"],
+      "source_ids": [
+        "wma_atlases_mirror"
+      ],
       "sha256": "1a0166d85f218fc62556f28c05ceabc8b3870f0b00dd49125a32dc503a4005ae",
       "size_bytes": 536870912,
       "redistribution": "with-notice",
@@ -352,7 +412,9 @@
       "attribution": "https://doi.org/10.1038/s41597-024-03624-2"
     },
     "bundles/wma/east-west/archives/runtime.zip.part-009": {
-      "source_ids": ["wma_atlases_mirror"],
+      "source_ids": [
+        "wma_atlases_mirror"
+      ],
       "sha256": "8bfc6d93f926aaf849b1f049c6be9ed1b9e917fd0559a66cc21f4efe29379014",
       "size_bytes": 536870912,
       "redistribution": "with-notice",
@@ -361,7 +423,9 @@
       "attribution": "https://doi.org/10.1038/s41597-024-03624-2"
     },
     "bundles/wma/east-west/archives/runtime.zip.part-010": {
-      "source_ids": ["wma_atlases_mirror"],
+      "source_ids": [
+        "wma_atlases_mirror"
+      ],
       "sha256": "3da5a0c191f00d16db5fc88eb4e90f2b90580c21749e3641a5714a6ee4df8d43",
       "size_bytes": 536870912,
       "redistribution": "with-notice",
@@ -370,7 +434,9 @@
       "attribution": "https://doi.org/10.1038/s41597-024-03624-2"
     },
     "bundles/wma/east-west/archives/runtime.zip.part-011": {
-      "source_ids": ["wma_atlases_mirror"],
+      "source_ids": [
+        "wma_atlases_mirror"
+      ],
       "sha256": "abab33077feb790d5d01b916e59a09756223680b249fbde418c00350cb93e2be",
       "size_bytes": 536870912,
       "redistribution": "with-notice",
@@ -379,7 +445,9 @@
       "attribution": "https://doi.org/10.1038/s41597-024-03624-2"
     },
     "bundles/wma/east-west/archives/runtime.zip.part-012": {
-      "source_ids": ["wma_atlases_mirror"],
+      "source_ids": [
+        "wma_atlases_mirror"
+      ],
       "sha256": "55a91c82455e174a20a8e37306bbc9638bfbad4bd44325ac212e3bc79c72e342",
       "size_bytes": 536870912,
       "redistribution": "with-notice",
@@ -388,7 +456,9 @@
       "attribution": "https://doi.org/10.1038/s41597-024-03624-2"
     },
     "bundles/wma/east-west/archives/runtime.zip.part-013": {
-      "source_ids": ["wma_atlases_mirror"],
+      "source_ids": [
+        "wma_atlases_mirror"
+      ],
       "sha256": "a5d4d5bc5ed8b546e81eb70704ddffedaef673e7ac1a1974e3bc452056bb3ed4",
       "size_bytes": 536870912,
       "redistribution": "with-notice",
@@ -397,7 +467,9 @@
       "attribution": "https://doi.org/10.1038/s41597-024-03624-2"
     },
     "bundles/wma/east-west/archives/runtime.zip.part-014": {
-      "source_ids": ["wma_atlases_mirror"],
+      "source_ids": [
+        "wma_atlases_mirror"
+      ],
       "sha256": "9d7286bc89bdcee41da3c7a9188380a5745047cb554d37ed32d46a77269cf531",
       "size_bytes": 536870912,
       "redistribution": "with-notice",
@@ -406,7 +478,9 @@
       "attribution": "https://doi.org/10.1038/s41597-024-03624-2"
     },
     "bundles/wma/east-west/archives/runtime.zip.part-015": {
-      "source_ids": ["wma_atlases_mirror"],
+      "source_ids": [
+        "wma_atlases_mirror"
+      ],
       "sha256": "bbe1152fc2bbd7676112cf7f563737bfaaa0817cf2e518340fe18d3ef5cbf675",
       "size_bytes": 536870912,
       "redistribution": "with-notice",
@@ -415,7 +489,9 @@
       "attribution": "https://doi.org/10.1038/s41597-024-03624-2"
     },
     "bundles/wma/east-west/archives/runtime.zip.part-016": {
-      "source_ids": ["wma_atlases_mirror"],
+      "source_ids": [
+        "wma_atlases_mirror"
+      ],
       "sha256": "2d10e3a40a752d3910a880c3a99d85847bb9598a199d24edff5d05dd35c1a13e",
       "size_bytes": 536870912,
       "redistribution": "with-notice",
@@ -424,7 +500,9 @@
       "attribution": "https://doi.org/10.1038/s41597-024-03624-2"
     },
     "bundles/wma/east-west/archives/runtime.zip.part-017": {
-      "source_ids": ["wma_atlases_mirror"],
+      "source_ids": [
+        "wma_atlases_mirror"
+      ],
       "sha256": "4f96fe68a0d3136b8666ff77992dc8861c24268d01923498128cefacbed39b62",
       "size_bytes": 536870912,
       "redistribution": "with-notice",
@@ -433,7 +511,9 @@
       "attribution": "https://doi.org/10.1038/s41597-024-03624-2"
     },
     "bundles/wma/east-west/archives/runtime.zip.part-018": {
-      "source_ids": ["wma_atlases_mirror"],
+      "source_ids": [
+        "wma_atlases_mirror"
+      ],
       "sha256": "7985bce0ec69213bdf3adf31caf740f82c67be5dda0275fe7676093f54f5cd84",
       "size_bytes": 536870912,
       "redistribution": "with-notice",
@@ -442,7 +522,9 @@
       "attribution": "https://doi.org/10.1038/s41597-024-03624-2"
     },
     "bundles/wma/east-west/archives/runtime.zip.part-019": {
-      "source_ids": ["wma_atlases_mirror"],
+      "source_ids": [
+        "wma_atlases_mirror"
+      ],
       "sha256": "899b9b7aaca3ab37ca4b4b21a4f5e80cba52325f5af14e4ba0bb2341e321685d",
       "size_bytes": 536870912,
       "redistribution": "with-notice",
@@ -451,7 +533,9 @@
       "attribution": "https://doi.org/10.1038/s41597-024-03624-2"
     },
     "bundles/wma/east-west/archives/runtime.zip.part-020": {
-      "source_ids": ["wma_atlases_mirror"],
+      "source_ids": [
+        "wma_atlases_mirror"
+      ],
       "sha256": "b7fd5a2cfd51457224d895fa9e2e459269c143e09ba8232354e1af25c210b69e",
       "size_bytes": 370370024,
       "redistribution": "with-notice",
@@ -460,7 +544,9 @@
       "attribution": "https://doi.org/10.1038/s41597-024-03624-2"
     },
     "bundles/wma/east-west/extracted_resource_index.json": {
-      "source_ids": ["wma_atlases_mirror"],
+      "source_ids": [
+        "wma_atlases_mirror"
+      ],
       "sha256": "acc6e8d4a56e1dd0c60078cdc8e599d0f8912152760ef0c4e69cbb107fa19cd2",
       "size_bytes": 156592,
       "redistribution": "with-notice",
@@ -469,7 +555,9 @@
       "attribution": "https://doi.org/10.1038/s41597-024-03624-2"
     },
     "bundles/wma/east-west/ATTRIBUTION.md": {
-      "source_ids": ["wma_atlases_mirror"],
+      "source_ids": [
+        "wma_atlases_mirror"
+      ],
       "sha256": "baa8f25ab237cea89ea5b9f92d742bd9bc3e9d4d2a0d9880df04ef9f73b74e2f",
       "size_bytes": 455,
       "redistribution": "with-notice",
@@ -526,8 +614,12 @@
     },
     "pnl-cnn-legacy": {
       "directory": "brain_mask/pnl_cnn",
-      "include_profiles": ["pnl-cnn-legacy-weights"],
-      "required_paths": ["brain_mask/pnl_cnn/IITmean_b0_256.nii.gz"],
+      "include_profiles": [
+        "pnl-cnn-legacy-weights"
+      ],
+      "required_paths": [
+        "brain_mask/pnl_cnn/IITmean_b0_256.nii.gz"
+      ],
       "terms_notice": [
         "Historical author HDF5 receipts for explicit offline conversion/audit only; not selected by current PNL runtime or optional-resource preparation."
       ]

@@ -370,7 +370,7 @@ if (-not $SkipResolvedModelAssets) {
     Write-Host "Downloading/verifying the core model-asset profile through WSL..."
     & wsl.exe --distribution $Distro --exec "$($state.runtime_env)/bin/python" $wslModelDownloader `
         --asset-root $wslModelAssets --profile core --source url `
-        --source-id slicerdsurfer_models_git --write-lockfile $wslModelLock
+        --source-id slicerdsurfer_models_release --write-lockfile $wslModelLock
     if ($LASTEXITCODE -ne 0) {
         throw "Model asset installation failed with exit code $LASTEXITCODE."
     }

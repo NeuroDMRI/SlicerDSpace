@@ -575,7 +575,7 @@ def setup_steps(plan, accepted_licences, *, folder, launcher=None, python_comman
         steps.append(dict(id="model_assets", title="Download and verify model assets", receipt=None,
                           asset_root=str(plan["asset_root"]), profiles=list(plan["asset_profiles"]),
                           commands=[run("download_model_assets.py", "--profile", name, "--asset-root", str(plan["asset_root"]),
-                                        "--source", "url", "--source-id", "slicerdsurfer_models_git")
+                                        "--source", "url", "--source-id", "slicerdsurfer_models_release")
                                     for name in plan["asset_profiles"]]))
     if plan.get("optional_asset_profiles"):
         receipt = folder / "optional-resources-result.json"

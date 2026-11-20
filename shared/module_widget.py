@@ -4334,7 +4334,7 @@ class SharedWidgetMixin:
         profiles = (profile,) if isinstance(profile, str) else tuple(dict.fromkeys(profile))
         commands = [(program, [*prefix, "-u", str(script), "--profile", selected,
                               "--asset-root", str(asset_root), "--source", "url",
-                              "--source-id", "slicerdsurfer_models_git"], {}) for selected in profiles]
+                              "--source-id", "slicerdsurfer_models_release"], {}) for selected in profiles]
 
         def done(status, details, log_path):
             if status == "completed":

@@ -73,6 +73,14 @@ class WorkflowStaticTests(unittest.TestCase):
         self.assertEqual(self.text.count("timeout-minutes: 40"), 2)
         self.assertEqual(self.text.count("-m unittest discover -s Testing/Python -p 'test_*.py'"), 2)
 
+    def test_full_install_unit_suite_is_skipped_on_macos_after_runner_loss(self):
+        # Run 44825474979: both macOS full-install jobs lost the runner in this step.
+        step = "Unit test suite under the real PythonSlicer (report only)"
+        guards = re.findall(re.escape(step) + r"\n\s+if: (.*)", self.text)
+        self.assertEqual(len(guards), 2)
+        self.assertNotIn("macOS", guards[0])
+        self.assertIn("runner.os != 'macOS'", guards[1])
+
     def test_only_github_token_is_used(self):
         self.assertNotIn("secrets.", self.text)
         self.assertEqual(self.text.count("github.token"), 1)

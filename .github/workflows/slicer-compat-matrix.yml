@@ -278,8 +278,14 @@ jobs:
             --limit 2.28 --json "$RUNNER_TEMP/ci-artifacts/glibc_scan.json" 2>&1 | tee "$RUNNER_TEMP/ci-artifacts/glibc_scan.txt"
           exit "${PIPESTATUS[0]}"
 
+      # Not run on macOS: in run 44825474979 both macOS full-install jobs lost
+      # their runner ("The hosted runner lost communication with the server")
+      # during this step, after the install and the smoke had passed, and the
+      # step logs were lost. The same suite passed on macOS repo-only (736 s),
+      # so the resource problem comes with the installed bundle. The cause is
+      # not proven. The suite is report-only, and the smoke above is the gate.
       - name: Unit test suite under the real PythonSlicer (report only)
-        if: ${{ !cancelled() }}
+        if: ${{ runner.os != 'macOS' && !cancelled() }}
         continue-on-error: true
         timeout-minutes: 40
         shell: bash

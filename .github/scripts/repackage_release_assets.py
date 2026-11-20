@@ -44,6 +44,8 @@ from scripts.package_slicer_extension import _should_mark_executable
 from shared.code_updater import EXTENSION_VERSION, RUNTIME_ABI_VERSION, compute_code_tree_sha256
 
 GITHUB_REPO = "NeuroDMRI/SlicerDSpace"
+MODEL_ASSETS_TAG = "model-assets-v0.1.1"
+MACOS_UKF_ARCHIVE = "ukf-standalone-darwin-arm64.tar.gz"
 
 SOURCE_BUNDLES: dict[str, dict[str, str]] = {
     "windows-x64": {
@@ -122,7 +124,61 @@ def _download_verified_part(filename: str, expected_size: int, expected_sha256: 
     raise RuntimeError(f"Could not download verified release part: {filename}")
 
 
-def _should_skip_member(norm_path: str, ext_prefix: str, qt_root: str) -> bool:
+def _download_model_asset(
+    filename: str,
+    dest: Path,
+    *,
+    repo: str = GITHUB_REPO,
+    tag: str = MODEL_ASSETS_TAG,
+) -> Path:
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    base_url = f"https://github.com/{repo}/releases/download/{tag}"
+    sha_url = f"{base_url}/{filename}.sha256"
+    expected_sha = ""
+    for attempt in range(1, 4):
+        try:
+            req = urllib.request.Request(sha_url, headers={"User-Agent": "SlicerDSpace-repackager"})
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                raw_sha = resp.read().decode("utf-8", errors="replace").strip()
+            expected_sha = raw_sha.split()[0].lower() if raw_sha else ""
+            if len(expected_sha) != 64:
+                raise RuntimeError(f"Invalid .sha256 contents for {filename}: {raw_sha!r}")
+            break
+        except Exception as exc:
+            print(f"[warn] SHA256 fetch retry for {filename} ({attempt}/3): {exc}", flush=True)
+            time.sleep(2 * attempt)
+    if len(expected_sha) != 64:
+        raise RuntimeError(f"Could not fetch valid SHA-256 sidecar for {filename} from {tag}")
+
+    if dest.is_file() and sha256_file(dest) == expected_sha:
+        return dest
+
+    url = f"{base_url}/{filename}"
+    for attempt in range(1, 4):
+        try:
+            print(f"[download] {tag}/{filename} (attempt {attempt}/3)...", flush=True)
+            req = urllib.request.Request(url, headers={"User-Agent": "SlicerDSpace-repackager"})
+            with urllib.request.urlopen(req, timeout=300) as resp, dest.open("wb") as out:
+                shutil.copyfileobj(resp, out, length=8 * 1024 * 1024)
+            actual = sha256_file(dest)
+            if actual != expected_sha:
+                raise RuntimeError(f"SHA256 mismatch for {filename}: {actual} != {expected_sha}")
+            return dest
+        except Exception as exc:
+            dest.unlink(missing_ok=True)
+            print(f"[warn] Download retry for {tag}/{filename}: {exc}", flush=True)
+            time.sleep(3 * attempt)
+    raise RuntimeError(f"Could not download verified asset {filename} from {tag}")
+
+
+def _should_skip_member(
+    norm_path: str,
+    ext_prefix: str,
+    qt_root: str,
+    *,
+    replace_macos_ukf: bool = False,
+    slicer_subdir: str = "Slicer-5.10",
+) -> bool:
     wma_root = f"{ext_prefix}/bundled-model-assets/bundles/wma"
     if norm_path == wma_root or norm_path.startswith(wma_root + "/"):
         return True
@@ -130,6 +186,18 @@ def _should_skip_member(norm_path: str, ext_prefix: str, qt_root: str) -> bool:
         return True
     if norm_path == qt_root or norm_path.startswith(qt_root + "/"):
         return True
+    if replace_macos_ukf:
+        cli_root = f"{ext_prefix}/lib/{slicer_subdir}/cli-modules"
+        ukf_rt_root = f"{ext_prefix}/bundled-runtimes/ukf-darwin-arm64"
+        base_lib = f"{ext_prefix}/lib/{slicer_subdir}/libUKFBase.dylib"
+        if norm_path == cli_root or norm_path.startswith(cli_root + "/"):
+            return True
+        if norm_path == ukf_rt_root or norm_path.startswith(ukf_rt_root + "/"):
+            return True
+        if norm_path == base_lib or (
+            norm_path.startswith(f"{ext_prefix}/lib/{slicer_subdir}/libUKFBase") and norm_path.endswith(".dylib")
+        ):
+            return True
     return False
 
 
@@ -235,8 +303,19 @@ def cmd_repack_os_base(args: argparse.Namespace) -> int:
             _download_verified_part(source_filename, source_size, source_sha256, old_archive)
 
     ext_prefix = spec["ext_prefix"]
-    qt_root = f"{ext_prefix}/lib/{spec['slicer_subdir']}/qt-scripted-modules"
+    slicer_subdir = spec["slicer_subdir"]
+    qt_root = f"{ext_prefix}/lib/{slicer_subdir}/qt-scripted-modules"
     fresh_runtime_files = sorted(runtime_files(REPO_ROOT))
+    replace_macos_ukf = (target == "macos-arm64") and (not getattr(args, "skip_macos_ukf", False))
+    macos_ukf_tar: Path | None = None
+    if replace_macos_ukf:
+        explicit_ukf = getattr(args, "macos_ukf_archive", None)
+        if explicit_ukf is not None:
+            macos_ukf_tar = Path(explicit_ukf).expanduser().resolve()
+            if not macos_ukf_tar.is_file():
+                raise FileNotFoundError(f"--macos-ukf-archive not found: {macos_ukf_tar}")
+        else:
+            macos_ukf_tar = _download_model_asset(MACOS_UKF_ARCHIVE, work_dir / MACOS_UKF_ARCHIVE)
     new_archive = out_dir / spec["out_name"]
     tmp_new = new_archive.with_name(new_archive.name + ".tmp")
     saw_qt_entry = False
@@ -249,7 +328,13 @@ def cmd_repack_os_base(args: argparse.Namespace) -> int:
                 norm = info.filename.replace("\\", "/").strip("/")
                 if norm == f"{qt_root}/SlicerDSpace.py":
                     saw_qt_entry = True
-                if info.is_dir() or _should_skip_member(norm, ext_prefix, qt_root):
+                if info.is_dir() or _should_skip_member(
+                    norm,
+                    ext_prefix,
+                    qt_root,
+                    replace_macos_ukf=replace_macos_ukf,
+                    slicer_subdir=slicer_subdir,
+                ):
                     continue
                 if "/bundles/wma" in norm or norm.endswith("/IITmean_b0_256.nii.gz"):
                     raise RuntimeError(f"Refusing forbidden asset in base package: {norm}")
@@ -282,7 +367,13 @@ def cmd_repack_os_base(args: argparse.Namespace) -> int:
                     saw_qt_entry = True
                 if member.issym() or member.islnk() or member.isdev():
                     raise RuntimeError(f"Unsupported link/dev member in source archive: {member.name}")
-                if not norm or _should_skip_member(norm, ext_prefix, qt_root):
+                if not norm or _should_skip_member(
+                    norm,
+                    ext_prefix,
+                    qt_root,
+                    replace_macos_ukf=replace_macos_ukf,
+                    slicer_subdir=slicer_subdir,
+                ):
                     continue
                 if "/bundles/wma" in norm or norm.endswith("/IITmean_b0_256.nii.gz"):
                     raise RuntimeError(f"Refusing forbidden asset in base package: {norm}")
@@ -335,6 +426,33 @@ def cmd_repack_os_base(args: argparse.Namespace) -> int:
                 f_info.gname = "root"
                 with src.open("rb") as src_fh:
                     new_tf.addfile(f_info, src_fh)
+
+            if macos_ukf_tar is not None:
+                rt_prefix = f"{ext_prefix}/bundled-runtimes"
+                _ensure_tar_dir(rt_prefix)
+                with tarfile.open(macos_ukf_tar, "r:*") as ukf_tf:
+                    for um in ukf_tf:
+                        unorm = um.name.replace("\\", "/").strip("/")
+                        if not unorm or ".." in PurePosixPath(unorm).parts:
+                            continue
+                        if not (unorm == "ukf-darwin-arm64" or unorm.startswith("ukf-darwin-arm64/")):
+                            raise RuntimeError(f"Unexpected member inside standalone UKF archive: {unorm}")
+                        arcname = f"{rt_prefix}/{unorm}"
+                        if um.isdir():
+                            _ensure_tar_dir(arcname)
+                        elif um.isfile():
+                            _ensure_tar_dir(PurePosixPath(arcname).parent.as_posix())
+                            uinfo = tarfile.TarInfo(name=arcname)
+                            uinfo.type = tarfile.REGTYPE
+                            uinfo.size = um.size
+                            uinfo.mode = (um.mode & 0o777) or (0o755 if unorm.endswith("/UKFTractography") else 0o644)
+                            uinfo.mtime = um.mtime or DETERMINISTIC_MTIME
+                            uinfo.uid = 0
+                            uinfo.gid = 0
+                            uinfo.uname = "root"
+                            uinfo.gname = "root"
+                            with ukf_tf.extractfile(um) as src_fh:
+                                new_tf.addfile(uinfo, src_fh)
 
     if not saw_qt_entry:
         tmp_new.unlink(missing_ok=True)
@@ -465,6 +583,52 @@ def _extract_embedded_setup_config(py_src: str) -> dict[str, Any]:
     raise RuntimeError("Could not extract embedded CONFIG JSON literal from SlicerDSpaceSetup.py")
 
 
+def _verify_generated_setup_zip(
+    zip_path: Path,
+    os_key: str,
+    bundle_key: str,
+    expected_s4ext_os: str,
+    expected_rev: str,
+    expected_subdir: str,
+    bundles: dict[str, dict[str, Any]],
+) -> None:
+    if not zip_path.is_file():
+        raise RuntimeError(f"Missing generated setup archive: {zip_path}")
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        bad = zf.testzip()
+        if bad is not None:
+            raise RuntimeError(f"Corrupt entry {bad} inside {zip_path}")
+        prefix = (
+            f"SlicerDSpaceSetup/Slicer.app/Contents/Extensions-{expected_rev}/SlicerDSpaceSetup"
+            if os_key == "macos"
+            else "SlicerDSpaceSetup"
+        )
+        names = set(zf.namelist())
+        s4ext_rel = f"{prefix}/share/{expected_subdir}/SlicerDSpaceSetup.s4ext"
+        root_s4ext_rel = f"{prefix}/SlicerDSpaceSetup.s4ext"
+        py_rel = f"{prefix}/lib/{expected_subdir}/qt-scripted-modules/SlicerDSpaceSetup.py"
+        for required in (s4ext_rel, root_s4ext_rel, py_rel):
+            if required not in names:
+                raise RuntimeError(f"Missing {required} inside {zip_path}")
+        s4ext_text = zf.read(s4ext_rel).decode("utf-8")
+        if f"os {expected_s4ext_os}" not in s4ext_text or f"slicer_revision {expected_rev}" not in s4ext_text:
+            raise RuntimeError(f"Unexpected .s4ext metadata inside {zip_path}")
+        py_src = zf.read(py_rel).decode("utf-8")
+        if not all(ord(ch) < 128 or ch == "·" for ch in py_src):
+            raise RuntimeError(f"Non-ASCII wording detected in {zip_path}")
+        cfg = _extract_embedded_setup_config(py_src)
+        if cfg.get("auto_start") is not False:
+            raise RuntimeError(f"Expected auto_start=False inside {zip_path}, got {cfg.get('auto_start')!r}")
+        if cfg.get("os") != os_key or cfg.get("selected_packs") != ["wma_org"]:
+            raise RuntimeError(f"Unexpected OS/pack defaults inside {zip_path}")
+        expected_bundle_sha = str((bundles.get(bundle_key) or {}).get("sha256") or "")
+        actual_bundle_sha = str((((cfg.get("artifacts") or {}).get("bundles") or {}).get(bundle_key) or {}).get("sha256") or "")
+        if expected_bundle_sha and actual_bundle_sha != expected_bundle_sha:
+            raise RuntimeError(
+                f"Embedded {bundle_key} sha256 mismatch in {zip_path}: {actual_bundle_sha} != {expected_bundle_sha}"
+            )
+
+
 def build_setup_zips(
     out_dir: Path,
     installer_artifacts: dict[str, Any],
@@ -512,42 +676,7 @@ def build_setup_zips(
 
     for os_key, filename, bundle_key, expected_s4ext_os in SETUP_OS_ORDER:
         zip_path = out_dir / filename
-        if not zip_path.is_file():
-            raise RuntimeError(f"Missing generated setup archive: {zip_path}")
-        with zipfile.ZipFile(zip_path, "r") as zf:
-            bad = zf.testzip()
-            if bad is not None:
-                raise RuntimeError(f"Corrupt entry {bad} inside {zip_path}")
-            prefix = (
-                "SlicerDSpaceSetup/Slicer.app/Contents/Extensions-34045/SlicerDSpaceSetup"
-                if os_key == "macos"
-                else "SlicerDSpaceSetup"
-            )
-            names = set(zf.namelist())
-            s4ext_rel = f"{prefix}/share/Slicer-5.10/SlicerDSpaceSetup.s4ext"
-            root_s4ext_rel = f"{prefix}/SlicerDSpaceSetup.s4ext"
-            py_rel = f"{prefix}/lib/Slicer-5.10/qt-scripted-modules/SlicerDSpaceSetup.py"
-            for required in (s4ext_rel, root_s4ext_rel, py_rel):
-                if required not in names:
-                    raise RuntimeError(f"Missing {required} inside {zip_path}")
-            s4ext_text = zf.read(s4ext_rel).decode("utf-8")
-            if f"os {expected_s4ext_os}" not in s4ext_text or "slicer_revision 34045" not in s4ext_text:
-                raise RuntimeError(f"Unexpected .s4ext metadata inside {zip_path}")
-            py_src = zf.read(py_rel).decode("utf-8")
-            if not all(ord(ch) < 128 or ch == "·" for ch in py_src):
-                raise RuntimeError(f"Non-ASCII wording detected in {zip_path}")
-            cfg = _extract_embedded_setup_config(py_src)
-            if cfg.get("auto_start") is not False:
-                raise RuntimeError(f"Expected auto_start=False inside {zip_path}, got {cfg.get('auto_start')!r}")
-            if cfg.get("os") != os_key or cfg.get("selected_packs") != ["wma_org"]:
-                raise RuntimeError(f"Unexpected OS/pack defaults inside {zip_path}")
-            expected_bundle_sha = str((bundles.get(bundle_key) or {}).get("sha256") or "")
-            actual_bundle_sha = str((((cfg.get("artifacts") or {}).get("bundles") or {}).get(bundle_key) or {}).get("sha256") or "")
-            if expected_bundle_sha and actual_bundle_sha != expected_bundle_sha:
-                raise RuntimeError(
-                    f"Embedded {bundle_key} sha256 mismatch in {zip_path}: {actual_bundle_sha} != {expected_bundle_sha}"
-                )
-
+        _verify_generated_setup_zip(zip_path, os_key, bundle_key, expected_s4ext_os, "34045", "Slicer-5.10", bundles)
         size_bytes = zip_path.stat().st_size
         digest = sha256_file(zip_path)
         setup_meta[os_key] = {
@@ -562,6 +691,110 @@ def build_setup_zips(
         print(f"[setup-zip] Verified {zip_path.name} ({size_bytes:,} bytes, sha256={digest})", flush=True)
 
     return setup_meta, written_paths
+
+
+_CROSS_VERSION_SCRIPT_SPECS = (
+    ("windows", "Install-SlicerDSpace-Windows.bat", "windows_x64_base", False),
+    ("linux", "Install-SlicerDSpace-Linux.sh", "linux_x64_base", True),
+    ("macos", "Install-SlicerDSpace-macOS.command", "macos_arm64_base", True),
+)
+
+
+def build_cross_version_setup_assets(
+    out_dir: Path,
+    installer_artifacts: dict[str, Any],
+    *,
+    release_tag: str = RELEASE_TAG,
+    published: bool = True,
+) -> tuple[dict[str, dict[str, Any]], list[Path]]:
+    """Build Slicer 5.12.4 setup zips and universal auto-adapt scripts for Windows/Linux/macOS."""
+    node_bin = shutil.which("node")
+    if node_bin is None:
+        raise RuntimeError("node is required in PATH to build cross-version installer assets")
+
+    out_dir = out_dir.expanduser().resolve()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    js_path = REPO_ROOT / "docs" / "site" / "assets" / "js" / "installer-customizer.js"
+
+    node_script = (
+        "const fs = require('fs');\n"
+        "const path = require('path');\n"
+        "const ic = require(process.argv[1]);\n"
+        "const outDir = process.argv[2];\n"
+        "const scriptNames = { windows: 'Install-SlicerDSpace-Windows.bat', linux: 'Install-SlicerDSpace-Linux.sh', macos: 'Install-SlicerDSpace-macOS.command' };\n"
+        "(async () => {\n"
+        "  for (const osKey of ['windows', 'linux', 'macos']) {\n"
+        "    const state512 = { os: osKey, slicerVersion: '5.12.4', wmaEnabled: true, wmaAtlases: ['wma_org'], autoStart: false };\n"
+        "    const bytes = await ic.buildSetupZip(state512);\n"
+        "    const zipName = ic.OS_DEFAULTS[osKey].setupZipName.replace(/\\.zip$/i, '-Slicer5.12.4.zip');\n"
+        "    fs.writeFileSync(path.join(outDir, zipName), Buffer.from(bytes));\n"
+        "    const scr = ic.buildScript(state512);\n"
+        "    fs.writeFileSync(path.join(outDir, scriptNames[osKey]), scr, 'utf8');\n"
+        "  }\n"
+        "})().catch((err) => { console.error(err); process.exit(1); });\n"
+    )
+    proc = subprocess.run([node_bin, "-e", node_script, str(js_path), str(out_dir)], capture_output=True, text=True)
+    if proc.returncode != 0:
+        raise RuntimeError(f"Failed generating cross-version assets via node:\n{proc.stderr or proc.stdout}")
+
+    base_url = str(
+        installer_artifacts.get("release_base_url")
+        or f"https://github.com/{GITHUB_REPO}/releases/download/{release_tag}"
+    ).rstrip("/")
+    bundles = installer_artifacts.get("bundles") or {}
+    cross_meta: dict[str, dict[str, Any]] = {}
+    written_paths: list[Path] = []
+
+    for os_key, base_filename, bundle_key, expected_s4ext_os in SETUP_OS_ORDER:
+        filename = base_filename.replace(".zip", "-Slicer5.12.4.zip")
+        zip_path = out_dir / filename
+        _verify_generated_setup_zip(zip_path, os_key, bundle_key, expected_s4ext_os, "34645", "Slicer-5.12", bundles)
+        size_bytes = zip_path.stat().st_size
+        digest = sha256_file(zip_path)
+        cross_meta[f"{os_key}_512"] = {
+            "os": os_key,
+            "slicer_version": "5.12.4",
+            "filename": filename,
+            "url": f"{base_url}/{filename}",
+            "size_bytes": size_bytes,
+            "sha256": digest,
+            "published": published,
+        }
+        written_paths.append(zip_path)
+        print(f"[setup-zip-5.12] Verified {zip_path.name} ({size_bytes:,} bytes, sha256={digest})", flush=True)
+
+    for os_key, script_name, bundle_key, make_exec in _CROSS_VERSION_SCRIPT_SPECS:
+        script_path = out_dir / script_name
+        if not script_path.is_file():
+            raise RuntimeError(f"Missing generated universal installer script: {script_path}")
+        if make_exec:
+            os.chmod(script_path, 0o755)
+        raw_script = script_path.read_text(encoding="utf-8")
+        if "# __SLICERDSPACE_PY_BEGIN__" not in raw_script or "# __SLICERDSPACE_PY_END__" not in raw_script:
+            raise RuntimeError(f"Missing embedded Python payload markers in {script_path}")
+        py_body = raw_script.split("# __SLICERDSPACE_PY_BEGIN__", 1)[1].split("# __SLICERDSPACE_PY_END__", 1)[0]
+        cfg = _extract_embedded_setup_config(py_body)
+        if cfg.get("os") != os_key or cfg.get("selected_packs") != ["wma_org"]:
+            raise RuntimeError(f"Unexpected OS/pack defaults inside {script_path}")
+        expected_bundle_sha = str((bundles.get(bundle_key) or {}).get("sha256") or "")
+        actual_bundle_sha = str((((cfg.get("artifacts") or {}).get("bundles") or {}).get(bundle_key) or {}).get("sha256") or "")
+        if expected_bundle_sha and actual_bundle_sha != expected_bundle_sha:
+            raise RuntimeError(f"Embedded {bundle_key} sha256 mismatch in {script_path}")
+        size_bytes = script_path.stat().st_size
+        digest = sha256_file(script_path)
+        cross_meta[f"{os_key}_universal"] = {
+            "os": os_key,
+            "slicer_version": "universal",
+            "filename": script_name,
+            "url": f"{base_url}/{script_name}",
+            "size_bytes": size_bytes,
+            "sha256": digest,
+            "published": published,
+        }
+        written_paths.append(script_path)
+        print(f"[universal-script] Verified {script_path.name} ({size_bytes:,} bytes, sha256={digest})", flush=True)
+
+    return cross_meta, written_paths
 
 
 def build_code_overlay(
@@ -668,6 +901,12 @@ def _format_sha256sums(artifacts: dict[str, Any], packs_manifest: dict[str, Any]
         rec = setup_installers.get(os_key)
         if rec and rec.get("sha256") and rec.get("filename"):
             entries.append((str(rec["sha256"]), str(rec["filename"])))
+    cross_installers = artifacts.get("cross_version_installers") or {}
+    cross_order = ("windows_512", "linux_512", "macos_512", "windows_universal", "linux_universal", "macos_universal")
+    for key in [k for k in cross_order if k in cross_installers] + [k for k in cross_installers if k not in cross_order]:
+        rec = cross_installers.get(key)
+        if rec and rec.get("sha256") and rec.get("filename"):
+            entries.append((str(rec["sha256"]), str(rec["filename"])))
     packs = packs_manifest.get("packs") or {}
     pack_order = [k for k in ("wma_org", "wma_naba", "wma_east_west") if k in packs] + [
         k for k in packs if k not in ("wma_org", "wma_naba", "wma_east_west")
@@ -715,6 +954,13 @@ def cmd_sync_metadata(args: argparse.Namespace) -> int:
         published=not args.dry_run,
     )
     artifacts["setup_installers"] = setup_meta
+    cross_meta, cross_paths = build_cross_version_setup_assets(
+        setup_dir,
+        artifacts,
+        release_tag=args.release_tag,
+        published=not args.dry_run,
+    )
+    artifacts["cross_version_installers"] = cross_meta
 
     overlay_manifest, overlay_paths = build_code_overlay(
         setup_dir / "overlay",
@@ -740,7 +986,7 @@ def cmd_sync_metadata(args: argparse.Namespace) -> int:
 
     if args.upload_sha256sums and not args.dry_run:
         _upload_release_files(
-            [*overlay_paths, *setup_paths, sha_out],
+            [*overlay_paths, *setup_paths, *cross_paths, sha_out],
             release_tag=args.release_tag,
             repo=args.repo,
         )
@@ -795,6 +1041,13 @@ def cmd_sync_setup_zips(args: argparse.Namespace) -> int:
         published=not args.dry_run,
     )
     artifacts["setup_installers"] = setup_meta
+    cross_meta, cross_paths = build_cross_version_setup_assets(
+        out_dir,
+        artifacts,
+        release_tag=args.release_tag,
+        published=not args.dry_run,
+    )
+    artifacts["cross_version_installers"] = cross_meta
     artifacts_path.write_text(json.dumps(artifacts, indent=2) + "\n", encoding="utf-8")
     print(f"[sync-setup-zips] Updated {artifacts_path}", flush=True)
 
@@ -807,7 +1060,7 @@ def cmd_sync_setup_zips(args: argparse.Namespace) -> int:
 
     if not args.dry_run:
         _upload_release_files(
-            [*setup_paths, sha_out],
+            [*setup_paths, *cross_paths, sha_out],
             release_tag=args.release_tag,
             repo=args.repo,
         )
@@ -828,6 +1081,8 @@ def main(argv: list[str] | None = None) -> int:
     p_base.add_argument("--target", required=True, choices=tuple(SOURCE_BUNDLES.keys()))
     p_base.add_argument("--work-dir", required=True, type=Path)
     p_base.add_argument("--out-dir", required=True, type=Path)
+    p_base.add_argument("--macos-ukf-archive", default=None, type=Path, help="Optional local ukf-standalone-darwin-arm64.tar.gz path.")
+    p_base.add_argument("--skip-macos-ukf", action="store_true", help="Do not replace macOS UKF binary during repack.")
     p_base.add_argument("--dry-run", action="store_true")
 
     p_sync = sub.add_parser(

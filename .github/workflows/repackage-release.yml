@@ -4,13 +4,14 @@ on:
   workflow_dispatch:
     inputs:
       phase:
-        description: "Phase to execute: 'os-bases' (repack code into all 3 OS base packages + overlay + website), 'code-overlay' (fast ~20s incremental code update + manifest), 'setup-zips', or 'atlases'"
+        description: "Phase to execute: 'os-bases' (repack code into all 3 OS base packages + overlay + website), 'code-overlay' (fast ~20s incremental code update + manifest), 'macos-ukf' (build standalone arm64 macOS UKF binary), 'setup-zips', or 'atlases'"
         required: true
         type: choice
         default: "os-bases"
         options:
           - "os-bases"
           - "code-overlay"
+          - "macos-ukf"
           - "setup-zips"
           - "atlases"
       release_tag:
@@ -29,6 +30,38 @@ permissions:
   actions: write
 
 jobs:
+  build-macos-ukf:
+    if: github.event.inputs.phase == 'macos-ukf'
+    runs-on: macos-14
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Ninja build tool if missing
+        run: |
+          if ! command -v ninja >/dev/null 2>&1; then
+            brew install ninja
+          fi
+
+      - name: Build standalone arm64 UKFTractography & upload to model-assets-v0.1.1
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/build_macos_ukf_standalone.py \
+            --work-dir "${{ runner.temp }}/ukf-work" \
+            --out-dir "${{ runner.temp }}/ukf-out"
+          gh release upload model-assets-v0.1.1 \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber \
+            "${{ runner.temp }}/ukf-out/ukf-standalone-darwin-arm64.tar.gz" \
+            "${{ runner.temp }}/ukf-out/ukf-standalone-darwin-arm64.tar.gz.sha256"
+
   atlases:
     if: github.event.inputs.phase == 'atlases'
     runs-on: ubuntu-latest

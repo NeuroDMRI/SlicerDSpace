@@ -155,6 +155,16 @@ def resolve_executable(explicit=None, name="UKFTractography"):
                 for path in root.glob(pattern):
                     if path.is_file() and path.name.lower() in gpu_names_lower:
                         return path.resolve()
+        standalone_names_lower = (name.lower(), name.lower() + ".exe")
+        for root in roots:
+            for pattern in (
+                "bundled-runtimes/ukf-*/bin/*",
+                "Extensions-*/*/bundled-runtimes/ukf-*/bin/*",
+                "slicer.org/Extensions-*/*/bundled-runtimes/ukf-*/bin/*",
+            ):
+                for path in sorted(root.glob(pattern)):
+                    if path.is_file() and path.name.lower() in standalone_names_lower:
+                        return path.resolve()
     found = shutil.which(name)
     if found:
         return Path(found).resolve()
@@ -501,15 +511,19 @@ def schema_supports_gpu(schema) -> bool:
 
 
 def ukf_gpu_process_environment(startup_environment, executable):
-    """Isolate bundled ukf-gpu binaries from Slicer's Qt/Python/runtime libraries."""
+    """Isolate bundled ukf-gpu and standalone ukf binaries from Slicer's Qt/Python/runtime libraries."""
     exe_path = Path(executable)
-    is_gpu_bundle = exe_path.name.lower().startswith(("ukf-gpu", "ukftractography_gpu")) or (
+    parts_lower = [part.lower() for part in exe_path.parts]
+    is_standalone_runtime = "bundled-runtimes" in parts_lower and any("ukf" in p for p in parts_lower)
+    is_gpu_bundle = is_standalone_runtime or exe_path.name.lower().startswith(("ukf-gpu", "ukftractography_gpu")) or (
         exe_path.parent.name.lower() == "bin" and exe_path.parent.parent.name.lower() == "runtime"
     )
     env = dict(startup_environment)
     if not is_gpu_bundle:
         return env
     removed = {
+        "DYLD_LIBRARY_PATH",
+        "DYLD_FALLBACK_LIBRARY_PATH",
         "LD_LIBRARY_PATH",
         "LD_PRELOAD",
         "PYTHONHOME",

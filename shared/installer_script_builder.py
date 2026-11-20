@@ -32,17 +32,22 @@ _BOOTSTRAP_BODY = textwrap.dedent(
     import json
     import os
     import platform
+    import posixpath
+    import re
     import shutil
     import socket
     import ssl
+    import stat
     import subprocess
     import sys
+    import tarfile
     import tempfile
     import threading
     import time
     import urllib.error
     import urllib.parse
     import urllib.request
+    import zipfile
     from pathlib import Path
 
     _GITHUB_PREFIXES = (
@@ -749,30 +754,255 @@ _BOOTSTRAP_BODY = textwrap.dedent(
         if sys.platform == "darwin" and shutil.which("xattr"):
             subprocess.run(["xattr", "-dr", "com.apple.quarantine", str(path)], capture_output=True)
 
+    def _remap_s4ext_text(raw_text: str, rev: str, slicer_os: str = "", slicer_arch: str = "") -> str:
+        lines = []
+        saw_rev = False
+        saw_os = False
+        saw_arch = False
+        for raw_line in str(raw_text or "").splitlines():
+            low = raw_line.strip().lower()
+            if rev and low.startswith("slicer_revision "):
+                lines.append(f"slicer_revision {rev}")
+                saw_rev = True
+            elif slicer_os and low.startswith("os "):
+                lines.append(f"os {slicer_os}")
+                saw_os = True
+            elif slicer_arch and low.startswith("arch "):
+                lines.append(f"arch {slicer_arch}")
+                saw_arch = True
+            else:
+                lines.append(raw_line)
+        if rev and not saw_rev:
+            lines.append(f"slicer_revision {rev}")
+        if slicer_os and not saw_os:
+            lines.append(f"os {slicer_os}")
+        if slicer_arch and not saw_arch:
+            lines.append(f"arch {slicer_arch}")
+        return "\n".join(lines).rstrip("\n") + "\n"
+
+    def _remap_base_relpath(raw_name: str, target_subdir: str) -> str:
+        p = posixpath.normpath(str(raw_name or "").replace(chr(92), "/").lstrip("/"))
+        while p.startswith("./"):
+            p = p[2:]
+        if not p or p == ".":
+            return ""
+        parts = [x for x in p.split("/") if x and x != "."]
+        if not parts or ".." in parts:
+            return ""
+        has_app = (parts[0] == "Slicer.app") or (
+            len(parts) >= 2 and parts[0] in ("SlicerDSpace", "SlicerDSpaceSetup") and parts[1] == "Slicer.app"
+        )
+        if has_app:
+            ext_idx = next((i for i, seg in enumerate(parts) if re.match(r"^Extensions-[0-9]+$", seg)), -1)
+            if ext_idx < 0 or ext_idx + 2 >= len(parts):
+                return ""
+            if parts[ext_idx + 1] not in ("SlicerDSpace", "SlicerDSpaceSetup"):
+                return ""
+            parts = parts[ext_idx + 2:]
+        elif parts[0] in ("SlicerDSpace", "SlicerDSpaceSetup"):
+            parts = parts[1:]
+        if not parts:
+            return ""
+        if len(parts) >= 2 and parts[0] in ("lib", "share") and re.match(r"^Slicer-[0-9]+[.][0-9]+", parts[1]):
+            parts[1] = str(target_subdir)
+        return "/".join(parts)
+
+    def _safe_remove_dest(dst: Path):
+        if dst.is_symlink() or dst.is_file():
+            try:
+                dst.unlink()
+            except PermissionError:
+                os.chmod(dst, 0o644)
+                dst.unlink()
+        elif dst.is_dir():
+            shutil.rmtree(dst)
+
+    def _safe_symlink(tgt: str, rel: str, dst: Path, target_subdir: str):
+        tgt = str(tgt or "")
+        if not tgt or posixpath.isabs(tgt):
+            return
+        if re.search(r"Slicer-[0-9]+[.][0-9]+", tgt):
+            tgt = re.sub(r"Slicer-[0-9]+[.][0-9]+", str(target_subdir), tgt)
+        joined = posixpath.normpath(posixpath.join(posixpath.dirname(rel), tgt))
+        if joined == ".." or joined.startswith("../"):
+            return
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        _safe_remove_dest(dst)
+        try:
+            os.symlink(tgt, dst)
+        except OSError:
+            pass
+
+    def _extract_base_archive_remapped(
+        archive_path: Path,
+        ext_root: Path,
+        rev: str,
+        target_subdir: str,
+        slicer_os: str = "",
+        slicer_arch: str = "",
+    ) -> Path:
+        archive_path = Path(archive_path)
+        ext_root = Path(ext_root)
+        ext_root.mkdir(parents=True, exist_ok=True)
+        count = 0
+        if zipfile.is_zipfile(archive_path):
+            with zipfile.ZipFile(archive_path, "r") as zf:
+                for zi in zf.infolist():
+                    rel = _remap_base_relpath(zi.filename, target_subdir)
+                    if not rel:
+                        continue
+                    dst = ext_root / rel
+                    if zi.is_dir():
+                        dst.mkdir(parents=True, exist_ok=True)
+                        continue
+                    mode = int(zi.external_attr or 0) >> 16
+                    if stat.S_ISLNK(mode):
+                        _safe_symlink(zf.read(zi).decode("utf-8", "replace"), rel, dst, target_subdir)
+                        continue
+                    dst.parent.mkdir(parents=True, exist_ok=True)
+                    _safe_remove_dest(dst)
+                    if dst.name == "SlicerDSpace.s4ext":
+                        txt = zf.read(zi).decode("utf-8", "replace")
+                        dst.write_text(_remap_s4ext_text(txt, rev, slicer_os, slicer_arch), encoding="utf-8")
+                    else:
+                        with zf.open(zi, "r") as sf, dst.open("wb") as of:
+                            shutil.copyfileobj(sf, of, 1048576)
+                    perm = mode & 0o777
+                    if perm:
+                        try:
+                            os.chmod(dst, perm)
+                        except OSError:
+                            pass
+                    count += 1
+                    if count % 5000 == 0:
+                        _log(f"Extracted {count} extension files...")
+        else:
+            deferred = []
+            with tarfile.open(archive_path, "r:*") as tf:
+                for m in tf:
+                    rel = _remap_base_relpath(m.name, target_subdir)
+                    if not rel:
+                        continue
+                    dst = ext_root / rel
+                    if m.isdir():
+                        dst.mkdir(parents=True, exist_ok=True)
+                        continue
+                    if m.issym():
+                        _safe_symlink(m.linkname, rel, dst, target_subdir)
+                        continue
+                    if m.islnk():
+                        lrel = _remap_base_relpath(m.linkname, target_subdir)
+                        if not lrel:
+                            continue
+                        src_p = ext_root / lrel
+                        if src_p.exists():
+                            dst.parent.mkdir(parents=True, exist_ok=True)
+                            _safe_remove_dest(dst)
+                            try:
+                                os.link(src_p, dst)
+                            except OSError:
+                                shutil.copy2(src_p, dst)
+                        else:
+                            deferred.append((dst, src_p))
+                        continue
+                    if not m.isfile():
+                        continue
+                    fobj = tf.extractfile(m)
+                    if fobj is None:
+                        continue
+                    dst.parent.mkdir(parents=True, exist_ok=True)
+                    _safe_remove_dest(dst)
+                    if dst.name == "SlicerDSpace.s4ext":
+                        txt = fobj.read().decode("utf-8", "replace")
+                        dst.write_text(_remap_s4ext_text(txt, rev, slicer_os, slicer_arch), encoding="utf-8")
+                    else:
+                        with dst.open("wb") as of:
+                            shutil.copyfileobj(fobj, of, 1048576)
+                    perm = int(m.mode or 0) & 0o777
+                    if perm:
+                        try:
+                            os.chmod(dst, perm)
+                        except OSError:
+                            pass
+                    count += 1
+                    if count % 5000 == 0:
+                        _log(f"Extracted {count} extension files...")
+            for dst, src_p in deferred:
+                if src_p.exists():
+                    dst.parent.mkdir(parents=True, exist_ok=True)
+                    _safe_remove_dest(dst)
+                    try:
+                        os.link(src_p, dst)
+                    except OSError:
+                        shutil.copy2(src_p, dst)
+        for cand in (ext_root / "SlicerDSpace.s4ext", ext_root / "share" / target_subdir / "SlicerDSpace.s4ext", ext_root.parent / "SlicerDSpace.s4ext"):
+            if cand.is_file():
+                cand.write_text(_remap_s4ext_text(cand.read_text(encoding="utf-8", errors="replace"), rev, slicer_os, slicer_arch), encoding="utf-8")
+        _log(f"Remapped extraction complete ({count} files) -> {ext_root}")
+        return ext_root
+
     def _install_extension_in_slicer(slicer_exe: str, archive_path: Path):
         _strip_quarantine_macos(archive_path)
         receipt = Path(tempfile.mkdtemp(prefix="slicerdspace-inst-")) / "receipt.json"
         helper = receipt.with_name("install_ext.py")
-        helper.write_text(
-            "import json, sys, traceback, qt, slicer\n"
-            "from pathlib import Path\n"
-            "def _run():\n"
-            "    archive = sys.argv[1]\n"
-            "    receipt = Path(sys.argv[2])\n"
-            "    try:\n"
-            "        em = slicer.app.extensionsManagerModel()\n"
-            "        em.setInteractive(False)\n"
-            "        meta = {'extensionname': 'SlicerDSpace', 'depends': 'NA', 'slicer_revision': str(em.slicerRevision), 'os': str(em.slicerOs), 'arch': str(em.slicerArch)}\n"
-            "        ok = bool(em.installExtension('SlicerDSpace', meta, archive, False, True))\n"
-            "        paths = [str(p) for p in em.extensionModulePaths('SlicerDSpace')]\n"
-            "        receipt.write_text(json.dumps({'installed': ok, 'module_paths': paths}), encoding='utf-8')\n"
-            "        slicer.app.exit(0 if ok else 1)\n"
-            "    except Exception as exc:\n"
-            "        receipt.write_text(json.dumps({'installed': False, 'error': str(exc), 'traceback': traceback.format_exc()}), encoding='utf-8')\n"
-            "        slicer.app.exit(1)\n"
-            "qt.QTimer.singleShot(500, _run)\n",
-            encoding="utf-8",
-        )
+        helper_lines = [
+            "import json, sys, traceback, zipfile, qt, slicer",
+            "from pathlib import Path",
+            "def _run():",
+            "    archive = sys.argv[1]",
+            "    receipt = Path(sys.argv[2])",
+            "    try:",
+            "        em = slicer.app.extensionsManagerModel()",
+            "        em.setInteractive(False)",
+            "        rev = str(em.slicerRevision)",
+            "        sos = str(em.slicerOs)",
+            "        sarch = str(em.slicerArch)",
+            "        maj = int(getattr(slicer.app, 'majorVersion', 5))",
+            "        minv = int(getattr(slicer.app, 'minorVersion', 10))",
+            "        tsub = f'Slicer-{maj}.{minv}'",
+            "        if maj < 5 or (maj == 5 and minv < 8):",
+            "            raise RuntimeError(f'Requires 3D Slicer 5.8+ (found {maj}.{minv})')",
+            "        needs_remap = (rev != '34045' or tsub != 'Slicer-5.10')",
+            "        if em.isExtensionInstalled('SlicerDSpace'):",
+            "            em.uninstallExtension('SlicerDSpace')",
+            "            em.updateModel()",
+            "        target_arc = archive",
+            "        stub = None",
+            "        if needs_remap:",
+            "            stub = receipt.with_name('SlicerDSpace-stub.zip')",
+            "            pfx = f'SlicerDSpace/Slicer.app/Contents/Extensions-{rev}/SlicerDSpace' if (sos.lower() == 'macosx' or sys.platform == 'darwin') else 'SlicerDSpace'",
+            "            s4 = chr(10).join([f'arch {sarch}', 'category Diffusion', 'contributors Chengjin Li, Fan Zhang (UESTC)', 'depends NA', 'description SlicerDSpace', 'enabled 1', 'homepage https://neurodmri.github.io/SlicerDSpace/', f'os {sos}', 'scm git', 'scmurl https://github.com/NeuroDMRI/SlicerDSpace.git', f'slicer_revision {rev}', ''])",
+            "            spy = chr(10).join(['from slicer.ScriptedLoadableModule import ScriptedLoadableModule, ScriptedLoadableModuleWidget', 'class SlicerDSpace(ScriptedLoadableModule):', '    def __init__(self, p): ScriptedLoadableModule.__init__(self, p)', 'class SlicerDSpaceWidget(ScriptedLoadableModuleWidget):', '    def setup(self): ScriptedLoadableModuleWidget.setup(self)', ''])",
+            "            with zipfile.ZipFile(stub, 'w', compression=zipfile.ZIP_DEFLATED) as zf:",
+            "                zf.writestr(f'{pfx}/share/{tsub}/SlicerDSpace.s4ext', s4)",
+            "                zf.writestr(f'{pfx}/SlicerDSpace.s4ext', s4)",
+            "                zf.writestr(f'{pfx}/lib/{tsub}/qt-scripted-modules/SlicerDSpace.py', spy)",
+            "            target_arc = str(stub)",
+            "        meta = {'extensionname': 'SlicerDSpace', 'depends': 'NA', 'slicer_revision': rev, 'os': sos, 'arch': sarch}",
+            "        ok = bool(em.installExtension('SlicerDSpace', meta, target_arc, False, True))",
+            "        if stub is not None:",
+            "            stub.unlink(missing_ok=True)",
+            "        paths = [str(p) for p in (em.extensionModulePaths('SlicerDSpace') or ())]",
+            "        ext_root = ''",
+            "        for mp in paths:",
+            "            p = Path(mp)",
+            "            if (p / 'SlicerDSpace.py').is_file():",
+            "                ext_root = str(p.parents[2].resolve())",
+            "                break",
+            "        if not ext_root:",
+            "            ep = em.extensionsInstallPath() if callable(getattr(em, 'extensionsInstallPath', None)) else getattr(em, 'extensionsInstallPath', '')",
+            "            for c in Path(str(ep)).glob(f'SlicerDSpace/lib/{tsub}/qt-scripted-modules'):",
+            "                if (c / 'SlicerDSpace.py').is_file():",
+            "                    ext_root = str(c.parents[2].resolve())",
+            "                    break",
+            "        receipt.write_text(json.dumps({'installed': ok, 'module_paths': paths, 'ext_root': ext_root, 'needs_remap': needs_remap, 'rev': rev, 'target_subdir': tsub, 'slicer_os': sos, 'slicer_arch': sarch, 'slicer_major': maj, 'slicer_minor': minv, 'py_minor': f'{sys.version_info[0]}.{sys.version_info[1]}'}), encoding='utf-8')",
+            "        slicer.app.exit(0 if ok else 1)",
+            "    except Exception as exc:",
+            "        receipt.write_text(json.dumps({'installed': False, 'error': str(exc), 'traceback': traceback.format_exc()}), encoding='utf-8')",
+            "        slicer.app.exit(1)",
+            "qt.QTimer.singleShot(500, _run)",
+        ]
+        helper.write_text("\n".join(helper_lines) + "\n", encoding="utf-8")
         cmd = [slicer_exe, "--no-splash", "--no-main-window", "--python-script", str(helper), str(archive_path), str(receipt)]
         env = os.environ.copy()
         if sys.platform.startswith("linux") and not env.get("DISPLAY"):
@@ -783,12 +1013,28 @@ _BOOTSTRAP_BODY = textwrap.dedent(
                 env.setdefault("QT_QPA_PLATFORM", "offscreen")
         _log("Installing SlicerDSpace base extension into 3D Slicer...")
         proc = subprocess.run(cmd, env=env)
-        if proc.returncode != 0 or not receipt.is_file():
+        if not receipt.is_file():
             raise RuntimeError(f"Slicer extension installation failed with exit code {proc.returncode}")
         data = json.loads(receipt.read_text(encoding="utf-8"))
-        if not data.get("installed"):
-            raise RuntimeError(f"Slicer ExtensionManager rejected archive: {archive_path}")
         shutil.rmtree(receipt.parent, ignore_errors=True)
+        if proc.returncode != 0 or not data.get("installed"):
+            raise RuntimeError(data.get("error") or f"Slicer ExtensionManager rejected archive: {archive_path}")
+        if data.get("py_minor") and data.get("py_minor") != "3.12":
+            _log(f"[WARN] 3D Slicer Python is {data['py_minor']}; bundled Python tools target 3.12.")
+        if data.get("needs_remap"):
+            ext_root_str = str(data.get("ext_root") or "").strip()
+            if not ext_root_str:
+                raise RuntimeError("Remapped extension root directory not returned by Slicer")
+            _log(f"Adapting extension layout for {data.get('target_subdir')} (r{data.get('rev')})...")
+            ext_root_path = _extract_base_archive_remapped(
+                archive_path,
+                Path(ext_root_str),
+                str(data.get("rev") or ""),
+                str(data["target_subdir"]),
+                slicer_os=str(data.get("slicer_os") or ""),
+                slicer_arch=str(data.get("slicer_arch") or ""),
+            )
+            _strip_quarantine_macos(ext_root_path)
         return data
 
     def _find_module_root(slicer_exe: str, receipt_data: dict) -> Path:
@@ -1171,12 +1417,17 @@ def generate_installer_script(
 
             call :resolve_slicer "%SLICER_INPUT%"
             if not defined PYTHON_SLICER (
-              for %%D in ("%LOCALAPPDATA%\\slicer.org\\Slicer 5.10.0" "C:\\Program Files\\Slicer 5.10.0") do (
+              for %%D in ("%LOCALAPPDATA%\\slicer.org\\Slicer 5.10.0" "%LOCALAPPDATA%\\slicer.org\\Slicer 5.12.4" "C:\\Program Files\\Slicer 5.10.0" "C:\\Program Files\\Slicer 5.12.4") do (
                 if not defined PYTHON_SLICER call :resolve_slicer "%%~D"
               )
             )
             if not defined PYTHON_SLICER (
-              set /p SLICER_INPUT="Enter path to 3D Slicer 5.10.0 folder or Slicer.exe: "
+              for /d %%D in ("%LOCALAPPDATA%\\slicer.org\\Slicer*" "%LOCALAPPDATA%\\Slicer*" "C:\\Program Files\\slicer.org\\Slicer*" "C:\\Program Files\\Slicer*" "C:\\Slicer*") do (
+                if not defined PYTHON_SLICER call :resolve_slicer "%%~D"
+              )
+            )
+            if not defined PYTHON_SLICER (
+              set /p SLICER_INPUT="Enter path to 3D Slicer folder or Slicer.exe: "
               call :resolve_slicer "%SLICER_INPUT%"
             )
             if not defined PYTHON_SLICER (
@@ -1223,6 +1474,7 @@ def generate_installer_script(
             resolve_slicer() {
               local p="${1:-}"
               [ -n "$p" ] || return 1
+              p="${p%/}"
               if [ -f "$p/Contents/MacOS/Slicer" ] && [ -f "$p/Contents/bin/PythonSlicer" ]; then
                 SLICER_BIN="$p/Contents/MacOS/Slicer"
                 PYTHON_SLICER="$p/Contents/bin/PythonSlicer"
@@ -1242,13 +1494,15 @@ def generate_installer_script(
             }
             '''
         )
-        fallback_list = '"/Applications/Slicer.app" "$HOME/Applications/Slicer.app" "/Applications/Slicer-5.10.0.app"'
+        fallback_list = '"/Applications/Slicer.app" "$HOME/Applications/Slicer.app" /Applications/Slicer*.app "$HOME"/Applications/Slicer*.app'
+        prompt_text = "Enter path to 3D Slicer (.app): "
     else:
         resolve_fn = textwrap.dedent(
             '''\
             resolve_slicer() {
               local p="${1:-}"
               [ -n "$p" ] || return 1
+              p="${p%/}"
               if [ -f "$p/Slicer" ] && [ -f "$p/bin/PythonSlicer" ]; then
                 SLICER_BIN="$p/Slicer"
                 PYTHON_SLICER="$p/bin/PythonSlicer"
@@ -1263,7 +1517,8 @@ def generate_installer_script(
             }
             '''
         )
-        fallback_list = '"$HOME/Slicer-5.10.0-linux-amd64" "/opt/Slicer-5.10.0-linux-amd64" "/opt/slicer"'
+        fallback_list = '"$HOME"/Slicer* /opt/Slicer* /opt/slicer /opt/slicer/Slicer* /usr/local/Slicer* "$HOME"/Applications/Slicer*'
+        prompt_text = "Enter path to 3D Slicer folder: "
 
     header = textwrap.dedent(
         f'''\
@@ -1287,7 +1542,7 @@ def generate_installer_script(
         fi
 
         if [ -z "$PYTHON_SLICER" ]; then
-          printf "Enter path to 3D Slicer 5.10.0 (e.g. /Applications/Slicer.app or Slicer dir): "
+          printf "{prompt_text}"
           read -r USER_SLICER
           resolve_slicer "$USER_SLICER" || {{
             echo "[ERROR] Could not find Slicer and bin/PythonSlicer at: $USER_SLICER"

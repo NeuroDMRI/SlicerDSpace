@@ -1359,6 +1359,205 @@ class FastInstallerOptimizationTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
 
+    def test_cross_version_setup_zip_512_and_universal_scripts(self) -> None:
+        node_bin = shutil.which("node")
+        if node_bin is None:
+            self.skipTest("node is not installed in PATH")
+
+        js_path = REPO_ROOT / "docs" / "site" / "assets" / "js" / "installer-customizer.js"
+        node_script = (
+            "const ic = require(process.argv[1]);\n"
+            "const f512 = ic.buildSetupExtensionFiles({ os: 'macos', slicerVersion: '5.12.4', wmaEnabled: true, wmaAtlases: ['wma_org'] });\n"
+            "const scripts = { win: ic.buildScript({ os: 'windows' }), mac: ic.buildScript({ os: 'macos' }), lin: ic.buildScript({ os: 'linux' }) };\n"
+            "process.stdout.write(JSON.stringify({ f512, scripts }));\n"
+        )
+        out = subprocess.run([node_bin, "-e", node_script, str(js_path)], capture_output=True, text=True, check=True).stdout
+        payload = json.loads(out)
+        names = {item["name"]: item["data"] for item in payload["f512"]}
+        prefix = "SlicerDSpaceSetup/Slicer.app/Contents/Extensions-34645/SlicerDSpaceSetup"
+        self.assertIn(f"{prefix}/share/Slicer-5.12/SlicerDSpaceSetup.s4ext", names)
+        self.assertIn(f"{prefix}/SlicerDSpaceSetup.s4ext", names)
+        self.assertIn(f"{prefix}/lib/Slicer-5.12/qt-scripted-modules/SlicerDSpaceSetup.py", names)
+        self.assertIn("slicer_revision 34645", names[f"{prefix}/SlicerDSpaceSetup.s4ext"])
+        py_src = names[f"{prefix}/lib/Slicer-5.12/qt-scripted-modules/SlicerDSpaceSetup.py"]
+        self.assertTrue(all(ord(ch) < 128 or ch == "·" for ch in py_src))
+        self.assertIn("/Applications/Slicer*.app", payload["scripts"]["mac"])
+        self.assertIn("Slicer*", payload["scripts"]["win"])
+        self.assertIn("Slicer*", payload["scripts"]["lin"])
+        for scr in payload["scripts"].values():
+            self.assertIn("_extract_base_archive_remapped", scr)
+
+    def test_setup_module_version_check_and_remapped_tar_extraction(self) -> None:
+        node_bin = shutil.which("node")
+        if node_bin is None:
+            self.skipTest("node is not installed in PATH")
+
+        import io
+        import tarfile
+        import types
+        import zipfile
+
+        js_path = REPO_ROOT / "docs" / "site" / "assets" / "js" / "installer-customizer.js"
+        node_script = (
+            "const ic = require(process.argv[1]);\n"
+            "const f = ic.buildSetupExtensionFiles({ os: 'macos', slicerVersion: '5.12.4' });\n"
+            "process.stdout.write(f.find((x) => x.name.endsWith('SlicerDSpaceSetup.py')).data);\n"
+        )
+        py_src = subprocess.run([node_bin, "-e", node_script, str(js_path)], capture_output=True, text=True, check=True).stdout
+
+        qt_stub = types.ModuleType("qt")
+        slm_stub = types.ModuleType("slicer.ScriptedLoadableModule")
+
+        class _BaseSLM:
+            def __init__(self, parent: object = None) -> None:
+                self.parent = parent
+
+        slm_stub.ScriptedLoadableModule = _BaseSLM
+        slm_stub.ScriptedLoadableModuleWidget = _BaseSLM
+        slicer_stub = types.ModuleType("slicer")
+        slicer_stub.ScriptedLoadableModule = slm_stub
+        slicer_stub.app = type("_SlicerApp", (), {"majorVersion": 5, "minorVersion": 12, "patchVersion": 4})()
+        saved = {k: sys.modules.get(k) for k in ("qt", "slicer", "slicer.ScriptedLoadableModule")}
+        ns: dict[str, object] = {}
+        try:
+            sys.modules["qt"] = qt_stub
+            sys.modules["slicer"] = slicer_stub
+            sys.modules["slicer.ScriptedLoadableModule"] = slm_stub
+            exec(compile(py_src, "SlicerDSpaceSetup.py", "exec"), ns)
+
+            for maj, minv, expected in ((5, 8, True), (5, 10, True), (5, 12, True), (6, 0, True), (5, 6, False)):
+                slicer_stub.app.majorVersion = maj
+                slicer_stub.app.minorVersion = minv
+                self.assertEqual(ns["_is_supported_slicer"](), expected, (maj, minv))
+
+            self.assertEqual(
+                ns["_remap_base_relpath"](
+                    "SlicerDSpace/Slicer.app/Contents/Extensions-34045/SlicerDSpace/lib/Slicer-5.10/qt-scripted-modules/SlicerDSpace.py",
+                    "Slicer-5.12",
+                ),
+                "lib/Slicer-5.12/qt-scripted-modules/SlicerDSpace.py",
+            )
+            self.assertEqual(
+                ns["_remap_base_relpath"]("SlicerDSpace/Slicer.app/Contents/Extensions-34045", "Slicer-5.12"),
+                "",
+            )
+
+            with tempfile.TemporaryDirectory() as tmp:
+                tdir = Path(tmp)
+                stub_zip = tdir / "stub.zip"
+                ns["_build_stub_extension_archive"](stub_zip, "34645", "Slicer-5.12", "macosx", "amd64")
+                with zipfile.ZipFile(stub_zip, "r") as zf:
+                    znames = set(zf.namelist())
+                    self.assertIn(
+                        "SlicerDSpace/Slicer.app/Contents/Extensions-34645/SlicerDSpace/lib/Slicer-5.12/qt-scripted-modules/SlicerDSpace.py",
+                        znames,
+                    )
+
+                src_tar = tdir / "base.tar.gz"
+                with tarfile.open(src_tar, "w:gz") as tf:
+                    files = [
+                        ("SlicerDSpace/Slicer.app/Contents/Extensions-34045/SlicerDSpace/lib/Slicer-5.10/qt-scripted-modules/SlicerDSpace.py", b"# mod\n", 0o644),
+                        ("SlicerDSpace/Slicer.app/Contents/Extensions-34045/SlicerDSpace/bundled-runtimes/ukf-darwin-arm64/bin/UKFTractography", b"#!/bin/sh\n", 0o755),
+                        ("SlicerDSpace/Slicer.app/Contents/Extensions-34045/SlicerDSpace/SlicerDSpace.s4ext", b"slicer_revision 34045\nos macosx\narch amd64\n", 0o644),
+                    ]
+                    for arc, body, mode in files:
+                        ti = tarfile.TarInfo(arc)
+                        ti.size = len(body)
+                        ti.mode = mode
+                        tf.addfile(ti, io.BytesIO(body))
+                    sym = tarfile.TarInfo("SlicerDSpace/Slicer.app/Contents/Extensions-34045/SlicerDSpace/bundled-python/bin/python3")
+                    sym.type = tarfile.SYMTYPE
+                    sym.linkname = "python3.12"
+                    tf.addfile(sym)
+
+                ext_root = tdir / "Extensions-34645" / "SlicerDSpace"
+                ns["_extract_base_archive_remapped"](src_tar, ext_root, "34645", "Slicer-5.12", slicer_os="macosx", slicer_arch="amd64")
+                self.assertTrue((ext_root / "lib" / "Slicer-5.12" / "qt-scripted-modules" / "SlicerDSpace.py").is_file())
+                ukf_bin = ext_root / "bundled-runtimes" / "ukf-darwin-arm64" / "bin" / "UKFTractography"
+                self.assertTrue(ukf_bin.is_file())
+                self.assertTrue(bool(ukf_bin.stat().st_mode & 0o100))
+                sym_out = ext_root / "bundled-python" / "bin" / "python3"
+                self.assertTrue(sym_out.is_symlink())
+                self.assertEqual(os.readlink(sym_out), "python3.12")
+                self.assertIn("slicer_revision 34645", (ext_root / "SlicerDSpace.s4ext").read_text(encoding="utf-8"))
+        finally:
+            for k, orig in saved.items():
+                if orig is None:
+                    sys.modules.pop(k, None)
+                else:
+                    sys.modules[k] = orig
+
+    def test_bundled_python_macho_arch_and_compatibility(self) -> None:
+        import struct
+        from unittest.mock import patch
+        from shared import bundled_python as bp
+
+        def _macho64_le(cpu: int) -> bytes:
+            return struct.pack(">I", 0xCFFAEDFE) + struct.pack("<I", cpu) + b"\x00" * 24
+
+        def _fat(cpus: list[int]) -> bytes:
+            out = struct.pack(">II", 0xCAFEBABE, len(cpus))
+            for cpu in cpus:
+                out += struct.pack(">IIIII", cpu, 0, 0, 0, 0)
+            return out
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "bundled-python"
+            sp = root / "site-packages"
+            sp.mkdir(parents=True)
+            (root / "python-runtime.json").write_text(
+                json.dumps({"python_version": f"{sys.version_info[0]}.{sys.version_info[1]}"}),
+                encoding="utf-8",
+            )
+            so_file = sp / "mod.so"
+            so_file.write_bytes(_macho64_le(0x01000007))  # x86_64
+            self.assertEqual(bp._macho_arches(so_file), {"x86_64"})
+            with patch.object(bp.sys, "platform", "darwin"), patch.object(bp.platform, "machine", return_value="x86_64"):
+                self.assertTrue(bp._runtime_compatible(root))
+            with patch.object(bp.sys, "platform", "darwin"), patch.object(bp.platform, "machine", return_value="arm64"):
+                self.assertFalse(bp._runtime_compatible(root))
+
+            uni_file = sp / "uni.so"
+            uni_file.write_bytes(_fat([0x01000007, 0x0100000C]))
+            so_file.write_bytes(_fat([0x01000007, 0x0100000C]))
+            self.assertEqual(bp._macho_arches(uni_file), {"x86_64", "arm64"})
+            with patch.object(bp.sys, "platform", "darwin"), patch.object(bp.platform, "machine", return_value="arm64"):
+                self.assertTrue(bp._runtime_compatible(root))
+
+            # If a single-arch x86_64 .so accompanies universal2 .so, arm64 host still rejects it.
+            (sp / "extra.so").write_bytes(_macho64_le(0x01000007))
+            with patch.object(bp.sys, "platform", "darwin"), patch.object(bp.platform, "machine", return_value="arm64"):
+                self.assertFalse(bp._runtime_compatible(root))
+
+    def test_package_macos_ukf_standalone_tarball(self) -> None:
+        import tarfile
+        from scripts.build_macos_ukf_standalone import package_standalone_tarball
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tdir = Path(tmp)
+            bin_p = tdir / "UKFTractography"
+            xml_p = tdir / "UKFTractography.xml"
+            bin_p.write_bytes(b"#!/bin/sh\n")
+            xml_p.write_text("<executable><name>dwiFile</name></executable>\n", encoding="utf-8")
+            arc, sha_p = package_standalone_tarball(
+                binary=bin_p,
+                xml_path=xml_p,
+                source_repo="https://github.com/NeuroDMRI/ukftractography_gpu.git",
+                source_commit="deadbeef",
+                out_dir=tdir / "out",
+            )
+            self.assertTrue(arc.is_file())
+            self.assertTrue(sha_p.is_file())
+            self.assertIn(arc.name, sha_p.read_text(encoding="utf-8"))
+            with tarfile.open(arc, "r:gz") as tf:
+                names = {m.name: m for m in tf.getmembers()}
+                self.assertIn("ukf-darwin-arm64/bin/UKFTractography", names)
+                self.assertTrue(bool(names["ukf-darwin-arm64/bin/UKFTractography"].mode & 0o100))
+                meta = json.loads(tf.extractfile("ukf-darwin-arm64/runtime.json").read().decode("utf-8"))
+                self.assertIs(meta["activation_key_included"], False)
+                self.assertIs(meta["slicer_independent"], True)
+                self.assertEqual(meta["arch"], "arm64")
+
 
 if __name__ == "__main__":
     unittest.main()

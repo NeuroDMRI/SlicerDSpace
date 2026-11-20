@@ -778,6 +778,41 @@ class IntegrationTests(unittest.TestCase):
             for name in ("bundles.wmql", "bundles.wma", "bundles.tractcloud", "connectome.streamline_count"):
                 self.assertEqual(statuses[name], "blocked", name)
 
+    def test_standalone_bundled_ukf_resolved_and_isolated(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ext_root = Path(tmp) / "SlicerDSpace"
+            standalone_bin = ext_root / "bundled-runtimes" / "ukf-darwin-arm64" / "bin" / "UKFTractography"
+            standalone_bin.parent.mkdir(parents=True, exist_ok=True)
+            standalone_bin.write_text("#!/bin/sh\necho ukf\n", encoding="utf-8")
+            standalone_bin.chmod(0o755)
+            cli_bin = ext_root / "lib" / "Slicer-5.10" / "cli-modules" / "UKFTractography"
+            cli_bin.parent.mkdir(parents=True, exist_ok=True)
+            cli_bin.write_text("legacy", encoding="utf-8")
+
+            with (
+                mock.patch.dict(os.environ, {}, clear=True),
+                mock.patch.object(ukf, "_extension_search_roots", return_value=[ext_root]),
+                mock.patch.object(shutil, "which", return_value=None),
+            ):
+                resolved = ukf.resolve_executable()
+            self.assertEqual(resolved, standalone_bin.resolve())
+
+            env = ukf.ukf_gpu_process_environment(
+                {
+                    "PATH": "/usr/bin",
+                    "DYLD_LIBRARY_PATH": "/Applications/Slicer.app/Contents/lib/Slicer-5.10",
+                    "DYLD_FALLBACK_LIBRARY_PATH": "/Applications/Slicer.app/Contents/lib",
+                    "LD_LIBRARY_PATH": "/tmp/lib",
+                    "PYTHONHOME": "/tmp/py",
+                },
+                resolved,
+            )
+            self.assertNotIn("DYLD_LIBRARY_PATH", env)
+            self.assertNotIn("DYLD_FALLBACK_LIBRARY_PATH", env)
+            self.assertNotIn("LD_LIBRARY_PATH", env)
+            self.assertNotIn("PYTHONHOME", env)
+            self.assertEqual(env["PATH"], "/usr/bin")
+
 
 if __name__ == "__main__":
     unittest.main()

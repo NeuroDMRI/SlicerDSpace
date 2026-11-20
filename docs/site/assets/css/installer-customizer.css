@@ -248,6 +248,66 @@
   color: rgba(18, 18, 20, .68);
 }
 
+/* ---------- Slicer version selector row ---------- */
+.ic-ver-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(239, 230, 210, .08);
+  min-width: 0;
+}
+
+.ic-ver-label {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: #9c968b;
+  flex: none;
+}
+
+.ic-ver-seg {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.ic-ver-btn {
+  padding: 7px 13px;
+  font-size: 13px;
+  gap: 6px 8px;
+  white-space: normal;
+  flex-wrap: wrap;
+  text-align: left;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.ic-ver-sub {
+  font-family: var(--f-mono);
+  font-size: 11px;
+  font-weight: 500;
+  color: #9c968b;
+}
+
+.ic-ver-btn[aria-pressed="true"] .ic-ver-sub {
+  color: rgba(18, 18, 20, .68);
+}
+
+.ic-ver-note {
+  margin: 8px 0 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: #a9a295;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
 /* ---------- Read-only included core strip ---------- */
 .ic-ro-panel {
   padding: 10px 14px;

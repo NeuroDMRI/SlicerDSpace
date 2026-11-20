@@ -159,6 +159,40 @@
     }
   };
 
+  var SLICER_PRESET_ORDER = ['5.10.0', '5.12.4', 'universal'];
+  var SLICER_PRESETS = {
+    '5.10.0': {
+      version: '5.10.0',
+      minor: '5.10',
+      revision: '34045',
+      labelEn: '3D Slicer 5.10.0',
+      labelZh: '3D Slicer 5.10.0',
+      subEn: 'r34045 (Default)',
+      subZh: 'r34045（默认推荐）',
+      zipSuffix: ''
+    },
+    '5.12.4': {
+      version: '5.12.4',
+      minor: '5.12',
+      revision: '34645',
+      labelEn: '3D Slicer 5.12.4',
+      labelZh: '3D Slicer 5.12.4',
+      subEn: 'r34645',
+      subZh: 'r34645',
+      zipSuffix: '-Slicer5.12.4'
+    },
+    'universal': {
+      version: 'universal',
+      minor: '',
+      revision: '',
+      labelEn: 'All Versions (5.8 – 5.12+)',
+      labelZh: '通用适配 (5.8 – 5.12+)',
+      subEn: 'Auto-adapt script',
+      subZh: '自动适配脚本',
+      zipSuffix: ''
+    }
+  };
+
   // Shared Keep-Alive single-redirect HTTP Range downloader + SHA-256 verification reused by GUI and CLI installers.
   var SHARED_DOWNLOAD_PY = [
     '_GITHUB_PREFIXES = ("https://github.com/", "https://raw.githubusercontent.com/", "https://objects.githubusercontent.com/", "https://media.githubusercontent.com/", "https://codeload.github.com/")',
@@ -633,9 +667,152 @@
     '    raise RuntimeError(f"Failed downloading {dest.name}: {errors}")'
   ].join('\n');
 
+  // Pure-ASCII helpers to remap SlicerDSpace base archives across 3D Slicer versions (5.8-5.12+).
+  var SHARED_REMAP_PY = [
+    'def _remap_s4ext_text(raw_text, rev, slicer_os="", slicer_arch=""):',
+    '    lines = []; saw_rev = False; saw_os = False; saw_arch = False',
+    '    for raw_line in str(raw_text or "").splitlines():',
+    '        low = raw_line.strip().lower()',
+    '        if rev and low.startswith("slicer_revision "): lines.append(f"slicer_revision {rev}"); saw_rev = True',
+    '        elif slicer_os and low.startswith("os "): lines.append(f"os {slicer_os}"); saw_os = True',
+    '        elif slicer_arch and low.startswith("arch "): lines.append(f"arch {slicer_arch}"); saw_arch = True',
+    '        else: lines.append(raw_line)',
+    '    if rev and not saw_rev: lines.append(f"slicer_revision {rev}")',
+    '    if slicer_os and not saw_os: lines.append(f"os {slicer_os}")',
+    '    if slicer_arch and not saw_arch: lines.append(f"arch {slicer_arch}")',
+    '    return "\\n".join(lines).rstrip("\\n") + "\\n"',
+    'def _remap_base_relpath(raw_name, target_subdir):',
+    '    p = posixpath.normpath(str(raw_name or "").replace(chr(92), "/").lstrip("/"))',
+    '    while p.startswith("./"): p = p[2:]',
+    '    if not p or p == ".": return ""',
+    '    parts = [x for x in p.split("/") if x and x != "."]',
+    '    if not parts or ".." in parts: return ""',
+    '    has_app = (parts[0] == "Slicer.app") or (len(parts) >= 2 and parts[0] in ("SlicerDSpace", "SlicerDSpaceSetup") and parts[1] == "Slicer.app")',
+    '    if has_app:',
+    '        ext_idx = next((i for i, seg in enumerate(parts) if re.match(r"^Extensions-[0-9]+$", seg)), -1)',
+    '        if ext_idx < 0 or ext_idx + 2 >= len(parts): return ""',
+    '        if parts[ext_idx + 1] not in ("SlicerDSpace", "SlicerDSpaceSetup"): return ""',
+    '        parts = parts[ext_idx + 2:]',
+    '    elif parts[0] in ("SlicerDSpace", "SlicerDSpaceSetup"):',
+    '        parts = parts[1:]',
+    '    if not parts: return ""',
+    '    if len(parts) >= 2 and parts[0] in ("lib", "share") and re.match(r"^Slicer-[0-9]+[.][0-9]+", parts[1]):',
+    '        parts[1] = str(target_subdir)',
+    '    return "/".join(parts)',
+    'def _build_stub_extension_archive(out_zip, rev, target_subdir, slicer_os, slicer_arch, ext_name="SlicerDSpace"):',
+    '    out_zip = Path(out_zip); out_zip.parent.mkdir(parents=True, exist_ok=True)',
+    '    is_mac = (str(slicer_os or "").lower() == "macosx") or (not slicer_os and sys.platform == "darwin")',
+    '    pfx = f"{ext_name}/Slicer.app/Contents/Extensions-{rev}/{ext_name}" if is_mac else ext_name',
+    '    sos = slicer_os or ("macosx" if is_mac else ("win" if sys.platform == "win32" else "linux"))',
+    '    sarch = slicer_arch or "amd64"',
+    '    s4ext_body = "\\n".join([',
+    '        f"arch {sarch}", "category Diffusion", "contributors Chengjin Li, Fan Zhang (Fan\'s Lab, UESTC)",',
+    '        "depends NA", "description SlicerDSpace", "enabled 1", "homepage https://neurodmri.github.io/SlicerDSpace/",',
+    '        f"os {sos}", "scm git", "scmurl https://github.com/NeuroDMRI/SlicerDSpace.git", f"slicer_revision {rev}", "",',
+    '    ])',
+    '    stub_py = "\\n".join([',
+    '        "from slicer.ScriptedLoadableModule import ScriptedLoadableModule, ScriptedLoadableModuleWidget",',
+    '        f"class {ext_name}(ScriptedLoadableModule):", "    def __init__(self, parent):",',
+    '        "        ScriptedLoadableModule.__init__(self, parent)", f"        self.parent.title = \'{ext_name}\'",',
+    '        "        self.parent.categories = [\'Diffusion\']", "        self.parent.dependencies = []",',
+    '        f"class {ext_name}Widget(ScriptedLoadableModuleWidget):", "    def setup(self):",',
+    '        "        ScriptedLoadableModuleWidget.setup(self)", "",',
+    '    ])',
+    '    with zipfile.ZipFile(out_zip, "w", compression=zipfile.ZIP_DEFLATED) as zf:',
+    '        zf.writestr(f"{pfx}/share/{target_subdir}/{ext_name}.s4ext", s4ext_body)',
+    '        zf.writestr(f"{pfx}/{ext_name}.s4ext", s4ext_body)',
+    '        zf.writestr(f"{pfx}/lib/{target_subdir}/qt-scripted-modules/{ext_name}.py", stub_py)',
+    '    return out_zip',
+    'def _safe_remove_dest(dst):',
+    '    if dst.is_symlink() or dst.is_file():',
+    '        try: dst.unlink()',
+    '        except PermissionError: os.chmod(dst, 0o644); dst.unlink()',
+    '    elif dst.is_dir():',
+    '        shutil.rmtree(dst)',
+    'def _safe_symlink(tgt, rel, dst, target_subdir):',
+    '    tgt = str(tgt or "")',
+    '    if not tgt or posixpath.isabs(tgt): return',
+    '    if re.search(r"Slicer-[0-9]+[.][0-9]+", tgt): tgt = re.sub(r"Slicer-[0-9]+[.][0-9]+", str(target_subdir), tgt)',
+    '    joined = posixpath.normpath(posixpath.join(posixpath.dirname(rel), tgt))',
+    '    if joined == ".." or joined.startswith("../"): return',
+    '    dst.parent.mkdir(parents=True, exist_ok=True); _safe_remove_dest(dst)',
+    '    try: os.symlink(tgt, dst)',
+    '    except OSError: pass',
+    'def _extract_base_archive_remapped(archive_path, ext_root, rev, target_subdir, slicer_os="", slicer_arch="", log_cb=None):',
+    '    archive_path = Path(archive_path); ext_root = Path(ext_root); ext_root.mkdir(parents=True, exist_ok=True)',
+    '    count = 0',
+    '    if zipfile.is_zipfile(archive_path):',
+    '        with zipfile.ZipFile(archive_path, "r") as zf:',
+    '            for zi in zf.infolist():',
+    '                rel = _remap_base_relpath(zi.filename, target_subdir)',
+    '                if not rel: continue',
+    '                dst = ext_root / rel',
+    '                if zi.is_dir(): dst.mkdir(parents=True, exist_ok=True); continue',
+    '                mode = (int(zi.external_attr or 0) >> 16)',
+    '                if stat.S_ISLNK(mode):',
+    '                    _safe_symlink(zf.read(zi).decode("utf-8", "replace"), rel, dst, target_subdir); continue',
+    '                dst.parent.mkdir(parents=True, exist_ok=True); _safe_remove_dest(dst)',
+    '                if dst.name == "SlicerDSpace.s4ext":',
+    '                    txt = zf.read(zi).decode("utf-8", "replace")',
+    '                    dst.write_text(_remap_s4ext_text(txt, rev, slicer_os, slicer_arch), encoding="utf-8")',
+    '                else:',
+    '                    with zf.open(zi, "r") as sf, dst.open("wb") as of: shutil.copyfileobj(sf, of, 1048576)',
+    '                perm = mode & 0o777',
+    '                if perm:',
+    '                    try: os.chmod(dst, perm)',
+    '                    except OSError: pass',
+    '                count += 1',
+    '                if log_cb and count % 5000 == 0: log_cb(f"Extracted {count} extension files...")',
+    '    else:',
+    '        deferred = []',
+    '        with tarfile.open(archive_path, "r:*") as tf:',
+    '            for m in tf:',
+    '                rel = _remap_base_relpath(m.name, target_subdir)',
+    '                if not rel: continue',
+    '                dst = ext_root / rel',
+    '                if m.isdir(): dst.mkdir(parents=True, exist_ok=True); continue',
+    '                if m.issym():',
+    '                    _safe_symlink(m.linkname, rel, dst, target_subdir); continue',
+    '                if m.islnk():',
+    '                    lrel = _remap_base_relpath(m.linkname, target_subdir)',
+    '                    if not lrel: continue',
+    '                    src_p = ext_root / lrel',
+    '                    if src_p.exists():',
+    '                        dst.parent.mkdir(parents=True, exist_ok=True); _safe_remove_dest(dst)',
+    '                        try: os.link(src_p, dst)',
+    '                        except OSError: shutil.copy2(src_p, dst)',
+    '                    else: deferred.append((dst, src_p))',
+    '                    continue',
+    '                if not m.isfile(): continue',
+    '                fobj = tf.extractfile(m)',
+    '                if fobj is None: continue',
+    '                dst.parent.mkdir(parents=True, exist_ok=True); _safe_remove_dest(dst)',
+    '                if dst.name == "SlicerDSpace.s4ext":',
+    '                    txt = fobj.read().decode("utf-8", "replace")',
+    '                    dst.write_text(_remap_s4ext_text(txt, rev, slicer_os, slicer_arch), encoding="utf-8")',
+    '                else:',
+    '                    with dst.open("wb") as of: shutil.copyfileobj(fobj, of, 1048576)',
+    '                perm = int(m.mode or 0) & 0o777',
+    '                if perm:',
+    '                    try: os.chmod(dst, perm)',
+    '                    except OSError: pass',
+    '                count += 1',
+    '                if log_cb and count % 5000 == 0: log_cb(f"Extracted {count} extension files...")',
+    '        for dst, src_p in deferred:',
+    '            if src_p.exists():',
+    '                dst.parent.mkdir(parents=True, exist_ok=True); _safe_remove_dest(dst)',
+    '                try: os.link(src_p, dst)',
+    '                except OSError: shutil.copy2(src_p, dst)',
+    '    for cand in (ext_root / "SlicerDSpace.s4ext", ext_root / "share" / target_subdir / "SlicerDSpace.s4ext", ext_root.parent / "SlicerDSpace.s4ext"):',
+    '        if cand.is_file():',
+    '            cand.write_text(_remap_s4ext_text(cand.read_text(encoding="utf-8", errors="replace"), rev, slicer_os, slicer_arch), encoding="utf-8")',
+    '    if log_cb: log_cb(f"Remapped extraction complete ({count} files) -> {ext_root}")',
+    '    return ext_root'
+  ].join('\n');
+
   // Shared graphical Slicer extension module injected into SlicerDSpaceSetup-<OS>.zip.
   var SETUP_MODULE_PY = [
-    'import hashlib, json, os, platform, queue, shutil, signal, socket, ssl, subprocess, sys, tempfile, threading, time, traceback, urllib.error, urllib.parse, urllib.request',
+    'import hashlib, io, json, os, platform, posixpath, queue, re, shutil, signal, socket, ssl, stat, subprocess, sys, tarfile, tempfile, threading, time, traceback, urllib.error, urllib.parse, urllib.request, zipfile',
     'from pathlib import Path',
     '_IS_WORKER = (__name__ == "__main__" and len(sys.argv) >= 3 and sys.argv[1] in ("--download-worker", "--finalize-worker"))',
     'if not _IS_WORKER:',
@@ -643,6 +820,7 @@
     '    from slicer.ScriptedLoadableModule import ScriptedLoadableModule, ScriptedLoadableModuleWidget',
     '_ACTIVE_DIALOG = None',
     SHARED_DOWNLOAD_PY,
+    SHARED_REMAP_PY,
     'def _search_dirs(offline_dir=""):',
     '    dirs = []',
     '    raw = str(offline_dir or "").strip()',
@@ -779,8 +957,14 @@
     'def _run_phase_c_core(info, emit):',
     '    def log_cb(msg): emit("log", str(msg))',
     '    try:',
-    '        _cleanup_paths(info["ext_temps"])',
     '        mod_root = Path(info["mod_root"])',
+    '        rm = info.get("remap_extract")',
+    '        if isinstance(rm, dict) and rm.get("target_subdir"):',
+    '            emit("progress", [915, f"Extracting SlicerDSpace for {rm.get(\'target_subdir\')}..."])',
+    '            log_cb(f"Remapping SlicerDSpace base archive for {rm.get(\'target_subdir\')} (r{rm.get(\'rev\')})...")',
+    '            _extract_base_archive_remapped(Path(info["ext_archive"]), mod_root.parents[2], str(rm.get("rev") or ""), str(rm["target_subdir"]), slicer_os=str(rm.get("slicer_os") or ""), slicer_arch=str(rm.get("slicer_arch") or ""), log_cb=log_cb)',
+    '            _dequarantine(mod_root.parents[2])',
+    '        _cleanup_paths(info["ext_temps"])',
     '        if str(mod_root) not in sys.path: sys.path.insert(0, str(mod_root))',
     '        from shared.network_config import extract_modular_pack, save_network_settings',
     '        from shared.model_assets import configured_model_assets_root',
@@ -872,9 +1056,15 @@
     '        for cand in Path(str(base_s)).glob("SlicerDSpace/lib/Slicer-*/qt-scripted-modules"):',
     '            if (cand / "SlicerDSpace.py").is_file(): return cand.resolve()',
     '    raise FileNotFoundError("Installed SlicerDSpace module directory not found")',
-    'def _is_slicer_510():',
-    '    try: return int(getattr(slicer.app, "majorVersion", 0)) == 5 and int(getattr(slicer.app, "minorVersion", 0)) == 10',
+    'def _is_supported_slicer():',
+    '    try:',
+    '        maj = int(getattr(slicer.app, "majorVersion", 0))',
+    '        minv = int(getattr(slicer.app, "minorVersion", 0))',
+    '        return (maj > 5) or (maj == 5 and minv >= 8)',
     '    except Exception: return True',
+    'def _slicer_version_str():',
+    '    try: return f"{int(getattr(slicer.app, \'majorVersion\', 0))}.{int(getattr(slicer.app, \'minorVersion\', 0))}.{int(getattr(slicer.app, \'patchVersion\', 0))}"',
+    '    except Exception: return "5.10+"',
     'def _host_bundle_key():',
     '    if sys.platform == "darwin": return "macos_arm64_base"',
     '    if sys.platform == "win32": return "windows_x64_base"',
@@ -891,17 +1081,21 @@
     '    _ACTIVE_DIALOG = dlg',
     '    layout = qt.QVBoxLayout(dlg)',
     '    layout.setSpacing(10)',
-    '    title = qt.QLabel("<b>SlicerDSpace 5.10.0 One-Click Installer</b>")',
+    '    title = qt.QLabel("<b>SlicerDSpace One-Click Installer</b>")',
     '    subtitle = qt.QLabel("Installs the unified SlicerDSpace extension and selected white-matter atlases with resume and checksum verification.")',
     '    subtitle.setWordWrap(True)',
     '    layout.addWidget(title); layout.addWidget(subtitle)',
-    '    slicer_ok = _is_slicer_510()',
+    '    slicer_ok = _is_supported_slicer()',
     '    intel_mac = _is_intel_mac()',
     '    ver_ok = slicer_ok and (not intel_mac)',
     '    if not slicer_ok:',
-    '        warn = qt.QLabel("This setup requires 3D Slicer 5.10.x. Please open 3D Slicer 5.10.0.")',
+    '        warn = qt.QLabel(f"This setup requires 3D Slicer 5.8+ (detected {_slicer_version_str()}).")',
     '        warn.setWordWrap(True); warn.setStyleSheet("color: #f87171; font-weight: bold;")',
     '        layout.addWidget(warn)',
+    '    if sys.version_info[:2] != (3, 12):',
+    '        warn_py = qt.QLabel(f"Note: 3D Slicer uses Python {sys.version_info[0]}.{sys.version_info[1]}; bundled Python tools target 3.12 (core features still install).")',
+    '        warn_py.setWordWrap(True); warn_py.setStyleSheet("color: #fbbf24;")',
+    '        layout.addWidget(warn_py)',
     '    if intel_mac:',
     '        warn_m = qt.QLabel("Intel x86_64 Macs are not supported by the Apple Silicon macOS bundle (requires M1/M2/M3/M4).")',
     '        warn_m.setWordWrap(True); warn_m.setStyleSheet("color: #f87171; font-weight: bold;")',
@@ -1127,9 +1321,22 @@
     '                    em = slicer.app.extensionsManagerModel(); em.setInteractive(False)',
     '                    if em.isExtensionInstalled("SlicerDSpace"):',
     '                        em.uninstallExtension("SlicerDSpace"); em.updateModel()',
-    '                    meta = {"extensionname": "SlicerDSpace", "depends": "NA", "slicer_revision": str(em.slicerRevision), "os": str(em.slicerOs), "arch": str(em.slicerArch)}',
-    '                    ok = bool(em.installExtension("SlicerDSpace", meta, str(ext_arc), False, True))',
-    '                    if not ok: raise RuntimeError("Slicer Extension Manager rejected SlicerDSpace archive.")',
+    '                    rev = str(em.slicerRevision); sos = str(em.slicerOs); sarch = str(em.slicerArch)',
+    '                    maj = int(getattr(slicer.app, "majorVersion", 5)); minv = int(getattr(slicer.app, "minorVersion", 10))',
+    '                    target_subdir = f"Slicer-{maj}.{minv}"',
+    '                    meta = {"extensionname": "SlicerDSpace", "depends": "NA", "slicer_revision": rev, "os": sos, "arch": sarch}',
+    '                    if rev != "34045" or target_subdir != "Slicer-5.10":',
+    '                        _append_log(f"Adapting SlicerDSpace package for 3D Slicer {maj}.{minv} (r{rev})...")',
+    '                        stub_arc = Path(payload["work_dir"]) / "SlicerDSpace-stub.zip"',
+    '                        _build_stub_extension_archive(stub_arc, rev, target_subdir, sos, sarch)',
+    '                        try: ok = bool(em.installExtension("SlicerDSpace", meta, str(stub_arc), False, True))',
+    '                        finally: stub_arc.unlink(missing_ok=True)',
+    '                        if not ok: raise RuntimeError("Slicer Extension Manager rejected SlicerDSpace stub archive.")',
+    '                        payload["remap_extract"] = {"rev": rev, "target_subdir": target_subdir, "slicer_os": sos, "slicer_arch": sarch}',
+    '                    else:',
+    '                        ok = bool(em.installExtension("SlicerDSpace", meta, str(ext_arc), False, True))',
+    '                        if not ok: raise RuntimeError("Slicer Extension Manager rejected SlicerDSpace archive.")',
+    '                        payload["remap_extract"] = None',
     '                    mod_root = _resolve_mod_root(em)',
     '                    _dequarantine(mod_root.parents[2])',
     '                    _append_log(f"Installed SlicerDSpace at: {mod_root}")',
@@ -1211,10 +1418,11 @@
 
   // Headless CLI script fallback (for HPC Linux / SSH servers without GUI).
   var BOOTSTRAP_PY = [
-    'import hashlib, json, os, platform, queue, shutil, socket, ssl, subprocess, sys, tempfile, threading, time, urllib.error, urllib.parse, urllib.request',
+    'import hashlib, io, json, os, platform, posixpath, queue, re, shutil, socket, ssl, stat, subprocess, sys, tarfile, tempfile, threading, time, urllib.error, urllib.parse, urllib.request, zipfile',
     'from pathlib import Path',
     'def _log(msg): print(f"[SlicerDSpace Installer] {msg}", flush=True)',
     SHARED_DOWNLOAD_PY,
+    SHARED_REMAP_PY,
     'def _search_dirs():',
     '    dirs = []',
     '    raw = str(CONFIG.get("offline_dir", "") or "").strip()',
@@ -1262,7 +1470,49 @@
     '    if sys.platform == "darwin" and shutil.which("xattr"): subprocess.run(["xattr", "-dr", "com.apple.quarantine", str(archive_path)], capture_output=True)',
     '    receipt = Path(tempfile.mkdtemp(prefix="slicerdspace-inst-")) / "receipt.json"',
     '    helper = receipt.with_name("install_ext.py")',
-    '    helper.write_text("import json, sys, traceback, qt, slicer\\nfrom pathlib import Path\\ndef _run():\\n  a=sys.argv[1]; r=Path(sys.argv[2])\\n  try:\\n    em=slicer.app.extensionsManagerModel(); em.setInteractive(False)\\n    if em.isExtensionInstalled(\'SlicerDSpace\'): em.uninstallExtension(\'SlicerDSpace\'); em.updateModel()\\n    meta={\'extensionname\':\'SlicerDSpace\',\'depends\':\'NA\',\'slicer_revision\':str(em.slicerRevision),\'os\':str(em.slicerOs),\'arch\':str(em.slicerArch)}\\n    ok=bool(em.installExtension(\'SlicerDSpace\', meta, a, False, True))\\n    r.write_text(json.dumps({\'installed\':ok,\'module_paths\':[str(p) for p in em.extensionModulePaths(\'SlicerDSpace\')]}),encoding=\'utf-8\')\\n    slicer.app.exit(0 if ok else 1)\\n  except Exception as e:\\n    r.write_text(json.dumps({\'installed\':False,\'error\':str(e),\'traceback\':traceback.format_exc()}),encoding=\'utf-8\')\\n    slicer.app.exit(1)\\nqt.QTimer.singleShot(500, _run)\\n", encoding="utf-8")',
+    '    helper_lines = [',
+    '        "import json, sys, traceback, zipfile, qt, slicer",',
+    '        "from pathlib import Path",',
+    '        "def _run():",',
+    '        "    a = sys.argv[1]; r = Path(sys.argv[2])",',
+    '        "    try:",',
+    '        "        em = slicer.app.extensionsManagerModel(); em.setInteractive(False)",',
+    '        "        rev = str(em.slicerRevision); sos = str(em.slicerOs); sarch = str(em.slicerArch)",',
+    '        "        maj = int(getattr(slicer.app, \'majorVersion\', 5)); minv = int(getattr(slicer.app, \'minorVersion\', 10))",',
+    '        "        tsub = f\'Slicer-{maj}.{minv}\'",',
+    '        "        if maj < 5 or (maj == 5 and minv < 8): raise RuntimeError(f\'Requires 3D Slicer 5.8+ (found {maj}.{minv})\')",',
+    '        "        needs_remap = (rev != \'34045\' or tsub != \'Slicer-5.10\')",',
+    '        "        if em.isExtensionInstalled(\'SlicerDSpace\'): em.uninstallExtension(\'SlicerDSpace\'); em.updateModel()",',
+    '        "        target_arc = a; stub = None",',
+    '        "        if needs_remap:",',
+    '        "            stub = r.with_name(\'SlicerDSpace-stub.zip\')",',
+    '        "            pfx = f\'SlicerDSpace/Slicer.app/Contents/Extensions-{rev}/SlicerDSpace\' if (sos.lower() == \'macosx\' or sys.platform == \'darwin\') else \'SlicerDSpace\'",',
+    '        "            s4 = chr(10).join([f\'arch {sarch}\', \'category Diffusion\', \'contributors Chengjin Li, Fan Zhang (UESTC)\', \'depends NA\', \'description SlicerDSpace\', \'enabled 1\', \'homepage https://neurodmri.github.io/SlicerDSpace/\', f\'os {sos}\', \'scm git\', \'scmurl https://github.com/NeuroDMRI/SlicerDSpace.git\', f\'slicer_revision {rev}\', \'\'])",',
+    '        "            spy = chr(10).join([\'from slicer.ScriptedLoadableModule import ScriptedLoadableModule, ScriptedLoadableModuleWidget\', \'class SlicerDSpace(ScriptedLoadableModule):\', \'    def __init__(self, p): ScriptedLoadableModule.__init__(self, p)\', \'class SlicerDSpaceWidget(ScriptedLoadableModuleWidget):\', \'    def setup(self): ScriptedLoadableModuleWidget.setup(self)\', \'\'])",',
+    '        "            with zipfile.ZipFile(stub, \'w\', compression=zipfile.ZIP_DEFLATED) as zf:",',
+    '        "                zf.writestr(f\'{pfx}/share/{tsub}/SlicerDSpace.s4ext\', s4)",',
+    '        "                zf.writestr(f\'{pfx}/SlicerDSpace.s4ext\', s4)",',
+    '        "                zf.writestr(f\'{pfx}/lib/{tsub}/qt-scripted-modules/SlicerDSpace.py\', spy)",',
+    '        "            target_arc = str(stub)",',
+    '        "        meta = {\'extensionname\': \'SlicerDSpace\', \'depends\': \'NA\', \'slicer_revision\': rev, \'os\': sos, \'arch\': sarch}",',
+    '        "        ok = bool(em.installExtension(\'SlicerDSpace\', meta, target_arc, False, True))",',
+    '        "        if stub is not None: stub.unlink(missing_ok=True)",',
+    '        "        mp = [str(p) for p in (em.extensionModulePaths(\'SlicerDSpace\') or ())]",',
+    '        "        er = \'\'",',
+    '        "        for p in mp:",',
+    '        "            if (Path(p) / \'SlicerDSpace.py\').is_file(): er = str(Path(p).parents[2].resolve()); break",',
+    '        "        if not er:",',
+    '        "            ep = em.extensionsInstallPath() if callable(getattr(em, \'extensionsInstallPath\', None)) else getattr(em, \'extensionsInstallPath\', \'\')",',
+    '        "            for c in Path(str(ep)).glob(f\'SlicerDSpace/lib/{tsub}/qt-scripted-modules\'):",',
+    '        "                if (c / \'SlicerDSpace.py\').is_file(): er = str(c.parents[2].resolve()); break",',
+    '        "        r.write_text(json.dumps({\'installed\': ok, \'module_paths\': mp, \'ext_root\': er, \'needs_remap\': needs_remap, \'rev\': rev, \'target_subdir\': tsub, \'slicer_os\': sos, \'slicer_arch\': sarch, \'slicer_major\': maj, \'slicer_minor\': minv, \'py_minor\': f\'{sys.version_info[0]}.{sys.version_info[1]}\'}), encoding=\'utf-8\')",',
+    '        "        slicer.app.exit(0 if ok else 1)",',
+    '        "    except Exception as e:",',
+    '        "        r.write_text(json.dumps({\'installed\': False, \'error\': str(e), \'traceback\': traceback.format_exc()}), encoding=\'utf-8\')",',
+    '        "        slicer.app.exit(1)",',
+    '        "qt.QTimer.singleShot(500, _run)",',
+    '    ]',
+    '    helper.write_text("\\n".join(helper_lines) + "\\n", encoding="utf-8")',
     '    cmd = [slicer_exe, "--no-splash", "--no-main-window", "--python-script", str(helper), str(archive_path), str(receipt)]',
     '    env = os.environ.copy()',
     '    if sys.platform.startswith("linux") and not env.get("DISPLAY"):',
@@ -1271,9 +1521,17 @@
     '        else: env.setdefault("QT_QPA_PLATFORM", "offscreen")',
     '    _log("Installing SlicerDSpace base extension into 3D Slicer...")',
     '    proc = subprocess.run(cmd, env=env)',
-    '    if proc.returncode != 0 or not receipt.is_file(): raise RuntimeError(f"Slicer install exited {proc.returncode}")',
+    '    if not receipt.is_file(): raise RuntimeError(f"Slicer install exited {proc.returncode}")',
     '    data = json.loads(receipt.read_text(encoding="utf-8")); shutil.rmtree(receipt.parent, ignore_errors=True)',
-    '    if not data.get("installed"): raise RuntimeError("Slicer rejected extension archive")',
+    '    if proc.returncode != 0 or not data.get("installed"): raise RuntimeError(data.get("error") or "Slicer rejected extension archive")',
+    '    if data.get("py_minor") and data.get("py_minor") != "3.12":',
+    '        _log(f"[WARN] 3D Slicer Python is {data[\'py_minor\']}; bundled Python tools target 3.12.")',
+    '    if data.get("needs_remap"):',
+    '        er = str(data.get("ext_root") or "").strip()',
+    '        if not er: raise RuntimeError("Remapped extension root path missing")',
+    '        _log(f"Adapting extension layout for {data.get(\'target_subdir\')} (r{data.get(\'rev\')})...")',
+    '        _extract_base_archive_remapped(archive_path, Path(er), str(data.get("rev") or ""), str(data["target_subdir"]), slicer_os=str(data.get("slicer_os") or ""), slicer_arch=str(data.get("slicer_arch") or ""), log_cb=_log)',
+    '        if sys.platform == "darwin" and shutil.which("xattr"): subprocess.run(["xattr", "-dr", "com.apple.quarantine", er], capture_output=True)',
     '    return data',
     'def _find_module_root(slicer_exe, receipt_data):',
     '    for mp in receipt_data.get("module_paths") or ():',
@@ -1508,9 +1766,13 @@
   function buildSetupExtensionFiles(state) {
     var osKey = state.os || 'macos';
     var def = OS_DEFAULTS[osKey] || OS_DEFAULTS.macos;
+    var preset = SLICER_PRESETS[state.slicerVersion] || SLICER_PRESETS['5.10.0'];
+    if (!preset.revision) { preset = SLICER_PRESETS['5.10.0']; }
+    var rev = preset.revision;
+    var sub = 'Slicer-' + preset.minor;
     var cfg = buildConfig(state);
     var prefix = osKey === 'macos'
-      ? 'SlicerDSpaceSetup/Slicer.app/Contents/Extensions-34045/SlicerDSpaceSetup'
+      ? ('SlicerDSpaceSetup/Slicer.app/Contents/Extensions-' + rev + '/SlicerDSpaceSetup')
       : 'SlicerDSpaceSetup';
     var s4ext = [
       'arch amd64',
@@ -1524,20 +1786,20 @@
       'scm git',
       'scmrevision ' + RELEASE_TAG,
       'scmurl https://github.com/NeuroDMRI/SlicerDSpace.git',
-      'slicer_revision 34045',
+      'slicer_revision ' + rev,
       ''
     ].join('\n');
     var setupPy = [
-      '# SlicerDSpace One-Click Graphical Setup Extension for 3D Slicer 5.10.0',
+      '# SlicerDSpace One-Click Graphical Setup Extension for 3D Slicer ' + preset.version,
       'import json as _json',
       'CONFIG = _json.loads(' + asciiJsonLiteral(cfg) + ')',
       SETUP_MODULE_PY,
       ''
     ].join('\n');
     return [
-      { name: prefix + '/share/Slicer-5.10/SlicerDSpaceSetup.s4ext', data: s4ext },
+      { name: prefix + '/share/' + sub + '/SlicerDSpaceSetup.s4ext', data: s4ext },
       { name: prefix + '/SlicerDSpaceSetup.s4ext', data: s4ext },
-      { name: prefix + '/lib/Slicer-5.10/qt-scripted-modules/SlicerDSpaceSetup.py', data: setupPy }
+      { name: prefix + '/lib/' + sub + '/qt-scripted-modules/SlicerDSpaceSetup.py', data: setupPy }
     ];
   }
 
@@ -1564,12 +1826,17 @@
         'set "SLICER_INPUT=' + cleanSlicer + '"',
         'call :resolve_slicer "%SLICER_INPUT%"',
         'if not defined PYTHON_SLICER (',
-        '  for %%D in ("%LOCALAPPDATA%\\slicer.org\\Slicer 5.10.0" "C:\\Program Files\\Slicer 5.10.0") do (',
+        '  for %%D in ("%LOCALAPPDATA%\\slicer.org\\Slicer 5.10.0" "%LOCALAPPDATA%\\slicer.org\\Slicer 5.12.4" "C:\\Program Files\\Slicer 5.10.0" "C:\\Program Files\\Slicer 5.12.4") do (',
         '    if not defined PYTHON_SLICER call :resolve_slicer "%%~D"',
         '  )',
         ')',
         'if not defined PYTHON_SLICER (',
-        '  set /p SLICER_INPUT="Enter path to 3D Slicer 5.10.0 folder or Slicer.exe: "',
+        '  for /d %%D in ("%LOCALAPPDATA%\\slicer.org\\Slicer*" "%LOCALAPPDATA%\\Slicer*" "C:\\Program Files\\slicer.org\\Slicer*" "C:\\Program Files\\Slicer*" "C:\\Slicer*") do (',
+        '    if not defined PYTHON_SLICER call :resolve_slicer "%%~D"',
+        '  )',
+        ')',
+        'if not defined PYTHON_SLICER (',
+        '  set /p SLICER_INPUT="Enter path to 3D Slicer folder or Slicer.exe: "',
         '  call :resolve_slicer "%SLICER_INPUT%"',
         ')',
         'if not defined PYTHON_SLICER (',
@@ -1601,7 +1868,7 @@
     var resolveFn = state.os === 'macos'
       ? [
           'resolve_slicer() {',
-          '  local p="${1:-}"; [ -n "$p" ] || return 1',
+          '  local p="${1:-}"; [ -n "$p" ] || return 1; p="${p%/}"',
           '  if [ -f "$p/Contents/MacOS/Slicer" ] && [ -f "$p/Contents/bin/PythonSlicer" ]; then SLICER_BIN="$p/Contents/MacOS/Slicer"; PYTHON_SLICER="$p/Contents/bin/PythonSlicer"; return 0; fi',
           '  if [ -f "$p/MacOS/Slicer" ] && [ -f "$p/bin/PythonSlicer" ]; then SLICER_BIN="$p/MacOS/Slicer"; PYTHON_SLICER="$p/bin/PythonSlicer"; return 0; fi',
           '  if [ "$(basename "$p")" = "Slicer" ] && [ -f "$(dirname "$p")/../bin/PythonSlicer" ]; then SLICER_BIN="$p"; PYTHON_SLICER="$(cd "$(dirname "$p")/.." && pwd)/bin/PythonSlicer"; return 0; fi',
@@ -1610,15 +1877,16 @@
         ].join('\n')
       : [
           'resolve_slicer() {',
-          '  local p="${1:-}"; [ -n "$p" ] || return 1',
+          '  local p="${1:-}"; [ -n "$p" ] || return 1; p="${p%/}"',
           '  if [ -f "$p/Slicer" ] && [ -f "$p/bin/PythonSlicer" ]; then SLICER_BIN="$p/Slicer"; PYTHON_SLICER="$p/bin/PythonSlicer"; return 0; fi',
           '  if [ "$(basename "$p")" = "Slicer" ] && [ -f "$(dirname "$p")/bin/PythonSlicer" ]; then SLICER_BIN="$p"; PYTHON_SLICER="$(dirname "$p")/bin/PythonSlicer"; return 0; fi',
           '  return 1',
           '}'
         ].join('\n');
     var fallbacks = state.os === 'macos'
-      ? '"/Applications/Slicer.app" "$HOME/Applications/Slicer.app" "/Applications/Slicer-5.10.0.app"'
-      : '"$HOME/Slicer-5.10.0-linux-amd64" "/opt/Slicer-5.10.0-linux-amd64" "/opt/slicer"';
+      ? '"/Applications/Slicer.app" "$HOME/Applications/Slicer.app" /Applications/Slicer*.app "$HOME"/Applications/Slicer*.app'
+      : '"$HOME"/Slicer* /opt/Slicer* /opt/slicer /opt/slicer/Slicer* /usr/local/Slicer* "$HOME"/Applications/Slicer*';
+    var promptTxt = state.os === 'macos' ? 'Enter path to 3D Slicer (.app): ' : 'Enter path to 3D Slicer folder: ';
 
     return [
       '#!/usr/bin/env bash',
@@ -1633,7 +1901,7 @@
       '  for cand in ' + fallbacks + '; do if resolve_slicer "$cand"; then break; fi; done',
       'fi',
       'if [ -z "$PYTHON_SLICER" ]; then',
-      '  printf "Enter path to 3D Slicer 5.10.0: "; read -r USER_SLICER',
+      '  printf "' + promptTxt + '"; read -r USER_SLICER',
       '  resolve_slicer "$USER_SLICER" || { echo "[ERROR] Slicer not found at: $USER_SLICER"; exit 1; }',
       'fi',
       'export SLICERDSPACE_RESOLVED_SLICER="$SLICER_BIN"',
@@ -1673,6 +1941,7 @@
 
     var state = {
       os: detectOS(),
+      slicerVersion: '5.10.0',
       slicerPath: '',
       modelAssetsDir: '',
       wmaEnabled: false,
@@ -1698,7 +1967,7 @@
         html.push('<div class="ic-top">');
         html.push('<div class="ic-top-copy">');
         html.push('<h3 class="ic-heading">' + t('One-Click Graphical Setup', '一键图形化安装器') + '</h3>');
-        html.push('<p class="ic-sub">' + t('Select your operating system and download the lightweight setup archive for 3D Slicer 5.10.0.', '选择操作系统并直接下载 3D Slicer 5.10.0 轻量安装引导包。') + '</p>');
+        html.push('<p class="ic-sub">' + t('Select your operating system and 3D Slicer version to download the installer.', '选择操作系统和 3D Slicer 版本，下载一键安装引导包。') + '</p>');
         html.push('</div></div>');
       }
 
@@ -1713,10 +1982,30 @@
         html.push('<button type="button" class="ic-seg-btn" data-os="' + osKey + '" aria-pressed="' + (state.os === osKey ? 'true' : 'false') + '"><span>' + OS_DEFAULTS[osKey].label + '</span><span class="ic-seg-arch">' + OS_ARCH[osKey] + '</span></button>');
       });
       html.push('</div>');
+      var dlLabel = state.slicerVersion === 'universal'
+        ? t('Download Universal Installer (.' + (OS_DEFAULTS[state.os].scriptName.split('.').pop()) + ')', '下载通用自动适配脚本')
+        : (state.slicerVersion === '5.12.4'
+          ? t('Download Setup (Slicer 5.12.4)', '下载 Slicer 5.12.4 安装包')
+          : t('Download Slicer Setup', '下载 Slicer 一键安装包'));
       html.push('<div class="ic-actions">');
-      html.push('<button type="button" class="ic-btn-primary" id="ic-download-btn">' + t('Download Slicer Setup', '下载 Slicer 一键安装包') + '</button>');
+      html.push('<button type="button" class="ic-btn-primary" id="ic-download-btn">' + dlLabel + '</button>');
       html.push('</div>');
       html.push('</div>');
+      html.push('<div class="ic-ver-row">');
+      html.push('<span class="ic-ver-label">' + t('3D Slicer Version', '3D Slicer 版本') + '</span>');
+      html.push('<div class="ic-ver-seg" role="group" aria-label="' + escapeAttr(t('3D Slicer Version', '3D Slicer 版本')) + '">');
+      SLICER_PRESET_ORDER.forEach(function (vKey) {
+        var pr = SLICER_PRESETS[vKey];
+        html.push('<button type="button" class="ic-seg-btn ic-ver-btn" data-slicer-ver="' + vKey + '" aria-pressed="' + (state.slicerVersion === vKey ? 'true' : 'false') + '"><span>' + t(pr.labelEn, pr.labelZh) + '</span><span class="ic-ver-sub">' + t(pr.subEn, pr.subZh) + '</span></button>');
+      });
+      html.push('</div>');
+      html.push('</div>');
+      if (state.slicerVersion === 'universal') {
+        var uniNote = state.os === 'windows'
+          ? t('Auto-detects installed 3D Slicer (5.8-5.12+) and adapts the extension layout. Double-click the downloaded .bat file.', '自动识别本机 3D Slicer (5.8–5.12+) 并自动重映射扩展目录。下载后直接双击 .bat 运行。')
+          : t('Auto-detects installed 3D Slicer (5.8-5.12+) and adapts the extension layout. Run in Terminal: bash ' + OS_DEFAULTS[state.os].scriptName, '自动识别本机 3D Slicer (5.8–5.12+) 并自动重映射扩展目录。在终端运行：bash ' + OS_DEFAULTS[state.os].scriptName);
+        html.push('<p class="ic-ver-note">' + uniNote + '</p>');
+      }
       html.push('</div>');
 
       root.innerHTML = html.join('');
@@ -1727,11 +2016,19 @@
       Array.prototype.forEach.call(root.querySelectorAll('[data-os]'), function (btn) {
         btn.addEventListener('click', function () { state.os = btn.getAttribute('data-os'); render(); });
       });
+      Array.prototype.forEach.call(root.querySelectorAll('[data-slicer-ver]'), function (btn) {
+        btn.addEventListener('click', function () { state.slicerVersion = btn.getAttribute('data-slicer-ver'); render(); });
+      });
 
       var dlBtn = document.getElementById('ic-download-btn');
       if (dlBtn) {
         dlBtn.addEventListener('click', function () {
-          var filename = OS_DEFAULTS[state.os].setupZipName;
+          if (state.slicerVersion === 'universal') {
+            triggerBlobDownload(encodeUtf8(buildScript(state)), 'text/plain;charset=utf-8', OS_DEFAULTS[state.os].scriptName);
+            return;
+          }
+          var preset = SLICER_PRESETS[state.slicerVersion] || SLICER_PRESETS['5.10.0'];
+          var filename = OS_DEFAULTS[state.os].setupZipName.replace(/\.zip$/i, (preset.zipSuffix || '') + '.zip');
           var orig = dlBtn.textContent;
           dlBtn.disabled = true;
           dlBtn.textContent = zh ? '正在打包...' : 'Packaging...';
@@ -1755,6 +2052,8 @@
     module.exports = {
       ARTIFACTS: ARTIFACTS,
       OS_DEFAULTS: OS_DEFAULTS,
+      SLICER_PRESET_ORDER: SLICER_PRESET_ORDER,
+      SLICER_PRESETS: SLICER_PRESETS,
       buildSetupExtensionFiles: buildSetupExtensionFiles,
       buildSetupZip: buildSetupZip,
       buildScript: buildScript

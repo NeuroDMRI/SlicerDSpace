@@ -5,8 +5,10 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import platform
 import shutil
 import site
+import struct
 import subprocess
 import sys
 from typing import MutableMapping
@@ -94,18 +96,84 @@ def _default_extension_roots(module_root: Path | str | None = None) -> tuple[Pat
     return tuple(deduped)
 
 
+def _normalize_arch(raw: str | None = None) -> str:
+    value = str(raw or platform.machine() or "").strip().lower()
+    return {
+        "amd64": "x86_64",
+        "x86_64": "x86_64",
+        "arm64": "arm64",
+        "aarch64": "arm64",
+    }.get(value, value)
+
+
+def _macho_arches(path: Path) -> set[str]:
+    """Return Mach-O architectures supported by a binary or shared library."""
+    arches: set[str] = set()
+    cpu_map = {0x01000007: "x86_64", 0x0100000C: "arm64"}
+    try:
+        with path.open("rb") as fh:
+            head = fh.read(8)
+            if len(head) < 8:
+                return arches
+            magic_be = struct.unpack(">I", head[:4])[0]
+            if magic_be == 0xCFFAEDFE:  # MH_CIGAM_64 (little-endian 64-bit Mach-O)
+                cpu = struct.unpack("<I", head[4:8])[0]
+                if cpu in cpu_map:
+                    arches.add(cpu_map[cpu])
+            elif magic_be == 0xFEEDFACF:  # MH_MAGIC_64 (big-endian 64-bit Mach-O)
+                cpu = struct.unpack(">I", head[4:8])[0]
+                if cpu in cpu_map:
+                    arches.add(cpu_map[cpu])
+            elif magic_be in (0xCAFEBABE, 0xCAFEBABF):  # FAT_MAGIC / FAT_MAGIC_64
+                nfat = struct.unpack(">I", head[4:8])[0]
+                if 1 <= nfat <= 16:
+                    stride = 20 if magic_be == 0xCAFEBABE else 32
+                    for _ in range(nfat):
+                        entry = fh.read(stride)
+                        if len(entry) < 4:
+                            break
+                        cpu = struct.unpack(">I", entry[:4])[0]
+                        if cpu in cpu_map:
+                            arches.add(cpu_map[cpu])
+    except OSError:
+        pass
+    return arches
+
+
 def _runtime_compatible(bundled_root: Path) -> bool:
     meta_file = bundled_root / "python-runtime.json"
-    if not meta_file.is_file():
-        return True
-    try:
-        meta = json.loads(meta_file.read_text(encoding="utf-8"))
-    except (OSError, ValueError, TypeError):
-        return False
+    meta: dict[str, object] = {}
+    if meta_file.is_file():
+        try:
+            loaded = json.loads(meta_file.read_text(encoding="utf-8"))
+            if not isinstance(loaded, dict):
+                return False
+            meta = loaded
+        except (OSError, ValueError, TypeError):
+            return False
     expected_py = meta.get("python_version")
     current_py = f"{sys.version_info[0]}.{sys.version_info[1]}"
     if expected_py and str(expected_py) != current_py:
         return False
+    host_arch = _normalize_arch()
+    expected_arch = meta.get("arch")
+    if expected_arch and _normalize_arch(str(expected_arch)) != host_arch:
+        return False
+    if sys.platform == "darwin":
+        sp = bundled_root / "site-packages"
+        if sp.is_dir():
+            sampled = 0
+            for ext in sp.rglob("*.so"):
+                if not ext.is_file():
+                    continue
+                arches = _macho_arches(ext)
+                if not arches:
+                    continue
+                if host_arch not in arches:
+                    return False
+                sampled += 1
+                if sampled >= 10:
+                    break
     return True
 
 

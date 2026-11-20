@@ -230,7 +230,7 @@ jobs:
         shell: bash
         env:
           SLICER_EXE: ${{ steps.slicer.outputs.slicer_exe }}
-        run: python .github/scripts/ci_debug_state.py --label pre-install --probe --slicer-exe "$SLICER_EXE"
+        run: python .github/scripts/ci_debug_state.py --label pre-install --slicer-exe "$SLICER_EXE"
 
       - name: Install SlicerDSpace v0.1.1 with the website installer, then overlay this checkout
         id: dspace

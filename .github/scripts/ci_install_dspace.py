@@ -107,8 +107,9 @@ def run_website_installer(python_slicer, slicer_exe, target_os, offline_dir, bun
                SLICERDSPACE_INSTALLER_NONINTERACTIVE="1", PYTHONNOUSERSITE="1")
     command = [str(python_slicer), "-u", "-c", EXEC_SNIPPET, str(script_path)]
     log("run: %s -u -c <installer payload> %s" % (python_slicer, script_path))
-    # cwd = the download folder, not the checkout: the checkout holds SlicerDSpace.s4ext and SlicerDSpace.py at its
-    # root, and a user never runs the installer from inside a source tree.
+    # cwd = the download folder, not the checkout. Run 44819974644: started inside the checkout, a fresh Slicer
+    # reported SlicerDSpace as installed, the installer's own uninstall failed ("already loaded") and left it
+    # scheduled for uninstall; the probe in run 44822858821 shows the cwd decides this.
     process = subprocess.Popen(command, env=env, cwd=str(offline_dir), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                text=True, errors="replace")
     lines = []

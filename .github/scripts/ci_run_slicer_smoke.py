@@ -72,7 +72,9 @@ def main(argv=None):
     log("run: " + " ".join(command))
     slicer_log = artifacts / "slicer_stdout.log"
     with open(str(slicer_log), "wb") as handle:
-        code = subprocess.run(command, env=env, stdout=handle, stderr=subprocess.STDOUT).returncode
+        # cwd = the artifacts folder, not the checkout: a Slicer started inside the checkout reported SlicerDSpace
+        # as installed on a fresh install, one started in an empty folder did not (probe, run 44822858821).
+        code = subprocess.run(command, env=env, cwd=str(artifacts), stdout=handle, stderr=subprocess.STDOUT).returncode
     log("Slicer exit code %d; its output follows (full copy: %s)" % (code, slicer_log))
     text = slicer_log.read_text(encoding="utf-8", errors="replace")
     print(text[-20000:], flush=True)

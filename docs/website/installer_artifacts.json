@@ -16,8 +16,8 @@
       "mode": "base",
       "filename": "SlicerDSpace-v0.1.1-Windows-x64.zip",
       "url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v0.1.1/SlicerDSpace-v0.1.1-Windows-x64.zip",
-      "size_bytes": 1468720670,
-      "sha256": "c20a0c150228f1d818620ffbcc022586e91caa05154923da9a791497fd393022",
+      "size_bytes": 1468731734,
+      "sha256": "8336932cb6b01e0bb147a67d38da641c24cd38552d87aef459f9de4a9d160ae4",
       "published": true,
       "parts": []
     },
@@ -27,8 +27,8 @@
       "mode": "base",
       "filename": "SlicerDSpace-v0.1.1-Linux-x64.tar.gz",
       "url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v0.1.1/SlicerDSpace-v0.1.1-Linux-x64.tar.gz",
-      "size_bytes": 1613628669,
-      "sha256": "cf82ec6eebc3467baebbe54145d4d72a5761d4db1c17a1a3cbf886efd4985111",
+      "size_bytes": 1613638871,
+      "sha256": "e38298d5685dea8c3c48ce17f6115901fd5c5166e1c9b629414f5746f8b5b7d8",
       "published": true,
       "parts": []
     },
@@ -38,8 +38,8 @@
       "mode": "base",
       "filename": "SlicerDSpace-v0.1.1-macOS-arm64.tar.gz",
       "url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v0.1.1/SlicerDSpace-v0.1.1-macOS-arm64.tar.gz",
-      "size_bytes": 1463960927,
-      "sha256": "ff862862fc2dac353d091318849529a9909181a87fa1937ce3d23c0ca5d930c4",
+      "size_bytes": 1463970576,
+      "sha256": "701e8dfded2bb648d0901ede4d092c955da9f9ae6fce8aa4cab82973a39dea01",
       "published": true,
       "parts": []
     }
@@ -50,15 +50,15 @@
       "filename": "SlicerDSpaceSetup-Windows.zip",
       "url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v0.1.1/SlicerDSpaceSetup-Windows.zip",
       "size_bytes": 14385,
-      "sha256": "5b6ab19def5b5e9a671fe2a7fa3a921a8bf6108b99688ae0f5114853d16f07c4",
+      "sha256": "77253ff332b0e196d1cfbdf74da837dcc21285f27d7f85d1f343ee4c5e0673b8",
       "published": true
     },
     "linux": {
       "os": "linux",
       "filename": "SlicerDSpaceSetup-Linux.zip",
       "url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v0.1.1/SlicerDSpaceSetup-Linux.zip",
-      "size_bytes": 14386,
-      "sha256": "489f857cbea7cee0e8bb183f23660d5af131ac4b89c7b008b29cdea96e5facd5",
+      "size_bytes": 14385,
+      "sha256": "d91678731946dd20f4c5371568ddeff62e2e2c22979ed64c6995753009dc5e64",
       "published": true
     },
     "macos": {
@@ -66,8 +66,17 @@
       "filename": "SlicerDSpaceSetup-macOS.zip",
       "url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v0.1.1/SlicerDSpaceSetup-macOS.zip",
       "size_bytes": 14718,
-      "sha256": "9557b4bce6e3fe136adb5be041d7b86e8016fb610dcd03dd2cfdf6051f5427a7",
+      "sha256": "9c2febd24fe6f664febbc11938c0729bd20c6ddc9ed63b70a88f5fcd542fc9f1",
       "published": true
     }
+  },
+  "code_overlay": {
+    "filename": "SlicerDSpace-v0.1.1-CodeOverlay.tar.gz",
+    "url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v0.1.1/SlicerDSpace-v0.1.1-CodeOverlay.tar.gz",
+    "size_bytes": 3375745,
+    "sha256": "d5c7e7044ab4003d479e2fa18dee3defe1927a01da82e36093d8be6eb2f65992",
+    "code_sha256": "64086de470386782ff0c4b8900dbbdde1c692b6fc04c20b4831bfdcfa7863337",
+    "runtime_abi_version": 1,
+    "version": "0.1.1"
   }
 }

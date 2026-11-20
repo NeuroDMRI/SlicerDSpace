@@ -44,7 +44,9 @@ set(common_args
   -DCMAKE_INSTALL_PREFIX:PATH=${UKF_DEPENDENCIES}
   -DCMAKE_C_COMPILER:FILEPATH=${CMAKE_C_COMPILER}
   -DCMAKE_CXX_COMPILER:FILEPATH=${CMAKE_CXX_COMPILER}
-  -DCMAKE_POLICY_VERSION_MINIMUM:STRING=3.5
+  -DCMAKE_POLICY_DEFAULT_CMP0024:STRING=OLD
+  -DCMAKE_DISABLE_FIND_PACKAGE_X11:BOOL=ON
+  -DCMAKE_IGNORE_PREFIX_PATH:PATH=/opt/homebrew
 )
 
 set(zlib_static "${UKF_DEPENDENCIES}/lib/libz.a")
@@ -219,9 +221,9 @@ set_target_properties(UKFTractography PROPERTIES
 """
 
 
-def _run(cmd: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+def _run(cmd: list[str], *, cwd: Path | None = None, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
     print("[cmd]", " ".join(str(x) for x in cmd), flush=True)
-    return subprocess.run(cmd, cwd=cwd, check=True, text=True)
+    return subprocess.run(cmd, cwd=cwd, env=env, check=True, text=True)
 
 
 def _sha256_file(path: Path) -> str:
@@ -372,11 +374,22 @@ def main(argv: list[str] | None = None) -> int:
     )
     (standalone_src / "CMakeLists.txt").write_text(_STANDALONE_CMAKELISTS, encoding="utf-8")
 
-    gen_args: list[str] = ["-G", "Ninja"] if shutil.which("ninja") else []
+    py_bin_dir = Path(sys.executable).resolve().parent
+    cmake_candidate = py_bin_dir / "cmake"
+    cmake_bin = str(cmake_candidate) if cmake_candidate.is_file() else (shutil.which("cmake") or "cmake")
+    ninja_candidate = py_bin_dir / "ninja"
+    ninja_bin = str(ninja_candidate) if ninja_candidate.is_file() else shutil.which("ninja")
+
+    build_env = os.environ.copy()
+    path_parts = [str(py_bin_dir)] + [p for p in build_env.get("PATH", "").split(os.pathsep) if p and p != str(py_bin_dir)]
+    build_env["PATH"] = os.pathsep.join(path_parts)
+
+    gen_args: list[str] = ["-G", "Ninja", f"-DCMAKE_MAKE_PROGRAM={ninja_bin}"] if ninja_bin else []
     c_comp = shutil.which("clang") or "/usr/bin/clang"
     cxx_comp = shutil.which("clang++") or "/usr/bin/clang++"
+    _run([cmake_bin, "--version"], env=build_env)
     _run([
-        "cmake",
+        cmake_bin,
         "-S", str(sb_src),
         "-B", str(sb_build),
         *gen_args,
@@ -384,8 +397,8 @@ def main(argv: list[str] | None = None) -> int:
         f"-DCMAKE_CXX_COMPILER={cxx_comp}",
         "-DCMAKE_OSX_ARCHITECTURES=arm64",
         "-DCMAKE_OSX_DEPLOYMENT_TARGET=13.0",
-    ])
-    _run(["cmake", "--build", str(sb_build), "--parallel", str(max(1, int(args.jobs)))])
+    ], env=build_env)
+    _run([cmake_bin, "--build", str(sb_build), "--parallel", str(max(1, int(args.jobs)))], env=build_env)
 
     binary = sb_build / "backend" / "bin" / "UKFTractography"
     xml_path = src_dir / "UKFTractography" / "UKFTractography.xml"

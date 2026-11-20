@@ -714,9 +714,12 @@ def _download_parallel_verified(
             pass
     elif part.is_file() and not meta.is_file():
         legacy_sz = part.stat().st_size
-        full = min(n_chunks, legacy_sz // chunk_sz)
-        for idx in range(full):
-            done_flags[idx] = True
+        if 0 < legacy_sz < total_size:
+            full = min(n_chunks, legacy_sz // chunk_sz)
+            for idx in range(full):
+                done_flags[idx] = True
+        else:
+            part.unlink(missing_ok=True)
 
     todo = [idx for idx, ok in enumerate(done_flags) if not ok]
     done_bytes = sum(min(chunk_sz, total_size - idx * chunk_sz) for idx, ok in enumerate(done_flags) if ok)
@@ -730,23 +733,30 @@ def _download_parallel_verified(
         url_lock = threading.Lock()
         state_lock = threading.Lock()
         write_lock = threading.Lock()
+        abort_event = threading.Event()
         active_url = [resolved_url if (resolved_url and not _is_mirror_host(url)) else url]
         state = {"bytes": done_bytes}
 
         def _save_meta() -> None:
-            meta.write_text(
+            tmp_meta = meta.with_name(meta.name + ".tmp")
+            tmp_meta.write_text(
                 json.dumps({"size": total_size, "chunk_size": chunk_sz, "done": done_flags}),
                 encoding="utf-8",
             )
+            os.replace(tmp_meta, meta)
 
         _save_meta()
         with part.open("r+b") as fh:
             def _fetch_chunk(idx: int) -> None:
+                if abort_event.is_set():
+                    return
                 start = idx * chunk_sz
                 end = min(total_size - 1, start + chunk_sz - 1)
                 expected_len = end - start + 1
                 last_exc: Exception | None = None
                 for attempt in range(4):
+                    if abort_event.is_set():
+                        return
                     buf = bytearray()
                     with url_lock:
                         fetch_url = active_url[0]
@@ -764,19 +774,29 @@ def _download_parallel_verified(
                                 raise RuntimeError(f"Expected 206 for range {start}-{end}, got HTTP {status}")
                             if hasattr(resp, "iter_chunks"):
                                 for blk in resp.iter_chunks(262144):
+                                    if abort_event.is_set():
+                                        return
                                     buf.extend(blk)
                             else:
                                 while len(buf) < expected_len:
+                                    if abort_event.is_set():
+                                        return
                                     blk = resp.read(min(262144, expected_len - len(buf)))
                                     if not blk:
                                         break
                                     buf.extend(blk)
+                        if abort_event.is_set():
+                            return
                         if len(buf) != expected_len:
                             raise RuntimeError(f"Chunk {idx} short read {len(buf)}/{expected_len}")
                         with write_lock:
+                            if abort_event.is_set():
+                                return
                             fh.seek(start)
                             fh.write(buf)
                         with state_lock:
+                            if abort_event.is_set():
+                                return
                             done_flags[idx] = True
                             state["bytes"] += expected_len
                             _save_meta()
@@ -796,19 +816,28 @@ def _download_parallel_verified(
                             with url_lock:
                                 active_url[0] = fresh if (fresh and not _is_mirror_host(url)) else url
                         elif exc.code in (429, 503, 504):
-                            time.sleep(0.5 * (2 ** attempt))
+                            if abort_event.wait(0.5 * (2 ** attempt)):
+                                return
                     except Exception as exc:
                         last_exc = exc
                         if fetch_url != url:
                             with url_lock:
                                 active_url[0] = url
-                    time.sleep(0.35 * (attempt + 1))
+                    if abort_event.wait(0.35 * (attempt + 1)):
+                        return
+                abort_event.set()
                 raise RuntimeError(f"Chunk {idx} failed after retries: {last_exc}")
 
             with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
                 futures = [pool.submit(_fetch_chunk, idx) for idx in todo]
-                for fut in concurrent.futures.as_completed(futures):
-                    fut.result()
+                try:
+                    for fut in concurrent.futures.as_completed(futures):
+                        fut.result()
+                except Exception:
+                    abort_event.set()
+                    for pending in futures:
+                        pending.cancel()
+                    raise
 
     if part.stat().st_size != total_size:
         raise RuntimeError(f"Short download for {target.name}: got {part.stat().st_size} of {total_size} bytes")

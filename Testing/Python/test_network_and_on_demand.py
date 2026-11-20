@@ -1188,6 +1188,177 @@ class FastInstallerOptimizationTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
 
+    def test_finalize_worker_cli_extracts_pack_stages_iit_and_writes_config(self) -> None:
+        node_bin = shutil.which("node")
+        if node_bin is None:
+            self.skipTest("node is not installed in PATH")
+
+        js_path = REPO_ROOT / "docs" / "site" / "assets" / "js" / "installer-customizer.js"
+        with tempfile.TemporaryDirectory() as tmp:
+            tdir = Path(tmp)
+            asset_dir = tdir / "custom_assets"
+            node_script = (
+                "const ic = require(process.argv[1]);\n"
+                "const files = ic.buildSetupExtensionFiles({ "
+                f"os: 'linux', wmaEnabled: true, wmaAtlases: ['wma_naba'], modelAssetsDir: {json.dumps(str(asset_dir))}, language: 'zh' "
+                "});\n"
+                "process.stdout.write(files.find((f) => f.name.endsWith('SlicerDSpaceSetup.py')).data);\n"
+            )
+            py_src = subprocess.run([node_bin, "-e", node_script, str(js_path)], capture_output=True, text=True, check=True).stdout
+            worker_py = tdir / "SlicerDSpaceSetup.py"
+            worker_py.write_text(py_src, encoding="utf-8")
+
+            ext_root = tdir / "SlicerDSpace"
+            mod_root = ext_root / "lib" / "Slicer-5.10" / "qt-scripted-modules"
+            mod_root.mkdir(parents=True, exist_ok=True)
+            bundled = ext_root / "bundled-model-assets"
+            (bundled / "sample").mkdir(parents=True, exist_ok=True)
+            (bundled / "sample" / "w.bin").write_bytes(b"weights")
+
+            iit_src = tdir / "IITmean_b0_256.nii.gz"
+            iit_src.write_bytes(b"fake-iit")
+            pack_zip = tdir / "SlicerDSpace-wma-naba-v0.1.1.zip"
+            with zipfile.ZipFile(pack_zip, "w") as zf:
+                zf.writestr("bundles/wma/naba/atlas.txt", "naba-ok")
+
+            user_cfg = tdir / "user_config.json"
+            job_file = tdir / "finalize_job.json"
+            job_file.write_text(
+                json.dumps({
+                    "ext_temps": [],
+                    "mod_root": str(mod_root),
+                    "iit_file": str(iit_src),
+                    "work_dir": str(tdir),
+                    "pack_archives": [[{"filename": pack_zip.name}, str(pack_zip)]],
+                    "asset_temps": [str(pack_zip)],
+                    "sel_packs": ["wma_naba"],
+                    "mirror": "",
+                    "proxy": "",
+                    "offdir": "",
+                    "verified_packs": True,
+                }),
+                encoding="utf-8",
+            )
+            env = os.environ.copy()
+            env.update({
+                "PYTHONPATH": str(REPO_ROOT),
+                "SLICERDSPACE_USER_CONFIG": str(user_cfg),
+                "HOME": str(tdir),
+                "USERPROFILE": str(tdir),
+            })
+            proc = subprocess.run(
+                [sys.executable, "-u", str(worker_py), "--finalize-worker", str(job_file)],
+                capture_output=True,
+                text=True,
+                env=env,
+                timeout=30,
+            )
+            self.assertEqual(proc.returncode, 0, msg=f"stdout={proc.stdout}\nstderr={proc.stderr}")
+            events = [json.loads(ln) for ln in proc.stdout.splitlines() if ln.strip().startswith("{")]
+            kinds = [ev["k"] for ev in events]
+            self.assertIn("progress", kinds)
+            self.assertIn("all_done", kinds)
+            self.assertTrue((asset_dir / "bundles" / "wma" / "naba" / "atlas.txt").is_file())
+            self.assertTrue((asset_dir / "brain_mask" / "pnl_cnn_torch" / "IITmean_b0_256.nii.gz").is_file())
+            self.assertFalse(pack_zip.exists())
+            saved_cfg = json.loads(user_cfg.read_text(encoding="utf-8"))
+            self.assertEqual(saved_cfg["run_defaults"]["wma_atlas"], "naba")
+            self.assertIn("wma", saved_cfg["run_defaults"]["targets"])
+
+    def test_parallel_fast_fail_zero_part_rejection_and_mirror_url_preservation(self) -> None:
+        from unittest.mock import patch
+        from shared import network_config as nc
+
+        payload = b"REALDATA" * (24 * 1024)
+        sha = hashlib.sha256(payload).hexdigest()
+        server, hits = self._start_range_server(
+            {"/mirror/pkg.bin": payload},
+            redirect_routes={"/redir/pkg.bin": "/mirror/pkg.bin"},
+        )
+        try:
+            with (
+                tempfile.TemporaryDirectory() as tmp,
+                patch.dict(os.environ, {"HTTP_PROXY": "", "HTTPS_PROXY": "", "http_proxy": "", "https_proxy": "", "SLICERDSPACE_PROXY_URL": ""}, clear=False),
+                patch.object(nc, "_PAR_CHUNK", 64 * 1024),
+            ):
+                tdir = Path(tmp)
+                url = f"http://127.0.0.1:{server.server_port}/mirror/pkg.bin"
+                dest_nc = tdir / "nc.bin"
+                # Seed a zero-filled pre-truncated .part without .part.json (must NOT be treated as completed!).
+                dest_nc.with_name("nc.bin.part").write_bytes(b"\x00" * len(payload))
+                nc.download_file_verified(url, dest_nc, expected_sha256="", expected_size=len(payload), allow_mirror=False)
+                self.assertEqual(dest_nc.read_bytes(), payload)
+
+                _, ns = self._load_setup_module_ns("linux")
+                ns["_PAR_CHUNK"] = 64 * 1024
+                dest_setup = tdir / "setup.bin"
+                dest_setup.with_name("setup.bin.part").write_bytes(b"\x00" * len(payload))
+                ns["_download"](url, dest_setup, expected_sha256="", expected_size=len(payload), allow_mirror=False)
+                self.assertEqual(dest_setup.read_bytes(), payload)
+
+                # When cap_ref is a mirror host, do not follow a 302 redirect target for Range chunks.
+                hits.clear()
+                ns["_DIRECT_MIRROR_HOSTS"] = ("127.0.0.1",)
+                dest_mir = tdir / "mir.bin"
+                ns["_download"](
+                    f"http://127.0.0.1:{server.server_port}/redir/pkg.bin",
+                    dest_mir,
+                    expected_sha256=sha,
+                    expected_size=len(payload),
+                    allow_mirror=False,
+                )
+                self.assertEqual(dest_mir.read_bytes(), payload)
+                origin_chunk_hits = [p for p, r in hits if p == "/redir/pkg.bin" and r != "bytes=0-0"]
+                self.assertGreaterEqual(len(origin_chunk_hits), 3)
+
+                # Fast-fail abort prevents queued remaining chunks from being retried repeatedly.
+                import http.server
+                import threading
+
+                fail_hits: list[str] = []
+
+                class FailChunkHandler(http.server.BaseHTTPRequestHandler):
+                    def log_message(self, *_a):
+                        return
+
+                    def do_GET(self):
+                        rng = str(self.headers.get("Range") or "")
+                        fail_hits.append(rng)
+                        if rng == "bytes=0-0":
+                            self.send_response(206)
+                            self.send_header("Content-Range", f"bytes 0-0/{8192 * 30}")
+                            self.send_header("Content-Length", "1")
+                            self.end_headers()
+                            self.wfile.write(b"0")
+                            return
+                        self.send_response(404)
+                        self.send_header("Content-Length", "0")
+                        self.end_headers()
+
+                fsrv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), FailChunkHandler)
+                threading.Thread(target=fsrv.serve_forever, daemon=True).start()
+                try:
+                    with (
+                        patch.object(nc, "_PAR_CHUNK", 8192),
+                        patch.object(nc, "_PAR_WORKERS", 2),
+                    ):
+                        with self.assertRaises(RuntimeError):
+                            nc.download_file_verified(
+                                f"http://127.0.0.1:{fsrv.server_port}/broken.bin",
+                                tdir / "broken.bin",
+                                expected_size=8192 * 30,
+                                allow_mirror=False,
+                            )
+                    # Out of 30 chunks * 4 attempts = 120 possible requests, abort_event stops early.
+                    chunk_attempts = [r for r in fail_hits if r != "bytes=0-0"]
+                    self.assertLessEqual(len(chunk_attempts), 12)
+                finally:
+                    fsrv.shutdown()
+                    fsrv.server_close()
+        finally:
+            server.shutdown()
+            server.server_close()
+
 
 if __name__ == "__main__":
     unittest.main()

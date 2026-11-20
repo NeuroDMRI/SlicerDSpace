@@ -1,6 +1,9 @@
 """Canonical multi-algorithm selections shared by GUI, CLI and preflight."""
 
 PREPROCESSING = ("brain_mask", "denoise", "eddy", "topup")
+# G3: the preprocessing stages that need FSL. Brain mask (PNL CNN) and DWI denoising (DIPY) do not.
+FSL_STAGES = ("eddy", "topup")
+FSL_FREE_PREPROCESSING_DEFAULT = "denoise"
 MICROSTRUCTURE = ("dti", "freewater", "noddi", "dki", "ifw")
 TRACKING = ("csd_act", "ukf", "dti_det", "saf")
 BUNDLES = ("wmql", "wma", "tractcloud")
@@ -50,3 +53,15 @@ def choice_value(value, choices=TRACKING, default="csd_act"):
     """Normalize shared CLI settings for order-independent MRML Choice values."""
     selected = algorithms(value, choices, default)
     return ",".join(item for item in choices if item in selected)
+
+
+def without_fsl_stages(value, choices=PREPROCESSING):
+    """G3: the preprocessing selection without Eddy and Topup, in canonical order.
+
+    Returns "" when nothing is left. The caller must not store "" (it means "run every stage").
+    """
+    text = (value or "").strip().lower().replace("+", ",").replace(";", ",")
+    kept = {part.strip() for part in text.split(",") if part.strip()} - set(FSL_STAGES)
+    if "all" in kept:
+        kept = (set(choices) - set(FSL_STAGES)) | (kept - {"all"})
+    return ",".join(item for item in choices if item in kept)

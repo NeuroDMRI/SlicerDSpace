@@ -136,15 +136,44 @@ def _wma_atlas_ready(roots: tuple[Path, ...], atlas_family: str, explicit_wma_di
     return False
 
 
+def _macos_blocked(path: Path) -> bool:
+    """G-H2: True when ``path`` is a valid native surface runtime that this macOS cannot load."""
+    try:
+        from shared.surface_runtime import runtime_dir_macos_block
+
+        return bool(runtime_dir_macos_block(path))
+    except Exception:
+        return False
+
+
+def _explicit_runtime_block(explicit_fs_home: str | None) -> str | None:
+    """R3-3: the macOS block message of an explicitly selected runtime directory, else None."""
+    if not explicit_fs_home:
+        return None
+    try:
+        from shared.surface_runtime import runtime_dir_macos_block
+
+        explicit = Path(explicit_fs_home).expanduser()
+        return runtime_dir_macos_block(explicit) if explicit.is_dir() else None
+    except Exception:
+        return None
+
+
 def _surface_runtime_ready(explicit_fs_home: str | None = None) -> bool:
-    if explicit_fs_home and Path(explicit_fs_home).expanduser().is_dir():
-        return True
+    # G-H2: a runtime whose binaries need a newer macOS than this Mac runs is never ready, also when its path is
+    # given explicitly (the saved ``postprocess_runtime`` path reaches here as ``explicit_fs_home``).
+    if explicit_fs_home:
+        explicit = Path(explicit_fs_home).expanduser()
+        if explicit.is_dir():
+            # R3-3: the run keeps an explicit selection (resolve_surface_runtime), so a blocked explicit runtime is not
+            # ready even when another installed runtime would load.
+            return not _macos_blocked(explicit)
     try:
         from shared.native_runtimes import bundled_runtime_roots
 
         for bundle_root in bundled_runtime_roots():
             for child in bundle_root.glob("surface-runtime-*"):
-                if (child / "runtime.json").is_file():
+                if (child / "runtime.json").is_file() and not _macos_blocked(child):
                     return True
     except Exception:
         pass
@@ -159,10 +188,10 @@ def _surface_runtime_ready(explicit_fs_home: str | None = None) -> bool:
         if bundled_surface_runtime() is not None:
             return True
         prefix = default_surface_runtime()
-        if (prefix / "runtime.json").is_file() or is_valid_surface_runtime_dir(prefix):
+        if ((prefix / "runtime.json").is_file() or is_valid_surface_runtime_dir(prefix)) and not _macos_blocked(prefix):
             return True
         backend, home = resolve_surface_runtime(freesurfer_home=explicit_fs_home or None)
-        if backend == "native" and is_valid_surface_runtime_dir(home):
+        if backend == "native" and is_valid_surface_runtime_dir(home) and not _macos_blocked(home):
             return True
         if backend == "freesurfer" and (home / "build-stamp.txt").is_file():
             return True
@@ -222,17 +251,18 @@ def detect_missing_task_resources(
 
     missing: list[dict[str, Any]] = []
 
-    def add_item(item_id: str, size_bytes: int, pack_id: str | None = None) -> None:
+    def add_item(item_id: str, size_bytes: int, pack_id: str | None = None, reason: str | None = None) -> None:
         zh_title, en_title = _RESOURCE_LABELS[item_id]
-        missing.append(
-            {
-                "id": item_id,
-                "title_zh": zh_title,
-                "title_en": en_title,
-                "size_bytes": int(size_bytes),
-                "pack_id": pack_id,
-            }
-        )
+        item = {
+            "id": item_id,
+            "title_zh": zh_title,
+            "title_en": en_title,
+            "size_bytes": int(size_bytes),
+            "pack_id": pack_id,
+        }
+        if reason:
+            item["reason"] = reason
+        missing.append(item)
 
     # 1. Anatomical priors (DDSeg / DDParcel / DDSurfer / Surface Postprocess)
     if "segmentation" in target_set:
@@ -266,7 +296,17 @@ def detect_missing_task_resources(
             size = (sum(ext_sizes.get(p, 0) for p in atlas_paths) if not atlas_ok else 0) + (
                 40_000_000 if not runtime_ok else 0
             )
-            add_item("surface_postprocess", size or _DEFAULT_PACK_SIZES_BYTES["surface_postprocess"], "surface")
+            reason = None
+            if not runtime_ok:
+                reason = _explicit_runtime_block(fs_candidate)
+                if not reason:
+                    try:
+                        from shared.surface_runtime import surface_runtime_macos_block
+
+                        reason = surface_runtime_macos_block()  # G-H2: why the bundled runtime is not ready on this Mac
+                    except Exception:
+                        reason = None
+            add_item("surface_postprocess", size or _DEFAULT_PACK_SIZES_BYTES["surface_postprocess"], "surface", reason)
 
     # 2. Automatic PNL brain mask
     needs_mask = bool(
@@ -439,6 +479,15 @@ def build_network_and_offline_panel(parent: Any, *, zh: bool) -> tuple[Any, Call
     return group, get_values
 
 
+def _missing_bullets_html(missing: list[dict[str, Any]], zh: bool) -> str:
+    """The bullet list of the supplement dialog; G-H2: an item with a ``reason`` (macOS too old) shows it."""
+    return "".join(
+        f"<br>• <b>{html.escape(item['title_zh'] if zh else item['title_en'])}</b> ({_format_size(item['size_bytes'])})"
+        + (f"<br>&nbsp;&nbsp;<i>{html.escape(item['reason'])}</i>" if item.get("reason") else "")
+        for item in missing
+    )
+
+
 def maybe_prompt_on_demand_install(owner: Any, *, force: bool = False) -> bool:
     """Prompt to hot-install missing model weights or atlases right when a user ticks a workflow."""
 
@@ -506,10 +555,7 @@ def maybe_prompt_on_demand_install(owner: Any, *, force: bool = False) -> bool:
     layout.setContentsMargins(14, 12, 14, 12)
     layout.setSpacing(10)
 
-    bullets = "".join(
-        f"<br>• <b>{html.escape(item['title_zh'] if zh else item['title_en'])}</b> ({_format_size(item['size_bytes'])})"
-        for item in missing
-    )
+    bullets = _missing_bullets_html(missing, zh)
     sub_note = (
         "无需重装扩展或重启 3D Slicer；可在下方选择加速镜像、代理或本地离线包目录。"
         if zh

@@ -10,17 +10,90 @@ from shared.ui_environment_panel import environment_missing_items
 from shared.wsl_bridge import WSL_INSTALL_COMMAND, WSL_MISSING_LABEL, list_distributions, select_distribution
 
 PNL_UNSUPPORTED_TEXT = "Automatic brain mask is not available on this system yet. Provide a brain mask file (NIfTI)."
-# W2a (D1): the one preprocessing route needs MRtrix3 and FSL (eddy, topup).
-PREPROCESSING_UNSUPPORTED_TEXT = ("Preprocessing needs FSL, which has no build for this platform; "
-                                  "import preprocessed data instead")
+# W2a (D1): Eddy and Topup need FSL (and MRtrix3 for dwifslpreproc). G3: Brain mask and DWI denoising do not.
+# This text is the setup-plan note for the managed FSL install path and the tooltip of the unavailable stages.
+PREPROCESSING_UNSUPPORTED_TEXT = ("Eddy and Topup need FSL, which is not available on this system; "
+                                  "Brain mask and DWI denoising still run.")
+PREPROCESSING_UNSUPPORTED_TEXT_ZH = "Eddy 和 Topup 需要 FSL，当前系统不可用；脑掩膜和 DWI 降噪仍可运行。"
 
 
 def preprocessing_offered(system=None, machine=None):
-    """True when the platform has MRtrix3 and FSL builds (Windows gets them through WSL)."""
+    """Managed/WSL route rule: True when the platform has MRtrix3 and FSL builds (Windows gets them through WSL).
+
+    G2: kept for compatibility, with this meaning only. It ignores bundled runtimes and does not decide whether the
+    Preprocessing checkbox is offered (that is always on). The UI asks ``fsl_preprocessing_offered`` for Eddy/Topup.
+    """
     import platform
     if (system or platform.system()) == "Windows":
         return True
     return supported_platform(system, machine, profiles=("mrtrix", "fsl_cpu"))
+
+
+def _bundled_fsl_requirement(system, machine):
+    """(found, required) for the bundled FSL and MRtrix3 runtimes of this host.
+
+    ``found`` is True when both are installed (the same lookup that the preprocessing runner uses).
+    ``required`` is the highest minimum macOS of the two as a version tuple, or None when it cannot be read.
+    """
+    from shared.macho_min_os import min_macos_for_dir
+    from shared.native_runtimes import host_platform, installed_bundle_bin_dirs
+    sys_name, arch = host_platform(system, machine)
+    required = None
+    for tool in ("fsl", "mrtrix"):
+        bins = installed_bundle_bin_dirs(tool, system=sys_name, machine=arch)
+        if not bins:
+            return False, None
+        found = min_macos_for_dir(bins[0].parent, arch)
+        if found is None:
+            return True, None  # unknown: the old (managed) rule decides
+        required = found if required is None else max(required, found)
+    return True, required
+
+
+def _macos_version():
+    import platform
+    from shared.macho_min_os import parse_version_text
+    text = platform.mac_ver()[0]
+    return parse_version_text(text) if text else None
+
+
+def fsl_preprocessing_offered(system=None, machine=None):
+    """G2: True when Eddy and Topup can run. Brain mask and DWI denoising do not depend on this.
+
+    Windows: True (WSL route). Linux x86_64: the managed rule. macOS: True when a bundled FSL and a bundled MRtrix3
+    runtime for the host exist and the running macOS is at least the highest minimum of the two (read from the
+    binaries). Otherwise, and when a minimum cannot be read, the managed rule decides (macOS 14.5 or later).
+    """
+    import platform
+    system = system or platform.system()
+    if system == "Darwin":
+        found, required = _bundled_fsl_requirement(system, machine)
+        if found and required is not None:
+            current = _macos_version()
+            if current is None:  # no macOS version to compare (not a real Mac): same answer as the managed rule
+                if platform.system() != "Darwin":
+                    return True
+            elif current >= required:
+                return True
+    return preprocessing_offered(system, machine)
+
+
+def fsl_unavailable_text(system=None, machine=None, zh=False):
+    """G3: the tooltip for the unavailable Eddy/Topup stages; on macOS it names this Mac's and the required version."""
+    import platform
+    from shared.macho_min_os import format_version
+    system = system or platform.system()
+    base = PREPROCESSING_UNSUPPORTED_TEXT_ZH if zh else PREPROCESSING_UNSUPPORTED_TEXT
+    current = _macos_version() if system == "Darwin" else None
+    if current is None:
+        return base
+    found, required = _bundled_fsl_requirement(system, machine)
+    managed = (14, 5, 0)  # the managed (conda) install route needs this; the bundle route may need less
+    required = min(required, managed) if found and required is not None else managed
+    have, need = format_version(current), format_version(required)
+    if zh:
+        return "%s（本机 macOS %s，需要 macOS %s 或更高）" % (base, have, need)
+    return "%s This Mac: macOS %s; FSL needs macOS %s or later." % (base, have, need)
 
 
 def build_setup_plan(result, *, installed_extensions=(), loaded_extensions=None, need_dti=False, need_torch=False, need_ukf=False,

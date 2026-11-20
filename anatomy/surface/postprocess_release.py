@@ -501,6 +501,10 @@ def _run_current_postprocess(config, subject_root, native_dir, log):
     layout = subject_layout(subject_root, output_root=config.output_root)
     from shared.surface_runtime import resolve_surface_runtime, surface_runtime_identity
     backend, home = resolve_surface_runtime(config.runtime, config.freesurfer_home)
+    from shared.surface_runtime import surface_runtime_block_reason
+    blocked = surface_runtime_block_reason(backend, home)  # G-H3: a clear message, not a dyld failure
+    if blocked:
+        raise RuntimeError(blocked)
     brain = config.mri_dir / 'brain.mgz' if config.mri_dir is not None else None
     brain = brain if brain is not None and brain.is_file() else None
     inputs = native_surface_hashes(native_dir, config.mode)

@@ -195,6 +195,8 @@ class SlicerUiLayoutContractTest(unittest.TestCase):
         self.assertNotIn("preprocessingBackend", MODULE_WIDGET_PATH.read_text(encoding="utf-8"))
 
     def test_w2a_a_platform_without_an_fsl_build_does_not_offer_preprocessing(self) -> None:
+        # G3: updated. A platform without FSL still offers Preprocessing (Brain mask, DWI denoising); only the
+        # Eddy/Topup stages are removed, and the tooltip says why. The checkbox is no longer disabled or unchecked.
         from shared.selected_setup import PREPROCESSING_UNSUPPORTED_TEXT
         from shared.ui_parameter_sync import apply_preprocessing_availability
 
@@ -209,10 +211,9 @@ class SlicerUiLayoutContractTest(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
         self.assertFalse(apply_preprocessing_availability(checkbox, "Linux", "aarch64"))
-        self.assertEqual(calls, [("enabled", False), ("tip", PREPROCESSING_UNSUPPORTED_TEXT),
-                                 ("signals", True), ("checked", False), ("signals", False)])
-        self.assertEqual(PREPROCESSING_UNSUPPORTED_TEXT, "Preprocessing needs FSL, which has no build for this platform; "
-                                                         "import preprocessed data instead")
+        self.assertEqual(calls, [("tip", PREPROCESSING_UNSUPPORTED_TEXT)])
+        self.assertEqual(PREPROCESSING_UNSUPPORTED_TEXT, "Eddy and Topup need FSL, which is not available on this system; "
+                                                         "Brain mask and DWI denoising still run.")
         for system, machine in (("Linux", "x86_64"), ("Darwin", "arm64"), ("Darwin", "x86_64"), ("Windows", "AMD64")):
             calls.clear()
             self.assertTrue(apply_preprocessing_availability(checkbox, system, machine), (system, machine))

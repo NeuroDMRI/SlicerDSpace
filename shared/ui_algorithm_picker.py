@@ -3,11 +3,14 @@
 from shared.algorithm_selection import (
     BUNDLES,
     CONNECTOME,
+    FSL_FREE_PREPROCESSING_DEFAULT,
+    FSL_STAGES,
     LABELS,
     MICROSTRUCTURE,
     PREPROCESSING,
     TRACKING,
     algorithms,
+    without_fsl_stages,
 )
 
 DEFAULT_CHOICES = {
@@ -125,14 +128,35 @@ def _cleared_algorithm_families(owner) -> set[str]:
     return cleared
 
 
+def _fsl_stages_offered() -> bool:
+    """G3: False where Eddy and Topup cannot run (no FSL). A failed lookup counts as offered (the old behaviour)."""
+    try:
+        from shared import selected_setup
+
+        return bool(selected_setup.fsl_preprocessing_offered())
+    except Exception:
+        return True
+
+
+def _available_selection(family, selected):
+    """G3: drop the FSL stages from a Preprocessing selection where FSL is not offered."""
+    if family != "preprocessing" or _fsl_stages_offered():
+        return tuple(selected)
+    return tuple(value for value in selected if value not in FSL_STAGES)
+
+
 def selected_algorithms(node, family):
     _, choices, attribute = FAMILIES[family]
-    return algorithms(getattr(node, attribute, ""), choices, DEFAULT_CHOICES[family])
+    value, default = getattr(node, attribute, ""), DEFAULT_CHOICES[family]
+    if family == "preprocessing" and not _fsl_stages_offered():
+        value, default = without_fsl_stages(value or default), FSL_FREE_PREPROCESSING_DEFAULT
+    return algorithms(value, choices, default)
 
 
 def _apply_family_selection_to_node(node, family, values):
     _, choices, attribute = FAMILIES[family]
     selected = algorithms(",".join(values), choices, DEFAULT_CHOICES[family]) if values else ()
+    selected = _available_selection(family, selected)
     if not selected:
         raise ValueError("Select at least one algorithm")
     selected = tuple(value for value in choices if value in selected)
@@ -151,7 +175,7 @@ def _apply_family_selection_to_node(node, family, values):
 def set_algorithms(owner, family, values):
     _, choices, _ = FAMILIES[family]
     selected = algorithms(",".join(values), choices, DEFAULT_CHOICES[family]) if values else ()
-    if not selected:
+    if not _available_selection(family, selected):
         raise ValueError("Select at least one algorithm")
     import slicer
 
@@ -443,11 +467,22 @@ def choose_algorithms(owner, family):
     boxes = {}
     staged = {}
     pointing_cursor = getattr(qt.Qt, "PointingHandCursor", None)
+    # G3: where FSL is not offered, Eddy and Topup are disabled and unchecked; Brain mask and DWI denoising stay.
+    fsl_missing = family == "preprocessing" and not _fsl_stages_offered()
+    fsl_tip = ""
+    if fsl_missing:
+        from shared.selected_setup import fsl_unavailable_text
+
+        fsl_tip = fsl_unavailable_text(zh=zh)
     for value in choices:
         label = ANATOMICAL_PRIORS[value][int(zh)] if is_anatomical else LABELS[value]
         box = qt.QCheckBox(label)
         box.objectName = "algorithm_" + value
-        box.checked = value in current
+        fsl_blocked = fsl_missing and value in FSL_STAGES
+        box.checked = value in current and not fsl_blocked
+        if fsl_blocked:
+            box.setEnabled(False)
+            box.setToolTip(fsl_tip)
         if pointing_cursor is not None and hasattr(box, "setCursor"):
             box.setCursor(pointing_cursor)
         boxes[value] = box

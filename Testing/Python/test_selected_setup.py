@@ -251,6 +251,8 @@ class SelectedSetupTests(unittest.TestCase):
                         self.assertEqual(plan["managed_profiles"], ["mrtrix", "fsl_cpu"])
 
     def test_w2a_a_platform_without_an_fsl_build_does_not_offer_preprocessing(self):
+        # G2: updated. preprocessing_offered() keeps the managed/WSL-route meaning; the text now says that only
+        # Eddy and Topup are unavailable (Brain mask and DWI denoising still run).
         from shared.selected_setup import PREPROCESSING_UNSUPPORTED_TEXT, preprocessing_offered
 
         items = self._w2a_missing_preprocessing_items()
@@ -263,8 +265,8 @@ class SelectedSetupTests(unittest.TestCase):
         self.assertEqual(plan["managed_profiles"], [])
         self.assertFalse(plan["fsl_license_required"])
         self.assertIn(PREPROCESSING_UNSUPPORTED_TEXT, plan["unsupported_notes"].values())
-        self.assertEqual(PREPROCESSING_UNSUPPORTED_TEXT, "Preprocessing needs FSL, which has no build for this platform; "
-                                                         "import preprocessed data instead")
+        self.assertEqual(PREPROCESSING_UNSUPPORTED_TEXT, "Eddy and Topup need FSL, which is not available on this system; "
+                                                         "Brain mask and DWI denoising still run.")
         self.assertTrue(plan["manual_items"])
         self.assertEqual({item["hint"] for item in plan["manual_items"]}, {PREPROCESSING_UNSUPPORTED_TEXT})
 

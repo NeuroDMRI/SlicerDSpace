@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from time import monotonic
 from typing import Any
 
@@ -136,6 +137,14 @@ def refresh_compact_algorithms(owner: Any, language: str | None = None) -> None:
             selection_line = onboarding_text(language, "compact_algorithm_tooltip").format(algorithms=algorithms)
             desc_key = _COMPACT_PRODUCT_TOOLTIP_KEYS.get(name)
             desc = onboarding_text(language, desc_key) if desc_key else ""
+            if name == "targetPreprocessingCheckBox":
+                # G-H1: where Eddy and Topup are unavailable, the reason stays in the tooltip after every refresh.
+                from shared.selected_setup import fsl_unavailable_text
+                from shared.ui_parameter_sync import fsl_stages_offered
+
+                if not fsl_stages_offered():
+                    reason = fsl_unavailable_text(zh=zh)
+                    desc = f"{desc}\n{reason}" if desc else reason
             tooltip = f"{desc}\n{selection_line}" if desc else selection_line
             summary = summary_map.get(name)
             if summary is None:
@@ -1002,6 +1011,65 @@ def organize_environment_section(owner: Any) -> None:
     owner._environmentSectionOrganized = True
 
 
+def install_input_preview_controls(owner: Any) -> None:
+    """Add the 'View input' button and its status label to the end of 1. Inputs (H1).
+
+    The row lives in ``configurationLayout`` outside the Prepare Inputs panel, so it stays
+    visible in batch mode (where that panel is hidden).
+    """
+
+    if getattr(owner, "_inputPreviewWidgets", None) is not None:
+        return
+    import qt
+
+    layout = getattr(owner.ui, "configurationLayout", None)
+    if layout is None:
+        return
+    row = qt.QWidget()
+    row.setObjectName("dspaceInputPreviewRow")
+    row_layout = qt.QVBoxLayout(row)
+    row_layout.setContentsMargins(0, 2, 0, 0)
+    row_layout.setSpacing(3)
+    button = qt.QPushButton()
+    button.setObjectName("inputPreviewButton")
+    button.setSizePolicy(qt.QSizePolicy.Maximum, qt.QSizePolicy.Fixed)
+    status = qt.QLabel()
+    status.setObjectName("inputPreviewStatusLabel")
+    status.setWordWrap(True)
+    status.setTextFormat(qt.Qt.PlainText)
+    status.setMinimumWidth(0)
+    status.hide()
+    row_layout.addWidget(button, 0, qt.Qt.AlignLeft)
+    row_layout.addWidget(status)
+    button.clicked.connect(lambda *_args: owner._on_input_preview_clicked())
+    layout.addWidget(row)
+    owner.ui.inputPreviewButton = button
+    owner._inputPreviewWidgets = {"row": row, "button": button, "status": status}
+    refresh_input_preview_controls(owner)
+
+
+def refresh_input_preview_controls(owner: Any, language: str | None = None) -> None:
+    """Translate the 'View input' button; the owner sets its enabled state and tooltip."""
+
+    widgets = getattr(owner, "_inputPreviewWidgets", None)
+    if not widgets:
+        return
+    lang = language or getattr(owner, "_onboardingLanguage", "en")
+    zh = str(lang).startswith("zh")
+    button = widgets["button"]
+    button.setText("预览输入" if zh else "View input")
+    if hasattr(button, "setAccessibleName"):
+        button.setAccessibleName("预览输入" if zh else "View input")
+    refresh = getattr(owner, "_refresh_input_preview_controls", None)
+    if callable(refresh):
+        refresh()
+    else:
+        button.setToolTip(
+            "在切片视图中显示当前输入的平均 b0 图像。" if zh
+            else "Show the mean b0 image of the current input in the slice views."
+        )
+
+
 def install_compact_layout(owner: Any) -> None:
     """Move secondary controls, not their state or signals, into Advanced."""
 
@@ -1065,6 +1133,10 @@ def install_compact_layout(owner: Any) -> None:
     prepare_inputs.setMinimumWidth(0)
     for name in ("inputDirectoryLabel", "inputDirectoryPath"):
         getattr(ui, name).hide()
+    try:
+        install_input_preview_controls(owner)
+    except Exception as exc:  # R3-4: a preview-row failure must never break the module load
+        logging.warning("Input preview controls could not be installed: %s", exc)
     for name in ("parametersCollapsibleButton",):
         section = getattr(ui, name)
         layout.removeWidget(section)
@@ -1242,6 +1314,10 @@ def apply_compact_language(owner: Any, language: str) -> None:
         else:
             widget.setText(text)
     refresh_input_format_selector(owner, language)
+    try:
+        refresh_input_preview_controls(owner, language)
+    except Exception as exc:  # R3-4: a preview-row failure must never break language switching
+        logging.warning("Input preview controls could not be refreshed: %s", exc)
     refresh_compute_device_selector(owner, language)
     refresh_compact_algorithms(owner, language)
     from shared.ui_run_history import refresh_run_progress_styles

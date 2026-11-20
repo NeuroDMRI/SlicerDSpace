@@ -5,25 +5,78 @@ from __future__ import annotations
 from shared.user_config import selected_microstructure_stages
 
 
-def apply_preprocessing_availability(checkbox, system=None, machine=None, node=None) -> bool:
-    """W2a (D1): a platform with no FSL build does not offer preprocessing. Returns True when it is offered.
+_FSL_LOOKUP_LOGGED = False
 
-    Where it is not offered, the checkbox is disabled and unchecked, and the parameter node (when given) no longer
-    selects preprocessing, so the saved setting cannot keep it selected and no dependency check blocks the run (F2).
+
+def fsl_stages_offered(system=None, machine=None) -> bool:
+    """O3: ``selected_setup.fsl_preprocessing_offered`` that never raises.
+
+    A failed lookup counts as offered (the old behaviour, the same as the algorithm picker) and is logged once.
     """
 
-    from shared.selected_setup import PREPROCESSING_UNSUPPORTED_TEXT, preprocessing_offered
+    global _FSL_LOOKUP_LOGGED
+    try:
+        from shared import selected_setup
 
-    offered = preprocessing_offered(system, machine)
-    if not offered and node is not None and getattr(node, "targetPreprocessing", False):
-        node.targetPreprocessing = False
-    if checkbox is not None and not offered:
-        checkbox.setEnabled(False)
-        checkbox.setToolTip(PREPROCESSING_UNSUPPORTED_TEXT)
-        checkbox.blockSignals(True)
-        checkbox.setChecked(False)
-        checkbox.blockSignals(False)
-    return offered
+        return bool(selected_setup.fsl_preprocessing_offered(system, machine))
+    except Exception as exc:
+        if not _FSL_LOOKUP_LOGGED:
+            _FSL_LOOKUP_LOGGED = True
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "Could not check whether Eddy and Topup are available (%s); treating them as available.", exc
+            )
+        return True
+
+
+def _restore_normal_tooltip(checkbox, zh: bool) -> None:
+    """O4: put the normal Preprocessing tooltip back when the tooltip still shows the "no FSL" reason."""
+
+    from shared.selected_setup import PREPROCESSING_UNSUPPORTED_TEXT, PREPROCESSING_UNSUPPORTED_TEXT_ZH
+
+    current = getattr(checkbox, "toolTip", None)
+    current = current() if callable(current) else current
+    if not isinstance(current, str) or not (
+        PREPROCESSING_UNSUPPORTED_TEXT in current or PREPROCESSING_UNSUPPORTED_TEXT_ZH in current
+    ):
+        return
+    from shared.ui_onboarding import onboarding_text
+
+    checkbox.setToolTip(onboarding_text("zh" if zh else "en", "preprocessing_tooltip"))
+
+
+def apply_preprocessing_availability(checkbox, system=None, machine=None, node=None, language=None) -> bool:
+    """G3: Preprocessing stays on offer everywhere; only its FSL stages (Eddy, Topup) can be unavailable.
+
+    Brain mask and DWI denoising need no FSL, so the checkbox is never disabled or unchecked here. Returns True when
+    Eddy and Topup are offered (``selected_setup.fsl_preprocessing_offered``). Where they are not, the node's stage
+    selection loses them, so the run maps to ``run_eddy=False, run_topup=False`` and no FSL dependency check blocks
+    it (F2), and the checkbox tooltip says why (O4: in the UI language ``language``; the normal tooltip is restored
+    when the stages are offered again). An empty stage string would mean "run every stage", so a selection
+    that held only Eddy/Topup becomes the FSL-free default ("denoise") with the Preprocessing target cleared.
+    """
+
+    from shared.algorithm_selection import FSL_FREE_PREPROCESSING_DEFAULT, without_fsl_stages
+    from shared.selected_setup import fsl_unavailable_text
+
+    zh = str(language or "en").startswith("zh")
+    offered = fsl_stages_offered(system, machine)
+    if offered:
+        if checkbox is not None:
+            _restore_normal_tooltip(checkbox, zh)
+        return True
+    if node is not None:
+        current = (getattr(node, "orchestrationPreprocessingStages", "") or "").strip()
+        kept = without_fsl_stages(current) if current else ""
+        if current and not kept:
+            node.targetPreprocessing = False
+        wanted = kept or FSL_FREE_PREPROCESSING_DEFAULT
+        if current != wanted:
+            node.orchestrationPreprocessingStages = wanted
+    if checkbox is not None:
+        checkbox.setToolTip(fsl_unavailable_text(system, machine, zh=zh))
+    return False
 
 
 def sync_parameter_node_to_ui(widget) -> None:
@@ -74,7 +127,10 @@ def sync_parameter_node_to_ui(widget) -> None:
     widget._sync_combo_text(getattr(ui, "ddsegDeviceComboBox", None), node.ddsegDevice or "auto", via_index=False)
     widget._sync_checkbox(getattr(ui, "ddsegSoftmaxCheckBox", None), bool(node.ddsegApplySoftmax))
 
-    apply_preprocessing_availability(getattr(ui, "targetPreprocessingCheckBox", None), node=node)
+    apply_preprocessing_availability(
+        getattr(ui, "targetPreprocessingCheckBox", None), node=node,
+        language=getattr(widget, "_onboardingLanguage", "en"),
+    )
     widget._sync_checkbox(getattr(ui, "targetPreprocessingCheckBox", None), bool(node.targetPreprocessing))
     sync_combo_data = getattr(widget, "_sync_combo_data", None)
     if sync_combo_data is not None:

@@ -93,23 +93,31 @@ class F2UnsupportedPlatformTest(unittest.TestCase):
         return box, state
 
     def test_f2_apply_unchecks_the_box_and_clears_the_parameter_node_where_there_is_no_fsl_build(self) -> None:
+        # G3: updated. The box stays enabled and checked; Eddy and Topup leave the stage selection, so no FSL
+        # dependency check blocks the run. The Preprocessing target is cleared only when nothing else is selected.
         from unittest.mock import patch
 
         from shared.ui_parameter_sync import apply_preprocessing_availability
 
         box, state = self.fake_checkbox(True)
-        node = types.SimpleNamespace(targetPreprocessing=True)
+        node = types.SimpleNamespace(targetPreprocessing=True, orchestrationPreprocessingStages="denoise,eddy,topup")
         with patch("platform.mac_ver", return_value=("15.1", ("", "", ""), "")):
             self.assertFalse(apply_preprocessing_availability(box, "Linux", "aarch64", node=node))
-        self.assertFalse(state["enabled"])
-        self.assertFalse(state["checked"])
-        self.assertFalse(node.targetPreprocessing)
+        self.assertTrue(state["enabled"])
+        self.assertTrue(state["checked"])
+        self.assertTrue(node.targetPreprocessing)
+        self.assertEqual(node.orchestrationPreprocessingStages, "denoise")
+        only_fsl = types.SimpleNamespace(targetPreprocessing=True, orchestrationPreprocessingStages="eddy,topup")
+        with patch("platform.mac_ver", return_value=("15.1", ("", "", ""), "")):
+            apply_preprocessing_availability(box, "Linux", "aarch64", node=only_fsl)
+        self.assertFalse(only_fsl.targetPreprocessing)
+        self.assertEqual(only_fsl.orchestrationPreprocessingStages, "denoise")
 
     def test_f2_apply_keeps_the_selection_where_preprocessing_is_offered(self) -> None:
         from shared.ui_parameter_sync import apply_preprocessing_availability
 
         box, state = self.fake_checkbox(True)
-        node = types.SimpleNamespace(targetPreprocessing=True)
+        node = types.SimpleNamespace(targetPreprocessing=True, orchestrationPreprocessingStages="denoise,eddy,topup")
         self.assertTrue(apply_preprocessing_availability(box, "Linux", "x86_64", node=node))
         self.assertTrue(state["checked"])
         self.assertTrue(node.targetPreprocessing)
@@ -122,6 +130,7 @@ class F2UnsupportedPlatformTest(unittest.TestCase):
         box, state = self.fake_checkbox(True)
         node = MagicMock()
         node.targetPreprocessing = True
+        node.orchestrationPreprocessingStages = "denoise,eddy,topup"
         node.orchestrationTractographyBackend = "csd_act"
         node.orchestrationBundleBackend = "wmql"
         widget = MagicMock()
@@ -130,10 +139,12 @@ class F2UnsupportedPlatformTest(unittest.TestCase):
         widget.ui = types.SimpleNamespace(targetPreprocessingCheckBox=box)
         widget._microstructure_stages_text.return_value = "dti"
         widget._sync_checkbox.side_effect = lambda w, desired: w.setChecked(desired) if w is not None else None
-        with patch("shared.selected_setup.preprocessing_offered", return_value=False):
+        # G3: updated. The UI asks fsl_preprocessing_offered; the saved selection loses only Eddy and Topup.
+        with patch("shared.selected_setup.fsl_preprocessing_offered", return_value=False):
             ui_parameter_sync.sync_parameter_node_to_ui(widget)
-        self.assertFalse(node.targetPreprocessing)
-        self.assertFalse(state["checked"])
+        self.assertTrue(node.targetPreprocessing)
+        self.assertEqual(node.orchestrationPreprocessingStages, "denoise")
+        self.assertTrue(state["checked"])
 
 
 class F3PeBlockDecidedOnceTest(unittest.TestCase):

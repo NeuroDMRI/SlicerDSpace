@@ -2628,7 +2628,8 @@ def run_environment_doctor(config: EnvironmentDoctorConfig, *, _probe_cache=None
             DependencyStatus(key='surface_postprocess_runtime', kind='setting', label='Surface postprocessing components',
                 status='available' if surface['components_available'] else 'missing', required=True,
                 targets=('surface_postprocess',), details=surface, install_group='surface-runtime',
-                install_hint='Use Environment > Prepare for qualified precompiled components, or configure an existing runtime. If its archive is not yet published, import the verified offline bundle. Source compilation is an expert CLI opt-in; Check never installs.'),
+                install_hint=(surface['notes'] if surface.get('macos_blocked') else
+                              'Use Environment > Prepare for qualified precompiled components, or configure an existing runtime. If its archive is not yet published, import the verified offline bundle. Source compilation is an expert CLI opt-in; Check never installs.')),
             DependencyStatus(key='surface_postprocess_license', kind='setting', label='Personal FreeSurfer activation',
                 status='available' if surface['license_available'] else 'missing', required=True,
                 targets=('surface_postprocess',), details={'notes': 'Set the activation file or FS_LICENSE; it is not downloaded or included in the runtime.'},

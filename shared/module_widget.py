@@ -498,6 +498,10 @@ class SharedWidgetMixin:
             and not getattr(self, "_selectedSetupActive", False)
         )
         button.setToolTip(state.tooltip)
+        try:
+            self._refresh_input_preview_controls()
+        except Exception as exc:
+            self.appendLog(f"[Input preview] Could not update the View input button: {exc}")
 
     def _schedule_run_history_refresh(self) -> None:
         node = self._parameterNode
@@ -906,6 +910,25 @@ class SharedWidgetMixin:
         }:
             if not Path(value).expanduser().exists():
                 value = ""
+        saved_blocked = False
+        if value and dependency_id == "postprocess_runtime":
+            # G-H4: a saved runtime that this macOS cannot load is not applied. The saved setting stays, as the
+            # user (or a past run) wrote it; the reason is logged once.
+            try:
+                from shared.surface_runtime import runtime_dir_macos_block
+
+                reason = runtime_dir_macos_block(Path(value).expanduser())
+            except Exception:
+                reason = None
+            if reason:
+                saved_blocked = True
+                value = ""
+                if getattr(self, "_surfaceRuntimeBlockShown", None) != reason:
+                    try:
+                        self.appendLog(f"[Surface runtime] {reason}. The saved runtime path is not used.")
+                        self._surfaceRuntimeBlockShown = reason  # only after the log took it, so a late log widget still shows it
+                    except Exception:
+                        pass
         if value and dependency_id == "postprocess_license_file":
             from shared.surface_license import usable_license
             if not usable_license(value):
@@ -945,7 +968,7 @@ class SharedWidgetMixin:
                     managed = managed_surface_license_path()
                     if usable_license(managed):
                         value = managed.resolve().as_posix()
-                if value:
+                if value and not saved_blocked:
                     settings.setValue(self._environment_settings_key(dependency_id), value)
                     update_user_config({"external_dependencies": {dependency_id: value}})
             except Exception:
@@ -1609,6 +1632,208 @@ class SharedWidgetMixin:
             dwiconvert_executable=dwiconvert,
             force=True,
         )
+
+    # ---- Input preview (H1): show the current input's mean b0 in the slice views ----
+
+    def _input_preview_is_batch(self) -> bool:
+        node = self._parameterNode
+        if node is None:
+            return False
+        cohort = bool(getattr(node, "experimentsEnabled", False)
+                      and getattr(node, "experimentScope", "subject") == "cohort")
+        return cohort or bool(getattr(node, "batchMode", False))
+
+    def _input_preview_batch_root(self) -> str:
+        node = self._parameterNode
+        if getattr(node, "experimentsEnabled", False) and getattr(node, "experimentScope", "subject") == "cohort":
+            return str(getattr(node, "experimentRoot", "") or "").strip()
+        return str(getattr(node, "batchRoot", "") or "").strip()
+
+    def _input_preview_pending_source(self) -> Optional[dict[str, Any]]:
+        """A Prepare Inputs tile source that Run would import first (same test as _onRunSelectedClicked)."""
+        node = self._parameterNode
+        fields = getattr(self, "_prepareInputWidgets", None) or {}
+        if node is None or self._input_preview_is_batch() or "source_kind" not in fields:
+            return None
+        source = self._prepare_inputs_widget_text("source")
+        if not source or getattr(self, "_preparedInputSelection", None) == self._input_import_selection():
+            return None
+        provided = getattr(node, "brainMaskBackend", "") == "provided"
+        kind = fields.get("source_kind")
+        # C1: an NHDR with a file in the 'Detached data' tile is imported with that file (see import_detached_nrrd).
+        raw = ""
+        if kind == "nrrd" and str(source).lower().endswith(".nhdr"):
+            raw = self._prepare_inputs_widget_text("raw")
+        return {
+            "kind": kind,
+            "source": source,
+            "bval": self._prepare_inputs_widget_text("bval"),
+            "mask": self._prepare_inputs_widget_text("mask") if provided else "",
+            "raw": raw,
+        }
+
+    def _resolve_input_preview_source(self):
+        """Resolve the current subject's DWI the way input validation does (first subject in batch mode)."""
+        from shared.input_preview import PreviewError, resolve_preview_for_ui
+
+        node = self._parameterNode
+        if node is None:
+            raise PreviewError("no_input")
+        return resolve_preview_for_ui(
+            batch_mode=self._input_preview_is_batch(),
+            batch_root=self._input_preview_batch_root(),
+            input_dir=node.inputDirectory,
+            subject_id=self._effective_subject_id(),
+            pending=self._input_preview_pending_source(),
+            inspect=lambda path, subject_id: inspect_input_directory(self, path, subject_id),
+        )
+
+    def _input_preview_key(self, source: Any = None) -> tuple:
+        """What the status line describes: the resolved DWI (the batch folder in batch mode)."""
+        if self._input_preview_is_batch():
+            return ("batch", self._input_preview_batch_root())
+        if source is None:
+            return ("none",)
+        return ("source", str(source.dwi), str(getattr(source, "raw", None) or ""))
+
+    def _refresh_input_preview_controls(self) -> None:
+        """Enable the View input button only when a DWI can be previewed; the tooltip says why not."""
+        widgets = getattr(self, "_inputPreviewWidgets", None)
+        if not widgets:
+            return
+        from shared.input_preview import PreviewError, check_preview_dependencies
+
+        zh = str(getattr(self, "_onboardingLanguage", "en")).startswith("zh")
+        tooltip = ("在切片视图中显示当前输入的平均 b0 图像（如已设置脑掩膜则叠加显示）。" if zh else
+                   "Show the mean b0 image of the current input (and the brain mask, if set) in the slice views.")
+        enabled = True
+        source = None
+        try:
+            if self._parameterNode is None:
+                raise PreviewError("no_input")
+            if self._input_preview_is_batch():
+                # Resolving scans the subject folders; do that on click, not on every refresh.
+                root = self._input_preview_batch_root()
+                if not (root and Path(root).expanduser().is_dir()):
+                    raise PreviewError("no_input")
+                check_preview_dependencies()
+            else:
+                source = self._resolve_input_preview_source()
+                check_preview_dependencies(source)  # O11: nibabel (and pynrrd for NRRD) must be importable
+        except PreviewError as exc:
+            enabled, tooltip = False, exc.text(zh)
+        except Exception as exc:
+            enabled, tooltip = False, str(exc)
+        busy = bool(getattr(self, "_inputPreviewPending", False) or getattr(self, "_inputImportPending", False))
+        widgets["button"].setEnabled(enabled and not busy)
+        widgets["button"].setToolTip(tooltip)
+        # O9: a status line describes the source it was made for; clear it when the resolved source changes.
+        shown_for = getattr(self, "_inputPreviewStatusKey", None)
+        if shown_for is not None and not getattr(self, "_inputPreviewPending", False) \
+                and shown_for != self._input_preview_key(source):
+            self._set_input_preview_status("")
+
+    def _set_input_preview_status(self, text: str, *, error: bool = False, key: Optional[tuple] = None) -> None:
+        label = (getattr(self, "_inputPreviewWidgets", None) or {}).get("status")
+        if label is None:
+            return
+        self._inputPreviewStatusKey = key if text else None
+        label.setText(text)
+        label.setVisible(bool(text))
+        try:
+            from shared.ui_styles import is_dark_mode
+
+            dark = is_dark_mode(label)
+        except Exception:
+            dark = False
+        color = ("#FF7B72" if dark else "#C62828") if error else ("#B7B8BA" if dark else "#606367")
+        label.setStyleSheet(f"QLabel#inputPreviewStatusLabel {{ color: {color}; font-size: 11px; }}")
+
+    def _input_preview_failed(self, message: str, key: Optional[tuple] = None) -> None:
+        self.appendLog(f"[Input preview] {message}")
+        self._set_input_preview_status(message, error=True, key=key)
+
+    def _input_preview_cache_dir(self) -> Path:
+        try:
+            base = Path(str(slicer.app.temporaryPath))
+        except Exception:
+            base = Path(tempfile.gettempdir())
+        return base / "SlicerDSpace" / "input_preview"
+
+    def _on_input_preview_clicked(self) -> None:
+        from concurrent.futures import Future
+        from threading import Thread
+
+        from shared.input_preview import (
+            PreviewError,
+            check_preview_dependencies,
+            mean_b0_image,
+            show_preview_in_scene,
+        )
+
+        if getattr(self, "_inputPreviewPending", False) or getattr(self, "_inputImportPending", False):
+            return
+        zh = str(getattr(self, "_onboardingLanguage", "en")).startswith("zh")
+        try:
+            source = self._resolve_input_preview_source()
+            check_preview_dependencies(source)
+        except PreviewError as exc:
+            self._input_preview_failed(exc.text(zh), key=self._input_preview_key(None))
+            return
+        except Exception as exc:
+            self._input_preview_failed(str(exc), key=self._input_preview_key(None))
+            return
+        key = self._input_preview_key(source)
+        if self._input_preview_is_batch():
+            # O8: the first subject that can be previewed (unconverted DICOM subjects are skipped).
+            self.appendLog(
+                f"[Input preview] Batch mode: previewing the first previewable subject, "
+                f"{source.subject_id} ({source.origin})."
+            )
+        self.appendLog(f"[Input preview] Building the mean b0 image from {source.dwi}")
+        self._inputPreviewPending = True
+        self._set_input_preview_status("正在生成平均 b0 图像…" if zh else "Building the mean b0 image…", key=key)
+        self._refresh_input_preview_controls()
+        cache_dir = self._input_preview_cache_dir()
+        future: Future = Future()
+
+        def work() -> None:
+            try:
+                future.set_result(mean_b0_image(source, cache_dir))
+            except BaseException as exc:
+                future.set_exception(exc)
+
+        def finish() -> None:
+            self._inputPreviewPending = False
+            try:
+                mean_b0 = future.result()
+                nodes = show_preview_in_scene(
+                    slicer, mean_b0, source.mask, subject_id=source.subject_id, log=self.appendLog
+                )
+            except PreviewError as exc:
+                self._input_preview_failed(exc.text(zh), key=key)
+            except Exception as exc:
+                self._input_preview_failed(f"Could not show the input preview: {exc}", key=key)
+            else:
+                note = ""
+                if nodes.get("mask_id"):
+                    note = "，并叠加脑掩膜" if zh else " with the brain mask overlay"
+                text = (f"已显示 {source.subject_id} 的平均 b0 图像{note}。" if zh
+                        else f"Showing the mean b0 image of {source.subject_id}{note}.")
+                self.appendLog(f"[Input preview] {text} ({mean_b0})")
+                self._set_input_preview_status(text, key=key)
+            self._refresh_input_preview_controls()
+
+        def poll() -> None:
+            if getattr(self, "_cleanedUp", False):
+                return
+            if future.done():
+                finish()
+            else:
+                qt.QTimer.singleShot(100, poll)
+
+        Thread(target=work, daemon=True).start()
+        qt.QTimer.singleShot(100, poll)
 
     def _input_import_selection(self) -> tuple:
         source_kind = self._prepareInputWidgets["source_kind"]

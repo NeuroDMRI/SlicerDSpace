@@ -13,6 +13,10 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from shared.bundled_python import activate_bundled_python
+
+activate_bundled_python()
+
 from tractography.wma_atlases import (atlas_definition, atlas_output_contract,
                                       parameterized_author_shell, atlas_hemisphere_source,
                                       validate_group_hemispheres)

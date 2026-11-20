@@ -24,6 +24,37 @@ import time
 
 os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
+
+def _prepend_bundled_site_packages() -> None:
+    if "numpy" in sys.modules:
+        return
+    raw = os.environ.get("SLICERDSPACE_BUNDLED_SITE_PACKAGES", "")
+    dirs = [entry for entry in raw.split(os.pathsep) if entry and os.path.isdir(entry)]
+    if dirs:
+        norms = {os.path.normcase(os.path.normpath(d)) for d in dirs}
+        sys.path[:] = [
+            *dirs,
+            *(entry for entry in sys.path if os.path.normcase(os.path.normpath(entry)) not in norms),
+        ]
+        return
+    if (Path(sys.executable).parent.parent / "pyvenv.cfg").is_file():
+        return
+    bp_file = Path(__file__).with_name("bundled_python.py")
+    if bp_file.is_file():
+        try:
+            import importlib.util as _ilu
+
+            spec = _ilu.spec_from_file_location("_slicerdspace_bundled_python", bp_file)
+            if spec and spec.loader:
+                mod = _ilu.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                mod.activate_bundled_python(Path(__file__).resolve().parents[1])
+        except Exception:
+            pass
+
+
+_prepend_bundled_site_packages()
+
 import numpy as np
 
 ROUTE = "native-sitk"

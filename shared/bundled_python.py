@@ -261,6 +261,22 @@ def inject_bundled_python_env(
     return env
 
 
+def prepend_env_bundled_site_packages() -> tuple[str, ...]:
+    """Prepend ``SLICERDSPACE_BUNDLED_SITE_PACKAGES`` entries ahead of ``sys.path`` before ``numpy`` loads."""
+    if "numpy" in sys.modules:
+        return ()
+    raw = os.environ.get("SLICERDSPACE_BUNDLED_SITE_PACKAGES", "")
+    dirs = [entry for entry in raw.split(os.pathsep) if entry and os.path.isdir(entry)]
+    if not dirs:
+        return ()
+    norms = {os.path.normcase(os.path.normpath(entry)) for entry in dirs}
+    sys.path[:] = [
+        *dirs,
+        *(entry for entry in sys.path if os.path.normcase(os.path.normpath(entry)) not in norms),
+    ]
+    return tuple(dirs)
+
+
 def activate_bundled_python(module_root: Path | None = None) -> tuple[Path, ...]:
     """Activate bundled ``site-packages`` in the running Slicer Python process and its child env."""
     os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")

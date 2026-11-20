@@ -930,7 +930,25 @@ def _run_native_org(config, staging, wma_root, slicer, python, env, manifest, st
             stderr.write(f"\n[WMA] {stage}\n")
             stderr.flush()
             stage_output_start = stdout.tell()
-            completed = subprocess.run(command, cwd=staging, env=env, stdout=stdout, stderr=stderr)
+            bsp_dirs = [p for p in env.get("SLICERDSPACE_BUNDLED_SITE_PACKAGES", "").split(os.pathsep) if p and Path(p).is_dir()]
+            exec_command = command
+            if (
+                bsp_dirs
+                and len(command) >= 3
+                and command[0] == str(python)
+                and command[1] == "-u"
+                and str(command[2]).endswith(".py")
+            ):
+                script_file = str(Path(command[2]).resolve())
+                prepend = list(dict.fromkeys([str(Path(script_file).parent), *bsp_dirs]))
+                exec_args = [script_file, *command[3:]]
+                exec_command = [
+                    str(python),
+                    "-u",
+                    "-c",
+                    f"import runpy, sys; sys.path[:0] = {prepend!r}; sys.argv = {exec_args!r}; runpy.run_path(sys.argv[0], run_name='__main__')",
+                ]
+            completed = subprocess.run(exec_command, cwd=staging, env=env, stdout=stdout, stderr=stderr)
             record["return_code"] = completed.returncode
             completed.check_returncode()
             if stage == "registration-nonrigid":

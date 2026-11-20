@@ -206,6 +206,7 @@ def external_python_environment(
         "PYTHONNOUSERSITE",
         "PYTHONEXECUTABLE",
         "PYTHONUSERBASE",
+        "SLICERDSPACE_BUNDLED_SITE_PACKAGES",
     ):
         env.pop(key, None)
 

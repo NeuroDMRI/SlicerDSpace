@@ -7,9 +7,13 @@ from pathlib import Path
 
 os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
+
+from shared.bundled_python import activate_bundled_python
+
+activate_bundled_python()
 
 from anatomy.segmentation.config import DDSegConfig
 from anatomy.segmentation.pipeline import run_ddseg

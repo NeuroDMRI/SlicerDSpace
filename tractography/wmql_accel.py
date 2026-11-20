@@ -18,8 +18,17 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from optparse import OptionParser
 import os
+from pathlib import Path
 import sys
 import warnings
+
+_REPO_ROOT = str(Path(__file__).resolve().parents[1])
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+
+from shared.bundled_python import prepend_env_bundled_site_packages
+
+prepend_env_bundled_site_packages()
 
 import nibabel as nib
 import numpy as np

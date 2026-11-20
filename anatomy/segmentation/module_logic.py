@@ -8,8 +8,9 @@ from pathlib import Path
 from typing import Optional
 
 from shared import ensure_native_dti_bundle, find_subject_root, resolve_pythonslicer_executable
+from shared.bundled_python import inject_bundled_python_env
 from shared.environment import resolve_auto_torch_device
-from shared.external_process import text_subprocess_kwargs
+from shared.external_process import is_slicer_python, text_subprocess_kwargs
 
 DDSEG_PYTHON_REQUIREMENTS: tuple[tuple[str, str], ...] = (
     ("numpy", "numpy"),
@@ -124,11 +125,14 @@ class SegmentationLogicMixin:
             cmd.extend(["--slicer-ext", slicer_ext.expanduser().resolve().as_posix()])
 
         self.log(f"[DDSeg] Running in PythonSlicer subprocess: {' '.join(cmd)}")
+        child_env = os.environ.copy()
+        if is_slicer_python(python_slicer):
+            inject_bundled_python_env(child_env)
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
-            env=os.environ.copy(),
+            env=child_env,
             **text_subprocess_kwargs(bufsize=1),
         )
         if process.stdout:

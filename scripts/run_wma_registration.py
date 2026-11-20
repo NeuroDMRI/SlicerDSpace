@@ -14,6 +14,10 @@ import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from shared.bundled_python import activate_bundled_python
+
+activate_bundled_python()
+
 from tractography.wma_registration import RegistrationPreprocessCache, registration_cache_support
 from tractography.wma_preprocessing import AuthorCompatibleLengthFilter
 from tractography.wma_transform import AuthorCompatibleFiberTransform, registration_transform_support

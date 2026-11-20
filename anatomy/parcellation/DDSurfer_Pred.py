@@ -10,6 +10,10 @@ import gc
 
 os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
+from shared.bundled_python import prepend_env_bundled_site_packages
+
+prepend_env_bundled_site_packages()
+
 import nibabel as nib
 import numpy as np
 

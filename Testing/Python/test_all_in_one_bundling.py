@@ -359,6 +359,60 @@ class AllInOneBundlingTests(unittest.TestCase):
                 if orig_numpy is not None:
                     sys.modules["numpy"] = orig_numpy
 
+    def test_pnl_mask_native_subprocess_prefers_bundled_numpy_over_higher_priority_pythonpath(self):
+        import runpy
+        import subprocess
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp).resolve()
+            decoy_sp = base / "slicer-site-packages"
+            bundled_sp = base / "bundled-site-packages"
+            (decoy_sp / "numpy").mkdir(parents=True)
+            (bundled_sp / "numpy").mkdir(parents=True)
+            (decoy_sp / "numpy" / "__init__.py").write_text(
+                "__version__ = '2.9.9'\nfloat32 = lambda x: float(x)\ndef asarray(x): return x\n",
+                encoding="utf-8",
+            )
+            (bundled_sp / "numpy" / "__init__.py").write_text(
+                "__version__ = '1.26.4'\nfloat32 = lambda x: float(x)\ndef asarray(x): return x\n",
+                encoding="utf-8",
+            )
+
+            env = dict(os.environ)
+            env["PYTHONPATH"] = os.pathsep.join([str(decoy_sp), *(p for p in env.get("PYTHONPATH", "").split(os.pathsep) if p)])
+            env["SLICERDSPACE_BUNDLED_SITE_PACKAGES"] = str(bundled_sp)
+            probe = (
+                "import runpy, sys; "
+                f"sys.path.insert(0, {str(decoy_sp)!r}); "
+                f"ns = runpy.run_path({str((ROOT / 'shared' / 'pnl_mask_native.py').resolve())!r}); "
+                "print(ns['np'].__version__); "
+                "print(ns['np'].__file__)"
+            )
+            completed = subprocess.run(
+                [sys.executable, "-c", probe],
+                check=True,
+                capture_output=True,
+                env=env,
+                text=True,
+                encoding="utf-8",
+            )
+            lines = [line.strip() for line in completed.stdout.splitlines() if line.strip()]
+            self.assertEqual(lines[-2], "1.26.4")
+            self.assertEqual(Path(lines[-1]).resolve(), (bundled_sp / "numpy" / "__init__.py").resolve())
+
+    def test_external_python_environment_strips_bundled_site_packages(self):
+        from shared.external_process import external_python_environment
+
+        with patch.dict(os.environ, {"SLICERDSPACE_BUNDLED_SITE_PACKAGES": "/tmp/bundled-sp"}, clear=False):
+            cleaned = external_python_environment()
+        self.assertNotIn("SLICERDSPACE_BUNDLED_SITE_PACKAGES", cleaned)
+
+    def test_run_ddseg_resolves_repo_root(self):
+        import importlib
+
+        run_ddseg_mod = importlib.import_module("anatomy.segmentation.run_ddseg")
+        self.assertEqual(run_ddseg_mod.REPO_ROOT, ROOT.resolve())
+
 
 if __name__ == "__main__":
     unittest.main()

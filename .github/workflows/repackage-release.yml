@@ -32,7 +32,7 @@ permissions:
 jobs:
   build-macos-ukf:
     if: github.event.inputs.phase == 'macos-ukf'
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4

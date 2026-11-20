@@ -4,11 +4,15 @@ name: Slicer compatibility matrix (real stock Slicer)
 # GitHub-hosted runners, so cross-platform support is measured instead of claimed.
 #
 #   repo-only    stock Slicer + this checkout staged as an extension-like tree (light, minutes).
-#                The bundled Python packages are absent, so the DTI worker run is allowed to be
-#                "skipped" when it only fails on a missing third-party package.
+#                The bundled Python packages are absent, so the DTI worker run must end "blocked" with
+#                the documented manifest (exit 0, task blocked for missing packages that the versions
+#                check proves absent); any other outcome fails (see judge_blocked_task in
+#                Testing/Python/slicer_ci_compat_smoke.py).
 #   full-install stock Slicer + the released v0.1.1 base asset installed by the website installer, then
 #                this checkout overlaid on the installed layout (heavy, about 1.5 GB download).
-#                The DTI worker run is required to pass. Linux also scans ELF files for GLIBC (X8).
+#                The DTI worker run is required to pass. Linux also scans ELF files for GLIBC (X8);
+#                the scan limit is the documented Linux floor, glibc 2.34 (Ubuntu 22.04+, Debian 12+,
+#                RHEL/Rocky/Alma 9+). A bundle that needs more than 2.34 fails CI.
 #
 # Start it from the Actions tab or with: gh workflow run slicer-compat-matrix.yml --ref <branch>
 # (manual only: the repository policy forbids push/schedule triggers).
@@ -267,15 +271,16 @@ jobs:
           EXT_ROOT: ${{ steps.dspace.outputs.ext_root }}
         run: python .github/scripts/ci_debug_state.py --label post-smoke --slicer-exe "$SLICER_EXE" --ext-root "$EXT_ROOT"
 
-      - name: Linux - X8 GLIBC scan of bundled-runtimes and bundled-python (fails above GLIBC 2.28)
+      - name: Linux - X8 GLIBC scan of bundled-runtimes and bundled-python (fails above the documented floor, GLIBC 2.34)
         if: ${{ runner.os == 'Linux' && !cancelled() }}
         shell: bash
         env:
           EXT_ROOT: ${{ steps.dspace.outputs.ext_root }}
         run: |
+          # 2.34 is the documented Linux floor (G1), not a target: mrcrop and the surface-runtime tools need it.
           mkdir -p "$RUNNER_TEMP/ci-artifacts"
           python .github/scripts/ci_glibc_scan.py "$EXT_ROOT/bundled-runtimes" "$EXT_ROOT/bundled-python" \
-            --limit 2.28 --json "$RUNNER_TEMP/ci-artifacts/glibc_scan.json" 2>&1 | tee "$RUNNER_TEMP/ci-artifacts/glibc_scan.txt"
+            --limit 2.34 --json "$RUNNER_TEMP/ci-artifacts/glibc_scan.json" 2>&1 | tee "$RUNNER_TEMP/ci-artifacts/glibc_scan.txt"
           exit "${PIPESTATUS[0]}"
 
       # Not run on macOS: in run 44825474979 both macOS full-install jobs lost

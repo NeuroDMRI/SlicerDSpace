@@ -328,7 +328,7 @@ Start with one concurrency level and budget combined RAM/VRAM use.
 
 | Area | Current scope |
 | --- | --- |
-| Reference environment | Windows (`x86_64`), Linux (`x86_64`), and macOS (Apple Silicon host, Slicer under Rosetta 2, native `arm64` CLI runtimes) on 3D Slicer 5.10.0; supported range 5.10 to 5.12.4 |
+| Reference environment | Windows (`x86_64`), Linux (`x86_64`), and macOS (Apple Silicon host, Slicer under Rosetta 2, native `arm64` CLI runtimes) on 3D Slicer 5.10.0; supported range 5.10 to 5.12.4. Linux needs glibc 2.34 or newer (Ubuntu 22.04+, Debian 12+, RHEL/Rocky/Alma 9+); on an older system the bundled MRtrix `mrcrop` and the surface-runtime FreeSurfer tools fail, and the Environment check warns |
 | Validation | Recorded Windows, Linux & macOS (`arm64`) Slicer 5.10.0 Extension Manager install, GUI smoke suites, runtime corruption auto-repair, and real-data multi-shell and clinical single-shell workflows |
 | Distribution | GitHub Release `v0.1.1` one-click setup archives (`SlicerDSpaceSetup-macOS.zip`, `SlicerDSpaceSetup-Windows.zip`, `SlicerDSpaceSetup-Linux.zip`, customizable via the [Project Website](https://neurodmri.github.io/SlicerDSpace/#start)) and standalone OS Base packages (`SlicerDSpace-v0.1.1-Windows-x64.zip`, `SlicerDSpace-v0.1.1-Linux-x64.tar.gz`, `SlicerDSpace-v0.1.1-macOS-arm64.tar.gz`) + separate WMA atlases; online Extension Catalog listing remains a Tier 1 proposal |
 | Licensing | BSD-3-Clause project code; third-party runtimes and on-demand model assets retain separate terms and release gates (FreeSurfer surface postprocessing requires a user-supplied license) |

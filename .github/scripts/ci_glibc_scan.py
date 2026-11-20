@@ -3,7 +3,10 @@
 
 Scans every ELF file under the given roots with `objdump -T` (undefined dynamic symbols = what the file
 needs from the host). Prints a table either way. Exit code 1 when any file needs GLIBC above the limit
-(default 2.28, the oldest glibc the Linux bundle promises to support). GLIBCXX is recorded only.
+(default 2.34). The limit is the documented Linux floor (Ubuntu 22.04+, Debian 12+, RHEL/Rocky/Alma 9+), set
+from the scan of the released v0.1.1 asset: bundled mrcrop and the surface-runtime FreeSurfer tools need
+2.34 and everything else needs 2.28 or less. Any bundle that needs more than 2.34 fails CI.
+GLIBCXX is recorded only.
 """
 from __future__ import annotations
 
@@ -18,7 +21,7 @@ from pathlib import Path
 
 GLIBC_RE = re.compile(r"\bGLIBC_(\d+(?:\.\d+)*)")
 GLIBCXX_RE = re.compile(r"\bGLIBCXX_(\d+(?:\.\d+)*)")
-DEFAULT_LIMIT = "2.28"
+DEFAULT_LIMIT = "2.34"
 
 
 def version_tuple(text):

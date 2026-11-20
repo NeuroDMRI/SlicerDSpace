@@ -195,6 +195,20 @@ _BOOTSTRAP_BODY = textwrap.dedent(
             pass
         return True
 
+    def _warn_linux_glibc_floor():
+        """G1: warn (never abort) when the Linux glibc is older than 2.34."""
+        if not sys.platform.startswith("linux"):
+            return
+        try:
+            m = re.search(r"glibc\s+(\d+)\.(\d+)", os.confstr("CS_GNU_LIBC_VERSION") or "")
+            if not m:
+                name, ver = platform.libc_ver()
+                m = re.search(r"(\d+)\.(\d+)", ver or "") if name == "glibc" else None
+            if m and (int(m.group(1)), int(m.group(2))) < (2, 34):
+                _log(f"[WARN] This Linux has glibc {m.group(1)}.{m.group(2)}, which is older than 2.34. The bundled MRtrix mrcrop and the FreeSurfer surface tools of the surface runtime need glibc 2.34 or newer and will fail; other steps, such as DTI, still run. Supported Linux systems: Ubuntu 22.04+, Debian 12+, RHEL/Rocky/Alma 9+.")
+        except Exception:
+            pass
+
     def _pick_cache_dir(need_bytes=0):
         cands = [Path(tempfile.gettempdir()) / "slicerdspace-installer-cache"]
         if sys.platform == "win32":
@@ -1224,6 +1238,7 @@ _BOOTSTRAP_BODY = textwrap.dedent(
         slicer_exe = _pick_supported_slicer(slicer_exe, _explicit)
 
         os_name = CONFIG["os"]
+        _warn_linux_glibc_floor()
         if _is_intel_mac():
             raise RuntimeError("Intel x86_64 Macs are not supported by the macOS bundle; Apple Silicon (M1-M4) is required.")
         artifacts = CONFIG["artifacts"]

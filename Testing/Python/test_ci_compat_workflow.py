@@ -96,10 +96,18 @@ class WorkflowStaticTests(unittest.TestCase):
         self.assertIn("softwareupdate --install-rosetta --agree-to-license", self.text)
 
     def test_full_install_runs_website_installer_overlay_smoke_and_glibc_scan(self):
-        for needle in ("ci_install_dspace.py", "--mode full-install --pipeline required", "ci_glibc_scan.py", "--limit 2.28"):
+        for needle in ("ci_install_dspace.py", "--mode full-install --pipeline required", "ci_glibc_scan.py", "--limit 2.34"):
             self.assertIn(needle, self.text)
         self.assertIn("--mode repo-only --pipeline optional", self.text)
         self.assertIn("scripts/stage_slicer_extension.py", self.text)
+
+    def test_g1_glibc_limit_is_the_documented_linux_floor(self):
+        self.assertNotIn("--limit 2.28", self.text)
+        self.assertNotIn("allowed to be", self.text.split("on:\n", 1)[0])
+        self.assertIn("judge_blocked_task", self.text.split("on:\n", 1)[0])
+        scan = (SCRIPTS / "ci_glibc_scan.py").read_text(encoding="utf-8")
+        self.assertIn('DEFAULT_LIMIT = "2.34"', scan)
+        self.assertIn("documented Linux floor", scan)
 
     def test_uses_only_allowed_action_versions(self):
         for use in re.findall(r"uses: (\S+)", self.text):

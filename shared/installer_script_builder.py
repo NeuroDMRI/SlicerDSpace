@@ -27,6 +27,7 @@ DEFAULT_IIT_TEMPLATE: dict[str, Any] = {
 
 _BOOTSTRAP_BODY = textwrap.dedent(
     r'''
+    import concurrent.futures
     import hashlib
     import json
     import os
@@ -37,7 +38,10 @@ _BOOTSTRAP_BODY = textwrap.dedent(
     import subprocess
     import sys
     import tempfile
+    import threading
+    import time
     import urllib.error
+    import urllib.parse
     import urllib.request
     from pathlib import Path
 
@@ -48,6 +52,11 @@ _BOOTSTRAP_BODY = textwrap.dedent(
         "https://media.githubusercontent.com/",
         "https://codeload.github.com/",
     )
+    _DIRECT_MIRROR_HOSTS = ("ghfast.top", "gh-proxy.com")
+    _PAR_CHUNK = 8388608
+    _PAR_WORKERS = 12
+    _MIRROR_WORKERS = 3
+    _UA = "SlicerDSpace-custom-installer"
 
     def _log(msg):
         print(f"[SlicerDSpace Installer] {msg}", flush=True)
@@ -55,7 +64,7 @@ _BOOTSTRAP_BODY = textwrap.dedent(
     def _sha256(path: Path) -> str:
         h = hashlib.sha256()
         with path.open("rb") as fh:
-            for chunk in iter(lambda: fh.read(1048576), b""):
+            for chunk in iter(lambda: fh.read(4194304), b""):
                 h.update(chunk)
         return h.hexdigest()
 
@@ -97,22 +106,28 @@ _BOOTSTRAP_BODY = textwrap.dedent(
                 return ""
         return s if "://" in s else ("http" + "://" + s)
 
-    def _ssl_context():
+    def _ssl_cafile():
         for env_k in ("SSL_CERT_FILE", "REQUESTS_CA_BUNDLE"):
             cf = str(os.environ.get(env_k) or "").strip()
             if cf and Path(cf).is_file():
-                try:
-                    return ssl.create_default_context(cafile=cf)
-                except Exception:
-                    pass
+                return cf
         try:
             import certifi
 
             cf = certifi.where()
             if cf and Path(cf).is_file():
-                return ssl.create_default_context(cafile=cf)
+                return cf
         except Exception:
             pass
+        return ""
+
+    def _ssl_context():
+        cf = _ssl_cafile()
+        if cf:
+            try:
+                return ssl.create_default_context(cafile=cf)
+            except Exception:
+                pass
         return ssl.create_default_context()
 
     def _detect_system_proxy():
@@ -205,11 +220,33 @@ _BOOTSTRAP_BODY = textwrap.dedent(
             )
         return best
 
-    def _open_url(req, timeout=120):
+    def _host_of(url):
+        try:
+            return (urllib.parse.urlparse(str(url or "")).hostname or "").lower()
+        except Exception:
+            return ""
+
+    def _is_mirror_host(url):
+        host = _host_of(url)
+        return any(host == d or host.endswith("." + d) for d in _DIRECT_MIRROR_HOSTS)
+
+    def _worker_count_for(url):
+        return _MIRROR_WORKERS if _is_mirror_host(url) else _PAR_WORKERS
+
+    def _resolve_proxy(req_or_url, bypass_system_proxy=False):
         explicit = _clean_proxy(CONFIG.get("proxy_url", ""))
-        proxy = explicit or ("" if _is_loopback_url(req) else _detect_system_proxy())
+        if explicit:
+            proxy = explicit
+        elif _is_loopback_url(req_or_url) or bypass_system_proxy:
+            proxy = ""
+        else:
+            proxy = _detect_system_proxy()
         if proxy.lower().startswith("socks"):
             raise RuntimeError(f"SOCKS proxy {proxy!r} is not supported without PySocks; use an HTTP/HTTPS proxy URL.")
+        return proxy
+
+    def _open_url(req, timeout=120, bypass_system_proxy=False):
+        proxy = _resolve_proxy(req, bypass_system_proxy=bypass_system_proxy)
         ctx = _ssl_context()
         if proxy:
             opener = urllib.request.build_opener(
@@ -217,7 +254,320 @@ _BOOTSTRAP_BODY = textwrap.dedent(
                 urllib.request.HTTPSHandler(context=ctx),
             )
             return opener.open(req, timeout=timeout)
+        if bypass_system_proxy:
+            opener = urllib.request.build_opener(
+                urllib.request.ProxyHandler({}),
+                urllib.request.HTTPSHandler(context=ctx),
+            )
+            return opener.open(req, timeout=timeout)
         return urllib.request.urlopen(req, timeout=timeout, context=ctx)
+
+    class _ReqResp:
+        def __init__(self, r):
+            self._r = r
+            self.status = int(getattr(r, "status_code", 200))
+            self.headers = r.headers
+            self.url = str(getattr(r, "url", "") or "")
+            self._it = None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            self.close()
+            return False
+
+        def close(self):
+            try:
+                self._r.close()
+            except Exception:
+                pass
+
+        def read(self, n=-1):
+            if n is None or n < 0:
+                return self._r.content
+            if self._it is None:
+                self._it = self._r.iter_content(chunk_size=max(65536, int(n)))
+            try:
+                return next(self._it)
+            except StopIteration:
+                return b""
+
+        def iter_chunks(self, chunk_size=262144):
+            for ch in self._r.iter_content(chunk_size=chunk_size):
+                if ch:
+                    yield ch
+
+    def _make_http_session(proxy, pool_size=16):
+        try:
+            import requests
+            from requests.adapters import HTTPAdapter
+
+            sess = requests.Session()
+            adapter = HTTPAdapter(pool_connections=pool_size, pool_maxsize=pool_size)
+            sess.mount("https://", adapter)
+            sess.mount("http://", adapter)
+            sess.trust_env = False
+            if proxy:
+                sess.proxies = {"http": proxy, "https": proxy}
+            cf = _ssl_cafile()
+            sess.verify = cf or True
+            sess.headers.update({"User-Agent": _UA})
+            return sess
+        except Exception:
+            return None
+
+    def _http_get(url, headers=None, timeout=120, session=None, bypass_system_proxy=False):
+        hdrs = {"User-Agent": _UA, "Accept-Encoding": "identity"}
+        if headers:
+            hdrs.update(headers)
+        if session is not None:
+            r = session.get(url, headers=hdrs, stream=True, timeout=timeout, allow_redirects=True)
+            if r.status_code >= 400:
+                code, msg = int(r.status_code), str(getattr(r, "reason", "") or "")
+                rh = dict(r.headers or {})
+                r.close()
+                raise urllib.error.HTTPError(url, code, msg, rh, None)
+            return _ReqResp(r)
+        req = urllib.request.Request(url, headers=hdrs)
+        return _open_url(req, timeout=timeout, bypass_system_proxy=bypass_system_proxy)
+
+    def _probe_range(url, timeout=60, session=None, bypass_system_proxy=False):
+        try:
+            with _http_get(
+                url,
+                headers={"Range": "bytes=0-0", "Accept-Encoding": "identity"},
+                timeout=timeout,
+                session=session,
+                bypass_system_proxy=bypass_system_proxy,
+            ) as resp:
+                status = getattr(resp, "status", 200)
+                resolved = str(getattr(resp, "url", "") or "") or (resp.geturl() if hasattr(resp, "geturl") else "")
+                cr = (resp.headers.get("Content-Range") or "") if hasattr(resp, "headers") else ""
+                total = 0
+                if "/" in cr:
+                    tail = cr.rsplit("/", 1)[1].strip()
+                    if tail.isdigit():
+                        total = int(tail)
+                return (status == 206 and total > 0), total, resolved
+        except Exception:
+            return False, 0, ""
+
+    def _fetch_release_sha256(asset_url, filename, timeout=20, session=None, bypass_system_proxy=False):
+        raw = str(asset_url or "")
+        if "/releases/download/" not in raw:
+            return ""
+        base = raw.rsplit("/", 1)[0]
+        sums_url = base + "/SHA256SUMS.txt"
+        try:
+            with _http_get(sums_url, timeout=timeout, session=session, bypass_system_proxy=bypass_system_proxy) as resp:
+                body = resp.read().decode("utf-8", errors="replace")
+            for line in body.splitlines():
+                parts = line.strip().split()
+                if len(parts) >= 2 and Path(parts[-1].lstrip("*")).name == filename:
+                    cand = parts[0].lower()
+                    if len(cand) == 64 and all(c in "0123456789abcdef" for c in cand):
+                        return cand
+        except Exception:
+            pass
+        return ""
+
+    def _url_attempts_for(urls, allow_mirror=True):
+        explicit = _clean_proxy(CONFIG.get("proxy_url", ""))
+        sys_proxy = "" if explicit else _detect_system_proxy()
+        attempts = []
+        for url in _expand_urls(urls, allow_mirror=allow_mirror):
+            if _is_mirror_host(url) and not explicit and sys_proxy and not _is_loopback_url(url):
+                attempts.append((url, True))
+                attempts.append((url, False))
+            else:
+                attempts.append((url, False))
+        return attempts
+
+    def _download_parallel(url, dest: Path, part: Path, total_size: int, expected_sha256="", resolved_url="", session=None, bypass_system_proxy=False):
+        meta = dest.with_name(dest.name + ".part.json")
+        chunk_sz = _PAR_CHUNK
+        n_chunks = (total_size + chunk_sz - 1) // chunk_sz
+        done_flags = [False] * n_chunks
+
+        if meta.is_file() and part.is_file() and part.stat().st_size == total_size:
+            try:
+                saved = json.loads(meta.read_text(encoding="utf-8"))
+                if int(saved.get("size") or 0) == total_size and int(saved.get("chunk_size") or 0) == chunk_sz:
+                    raw_done = saved.get("done") or ()
+                    if len(raw_done) == n_chunks:
+                        done_flags = [bool(x) for x in raw_done]
+            except Exception:
+                pass
+        elif part.is_file() and not meta.is_file():
+            legacy_sz = part.stat().st_size
+            full = min(n_chunks, legacy_sz // chunk_sz)
+            if full > 0:
+                _log(f"Migrating {full}/{n_chunks} cached chunks for parallel resume: {dest.name}")
+                for idx in range(full):
+                    done_flags[idx] = True
+
+        todo = [idx for idx, ok in enumerate(done_flags) if not ok]
+        done_bytes = sum(min(chunk_sz, total_size - idx * chunk_sz) for idx, ok in enumerate(done_flags) if ok)
+        mode = "r+b" if part.is_file() else "wb"
+        with part.open(mode) as pre:
+            if pre.seek(0, os.SEEK_END) != total_size:
+                pre.truncate(total_size)
+
+        if todo:
+            workers = max(1, min(_worker_count_for(url), len(todo)))
+            label = "direct" if bypass_system_proxy else "configured"
+            _log(f"Parallel download ({workers} threads, {label}, {len(done_flags) - len(todo)}/{n_chunks} chunks cached): {dest.name} <- {url}")
+            url_lock = threading.Lock()
+            state_lock = threading.Lock()
+            write_lock = threading.Lock()
+            active_url = [resolved_url if (resolved_url and not _is_mirror_host(url)) else url]
+            state = {"bytes": done_bytes, "next_log": done_bytes + 32 * 1024 * 1024}
+
+            def _save_meta():
+                meta.write_text(
+                    json.dumps({"size": total_size, "chunk_size": chunk_sz, "done": done_flags}),
+                    encoding="utf-8",
+                )
+
+            _save_meta()
+            with part.open("r+b") as fh:
+                def _fetch_chunk(idx):
+                    start = idx * chunk_sz
+                    end = min(total_size - 1, start + chunk_sz - 1)
+                    expected_len = end - start + 1
+                    last_exc = None
+                    for attempt in range(4):
+                        buf = bytearray()
+                        with url_lock:
+                            fetch_url = active_url[0]
+                        try:
+                            with _http_get(
+                                fetch_url,
+                                headers={"Range": f"bytes={start}-{end}", "Accept-Encoding": "identity"},
+                                timeout=120,
+                                session=session,
+                                bypass_system_proxy=bypass_system_proxy,
+                            ) as resp:
+                                status = getattr(resp, "status", 200)
+                                if status != 206 and not (status == 200 and start == 0 and expected_len == total_size):
+                                    raise RuntimeError(f"Expected 206 for range {start}-{end}, got HTTP {status}")
+                                if hasattr(resp, "iter_chunks"):
+                                    for blk in resp.iter_chunks(262144):
+                                        buf.extend(blk)
+                                else:
+                                    while len(buf) < expected_len:
+                                        blk = resp.read(min(262144, expected_len - len(buf)))
+                                        if not blk:
+                                            break
+                                        buf.extend(blk)
+                            if len(buf) != expected_len:
+                                raise RuntimeError(f"Chunk {idx} short read {len(buf)}/{expected_len}")
+                            with write_lock:
+                                fh.seek(start)
+                                fh.write(buf)
+                            with state_lock:
+                                done_flags[idx] = True
+                                state["bytes"] += expected_len
+                                _save_meta()
+                                if state["bytes"] >= state["next_log"]:
+                                    pct = 100.0 * state["bytes"] / max(1, total_size)
+                                    _log(f"  {dest.name}: {state['bytes'] / 1048576:.1f} / {total_size / 1048576:.1f} MB ({pct:.1f}%)")
+                                    state["next_log"] = state["bytes"] + 32 * 1024 * 1024
+                            return
+                        except urllib.error.HTTPError as exc:
+                            last_exc = exc
+                            if exc.code in (403, 404, 410) and fetch_url != url:
+                                _, _, fresh = _probe_range(url, timeout=60, session=session, bypass_system_proxy=bypass_system_proxy)
+                                with url_lock:
+                                    active_url[0] = fresh if (fresh and not _is_mirror_host(url)) else url
+                            elif exc.code in (429, 503, 504):
+                                time.sleep(0.5 * (2 ** attempt))
+                        except Exception as exc:
+                            last_exc = exc
+                            if fetch_url != url:
+                                with url_lock:
+                                    active_url[0] = url
+                        time.sleep(0.35 * (attempt + 1))
+                    raise RuntimeError(f"Chunk {idx} failed after retries: {last_exc}")
+
+                with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+                    futs = [pool.submit(_fetch_chunk, idx) for idx in todo]
+                    for fut in concurrent.futures.as_completed(futs):
+                        fut.result()
+
+        if part.stat().st_size != total_size:
+            raise RuntimeError(f"Size mismatch for {dest.name}: {part.stat().st_size}/{total_size}")
+        if expected_sha256:
+            _log(f"Verifying SHA-256: {dest.name} ...")
+            actual = _sha256(part)
+            if actual != expected_sha256:
+                part.unlink(missing_ok=True)
+                meta.unlink(missing_ok=True)
+                raise ValueError(f"SHA-256 mismatch for {dest.name}: expected {expected_sha256}, got {actual}")
+        meta.unlink(missing_ok=True)
+        os.replace(part, dest)
+        _log(f"Verified {dest.name}")
+        return dest
+
+    def _download_stream(url, dest: Path, part: Path, expected_sha256="", expected_size=0, session=None, bypass_system_proxy=False):
+        _log(f"Downloading {dest.name} <- {url}")
+        resume_from = part.stat().st_size if part.is_file() else 0
+        if expected_size and resume_from > expected_size:
+            part.unlink(missing_ok=True)
+            resume_from = 0
+        headers = {"Accept-Encoding": "identity"}
+        if resume_from:
+            headers["Range"] = f"bytes={resume_from}-"
+        try:
+            resp_cm = _http_get(url, headers=headers, timeout=120, session=session, bypass_system_proxy=bypass_system_proxy)
+        except urllib.error.HTTPError as range_exc:
+            if resume_from and range_exc.code in (400, 405, 501):
+                part.unlink(missing_ok=True)
+                resume_from = 0
+                resp_cm = _http_get(url, headers={"Accept-Encoding": "identity"}, timeout=120, session=session, bypass_system_proxy=bypass_system_proxy)
+            else:
+                raise
+        with resp_cm as resp:
+            status = getattr(resp, "status", 200)
+            append = bool(resume_from and status == 206)
+            if resume_from and not append:
+                resume_from = 0
+            clen = resp.headers.get("Content-Length") if hasattr(resp, "headers") else None
+            total = (int(clen) + resume_from) if (clen and str(clen).isdigit()) else int(expected_size or 0)
+            done = resume_from
+            next_log = done + 32 * 1024 * 1024
+            with part.open("ab" if append else "wb") as fh:
+                if hasattr(resp, "iter_chunks"):
+                    for chunk in resp.iter_chunks(262144):
+                        fh.write(chunk)
+                        done += len(chunk)
+                        if total and done >= next_log:
+                            pct = 100.0 * done / max(1, total)
+                            _log(f"  {dest.name}: {done / 1048576:.1f} / {total / 1048576:.1f} MB ({pct:.1f}%)")
+                            next_log = done + 32 * 1024 * 1024
+                else:
+                    while True:
+                        chunk = resp.read(262144)
+                        if not chunk:
+                            break
+                        fh.write(chunk)
+                        done += len(chunk)
+                        if total and done >= next_log:
+                            pct = 100.0 * done / max(1, total)
+                            _log(f"  {dest.name}: {done / 1048576:.1f} / {total / 1048576:.1f} MB ({pct:.1f}%)")
+                            next_log = done + 32 * 1024 * 1024
+        if total and done < total:
+            raise RuntimeError(f"Short read {done}/{total} bytes")
+        if expected_sha256:
+            _log(f"Verifying SHA-256: {dest.name} ...")
+            actual = _sha256(part)
+            if actual != expected_sha256:
+                part.unlink(missing_ok=True)
+                raise ValueError(f"SHA-256 mismatch for {dest.name}: expected {expected_sha256}, got {actual}")
+        os.replace(part, dest)
+        _log(f"Verified {dest.name}")
+        return dest
 
     def _download(urls, dest: Path, expected_sha256="", expected_size=0, allow_mirror=True):
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -230,63 +580,56 @@ _BOOTSTRAP_BODY = textwrap.dedent(
                 return dest
         part = dest.with_name(dest.name + ".part")
         errors = []
-        for url in _expand_urls(urls, allow_mirror=allow_mirror):
+        for url, bypass in _url_attempts_for(urls, allow_mirror=allow_mirror):
+            session = None
             try:
-                _log(f"Downloading {dest.name} <- {url}")
-                resume_from = part.stat().st_size if part.is_file() else 0
-                if expected_size and resume_from > expected_size:
+                proxy = _resolve_proxy(url, bypass_system_proxy=bypass)
+                session = _make_http_session(proxy, pool_size=max(8, _worker_count_for(url) + 4))
+                eff_sha = expected_sha256
+                eff_size = int(expected_size or 0)
+                ok_range, ptot, resolved = _probe_range(url, timeout=60, session=session, bypass_system_proxy=bypass)
+                if ptot and eff_size and ptot != eff_size:
+                    latest_sha = _fetch_release_sha256(url, dest.name, timeout=20, session=session, bypass_system_proxy=bypass)
+                    if not latest_sha:
+                        raise RuntimeError(f"Remote size mismatch for {dest.name}: expected {eff_size}, got {ptot}")
+                    _log(f"Detected updated release asset for {dest.name} ({eff_size} -> {ptot} B); refreshed SHA-256.")
                     part.unlink(missing_ok=True)
-                    resume_from = 0
-                headers = {"User-Agent": "SlicerDSpace-custom-installer"}
-                if resume_from:
-                    headers["Range"] = f"bytes={resume_from}-"
-                req = urllib.request.Request(url, headers=headers)
-                try:
-                    resp_cm = _open_url(req, timeout=120)
-                except urllib.error.HTTPError as range_exc:
-                    if resume_from and range_exc.code in (400, 405, 501):
-                        part.unlink(missing_ok=True)
-                        resume_from = 0
-                        req = urllib.request.Request(url, headers={"User-Agent": "SlicerDSpace-custom-installer"})
-                        resp_cm = _open_url(req, timeout=120)
-                    else:
-                        raise
-                with resp_cm as resp:
-                    status = getattr(resp, "status", 200)
-                    append = bool(resume_from and status == 206)
-                    if resume_from and not append:
-                        resume_from = 0
-                    clen = resp.headers.get("Content-Length") if hasattr(resp, "headers") else None
-                    total = (int(clen) + resume_from) if (clen and str(clen).isdigit()) else int(expected_size or 0)
-                    done = resume_from
-                    next_log = done + 32 * 1024 * 1024
-                    with part.open("ab" if append else "wb") as fh:
-                        while True:
-                            chunk = resp.read(1048576)
-                            if not chunk:
-                                break
-                            fh.write(chunk)
-                            done += len(chunk)
-                            if total and done >= next_log:
-                                pct = 100.0 * done / max(1, total)
-                                _log(f"  {dest.name}: {done / 1048576:.1f} / {total / 1048576:.1f} MB ({pct:.1f}%)")
-                                next_log = done + 32 * 1024 * 1024
-                if total and done < total:
-                    raise RuntimeError(f"Short read {done}/{total} bytes")
-                if expected_sha256:
-                    actual = _sha256(part)
-                    if actual != expected_sha256:
-                        part.unlink(missing_ok=True)
-                        raise ValueError(f"SHA-256 mismatch for {dest.name}: expected {expected_sha256}, got {actual}")
-                os.replace(part, dest)
-                _log(f"Verified {dest.name}")
-                return dest
+                    dest.with_name(dest.name + ".part.json").unlink(missing_ok=True)
+                    eff_sha = latest_sha
+                    eff_size = ptot
+                total_par = ptot if ok_range else 0
+                if total_par >= _PAR_CHUNK * 2:
+                    return _download_parallel(
+                        url,
+                        dest,
+                        part,
+                        total_par,
+                        expected_sha256=eff_sha,
+                        resolved_url=resolved,
+                        session=session,
+                        bypass_system_proxy=bypass,
+                    )
+                return _download_stream(
+                    url,
+                    dest,
+                    part,
+                    expected_sha256=eff_sha,
+                    expected_size=eff_size or ptot,
+                    session=session,
+                    bypass_system_proxy=bypass,
+                )
             except urllib.error.HTTPError as exc:
                 if exc.code == 416:
                     part.unlink(missing_ok=True)
                 errors.append(f"{url}: {exc}")
             except Exception as exc:
                 errors.append(f"{url}: {exc}")
+            finally:
+                if session is not None:
+                    try:
+                        session.close()
+                    except Exception:
+                        pass
         raise RuntimeError(f"Unable to download {dest.name}: {errors}")
 
     def _search_dirs():
@@ -564,7 +907,7 @@ _BOOTSTRAP_BODY = textwrap.dedent(
                 continue
             archive, pack_temps = _acquire_spec(pspec, work_dir)
             _log(f"Extracting {pspec['filename']} -> {asset_root}")
-            extract_modular_pack(archive, asset_root, expected_sha256=str(pspec.get("sha256") or ""))
+            extract_modular_pack(archive, asset_root, expected_sha256="")
             _cleanup_temp_files(pack_temps)
 
         cfg = load_user_config()

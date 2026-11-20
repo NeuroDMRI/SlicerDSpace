@@ -6,6 +6,7 @@ import ast
 import hashlib
 import io
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -752,6 +753,440 @@ class InstallerScriptBuilderTests(unittest.TestCase):
         )
         self.assertEqual(ns["_expand_urls"]([nitrc], mirror_prefix="", allow_mirror=True), [nitrc])
         self.assertEqual(ns["_expand_urls"]([gh], mirror_prefix="", allow_mirror=False), [gh])
+
+
+class FastInstallerOptimizationTests(unittest.TestCase):
+    """Cross-OS tests for Keep-Alive, single-redirect Range, smart mirror bypass, and worker CLI."""
+
+    def _load_setup_module_ns(self, os_key: str = "windows") -> tuple[str, dict[str, object]]:
+        import types
+
+        node_bin = shutil.which("node")
+        if not node_bin:
+            self.skipTest("Node.js not installed")
+        js_path = REPO_ROOT / "docs" / "site" / "assets" / "js" / "installer-customizer.js"
+        node_script = (
+            "const ic = require(process.argv[1]);\n"
+            f"const files = ic.buildSetupExtensionFiles({{ os: {json.dumps(os_key)}, wmaEnabled: false }});\n"
+            "process.stdout.write(files.find((f) => f.name.endsWith('SlicerDSpaceSetup.py')).data);\n"
+        )
+        py_src = subprocess.run([node_bin, "-e", node_script, str(js_path)], capture_output=True, text=True, check=True).stdout
+        qt_stub = types.ModuleType("qt")
+        slicer_stub = types.ModuleType("slicer")
+        slm_stub = types.ModuleType("slicer.ScriptedLoadableModule")
+        slm_stub.ScriptedLoadableModule = type("ScriptedLoadableModule", (), {})
+        slm_stub.ScriptedLoadableModuleWidget = type("ScriptedLoadableModuleWidget", (), {})
+        ns: dict[str, object] = {"__name__": "SlicerDSpaceSetup"}
+        from unittest.mock import patch
+
+        with patch.dict(
+            sys.modules,
+            {"qt": qt_stub, "slicer": slicer_stub, "slicer.ScriptedLoadableModule": slm_stub},
+        ):
+            exec(compile(py_src, "SlicerDSpaceSetup.py", "exec"), ns)
+        return py_src, ns
+
+    def _start_range_server(self, routes: dict[str, bytes], *, redirect_routes: dict[str, str] | None = None):
+        import http.server
+        import threading
+
+        redirects = dict(redirect_routes or {})
+        hits: list[tuple[str, str]] = []
+        hit_lock = threading.Lock()
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def log_message(self, *_args):
+                return
+
+            def handle(self):
+                try:
+                    super().handle()
+                except OSError:
+                    pass
+
+            def do_GET(self):
+                with hit_lock:
+                    hits.append((self.path, str(self.headers.get("Range") or "")))
+                if self.path in redirects:
+                    dest_path = redirects[self.path]
+                    self.send_response(302)
+                    self.send_header("Location", f"http://127.0.0.1:{self.server.server_port}{dest_path}")
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                if self.path not in routes:
+                    self.send_response(404)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                data = routes[self.path]
+                rng = self.headers.get("Range")
+                if rng and rng.startswith("bytes="):
+                    spec = rng[6:].split(",", 1)[0].strip()
+                    s_str, _, e_str = spec.partition("-")
+                    start = int(s_str) if s_str else 0
+                    end = int(e_str) if e_str else (len(data) - 1)
+                    if start < 0 or end >= len(data) or start > end:
+                        self.send_response(416)
+                        self.send_header("Content-Range", f"bytes */{len(data)}")
+                        self.send_header("Content-Length", "0")
+                        self.end_headers()
+                        return
+                    chunk = data[start : end + 1]
+                    self.send_response(206)
+                    self.send_header("Accept-Ranges", "bytes")
+                    self.send_header("Content-Range", f"bytes {start}-{end}/{len(data)}")
+                    self.send_header("Content-Length", str(len(chunk)))
+                    self.end_headers()
+                    self.wfile.write(chunk)
+                    return
+                self.send_response(200)
+                self.send_header("Accept-Ranges", "bytes")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        return server, hits
+
+    def test_find_python_slicer_across_windows_macos_linux(self) -> None:
+        _, ns = self._load_setup_module_ns("macos")
+        find_fn = ns["_find_python_slicer"]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            win_py = root / "win_slicer" / "bin" / "PythonSlicer.exe"
+            win_py.parent.mkdir(parents=True)
+            win_py.write_bytes(b"")
+            self.assertEqual(find_fn(root / "win_slicer", is_win=True), win_py)
+
+            mac_app = root / "Slicer.app"
+            mac_py = mac_app / "Contents" / "bin" / "PythonSlicer"
+            mac_py.parent.mkdir(parents=True)
+            (mac_app / "Contents" / "MacOS").mkdir(parents=True)
+            mac_py.write_bytes(b"")
+            mac_py.chmod(0o755)
+            for hint in (mac_app, mac_app / "Contents", mac_app / "Contents" / "MacOS"):
+                self.assertEqual(find_fn(hint, is_win=False), mac_py)
+
+            lin_py = root / "lin_slicer" / "bin" / "PythonSlicer"
+            lin_py.parent.mkdir(parents=True)
+            lin_py.write_bytes(b"")
+            lin_py.chmod(0o755)
+            self.assertEqual(find_fn(root / "lin_slicer", is_win=False), lin_py)
+
+    def test_single_redirect_reuse_and_mirror_worker_cap(self) -> None:
+        _, ns = self._load_setup_module_ns("linux")
+        wcount = ns["_worker_count_for"]
+        self.assertEqual(wcount("https://ghfast.top/https://github.com/a/b.zip", 12), 3)
+        self.assertEqual(wcount("https://gh-proxy.com/https://github.com/a/b.zip", 12), 3)
+        self.assertEqual(wcount("https://release-assets.githubusercontent.com/a/b.zip", 12), 12)
+        self.assertEqual(wcount("http://127.0.0.1:8080/ext.zip", 5), 5)
+
+        ns["_PAR_CHUNK"] = 64 * 1024
+        payload = b"ABCD" * (40 * 1024)
+        sha = hashlib.sha256(payload).hexdigest()
+        server, hits = self._start_range_server(
+            {"/cdn/ext.zip": payload},
+            redirect_routes={"/releases/download/v0.1.1/ext.zip": "/cdn/ext.zip"},
+        )
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                dest = Path(tmp) / "ext.zip"
+                ns["_download"](
+                    f"http://127.0.0.1:{server.server_port}/releases/download/v0.1.1/ext.zip",
+                    dest,
+                    expected_sha256=sha,
+                    expected_size=len(payload),
+                    allow_mirror=False,
+                )
+                self.assertEqual(hashlib.sha256(dest.read_bytes()).hexdigest(), sha)
+        finally:
+            server.shutdown()
+            server.server_close()
+
+        origin_hits = [p for p, _ in hits if p == "/releases/download/v0.1.1/ext.zip"]
+        cdn_hits = [p for p, _ in hits if p == "/cdn/ext.zip"]
+        self.assertEqual(len(origin_hits), 1)
+        self.assertGreaterEqual(len(cdn_hits), 3)
+
+    def test_smart_direct_mirror_proxy_bypass_vs_explicit_proxy(self) -> None:
+        from unittest.mock import patch
+        from shared import network_config as nc
+
+        _, ns = self._load_setup_module_ns("windows")
+        ns["_SYS_PROXY_CACHE"][0] = None
+        orig_detect = ns["_detect_system_proxy"]
+        try:
+            ns["_detect_system_proxy"] = lambda: "http://127.0.0.1:7897"
+            self.assertEqual(ns["_resolve_proxy"]("https://ghfast.top/x", proxy_url="", bypass_sys_proxy=True), "")
+            self.assertEqual(
+                ns["_resolve_proxy"]("https://ghfast.top/x", proxy_url="", bypass_sys_proxy=False),
+                "http://127.0.0.1:7897",
+            )
+            self.assertEqual(
+                ns["_resolve_proxy"]("https://ghfast.top/x", proxy_url="http://127.0.0.1:9999", bypass_sys_proxy=True),
+                "http://127.0.0.1:9999",
+            )
+
+            seen_attempts: list[tuple[str, bool]] = []
+            orig_probe = ns["_probe_range"]
+
+            def rec_probe(url, proxy_url="", expected_size=0, timeout=12, bypass_sys_proxy=False, sess=None):
+                seen_attempts.append((url, bypass_sys_proxy))
+                return False, 0, url, False, RuntimeError("stop")
+
+            ns["_probe_range"] = rec_probe
+            try:
+                with tempfile.TemporaryDirectory() as tmp:
+                    with self.assertRaises(RuntimeError):
+                        ns["_download"](
+                            "https://github.com/org/repo/releases/download/v0.1.1/a.zip",
+                            Path(tmp) / "a.zip",
+                            mirror_prefix="https://ghfast.top/",
+                            expected_size=100,
+                            proxy_url="",
+                        )
+                    self.assertEqual(
+                        seen_attempts,
+                        [
+                            ("https://ghfast.top/https://github.com/org/repo/releases/download/v0.1.1/a.zip", True),
+                            ("https://ghfast.top/https://github.com/org/repo/releases/download/v0.1.1/a.zip", False),
+                            ("https://github.com/org/repo/releases/download/v0.1.1/a.zip", False),
+                        ],
+                    )
+                    seen_attempts.clear()
+                    ns["_detect_system_proxy"] = lambda: ""
+                    with self.assertRaises(RuntimeError):
+                        ns["_download"](
+                            "https://github.com/org/repo/releases/download/v0.1.1/a.zip",
+                            Path(tmp) / "a.zip",
+                            mirror_prefix="https://ghfast.top/",
+                            expected_size=100,
+                            proxy_url="",
+                        )
+                    self.assertEqual(
+                        seen_attempts,
+                        [
+                            ("https://ghfast.top/https://github.com/org/repo/releases/download/v0.1.1/a.zip", False),
+                            ("https://github.com/org/repo/releases/download/v0.1.1/a.zip", False),
+                        ],
+                    )
+            finally:
+                ns["_probe_range"] = orig_probe
+        finally:
+            ns["_detect_system_proxy"] = orig_detect
+
+        with (
+            patch.dict(os.environ, {"HTTP_PROXY": "", "HTTPS_PROXY": "", "SLICERDSPACE_PROXY_URL": ""}, clear=False),
+            patch.object(nc, "load_network_settings", return_value={"mirror_prefix": "", "proxy_url": "", "offline_assets_dir": ""}),
+            patch.object(nc, "_load_explicit_proxy", return_value=""),
+            patch.object(nc, "_detect_system_proxy", return_value="http://127.0.0.1:7897"),
+        ):
+            self.assertEqual(
+                nc._download_attempts_for(["https://ghfast.top/x", "https://github.com/x"], None),
+                [("https://ghfast.top/x", True), ("https://ghfast.top/x", False), ("https://github.com/x", False)],
+            )
+            self.assertEqual(
+                nc._download_attempts_for(["https://ghfast.top/x", "https://github.com/x"], "http://127.0.0.1:9999"),
+                [("https://ghfast.top/x", False), ("https://github.com/x", False)],
+            )
+            self.assertEqual(
+                nc._resolve_effective_proxy("https://ghfast.top/x", proxy_url="http://127.0.0.1:9999", bypass_system_proxy=True),
+                "http://127.0.0.1:9999",
+            )
+        with (
+            patch.dict(os.environ, {"HTTP_PROXY": "", "HTTPS_PROXY": "", "SLICERDSPACE_PROXY_URL": ""}, clear=False),
+            patch.object(nc, "load_network_settings", return_value={"mirror_prefix": "", "proxy_url": "", "offline_assets_dir": ""}),
+            patch.object(nc, "_load_explicit_proxy", return_value=""),
+            patch.object(nc, "_detect_system_proxy", return_value=""),
+        ):
+            self.assertEqual(
+                nc._download_attempts_for(["https://ghfast.top/x", "https://github.com/x"], None),
+                [("https://ghfast.top/x", False), ("https://github.com/x", False)],
+            )
+
+    def test_sha256sums_auto_refresh_and_fail_fast_on_size_mismatch(self) -> None:
+        _, ns = self._load_setup_module_ns("windows")
+        ns["_PAR_CHUNK"] = 64 * 1024
+        payload = b"NWRK" * 37500
+        new_sha = hashlib.sha256(payload).hexdigest()
+        sums_bytes = f"{new_sha}  pkg.zip\n".encode("utf-8")
+
+        srv1, _ = self._start_range_server(
+            {
+                "/releases/download/v0.1.1/pkg.zip": payload,
+                "/releases/download/v0.1.1/SHA256SUMS.txt": sums_bytes,
+            }
+        )
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                dest = Path(tmp) / "pkg.zip"
+                ns["_download"](
+                    f"http://127.0.0.1:{srv1.server_port}/releases/download/v0.1.1/pkg.zip",
+                    dest,
+                    expected_sha256="a" * 64,
+                    expected_size=100000,
+                    allow_mirror=False,
+                )
+                self.assertEqual(hashlib.sha256(dest.read_bytes()).hexdigest(), new_sha)
+        finally:
+            srv1.shutdown()
+            srv1.server_close()
+
+        srv2, hits2 = self._start_range_server({"/releases/download/v0.1.1/pkg.zip": payload})
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                with self.assertRaises(RuntimeError):
+                    ns["_download"](
+                        f"http://127.0.0.1:{srv2.server_port}/releases/download/v0.1.1/pkg.zip",
+                        Path(tmp) / "pkg.zip",
+                        expected_sha256="a" * 64,
+                        expected_size=100000,
+                        allow_mirror=False,
+                    )
+        finally:
+            srv2.shutdown()
+            srv2.server_close()
+
+        pkg_hits = [r for p, r in hits2 if p == "/releases/download/v0.1.1/pkg.zip"]
+        self.assertEqual(pkg_hits, ["bytes=0-0"])
+
+    def test_external_download_worker_cli_emits_progress_and_ready(self) -> None:
+        os_key = "windows" if sys.platform == "win32" else ("macos" if sys.platform == "darwin" else "linux")
+        bundle_key = {"windows": "windows_x64_base", "macos": "macos_arm64_base", "linux": "linux_x64_base"}[os_key]
+        py_src, _ = self._load_setup_module_ns(os_key)
+
+        payload = b"WORKER_ZIP_" * (18 * 1024)
+        sha = hashlib.sha256(payload).hexdigest()
+        server, _ = self._start_range_server({"/ext.zip": payload})
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                tdir = Path(tmp)
+                cfg = {
+                    "os": os_key,
+                    "mode": "base",
+                    "slicer_path": "",
+                    "model_assets_dir": "",
+                    "selected_packs": [],
+                    "mirror_prefix": "",
+                    "proxy_url": "",
+                    "offline_dir": "",
+                    "check_script_dir": False,
+                    "auto_start": False,
+                    "language": "en",
+                    "artifacts": {
+                        "iit_template": {},
+                        "packs": {},
+                        "bundles": {
+                            bundle_key: {
+                                "filename": "ext.zip",
+                                "url": f"http://127.0.0.1:{server.server_port}/ext.zip",
+                                "size_bytes": len(payload),
+                                "sha256": sha,
+                                "parts": [],
+                            }
+                        },
+                    },
+                }
+                lines = py_src.splitlines()
+                idx = next(i for i, ln in enumerate(lines) if ln.startswith("CONFIG = _json.loads("))
+                lines[idx] = f"CONFIG = _json.loads({json.dumps(json.dumps(cfg))})"
+                worker_py = tdir / "SlicerDSpaceSetup.py"
+                worker_py.write_text("\n".join(lines) + "\n", encoding="utf-8")
+                job_file = tdir / "job.json"
+                job_file.write_text(
+                    json.dumps({"sel_packs": [], "mirror": "", "proxy": "", "offdir": ""}),
+                    encoding="utf-8",
+                )
+                env = os.environ.copy()
+                env.update({"TMP": str(tdir), "TEMP": str(tdir), "TMPDIR": str(tdir), "HOME": str(tdir), "USERPROFILE": str(tdir)})
+                proc = subprocess.run(
+                    [sys.executable, "-u", str(worker_py), "--download-worker", str(job_file)],
+                    capture_output=True,
+                    text=True,
+                    env=env,
+                    timeout=30,
+                )
+                self.assertEqual(proc.returncode, 0, msg=f"stdout={proc.stdout}\nstderr={proc.stderr}")
+                events = []
+                for raw in proc.stdout.splitlines():
+                    s = raw.strip()
+                    if s.startswith("{"):
+                        events.append(json.loads(s))
+                kinds = [ev["k"] for ev in events]
+                self.assertIn("progress", kinds)
+                self.assertIn("downloads_ready", kinds)
+                ready = next(ev["p"] for ev in events if ev["k"] == "downloads_ready")
+                self.assertTrue(ready.get("verified_packs"))
+                ext_arc = Path(ready["ext_archive"])
+                self.assertTrue(ext_arc.is_file())
+                self.assertEqual(hashlib.sha256(ext_arc.read_bytes()).hexdigest(), sha)
+        finally:
+            server.shutdown()
+            server.server_close()
+
+    def test_network_config_download_file_verified_parallel_and_script_builder_all_os(self) -> None:
+        from unittest.mock import patch
+        from shared import network_config as nc
+        from shared.installer_script_builder import generate_installer_script
+
+        payload = b"XYZ1" * (40 * 1024)
+        sha = hashlib.sha256(payload).hexdigest()
+        server, hits = self._start_range_server({"/pack.tar.gz": payload})
+        try:
+            url = f"http://127.0.0.1:{server.server_port}/pack.tar.gz"
+            with (
+                tempfile.TemporaryDirectory() as tmp,
+                patch.dict(os.environ, {"HTTP_PROXY": "", "HTTPS_PROXY": "", "http_proxy": "", "https_proxy": "", "SLICERDSPACE_PROXY_URL": ""}, clear=False),
+                patch.object(nc, "_PAR_CHUNK", 64 * 1024),
+            ):
+                tdir = Path(tmp)
+                part = tdir / "pack.tar.gz.part"
+                meta = tdir / "pack.tar.gz.part.json"
+                part.write_bytes(payload[: 64 * 1024] + b"\x00" * (len(payload) - 64 * 1024))
+                meta.write_text(json.dumps({"size": len(payload), "chunk_size": 64 * 1024, "done": [True, False, False]}), encoding="utf-8")
+
+                progress_seen: list[tuple[int, int]] = []
+                out_resumed = nc.download_file_verified(
+                    url,
+                    tdir / "pack.tar.gz",
+                    expected_sha256=sha,
+                    expected_size=len(payload),
+                    allow_mirror=False,
+                    progress_callback=lambda d, tot, _u: progress_seen.append((int(d), int(tot))),
+                )
+                self.assertEqual(hashlib.sha256(out_resumed.read_bytes()).hexdigest(), sha)
+                self.assertTrue(progress_seen)
+                self.assertEqual(progress_seen[-1][0], len(payload))
+                self.assertNotIn("bytes=0-65535", [r for _, r in hits])
+
+                out_fresh = nc.download_file_verified(
+                    url,
+                    tdir / "fresh.tar.gz",
+                    expected_sha256=sha,
+                    expected_size=len(payload),
+                    allow_mirror=False,
+                )
+                self.assertEqual(hashlib.sha256(out_fresh.read_bytes()).hexdigest(), sha)
+
+            for target_os in ("windows", "macos", "linux"):
+                with self.subTest(target_os=target_os):
+                    script = generate_installer_script(target_os=target_os, mode="base", slicer_path="/custom/Slicer")
+                    py_block = script.split("# __SLICERDSPACE_PY_BEGIN__", 1)[1].split("# __SLICERDSPACE_PY_END__", 1)[0]
+                    ast.parse(py_block)
+                    ns: dict[str, object] = {"__file__": str(REPO_ROOT / f"Install-SlicerDSpace-{target_os}.py")}
+                    exec(compile(py_block, f"install_{target_os}.py", "exec"), ns)
+                    ns["_PAR_CHUNK"] = 64 * 1024
+                    with tempfile.TemporaryDirectory() as tmp:
+                        out = Path(tmp) / f"ext_{target_os}.bin"
+                        ns["_download"](url, out, expected_sha256=sha, expected_size=len(payload), allow_mirror=False)
+                        self.assertEqual(hashlib.sha256(out.read_bytes()).hexdigest(), sha)
+        finally:
+            server.shutdown()
+            server.server_close()
 
 
 if __name__ == "__main__":

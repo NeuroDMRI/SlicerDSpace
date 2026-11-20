@@ -49,24 +49,24 @@
       "os": "windows",
       "filename": "SlicerDSpaceSetup-Windows.zip",
       "url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v0.1.1/SlicerDSpaceSetup-Windows.zip",
-      "size_bytes": 21514,
-      "sha256": "fee46c19b71a9c849fa395311b3509ba1f6ef81007b1c8e3a36137d4e6549752",
+      "size_bytes": 148152,
+      "sha256": "79c227b30bad8a4a62e7f9f65098c139f945ee5ee12c46d5a15abd92a2f11aee",
       "published": true
     },
     "linux": {
       "os": "linux",
       "filename": "SlicerDSpaceSetup-Linux.zip",
       "url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v0.1.1/SlicerDSpaceSetup-Linux.zip",
-      "size_bytes": 21515,
-      "sha256": "53872d39f1b3ed540494337ea05b964cd177242abb519156e3d23e258d9370cd",
+      "size_bytes": 148146,
+      "sha256": "54bf5f52714624567bfcf2ecd4d3a1c15b2d5bf0eade716bc1a249835d66f17d",
       "published": true
     },
     "macos": {
       "os": "macos",
       "filename": "SlicerDSpaceSetup-macOS.zip",
       "url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v0.1.1/SlicerDSpaceSetup-macOS.zip",
-      "size_bytes": 21847,
-      "sha256": "638e32214468c64deeba2644034c5342b7f9fcc098f141745687115b261f4a9f",
+      "size_bytes": 174690,
+      "sha256": "16054591881f57e3e1c28ccc4819554a98389afa17a5aec9771fcc365662e1f4",
       "published": true
     }
   },
@@ -78,34 +78,5 @@
     "code_sha256": "c0df9904a4a01e69f06403209a39b387cf170a0dbe46fde5f5e9e119d3255cb6",
     "runtime_abi_version": 1,
     "version": "0.1.1"
-  },
-  "universal_installers": {
-    "windows": {
-      "os": "windows",
-      "slicer_version": "universal",
-      "filename": "Install-SlicerDSpace-Windows.bat",
-      "url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v0.1.1/Install-SlicerDSpace-Windows.bat",
-      "size_bytes": 58658,
-      "sha256": "25beb336724a8fdd6d09b662fdb3760cc17c0d0ccb1cf687cd6c6ef9f7b9c247",
-      "published": true
-    },
-    "linux": {
-      "os": "linux",
-      "slicer_version": "universal",
-      "filename": "Install-SlicerDSpace-Linux.sh",
-      "url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v0.1.1/Install-SlicerDSpace-Linux.sh",
-      "size_bytes": 57679,
-      "sha256": "ac142c6984bff4161d2aa0a6a04e2f29329f612b52882cd9553e37258e6da992",
-      "published": true
-    },
-    "macos": {
-      "os": "macos",
-      "slicer_version": "universal",
-      "filename": "Install-SlicerDSpace-macOS.command",
-      "url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v0.1.1/Install-SlicerDSpace-macOS.command",
-      "size_bytes": 57905,
-      "sha256": "56557f52cfedffddbd79551e66df3e17eba6971b6acb92ec5117fad09c279a55",
-      "published": true
-    }
   }
 }

@@ -264,6 +264,7 @@ class InstallerScriptBuilderTests(unittest.TestCase):
             [node_bin, "-e", node_script, str(js_path)],
             capture_output=True,
             text=True,
+            encoding="utf-8",
             check=True,
         )
         rows = json.loads(proc.stdout)
@@ -359,7 +360,7 @@ class InstallerScriptBuilderTests(unittest.TestCase):
             "const py = files.find((f) => f.name.endsWith('SlicerDSpaceSetup.py')).data;\n"
             "process.stdout.write(py);\n"
         )
-        py_src = subprocess.run([node_bin, "-e", node_script, str(js_path)], capture_output=True, text=True, check=True).stdout
+        py_src = subprocess.run([node_bin, "-e", node_script, str(js_path)], capture_output=True, text=True, encoding="utf-8", check=True).stdout
 
         qt_stub = types.ModuleType("qt")
         slicer_stub = types.ModuleType("slicer")
@@ -466,7 +467,7 @@ class InstallerScriptBuilderTests(unittest.TestCase):
                     "const py = files.find((f) => f.name.endsWith('SlicerDSpaceSetup.py')).data;\n"
                     "process.stdout.write(py);\n"
                 )
-                py_src = subprocess.run([node_bin, "-e", node_script, str(js_path)], capture_output=True, text=True, check=True).stdout
+                py_src = subprocess.run([node_bin, "-e", node_script, str(js_path)], capture_output=True, text=True, encoding="utf-8", check=True).stdout
 
                 class _Signal:
                     def __init__(self) -> None:
@@ -725,7 +726,7 @@ class InstallerScriptBuilderTests(unittest.TestCase):
             "const files = ic.buildSetupExtensionFiles({ os: 'macos' });\n"
             "process.stdout.write(files.find((f) => f.name.endsWith('SlicerDSpaceSetup.py')).data);\n"
         )
-        py_src = subprocess.run([node_bin, "-e", node_script, str(js_path)], capture_output=True, text=True, check=True).stdout
+        py_src = subprocess.run([node_bin, "-e", node_script, str(js_path)], capture_output=True, text=True, encoding="utf-8", check=True).stdout
         qt_stub = types.ModuleType("qt")
         slicer_stub = types.ModuleType("slicer")
         slm_stub = types.ModuleType("slicer.ScriptedLoadableModule")
@@ -814,7 +815,7 @@ class FastInstallerOptimizationTests(unittest.TestCase):
             f"const files = ic.buildSetupExtensionFiles({{ os: {json.dumps(os_key)}, wmaEnabled: false }});\n"
             "process.stdout.write(files.find((f) => f.name.endsWith('SlicerDSpaceSetup.py')).data);\n"
         )
-        py_src = subprocess.run([node_bin, "-e", node_script, str(js_path)], capture_output=True, text=True, check=True).stdout
+        py_src = subprocess.run([node_bin, "-e", node_script, str(js_path)], capture_output=True, text=True, encoding="utf-8", check=True).stdout
         qt_stub = types.ModuleType("qt")
         slicer_stub = types.ModuleType("slicer")
         slm_stub = types.ModuleType("slicer.ScriptedLoadableModule")
@@ -1248,7 +1249,7 @@ class FastInstallerOptimizationTests(unittest.TestCase):
                 "});\n"
                 "process.stdout.write(files.find((f) => f.name.endsWith('SlicerDSpaceSetup.py')).data);\n"
             )
-            py_src = subprocess.run([node_bin, "-e", node_script, str(js_path)], capture_output=True, text=True, check=True).stdout
+            py_src = subprocess.run([node_bin, "-e", node_script, str(js_path)], capture_output=True, text=True, encoding="utf-8", check=True).stdout
             worker_py = tdir / "SlicerDSpaceSetup.py"
             worker_py.write_text(py_src, encoding="utf-8")
 
@@ -1460,7 +1461,7 @@ class FastInstallerOptimizationTests(unittest.TestCase):
             "const ic = require(process.argv[1]);\n"
             "process.stdout.write(JSON.stringify({ macTargets: ic.MACOS_SLICER_TARGETS.length, genericMinors: ic.GENERIC_SLICER_MINORS.length }));\n"
         )
-        counts = json.loads(subprocess.run([node_bin, "-e", node_script, str(js_path)], capture_output=True, text=True, check=True).stdout)
+        counts = json.loads(subprocess.run([node_bin, "-e", node_script, str(js_path)], capture_output=True, text=True, encoding="utf-8", check=True).stdout)
         self.assertEqual(counts["macTargets"], 6)
         self.assertEqual(counts["genericMinors"], 5)
 
@@ -1480,7 +1481,7 @@ class FastInstallerOptimizationTests(unittest.TestCase):
             "const f = ic.buildSetupExtensionFiles({ os: 'macos' });\n"
             "process.stdout.write(f.find((x) => x.name.endsWith('SlicerDSpaceSetup.py')).data);\n"
         )
-        py_src = subprocess.run([node_bin, "-e", node_script, str(js_path)], capture_output=True, text=True, check=True).stdout
+        py_src = subprocess.run([node_bin, "-e", node_script, str(js_path)], capture_output=True, text=True, encoding="utf-8", check=True).stdout
 
         qt_stub = types.ModuleType("qt")
         slm_stub = types.ModuleType("slicer.ScriptedLoadableModule")

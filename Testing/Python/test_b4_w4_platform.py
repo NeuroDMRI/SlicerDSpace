@@ -178,7 +178,8 @@ def _js_payload(target_os: str = "linux") -> str:
         raise unittest.SkipTest("node is not installed in PATH")
     code = ("const ic = require(process.argv[1]);"
             "process.stdout.write(ic.buildScript({ os: '%s' }));" % target_os)
-    out = subprocess.run([node, "-e", code, str(JS_PATH)], capture_output=True, text=True, check=True).stdout
+    out = subprocess.run([node, "-e", code, str(JS_PATH)], capture_output=True, text=True, encoding="utf-8",
+                         check=True).stdout
     return _extract_payload(out)
 
 

@@ -11,6 +11,7 @@ Slicer so it can be unit tested with the plain Python test runner.
 from __future__ import annotations
 
 import json
+import math
 import os
 from collections import deque
 from dataclasses import dataclass, field
@@ -582,7 +583,12 @@ def parse_hidden_runs(value: Any) -> dict[str, Optional[float]]:
         if stamp is None:
             hidden[key] = None
         elif isinstance(stamp, (int, float)) and not isinstance(stamp, bool):
-            hidden[key] = float(stamp)
+            try:
+                value = float(stamp)
+            except (OverflowError, ValueError):
+                continue  # a 400-digit integer: the broken entry reads as absent
+            if math.isfinite(value):
+                hidden[key] = value
     return hidden
 
 

@@ -1578,6 +1578,148 @@ class HideAndClearTest(unittest.TestCase):
                             ui_run_history._results_icon_svg("list", dark=True))
 
 
+class B2FixResultsTest(unittest.TestCase):
+    """Fix round, lane results: items R1 to R5 (live batch key, running batch protection, language refresh, icons)."""
+
+    STARTED = "2026-11-10T00:00:00Z"
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.root = Path(self._tmp.name)
+        self.settings = FakeSettings()
+
+    harness = HideAndClearTest.harness
+    subject_item = HideAndClearTest.subject_item
+    remove_action = HideAndClearTest.remove_action
+    remove_via_menu = HideAndClearTest.remove_via_menu
+    header_menu = HideAndClearTest.header_menu
+    clear = HideAndClearTest.clear
+
+    def stored(self) -> dict:
+        return json.loads(self.settings.store["SlicerDSpace/UserSettings/resultsHiddenRuns"])
+
+    def campaign_record(self, status: str = "completed"):
+        path = self.root / "campaign" / "experiments.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({
+            "kind": "slicerdsurfer_batch_run", "version": 1, "run_name": "camp", "experiment": True,
+            "status": status, "subjects": [{}, {}], "ended_at": "2026-11-01T10:00:00Z"}), encoding="utf-8")
+        return parse_run_manifest(path)
+
+    def start_batch(self, h: Harness, **context) -> None:
+        h.owner._backgroundRunContext = {"subject_id": "batch", "batch_size": 2, "started_at": self.STARTED, **context}
+        ui_run_history.set_run_state(h.owner, "running")
+
+    def test_b2fix_results_R1_a_running_campaign_is_not_cleared_nor_removable(self) -> None:
+        # The campaign record is "completed" with an old stamp here, so only the live key can protect it.
+        camp = self.campaign_record()
+        old = make_manifest(self.root, "sub1", "runA", "2026-11-01T10:00:00Z", [("microstructure.fa", "/x/fa")])
+        h = self.harness([camp, old])
+        h.owner._backgroundManifestPath = camp.manifest_path
+        h.owner._backgroundRunContext = {"subject_id": "sub1", "run_name": "r", "targets": [],
+                                         "experiment_manifest_path": str(camp.manifest_path)}
+        ui_run_history.set_run_state(h.owner, "running")
+        self.assertEqual(ui_run_history.run_record_key(camp).split("\t")[0], "batch")
+        self.clear(h)
+        self.assertEqual(h.owner._runHistoryRecords, (camp,))
+        self.assertNotIn(ui_run_history.run_record_key(camp), self.stored())
+        batch_item = next(item for item in h.tree.items if "batch" in item.text(0))
+        action = self.remove_action(self.remove_via_menu(h, batch_item))
+        self.assertFalse(action.enabled)
+        self.assertEqual(h.owner._runHistoryRecords, (camp,))
+
+    def test_b2fix_results_R1_the_filter_shows_a_running_campaign_that_an_older_hide_holds(self) -> None:
+        camp = self.campaign_record()
+        key = ui_run_history.run_record_key(camp)
+        self.settings.store["SlicerDSpace/UserSettings/resultsHiddenRuns"] = json.dumps({key: 9e12})
+        h = self.harness()
+        h.owner._backgroundManifestPath = camp.manifest_path
+        h.owner._backgroundRunContext = {"subject_id": "sub1", "run_name": "r", "targets": [],
+                                         "experiment_manifest_path": str(camp.manifest_path)}
+        ui_run_history.set_run_state(h.owner, "running")
+        h.refresh([camp])
+        self.assertEqual(h.owner._runHistoryRecords, (camp,))
+
+    def batch_runs(self):
+        old = make_manifest(self.root, "sub1", "runA", "2026-11-01T10:00:00Z", [("microstructure.fa", "/x/fa")])
+        live = make_manifest(self.root, "sub2", "runA", "2026-11-01T10:00:00Z", [("microstructure.fa", "/y/fa")],
+                             status="running")  # in progress: its own stamp is old, its status says running
+        done = make_manifest(self.root, "sub3", "runA", "2026-11-10T00:05:00Z", [("microstructure.fa", "/z/fa")])
+        return old, live, done
+
+    def test_b2fix_results_R2_clear_during_a_gui_batch_keeps_the_runs_of_the_batch(self) -> None:
+        old, live, done = self.batch_runs()
+        h = self.harness([done, live, old])
+        self.start_batch(h)
+        self.clear(h)
+        self.assertEqual(h.owner._runHistoryRecords, (done, live))  # running by status, finished by stamp
+        self.assertEqual(list(self.stored()), [ui_run_history.run_record_key(old)])
+        self.assertEqual([label.split(" · ")[0] for label in sorted(h.labels())], ["sub2", "sub3"])
+
+    def test_b2fix_results_R2_remove_during_a_gui_batch_is_refused_for_a_run_of_the_batch(self) -> None:
+        old, live, done = self.batch_runs()
+        h = self.harness([done, live, old])
+        self.start_batch(h)
+        for subject in ("sub2", "sub3"):
+            action = self.remove_action(self.remove_via_menu(h, self.subject_item(h, subject)))
+            self.assertFalse(action.enabled, subject)
+        self.assertEqual(h.owner._runHistoryRecords, (done, live, old))
+        action = self.remove_action(self.remove_via_menu(h, self.subject_item(h, "sub1")))
+        self.assertTrue(action.enabled)  # an older run of the same job is not protected
+        self.assertEqual(h.owner._runHistoryRecords, (done, live))
+
+    def test_b2fix_results_R2_the_filter_shows_a_batch_run_that_an_older_hide_holds(self) -> None:
+        old, live, done = self.batch_runs()
+        hidden = {ui_run_history.run_record_key(record): 9e12 for record in (old, live, done)}
+        self.settings.store["SlicerDSpace/UserSettings/resultsHiddenRuns"] = json.dumps(hidden)
+        h = self.harness()
+        self.start_batch(h)
+        h.refresh([done, live, old])
+        self.assertEqual(h.owner._runHistoryRecords, (done, live))
+
+    def test_b2fix_results_R2_nothing_is_protected_when_no_job_runs(self) -> None:
+        old, live, done = self.batch_runs()
+        h = self.harness([done, live, old])
+        h.owner._backgroundRunContext = {"subject_id": "batch", "batch_size": 2, "started_at": self.STARTED}
+        self.clear(h)
+        self.assertEqual(h.owner._runHistoryRecords, ())
+
+    def test_b2fix_results_R4_a_language_switch_keeps_the_count_and_renames_the_row_buttons(self) -> None:
+        from shared.ui_onboarding import apply_onboarding_language
+
+        a1 = make_manifest(self.root, "sub1", "runA", "2026-11-01T10:00:00Z", [("microstructure.fa", "/x/fa")])
+        h = self.harness([a1])
+        self.clear(h)
+        button = h.widget("resultsShowHiddenButton")
+        self.assertEqual(button.setText.call_args[0][0], "Show hidden results (1)")
+        apply_onboarding_language(h.owner, "zh")
+        self.assertEqual(button.setText.call_args[0][0], "显示已隐藏的结果（1）")
+        apply_onboarding_language(h.owner, "en")
+        self.assertEqual(button.setText.call_args[0][0], "Show hidden results (1)")
+        h.click("resultsShowHiddenButton")
+        subject = self.subject_item(h, "sub1")
+        self.assertEqual(subject.tooltips[1], "Open folder")
+        calls = h.slicer.util.showStatusMessage.call_count
+        with mock.patch.object(ui_run_history, "discover_runs", side_effect=AssertionError("rescan")):
+            apply_onboarding_language(h.owner, "zh")
+        self.assertIs(self.subject_item(h, "sub1"), subject)  # no rebuild of the tree
+        self.assertEqual(subject.tooltips[1], "打开文件夹")
+        self.assertEqual(subject.data(1, h.qt.Qt.AccessibleTextRole), "打开文件夹")
+        self.assertEqual(h.widget("resultsHideAllButton").setAccessibleName.call_args[0][0], "关闭所有显示")
+        self.assertEqual(h.slicer.util.showStatusMessage.call_count, calls)
+
+    def test_b2fix_results_R5_a_theme_change_gives_the_folder_icon_only_to_rows_with_a_folder(self) -> None:
+        a1 = make_manifest(self.root, "sub1", "runA", "2026-11-01T10:00:00Z", [("microstructure.fa", "/x/fa")])
+        h = self.harness([a1])
+        subject = self.subject_item(h, "sub1")
+        family_row = FakeItem(h.tree, ["Tractography (1)"])  # the flat fallback tree: a family row at the top level
+        subject.icons.clear()
+        ui_run_history._refresh_folder_icons(h.owner, True)
+        self.assertIsNotNone(subject.icons.get(1))
+        self.assertNotIn(1, family_row.icons)
+
+
 class OpenFolderTest(unittest.TestCase):
     """Batch 2 add-on: the Subject ID row has an "Open folder" button at its right end (column 1, like the eye)."""
 

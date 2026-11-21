@@ -515,6 +515,26 @@ def _solve_mppca_batch_torch(
     return xest, this_theta, this_var
 
 
+# CPU MP-PCA patch batch per worker, sized by bytes like the CUDA path (``_mppca_cuda``).
+# Measured 2026-11-22 in Slicer's x86_64 (Rosetta, OpenBLAS Nehalem) PythonSlicer, 8 workers: the
+# former fixed ~2048-patch batch peaked at 12.7 GB RSS / 50 s at 288 volumes (145x32x14 slab) and
+# 9.9 GB / 33-36 s at 100 volumes (64x64x32), because every worker holds about six
+# (batch, 125, volumes) arrays. Batches of about 140-240 patches gave 3.0 GB / 28-29 s and
+# 2.1 GB / 28.5-29 s; no smaller batch was slower. 192 MiB gives 268 patches at <= 125 volumes and
+# 116 at 288. The batch is cut in whole x-rows of patch centres, so one call holds at least one row
+# (``nx_c`` patches) even when that exceeds the budget. Only the float32 accumulation order changes.
+MPPCA_CPU_BATCH_BYTES = 192 * MIB
+_MPPCA_CPU_MIN_PATCH_BATCH = 64
+_MPPCA_CPU_MAX_PATCH_BATCH = 2048  # the former fixed batch; no input gets a larger batch than before
+
+
+def _mppca_cpu_patch_batch(dim: int, num_samples: int) -> int:
+    """Patches per CPU solver call for ``dim`` volumes and ``num_samples`` voxels per patch."""
+    per_patch_bytes = max(1, int(num_samples)) * max(int(dim), int(num_samples), 1) * 8 * 6
+    batch = MPPCA_CPU_BATCH_BYTES // per_patch_bytes
+    return int(max(_MPPCA_CPU_MIN_PATCH_BATCH, min(_MPPCA_CPU_MAX_PATCH_BATCH, batch)))
+
+
 def _mppca_cpu(
     arr: np.ndarray,
     *,
@@ -525,7 +545,9 @@ def _mppca_cpu(
     calc_dtype: np.dtype,
     out_dtype: np.dtype,
     max_workers: Optional[int] = None,
+    patch_batch: Optional[int] = None,
 ):
+    """CPU MP-PCA. ``patch_batch`` is internal (tests): None = byte-budgeted batch, int = fixed patches per call."""
     sx, sy, sz, dim = arr.shape
     px, py, pz = 2 * rx + 1, 2 * ry + 1, 2 * rz + 1
     num_samples = px * py * pz
@@ -537,8 +559,10 @@ def _mppca_cpu(
 
     n_workers = max(1, int(max_workers if max_workers is not None else effective_cpu_threads(None, default=8)))
     n_workers = min(n_workers, nz_c, 16)
-    # Keep per-worker memory small for modest 8-16 GiB RAM machines.
-    ny_step = max(1, min(ny_c, max(1, 2048 // max(1, nx_c))))
+    # Per-worker patch batch from the byte budget (MPPCA_CPU_BATCH_BYTES), in whole x-rows.
+    if patch_batch is None:
+        patch_batch = _mppca_cpu_patch_batch(dim, num_samples)
+    ny_step = max(1, min(ny_c, max(1, int(patch_batch) // max(1, nx_c))))
 
     try:
         from threadpoolctl import threadpool_limits

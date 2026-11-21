@@ -246,5 +246,102 @@ class AcceleratedNumericsParityTests(unittest.TestCase):
             np.testing.assert_allclose(sl_ram._data, sl_slab._data, rtol=0, atol=1e-6)
 
 
+def _b2_mppca_noise_background_volume(shape, dim, seed):
+    """Low-rank DWI-like signal in an ellipsoid, Rician noise everywhere (no zeroed background)."""
+    rng = np.random.default_rng(seed)
+    sx, sy, sz = shape
+    x, y, z = np.meshgrid(np.linspace(-1, 1, sx), np.linspace(-1, 1, sy), np.linspace(-1, 1, sz), indexing="ij")
+    brain = (x ** 2 / 0.8 + y ** 2 / 0.8 + z ** 2 / 0.9) < 1
+    comps = np.stack([np.ones_like(x), x, y, z, x * y, np.sin(3 * x) * np.cos(2 * z)], -1)
+    prof = np.abs(rng.normal(size=(6, dim)))
+    prof[0] = 1.0
+    sig = 800.0 * (comps @ (prof * np.array([1.0, 0.3, 0.3, 0.3, 0.2, 0.2])[:, None]))
+    sig[..., 0] = 1500.0
+    sig *= brain[..., None]
+    n1 = rng.normal(scale=20.0, size=sig.shape)
+    n2 = rng.normal(scale=20.0, size=sig.shape)
+    return np.sqrt((sig + n1) ** 2 + n2 ** 2).astype(np.float32)
+
+
+class MppcaCpuBatchSizingTests(unittest.TestCase):
+    """Batch 2 request "MPPCA is very slow on Mac": byte-budgeted CPU patch batch, results unchanged."""
+
+    def test_b2_mppca_cpu_solver_batch_bounded_at_high_volume_count(self):
+        # Before the fix the CPU batch was a fixed ~2048 patches (here all 26 rows = 520 patches at 288
+        # volumes); the per-call working set then reached GBs per worker on real 288-volume scans.
+        import preprocessing.dipy_accel as da
+
+        seen: list[int] = []
+        orig = da._solve_mppca_batch_numpy
+
+        def spy(patches, **kwargs):
+            seen.append(int(patches.shape[0]))
+            return orig(patches, **kwargs)
+
+        rng = np.random.default_rng(5)
+        vol = (100.0 + 15.0 * rng.standard_normal((24, 30, 5, 288))).astype(np.float32)
+        with patch.object(da, "_solve_mppca_batch_numpy", side_effect=spy):
+            da.mppca_accelerated(vol, patch_radius=2, device="cpu", max_workers=1)
+        self.assertTrue(seen)
+        nx_c = 24 - 4
+        # 192 MiB per-worker budget / (125 samples * 288 volumes * 8 B * 6 arrays) = 116 patches -> 5 rows of 20.
+        self.assertLessEqual(max(seen), 116)
+        self.assertEqual(max(seen) % nx_c, 0)
+
+    def test_b2_mppca_cpu_patch_batch_monotone_and_bounded(self):
+        from preprocessing.dipy_accel import (
+            _MPPCA_CPU_MAX_PATCH_BATCH,
+            _MPPCA_CPU_MIN_PATCH_BATCH,
+            MPPCA_CPU_BATCH_BYTES,
+            _mppca_cpu_patch_batch,
+        )
+
+        self.assertEqual(_MPPCA_CPU_MAX_PATCH_BATCH, 2048)
+        self.assertGreater(_MPPCA_CPU_MIN_PATCH_BATCH, 0)
+        self.assertGreater(MPPCA_CPU_BATCH_BYTES, 0)
+        dims = [1, 2, 6, 12, 31, 64, 100, 125, 126, 150, 200, 288, 500, 1000, 5000, 100000]
+        for num_samples in (27, 125):
+            sizes = [_mppca_cpu_patch_batch(d, num_samples) for d in dims]
+            for d, n in zip(dims, sizes):
+                self.assertIsInstance(n, int)
+                self.assertGreaterEqual(n, _MPPCA_CPU_MIN_PATCH_BATCH, (d, num_samples))
+                self.assertLessEqual(n, _MPPCA_CPU_MAX_PATCH_BATCH, (d, num_samples))
+            for a, b in zip(sizes, sizes[1:]):
+                self.assertGreaterEqual(a, b, (num_samples, sizes))
+        # Values the report quotes (5x5x5 patch): 31 and 100 volumes -> 268, 288 volumes -> 116.
+        self.assertEqual(_mppca_cpu_patch_batch(31, 125), 268)
+        self.assertEqual(_mppca_cpu_patch_batch(100, 125), 268)
+        self.assertEqual(_mppca_cpu_patch_batch(288, 125), 116)
+        self.assertEqual(_mppca_cpu_patch_batch(100000, 125), _MPPCA_CPU_MIN_PATCH_BATCH)
+
+    def test_b2_mppca_cpu_new_batch_matches_old_batch_rule(self):
+        # Same input, same max_workers: the old fixed 2048-patch rule versus the byte-budgeted batch.
+        # Only the float32 accumulation order may change (decision 2 tolerance 5e-6 of the max signal).
+        from preprocessing.dipy_accel import _mppca_cpu, _mppca_cpu_patch_batch, mppca_accelerated
+
+        shape = (64, 12, 7)
+        nx_c, ny_c = shape[0] - 4, shape[1] - 4
+        for dim in (31, 150):
+            with self.subTest(dim=dim):
+                old_rows = min(ny_c, 2048 // nx_c)
+                new_rows = _mppca_cpu_patch_batch(dim, 125) // nx_c
+                self.assertEqual(old_rows, ny_c)
+                self.assertLess(new_rows, ny_c)  # the y-chunking really differs
+                vol = _b2_mppca_noise_background_volume(shape, dim, seed=11 + dim)
+                self.assertGreater(float(vol[0, 0, 0].min()), 0.0)  # noise background, not zeroed
+                old_den, old_sig = _mppca_cpu(
+                    vol, rx=2, ry=2, rz=2, return_sigma=True, calc_dtype=np.dtype(np.float32),
+                    out_dtype=vol.dtype, max_workers=2, patch_batch=2048,
+                )
+                new_den, new_sig = mppca_accelerated(vol, patch_radius=2, return_sigma=True, device="cpu", max_workers=2)
+                self.assertEqual(new_den.dtype, old_den.dtype)
+                self.assertEqual(new_sig.dtype, old_sig.dtype)
+                sig_max = float(np.abs(vol).max())
+                den_rel = float(np.abs(new_den.astype(np.float64) - old_den).max()) / sig_max
+                sigma_rel = float(np.abs(new_sig.astype(np.float64) - old_sig).max()) / float(np.abs(old_sig).max())
+                self.assertLessEqual(den_rel, 5e-6)
+                self.assertLessEqual(sigma_rel, 5e-6)
+
+
 if __name__ == "__main__":
     unittest.main()

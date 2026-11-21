@@ -228,6 +228,63 @@ class PopupApplyTest(unittest.TestCase):
         self.dialog.installEventFilter.assert_called_once()
         self.dialog.removeEventFilter.assert_called_once_with(self.dialog.installEventFilter.call_args.args[0])
 
+    def test_b2fix_source_S8_outside_click_on_an_unchanged_popup_discards(self):
+        """Looking at a popup never turns a family on: no tick or staged value changed, so the close passes through
+        to the old reject route (no accept, no commit, no install prompt)."""
+
+        seen = []
+
+        def scenario(flt, dialog):
+            event = _Event()
+            seen.append((flt.eventFilter(dialog, event), event.ignored))
+
+        self.assertFalse(self.node.targetTractography)
+        with self._spy_commit() as commit:
+            accepted = self._run("tractography", scenario, chosen=("csd_act",))  # the boxes as they opened
+        self.assertFalse(accepted)
+        self.assertEqual(seen, [(False, 0)])
+        commit.assert_not_called()
+        self.dialog.accept.assert_not_called()
+        self.assertFalse(self.node.targetTractography)
+
+    def test_b2fix_source_S8_outside_click_commits_a_changed_staged_value_with_unchanged_boxes(self):
+        value = {"text": "{}"}
+
+        def staged_ukf(layout, node, zh):
+            return lambda: value["text"]
+
+        def scenario(flt, dialog):
+            value["text"] = '{"seedsPerVoxel": 2}'
+            flt.eventFilter(dialog, _Event())
+
+        with mock.patch("shared.ui_ukf.add_staged_ukf_fields", staged_ukf), self._spy_commit() as commit:
+            accepted = self._run("tractography", scenario, chosen=("csd_act",))
+        self.assertTrue(accepted)
+        commit.assert_called_once()
+        self.assertEqual(self.node.ukfParameters, '{"seedsPerVoxel": 2}')
+
+    def test_b2fix_source_S8_a_staged_value_that_cannot_be_read_counts_as_changed(self):
+        """A getter that raises (at open and at the click) does not crash the popup; the click takes the Apply route,
+        which refuses and shows the error, as the Apply button does."""
+
+        def staged_ukf(layout, node, zh):
+            def read():
+                raise ValueError("UKF value out of range")
+            return read
+
+        seen = {}
+
+        def scenario(flt, dialog):
+            event = _Event()
+            seen["outside"] = (flt.eventFilter(dialog, event), event.ignored, dialog.accept.call_count)
+            seen["note"] = by_name(self.qt, "algorithmPickerNote").setText.call_args.args[0]
+
+        with mock.patch("shared.ui_ukf.add_staged_ukf_fields", staged_ukf), self._spy_commit() as commit:
+            accepted = self._run("tractography", scenario, chosen=("csd_act",))
+        self.assertFalse(accepted)
+        self.assertEqual(seen, {"outside": (True, 1, 0), "note": "UKF value out of range"})
+        commit.assert_not_called()
+
     def test_b2_every_family_gets_the_outside_click_rule(self):
         """The anatomical-priors popup and the family pickers share this function and the same rule."""
 

@@ -92,6 +92,34 @@ def make_request(*, base_args, subject_root, subject_id, output_root, run_name, 
                 jobs=int(jobs), options=parameter_args(options), variants=variants_from_json(variants))
 
 
+def _merge_bundle_sources(*groups):
+    """Join argument lists; ``--bundle-source`` values merge per algorithm (fix S6).
+
+    Baseline, common options and variant options are merged in that order: a later value replaces an earlier one
+    for the same algorithm, ``auto`` (and ``wma=ukf``) resets it, other algorithms keep their values. Each list keeps
+    the CLI's own checks. The merged explicit values are appended once at the end.
+    """
+
+    from shared.bundle_sources import cli_tokens, normalize_bundle_sources, source_assignments
+    merged, kept = {}, []
+    for group in groups:
+        values, index = [], 0
+        while index < len(group):
+            token = group[index]
+            if token == '--bundle-source' and index + 1 < len(group):
+                values.append(group[index + 1])
+                index += 2
+                continue
+            if token.startswith('--bundle-source='):
+                values.append(token.split('=', 1)[1])
+            else:
+                kept.append(token)
+            index += 1
+        normalize_bundle_sources(values, strict=True)
+        merged.update(source_assignments(values, strict=True))
+    return [*kept, *cli_tokens(merged)]
+
+
 def compile_plan(request, *, python_executable, pipeline_script):
     from scripts.run_batch_pipeline import BatchSubject, discover_subjects
     if request.get('kind') != 'slicerddsurfer_experiment_request' or request.get('version') != 1:
@@ -146,7 +174,7 @@ def compile_plan(request, *, python_executable, pipeline_script):
     # Parameters are shared across subjects. Validate each variant once, before
     # materialising paths, instead of rebuilding the parser for every job.
     for variant in variants:
-        args = [*base, *options, *variant['args'], '--no-user-config', '--strict-environment']
+        args = [*_merge_bundle_sources(base, options, variant['args']), '--no-user-config', '--strict-environment']
         resolved = parse_cli(args)
         targets = resolve_analysis_options(resolved, explicit_dests=explicit_cli_destinations(cli_parser(), args))
         if resolved.select_streamlines < 1 or resolved.dti_min_length_mm < 0 or resolved.dti_max_length_mm <= resolved.dti_min_length_mm:

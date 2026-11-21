@@ -706,8 +706,9 @@ def _wma_on_selected_source(config: ProductOrchestratorConfig) -> bool:
     from shared.bundle_sources import explicit_sources
     source = explicit_sources(config.bundle_sources).get("wma")
     primary = _primary_tractography_backend(config)
+    # R4 (fix S5): a SAF run is never a WMA source, also in single-backend dispatch.
     return (bool(source) and config.wma_input_tractography is None and primary != "ukf"
-            and source in {"all", primary})
+            and config.tractography_backend != "saf" and source in {"all", primary})
 
 
 def _ukf_raw(config, inputs):

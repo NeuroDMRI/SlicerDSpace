@@ -88,6 +88,66 @@ def _repolish_widget_tree(root_widget: Any) -> None:
         pass
 
 
+def _pin_log_tail(scrollbar: Any, following: bool, position: int) -> None:
+    """Set the vertical log position after an insertion; never touch the horizontal bar.
+
+    The log must not call ensureCursorVisible, moveCursor or setTextCursor: those scroll the
+    view to the end of the last line (far right for a long line) and follow a clicked line.
+    """
+
+    if not following:
+        scrollbar.setValue(position)
+        return
+    scrollbar.setValue(scrollbar.maximum)
+
+    def repin() -> None:
+        # The horizontal bar that appears with the first long line adds one line to the vertical range.
+        try:
+            if scrollbar.value >= scrollbar.maximum - 1:
+                scrollbar.setValue(scrollbar.maximum)
+        except Exception:
+            pass  # The widget may be gone by the time the timer fires.
+
+    try:
+        import qt
+
+        qt.QTimer.singleShot(0, repin)
+    except Exception:
+        pass  # No event loop (unit tests): the pinned value above is enough.
+
+
+def repaint_log_widget(log_widget: Any, *, dark: bool) -> None:
+    """Re-render the existing log lines in the Day/Night colours.
+
+    The vertical rule is the one of append_log. The horizontal position is kept.
+    """
+
+    try:
+        existing_text = str(log_widget.toPlainText() or "")
+        if existing_text:
+            scrollbar = log_widget.verticalScrollBar()
+            position = scrollbar.value if scrollbar is not None else 0
+            following = scrollbar is not None and position >= scrollbar.maximum - 1
+            hbar = getattr(log_widget, "horizontalScrollBar", None)
+            hbar = hbar() if callable(hbar) else None
+            hposition = hbar.value if hbar is not None else 0
+            lines = existing_text.splitlines()
+            log_widget.clear()
+            if all(lines):
+                log_widget.appendHtml(
+                    "".join(f'<p style="margin:0">{log_line_html(line, dark=dark)}</p>' for line in lines)
+                )
+            else:
+                for line in lines:
+                    log_widget.appendHtml(log_line_html(line, dark=dark))
+            if scrollbar is not None:
+                _pin_log_tail(scrollbar, following, position)
+            if hbar is not None:
+                hbar.setValue(hposition)
+    except Exception:
+        pass
+
+
 def apply_widget_styles(owner: Any) -> None:
     """Apply Light/Dark SlicerDSpace styles across the main widget and all sub-panels."""
 
@@ -206,24 +266,7 @@ def apply_widget_styles(owner: Any) -> None:
                     pass
         log_widget = getattr(ui, "logPlainTextEdit", None) if ui is not None else None
         if log_widget is not None:
-            try:
-                existing_text = str(log_widget.toPlainText() or "")
-                if existing_text:
-                    scrollbar = log_widget.verticalScrollBar()
-                    position = scrollbar.value if scrollbar is not None else 0
-                    lines = existing_text.splitlines()
-                    log_widget.clear()
-                    if all(lines):
-                        log_widget.appendHtml(
-                            "".join(f'<p style="margin:0">{log_line_html(line, dark=dark)}</p>' for line in lines)
-                        )
-                    else:
-                        for line in lines:
-                            log_widget.appendHtml(log_line_html(line, dark=dark))
-                    if scrollbar is not None:
-                        scrollbar.setValue(position)
-            except Exception:
-                pass
+            repaint_log_widget(log_widget, dark=dark)
     env_fn = getattr(owner, "_update_environment_result_label", None)
     if callable(env_fn):
         try:
@@ -438,10 +481,7 @@ def append_log(owner: Any, text: str) -> None:
         owner._logAppendCount = int(getattr(owner, "_logAppendCount", 0) or 0) + 1
         if owner._logAppendCount % 100 == 0:
             owner._trim_log_widget(owner.ui.logPlainTextEdit)
-        if following:
-            log_widget.ensureCursorVisible()
-        else:
-            scrollbar.setValue(position)
+        _pin_log_tail(scrollbar, following, position)
     if text.startswith("[Orchestrator] Running "):
         owner._set_run_progress_message(text.replace("[Orchestrator] ", "", 1))
     now = monotonic()

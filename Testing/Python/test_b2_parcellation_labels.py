@@ -242,6 +242,7 @@ class _Node:
         self.color_id = None
         self.visible = True
         self.CreateClosedSurfaceRepresentation = Mock()  # must stay uncalled: no 3D surface build on load
+        self.ras_bounds = (139.0, 219.0, -131.0, -71.0, 105.0, 153.0)  # an off-origin node (b2fix D2)
 
     def _set_color(self, identity):
         self.color_id = identity
@@ -274,6 +275,9 @@ class _Node:
 
     def GetDisplayNode(self):
         return self.display
+
+    def GetRASBounds(self, bounds):
+        bounds[:] = self.ras_bounds
 
     def CreateDefaultDisplayNodes(self):
         pass
@@ -458,6 +462,23 @@ class SegmentationLoaderTest(unittest.TestCase):
                 self.logic.loadKeyResultsFromManifest(self.manifest_path, mode="replace")
                 self._assert_segmentation(color_from=str(FREESURFER_LUT))
 
+    def test_b2fix_display_D3_unreadable_ctbl_falls_back_to_the_freesurfer_table(self) -> None:
+        """D3: slicer.util.loadColorTable raises on a bad .ctbl; the parcellation must still load with the FreeSurfer table."""
+        from shared.result_scene import FREESURFER_LUT
+
+        self.manifest_path = self._manifest()
+        real_load = self.fake.util.loadColorTable
+
+        def load_color(path):
+            if str(path).endswith(".ctbl"):
+                raise RuntimeError("Could not load color table from " + str(path))
+            return real_load(path)
+
+        self.fake.util.loadColorTable = load_color
+        result = self.logic.loadKeyResultsFromManifest(self.manifest_path, mode="replace")
+        self.assertFalse([item for item in result["skipped"] if item.get("path") == str(self.parcellation)])
+        self._assert_segmentation(color_from=str(FREESURFER_LUT))
+
     def test_b2_parcellation_failed_import_removes_the_temporary_labelmap(self) -> None:
         self.manifest_path = self._manifest()
         self.import_result = RuntimeError("import failed")
@@ -484,6 +505,70 @@ class SegmentationLoaderTest(unittest.TestCase):
         ddseg = self._nodes_for(self.ddseg)[0]
         self.assertEqual(result["view_node_ids"].get("label"), ddseg.GetID())
         self.assertNotIn(segmentation.GetID(), result["view_node_ids"].values())
+
+    def _slice_node(self, width=600, height=400):
+        """A fake axial slice view: identity SliceToRAS, a field of view that does not show the segmentation."""
+        matrix = SimpleNamespace(GetElement=lambda row, column: 1.0 if row == column else 0.0)
+        return SimpleNamespace(GetDimensions=lambda: (width, height, 1), GetSliceToRAS=lambda: matrix,
+                               GetFieldOfView=lambda: (250.0, 250.0, 1.0), SetFieldOfView=Mock())
+
+    def _fake_slice_views(self, slice_node):
+        original = self.fake.util.getNodesByClass
+        self.fake.util.getNodesByClass = lambda kind: [slice_node] if kind == "vtkMRMLSliceNode" else original(kind)
+        self.fake.vtkMRMLSliceNode = SimpleNamespace(JumpAllSlices=Mock(), CenteredJumpSlice=1)
+
+    def _parcellation_only_manifest(self):
+        path = self._manifest()
+        manifest = json.loads(path.read_text())
+        manifest["tasks"] = [task for task in manifest["tasks"] if task["name"] == "parcellation.ddparcel"]
+        path.write_text(json.dumps(manifest))
+        return path
+
+    def test_b2fix_display_D2_segmentation_only_result_fits_and_centres_the_slice_views(self) -> None:
+        """D2: a result with only DDParcel has no volume layer; the slice views must still show the segmentation."""
+        slice_node = self._slice_node()
+        self._fake_slice_views(slice_node)
+        self.manifest_path = self._parcellation_only_manifest()
+        result = self.logic.loadKeyResultsFromManifest(self.manifest_path, automatic=True)
+        segmentation = self._nodes_for(self.parcellation)[0]
+        self.assertEqual(result["view_node_ids"], {})  # the segmentation never becomes a volume layer
+        self.fake.vtkMRMLSliceNode.JumpAllSlices.assert_called_once_with(self.scene, 179.0, -101.0, 129.0, 1)
+        (fov_x, fov_y, fov_z), = [call.args for call in slice_node.SetFieldOfView.call_args_list]
+        self.assertGreaterEqual(fov_x, 80.0)  # the 80 x 60 mm in-plane extent fits ...
+        self.assertGreaterEqual(fov_y, 60.0)
+        self.assertLess(fov_x, 3 * 80.0)  # ... and the view is zoomed to it, not left at 250 mm
+        self.assertAlmostEqual(fov_x / fov_y, 600 / 400)
+        self.assertEqual(fov_z, 1.0)
+        self.assertIs(self._nodes_for(self.parcellation)[0], segmentation)
+
+    def test_b2fix_display_D2_a_label_volume_still_decides_the_fit_when_there_is_one(self) -> None:
+        slice_node = self._slice_node()
+        self._fake_slice_views(slice_node)
+        self.manifest_path = self._manifest()
+        self.logic.loadKeyResultsFromManifest(self.manifest_path, automatic=True)
+        slice_node.SetFieldOfView.assert_not_called()  # a volume layer is fitted by resetSliceViews, as before
+
+    def test_b2fix_display_D4_automatic_ddseg_view_hides_the_parcellation_in_2d(self) -> None:
+        """D4: with a DDSeg label layer shown, the automatic path loads DDParcel but leaves its 2D display off."""
+        self.manifest_path = self._manifest()
+        self.logic.loadKeyResultsFromManifest(self.manifest_path, automatic=True)
+        segmentation = self._nodes_for(self.parcellation)[0]
+        segmentation.display.SetVisibility2D.assert_called_once_with(False)
+        self.assertTrue(segmentation.GetDisplayVisibility())  # loaded and listed as shown in Results
+
+    def test_b2fix_display_D4_without_ddseg_or_by_hand_the_parcellation_shows_in_2d(self) -> None:
+        for case in ("no ddseg", "manual"):
+            with self.subTest(case=case):
+                self.scene.nodes.clear()
+                self.manifest_path = self._manifest()
+                if case == "no ddseg":
+                    data = json.loads(self.manifest_path.read_text())
+                    data["tasks"] = [task for task in data["tasks"] if task["name"] != "segmentation.ddseg"]
+                    self.manifest_path.write_text(json.dumps(data))
+                self.logic.loadKeyResultsFromManifest(self.manifest_path, automatic=(case == "no ddseg"), mode="replace")
+                segmentation = self._nodes_for(self.parcellation)[0]
+                self.assertNotIn(((False,), {}), [(c.args, c.kwargs) for c in segmentation.display.SetVisibility2D.call_args_list])
+                segmentation.display.SetVisibility2DFill.assert_called_with(True)
 
     def test_b2_parcellation_eye_hides_and_shows_a_segmentation_node(self) -> None:
         from shared.ui_run_history import _toggle_output

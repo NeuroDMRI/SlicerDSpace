@@ -46,11 +46,29 @@ Generic tract models default to RAS; explicit RAS/LPS `SPACE` metadata is
 respected. Streamline/world geometry is not inferred from finite values alone.
 
 Automatic display sets FA/MD grayscale, bounded color scales for fractional
-maps, existing Slicer categorical colors, and surface/bundle colors. Pial
-counterparts are loaded but initially hidden to avoid overlapping white
-surfaces. New scalars initialize a FA-preferred slice background and labels
-initialize an overlay; new models/fibers initialize the 3D camera. Reuse-only
-polls do not reset views or user display choices.
+maps, and surface colors. Pial counterparts are loaded but initially hidden to
+avoid overlapping white surfaces.
+
+Tractography and bundles load as native Slicer model nodes of polylines. Every
+load path (automatic, Results, Load, Replace, Append, SAF) gives the same
+display: opaque lines colored by direction (red left-right, green
+anterior-posterior, blue superior-inferior) with 2D slice intersections. No
+other extension, such as SlicerDMRI, is needed. Slicer then treats the node as
+changed, so the loader removes its storage node: a scene Save never offers to
+rewrite the result file, and the result file stays unchanged.
+
+DDSeg loads as a label map with its named tissue colors. DDParcel loads as a
+named segmentation with 2D fill and outline, no 3D surface, and its region
+names and colors: the run's `.ctbl` when it is not older than the label file,
+else the FreeSurfer table (also when the `.ctbl` cannot be read). In an
+automatic load that also shows DDSeg in the slice views, the DDParcel
+segmentation is loaded with its 2D display off, so the two overlays do not
+cover each other. Loading DDParcel from Results shows it in 2D.
+
+New scalars initialize a FA-preferred slice background and labels initialize an
+overlay. A result with only a segmentation has no volume layer: the slice views
+are centered and zoomed on the segmentation. New models/fibers initialize the
+3D camera. Reuse-only polls do not reset views or user display choices.
 
 Explicitly failed QC is excluded from automatic loading. Recorded `QCState`
 is separate from `HumanReviewState=pending`. Loading is not a claim that a person

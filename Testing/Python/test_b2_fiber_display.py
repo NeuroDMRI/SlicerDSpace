@@ -171,6 +171,7 @@ class _Node:
         self.display = Mock(name="display-" + identity)
         self.polydata = None
         self.default_display_calls = 0
+        self.storage = []  # storage nodes (b2fix D1): the file a Save would write
 
     def GetID(self):
         return self.identity
@@ -202,10 +203,24 @@ class _Node:
     def GetPolyData(self):
         return self.polydata
 
+    def GetNumberOfStorageNodes(self):
+        return len(self.storage)
+
+    def GetNthStorageNode(self, index):
+        return self.storage[index]
+
+
+class _Storage:
+    def __init__(self, path):
+        self.path = path
+
+    def GetFileName(self):
+        return self.path
+
 
 class _Scene:
     def __init__(self):
-        self.nodes, self.next_id = [], 0
+        self.nodes, self.storage_nodes, self.next_id = [], [], 0
 
     def AddNewNodeByClass(self, kind, name=""):
         self.next_id += 1
@@ -217,6 +232,11 @@ class _Scene:
         return kind == "vtkMRMLFiberBundleNode"  # SlicerDMRI is present: the loader must still make a model
 
     def RemoveNode(self, node):
+        if isinstance(node, _Storage):  # removing a storage node drops every node reference to it
+            self.storage_nodes.remove(node)
+            for owner in self.nodes:
+                owner.storage = [item for item in owner.storage if item is not node]
+            return
         self.nodes.remove(node)
 
     def GetNodeByID(self, identity):
@@ -247,6 +267,9 @@ class NativeFiberLoaderTest(unittest.TestCase):
             reader.Update()
             node = self.scene.AddNewNodeByClass("vtkMRMLModelNode", "model")
             node.SetAndObservePolyData(reader.GetOutput())
+            storage = _Storage(path)  # the reader gives the node a storage node that points at the file it read
+            self.scene.storage_nodes.append(storage)
+            node.storage.append(storage)
             return True, node
 
         self.fake = SimpleNamespace(
@@ -351,6 +374,47 @@ class NativeFiberLoaderTest(unittest.TestCase):
                 colors = vtk_to_numpy(bundle_nodes[0].GetPolyData().GetPointData().GetArray(DEC))
                 self.assertEqual({tuple(int(v) for v in row) for row in colors}, {(0, 0, 255)})
                 self._assert_no_slicerdmri()
+
+    def test_b2fix_display_D1_fiber_nodes_are_not_tied_to_the_result_file(self) -> None:
+        """D1: the DEC array makes the poly data differ from the file, so a scene Save must never target the file."""
+        manifest, tract, bundle = self._manifest()
+        for automatic in (False, True):
+            with self.subTest(automatic=automatic):
+                self.scene.nodes.clear()
+                self.scene.storage_nodes.clear()
+                before = {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in (tract, bundle)}
+                self.logic.loadKeyResultsFromManifest(manifest, automatic=automatic, mode="replace")
+                for source in (tract, bundle):
+                    nodes = self._nodes_for(source)
+                    self.assertEqual(len(nodes), 1)
+                    self.assertIsNotNone(nodes[0].GetPolyData().GetPointData().GetArray(DEC))
+                    self.assertEqual(nodes[0].GetNumberOfStorageNodes(), 0, "a Save would offer the result file")
+                self.assertEqual(self.scene.storage_nodes, [], "an orphan storage node stays in the scene")
+                self.assertEqual({path: (path.read_bytes(), path.stat().st_mtime_ns) for path in (tract, bundle)}, before)
+
+    def test_b2fix_display_D1_direct_loader_and_saf_path_also_drop_the_storage_node(self) -> None:
+        source = self.root / "s_saf.vtk"
+        data, _ = _polydata([[(0, 0, 0), (3, 0, 0)]], permute=False)
+        writer = vtk.vtkPolyDataWriter()
+        writer.SetFileName(str(source))
+        writer.SetInputData(data)
+        writer.Write()
+        self.assertTrue(self.logic._load_fiber_bundle_node(source, "s_SAF"))
+        self.assertEqual(self.scene.nodes[-1].GetNumberOfStorageNodes(), 0)
+
+    def test_b2fix_display_D1_a_plain_mesh_keeps_its_storage_node(self) -> None:
+        mesh = self.root / "outputs" / "lh.white.vtk"
+        mesh.parent.mkdir(parents=True)
+        data, _ = _polydata([[(0, 0, 0), (3, 0, 0)]], permute=False)
+        writer = vtk.vtkPolyDataWriter()
+        writer.SetFileName(str(mesh))
+        writer.SetInputData(data)
+        writer.Write()
+        manifest = self.root / "outputs" / "manifest.json"
+        manifest.write_text(json.dumps({"subject_id": "s", "tasks": [
+            {"name": "surface.unit", "status": "completed", "outputs": {"white_lh_vtk": str(mesh)}}]}), encoding="utf-8")
+        self.logic.loadKeyResultsFromManifest(manifest, source_path=mesh)
+        self.assertEqual(self._nodes_for(mesh)[0].GetNumberOfStorageNodes(), 1)  # unchanged data: Save may keep the link
 
     def test_b2_fiber_saf_and_direct_loader_use_the_same_style(self) -> None:
         source = self.root / "s_saf.vtk"

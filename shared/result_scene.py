@@ -519,7 +519,10 @@ def parcellation_color_node(slicer, candidate):
         identity, stamp = "parcellation-table:" + str(Path(table).resolve()), source_stamp(table)
         color = _reused_color_node(slicer, identity, stamp)
         if color is None:
-            color = slicer.util.loadColorTable(str(table))
+            try:
+                color = slicer.util.loadColorTable(str(table))
+            except Exception:  # b2fix D3: Slicer raises on an unreadable .ctbl; the FreeSurfer table below still colours it
+                color = None
             if color is not None:
                 color.SetAttribute(PREFIX + 'LUTSourcePath', identity)
                 color.SetAttribute(PREFIX + 'LUTSourceStamp', stamp)
@@ -626,9 +629,36 @@ def automatic_display_preset(slicer, node, candidate, *, hide_pial=True):
         display.SetVisibility(not (pial and hide_pial))
 
 
+SLICE_FIT_MARGIN = 1.15
+
+
+def fit_slice_views_to_bounds(slicer, bounds):
+    """Centre every slice view on a RAS box and zoom to it: the volume-free counterpart of resetSliceViews.
+
+    The in-plane axes of a slice are the first two columns of its SliceToRAS rotation, so the extent of the box along
+    an axis is the sum of |axis component| * box size. The field of view keeps the aspect ratio of the view.
+    """
+    for node in slicer.util.getNodesByClass("vtkMRMLSliceNode"):
+        width, height = node.GetDimensions()[:2]
+        if width < 1 or height < 1:
+            continue
+        matrix = node.GetSliceToRAS()
+        extent = [sum(abs(matrix.GetElement(row, axis)) * (bounds[2 * row + 1] - bounds[2 * row]) for row in range(3))
+                  for axis in (0, 1)]
+        per_pixel = max(extent[0] * SLICE_FIT_MARGIN / width, extent[1] * SLICE_FIT_MARGIN / height)
+        if per_pixel > 0:
+            node.SetFieldOfView(per_pixel * width, per_pixel * height, node.GetFieldOfView()[2])
+    center = [(bounds[index] + bounds[index + 1]) / 2 for index in (0, 2, 4)]
+    slice_class = getattr(slicer, "vtkMRMLSliceNode", None)
+    if slice_class is not None:
+        slice_class.JumpAllSlices(slicer.mrmlScene, *center, slice_class.CenteredJumpSlice)
+
+
 def show_automatic_results(slicer, entries, *, newly_loaded=None):
     """Initialize views once after new loads, not on every checkpoint reuse."""
-    backgrounds, labels = [], []
+    backgrounds, labels, segmentations = [], [], []
+    new = entries if newly_loaded is None else newly_loaded
+    new_ids = {identity for entry in new for identity in entry.get("node_ids", [])}
     for entry in entries:
         for identity in entry.get("node_ids", []):
             node = slicer.mrmlScene.GetNodeByID(identity)
@@ -643,12 +673,17 @@ def show_automatic_results(slicer, entries, *, newly_loaded=None):
             elif role.startswith("categorical") and node.IsA("vtkMRMLLabelMapVolumeNode"):
                 rank = 0 if entry["product"].startswith("segmentation.") else 2 if role == "categorical:mask" else 1
                 labels.append((rank, identity))
+            elif role.startswith("categorical") and node.IsA("vtkMRMLSegmentationNode") and identity in new_ids:
+                segmentations.append(node)
     view = {}
     if backgrounds:
         view["background"] = sorted(backgrounds)[0][1]
     if labels:
         view["label"] = sorted(labels)[0][1]
-    new = entries if newly_loaded is None else newly_loaded
+        if sorted(labels)[0][0] == 0:
+            # b2fix D4: DDSeg owns the 2D overlay of an automatic load; DDParcel stays loaded with its 2D display off.
+            for node in segmentations:
+                node.GetDisplayNode().SetVisibility2D(False)
     new_volumes = any(entry.get("display_role", "").startswith(("scalar:", "categorical")) for entry in new)
     if new_volumes and view and hasattr(slicer.util, "setSliceViewerLayers"):
         slicer.util.setSliceViewerLayers(**view, **({"labelOpacity": 0.35} if labels else {}))
@@ -663,6 +698,14 @@ def show_automatic_results(slicer, entries, *, newly_loaded=None):
             # Fit/zoom alone may leave off-origin native data outside the
             # coronal/sagittal planes in a fresh scene.
             slice_class.JumpAllSlices(slicer.mrmlScene, *center, slice_class.CenteredJumpSlice)
+    elif segmentations and not view:
+        # b2fix D2: no volume layer to fit; fit and centre the slice views on the new segmentations themselves.
+        boxes = []
+        for node in segmentations:
+            box = [0.0] * 6
+            node.GetRASBounds(box)
+            boxes.append(box)
+        fit_slice_views_to_bounds(slicer, [(min if index % 2 == 0 else max)(box[index] for box in boxes) for index in range(6)])
     if any(entry.get("display_role", "").startswith(("surface:", "bundle:", "tractography")) for entry in new):
         if hasattr(slicer.util, "resetThreeDViews"):
             slicer.util.resetThreeDViews()

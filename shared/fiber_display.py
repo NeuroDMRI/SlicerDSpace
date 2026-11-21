@@ -105,6 +105,26 @@ def add_direction_colors(poly_data: Any) -> Any:
     return array
 
 
+def detach_result_storage(slicer: Any, node: Any) -> int:
+    """Remove the storage nodes of ``node`` from the scene; return how many were removed.
+
+    The DEC array makes the node's poly data differ from the result file it was read from. Slicer then lists the node
+    as modified in the Save dialog with that file as its target, and Python has no way to mark the node as unmodified.
+    A node without a storage node is never written to the result file: a scene Save offers a new file instead.
+    """
+
+    count = getattr(node, "GetNumberOfStorageNodes", None)
+    if count is None:
+        return 0
+    storages = [node.GetNthStorageNode(index) for index in range(int(count()))]
+    removed = 0
+    for storage in storages:
+        if storage is not None:
+            slicer.mrmlScene.RemoveNode(storage)
+            removed += 1
+    return removed
+
+
 def apply_fiber_display(slicer: Any, node: Any, kind: Optional[str]) -> bool:
     """The one fiber style: DEC by direct RGB mapping, opaque lines, 2D slice intersections. No tubes."""
 
@@ -115,6 +135,7 @@ def apply_fiber_display(slicer: Any, node: Any, kind: Optional[str]) -> bool:
     if poly_data is None:
         return False
     add_direction_colors(poly_data)
+    detach_result_storage(slicer, node)  # b2fix D1: a scene Save must not rewrite the published result file
     display = node.GetDisplayNode()
     if display is None and hasattr(node, "CreateDefaultDisplayNodes"):
         node.CreateDefaultDisplayNodes()

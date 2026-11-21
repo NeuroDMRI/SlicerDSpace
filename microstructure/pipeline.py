@@ -447,7 +447,7 @@ NODDI_GRADIENT_FRAME = "fsl-bvecs-in-voxel-axis-frame-flip-x-for-positive-determ
 
 
 def _dwi_determinant_positive(path: Path) -> bool:
-    """det > 0 of the DWI affine; False (the key and inputs as before the fix) when nibabel cannot read the file."""
+    """det > 0 of the DWI affine; True (affected, as in the cache-key pin) when nibabel cannot read the file."""
     from shared import gradient_frame
 
     try:
@@ -455,7 +455,7 @@ def _dwi_determinant_positive(path: Path) -> bool:
 
         affine = nibabel.load(str(path)).affine
     except Exception:
-        return False
+        return True
     return gradient_frame.determinant_positive(affine)
 
 

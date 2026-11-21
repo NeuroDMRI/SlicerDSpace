@@ -343,13 +343,19 @@ def _dwiconvert_gradients_valid(affine):
 
 
 def _input_affine(raw):
+    """The DWI affine; None when nibabel cannot read the file (then affected, as in the cache-key pin)."""
     import nibabel as nib
 
-    return nib.load(str(raw.dwi_path)).affine
+    try:
+        return nib.load(str(raw.dwi_path)).affine
+    except Exception:
+        return None
 
 
 def conversion_policy(affine):
-    return CONVERSION_POLICY_DWICONVERT if _dwiconvert_gradients_valid(affine) else CONVERSION_POLICY_FSL_WORLD
+    if affine is not None and _dwiconvert_gradients_valid(affine):
+        return CONVERSION_POLICY_DWICONVERT
+    return CONVERSION_POLICY_FSL_WORLD
 
 
 def _fsl_gradient_table(raw):

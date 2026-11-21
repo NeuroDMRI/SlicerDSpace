@@ -54,3 +54,9 @@ microstructure maps) are then computed again too.
 UKF, DIPY tracking, DKI, NODDI and NRRD import are computed again only for the
 inputs listed above. The standalone DDSeg DTI feature folder has no cache key:
 delete `DTI/` in its output folder to compute it again.
+The standalone DDParcel module reuses its diffusion headers and tensor files
+when the files exist. For an input listed above, delete the subject output
+folder and the `<subject>-mask.nhdr` file in the subject `T1w/Diffusion/` input
+folder to compute them again. The surface `raw` mode fits the tensor again once
+per subject for every input; for the inputs that do not change, the output is
+the same as before.

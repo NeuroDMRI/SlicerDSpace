@@ -169,7 +169,13 @@ def prepare_convertible_root(
         try:
             saved = json.loads(receipt_path.read_text(encoding="utf-8"))
             if saved.get("kind") == kind and saved.get("signature") == signature:
-                return dest_root
+                if kind != "nrrd":
+                    return dest_root
+                # Gradient frame (batch 2): bvecs imported before the fix from an oblique NRRD are imported again.
+                from shared.input_import import _canonical_targets, _nrrd_import_gradients_current
+
+                if _nrrd_import_gradients_current(source_file, _canonical_targets(dest_root)):
+                    return dest_root
         except (OSError, ValueError, TypeError):
             pass
 

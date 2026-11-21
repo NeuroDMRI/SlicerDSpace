@@ -72,6 +72,11 @@ class SegmentationInferenceTest(unittest.TestCase):
         for changed in ('segmentation', 'gm_probability', 'wm_probability', 'csf_probability'):
             with self.subTest(changed=changed), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
+                # Gradient frame (batch 2, G3): the record names no DTI bundle, so only an input that the fix leaves
+                # unchanged (axis-aligned, det < 0) keeps the segmentation reusable.
+                (root / 'input').mkdir()
+                nib.save(nib.Nifti1Image(np.zeros((3, 3, 3, 2), dtype=np.float32), np.diag([-1.0, 1.0, 1.0, 1.0])),
+                         root / 'input' / 'data.nii.gz')
                 outputs = {key: path for key, path in _segmentation_outputs(root).items() if key != 'qc'}
                 output_dir = outputs['segmentation'].parent
                 output_dir.mkdir(parents=True)

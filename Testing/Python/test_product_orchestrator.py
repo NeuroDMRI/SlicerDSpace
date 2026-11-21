@@ -17,13 +17,14 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 
-def _write_test_volume(path: Path) -> None:
+def _write_test_volume(path: Path, affine=None) -> None:
     import nibabel as nib
     import numpy as np
 
     path.parent.mkdir(parents=True, exist_ok=True)
     data = np.ones((2, 2, 2), dtype=np.float32)
-    image = nib.MGHImage(data, np.eye(4)) if path.name.endswith(".mgz") else nib.Nifti1Image(data, np.eye(4))
+    affine = np.eye(4) if affine is None else np.array(affine)
+    image = nib.MGHImage(data, affine) if path.name.endswith(".mgz") else nib.Nifti1Image(data, affine)
     nib.save(image, str(path))
 
 
@@ -41,20 +42,32 @@ def _ddseg_artifact_fixture(directory: Path):
     return {key: _artifact_record(directory / (name + '.nii.gz'), verify_content=True) for key, name in names.items()}
 
 
-def _write_valid_raw_subject(subject_root: Path, shape=(5, 5, 5)):
+def _write_valid_raw_subject(subject_root: Path, shape=(5, 5, 5), affine=None):
     import nibabel as nib
     import numpy as np
+    affine = np.eye(4) if affine is None else np.array(affine)
     directory = subject_root / 'input'
     directory.mkdir(parents=True, exist_ok=True)
-    nib.save(nib.Nifti1Image(np.ones((*shape, 4), dtype=np.float32), np.eye(4)), directory / 'data.nii.gz')
+    nib.save(nib.Nifti1Image(np.ones((*shape, 4), dtype=np.float32), affine), directory / 'data.nii.gz')
     mask = np.zeros(shape, dtype=np.uint8)
     if min(shape) <= 2:
         mask[...] = 1
     else:
         mask[1:4, 1:4, 1:4] = 1
-    nib.save(nib.Nifti1Image(mask, np.eye(4)), directory / 'nodif_brain_mask.nii.gz')
+    nib.save(nib.Nifti1Image(mask, affine), directory / 'nodif_brain_mask.nii.gz')
     (directory / 'bvals').write_text('0 1000 1000 1000')
     (directory / 'bvecs').write_text('0 1 0 0\n0 0 1 0\n0 0 0 1\n')
+
+
+# Gradient frame (batch 2, G3/G4): an axis-aligned det < 0 (LAS) affine, which the fix leaves unchanged. With np.eye(4)
+# (det > 0) or a text placeholder (unreadable) the input counts as affected, so finished products are not reused.
+UNAFFECTED_AFFINE = ((-1.0, 0.0, 0.0, 0.0), (0.0, 1.0, 0.0, 0.0), (0.0, 0.0, 1.0, 0.0), (0.0, 0.0, 0.0, 1.0))
+
+
+def _write_unaffected_dwi(path: Path) -> None:
+    import nibabel as nib
+    import numpy as np
+    nib.save(nib.Nifti1Image(np.zeros((2, 2, 2, 2), dtype=np.float32), np.array(UNAFFECTED_AFFINE)), str(path))
 
 
 def _write_test_tractogram(path: Path, *, length_mm: float = 20.0, count: int = 1) -> None:
@@ -1228,7 +1241,8 @@ class ProductOrchestratorTest(unittest.TestCase):
             input_dir.mkdir(parents=True)
             for name in ("data.nii.gz", "bvals", "bvecs", "nodif_brain_mask.nii.gz"):
                 (input_dir / name).write_text("input", encoding="utf-8")
-            _write_valid_raw_subject(subject_root, shape=(2, 2, 2))
+            # Batch 2 G3: an input that the gradient-frame fix leaves unchanged, so the finished products stay reusable.
+            _write_valid_raw_subject(subject_root, shape=(2, 2, 2), affine=UNAFFECTED_AFFINE)
             layout = subject_layout(subject_root)
             run_name = "csd_act_test"
             csd_dir = layout.stage_cache(f"03_tractography/csd/{run_name}")
@@ -1274,7 +1288,7 @@ class ProductOrchestratorTest(unittest.TestCase):
                 "100307-dti-MinEigenvalue-Reg-NormMasked.nii.gz",
                 "100307-dti-MidEigenvalue-Reg-NormMasked.nii.gz",
             ):
-                _write_test_volume(parcel_dir / name)
+                _write_test_volume(parcel_dir / name, affine=UNAFFECTED_AFFINE)
             for name in (
                 "100307_predicted_wm_lh.stl",
                 "100307_predicted_wm_rh.stl",
@@ -1445,7 +1459,7 @@ class ProductOrchestratorTest(unittest.TestCase):
             micro_dir = micro_stage / "dti"
             micro_dir.mkdir(parents=True)
             for suffix in ("FA", "MD", "AD", "RD", "L1", "L2", "L3", "Trace"):
-                _write_test_volume(micro_dir / f"100307_dti_{suffix}.nii.gz")
+                _write_test_volume(micro_dir / f"100307_dti_{suffix}.nii.gz", affine=UNAFFECTED_AFFINE)
             (micro_dir / "100307-dti-DEC.nrrd").write_bytes(b"dec")  # D6: a completed DTI stage has the DEC map
             (micro_dir / "dti_qc.json").write_text(json.dumps({
                 "status": "completed", "automatic_qc_passed": True, "checks": {"synthetic_fixture": True},
@@ -1638,6 +1652,7 @@ class ProductOrchestratorTest(unittest.TestCase):
             input_dir.mkdir(parents=True)
             for name in ("data.nii.gz", "bvals", "bvecs", "nodif_brain_mask.nii.gz"):
                 (input_dir / name).write_text("x", encoding="utf-8")
+            _write_unaffected_dwi(input_dir / "data.nii.gz")
 
             layout = subject_layout(subject_root, output_root=output_root)
             seg_dir = layout.stage_cache("01_anatomical_priors/tissue_segmentation")

@@ -684,6 +684,62 @@ class NrrdImportGradientFrameTests(unittest.TestCase):
         self.assertTrue(third.get("reused"))
         self.assertEqual(called.call_count, 0)
 
+    def auto_import(self, folder, ras_axes):
+        """Run on a folder that holds one raw NRRD: the orchestrator's route (prepare_convertible_root)."""
+        from shared.convertible_input import prepare_convertible_root
+
+        run, out_axes = self.fake_nrrd_to_fsl(ras_axes)
+        with mock.patch("shared.input_import._run", side_effect=run) as called:
+            prepare_convertible_root(folder, "auto", dwiconvert=self.converter)
+        return out_axes, called.call_count
+
+    def test_b2fix_grad_G1_auto_import_receipt_does_not_keep_old_wrong_bvecs(self):
+        """G1 (Opus B1): the auto-import receipt must not keep the bvecs that base code imported from an oblique NRRD."""
+        from shared.input_import import _canonical_targets, _output_signatures
+
+        axes = U20 @ np.diag([-2.0, -2.0, 2.0])
+        folder = self.root / "auto_oblique"
+        folder.mkdir()
+        write_source_nrrd(folder / "dwi.nrrd", axes, self.world)
+        _, count = self.auto_import(folder, axes)
+        self.assertEqual(count, 1)
+        # The state base code left: the same receipt, DWIConvert's uncorrected bvecs, no gradient_frame entry.
+        input_dir = folder / "input"
+        (input_dir / "bvecs").write_text(
+            "\n".join(" ".join("0" if x == 0 else repr(float(x)) for x in row) for row in (H @ self.world.T)) + "\n")
+        manifest_path = input_dir / "input_import_manifest.json"
+        saved = json.loads(manifest_path.read_text())
+        saved.pop("gradient_frame", None)
+        saved["output_signatures"] = _output_signatures(_canonical_targets(folder))
+        manifest_path.write_text(json.dumps(saved, indent=2, sort_keys=True) + "\n")
+        out_axes, count = self.auto_import(folder, axes)
+        self.assertEqual(count, 1)  # imported again
+        b = np.loadtxt(input_dir / "bvecs").T
+        self.assertLess(axis_angles(reference_world(out_axes, b)[1:], self.world[1:]).max(), MAX_ANGLE_DEG)
+        _, count = self.auto_import(folder, axes)
+        self.assertEqual(count, 0)  # a current import is not repeated on the next resume
+
+    def test_b2fix_grad_G1_auto_import_receipt_keeps_a_right_import(self):
+        """G1 (Opus B1): an axis-aligned source whose bvecs are right keeps its receipt; no file is touched."""
+        from shared.convertible_input import RECEIPT
+
+        axes = np.diag([-2.0, -2.0, 2.0])
+        folder = self.root / "auto_axial"
+        folder.mkdir()
+        write_source_nrrd(folder / "dwi.nrrd", axes, self.world)
+        _, count = self.auto_import(folder, axes)
+        self.assertEqual(count, 1)
+        names = ("data.nii.gz", "bvals", "bvecs", "input_import_manifest.json", RECEIPT)
+
+        def snapshot():
+            return {name: ((folder / "input" / name).read_bytes(), (folder / "input" / name).stat().st_mtime_ns)
+                    for name in names}
+
+        before = snapshot()
+        _, count = self.auto_import(folder, axes)
+        self.assertEqual(count, 0)
+        self.assertEqual(snapshot(), before)
+
 
 # ----------------------------------------------------------------------------- tensor fit matrix (teem_dti)
 def base_prepare_gradients(reader, vtk, storage_node_class):
@@ -899,6 +955,353 @@ class CacheKeyPinTests(unittest.TestCase):
                     case = write_fsl_case(Path(tmp) / name, A3, bvals, bvecs)
                     self.assertIs(cache_key_pins.gradient_frame_fix_is_no_op(case.dwi_path), expected)
             self.assertIs(cache_key_pins.gradient_frame_fix_is_no_op(Path(tmp) / "missing.nii.gz"), False)
+
+
+# ----------------------------------------------------------------------------- G3: product-level reuse on resume
+BASE_LITERALS = {PINNED_FILES[0]: BASE_CONVERSION["nhdr_write.py"], PINNED_FILES[1]: BASE_KEY_FIELDS["native"]["tensor_implementation"],
+                 PINNED_FILES[2]: BASE_PIPELINE}
+
+
+def pinned_base(name):
+    """The base 3c912ad2 sha256 of a pinned file in this checkout (LF or CRLF bytes), through the pin table."""
+    from shared import cache_key_pins
+
+    return cache_key_pins.BASE_HASH_PINS.get(hashlib.sha256((ROOT / name).read_bytes()).hexdigest(), BASE_LITERALS[name])
+
+
+def subject_inputs(root, A3):
+    """A subject root with canonical raw inputs (input/data.nii.gz, bvals, bvecs, nodif_brain_mask.nii.gz)."""
+    from shared.pipeline import RawInputBundle
+
+    bvals, bvecs = gradient_set()
+    case = write_fsl_case(Path(root) / "input", A3, bvals, bvecs)
+    mask = case.mask_path.with_name("nodif_brain_mask.nii.gz")
+    case.mask_path.replace(mask)
+    return RawInputBundle(Path(root), "gradframe", Path(root) / "input", case.dwi_path, case.bval_path, case.bvec_path, mask)
+
+
+def native_manifest_as_written(raw, fit_method, base):
+    """The native DTI bundle manifest that base 3c912ad2 (base=True) or the fixed code (base=False) writes."""
+    from shared import pipeline
+
+    manifest = pipeline._native_manifest(raw, types.SimpleNamespace(fit_method=fit_method))
+    if base:
+        manifest["conversion_implementation"]["nhdr_write.py"] = pinned_base(PINNED_FILES[0])
+        manifest["tensor_implementation"] = pinned_base(PINNED_FILES[1])
+        manifest["preparation_implementation"] = pinned_base(PINNED_FILES[2])
+    return manifest
+
+
+def scalar_qc_record(maps):
+    from shared.scalar_qc import _signature
+
+    return json.dumps({"status": "completed", "automatic_qc_passed": True, "checks": {"finite": True},
+                       "output_artifacts": {str(Path(path).resolve()): _signature(path) for path in maps}})
+
+
+def finish_microstructure_dti(raw, base):
+    """A finished Microstructure DTI stage (records as the stage writes them; maps are placeholders)."""
+    from shared import orchestrator
+    from shared.pipeline import _file_signature
+
+    outputs = orchestrator._microstructure_dti_outputs(raw.subject_root, raw.subject_id)
+    maps = [outputs[key] for key in ("fa", "md", "ad", "rd", "l1", "l2", "l3", "trace")]
+    for path in maps + [outputs["dec"]]:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"map " + path.name.encode())
+    outputs["qc"].write_text(scalar_qc_record(maps))
+    outputs["manifest"].write_text(json.dumps({
+        "kind": "microstructure_phase3", "version": 6, "subject_id": raw.subject_id, "fit_method": "wls",
+        "native_bundle": {"dir": "native", "manifest": native_manifest_as_written(raw, "wls", base)},
+        "raw_input_bundle": {key: _file_signature(getattr(raw, key + "_path")) for key in ("dwi", "bval", "bvec", "mask")}}))
+
+
+def finish_segmentation(raw, base):
+    """A finished DDSeg stage on the native LS bundle (orchestrator.py: ensure_native_dti_bundle, run_ddseg)."""
+    import nibabel as nib
+    from anatomy.segmentation.config import DDSegConfig
+    from anatomy.segmentation.qc import write_ddseg_qc_record
+    from shared import orchestrator, pipeline
+
+    native = native_manifest_as_written(raw, "ls", base)
+    bundle = pipeline._build_native_bundle(raw, "ls")
+    bundle.bundle_dir.mkdir(parents=True, exist_ok=True)
+    bundle.manifest_path.write_text(json.dumps(native))
+    outputs = {key: path for key, path in orchestrator._segmentation_outputs(raw.subject_root).items() if key != "qc"}
+    directory = outputs["segmentation"].parent
+    directory.mkdir(parents=True, exist_ok=True)
+    labels = np.ones((3, 3, 3), dtype=np.int16)
+    probabilities = np.zeros((*labels.shape, 4), dtype=np.float32)
+    probabilities[..., 1] = 1
+    for key, path in outputs.items():
+        data = labels if key == "segmentation" else (probabilities[..., 1] if key == "wm_probability" else probabilities[..., 0])
+        nib.save(nib.Nifti1Image(data, np.eye(4)), str(path))
+    write_ddseg_qc_record(DDSegConfig(input_mask_nii=raw.mask_path, parameter_type="DTI", output_folder=directory,
+                                      weights_dir=raw.subject_root / "weights", dti_feature_dir=bundle.bundle_dir,
+                                      source_dwi=raw.dwi_path),
+                          labels=labels, probability_maps=probabilities, outputs=outputs,
+                          geometry={"feature_dir": bundle.bundle_dir.resolve().as_posix()})
+    # Base wrote no bundle key into ddseg_source.json; the fixed orchestrator records the one the run read (G3b).
+    orchestrator._write_anatomy_source(directory / "ddseg_source.json", raw, native["source_files"],
+                                       **({} if base else {"tensor_key": native}))
+    return bundle
+
+
+def finish_parcellation(raw, base):
+    """A finished DDParcel stage on the registered WLS bundle (orchestrator.py: run_ddparcel_from_registered_bundle)."""
+    from anatomy.parcellation.pipeline import DDParcelRegisteredConfig, _registered_task_signature
+    from shared import orchestrator, pipeline
+
+    atlas = raw.subject_root / "atlas.nii.gz"
+    atlas.write_bytes(b"atlas")
+    registered = pipeline._build_registered_bundle(raw, "wls", atlas)
+    registered.bundle_dir.mkdir(parents=True, exist_ok=True)
+    for name in registered.__dataclass_fields__:
+        if name.endswith("_path") and name != "manifest_path":
+            getattr(registered, name).write_bytes(b"registered " + name.encode())
+    implementation = (pinned_base(PINNED_FILES[2]) if base else
+                      pipeline._gradient_frame_key_pin(raw)(hashlib.sha256((ROOT / PINNED_FILES[2]).read_bytes()).hexdigest()))
+    registered.manifest_path.write_text(json.dumps({
+        "kind": "registered_dti_bundle", "version": 2, "subject_id": raw.subject_id, "fit_method": "wls",
+        "scalar_format": "nifti", "implementation": implementation,
+        "native_bundle": {"dir": "native", "manifest": native_manifest_as_written(raw, "wls", base), "artifacts": {}}}))
+    weights = raw.subject_root / "weights"
+    weights.mkdir(exist_ok=True)
+    (weights / "model.pkl").write_bytes(b"weights")
+    outputs = orchestrator._parcellation_outputs(raw.subject_root, raw.subject_id)
+    directory = outputs["wmparc"].parent
+    directory.mkdir(parents=True, exist_ok=True)
+    for path in outputs.values():
+        path.write_bytes(b"parcel " + path.name.encode())
+    config = DDParcelRegisteredConfig(raw.subject_id, registered, directory, raw.mask_path, weights, device="cpu")
+    pipeline._write_manifest(directory / "ddparcel_preparation.json", _registered_task_signature(config, weights))
+    (directory / "ddparcel_qc.json").write_text(scalar_qc_record(list(outputs.values())))
+    orchestrator._write_anatomy_source(directory / "ddparcel_source.json", raw,
+                                       native_manifest_as_written(raw, "wls", base)["source_files"])
+    return directory
+
+
+class ProductReuseGradientFrameTests(unittest.TestCase):
+    """G3 (Codex P1 "product-level reuse"): on resume, a product made from a tensor bundle of base 3c912ad2 is
+    computed again for an affected geometry and stays reusable for an unaffected one (item 8, through the pin).
+
+    The checks called here are the ones the resume path calls (plan_subject_products and the execution path).
+    """
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name).resolve()
+
+    def complete(self, product, name, base):
+        from shared import orchestrator
+
+        raw = subject_inputs(self.root / f"{product}_{name}_{base}", GEOMETRIES[name])
+        if product == "microstructure_dti":
+            finish_microstructure_dti(raw, base)
+            return orchestrator._microstructure_dti_complete(raw.subject_root, raw.subject_id, fit_method="wls")
+        if product == "segmentation":
+            finish_segmentation(raw, base)
+            return orchestrator._segmentation_complete(raw.subject_root)
+        finish_parcellation(raw, base)
+        return orchestrator._parcellation_complete(raw.subject_root, raw.subject_id)
+
+    def test_b2fix_grad_G3_products_of_base_tensors_are_recomputed_for_affected_geometry(self):
+        for name in ("oblique20_det_neg", "axial_det_pos_RAS"):
+            for product in ("microstructure_dti", "segmentation", "parcellation"):
+                with self.subTest(geometry=name, product=product):
+                    self.assertFalse(self.complete(product, name, base=True))
+
+    def test_b2fix_grad_G3_products_of_base_tensors_stay_reusable_for_unaffected_geometry(self):
+        CacheKeyPinTests.live_pins_or_skip(self)
+        for name in ("axial_det_neg_LAS", "permuted_det_neg"):
+            for product in ("microstructure_dti", "segmentation", "parcellation"):
+                with self.subTest(geometry=name, product=product):
+                    self.assertTrue(self.complete(product, name, base=True))
+
+    def test_b2fix_grad_G3_unaffected_products_with_older_bundle_records_stay_reusable(self):
+        # A record written before base (other bundle keys) was reused on HEAD for an input the fix leaves unchanged.
+        from unittest import mock
+
+        module = sys.modules[__name__]
+        written = module.native_manifest_as_written
+
+        def older(raw, fit_method, base):
+            return {**written(raw, fit_method, base), "tensor_implementation": "older"}
+
+        with mock.patch.object(module, "native_manifest_as_written", older):
+            for name in ("axial_det_neg_LAS", "permuted_det_neg"):
+                for product in ("microstructure_dti", "segmentation", "parcellation"):
+                    with self.subTest(geometry=name, product=product):
+                        self.assertTrue(self.complete(product, name, base=True))
+
+    def test_b2fix_grad_G3b_affected_old_segmentation_is_recomputed_after_its_bundle_was_rebuilt(self):
+        from shared import orchestrator
+
+        for name in ("oblique20_det_neg", "axial_det_pos_RAS"):
+            with self.subTest(geometry=name):
+                raw = subject_inputs(self.root / f"seg_rebuilt_{name}", GEOMETRIES[name])
+                bundle = finish_segmentation(raw, base=True)
+                # Another consumer rebuilt the LS bundle in the recorded folder with the fixed code.
+                bundle.manifest_path.write_text(json.dumps(native_manifest_as_written(raw, "ls", base=False)))
+                self.assertFalse(orchestrator._segmentation_complete(raw.subject_root))
+
+    def test_b2fix_grad_G3b_orchestrator_ddseg_run_records_the_bundle_key(self):
+        from unittest import mock
+        from shared import orchestrator, pipeline
+
+        raw = subject_inputs(self.root / "seg_run", GEOMETRIES["oblique20_det_neg"])
+        bundle = pipeline._build_native_bundle(raw, "ls")
+        native = native_manifest_as_written(raw, "ls", base=False)
+
+        def ensure(bundle_raw, **_):
+            bundle.bundle_dir.mkdir(parents=True, exist_ok=True)
+            bundle.manifest_path.write_text(json.dumps(native))
+            return bundle
+
+        def run_ddseg(config):  # only the DDSeg outputs and QC record (finish_segmentation); the bundle stays as built
+            finish_segmentation(raw, base=True)
+            (config.output_folder / "ddseg_source.json").unlink()
+            bundle.manifest_path.write_text(json.dumps(native))
+
+        config = orchestrator.ProductOrchestratorConfig(subject_id=raw.subject_id, subject_root=raw.subject_root,
+                                                        targets=("segmentation",), execute=True)
+        with mock.patch("shared.pipeline.ensure_native_dti_bundle", side_effect=ensure), \
+                mock.patch("anatomy.segmentation.pipeline.run_ddseg", side_effect=run_ddseg), \
+                mock.patch.object(orchestrator, "_run_ddseg_world_qc_gate", return_value=None):
+            result = orchestrator.run_subject_products(config)
+        statuses = {task.name: task.status for task in result.tasks}
+        self.assertEqual(statuses.get("segmentation.ddseg"), "completed", statuses)
+        record = json.loads((orchestrator._segmentation_outputs(raw.subject_root)["qc"].parent / "ddseg_source.json").read_text())
+        self.assertEqual({key: record.get(key) for key in orchestrator._TENSOR_KEY_FIELDS},
+                         {key: native[key] for key in orchestrator._TENSOR_KEY_FIELDS})
+        self.assertTrue(orchestrator._segmentation_complete(raw.subject_root))
+
+    def test_b2fix_grad_G3b_standalone_ddseg_result_follows_the_pin(self):
+        # The standalone DDSeg module writes no ddseg_source.json and no source_dwi in its QC record.
+        from shared import orchestrator
+
+        for name, expected in (("oblique20_det_neg", False), ("axial_det_neg_LAS", True)):
+            with self.subTest(geometry=name):
+                raw = subject_inputs(self.root / f"seg_standalone_{name}", GEOMETRIES[name])
+                finish_segmentation(raw, base=False)
+                outputs = orchestrator._segmentation_outputs(raw.subject_root)
+                (outputs["qc"].parent / "ddseg_source.json").unlink()
+                qc = json.loads(outputs["qc"].read_text())
+                outputs["qc"].write_text(json.dumps({**qc, "source_dwi": None}))
+                self.assertIs(orchestrator._segmentation_complete(raw.subject_root), expected)
+
+    def test_b2fix_grad_G3b_unaffected_segmentation_with_a_base_record_stays_reusable(self):
+        from shared import orchestrator
+
+        for name in ("axial_det_neg_LAS", "permuted_det_neg"):
+            with self.subTest(geometry=name):
+                raw = subject_inputs(self.root / f"seg_base_{name}", GEOMETRIES[name])
+                bundle = finish_segmentation(raw, base=True)
+                bundle.manifest_path.write_text(json.dumps(native_manifest_as_written(raw, "ls", base=False)))
+                self.assertTrue(orchestrator._segmentation_complete(raw.subject_root))
+
+    def test_b2fix_grad_G3_unaffected_segmentation_stays_reusable_without_its_cache_folder(self):
+        import shutil
+        from shared import orchestrator
+
+        raw = subject_inputs(self.root / "seg_no_cache", GEOMETRIES["axial_det_neg_LAS"])
+        bundle = finish_segmentation(raw, base=True)
+        shutil.rmtree(bundle.bundle_dir)
+        self.assertTrue(orchestrator._segmentation_complete(raw.subject_root))
+
+    def test_b2fix_grad_G3_parcellation_without_receipt_follows_the_pin(self):
+        from shared import orchestrator
+
+        for name, expected in (("oblique20_det_neg", False), ("axial_det_neg_LAS", True)):
+            with self.subTest(geometry=name):
+                raw = subject_inputs(self.root / f"parcel_no_receipt_{name}", GEOMETRIES[name])
+                (finish_parcellation(raw, base=True) / "ddparcel_preparation.json").unlink()
+                self.assertIs(orchestrator._parcellation_complete(raw.subject_root, raw.subject_id), expected)
+
+    def test_b2fix_grad_G3_products_of_fixed_tensors_are_reused_for_affected_geometry(self):
+        for name in ("oblique20_det_neg", "axial_det_pos_RAS"):
+            for product in ("microstructure_dti", "segmentation", "parcellation"):
+                with self.subTest(geometry=name, product=product):
+                    self.assertTrue(self.complete(product, name, base=False))
+
+
+# ----------------------------------------------------------------------------- G4: unreadable DWI
+class UnreadableDwiGradientFrameTests(unittest.TestCase):
+    """G4 (Opus N3 + N4, Codex P1 "unreadable affine"): a DWI that nibabel cannot read counts as AFFECTED (as in the
+    pin); a currency check then needs the new key or marker and never raises."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name).resolve()
+        bvals, bvecs = gradient_set()
+        self.case = write_fsl_case(self.root / "case", GEOMETRIES["axial_det_neg_LAS"], bvals, bvecs)
+        self.case.dwi_path.write_bytes(b"not a nifti" * 40)  # nibabel: ImageFileError (not an OSError)
+
+    def raw(self):
+        from shared.pipeline import RawInputBundle
+
+        return RawInputBundle(subject_root=self.root, subject_id="gradframe", input_dir=self.root / "case",
+                              dwi_path=self.case.dwi_path, bval_path=self.case.bval_path,
+                              bvec_path=self.case.bvec_path, mask_path=self.case.mask_path)
+
+    def test_b2fix_grad_G4_ukf_unreadable_dwi_is_affected_and_never_raises(self):
+        from tractography import ukf
+
+        raw = self.raw()
+        binary, converter = self.root / "UKFTractography", self.root / "DWIConvert"
+        binary.write_text("mock")
+        converter.write_text("mock")
+        directory = self.root / "ukf"
+        directory.mkdir()
+        # A historical (unmarked) manifest: the v1 policy that base code recorded while the file was readable.
+        with mock.patch.object(ukf, "_input_affine", return_value=affine4(GEOMETRIES["axial_det_neg_LAS"])):
+            historical = ukf.signature(raw, {}, binary, converter)
+        self.assertEqual(historical["conversion_policy"], UKF_POLICY_V1)
+        ukf.paths(raw.subject_id, directory)["manifest"].write_text(
+            json.dumps({"status": "completed", "signature": historical}))
+        self.assertNotEqual(ukf.signature(raw, {}, binary, converter)["conversion_policy"], UKF_POLICY_V1)
+        self.assertFalse(ukf.current(raw, directory, {}, binary, converter))
+
+    def test_b2fix_grad_G4_dti_tracking_unreadable_dwi_needs_the_marker(self):
+        from tractography import dti
+
+        manifest = self.root / "manifest.json"
+        manifest.write_text(json.dumps({"status": "completed"}))
+        self.assertFalse(dti.tracking_gradient_frame_current(manifest, self.case.dwi_path))
+        manifest.write_text(json.dumps({"status": "completed", "gradient_frame": dti.DIPY_GRADIENT_FRAME}))
+        self.assertTrue(dti.tracking_gradient_frame_current(manifest, self.case.dwi_path))
+
+    def test_b2fix_grad_G4_dki_unreadable_dwi_needs_the_new_key(self):
+        from microstructure import dki
+
+        config = dki.DkiConfig(subject_id="gradframe", raw_input_bundle=self.raw(), output_dir=self.root / "dki",
+                               fit_method="WLS")
+        signature = dki.expected_dki_signature(config)
+        self.assertEqual(signature.get("gradient_frame"), dki.DKI_GRADIENT_FRAME)
+        historical = {key: value for key, value in signature.items() if key != "gradient_frame"}
+        paths = dki.dki_output_paths(config.subject_id, config.output_dir)
+        paths["manifest"].parent.mkdir(parents=True, exist_ok=True)
+        paths["manifest"].write_text(json.dumps({"status": "completed", "signature": historical}))
+        paths["qc"].write_text(json.dumps({"status": "completed", "valid_voxels": 10}))
+        self.assertFalse(dki.dki_outputs_current(config))
+
+    def test_b2fix_grad_G4_noddi_unreadable_dwi_needs_the_marker(self):
+        from microstructure import pipeline as micro
+
+        raw = types.SimpleNamespace(dwi_path=self.case.dwi_path, bval_path=self.case.bval_path,
+                                    bvec_path=self.case.bvec_path, mask_path=self.case.mask_path)
+        config = types.SimpleNamespace(
+            raw_input_bundle=raw, subject_id="gradframe", noddi_directional_average=False,
+            noddi_b0_threshold=0, noddi_lmax=12, noddi_ndirs=500, noddi_solver_lambda1=0.0,
+            noddi_solver_lambda2=0.001, noddi_max_isotropic_fraction_for_tissue=0.9)
+        with mock.patch.object(micro, "_file_signature", return_value={}), \
+                mock.patch.object(micro, "_noddi_threads", return_value=1):
+            manifest = micro._expected_noddi_manifest(config)
+        self.assertEqual(manifest.get("gradient_frame"), micro.NODDI_GRADIENT_FRAME)
+        historical = {key: value for key, value in manifest.items() if key != "gradient_frame"}
+        self.assertNotEqual(historical, manifest)
 
 
 if __name__ == "__main__":

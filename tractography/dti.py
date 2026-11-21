@@ -130,8 +130,8 @@ def tracking_gradient_frame_current(manifest_path: Path, dwi_path: Path) -> bool
         import nibabel as nib
 
         positive = gradient_frame.determinant_positive(nib.load(str(dwi_path)).affine)
-    except Exception:  # unreadable DWI: decide as before the fix; the tracking run itself must read the DWI
-        return True
+    except Exception:  # unreadable DWI: affected (as in the cache-key pin), so the marker is required
+        positive = True
     if not positive:
         return True
     try:

@@ -409,8 +409,8 @@ def expected_dki_signature(config: DkiConfig) -> dict[str, Any]:
         import nibabel as nib
 
         positive = gradient_frame.determinant_positive(nib.load(str(bundle.dwi_path)).affine)
-    except Exception:  # unreadable DWI: the key as before the fix; the fit itself must read the DWI
-        positive = False
+    except Exception:  # unreadable DWI: affected (as in the cache-key pin), so the new key is required
+        positive = True
     if positive:
         signature["gradient_frame"] = DKI_GRADIENT_FRAME  # det < 0: the key stays as before
     if _method(config).startswith("MKCURVE"):

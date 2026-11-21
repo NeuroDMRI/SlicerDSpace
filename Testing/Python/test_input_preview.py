@@ -505,8 +505,8 @@ class WiringTest(unittest.TestCase):
             self.assertEqual(row_layout.items, [btn])
 
         prepare_source = (REPO_ROOT / "shared" / "ui_prepare_inputs.py").read_text(encoding="utf-8")
-        self.assertIn("border: 1px dashed", prepare_source)
-        self.assertNotIn("border: 2px dashed", prepare_source)
+        self.assertIn("border: 2px dashed", prepare_source)
+        self.assertNotIn("border: 1px dashed", prepare_source)
 
         class DummyQFrame:
             NoFrame = 0

@@ -1,0 +1,208 @@
+name: Build Surface Runtime
+
+# Rebuilds the seven FreeSurfer surface tools (anatomy/surface/ddsurfer_backend/postprocessing/core/build.py)
+# for Apple Silicon with a macOS 13.0 deployment target, verifies them and uploads an Actions artifact.
+# The publish job runs only from a manual dispatch with publish=true and never replaces an existing asset.
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Upload the verified tarball to the release named by release_tag (new asset name only)"
+        required: false
+        type: boolean
+        default: false
+      release_tag:
+        description: "Release tag for the publish job (required when publish is true)"
+        required: false
+        type: string
+        default: ""
+  push:
+    branches:
+      - ci/b2-surface-runtime
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-surface-runtime-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ASSET: surface-runtime-darwin-arm64-macos13.tar.gz
+  ARTIFACT: surface-runtime-darwin-arm64-macos13
+
+jobs:
+  build-darwin-arm64:
+    runs-on: macos-15
+    timeout-minutes: 120
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "13.0"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - name: Set the work folders
+        run: |
+          echo "WORK=$RUNNER_TEMP/surface-work" >> "$GITHUB_ENV"
+          echo "RUNTIME=$RUNNER_TEMP/surface-runtime" >> "$GITHUB_ENV"
+          echo "OUT=$RUNNER_TEMP/surface-out" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install CMake 3.31
+        run: |
+          python3 -m pip install --upgrade "cmake==3.31.6"
+          cmake --version
+
+      - name: Record the toolchain
+        run: |
+          mkdir -p "$OUT"
+          {
+            echo "runner_os: $(sw_vers -productVersion) ($(sw_vers -buildVersion)) $(uname -m)"
+            echo "xcode: $(xcodebuild -version | tr '\n' ' ')"
+            echo "xcode_path: $(xcode-select -p)"
+            echo "clang: $(clang --version | head -n 1)"
+            echo "sdk_version: $(xcrun --show-sdk-version)"
+            echo "sdk_path: $(xcrun --show-sdk-path)"
+            echo "cmake: $(cmake --version | head -n 1)"
+            echo "python: $(python3 --version)"
+            echo "commit: $GITHUB_SHA"
+            echo "MACOSX_DEPLOYMENT_TARGET: $MACOSX_DEPLOYMENT_TARGET"
+          } | tee "$OUT/toolchain-darwin-arm64.txt"
+
+      - name: Fetch the pinned atlas data archive
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, pathlib, urllib.request
+          record = json.loads(pathlib.Path('models/external_assets_manifest.json').read_text())['asset_records'][
+              'surface/postprocessing/atlas.tar.gz']
+          target = pathlib.Path('anatomy/surface/ddsurfer_backend/postprocessing/assets/atlas.tar.gz')
+          pinned = json.loads((target.parent / 'manifest.json').read_text())
+          assert pinned['sha256'] == record['sha256'] and pinned['bytes'] == record['size_bytes']
+          with urllib.request.urlopen(record['urls'][0], timeout=300) as source:
+              data = source.read()
+          if hashlib.sha256(data).hexdigest() != record['sha256'] or len(data) != record['size_bytes']:
+              raise SystemExit('atlas.tar.gz checksum mismatch')
+          target.write_bytes(data)
+          print('atlas.tar.gz', len(data), record['sha256'])
+          PY
+
+      - name: Build the surface tools (macOS 13.0 target)
+        working-directory: anatomy/surface/ddsurfer_backend
+        run: |
+          python3 -m postprocessing.core.build --jobs 4 \
+            --prefix "$RUNTIME" \
+            --work-dir "$WORK" \
+            --macos-deployment-target 13.0 \
+            --build-commit "$GITHUB_SHA"
+
+      - name: Show the build logs (failure only)
+        if: failure()
+        run: |
+          for log in "$WORK"/*.log; do
+            [ -f "$log" ] || continue
+            echo "::group::$log (last 120 lines)"
+            tail -n 120 "$log"
+            echo "::endgroup::"
+          done
+
+      - name: Verify minimum macOS, libraries, tool list and start
+        run: |
+          python3 .github/scripts/verify_surface_runtime.py \
+            --runtime "$RUNTIME" \
+            --expect-min-macos 13.0 \
+            --start \
+            --build-logs "$WORK" \
+            --json "$OUT/verify-darwin-arm64.json"
+          (cd anatomy/surface/ddsurfer_backend && python3 -m postprocessing.core.runtime --runtime "$RUNTIME")
+          if grep -q "OpenMP not found" "$WORK/surface-configure.log"; then
+            echo "openmp: not found (tools built without OpenMP, like the shipped runtime)" | tee -a "$OUT/toolchain-darwin-arm64.txt"
+          else
+            echo "openmp: found" | tee -a "$OUT/toolchain-darwin-arm64.txt"
+          fi
+
+      - name: Package the runtime
+        run: |
+          python3 scripts/package_surface_runtime.py --source "$RUNTIME" --output "$OUT/$ASSET"
+          cp "$RUNTIME/runtime.json" "$OUT/runtime-darwin-arm64-macos13.json"
+          (cd "$OUT" && shasum -a 256 "$ASSET" > "$ASSET.sha256" && cat "$ASSET.sha256")
+          ls -l "$OUT"
+
+      - name: Upload the artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT }}
+          path: ${{ runner.temp }}/surface-out/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload the build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: surface-runtime-darwin-arm64-build-logs
+          path: ${{ runner.temp }}/surface-work/*.log
+          if-no-files-found: ignore
+          retention-days: 14
+
+  run-on-older-macos:
+    needs: build-darwin-arm64
+    runs-on: macos-14
+    continue-on-error: true
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT }}
+          path: ${{ runner.temp }}/surface-out
+
+      - name: Start every binary with --version
+        run: |
+          sw_vers
+          mkdir -p "$RUNNER_TEMP/runtime"
+          tar -xzf "$RUNNER_TEMP/surface-out/$ASSET" -C "$RUNNER_TEMP/runtime"
+          python3 .github/scripts/verify_surface_runtime.py \
+            --runtime "$RUNNER_TEMP/runtime" \
+            --expect-min-macos 13.0 \
+            --start \
+            --json "$RUNNER_TEMP/verify-older-macos.json"
+
+  publish:
+    needs: build-darwin-arm64
+    if: github.event_name == 'workflow_dispatch' && inputs.publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT }}
+          path: surface-out
+
+      - name: Upload as a new release asset (never overwrite)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.release_tag }}
+        run: |
+          if [ -z "$TAG" ]; then
+            echo "::error::release_tag is required when publish is true"
+            exit 1
+          fi
+          (cd surface-out && shasum -a 256 -c "$ASSET.sha256")
+          names="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name')"
+          for name in "$ASSET" "$ASSET.sha256"; do
+            if printf '%s\n' "$names" | grep -qxF "$name"; then
+              echo "::error::release $TAG already has $name; refusing to overwrite it"
+              exit 1
+            fi
+          done
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" "surface-out/$ASSET" "surface-out/$ASSET.sha256"

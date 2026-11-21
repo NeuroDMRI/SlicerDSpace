@@ -223,6 +223,13 @@ def refresh_compact_algorithms(owner: Any, language: str | None = None) -> None:
                 _mute_summary(owner, name, summary, muted)
     from shared.ui_algorithm_picker import refresh_picker_language
     refresh_picker_language(owner)
+    # FC3: the "Also runs automatically" note follows the same data as the summary (a tile edit, the Refresh click).
+    refresh_note = getattr(owner, "_refresh_also_runs_note", None)
+    if callable(refresh_note):
+        try:
+            refresh_note()
+        except Exception:
+            pass
 
 
 def _apply_input_path_mode(owner: Any, fmt: str, language: str | None = None) -> None:

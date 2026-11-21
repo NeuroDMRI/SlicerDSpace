@@ -876,5 +876,68 @@ class RunRequestTest(TempCase):
         self.assertEqual([line for line in self.logged if line.startswith("Skipped")], [])
 
 
+class NoteLabel:
+    def __init__(self, text="", visible=False):
+        self.text, self.visible = text, visible
+
+    def setText(self, value):
+        self.text = value
+
+
+class AlsoRunsNoteTest(TempCase):
+    """FC3: the "Also runs automatically" note follows the data-filtered request that the Run click uses."""
+
+    build_widget = RunRequestTest.build_widget
+
+    def summary_note(self, widget):
+        widget._alsoRunsLabel = NoteLabel()
+        widget._selectedProductsSummaryLabel = NoteLabel()
+        widget._refresh_selected_products_summary()
+        return widget._alsoRunsLabel
+
+    def test_fc3_free_water_alone_on_data_that_cannot_run_it_has_no_note(self):
+        widget = self.build_widget(write_subject(self.root / "s1", SINGLE_SHELL), "freewater")
+        self.assertEqual(widget._closure_notice_text(), "Also runs automatically: DTI (needed by Free Water)")
+        note = self.summary_note(widget)
+        self.assertEqual((note.text, note.visible), ("", False))
+
+    def test_fc3_nothing_blocked_keeps_the_note_unchanged(self):
+        widget = self.build_widget(write_subject(self.root / "s2", THREE_GROUPS), "freewater")
+        note = self.summary_note(widget)
+        self.assertEqual((note.text, note.visible), ("Also runs automatically: DTI (needed by Free Water)", True))
+        self.assertEqual(note.text, widget._closure_notice_text())
+
+    def test_fc3_a_partly_blocked_selection_names_only_what_still_runs(self):
+        widget = self.build_widget(write_subject(self.root / "s2", THREE_GROUPS), "freewater,dki")
+        self.assertIn("dki", availability.current_data_blocks(widget))
+        self.assertNotIn("freewater", availability.current_data_blocks(widget))
+        note = self.summary_note(widget)
+        self.assertEqual((note.text, note.visible), ("Also runs automatically: DTI (needed by Free Water)", True))
+        self.assertNotIn("DKI", note.text)
+
+    def test_fc3_a_failing_block_lookup_falls_back_to_the_unfiltered_note(self):
+        widget = self.build_widget(write_subject(self.root / "s1", SINGLE_SHELL), "freewater")
+        with mock.patch("shared.algorithm_availability.current_data_blocks", side_effect=RuntimeError("broke")):
+            note = self.summary_note(widget)
+        self.assertEqual(note.text, widget._closure_notice_text())
+
+    def test_fc3_the_summary_refresh_after_a_data_change_also_refreshes_the_note(self):
+        """A tile edit and the Refresh click call ``refresh_compact_algorithms`` only: the note must follow."""
+        from shared.ui_compact import refresh_compact_algorithms
+
+        subject = write_subject(self.root / "s1", SINGLE_SHELL)
+        widget = self.build_widget(subject, "freewater")
+        widget._alsoRunsLabel = NoteLabel("Also runs automatically: DTI (needed by Free Water)", True)
+        widget._selectedProductsSummaryLabel = NoteLabel()
+        refresh_compact_algorithms(widget)
+        self.assertEqual((widget._alsoRunsLabel.text, widget._alsoRunsLabel.visible), ("", False))
+        write_subject(subject, THREE_GROUPS)  # the user chose other data
+        availability.clear_cache()
+        widget._algorithmGateCache = None
+        refresh_compact_algorithms(widget)
+        self.assertEqual((widget._alsoRunsLabel.text, widget._alsoRunsLabel.visible),
+                         ("Also runs automatically: DTI (needed by Free Water)", True))
+
+
 if __name__ == "__main__":
     unittest.main()

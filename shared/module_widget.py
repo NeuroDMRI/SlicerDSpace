@@ -547,6 +547,15 @@ class SharedWidgetMixin:
             self._runHistoryRefreshTimer = timer
         timer.start()
 
+    def _on_refresh_inputs_clicked(self) -> None:
+        from shared.ui_prepare_inputs import on_refresh_inputs_clicked
+
+        message = on_refresh_inputs_clicked(self)
+        try:
+            slicer.util.showStatusMessage(message, 3000)
+        except Exception:
+            pass
+
     def _refresh_run_history(self, select_path=None) -> None:
         try:
             refresh_run_history(self, select_path=select_path)
@@ -809,6 +818,13 @@ class SharedWidgetMixin:
                 node.autoInstallPythonDependencies = bool(
                     defaults.get("auto_install_python_dependencies", node.autoInstallPythonDependencies)
                 )
+                # Package C1: the distortion-correction inputs come back when something was saved.
+                if recent.get("reverse_pe_b0"):
+                    node.preprocessingReversePhaseB0 = str(recent["reverse_pe_b0"])
+                if recent.get("pe_direction"):
+                    node.preprocessingPhaseEncodingDirection = str(recent["pe_direction"])
+                if float(recent.get("readout_time") or 0.0) > 0.0:
+                    node.preprocessingReadoutTime = float(recent["readout_time"])
                 if targets_configured:
                     node.targetPreprocessing = "preprocessing" in targets
                     node.targetSurface = "surface" in targets
@@ -822,6 +838,10 @@ class SharedWidgetMixin:
                     node.targetTractography = bool(targets & {"tractography", "saf"})
                     node.targetBundles = bool(targets & {"bundles", "wma", "tractcloud"})
                     node.targetConnectome = "connectome" in targets
+            # Package C1: the visible input tiles and the format tab (waits for the panel if it is not built yet).
+            from shared.ui_prepare_inputs import restore_input_sources
+
+            restore_input_sources(self, recent)
         else:
             self._save_common_user_settings()
 
@@ -844,14 +864,24 @@ class SharedWidgetMixin:
             item["id"]: self._read_environment_path_setting(item["id"]) or None
             for item in ENVIRONMENT_DEPENDENCY_PATHS
         }
+        from shared.ui_prepare_inputs import collect_input_sources
+
+        recent = {
+            "subject_id": node.subjectId or "",
+            "subject_root": node.inputDirectory or "",
+            "output_root": node.outputDirectory or "",
+            # Package C1: the distortion-correction inputs.
+            "reverse_pe_b0": getattr(node, "preprocessingReversePhaseB0", "") or "",
+            "pe_direction": getattr(node, "preprocessingPhaseEncodingDirection", "") or "",
+            "readout_time": float(getattr(node, "preprocessingReadoutTime", 0.0) or 0.0),
+        }
+        input_sources = collect_input_sources(self)
+        if input_sources is not None:  # None: no panel yet, or a restore still waits for it
+            recent["input_sources"] = input_sources
         try:
             _, path = update_user_config(
                 {
-                    "recent": {
-                        "subject_id": node.subjectId or "",
-                        "subject_root": node.inputDirectory or "",
-                        "output_root": node.outputDirectory or "",
-                    },
+                    "recent": recent,
                     "run_defaults": {
                         "run_name": node.orchestrationRunName or "Test1",
                         "targets": targets,
@@ -2363,14 +2393,7 @@ class SharedWidgetMixin:
         if not self._parameterNode:
             label.setText("Selected products will appear here after the parameter node is ready.")
             return
-        notice = getattr(self, "_alsoRunsLabel", None)
-        if notice is not None:
-            notice_text = self._closure_notice_text()
-            if notice.text != notice_text:
-                notice.setText(notice_text)
-            target_visible = bool(notice_text)
-            if notice.visible != target_visible:
-                notice.visible = target_visible
+        self._refresh_also_runs_note()
         text, target_text = selected_products_summary(
             self._selected_product_targets(),
             BackendSelection(
@@ -2387,6 +2410,22 @@ class SharedWidgetMixin:
             tip = "Run selected products after environment preflight. Current selection: " + target_text
             if run_button.toolTip != tip:
                 run_button.setToolTip(tip)
+
+    def _refresh_also_runs_note(self) -> None:
+        """The "Also runs automatically" line, from the data-filtered request that Run sends (FC3).
+
+        ``refresh_compact_algorithms`` also calls it, so the note follows a tile edit and the Refresh click like the
+        family summary above it.
+        """
+        notice = getattr(self, "_alsoRunsLabel", None)
+        if notice is None or not self._parameterNode:
+            return
+        notice_text = self._closure_notice_text(data_filtered=True)
+        if notice.text != notice_text:
+            notice.setText(notice_text)
+        target_visible = bool(notice_text)
+        if notice.visible != target_visible:
+            notice.visible = target_visible
 
     def _configure_log_widget(self) -> None:
         configure_log_widget(getattr(self.ui, "logPlainTextEdit", None), line_limit=int(self._logLineLimit))
@@ -3322,17 +3361,18 @@ class SharedWidgetMixin:
             provided_tractography=self._provided_tractography(),
         )
 
-    def _data_filtered_run(self, batch_mode: bool):
+    def _data_filtered_run(self, batch_mode: bool, *, fresh: bool = True):
         """B3: the run request without the algorithms this data cannot run, or ``None`` when nothing is skipped.
 
         Returns ``(DataFilteredRun, blocks)``. The parameter node is never written: the stored selection stays, and
         the algorithm runs again when the data fits. Batch mode is not filtered (subjects can differ).
+        ``fresh=False`` (the "Also runs automatically" note) reuses the per-event cache of the family summary.
         """
         if batch_mode or not self._parameterNode:
             return None
         from shared.algorithm_availability import current_data_blocks
 
-        blocks = current_data_blocks(self, fresh=True)  # F3: never the per-event cache at the click
+        blocks = current_data_blocks(self, fresh=fresh)  # F3: the click keeps fresh=True, never the per-event cache
         filtered = filter_run_for_data(self._product_target_flags(), self._microstructure_stages_text(), set(blocks))
         return None if filtered is None else (filtered, blocks)
 
@@ -3379,11 +3419,23 @@ class SharedWidgetMixin:
         from shared.algorithm_selection import choice_value
         return choice_value(closure.algorithms_text)
 
-    def _closure_notice_text(self) -> str:
-        """C4 one-line notice naming the targets that run automatically."""
+    def _closure_notice_text(self, *, data_filtered: bool = False) -> str:
+        """C4 one-line notice naming the targets that run automatically.
+
+        ``data_filtered=True`` (FC3) words it for the request that the Run click sends: the closure of
+        ``_data_filtered_run`` / ``_data_filtered_closure`` when the data blocks a stored algorithm. If the data check
+        fails, the notice falls back to the stored selection.
+        """
         closure = self._selected_closure()
         if closure is None:
             return ""
+        if data_filtered:
+            try:
+                skips = self._data_filtered_run(bool(getattr(self._parameterNode, "batchMode", False)), fresh=False)
+                if skips is not None:
+                    closure = self._data_filtered_closure(skips[0])
+            except Exception:
+                pass
         from shared.target_closure import closure_notice
         return closure_notice(closure)
 

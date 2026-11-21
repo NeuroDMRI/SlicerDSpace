@@ -15,6 +15,7 @@ from shared.user_config import (
     empty_user_config,
     explicit_cli_destinations,
     load_user_config,
+    normalize_user_config,
     update_user_config,
     user_config_from_cli_args,
     user_config_cli_values,
@@ -211,6 +212,66 @@ class UserConfigTest(unittest.TestCase):
         self.assertEqual(args.subject_root, Path("/data/new-subject"))
         self.assertIsNone(args.subject_id)
         self.assertIsNone(args.output_root)
+
+
+class RememberedInputsConfigTest(unittest.TestCase):
+    """Package C1: the input tiles and the distortion-correction values live under ``recent``."""
+
+    TILE_KEYS = ("nifti_source", "bval", "bvec", "nrrd_source", "raw", "dicom_source", "mask")
+
+    def test_c1_empty_config_has_empty_defaults_for_the_remembered_inputs(self) -> None:
+        recent = empty_user_config()["recent"]
+        self.assertEqual(recent["input_sources"], {})
+        self.assertEqual(recent["reverse_pe_b0"], "")
+        self.assertEqual(recent["pe_direction"], "")
+        self.assertEqual(recent["readout_time"], 0.0)
+
+    def test_c1_an_old_config_file_without_the_new_keys_loads_with_empty_defaults(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "user_config.json"
+            path.write_text(json.dumps({"recent": {"subject_id": "s1", "subject_root": "/d", "output_root": "/o"}}),
+                            encoding="utf-8")
+            recent = load_user_config(path)["recent"]
+        self.assertEqual(recent["subject_id"], "s1")
+        self.assertEqual(recent["input_sources"], {})
+        self.assertEqual((recent["reverse_pe_b0"], recent["pe_direction"], recent["readout_time"]), ("", "", 0.0))
+
+    def test_c1_normalize_keeps_the_new_keys_through_a_write_and_load(self) -> None:
+        sources = {"kind": "dicom", "dicom_source": "/data/s1/dicom", "bval": "", "mask": "/data/m.nii.gz"}
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "user_config.json"
+            write_user_config({"recent": {"input_sources": sources, "reverse_pe_b0": "/data/rev.nii.gz",
+                                          "pe_direction": "AP", "readout_time": 0.05}}, path)
+            recent = load_user_config(path)["recent"]
+        self.assertEqual(recent["input_sources"], sources)
+        self.assertEqual(recent["reverse_pe_b0"], "/data/rev.nii.gz")
+        self.assertEqual(recent["pe_direction"], "AP")
+        self.assertEqual(recent["readout_time"], 0.05)
+
+    def test_c1_malformed_remembered_values_normalize_to_empty_defaults(self) -> None:
+        for bad in ("text", ["a"], 7, None):
+            with self.subTest(input_sources=bad):
+                self.assertEqual(normalize_user_config({"recent": {"input_sources": bad}})["recent"]["input_sources"], {})
+        recent = normalize_user_config({"recent": {"readout_time": "fast", "reverse_pe_b0": None, "pe_direction": None,
+                                                   "input_sources": {"bval": None, "kind": "nifti", 3: "x"}}})["recent"]
+        self.assertEqual(recent["readout_time"], 0.0)
+        self.assertEqual((recent["reverse_pe_b0"], recent["pe_direction"]), ("", ""))
+        self.assertEqual(recent["input_sources"], {"kind": "nifti", "3": "x"})
+
+    def test_c1_the_cli_payload_keeps_remembered_inputs_it_did_not_write(self) -> None:
+        args = argparse.Namespace(subject_id="s", subject_root=Path("/d/s"), output_root=None)
+        config = user_config_from_cli_args(args, base_config={"recent": {"input_sources": {"kind": "nrrd"},
+                                                                         "readout_time": 0.03}})
+        self.assertEqual(config["recent"]["input_sources"], {"kind": "nrrd"})
+        self.assertEqual(config["recent"]["readout_time"], 0.03)
+
+    def test_c1_the_existing_public_names_are_all_still_importable(self) -> None:
+        import shared.user_config as module
+        for name in ("empty_user_config", "normalize_user_config", "load_user_config", "write_user_config",
+                     "update_user_config", "default_user_config_path", "user_config_cli_values",
+                     "user_config_from_cli_args", "prune_stale_bundled_dependencies", "extension_root_for_module",
+                     "selected_microstructure_stages", "canonical_microstructure_stages", "RUN_DEFAULTS"):
+            self.assertTrue(hasattr(module, name), name)
 
 
 if __name__ == "__main__":

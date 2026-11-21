@@ -179,6 +179,11 @@ def empty_user_config() -> dict[str, Any]:
             "subject_id": "",
             "subject_root": "",
             "output_root": "",
+            # Package C1: the Prepare Inputs tiles ({"kind": tab, "<tile key>": path}) and the distortion-correction values.
+            "input_sources": {},
+            "reverse_pe_b0": "",
+            "pe_direction": "",
+            "readout_time": 0.0,
         },
         "network": {
             "mirror_prefix": "",
@@ -218,6 +223,20 @@ def normalize_user_config(payload: Mapping[str, Any] | None) -> dict[str, Any]:
             config[section] = deepcopy(fallback)
     for key in ("mirror_prefix", "proxy_url", "offline_assets_dir"):
         config["network"][key] = str(config["network"].get(key) or "").strip()
+    recent = config["recent"]
+    sources = recent.get("input_sources")
+    recent["input_sources"] = {
+        str(key): str(value)
+        for key, value in (sources.items() if isinstance(sources, Mapping) else ())
+        if value is not None
+    }
+    for key in ("reverse_pe_b0", "pe_direction"):
+        recent[key] = str(recent.get(key) or "")
+    try:
+        readout = float(recent.get("readout_time") or 0.0)
+    except (TypeError, ValueError):
+        readout = 0.0
+    recent["readout_time"] = readout if 0.0 < readout < float("inf") else 0.0
     language = str(config["ui"].get("language") or "en").lower()
     config["ui"]["language"] = "zh" if language.startswith("zh") else "en"
     dependencies = config.get("external_dependencies")

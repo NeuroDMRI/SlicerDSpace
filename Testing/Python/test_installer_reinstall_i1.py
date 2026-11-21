@@ -7,6 +7,7 @@ S3 uninstalling a loaded extension is refused; S4 installing an installed extens
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import types
@@ -83,7 +84,8 @@ def _run_installer_function(ns: dict, state: FakeSlicerState, tmp: Path, slicer_
     qt_stub = types.ModuleType("qt")
     qt_stub.QTimer = types.SimpleNamespace(singleShot=lambda ms, fn: fn())
 
-    expected_exe = expected_exe or slicer_arg
+    # The installer launches os.path.abspath(slicer_exe); on Windows that adds a drive letter to /fake/Slicer.
+    expected_exe = expected_exe or os.path.abspath(slicer_arg)
 
     def fake_run(cmd, *args, **kwargs):
         if not cmd or cmd[0] not in (slicer_arg, expected_exe):

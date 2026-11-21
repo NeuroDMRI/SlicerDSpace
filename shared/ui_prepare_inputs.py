@@ -138,8 +138,12 @@ def place_input_preview_button(owner: Any, batch: Any = None) -> None:
     preview_layout = preview.get("layout")
     format_header = fields.get("format_header") if isinstance(fields, dict) else None
     if batch is None:
-        node = getattr(owner, "_parameterNode", None)
-        is_batch = bool(getattr(node, "batchMode", False)) if node is not None else False
+        effective = getattr(owner, "_input_preview_is_batch", None)  # b2 fix W2: the cohort scope counts as Batch
+        if callable(effective):
+            is_batch = bool(effective())
+        else:
+            node = getattr(owner, "_parameterNode", None)
+            is_batch = bool(getattr(node, "batchMode", False)) if node is not None else False
     else:
         is_batch = bool(batch)
     if format_header is not None:
@@ -447,7 +451,8 @@ def sync_input_mode(owner):
     fields["subject_labels"].setCurrentIndex(int(batch))
     fields["subject_fields"].setCurrentIndex(int(batch))
     fields["mask_tile"].setVisible(not batch and getattr(node, "brainMaskBackend", "") == "provided")
-    place_input_preview_button(owner, batch=batch)
+    effective_batch = getattr(owner, "_input_preview_is_batch", None)  # b2 fix W2: the cohort scope counts as Batch
+    place_input_preview_button(owner, batch=bool(effective_batch()) if callable(effective_batch) else batch)
     output_help = fields.get("output_help")
     if output_help is not None:
         output_help.setVisible(batch)  # b2 inputs-help: the Output Folder "?" describes the batch layout

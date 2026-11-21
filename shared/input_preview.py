@@ -714,6 +714,8 @@ def read_bvecs(path: Any, count: int):
                 if line.strip()]
     except ValueError as exc:
         raise PreviewError("bad_data", f"The bvec file has a non-numeric entry: {exc}") from exc
+    if not all(np.isfinite(value) for row in rows for value in row):  # b2 fix W3: "nan" and "inf" parse as floats
+        raise PreviewError("bad_data", "The bvec file has a non-finite entry (nan or inf).")
     widths = {len(row) for row in rows}
     if len(widths) == 1:
         values = np.asarray(rows, dtype=float)

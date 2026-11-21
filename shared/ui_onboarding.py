@@ -673,8 +673,8 @@ HELP_TEXT = {
         "help_batch_folder": _help_card(
             _help_p("<b>Fill:</b> choose an existing folder. Batch mode needs it."),
             _help_p("<b>Subjects:</b> each direct subfolder is one subject, and the folder name is its Subject ID. "
-                    "Files and deeper folders are not searched. A subfolder with no readable input is skipped. "
-                    "A subfolder can hold, for example:"),
+                    "NIfTI and NRRD files are looked for in the subject subfolder itself or in its "
+                    "<tt>input/</tt> folder. DICOM files may be in deeper folders. A subfolder can hold, for example:"),
             _help_list(
                 "<tt>input/data.nii.gz</tt>, <tt>input/bvals</tt> and <tt>input/bvecs</tt>",
                 "one NIfTI (a name without \"mask\") with <tt>name.bval</tt> + <tt>name.bvec</tt>, "
@@ -686,8 +686,8 @@ HELP_TEXT = {
         ),
         "help_output_folder": _help_card(
             _help_p("<b>Fill:</b> optional. If you leave it empty, the results of each subject go in "
-                    "<tt>&lt;ID&gt;/outputs</tt> inside the Batch Folder, and the batch record goes in "
-                    "<tt>batch_outputs/00_batch_metadata</tt> there."),
+                    "an <tt>outputs</tt> folder next to that subject's input, and the batch record goes in "
+                    "<tt>batch_outputs/00_batch_metadata</tt> inside the Batch Folder."),
             _help_p("<b>Made here:</b> one subfolder per subject, <tt>&lt;Output Folder&gt;/&lt;ID&gt;/outputs</tt>, "
                     "holds its results. Its cache and preprocessed files are kept next to <tt>outputs</tt>. "
                     "<tt>00_batch_metadata</tt> holds the batch record (<tt>batch_&lt;date&gt;_&lt;time&gt;.json</tt>) "
@@ -707,7 +707,8 @@ HELP_TEXT = {
         "help_batch_folder": _help_card(
             _help_p("<b>填写：</b>选择一个已存在的文件夹。批量模式必须填写。"),
             _help_p("<b>受试者：</b>每个直接子文件夹是一名受试者，文件夹名即其受试者 ID。"
-                    "文件和更深层的文件夹不会被搜索。没有可读取输入的子文件夹会被跳过。子文件夹可以包含，例如："),
+                    "NIfTI 和 NRRD 文件在受试者子文件夹本身或其 <tt>input/</tt> 文件夹中查找。"
+                    "DICOM 文件可以在更深层的文件夹中。子文件夹可以包含，例如："),
             _help_list(
                 "<tt>input/data.nii.gz</tt>、<tt>input/bvals</tt> 和 <tt>input/bvecs</tt>",
                 "一个 NIfTI（名称不含 \"mask\"）及其梯度文件：<tt>name.bval</tt> + <tt>name.bvec</tt>、"
@@ -718,8 +719,8 @@ HELP_TEXT = {
             _help_tree(*_HELP_BATCH_TREE),
         ),
         "help_output_folder": _help_card(
-            _help_p("<b>填写：</b>可选。留空时，每名受试者的结果保存在批量输入目录内的 "
-                    "<tt>&lt;ID&gt;/outputs</tt>，批量记录保存在其中的 <tt>batch_outputs/00_batch_metadata</tt>。"),
+            _help_p("<b>填写：</b>可选。留空时，每名受试者的结果保存在该受试者输入旁边的 "
+                    "<tt>outputs</tt> 文件夹，批量记录保存在批量输入目录内的 <tt>batch_outputs/00_batch_metadata</tt>。"),
             _help_p("<b>在此生成：</b>每名受试者一个子文件夹 <tt>&lt;输出文件夹&gt;/&lt;ID&gt;/outputs</tt>，保存其结果；"
                     "其缓存和预处理文件放在 <tt>outputs</tt> 旁边。"
                     "<tt>00_batch_metadata</tt> 保存批量记录（<tt>batch_&lt;日期&gt;_&lt;时间&gt;.json</tt>）"

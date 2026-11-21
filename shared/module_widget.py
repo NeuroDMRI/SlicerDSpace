@@ -1796,8 +1796,8 @@ class SharedWidgetMixin:
         try:
             if self._parameterNode is None:
                 raise PreviewError("no_input")
-            if bool(getattr(self._parameterNode, "batchMode", False)):
-                # b2 inputs-help item 3: Batch mode has no input preview. The button is hidden; keep it off and the
+            if self._input_preview_is_batch():
+                # b2 inputs-help item 3: Batch mode (and the cohort experiment scope, W2) has no input preview. The button is hidden; keep it off and the
                 # status line empty, so nothing of the single-subject preview shows in Batch mode.
                 widgets["button"].setEnabled(False)
                 widgets["button"].setToolTip("")
@@ -1854,8 +1854,8 @@ class SharedWidgetMixin:
 
         if getattr(self, "_inputPreviewPending", False) or getattr(self, "_inputImportPending", False):
             return
-        if bool(getattr(getattr(self, "_parameterNode", None), "batchMode", False)):
-            return  # b2 inputs-help item 3: Batch mode has no input preview
+        if self._input_preview_is_batch():
+            return  # b2 inputs-help item 3: Batch mode (and the cohort experiment scope, W2) has no input preview
         zh = str(getattr(self, "_onboardingLanguage", "en")).startswith("zh")
         try:
             source = self._resolve_input_preview_source()
@@ -1997,7 +1997,7 @@ class SharedWidgetMixin:
         if info is not None:
             info.setText(f"/ {count}  (b = {float(node.GetBValue(component)):g})")
         # b2 inputs-help item 3: Batch mode hides the stepper and keeps it hidden on every refresh.
-        shown = not bool(getattr(getattr(self, "_parameterNode", None), "batchMode", False))
+        shown = not self._input_preview_is_batch()
         spin.setEnabled(shown)
         if stepper is not None:
             stepper.setVisible(shown)

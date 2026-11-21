@@ -114,6 +114,9 @@ class HelpTruthTest(unittest.TestCase):
                 (folder / item).write_bytes(b"x")
         elif kind == "nrrd":
             (folder / "dwi.nhdr").write_bytes(b"NRRD")
+        elif kind == "dicom_deeper":
+            (folder / "series1").mkdir()
+            (folder / "series1" / "IM0001").write_bytes(b"\0" * 128 + b"DICM" + b"\0" * 64)
         elif kind == "two_nifti":
             for item in ("a.nii.gz", "a.bval", "a.bvec", "b.nii.gz", "b.bval", "b.bvec"):
                 (folder / item).write_bytes(b"x")
@@ -148,6 +151,35 @@ class HelpTruthTest(unittest.TestCase):
         self.assertNotIn("group/sub-07", ids)
         # A subfolder with no readable input is skipped; so is one with two NIfTI files (the text says "one NIfTI").
         self.assertEqual({item["subject_id"] for item in skipped} - {"group"}, {"sub-05", "sub-06"})
+
+    def test_b2fix_dwi_W1_batch_text_states_only_what_the_scan_does(self):
+        """W1: the text claimed deeper folders are not searched and an empty subfolder is skipped; neither is true."""
+        batch = self.root / "batch"
+        self.make_subject(batch, "sub-a", "dicom_deeper")  # the DICOM file is one folder deeper
+        self.make_subject(batch, "sub-b", "empty")
+        module = self.load_batch_script()
+        subjects, skipped = module.discover_subjects(batch)
+        by_id = {subject.subject_id: subject for subject in subjects}
+        # A DICOM subject may hold its files in a deeper folder, so "deeper folders are not searched" is false.
+        self.assertEqual(by_id["sub-a"].mode, "dicom")
+        # An empty subfolder is not skipped here (the scan falls back to the Batch Folder), so "is skipped" is false.
+        self.assertNotIn("sub-b", {item["subject_id"] for item in skipped})
+        for lang, false_claims in (("en", ("Files and deeper folders are not searched",
+                                           "A subfolder with no readable input is skipped")),
+                                   ("zh", ("文件和更深层的文件夹不会被搜索", "没有可读取输入的子文件夹会被跳过"))):
+            for key in ("help_batch_folder", "help_output_folder"):
+                text = plain(onboarding_text(lang, key))
+                for claim in false_claims:
+                    self.assertNotIn(claim, text, (lang, key))
+                self.assertNotIn("skipped" if lang == "en" else "跳过", text, (lang, key))
+            folder = plain(onboarding_text(lang, "help_batch_folder"))
+            self.assertIn("input/", folder)
+            self.assertIn("DICOM", folder)
+            output = plain(onboarding_text(lang, "help_output_folder"))
+            self.assertNotIn("<ID>/outputs</tt> inside the Batch Folder", output)
+        # The empty Output Folder text names the real default: an outputs folder next to the subject's input.
+        self.assertIn("next to that subject's input", plain(onboarding_text("en", "help_output_folder")))
+        self.assertIn("旁边", plain(onboarding_text("zh", "help_output_folder")).split("<ID>/outputs")[0])
 
     def test_b2_inputs_output_text_matches_the_batch_output_layout(self):
         module = self.load_batch_script()

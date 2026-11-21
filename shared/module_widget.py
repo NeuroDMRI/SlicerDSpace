@@ -5157,14 +5157,27 @@ class SharedWidgetMixin:
         from shared.ui_environment_panel import os_blocked_without_remedy
         if setting_key == "postprocess_freesurfer_home" and os_blocked_without_remedy(item):
             # b2-os F7: the resolver prefers postprocess_runtime, so a blocked override would hide the chosen folder.
-            # Clear it in the settings and in its line edit before the re-check reads the widgets.
+            # Clear it in the settings and in its line edit before the re-check reads the widgets. Clear it whatever the
+            # reader shows: after a restart the reader hides an OS-blocked override, but the raw value is still stored.
             runtime_edit = line_edits.get("postprocess_runtime")
             override = (self._line_edit_text(runtime_edit) if runtime_edit else ""
                         ) or self._read_environment_path_setting("postprocess_runtime")
+            if not override:
+                try:
+                    override = str(slicer.app.userSettings().value(
+                        self._environment_settings_key("postprocess_runtime"), "") or "").strip()
+                except Exception:
+                    override = ""
+            if not override:
+                try:
+                    override = str((load_user_config().get("external_dependencies") or {}).get("postprocess_runtime")
+                                   or "").strip()
+                except Exception:
+                    override = ""
+            self._save_environment_path_setting("postprocess_runtime", "")
+            if runtime_edit:
+                runtime_edit.setText("")
             if override:
-                self._save_environment_path_setting("postprocess_runtime", "")
-                if runtime_edit:
-                    runtime_edit.setText("")
                 self.appendLog(f"[Environment] Cleared postprocess_runtime (this macOS cannot run it): {override}")
         result = self._run_environment_dependency_check()
         if result is not None:

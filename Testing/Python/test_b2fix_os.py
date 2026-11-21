@@ -373,6 +373,56 @@ class F7ChooserTest(MacCase):
         widget._configure_path_for_environment_item(other)
         self.assertNotIn(("postprocess_runtime", ""), saved)
 
+    def test_b2fix_os_F7b_choose_freesurfer_folder_clears_a_stored_override_that_the_reader_hides(self):
+        """F7 re-review (item not complete): after a restart the REAL reader hides the OS-blocked runtime override, so the
+        guard saw an empty value and left it in QSettings and in the shared JSON config. The chooser clears both stores."""
+        self.mac("13.4")
+        mw = _import_module_widget(self)
+        values = {}
+
+        class Settings:  # the QSettings stand-in: a plain dict behind value/setValue/remove
+            def value(self, key, default=None):
+                return values.get(key, default)
+
+            def setValue(self, key, value):
+                values[key] = value
+
+            def remove(self, key):
+                values.pop(key, None)
+
+        mw.slicer.app.userSettings.return_value = Settings()
+        config_path = self.root / "user_config.json"
+        env = mock.patch.dict("os.environ", {"SLICERDSPACE_USER_CONFIG": str(config_path)})
+        env.start()
+        self.addCleanup(env.stop)
+        widget = mw.SharedWidgetMixin()
+        key = widget._environment_settings_key("postprocess_runtime")
+        blocked_runtime = self.bundle.as_posix()  # a real runtime directory whose binaries need macOS 15.0
+        values[key] = blocked_runtime
+        mw.update_user_config({"external_dependencies": {"postprocess_runtime": blocked_runtime}})
+        logged = []
+        widget.appendLog = logged.append
+        # The real reader shows nothing for it (this is the state after a Slicer restart).
+        self.assertEqual(widget._read_environment_path_setting("postprocess_runtime"), "")
+        self.assertEqual(values.get(key), blocked_runtime)
+        runtime_edit = mock.Mock()
+        runtime_edit.text = ""
+        widget._environmentPathLineEdits = {"postprocess_runtime": runtime_edit, "postprocess_freesurfer_home": mock.Mock()}
+        widget._is_model_resource_item = lambda item: False
+        widget._run_environment_dependency_check = lambda: None
+        mw.qt.QFileDialog.getExistingDirectory.return_value = "/Applications/freesurfer"
+        self.assertTrue(widget._configure_path_for_environment_item(_os_row()))
+        self.assertNotIn(key, values)  # QSettings
+        stored = mw.load_user_config().get("external_dependencies") or {}
+        self.assertFalse(stored.get("postprocess_runtime"))  # shared JSON config
+        self.assertEqual(values.get(widget._environment_settings_key("postprocess_freesurfer_home")),
+                         "/Applications/freesurfer")
+        self.assertTrue(any("Cleared postprocess_runtime" in line and blocked_runtime in line for line in logged), logged)
+        # Nothing stored: nothing cleared, nothing logged.
+        logged.clear()
+        self.assertTrue(widget._configure_path_for_environment_item(_os_row()))
+        self.assertFalse(any("Cleared postprocess_runtime" in line for line in logged), logged)
+
 
 if __name__ == "__main__":
     unittest.main()

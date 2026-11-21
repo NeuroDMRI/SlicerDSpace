@@ -139,6 +139,34 @@ def stage_source(source, work):
     return stage
 
 
+def macos_deployment_target(value, system):
+    """Return the macOS deployment target for this build ('' when none is set).
+
+    The value comes from --macos-deployment-target or, when that is absent, from MACOSX_DEPLOYMENT_TARGET.
+    It is recorded in runtime.json so the published runtime can be rebuilt the same way.
+    """
+    explicit = value is not None and str(value).strip() != ''
+    target = str(value).strip() if explicit else os.environ.get('MACOSX_DEPLOYMENT_TARGET', '').strip()
+    if not target:
+        return ''
+    if system != 'Darwin':
+        if explicit:
+            raise ValueError('--macos-deployment-target applies to macOS builds only')
+        return ''
+    if not re.fullmatch(r'\d+(\.\d+){0,2}', target):
+        raise ValueError('Invalid macOS deployment target: ' + target)
+    return target
+
+
+def sdk_version(system, env):
+    if system != 'Darwin':
+        return ''
+    try:
+        return subprocess.check_output(['xcrun', '--show-sdk-version'], text=True, env=env).strip()
+    except (OSError, subprocess.CalledProcessError):
+        return ''
+
+
 def build(args):
     system, machine = host()
     if args.jobs < 1:
@@ -156,8 +184,12 @@ def build(args):
     if prefix == work or work in prefix.parents or prefix in work.parents:
         # Keeping the installed runtime outside the build tree permits later build-cache cleanup.
         raise ValueError('Install prefix and build work directory must be separate')
+    target = macos_deployment_target(getattr(args, 'macos_deployment_target', None), system)
+    target_options = ['-DCMAKE_OSX_DEPLOYMENT_TARGET=' + target] if target else []
     env = dict(os.environ, CC=cc, CXX=cxx, CMAKE_BUILD_PARALLEL_LEVEL=str(args.jobs),
                OMP_NUM_THREADS=str(args.jobs), OPENBLAS_NUM_THREADS='1')
+    if target:
+        env['MACOSX_DEPLOYMENT_TARGET'] = target
     if machine == 'arm64':
         for flag_var in ('CFLAGS', 'CXXFLAGS'):
             current_flags = env.get(flag_var, '')
@@ -181,7 +213,8 @@ def build(args):
         run([cmake, '-S', itk, '-B', itk_build, '-DCMAKE_BUILD_TYPE=Release',
              '-DCMAKE_CXX_STANDARD=11', '-DCMAKE_POSITION_INDEPENDENT_CODE=ON',
              '-DBUILD_SHARED_LIBS=OFF', '-DBUILD_TESTING=OFF', '-DITK_BUILD_DEFAULT_MODULES=OFF',
-             '-DITKGroup_Core=OFF', '-DModule_ITKCommon=ON', '-DCMAKE_INSTALL_PREFIX=' + str(itk_prefix)],
+             '-DITKGroup_Core=OFF', '-DModule_ITKCommon=ON', '-DCMAKE_INSTALL_PREFIX=' + str(itk_prefix),
+             *target_options],
             work / 'itk-configure.log', env)
         run([cmake, '--build', itk_build, '--parallel', args.jobs], work / 'itk-build.log', env)
         run([cmake, '--install', itk_build], work / 'itk-install.log', env)
@@ -189,7 +222,7 @@ def build(args):
         native = work / 'surface-build'
         run([cmake, '-S', stage, '-B', native, '-DCMAKE_BUILD_TYPE=Release',
              '-DITK_DIR=' + str(itk_prefix / 'lib/cmake/ITK-4.13'),
-             '-DDDSURFER_ZLIB_SOURCE=' + str(zlib), '-DPython3_EXECUTABLE=' + sys.executable],
+             '-DDDSURFER_ZLIB_SOURCE=' + str(zlib), '-DPython3_EXECUTABLE=' + sys.executable, *target_options],
             work / 'surface-configure.log', env)
         run([cmake, '--build', native, '--parallel', args.jobs, '--target', *COMMANDS], work / 'surface-build.log', env)
         prefix.parent.mkdir(parents=True, exist_ok=True)
@@ -212,7 +245,10 @@ def build(args):
                           recipe_sha256=recipe_digest(), activation_key_included=False,
                           build=dict(cmake=version, cxx=subprocess.check_output([cxx, '--version'], text=True).splitlines()[0],
                                      dependencies=DEPENDENCIES, itk_compiler_guard_patch=True,
-                                     environment_flags={name: env.get(name, '') for name in ('CFLAGS', 'CXXFLAGS', 'LDFLAGS')}), files=files)
+                                     environment_flags={name: env.get(name, '') for name in ('CFLAGS', 'CXXFLAGS', 'LDFLAGS')},
+                                     macos_deployment_target=target, cmake_target_options=target_options,
+                                     sdk=sdk_version(system, env), builder_commit=getattr(args, 'build_commit', None) or ''),
+                          files=files)
             atomic_json(runtime / 'runtime.json', record)
             validate_runtime(runtime)
             runtime.rename(prefix)
@@ -228,6 +264,9 @@ def main(argv=None):
     parser.add_argument('--source-root', type=Path, help='Optional clean Git checkout of the pinned source revision.')
     parser.add_argument('--cmake', type=Path, help='Override the CMake executable.')
     parser.add_argument('--offline', action='store_true', help='Require an existing source checkout and cached dependency archives.')
+    parser.add_argument('--macos-deployment-target', help='Lowest macOS version the binaries run on (for example 13.0); '
+                        'defaults to MACOSX_DEPLOYMENT_TARGET, else the compiler default.')
+    parser.add_argument('--build-commit', help='Commit of the repository that ran this build; recorded in runtime.json.')
     args = parser.parse_args(argv)
     try:
         build(args)

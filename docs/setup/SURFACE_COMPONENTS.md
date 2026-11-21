@@ -109,13 +109,44 @@ QC success does not replace anatomical review. Runtime identity is recorded in
 the manifest and cache signature; switching an explicit runtime prevents reuse
 of the previous runtime's completion state.
 
-The Apple Silicon candidate was built on macOS 15.8.1 from the pinned
-FreeSurfer 7.4.1 source. The build passed the upstream Apple Silicon flags
-`-DARM64 -DPNG_ARM_NEON_OPT=0` in both `CFLAGS` and `CXXFLAGS` and set
-`MACOSX_DEPLOYMENT_TARGET=15.0`. All seven binaries were arm64 and passed
-`--version` in a clean process environment. A fresh offline installation
-repeated all seven checks. This candidate was built without OpenMP. Scientific
-comparison on macOS remains pending.
+The Apple Silicon runtime in the `v0.1.1` macOS base package was built from the
+pinned FreeSurfer 7.4.1 source. Its seven binaries are arm64 with a minimum
+macOS of 15.0 and were built without OpenMP. Its `runtime.json` records CMake
+3.31.10, Apple clang 17.0.0 (clang-1700.0.13.5) and empty `CFLAGS`, `CXXFLAGS`
+and `LDFLAGS`. It records no deployment target, build host or commit, so that
+archive cannot be rebuilt exactly as recorded.
+
+The workflow `.github/workflows/build-surface-runtime.yml` rebuilds this runtime
+for macOS 13.0:
+
+- It runs on the GitHub `macos-15` arm64 runner with Xcode 16.4, Apple clang
+  17.0.0 (clang-1700.0.13.5), the macOS 15.5 SDK, CMake 3.31.6 from pip and
+  Python 3.12. It fetches the pinned `atlas.tar.gz` and checks its SHA-256.
+- It runs `python -m postprocessing.core.build --jobs 4
+  --macos-deployment-target 13.0 --build-commit <commit>`. `build.py` sets
+  `MACOSX_DEPLOYMENT_TARGET=13.0`, passes `-DCMAKE_OSX_DEPLOYMENT_TARGET=13.0`
+  to the ITK and the surface-tool configure steps, and adds `-DARM64` to
+  `CFLAGS` and `CXXFLAGS` on arm64. It does not set `PNG_ARM_NEON_OPT`.
+  CMake finds no OpenMP, so the tools run without OpenMP.
+- `runtime.json` records the flags, the compiler, CMake, the SDK, the
+  deployment target and the commit that ran the build.
+- `.github/scripts/verify_surface_runtime.py` checks that every binary has a
+  minimum macOS of 13.0 and links only `/usr/lib` system libraries, that `bin/`
+  holds exactly the seven recipe commands, that each command starts with
+  `--version`, and that no build log reports an object built for a newer macOS.
+- `scripts/package_surface_runtime.py` packs
+  `surface-runtime-darwin-arm64-macos13.tar.gz`. The tarball and its `.sha256`
+  file are kept as an Actions artifact. Only a manual run with `publish=true`
+  and a `release_tag` uploads them to a release, under this new name; the job
+  stops if the release already has an asset with that name. `artifact_run_id`
+  selects the verified artifact of an earlier run, because each build embeds
+  its build date and so gets a new SHA-256.
+
+The rebuilt data files are byte-identical to the `v0.1.1` runtime. The binaries
+differ only in embedded build paths, build-date strings and about 50 of
+430,000–575,000 instructions each (static comparison). The rebuilt commands
+were started on macOS 15 only; the `macos-14` runner of the start check was not
+available to this repository. Scientific comparison on macOS remains pending.
 
 On Windows x86_64 (`v0.1.1`), the 7 native FreeSurfer surface postprocessing executables (`mris_convert.exe`, `mris_inflate.exe`, `mris_curv.exe`, `mris_smooth.exe`, `mris_sphere.exe`, `mris_register.exe`, `mris_ca_label.exe`, `mris_anatomical_stats.exe`) have been ported, built, bundled in `surface-runtime-windows-x86_64`, and verified on real data in 3D Slicer 5.10.0 against the Linux reference (`Activation Key Included: false`; personal FreeSurfer license required at runtime).
 

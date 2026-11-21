@@ -199,7 +199,14 @@ class RepositoryStructureTest(unittest.TestCase):
             self.assertIsNotNone(events, workflow.name)
             self.assertIn("workflow_dispatch:", events.group(1), workflow.name)
             forbidden = r"(?m)^  (pull_request|schedule|workflow_run|release):" if workflow.name == "pages.yml" else r"(?m)^  (push|pull_request|schedule|workflow_run|release):"
-            self.assertNotRegex(events.group(1), forbidden)
+            block = events.group(1)
+            if workflow.name == "build-surface-runtime.yml":
+                # b2 runtime lane: the surface-runtime build also runs on a push to its one CI branch, never main.
+                scoped = "  push:\n    branches:\n      - ci/b2-surface-runtime\n"
+                self.assertEqual(block.count("  push:"), 1, workflow.name)
+                self.assertIn(scoped, block, workflow.name)
+                block = block.replace(scoped, "")
+            self.assertNotRegex(block, forbidden)
 
     def test_cache_settings_preserve_scientific_evidence(self) -> None:
         project = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")

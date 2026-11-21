@@ -314,7 +314,7 @@ class CrossPlatformReliabilityTests(unittest.TestCase):
             "const pyEn = filesEn.find((f) => f.name.endsWith('SlicerDSpaceSetup.py')).data;\n"
             "process.stdout.write(JSON.stringify({ py, pyEn }));\n"
         )
-        raw = subprocess.run([node_bin, "-e", node_script, str(js_path)], capture_output=True, text=True, check=True).stdout
+        raw = subprocess.run([node_bin, "-e", node_script, str(js_path)], capture_output=True, text=True, encoding="utf-8", check=True).stdout
         payload_js = json.loads(raw)
         self.assertIn('"language":"zh"', payload_js["py"])
         self.assertIn('"language":"en"', payload_js["pyEn"])

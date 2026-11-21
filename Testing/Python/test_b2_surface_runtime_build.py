@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import re
+import struct
 import sys
 import tempfile
 import unittest
@@ -63,8 +64,10 @@ class FakeBuild:
     def copy2(self, source, destination):
         Path(destination).write_bytes(b'\xcf\xfa\xed\xfe binary')
 
-    def __call__(self, argv, environ=None):
+    def __call__(self, argv, environ=None, existing=None):
         b = self.core_build
+        if existing is not None:  # an already installed prefix; validate_runtime returns its record
+            (self.folder / 'prefix').mkdir(parents=True, exist_ok=True)
         args = b.argparse.Namespace(jobs=2, prefix=self.folder / 'prefix', work_dir=self.folder / 'work',
                                     source_root=None, cmake=None, offline=False,
                                     macos_deployment_target=argv.get('target'), build_commit=argv.get('commit'))
@@ -80,8 +83,10 @@ class FakeBuild:
                 patch.object(b, 'run', side_effect=self.run), \
                 patch.object(b, 'install_assets', side_effect=self.install_assets), \
                 patch.object(b.shutil, 'copy2', side_effect=self.copy2), \
-                patch.object(b, 'validate_runtime', return_value={}):
+                patch.object(b, 'validate_runtime', return_value=existing if existing is not None else {}):
             b.build(args)
+        if existing is not None:
+            return existing
         return json.loads((self.folder / 'prefix/runtime.json').read_text())
 
     def configures(self):
@@ -129,6 +134,49 @@ class BuildDeploymentTargetTests(unittest.TestCase):
             self.assertEqual(record['build']['macos_deployment_target'], '')
             self.assertEqual(record['build']['builder_commit'], '')
 
+    def test_b2fix_runtime_T3_no_target_unsets_a_cached_cmake_target(self):
+        """T3 (Codex P1, Opus P2-4): a CMakeCache.txt target of an earlier build must not survive a no-target build."""
+        with tempfile.TemporaryDirectory() as folder:
+            fake = FakeBuild(self.core_build, folder)
+            record = fake(dict())
+            self.assertEqual(len(fake.configures()), 2)
+            for command, _env in fake.configures():
+                self.assertIn('-UCMAKE_OSX_DEPLOYMENT_TARGET', command)
+            self.assertEqual(record['build']['macos_deployment_target'], '')
+            self.assertEqual(record['build']['cmake_target_options'], ['-UCMAKE_OSX_DEPLOYMENT_TARGET'])
+        with tempfile.TemporaryDirectory() as folder:  # the unset applies to macOS builds only
+            fake = FakeBuild(self.core_build, folder, system='Linux', machine='x86_64')
+            fake(dict())
+            for command, _env in fake.configures():
+                self.assertNotIn('-UCMAKE_OSX_DEPLOYMENT_TARGET', command)
+
+    def existing_record(self, target):
+        build = {} if target is None else dict(macos_deployment_target=target)
+        return dict(recipe_sha256=self.core_build.recipe_digest(), build=build)
+
+    def test_b2fix_runtime_T3_refuses_a_prefix_built_for_another_target(self):
+        """T3 (Codex P1): an installed prefix with a different or unrecorded target is not reused silently."""
+        for recorded in ('', None, '15.0', '14.0'):
+            with tempfile.TemporaryDirectory() as folder:
+                fake = FakeBuild(self.core_build, folder)
+                with self.assertRaisesRegex(ValueError, 'deployment target'):
+                    fake(dict(target='13.0'), existing=self.existing_record(recorded))
+                self.assertEqual(fake.commands, [], recorded)
+
+    def test_b2fix_runtime_T3_reuses_a_prefix_with_the_requested_target(self):
+        for requested, recorded in (('13.0', '13.0'), ('13', '13.0'), ('13.0', '13.0.0')):
+            with tempfile.TemporaryDirectory() as folder:
+                fake = FakeBuild(self.core_build, folder)
+                fake(dict(target=requested), existing=self.existing_record(recorded))
+                self.assertEqual(fake.commands, [], (requested, recorded))
+
+    def test_b2fix_runtime_T3_no_requested_target_reuses_any_prefix(self):
+        for recorded in ('', None, '13.0'):
+            with tempfile.TemporaryDirectory() as folder:
+                fake = FakeBuild(self.core_build, folder)
+                fake(dict(), existing=self.existing_record(recorded))
+                self.assertEqual(fake.commands, [], recorded)
+
     def test_b2_runtime_target_from_environment_is_recorded(self):
         with tempfile.TemporaryDirectory() as folder:
             fake = FakeBuild(self.core_build, folder)
@@ -153,6 +201,11 @@ class BuildDeploymentTargetTests(unittest.TestCase):
         self.assertEqual(seen[0].build_commit, 'abc')
 
 
+def macho(cputype=0x0100000C):
+    """A thin 64-bit Mach-O header (magic, cputype, zeros) of 32 bytes."""
+    return struct.pack('<II', 0xFEEDFACF, cputype) + b'\0' * 24
+
+
 class VerifierTests(unittest.TestCase):
     def setUp(self):
         self.verifier = load_verifier()
@@ -162,7 +215,7 @@ class VerifierTests(unittest.TestCase):
         (self.root / 'bin').mkdir(parents=True)
         for name in COMMANDS:
             path = self.root / 'bin' / name
-            path.write_bytes(b'\xcf\xfa\xed\xfe')
+            path.write_bytes(macho())
             path.chmod(0o755)
         (self.root / 'LICENSE.txt').write_text('notice\n')
         self.minos = {name: (13, 0, 0) for name in COMMANDS}
@@ -209,6 +262,44 @@ class VerifierTests(unittest.TestCase):
         joined = '\n'.join(report['failures'])
         self.assertIn('mris_inflate', joined)
         self.assertIn('mris_extra', joined)
+
+    def test_b2fix_runtime_T2_verifier_fails_on_a_symlink_in_bin(self):
+        """T2 (Codex P1, Opus P2-3): a symlinked tool skipped every check and still passed."""
+        (self.root / 'bin/mris_sphere').unlink()
+        (self.root / 'bin/mris_sphere').symlink_to('mris_inflate')
+        report = self.check()
+        self.assertFalse(report['ok'])
+        self.assertTrue(any('mris_sphere' in item and 'symlink' in item for item in report['failures']), report['failures'])
+
+    def test_b2fix_runtime_T2_verifier_fails_when_no_tool_was_checked(self):
+        """T2 (Codex P1): all seven tools symlinks gave ok=true with tools=[]."""
+        real = self.root / 'real'
+        real.write_bytes(b'not a mach-o')
+        for name in COMMANDS:
+            (self.root / 'bin' / name).unlink()
+            (self.root / 'bin' / name).symlink_to('../real')
+        report = self.check()
+        self.assertFalse(report['ok'])
+        self.assertEqual(report['tools'], [])
+        self.assertTrue(any('no tool was checked' in item for item in report['failures']), report['failures'])
+        empty = Path(self.folder.name) / 'empty'
+        (empty / 'bin').mkdir(parents=True)
+        self.assertTrue(any('no tool was checked' in item
+                            for item in self.verifier.check_runtime(empty, expected_min_macos='13.0')['failures']))
+
+    def test_b2fix_runtime_T2_verifier_fails_on_a_binary_that_is_not_arm64(self):
+        """T2 (Opus P2-3): minos 13.0 on an x86_64 file passed; the CPU type is checked now."""
+        (self.root / 'bin/mris_sphere').write_bytes(macho(0x01000007))  # x86_64
+        (self.root / 'bin/mri_surf2surf').write_bytes(b'\xcf\xfa\xed\xfe')  # header cut short
+        fat = struct.pack('>IIIiiII', 0xCAFEBABE, 2, 0x0100000C, 0, 4096, 4096, 14) \
+            + struct.pack('>iiIII', 0x01000007, 3, 8192, 4096, 14)
+        (self.root / 'bin/mris_register').write_bytes(fat)  # arm64 + x86_64
+        report = self.check()
+        self.assertFalse(report['ok'])
+        joined = '\n'.join(report['failures'])
+        self.assertRegex(joined, r'mris_sphere: .*x86_64')
+        self.assertRegex(joined, r'mri_surf2surf: .*CPU type')
+        self.assertRegex(joined, r'mris_register: .*arm64.*x86_64')
 
     def test_b2_runtime_verifier_fails_when_a_tool_does_not_start(self):
         self.started['mri_label2label'] = (134, 'dyld: Symbol not found')
@@ -294,9 +385,9 @@ class WorkflowTests(unittest.TestCase):
         self.assertRegex(self.head, r'(?m)^  workflow_dispatch:\s*$')
         self.assertRegex(self.head, r'(?s)publish:.*?type: boolean.*?default: false')
         self.assertRegex(self.head, r'(?s)release_tag:.*?default: ""')
-        self.assertRegex(self.head, r'(?s)  push:\s*\n    branches:\s*\n      - ci/b2-surface-runtime\s*\n')
-        self.assertEqual(re.findall(r'(?m)^      - (\S+)', self.head), ['ci/b2-surface-runtime'])
-        self.assertNotRegex(self.head, r'(?m)^  (pull_request|schedule|release):')
+        # T1: manual only on main; the push trigger of the CI branch is gone.
+        self.assertNotRegex(self.head, r'(?m)^  (push|pull_request|schedule|workflow_run|release):')
+        self.assertNotIn('ci/b2-surface-runtime', self.text)
         self.assertRegex(self.head, r'(?m)^permissions:\s*\n  contents: read\s*$')
 
     def test_b2_runtime_build_job(self):
@@ -326,6 +417,12 @@ class WorkflowTests(unittest.TestCase):
         self.assertNotIn('--clobber', self.text)
         self.assertEqual(self.text.count('contents: write'), 1)
 
+    def test_b2fix_runtime_T5_publish_has_its_own_concurrency_group_that_is_never_cancelled(self):
+        job = self.jobs['publish']
+        self.assertRegex(job, r'(?s)\n    concurrency:\s*\n      group: \S+\s*\n      cancel-in-progress: false\s*\n')
+        group = re.search(r'\n      group: (\S+)', job).group(1)
+        self.assertNotEqual(group, re.search(r'(?m)^  group: (\S+)', self.head).group(1))
+
     def test_b2_runtime_publish_can_take_the_verified_artifact_of_an_earlier_run(self):
         # Each build embeds __DATE__/__TIME__, so a new run gives a new sha256. The catalog patch names one run.
         self.assertRegex(self.head, r'(?s)artifact_run_id:.*?type: string.*?default: ""')
@@ -347,14 +444,11 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn('image: ubuntu:20.04', older)
         self.assertIn('--version', older)
 
-    def test_b2_runtime_older_macos_job_may_fail(self):
-        job = self.jobs['run-on-older-macos']
-        self.assertIn('runs-on: macos-14', job)
-        self.assertIn('continue-on-error: true', job)
-        self.assertIn('needs: build-darwin-arm64', job)
-        self.assertIn('actions/download-artifact@v4', job)
-        self.assertIn('--version', job)
-        self.assertIn('timeout-minutes:', job)
+    def test_b2fix_runtime_T4_no_older_macos_job(self):
+        """T4 (Opus P2-1): the macos-14 job always ended cancelled and made the run conclusion cancelled."""
+        self.assertNotIn('run-on-older-macos', self.jobs)
+        self.assertNotIn('macos-14', self.text)
+        self.assertEqual(sorted(self.jobs), ['build-darwin-arm64', 'build-linux-x86_64', 'publish', 'run-on-older-linux'])
 
 
 if __name__ == '__main__':

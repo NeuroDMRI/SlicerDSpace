@@ -158,6 +158,16 @@ def macos_deployment_target(value, system):
     return target
 
 
+def same_deployment_target(recorded, requested):
+    """True when two macOS target strings name the same version ('13' equals '13.0' equals '13.0.0')."""
+    def parts(text):
+        numbers = [int(part) for part in str(text or '').strip().split('.') if part.isdigit()]
+        while numbers and numbers[-1] == 0:
+            numbers.pop()
+        return numbers
+    return bool(str(recorded or '').strip()) and parts(recorded) == parts(requested)
+
+
 def sdk_version(system, env):
     if system != 'Darwin':
         return ''
@@ -185,7 +195,10 @@ def build(args):
         # Keeping the installed runtime outside the build tree permits later build-cache cleanup.
         raise ValueError('Install prefix and build work directory must be separate')
     target = macos_deployment_target(getattr(args, 'macos_deployment_target', None), system)
-    target_options = ['-DCMAKE_OSX_DEPLOYMENT_TARGET=' + target] if target else []
+    # Without a target, remove a CMAKE_OSX_DEPLOYMENT_TARGET that an earlier build left in a reused CMakeCache.txt,
+    # so the record ('') and the binaries agree.
+    target_options = (['-DCMAKE_OSX_DEPLOYMENT_TARGET=' + target] if target
+                      else ['-UCMAKE_OSX_DEPLOYMENT_TARGET'] if system == 'Darwin' else [])
     env = dict(os.environ, CC=cc, CXX=cxx, CMAKE_BUILD_PARALLEL_LEVEL=str(args.jobs),
                OMP_NUM_THREADS=str(args.jobs), OPENBLAS_NUM_THREADS='1')
     if target:
@@ -204,6 +217,10 @@ def build(args):
             record = validate_runtime(prefix)
             if record.get('recipe_sha256') != recipe_digest():
                 raise ValueError('Existing runtime uses a different build recipe; choose another --prefix')
+            recorded_target = str((record.get('build') or {}).get('macos_deployment_target') or '')
+            if target and not same_deployment_target(recorded_target, target):
+                raise ValueError('Existing runtime was built for macOS deployment target %s, not the requested %s; '
+                                 'choose another --prefix' % (recorded_target or '(not recorded)', target))
             print('[ready] ' + str(prefix), flush=True)
             return prefix
         source = prepare_source(work, args.source_root, git, args.offline, env)

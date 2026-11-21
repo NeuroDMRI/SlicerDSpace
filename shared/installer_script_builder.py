@@ -1312,7 +1312,11 @@ _BOOTSTRAP_BODY = textwrap.dedent(
 
         from shared.network_config import extract_modular_pack, save_network_settings
         from shared.model_assets import configured_model_assets_root
-        from shared.user_config import load_user_config, prune_stale_bundled_dependencies, write_user_config
+        from shared.user_config import load_user_config, write_user_config
+        try:
+            from shared.user_config import prune_stale_bundled_dependencies
+        except ImportError:  # the installed release package predates the prune step
+            prune_stale_bundled_dependencies = None
 
         save_network_settings(
             mirror_prefix=CONFIG.get("mirror_prefix", ""),
@@ -1365,13 +1369,16 @@ _BOOTSTRAP_BODY = textwrap.dedent(
         cfg = load_user_config()
         ui_cfg = cfg.setdefault("ui", {})
         ui_cfg["language"] = ui_cfg.get("language") or str(CONFIG.get("language") or "en")
-        deps, pruned_deps = prune_stale_bundled_dependencies(
-            cfg.get("external_dependencies", {}),
-            current_extension_root=module_root.parents[2],
-        )
-        if pruned_deps:
-            _log("Cleared stale bundled dependency override(s): " + ", ".join(pruned_deps))
-        cfg["external_dependencies"] = deps
+        if prune_stale_bundled_dependencies is None:
+            deps = cfg.setdefault("external_dependencies", {})
+        else:
+            deps, pruned_deps = prune_stale_bundled_dependencies(
+                cfg.get("external_dependencies", {}),
+                current_extension_root=module_root.parents[2],
+            )
+            if pruned_deps:
+                _log("Cleared stale bundled dependency override(s): " + ", ".join(pruned_deps))
+            cfg["external_dependencies"] = deps
         if custom_assets_dir:
             deps["model_assets_dir"] = str(asset_root)
         else:

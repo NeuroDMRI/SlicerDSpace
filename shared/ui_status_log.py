@@ -98,12 +98,14 @@ def _pin_log_tail(scrollbar: Any, following: bool, position: int) -> None:
     if not following:
         scrollbar.setValue(position)
         return
-    scrollbar.setValue(scrollbar.maximum)
+    pinned = scrollbar.maximum
+    scrollbar.setValue(pinned)
 
     def repin() -> None:
-        # The horizontal bar that appears with the first long line adds one line to the vertical range.
+        # The horizontal bar that appears with the first long line adds lines to the vertical range.
+        # Re-pin only when the view is still at the maximum recorded at the pin: a reader who scrolled keeps the place.
         try:
-            if scrollbar.value >= scrollbar.maximum - 1:
+            if scrollbar.value >= pinned:
                 scrollbar.setValue(scrollbar.maximum)
         except Exception:
             pass  # The widget may be gone by the time the timer fires.

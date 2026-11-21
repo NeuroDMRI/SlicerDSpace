@@ -73,7 +73,7 @@ class FakeEm:
     def extensionsInstallPath(self): return ""
 
 
-def _run_installer_function(ns: dict, state: FakeSlicerState, tmp: Path):
+def _run_installer_function(ns: dict, state: FakeSlicerState, tmp: Path, slicer_arg: str = "/fake/Slicer", expected_exe: str = None):
     """Run the installer against the fake; each helper launch is a new Slicer start. Return (calls, logs, error)."""
     name = "_install_extension_in_slicer" if "_install_extension_in_slicer" in ns else "_install_extension"
     logs: list = []
@@ -83,9 +83,14 @@ def _run_installer_function(ns: dict, state: FakeSlicerState, tmp: Path):
     qt_stub = types.ModuleType("qt")
     qt_stub.QTimer = types.SimpleNamespace(singleShot=lambda ms, fn: fn())
 
+    expected_exe = expected_exe or slicer_arg
+
     def fake_run(cmd, *args, **kwargs):
-        if not cmd or cmd[0] != "/fake/Slicer":
+        if not cmd or cmd[0] not in (slicer_arg, expected_exe):
             return real_run(cmd, *args, **kwargs)
+        if cmd[0] != expected_exe:
+            # POSIX subprocess resolves a relative executable against the cwd of the child, not of the caller.
+            raise FileNotFoundError(cmd[0])
         seen: dict = {}
         em = state.start()
         slicer_stub = types.ModuleType("slicer")
@@ -109,7 +114,7 @@ def _run_installer_function(ns: dict, state: FakeSlicerState, tmp: Path):
     error = None
     with patch.object(subprocess, "run", fake_run):
         try:
-            ns[name]("/fake/Slicer", archive)
+            ns[name](slicer_arg, archive)
         except RuntimeError as exc:
             error = str(exc)
     return calls, logs, error
@@ -196,6 +201,28 @@ class I1ReinstallTests(_InstallerCopies, unittest.TestCase):
                 receipt = Path(call["args"][1])
                 self.assertEqual(Path(call["cwd"]), receipt.parent)
                 self.assertTrue(receipt.name == "receipt.json")
+
+    def test_r1_a_relative_slicer_path_is_made_absolute_before_the_cwd_changes(self) -> None:
+        import os
+        import tempfile
+
+        for label, ns in self.copies():
+            with self.subTest(label), tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as user_cwd:
+                user_cwd = os.path.realpath(user_cwd)
+                state = FakeSlicerState(installed=False)
+                old = os.getcwd()
+                os.chdir(user_cwd)  # the user's folder: the relative path below is valid only here
+                try:
+                    calls, logs, error = _run_installer_function(
+                        ns, state, Path(tmp), slicer_arg="Slicer-5.10.0-linux-amd64/Slicer",
+                        expected_exe=os.path.join(user_cwd, "Slicer-5.10.0-linux-amd64", "Slicer"))
+                finally:
+                    os.chdir(old)
+                self.assertIsNone(error)
+                self.assertEqual(len(calls), 1)
+                for call in calls:
+                    self.assertTrue(os.path.isabs(call["cmd"][0]), call["cmd"][0])
+                    self.assertNotEqual(Path(call["cwd"]), Path(user_cwd))
 
 
 if __name__ == "__main__":

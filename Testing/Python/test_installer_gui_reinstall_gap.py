@@ -22,6 +22,30 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 JS_PATH = REPO_ROOT / "docs" / "site" / "assets" / "js" / "installer-customizer.js"
 
 
+class TwoExtensionSlicer:
+    """Setup and SlicerDSpace together; the S1-S4 facts per extension name. A finished Setup scheduled itself for removal."""
+
+    def __init__(self, scheduled=("SlicerDSpaceSetup",), cancel_works: bool = True) -> None:
+        self.installed = {"SlicerDSpace", "SlicerDSpaceSetup"}
+        self.scheduled = set(scheduled)
+        self.cancel_works = cancel_works
+        self.cancel_calls = []
+
+    def start(self):
+        self.installed -= self.scheduled  # S1: the start-up removal runs first
+        self.scheduled = set()
+        return self
+
+    def isExtensionInstalled(self, name): return name in self.installed
+    def isExtensionScheduledForUninstall(self, name): return name in self.scheduled
+    def scheduleExtensionForUninstall(self, name): self.scheduled.add(name)
+
+    def cancelExtensionScheduledForUninstall(self, name):
+        self.cancel_calls.append(name)
+        if self.cancel_works:
+            self.scheduled.discard(name)
+
+
 class _Loose(types.ModuleType):
     def __getattr__(self, name):
         if name.startswith("__"):
@@ -113,6 +137,39 @@ class GapGuiReinstallTests(unittest.TestCase):
         note = ns["_handle_installed_copy"](state.start(), lambda: True, lambda: False, lambda _m: None)
         self.assertIn("Restart 3D Slicer yourself", note)
         self.assertTrue(state.scheduled)
+
+    def test_s_setup_reinstall_after_a_completed_setup_cancels_the_setup_self_removal(self) -> None:
+        ns = self._ns()
+        slicer = TwoExtensionSlicer()
+        restarts = []
+        note = ns["_handle_installed_copy"](slicer, lambda: True, lambda: restarts.append(1) or True, lambda _m: None)
+        self.assertTrue(note.startswith("Restarting"), note)
+        self.assertEqual(restarts, [1])
+        self.assertEqual(slicer.cancel_calls, ["SlicerDSpaceSetup"])
+        self.assertEqual(slicer.scheduled, {"SlicerDSpace"})
+        slicer.start()
+        self.assertEqual(slicer.installed, {"SlicerDSpaceSetup"}, "Setup must survive the restart to install the replacement")
+
+    def test_s_setup_failed_cancel_schedules_nothing_and_does_not_restart(self) -> None:
+        ns = self._ns()
+        slicer = TwoExtensionSlicer(cancel_works=False)
+        logs, restarts = [], []
+        note = ns["_handle_installed_copy"](slicer, lambda: True, lambda: restarts.append(1) or True, logs.append)
+        self.assertEqual(restarts, [])
+        self.assertNotIn("SlicerDSpace", slicer.scheduled)
+        self.assertEqual(slicer.scheduled, {"SlicerDSpaceSetup"})
+        self.assertIn("Restart 3D Slicer first", note)
+        self.assertIn(note, logs)
+        slicer.start()
+        self.assertIn("SlicerDSpace", slicer.installed)
+
+    def test_s_setup_without_a_self_schedule_is_unchanged(self) -> None:
+        ns = self._ns()
+        slicer = TwoExtensionSlicer(scheduled=())
+        restarts = []
+        note = ns["_handle_installed_copy"](slicer, lambda: True, lambda: restarts.append(1) or True, lambda _m: None)
+        self.assertTrue(note.startswith("Restarting"), note)
+        self.assertEqual((slicer.cancel_calls, slicer.scheduled, restarts), ([], {"SlicerDSpace"}, [1]))
 
     def test_gap_nothing_to_handle_when_not_installed(self) -> None:
         ns = self._ns()

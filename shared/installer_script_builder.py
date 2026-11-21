@@ -1049,7 +1049,8 @@ _BOOTSTRAP_BODY = textwrap.dedent(
             "qt.QTimer.singleShot(500, _run)",
         ]
         helper.write_text("\n".join(helper_lines) + "\n", encoding="utf-8")
-        base_cmd = [slicer_exe, "--no-splash", "--no-main-window", "--modules-to-ignore", "SlicerDSpace", "--python-script", str(helper), str(archive_path), str(receipt)]
+        # Absolute: the launch below runs in another cwd, and POSIX subprocess resolves a relative executable against it.
+        base_cmd = [os.path.abspath(slicer_exe), "--no-splash", "--no-main-window", "--modules-to-ignore", "SlicerDSpace", "--python-script", str(helper), str(archive_path), str(receipt)]
         env = os.environ.copy()
         prefix = []
         if sys.platform.startswith("linux") and not env.get("DISPLAY"):

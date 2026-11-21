@@ -264,6 +264,7 @@ class I1ReinstallTests(_InstallerCopies, unittest.TestCase):
         cases = (
             ("linux, DISPLAY set", "linux", {**env_without_display, "DISPLAY": ":0"}),
             ("win32, no DISPLAY", "win32", env_without_display),
+            ("darwin, no DISPLAY", "darwin", env_without_display),
         )
         for label, ns in self.copies():
             for case, platform_name, env in cases:

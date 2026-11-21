@@ -750,7 +750,8 @@ class SurfaceBlockTest(unittest.TestCase):
         self.assertFalse(od._surface_runtime_ready(str(self.bundle)))
         items = od.detect_missing_task_resources(targets=("surface_postprocess",), bundle_backends=("wmql",),
                                                  backend_paths={"postprocess_runtime": str(self.bundle)})
-        self.assertTrue([item for item in items if item["id"] == "surface_postprocess"], items)
+        # b2-os: not ready, but no download item: a download cannot replace an explicit path (remedy none).
+        self.assertFalse([item for item in items if item["id"] == "surface_postprocess"], items)
         self.mac("15.1")
         self.assertTrue(od._surface_runtime_ready(str(self.bundle)))
 
@@ -772,8 +773,7 @@ class SurfaceBlockTest(unittest.TestCase):
         items = od.detect_missing_task_resources(targets=("surface_postprocess",), bundle_backends=("wmql",),
                                                  backend_paths={"postprocess_runtime": str(explicit)})
         surface = [item for item in items if item["id"] == "surface_postprocess"]
-        self.assertTrue(surface, items)
-        self.assertIn("needs macOS 15.0", surface[0].get("reason", ""))
+        self.assertFalse(surface, items)  # b2-os: remedy none, so no download item (the doctor row gives the reason)
         self.mac("15.1")
         self.assertTrue(od._surface_runtime_ready(str(explicit)))
 
@@ -789,11 +789,24 @@ class SurfaceBlockTest(unittest.TestCase):
         self.assertNotIn("macOS", od._missing_bullets_html([plain], zh=False))
 
     def test_g_h2_missing_resource_item_carries_the_macos_reason(self):
+        """b2-os: the item exists only when a catalog runtime for this Mac can be downloaded (remedy download)."""
+        import json
+        from shared import prebuilt_surface
         from shared import ui_on_demand_resources as od
 
         self.mac("14.2")
         items = od.detect_missing_task_resources(targets=("surface_postprocess",), bundle_backends=("wmql",),
                                                  backend_paths={})
+        self.assertFalse([item for item in items if item["id"] == "surface_postprocess"], items)
+        payload = json.loads(prebuilt_surface.CATALOG.read_text(encoding="utf-8"))
+        for record in payload["surface"]:
+            if record["system"] == "Darwin" and record["machine"] == "arm64":
+                record["min_macos"] = "13.0"
+        catalog = self.root / "runtime_bundles.json"
+        catalog.write_text(json.dumps(payload), encoding="utf-8")
+        with mock.patch.object(prebuilt_surface, "CATALOG", catalog):
+            items = od.detect_missing_task_resources(targets=("surface_postprocess",), bundle_backends=("wmql",),
+                                                     backend_paths={})
         surface = [item for item in items if item["id"] == "surface_postprocess"]
         self.assertTrue(surface, items)
         self.assertEqual(surface[0].get("reason"), self.message)

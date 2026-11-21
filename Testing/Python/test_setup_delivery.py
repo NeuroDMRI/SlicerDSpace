@@ -107,6 +107,11 @@ class SetupDeliveryTests(unittest.TestCase):
         from shared.managed_runtimes import install_plan
         with patch('platform.system', return_value='Darwin'), patch('platform.machine', return_value='x86_64'), \
                 patch('platform.mac_ver', return_value=('13.6', (), '')):
+            # b2-os, decision 8: managed MRtrix3 (official tarball) needs macOS 13.0; managed FSL keeps 14.5.
+            self.assertTrue(install_plan(('mrtrix',))['platform_supported'])
+            self.assertFalse(install_plan(('fsl_cpu',))['platform_supported'])
+        with patch('platform.system', return_value='Darwin'), patch('platform.machine', return_value='x86_64'), \
+                patch('platform.mac_ver', return_value=('12.7', (), '')):
             self.assertFalse(install_plan(('mrtrix',))['platform_supported'])
 
     def test_unpublished_missing_surface_bundle_is_not_offered_as_downloadable(self):

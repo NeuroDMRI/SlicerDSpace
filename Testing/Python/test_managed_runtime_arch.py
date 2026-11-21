@@ -193,7 +193,7 @@ class CondaArchitectureTests(unittest.TestCase):
 
 class GateAndConfigTests(unittest.TestCase):
     def test_macos_gate_message_names_mrtrix_and_fsl(self):
-        """R-N7: every gated profile (DARWIN_PROFILES = mrtrix, fsl_cpu) is named."""
+        """R-N7: every gated profile below its floor is named (b2-os: MRtrix3 13.0, FSL 14.5)."""
         self.assertEqual(runtime.DARWIN_PROFILES, {'mrtrix', 'fsl_cpu'})
         plan = {'platform_supported': True, 'root': '/nowhere', 'prefixes': {}, 'profiles': [],
                 'fsl_license_required': False}
@@ -204,7 +204,7 @@ class GateAndConfigTests(unittest.TestCase):
             runtime.provision(('mrtrix', 'fsl_cpu'), root=Path('/nowhere'))
         message = str(context.exception)
         self.assertIn('14.5', message)
-        self.assertIn('MRtrix', message)
+        self.assertNotIn('MRtrix', message)  # b2-os, decision 8: MRtrix3 needs 13.0, so 14.0 names only FSL
         self.assertIn('FSL', message)
 
     def run_script(self, system, profiles):

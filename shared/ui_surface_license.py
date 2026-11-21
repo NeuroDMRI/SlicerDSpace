@@ -62,7 +62,10 @@ def prepare_surface_license(owner, result):
     """Discover or import once for selected surface postprocessing; configure FS_LICENSE and refresh."""
     if 'surface_postprocess' not in result.targets:
         return result
-    config = owner._environment_dependency_path_kwargs()
+    from shared.ui_environment_panel import os_blocked_statuses
+    if os_blocked_statuses(result):  # b2-os: a licence cannot make a runtime run that this OS cannot load
+        return result
+    config =owner._environment_dependency_path_kwargs()
     explicit = config.get('postprocess_license_file')
     from shared.surface_runtime import resolve_surface_runtime
     try:

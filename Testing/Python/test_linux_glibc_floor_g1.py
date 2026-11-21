@@ -31,8 +31,11 @@ class G1DoctorRowTests(unittest.TestCase):
         self.assertEqual((row.status, row.required), ("missing", False))
         self.assertEqual(row.install_group, "")  # no install action; an old system cannot be fixed by the plugin
         self.assertEqual(row.targets, ("preprocessing",))
-        for fact in ("2.28", "2.34", "mrcrop", "surface", "Ubuntu 22.04+", "Debian 12+", "RHEL/Rocky/Alma 9+"):
+        for fact in ("2.28", "2.34", "mrcrop", "surface"):  # b2-os, decision 4: the reason ...
+            self.assertIn(fact, row.details["notes"])
+        for fact in ("2.34", "Ubuntu 22.04+", "Debian 12+", "RHEL/Rocky/Alma 9+"):  # ... and the fix are two texts
             self.assertIn(fact, row.install_hint)
+        self.assertNotIn(row.install_hint, row.details["notes"])
 
     def test_g1_new_or_unknown_glibc_is_available(self) -> None:
         self.assertEqual(self._row((2, 34)).status, "available")

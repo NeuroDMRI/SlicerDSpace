@@ -149,6 +149,45 @@ def _mute_summary(owner: Any, name: str, summary: Any, muted: bool) -> None:
     muted_names.add(name) if muted else muted_names.discard(name)
 
 
+def surface_postprocess_block_tooltip(owner: Any, zh: bool = False) -> str:
+    """b2-os, decision 6: the reason and the actions when this OS cannot run Surface postprocess, else "".
+
+    The stored tick stays (the Run skips the step and logs it); the tooltip says why and what fixes it.
+    """
+    try:
+        from shared.surface_runtime import surface_postprocess_os_skip
+
+        getter = getattr(owner, "_environment_dependency_path_kwargs", None)
+        state = surface_postprocess_os_skip(getter() if callable(getter) else {})
+    except Exception:
+        return ""
+    if not state:
+        return ""
+    reason = state.get("reason_zh" if zh else "reason") or state.get("reason") or ""
+    hint = state.get("hint_zh" if zh else "hint") or ""
+    return "\n".join(text for text in (reason, hint) if text)
+
+
+def _refresh_surface_postprocess_tooltip(owner: Any, ui: Any, zh: bool) -> None:
+    control = getattr(ui, "targetSurfacePostprocessCheckBox", None)
+    if control is None or not hasattr(control, "setToolTip"):
+        return
+    if not hasattr(owner, "_surfacePostprocessBaseToolTip"):
+        base = getattr(control, "toolTip", "")
+        try:
+            owner._surfacePostprocessBaseToolTip = base() if callable(base) else str(base or "")
+        except Exception:
+            return
+    block = surface_postprocess_block_tooltip(owner, zh=zh)
+    tooltip = block or owner._surfacePostprocessBaseToolTip
+    if getattr(control, "toolTip", None) != tooltip:
+        control.setToolTip(tooltip)
+    # Decision 6: grey the row label (not the checkbox, so the stored tick can still be removed); undo it afterwards.
+    label = getattr(owner, "_surfacePostprocessLabel", None)
+    if label is not None:
+        _mute_summary(owner, "targetSurfacePostprocessCheckBox", label, bool(block))
+
+
 def refresh_compact_algorithms(owner: Any, language: str | None = None) -> None:
     """Refresh the product rows after parameter or language changes."""
 
@@ -221,6 +260,7 @@ def refresh_compact_algorithms(owner: Any, language: str | None = None) -> None:
                 if getattr(summary, "toolTip", None) != tooltip:
                     summary.setToolTip(tooltip)
                 _mute_summary(owner, name, summary, muted)
+    _refresh_surface_postprocess_tooltip(owner, ui, zh)
     from shared.ui_algorithm_picker import refresh_picker_language
     refresh_picker_language(owner)
     # FC3: the "Also runs automatically" note follows the same data as the summary (a tile edit, the Refresh click).

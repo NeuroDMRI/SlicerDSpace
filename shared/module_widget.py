@@ -3439,16 +3439,61 @@ class SharedWidgetMixin:
         """B3: the run request without the algorithms this data cannot run, or ``None`` when nothing is skipped.
 
         Returns ``(DataFilteredRun, blocks)``. The parameter node is never written: the stored selection stays, and
-        the algorithm runs again when the data fits. Batch mode is not filtered (subjects can differ).
+        the algorithm runs again when the data fits. Batch mode is not filtered for data (subjects can differ).
         ``fresh=False`` (the "Also runs automatically" note) reuses the per-event cache of the family summary.
+        b2-os, decision 6: a stored Surface postprocess that this OS cannot run (remedy 'none') is skipped too, also in
+        batch mode (the OS is the same for every subject).
         """
-        if batch_mode or not self._parameterNode:
+        if not self._parameterNode:
             return None
-        from shared.algorithm_availability import current_data_blocks
+        flags = self._product_target_flags()
+        filtered, blocks = None, {}
+        if not batch_mode:
+            from shared.algorithm_availability import current_data_blocks
 
-        blocks = current_data_blocks(self, fresh=fresh)  # F3: the click keeps fresh=True, never the per-event cache
-        filtered = filter_run_for_data(self._product_target_flags(), self._microstructure_stages_text(), set(blocks))
-        return None if filtered is None else (filtered, blocks)
+            blocks = current_data_blocks(self, fresh=fresh)  # F3: the click keeps fresh=True, never the per-event cache
+            filtered = filter_run_for_data(flags, self._microstructure_stages_text(), set(blocks))
+        os_block = self._surface_postprocess_os_block(flags)
+        if os_block is None:
+            return None if filtered is None else (filtered, blocks)
+        if filtered is None:
+            from shared.ui_run_controller import DataFilteredRun, selected_microstructure_stages
+
+            freewater, noddi = self._microstructure_stage_flags()
+            filtered = DataFilteredRun(
+                flags=flags,
+                stages=selected_microstructure_stages(self._microstructure_stages_text()) if flags.microstructure else (),
+                skipped=(),
+                dti=self._microstructure_dti_enabled() if hasattr(self, "_microstructure_dti_enabled") else True,
+                freewater=freewater, noddi=noddi,
+                dki=self._microstructure_dki_enabled(), ifw=self._microstructure_ifw_enabled(),
+            )
+        from dataclasses import replace
+
+        filtered = replace(filtered, flags=replace(filtered.flags, surface_postprocess=False),
+                           skipped=tuple(filtered.skipped) + ("surface_postprocess",))
+        return filtered, dict(blocks, surface_postprocess=os_block)
+
+    def _surface_postprocess_os_block(self, flags):
+        """b2-os: a ``text(lang)`` reason when the stored Surface postprocess cannot run on this OS (remedy none)."""
+        if not getattr(flags, "surface_postprocess", False):
+            return None
+        try:
+            from shared.surface_runtime import surface_postprocess_os_skip
+
+            state = surface_postprocess_os_skip(self._environment_dependency_path_kwargs())
+        except Exception:
+            return None
+        if not state:
+            return None
+
+        class _OsBlock:
+            @staticmethod
+            def text(lang="en"):
+                zh = str(lang or "").lower().startswith("zh")
+                return str((state.get("reason_zh") if zh else None) or state.get("reason") or "")
+
+        return _OsBlock()
 
     def _data_filtered_closure(self, filtered):
         """The prerequisite closure of the request after ``_data_filtered_run`` (same inputs as ``_selected_closure``)."""
@@ -3467,8 +3512,9 @@ class SharedWidgetMixin:
     def _log_data_skips(self, filtered, blocks) -> None:
         from shared.algorithm_selection import LABELS
 
+        labels = dict(LABELS, surface_postprocess="Surface postprocess")
         for algorithm in filtered.skipped:
-            self.appendLog(f"Skipped {LABELS.get(algorithm, algorithm)}: {blocks[algorithm].text('en')}")
+            self.appendLog(f"Skipped {labels.get(algorithm, algorithm)}: {blocks[algorithm].text('en')}")
 
     def _provided_tractography(self) -> tuple[str, ...]:
         """K2: targets whose tractogram file the user supplied (same set the CLI builds).
@@ -4850,10 +4896,14 @@ class SharedWidgetMixin:
     def _build_environment_item_row(self, item):
         from shared.ui_environment_dialog import build_environment_item_row
 
-        return build_environment_item_row(item, on_install_item=self._onInstallEnvironmentItemClicked)
+        return build_environment_item_row(item, on_install_item=self._onInstallEnvironmentItemClicked,
+                                          zh=self._environment_text_zh())
+
+    def _environment_text_zh(self) -> bool:
+        return str(getattr(self, "_onboardingLanguage", "en") or "en").startswith("zh")
 
     def _environment_item_text(self, item) -> str:
-        return environment_item_text(item)
+        return environment_item_text(item, zh=self._environment_text_zh())
 
     def _onInstallAllEnvironmentItemsClicked(self) -> None:
         result = getattr(self, "_lastEnvironmentResult", None)
@@ -4978,6 +5028,9 @@ class SharedWidgetMixin:
         if self._is_model_resource_item(item):
             return "model_assets_dir", "dir"
         if key == "env:freesurfer_home" or group == "freesurfer":
+            return "postprocess_freesurfer_home", "dir"
+        from shared.ui_environment_panel import os_blocked_without_remedy
+        if os_blocked_without_remedy(item):  # b2-os, decision 5: "Choose FreeSurfer folder"
             return "postprocess_freesurfer_home", "dir"
         if group == "mrtrix":
             return "mrtrix_bin_dir", "dir"

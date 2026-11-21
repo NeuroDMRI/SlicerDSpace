@@ -250,6 +250,76 @@ def _run_nrrd_conversion(command, source, targets, *, dry_run):
             return result
 
 
+def _nrrd_import_gradient_check(source: Path, targets: dict[str, Path]) -> dict[str, Any]:
+    """Gradient frame (batch 2): compare the imported bvecs with the source NRRD's own gradients.
+
+    The world direction of each source gradient is S MF g_file. The FSL rule for the output NIfTI's affine gives
+    the bvecs world_to_fsl(g). DWIConvert NrrdToFSL ignores the rotation of the grid, so its bvecs are wrong on
+    oblique sources. Returns the largest angle between the imported and the rule's directions and the rule's rows.
+    """
+    import nibabel as nib
+    import nrrd
+    import numpy as np
+
+    from shared import gradient_frame
+
+    header = nrrd.read_header(str(source))
+    count = sum(1 for key in header if str(key).startswith("DWMRI_gradient_"))
+    keys = ["DWMRI_gradient_%04d" % index for index in range(count)]
+    if any(key not in header for key in keys):
+        raise ValueError(f"Source NRRD gradient keys are not numbered 0000 to N-1: {source}")
+    if count == 0:
+        return dict(count=0, max_error_deg=0.0, rows=None)
+    bvecs = np.loadtxt(targets["bvecs"], ndmin=2)
+    if bvecs.shape == (3, count):  # the FSL layout: three rows
+        bvecs = bvecs.T
+    if bvecs.shape != (count, 3):
+        raise ValueError(f"The imported bvec file has {bvecs.shape} entries; the source NRRD has {count} gradients")
+    frame = np.asarray(header.get("measurement frame", np.eye(3)), dtype=float).T  # pynrrd rows -> columns
+    values = np.array([gradient_frame.parse_nrrd_vector(header[key]) for key in keys])
+    world = gradient_frame.nrrd_to_world(values, header["space"], frame)
+    affine = nib.load(str(targets["dwi"])).affine
+    source_moving = np.linalg.norm(world, axis=1) > gradient_frame.ZERO_GRADIENT_NORM
+    imported_moving = np.linalg.norm(bvecs, axis=1) > gradient_frame.ZERO_GRADIENT_NORM
+    if not np.array_equal(source_moving, imported_moving):
+        raise ValueError("The imported bvec file and the source NRRD disagree on which volumes are b = 0")
+    rows = bvecs.copy()
+    error = 0.0
+    if source_moving.any():
+        unit = world[source_moving] / np.linalg.norm(world[source_moving], axis=1, keepdims=True)
+        expected = gradient_frame.world_to_fsl(unit, affine)
+        rows[source_moving] = expected / np.linalg.norm(expected, axis=1, keepdims=True)
+        error = float(gradient_frame.axis_angle_degrees(bvecs[source_moving], rows[source_moving]).max())
+    return dict(count=count, max_error_deg=error, rows=rows)
+
+
+def _correct_nrrd_import_gradients(source: Path, targets: dict[str, Path]) -> dict[str, Any] | None:
+    """Rewrite the imported bvec file by the FSL rule when DWIConvert's directions differ; else keep it as written."""
+    from shared import gradient_frame
+
+    check = _nrrd_import_gradient_check(source, targets)
+    if check["max_error_deg"] <= gradient_frame.KEEP_TOLERANCE_DEG:
+        return None
+    rows = check["rows"]
+    text = "\n".join(" ".join("0" if value == 0 else repr(float(value)) for value in rows[:, axis])
+                     for axis in range(3)) + "\n"
+    staged = targets["bvecs"].with_name(targets["bvecs"].name + ".gradient-frame")
+    staged.write_text(text, encoding="utf-8")
+    os.replace(staged, targets["bvecs"])
+    return {"rule": "bvec = F R^-1 g (inverse FSL rule for the output NIfTI affine)",
+            "source": "the source NRRD gradients and measurement frame",
+            "dwiconvert_max_error_deg": check["max_error_deg"], "bvals": "kept", "image": "kept"}
+
+
+def _nrrd_import_gradients_current(source: Path, targets: dict[str, Path]) -> bool:
+    from shared import gradient_frame
+
+    try:
+        return _nrrd_import_gradient_check(source, targets)["max_error_deg"] <= gradient_frame.KEEP_TOLERANCE_DEG
+    except Exception:  # unreadable or inconsistent: import again
+        return False
+
+
 def _normalize_dcm2niix_outputs(input_dir: Path, *, force: bool, dry_run: bool) -> list[dict[str, str]]:
     expected = {
         "data.bval": "bvals",
@@ -774,6 +844,7 @@ def prepare_inputs(config: InputImportConfig) -> dict[str, Any]:
             and saved.get("source_signatures") == source_sigs
             and isinstance(saved.get("output_signatures"), dict)
             and saved.get("output_signatures") == _output_signatures(targets)
+            and (source_kind != "nrrd" or backend != "dwiconvert" or _nrrd_import_gradients_current(source, targets))
         ):
             return {**saved, "status": "completed", "reused": True, "runtime_seconds": 0.0}
     if not config.dry_run and not config.force:
@@ -806,6 +877,7 @@ def prepare_inputs(config: InputImportConfig) -> dict[str, Any]:
             for stale_name in ("data.nii.gz", "data.nii", "bvals", "bvecs", "dwi.json", "data.bval", "data.bvec", "data.json"):
                 (targets["input_dir"] / stale_name).unlink(missing_ok=True)
     command_result: dict[str, Any] | None = None
+    gradient_receipt: dict[str, Any] | None = None
 
     if backend == "copy":
         if source_kind == "canonical":
@@ -819,6 +891,8 @@ def prepare_inputs(config: InputImportConfig) -> dict[str, Any]:
         cwd = targets["input_dir"] if backend == "dcm2niix" else None
         if backend == 'dwiconvert' and source_kind == 'nrrd':
             command_result = _run_nrrd_conversion(command, source, targets, dry_run=config.dry_run)
+            if not config.dry_run and config.output_kind == "canonical-nifti":
+                gradient_receipt = _correct_nrrd_import_gradients(source, targets)
         else:
             command_result = _run(command, dry_run=config.dry_run, cwd=cwd)
         if backend == "dcm2niix":
@@ -844,6 +918,7 @@ def prepare_inputs(config: InputImportConfig) -> dict[str, Any]:
             "mask": targets["mask"].as_posix() if targets["mask"].exists() or config.mask_path else None,
         },
         **({"source_signatures": source_sigs} if source_sigs is not None else {}),
+        **({"gradient_frame": gradient_receipt} if gradient_receipt is not None else {}),
         **({"output_signatures": _output_signatures(targets)} if not config.dry_run else {}),
     }
     if not config.dry_run:

@@ -59,6 +59,9 @@ lightweight source checkout or complete development/research repository.
 
 ## Validation Records
 
+[Diffusion gradient frame](release/GRADIENT_FRAME_20261122.md) lists which
+inputs change after the gradient-frame correction and which stay identical.
+
 [Portable setup and default methods](release/PORTABLE_SETUP_20261107.md) lists
 what changed for users: native tensor fit, one setup confirmation, the PNL mask
 route per platform, the run record, and the one-time regeneration after the update.

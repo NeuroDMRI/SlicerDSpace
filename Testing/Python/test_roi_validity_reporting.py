@@ -143,7 +143,8 @@ class RegionalValidityTest(unittest.TestCase):
         with patch('shared.orchestrator._resolve_parcellation', return_value=self.roi), \
                 patch('shared.orchestrator._resolve_analysis_inputs', return_value={'mask': brain}), \
                 patch('shared.scalar_qc.scalar_qc_current', return_value=True), \
-                patch('shared.orchestrator._manifest_inputs_match', return_value=True):
+                patch('shared.orchestrator._manifest_inputs_match', return_value=True), \
+                patch('shared.orchestrator._tensor_bundle_key_current', return_value=True):  # batch 2 G3: no manifest here
             self.assertFalse(_microstructure_dti_complete(subject, 'test'))
             _compute_roi_stats(metric_paths={key: scalar for key in DTI_KEYS}, roi_label_map=self.roi, lut_path=None,
                                csv_path=csv_path, json_path=json_path, brain_mask_path=brain)

@@ -21,6 +21,14 @@ REFERENCE = "https://github.com/pnlbwh/ukftractography/blob/2d2b661539700aa825c1
 MASK_POLICY = "native-mask-intersect-positive-mean-b0-v1"
 # A conservative input-integrity guard, not an anatomical-accuracy threshold.
 MAX_EXCLUDED_MASK_FRACTION = 0.01
+# Gradient frame (batch 2). DWIConvert FSLToNrrd writes world-correct gradients only for axis-aligned grids with
+# det(A) < 0; these keep the converter's lines verbatim and the v1 policy, so finished runs stay valid. Every other
+# grid gets its gradient directions from the bvec file by the FSL rule and the v2 policy, so old runs are redone.
+CONVERSION_POLICY_DWICONVERT = "official-gradient-geometry-probe-with-lossless-native-payload-v1"
+CONVERSION_POLICY_FSL_WORLD = "official-geometry-probe-lossless-payload-fsl-rule-gradients-v2"
+INPUT_FRAME_DWICONVERT = "NIfTI RAS+, gradients converted by official DWIConvert"
+INPUT_FRAME_FSL_WORLD = ("NIfTI RAS+; geometry from official DWIConvert; gradient directions from the bvec file by "
+                         "the FSL rule g = R F b (MRtrix -fslgrad), DWIConvert b-value scaling kept")
 
 
 @dataclass(frozen=True)
@@ -327,6 +335,39 @@ def executable_identity(executable):
     return dict(path=str(executable), sha256=digest(executable), companion_libraries=libraries)
 
 
+def _dwiconvert_gradients_valid(affine):
+    """True when DWIConvert FSLToNrrd already writes world-correct gradients: det(A) < 0 and no rotation."""
+    from shared import gradient_frame
+
+    return not gradient_frame.determinant_positive(affine) and gradient_frame.is_signed_diagonal(affine)
+
+
+def _input_affine(raw):
+    """The DWI affine; None when nibabel cannot read the file (then affected, as in the cache-key pin)."""
+    import nibabel as nib
+
+    try:
+        return nib.load(str(raw.dwi_path)).affine
+    except Exception:
+        return None
+
+
+def conversion_policy(affine):
+    if affine is not None and _dwiconvert_gradients_valid(affine):
+        return CONVERSION_POLICY_DWICONVERT
+    return CONVERSION_POLICY_FSL_WORLD
+
+
+def _fsl_gradient_table(raw):
+    import numpy as np
+
+    bvals = np.loadtxt(raw.bval_path).reshape(-1)
+    bvecs = np.loadtxt(raw.bvec_path, ndmin=2)
+    if bvecs.shape == (3, len(bvals)):
+        bvecs = bvecs.T
+    return bvals, bvecs
+
+
 def signature(raw, options, executable, converter=None):
     converter = converter or resolve_executable(name="DWIConvert")
     gpu_opts = parse_gpu_options(options)
@@ -342,7 +383,7 @@ def signature(raw, options, executable, converter=None):
         converter=executable_identity(converter),
         protocol="author-module-defaults-with-explicit-overrides",
         shell_policy="all supplied volumes; no implicit shell filtering",
-        conversion_policy="official-gradient-geometry-probe-with-lossless-native-payload-v1",
+        conversion_policy=conversion_policy(_input_affine(raw)),
         mask_policy=MASK_POLICY,
         max_excluded_mask_fraction=MAX_EXCLUDED_MASK_FRACTION,
     )
@@ -533,7 +574,8 @@ def _validated_inputs(raw):
         warnings=([f"UKF excludes {excluded} mask voxels without finite positive mean b0 signal; "
                    "the source DWI and mask are unchanged."] if excluded else []),
         approximate_shells=np.unique(np.round(b[nonzero] / 100) * 100).tolist(),
-        input_coordinate_system="NIfTI RAS+, gradients converted by official DWIConvert",
+        input_coordinate_system=(INPUT_FRAME_DWICONVERT if _dwiconvert_gradients_valid(image.affine)
+                                 else INPUT_FRAME_FSL_WORLD),
     )
     return report, effective
 
@@ -986,9 +1028,14 @@ def write_conversion_probe(raw, target):
 def restore_lossless_payload(raw, probe, converted, dwi, mask):
     """Validate a pure axis permutation/flip, then copy native signals bit-for-bit.
 
-    DWIConvert supplies ALL gradient metadata and coordinate conventions. Its
+    DWIConvert supplies the geometry and the b-value scaling of each gradient line. Its
     short-only image IO is used only for a tiny integer probe. The actual DWI
     and mask share the same verified mapping and never pass through a short cast.
+
+    Gradient frame (batch 2): the gradient lines must match the bval/bvec rows in count and order.
+    For an axis-aligned det < 0 grid the DWIConvert lines are kept verbatim after a check against the
+    FSL rule; for every other grid each line gets the direction of g = R F b in the header frame and
+    keeps the norm DWIConvert wrote (zero lines stay zero).
     """
     import nibabel as nib
     import nrrd
@@ -1045,6 +1092,7 @@ def restore_lossless_payload(raw, probe, converted, dwi, mask):
         for value in gradients
     ):
         raise ValueError("Incomplete DWIConvert gradient metadata")
+    gradient_report = _set_world_gradients(raw, image.affine, header)
     full_shift = np.zeros(3)
     for new, old in enumerate(order):
         full_shift[old] = image.shape[old] - 1 if negative[new] else 0
@@ -1118,7 +1166,7 @@ def restore_lossless_payload(raw, probe, converted, dwi, mask):
         "encoding": "raw",
     }
     nrrd.write(str(mask), np.ascontiguousarray(reorder(np.asanyarray(nib.load(raw.mask_path).dataobj)).astype(np.uint8)), mask_header)
-    return dict(
+    report = dict(
         policy="lossless-native-payload",
         probe_voxels=8,
         gradient_count=len(gradients),
@@ -1129,6 +1177,47 @@ def restore_lossless_payload(raw, probe, converted, dwi, mask):
         resampled=False,
         allow_lossy_conversion=False,
     )
+    if gradient_report is not None:
+        report["gradient_frame"] = gradient_report
+    return report
+
+
+def _set_world_gradients(raw, affine, header):
+    """Check the DWIConvert gradient lines against the bvec file; rewrite their directions where DWIConvert is wrong.
+
+    Returns None when the lines are kept verbatim (axis-aligned det < 0 grid), else a short receipt.
+    """
+    import numpy as np
+    from shared import gradient_frame
+
+    keys = ["DWMRI_gradient_%04d" % index for index in range(len(
+        [key for key in header if key.startswith("DWMRI_gradient_")]))]
+    if any(key not in header for key in keys):
+        raise ValueError("DWIConvert gradient keys are not numbered 0000 to N-1")
+    values = [header[key] for key in keys]
+    bvals, bvecs = _fsl_gradient_table(raw)
+    try:
+        gradient_frame.check_nrrd_gradients_match_fsl(values, bvals, bvecs)
+    except ValueError as error:
+        raise ValueError(f"UKF gradient conversion: {error}") from error
+    space = header["space"]
+    frame = np.asarray(header.get("measurement frame", np.eye(3)), dtype=float).T  # pynrrd rows -> columns
+    world = gradient_frame.fsl_to_world(bvecs, affine)
+    written = gradient_frame.nrrd_to_world([gradient_frame.parse_nrrd_vector(value) for value in values], space, frame)
+    moving = np.linalg.norm(written, axis=1) > gradient_frame.ZERO_GRADIENT_NORM
+    before = gradient_frame.axis_angle_degrees(written[moving], world[moving]) if moving.any() else np.zeros(1)
+    if _dwiconvert_gradients_valid(affine):
+        if before.max() > gradient_frame.KEEP_TOLERANCE_DEG:
+            raise ValueError(
+                f"DWIConvert gradients differ from the FSL rule by {before.max():.3f} degrees on an axis-aligned "
+                "grid; the converter behaves differently from the measured version. UKF was not run.")
+        return None
+    updated = gradient_frame.nrrd_gradient_values_for_world(values, world, space, frame)
+    for key, value in zip(keys, updated):
+        header[key] = value
+    return dict(rule="g = R F b (FSL bvecs, MRtrix -fslgrad)", source="bvec file",
+                kept="DWIConvert geometry and per-line norm (b-value scaling)",
+                dwiconvert_max_error_deg=float(before.max()))
 
 
 @scheduled_stage('ukf')

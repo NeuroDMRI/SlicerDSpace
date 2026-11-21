@@ -1767,8 +1767,61 @@ def _manifest_inputs_match(manifest_path: Path, inputs: dict[str, Path], field: 
     return all(_file_record_matches(records.get(key), path) for key, path in inputs.items())
 
 
+def _dti_tracking_frame_current(manifest_path, inputs):
+    """Gradient frame (batch 2): a det > 0 DTI tracking result made before the fix is not reused."""
+    from tractography.dti import tracking_gradient_frame_current
+
+    dwi = inputs.get('dwi') if isinstance(inputs, dict) else None
+    return dwi is not None and tracking_gradient_frame_current(manifest_path, Path(dwi))
+
+
+_TENSOR_KEY_FIELDS = ('conversion_implementation', 'preparation_implementation', 'tensor_implementation')
+
+
+def _gradient_frame_no_op(dwi) -> bool:
+    """G3: True when the gradient-frame fix leaves this DWI unchanged (item 8 pin); unreadable or unknown: False."""
+    try:
+        from shared.cache_key_pins import gradient_frame_fix_is_no_op
+        return dwi is not None and gradient_frame_fix_is_no_op(dwi)
+    except Exception:
+        return False
+
+
+def _tensor_bundle_key_current(record_path: Path, nested: bool = False, dwi=None) -> bool:
+    """Gradient frame (batch 2, G3): a product of a DTI bundle is reused when the fix leaves its DWI unchanged, else only
+    when its recorded bundle key (``record_path``, or a ``nested`` ``native_bundle.manifest``) equals the current key."""
+    from types import SimpleNamespace
+    from shared.pipeline import _native_manifest
+
+    if _gradient_frame_no_op(dwi):
+        return True
+    try:
+        record = _read_json(record_path)
+        native = record['native_bundle']['manifest'] if nested else record
+        raw = SimpleNamespace(subject_id=native.get('subject_id'), **{
+            key + '_path': Path(native['source_files'][key]['path']) for key in ('dwi', 'bval', 'bvec', 'mask')})
+        expected = _native_manifest(raw, SimpleNamespace(fit_method=native.get('fit_method')))
+        if record.get('kind') == 'registered_dti_bundle' and record.get('implementation') != expected['preparation_implementation']:
+            return False
+        return all(native.get(key) == expected[key] for key in _TENSOR_KEY_FIELDS)
+    except Exception:
+        return False
+
+
+def _ddseg_tensor_source_current(subject_root: Path, output_root: Optional[Path], qc: dict, source: Path) -> bool:
+    """G3b: ``ddseg_source.json`` records the native bundle key the DDSeg run read (orchestrator runs only). A record
+    without it (base era, standalone DDSeg) stays reusable only for an input that the fix leaves unchanged."""
+    try:
+        dwi = qc.get('source_dwi') or _resolve_raw_inputs(subject_root, output_root)['dwi']
+    except Exception:
+        dwi = None
+    return _tensor_bundle_key_current(source, dwi=dwi)
+
+
 def _dti_bundle_source_current(config, manifest_path, inputs):
     if not _manifest_inputs_match(manifest_path, inputs, 'raw_inputs'):
+        return False
+    if not _dti_tracking_frame_current(manifest_path, inputs):
         return False
     try:
         manifest = _read_json(manifest_path)
@@ -2060,7 +2113,7 @@ def _anatomy_input_bundle(
     return resolve_preprocessed_input_bundle(raw_bundle, output_root=output_root)
 
 
-def _write_anatomy_source(path: Path, bundle, prepared_source=None) -> None:
+def _write_anatomy_source(path: Path, bundle, prepared_source=None, tensor_key=None) -> None:
     from shared.pipeline import _cache_file_signature, _write_manifest
     sources = {key: _cache_file_signature(getattr(bundle, key + '_path'))
                for key in ('dwi', 'bval', 'bvec', 'mask')}
@@ -2075,6 +2128,8 @@ def _write_anatomy_source(path: Path, bundle, prepared_source=None) -> None:
         "preprocessed": Path(bundle.input_dir).resolve() != (Path(bundle.subject_root) / "input").resolve(),
         "source_files": sources,
     }
+    # G3b: the native bundle key the product read (DDSeg); the source paths above give the expected key.
+    record.update({key: tensor_key.get(key) for key in _TENSOR_KEY_FIELDS} if tensor_key else {})
     _write_manifest(path, record)
 
 
@@ -2214,6 +2269,8 @@ def _segmentation_complete(subject_root: Path, output_root: Optional[Path] = Non
         artifacts = {key: _artifact_record(path, verify_content=True) for key, path in outputs.items() if key != 'qc'}
         if qc.get('output_artifacts') != artifacts:
             return False
+        if not _ddseg_tensor_source_current(subject_root, output_root, qc, outputs['qc'].parent / 'ddseg_source.json'):
+            return False
     except Exception:
         return False
     from anatomy.segmentation.orientation import ORIENTATION_CONVENTION
@@ -2268,8 +2325,14 @@ def _parcellation_complete(subject_root: Path, subject_id: str, output_root: Opt
             if not record.get('inputs') or any(_artifact_record(Path(path))['sha256'] != digest
                     for path, digest in record['inputs'].items()):
                 return False
+            # G3: the receipt holds the sha256 of the registered bundle manifest the product was made from.
+            registered = [Path(path) for path in record['inputs'] if Path(path).name == 'manifest.json']
+            if len(registered) != 1 or not _tensor_bundle_key_current(registered[0], nested=True, dwi=inputs.get('dwi')):
+                return False
         except (OSError, ValueError, TypeError, AttributeError):
             return False
+    elif not _gradient_frame_no_op(_resolve_analysis_inputs(subject_root, subject_id, output_root).get('dwi')):
+        return False  # G3: no receipt, so the bundle it was made from is unknown
     return scalar_qc_current(outputs["wmparc"].parent / "ddparcel_qc.json", list(outputs.values()))
 
 
@@ -2578,7 +2641,8 @@ def _microstructure_dti_complete(subject_root: Path, subject_id: str, output_roo
         outputs["manifest"],
         _resolve_analysis_inputs(subject_root, subject_id, output_root),
         "raw_input_bundle",
-    )
+    ) and _tensor_bundle_key_current(  # G3: the native bundle key it was made from
+        outputs["manifest"], nested=True, dwi=_resolve_analysis_inputs(subject_root, subject_id, output_root).get("dwi"))
 
 
 def _microstructure_freewater_outputs(subject_root: Path, subject_id: str, output_root: Optional[Path] = None) -> dict[str, Path]:
@@ -3308,7 +3372,8 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
                     analysis_inputs,
                     allow_ddseg_only=config.allow_act_ddseg_only,
                 )
-            return _qc_completed(dti_qc) and tractogram_trk.is_file()
+            return (_qc_completed(dti_qc) and tractogram_trk.is_file()
+                    and _dti_tracking_frame_current(dti_manifest, analysis_inputs))
         if target == "bundles":
             return _wmql_complete(
                 wmql_dir / "wmql_qc.json",
@@ -3699,6 +3764,7 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
                 and (not config.bundle_tractography_backend or _csd_bundle_parameters_current(config, csd_dir / 'csd_act_manifest.json'))
                 if primary_tractography_backend == "csd_act"
                 else _qc_completed(tractography_qc) and tractogram_trk.is_file()
+                and _dti_tracking_frame_current(dti_manifest, analysis_inputs)
                 and (not config.bundle_tractography_backend or (_dti_bundle_source_current(config, dti_manifest, analysis_inputs)
                      and _dti_bundle_qc_acceptable(config, dti_qc, tractogram_trk)))
             )
@@ -3844,7 +3910,7 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
                 tractcloud_input_tractography == current_vtk
                 and (available.get("tractography", False) or
                      (primary_tractography_backend == 'dti_det' and _qc_completed(dti_qc)
-                      and tractogram_trk.is_file()))
+                      and tractogram_trk.is_file() and _dti_tracking_frame_current(dti_manifest, analysis_inputs)))
             )
             if config.bundle_tractography_backend:
                 tractcloud_input_available = False
@@ -4914,8 +4980,9 @@ def _run_subject_products_impl(
                     source_dwi=raw_bundle.dwi_path,
                 )
             )
-            _write_anatomy_source(seg_stage_dir / 'ddseg_source.json', raw_bundle,
-                                  _read_json(native_bundle.manifest_path).get('source_files'))
+            native_record = _read_json(native_bundle.manifest_path)
+            _write_anatomy_source(seg_stage_dir / 'ddseg_source.json', raw_bundle, native_record.get('source_files'),
+                                  tensor_key=native_record)  # G3b: the bundle key this DDSeg run read
             _finish_task_timer("DDSeg", task_started, log)
             segmentation_outputs = _segmentation_outputs(subject_root, output_root)
             published_seg = _publish_segmentation_outputs(segmentation_outputs, layout)
@@ -5611,6 +5678,7 @@ def _run_subject_products_impl(
             and (not config.bundle_tractography_backend or _csd_bundle_parameters_current(config, csd_dir / 'csd_act_manifest.json'))
             if primary_tractography_backend == "csd_act"
             else _qc_completed(tractography_qc) and tractogram_trk.is_file()
+            and _dti_tracking_frame_current(dti_manifest, analysis_inputs)
             and (not config.bundle_tractography_backend or (_dti_bundle_source_current(config, dti_manifest, analysis_inputs)
                  and _dti_bundle_qc_acceptable(config, dti_qc, tractogram_trk)))
         )
@@ -6154,7 +6222,8 @@ def _run_subject_products_impl(
         conversion_error = bundle_conversion_error
         if (config.execute and primary_tractography_backend == 'dti_det'
                 and config.tractcloud_input_tractography is None and not config.bundle_tractography_backend):
-            if not _qc_completed(dti_qc) or not tractogram_trk.is_file():
+            if (not _qc_completed(dti_qc) or not tractogram_trk.is_file()
+                    or not _dti_tracking_frame_current(dti_manifest, analysis_inputs)):
                 conversion_error = 'Current DTI tractography is not QC-valid; no historical CSD fallback'
             else:
                 from tractography.conversion import ensure_vtk_tractogram

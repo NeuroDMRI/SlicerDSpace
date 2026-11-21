@@ -93,8 +93,10 @@ class BundleSourceTests(unittest.TestCase):
                              'size': path.stat().st_size, 'mtime_ns': path.stat().st_mtime_ns}
                        for key, path in inputs.items()}
             manifest = root / 'manifest.json'
+            # Gradient frame (batch 2, G4): the fake DWI is unreadable, so it counts as affected; a current run has the marker.
+            from tractography.dti import DIPY_GRADIENT_FRAME
             manifest.write_text(json.dumps({'status': 'completed', 'raw_inputs': records,
-                'parameters': {'fit_method': config.microstructure_fit_method, 'tracking_method': 'deterministic',
+                'gradient_frame': DIPY_GRADIENT_FRAME, 'parameters': {'fit_method': config.microstructure_fit_method, 'tracking_method': 'deterministic',
                     'output_format': 'trk', 'max_seed_voxels': config.select_streamlines,
                     'min_length_mm': config.dti_min_length_mm, 'max_length_mm': config.dti_max_length_mm}}))
             self.assertTrue(_dti_bundle_source_current(config, manifest, inputs))
@@ -195,7 +197,10 @@ class BundleSourceTests(unittest.TestCase):
                 paths = {'dwi': bundle.dwi_path, 'bval': bundle.bval_path, 'bvec': bundle.bvec_path, 'mask': bundle.mask_path}
                 records = {key: {'path': path.resolve().as_posix(), 'size': path.stat().st_size,
                                  'mtime_ns': path.stat().st_mtime_ns} for key, path in paths.items()}
+                # Gradient frame (batch 2): the fixture DWI has affine eye(4) (det > 0); the real run writes this marker.
+                from tractography.dti import DIPY_GRADIENT_FRAME
                 manifest.write_text(json.dumps({'status': 'completed', 'raw_inputs': records,
+                    'gradient_frame': DIPY_GRADIENT_FRAME,
                     'parameters': {'fit_method': options.fit_method, 'tracking_method': 'deterministic',
                         'output_format': 'trk', 'max_seed_voxels': options.max_seed_voxels,
                         'min_length_mm': options.min_length_mm, 'max_length_mm': options.max_length_mm}}))

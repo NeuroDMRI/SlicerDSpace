@@ -48,6 +48,15 @@ def _complete_preprocessing(subject_root: Path) -> Path:
     return preproc
 
 
+def _write_unaffected_dwi(path: Path) -> None:
+    """Gradient frame (batch 2, G3/G4): a real tiny DWI with an axis-aligned det < 0 (LAS) affine, which the fix leaves
+    unchanged; a text placeholder is unreadable and so counts as affected."""
+    import nibabel as nib
+    import numpy as np
+
+    nib.save(nib.Nifti1Image(np.zeros((2, 2, 2, 2), dtype=np.float32), np.diag([-2.0, 2.0, 2.0, 1.0])), str(path))
+
+
 def _ddseg_qc(schema_version: int, convention: str) -> dict[str, object]:
     return {
         "status": "completed",
@@ -146,6 +155,7 @@ class ResumeInvalidationTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             subject_root = _subject(tmp)
+            _write_unaffected_dwi(subject_root / "input" / "data.nii.gz")
             legacy = _ddseg_qc(1, ORIENTATION_CONVENTION)
             legacy.pop("orientation_convention")
             self._write_ddseg(subject_root, legacy)

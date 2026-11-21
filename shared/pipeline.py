@@ -792,9 +792,26 @@ def _save_artifacts(directory: Path, files) -> None:
     _write_manifest(directory / 'artifacts.json', {str(path): _artifact_record(path) for path in files})
 
 
-def _conversion_implementation() -> dict:
+def _gradient_frame_key_pin(raw: RawInputBundle) -> Callable[[str], str]:
+    """Item 8 of the gradient-frame fix: keep the old cache keys where the fix changes no output.
+
+    The fix edited nhdr_write.py, teem_dti.py and this file, whose sha256 values are part of the cache keys below.
+    For a DWI whose affine the fix provably leaves alone (shared/cache_key_pins.py: axis-aligned, det < 0) each
+    current sha256 is mapped to the sha256 of base commit 3c912ad2, so finished runs are reused. Every other DWI
+    keeps the real sha256 and is recomputed. A later edit of one of these files changes its sha256; the table then
+    no longer matches it and the key changes as it did before the pin.
+    """
+    try:
+        from shared.cache_key_pins import gradient_frame_fix_is_no_op, key_sha256
+    except ImportError:
+        return lambda digest: digest
+    no_op = gradient_frame_fix_is_no_op(raw.dwi_path)
+    return lambda digest: key_sha256(digest, no_op)
+
+
+def _conversion_implementation(pin: Callable[[str], str] = lambda digest: digest) -> dict:
     root = Path(__file__).resolve().parents[1] / 'anatomy/parcellation/conversion'
-    return {name: _artifact_record(root / name)['sha256'] for name in ('nhdr_write.py', 'bval_bvec_io.py')}
+    return {name: pin(_artifact_record(root / name)['sha256']) for name in ('nhdr_write.py', 'bval_bvec_io.py')}
 
 
 def _run_cli(cmd: list[str], log: Optional[Callable[[str], None]] = None) -> None:
@@ -1077,7 +1094,7 @@ def ensure_diffusion_headers(raw: RawInputBundle, *, log=None) -> tuple[Path, Pa
     headers = (directory / 'DWI.nhdr', directory / 'Mask.nhdr')
     manifest = directory / 'manifest.json'
     signature = dict(kind='diffusion_headers', version=2, subject_id=raw.subject_id,
-        implementation=_conversion_implementation(),
+        implementation=_conversion_implementation(_gradient_frame_key_pin(raw)),
         sources={key: _cache_file_signature(getattr(raw, key + '_path')) for key in ('dwi', 'bval', 'bvec', 'mask')})
     with cache_lock(directory / '.lock', log=_lock_log(log)):
         signature['sources'] = {key: _cache_file_signature(getattr(raw, key + '_path'))
@@ -1150,14 +1167,15 @@ def _build_native_bundle(raw: RawInputBundle, fit_method: str) -> NativeDTIBundl
 
 
 def _native_manifest(raw: RawInputBundle, bundle: NativeDTIBundle) -> dict[str, Any]:
+    pin = _gradient_frame_key_pin(raw)
     return {
         "kind": "native_dti_bundle",
         "version": 4,
         "subject_id": raw.subject_id,
         "fit_method": bundle.fit_method,
-        "conversion_implementation": _conversion_implementation(),
-        "preparation_implementation": _artifact_record(Path(__file__))['sha256'],
-        "tensor_implementation": _artifact_record(Path(__file__).with_name('teem_dti.py'))['sha256'],
+        "conversion_implementation": _conversion_implementation(pin),
+        "preparation_implementation": pin(_artifact_record(Path(__file__))['sha256']),
+        "tensor_implementation": pin(_artifact_record(Path(__file__).with_name('teem_dti.py'))['sha256']),
         "source_files": {
             "dwi": _cache_file_signature(raw.dwi_path),
             "bval": _cache_file_signature(raw.bval_path),
@@ -1368,7 +1386,7 @@ def _registered_manifest(raw: RawInputBundle, native: NativeDTIBundle, registere
         "subject_id": raw.subject_id,
         "fit_method": registered.fit_method,
         "scalar_format": registered.scalar_format,
-        "implementation": _artifact_record(Path(__file__))['sha256'],
+        "implementation": _gradient_frame_key_pin(raw)(_artifact_record(Path(__file__))['sha256']),
         "atlas": _cache_file_signature(registered.atlas_path),
         "native_bundle": {
             "dir": str(native.bundle_dir.resolve()),

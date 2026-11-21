@@ -145,8 +145,8 @@ for macOS 13.0:
 The rebuilt data files are byte-identical to the `v0.1.1` runtime. The binaries
 differ only in embedded build paths, build-date strings and about 50 of
 430,000–575,000 instructions each (static comparison). The rebuilt commands
-were started on macOS 15 only; GitHub offers no older macOS arm64 runner for
-this check. Scientific comparison on macOS remains pending.
+were started on macOS 15 only; the `macos-14` runner of the start check was not
+available to this repository. Scientific comparison on macOS remains pending.
 
 On Windows x86_64 (`v0.1.1`), the 7 native FreeSurfer surface postprocessing executables (`mris_convert.exe`, `mris_inflate.exe`, `mris_curv.exe`, `mris_smooth.exe`, `mris_sphere.exe`, `mris_register.exe`, `mris_ca_label.exe`, `mris_anatomical_stats.exe`) have been ported, built, bundled in `surface-runtime-windows-x86_64`, and verified on real data in 3D Slicer 5.10.0 against the Linux reference (`Activation Key Included: false`; personal FreeSurfer license required at runtime).
 

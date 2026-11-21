@@ -124,7 +124,7 @@ PythonSlicer run_subject_pipeline.py --subject-root /data/sub-01 --subject-id su
 
 重建后的数据文件与 `v0.1.1` 组件逐字节一致。二进制文件只在嵌入的构建路径、
 构建日期字符串以及每个文件 43 万至 57.5 万条指令中约 50 条上不同（静态比较）。
-重建后的命令只在 macOS 15 上启动过；GitHub 没有可用于此检查的更低版本 macOS arm64 运行器。
+重建后的命令只在 macOS 15 上启动过；启动检查所用的 `macos-14` 运行器对本仓库不可用。
 macOS 科学结果对照仍待验证。
 
 Windows x86_64（`v0.1.1`）已完成全部 7 个原生 FreeSurfer 表面后处理程序（`mris_convert.exe`、`mris_inflate.exe`、`mris_curv.exe`、`mris_smooth.exe`、`mris_sphere.exe`、`mris_register.exe`、`mris_ca_label.exe`、`mris_anatomical_stats.exe`）的 Windows 原生移植、编译与打包（内置于 `surface-runtime-windows-x86_64`），并在 3D Slicer 5.10.0 中通过真实数据与 Linux 参考结果的一致性验收（`Activation Key Included: false`，运行仍需用户个人 FreeSurfer 许可证）。

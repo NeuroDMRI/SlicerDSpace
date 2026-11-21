@@ -244,14 +244,23 @@ jobs:
           SLICER_EXE: ${{ steps.slicer.outputs.slicer_exe }}
           PYTHON_SLICER: ${{ steps.slicer.outputs.python_slicer }}
         run: |
-          python .github/scripts/ci_install_dspace.py --slicer-exe "$SLICER_EXE" --python-slicer "$PYTHON_SLICER"
+          python .github/scripts/ci_install_dspace.py --slicer-exe "$SLICER_EXE" --python-slicer "$PYTHON_SLICER" --keep-asset
+
+      - name: Reinstall - run the website installer a second time over the installed copy
+        id: reinstall
+        shell: bash
+        env:
+          SLICER_EXE: ${{ steps.slicer.outputs.slicer_exe }}
+          PYTHON_SLICER: ${{ steps.slicer.outputs.python_slicer }}
+        run: |
+          python .github/scripts/ci_install_dspace.py --slicer-exe "$SLICER_EXE" --python-slicer "$PYTHON_SLICER" --reinstall
 
       - name: Run the headless smoke through real Slicer
         id: smoke
         shell: bash
         env:
           SLICER_EXE: ${{ steps.slicer.outputs.slicer_exe }}
-          MODULE_DIR: ${{ steps.dspace.outputs.module_dir }}
+          MODULE_DIR: ${{ steps.reinstall.outputs.module_dir }}
         run: |
           python .github/scripts/ci_run_slicer_smoke.py --slicer-exe "$SLICER_EXE" --module-dir "$MODULE_DIR" \
             --mode full-install --pipeline required

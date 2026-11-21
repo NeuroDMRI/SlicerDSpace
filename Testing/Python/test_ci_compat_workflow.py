@@ -101,6 +101,29 @@ class WorkflowStaticTests(unittest.TestCase):
         self.assertIn("--mode repo-only --pipeline optional", self.text)
         self.assertIn("scripts/stage_slicer_extension.py", self.text)
 
+    def test_b1_full_install_reinstalls_over_the_installed_copy_before_the_smoke(self):
+        full = self.text.split("\n  full-install:\n", 1)[1]
+        install = full.index("id: dspace")
+        reinstall = full.index("id: reinstall")
+        smoke = full.index("id: smoke")
+        self.assertEqual(self.text.count("id: reinstall"), 1)
+        self.assertLess(install, reinstall)
+        self.assertLess(reinstall, smoke)
+        first = full[install:reinstall]
+        second = full[reinstall:smoke]
+        self.assertIn("ci_install_dspace.py", first)
+        self.assertIn("--keep-asset", first)
+        self.assertIn("ci_install_dspace.py", second)
+        self.assertIn("--reinstall", second)
+        self.assertNotIn("GH_TOKEN", second)  # the second run reuses the asset of the first run
+        self.assertNotIn("continue-on-error", second)
+        self.assertIn("MODULE_DIR: ${{ steps.reinstall.outputs.module_dir }}", full[smoke:smoke + 400])
+        if self.doc is not None:
+            names = [step.get("name", "") for step in self.doc["jobs"]["full-install"]["steps"]]
+            self.assertEqual(sum(1 for n in names if n.startswith("Reinstall")), 1)
+            self.assertFalse(any(n.startswith("Reinstall") for n in
+                                 [step.get("name", "") for step in self.doc["jobs"]["repo-only"]["steps"]]))
+
     def test_g1_glibc_limit_is_the_documented_linux_floor(self):
         self.assertNotIn("--limit 2.28", self.text)
         self.assertNotIn("allowed to be", self.text.split("on:\n", 1)[0])
@@ -209,6 +232,56 @@ class DspaceInstallTests(unittest.TestCase):
         self.assertEqual((new, changed), ("ScheduledForUninstall=\r\n", True))
         for untouched in ("ScheduledForUninstall=@Invalid()\n", "ScheduledForUninstall=SlicerDMRI\n", "x=1\n"):
             self.assertEqual(self.mod.strip_scheduled_uninstall(untouched), (untouched, False))
+
+    def _check_reinstall(self, output, module_dir, ini_text=None):
+        with tempfile.TemporaryDirectory() as td:
+            ini = Path(td) / "Slicer.ini"
+            ini.write_text(ini_text or "[Extensions]\nScheduledForUninstall=\n", encoding="utf-8")
+            original = self.mod.settings_files_near
+            self.mod.settings_files_near = lambda exe: [ini]
+            try:
+                return self.mod.check_reinstall(output, module_dir, Path("/x/Slicer"))
+            finally:
+                self.mod.settings_files_near = original
+
+    def test_b1_reinstall_check_passes_for_a_real_reinstall(self):
+        with tempfile.TemporaryDirectory() as td:
+            module = Path(td) / "qt-scripted-modules"
+            module.mkdir()
+            (module / "SlicerDSpace.py").write_text("#", encoding="utf-8")
+            out = "[SlicerDSpace Installer] %s 3D Slicer removes it\n" % self.mod.REINSTALL_MARKER
+            self._check_reinstall(out, module)
+
+    def test_b1_reinstall_check_fails_when_the_extension_is_missing_or_still_scheduled_or_not_a_reinstall(self):
+        with tempfile.TemporaryDirectory() as td:
+            module = Path(td) / "qt-scripted-modules"
+            module.mkdir()
+            (module / "SlicerDSpace.py").write_text("#", encoding="utf-8")
+            out = "[SlicerDSpace Installer] %s 3D Slicer removes it\n" % self.mod.REINSTALL_MARKER
+            with self.assertRaises(SystemExit) as missing:
+                self._check_reinstall(out, Path(td) / "nowhere")
+            self.assertIn("missing after the reinstall", str(missing.exception))
+            with self.assertRaises(SystemExit) as none:
+                self._check_reinstall(out, None)
+            self.assertIn("missing after the reinstall", str(none.exception))
+            with self.assertRaises(SystemExit) as scheduled:
+                self._check_reinstall(out, module, "[Extensions]\nScheduledForUninstall=SlicerDSpace, Other\n")
+            self.assertIn("ScheduledForUninstall", str(scheduled.exception))
+            with self.assertRaises(SystemExit) as fresh:
+                self._check_reinstall("installed at: /x\n", module)
+            self.assertIn("did not go over an installed", str(fresh.exception))
+            self._check_reinstall(out, module, "[Extensions]\nScheduledForUninstall=SlicerDMRI\n")
+
+    def test_b1_reinstall_marker_is_logged_by_both_installer_copies(self):
+        for path in (REPO / "shared" / "installer_script_builder.py", REPO / "docs" / "site" / "assets" / "js" / "installer-customizer.js"):
+            with self.subTest(path=path.name):
+                self.assertIn(self.mod.REINSTALL_MARKER, path.read_text(encoding="utf-8"))
+
+    def test_b1_reinstall_without_the_kept_asset_fails_early(self):
+        with tempfile.TemporaryDirectory() as td:
+            with self.assertRaises(SystemExit) as ctx:
+                self.mod.main(["--slicer-exe", "/x/Slicer", "--python-slicer", "/x/PythonSlicer", "--offline-dir", td, "--reinstall"])
+            self.assertIn("--keep-asset", str(ctx.exception))
 
     def test_website_installer_generates_for_all_three_systems(self):
         sys.path.insert(0, str(REPO))

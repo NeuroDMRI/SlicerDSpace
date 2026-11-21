@@ -10,6 +10,12 @@
    installed module directory, one file at a time (the installed tree is never emptied), and prove that the
    installed code tree now has the same SHA-256 fingerprint as the checkout.
 
+With --reinstall the script runs the SAME website installer a second time over the copy that the first run
+installed (the asset from the first run must still be in --offline-dir: pass --keep-asset to the first run). The
+reinstall fails when the installer fails, when it did not go over an installed copy, when SlicerDSpace is missing
+afterwards, or when any Slicer settings file lists SlicerDSpace under ScheduledForUninstall. It then overlays this
+checkout again, because the reinstall replaced the overlaid files with the released ones.
+
 Prints and writes module_dir (the directory that holds SlicerDSpace.py) and ext_root to $GITHUB_OUTPUT.
 Never run this against a Slicer you care about: it installs and overwrites files in that Slicer.
 """
@@ -39,6 +45,8 @@ EXEC_SNIPPET = (
     "t=open(sys.argv[1], encoding='utf-8').read(); b=t.split(bmk,1)[1].split(emk,1)[0]; "
     "exec(compile(b, sys.argv[1], 'exec'), {'__name__': '__main__', '__file__': sys.argv[1]})"
 )
+# The website installer logs this line when it found an older SlicerDSpace and started Slicer a second time (finding B1).
+REINSTALL_MARKER = "An older SlicerDSpace is installed."
 INSTALLED_AT = re.compile(r"SlicerDSpace extension installed at: (.+)$", re.MULTILINE)
 
 
@@ -179,6 +187,32 @@ def settings_files_near(slicer_exe):
     return found
 
 
+def scheduled_uninstall_files(slicer_exe, extension="SlicerDSpace"):
+    """Settings files that list the extension under ScheduledForUninstall (Slicer deletes it at its next start)."""
+    found = []
+    for ini in settings_files_near(slicer_exe):
+        text = ini.read_text(encoding="utf-8", errors="replace")
+        if strip_scheduled_uninstall(text, extension)[1]:
+            log("settings file %s: %s" % (ini, [l for l in text.splitlines() if "ScheduledForUninstall" in l]))
+            found.append(ini)
+    return found
+
+
+def check_reinstall(installer_output, module_dir, slicer_exe):
+    """Fail unless the second website-installer run replaced an installed copy and left nothing scheduled."""
+    if REINSTALL_MARKER not in installer_output:
+        raise SystemExit("The second install did not go over an installed SlicerDSpace (the installer never logged %r); "
+                         "the reinstall path was not tested" % REINSTALL_MARKER)
+    if module_dir is None or not (module_dir / "SlicerDSpace.py").is_file():
+        raise SystemExit("SlicerDSpace is missing after the reinstall (module directory: %r)" % (module_dir,))
+    leftovers = scheduled_uninstall_files(slicer_exe)
+    if leftovers:
+        print("::error title=Reinstall leaves SlicerDSpace scheduled for uninstall::%s list SlicerDSpace under "
+              "Extensions/ScheduledForUninstall; the next Slicer start deletes the extension." % ", ".join(map(str, leftovers)), flush=True)
+        raise SystemExit("After the reinstall %s still list SlicerDSpace under ScheduledForUninstall" % ", ".join(map(str, leftovers)))
+    log("reinstall check passed: second install over an installed copy, module present, nothing scheduled for uninstall")
+
+
 def cancel_scheduled_uninstall(slicer_exe):
     """Product-installer workaround for CI: if the website installer left SlicerDSpace scheduled for
     uninstall, the next Slicer start deletes the extension it just installed. Edit the ini files so the
@@ -217,18 +251,30 @@ def main(argv=None):
     parser.add_argument("--python-slicer", required=True, type=Path)
     temp = Path(os.environ.get("RUNNER_TEMP") or os.environ.get("TMPDIR") or "/tmp")
     parser.add_argument("--offline-dir", type=Path, default=temp / "dspace-offline")
+    parser.add_argument("--keep-asset", action="store_true", help="keep the downloaded base asset for a later --reinstall run")
+    parser.add_argument("--reinstall", action="store_true",
+                        help="run the website installer again over the installed copy and fail on any reinstall problem")
     args = parser.parse_args(argv)
 
     target_os, template, bundle_key = BASE_ASSETS[platform_key()]
     filename = template % RELEASE_TAG
-    asset_sha = download_asset(args.offline_dir, filename)
+    asset = args.offline_dir / filename
+    if args.reinstall:
+        if not asset.is_file():
+            raise SystemExit("--reinstall needs %s from the first install run; pass --keep-asset to that run" % asset)
+        asset_sha = sha256_of(asset)
+    else:
+        asset_sha = download_asset(args.offline_dir, filename)
     output = run_website_installer(args.python_slicer, args.slicer_exe, target_os, args.offline_dir, bundle_key, asset_sha)
     module_dir = find_installed_module_dir(output)
+    if args.reinstall:
+        check_reinstall(output, module_dir, args.slicer_exe)
     if module_dir is None or not (module_dir / "SlicerDSpace.py").is_file():
         raise SystemExit("Could not find the installed module directory in the installer output (got %r)" % (module_dir,))
     count = overlay_checkout(module_dir)
-    cancelled = cancel_scheduled_uninstall(args.slicer_exe)
-    (args.offline_dir / filename).unlink()  # free about 1.5 GB of runner disk
+    cancelled = [] if args.reinstall else cancel_scheduled_uninstall(args.slicer_exe)
+    if not args.keep_asset:
+        asset.unlink()  # free about 1.5 GB of runner disk
     write_outputs({"module_dir": module_dir, "ext_root": module_dir.parents[2], "overlay_files": count,
                    "scheduled_uninstall_cancelled": len(cancelled)})
     return 0

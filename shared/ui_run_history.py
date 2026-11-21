@@ -19,12 +19,20 @@ from shared.run_history import (
     RunRecord,
     candidate_run_roots,
     discover_runs,
+    dump_hidden_runs,
+    hidden_stamp,
+    parse_hidden_runs,
     parse_run_manifest,
     progress_from_manifest,
     remember_directory,
+    run_manifest_key,
     run_record_brief,
     run_record_details,
+    run_record_key,
+    run_folder_path,
     run_record_label,
+    split_hidden,
+    subject_folder_from_roots,
     status_label,
 )
 from shared.ui_run_state import (
@@ -38,6 +46,8 @@ from shared.ui_run_state import (
 
 
 RUN_HISTORY_SETTING = "SlicerDSpace/UserSettings/runHistoryDirectories"
+# Batch 2: runs removed from the Results list (one JSON string: slot key -> the run's own stamp). Files stay on disk.
+RESULTS_HIDDEN_SETTING = "SlicerDSpace/UserSettings/resultsHiddenRuns"
 PROGRESS_POLL_INTERVAL_MS = 2000
 ADD_RUN_FOLDER_TEXT = "Add a run folder…"
 ADD_RUN_FOLDER_TOOLTIP = (
@@ -54,6 +64,7 @@ MODULE_ROOT_RULE = "qMRMLWidget#DDSurfer {"  # the root rule of ui_styles.ui_sty
 RESULT_FAMILY_ORDER = ("preprocessing", "anatomy", "microstructure", "tractography", "bundles", "connectome", "qc")
 # Item data roles of the Results tree, as offsets from Qt.UserRole.
 ROLE_PATH, ROLE_KIND, ROLE_MANIFEST, ROLE_RUN, ROLE_KEY = 0, 1, 2, 3, 4
+ROLE_FOLDER = 5  # Batch 2: the folder on disk of a subject row (the Open folder button); text, empty when unknown
 
 
 def _text(owner: Any, key: str, fallback: str) -> str:
@@ -796,6 +807,16 @@ def install_results_panel(owner: Any) -> None:
     owner._resultsEmptyLabel = empty_label
     _bind(owner, empty_label, "text", "no_runs_found")
     empty_layout.addWidget(empty_label, 1)
+    # Batch 2: after a Clear the tree container is hidden; this button is then the only way back.
+    show_hidden = qt.QPushButton("")
+    show_hidden.setObjectName("resultsShowHiddenButton")
+    show_hidden.setText(_show_hidden_text(owner, 0))
+    _bind(owner, show_hidden, "text", "results_show_hidden")
+    show_hidden.clicked.connect(lambda *_args: show_hidden_results(owner))
+    show_hidden.hide()
+    empty_layout.addWidget(show_hidden)
+    owner._resultsShowHiddenButton = show_hidden
+    owner._resultsHiddenRecords = ()
     results_body_layout.addWidget(empty_row)
 
     results_box = qt.QWidget()
@@ -873,6 +894,8 @@ def install_results_panel(owner: Any) -> None:
     results_box_layout.addWidget(files)
 
     def _on_tree_item_clicked(item, column) -> None:
+        if column == 1 and item.parent() is None:  # Batch 2 add-on: the Open folder button of a subject row
+            _open_item_folder(owner, item)
         raw_path = item.data(0, _user_role(qt, 0))
         if isinstance(raw_path, (str, Path)) and raw_path and column == 1:
             _toggle_output(owner, item)
@@ -954,11 +977,34 @@ def _results_icon_svg(glyph: str, *, dark: bool) -> bytes:
     if cached is not None:
         return cached
     color = "#C9D1D9" if dark else "#4A5560"
-    body = (
-        f'<g fill="none" stroke="{color}" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">'
-        '<path d="M9.5 2.5h4v4"/><path d="M13.5 2.5 8 8"/>'
-        '<path d="M12 9.5v3a1 1 0 0 1-1 1H3.5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h3"/></g>'
-    )
+    group = f'<g fill="none" stroke="{color}" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">'
+    if glyph == "list":  # the Results list menu: a list with an x (clear, show hidden)
+        body = (
+            f"{group}"
+            '<path d="M2.5 4h11"/><path d="M2.5 8h11"/><path d="M2.5 12h5"/>'
+            '<path d="M10.5 10.5l3 3"/><path d="M13.5 10.5l-3 3"/></g>'
+        )
+    elif glyph == "folder":  # Open folder, on the Subject ID rows
+        # A mid-tone stroke: the selected row has a light highlight also in the dark theme, so the light stroke
+        # of the header buttons would vanish there.
+        row_group = group.replace(color, "#8A99AB" if dark else "#5F6E80")
+        body = (
+            f"{row_group}"
+            '<path d="M2 4.5a1 1 0 0 1 1-1h3l1.5 1.5H13a1 1 0 0 1 1 1V12a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1z"/></g>'
+        )
+    elif glyph == "hideall":  # Hide everything shown: an eye with a slash over stacked layers
+        body = (
+            f"{group}"
+            '<path d="M2 5s2.2-3 6-3 6 3 6 3-2.2 3-6 3-6-3-6-3z"/><circle cx="8" cy="5" r="1.2"/>'
+            '<path d="M2 10.6l6 2.4 6-2.4"/><path d="M2 13.4l6 2.4 6-2.4"/>'
+            '<path d="M3 1.5l10 11"/></g>'
+        )
+    else:  # "popout"
+        body = (
+            f"{group}"
+            '<path d="M9.5 2.5h4v4"/><path d="M13.5 2.5 8 8"/>'
+            '<path d="M12 9.5v3a1 1 0 0 1-1 1H3.5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h3"/></g>'
+        )
     svg = ('<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 16 16">'
            f"{body}</svg>").encode("utf-8")
     _RESULTS_ICON_SVG_CACHE[key] = svg
@@ -1012,6 +1058,32 @@ def _install_results_header(owner: Any, qt: Any, results_layout: Any) -> Any:
     header_layout.setContentsMargins(0, 0, 0, 0)
     header_layout.setSpacing(2)
     header_layout.addStretch(1)
+    # Batch 2 add-on: "Hide everything shown", an icon-only button; the text is the tooltip and the accessible name.
+    hide_all = qt.QToolButton()
+    hide_all.setObjectName("resultsHideAllButton")
+    _style_header_button(qt, hide_all)
+    hide_all.setToolButtonStyle(qt.Qt.ToolButtonIconOnly)
+    hide_all_text = _text(owner, "results_hide_all", HIDE_ALL_TEXT)
+    hide_all.setToolTip(hide_all_text)
+    hide_all.setAccessibleName(hide_all_text)
+    _bind(owner, hide_all, "tooltip", "results_hide_all")
+    hide_all.clicked.connect(lambda *_args: hide_everything_shown(owner))
+    header_layout.addWidget(hide_all)
+    owner._resultsHideAllButton = hide_all
+    # Batch 2: the Results list menu (Clear, Show hidden). The menu is filled on each open, in the current language.
+    menu_button = qt.QToolButton()
+    menu_button.setObjectName("resultsMenuButton")
+    _style_header_button(qt, menu_button)
+    menu_button.setToolButtonStyle(qt.Qt.ToolButtonIconOnly)
+    menu_button.setPopupMode(qt.QToolButton.InstantPopup)
+    menu_button.setStyleSheet("QToolButton::menu-indicator { image: none; width: 0px; }")
+    menu_button.setToolTip(_text(owner, "results_menu", "Results list: clear it or show hidden results"))
+    _bind(owner, menu_button, "tooltip", "results_menu")
+    results_menu = qt.QMenu(menu_button)
+    _show_menu_tooltips(results_menu)
+    results_menu.connect("aboutToShow()", lambda: _fill_results_menu(owner, results_menu))
+    menu_button.setMenu(results_menu)
+    header_layout.addWidget(menu_button)
     collapse = qt.QToolButton()
     collapse.setObjectName("resultsCollapseButton")
     _style_header_button(qt, collapse)
@@ -1054,6 +1126,8 @@ def _install_results_header(owner: Any, qt: Any, results_layout: Any) -> Any:
 
     owner._resultsLayout = results_layout
     owner._resultsHeaderRow = header
+    owner._resultsMenuButton = menu_button
+    owner._resultsMenu = results_menu
     owner._resultsCollapseButton = collapse
     owner._resultsPopOutButton = pop_out
     owner._resultsPoppedRow = popped
@@ -1194,8 +1268,17 @@ def refresh_results_window(owner: Any, *, dark: Optional[bool] = None) -> None:
         icon = _results_icon(qt, "popout", dark=resolved_dark)
         if icon is not None:
             pop_button.setIcon(icon)
+        menu_button = getattr(owner, "_resultsMenuButton", None)
+        menu_icon = _results_icon(qt, "list", dark=resolved_dark) if menu_button is not None else None
+        if menu_icon is not None:
+            menu_button.setIcon(menu_icon)
+        hide_all_button = getattr(owner, "_resultsHideAllButton", None)
+        hide_all_icon = _results_icon(qt, "hideall", dark=resolved_dark) if hide_all_button is not None else None
+        if hide_all_icon is not None:
+            hide_all_button.setIcon(hide_all_icon)
     except Exception:
         pass
+    _refresh_folder_icons(owner, resolved_dark)
     dialog = getattr(owner, "_resultsDialog", None)
     root = getattr(owner, "_uiWidget", None)
     if dialog is not None and root is not None:
@@ -1429,6 +1512,7 @@ def _build_subject_item(owner: Any, qt_mod: Any, tree: Any, records, group: dict
         text = f"{group['label']} · {status}"
     item = qt_mod.QTreeWidgetItem(tree, [text])
     item.setData(0, _user_role(qt_mod, ROLE_KEY), group["key"])
+    _set_folder_button(owner, qt_mod, item, _group_folder(owner, records, group))  # Batch 2 add-on: Open folder
     if newest is not None:
         item.setData(0, _user_role(qt_mod, ROLE_MANIFEST), str(records[newest].manifest_path))
         item.setData(0, _user_role(qt_mod, ROLE_RUN), newest)
@@ -1456,6 +1540,8 @@ def _populate_run_tree(owner, records, current_index):
     empty_row = getattr(owner, "_resultsEmptyRow", None)
     if empty_row is not None:
         empty_row.setVisible(not has_content)
+    _update_empty_state(owner, has_content)
+    _sync_hide_all_text(owner)
     report_bar = getattr(owner, "_resultsReportBar", None)
     if report_bar is not None:
         report_bar.setVisible(False)
@@ -1772,14 +1858,16 @@ def _output_menu(owner, position):
 
     tree = owner._runOutputFiles
     item = tree.itemAt(position)
-    raw_path = item.data(0, _user_role(qt, 0)) if item is not None else None
-    manifest_path = _item_manifest_path(owner, item, qt) if item is not None else getattr(owner, "_latestResultManifestPath", None)
-    if not isinstance(raw_path, (str, Path)) or not raw_path or manifest_path is None:
+    if item is None:
         return
-    nodes = _output_nodes(slicer, manifest_path, Path(raw_path))
-    is_seg = item is not None and item.data(0, _user_role(qt, 1)) == "segmentation"
-    if not nodes and not is_seg:
-        return
+    raw_path = item.data(0, _user_role(qt, 0))
+    manifest_path = _item_manifest_path(owner, item, qt)
+    is_file = isinstance(raw_path, (str, Path)) and bool(raw_path) and manifest_path is not None
+    nodes = _output_nodes(slicer, manifest_path, Path(raw_path)) if is_file else []
+    is_seg = is_file and item.data(0, _user_role(qt, 1)) == "segmentation"
+    # Batch 2 + FD8: take the runs of the whole subject now; no tree item is read after the menu closes.
+    remove_records, remove_reason = _removal_for_item(owner, qt, item)
+    folder = _top_item(item).data(0, _user_role(qt, ROLE_FOLDER))  # also before exec_ (FD8)
     menu = qt.QMenu(tree)
     zh = str(getattr(owner, "_onboardingLanguage", "en")).startswith("zh")
     edit_action = (
@@ -1788,6 +1876,13 @@ def _output_menu(owner, position):
         else None
     )
     unload = menu.addAction("从场景卸载" if zh else "Unload from scene") if nodes else None
+    if edit_action is not None or unload is not None:
+        menu.addSeparator()
+    open_folder = menu.addAction(_text(owner, "results_open_folder", OPEN_FOLDER_TEXT))
+    remove = menu.addAction(_text(owner, "results_remove", "Remove from Results list"))
+    remove.enabled = bool(remove_records)
+    remove.toolTip = remove_reason or _text(owner, "results_remove_tooltip", REMOVE_TOOLTIP)
+    _show_menu_tooltips(menu)
     chosen = menu.exec_(tree.viewport().mapToGlobal(position))
     if edit_action is not None and chosen == edit_action:
         # FD3: _manage_result_scene acts on the selected run; in a merged subject the file may own an older one.
@@ -1799,6 +1894,348 @@ def _output_menu(owner, position):
         for node in nodes:
             slicer.mrmlScene.RemoveNode(node)
         _refresh_output_visibility(owner)
+    elif chosen == open_folder:
+        open_results_folder(owner, folder)
+    elif chosen == remove and remove_records:
+        _hide_records(owner, remove_records)
+
+
+# ------------------------------------------------- Batch 2: remove from the Results list, Clear, show hidden
+# Only the list changes: no file is deleted and no scene node is removed. A removed run shows again when its slot
+# gets a newer run (re-run, resume, cancel), and "Show hidden results" brings back all hidden runs of the scan.
+
+REMOVE_TOOLTIP = "Hide this subject's runs from the Results list. Files on disk and loaded scene nodes are kept."
+REMOVE_RUNNING_TOOLTIP = "A job of this subject is running now; it cannot be removed from the list."
+CLEAR_TOOLTIP = "Hide every run in the Results list. Files on disk and loaded scene nodes are kept; new runs appear."
+REMOVED_STATUS = "Removed {count} run(s) from the list; files are kept."
+
+
+def _show_menu_tooltips(menu: Any) -> None:
+    try:
+        menu.setToolTipsVisible(True)
+    except Exception:
+        pass
+
+
+def load_hidden_runs() -> dict:
+    """The stored hide list; a broken or missing value reads as empty."""
+
+    try:
+        import slicer
+
+        value = slicer.app.userSettings().value(RESULTS_HIDDEN_SETTING, "")
+    except Exception:
+        return {}
+    return parse_hidden_runs(value)
+
+
+def save_hidden_runs(hidden: dict) -> None:
+    try:
+        import slicer
+
+        slicer.app.userSettings().setValue(RESULTS_HIDDEN_SETTING, dump_hidden_runs(hidden))
+    except Exception:
+        pass
+
+
+def _live_run_keys(owner: Any) -> set:
+    """The slot of the job that runs now; it is never hidden."""
+
+    if str(getattr(owner, "_runState", "") or "") != "running":
+        return set()
+    return {run_manifest_key(path) for path in _job_manifest_keys(owner)}
+
+
+def _split_hidden_for_owner(owner: Any, records) -> tuple[tuple, tuple]:
+    hidden = load_hidden_runs()
+    live = _live_run_keys(owner)
+    if live:
+        hidden = {key: stamp for key, stamp in hidden.items() if key not in live}
+    return split_hidden(records, hidden)
+
+
+def _is_protected(record: RunRecord, running_subject: str, live_keys: set) -> bool:
+    if run_record_key(record) in live_keys:
+        return True
+    return bool(running_subject) and not record.is_batch and record.subject_id == running_subject
+
+
+def _clearable_records(owner: Any) -> tuple:
+    """The listed runs that a Clear hides: all except the subject of the job that runs now."""
+
+    running, live = running_subject_id(owner), _live_run_keys(owner)
+    return tuple(record for record in getattr(owner, "_runHistoryRecords", ()) or ()
+                 if not _is_protected(record, running, live))
+
+
+def _removal_for_item(owner: Any, qt_mod: Any, item: Any) -> tuple[tuple, str]:
+    """The runs of the item's top subject item, and the reason when they cannot be removed."""
+
+    top = _top_item(item)
+    running = running_subject_id(owner)
+    reason = _text(owner, "results_remove_running", REMOVE_RUNNING_TOOLTIP)
+    if running and top.data(0, _user_role(qt_mod, ROLE_KEY)) == running:
+        return (), reason
+    run_idx = top.data(0, _user_role(qt_mod, ROLE_RUN))
+    if not isinstance(run_idx, int) or isinstance(run_idx, bool):
+        return (), ""
+    tree_records = getattr(owner, "_runTreeRecords", ()) or ()
+    indices = (getattr(owner, "_resultsGroupRuns", {}) or {}).get(run_idx, ())
+    records = tuple(tree_records[index] for index in indices if 0 <= index < len(tree_records))
+    live = _live_run_keys(owner)
+    if any(run_record_key(record) in live for record in records):
+        return (), reason
+    return records, ""
+
+
+def _hide_records(owner: Any, records) -> None:
+    records = tuple(records)
+    if not records:
+        return
+    hidden = load_hidden_runs()
+    for record in records:
+        key = run_record_key(record)
+        hidden.pop(key, None)  # a new hide goes to the end
+        hidden[key] = hidden_stamp(record)
+    save_hidden_runs(hidden)
+    owner._refresh_run_history()
+    message = _text(owner, "results_removed_status", REMOVED_STATUS).format(count=len(records))
+    try:
+        import slicer
+
+        slicer.util.showStatusMessage(message, 4000)
+    except Exception:
+        pass
+
+
+def _unhide_records(records) -> None:
+    hidden = load_hidden_runs()
+    keys = {run_record_key(record) for record in records} & set(hidden)
+    if keys:
+        save_hidden_runs({key: stamp for key, stamp in hidden.items() if key not in keys})
+
+
+def clear_results_list(owner: Any) -> None:
+    """Hide every listed run except the running subject; new runs appear after it."""
+
+    _hide_records(owner, _clearable_records(owner))
+
+
+def show_hidden_results(owner: Any) -> None:
+    """Show every hidden run that the last scan found again."""
+
+    _unhide_records(getattr(owner, "_resultsHiddenRecords", ()) or ())
+    owner._refresh_run_history()
+
+
+def _show_hidden_text(owner: Any, count: int) -> str:
+    text = _text(owner, "results_show_hidden", "Show hidden results")
+    zh = str(getattr(owner, "_onboardingLanguage", "en")).startswith("zh")
+    return f"{text}（{count}）" if zh else f"{text} ({count})"
+
+
+def results_menu_entries(owner: Any) -> list:
+    """(text, enabled, tooltip, action) of the Results list menu, in the current language and state."""
+
+    count = len(getattr(owner, "_resultsHiddenRecords", ()) or ())
+    return [
+        (_text(owner, "results_clear", "Clear results list"), bool(_clearable_records(owner)),
+         _text(owner, "results_clear_tooltip", CLEAR_TOOLTIP), lambda: clear_results_list(owner)),
+        (_show_hidden_text(owner, count), count > 0, "", lambda: show_hidden_results(owner)),
+    ]
+
+
+def _fill_results_menu(owner: Any, menu: Any) -> None:
+    menu.clear()
+    for text, enabled, tooltip, action_slot in results_menu_entries(owner):
+        action = menu.addAction(text)
+        action.enabled = bool(enabled)
+        if tooltip:
+            action.toolTip = tooltip
+        action.connect("triggered()", action_slot)
+
+
+def _update_empty_state(owner: Any, has_content: bool) -> None:
+    """The empty row: "no runs yet", or after a Clear the cleared text and the show-hidden button."""
+
+    count = len(getattr(owner, "_resultsHiddenRecords", ()) or ())
+    cleared = not has_content and count > 0
+    label = getattr(owner, "_resultsEmptyLabel", None)
+    if label is not None and not has_content:
+        key, fallback = (("results_cleared_empty", "Results list cleared. New runs will appear here.") if cleared
+                         else ("no_runs_found", "No runs in output folder yet"))
+        label.setText(_text(owner, key, fallback))
+        _rebind(owner, label, "text", key)
+    button = getattr(owner, "_resultsShowHiddenButton", None)
+    if button is not None:
+        if cleared:
+            button.setText(_show_hidden_text(owner, count))
+        _set_widget_visible(button, cleared)
+
+
+# --------------------------------------------- Batch 2 add-on: Open folder on a subject row, Hide everything shown
+# Open folder is the icon of column 1 of a top-level row (the eye of a file row lives in the same column). The folder
+# is stored on the row (ROLE_FOLDER) when the tree is built, so a click or a menu entry never reads a record again.
+# Hide everything shown turns off displays only: it removes no node and touches no file.
+
+HIDE_ALL_TEXT = "Hide everything shown"
+OPEN_FOLDER_TEXT = "Open folder"
+FOLDER_MISSING_TEXT = "The folder does not exist: {path}"
+FOLDER_UNKNOWN_TEXT = "The folder of this subject is not known yet."
+FOLDER_OPEN_FAILED_TEXT = "The system could not open the folder: {path}"
+_COMPOSITE_LAYERS = ("Background", "Foreground", "Label")
+
+
+def _status_message(text: str) -> None:
+    try:
+        import slicer
+
+        slicer.util.showStatusMessage(text, 4000)
+    except Exception:
+        pass
+
+
+def _folder_icon(owner: Any, qt_mod: Any, dark: Optional[bool] = None) -> Any:
+    try:
+        return _results_icon(qt_mod, "folder", dark=_resolve_dark_mode(owner, dark))
+    except Exception:
+        return None
+
+
+def _group_folder(owner: Any, records, group: dict) -> str:
+    """The folder of a subject row: that of its newest run; a running subject without a run uses its job roots."""
+
+    if group["indices"]:
+        return str(run_folder_path(records[group["indices"][0]]))
+    context = getattr(owner, "_backgroundRunContext", None) or {}
+    folder = subject_folder_from_roots(context.get("output_root"), context.get("subject_root"))
+    return str(folder) if folder is not None else ""
+
+
+def _set_folder_button(owner: Any, qt_mod: Any, item: Any, folder: str) -> None:
+    item.setData(0, _user_role(qt_mod, ROLE_FOLDER), folder)
+    icon = _folder_icon(owner, qt_mod)
+    if icon is not None:
+        item.setIcon(1, icon)
+    text = _text(owner, "results_open_folder", OPEN_FOLDER_TEXT)
+    item.setToolTip(1, text)
+    role = getattr(getattr(qt_mod, "Qt", None), "AccessibleTextRole", None)
+    if role is not None:
+        item.setData(1, role, text)
+
+
+def _refresh_folder_icons(owner: Any, dark: bool) -> None:
+    """A theme change: redraw the Open folder icon of every subject row."""
+
+    tree = getattr(owner, "_runOutputFiles", None)
+    if tree is None:
+        return
+    try:
+        import qt
+
+        icon = _folder_icon(owner, qt, dark)
+        if icon is None:
+            return
+        for item in _child_items(tree):
+            item.setIcon(1, icon)
+    except Exception:
+        pass
+
+
+def open_results_folder(owner: Any, folder: Any) -> None:
+    """Open ``folder`` in the system file browser. A missing folder gives a status message and nothing else."""
+
+    text = str(folder or "").strip()
+    if not text:
+        _status_message(_text(owner, "results_folder_unknown", FOLDER_UNKNOWN_TEXT))
+        return
+    path = Path(text)
+    if not path.is_dir():
+        _status_message(_text(owner, "results_folder_missing", FOLDER_MISSING_TEXT).format(path=path))
+        return
+    try:
+        import qt
+
+        opened = qt.QDesktopServices.openUrl(qt.QUrl.fromLocalFile(str(path)))
+    except Exception:
+        opened = False
+    if opened is False:
+        _status_message(_text(owner, "results_folder_open_failed", FOLDER_OPEN_FAILED_TEXT).format(path=path))
+
+
+def _open_item_folder(owner: Any, item: Any) -> None:
+    import qt
+
+    open_results_folder(owner, item.data(0, _user_role(qt, ROLE_FOLDER)))
+
+
+def _sync_hide_all_text(owner: Any) -> None:
+    """The accessible name follows the language (the tooltip is bound; a binding cannot set an accessible name)."""
+
+    button = getattr(owner, "_resultsHideAllButton", None)
+    if button is not None:
+        try:
+            button.setAccessibleName(_text(owner, "results_hide_all", HIDE_ALL_TEXT))
+        except Exception:
+            pass
+
+
+def _is_internal_node(node: Any) -> bool:
+    """Slice-plane models ("Red Volume Slice" ...) and other nodes that Slicer hides from the user's lists."""
+
+    if node.GetHideFromEditors():
+        return True
+    for index in range(node.GetNumberOfDisplayNodes()):
+        if node.GetNthDisplayNode(index).IsA("vtkMRMLSliceDisplayNode"):
+            return True
+    return False
+
+
+def _hide_node_displays(node: Any) -> None:
+    for index in range(node.GetNumberOfDisplayNodes()):
+        display = node.GetNthDisplayNode(index)
+        if display is not None and display.GetVisibility():
+            display.SetVisibility(0)
+
+
+def hide_everything_shown(owner: Any) -> None:
+    """Turn off every model, segmentation, slice layer and volume rendering that is shown. There is no "show all".
+
+    The whole scene is acted on, not only the nodes the plugin loaded. Nodes stay in the scene and files stay on disk.
+    """
+
+    import slicer
+
+    def nodes_of(class_name: str) -> list:
+        try:
+            return list(slicer.util.getNodesByClass(class_name))
+        except Exception:
+            return []
+
+    def each(class_name: str, action) -> None:
+        for node in nodes_of(class_name):
+            try:
+                action(node)
+            except Exception:  # one deleted or odd node must not stop the others
+                continue
+
+    def hide_model(node: Any) -> None:
+        if not _is_internal_node(node):
+            _hide_node_displays(node)
+
+    def clear_layers(composite: Any) -> None:
+        for layer in _COMPOSITE_LAYERS:
+            if getattr(composite, f"Get{layer}VolumeID")():
+                getattr(composite, f"Set{layer}VolumeID")(None)
+
+    each("vtkMRMLModelNode", hide_model)
+    each("vtkMRMLSegmentationNode", _hide_node_displays)  # every segmentation, as asked
+    each("vtkMRMLSliceCompositeNode", clear_layers)
+    each("vtkMRMLVolumeRenderingDisplayNode", lambda display: display.GetVisibility() and display.SetVisibility(0))
+    try:
+        _refresh_output_visibility(owner)
+    except Exception:
+        pass
 
 
 def _eye_icon(qt, visible):
@@ -2169,14 +2606,17 @@ def refresh_run_history(owner: Any, select_path: Optional[Path] = None) -> None:
         return
     previous = select_path or selected_manifest_path(owner)
     discovery = discover_runs(history_roots(owner))
-    owner._runHistoryRecords = discovery.records
+    # Batch 2: the one place where runs removed from the Results list are filtered out. Every reader below (combo,
+    # records, tree, item map, target index, empty row, selection) sees only the shown runs.
+    records, owner._resultsHiddenRecords = _split_hidden_for_owner(owner, discovery.records)
+    owner._runHistoryRecords = records
     combo.blockSignals(True)
     try:
         combo.clear()
-        for record in _with_ended_runs(owner, discovery.records):
+        for record in _with_ended_runs(owner, records):
             combo.addItem(run_record_label(record), record.manifest_path.as_posix())
             combo.setItemData(combo.count - 1, run_record_details(record), 3)  # Qt::ToolTipRole
-        if not discovery.records:
+        if not records:
             combo.addItem(_text(owner, "no_runs_found", "No runs found"), "")
         # The last item adds a folder; it carries no manifest, so a selection never reads it as a run.
         try:
@@ -2189,7 +2629,7 @@ def refresh_run_history(owner: Any, select_path: Optional[Path] = None) -> None:
         target_index = 0
         if previous is not None:
             wanted = Path(previous).as_posix()
-            for index, record in enumerate(discovery.records):
+            for index, record in enumerate(records):
                 if record.manifest_path.as_posix() == wanted:
                     target_index = index
                     break
@@ -2197,7 +2637,7 @@ def refresh_run_history(owner: Any, select_path: Optional[Path] = None) -> None:
         owner._runHistoryPreviousIndex = target_index
     finally:
         combo.blockSignals(False)
-    _populate_run_tree(owner, discovery.records, target_index)
+    _populate_run_tree(owner, records, target_index)
     notes = []
     if discovery.skipped:
         notes.append(f"{len(discovery.skipped)} unreadable manifest(s) skipped; first: {discovery.skipped[0][1]}")
@@ -2395,6 +2835,7 @@ def browse_run_directory(owner: Any) -> None:
         )
         return
     save_history_directory(directory)
+    _unhide_records(discovery.records)  # Batch 2: the runs this folder holds are listed, so the message stays true
     manual = list(getattr(owner, "_manualRunHistoryDirs", ()) or ())
     if directory not in manual:
         manual.append(directory)

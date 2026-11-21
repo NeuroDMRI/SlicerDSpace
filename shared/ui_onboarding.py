@@ -1324,6 +1324,8 @@ def apply_onboarding_language(owner: Any, language: str) -> None:
     apply_compact_language(owner, lang)
     from shared.ui_regions import apply_region_language
     apply_region_language(owner, lang)
+    from shared.ui_run_history import refresh_results_language
+    refresh_results_language(owner)
 
 
 def maybe_show_first_run_wizard(owner: Any) -> None:

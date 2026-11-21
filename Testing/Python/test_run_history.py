@@ -456,6 +456,13 @@ class HiddenRunsTest(unittest.TestCase):
                 self.assertEqual(parse_hidden_runs(broken), {})
         self.assertEqual(parse_hidden_runs('{"a": 1.5, "b": "x", "c": true, "": 2}'), {"a": 1.5})
 
+    def test_b2fix_results_R3_a_huge_or_non_finite_stamp_reads_as_absent(self) -> None:
+        big = "9" * 400
+        self.assertEqual(parse_hidden_runs('{"a": %s, "ok": 5}' % big), {"ok": 5.0})  # float() overflows
+        self.assertEqual(parse_hidden_runs('{"a": 1e309, "ok": 5}'), {"ok": 5.0})  # infinity
+        self.assertEqual(parse_hidden_runs('{"a": -1e309, "n": NaN, "ok": 5}'), {"ok": 5.0})
+        self.assertEqual(parse_hidden_runs('{"a": null}'), {"a": None})  # a missing stamp stays valid
+
     def test_b2_results_stored_map_is_capped_and_drops_the_oldest_stamps(self) -> None:
         hidden = {f"k{i}": float(i) for i in range(10)}
         hidden["none"] = None

@@ -11,6 +11,7 @@ import json
 import os
 import time
 from dataclasses import replace
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -810,8 +811,7 @@ def install_results_panel(owner: Any) -> None:
     # Batch 2: after a Clear the tree container is hidden; this button is then the only way back.
     show_hidden = qt.QPushButton("")
     show_hidden.setObjectName("resultsShowHiddenButton")
-    show_hidden.setText(_show_hidden_text(owner, 0))
-    _bind(owner, show_hidden, "text", "results_show_hidden")
+    show_hidden.setText(_show_hidden_text(owner, 0))  # no language binding: the text carries a count (R4)
     show_hidden.clicked.connect(lambda *_args: show_hidden_results(owner))
     show_hidden.hide()
     empty_layout.addWidget(show_hidden)
@@ -1938,34 +1938,75 @@ def save_hidden_runs(hidden: dict) -> None:
         pass
 
 
-def _live_run_keys(owner: Any) -> set:
-    """The slot of the job that runs now; it is never hidden."""
+def _live_run_keys(owner: Any, records=()) -> set:
+    """The slots of the job that runs now; they are never hidden.
+
+    A path that a listed record owns gets the key of that record (a campaign file is a ``batch`` key, not a
+    ``subject`` key). The ``subject`` key of the path stays in the set for a record that the scan lists under
+    another file of the slot (a cancel companion).
+    """
 
     if str(getattr(owner, "_runState", "") or "") != "running":
         return set()
-    return {run_manifest_key(path) for path in _job_manifest_keys(owner)}
+    paths = _job_manifest_keys(owner)
+    keys = {run_manifest_key(path) for path in paths}
+    if paths:
+        keys.update(run_record_key(record) for record in records if _manifest_key(record.manifest_path) in paths)
+    return keys
+
+
+def _run_started_stamp(owner: Any) -> Optional[float]:
+    """The start of the current run (``_backgroundRunContext["started_at"]``, UTC ISO text) as a stamp."""
+
+    text = str((getattr(owner, "_backgroundRunContext", None) or {}).get("started_at") or "").strip()
+    if not text:
+        return None
+    try:
+        started = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        if started.tzinfo is None:
+            started = started.replace(tzinfo=timezone.utc)
+        return started.timestamp()
+    except (ValueError, OverflowError, OSError):
+        return None
+
+
+def _active_run_keys(owner: Any, records) -> set:
+    """The slots that a running job owns: its live manifests, and every listed run that is running or that is not
+    older than the start of the run (a GUI batch or a campaign writes many subjects; only the last manifest path
+    is known)."""
+
+    if str(getattr(owner, "_runState", "") or "") != "running":
+        return set()
+    records = tuple(records)
+    keys = _live_run_keys(owner, records)
+    started = _run_started_stamp(owner)
+    for record in records:
+        if record.status == "running" or (started is not None and _record_stamp(record) >= started):
+            keys.add(run_record_key(record))
+    return keys
 
 
 def _split_hidden_for_owner(owner: Any, records) -> tuple[tuple, tuple]:
+    records = tuple(records)
     hidden = load_hidden_runs()
-    live = _live_run_keys(owner)
-    if live:
-        hidden = {key: stamp for key, stamp in hidden.items() if key not in live}
+    active = _active_run_keys(owner, records)
+    if active:
+        hidden = {key: stamp for key, stamp in hidden.items() if key not in active}
     return split_hidden(records, hidden)
 
 
-def _is_protected(record: RunRecord, running_subject: str, live_keys: set) -> bool:
-    if run_record_key(record) in live_keys:
+def _is_protected(record: RunRecord, running_subject: str, active_keys: set) -> bool:
+    if run_record_key(record) in active_keys:
         return True
     return bool(running_subject) and not record.is_batch and record.subject_id == running_subject
 
 
 def _clearable_records(owner: Any) -> tuple:
-    """The listed runs that a Clear hides: all except the subject of the job that runs now."""
+    """The listed runs that a Clear hides: all except the runs of the job that runs now."""
 
-    running, live = running_subject_id(owner), _live_run_keys(owner)
-    return tuple(record for record in getattr(owner, "_runHistoryRecords", ()) or ()
-                 if not _is_protected(record, running, live))
+    records = tuple(getattr(owner, "_runHistoryRecords", ()) or ())
+    running, active = running_subject_id(owner), _active_run_keys(owner, records)
+    return tuple(record for record in records if not _is_protected(record, running, active))
 
 
 def _removal_for_item(owner: Any, qt_mod: Any, item: Any) -> tuple[tuple, str]:
@@ -1982,8 +2023,8 @@ def _removal_for_item(owner: Any, qt_mod: Any, item: Any) -> tuple[tuple, str]:
     tree_records = getattr(owner, "_runTreeRecords", ()) or ()
     indices = (getattr(owner, "_resultsGroupRuns", {}) or {}).get(run_idx, ())
     records = tuple(tree_records[index] for index in indices if 0 <= index < len(tree_records))
-    live = _live_run_keys(owner)
-    if any(run_record_key(record) in live for record in records):
+    active = _active_run_keys(owner, tree_records)
+    if any(run_record_key(record) in active for record in records):
         return (), reason
     return records, ""
 
@@ -2117,6 +2158,10 @@ def _set_folder_button(owner: Any, qt_mod: Any, item: Any, folder: str) -> None:
     icon = _folder_icon(owner, qt_mod)
     if icon is not None:
         item.setIcon(1, icon)
+    _set_folder_button_text(owner, qt_mod, item)
+
+
+def _set_folder_button_text(owner: Any, qt_mod: Any, item: Any) -> None:
     text = _text(owner, "results_open_folder", OPEN_FOLDER_TEXT)
     item.setToolTip(1, text)
     role = getattr(getattr(qt_mod, "Qt", None), "AccessibleTextRole", None)
@@ -2136,8 +2181,38 @@ def _refresh_folder_icons(owner: Any, dark: bool) -> None:
         icon = _folder_icon(owner, qt, dark)
         if icon is None:
             return
+        role = _user_role(qt, ROLE_FOLDER)
         for item in _child_items(tree):
-            item.setIcon(1, icon)
+            if item.data(0, role) is not None:  # R5: only a subject row has the Open folder button
+                item.setIcon(1, icon)
+    except Exception:
+        pass
+
+
+def refresh_results_language(owner: Any) -> None:
+    """A language switch: the texts that the generic bindings cannot set (R4). No rescan, no tree rebuild.
+
+    The counted Show-hidden button, the accessible name of Hide all, and the tooltip and accessible name of the
+    Open folder button of every subject row.
+    """
+
+    button = getattr(owner, "_resultsShowHiddenButton", None)
+    if button is not None:
+        try:
+            button.setText(_show_hidden_text(owner, len(getattr(owner, "_resultsHiddenRecords", ()) or ())))
+        except Exception:
+            pass
+    _sync_hide_all_text(owner)
+    tree = getattr(owner, "_runOutputFiles", None)
+    if tree is None:
+        return
+    try:
+        import qt
+
+        role = _user_role(qt, ROLE_FOLDER)
+        for item in _child_items(tree):
+            if item.data(0, role) is not None:
+                _set_folder_button_text(owner, qt, item)
     except Exception:
         pass
 

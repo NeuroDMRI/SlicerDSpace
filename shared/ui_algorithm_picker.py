@@ -265,7 +265,9 @@ def _add_algorithm_row(qt, owner, layout, box, family, algorithm, staged, zh, re
     fields = [(attribute, control, label) for attribute, control, label in fields
               if control is not None and label is not None]
     ukf = (family, algorithm) == ("tractography", "ukf")
-    if not fields and not ukf:
+    # Batch 2 item 5: every bundle algorithm gets a "Tractography source" combo built in code.
+    bundle_source = family == "bundles" and algorithm in ("wmql", "wma", "tractcloud")
+    if not fields and not ukf and not bundle_source:
         if marker is None:
             layout.addWidget(box)
             return
@@ -352,6 +354,12 @@ def _add_algorithm_row(qt, owner, layout, box, family, algorithm, staged, zh, re
     if ukf:
         from shared.ui_ukf import add_staged_ukf_fields
         staged["ukfParameters"] = add_staged_ukf_fields(form, owner._parameterNode, zh)
+    if bundle_source:
+        from shared.ui_bundle_source import add_staged_source_field
+        source_attribute, source_value = add_staged_source_field(
+            qt, form, owner._parameterNode, algorithm, zh, selected_algorithms(owner._parameterNode, "tractography"),
+            dark=use_dark)
+        staged[source_attribute] = source_value
     layout.addWidget(panel)
     panel.hide()
     def toggle_settings(visible):
@@ -359,6 +367,42 @@ def _add_algorithm_row(qt, owner, layout, box, family, algorithm, staged, zh, re
         resize_popup()
 
     button.toggled.connect(toggle_settings)
+
+
+def _install_outside_close_apply(qt, dialog, popup_state, apply_staged):
+    """Make a click outside the popup act like the Apply button (batch 2, popup-apply).
+
+    Qt closes a ``Qt.Popup`` on an outside click with ``close()``, and ``QDialog::closeEvent`` turns that into
+    ``reject()``. This filter sees the Close event first and calls ``apply_staged``, the function behind the Apply
+    button: it validates, and on success it accepts the dialog (the one commit runs after ``exec_`` returns). The Close
+    event is always ignored, so ``closeEvent`` cannot reject after the accept, and a refused apply leaves the popup
+    open with the error shown, as the Apply button does. Cancel, the X and Esc call ``reject()``, which sends no Close
+    event: they still discard. After the popup has finished, a late Close event passes through and commits nothing.
+    Returns the filter; the caller must keep it alive. Returns None if the filter cannot be built.
+    """
+
+    close_type = getattr(getattr(qt, "QEvent", None), "Close", None)
+    if close_type is None or not hasattr(dialog, "installEventFilter"):
+        return None
+    try:
+        base = getattr(qt, "QObject")
+
+        class OutsideCloseApplyFilter(base):
+            def eventFilter(self, _watched, event):
+                try:
+                    if event.type() != close_type or popup_state["finished"]:
+                        return False
+                    apply_staged()
+                    event.ignore()
+                    return True
+                except Exception:
+                    return False
+
+        flt = OutsideCloseApplyFilter()
+        dialog.installEventFilter(flt)
+        return flt
+    except Exception:
+        return None
 
 
 def choose_algorithms(owner, family):
@@ -616,6 +660,8 @@ def choose_algorithms(owner, family):
 
     resize_popup()
 
+    outside_filter = _install_outside_close_apply(qt, dialog, popup_state, validate_and_accept) if popup_flag else None
+
     popup_watch = None
     if hasattr(qt, "QTimer") and popup_flag:
         try:
@@ -654,6 +700,11 @@ def choose_algorithms(owner, family):
     finally:
         popup_state["finished"] = True
         _stop_popup_watch()
+        if outside_filter is not None:
+            try:
+                dialog.removeEventFilter(outside_filter)
+            except Exception:
+                pass
     if accepted:
         # A data-blocked algorithm that was stored before stays stored (it is skipped at Run, not removed here).
         selection = [value for value, box in boxes.items()

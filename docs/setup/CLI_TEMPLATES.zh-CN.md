@@ -364,6 +364,14 @@ pipeline bundles_compare --targets validation,parcellation,tractography,bundles 
 比较其他来源时改 `--bundle-tractography-backend`，并使用新运行名。
 非 UKF 来源的 WMA 覆盖率需单独检查。稀疏/空束保留在 QC 中；SAF 不作为全脑束分析来源。
 
+如需按束方法分别选择来源，可重复 `--bundle-source ALG=SOURCE`
+（例如 `--bundle-source wma=csd_act --bundle-source tractcloud=ukf`）。`ALG` 为
+`wmql`、`wma` 或 `tractcloud`；`SOURCE` 为 `csd_act`、`ukf`、`dti_det` 或 `auto`
+（默认：WMQL 与 TractCloud 使用每个已选追踪，WMA 使用 UKF）；WMA 还接受 `all`
+（每个已选追踪各运行一次）。不在 `--tractography-backend` 中的来源会自动加入。
+不要与 `--bundle-tractography-backend`、`--skip-targets tractography` 或同一方法的输入文件同时使用。
+发布的纤维束按来源分子文件夹：`outputs/04_bundles/<folder>/<source>/`（见[输出目录](OUTPUT_LAYOUT.zh-CN.md)）。
+
 复用已有兼容全脑 VTK/VTP 输入：
 
 <!-- cli-template: bundle-existing -->

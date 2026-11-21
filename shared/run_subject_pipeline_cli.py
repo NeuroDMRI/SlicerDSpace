@@ -224,7 +224,14 @@ def _resolve_closure(args: argparse.Namespace):
             ("tractcloud", getattr(args, "tractcloud_input_tractography", None)),
             ("saf", getattr(args, "saf_pregenerated_tractogram", None))) if value),
         excluded=tuple(exclude),  # K5: the closure never adds or expands a skipped target
+        bundle_sources=_bundle_sources_arg(args),
     ), exclude
+
+
+def _bundle_sources_arg(args) -> dict:
+    """``--bundle-source ALG=SOURCE`` values as ``{algorithm: source}`` (explicit values only; batch 2 item 5)."""
+    from shared.bundle_sources import normalize_bundle_sources
+    return normalize_bundle_sources(getattr(args, "bundle_sources", None) or {}, strict=True)
 
 
 def _resolve_targets(args: argparse.Namespace) -> tuple[str, ...]:
@@ -250,6 +257,19 @@ def resolve_analysis_options(args, *, explicit_dests=()):
                                   or value < 0 or (name != 'ifw_echo_time_ms' and value <= 0)):
             raise ValueError('--' + name.replace('_', '-') + (' must be zero or a positive number' if name == 'ifw_echo_time_ms'
                                                               else ' must be a positive number'))
+    # Batch 2 item 5: --bundle-source ALG=SOURCE (repeatable). Parse errors and conflicts stop before any job runs.
+    bundle_sources = _bundle_sources_arg(args)
+    if bundle_sources:
+        if args.bundle_tractography_backend:
+            raise ValueError('--bundle-source cannot be combined with --bundle-tractography-backend; '
+                             'use one --bundle-source per bundle algorithm instead')
+        if 'tractography' in _split_csv_or_repeat(args.skip_targets):
+            raise ValueError('--bundle-source requires tractography; remove --skip-targets tractography')
+        for algorithm, option in (('wma', 'wma_input_tractography'), ('tractcloud', 'tractcloud_input_tractography')):
+            if algorithm in bundle_sources and getattr(args, option, None):
+                raise ValueError(f'--bundle-source {algorithm}=... cannot be combined with '
+                                 f'--{option.replace("_", "-")}; the supplied file is the {algorithm} input')
+    args.bundle_sources = bundle_sources
     if args.bundle_tractography_backend:
         from shared.algorithm_selection import algorithms
         if args.wma_input_tractography or args.tractcloud_input_tractography:
@@ -641,6 +661,17 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("csd_act", "ukf", "dti_det"),
         help=("Use this whole-brain tracking backend as the source for all selected bundle methods. "
               "The source is run automatically; SAF is a short-fibre product and is not a whole-brain input."),
+    )
+    parser.add_argument(
+        "--bundle-source",
+        dest="bundle_sources",
+        action="append",
+        metavar="ALG=SOURCE",
+        help=("Tractography source of one bundle algorithm (repeatable). ALG is wmql, wma or tractcloud. "
+              "SOURCE is csd_act, ukf or dti_det; WMA also takes all (once per selected tracking backend). "
+              "Without this option WMQL and TractCloud run on every selected tracking backend and WMA runs on UKF. "
+              "A source that is not selected is tracked automatically. WMA on CSD/ACT or DTI is not the reference "
+              "route; UKF is the validated input for WMA."),
     )
     parser.add_argument(
         "--connectome-backend",
@@ -1035,6 +1066,7 @@ def main(argv: list[str] | None = None) -> int:
         tractography_backend=getattr(args, 'closure_tractography_backend', None) or args.tractography_backend,
         bundle_backend=args.bundle_backend,
         bundle_tractography_backend=args.bundle_tractography_backend,
+        bundle_sources=_bundle_sources_arg(args),
         ukf_parameters=json.loads(args.ukf_parameters),
         ukf_executable=args.ukf_executable,
         dwiconvert_executable=args.dwiconvert_executable,

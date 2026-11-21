@@ -17,7 +17,7 @@ PARAMETERS = frozenset('''targets skip_targets all with_validation no_resume
 brain_mask_backend brain_mask_device pnl_mask_route preprocessing_force preprocessing_skip_gibbs
 preprocessing_backend preprocessing_dipy_denoise_method preprocessing_skip_motion
 preprocessing_phase_encoding_direction preprocessing_readout_time preprocessing_eddy_threads preprocessing_eddy_slm
-tractography_backend ukf_parameters bundle_backend bundle_tractography_backend connectome_backend
+tractography_backend ukf_parameters bundle_backend bundle_tractography_backend bundle_sources connectome_backend
 max_parallel_models wmql_query_preset wmql_query_selection select_streamlines dti_min_length_mm dti_max_length_mm
 mrtrix_nthreads mrtrix_seed tckgen_seeding micro_fit_method microstructure_stages run_free_water run_noddi run_dki
 run_ifw ifw_echo_time_ms ifw_t2_gm_ms ifw_t2_csf_ms
@@ -153,6 +153,7 @@ def compile_plan(request, *, python_executable, pipeline_script):
             raise ValueError('Invalid streamline count or DTI length interval')
         effective = dict(targets=list(targets), tractography=resolved.tractography_backend,
                          bundles=resolved.bundle_backend, bundle_source=resolved.bundle_tractography_backend,
+                         bundle_sources=dict(resolved.bundle_sources or {}),
                          microstructure=list(_resolve_microstructure_stages(resolved)),
                          fit_method=resolved.micro_fit_method, mask=resolved.brain_mask_backend)
         templates.append((variant, args, effective))

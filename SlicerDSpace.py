@@ -164,6 +164,10 @@ class SlicerDSpaceParameterNode:
     maxParallelModels: Annotated[int, WithinRange(1, 3)] = 1
     wmaInputTractography: str = ""
     wmaAtlas: Annotated[str, Choice(["org", "east-west", "naba"])] = "org"
+    # Batch 2 item 5: tractography source per bundle algorithm ("auto" = today's routing; shared/bundle_sources.py).
+    orchestrationWmqlTractographySource: Annotated[str, Choice(["auto", "csd_act", "ukf", "dti_det"])] = "auto"
+    orchestrationWmaTractographySource: Annotated[str, Choice(["auto", "csd_act", "dti_det", "all"])] = "auto"
+    orchestrationTractcloudTractographySource: Annotated[str, Choice(["auto", "csd_act", "ukf", "dti_det"])] = "auto"
     orchestrationSelectStreamlines: int = 1000000
     orchestrationMicrostructureStages: Annotated[str, Choice(selection_choices(MICROSTRUCTURE))] = "dti"
     # Echo time (ms) for iFW as text; empty = not set (the stage then reads EchoTime from the DWI sidecar).

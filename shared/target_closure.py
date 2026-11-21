@@ -15,6 +15,9 @@ Rules (applied until nothing changes):
 * tractcloud                                -> tractography
 * wma                                       -> tractography, with ``ukf`` added to
                                                the tractography algorithms
+* an explicit bundle source (``bundle_sources``, batch 2 item 5) adds its tracking
+  algorithm when it is not ticked and records the bundle targets that asked for it in
+  ``added_algorithms``; with every source at ``auto`` the rules above are unchanged
 * a supplied tractogram file removes the ``tractography`` prerequisite of wma and
   tractcloud only. SAF keeps it: the tractography stage makes the CSD FOD that SAF
   needs, and the SAF stage still uses the supplied tractogram (K3).
@@ -179,6 +182,7 @@ def expand_closure(
     wma_source_explicit: bool = False,
     provided_tractography: Iterable[str] = (),
     excluded: Iterable[str] = (),
+    bundle_sources: Optional[dict] = None,
 ) -> Closure:
     """Return the prerequisite closure of ``targets``.
 
@@ -187,6 +191,10 @@ def expand_closure(
 
     ``wma_source_explicit`` is True when the user chose the tractography source
     of the bundle targets by hand; the closure then does not add ``ukf``.
+
+    ``bundle_sources`` maps a bundle algorithm (wmql, wma, tractcloud) to its tractography
+    source (batch 2 item 5). A missing key or ``auto`` keeps today's rule. A source is
+    ignored for an algorithm that is not requested or whose tractogram file is supplied.
     """
 
     algorithms = list(dict.fromkeys(tractography_algorithms)) or ["csd_act"]
@@ -202,7 +210,11 @@ def expand_closure(
     selected = set(requested)
     added_algorithms: dict = {}
     provided = frozenset(provided_tractography)
-    if ("wma" in requested and "ukf" not in algorithms and not wma_source_explicit and "wma" not in provided
+    explicit = _explicit_sources(bundle_sources, requested, provided) if "tractography" not in skip else {}
+    if explicit:
+        algorithms = _algorithms_for_sources(algorithms, explicit, requested, provided, wma_source_explicit,
+                                             added_algorithms)
+    elif ("wma" in requested and "ukf" not in algorithms and not wma_source_explicit and "wma" not in provided
             and "tractography" not in skip):
         # WMA needs a UKF tractogram. When nothing else asked for tracking, run UKF alone
         # instead of the default CSD/ACT as well. (No rule adds wma, so `requested` is final here.)
@@ -235,6 +247,47 @@ def expand_closure(
                    required_by=ordered, added_algorithms=added_algorithms)
 
 
+def _explicit_sources(bundle_sources, requested, provided) -> dict:
+    """Explicit (non-``auto``) bundle sources of requested bundle targets that read a tracking result."""
+
+    if not bundle_sources:
+        return {}
+    from shared.bundle_sources import TARGETS, normalize_bundle_sources
+    return {algorithm: source for algorithm, source in normalize_bundle_sources(bundle_sources, strict=False).items()
+            if TARGETS[algorithm] in requested and TARGETS[algorithm] not in provided}
+
+
+def _algorithms_for_sources(ticked, explicit, requested, provided, wma_source_explicit, added_algorithms) -> list:
+    """Tracking algorithms when at least one bundle algorithm has an explicit source (batch 2 item 5).
+
+    A source that is not ticked is appended and recorded in ``added_algorithms`` with the bundle targets that asked
+    for it, like WMA adds UKF today. When no selected product reads every ticked tracking result, only the tracking
+    algorithms that a bundle source needs run (the same rule as WMA alone, which runs UKF alone).
+    """
+
+    from shared.bundle_sources import SOURCES, TARGETS
+
+    ticked = list(ticked)
+    needs: dict = {}
+    for algorithm, source in explicit.items():
+        if source != "all":
+            needs.setdefault(source, []).append(TARGETS[algorithm])
+    if ("wma" in requested and "wma" not in explicit and "ukf" not in ticked and not wma_source_explicit
+            and "wma" not in provided):
+        needs.setdefault("ukf", []).append("wma")  # WMA at auto keeps its UKF rule
+    uses_all_ticked = bool(requested & {"tractography", "connectome", "saf"}) or explicit.get("wma") == "all" or any(
+        TARGETS[algorithm] in requested and TARGETS[algorithm] not in provided and algorithm not in explicit
+        for algorithm in ("wmql", "tractcloud"))
+    missing = [source for source in SOURCES if source in needs and source not in ticked]
+    if uses_all_ticked:
+        algorithms = [*ticked, *missing]
+    else:
+        algorithms = [*(name for name in ticked if name in needs), *missing]
+    for source in missing:
+        added_algorithms[source] = tuple(target for target in TARGET_ORDER if target in needs[source])
+    return algorithms
+
+
 def _requester_label(requester: str, closure: Closure) -> str:
     if requester == "tractography":
         if set(closure.tractography_algorithms) & set(ACT_ALGORITHMS):
@@ -260,7 +313,8 @@ def closure_notice(closure: Closure) -> str:
             if (name == "tractography" and added_algorithms
                     and set(closure.tractography_algorithms) == set(added_algorithms)
                     and {who for who in added_algorithms.values()} == {requesters}):
-                shown.append("UKF tractography")  # tractography runs only because of the added algorithm
+                # tractography runs only because of the added algorithm(s): UKF for WMA, or a bundle source
+                shown.append(" and ".join(ALGORITHM_NAMES.get(item, item) for item in added_algorithms) + " tractography")
                 added_algorithms = {}
             else:
                 shown.append(DISPLAY_NAMES.get(name, name))

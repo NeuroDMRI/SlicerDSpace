@@ -30,10 +30,16 @@ def build_cli_plan(targets, user_config, *, doctor=None, wsl_distributions=None,
     defaults, deps = user_config["run_defaults"], dict(user_config["external_dependencies"])
     stages = set(defaults.get("microstructure_stages") or ())
     # S-B5: saved selections may be lists ("csd_act,ukf") or "all"; the GUI parses them with the same function.
-    closure = expand_closure(targets, tractography_algorithms=algorithms(defaults.get("tractography_backend"), TRACKING, "csd_act"),
-                             bundle_backends=algorithms(defaults.get("bundle_backend"), BUNDLES, "wmql"),
-                             microstructure_free_water="freewater" in stages, microstructure_noddi="noddi" in stages,
-                             microstructure_dki="dki" in stages)
+    closure_kwargs = dict(tractography_algorithms=algorithms(defaults.get("tractography_backend"), TRACKING, "csd_act"),
+                          bundle_backends=algorithms(defaults.get("bundle_backend"), BUNDLES, "wmql"),
+                          microstructure_free_water="freewater" in stages, microstructure_noddi="noddi" in stages,
+                          microstructure_dki="dki" in stages)
+    # Batch 2 item 5: a saved bundle source can add a tracking algorithm (for example TractCloud on UKF).
+    bundle_sources = defaults.get("bundle_sources") or {}
+    try:
+        closure = expand_closure(targets, **closure_kwargs, **({"bundle_sources": bundle_sources} if bundle_sources else {}))
+    except TypeError:  # an older published shared.target_closure without bundle_sources
+        closure = expand_closure(targets, **closure_kwargs)
     known = {field.name for field in fields(EnvironmentDoctorConfig)}
     values = {key: defaults[key] for key in ("brain_mask_backend", "brain_mask_device", "pnl_mask_route",
                                              "ddseg_device", "surface_device", "tractcloud_device",

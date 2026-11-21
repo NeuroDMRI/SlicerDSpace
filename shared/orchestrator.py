@@ -79,6 +79,9 @@ class ProductOrchestratorConfig:
     dwiconvert_executable: Optional[Path] = None
     bundle_backend: str = "wmql"
     bundle_tractography_backend: Optional[str] = None
+    # Batch 2 item 5: tractography source per bundle algorithm ({"wmql"|"wma"|"tractcloud": source}); a missing key is
+    # "auto" (today's routing). Values: csd_act, ukf, dti_det; WMA also "all". See shared/bundle_sources.py.
+    bundle_sources: dict = field(default_factory=dict)
     wmql_query_preset: str = "official"
     wmql_query_selection: tuple[str, ...] = ()
     wmql_atlas_mode: str = 'native'
@@ -686,6 +689,27 @@ def _primary_tractography_backend(config: ProductOrchestratorConfig) -> str:
     return "csd_act" if config.tractography_backend == "saf" else config.tractography_backend
 
 
+def _recorded_bundle_sources(config: ProductOrchestratorConfig) -> dict:
+    """Batch 2 item 5: the explicit bundle sources for the manifests (``{}`` means every source is ``auto``)."""
+
+    from shared.bundle_sources import explicit_sources
+    return explicit_sources(config.bundle_sources)
+
+
+def _wma_on_selected_source(config: ProductOrchestratorConfig) -> bool:
+    """Batch 2 item 5: WMA reads this run's own CSD/ACT or DTI tractogram because the user chose that WMA source.
+
+    Only an explicit WMA source (``csd_act``, ``dti_det`` or ``all``) lifts the UKF-only rule, and only without a
+    supplied WMA input file. With the default (``auto``) WMA keeps reading UKF and refuses other tractograms.
+    """
+
+    from shared.bundle_sources import explicit_sources
+    source = explicit_sources(config.bundle_sources).get("wma")
+    primary = _primary_tractography_backend(config)
+    return (bool(source) and config.wma_input_tractography is None and primary != "ukf"
+            and source in {"all", primary})
+
+
 def _ukf_raw(config, inputs):
     from shared.pipeline import RawInputBundle
     return RawInputBundle(subject_root=config.subject_root, subject_id=config.subject_id,
@@ -712,6 +736,7 @@ def orchestrator_closure(
     wma_source_explicit: bool = False,
     provided_tractography: tuple[str, ...] = (),
     excluded: tuple[str, ...] = (),
+    bundle_sources: Optional[dict] = None,
 ):
     """Return the prerequisite closure (see ``shared.target_closure``) of the selected targets."""
 
@@ -728,6 +753,7 @@ def orchestrator_closure(
         wma_source_explicit=wma_source_explicit,
         provided_tractography=provided_tractography,
         excluded=excluded,
+        bundle_sources=bundle_sources,
     )
 
 
@@ -742,6 +768,7 @@ def normalize_orchestrator_targets(
     microstructure_run_ifw: bool = False,
     wma_source_explicit: bool = False,
     provided_tractography: tuple[str, ...] = (),
+    bundle_sources: Optional[dict] = None,
 ) -> tuple[str, ...]:
     """Expand product-level targets and add every prerequisite target (C1 closure)."""
 
@@ -755,6 +782,7 @@ def normalize_orchestrator_targets(
         microstructure_run_ifw=microstructure_run_ifw,
         wma_source_explicit=wma_source_explicit,
         provided_tractography=provided_tractography,
+        bundle_sources=bundle_sources,
     ).targets
 
 
@@ -1250,25 +1278,62 @@ def _publish_tractography_outputs(
     return published
 
 
-def _publish_bundles_outputs(backend: str, stage_dir: Path, layout, raw_outputs: Optional[dict[str, str | None]] = None) -> dict[str, str | None]:
+# Batch 2 item 5: the subfolder of a bundle product for a user-supplied tractogram file.
+SUPPLIED_BUNDLE_SOURCE = "supplied"
+
+
+def _bundle_publish_backend(config: ProductOrchestratorConfig) -> str:
+    """The tracking backend id of this (child) run, used as the published bundle subfolder name.
+
+    A SAF child keeps ``saf`` (its bundles come from the SAF child's own CSD/ACT tracking), so it does not overwrite
+    the ``csd_act`` child's files.
+    """
+
+    backend = str(config.tractography_backend or "").strip().lower()
+    if backend and "," not in backend:
+        return backend
+    return _primary_tractography_backend(config)
+
+
+def _same_file_path(first: Optional[Path], second: Optional[Path]) -> bool:
+    if first is None or second is None:
+        return False
+    try:
+        return Path(first).expanduser().resolve() == Path(second).expanduser().resolve()
+    except OSError:
+        return False
+
+
+def _publish_bundles_outputs(backend: str, stage_dir: Path, layout, raw_outputs: Optional[dict[str, str | None]] = None,
+                             *, source: str) -> dict[str, str | None]:
+    """Publish one bundle product into ``outputs/04_bundles/<product>/<source>/``.
+
+    ``source`` is the tracking backend id that produced the input tractogram, or ``supplied`` for a user file. Each
+    tracking variant therefore keeps its own files (batch 2 item 5: the flat folder let a later variant overwrite them).
+    """
+
     outputs: dict[str, str | None] = dict(raw_outputs or {})
+    folder = str(source or "").strip() or SUPPLIED_BUNDLE_SOURCE
     if backend == "wmql":
-        published = publish_output_directory_flat(stage_dir, layout.query_bundle_extraction, suffixes=(".trk",))
+        destination = layout.query_bundle_extraction / folder
+        published = publish_output_directory_flat(stage_dir, destination, suffixes=(".trk",))
         if published:
-            outputs["output_dir"] = layout.query_bundle_extraction.as_posix()
+            outputs["output_dir"] = destination.as_posix()
             outputs["bundle_count"] = str(len(published))
     elif backend == "wma":
+        destination = layout.fiber_clustering / folder
         anat_dir = next((cand for cand in sorted(stage_dir.rglob("AnatomicalTracts")) if cand.is_dir()), None)
-        published = publish_output_directory_flat(anat_dir or stage_dir, layout.fiber_clustering, suffixes=(".vtp",), recursive=anat_dir is None)
+        published = publish_output_directory_flat(anat_dir or stage_dir, destination, suffixes=(".vtp",), recursive=anat_dir is None)
         meas = next((cand for cand in sorted(stage_dir.rglob("*measurements*.csv")) if cand.is_file()), None)
         if meas is not None:
-            publish_output_file(meas, layout.fiber_clustering / "bundle_measurements.csv", replace=True)
+            publish_output_file(meas, destination / "bundle_measurements.csv", replace=True)
         if published:
-            outputs["output_dir"] = layout.fiber_clustering.as_posix()
+            outputs["output_dir"] = destination.as_posix()
     elif backend == "tractcloud":
-        published = publish_output_directory_flat(stage_dir, layout.bundle_identification, suffixes=(".vtp",), recursive=True)
+        destination = layout.bundle_identification / folder
+        published = publish_output_directory_flat(stage_dir, destination, suffixes=(".vtp",), recursive=True)
         if published:
-            outputs["output_dir"] = layout.bundle_identification.as_posix()
+            outputs["output_dir"] = destination.as_posix()
             outputs["bundle_count"] = str(len(published))
     return outputs
 
@@ -1532,6 +1597,7 @@ def _with_closure(config: ProductOrchestratorConfig) -> ProductOrchestratorConfi
         wma_source_explicit=bool(config.bundle_tractography_backend),
         provided_tractography=_provided_tractography(config),
         excluded=config.excluded_targets,  # K5: skipped targets are never added or expanded
+        bundle_sources=config.bundle_sources,
     )
     from shared.target_closure import provenance_map
     required_by = {target: tuple(value) for target, value in
@@ -3149,9 +3215,10 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
             None,
             output_root=output_root,
         )
+    wma_on_selected_source = _wma_on_selected_source(config)
     if primary_tractography_backend == 'ukf' and config.wma_input_tractography is None:
         wma_input_tractography = tractogram
-    elif config.bundle_tractography_backend:
+    elif config.bundle_tractography_backend or wma_on_selected_source:
         wma_input_tractography = current_vtk
     tractcloud_input_tractography = _resolve_bundle_input_tractography(
         subject_root,
@@ -3683,6 +3750,11 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
             if config.bundle_tractography_backend:
                 wma_input_available = False
                 wma_input_will_run = available.get('tractography', False)
+            elif wma_on_selected_source:
+                # Batch 2 item 5: the chosen CSD/ACT or DTI tractogram of this run (DTI is converted to VTK first).
+                wma_input_available = current_vtk.is_file()
+                wma_input_will_run = bool(available.get('tractography', False) or (
+                    primary_tractography_backend == 'dti_det' and _qc_completed(dti_qc) and tractogram_trk.is_file()))
             if (
                 config.resume
                 and (ukf_cached or config.wma_input_tractography is not None)
@@ -3929,6 +4001,7 @@ def _write_orchestration_checkpoint(
         "execute": bool(config.execute),
         "run_plan_path": plan.run_plan_path.as_posix(),
         "bundle_tractography_backend": config.bundle_tractography_backend,
+        "bundle_sources": _recorded_bundle_sources(config),
         "preflight_blocked_by_backend": config.preflight_blocked_by_backend,
         "previous_run_records": {key: value.as_posix() for key, value in previous_run_records.items()},
         "updated_at": _now_utc(),
@@ -4750,9 +4823,10 @@ def _run_subject_products_impl(
             None,
             output_root=output_root,
         )
+    wma_on_selected_source = _wma_on_selected_source(config)
     if primary_tractography_backend == 'ukf' and config.wma_input_tractography is None:
         wma_input_tractography = tractogram
-    elif config.bundle_tractography_backend:
+    elif config.bundle_tractography_backend or wma_on_selected_source:
         wma_input_tractography = current_vtk
     tractcloud_input_tractography = _resolve_bundle_input_tractography(
         subject_root,
@@ -5698,6 +5772,21 @@ def _run_subject_products_impl(
                 allow_ddseg_only=config.allow_act_ddseg_only)
             bundle_source_invalid = bundle_source_invalid or not _csd_bundle_parameters_current(config, csd_dir / 'csd_act_manifest.json')
 
+    # Batch 2 item 5: each tracking variant publishes its bundles into its own subfolder.
+    bundle_publish_backend = _bundle_publish_backend(config)
+    tractcloud_publish_source = (SUPPLIED_BUNDLE_SOURCE if config.tractcloud_input_tractography is not None
+                                 else bundle_publish_backend)
+
+    def wma_publish_source() -> str:
+        """``supplied`` unless WMA reads this run's own tractogram (a user file or a discovered older file)."""
+
+        if config.wma_input_tractography is not None:
+            return SUPPLIED_BUNDLE_SOURCE
+        if wma_input_tractography is None or any(_same_file_path(wma_input_tractography, own)
+                                                 for own in (tractogram, current_vtk)):
+            return bundle_publish_backend
+        return SUPPLIED_BUNDLE_SOURCE
+
     if "bundles" in run_targets:
         wmql_qc = wmql_dir / "wmql_qc.json"
         if bundle_source_invalid:
@@ -5712,7 +5801,7 @@ def _run_subject_products_impl(
             input_tractography=tractogram_trk,
             parcellation=parcellation,
         ):
-            published_wmql = _publish_bundles_outputs("wmql", wmql_dir, layout)
+            published_wmql = _publish_bundles_outputs("wmql", wmql_dir, layout, source=bundle_publish_backend)
             tasks.append(ProductTaskRecord(name="bundles.wmql", status="skipped", reason="completed outputs found", qc_path=wmql_qc, manifest_path=wmql_dir / "wmql_manifest.json", outputs=published_wmql))
         elif not config.execute:
             tasks.append(ProductTaskRecord(name="bundles.wmql", status="planned", reason="execute=False"))
@@ -5757,7 +5846,8 @@ def _run_subject_products_impl(
                 reason="" if wmql_complete else _read_json(result.qc_path).get('error', "WMQL scientific QC failed"),
             )
             if wmql_complete:
-                wmql_rec = replace(wmql_rec, outputs=_publish_bundles_outputs("wmql", wmql_dir, layout, wmql_rec.outputs))
+                wmql_rec = replace(wmql_rec, outputs=_publish_bundles_outputs("wmql", wmql_dir, layout, wmql_rec.outputs,
+                                                                           source=bundle_publish_backend))
             tasks.append(wmql_rec)
 
     if "saf" in run_targets:
@@ -5874,6 +5964,22 @@ def _run_subject_products_impl(
         except (OSError, ValueError, RuntimeError) as exc:
             bundle_conversion_error = 'Automatic DTI-to-VTK conversion failed: ' + str(exc)
 
+    wma_source_error = None
+    if config.execute and wma_on_selected_source and "wma" in run_targets and not config.bundle_tractography_backend:
+        # Batch 2 item 5: WMA on the chosen CSD/ACT or DTI tractogram of this run; never an older tractogram.
+        tracking_tasks = [task for task in tasks if task.name == 'tractography.' + primary_tractography_backend]
+        if tracking_tasks and tracking_tasks[-1].status not in {'completed', 'skipped'}:
+            wma_source_error = 'selected tractography did not pass current-run QC'
+        elif primary_tractography_backend == 'dti_det':
+            if not _qc_completed(dti_qc) or not tractogram_trk.is_file():
+                wma_source_error = 'Current DTI tractography is not QC-valid; no historical CSD fallback'
+            else:
+                from tractography.conversion import ensure_vtk_tractogram
+                try:
+                    ensure_vtk_tractogram(tractogram_trk, current_vtk)
+                except (OSError, ValueError, RuntimeError) as exc:
+                    wma_source_error = 'Automatic DTI-to-VTK conversion failed: ' + str(exc)
+
     if "wma" in run_targets:
         wma_qc = wma_dir / "wma_org_atlas_qc.json"
         wma_summary = _wma_output_summary(wma_dir)
@@ -5887,8 +5993,8 @@ def _run_subject_products_impl(
             wma_root=config.wma_root,
             export_diffusion_measures=config.wma_export_diffusion_measures,
         ))
-        if bundle_source_invalid or bundle_conversion_error:
-            tasks.append(ProductTaskRecord(name='bundles.wma', status='blocked', reason=bundle_conversion_error or 'selected tractography did not pass current-run QC'))
+        if bundle_source_invalid or bundle_conversion_error or wma_source_error:
+            tasks.append(ProductTaskRecord(name='bundles.wma', status='blocked', reason=bundle_conversion_error or wma_source_error or 'selected tractography did not pass current-run QC'))
         elif (ukf_upstream_invalid and config.wma_input_tractography is None
                 and not ('tractography' in input_blocked_targets and wma_resume_complete)):
             # F1: the block is lifted only when the input gate stopped tractography (the UKF
@@ -5905,6 +6011,7 @@ def _run_subject_products_impl(
                     "anatomical_tract_count": str(anatomical_tract_count),
                     "anatomical_tract_nonempty_count": str(nonempty_tract_count),
                 },
+                source=wma_publish_source(),
             )
             tasks.append(
                 ProductTaskRecord(
@@ -5928,7 +6035,7 @@ def _run_subject_products_impl(
                     config.wma_input_tractography,
                     output_root=output_root,
                 )
-            elif primary_tractography_backend != 'ukf' and not config.bundle_tractography_backend:
+            elif primary_tractography_backend != 'ukf' and not config.bundle_tractography_backend and not wma_on_selected_source:
                 wma_input_tractography = _resolve_wma_input_tractography(
                     subject_root,
                     None,
@@ -5947,6 +6054,7 @@ def _run_subject_products_impl(
                     wma_dir,
                     layout,
                     {"anatomical_tract_count": str(anatomical_tract_count), "anatomical_tract_nonempty_count": str(nonempty_tract_count)},
+                    source=wma_publish_source(),
                 )
                 tasks.append(ProductTaskRecord(name="bundles.wma", status="skipped", reason="completed outputs found", qc_path=wma_qc, manifest_path=wma_dir / "wma_org_atlas_manifest.json", outputs=published_wma))
             elif wma_input_tractography is None:
@@ -6012,7 +6120,8 @@ def _run_subject_products_impl(
                     reason="" if wma_complete else "WMA outputs did not satisfy the anatomical-tract QC contract",
                 )
                 if wma_complete:
-                    wma_rec = replace(wma_rec, outputs=_publish_bundles_outputs("wma", wma_dir, layout, wma_rec.outputs))
+                    wma_rec = replace(wma_rec, outputs=_publish_bundles_outputs("wma", wma_dir, layout, wma_rec.outputs,
+                                                                             source=wma_publish_source()))
                 tasks.append(wma_rec)
 
     if "tractcloud" in run_targets:
@@ -6056,6 +6165,7 @@ def _run_subject_products_impl(
                 tractcloud_dir,
                 layout,
                 {"bundle_count": str(output_summary.get("bundle_count"))},
+                source=tractcloud_publish_source,
             )
             tasks.append(
                 ProductTaskRecord(
@@ -6097,7 +6207,8 @@ def _run_subject_products_impl(
                 )
                 tc_rec = _task_from_result("bundles.tractcloud", result)
                 if tc_rec.status in {"completed", "skipped"}:
-                    tc_rec = replace(tc_rec, outputs=_publish_bundles_outputs("tractcloud", tractcloud_dir, layout, tc_rec.outputs))
+                    tc_rec = replace(tc_rec, outputs=_publish_bundles_outputs("tractcloud", tractcloud_dir, layout, tc_rec.outputs,
+                                                                               source=tractcloud_publish_source))
                 tasks.append(tc_rec)
 
     if "connectome" in run_targets:
@@ -6390,6 +6501,7 @@ def _run_subject_products_impl(
         "run_name": run_name,
         "tractography_backend": config.tractography_backend,
         "bundle_tractography_backend": config.bundle_tractography_backend,
+        "bundle_sources": _recorded_bundle_sources(config),
         "ukf_parameters": config.ukf_parameters,
         "ukf_executable": str(config.ukf_executable) if config.ukf_executable else None,
         "dwiconvert_executable": str(config.dwiconvert_executable) if config.dwiconvert_executable else None,

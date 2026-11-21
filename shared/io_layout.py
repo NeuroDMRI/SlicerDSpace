@@ -749,6 +749,14 @@ def _remove_empty_dirs(root: Path, *, stop_at: Path) -> None:
             root.rmdir()
 
 
+def _bundle_files(folder: Path, pattern: str) -> list[Path]:
+    """Published bundle files: the old flat layout and the batch 2 per-tractography subfolders (``<backend>/``)."""
+
+    if not folder.is_dir():
+        return []
+    return sorted(folder.glob(pattern)) + sorted(folder.glob("*/" + pattern))
+
+
 def _migrate_qc_from_stage_caches(layout: SubjectIOLayout, subject_id: str) -> dict[str, Path]:
     from shared.qc_text_summary import write_qc_text_summaries
 
@@ -880,17 +888,17 @@ def _migrate_qc_from_stage_caches(layout: SubjectIOLayout, subject_id: str) -> d
     )
     maybe_add(
         "bundles.wmql",
-        sorted(layout.query_bundle_extraction.glob("*.trk")) if layout.query_bundle_extraction.is_dir() else [],
+        _bundle_files(layout.query_bundle_extraction, "*.trk"),
         tuple(sorted((sc / "04_bundles").rglob("*wmql_qc.json"))) if (sc / "04_bundles").is_dir() else (),
     )
     maybe_add(
         "bundles.wma",
-        sorted(layout.fiber_clustering.glob("T_*.vtp")) if layout.fiber_clustering.is_dir() else [],
+        _bundle_files(layout.fiber_clustering, "T_*.vtp"),
         tuple(sorted((sc / "04_bundles").rglob("*wma_org_atlas_qc.json"))) if (sc / "04_bundles").is_dir() else (),
     )
     maybe_add(
         "bundles.tractcloud",
-        sorted(layout.bundle_identification.glob("*.vtp")) if layout.bundle_identification.is_dir() else [],
+        _bundle_files(layout.bundle_identification, "*.vtp"),
         tuple(sorted((sc / "04_bundles").rglob("*tractcloud_qc.json"))) if (sc / "04_bundles").is_dir() else (),
     )
     maybe_add(
@@ -964,6 +972,17 @@ def migrate_subject_output_tree(
             _sync_tree_into_cache(jfile, stage_cache / "02_microstructure" / jfile.name, move=clean_legacy)
 
     tract_dir = outputs / "04_tractography"
+    # Batch 2 item 5: only bundle folders that come from a legacy ``04_tractography/bundles`` tree are published flat
+    # below (old results). Current runs publish their own ``04_bundles/<product>/<backend>/`` folders.
+    legacy_bundle_roots: dict[str, list[Path]] = {}
+    for bundle_sub in ("wmql", "wma_org_atlas", "tract_cloud_dl"):
+        legacy = tract_dir / "bundles" / bundle_sub
+        if legacy.is_dir():
+            children = sorted(legacy.iterdir())
+            roots = [stage_cache / "04_bundles" / bundle_sub / child.name for child in children if child.is_dir()]
+            if any(child.is_file() for child in children):
+                roots.append(stage_cache / "04_bundles" / bundle_sub)
+            legacy_bundle_roots[bundle_sub] = roots
     if tract_dir.is_dir():
         for sub in ("act_prep", "csd", "saf", "tract_cloud", "tractograms"):
             cand = tract_dir / sub
@@ -1166,22 +1185,22 @@ def migrate_subject_output_tree(
                 published[f"tract:{dest_name}"] = dest
 
     # 04_bundles
-    wmql_src = _find_first_file([stage_cache / "04_bundles/wmql", stage_cache / "04_bundles/query_bundle_extraction", layout.query_bundle_extraction], ("*.trk",))
+    wmql_src = _find_first_file(legacy_bundle_roots.get("wmql", ()), ("*.trk",))
     if wmql_src is not None:
         for p in publish_output_directory_flat(wmql_src.parent, layout.query_bundle_extraction, suffixes=(".trk",)):
             published[f"wmql:{p.name}"] = p
 
-    wma_root = _find_first_file([stage_cache / "04_bundles/wma_org_atlas", stage_cache / "04_bundles/fiber_clustering", layout.fiber_clustering], ("T_*.vtp", "*.vtp"))
+    wma_root = _find_first_file(legacy_bundle_roots.get("wma_org_atlas", ()), ("T_*.vtp", "*.vtp"))
     if wma_root is not None:
         for p in publish_output_directory_flat(wma_root.parent, layout.fiber_clustering, suffixes=(".vtp",)):
             published[f"wma:{p.name}"] = p
-        meas = _find_first_file([wma_root.parent.parent, stage_cache / "04_bundles/wma_org_atlas", layout.fiber_clustering], ("bundle_measurements.csv", "*measurements.csv"))
+        meas = _find_first_file([wma_root.parent.parent], ("bundle_measurements.csv", "*measurements.csv"))
         if meas is not None:
             dest = layout.fiber_clustering / "bundle_measurements.csv"
             publish_output_file(meas, dest, replace=True)
             published["wma:bundle_measurements.csv"] = dest
 
-    tc_src = _find_first_file([stage_cache / "04_bundles/tract_cloud_dl", stage_cache / "04_bundles/bundle_identification", layout.bundle_identification], ("*.vtp",))
+    tc_src = _find_first_file(legacy_bundle_roots.get("tract_cloud_dl", ()), ("*.vtp",))
     if tc_src is not None:
         for p in publish_output_directory_flat(tc_src.parent, layout.bundle_identification, suffixes=(".vtp",)):
             published[f"tractcloud:{p.name}"] = p

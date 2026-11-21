@@ -810,6 +810,8 @@ class SharedWidgetMixin:
                 )
                 stages = defaults.get("microstructure_stages") or ["dti"]
                 node.wmaAtlas = str(defaults.get("wma_atlas") or "org")
+                from shared.ui_bundle_source import apply_bundle_sources_to_node
+                apply_bundle_sources_to_node(node, defaults.get("bundle_sources") or {})
                 node.orchestrationMicrostructureStages = ",".join(selected_microstructure_stages(stages))
                 node.orchestrationDkiFitMethod = str(defaults.get("dki_fit_method") or "MKCURVE").upper()
                 node.connectomeBackend = str(defaults.get("connectome_backend") or node.connectomeBackend or "auto")
@@ -869,6 +871,7 @@ class SharedWidgetMixin:
                 continue
             settings.setValue(self._user_settings_key(attribute), value)
         from shared.user_config import selected_microstructure_stages
+        from shared.ui_bundle_source import node_bundle_sources, stored_bundle_sources
 
         targets = list(self._requested_product_targets())  # K4: the user's ticks, not the closed set
         stages = list(selected_microstructure_stages(node.orchestrationMicrostructureStages or "dti"))
@@ -914,6 +917,8 @@ class SharedWidgetMixin:
                         "tractography_backend": node.orchestrationTractographyBackend or "csd_act",
                         "bundle_backend": node.orchestrationBundleBackend or "wmql",
                         "wma_atlas": getattr(node, "wmaAtlas", "org") or "org",
+                        # Every key is written (``auto`` too): update_user_config merges maps key by key.
+                        "bundle_sources": stored_bundle_sources(node_bundle_sources(node)),
                         "microstructure_stages": stages or ["dti"],
                         "dki_fit_method": getattr(node, "orchestrationDkiFitMethod", "MKCURVE") or "MKCURVE",
                         "connectome_backend": node.connectomeBackend or "auto",
@@ -3422,6 +3427,7 @@ class SharedWidgetMixin:
         node = self._parameterNode
         if not node:
             return None
+        from shared.ui_bundle_source import node_bundle_sources
         freewater, noddi = self._microstructure_stage_flags()
         return selected_closure(
             self._product_target_flags(),
@@ -3433,6 +3439,7 @@ class SharedWidgetMixin:
             microstructure_dki=self._microstructure_dki_enabled(),
             microstructure_ifw=self._microstructure_ifw_enabled(),
             provided_tractography=self._provided_tractography(),
+            bundle_sources=node_bundle_sources(node),
         )
 
     def _data_filtered_run(self, batch_mode: bool, *, fresh: bool = True):
@@ -3452,6 +3459,7 @@ class SharedWidgetMixin:
 
     def _data_filtered_closure(self, filtered):
         """The prerequisite closure of the request after ``_data_filtered_run`` (same inputs as ``_selected_closure``)."""
+        from shared.ui_bundle_source import node_bundle_sources
         return selected_closure(
             filtered.flags,
             tractography_backend=self._tractography_backend_text(),
@@ -3462,6 +3470,7 @@ class SharedWidgetMixin:
             microstructure_dki=filtered.dki,
             microstructure_ifw=filtered.ifw,
             provided_tractography=self._provided_tractography(),
+            bundle_sources=node_bundle_sources(self._parameterNode),
         )
 
     def _log_data_skips(self, filtered, blocks) -> None:
@@ -3536,6 +3545,11 @@ class SharedWidgetMixin:
     def _tractography_backend_text(self) -> str:
         node = self._parameterNode
         return ((node.orchestrationTractographyBackend if node else "") or "csd_act").strip() or "csd_act"
+
+    def _bundle_sources(self) -> dict:
+        """Batch 2 item 5: the explicit tractography source per bundle algorithm (``{}`` = every source ``auto``)."""
+        from shared.ui_bundle_source import node_bundle_sources
+        return node_bundle_sources(self._parameterNode)
 
     def _bundle_backend_text(self) -> str:
         node = self._parameterNode
@@ -4537,6 +4551,7 @@ class SharedWidgetMixin:
         auto_install_python = bool(self._parameterNode.autoInstallPythonDependencies)
         external_paths = self._environment_dependency_path_kwargs()
         run_name = (self._parameterNode.orchestrationRunName or "Test1").strip() or "Test1"
+        from shared.ui_bundle_source import node_bundle_sources
         selection = RunSelection(
             subject_id=subject_id,
             subject_root_text=subject_root_text,
@@ -4573,6 +4588,7 @@ class SharedWidgetMixin:
             topup=topup_validation.parameters,
             preprocessing_stages=(getattr(self._parameterNode, "orchestrationPreprocessingStages", "") or "").strip(),
             connectome_metrics=(getattr(self._parameterNode, "orchestrationConnectomeMetrics", "") or "").strip(),
+            bundle_sources=node_bundle_sources(self._parameterNode),
         )
 
         batch_options = None

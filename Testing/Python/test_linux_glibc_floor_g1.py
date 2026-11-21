@@ -49,11 +49,11 @@ class G1DoctorRowTests(unittest.TestCase):
         self.assertEqual(blockers, [])
 
     def test_g1_version_parse(self) -> None:
-        with patch("os.confstr", return_value="glibc 2.28"):
+        with patch("os.confstr", create=True, return_value="glibc 2.28"):
             self.assertEqual(env.linux_glibc_version(), (2, 28))
-        with patch("os.confstr", side_effect=ValueError), patch("platform.libc_ver", return_value=("glibc", "2.35")):
+        with patch("os.confstr", create=True, side_effect=ValueError), patch("platform.libc_ver", return_value=("glibc", "2.35")):
             self.assertEqual(env.linux_glibc_version(), (2, 35))
-        with patch("os.confstr", side_effect=ValueError), patch("platform.libc_ver", return_value=("", "")):
+        with patch("os.confstr", create=True, side_effect=ValueError), patch("platform.libc_ver", return_value=("", "")):
             self.assertIsNone(env.linux_glibc_version())
 
     def test_o_p2_3_detected_source_names_the_real_source(self) -> None:
@@ -61,13 +61,13 @@ class G1DoctorRowTests(unittest.TestCase):
             rows = env._linux_glibc_floor_statuses(_specs(), (), host_platform="Linux")
             return rows[0].details["detected_source"], rows[0].details["glibc_version"]
 
-        with patch("os.confstr", return_value="glibc 2.28"):
+        with patch("os.confstr", create=True, return_value="glibc 2.28"):
             self.assertEqual(source(), ("os.confstr CS_GNU_LIBC_VERSION", "2.28"))
-        with patch("os.confstr", side_effect=ValueError), patch("platform.libc_ver", return_value=("glibc", "2.35")):
+        with patch("os.confstr", create=True, side_effect=ValueError), patch("platform.libc_ver", return_value=("glibc", "2.35")):
             self.assertEqual(source(), ("platform.libc_ver", "2.35"))
-        with patch("os.confstr", return_value="glibc 2.28"), patch("platform.libc_ver", return_value=("glibc", "2.35")):
+        with patch("os.confstr", create=True, return_value="glibc 2.28"), patch("platform.libc_ver", return_value=("glibc", "2.35")):
             self.assertEqual(source()[0], "os.confstr CS_GNU_LIBC_VERSION")
-        with patch("os.confstr", side_effect=ValueError), patch("platform.libc_ver", return_value=("", "")):
+        with patch("os.confstr", create=True, side_effect=ValueError), patch("platform.libc_ver", return_value=("", "")):
             text, version = source()
             self.assertIn("unavailable", text)
             self.assertEqual(version, "unknown")
@@ -90,17 +90,17 @@ class G1InstallerWarningTests(_InstallerCopies, unittest.TestCase):
                 logs: list = []
                 ns["_log"] = logs.append
                 warn = ns["_warn_linux_glibc_floor"]
-                with patch("os.confstr", return_value="glibc 2.28"), patch("sys.platform", "linux"):
+                with patch("os.confstr", create=True, return_value="glibc 2.28"), patch("sys.platform", "linux"):
                     warn()
                 text = " ".join(logs)
                 for fact in ("[WARN]", "2.28", "2.34", "mrcrop", "surface", "Ubuntu 22.04+", "RHEL/Rocky/Alma 9+"):
                     self.assertIn(fact, text)
                 logs.clear()
-                with patch("os.confstr", return_value="glibc 2.35"), patch("sys.platform", "linux"):
+                with patch("os.confstr", create=True, return_value="glibc 2.35"), patch("sys.platform", "linux"):
                     warn()
-                with patch("os.confstr", side_effect=ValueError), patch("sys.platform", "linux"):
+                with patch("os.confstr", create=True, side_effect=ValueError), patch("sys.platform", "linux"):
                     warn()
-                with patch("os.confstr", return_value="glibc 2.17"), patch("sys.platform", "darwin"):
+                with patch("os.confstr", create=True, return_value="glibc 2.17"), patch("sys.platform", "darwin"):
                     warn()
                 self.assertEqual(logs, [])
 
@@ -123,7 +123,7 @@ class G1SetupExtensionWarningTests(unittest.TestCase):
         ns["_detect_system_proxy"] = lambda: ""
         with tempfile.TemporaryDirectory() as tmp:
             ns["_pick_cache_dir"] = lambda *_a: Path(tmp)
-            with patch("os.confstr", return_value=glibc_text), patch("sys.platform", platform_name):
+            with patch("os.confstr", create=True, return_value=glibc_text), patch("sys.platform", platform_name):
                 ns["_run_phase_a_core"]([], "", "", "", lambda kind, payload: events.append((kind, payload)), None)
         return [str(payload) for kind, payload in events if kind == "log"]
 

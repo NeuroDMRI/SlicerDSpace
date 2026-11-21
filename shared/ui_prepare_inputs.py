@@ -586,13 +586,17 @@ def import_dicom_series(config, series):
     from tempfile import TemporaryDirectory
 
     from shared.dicom_input import _validate_converted, converter_path
-    from shared.input_import import prepare_inputs
+    from shared.input_import import import_source_signatures, prepare_inputs
 
     if config.backend == "auto":
         backend, executable = converter_path()
         config = replace(config, backend=backend,
                          dcm2niix_executable=executable if backend == "dcm2niix" else None,
                          dwiconvert_executable=executable if backend == "dwiconvert" else None)
+    # D3.1: the identity names the user's folder and the chosen series, not the temporary copy below.
+    signatures = config.source_signatures
+    if signatures is None and not config.dry_run and config.output_kind == "canonical-nifti":
+        signatures = import_source_signatures(config, dicom_series=series)
     with TemporaryDirectory(prefix="slicerdspace-series-") as temporary:
         staged = Path(temporary)
         for index, original in enumerate(series["paths"]):
@@ -601,7 +605,17 @@ def import_dicom_series(config, series):
                 os.link(original, target)
             except OSError:
                 shutil.copyfile(original, target)
-        manifest = prepare_inputs(replace(config, source=staged))
+        manifest = prepare_inputs(replace(config, source=staged, source_signatures=signatures))
+    if manifest.get("reused"):
+        # FE3: an earlier import may have stopped after its manifest and before this validation ended.
+        if not config.dry_run and config.output_kind == "canonical-nifti":
+            input_dir = config.subject_root / "input"
+            try:
+                _validate_converted(input_dir)
+            except Exception:
+                (input_dir / "input_import_manifest.json").unlink(missing_ok=True)
+                raise
+        return manifest  # the unchanged series is already staged; its receipt stays as it is
     manifest["plan"]["dicom_series"] = {
         "source": str(config.source),
         "series_instance_uid": series["uid"],
@@ -679,7 +693,7 @@ def import_detached_nrrd(config, raw):
     import re
     from tempfile import TemporaryDirectory
 
-    from shared.input_import import prepare_inputs
+    from shared.input_import import import_source_signatures, prepare_inputs
 
     if config.source.suffix.lower() != ".nhdr" or not raw.is_file():
         raise ValueError("Select an NHDR header and an existing detached data file.")
@@ -688,12 +702,18 @@ def import_detached_nrrd(config, raw):
     match = re.search(pattern, header, re.IGNORECASE | re.MULTILINE)
     if match is None or match.group(1).upper().startswith("LIST") or "%" in match.group(1):
         raise ValueError("A single detached data file is required for this header override.")
+    # D3: the identity names the user's header and the chosen data file, not the temporary header below.
+    signatures = config.source_signatures
+    if signatures is None and not config.dry_run and config.output_kind == "canonical-nifti":
+        signatures = import_source_signatures(config, raw_path=raw)
     with TemporaryDirectory(prefix="slicerdspace-nhdr-") as temporary:
         staged = Path(temporary) / config.source.name
         header = re.sub(pattern, lambda _: f"data file: {raw.as_posix()}", header,
                         count=1, flags=re.IGNORECASE | re.MULTILINE)
         staged.write_text(header, encoding="ascii")
-        manifest = prepare_inputs(replace(config, source=staged))
+        manifest = prepare_inputs(replace(config, source=staged, source_signatures=signatures))
+    if manifest.get("reused"):
+        return manifest  # unchanged header, data file and staged outputs: the manifest stays as it is
     manifest["plan"]["detached_nrrd"] = {"header": str(config.source), "data": str(raw)}
     if not config.dry_run:
         (config.subject_root / "input" / "input_import_manifest.json").write_text(

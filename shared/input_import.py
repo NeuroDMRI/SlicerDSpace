@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import gzip
+import hashlib
 import io
 import json
 import os
@@ -10,6 +11,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -47,6 +49,9 @@ class InputImportConfig:
     dwiconvert_executable: Path | None = None
     dry_run: bool = False
     force: bool = False
+    # D3: the identity of the user's real source, given by a wrapper that imports a temporary copy of it
+    # (detached NRRD header, chosen DICOM series). None: prepare_inputs computes it from ``source``.
+    source_signatures: dict[str, Any] | None = None
 
 
 def detect_import_source_kind(path: Path) -> ImportSourceKind:
@@ -434,14 +439,52 @@ def _path_signature(path: Path | None) -> dict[str, Any] | None:
     }
 
 
+def dicom_source_signature(folder: Path, series: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """D3.1: a stat-only signature of a DICOM source (no pixel data is read).
+
+    ``series`` (a ``scan_series`` entry: ``uid`` and ``paths``) names the one series that the tile import
+    converts; without it the signature covers every DICOM file in the folder. Run it in an import job,
+    never on the GUI thread: it lists and stats every file.
+    """
+    root = Path(folder).expanduser().resolve()
+    if series is None:
+        from shared.dicom_input import _inventory
+
+        if not root.is_dir():
+            raise FileNotFoundError(f"DICOM folder not found: {root}")
+        entries = _inventory(root)
+        series_uid = None
+    else:
+        entries = []
+        for item in series.get("paths") or ():
+            path = Path(item)
+            stat = path.stat()  # a missing series file raises FileNotFoundError, as the import would
+            try:
+                relative = path.relative_to(root).as_posix()
+            except ValueError:
+                relative = path.as_posix()
+            entries.append({"path": relative, "size": int(stat.st_size), "mtime_ns": int(stat.st_mtime_ns)})
+        entries.sort(key=lambda entry: entry["path"])
+        series_uid = str(series.get("uid") or "")
+    canonical = json.dumps(entries, sort_keys=True, separators=(",", ":"))
+    return {
+        "folder": root.as_posix(),
+        "series_uid": series_uid,
+        "count": len(entries),
+        "inventory_sha256": hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+    }
+
+
 def _import_source_signatures(
     config: InputImportConfig,
     source: Path,
     source_kind: ImportSourceKind,
 ) -> dict[str, Any] | None:
-    if source_kind == "dicom" or config.output_kind != "canonical-nifti":
+    if config.output_kind != "canonical-nifti":
         return None
     mask_sig = _path_signature(config.mask_path)
+    if source_kind == "dicom":
+        return {"dicom": dicom_source_signature(source), "mask": mask_sig}
     if source_kind == "canonical":
         src_input = source / "input" if (source / "input").is_dir() else source
         return {
@@ -478,6 +521,235 @@ def _output_signatures(targets: dict[str, Path]) -> dict[str, Any]:
     return signatures
 
 
+# ----- D3: the subject folder follows the input identity ---------------------------------------------------------
+
+INTENT_MARKER_NAME = "input_import_intent.json"
+SUBJECT_SUFFIX_LIMIT = 99
+_OPTIONAL_SIGNATURE_KEYS = frozenset({"metadata", "mask"})
+_AUTO_DICOM_RECEIPT = "auto_dicom_import.json"  # shared.dicom_input.RECEIPT (automatic DICOM import)
+# FE1: "Check environment dependencies" writes its reports here (relative to the subject root) before any import.
+_ENVIRONMENT_SCAFFOLD = ("outputs", "00_run_metadata", "environment")
+
+
+@dataclass(frozen=True)
+class SubjectChoice:
+    """The subject folder an import writes to, and why (``new``, ``same_input``, ``retry_same_input``,
+    ``legacy_same_source``)."""
+
+    subject_id: str
+    subject_root: Path
+    decision: str
+    base_id: str
+
+    def as_payload(self) -> dict[str, str]:
+        return {"base_id": self.base_id, "subject_id": self.subject_id,
+                "subject_root": self.subject_root.as_posix(), "decision": self.decision}
+
+
+def input_identity(signatures: Mapping[str, Any] | None) -> dict[str, Any]:
+    """The source signatures without the ``mask`` and ``raw`` entries: another mask for the same DWI is the same
+    input, and so is another detached data file under the same NHDR header (FE2: the importer's reuse test still
+    sees ``raw`` and converts again)."""
+    return {key: value for key, value in (signatures or {}).items() if key not in {"mask", "raw"}}
+
+
+def import_source_signatures(
+    config: InputImportConfig,
+    *,
+    raw_path: Path | None = None,
+    dicom_series: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """The source signatures of one GUI import, computed from the user's real source.
+
+    ``raw_path``: the file of the 'Detached data' tile (its stat signature is part of the input).
+    ``dicom_series``: the chosen series of a DICOM tile import. A required file that does not exist raises
+    ``FileNotFoundError`` before any subject folder is chosen. Lists a DICOM folder: run it in the import job.
+    """
+    source = config.source.expanduser().resolve()
+    source_kind = config.source_kind if config.source_kind != "canonical" else detect_import_source_kind(source)
+    if source_kind == "dicom" and dicom_series is not None:
+        if config.output_kind != "canonical-nifti":
+            raise ValueError("A subject folder can be chosen only for a canonical NIfTI import.")
+        signatures: dict[str, Any] | None = {"dicom": dicom_source_signature(source, dicom_series),
+                                             "mask": _path_signature(config.mask_path)}
+    else:
+        signatures = _import_source_signatures(config, source, source_kind)
+    if signatures is None:
+        raise ValueError("A subject folder can be chosen only for a canonical NIfTI import.")
+    required: dict[str, Path] = {}
+    if source_kind == "nifti":
+        required = {
+            "dwi": source,
+            "bval": (config.bval_path or _sidecar_for(source, ".bval")).expanduser(),
+            "bvec": (config.bvec_path or _sidecar_for(source, ".bvec")).expanduser(),
+        }
+    elif source_kind == "canonical":
+        src_input = source / "input" if (source / "input").is_dir() else source
+        required = {"dwi": src_input / "data.nii.gz", "bvals": src_input / "bvals", "bvecs": src_input / "bvecs"}
+    elif source_kind == "nrrd":
+        required = {"dwi": source}
+    if raw_path is not None:
+        signatures["raw"] = _path_signature(raw_path)
+        required["raw"] = Path(raw_path)
+    if config.mask_path is not None and signatures.get("mask") is None:
+        required["mask"] = config.mask_path
+    for key, path in required.items():
+        if signatures.get(key) is None:
+            raise FileNotFoundError(f"Input file not found: {path}")
+    return signatures
+
+
+def subject_root_rule(output_text: str, fallback_parent: str | Path) -> Callable[[str], Path]:
+    """``root_for_id`` with the GUI rule: ``<Output Folder>/<ID>`` (resolved), else ``<fallback_parent>/<ID>``."""
+
+    def root_for_id(subject_id: str) -> Path:
+        from shared.ui_run_controller import resolve_single_subject_workspace_root
+
+        root = resolve_single_subject_workspace_root(output_text, subject_id)
+        if root is not None:
+            return root.expanduser().resolve()
+        return Path(fallback_parent).expanduser() / subject_id
+
+    return root_for_id
+
+
+def _read_json_object(path: Path) -> dict[str, Any] | None:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _holds_data(folder: Path, marker: Path, scaffold: Path | None = None, *, in_scaffold: bool = False) -> bool:
+    """True when ``folder`` holds anything but hidden entries, empty folders, the intent ``marker`` and the
+    files at any depth below ``scaffold`` (the environment-check folder; a symlink there still counts)."""
+    try:
+        children = list(folder.iterdir())
+    except OSError:
+        return True  # unreadable: treat as data, never as unused
+    for child in children:
+        if child.name.startswith("."):
+            continue
+        if child.is_symlink():
+            return True
+        if child.is_dir():
+            if _holds_data(child, marker, scaffold, in_scaffold=in_scaffold or child == scaffold):
+                return True
+            continue
+        if in_scaffold or child == marker:
+            continue
+        return True
+    return False
+
+
+def _recorded_source(manifest: Mapping[str, Any]) -> str:
+    """The source a legacy manifest names; the tile wrappers record the real source beside a temporary copy."""
+    plan = manifest.get("plan") if isinstance(manifest.get("plan"), Mapping) else {}
+    series = plan.get("dicom_series") if isinstance(plan.get("dicom_series"), Mapping) else {}
+    detached = plan.get("detached_nrrd") if isinstance(plan.get("detached_nrrd"), Mapping) else {}
+    return str(series.get("source") or detached.get("header") or plan.get("source") or "")
+
+
+def _same_path(left: str, right: Path | str | None) -> bool:
+    if not left or right is None:
+        return False
+    try:
+        return Path(left).expanduser().resolve() == Path(right).expanduser().resolve()
+    except OSError:
+        return False
+
+
+def _same_legacy_series(plan: Mapping[str, Any], identity: Mapping[str, Any]) -> bool:
+    """A legacy DICOM series import matches only the same series: another series of the folder is another input."""
+    recorded = plan.get("dicom_series") if isinstance(plan.get("dicom_series"), Mapping) else {}
+    recorded_uid = str(recorded.get("series_instance_uid") or "")
+    dicom = identity.get("dicom") if isinstance(identity.get("dicom"), Mapping) else {}
+    current_uid = str(dicom.get("series_uid") or "")
+    return not (recorded_uid or current_uid) or recorded_uid == current_uid
+
+
+def _subject_root_decision(
+    root: Path,
+    identity: Mapping[str, Any],
+    source: Path | None,
+    source_kind: str | None,
+) -> str | None:
+    """Rules 1-4 of D3.2 for one candidate root; ``None`` means "not this input, try the next ID"."""
+    if not root.exists() and not root.is_symlink():
+        return "new"
+    if not root.is_dir():
+        return None
+    input_dir = root / "input"
+    if not _holds_data(root, input_dir / INTENT_MARKER_NAME, root.joinpath(*_ENVIRONMENT_SCAFFOLD)):
+        return "new"
+    if (input_dir / _AUTO_DICOM_RECEIPT).exists():
+        return None  # automatically imported data: never overwritten by a tile import
+    manifest = _read_json_object(input_dir / "input_import_manifest.json")
+    if manifest is not None and manifest.get("status") == "completed":
+        if "source_signatures" in manifest:
+            saved = manifest.get("source_signatures")
+            if isinstance(saved, Mapping) and input_identity(saved) == identity:
+                return "same_input"
+            return None
+        plan = manifest.get("plan") if isinstance(manifest.get("plan"), Mapping) else {}
+        if (source is not None and source_kind and plan.get("source_kind") == source_kind
+                and _same_path(_recorded_source(manifest), source)
+                and _same_legacy_series(plan, identity)):
+            return "legacy_same_source"
+        return None
+    marker = _read_json_object(input_dir / INTENT_MARKER_NAME)
+    if marker is not None and marker.get("identity") == identity:
+        return "retry_same_input"
+    return None
+
+
+def choose_subject_for_source(
+    base_id: str,
+    root_for_id: Callable[[str], Path],
+    signatures: Mapping[str, Any] | None,
+    *,
+    source: Path | None = None,
+    source_kind: str | None = None,
+) -> SubjectChoice:
+    """D3.2: the subject ID and folder for this input: ``base``, ``base_2``, ... ``base_99``; the first match wins.
+
+    ``source`` and ``source_kind`` are needed only for the legacy rule (a manifest made before signatures).
+    The function creates nothing; it reads the candidate folders.
+    """
+    base = str(base_id or "").strip()
+    if not base:
+        raise ValueError("Enter a valid subject ID.")
+    if not signatures:
+        raise ValueError("The input has no signature; a subject folder cannot be chosen.")
+    identity = input_identity(signatures)
+    missing = [key for key, value in identity.items() if value is None and key not in _OPTIONAL_SIGNATURE_KEYS]
+    if missing:
+        raise FileNotFoundError("Input file not found: " + ", ".join(sorted(missing)))
+    # JSON form, so the comparison with a saved manifest or marker is exact.
+    identity = json.loads(json.dumps(identity))
+    for index in range(1, SUBJECT_SUFFIX_LIMIT + 1):
+        candidate = base if index == 1 else f"{base}_{index}"
+        root = Path(root_for_id(candidate))
+        decision = _subject_root_decision(root, identity, source, source_kind)
+        if decision is not None:
+            return SubjectChoice(subject_id=candidate, subject_root=root, decision=decision, base_id=base)
+    raise ValueError(
+        f"Subjects {base} to {base}_{SUBJECT_SUFFIX_LIMIT} already hold other data. "
+        "Enter another Subject ID or choose another Output Folder."
+    )
+
+
+def _write_intent_marker(input_dir: Path, signatures: Mapping[str, Any]) -> None:
+    marker = {
+        "kind": "slicerdsurfer_input_import_intent",
+        "version": 1,
+        "identity": input_identity(signatures),
+        "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    (input_dir / INTENT_MARKER_NAME).write_text(json.dumps(marker, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
 def prepare_inputs(config: InputImportConfig) -> dict[str, Any]:
     """Prepare external inputs and write input/input_import_manifest.json."""
 
@@ -487,11 +759,10 @@ def prepare_inputs(config: InputImportConfig) -> dict[str, Any]:
     source = config.source.expanduser().resolve()
     source_kind = plan["source_kind"]
     backend = plan["backend"]
-    source_sigs = (
-        _import_source_signatures(config, source, source_kind)
-        if (not config.dry_run and config.output_kind == "canonical-nifti" and source_kind != "dicom")
-        else None
-    )
+    source_sigs = None
+    if not config.dry_run and config.output_kind == "canonical-nifti":
+        source_sigs = (dict(config.source_signatures) if config.source_signatures is not None
+                       else _import_source_signatures(config, source, source_kind))
     if not config.dry_run and config.force and source_sigs is not None and targets["manifest"].is_file():
         try:
             saved = json.loads(targets["manifest"].read_text(encoding="utf-8"))
@@ -517,6 +788,9 @@ def prepare_inputs(config: InputImportConfig) -> dict[str, Any]:
                                   ', '.join(path.as_posix() for path in conflicts))
     if not config.dry_run:
         targets["input_dir"].mkdir(parents=True, exist_ok=True)
+        if source_sigs is not None:
+            # D3: before any staged file is removed or written, so a failed import is retried in this folder.
+            _write_intent_marker(targets["input_dir"], source_sigs)
         if config.force and config.mask_path is None:
             src_input = (source / "input" if (source / "input").is_dir() else source) if source_kind == "canonical" else None
             same_canonical = False

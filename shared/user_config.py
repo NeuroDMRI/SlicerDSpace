@@ -179,6 +179,8 @@ def empty_user_config() -> dict[str, Any]:
             "subject_id": "",
             "subject_root": "",
             "output_root": "",
+            # D3: the base subject ID of the last tile import (3167 when the ID shows 3167_2).
+            "subject_id_base": "",
             # Package C1: the Prepare Inputs tiles ({"kind": tab, "<tile key>": path}) and the distortion-correction values.
             "input_sources": {},
             "reverse_pe_b0": "",
@@ -230,7 +232,7 @@ def normalize_user_config(payload: Mapping[str, Any] | None) -> dict[str, Any]:
         for key, value in (sources.items() if isinstance(sources, Mapping) else ())
         if value is not None
     }
-    for key in ("reverse_pe_b0", "pe_direction"):
+    for key in ("reverse_pe_b0", "pe_direction", "subject_id_base"):
         recent[key] = str(recent.get(key) or "")
     try:
         readout = float(recent.get("readout_time") or 0.0)

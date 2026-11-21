@@ -8,7 +8,7 @@ import json
 import os
 import sys
 import tempfile
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any, Optional
 
@@ -83,15 +83,87 @@ def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
         tmp_path.unlink(missing_ok=True)
 
 
+def _choose_subject(
+    config: InputImportConfig, request: Mapping[str, Any], mode: str, say: Callable[[str], None]
+) -> tuple[InputImportConfig, Any]:
+    """D3: choose the subject folder from the input identity inside the import job (thread or child process).
+
+    ``request["subject_choice"]``: ``base_id``, ``output_dir`` and ``fallback_parent`` (the GUI root rule).
+    Without it, or for a mode that imports nothing, the config is used as given.
+    """
+    choice_request = request.get("subject_choice")
+    if not isinstance(choice_request, Mapping) or mode not in {"prepare", "detached_nrrd", "dicom"}:
+        return config, None
+    from dataclasses import replace
+
+    from shared.input_import import choose_subject_for_source, import_source_signatures, subject_root_rule
+
+    raw_path = None
+    series = None
+    if mode == "detached_nrrd":
+        raw_val = str(request.get("raw_path") or request.get("raw") or "").strip()
+        if not raw_val:
+            raise ValueError("detached_nrrd mode requires 'raw_path'.")
+        raw_path = Path(raw_val).expanduser().resolve()
+    elif mode == "dicom":
+        series = _series_from_request(request)
+    signatures = import_source_signatures(config, raw_path=raw_path, dicom_series=series)
+    root_for_id = subject_root_rule(str(choice_request.get("output_dir") or ""),
+                                    str(choice_request.get("fallback_parent") or ""))
+    choice = choose_subject_for_source(str(choice_request.get("base_id") or ""), root_for_id, signatures,
+                                       source=config.source, source_kind=config.source_kind)
+    say(f"[Prepare Inputs] Subject {choice.subject_id} ({choice.decision}): {choice.subject_root}")
+    return replace(config, subject_root=choice.subject_root, subject_id=choice.subject_id,
+                   source_signatures=signatures), choice
+
+
+def _series_from_request(request: Mapping[str, Any]) -> dict[str, Any]:
+    series_raw = request.get("series_entry") or request.get("series")
+    if not isinstance(series_raw, Mapping):
+        raise ValueError("dicom mode requires 'series_entry'.")
+    series = dict(series_raw)
+    series["paths"] = [Path(str(item)) for item in (series.get("paths") or ())]
+    return series
+
+
 def execute_request(request: Mapping[str, Any]) -> dict[str, Any]:
-    """Execute one input-import request dict and return its manifest payload."""
+    """Execute one input-import request dict and return its manifest payload.
 
-    mode = str(request.get("mode") or "prepare").strip().lower()
+    With ``subject_choice`` the job chooses the subject folder first (D3) and the result carries the chosen
+    target under ``subject_choice``; that key is added fresh to every result and never saved in a manifest.
+    """
+
     cfg_data = request.get("config") if isinstance(request.get("config"), Mapping) else request
-    config = config_from_dict(cfg_data)
+    return execute_import(config_from_dict(cfg_data), request)
 
+
+def _print_line(text: str) -> None:
+    print(text, flush=True)
+
+
+def execute_import(
+    config: InputImportConfig,
+    request: Mapping[str, Any],
+    *,
+    log: Callable[[str], None] | None = _print_line,
+) -> dict[str, Any]:
+    """:func:`execute_request` with a ready config: the GUI thread path calls it, so both job paths share the
+    subject choice (D3) and the mode dispatch. ``log=None`` prints nothing (a GUI worker thread)."""
+
+    say = log or (lambda _text: None)
+    mode = str(request.get("mode") or "prepare").strip().lower()
+    config, choice = _choose_subject(config, request, mode, say)
+    result = _execute_mode(config, request, mode, say)
+    if choice is not None:
+        result = {**result, "subject_choice": choice.as_payload()}
+    return result
+
+
+def _execute_mode(
+    config: InputImportConfig, request: Mapping[str, Any], mode: str, say: Callable[[str], None]
+) -> dict[str, Any]:
     if mode == "prepare":
-        print(f"[Prepare Inputs] Preparing {config.source_kind} inputs from {config.source}...", flush=True)
+        say(f"[Prepare Inputs] Preparing {config.source_kind} inputs from {config.source}...")
         return prepare_inputs(config)
 
     if mode == "detached_nrrd":
@@ -101,24 +173,20 @@ def execute_request(request: Mapping[str, Any]) -> dict[str, Any]:
         raw_path = Path(str(raw_val)).expanduser().resolve()
         from shared.ui_prepare_inputs import import_detached_nrrd
 
-        print(f"[Prepare Inputs] Importing detached NRRD from {config.source}...", flush=True)
+        say(f"[Prepare Inputs] Importing detached NRRD from {config.source}...")
         return import_detached_nrrd(config, raw_path)
 
     if mode == "dicom":
-        series_raw = request.get("series_entry") or request.get("series")
-        if not isinstance(series_raw, Mapping):
-            raise ValueError("dicom mode requires 'series_entry'.")
-        series = dict(series_raw)
-        series["paths"] = [Path(str(item)) for item in (series.get("paths") or ())]
+        series = _series_from_request(request)
         from shared.ui_prepare_inputs import import_dicom_series
 
-        print(f"[Prepare Inputs] Importing DICOM series from {config.source}...", flush=True)
+        say(f"[Prepare Inputs] Importing DICOM series from {config.source}...")
         return import_dicom_series(config, series)
 
     if mode == "scan_dicom":
         from shared.dicom_input import scan_series
 
-        print(f"[Prepare Inputs] Scanning DICOM series in {config.source}...", flush=True)
+        say(f"[Prepare Inputs] Scanning DICOM series in {config.source}...")
         series_list = scan_series(config.source)
         serialized = [
             {

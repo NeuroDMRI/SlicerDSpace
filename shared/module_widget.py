@@ -839,6 +839,17 @@ class SharedWidgetMixin:
                     node.targetTractography = bool(targets & {"tractography", "saf"})
                     node.targetBundles = bool(targets & {"bundles", "wma", "tractcloud"})
                     node.targetConnectome = "connectome" in targets
+            # D3: the base ID of the last suffixed import comes back when the saved ID and Output Folder still match.
+            import re
+
+            saved_base = str(recent.get("subject_id_base") or "").strip()
+            saved_output = str(recent.get("output_root") or "")
+            restored_id = str(node.subjectId or "")
+            self._subjectIdSuffixState = None
+            if (saved_base and (node.outputDirectory or "") == saved_output
+                    and (restored_id == saved_base
+                         or re.fullmatch(re.escape(saved_base) + r"_([2-9]|[1-9]\d+)", restored_id))):
+                self._subjectIdSuffixState = {"base": saved_base, "effective": restored_id, "output": saved_output}
             # Package C1: the visible input tiles and the format tab (waits for the panel if it is not built yet).
             from shared.ui_prepare_inputs import restore_input_sources
 
@@ -867,10 +878,18 @@ class SharedWidgetMixin:
         }
         from shared.ui_prepare_inputs import collect_input_sources
 
+        # D3: keep the base ID only while the node still shows that import's ID and Output Folder.
+        suffix_state = getattr(self, "_subjectIdSuffixState", None) or {}
+        subject_id_base = ""
+        if (suffix_state.get("effective") == (node.subjectId or "")
+                and suffix_state.get("output") == (node.outputDirectory or "")):
+            subject_id_base = str(suffix_state.get("base") or "")
         recent = {
             "subject_id": node.subjectId or "",
             "subject_root": node.inputDirectory or "",
             "output_root": node.outputDirectory or "",
+            # D3: the base ID of the last import, so a suffixed ID (3167_2) maps back to its base after a restart.
+            "subject_id_base": subject_id_base,
             # Package C1: the distortion-correction inputs.
             "reverse_pe_b0": getattr(node, "preprocessingReversePhaseB0", "") or "",
             "pe_direction": getattr(node, "preprocessingPhaseEncodingDirection", "") or "",
@@ -2022,6 +2041,28 @@ class SharedWidgetMixin:
             slicer.util.errorDisplay(str(exc), parent=self.parent)
             return
         selection = self._input_import_selection()
+        # D3: the import job chooses the subject folder from the input identity. The base ID is the typed ID,
+        # or the base of the last suffixed import while the field still shows its effective ID.
+        from shared.subject_id import derive_subject_id
+        from shared.user_config import default_user_config_path
+
+        typed_id = derive_subject_id(config.subject_id)
+        output_text = (getattr(self._parameterNode, "outputDirectory", "") or "").strip() if self._parameterNode else ""
+        suffix_state = getattr(self, "_subjectIdSuffixState", None)
+        if (isinstance(suffix_state, dict) and suffix_state.get("base")
+                and typed_id == suffix_state.get("effective") and output_text == suffix_state.get("output")):
+            base_id = str(suffix_state["base"])
+        else:
+            base_id = typed_id
+            self._subjectIdSuffixState = None
+        subject_choice: Optional[dict[str, str]] = {
+            "base_id": base_id,
+            "output_dir": output_text,
+            "fallback_parent": str(default_user_config_path().parent / "subjects"),
+        }
+        if self._input_preview_is_batch():
+            subject_choice = None  # D3.3: batch mode does not use the subject choice
+            self._subjectIdSuffixState = None
         self._inputImportPending = True
         self._inputImportCancelRequested = False
         zh = getattr(self, "_onboardingLanguage", "en").startswith("zh")
@@ -2077,6 +2118,7 @@ class SharedWidgetMixin:
             request_payload = {
                 "mode": mode,
                 "config": self._prepare_config_payload(config),
+                **({"subject_choice": subject_choice} if subject_choice and mode != "scan_dicom" else {}),
                 **extra_payload,
             }
             request_path.write_text(json.dumps(request_payload, indent=2, default=str), encoding="utf-8")
@@ -2234,12 +2276,32 @@ class SharedWidgetMixin:
             if (manifest.get("status") == "completed" and self._parameterNode is not None
                     and selection == self._input_import_selection()):
                 status_label.setText("影像已导入" if zh else "Inputs ready")
+                # D3: the job reports the folder it chose; without that key the config target was used.
+                chosen = manifest.get("subject_choice") if isinstance(manifest.get("subject_choice"), dict) else {}
+                effective_id = str(chosen.get("subject_id") or config.subject_id)
+                effective_root = str(chosen.get("subject_root") or config.subject_root.as_posix())
                 with slicer.util.NodeModify(self._parameterNode):
-                    self._parameterNode.inputDirectory = config.subject_root.as_posix()
-                    self._parameterNode.subjectId = config.subject_id
+                    self._parameterNode.inputDirectory = effective_root
+                    self._parameterNode.subjectId = effective_id
+                suffix_message = ""
+                if chosen:
+                    subject_field = getattr(self.ui, "subjectIdLineEdit", None)
+                    if subject_field is not None and self._line_edit_text(subject_field) != effective_id:
+                        subject_field.setText(effective_id)
+                    self._subjectIdSuffixState = {"base": base_id, "effective": effective_id, "output": output_text}
+                    if effective_id != base_id:
+                        suffix_message = (
+                            f"输入与受试者 {base_id} 已保存的数据不同。结果写入受试者 {effective_id}。" if zh
+                            else f"The input differs from the data stored for subject {base_id}. "
+                                 f"Results go to subject {effective_id}."
+                        )
+                        self.appendLog("[Prepare Inputs] " + suffix_message)
                 self._preparedInputSelection = self._input_import_selection()
                 self._apply_shared_inputs_to_workflow_fields()
                 self._checkCanApply()
+                if suffix_message:
+                    # FE4: after _checkCanApply, whose input check would replace the notice.
+                    self._setStatus("warning", suffix_message)
                 if run_after:
                     self._onRunSelectedClicked()
                     if (
@@ -2278,13 +2340,18 @@ class SharedWidgetMixin:
                 if use_qprocess:
                     start_subprocess_job("detached_nrrd", {"raw_path": str(resolved_raw)}, finish_with_result)
                 else:
-                    from shared.ui_prepare_inputs import import_detached_nrrd
-                    start_thread_job(lambda: import_detached_nrrd(config, resolved_raw), finish_future)
+                    from shared.prepare_inputs_cli import execute_import
+                    start_thread_job(lambda: execute_import(config, {
+                        "mode": "detached_nrrd", "raw_path": str(resolved_raw), "subject_choice": subject_choice,
+                    }, log=None), finish_future)
             else:
                 if use_qprocess:
                     start_subprocess_job("prepare", {}, finish_with_result)
                 else:
-                    start_thread_job(lambda: prepare_inputs(config), finish_future)
+                    from shared.prepare_inputs_cli import execute_import
+                    start_thread_job(lambda: execute_import(config, {"mode": "prepare",
+                                                                     "subject_choice": subject_choice}, log=None),
+                                     finish_future)
             return
 
         def choose_series_from_list(series_raw: Any, exc: Optional[Exception]) -> None:
@@ -2326,9 +2393,11 @@ class SharedWidgetMixin:
                 selected_entry["paths"] = [Path(p).as_posix() for p in (selected_entry.get("paths") or ())]
                 start_subprocess_job("dicom", {"series_entry": selected_entry}, finish_with_result)
             else:
-                from shared.ui_prepare_inputs import import_dicom_series
+                from shared.prepare_inputs_cli import execute_import
                 selected_entry["paths"] = [Path(str(p)) for p in (selected_entry.get("paths") or ())]
-                start_thread_job(lambda: import_dicom_series(config, selected_entry), finish_future)
+                start_thread_job(lambda: execute_import(config, {
+                    "mode": "dicom", "series_entry": selected_entry, "subject_choice": subject_choice,
+                }, log=None), finish_future)
 
         if use_qprocess:
             set_live_stage_text(

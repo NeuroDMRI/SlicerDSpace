@@ -125,6 +125,38 @@ jobs:
           python .github/scripts/ci_run_slicer_smoke.py --slicer-exe "$SLICER_EXE" --module-dir "$MODULE_DIR" \
             --mode repo-only --pipeline optional
 
+      # Stock Slicer has no nibabel, psutil, nrrd, dipy, scikit-learn or trimesh,
+      # so without this step about 300 tests ended as import errors (run
+      # 44887655250). The packages go into their own directory, never into
+      # Slicer's site-packages. --no-deps keeps pip from putting a second numpy
+      # and scipy there: the tests use the numpy and scipy of Slicer itself.
+      # This step is not continue-on-error: a broken install must show.
+      - name: Install the unit-test dependencies for PythonSlicer (own directory)
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          PYTHON_SLICER: ${{ steps.slicer.outputs.python_slicer }}
+        run: |
+          set -euo pipefail
+          TEST_SITE="$RUNNER_TEMP/test-site"
+          "$PYTHON_SLICER" -c "import numpy, scipy, sys; print('Slicer python', sys.version.split()[0], 'numpy', numpy.__version__, 'scipy', scipy.__version__)"
+          echo "== packages of the stock Slicer"
+          "$PYTHON_SLICER" -m pip list --format=freeze || true
+          "$PYTHON_SLICER" -m pip install --no-deps --target "$TEST_SITE" -r scripts/dev/requirements-slicer-tests.txt
+          # Import every module the tests need; report all failures, then fail.
+          PYTHONPATH="$TEST_SITE" "$PYTHON_SLICER" - <<'PY'
+          import importlib, sys
+          bad = []
+          for name in ("nibabel", "psutil", "nrrd", "dipy", "dipy.io.streamline", "sklearn", "sklearn.cluster", "trimesh", "threadpoolctl", "trx"):
+              try:
+                  importlib.import_module(name)
+                  print("import OK  ", name)
+              except Exception as exc:
+                  bad.append(name)
+                  print("import FAIL", name, "->", type(exc).__name__, exc)
+          sys.exit(1 if bad else 0)
+          PY
+
       - name: Unit test suite under the real PythonSlicer (report only)
         if: ${{ !cancelled() }}
         continue-on-error: true
@@ -135,7 +167,10 @@ jobs:
           WORKSPACE: ${{ github.workspace }}
         run: |
           mkdir -p "$RUNNER_TEMP/ci-artifacts"
-          export PYTHONPATH="$WORKSPACE"
+          # Test dependencies first, then the checkout (same order as the full-install job).
+          if [ "$RUNNER_OS" = "Windows" ]; then SEP=';'; else SEP=':'; fi
+          export PYTHONPATH="$RUNNER_TEMP/test-site$SEP$WORKSPACE"
+          echo "PYTHONPATH=$PYTHONPATH"
           echo "PythonSlicer: $PYTHON_SLICER"
           "$PYTHON_SLICER" --version || true
           "$PYTHON_SLICER" -m unittest discover -s Testing/Python -p 'test_*.py' 2>&1 | tee "$RUNNER_TEMP/ci-artifacts/unittest.log"

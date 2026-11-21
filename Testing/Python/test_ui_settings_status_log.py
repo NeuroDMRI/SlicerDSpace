@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 from shared.ui_settings import (coerce_user_setting_value, common_user_setting_specs,
                                 mark_new_parameter_node, consume_user_defaults_request, SETTINGS_STATE_ATTRIBUTE)
-from shared.ui_status_log import set_existing_report_path, append_log
+from shared.ui_status_log import set_existing_report_path, append_log, repaint_log_widget
 
 
 class ParameterNode:
@@ -30,23 +30,82 @@ class ParameterNode:
         self.attributes[name] = value
 
 
+LONG_LINE_CHARS = 1000
+HORIZONTAL_MAXIMUM = 40000
+
+
 class LogWidget:
+    """Fake QPlainTextEdit that models the Qt behaviour measured in real Qt 5.15.
+
+    appendHtml moves the text cursor to the end of the chunk and leaves the horizontal bar alone.
+    ensureCursorVisible scrolls the horizontal bar to the far right when the cursor line is long,
+    and follows a clicked line vertically. The first long line makes the horizontal bar appear,
+    which adds one line to the vertical range.
+    """
+
     def __init__(self, position=100):
         self.bar = SimpleNamespace(value=position, maximum=100)
-        self.bar.setValue = lambda value: setattr(self.bar, 'value', value)
+        self.bar.setValue = lambda value: setattr(self.bar, 'value', min(int(value), self.bar.maximum))
+        self.hbar = SimpleNamespace(value=0, maximum=0)
+        self.hbar.setValue = lambda value: setattr(self.hbar, 'value', min(int(value), self.hbar.maximum))
         self.insertions = []
         self.followed = False
+        self.cursor_calls = []
+        self.clicked_line = None
+        self._last_line_long = False
+        self.plain_lines = []
+        self.cleared = False
+        self.layout_pending = False
 
     def verticalScrollBar(self):
         return self.bar
 
+    def horizontalScrollBar(self):
+        return self.hbar
+
     def appendHtml(self, text):
         self.insertions.append(text)
-        self.bar.maximum += 1
+        self.plain_lines.append(text)
+        long_line = ('x' * LONG_LINE_CHARS) in text
+        self._last_line_long = long_line
+        self.bar.maximum += max(1, text.count('<p '))
         self.bar.value = self.bar.maximum
+        if long_line and self.hbar.maximum == 0:
+            self.hbar.maximum = HORIZONTAL_MAXIMUM
+            self.layout_pending = True
+
+    def run_layout(self):
+        """The event loop lays out the widget: the new horizontal bar costs one line of viewport."""
+        if self.layout_pending:
+            self.layout_pending = False
+            self.bar.maximum += 1
 
     def ensureCursorVisible(self):
         self.followed = True
+        self.cursor_calls.append('ensureCursorVisible')
+        if self._last_line_long:
+            self.hbar.value = self.hbar.maximum
+        if self.clicked_line is not None:
+            self.bar.value = self.clicked_line
+        else:
+            self.bar.value = self.bar.maximum
+
+    def moveCursor(self, *args):
+        self.cursor_calls.append('moveCursor')
+
+    def setTextCursor(self, *args):
+        self.cursor_calls.append('setTextCursor')
+
+    def toPlainText(self):
+        return '\n'.join(self.plain_lines)
+
+    def clear(self):
+        self.cleared = True
+        self.plain_lines = []
+        self.insertions = []
+        self.hbar.value = 0
+        self.bar.value = 0
+        self.bar.maximum = 0
 
 
 class UISettingsStatusLogTest(unittest.TestCase):
@@ -82,9 +141,158 @@ class UISettingsStatusLogTest(unittest.TestCase):
             self.assertEqual(len(log.insertions), 1)
             self.assertEqual(log.insertions[0].count('<p '), 3)
             self.assertIn('&lt;line&gt;', log.insertions[0])
-            self.assertEqual(log.followed, position == 100)
-            if position < 100:
+            # b2 log: the end position is checked, not the ensureCursorVisible call.
+            if position == 100:
+                self.assertEqual(log.bar.value, log.bar.maximum)
+            else:
                 self.assertEqual(log.bar.value, position)
+
+    # ---- batch 2, lane log: the log view must not scroll horizontally by itself ----
+
+    def _owner(self, log):
+        return SimpleNamespace(ui=SimpleNamespace(logPlainTextEdit=log),
+                               _lastProcessEventsAt=0, _trim_log_widget=lambda widget: None)
+
+    def _append(self, owner, text, timers=None):
+        queue = timers if timers is not None else []
+        fake_qt = SimpleNamespace(QTimer=SimpleNamespace(singleShot=lambda ms, fn: queue.append(fn)))
+        with patch.dict(sys.modules, {'slicer': SimpleNamespace(app=SimpleNamespace(processEvents=lambda: None)),
+                                      'qt': fake_qt}):
+            append_log(owner, text)
+        return queue
+
+    def test_b2_log_long_last_line_keeps_horizontal_value_at_zero(self):
+        log = LogWidget(100)
+        owner = self._owner(log)
+        self._append(owner, 'short line')
+        self._append(owner, 'x' * 5000)
+        self.assertEqual(log.hbar.value, 0)
+        self.assertGreater(log.hbar.maximum, 0)
+        self.assertEqual(log.bar.value, log.bar.maximum)
+
+    def test_b2_log_chunk_ending_in_long_line_keeps_horizontal_value_at_zero(self):
+        log = LogWidget(100)
+        owner = self._owner(log)
+        self._append(owner, 'a\nb\n' + 'x' * 5000)
+        self.assertEqual(log.hbar.value, 0)
+
+    def test_b2_log_user_chosen_horizontal_value_survives_append(self):
+        log = LogWidget(100)
+        owner = self._owner(log)
+        self._append(owner, 'x' * 5000)
+        log.hbar.setValue(300)
+        self.assertEqual(log.hbar.value, 300)
+        self._append(owner, 'short line')
+        self.assertEqual(log.hbar.value, 300)
+        self._append(owner, 'y' * 5000 + ' ' + 'x' * 5000)
+        self.assertEqual(log.hbar.value, 300)
+
+    def test_b2_log_user_chosen_horizontal_value_survives_theme_repaint(self):
+        log = LogWidget(100)
+        owner = self._owner(log)
+        self._append(owner, 'first\n' + 'x' * 5000)
+        log.hbar.setValue(300)
+        repaint_log_widget(log, dark=True)
+        self.assertTrue(log.cleared)
+        self.assertEqual(log.hbar.value, 300)
+        self.assertEqual(len(log.insertions), 1)
+        self.assertIn('first', log.insertions[0])
+
+    def test_b2_log_theme_repaint_keeps_vertical_rules(self):
+        log = LogWidget(100)
+        owner = self._owner(log)
+        for index in range(30):
+            self._append(owner, f'line {index}')
+        log.bar.setValue(10)
+        repaint_log_widget(log, dark=True)
+        self.assertEqual(log.bar.value, 10)
+
+        log = LogWidget(100)
+        owner = self._owner(log)
+        for index in range(30):
+            self._append(owner, f'line {index}')
+        self.assertEqual(log.bar.value, log.bar.maximum)
+        repaint_log_widget(log, dark=False)
+        self.assertEqual(log.bar.value, log.bar.maximum)
+
+    def test_b2_log_follow_at_bottom_and_scrolled_up_keep_vertical_rule(self):
+        log = LogWidget(100)
+        owner = self._owner(log)
+        self._append(owner, 'one\ntwo')
+        self.assertEqual(log.bar.value, log.bar.maximum)
+        scrolled = LogWidget(40)
+        owner = self._owner(scrolled)
+        self._append(owner, 'one\ntwo')
+        self.assertEqual(scrolled.bar.value, 40)
+        self._append(owner, 'x' * 5000)
+        self.assertEqual(scrolled.bar.value, 40)
+        self.assertEqual(scrolled.hbar.value, 0)
+
+    def test_b2_log_deferred_pin_restores_bottom_after_horizontal_bar_appears(self):
+        log = LogWidget(100)
+        owner = self._owner(log)
+        timers = self._append(owner, 'x' * 5000)
+        # The event loop lays out the widget: the horizontal bar that appeared adds one line.
+        log.run_layout()
+        self.assertEqual(log.bar.value, log.bar.maximum - 1)
+        self.assertEqual(len(timers), 1)
+        for callback in timers:
+            callback()
+        self.assertEqual(log.bar.value, log.bar.maximum)
+
+    def test_b2_log_deferred_pin_keeps_position_of_reader_who_scrolled_up(self):
+        log = LogWidget(40)
+        owner = self._owner(log)
+        timers = self._append(owner, 'x' * 5000)
+        for callback in timers:
+            callback()
+        self.assertEqual(log.bar.value, 40)
+
+    def test_b2_log_deferred_pin_ignores_a_deleted_widget(self):
+        log = LogWidget(100)
+        owner = self._owner(log)
+        timers = self._append(owner, 'x' * 5000)
+
+        def broken():
+            raise RuntimeError('Internal C++ object already deleted')
+        log.bar.setValue = lambda value: broken()
+        for callback in timers:
+            callback()
+
+    def test_b2_log_works_without_qt_event_loop(self):
+        log = LogWidget(100)
+        owner = self._owner(log)
+        with patch.dict(sys.modules, {'slicer': SimpleNamespace(app=SimpleNamespace(processEvents=lambda: None)),
+                                      'qt': None}):
+            append_log(owner, 'x' * 5000)
+        self.assertEqual(log.hbar.value, 0)
+        self.assertEqual(log.bar.value, log.bar.maximum)
+
+        class BrokenTimer:
+            @staticmethod
+            def singleShot(ms, fn):
+                raise RuntimeError('no event loop')
+        log = LogWidget(100)
+        owner = self._owner(log)
+        with patch.dict(sys.modules, {'slicer': SimpleNamespace(app=SimpleNamespace(processEvents=lambda: None)),
+                                      'qt': SimpleNamespace(QTimer=BrokenTimer)}):
+            append_log(owner, 'x' * 5000)
+        self.assertEqual(log.bar.value, log.bar.maximum)
+
+    def test_b2_log_path_makes_no_cursor_call(self):
+        log = LogWidget(100)
+        owner = self._owner(log)
+        self._append(owner, 'a\nb')
+        self._append(owner, 'x' * 5000)
+        repaint_log_widget(log, dark=True)
+        self.assertEqual(log.cursor_calls, [])
+
+    def test_b2_log_follow_survives_clicked_text_in_the_log(self):
+        log = LogWidget(100)
+        log.clicked_line = 5
+        owner = self._owner(log)
+        self._append(owner, 'next line')
+        self.assertEqual(log.bar.value, log.bar.maximum)
 
     def test_blank_lines_keep_the_original_insertion_path(self):
         log = LogWidget()

@@ -2,8 +2,10 @@
 """Verify a built surface runtime before it is packaged or published.
 
 Checks, per binary in bin/ (and lib/ when present):
-  * macOS (--expect-min-macos): the Mach-O minimum macOS equals the value (read with shared/macho_min_os.py),
-    and every linked library is a system library (/usr/lib or /System/Library);
+  * a symlink in bin/ fails, and a runtime where no tool was checked fails;
+  * macOS (--expect-min-macos): the Mach-O is arm64 only (CPU type read from the header), the minimum macOS
+    equals the value (read with shared/macho_min_os.py), and every linked library is a system library
+    (/usr/lib or /System/Library);
   * Linux (--max-glibc): no GLIBC_ symbol version above the value, no GLIBCXX_/CXXABI_ symbol version
     (libstdc++ linked statically), and only C-library objects are NEEDED;
   * the tool list equals the seven surface commands of the build recipe (the shipped runtime's list);
@@ -22,6 +24,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import struct
 import subprocess
 import sys
 
@@ -49,6 +52,33 @@ def read_min_os(path):
     finally:
         sys.path.remove(str(REPO))
     return macho_min_macos(path, 'arm64' if os.uname().machine == 'arm64' else None)
+
+
+_MH_MAGIC_64 = 0xFEEDFACF
+_FAT_MAGIC, _FAT_MAGIC_64 = 0xCAFEBABE, 0xCAFEBABF
+_CPU_NAMES = {0x0100000C: 'arm64', 0x01000007: 'x86_64', 0x0000000C: 'arm', 0x00000007: 'i386'}
+
+
+def read_archs(path):
+    """CPU names of a Mach-O file (thin or fat), read from the header; [] when it is not a Mach-O file."""
+    with open(path, 'rb') as stream:
+        head = stream.read(8)
+        if len(head) < 8:
+            return []
+        if struct.unpack_from('<I', head, 0)[0] == _MH_MAGIC_64:
+            return [_CPU_NAMES.get(struct.unpack_from('<I', head, 4)[0], 'cpu-0x%x' % struct.unpack_from('<I', head, 4)[0])]
+        magic, count = struct.unpack('>II', head)
+        if magic not in (_FAT_MAGIC, _FAT_MAGIC_64) or not 0 < count <= 16:
+            return []
+        size = 32 if magic == _FAT_MAGIC_64 else 20
+        archs = []
+        for _ in range(count):
+            entry = stream.read(size)
+            if len(entry) < size:
+                return []
+            cputype = struct.unpack_from('>I', entry, 0)[0]
+            archs.append(_CPU_NAMES.get(cputype, 'cpu-0x%x' % cputype))
+        return archs
 
 
 def parse_otool_libraries(text):
@@ -160,7 +190,7 @@ def check_elf(relative, row, versions, needed, max_glibc):
 
 def check_runtime(root, expected_min_macos=None, start=False, build_logs=None, reference=None,
                   min_os_reader=read_min_os, library_reader=read_libraries, starter=start_tool, commands=None,
-                  max_glibc=None, elf_reader=read_elf):
+                  max_glibc=None, elf_reader=read_elf, arch_reader=read_archs):
     root = Path(root)
     if bool(expected_min_macos) == bool(max_glibc):
         raise ValueError('Give exactly one of expected_min_macos (macOS) or max_glibc (Linux)')
@@ -168,6 +198,8 @@ def check_runtime(root, expected_min_macos=None, start=False, build_logs=None, r
     failures, rows = [], []
     commands = tuple(commands or recipe_commands())
     present = sorted(path.name for path in (root / 'bin').iterdir() if path.is_file()) if (root / 'bin').is_dir() else []
+    for link in sorted(path.name for path in (root / 'bin').iterdir() if path.is_symlink()) if (root / 'bin').is_dir() else []:
+        failures.append('symlink in bin/: %s (a tool must be a regular file; it would skip every check)' % link)
     for name in sorted(set(commands) - set(present)):
         failures.append('tool missing from bin/: ' + name)
     for name in sorted(set(present) - set(commands)):
@@ -183,6 +215,17 @@ def check_runtime(root, expected_min_macos=None, start=False, build_logs=None, r
                 row['libraries'] = []
                 failures.append('%s: cannot read ELF symbol versions: %s' % (relative, error))
         else:
+            try:
+                archs = list(arch_reader(path))
+            except OSError as error:
+                archs = []
+                failures.append('%s: cannot read CPU type: %s' % (relative, error))
+            else:
+                if not archs:
+                    failures.append('%s: cannot read CPU type (not a Mach-O file)' % relative)
+            row['archs'] = archs
+            if archs and archs != ['arm64']:
+                failures.append('%s: CPU types %s, expected arm64 only' % (relative, ', '.join(archs)))
             version = format_version(min_os_reader(path))
             row['min_macos'] = version
             if version != expected:
@@ -203,6 +246,8 @@ def check_runtime(root, expected_min_macos=None, start=False, build_logs=None, r
             if not row['started']:
                 failures.append('%s: --version failed (exit %s): %s' % (relative, code, output[:300]))
         rows.append(row)
+    if not any(row['path'].startswith('bin/') for row in rows):
+        failures.append('no tool was checked: bin/ holds no regular file')
     if build_logs is not None:
         for log in sorted(Path(build_logs).rglob('*.log')):
             for line in log.read_text(encoding='utf-8', errors='replace').splitlines():

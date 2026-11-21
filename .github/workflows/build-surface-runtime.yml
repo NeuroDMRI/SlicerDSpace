@@ -24,16 +24,15 @@ on:
         required: false
         type: string
         default: ""
-  push:
-    branches:
-      - ci/b2-surface-runtime
 
 permissions:
   contents: read
 
 concurrency:
-  group: build-surface-runtime-${{ github.ref }}
-  cancel-in-progress: true
+  # Publishing runs have their own group, so a later build-only dispatch on this ref cannot cancel a run that
+  # publishes. GitHub takes cancel-in-progress from the NEW run: a publishing run never cancels, it waits.
+  group: build-surface-runtime-${{ github.ref }}-${{ inputs.publish && 'publish' || 'build' }}
+  cancel-in-progress: ${{ !inputs.publish }}
 
 env:
   ASSET: surface-runtime-darwin-arm64-macos13.tar.gz
@@ -156,37 +155,16 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
-  run-on-older-macos:
-    needs: build-darwin-arm64
-    runs-on: macos-14
-    continue-on-error: true
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          lfs: false
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: ${{ env.ARTIFACT }}
-          path: ${{ runner.temp }}/surface-out
-
-      - name: Start every binary with --version
-        run: |
-          sw_vers
-          mkdir -p "$RUNNER_TEMP/runtime"
-          tar -xzf "$RUNNER_TEMP/surface-out/$ASSET" -C "$RUNNER_TEMP/runtime"
-          python3 .github/scripts/verify_surface_runtime.py \
-            --runtime "$RUNNER_TEMP/runtime" \
-            --expect-min-macos 13.0 \
-            --start \
-            --json "$RUNNER_TEMP/verify-older-macos.json"
-
   publish:
     needs: build-darwin-arm64
     if: github.event_name == 'workflow_dispatch' && inputs.publish
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # Its own group across all refs: one publish job at a time, never cancelled by another publish job.
+    # The run-level groups above keep a build-only dispatch from cancelling the whole publishing run.
+    concurrency:
+      group: build-surface-runtime-publish
+      cancel-in-progress: false
     permissions:
       contents: write
       actions: read

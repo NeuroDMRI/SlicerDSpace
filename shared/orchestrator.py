@@ -1676,8 +1676,18 @@ def _manifest_inputs_match(manifest_path: Path, inputs: dict[str, Path], field: 
     return all(_file_record_matches(records.get(key), path) for key, path in inputs.items())
 
 
+def _dti_tracking_frame_current(manifest_path, inputs):
+    """Gradient frame (batch 2): a det > 0 DTI tracking result made before the fix is not reused."""
+    from tractography.dti import tracking_gradient_frame_current
+
+    dwi = inputs.get('dwi') if isinstance(inputs, dict) else None
+    return dwi is not None and tracking_gradient_frame_current(manifest_path, Path(dwi))
+
+
 def _dti_bundle_source_current(config, manifest_path, inputs):
     if not _manifest_inputs_match(manifest_path, inputs, 'raw_inputs'):
+        return False
+    if not _dti_tracking_frame_current(manifest_path, inputs):
         return False
     try:
         manifest = _read_json(manifest_path)
@@ -3216,7 +3226,8 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
                     analysis_inputs,
                     allow_ddseg_only=config.allow_act_ddseg_only,
                 )
-            return _qc_completed(dti_qc) and tractogram_trk.is_file()
+            return (_qc_completed(dti_qc) and tractogram_trk.is_file()
+                    and _dti_tracking_frame_current(dti_manifest, analysis_inputs))
         if target == "bundles":
             return _wmql_complete(
                 wmql_dir / "wmql_qc.json",
@@ -3607,6 +3618,7 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
                 and (not config.bundle_tractography_backend or _csd_bundle_parameters_current(config, csd_dir / 'csd_act_manifest.json'))
                 if primary_tractography_backend == "csd_act"
                 else _qc_completed(tractography_qc) and tractogram_trk.is_file()
+                and _dti_tracking_frame_current(dti_manifest, analysis_inputs)
                 and (not config.bundle_tractography_backend or (_dti_bundle_source_current(config, dti_manifest, analysis_inputs)
                      and _dti_bundle_qc_acceptable(config, dti_qc, tractogram_trk)))
             )
@@ -3747,7 +3759,7 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
                 tractcloud_input_tractography == current_vtk
                 and (available.get("tractography", False) or
                      (primary_tractography_backend == 'dti_det' and _qc_completed(dti_qc)
-                      and tractogram_trk.is_file()))
+                      and tractogram_trk.is_file() and _dti_tracking_frame_current(dti_manifest, analysis_inputs)))
             )
             if config.bundle_tractography_backend:
                 tractcloud_input_available = False
@@ -5512,6 +5524,7 @@ def _run_subject_products_impl(
             and (not config.bundle_tractography_backend or _csd_bundle_parameters_current(config, csd_dir / 'csd_act_manifest.json'))
             if primary_tractography_backend == "csd_act"
             else _qc_completed(tractography_qc) and tractogram_trk.is_file()
+            and _dti_tracking_frame_current(dti_manifest, analysis_inputs)
             and (not config.bundle_tractography_backend or (_dti_bundle_source_current(config, dti_manifest, analysis_inputs)
                  and _dti_bundle_qc_acceptable(config, dti_qc, tractogram_trk)))
         )
@@ -6020,7 +6033,8 @@ def _run_subject_products_impl(
         conversion_error = bundle_conversion_error
         if (config.execute and primary_tractography_backend == 'dti_det'
                 and config.tractcloud_input_tractography is None and not config.bundle_tractography_backend):
-            if not _qc_completed(dti_qc) or not tractogram_trk.is_file():
+            if (not _qc_completed(dti_qc) or not tractogram_trk.is_file()
+                    or not _dti_tracking_frame_current(dti_manifest, analysis_inputs)):
                 conversion_error = 'Current DTI tractography is not QC-valid; no historical CSD fallback'
             else:
                 from tractography.conversion import ensure_vtk_tractogram

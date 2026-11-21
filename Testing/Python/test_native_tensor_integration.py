@@ -109,7 +109,10 @@ class NativeTensorBundleTests(unittest.TestCase):
         raw, bundle, _commands = self.build()
         manifest = json.loads(bundle.manifest_path.read_text(encoding="utf-8"))
         self.assertEqual(manifest["version"], 4)
-        self.assertEqual(manifest["tensor_implementation"], hashlib.sha256(TEEM_SCRIPT.read_bytes()).hexdigest())
+        # Gradient-frame fix, item 8: the fixture DWI is axis-aligned with det < 0, so the key holds the pinned sha256.
+        from shared.cache_key_pins import key_sha256
+        self.assertEqual(manifest["tensor_implementation"],
+                         key_sha256(hashlib.sha256(TEEM_SCRIPT.read_bytes()).hexdigest(), True))
         self.assertEqual(pipeline._native_manifest(raw, bundle)["tensor_implementation"],
                          manifest["tensor_implementation"])
 

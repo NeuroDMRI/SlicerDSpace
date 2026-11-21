@@ -441,8 +441,29 @@ def _expected_free_water_manifest(config: MicrostructureConfig) -> dict[str, obj
     }
 
 
+# Gradient frame (batch 2): for det > 0 inputs AMICO gets F b (voxel-axis frame), so fit_dir holds voxel-axis
+# directions; the NODDI manifest then carries this marker and older det > 0 results are recomputed.
+NODDI_GRADIENT_FRAME = "fsl-bvecs-in-voxel-axis-frame-flip-x-for-positive-determinant-v1"
+
+
+def _dwi_determinant_positive(path: Path) -> bool:
+    """det > 0 of the DWI affine; False (the key and inputs as before the fix) when nibabel cannot read the file."""
+    from shared import gradient_frame
+
+    try:
+        import nibabel
+
+        affine = nibabel.load(str(path)).affine
+    except Exception:
+        return False
+    return gradient_frame.determinant_positive(affine)
+
+
 def _expected_noddi_manifest(config: MicrostructureConfig) -> dict[str, object]:
+    frame = ({"gradient_frame": NODDI_GRADIENT_FRAME}
+             if _dwi_determinant_positive(config.raw_input_bundle.dwi_path) else {})
     return {
+        **frame,
         "kind": "microstructure_noddi_stage",
         "version": 3,
         "subject_id": config.subject_id,
@@ -1284,6 +1305,17 @@ def _prepare_amico_inputs(
     _link_or_copy(raw.bval_path, bval_path)
     _link_or_copy(raw.bvec_path, bvec_path)
     _link_or_copy(raw.mask_path, mask_path)
+    if _dwi_determinant_positive(raw.dwi_path):
+        import nibabel
+        import numpy
+        from shared import gradient_frame
+
+        rows = numpy.loadtxt(str(raw.bvec_path), ndmin=2)
+        rows = rows.T if rows.shape[0] == 3 else rows
+        flipped = gradient_frame.voxel_axis_bvecs(rows, nibabel.load(str(raw.dwi_path)).affine)
+        bvec_path = study_dir / (raw.bvec_path.name + ".voxel_axis")
+        bvec_path.write_text("\n".join(" ".join(repr(float(value)) for value in flipped[:, axis])
+                                       for axis in range(3)) + "\n", encoding="utf-8")
     fsl2scheme(str(bval_path), str(bvec_path), schemeFilename=str(scheme_path))
 
     _emit(

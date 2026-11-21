@@ -536,6 +536,36 @@ def _vtk_modules():
     return vtk, vtkTeem, numpy_support, vtkMRMLNRRDStorageNode
 
 
+def _normalised_ras_to_ijk(reader, vtk, by_rows: bool):
+    matrix = vtk.vtkMatrix4x4()
+    matrix.DeepCopy(reader.GetRasToIjkMatrix())
+    for row in range(3):
+        matrix.SetElement(row, 3, 0)
+    for line in range(3):
+        cells = [(line, other) if by_rows else (other, line) for other in range(3)]
+        values = [matrix.GetElement(row, column) for row, column in cells]
+        if vtk.vtkMath.Normalize(values) != 0.0 and abs(math.fsum(v * v for v in values) - 1.0) > 1e-9:
+            raise TeemError("vtkMath.Normalize did not update its argument in place")
+        for (row, column), value in zip(cells, values):
+            matrix.SetElement(row, column, value)
+    return matrix
+
+
+def _ras_to_ijk_rotation(reader, vtk):
+    """The rotation from RAS to the voxel-axis frame (gradient frame fix, batch 2).
+
+    RasToIjk = V^-1 R^T (V: voxel sizes). Normalising its ROWS gives R^T exactly. SlicerDMRI normalises its
+    COLUMNS, which is the same matrix only on axis-aligned grids or with isotropic voxels; on an oblique grid with
+    anisotropic voxels the column version is not orthogonal and bends the gradients (measured: tensor e1 error
+    6.4 degrees, FA 0.015 on a 20 degree, 2 x 2 x 2.5 mm control). Where the two agree within 1e-9 the column
+    matrix is kept, so results on those grids stay bit-identical to earlier runs.
+    """
+    columns = _normalised_ras_to_ijk(reader, vtk, by_rows=False)
+    rows = _normalised_ras_to_ijk(reader, vtk, by_rows=True)
+    difference = max(abs(columns.GetElement(r, c) - rows.GetElement(r, c)) for r in range(3) for c in range(3))
+    return columns if difference <= 1e-9 else rows
+
+
 def prepare_gradients(reader, vtk, storage_node_class):
     """Gradients in IJK, normalised, rescaled by sqrt(b / max b); as DWIToDTIEstimation does."""
     grads = vtk.vtkDoubleArray()
@@ -544,16 +574,7 @@ def prepare_gradients(reader, vtk, storage_node_class):
         raise TeemError("Error parsing diffusion information")
     measurement_frame = vtk.vtkMatrix4x4()
     measurement_frame.DeepCopy(reader.GetMeasurementFrameMatrix())
-    ras_to_ijk_rotation = vtk.vtkMatrix4x4()
-    ras_to_ijk_rotation.DeepCopy(reader.GetRasToIjkMatrix())
-    for row in range(3):
-        ras_to_ijk_rotation.SetElement(row, 3, 0)
-    for column in range(3):
-        values = [ras_to_ijk_rotation.GetElement(row, column) for row in range(3)]
-        if vtk.vtkMath.Normalize(values) != 0.0 and abs(math.fsum(v * v for v in values) - 1.0) > 1e-9:
-            raise TeemError("vtkMath.Normalize did not update its argument in place")
-        for row in range(3):
-            ras_to_ijk_rotation.SetElement(row, column, values[row])
+    ras_to_ijk_rotation = _ras_to_ijk_rotation(reader, vtk)
     transform = vtk.vtkTransform()
     transform.PostMultiply()
     transform.SetMatrix(measurement_frame)

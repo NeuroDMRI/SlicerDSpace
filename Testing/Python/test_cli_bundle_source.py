@@ -195,7 +195,10 @@ class BundleSourceTests(unittest.TestCase):
                 paths = {'dwi': bundle.dwi_path, 'bval': bundle.bval_path, 'bvec': bundle.bvec_path, 'mask': bundle.mask_path}
                 records = {key: {'path': path.resolve().as_posix(), 'size': path.stat().st_size,
                                  'mtime_ns': path.stat().st_mtime_ns} for key, path in paths.items()}
+                # Gradient frame (batch 2): the fixture DWI has affine eye(4) (det > 0); the real run writes this marker.
+                from tractography.dti import DIPY_GRADIENT_FRAME
                 manifest.write_text(json.dumps({'status': 'completed', 'raw_inputs': records,
+                    'gradient_frame': DIPY_GRADIENT_FRAME,
                     'parameters': {'fit_method': options.fit_method, 'tracking_method': 'deterministic',
                         'output_format': 'trk', 'max_seed_voxels': options.max_seed_voxels,
                         'min_length_mm': options.min_length_mm, 'max_length_mm': options.max_length_mm}}))

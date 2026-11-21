@@ -28,6 +28,8 @@ if sys.platform == "darwin":
 DKI_METRICS = ("mk", "ak", "rk", "kfa", "mkt", "rtk")
 DKI_FIT_METHODS = ("WLS", "OLS", "MKCURVE", "MKCURVE_MATLAB")
 DKI_REFERENCE = "https://docs.dipy.org/stable/examples_built/reconstruction/reconst_dki.html"
+# Gradient frame (batch 2): det > 0 inputs give DIPY F b, so the stored eigenvectors are voxel-axis directions.
+DKI_GRADIENT_FRAME = "fsl-bvecs-in-voxel-axis-frame-flip-x-for-positive-determinant-v1"
 
 
 @dataclass(frozen=True)
@@ -294,6 +296,14 @@ def _load_protocol(config: DkiConfig, *, require_mask: bool = True):
     _check_image(image.shape, image.affine)
     bvals = np.loadtxt(bundle.bval_path, ndmin=1).reshape(-1)
     vectors = np.loadtxt(bundle.bvec_path, ndmin=2)
+    if len(image.shape) == 4 and vectors.shape == (3, image.shape[3]):
+        vectors = vectors.T
+    if vectors.ndim == 2 and vectors.shape[1] == 3:
+        # Gradient frame (batch 2): the parameter map stores eigenvectors in the voxel-axis frame, so DIPY needs
+        # F b (F = diag(-1, 1, 1) when det > 0). det < 0: the same values, no arithmetic.
+        from shared import gradient_frame
+
+        vectors = gradient_frame.voxel_axis_bvecs(vectors, image.affine)
     gtab, selected, parts = _check_acquisition(image.shape, bvals, vectors, config)
     mask_data = None
     if require_mask or bundle.mask_path.is_file():
@@ -393,6 +403,16 @@ def expected_dki_signature(config: DkiConfig) -> dict[str, Any]:
             "raw_metric_bounds": None, "smoothing": False, "nrmse_normalization": "fitted_S0",
         },
     }
+    from shared import gradient_frame
+
+    try:
+        import nibabel as nib
+
+        positive = gradient_frame.determinant_positive(nib.load(str(bundle.dwi_path)).affine)
+    except Exception:  # unreadable DWI: the key as before the fix; the fit itself must read the DWI
+        positive = False
+    if positive:
+        signature["gradient_frame"] = DKI_GRADIENT_FRAME  # det < 0: the key stays as before
     if _method(config).startswith("MKCURVE"):
         if _method(config) == "MKCURVE_MATLAB":
             from microstructure.mkcurve_matlab import inspect_mkcurve_backend

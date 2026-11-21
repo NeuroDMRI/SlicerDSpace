@@ -15,6 +15,10 @@ from shared import NativeDTIBundle, RawInputBundle, default_task_output_dir, fin
 
 
 SUPPORTED_TRACKING_METHODS = {"deterministic"}
+# Gradient frame (batch 2): DIPY maps a peak direction d to the world as R d (R = the affine with normalised
+# columns), so it needs the bvecs in the voxel-axis frame: F b, with F = diag(-1, 1, 1) when det(A) > 0.
+# Only det > 0 inputs change; their manifest carries this marker, and a result without it is recomputed.
+DIPY_GRADIENT_FRAME = "fsl-bvecs-in-voxel-axis-frame-flip-x-for-positive-determinant-v1"
 SUPPORTED_OUTPUT_FORMATS = {"trk", "tck"}
 
 
@@ -116,6 +120,24 @@ def _native_cache_available(bundle: NativeDTIBundle) -> bool:
         bundle.mean_diffusivity_nii_path,
     ]
     return all(path.is_file() for path in required)
+
+
+def tracking_gradient_frame_current(manifest_path: Path, dwi_path: Path) -> bool:
+    """True when a finished DTI tracking result used the corrected gradient frame (always true for det < 0)."""
+    from shared import gradient_frame
+
+    try:
+        import nibabel as nib
+
+        positive = gradient_frame.determinant_positive(nib.load(str(dwi_path)).affine)
+    except Exception:  # unreadable DWI: decide as before the fix; the tracking run itself must read the DWI
+        return True
+    if not positive:
+        return True
+    try:
+        return json.loads(Path(manifest_path).read_text(encoding="utf-8")).get("gradient_frame") == DIPY_GRADIENT_FRAME
+    except (OSError, ValueError, TypeError, AttributeError):
+        return False
 
 
 def _validate_config(config: DTITrackingConfig) -> None:
@@ -554,6 +576,10 @@ def _run_dipy_dti_tracking(
                     data_in_mask[dest_idx] = slab_arr[mask_slab]
             del mask_rank
 
+    from shared import gradient_frame
+
+    flipped = gradient_frame.determinant_positive(dwi_img.affine)
+    bvecs = gradient_frame.voxel_axis_bvecs(bvecs, dwi_img.affine)  # det < 0: the same values, no arithmetic
     gtab = gradient_table(bvals, bvecs=bvecs)
     _emit(f"[Tractography] Fitting DTI tensor and sphere peaks (method={config.fit_method.upper()}, device={config.device})", log)
     fa, tracking_mask, peaks, resolved_device = _fit_dti_fa_and_peaks(
@@ -662,6 +688,7 @@ def _run_dipy_dti_tracking(
         "fa_threshold": float(config.min_fa),
         "tracking_mask_voxels": int(tracking_mask.sum()),
         "length": length_summary,
+        **({"gradient_frame": DIPY_GRADIENT_FRAME} if flipped else {}),
     }
 
 
@@ -771,6 +798,8 @@ def run_dti_tracking(config: DTITrackingConfig, *, log: Optional[Callable[[str],
             }
         )
         manifest["execution_summary"] = execution_summary
+        if execution_summary.get("gradient_frame"):
+            manifest["gradient_frame"] = execution_summary["gradient_frame"]
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     qc_path.write_text(json.dumps(qc, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     _emit(f"[Tractography] {'Completed' if config.execute else 'Prepared'} DTI tracking: {manifest_path}", log)

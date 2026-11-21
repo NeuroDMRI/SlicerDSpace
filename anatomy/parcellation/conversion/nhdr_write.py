@@ -128,6 +128,11 @@ type: {numpy_to_nrrd_dtype[dtype.name]}\ndimension: {dim}\nspace: right-anterior
 
             bvecs = read_bvecs(bvec, assume_normed= False)
             bvals = read_bvals(bval)
+            # Gradient frame (batch 2): FSL bvecs are in radiological voxel order. With MF = R the world
+            # gradient is R g, and the FSL rule needs g = F b with F = diag(-1, 1, 1) when det > 0.
+            # det < 0 grids are left untouched, so their headers stay byte-identical.
+            if np.linalg.det(spc_dir) > 0:
+                bvecs = [[0.0 - vector[0], vector[1], vector[2]] for vector in bvecs]
 
             print('modality:=DWMRI')
 

@@ -511,7 +511,9 @@ class SegmentationLoaderTest(unittest.TestCase):
         owner._runOutputFiles = Mock()
         owner._runOutputFiles.itemAt.return_value = item
         menu = Mock()
-        menu.addAction.side_effect = lambda text: text
+        # Merge seam (lane results): the menu sets .enabled / .toolTip on an action, so an action is a str
+        # subclass here (it still compares equal to the text that exec_ returns).
+        menu.addAction.side_effect = lambda text: type("_Action", (str,), {})(text)
         menu.exec_.side_effect = lambda *_args: "Unload from scene"
         fake_qt = _qt()
         fake_qt.QMenu = Mock(return_value=menu)
@@ -576,6 +578,9 @@ class SegmentationLoaderTest(unittest.TestCase):
 
     def _item(self, path):
         item = Mock()
+        # Merge seam (lane results): the menu walks item.parent() up to the subject row. A bare Mock returns a new
+        # Mock for every parent() call, so that walk never ended and the test process grew to 124 GB.
+        item.parent.return_value = None
         roles = {256: str(path), 258: str(self.manifest_path)}
         item.data.side_effect = lambda _col, role: roles.get(role)
         item.text.side_effect = lambda col: "" if col == 1 else Path(path).name

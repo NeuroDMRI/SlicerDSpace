@@ -28,7 +28,8 @@ import sys
 REPO = Path(__file__).resolve().parents[2]
 BACKEND = REPO / 'anatomy/surface/ddsurfer_backend'
 SYSTEM_PREFIXES = ('/usr/lib/', '/System/Library/')
-# glibc objects; libcrypt.so.1 comes from glibc or libxcrypt and is installed on every supported distribution.
+# glibc objects. libcrypt.so.1 (crypt() in the activation check) is glibc's on RHEL 8 and libcrypt1 on
+# Debian/Ubuntu; distributions with libcrypt.so.2 only (recent Fedora, Arch) need libxcrypt-compat.
 LINUX_SYSTEM_LIBRARIES = {'libc.so.6', 'libm.so.6', 'libpthread.so.0', 'libdl.so.2', 'librt.so.1', 'libcrypt.so.1',
                           'ld-linux-x86-64.so.2', 'ld-linux-aarch64.so.1'}
 NEWER_OBJECT = re.compile(r'built for newer .{0,12}macOS.{0,12} version', re.IGNORECASE)

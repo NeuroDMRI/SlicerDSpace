@@ -566,8 +566,50 @@ def environment_detail_lines(result: Any) -> list[str]:
     return lines
 
 
-def environment_item_text(item: Any) -> str:
-    """Build the multi-line text for one missing dependency item."""
+def os_blocked_without_remedy(item: Any) -> bool:
+    """b2-os: the surface runtime row of an OS that cannot run it, where no download can help (remedy 'none')."""
+    if str(getattr(item, "key", "") or "") != "surface_postprocess_runtime":
+        return False
+    details = getattr(item, "details", None) or {}
+    if details.get("state") == "os_blocked":
+        return details.get("remedy", "none") != "download"
+    return bool(details.get("macos_blocked")) and "remedy" not in details  # a record from an older inspector
+
+
+def os_blocked_statuses(result: Any) -> tuple[Any, ...]:
+    """b2-os: rows that no setup step can fix on this OS: the OS-blocked surface runtime (remedy 'none') and, with it,
+    the FreeSurfer licence row of the same step (a licence cannot make the runtime run)."""
+    statuses = tuple(getattr(result, "statuses", ()) or ())
+    if not any(os_blocked_without_remedy(item) for item in statuses):
+        return ()
+    return tuple(item for item in statuses if os_blocked_without_remedy(item)
+                 or str(getattr(item, "key", "") or "") == "surface_postprocess_license")
+
+
+def readiness_blocker_count(result: Any) -> int:
+    """b2-os: ``result.blocker_count`` without the rows that no setup step can fix (the Run skips that step)."""
+    count = int(getattr(result, "blocker_count", 0) or 0)
+    skipped = sum(1 for item in os_blocked_statuses(result)
+                  if getattr(item, "required", False) and getattr(item, "status", "") == "missing")
+    return max(0, count - skipped)
+
+
+def _item_reason_and_hint(item: Any, zh: bool) -> tuple[str, str]:
+    details = getattr(item, "details", None) or {}
+    reason = details.get("notes") or ""
+    hint = getattr(item, "install_hint", "") or ""
+    if zh:
+        reason = details.get("notes_zh") or reason
+        hint = details.get("install_hint_zh") or hint
+    return reason, hint
+
+
+def environment_item_text(item: Any, zh: bool = False) -> str:
+    """Build the multi-line text for one missing dependency item.
+
+    b2-os, decision 4: "Suggested fix" only when the hint is not empty and differs from the reason. ``zh`` uses the
+    Chinese reason and hint where the row has them.
+    """
 
     required = "required" if item.required else "optional"
     targets = ", ".join(item.targets) if item.targets else "none"
@@ -600,10 +642,11 @@ def environment_item_text(item: Any) -> str:
         lines.append(f"Environment variable(s): {env_names}")
     elif item.kind == "device":
         lines.append(f"Requested device: {details.get('requested_device') or ''}")
-    elif item.kind == "setting":
-        lines.append(details.get("notes") or "Provide the required setting before running.")
-    if item.install_hint:
-        lines.append(f"Suggested fix: {item.install_hint}")
+    reason, hint = _item_reason_and_hint(item, zh)
+    if item.kind == "setting":
+        lines.append(reason or "Provide the required setting before running.")
+    if hint.strip() and hint.strip() != reason.strip():
+        lines.append(("建议操作：" if zh else "Suggested fix: ") + hint)
     checked_locations = details.get("checked_locations") or []
     if checked_locations:
         preview = ", ".join(checked_locations[:3])
@@ -613,9 +656,11 @@ def environment_item_text(item: Any) -> str:
     return "\n".join(line for line in lines if line)
 
 
-def environment_item_button_text(item: Any) -> str:
+def environment_item_button_text(item: Any, zh: bool = False) -> str:
     """Return the action button text for a missing dependency row."""
 
+    if os_blocked_without_remedy(item):  # b2-os, decision 5: opens the FreeSurfer home chooser
+        return "选择 FreeSurfer 文件夹" if zh else "Choose FreeSurfer folder"
     if item.kind == "python":
         return "Install" if (item.details or {}).get("package") else "Setup"
     if getattr(item, "install_group", "") == "model-resources":
@@ -629,9 +674,14 @@ def environment_item_button_text(item: Any) -> str:
     return "Setup"
 
 
-def environment_item_button_tooltip(item: Any) -> str:
+def environment_item_button_tooltip(item: Any, zh: bool = False) -> str:
     """Return the action button tooltip for a missing dependency row."""
 
+    if os_blocked_without_remedy(item):
+        if zh:
+            return "选择一个兼容的 FreeSurfer 安装文件夹（设置“FreeSurfer 主目录（可选）”）；表面后处理随后使用它。"
+        return ("Choose the folder of a compatible FreeSurfer installation (the setting FreeSurfer home (optional)); "
+                "Surface postprocess then uses it.")
     if item.kind == "python":
         if (item.details or {}).get("package"):
             return item.install_hint or "Install this package into the selected Slicer Python environment."

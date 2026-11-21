@@ -2247,6 +2247,35 @@ def _numpy_below_floor(version: Optional[str], floor: str) -> bool:
         return False
 
 
+def _reason_and_fix(message: str) -> tuple[str, str]:
+    """b2-os, decision 4: split "<reason>; <action>" into a reason sentence and a fix sentence (fix "" without one)."""
+    reason, sep, action = (message or "").rpartition("; ")
+    if not sep or not reason.strip() or not action.strip():
+        return message, ""
+    action = action.strip().rstrip(".")
+    return reason.strip().rstrip(".") + ".", action[:1].upper() + action[1:] + "."
+
+
+def _surface_runtime_hint(surface: dict[str, Any]) -> str:
+    """b2-os, decisions 3 and 4: the fix of the surface runtime row; never the reason again.
+
+    An OS-blocked runtime gives the hint of its state (upgrade, FreeSurfer home, untick; or the download). A record
+    from an older inspector with ``macos_blocked`` and no hint is treated as remedy 'none'.
+    """
+    if surface.get('components_available'):
+        return ''
+    if surface.get('install_hint'):
+        return str(surface['install_hint'])
+    if surface.get('macos_blocked'):
+        import re
+        from shared.surface_runtime import os_block_texts
+        found = re.search(r'macOS ([0-9.]+) or later \(this Mac: ([0-9.]+)\)', str(surface.get('notes') or ''))
+        return os_block_texts(*found.groups())['hint'] if found else ''
+    return ('Use Environment > Prepare for qualified precompiled components, or configure an existing runtime. If its '
+            'archive is not yet published, import the verified offline bundle. Source compilation is an expert CLI '
+            'opt-in; Check never installs.')
+
+
 def _runtime_compatibility_statuses(
     specs: Iterable[DependencySpec],
     statuses: Iterable[DependencyStatus],
@@ -2259,11 +2288,12 @@ def _runtime_compatibility_statuses(
 
     problem = activation_problem()
     if problem and python_targets:
+        reason, fix = _reason_and_fix(problem)  # b2-os: the row text shows the reason once and the action once
         rows.append(DependencyStatus(
             key="bundled_python_activation", kind="setting", label="Bundled Python packages",
             status="missing", required=True, targets=python_targets,
-            details={"notes": problem, "error": problem, "detected_source": "bundle compatibility check"},
-            install_hint=problem, install_group="slicerdspace-package",
+            details={"notes": reason, "error": problem, "detected_source": "bundle compatibility check"},
+            install_hint=fix, install_group="slicerdspace-package",
         ))
     available_torch = {item.key for item in statuses if item.kind == "python" and item.status == "available"}
     torch_specs = [spec for spec in specs if spec.kind == "python" and spec.python_import == "torch"
@@ -2276,25 +2306,26 @@ def _runtime_compatibility_statuses(
         probe = torch_numpy_abi_probe(python_executable, entries)
         if probe.get("abi_mismatch"):
             numpy_version = probe.get("numpy_version") or "unknown"
-            message = (f"PyTorch cannot exchange arrays with NumPy {numpy_version} in this Slicer; "
-                       "reinstall the SlicerDSpace package for this Slicer")
+            message = f"PyTorch cannot exchange arrays with NumPy {numpy_version} in this Slicer."
             rows.append(DependencyStatus(
                 key="torch_numpy_abi", kind="setting", label="PyTorch and NumPy compatibility",
                 status="missing", required=True, targets=targets,
                 details={"notes": message, "error": probe.get("error"), "numpy_version": numpy_version,
                          "torch_version": probe.get("torch_version"), "detected_source": "torch.from_numpy probe"},
-                install_hint=message, install_group="slicerdspace-package",
+                install_hint="Reinstall the SlicerDSpace package for this Slicer.",
+                install_group="slicerdspace-package",
             ))
         floor = _bundle_runtime_numpy_floor()
         if floor and _numpy_below_floor(probe.get("numpy_version"), floor):
             message = (f"Slicer's NumPy {probe['numpy_version']} is older than the NumPy {floor} that the bundled "
-                       "packages need; use a Slicer release that ships NumPy " + floor + " or newer")
+                       "packages need.")
             rows.append(DependencyStatus(
                 key="slicer_numpy_floor", kind="setting", label="Slicer NumPy version",
                 status="missing", required=True, targets=targets,
                 details={"notes": message, "numpy_version": probe["numpy_version"], "numpy_minimum": floor,
                          "detected_source": "python-runtime.json"},
-                install_hint=message, install_group="slicerdspace-package",
+                install_hint=f"Use a Slicer release that ships NumPy {floor} or newer.",
+                install_group="slicerdspace-package",
             ))
     return tuple(rows)
 
@@ -2356,17 +2387,18 @@ def _linux_glibc_floor_statuses(
         source = source or "unavailable (no glibc version could be read)"
     below = found is not None and tuple(found) < LINUX_GLIBC_FLOOR
     found_text = ".".join(str(part) for part in found) if found else "unknown"
-    message = ""
+    message = fix = ""
     if below:
         message = (f"This Linux has glibc {found_text}; the bundled MRtrix mrcrop and the FreeSurfer surface tools of the "
-                   f"surface runtime need glibc {LINUX_GLIBC_FLOOR_TEXT} or newer and will fail. Other steps, such as DTI, still run. "
-                   f"Supported systems: {LINUX_GLIBC_SUPPORTED_SYSTEMS}.")
+                   f"surface runtime need glibc {LINUX_GLIBC_FLOOR_TEXT} or newer and will fail. Other steps, such as DTI, still run.")
+        fix = (f"Use a Linux with glibc {LINUX_GLIBC_FLOOR_TEXT} or newer. "
+               f"Supported systems: {LINUX_GLIBC_SUPPORTED_SYSTEMS}.")
     return (DependencyStatus(
         key="linux_glibc_floor", kind="setting", label="Linux glibc version",
         status="missing" if below else "available", required=False, targets=targets,
         details={"notes": message, "glibc_version": found_text, "glibc_minimum": LINUX_GLIBC_FLOOR_TEXT,
                  "affected": list(LINUX_GLIBC_AFFECTED), "detected_source": source},
-        install_hint=message, install_group="",
+        install_hint=fix, install_group="",
     ),)
 
 
@@ -2976,8 +3008,7 @@ def run_environment_doctor(config: EnvironmentDoctorConfig, *, _probe_cache=None
             DependencyStatus(key='surface_postprocess_runtime', kind='setting', label='Surface postprocessing components',
                 status='available' if surface['components_available'] else 'missing', required=True,
                 targets=('surface_postprocess',), details=surface, install_group='surface-runtime',
-                install_hint=(surface['notes'] if surface.get('macos_blocked') else
-                              'Use Environment > Prepare for qualified precompiled components, or configure an existing runtime. If its archive is not yet published, import the verified offline bundle. Source compilation is an expert CLI opt-in; Check never installs.')),
+                install_hint=_surface_runtime_hint(surface)),
             DependencyStatus(key='surface_postprocess_license', kind='setting', label='Personal FreeSurfer activation',
                 status='available' if surface['license_available'] else 'missing', required=True,
                 targets=('surface_postprocess',), details={'notes': 'Set the activation file or FS_LICENSE; it is not downloaded or included in the runtime.'},

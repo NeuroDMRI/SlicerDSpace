@@ -348,7 +348,7 @@ are distinct evidence.
   `scripts/setup_surface_runtime.py` defaults to prebuilt, with
   `--build-from-source` an expert opt-in, not an automatic failure fallback.
 - macOS (Intel and Apple Silicon) managed MRtrix3 3.0.8 is the official universal
-  tarball and FSL CPU tools come from conda; both need macOS **14.5+**. There is no
+  tarball (macOS **13.0+**) and FSL CPU tools come from conda (macOS **14.5+**). There is no
   CUDA eddy on macOS. The package/installer adaptation has plan tests, not
   real-Mac execution or native scientific acceptance. The PNL mask runs natively in
   Slicer's Python (experimental); no surface bundle is supplied for macOS. Plugin MPS is

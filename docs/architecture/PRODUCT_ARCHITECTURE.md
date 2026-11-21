@@ -75,8 +75,8 @@ declared; the tensor fit uses Teem in Slicer core), uses the
 PyTorch extension for framework installation, and feature-detects
 `slicer.packaging` for Python requirements. Dependency profiles, external worker
 paths and model hashes are implemented. [Managed setup](../setup/MANAGED_SETUP.md)
-now provisions selected MRtrix/FSL environments on Linux x86_64 and, with macOS 14.5 or later,
-MRtrix3 and FSL CPU tools on macOS; on Windows it lists the WSL 2 runtime in the same single
+now provisions selected MRtrix/FSL environments on Linux x86_64 and, on macOS, MRtrix3
+(macOS 13.0 or later) and FSL CPU tools (macOS 14.5 or later); on Windows it lists the WSL 2 runtime in the same single
 confirmation. It saves their paths automatically. Other external tools still use explicit configuration; this
 is **not** a certified one-click installation of every backend on every platform.
 

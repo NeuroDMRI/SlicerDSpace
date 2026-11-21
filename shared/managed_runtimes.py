@@ -34,6 +34,22 @@ MINIFORGE_BOOTSTRAP = "miniforge-26.7.2-0"
 FSL_TERMS_URL = "https://fsl.fmrib.ox.ac.uk/fsl/docs/license.html"
 # B4: on Darwin only these profiles have a qualified build, on both host architectures.
 DARWIN_PROFILES = frozenset({"mrtrix", "fsl_cpu"})
+# b2-os, decision 8: the lowest macOS of each managed macOS profile. MRtrix3 is the official universal tarball
+# (MRTRIX_TARBALL; Mach-O minimum 11.0 arm64 / 10.13 x86_64), so it gets the Slicer 5.10 floor 13.0. The 14.5 rule came
+# with the Intel conda package mrtrix3=3.0.8=hee5d243_0 (__osx >=14.5), which the macOS route no longer installs. FSL
+# keeps 14.5: its conda-forge closure and the Miniforge installer were not measured. Evidence: test_b2_os_block.py.
+DARWIN_MIN_MACOS = {"mrtrix": (13, 0), "fsl_cpu": (14, 5)}
+DARWIN_PROFILE_LABELS = {"mrtrix": "MRtrix3", "fsl_cpu": "FSL"}
+
+
+def darwin_min_macos(profiles):
+    """b2-os: the highest macOS floor of ``profiles`` on Darwin, as a (major, minor) tuple."""
+    return max((DARWIN_MIN_MACOS.get(name, (14, 5)) for name in profiles or ()), default=(13, 0))
+
+
+def _mac_version_tuple():
+    version = platform.mac_ver()[0]
+    return tuple(map(int, version.split('.')[:2])) if version else None
 # fsl-eddy 2602.0 build string per conda subdir (design fact sheet).
 FSL_EDDY_BUILD = {"linux-64": "hb35a746_0", "osx-64": "h7ffe42b_0", "osx-arm64": "hed4507f_0"}
 PROFILES = {
@@ -94,8 +110,8 @@ def supported_platform(system=None, machine=None, *, profiles=None):
     if system == 'Linux' and machine in {'x86_64', 'amd64'}:
         return True
     if system == 'Darwin' and machine in {'x86_64', 'amd64', 'arm64', 'aarch64'} and profiles and set(profiles) <= DARWIN_PROFILES:
-        version = platform.mac_ver()[0]
-        return (tuple(map(int, version.split('.')[:2])) >= (14, 5)) if version else platform.system() != 'Darwin'
+        version = _mac_version_tuple()
+        return (version >= darwin_min_macos(profiles)) if version else platform.system() != 'Darwin'
     return False
 
 
@@ -504,8 +520,13 @@ def provision(profiles, *, root=None, conda=None, accept_fsl_license=False, acce
     plan = install_plan(profiles, root)
     if not plan["platform_supported"]:
         raise RuntimeError("No qualified managed package for the selected platform/profile combination")
-    if platform.system() == 'Darwin' and platform.mac_ver()[0] and tuple(map(int, platform.mac_ver()[0].split('.')[:2])) < (14, 5):
-        raise RuntimeError('The qualified macOS packages (MRtrix3 and FSL) require macOS 14.5 or later')
+    current = _mac_version_tuple() if platform.system() == 'Darwin' else None
+    below = [name for name in profiles if current and current < DARWIN_MIN_MACOS.get(name, (14, 5))]
+    if below:
+        floor = darwin_min_macos(below)
+        names = ' and '.join(dict.fromkeys(DARWIN_PROFILE_LABELS.get(name, name) for name in below))
+        raise RuntimeError('The qualified macOS package for %s requires macOS %d.%d or later (this Mac: %d.%d)'
+                           % ((names,) + tuple(floor) + tuple(current)))
     if plan["fsl_license_required"] and not accept_fsl_license:
         raise PermissionError("Read and explicitly accept the FSL license before installing: " + FSL_TERMS_URL)
     if "pnl_cnn" in profiles and not accept_pnl_terms:

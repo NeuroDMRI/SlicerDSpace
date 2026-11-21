@@ -22,8 +22,9 @@ def build_environment_item_row(
     item: Any,
     *,
     on_install_item: Callable[[Any], None],
+    zh: bool = False,
 ):
-    """Build one missing-dependency row for the environment dialog."""
+    """Build one missing-dependency row for the environment dialog (``zh``: the Chinese reason, hint and button)."""
 
     import qt
 
@@ -34,7 +35,7 @@ def build_environment_item_row(
     layout.setContentsMargins(14, 12, 14, 12)
     layout.setSpacing(14)
 
-    text = qt.QLabel(environment_item_text(item))
+    text = qt.QLabel(environment_item_text(item, zh=zh))
     text.setObjectName("environmentItemText")
     text.wordWrap = True
     try:
@@ -43,9 +44,9 @@ def build_environment_item_row(
         pass
     layout.addWidget(text, 1)
 
-    button = qt.QPushButton(environment_item_button_text(item))
+    button = qt.QPushButton(environment_item_button_text(item, zh=zh))
     button.setObjectName("environmentItemActionButton")
-    button.toolTip = environment_item_button_tooltip(item)
+    button.toolTip = environment_item_button_tooltip(item, zh=zh)
     button.connect("clicked()", lambda: on_install_item(item))
     layout.addWidget(button)
     return frame
@@ -132,7 +133,9 @@ def show_environment_results_dialog(
         scroll_widget = qt.QWidget()
         scroll_layout = qt.QVBoxLayout(scroll_widget)
         for item in state.missing_items:
-            scroll_layout.addWidget(build_environment_item_row(item, on_install_item=on_install_item))
+            scroll_layout.addWidget(build_environment_item_row(
+                item, on_install_item=on_install_item,
+                zh=str(getattr(owner, "_onboardingLanguage", "en") or "en").startswith("zh")))
         scroll_layout.addStretch(1)
         scroll.setWidget(scroll_widget)
         layout.addWidget(scroll)

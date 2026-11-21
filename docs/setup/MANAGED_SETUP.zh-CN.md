@@ -91,8 +91,8 @@ PNL 模型/模板、TractCloud 推理参考和 WMA ORG 图谱使用统一资源�
 
 | 工具 | 自动配置范围 |
 | --- | --- |
-| MRtrix3 3.0.8 | Windows x64 与 Linux x86_64：已随 `v0.1.1` 统一安装包内置（`bundled-runtimes/mrtrix-3.0.8-*`，68 个命令，支持 `tree_sha256` 损坏自动修复）或使用官方预编译包。macOS（Intel 和 Apple Silicon，macOS 14.5 或更高）：官方通用 tarball 候选，全流程科学验收待完成 |
-| FSL eddy 2602.0 / topup 2203.5 | Windows x64（`topup.exe`、`applytopup.exe`、`eddy_cpu.exe`）与 Linux x86_64：已随 `v0.1.1` 统一安装包内置（`bundled-runtimes/fsl-2602.0-*`，支持 `tree_sha256` 自动修复）或从官方 FSL 源安装（需确认许可）。macOS Intel 和 Apple Silicon（仅 CPU eddy）：官方 FSL 源候选 |
+| MRtrix3 3.0.8 | Windows x64 与 Linux x86_64：已随 `v0.1.1` 统一安装包内置（`bundled-runtimes/mrtrix-3.0.8-*`，68 个命令，支持 `tree_sha256` 损坏自动修复）或使用官方预编译包。macOS（Intel 和 Apple Silicon，macOS 13.0 或更高）：官方通用 tarball 候选，全流程科学验收待完成 |
+| FSL eddy 2602.0 / topup 2203.5 | Windows x64（`topup.exe`、`applytopup.exe`、`eddy_cpu.exe`）与 Linux x86_64：已随 `v0.1.1` 统一安装包内置（`bundled-runtimes/fsl-2602.0-*`，支持 `tree_sha256` 自动修复）或从官方 FSL 源安装（需确认许可）。macOS Intel 和 Apple Silicon（macOS 14.5 或更高；仅 CPU eddy）：官方 FSL 源候选 |
 | CUDA eddy 2602.0 | 可选 Linux FSL profile（或 Windows 下带 NVIDIA GPU 的可选 WSL 2），需要 NVIDIA 驱动，不要求安装完整 CUDA Toolkit |
 | DDSurfer / DDSeg / DDParcel 资源 | 按需后台下载，按所选产品获取并使用默认缓存目录（核对 `SHA-256`） |
 | Python 科学计算包 | 所选解释器、核心版本约束、可用时使用原生 packaging API；官方 PyTorch 辅助器 |

@@ -401,6 +401,15 @@ def selected_setup_plan(owner, result, *, repair=False):
     return plan
 
 
+def setup_plan_pending_actions(plan) -> bool:
+    """True when the plan has work (or items that need the confirm dialog). ``os_blocked_items`` are not work (b2-os)."""
+    # S-B1: the Windows ps1 step is pending work too; without it the dialog (and the licence acceptance) was skipped.
+    return bool((plan.get('windows_runtime') or {}).get('command')) or bool(plan.get('surface_build_required', False)) \
+        or bool(plan.get('surface_prebuilt_required', False)) or any(plan.get(key) for key in (
+            "extensions", "restart_extensions", "python_packages", "asset_profiles", "optional_asset_profiles",
+            "managed_profiles", "native_bundles", "unsupported_profiles", "manual_items", "backend_profiles"))
+
+
 def prepare_selected_environment(owner, result=None, *, repair=False, skip_confirm=False, auto_run_after=False):
     import slicer
     from shared.selected_setup import complete_step
@@ -431,10 +440,7 @@ def prepare_selected_environment(owner, result=None, *, repair=False, skip_confi
     manager = slicer.app.extensionsManagerModel()
     config = owner._environment_dependency_path_kwargs()
     plan = selected_setup_plan(owner, result, repair=repair)
-    # S-B1: the Windows ps1 step is pending work too; without it the dialog (and the licence acceptance) was skipped.
-    pending_actions = bool((plan.get('windows_runtime') or {}).get('command')) or plan.get('surface_build_required', False) or plan.get('surface_prebuilt_required', False) or any(plan.get(key) for key in (
-        "extensions", "restart_extensions", "python_packages", "asset_profiles", "optional_asset_profiles",
-        "managed_profiles", "native_bundles", "unsupported_profiles", "manual_items", "backend_profiles"))
+    pending_actions = setup_plan_pending_actions(plan)
     needs_confirm = not skip_confirm
     if skip_confirm and pending_actions:
         from shared.setup_components import pending_licences, plan_components, required_licences
@@ -600,14 +606,21 @@ def prepare_selected_environment(owner, result=None, *, repair=False, skip_confi
     def record_readiness(current, warnings=()):
         owner._latestEnvironmentReportDir = folder
         pending = bool(getattr(owner, "_setupRestartRequired", False))
-        state = "restart_required" if pending else "ready" if current and current.blocker_count == 0 else "blocked"
+        # b2-os: rows that no setup step can fix on this OS (the Run skips that step) do not keep the setup "blocked".
+        from shared.ui_environment_panel import os_blocked_statuses, readiness_blocker_count
+        blockers = readiness_blocker_count(current) if current else None
+        if current and blockers == 0:
+            warnings = tuple(warnings) + tuple(
+                f"{item.label}: {(item.details or {}).get('notes')}" for item in os_blocked_statuses(current)
+                if item.key == "surface_postprocess_runtime")
+        state = "restart_required" if pending else "ready" if current and blockers == 0 else "blocked"
         if state == "ready":
             from shared.setup_resume import complete_setup, refresh_setup_button
             complete_setup(folder.name)
             if pending_before:
                 complete_setup(pending_before['request'])
             refresh_setup_button(owner)
-        record = {"status": state, "blockers": current.blocker_count if current else None,
+        record = {"status": state, "blockers": blockers,
                   "scope": "Environment readiness only; not scientific QC"}
         if warnings:
             record["warnings"] = list(warnings)
@@ -625,7 +638,7 @@ def prepare_selected_environment(owner, result=None, *, repair=False, skip_confi
             "请重启 Slicer 后再运行分析。" if pending else "自动准备已结束，仍有依赖需要处理。"))
         if current and state == "blocked":
             owner._show_environment_results_dialog(current)
-        if auto_run_after and state == "ready" and current is not None and current.blocker_count == 0 and not pending:
+        if auto_run_after and state == "ready" and current is not None and blockers == 0 and not pending:
             _schedule_auto_run(owner)
 
     ZH_TITLES = {"backend_sources": "准备算法源码", "python_packages": "安装 Python 依赖", "model_assets": "下载并校验模型资源",

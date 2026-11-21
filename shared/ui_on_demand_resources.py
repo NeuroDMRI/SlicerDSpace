@@ -136,68 +136,27 @@ def _wma_atlas_ready(roots: tuple[Path, ...], atlas_family: str, explicit_wma_di
     return False
 
 
-def _macos_blocked(path: Path) -> bool:
-    """G-H2: True when ``path`` is a valid native surface runtime that this macOS cannot load."""
+def _surface_runtime_state(explicit_fs_home: str | None = None, asset_root: str | None = None) -> dict[str, Any]:
+    """b2-os: the structured state (ready / missing / os_blocked and the remedy) of the runtime the run would use.
+
+    An explicit path that is a folder is kept, as the run keeps it (R3-3). It is ready only with a valid
+    ``runtime.json`` or FreeSurfer's ``build-stamp.txt`` (decision 7), and never when it needs a newer macOS (G-H2).
+    """
+    from shared.surface_runtime import surface_runtime_state
+
+    explicit = None
+    if explicit_fs_home:
+        candidate = Path(explicit_fs_home).expanduser()
+        explicit = candidate if candidate.is_dir() else None
     try:
-        from shared.surface_runtime import runtime_dir_macos_block
-
-        return bool(runtime_dir_macos_block(path))
+        return surface_runtime_state(freesurfer_home=explicit, asset_root=asset_root)
     except Exception:
-        return False
-
-
-def _explicit_runtime_block(explicit_fs_home: str | None) -> str | None:
-    """R3-3: the macOS block message of an explicitly selected runtime directory, else None."""
-    if not explicit_fs_home:
-        return None
-    try:
-        from shared.surface_runtime import runtime_dir_macos_block
-
-        explicit = Path(explicit_fs_home).expanduser()
-        return runtime_dir_macos_block(explicit) if explicit.is_dir() else None
-    except Exception:
-        return None
+        return {"state": "missing", "remedy": "none", "download_bytes": 0, "reason": "", "macos_required": "",
+                "macos_current": ""}
 
 
 def _surface_runtime_ready(explicit_fs_home: str | None = None) -> bool:
-    # G-H2: a runtime whose binaries need a newer macOS than this Mac runs is never ready, also when its path is
-    # given explicitly (the saved ``postprocess_runtime`` path reaches here as ``explicit_fs_home``).
-    if explicit_fs_home:
-        explicit = Path(explicit_fs_home).expanduser()
-        if explicit.is_dir():
-            # R3-3: the run keeps an explicit selection (resolve_surface_runtime), so a blocked explicit runtime is not
-            # ready even when another installed runtime would load.
-            return not _macos_blocked(explicit)
-    try:
-        from shared.native_runtimes import bundled_runtime_roots
-
-        for bundle_root in bundled_runtime_roots():
-            for child in bundle_root.glob("surface-runtime-*"):
-                if (child / "runtime.json").is_file() and not _macos_blocked(child):
-                    return True
-    except Exception:
-        pass
-    try:
-        from shared.surface_runtime import (
-            bundled_surface_runtime,
-            default_surface_runtime,
-            is_valid_surface_runtime_dir,
-            resolve_surface_runtime,
-        )
-
-        if bundled_surface_runtime() is not None:
-            return True
-        prefix = default_surface_runtime()
-        if ((prefix / "runtime.json").is_file() or is_valid_surface_runtime_dir(prefix)) and not _macos_blocked(prefix):
-            return True
-        backend, home = resolve_surface_runtime(freesurfer_home=explicit_fs_home or None)
-        if backend == "native" and is_valid_surface_runtime_dir(home) and not _macos_blocked(home):
-            return True
-        if backend == "freesurfer" and (home / "build-stamp.txt").is_file():
-            return True
-    except Exception:
-        pass
-    return False
+    return _surface_runtime_state(explicit_fs_home)["state"] == "ready"
 
 
 def detect_missing_task_resources(
@@ -291,22 +250,18 @@ def detect_missing_task_resources(
             or backend_paths.get("postprocess_runtime")
             or backend_paths.get("freesurfer_home")
         )
-        runtime_ok = _surface_runtime_ready(fs_candidate)
-        if not atlas_ok or not runtime_ok:
-            size = (sum(ext_sizes.get(p, 0) for p in atlas_paths) if not atlas_ok else 0) + (
-                40_000_000 if not runtime_ok else 0
-            )
-            reason = None
-            if not runtime_ok:
-                reason = _explicit_runtime_block(fs_candidate)
-                if not reason:
-                    try:
-                        from shared.surface_runtime import surface_runtime_macos_block
-
-                        reason = surface_runtime_macos_block()  # G-H2: why the bundled runtime is not ready on this Mac
-                    except Exception:
-                        reason = None
-            add_item("surface_postprocess", size or _DEFAULT_PACK_SIZES_BYTES["surface_postprocess"], "surface", reason)
+        runtime = _surface_runtime_state(fs_candidate, explicit_root)
+        runtime_ok = runtime["state"] == "ready"
+        # b2-os, decision 2: a runtime that a download cannot fix (remedy 'none', for example a Mac below the catalog's
+        # min_macos) gives no item: no size, no "Download and Install". The environment check and the Run skip say why.
+        if runtime_ok or runtime["remedy"] == "download":
+            if not atlas_ok or not runtime_ok:
+                size = (sum(ext_sizes.get(p, 0) for p in atlas_paths) if not atlas_ok else 0) + (
+                    int(runtime["download_bytes"]) if not runtime_ok else 0
+                )
+                reason = runtime.get("reason") or None if not runtime_ok else None
+                add_item("surface_postprocess", size or _DEFAULT_PACK_SIZES_BYTES["surface_postprocess"], "surface",
+                         reason)
 
     # 2. Automatic PNL brain mask
     needs_mask = bool(

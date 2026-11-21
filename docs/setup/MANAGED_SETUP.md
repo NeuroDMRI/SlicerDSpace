@@ -121,7 +121,7 @@ them by hand after a successful run.
 
 | Component | Managed path |
 | --- | --- |
-| MRtrix3 3.0.8 | Windows x64 & Linux x86_64: bundled natively in the unified `v0.1.1` release archive (`bundled-runtimes/mrtrix-3.0.8-*`, 68 commands, `tree_sha256` auto-repair) or installed via prebuilt packages. macOS (Intel and Apple Silicon, macOS 14.5 or later): official universal tarball, SHA-256 verified, unpacked into the runtimes folder (full scientific acceptance pending) |
+| MRtrix3 3.0.8 | Windows x64 & Linux x86_64: bundled natively in the unified `v0.1.1` release archive (`bundled-runtimes/mrtrix-3.0.8-*`, 68 commands, `tree_sha256` auto-repair) or installed via prebuilt packages. macOS (Intel and Apple Silicon, macOS 13.0 or later): official universal tarball, SHA-256 verified, unpacked into the runtimes folder (full scientific acceptance pending) |
 | FSL eddy 2602.0 / topup 2203.5 | Windows x64 (`topup.exe`, `applytopup.exe`, `eddy_cpu.exe`) & Linux x86_64: bundled natively in the unified `v0.1.1` release archive (`bundled-runtimes/fsl-2602.0-*`, `tree_sha256` auto-repair) or installed from official FSL channel with explicit license approval. macOS Intel and Apple Silicon (macOS 14.5 or later; CPU eddy only): official FSL channel candidate |
 | CUDA eddy 2602.0 | Optional Linux FSL profile (or optional WSL 2 with NVIDIA GPU on Windows); NVIDIA driver required; no full CUDA Toolkit installation |
 | DDSurfer / DDSeg / DDParcel assets | On-demand background download with profile-specific selection and default directory (`SHA-256` verified) |

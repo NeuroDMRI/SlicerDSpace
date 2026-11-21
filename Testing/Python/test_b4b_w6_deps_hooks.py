@@ -269,8 +269,9 @@ class D4TorchNumpyProbeTests(unittest.TestCase):
         self.assertEqual(row.status, "missing")
         self.assertTrue(row.required)
         self.assertEqual(row.targets, ("segmentation",))
-        self.assertEqual(row.install_hint, "PyTorch cannot exchange arrays with NumPy 2.4.6 in this Slicer; "
-                                           "reinstall the SlicerDSpace package for this Slicer")
+        # b2-os, decision 4: the reason and the fix are two sentences, so the row does not repeat the reason.
+        self.assertEqual(row.details["notes"], "PyTorch cannot exchange arrays with NumPy 2.4.6 in this Slicer.")
+        self.assertEqual(row.install_hint, "Reinstall the SlicerDSpace package for this Slicer.")
 
     def test_d4_doctor_adds_no_row_when_torch_and_numpy_agree(self) -> None:
         specs, statuses = self._statuses_for_torch()
@@ -297,7 +298,8 @@ class D4TorchNumpyProbeTests(unittest.TestCase):
             rows = self.env._runtime_compatibility_statuses(specs, statuses)
         row = next(item for item in rows if item.key == "slicer_numpy_floor")
         self.assertTrue(row.required)
-        self.assertIn("1.26.4", row.install_hint)
+        self.assertIn("1.26.4", row.details["notes"])  # b2-os: the reason holds the found version, the fix the floor
+        self.assertIn("2.0.2", row.details["notes"])
         self.assertIn("2.0.2", row.install_hint)
 
     def test_d8_floor_is_read_from_python_runtime_json_and_skipped_when_absent(self) -> None:
@@ -328,7 +330,10 @@ class D4TorchNumpyProbeTests(unittest.TestCase):
             rows = self.env._runtime_compatibility_statuses(specs, ())
         row = next(item for item in rows if item.key == "bundled_python_activation")
         self.assertEqual((row.status, row.required), ("missing", True))
-        self.assertEqual(row.install_hint, reason)
+        # b2-os, decision 4: reason and fix are split at the last "; ".
+        self.assertEqual(row.details["notes"], "bundled Python stack is for Python 3.99 x86_64.")
+        self.assertEqual(row.install_hint, "Install the SlicerDSpace package built for this Slicer.")
+        self.assertEqual(row.details["error"], reason)
         self.assertEqual(row.targets, ("segmentation",))
 
     def test_f3_hook_is_silent_without_a_problem(self) -> None:

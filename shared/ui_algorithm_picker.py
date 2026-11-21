@@ -805,7 +805,10 @@ def install_algorithm_pickers(owner):
 
     checkbox = getattr(owner.ui, "targetSurfacePostprocessCheckBox", None)
     if checkbox is not None:
+        labels_before = len(owner._productLabelButtons)
         make_label_clickable(2, checkbox)
+        if len(owner._productLabelButtons) > labels_before:  # b2-os: ui_compact greys this label on an OS block
+            owner._surfacePostprocessLabel = owner._productLabelButtons[-1][0]
         form.takeAt(form.indexOf(checkbox))
         checkbox.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Fixed)
         checkbox.setMinimumWidth(0)

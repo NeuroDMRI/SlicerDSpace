@@ -588,7 +588,8 @@ class G4SurfaceRuntimeTest(BundleEnv, unittest.TestCase):
                 self.assertEqual(record["notes"], expected)
                 self.assertEqual(record["error"], expected)
 
-    def test_g4_environment_check_shows_the_message_as_the_fix_and_the_plan_keeps_it(self):
+    def test_g4_environment_check_shows_the_message_and_a_real_fix_and_the_plan_keeps_it(self):
+        """b2-os, decisions 2-4: the fix is the action text, not the message again; no manual item forces a dialog."""
         from shared.environment import EnvironmentDoctorConfig, run_environment_doctor
         from shared.selected_setup import build_setup_plan
         message = "The bundled surface runtime needs macOS 15.0 or later (this Mac: 14.2)"
@@ -599,10 +600,13 @@ class G4SurfaceRuntimeTest(BundleEnv, unittest.TestCase):
             result = run_environment_doctor(EnvironmentDoctorConfig(targets=("surface_postprocess",), repo_root=REPO_ROOT))
         status = {item.key: item for item in result.statuses}["surface_postprocess_runtime"]
         self.assertEqual(status.status, "missing")
-        self.assertEqual(status.install_hint, message)
+        self.assertEqual(status.details["notes"], message)
+        self.assertIn("upgrade macOS to 15.0 or later", status.install_hint)
+        self.assertNotEqual(status.install_hint, message)
         plan = build_setup_plan(result, system="Darwin", machine="arm64")
-        hints = {item["key"]: item["hint"] for item in plan["manual_items"]}
-        self.assertEqual(hints.get("surface_postprocess_runtime"), message)
+        self.assertNotIn("surface_postprocess_runtime", [item["key"] for item in plan["manual_items"]])
+        reasons = {item["key"]: item["reason"] for item in plan["os_blocked_items"]}
+        self.assertEqual(reasons.get("surface_postprocess_runtime"), message)
 
 
 class PythonSyntaxTest(unittest.TestCase):

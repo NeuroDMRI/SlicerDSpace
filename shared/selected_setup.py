@@ -62,7 +62,7 @@ def fsl_preprocessing_offered(system=None, machine=None):
 
     Windows: True (WSL route). Linux x86_64: the managed rule. macOS: True when a bundled FSL and a bundled MRtrix3
     runtime for the host exist and the running macOS is at least the highest minimum of the two (read from the
-    binaries). Otherwise, and when a minimum cannot be read, the managed rule decides (macOS 14.5 or later).
+    binaries). Otherwise, and when a minimum cannot be read, the managed rule decides (managed FSL: macOS 14.5 or later).
     """
     import platform
     system = system or platform.system()
@@ -88,9 +88,21 @@ def fsl_unavailable_text(system=None, machine=None, zh=False):
     if current is None:
         return base
     found, required = _bundled_fsl_requirement(system, machine)
-    managed = (14, 5, 0)  # the managed (conda) install route needs this; the bundle route may need less
-    required = min(required, managed) if found and required is not None else managed
-    have, need = format_version(current), format_version(required)
+    from shared.managed_runtimes import DARWIN_MIN_MACOS
+    managed = tuple(DARWIN_MIN_MACOS["fsl_cpu"]) + (0,)  # the managed (conda) FSL route; the bundle route may need less
+    have = format_version(current)
+    if not found:
+        # b2-os, decision 8: the true cause is the missing bundle; the version floor is only the managed route's.
+        from shared.native_runtimes import host_platform, installed_bundle_bin_dirs
+        sys_name, arch = host_platform(system, machine)
+        tool = "FSL" if not installed_bundle_bin_dirs("fsl", system=sys_name, machine=arch) else "MRtrix3"
+        if zh:
+            return "%s（本机 macOS %s；未安装随包的 %s，受管安装的 FSL 需要 macOS %s 或更高）" % (
+                base, have, tool, format_version(managed))
+        return "%s This Mac: macOS %s; no bundled %s is installed, and the managed FSL install needs macOS %s or later." % (
+            base, have, tool, format_version(managed))
+    required = min(required, managed) if required is not None else managed
+    need = format_version(required)
     if zh:
         return "%s（本机 macOS %s，需要 macOS %s 或更高）" % (base, have, need)
     return "%s This Mac: macOS %s; FSL needs macOS %s or later." % (base, have, need)
@@ -330,6 +342,11 @@ def build_setup_plan(result, *, installed_extensions=(), loaded_extensions=None,
             handled_keys.add(item.key)
         if ('tractcloud' in source_profiles and item.key in {'tractcloud_root', 'tractcloud_root_path'}):
             handled_keys.add(item.key)
+    # b2-os, decision 2: rows that no setup step can fix on this OS (the OS-blocked surface runtime with remedy 'none',
+    # and the licence of that step) are not manual items: they would force the confirm dialog and leave pending.json.
+    from shared.ui_environment_panel import os_blocked_statuses
+    os_blocked = [item for item in os_blocked_statuses(result) if item in missing]
+    handled_keys.update(item.key for item in os_blocked)
     return {"kind": "slicerdsurfer_selected_setup_plan", "extensions": list(dict.fromkeys(
                 name for name in required_extensions if name not in installed)),
             "restart_extensions": list(dict.fromkeys(name for name in required_extensions
@@ -362,6 +379,9 @@ def build_setup_plan(result, *, installed_extensions=(), loaded_extensions=None,
                              for item in missing if item.install_group not in covered and item.key not in handled_keys]
                             + ([{"key": "wsl2_ubuntu", "label": WSL_MISSING_LABEL, "hint": WSL_INSTALL_COMMAND}]
                                if windows_runtime and windows_runtime["needed"] and not windows_runtime["distribution"] else []),
+            "os_blocked_items": [{"key": item.key, "label": item.label,
+                                  "reason": (item.details or {}).get("notes") or "", "hint": item.install_hint}
+                                 for item in os_blocked],
             "windows_runtime": windows_runtime,
             "fsl_license_required": any(name.startswith("fsl_") for name in supported_managed)
                                     or "fsl" in native_bundles

@@ -64,7 +64,7 @@ Linux NVIDIA 组件，与插件的 PyTorch 设备选择、脑掩膜设备选择�
 并检测可用的 `slicer.packaging` API 安装 Python 依赖。
 依赖配置、外部 worker 路径和模型哈希管理已经实现。
 [插件内自动配置](../setup/MANAGED_SETUP.zh-CN.md)现支持 Linux x86_64 的 MRtrix/FSL
-按需安装与路径自动保存；macOS 14.5 或更高时还可安装 MRtrix3 和 FSL CPU 工具；Windows 上 WSL 2 运行环境列入同一个确认对话框；其他外部工具仍需显式配置。
+按需安装与路径自动保存；macOS 上还可安装 MRtrix3（macOS 13.0 或更高）和 FSL CPU 工具（macOS 14.5 或更高）；Windows 上 WSL 2 运行环境列入同一个确认对话框；其他外部工具仍需显式配置。
 **尚未实现并验收所有后端的跨平台一键安装**。
 
 正式分发前还需要可选环境的干净安装验收、可信且固定版本的下载、必要的授权确认入口，

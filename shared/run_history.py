@@ -455,6 +455,147 @@ def _pick_preferred_manifest_record(
     return candidate if cand_rank > cur_rank else current
 
 
+CANCELLED_MANIFEST_SUFFIX = "_cancelled_orchestration_manifest.json"
+
+
+def _group_key(kind: str, manifest_path: Path) -> tuple[str, ...]:
+    """The slot of a run: a re-run, a resume or a cancel companion of the same run share it."""
+
+    path = Path(manifest_path)
+    if kind == "subject":
+        name = path.name
+        if name.endswith(CANCELLED_MANIFEST_SUFFIX):
+            base = name[: -len(CANCELLED_MANIFEST_SUFFIX)]
+        elif name.endswith(SUBJECT_MANIFEST_SUFFIX):
+            base = name[: -len(SUBJECT_MANIFEST_SUFFIX)]
+        else:
+            base = name
+        return ("subject", os.path.realpath(path.parent), base)
+    return ("batch", os.path.realpath(path))
+
+
+def run_manifest_key(manifest_path: Path | str, kind: str = "subject") -> str:
+    """The ``discover_runs`` slot of a manifest path as one string (the Results hide list key)."""
+
+    return "\t".join(_group_key(kind, Path(manifest_path)))
+
+
+def run_record_key(record: RunRecord) -> str:
+    """The ``discover_runs`` slot of a record as one string; not the manifest path, which a cancel switches."""
+
+    return run_manifest_key(record.manifest_path, record.kind)
+
+
+def hidden_stamp(record: RunRecord) -> Optional[float]:
+    """The record's own time as stored in the hide list; None when the record has no time."""
+
+    return record.timestamp.timestamp() if record.timestamp is not None else None
+
+
+def _stamp_value(stamp: Optional[float]) -> float:
+    return float("-inf") if stamp is None else float(stamp)
+
+
+def split_hidden(records: Iterable[RunRecord], hidden: dict[str, Optional[float]]
+                 ) -> tuple[tuple[RunRecord, ...], tuple[RunRecord, ...]]:
+    """Split ``records`` into (shown, hidden), both in the given order.
+
+    A record is hidden while its slot is in ``hidden`` and its own stamp is not newer than the stored one, so a
+    later run, re-run, resume or cancel in the same slot shows again by itself.
+    """
+
+    shown: list[RunRecord] = []
+    gone: list[RunRecord] = []
+    for record in records:
+        key = run_record_key(record)
+        if key in hidden and _stamp_value(hidden_stamp(record)) <= _stamp_value(hidden[key]):
+            gone.append(record)
+        else:
+            shown.append(record)
+    return tuple(shown), tuple(gone)
+
+
+_OUTPUT_FOLDER_NAMES = frozenset({"output", "outputs"})
+
+
+def _workspace_of(output_root: Path) -> Path:
+    """The folder that holds ``outputs`` (and ``input``); an output root of another name is its own workspace."""
+
+    return output_root.parent if output_root.name.lower() in _OUTPUT_FOLDER_NAMES else output_root
+
+
+def subject_folder_from_roots(output_root: Any, subject_root: Any) -> Optional[Path]:
+    """The subject folder of a job from its roots (Results "Open folder" for a job without a manifest); None if unknown.
+
+    Pure: nothing is read from disk and nothing is resolved, so the same text gives the same path.
+    """
+
+    output_text = str(output_root).strip() if output_root is not None else ""
+    if output_text:
+        return _workspace_of(Path(output_text))
+    subject_text = str(subject_root).strip() if subject_root is not None else ""
+    return Path(subject_text) if subject_text else None
+
+
+def run_folder_path(record: RunRecord) -> Path:
+    """The folder of a run on disk, for Results "Open folder". Pure: the caller checks that it exists.
+
+    A subject run gives the folder that holds the subject's ``input/`` and ``outputs/``; a batch run gives its batch
+    output folder (the stored ``output_root`` when that folder exists, else the parent of ``00_batch_metadata``).
+    For a subject run the place of the manifest file wins over the stored ``output_root``, so a run folder that was
+    moved still opens; a manifest outside the usual layout falls back to ``output_root``, then to its own folder.
+    The only disk access is ``is_dir`` on a batch ``output_root``.
+    """
+
+    metadata = Path(record.manifest_path).parent
+    if record.is_batch:
+        # ``run_batch_pipeline`` writes the manifest to ``<output_base>/00_batch_metadata`` unless --manifest says
+        # otherwise, and stores ``output_root`` only when --output-root was given: a stored root that exists wins.
+        root = str(record.output_root or "").strip()
+        if root and Path(root).is_dir():
+            return Path(root)
+        return metadata.parent if metadata.name == BATCH_METADATA_DIR else (Path(root) if root else metadata)
+    if metadata.name == RUN_METADATA_DIR:
+        return _workspace_of(metadata.parent)
+    folder = subject_folder_from_roots(record.output_root, None)
+    return folder if folder is not None else metadata
+
+
+HIDDEN_RUNS_LIMIT = 500
+
+
+def parse_hidden_runs(value: Any) -> dict[str, Optional[float]]:
+    """Read the stored hide list (one JSON object string); anything broken reads as empty."""
+
+    if not isinstance(value, str) or not value.strip():
+        return {}
+    try:
+        payload = json.loads(value)
+    except ValueError:
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    hidden: dict[str, Optional[float]] = {}
+    for key, stamp in payload.items():
+        if not isinstance(key, str) or not key:
+            continue
+        if stamp is None:
+            hidden[key] = None
+        elif isinstance(stamp, (int, float)) and not isinstance(stamp, bool):
+            hidden[key] = float(stamp)
+    return hidden
+
+
+def dump_hidden_runs(hidden: dict[str, Optional[float]], *, limit: int = HIDDEN_RUNS_LIMIT) -> str:
+    """The hide list as one JSON string, capped at ``limit`` entries; the oldest stamps are dropped first."""
+
+    items = list(hidden.items())
+    if len(items) > limit:
+        keep = {key for key, _stamp in sorted(items, key=lambda item: _stamp_value(item[1]), reverse=True)[:limit]}
+        items = [item for item in items if item[0] in keep]
+    return json.dumps(dict(items))
+
+
 def discover_runs(
     roots: Iterable[Path | str],
     *,
@@ -475,18 +616,8 @@ def discover_runs(
             continue
         tasks = payload.get("tasks")
         task_count = len(tasks) if isinstance(tasks, dict) else 0
-        name = record.manifest_path.name
-        is_cancelled_companion = name.endswith("_cancelled_orchestration_manifest.json")
-        if record.kind == "subject":
-            if is_cancelled_companion:
-                base = name[: -len("_cancelled_orchestration_manifest.json")]
-            elif name.endswith(SUBJECT_MANIFEST_SUFFIX):
-                base = name[: -len(SUBJECT_MANIFEST_SUFFIX)]
-            else:
-                base = name
-            group_key: tuple[str, ...] = ("subject", os.path.realpath(record.manifest_path.parent), base)
-        else:
-            group_key = ("batch", os.path.realpath(record.manifest_path))
+        is_cancelled_companion = record.manifest_path.name.endswith(CANCELLED_MANIFEST_SUFFIX)
+        group_key = _group_key(record.kind, record.manifest_path)
         entry = (record, task_count, is_cancelled_companion)
         existing = grouped.get(group_key)
         grouped[group_key] = entry if existing is None else _pick_preferred_manifest_record(existing, entry)

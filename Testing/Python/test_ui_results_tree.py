@@ -48,6 +48,8 @@ class FakeItem:
         self._data: dict = {}
         self.expanded = False
         self.tooltip = ""
+        self.icons: dict = {}  # column -> icon (Batch 2: the Open folder button is the icon of column 1)
+        self.tooltips: dict = {}
         if isinstance(parent, FakeTree):
             parent.items.append(self)
         else:
@@ -71,10 +73,11 @@ class FakeItem:
     def setData(self, col, role, value) -> None: self._data[(col, role)] = value
     def data(self, col, role): return self._data.get((col, role))
     def setToolTip(self, col, tip) -> None:
+        self.tooltips[col] = tip
         if col == 0:
             self.tooltip = tip
 
-    def setIcon(self, *_a) -> None: pass
+    def setIcon(self, col, icon) -> None: self.icons[col] = icon
     def childCount(self): return len(self.children)
     def child(self, i): return self.children[i]
     def takeChildren(self):
@@ -218,6 +221,117 @@ class FakeLayout:
         return self.widgets.index(widget) if widget in self.widgets else -1
 
 
+class FakeSettings:
+    """QSettings stand-in; two harnesses that share one store act like a Slicer restart."""
+
+    def __init__(self, store: dict | None = None) -> None:
+        self.store = {} if store is None else store
+
+    def value(self, key, default=None):
+        return self.store.get(key, default)
+
+    def setValue(self, key, value) -> None:
+        self.store[key] = value
+
+
+class FakeAction:
+    def __init__(self, text) -> None:
+        self.text = text
+        self.enabled = True
+        self.toolTip = ""
+        self.slots: list = []
+
+    def connect(self, signal, slot) -> None:
+        self.slots.append((signal, slot))
+
+    def trigger(self) -> None:
+        for signal, slot in list(self.slots):
+            if signal == "triggered()":
+                slot()
+
+
+class FakeMenu:
+    """A QMenu that holds real actions; ``exec_`` asks the harness which action the user picks."""
+
+    def __init__(self, harness, *args) -> None:
+        self.harness = harness
+        self.ctor_args = args
+        self.actions: list[FakeAction] = []
+        self.slots: list = []
+
+    def addAction(self, text):
+        self.actions.append(FakeAction(text))
+        return self.actions[-1]
+
+    def addSeparator(self) -> None: pass
+    def setToolTipsVisible(self, *_a) -> None: pass
+    def clear(self) -> None: self.actions = []
+
+    def connect(self, signal, slot) -> None:
+        self.slots.append((signal, slot))
+
+    def open(self) -> list[FakeAction]:
+        """What a click on a menu button does: aboutToShow, then the actions are shown."""
+        for signal, slot in list(self.slots):
+            if signal == "aboutToShow()":
+                slot()
+        return self.actions
+
+    def exec_(self, *_a):
+        return self.harness.pick(self)
+
+
+class FakeNode:
+    """A displayable scene node with the few MRML calls the Results code uses."""
+
+    def __init__(self, name: str, class_name: str, *, shown: bool = True, hide_from_editors: bool = False,
+                 attributes: dict | None = None, displays: int = 1,
+                 display_class: str = "vtkMRMLModelDisplayNode") -> None:
+        self.name, self.class_name = name, class_name
+        self.hide_from_editors = hide_from_editors
+        self.attributes = dict(attributes or {})
+        self.displays = [FakeDisplay(shown, display_class) for _ in range(displays)]
+
+    def GetName(self): return self.name
+    def GetHideFromEditors(self): return 1 if self.hide_from_editors else 0
+    def GetAttribute(self, key): return self.attributes.get(key)
+    def GetNumberOfDisplayNodes(self): return len(self.displays)
+    def GetNthDisplayNode(self, index): return self.displays[index]
+    def GetDisplayNode(self): return self.displays[0] if self.displays else None
+    def GetDisplayVisibility(self): return int(any(display.visibility for display in self.displays))
+
+    def SetDisplayVisibility(self, value) -> None:
+        for display in self.displays:
+            display.SetVisibility(value)
+
+
+class FakeDisplay:
+    def __init__(self, shown: bool, class_name: str = "vtkMRMLModelDisplayNode") -> None:
+        self.visibility = 1 if shown else 0
+        self.class_name = class_name
+        self.calls: list = []
+
+    def IsA(self, class_name): return class_name == self.class_name
+
+    def GetVisibility(self): return self.visibility
+
+    def SetVisibility(self, value) -> None:
+        self.calls.append(value)
+        self.visibility = int(value)
+
+
+class FakeComposite:
+    def __init__(self, background="vol1", foreground="vol2", label="lab1") -> None:
+        self.layers = {"Background": background, "Foreground": foreground, "Label": label}
+
+    def GetBackgroundVolumeID(self): return self.layers["Background"]
+    def GetForegroundVolumeID(self): return self.layers["Foreground"]
+    def GetLabelVolumeID(self): return self.layers["Label"]
+    def SetBackgroundVolumeID(self, value) -> None: self.layers["Background"] = value
+    def SetForegroundVolumeID(self, value) -> None: self.layers["Foreground"] = value
+    def SetLabelVolumeID(self, value) -> None: self.layers["Label"] = value
+
+
 def make_manifest(root: Path, subject: str, run: str, ended_at: str, candidates: list[tuple[str, str]],
                   status: str = "completed"):
     path = root / subject / "outputs" / "00_run_metadata" / f"{run}_orchestration_manifest.json"
@@ -234,12 +348,21 @@ def make_manifest(root: Path, subject: str, run: str, ended_at: str, candidates:
 class Harness:
     """Install the Results panel on a fake owner and drive it through the real refresh path."""
 
-    def __init__(self, test: unittest.TestCase, *, language: str = "en") -> None:
+    def __init__(self, test: unittest.TestCase, *, language: str = "en", settings: FakeSettings | None = None) -> None:
         self.test = test
         self.qt = qt = fake_qt()
         qt.Qt.UserRole = USER_ROLE
         self.tree = FakeTree()
         self.combo_holder: list[FakeCombo] = []
+        self.menus: list[FakeMenu] = []
+        self.pick = lambda _menu: None  # the action the user picks in a context menu
+        self.disk: list = []  # what a rescan outside ``refresh`` finds
+
+        def make_menu(*args):
+            self.menus.append(FakeMenu(self, *args))
+            return self.menus[-1]
+
+        qt.QMenu.side_effect = make_menu
         qt.QTreeWidget.side_effect = lambda *_a: self.tree
         qt.QTreeWidgetItem = lambda parent, labels: FakeItem(parent, labels)
         qt.QComboBox.side_effect = lambda *_a: self.combo_holder.append(FakeCombo()) or self.combo_holder[-1]
@@ -256,6 +379,8 @@ class Harness:
         self.main_window = object()
         self.slicer = mock.MagicMock(name="slicer")
         self.slicer.util.mainWindow.return_value = self.main_window
+        self.settings = settings if settings is not None else FakeSettings()
+        self.slicer.app.userSettings.return_value = self.settings
         self.layout = FakeLayout()
         self.report_paths: list = []
         self.fits = 0
@@ -282,6 +407,8 @@ class Harness:
                        side_effect=lambda manifest, **_kw: (manifest.get("cands", []), {})),
             mock.patch("shared.result_scene.owned_nodes", return_value=[]),
             mock.patch.object(ui_run_history, "history_roots", return_value=[]),
+            mock.patch.object(ui_run_history, "discover_runs",
+                              side_effect=lambda *_a, **_k: RunDiscovery(records=tuple(self.disk))),
         ]
         for patch in self.patches:
             patch.start()
@@ -290,8 +417,8 @@ class Harness:
         self.combo = self.combo_holder[0]
 
     def refresh(self, records, select_path=None) -> None:
-        with mock.patch.object(ui_run_history, "discover_runs", return_value=RunDiscovery(records=tuple(records))):
-            ui_run_history.refresh_run_history(self.owner, select_path=select_path)
+        self.disk = list(records)
+        ui_run_history.refresh_run_history(self.owner, select_path=select_path)
 
     def labels(self) -> list[str]:
         return [item.text(0) for item in self.tree.items]
@@ -933,7 +1060,7 @@ class CollapseTest(unittest.TestCase):
         in a header row no higher than the buttons. Only the calls can be tested here."""
 
         h = Harness(self)
-        for name in ("resultsCollapseButton", "resultsPopOutButton"):
+        for name in ("resultsHideAllButton", "resultsMenuButton", "resultsCollapseButton", "resultsPopOutButton"):
             with self.subTest(button=name):
                 button = h.widget(name)
                 button.setFixedSize.assert_called_with(28, 22)
@@ -945,7 +1072,10 @@ class CollapseTest(unittest.TestCase):
         header = h.widget("resultsHeaderRow")
         header.setFixedHeight.assert_called_with(22)
         header_layout = next(layout for layout in h.layouts if layout.parent is header)
-        self.assertEqual(header_layout.widgets, [h.widget("resultsCollapseButton"), h.widget("resultsPopOutButton")])
+        # Batch 2 (Results Clear): the menu button sits before the collapse button; (Hide all) the hide-all button
+        # sits before the menu button.
+        self.assertEqual(header_layout.widgets, [h.widget("resultsHideAllButton"), h.widget("resultsMenuButton"),
+                                                 h.widget("resultsCollapseButton"), h.widget("resultsPopOutButton")])
 
     def test_a_refresh_does_not_show_the_body_again_while_it_is_collapsed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1135,6 +1265,655 @@ class PopOutTest(unittest.TestCase):
         self.finished_slot()(0)
         self.assertGreater(mid, before)
         self.assertGreater(self.h.fits, mid)
+
+
+def write_cancelled_companion(main_record, cancelled_at: str):
+    """The file a GUI cancel writes next to the main manifest (ui_run_controller): same slot, newer stamp."""
+
+    path = main_record.manifest_path.with_name(
+        main_record.manifest_path.name.replace("_orchestration_manifest.json", "_cancelled_orchestration_manifest.json"))
+    path.write_text(json.dumps({
+        "kind": SUBJECT_MANIFEST_KIND, "version": 1, "status": "cancelled", "subject_id": main_record.subject_id,
+        "run_name": main_record.run_name, "cancelled_at": cancelled_at, "tasks": [], "cands": []}), encoding="utf-8")
+    return parse_run_manifest(path)
+
+
+class HideAndClearTest(unittest.TestCase):
+    """Batch 2, Results: "Remove from Results list" and "Clear". Only the list changes: no file, no scene node."""
+
+    REMOVED_EN = "Removed {count} run(s) from the list; files are kept."
+    CLEARED_EN = "Results list cleared. New runs will appear here."
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.root = Path(self._tmp.name)
+        self.settings = FakeSettings()
+
+    def runs(self):
+        a1 = make_manifest(self.root, "sub1", "runA", "2026-11-01T10:00:00Z", [("microstructure.fa", "/x/fa.nii.gz")])
+        b1 = make_manifest(self.root, "sub1", "runB", "2026-11-02T10:00:00Z", [("microstructure.md", "/x/md.nii.gz")])
+        a2 = make_manifest(self.root, "sub2", "runA", "2026-11-03T10:00:00Z", [("microstructure.fa", "/y/fa.nii.gz")])
+        return a1, b1, a2
+
+    def harness(self, records=None, **kwargs) -> Harness:
+        h = Harness(self, settings=self.settings, **kwargs)
+        h.tree.viewport = lambda: SimpleNamespace(mapToGlobal=lambda position: position)
+        if records is not None:
+            h.refresh(records)
+        return h
+
+    def subject_item(self, h: Harness, subject: str):
+        return next(item for item in h.tree.items if item.text(0).startswith(subject))
+
+    def remove_action(self, menu: FakeMenu) -> FakeAction:
+        return next(action for action in menu.actions if action.text == "Remove from Results list")
+
+    def remove_via_menu(self, h: Harness, item) -> FakeMenu:
+        h.tree.itemAt = lambda _position: item
+        h.pick = self.remove_action
+        ui_run_history._output_menu(h.owner, (3, 3))
+        return h.menus[-1]
+
+    def header_menu(self, h: Harness) -> dict:
+        menu = h.owner._resultsMenu
+        return {action.text: action for action in menu.open()}
+
+    def clear(self, h: Harness) -> None:
+        self.header_menu(h)["Clear results list"].trigger()
+
+    def start(self, h: Harness, subject: str) -> None:
+        h.owner._backgroundRunContext = {"subject_id": subject, "run_name": "r", "targets": []}
+        ui_run_history.set_run_state(h.owner, "running")
+
+    def combo_runs(self, h: Harness) -> list:
+        return [item["data"] for item in h.combo.items if item["data"]]
+
+    def test_b2_results_remove_a_subject_hides_it_from_tree_combo_and_records(self) -> None:
+        a1, b1, a2 = self.runs()
+        h = self.harness([a2, b1, a1])
+        family = find_child(self.subject_item(h, "sub1"), "Microstructure")
+        menu = self.remove_via_menu(h, family)  # on a family item: acts on the whole subject
+        action = self.remove_action(menu)
+        self.assertTrue(action.enabled)
+        self.assertIn("kept", action.toolTip)
+        self.assertEqual(h.labels(), ["sub2 · completed"])
+        self.assertEqual(self.combo_runs(h), [a2.manifest_path.as_posix()])
+        self.assertEqual(h.owner._runHistoryRecords, (a2,))
+        self.assertEqual(h.owner._runTreeRecords, (a2,))
+        self.assertEqual(set(h.owner._runTreeItems), {0})
+        sub2 = h.tree.topLevelItem(0)
+        self.assertEqual(sub2.data(0, USER_ROLE + 3), h.combo.currentIndex)  # combo index == ROLE_RUN
+        self.assertEqual(h.owner._latestResultManifestPath, a2.manifest_path)
+        h.slicer.util.showStatusMessage.assert_called_with(self.REMOVED_EN.format(count=2), 4000)
+        stored = json.loads(self.settings.store["SlicerDSpace/UserSettings/resultsHiddenRuns"])
+        self.assertEqual(len(stored), 2)
+
+    def test_b2_results_remove_on_a_file_item_and_on_the_subject_item(self) -> None:
+        for target in ("file", "subject"):
+            with self.subTest(target=target):
+                self.settings = FakeSettings()
+                a1, b1, a2 = self.runs()
+                h = self.harness([a2, b1, a1])
+                subject = self.subject_item(h, "sub1")
+                item = find_child(subject, "Microstructure").child(0) if target == "file" else subject
+                self.remove_via_menu(h, item)
+                self.assertEqual(h.labels(), ["sub2 · completed"])
+
+    def test_b2_results_hidden_runs_stay_hidden_after_a_restart(self) -> None:
+        a1, b1, a2 = self.runs()
+        h = self.harness([a2, b1, a1])
+        self.remove_via_menu(h, self.subject_item(h, "sub1"))
+        restarted = self.harness([a2, b1, a1])  # a new owner with the same QSettings store
+        self.assertEqual(restarted.labels(), ["sub2 · completed"])
+        self.assertEqual(restarted.owner._runHistoryRecords, (a2,))
+
+    def test_b2_results_a_newer_run_in_the_same_slot_shows_again(self) -> None:
+        a1, b1, a2 = self.runs()
+        h = self.harness([a2, b1, a1])
+        self.remove_via_menu(h, self.subject_item(h, "sub1"))
+        rerun = make_manifest(self.root, "sub1", "runA", "2026-11-05T10:00:00Z", [("microstructure.fa", "/x/fa.nii.gz")])
+        self.assertEqual(rerun.manifest_path, a1.manifest_path)  # a re-run overwrites the same manifest path
+        h.refresh([rerun, a2, b1])
+        self.assertEqual(h.owner._runHistoryRecords, (rerun, a2))  # runB of sub1 stays hidden
+        self.assertEqual(h.labels(), ["sub1 · completed", "sub2 · completed"])
+
+    def test_b2_results_a_cancel_companion_with_a_newer_stamp_shows_again(self) -> None:
+        a1, b1, a2 = self.runs()
+        h = self.harness([a2, b1, a1])
+        self.remove_via_menu(h, self.subject_item(h, "sub1"))
+        companion = write_cancelled_companion(a1, "2026-11-04T10:00:00Z")
+        h.refresh([companion, a2, b1])
+        self.assertEqual(h.owner._runHistoryRecords, (companion, a2))
+        self.assertEqual(h.labels(), ["sub1 · cancelled", "sub2 · completed"])
+
+    def test_b2_results_clear_leaves_the_running_subject(self) -> None:
+        a1, b1, a2 = self.runs()
+        h = self.harness([a2, b1, a1])
+        h.owner._runProgressManifestPath = a1.manifest_path  # the live job writes runA of sub1
+        self.start(h, "sub1")
+        self.clear(h)
+        self.assertEqual(h.labels(), ["sub1 · running"])
+        self.assertEqual(h.owner._runHistoryRecords, (b1, a1))
+        stored = json.loads(self.settings.store["SlicerDSpace/UserSettings/resultsHiddenRuns"])
+        self.assertEqual(list(stored), [ui_run_history.run_record_key(a2)])
+        # Remove is disabled on the running subject, with the reason.
+        menu = self.remove_via_menu(h, self.subject_item(h, "sub1"))
+        action = self.remove_action(menu)
+        self.assertFalse(action.enabled)
+        self.assertEqual(action.toolTip, onboarding_text("en", "results_remove_running"))
+        self.assertEqual(h.labels(), ["sub1 · running"])
+
+    def test_b2_results_after_a_clear_only_new_runs_are_listed(self) -> None:
+        a1, b1, a2 = self.runs()
+        h = self.harness([a2, b1, a1])
+        self.clear(h)
+        self.assertEqual(h.labels(), [])
+        h.slicer.util.showStatusMessage.assert_called_with(self.REMOVED_EN.format(count=3), 4000)
+        new = make_manifest(self.root, "sub3", "runA", "2026-11-06T10:00:00Z", [("microstructure.fa", "/z/fa.nii.gz")])
+        # module_widget refreshes with select_path of the run that just ended.
+        h.refresh([new, a2, b1, a1], select_path=new.manifest_path)
+        self.assertEqual(h.labels(), ["sub3 · completed"])
+        self.assertEqual(h.owner._runHistoryRecords, (new,))
+        self.assertEqual(self.combo_runs(h), [new.manifest_path.as_posix()])
+        self.assertEqual(h.owner._latestResultManifestPath, new.manifest_path)
+        self.assertTrue(h.widget("resultsTreeContainer").setVisible.call_args[0][0])
+
+    def test_b2_results_empty_state_after_a_clear_and_show_hidden_restores_all(self) -> None:
+        a1, b1, a2 = self.runs()
+        h = self.harness([a2, b1, a1])
+        button = h.widget("resultsShowHiddenButton")
+        self.assertIs(button.setVisible.call_args[0][0], False)
+        self.clear(h)
+        self.assertIs(h.widget("resultsTreeContainer").setVisible.call_args[0][0], False)
+        self.assertEqual(h.owner._resultsEmptyLabel.setText.call_args[0][0], self.CLEARED_EN)
+        self.assertNotEqual(self.CLEARED_EN, onboarding_text("en", "no_runs_found"))
+        self.assertIs(button.setVisible.call_args[0][0], True)
+        self.assertEqual(button.setText.call_args[0][0], "Show hidden results (3)")
+        h.click("resultsShowHiddenButton")
+        self.assertEqual(h.labels(), ["sub2 · completed", "sub1 · completed"])
+        self.assertEqual(len(h.owner._runHistoryRecords), 3)
+        self.assertEqual(json.loads(self.settings.store["SlicerDSpace/UserSettings/resultsHiddenRuns"]), {})
+        self.assertIs(button.setVisible.call_args[0][0], False)
+
+    def test_b2_results_no_runs_at_all_keeps_the_no_runs_text(self) -> None:
+        h = self.harness([])
+        self.assertEqual(h.owner._resultsEmptyLabel.setText.call_args[0][0], onboarding_text("en", "no_runs_found"))
+        self.assertIs(h.widget("resultsShowHiddenButton").setVisible.call_args[0][0], False)
+
+    def test_b2_results_header_menu_entries_and_their_enabled_state(self) -> None:
+        a1, b1, a2 = self.runs()
+        h = self.harness([])
+        entries = self.header_menu(h)
+        self.assertEqual(list(entries), ["Clear results list", "Show hidden results (0)"])
+        self.assertFalse(entries["Clear results list"].enabled)  # nothing to clear
+        self.assertFalse(entries["Show hidden results (0)"].enabled)
+        h.refresh([a2, b1, a1])
+        entries = self.header_menu(h)  # rebuilt on each open
+        self.assertTrue(entries["Clear results list"].enabled)
+        self.remove_via_menu(h, self.subject_item(h, "sub1"))
+        entries = self.header_menu(h)
+        self.assertTrue(entries["Show hidden results (2)"].enabled)
+        entries["Show hidden results (2)"].trigger()
+        self.assertEqual(len(h.owner._runHistoryRecords), 3)
+        button = h.widget("resultsMenuButton")
+        button.setMenu.assert_called_with(h.owner._resultsMenu)
+        button.setPopupMode.assert_called_with(h.qt.QToolButton.InstantPopup)
+        self.assertFalse(object_name(button).startswith("runHistory"))
+
+    def test_b2_results_clear_is_disabled_when_only_the_running_subject_is_listed(self) -> None:
+        h = self.harness([])
+        self.start(h, "sub9")
+        self.assertFalse(self.header_menu(h)["Clear results list"].enabled)
+
+    def test_b2_results_header_menu_and_empty_state_in_chinese(self) -> None:
+        a1, b1, a2 = self.runs()
+        h = self.harness([a2, b1, a1], language="zh")
+        texts = [action.text for action in h.owner._resultsMenu.open()]
+        self.assertEqual(texts, ["清空结果列表", "显示已隐藏的结果（0）"])
+        h.owner._resultsMenu.actions[0].trigger()
+        self.assertEqual(h.owner._resultsEmptyLabel.setText.call_args[0][0], "结果列表已清空，新的运行结果会显示在这里。")
+        self.assertEqual(h.widget("resultsShowHiddenButton").setText.call_args[0][0], "显示已隐藏的结果（3）")
+        self.assertNotEqual(onboarding_text("zh", "results_remove"), onboarding_text("en", "results_remove"))
+        self.assertEqual(onboarding_text("zh", "results_remove"), "从结果列表中移除")
+
+    def test_b2_results_the_show_hidden_button_works_in_the_pop_out_window_and_after_collapse(self) -> None:
+        a1, b1, a2 = self.runs()
+        h = self.harness([a2, b1, a1])
+        h.click("resultsPopOutButton")
+        self.clear(h)
+        body = h.widget("resultsBody")
+        window_layout = next(layout for layout in h.layouts if layout.parent is not None
+                             and getattr(layout.parent, "kind", "") == "QDialog")
+        self.assertIn(body, window_layout.widgets)  # the empty row and its button live in the body
+        h.click("resultsShowHiddenButton")
+        self.assertEqual(len(h.owner._runHistoryRecords), 3)
+        h.click("resultsDockBackButton")
+        self.clear(h)
+        h.click("resultsCollapseButton")
+        h.click("resultsCollapseButton")
+        h.click("resultsShowHiddenButton")
+        self.assertEqual(len(h.owner._runHistoryRecords), 3)
+
+    def test_b2_results_add_a_run_folder_un_hides_what_it_finds(self) -> None:
+        a1, b1, a2 = self.runs()
+        h = self.harness([a2, b1, a1])
+        self.clear(h)
+        folder = str(self.root / "sub1")
+        h.owner.parent = None
+        h.qt.QFileDialog.getExistingDirectory.return_value = folder
+        h.disk = [b1, a1]  # what the folder holds; the next rescan finds all three again
+        with mock.patch.object(ui_run_history, "save_history_directory"):
+            ui_run_history.browse_run_directory(h.owner)
+            h.disk = [a2, b1, a1]
+            ui_run_history.refresh_run_history(h.owner)
+        self.assertEqual(h.owner._runHistoryRecords, (b1, a1))  # sub2 stays hidden
+        h.slicer.util.showStatusMessage.assert_called_with(f"Found 2 run(s) under {folder}; selected the newest.", 4000)
+
+    def test_b2_results_a_broken_stored_value_reads_as_empty(self) -> None:
+        a1, b1, a2 = self.runs()
+        for broken in ("{not json", "[]", "17", ["x"]):
+            with self.subTest(value=broken):
+                self.settings = FakeSettings({"SlicerDSpace/UserSettings/resultsHiddenRuns": broken})
+                h = self.harness([a2, b1, a1])
+                self.assertEqual(len(h.owner._runHistoryRecords), 3)
+        h.slicer.app.userSettings.side_effect = RuntimeError("no settings")
+        self.assertEqual(ui_run_history.load_hidden_runs(), {})
+
+    def test_b2_results_remove_and_clear_delete_no_file_and_touch_no_scene_node(self) -> None:
+        a1, b1, a2 = self.runs()
+        files = sorted(str(path) for path in self.root.rglob("*") if path.is_file())
+        with mock.patch("pathlib.Path.unlink") as unlink, mock.patch("os.remove") as remove, \
+                mock.patch("os.unlink") as os_unlink, mock.patch("shutil.rmtree") as rmtree:
+            h = self.harness([a2, b1, a1])
+            self.remove_via_menu(h, self.subject_item(h, "sub1"))
+            self.clear(h)
+            h.click("resultsShowHiddenButton")
+            self.clear(h)
+        for fake in (unlink, remove, os_unlink, rmtree):
+            fake.assert_not_called()
+        h.slicer.mrmlScene.RemoveNode.assert_not_called()
+        self.assertEqual(sorted(str(path) for path in self.root.rglob("*") if path.is_file()), files)
+
+    def test_b2_results_the_context_menu_resolves_its_keys_before_exec(self) -> None:
+        """FD8 for Remove: exec_ runs a nested event loop; a refresh there deletes the right-clicked item."""
+
+        a1, b1, a2 = self.runs()
+        h = self.harness([a2, b1, a1])
+        subject = self.subject_item(h, "sub1")
+        family = find_child(subject, "Microstructure")
+        h.tree.itemAt = lambda _position: family
+
+        def deleted(*_a):
+            raise RuntimeError("underlying C++ object has been deleted")
+
+        def pick(menu):
+            h.refresh([a1, b1, a2])  # a refresh reorders the records and rebuilds the tree
+            for item in (family, subject):
+                item.data = deleted
+                item.parent = deleted
+            return self.remove_action(menu)
+
+        h.pick = pick
+        ui_run_history._output_menu(h.owner, (3, 3))
+        self.assertEqual(h.owner._runHistoryRecords, (a2,))
+        stored = json.loads(self.settings.store["SlicerDSpace/UserSettings/resultsHiddenRuns"])
+        self.assertEqual(set(stored), {ui_run_history.run_record_key(a1), ui_run_history.run_record_key(b1)})
+
+    def test_b2_results_file_actions_stay_in_the_context_menu(self) -> None:
+        tissue = make_manifest(self.root, "sub1", "runA", "2026-11-01T10:00:00Z",
+                               [("segmentation.tissue", "/x/tissue_seg.nii.gz")])
+        h = self.harness([tissue])
+        leaf = find_child(h.tree.topLevelItem(0), "Anatomical").child(0)
+        h.tree.itemAt = lambda _position: leaf
+        ui_run_history._output_menu(h.owner, (3, 3))
+        self.assertEqual([action.text for action in h.menus[-1].actions],
+                         ["Edit tissue copy in Segment Editor", "Open folder", "Remove from Results list"])
+
+    def test_b2_results_menu_icon_has_its_own_glyph(self) -> None:
+        for dark in (False, True):
+            self.assertNotEqual(ui_run_history._results_icon_svg("list", dark=dark),
+                                ui_run_history._results_icon_svg("popout", dark=dark))
+        self.assertNotEqual(ui_run_history._results_icon_svg("list", dark=False),
+                            ui_run_history._results_icon_svg("list", dark=True))
+
+
+class OpenFolderTest(unittest.TestCase):
+    """Batch 2 add-on: the Subject ID row has an "Open folder" button at its right end (column 1, like the eye)."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.root = Path(self._tmp.name)
+
+    def harness(self, records, **kwargs) -> Harness:
+        h = Harness(self, **kwargs)
+        h.tree.viewport = lambda: SimpleNamespace(mapToGlobal=lambda position: position)
+        h.refresh(records)
+        return h
+
+    def subject_item(self, h: Harness, prefix: str):
+        return next(item for item in h.tree.items if item.text(0).startswith(prefix))
+
+    def assert_opened(self, h: Harness, folder: Path) -> None:
+        h.qt.QUrl.fromLocalFile.assert_called_once_with(str(folder))
+        h.qt.QDesktopServices.openUrl.assert_called_once_with(h.qt.QUrl.fromLocalFile.return_value)
+
+    def assert_not_opened(self, h: Harness) -> None:
+        h.qt.QDesktopServices.openUrl.assert_not_called()
+        h.qt.QUrl.fromLocalFile.assert_not_called()
+
+    def test_b2_open_folder_one_run_the_subject_row_has_the_button_and_a_click_opens_the_folder(self) -> None:
+        record = make_manifest(self.root, "sub1", "runA", "2026-11-01T10:00:00Z", [("microstructure.fa", "/x/fa")])
+        h = self.harness([record])
+        subject = self.subject_item(h, "sub1")
+        self.assertIsNotNone(subject.icons.get(1))  # the button: a code-drawn icon in the second column
+        self.assertEqual(subject.tooltips[1], "Open folder")
+        self.assertEqual(subject.data(1, h.qt.Qt.AccessibleTextRole), "Open folder")
+        self.assertEqual(subject.data(0, USER_ROLE + 5), str(self.root / "sub1"))  # stored on the item
+        h.tree.itemClicked.emit(subject, 1)
+        self.assert_opened(h, self.root / "sub1")
+
+    def test_b2_open_folder_only_the_subject_row_has_the_button(self) -> None:
+        record = make_manifest(self.root, "sub1", "runA", "2026-11-01T10:00:00Z", [("microstructure.fa", "/x/fa")])
+        h = self.harness([record])
+        subject = self.subject_item(h, "sub1")
+        family = find_child(subject, "Microstructure")
+        leaf = family.child(0)
+        self.assertNotIn(1, family.icons)
+        self.assertIsNone(family.data(0, USER_ROLE + 5))
+        self.assertIsNone(leaf.data(0, USER_ROLE + 5))
+        h.tree.itemClicked.emit(subject, 0)  # a click on the text only selects
+        h.tree.itemClicked.emit(family, 1)
+        self.assert_not_opened(h)
+
+    def test_b2_open_folder_two_runs_in_different_folders_the_newest_wins(self) -> None:
+        old = make_manifest(self.root / "disk_a", "sub1", "runA", "2026-11-01T10:00:00Z", [])
+        new = make_manifest(self.root / "disk_b", "sub1", "runB", "2026-11-03T10:00:00Z", [])
+        for records in ([new, old], [old, new]):  # the list order does not decide
+            with self.subTest(order=[r.run_name for r in records]):
+                h = self.harness(records)
+                self.assertEqual(h.tree.topLevelItemCount, 1)
+                h.tree.itemClicked.emit(h.tree.topLevelItem(0), 1)
+                self.assert_opened(h, self.root / "disk_b" / "sub1")
+
+    def test_b2_open_folder_a_batch_record_opens_its_batch_output_folder(self) -> None:
+        batch_path = self.root / "b1" / "00_batch_metadata" / "batch_20261104_100000.json"
+        batch_path.parent.mkdir(parents=True)
+        batch_path.write_text(json.dumps({
+            "kind": "slicerdsurfer_batch_run", "version": 1, "run_name": "batch1", "subjects": [{}, {}],
+            "results": [{"returncode": 0}], "ended_at": "2026-11-04T10:00:00Z"}), encoding="utf-8")
+        h = self.harness([parse_run_manifest(batch_path)])
+        item = h.tree.topLevelItem(0)
+        self.assertIsNotNone(item.icons.get(1))
+        h.tree.itemClicked.emit(item, 1)
+        self.assert_opened(h, self.root / "b1")
+
+    def test_b2_open_folder_a_running_subject_without_a_manifest_opens_its_subject_folder(self) -> None:
+        h = self.harness([])
+        folder = self.root / "ws" / "sub9"
+        (folder / "outputs").mkdir(parents=True)
+        h.owner._backgroundRunContext = {"subject_id": "sub9", "run_name": "r", "targets": [],
+                                         "subject_root": self.root / "in" / "sub9", "output_root": folder / "outputs"}
+        ui_run_history.set_run_state(h.owner, "running")
+        item = self.subject_item(h, "sub9")
+        self.assertIsNotNone(item.icons.get(1))
+        h.tree.itemClicked.emit(item, 1)
+        self.assert_opened(h, folder)
+
+    def test_b2_open_folder_a_running_subject_without_a_folder_shows_the_status_message(self) -> None:
+        h = self.harness([])
+        h.owner._backgroundRunContext = {"subject_id": "sub9", "run_name": "r", "targets": []}
+        ui_run_history.set_run_state(h.owner, "running")
+        h.tree.itemClicked.emit(self.subject_item(h, "sub9"), 1)
+        self.assert_not_opened(h)
+        self.assertTrue(h.slicer.util.showStatusMessage.called)
+
+    def test_b2_open_folder_a_missing_folder_gives_a_status_message_and_nothing_else(self) -> None:
+        import shutil
+
+        record = make_manifest(self.root, "sub1", "runA", "2026-11-01T10:00:00Z", [])
+        h = self.harness([record])
+        gone = self.root / "sub1"
+        shutil.rmtree(gone)
+        with mock.patch("os.remove") as remove, mock.patch("os.mkdir") as mkdir, mock.patch("os.makedirs") as makedirs, \
+                mock.patch("shutil.rmtree") as rmtree, mock.patch("shutil.move") as move, \
+                mock.patch.object(Path, "mkdir") as path_mkdir, mock.patch.object(Path, "unlink") as unlink:
+            h.tree.itemClicked.emit(h.tree.topLevelItem(0), 1)
+        self.assert_not_opened(h)
+        h.slicer.util.showStatusMessage.assert_called_with(f"The folder does not exist: {gone}", 4000)
+        for call in (remove, mkdir, makedirs, rmtree, move, path_mkdir, unlink):
+            call.assert_not_called()
+        self.assertFalse(gone.exists())  # nothing was created
+
+    def test_b2_open_folder_the_status_message_is_chinese_in_chinese(self) -> None:
+        import shutil
+
+        record = make_manifest(self.root, "sub1", "runA", "2026-11-01T10:00:00Z", [])
+        h = self.harness([record], language="zh")
+        subject = h.tree.topLevelItem(0)
+        self.assertEqual(subject.tooltips[1], "打开文件夹")
+        self.assertEqual(subject.data(1, h.qt.Qt.AccessibleTextRole), "打开文件夹")
+        shutil.rmtree(self.root / "sub1")
+        h.tree.itemClicked.emit(subject, 1)
+        h.slicer.util.showStatusMessage.assert_called_with(f"文件夹不存在：{self.root / 'sub1'}", 4000)
+
+    def test_b2_open_folder_the_context_menu_has_the_action_and_resolves_the_path_before_exec(self) -> None:
+        """FD8: exec_ runs a nested event loop; a refresh there deletes the right-clicked item."""
+
+        record = make_manifest(self.root, "sub1", "runA", "2026-11-01T10:00:00Z", [("microstructure.fa", "/x/fa")])
+        h = self.harness([record])
+        for kind in ("subject", "family"):
+            with self.subTest(target=kind):
+                h.qt.reset_mock()
+                subject = self.subject_item(h, "sub1")  # fresh items: the last subtest rebuilt the tree
+                family = find_child(subject, "Microstructure")
+                h.tree.itemAt = lambda _position, item=subject if kind == "subject" else family: item
+
+                def deleted(*_a):
+                    raise RuntimeError("underlying C++ object has been deleted")
+
+                def pick(menu):
+                    h.refresh([record])
+                    for item in (subject, family):
+                        item.data = deleted
+                        item.parent = deleted
+                    return next(action for action in menu.actions if action.text == "Open folder")
+
+                h.pick = pick
+                ui_run_history._output_menu(h.owner, (3, 3))
+                self.assertIn("Open folder", [action.text for action in h.menus[-1].actions])
+                self.assert_opened(h, self.root / "sub1")
+
+    def test_b2_open_folder_the_context_menu_entry_with_a_missing_folder_does_nothing_else(self) -> None:
+        import shutil
+
+        record = make_manifest(self.root, "sub1", "runA", "2026-11-01T10:00:00Z", [])
+        h = self.harness([record])
+        shutil.rmtree(self.root / "sub1")
+        h.tree.itemAt = lambda _position: h.tree.topLevelItem(0)
+        h.pick = lambda menu: next(action for action in menu.actions if action.text == "Open folder")
+        ui_run_history._output_menu(h.owner, (3, 3))
+        self.assert_not_opened(h)
+        self.assertTrue(h.slicer.util.showStatusMessage.called)
+
+    def test_b2_open_folder_the_button_survives_a_rebuild_and_follows_the_theme(self) -> None:
+        record = make_manifest(self.root, "sub1", "runA", "2026-11-01T10:00:00Z", [])
+        h = self.harness([record])
+        h.refresh([record])  # a rebuild makes new items
+        h.tree.itemClicked.emit(h.tree.topLevelItem(0), 1)
+        self.assert_opened(h, self.root / "sub1")
+        # A theme change redraws the icon of every subject row (the stroke colour differs).
+        with mock.patch.object(ui_run_history, "_results_icon",
+                               side_effect=lambda _qt, glyph, *, dark: (glyph, dark)) as icon:
+            ui_run_history.refresh_results_window(h.owner, dark=True)
+            self.assertEqual(h.tree.topLevelItem(0).icons[1], ("folder", True))
+            ui_run_history.refresh_results_window(h.owner, dark=False)
+            self.assertEqual(h.tree.topLevelItem(0).icons[1], ("folder", False))
+        self.assertNotEqual(ui_run_history._results_icon_svg("folder", dark=False),
+                            ui_run_history._results_icon_svg("folder", dark=True))
+        for other in ("popout", "list"):
+            self.assertNotEqual(ui_run_history._results_icon_svg("folder", dark=False),
+                                ui_run_history._results_icon_svg(other, dark=False))
+
+    def test_b2_open_folder_works_in_the_pop_out_window_and_the_tree_is_not_touched_by_it(self) -> None:
+        record = make_manifest(self.root, "sub1", "runA", "2026-11-01T10:00:00Z", [])
+        h = self.harness([record])
+        h.click("resultsPopOutButton")
+        subject = h.tree.topLevelItem(0)  # the body, with its tree, moves into the window: the same tree object
+        h.tree.itemClicked.emit(subject, 1)
+        self.assert_opened(h, self.root / "sub1")
+        self.assertEqual(h.tree.topLevelItemCount, 1)
+
+
+class HideAllTest(unittest.TestCase):
+    """Batch 2 add-on: one header button that turns off everything shown (volumes, segmentations, models)."""
+
+    def harness(self, **kwargs) -> Harness:
+        h = Harness(self, **kwargs)
+        self.nodes: dict = {}
+        h.slicer.util.getNodesByClass.side_effect = lambda class_name: list(self.nodes.get(class_name, ()))
+        return h
+
+    def scene(self):
+        self.model = FakeNode("tracts", "vtkMRMLModelNode")
+        self.two_displays = FakeNode("surf", "vtkMRMLModelNode", displays=2)
+        self.already_hidden = FakeNode("old", "vtkMRMLModelNode", shown=False)
+        self.slice_models = [
+            FakeNode("Red Volume Slice", "vtkMRMLModelNode", hide_from_editors=True,
+                     display_class="vtkMRMLSliceDisplayNode"),
+            FakeNode("Yellow Volume Slice", "vtkMRMLModelNode", display_class="vtkMRMLSliceDisplayNode"),
+        ]
+        self.internal = FakeNode("tool helper", "vtkMRMLModelNode", hide_from_editors=True)
+        self.segmentation = FakeNode("seg", "vtkMRMLSegmentationNode", displays=2)
+        self.composites = [FakeComposite(), FakeComposite("volX", None, None)]
+        self.volume_rendering = [FakeNode("vr1", "x", display_class="vtkMRMLVolumeRenderingDisplayNode"),
+                                 FakeNode("vr2", "x", shown=False, display_class="vtkMRMLVolumeRenderingDisplayNode")]
+        self.nodes = {
+            "vtkMRMLModelNode": [self.model, self.two_displays, self.already_hidden, *self.slice_models, self.internal],
+            "vtkMRMLSegmentationNode": [self.segmentation],
+            "vtkMRMLSliceCompositeNode": self.composites,
+            "vtkMRMLVolumeRenderingDisplayNode": [d.displays[0] for d in self.volume_rendering],
+        }
+
+    def test_b2_hide_all_the_header_button_is_icon_only_with_a_tooltip_and_an_accessible_name(self) -> None:
+        h = self.harness()
+        button = h.widget("resultsHideAllButton")
+        self.assertFalse(object_name(button).startswith("runHistory"))
+        button.setFixedSize.assert_called_with(28, 22)
+        button.setProperty.assert_any_call("algorithmPickerButton", True)
+        button.setToolButtonStyle.assert_called_with(h.qt.Qt.ToolButtonIconOnly)
+        button.setToolTip.assert_called_with("Hide everything shown")
+        button.setAccessibleName.assert_called_with("Hide everything shown")
+        self.assertTrue(all(call[0][0] == "" for call in button.setText.call_args_list))  # no text on the button
+        self.assertIn((button, "tooltip", "results_hide_all"), h.owner._uiLanguageBindings)
+        self.assertIs(h.owner._resultsHideAllButton, button)
+        self.assertEqual(button.clicked.connect.call_count, 1)
+        header = h.widget("resultsHeaderRow")
+        header_layout = next(layout for layout in h.layouts if layout.parent is header)
+        self.assertEqual(header_layout.widgets[:2], [button, h.widget("resultsMenuButton")])
+
+    def test_b2_hide_all_the_texts_are_english_and_chinese_and_no_text_is_a_label(self) -> None:
+        self.assertEqual(onboarding_text("en", "results_hide_all"), "Hide everything shown")
+        self.assertEqual(onboarding_text("zh", "results_hide_all"), "关闭所有显示")
+        self.assertEqual(onboarding_text("en", "results_open_folder"), "Open folder")
+        self.assertEqual(onboarding_text("zh", "results_open_folder"), "打开文件夹")
+        h = self.harness(language="zh")
+        button = h.widget("resultsHideAllButton")
+        button.setToolTip.assert_called_with("关闭所有显示")
+        button.setAccessibleName.assert_called_with("关闭所有显示")
+
+    def test_b2_hide_all_the_icon_has_its_own_glyph_in_both_themes(self) -> None:
+        for dark in (False, True):
+            glyph = ui_run_history._results_icon_svg("hideall", dark=dark)
+            for other in ("popout", "list", "folder"):
+                self.assertNotEqual(glyph, ui_run_history._results_icon_svg(other, dark=dark))
+        self.assertNotEqual(ui_run_history._results_icon_svg("hideall", dark=False),
+                            ui_run_history._results_icon_svg("hideall", dark=True))
+        h = self.harness()
+        with mock.patch.object(ui_run_history, "_results_icon",
+                               side_effect=lambda _qt, glyph, *, dark: (glyph, dark)):
+            ui_run_history.refresh_results_window(h.owner, dark=True)
+        h.widget("resultsHideAllButton").setIcon.assert_called_with(("hideall", True))
+
+    def test_b2_hide_all_a_click_turns_off_models_segmentations_slice_layers_and_volume_rendering(self) -> None:
+        h = self.harness()
+        self.scene()
+        h.click("resultsHideAllButton")
+        self.assertEqual([d.visibility for d in self.model.displays], [0])
+        self.assertEqual([d.visibility for d in self.two_displays.displays], [0, 0])
+        self.assertEqual([d.visibility for d in self.segmentation.displays], [0, 0])
+        self.assertEqual([d.visibility for d in self.already_hidden.displays], [0])
+        self.assertEqual([c.layers for c in self.composites],
+                         [{"Background": None, "Foreground": None, "Label": None}] * 2)
+        self.assertEqual([n.displays[0].visibility for n in self.volume_rendering], [0, 0])
+
+    def test_b2_hide_all_slice_models_and_internal_nodes_are_left_alone(self) -> None:
+        h = self.harness()
+        self.scene()
+        h.click("resultsHideAllButton")
+        for node in (*self.slice_models, self.internal):
+            self.assertEqual([d.visibility for d in node.displays], [1], node.name)
+            self.assertEqual([d.calls for d in node.displays], [[]], node.name)  # not even touched
+
+    def test_b2_hide_all_every_segmentation_is_hidden_also_one_that_is_hidden_from_editors(self) -> None:
+        h = self.harness()
+        self.scene()
+        extra = FakeNode("seg2", "vtkMRMLSegmentationNode", hide_from_editors=True)
+        self.nodes["vtkMRMLSegmentationNode"].append(extra)
+        h.click("resultsHideAllButton")
+        self.assertEqual([d.visibility for d in extra.displays], [0])
+
+    def test_b2_hide_all_refreshes_the_eye_icons_after_the_hide(self) -> None:
+        h = self.harness()
+        self.scene()
+        seen: list = []
+        with mock.patch.object(ui_run_history, "_refresh_output_visibility",
+                               side_effect=lambda owner: seen.append((owner, self.model.displays[0].visibility,
+                                                                      self.composites[0].layers["Label"]))):
+            h.click("resultsHideAllButton")
+        self.assertEqual(seen, [(h.owner, 0, None)])  # called once, after the nodes were hidden
+
+    def test_b2_hide_all_removes_no_node_and_touches_no_file(self) -> None:
+        h = self.harness()
+        self.scene()
+        with mock.patch("os.remove") as remove, mock.patch("os.unlink") as unlink, mock.patch("shutil.rmtree") as rmtree, \
+                mock.patch("shutil.move") as move, mock.patch.object(Path, "unlink") as path_unlink, \
+                mock.patch("builtins.open") as opened:
+            h.click("resultsHideAllButton")
+        for call in (remove, unlink, rmtree, move, path_unlink, opened):
+            call.assert_not_called()
+        h.slicer.mrmlScene.RemoveNode.assert_not_called()
+        h.slicer.mrmlScene.Clear.assert_not_called()
+        h.slicer.util.loadVolume.assert_not_called()
+        h.qt.QDesktopServices.openUrl.assert_not_called()
+        self.assertEqual(h.slicer.util.errorDisplay.call_count, 0)
+
+    def test_b2_hide_all_an_empty_scene_does_nothing_and_does_not_fail(self) -> None:
+        h = self.harness()
+        h.click("resultsHideAllButton")
+        self.assertEqual(h.slicer.util.errorDisplay.call_count, 0)
+
+    def test_b2_hide_all_one_broken_node_does_not_stop_the_rest(self) -> None:
+        h = self.harness()
+        self.scene()
+
+        def broken(*_a):
+            raise RuntimeError("underlying C++ object has been deleted")
+
+        self.model.GetNumberOfDisplayNodes = broken
+        h.click("resultsHideAllButton")
+        self.assertEqual([d.visibility for d in self.segmentation.displays], [0, 0])
+        self.assertEqual(self.composites[0].layers["Label"], None)
+
+    def test_b2_hide_all_the_header_test_forbids_no_other_button(self) -> None:
+        """The panel keeps no runHistory* push button and no refresh button (``test_ui_run_history``)."""
+
+        h = self.harness()
+        names = {object_name(widget) for widget in h.qt.created}
+        self.assertNotIn("runHistoryRefreshButton", names)
+        self.assertEqual([w for w in h.qt.created if w.kind == "QPushButton" and object_name(w).startswith("runHistory")],
+                         [])
 
 
 class ModuleWidgetWiringTest(unittest.TestCase):

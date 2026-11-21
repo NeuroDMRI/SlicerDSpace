@@ -8,6 +8,7 @@ import os
 import tempfile
 import time
 import unittest
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -18,7 +19,13 @@ from shared.run_history import (
     candidate_run_roots,
     discover_manifest_paths,
     discover_runs,
+    dump_hidden_runs,
+    hidden_stamp,
     manifest_path_for_plan,
+    parse_hidden_runs,
+    run_manifest_key,
+    run_record_key,
+    split_hidden,
     manifest_timestamp,
     parse_run_manifest,
     progress_from_manifest,
@@ -26,7 +33,9 @@ from shared.run_history import (
     remember_directory,
     run_record_brief,
     run_record_details,
+    run_folder_path,
     run_record_label,
+    subject_folder_from_roots,
 )
 
 
@@ -386,6 +395,74 @@ class CancelledManifestRowsTest(unittest.TestCase):
             self.assertEqual(discovery.records[0].manifest_path, primary)
 
 
+class HiddenRunsTest(unittest.TestCase):
+    """Batch 2, Results "Remove from Results list" / "Clear": the identity of a run slot and the stamp rule."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.root = Path(self._tmp.name)
+
+    def subject(self, folder: str, name: str, **fields):
+        path = _write(self.root / folder / "00_run_metadata" / name, _subject_manifest(**fields))
+        return parse_run_manifest(path)
+
+    def test_b2_results_key_is_the_discover_runs_slot_for_main_and_cancelled_companion(self) -> None:
+        main = self.subject("s1", "Test1_orchestration_manifest.json", ended_at="2026-11-01T10:00:00Z")
+        companion = self.subject("s1", "Test1_cancelled_orchestration_manifest.json", cancelled_at="2026-11-01T11:00:00Z")
+        other_name = self.subject("s1", "Test2_orchestration_manifest.json")
+        other_folder = self.subject("s2", "Test1_orchestration_manifest.json")
+        self.assertEqual(run_record_key(main), run_record_key(companion))
+        self.assertNotEqual(run_record_key(main), run_record_key(other_name))
+        self.assertNotEqual(run_record_key(main), run_record_key(other_folder))
+        self.assertEqual(run_manifest_key(main.manifest_path), run_record_key(main))
+        self.assertEqual(run_manifest_key(companion.manifest_path), run_record_key(main))
+        # discover_runs keeps one record per key.
+        self.assertEqual(len(discover_runs([self.root]).records), 3)
+
+    def test_b2_results_batch_key_is_the_real_manifest_path(self) -> None:
+        path = _write(self.root / "b" / "00_batch_metadata" / "batch_20261101_100000.json",
+                      {"kind": BATCH_MANIFEST_KIND, "version": 1, "subjects": [], "results": []})
+        record = parse_run_manifest(path)
+        self.assertIn(os.path.realpath(path), run_record_key(record))
+        self.assertTrue(run_record_key(record).startswith("batch"))
+
+    def test_b2_results_stamp_rule_equal_stays_hidden_newer_shows(self) -> None:
+        old = self.subject("s1", "Test1_orchestration_manifest.json", ended_at="2026-11-01T10:00:00Z")
+        other = self.subject("s2", "Test1_orchestration_manifest.json", ended_at="2026-11-01T09:00:00Z")
+        hidden = {run_record_key(old): hidden_stamp(old)}
+        shown, gone = split_hidden((old, other), hidden)
+        self.assertEqual((shown, gone), ((other,), (old,)))
+        rerun = self.subject("s1", "Test1_orchestration_manifest.json", ended_at="2026-11-02T09:00:00Z")
+        self.assertEqual(split_hidden((rerun, other), hidden), ((rerun, other), ()))
+        cancelled = self.subject("s1", "Test1_cancelled_orchestration_manifest.json",
+                                 status="cancelled", cancelled_at="2026-11-01T10:05:00Z")
+        self.assertEqual(split_hidden((cancelled,), hidden), ((cancelled,), ()))
+
+    def test_b2_results_missing_stamps(self) -> None:
+        record = self.subject("s1", "Test1_orchestration_manifest.json", ended_at="2026-11-01T10:00:00Z")
+        no_stamp = replace(record, timestamp=None)
+        key = run_record_key(record)
+        self.assertIsNone(hidden_stamp(no_stamp))
+        self.assertEqual(split_hidden((no_stamp,), {key: None}), ((), (no_stamp,)))
+        self.assertEqual(split_hidden((no_stamp,), {key: 5.0}), ((), (no_stamp,)))
+        self.assertEqual(split_hidden((record,), {key: None}), ((record,), ()))
+
+    def test_b2_results_stored_value_round_trip_and_broken_values_read_as_empty(self) -> None:
+        hidden = {"subject\t/a\tTest1": 1700000000.25, "batch\t/b.json": None}
+        self.assertEqual(parse_hidden_runs(dump_hidden_runs(hidden)), hidden)
+        for broken in (None, "", "not json", "[1, 2]", "42", b"{}", ["{}"], {"a": 1}):
+            with self.subTest(value=broken):
+                self.assertEqual(parse_hidden_runs(broken), {})
+        self.assertEqual(parse_hidden_runs('{"a": 1.5, "b": "x", "c": true, "": 2}'), {"a": 1.5})
+
+    def test_b2_results_stored_map_is_capped_and_drops_the_oldest_stamps(self) -> None:
+        hidden = {f"k{i}": float(i) for i in range(10)}
+        hidden["none"] = None
+        kept = parse_hidden_runs(dump_hidden_runs(hidden, limit=4))
+        self.assertEqual(set(kept), {"k6", "k7", "k8", "k9"})
+
+
 class ProgressTest(unittest.TestCase):
     PLAN = {
         "items": [
@@ -448,6 +525,60 @@ class ProgressTest(unittest.TestCase):
             os.utime(manifest, (old, old))
             self.assertIsNone(progress_from_manifest(manifest, not_before=time.time()))
             self.assertIsNotNone(progress_from_manifest(manifest, not_before=old))
+
+
+class RunFolderPathTest(unittest.TestCase):
+    """Batch 2, Results "Open folder": the folder of a run record on disk (pure; the UI checks that it exists)."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.root = Path(self._tmp.name)
+
+    def test_b2_open_folder_a_subject_record_gives_the_folder_that_holds_input_and_outputs(self) -> None:
+        path = _write(self.root / "out" / "sub1" / "outputs" / "00_run_metadata" / "R1_orchestration_manifest.json",
+                      _subject_manifest(output_root=str(self.root / "elsewhere" / "outputs")))
+        record = parse_run_manifest(path)
+        # The place of the manifest wins over the stored output_root: a moved run folder keeps working.
+        self.assertEqual(run_folder_path(record), self.root / "out" / "sub1")
+
+    def test_b2_open_folder_a_subject_record_with_a_manifest_outside_the_usual_layout_uses_output_root(self) -> None:
+        path = _write(self.root / "loose" / "R1_orchestration_manifest.json",
+                      _subject_manifest(output_root=str(self.root / "ws" / "sub9" / "outputs")))
+        self.assertEqual(run_folder_path(parse_run_manifest(path)), self.root / "ws" / "sub9")
+        path = _write(self.root / "loose" / "R2_orchestration_manifest.json",
+                      _subject_manifest(output_root=str(self.root / "ws" / "custom")))
+        self.assertEqual(run_folder_path(parse_run_manifest(path)), self.root / "ws" / "custom")
+
+    def test_b2_open_folder_a_batch_record_gives_its_batch_output_folder(self) -> None:
+        # run_batch_pipeline: the manifest is <output_base>/00_batch_metadata/batch_*.json; ``output_root`` is stored
+        # only with --output-root, and then it is the output base. An existing stored root wins; a stale one does not.
+        payload = {"kind": BATCH_MANIFEST_KIND, "version": 1, "run_name": "x", "subjects": [], "results": [],
+                   "ended_at": "2026-11-04T10:00:00Z"}
+        elsewhere = self.root / "elsewhere"
+        elsewhere.mkdir()
+        custom = _write(self.root / "b1" / "00_batch_metadata" / "batch_1.json", {**payload, "output_root": str(elsewhere)})
+        self.assertEqual(run_folder_path(parse_run_manifest(custom)), elsewhere)  # --manifest put the file elsewhere
+        stale = _write(self.root / "b2" / "00_batch_metadata" / "batch_2.json",
+                       {**payload, "output_root": str(self.root / "gone")})
+        self.assertEqual(run_folder_path(parse_run_manifest(stale)), self.root / "b2")  # the run folder was moved
+        unset = _write(self.root / "b3" / "00_batch_metadata" / "batch_3.json", {**payload, "output_root": None})
+        self.assertEqual(run_folder_path(parse_run_manifest(unset)), self.root / "b3")
+        loose = _write(self.root / "loose_batch.json", payload)
+        self.assertEqual(run_folder_path(parse_run_manifest(loose)), self.root)
+
+    def test_b2_open_folder_the_last_resort_is_the_folder_of_the_manifest_file(self) -> None:
+        record = replace(parse_run_manifest(_write(self.root / "x" / "R_orchestration_manifest.json",
+                                                   _subject_manifest())), output_root="")
+        self.assertEqual(run_folder_path(record), self.root / "x")  # the folder of the file is the last resort
+        self.assertIsNone(subject_folder_from_roots(None, None))
+        self.assertIsNone(subject_folder_from_roots("", " "))
+
+    def test_b2_open_folder_roots_of_a_running_job(self) -> None:
+        self.assertEqual(subject_folder_from_roots(self.root / "o" / "s1" / "outputs", self.root / "in" / "s1"),
+                         self.root / "o" / "s1")
+        self.assertEqual(subject_folder_from_roots(None, self.root / "in" / "s1"), self.root / "in" / "s1")
+        self.assertEqual(subject_folder_from_roots(self.root / "o" / "s1", None), self.root / "o" / "s1")
 
 
 if __name__ == "__main__":

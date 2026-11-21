@@ -34,9 +34,11 @@ def run():
                         widget.ui.resultsCollapsibleButton):
             assert isinstance(section, qt.QGroupBox)
         widget._latestResultManifestPath = ROOT / "previous-run.json"
+        items_before = widget._runOutputFiles.topLevelItemCount
         widget._reset_result_scene_actions()
         assert widget._latestResultManifestPath is None
-        assert widget._runOutputFiles.topLevelItemCount == 0
+        # D7.2: earlier results stay in the tree when a run starts.
+        assert widget._runOutputFiles.topLevelItemCount == items_before
         print("GUI_RESULT_ACTION_RESET=True", flush=True)
         STATE["widget"] = widget
         with slicer.util.NodeModify(widget._parameterNode):

@@ -108,9 +108,11 @@ class ResultsPanelTest(unittest.TestCase):
         by_name(qt, "addRunFolderButton").hide.assert_called_once_with()
         by_name(qt, "reviewStateLabel").hide.assert_called_once_with()
         by_name(qt, "resultsReportBar").hide.assert_called_once_with()
-        self.assertEqual(widget_names(layout), ["", "resultsTreeContainer", "resultsReportBar"])
+        # D7: the panel holds a header row (collapse, pop-out), a pop-out placeholder row and one body container;
+        # the empty-state row, the tree container and the report bar sit inside that body.
+        self.assertEqual(widget_names(layout), ["resultsHeaderRow", "resultsPoppedOutRow", "resultsBody"])
 
-    def test_unified_tree_populates_expanded_subject_run_category_files_and_preserves_siblings(self) -> None:
+    def test_unified_tree_populates_merged_subject_family_files_and_preserves_siblings(self) -> None:
         qt = fake_qt()
         qt.Qt.UserRole = 256
         items_by_parent = []
@@ -231,11 +233,11 @@ class ResultsPanelTest(unittest.TestCase):
             qc2.write_text("ok2", encoding="utf-8")
             m1.write_text(json.dumps({
                 "kind": SUBJECT_MANIFEST_KIND, "version": 1, "subject_id": "sub1", "run_name": "run1",
-                "output_root": str(m1.parent.parent), "tasks": [],
+                "status": "completed", "ended_at": "2026-11-01T10:00:00Z", "output_root": str(m1.parent.parent), "tasks": [],
             }), encoding="utf-8")
             m2.write_text(json.dumps({
                 "kind": SUBJECT_MANIFEST_KIND, "version": 1, "subject_id": "sub1", "run_name": "run2",
-                "output_root": str(m2.parent.parent), "tasks": [],
+                "status": "completed", "ended_at": "2026-11-02T10:00:00Z", "output_root": str(m2.parent.parent), "tasks": [],
             }), encoding="utf-8")
             r1 = parse_run_manifest(m1)
             r2 = parse_run_manifest(m2)
@@ -243,28 +245,27 @@ class ResultsPanelTest(unittest.TestCase):
                  mock.patch("shared.result_scene.owned_nodes", return_value=[]):
                 ui_run_history._populate_run_tree(owner, (r1, r2), 0)
                 tree = owner._runOutputFiles
-                self.assertTrue(tree.expanded_all)
+                self.assertFalse(tree.expanded_all)  # D7: the default state replaces expandAll
                 self.assertEqual(tree.topLevelItemCount, 1)
                 subj_item = tree.topLevelItem(0)
-                self.assertEqual(subj_item.text(0), "sub1")
+                # D7: both runs of sub1 merge into one subject item (no Run level); its status is the newest run's.
+                self.assertEqual(subj_item.text(0), "sub1 · completed")
                 self.assertTrue(subj_item.expanded)
-                self.assertEqual(subj_item.childCount(), 2)
-                run1_item, run2_item = subj_item.child(0), subj_item.child(1)
-                self.assertTrue(run1_item.expanded)
-                self.assertTrue(run2_item.expanded)
-                cat2 = run2_item.child(0)
-                self.assertTrue(cat2.expanded)
-                leaf2 = next(cat2.child(i) for i in range(cat2.childCount()) if cat2.child(i).text(0) == "r2.txt")
-                self.assertEqual(leaf2.data(0, qt.Qt.UserRole + 2), str(m2))
-                # Clicking column 1 on leaf2 opens r2.txt even though run1 (index 0) was initially selected
+                self.assertEqual(subj_item.childCount(), 1)
+                cat = subj_item.child(0)
+                self.assertFalse(cat.expanded)  # families start collapsed
+                self.assertEqual(cat.childCount(), 2)
+                leaf2 = next(cat.child(i) for i in range(cat.childCount()) if cat.child(i).text(0) == "r2.txt")
+                self.assertEqual(leaf2.data(0, qt.Qt.UserRole + 2), str(m2))  # run2 is the newest run
+                # Clicking column 1 on leaf2 opens r2.txt and selects its run, although run1 (index 0) was selected
                 tree.clicked_cb(leaf2, 1)
                 self.assertEqual(opened, [qc2.resolve()])
                 self.assertEqual(combo_holder[0].currentIndex, 1)
-                self.assertEqual(subj_item.childCount(), 2)
-                # Programmatic show_record on run2 preserves run1 sibling intact
+                self.assertEqual(subj_item.childCount(), 1)
+                # Programmatic show_record on run2 keeps the merged files of both runs
                 ui_run_history.show_record(owner, r2, json.loads(m2.read_text(encoding="utf-8")))
-                self.assertEqual(subj_item.childCount(), 2)
-                self.assertTrue(run1_item.childCount() >= 1)
+                self.assertEqual(subj_item.childCount(), 1)
+                self.assertEqual(subj_item.child(0).childCount(), 2)
 
     def test_populate_manifest_output_items_renders_preprocessing_mask_group(self) -> None:
         qt = fake_qt()

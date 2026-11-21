@@ -876,5 +876,40 @@ class LeHooksTest(unittest.TestCase):
             self.assertEqual(validate.call_args.args[0].selected_targets, ())
 
 
+# ------------------------------------------------------------------------------------------------------- FD4
+class _RescanOwner(_Owner):
+    """Records the Results rescans. A rescan while the user views another run shows that run's summary
+    (``show_record``); the failure summary must still be the last one."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.rescans: list = []
+
+    def _refresh_run_history(self, select_path=None) -> None:
+        self.rescans.append((self._runState, select_path))
+        self._set_run_summary_message("summary of the run the user views", "completed")
+
+
+class FD4RunEndRescanTest(unittest.TestCase):
+    def test_fd4_every_failed_run_end_rescans_the_results_after_the_state_change(self) -> None:
+        """FD4(a): worker_killed, process_failed and no_manifest rescan, so a never-scanned failed run appears and
+        the tree is not built from a scan taken while the run was running."""
+
+        for exit_code, outcome in ((137, "worker_killed"), (1, "process_failed"), (0, "no_manifest")):
+            with self.subTest(outcome=outcome):
+                owner = _RescanOwner()
+                owner._onBackgroundProcessFinished(exit_code, NORMAL)
+                self.assertEqual(owner._runState, "failed")
+                self.assertEqual(owner.rescans, [("failed", None)])
+                self.assertEqual(owner.summaries[-1][0], "failed")  # the failure summary stays on top
+
+    def test_fd4_a_finish_error_rescans_too(self) -> None:
+        owner = _RescanOwner()
+        owner.rows_error = RuntimeError("table is gone")
+        owner._onBackgroundProcessFinished(1, NORMAL)
+        self.assertEqual(owner._runState, "failed")
+        self.assertEqual(owner.rescans[-1], ("failed", None))
+
+
 if __name__ == "__main__":
     unittest.main()

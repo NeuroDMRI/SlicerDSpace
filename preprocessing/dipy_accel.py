@@ -522,7 +522,7 @@ def _solve_mppca_batch_torch(
 # 288 volumes (145x32x14 slab) and 9.9-12.6 GB / 33-61 s at 100 volumes (64x64x32), because every
 # worker holds about six (batch, 125, volumes) arrays. Batches of about 140-240 patches gave
 # 3.0-3.2 GB / 28-39 s and 2.1-2.3 GB / 29-42 s; in each interleaved pair the smaller batch was not
-# slower. The denoised output differs by at most 5e-7 of the signal maximum.
+# slower. The denoised output differs by at most 6e-7 of the signal maximum (31, 100 and 288 volumes).
 # 192 MiB gives 268 patches at <= 125 volumes and
 # 116 at 288. The batch is cut in whole x-rows of patch centres, so one call holds at least one row
 # (``nx_c`` patches) even when that exceeds the budget. Only the float32 accumulation order changes.

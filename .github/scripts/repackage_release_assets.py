@@ -696,7 +696,7 @@ def build_setup_zips(
         "  }\n"
         "})().catch((err) => { console.error(err); process.exit(1); });\n"
     )
-    proc = subprocess.run([node_bin, "-e", node_script, str(js_path), str(out_dir)], capture_output=True, text=True)
+    proc = subprocess.run([node_bin, "-e", node_script, str(js_path), str(out_dir)], capture_output=True, text=True, encoding="utf-8", errors="replace")
     if proc.returncode != 0:
         raise RuntimeError(f"Failed generating setup zips via node:\n{proc.stderr or proc.stdout}")
 

@@ -59,7 +59,7 @@ def setup_module_source(state_js: str = "{ os: 'linux', wmaEnabled: false }") ->
         raise unittest.SkipTest("node is not installed in PATH")
     code = ("const ic = require(process.argv[1]);"
             f"process.stdout.write(ic.buildSetupExtensionFiles({state_js}).find((f) => f.name.endsWith('SlicerDSpaceSetup.py')).data);")
-    return subprocess.run([node, "-e", code, str(JS_PATH)], capture_output=True, text=True, check=True).stdout
+    return subprocess.run([node, "-e", code, str(JS_PATH)], capture_output=True, text=True, encoding="utf-8", errors="strict", check=True).stdout
 
 
 def load_setup_module(minor: int = 10, source: str = None) -> dict:

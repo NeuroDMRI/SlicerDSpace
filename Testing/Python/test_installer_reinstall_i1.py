@@ -88,8 +88,14 @@ def _run_installer_function(ns: dict, state: FakeSlicerState, tmp: Path, slicer_
     expected_exe = expected_exe or os.path.abspath(slicer_arg)
 
     def fake_run(cmd, *args, **kwargs):
+        # Finding P2-1: on Linux without DISPLAY the installer prefixes the helper command with [xvfb-run, -a].
+        # Strip that prefix before matching, and record it, so the prefix stays tested.
+        orig_cmd = cmd
+        xvfb_prefix: list = []
+        if cmd and len(cmd) > 2 and os.path.basename(cmd[0]) == "xvfb-run" and cmd[1] == "-a":
+            xvfb_prefix, cmd = list(cmd[:2]), list(cmd[2:])
         if not cmd or cmd[0] not in (slicer_arg, expected_exe):
-            return real_run(cmd, *args, **kwargs)
+            return real_run(orig_cmd, *args, **kwargs)
         if cmd[0] != expected_exe:
             # POSIX subprocess resolves a relative executable against the cwd of the child, not of the caller.
             raise FileNotFoundError(cmd[0])
@@ -101,7 +107,7 @@ def _run_installer_function(ns: dict, state: FakeSlicerState, tmp: Path, slicer_
         )
         script = cmd.index("--python-script") + 1
         helper, script_args = cmd[script], cmd[script + 1:]
-        calls.append({"cmd": list(cmd), "cwd": kwargs.get("cwd"), "args": script_args})
+        calls.append({"cmd": list(cmd), "cwd": kwargs.get("cwd"), "args": script_args, "xvfb_prefix": xvfb_prefix})
         saved_argv = sys.argv
         sys.argv = [helper, *script_args]
         try:
@@ -109,7 +115,7 @@ def _run_installer_function(ns: dict, state: FakeSlicerState, tmp: Path, slicer_
                 exec(compile(Path(helper).read_text(encoding="utf-8"), helper, "exec"), {"__name__": "helper"})
         finally:
             sys.argv = saved_argv
-        return subprocess.CompletedProcess(cmd, seen.get("code", 1))
+        return subprocess.CompletedProcess(orig_cmd, seen.get("code", 1))
 
     archive = tmp / "ext.zip"
     archive.write_bytes(b"PK")
@@ -225,6 +231,27 @@ class I1ReinstallTests(_InstallerCopies, unittest.TestCase):
                 for call in calls:
                     self.assertTrue(os.path.isabs(call["cmd"][0]), call["cmd"][0])
                     self.assertNotEqual(Path(call["cwd"]), Path(user_cwd))
+
+    def test_p2_1_on_linux_without_display_the_helper_runs_under_xvfb_run_and_the_fake_accepts_it(self) -> None:
+        import shutil
+        import tempfile
+
+        # Simulate the Linux CI runner on any host: platform linux, DISPLAY unset, xvfb-run on PATH.
+        real_which = shutil.which
+        fake_which = lambda cmd, *a, **k: "/usr/bin/xvfb-run" if cmd == "xvfb-run" else real_which(cmd, *a, **k)
+        for label, ns in self.copies():
+            with self.subTest(label), tempfile.TemporaryDirectory() as tmp:
+                state = FakeSlicerState(installed=True)
+                env_without_display = {k: v for k, v in os.environ.items() if k != "DISPLAY"}
+                with patch.object(sys, "platform", "linux"), patch.dict(os.environ, env_without_display, clear=True), \
+                        patch.object(shutil, "which", fake_which):
+                    calls, logs, error = _run_installer_function(ns, state, Path(tmp))
+                self.assertIsNone(error)
+                self.assertEqual(state.starts, 2)
+                self.assertEqual(len(calls), 2)
+                for call in calls:
+                    self.assertEqual(call["xvfb_prefix"], ["/usr/bin/xvfb-run", "-a"])
+                    self.assertEqual(call["cmd"][0], os.path.abspath("/fake/Slicer"))
 
 
 if __name__ == "__main__":

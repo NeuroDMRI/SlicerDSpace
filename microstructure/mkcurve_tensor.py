@@ -506,10 +506,10 @@ def parameter_maps(coefficients):
 
 
 @lru_cache(maxsize=4)
-def _cached_cuda_operators(scaled_shape, scaled_bytes, grid_shape, grid_bytes):
+def _cached_cuda_operators(scaled_shape, scaled_bytes, grid_shape, grid_bytes, device_str="cuda"):
     import torch
 
-    dev = torch.device("cuda")
+    dev = torch.device(device_str)
     cpu_ops = _cached_grid_operator(scaled_shape, scaled_bytes, grid_shape, grid_bytes)
     (l_mid, K, S, R, l_nodes, T_nodes_inv, T_grid, U_R, P_gram, Q_rhs,
      X0, X0_is_e0, X0_full, a0_sq_nodes, U_R_full, a0_sq_full, log_grid) = cpu_ops
@@ -566,10 +566,10 @@ def _mean_kurtosis_cuda(coefficients_t, diff_basis_t, kurt_basis_t):
     return result
 
 
-def _parameter_maps_cuda(coefficients_np, ops):
+def _parameter_maps_cuda(coefficients_np, ops, device_str="cuda"):
     import torch
 
-    dev = torch.device("cuda")
+    dev = torch.device(device_str)
     n = len(coefficients_np)
     maps = {key: np.full(n, np.nan, dtype=np.float64) for key in ("fa", "md", "ad", "rd", "mk", "ak", "rk", "e1", "e2", "e3")}
     coeff_t = torch.as_tensor(np.ascontiguousarray(coefficients_np), dtype=torch.float64, device=dev)
@@ -662,7 +662,7 @@ def _parameter_maps_cuda(coefficients_np, ops):
 class _CudaSyntheticB0Fitter:
     """PyTorch CUDA fp64 WLLS and Chebyshev synthetic-b0 grid solver with CPU QR fallback."""
 
-    def __init__(self, signals, design, grid, *, solver="reference"):
+    def __init__(self, signals, design, grid, *, solver="reference", device="cuda"):
         import torch
 
         self.cpu_fitter = _SyntheticB0Fitter(signals, design, solver=solver)
@@ -670,7 +670,8 @@ class _CudaSyntheticB0Fitter:
         self.solver = solver
         self.prepared = self.cpu_fitter.prepared
         self.indices = self.cpu_fitter.indices
-        self.dev = torch.device("cuda")
+        self.device_str = str(device or "cuda")
+        self.dev = torch.device(self.device_str)
         self.grid_np = np.ascontiguousarray(grid, dtype=np.float64)
         self.ops = None
         if self.prepared is not None and len(self.indices) > 0 and len(self.grid_np) >= 64:
@@ -679,7 +680,9 @@ class _CudaSyntheticB0Fitter:
             self.scale_np = scale
             self.scaled_c = scaled_c
             self.scale_t = torch.as_tensor(np.array(scale, dtype=np.float64, copy=True, order="C"), dtype=torch.float64, device=self.dev)
-            self.ops = _cached_cuda_operators(scaled_c.shape, scaled_c.tobytes(), self.grid_np.shape, self.grid_np.tobytes())
+            self.ops = _cached_cuda_operators(
+                scaled_c.shape, scaled_c.tobytes(), self.grid_np.shape, self.grid_np.tobytes(), self.device_str
+            )
             self.logs_base_t = torch.as_tensor(np.ascontiguousarray(self.cpu_fitter.logs), dtype=torch.float64, device=self.dev)
             self.pos_nonb0_t = torch.as_tensor(self.cpu_fitter._positive_nonb0, dtype=torch.bool, device=self.dev)
 

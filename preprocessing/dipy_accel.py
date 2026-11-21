@@ -301,6 +301,8 @@ def resolve_dipy_accel_device(requested: Optional[str] = None, *, for_gibbs: boo
     if (value == "cuda" or value.startswith("cuda:")) and not cuda_ok:
         raise RuntimeError("DIPY CUDA acceleration was explicitly requested, but PyTorch CUDA is unavailable.")
     if cuda_ok:
+        if value.startswith("cuda:") and value != "cuda:0":
+            return value
         return "cuda"
     if for_gibbs and _mps_supports_fft_float32():
         return "mps"
@@ -631,6 +633,7 @@ def _mppca_cuda(
     return_sigma: bool,
     calc_dtype: np.dtype,
     out_dtype: np.dtype,
+    device: str = "cuda",
 ):
     import torch
 
@@ -642,7 +645,7 @@ def _mppca_cuda(
     nx_c = sx - 2 * rx
     ny_c = sy - 2 * ry
 
-    dev = torch.device("cuda")
+    dev = torch.device(device)
     torch_dtype = torch.float64 if calc_dtype == np.float64 else torch.float32
     elem_bytes = 8 if torch_dtype == torch.float64 else 4
     per_patch_bytes = max(4096, num_samples * max(dim, num_samples) * elem_bytes * 6)
@@ -651,6 +654,8 @@ def _mppca_cuda(
         default_batch=4096,
         min_batch=256,
         max_batch=8192,
+        device=dev,
+        windows_tdr_cap=2048,
     )
     ny_step = max(1, min(ny_c, max(1, patch_batch // max(1, nx_c))))
 
@@ -754,8 +759,9 @@ def mppca_accelerated(
     rx, ry, rz = int(r_arr[0]), int(r_arr[1]), int(r_arr[2])
 
     resolved = resolve_dipy_accel_device(device)
-    explicit_cuda = str(device or os.environ.get("SLICERDSPACE_DIPY_DEVICE", "auto")).strip().lower() == "cuda"
-    if resolved == "cuda":
+    req_raw = str(device or os.environ.get("SLICERDSPACE_DIPY_DEVICE", "auto")).strip().lower()
+    explicit_cuda = req_raw == "cuda" or req_raw.startswith("cuda:")
+    if resolved.startswith("cuda"):
         try:
             return _mppca_cuda(
                 arr_np,
@@ -765,6 +771,7 @@ def mppca_accelerated(
                 return_sigma=return_sigma,
                 calc_dtype=calc_dtype,
                 out_dtype=out_dtype,
+                device=resolved,
             )
         except Exception as exc:
             if is_cuda_oom(exc) or not explicit_cuda:
@@ -985,18 +992,19 @@ def gibbs_removal_accelerated(
                     out_sub[b0:b1] = res
         return out_sub
 
-    if resolved in {"cuda", "mps"}:
+    is_cuda_dev = resolved.startswith("cuda")
+    if is_cuda_dev or resolved == "mps":
         import torch
 
         dev = torch.device(resolved)
-        torch_dtype = torch.float64 if (resolved == "cuda" and flat.dtype == np.float64) else torch.float32
+        torch_dtype = torch.float64 if (is_cuda_dev and flat.dtype == np.float64) else torch.float32
         elem_bytes = 8 if torch_dtype == torch.float64 else 4
         per_slice_bytes = max(4096, h_dim * w_dim * elem_bytes * 24)
         init_batch = adaptive_gpu_scaled_batch(
             per_item_bytes=per_slice_bytes,
-            default_batch=512 if resolved == "cuda" else 128,
+            default_batch=512 if is_cuda_dev else 128,
             min_batch=16 if resolved == "mps" else 32,
-            max_batch=1024 if resolved == "cuda" else 256,
+            max_batch=1024 if is_cuda_dev else 256,
             device=dev,
         )
         g0_t = torch.as_tensor(g0, device=dev, dtype=torch_dtype).unsqueeze(0)

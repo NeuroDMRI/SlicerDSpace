@@ -41,6 +41,10 @@ class ModelBundle:
 def load_torch_model(path: Path, device: str) -> TorchScriptModel:
     if not path.exists():
         raise FileNotFoundError(f"Missing model: {path}")
+    if str(device).startswith("cuda"):
+        torch.backends.cuda.matmul.allow_tf32 = False
+        torch.backends.cudnn.allow_tf32 = False
+        torch.backends.cudnn.benchmark = True
     module = torch.jit.load(path.as_posix(), map_location=device)
     module.eval()
     return TorchScriptModel(module=module, device=device)

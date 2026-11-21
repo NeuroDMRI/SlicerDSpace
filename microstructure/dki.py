@@ -575,16 +575,18 @@ def _resolve_dki_device(device: str) -> str:
         has_cuda = False
     if (req == "cuda" or req.startswith("cuda:")) and not has_cuda:
         raise RuntimeError("DKI CUDA requested, but torch.cuda.is_available() is False")
+    if has_cuda and req.startswith("cuda:") and req != "cuda:0":
+        return req
     return "cuda" if has_cuda else "cpu"
 
 
-def _fit_dki_chunk_cuda(model, observed, fit_method_name: str):
+def _fit_dki_chunk_cuda(model, observed, fit_method_name: str, device: str = "cuda"):
     """PyTorch CUDA fp64 WLS/OLS solver with CPU pinv fallback on ill-conditioned voxels."""
     import numpy as np
     import torch
     from dipy.reconst.dki import decompose_tensor, from_lower_triangular
 
-    dev = torch.device("cuda")
+    dev = torch.device(device)
     A = model.design_matrix
     inv_A = model.inverse_design_matrix
     A_t = torch.as_tensor(np.ascontiguousarray(A), dtype=torch.float64, device=dev)
@@ -640,7 +642,7 @@ def _fit_dki_chunk_cuda(model, observed, fit_method_name: str):
     return params, s0
 
 
-def _predict_and_rtk_cuda(model, params, s0, observed):
+def _predict_and_rtk_cuda(model, params, s0, observed, device: str = "cuda"):
     """GPU fp64 signal residual (RMSE/NRMSE) and rescaled radial tensor kurtosis (RTK)."""
     import numpy as np
     import torch
@@ -653,7 +655,7 @@ def _predict_and_rtk_cuda(model, params, s0, observed):
         split_dki_param,
     )
 
-    dev = torch.device("cuda")
+    dev = torch.device(device)
     fevals, fevecs, fkt = split_dki_param(params)
     DT_pred = np.matmul(fevecs * fevals[:, None, :], np.swapaxes(fevecs, -1, -2))
     dt_pred = lower_triangular(DT_pred)
@@ -758,6 +760,7 @@ def _compute_maps(config: DkiConfig, paths: dict[str, Path], log):
             arrays[key] = array
         try:
             resolved_device = _resolve_dki_device(config.device)
+            is_cuda_dev = resolved_device.startswith("cuda")
             from shared.hardware_adapt import (
                 adaptive_cuda_scaled_batch,
                 available_ram_bytes,
@@ -765,13 +768,15 @@ def _compute_maps(config: DkiConfig, paths: dict[str, Path], log):
                 is_cuda_oom,
             )
 
-            if resolved_device == "cuda" and config.dense_metrics and dense_supported:
+            if is_cuda_dev and config.dense_metrics and dense_supported:
                 per_voxel_bytes = max(8192, int(len(selected)) * 22 * 32)
                 chunk_step = adaptive_cuda_scaled_batch(
                     per_voxel_bytes,
                     max(config.voxels_per_chunk, 16384),
                     min_batch=256,
                     max_batch=65536,
+                    device=resolved_device,
+                    windows_tdr_cap=8192,
                 )
             elif config.dense_metrics and dense_supported and len(flat_indices) > 64 and config.voxels_per_chunk == 1024:
                 chunk_step = 8192
@@ -812,15 +817,15 @@ def _compute_maps(config: DkiConfig, paths: dict[str, Path], log):
                         and getattr(type(model), "fit", None) is _ORIG_DKI_FIT
                         and "fit" not in model.__dict__
                     )
-                    if use_fast_dense and resolved_device == "cuda":
+                    if use_fast_dense and resolved_device.startswith("cuda"):
                         from dipy.reconst.dki import DiffusionKurtosisFit
                         try:
-                            params, s0 = _fit_dki_chunk_cuda(model, observed, fit_method_name)
+                            params, s0 = _fit_dki_chunk_cuda(model, observed, fit_method_name, device=resolved_device)
                             phase_times['tensor_fit'] += time.monotonic()-stamp
                             stamp = time.monotonic()
                             fitted = DiffusionKurtosisFit(model, params, model_S0=s0)
                             dense_used = True
-                            rmse, nrmse, rtk_cuda = _predict_and_rtk_cuda(model, params, s0, observed)
+                            rmse, nrmse, rtk_cuda = _predict_and_rtk_cuda(model, params, s0, observed, device=resolved_device)
                             with np.errstate(invalid="ignore", divide="ignore", over="ignore"):
                                 raw = {
                                     key: np.asarray(getattr(fitted, key)(min_kurtosis=None, max_kurtosis=None)).reshape(-1)
@@ -940,6 +945,8 @@ def _compute_maps(config: DkiConfig, paths: dict[str, Path], log):
                 staged.replace(paths[key])
             phase_times['file_export'] = time.monotonic()-stamp
         finally:
+            if resolved_device.startswith("cuda"):
+                empty_cuda_cache_safely()
             for array in arrays.values():
                 array._mmap.close()
             if isinstance(unscaled, np.memmap):

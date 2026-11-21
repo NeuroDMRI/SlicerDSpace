@@ -310,7 +310,9 @@ def install_tractcloud_accelerations(pipeline_mod, resolved_device: str = "cpu")
         return bool(callable(fn) and fn() is True)
 
     dev_str = str(resolved_device or "cpu").lower()
-    if dev_str.startswith("cuda"):
+    if dev_str.startswith("cuda:"):
+        _ACTIVE_DEVICE_STR = dev_str
+    elif dev_str.startswith("cuda"):
         _ACTIVE_DEVICE_STR = "cuda:0"
     elif dev_str.startswith("mps"):
         _ACTIVE_DEVICE_STR = "mps"
@@ -447,8 +449,18 @@ def install_tractcloud_accelerations(pipeline_mod, resolved_device: str = "cpu")
         n_total = len(ds)
         if n_total == 0:
             return []
+        from shared.hardware_adapt import adaptive_cuda_scaled_batch, empty_gpu_cache_safely, is_cuda_oom
+
         batch_size = int(getattr(data_loader, "batch_size", 2048) or 2048)
-        total_batches = (n_total + batch_size - 1) // batch_size
+        if target_dev.type == "cuda":
+            batch_size = adaptive_cuda_scaled_batch(
+                per_item_bytes=262144,
+                default_batch=batch_size,
+                min_batch=128,
+                max_batch=batch_size,
+                device=target_dev,
+            )
+        total_batches = max(1, (n_total + batch_size - 1) // batch_size)
 
         non_blocking = target_dev.type == "cuda"
         feat_t = ds._feat_transposed.to(target_dev, non_blocking=non_blocking)
@@ -457,37 +469,49 @@ def install_tractcloud_accelerations(pipeline_mod, resolved_device: str = "cpu")
         global_t = torch.as_tensor(global_feat, dtype=torch.float32, device=target_dev).transpose(2, 1).contiguous()
 
         preds_gpu: list[torch.Tensor] = []
-        with torch.no_grad():
-            for b_idx, start in enumerate(range(0, n_total, batch_size)):
-                end = min(start + batch_size, n_total)
-                cur_b = end - start
-                points = feat_t[start:end]  # (B, 3, P)
-                if knn_idx is not None:
-                    # feat_t[knn_idx[start:end]] -> (B, k, 3, P) -> permute -> (B, 3, P, k)
-                    k_local = feat_t[knn_idx[start:end]].permute(0, 2, 3, 1).contiguous()
-                else:
-                    k_local = torch.zeros(
-                        (cur_b, points.shape[1], points.shape[2], 1),
-                        dtype=torch.float32,
-                        device=target_dev,
-                    )
-                k_global_b = global_t.expand(cur_b, -1, -1, -1)
-                info = torch.cat((k_local, k_global_b), dim=3)
-                logits = model(points, info).view(-1, num_classes)
-                preds_gpu.append(logits.argmax(dim=1))
-                if progress_callback:
-                    progress_callback((b_idx + 1) / total_batches)
-
-        out_preds = torch.cat(preds_gpu, dim=0).cpu().numpy().tolist()
-        del preds_gpu, feat_t, knn_idx, global_t
-        if target_dev.type == "mps":
-            mps_ns = getattr(torch, "mps", None)
-            if callable(getattr(mps_ns, "synchronize", None)):
-                mps_ns.synchronize()
-            if callable(getattr(mps_ns, "empty_cache", None)):
-                mps_ns.empty_cache()
-        elif target_dev.type == "cuda" and torch.cuda.is_initialized():
-            torch.cuda.empty_cache()
+        try:
+            with torch.no_grad():
+                start = 0
+                cur_batch_size = batch_size
+                b_idx = 0
+                while start < n_total:
+                    end = min(start + cur_batch_size, n_total)
+                    cur_b = end - start
+                    try:
+                        points = feat_t[start:end]  # (B, 3, P)
+                        if knn_idx is not None:
+                            # feat_t[knn_idx[start:end]] -> (B, k, 3, P) -> permute -> (B, 3, P, k)
+                            k_local = feat_t[knn_idx[start:end]].permute(0, 2, 3, 1).contiguous()
+                        else:
+                            k_local = torch.zeros(
+                                (cur_b, points.shape[1], points.shape[2], 1),
+                                dtype=torch.float32,
+                                device=target_dev,
+                            )
+                        k_global_b = global_t.expand(cur_b, -1, -1, -1)
+                        info = torch.cat((k_local, k_global_b), dim=3)
+                        logits = model(points, info).view(-1, num_classes)
+                        preds_gpu.append(logits.argmax(dim=1))
+                        start = end
+                        b_idx += 1
+                        if progress_callback:
+                            progress_callback(min(1.0, b_idx / total_batches))
+                    except RuntimeError as exc:
+                        if target_dev.type != "cuda" or not is_cuda_oom(exc) or cur_batch_size <= 64:
+                            raise
+                        empty_gpu_cache_safely()
+                        cur_batch_size = max(64, cur_batch_size // 2)
+            out_preds = torch.cat(preds_gpu, dim=0).cpu().numpy().tolist()
+        finally:
+            del preds_gpu, feat_t, knn_idx, global_t
+            if target_dev.type == "mps":
+                mps_ns = getattr(torch, "mps", None)
+                if callable(getattr(mps_ns, "synchronize", None)):
+                    mps_ns.synchronize()
+                if callable(getattr(mps_ns, "empty_cache", None)):
+                    mps_ns.empty_cache()
+            elif target_dev.type == "cuda" and torch.cuda.is_initialized():
+                torch.cuda.empty_cache()
         return out_preds
 
     inference_mod.extract_ras_features = fast_extract_ras_features

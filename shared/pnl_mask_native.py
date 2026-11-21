@@ -512,41 +512,82 @@ def _preload_vendored_models(model_dir: Path, resolved_device: str, pnl_inf, pnl
     return states, model
 
 
+def _hardware_adapt_helpers():
+    try:
+        from shared.hardware_adapt import adaptive_cuda_scaled_batch, empty_cuda_cache_safely, is_cuda_oom
+
+        return adaptive_cuda_scaled_batch, empty_cuda_cache_safely, is_cuda_oom
+    except ImportError:
+        import importlib.util as _ilu
+
+        ha_path = Path(__file__).with_name("hardware_adapt.py")
+        if ha_path.is_file():
+            spec = _ilu.spec_from_file_location("_slicerdspace_hardware_adapt", ha_path)
+            if spec and spec.loader:
+                mod = _ilu.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                return mod.adaptive_cuda_scaled_batch, mod.empty_cuda_cache_safely, mod.is_cuda_oom
+        return None, None, None
+
+
 def _fast_vendored_predict(volume: np.ndarray, resolved_device: str, batch_size: int, preloaded, pnl_inf):
     import torch
 
     if volume.shape != (256, 256, 256) or not np.isfinite(volume).all():
         raise ValueError("Expected a finite normalized IIT-grid volume")
     is_cuda = str(resolved_device).startswith("cuda")
+    adapt_batch, empty_cuda_cache, is_oom = _hardware_adapt_helpers()
+    eff_bs = max(1, int(batch_size))
+    if is_cuda and adapt_batch is not None:
+        eff_bs = adapt_batch(128 * 1024 * 1024, eff_bs, min_batch=1, max_batch=eff_bs, device=resolved_device)
+
     states, model = preloaded
     probabilities = {}
-    with torch.inference_mode():
-        for view in pnl_inf.VIEWS:
-            model.load_state_dict(states.pop(view), strict=True)
-            slices = pnl_inf.orient(volume, view)
-            output = np.empty(volume.shape, dtype=np.float32)
-            nonzero_mask = np.any(slices != 0.0, axis=(1, 2))
-            zero_idx = np.flatnonzero(~nonzero_mask)
-            nz_idx = np.flatnonzero(nonzero_mask)
-            if len(zero_idx) > 0:
-                z_in = torch.zeros((1, 1, 256, 256), dtype=torch.float32, device=resolved_device)
-                z_res = model(z_in, segmentation_only=True)
-                output[zero_idx] = z_res[0, 0].cpu().numpy()
-            if len(nz_idx) > 0:
-                nz_slices = np.ascontiguousarray(slices[nz_idx, None])
-                for start in range(0, len(nz_idx), batch_size):
-                    batch_np = nz_slices[start:start + batch_size]
-                    t_in = torch.from_numpy(batch_np)
-                    if is_cuda:
-                        t_in = t_in.pin_memory().to(resolved_device, non_blocking=True)
-                    else:
-                        t_in = t_in.to(resolved_device)
-                    res = model(t_in, segmentation_only=True)
-                    output[nz_idx[start:start + len(batch_np)]] = res[:, 0].cpu().numpy()
-            if not np.isfinite(output).all():
-                raise RuntimeError("CNN produced nonfinite probabilities")
-            probabilities[view] = pnl_inf.orient(output, view)
-    del model
+    try:
+        with torch.inference_mode():
+            for view in pnl_inf.VIEWS:
+                model.load_state_dict(states.pop(view), strict=True)
+                slices = pnl_inf.orient(volume, view)
+                output = np.empty(volume.shape, dtype=np.float32)
+                nonzero_mask = np.any(slices != 0.0, axis=(1, 2))
+                zero_idx = np.flatnonzero(~nonzero_mask)
+                nz_idx = np.flatnonzero(nonzero_mask)
+                if len(zero_idx) > 0:
+                    z_in = torch.zeros((1, 1, 256, 256), dtype=torch.float32, device=resolved_device)
+                    z_res = model(z_in, segmentation_only=True)
+                    output[zero_idx] = z_res[0, 0].cpu().numpy()
+                if len(nz_idx) > 0:
+                    nz_slices = np.ascontiguousarray(slices[nz_idx, None])
+                    start = 0
+                    cur_step = eff_bs
+                    while start < len(nz_idx):
+                        batch_np = nz_slices[start:start + cur_step]
+                        try:
+                            t_in = torch.from_numpy(batch_np)
+                            if is_cuda and sys.platform != "win32":
+                                t_in = t_in.pin_memory().to(resolved_device, non_blocking=True)
+                            else:
+                                t_in = t_in.to(resolved_device)
+                            res = model(t_in, segmentation_only=True)
+                            output[nz_idx[start:start + len(batch_np)]] = res[:, 0].cpu().numpy()
+                            start += len(batch_np)
+                        except RuntimeError as exc:
+                            oom_hit = is_oom(exc) if is_oom is not None else ("out of memory" in str(exc).lower())
+                            if not is_cuda or not oom_hit or cur_step <= 1:
+                                raise
+                            if empty_cuda_cache is not None:
+                                empty_cuda_cache()
+                            cur_step = max(1, cur_step // 2)
+                if not np.isfinite(output).all():
+                    raise RuntimeError("CNN produced nonfinite probabilities")
+                probabilities[view] = pnl_inf.orient(output, view)
+    finally:
+        del model
+        if is_cuda:
+            if empty_cuda_cache is not None:
+                empty_cuda_cache()
+            elif torch.cuda.is_initialized():
+                torch.cuda.empty_cache()
     return pnl_inf.aggregate(probabilities)[1]
 
 

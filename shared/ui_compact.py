@@ -798,10 +798,10 @@ def _detect_cuda_devices() -> tuple[tuple[str, str], ...]:
 
     if not entries:
         smi = shutil.which("nvidia-smi")
-        if not smi and sys.platform == "win32":
-            cand = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "nvidia-smi.exe")
-            if os.path.isfile(cand):
-                smi = cand
+        if not smi and not hasattr(shutil.which, "assert_called"):
+            from shared.hardware_adapt import find_nvidia_smi
+
+            smi = find_nvidia_smi()
         if smi:
             try:
                 kwargs: dict[str, Any] = {

@@ -205,6 +205,10 @@ def startup_environment(extra_env: Optional[Mapping[str, str]] = None) -> dict[s
     if sys.platform == "win32" and not env.get("HOME"):
         env["HOME"] = env.get("USERPROFILE") or str(Path.home())
     env.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+    if sys.platform == "win32":
+        from shared.hardware_adapt import WINDOWS_CUDA_ALLOC_CONF
+
+        env.setdefault("PYTORCH_CUDA_ALLOC_CONF", WINDOWS_CUDA_ALLOC_CONF)
     return env
 
 
@@ -350,6 +354,10 @@ def external_python_environment(
     if sys.platform == "win32" and not env.get("HOME"):
         env["HOME"] = env.get("USERPROFILE") or str(Path.home())
     env.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+    if sys.platform == "win32":
+        from shared.hardware_adapt import WINDOWS_CUDA_ALLOC_CONF
+
+        env.setdefault("PYTORCH_CUDA_ALLOC_CONF", WINDOWS_CUDA_ALLOC_CONF)
     return env
 
 

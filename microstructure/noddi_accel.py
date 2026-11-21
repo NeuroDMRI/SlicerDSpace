@@ -56,6 +56,8 @@ def resolve_noddi_device(requested: str | None = "auto") -> str:
     cuda_ok = bool(torch is not None and torch.cuda.is_available())
     if (req == "cuda" or req.startswith("cuda:")) and not cuda_ok:
         raise RuntimeError("NODDI CUDA requested, but torch.cuda.is_available() is False.")
+    if cuda_ok and req.startswith("cuda:") and req != "cuda:0":
+        return req
     return "cuda" if cuda_ok else "cpu"
 
 
@@ -638,6 +640,9 @@ def _fit_noddi_cuda(
     lambda1: float,
     lambda2: float,
     ndirs: int,
+    device: str = "cuda:0",
+    explicit_cuda: bool = False,
+    nthreads: int = 1,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     assert torch is not None
     n_vox, n_grad = y.shape
@@ -649,97 +654,143 @@ def _fit_noddi_cuda(
     if n_vox == 0:
         return estimates, rmse, nrmse
 
-    dev = torch.device("cuda:0")
-    with torch.no_grad():
-        # Build (ndirs, n_grad, P1) and Gram matrices on GPU in FP64
-        wm_t = torch.as_tensor(K_wm, dtype=torch.float64, device=dev).permute(1, 2, 0).contiguous()
-        iso_t = torch.as_tensor(K_iso, dtype=torch.float64, device=dev)
-        A1_all = torch.empty((ndirs, n_grad, P1), dtype=torch.float64, device=dev)
-        A1_all[:, :, :n_wm] = wm_t
-        A1_all[:, :, n_wm] = iso_t.unsqueeze(0)
-        G1_all = torch.bmm(A1_all.transpose(1, 2), A1_all)
+    from shared.hardware_adapt import (
+        adaptive_cuda_scaled_batch,
+        empty_cuda_cache_safely,
+        run_cuda_chunked_with_oom_fallback,
+    )
 
-        dwi_idx_t = torch.as_tensor(dwi_idx, dtype=torch.int64, device=dev)
-        norms_t = torch.as_tensor(K_norms, dtype=torch.float64, device=dev)
-        A2_all = A1_all.index_select(1, dwi_idx_t)[:, :, :n_wm] * norms_t.unsqueeze(0)
-        eye_wm = torch.eye(n_wm, dtype=torch.float64, device=dev).unsqueeze(0)
-        G2_all = torch.bmm(A2_all.transpose(1, 2), A2_all) + lambda2 * eye_wm
+    dev_str = str(device or "cuda:0")
+    dev = torch.device(dev_str if ":" in dev_str else "cuda:0")
+    order = np.argsort(dir_idx, kind="stable")
+    sorted_d = dir_idx[order]
+    Y_sorted = np.ascontiguousarray(y[order], dtype=np.float64)
 
-        iso_dwi_t = iso_t.index_select(0, dwi_idx_t)
-        icvf_t = torch.as_tensor(icvf, dtype=torch.float64, device=dev)
-        kappa_t = torch.as_tensor(kappa, dtype=torch.float64, device=dev)
+    est_sorted = np.empty((n_vox, 3), dtype=np.float32)
+    rmse_sorted = np.empty(n_vox, dtype=np.float32)
+    nrmse_sorted = np.empty(n_vox, dtype=np.float32)
 
-        # Sort voxels by direction so RHS GEMMs can operate on contiguous slices
-        order = np.argsort(dir_idx, kind="stable")
-        sorted_d = dir_idx[order]
-        Y_sorted = np.ascontiguousarray(y[order], dtype=np.float64)
+    wm_t = iso_t = A1_all = G1_all = dwi_idx_t = norms_t = A2_all = eye_wm = G2_all = iso_dwi_t = icvf_t = kappa_t = None
+    try:
+        with torch.no_grad():
+            # Build (ndirs, n_grad, P1) and Gram matrices on GPU in FP64
+            wm_t = torch.as_tensor(K_wm, dtype=torch.float64, device=dev).permute(1, 2, 0).contiguous()
+            iso_t = torch.as_tensor(K_iso, dtype=torch.float64, device=dev)
+            A1_all = torch.empty((ndirs, n_grad, P1), dtype=torch.float64, device=dev)
+            A1_all[:, :, :n_wm] = wm_t
+            A1_all[:, :, n_wm] = iso_t.unsqueeze(0)
+            G1_all = torch.bmm(A1_all.transpose(1, 2), A1_all)
 
-        chunk_size = 65536
-        est_sorted = np.empty((n_vox, 3), dtype=np.float32)
-        rmse_sorted = np.empty(n_vox, dtype=np.float32)
-        nrmse_sorted = np.empty(n_vox, dtype=np.float32)
+            dwi_idx_t = torch.as_tensor(dwi_idx, dtype=torch.int64, device=dev)
+            norms_t = torch.as_tensor(K_norms, dtype=torch.float64, device=dev)
+            A2_all = A1_all.index_select(1, dwi_idx_t)[:, :, :n_wm] * norms_t.unsqueeze(0)
+            eye_wm = torch.eye(n_wm, dtype=torch.float64, device=dev).unsqueeze(0)
+            G2_all = torch.bmm(A2_all.transpose(1, 2), A2_all) + lambda2 * eye_wm
 
-        for start in range(0, n_vox, chunk_size):
-            stop = min(start + chunk_size, n_vox)
-            B = stop - start
-            Y_c = torch.as_tensor(Y_sorted[start:stop], dtype=torch.float64, device=dev)
-            d_c = torch.as_tensor(sorted_d[start:stop], dtype=torch.int64, device=dev)
+            iso_dwi_t = iso_t.index_select(0, dwi_idx_t)
+            icvf_t = torch.as_tensor(icvf, dtype=torch.float64, device=dev)
+            kappa_t = torch.as_tensor(kappa, dtype=torch.float64, device=dev)
 
-            # Grouped RHS1 computation across unique directions in this sorted chunk
-            rhs1 = torch.empty((B, P1), dtype=torch.float64, device=dev)
-            uniq_d, counts_d = torch.unique_consecutive(d_c, return_counts=True)
-            offsets_d = torch.zeros(uniq_d.numel() + 1, dtype=torch.int64, device=dev)
-            torch.cumsum(counts_d, dim=0, out=offsets_d[1:])
-            offs_cpu = offsets_d.cpu().tolist()
-            uniq_cpu = uniq_d.cpu().tolist()
-            for idx_u, d_val in enumerate(uniq_cpu):
-                s_u, e_u = offs_cpu[idx_u], offs_cpu[idx_u + 1]
-                rhs1[s_u:e_u] = Y_c[s_u:e_u] @ A1_all[d_val]
-
-            c1 = _solve_qp_batched_torch(G1_all, d_c, rhs1)
-
-            y2 = torch.clamp(
-                Y_c.index_select(1, dwi_idx_t) - c1[:, n_wm : n_wm + 1] * iso_dwi_t.unsqueeze(0),
-                min=0.0,
+            per_voxel_bytes = max(8192, (n_grad * 4 + P1 * 8) * 8)
+            chunk_size = adaptive_cuda_scaled_batch(
+                per_voxel_bytes,
+                65536,
+                min_batch=512,
+                max_batch=65536,
+                device=dev,
+                windows_tdr_cap=8192,
             )
-            rhs2 = torch.empty((B, n_wm), dtype=torch.float64, device=dev)
-            for idx_u, d_val in enumerate(uniq_cpu):
-                s_u, e_u = offs_cpu[idx_u], offs_cpu[idx_u + 1]
-                rhs2[s_u:e_u] = y2[s_u:e_u] @ A2_all[d_val] - lambda1
 
-            x2 = _solve_qp_batched_torch(G2_all, d_c, rhs2)
+            def _cuda_chunk_step(start: int, stop: int) -> None:
+                B = stop - start
+                Y_c = torch.as_tensor(Y_sorted[start:stop], dtype=torch.float64, device=dev)
+                d_c = torch.as_tensor(sorted_d[start:stop], dtype=torch.int64, device=dev)
 
-            supp = torch.empty((B, P1), dtype=torch.bool, device=dev)
-            supp[:, :n_wm] = x2 > 0.0
-            supp[:, n_wm] = True
-            c3 = _solve_qp_batched_torch(G1_all, d_c, rhs1, allowed_mask=supp)
+                # Grouped RHS1 computation across unique directions in this sorted chunk
+                rhs1 = torch.empty((B, P1), dtype=torch.float64, device=dev)
+                uniq_d, counts_d = torch.unique_consecutive(d_c, return_counts=True)
+                offsets_d = torch.zeros(uniq_d.numel() + 1, dtype=torch.int64, device=dev)
+                torch.cumsum(counts_d, dim=0, out=offsets_d[1:])
+                offs_cpu = offsets_d.cpu().tolist()
+                uniq_cpu = uniq_d.cpu().tolist()
+                for idx_u, d_val in enumerate(uniq_cpu):
+                    s_u, e_u = offs_cpu[idx_u], offs_cpu[idx_u + 1]
+                    rhs1[s_u:e_u] = Y_c[s_u:e_u] @ A1_all[d_val]
 
-            w_wm = c3[:, :n_wm]
-            s_wm = w_wm.sum(dim=1) + 1e-16
-            s_tot = c3.sum(dim=1) + 1e-16
-            f_iso = c3[:, n_wm] / s_tot
-            f_ic = (w_wm @ icvf_t) / s_wm
-            f_od = (2.0 / np.pi) * torch.atan2(torch.ones_like(s_wm), (w_wm @ kappa_t) / s_wm)
-            est_c = torch.stack((f_ic, f_od, f_iso), dim=1).to(torch.float32)
+                c1 = _solve_qp_batched_torch(G1_all, d_c, rhs1)
 
-            y_pred = torch.empty_like(Y_c)
-            for idx_u, d_val in enumerate(uniq_cpu):
-                s_u, e_u = offs_cpu[idx_u], offs_cpu[idx_u + 1]
-                y_pred[s_u:e_u] = c3[s_u:e_u] @ A1_all[d_val].T
+                y2 = torch.clamp(
+                    Y_c.index_select(1, dwi_idx_t) - c1[:, n_wm : n_wm + 1] * iso_dwi_t.unsqueeze(0),
+                    min=0.0,
+                )
+                rhs2 = torch.empty((B, n_wm), dtype=torch.float64, device=dev)
+                for idx_u, d_val in enumerate(uniq_cpu):
+                    s_u, e_u = offs_cpu[idx_u], offs_cpu[idx_u + 1]
+                    rhs2[s_u:e_u] = y2[s_u:e_u] @ A2_all[d_val] - lambda1
 
-            res = Y_c - y_pred
-            ss_res = (res * res).sum(dim=1)
-            rmse_c = torch.sqrt(ss_res / float(n_grad)).to(torch.float32)
-            ss_y = (Y_c * Y_c).sum(dim=1)
-            nrmse_c = torch.where(ss_y > 1e-16, torch.sqrt(ss_res / torch.clamp(ss_y, min=1e-16)), 0.0).to(torch.float32)
+                x2 = _solve_qp_batched_torch(G2_all, d_c, rhs2)
 
-            est_sorted[start:stop] = est_c.cpu().numpy()
-            rmse_sorted[start:stop] = rmse_c.cpu().numpy()
-            nrmse_sorted[start:stop] = nrmse_c.cpu().numpy()
+                supp = torch.empty((B, P1), dtype=torch.bool, device=dev)
+                supp[:, :n_wm] = x2 > 0.0
+                supp[:, n_wm] = True
+                c3 = _solve_qp_batched_torch(G1_all, d_c, rhs1, allowed_mask=supp)
+
+                w_wm = c3[:, :n_wm]
+                s_wm = w_wm.sum(dim=1) + 1e-16
+                s_tot = c3.sum(dim=1) + 1e-16
+                f_iso = c3[:, n_wm] / s_tot
+                f_ic = (w_wm @ icvf_t) / s_wm
+                f_od = (2.0 / np.pi) * torch.atan2(torch.ones_like(s_wm), (w_wm @ kappa_t) / s_wm)
+                est_c = torch.stack((f_ic, f_od, f_iso), dim=1).to(torch.float32)
+
+                y_pred = torch.empty_like(Y_c)
+                for idx_u, d_val in enumerate(uniq_cpu):
+                    s_u, e_u = offs_cpu[idx_u], offs_cpu[idx_u + 1]
+                    y_pred[s_u:e_u] = c3[s_u:e_u] @ A1_all[d_val].T
+
+                res = Y_c - y_pred
+                ss_res = (res * res).sum(dim=1)
+                rmse_c = torch.sqrt(ss_res / float(n_grad)).to(torch.float32)
+                ss_y = (Y_c * Y_c).sum(dim=1)
+                nrmse_c = torch.where(ss_y > 1e-16, torch.sqrt(ss_res / torch.clamp(ss_y, min=1e-16)), 0.0).to(torch.float32)
+
+                est_sorted[start:stop] = est_c.cpu().numpy()
+                rmse_sorted[start:stop] = rmse_c.cpu().numpy()
+                nrmse_sorted[start:stop] = nrmse_c.cpu().numpy()
+
+            def _cpu_chunk_fallback(start: int, stop: int) -> None:
+                est_fb, rmse_fb, nrmse_fb = _fit_noddi_cpu(
+                    y=Y_sorted[start:stop],
+                    dir_idx=sorted_d[start:stop],
+                    K_wm=K_wm,
+                    K_iso=K_iso,
+                    K_norms=K_norms,
+                    icvf=icvf,
+                    kappa=kappa,
+                    dwi_idx=dwi_idx,
+                    lambda1=lambda1,
+                    lambda2=lambda2,
+                    ndirs=ndirs,
+                    nthreads=max(1, int(nthreads)),
+                )
+                est_sorted[start:stop] = est_fb
+                rmse_sorted[start:stop] = rmse_fb
+                nrmse_sorted[start:stop] = nrmse_fb
+
+            run_cuda_chunked_with_oom_fallback(
+                n_vox,
+                chunk_size,
+                _cuda_chunk_step,
+                min_chunk=512,
+                cpu_fallback_fn=None if explicit_cuda else _cpu_chunk_fallback,
+            )
 
         estimates[order] = est_sorted
         rmse[order] = rmse_sorted
         nrmse[order] = nrmse_sorted
+    finally:
+        del wm_t, iso_t, A1_all, G1_all, dwi_idx_t, norms_t, A2_all, eye_wm, G2_all, iso_dwi_t, icvf_t, kappa_t
+        empty_cuda_cache_safely()
 
     return estimates, rmse, nrmse
 
@@ -900,7 +951,8 @@ def run_accelerated_noddi_fit(
     kappa = np.asarray(kernels["kappa"], dtype=np.float64)
     dwi_idx = np.asarray(scheme.dwi_idx, dtype=np.int64)
 
-    if resolved_device == "cuda":
+    requested_norm = str(getattr(config, "noddi_device", "") or "").strip().lower()
+    if resolved_device.startswith("cuda"):
         estimates, rmse_v, nrmse_v = _fit_noddi_cuda(
             y=y,
             dir_idx=dir_idx,
@@ -913,6 +965,9 @@ def run_accelerated_noddi_fit(
             lambda1=float(config.noddi_solver_lambda1),
             lambda2=float(config.noddi_solver_lambda2),
             ndirs=int(config.noddi_ndirs),
+            device=resolved_device,
+            explicit_cuda=requested_norm == "cuda" or requested_norm.startswith("cuda:"),
+            nthreads=int(nthreads),
         )
     else:
         estimates, rmse_v, nrmse_v = _fit_noddi_cpu(
@@ -1034,7 +1089,7 @@ def run_accelerated_noddi_fit(
         "noddi_nrmse": nrmse_map,
     }
     exec_meta = {
-        "engine": f"batched_lawson_hanson_fp64_{resolved_device}",
+        "engine": f"batched_lawson_hanson_fp64_{'cuda' if resolved_device.startswith('cuda') else resolved_device}",
         "device": resolved_device,
         "nthreads": int(nthreads),
         "load_seconds": round(t_load, 4),

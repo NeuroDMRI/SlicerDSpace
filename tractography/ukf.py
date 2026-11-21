@@ -712,11 +712,15 @@ def ukf_gpu_process_environment(startup_environment, executable):
         from pathlib import PureWindowsPath
 
         windows = next((value for key, value in env.items() if key.upper() == "SYSTEMROOT"), None)
+        cuda_path = next((value for key, value in env.items() if key.upper() == "CUDA_PATH"), None)
         if windows:
             for key in list(env):
                 if key.upper() == "PATH":
                     del env[key]
-            env["PATH"] = ";".join((str(PureWindowsPath(str(exe_path)).parent), windows + r"\System32", windows))
+            path_parts = [str(PureWindowsPath(str(exe_path)).parent), windows + r"\System32", windows]
+            if cuda_path and (Path(cuda_path) / "bin").is_dir():
+                path_parts.append(str(PureWindowsPath(cuda_path) / "bin"))
+            env["PATH"] = ";".join(path_parts)
     return env
 
 
@@ -729,27 +733,70 @@ def _cuda_runtime_available_for_ukf(binary: Path) -> bool:
         except Exception:
             pass
     try:
+        import contextlib
         import ctypes
         import ctypes.util
+
+        @contextlib.contextmanager
+        def _win_dll_dir(folder: Path):
+            handle = None
+            adder = getattr(os, "add_dll_directory", None)
+            if sys.platform == "win32" and callable(adder) and folder.is_dir():
+                try:
+                    handle = adder(str(folder))
+                except OSError:
+                    handle = None
+            try:
+                yield
+            finally:
+                if handle is not None:
+                    try:
+                        handle.close()
+                    except Exception:
+                        pass
 
         candidates = []
         lib_dir = Path(binary).parent.parent / "lib"
         if sys.platform == "win32":
             candidates.extend(sorted(Path(binary).parent.glob("cudart64_*.dll")))
+            cuda_path = os.environ.get("CUDA_PATH", "").strip()
+            if cuda_path:
+                cuda_bin = Path(cuda_path) / "bin"
+                if cuda_bin.is_dir():
+                    candidates.extend(sorted(cuda_bin.glob("cudart64_*.dll")))
         elif sys.platform.startswith("linux"):
             if lib_dir.is_dir():
                 candidates.extend(sorted(lib_dir.glob("libcudart.so*")))
         found_sys = ctypes.util.find_library("cudart")
         if found_sys:
             candidates.append(Path(found_sys))
-        for cand in candidates:
+        deduped = list(dict.fromkeys(candidates))
+        for cand in deduped:
             try:
-                lib = ctypes.CDLL(str(cand))
-                count = ctypes.c_int(0)
-                if lib.cudaGetDeviceCount(ctypes.byref(count)) == 0 and count.value > 0:
-                    return True
-            except OSError:
+                with _win_dll_dir(cand.parent):
+                    lib = ctypes.CDLL(str(cand))
+                    lib.cudaGetDeviceCount.argtypes = [ctypes.POINTER(ctypes.c_int)]
+                    lib.cudaGetDeviceCount.restype = ctypes.c_int
+                    count = ctypes.c_int(0)
+                    if lib.cudaGetDeviceCount(ctypes.byref(count)) == 0 and count.value > 0:
+                        return True
+            except (OSError, AttributeError):
                 continue
+        if sys.platform == "win32":
+            sys_nvcuda = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "nvcuda.dll"
+            for drv_name in ("nvcuda.dll", str(sys_nvcuda)):
+                try:
+                    driver = ctypes.WinDLL(drv_name)
+                    driver.cuInit.argtypes = [ctypes.c_uint]
+                    driver.cuInit.restype = ctypes.c_int
+                    driver.cuDeviceGetCount.argtypes = [ctypes.POINTER(ctypes.c_int)]
+                    driver.cuDeviceGetCount.restype = ctypes.c_int
+                    if driver.cuInit(0) == 0:
+                        count = ctypes.c_int(0)
+                        if driver.cuDeviceGetCount(ctypes.byref(count)) == 0 and count.value > 0:
+                            return True
+                except (OSError, AttributeError):
+                    continue
         if sys.platform.startswith("linux"):
             try:
                 driver = ctypes.CDLL("libcuda.so.1")
@@ -757,7 +804,7 @@ def _cuda_runtime_available_for_ukf(binary: Path) -> bool:
                     count = ctypes.c_int(0)
                     if driver.cuDeviceGetCount(ctypes.byref(count)) == 0 and count.value > 0:
                         return True
-            except OSError:
+            except (OSError, AttributeError):
                 pass
     except Exception:
         pass

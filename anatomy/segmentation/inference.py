@@ -74,32 +74,38 @@ def predict_view(model, slices: List[np.ndarray], apply_softmax: bool) -> np.nda
 
     batch_supported = True
     pos = 0
-    while pos < len(infer_indices):
-        step = batch_size if batch_supported else 1
-        chunk_idx = infer_indices[pos : pos + step]
-        arr = np.stack([slices[i] for i in chunk_idx], axis=0).astype(np.float32, copy=False)
-        x = arr if model.input_layout == "NHWC" else arr.transpose(0, 3, 1, 2)
-        if len(chunk_idx) > 1:
-            try:
-                y = model.forward(np.ascontiguousarray(x))
-                if y.shape[0] != len(chunk_idx):
-                    raise ValueError("Model did not preserve batch dimension")
-                decoded = _decode_batch_output(y, model.output_layout, apply_softmax)
-                for local_i, orig_i in enumerate(chunk_idx):
-                    inferred_scores[orig_i] = decoded[local_i]
-                pos += len(chunk_idx)
-                continue
-            except Exception:
-                from shared.hardware_adapt import empty_gpu_cache_safely
+    try:
+        while pos < len(infer_indices):
+            step = batch_size if batch_supported else 1
+            chunk_idx = infer_indices[pos : pos + step]
+            arr = np.stack([slices[i] for i in chunk_idx], axis=0).astype(np.float32, copy=False)
+            x = arr if model.input_layout == "NHWC" else arr.transpose(0, 3, 1, 2)
+            if len(chunk_idx) > 1:
+                try:
+                    y = model.forward(np.ascontiguousarray(x))
+                    if y.shape[0] != len(chunk_idx):
+                        raise ValueError("Model did not preserve batch dimension")
+                    decoded = _decode_batch_output(y, model.output_layout, apply_softmax)
+                    for local_i, orig_i in enumerate(chunk_idx):
+                        inferred_scores[orig_i] = decoded[local_i]
+                    pos += len(chunk_idx)
+                    continue
+                except Exception:
+                    from shared.hardware_adapt import empty_gpu_cache_safely
 
-                empty_gpu_cache_safely()
-                batch_supported = False
-                continue
+                    empty_gpu_cache_safely()
+                    batch_supported = False
+                    continue
 
-        y1 = model.forward(np.ascontiguousarray(x))
-        decoded1 = _decode_batch_output(y1, model.output_layout, apply_softmax)
-        inferred_scores[chunk_idx[0]] = decoded1[0]
-        pos += 1
+            y1 = model.forward(np.ascontiguousarray(x))
+            decoded1 = _decode_batch_output(y1, model.output_layout, apply_softmax)
+            inferred_scores[chunk_idx[0]] = decoded1[0]
+            pos += 1
+    finally:
+        if dev_str.startswith(("cuda", "mps")):
+            from shared.hardware_adapt import empty_gpu_cache_safely
+
+            empty_gpu_cache_safely()
 
     for key, infer_pos in pending_uniform_keys.items():
         if len(uniform_cache) < 16:

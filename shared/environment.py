@@ -15,7 +15,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
-from shared.external_process import SLICER_PYTHON_NAMES, find_pythonslicer, interpreter_path, slicer_runtime_roots, text_subprocess_kwargs, python_tool_environment
+from shared.external_process import SLICER_PYTHON_NAMES, find_pythonslicer, interpreter_path, slicer_runtime_roots, subprocess_no_window_kwargs, text_subprocess_kwargs, python_tool_environment
 from shared.model_assets import model_asset_candidates, model_asset_path_or_none
 
 
@@ -2087,14 +2087,20 @@ def _check_cuda_device(
             "import json, sys; "
             f"sys.path[:0] = {prepend_paths!r}; "
             "payload = {'torch_importable': False, 'cuda_available': False, 'device_count': 0, "
-            "'mps_available': False, 'torch_version': None, 'error': None}; "
+            "'mps_available': False, 'torch_version': None, 'torch_cuda_build': None, 'error': None}; "
             "\ntry:\n"
             "    import torch\n"
             "    payload['torch_importable'] = True\n"
             "    payload['torch_version'] = getattr(torch, '__version__', None)\n"
+            "    payload['torch_cuda_build'] = getattr(getattr(torch, 'version', None), 'cuda', None)\n"
             "    payload['cuda_available'] = bool(torch.cuda.is_available())\n"
             "    payload['device_count'] = int(torch.cuda.device_count()) if payload['cuda_available'] else 0\n"
             "    if payload['cuda_available']:\n"
+            "        try:\n"
+            "            payload['device_name'] = torch.cuda.get_device_name(0)\n"
+            "            payload['compute_capability'] = list(torch.cuda.get_device_capability(0))\n"
+            "        except Exception:\n"
+            "            pass\n"
             "        try:\n"
             "            payload['cuda_kernel_ok'] = bool((torch.zeros(1, device='cuda:0') + 1).item() == 1.0)\n"
             "        except Exception as cuda_exc:\n"
@@ -2115,7 +2121,7 @@ def _check_cuda_device(
                 capture_output=True,
                 timeout=DEPENDENCY_PROBE_TIMEOUT_SECONDS,
                 env=python_tool_environment(python_path),
-                **text_subprocess_kwargs(),
+                **subprocess_no_window_kwargs(**text_subprocess_kwargs()),
             )
             details = _parse_json_probe_output(completed.stdout)
         except subprocess.TimeoutExpired as exc:
@@ -2125,6 +2131,7 @@ def _check_cuda_device(
                 "device_count": 0,
                 "mps_available": False,
                 "torch_version": None,
+                "torch_cuda_build": None,
                 "error": _probe_timeout_error(exc),
             }
         except Exception as exc:
@@ -2134,6 +2141,7 @@ def _check_cuda_device(
                 "device_count": 0,
                 "mps_available": False,
                 "torch_version": None,
+                "torch_cuda_build": None,
                 "error": str(exc),
             }
         if probe_cache is not None:
@@ -2202,7 +2210,7 @@ def torch_numpy_abi_probe(
             capture_output=True,
             timeout=TORCH_ABI_PROBE_TIMEOUT_SECONDS,
             env=python_tool_environment(python_path),
-            **text_subprocess_kwargs(),
+            **subprocess_no_window_kwargs(**text_subprocess_kwargs()),
         )
         details = _parse_json_probe_output(completed.stdout)
     except subprocess.TimeoutExpired as exc:
@@ -2447,7 +2455,7 @@ def cuda_free_gib(
             capture_output=True,
             timeout=DEPENDENCY_PROBE_TIMEOUT_SECONDS,
             env=python_tool_environment(python_path),
-            **text_subprocess_kwargs(),
+            **subprocess_no_window_kwargs(**text_subprocess_kwargs()),
         )
         payload = _parse_json_probe_output(completed.stdout)
         raw = payload.get("free_gib") if isinstance(payload, dict) else None
@@ -2572,7 +2580,7 @@ def _check_spec(spec: DependencySpec, platform_name: str) -> DependencyStatus:
                         capture_output=True,
                         env=env,
                         timeout=DEPENDENCY_PROBE_TIMEOUT_SECONDS,
-                        **text_subprocess_kwargs(),
+                        **subprocess_no_window_kwargs(**text_subprocess_kwargs()),
                     )
                     probe_details = _parse_json_probe_output(completed.stdout)
                     available = bool(probe_details.get("available"))
@@ -2796,7 +2804,7 @@ def _batch_probe_python_specs(specs: Iterable[DependencySpec]) -> dict[tuple[Any
                 capture_output=True,
                 env=env,
                 timeout=DEPENDENCY_PROBE_TIMEOUT_SECONDS,
-                **text_subprocess_kwargs(),
+                **subprocess_no_window_kwargs(**text_subprocess_kwargs()),
             )
             payload = _parse_json_probe_output(completed.stdout)
             if isinstance(payload, dict):
@@ -2839,7 +2847,7 @@ def _teem_info_in_interpreter(python_path: Path) -> dict[str, str]:
         completed = subprocess.run(
             [python_path.as_posix(), "-c", probe],
             check=True, capture_output=True, env=python_tool_environment(python_path),
-            timeout=DEPENDENCY_PROBE_TIMEOUT_SECONDS, **text_subprocess_kwargs(),
+            timeout=DEPENDENCY_PROBE_TIMEOUT_SECONDS, **subprocess_no_window_kwargs(**text_subprocess_kwargs()),
         )
         payload = _parse_json_probe_output(completed.stdout)
     except subprocess.TimeoutExpired as exc:

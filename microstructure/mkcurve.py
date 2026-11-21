@@ -184,6 +184,8 @@ def _resolve_mkcurve_device(device: str) -> str:
         has_cuda = False
     if (dev == "cuda" or dev.startswith("cuda:")) and not has_cuda:
         raise RuntimeError("MK-Curve device='cuda' requested, but torch.cuda.is_available() is False")
+    if has_cuda and dev.startswith("cuda:") and dev != "cuda:0":
+        return dev
     return "cuda" if has_cuda else "cpu"
 
 
@@ -197,11 +199,15 @@ def _fit_chunk_cuda(payload):
         _parameter_maps_cuda,
     )
 
-    signals, design, grid, threshold, solver = payload
+    if len(payload) >= 6:
+        signals, design, grid, threshold, solver, device_str = payload[:6]
+    else:
+        signals, design, grid, threshold, solver = payload
+        device_str = "cuda"
     try:
-        fitter = _CudaSyntheticB0Fitter(signals, design, grid, solver=solver)
+        fitter = _CudaSyntheticB0Fitter(signals, design, grid, solver=solver, device=device_str)
         if fitter.ops is None:
-            return _fit_chunk(payload)
+            return _fit_chunk((signals, design, grid, threshold, solver))
 
         b0 = signals[:, 0].copy()
         original = fitter.fit(b0)
@@ -218,7 +224,7 @@ def _fit_chunk_cuda(payload):
         corrected = fitter.fit(signals[:, 0])
         design_t = torch.as_tensor(np.ascontiguousarray(design), dtype=torch.float64, device=fitter.dev)
         for kind, coefficients in (("original", original), ("corrected", corrected)):
-            maps = _parameter_maps_cuda(coefficients, fitter.ops)
+            maps = _parameter_maps_cuda(coefficients, fitter.ops, device_str=device_str)
             valid = np.isfinite(coefficients).all(axis=1)
             for key, values in maps.items():
                 lower, upper = (0, 1) if key == "fa" else ((0, 3) if key in {"mk", "ak", "rk"} else (0, .005))
@@ -244,8 +250,12 @@ def _fit_chunk_cuda(payload):
         empty_cuda_cache_safely()
         if len(signals) > 128:
             mid = len(signals) // 2
-            orig_a, corr_a, cur_a, det_a = _fit_chunk_cuda((signals[:mid].copy(), design, grid, threshold, solver))
-            orig_b, corr_b, cur_b, det_b = _fit_chunk_cuda((signals[mid:].copy(), design, grid, threshold, solver))
+            orig_a, corr_a, cur_a, det_a = _fit_chunk_cuda(
+                (signals[:mid].copy(), design, grid, threshold, solver, device_str)
+            )
+            orig_b, corr_b, cur_b, det_b = _fit_chunk_cuda(
+                (signals[mid:].copy(), design, grid, threshold, solver, device_str)
+            )
             merged = {k: np.concatenate([det_a[k], det_b[k]], axis=0) for k in det_a}
             return (
                 np.concatenate([orig_a, orig_b], axis=0),
@@ -340,8 +350,9 @@ def run_mkcurve(dwi_path, bval_path, bvec_path, mask_path, output_dir, *,
             corrected_coefficients = np.lib.format.open_memmap(root / "corrected_coefficients.npy", mode="w+", dtype="float64", shape=(count, 22))
             results = {}
             try:
-                eff_workers = 1 if resolved_device == "cuda" else num_workers
-                if resolved_device == "cuda":
+                is_cuda_dev = resolved_device.startswith("cuda")
+                eff_workers = 1 if is_cuda_dev else num_workers
+                if is_cuda_dev:
                     from shared.hardware_adapt import adaptive_cuda_scaled_batch
                     per_voxel_bytes = max(16384, int(len(grid)) * 22 * 64)
                     eff_chunk = adaptive_cuda_scaled_batch(
@@ -349,10 +360,12 @@ def run_mkcurve(dwi_path, bval_path, bvec_path, mask_path, output_dir, *,
                         max(voxels_per_chunk, 4096) if voxels_per_chunk <= 512 else voxels_per_chunk,
                         min_batch=128,
                         max_batch=16384,
+                        device=resolved_device,
+                        windows_tdr_cap=4096,
                     )
                 else:
                     eff_chunk = voxels_per_chunk
-                chunk_fn = _fit_chunk_cuda if resolved_device == "cuda" else _fit_chunk
+                chunk_fn = _fit_chunk_cuda if is_cuda_dev else _fit_chunk
                 if worker_threads is not None:
                     from threadpoolctl import threadpool_limits
                     handles.enter_context(threadpool_limits(limits=worker_threads))
@@ -379,7 +392,10 @@ def run_mkcurve(dwi_path, bval_path, bvec_path, mask_path, output_dir, *,
                     pool = None
                 def payload(start):
                     stop = min(start + eff_chunk, count)
-                    return np.asarray(masked_signals[start:stop], dtype=np.float64).copy(), design, grid, threshold, solver
+                    sig = np.asarray(masked_signals[start:stop], dtype=np.float64).copy()
+                    if is_cuda_dev:
+                        return sig, design, grid, threshold, solver, resolved_device
+                    return sig, design, grid, threshold, solver
                 from microstructure.chunk_dispatch import chunk_results
                 completed = 0
                 last_progress = 0.0
@@ -454,6 +470,10 @@ def run_mkcurve(dwi_path, bval_path, bvec_path, mask_path, output_dir, *,
                 _write_json(progress, {"status": "completed", "completed_voxels": count, "total_voxels": count})
                 return record
             finally:
+                if resolved_device.startswith("cuda"):
+                    from shared.hardware_adapt import empty_cuda_cache_safely
+
+                    empty_cuda_cache_safely()
                 for array in (curves, original_coefficients, corrected_coefficients, masked_signals, *results.values()):
                     array._mmap.close()
                 if isinstance(data, np.memmap):

@@ -105,7 +105,7 @@
   },
   "local_patches": {
     "inference/native.py": "9647a3b20f6b01d703e2c48976a95f9b28db10b1ba2b0fdc14301cf57ca07450",
-    "inference/predict.py": "ac1fcee983d87114b7578d99688eeb1b24746d4a1c233d5d7e2a5b1b95ba6493",
+    "inference/predict.py": "4c776e8513234a82f9c57be565706d1c8aef3cde20ef1d4ad659038c2bf43fde",
     "model/ddsurfer.py": "f1a703c1581f0cbe8fc1700015f56d58732b737226e22ae2a9750fa7e6129bff",
     "postprocessing/core/archive.py": "9fd2d59e706ebd240e50b150d2bb1108db7533578181a70034d4d23f129a55c7",
     "postprocessing/core/build.py": "ef127a1cd57a293d793115eefe40b3be89718d62b9454df92d2331db359266a1",

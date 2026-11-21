@@ -1130,6 +1130,12 @@ def run_wma_org_atlas(
             env["WMA_CPU_THREADS"] = str(config.num_threads)
             if gpu_mode == "off":
                 env["CUDA_VISIBLE_DEVICES"] = "-1"
+            else:
+                raw_dev = str(config.device or "").strip().lower()
+                if raw_dev.startswith("cuda:") and not env.get("CUDA_VISIBLE_DEVICES"):
+                    gpu_idx = raw_dev.split(":", 1)[1].split(",", 1)[0].strip()
+                    if gpu_idx.isdigit():
+                        env["CUDA_VISIBLE_DEVICES"] = gpu_idx
         python_path = wma_root.as_posix()
         env["PYTHONPATH"] = (
             python_path if not env.get("PYTHONPATH") else python_path + os.pathsep + env["PYTHONPATH"]

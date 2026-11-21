@@ -100,11 +100,13 @@ class SurfacePredictor:
             raise ValueError('Invalid transformed template')
         if ((self.vertices < 0) | (self.vertices > np.array(self.geometry.crop_shape)-1)).any():
             raise ValueError('Template is outside the trained crop')
+        free_cuda_bytes = None
         if self.device.type == 'mps':
             torch.empty(1, device=self.device)
         elif self.device.type == 'cuda':
             torch.cuda.set_device(self.device)
             free, total = torch.cuda.mem_get_info(self.device)
+            free_cuda_bytes = free
             cap = min(args.max_gpu_gib, free/1024**3 - 4)
             if cap < 8:
                 raise RuntimeError('Insufficient free GPU memory; at least 8 GiB plus a 4-GiB margin is required')
@@ -114,8 +116,16 @@ class SurfacePredictor:
             torch.backends.cudnn.allow_tf32 = False
         self.precision = resolve_precision(args.precision, self.device, self.config['precision'])
         self.architecture = architecture
-        self._lazy_mps_models = self.device.type == 'mps' and len(self.entries) > 1
-        self.models = {} if self._lazy_mps_models else {
+        self._lazy_models = (
+            self.device.type == 'mps'
+            or (
+                self.device.type == 'cuda'
+                and free_cuda_bytes is not None
+                and free_cuda_bytes < 18 * 1024**3
+            )
+        ) and len(self.entries) > 1
+        self._lazy_mps_models = self._lazy_models
+        self.models = {} if self._lazy_models else {
             surface: load_model(self.checkpoint_dir / entry['checkpoint_file'], entry['sha256'], architecture, self.device)
             for surface, entry in self.entries.items()
         }
@@ -151,6 +161,7 @@ class SurfacePredictor:
         laplacian_matrix = None
         directory = self.args.output_dir / 'mni' / folder.name
         directory.mkdir(parents=True, exist_ok=True)
+        lazy_models = getattr(self, '_lazy_models', getattr(self, '_lazy_mps_models', False))
         for surface in ('white', 'pial'):
             if surface not in self.entries:
                 continue
@@ -158,16 +169,18 @@ class SurfacePredictor:
             if model is None:
                 entry = self.entries[surface]
                 model = load_model(self.checkpoint_dir / entry['checkpoint_file'], entry['sha256'], self.architecture, self.device)
-            execution_devices = dict(model.execution_devices)  # read before a lazy MPS model is released
+            execution_devices = dict(model.execution_devices)  # read before a lazy GPU/MPS model is released
             with precision_context(self.precision, self.device):
                 raw = model(vertices, volumes)
-            if self._lazy_mps_models:
+            if lazy_models:
                 del model
-                if hasattr(torch, 'mps'):
+                if self.device.type == 'mps' and hasattr(torch, 'mps'):
                     if hasattr(torch.mps, 'synchronize'):
                         torch.mps.synchronize()
                     if hasattr(torch.mps, 'empty_cache'):
                         torch.mps.empty_cache()
+                elif self.device.type == 'cuda' and torch.cuda.is_initialized():
+                    torch.cuda.empty_cache()
             elif self.device.type == 'mps' and hasattr(torch, 'mps'):
                 if hasattr(torch.mps, 'empty_cache'):
                     torch.mps.empty_cache()

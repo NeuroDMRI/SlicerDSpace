@@ -1787,7 +1787,7 @@ def _stage_compute_device(config: ProductOrchestratorConfig, *, primary: str = "
             chosen = raw
             break
     if chosen.startswith("cuda:"):
-        return "cuda"
+        return chosen
     if chosen in {"mps:0", "mps"}:
         return "mps"
     return chosen

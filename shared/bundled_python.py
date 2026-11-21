@@ -14,6 +14,7 @@ import sys
 from typing import MutableMapping
 
 BUNDLED_PYTHON_ENV = "SLICERDSPACE_BUNDLED_PYTHON_ROOT"
+WINDOWS_CUDA_ALLOC_CONF = "garbage_collection_threshold:0.8,max_split_size_mb:128"
 _DEQUARANTINED_ROOTS: set[Path] = set()
 
 
@@ -289,6 +290,8 @@ def inject_bundled_python_env(
 ) -> MutableMapping[str, str]:
     """Append bundled ``site-packages`` and script directories to ``env`` for Slicer Python subprocesses."""
     env.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+    if sys.platform == "win32":
+        env.setdefault("PYTORCH_CUDA_ALLOC_CONF", WINDOWS_CUDA_ALLOC_CONF)
     if include_pythonpath:
         py_dirs: list[Path] = []
         for site_dir in bundled_site_packages_dirs(module_root):
@@ -323,6 +326,8 @@ def prepend_env_bundled_site_packages() -> tuple[str, ...]:
 def activate_bundled_python(module_root: Path | None = None) -> tuple[Path, ...]:
     """Activate bundled ``site-packages`` in the running Slicer Python process and its child env."""
     os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+    if sys.platform == "win32":
+        os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", WINDOWS_CUDA_ALLOC_CONF)
     _clear_macos_quarantine_once(module_root)
     site_dirs = bundled_site_packages_dirs(module_root)
     _log_activation_problem()

@@ -21,7 +21,22 @@ import torch
 import torch.nn as nn
 from torch.autograd import Variable
 from torch.utils.data.dataloader import DataLoader
-from torchvision import transforms
+try:
+    from torchvision import transforms
+except Exception:
+    class _ComposeFallback:
+        def __init__(self, transforms_list):
+            self.transforms = list(transforms_list)
+
+        def __call__(self, img):
+            for tfm in self.transforms:
+                img = tfm(img)
+            return img
+
+    class _TransformsFallback:
+        Compose = _ComposeFallback
+
+    transforms = _TransformsFallback()
 
 from scipy.ndimage.filters import median_filter, gaussian_filter
 from skimage.measure import regionprops
@@ -163,7 +178,7 @@ def _forward_fused_logits(model, sub_batch, *, use_cuda, device):
     if target_device.type == "cpu":
         _, out_list = model(sub_batch)
         return out_list[0].detach().cpu()
-    non_blocking = target_device.type == "cuda"
+    non_blocking = target_device.type == "cuda" and bool(getattr(sub_batch, "is_pinned", lambda: False)())
     try:
         _, out_list = model(sub_batch.to(target_device, non_blocking=non_blocking))
         return out_list[0].detach().cpu()
@@ -332,6 +347,9 @@ def fastsurfercnn(img_filename, save_as, logger, args):
                 f"Requested CUDA device {args.gpu}, but only {torch.cuda.device_count()} logical device(s) are visible."
             )
         device = torch.device(f"cuda:{cuda_index}")
+        torch.backends.cuda.matmul.allow_tf32 = False
+        torch.backends.cudnn.allow_tf32 = False
+        torch.backends.cudnn.benchmark = True
     elif use_mps:
         print("On GPU (Apple MPS)!")
         device = torch.device("mps")

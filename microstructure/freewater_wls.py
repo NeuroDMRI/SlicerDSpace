@@ -83,6 +83,8 @@ def _resolve_fw_device(device: str) -> str:
         raise RuntimeError("CUDA device requested for Free Water WLS, but torch.cuda.is_available() is False")
     if requested.startswith("cuda:") and not has_cuda:
         raise RuntimeError("CUDA device requested for Free Water WLS, but torch.cuda.is_available() is False")
+    if has_cuda and requested.startswith("cuda:") and requested != "cuda:0":
+        return requested
     return "cuda" if has_cuda else "cpu"
 
 
@@ -143,11 +145,15 @@ def wls_batch_fit(model, signals, *, device: str = "cpu"):
     if len(fast_indices) == 0:
         return fwdti.FreeWaterTensorFit(model, out), resolved_device
 
-    if resolved_device == "cuda":
+    if resolved_device.startswith("cuda"):
         import torch
-        from shared.hardware_adapt import adaptive_cuda_scaled_batch, run_cuda_chunked_with_oom_fallback
+        from shared.hardware_adapt import (
+            adaptive_cuda_scaled_batch,
+            empty_cuda_cache_safely,
+            run_cuda_chunked_with_oom_fallback,
+        )
 
-        torch_dev = torch.device("cuda")
+        torch_dev = torch.device(resolved_device)
         W_t = torch.as_tensor(np.ascontiguousarray(W), dtype=torch.float64, device=torch_dev)
         col_scale = torch.linalg.norm(W_t, dim=0).clamp(min=1e-30)
         W_eq = W_t / col_scale
@@ -158,7 +164,14 @@ def wls_batch_fit(model, signals, *, device: str = "cpu"):
             else None
         )
         per_voxel_bytes = max(4096, int(W.shape[0]) * 19 * 64)
-        batch_size = adaptive_cuda_scaled_batch(per_voxel_bytes, 8192, min_batch=128, max_batch=16384, device=torch_dev)
+        batch_size = adaptive_cuda_scaled_batch(
+            per_voxel_bytes,
+            8192,
+            min_batch=128,
+            max_batch=16384,
+            device=torch_dev,
+            windows_tdr_cap=4096,
+        )
 
         def _cuda_fw_step(start: int, stop: int) -> None:
             ids = fast_indices[start:stop]
@@ -254,13 +267,17 @@ def wls_batch_fit(model, signals, *, device: str = "cpu"):
             out[ids] = np.asarray(cpu_fit.model_params)
             resolved_device = "cpu"
 
-        run_cuda_chunked_with_oom_fallback(
-            len(fast_indices),
-            batch_size,
-            _cuda_fw_step,
-            min_chunk=128,
-            cpu_fallback_fn=_cpu_fw_fallback,
-        )
+        try:
+            run_cuda_chunked_with_oom_fallback(
+                len(fast_indices),
+                batch_size,
+                _cuda_fw_step,
+                min_chunk=128,
+                cpu_fallback_fn=_cpu_fw_fallback,
+            )
+        finally:
+            del W_t, W_eq, fwsig_t, fs0_1d
+            empty_cuda_cache_safely()
         return fwdti.FreeWaterTensorFit(model, out), resolved_device
 
     # CPU batched path

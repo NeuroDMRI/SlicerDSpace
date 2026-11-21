@@ -163,6 +163,8 @@ def _resolve_dti_device(requested: str) -> str:
         cuda_ok = False
     if (mode == "cuda" or mode.startswith("cuda:")) and not cuda_ok:
         raise RuntimeError("DTI tracking CUDA device requested, but PyTorch CUDA is unavailable.")
+    if cuda_ok and mode.startswith("cuda:") and mode != "cuda:0":
+        return mode
     return "cuda" if cuda_ok else "cpu"
 
 
@@ -321,7 +323,8 @@ def _fit_dti_fa_and_peaks(
     )
 
     resolved_device = _resolve_dti_device(device)
-    explicit_cuda = str(device).strip().lower() == "cuda"
+    req_dev = str(device).strip().lower()
+    explicit_cuda = req_dev == "cuda" or req_dev.startswith("cuda:")
     w_mat = np.asarray(design_matrix(gtab), dtype=np.float64)
     w_pinv_t = np.linalg.pinv(w_mat).T
     w_outer = (w_mat[:, :, None] * w_mat[:, None, :]).reshape(w_mat.shape[0], 49)
@@ -366,10 +369,10 @@ def _fit_dti_fa_and_peaks(
             closest[valid_dir] = np.argmax(np.abs(normed @ sphere_verts.T), axis=1).astype(np.int32)
         return fa_chunk, closest
 
-    if resolved_device == "cuda" and n_vox > 0:
+    if resolved_device.startswith("cuda") and n_vox > 0:
         import torch
 
-        dev = torch.device("cuda")
+        dev = torch.device(resolved_device)
         w_t = torch.as_tensor(w_mat, device=dev, dtype=torch.float64)
         w_pinv_t_gpu = torch.as_tensor(w_pinv_t, device=dev, dtype=torch.float64)
         w_outer_t = torch.as_tensor(w_outer, device=dev, dtype=torch.float64)
@@ -381,6 +384,8 @@ def _fit_dti_fa_and_peaks(
             default_batch=16384,
             min_batch=2048,
             max_batch=16384,
+            device=dev,
+            windows_tdr_cap=16384,
         )
 
         def _cuda_chunk(start: int, end: int):

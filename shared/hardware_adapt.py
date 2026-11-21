@@ -8,11 +8,40 @@ multi-GPU servers without changing numerical results.
 from __future__ import annotations
 
 import os
+from pathlib import Path
+import shutil
+import sys
 from typing import Any, Callable
 
 
 GIB = 1024 ** 3
 MIB = 1024 ** 2
+WINDOWS_CUDA_ALLOC_CONF = "garbage_collection_threshold:0.8,max_split_size_mb:128"
+
+
+def find_nvidia_smi() -> str | None:
+    """Locate ``nvidia-smi`` across PATH and standard Windows DriverStore / NVSMI / WSL locations."""
+    found = shutil.which("nvidia-smi")
+    if found:
+        return found
+    candidates: list[Path] = []
+    if sys.platform == "win32":
+        sys_root = Path(os.environ.get("SystemRoot") or r"C:\Windows")
+        candidates.append(sys_root / "System32" / "nvidia-smi.exe")
+        for prog_env in ("ProgramFiles", "ProgramW6432"):
+            prog = os.environ.get(prog_env)
+            if prog:
+                candidates.append(Path(prog) / "NVIDIA Corporation" / "NVSMI" / "nvidia-smi.exe")
+        candidates.append(Path(r"C:\Program Files\NVIDIA Corporation\NVSMI\nvidia-smi.exe"))
+    elif sys.platform.startswith("linux"):
+        candidates.append(Path("/usr/lib/wsl/lib/nvidia-smi"))
+    for cand in candidates:
+        try:
+            if cand.is_file():
+                return str(cand)
+        except OSError:
+            continue
+    return None
 
 
 def query_cuda_free_total_bytes(device: Any = None) -> tuple[int, int] | None:
@@ -110,7 +139,9 @@ def query_gpu_free_total_bytes(device: Any = None) -> tuple[int, int] | None:
 def is_cuda_oom(exc: BaseException) -> bool:
     """Return True when ``exc`` represents a CUDA or Apple MPS out-of-memory condition."""
     msg = str(exc).lower()
-    if "out of memory" in msg and ("cuda" in msg or "cublas" in msg or "cudnn" in msg or "alloc" in msg or "mps" in msg):
+    if ("out of memory" in msg or "alloc_failed" in msg) and (
+        "cuda" in msg or "cublas" in msg or "cudnn" in msg or "alloc" in msg or "mps" in msg
+    ):
         return True
     if "mps backend out of memory" in msg or "invalid buffer size" in msg or "mtlbuffer" in msg:
         return True
@@ -201,9 +232,12 @@ def adaptive_cuda_scaled_batch(
     max_batch: int = 131072,
     safety_fraction: float = 0.30,
     device: Any = None,
+    windows_tdr_cap: int | None = None,
 ) -> int:
     """Scale batch size down on low-VRAM GPUs while keeping ``default_batch`` when VRAM suffices."""
     base = max(int(min_batch), min(int(max_batch), int(default_batch)))
+    if os.name == "nt" and windows_tdr_cap is not None:
+        base = max(int(min_batch), min(base, int(windows_tdr_cap)))
     info = query_cuda_free_total_bytes(device)
     if info is None:
         return base

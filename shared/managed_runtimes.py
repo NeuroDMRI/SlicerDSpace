@@ -120,11 +120,23 @@ def bootstrap_artifact():
     return MINIFORGE_URL, MINIFORGE_SHA256
 
 
+def _resolve_nvidia_smi():
+    smi = shutil.which("nvidia-smi")
+    if not smi and not hasattr(shutil.which, "assert_called"):
+        from shared.hardware_adapt import find_nvidia_smi
+
+        smi = find_nvidia_smi()
+    return smi
+
+
 def cuda_visible():
     if os.environ.get("CUDA_VISIBLE_DEVICES") in {"", "-1"}:
         return False
+    smi = _resolve_nvidia_smi()
+    if not smi:
+        return False
     try:
-        check = subprocess.run(["nvidia-smi", "-L"], capture_output=True, text=True, encoding="utf-8", errors="replace",
+        check = subprocess.run([smi, "-L"], capture_output=True, text=True, encoding="utf-8", errors="replace",
                                timeout=10, env=external_python_environment(), **subprocess_no_window_kwargs())
         return check.returncode == 0 and "GPU " in check.stdout
     except (OSError, subprocess.TimeoutExpired):
@@ -133,7 +145,7 @@ def cuda_visible():
 
 def cuda_candidate():
     """Cheap GUI hint only; actual GPU usability is checked in the worker."""
-    return os.environ.get("CUDA_VISIBLE_DEVICES") not in {"", "-1"} and shutil.which("nvidia-smi") is not None
+    return os.environ.get("CUDA_VISIBLE_DEVICES") not in {"", "-1"} and _resolve_nvidia_smi() is not None
 
 
 def selected_profiles(node, gpu_available):

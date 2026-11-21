@@ -253,6 +253,29 @@ class I1ReinstallTests(_InstallerCopies, unittest.TestCase):
                     self.assertEqual(call["xvfb_prefix"], ["/usr/bin/xvfb-run", "-a"])
                     self.assertEqual(call["cmd"][0], os.path.abspath("/fake/Slicer"))
 
+    def test_p2_xvfb_run_is_not_used_when_display_is_set_or_off_linux(self) -> None:
+        import shutil
+        import tempfile
+
+        # Backlog "Opus P2 (test fakes)": the fake strips an xvfb-run prefix on every host, so assert its absence too.
+        real_which = shutil.which
+        fake_which = lambda cmd, *a, **k: "/usr/bin/xvfb-run" if cmd == "xvfb-run" else real_which(cmd, *a, **k)
+        env_without_display = {k: v for k, v in os.environ.items() if k != "DISPLAY"}
+        cases = (
+            ("linux, DISPLAY set", "linux", {**env_without_display, "DISPLAY": ":0"}),
+            ("win32, no DISPLAY", "win32", env_without_display),
+        )
+        for label, ns in self.copies():
+            for case, platform_name, env in cases:
+                with self.subTest(label, case=case), tempfile.TemporaryDirectory() as tmp:
+                    state = FakeSlicerState(installed=False)
+                    with patch.object(sys, "platform", platform_name), patch.dict(os.environ, env, clear=True), \
+                            patch.object(shutil, "which", fake_which):
+                        calls, logs, error = _run_installer_function(ns, state, Path(tmp))
+                    self.assertIsNone(error)
+                    self.assertEqual(len(calls), 1)
+                    self.assertEqual(calls[0]["xvfb_prefix"], [])
+
 
 if __name__ == "__main__":
     unittest.main()

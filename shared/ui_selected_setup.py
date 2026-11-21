@@ -28,6 +28,17 @@ def _text(owner, english, chinese):
     return chinese if str(getattr(owner, "_onboardingLanguage", "en")).startswith("zh") else english
 
 
+def _os_skip_labels(owner, zh=False):
+    """b2-os F1: the names that the Run leaves out because this OS cannot run Surface postprocess, else []."""
+    try:
+        skips = owner._os_filtered_run()
+        if skips is None:
+            return []
+        return [str(block.label("zh" if zh else "en")) for block in dict(skips[1]).values()]
+    except Exception:
+        return []
+
+
 def _safe_set_run_state(owner, state):
     """Best-effort UI run-state update that also works cleanly with lightweight test stubs."""
     try:
@@ -541,7 +552,10 @@ def prepare_selected_environment(owner, result=None, *, repair=False, skip_confi
             _sync_owner_busy_controls(owner)
 
     def functional_check(current):
-        if current is None or current.blocker_count or getattr(owner, '_setupRestartRequired', False):
+        # b2-os F2: rows that no setup step can fix (the Run skips that step) do not skip the functional self-test;
+        # the self-test builds its requests from available rows only.
+        from shared.ui_environment_panel import readiness_blocker_count
+        if current is None or readiness_blocker_count(current) or getattr(owner, '_setupRestartRequired', False):
             record_readiness(current)
             return
         from shared.setup_selftest import requests_for_report
@@ -610,9 +624,14 @@ def prepare_selected_environment(owner, result=None, *, repair=False, skip_confi
         from shared.ui_environment_panel import os_blocked_statuses, readiness_blocker_count
         blockers = readiness_blocker_count(current) if current else None
         if current and blockers == 0:
+            # b2-os F1/F8: the warning names the skip (with SAF and what needs it) in the UI language.
+            zh = str(getattr(owner, "_onboardingLanguage", "en")).startswith("zh")
+            labels = _os_skip_labels(owner, zh) or ["表面后处理" if zh else "Surface postprocess"]
             warnings = tuple(warnings) + tuple(
-                f"{item.label}: {(item.details or {}).get('notes')}" for item in os_blocked_statuses(current)
-                if item.key == "surface_postprocess_runtime")
+                _text(owner, f"Skipped on this Mac: {', '.join(labels)}. " + str(details.get("notes") or ""),
+                      f"本机跳过：{'、'.join(labels)}。" + str(details.get("notes_zh") or details.get("notes") or ""))
+                for details in ((item.details or {}) for item in os_blocked_statuses(current)
+                                if item.key == "surface_postprocess_runtime"))
         state = "restart_required" if pending else "ready" if current and blockers == 0 else "blocked"
         if state == "ready":
             from shared.setup_resume import complete_setup, refresh_setup_button
@@ -638,7 +657,10 @@ def prepare_selected_environment(owner, result=None, *, repair=False, skip_confi
             "请重启 Slicer 后再运行分析。" if pending else "自动准备已结束，仍有依赖需要处理。"))
         if current and state == "blocked":
             owner._show_environment_results_dialog(current)
-        if auto_run_after and state == "ready" and current is not None and blockers == 0 and not pending:
+        # b2-os F1: the auto-run uses the raw count, which the Run filter does not change. An OS block alone
+        # (counted only by the discounted "ready" label) never clicks Run again, so Prepare and Run cannot loop.
+        if (auto_run_after and state == "ready" and current is not None and current.blocker_count == 0
+                and not pending):
             _schedule_auto_run(owner)
 
     ZH_TITLES = {"backend_sources": "准备算法源码", "python_packages": "安装 Python 依赖", "model_assets": "下载并校验模型资源",

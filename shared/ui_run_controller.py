@@ -205,6 +205,44 @@ class DataFilteredRun:
     noddi: bool
     dki: bool
     ifw: bool
+    # b2-os F1: the tracking algorithms of the request when an OS block removed one (SAF); "" keeps the stored text.
+    tractography_backend: str = ""
+
+
+def filter_run_for_os_blocked_surface(run: DataFilteredRun, tractography_backend: str, closure_of):
+    """b2-os F1: skip the OS-blocked Surface postprocess and every ticked target whose closure requires it.
+
+    ``closure_of(flags, tractography_backend)`` returns the prerequisite closure of a request. Returns
+    ``(DataFilteredRun, os_skipped)`` or ``None`` when the request does not need Surface postprocess. ``os_skipped``
+    names what this filter left out, in order: ``surface_postprocess`` (when ticked), ``saf`` (the tracking
+    algorithm, when it would run), then the product targets that still need the step (for example Tractography and
+    Fiber bundles when SAF is the only tracking algorithm). No other algorithm is put in the place of SAF.
+    """
+
+    from dataclasses import fields
+
+    from shared.algorithm_selection import algorithms
+
+    tracking = (tractography_backend or "csd_act").strip() or "csd_act"
+    full = closure_of(run.flags, tracking)
+    if "surface_postprocess" not in full.targets:
+        return None
+    flags, skipped = run.flags, []
+    if flags.surface_postprocess:
+        flags = replace(flags, surface_postprocess=False)
+        skipped.append("surface_postprocess")
+    if "saf" in full.targets and "saf" in full.tractography_algorithms:
+        kept = tuple(name for name in algorithms(tracking) if name != "saf")
+        skipped.append("saf")
+        if kept:
+            tracking = ",".join(kept)
+    for name in (field.name for field in fields(ProductTargetFlags)):
+        if getattr(flags, name) and "surface_postprocess" in closure_of(
+                ProductTargetFlags(**{name: True}), tracking).targets:
+            flags = replace(flags, **{name: False})
+            skipped.append(name)
+    return replace(run, flags=flags, skipped=tuple(run.skipped) + tuple(skipped),
+                   tractography_backend=tracking), tuple(skipped)
 
 
 def filter_run_for_data(flags: ProductTargetFlags, stages_text: str, blocked) -> Optional[DataFilteredRun]:

@@ -3003,7 +3003,8 @@ def run_environment_doctor(config: EnvironmentDoctorConfig, *, _probe_cache=None
         report_progress('Surface postprocessing components')
         from shared.surface_runtime import inspect_surface_runtime
         surface = inspect_surface_runtime(config.postprocess_runtime, config.postprocess_freesurfer_home,
-                                          config.postprocess_license_file, python_bin=checked_python_path)
+                                          config.postprocess_license_file, python_bin=checked_python_path,
+                                          asset_root=config.model_assets_dir)  # b2-os F4
         statuses += (
             DependencyStatus(key='surface_postprocess_runtime', kind='setting', label='Surface postprocessing components',
                 status='available' if surface['components_available'] else 'missing', required=True,

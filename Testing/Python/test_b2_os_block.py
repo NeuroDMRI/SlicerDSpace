@@ -197,18 +197,24 @@ class OnDemandStateTest(MacCase):
         self.assertTrue(od._surface_runtime_ready(str(stamp)))
 
     def test_b2_os_c_ticking_surface_postprocess_on_a_blocked_mac_raises_no_prompt(self):
-        """Test (c), decision 6: the click handler calls maybe_prompt_on_demand_install; it builds no dialog."""
+        """Test (c), decision 6: the click handler calls maybe_prompt_on_demand_install; it builds no dialog.
+
+        b2fix F6: this test used a closure without ``surface`` and marked every resource present, which hid the
+        223 MB DDSurfer weights item. It now uses the real widget closure and no resource is present.
+        """
         from shared import ui_on_demand_resources as od
+        from Testing.Python import test_ui_algorithm_availability as taa
 
         self.mac("13.4")
-        self.atlas_present(True)
+        self.atlas_present(False)
+        subject = taa.write_subject(Path(tempfile.mkdtemp(dir=self.root)) / "s1", taa.THREE_GROUPS)
+        owner = taa.RunRequestTest.build_widget(self, subject, "dti")
+        owner._parameterNode.targetSurfacePostprocess = True
+        owner._parameterNode.targetMicrostructure = False
+        owner._parameterNode.wmaAtlas = "org"
+        owner._declinedOnDemandItems = set()
+        self.assertIn("surface", owner._selected_closure().targets)  # the stored closure still holds DDSurfer
         qt_mock, slicer_mock = mock.MagicMock(), mock.MagicMock()
-        owner = SimpleNamespace(
-            _parameterNode=SimpleNamespace(orchestrationBundleBackend="wmql", wmaAtlas="org",
-                                           brainMaskBackend="pnl_cnn", pnlMaskRoute="auto"),
-            _selected_closure=lambda: SimpleNamespace(targets=("surface_postprocess",)),
-            _environment_dependency_path_kwargs=lambda: {}, _declinedOnDemandItems=set(),
-            _onboardingLanguage="en")
         with mock.patch.dict(sys.modules, {"qt": qt_mock, "slicer": slicer_mock}):
             self.assertFalse(od.maybe_prompt_on_demand_install(owner, force=True))
         qt_mock.QDialog.assert_not_called()
@@ -653,7 +659,10 @@ class DocsAndPickerTest(MacCase):
         self.mac("15.1")
         _refresh_surface_postprocess_tooltip(owner, ui, False)
         self.assertTrue(label.enabled)
-        self.assertEqual(checkbox.toolTip, "base")
+        from shared.ui_onboarding import onboarding_text
+
+        # b2fix F3: the onboarding tooltip of the language comes back (a stored first tooltip lost the translation).
+        self.assertEqual(checkbox.toolTip, onboarding_text("en", "surface_postprocess_tooltip"))
 
 
 if __name__ == "__main__":

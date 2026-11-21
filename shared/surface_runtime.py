@@ -279,9 +279,9 @@ def surface_runtime_state(runtime=None, freesurfer_home=None, *, asset_root=None
                 break
         if versions is None:
             versions = _catalog_macos_block_versions()  # no runtime here, and the catalog's needs a newer macOS
+    # A path the user set is kept by the resolver, so a download cannot replace it. b2-os F5: a blocked copy in the
+    # default prefix keeps the download remedy: prebuilt_surface.prepare() validates that prefix and replaces it.
     downloadable, size = (False, 0) if explicit else _catalog_download(asset_root)
-    if versions and is_valid_surface_runtime_dir(home) and not bundled:
-        downloadable, size = False, 0  # an installed copy that is itself blocked: a new download is not used
     if downloadable:
         state.update(remedy='download', download_bytes=size)
     if versions:
@@ -313,8 +313,12 @@ def surface_runtime_identity(runtime=None, freesurfer_home=None):
 
 
 def inspect_surface_runtime(runtime=None, freesurfer_home=None, license_file=None, *, python_bin=None,
-                            hemisphere='both', atlases='aparc,aparc.a2009s'):
-    """Verify in a fresh worker; never compile or download from a Check action."""
+                            hemisphere='both', atlases='aparc,aparc.a2009s', asset_root=None):
+    """Verify in a fresh worker; never compile or download from a Check action.
+
+    ``asset_root`` is the configured model asset folder (b2-os F4): an imported offline archive there makes the
+    catalog runtime a download remedy, as for the on-demand check and the Run.
+    """
     script = Path(__file__).resolve().parents[1] / 'scripts/probe_surface_runtime.py'
     command = [python_executable(python_bin), str(script), '--hemi', hemisphere, '--atlases', atlases]
     try:
@@ -329,7 +333,7 @@ def inspect_surface_runtime(runtime=None, freesurfer_home=None, license_file=Non
         if blocked:
             raise SurfaceRuntimeMacosBlocked(blocked)
         if backend == 'native' and not is_valid_surface_runtime_dir(home):
-            state = surface_runtime_state(runtime, freesurfer_home)
+            state = surface_runtime_state(runtime, freesurfer_home, asset_root=asset_root)
             if state['remedy'] == 'download':
                 # b2-os: nothing to probe; Prepare installs the catalog runtime (selected_setup needs build_required).
                 raise SurfaceRuntimeMissing('No surface runtime is installed at %s' % home)
@@ -364,7 +368,7 @@ def inspect_surface_runtime(runtime=None, freesurfer_home=None, license_file=Non
         if isinstance(exc, (SurfaceRuntimeMacosBlocked, SurfaceRuntimeMissing)):
             # b2-os, decision 1: the structured state goes with the record to every user interface.
             try:
-                state = surface_runtime_state(runtime, freesurfer_home)
+                state = surface_runtime_state(runtime, freesurfer_home, asset_root=asset_root)
             except Exception:
                 state = None
             if state is not None:

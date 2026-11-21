@@ -178,7 +178,9 @@ def detect_missing_task_resources(
     backend_paths = dict(backend_paths or {})
 
     if targets is None:
-        closure_fn = getattr(owner, "_selected_closure", None)
+        # b2-os F6: the closure after the OS skip, so the blocked Surface postprocess (and SAF) add no downloads;
+        # prerequisites that a runnable target selects by itself stay.
+        closure_fn = getattr(owner, "_os_filtered_closure", None) or getattr(owner, "_selected_closure", None)
         closure = closure_fn() if callable(closure_fn) else None
         if closure is not None:
             active_targets = tuple(closure.targets)

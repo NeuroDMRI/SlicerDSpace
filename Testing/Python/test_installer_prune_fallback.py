@@ -13,8 +13,10 @@ installer script and the graphical Setup module (SETUP_MODULE_PY). The installed
 
 from __future__ import annotations
 
+import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -33,6 +35,18 @@ if str(TESTS_ROOT) not in sys.path:
 
 from test_b4_w4_platform import _js_payload, _load, _python_payload
 from test_installer_gui_reinstall_gap import load_setup_module
+
+# The commit that the published base packages (repack-os-base) are built from: the parent of 5070ca29 "sync repacked
+# v0.1.1 checksums and setup zips to website". The tag v0.1.1 is not that code: the packages hold fresh HEAD code.
+# The matrix workflow fetches this commit (see test_workflow_fetches_the_release_package_source_commit).
+RELEASE_PACKAGE_SOURCE_COMMIT = "2e8f73152e2f218ac87adcad55f1731967a162e1"
+WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "slicer-compat-matrix.yml"
+FETCH_STEP_NAME = "Fetch the release-package source commit for the installer tests"
+
+
+def _on_ci() -> bool:
+    return os.environ.get("CI", "").strip().lower() not in ("", "0", "false", "no")
+
 
 # The shape of shared/user_config.py in the v0.1.1 release package: load and write only, no prune function.
 _V011_USER_CONFIG = '''"""Stand-in for shared/user_config.py of the v0.1.1 release package (no prune_stale_bundled_dependencies)."""
@@ -199,21 +213,27 @@ class PruneFallbackTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.python_payload = _python_payload("linux")
-        try:
-            cls.js_payload = _js_payload("linux")
-        except unittest.SkipTest:
-            cls.js_payload = None
+        # Without node the JS copies cannot be built. They must not vanish: _run_case fails them on CI and skips them
+        # with a message elsewhere (finding P2-B).
+        cls.js_payload = _js_payload("linux") if shutil.which("node") is not None else None
 
     def _runners(self):
         yield "python_builder", lambda project: _run_script_main(_load(self.python_payload), project)
         if self.js_payload is not None:
             yield "js_script", lambda project: _run_script_main(_load(self.js_payload), project)
             yield "js_setup_module", _run_setup_module
+        else:
+            yield "js_script", None
+            yield "js_setup_module", None
 
     def _run_case(self, *, release_package: bool, make_deps, check) -> None:
         """Run every copy in its own temp project; check(project, deps, logs) runs before the temp folder is removed."""
         for label, run in self._runners():
             with self.subTest(copy=label, release_package=release_package):
+                if run is None:
+                    if _on_ci():
+                        self.fail("node is required on CI for the JS installer copies (node is not in PATH)")
+                    self.skipTest("node is not installed in PATH: the JS installer copy is not tested")
                 with tempfile.TemporaryDirectory() as td:
                     project = _Project(Path(td), release_package=release_package)
                     deps = make_deps(project)
@@ -255,17 +275,94 @@ class PruneFallbackTests(unittest.TestCase):
         self._run_case(release_package=False, make_deps=make, check=check)
 
     def test_prune_stub_matches_the_release_package_shape(self) -> None:
-        # Evidence that the stand-in is faithful: the v0.1.1 tag (when this checkout has it) has no prune function.
+        # Evidence that the stand-in is faithful: the commit that the published base packages are built from has no
+        # prune function. On CI a missing git or commit is a failure (the workflow fetches the commit); elsewhere a skip.
+        sha = RELEASE_PACKAGE_SOURCE_COMMIT
         git = shutil.which("git")
-        if git is None:
-            self.skipTest("git is not installed")
-        out = subprocess.run([git, "show", "v0.1.1:shared/user_config.py"], cwd=REPO_ROOT, capture_output=True, text=True,
-                             encoding="utf-8")
-        if out.returncode != 0:
-            self.skipTest("tag v0.1.1 is not in this checkout")
+        out = None
+        if git is not None:
+            out = subprocess.run([git, "show", f"{sha}:shared/user_config.py"], cwd=REPO_ROOT, capture_output=True,
+                                 text=True, encoding="utf-8")
+        if out is None or out.returncode != 0:
+            why = "git is not installed" if out is None else f"commit {sha} is not in this checkout"
+            if _on_ci():
+                self.fail(f"{why}; the workflow step '{FETCH_STEP_NAME}' in slicer-compat-matrix.yml must fetch it")
+            self.skipTest(f"{why}; run: git fetch --no-tags --depth=1 origin {sha}")
         self.assertNotIn("prune_stale_bundled_dependencies", out.stdout)
         for name in ("load_user_config", "write_user_config"):
             self.assertIn(f"def {name}(", out.stdout)
+
+
+def _run_inner(test_name: str, *, ci: bool, which_without_node: bool = False, fake_git_missing_commit: bool = False):
+    """Run one PruneFallbackTests test with unittest in a simulated environment; return its TestResult.
+
+    The inner run never includes PruneGuardTests, so it cannot recurse into the caller.
+    """
+    real_which = shutil.which
+    real_run = subprocess.run
+
+    def fake_which(cmd, *args, **kwargs):
+        return None if cmd == "node" else real_which(cmd, *args, **kwargs)
+
+    def fake_run(cmd, *args, **kwargs):
+        if fake_git_missing_commit and isinstance(cmd, (list, tuple)) and len(cmd) > 1 and cmd[1] == "show":
+            return subprocess.CompletedProcess(cmd, 128, "", "fatal: invalid object name")
+        return real_run(cmd, *args, **kwargs)
+
+    with patch.dict(os.environ):
+        if ci:
+            os.environ["CI"] = "true"
+        else:
+            os.environ.pop("CI", None)
+        with patch.object(shutil, "which", fake_which if which_without_node else real_which), \
+                patch.object(subprocess, "run", fake_run):
+            suite = unittest.TestSuite([PruneFallbackTests(test_name)])
+            return unittest.TextTestRunner(stream=io.StringIO(), verbosity=0).run(suite)
+
+
+class PruneGuardTests(unittest.TestCase):
+    """Fail-before checks for the two findings: the guarded tests must fail on CI, not skip or pass silently."""
+
+    def test_prune_p2a_missing_release_commit_fails_on_ci(self) -> None:
+        # Finding P2-A: the commit check was skipped on CI (a depth-1 checkout has no tags). It must fail there.
+        result = _run_inner("test_prune_stub_matches_the_release_package_shape", ci=True, fake_git_missing_commit=True)
+        self.assertEqual(result.testsRun, 1)
+        self.assertEqual(len(result.failures) + len(result.errors), 1, (result.skipped, result.failures))
+        self.assertEqual(result.skipped, [])
+        self.assertIn(FETCH_STEP_NAME, result.failures[0][1])
+
+    def test_prune_p2a_missing_release_commit_skips_off_ci(self) -> None:
+        result = _run_inner("test_prune_stub_matches_the_release_package_shape", ci=False, fake_git_missing_commit=True)
+        self.assertEqual(len(result.skipped), 1, result.failures)
+        self.assertEqual(result.failures + result.errors, [])
+
+    def test_prune_p2b_missing_node_fails_the_js_copies_on_ci(self) -> None:
+        # Finding P2-B: without node the two JS copies were dropped silently. On CI both must fail with a message.
+        name = "test_prune_release_package_still_sets_the_model_assets_dir"
+        result = _run_inner(name, ci=True, which_without_node=True)
+        failed = [text for _, text in result.failures + result.errors]
+        self.assertEqual(len(failed), 2, (result.skipped, failed))
+        for text in failed:
+            self.assertIn("node is required on CI for the JS installer copies", text)
+
+    def test_prune_p2b_missing_node_skips_the_js_copies_off_ci_and_runs_python(self) -> None:
+        name = "test_prune_release_package_still_sets_the_model_assets_dir"
+        result = _run_inner(name, ci=False, which_without_node=True)
+        self.assertEqual(result.failures + result.errors, [])
+        self.assertEqual(len(result.skipped), 2, "both JS copies must be reported as skipped, not dropped")
+        for _, reason in result.skipped:
+            self.assertIn("node is not installed", reason)
+
+
+class PruneWorkflowSyncTests(unittest.TestCase):
+    def test_workflow_fetches_the_release_package_source_commit(self) -> None:
+        # Every job that checks out the repo must fetch exactly RELEASE_PACKAGE_SOURCE_COMMIT, as the test constant says.
+        text = WORKFLOW_PATH.read_text(encoding="utf-8")
+        jobs = len(re.findall(r"(?m)^\s*- uses: actions/checkout@", text))
+        self.assertGreaterEqual(jobs, 2)
+        shas = re.findall(r"(?m)^\s*run: git fetch --no-tags --depth=1 origin (\S+)\s*$", text)
+        self.assertEqual(shas, [RELEASE_PACKAGE_SOURCE_COMMIT] * jobs)
+        self.assertEqual(text.count(f"- name: {FETCH_STEP_NAME}"), jobs)
 
 
 if __name__ == "__main__":

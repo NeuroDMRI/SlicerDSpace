@@ -1,0 +1,3595 @@
+[
+ {
+  "bundles": "wmql",
+  "children": [
+   [
+    "Test1",
+    "csd_act",
+    [
+     "segmentation",
+     "parcellation",
+     "tractography",
+     "bundles",
+     "connectome"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "csd_act",
+  "closed_targets": [
+   "segmentation",
+   "parcellation",
+   "tractography",
+   "bundles",
+   "connectome"
+  ],
+  "multi": false,
+  "notice": "Also runs automatically: DDSeg (needed by CSD/ACT tractography); DDParcel (needed by CSD/ACT tractography and WMQL bundles and Connectome)",
+  "plan_items": [
+   "bundles.wmql",
+   "connectome.streamline_count",
+   "parcellation.ddparcel",
+   "segmentation.ddseg",
+   "tractography.csd_act"
+  ],
+  "requesters": {},
+  "ticked": [
+   "tractography",
+   "bundles",
+   "connectome"
+  ],
+  "tracking": "csd_act"
+ },
+ {
+  "bundles": "wma",
+  "children": [
+   [
+    "Test1__csd_act",
+    "csd_act",
+    [
+     "segmentation",
+     "parcellation",
+     "tractography",
+     "connectome"
+    ],
+    null
+   ],
+   [
+    "Test1__ukf",
+    "ukf",
+    [
+     "tractography",
+     "wma"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "csd_act,ukf",
+  "closed_targets": [
+   "segmentation",
+   "parcellation",
+   "tractography",
+   "wma",
+   "connectome"
+  ],
+  "multi": true,
+  "notice": "Also runs automatically: DDSeg (needed by CSD/ACT tractography); DDParcel (needed by CSD/ACT tractography and Connectome); UKF tractography (needed by WMA)",
+  "plan_items": [
+   "bundles.wma@ukf",
+   "connectome.streamline_count@csd_act",
+   "parcellation.ddparcel",
+   "segmentation.ddseg",
+   "tractography.csd_act@csd_act",
+   "tractography.ukf@ukf"
+  ],
+  "requesters": {
+   "ukf": [
+    "wma"
+   ]
+  },
+  "ticked": [
+   "tractography",
+   "bundles",
+   "connectome"
+  ],
+  "tracking": "csd_act"
+ },
+ {
+  "bundles": "tractcloud",
+  "children": [
+   [
+    "Test1",
+    "csd_act",
+    [
+     "segmentation",
+     "parcellation",
+     "tractography",
+     "tractcloud",
+     "connectome"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "csd_act",
+  "closed_targets": [
+   "segmentation",
+   "parcellation",
+   "tractography",
+   "tractcloud",
+   "connectome"
+  ],
+  "multi": false,
+  "notice": "Also runs automatically: DDSeg (needed by CSD/ACT tractography); DDParcel (needed by CSD/ACT tractography and Connectome)",
+  "plan_items": [
+   "bundles.tractcloud",
+   "connectome.streamline_count",
+   "parcellation.ddparcel",
+   "segmentation.ddseg",
+   "tractography.csd_act"
+  ],
+  "requesters": {},
+  "ticked": [
+   "tractography",
+   "bundles",
+   "connectome"
+  ],
+  "tracking": "csd_act"
+ },
+ {
+  "bundles": "wmql,wma,tractcloud",
+  "children": [
+   [
+    "Test1__csd_act",
+    "csd_act",
+    [
+     "segmentation",
+     "parcellation",
+     "tractography",
+     "bundles",
+     "tractcloud",
+     "connectome"
+    ],
+    null
+   ],
+   [
+    "Test1__ukf",
+    "ukf",
+    [
+     "tractography",
+     "wma"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "csd_act,ukf",
+  "closed_targets": [
+   "segmentation",
+   "parcellation",
+   "tractography",
+   "bundles",
+   "wma",
+   "tractcloud",
+   "connectome"
+  ],
+  "multi": true,
+  "notice": "Also runs automatically: DDSeg (needed by CSD/ACT tractography); DDParcel (needed by CSD/ACT tractography and WMQL bundles and Connectome); UKF tractography (needed by WMA)",
+  "plan_items": [
+   "bundles.tractcloud@csd_act",
+   "bundles.wma@ukf",
+   "bundles.wmql@csd_act",
+   "connectome.streamline_count@csd_act",
+   "parcellation.ddparcel",
+   "segmentation.ddseg",
+   "tractography.csd_act@csd_act",
+   "tractography.ukf@ukf"
+  ],
+  "requesters": {
+   "ukf": [
+    "wma"
+   ]
+  },
+  "ticked": [
+   "tractography",
+   "bundles",
+   "connectome"
+  ],
+  "tracking": "csd_act"
+ },
+ {
+  "bundles": "wmql",
+  "children": [
+   [
+    "Test1",
+    "ukf",
+    [
+     "parcellation",
+     "tractography",
+     "bundles",
+     "connectome"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "ukf",
+  "closed_targets": [
+   "parcellation",
+   "tractography",
+   "bundles",
+   "connectome"
+  ],
+  "multi": false,
+  "notice": "Also runs automatically: DDParcel (needed by WMQL bundles and Connectome)",
+  "plan_items": [
+   "bundles.wmql",
+   "connectome.streamline_count",
+   "parcellation.ddparcel",
+   "tractography.ukf"
+  ],
+  "requesters": {},
+  "ticked": [
+   "tractography",
+   "bundles",
+   "connectome"
+  ],
+  "tracking": "ukf"
+ },
+ {
+  "bundles": "wma",
+  "children": [
+   [
+    "Test1",
+    "ukf",
+    [
+     "parcellation",
+     "tractography",
+     "wma",
+     "connectome"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "ukf",
+  "closed_targets": [
+   "parcellation",
+   "tractography",
+   "wma",
+   "connectome"
+  ],
+  "multi": false,
+  "notice": "Also runs automatically: DDParcel (needed by Connectome)",
+  "plan_items": [
+   "bundles.wma",
+   "connectome.streamline_count",
+   "parcellation.ddparcel",
+   "tractography.ukf"
+  ],
+  "requesters": {},
+  "ticked": [
+   "tractography",
+   "bundles",
+   "connectome"
+  ],
+  "tracking": "ukf"
+ },
+ {
+  "bundles": "tractcloud",
+  "children": [
+   [
+    "Test1",
+    "ukf",
+    [
+     "parcellation",
+     "tractography",
+     "tractcloud",
+     "connectome"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "ukf",
+  "closed_targets": [
+   "parcellation",
+   "tractography",
+   "tractcloud",
+   "connectome"
+  ],
+  "multi": false,
+  "notice": "Also runs automatically: DDParcel (needed by Connectome)",
+  "plan_items": [
+   "bundles.tractcloud",
+   "connectome.streamline_count",
+   "parcellation.ddparcel",
+   "tractography.ukf"
+  ],
+  "requesters": {},
+  "ticked": [
+   "tractography",
+   "bundles",
+   "connectome"
+  ],
+  "tracking": "ukf"
+ },
+ {
+  "bundles": "wmql,wma,tractcloud",
+  "children": [
+   [
+    "Test1",
+    "ukf",
+    [
+     "parcellation",
+     "tractography",
+     "bundles",
+     "wma",
+     "tractcloud",
+     "connectome"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "ukf",
+  "closed_targets": [
+   "parcellation",
+   "tractography",
+   "bundles",
+   "wma",
+   "tractcloud",
+   "connectome"
+  ],
+  "multi": false,
+  "notice": "Also runs automatically: DDParcel (needed by WMQL bundles and Connectome)",
+  "plan_items": [
+   "bundles.tractcloud",
+   "bundles.wma",
+   "bundles.wmql",
+   "connectome.streamline_count",
+   "parcellation.ddparcel",
+   "tractography.ukf"
+  ],
+  "requesters": {},
+  "ticked": [
+   "tractography",
+   "bundles",
+   "connectome"
+  ],
+  "tracking": "ukf"
+ },
+ {
+  "bundles": "wmql",
+  "children": [
+   [
+    "Test1",
+    "dti_det",
+    [
+     "parcellation",
+     "tractography",
+     "bundles",
+     "connectome"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "dti_det",
+  "closed_targets": [
+   "parcellation",
+   "tractography",
+   "bundles",
+   "connectome"
+  ],
+  "multi": false,
+  "notice": "Also runs automatically: DDParcel (needed by WMQL bundles and Connectome)",
+  "plan_items": [
+   "bundles.wmql",
+   "connectome.streamline_count",
+   "parcellation.ddparcel",
+   "tractography.dti_det"
+  ],
+  "requesters": {},
+  "ticked": [
+   "tractography",
+   "bundles",
+   "connectome"
+  ],
+  "tracking": "dti_det"
+ },
+ {
+  "bundles": "wma",
+  "children": [
+   [
+    "Test1__dti_det",
+    "dti_det",
+    [
+     "parcellation",
+     "tractography",
+     "connectome"
+    ],
+    null
+   ],
+   [
+    "Test1__ukf",
+    "ukf",
+    [
+     "tractography",
+     "wma"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "dti_det,ukf",
+  "closed_targets": [
+   "parcellation",
+   "tractography",
+   "wma",
+   "connectome"
+  ],
+  "multi": true,
+  "notice": "Also runs automatically: DDParcel (needed by Connectome); UKF tractography (needed by WMA)",
+  "plan_items": [
+   "bundles.wma@ukf",
+   "connectome.streamline_count@dti_det",
+   "parcellation.ddparcel",
+   "tractography.dti_det@dti_det",
+   "tractography.ukf@ukf"
+  ],
+  "requesters": {
+   "ukf": [
+    "wma"
+   ]
+  },
+  "ticked": [
+   "tractography",
+   "bundles",
+   "connectome"
+  ],
+  "tracking": "dti_det"
+ },
+ {
+  "bundles": "tractcloud",
+  "children": [
+   [
+    "Test1",
+    "dti_det",
+    [
+     "parcellation",
+     "tractography",
+     "tractcloud",
+     "connectome"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "dti_det",
+  "closed_targets": [
+   "parcellation",
+   "tractography",
+   "tractcloud",
+   "connectome"
+  ],
+  "multi": false,
+  "notice": "Also runs automatically: DDParcel (needed by Connectome)",
+  "plan_items": [
+   "bundles.tractcloud",
+   "connectome.streamline_count",
+   "parcellation.ddparcel",
+   "tractography.dti_det"
+  ],
+  "requesters": {},
+  "ticked": [
+   "tractography",
+   "bundles",
+   "connectome"
+  ],
+  "tracking": "dti_det"
+ },
+ {
+  "bundles": "wmql,wma,tractcloud",
+  "children": [
+   [
+    "Test1__dti_det",
+    "dti_det",
+    [
+     "parcellation",
+     "tractography",
+     "bundles",
+     "tractcloud",
+     "connectome"
+    ],
+    null
+   ],
+   [
+    "Test1__ukf",
+    "ukf",
+    [
+     "tractography",
+     "wma"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "dti_det,ukf",
+  "closed_targets": [
+   "parcellation",
+   "tractography",
+   "bundles",
+   "wma",
+   "tractcloud",
+   "connectome"
+  ],
+  "multi": true,
+  "notice": "Also runs automatically: DDParcel (needed by WMQL bundles and Connectome); UKF tractography (needed by WMA)",
+  "plan_items": [
+   "bundles.tractcloud@dti_det",
+   "bundles.wma@ukf",
+   "bundles.wmql@dti_det",
+   "connectome.streamline_count@dti_det",
+   "parcellation.ddparcel",
+   "tractography.dti_det@dti_det",
+   "tractography.ukf@ukf"
+  ],
+  "requesters": {
+   "ukf": [
+    "wma"
+   ]
+  },
+  "ticked": [
+   "tractography",
+   "bundles",
+   "connectome"
+  ],
+  "tracking": "dti_det"
+ },
+ {
+  "bundles": "wmql",
+  "children": [
+   [
+    "Test1__csd_act",
+    "csd_act",
+    [
+     "segmentation",
+     "parcellation",
+     "tractography",
+     "bundles",
+     "connectome"
+    ],
+    null
+   ],
+   [
+    "Test1__ukf",
+    "ukf",
+    [
+     "tractography",
+     "bundles",
+     "connectome"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "csd_act,ukf",
+  "closed_targets": [
+   "segmentation",
+   "parcellation",
+   "tractography",
+   "bundles",
+   "connectome"
+  ],
+  "multi": true,
+  "notice": "Also runs automatically: DDSeg (needed by CSD/ACT tractography); DDParcel (needed by CSD/ACT tractography and WMQL bundles and Connectome)",
+  "plan_items": [
+   "bundles.wmql@csd_act",
+   "bundles.wmql@ukf",
+   "connectome.streamline_count@csd_act",
+   "connectome.streamline_count@ukf",
+   "parcellation.ddparcel",
+   "segmentation.ddseg",
+   "tractography.csd_act@csd_act",
+   "tractography.ukf@ukf"
+  ],
+  "requesters": {},
+  "ticked": [
+   "tractography",
+   "bundles",
+   "connectome"
+  ],
+  "tracking": "csd_act,ukf"
+ },
+ {
+  "bundles": "wma",
+  "children": [
+   [
+    "Test1__csd_act",
+    "csd_act",
+    [
+     "segmentation",
+     "parcellation",
+     "tractography",
+     "connectome"
+    ],
+    null
+   ],
+   [
+    "Test1__ukf",
+    "ukf",
+    [
+     "tractography",
+     "wma",
+     "connectome"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "csd_act,ukf",
+  "closed_targets": [
+   "segmentation",
+   "parcellation",
+   "tractography",
+   "wma",
+   "connectome"
+  ],
+  "multi": true,
+  "notice": "Also runs automatically: DDSeg (needed by CSD/ACT tractography); DDParcel (needed by CSD/ACT tractography and Connectome)",
+  "plan_items": [
+   "bundles.wma@ukf",
+   "connectome.streamline_count@csd_act",
+   "connectome.streamline_count@ukf",
+   "parcellation.ddparcel",
+   "segmentation.ddseg",
+   "tractography.csd_act@csd_act",
+   "tractography.ukf@ukf"
+  ],
+  "requesters": {},
+  "ticked": [
+   "tractography",
+   "bundles",
+   "connectome"
+  ],
+  "tracking": "csd_act,ukf"
+ },
+ {
+  "bundles": "tractcloud",
+  "children": [
+   [
+    "Test1__csd_act",
+    "csd_act",
+    [
+     "segmentation",
+     "parcellation",
+     "tractography",
+     "tractcloud",
+     "connectome"
+    ],
+    null
+   ],
+   [
+    "Test1__ukf",
+    "ukf",
+    [
+     "tractography",
+     "tractcloud",
+     "connectome"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "csd_act,ukf",
+  "closed_targets": [
+   "segmentation",
+   "parcellation",
+   "tractography",
+   "tractcloud",
+   "connectome"
+  ],
+  "multi": true,
+  "notice": "Also runs automatically: DDSeg (needed by CSD/ACT tractography); DDParcel (needed by CSD/ACT tractography and Connectome)",
+  "plan_items": [
+   "bundles.tractcloud@csd_act",
+   "bundles.tractcloud@ukf",
+   "connectome.streamline_count@csd_act",
+   "connectome.streamline_count@ukf",
+   "parcellation.ddparcel",
+   "segmentation.ddseg",
+   "tractography.csd_act@csd_act",
+   "tractography.ukf@ukf"
+  ],
+  "requesters": {},
+  "ticked": [
+   "tractography",
+   "bundles",
+   "connectome"
+  ],
+  "tracking": "csd_act,ukf"
+ },
+ {
+  "bundles": "wmql,wma,tractcloud",
+  "children": [
+   [
+    "Test1__csd_act",
+    "csd_act",
+    [
+     "segmentation",
+     "parcellation",
+     "tractography",
+     "bundles",
+     "tractcloud",
+     "connectome"
+    ],
+    null
+   ],
+   [
+    "Test1__ukf",
+    "ukf",
+    [
+     "tractography",
+     "bundles",
+     "wma",
+     "tractcloud",
+     "connectome"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "csd_act,ukf",
+  "closed_targets": [
+   "segmentation",
+   "parcellation",
+   "tractography",
+   "bundles",
+   "wma",
+   "tractcloud",
+   "connectome"
+  ],
+  "multi": true,
+  "notice": "Also runs automatically: DDSeg (needed by CSD/ACT tractography); DDParcel (needed by CSD/ACT tractography and WMQL bundles and Connectome)",
+  "plan_items": [
+   "bundles.tractcloud@csd_act",
+   "bundles.tractcloud@ukf",
+   "bundles.wma@ukf",
+   "bundles.wmql@csd_act",
+   "bundles.wmql@ukf",
+   "connectome.streamline_count@csd_act",
+   "connectome.streamline_count@ukf",
+   "parcellation.ddparcel",
+   "segmentation.ddseg",
+   "tractography.csd_act@csd_act",
+   "tractography.ukf@ukf"
+  ],
+  "requesters": {},
+  "ticked": [
+   "tractography",
+   "bundles",
+   "connectome"
+  ],
+  "tracking": "csd_act,ukf"
+ },
+ {
+  "bundles": "wmql",
+  "children": [
+   [
+    "Test1__csd_act",
+    "csd_act",
+    [
+     "segmentation",
+     "parcellation",
+     "tractography",
+     "bundles",
+     "connectome"
+    ],
+    null
+   ],
+   [
+    "Test1__ukf",
+    "ukf",
+    [
+     "tractography",
+     "bundles",
+     "connectome"
+    ],
+    null
+   ],
+   [
+    "Test1__dti_det",
+    "dti_det",
+    [
+     "tractography",
+     "bundles",
+     "connectome"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "csd_act,ukf,dti_det",
+  "closed_targets": [
+   "segmentation",
+   "parcellation",
+   "tractography",
+   "bundles",
+   "connectome"
+  ],
+  "multi": true,
+  "notice": "Also runs automatically: DDSeg (needed by CSD/ACT tractography); DDParcel (needed by CSD/ACT tractography and WMQL bundles and Connectome)",
+  "plan_items": [
+   "bundles.wmql@csd_act",
+   "bundles.wmql@dti_det",
+   "bundles.wmql@ukf",
+   "connectome.streamline_count@csd_act",
+   "connectome.streamline_count@dti_det",
+   "connectome.streamline_count@ukf",
+   "parcellation.ddparcel",
+   "segmentation.ddseg",
+   "tractography.csd_act@csd_act",
+   "tractography.dti_det@dti_det",
+   "tractography.ukf@ukf"
+  ],
+  "requesters": {},
+  "ticked": [
+   "tractography",
+   "bundles",
+   "connectome"
+  ],
+  "tracking": "csd_act,ukf,dti_det"
+ },
+ {
+  "bundles": "wma",
+  "children": [
+   [
+    "Test1__csd_act",
+    "csd_act",
+    [
+     "segmentation",
+     "parcellation",
+     "tractography",
+     "connectome"
+    ],
+    null
+   ],
+   [
+    "Test1__ukf",
+    "ukf",
+    [
+     "tractography",
+     "wma",
+     "connectome"
+    ],
+    null
+   ],
+   [
+    "Test1__dti_det",
+    "dti_det",
+    [
+     "tractography",
+     "connectome"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "csd_act,ukf,dti_det",
+  "closed_targets": [
+   "segmentation",
+   "parcellation",
+   "tractography",
+   "wma",
+   "connectome"
+  ],
+  "multi": true,
+  "notice": "Also runs automatically: DDSeg (needed by CSD/ACT tractography); DDParcel (needed by CSD/ACT tractography and Connectome)",
+  "plan_items": [
+   "bundles.wma@ukf",
+   "connectome.streamline_count@csd_act",
+   "connectome.streamline_count@dti_det",
+   "connectome.streamline_count@ukf",
+   "parcellation.ddparcel",
+   "segmentation.ddseg",
+   "tractography.csd_act@csd_act",
+   "tractography.dti_det@dti_det",
+   "tractography.ukf@ukf"
+  ],
+  "requesters": {},
+  "ticked": [
+   "tractography",
+   "bundles",
+   "connectome"
+  ],
+  "tracking": "csd_act,ukf,dti_det"
+ },
+ {
+  "bundles": "tractcloud",
+  "children": [
+   [
+    "Test1__csd_act",
+    "csd_act",
+    [
+     "segmentation",
+     "parcellation",
+     "tractography",
+     "tractcloud",
+     "connectome"
+    ],
+    null
+   ],
+   [
+    "Test1__ukf",
+    "ukf",
+    [
+     "tractography",
+     "tractcloud",
+     "connectome"
+    ],
+    null
+   ],
+   [
+    "Test1__dti_det",
+    "dti_det",
+    [
+     "tractography",
+     "tractcloud",
+     "connectome"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "csd_act,ukf,dti_det",
+  "closed_targets": [
+   "segmentation",
+   "parcellation",
+   "tractography",
+   "tractcloud",
+   "connectome"
+  ],
+  "multi": true,
+  "notice": "Also runs automatically: DDSeg (needed by CSD/ACT tractography); DDParcel (needed by CSD/ACT tractography and Connectome)",
+  "plan_items": [
+   "bundles.tractcloud@csd_act",
+   "bundles.tractcloud@dti_det",
+   "bundles.tractcloud@ukf",
+   "connectome.streamline_count@csd_act",
+   "connectome.streamline_count@dti_det",
+   "connectome.streamline_count@ukf",
+   "parcellation.ddparcel",
+   "segmentation.ddseg",
+   "tractography.csd_act@csd_act",
+   "tractography.dti_det@dti_det",
+   "tractography.ukf@ukf"
+  ],
+  "requesters": {},
+  "ticked": [
+   "tractography",
+   "bundles",
+   "connectome"
+  ],
+  "tracking": "csd_act,ukf,dti_det"
+ },
+ {
+  "bundles": "wmql,wma,tractcloud",
+  "children": [
+   [
+    "Test1__csd_act",
+    "csd_act",
+    [
+     "segmentation",
+     "parcellation",
+     "tractography",
+     "bundles",
+     "tractcloud",
+     "connectome"
+    ],
+    null
+   ],
+   [
+    "Test1__ukf",
+    "ukf",
+    [
+     "tractography",
+     "bundles",
+     "wma",
+     "tractcloud",
+     "connectome"
+    ],
+    null
+   ],
+   [
+    "Test1__dti_det",
+    "dti_det",
+    [
+     "tractography",
+     "bundles",
+     "tractcloud",
+     "connectome"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "csd_act,ukf,dti_det",
+  "closed_targets": [
+   "segmentation",
+   "parcellation",
+   "tractography",
+   "bundles",
+   "wma",
+   "tractcloud",
+   "connectome"
+  ],
+  "multi": true,
+  "notice": "Also runs automatically: DDSeg (needed by CSD/ACT tractography); DDParcel (needed by CSD/ACT tractography and WMQL bundles and Connectome)",
+  "plan_items": [
+   "bundles.tractcloud@csd_act",
+   "bundles.tractcloud@dti_det",
+   "bundles.tractcloud@ukf",
+   "bundles.wma@ukf",
+   "bundles.wmql@csd_act",
+   "bundles.wmql@dti_det",
+   "bundles.wmql@ukf",
+   "connectome.streamline_count@csd_act",
+   "connectome.streamline_count@dti_det",
+   "connectome.streamline_count@ukf",
+   "parcellation.ddparcel",
+   "segmentation.ddseg",
+   "tractography.csd_act@csd_act",
+   "tractography.dti_det@dti_det",
+   "tractography.ukf@ukf"
+  ],
+  "requesters": {},
+  "ticked": [
+   "tractography",
+   "bundles",
+   "connectome"
+  ],
+  "tracking": "csd_act,ukf,dti_det"
+ },
+ {
+  "bundles": "wmql",
+  "children": [
+   [
+    "Test1__csd_act",
+    "csd_act",
+    [
+     "segmentation",
+     "parcellation",
+     "surface",
+     "surface_postprocess",
+     "tractography",
+     "bundles",
+     "connectome"
+    ],
+    null
+   ],
+   [
+    "Test1__saf",
+    "saf",
+    [
+     "tractography",
+     "bundles",
+     "saf",
+     "connectome"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "csd_act,saf",
+  "closed_targets": [
+   "segmentation",
+   "parcellation",
+   "surface",
+   "surface_postprocess",
+   "tractography",
+   "bundles",
+   "saf",
+   "connectome"
+  ],
+  "multi": true,
+  "notice": "Also runs automatically: DDSeg (needed by CSD/ACT tractography); DDParcel (needed by CSD/ACT tractography and WMQL bundles and Connectome); DDSurfer (needed by Surface postprocess); Surface postprocess (needed by CSD/ACT tractography and SAF)",
+  "plan_items": [
+   "bundles.wmql@csd_act",
+   "bundles.wmql@saf",
+   "connectome.streamline_count@csd_act",
+   "connectome.streamline_count@saf",
+   "parcellation.ddparcel",
+   "segmentation.ddseg",
+   "surface.ddsurfer",
+   "surface.ddsurfer_postprocess",
+   "tractography.csd_act@csd_act",
+   "tractography.csd_act@saf",
+   "tractography.saf@saf"
+  ],
+  "requesters": {},
+  "ticked": [
+   "tractography",
+   "bundles",
+   "connectome"
+  ],
+  "tracking": "csd_act,saf"
+ },
+ {
+  "bundles": "wma",
+  "children": [
+   [
+    "Test1__csd_act",
+    "csd_act",
+    [
+     "segmentation",
+     "parcellation",
+     "surface",
+     "surface_postprocess",
+     "tractography",
+     "connectome"
+    ],
+    null
+   ],
+   [
+    "Test1__saf",
+    "saf",
+    [
+     "tractography",
+     "saf",
+     "connectome"
+    ],
+    null
+   ],
+   [
+    "Test1__ukf",
+    "ukf",
+    [
+     "tractography",
+     "wma"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "csd_act,saf,ukf",
+  "closed_targets": [
+   "segmentation",
+   "parcellation",
+   "surface",
+   "surface_postprocess",
+   "tractography",
+   "saf",
+   "wma",
+   "connectome"
+  ],
+  "multi": true,
+  "notice": "Also runs automatically: DDSeg (needed by CSD/ACT tractography); DDParcel (needed by CSD/ACT tractography and Connectome); DDSurfer (needed by Surface postprocess); Surface postprocess (needed by CSD/ACT tractography and SAF); UKF tractography (needed by WMA)",
+  "plan_items": [
+   "bundles.wma@ukf",
+   "connectome.streamline_count@csd_act",
+   "connectome.streamline_count@saf",
+   "parcellation.ddparcel",
+   "segmentation.ddseg",
+   "surface.ddsurfer",
+   "surface.ddsurfer_postprocess",
+   "tractography.csd_act@csd_act",
+   "tractography.csd_act@saf",
+   "tractography.saf@saf",
+   "tractography.ukf@ukf"
+  ],
+  "requesters": {
+   "ukf": [
+    "wma"
+   ]
+  },
+  "ticked": [
+   "tractography",
+   "bundles",
+   "connectome"
+  ],
+  "tracking": "csd_act,saf"
+ },
+ {
+  "bundles": "tractcloud",
+  "children": [
+   [
+    "Test1__csd_act",
+    "csd_act",
+    [
+     "segmentation",
+     "parcellation",
+     "surface",
+     "surface_postprocess",
+     "tractography",
+     "tractcloud",
+     "connectome"
+    ],
+    null
+   ],
+   [
+    "Test1__saf",
+    "saf",
+    [
+     "tractography",
+     "saf",
+     "tractcloud",
+     "connectome"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "csd_act,saf",
+  "closed_targets": [
+   "segmentation",
+   "parcellation",
+   "surface",
+   "surface_postprocess",
+   "tractography",
+   "saf",
+   "tractcloud",
+   "connectome"
+  ],
+  "multi": true,
+  "notice": "Also runs automatically: DDSeg (needed by CSD/ACT tractography); DDParcel (needed by CSD/ACT tractography and Connectome); DDSurfer (needed by Surface postprocess); Surface postprocess (needed by CSD/ACT tractography and SAF)",
+  "plan_items": [
+   "bundles.tractcloud@csd_act",
+   "bundles.tractcloud@saf",
+   "connectome.streamline_count@csd_act",
+   "connectome.streamline_count@saf",
+   "parcellation.ddparcel",
+   "segmentation.ddseg",
+   "surface.ddsurfer",
+   "surface.ddsurfer_postprocess",
+   "tractography.csd_act@csd_act",
+   "tractography.csd_act@saf",
+   "tractography.saf@saf"
+  ],
+  "requesters": {},
+  "ticked": [
+   "tractography",
+   "bundles",
+   "connectome"
+  ],
+  "tracking": "csd_act,saf"
+ },
+ {
+  "bundles": "wmql,wma,tractcloud",
+  "children": [
+   [
+    "Test1__csd_act",
+    "csd_act",
+    [
+     "segmentation",
+     "parcellation",
+     "surface",
+     "surface_postprocess",
+     "tractography",
+     "bundles",
+     "tractcloud",
+     "connectome"
+    ],
+    null
+   ],
+   [
+    "Test1__saf",
+    "saf",
+    [
+     "tractography",
+     "bundles",
+     "saf",
+     "tractcloud",
+     "connectome"
+    ],
+    null
+   ],
+   [
+    "Test1__ukf",
+    "ukf",
+    [
+     "tractography",
+     "wma"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "csd_act,saf,ukf",
+  "closed_targets": [
+   "segmentation",
+   "parcellation",
+   "surface",
+   "surface_postprocess",
+   "tractography",
+   "bundles",
+   "saf",
+   "wma",
+   "tractcloud",
+   "connectome"
+  ],
+  "multi": true,
+  "notice": "Also runs automatically: DDSeg (needed by CSD/ACT tractography); DDParcel (needed by CSD/ACT tractography and WMQL bundles and Connectome); DDSurfer (needed by Surface postprocess); Surface postprocess (needed by CSD/ACT tractography and SAF); UKF tractography (needed by WMA)",
+  "plan_items": [
+   "bundles.tractcloud@csd_act",
+   "bundles.tractcloud@saf",
+   "bundles.wma@ukf",
+   "bundles.wmql@csd_act",
+   "bundles.wmql@saf",
+   "connectome.streamline_count@csd_act",
+   "connectome.streamline_count@saf",
+   "parcellation.ddparcel",
+   "segmentation.ddseg",
+   "surface.ddsurfer",
+   "surface.ddsurfer_postprocess",
+   "tractography.csd_act@csd_act",
+   "tractography.csd_act@saf",
+   "tractography.saf@saf",
+   "tractography.ukf@ukf"
+  ],
+  "requesters": {
+   "ukf": [
+    "wma"
+   ]
+  },
+  "ticked": [
+   "tractography",
+   "bundles",
+   "connectome"
+  ],
+  "tracking": "csd_act,saf"
+ },
+ {
+  "bundles": "wmql",
+  "children": [
+   [
+    "Test1",
+    "csd_act",
+    [
+     "segmentation",
+     "parcellation",
+     "tractography",
+     "bundles"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "csd_act",
+  "closed_targets": [
+   "segmentation",
+   "parcellation",
+   "tractography",
+   "bundles"
+  ],
+  "multi": false,
+  "notice": "Also runs automatically: DDSeg (needed by CSD/ACT tractography); DDParcel (needed by CSD/ACT tractography and WMQL bundles); Tractography (needed by WMQL bundles)",
+  "plan_items": [
+   "bundles.wmql",
+   "parcellation.ddparcel",
+   "segmentation.ddseg",
+   "tractography.csd_act"
+  ],
+  "requesters": {},
+  "ticked": [
+   "bundles"
+  ],
+  "tracking": "csd_act"
+ },
+ {
+  "bundles": "wma",
+  "children": [
+   [
+    "Test1",
+    "ukf",
+    [
+     "tractography",
+     "wma"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "ukf",
+  "closed_targets": [
+   "tractography",
+   "wma"
+  ],
+  "multi": false,
+  "notice": "Also runs automatically: UKF tractography (needed by WMA)",
+  "plan_items": [
+   "bundles.wma",
+   "tractography.ukf"
+  ],
+  "requesters": {
+   "ukf": [
+    "wma"
+   ]
+  },
+  "ticked": [
+   "bundles"
+  ],
+  "tracking": "csd_act"
+ },
+ {
+  "bundles": "tractcloud",
+  "children": [
+   [
+    "Test1",
+    "csd_act",
+    [
+     "segmentation",
+     "parcellation",
+     "tractography",
+     "tractcloud"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "csd_act",
+  "closed_targets": [
+   "segmentation",
+   "parcellation",
+   "tractography",
+   "tractcloud"
+  ],
+  "multi": false,
+  "notice": "Also runs automatically: DDSeg, DDParcel (needed by CSD/ACT tractography); Tractography (needed by TractCloud)",
+  "plan_items": [
+   "bundles.tractcloud",
+   "parcellation.ddparcel",
+   "segmentation.ddseg",
+   "tractography.csd_act"
+  ],
+  "requesters": {},
+  "ticked": [
+   "bundles"
+  ],
+  "tracking": "csd_act"
+ },
+ {
+  "bundles": "wmql,wma,tractcloud",
+  "children": [
+   [
+    "Test1__csd_act",
+    "csd_act",
+    [
+     "segmentation",
+     "parcellation",
+     "tractography",
+     "bundles",
+     "tractcloud"
+    ],
+    null
+   ],
+   [
+    "Test1__ukf",
+    "ukf",
+    [
+     "tractography",
+     "wma"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "csd_act,ukf",
+  "closed_targets": [
+   "segmentation",
+   "parcellation",
+   "tractography",
+   "bundles",
+   "wma",
+   "tractcloud"
+  ],
+  "multi": true,
+  "notice": "Also runs automatically: DDSeg (needed by CSD/ACT tractography); DDParcel (needed by CSD/ACT tractography and WMQL bundles); Tractography (needed by WMQL bundles and WMA and TractCloud); UKF tractography (needed by WMA)",
+  "plan_items": [
+   "bundles.tractcloud@csd_act",
+   "bundles.wma@ukf",
+   "bundles.wmql@csd_act",
+   "parcellation.ddparcel",
+   "segmentation.ddseg",
+   "tractography.csd_act@csd_act",
+   "tractography.ukf@ukf"
+  ],
+  "requesters": {
+   "ukf": [
+    "wma"
+   ]
+  },
+  "ticked": [
+   "bundles"
+  ],
+  "tracking": "csd_act"
+ },
+ {
+  "bundles": "wmql",
+  "children": [
+   [
+    "Test1",
+    "ukf",
+    [
+     "parcellation",
+     "tractography",
+     "bundles"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "ukf",
+  "closed_targets": [
+   "parcellation",
+   "tractography",
+   "bundles"
+  ],
+  "multi": false,
+  "notice": "Also runs automatically: DDParcel, Tractography (needed by WMQL bundles)",
+  "plan_items": [
+   "bundles.wmql",
+   "parcellation.ddparcel",
+   "tractography.ukf"
+  ],
+  "requesters": {},
+  "ticked": [
+   "bundles"
+  ],
+  "tracking": "ukf"
+ },
+ {
+  "bundles": "wma",
+  "children": [
+   [
+    "Test1",
+    "ukf",
+    [
+     "tractography",
+     "wma"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "ukf",
+  "closed_targets": [
+   "tractography",
+   "wma"
+  ],
+  "multi": false,
+  "notice": "Also runs automatically: Tractography (needed by WMA)",
+  "plan_items": [
+   "bundles.wma",
+   "tractography.ukf"
+  ],
+  "requesters": {},
+  "ticked": [
+   "bundles"
+  ],
+  "tracking": "ukf"
+ },
+ {
+  "bundles": "tractcloud",
+  "children": [
+   [
+    "Test1",
+    "ukf",
+    [
+     "tractography",
+     "tractcloud"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "ukf",
+  "closed_targets": [
+   "tractography",
+   "tractcloud"
+  ],
+  "multi": false,
+  "notice": "Also runs automatically: Tractography (needed by TractCloud)",
+  "plan_items": [
+   "bundles.tractcloud",
+   "tractography.ukf"
+  ],
+  "requesters": {},
+  "ticked": [
+   "bundles"
+  ],
+  "tracking": "ukf"
+ },
+ {
+  "bundles": "wmql,wma,tractcloud",
+  "children": [
+   [
+    "Test1",
+    "ukf",
+    [
+     "parcellation",
+     "tractography",
+     "bundles",
+     "wma",
+     "tractcloud"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "ukf",
+  "closed_targets": [
+   "parcellation",
+   "tractography",
+   "bundles",
+   "wma",
+   "tractcloud"
+  ],
+  "multi": false,
+  "notice": "Also runs automatically: DDParcel (needed by WMQL bundles); Tractography (needed by WMQL bundles and WMA and TractCloud)",
+  "plan_items": [
+   "bundles.tractcloud",
+   "bundles.wma",
+   "bundles.wmql",
+   "parcellation.ddparcel",
+   "tractography.ukf"
+  ],
+  "requesters": {},
+  "ticked": [
+   "bundles"
+  ],
+  "tracking": "ukf"
+ },
+ {
+  "bundles": "wmql",
+  "children": [
+   [
+    "Test1",
+    "dti_det",
+    [
+     "parcellation",
+     "tractography",
+     "bundles"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "dti_det",
+  "closed_targets": [
+   "parcellation",
+   "tractography",
+   "bundles"
+  ],
+  "multi": false,
+  "notice": "Also runs automatically: DDParcel, Tractography (needed by WMQL bundles)",
+  "plan_items": [
+   "bundles.wmql",
+   "parcellation.ddparcel",
+   "tractography.dti_det"
+  ],
+  "requesters": {},
+  "ticked": [
+   "bundles"
+  ],
+  "tracking": "dti_det"
+ },
+ {
+  "bundles": "wma",
+  "children": [
+   [
+    "Test1",
+    "ukf",
+    [
+     "tractography",
+     "wma"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "ukf",
+  "closed_targets": [
+   "tractography",
+   "wma"
+  ],
+  "multi": false,
+  "notice": "Also runs automatically: UKF tractography (needed by WMA)",
+  "plan_items": [
+   "bundles.wma",
+   "tractography.ukf"
+  ],
+  "requesters": {
+   "ukf": [
+    "wma"
+   ]
+  },
+  "ticked": [
+   "bundles"
+  ],
+  "tracking": "dti_det"
+ },
+ {
+  "bundles": "tractcloud",
+  "children": [
+   [
+    "Test1",
+    "dti_det",
+    [
+     "tractography",
+     "tractcloud"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "dti_det",
+  "closed_targets": [
+   "tractography",
+   "tractcloud"
+  ],
+  "multi": false,
+  "notice": "Also runs automatically: Tractography (needed by TractCloud)",
+  "plan_items": [
+   "bundles.tractcloud",
+   "tractography.dti_det"
+  ],
+  "requesters": {},
+  "ticked": [
+   "bundles"
+  ],
+  "tracking": "dti_det"
+ },
+ {
+  "bundles": "wmql,wma,tractcloud",
+  "children": [
+   [
+    "Test1__dti_det",
+    "dti_det",
+    [
+     "parcellation",
+     "tractography",
+     "bundles",
+     "tractcloud"
+    ],
+    null
+   ],
+   [
+    "Test1__ukf",
+    "ukf",
+    [
+     "tractography",
+     "wma"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "dti_det,ukf",
+  "closed_targets": [
+   "parcellation",
+   "tractography",
+   "bundles",
+   "wma",
+   "tractcloud"
+  ],
+  "multi": true,
+  "notice": "Also runs automatically: DDParcel (needed by WMQL bundles); Tractography (needed by WMQL bundles and WMA and TractCloud); UKF tractography (needed by WMA)",
+  "plan_items": [
+   "bundles.tractcloud@dti_det",
+   "bundles.wma@ukf",
+   "bundles.wmql@dti_det",
+   "parcellation.ddparcel",
+   "tractography.dti_det@dti_det",
+   "tractography.ukf@ukf"
+  ],
+  "requesters": {
+   "ukf": [
+    "wma"
+   ]
+  },
+  "ticked": [
+   "bundles"
+  ],
+  "tracking": "dti_det"
+ },
+ {
+  "bundles": "wmql",
+  "children": [
+   [
+    "Test1__csd_act",
+    "csd_act",
+    [
+     "segmentation",
+     "parcellation",
+     "tractography",
+     "bundles"
+    ],
+    null
+   ],
+   [
+    "Test1__ukf",
+    "ukf",
+    [
+     "tractography",
+     "bundles"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "csd_act,ukf",
+  "closed_targets": [
+   "segmentation",
+   "parcellation",
+   "tractography",
+   "bundles"
+  ],
+  "multi": true,
+  "notice": "Also runs automatically: DDSeg (needed by CSD/ACT tractography); DDParcel (needed by CSD/ACT tractography and WMQL bundles); Tractography (needed by WMQL bundles)",
+  "plan_items": [
+   "bundles.wmql@csd_act",
+   "bundles.wmql@ukf",
+   "parcellation.ddparcel",
+   "segmentation.ddseg",
+   "tractography.csd_act@csd_act",
+   "tractography.ukf@ukf"
+  ],
+  "requesters": {},
+  "ticked": [
+   "bundles"
+  ],
+  "tracking": "csd_act,ukf"
+ },
+ {
+  "bundles": "wma",
+  "children": [
+   [
+    "Test1__csd_act",
+    "csd_act",
+    [
+     "segmentation",
+     "parcellation",
+     "tractography"
+    ],
+    null
+   ],
+   [
+    "Test1__ukf",
+    "ukf",
+    [
+     "tractography",
+     "wma"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "csd_act,ukf",
+  "closed_targets": [
+   "segmentation",
+   "parcellation",
+   "tractography",
+   "wma"
+  ],
+  "multi": true,
+  "notice": "Also runs automatically: DDSeg, DDParcel (needed by CSD/ACT tractography); Tractography (needed by WMA)",
+  "plan_items": [
+   "bundles.wma@ukf",
+   "parcellation.ddparcel",
+   "segmentation.ddseg",
+   "tractography.csd_act@csd_act",
+   "tractography.ukf@ukf"
+  ],
+  "requesters": {},
+  "ticked": [
+   "bundles"
+  ],
+  "tracking": "csd_act,ukf"
+ },
+ {
+  "bundles": "tractcloud",
+  "children": [
+   [
+    "Test1__csd_act",
+    "csd_act",
+    [
+     "segmentation",
+     "parcellation",
+     "tractography",
+     "tractcloud"
+    ],
+    null
+   ],
+   [
+    "Test1__ukf",
+    "ukf",
+    [
+     "tractography",
+     "tractcloud"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "csd_act,ukf",
+  "closed_targets": [
+   "segmentation",
+   "parcellation",
+   "tractography",
+   "tractcloud"
+  ],
+  "multi": true,
+  "notice": "Also runs automatically: DDSeg, DDParcel (needed by CSD/ACT tractography); Tractography (needed by TractCloud)",
+  "plan_items": [
+   "bundles.tractcloud@csd_act",
+   "bundles.tractcloud@ukf",
+   "parcellation.ddparcel",
+   "segmentation.ddseg",
+   "tractography.csd_act@csd_act",
+   "tractography.ukf@ukf"
+  ],
+  "requesters": {},
+  "ticked": [
+   "bundles"
+  ],
+  "tracking": "csd_act,ukf"
+ },
+ {
+  "bundles": "wmql,wma,tractcloud",
+  "children": [
+   [
+    "Test1__csd_act",
+    "csd_act",
+    [
+     "segmentation",
+     "parcellation",
+     "tractography",
+     "bundles",
+     "tractcloud"
+    ],
+    null
+   ],
+   [
+    "Test1__ukf",
+    "ukf",
+    [
+     "tractography",
+     "bundles",
+     "wma",
+     "tractcloud"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "csd_act,ukf",
+  "closed_targets": [
+   "segmentation",
+   "parcellation",
+   "tractography",
+   "bundles",
+   "wma",
+   "tractcloud"
+  ],
+  "multi": true,
+  "notice": "Also runs automatically: DDSeg (needed by CSD/ACT tractography); DDParcel (needed by CSD/ACT tractography and WMQL bundles); Tractography (needed by WMQL bundles and WMA and TractCloud)",
+  "plan_items": [
+   "bundles.tractcloud@csd_act",
+   "bundles.tractcloud@ukf",
+   "bundles.wma@ukf",
+   "bundles.wmql@csd_act",
+   "bundles.wmql@ukf",
+   "parcellation.ddparcel",
+   "segmentation.ddseg",
+   "tractography.csd_act@csd_act",
+   "tractography.ukf@ukf"
+  ],
+  "requesters": {},
+  "ticked": [
+   "bundles"
+  ],
+  "tracking": "csd_act,ukf"
+ },
+ {
+  "bundles": "wmql",
+  "children": [
+   [
+    "Test1__csd_act",
+    "csd_act",
+    [
+     "segmentation",
+     "parcellation",
+     "tractography",
+     "bundles"
+    ],
+    null
+   ],
+   [
+    "Test1__ukf",
+    "ukf",
+    [
+     "tractography",
+     "bundles"
+    ],
+    null
+   ],
+   [
+    "Test1__dti_det",
+    "dti_det",
+    [
+     "tractography",
+     "bundles"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "csd_act,ukf,dti_det",
+  "closed_targets": [
+   "segmentation",
+   "parcellation",
+   "tractography",
+   "bundles"
+  ],
+  "multi": true,
+  "notice": "Also runs automatically: DDSeg (needed by CSD/ACT tractography); DDParcel (needed by CSD/ACT tractography and WMQL bundles); Tractography (needed by WMQL bundles)",
+  "plan_items": [
+   "bundles.wmql@csd_act",
+   "bundles.wmql@dti_det",
+   "bundles.wmql@ukf",
+   "parcellation.ddparcel",
+   "segmentation.ddseg",
+   "tractography.csd_act@csd_act",
+   "tractography.dti_det@dti_det",
+   "tractography.ukf@ukf"
+  ],
+  "requesters": {},
+  "ticked": [
+   "bundles"
+  ],
+  "tracking": "csd_act,ukf,dti_det"
+ },
+ {
+  "bundles": "wma",
+  "children": [
+   [
+    "Test1__csd_act",
+    "csd_act",
+    [
+     "segmentation",
+     "parcellation",
+     "tractography"
+    ],
+    null
+   ],
+   [
+    "Test1__ukf",
+    "ukf",
+    [
+     "tractography",
+     "wma"
+    ],
+    null
+   ],
+   [
+    "Test1__dti_det",
+    "dti_det",
+    [
+     "tractography"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "csd_act,ukf,dti_det",
+  "closed_targets": [
+   "segmentation",
+   "parcellation",
+   "tractography",
+   "wma"
+  ],
+  "multi": true,
+  "notice": "Also runs automatically: DDSeg, DDParcel (needed by CSD/ACT tractography); Tractography (needed by WMA)",
+  "plan_items": [
+   "bundles.wma@ukf",
+   "parcellation.ddparcel",
+   "segmentation.ddseg",
+   "tractography.csd_act@csd_act",
+   "tractography.dti_det@dti_det",
+   "tractography.ukf@ukf"
+  ],
+  "requesters": {},
+  "ticked": [
+   "bundles"
+  ],
+  "tracking": "csd_act,ukf,dti_det"
+ },
+ {
+  "bundles": "tractcloud",
+  "children": [
+   [
+    "Test1__csd_act",
+    "csd_act",
+    [
+     "segmentation",
+     "parcellation",
+     "tractography",
+     "tractcloud"
+    ],
+    null
+   ],
+   [
+    "Test1__ukf",
+    "ukf",
+    [
+     "tractography",
+     "tractcloud"
+    ],
+    null
+   ],
+   [
+    "Test1__dti_det",
+    "dti_det",
+    [
+     "tractography",
+     "tractcloud"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "csd_act,ukf,dti_det",
+  "closed_targets": [
+   "segmentation",
+   "parcellation",
+   "tractography",
+   "tractcloud"
+  ],
+  "multi": true,
+  "notice": "Also runs automatically: DDSeg, DDParcel (needed by CSD/ACT tractography); Tractography (needed by TractCloud)",
+  "plan_items": [
+   "bundles.tractcloud@csd_act",
+   "bundles.tractcloud@dti_det",
+   "bundles.tractcloud@ukf",
+   "parcellation.ddparcel",
+   "segmentation.ddseg",
+   "tractography.csd_act@csd_act",
+   "tractography.dti_det@dti_det",
+   "tractography.ukf@ukf"
+  ],
+  "requesters": {},
+  "ticked": [
+   "bundles"
+  ],
+  "tracking": "csd_act,ukf,dti_det"
+ },
+ {
+  "bundles": "wmql,wma,tractcloud",
+  "children": [
+   [
+    "Test1__csd_act",
+    "csd_act",
+    [
+     "segmentation",
+     "parcellation",
+     "tractography",
+     "bundles",
+     "tractcloud"
+    ],
+    null
+   ],
+   [
+    "Test1__ukf",
+    "ukf",
+    [
+     "tractography",
+     "bundles",
+     "wma",
+     "tractcloud"
+    ],
+    null
+   ],
+   [
+    "Test1__dti_det",
+    "dti_det",
+    [
+     "tractography",
+     "bundles",
+     "tractcloud"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "csd_act,ukf,dti_det",
+  "closed_targets": [
+   "segmentation",
+   "parcellation",
+   "tractography",
+   "bundles",
+   "wma",
+   "tractcloud"
+  ],
+  "multi": true,
+  "notice": "Also runs automatically: DDSeg (needed by CSD/ACT tractography); DDParcel (needed by CSD/ACT tractography and WMQL bundles); Tractography (needed by WMQL bundles and WMA and TractCloud)",
+  "plan_items": [
+   "bundles.tractcloud@csd_act",
+   "bundles.tractcloud@dti_det",
+   "bundles.tractcloud@ukf",
+   "bundles.wma@ukf",
+   "bundles.wmql@csd_act",
+   "bundles.wmql@dti_det",
+   "bundles.wmql@ukf",
+   "parcellation.ddparcel",
+   "segmentation.ddseg",
+   "tractography.csd_act@csd_act",
+   "tractography.dti_det@dti_det",
+   "tractography.ukf@ukf"
+  ],
+  "requesters": {},
+  "ticked": [
+   "bundles"
+  ],
+  "tracking": "csd_act,ukf,dti_det"
+ },
+ {
+  "bundles": "wmql",
+  "children": [
+   [
+    "Test1__csd_act",
+    "csd_act",
+    [
+     "segmentation",
+     "parcellation",
+     "surface",
+     "surface_postprocess",
+     "tractography",
+     "bundles"
+    ],
+    null
+   ],
+   [
+    "Test1__saf",
+    "saf",
+    [
+     "tractography",
+     "bundles",
+     "saf"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "csd_act,saf",
+  "closed_targets": [
+   "segmentation",
+   "parcellation",
+   "surface",
+   "surface_postprocess",
+   "tractography",
+   "bundles",
+   "saf"
+  ],
+  "multi": true,
+  "notice": "Also runs automatically: DDSeg (needed by CSD/ACT tractography); DDParcel (needed by CSD/ACT tractography and WMQL bundles); DDSurfer (needed by Surface postprocess); Surface postprocess (needed by CSD/ACT tractography and SAF); Tractography (needed by WMQL bundles and SAF)",
+  "plan_items": [
+   "bundles.wmql@csd_act",
+   "bundles.wmql@saf",
+   "parcellation.ddparcel",
+   "segmentation.ddseg",
+   "surface.ddsurfer",
+   "surface.ddsurfer_postprocess",
+   "tractography.csd_act@csd_act",
+   "tractography.csd_act@saf",
+   "tractography.saf@saf"
+  ],
+  "requesters": {},
+  "ticked": [
+   "bundles"
+  ],
+  "tracking": "csd_act,saf"
+ },
+ {
+  "bundles": "wma",
+  "children": [
+   [
+    "Test1",
+    "ukf",
+    [
+     "tractography",
+     "wma"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "ukf",
+  "closed_targets": [
+   "tractography",
+   "wma"
+  ],
+  "multi": false,
+  "notice": "Also runs automatically: UKF tractography (needed by WMA)",
+  "plan_items": [
+   "bundles.wma",
+   "tractography.ukf"
+  ],
+  "requesters": {
+   "ukf": [
+    "wma"
+   ]
+  },
+  "ticked": [
+   "bundles"
+  ],
+  "tracking": "csd_act,saf"
+ },
+ {
+  "bundles": "tractcloud",
+  "children": [
+   [
+    "Test1__csd_act",
+    "csd_act",
+    [
+     "segmentation",
+     "parcellation",
+     "surface",
+     "surface_postprocess",
+     "tractography",
+     "tractcloud"
+    ],
+    null
+   ],
+   [
+    "Test1__saf",
+    "saf",
+    [
+     "tractography",
+     "saf",
+     "tractcloud"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "csd_act,saf",
+  "closed_targets": [
+   "segmentation",
+   "parcellation",
+   "surface",
+   "surface_postprocess",
+   "tractography",
+   "saf",
+   "tractcloud"
+  ],
+  "multi": true,
+  "notice": "Also runs automatically: DDSeg, DDParcel (needed by CSD/ACT tractography); DDSurfer (needed by Surface postprocess); Surface postprocess (needed by CSD/ACT tractography and SAF); Tractography (needed by SAF and TractCloud)",
+  "plan_items": [
+   "bundles.tractcloud@csd_act",
+   "bundles.tractcloud@saf",
+   "parcellation.ddparcel",
+   "segmentation.ddseg",
+   "surface.ddsurfer",
+   "surface.ddsurfer_postprocess",
+   "tractography.csd_act@csd_act",
+   "tractography.csd_act@saf",
+   "tractography.saf@saf"
+  ],
+  "requesters": {},
+  "ticked": [
+   "bundles"
+  ],
+  "tracking": "csd_act,saf"
+ },
+ {
+  "bundles": "wmql,wma,tractcloud",
+  "children": [
+   [
+    "Test1__csd_act",
+    "csd_act",
+    [
+     "segmentation",
+     "parcellation",
+     "surface",
+     "surface_postprocess",
+     "tractography",
+     "bundles",
+     "tractcloud"
+    ],
+    null
+   ],
+   [
+    "Test1__saf",
+    "saf",
+    [
+     "tractography",
+     "bundles",
+     "saf",
+     "tractcloud"
+    ],
+    null
+   ],
+   [
+    "Test1__ukf",
+    "ukf",
+    [
+     "tractography",
+     "wma"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "csd_act,saf,ukf",
+  "closed_targets": [
+   "segmentation",
+   "parcellation",
+   "surface",
+   "surface_postprocess",
+   "tractography",
+   "bundles",
+   "saf",
+   "wma",
+   "tractcloud"
+  ],
+  "multi": true,
+  "notice": "Also runs automatically: DDSeg (needed by CSD/ACT tractography); DDParcel (needed by CSD/ACT tractography and WMQL bundles); DDSurfer (needed by Surface postprocess); Surface postprocess (needed by CSD/ACT tractography and SAF); Tractography (needed by WMQL bundles and SAF and WMA and TractCloud); UKF tractography (needed by WMA)",
+  "plan_items": [
+   "bundles.tractcloud@csd_act",
+   "bundles.tractcloud@saf",
+   "bundles.wma@ukf",
+   "bundles.wmql@csd_act",
+   "bundles.wmql@saf",
+   "parcellation.ddparcel",
+   "segmentation.ddseg",
+   "surface.ddsurfer",
+   "surface.ddsurfer_postprocess",
+   "tractography.csd_act@csd_act",
+   "tractography.csd_act@saf",
+   "tractography.saf@saf",
+   "tractography.ukf@ukf"
+  ],
+  "requesters": {
+   "ukf": [
+    "wma"
+   ]
+  },
+  "ticked": [
+   "bundles"
+  ],
+  "tracking": "csd_act,saf"
+ },
+ {
+  "bundles": "wmql",
+  "children": [
+   [
+    "Test1",
+    "csd_act",
+    [
+     "segmentation",
+     "parcellation",
+     "tractography",
+     "bundles"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "csd_act",
+  "closed_targets": [
+   "segmentation",
+   "parcellation",
+   "tractography",
+   "bundles"
+  ],
+  "multi": false,
+  "notice": "Also runs automatically: DDSeg (needed by CSD/ACT tractography); DDParcel (needed by CSD/ACT tractography and WMQL bundles)",
+  "plan_items": [
+   "bundles.wmql",
+   "parcellation.ddparcel",
+   "segmentation.ddseg",
+   "tractography.csd_act"
+  ],
+  "requesters": {},
+  "ticked": [
+   "tractography",
+   "bundles"
+  ],
+  "tracking": "csd_act"
+ },
+ {
+  "bundles": "wma",
+  "children": [
+   [
+    "Test1__csd_act",
+    "csd_act",
+    [
+     "segmentation",
+     "parcellation",
+     "tractography"
+    ],
+    null
+   ],
+   [
+    "Test1__ukf",
+    "ukf",
+    [
+     "tractography",
+     "wma"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "csd_act,ukf",
+  "closed_targets": [
+   "segmentation",
+   "parcellation",
+   "tractography",
+   "wma"
+  ],
+  "multi": true,
+  "notice": "Also runs automatically: DDSeg, DDParcel (needed by CSD/ACT tractography); UKF tractography (needed by WMA)",
+  "plan_items": [
+   "bundles.wma@ukf",
+   "parcellation.ddparcel",
+   "segmentation.ddseg",
+   "tractography.csd_act@csd_act",
+   "tractography.ukf@ukf"
+  ],
+  "requesters": {
+   "ukf": [
+    "wma"
+   ]
+  },
+  "ticked": [
+   "tractography",
+   "bundles"
+  ],
+  "tracking": "csd_act"
+ },
+ {
+  "bundles": "tractcloud",
+  "children": [
+   [
+    "Test1",
+    "csd_act",
+    [
+     "segmentation",
+     "parcellation",
+     "tractography",
+     "tractcloud"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "csd_act",
+  "closed_targets": [
+   "segmentation",
+   "parcellation",
+   "tractography",
+   "tractcloud"
+  ],
+  "multi": false,
+  "notice": "Also runs automatically: DDSeg, DDParcel (needed by CSD/ACT tractography)",
+  "plan_items": [
+   "bundles.tractcloud",
+   "parcellation.ddparcel",
+   "segmentation.ddseg",
+   "tractography.csd_act"
+  ],
+  "requesters": {},
+  "ticked": [
+   "tractography",
+   "bundles"
+  ],
+  "tracking": "csd_act"
+ },
+ {
+  "bundles": "wmql,wma,tractcloud",
+  "children": [
+   [
+    "Test1__csd_act",
+    "csd_act",
+    [
+     "segmentation",
+     "parcellation",
+     "tractography",
+     "bundles",
+     "tractcloud"
+    ],
+    null
+   ],
+   [
+    "Test1__ukf",
+    "ukf",
+    [
+     "tractography",
+     "wma"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "csd_act,ukf",
+  "closed_targets": [
+   "segmentation",
+   "parcellation",
+   "tractography",
+   "bundles",
+   "wma",
+   "tractcloud"
+  ],
+  "multi": true,
+  "notice": "Also runs automatically: DDSeg (needed by CSD/ACT tractography); DDParcel (needed by CSD/ACT tractography and WMQL bundles); UKF tractography (needed by WMA)",
+  "plan_items": [
+   "bundles.tractcloud@csd_act",
+   "bundles.wma@ukf",
+   "bundles.wmql@csd_act",
+   "parcellation.ddparcel",
+   "segmentation.ddseg",
+   "tractography.csd_act@csd_act",
+   "tractography.ukf@ukf"
+  ],
+  "requesters": {
+   "ukf": [
+    "wma"
+   ]
+  },
+  "ticked": [
+   "tractography",
+   "bundles"
+  ],
+  "tracking": "csd_act"
+ },
+ {
+  "bundles": "wmql",
+  "children": [
+   [
+    "Test1",
+    "ukf",
+    [
+     "parcellation",
+     "tractography",
+     "bundles"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "ukf",
+  "closed_targets": [
+   "parcellation",
+   "tractography",
+   "bundles"
+  ],
+  "multi": false,
+  "notice": "Also runs automatically: DDParcel (needed by WMQL bundles)",
+  "plan_items": [
+   "bundles.wmql",
+   "parcellation.ddparcel",
+   "tractography.ukf"
+  ],
+  "requesters": {},
+  "ticked": [
+   "tractography",
+   "bundles"
+  ],
+  "tracking": "ukf"
+ },
+ {
+  "bundles": "wma",
+  "children": [
+   [
+    "Test1",
+    "ukf",
+    [
+     "tractography",
+     "wma"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "ukf",
+  "closed_targets": [
+   "tractography",
+   "wma"
+  ],
+  "multi": false,
+  "notice": "",
+  "plan_items": [
+   "bundles.wma",
+   "tractography.ukf"
+  ],
+  "requesters": {},
+  "ticked": [
+   "tractography",
+   "bundles"
+  ],
+  "tracking": "ukf"
+ },
+ {
+  "bundles": "tractcloud",
+  "children": [
+   [
+    "Test1",
+    "ukf",
+    [
+     "tractography",
+     "tractcloud"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "ukf",
+  "closed_targets": [
+   "tractography",
+   "tractcloud"
+  ],
+  "multi": false,
+  "notice": "",
+  "plan_items": [
+   "bundles.tractcloud",
+   "tractography.ukf"
+  ],
+  "requesters": {},
+  "ticked": [
+   "tractography",
+   "bundles"
+  ],
+  "tracking": "ukf"
+ },
+ {
+  "bundles": "wmql,wma,tractcloud",
+  "children": [
+   [
+    "Test1",
+    "ukf",
+    [
+     "parcellation",
+     "tractography",
+     "bundles",
+     "wma",
+     "tractcloud"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "ukf",
+  "closed_targets": [
+   "parcellation",
+   "tractography",
+   "bundles",
+   "wma",
+   "tractcloud"
+  ],
+  "multi": false,
+  "notice": "Also runs automatically: DDParcel (needed by WMQL bundles)",
+  "plan_items": [
+   "bundles.tractcloud",
+   "bundles.wma",
+   "bundles.wmql",
+   "parcellation.ddparcel",
+   "tractography.ukf"
+  ],
+  "requesters": {},
+  "ticked": [
+   "tractography",
+   "bundles"
+  ],
+  "tracking": "ukf"
+ },
+ {
+  "bundles": "wmql",
+  "children": [
+   [
+    "Test1",
+    "dti_det",
+    [
+     "parcellation",
+     "tractography",
+     "bundles"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "dti_det",
+  "closed_targets": [
+   "parcellation",
+   "tractography",
+   "bundles"
+  ],
+  "multi": false,
+  "notice": "Also runs automatically: DDParcel (needed by WMQL bundles)",
+  "plan_items": [
+   "bundles.wmql",
+   "parcellation.ddparcel",
+   "tractography.dti_det"
+  ],
+  "requesters": {},
+  "ticked": [
+   "tractography",
+   "bundles"
+  ],
+  "tracking": "dti_det"
+ },
+ {
+  "bundles": "wma",
+  "children": [
+   [
+    "Test1__dti_det",
+    "dti_det",
+    [
+     "tractography"
+    ],
+    null
+   ],
+   [
+    "Test1__ukf",
+    "ukf",
+    [
+     "tractography",
+     "wma"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "dti_det,ukf",
+  "closed_targets": [
+   "tractography",
+   "wma"
+  ],
+  "multi": true,
+  "notice": "Also runs automatically: UKF tractography (needed by WMA)",
+  "plan_items": [
+   "bundles.wma@ukf",
+   "tractography.dti_det@dti_det",
+   "tractography.ukf@ukf"
+  ],
+  "requesters": {
+   "ukf": [
+    "wma"
+   ]
+  },
+  "ticked": [
+   "tractography",
+   "bundles"
+  ],
+  "tracking": "dti_det"
+ },
+ {
+  "bundles": "tractcloud",
+  "children": [
+   [
+    "Test1",
+    "dti_det",
+    [
+     "tractography",
+     "tractcloud"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "dti_det",
+  "closed_targets": [
+   "tractography",
+   "tractcloud"
+  ],
+  "multi": false,
+  "notice": "",
+  "plan_items": [
+   "bundles.tractcloud",
+   "tractography.dti_det"
+  ],
+  "requesters": {},
+  "ticked": [
+   "tractography",
+   "bundles"
+  ],
+  "tracking": "dti_det"
+ },
+ {
+  "bundles": "wmql,wma,tractcloud",
+  "children": [
+   [
+    "Test1__dti_det",
+    "dti_det",
+    [
+     "parcellation",
+     "tractography",
+     "bundles",
+     "tractcloud"
+    ],
+    null
+   ],
+   [
+    "Test1__ukf",
+    "ukf",
+    [
+     "tractography",
+     "wma"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "dti_det,ukf",
+  "closed_targets": [
+   "parcellation",
+   "tractography",
+   "bundles",
+   "wma",
+   "tractcloud"
+  ],
+  "multi": true,
+  "notice": "Also runs automatically: DDParcel (needed by WMQL bundles); UKF tractography (needed by WMA)",
+  "plan_items": [
+   "bundles.tractcloud@dti_det",
+   "bundles.wma@ukf",
+   "bundles.wmql@dti_det",
+   "parcellation.ddparcel",
+   "tractography.dti_det@dti_det",
+   "tractography.ukf@ukf"
+  ],
+  "requesters": {
+   "ukf": [
+    "wma"
+   ]
+  },
+  "ticked": [
+   "tractography",
+   "bundles"
+  ],
+  "tracking": "dti_det"
+ },
+ {
+  "bundles": "wmql",
+  "children": [
+   [
+    "Test1__csd_act",
+    "csd_act",
+    [
+     "segmentation",
+     "parcellation",
+     "tractography",
+     "bundles"
+    ],
+    null
+   ],
+   [
+    "Test1__ukf",
+    "ukf",
+    [
+     "tractography",
+     "bundles"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "csd_act,ukf",
+  "closed_targets": [
+   "segmentation",
+   "parcellation",
+   "tractography",
+   "bundles"
+  ],
+  "multi": true,
+  "notice": "Also runs automatically: DDSeg (needed by CSD/ACT tractography); DDParcel (needed by CSD/ACT tractography and WMQL bundles)",
+  "plan_items": [
+   "bundles.wmql@csd_act",
+   "bundles.wmql@ukf",
+   "parcellation.ddparcel",
+   "segmentation.ddseg",
+   "tractography.csd_act@csd_act",
+   "tractography.ukf@ukf"
+  ],
+  "requesters": {},
+  "ticked": [
+   "tractography",
+   "bundles"
+  ],
+  "tracking": "csd_act,ukf"
+ },
+ {
+  "bundles": "wma",
+  "children": [
+   [
+    "Test1__csd_act",
+    "csd_act",
+    [
+     "segmentation",
+     "parcellation",
+     "tractography"
+    ],
+    null
+   ],
+   [
+    "Test1__ukf",
+    "ukf",
+    [
+     "tractography",
+     "wma"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "csd_act,ukf",
+  "closed_targets": [
+   "segmentation",
+   "parcellation",
+   "tractography",
+   "wma"
+  ],
+  "multi": true,
+  "notice": "Also runs automatically: DDSeg, DDParcel (needed by CSD/ACT tractography)",
+  "plan_items": [
+   "bundles.wma@ukf",
+   "parcellation.ddparcel",
+   "segmentation.ddseg",
+   "tractography.csd_act@csd_act",
+   "tractography.ukf@ukf"
+  ],
+  "requesters": {},
+  "ticked": [
+   "tractography",
+   "bundles"
+  ],
+  "tracking": "csd_act,ukf"
+ },
+ {
+  "bundles": "tractcloud",
+  "children": [
+   [
+    "Test1__csd_act",
+    "csd_act",
+    [
+     "segmentation",
+     "parcellation",
+     "tractography",
+     "tractcloud"
+    ],
+    null
+   ],
+   [
+    "Test1__ukf",
+    "ukf",
+    [
+     "tractography",
+     "tractcloud"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "csd_act,ukf",
+  "closed_targets": [
+   "segmentation",
+   "parcellation",
+   "tractography",
+   "tractcloud"
+  ],
+  "multi": true,
+  "notice": "Also runs automatically: DDSeg, DDParcel (needed by CSD/ACT tractography)",
+  "plan_items": [
+   "bundles.tractcloud@csd_act",
+   "bundles.tractcloud@ukf",
+   "parcellation.ddparcel",
+   "segmentation.ddseg",
+   "tractography.csd_act@csd_act",
+   "tractography.ukf@ukf"
+  ],
+  "requesters": {},
+  "ticked": [
+   "tractography",
+   "bundles"
+  ],
+  "tracking": "csd_act,ukf"
+ },
+ {
+  "bundles": "wmql,wma,tractcloud",
+  "children": [
+   [
+    "Test1__csd_act",
+    "csd_act",
+    [
+     "segmentation",
+     "parcellation",
+     "tractography",
+     "bundles",
+     "tractcloud"
+    ],
+    null
+   ],
+   [
+    "Test1__ukf",
+    "ukf",
+    [
+     "tractography",
+     "bundles",
+     "wma",
+     "tractcloud"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "csd_act,ukf",
+  "closed_targets": [
+   "segmentation",
+   "parcellation",
+   "tractography",
+   "bundles",
+   "wma",
+   "tractcloud"
+  ],
+  "multi": true,
+  "notice": "Also runs automatically: DDSeg (needed by CSD/ACT tractography); DDParcel (needed by CSD/ACT tractography and WMQL bundles)",
+  "plan_items": [
+   "bundles.tractcloud@csd_act",
+   "bundles.tractcloud@ukf",
+   "bundles.wma@ukf",
+   "bundles.wmql@csd_act",
+   "bundles.wmql@ukf",
+   "parcellation.ddparcel",
+   "segmentation.ddseg",
+   "tractography.csd_act@csd_act",
+   "tractography.ukf@ukf"
+  ],
+  "requesters": {},
+  "ticked": [
+   "tractography",
+   "bundles"
+  ],
+  "tracking": "csd_act,ukf"
+ },
+ {
+  "bundles": "wmql",
+  "children": [
+   [
+    "Test1__csd_act",
+    "csd_act",
+    [
+     "segmentation",
+     "parcellation",
+     "tractography",
+     "bundles"
+    ],
+    null
+   ],
+   [
+    "Test1__ukf",
+    "ukf",
+    [
+     "tractography",
+     "bundles"
+    ],
+    null
+   ],
+   [
+    "Test1__dti_det",
+    "dti_det",
+    [
+     "tractography",
+     "bundles"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "csd_act,ukf,dti_det",
+  "closed_targets": [
+   "segmentation",
+   "parcellation",
+   "tractography",
+   "bundles"
+  ],
+  "multi": true,
+  "notice": "Also runs automatically: DDSeg (needed by CSD/ACT tractography); DDParcel (needed by CSD/ACT tractography and WMQL bundles)",
+  "plan_items": [
+   "bundles.wmql@csd_act",
+   "bundles.wmql@dti_det",
+   "bundles.wmql@ukf",
+   "parcellation.ddparcel",
+   "segmentation.ddseg",
+   "tractography.csd_act@csd_act",
+   "tractography.dti_det@dti_det",
+   "tractography.ukf@ukf"
+  ],
+  "requesters": {},
+  "ticked": [
+   "tractography",
+   "bundles"
+  ],
+  "tracking": "csd_act,ukf,dti_det"
+ },
+ {
+  "bundles": "wma",
+  "children": [
+   [
+    "Test1__csd_act",
+    "csd_act",
+    [
+     "segmentation",
+     "parcellation",
+     "tractography"
+    ],
+    null
+   ],
+   [
+    "Test1__ukf",
+    "ukf",
+    [
+     "tractography",
+     "wma"
+    ],
+    null
+   ],
+   [
+    "Test1__dti_det",
+    "dti_det",
+    [
+     "tractography"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "csd_act,ukf,dti_det",
+  "closed_targets": [
+   "segmentation",
+   "parcellation",
+   "tractography",
+   "wma"
+  ],
+  "multi": true,
+  "notice": "Also runs automatically: DDSeg, DDParcel (needed by CSD/ACT tractography)",
+  "plan_items": [
+   "bundles.wma@ukf",
+   "parcellation.ddparcel",
+   "segmentation.ddseg",
+   "tractography.csd_act@csd_act",
+   "tractography.dti_det@dti_det",
+   "tractography.ukf@ukf"
+  ],
+  "requesters": {},
+  "ticked": [
+   "tractography",
+   "bundles"
+  ],
+  "tracking": "csd_act,ukf,dti_det"
+ },
+ {
+  "bundles": "tractcloud",
+  "children": [
+   [
+    "Test1__csd_act",
+    "csd_act",
+    [
+     "segmentation",
+     "parcellation",
+     "tractography",
+     "tractcloud"
+    ],
+    null
+   ],
+   [
+    "Test1__ukf",
+    "ukf",
+    [
+     "tractography",
+     "tractcloud"
+    ],
+    null
+   ],
+   [
+    "Test1__dti_det",
+    "dti_det",
+    [
+     "tractography",
+     "tractcloud"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "csd_act,ukf,dti_det",
+  "closed_targets": [
+   "segmentation",
+   "parcellation",
+   "tractography",
+   "tractcloud"
+  ],
+  "multi": true,
+  "notice": "Also runs automatically: DDSeg, DDParcel (needed by CSD/ACT tractography)",
+  "plan_items": [
+   "bundles.tractcloud@csd_act",
+   "bundles.tractcloud@dti_det",
+   "bundles.tractcloud@ukf",
+   "parcellation.ddparcel",
+   "segmentation.ddseg",
+   "tractography.csd_act@csd_act",
+   "tractography.dti_det@dti_det",
+   "tractography.ukf@ukf"
+  ],
+  "requesters": {},
+  "ticked": [
+   "tractography",
+   "bundles"
+  ],
+  "tracking": "csd_act,ukf,dti_det"
+ },
+ {
+  "bundles": "wmql,wma,tractcloud",
+  "children": [
+   [
+    "Test1__csd_act",
+    "csd_act",
+    [
+     "segmentation",
+     "parcellation",
+     "tractography",
+     "bundles",
+     "tractcloud"
+    ],
+    null
+   ],
+   [
+    "Test1__ukf",
+    "ukf",
+    [
+     "tractography",
+     "bundles",
+     "wma",
+     "tractcloud"
+    ],
+    null
+   ],
+   [
+    "Test1__dti_det",
+    "dti_det",
+    [
+     "tractography",
+     "bundles",
+     "tractcloud"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "csd_act,ukf,dti_det",
+  "closed_targets": [
+   "segmentation",
+   "parcellation",
+   "tractography",
+   "bundles",
+   "wma",
+   "tractcloud"
+  ],
+  "multi": true,
+  "notice": "Also runs automatically: DDSeg (needed by CSD/ACT tractography); DDParcel (needed by CSD/ACT tractography and WMQL bundles)",
+  "plan_items": [
+   "bundles.tractcloud@csd_act",
+   "bundles.tractcloud@dti_det",
+   "bundles.tractcloud@ukf",
+   "bundles.wma@ukf",
+   "bundles.wmql@csd_act",
+   "bundles.wmql@dti_det",
+   "bundles.wmql@ukf",
+   "parcellation.ddparcel",
+   "segmentation.ddseg",
+   "tractography.csd_act@csd_act",
+   "tractography.dti_det@dti_det",
+   "tractography.ukf@ukf"
+  ],
+  "requesters": {},
+  "ticked": [
+   "tractography",
+   "bundles"
+  ],
+  "tracking": "csd_act,ukf,dti_det"
+ },
+ {
+  "bundles": "wmql",
+  "children": [
+   [
+    "Test1__csd_act",
+    "csd_act",
+    [
+     "segmentation",
+     "parcellation",
+     "surface",
+     "surface_postprocess",
+     "tractography",
+     "bundles"
+    ],
+    null
+   ],
+   [
+    "Test1__saf",
+    "saf",
+    [
+     "tractography",
+     "bundles",
+     "saf"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "csd_act,saf",
+  "closed_targets": [
+   "segmentation",
+   "parcellation",
+   "surface",
+   "surface_postprocess",
+   "tractography",
+   "bundles",
+   "saf"
+  ],
+  "multi": true,
+  "notice": "Also runs automatically: DDSeg (needed by CSD/ACT tractography); DDParcel (needed by CSD/ACT tractography and WMQL bundles); DDSurfer (needed by Surface postprocess); Surface postprocess (needed by CSD/ACT tractography and SAF)",
+  "plan_items": [
+   "bundles.wmql@csd_act",
+   "bundles.wmql@saf",
+   "parcellation.ddparcel",
+   "segmentation.ddseg",
+   "surface.ddsurfer",
+   "surface.ddsurfer_postprocess",
+   "tractography.csd_act@csd_act",
+   "tractography.csd_act@saf",
+   "tractography.saf@saf"
+  ],
+  "requesters": {},
+  "ticked": [
+   "tractography",
+   "bundles"
+  ],
+  "tracking": "csd_act,saf"
+ },
+ {
+  "bundles": "wma",
+  "children": [
+   [
+    "Test1__csd_act",
+    "csd_act",
+    [
+     "segmentation",
+     "parcellation",
+     "surface",
+     "surface_postprocess",
+     "tractography"
+    ],
+    null
+   ],
+   [
+    "Test1__saf",
+    "saf",
+    [
+     "tractography",
+     "saf"
+    ],
+    null
+   ],
+   [
+    "Test1__ukf",
+    "ukf",
+    [
+     "tractography",
+     "wma"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "csd_act,saf,ukf",
+  "closed_targets": [
+   "segmentation",
+   "parcellation",
+   "surface",
+   "surface_postprocess",
+   "tractography",
+   "saf",
+   "wma"
+  ],
+  "multi": true,
+  "notice": "Also runs automatically: DDSeg, DDParcel (needed by CSD/ACT tractography); DDSurfer (needed by Surface postprocess); Surface postprocess (needed by CSD/ACT tractography and SAF); UKF tractography (needed by WMA)",
+  "plan_items": [
+   "bundles.wma@ukf",
+   "parcellation.ddparcel",
+   "segmentation.ddseg",
+   "surface.ddsurfer",
+   "surface.ddsurfer_postprocess",
+   "tractography.csd_act@csd_act",
+   "tractography.csd_act@saf",
+   "tractography.saf@saf",
+   "tractography.ukf@ukf"
+  ],
+  "requesters": {
+   "ukf": [
+    "wma"
+   ]
+  },
+  "ticked": [
+   "tractography",
+   "bundles"
+  ],
+  "tracking": "csd_act,saf"
+ },
+ {
+  "bundles": "tractcloud",
+  "children": [
+   [
+    "Test1__csd_act",
+    "csd_act",
+    [
+     "segmentation",
+     "parcellation",
+     "surface",
+     "surface_postprocess",
+     "tractography",
+     "tractcloud"
+    ],
+    null
+   ],
+   [
+    "Test1__saf",
+    "saf",
+    [
+     "tractography",
+     "saf",
+     "tractcloud"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "csd_act,saf",
+  "closed_targets": [
+   "segmentation",
+   "parcellation",
+   "surface",
+   "surface_postprocess",
+   "tractography",
+   "saf",
+   "tractcloud"
+  ],
+  "multi": true,
+  "notice": "Also runs automatically: DDSeg, DDParcel (needed by CSD/ACT tractography); DDSurfer (needed by Surface postprocess); Surface postprocess (needed by CSD/ACT tractography and SAF)",
+  "plan_items": [
+   "bundles.tractcloud@csd_act",
+   "bundles.tractcloud@saf",
+   "parcellation.ddparcel",
+   "segmentation.ddseg",
+   "surface.ddsurfer",
+   "surface.ddsurfer_postprocess",
+   "tractography.csd_act@csd_act",
+   "tractography.csd_act@saf",
+   "tractography.saf@saf"
+  ],
+  "requesters": {},
+  "ticked": [
+   "tractography",
+   "bundles"
+  ],
+  "tracking": "csd_act,saf"
+ },
+ {
+  "bundles": "wmql,wma,tractcloud",
+  "children": [
+   [
+    "Test1__csd_act",
+    "csd_act",
+    [
+     "segmentation",
+     "parcellation",
+     "surface",
+     "surface_postprocess",
+     "tractography",
+     "bundles",
+     "tractcloud"
+    ],
+    null
+   ],
+   [
+    "Test1__saf",
+    "saf",
+    [
+     "tractography",
+     "bundles",
+     "saf",
+     "tractcloud"
+    ],
+    null
+   ],
+   [
+    "Test1__ukf",
+    "ukf",
+    [
+     "tractography",
+     "wma"
+    ],
+    null
+   ]
+  ],
+  "closed_algorithms": "csd_act,saf,ukf",
+  "closed_targets": [
+   "segmentation",
+   "parcellation",
+   "surface",
+   "surface_postprocess",
+   "tractography",
+   "bundles",
+   "saf",
+   "wma",
+   "tractcloud"
+  ],
+  "multi": true,
+  "notice": "Also runs automatically: DDSeg (needed by CSD/ACT tractography); DDParcel (needed by CSD/ACT tractography and WMQL bundles); DDSurfer (needed by Surface postprocess); Surface postprocess (needed by CSD/ACT tractography and SAF); UKF tractography (needed by WMA)",
+  "plan_items": [
+   "bundles.tractcloud@csd_act",
+   "bundles.tractcloud@saf",
+   "bundles.wma@ukf",
+   "bundles.wmql@csd_act",
+   "bundles.wmql@saf",
+   "parcellation.ddparcel",
+   "segmentation.ddseg",
+   "surface.ddsurfer",
+   "surface.ddsurfer_postprocess",
+   "tractography.csd_act@csd_act",
+   "tractography.csd_act@saf",
+   "tractography.saf@saf",
+   "tractography.ukf@ukf"
+  ],
+  "requesters": {
+   "ukf": [
+    "wma"
+   ]
+  },
+  "ticked": [
+   "tractography",
+   "bundles"
+  ],
+  "tracking": "csd_act,saf"
+ }
+]

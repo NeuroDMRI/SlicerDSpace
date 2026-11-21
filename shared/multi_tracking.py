@@ -14,17 +14,22 @@ SHARED = {"validation", "preprocessing", "segmentation", "parcellation", "surfac
 
 def variants(config):
     from shared.io_layout import normalize_run_name
+    from shared.bundle_sources import target_runs_on, wma_explicit
     selected = algorithms(config.tractography_backend)
+    sources = getattr(config, "bundle_sources", None) or {}
     for index, backend in enumerate(selected):
-        # WMA consumes only a UKF tractogram (closure rule C1): it runs in the UKF variant.
-        wma_only_on_ukf = "ukf" in selected and not config.bundle_tractography_backend
+        # WMA consumes only a UKF tractogram (closure rule C1): it runs in the UKF variant, unless the user chose
+        # another WMA source (batch 2 item 5).
+        wma_only_on_ukf = "ukf" in selected and not config.bundle_tractography_backend and not wma_explicit(sources)
         targets = tuple(target for target in config.targets if
                         # The SAF target uses the CSD FOD; without the SAF algorithm it runs once, in the first variant.
                         (backend == "saf" or target != "saf" or ("saf" not in selected and index == 0))
                         and (index == 0 or target not in SHARED)
                         and not (target == "wma" and wma_only_on_ukf and backend != "ukf")
                         and (not config.bundle_tractography_backend or backend == config.bundle_tractography_backend
-                             or target not in {'bundles', 'wma', 'tractcloud'}))
+                             or target not in {'bundles', 'wma', 'tractcloud'})
+                        # Batch 2 item 5: an explicit source keeps a bundle algorithm to its own tracking variant.
+                        and target_runs_on(sources, target, backend))
         requesters = config.closure_algorithm_requesters.get(backend)
         if requesters and index > 0:
             # An algorithm the closure added (for example UKF for WMA) runs only for the targets that need it.
@@ -71,6 +76,7 @@ def plan(config, *, write=True):
 
 
 def run(config, *, log=None):
+    from shared.bundle_sources import explicit_sources
     from shared.orchestrator import (ProductOrchestratorResult, ProductTaskRecord, run_subject_products,
                                      _archive_existing_run_records, _normalize_bundle_backends, _with_closure)
     config = _with_closure(config)
@@ -86,6 +92,7 @@ def run(config, *, log=None):
                    subject_root=str(config.subject_root.resolve()), output_root=str(layout.outputs), run_name=name,
                    targets=list(planned.targets), tractography_backends=list(algorithms(config.tractography_backend)),
                    bundle_tractography_backend=config.bundle_tractography_backend,
+                   bundle_sources=explicit_sources(getattr(config, "bundle_sources", None)),
                    bundle_backends=list(_normalize_bundle_backends(config.bundle_backend)),
                    closure={"required_by": {key: list(value) for key, value in config.target_required_by.items()}},
                    preflight_blocked_by_backend=config.preflight_blocked_by_backend,

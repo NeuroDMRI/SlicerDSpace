@@ -7,7 +7,7 @@ import math
 import os
 import re
 import sys
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Optional
 
@@ -84,6 +84,9 @@ class RunSelection:
     closure_tractography_backend: str = ""
     preprocessing_stages: str = ""
     connectome_metrics: str = ""
+    # Batch 2 item 5: tractography source per bundle algorithm ({"wmql"|"wma"|"tractcloud": source}); a missing key
+    # is "auto" (today's routing). Only explicit values reach the CLI as --bundle-source tokens.
+    bundle_sources: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -309,10 +312,12 @@ def selected_closure(
     provided_tractography: tuple[str, ...] = (),
     microstructure_ifw: bool = False,
     microstructure_dti: bool = True,
+    bundle_sources: Optional[dict] = None,
 ):
     """Return the prerequisite closure (C1) of the ticked targets.
 
     ``provided_tractography`` names targets whose tractogram the user supplied as a file (K2).
+    ``bundle_sources`` is the tractography source per bundle algorithm (batch 2 item 5).
     """
 
     product_targets = ["validation"]
@@ -344,7 +349,28 @@ def selected_closure(
         microstructure_run_ifw=microstructure_ifw,
         microstructure_run_dti=microstructure_dti,
         provided_tractography=tuple(provided_tractography),
+        bundle_sources=bundle_sources,
     )
+
+
+def run_bundle_sources(selection: RunSelection, *, with_wma_input: bool = True) -> dict:
+    """Explicit bundle sources of the selected bundle algorithms (batch 2 item 5).
+
+    A source of an algorithm that is not selected is dropped. With a supplied WMA tractogram file
+    (``with_wma_input``), the WMA source is dropped: the file is the WMA input.
+    """
+
+    from shared.algorithm_selection import BUNDLES, algorithms
+    from shared.bundle_sources import normalize_bundle_sources
+    try:
+        selected = set(algorithms(selection.bundle_backend, BUNDLES, "wmql"))  # "all" = every bundle algorithm
+    except ValueError:
+        selected = set()
+    sources = {algorithm: source for algorithm, source in
+               normalize_bundle_sources(selection.bundle_sources or {}, strict=False).items() if algorithm in selected}
+    if with_wma_input and selection.wma_input_tractography_text.strip():
+        sources.pop("wma", None)
+    return sources
 
 
 def selected_product_targets(
@@ -659,6 +685,7 @@ def build_single_subject_run_kwargs(
         "connectome_compress_mrtrix_dense": selection.connectome_compress_mrtrix_dense,
         **({"preprocessing_stages": selection.preprocessing_stages} if selection.preprocessing_stages else {}),
         **({"connectome_metrics": selection.connectome_metrics} if selection.connectome_metrics else {}),
+        **({"bundle_sources": run_bundle_sources(selection)} if run_bundle_sources(selection) else {}),
         "preflight_blocked_targets": dict(preflight_blocked_targets),
         **topup_orchestrator_kwargs(selection.topup),
     }
@@ -702,6 +729,9 @@ def build_batch_run_kwargs(selection: RunSelection, *, batch_root: Path) -> dict
         "connectome_compress_mrtrix_dense": selection.connectome_compress_mrtrix_dense,
         **({"preprocessing_stages": selection.preprocessing_stages} if selection.preprocessing_stages else {}),
         **({"connectome_metrics": selection.connectome_metrics} if selection.connectome_metrics else {}),
+        # Batch runs do not forward the single-subject WMA input file, so the WMA source is kept.
+        **({"bundle_sources": run_bundle_sources(selection, with_wma_input=False)}
+           if run_bundle_sources(selection, with_wma_input=False) else {}),
         "preflight_blocked_targets": {},
         # One reverse-PE b=0 file cannot describe every subject, so batch runs
         # only forward the per-protocol values (validation blocks the file).
@@ -975,6 +1005,13 @@ def _wmql_selection_cli_tokens(common_run_kwargs: dict[str, Any]) -> list[str]:
     return ["--wmql-query-selection="]
 
 
+def bundle_source_cli_tokens(sources) -> list[str]:
+    """``--bundle-source ALG=SOURCE`` for each explicit value; nothing when every source is ``auto``."""
+
+    from shared.bundle_sources import cli_tokens
+    return cli_tokens(sources or {})
+
+
 def build_background_cli_args(
     common_run_kwargs: dict[str, Any],
     external_paths: dict[str, Optional[Path]],
@@ -1040,6 +1077,7 @@ def build_background_cli_args(
         args.extend(["--preprocessing-stages", str(common_run_kwargs["preprocessing_stages"])])
     if common_run_kwargs.get("connectome_metrics"):
         args.extend(["--connectome-metrics", str(common_run_kwargs["connectome_metrics"])])
+    args.extend(bundle_source_cli_tokens(common_run_kwargs.get("bundle_sources")))
     wma_input = common_run_kwargs.get("wma_input_tractography")
     if wma_input is not None:
         args.extend(["--wma-input-tractography", _path_text(wma_input)])
@@ -1122,6 +1160,7 @@ def build_batch_background_cli_args(
     if common_run_kwargs.get("connectome_metrics"):
         args.extend(["--connectome-metrics", str(common_run_kwargs["connectome_metrics"])])
     # Forwarded unchanged to every subject's run_subject_pipeline.py call.
+    args.extend(bundle_source_cli_tokens(common_run_kwargs.get("bundle_sources")))
     args.extend(topup_cli_args(topup_parameters_from_run_kwargs(common_run_kwargs)))
     _append_optional_path_args(args, external_paths)
     return args

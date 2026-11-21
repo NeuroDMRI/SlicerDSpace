@@ -37,9 +37,9 @@
       anatomically_constrained_tractography/ # <sub_id>_act.{tck,trk,vtk}
       short_association_fibers/         # <sub_id>_saf.{tck,vtk}
     04_bundles/
-      query_bundle_extraction/          # *.trk
-      fiber_clustering/                 # T_*.vtp, bundle_measurements.csv
-      bundle_identification/            # *.vtp
+      query_bundle_extraction/<source>/ # WMQL: *.trk
+      fiber_clustering/<source>/        # WMA: T_*.vtp, bundle_measurements.csv
+      bundle_identification/<source>/   # TractCloud: *.vtp
     05_connectome/                      # <sub_id>_{streamline_count,sift2_weighted,<metric>}.csv, <sub_id>_nodes.tsv, <sub_id>_node_parcellation.nii.gz
     06_qc/                              # Concise per-algorithm plain-text QC summaries for tasks that ran/reused
 ```
@@ -52,6 +52,15 @@ It copies no output file. A re-run keeps the previous record as
 `run_record-<started_at>.json` and nothing is deleted.
 
 Primary deliverables under `outputs/` are published as flat, symlink-free real files or hardlinks organized by scientific stage (`01_anatomical_priors` through `05_connectome`), while concise `.txt` quality-control summaries sit under `06_qc/`. Internal workspaces and intermediate files reside under `cache/`.
+
+Each bundle folder has one subfolder per input tractogram. `<source>` is the id of the tracking that made the
+tractogram (`csd_act`, `ukf`, `dti_det`, `saf`), also when the run has one tracking only. It is `supplied` when the user
+gave the tractogram as a file (WMA or TractCloud input file). With two or more trackings, each tracking variant writes
+into its own subfolder, so one variant cannot overwrite the bundle files of another. Which tracking each bundle
+algorithm uses is the "Tractography source" setting of that algorithm (GUI settings popup, CLI
+`--bundle-source ALG=SOURCE`); the default is unchanged: WMQL and TractCloud use every ticked tracking, WMA uses UKF.
+Results from before this layout keep their flat files in these folders and stay readable; a resumed run publishes the
+finished stage outputs again into the subfolders and does not compute them again.
 
 ---
 

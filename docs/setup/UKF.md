@@ -19,6 +19,10 @@ Click **...** beside Fiber bundles to choose **WMA** for automatic
 UKF → WMA processing. The ORG atlas and WMA runtime remain separate dependencies.
 UKF parameters are under **Advanced settings > Model parameters**. If other
 tracking methods are selected too, each produces a separate run variant.
+UKF is the default **Tractography source** of WMA (the gear button beside WMA in
+the Fiber bundles popup). Choosing CSD/ACT, DTI or **All ticked tractography** there is an
+explicit opt-in; it is not the reference route, because UKF is the validated input
+for WMA.
 
 SlicerDSpace invokes the installed author CLI; it does not vendor or rewrite
 UKF. Missing dependencies block that route, without silently changing algorithms.

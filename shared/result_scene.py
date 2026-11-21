@@ -71,13 +71,33 @@ def bundle_outputs(task, *, allow_directory_scan=True):
             if not isinstance(value, str) or value in empty or Path(value).name in empty_names:
                 continue
             name_only = Path(value).name
-            if published_dir_path is not None and published_dir_path.is_dir() and (published_dir_path / name_only).is_file():
-                resolved_files["bundle_" + name_only] = str(published_dir_path / name_only)
+            published_file = published_dir_path / name_only if published_dir_path is not None else None
+            if published_file is not None and published_file.is_file() and _published_copy_of(value, published_file):
+                resolved_files["bundle_" + name_only] = str(published_file)
             else:
                 resolved_files["bundle_" + name_only] = value
         return resolved_files
     except (OSError, ValueError, TypeError, AttributeError):
         return {}
+
+
+def _published_copy_of(stage_file, published_file):
+    """Batch 2 item 5: True unless the published file is another tracking variant's file of the same name.
+
+    Before the per-tractography subfolders, every variant published into one flat folder, so an old flat file can
+    belong to a later variant. When the task's own stage file still exists and differs from the published file, the
+    stage file is the right one; when the stage file is gone, the published file is all there is.
+    """
+    stage = Path(stage_file)
+    try:
+        if not stage.is_file():
+            return True
+        if stage.samefile(published_file):
+            return True
+        first, second = stage.stat(), Path(published_file).stat()
+        return first.st_size == second.st_size and first.st_mtime_ns == second.st_mtime_ns
+    except OSError:
+        return True
 
 
 def source_stamp(path):

@@ -175,7 +175,14 @@ def snapshot_selection(owner):
         dki_fit_method=node.orchestrationDkiFitMethod, wmql_query_preset=node.orchestrationWmqlPreset,
         wma_atlas=getattr(node, "wmaAtlas", "org"),
         wmql_query_selection=node.orchestrationWmqlSelection, max_parallel_models=node.maxParallelModels,
-        ukf_parameters_text=node.ukfParameters, wma_input_tractography_text=node.wmaInputTractography.strip(), topup=topup.parameters)
+        ukf_parameters_text=node.ukfParameters, wma_input_tractography_text=node.wmaInputTractography.strip(), topup=topup.parameters,
+        bundle_sources=_bundle_sources(owner))
+
+
+def _bundle_sources(owner):
+    """Batch 2 item 5: the GUI's tractography source per bundle algorithm (``{}`` = every source ``auto``)."""
+    getter = getattr(owner, "_bundle_sources", None)
+    return getter() if callable(getter) else {}
 
 
 def request_and_plan(owner):

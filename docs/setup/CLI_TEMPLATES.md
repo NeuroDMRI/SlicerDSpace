@@ -405,6 +405,16 @@ does not receive bundle jobs. To compare a different source, change
 non-UKF source needs its own review. Sparse/empty fiber bundles stay visible in QC.
 SAF is not a whole-brain bundle source.
 
+To choose the source per bundle method instead, repeat `--bundle-source ALG=SOURCE`
+(for example `--bundle-source wma=csd_act --bundle-source tractcloud=ukf`). `ALG` is
+`wmql`, `wma` or `tractcloud`. `SOURCE` is `csd_act`, `ukf` or `dti_det`, or `auto`
+(the default: WMQL and TractCloud use every ticked tracking, WMA uses UKF); WMA also
+accepts `all` (once per ticked tracking). A source that is not in
+`--tractography-backend` is added. Do not combine it with
+`--bundle-tractography-backend`, with `--skip-targets tractography`, or with an
+input file of the same method. Published bundles go to one subfolder per source:
+`outputs/04_bundles/<folder>/<source>/` (see [Output layout](OUTPUT_LAYOUT.md)).
+
 Advanced reuse of an existing compatible whole-brain VTK/VTP input:
 
 <!-- cli-template: bundle-existing -->

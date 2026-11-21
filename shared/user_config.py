@@ -89,6 +89,9 @@ RUN_DEFAULTS = {
     "tractography_backend": "csd_act",
     "bundle_backend": "wmql",
     "wma_atlas": "org",
+    # Batch 2 item 5: tractography source per bundle algorithm ({} = every source "auto"). The GUI restores and saves
+    # it; the CLI never reads it back from the saved config (the GUI always sends explicit --bundle-source tokens).
+    "bundle_sources": {},
     "microstructure_stages": ["dti"],
     "dki_fit_method": "MKCURVE",
     "connectome_backend": "auto",
@@ -207,6 +210,18 @@ def _merge_dict(base: dict[str, Any], override: Mapping[str, Any]) -> dict[str, 
     return base
 
 
+def _saved_bundle_sources(value: Any) -> dict[str, str]:
+    """Batch 2 item 5: the explicit values of a saved bundle-source map; anything malformed becomes ``{}``."""
+
+    if not isinstance(value, Mapping):
+        return {}
+    try:
+        from shared.bundle_sources import normalize_bundle_sources
+    except ImportError:  # an older published package without the module
+        return {}
+    return normalize_bundle_sources(dict(value), strict=False)
+
+
 def normalize_user_config(payload: Mapping[str, Any] | None) -> dict[str, Any]:
     """Normalize a user configuration while preserving forward-compatible keys."""
 
@@ -283,6 +298,7 @@ def normalize_user_config(payload: Mapping[str, Any] | None) -> dict[str, Any]:
         _LOG.warning(note)
     if notes:
         config["notes"] = notes
+    defaults["bundle_sources"] = _saved_bundle_sources(defaults.get("bundle_sources"))
     # SC-1a: shared.brain_mask.PNL_MASK_ROUTES; an unknown saved value falls back to auto.
     if str(defaults.get("pnl_mask_route") or "auto") not in ("auto", "managed", "native"):
         defaults["pnl_mask_route"] = "auto"

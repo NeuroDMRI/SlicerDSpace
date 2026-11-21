@@ -708,6 +708,10 @@ def ukf_gpu_process_environment(startup_environment, executable):
     for key in list(env):
         if key.upper() in removed:
             del env[key]
+    lib_dir = exe_path.parent.parent / "lib"
+    if is_standalone_runtime and sys.platform.startswith("linux") and lib_dir.is_dir():
+        # The Linux standalone UKF has no RUNPATH: point the loader at its own bundled libraries only.
+        env["LD_LIBRARY_PATH"] = str(lib_dir)
     if sys.platform == "win32":
         from pathlib import PureWindowsPath
 

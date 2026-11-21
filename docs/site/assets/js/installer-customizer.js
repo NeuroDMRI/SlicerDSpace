@@ -2178,16 +2178,15 @@
     setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
   }
 
-  function initCustomizer() {
-    var root = document.getElementById('installer-customizer');
-    if (!root) { return; }
-
-    var state = {
-      os: detectOS(),
+  // The page button's setup state. ORG stays preselected, the same as the release's static setup zips
+  // (repackage_release_assets.py checks selected_packs == ['wma_org']) and the paper's Equipment setup.
+  function defaultSetupState(os) {
+    return {
+      os: os,
       slicerPath: '',
       modelAssetsDir: '',
-      wmaEnabled: false,
-      wmaAtlases: [],
+      wmaEnabled: true,
+      wmaAtlases: ['wma_org'],
       mirrorPreset: 'direct',
       mirrorPrefix: '',
       proxyUrl: '',
@@ -2195,6 +2194,13 @@
       checkScriptDir: true,
       autoStart: false
     };
+  }
+
+  function initCustomizer() {
+    var root = document.getElementById('installer-customizer');
+    if (!root) { return; }
+
+    var state = defaultSetupState(detectOS());
 
     function t(en, cn) { return zh ? cn : en; }
 
@@ -2270,6 +2276,7 @@
       GENERIC_SLICER_MINORS: GENERIC_SLICER_MINORS,
       buildSetupExtensionFiles: buildSetupExtensionFiles,
       buildSetupZip: buildSetupZip,
+      defaultSetupState: defaultSetupState,
       buildScript: buildScript
     };
   }

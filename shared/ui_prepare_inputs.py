@@ -317,6 +317,11 @@ def install_prepare_inputs_panel(owner: Any, configuration_layout: Any) -> None:
             hint.setVisible(not path)
             status.hide()
             owner._refresh_run_button_state()
+            if key in {"nifti_source", "nrrd_source", "dicom_source", "bval", "bvec"}:
+                # B3: a new input can change which algorithms its data can run.
+                from shared.ui_compact import refresh_compact_algorithms
+
+                refresh_compact_algorithms(owner)
 
         edit.textChanged.connect(text_changed)
 
@@ -371,6 +376,7 @@ def install_prepare_inputs_panel(owner: Any, configuration_layout: Any) -> None:
 
 def show_input_format(owner, kind):
     fields = owner._prepareInputWidgets
+    previous_kind = fields.get("source_kind")
     fields["source_kind"] = kind
     fields["source"] = fields[kind + "_source"]
     page = fields[kind + "_page"]
@@ -381,6 +387,11 @@ def show_input_format(owner, kind):
         tabs.setCurrentIndex(page)
         tabs.blockSignals(blocked)
     _update_drop_hint(owner)
+    if previous_kind is not None and previous_kind != kind:
+        # F4: another tab is another source, so the family summary and its tooltip change with it.
+        from shared.ui_compact import refresh_compact_algorithms
+
+        refresh_compact_algorithms(owner)
 
 
 def sync_input_mode(owner):

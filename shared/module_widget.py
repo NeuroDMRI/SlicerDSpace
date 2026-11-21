@@ -102,6 +102,7 @@ from shared.ui_run_controller import (
     format_last_output,
     default_run_name_for_backend,
     extract_background_manifest_path,
+    filter_run_for_data,
     is_auto_generated_run_name,
     compress_mrtrix_dense_value,
     microstructure_dti_enabled,
@@ -3321,6 +3322,40 @@ class SharedWidgetMixin:
             provided_tractography=self._provided_tractography(),
         )
 
+    def _data_filtered_run(self, batch_mode: bool):
+        """B3: the run request without the algorithms this data cannot run, or ``None`` when nothing is skipped.
+
+        Returns ``(DataFilteredRun, blocks)``. The parameter node is never written: the stored selection stays, and
+        the algorithm runs again when the data fits. Batch mode is not filtered (subjects can differ).
+        """
+        if batch_mode or not self._parameterNode:
+            return None
+        from shared.algorithm_availability import current_data_blocks
+
+        blocks = current_data_blocks(self, fresh=True)  # F3: never the per-event cache at the click
+        filtered = filter_run_for_data(self._product_target_flags(), self._microstructure_stages_text(), set(blocks))
+        return None if filtered is None else (filtered, blocks)
+
+    def _data_filtered_closure(self, filtered):
+        """The prerequisite closure of the request after ``_data_filtered_run`` (same inputs as ``_selected_closure``)."""
+        return selected_closure(
+            filtered.flags,
+            tractography_backend=self._tractography_backend_text(),
+            bundle_backend=self._bundle_backend_text(),
+            microstructure_dti=filtered.dti,
+            microstructure_freewater=filtered.freewater,
+            microstructure_noddi=filtered.noddi,
+            microstructure_dki=filtered.dki,
+            microstructure_ifw=filtered.ifw,
+            provided_tractography=self._provided_tractography(),
+        )
+
+    def _log_data_skips(self, filtered, blocks) -> None:
+        from shared.algorithm_selection import LABELS
+
+        for algorithm in filtered.skipped:
+            self.appendLog(f"Skipped {LABELS.get(algorithm, algorithm)}: {blocks[algorithm].text('en')}")
+
     def _provided_tractography(self) -> tuple[str, ...]:
         """K2: targets whose tractogram file the user supplied (same set the CLI builds).
 
@@ -4323,6 +4358,14 @@ class SharedWidgetMixin:
         if not selected:
             self._setStatus("error", self._summarise_missing(["Target products"]))
             return
+        # B3: leave out what the data cannot run. Only this request changes; the stored selection stays.
+        data_skips = self._data_filtered_run(batch_mode)
+        if data_skips is not None:
+            selected = selected_workflows(data_skips[0].flags)
+            if not selected:
+                self._log_data_skips(*data_skips)
+                self._setStatus("error", self._summarise_missing(["Target products"]))
+                return
         try:
             from tractography.wmql_protocol import canonical_wmql_selection
             canonical_wmql_selection(getattr(self._parameterNode, 'orchestrationWmqlSelection', ''),
@@ -4350,7 +4393,20 @@ class SharedWidgetMixin:
         surface_device = (self._parameterNode.device or "auto").strip() or "auto"
         ddseg_device = (self._parameterNode.ddsegDevice or "auto").strip() or "auto"
         run_free_water, run_noddi = self._microstructure_stage_flags()
+        run_dki, run_ifw = self._microstructure_dki_enabled(), self._microstructure_ifw_enabled()
         selected_targets = self._selected_product_targets()
+        requested_targets = self._requested_product_targets()
+        closure_tractography_backend = self._closure_tractography_backend_text()
+        if data_skips is not None:
+            skip_run = data_skips[0]
+            run_free_water, run_noddi, run_dki, run_ifw = skip_run.freewater, skip_run.noddi, skip_run.dki, skip_run.ifw
+            closure = self._data_filtered_closure(skip_run)
+            selected_targets, requested_targets = closure.targets, closure.requested
+            if "tractography" in closure.targets:
+                from shared.algorithm_selection import choice_value
+                closure_tractography_backend = choice_value(closure.algorithms_text)
+            else:
+                closure_tractography_backend = self._tractography_backend_text()
         auto_install_python = bool(self._parameterNode.autoInstallPythonDependencies)
         external_paths = self._environment_dependency_path_kwargs()
         run_name = (self._parameterNode.orchestrationRunName or "Test1").strip() or "Test1"
@@ -4361,8 +4417,8 @@ class SharedWidgetMixin:
             selected_targets=selected_targets,
             run_name=run_name,
             tractography_backend=self._tractography_backend_text(),
-            closure_tractography_backend=self._closure_tractography_backend_text(),
-            requested_targets=self._requested_product_targets(),
+            closure_tractography_backend=closure_tractography_backend,
+            requested_targets=requested_targets,
             bundle_backend=self._bundle_backend_text(),
             microstructure_freewater=run_free_water,
             wmql_query_preset=getattr(self._parameterNode, "orchestrationWmqlPreset", "official") or "official",
@@ -4371,8 +4427,8 @@ class SharedWidgetMixin:
             max_parallel_models=int(getattr(self._parameterNode, 'maxParallelModels', 1)),
             ukf_parameters_text=getattr(self._parameterNode, 'ukfParameters', '{}'),
             microstructure_noddi=run_noddi,
-            microstructure_dki=self._microstructure_dki_enabled(),
-            microstructure_ifw=self._microstructure_ifw_enabled(),
+            microstructure_dki=run_dki,
+            microstructure_ifw=run_ifw,
             ifw_echo_time_ms=ifw_echo_time_ms,
             dki_fit_method=getattr(self._parameterNode, "orchestrationDkiFitMethod", "MKCURVE") or "MKCURVE",
             select_streamlines=max(1, int(self._parameterNode.orchestrationSelectStreamlines)),
@@ -4485,6 +4541,8 @@ class SharedWidgetMixin:
             self._setStatus("error", "Run planning failed")
             return
 
+        if data_skips is not None:
+            self._log_data_skips(*data_skips)
         self.appendLog("Submitting selected products to background runner: " + ", ".join(selected))
         self._pendingRunManifestPath = manifest_path_for_plan(plan.run_plan_path, plan.run_name)
         self._startBackgroundPipeline(common_run_kwargs, external_paths, selected)
@@ -4946,6 +5004,10 @@ class SharedWidgetMixin:
                 cb.enabled = enabled
         for button in getattr(self, "_algorithmButtons", {}).values():
             button.enabled = enabled
+        anatomical_row = getattr(self, "_anatomicalPriorsRow", None)
+        if isinstance(anatomical_row, tuple) and len(anatomical_row) == 5:
+            for control in (anatomical_row[2], anatomical_row[4]):
+                control.enabled = enabled
         device_combo = getattr(self.ui, "unifiedTorchDeviceComboBox", None) or getattr(self, "_computeDeviceComboBox", None)
         if device_combo is not None:
             device_combo.enabled = enabled

@@ -37,19 +37,15 @@ def _connect_clicked(button: Any, callback: Any) -> None:
         button.connect("clicked()", callback)
 
 
-def compact_algorithm_labels(node: Any) -> dict[str, str]:
-    """Describe the configured algorithms, not execution or QC status."""
+def microstructure_models(node: Any) -> list[tuple[str, str]]:
+    """The stored Microstructure selection as ``(algorithm id, label)`` pairs, in display order."""
 
-    from shared.algorithm_selection import BUNDLES, CONNECTOME, LABELS, PREPROCESSING, algorithms
     from shared.ui_run_controller import microstructure_ifw_enabled, microstructure_optional_stage_flags
     from shared.user_config import RUN_DEFAULTS, selected_microstructure_stages
 
     def _str_attr(attr_name: str) -> str:
         val = getattr(node, attr_name, "")
         return val.strip() if isinstance(val, str) else ""
-
-    preprocessing = (_str_attr("orchestrationPreprocessingStages") or "denoise,eddy,topup").lower()
-    preproc_labels = " + ".join(LABELS[name] for name in algorithms(preprocessing, PREPROCESSING, "denoise,eddy,topup"))
 
     raw_micro = _str_attr("orchestrationMicrostructureStages")
     method = (_str_attr("orchestrationDkiFitMethod") or RUN_DEFAULTS["dki_fit_method"]).upper()
@@ -58,17 +54,17 @@ def compact_algorithm_labels(node: Any) -> dict[str, str]:
         chosen = set(selected_microstructure_stages(raw_micro))
         models = []
         if "dti" in chosen:
-            models.append("DTI")
+            models.append(("dti", "DTI"))
         if "freewater" in chosen:
-            models.append("FW")
+            models.append(("freewater", "FW"))
         if "noddi" in chosen:
-            models.append("NODDI")
+            models.append(("noddi", "NODDI"))
         if "dki" in chosen:
-            models.append(dki_label)
+            models.append(("dki", dki_label))
         if "ifw" in chosen:
-            models.append("iFW")
+            models.append(("ifw", "iFW"))
         if not models:
-            models.append("DTI")
+            models.append(("dti", "DTI"))
     else:
         freewater, noddi, dki = microstructure_optional_stage_flags(
             "",
@@ -76,15 +72,37 @@ def compact_algorithm_labels(node: Any) -> dict[str, str]:
             legacy_noddi=bool(getattr(node, "orchestrationRunNoddi", False)),
             legacy_dki=bool(getattr(node, "orchestrationRunDki", False)),
         )
-        models = ["DTI"]
+        models = [("dti", "DTI")]
         if freewater:
-            models.append("FW")
+            models.append(("freewater", "FW"))
         if noddi:
-            models.append("NODDI")
+            models.append(("noddi", "NODDI"))
         if dki:
-            models.append(dki_label)
+            models.append(("dki", dki_label))
         if microstructure_ifw_enabled("", legacy_ifw=bool(getattr(node, "orchestrationRunIfw", False))):
-            models.append("iFW")
+            models.append(("ifw", "iFW"))
+    return models
+
+
+def compact_algorithm_labels(node: Any, blocked: Any = ()) -> dict[str, str]:
+    """Describe the configured algorithms, not execution or QC status.
+
+    ``blocked`` names algorithms that the data cannot run (B3). They are left out of the Microstructure text, unless
+    that would leave nothing: then the stored text stays and the caller adds the "not available" note.
+    """
+
+    from shared.algorithm_selection import BUNDLES, CONNECTOME, LABELS, PREPROCESSING, algorithms
+    from shared.user_config import RUN_DEFAULTS
+
+    def _str_attr(attr_name: str) -> str:
+        val = getattr(node, attr_name, "")
+        return val.strip() if isinstance(val, str) else ""
+
+    preprocessing = (_str_attr("orchestrationPreprocessingStages") or "denoise,eddy,topup").lower()
+    preproc_labels = " + ".join(LABELS[name] for name in algorithms(preprocessing, PREPROCESSING, "denoise,eddy,topup"))
+
+    stored = microstructure_models(node)
+    models = [label for algorithm, label in stored if algorithm not in blocked] or [label for _, label in stored]
     tractography = (_str_attr("orchestrationTractographyBackend")
                     or RUN_DEFAULTS["tractography_backend"]).lower()
     bundles = (_str_attr("orchestrationBundleBackend")
@@ -106,6 +124,31 @@ def compact_algorithm_labels(node: Any) -> dict[str, str]:
     }
 
 
+def _summary_data_blocks(owner: Any) -> dict:
+    """Algorithms that the current data cannot run (B3); ``{}`` when unknown or on any failure."""
+    try:
+        from shared.algorithm_availability import current_data_blocks
+
+        return current_data_blocks(owner)
+    except Exception:
+        return {}
+
+
+def _mute_summary(owner: Any, name: str, summary: Any, muted: bool) -> None:
+    """Grey a summary label only while every stored algorithm of its family is blocked; undo it afterwards."""
+    muted_names = getattr(owner, "_algorithmSummaryMuted", None)
+    if not isinstance(muted_names, set):
+        muted_names = set()
+        try:
+            owner._algorithmSummaryMuted = muted_names
+        except Exception:
+            return
+    if muted == (name in muted_names) or not hasattr(summary, "setEnabled"):
+        return
+    summary.setEnabled(not muted)
+    muted_names.add(name) if muted else muted_names.discard(name)
+
+
 def refresh_compact_algorithms(owner: Any, language: str | None = None) -> None:
     """Refresh the product rows after parameter or language changes."""
 
@@ -124,13 +167,26 @@ def refresh_compact_algorithms(owner: Any, language: str | None = None) -> None:
     node = getattr(owner, "_parameterNode", None)
     cleared = getattr(owner, "_clearedAlgorithmFamilies", None)
     box_to_family = {box_name: family for family, (box_name, _, _) in FAMILIES.items()}
-    for name, algorithms in compact_algorithm_labels(node).items():
+    blocks = _summary_data_blocks(owner)
+    for name, algorithms in compact_algorithm_labels(node, blocked=set(blocks)).items():
         family = box_to_family.get(name)
+        none_selected = False
         if family and isinstance(cleared, set) and family in cleared:
             if node is not None and bool(getattr(node, FAMILY_TARGET_ATTRS[family], False)):
                 cleared.discard(family)
             else:
                 algorithms = "未选择" if zh else "None selected"
+                none_selected = True
+        # B3: what the data cannot run is skipped at Run; say so here without touching the stored selection.
+        skipped_lines, muted = [], False
+        if family == "microstructure" and blocks and not none_selected:
+            stored = microstructure_models(node)
+            skipped = [(algorithm, label) for algorithm, label in stored if algorithm in blocks]
+            skipped_lines = [f"{label}: {blocks[algorithm].text(language)}" for algorithm, label in skipped]
+            if skipped and len(skipped) == len(stored):
+                muted = True
+                algorithms = " + ".join(label for _, label in skipped) + (
+                    " · 当前数据不可用" if zh else " · not available for this data")
         control = getattr(ui, name, None)
         if control is not None:
             text = onboarding_text(language, "compact_algorithm_selection").format(algorithms=algorithms)
@@ -146,6 +202,8 @@ def refresh_compact_algorithms(owner: Any, language: str | None = None) -> None:
                     reason = fsl_unavailable_text(zh=zh)
                     desc = f"{desc}\n{reason}" if desc else reason
             tooltip = f"{desc}\n{selection_line}" if desc else selection_line
+            if skipped_lines:
+                tooltip = tooltip + "\n" + "\n".join(skipped_lines)
             summary = summary_map.get(name)
             if summary is None:
                 if hasattr(control, "setText") and getattr(control, "text", None) != text:
@@ -162,6 +220,7 @@ def refresh_compact_algorithms(owner: Any, language: str | None = None) -> None:
                     summary.setText(algorithms)
                 if getattr(summary, "toolTip", None) != tooltip:
                     summary.setToolTip(tooltip)
+                _mute_summary(owner, name, summary, muted)
     from shared.ui_algorithm_picker import refresh_picker_language
     refresh_picker_language(owner)
 

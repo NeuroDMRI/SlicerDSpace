@@ -166,48 +166,69 @@ def _independent_axes(vectors) -> int:
     return len(unique)
 
 
-def _load_protocol(config: DkiConfig, *, require_mask: bool = True):
-    import nibabel as nib
+def _acquisition_error(code: str, message: str, **numbers) -> ValueError:
+    """F5: a plain ``ValueError`` (the planner text stays ``ValueError: <message>``) carrying a stable code and numbers."""
+    error = ValueError(message)
+    error.code, error.numbers = code, numbers
+    return error
+
+
+def _check_image(shape, affine) -> None:
+    """Geometry rules of the DWI header: 4D with enough volumes and a finite, nonsingular affine."""
+    import numpy as np
+
+    if len(shape) != 4 or shape[3] < 22:
+        raise _acquisition_error("dki_needs_4d_volumes", "DKI requires a 4D DWI with at least 22 measurements",
+                                 dimensions=len(shape), volumes=int(shape[3]) if len(shape) == 4 else None,
+                                 min_volumes=22)
+    if not np.isfinite(affine).all() or abs(np.linalg.det(affine[:3, :3])) < 1e-12:
+        raise _acquisition_error("dki_affine_invalid", "DKI DWI must have a finite nonsingular world affine")
+
+
+def _check_acquisition(shape, bvals, vectors, limits=DkiConfig):
+    """The ACQUISITION rules: gradients, shells, directions and design rank (no files, no mask, no options).
+
+    ``limits`` holds ``b0_threshold``, ``shell_tolerance``, ``max_bvalue`` and ``min_directions_per_shell``; the
+    ``DkiConfig`` class itself serves as the default because its dataclass defaults are class attributes.
+    Raises ``ValueError`` with the messages that ``inspect_dki_inputs`` reports. Returns
+    ``(gtab, selected, parts)``; ``parts`` holds the inspection keys that depend on the acquisition only.
+    """
     import numpy as np
     from dipy.core.gradients import gradient_table
     from dipy.reconst.utils import dki_design_matrix
 
-    bundle = config.raw_input_bundle
-    image = nib.load(str(bundle.dwi_path))
-    if len(image.shape) != 4 or image.shape[3] < 22:
-        raise ValueError("DKI requires a 4D DWI with at least 22 measurements")
-    if not np.isfinite(image.affine).all() or abs(np.linalg.det(image.affine[:3, :3])) < 1e-12:
-        raise ValueError("DKI DWI must have a finite nonsingular world affine")
-    bvals = np.loadtxt(bundle.bval_path, ndmin=1).reshape(-1)
-    vectors = np.loadtxt(bundle.bvec_path, ndmin=2)
-    if vectors.shape == (3, image.shape[3]):
+    if vectors.shape == (3, shape[3]):
         vectors = vectors.T
-    if len(bvals) != image.shape[3] or vectors.shape != (image.shape[3], 3):
-        raise ValueError("DKI bvals/bvecs must match the DWI volume count")
+    if len(bvals) != shape[3] or vectors.shape != (shape[3], 3):
+        raise _acquisition_error("dki_gradient_count_mismatch", "DKI bvals/bvecs must match the DWI volume count",
+                                 volumes=int(shape[3]), bvals=len(bvals), bvecs=" x ".join(map(str, vectors.shape)))
     if not np.isfinite(bvals).all() or np.any(bvals < 0) or not np.isfinite(vectors).all():
-        raise ValueError("DKI gradients must be finite and b-values nonnegative")
+        raise _acquisition_error("dki_gradients_invalid", "DKI gradients must be finite and b-values nonnegative")
     norms = np.linalg.norm(vectors, axis=1)
-    if np.any(np.abs(norms[bvals > config.b0_threshold] - 1) > 0.01):
-        raise ValueError("DKI diffusion b-vectors must be unit length within 0.01")
-    nonzero_baseline_vectors = int(np.count_nonzero(norms[bvals <= config.b0_threshold] > 0.01))
+    if np.any(np.abs(norms[bvals > limits.b0_threshold] - 1) > 0.01):
+        raise _acquisition_error("dki_bvectors_not_unit", "DKI diffusion b-vectors must be unit length within 0.01",
+                                 tolerance=0.01)
+    nonzero_baseline_vectors = int(np.count_nonzero(norms[bvals <= limits.b0_threshold] > 0.01))
     # HCP can retain direction entries for nominal b0 volumes. Direction is
     # irrelevant to the b0 model; clear it in the working table only.
     vectors = vectors.copy()
-    vectors[bvals <= config.b0_threshold] = 0
+    vectors[bvals <= limits.b0_threshold] = 0
     # Select complete shells by their median, not individual scanner b-values.
     # Otherwise a nominal b=3000 shell can be silently truncated at 3000.
-    all_shells = _shells(bvals, config.b0_threshold, config.shell_tolerance)
+    all_shells = _shells(bvals, limits.b0_threshold, limits.shell_tolerance)
     selected = np.asarray(sorted(
-        list(np.flatnonzero(bvals <= config.b0_threshold)) +
-        [index for shell in all_shells if np.median(bvals[shell]) <= config.max_bvalue for index in shell]
+        list(np.flatnonzero(bvals <= limits.b0_threshold)) +
+        [index for shell in all_shells if np.median(bvals[shell]) <= limits.max_bvalue for index in shell]
     ), dtype=int)
     selected_bvals, selected_vectors = bvals[selected], vectors[selected]
-    if not np.any(selected_bvals <= config.b0_threshold):
-        raise ValueError("DKI requires at least one b0 measurement")
-    shells = _shells(selected_bvals, config.b0_threshold, config.shell_tolerance)
+    if not np.any(selected_bvals <= limits.b0_threshold):
+        raise _acquisition_error("dki_needs_b0", "DKI requires at least one b0 measurement")
+    shells = _shells(selected_bvals, limits.b0_threshold, limits.shell_tolerance)
     if len(shells) < 2:
-        raise ValueError("DKI requires at least two nonzero shells after the maximum-b selection")
-    gtab = gradient_table(selected_bvals, bvecs=selected_vectors, b0_threshold=config.b0_threshold, atol=0.01)
+        raise _acquisition_error("dki_needs_two_shells",
+                                 "DKI requires at least two nonzero shells after the maximum-b selection",
+                                 shells=len(shells), max_bvalue=float(limits.max_bvalue))
+    gtab = gradient_table(selected_bvals, bvecs=selected_vectors, b0_threshold=limits.b0_threshold, atol=0.01)
     design = dki_design_matrix(gtab)
     shell_info = []
     for indices in shells:
@@ -217,14 +238,63 @@ def _load_protocol(config: DkiConfig, *, require_mask: bool = True):
             "bvalue": float(np.mean(selected_bvals[indices])), "volume_count": len(indices),
             "independent_directions": unique, "angular_rank": angular_rank,
         })
-        if unique < config.min_directions_per_shell or angular_rank < 15:
-            raise ValueError(
+        if unique < limits.min_directions_per_shell or angular_rank < 15:
+            raise _acquisition_error(
+                "dki_shell_directions",
                 "DKI requires at least 15 independent directions and angular design rank 15 per shell; "
-                f"shell {shell_info[-1]['bvalue']:g} has {unique} directions and rank {angular_rank}"
+                f"shell {shell_info[-1]['bvalue']:g} has {unique} directions and rank {angular_rank}",
+                bvalue=shell_info[-1]["bvalue"], directions=unique, rank=angular_rank,
+                min_directions=int(limits.min_directions_per_shell), min_rank=15,
             )
     rank, condition = _scaled_rank(design)
     if rank < 22:
-        raise ValueError(f"DKI scaled-column design rank is {rank}; all 22 parameters must be identifiable")
+        raise _acquisition_error("dki_design_rank",
+                                 f"DKI scaled-column design rank is {rank}; all 22 parameters must be identifiable",
+                                 rank=rank, parameters=22)
+    parts = {
+        "selected_volumes": selected.tolist(),
+        "excluded_high_b_volumes": int(shape[3] - len(selected)),
+        "b0_count": int(np.count_nonzero(selected_bvals <= limits.b0_threshold)),
+        "baseline_bvectors_cleared_in_working_table": nonzero_baseline_vectors,
+        "shells": shell_info, "design_rank": rank, "design_condition_scaled": condition,
+        "warnings": (["b > 2500 s/mm^2 included: truncated cumulant DKI can be biased; review high-b fits"]
+                     if np.any(selected_bvals > 2500) else []),
+    }
+    return gtab, selected, parts
+
+
+def dki_acquisition_issue(image, bvals, vectors, limits=DkiConfig) -> Optional[ValueError]:
+    """Data-only DKI check shared with ``inspect_dki_inputs``: ``None`` when the acquisition fits, else the error.
+
+    ``image`` needs ``shape`` and ``affine`` (a nibabel image, header only); ``bvals`` and ``vectors`` are the
+    arrays read from the gradient files. Options, the MK-Curve backend and the brain mask are not checked here.
+    F5: an error raised by these rules carries ``code`` and ``numbers``; another ``ValueError`` (for example from
+    DIPY) has neither.
+    """
+    try:
+        _check_image(image.shape, image.affine)
+        _check_acquisition(image.shape, bvals, vectors, limits)
+    except ValueError as exc:
+        return exc
+    return None
+
+
+def dki_acquisition_problem(image, bvals, vectors, limits=DkiConfig) -> str:
+    """``""`` when the acquisition fits, else the reason (the message of ``dki_acquisition_issue``)."""
+    issue = dki_acquisition_issue(image, bvals, vectors, limits)
+    return str(issue) if issue is not None else ""
+
+
+def _load_protocol(config: DkiConfig, *, require_mask: bool = True):
+    import nibabel as nib
+    import numpy as np
+
+    bundle = config.raw_input_bundle
+    image = nib.load(str(bundle.dwi_path))
+    _check_image(image.shape, image.affine)
+    bvals = np.loadtxt(bundle.bval_path, ndmin=1).reshape(-1)
+    vectors = np.loadtxt(bundle.bvec_path, ndmin=2)
+    gtab, selected, parts = _check_acquisition(image.shape, bvals, vectors, config)
     mask_data = None
     if require_mask or bundle.mask_path.is_file():
         mask_image = nib.load(str(bundle.mask_path))
@@ -234,16 +304,16 @@ def _load_protocol(config: DkiConfig, *, require_mask: bool = True):
         if not np.isfinite(mask_data).all() or not np.all((mask_data == 0) | (mask_data == 1)) or not np.any(mask_data):
             raise ValueError("DKI mask must be finite, binary and nonempty")
     inspection = {
-        "shape": list(image.shape), "selected_volumes": selected.tolist(),
-        "excluded_high_b_volumes": int(image.shape[3] - len(selected)),
+        "shape": list(image.shape), "selected_volumes": parts["selected_volumes"],
+        "excluded_high_b_volumes": parts["excluded_high_b_volumes"],
         "upper_bvalue_policy": "include complete shells whose median b-value is at most max_bvalue",
-        "b0_count": int(np.count_nonzero(selected_bvals <= config.b0_threshold)),
-        "baseline_bvectors_cleared_in_working_table": nonzero_baseline_vectors,
-        "shells": shell_info, "design_rank": rank, "design_condition_scaled": condition,
+        "b0_count": parts["b0_count"],
+        "baseline_bvectors_cleared_in_working_table": parts["baseline_bvectors_cleared_in_working_table"],
+        "shells": parts["shells"], "design_rank": parts["design_rank"],
+        "design_condition_scaled": parts["design_condition_scaled"],
         "mask_voxels": int(np.count_nonzero(mask_data)) if mask_data is not None else None,
         "geometry_pass": True if mask_data is not None else None,
-        "warnings": (["b > 2500 s/mm^2 included: truncated cumulant DKI can be biased; review high-b fits"]
-                     if np.any(selected_bvals > 2500) else []),
+        "warnings": parts["warnings"],
     }
     return image, mask_data.astype(bool) if mask_data is not None else None, gtab, selected, inspection
 

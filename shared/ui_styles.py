@@ -249,6 +249,11 @@ QCheckBox::indicator:disabled {
   background: #F1F5F9;
   border-color: #CBD5E1;
 }
+QCheckBox::indicator:checked:disabled {
+  background: #7C97A6;
+  border: 1px solid #7C97A6;
+  image: url("__CHECKMARK_ICON_URL__");
+}
 QLabel:disabled, QCheckBox:disabled, QRadioButton:disabled {
   color: #8A98A3;
 }
@@ -680,6 +685,11 @@ QCheckBox::indicator:checked {
 QCheckBox::indicator:disabled {
   background: #1C2026;
   border-color: #3B424B;
+}
+QCheckBox::indicator:checked:disabled {
+  background: #34586B;
+  border: 1px solid #3F6A80;
+  image: url("__CHECKMARK_ICON_URL__");
 }
 QLabel:disabled, QCheckBox:disabled, QRadioButton:disabled {
   color: #7D8590;

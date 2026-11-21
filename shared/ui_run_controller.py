@@ -7,7 +7,7 @@ import math
 import os
 import re
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Optional
 
@@ -191,6 +191,43 @@ def microstructure_ifw_enabled(stages_text: str, *, legacy_ifw: bool = False) ->
     if not text:
         return bool(legacy_ifw)
     return "ifw" in canonical_microstructure_stages(text)
+
+
+@dataclass(frozen=True)
+class DataFilteredRun:
+    """The microstructure part of a run request after the data-blocked algorithms are removed (B3)."""
+
+    flags: ProductTargetFlags
+    stages: tuple[str, ...]  # the stored stages that still run, in catalog order (empty: the family is left out)
+    skipped: tuple[str, ...]  # the stored stages that the data cannot run, in catalog order
+    dti: bool
+    freewater: bool
+    noddi: bool
+    dki: bool
+    ifw: bool
+
+
+def filter_run_for_data(flags: ProductTargetFlags, stages_text: str, blocked) -> Optional[DataFilteredRun]:
+    """Remove data-blocked microstructure stages from a run request; ``None`` when nothing is removed.
+
+    ``stages_text`` is the stored selection. It is never rewritten: only the request changes. When no stored stage
+    is left, the Microstructure target is left out of the request (the other families still run).
+    """
+
+    if not flags.microstructure:
+        return None
+    stored = selected_microstructure_stages(stages_text)
+    skipped = tuple(stage for stage in stored if stage in blocked)
+    if not skipped:
+        return None
+    kept = tuple(stage for stage in stored if stage not in skipped)
+    if not kept:
+        flags = replace(flags, microstructure=False)
+    return DataFilteredRun(
+        flags=flags, stages=kept, skipped=skipped,
+        dti="dti" in kept, freewater="freewater" in kept, noddi="noddi" in kept,
+        dki="dki" in kept, ifw="ifw" in kept,
+    )
 
 
 def compress_mrtrix_dense_value(state: Any) -> Optional[bool]:

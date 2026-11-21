@@ -87,3 +87,17 @@ Re-review of the fix (Opus and Codex): no blocking item. These items stay open. 
 | Opus r2 P2-3 | P2 | `close_all_windows_refused` accepts an ask count `>= 1`; the other paths require exactly 1. | Use `== 1` so a repeated question on this path fails the check. |
 | Author | P2 | Measured only on macOS, Slicer 5.12.4, Qt 5.15.18, through `window.close()`, the File > Exit action and `closeAllWindows()`. Not measured: a human Cmd+Q, a Dock quit, a logout, and Windows and Linux. | Run `slicer_close_guard_smoke.py` in the GitHub Actions real-Slicer matrix; try Cmd+Q and Dock quit once by hand. |
 | Author | P2 | A running update check (a few seconds) counts as a "code update" job, so a close in that window asks the question. | Count the update job only while it downloads or applies, if users report it. |
+
+## 21 November 2026: UI batch, packages A and B (run lock ticks; grey out algorithms the data cannot run)
+
+Scope: branch `feat/ui-batch`. Round 1: package A no item; package B 3 blocking items (F1 gate read raw inputs while the planner reads the preprocessed files; F2 stale auto-import files; F3 uncached folder listing on every event) and 2 P2 items (F4, F5), all fixed in the one fix round.
+Re-review of the fix (Opus and Codex): no blocking item. These items stay open. Decide by 5 December 2026.
+
+| Source | Label | Item | Proposed fix |
+|---|---|---|---|
+| Opus r1 P2 | P2 | `shared/algorithm_availability.py`: unreadable bvals are not cached as a negative result, so each refresh reads the file again. | Cache the "unknown" answer on the same `(path, size, mtime_ns)` key. |
+| Codex r1 P2 | P2 | The environment check before a run still asks for the dependencies of an algorithm that the data filter skips. | Run the environment check on the filtered request. |
+| Opus r1 P2 | P2 | The iFW echo-time validation still runs when iFW is skipped for data reasons. | Validate the echo times only when iFW stays in the filtered request. |
+| Author | P2 | A folder that keeps its convertible source next to an imported `input/` never greys an algorithm, also when the import receipt is current (the gate answers "unknown"). | Expose the importer's "receipt is current" test and use it in the gate. |
+| Author | P2 | The `dki_design_rank` code and its Chinese text have no test (no cheap fixture passes the per-shell checks and fails the rank check). | Build a fixture with collinear directions per shell. |
+| Author | P2 | Real-Slicer check of package A and B covers only the checkbox style and the "?" marker (light and dark, Slicer 5.12.4). The popup, the summary text and the Run filter are tested with fake Qt only. | Add a picker smoke step to `slicer_algorithm_picker_smoke.py`. |

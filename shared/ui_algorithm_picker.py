@@ -221,9 +221,44 @@ ALGORITHM_SETTINGS = {
 }
 
 
+def _unavailable_marker(qt, owner, algorithm, reason, dark=None):
+    """B2: a small "?" at the right end of a row whose algorithm this data or system cannot run; hover shows why."""
+    from shared.ui_styles import is_dark_mode
+
+    use_dark = is_dark_mode(getattr(owner, "_uiWidget", None)) if dark is None else bool(dark)
+    ink = "#7D8590" if use_dark else "#64748B"
+    name = "algorithmUnavailable_" + algorithm
+    marker = qt.QLabel("?")
+    marker.setObjectName(name)
+    marker.setToolTip(reason)
+    marker.setAccessibleName(reason)
+    marker.setFixedSize(18, 18)
+    if hasattr(qt.Qt, "NoFocus"):
+        marker.setFocusPolicy(qt.Qt.NoFocus)
+    if hasattr(qt.Qt, "AlignCenter") and hasattr(marker, "setAlignment"):
+        marker.setAlignment(qt.Qt.AlignCenter)
+    marker.setStyleSheet(
+        f"QLabel#{name} {{ color: {ink}; border: 1px solid {ink}; border-radius: 9px; "
+        "font-size: 11px; font-weight: 600; background: transparent; }"
+    )
+    return marker
+
+
+def _data_block_texts(owner, choices, zh) -> dict:
+    """Algorithm id -> reason text for the algorithms of ``choices`` that the current data cannot run."""
+    try:
+        from shared import algorithm_availability
+
+        blocks = algorithm_availability.current_data_blocks(owner)
+        return {value: blocks[value].text("zh" if zh else "en") for value in choices if value in blocks}
+    except Exception:
+        return {}
+
+
 def _add_algorithm_row(qt, owner, layout, box, family, algorithm, staged, zh, resize_popup, dark=None,
                        disabled=False, disabled_tooltip=""):
     specs = ALGORITHM_SETTINGS.get((family, algorithm), ())
+    marker = _unavailable_marker(qt, owner, algorithm, disabled_tooltip, dark) if disabled else None
     ui_root = getattr(owner, "ui", None)
     fields = [(attribute, getattr(ui_root, control, None), getattr(ui_root, label, None))
               for attribute, control, label in specs] if ui_root is not None else []
@@ -231,7 +266,13 @@ def _add_algorithm_row(qt, owner, layout, box, family, algorithm, staged, zh, re
               if control is not None and label is not None]
     ukf = (family, algorithm) == ("tractography", "ukf")
     if not fields and not ukf:
-        layout.addWidget(box)
+        if marker is None:
+            layout.addWidget(box)
+            return
+        row = qt.QHBoxLayout()
+        row.addWidget(box, 1)
+        row.addWidget(marker)
+        layout.addLayout(row)
         return
     row = qt.QHBoxLayout()
     row.addWidget(box, 1)
@@ -263,6 +304,8 @@ def _add_algorithm_row(qt, owner, layout, box, family, algorithm, staged, zh, re
     button.setFixedSize(28, 24)
     button.setCheckable(True)
     row.addWidget(button)
+    if marker is not None:
+        row.addWidget(marker)
     layout.addLayout(row)
     panel = qt.QWidget()
     form = qt.QFormLayout(panel)
@@ -482,21 +525,25 @@ def choose_algorithms(owner, family):
         from shared.selected_setup import fsl_unavailable_text
 
         fsl_tip = fsl_unavailable_text(zh=zh)
+    # B2: algorithms that the chosen DATA cannot run. They stay in the stored selection (see Apply below).
+    data_tips = {} if is_anatomical else _data_block_texts(owner, choices, zh)
     for value in choices:
         label = ANATOMICAL_PRIORS[value][int(zh)] if is_anatomical else LABELS[value]
         box = qt.QCheckBox(label)
         box.objectName = "algorithm_" + value
         fsl_blocked = fsl_missing and value in FSL_STAGES
-        box.checked = value in current and not fsl_blocked
-        if fsl_blocked:
+        blocked_tip = fsl_tip if fsl_blocked else data_tips.get(value, "")
+        blocked = fsl_blocked or value in data_tips
+        box.checked = value in current and not blocked
+        if blocked:
             box.setEnabled(False)
-            box.setToolTip(fsl_tip)
+            box.setToolTip(blocked_tip)
         if pointing_cursor is not None and hasattr(box, "setCursor"):
             box.setCursor(pointing_cursor)
         boxes[value] = box
         _add_algorithm_row(
             qt, owner, body_layout, box, family, value, staged, zh, resize_popup,
-            dark=dark, disabled=fsl_blocked, disabled_tooltip=fsl_tip,
+            dark=dark, disabled=blocked, disabled_tooltip=blocked_tip,
         )
 
     if fsl_missing and fsl_tip:
@@ -608,7 +655,9 @@ def choose_algorithms(owner, family):
         popup_state["finished"] = True
         _stop_popup_watch()
     if accepted:
-        selection = [value for value, box in boxes.items() if box.checked]
+        # A data-blocked algorithm that was stored before stays stored (it is skipped at Run, not removed here).
+        selection = [value for value, box in boxes.items()
+                     if box.checked or (value in data_tips and value in current)]
         if is_anatomical:
             _set_anatomical_priors(owner, selection, clear_memory=not selection)
         else:
@@ -722,6 +771,10 @@ def install_algorithm_pickers(owner):
         checkbox.setFixedWidth(indicator_width)
         checkbox.setMinimumHeight(18)
         def _on_anatomical_clicked(checked: bool) -> None:
+            if getattr(owner, "_pipelineActive", False) or getattr(owner, "_selectedSetupActive", False):
+                lang = getattr(owner, "_onboardingLanguage", "en")
+                _refresh_anatomical_priors(owner, isinstance(lang, str) and lang.startswith("zh"))
+                return
             if checked:
                 fields = _remembered_anatomical_priors(owner) or tuple(ANATOMICAL_PRIORS)
                 _set_anatomical_priors(owner, fields)

@@ -2297,26 +2297,31 @@ LINUX_GLIBC_SUPPORTED_SYSTEMS = "Ubuntu 22.04+, Debian 12+, RHEL/Rocky/Alma 9+"
 LINUX_GLIBC_AFFECTED = ("bundled MRtrix mrcrop", "the FreeSurfer surface tools of the surface runtime")
 
 
-def linux_glibc_version() -> Optional[tuple[int, ...]]:
-    """G1: the host glibc version as an integer tuple, or None when it cannot be read (musl, non-Linux)."""
+def linux_glibc_version_with_source() -> tuple[Optional[tuple[int, ...]], str]:
+    """G1/O-P2-3: the host glibc version and the source that gave it ("" when it cannot be read: musl, non-Linux)."""
     import re
 
     candidates = []
     try:
-        candidates.append(os.confstr("CS_GNU_LIBC_VERSION") or "")
+        candidates.append(("os.confstr CS_GNU_LIBC_VERSION", os.confstr("CS_GNU_LIBC_VERSION") or ""))
     except (AttributeError, OSError, ValueError):
         pass
     try:
         name, version = platform.libc_ver()
         if name == "glibc":
-            candidates.append(f"glibc {version}")
+            candidates.append(("platform.libc_ver", f"glibc {version}"))
     except Exception:
         pass
-    for text in candidates:
+    for source, text in candidates:
         match = re.search(r"glibc\s+(\d+)\.(\d+)", text)
         if match:
-            return (int(match.group(1)), int(match.group(2)))
-    return None
+            return (int(match.group(1)), int(match.group(2))), source
+    return None, ""
+
+
+def linux_glibc_version() -> Optional[tuple[int, ...]]:
+    """G1: the host glibc version as an integer tuple, or None when it cannot be read (musl, non-Linux)."""
+    return linux_glibc_version_with_source()[0]
 
 
 def _linux_glibc_floor_statuses(
@@ -2336,7 +2341,11 @@ def _linux_glibc_floor_statuses(
     ))
     if not targets:
         return ()
-    found = glibc if glibc is not None else linux_glibc_version()
+    if glibc is not None:
+        found, source = glibc, "value passed by the caller"
+    else:
+        found, source = linux_glibc_version_with_source()
+        source = source or "unavailable (no glibc version could be read)"
     below = found is not None and tuple(found) < LINUX_GLIBC_FLOOR
     found_text = ".".join(str(part) for part in found) if found else "unknown"
     message = ""
@@ -2348,7 +2357,7 @@ def _linux_glibc_floor_statuses(
         key="linux_glibc_floor", kind="setting", label="Linux glibc version",
         status="missing" if below else "available", required=False, targets=targets,
         details={"notes": message, "glibc_version": found_text, "glibc_minimum": LINUX_GLIBC_FLOOR_TEXT,
-                 "affected": list(LINUX_GLIBC_AFFECTED), "detected_source": "os.confstr CS_GNU_LIBC_VERSION"},
+                 "affected": list(LINUX_GLIBC_AFFECTED), "detected_source": source},
         install_hint=message, install_group="",
     ),)
 

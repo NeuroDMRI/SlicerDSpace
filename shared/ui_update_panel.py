@@ -67,6 +67,19 @@ def _restart_slicer() -> bool:
     return False
 
 
+def _restart_slicer_if_allowed(owner: Any) -> bool:
+    """Restart Slicer unless a running job exists and the user chose to keep it running."""
+
+    try:
+        from shared.ui_close_guard import may_close
+
+        if not may_close(owner, action="restart"):
+            return False
+    except Exception:
+        pass
+    return _restart_slicer()
+
+
 def _stop_timer(owner: Any) -> None:
     timer = getattr(owner, "_codeUpdatePollTimer", None)
     if timer is not None and hasattr(timer, "stop"):
@@ -273,7 +286,7 @@ def _handle_apply_result(owner: Any, result: dict[str, Any]) -> None:
     box.addButton(_t(zh, "Later", "稍后重启"), qt.QMessageBox.RejectRole)
     box.exec_()
     if box.clickedButton() == restart_btn:
-        _restart_slicer()
+        _restart_slicer_if_allowed(owner)
 
 
 def _show_error(owner: Any, error_msg: str) -> None:
@@ -688,7 +701,7 @@ def _on_check_updates_clicked(owner: Any) -> None:
     if state.get("busy"):
         return
     if state.get("phase") == "restart_required":
-        _restart_slicer()
+        _restart_slicer_if_allowed(owner)
         return
     _start_check_worker(owner)
 

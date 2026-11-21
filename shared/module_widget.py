@@ -25,6 +25,7 @@ from shared.docs import doc_path
 from shared.input_import import InputImportConfig, prepare_inputs
 from shared.model_assets import model_asset_path_or_none
 from shared.ui_error_dialogs import show_actionable_error_dialog
+from shared.ui_close_guard import install_close_guard, uninstall_close_guard
 from shared.ui_compact import close_input_format_help_popovers, install_compact_layout
 from shared.ui_environment_dialog import show_environment_results_dialog
 from shared.ui_environment_paths import (
@@ -199,6 +200,10 @@ class SharedWidgetMixin:
 
     def _connect_common_ui(self) -> None:
         slicer.app.connect("aboutToQuit()", self.cleanup)
+        try:
+            install_close_guard(self)
+        except Exception:
+            pass
         if hasattr(self.ui, "runSelectedButton"):
             self.ui.runSelectedButton.connect("clicked()", self._onRunSelectedClicked)
         if hasattr(self.ui, "validateButton"):
@@ -2835,6 +2840,10 @@ class SharedWidgetMixin:
         self._set_module_help_section_hidden(False, _retry=False)
         try:
             slicer.app.disconnect("aboutToQuit()", self.cleanup)
+        except Exception:
+            pass
+        try:
+            uninstall_close_guard(self)
         except Exception:
             pass
         job = getattr(self, "_setupJob", None)

@@ -27,6 +27,7 @@ from shared.model_assets import model_asset_path_or_none
 from shared.ui_error_dialogs import show_actionable_error_dialog
 from shared.ui_close_guard import install_close_guard, uninstall_close_guard
 from shared.ui_compact import close_input_format_help_popovers, install_compact_layout
+from shared.ui_help_button import close_help_popup
 from shared.ui_environment_dialog import show_environment_results_dialog
 from shared.ui_environment_paths import (
     add_environment_path_row,
@@ -634,6 +635,8 @@ class SharedWidgetMixin:
         self.addObserver(slicer.mrmlScene, slicer.mrmlScene.StartCloseEvent, self.onSceneStartClose)
         self.addObserver(slicer.mrmlScene, slicer.mrmlScene.EndCloseEvent, self.onSceneEndClose)
         self.addObserver(slicer.mrmlScene, slicer.mrmlScene.NodeRemovedEvent, self._queue_output_visibility_refresh)
+        # b2-dwi: the View input volume stepper resets when its DWI preview node goes away.
+        self.addObserver(slicer.mrmlScene, slicer.mrmlScene.NodeRemovedEvent, self._queue_input_preview_stepper_refresh)
 
         progress = getattr(self.ui, "statusProgressBar", None)
         if progress:
@@ -1717,7 +1720,7 @@ class SharedWidgetMixin:
             force=True,
         )
 
-    # ---- Input preview (H1): show the current input's mean b0 in the slice views ----
+    # ---- Input preview (H1, b2-dwi): show the current input's full DWI in the slice views ----
 
     def _input_preview_is_batch(self) -> bool:
         node = self._parameterNode
@@ -1726,12 +1729,6 @@ class SharedWidgetMixin:
         cohort = bool(getattr(node, "experimentsEnabled", False)
                       and getattr(node, "experimentScope", "subject") == "cohort")
         return cohort or bool(getattr(node, "batchMode", False))
-
-    def _input_preview_batch_root(self) -> str:
-        node = self._parameterNode
-        if getattr(node, "experimentsEnabled", False) and getattr(node, "experimentScope", "subject") == "cohort":
-            return str(getattr(node, "experimentRoot", "") or "").strip()
-        return str(getattr(node, "batchRoot", "") or "").strip()
 
     def _input_preview_pending_source(self) -> Optional[dict[str, Any]]:
         """A Prepare Inputs tile source that Run would import first (same test as _onRunSelectedClicked)."""
@@ -1752,20 +1749,19 @@ class SharedWidgetMixin:
             "kind": kind,
             "source": source,
             "bval": self._prepare_inputs_widget_text("bval"),
+            "bvec": self._prepare_inputs_widget_text("bvec") if kind == "nifti" else "",
             "mask": self._prepare_inputs_widget_text("mask") if provided else "",
             "raw": raw,
         }
 
     def _resolve_input_preview_source(self):
-        """Resolve the current subject's DWI the way input validation does (first subject in batch mode)."""
+        """Resolve the current single subject's DWI the way input validation does (batch mode has no preview)."""
         from shared.input_preview import PreviewError, resolve_preview_for_ui
 
         node = self._parameterNode
         if node is None:
             raise PreviewError("no_input")
         return resolve_preview_for_ui(
-            batch_mode=self._input_preview_is_batch(),
-            batch_root=self._input_preview_batch_root(),
             input_dir=node.inputDirectory,
             subject_id=self._effective_subject_id(),
             pending=self._input_preview_pending_source(),
@@ -1773,9 +1769,7 @@ class SharedWidgetMixin:
         )
 
     def _input_preview_key(self, source: Any = None) -> tuple:
-        """What the status line describes: the resolved DWI (the batch folder in batch mode)."""
-        if self._input_preview_is_batch():
-            return ("batch", self._input_preview_batch_root())
+        """What the status line describes: the resolved DWI."""
         if source is None:
             return ("none",)
         return ("source", str(source.dwi), str(getattr(source, "raw", None) or ""))
@@ -1788,22 +1782,24 @@ class SharedWidgetMixin:
         from shared.input_preview import PreviewError, check_preview_dependencies
 
         zh = str(getattr(self, "_onboardingLanguage", "en")).startswith("zh")
-        tooltip = ("在切片视图中显示当前输入的平均 b0 图像（如已设置脑掩膜则叠加显示）。" if zh else
-                   "Show the mean b0 image of the current input (and the brain mask, if set) in the slice views.")
+        tooltip = ("在切片视图中显示当前输入的完整 DWI（全部体积，先显示第一个 b0；如已设置脑掩膜则叠加显示）。"
+                   "数据只保存在内存中，不写入任何文件。" if zh else
+                   "Show the full DWI of the current input (all volumes, starting at the first b0, and the brain "
+                   "mask, if set) in the slice views. It stays in memory; no file is written.")
         enabled = True
         source = None
         try:
             if self._parameterNode is None:
                 raise PreviewError("no_input")
-            if self._input_preview_is_batch():
-                # Resolving scans the subject folders; do that on click, not on every refresh.
-                root = self._input_preview_batch_root()
-                if not (root and Path(root).expanduser().is_dir()):
-                    raise PreviewError("no_input")
-                check_preview_dependencies()
-            else:
-                source = self._resolve_input_preview_source()
-                check_preview_dependencies(source)  # O11: nibabel (and pynrrd for NRRD) must be importable
+            if bool(getattr(self._parameterNode, "batchMode", False)):
+                # b2 inputs-help item 3: Batch mode has no input preview. The button is hidden; keep it off and the
+                # status line empty, so nothing of the single-subject preview shows in Batch mode.
+                widgets["button"].setEnabled(False)
+                widgets["button"].setToolTip("")
+                self._set_input_preview_status("")
+                return
+            source = self._resolve_input_preview_source()
+            check_preview_dependencies(source)  # O11: nibabel (and pynrrd for NRRD) must be importable
         except PreviewError as exc:
             enabled, tooltip = False, exc.text(zh)
         except Exception as exc:
@@ -1848,19 +1844,17 @@ class SharedWidgetMixin:
         from concurrent.futures import Future
         from threading import Thread
 
-        from shared.input_preview import (
-            PreviewError,
-            check_preview_dependencies,
-            mean_b0_image,
-            show_preview_in_scene,
-        )
+        from shared import input_preview
+        from shared.input_preview import PreviewError
 
         if getattr(self, "_inputPreviewPending", False) or getattr(self, "_inputImportPending", False):
             return
+        if bool(getattr(getattr(self, "_parameterNode", None), "batchMode", False)):
+            return  # b2 inputs-help item 3: Batch mode has no input preview
         zh = str(getattr(self, "_onboardingLanguage", "en")).startswith("zh")
         try:
             source = self._resolve_input_preview_source()
-            check_preview_dependencies(source)
+            input_preview.check_preview_dependencies(source)
         except PreviewError as exc:
             self._input_preview_failed(exc.text(zh), key=self._input_preview_key(None))
             return
@@ -1868,32 +1862,40 @@ class SharedWidgetMixin:
             self._input_preview_failed(str(exc), key=self._input_preview_key(None))
             return
         key = self._input_preview_key(source)
-        if self._input_preview_is_batch():
-            # O8: the first subject that can be previewed (unconverted DICOM subjects are skipped).
-            self.appendLog(
-                f"[Input preview] Batch mode: previewing the first previewable subject, "
-                f"{source.subject_id} ({source.origin})."
-            )
-        self.appendLog(f"[Input preview] Building the mean b0 image from {source.dwi}")
+        self.appendLog(f"[Input preview] Loading the full DWI from {source.dwi}")
+        # b2-dwi: drop the earlier preview first, so its voxel memory is free before the new DWI is read.
+        try:
+            input_preview.remove_preview_nodes(slicer)
+        except Exception as exc:
+            self.appendLog(f"[Input preview] Could not remove the earlier preview: {exc}")
+        self._inputPreviewDwiNodeId = None
+        self._refresh_input_preview_stepper()
         self._inputPreviewPending = True
-        self._set_input_preview_status("正在生成平均 b0 图像…" if zh else "Building the mean b0 image…", key=key)
+        self._set_input_preview_status("正在载入完整 DWI…" if zh else "Loading the full DWI…", key=key)
         self._refresh_input_preview_controls()
         cache_dir = self._input_preview_cache_dir()
         future: Future = Future()
 
         def work() -> None:
+            # Worker thread: all file I/O and the voxel copy; writes nothing except the size fallback's cache file.
             try:
-                future.set_result(mean_b0_image(source, cache_dir))
+                future.set_result(input_preview.prepare_input_preview(source, cache_dir))
             except BaseException as exc:
                 future.set_exception(exc)
 
         def finish() -> None:
             self._inputPreviewPending = False
             try:
-                mean_b0 = future.result()
-                nodes = show_preview_in_scene(
-                    slicer, mean_b0, source.mask, subject_id=source.subject_id, log=self.appendLog
-                )
+                prepared = future.result()
+                if prepared.kind == "dwi":
+                    nodes = input_preview.show_dwi_in_scene(
+                        slicer, prepared.dwi, source.mask, subject_id=source.subject_id, log=self.appendLog
+                    )
+                    self._inputPreviewDwiNodeId = nodes.get("volume_id")
+                else:
+                    nodes = input_preview.show_preview_in_scene(
+                        slicer, prepared.mean_b0, source.mask, subject_id=source.subject_id, log=self.appendLog
+                    )
             except PreviewError as exc:
                 self._input_preview_failed(exc.text(zh), key=key)
             except Exception as exc:
@@ -1902,11 +1904,25 @@ class SharedWidgetMixin:
                 note = ""
                 if nodes.get("mask_id"):
                     note = "，并叠加脑掩膜" if zh else " with the brain mask overlay"
-                text = (f"已显示 {source.subject_id} 的平均 b0 图像{note}。" if zh
-                        else f"Showing the mean b0 image of {source.subject_id}{note}.")
-                self.appendLog(f"[Input preview] {text} ({mean_b0})")
+                if prepared.kind == "dwi":
+                    count, b_value = nodes.get("count", 0), nodes.get("b_value", 0.0)
+                    first = int(nodes.get("component", 0)) + 1
+                    text = (f"已显示 {source.subject_id} 的完整 DWI（{count} 个体积）{note}。"
+                            f"当前为体积 {first}（b = {b_value:g}），可用“体积”切换。" if zh
+                            else f"Showing the full DWI of {source.subject_id} ({count} volumes){note}. "
+                                 f"Volume {first} (b = {b_value:g}) is shown; use Volume to step.")
+                    detail = f"{prepared.estimated_bytes / float(1 << 20):.0f} MiB in memory, no file written"
+                else:
+                    shown = (f"已显示 {source.subject_id} 的平均 b0 图像{note}。" if zh
+                             else f"Showing the mean b0 image of {source.subject_id}{note}.")
+                    notice = (input_preview.gradient_notice(zh) if prepared.reason == "no_gradients"
+                              else input_preview.size_notice(prepared.estimated_bytes, prepared.limit_bytes, zh))
+                    text = notice + " " + shown
+                    detail = str(prepared.mean_b0)
+                self.appendLog(f"[Input preview] {text} ({detail})")
                 self._set_input_preview_status(text, key=key)
             self._refresh_input_preview_controls()
+            self._refresh_input_preview_stepper()
 
         def poll() -> None:
             if getattr(self, "_cleanedUp", False):
@@ -1918,6 +1934,92 @@ class SharedWidgetMixin:
 
         Thread(target=work, daemon=True).start()
         qt.QTimer.singleShot(100, poll)
+
+    # ---- b2-dwi: 'Volume i / N (b = ...)' stepper for the full-DWI preview ----
+
+    def _input_preview_dwi_node(self):
+        """The full-DWI preview node that View input made, or None when it is gone (removed, scene closed)."""
+        from shared.input_preview import PREVIEW_ATTRIBUTE
+
+        node_id = getattr(self, "_inputPreviewDwiNodeId", None)
+        if not node_id:
+            return None
+        try:
+            node = slicer.mrmlScene.GetNodeByID(node_id)
+        except Exception:
+            return None
+        if node is None or node.GetAttribute(PREVIEW_ATTRIBUTE) != "dwi" or not hasattr(node, "GetNumberOfGradients"):
+            return None
+        return node
+
+    def _refresh_input_preview_stepper(self) -> None:
+        """Show and enable the stepper only while the full-DWI preview exists; follow its display node."""
+        widgets = getattr(self, "_inputPreviewWidgets", None) or {}
+        spin = widgets.get("spin")
+        if spin is None:
+            return
+        node = self._input_preview_dwi_node()
+        display = node.GetDisplayNode() if node is not None else None
+        if display is not None and not hasattr(display, "GetDiffusionComponent"):
+            display = None
+        observed = getattr(self, "_inputPreviewObservedDisplay", None)
+        if observed is not None and observed is not display:
+            try:
+                self.removeObserver(observed, vtk.vtkCommand.ModifiedEvent, self._on_input_preview_display_modified)
+            except Exception:
+                pass
+            self._inputPreviewObservedDisplay = None
+        stepper = widgets.get("stepper")
+        if display is None:
+            self._inputPreviewDwiNodeId = None
+            spin.setEnabled(False)
+            if stepper is not None:
+                stepper.setVisible(False)
+            return
+        if getattr(self, "_inputPreviewObservedDisplay", None) is not display:
+            # Follows a change made in Slicer's Volumes module (DWI Component).
+            self.addObserver(display, vtk.vtkCommand.ModifiedEvent, self._on_input_preview_display_modified)
+            self._inputPreviewObservedDisplay = display
+        count = max(int(node.GetNumberOfGradients()), 1)
+        component = min(max(int(display.GetDiffusionComponent()), 0), count - 1)
+        blocked = spin.blockSignals(True)
+        try:
+            spin.setRange(1, count)
+            spin.setValue(component + 1)
+        finally:
+            spin.blockSignals(blocked)
+        info = widgets.get("info")
+        if info is not None:
+            info.setText(f"/ {count}  (b = {float(node.GetBValue(component)):g})")
+        # b2 inputs-help item 3: Batch mode hides the stepper and keeps it hidden on every refresh.
+        shown = not bool(getattr(getattr(self, "_parameterNode", None), "batchMode", False))
+        spin.setEnabled(shown)
+        if stepper is not None:
+            stepper.setVisible(shown)
+
+    def _on_input_preview_component_changed(self, value) -> None:
+        node = self._input_preview_dwi_node()
+        display = node.GetDisplayNode() if node is not None else None
+        if display is None or not hasattr(display, "SetDiffusionComponent"):
+            return
+        component = int(value) - 1  # the stepper counts from 1; the display node from 0
+        if int(display.GetDiffusionComponent()) != component:
+            display.SetDiffusionComponent(component)
+
+    def _on_input_preview_display_modified(self, caller=None, event=None) -> None:
+        self._refresh_input_preview_stepper()
+
+    def _queue_input_preview_stepper_refresh(self, caller=None, event=None) -> None:
+        if getattr(self, "_inputPreviewStepperRefreshPending", False):
+            return
+        self._inputPreviewStepperRefreshPending = True
+
+        def refresh():
+            self._inputPreviewStepperRefreshPending = False
+            if not getattr(self, "_cleanedUp", False):
+                self._refresh_input_preview_stepper()
+
+        qt.QTimer.singleShot(0, refresh)
 
     def _input_import_selection(self) -> tuple:
         source_kind = self._prepareInputWidgets["source_kind"]
@@ -2940,6 +3042,7 @@ class SharedWidgetMixin:
             return
         self._cleanedUp = True
         close_input_format_help_popovers(self, destroy=True)
+        close_help_popup(self, destroy=True)
         try:
             from shared.ui_update_panel import cleanup_update_panel
 
@@ -3022,6 +3125,7 @@ class SharedWidgetMixin:
 
     def exit(self) -> None:
         close_input_format_help_popovers(self, destroy=False)
+        close_help_popup(self)
         self._set_module_help_section_hidden(False, _retry=False)
         if self._parameterNode:
             if self._parameterNodeGuiTag is not None:
@@ -3048,6 +3152,7 @@ class SharedWidgetMixin:
 
     def onSceneEndClose(self, caller, event) -> None:
         self._queue_output_visibility_refresh()
+        self._queue_input_preview_stepper_refresh()
         if self.parent.isEntered:
             self.initializeParameterNode()
 

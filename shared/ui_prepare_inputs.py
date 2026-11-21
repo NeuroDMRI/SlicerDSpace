@@ -123,7 +123,11 @@ def _make_input_drop_tile(qt: Any, owner: Any, key: str) -> tuple[Any, bool]:
 
 
 def place_input_preview_button(owner: Any, batch: Any = None) -> None:
-    """Keep 'View input' aligned next to NIfTI/NRRD/DICOM in Single mode, and below Batch Folder in Batch mode."""
+    """Keep 'View input' aligned next to NIfTI/NRRD/DICOM, and hide it and its row in Batch mode.
+
+    b2 inputs-help item 3: Batch mode has no input preview. The button stays in the format header (inside the Prepare
+    Inputs panel, which Batch mode hides); the preview row (volume stepper and status line) is hidden with it.
+    """
     import qt
 
     preview = getattr(owner, "_inputPreviewWidgets", None)
@@ -138,18 +142,33 @@ def place_input_preview_button(owner: Any, batch: Any = None) -> None:
         is_batch = bool(getattr(node, "batchMode", False)) if node is not None else False
     else:
         is_batch = bool(batch)
-    if not is_batch and format_header is not None:
+    if format_header is not None:
         if preview_layout is not None and preview_layout.indexOf(button) >= 0:
             preview_layout.removeWidget(button)
         if format_header.indexOf(button) < 0:
             format_header.addWidget(button, 0, qt.Qt.AlignRight | qt.Qt.AlignVCenter)
-    else:
-        if format_header is not None and format_header.indexOf(button) >= 0:
-            format_header.removeWidget(button)
-        if preview_layout is not None and preview_layout.indexOf(button) < 0:
-            preview_layout.insertWidget(0, button, 0, qt.Qt.AlignLeft)
-    if hasattr(button, "show"):
-        button.show()
+    elif preview_layout is not None and preview_layout.indexOf(button) < 0:
+        preview_layout.insertWidget(0, button, 0, qt.Qt.AlignLeft)
+    button.setVisible(not is_batch)
+    row = preview.get("row")
+    if row is not None:
+        row.setVisible(not is_batch)
+
+
+def _field_with_help(owner: Any, qt: Any, parent: Any, field: Any, key: str) -> Any:
+    """A row holding ``field`` and, at its right, the "?" button for help ``key``."""
+
+    from shared.ui_help_button import make_help_button
+
+    wrapper = qt.QWidget(parent)
+    wrapper.setMinimumWidth(0)
+    wrapper.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Preferred)
+    row = qt.QHBoxLayout(wrapper)
+    row.setContentsMargins(0, 0, 0, 0)
+    row.setSpacing(4)
+    row.addWidget(field, 1)
+    row.addWidget(make_help_button(owner, qt, wrapper, key), 0, qt.Qt.AlignVCenter)
+    return wrapper
 
 
 def install_prepare_inputs_panel(owner: Any, configuration_layout: Any) -> None:
@@ -225,8 +244,10 @@ def install_prepare_inputs_panel(owner: Any, configuration_layout: Any) -> None:
     subject_fields = qt.QStackedWidget(section)
     subject_labels.addWidget(owner.ui.subjectIdLabel)
     subject_labels.addWidget(batch_label)
-    subject_fields.addWidget(owner.ui.subjectIdLineEdit)
-    subject_fields.addWidget(batch_root)
+    # b2 inputs-help: a "?" at the right of Subject ID (single page) and of Batch Folder (batch page). The "?" is a
+    # sibling of the field in a wrapper row, never a child of the path edit, so the field keeps its own layout.
+    subject_fields.addWidget(_field_with_help(owner, qt, section, owner.ui.subjectIdLineEdit, "subject_id"))
+    subject_fields.addWidget(_field_with_help(owner, qt, section, batch_root, "batch_folder"))
     subject_fields.setMinimumWidth(0)
     subject_fields.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Preferred)
     form.setWidget(0, qt.QFormLayout.LabelRole, subject_labels)
@@ -427,6 +448,12 @@ def sync_input_mode(owner):
     fields["subject_fields"].setCurrentIndex(int(batch))
     fields["mask_tile"].setVisible(not batch and getattr(node, "brainMaskBackend", "") == "provided")
     place_input_preview_button(owner, batch=batch)
+    output_help = fields.get("output_help")
+    if output_help is not None:
+        output_help.setVisible(batch)  # b2 inputs-help: the Output Folder "?" describes the batch layout
+    refresh_stepper = getattr(owner, "_refresh_input_preview_stepper", None)
+    if callable(refresh_stepper):
+        refresh_stepper()  # hidden in Batch mode; back with its state in Single mode (the button's state: Run refresh)
     owner._sync_path_widget(fields["batch_root"], getattr(node, "batchRoot", "") or "")
     fields["single_mode"].setEnabled(not owner._pipelineActive)
     fields["batch_mode"].setEnabled(not owner._pipelineActive)
@@ -463,6 +490,9 @@ def apply_input_language(owner):
         fields["batch_label"].setText("批量输入目录" if zh else "Batch Folder")
         fields["batch_root"].setToolTip("选择包含多个受试者文件夹的目录。" if zh else
                                         "Select the folder containing the subject folders.")
+    from shared.ui_help_button import apply_help_language
+
+    apply_help_language(owner)
     owner.ui.outputDirectoryLabel.setText("输出文件夹" if zh else "Output folder")
     owner.ui.outputDirectoryPath.setToolTip(
         "选择结果保存位置。留空则使用默认位置。" if zh else
@@ -574,6 +604,9 @@ def refresh_prepare_inputs_styles(owner: Any, *, dark: bool | None = None) -> No
         f"QWidget#dspaceInputTile[missing=\"true\"] QLabel#dspaceInputHint {{ color: {missing_ink}; }}"
         "QWidget#dspaceInputTile[missing=\"true\"] QPlainTextEdit { padding-right: 96px; }"
     )
+    from shared.ui_help_button import refresh_help_styles
+
+    refresh_help_styles(owner, dark=dark)  # b2 inputs-help: the "?" buttons and an open popup
 
 
 def import_dicom_series(config, series):
@@ -903,9 +936,15 @@ def _install_refresh_button(owner: Any, qt: Any, section: Any, fields: dict) -> 
     button.clicked.connect(lambda _checked=False: owner._on_refresh_inputs_clicked())
     layout.addWidget(path, 1)
     layout.addWidget(button, 0)
+    from shared.ui_help_button import make_help_button
+
+    output_help = make_help_button(owner, qt, container, "output_folder")  # b2 inputs-help: shown in Batch mode only
+    layout.addWidget(output_help, 0, qt.Qt.AlignVCenter)
+    output_help.setVisible(bool(getattr(getattr(owner, "_parameterNode", None), "batchMode", False)))
     form.setWidget(row, qt.QFormLayout.FieldRole, container)
     fields["refresh_button"] = button
     fields["output_row"] = container
+    fields["output_help"] = output_help
 
 
 def _inputs_busy(owner: Any) -> bool:

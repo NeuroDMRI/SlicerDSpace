@@ -24,7 +24,6 @@ from shared.input_preview import (  # noqa: E402
     PreviewError,
     PreviewSource,
     check_preview_dependencies,
-    first_batch_source,
     mean_b0_image,
     preview_cache_path,
     resolve_pending_source,
@@ -125,11 +124,11 @@ class DetachedNrrdTest(unittest.TestCase):
         nhdr, _raw = write_detached_nrrd(self.root / "own")
         _n, other_raw = write_detached_nrrd(self.root / "other", fill=100.0)
         pending = {"kind": "nrrd", "source": str(nhdr), "bval": "", "mask": "", "raw": str(other_raw)}
-        source = resolve_preview_for_ui(batch_mode=False, input_dir="", subject_id="s", pending=pending)
+        source = resolve_preview_for_ui(input_dir="", subject_id="s", pending=pending)
         self.assertEqual(source.raw, other_raw.resolve())
         pending["raw"] = str(self.root / "nope.raw")
         with self.assertRaises(PreviewError) as caught:
-            resolve_preview_for_ui(batch_mode=False, input_dir="", subject_id="s", pending=pending)
+            resolve_preview_for_ui(input_dir="", subject_id="s", pending=pending)
         self.assertEqual(caught.exception.code, "bad_data")
 
     def test_c1_widget_pending_source_includes_the_selected_raw_only_for_an_nhdr(self):
@@ -413,28 +412,6 @@ class BatchAndDependencyTest(unittest.TestCase):
         self.root = Path(self._tmp.name)
         self.addCleanup(self._tmp.cleanup)
 
-    def test_o8_batch_skips_an_unconverted_dicom_subject_and_uses_the_next(self):
-        for name in ("sub-a", "sub-b", "sub-c"):
-            (self.root / name).mkdir()
-        root_b = self.root / "sub-b"
-
-        def inspect(path, subject_id):
-            if subject_id == "sub-a":
-                return {"mode": "dicom"}
-            return {"mode": "subject_root", "subject_root": str(Path(path))}
-
-        source = first_batch_source(self.root, inspect)
-        self.assertEqual(source.subject_id, "sub-b")
-        self.assertEqual(Path(source.origin).resolve(), root_b.resolve())
-
-    def test_o8_batch_with_only_dicom_subjects_gives_the_convert_first_reason(self):
-        for name in ("sub-a", "sub-b"):
-            (self.root / name).mkdir()
-        with self.assertRaises(PreviewError) as caught:
-            first_batch_source(self.root, lambda path, subject_id: {"mode": "dicom"})
-        self.assertEqual(caught.exception.code, "dicom_unconverted")
-        self.assertEqual(caught.exception.text(), "Convert inputs first (Prepare Inputs)")
-
     def test_o11_missing_nibabel_or_pynrrd_is_reported_with_the_package_name(self):
         nifti = PreviewSource("nifti", Path("a"), None, None, "s")
         nrrd_source = PreviewSource("nrrd", Path("a"), None, None, "s")
@@ -484,7 +461,6 @@ class BatchAndDependencyTest(unittest.TestCase):
         me._parameterNode = object()
         me._current = source
         me._input_preview_is_batch = lambda: batch
-        me._input_preview_batch_root = lambda: str(self.root)
 
         def resolve():
             if isinstance(me._current, Exception):

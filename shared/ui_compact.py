@@ -1078,10 +1078,11 @@ def organize_environment_section(owner: Any) -> None:
 
 
 def install_input_preview_controls(owner: Any) -> None:
-    """Add the 'View input' button and its status label to the end of 1. Inputs (H1).
+    """Add the 'View input' button, its volume stepper and its status label to the end of 1. Inputs (H1).
 
-    The row lives in ``configurationLayout`` outside the Prepare Inputs panel, so it stays
-    visible in batch mode (where that panel is hidden).
+    The row lives in ``configurationLayout`` outside the Prepare Inputs panel. b2-dwi: the 'Volume i / N (b = ...)'
+    stepper stays hidden until a full-DWI preview exists (the owner's ``_refresh_input_preview_stepper``).
+    b2 inputs-help: Batch mode hides the button and this row (``place_input_preview_button``).
     """
 
     if getattr(owner, "_inputPreviewWidgets", None) is not None:
@@ -1102,6 +1103,29 @@ def install_input_preview_controls(owner: Any) -> None:
     pointing = getattr(qt.Qt, "PointingHandCursor", None)
     if pointing is not None and hasattr(button, "setCursor"):
         button.setCursor(pointing)
+    stepper = qt.QWidget()
+    stepper.setObjectName("inputPreviewStepper")
+    stepper_layout = qt.QHBoxLayout(stepper)
+    stepper_layout.setContentsMargins(0, 0, 0, 0)
+    stepper_layout.setSpacing(4)
+    stepper_label = qt.QLabel()
+    stepper_label.setObjectName("inputPreviewStepperLabel")
+    spin = qt.QSpinBox()
+    spin.setObjectName("inputPreviewComponentSpinBox")
+    spin.setRange(1, 1)
+    spin.setSizePolicy(qt.QSizePolicy.Maximum, qt.QSizePolicy.Fixed)
+    spin.setEnabled(False)
+    info = qt.QLabel()
+    info.setObjectName("inputPreviewStepperInfo")
+    info.setTextFormat(qt.Qt.PlainText)
+    info.setMinimumWidth(0)
+    # The info text never sets a minimum width, so the panel-fit logic is not widened by it.
+    info.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Preferred)
+    stepper_layout.addWidget(stepper_label)
+    stepper_layout.addWidget(spin)
+    stepper_layout.addWidget(info, 1)
+    stepper.hide()
+    row_layout.addWidget(stepper)
     status = qt.QLabel()
     status.setObjectName("inputPreviewStatusLabel")
     status.setWordWrap(True)
@@ -1110,9 +1134,13 @@ def install_input_preview_controls(owner: Any) -> None:
     status.hide()
     row_layout.addWidget(status)
     button.clicked.connect(lambda *_args: owner._on_input_preview_clicked())
+    spin.connect("valueChanged(int)", lambda value: owner._on_input_preview_component_changed(value))
     layout.addWidget(row)
     owner.ui.inputPreviewButton = button
-    owner._inputPreviewWidgets = {"row": row, "layout": row_layout, "button": button, "status": status}
+    owner._inputPreviewWidgets = {
+        "row": row, "layout": row_layout, "button": button, "status": status,
+        "stepper": stepper, "stepper_label": stepper_label, "spin": spin, "info": info,
+    }
     from shared.ui_prepare_inputs import place_input_preview_button
     place_input_preview_button(owner)
     refresh_input_preview_controls(owner)
@@ -1130,14 +1158,26 @@ def refresh_input_preview_controls(owner: Any, language: str | None = None) -> N
     button.setText("预览输入" if zh else "View input")
     if hasattr(button, "setAccessibleName"):
         button.setAccessibleName("预览输入" if zh else "View input")
+    stepper_label, spin = widgets.get("stepper_label"), widgets.get("spin")
+    if stepper_label is not None:
+        stepper_label.setText("体积" if zh else "Volume")
+    if spin is not None:
+        spin.setToolTip(
+            "逐个查看 DWI 体积（从 1 开始计数）。Volumes 模块中的 DWI Component 显示同一体积，但从 0 开始计数。" if zh
+            else "Step through the DWI volumes (counted from 1). The Volumes module's DWI Component shows the "
+                 "same volume, counted from 0."
+        )
     refresh = getattr(owner, "_refresh_input_preview_controls", None)
     if callable(refresh):
         refresh()
     else:
         button.setToolTip(
-            "在切片视图中显示当前输入的平均 b0 图像。" if zh
-            else "Show the mean b0 image of the current input in the slice views."
+            "在切片视图中显示当前输入的完整 DWI（先显示第一个 b0）。" if zh
+            else "Show the full DWI of the current input in the slice views, starting at the first b0."
         )
+    stepper_refresh = getattr(owner, "_refresh_input_preview_stepper", None)
+    if callable(stepper_refresh):
+        stepper_refresh()
 
 
 def install_compact_layout(owner: Any) -> None:

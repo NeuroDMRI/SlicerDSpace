@@ -317,6 +317,59 @@ exit 0
         with mock.patch.dict(os.environ, {'DSP_WMA_EXECUTION_BACKEND': 'native'}):
             self.assertFalse(_wma_complete(self.output_dir, **resume_args))
 
+    @unittest.skipIf(sys.platform == 'win32', 'Uses the POSIX author shell fixture')
+    def test_resume_rejects_wma_rerun_killed_before_its_qc_was_written(self):
+        """WMA stale accept: a killed rerun leaves the new manifest next to the previous run's QC."""
+        from shared.orchestrator import _wma_complete
+        from tractography.wma import WMAOrgAtlasConfig, run_wma_org_atlas
+
+        class HardKill(BaseException):
+            """Stands for SIGKILL, a crash or a power loss: the run ends before it writes its QC."""
+
+        config = WMAOrgAtlasConfig(subject_id='subject', input_tractography=self.tractography,
+            atlas_dir=self.atlas_dir, output_dir=self.output_dir, slicer_executable=self.slicer_executable,
+            wma_root=self.wma_root, execute=True)
+        resume_args = dict(input_tractography=self.tractography, atlas_dir=self.atlas_dir, wma_root=self.wma_root)
+        with mock.patch.dict(os.environ, {'DSP_WMA_EXECUTION_BACKEND': 'legacy', 'DISPLAY': ':1'}):
+            self.assertEqual(run_wma_org_atlas(config).status, 'completed')
+            self.assertTrue(_wma_complete(self.output_dir, **resume_args))
+
+            # The tractogram is regenerated at the same path, so the old result is out of date.
+            self.tractography.write_text('# vtk DataFile Version 3.0\nregenerated tractogram\n', encoding='utf-8')
+            self.assertFalse(_wma_complete(self.output_dir, **resume_args))
+
+            with mock.patch('tractography.wma.subprocess.run', side_effect=HardKill):
+                with self.assertRaises(HardKill):
+                    run_wma_org_atlas(config)
+
+            manifest = json.loads((self.output_dir / 'wma_org_atlas_manifest.json').read_text(encoding='utf-8'))
+            qc = json.loads((self.output_dir / 'wma_org_atlas_qc.json').read_text(encoding='utf-8'))
+            self.assertEqual(manifest['status'], 'running')
+            self.assertEqual(qc['status'], 'completed')  # still the previous run's QC
+            self.assertFalse(_wma_complete(self.output_dir, **resume_args))
+
+    @unittest.skipIf(sys.platform == 'win32', 'Uses the POSIX author shell fixture')
+    def test_resume_requires_an_executed_completed_wma_manifest(self):
+        """WMA stale accept: the manifest status is part of the completion check."""
+        from shared.orchestrator import _wma_complete
+        from tractography.wma import WMAOrgAtlasConfig, run_wma_org_atlas
+
+        config = WMAOrgAtlasConfig(subject_id='subject', input_tractography=self.tractography,
+            atlas_dir=self.atlas_dir, output_dir=self.output_dir, slicer_executable=self.slicer_executable,
+            wma_root=self.wma_root, execute=True)
+        resume_args = dict(input_tractography=self.tractography, atlas_dir=self.atlas_dir, wma_root=self.wma_root)
+        manifest_path = self.output_dir / 'wma_org_atlas_manifest.json'
+        with mock.patch.dict(os.environ, {'DSP_WMA_EXECUTION_BACKEND': 'legacy', 'DISPLAY': ':1'}):
+            self.assertEqual(run_wma_org_atlas(config).status, 'completed')
+            completed = json.loads(manifest_path.read_text(encoding='utf-8'))
+            self.assertTrue(_wma_complete(self.output_dir, **resume_args))
+            for changes in ({'status': 'running'}, {'status': 'failed'}, {'executed': False}):
+                with self.subTest(changes=changes):
+                    manifest_path.write_text(json.dumps({**completed, **changes}), encoding='utf-8')
+                    self.assertFalse(_wma_complete(self.output_dir, **resume_args))
+            manifest_path.write_text(json.dumps(completed), encoding='utf-8')
+            self.assertTrue(_wma_complete(self.output_dir, **resume_args))
+
     def test_windows_prefers_explicit_executable_bridge(self):
         from tractography.wma import _wma_script_path, _command_path, resolve_wma_root
         alias = self.wma_script.with_name(self.wma_script.name + '.exe')

@@ -43,6 +43,17 @@ Opus and Codex rounds was fixed in the fix rounds, with tests. These items stay 
 | Opus r3 P2-1 | P2 | On a mount whose `flock` fails with an errno outside EAGAIN/EACCES/EDEADLK (ENOLCK/ENOTSUP on some NFS/SMB), every overlay apply refuses with "check that the extension folder is writable". | Put the errno in the message, or say that file locking is not supported there. |
 | Opus r3 P2-2 | P2 | `--jobs 1` does not clear an inherited `SLICERDSPACE_PARALLEL_SUBJECTS`; in a `--jobs > 1` run the last subject can run alone and still skips the LE-3 GPU check. | Pop the variable when one subject runs; accept the tail case. |
 
+## 21 November 2026: WMA resume must not accept a killed rerun
+
+Scope: branch `fix/wma-stale-resume`. Round 1: Opus no blocking item; Codex 1 item (Windows skip for a new test), fixed.
+These items stay open. Decide by 5 December 2026.
+
+| Source | Label | Item | Proposed fix |
+|---|---|---|---|
+| Opus P2 | P2 | `scripts/audit_bundle_products.py --update-qc` is a second writer of the WMA manifest status. On a killed-rerun folder it can set `status='completed'` when the new input contains every old streamline; `_wma_complete` then accepts the old products. Plain resume cannot reach this state; it needs this manual step. | In `update_qc_records`, refuse a manifest whose status is `running`. |
+| Codex / author | P2 | `test_resume_does_not_reuse_legacy_output_for_native_org` (older test, same POSIX fixture) has no Windows skip; with `tractography.wma.sys.platform` patched to `win32` it gives errors=1 ("Windows WMA requires the managed WSL command bridge"). | Add the same `skipIf(win32)` decorator. |
+| Author | P2 | `run_wma_org_atlas` leaves the previous run's QC (`status: completed`) on disk while a rerun is in progress. The resume check no longer trusts it, but another reader of the QC file could. | Write a `running` QC at the start of an executed run, after `archive_run_records`. |
+
 ## 21 November 2026: CI matrix, installer reinstall (I1), Linux glibc floor (G1)
 
 Scope: branch `ci/compat-matrix-fix`. Every blocking item from the Opus and Codex rounds was fixed, with tests. These items

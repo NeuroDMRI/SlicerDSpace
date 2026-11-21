@@ -1339,6 +1339,11 @@ def _wma_complete(
             return False
 
         manifest = _read_json(manifest_path)
+        # A rerun rewrites the manifest ("running", new dependencies) at its start and the QC only
+        # at its end. A rerun killed in between leaves the previous run's QC next to the new
+        # manifest, so the QC alone does not prove that this manifest's run completed.
+        if manifest.get("status") != "completed" or manifest.get("executed") is not True:
+            return False
         if manifest.get("atlas_family", "org") != atlas_family:
             return False
         execution_backend = resolve_wma_execution_backend(

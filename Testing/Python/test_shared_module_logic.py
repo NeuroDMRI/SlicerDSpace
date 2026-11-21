@@ -130,7 +130,8 @@ class SharedModuleLogicTest(unittest.TestCase):
             self.assertTrue(loaded)
             self.assertEqual(node.name, "bundle")
             self.assertEqual(node.attributes["SlicerDDSurfer.SourcePath"], tractogram.as_posix())
-            self.assertEqual(node.attributes["SlicerDDSurfer.DisplayFallback"], "vtkMRMLModelNode")
+            # B2 fiber display: the model node is the one native display, not a fallback for SlicerDMRI.
+            self.assertNotIn("SlicerDDSurfer.DisplayFallback", node.attributes)
 
 
 if __name__ == "__main__":

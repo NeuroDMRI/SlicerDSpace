@@ -1073,7 +1073,31 @@ def _publish_parcellation_outputs(stage_outputs: dict[str, Path], layout, subjec
         return {}
     dest = layout.brain_parcellation / f"{subject_id}_parcellation.nii.gz"
     pub = _publish_optional(src, dest)
-    return {"wmparc": (pub or Path(src)).as_posix()}
+    published = {"wmparc": (pub or Path(src)).as_posix()}
+    if pub is not None:
+        published.update(_write_parcellation_label_tables(pub, subject_id))
+    return published
+
+
+def _write_parcellation_label_tables(label_path: Path, subject_id: str) -> dict[str, str]:
+    """B2: the names and colours of the ids present, beside the unchanged label NIfTI. Never blocks a run.
+
+    The tables are not in ``_parcellation_outputs`` or the receipts, so resume and completeness do not change.
+    """
+
+    ctbl = label_path.parent / f"{subject_id}_parcellation.ctbl"
+    freesurfer = label_path.parent / f"{subject_id}_parcellation_lut.txt"
+    try:
+        label_time = label_path.stat().st_mtime_ns
+        if all(path.is_file() and path.stat().st_mtime_ns >= label_time for path in (ctbl, freesurfer)):
+            # Resume: current tables keep their stamp, so Slicer reuses the loaded colour node.
+            return {"color_table": ctbl.as_posix(), "freesurfer_lut": freesurfer.as_posix()}
+        from anatomy.parcellation.label_table import write_label_tables
+
+        write_label_tables(label_path, ctbl, freesurfer)
+    except Exception:  # an unreadable label file or a missing reader: the run keeps its NIfTI result
+        return {}
+    return {"color_table": ctbl.as_posix(), "freesurfer_lut": freesurfer.as_posix()}
 
 
 def _publish_surface_outputs(stage_dir: Path, models: Iterable[Path] | dict[str, Path], layout, subject_id: str) -> dict[str, str]:

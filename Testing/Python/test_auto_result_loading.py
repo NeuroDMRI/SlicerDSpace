@@ -50,6 +50,29 @@ class Node:
         self.polydata = data
 
 
+class ColorNode(Node):
+    """B2: the DDSeg tissue colour table the categorical loader now creates."""
+
+    def __init__(self, identity, kind):
+        super().__init__(identity, kind)
+        self.count, self.names = 0, {}
+
+    def SetTypeToUser(self):
+        pass
+
+    def SetNumberOfColors(self, count):
+        self.count = count
+
+    def GetNumberOfColors(self):
+        return self.count
+
+    def GetLookupTable(self):
+        return Mock()
+
+    def SetColor(self, label, name, *_rgba):
+        self.names[label] = name
+
+
 class Scene:
     def __init__(self):
         self.nodes = []
@@ -57,7 +80,7 @@ class Scene:
 
     def AddNewNodeByClass(self, kind, name):
         self.next_id += 1
-        node = Node("node" + str(self.next_id), kind)
+        node = (ColorNode if kind == "vtkMRMLColorTableNode" else Node)("node" + str(self.next_id), kind)
         self.nodes.append(node)
         return node
 
@@ -92,8 +115,10 @@ class AutoResultLoadingTest(unittest.TestCase):
             mrmlScene=self.scene,
             vtkMRMLStorageNode=types.SimpleNamespace(CoordinateSystemRAS=0, CoordinateSystemLPS=1),
             util=types.SimpleNamespace(
+                # B2: colour tables (DDSeg tissue colours) are not displayable result nodes, as in Slicer.
                 getNodesByClass=lambda kind: [node for node in self.scene.nodes if
-                    (node.kind == "vtkMRMLTableNode") == (kind == "vtkMRMLTableNode")],
+                    (node.kind == kind if kind in {"vtkMRMLTableNode", "vtkMRMLColorTableNode"}
+                     else node.kind not in {"vtkMRMLTableNode", "vtkMRMLColorTableNode"})],
                 loadVolume=load_volume,
                 loadLabelVolume=lambda *a, **kw: self.scene.AddNewNodeByClass("vtkMRMLLabelMapVolumeNode", "label"),
                 setSliceViewerLayers=Mock(), resetSliceViews=Mock(), resetThreeDViews=Mock(),
@@ -154,7 +179,8 @@ class AutoResultLoadingTest(unittest.TestCase):
         second = self.logic.loadKeyResultsFromManifest(path)
         self.assertFalse(second["loaded"])
         self.assertIn("Source changed", second["skipped"][-1]["reason"])
-        self.assertEqual(len(self.scene.nodes), len(first["loaded"]))
+        # B2: the shared DDSeg tissue colour table is a scene node too, not a result node.
+        self.assertEqual(len([node for node in self.scene.nodes if not isinstance(node, ColorNode)]), len(first["loaded"]))
 
     def test_failed_bundle_retracts_only_automatic_nodes_without_file_path(self):
         path = self.root / 'run.json'

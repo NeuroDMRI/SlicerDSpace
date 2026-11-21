@@ -172,14 +172,12 @@ def _refresh_surface_postprocess_tooltip(owner: Any, ui: Any, zh: bool) -> None:
     control = getattr(ui, "targetSurfacePostprocessCheckBox", None)
     if control is None or not hasattr(control, "setToolTip"):
         return
-    if not hasattr(owner, "_surfacePostprocessBaseToolTip"):
-        base = getattr(control, "toolTip", "")
-        try:
-            owner._surfacePostprocessBaseToolTip = base() if callable(base) else str(base or "")
-        except Exception:
-            return
+    from shared.ui_onboarding import onboarding_text
+
     block = surface_postprocess_block_tooltip(owner, zh=zh)
-    tooltip = block or owner._surfacePostprocessBaseToolTip
+    # b2-os F3: no stored tooltip; without a block the row shows the onboarding text of the UI language, as the
+    # language binding (MAIN_UI_TOOLTIP_BINDINGS) does, so a language switch keeps the translation.
+    tooltip = block or onboarding_text("zh" if zh else "en", "surface_postprocess_tooltip")
     if getattr(control, "toolTip", None) != tooltip:
         control.setToolTip(tooltip)
     # Decision 6: grey the row label (not the checkbox, so the stored tick can still be removed); undo it afterwards.

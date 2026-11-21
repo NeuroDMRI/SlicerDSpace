@@ -198,6 +198,46 @@ from shared.ui_environment_check import start_environment_check
 ENVIRONMENT_DEPENDENCY_PATHS = UI_DEPENDENCY_PATHS
 
 
+class _SurfaceOsBlock:
+    """b2-os F1: why the Run leaves out ``name``: Surface postprocess cannot run on this OS (remedy 'none').
+
+    ``name`` is ``surface_postprocess``, ``saf`` (the tracking algorithm) or a product target that needs the step.
+    """
+
+    def __init__(self, state, name):
+        self.state, self.name = dict(state or {}), name
+
+    @staticmethod
+    def _zh(lang):
+        return str(lang or "").lower().startswith("zh")
+
+    def reason(self, lang="en"):
+        return str((self.state.get("reason_zh") if self._zh(lang) else None) or self.state.get("reason") or "")
+
+    def label(self, lang="en"):
+        if self.name == "saf":
+            from shared.algorithm_selection import LABELS
+            return LABELS["saf"]
+        return onboarding_text("zh" if self._zh(lang) else "en", self.name)
+
+    def text(self, lang="en"):
+        if self.name == "surface_postprocess":
+            return self.reason(lang)
+        if self._zh(lang):
+            return "需要表面后处理，而本机无法运行表面后处理：" + self.reason(lang)
+        return "needs Surface postprocess, which cannot run on this Mac: " + self.reason(lang)
+
+    def log_line(self, lang="en"):
+        if self._zh(lang):
+            return f"已跳过 {self.label(lang)}：{self.text(lang)}"
+        return f"Skipped {self.label(lang)}: {self.text(lang)}"
+
+    def nothing_to_run(self, lang, labels):
+        if self._zh(lang):
+            return f"本机没有可运行的分析：已跳过 {'、'.join(labels)}。{self.reason(lang)}"
+        return f"Nothing to run on this Mac: skipped {', '.join(labels)}. {self.reason(lang)}"
+
+
 class SharedWidgetMixin:
     """Shared UI helpers used across the unified SlicerDSpace widget."""
 
@@ -3553,8 +3593,8 @@ class SharedWidgetMixin:
         Returns ``(DataFilteredRun, blocks)``. The parameter node is never written: the stored selection stays, and
         the algorithm runs again when the data fits. Batch mode is not filtered for data (subjects can differ).
         ``fresh=False`` (the "Also runs automatically" note) reuses the per-event cache of the family summary.
-        b2-os, decision 6: a stored Surface postprocess that this OS cannot run (remedy 'none') is skipped too, also in
-        batch mode (the OS is the same for every subject).
+        b2-os, decision 6 and fix F1: a Surface postprocess that this OS cannot run (remedy 'none') is skipped, with
+        every ticked target whose closure requires it (SAF), also in batch mode (the OS is the same for every subject).
         """
         if not self._parameterNode:
             return None
@@ -3565,12 +3605,21 @@ class SharedWidgetMixin:
 
             blocks = current_data_blocks(self, fresh=fresh)  # F3: the click keeps fresh=True, never the per-event cache
             filtered = filter_run_for_data(flags, self._microstructure_stages_text(), set(blocks))
-        os_block = self._surface_postprocess_os_block(flags)
-        if os_block is None:
+        os_skips = self._os_filtered_run(filtered)
+        if os_skips is None:
             return None if filtered is None else (filtered, blocks)
-        if filtered is None:
-            from shared.ui_run_controller import DataFilteredRun, selected_microstructure_stages
+        return os_skips[0], dict(blocks, **os_skips[1])
 
+    def _os_filtered_run(self, filtered=None):
+        """b2-os F1: ``(DataFilteredRun, blocks)`` without the OS-blocked Surface postprocess and what needs it, or None.
+
+        ``filtered`` is the request after the data skip (``None``: the stored selection). Only the request changes.
+        """
+        from dataclasses import replace
+        from shared.ui_run_controller import DataFilteredRun, filter_run_for_os_blocked_surface
+
+        if filtered is None:
+            flags = self._product_target_flags()
             freewater, noddi = self._microstructure_stage_flags()
             filtered = DataFilteredRun(
                 flags=flags,
@@ -3580,39 +3629,44 @@ class SharedWidgetMixin:
                 freewater=freewater, noddi=noddi,
                 dki=self._microstructure_dki_enabled(), ifw=self._microstructure_ifw_enabled(),
             )
-        from dataclasses import replace
+        base = filtered
 
-        filtered = replace(filtered, flags=replace(filtered.flags, surface_postprocess=False),
-                           skipped=tuple(filtered.skipped) + ("surface_postprocess",))
-        return filtered, dict(blocks, surface_postprocess=os_block)
+        def closure_of(flags, tracking):
+            return self._data_filtered_closure(replace(base, flags=flags, tractography_backend=tracking))
 
-    def _surface_postprocess_os_block(self, flags):
-        """b2-os: a ``text(lang)`` reason when the stored Surface postprocess cannot run on this OS (remedy none)."""
-        if not getattr(flags, "surface_postprocess", False):
+        result = filter_run_for_os_blocked_surface(base, self._tractography_backend_text(), closure_of)
+        if result is None:
+            return None  # the request does not need Surface postprocess: no OS check is needed
+        state = self._surface_postprocess_os_state()
+        if not state:
             return None
+        run, skipped = result
+        return run, {name: _SurfaceOsBlock(state, name) for name in skipped}
+
+    def _surface_postprocess_os_state(self):
+        """b2-os: the runtime state when this OS cannot run Surface postprocess and nothing can fix it, else None."""
         try:
             from shared.surface_runtime import surface_postprocess_os_skip
 
-            state = surface_postprocess_os_skip(self._environment_dependency_path_kwargs())
+            return surface_postprocess_os_skip(self._environment_dependency_path_kwargs()) or None
         except Exception:
             return None
-        if not state:
-            return None
 
-        class _OsBlock:
-            @staticmethod
-            def text(lang="en"):
-                zh = str(lang or "").lower().startswith("zh")
-                return str((state.get("reason_zh") if zh else None) or state.get("reason") or "")
-
-        return _OsBlock()
+    def _os_filtered_closure(self):
+        """b2-os F6: the closure of the stored selection after the OS skip (the on-demand check uses it)."""
+        try:
+            skips = self._os_filtered_run()
+        except Exception:
+            skips = None
+        return self._data_filtered_closure(skips[0]) if skips is not None else self._selected_closure()
 
     def _data_filtered_closure(self, filtered):
         """The prerequisite closure of the request after ``_data_filtered_run`` (same inputs as ``_selected_closure``)."""
         from shared.ui_bundle_source import node_bundle_sources
         return selected_closure(
             filtered.flags,
-            tractography_backend=self._tractography_backend_text(),
+            # b2-os F1: the OS skip can remove SAF from the tracking algorithms of the request.
+            tractography_backend=getattr(filtered, "tractography_backend", "") or self._tractography_backend_text(),
             bundle_backend=self._bundle_backend_text(),
             microstructure_dti=filtered.dti,
             microstructure_freewater=filtered.freewater,
@@ -3626,9 +3680,21 @@ class SharedWidgetMixin:
     def _log_data_skips(self, filtered, blocks) -> None:
         from shared.algorithm_selection import LABELS
 
-        labels = dict(LABELS, surface_postprocess="Surface postprocess")
+        lang = getattr(self, "_onboardingLanguage", "en") or "en"
         for algorithm in filtered.skipped:
-            self.appendLog(f"Skipped {labels.get(algorithm, algorithm)}: {blocks[algorithm].text('en')}")
+            block = blocks[algorithm]
+            if isinstance(block, _SurfaceOsBlock):  # b2-os F1/F8: the OS skip line follows the UI language
+                self.appendLog(block.log_line(lang))
+            else:
+                self.appendLog(f"Skipped {LABELS.get(algorithm, algorithm)}: {block.text('en')}")
+
+    def _os_skip_status_text(self, blocks) -> str:
+        """b2-os F1: why nothing is left to run when the OS skip removed the whole request, else ""."""
+        os_blocks = [block for block in (blocks or {}).values() if isinstance(block, _SurfaceOsBlock)]
+        if not os_blocks:
+            return ""
+        lang = getattr(self, "_onboardingLanguage", "en") or "en"
+        return os_blocks[0].nothing_to_run(lang, [block.label(lang) for block in os_blocks])
 
     def _provided_tractography(self) -> tuple[str, ...]:
         """K2: targets whose tractogram file the user supplied (same set the CLI builds).
@@ -4656,7 +4722,9 @@ class SharedWidgetMixin:
             selected = selected_workflows(data_skips[0].flags)
             if not selected:
                 self._log_data_skips(*data_skips)
-                self._setStatus("error", self._summarise_missing(["Target products"]))
+                # b2-os F1: when the OS skip left nothing, the status says why (not only "Target products").
+                self._setStatus("error", self._os_skip_status_text(data_skips[1])
+                                or self._summarise_missing(["Target products"]))
                 return
         try:
             from tractography.wmql_protocol import canonical_wmql_selection
@@ -4689,16 +4757,19 @@ class SharedWidgetMixin:
         selected_targets = self._selected_product_targets()
         requested_targets = self._requested_product_targets()
         closure_tractography_backend = self._closure_tractography_backend_text()
+        run_tractography_backend = self._tractography_backend_text()
         if data_skips is not None:
             skip_run = data_skips[0]
             run_free_water, run_noddi, run_dki, run_ifw = skip_run.freewater, skip_run.noddi, skip_run.dki, skip_run.ifw
+            # b2-os F1: the runner recomputes the closure from this text, so an OS-skipped SAF must leave it here.
+            run_tractography_backend = skip_run.tractography_backend or run_tractography_backend
             closure = self._data_filtered_closure(skip_run)
             selected_targets, requested_targets = closure.targets, closure.requested
             if "tractography" in closure.targets:
                 from shared.algorithm_selection import choice_value
                 closure_tractography_backend = choice_value(closure.algorithms_text)
             else:
-                closure_tractography_backend = self._tractography_backend_text()
+                closure_tractography_backend = run_tractography_backend
         auto_install_python = bool(self._parameterNode.autoInstallPythonDependencies)
         external_paths = self._environment_dependency_path_kwargs()
         run_name = (self._parameterNode.orchestrationRunName or "Test1").strip() or "Test1"
@@ -4709,7 +4780,7 @@ class SharedWidgetMixin:
             output_root_text=output_root_text,
             selected_targets=selected_targets,
             run_name=run_name,
-            tractography_backend=self._tractography_backend_text(),
+            tractography_backend=run_tractography_backend,
             closure_tractography_backend=closure_tractography_backend,
             requested_targets=requested_targets,
             bundle_backend=self._bundle_backend_text(),
@@ -4789,6 +4860,8 @@ class SharedWidgetMixin:
             return
         if batch_mode:
             common_run_kwargs = build_batch_run_kwargs(selection, batch_root=batch_options.batch_root)
+            if data_skips is not None:
+                self._log_data_skips(*data_skips)  # b2-os F8: batch mode names the skip too
             self.appendLog(
                 f"Submitting batch products to background runner: root={batch_options.batch_root}, "
                 f"batch_size={batch_options.batch_size}, targets={', '.join(selected)}"
@@ -5197,10 +5270,36 @@ class SharedWidgetMixin:
         if not selected_text:
             return True
         self._save_environment_path_setting(setting_key, selected_text)
-        line_edit = (getattr(self, "_environmentPathLineEdits", {}) or {}).get(setting_key)
+        line_edits = getattr(self, "_environmentPathLineEdits", {}) or {}
+        line_edit = line_edits.get(setting_key)
         if line_edit:
             line_edit.setText(selected_text)
         self.appendLog(f"[Environment] Saved {setting_key}: {selected_text}")
+        from shared.ui_environment_panel import os_blocked_without_remedy
+        if setting_key == "postprocess_freesurfer_home" and os_blocked_without_remedy(item):
+            # b2-os F7: the resolver prefers postprocess_runtime, so a blocked override would hide the chosen folder.
+            # Clear it in the settings and in its line edit before the re-check reads the widgets. Clear it whatever the
+            # reader shows: after a restart the reader hides an OS-blocked override, but the raw value is still stored.
+            runtime_edit = line_edits.get("postprocess_runtime")
+            override = (self._line_edit_text(runtime_edit) if runtime_edit else ""
+                        ) or self._read_environment_path_setting("postprocess_runtime")
+            if not override:
+                try:
+                    override = str(slicer.app.userSettings().value(
+                        self._environment_settings_key("postprocess_runtime"), "") or "").strip()
+                except Exception:
+                    override = ""
+            if not override:
+                try:
+                    override = str((load_user_config().get("external_dependencies") or {}).get("postprocess_runtime")
+                                   or "").strip()
+                except Exception:
+                    override = ""
+            self._save_environment_path_setting("postprocess_runtime", "")
+            if runtime_edit:
+                runtime_edit.setText("")
+            if override:
+                self.appendLog(f"[Environment] Cleared postprocess_runtime (this macOS cannot run it): {override}")
         result = self._run_environment_dependency_check()
         if result is not None:
             self._show_environment_results_dialog(result)

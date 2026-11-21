@@ -8,6 +8,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 
+from shared.fiber_display import streamline_kind
 from shared.result_scene import result_candidates, result_file_suffix, record_qc_state
 
 
@@ -211,10 +212,10 @@ def _role(candidate):
                     return "surface:white:" + hemisphere
                 if "pial" in key or "pial" in path.name.lower():
                     return "surface:pial:" + hemisphere
-    if product.startswith(("tractography.", "saf.")) and suffix in {".trk", ".tck", ".vtk", ".vtp"}:
-        if not any(word in key for word in ("seed", "fod", "mask", "intermediate")):
-            return "tractography"
-    if product.startswith("bundles.") and suffix in {".trk", ".tck", ".vtk", ".vtp"}:
+    kind = streamline_kind(candidate)  # the one classifier the Results tree uses too
+    if kind == "tractography":
+        return "tractography"
+    if kind == "bundle":
         name = path.name.lower()
         if re.search(r"(^|[^a-z])af([^a-z]|$)|arcuate", name):
             return "bundle:af"

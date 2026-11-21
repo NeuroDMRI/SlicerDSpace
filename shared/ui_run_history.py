@@ -1181,6 +1181,10 @@ def dock_results_body(owner: Any) -> None:
 def refresh_results_window(owner: Any, *, dark: Optional[bool] = None) -> None:
     """Theme refresh: redraw the header icon and give the Results window the module style."""
 
+    try:
+        _refresh_output_visibility(owner, dark=dark)  # B2: the row eyes follow the theme
+    except Exception:
+        pass
     pop_button = getattr(owner, "_resultsPopOutButton", None)
     if pop_button is None:
         return
@@ -1801,15 +1805,32 @@ def _output_menu(owner, position):
         _refresh_output_visibility(owner)
 
 
-def _eye_icon(qt, visible):
-    key = bool(visible)
+FIBER_ROW_KIND = "fiber_bundle"
+_EYE_OUTLINE = {(True, False): "#27824d", (True, True): "#6fcf97", (False, False): "#728195", (False, True): "#9aa7b8"}
+# The "fiber eye": three short streamlines in direction colours (red, green, blue) replace the pupil.
+_FIBER_EYE_COLORS = {False: {"curves": ("#d64545", "#2f9e44", "#3b6fd8")},
+                     True: {"curves": ("#ff7b7b", "#63d67a", "#6ea8ff")}}
+_FIBER_EYE_CURVES = ("M7.5 10c1.5-1.4 3 1.4 4.5 0s3-1.4 4.5 0",
+                     "M7.5 12c1.5-1.4 3 1.4 4.5 0s3-1.4 4.5 0",
+                     "M7.5 14c1.5-1.4 3 1.4 4.5 0s3-1.4 4.5 0")
+
+
+def _eye_icon(qt, visible, *, kind=None, dark=False):
+    """Row eye. Cache key (kind, visible, dark): the icon follows the theme. A fiber-bundle row gets the fiber eye."""
+    key = (FIBER_ROW_KIND if kind == FIBER_ROW_KIND else "plain", bool(visible), bool(dark))
     if key not in _EYE_ICONS:
-        color = "#27824d" if visible else "#728195"
+        color = _EYE_OUTLINE[(key[1], key[2])]
         slash = '' if visible else '<path d="M3 3l18 18"/>'
+        if key[0] == FIBER_ROW_KIND:
+            curves = _FIBER_EYE_COLORS[key[2]]["curves"] if visible else (color,) * 3
+            pupil = "".join(f'<path d="{shape}" stroke="{stroke}" stroke-width="1.5"/>'
+                            for shape, stroke in zip(_FIBER_EYE_CURVES, curves))
+        else:
+            pupil = '<circle cx="12" cy="12" r="2.5"/>'
         svg = (f'<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24">'
                f'<g fill="none" stroke="{color}" stroke-width="2" stroke-linecap="round">'
                '<path d="M2 12s3.6-6 10-6 10 6 10 6-3.6 6-10 6-10-6-10-6z"/>'
-               f'<circle cx="12" cy="12" r="2.5"/>{slash}</g></svg>')
+               f'{pupil}{slash}</g></svg>')
         pixmap = qt.QPixmap()
         pixmap.loadFromData(qt.QByteArray(svg.encode("utf-8")))
         _EYE_ICONS[key] = qt.QIcon(pixmap)
@@ -1819,7 +1840,7 @@ def _eye_icon(qt, visible):
 _EYE_ICONS = {}
 
 
-def _refresh_output_visibility(owner):
+def _refresh_output_visibility(owner, *, dark: Optional[bool] = None):
     import slicer
 
     tree = getattr(owner, "_runOutputFiles", None)
@@ -1844,6 +1865,10 @@ def _refresh_output_visibility(owner):
         return cached
 
     zh = str(getattr(owner, "_onboardingLanguage", "en")).startswith("zh")
+    try:
+        resolved_dark = _resolve_dark_mode(owner, dark)
+    except Exception:
+        resolved_dark = False
     for item in _iter_tree_items(tree):
         raw_path = item.data(0, _user_role(qt, 0))
         if not isinstance(raw_path, (str, Path)) or not raw_path:
@@ -1853,9 +1878,14 @@ def _refresh_output_visibility(owner):
         mpath = _item_manifest_path(owner, item, qt) or (Path(fallback_manifest) if fallback_manifest else None)
         by_path = _nodes_for_manifest(mpath)
         visible = _output_visible(slicer, by_path.get(str(raw_path), ()))
-        item.setIcon(1, _eye_icon(qt, visible))
+        kind = item.data(0, _user_role(qt, ROLE_KIND))
+        item.setIcon(1, _eye_icon(qt, visible, kind=kind, dark=resolved_dark))
         item.setText(1, "")
-        item.setToolTip(1, ("隐藏" if zh else "Hide") if visible else ("显示" if zh else "Show"))
+        if kind == FIBER_ROW_KIND:
+            tip = ("隐藏纤维束" if zh else "Hide fiber bundle") if visible else ("显示为纤维束" if zh else "Show as fiber bundle")
+        else:
+            tip = ("隐藏" if zh else "Hide") if visible else ("显示" if zh else "Show")
+        item.setToolTip(1, tip)
 
 
 def _is_internal_cache_path(
@@ -1927,6 +1957,8 @@ def _populate_manifest_output_items(
                     if Path(item["path"]).suffix.lower() not in {".csv", ".tsv"}}
     seg_paths = {item["path"] for item in filtered_candidates
                  if str(item.get("product") or "").startswith("segmentation")}
+    from shared.fiber_display import streamline_kind
+    fiber_paths = {item["path"] for item in filtered_candidates if streamline_kind(item)}
     groups = {}
     for candidate in filtered_candidates:
         path = candidate["path"]
@@ -2017,6 +2049,8 @@ def _populate_manifest_output_items(
             item.setData(0, _user_role(qt, ROLE_PATH), path)
             if path in seg_paths:
                 item.setData(0, _user_role(qt, ROLE_KIND), "segmentation")
+            elif path in fiber_paths:
+                item.setData(0, _user_role(qt, ROLE_KIND), FIBER_ROW_KIND)
             if manifest_str is not None:
                 item.setData(0, role_manifest, manifest_str)
             if run_index is not None:

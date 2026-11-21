@@ -438,21 +438,168 @@ def freesurfer_color_node(slicer):
     return color
 
 
+_MASK_KEYS = {"mask", "brain_mask", "brainmask", "final_mask", "brain_mask_final"}
+SEGMENTATION_FILL_OPACITY = 0.35
+
+
+def categorical_role(candidate):
+    """The categorical display role of a label volume, the same for automatic and manual loads; None if not one."""
+    role = str(candidate.get("display_role") or "")
+    if role.startswith("categorical"):
+        return role
+    product = str(candidate.get("product") or "")
+    key = str(candidate.get("key") or "").lower().removesuffix("_path")
+    if product == "statistics.regions" and key == "selected_regions":
+        return "categorical:region_selection"
+    if product.startswith("connectome.") and key == "node_parcellation":
+        return "categorical:node_parcellation"  # the DDParcel ids kept as nodes, not renumbered
+    if product.startswith("preprocessing.") and key in _MASK_KEYS:
+        return "categorical:mask"
+    if product.startswith(("segmentation.", "parcellation.")) and any(
+            word in key for word in ("label", "segmentation", "wmparc", "aparc")):
+        return "categorical"
+    return None
+
+
+def categorical_context(candidate, manifest):
+    """Add what the colour source needs from the manifest: the recorded .ctbl, or the region ids and atlas LUT."""
+    role = categorical_role(candidate) or ""
+    extra = {}
+    if role == "categorical:region_selection":
+        extra["color_lut_path"] = manifest.get("atlas_lut_path")
+        extra["region_label_ids"] = (manifest.get("selected_region_ids")
+                                     or (manifest.get("request") or {}).get("selected_labels", []))
+    elif str(candidate.get("product") or "").startswith("parcellation."):
+        task = next((task for task in manifest.get("tasks") or [] if isinstance(task, dict)
+                     and str(task.get("name") or "") == candidate["product"]), {})
+        extra["color_table_path"] = (task.get("outputs") or {}).get("color_table")
+    return {**candidate, **{key: value for key, value in extra.items() if key not in candidate}}
+
+
+def is_segmentation_result(candidate):
+    """B2: the DDParcel parcellation loads as a named segmentation; DDSeg stays a labelmap for its edit copy."""
+    return str(candidate.get("product") or "").startswith("parcellation.") and categorical_role(candidate) is not None
+
+
+def _reused_color_node(slicer, identity, stamp):
+    return next((item for item in slicer.util.getNodesByClass('vtkMRMLColorTableNode')
+                 if item.GetAttribute(PREFIX + 'LUTSourcePath') == identity
+                 and item.GetAttribute(PREFIX + 'LUTSourceStamp') == stamp), None)
+
+
+def tissue_color_node(slicer):
+    """DDSeg tissue names and colours (segmentation_review.TISSUES) as one shared colour table."""
+    from shared.segmentation_review import TISSUES
+
+    identity, stamp = "tissues:ddseg", ";".join(f"{value}:{name}:{rgb}" for value, name, rgb in TISSUES)
+    color = _reused_color_node(slicer, identity, stamp)
+    if color is not None:
+        return color
+    color = slicer.mrmlScene.AddNewNodeByClass('vtkMRMLColorTableNode', 'DDSeg tissue colors')
+    color.SetTypeToUser()
+    color.SetNumberOfColors(max(value for value, _, _ in TISSUES) + 1)
+    color.GetLookupTable().SetTableRange(0, color.GetNumberOfColors() - 1)
+    color.SetColor(0, 'Background', 0., 0., 0., 0.)
+    for value, name, rgb in TISSUES:
+        color.SetColor(value, name, *rgb, 1.)
+    color.SetAttribute(PREFIX + 'LUTSourcePath', identity)
+    color.SetAttribute(PREFIX + 'LUTSourceStamp', stamp)
+    return color
+
+
+def parcellation_color_node(slicer, candidate):
+    """The run's recorded .ctbl when it is not older than the label file, else the FreeSurfer table."""
+    table, labels = candidate.get("color_table_path"), Path(candidate["path"])
+    try:
+        current = (bool(table) and Path(table).is_file() and labels.is_file()
+                   and Path(table).stat().st_mtime_ns >= labels.stat().st_mtime_ns)
+    except OSError:
+        current = False
+    if current:
+        identity, stamp = "parcellation-table:" + str(Path(table).resolve()), source_stamp(table)
+        color = _reused_color_node(slicer, identity, stamp)
+        if color is None:
+            color = slicer.util.loadColorTable(str(table))
+            if color is not None:
+                color.SetAttribute(PREFIX + 'LUTSourcePath', identity)
+                color.SetAttribute(PREFIX + 'LUTSourceStamp', stamp)
+        if color is not None:
+            return color
+    return freesurfer_color_node(slicer)
+
+
+def apply_categorical_colors(slicer, node, candidate):
+    """The one colour source of a categorical label volume, for automatic and manual loads alike."""
+    display = node.GetDisplayNode() if hasattr(node, "GetDisplayNode") else None
+    if display is None:
+        return None
+    role = categorical_role(candidate) or ""
+    product = str(candidate.get("product") or "")
+    if role == "categorical:region_selection":
+        color, fallbacks = regional_color_node(slicer, candidate), ()
+    elif product.startswith("parcellation."):
+        color, fallbacks = parcellation_color_node(slicer, candidate), ("vtkMRMLColorTableNodeLabels",)
+    elif role == "categorical:node_parcellation":
+        color, fallbacks = freesurfer_color_node(slicer), ("vtkMRMLColorTableNodeLabels",)
+    elif product.startswith("segmentation."):
+        color, fallbacks = tissue_color_node(slicer), ()
+    else:
+        color, fallbacks = None, ("vtkMRMLColorTableNodeGenericAnatomyColors", "vtkMRMLColorTableNodeLabels")
+    if color is not None:
+        display.SetAndObserveColorNodeID(color.GetID())
+        return color
+    for identity in fallbacks:
+        if slicer.mrmlScene.GetNodeByID(identity) is not None:
+            display.SetAndObserveColorNodeID(identity)
+            return slicer.mrmlScene.GetNodeByID(identity)
+    return None
+
+
+def load_categorical_result(slicer, path, name, candidate):
+    """Load a label volume with its colours; a parcellation becomes a named segmentation (2D fill and outline).
+
+    The segmentation path loads a temporary labelmap, sets its colour node, imports it, and removes it again.
+    No closed surface is built; the user can still choose Show 3D.
+    """
+    labelmap = slicer.util.loadLabelVolume(str(path), properties={"name": name, "show": False})
+    if not labelmap:
+        return None
+    if not is_segmentation_result(candidate):
+        try:
+            apply_categorical_colors(slicer, labelmap, candidate)
+        except Exception:
+            slicer.mrmlScene.RemoveNode(labelmap)  # a manual load must not leave an unregistered node behind
+            raise
+        return labelmap
+    segmentation = None
+    try:
+        apply_categorical_colors(slicer, labelmap, candidate)
+        segmentation = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLSegmentationNode", name)
+        segmentation.CreateDefaultDisplayNodes()
+        if not slicer.modules.segmentations.logic().ImportLabelmapToSegmentationNode(labelmap, segmentation):
+            raise RuntimeError("Slicer could not convert the parcellation labels to a segmentation")
+        display = segmentation.GetDisplayNode()
+        display.SetVisibility2DFill(True)
+        display.SetVisibility2DOutline(True)
+        display.SetOpacity2DFill(SEGMENTATION_FILL_OPACITY)
+    except Exception:
+        if segmentation is not None:
+            slicer.mrmlScene.RemoveNode(segmentation)
+        raise
+    finally:
+        slicer.mrmlScene.RemoveNode(labelmap)
+    return segmentation
+
+
 def automatic_display_preset(slicer, node, candidate, *, hide_pial=True):
     """Only display properties change; voxel values, label IDs and mesh data do not."""
     annotate_automatic_result(node, candidate)
+    role = candidate["display_role"]
+    if role.startswith(("bundle:", "tractography")):
+        return  # the fiber loader already applied the one native fiber style (shared.fiber_display)
     display = node.GetDisplayNode() if hasattr(node, "GetDisplayNode") else None
-    if node.IsA("vtkMRMLFiberBundleNode") and hasattr(node, "GetLineDisplayNode"):
-        display = node.GetLineDisplayNode() or display
-        # Converted streamlines do not contain fitted tensors. Display true
-        # geometry/orientation instead of fabricating tensor glyphs/scalars.
-        for getter in ("GetTubeDisplayNode", "GetGlyphDisplayNode"):
-            other = getattr(node, getter, lambda: None)()
-            if other is not None:
-                other.SetVisibility(False)
     if display is None:
         return
-    role = candidate["display_role"]
 
     def color_node(*identities):
         for identity in identities:
@@ -471,35 +618,12 @@ def automatic_display_preset(slicer, node, candidate, *, hide_pial=True):
         maximum = 0.003 if metric in {"md", "ad", "rd", "fw_md"} else 3.0 if metric.removeprefix("corrected_") in {"mk", "ak", "rk", "mkt", "rtk"} else 1.0
         display.SetWindowLevel(maximum, maximum / 2)
     elif role.startswith("categorical"):
-        if role == 'categorical:region_selection':
-            color = regional_color_node(slicer, candidate)
-            if color is not None:
-                display.SetAndObserveColorNodeID(color.GetID())
-        elif candidate["product"].startswith("parcellation."):
-            color = freesurfer_color_node(slicer)
-            if color is not None:
-                display.SetAndObserveColorNodeID(color.GetID())
-            else:
-                color_node("vtkMRMLColorTableNodeLabels")
-        else:
-            color_node("vtkMRMLColorTableNodeGenericAnatomyColors", "vtkMRMLColorTableNodeLabels")
+        return  # load_categorical_result already applied the one categorical colour source, on every load path
     elif role.startswith("surface:"):
         pial = ":pial:" in role
         display.SetColor(*( (0.84, 0.64, 0.51) if pial else (0.88, 0.88, 0.82) ))
         display.SetOpacity(0.3 if pial else 1.0)
         display.SetVisibility(not (pial and hide_pial))
-    elif role.startswith("bundle:"):
-        if hasattr(display, "SetColorModeToSolid"):
-            display.SetColorModeToSolid()
-        display.SetColor(*{"af": (0.93, 0.48, 0.22), "cst": (0.24, 0.65, 0.88),
-                            "cc": (0.83, 0.72, 0.28), "representative": (0.5, 0.7, 0.65)}[role.split(":", 1)[1]])
-        display.SetOpacity(1.0)
-        display.SetVisibility(True)
-    elif role.startswith("tractography"):
-        if hasattr(display, "SetColorModeToPointFiberOrientation"):
-            display.SetColorModeToPointFiberOrientation()
-        display.SetOpacity(0.5)
-        display.SetVisibility(True)
 
 
 def show_automatic_results(slicer, entries, *, newly_loaded=None):

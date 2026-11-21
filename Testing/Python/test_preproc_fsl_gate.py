@@ -377,18 +377,23 @@ class G3SelectionTest(unittest.TestCase):
         with mock.patch("shared.selected_setup.fsl_preprocessing_offered", return_value=True):
             self.assertEqual(picker.selected_algorithms(node(""), "preprocessing"), ("denoise", "eddy", "topup"))
 
-    def _run_popup(self, offered, stages="denoise,eddy,topup", lang="en"):
+    def _run_popup(self, offered, stages="denoise,eddy,topup", lang="en", ui=None, node_obj=None):
         from Testing.Python.test_ui_run_history import fake_qt
         from shared import ui_algorithm_picker as picker
         qt = fake_qt()
+        if ui is not None:
+            qt.QComboBox = type("FakeComboBox", (), {})
+            qt.QDoubleSpinBox = type("FakeDoubleSpinBox", (), {})
         owner = SimpleNamespace(
-            ui=SimpleNamespace(), _uiWidget=None, _pipelineActive=False, _selectedSetupActive=False,
-            _onboardingLanguage=lang, _parameterNode=node(stages),
+            ui=ui if ui is not None else SimpleNamespace(),
+            _uiWidget=None, _pipelineActive=False, _selectedSetupActive=False,
+            _onboardingLanguage=lang, _parameterNode=node_obj if node_obj is not None else node(stages),
             _lastEnvironmentResult=None, _lastEnvironmentSignature=None)
         slicer = mock.MagicMock(name="slicer")
         with mock.patch.dict(sys.modules, {"qt": qt, "slicer": slicer, "ctk": mock.MagicMock()}), \
                 mock.patch("shared.selected_setup.fsl_preprocessing_offered", return_value=offered):
             picker.choose_algorithms(owner, "preprocessing")
+        self._last_qt = qt
         return {w.objectName: w for w in qt.created if w.kind == "QCheckBox"}
 
     def test_g3_popup_disables_and_unchecks_eddy_topup_where_fsl_is_not_offered(self):
@@ -403,6 +408,64 @@ class G3SelectionTest(unittest.TestCase):
         boxes["algorithm_brain_mask"].setEnabled.assert_not_called()
         zh_boxes = self._run_popup(False, lang="zh")
         self.assertIn("需要 FSL", zh_boxes["algorithm_eddy"].setToolTip.call_args[0][0])
+
+    def test_g3_popup_shows_visible_inline_reason_and_disables_topup_gear_when_fsl_missing(self):
+        from Testing.Python.test_ui_run_history import object_name
+
+        topup_ui = SimpleNamespace(
+            preprocessingPhaseEncodingDirectionComboBox=SimpleNamespace(toolTip="pe tip"),
+            preprocessingPhaseEncodingDirectionLabel=SimpleNamespace(text="Phase direction"),
+            preprocessingReadoutTimeSpinBox=SimpleNamespace(toolTip="ro tip"),
+            preprocessingReadoutTimeLabel=SimpleNamespace(text="Readout time"),
+            preprocessingReversePhaseB0Path=SimpleNamespace(toolTip="rpe tip"),
+            preprocessingReversePhaseB0Label=SimpleNamespace(text="Reverse B0"),
+        )
+        topup_node = node("denoise,eddy,topup")
+        topup_node.preprocessingPhaseEncodingDirection = "j-"
+        topup_node.preprocessingReadoutTime = "0.05"
+        topup_node.preprocessingReversePhaseB0 = ""
+
+        with mac_host("13.6.0", "arm64"), \
+                mock.patch("shared.selected_setup._bundled_fsl_requirement", return_value=(False, None)):
+            self._run_popup(False, lang="en", ui=topup_ui, node_obj=topup_node)
+            en_labels = [
+                w for w in self._last_qt.created
+                if w.kind == "QLabel" and object_name(w) == "algorithmPickerAvailabilityNote"
+            ]
+            self.assertEqual(len(en_labels), 1)
+            en_text = en_labels[0].ctor_args[0]
+            self.assertIn("Eddy and Topup need FSL", en_text)
+            self.assertIn("macOS 13.6", en_text)
+            self.assertIn("14.5", en_text)
+            en_labels[0].hide.assert_not_called()
+
+            topup_gear = [
+                w for w in self._last_qt.created
+                if w.kind == "QToolButton" and object_name(w) == "algorithmSettings_topup"
+            ]
+            self.assertEqual(len(topup_gear), 1)
+            topup_gear[0].setEnabled.assert_called_with(False)
+            self.assertIn("macOS 13.6", topup_gear[0].setToolTip.call_args[0][0])
+
+            dialogs = [w for w in self._last_qt.created if w.kind == "QDialog"]
+            self.assertEqual(len(dialogs), 1)
+            dialogs[0].setAttribute.assert_any_call(self._last_qt.Qt.WA_AlwaysShowToolTips, True)
+
+            self._run_popup(False, lang="zh", ui=topup_ui, node_obj=topup_node)
+            zh_labels = [
+                w for w in self._last_qt.created
+                if w.kind == "QLabel" and object_name(w) == "algorithmPickerAvailabilityNote"
+            ]
+            self.assertEqual(len(zh_labels), 1)
+            self.assertIn("本机 macOS 13.6", zh_labels[0].ctor_args[0])
+            self.assertIn("14.5", zh_labels[0].ctor_args[0])
+
+        self._run_popup(True, lang="en", ui=topup_ui, node_obj=topup_node)
+        ok_labels = [
+            w for w in self._last_qt.created
+            if w.kind == "QLabel" and object_name(w) == "algorithmPickerAvailabilityNote"
+        ]
+        self.assertEqual(ok_labels, [])
 
     def test_g3_popup_forces_eddy_topup_unchecked_even_if_the_node_still_lists_them(self):
         with mock.patch("shared.selected_setup.fsl_preprocessing_offered", return_value=False):

@@ -2,10 +2,140 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
 from shared.ui_onboarding import register_ui_language_binding
+
+
+def _extract_drop_paths(qt: Any, mime_data: Any) -> list[Path]:
+    if mime_data is None:
+        return []
+    paths: list[Path] = []
+    seen: set[Path] = set()
+    urls_fn = getattr(mime_data, "urls", None)
+    has_urls_fn = getattr(mime_data, "hasUrls", None)
+    if callable(urls_fn) and (not callable(has_urls_fn) or has_urls_fn()):
+        for url in urls_fn() or ():
+            is_local = getattr(url, "isLocalFile", None)
+            if callable(is_local) and not is_local():
+                continue
+            local = str(url.toLocalFile() or "").strip() if hasattr(url, "toLocalFile") else ""
+            if local:
+                cand = Path(local)
+                if cand not in seen:
+                    seen.add(cand)
+                    paths.append(cand)
+    if not paths:
+        has_text_fn = getattr(mime_data, "hasText", None)
+        text_fn = getattr(mime_data, "text", None)
+        if callable(text_fn) and (not callable(has_text_fn) or has_text_fn()):
+            raw_text = str(text_fn() or "")
+            for url_text in re.findall(r"file:/+[^\r\n]+?(?=file:/+|[\r\n]|$)", raw_text):
+                local = str(qt.QUrl(url_text.strip()).toLocalFile() or "").strip()
+                if local:
+                    cand = Path(local)
+                    if cand not in seen:
+                        seen.add(cand)
+                        paths.append(cand)
+    return paths
+
+
+def _set_tile_drag_active(tile: Any, active: bool) -> None:
+    if bool(tile.property("dragActive")) == bool(active):
+        return
+    tile.setProperty("dragActive", bool(active))
+    style_fn = getattr(tile, "style", None)
+    style = style_fn() if callable(style_fn) else style_fn
+    if style is not None:
+        if hasattr(style, "unpolish"):
+            style.unpolish(tile)
+        if hasattr(style, "polish"):
+            style.polish(tile)
+    if hasattr(tile, "update"):
+        tile.update()
+
+
+_DROP_TILE_CLASSES: dict[type, type] = {}
+
+
+def _make_input_drop_tile(qt: Any, owner: Any, key: str) -> tuple[Any, bool]:
+    """Return an input tile widget; subclass QFrame so the entire tile handles drops without an eventFilter."""
+    qframe_cls = getattr(qt, "QFrame", None)
+    if isinstance(qframe_cls, type):
+        tile_cls = _DROP_TILE_CLASSES.get(qframe_cls)
+        if tile_cls is None:
+            class _InputDropTile(qframe_cls):
+                def dragEnterEvent(self, event):
+                    qt_mod, drop_owner, _drop_key = getattr(self, "_dspaceDropCtx", (None, None, ""))
+                    mime = event.mimeData() if hasattr(event, "mimeData") else None
+                    if qt_mod is not None and _extract_drop_paths(qt_mod, mime):
+                        _set_tile_drag_active(self, True)
+                        if hasattr(event, "acceptProposedAction"):
+                            event.acceptProposedAction()
+                        return
+                    if hasattr(event, "ignore"):
+                        event.ignore()
+
+                def dragMoveEvent(self, event):
+                    self.dragEnterEvent(event)
+
+                def dragLeaveEvent(self, event):
+                    _set_tile_drag_active(self, False)
+
+                def dropEvent(self, event):
+                    _set_tile_drag_active(self, False)
+                    qt_mod, drop_owner, drop_key = getattr(self, "_dspaceDropCtx", (None, None, ""))
+                    mime = event.mimeData() if hasattr(event, "mimeData") else None
+                    paths = _extract_drop_paths(qt_mod, mime) if qt_mod is not None else []
+                    if paths and _assign_dropped_file_paths(drop_owner, drop_key, paths):
+                        if hasattr(event, "acceptProposedAction"):
+                            event.acceptProposedAction()
+                        return
+                    if hasattr(event, "ignore"):
+                        event.ignore()
+
+            tile_cls = _InputDropTile
+            _DROP_TILE_CLASSES[qframe_cls] = tile_cls
+
+        tile = tile_cls()
+        tile._dspaceDropCtx = (qt, owner, key)
+        no_frame = getattr(qframe_cls, "NoFrame", None)
+        if no_frame is not None and hasattr(tile, "setFrameShape"):
+            tile.setFrameShape(no_frame)
+        return tile, True
+    return qt.QWidget(), False
+
+
+def place_input_preview_button(owner: Any, batch: Any = None) -> None:
+    """Keep 'View input' aligned next to NIfTI/NRRD/DICOM in Single mode, and below Batch Folder in Batch mode."""
+    import qt
+
+    preview = getattr(owner, "_inputPreviewWidgets", None)
+    fields = getattr(owner, "_prepareInputWidgets", None)
+    if not isinstance(preview, dict) or "button" not in preview:
+        return
+    button = preview["button"]
+    preview_layout = preview.get("layout")
+    format_header = fields.get("format_header") if isinstance(fields, dict) else None
+    if batch is None:
+        node = getattr(owner, "_parameterNode", None)
+        is_batch = bool(getattr(node, "batchMode", False)) if node is not None else False
+    else:
+        is_batch = bool(batch)
+    if not is_batch and format_header is not None:
+        if preview_layout is not None and preview_layout.indexOf(button) >= 0:
+            preview_layout.removeWidget(button)
+        if format_header.indexOf(button) < 0:
+            format_header.addWidget(button, 0, qt.Qt.AlignRight | qt.Qt.AlignVCenter)
+    else:
+        if format_header is not None and format_header.indexOf(button) >= 0:
+            format_header.removeWidget(button)
+        if preview_layout is not None and preview_layout.indexOf(button) < 0:
+            preview_layout.insertWidget(0, button, 0, qt.Qt.AlignLeft)
+    if hasattr(button, "show"):
+        button.show()
 
 
 def install_prepare_inputs_panel(owner: Any, configuration_layout: Any) -> None:
@@ -42,13 +172,8 @@ def install_prepare_inputs_panel(owner: Any, configuration_layout: Any) -> None:
     format_header = qt.QHBoxLayout()
     format_header.setSpacing(8)
     format_header.addWidget(tabs, 0, qt.Qt.AlignVCenter)
-    drop_hint = qt.QLabel(panel)
-    drop_hint.setObjectName("dspaceDropHint")
-    drop_hint.setWordWrap(True)
-    fields["drop_hint"] = drop_hint
-    drop_hint.setMinimumWidth(0)
-    drop_hint.setAlignment(qt.Qt.AlignRight | qt.Qt.AlignVCenter)
-    format_header.addWidget(drop_hint, 1)
+    format_header.addStretch(1)
+    fields["format_header"] = format_header
     layout.addLayout(format_header)
     mode_switch = qt.QWidget(header)
     mode_switch.setObjectName("dspaceInputMode")
@@ -101,9 +226,13 @@ def install_prepare_inputs_panel(owner: Any, configuration_layout: Any) -> None:
     fields["status"] = status
 
     def add_field(parent_layout, key, title, callback):
-        tile = qt.QWidget()
+        tile, handles_drops = _make_input_drop_tile(qt, owner, key)
         tile.setObjectName("dspaceInputTile")
         tile.setProperty("standalone", key == "mask")
+        tile.setAcceptDrops(True)
+        styled_bg = getattr(qt.Qt, "WA_StyledBackground", None)
+        if styled_bg is not None and hasattr(tile, "setAttribute"):
+            tile.setAttribute(styled_bg, True)
         tile.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Fixed)
         tile_layout = qt.QVBoxLayout(tile)
         tile_layout.setContentsMargins(12, 9, 11, 8)
@@ -113,14 +242,15 @@ def install_prepare_inputs_panel(owner: Any, configuration_layout: Any) -> None:
         heading.setSpacing(1)
         label = qt.QLabel(title, tile)
         label.setObjectName("dspaceInputName")
+        label.setAttribute(qt.Qt.WA_TransparentForMouseEvents)
         label.setMinimumWidth(0)
         label.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Fixed)
         heading.addWidget(label, 1)
 
         edit = qt.QPlainTextEdit(tile)
         edit.setObjectName("dspaceInput_" + key)
-        edit.setAcceptDrops(True)
-        edit.viewport().setAcceptDrops(True)
+        edit.setAcceptDrops(not handles_drops)
+        edit.viewport().setAcceptDrops(not handles_drops)
         edit.setFrameShape(qt.QFrame.NoFrame)
         edit.setLineWrapMode(qt.QPlainTextEdit.NoWrap)
         edit.setTabChangesFocus(True)
@@ -212,6 +342,14 @@ def install_prepare_inputs_panel(owner: Any, configuration_layout: Any) -> None:
     add_field(optional, "mask", "Brain mask", owner._browse_prepare_input_file)
     layout.addLayout(optional)
     fields["mask_tile"].hide()
+    drop_hint = qt.QLabel(panel)
+    drop_hint.setObjectName("dspaceDropHint")
+    drop_hint.setWordWrap(True)
+    drop_hint.setMinimumWidth(0)
+    drop_hint.setAlignment(qt.Qt.AlignLeft | qt.Qt.AlignVCenter)
+    drop_hint.setContentsMargins(2, 1, 0, 0)
+    fields["drop_hint"] = drop_hint
+    layout.addWidget(drop_hint)
     layout.addWidget(status)
 
     def update_format(index):
@@ -256,6 +394,7 @@ def sync_input_mode(owner):
     fields["subject_labels"].setCurrentIndex(int(batch))
     fields["subject_fields"].setCurrentIndex(int(batch))
     fields["mask_tile"].setVisible(not batch and getattr(node, "brainMaskBackend", "") == "provided")
+    place_input_preview_button(owner, batch=batch)
     owner._sync_path_widget(fields["batch_root"], getattr(node, "batchRoot", "") or "")
     fields["single_mode"].setEnabled(not owner._pipelineActive)
     fields["batch_mode"].setEnabled(not owner._pipelineActive)
@@ -274,7 +413,7 @@ def _update_drop_hint(owner):
     if zh:
         text = "拖入文件夹，或点 …" if dicom else "拖入文件，或点 …"
     else:
-        text = "Drop a folder below or click …" if dicom else "Drop files below or click …"
+        text = "Drop a folder above or click …" if dicom else "Drop files above or click …"
     fields["drop_hint"].setText(text)
 
 
@@ -373,7 +512,11 @@ def refresh_prepare_inputs_styles(owner: Any, *, dark: bool | None = None) -> No
         f"QTabBar#dspaceFormatTabs::tab:selected {{ color: {ink}; border-bottom-color: {ink}; font-weight: 600; }}"
         f"QLabel#dspaceInputsTitle {{ color: {ink}; font-size: 16px; font-weight: 700; }}"
         "QWidget#dspaceFileStrip { background: transparent; border: 0; }"
-        f"QWidget#dspaceInputTile {{ background: {base}; border: 2px dashed {drop_line}; border-radius: 10px; }}"
+        f"QWidget#dspaceInputTile {{ background: {base}; border: 1px dashed {drop_line}; border-radius: 9px; }}"
+        f"QWidget#dspaceInputTile[dragActive=\"true\"] {{ border: 1px dashed {'#7CC4EA' if dark else '#335B70'}; background: {hover}; }}"
+        f"QPushButton#inputPreviewButton {{ background: {action}; color: {ink}; border: 1px solid {line}; border-radius: 5px; padding: 2px 10px; font-size: 11px; min-height: 20px; }}"
+        f"QPushButton#inputPreviewButton:hover:!disabled {{ background: {hover}; border-color: #478CB3; }}"
+        f"QPushButton#inputPreviewButton:disabled {{ color: {muted}; background: transparent; border-color: {line}; }}"
         f"QLabel#dspaceInputName {{ background: transparent; color: {ink}; border: 0; font-weight: 600; }}"
         f"QLabel#dspaceInputHint, QLabel#dspaceDropHint {{ background: transparent; color: {muted}; border: 0; font-size: 11px; }}"
         f"QWidget#dspaceInputTile QPlainTextEdit {{ background: transparent; color: {ink};"
@@ -433,34 +576,52 @@ def import_dicom_series(config, series):
     return manifest
 
 
+def _assign_dropped_file_paths(owner, field, paths, *, restore_field=False):
+    """Route dropped local file/directory Paths across the input tiles."""
+    assigned = {}
+    detected_kind = None
+    clean_paths = [Path(p) for p in paths if str(p or "").strip()]
+    if not clean_paths:
+        return False
+    if field == "mask" and len(clean_paths) == 1 and not clean_paths[0].is_dir():
+        assigned["mask"] = clean_paths[0]
+    else:
+        for path in clean_paths:
+            name = path.name.lower()
+            if name.endswith(".bval") or name == "bvals":
+                assigned["bval"] = path
+            elif name.endswith(".bvec") or name == "bvecs":
+                assigned["bvec"] = path
+            elif name.endswith((".raw", ".raw.gz")):
+                assigned["raw"] = path
+            elif path.is_dir() or name.endswith((".nii", ".nii.gz", ".nrrd", ".nhdr")):
+                assigned["source"] = path
+                detected_kind = "dicom" if path.is_dir() else "nrrd" if name.endswith((".nrrd", ".nhdr")) else "nifti"
+        if not assigned and field == "raw" and len(clean_paths) == 1 and not clean_paths[0].is_dir():
+            assigned["raw"] = clean_paths[0]
+    if not assigned:
+        return False
+    if restore_field:
+        previous = owner._prepare_inputs_widget_text(field)
+        owner._set_prepare_inputs_widget_text(field, previous)
+    if detected_kind:
+        show_input_format(owner, detected_kind)
+    for key, path in assigned.items():
+        owner._set_prepare_inputs_widget_text(key, str(path))
+    return True
+
+
 def _assign_dropped_paths(owner, field, text):
     """Route local-file URLs supplied by Qt's native text drop support."""
-    import re
     import qt
 
     urls = re.findall(r"file:/+[^\r\n]+?(?=file:/+|[\r\n]|$)", str(text))
     if not urls:
         return False
     paths = [Path(qt.QUrl(url.strip()).toLocalFile()) for url in urls]
-    assigned = {}
-    detected_kind = None
-    for path in paths:
-        name = path.name.lower()
-        if name.endswith(".bval") or name == "bvals":
-            assigned["bval"] = path
-        elif name.endswith(".bvec") or name == "bvecs":
-            assigned["bvec"] = path
-        elif name.endswith((".raw", ".raw.gz")):
-            assigned["raw"] = path
-        elif path.is_dir() or name.endswith((".nii", ".nii.gz", ".nrrd", ".nhdr")):
-            assigned["source"] = path
-            detected_kind = "dicom" if path.is_dir() else "nrrd" if name.endswith((".nrrd", ".nhdr")) else "nifti"
-    previous = owner._prepare_inputs_widget_text(field)
-    owner._set_prepare_inputs_widget_text(field, previous)
-    if detected_kind:
-        show_input_format(owner, detected_kind)
-    for key, path in assigned.items():
-        owner._set_prepare_inputs_widget_text(key, str(path))
+    if not _assign_dropped_file_paths(owner, field, paths, restore_field=True):
+        previous = owner._prepare_inputs_widget_text(field)
+        owner._set_prepare_inputs_widget_text(field, previous)
     return True
 
 

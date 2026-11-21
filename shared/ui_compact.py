@@ -1028,23 +1028,27 @@ def install_input_preview_controls(owner: Any) -> None:
     row = qt.QWidget()
     row.setObjectName("dspaceInputPreviewRow")
     row_layout = qt.QVBoxLayout(row)
-    row_layout.setContentsMargins(0, 2, 0, 0)
+    row_layout.setContentsMargins(0, 0, 0, 0)
     row_layout.setSpacing(3)
     button = qt.QPushButton()
     button.setObjectName("inputPreviewButton")
     button.setSizePolicy(qt.QSizePolicy.Maximum, qt.QSizePolicy.Fixed)
+    pointing = getattr(qt.Qt, "PointingHandCursor", None)
+    if pointing is not None and hasattr(button, "setCursor"):
+        button.setCursor(pointing)
     status = qt.QLabel()
     status.setObjectName("inputPreviewStatusLabel")
     status.setWordWrap(True)
     status.setTextFormat(qt.Qt.PlainText)
     status.setMinimumWidth(0)
     status.hide()
-    row_layout.addWidget(button, 0, qt.Qt.AlignLeft)
     row_layout.addWidget(status)
     button.clicked.connect(lambda *_args: owner._on_input_preview_clicked())
     layout.addWidget(row)
     owner.ui.inputPreviewButton = button
-    owner._inputPreviewWidgets = {"row": row, "button": button, "status": status}
+    owner._inputPreviewWidgets = {"row": row, "layout": row_layout, "button": button, "status": status}
+    from shared.ui_prepare_inputs import place_input_preview_button
+    place_input_preview_button(owner)
     refresh_input_preview_controls(owner)
 
 

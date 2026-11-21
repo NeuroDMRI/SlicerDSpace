@@ -410,6 +410,14 @@ QLabel#algorithmPickerNote {
   background: transparent;
   border: none;
 }
+QLabel#algorithmPickerAvailabilityNote {
+  color: #7C5308;
+  background: #FFFBEB;
+  border: 1px solid #FDE68A;
+  border-radius: 5px;
+  padding: 6px 8px;
+  font-size: 11px;
+}
 QPushButton#algorithmPickerCancelButton {
   background: #F8FAFC;
   color: #334155;
@@ -833,6 +841,14 @@ QLabel#algorithmPickerNote {
   font-size: 11px;
   background: transparent;
   border: none;
+}
+QLabel#algorithmPickerAvailabilityNote {
+  color: #FCD34D;
+  background: #332B19;
+  border: 1px solid #6B5220;
+  border-radius: 5px;
+  padding: 6px 8px;
+  font-size: 11px;
 }
 QPushButton#algorithmPickerCancelButton {
   background: #272C33;

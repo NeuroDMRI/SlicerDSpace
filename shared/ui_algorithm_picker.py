@@ -221,7 +221,8 @@ ALGORITHM_SETTINGS = {
 }
 
 
-def _add_algorithm_row(qt, owner, layout, box, family, algorithm, staged, zh, resize_popup, dark=None):
+def _add_algorithm_row(qt, owner, layout, box, family, algorithm, staged, zh, resize_popup, dark=None,
+                       disabled=False, disabled_tooltip=""):
     specs = ALGORITHM_SETTINGS.get((family, algorithm), ())
     ui_root = getattr(owner, "ui", None)
     fields = [(attribute, getattr(ui_root, control, None), getattr(ui_root, label, None))
@@ -238,11 +239,15 @@ def _add_algorithm_row(qt, owner, layout, box, family, algorithm, staged, zh, re
     button.setObjectName("algorithmSettings_" + algorithm)
     caption = "设置" if zh else "Settings"
     button.setAccessibleName(caption)
-    button.setToolTip(caption)
+    if disabled:
+        button.setEnabled(False)
+        button.setToolTip(disabled_tooltip or caption)
+    else:
+        button.setToolTip(caption)
     from shared.ui_styles import is_dark_mode, style_combobox_popup
 
     use_dark = is_dark_mode(getattr(owner, "_uiWidget", None)) if dark is None else bool(dark)
-    ink = "#E6EDF3" if use_dark else "#334155"
+    ink = ("#7D8590" if use_dark else "#94A3B8") if disabled else ("#E6EDF3" if use_dark else "#334155")
     artwork = (
         '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20">'
         f'<g fill="none" stroke="{ink}" stroke-width="1.7" stroke-linejoin="round">'
@@ -347,6 +352,9 @@ def choose_algorithms(owner, family):
         dialog.setWindowFlags(dialog_flags)
     if hasattr(dialog, "setProperty"):
         dialog.setProperty("popupCard", "true")
+    always_tips = getattr(qt.Qt, "WA_AlwaysShowToolTips", None)
+    if always_tips is not None and hasattr(dialog, "setAttribute"):
+        dialog.setAttribute(always_tips, True)
     try:
         from shared.ui_styles import is_dark_mode, ui_stylesheet
 
@@ -486,7 +494,21 @@ def choose_algorithms(owner, family):
         if pointing_cursor is not None and hasattr(box, "setCursor"):
             box.setCursor(pointing_cursor)
         boxes[value] = box
-        _add_algorithm_row(qt, owner, body_layout, box, family, value, staged, zh, resize_popup, dark=dark)
+        _add_algorithm_row(
+            qt, owner, body_layout, box, family, value, staged, zh, resize_popup,
+            dark=dark, disabled=fsl_blocked, disabled_tooltip=fsl_tip,
+        )
+
+    if fsl_missing and fsl_tip:
+        avail_note = qt.QLabel(fsl_tip)
+        if hasattr(avail_note, "setObjectName"):
+            avail_note.setObjectName("algorithmPickerAvailabilityNote")
+        avail_note.wordWrap = True
+        if hasattr(avail_note, "setMaximumWidth"):
+            avail_note.setMaximumWidth(360)
+        if hasattr(avail_note, "setTextFormat") and hasattr(qt.Qt, "PlainText"):
+            avail_note.setTextFormat(qt.Qt.PlainText)
+        body_layout.addWidget(avail_note)
 
     note = qt.QLabel("")
     if hasattr(note, "setObjectName"):

@@ -7,6 +7,7 @@ may not) and are skipped without them.
 from __future__ import annotations
 
 import ast
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -430,6 +431,145 @@ class WiringTest(unittest.TestCase):
         widget = (REPO_ROOT / "shared" / "module_widget.py").read_text(encoding="utf-8")
         self.assertIn("self._refresh_input_preview_controls()", widget)
         self.assertIn("def _on_input_preview_clicked", widget)
+
+    def test_input_drop_routing_tile_border_and_preview_placement(self):
+        from Testing.Python.test_ui_run_history import fake_qt
+        from shared import ui_prepare_inputs as prep
+
+        assigned: dict[str, str] = {}
+        shown: list[str] = []
+
+        class Owner:
+            _parameterNode = SimpleNamespace(batchMode=False)
+
+            def _prepare_inputs_widget_text(self, key):
+                return assigned.get(key, "")
+
+            def _set_prepare_inputs_widget_text(self, key, value):
+                assigned[key] = value
+
+        owner = Owner()
+        with mock.patch.object(prep, "show_input_format", side_effect=lambda _o, k: shown.append(k)):
+            ok = prep._assign_dropped_file_paths(
+                owner, "nifti_source",
+                [Path("/tmp/sub/dwi.nii.gz"), Path("/tmp/sub/dwi.bval"), Path("/tmp/sub/dwi.bvec")],
+            )
+            self.assertTrue(ok)
+            self.assertEqual(shown, ["nifti"])
+            self.assertEqual(assigned["source"], str(Path("/tmp/sub/dwi.nii.gz")))
+            self.assertEqual(assigned["bval"], str(Path("/tmp/sub/dwi.bval")))
+            self.assertEqual(assigned["bvec"], str(Path("/tmp/sub/dwi.bvec")))
+
+            assigned.clear()
+            ok_mask = prep._assign_dropped_file_paths(owner, "mask", [Path("/tmp/sub/mask.nii.gz")])
+            self.assertTrue(ok_mask)
+            self.assertEqual(assigned, {"mask": str(Path("/tmp/sub/mask.nii.gz"))})
+
+            assigned.clear()
+            ok_raw = prep._assign_dropped_file_paths(owner, "raw", [Path("/tmp/sub/volume.img")])
+            self.assertTrue(ok_raw)
+            self.assertEqual(assigned, {"raw": str(Path("/tmp/sub/volume.img"))})
+
+        class FakeLayout:
+            def __init__(self, initial=()):
+                self.items = list(initial)
+
+            def indexOf(self, w):
+                return self.items.index(w) if w in self.items else -1
+
+            def addWidget(self, w, *_a):
+                self.items.append(w)
+
+            def insertWidget(self, idx, w, *_a):
+                self.items.insert(idx, w)
+
+            def removeWidget(self, w):
+                if w in self.items:
+                    self.items.remove(w)
+
+        qt = fake_qt()
+        btn = object()
+        header = FakeLayout()
+        row_layout = FakeLayout()
+        me = SimpleNamespace(
+            _parameterNode=SimpleNamespace(batchMode=False),
+            _prepareInputWidgets={"format_header": header},
+            _inputPreviewWidgets={"button": btn, "layout": row_layout},
+        )
+        with mock.patch.dict(sys.modules, {"qt": qt}):
+            prep.place_input_preview_button(me)
+            self.assertEqual(header.items, [btn])
+            self.assertEqual(row_layout.items, [])
+            prep.place_input_preview_button(me, batch=True)
+            self.assertEqual(header.items, [])
+            self.assertEqual(row_layout.items, [btn])
+
+        prepare_source = (REPO_ROOT / "shared" / "ui_prepare_inputs.py").read_text(encoding="utf-8")
+        self.assertIn("border: 1px dashed", prepare_source)
+        self.assertNotIn("border: 2px dashed", prepare_source)
+
+        class DummyQFrame:
+            NoFrame = 0
+
+            def __init__(self):
+                self._props = {}
+                self.frame_shape = None
+                self.updated = False
+
+            def property(self, name):
+                return self._props.get(name)
+
+            def setProperty(self, name, value):
+                self._props[name] = value
+
+            def setFrameShape(self, shape):
+                self.frame_shape = shape
+
+            def update(self):
+                self.updated = True
+
+        class DummyEvent:
+            def __init__(self, urls=()):
+                self._urls = list(urls)
+                self.accepted = False
+                self.ignored = False
+
+            def mimeData(self):
+                return SimpleNamespace(
+                    hasUrls=lambda: bool(self._urls),
+                    urls=lambda: list(self._urls),
+                )
+
+            def acceptProposedAction(self):
+                self.accepted = True
+
+            def ignore(self):
+                self.ignored = True
+
+        local_url = SimpleNamespace(isLocalFile=lambda: True, toLocalFile=lambda: "/tmp/sub/drop_dwi.nii.gz")
+        assigned.clear()
+        shown.clear()
+        with mock.patch.object(prep, "show_input_format", side_effect=lambda _o, k: shown.append(k)):
+            tile, handles_drops = prep._make_input_drop_tile(
+                SimpleNamespace(QFrame=DummyQFrame), owner, "nifti_source"
+            )
+            self.assertTrue(handles_drops)
+            self.assertEqual(tile.frame_shape, DummyQFrame.NoFrame)
+
+            enter_ev = DummyEvent([local_url])
+            tile.dragEnterEvent(enter_ev)
+            self.assertTrue(enter_ev.accepted)
+            self.assertTrue(tile.property("dragActive"))
+
+            tile.dragLeaveEvent(DummyEvent())
+            self.assertFalse(tile.property("dragActive"))
+
+            drop_ev = DummyEvent([local_url])
+            tile.dropEvent(drop_ev)
+            self.assertTrue(drop_ev.accepted)
+            self.assertFalse(tile.property("dragActive"))
+            self.assertEqual(shown, ["nifti"])
+            self.assertEqual(assigned["source"], str(Path("/tmp/sub/drop_dwi.nii.gz")))
 
 
 if __name__ == "__main__":

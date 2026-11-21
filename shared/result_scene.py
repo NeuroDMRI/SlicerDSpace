@@ -629,9 +629,6 @@ def automatic_display_preset(slicer, node, candidate, *, hide_pial=True):
         display.SetVisibility(not (pial and hide_pial))
 
 
-SLICE_FIT_MARGIN = 1.15
-
-
 def fit_slice_views_to_bounds(slicer, bounds):
     """Centre every slice view on a RAS box and zoom to it: the volume-free counterpart of resetSliceViews.
 
@@ -645,7 +642,7 @@ def fit_slice_views_to_bounds(slicer, bounds):
         matrix = node.GetSliceToRAS()
         extent = [sum(abs(matrix.GetElement(row, axis)) * (bounds[2 * row + 1] - bounds[2 * row]) for row in range(3))
                   for axis in (0, 1)]
-        per_pixel = max(extent[0] * SLICE_FIT_MARGIN / width, extent[1] * SLICE_FIT_MARGIN / height)
+        per_pixel = max(extent[0] / width, extent[1] / height)
         if per_pixel > 0:
             node.SetFieldOfView(per_pixel * width, per_pixel * height, node.GetFieldOfView()[2])
     center = [(bounds[index] + bounds[index + 1]) / 2 for index in (0, 2, 4)]
@@ -681,9 +678,10 @@ def show_automatic_results(slicer, entries, *, newly_loaded=None):
     if labels:
         view["label"] = sorted(labels)[0][1]
         if sorted(labels)[0][0] == 0:
-            # b2fix D4: DDSeg owns the 2D overlay of an automatic load; DDParcel stays loaded with its 2D display off.
+            # b2fix D4/B1: DDSeg owns the 2D overlay of an automatic load; DDParcel stays loaded but hidden. Only the node
+            # display visibility is turned off, so one Results eye click shows it in 2D (Visibility2D stays on).
             for node in segmentations:
-                node.GetDisplayNode().SetVisibility2D(False)
+                node.SetDisplayVisibility(False)
     new_volumes = any(entry.get("display_role", "").startswith(("scalar:", "categorical")) for entry in new)
     if new_volumes and view and hasattr(slicer.util, "setSliceViewerLayers"):
         slicer.util.setSliceViewerLayers(**view, **({"labelOpacity": 0.35} if labels else {}))

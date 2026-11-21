@@ -62,8 +62,8 @@ named segmentation with 2D fill and outline, no 3D surface, and its region
 names and colors: the run's `.ctbl` when it is not older than the label file,
 else the FreeSurfer table (also when the `.ctbl` cannot be read). In an
 automatic load that also shows DDSeg in the slice views, the DDParcel
-segmentation is loaded with its 2D display off, so the two overlays do not
-cover each other. Loading DDParcel from Results shows it in 2D.
+segmentation is loaded but hidden, so the two overlays do not cover each
+other. Its eye in Results shows it in 2D.
 
 New scalars initialize a FA-preferred slice background and labels initialize an
 overlay. A result with only a segmentation has no volume layer: the slice views

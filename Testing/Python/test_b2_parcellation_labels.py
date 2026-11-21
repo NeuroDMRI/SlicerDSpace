@@ -448,7 +448,8 @@ class SegmentationLoaderTest(unittest.TestCase):
                 if result is not None:
                     self.assertFalse([item for item in result["skipped"] if item.get("path") == str(self.parcellation)])
                 node, color = self._assert_segmentation(color_from=str(self.ctbl))
-                self.assertTrue(node.GetDisplayVisibility())
+                # b2fix B1: the automatic load with DDSeg shown leaves DDParcel loaded but hidden (D4); the others show it
+                self.assertEqual(node.GetDisplayVisibility(), path_name != "automatic")
                 colors.append(color.GetID())
         self.assertEqual(len(set(colors)), 1, "every path must reuse the one colour node of the recorded .ctbl")
 
@@ -534,9 +535,8 @@ class SegmentationLoaderTest(unittest.TestCase):
         self.assertEqual(result["view_node_ids"], {})  # the segmentation never becomes a volume layer
         self.fake.vtkMRMLSliceNode.JumpAllSlices.assert_called_once_with(self.scene, 179.0, -101.0, 129.0, 1)
         (fov_x, fov_y, fov_z), = [call.args for call in slice_node.SetFieldOfView.call_args_list]
-        self.assertGreaterEqual(fov_x, 80.0)  # the 80 x 60 mm in-plane extent fits ...
-        self.assertGreaterEqual(fov_y, 60.0)
-        self.assertLess(fov_x, 3 * 80.0)  # ... and the view is zoomed to it, not left at 250 mm
+        self.assertAlmostEqual(fov_y, 60.0)  # the 80 x 60 mm extent fits the 600 x 400 view exactly, with no margin
+        self.assertAlmostEqual(fov_x, 90.0)  # (as resetSliceViews): the height limits, the width follows the aspect ratio
         self.assertAlmostEqual(fov_x / fov_y, 600 / 400)
         self.assertEqual(fov_z, 1.0)
         self.assertIs(self._nodes_for(self.parcellation)[0], segmentation)
@@ -553,8 +553,17 @@ class SegmentationLoaderTest(unittest.TestCase):
         self.manifest_path = self._manifest()
         self.logic.loadKeyResultsFromManifest(self.manifest_path, automatic=True)
         segmentation = self._nodes_for(self.parcellation)[0]
-        segmentation.display.SetVisibility2D.assert_called_once_with(False)
-        self.assertTrue(segmentation.GetDisplayVisibility())  # loaded and listed as shown in Results
+        self.assertFalse(segmentation.GetDisplayVisibility())  # loaded, hidden: the Results eye reads closed
+        self.assertNotIn(((False,), {}), [(c.args, c.kwargs) for c in segmentation.display.SetVisibility2D.call_args_list])
+
+    def test_b2fix_display_B1_one_eye_click_shows_the_hidden_parcellation_in_2d(self) -> None:
+        """B1: the eye only sets the node display visibility, so Visibility2D must never be turned off."""
+        self.manifest_path = self._manifest()
+        self.logic.loadKeyResultsFromManifest(self.manifest_path, automatic=True)
+        segmentation = self._nodes_for(self.parcellation)[0]
+        segmentation.SetDisplayVisibility(True)  # what one Results eye click does
+        self.assertTrue(segmentation.GetDisplayVisibility())
+        self.assertNotIn(((False,), {}), [(c.args, c.kwargs) for c in segmentation.display.SetVisibility2D.call_args_list])
 
     def test_b2fix_display_D4_without_ddseg_or_by_hand_the_parcellation_shows_in_2d(self) -> None:
         for case in ("no ddseg", "manual"):

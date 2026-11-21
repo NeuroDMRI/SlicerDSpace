@@ -137,14 +137,14 @@ def fingerprint(path):
 def ensure_record(path, signature):
     path = Path(path)
     if path.exists():
-        if json.loads(path.read_text()) != signature:
+        if json.loads(path.read_text(encoding='utf-8')) != signature:
             raise ValueError(f'Cached outputs have different raw inputs/settings; use a new output directory: {path.parent}')
         return
     if path.parent.exists() and any(path.parent.iterdir()):
         raise ValueError(f'Existing outputs have no raw-input record; use a new output directory: {path.parent}')
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix('.tmp')
-    temporary.write_text(json.dumps(signature, indent=2) + '\n')
+    temporary.write_text(json.dumps(signature, indent=2) + '\n', encoding='utf-8')
     temporary.replace(path)
 
 
@@ -163,7 +163,7 @@ def main(argv=None):
     if args.reuse_record is not None:
         if args.record is None:
             parser.error('--reuse-record requires --record')
-        ensure_record(args.record, json.loads(args.reuse_record.read_text()))
+        ensure_record(args.record, json.loads(args.reuse_record.read_text(encoding='utf-8')))
         return
     if not args.subject or (args.input_root is None and args.dwi is None):
         parser.error('Specify --subject and an input root or all four input files')

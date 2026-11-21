@@ -21,6 +21,8 @@ import tempfile
 import urllib.request
 import zipfile
 
+from shared.external_process import rename_with_retry
+
 
 class NativeRuntimeUnavailable(RuntimeError):
     """The requested native tool has no qualified build for this platform."""
@@ -321,7 +323,7 @@ def install_bundle(record, *, archive=None, root=None, accept_terms=False):
             if has_tree_sha256:
                 receipt["tree_sha256"] = tree_sha256
             (stage / "native-runtime.json").write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
-            stage.rename(dest)
+            rename_with_retry(stage, dest)
         return dest
     finally:
         if download is not None:

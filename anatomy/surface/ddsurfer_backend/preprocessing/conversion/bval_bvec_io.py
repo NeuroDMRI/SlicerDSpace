@@ -4,7 +4,7 @@ np.set_printoptions(precision= PRECISION, suppress= True, floatmode= 'maxprec')
 
 def read_bvecs(bvec_file, assume_normed= True):
 
-    with open(bvec_file, 'r') as f:
+    with open(bvec_file, 'r', encoding='utf-8') as f:
         bvecs = [[float(num) for num in line.split()] for line in f.read().split('\n') if line]
 
     # bvec_file can be 3xN or Nx3
@@ -26,7 +26,7 @@ def read_bvecs(bvec_file, assume_normed= True):
 
 def read_bvals(bval_file):
 
-    with open(bval_file, 'r') as f:
+    with open(bval_file, 'r', encoding='utf-8') as f:
         bvals = [float(num) for num in f.read().split()]
 
     # bval_file can be 1 line or N lines
@@ -34,12 +34,12 @@ def read_bvals(bval_file):
 
 
 def write_bvals(bval_file, bvals):
-    with open(bval_file, 'w') as f:
+    with open(bval_file, 'w', encoding='utf-8') as f:
         f.write(('\n').join(str(b) for b in bvals))
 
 
 def write_bvecs(bvec_file, bvecs):
-    with open(bvec_file, 'w') as f:
+    with open(bvec_file, 'w', encoding='utf-8') as f:
         # when bvecs is a list
         f.write(('\n').join((' ').join(str(i) for i in row) for row in bvecs))
 
@@ -102,7 +102,7 @@ def encode_nrrd_gradient(bval, bvec, b_max):
 
 def read_gradient_indices(filename):
 
-    with open(filename) as f:
+    with open(filename, encoding='utf-8') as f:
         content= f.read()
 
     indices= content.replace(',', ' ')

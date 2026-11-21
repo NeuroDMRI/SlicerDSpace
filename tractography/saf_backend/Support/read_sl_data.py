@@ -2,7 +2,7 @@
 
 
 def read_sl_data(indata):
-    with open(indata, 'r') as f:
+    with open(indata, 'r', encoding='utf-8') as f:
         pos = f.tell()
         line = f.readline()
         while line and line.startswith('#'):

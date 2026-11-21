@@ -72,7 +72,7 @@ def compare(reference, candidate, hemis=('lh',), atlases=('aparc', 'aparc.a2009s
         return _array(aa, ba)
 
     def stats(a, b):
-        rows = lambda path: [line.strip().split() for line in path.read_text().splitlines()
+        rows = lambda path: [line.strip().split() for line in path.read_text(encoding='utf-8').splitlines()
                              if line.strip() and not line.startswith('#')]
         aa, ba = rows(a), rows(b)
         return dict(equal=aa == ba, reference_rows=len(aa), candidate_rows=len(ba))

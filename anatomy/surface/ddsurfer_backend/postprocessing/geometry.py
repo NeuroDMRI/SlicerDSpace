@@ -18,7 +18,7 @@ def volume_files(path):
     path = Path(path).resolve()
     files = [path]
     if path.suffix.lower() == '.nhdr':
-        entry = next((line.split(':', 1)[1].strip() for line in path.read_text().splitlines()
+        entry = next((line.split(':', 1)[1].strip() for line in path.read_text(encoding='utf-8').splitlines()
                       if line.lower().startswith('data file:')), None)
         if not entry or entry.upper().startswith('LIST') or '%' in entry:
             raise ValueError('Expected an NHDR header referencing one data file')

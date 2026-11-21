@@ -22,7 +22,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from shared.external_process import python_tool_environment, text_subprocess_kwargs
+from shared.external_process import python_tool_environment, subprocess_no_window_kwargs, text_subprocess_kwargs
 from shared.output_contracts import vtp_streamline_count
 from shared.product_staging import archive_run_records, new_product_staging, publish_products, retain_failed_products
 
@@ -504,7 +504,7 @@ def run_tractcloud_parcellation(
             runtime_command[1:3] = ['-c', TRACTCLOUD_COMPAT_BOOTSTRAP]
             manifest['executed_command'] = runtime_command
             manifest['compatibility_adjustments'] = ['Supply missing upstream logging; resolve device in the selected Python and refuse automatic CPU retries after CUDA failure; network and weights unchanged']
-            completed = subprocess.run(runtime_command, check=True, env=env)
+            completed = subprocess.run(runtime_command, check=True, env=env, **subprocess_no_window_kwargs())
             return_code = completed.returncode
             device_record = output_dir / 'tractcloud_device.json'
             if device_record.is_file():

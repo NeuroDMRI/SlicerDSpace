@@ -10,6 +10,7 @@ import sys
 import shutil
 import struct
 import tempfile
+import time
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
@@ -211,6 +212,28 @@ def merged_startup_environment(extra_env: Optional[Mapping[str, str]] = None) ->
     """Alias used at call sites where an existing env dict is extended."""
 
     return startup_environment(extra_env)
+
+
+def rename_with_retry(
+    src: Path | str,
+    dst: Path | str,
+    *,
+    timeout: float = 5.0,
+    interval: float = 0.1,
+) -> Path:
+    """Rename ``src`` to ``dst``, retrying transient PermissionError (e.g. Windows AV/indexer locks)."""
+
+    source = Path(src)
+    target = Path(dst)
+    deadline = time.monotonic() + max(0.0, float(timeout))
+    while True:
+        try:
+            source.rename(target)
+            return target
+        except PermissionError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(max(0.01, float(interval)))
 
 
 def _path_parts(value: Optional[str]) -> list[str]:
@@ -445,14 +468,14 @@ def python_shim_folder(target: Path | str, shim_root: Optional[Path | str] = Non
     for name in ("python", "python3"):
         script = folder / name
         try:
-            if script.is_file() and os.access(script, os.X_OK) and script.read_text() == body:
+            if script.is_file() and os.access(script, os.X_OK) and script.read_text(encoding="utf-8") == body:
                 continue  # R-B6: an identical shim is never rewritten
         except OSError:
             pass
         # R-B6: a unique temporary file per writer, so parallel jobs cannot remove each other's file.
         handle, temporary = tempfile.mkstemp(prefix=name + ".", suffix=".tmp", dir=folder)
         try:
-            with os.fdopen(handle, "w") as output:
+            with os.fdopen(handle, "w", encoding="utf-8") as output:
                 output.write(body)
             os.chmod(temporary, 0o755)
             os.replace(temporary, script)

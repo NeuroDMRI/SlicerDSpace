@@ -27,13 +27,13 @@ LOG = logging.getLogger(__name__)
 
 def load_json(path):
     import json
-    return json.loads(Path(path).read_text())
+    return json.loads(Path(path).read_text(encoding='utf-8'))
 
 
 def load_checksums(folder):
     path = folder / 'SHA256SUMS'
     checksums = {}
-    for line in path.read_text().splitlines():
+    for line in path.read_text(encoding='utf-8').splitlines():
         if not line.strip():
             continue
         digest, name = line.split(maxsplit=1)

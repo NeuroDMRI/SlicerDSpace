@@ -5,7 +5,13 @@ import subprocess
 import sys
 from pathlib import Path
 
-from shared.external_process import native_arm64_argv, resolve_external_command, startup_environment, text_subprocess_kwargs
+from shared.external_process import (
+    native_arm64_argv,
+    resolve_external_command,
+    startup_environment,
+    subprocess_no_window_kwargs,
+    text_subprocess_kwargs,
+)
 
 
 def _mrtrix_seed_extra_env(PS):
@@ -77,6 +83,7 @@ def sys_exec(cmd, PS):
             shell=shell,
             check=True,
             env=env,
+            **subprocess_no_window_kwargs(),
         )
     return subprocess.run(
         cmd,
@@ -85,5 +92,5 @@ def sys_exec(cmd, PS):
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         env=env,
-        **text_subprocess_kwargs(),
+        **subprocess_no_window_kwargs(**text_subprocess_kwargs()),
     )

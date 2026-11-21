@@ -30,10 +30,11 @@ def journal_dir(module_root: Path) -> Path:
 
 
 def write_json_atomic(path: Path, payload: Dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_name(path.name + ".tmp")
+    path_fs = win_fs_path(path)
+    path_fs.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = win_fs_path(path.with_name(path.name + ".tmp"))
     tmp_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-    os.replace(tmp_path, path)
+    os.replace(tmp_path, path_fs)
 
 
 def clear_stale_pyc(root: Path, python_relatives: set) -> None:
@@ -41,12 +42,12 @@ def clear_stale_pyc(root: Path, python_relatives: set) -> None:
         if not rel.endswith(".py"):
             continue
         py_path = root / rel
-        cache_dir = py_path.parent / "__pycache__"
+        cache_dir = win_fs_path(py_path.parent / "__pycache__")
         if not cache_dir.is_dir():
             continue
         for pyc in cache_dir.glob(f"{py_path.stem}.*.pyc"):
             try:
-                pyc.unlink()
+                win_fs_path(pyc).unlink()
             except OSError:
                 pass
 
@@ -64,6 +65,22 @@ def current_process_identity() -> Dict[str, Any]:
     return identity
 
 
+_WIN_EXTENDED_PATH_THRESHOLD = 240
+
+
+def win_fs_path(path: Path) -> Path:
+    """Return a \\\\?\\ extended-length Path on Windows when the resolved path is near MAX_PATH."""
+
+    if os.name != "nt":
+        return path
+    resolved = os.path.abspath(os.fspath(path))
+    if len(resolved) < _WIN_EXTENDED_PATH_THRESHOLD or resolved.startswith("\\\\?\\"):
+        return path
+    if resolved.startswith("\\\\"):
+        return Path("\\\\?\\UNC\\" + resolved[2:])
+    return Path("\\\\?\\" + resolved)
+
+
 def _pid_alive_without_psutil(pid: int) -> bool:
     """Liveness of a pid without psutil; any doubt counts as alive."""
 
@@ -72,12 +89,20 @@ def _pid_alive_without_psutil(pid: int) -> bool:
         try:
             import ctypes
 
-            kernel32 = ctypes.windll.kernel32
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel32.OpenProcess.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32]
+            kernel32.OpenProcess.restype = ctypes.c_void_p
+            kernel32.GetExitCodeProcess.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32)]
+            kernel32.GetExitCodeProcess.restype = ctypes.c_int
+            kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+            kernel32.CloseHandle.restype = ctypes.c_int
+
+            ctypes.set_last_error(0)
             handle = kernel32.OpenProcess(0x1000, False, int(pid))  # PROCESS_QUERY_LIMITED_INFORMATION
             if not handle:
-                return kernel32.GetLastError() != 87  # ERROR_INVALID_PARAMETER: no such process
+                return ctypes.get_last_error() != 87  # ERROR_INVALID_PARAMETER: no such process
             try:
-                code = ctypes.c_ulong()
+                code = ctypes.c_uint32()
                 if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
                     return True
                 return code.value == 259  # STILL_ACTIVE
@@ -189,26 +214,27 @@ def write_update_journal(
     target_version: str,
     backed_up: List[str],
     created: List[str],
+    backup_map: Optional[Dict[str, str]] = None,
 ) -> None:
     """Record what an apply is about to change, before the first file is replaced (H6)."""
 
-    write_json_atomic(
-        journal_directory / JOURNAL_FILENAME,
-        {
-            "kind": "slicerdspace_update_journal",
-            "version": 1,
-            **current_process_identity(),
-            "target_version": target_version,
-            "backed_up": list(backed_up),
-            "created": list(created),
-        },
-    )
+    payload: Dict[str, Any] = {
+        "kind": "slicerdspace_update_journal",
+        "version": 1,
+        **current_process_identity(),
+        "target_version": target_version,
+        "backed_up": list(backed_up),
+        "created": list(created),
+    }
+    if backup_map:
+        payload["backup_map"] = dict(backup_map)
+    write_json_atomic(journal_directory / JOURNAL_FILENAME, payload)
 
 
 def discard_journal(journal_directory: Path) -> None:
     """Remove the journal after a finished apply; a journal that stays must never roll back a good update."""
 
-    journal_file = journal_directory / JOURNAL_FILENAME
+    journal_file = win_fs_path(journal_directory / JOURNAL_FILENAME)
     deadline = time.monotonic() + _DISCARD_RETRY_SECONDS
     while journal_file.exists():
         try:
@@ -221,7 +247,7 @@ def discard_journal(journal_directory: Path) -> None:
                     pass
                 break
             time.sleep(_DISCARD_RETRY_INTERVAL)
-    shutil.rmtree(journal_directory, ignore_errors=True)
+    shutil.rmtree(win_fs_path(journal_directory), ignore_errors=True)
 
 
 def rollback_apply(
@@ -229,16 +255,18 @@ def rollback_apply(
     backup_dir: Path,
     backed_up_relatives: List[str],
     created_relatives: List[str],
+    backup_map: Optional[Dict[str, str]] = None,
 ) -> None:
     for rel in created_relatives:
-        dst = module_root / rel
+        dst = win_fs_path(module_root / rel)
         try:
             dst.unlink(missing_ok=True)
         except OSError:
             pass
     for rel in backed_up_relatives:
-        src = backup_dir / rel
-        dst = module_root / rel
+        backup_rel = backup_map.get(rel, rel) if backup_map else rel
+        src = win_fs_path(backup_dir / backup_rel)
+        dst = win_fs_path(module_root / rel)
         if src.is_file():
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src, dst)
@@ -279,9 +307,9 @@ def _recover_locked(root: Path, *, check_owner: bool) -> Optional[Dict[str, Any]
     if not journal_file.is_file():
         return None
     try:
-        journal = json.loads(journal_file.read_text(encoding="utf-8"))
+        journal = json.loads(win_fs_path(journal_file).read_text(encoding="utf-8"))
         if journal.get("completed"):
-            shutil.rmtree(directory, ignore_errors=True)
+            shutil.rmtree(win_fs_path(directory), ignore_errors=True)
             return None
         if check_owner and journal_owner_is_running(journal, journal_file):
             return {"status": "update_in_progress", "pid": journal.get("pid")}
@@ -294,8 +322,14 @@ def _recover_locked(root: Path, *, check_owner: bool) -> Optional[Dict[str, Any]
             flush=True,
         )
         return {"status": "journal_unreadable", "journal": str(journal_file)}
+    raw_backup_map = journal.get("backup_map")
+    backup_map = {str(k): str(v) for k, v in raw_backup_map.items()} if isinstance(raw_backup_map, dict) else None
     backup_dir = directory / "backup"
-    missing = [rel for rel in backed_up if not (backup_dir / rel).is_file()]
+    missing = [
+        rel
+        for rel in backed_up
+        if not win_fs_path(backup_dir / (backup_map.get(rel, rel) if backup_map else rel)).is_file()
+    ]
     if missing:
         print(
             f"SlicerDSpace: cannot roll back the interrupted update to {journal.get('target_version')}: "
@@ -303,7 +337,7 @@ def _recover_locked(root: Path, *, check_owner: bool) -> Optional[Dict[str, Any]
             flush=True,
         )
         return {"status": "rollback_incomplete", "missing": missing}
-    rollback_apply(root, backup_dir, backed_up, created)
+    rollback_apply(root, backup_dir, backed_up, created, backup_map=backup_map)
     clear_stale_pyc(root, set(backed_up) | set(created))
     discard_journal(directory)
     print(

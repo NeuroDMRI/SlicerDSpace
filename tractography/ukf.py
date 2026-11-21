@@ -359,7 +359,7 @@ def signature(raw, options, executable, converter=None):
 def current(raw, directory, options=None, executable=None, converter=None, *, _signature=None):
     try:
         products = paths(raw.subject_id, directory)
-        record = json.loads(products["manifest"].read_text())
+        record = json.loads(products["manifest"].read_text(encoding="utf-8"))
         expected_signature = (
             _signature
             if _signature is not None
@@ -367,7 +367,7 @@ def current(raw, directory, options=None, executable=None, converter=None, *, _s
         )
         if record["status"] != "completed" or record["signature"] != expected_signature:
             return False
-        qc = json.loads(products["qc"].read_text())
+        qc = json.loads(products["qc"].read_text(encoding="utf-8"))
         return qc.get("automatic_qc_passed") is True and all(
             path.is_file() and record["artifacts"][key] == digest(path)
             for key, path in products.items()
@@ -375,6 +375,74 @@ def current(raw, directory, options=None, executable=None, converter=None, *, _s
         )
     except (OSError, ValueError, KeyError, RuntimeError, TypeError, AttributeError):
         return False
+
+
+def _host_ram_gib() -> float | None:
+    """Return physical host memory in GiB when observable, else None."""
+    try:
+        import psutil
+        total = int(psutil.virtual_memory().total)
+        if total > 0:
+            return total / float(1024 ** 3)
+    except Exception:
+        pass
+    if os.name == "nt":
+        try:
+            import ctypes
+
+            class _MemoryStatusEx(ctypes.Structure):
+                _fields_ = [
+                    ("dwLength", ctypes.c_uint32),
+                    ("dwMemoryLoad", ctypes.c_uint32),
+                    ("ullTotalPhys", ctypes.c_uint64),
+                    ("ullAvailPhys", ctypes.c_uint64),
+                    ("ullTotalPageFile", ctypes.c_uint64),
+                    ("ullAvailPageFile", ctypes.c_uint64),
+                    ("ullTotalVirtual", ctypes.c_uint64),
+                    ("ullAvailVirtual", ctypes.c_uint64),
+                    ("ullAvailExtendedVirtual", ctypes.c_uint64),
+                ]
+
+            stat = _MemoryStatusEx()
+            stat.dwLength = ctypes.sizeof(_MemoryStatusEx)
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            if kernel32.GlobalMemoryStatusEx(ctypes.byref(stat)) and stat.ullTotalPhys > 0:
+                return float(stat.ullTotalPhys) / float(1024 ** 3)
+        except Exception:
+            pass
+    elif hasattr(os, "sysconf"):
+        try:
+            pages = int(os.sysconf("SC_PHYS_PAGES"))
+            page_size = int(os.sysconf("SC_PAGE_SIZE"))
+            if pages > 0 and page_size > 0:
+                return float(pages * page_size) / float(1024 ** 3)
+        except (OSError, ValueError):
+            pass
+    return None
+
+
+def _ukf_cpu_memory_runtime_warning(
+    inputs: dict,
+    *,
+    use_gpu: bool,
+    ram_gib: float | None = None,
+) -> str | None:
+    """Warn when multi-shell high-resolution UKF runs on CPU with <=36 GiB RAM."""
+    if use_gpu:
+        return None
+    volumes = int(inputs.get("volumes") or 0)
+    shells = inputs.get("approximate_shells") or ()
+    voxels = int(inputs.get("effective_brain_voxels") or inputs.get("brain_voxels") or 0)
+    if volumes < 150 or len(shells) < 2 or voxels < 500_000:
+        return None
+    host_ram = _host_ram_gib() if ram_gib is None else ram_gib
+    if host_ram is None or host_ram > 36.0:
+        return None
+    return (
+        f"High-resolution multi-shell CPU UKF ({volumes} volumes, {len(shells)} shells, "
+        f"{voxels:,} mask voxels on {host_ram:.1f} GiB RAM) can take >40 min and >25 GB RAM. "
+        "Consider CSD/ACT, GPU UKF (--useGPU), or capping --numThreads if memory pressure occurs."
+    )
 
 
 def validate_inputs(raw):
@@ -1066,6 +1134,9 @@ def run_ukf(raw, directory, *, options=None, executable=None, converter=None, de
         record["effective_mask"] = dict(path=str(products["effective_mask"]),
                                         sha256=digest(products["effective_mask"]))
         save()
+        cpu_mem_warning = _ukf_cpu_memory_runtime_warning(inputs, use_gpu=use_gpu)
+        if cpu_mem_warning:
+            inputs["warnings"] = [*inputs["warnings"], cpu_mem_warning]
         if log:
             for warning in inputs['warnings']:
                 log('[UKF] '+warning)
@@ -1111,8 +1182,10 @@ def run_ukf(raw, directory, *, options=None, executable=None, converter=None, de
                     else:
                         log("[UKF] Running official UKFTractography")
                 with log_path.open("wb") as stream:
+                    from shared.external_process import subprocess_no_window_kwargs
                     process = subprocess.Popen(cmd, stdout=stream, stderr=subprocess.STDOUT,
-                                               env=converter_env if index == 0 else env)
+                                               env=converter_env if index == 0 else env,
+                                               **subprocess_no_window_kwargs())
                     try:
                         if process.wait():
                             raise RuntimeError("UKF stage failed; see " + str(log_path))

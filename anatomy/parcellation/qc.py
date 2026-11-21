@@ -74,7 +74,7 @@ def validate_outputs(subject_id: str, output_dir: Path, native_mask: Path) -> di
             raise ValueError("DDParcel output QC failed: " + ", ".join(key for key, value in checks.items() if not value))
         return payload
     except Exception as exc:
-        if not qc_path.is_file() or json.loads(qc_path.read_text()).get("status") != "failed":
+        if not qc_path.is_file() or json.loads(qc_path.read_text(encoding="utf-8")).get("status") != "failed":
             _write_json(qc_path, {"kind": "ddparcel_output_qc", "status": "failed",
                                   "automatic_qc_passed": False, "subject_id": subject_id, "error": str(exc)})
         raise

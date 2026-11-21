@@ -50,7 +50,7 @@ class StageCache:
     def __init__(self, record, related_files=None, validate=None):
         self.path = Path(record)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.records = json.loads(self.path.read_text()) if self.path.exists() else {}
+        self.records = json.loads(self.path.read_text(encoding='utf-8')) if self.path.exists() else {}
         self.related_files = related_files or (lambda path: [Path(path)])
         self.validate = validate or self._validate_file
         self.lock = Lock()

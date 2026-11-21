@@ -162,7 +162,7 @@ def process_group_is_running(pgid: int) -> bool:
             if not entry.name.isdigit():
                 continue
             try:
-                fields = (entry / "stat").read_text().rsplit(") ", 1)[1].split()
+                fields = (entry / "stat").read_text(encoding="utf-8").rsplit(") ", 1)[1].split()
                 if int(fields[2]) == pgid and fields[0] not in {"Z", "X"}:
                     return True
             except (OSError, ValueError, IndexError):

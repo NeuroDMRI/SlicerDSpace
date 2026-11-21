@@ -29,7 +29,7 @@ def require_tool(value, name):
 def run(command, log, env):
     print('[build] ' + ' '.join(str(value) for value in command), flush=True)
     log.parent.mkdir(parents=True, exist_ok=True)
-    with log.open('a') as stream:
+    with log.open('a', encoding='utf-8') as stream:
         subprocess.run([str(value) for value in command], check=True, env=env, stdout=stream, stderr=stream)
 
 
@@ -70,15 +70,15 @@ def prepare_dependency(name, work, offline=False):
             extract(archive, staged, record['directory'])
             atomic_json(staged / '.ddsurfer-source.json', record)
             staged.rename(destination)
-    elif not marker.is_file() or json.loads(marker.read_text()) != record:
+    elif not marker.is_file() or json.loads(marker.read_text(encoding='utf-8')) != record:
         raise ValueError(f'Unrecognized dependency source directory: {destination}; choose a fresh --work-dir')
     if name == 'itk':
         compiler = destination / 'Modules/ThirdParty/VNL/src/vxl/vcl/vcl_compiler.h'
         old = '# elif (__GNUC__==8)'
         new = '# elif (__GNUC__>=8) // DDSurfer: accept newer GCC with the GCC 8 compatibility definitions.'
-        text = compiler.read_text()
+        text = compiler.read_text(encoding='utf-8')
         if text.count(old) == 1:
-            compiler.write_text(text.replace(old, new))
+            compiler.write_text(text.replace(old, new), encoding='utf-8')
         elif new not in text:
             raise ValueError('Unrecognized ITK compiler header; refusing an unchecked compatibility patch')
     return destination
@@ -119,8 +119,8 @@ def stage_source(source, work):
         for name in SOURCE_DIRECTORIES:
             shutil.copytree(source / name, stage / name, symlinks=True)
         (stage / '.ddsurfer').mkdir()
-        marker.write_text(FS_REVISION + '\n')
-    elif not marker.is_file() or marker.read_text().strip() != FS_REVISION:
+        marker.write_text(FS_REVISION + '\n', encoding='utf-8')
+    elif not marker.is_file() or marker.read_text(encoding='utf-8').strip() != FS_REVISION:
         raise ValueError('Unrecognized staged source; choose a fresh --work-dir')
     else:
         for name in SOURCE_DIRECTORIES:
@@ -201,7 +201,7 @@ def build(args):
             for name in COMMANDS:
                 shutil.copy2(native / 'bin' / name, runtime / 'bin' / name)
                 run([runtime / 'bin' / name, '--version'], work / 'smoke.log', env)
-            (runtime / 'build-stamp.txt').write_text('ddsurfer-local-freesurfer-7eb8460\n')
+            (runtime / 'build-stamp.txt').write_text('ddsurfer-local-freesurfer-7eb8460\n', encoding='utf-8')
             for name, origin in [('license.ITK-source.txt', itk / 'LICENSE'), ('notice.ITK-source.txt', itk / 'NOTICE'),
                                  ('license.zlib-source.txt', zlib / 'LICENSE')]:
                 if origin.is_file():

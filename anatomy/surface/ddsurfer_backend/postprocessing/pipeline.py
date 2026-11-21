@@ -115,7 +115,7 @@ def run_locked(args):
     signature_path = subject_dir / 'logs/inputs.json'
     if any((subject_dir / name).exists() for name in ('mri', 'surf', 'label', 'stats', 'fsaverage')) and not signature_path.exists():
         raise ValueError('Existing subject output has no input record; use a new output directory')
-    if signature_path.exists() and json.loads(signature_path.read_text()) != signature:
+    if signature_path.exists() and json.loads(signature_path.read_text(encoding='utf-8')) != signature:
         raise ValueError('Existing FreeSurfer outputs have different inputs/settings; use a new output directory')
     for name in ('mri', 'surf', 'label', 'stats', 'logs', 'fsaverage'):
         (subject_dir / name).mkdir(parents=True, exist_ok=True)
@@ -262,7 +262,7 @@ def run_locked(args):
 
     preparation.run('native_surfaces', files + [Path(__file__), ROOT / 'postprocessing/geometry.py',
                     ROOT / 'utils/surface_io.py', ROOT / 'utils/stages.py'], prepared_outputs, prepare, settings=signature)
-    prepared = json.loads(prepared_qc.read_text())
+    prepared = json.loads(prepared_qc.read_text(encoding='utf-8'))
 
     def process_hemi(hemi):
         hemi_qc = prepared[hemi]

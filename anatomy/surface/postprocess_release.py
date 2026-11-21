@@ -16,7 +16,13 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from shared.environment import resolve_freesurfer_home
-from shared.external_process import interpreter_path, is_slicer_python, merged_startup_environment, text_subprocess_kwargs
+from shared.external_process import (
+    interpreter_path,
+    is_slicer_python,
+    merged_startup_environment,
+    rename_with_retry,
+    text_subprocess_kwargs,
+)
 
 import nibabel as nib
 import numpy as np
@@ -549,16 +555,16 @@ def _run_current_postprocess(config, subject_root, native_dir, log):
     prior_is_current = False
     if manifest_path.is_file():
         try:
-            prior_is_current = json.loads(manifest_path.read_text()).get('kind') == 'ddsurfer_surface_only_postprocess'
+            prior_is_current = json.loads(manifest_path.read_text(encoding='utf-8')).get('kind') == 'ddsurfer_surface_only_postprocess'
         except Exception:
             prior_is_current = False
-    manifest_path.write_text(json.dumps(manifest, indent=2) + '\n')
+    manifest_path.write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
     try:
         run_backend(command, python_bin=config.python_bin, log=log, log_path=structural / 'backend.log')
-        checks = json.loads((fs_subject / 'logs/qc.json').read_text())
+        checks = json.loads((fs_subject / 'logs/qc.json').read_text(encoding='utf-8'))
         from .postprocess_qc import validate_postprocess_outputs
         integrity = validate_postprocess_outputs(fs_subject, hemis, signature['atlases'])
-        (fs_subject / 'logs/integrity_qc.json').write_text(json.dumps(integrity, indent=2) + '\n')
+        (fs_subject / 'logs/integrity_qc.json').write_text(json.dumps(integrity, indent=2) + '\n', encoding='utf-8')
         if not integrity['automatic_qc_passed']:
             failed = [name for name, passed in integrity['checks'].items() if not passed]
             raise ValueError('Surface postprocess integrity failed: ' + ', '.join(failed))
@@ -574,7 +580,7 @@ def _run_current_postprocess(config, subject_root, native_dir, log):
                     backup.parent.mkdir(parents=True, exist_ok=True)
                     if backup.exists():
                         raise FileExistsError(f'Existing postprocess output conflicts with preserved backup: {backup}')
-                    destination.rename(backup)
+                    rename_with_retry(destination, backup)
             _symlink_canonical_output(source, destination)
         # Track the public copies too on platforms without directory symlinks.
         canonical_pairs = [(fs_subject / name, structural / name) for name in
@@ -602,6 +608,6 @@ def _run_current_postprocess(config, subject_root, native_dir, log):
         qc = dict(status='failed', error=str(exc))
         raise
     finally:
-        manifest_path.write_text(json.dumps(manifest, indent=2) + '\n')
-        qc_path.write_text(json.dumps(qc, indent=2) + '\n')
+        manifest_path.write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
+        qc_path.write_text(json.dumps(qc, indent=2) + '\n', encoding='utf-8')
     return DDSurferPostprocessResult(manifest_path, qc_path, structural, stats, native_dir)

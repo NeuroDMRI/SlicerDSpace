@@ -30,7 +30,7 @@ def ensure_vtk_tractogram(source, target):
     before = _digest(source)
     sidecar = target.with_suffix('.conversion.json')
     try:
-        saved = json.loads(sidecar.read_text())
+        saved = json.loads(sidecar.read_text(encoding='utf-8'))
         if (saved.get('version') == 1 and saved.get('source') == str(source)
                 and saved.get('source_sha256') == before and target.is_file()
                 and saved.get('vtk_sha256') == _digest(target)):

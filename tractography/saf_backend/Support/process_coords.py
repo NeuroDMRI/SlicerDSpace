@@ -3,7 +3,7 @@
 
 def process_coords(ic):
     if isinstance(ic, str):
-        with open(ic, 'r') as f:
+        with open(ic, 'r', encoding='utf-8') as f:
             first = f.readline().strip()
             if first == 'x,y,z,t':
                 data = np.loadtxt(f, delimiter=',')

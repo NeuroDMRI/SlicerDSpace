@@ -2,6 +2,7 @@
 
 from contextlib import contextmanager
 import contextvars
+import gc
 import gzip
 import hashlib
 import json
@@ -462,4 +463,13 @@ def diffusion_image(path, work_dir):
         from shared.cohort_io import io_admission
         with io_admission('dwi_decompression'), open_fast_gzip_reader(path) as source, uncompressed.open("wb") as destination:
             shutil.copyfileobj(source, destination, length=_STREAM_CHUNK_BYTES)
-        yield nib.load(str(uncompressed), mmap="r", keep_file_open=False)
+        loaded = nib.load(str(uncompressed), mmap=False if os.name == "nt" else "r", keep_file_open=False)
+        try:
+            yield loaded
+        finally:
+            try:
+                loaded.uncache()
+            except Exception:
+                pass
+            del loaded
+            gc.collect()

@@ -44,7 +44,7 @@ def extract(archive, destination, root_name, max_bytes=1024 ** 3):
 def assets(package=None):
     root = Path(package) if package is not None else ASSETS
     record = root / 'manifest.json'
-    manifest = json.loads(record.read_text())
+    manifest = json.loads(record.read_text(encoding='utf-8'))
     name = manifest.get('archive', '')
     if (manifest.get('schema') != 'ddsurfer-atlas-1' or Path(name).name != name or
             not name.endswith('.tar.gz') or not re.fullmatch(r'[a-f0-9]{64}', manifest.get('sha256', ''))):

@@ -23,7 +23,7 @@ def parse_ctab_file(filepath):
     if not os.path.exists(filepath):
         raise FileNotFoundError(f"CTAB file not found: {filepath}")
 
-    with open(filepath, "r") as f:
+    with open(filepath, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line or line.startswith("#"):
@@ -225,7 +225,7 @@ def main():
             )
 
         os.makedirs(os.path.dirname(args.out_stats_file), exist_ok=True)
-        with open(args.out_stats_file, "w") as f:
+        with open(args.out_stats_file, "w", encoding="utf-8") as f:
             f.write(f"# Measure \"{os.path.basename(args.annot_file)}\", {args.hemi} hemisphere\n")
             f.write(f"# Annotation File: {args.annot_file}\n")
             f.write(f"# ColorTable File: {args.ctab_file}\n")

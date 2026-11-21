@@ -26,6 +26,7 @@ from typing import Any, Callable, Optional
 from shared.external_process import (
     external_python_environment,
     find_pythonslicer,
+    subprocess_no_window_kwargs,
     text_subprocess_kwargs,
     slicer_runtime_roots,
 )
@@ -971,7 +972,7 @@ def _run_native_org(config, staging, wma_root, slicer, python, env, manifest, st
                     "-c",
                     f"import runpy, sys; sys.path[:0] = {prepend!r}; sys.argv = {exec_args!r}; runpy.run_path(sys.argv[0], run_name='__main__')",
                 ]
-            completed = subprocess.run(exec_command, cwd=staging, env=env, stdout=stdout, stderr=stderr)
+            completed = subprocess.run(exec_command, cwd=staging, env=env, stdout=stdout, stderr=stderr, **subprocess_no_window_kwargs())
             record["return_code"] = completed.returncode
             completed.check_returncode()
             if stage == "registration-nonrigid":

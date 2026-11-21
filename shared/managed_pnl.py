@@ -6,7 +6,7 @@ import subprocess
 import tarfile
 import urllib.request
 
-from shared.external_process import external_python_environment
+from shared.external_process import external_python_environment, subprocess_no_window_kwargs
 
 PNL_COMMIT = "d7fe0fd4976c2d5a3489526f75d2a00dae3e1fe1"
 PNL_TORCH_COMMIT = "8d201a50447ebea8b10a4f252bfd262931603970"
@@ -114,7 +114,7 @@ def provision_assets(prefix, cache, *, repair=False, asset_root=None):
     # CPU build covered by paired validation, not an unqualified CUDA upgrade.
     python = str(prefix / "bin/python")
     probe = subprocess.run([python, "-c", "import torch; v=tuple(map(int,torch.__version__.split('+')[0].split('.')[:2])); assert (2,4)<=v<(3,0)"],
-                           capture_output=True, env=pnl_python_environment(python), timeout=60)
+                           capture_output=True, env=pnl_python_environment(python), timeout=60, **subprocess_no_window_kwargs())
     if probe.returncode:
         _run([python, "-m", "pip", "install", "torch==2.5.1", "--index-url", "https://download.pytorch.org/whl/cpu"])
     if repair:
@@ -162,7 +162,8 @@ def verify_assets(prefix, *, asset_root=None):
     probe = Path(__file__).with_name("pnl_runtime_probe.py")
     result = subprocess.run([str(prefix / "bin/python"), str(probe), str(models)], check=True,
                             capture_output=True, text=True, encoding="utf-8", errors="replace",
-                            env=pnl_python_environment(prefix / "bin/python"), timeout=180)
+                            env=pnl_python_environment(prefix / "bin/python"), timeout=180,
+                            **subprocess_no_window_kwargs())
     details = json.loads(result.stdout)
     return {"external_dependencies": {"pnl_mask_python": str(prefix / "bin/python"),
             "pnl_mask_script": str(script), "pnl_mask_model_dir": str(models),

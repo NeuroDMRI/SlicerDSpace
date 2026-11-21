@@ -478,7 +478,7 @@ def select_streamlines(source, image, labels, selected, mode, directory, *, weig
     output, preview_path = directory / "selected_streamlines.vtk", directory / "selected_streamlines_preview.vtk"
     with (
         tempfile.TemporaryDirectory(prefix=".geometry-", dir=directory) as temporary,
-        source_ids.open("w", newline="") as ids,
+        source_ids.open("w", encoding="utf-8", newline="") as ids,
     ):
         spool = VTKSpool(temporary, "full")
         writer = csv.writer(ids)

@@ -10,7 +10,7 @@ def convert_coords(in_file, out_file):
         out = in_mat.copy()
         out[:, 0:2] = -out[:, 0:2]
         out = np.column_stack([out[:, 0], out[:, 1], out[:, 2], np.zeros(out.shape[0])])
-        with open(out_file, 'w') as f:
+        with open(out_file, 'w', encoding='utf-8') as f:
             f.write('x,y,z,t\n')
             np.savetxt(f, out, delimiter=',', fmt='%.6f')
     elif out_file.lower().endswith('tck'):

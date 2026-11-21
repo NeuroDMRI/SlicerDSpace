@@ -173,7 +173,7 @@ class D1BackendBundleFirstTests(unittest.TestCase):
         code = captured["command"][2]
         self.assertIn("os.environ['PYTHONPATH']", code)
         self.assertIn("SLICERDSPACE_BUNDLED_SITE_PACKAGES", code)
-        self.assertIn(str(site.resolve()), code)
+        self.assertIn(repr(str(site.resolve())), code)
 
     @unittest.skipUnless(POSIX and (Path("/Applications/Slicer.app/Contents/bin/PythonSlicer")).is_file(),
                          "needs the PythonSlicer launcher")

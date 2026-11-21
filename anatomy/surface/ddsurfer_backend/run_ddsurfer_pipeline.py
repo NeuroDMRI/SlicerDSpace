@@ -126,13 +126,13 @@ def run_command(command: Sequence[str], *, cwd: Path | None = None, env: dict | 
     else:
         log_path = Path(log_path)
         log_path.parent.mkdir(parents=True, exist_ok=True)
-        with log_path.open('w') as stream:
+        with log_path.open('w', encoding='utf-8') as stream:
             stream.write('$ ' + ' '.join(shlex.quote(str(part)) for part in command) + '\n')
             stream.flush()
             status = wait_command(command, cwd=cwd, env=env, stdout=stream,
                                   stderr=subprocess.STDOUT)
         if status:
-            with log_path.open(errors='replace') as stream:
+            with log_path.open(encoding='utf-8', errors='replace') as stream:
                 tail = ''.join(deque(stream, maxlen=15)).rstrip()
             logging.error('%s failed; detailed log: %s\n%s', name, log_path, tail)
             raise subprocess.CalledProcessError(status, command)
@@ -362,8 +362,8 @@ def finalize_outputs(args, signature=None):
             if not output.is_file() or not output.stat().st_size:
                 raise RuntimeError(f'Native output missing: {output}')
             source = cache_directory(args) / 'predictions/mni' / args.subject / f'{args.subject}_predicted_{kind}_surface_{hemi}.json'
-            prediction = json.loads(source.read_text())
-            native = json.loads((cache_directory(args) / 'logs/native' / f'{name}.json').read_text())
+            prediction = json.loads(source.read_text(encoding='utf-8'))
+            native = json.loads((cache_directory(args) / 'logs/native' / f'{name}.json').read_text(encoding='utf-8'))
             if sha256_file(output) != native['output_sha256']:
                 raise ValueError(f'Native surface does not match its export record: {output}')
             surfaces[name] = dict(file=f'ddsurfer/{name}.obj', sha256=native['output_sha256'],

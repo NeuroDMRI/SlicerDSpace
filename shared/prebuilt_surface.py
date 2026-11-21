@@ -11,7 +11,7 @@ import tempfile
 import urllib.request
 
 from shared.backend_sources import file_hash, source_lock
-from shared.external_process import subprocess_no_window_kwargs, text_subprocess_kwargs
+from shared.external_process import rename_with_retry, subprocess_no_window_kwargs, text_subprocess_kwargs
 
 CATALOG = Path(__file__).resolve().parents[1] / 'models/runtime_bundles.json'
 
@@ -155,6 +155,6 @@ def prepare(*, prefix=None, asset_root=None, execute=False, accept_terms=False, 
                             shutil.copyfileobj(stream, output)
                         target.chmod(0o755 if member.mode & 0o111 else 0o644)
                 checks = validate(staged)
-                staged.rename(prefix)
+                rename_with_retry(staged, prefix)
     result.update(status='completed', external_dependencies={'postprocess_runtime': str(prefix)}, functional_checks=checks)
     return result

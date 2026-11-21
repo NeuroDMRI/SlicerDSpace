@@ -180,7 +180,10 @@ class BrainMaskGuiConfigTest(unittest.TestCase):
                     args = argparse.Namespace(**values)
                     rebuilt = user_config_from_cli_args(args, base_config=saved)
                     self.assertEqual(rebuilt["run_defaults"]["brain_mask_backend"], backend)
-                    self.assertEqual(rebuilt["external_dependencies"], external)
+                    self.assertEqual(
+                        {k: Path(v) for k, v in rebuilt["external_dependencies"].items()},
+                        {k: Path(v) for k, v in external.items()},
+                    )
 
     def test_old_config_gets_pnl_default_and_unknown_backend_is_not_silently_replaced(self):
         self.assertEqual(user_config_cli_values({"run_defaults": {}})["brain_mask_backend"], "pnl_cnn")
@@ -320,7 +323,7 @@ class BrainMaskGuiConfigTest(unittest.TestCase):
                     for key, path in paths.items():
                         flag = "--" + key.replace("_", "-")
                         self.assertEqual(args.count(flag), 1)
-                        self.assertEqual(args[args.index(flag) + 1], str(path))
+                        self.assertEqual(Path(args[args.index(flag) + 1]), Path(path))
 
     def test_doctor_requires_mask_generator_for_preprocessing_and_known_missing_masks(self):
         doctor_kwargs = widget_method("_environment_check_kwargs", sys=SimpleNamespace(path=[]),

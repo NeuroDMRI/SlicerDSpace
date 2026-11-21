@@ -18,5 +18,5 @@ def atomic_json(path, data):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_name(path.name + f".{os.getpid()}.tmp")
-    temp.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+    temp.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     os.replace(temp, path)

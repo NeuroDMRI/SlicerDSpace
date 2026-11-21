@@ -17,7 +17,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from shared.external_process import python_tool_environment, text_subprocess_kwargs
+from shared.external_process import python_tool_environment, subprocess_no_window_kwargs, text_subprocess_kwargs
 from shared.output_contracts import polydata_streamline_count
 from shared.product_staging import archive_run_records, new_product_staging, publish_products, retain_failed_products
 from tractography.wmql_protocol import (OFFICIAL_DIR, official_query_names, canonical_wmql_selection,
@@ -702,6 +702,7 @@ def run_wmql_bundle_segmentation(
                     check=True,
                     env=env,
                     cwd=queries_dir if _requires_windows_query_staging() else None,
+                    **subprocess_no_window_kwargs(),
                 )
                 return_code = completed.returncode
         except subprocess.CalledProcessError as exc:

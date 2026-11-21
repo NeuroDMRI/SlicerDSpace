@@ -8,6 +8,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import shutil
 import tempfile
 import unittest
 
@@ -116,7 +117,10 @@ class VendoredPnlCnnTest(unittest.TestCase):
             torch.save(state, folder / "axial.pt")
             digest = sha256(folder / "axial.pt")
             for view in ("coronal", "sagittal"):
-                os.symlink(folder / "axial.pt", folder / f"{view}.pt")
+                try:
+                    os.symlink(folder / "axial.pt", folder / f"{view}.pt")
+                except OSError:
+                    shutil.copy2(folder / "axial.pt", folder / f"{view}.pt")
             receipt = {"format": 1, "architecture_sha256": weights.ARCHITECTURE_SHA256,
                        "views": {view: {"file": f"{view}.pt", "sha256": digest,
                                         "source_sha256": weights.AUTHOR_FILES[view][1]}

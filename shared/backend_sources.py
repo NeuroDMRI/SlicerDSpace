@@ -10,6 +10,8 @@ import tarfile
 import tempfile
 import urllib.request
 
+from shared.external_process import rename_with_retry
+
 SOURCES = {
     "wmql": dict(repository="demianw/tract_querier", revision="5c69c594d489859e08485110678dca7f6f4cba40",
                  sha256="63e84b6f99c8b992d72ea9ed965e8ac7da2323504122753354419cfc05965549",
@@ -224,7 +226,7 @@ def prepare_sources(profiles, *, root=None, execute=False, accept_terms=False, o
                     record = dict(profile=name, revision=spec["revision"], archive_sha256=spec["sha256"], files=files)
                     (staged / ".slicerdspace-source.json").write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
                     verify_source(name, staged)
-                    staged.rename(destination)
+                    rename_with_retry(staged, destination)
             if name == "tractcloud" and needs_darwin_arm64_tractcloud_python():
                 ensure_darwin_arm64_tractcloud_python(root)
             result["external_dependencies"][spec["setting"]] = str(destination)

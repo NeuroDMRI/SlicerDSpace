@@ -233,7 +233,7 @@ def _restore_numeric_types(SD):
 
 
 def update_log(PS):
-    logf = open(os.path.join(PS.work_dir, 'log.txt'), 'w')
+    logf = open(os.path.join(PS.work_dir, 'log.txt'), 'w', encoding='utf-8')
     for row in PS.logt:
         logf.write(f"{row[0]} {row[1]}\n")
     logf.close()

@@ -10,6 +10,8 @@ import sys
 import sysconfig
 import tempfile
 
+from shared.external_process import subprocess_no_window_kwargs
+
 PROTECTED_PACKAGES = ("numpy", "scipy", "vtk", "SimpleITK", "torch", "torchvision", "requests")
 
 
@@ -223,7 +225,7 @@ def install_requirements(requirements, *, protected=True, loaded=(), torch_minim
             else:
                 backend = "python_subprocess_compatibility"
                 subprocess.run([sys.executable, "-m", "pip", "install", "--constraint", str(constraints),
-                                "--", *missing], check=True)
+                                "--", *missing], check=True, **subprocess_no_window_kwargs())
     importlib.invalidate_caches()
     after = installed_versions()
     # PEP 508 names have an exact metadata check; direct source URLs are checked

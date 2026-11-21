@@ -1,5 +1,6 @@
 """Mask, resample and normalize scalar channels with reusable stage outputs."""
 import argparse
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -40,8 +41,9 @@ def run(args):
     def process(kind, inputs, output, action, cli):
         helper = getattr(args, kind + '_script')
         if helper.resolve() != default_helpers[kind].resolve():
+            win_kwargs = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)} if os.name == "nt" else {}
             action = lambda staged: subprocess.run([sys.executable, str(helper)] +
-                [str(staged[0]) if part == str(output) else part for part in cli], check=True)
+                [str(staged[0]) if part == str(output) else part for part in cli], check=True, **win_kwargs)
         cache.run(f'{kind}.{output.name}', list(inputs) + code + [helper], [output], action,
                   settings=GEOMETRY if kind == 'resample' else dict(epsilon=1e-6, zero_background=True))
 

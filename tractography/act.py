@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
 
-from shared.external_process import managed_tool_environment
+from shared.external_process import managed_tool_environment, subprocess_no_window_kwargs
 
 
 SUPPORTED_ACT_OUTPUT_FORMATS = {"tck"}
@@ -291,7 +291,7 @@ def run_act_tracking(config: ACTTrackingConfig, *, log: Optional[Callable[[str],
             for command in commands:
                 argv, env = _mrtrix_csd_invocation(command, command_env)
                 _emit(f"[Tractography] Running ACT command: {' '.join(argv)}", log)
-                completed = subprocess.run(argv, check=True, env=env)
+                completed = subprocess.run(argv, check=True, env=env, **subprocess_no_window_kwargs())
                 return_code = completed.returncode
         except subprocess.CalledProcessError as exc:
             return_code = exc.returncode

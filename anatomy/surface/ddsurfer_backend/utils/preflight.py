@@ -87,7 +87,7 @@ def mask_is_ready(args, files):
                     inputs={name: fingerprint(files[name]) for name in ('dwi', 'bval', 'bvec')})
     if not record.is_file():
         raise ValueError('Existing generated mask has no record; use a new output directory')
-    saved = json.loads(record.read_text())
+    saved = json.loads(record.read_text(encoding='utf-8'))
     if saved.get('signature') != expected or saved.get('output') != fingerprint(output):
         raise ValueError('Generated mask or its inputs changed; use a new output directory')
     validate_mask(files['dwi'], output)
@@ -105,7 +105,7 @@ def inspect_run(args, files):
     if args.data_type != 'hcp':
         raise ValueError('These checkpoints require --data-type hcp')
     config_path = args.checkpoint_root / 'manifest.json'
-    config = json.loads(config_path.read_text())
+    config = json.loads(config_path.read_text(encoding='utf-8'))
     checksums = load_checksums(args.checkpoint_root)
     assets = {'manifest': file_digest(config_path)}
     models = []

@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from shared.code_updater import EXTENSION_VERSION
-from shared.external_process import find_pythonslicer, normalize_slicer_python_launch
+from shared.external_process import find_pythonslicer, normalize_slicer_python_launch, startup_environment
 from shared.network_config import network_env_overrides
 from shared.process_group import (
     capture_process_group_id,
@@ -570,12 +570,18 @@ def _start_worker_process(
     process = qt.QProcess(_parent_window(owner))
     process.setProcessChannelMode(qt.QProcess.MergedChannels)
     try:
-        env = qt.QProcessEnvironment.systemEnvironment()
+        try:
+            env = qt.QProcessEnvironment()
+            for key, value in startup_environment().items():
+                env.insert(str(key), str(value))
+        except Exception:
+            env = qt.QProcessEnvironment.systemEnvironment()
         try:
             for key, value in network_env_overrides().items():
                 env.insert(key, str(value))
         except Exception:
             pass
+        env.insert("PYTHONUTF8", "1")
         env.insert("PYTHONUNBUFFERED", "1")
         env.insert("PYTHONIOENCODING", "utf-8")
         process.setProcessEnvironment(env)

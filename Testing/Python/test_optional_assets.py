@@ -118,8 +118,8 @@ class OptionalAssetsTests(unittest.TestCase):
     def test_explicit_wma_and_legacy_environment_precede_shared_directory(self):
         with patch.object(optional_assets, "verified_resource_directory") as check, \
                 patch.dict("os.environ", {"WMA_ATLAS_DIR": "/old/atlas"}, clear=True):
-            self.assertEqual(optional_assets.resolve_wma_atlas_directory(Path("/explicit")), Path("/explicit"))
-            self.assertEqual(optional_assets.resolve_wma_atlas_directory(), Path("/old/atlas"))
+            self.assertEqual(optional_assets.resolve_wma_atlas_directory(Path("/explicit")), Path("/explicit").resolve())
+            self.assertEqual(optional_assets.resolve_wma_atlas_directory(), Path("/old/atlas").resolve())
             check.assert_not_called()
 
     def test_planning_and_missing_terms_do_not_download_or_create_directories(self):

@@ -7,6 +7,8 @@ from pathlib import Path
 import shutil
 import tempfile
 
+from shared.external_process import rename_with_retry
+
 REQUIRED = ("data.nii.gz", "bvals", "bvecs")
 RECEIPT = "auto_dicom_import.json"
 IGNORED = {".git", "cache", "outputs", "__pycache__"}
@@ -193,5 +195,5 @@ def prepare_dicom_root(root, subject_id, *, dwiconvert=None, log=None, target_ro
         (prepared / RECEIPT).write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
         if target.exists() or target.is_symlink():
             raise FileExistsError("Input directory appeared during conversion; refusing to replace it")
-        prepared.rename(target)
+        rename_with_retry(prepared, target)
     return record

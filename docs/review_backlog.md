@@ -35,7 +35,7 @@ Opus and Codex rounds was fixed in the fix rounds, with tests. These items stay 
 
 | Source | Label | Item | Proposed fix |
 |---|---|---|---|
-| W6 D8 | P2 | The worker NumPy floor check reads `slicer_numpy_minimum` from `python-runtime.json`, but `scripts/package_slicer_extension.py` does not write that key yet, so the check does nothing. | Write `slicer_numpy_minimum` (Windows bundle: `2.0.2`) in the packager at the next full release. |
+| W6 D8 | Fixed | **Fixed**: `scripts/package_slicer_extension.py` now writes `"arch"` and `"slicer_numpy_minimum": "2.0.2"` to `python-runtime.json`. | Keep in sync with future Slicer/torch release floors. |
 | Audit LE-7 | P2 | `msmt_csd` on single-shell data is a method choice, not a compatibility item. | Decision for the spec owner. |
 | W6 LE-3 | P2 | The surface resume key compares `device` and `resolved_device`; a run that fell back to CPU may not be reused by a later `auto` run. Not measured. | Measure whether it forces a recompute; drop `resolved_device` from the key only if the outputs are equivalent. |
 | W1 H4 | P2 | On macOS the CTK launcher turns a signal kill into exit code 1, so the kill message has no signal number. Linux and Windows launcher exit codes are not checked on real systems. | Check in the GitHub Actions matrix. |

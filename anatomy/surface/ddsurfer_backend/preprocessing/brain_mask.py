@@ -92,7 +92,7 @@ def generate_mask(files, output, work_dir, record, *, freesurfer_home=None, thre
         signature = dict(method='freesurfer_synthstrip', b0_threshold=B0_THRESHOLD,
                          inputs={name: fingerprint(files[name]) for name in ('dwi', 'bval', 'bvec')})
         if record.exists():
-            saved = json.loads(record.read_text())
+            saved = json.loads(record.read_text(encoding='utf-8'))
             if saved['signature'] != signature:
                 raise ValueError('Generated mask has different inputs; use a new output directory')
             if output.exists():
@@ -117,8 +117,9 @@ def generate_mask(files, output, work_dir, record, *, freesurfer_home=None, thre
         # Omit -g: mask generation runs on CPU independently of inference.
         with tempfile.TemporaryDirectory(prefix='.brain-mask-', dir=output.parent) as tmp:
             raw = Path(tmp) / 'synthstrip.nii.gz'
+            win_kwargs = {'creationflags': getattr(subprocess, 'CREATE_NO_WINDOW', 0)} if os.name == 'nt' else {}
             subprocess.run([str(executable), '-i', str(baseline), '-m', str(raw)],
-                           env=env, check=True)
+                           env=env, check=True, **win_kwargs)
             validate_mask(files['dwi'], raw)
             data = np.asarray(nib.load(str(raw)).dataobj)
             if not np.all((data == 0) | (data == 1)):

@@ -92,7 +92,7 @@ def validate_runtime(home, hemisphere='both', atlas_names='aparc,aparc.a2009s', 
     if not record.is_file():
         raise FileNotFoundError('Local surface components have not been built. Run '
                                 'python -m postprocessing.core.build --jobs 4, or select an existing FreeSurfer installation')
-    manifest = json.loads(record.read_text())
+    manifest = json.loads(record.read_text(encoding='utf-8'))
     if (manifest.get('schema') != SCHEMA or manifest.get('source_revision') != FS_REVISION or
             manifest.get('activation_key_included') is not False):
         raise ValueError('Unsupported surface runtime; rebuild locally from the pinned source')

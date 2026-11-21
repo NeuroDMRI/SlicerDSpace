@@ -45,7 +45,7 @@ def export_native(subject, input_dir, output_dir, record=None):
     if output_dir.is_symlink():
         raise ValueError('Refusing to export DTI through a symlinked directory')
     record = Path(record) if record is not None else input_dir / 'raw_inputs.json'
-    inputs = json.loads(record.read_text())
+    inputs = json.loads(record.read_text(encoding='utf-8'))
     geometry = inputs['geometry']
     sources = {}
     for scalar, name in SCALARS:

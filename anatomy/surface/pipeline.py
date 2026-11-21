@@ -97,14 +97,14 @@ def inspect_surface_resources(config: SurfaceConfig) -> dict:
         missing.append(f'surface/template/{ATLAS_NAME}')
     if weights is not None and template is not None:
         try:
-            model_config = json.loads((weights / 'manifest.json').read_text())
-            expected_assets = json.loads((Path(__file__).resolve().parents[2] / 'models/assets_manifest.json').read_text())['asset_records']
+            model_config = json.loads((weights / 'manifest.json').read_text(encoding='utf-8'))
+            expected_assets = json.loads((Path(__file__).resolve().parents[2] / 'models/assets_manifest.json').read_text(encoding='utf-8'))['asset_records']
             for filename in ('manifest.json', 'SHA256SUMS'):
                 path = weights / filename
                 if sha256(path) != expected_assets[f'surface/weights/{filename}']['sha256']:
                     raise ValueError(f'Model release metadata mismatch: {path}')
             checksums = {}
-            for line in (weights / 'SHA256SUMS').read_text().splitlines():
+            for line in (weights / 'SHA256SUMS').read_text(encoding='utf-8').splitlines():
                 if line.strip():
                     digest, filename = line.split(maxsplit=1)
                     filename = filename.lstrip('*')
@@ -210,7 +210,7 @@ def _run_registered(config, resources, output_dir, subject_dir):
             cpu_threads=config.cpu_threads, max_gpu_gib=config.max_gpu_gib))
         for mesh in (predicted.wm_mesh_path, predicted.pial_mesh_path):  # read before cleanup deletes them (F1)
             try:
-                records.append(json.loads(Path(mesh).with_suffix('.json').read_text()))
+                records.append(json.loads(Path(mesh).with_suffix('.json').read_text(encoding='utf-8')))
             except (OSError, ValueError, TypeError):
                 pass
     run_backend([BACKEND_ROOT / 'inference/native.py', '--subject', config.subject_id,
@@ -260,7 +260,7 @@ def _run_shared_raw(config, resources, output_dir, manifest, previous, log):
     manifest['input_dwi'] = str(raw.dwi_path)
     manifest['input_sha256'] = {str(path.resolve()): sha256(path) for path in paths}
     manifest['shared_preprocessing'] = dict(registered_bundle=str(registered.bundle_dir),
-        native_bundle=json.loads(registered.manifest_path.read_text())['native_bundle']['dir'],
+        native_bundle=json.loads(registered.manifest_path.read_text(encoding='utf-8'))['native_bundle']['dir'],
         fit_method='wls', scalar_resampling_source='nrrd', atlas=resources['registration_atlas'],
         scope='Shared native tensor/scalars; trained surface atlas and five-channel normalization remain independent')
     keys = ('input_mode', 'input_sha256', 'subject_id', 'predict_mode', 'device', 'resolved_device',
@@ -357,7 +357,7 @@ def run_surface(config: SurfaceConfig, *, log: Optional[Callable[[str], None]] =
     manifest_path, qc_path = output_dir / 'surface_manifest.json', output_dir / 'surface_qc.json'
     resources = inspect_surface_resources(config)
     try:
-        previous = json.loads(manifest_path.read_text())
+        previous = json.loads(manifest_path.read_text(encoding='utf-8'))
     except (OSError, ValueError):
         previous = {}
     manifest, qc = _surface_records(config, resources, output_dir)
@@ -374,7 +374,7 @@ def run_surface(config: SurfaceConfig, *, log: Optional[Callable[[str], None]] =
                 log(f'[DDSurfer] Requested {manifest["device"]}; resolved {config.device} in the surface runtime')
             manifest['status'] = 'running'
             manifest['runtime'] = runtime_info(config.python_bin)
-            manifest_path.write_text(json.dumps(manifest, indent=2) + '\n')
+            manifest_path.write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
             inspected = inspect_subject_directory(config.subject_root, config.subject_id)
             if inspected['mode'] == 'missing':
                 for candidate in (config.subject_root, config.subject_root / config.subject_id):
@@ -411,7 +411,7 @@ def run_surface(config: SurfaceConfig, *, log: Optional[Callable[[str], None]] =
                 for hemi in ('lh', 'rh'):
                     for kind in ('white', 'pial') if config.predict_mode == 'all' else ('white',):
                         shutil.copy2(upstream / 'ddsurfer' / f'{hemi}.{kind}.obj', native_dir / f'{hemi}.{kind}.obj')
-                manifest['upstream_pipeline'] = json.loads((upstream / 'logs/pipeline.json').read_text())
+                manifest['upstream_pipeline'] = json.loads((upstream / 'logs/pipeline.json').read_text(encoding='utf-8'))
                 devices = _merge_execution_devices(manifest['upstream_pipeline'].get('surfaces', {}).values())
                 if devices:
                     manifest['execution_devices'] = devices

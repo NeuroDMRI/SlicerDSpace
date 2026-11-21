@@ -8,7 +8,8 @@ def parse_labels(labels, lut= None):
     if not lut:
         lut = pjoin(dirname(__file__), 'data', 'FreeSurferColorLUT.txt')
 
-    contents = open(lut).read()
+    with open(lut, encoding='utf-8') as f:
+        contents = f.read()
     lines = contents.split('\n')
 
     dictionary={}

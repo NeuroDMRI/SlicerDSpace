@@ -29,7 +29,7 @@ def sha256(path):
 
 
 def upstream_record():
-    return json.loads((BACKEND_ROOT / 'UPSTREAM.json').read_text())
+    return json.loads((BACKEND_ROOT / 'UPSTREAM.json').read_text(encoding='utf-8'))
 
 
 def native_surface_hashes(native_dir, mode='whole'):

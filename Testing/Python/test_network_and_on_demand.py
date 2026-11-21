@@ -1553,10 +1553,11 @@ class FastInstallerOptimizationTests(unittest.TestCase):
                 self.assertTrue((ext_root / "lib" / "Slicer-5.12" / "qt-scripted-modules" / "SlicerDSpace.py").is_file())
                 ukf_bin = ext_root / "bundled-runtimes" / "ukf-darwin-arm64" / "bin" / "UKFTractography"
                 self.assertTrue(ukf_bin.is_file())
-                self.assertTrue(bool(ukf_bin.stat().st_mode & 0o100))
-                sym_out = ext_root / "bundled-python" / "bin" / "python3"
-                self.assertTrue(sym_out.is_symlink())
-                self.assertEqual(os.readlink(sym_out), "python3.12")
+                if os.name != "nt":
+                    self.assertTrue(bool(ukf_bin.stat().st_mode & 0o100))
+                    sym_out = ext_root / "bundled-python" / "bin" / "python3"
+                    self.assertTrue(sym_out.is_symlink())
+                    self.assertEqual(os.readlink(sym_out), "python3.12")
                 self.assertIn("slicer_revision 34645", (ext_root / "SlicerDSpace.s4ext").read_text(encoding="utf-8"))
         finally:
             for k, orig in saved.items():

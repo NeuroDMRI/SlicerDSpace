@@ -5,7 +5,7 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
-from shared.external_process import find_pythonslicer, slicer_runtime_roots
+from shared.external_process import find_pythonslicer, slicer_runtime_roots, subprocess_no_window_kwargs
 from shared.teem_dti import estimate_command
 
 
@@ -96,7 +96,7 @@ def run_dti_feature_extraction(
          ("MidEigenvalue", e2_nrrd), ("MinEigenvalue", e3_nrrd)))
 
     for cmd in [dwi_convert_cmd, tensor_cmd]:
-        subprocess.run(cmd, check=True)
+        subprocess.run(cmd, check=True, **subprocess_no_window_kwargs())
 
     if not dti_e3.exists():
         raise RuntimeError("DTI parameter extraction failed. Check Slicer CLI paths.")

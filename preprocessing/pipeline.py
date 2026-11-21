@@ -33,6 +33,7 @@ from shared.external_process import (
     fsl_root_from_bin_dir,
     managed_tool_environment,
     native_arm64_argv,
+    subprocess_no_window_kwargs,
     text_subprocess_kwargs,
 )
 from shared.wsl_bridge import preprocessing_launcher
@@ -467,7 +468,7 @@ def _run_command(
         env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
-        **text_subprocess_kwargs(bufsize=1),
+        **subprocess_no_window_kwargs(**text_subprocess_kwargs(bufsize=1)),
     )
     output = []
 
@@ -965,7 +966,7 @@ def _mrtrix_backend_details(
     else:
         env = _external_command_environment(config)
         device_record = paths["qc_dir"] / "eddy_device.json"
-        device_execution = json.loads(device_record.read_text()) if (effective_eddy and device_record.is_file()) else None
+        device_execution = json.loads(device_record.read_text(encoding="utf-8")) if (effective_eddy and device_record.is_file()) else None
     return {
         "execution_backend": "native" if native else "legacy",
         "fsl_environment": {

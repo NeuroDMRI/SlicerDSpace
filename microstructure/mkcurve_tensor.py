@@ -143,7 +143,7 @@ def tensor_basis(directions, order):
 
 @lru_cache(maxsize=1)
 def integration_directions():
-    directions = np.asarray(json.loads(Path(__file__).with_name("mkcurve_directions.json").read_text()), dtype=float)
+    directions = np.asarray(json.loads(Path(__file__).with_name("mkcurve_directions.json").read_text(encoding="utf-8")), dtype=float)
     if directions.shape != (256, 3) or not np.isfinite(directions).all():
         raise ValueError("Invalid author MK-Curve integration directions")
     directions.setflags(write=False)

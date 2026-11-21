@@ -13,7 +13,7 @@ def generate(source, destination):
     text = 'unsigned char %s[] = {\n  %s\n};\nunsigned int %s_len = %d;\n' % (
         symbol, ',\n  '.join(rows), symbol, len(data))
     destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.write_text(text)
+    destination.write_text(text, encoding='utf-8')
 
 
 if __name__ == '__main__':

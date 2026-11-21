@@ -53,12 +53,18 @@ class DDSurferSyncTests(unittest.TestCase):
         self.assertEqual(set(record['local_patches']), {
             'inference/native.py', 'inference/predict.py', 'model/ddsurfer.py',
             'postprocessing/core/archive.py', 'postprocessing/core/build.py',
+            'postprocessing/core/cmake/help_header.py', 'postprocessing/core/compare.py',
             'postprocessing/core/config.py', 'postprocessing/core/runtime.py',
-            'postprocessing/environment.py', 'postprocessing/pipeline.py',
-            'preprocessing/dti.py', 'preprocessing/dti.sh', 'run_ddsurfer_pipeline.py', 'run_ddsurfer_pipeline.sh',
+            'postprocessing/environment.py', 'postprocessing/geometry.py', 'postprocessing/pipeline.py',
+            'postprocessing/stats.py', 'preprocessing/brain_mask.py',
+            'preprocessing/conversion/bval_bvec_io.py', 'preprocessing/conversion/nhdr_write.py',
+            'preprocessing/conversion/nifti_write.py', 'preprocessing/dti.py', 'preprocessing/dti.sh',
+            'preprocessing/export.py', 'preprocessing/inputs.py', 'preprocessing/volumes.py',
+            'run_ddsurfer_pipeline.py', 'run_ddsurfer_pipeline.sh',
             'tests/check_environment.py', 'tests/test_environment_check.py', 'tests/test_inference.py',
             'tests/test_native_build.py', 'tests/test_pipeline_reliability.py', 'tests/test_preprocessing.py',
-            'utils/mesh.py', 'utils/preflight.py', 'utils/stages.py', 'utils/surface_io.py'})
+            'utils/files.py', 'utils/mesh.py', 'utils/preflight.py', 'utils/results.py',
+            'utils/stages.py', 'utils/surface_io.py'})
         wrapper = (BACKEND_ROOT / 'run_ddsurfer_pipeline.sh').read_text()
         self.assertIn('${ARGS[@]+"${ARGS[@]}"}', wrapper)
         self.assertNotIn(' "${ARGS[@]}"', wrapper)

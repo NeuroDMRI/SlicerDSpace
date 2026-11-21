@@ -41,6 +41,7 @@ from shared.update_journal import (
     recover_interrupted_update,
     release_update_lock,
     rollback_apply as _rollback_apply,
+    win_fs_path as _win_fs_path,
     write_json_atomic as _write_json_atomic,
     write_update_journal as _write_update_journal,
 )
@@ -67,7 +68,7 @@ _REPLACE_RETRY_INTERVAL = 0.1
 
 def _sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
-    with path.open("rb") as stream:
+    with _win_fs_path(path).open("rb") as stream:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
@@ -80,7 +81,7 @@ def compute_code_tree_sha256(root: Path | None = None) -> tuple[str, list[str]]:
     files = runtime_files(resolved)
     digest = hashlib.sha256()
     for relative in files:
-        file_hash = _sha256_file(resolved / relative)
+        file_hash = _sha256_file(_win_fs_path(resolved / relative))
         digest.update(f"{relative}\0{file_hash}\n".encode("utf-8"))
     return digest.hexdigest(), files
 
@@ -359,8 +360,9 @@ def _extract_overlay_safely(archive_path: Path, staging_dir: Path) -> dict[str, 
     file_modes: dict[str, int] = {}
     total_files = 0
     total_bytes = 0
-    staging_resolved = staging_dir.resolve()
-    with tarfile.open(archive_path, "r:*") as tf:
+    staging_abs = os.path.abspath(os.fspath(staging_dir))
+    staging_root_path = Path(staging_abs)
+    with tarfile.open(_win_fs_path(archive_path), "r:*") as tf:
         for member in tf:
             if member.issym() or member.islnk() or member.isdev() or member.ischr() or member.isblk() or member.isfifo():
                 raise ValueError(f"Unsupported link or special member in code overlay: {member.name!r}")
@@ -369,11 +371,13 @@ def _extract_overlay_safely(archive_path: Path, staging_dir: Path) -> dict[str, 
                 continue
             posix = _safe_overlay_member_path(raw_name)
             rel_str = posix.as_posix()
-            target = (staging_dir / posix).resolve()
-            if not target.is_relative_to(staging_resolved):
+            target = staging_dir / posix
+            target_abs = os.path.abspath(os.fspath(target))
+            if not Path(target_abs).is_relative_to(staging_root_path):
                 raise ValueError(f"Overlay member escapes staging root: {member.name!r}")
+            target_fs = _win_fs_path(target)
             if member.isdir():
-                target.mkdir(parents=True, exist_ok=True)
+                target_fs.mkdir(parents=True, exist_ok=True)
                 continue
             if not member.isfile():
                 continue
@@ -383,11 +387,11 @@ def _extract_overlay_safely(archive_path: Path, staging_dir: Path) -> dict[str, 
                 raise ValueError(f"Overlay exceeds maximum file limit ({_MAX_OVERLAY_FILES}).")
             if total_bytes > _MAX_OVERLAY_UNPACKED_BYTES:
                 raise ValueError("Overlay exceeds maximum unpacked byte limit.")
-            target.parent.mkdir(parents=True, exist_ok=True)
+            target_fs.parent.mkdir(parents=True, exist_ok=True)
             src_fh = tf.extractfile(member)
             if src_fh is None:
                 raise ValueError(f"Unable to read archive member: {member.name!r}")
-            with src_fh, target.open("wb") as dst_fh:
+            with src_fh, target_fs.open("wb") as dst_fh:
                 shutil.copyfileobj(src_fh, dst_fh, length=1024 * 1024)
             is_exec = bool((member.mode or 0) & stat.S_IXUSR)
             file_modes[rel_str] = 0o755 if is_exec else 0o644
@@ -397,10 +401,12 @@ def _extract_overlay_safely(archive_path: Path, staging_dir: Path) -> dict[str, 
 def _replace_with_retry(src: Path, dst: Path) -> None:
     """os.replace that retries PermissionError for a few seconds (X5: Windows scanners lock new files)."""
 
+    src_fs = _win_fs_path(src)
+    dst_fs = _win_fs_path(dst)
     deadline = time.monotonic() + _REPLACE_RETRY_SECONDS
     while True:
         try:
-            os.replace(src, dst)
+            os.replace(src_fs, dst_fs)
             return
         except PermissionError:
             if time.monotonic() >= deadline:
@@ -529,23 +535,28 @@ def download_and_apply_code_overlay(
         # From here on files change in place: a kill must not stop the worker (H6/X5).
         if phase_callback is not None:
             phase_callback("applying")
-        shutil.rmtree(journal_dir, ignore_errors=True)
-        backup_dir.mkdir(parents=True, exist_ok=True)
+        shutil.rmtree(_win_fs_path(journal_dir), ignore_errors=True)
+        _win_fs_path(backup_dir).mkdir(parents=True, exist_ok=True)
         backed_up: list[str] = []
+        backup_map: dict[str, str] = {}
         created: list[str] = []
-        for rel in sorted(old_files | new_files):
-            existing = resolved_root / rel
-            if existing.is_file():
-                b_dst = backup_dir / rel
+        for idx, rel in enumerate(sorted(old_files | new_files)):
+            existing_fs = _win_fs_path(resolved_root / rel)
+            if existing_fs.is_file():
+                # Store backups flat in the journal directory to stay well under Windows MAX_PATH (260).
+                flat_name = f"{idx:05d}.bak"
+                b_dst = _win_fs_path(backup_dir / flat_name)
                 b_dst.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(existing, b_dst)
+                shutil.copy2(existing_fs, b_dst)
                 backed_up.append(rel)
-        created_planned = [rel for rel in sorted(new_files) if not (resolved_root / rel).exists()]
+                backup_map[rel] = flat_name
+        created_planned = [rel for rel in sorted(new_files) if not _win_fs_path(resolved_root / rel).exists()]
         _write_update_journal(
             journal_dir,
             target_version=str(remote["version"]),
             backed_up=backed_up,
             created=created_planned,
+            backup_map=backup_map,
         )
 
         try:
@@ -554,20 +565,22 @@ def download_and_apply_code_overlay(
             for rel in [*(rel for rel in sorted(new_files) if rel != "SlicerDSpace.py"), "SlicerDSpace.py"]:
                 if rel == "SlicerDSpace.py":
                     for obsolete in obsolete_files:
-                        target = resolved_root / obsolete
-                        if target.is_file():
-                            target.unlink()
+                        target_fs = _win_fs_path(resolved_root / obsolete)
+                        if target_fs.is_file():
+                            target_fs.unlink()
                 if _apply_hook is not None:
                     _apply_hook(rel)
                 src = staging_dir / rel
                 dst = resolved_root / rel
-                was_present = dst.exists()
-                dst.parent.mkdir(parents=True, exist_ok=True)
+                dst_fs = _win_fs_path(dst)
+                was_present = dst_fs.exists()
+                dst_fs.parent.mkdir(parents=True, exist_ok=True)
                 tmp_dst = dst.with_name(f".{dst.name}.upd.{os.getpid()}")
-                shutil.copy2(src, tmp_dst)
+                tmp_dst_fs = _win_fs_path(tmp_dst)
+                shutil.copy2(_win_fs_path(src), tmp_dst_fs)
                 if os.name != "nt":
                     try:
-                        tmp_dst.chmod(file_modes.get(rel, 0o644))
+                        tmp_dst_fs.chmod(file_modes.get(rel, 0o644))
                     except OSError:
                         pass
                 _replace_with_retry(tmp_dst, dst)
@@ -582,7 +595,7 @@ def download_and_apply_code_overlay(
                     f"Applied code tree verification failed: {applied_sha} != {remote['code_sha256']}"
                 )
         except Exception:
-            _rollback_apply(resolved_root, backup_dir, backed_up, created)
+            _rollback_apply(resolved_root, backup_dir, backed_up, created, backup_map=backup_map)
             _clear_stale_pyc(resolved_root, old_files | new_files)
             _discard_journal(journal_dir)
             raise
@@ -599,7 +612,7 @@ def download_and_apply_code_overlay(
             "restart_required": True,
         }
     finally:
-        shutil.rmtree(tmp_root, ignore_errors=True)
+        shutil.rmtree(_win_fs_path(tmp_root), ignore_errors=True)
         release_update_lock(update_lock)
 
 

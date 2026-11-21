@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import os
+import platform
 import re
 from pathlib import Path, PurePosixPath
 import shutil
@@ -398,11 +399,33 @@ def _stage_sources(extension_root: Path, sources_root: Path | None) -> list[str]
     return sorted(staged_names)
 
 
+def _normalize_runtime_arch(raw: str | None = None) -> str:
+    value = str(raw or platform.machine() or "").strip().lower()
+    return {
+        "amd64": "x86_64",
+        "x86_64": "x86_64",
+        "arm64": "arm64",
+        "aarch64": "arm64",
+    }.get(value, value)
+
+
+def _s4ext_arch(extension_root: Path) -> str:
+    s4ext = extension_root / "SlicerDSpace.s4ext"
+    if s4ext.is_file():
+        for line in s4ext.read_text(encoding="utf-8", errors="replace").splitlines():
+            parts = line.strip().split(None, 1)
+            if len(parts) == 2 and parts[0].lower() == "arch":
+                return _normalize_runtime_arch(parts[1])
+    return _normalize_runtime_arch()
+
+
 def _stage_python_site_packages(
     extension_root: Path,
     site_packages_dir: Path | None,
     *,
     python_version: str = "3.12",
+    arch: str | None = None,
+    slicer_numpy_minimum: str = "2.0.2",
 ) -> dict[str, object] | None:
     if site_packages_dir is None:
         return None
@@ -444,9 +467,12 @@ def _stage_python_site_packages(
                 if item.is_file():
                     item.chmod(0o755)
 
+    resolved_arch = _normalize_runtime_arch(arch) if arch else _s4ext_arch(extension_root)
     meta = {
         "python_version": python_version,
+        "arch": resolved_arch,
         "site_packages": "site-packages",
+        "slicer_numpy_minimum": slicer_numpy_minimum,
     }
     (dest_root / "python-runtime.json").write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
     # Self-contained bundle includes torch inside bundled-python/site-packages, so Slicer Extension Manager

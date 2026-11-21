@@ -94,7 +94,7 @@ def nifti_write(inImg, prefix= None):
         bval_path = prefix + '.bval'
         bvec_path = prefix + '.bvec'
         try:
-            with open(bval_path, 'w') as f_val, open(bvec_path, 'w') as f_vec:
+            with open(bval_path, 'w', encoding='utf-8') as f_val, open(bvec_path, 'w', encoding='utf-8') as f_vec:
                 b_max = float(hdr['DWMRI_b-value'])
 
                 mf= np.array(np.vstack((np.hstack((hdr['measurement frame'],

@@ -261,7 +261,8 @@ class Heartbeat:
             self._last_seen_activity = activity
             if cpu_s is not None:
                 gained = cpu_s - (self._last_cpu if self._last_cpu is not None else cpu_s)
-                if gained > 0.01 * max(now - self._previous_tick, 0.0):
+                min_cpu_delta = 0.05 if os.name == "nt" else 0.0
+                if gained > max(0.01 * max(now - self._previous_tick, 0.0), min_cpu_delta):
                     progressed = True
                 self._last_cpu = cpu_s
             if log_bytes is not None and log_bytes != self._last_log_bytes:

@@ -27,6 +27,7 @@ from shared.external_process import (
     managed_tool_environment,
     native_arm64_argv,
     resolve_external_command,
+    subprocess_no_window_kwargs,
 )
 
 
@@ -963,7 +964,7 @@ def run_csd_act(config: CSDActConfig, *, log: Optional[Callable[[str], None]] = 
                 argv, env = _mrtrix_csd_invocation(exec_cmd, command_env)
                 _emit(f"[Tractography] Running MRtrix CSD/ACT command: {' '.join(argv)}", log)
                 with _timed_step(phase_timings, Path(command[0]).name, persist_timings, argv) as phase:
-                    completed = subprocess.run(argv, check=True, env=env, cwd=output_dir)
+                    completed = subprocess.run(argv, check=True, env=env, cwd=output_dir, **subprocess_no_window_kwargs())
                     return_code = completed.returncode
                     phase['return_code'] = return_code
                     if Path(command[0]).name == "mrconvert" and len(command) > 2 and Path(command[2]) == dwi_mif:
@@ -976,7 +977,7 @@ def run_csd_act(config: CSDActConfig, *, log: Optional[Callable[[str], None]] = 
                     p_argv, p_env = _mrtrix_csd_invocation(cmd_tuple, command_env)
                     _emit(f"[Tractography] Running MRtrix CSD/ACT command: {' '.join(p_argv)}", log)
                     with _timed_step(phase_timings, Path(cmd_tuple[0]).name, persist_timings, p_argv) as p_phase:
-                        p_done = subprocess.run(p_argv, check=True, env=p_env, cwd=output_dir)
+                        p_done = subprocess.run(p_argv, check=True, env=p_env, cwd=output_dir, **subprocess_no_window_kwargs())
                         p_phase['return_code'] = p_done.returncode
                         return p_done.returncode
 

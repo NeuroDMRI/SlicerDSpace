@@ -63,7 +63,7 @@ def validate_postprocess_outputs(subject_dir, hemispheres, atlases, stats_dir=No
                 and np.any(labels > 0))
             remember(path)
             path = stats_dir / f"{hemi}.{atlas}.stats"
-            rows = [line.split() for line in path.read_text().splitlines() if line.strip() and not line.lstrip().startswith("#")]
+            rows = [line.split() for line in path.read_text(encoding="utf-8").splitlines() if line.strip() and not line.lstrip().startswith("#")]
             checks[f"{hemi}.{atlas}.finite_statistics"] = bool(rows) and all(
                 len(row) > 1 and np.isfinite(np.asarray(row[1:], dtype=float)).all() for row in rows)
             remember(path)

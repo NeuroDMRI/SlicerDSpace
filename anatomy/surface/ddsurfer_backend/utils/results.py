@@ -49,7 +49,7 @@ def result_receipt(args):
         if path.is_symlink() or not path.is_file() or not path.stat().st_size:
             raise ValueError(f'Result missing, empty or symlinked: {path}')
         inventory[str(path.relative_to(root))] = sha256_file(path)
-    maps = json.loads((root / 'logs/dti.json').read_text()).get('scalar_maps', {})
+    maps = json.loads((root / 'logs/dti.json').read_text(encoding='utf-8')).get('scalar_maps', {})
     for record in maps.values():
         if inventory.get(record['file']) != record['sha256']:
             raise ValueError('Native DTI map does not match its export record')
@@ -61,7 +61,7 @@ def reusable_result(args, signature):
         return False
     path = args.output_root.resolve() / args.subject / 'logs/pipeline.json'
     try:
-        saved = json.loads(path.read_text())
+        saved = json.loads(path.read_text(encoding='utf-8'))
         return (saved['subject'] == args.subject and saved['completed'] is True
                 and saved['result']['signature'] == signature
                 and saved['result'] == dict(signature=signature, **result_receipt(args)))

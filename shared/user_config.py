@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import platform
+import re
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
@@ -21,6 +22,60 @@ _LOG = logging.getLogger(__name__)
 USER_CONFIG_KIND = "slicerdsurfer_user_config"
 USER_CONFIG_VERSION = 1
 USER_CONFIG_ENV = "SLICERDSPACE_USER_CONFIG"
+
+_BUNDLED_EXT_DEP_RE = re.compile(r"(?:^|/)extensions-\d+/(?:slicerdspace|slicerddsurfer)/bundled-")
+
+
+def extension_root_for_module(module_file: Path | str | None = None) -> Path:
+    """Resolve the Slicer extension root whether running from a source checkout or an installed Slicer bundle."""
+
+    base = Path(module_file or __file__).expanduser().resolve().parents[1]
+    if base.name == "qt-scripted-modules" and len(base.parents) >= 3:
+        return base.parents[2]
+    return base
+
+
+def _norm_abs_path(raw: str | Path) -> Path:
+    expanded = os.path.expanduser(str(raw).strip())
+    abs_text = os.path.abspath(expanded)
+    if os.name == "nt":
+        abs_text = os.path.normcase(abs_text)
+    return Path(abs_text)
+
+
+def prune_stale_bundled_dependencies(
+    dependencies: Mapping[str, Any] | None,
+    *,
+    current_extension_root: Path | str | None = None,
+) -> tuple[dict[str, str], list[str]]:
+    """Drop stale Slicer extension-bundled paths while keeping user-configured external paths."""
+
+    cleaned: dict[str, str] = {}
+    pruned: list[str] = []
+    if not isinstance(dependencies, Mapping):
+        return cleaned, pruned
+
+    active_root = _norm_abs_path(current_extension_root) if current_extension_root is not None else None
+    for key, raw_value in dependencies.items():
+        if key not in DEPENDENCY_CONFIG_KEYS:
+            continue
+        text = str(raw_value or "").strip()
+        if not text:
+            continue
+        normalized_slash = text.replace("\\", "/").lower()
+        if _BUNDLED_EXT_DEP_RE.search(normalized_slash):
+            candidate = Path(text).expanduser()
+            in_active_root = False
+            if active_root is not None:
+                try:
+                    in_active_root = _norm_abs_path(candidate).is_relative_to(active_root)
+                except ValueError:
+                    in_active_root = False
+            if not candidate.exists() or (active_root is not None and not in_active_root):
+                pruned.append(str(key))
+                continue
+        cleaned[str(key)] = text
+    return cleaned, pruned
 
 RUN_DEFAULTS = {
     "run_name": "Test1",

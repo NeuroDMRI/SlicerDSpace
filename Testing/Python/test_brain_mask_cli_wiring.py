@@ -195,7 +195,7 @@ class BrainMaskCliWiringTest(unittest.TestCase):
             for file in (user_config, dependency_config):
                 payload = json.loads(file.read_text(encoding="utf-8"))
                 for key, value in paths.items():
-                    self.assertEqual(payload["external_dependencies"][key], str(value))
+                    self.assertEqual(Path(payload["external_dependencies"][key]), Path(value))
             run, _, _ = self._invoke(root / "sub-02", ["--user-config", str(user_config)])
             for key, value in paths.items():
                 self.assertEqual(getattr(run.call_args.args[0], key), value)

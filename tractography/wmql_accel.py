@@ -669,7 +669,8 @@ def main(argv: list[str] | None = None) -> None:
             cleaned_argv.append(arg)
         if argv is not None:
             import subprocess
-            subprocess.run([sys.executable] + cleaned_argv, check=True)
+            from shared.external_process import subprocess_no_window_kwargs
+            subprocess.run([sys.executable] + cleaned_argv, check=True, **subprocess_no_window_kwargs())
             return
         os.execv(sys.executable, [sys.executable] + cleaned_argv)
 

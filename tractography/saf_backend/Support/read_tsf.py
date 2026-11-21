@@ -2,7 +2,7 @@
 
 
 def read_tsf(tsf):
-    with open(tsf, 'r') as f:
+    with open(tsf, 'r', encoding='utf-8') as f:
         pos = f.tell()
         line = f.readline()
         while line and line.startswith('#'):

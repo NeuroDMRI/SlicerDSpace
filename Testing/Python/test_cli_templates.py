@@ -181,7 +181,7 @@ class CliTemplatesTest(unittest.TestCase):
                 analyze_regions.main()
                 if name == 'region-inspect':
                     inspect.assert_called_once()
-                    self.assertEqual(inspect.call_args.args[0], Path('/path/to/run_orchestration_manifest.json'))
+                    self.assertEqual(inspect.call_args.args[0], Path('/path/to/run_orchestration_manifest.json').resolve())
                     write.assert_not_called()
                     run.assert_not_called()
                 else:
@@ -269,8 +269,8 @@ class CliTemplatesTest(unittest.TestCase):
     @unittest.skipUnless(shutil.which('bash'), 'Bash unavailable')
     def test_bash_snippets_have_valid_syntax(self):
         commands = [blocks(GUIDES[0], 'setup')['bash'], *blocks(GUIDES[0], 'template').values()]
-        result = subprocess.run(['bash', '-n'], input='\n'.join(commands), text=True, capture_output=True)
-        self.assertEqual(result.returncode, 0, result.stderr)
+        result = subprocess.run(['bash', '-n'], input='\n'.join(commands).encode('utf-8'), capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr.decode('utf-8', errors='replace'))
 
     @unittest.skipUnless(shutil.which('bash') and os.name != 'nt', 'POSIX Bash fixture required')
     def test_bash_wrapper_preserves_spaces_json_and_output_isolation(self):

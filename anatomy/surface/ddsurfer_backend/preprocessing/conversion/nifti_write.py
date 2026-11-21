@@ -97,8 +97,8 @@ def write_nifti(inImg, prefix= None):
         try:
             # DWMRI
             # write .bval and .bvec
-            f_val= open(prefix+'.bval', 'w')
-            f_vec= open(prefix+'.bvec', 'w')
+            f_val= open(prefix+'.bval', 'w', encoding='utf-8')
+            f_vec= open(prefix+'.bvec', 'w', encoding='utf-8')
             b_max = float(hdr['DWMRI_b-value'])
 
             mf= np.array(np.vstack((np.hstack((hdr['measurement frame'],

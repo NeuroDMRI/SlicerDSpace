@@ -3,6 +3,7 @@ import argparse
 from concurrent.futures import ThreadPoolExecutor
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 
@@ -91,9 +92,21 @@ def run(args):
         def action(staged):
             replacements = dict(zip(map(str, outputs), map(str, staged)))
             if link is not None:
-                (staged[0].parent / link.name).symlink_to(link.resolve())
+                source_link = link.resolve()
+                target_link = staged[0].parent / link.name
+                try:
+                    target_link.symlink_to(source_link)
+                except OSError:
+                    try:
+                        os.link(source_link, target_link)
+                    except OSError:
+                        if source_link.is_dir():
+                            shutil.copytree(source_link, target_link)
+                        else:
+                            shutil.copy2(source_link, target_link)
             actual = [substitute(part, replacements) for part in command]
-            subprocess.run(actual, check=True, env=tool_env if tool else helper_env if helper else None)
+            win_kwargs = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)} if os.name == "nt" else {}
+            subprocess.run(actual, check=True, env=tool_env if tool else helper_env if helper else None, **win_kwargs)
         implementation = [Path(__file__), ROOT / 'preprocessing/cache.py', ROOT / 'utils/stages.py']
         if tool:
             implementation += tool

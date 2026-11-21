@@ -17,7 +17,11 @@ import tempfile
 import time
 import urllib.request
 
-from shared.external_process import external_python_environment
+from shared.external_process import (
+    external_python_environment,
+    rename_with_retry,
+    subprocess_no_window_kwargs,
+)
 from shared.model_assets import default_user_model_assets_root
 from shared.platform_info import host_machine
 
@@ -121,7 +125,7 @@ def cuda_visible():
         return False
     try:
         check = subprocess.run(["nvidia-smi", "-L"], capture_output=True, text=True, encoding="utf-8", errors="replace",
-                               timeout=10, env=external_python_environment())
+                               timeout=10, env=external_python_environment(), **subprocess_no_window_kwargs())
         return check.returncode == 0 and "GPU " in check.stdout
     except (OSError, subprocess.TimeoutExpired):
         return False
@@ -183,7 +187,7 @@ def write_json(path, payload):
 
 def _tarball_version(prefix, expected):
     probe = subprocess.run([str(prefix / "bin/mrconvert"), "--version"], capture_output=True, text=True, encoding="utf-8", errors="replace",
-                           timeout=60, env=external_python_environment(path_prepend=[prefix / "bin"]))
+                           timeout=60, env=external_python_environment(path_prepend=[prefix / "bin"]), **subprocess_no_window_kwargs())
     output = probe.stdout + probe.stderr
     if probe.returncode != 0 or not re.search(r"(?<![\d.])" + re.escape(expected) + r"(?![\d.])", output):
         raise RuntimeError(f"mrconvert --version does not report {expected}: {output.strip()[:200]}")
@@ -229,7 +233,7 @@ def verify_prefix(profile, prefix):
             header = b'mrtrix image\ndim: 2,2,2\nvox: 1,1,1\nlayout: +0,+1,+2\ndatatype: Float32LE\nfile: . 256\nEND\n'
             original.write_bytes(header.ljust(256, b'\0') + struct.pack('<8f', *range(8)))
             subprocess.run([str(prefix / 'bin/mrconvert'), str(original), str(output), '-quiet', '-datatype', 'Float32LE'],
-                           check=True, capture_output=True, timeout=60, env=external_python_environment())
+                           check=True, capture_output=True, timeout=60, env=external_python_environment(), **subprocess_no_window_kwargs())
             data = output.read_bytes()
             end = data.index(b'\nEND\n')
             offset_line = next(line for line in data[:end].decode('ascii').splitlines() if line.startswith('file:'))
@@ -246,14 +250,14 @@ def verify_prefix(profile, prefix):
             create = ('import sys, nibabel as n, numpy as np; '
                       'n.save(n.Nifti1Image(np.arange(27,dtype=np.float32).reshape(3,3,3),np.eye(4)),sys.argv[1])')
             subprocess.run([python, '-c', create, str(original)], check=True, capture_output=True,
-                           timeout=60, env=environment)
+                           timeout=60, env=environment, **subprocess_no_window_kwargs())
             subprocess.run([str(prefix / 'bin/ImageMath'), '3', str(output), 'm', str(original), '1'],
-                           check=True, capture_output=True, timeout=60, env=environment)
+                           check=True, capture_output=True, timeout=60, env=environment, **subprocess_no_window_kwargs())
             compare = ('import sys, nibabel as n, numpy as np; a,b=[n.load(p) for p in sys.argv[1:]]; '
                        'np.testing.assert_array_equal(np.asanyarray(a.dataobj),np.asanyarray(b.dataobj)); '
                        'np.testing.assert_allclose(a.affine,b.affine,atol=1e-6)')
             subprocess.run([python, '-c', compare, str(original), str(output)], check=True, capture_output=True,
-                           timeout=60, env=environment)
+                           timeout=60, env=environment, **subprocess_no_window_kwargs())
             functionality.append('ants:synthetic_image_roundtrip')
     return {"external_dependencies": {key: str(prefix / "bin") for key in spec["settings"]},
             "command_sha256": {name: file_hash(path) for name, path in commands.items()},
@@ -331,8 +335,8 @@ def _install_tarball(spec, base, prefix):
             raise RuntimeError("MRtrix3 archive does not hold exactly one top-level folder " + info["top_level"])
         if prefix.exists():
             # SPEC-GAP: B2 does not say what Repair does with a plugin-owned tarball prefix; keep it, do not delete it.
-            prefix.rename(prefix.with_name(prefix.name + f".replaced-{time.time_ns()}"))
-        unpacked.rename(prefix)
+            rename_with_retry(prefix, prefix.with_name(prefix.name + f".replaced-{time.time_ns()}"))
+        rename_with_retry(unpacked, prefix)
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
@@ -367,7 +371,7 @@ def _migration(base, profiles, settings, user_config):
 
 def _run(argv, extra_env=None):
     print("[Runtime setup] " + repr(argv), flush=True)
-    subprocess.run(argv, check=True, env=external_python_environment(extra_env))
+    subprocess.run(argv, check=True, env=external_python_environment(extra_env), **subprocess_no_window_kwargs())
 
 
 @contextmanager
@@ -403,7 +407,7 @@ def _path_conda_platform(executable):
     """Conda platform reported by ``conda info --json``; None when it cannot be read."""
     try:
         check = subprocess.run([executable, "info", "--json"], capture_output=True, text=True, encoding="utf-8", errors="replace",
-                               timeout=60, env=external_python_environment())
+                               timeout=60, env=external_python_environment(), **subprocess_no_window_kwargs())
         return json.loads(check.stdout).get("platform") if check.returncode == 0 else None
     except (OSError, subprocess.TimeoutExpired, ValueError, AttributeError):
         return None
@@ -436,7 +440,7 @@ def ensure_conda(root, explicit=None):
             raise RuntimeError(f"Managed bootstrap was not built for {subdir}; remove it or use Repair: " + str(bootstrap))
     if executable.is_file():
         check = subprocess.run([str(executable), "--version"], capture_output=True,
-                               timeout=30, env=external_python_environment())
+                               timeout=30, env=external_python_environment(), **subprocess_no_window_kwargs())
         if check.returncode == 0:
             return str(executable)
     bootstrap_url, bootstrap_sha256 = bootstrap_artifact()
@@ -554,12 +558,12 @@ def provision(profiles, *, root=None, conda=None, accept_fsl_license=False, acce
                     record.update(verify_assets(prefix, asset_root=asset_root))
                 locked = subprocess.run([manager, "list", "--explicit", "-p", str(prefix)],
                                         capture_output=True, text=True, encoding="utf-8", errors="replace", check=True,
-                                        env=external_python_environment())
+                                        env=external_python_environment(), **subprocess_no_window_kwargs())
                 (base / (spec["directory"] + ".explicit.txt")).write_text(locked.stdout, encoding="utf-8")
                 if profile == "pnl_cnn":
                     pip_lock = subprocess.run([str(prefix / "bin/python"), "-m", "pip", "freeze", "--all"],
                                               capture_output=True, text=True, encoding="utf-8", errors="replace", check=True,
-                                              env=external_python_environment())
+                                              env=external_python_environment(), **subprocess_no_window_kwargs())
                     (base / (spec["directory"] + ".pip-freeze.txt")).write_text(pip_lock.stdout, encoding="utf-8")
                 write_json(receipt_path, dict(pending, **record, status="ready", completed_at=time.time()))
             settings.update(record["external_dependencies"])

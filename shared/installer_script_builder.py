@@ -826,15 +826,29 @@ _BOOTSTRAP_BODY = textwrap.dedent(
             parts[1] = str(target_subdir)
         return "/".join(parts)
 
+    _WIN_PFX = chr(92) * 2 + "?" + chr(92)
+    _WIN_UNC_PFX = _WIN_PFX + "UNC" + chr(92)
+
+    def _win_long(p: Path | str, *, force: bool = False) -> Path:
+        if os.name != "nt":
+            return Path(p)
+        ap = os.path.abspath(os.fspath(p))
+        if ap.startswith(_WIN_PFX) or (not force and len(ap) < 240):
+            return Path(p)
+        if ap.startswith(chr(92) * 2):
+            return Path(_WIN_UNC_PFX + ap[2:])
+        return Path(_WIN_PFX + ap)
+
     def _safe_remove_dest(dst: Path):
-        if dst.is_symlink() or dst.is_file():
+        d = _win_long(dst)
+        if d.is_symlink() or d.is_file():
             try:
-                dst.unlink()
+                d.unlink()
             except PermissionError:
-                os.chmod(dst, 0o644)
-                dst.unlink()
-        elif dst.is_dir():
-            shutil.rmtree(dst)
+                os.chmod(d, 0o644)
+                d.unlink()
+        elif d.is_dir():
+            shutil.rmtree(_win_long(dst, force=True))
 
     def _safe_symlink(tgt: str, rel: str, dst: Path, target_subdir: str):
         tgt = str(tgt or "")
@@ -845,10 +859,11 @@ _BOOTSTRAP_BODY = textwrap.dedent(
         joined = posixpath.normpath(posixpath.join(posixpath.dirname(rel), tgt))
         if joined == ".." or joined.startswith("../"):
             return
-        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst_fs = _win_long(dst)
+        dst_fs.parent.mkdir(parents=True, exist_ok=True)
         _safe_remove_dest(dst)
         try:
-            os.symlink(tgt, dst)
+            os.symlink(tgt, dst_fs)
         except OSError:
             pass
 
@@ -862,7 +877,7 @@ _BOOTSTRAP_BODY = textwrap.dedent(
     ) -> Path:
         archive_path = Path(archive_path)
         ext_root = Path(ext_root)
-        ext_root.mkdir(parents=True, exist_ok=True)
+        _win_long(ext_root).mkdir(parents=True, exist_ok=True)
         _SKIPPED_CLI_SUBDIRS.clear()
         count = 0
         if zipfile.is_zipfile(archive_path):
@@ -872,25 +887,26 @@ _BOOTSTRAP_BODY = textwrap.dedent(
                     if not rel:
                         continue
                     dst = ext_root / rel
+                    dst_fs = _win_long(dst)
                     if zi.is_dir():
-                        dst.mkdir(parents=True, exist_ok=True)
+                        dst_fs.mkdir(parents=True, exist_ok=True)
                         continue
                     mode = int(zi.external_attr or 0) >> 16
                     if stat.S_ISLNK(mode):
                         _safe_symlink(zf.read(zi).decode("utf-8", "replace"), rel, dst, target_subdir)
                         continue
-                    dst.parent.mkdir(parents=True, exist_ok=True)
+                    dst_fs.parent.mkdir(parents=True, exist_ok=True)
                     _safe_remove_dest(dst)
                     if dst.name == "SlicerDSpace.s4ext":
                         txt = zf.read(zi).decode("utf-8", "replace")
-                        dst.write_text(_remap_s4ext_text(txt, rev, slicer_os, slicer_arch), encoding="utf-8")
+                        dst_fs.write_text(_remap_s4ext_text(txt, rev, slicer_os, slicer_arch), encoding="utf-8")
                     else:
-                        with zf.open(zi, "r") as sf, dst.open("wb") as of:
+                        with zf.open(zi, "r") as sf, dst_fs.open("wb") as of:
                             shutil.copyfileobj(sf, of, 1048576)
                     perm = mode & 0o777
                     if perm:
                         try:
-                            os.chmod(dst, perm)
+                            os.chmod(dst_fs, perm)
                         except OSError:
                             pass
                     count += 1
@@ -904,8 +920,9 @@ _BOOTSTRAP_BODY = textwrap.dedent(
                     if not rel:
                         continue
                     dst = ext_root / rel
+                    dst_fs = _win_long(dst)
                     if m.isdir():
-                        dst.mkdir(parents=True, exist_ok=True)
+                        dst_fs.mkdir(parents=True, exist_ok=True)
                         continue
                     if m.issym():
                         _safe_symlink(m.linkname, rel, dst, target_subdir)
@@ -915,13 +932,14 @@ _BOOTSTRAP_BODY = textwrap.dedent(
                         if not lrel:
                             continue
                         src_p = ext_root / lrel
-                        if src_p.exists():
-                            dst.parent.mkdir(parents=True, exist_ok=True)
+                        src_fs = _win_long(src_p)
+                        if src_fs.exists():
+                            dst_fs.parent.mkdir(parents=True, exist_ok=True)
                             _safe_remove_dest(dst)
                             try:
-                                os.link(src_p, dst)
+                                os.link(src_fs, dst_fs)
                             except OSError:
-                                shutil.copy2(src_p, dst)
+                                shutil.copy2(src_fs, dst_fs)
                         else:
                             deferred.append((dst, src_p))
                         continue
@@ -930,34 +948,37 @@ _BOOTSTRAP_BODY = textwrap.dedent(
                     fobj = tf.extractfile(m)
                     if fobj is None:
                         continue
-                    dst.parent.mkdir(parents=True, exist_ok=True)
+                    dst_fs.parent.mkdir(parents=True, exist_ok=True)
                     _safe_remove_dest(dst)
                     if dst.name == "SlicerDSpace.s4ext":
                         txt = fobj.read().decode("utf-8", "replace")
-                        dst.write_text(_remap_s4ext_text(txt, rev, slicer_os, slicer_arch), encoding="utf-8")
+                        dst_fs.write_text(_remap_s4ext_text(txt, rev, slicer_os, slicer_arch), encoding="utf-8")
                     else:
-                        with dst.open("wb") as of:
+                        with dst_fs.open("wb") as of:
                             shutil.copyfileobj(fobj, of, 1048576)
                     perm = int(m.mode or 0) & 0o777
                     if perm:
                         try:
-                            os.chmod(dst, perm)
+                            os.chmod(dst_fs, perm)
                         except OSError:
                             pass
                     count += 1
                     if count % 5000 == 0:
                         _log(f"Extracted {count} extension files...")
             for dst, src_p in deferred:
-                if src_p.exists():
-                    dst.parent.mkdir(parents=True, exist_ok=True)
+                src_fs = _win_long(src_p)
+                dst_fs = _win_long(dst)
+                if src_fs.exists():
+                    dst_fs.parent.mkdir(parents=True, exist_ok=True)
                     _safe_remove_dest(dst)
                     try:
-                        os.link(src_p, dst)
+                        os.link(src_fs, dst_fs)
                     except OSError:
-                        shutil.copy2(src_p, dst)
+                        shutil.copy2(src_fs, dst_fs)
         for cand in (ext_root / "SlicerDSpace.s4ext", ext_root / "share" / target_subdir / "SlicerDSpace.s4ext", ext_root.parent / "SlicerDSpace.s4ext"):
-            if cand.is_file():
-                cand.write_text(_remap_s4ext_text(cand.read_text(encoding="utf-8", errors="replace"), rev, slicer_os, slicer_arch), encoding="utf-8")
+            cand_fs = _win_long(cand)
+            if cand_fs.is_file():
+                cand_fs.write_text(_remap_s4ext_text(cand_fs.read_text(encoding="utf-8", errors="replace"), rev, slicer_os, slicer_arch), encoding="utf-8")
         if _SKIPPED_CLI_SUBDIRS:
             _log(f"[WARN] Skipped CLI modules built for {', '.join(sorted(_SKIPPED_CLI_SUBDIRS))} (VTK differs from {target_subdir}). UKFTractography for this Slicer must come from the Extension Manager (SlicerDMRI).")
         _log(f"Remapped extraction complete ({count} files) -> {ext_root}")
@@ -1291,7 +1312,7 @@ _BOOTSTRAP_BODY = textwrap.dedent(
 
         from shared.network_config import extract_modular_pack, save_network_settings
         from shared.model_assets import configured_model_assets_root
-        from shared.user_config import load_user_config, write_user_config
+        from shared.user_config import load_user_config, prune_stale_bundled_dependencies, write_user_config
 
         save_network_settings(
             mirror_prefix=CONFIG.get("mirror_prefix", ""),
@@ -1344,7 +1365,13 @@ _BOOTSTRAP_BODY = textwrap.dedent(
         cfg = load_user_config()
         ui_cfg = cfg.setdefault("ui", {})
         ui_cfg["language"] = ui_cfg.get("language") or str(CONFIG.get("language") or "en")
-        deps = cfg.setdefault("external_dependencies", {})
+        deps, pruned_deps = prune_stale_bundled_dependencies(
+            cfg.get("external_dependencies", {}),
+            current_extension_root=module_root.parents[2],
+        )
+        if pruned_deps:
+            _log("Cleared stale bundled dependency override(s): " + ", ".join(pruned_deps))
+        cfg["external_dependencies"] = deps
         if custom_assets_dir:
             deps["model_assets_dir"] = str(asset_root)
         else:
@@ -1573,7 +1600,20 @@ def generate_installer_script(
 
             call :resolve_slicer "%SLICER_INPUT%"
             if not defined PYTHON_SLICER (
+              for /d %%D in ("%LOCALAPPDATA%\\slicer.org\\Slicer 5.12*" "%LOCALAPPDATA%\\Slicer 5.12*" "C:\\Program Files\\slicer.org\\Slicer 5.12*" "C:\\Program Files\\Slicer 5.12*") do (
+                if not defined PYTHON_SLICER call :resolve_slicer "%%~D"
+              )
+            )
+            if not defined PYTHON_SLICER (
+              for /d %%D in ("%LOCALAPPDATA%\\slicer.org\\Slicer 5.11*" "%LOCALAPPDATA%\\Slicer 5.11*" "C:\\Program Files\\slicer.org\\Slicer 5.11*" "C:\\Program Files\\Slicer 5.11*") do (
+                if not defined PYTHON_SLICER call :resolve_slicer "%%~D"
+              )
+            )
+            if not defined PYTHON_SLICER (
               for %%D in ("%LOCALAPPDATA%\\slicer.org\\Slicer 5.10.0" "C:\\Program Files\\Slicer 5.10.0") do (
+                if not defined PYTHON_SLICER call :resolve_slicer "%%~D"
+              )
+              for /d %%D in ("%LOCALAPPDATA%\\slicer.org\\Slicer 5.10*" "%LOCALAPPDATA%\\Slicer 5.10*" "C:\\Program Files\\slicer.org\\Slicer 5.10*" "C:\\Program Files\\Slicer 5.10*") do (
                 if not defined PYTHON_SLICER call :resolve_slicer "%%~D"
               )
             )
@@ -1592,6 +1632,8 @@ def generate_installer_script(
               exit /b 1
             )
 
+            set "PYTHONUTF8=1"
+            set "PYTHONIOENCODING=utf-8"
             set "SLICERDSPACE_RESOLVED_SLICER=%SLICER_EXE%"
             "%PYTHON_SLICER%" -u -c "import sys; bmk='#'+' __SLICERDSPACE_PY_BEGIN__'; emk='#'+' __SLICERDSPACE_PY_END__'; t=open(sys.argv[1], encoding='utf-8').read(); b=t.split(bmk,1)[1].split(emk,1)[0]; exec(compile(b, sys.argv[1], 'exec'), {{'__name__': '__main__', '__file__': sys.argv[1]}})" "%~f0"
             set "SD_RC=%ERRORLEVEL%"

@@ -95,7 +95,7 @@ def atlas_output_contract(family, cluster_dir):
 def validate_group_hemispheres(cluster_dir, groups):
     """Reject a bundle inventory that disagrees with its reference cluster labels."""
     cluster_dir = Path(cluster_dir)
-    rows = (cluster_dir / "cluster_hemisphere_location.txt").read_text().splitlines()[1:]
+    rows = (cluster_dir / "cluster_hemisphere_location.txt").read_text(encoding="utf-8").splitlines()[1:]
     labels = {}
     for row in rows:
         if not row.strip():
@@ -108,7 +108,7 @@ def validate_group_hemispheres(cluster_dir, groups):
         raise ValueError("Atlas hemisphere file must assign all 800 reference clusters")
     for kind, expected in (("hemispheric", "h"), ("commissural", "c")):
         for name in groups[kind]:
-            text = (cluster_dir / (name + ".mrml")).read_text()
+            text = (cluster_dir / (name + ".mrml")).read_text(encoding="utf-8")
             clusters = set(re.findall(r"cluster_[0-9]{5}\.vtp", text))
             if not clusters or any(labels.get(cluster) != expected for cluster in clusters):
                 raise ValueError("Atlas tract/hemisphere mismatch: " + name)

@@ -62,7 +62,7 @@ def write_stats(subject_dir, hemi, atlas, output=None, measurements=None):
     for row in rows:
         lines.append(f'{row[0]} {row[1]} ' + ' '.join(f'{value:.6f}' for value in row[2:]))
     temp = output.with_suffix('.tmp')
-    temp.write_text('\n'.join(lines) + '\n')
+    temp.write_text('\n'.join(lines) + '\n', encoding='utf-8')
     temp.replace(output)
     return rows
 

@@ -181,9 +181,12 @@ from shared.ui_onboarding import (
 from shared.user_config import (
     canonical_microstructure_stages,
     default_user_config_path,
+    extension_root_for_module,
     load_user_config,
+    prune_stale_bundled_dependencies,
     selected_microstructure_stages,
     update_user_config,
+    write_user_config,
 )
 from shared.ui_environment_check import start_environment_check
 
@@ -722,7 +725,20 @@ class SharedWidgetMixin:
                 config = load_user_config(config_path)
                 for note in config.get("notes", ()):  # W5 / SC-2: a saved removed mask backend loaded as pnl_cnn
                     self.appendLog(f"[Settings] {note}")
-                configured_dependencies = config.get("external_dependencies", {})
+                configured_dependencies, pruned_deps = prune_stale_bundled_dependencies(
+                    config.get("external_dependencies", {}),
+                    current_extension_root=extension_root_for_module(__file__),
+                )
+                if pruned_deps:
+                    self.appendLog(
+                        "[Settings] Cleared stale bundled dependency override(s): " + ", ".join(pruned_deps)
+                    )
+                    cleaned_config = dict(config)
+                    cleaned_config["external_dependencies"] = configured_dependencies
+                    try:
+                        write_user_config(cleaned_config, config_path)
+                    except Exception:
+                        pass
                 for item in ENVIRONMENT_DEPENDENCY_PATHS:
                     dependency_id = item["id"]
                     value = configured_dependencies.get(dependency_id)

@@ -13,7 +13,7 @@ def available_cohort_resources(fraction=.7):
                           (Path('/sys/fs/cgroup/cpu/cpu.cfs_quota_us'),
                            Path('/sys/fs/cgroup/cpu/cpu.cfs_period_us'))):
         try:
-            q, p = quota.read_text().split() if period is None else (quota.read_text(), period.read_text())
+            q, p = quota.read_text(encoding='utf-8').split() if period is None else (quota.read_text(encoding='utf-8'), period.read_text(encoding='utf-8'))
             if q.strip() != 'max' and int(q) > 0:
                 cpus = min(cpus, max(1, int(q) // int(p)))
         except (OSError, ValueError, ZeroDivisionError):
@@ -21,8 +21,8 @@ def available_cohort_resources(fraction=.7):
     for limit, usage in (('memory.max', 'memory.current'),
                          ('memory/memory.limit_in_bytes', 'memory/memory.usage_in_bytes')):
         try:
-            ceiling = int((Path('/sys/fs/cgroup') / limit).read_text())
-            used = int((Path('/sys/fs/cgroup') / usage).read_text())
+            ceiling = int((Path('/sys/fs/cgroup') / limit).read_text(encoding='utf-8'))
+            used = int((Path('/sys/fs/cgroup') / usage).read_text(encoding='utf-8'))
             free = int(max(0, ceiling - used) * fraction)
             memory = min(memory, free) if memory else free
         except (OSError, ValueError):

@@ -3,7 +3,7 @@ from distutils.spawn import find_executable
 
 def read_imgs_masks(file):
 
-    with open(file) as f:
+    with open(file, encoding='utf-8') as f:
 
         imgs = []
         masks = []
@@ -28,7 +28,7 @@ def read_imgs_masks(file):
 
 def read_imgs(file):
 
-    with open(file) as f:
+    with open(file, encoding='utf-8') as f:
 
         imgs = []
         content= f.read().strip()
@@ -44,7 +44,7 @@ def read_imgs(file):
 
 def read_cases(file):
 
-    f = open(file, 'r')
+    f = open(file, 'r', encoding='utf-8')
 
     # omit any empty line in the caselist.txt
     subjects = []

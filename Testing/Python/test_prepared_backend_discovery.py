@@ -146,7 +146,7 @@ class PreparedBackendDiscoveryTest(unittest.TestCase):
                 mock.patch("tractography.wmql.subprocess.run", return_value=subprocess.CompletedProcess([], 0)) as run:
             result = wmql.run_wmql_bundle_segmentation(self.wmql_config(execute=True))
         self.assertEqual(result.backend_status["root"], prepared.as_posix())
-        self.assertEqual(run.call_args.args[0][1], Path(wmql.__file__).resolve().with_name("wmql_accel.py").as_posix())
+        self.assertEqual(Path(run.call_args.args[0][1]), Path(wmql.__file__).resolve().with_name("wmql_accel.py"))
         self.assertEqual(
             run.call_args.kwargs["env"]["PYTHONPATH"],
             os.pathsep.join([

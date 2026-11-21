@@ -197,8 +197,9 @@ def run_fsl_correction(
         field_map = scratch / "field_map.nii.gz"
         topup_nthr = [opt for opt in eddy_options if opt.startswith("--nthr=")]
         topup_stdout = call(
-            "topup", f"--imain={topup_image}", f"--datain={topup_datain}", f"--out={field}",
-            f"--fout={field_map}", f"--config={topup_config}", f"--logout={scratch / 'topup_in.topup_log'}",
+            "topup", f"--imain={topup_image.as_posix()}", f"--datain={topup_datain.as_posix()}",
+            f"--out={field.as_posix()}", f"--fout={field_map.as_posix()}",
+            f"--config={topup_config.as_posix()}", f"--logout={(scratch / 'topup_in.topup_log').as_posix()}",
             *topup_nthr[:1],
             "--verbose",
         )
@@ -222,8 +223,8 @@ def run_fsl_correction(
         apply_prefix = scratch / "applytopup_corrected"
         # FSL's TopupFileReader only recognises '/' as a directory separator.
         topup_option = f"--topup={field.as_posix()}"
-        call("applytopup", f"--imain={apply_input}", f"--datain={apply_config}", "--inindex=1",
-             topup_option, f"--out={apply_prefix}", "--method=jac")
+        call("applytopup", f"--imain={apply_input.as_posix()}", f"--datain={apply_config.as_posix()}", "--inindex=1",
+             topup_option, f"--out={apply_prefix.as_posix()}", "--method=jac")
         mask_source = scratch / "applytopup_corrected.mif"
         call("mrconvert", _fsl_image(apply_prefix), mask_source, "-fslgrad", apply_bvec, apply_bval)
         _require_file(mask_source)
@@ -251,9 +252,10 @@ def run_fsl_correction(
 
     eddy_prefix = scratch / "dwi_post_eddy"
     eddy_stdout = call(
-        "eddy", f"--imain={eddy_input}", f"--mask={mask}", f"--acqp={eddy_config}", f"--index={eddy_index}",
-        f"--bvecs={eddy_bvec}", f"--bvals={eddy_bval}", *eddy_topup, *eddy_options,
-        f"--out={eddy_prefix}", "--verbose",
+        "eddy", f"--imain={eddy_input.as_posix()}", f"--mask={mask.as_posix()}",
+        f"--acqp={eddy_config.as_posix()}", f"--index={eddy_index.as_posix()}",
+        f"--bvecs={eddy_bvec.as_posix()}", f"--bvals={eddy_bval.as_posix()}", *eddy_topup, *eddy_options,
+        f"--out={eddy_prefix.as_posix()}", "--verbose",
     )
     (scratch / "eddy_output.txt").write_text(eddy_stdout or "", encoding="utf-8")
     eddy_output = _fsl_image(eddy_prefix)

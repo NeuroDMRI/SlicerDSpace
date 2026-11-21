@@ -2,7 +2,7 @@
 
 
 def filters_label(vert, labs):
-    with open(labs, 'r') as f:
+    with open(labs, 'r', encoding='utf-8') as f:
         f.readline()
         f.readline()
         data = np.loadtxt(f)

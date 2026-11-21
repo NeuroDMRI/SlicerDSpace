@@ -2291,6 +2291,77 @@ def _runtime_compatibility_statuses(
     return tuple(rows)
 
 
+LINUX_GLIBC_FLOOR = (2, 34)
+LINUX_GLIBC_FLOOR_TEXT = "2.34"
+LINUX_GLIBC_SUPPORTED_SYSTEMS = "Ubuntu 22.04+, Debian 12+, RHEL/Rocky/Alma 9+"
+LINUX_GLIBC_AFFECTED = ("bundled MRtrix mrcrop", "the FreeSurfer surface tools of the surface runtime")
+
+
+def linux_glibc_version_with_source() -> tuple[Optional[tuple[int, ...]], str]:
+    """G1/O-P2-3: the host glibc version and the source that gave it ("" when it cannot be read: musl, non-Linux)."""
+    import re
+
+    candidates = []
+    try:
+        candidates.append(("os.confstr CS_GNU_LIBC_VERSION", os.confstr("CS_GNU_LIBC_VERSION") or ""))
+    except (AttributeError, OSError, ValueError):
+        pass
+    try:
+        name, version = platform.libc_ver()
+        if name == "glibc":
+            candidates.append(("platform.libc_ver", f"glibc {version}"))
+    except Exception:
+        pass
+    for source, text in candidates:
+        match = re.search(r"glibc\s+(\d+)\.(\d+)", text)
+        if match:
+            return (int(match.group(1)), int(match.group(2))), source
+    return None, ""
+
+
+def linux_glibc_version() -> Optional[tuple[int, ...]]:
+    """G1: the host glibc version as an integer tuple, or None when it cannot be read (musl, non-Linux)."""
+    return linux_glibc_version_with_source()[0]
+
+
+def _linux_glibc_floor_statuses(
+    specs: Iterable[DependencySpec],
+    statuses: Iterable[DependencyStatus],
+    *,
+    glibc: Optional[tuple[int, ...]] = None,
+    host_platform: Optional[str] = None,
+) -> tuple[DependencyStatus, ...]:
+    """G1: a non-blocking row. Bundled MRtrix mrcrop and the surface-runtime FreeSurfer tools need glibc 2.34."""
+    if (host_platform if host_platform is not None else (platform.system() or "")) != "Linux":
+        return ()
+    groups = {"mrtrix", "surface-runtime"}
+    targets = tuple(dict.fromkeys(
+        [t for spec in specs if spec.install_group in groups for t in spec.targets]
+        + [t for item in statuses if item.install_group in groups for t in item.targets]
+    ))
+    if not targets:
+        return ()
+    if glibc is not None:
+        found, source = glibc, "value passed by the caller"
+    else:
+        found, source = linux_glibc_version_with_source()
+        source = source or "unavailable (no glibc version could be read)"
+    below = found is not None and tuple(found) < LINUX_GLIBC_FLOOR
+    found_text = ".".join(str(part) for part in found) if found else "unknown"
+    message = ""
+    if below:
+        message = (f"This Linux has glibc {found_text}; the bundled MRtrix mrcrop and the FreeSurfer surface tools of the "
+                   f"surface runtime need glibc {LINUX_GLIBC_FLOOR_TEXT} or newer and will fail. Other steps, such as DTI, still run. "
+                   f"Supported systems: {LINUX_GLIBC_SUPPORTED_SYSTEMS}.")
+    return (DependencyStatus(
+        key="linux_glibc_floor", kind="setting", label="Linux glibc version",
+        status="missing" if below else "available", required=False, targets=targets,
+        details={"notes": message, "glibc_version": found_text, "glibc_minimum": LINUX_GLIBC_FLOOR_TEXT,
+                 "affected": list(LINUX_GLIBC_AFFECTED), "detected_source": source},
+        install_hint=message, install_group="",
+    ),)
+
+
 def _check_mps_device(
     python_executable: Optional[Path],
     python_path_entries: Iterable[Path] = (),
@@ -2913,6 +2984,7 @@ def run_environment_doctor(config: EnvironmentDoctorConfig, *, _probe_cache=None
                 native_targets, config, in_process=config.loaded_slicer_modules is not None),)
     if _check_spec is _DEFAULT_CHECK_SPEC:
         statuses += _runtime_compatibility_statuses(specs, statuses)
+        statuses += _linux_glibc_floor_statuses(specs, statuses, host_platform=host_platform)
     if "microstructure_dki" in targets and config.dki_fit_method.upper().startswith("MKCURVE"):
         report_progress('MK-Curve backend')
         matlab_reference = config.dki_fit_method.upper() == "MKCURVE_MATLAB"

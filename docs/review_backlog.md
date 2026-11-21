@@ -42,3 +42,17 @@ Opus and Codex rounds was fixed in the fix rounds, with tests. These items stay 
 | MPS probe | P2 | MPS batch-size scaling (DDSeg, DDParcel, PNL mask, TractCloud) gives at most 1.16x; vf_net Conv3d emulation needs 6.45 GiB, over the 4.87 GiB budget; Gibbs matmul DFT gives 1.1x. | No change. The real gain needs a native arm64 worker with a newer torch, or a native arm64 Slicer. |
 | Opus r3 P2-1 | P2 | On a mount whose `flock` fails with an errno outside EAGAIN/EACCES/EDEADLK (ENOLCK/ENOTSUP on some NFS/SMB), every overlay apply refuses with "check that the extension folder is writable". | Put the errno in the message, or say that file locking is not supported there. |
 | Opus r3 P2-2 | P2 | `--jobs 1` does not clear an inherited `SLICERDSPACE_PARALLEL_SUBJECTS`; in a `--jobs > 1` run the last subject can run alone and still skips the LE-3 GPU check. | Pop the variable when one subject runs; accept the tail case. |
+
+## 21 November 2026: CI matrix, installer reinstall (I1), Linux glibc floor (G1)
+
+Scope: branch `ci/compat-matrix-fix`. Every blocking item from the Opus and Codex rounds was fixed, with tests. These items
+stay open. Decide by 5 December 2026.
+
+| Source | Label | Item | Proposed fix |
+|---|---|---|---|
+| Opus r2 P2-a | P2 | If helper pass 1 writes `scheduled_uninstall` but Slicer exits non-zero at teardown, the installer stops with "rejected archive". The schedule stays, so the next Slicer start removes the old copy, and the message does not say so. | Go on to pass 2 whenever the receipt says `scheduled_uninstall`, or name the scheduled removal in the error. |
+| Opus r2 P2-b | P2 | If pass 2 fails after the start-up removal, the error does not say that the old SlicerDSpace was removed. | Add "the previous SlicerDSpace was removed; run the installer again" to pass-2 errors. |
+| Opus r2 P2-c | P2 | A GUI Setup retry in the same session asks for a restart even though this session installed the copy, so the copy is not loaded. | Record in `state` that this session installed the copy, and skip `_handle_installed_copy` in that case. |
+| CI macOS | P2 | The report-only unit suite is skipped on macOS full-install: the hosted runner was lost twice in that step (cause not measured). The smoke stays the gate. | Measure runner memory in that step, then turn the suite back on. |
+| Opus r3 P2 | P2 | When Setup cannot cancel its own removal, the message says "open Setup again", but the next start removes Setup. | Say: restart 3D Slicer (this removes Setup), then install SlicerDSpaceSetup again and reinstall SlicerDSpace. |
+| Codex r3 P2 / CI | P2 | The Windows unit suite (report only) fails in many modules. Run 44857030348 (Slicer 5.12.4, full-install) showed failures=67 and errors=107. The new tests fail too: `test_installer_reinstall_i1` (18), because its fake expects `/fake/Slicer` but `os.path.abspath` adds a drive letter, and `test_linux_glibc_floor_g1` (7). The real reinstall step passes on Windows. | Normalize the fake executable path with `os.path.abspath`; sort the older Windows failures into POSIX-only skips and real bugs. |

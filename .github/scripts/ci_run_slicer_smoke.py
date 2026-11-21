@@ -72,10 +72,15 @@ def main(argv=None):
     log("run: " + " ".join(command))
     slicer_log = artifacts / "slicer_stdout.log"
     with open(str(slicer_log), "wb") as handle:
-        code = subprocess.run(command, env=env, stdout=handle, stderr=subprocess.STDOUT).returncode
+        # cwd = the artifacts folder, not the checkout: a Slicer started inside the checkout reported SlicerDSpace
+        # as installed on a fresh install, one started in an empty folder did not (probe, run 44822858821).
+        code = subprocess.run(command, env=env, cwd=str(artifacts), stdout=handle, stderr=subprocess.STDOUT).returncode
     log("Slicer exit code %d; its output follows (full copy: %s)" % (code, slicer_log))
     text = slicer_log.read_text(encoding="utf-8", errors="replace")
     print(text[-20000:], flush=True)
+    if 'uninstalled extension "SlicerDSpace"' in text:
+        log("ERROR: Slicer deleted the SlicerDSpace extension at startup (it was scheduled for uninstall); "
+            "the code under test is gone, so the checks below cannot be trusted")
     smoke_log = work / "ci_smoke.log"
     if smoke_log.is_file():
         log("smoke log:\n" + smoke_log.read_text(encoding="utf-8", errors="replace")[-20000:])

@@ -17,6 +17,11 @@ submitting long jobs.
 Download 3D Slicer from <https://www.slicer.org/> or use the Slicer build
 provided by your lab/HPC module system.
 
+The Linux bundle needs glibc 2.34 or newer (Ubuntu 22.04+, Debian 12+,
+RHEL/Rocky/Alma 9+). On an older system the bundled MRtrix `mrcrop` and the
+FreeSurfer surface tools fail; the installer and the Environment check warn,
+and other steps such as DTI still run.
+
 Install the module using the source/staging instructions in the project README.
 Open **Environment and installation** to configure the selected
 route; the default compact interface has no automatic first-run wizard.

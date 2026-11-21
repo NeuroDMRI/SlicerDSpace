@@ -11,9 +11,13 @@ Settings come from environment variables (set by .github/workflows/slicer-compat
     SLICERDSPACE_CI_WORK        scratch directory for the synthetic subject and logs
     SLICERDSPACE_CI_MODE        "repo-only" or "full-install" (recorded in the report)
     SLICERDSPACE_CI_PIPELINE    "required" | "optional" | "skip"
-                                optional = a pipeline failure caused by a missing third-party
-                                package is reported as "skipped" with the cause (repo-only layout
-                                has no bundled-python); every other failure still fails.
+                                required = the FA map must exist and have the expected values.
+                                optional = (repo-only layout, no bundled-python) the product's
+                                documented partial execution is accepted: exit 0 with the target
+                                "blocked" (preflight missing dependencies) in the orchestration
+                                manifest, when every named package is really absent in this Slicer.
+                                A worker crash caused by a missing package is "skipped"; every
+                                other failure still fails.
 
 The process exits through slicer.util.exit(0|1). The report, not the exit code alone, is the
 result: the workflow fails when the report is missing or not "pass".
@@ -39,6 +43,8 @@ SILENT_WARN_SECONDS = 120.0
 EXPECTED_FA = 0.763  # tensor diag(1.7, 0.4, 0.3) e-3 mm2/s -> FA = 0.7634
 FA_TOLERANCE = 0.05
 SUBJECT_ID = "ci"
+TASK_NAME = "microstructure.dti"
+VERSION_PACKAGES = ("numpy", "torch", "dipy", "nibabel", "nrrd", "vtk")
 
 REPORT = {
     "schema": REPORT_SCHEMA,
@@ -216,6 +222,55 @@ def classify_worker_failure(output_text):
     return ""
 
 
+def read_task_outcome(subject_root, task_name=TASK_NAME):
+    """Return (status, reason) of one task from the newest *_orchestration_manifest.json under subject_root.
+
+    The CLI exits 0 for a "blocked" target (documented partial execution: --strict-environment is the
+    switch that aborts instead), so the manifest, not the exit code, tells whether the target ran.
+    Returns ("", "no orchestration manifest ...") when there is no readable manifest or task."""
+    manifests = sorted(Path(subject_root).rglob("*_orchestration_manifest.json"), key=lambda p: p.stat().st_mtime)
+    if not manifests:
+        return "", "no *_orchestration_manifest.json under %s" % subject_root
+    try:
+        manifest = json.loads(manifests[-1].read_text(encoding="utf-8"))
+    except ValueError as exc:
+        return "", "manifest %s is not valid JSON: %s" % (manifests[-1], exc)
+    for task in manifest.get("tasks", []):
+        if task.get("name") == task_name:
+            return str(task.get("status", "")), str(task.get("reason") or "")
+    return "", "manifest %s has no task %s (run status %s)" % (manifests[-1].name, task_name, manifest.get("status"))
+
+
+def missing_packages_from_reason(reason):
+    """'preflight missing dependencies: dipy (not found), nibabel (not found)' -> ['dipy', 'nibabel'], else []."""
+    marker = "preflight missing dependencies:"
+    if marker not in reason:
+        return []
+    names = []
+    for part in reason.split(marker, 1)[1].split(","):
+        name = part.strip().split(" ")[0].strip()
+        if name:
+            names.append(name)
+    return names
+
+
+def judge_blocked_task(status, reason, versions):
+    """Return (accepted, detail) for a target that produced no output while the CLI exited 0.
+
+    Accepted only when the task is "blocked" for missing dependencies and each named package is one the
+    versions check probed and found absent in this Slicer (so the block is real, not a hidden fault)."""
+    if status != "blocked":
+        return False, "task status is %r (reason: %s)" % (status, reason)
+    missing = missing_packages_from_reason(reason)
+    if not missing:
+        return False, "blocked, but not for missing dependencies: %s" % reason
+    unproven = [m for m in missing if m not in versions or versions[m].get("present")]
+    if unproven:
+        return False, "blocked for %s, but the versions check does not show %s absent (probed: %s)" % (
+            missing, unproven, sorted(versions))
+    return True, "blocked as documented (exit 0, partial execution): %s" % reason
+
+
 # --- checks (need Slicer) ----------------------------------------------------------------------
 
 def check_settings_isolation():
@@ -336,7 +391,7 @@ def _version_of(name):
 
 
 def check_versions():
-    versions = {name: _version_of(name) for name in ("numpy", "torch", "dipy", "vtk")}
+    versions = {name: _version_of(name) for name in VERSION_PACKAGES}
     try:
         import slicer
 
@@ -344,7 +399,7 @@ def check_versions():
     except Exception:  # noqa: BLE001
         pass
     REPORT["versions"] = versions
-    for name in ("numpy", "torch", "dipy", "vtk"):
+    for name in VERSION_PACKAGES:
         info = versions[name]
         say("[ci-smoke] version %-6s %s" % (name, ("%s  %s" % (info.get("version"), info.get("file"))) if info["present"] else "absent (%s)" % info.get("error")), flush=True)
     record("versions", "info", "numpy=%s numpy.__file__=%s" % (versions["numpy"].get("version"), versions["numpy"].get("file")))
@@ -434,7 +489,17 @@ def check_pipeline(module_dir, work):
         return
     maps = sorted(subject.rglob("%s_FA.nii.gz" % SUBJECT_ID))
     if not maps:
-        record("pipeline_dti", "fail", "worker exited 0 but no %s_FA.nii.gz exists under %s" % (SUBJECT_ID, subject), tail=tail)
+        status, reason = read_task_outcome(subject)
+        REPORT["pipeline"].update(task_status=status, task_reason=reason)
+        if policy == "optional":
+            accepted, detail = judge_blocked_task(status, reason, REPORT.get("versions", {}))
+            if accepted:
+                record("pipeline_dti", "pass", detail, tail=tail)
+            else:
+                record("pipeline_dti", "fail", "worker exited 0 without %s_FA.nii.gz and the block is not the documented one: %s" % (SUBJECT_ID, detail), tail=tail)
+            return
+        record("pipeline_dti", "fail", "worker exited 0 but no %s_FA.nii.gz exists under %s; task %s is %r: %s" % (
+            SUBJECT_ID, subject, TASK_NAME, status, reason), tail=tail)
         return
     import numpy as np
 

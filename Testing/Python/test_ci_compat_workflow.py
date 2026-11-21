@@ -17,7 +17,7 @@ REPO = Path(__file__).resolve().parents[2]
 WORKFLOW = REPO / ".github" / "workflows" / "slicer-compat-matrix.yml"
 SCRIPTS = REPO / ".github" / "scripts"
 SMOKE = REPO / "Testing" / "Python" / "slicer_ci_compat_smoke.py"
-HELPERS = ("ci_install_slicer.py", "ci_install_dspace.py", "ci_run_slicer_smoke.py", "ci_glibc_scan.py")
+HELPERS = ("ci_install_slicer.py", "ci_install_dspace.py", "ci_run_slicer_smoke.py", "ci_glibc_scan.py", "ci_debug_state.py")
 
 try:
     import yaml
@@ -60,10 +60,10 @@ class WorkflowStaticTests(unittest.TestCase):
             if jobs is not None:
                 strategy = jobs[job]["strategy"]
                 self.assertIs(strategy["fail-fast"], False)
-                self.assertEqual(set(strategy["matrix"]["os"]), {"ubuntu-22.04", "windows-2022", "macos-14"})
+                self.assertEqual(set(strategy["matrix"]["os"]), {"ubuntu-22.04", "windows-2022", "macos-15"})
                 self.assertEqual(set(strategy["matrix"]["slicer"]), {"5.10.0", "5.12.4"})
                 self.assertEqual(jobs[job]["timeout-minutes"], 90)
-        self.assertEqual(self.text.count("os: [ubuntu-22.04, windows-2022, macos-14]"), 2)
+        self.assertEqual(self.text.count("os: [ubuntu-22.04, windows-2022, macos-15]"), 2)
         self.assertEqual(self.text.count("slicer: ['5.10.0', '5.12.4']"), 2)
         self.assertEqual(self.text.count("fail-fast: false"), 2)
         self.assertEqual(self.text.count("timeout-minutes: 90"), 2)
@@ -72,6 +72,14 @@ class WorkflowStaticTests(unittest.TestCase):
         self.assertEqual(self.text.count("continue-on-error: true"), 2)
         self.assertEqual(self.text.count("timeout-minutes: 40"), 2)
         self.assertEqual(self.text.count("-m unittest discover -s Testing/Python -p 'test_*.py'"), 2)
+
+    def test_full_install_unit_suite_is_skipped_on_macos_after_runner_loss(self):
+        # Run 44825474979: both macOS full-install jobs lost the runner in this step.
+        step = "Unit test suite under the real PythonSlicer (report only)"
+        guards = re.findall(re.escape(step) + r"\n\s+if: (.*)", self.text)
+        self.assertEqual(len(guards), 2)
+        self.assertNotIn("macOS", guards[0])
+        self.assertIn("runner.os != 'macOS'", guards[1])
 
     def test_only_github_token_is_used(self):
         self.assertNotIn("secrets.", self.text)
@@ -88,10 +96,41 @@ class WorkflowStaticTests(unittest.TestCase):
         self.assertIn("softwareupdate --install-rosetta --agree-to-license", self.text)
 
     def test_full_install_runs_website_installer_overlay_smoke_and_glibc_scan(self):
-        for needle in ("ci_install_dspace.py", "--mode full-install --pipeline required", "ci_glibc_scan.py", "--limit 2.28"):
+        for needle in ("ci_install_dspace.py", "--mode full-install --pipeline required", "ci_glibc_scan.py", "--limit 2.34"):
             self.assertIn(needle, self.text)
         self.assertIn("--mode repo-only --pipeline optional", self.text)
         self.assertIn("scripts/stage_slicer_extension.py", self.text)
+
+    def test_b1_full_install_reinstalls_over_the_installed_copy_before_the_smoke(self):
+        full = self.text.split("\n  full-install:\n", 1)[1]
+        install = full.index("id: dspace")
+        reinstall = full.index("id: reinstall")
+        smoke = full.index("id: smoke")
+        self.assertEqual(self.text.count("id: reinstall"), 1)
+        self.assertLess(install, reinstall)
+        self.assertLess(reinstall, smoke)
+        first = full[install:reinstall]
+        second = full[reinstall:smoke]
+        self.assertIn("ci_install_dspace.py", first)
+        self.assertIn("--keep-asset", first)
+        self.assertIn("ci_install_dspace.py", second)
+        self.assertIn("--reinstall", second)
+        self.assertNotIn("GH_TOKEN", second)  # the second run reuses the asset of the first run
+        self.assertNotIn("continue-on-error", second)
+        self.assertIn("MODULE_DIR: ${{ steps.reinstall.outputs.module_dir }}", full[smoke:smoke + 400])
+        if self.doc is not None:
+            names = [step.get("name", "") for step in self.doc["jobs"]["full-install"]["steps"]]
+            self.assertEqual(sum(1 for n in names if n.startswith("Reinstall")), 1)
+            self.assertFalse(any(n.startswith("Reinstall") for n in
+                                 [step.get("name", "") for step in self.doc["jobs"]["repo-only"]["steps"]]))
+
+    def test_g1_glibc_limit_is_the_documented_linux_floor(self):
+        self.assertNotIn("--limit 2.28", self.text)
+        self.assertNotIn("allowed to be", self.text.split("on:\n", 1)[0])
+        self.assertIn("judge_blocked_task", self.text.split("on:\n", 1)[0])
+        scan = (SCRIPTS / "ci_glibc_scan.py").read_text(encoding="utf-8")
+        self.assertIn('DEFAULT_LIMIT = "2.34"', scan)
+        self.assertIn("documented Linux floor", scan)
 
     def test_uses_only_allowed_action_versions(self):
         for use in re.findall(r"uses: (\S+)", self.text):
@@ -181,6 +220,68 @@ class DspaceInstallTests(unittest.TestCase):
         out = "x\n[SlicerDSpace Installer] SlicerDSpace extension installed at: /a/b/lib/Slicer-5.12/qt-scripted-modules\ny\n"
         self.assertEqual(self.mod.find_installed_module_dir(out), Path("/a/b/lib/Slicer-5.12/qt-scripted-modules"))
         self.assertIsNone(self.mod.find_installed_module_dir("nothing"))
+
+    def test_scheduled_uninstall_of_the_extension_is_cancelled_in_the_ini(self):
+        # Run 44816716788: the smoke start printed 'Successfully uninstalled extension "SlicerDSpace"'.
+        text = "[Extensions]\nScheduledForUninstall=SlicerDSpace, Other\nInstallPath=Extensions-34645\n"
+        new, changed = self.mod.strip_scheduled_uninstall(text)
+        self.assertTrue(changed)
+        self.assertIn("ScheduledForUninstall=Other\n", new)
+        self.assertIn("InstallPath=Extensions-34645", new)
+        new, changed = self.mod.strip_scheduled_uninstall("ScheduledForUninstall=SlicerDSpace\r\n")
+        self.assertEqual((new, changed), ("ScheduledForUninstall=\r\n", True))
+        for untouched in ("ScheduledForUninstall=@Invalid()\n", "ScheduledForUninstall=SlicerDMRI\n", "x=1\n"):
+            self.assertEqual(self.mod.strip_scheduled_uninstall(untouched), (untouched, False))
+
+    def _check_reinstall(self, output, module_dir, ini_text=None):
+        with tempfile.TemporaryDirectory() as td:
+            ini = Path(td) / "Slicer.ini"
+            ini.write_text(ini_text or "[Extensions]\nScheduledForUninstall=\n", encoding="utf-8")
+            original = self.mod.settings_files_near
+            self.mod.settings_files_near = lambda exe: [ini]
+            try:
+                return self.mod.check_reinstall(output, module_dir, Path("/x/Slicer"))
+            finally:
+                self.mod.settings_files_near = original
+
+    def test_b1_reinstall_check_passes_for_a_real_reinstall(self):
+        with tempfile.TemporaryDirectory() as td:
+            module = Path(td) / "qt-scripted-modules"
+            module.mkdir()
+            (module / "SlicerDSpace.py").write_text("#", encoding="utf-8")
+            out = "[SlicerDSpace Installer] %s 3D Slicer removes it\n" % self.mod.REINSTALL_MARKER
+            self._check_reinstall(out, module)
+
+    def test_b1_reinstall_check_fails_when_the_extension_is_missing_or_still_scheduled_or_not_a_reinstall(self):
+        with tempfile.TemporaryDirectory() as td:
+            module = Path(td) / "qt-scripted-modules"
+            module.mkdir()
+            (module / "SlicerDSpace.py").write_text("#", encoding="utf-8")
+            out = "[SlicerDSpace Installer] %s 3D Slicer removes it\n" % self.mod.REINSTALL_MARKER
+            with self.assertRaises(SystemExit) as missing:
+                self._check_reinstall(out, Path(td) / "nowhere")
+            self.assertIn("missing after the reinstall", str(missing.exception))
+            with self.assertRaises(SystemExit) as none:
+                self._check_reinstall(out, None)
+            self.assertIn("missing after the reinstall", str(none.exception))
+            with self.assertRaises(SystemExit) as scheduled:
+                self._check_reinstall(out, module, "[Extensions]\nScheduledForUninstall=SlicerDSpace, Other\n")
+            self.assertIn("ScheduledForUninstall", str(scheduled.exception))
+            with self.assertRaises(SystemExit) as fresh:
+                self._check_reinstall("installed at: /x\n", module)
+            self.assertIn("did not go over an installed", str(fresh.exception))
+            self._check_reinstall(out, module, "[Extensions]\nScheduledForUninstall=SlicerDMRI\n")
+
+    def test_b1_reinstall_marker_is_logged_by_both_installer_copies(self):
+        for path in (REPO / "shared" / "installer_script_builder.py", REPO / "docs" / "site" / "assets" / "js" / "installer-customizer.js"):
+            with self.subTest(path=path.name):
+                self.assertIn(self.mod.REINSTALL_MARKER, path.read_text(encoding="utf-8"))
+
+    def test_b1_reinstall_without_the_kept_asset_fails_early(self):
+        with tempfile.TemporaryDirectory() as td:
+            with self.assertRaises(SystemExit) as ctx:
+                self.mod.main(["--slicer-exe", "/x/Slicer", "--python-slicer", "/x/PythonSlicer", "--offline-dir", td, "--reinstall"])
+            self.assertIn("--keep-asset", str(ctx.exception))
 
     def test_website_installer_generates_for_all_three_systems(self):
         sys.path.insert(0, str(REPO))
@@ -310,6 +411,30 @@ class SmokeScriptTests(unittest.TestCase):
         for key in ("numpy", "torch", "dipy", "vtk"):
             self.assertIn('"%s"' % key, text)
         self.assertIn("environment_doctor", text)
+
+    def test_blocked_task_is_accepted_only_for_documented_missing_dependencies(self):
+        # Run 44816716788 repo-only: exit 0, no FA, task blocked "preflight missing dependencies: dipy ...".
+        # The CLI documents partial execution as the default (--strict-environment aborts instead).
+        reason = "preflight missing dependencies: dipy (not found), nibabel (not found), nrrd (not found)"
+        self.assertEqual(self.mod.missing_packages_from_reason(reason), ["dipy", "nibabel", "nrrd"])
+        self.assertEqual(self.mod.missing_packages_from_reason("something else"), [])
+        absent = {n: {"present": False} for n in ("dipy", "nibabel", "nrrd")}
+        self.assertTrue(self.mod.judge_blocked_task("blocked", reason, absent)[0])
+        present = dict(absent, dipy={"present": True})
+        self.assertFalse(self.mod.judge_blocked_task("blocked", reason, present)[0])  # block is not explained
+        self.assertFalse(self.mod.judge_blocked_task("blocked", reason, {})[0])  # packages were not probed
+        self.assertFalse(self.mod.judge_blocked_task("blocked", "no GPU", absent)[0])
+        self.assertFalse(self.mod.judge_blocked_task("completed", "", absent)[0])
+
+    def test_task_outcome_is_read_from_the_orchestration_manifest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(self.mod.read_task_outcome(tmp)[0], "")
+            meta = Path(tmp) / "outputs" / "00_run_metadata"
+            meta.mkdir(parents=True)
+            (meta / "Test1_orchestration_manifest.json").write_text(json.dumps(
+                {"status": "completed_with_blocks", "tasks": [{"name": "microstructure.dti", "status": "blocked", "reason": "r"}]}))
+            self.assertEqual(self.mod.read_task_outcome(tmp), ("blocked", "r"))
+            self.assertEqual(self.mod.read_task_outcome(tmp, "other")[0], "")
 
     def test_missing_environment_fails_without_slicer(self):
         report = self.mod.REPORT

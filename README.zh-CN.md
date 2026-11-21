@@ -299,7 +299,7 @@ export SLICER="/path/to/Slicer"
 
 | 范围 | 当前状态 |
 | --- | --- |
-| 参考环境 | Windows (`x86_64`)、Linux (`x86_64`) 与 macOS（Apple Silicon 主机、Rosetta 2 下的 Slicer、原生 `arm64` 命令行运行时），目标 3D Slicer 5.10.0；支持范围 5.10 至 5.12.4 |
+| 参考环境 | Windows (`x86_64`)、Linux (`x86_64`) 与 macOS（Apple Silicon 主机、Rosetta 2 下的 Slicer、原生 `arm64` 命令行运行时），目标 3D Slicer 5.10.0；支持范围 5.10 至 5.12.4。Linux 需要 glibc 2.34 或更新（Ubuntu 22.04+、Debian 12+、RHEL/Rocky/Alma 9+）；在更旧的系统上，内置 MRtrix `mrcrop` 与 surface runtime 的 FreeSurfer 工具无法运行，环境检查会给出警告 |
 | 验证 | 已记录 Windows、Linux 与 macOS (`arm64`) 在 3D Slicer 5.10.0 下的 Extension Manager 安装、GUI 冒烟测试、损坏运行包自动修复及真实多壳与临床单壳数据工作流 |
 | 分发 | GitHub Release `v0.1.1` 一键安装引导包（`SlicerDSpaceSetup-macOS.zip`、`SlicerDSpaceSetup-Windows.zip`、`SlicerDSpaceSetup-Linux.zip`，可在[官网向导](https://neurodmri.github.io/SlicerDSpace/#start)预配置）及分平台离线底座包（`SlicerDSpace-v0.1.1-Windows-x64.zip`、`SlicerDSpace-v0.1.1-Linux-x64.tar.gz`、`SlicerDSpace-v0.1.1-macOS-arm64.tar.gz`）+ 独立 WMA 图谱包；在线扩展商店目录（Extension Catalog）仍为 Tier 1 申请草稿 |
 | 授权 | 项目代码采用 BSD-3-Clause；第三方运行环境与按需下载的模型资源各自保留条款与发布门禁（皮层表面后处理仍需用户自备 FreeSurfer 许可证） |

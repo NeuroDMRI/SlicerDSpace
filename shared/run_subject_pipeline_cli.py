@@ -259,16 +259,18 @@ def resolve_analysis_options(args, *, explicit_dests=()):
                                                               else ' must be a positive number'))
     # Batch 2 item 5: --bundle-source ALG=SOURCE (repeatable). Parse errors and conflicts stop before any job runs.
     bundle_sources = _bundle_sources_arg(args)
-    if bundle_sources:
-        if args.bundle_tractography_backend:
-            raise ValueError('--bundle-source cannot be combined with --bundle-tractography-backend; '
-                             'use one --bundle-source per bundle algorithm instead')
-        if 'tractography' in _split_csv_or_repeat(args.skip_targets):
-            raise ValueError('--bundle-source requires tractography; remove --skip-targets tractography')
-        for algorithm, option in (('wma', 'wma_input_tractography'), ('tractcloud', 'tractcloud_input_tractography')):
-            if algorithm in bundle_sources and getattr(args, option, None):
-                raise ValueError(f'--bundle-source {algorithm}=... cannot be combined with '
-                                 f'--{option.replace("_", "-")}; the supplied file is the {algorithm} input')
+    # Fix S7: the two conflicts read the RAW option, so `auto` and the `wma=ukf` alias are refused there too.
+    from shared.bundle_sources import source_assignments
+    named = source_assignments(getattr(args, "bundle_sources", None) or {}, strict=False)
+    if named and args.bundle_tractography_backend:
+        raise ValueError('--bundle-source cannot be combined with --bundle-tractography-backend; '
+                         'use one --bundle-source per bundle algorithm instead')
+    if bundle_sources and 'tractography' in _split_csv_or_repeat(args.skip_targets):
+        raise ValueError('--bundle-source requires tractography; remove --skip-targets tractography')
+    for algorithm, option in (('wma', 'wma_input_tractography'), ('tractcloud', 'tractcloud_input_tractography')):
+        if algorithm in named and getattr(args, option, None):
+            raise ValueError(f'--bundle-source {algorithm}=... cannot be combined with '
+                             f'--{option.replace("_", "-")}; the supplied file is the {algorithm} input')
     args.bundle_sources = bundle_sources
     if args.bundle_tractography_backend:
         from shared.algorithm_selection import algorithms

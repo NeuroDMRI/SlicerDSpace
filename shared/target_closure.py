@@ -262,7 +262,8 @@ def _algorithms_for_sources(ticked, explicit, requested, provided, wma_source_ex
 
     A source that is not ticked is appended and recorded in ``added_algorithms`` with the bundle targets that asked
     for it, like WMA adds UKF today. When no selected product reads every ticked tracking result, only the tracking
-    algorithms that a bundle source needs run (the same rule as WMA alone, which runs UKF alone).
+    algorithms that a bundle source needs run (the same rule as WMA alone, which runs UKF alone); a ticked SAF still
+    runs. WMA ``all`` with no ticked whole-brain tracking (only SAF) behaves as ``auto``.
     """
 
     from shared.bundle_sources import SOURCES, TARGETS
@@ -272,17 +273,22 @@ def _algorithms_for_sources(ticked, explicit, requested, provided, wma_source_ex
     for algorithm, source in explicit.items():
         if source != "all":
             needs.setdefault(source, []).append(TARGETS[algorithm])
-    if ("wma" in requested and "wma" not in explicit and "ukf" not in ticked and not wma_source_explicit
-            and "wma" not in provided):
-        needs.setdefault("ukf", []).append("wma")  # WMA at auto keeps its UKF rule
-    uses_all_ticked = bool(requested & {"tractography", "connectome", "saf"}) or explicit.get("wma") == "all" or any(
+    wma = explicit.get("wma")
+    if wma == "all" and not any(name != "saf" for name in ticked):
+        wma = None  # R4: SAF is never a whole-brain source; `all` with no other ticked tracking behaves as auto
+    if "wma" in requested and wma is None and not wma_source_explicit and "wma" not in provided:
+        # WMA at auto keeps its UKF rule. Recorded also when UKF is ticked (fix S2): only `missing` decides what is
+        # added, and the record keeps a ticked UKF from being dropped below.
+        needs.setdefault("ukf", []).append("wma")
+    uses_all_ticked = bool(requested & {"tractography", "connectome", "saf"}) or wma == "all" or any(
         TARGETS[algorithm] in requested and TARGETS[algorithm] not in provided and algorithm not in explicit
         for algorithm in ("wmql", "tractcloud"))
     missing = [source for source in SOURCES if source in needs and source not in ticked]
     if uses_all_ticked:
         algorithms = [*ticked, *missing]
     else:
-        algorithms = [*(name for name in ticked if name in needs), *missing]
+        # R1 (fix S3): a ticked algorithm that no selected product reads is dropped, but a ticked SAF always runs.
+        algorithms = [*(name for name in ticked if name in needs or name == "saf"), *missing]
     for source in missing:
         added_algorithms[source] = tuple(target for target in TARGET_ORDER if target in needs[source])
     return algorithms

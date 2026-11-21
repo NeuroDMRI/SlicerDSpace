@@ -369,15 +369,17 @@ def _add_algorithm_row(qt, owner, layout, box, family, algorithm, staged, zh, re
     button.toggled.connect(toggle_settings)
 
 
-def _install_outside_close_apply(qt, dialog, popup_state, apply_staged):
+def _install_outside_close_apply(qt, dialog, popup_state, apply_staged, changed=lambda: True):
     """Make a click outside the popup act like the Apply button (batch 2, popup-apply).
 
     Qt closes a ``Qt.Popup`` on an outside click with ``close()``, and ``QDialog::closeEvent`` turns that into
-    ``reject()``. This filter sees the Close event first and calls ``apply_staged``, the function behind the Apply
-    button: it validates, and on success it accepts the dialog (the one commit runs after ``exec_`` returns). The Close
-    event is always ignored, so ``closeEvent`` cannot reject after the accept, and a refused apply leaves the popup
-    open with the error shown, as the Apply button does. Cancel, the X and Esc call ``reject()``, which sends no Close
-    event: they still discard. After the popup has finished, a late Close event passes through and commits nothing.
+    ``reject()``. This filter sees the Close event first. When ``changed()`` says that no tick box and no staged value
+    differs from the popup's state at open (fix S8), the event passes through to that reject: looking at a popup
+    commits nothing. Otherwise it calls ``apply_staged``, the function behind the Apply button: it validates, and on
+    success it accepts the dialog (the one commit runs after ``exec_`` returns). That Close event is ignored, so
+    ``closeEvent`` cannot reject after the accept, and a refused apply leaves the popup open with the error shown, as
+    the Apply button does. Cancel, the X and Esc call ``reject()``, which sends no Close event: they still discard.
+    After the popup has finished, a late Close event passes through and commits nothing.
     Returns the filter; the caller must keep it alive. Returns None if the filter cannot be built.
     """
 
@@ -390,7 +392,7 @@ def _install_outside_close_apply(qt, dialog, popup_state, apply_staged):
         class OutsideCloseApplyFilter(base):
             def eventFilter(self, _watched, event):
                 try:
-                    if event.type() != close_type or popup_state["finished"]:
+                    if event.type() != close_type or popup_state["finished"] or not changed():
                         return False
                     apply_staged()
                     event.ignore()
@@ -660,7 +662,26 @@ def choose_algorithms(owner, family):
 
     resize_popup()
 
-    outside_filter = _install_outside_close_apply(qt, dialog, popup_state, validate_and_accept) if popup_flag else None
+    # Fix S8: the state at open (tick boxes and staged values); an outside click commits only when it changed.
+    unreadable = object()
+
+    def popup_state_now(fail):
+        values = []
+        for attribute, getter in staged.items():
+            try:
+                values.append((attribute, getter()))
+            except Exception:
+                values.append((attribute, fail))
+        return ({value: bool(box.checked) for value, box in boxes.items()}, values)
+
+    opened_state = popup_state_now(unreadable)
+
+    def popup_changed():
+        changed_marker = object()  # a value that cannot be read now counts as changed (Apply shows its error)
+        return popup_state_now(changed_marker) != opened_state
+
+    outside_filter = (_install_outside_close_apply(qt, dialog, popup_state, validate_and_accept, popup_changed)
+                      if popup_flag else None)
 
     popup_watch = None
     if hasattr(qt, "QTimer") and popup_flag:

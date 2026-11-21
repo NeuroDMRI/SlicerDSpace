@@ -820,6 +820,245 @@ class QcSummaryLayoutTests(unittest.TestCase):
             self.assertEqual(_bundle_files(Path(tmp) / "missing", "*.trk"), [])
 
 
+FIX_TARGETS = (("bundles",), ("tractography", "bundles"), ("tractography", "bundles", "connectome"))
+FIX_TRACKING = ("csd_act", "ukf", "dti_det", "saf", "csd_act,ukf", "csd_act,saf", "csd_act,dti_det",
+                "csd_act,ukf,dti_det", "ukf,saf")
+FIX_BUNDLES = ("wmql", "wma", "tractcloud", "wmql,wma", "wmql,wma,tractcloud")
+FIX_FILE = Path("/tmp/S/in.vtk")
+
+
+def _expected_routing(targets, ticked, bundles, sources, files):
+    """The routing rule of the batch 2 fix round (R1-R4) for a row with at least one explicit source.
+
+    Returns (tracking algorithms that run, {bundle target: tracking children it runs on}) or None for an all-auto row
+    (those rows keep the base commit's routing; ``test_b2_bundle_source_default`` pins them).
+    """
+
+    from shared.bundle_sources import TARGETS
+    selected = bundles.split(",")
+    explicit = {alg: src for alg, src in sources.items()
+                if alg in selected and src != "auto" and TARGETS[alg] not in files}
+    if not explicit:
+        return None
+    whole_brain = [name for name in ticked if name != "saf"]
+    wma = explicit.get("wma", "auto")
+    if wma == "all" and not whole_brain:
+        wma = "auto"  # R4: `all` with no eligible ticked source behaves as auto
+    reads_all = bool({"tractography", "connectome"} & set(targets)) or (wma == "all") or any(
+        alg in selected and TARGETS[alg] not in files and alg not in explicit for alg in ("wmql", "tractcloud"))
+    needs = {src for alg, src in explicit.items() if alg != "wma" and src != "all"}
+    if "wma" in selected and "wma" not in files:
+        needs.add("ukf" if wma == "auto" else (None if wma == "all" else wma))
+    needs.discard(None)
+    if reads_all:
+        algorithms = set(ticked) | needs
+    else:
+        algorithms = (set(ticked) & needs) | ({"saf"} & set(ticked)) | needs  # R1: a ticked SAF always runs
+    runs_on = {}
+    for alg in selected:
+        target = TARGETS[alg]
+        if target in files:
+            continue  # R3 is checked as "exactly once"
+        source = wma if alg == "wma" else explicit.get(alg, "auto")
+        if source == "auto":
+            runs_on[target] = {"ukf"} if alg == "wma" else set(ticked)  # R2: auto keeps today's rule
+        elif source == "all":
+            runs_on[target] = set(whole_brain)  # R4: never the SAF child
+        else:
+            runs_on[target] = {source}
+    return algorithms, runs_on
+
+
+class B2FixRoutingRuleTests(unittest.TestCase):
+    """Fix round, findings S2-S5: the routing rule as a case table (targets x ticked tracking x sources x files)."""
+
+    maxDiff = None
+
+    def test_b2fix_source_S2_S3_S4_S5_case_table_follows_rules_r1_to_r4(self) -> None:
+        import itertools
+        from shared.algorithm_selection import algorithms
+        from shared.bundle_sources import CHOICES, TARGETS
+        failures, checked = [], 0
+        for targets, tracking, bundles in itertools.product(FIX_TARGETS, FIX_TRACKING, FIX_BUNDLES):
+            selected = bundles.split(",")
+            file_options = [frozenset()]
+            for alg in ("wma", "tractcloud"):
+                if alg in selected:
+                    file_options += [options | {TARGETS[alg]} for options in file_options]
+            for values in itertools.product(*(CHOICES[alg] for alg in selected)):
+                sources = dict(zip(selected, values))
+                for files in file_options:
+                    expected = _expected_routing(targets, algorithms(tracking), bundles, sources, files)
+                    if expected is None:
+                        continue
+                    extra = {f"{target}_input_tractography": FIX_FILE for target in files}
+                    algos, _, _, children = _route(targets, tracking, bundles, sources, **extra)
+                    checked += 1
+                    want_algos, want_runs = expected
+                    got_runs = {target: {backend for backend, child in children.items() if target in child}
+                                for target in want_runs}
+                    row = (targets, tracking, bundles, sources, sorted(files))
+                    if set(algorithms(algos)) != want_algos or set(children) != want_algos:
+                        failures.append(("R1 tracking", row, algos, sorted(children), sorted(want_algos)))
+                    if got_runs != want_runs:
+                        failures.append(("R2/R4 placement", row, got_runs, want_runs))
+                    for target in files:
+                        count = sum(target in child for child in children.values())
+                        if count != 1:
+                            failures.append(("R3 supplied file runs once", row, target, count))
+        self.assertGreater(checked, 1000)
+        self.assertEqual(failures[:12], [], f"{len(failures)} of {checked} rows break the rule")
+
+    def test_b2fix_source_S2_wma_auto_keeps_the_ticked_ukf_next_to_an_explicit_wmql_source(self) -> None:
+        algos, requesters, _, children = _route(("bundles",), "ukf", "wmql,wma", {"wmql": "dti_det"})
+        self.assertEqual(algos, "ukf,dti_det")
+        self.assertEqual(requesters, {"dti_det": ("bundles",)})
+        self.assertEqual(_bundle_children(children), {"ukf": ("wma",), "dti_det": ("bundles",)})
+
+    def test_b2fix_source_S3_a_ticked_saf_still_runs_with_an_explicit_source(self) -> None:
+        algos, _, _, children = _route(("bundles",), "csd_act,saf", "wmql", {"wmql": "ukf"})
+        self.assertIn("saf", algos.split(","))
+        self.assertIn("saf", children["saf"])
+        self.assertEqual(_bundle_children(children)["ukf"], ("bundles",))
+        self.assertNotIn("bundles", children["saf"])
+
+    def test_b2fix_source_S4_supplied_wma_file_runs_once_when_another_source_adds_ukf(self) -> None:
+        _, requesters, _, children = _route(("tractography", "bundles"), "csd_act", "wmql,wma", {"wmql": "ukf"},
+                                            wma_input_tractography=FIX_FILE)
+        self.assertEqual(requesters, {"ukf": ("bundles",)})
+        self.assertEqual(sum("wma" in child for child in children.values()), 1)
+        self.assertIn("wma", children["csd_act"])  # the ticked child, as without the WMQL source
+        self.assertEqual(_bundle_children(children)["ukf"], ("bundles",))
+
+    def test_b2fix_source_S5_wma_all_never_runs_on_the_saf_child(self) -> None:
+        for targets in (("bundles",), ("tractography", "bundles")):
+            with self.subTest(targets=targets):
+                algos, requesters, _, children = _route(targets, "saf", "wma", {"wma": "all"})
+                self.assertEqual(algos, "saf,ukf")  # `all` has no eligible ticked source: WMA behaves as auto
+                self.assertEqual(requesters, {"ukf": ("wma",)})
+                self.assertEqual(_bundle_children(children), {"saf": (), "ukf": ("wma",)})
+
+    def test_b2fix_source_S5_single_backend_saf_run_never_feeds_wma_from_saf(self) -> None:
+        """R4 in single-backend dispatch: an explicit WMA source never makes the SAF run's tractogram the WMA input."""
+
+        from shared.orchestrator import _wma_on_selected_source
+        for source in ("all", "csd_act"):
+            with self.subTest(source=source):
+                config = ProductOrchestratorConfig(subject_id="S", subject_root=Path("/tmp/S"),
+                                                   targets=("tractography", "wma"), tractography_backend="saf",
+                                                   bundle_backend="wma", bundle_sources={"wma": source})
+                self.assertFalse(_wma_on_selected_source(config))
+
+    def test_b2fix_source_all_auto_supplied_file_rows_keep_the_base_routing(self) -> None:
+        """Guard rows (not in the default fixtures): with every source auto a supplied file routes as on the base."""
+
+        cases = {
+            ("csd_act,dti_det", "wmql,wma", "wma_input_tractography"):
+                {"csd_act": ("bundles", "wma"), "dti_det": ("bundles", "wma")},
+            ("csd_act,ukf", "wmql,wma", "wma_input_tractography"): {"csd_act": ("bundles",), "ukf": ("bundles", "wma")},
+            ("csd_act,ukf", "wmql,tractcloud", "tractcloud_input_tractography"):
+                {"csd_act": ("bundles", "tractcloud"), "ukf": ("bundles", "tractcloud")},
+        }
+        for (tracking, bundles, option), expected in cases.items():
+            with self.subTest(tracking=tracking, option=option):
+                _, _, _, children = _route(("tractography", "bundles"), tracking, bundles, {}, **{option: FIX_FILE})
+                self.assertEqual(_bundle_children(children), expected)
+
+
+class B2FixPlannerSignatureTests(unittest.TestCase):
+    """Fix round, finding S1: the real logic planner and runner take ``bundle_sources`` and forward it."""
+
+    def test_b2fix_source_S1_real_planner_and_runner_forward_bundle_sources(self) -> None:
+        import importlib
+        import types
+        previous = sys.modules.get("slicer")
+        sys.modules.setdefault("slicer", types.ModuleType("slicer"))
+        try:
+            logic_module = importlib.import_module("shared.module_logic")
+        finally:
+            if previous is None:
+                sys.modules.pop("slicer", None)
+
+        class Logic(logic_module.SharedLogicMixin):
+            def log(self, message):
+                pass
+
+        from shared.ui_run_controller import build_single_subject_run_kwargs
+        with mock.patch("shared.ui_run_controller._ukf_run_options", return_value={}):
+            options = build_single_subject_run_kwargs(_selection(bundle_sources={"wma": "dti_det"}), {},
+                                                      preflight_blocked_targets={})
+        self.assertEqual(options["bundle_sources"], {"wma": "dti_det"})
+        for name, callee, value in (
+                ("planSelectedProductOrchestration", "plan_subject_products",
+                 SimpleNamespace(run_plan_path=Path("/plan"), items=())),
+                ("runSelectedProductOrchestration", "run_subject_products",
+                 SimpleNamespace(run_manifest_path=Path("/manifest"), tasks=()))):
+            with self.subTest(method=name), mock.patch.object(logic_module, callee, return_value=value) as call:
+                getattr(Logic(), name)(**options)
+                self.assertEqual(call.call_args.args[0].bundle_sources, {"wma": "dti_det"})
+
+
+class B2FixExperimentMergeTests(unittest.TestCase):
+    """Fix round, finding S6: source assignments merge per algorithm across baseline, options and variant."""
+
+    def _plan(self, base_sources, options, variants):
+        from shared.experiments import compile_plan, make_request
+        with tempfile.TemporaryDirectory() as temp:
+            subject = Path(temp) / "subject"
+            subject.mkdir()
+            base = ["--targets", "validation,tractography,bundles", "--brain-mask-backend", "provided",
+                    "--tractography-backend", "csd_act", "--bundle-backend", "wmql,wma", *base_sources]
+            request = make_request(base_args=base, subject_root=subject, subject_id="subject",
+                                   output_root=Path(temp) / "out", run_name="b2", options=options,
+                                   variants=json.dumps(variants))
+            plan = compile_plan(request, python_executable=sys.executable, pipeline_script=Path("pipeline.py"))
+        return ({row["variant"]: row["effective_config"]["bundle_sources"] for row in plan["subjects"]},
+                {row["variant"]: _source_tokens(row["command"]) for row in plan["subjects"]})
+
+    def test_b2fix_source_S6_variant_overrides_and_resets_the_baseline_source(self) -> None:
+        effective, tokens = self._plan(["--bundle-source", "wmql=ukf"], "", [
+            {"name": "base", "args": []},
+            {"name": "dti", "args": ["--bundle-source", "wmql=dti_det"]},
+            {"name": "reset", "args": ["--bundle-source=wmql=auto"]},
+            {"name": "wma", "args": ["--bundle-source", "wma=csd_act"]}])
+        self.assertEqual(effective, {"base": {"wmql": "ukf"}, "dti": {"wmql": "dti_det"}, "reset": {},
+                                     "wma": {"wmql": "ukf", "wma": "csd_act"}})
+        self.assertEqual(tokens["dti"], ["wmql=dti_det"])
+        self.assertEqual(tokens["reset"], [])
+
+    def test_b2fix_source_S6_common_options_sit_between_baseline_and_variant(self) -> None:
+        effective, _ = self._plan(["--bundle-source", "wma=dti_det"], "--bundle-source wma=csd_act", [
+            {"name": "opt", "args": []}, {"name": "back", "args": ["--bundle-source", "wma=ukf"]}])
+        self.assertEqual(effective, {"opt": {"wma": "csd_act"}, "back": {}})  # wma=ukf is the WMA default (auto)
+
+    def test_b2fix_source_S6_an_invalid_source_is_still_refused(self) -> None:
+        with self.assertRaises(ValueError):
+            self._plan([], "", [{"name": "bad", "args": ["--bundle-source", "wmql=saf"]}])
+
+
+class B2FixCliRawConflictTests(unittest.TestCase):
+    """Fix round, finding S7: the conflict checks read the raw option, before auto and wma=ukf are removed."""
+
+    def test_b2fix_source_S7_auto_or_default_values_still_conflict(self) -> None:
+        from shared.run_subject_pipeline_cli import main
+        cases = {
+            "cannot be combined with --bundle-tractography-backend": ["--bundle-source", "wmql=auto",
+                                                                      "--bundle-tractography-backend", "ukf"],
+            "cannot be combined with --wma-input-tractography": ["--bundle-source", "wma=ukf",
+                                                                 "--wma-input-tractography", "/old.vtk"],
+            "cannot be combined with --tractcloud-input-tractography": ["--bundle-source", "tractcloud=auto",
+                                                                        "--tractcloud-input-tractography", "/old.vtk"],
+        }
+        for expected, extra in cases.items():
+            with self.subTest(case=expected), tempfile.TemporaryDirectory() as tmp, \
+                    contextlib.redirect_stderr(io.StringIO()) as errors, contextlib.redirect_stdout(io.StringIO()), \
+                    self.assertRaises(SystemExit):
+                main(["--no-user-config", "--subject-root", tmp, "--targets", "tractography,bundles",
+                      "--tractography-backend", "csd_act,ukf", "--bundle-backend", "wmql,wma,tractcloud", "--plan",
+                      "--skip-environment-check", *extra])
+            self.assertIn(expected, errors.getvalue())
+
+
 def _widget_run_case():
     from test_subject_suffix_gui import GuiCase
 
@@ -838,6 +1077,7 @@ def _widget_run_case():
                              orchestrationRunName="Test1", orchestrationSelectStreamlines=1000,
                              connectomeBackend="auto", connectomeCompressMrtrixDenseState="unset",
                              brainMaskDevice="auto", pnlMaskRoute="auto", maxParallelModels=1,
+                             orchestrationBundleBackend="wmql,wma,tractcloud",  # S1: the sources reach the planner
                              orchestrationWmqlTractographySource="auto",
                              orchestrationWmaTractographySource="dti_det",
                              orchestrationTractcloudTractographySource="ukf")
@@ -845,8 +1085,24 @@ def _widget_run_case():
             self.set_nifti(write_nifti(self.tmp / "a"))
             self.import_now(widget)
             started: list = []
-            widget.logic = SimpleNamespace(planSelectedProductOrchestration=lambda **kw: SimpleNamespace(
-                run_plan_path=Path("/x/plan.json"), run_name="Test1", items=[], warnings=[]))
+            # Fix round S1: the REAL planner method (no **kwargs lambda that hides its signature); only the
+            # orchestrator call behind it is replaced.
+            import shared.module_logic as logic_module
+
+            class Logic(logic_module.SharedLogicMixin):
+                def log(self, message):
+                    pass
+
+            planned: list = []
+
+            def fake_plan(config, write=True):
+                planned.append(config)
+                return SimpleNamespace(run_plan_path=Path("/x/plan.json"), run_name="Test1", items=[], warnings=[])
+
+            widget.logic = Logic()
+            plan_patch = mock.patch.object(logic_module, "plan_subject_products", fake_plan)
+            plan_patch.start()
+            self.addCleanup(plan_patch.stop)
             stubs = dict(
                 validateInputs=lambda manual=False: True,
                 _input_preview_pending_source=lambda: None,
@@ -887,6 +1143,7 @@ def _widget_run_case():
             self.assertEqual(len(started), 1, (self.status, self.errors))
             self.assertTrue(seen)
             self.assertEqual(seen[-1], {"wma": "dti_det", "tractcloud": "ukf"})
+            self.assertEqual(planned[-1].bundle_sources, {"wma": "dti_det", "tractcloud": "ukf"})
 
     return WidgetRunPathTests
 

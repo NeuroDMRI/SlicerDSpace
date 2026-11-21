@@ -17,6 +17,7 @@ def variants(config):
     from shared.bundle_sources import target_runs_on, wma_explicit
     selected = algorithms(config.tractography_backend)
     sources = getattr(config, "bundle_sources", None) or {}
+    supplied_home = _supplied_file_homes(config, selected, sources)
     for index, backend in enumerate(selected):
         # WMA consumes only a UKF tractogram (closure rule C1): it runs in the UKF variant, unless the user chose
         # another WMA source (batch 2 item 5).
@@ -29,11 +30,15 @@ def variants(config):
                         and (not config.bundle_tractography_backend or backend == config.bundle_tractography_backend
                              or target not in {'bundles', 'wma', 'tractcloud'})
                         # Batch 2 item 5: an explicit source keeps a bundle algorithm to its own tracking variant.
-                        and target_runs_on(sources, target, backend))
+                        and target_runs_on(sources, target, backend)
+                        and target not in supplied_home
+                        # Fix S4 (R3): a target that reads a supplied file runs on its one home variant only.
+                        or supplied_home.get(target) == backend)
         requesters = config.closure_algorithm_requesters.get(backend)
         if requesters and index > 0:
             # An algorithm the closure added (for example UKF for WMA) runs only for the targets that need it.
-            targets = tuple(target for target in targets if target in {"tractography", *requesters})
+            targets = tuple(target for target in targets
+                            if target in {"tractography", *requesters} or supplied_home.get(target) == backend)
         if not targets:
             continue
         yield replace(config, tractography_backend=backend, closure_applied=True, write_run_record=False,
@@ -46,6 +51,29 @@ def variants(config):
                       microstructure_run_noddi=config.microstructure_run_noddi if index == 0 else False,
                       microstructure_run_dki=config.microstructure_run_dki if index == 0 else False,
                       microstructure_run_ifw=config.microstructure_run_ifw if index == 0 else False)
+
+
+def _supplied_file_homes(config, selected, sources) -> dict:
+    """{target: backend} for a bundle target that reads a user-supplied tractogram file (fix S4, rule R3).
+
+    Only when another bundle algorithm has an explicit source (with every source ``auto`` the routing stays as it
+    was): the file-backed target then runs exactly once, whatever the other sources added. WMA keeps its home on a
+    ticked UKF; otherwise the home is the first ticked whole-brain variant, else the first ticked, else the first one.
+    """
+
+    from shared.bundle_sources import TARGETS, explicit_sources
+    supplied = {target for target, value in (("wma", config.wma_input_tractography),
+                                             ("tractcloud", config.tractcloud_input_tractography))
+                if value is not None and target in config.targets}
+    if not supplied or len(selected) < 2:
+        return {}
+    if not any(TARGETS[algorithm] in config.targets and TARGETS[algorithm] not in supplied
+               for algorithm in explicit_sources(sources)):
+        return {}
+    ticked = [backend for backend in selected if backend not in config.closure_algorithm_requesters]
+    default = next((backend for backend in ticked if backend != "saf"), ticked[0] if ticked else selected[0])
+    return {target: ("ukf" if target == "wma" and "ukf" in ticked and not config.bundle_tractography_backend
+                     else default) for target in supplied}
 
 
 def plan(config, *, write=True):

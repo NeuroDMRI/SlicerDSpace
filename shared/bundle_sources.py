@@ -30,15 +30,11 @@ NODE_ATTRIBUTES = {
 }
 
 
-def normalize_bundle_sources(value, *, strict=True) -> dict:
-    """``{algorithm: source}`` with only explicit (non-``auto``) values.
-
-    ``value`` is a mapping, ``None``, or an iterable of ``ALG=SOURCE`` tokens. ``strict=False`` drops an unknown
-    algorithm or source (a saved user config); ``strict=True`` raises ``ValueError`` (the CLI).
-    """
+def _validated_pairs(value, strict):
+    """``(algorithm, source)`` pairs in input order; ``wma=ukf`` becomes ``auto``; invalid pairs raise or are dropped."""
 
     if not value:
-        return {}
+        return []
     if isinstance(value, dict):
         pairs = list(value.items())
     else:
@@ -51,7 +47,7 @@ def normalize_bundle_sources(value, *, strict=True) -> dict:
                 continue
             algorithm, source = text.split("=", 1)
             pairs.append((algorithm, source))
-    result: dict = {}
+    valid = []
     for algorithm, source in pairs:
         algorithm = str(algorithm).strip().lower()
         source = str(source or "auto").strip().lower() or "auto"
@@ -72,6 +68,31 @@ def normalize_bundle_sources(value, *, strict=True) -> dict:
                 raise ValueError(f"Unknown tractography source {source!r} for {algorithm}; use one of: "
                                  + ", ".join(CHOICES[algorithm]))
             continue
+        valid.append((algorithm, source))
+    return valid
+
+
+def source_assignments(value, *, strict=True) -> dict:
+    """Every algorithm the option names, with its value, ``auto`` included (the later value wins).
+
+    The CLI conflict checks read this raw map (fix S7), and experiment plans merge it across argument lists (fix S6).
+    """
+
+    result: dict = {}
+    for algorithm, source in _validated_pairs(value, strict):
+        result[algorithm] = source
+    return result
+
+
+def normalize_bundle_sources(value, *, strict=True) -> dict:
+    """``{algorithm: source}`` with only explicit (non-``auto``) values.
+
+    ``value`` is a mapping, ``None``, or an iterable of ``ALG=SOURCE`` tokens. ``strict=False`` drops an unknown
+    algorithm or source (a saved user config); ``strict=True`` raises ``ValueError`` (the CLI).
+    """
+
+    result: dict = {}
+    for algorithm, source in _validated_pairs(value, strict):
         if algorithm in result and result[algorithm] != source and strict:
             raise ValueError(f"--bundle-source names {algorithm} twice with different sources")
         if source == "auto":

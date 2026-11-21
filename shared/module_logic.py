@@ -634,6 +634,7 @@ class SharedLogicMixin:
         connectome_compress_mrtrix_dense: Optional[bool] = None,
         preflight_blocked_targets: Optional[dict[str, str]] = None,
         requested_targets: tuple[str, ...] = (),
+        bundle_sources: Optional[dict] = None,
     ) -> ProductOrchestratorResult:
         result = run_subject_products(
             ProductOrchestratorConfig(
@@ -703,6 +704,7 @@ class SharedLogicMixin:
                 connectome_metrics=connectome_metrics,
                 connectome_compress_mrtrix_dense=connectome_compress_mrtrix_dense,
                 preflight_blocked_targets=preflight_blocked_targets or {},
+                bundle_sources=dict(bundle_sources or {}),  # batch 2 item 5 (fix S1)
             ),
             log=self.log,
         )
@@ -781,6 +783,7 @@ class SharedLogicMixin:
         connectome_compress_mrtrix_dense: Optional[bool] = None,
         preflight_blocked_targets: Optional[dict[str, str]] = None,
         requested_targets: tuple[str, ...] = (),
+        bundle_sources: Optional[dict] = None,
     ) -> RunPlanResult:
         plan = plan_subject_products(
             ProductOrchestratorConfig(
@@ -850,6 +853,7 @@ class SharedLogicMixin:
                 connectome_metrics=connectome_metrics,
                 connectome_compress_mrtrix_dense=connectome_compress_mrtrix_dense,
                 preflight_blocked_targets=preflight_blocked_targets or {},
+                bundle_sources=dict(bundle_sources or {}),  # batch 2 item 5 (fix S1)
             ),
             write=True,
         )

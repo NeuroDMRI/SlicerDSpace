@@ -29,8 +29,10 @@ permissions:
   contents: read
 
 concurrency:
-  group: build-surface-runtime-${{ github.ref }}
-  cancel-in-progress: true
+  # Publishing runs have their own group, so a later build-only dispatch on this ref cannot cancel a run that
+  # publishes. GitHub takes cancel-in-progress from the NEW run: a publishing run never cancels, it waits.
+  group: build-surface-runtime-${{ github.ref }}-${{ inputs.publish && 'publish' || 'build' }}
+  cancel-in-progress: ${{ !inputs.publish }}
 
 env:
   ASSET: surface-runtime-darwin-arm64-macos13.tar.gz
@@ -158,7 +160,8 @@ jobs:
     if: github.event_name == 'workflow_dispatch' && inputs.publish
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    # Its own group: a later dispatch must not cancel a publish between the two asset uploads.
+    # Its own group across all refs: one publish job at a time, never cancelled by another publish job.
+    # The run-level groups above keep a build-only dispatch from cancelling the whole publishing run.
     concurrency:
       group: build-surface-runtime-publish
       cancel-in-progress: false

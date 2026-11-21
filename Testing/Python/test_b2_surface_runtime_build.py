@@ -423,6 +423,14 @@ class WorkflowTests(unittest.TestCase):
         group = re.search(r'\n      group: (\S+)', job).group(1)
         self.assertNotEqual(group, re.search(r'(?m)^  group: (\S+)', self.head).group(1))
 
+    def test_b2fix_runtime_T5b_publish_run_is_not_cancelled(self):
+        """A run with publish=true must not cancel the earlier run on the same ref (run-level concurrency)."""
+        self.assertRegex(
+            self.head,
+            r'(?m)^concurrency:\s*\n(?:  #.*\n)*  group: .+\n(?:  #.*\n)*  cancel-in-progress: \$\{\{ !inputs\.publish \}\}\s*$')
+        # A build-only dispatch must not share a group with a publishing run, or it would cancel that run.
+        self.assertIn("group: build-surface-runtime-${{ github.ref }}-${{ inputs.publish && 'publish' || 'build' }}", self.head)
+
     def test_b2_runtime_publish_can_take_the_verified_artifact_of_an_earlier_run(self):
         # Each build embeds __DATE__/__TIME__, so a new run gives a new sha256. The catalog patch names one run.
         self.assertRegex(self.head, r'(?s)artifact_run_id:.*?type: string.*?default: ""')

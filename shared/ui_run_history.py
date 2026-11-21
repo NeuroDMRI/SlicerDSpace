@@ -8,7 +8,9 @@ only builds widgets and moves data between them and the owner widget.
 from __future__ import annotations
 
 import json
+import os
 import time
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Optional
 
@@ -43,6 +45,15 @@ ADD_RUN_FOLDER_TOOLTIP = (
     "for 00_run_metadata/<run>_orchestration_manifest.json and remembered for later sessions."
 )
 SCENE_ACTIONS = (("Load", "reuse"), ("Replace", "replace"), ("Append", "append"), ("Clear", "clear"))
+RESULTS_TREE_MAX_HEIGHT = 280
+RESULTS_TREE_NO_LIMIT = 16777215  # QWIDGETSIZE_MAX: the tree may grow with the Results window
+RESULTS_WINDOW_SIZE = (900, 640)
+RESULTS_HEADER_BUTTON_SIZE = (28, 22)  # the module's "..." buttons
+RESULTS_WINDOW_NAME = "resultsWindow"
+MODULE_ROOT_RULE = "qMRMLWidget#DDSurfer {"  # the root rule of ui_styles.ui_stylesheet, in both themes
+RESULT_FAMILY_ORDER = ("preprocessing", "anatomy", "microstructure", "tractography", "bundles", "connectome", "qc")
+# Item data roles of the Results tree, as offsets from Qt.UserRole.
+ROLE_PATH, ROLE_KIND, ROLE_MANIFEST, ROLE_RUN, ROLE_KEY = 0, 1, 2, 3, 4
 
 
 def _text(owner: Any, key: str, fallback: str) -> str:
@@ -477,6 +488,8 @@ def set_run_state(owner: Any, state: str) -> None:
     prev_busy = run_state_presentation(prev_state).busy
     presentation = run_state_presentation(normalized_state)
     owner._runState = normalized_state
+    if (prev_state == "running") != (normalized_state == "running"):
+        _on_running_changed(owner, normalized_state == "running")
 
     label = getattr(owner, "_runStateLabel", None)
     if label is not None:
@@ -774,6 +787,8 @@ def install_results_panel(owner: Any) -> None:
             lambda collapsed: None if collapsed else owner._refresh_run_history(),
         )
 
+    results_body_layout = _install_results_header(owner, qt, results_layout)
+
     empty_row = qt.QWidget()
     empty_layout = qt.QHBoxLayout(empty_row)
     empty_layout.setContentsMargins(0, 0, 0, 0)
@@ -781,12 +796,12 @@ def install_results_panel(owner: Any) -> None:
     owner._resultsEmptyLabel = empty_label
     _bind(owner, empty_label, "text", "no_runs_found")
     empty_layout.addWidget(empty_label, 1)
-    results_layout.addWidget(empty_row)
+    results_body_layout.addWidget(empty_row)
 
     results_box = qt.QWidget()
     results_box.setObjectName("resultsTreeContainer")
     results_box.hide()
-    results_layout.addWidget(results_box)
+    results_body_layout.addWidget(results_box)
     owner._resultsEmptyRow = empty_row
     owner._resultsColumns = results_box
     results_box_layout = qt.QVBoxLayout(results_box)
@@ -841,7 +856,7 @@ def install_results_panel(owner: Any) -> None:
     if hasattr(files, "setIndentation"):
         files.setIndentation(14)
     files.setMinimumHeight(150)
-    files.setMaximumHeight(280)
+    files.setMaximumHeight(RESULTS_TREE_MAX_HEIGHT)
     files.setFrameShape(qt.QFrame.NoFrame)
     files.setMinimumWidth(0)
     header = files.header()
@@ -852,21 +867,16 @@ def install_results_panel(owner: Any) -> None:
     owner._runOutputFiles = files
     owner._runHistoryTree = files
     owner._runTreeItems = {}
+    owner._runTreeRecords = ()
+    owner._resultsGroupRuns = {}
     owner._selectingTreeItem = False
     results_box_layout.addWidget(files)
 
     def _on_tree_item_clicked(item, column) -> None:
         raw_path = item.data(0, _user_role(qt, 0))
-        run_idx = item.data(0, _user_role(qt, 3))
         if isinstance(raw_path, (str, Path)) and raw_path and column == 1:
             _toggle_output(owner, item)
-        if isinstance(run_idx, int) and not isinstance(run_idx, bool):
-            if combo.currentIndex != run_idx:
-                owner._selectingTreeItem = True
-                try:
-                    combo.setCurrentIndex(run_idx)
-                finally:
-                    owner._selectingTreeItem = False
+        _select_item_run(owner, item)
 
     def _on_tree_item_double_clicked(item, _column) -> None:
         raw_path = item.data(0, _user_role(qt, 0))
@@ -874,6 +884,10 @@ def install_results_panel(owner: Any) -> None:
             _toggle_output(owner, item)
 
     files.itemClicked.connect(_on_tree_item_clicked)
+    if hasattr(files, "itemExpanded"):
+        files.itemExpanded.connect(lambda item: _record_expansion(owner, item, True))
+    if hasattr(files, "itemCollapsed"):
+        files.itemCollapsed.connect(lambda item: _record_expansion(owner, item, False))
     if hasattr(files, "itemDoubleClicked"):
         files.itemDoubleClicked.connect(_on_tree_item_double_clicked)
     files.setContextMenuPolicy(qt.Qt.CustomContextMenu)
@@ -897,7 +911,7 @@ def install_results_panel(owner: Any) -> None:
     report_row.addWidget(output_tree_button)
     report_bar.hide()
     owner._resultsReportBar = report_bar
-    results_layout.addWidget(report_bar)
+    results_body_layout.addWidget(report_bar)
 
     combo.currentIndexChanged.connect(lambda _index: owner._on_run_history_selection_changed())
 
@@ -916,61 +930,713 @@ def install_results_panel(owner: Any) -> None:
     owner._tableShowsLiveRun = False
 
 
+# ----------------------------------------------------- results header: collapse and pop-out
+
+
+def _rebind(owner: Any, widget: Any, prop: str, key: str) -> None:
+    """Point a language binding at a new text key (the tooltip changes with the state)."""
+
+    bindings = [entry for entry in (getattr(owner, "_uiLanguageBindings", None) or ())
+                if not (entry[0] is widget and entry[1] == prop)]
+    owner._uiLanguageBindings = bindings
+    _bind(owner, widget, prop, key)
+
+
+_RESULTS_ICON_SVG_CACHE: dict[tuple[str, bool], bytes] = {}
+_RESULTS_ICON_CACHE: dict[tuple[str, bool], Any] = {}
+
+
+def _results_icon_svg(glyph: str, *, dark: bool) -> bytes:
+    """Line icon for the Results header; the stroke follows the light or dark theme."""
+
+    key = (glyph, bool(dark))
+    cached = _RESULTS_ICON_SVG_CACHE.get(key)
+    if cached is not None:
+        return cached
+    color = "#C9D1D9" if dark else "#4A5560"
+    body = (
+        f'<g fill="none" stroke="{color}" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">'
+        '<path d="M9.5 2.5h4v4"/><path d="M13.5 2.5 8 8"/>'
+        '<path d="M12 9.5v3a1 1 0 0 1-1 1H3.5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h3"/></g>'
+    )
+    svg = ('<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 16 16">'
+           f"{body}</svg>").encode("utf-8")
+    _RESULTS_ICON_SVG_CACHE[key] = svg
+    return svg
+
+
+def _results_icon(qt_mod: Any, glyph: str, *, dark: bool) -> Any:
+    key = (glyph, bool(dark))
+    cached = _RESULTS_ICON_CACHE.get(key)
+    if cached is not None:
+        return cached
+    try:
+        pixmap = qt_mod.QPixmap()
+        if not pixmap.loadFromData(qt_mod.QByteArray(_results_icon_svg(glyph, dark=dark)), "SVG"):
+            return None
+        if hasattr(pixmap, "setDevicePixelRatio"):
+            pixmap.setDevicePixelRatio(4.0)
+        icon = qt_mod.QIcon(pixmap)
+    except Exception:
+        return None
+    _RESULTS_ICON_CACHE[key] = icon
+    return icon
+
+
+def _queue_fit(owner: Any) -> None:
+    queue_fit = getattr(owner, "_queueCompactFit", None)
+    if callable(queue_fit):
+        queue_fit()
+
+
+def _style_header_button(qt: Any, button: Any) -> None:
+    """FD7: the size and the style rules of the module's "..." buttons (``ui_algorithm_picker.picker_button``)."""
+
+    button.setProperty("algorithmPickerButton", True)  # QToolButton[algorithmPickerButton="true"] in ui_styles
+    button.setIconSize(qt.QSize(16, 16))
+    button.setFixedSize(*RESULTS_HEADER_BUTTON_SIZE)
+    button.setCursor(qt.Qt.PointingHandCursor)
+
+
+def _install_results_header(owner: Any, qt: Any, results_layout: Any) -> Any:
+    """Add the header row (collapse, pop-out), the pop-out placeholder row and the body container.
+
+    The body container holds the empty-state row, the tree and the report bar. Collapse and pop-out act
+    on this one widget; the tree code never shows or hides it. Returns the body's layout.
+    """
+
+    header = qt.QWidget()
+    header.setObjectName("resultsHeaderRow")
+    header.setFixedHeight(RESULTS_HEADER_BUTTON_SIZE[1])  # FD7: the row is no higher than its buttons
+    header_layout = qt.QHBoxLayout(header)
+    header_layout.setContentsMargins(0, 0, 0, 0)
+    header_layout.setSpacing(2)
+    header_layout.addStretch(1)
+    collapse = qt.QToolButton()
+    collapse.setObjectName("resultsCollapseButton")
+    _style_header_button(qt, collapse)
+    collapse.setArrowType(qt.Qt.DownArrow)
+    collapse.setToolTip(_text(owner, "results_collapse", "Collapse results"))
+    _bind(owner, collapse, "tooltip", "results_collapse")
+    pop_out = qt.QToolButton()
+    pop_out.setObjectName("resultsPopOutButton")
+    _style_header_button(qt, pop_out)
+    pop_out.setToolButtonStyle(qt.Qt.ToolButtonIconOnly)
+    pop_out.setToolTip(_text(owner, "results_pop_out", "Open results in a separate window"))
+    _bind(owner, pop_out, "tooltip", "results_pop_out")
+    header_layout.addWidget(collapse)
+    header_layout.addWidget(pop_out)
+    results_layout.addWidget(header)
+
+    popped = qt.QWidget()
+    popped.setObjectName("resultsPoppedOutRow")
+    popped_layout = qt.QHBoxLayout(popped)
+    popped_layout.setContentsMargins(0, 0, 0, 0)
+    popped_label = qt.QLabel("")
+    popped_label.setObjectName("resultsPoppedOutLabel")
+    popped_label.setText(_text(owner, "results_in_window", "Results are shown in a separate window."))
+    _bind(owner, popped_label, "text", "results_in_window")
+    dock_back = qt.QPushButton("")
+    dock_back.setObjectName("resultsDockBackButton")
+    dock_back.setText(_text(owner, "results_bring_back", "Bring back"))
+    _bind(owner, dock_back, "text", "results_bring_back")
+    popped_layout.addWidget(popped_label, 1)
+    popped_layout.addWidget(dock_back)
+    popped.hide()
+    results_layout.addWidget(popped)
+
+    body = qt.QWidget()
+    body.setObjectName("resultsBody")
+    body_layout = qt.QVBoxLayout(body)
+    body_layout.setContentsMargins(0, 0, 0, 0)
+    body_layout.setSpacing(4)
+    results_layout.addWidget(body)
+
+    owner._resultsLayout = results_layout
+    owner._resultsHeaderRow = header
+    owner._resultsCollapseButton = collapse
+    owner._resultsPopOutButton = pop_out
+    owner._resultsPoppedRow = popped
+    owner._resultsBody = body
+    owner._resultsCollapsed = False
+    owner._resultsPoppedOut = False
+    owner._resultsDialog = None
+    owner._resultsDialogLayout = None
+    owner._resultsBodyIndex = None
+    owner._resultsWindowSize = RESULTS_WINDOW_SIZE
+    collapse.clicked.connect(lambda *_args: toggle_results_collapsed(owner))
+    pop_out.clicked.connect(lambda *_args: pop_out_results(owner))
+    dock_back.clicked.connect(lambda *_args: dock_results_body(owner))
+    refresh_results_window(owner)
+    return body_layout
+
+
+def toggle_results_collapsed(owner: Any) -> None:
+    """Hide or show the Results body; everything except the header row. Session state only."""
+
+    body = getattr(owner, "_resultsBody", None)
+    if body is None:
+        return
+    collapsed = not bool(getattr(owner, "_resultsCollapsed", False))
+    if collapsed and getattr(owner, "_resultsPoppedOut", False):
+        dock_results_body(owner)
+    owner._resultsCollapsed = collapsed
+    _set_widget_visible(body, not collapsed)
+    button = getattr(owner, "_resultsCollapseButton", None)
+    if button is not None:
+        import qt
+
+        button.setArrowType(qt.Qt.RightArrow if collapsed else qt.Qt.DownArrow)
+        key = "results_expand" if collapsed else "results_collapse"
+        button.setToolTip(_text(owner, key, "Expand results" if collapsed else "Collapse results"))
+        _rebind(owner, button, "tooltip", key)
+    _queue_fit(owner)
+
+
+def _widget_extent(widget: Any, name: str) -> Optional[int]:
+    value = getattr(widget, name, None)
+    value = value() if callable(value) else value
+    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
+
+
+def pop_out_results(owner: Any) -> None:
+    """Move the Results body into one separate, non-modal window. There is still only one tree."""
+
+    body = getattr(owner, "_resultsBody", None)
+    layout = getattr(owner, "_resultsLayout", None)
+    if body is None or layout is None or getattr(owner, "_resultsPoppedOut", False):
+        return
+    import qt
+    import slicer
+
+    if getattr(owner, "_resultsCollapsed", False):
+        toggle_results_collapsed(owner)
+    dialog = getattr(owner, "_resultsDialog", None)
+    if dialog is None:
+        dialog = qt.QDialog(slicer.util.mainWindow())
+        dialog.setObjectName(RESULTS_WINDOW_NAME)
+        dialog.setModal(False)
+        dialog.setWindowFlags(qt.Qt.Window | qt.Qt.WindowMinMaxButtonsHint | qt.Qt.WindowCloseButtonHint)
+        dialog_layout = qt.QVBoxLayout(dialog)
+        dialog_layout.setContentsMargins(8, 8, 8, 8)
+        # finished(int) covers the title-bar close and Esc; the dialog is hidden and reused, never deleted.
+        dialog.connect("finished(int)", lambda *_args: dock_results_body(owner))
+        owner._resultsDialog = dialog
+        owner._resultsDialogLayout = dialog_layout
+    dialog.setWindowTitle(_text(owner, "results_window_title", "Results - SlicerDSpace"))
+    owner._resultsPoppedOut = True
+    owner._resultsBodyIndex = layout.indexOf(body)
+    layout.removeWidget(body)
+    owner._resultsDialogLayout.addWidget(body)
+    _set_widget_visible(body, True)
+    tree = getattr(owner, "_runOutputFiles", None)
+    if tree is not None:
+        tree.setMaximumHeight(RESULTS_TREE_NO_LIMIT)
+    _set_widget_visible(getattr(owner, "_resultsPoppedRow", None), True)
+    pop_button = getattr(owner, "_resultsPopOutButton", None)
+    if pop_button is not None:
+        pop_button.enabled = False
+    refresh_results_window(owner)
+    width, height = getattr(owner, "_resultsWindowSize", RESULTS_WINDOW_SIZE)
+    dialog.resize(width, height)
+    dialog.show()
+    _queue_fit(owner)
+
+
+def dock_results_body(owner: Any) -> None:
+    """Return the Results body to its place in the panel. Safe to call when nothing is popped out."""
+
+    if not getattr(owner, "_resultsPoppedOut", False):
+        return
+    owner._resultsPoppedOut = False
+    body = getattr(owner, "_resultsBody", None)
+    layout = getattr(owner, "_resultsLayout", None)
+    dialog = getattr(owner, "_resultsDialog", None)
+    if dialog is not None:
+        width, height = _widget_extent(dialog, "width"), _widget_extent(dialog, "height")
+        if width and height:
+            owner._resultsWindowSize = (width, height)
+        window_layout = getattr(owner, "_resultsDialogLayout", None)
+        if window_layout is not None and body is not None:
+            window_layout.removeWidget(body)
+    if body is not None and layout is not None:
+        index = getattr(owner, "_resultsBodyIndex", None)
+        layout.insertWidget(index if isinstance(index, int) and index >= 0 else layout.count(), body)
+        _set_widget_visible(body, not getattr(owner, "_resultsCollapsed", False))
+    tree = getattr(owner, "_runOutputFiles", None)
+    if tree is not None:
+        tree.setMaximumHeight(RESULTS_TREE_MAX_HEIGHT)
+    _set_widget_visible(getattr(owner, "_resultsPoppedRow", None), False)
+    pop_button = getattr(owner, "_resultsPopOutButton", None)
+    if pop_button is not None:
+        pop_button.enabled = True
+    if dialog is not None:
+        try:
+            dialog.hide()
+        except Exception:
+            pass
+    _queue_fit(owner)
+
+
+def refresh_results_window(owner: Any, *, dark: Optional[bool] = None) -> None:
+    """Theme refresh: redraw the header icon and give the Results window the module style."""
+
+    pop_button = getattr(owner, "_resultsPopOutButton", None)
+    if pop_button is None:
+        return
+    try:
+        resolved_dark = _resolve_dark_mode(owner, dark)
+    except Exception:
+        resolved_dark = False
+    try:
+        import qt
+
+        icon = _results_icon(qt, "popout", dark=resolved_dark)
+        if icon is not None:
+            pop_button.setIcon(icon)
+    except Exception:
+        pass
+    dialog = getattr(owner, "_resultsDialog", None)
+    root = getattr(owner, "_uiWidget", None)
+    if dialog is not None and root is not None:
+        from shared.ui_styles import set_stylesheet_if_changed
+
+        attr = getattr(root, "styleSheet", None)
+        style = attr() if callable(attr) else attr
+        if isinstance(style, str):
+            # FD7: the root rule (background, text colour) names the module root; give it to the window too.
+            set_stylesheet_if_changed(
+                dialog, style.replace(MODULE_ROOT_RULE, f"{MODULE_ROOT_RULE[:-2]}, QDialog#{RESULTS_WINDOW_NAME} {{")
+            )
+        # FD7: a window does not inherit its parent's palette; the panel body gets the root's palette
+        # (``apply_placeholder_palette``: Window, Base, Text, Button ...), so the window gets a copy of it.
+        palette_attr = getattr(root, "palette", None)
+        try:
+            root_palette = palette_attr() if callable(palette_attr) else palette_attr
+            if root_palette is not None:
+                import qt
+
+                dialog.setPalette(qt.QPalette(root_palette))
+        except Exception:
+            pass
+
+
+def _qt_value(obj: Any, name: str) -> Any:
+    value = getattr(obj, name, None)
+    return value() if callable(value) else value
+
+
+def _child_items(parent: Any) -> list:
+    """The direct child items of a tree widget (top-level items) or of a tree item."""
+
+    if hasattr(parent, "topLevelItemCount"):
+        count, getter = _tree_count(parent, "topLevelItemCount"), getattr(parent, "topLevelItem", None)
+    else:
+        count, getter = _tree_count(parent, "childCount"), getattr(parent, "child", None)
+    if getter is None or count <= 0:
+        return []
+    return [child for child in (getter(index) for index in range(count)) if child is not None]
+
+
+def _top_item(item: Any) -> Any:
+    while item is not None and item.parent() is not None:
+        item = item.parent()
+    return item
+
+
+def _item_key(qt_mod: Any, item: Any) -> Optional[tuple]:
+    """A key that survives a rebuild: subject, (subject, family) or (subject, file path)."""
+
+    role_key, role_path = _user_role(qt_mod, ROLE_KEY), _user_role(qt_mod, ROLE_PATH)
+    parent = item.parent()
+    if parent is None:
+        key = item.data(0, role_key)
+        return ("subject", key) if key else None
+    grand = parent.parent()
+    if grand is None:
+        key = item.data(0, role_key)
+        return ("family", parent.data(0, role_key), key) if key else None
+    path = item.data(0, role_path)
+    return ("file", grand.data(0, role_key), str(path)) if path else None
+
+
+def _view_snapshot(qt_mod: Any, tree: Any) -> tuple[Optional[tuple], Any]:
+    """The current item's key and the scroll position, taken before a rebuild."""
+
+    key = None
+    current = getattr(tree, "currentItem", None)
+    if callable(current):
+        try:
+            item = current()
+            key = _item_key(qt_mod, item) if item is not None else None
+        except Exception:
+            key = None
+    scroll = None
+    try:
+        scroll = _qt_value(tree.verticalScrollBar(), "value")
+    except Exception:
+        pass
+    return key, scroll
+
+
+def _restore_scroll(tree: Any, scroll: Any) -> None:
+    if scroll is None:
+        return
+    try:
+        tree.verticalScrollBar().setValue(scroll)
+    except Exception:
+        pass
+
+
+def _expansion_state(owner: Any) -> dict:
+    """What the user expanded or collapsed in this session: ``subjects[key]`` and ``families[(key, family)]``."""
+
+    state = getattr(owner, "_resultsExpansion", None)
+    if not isinstance(state, dict):
+        state = {"subjects": {}, "families": {}}
+        owner._resultsExpansion = state
+    return state
+
+
+def _record_expansion(owner: Any, item: Any, expanded: bool) -> None:
+    """Tree signal: remember a user change. A rebuild that applies the state is not a user change."""
+
+    if getattr(owner, "_resultsApplyingState", False):
+        return
+    import qt
+
+    key = _item_key(qt, item)
+    if key is None:
+        return
+    state = _expansion_state(owner)
+    if key[0] == "subject":
+        state["subjects"][key[1]] = bool(expanded)
+    elif key[0] == "family":
+        state["families"][(key[1], key[2])] = bool(expanded)
+
+
+def _apply_family_expansion(owner: Any, subject_item: Any, qt_mod: Any) -> None:
+    role_key = _user_role(qt_mod, ROLE_KEY)
+    subject_key = subject_item.data(0, role_key)
+    families = _expansion_state(owner)["families"]
+    for family in _child_items(subject_item):
+        _set_expanded(family, families.get((subject_key, family.data(0, role_key)), False))
+
+
+def running_subject_id(owner: Any) -> str:
+    """The subject a single-subject job is running now, from the live run state; empty for a batch."""
+
+    if str(getattr(owner, "_runState", "") or "") != "running":
+        return ""
+    context = getattr(owner, "_backgroundRunContext", None) or {}
+    if context.get("batch_size") is not None or _is_campaign(context):
+        return ""
+    return str(context.get("subject_id") or "").strip()
+
+
+def _is_campaign(context: dict) -> bool:
+    """FD6: an experiment campaign runs many subjects; its context still carries the GUI's subject."""
+
+    return bool(context.get("experiment_manifest_path"))
+
+
+def _record_stamp(record: RunRecord) -> float:
+    return record.timestamp.timestamp() if record.timestamp is not None else float("-inf")
+
+
+def _subject_groups(owner: Any, records, running: str) -> list[dict]:
+    """Group the records by subject, newest first; the subject of a running job comes first.
+
+    A batch record never merges into a subject: it is its own group.
+    """
+
+    fallback = _text(owner, "run_selector_label", "Runs")
+    groups: dict[str, dict] = {}
+    for index, record in enumerate(records):
+        label = record.subject_id or fallback
+        key = f"batch:{record.manifest_path}" if record.is_batch else label
+        group = groups.setdefault(
+            key, {"key": key, "label": label, "indices": [], "batch": record.is_batch, "running": False}
+        )
+        group["indices"].append(index)
+    if running:
+        group = groups.get(running)
+        if group is None:
+            group = groups[running] = {"key": running, "label": running, "indices": [], "batch": False,
+                                       "running": True}
+        group["running"] = not group["batch"]
+    for group in groups.values():
+        group["indices"].sort(key=lambda index: (-_record_stamp(records[index]), index))
+        group["indices"] = tuple(group["indices"])
+    return sorted(
+        groups.values(),
+        key=lambda group: (
+            0 if group["running"] else 1,
+            -(_record_stamp(records[group["indices"][0]]) if group["indices"] else float("inf")),
+            group["indices"][0] if group["indices"] else -1,
+        ),
+    )
+
+
+def _read_manifest(record: RunRecord) -> Optional[dict]:
+    try:
+        manifest = json.loads(record.manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return manifest if isinstance(manifest, dict) and manifest else None
+
+
+def _fill_subject_children(owner: Any, subject_item: Any, records, indices, manifests: Optional[dict] = None) -> None:
+    """Add the families and files of every run of a subject, newest run first, each family and file once."""
+
+    for index in indices:
+        record = records[index]
+        if record.is_batch:
+            continue
+        manifest = manifests[index] if manifests and index in manifests else _read_manifest(record)
+        if isinstance(manifest, dict) and manifest:
+            _populate_manifest_output_items(
+                owner, subject_item, manifest, manifest_path=record.manifest_path, run_index=index
+            )
+    _order_families(subject_item)
+
+
+def _order_families(subject_item: Any) -> None:
+    """Keep the families in their usual order, also when an older run adds one that a newer run lacks."""
+
+    import qt as qt_mod
+
+    role_key = _user_role(qt_mod, ROLE_KEY)
+    rank = {family: position for position, family in enumerate(RESULT_FAMILY_ORDER)}
+    children = _child_items(subject_item)
+    ordered = sorted(children, key=lambda child: rank.get(child.data(0, role_key), len(rank)))
+    if ordered != children:
+        subject_item.takeChildren()
+        for child in ordered:
+            subject_item.addChild(child)
+
+
+def _build_subject_item(owner: Any, qt_mod: Any, tree: Any, records, group: dict) -> Any:
+    newest = group["indices"][0] if group["indices"] else None
+    if group["running"]:
+        status = _text(owner, "results_running", "running")
+    else:
+        status = status_label(records[newest].status)
+    if group["batch"]:
+        name = records[newest].run_name or records[newest].manifest_path.parent.name
+        text = f"{group['label']} · {name} · {status}"
+    else:
+        text = f"{group['label']} · {status}"
+    item = qt_mod.QTreeWidgetItem(tree, [text])
+    item.setData(0, _user_role(qt_mod, ROLE_KEY), group["key"])
+    if newest is not None:
+        item.setData(0, _user_role(qt_mod, ROLE_MANIFEST), str(records[newest].manifest_path))
+        item.setData(0, _user_role(qt_mod, ROLE_RUN), newest)
+        item.setToolTip(0, "\n\n".join(run_record_details(records[index]) for index in group["indices"]))
+    else:
+        item.setToolTip(0, status)
+    return item
+
+
 def _populate_run_tree(owner, records, current_index):
+    """Rebuild the Results tree: one item per subject (runs merged), then families, then files."""
+
     tree = getattr(owner, "_runOutputFiles", None) or getattr(owner, "_runHistoryTree", None)
     if tree is None:
         return
     import qt
 
+    owner._runTreeRecords = tuple(records)  # as scanned; the labels below use the session's end states (FD4)
+    records = _with_ended_runs(owner, records)
+    running = running_subject_id(owner)
+    has_content = bool(records) or bool(running)
     columns = owner._resultsColumns
-    columns.setVisible(bool(records))
-    owner._resultsEmptyLabel.setVisible(not records)
+    columns.setVisible(has_content)
+    owner._resultsEmptyLabel.setVisible(not has_content)
     empty_row = getattr(owner, "_resultsEmptyRow", None)
     if empty_row is not None:
-        empty_row.setVisible(not records)
+        empty_row.setVisible(not has_content)
     report_bar = getattr(owner, "_resultsReportBar", None)
     if report_bar is not None:
         report_bar.setVisible(False)
-    tree.clear()
-    run_items = {}
-    owner._runTreeItems = run_items
-    subjects = {}
-    for index, record in enumerate(records):
-        subject = record.subject_id or _text(owner, "run_selector_label", "Runs")
-        if subject not in subjects:
-            subject_item = qt.QTreeWidgetItem(tree, [subject])
-            _set_expanded(subject_item, True)
-            subjects[subject] = subject_item
-        group = subjects[subject]
-        name = record.run_name or record.manifest_path.parent.name
-        item = qt.QTreeWidgetItem(group, [f"{name} · {status_label(record.status)}"])
-        item.setData(0, _user_role(qt, 2), str(record.manifest_path))
-        item.setData(0, _user_role(qt, 3), index)
-        item.setToolTip(0, run_record_details(record))
-        run_items[index] = item
-        if not record.is_batch:
-            try:
-                manifest = json.loads(record.manifest_path.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                manifest = None
-            if isinstance(manifest, dict) and manifest:
-                _populate_manifest_output_items(
-                    owner,
-                    item,
-                    manifest,
-                    manifest_path=record.manifest_path,
-                    run_index=index,
-                )
-        _set_expanded(item, True)
-        _set_expanded(group, True)
-        if index == current_index:
-            tree.setCurrentItem(item)
-    if hasattr(tree, "expandAll"):
-        tree.expandAll()
+    snapshot = _view_snapshot(qt, tree)
+    state = _expansion_state(owner)
+    run_items: dict = {}
+    group_runs: dict = {}
+    selected_item = None
+    owner._resultsApplyingState = True
+    try:
+        tree.clear()
+        for position, group in enumerate(_subject_groups(owner, records, running)):
+            item = _build_subject_item(owner, qt, tree, records, group)
+            if not group["batch"]:
+                _fill_subject_children(owner, item, records, group["indices"])
+                _apply_family_expansion(owner, item, qt)
+            # Default: only the newest subject is open, and only down to its (collapsed) families.
+            _set_expanded(item, state["subjects"].get(group["key"], position == 0))
+            for index in group["indices"]:
+                run_items[index] = item
+                group_runs[index] = group["indices"]
+            if current_index in group["indices"]:
+                selected_item = item
+        owner._runTreeItems = run_items
+        owner._resultsGroupRuns = group_runs
+        _restore_current_item(qt, tree, snapshot[0], selected_item)
+        _restore_scroll(tree, snapshot[1])
+    finally:
+        owner._resultsApplyingState = False
     _refresh_output_visibility(owner)
-    queue_fit = getattr(owner, "_queueCompactFit", None)
-    if callable(queue_fit):
-        queue_fit()
+    _queue_fit(owner)
+
+
+def _item_is_expanded(item: Any) -> bool:
+    is_expanded = getattr(item, "isExpanded", None)
+    return bool(is_expanded()) if callable(is_expanded) else True
+
+
+def _shown_item(item: Any) -> Any:
+    """The item itself, or its highest collapsed ancestor.
+
+    FD2: Qt expands every collapsed ancestor of a new current item (``currentChanged`` -> ``scrollTo``). That
+    would undo a collapse of the user, and in a hidden tree it would happen later, outside the guard.
+    """
+
+    target = item
+    ancestor = item.parent()
+    while ancestor is not None:
+        if not _item_is_expanded(ancestor):
+            target = ancestor
+        ancestor = ancestor.parent()
+    return target
+
+
+def _restore_current_item(qt_mod: Any, tree: Any, key: Optional[tuple], selected_subject: Any) -> None:
+    """Keep the item the user had when it is still in the selected subject; else select the subject."""
+
+    if key is not None and selected_subject is not None:
+        for item in _iter_tree_items(tree):
+            if _item_key(qt_mod, item) == key and _top_item(item) is selected_subject:
+                tree.setCurrentItem(_shown_item(item))
+                return
+    if selected_subject is not None:
+        tree.setCurrentItem(selected_subject)
+
+
+def _rebuild_tree(owner: Any) -> None:
+    """Rebuild the tree from the records of the last scan (no rescan), e.g. when a run starts or ends."""
+
+    if getattr(owner, "_runOutputFiles", None) is None or getattr(owner, "_resultsColumns", None) is None:
+        return
+    combo = getattr(owner, "_runHistoryComboBox", None)
+    index = _qt_value(combo, "currentIndex") if combo is not None else 0
+    _populate_run_tree(owner, getattr(owner, "_runTreeRecords", ()) or (), index if isinstance(index, int) else 0)
+
+
+def _on_running_changed(owner: Any, now_running: bool) -> None:
+    """A single-subject job started or ended: remember its Output Folder, show or relabel its subject."""
+
+    try:
+        if now_running:
+            _forget_ended_runs(owner, _job_manifest_keys(owner))
+            save_run_output_folder(owner)
+            subject = running_subject_id(owner)
+            if subject:
+                _expansion_state(owner)["subjects"][subject] = True
+        else:
+            _remember_ended_run(owner, str(getattr(owner, "_runState", "") or ""))
+        _rebuild_tree(owner)
+    except Exception:
+        pass
+
+
+# FD4: a job of this session that ended while its manifest on disk still says "running" (a killed worker leaves
+# its checkpoint). Session memory only, keyed by the real path of the manifest; the manifest is never changed.
+_ENDED_RUN_STATES = ("failed", "cancelled")
+
+
+def _manifest_key(path: Any) -> str:
+    return os.path.realpath(str(path))
+
+
+def _manifest_says_running(path: Any) -> bool:
+    try:
+        manifest = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(manifest, dict) and str(manifest.get("status") or "") == "running"
+
+
+def _job_manifest_keys(owner: Any) -> set:
+    """The manifest of the current job: the path the worker printed and the planned path (not a batch progress file)."""
+
+    paths = [getattr(owner, "_backgroundManifestPath", None)]
+    if not getattr(owner, "_runProgressIsBatch", False):
+        paths.append(getattr(owner, "_runProgressManifestPath", None))
+    return {_manifest_key(path) for path in paths if path}
+
+
+def _ended_runs(owner: Any) -> dict:
+    ended = getattr(owner, "_resultsEndedRuns", None)
+    if not isinstance(ended, dict):
+        ended = {}
+        owner._resultsEndedRuns = ended
+    return ended
+
+
+def _forget_ended_runs(owner: Any, keys) -> None:
+    ended = _ended_runs(owner)
+    for key in keys:
+        ended.pop(key, None)
+
+
+def _remember_ended_run(owner: Any, state: str) -> None:
+    if state not in _ENDED_RUN_STATES:
+        return
+    ended = _ended_runs(owner)
+    for key in _job_manifest_keys(owner):
+        if _manifest_says_running(key):
+            ended[key] = state
+
+
+def _with_ended_runs(owner: Any, records) -> tuple:
+    """The records as the Results show them: a run that ended in this session is not shown as running.
+
+    An entry is dropped when its manifest no longer says running, or when a job runs for it now.
+    """
+
+    records = tuple(records)
+    ended = getattr(owner, "_resultsEndedRuns", None)
+    if not ended:
+        return records
+    live = _job_manifest_keys(owner) if str(getattr(owner, "_runState", "") or "") == "running" else set()
+    for key in list(ended):
+        if key in live or not _manifest_says_running(key):
+            ended.pop(key, None)
+    if not ended:
+        return records
+    return tuple(
+        replace(record, status=ended[_manifest_key(record.manifest_path)])
+        if record.status == "running" and _manifest_key(record.manifest_path) in ended
+        else record
+        for record in records
+    )
+
+
+def save_run_output_folder(owner: Any) -> None:
+    """Remember the Output Folder of a run, so a later Slicer session lists its results too.
+
+    FD5: with an empty Output Folder field the results go to ``<subject root>/outputs``; then the subject root
+    holds the run and is remembered. A campaign does not run the GUI's subject; it remembers its own folder
+    (``ui_experiments.submit``).
+    """
+
+    context = getattr(owner, "_backgroundRunContext", None) or {}
+    folder = _node_text(owner, "outputDirectory")
+    if not folder and not _is_campaign(context):
+        subject_root = context.get("subject_root")
+        folder = str(subject_root).strip() if subject_root else _node_text(owner, "inputDirectory")
+    if folder:
+        save_history_directory(folder)
 
 
 def _output_nodes(slicer, manifest_path, path):
@@ -1053,6 +1719,53 @@ def _toggle_output(owner, item):
         slicer.util.errorDisplay(str(exc), parent=owner.parent)
 
 
+def _select_item_run(owner: Any, item: Any) -> None:
+    """Select the run of a tree item in the run selector, without rebuilding the merged subject."""
+
+    import qt
+
+    combo = getattr(owner, "_runHistoryComboBox", None)
+    run_idx = item.data(0, _user_role(qt, ROLE_RUN)) if item is not None else None
+    if combo is None or not isinstance(run_idx, int) or isinstance(run_idx, bool):
+        return
+    if combo.currentIndex != run_idx:
+        owner._selectingTreeItem = True
+        try:
+            combo.setCurrentIndex(run_idx)
+        finally:
+            owner._selectingTreeItem = False
+
+
+def _same_path(left: Any, right: Any) -> bool:
+    try:
+        return Path(left).resolve() == Path(right).resolve()
+    except (OSError, RuntimeError, TypeError, ValueError):
+        return False
+
+
+def _select_manifest_run(owner: Any, manifest_path: Any) -> bool:
+    """Select the current record that has ``manifest_path`` in the run selector; False when none has it.
+
+    FD8: reads no tree item, so it is safe after a nested event loop that may have rebuilt the tree.
+    """
+
+    combo = getattr(owner, "_runHistoryComboBox", None)
+    if combo is None or manifest_path is None:
+        return False
+    records = getattr(owner, "_runHistoryRecords", ()) or ()
+    run_idx = next((index for index, record in enumerate(records)
+                    if _same_path(record.manifest_path, manifest_path)), None)
+    if run_idx is None:
+        return False
+    if combo.currentIndex != run_idx:
+        owner._selectingTreeItem = True
+        try:
+            combo.setCurrentIndex(run_idx)
+        finally:
+            owner._selectingTreeItem = False
+    return True
+
+
 def _output_menu(owner, position):
     import qt
     import slicer
@@ -1077,7 +1790,11 @@ def _output_menu(owner, position):
     unload = menu.addAction("从场景卸载" if zh else "Unload from scene") if nodes else None
     chosen = menu.exec_(tree.viewport().mapToGlobal(position))
     if edit_action is not None and chosen == edit_action:
-        owner._manage_result_scene("edit_tissue")
+        # FD3: _manage_result_scene acts on the selected run; in a merged subject the file may own an older one.
+        # FD8: exec_ ran a nested event loop; a refresh may have deleted `item` and reordered the records,
+        # so resolve the run from the manifest path taken before the menu opened, never from the item.
+        if _select_manifest_run(owner, manifest_path):
+            owner._manage_result_scene("edit_tissue")
     elif unload is not None and chosen == unload:
         for node in nodes:
             slicer.mrmlScene.RemoveNode(node)
@@ -1257,31 +1974,71 @@ def _populate_manifest_output_items(
         if family in {"surface", "segmentation", "parcellation", "postprocess"}:
             family = "anatomy"
         families.setdefault(family, {}).update(paths)
-    role_manifest = _user_role(qt, 2)
-    role_run = _user_role(qt, 3)
+    role_manifest = _user_role(qt, ROLE_MANIFEST)
+    role_run = _user_role(qt, ROLE_RUN)
+    role_key = _user_role(qt, ROLE_KEY)
     manifest_str = str(resolved_manifest) if resolved_manifest is not None else None
-    family_order = ("preprocessing", "anatomy", "microstructure", "tractography", "bundles", "connectome", "qc")
+    family_order = RESULT_FAMILY_ORDER
     ordered_families = [
         *[family for family in family_order if family in families],
         *[family for family in families if family not in family_order],
     ]
+    # The parent may already hold families and files of a newer run: add to them, skip what is there.
+    existing: dict = {}
+    seen_paths: set = set()
+    for child in _child_items(parent):
+        if not callable(getattr(child, "data", None)):
+            continue
+        family_key = child.data(0, role_key)
+        if family_key:
+            existing[family_key] = child
+        for leaf in _child_items(child):
+            seen_paths.add(str(leaf.data(0, _user_role(qt, ROLE_PATH))))
     for family in ordered_families:
-        paths = families[family]
+        paths = {path: visual for path, visual in families[family].items() if path not in seen_paths}
+        if not paths:
+            continue
+        seen_paths.update(paths)
         caption = titles.get(family, (family, family))[int(zh)]
-        group = qt.QTreeWidgetItem(parent, [f"{caption} ({len(paths)})"])
-        if run_index is not None:
-            group.setData(0, role_run, run_index)
+        group = existing.get(family)
+        if group is None:
+            group = qt.QTreeWidgetItem(parent, [f"{caption} ({len(paths)})"])
+            group.setData(0, role_key, family)
+            if run_index is not None:
+                group.setData(0, role_run, run_index)
+            if manifest_str is not None and run_index is not None:
+                group.setData(0, role_manifest, manifest_str)
+            existing[family] = group
+            added_to_existing = False
+        else:
+            added_to_existing = True
         for path, visual in paths.items():
             item = qt.QTreeWidgetItem(group, [Path(path).name, "○" if visual else "↗"])
-            item.setData(0, _user_role(qt, 0), path)
+            item.setData(0, _user_role(qt, ROLE_PATH), path)
             if path in seg_paths:
-                item.setData(0, _user_role(qt, 1), "segmentation")
+                item.setData(0, _user_role(qt, ROLE_KIND), "segmentation")
             if manifest_str is not None:
                 item.setData(0, role_manifest, manifest_str)
             if run_index is not None:
                 item.setData(0, role_run, run_index)
             item.setToolTip(0, path)
-        _set_expanded(group, True)
+        if added_to_existing:
+            group.setText(0, f"{caption} ({_tree_count(group, 'childCount')})")
+
+
+def _target_run_index(owner: Any, run_items: dict, run_index: Optional[int]) -> Optional[int]:
+    if run_index in run_items:
+        return run_index
+    latest = getattr(owner, "_latestResultManifestPath", None)
+    if latest is not None:
+        wanted = str(latest)
+        for index, record in enumerate(getattr(owner, "_runTreeRecords", ()) or ()):
+            if index in run_items and str(record.manifest_path) == wanted:
+                return index
+        return None
+    combo = getattr(owner, "_runHistoryComboBox", None)
+    combo_idx = getattr(combo, "currentIndex", None)
+    return combo_idx if isinstance(combo_idx, int) and combo_idx in run_items else None
 
 
 def _show_output_files(owner, manifest, *, run_index: Optional[int] = None):
@@ -1292,42 +2049,29 @@ def _show_output_files(owner, manifest, *, run_index: Optional[int] = None):
 
     run_items = getattr(owner, "_runTreeItems", None)
     if isinstance(run_items, dict) and run_items:
-        if not isinstance(manifest, dict) or not manifest:
-            if run_index is not None and run_index in run_items:
-                _clear_item_children(run_items[run_index])
-            _refresh_output_visibility(owner)
-            return
-        target_idx = run_index if run_index in run_items else None
-        target_item = run_items.get(target_idx) if target_idx is not None else None
-        if target_item is None:
-            latest = getattr(owner, "_latestResultManifestPath", None)
-            if latest is not None:
-                wanted = str(latest)
-                role_manifest = _user_role(qt, 2)
-                for idx, candidate in run_items.items():
-                    if str(candidate.data(0, role_manifest) or "") == wanted:
-                        target_idx, target_item = idx, candidate
-                        break
-        if target_item is None:
-            combo = getattr(owner, "_runHistoryComboBox", None)
-            combo_idx = getattr(combo, "currentIndex", None)
-            if isinstance(combo_idx, int) and combo_idx in run_items:
-                target_idx, target_item = combo_idx, run_items[combo_idx]
-        if target_item is not None:
-            _clear_item_children(target_item)
-            resolved_manifest = _item_manifest_path(owner, target_item, qt)
-            _populate_manifest_output_items(
-                owner,
-                target_item,
-                manifest,
-                manifest_path=resolved_manifest,
-                run_index=target_idx,
-            )
-            _set_expanded(target_item, True)
-            if hasattr(target_item, "parent") and target_item.parent() is not None:
-                _set_expanded(target_item.parent(), True)
-            _refresh_output_visibility(owner)
-            return
+        target_idx = _target_run_index(owner, run_items, run_index)
+        if target_idx is not None:
+            # Rebuild the subject of this run from all its runs; the run's manifest is the one in hand.
+            subject_item = run_items[target_idx]
+            indices = (getattr(owner, "_resultsGroupRuns", {}) or {}).get(target_idx, (target_idx,))
+            key, scroll = _view_snapshot(qt, tree)
+            owner._resultsApplyingState = True
+            try:
+                _clear_item_children(subject_item)
+                _fill_subject_children(
+                    owner, subject_item, getattr(owner, "_runTreeRecords", ()), indices,
+                    {target_idx: manifest if isinstance(manifest, dict) else {}},
+                )
+                _apply_family_expansion(owner, subject_item, qt)
+                # FD1: the clear removed the current item from the tree, so ``currentItem()`` is None now.
+                # The snapshot taken before the clear tells whether it was in this subject.
+                if key is not None and key[1] == subject_item.data(0, _user_role(qt, ROLE_KEY)):
+                    _restore_current_item(qt, tree, key, subject_item)
+                _restore_scroll(tree, scroll)
+            finally:
+                owner._resultsApplyingState = False
+        _refresh_output_visibility(owner)
+        return
 
     tree.clear()
     if isinstance(manifest, dict) and manifest:
@@ -1337,6 +2081,8 @@ def _show_output_files(owner, manifest, *, run_index: Optional[int] = None):
             manifest,
             manifest_path=getattr(owner, "_latestResultManifestPath", None),
         )
+        for family in _child_items(tree):
+            _set_expanded(family, True)
     _refresh_output_visibility(owner)
 
 
@@ -1403,12 +2149,8 @@ def history_roots(owner: Any):
     subject_root_text = _node_text(owner, "inputDirectory")
     output_root_text = _node_text(owner, "outputDirectory")
     batch_root_text = _node_text(owner, "batchRoot")
-    has_configured_root = bool(subject_root_text or output_root_text or batch_root_text)
-    extra_dirs = (
-        getattr(owner, "_manualRunHistoryDirs", ())
-        if has_configured_root
-        else load_history_directories()
-    )
+    # Results of earlier plugin sessions stay: the remembered folders are always scanned.
+    extra_dirs = (*(getattr(owner, "_manualRunHistoryDirs", ()) or ()), *load_history_directories())
     return candidate_run_roots(
         subject_root_text=subject_root_text,
         output_root_text=output_root_text,
@@ -1431,7 +2173,7 @@ def refresh_run_history(owner: Any, select_path: Optional[Path] = None) -> None:
     combo.blockSignals(True)
     try:
         combo.clear()
-        for record in discovery.records:
+        for record in _with_ended_runs(owner, discovery.records):
             combo.addItem(run_record_label(record), record.manifest_path.as_posix())
             combo.setItemData(combo.count - 1, run_record_details(record), 3)  # Qt::ToolTipRole
         if not discovery.records:
@@ -1516,7 +2258,7 @@ def on_run_selection_changed(owner: Any, *, from_refresh: bool = False) -> None:
     path = selected_manifest_path(owner)
     notes = "\n".join(getattr(owner, "_runHistoryNotes", ()) or ())
     if path is None:
-        if not getattr(owner, "_runTreeItems", None):
+        if not getattr(owner, "_runTreeItems", None) and not running_subject_id(owner):
             _show_output_files(owner, {})
         owner._latestResultManifestPath = None
         _set_scene_actions(owner, has_subject_run=False, is_batch=False)

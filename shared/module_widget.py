@@ -62,6 +62,7 @@ from shared.topup_parameters import (
 )
 from shared.ui_run_history import (
     browse_run_directory,
+    dock_results_body,
     on_run_combo_changed,
     poll_run_progress,
     refresh_run_history,
@@ -2920,6 +2921,10 @@ class SharedWidgetMixin:
         stop_progress_polling(self)
         stop_run_animation(self)
         self._end_worker_tracking()
+        try:
+            dock_results_body(self)  # a Results window must not keep the tree when the panel goes away
+        except Exception:
+            pass
         timer = getattr(self, "_runHistoryRefreshTimer", None)
         if timer is not None:
             timer.stop()
@@ -3602,11 +3607,8 @@ class SharedWidgetMixin:
         )
 
     def _reset_result_scene_actions(self) -> None:
+        # The Results tree is kept: earlier results stay visible while a new run starts (D7.2).
         self._latestResultManifestPath = None
-        files = getattr(self, "_runOutputFiles", None)
-        if files is not None:
-            files.clear()
-        self._runTreeItems = {}
         for button in getattr(self, "_resultSceneButtons", []):
             button.enabled = False
         review = getattr(self, "_reviewStateLabel", None)
@@ -3988,29 +3990,32 @@ class SharedWidgetMixin:
                 message = worker_killed_message(worker_kill_info(exit_code, exit_status, abnormal_exit_seen=abnormal_exit) or {})
                 self._mark_unfinished_rows("failed", message)
                 self._setStatus("error", "Pipeline failed: the worker was killed")
+                set_run_state(self, "failed")
+                self._refresh_run_history()  # FD4: rescan; the failure texts below stay on top
                 self._set_latest_report_path(None)
                 self._set_latest_output_tree_path(None)
                 self._set_run_progress_message("Pipeline failed: the worker was killed.")
                 self._set_run_summary_message("Status: failed | " + message, "failed")
-                set_run_state(self, "failed")
                 failure_notice = (message, last_output)
             elif outcome == "process_failed":
                 self._mark_unfinished_rows("failed", f"Background process exited with code {exit_code}")
                 self._setStatus("error", f"Pipeline failed: exit code {exit_code}")
+                set_run_state(self, "failed")
+                self._refresh_run_history()  # FD4: rescan; the failure texts below stay on top
                 self._set_latest_report_path(None)
                 self._set_latest_output_tree_path(None)
                 self._set_run_progress_message(f"Pipeline failed: exit code {exit_code}")
                 self._set_run_summary_message(f"Status: failed | Background process exited with code {exit_code}.", "failed")
-                set_run_state(self, "failed")
                 failure_notice = (f"The worker exited with code {exit_code}.", last_output)
             else:
                 self._mark_unfinished_rows("failed", "Background process finished without a manifest path.")
                 self._setStatus("error", "Pipeline failed: no manifest")
+                set_run_state(self, "failed")
+                self._refresh_run_history()  # FD4: rescan; the failure texts below stay on top
                 self._set_latest_report_path(None)
                 self._set_latest_output_tree_path(None)
                 self._set_run_progress_message("Pipeline failed: no manifest path was reported.")
                 self._set_run_summary_message("Status: failed | Background process finished without a manifest path.", "failed")
-                set_run_state(self, "failed")
                 failure_notice = ("The worker finished without reporting a manifest path.", last_output)
         except Exception as exc:
             self._report_run_finish_error(exc)
@@ -4038,6 +4043,7 @@ class SharedWidgetMixin:
             self._setStatus("error", f"Pipeline finished with an error: {exc}")
             if getattr(self, "_runState", None) not in ("cancelled", "completed", "completed_with_blocks", "failed"):
                 set_run_state(self, "failed")
+                self._refresh_run_history()  # FD4: a run end rescans the Results
         except Exception:
             pass
 

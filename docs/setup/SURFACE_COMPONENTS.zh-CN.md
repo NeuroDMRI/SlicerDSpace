@@ -95,11 +95,36 @@ PythonSlicer run_subject_pipeline.py --subject-root /data/sub-01 --subject-id su
 不代替人工解剖审核。清单及缓存签名记录运行环境身份；切换显式组件目录时不会沿用
 上一运行环境的“已完成”状态。
 
-Apple Silicon 候选包在 macOS 15.8.1 上用固定的 FreeSurfer 7.4.1 源码构建。
-构建时在 `CFLAGS` 和 `CXXFLAGS` 中加入上游 Apple Silicon 选项
-`-DARM64 -DPNG_ARM_NEON_OPT=0`，并设置 `MACOSX_DEPLOYMENT_TARGET=15.0`。
-七个二进制均为 arm64，并在干净的进程环境下通过 `--version` 检查。
-全新离线安装重复通过了这七项检查。此候选包未链接 OpenMP。
+`v0.1.1` macOS 底座包中的 Apple Silicon 组件用固定的 FreeSurfer 7.4.1 源码构建。
+七个二进制均为 arm64，最低 macOS 版本为 15.0，未链接 OpenMP。
+其 `runtime.json` 记录 CMake 3.31.10、Apple clang 17.0.0（clang-1700.0.13.5），
+`CFLAGS`、`CXXFLAGS` 和 `LDFLAGS` 均为空。
+它没有记录部署目标、构建主机和提交，因此无法按记录原样重建该归档。
+
+工作流 `.github/workflows/build-surface-runtime.yml` 以 macOS 13.0 为目标重建该组件：
+
+- 运行于 GitHub `macos-15` arm64 运行器：Xcode 16.4、Apple clang 17.0.0
+  （clang-1700.0.13.5）、macOS 15.5 SDK、pip 安装的 CMake 3.31.6 和 Python 3.12。
+  它下载固定的 `atlas.tar.gz` 并校验 SHA-256。
+- 它运行 `python -m postprocessing.core.build --jobs 4
+  --macos-deployment-target 13.0 --build-commit <commit>`。`build.py` 设置
+  `MACOSX_DEPLOYMENT_TARGET=13.0`，向 ITK 和表面命令的两次配置传入
+  `-DCMAKE_OSX_DEPLOYMENT_TARGET=13.0`，并在 arm64 上向 `CFLAGS` 和 `CXXFLAGS`
+  加入 `-DARM64`。它不设置 `PNG_ARM_NEON_OPT`。CMake 未找到 OpenMP，
+  因此这些命令不使用 OpenMP。
+- `runtime.json` 记录编译选项、编译器、CMake、SDK、部署目标和执行构建的提交。
+- `.github/scripts/verify_surface_runtime.py` 检查：每个二进制的最低 macOS 为 13.0，
+  只链接 `/usr/lib` 系统库；`bin/` 恰好包含七个配方命令；每个命令能以 `--version`
+  启动；构建日志中没有“对象为更新的 macOS 构建”的提示。
+- `scripts/package_surface_runtime.py` 打包 `surface-runtime-darwin-arm64-macos13.tar.gz`。
+  压缩包及其 `.sha256` 文件保存为 Actions 构件。只有手动运行并设置 `publish=true`
+  和 `release_tag` 时，才以这个新名称上传到发布页；若该发布已有同名资源，作业停止。
+  `artifact_run_id` 选择较早一次运行中已验证的构件，因为每次构建都嵌入构建日期，
+  SHA-256 会变化。
+
+重建后的数据文件与 `v0.1.1` 组件逐字节一致。二进制文件只在嵌入的构建路径、
+构建日期字符串以及每个文件 43 万至 57.5 万条指令中约 50 条上不同（静态比较）。
+重建后的命令只在 macOS 15 上启动过；GitHub 没有可用于此检查的更低版本 macOS arm64 运行器。
 macOS 科学结果对照仍待验证。
 
 Windows x86_64（`v0.1.1`）已完成全部 7 个原生 FreeSurfer 表面后处理程序（`mris_convert.exe`、`mris_inflate.exe`、`mris_curv.exe`、`mris_smooth.exe`、`mris_sphere.exe`、`mris_register.exe`、`mris_ca_label.exe`、`mris_anatomical_stats.exe`）的 Windows 原生移植、编译与打包（内置于 `surface-runtime-windows-x86_64`），并在 3D Slicer 5.10.0 中通过真实数据与 Linux 参考结果的一致性验收（`Activation Key Included: false`，运行仍需用户个人 FreeSurfer 许可证）。

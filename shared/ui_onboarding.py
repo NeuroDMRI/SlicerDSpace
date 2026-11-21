@@ -621,8 +621,120 @@ DYNAMIC_UI_TEXT_BINDINGS = {
     "_environmentExportConfigButton": "export_dependency_config",
 }
 
+
+def _help_card(*blocks: str) -> str:
+    """Rich text of one "?" help card. The fixed table width makes a tooltip wrap like the popup (shared/ui_help_button.py)."""
+
+    return '<table width="360" cellspacing="0" cellpadding="0"><tr><td>' + "".join(blocks) + "</td></tr></table>"
+
+
+def _help_p(text: str) -> str:
+    return f'<p style="margin:0 0 6px 0">{text}</p>'
+
+
+def _help_list(*items: str) -> str:
+    return '<ul style="margin:0 0 6px 0; -qt-list-indent:1">' + "".join(f"<li>{item}</li>" for item in items) + "</ul>"
+
+
+def _help_tree(*lines: str) -> str:
+    return '<pre style="margin:0 0 2px 0">' + "\n".join(lines) + "</pre>"
+
+
+# b2 inputs-help: the facts below come from the code that defines the rules (see the b2 add-on report).
+_HELP_BATCH_TREE = (
+    "Batch Folder/",
+    "├─ sub-01/",
+    "│  └─ input/ data.nii.gz bvals bvecs",
+    "├─ sub-02/",
+    "│  ├─ dwi.nii.gz",
+    "│  ├─ dwi.bval",
+    "│  └─ dwi.bvec",
+    "└─ sub-03/  (DICOM files)",
+)
+_HELP_OUTPUT_TREE = (
+    "Output Folder/",
+    "├─ 00_batch_metadata/",
+    "│  ├─ batch_20260101_120000.json",
+    "│  └─ logs/  (sub-01.stdout.log ...)",
+    "├─ sub-01/",
+    "│  └─ outputs/",
+    "└─ sub-02/",
+    "   └─ outputs/",
+)
+HELP_TEXT = {
+    "en": {
+        "help_subject_id": _help_card(
+            _help_p("A subfolder named after the Subject ID is created in the Output Folder, and the results are "
+                    "saved in it (<tt>&lt;Output Folder&gt;/&lt;Subject ID&gt;</tt>). If the Output Folder already "
+                    "ends with this ID, that folder is used."),
+            _help_p("If that subfolder already holds a different input, the new input is saved in "
+                    "<tt>&lt;ID&gt;_2</tt> (then <tt>_3</tt> to <tt>_99</tt>)."),
+        ),
+        "help_batch_folder": _help_card(
+            _help_p("<b>Fill:</b> choose an existing folder. Batch mode needs it."),
+            _help_p("<b>Subjects:</b> each direct subfolder is one subject, and the folder name is its Subject ID. "
+                    "Files and deeper folders are not searched. A subfolder with no readable input is skipped. "
+                    "A subfolder can hold, for example:"),
+            _help_list(
+                "<tt>input/data.nii.gz</tt>, <tt>input/bvals</tt> and <tt>input/bvecs</tt>",
+                "one NIfTI (a name without \"mask\") with <tt>name.bval</tt> + <tt>name.bvec</tt>, "
+                "<tt>name.bvals</tt> + <tt>name.bvecs</tt>, or <tt>bvals</tt> + <tt>bvecs</tt>",
+                "one NRRD or NHDR file",
+                "DICOM files",
+            ),
+            _help_tree(*_HELP_BATCH_TREE),
+        ),
+        "help_output_folder": _help_card(
+            _help_p("<b>Fill:</b> optional. If you leave it empty, the results of each subject go in "
+                    "<tt>&lt;ID&gt;/outputs</tt> inside the Batch Folder, and the batch record goes in "
+                    "<tt>batch_outputs/00_batch_metadata</tt> there."),
+            _help_p("<b>Made here:</b> one subfolder per subject, <tt>&lt;Output Folder&gt;/&lt;ID&gt;/outputs</tt>, "
+                    "holds its results. Its cache and preprocessed files are kept next to <tt>outputs</tt>. "
+                    "<tt>00_batch_metadata</tt> holds the batch record (<tt>batch_&lt;date&gt;_&lt;time&gt;.json</tt>) "
+                    "and a <tt>logs</tt> folder with a stdout and a stderr log per subject."),
+            _help_tree(*_HELP_OUTPUT_TREE),
+        ),
+        "help_subject_id_name": "Help: Subject ID",
+        "help_batch_folder_name": "Help: Batch Folder",
+        "help_output_folder_name": "Help: Output Folder (Batch mode)",
+    },
+    "zh": {
+        "help_subject_id": _help_card(
+            _help_p("输出文件夹中会创建一个以受试者 ID 命名的子文件夹，结果保存在其中"
+                    "（<tt>&lt;输出文件夹&gt;/&lt;受试者 ID&gt;</tt>）。若输出文件夹本身已以该 ID 结尾，则直接使用它。"),
+            _help_p("若该子文件夹已有其他输入的数据，新输入会保存到 <tt>&lt;ID&gt;_2</tt>（依次 <tt>_3</tt> 至 <tt>_99</tt>）。"),
+        ),
+        "help_batch_folder": _help_card(
+            _help_p("<b>填写：</b>选择一个已存在的文件夹。批量模式必须填写。"),
+            _help_p("<b>受试者：</b>每个直接子文件夹是一名受试者，文件夹名即其受试者 ID。"
+                    "文件和更深层的文件夹不会被搜索。没有可读取输入的子文件夹会被跳过。子文件夹可以包含，例如："),
+            _help_list(
+                "<tt>input/data.nii.gz</tt>、<tt>input/bvals</tt> 和 <tt>input/bvecs</tt>",
+                "一个 NIfTI（名称不含 \"mask\"）及其梯度文件：<tt>name.bval</tt> + <tt>name.bvec</tt>、"
+                "<tt>name.bvals</tt> + <tt>name.bvecs</tt>，或 <tt>bvals</tt> + <tt>bvecs</tt>",
+                "一个 NRRD 或 NHDR 文件",
+                "DICOM 文件",
+            ),
+            _help_tree(*_HELP_BATCH_TREE),
+        ),
+        "help_output_folder": _help_card(
+            _help_p("<b>填写：</b>可选。留空时，每名受试者的结果保存在批量输入目录内的 "
+                    "<tt>&lt;ID&gt;/outputs</tt>，批量记录保存在其中的 <tt>batch_outputs/00_batch_metadata</tt>。"),
+            _help_p("<b>在此生成：</b>每名受试者一个子文件夹 <tt>&lt;输出文件夹&gt;/&lt;ID&gt;/outputs</tt>，保存其结果；"
+                    "其缓存和预处理文件放在 <tt>outputs</tt> 旁边。"
+                    "<tt>00_batch_metadata</tt> 保存批量记录（<tt>batch_&lt;日期&gt;_&lt;时间&gt;.json</tt>）"
+                    "和 <tt>logs</tt> 文件夹（每名受试者一份 stdout 和 stderr 日志）。"),
+            _help_tree(*_HELP_OUTPUT_TREE),
+        ),
+        "help_subject_id_name": "帮助：受试者 ID",
+        "help_batch_folder_name": "帮助：批量输入目录",
+        "help_output_folder_name": "帮助：输出文件夹（批量模式）",
+    },
+}
+
 TRANSLATIONS = {
-    language: {**TRANSLATIONS[language], **WORKFLOW_TEXT.get(language, {})} for language in TRANSLATIONS
+    language: {**TRANSLATIONS[language], **WORKFLOW_TEXT.get(language, {}), **HELP_TEXT.get(language, {})}
+    for language in TRANSLATIONS
 }
 MAIN_UI_TEXT_BINDINGS = {**MAIN_UI_TEXT_BINDINGS, **WORKFLOW_TEXT_BINDINGS}
 MAIN_UI_TOOLTIP_BINDINGS = {**MAIN_UI_TOOLTIP_BINDINGS, **WORKFLOW_TOOLTIP_BINDINGS}

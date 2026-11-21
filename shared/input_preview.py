@@ -1,7 +1,12 @@
-"""Input preview (H1): resolve the current DWI and show a light mean-b0 volume in Slicer.
+"""Input preview (H1): resolve the current DWI and show it in Slicer.
 
-Everything except :func:`show_preview_in_scene` runs without Slicer, so it can be unit
-tested. Heavy imports (numpy, nibabel, pynrrd, ``shared.pipeline``) happen inside the
+b2-dwi: 'View input' builds the whole DWI as a core ``vtkMRMLDiffusionWeightedVolumeNode`` in memory
+(:func:`read_full_dwi` on the worker thread, :func:`show_dwi_in_scene` on the GUI thread). Above the size limit
+(:func:`full_dwi_limit_bytes`), and when a NIfTI has no usable bvec, it falls back to the light mean-b0 volume
+(:func:`mean_b0_image`). Batch mode has no preview (b2 inputs-help): the button is hidden there.
+
+Everything except :func:`show_preview_in_scene` and :func:`show_dwi_in_scene` runs without Slicer, so it can be
+unit tested. Heavy imports (numpy, nibabel, pynrrd, ``shared.pipeline``) happen inside the
 functions that need them. Discovery reuses ``shared.pipeline.inspect_subject_directory``
 (the rule that input validation uses) and ``shared.convertible_input.find_convertible_input``;
 this module adds no new discovery rule.
@@ -28,6 +33,12 @@ _ONE_PASS_BYTES = 1 << 30
 # O2: a NRRD is read whole, so a header that announces more voxel data than this is refused.
 MAX_NRRD_BYTES = 4 << 30
 _MAX_PAYLOAD_FILES = 4096
+# b2-dwi: the full DWI is built when its voxel data is at most min(FULL_DWI_MAX_BYTES, FULL_DWI_RAM_FRACTION * RAM).
+FULL_DWI_MAX_BYTES = 4 << 30
+FULL_DWI_RAM_FRACTION = 0.25
+# b2-dwi: volumes read per block (measured: about 1.3x the voxel array at peak, versus about 3x for get_fdata).
+_FILL_BLOCK = 10
+_VTK_DTYPES = ("int8", "uint8", "int16", "uint16", "int32", "uint32", "int64", "uint64", "float32", "float64")
 
 # (English, Chinese) text per error code. ``{detail}`` is filled from PreviewError.detail.
 _MESSAGES: dict[str, tuple[str, str]] = {
@@ -39,11 +50,8 @@ _MESSAGES: dict[str, tuple[str, str]] = {
         "此输入不含可预览的 DWI（已配准的 DTI 布局）。",
     ),
     "no_bval": ("The b-value file (bval) was not found.", "找不到 b 值文件（bval）。"),
+    "no_bvec": ("The gradient direction file (bvec) was not found.", "找不到梯度方向文件（bvec）。"),
     "no_b0": ("No volume with b <= {detail} was found.", "没有 b <= {detail} 的体积。"),
-    "batch_empty": (
-        "No subject folder with a readable input was found in the batch folder.",
-        "批量文件夹中没有含可读取输入的受试者文件夹。",
-    ),
     "missing_dependency": (
         "The input preview needs the Python package {detail}, which is not installed.",
         "预览输入需要 Python 包 {detail}，但尚未安装。",
@@ -76,6 +84,7 @@ class PreviewSource:
     subject_id: str
     origin: str = ""
     raw: Optional[Path] = None  # C1: the file chosen in the 'Detached data' tile, which replaces the NHDR's own data file
+    bvec: Optional[Path] = None  # b2-dwi: FSL gradient directions of a NIfTI DWI (the full view needs them)
 
 
 # --------------------------------------------------------------------------- discovery
@@ -129,6 +138,7 @@ def resolve_preview_source(inspected: Mapping[str, Any], candidate: Path, subjec
             mask=_user_mask(input_dir),
             subject_id=subject_id or root.name,
             origin=str(root),
+            bvec=input_dir / "bvecs",
         )
     if mode in {"nifti", "nrrd"}:
         found = _find_convertible(Path(candidate), subject_id)
@@ -142,6 +152,7 @@ def resolve_preview_source(inspected: Mapping[str, Any], candidate: Path, subjec
             mask=Path(extra["mask_path"]) if extra.get("mask_path") else None,
             subject_id=subject_id or Path(folder).name,
             origin=str(folder),
+            bvec=Path(extra["bvec_path"]) if extra.get("bvec_path") else None,
         )
     raise PreviewError("missing")
 
@@ -154,6 +165,7 @@ def resolve_pending_source(
     mask: Any = None,
     raw: Any = None,
     subject_id: str = "",
+    bvec: Any = None,
 ) -> PreviewSource:
     """Preview a Prepare-Inputs tile source that has not been imported yet.
 
@@ -181,14 +193,22 @@ def resolve_pending_source(
                 raise PreviewError("bad_data", "The selected detached data file was not found.")
         return PreviewSource("nrrd", path, None, mask_path, name, str(path.parent), raw_path)
     bval_path = Path(str(bval)).expanduser() if bval else None
-    if bval_path is None or not bval_path.is_file():
+    bvec_path = Path(str(bvec)).expanduser() if bvec else None
+    if bvec_path is not None and not bvec_path.is_file():
+        bvec_path = None
+    if bval_path is None or not bval_path.is_file() or bvec_path is None:
         from shared.convertible_input import find_convertible_input
 
         found = find_convertible_input(path)
-        bval_path = Path(found[3]["bval_path"]) if found and found[3].get("bval_path") else None
+        extra = found[3] if found else {}
+        if bval_path is None or not bval_path.is_file():
+            bval_path = Path(extra["bval_path"]) if extra.get("bval_path") else None
+        if bvec_path is None and extra.get("bvec_path"):
+            bvec_path = Path(extra["bvec_path"])
     if bval_path is None:
         raise PreviewError("no_bval")
-    return PreviewSource("nifti", path, bval_path, mask_path, name, str(path.parent))
+    # b2-dwi: a missing bvec is not a resolve error; the full-DWI reader raises 'no_bvec' (the size fallback needs none).
+    return PreviewSource("nifti", path, bval_path, mask_path, name, str(path.parent), bvec=bvec_path)
 
 
 def check_preview_dependencies(source: Optional[PreviewSource] = None, find_spec: Callable[[str], Any] = None) -> None:
@@ -206,42 +226,8 @@ def check_preview_dependencies(source: Optional[PreviewSource] = None, find_spec
             raise PreviewError("missing_dependency", package)
 
 
-def first_batch_source(
-    batch_root: Any, inspect: Optional[Callable[[Path, str], Mapping[str, Any]]] = None
-) -> PreviewSource:
-    """First previewable subject of a batch, in the order ``scripts/run_batch_pipeline.discover_subjects`` uses.
-
-    O8: a subject that cannot be previewed (unconverted DICOM, registered DTI layout) is skipped. When no subject can
-    be previewed, the reason of the first skipped subject is raised.
-    """
-
-    inspect = inspect or _default_inspect
-    text = str(batch_root or "").strip()
-    root = Path(text).expanduser().resolve() if text else None
-    if root is None or not root.is_dir():
-        raise PreviewError("no_input")
-    first_error: Optional[PreviewError] = None
-    for candidate in sorted(root.glob("*")):
-        if not candidate.is_dir():
-            continue
-        base = candidate
-        inspected = inspect(candidate, candidate.name)
-        if inspected.get("mode") == "missing":
-            base = root
-            inspected = inspect(root, candidate.name)
-        if inspected.get("mode") == "missing":
-            continue
-        try:
-            return resolve_preview_source(inspected, base, candidate.name)
-        except PreviewError as exc:
-            first_error = first_error or exc
-    raise first_error or PreviewError("batch_empty")
-
-
 def resolve_preview_for_ui(
     *,
-    batch_mode: bool,
-    batch_root: Any = "",
     input_dir: Any = "",
     subject_id: str = "",
     pending: Optional[Mapping[str, Any]] = None,
@@ -250,8 +236,6 @@ def resolve_preview_for_ui(
     """Resolve the current subject's DWI the way input validation sees it."""
 
     inspect = inspect or _default_inspect
-    if batch_mode:
-        return first_batch_source(batch_root, inspect)
     if pending:
         return resolve_pending_source(
             str(pending.get("kind") or ""),
@@ -260,6 +244,7 @@ def resolve_preview_for_ui(
             mask=pending.get("mask"),
             raw=pending.get("raw"),
             subject_id=subject_id,
+            bvec=pending.get("bvec"),
         )
     text = str(input_dir or "").strip()
     if not text:
@@ -501,6 +486,14 @@ def _mean_b0_nrrd(source: PreviewSource, threshold: float):
     indices = [index for index, value in enumerate(bvals) if value <= threshold]
     volumes = np.moveaxis(data, axis, -1)
     mean = _mean_of(lambda i: volumes[..., i], indices, threshold)
+    return nib.Nifti1Image(mean, _nrrd_ras_affine(header, axis)), len(indices)
+
+
+def _nrrd_ras_affine(header: Mapping[str, Any], axis: int):
+    """IJK-to-RAS matrix of the three spatial NRRD axes (the diffusion axis ``axis`` removed)."""
+
+    import numpy as np
+
     directions = np.asarray(header.get("space directions"), dtype=float)
     spatial = np.delete(directions, axis, axis=0)
     if spatial.shape != (3, 3) or not np.all(np.isfinite(spatial)):
@@ -509,8 +502,7 @@ def _mean_b0_nrrd(source: PreviewSource, threshold: float):
     affine = np.eye(4)
     affine[:3, :3] = spatial.T
     affine[:3, 3] = origin
-    affine = np.diag(list(_space_signs(header.get("space"))) + [1.0]) @ affine
-    return nib.Nifti1Image(mean, affine), len(indices)
+    return np.diag(list(_space_signs(header.get("space"))) + [1.0]) @ affine
 
 
 def _stamp(path: Optional[Path]) -> str:
@@ -582,6 +574,372 @@ def mean_b0_image(source: PreviewSource, cache_dir: Any, threshold: float = B0_T
     except OSError:
         pass
     return target
+
+
+# --------------------------------------------------------------------------- full DWI (b2-dwi)
+
+
+@dataclass
+class FullDwi:
+    """A whole DWI read into memory, ready for a core ``vtkMRMLDiffusionWeightedVolumeNode``.
+
+    ``image`` is a ``vtkImageData`` whose N-component scalar array VTK allocated and owns, so no numpy buffer has to
+    stay alive. ``gradients`` are unit vectors (zero for a zero vector) in the measurement frame
+    ``measurement_frame`` (3x3, gradient frame to RAS); ``bvalues`` are per volume.
+    """
+
+    image: Any
+    ijk_to_ras: Any
+    gradients: Any
+    bvalues: list
+    measurement_frame: Any
+    voxel_bytes: int
+    scalar_type: str
+
+
+@dataclass
+class PreparedPreview:
+    """What the worker hands to the GUI thread: the full DWI, or the mean-b0 file above the size limit."""
+
+    kind: str  # "dwi" or "meanb0"
+    dwi: Optional[FullDwi] = None
+    mean_b0: Optional[Path] = None
+    estimated_bytes: int = 0
+    limit_bytes: int = 0
+    # Why the mean b0 is shown: "size" (above the size limit) or "no_gradients" (bvec missing or unusable); "" for a DWI.
+    reason: str = "size"
+
+
+def physical_memory_bytes() -> Optional[int]:
+    """Installed RAM in bytes, or None when the platform does not say."""
+
+    try:
+        pages, page_size = os.sysconf("SC_PHYS_PAGES"), os.sysconf("SC_PAGE_SIZE")
+        if pages > 0 and page_size > 0:
+            return int(pages) * int(page_size)
+    except (AttributeError, ValueError, OSError):
+        pass
+    if os.name == "nt":
+        try:
+            import ctypes
+
+            class _MemoryStatus(ctypes.Structure):
+                _fields_ = [("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
+                            ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
+                            ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
+                            ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
+                            ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+
+            status = _MemoryStatus()
+            status.dwLength = ctypes.sizeof(_MemoryStatus)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+                return int(status.ullTotalPhys)
+        except Exception:
+            pass
+    return None
+
+
+def full_dwi_limit_bytes(physical: Any = "auto") -> int:
+    """Largest voxel data that View input loads as a full DWI: min(4 GiB, 25 % of RAM); 4 GiB when RAM is unknown."""
+
+    if physical == "auto":
+        physical = physical_memory_bytes()
+    if not physical:
+        return FULL_DWI_MAX_BYTES
+    return int(min(FULL_DWI_MAX_BYTES, int(physical) * FULL_DWI_RAM_FRACTION))
+
+
+def size_notice(estimated: int, limit: int, zh: bool = False) -> str:
+    """Status text for the size fallback (no dialog)."""
+
+    gib_estimated, gib_limit = estimated / float(1 << 30), limit / float(1 << 30)
+    if zh:
+        return (f"该 DWI 约含 {gib_estimated:.1f} GiB 体素数据，超过完整显示的上限 {gib_limit:.1f} GiB"
+                f"（4 GiB 与内存 25% 中的较小者），因此改为显示平均 b0 图像。")
+    return (f"The DWI holds about {gib_estimated:.1f} GiB of voxel data, more than the {gib_limit:.1f} GiB limit "
+            f"for the full view (the smaller of 4 GiB and 25% of RAM), so the mean b0 image is shown instead.")
+
+
+def gradient_notice(zh: bool = False) -> str:
+    """Status text for the gradient fallback: the bvec file is missing or cannot be read (no dialog)."""
+
+    if zh:
+        return "找不到梯度方向文件（bvec），或无法读取，因此改为显示平均 b0 图像。"
+    return "The gradient table (bvec) was not found or could not be read, so the mean b0 image is shown instead."
+
+
+def gradient_table_unusable(source: PreviewSource) -> bool:
+    """True when a NIfTI source has no usable bvec, so the full DWI cannot be built (b2 inputs-help addon).
+
+    A missing path, a missing file, an unreadable file and a count that does not match the volumes all count. Another
+    problem of the DWI itself (not 4D, a bval count mismatch) is left to the readers, which report it as an error.
+    """
+
+    if source.kind == "nrrd":
+        return False  # the gradients are in the NRRD header
+    if source.bvec is None or not Path(source.bvec).is_file():
+        return True
+    try:
+        import nibabel as nib
+
+        shape = tuple(int(size) for size in nib.load(str(source.dwi)).shape)
+    except Exception:
+        return False  # the header is unreadable: the readers report that
+    if len(shape) != 4:
+        return False
+    try:
+        read_bvecs(source.bvec, shape[3])
+    except Exception:
+        return True
+    return False
+
+
+def default_component(bvalues: Any, threshold: float = B0_THRESHOLD) -> int:
+    """The first volume with b <= ``threshold`` (the first volume when there is none)."""
+
+    for index, value in enumerate(bvalues):
+        if float(value) <= threshold:
+            return index
+    return 0
+
+
+def read_bvecs(path: Any, count: int):
+    """FSL gradient directions as an (N, 3) array; 3 x N (FSL) and N x 3 layouts are both accepted."""
+
+    import numpy as np
+
+    text = Path(path).read_text(encoding="utf-8", errors="replace")
+    try:
+        rows = [[float(token) for token in line.replace(",", " ").split()] for line in text.splitlines()
+                if line.strip()]
+    except ValueError as exc:
+        raise PreviewError("bad_data", f"The bvec file has a non-numeric entry: {exc}") from exc
+    widths = {len(row) for row in rows}
+    if len(widths) == 1:
+        values = np.asarray(rows, dtype=float)
+        if values.shape == (3, count):
+            return values.T.copy()
+        if values.shape == (count, 3):
+            return values
+    shape = f"{len(rows)} x {max(widths) if widths else 0}"
+    raise PreviewError("bad_data", f"The bvec file has {shape} entries; 3 x {count} are needed for {count} volumes.")
+
+
+def _unit_rows(vectors: Any):
+    import numpy as np
+
+    vectors = np.asarray(vectors, dtype=float).reshape(-1, 3)
+    lengths = np.linalg.norm(vectors, axis=1)
+    out = np.zeros_like(vectors)
+    nonzero = lengths > 1e-6
+    out[nonzero] = vectors[nonzero] / lengths[nonzero, None]
+    return out
+
+
+def gradients_ras(affine: Any, bvecs: Any):
+    """FSL bvecs to RAS gradient directions: ``g = R @ F @ b``.
+
+    ``R`` is ``affine[:3, :3]`` with unit columns. ``F = diag(-1, 1, 1)`` when ``det(affine[:3, :3]) > 0`` (FSL
+    stores bvecs in a radiological voxel frame), else the identity. Measured equal to MRtrix ``-fslgrad`` (b2-dwi).
+    Zero rows stay zero; other rows are returned with unit length.
+    """
+
+    import numpy as np
+
+    matrix = np.asarray(affine, dtype=float)[:3, :3]
+    norms = np.linalg.norm(matrix, axis=0)
+    if not np.all(norms > 0) or not np.all(np.isfinite(matrix)):
+        raise PreviewError("bad_data", "The DWI affine has a zero or invalid voxel axis.")
+    rotation = matrix / norms
+    flip = np.diag([-1.0, 1.0, 1.0]) if np.linalg.det(matrix) > 0 else np.eye(3)
+    vectors = np.asarray(bvecs, dtype=float).reshape(-1, 3)
+    return _unit_rows((rotation @ flip @ vectors.T).T)
+
+
+def _build_dtype(dtype: Any):
+    import numpy as np
+
+    native = np.dtype(dtype).newbyteorder("=")
+    if native.name not in _VTK_DTYPES:
+        raise PreviewError("bad_data", f"The DWI voxel type {native.name} cannot be shown.")
+    return native
+
+
+def _nifti_build_dtype(image: Any):
+    """On-disk dtype, or float32 when the NIfTI scale slope/intercept is not 1/0."""
+
+    import numpy as np
+
+    slope = float(getattr(image.dataobj, "slope", 1.0))
+    inter = float(getattr(image.dataobj, "inter", 0.0))
+    if slope != 1.0 or inter != 0.0:
+        return np.dtype(np.float32)
+    return _build_dtype(image.get_data_dtype())
+
+
+def estimate_full_dwi_bytes(source: PreviewSource) -> int:
+    """Voxel bytes of the full DWI as it would be built; reads only the header."""
+
+    import numpy as np
+
+    if source.kind == "nrrd":
+        try:
+            import nrrd
+        except ImportError as exc:
+            raise PreviewError("bad_data", "Reading NRRD needs pynrrd, which is not installed.") from exc
+        try:
+            with _nrrd_read_target(source) as target:
+                return _nrrd_announced_bytes(nrrd.read_header(target))
+        except PreviewError:
+            raise
+        except Exception as exc:
+            raise PreviewError("bad_data", f"Could not read the NRRD header: {exc}") from exc
+    import nibabel as nib
+
+    try:
+        image = nib.load(str(source.dwi))
+    except Exception as exc:
+        raise PreviewError("bad_data", f"Could not read the NIfTI header: {exc}") from exc
+    return int(np.prod(image.shape, dtype=np.int64)) * int(_nifti_build_dtype(image).itemsize)
+
+
+def _new_vtk_image(shape_ijk: Any, count: int, dtype: Any):
+    """A vtkImageData with an uninitialised N-component array that VTK owns, and a numpy view (k, j, i, c) of it."""
+
+    import vtk
+    from vtk.util import numpy_support
+
+    nx, ny, nz = (int(size) for size in shape_ijk)
+    array = vtk.vtkDataArray.CreateDataArray(numpy_support.get_vtk_array_type(dtype))
+    array.SetNumberOfComponents(int(count))
+    array.SetNumberOfTuples(nx * ny * nz)
+    array.SetName("DWI")
+    image = vtk.vtkImageData()
+    image.SetDimensions(nx, ny, nz)
+    image.GetPointData().SetScalars(array)
+    view = numpy_support.vtk_to_numpy(array).reshape(nz, ny, nx, int(count))
+    return image, view
+
+
+def _fill_block(view: Any, block: Any, start: int) -> None:
+    """Copy volumes ``start..`` of an (i, j, k, n) block into the (k, j, i, c) view, one slab at a time."""
+
+    stop = start + block.shape[3]
+    for z in range(block.shape[2]):
+        view[z, :, :, start:stop] = block[:, :, z, :].transpose(1, 0, 2)
+
+
+def _read_full_dwi_nifti(source: PreviewSource, block: int) -> FullDwi:
+    import nibabel as nib
+    import numpy as np
+
+    if source.bval is None or not Path(source.bval).is_file():
+        raise PreviewError("no_bval")
+    bvals = read_bvals(source.bval)
+    image = nib.load(str(source.dwi), keep_file_open=True)
+    shape = tuple(int(size) for size in image.shape)
+    if len(shape) != 4:
+        raise PreviewError("bad_data", f"The DWI is {len(shape)}D; a 4D volume series is required.")
+    count = shape[3]
+    if len(bvals) != count:
+        raise PreviewError("bad_data", f"The bval file has {len(bvals)} entries but the DWI has {count} volumes.")
+    if source.bvec is None or not Path(source.bvec).is_file():
+        raise PreviewError("no_bvec")
+    affine = np.array(image.affine, dtype=float)
+    gradients = gradients_ras(affine, read_bvecs(source.bvec, count))
+    dtype = _nifti_build_dtype(image)
+    vtk_image, view = _new_vtk_image(shape[:3], count, dtype)
+    for start in range(0, count, block):
+        # The volumes of one block are contiguous in the file; a block keeps the peak near 1.3x the array (b2-dwi).
+        chunk = np.asarray(image.dataobj[..., start:min(count, start + block)])
+        _fill_block(view, chunk, start)
+        del chunk
+    del view, image  # the view points into VTK memory; the image closes the file that keep_file_open holds
+    return FullDwi(vtk_image, affine, gradients, [float(b) for b in bvals], np.eye(3),
+                   int(np.prod(shape, dtype=np.int64)) * dtype.itemsize, vtk_image.GetScalarTypeAsString())
+
+
+def _read_full_dwi_nrrd(source: PreviewSource, block: int) -> FullDwi:
+    import numpy as np
+
+    try:
+        import nrrd
+    except ImportError as exc:
+        raise PreviewError("bad_data", "Reading NRRD needs pynrrd, which is not installed.") from exc
+    try:
+        with _nrrd_read_target(source) as target:
+            announced = _nrrd_announced_bytes(nrrd.read_header(target))
+            if announced > MAX_NRRD_BYTES:
+                raise PreviewError(
+                    "bad_data",
+                    "The NRRD holds about %.1f GiB of voxel data; the preview reads at most %d GiB."
+                    % (announced / (1 << 30), MAX_NRRD_BYTES >> 30),
+                )
+            data, header = nrrd.read(target)
+    except PreviewError:
+        raise
+    except Exception as exc:
+        raise PreviewError("bad_data", f"Could not read the NRRD file: {exc}") from exc
+    if data.ndim != 4:
+        raise PreviewError("bad_data", f"The NRRD is {data.ndim}D; a 4D diffusion series is required.")
+    axis = _nrrd_diffusion_axis(header, data.ndim)
+    count = int(data.shape[axis])
+    bvals = _nrrd_bvalues(header, count)
+    vectors = [[float(token) for token in str(header["DWMRI_gradient_%04d" % i]).split()] for i in range(count)]
+    if any(len(vector) != 3 for vector in vectors):
+        raise PreviewError("bad_data", "A DWMRI_gradient entry does not have 3 components.")
+    affine = _nrrd_ras_affine(header, axis)
+    frame = header.get("measurement frame")
+    # pynrrd returns one header vector per row; the NRRD vectors are the matrix columns.
+    matrix = np.asarray(frame, dtype=float).T if frame is not None else np.eye(3)
+    if matrix.shape != (3, 3) or not np.all(np.isfinite(matrix)):
+        raise PreviewError("bad_data", "The NRRD 'measurement frame' field is not usable.")
+    measurement_frame = np.diag(_space_signs(header.get("space"))) @ matrix
+    volumes = np.moveaxis(data, axis, -1)
+    dtype = _build_dtype(volumes.dtype)
+    vtk_image, view = _new_vtk_image(volumes.shape[:3], count, dtype)
+    for start in range(0, count, block):
+        _fill_block(view, volumes[..., start:min(count, start + block)], start)
+    del view, volumes, data
+    return FullDwi(vtk_image, affine, _unit_rows(vectors), bvals, measurement_frame,
+                   int(np.prod(vtk_image.GetDimensions(), dtype=np.int64)) * count * dtype.itemsize,
+                   vtk_image.GetScalarTypeAsString())
+
+
+def read_full_dwi(source: PreviewSource, block: int = _FILL_BLOCK) -> FullDwi:
+    """Read the whole DWI into a VTK array of the on-disk type (runs on the worker thread; writes no file)."""
+
+    if not Path(source.dwi).is_file():
+        raise PreviewError("missing")
+    try:
+        if source.kind == "nrrd":
+            return _read_full_dwi_nrrd(source, block)
+        return _read_full_dwi_nifti(source, block)
+    except PreviewError:
+        raise
+    except MemoryError as exc:
+        raise PreviewError("bad_data", "Not enough memory to load the full DWI.") from exc
+    except Exception as exc:
+        raise PreviewError("bad_data", f"Could not read the full DWI: {exc}") from exc
+
+
+def prepare_input_preview(
+    source: PreviewSource, cache_dir: Any, *, limit: Optional[int] = None, threshold: float = B0_THRESHOLD
+) -> PreparedPreview:
+    """Worker-thread step of View input: the full DWI, or the mean b0 when it is above the size limit."""
+
+    if not Path(source.dwi).is_file():
+        raise PreviewError("missing")
+    limit = full_dwi_limit_bytes() if limit is None else int(limit)
+    estimated = estimate_full_dwi_bytes(source)
+    if gradient_table_unusable(source):
+        # Without gradients the earlier view is kept: the mean b0 (it needs only the bval file).
+        return PreparedPreview("meanb0", mean_b0=mean_b0_image(source, cache_dir, threshold),
+                               estimated_bytes=estimated, limit_bytes=limit, reason="no_gradients")
+    if estimated > limit:
+        return PreparedPreview("meanb0", mean_b0=mean_b0_image(source, cache_dir, threshold),
+                               estimated_bytes=estimated, limit_bytes=limit, reason="size")
+    return PreparedPreview("dwi", dwi=read_full_dwi(source), estimated_bytes=estimated, limit_bytes=limit, reason="")
 
 
 # --------------------------------------------------------------------------- Slicer side
@@ -664,18 +1022,91 @@ def show_preview_in_scene(
     if volume is None:
         raise PreviewError("bad_data", f"Slicer could not load {mean_b0}")
     volume.SetAttribute(PREVIEW_ATTRIBUTE, "meanb0")
-    label = None
-    if mask:
-        try:
-            label = _first_node(
-                slicer.util.loadLabelVolume(str(mask), properties={"name": f"{name}_mask", "show": False})
-            )
-            if label is None:
-                say(f"[Input preview] The brain mask could not be loaded as a label map: {mask}")
-            else:
-                label.SetAttribute(PREVIEW_ATTRIBUTE, "mask")
-        except Exception as exc:
-            label = None
-            say(f"[Input preview] The brain mask could not be loaded: {exc}")
+    label = _load_preview_mask(slicer, mask, name, say)
     _fit_slice_views(slicer, volume.GetID(), label.GetID() if label is not None else None)
     return {"volume_id": volume.GetID(), "mask_id": label.GetID() if label is not None else None}
+
+
+def _load_preview_mask(slicer: Any, mask: Any, name: str, say: Callable[[str], None]) -> Any:
+    """The brain mask as a label map tagged as a preview node, or None (a mask failure never stops the preview)."""
+
+    if not mask:
+        return None
+    try:
+        label = _first_node(slicer.util.loadLabelVolume(str(mask), properties={"name": f"{name}_mask", "show": False}))
+    except Exception as exc:
+        say(f"[Input preview] The brain mask could not be loaded: {exc}")
+        return None
+    if label is None:
+        say(f"[Input preview] The brain mask could not be loaded as a label map: {mask}")
+        return None
+    label.SetAttribute(PREVIEW_ATTRIBUTE, "mask")
+    return label
+
+
+def remove_preview_nodes(slicer: Any) -> None:
+    """Remove every node that an earlier View input added (full DWI, mean b0, mask)."""
+
+    _remove_previous_preview_nodes(slicer)
+
+
+def show_dwi_in_scene(
+    slicer: Any,
+    dwi: FullDwi,
+    mask: Any = None,
+    *,
+    subject_id: str = "",
+    log: Optional[Callable[[str], None]] = None,
+    threshold: float = B0_THRESHOLD,
+) -> dict[str, Any]:
+    """GUI thread: wrap a :class:`FullDwi` in a core DWI node, show the first b0 component and the mask overlay.
+
+    The node replaces any earlier preview node. Only core Slicer classes are used (no SlicerDMRI).
+    """
+
+    import numpy as np
+
+    say = log or (lambda _message: None)
+    _remove_previous_preview_nodes(slicer)
+    name = f"{subject_id or 'subject'}_input"
+    try:
+        node = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLDiffusionWeightedVolumeNode", f"{name}_dwi")
+    except Exception as exc:
+        raise PreviewError("bad_data", f"Slicer could not create the DWI node: {exc}") from exc
+    if node is None:
+        raise PreviewError("bad_data", "Slicer could not create the DWI node.")
+    count = len(dwi.bvalues)
+    component = default_component(dwi.bvalues, threshold)
+    try:
+        node.SetAttribute(PREVIEW_ATTRIBUTE, "dwi")
+        if len(dwi.gradients) != count:
+            raise ValueError(f"{len(dwi.gradients)} gradients for {count} volumes")
+        node.SetIJKToRASMatrix(slicer.util.vtkMatrixFromArray(np.asarray(dwi.ijk_to_ras, dtype=float)))
+        node.SetAndObserveImageData(dwi.image)
+        node.SetNumberOfGradients(count)
+        for index in range(count):
+            node.SetDiffusionGradient(index, [float(value) for value in dwi.gradients[index]])
+            node.SetBValue(index, float(dwi.bvalues[index]))
+        frame = np.eye(4)
+        frame[:3, :3] = np.asarray(dwi.measurement_frame, dtype=float)
+        node.SetMeasurementFrameMatrix(slicer.util.vtkMatrixFromArray(frame))
+        node.CreateDefaultDisplayNodes()
+        display = node.GetDisplayNode()
+        if display is not None:
+            display.SetAutoWindowLevel(1)  # measured: W/L is recomputed for each component
+            display.SetDiffusionComponent(component)
+    except Exception as exc:
+        try:
+            slicer.mrmlScene.RemoveNode(node)
+        except Exception:
+            pass
+        raise PreviewError("bad_data", f"Slicer could not build the DWI node: {exc}") from exc
+    label = _load_preview_mask(slicer, mask, name, say)
+    _fit_slice_views(slicer, node.GetID(), label.GetID() if label is not None else None)
+    return {
+        "volume_id": node.GetID(),
+        "mask_id": label.GetID() if label is not None else None,
+        "component": component,
+        "count": count,
+        "b_value": float(dwi.bvalues[component]) if count else 0.0,
+    }

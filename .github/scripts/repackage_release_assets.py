@@ -776,6 +776,8 @@ def build_code_overlay(
             ["git", "-C", str(REPO_ROOT), "log", "-1", "--pretty=%s"],
             stderr=subprocess.DEVNULL,
             text=True,
+            encoding="utf-8",
+            errors="replace",
         ).strip()
     except Exception:
         pass

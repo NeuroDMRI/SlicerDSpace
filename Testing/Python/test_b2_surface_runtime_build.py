@@ -245,7 +245,8 @@ class VerifierTests(unittest.TestCase):
 
     def test_b2_runtime_verifier_elf_mode_checks_glibc_and_libstdcxx(self):
         versions = {name: {'GLIBC_2.2.5', 'GLIBC_2.17'} for name in COMMANDS}
-        needed = {name: ['libm.so.6', 'libc.so.6', 'libpthread.so.0'] for name in COMMANDS}
+        # libcrypt.so.1 (FreeSurfer's activation check uses crypt) is part of glibc / libxcrypt on every target.
+        needed = {name: ['libm.so.6', 'libc.so.6', 'libpthread.so.0', 'libcrypt.so.1'] for name in COMMANDS}
         report = self.check_elf(versions, needed)
         self.assertTrue(report['ok'], report['failures'])
         self.assertTrue(all(row['max_glibc'] == '2.17' for row in report['tools']))

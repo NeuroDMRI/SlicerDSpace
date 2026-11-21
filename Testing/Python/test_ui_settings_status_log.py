@@ -240,13 +240,39 @@ class UISettingsStatusLogTest(unittest.TestCase):
             callback()
         self.assertEqual(log.bar.value, log.bar.maximum)
 
-    def test_b2_log_deferred_pin_keeps_position_of_reader_who_scrolled_up(self):
-        log = LogWidget(40)
+    def test_b2fix_log_L2_deferred_pin_keeps_position_of_reader_who_scrolled_up(self):
+        """L2: the log follows, one timer is queued, the reader scrolls up before it fires."""
+        log = LogWidget(100)
         owner = self._owner(log)
         timers = self._append(owner, 'x' * 5000)
+        self.assertEqual(len(timers), 1)
+        log.bar.setValue(40)
         for callback in timers:
             callback()
         self.assertEqual(log.bar.value, 40)
+
+    def test_b2fix_log_L1_deferred_pin_keeps_a_one_line_scroll(self):
+        """L1: a one-line scroll up inside the tick is a reader choice; the re-pin must not undo it."""
+        log = LogWidget(100)
+        owner = self._owner(log)
+        timers = self._append(owner, 'x' * 5000)
+        self.assertEqual(len(timers), 1)
+        log.bar.setValue(log.bar.maximum - 1)
+        expected = log.bar.value
+        for callback in timers:
+            callback()
+        self.assertEqual(log.bar.value, expected)
+
+    def test_b2fix_log_L1_deferred_pin_follows_when_bar_grows_by_two_lines(self):
+        """L1: the new horizontal bar costs 2 lines at another height or font; the view stays pinned."""
+        log = LogWidget(100)
+        owner = self._owner(log)
+        timers = self._append(owner, 'x' * 5000)
+        self.assertEqual(len(timers), 1)
+        log.bar.maximum += 2
+        for callback in timers:
+            callback()
+        self.assertEqual(log.bar.value, log.bar.maximum)
 
     def test_b2_log_deferred_pin_ignores_a_deleted_widget(self):
         log = LogWidget(100)

@@ -237,6 +237,36 @@ class VerifierTests(unittest.TestCase):
         (reference / 'LICENSE.txt').write_text('notice\n')
         self.assertTrue(self.check(reference=reference)['ok'])
 
+    def check_elf(self, versions, needed):
+        return self.verifier.check_runtime(
+            self.root, expected_min_macos=None, max_glibc='2.28', start=True,
+            elf_reader=lambda path: (versions[Path(path).name], needed[Path(path).name]),
+            starter=lambda path: self.started[Path(path).name])
+
+    def test_b2_runtime_verifier_elf_mode_checks_glibc_and_libstdcxx(self):
+        versions = {name: {'GLIBC_2.2.5', 'GLIBC_2.17'} for name in COMMANDS}
+        needed = {name: ['libm.so.6', 'libc.so.6', 'libpthread.so.0'] for name in COMMANDS}
+        report = self.check_elf(versions, needed)
+        self.assertTrue(report['ok'], report['failures'])
+        self.assertTrue(all(row['max_glibc'] == '2.17' for row in report['tools']))
+        versions['mris_sphere'] = {'GLIBC_2.34', 'GLIBC_2.2.5'}
+        versions['mris_register'] = {'GLIBC_2.17', 'GLIBCXX_3.4.29', 'CXXABI_1.3.9'}
+        needed['mri_surf2surf'] = ['libc.so.6', 'libstdc++.so.6', 'libgomp.so.1']
+        joined = '\n'.join(self.check_elf(versions, needed)['failures'])
+        self.assertIn('mris_sphere: needs GLIBC_2.34', joined)
+        self.assertIn('GLIBCXX_3.4.29', joined)
+        self.assertIn('libstdc++.so.6', joined)
+        self.assertIn('libgomp.so.1', joined)
+
+    def test_b2_runtime_verifier_parses_objdump_and_readelf_output(self):
+        objdump = ('0000000000000000      DF *UND*\t0000000000000000 (GLIBC_2.2.5) memcpy\n'
+                   '0000000000000000      DF *UND*\t0000000000000000  GLIBC_2.17  clock_gettime\n'
+                   '0000000000000000      DF *UND*\t0000000000000000  GLIBCXX_3.4 _ZNSo3putEc\n')
+        self.assertEqual(self.verifier.parse_symbol_versions(objdump), {'GLIBC_2.2.5', 'GLIBC_2.17', 'GLIBCXX_3.4'})
+        readelf = (' 0x0000000000000001 (NEEDED)             Shared library: [libm.so.6]\n'
+                   ' 0x0000000000000001 (NEEDED)             Shared library: [libc.so.6]\n')
+        self.assertEqual(self.verifier.parse_needed(readelf), ['libm.so.6', 'libc.so.6'])
+
     def test_b2_runtime_verifier_parses_otool_output(self):
         text = ('/x/bin/mris_sphere:\n'
                 '\t/usr/lib/libSystem.B.dylib (compatibility version 1.0.0, current version 1351.0.0)\n'
@@ -294,6 +324,27 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn('already has', job)  # the asset-absent check
         self.assertNotIn('--clobber', self.text)
         self.assertEqual(self.text.count('contents: write'), 1)
+
+    def test_b2_runtime_publish_can_take_the_verified_artifact_of_an_earlier_run(self):
+        # Each build embeds __DATE__/__TIME__, so a new run gives a new sha256. The catalog patch names one run.
+        self.assertRegex(self.head, r'(?s)artifact_run_id:.*?type: string.*?default: ""')
+        job = self.jobs['publish']
+        self.assertIn('run-id: ${{ inputs.artifact_run_id || github.run_id }}', job)
+        self.assertIn('github-token: ${{ github.token }}', job)
+        self.assertIn('actions: read', job)
+
+    def test_b2_runtime_linux_job_builds_in_manylinux_2_28_and_checks_glibc(self):
+        job = self.jobs['build-linux-x86_64']
+        self.assertIn('image: quay.io/pypa/manylinux_2_28_x86_64', job)
+        self.assertIn('-static-libstdc++', job)
+        self.assertIn('postprocessing.core.build', job)
+        self.assertIn('--max-glibc 2.28', job)
+        self.assertIn('surface-runtime-linux-x86_64-glibc228', job)
+        self.assertNotIn('gh release', job)
+        older = self.jobs['run-on-older-linux']
+        self.assertIn('needs: build-linux-x86_64', older)
+        self.assertIn('image: ubuntu:20.04', older)
+        self.assertIn('--version', older)
 
     def test_b2_runtime_older_macos_job_may_fail(self):
         job = self.jobs['run-on-older-macos']

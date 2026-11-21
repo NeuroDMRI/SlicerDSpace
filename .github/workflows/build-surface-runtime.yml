@@ -3,6 +3,8 @@ name: Build Surface Runtime
 # Rebuilds the seven FreeSurfer surface tools (anatomy/surface/ddsurfer_backend/postprocessing/core/build.py)
 # for Apple Silicon with a macOS 13.0 deployment target, verifies them and uploads an Actions artifact.
 # The publish job runs only from a manual dispatch with publish=true and never replaces an existing asset.
+# Stretch: build-linux-x86_64 builds the Linux runtime in manylinux_2_28 (glibc 2.28, static libstdc++) as an
+# artifact only; it is never published by this workflow.
 
 on:
   workflow_dispatch:
@@ -14,6 +16,11 @@ on:
         default: false
       release_tag:
         description: "Release tag for the publish job (required when publish is true)"
+        required: false
+        type: string
+        default: ""
+      artifact_run_id:
+        description: "Publish the verified artifact of this earlier run (blank: this run). Each build has a new sha256."
         required: false
         type: string
         default: ""
@@ -182,11 +189,14 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: write
+      actions: read
     steps:
       - uses: actions/download-artifact@v4
         with:
           name: ${{ env.ARTIFACT }}
           path: surface-out
+          run-id: ${{ inputs.artifact_run_id || github.run_id }}
+          github-token: ${{ github.token }}
 
       - name: Upload as a new release asset (never overwrite)
         env:
@@ -206,3 +216,127 @@ jobs:
             fi
           done
           gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" "surface-out/$ASSET" "surface-out/$ASSET.sha256"
+
+  build-linux-x86_64:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    container:
+      image: quay.io/pypa/manylinux_2_28_x86_64
+    env:
+      LDFLAGS: "-static-libstdc++ -static-libgcc"
+      LINUX_ASSET: surface-runtime-linux-x86_64-glibc228.tar.gz
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - name: Set the work folders and tools
+        run: |
+          echo "WORK=$RUNNER_TEMP/surface-work" >> "$GITHUB_ENV"
+          echo "RUNTIME=$RUNNER_TEMP/surface-runtime" >> "$GITHUB_ENV"
+          echo "OUT=$GITHUB_WORKSPACE/surface-out" >> "$GITHUB_ENV"
+          echo "/opt/python/cp312-cp312/bin" >> "$GITHUB_PATH"
+          # No OpenMP: a host libgomp.so.1 would be needed otherwise (the macOS runtime has no OpenMP either).
+          echo 'set(CMAKE_DISABLE_FIND_PACKAGE_OpenMP ON CACHE BOOL "" FORCE)' > "$RUNNER_TEMP/no-openmp.cmake"
+          echo "CMAKE_TOOLCHAIN_FILE=$RUNNER_TEMP/no-openmp.cmake" >> "$GITHUB_ENV"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Install CMake 3.31 and record the toolchain
+        run: |
+          python3 -m pip install --upgrade "cmake==3.31.6"
+          mkdir -p "$OUT"
+          {
+            echo "image: quay.io/pypa/manylinux_2_28_x86_64"
+            echo "os: $(cat /etc/redhat-release)"
+            echo "glibc: $(ldd --version | head -n 1)"
+            echo "gcc: $(gcc --version | head -n 1)"
+            echo "cmake: $(cmake --version | head -n 1)"
+            echo "python: $(python3 --version)"
+            echo "LDFLAGS: $LDFLAGS"
+            echo "openmp: disabled (CMAKE_DISABLE_FIND_PACKAGE_OpenMP)"
+            echo "commit: $GITHUB_SHA"
+          } | tee "$OUT/toolchain-linux-x86_64.txt"
+
+      - name: Fetch the pinned atlas data archive
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, pathlib, urllib.request
+          record = json.loads(pathlib.Path('models/external_assets_manifest.json').read_text())['asset_records'][
+              'surface/postprocessing/atlas.tar.gz']
+          target = pathlib.Path('anatomy/surface/ddsurfer_backend/postprocessing/assets/atlas.tar.gz')
+          with urllib.request.urlopen(record['urls'][0], timeout=300) as source:
+              data = source.read()
+          if hashlib.sha256(data).hexdigest() != record['sha256'] or len(data) != record['size_bytes']:
+              raise SystemExit('atlas.tar.gz checksum mismatch')
+          target.write_bytes(data)
+          PY
+
+      - name: Build the surface tools (glibc 2.28, static libstdc++)
+        working-directory: anatomy/surface/ddsurfer_backend
+        run: |
+          python3 -m postprocessing.core.build --jobs 4 \
+            --prefix "$RUNTIME" \
+            --work-dir "$WORK" \
+            --build-commit "$GITHUB_SHA"
+
+      - name: Show the build logs (failure only)
+        if: failure()
+        run: |
+          for log in "$WORK"/*.log; do
+            [ -f "$log" ] || continue
+            echo "::group::$log (last 120 lines)"
+            tail -n 120 "$log"
+            echo "::endgroup::"
+          done
+
+      - name: Verify glibc, libstdc++, tool list and start
+        run: |
+          python3 .github/scripts/verify_surface_runtime.py \
+            --runtime "$RUNTIME" \
+            --max-glibc 2.28 \
+            --start \
+            --json "$OUT/verify-linux-x86_64.json"
+          (cd anatomy/surface/ddsurfer_backend && python3 -m postprocessing.core.runtime --runtime "$RUNTIME")
+
+      - name: Package the runtime
+        run: |
+          python3 scripts/package_surface_runtime.py --source "$RUNTIME" --output "$OUT/$LINUX_ASSET"
+          cp "$RUNTIME/runtime.json" "$OUT/runtime-linux-x86_64-glibc228.json"
+          (cd "$OUT" && sha256sum "$LINUX_ASSET" > "$LINUX_ASSET.sha256" && cat "$LINUX_ASSET.sha256")
+          ls -l "$OUT"
+
+      - name: Upload the artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: surface-runtime-linux-x86_64-glibc228
+          path: surface-out/  # relative: runner.temp is a host path in a container job
+          if-no-files-found: error
+          retention-days: 30
+
+  run-on-older-linux:
+    needs: build-linux-x86_64
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    container:
+      image: ubuntu:20.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: surface-runtime-linux-x86_64-glibc228
+          path: surface-out
+
+      - name: Start every binary with --version
+        run: |
+          ldd --version | head -n 1
+          mkdir -p runtime
+          tar -xzf surface-out/surface-runtime-linux-x86_64-glibc228.tar.gz -C runtime
+          status=0
+          for tool in runtime/bin/*; do
+            if output="$(env -i PATH=/usr/bin:/bin "$tool" --version 2>&1)" && [ -n "$output" ]; then
+              echo "started $tool: $output"
+            else
+              echo "::error::$tool did not start: $output"
+              status=1
+            fi
+          done
+          exit $status

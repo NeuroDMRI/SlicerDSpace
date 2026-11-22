@@ -141,6 +141,7 @@ SUBGROUP_ROW_KIND = "subgroup"  # ROLE_KIND of a subgroup row; file rows use "se
 # Item data roles of the Results tree, as offsets from Qt.UserRole.
 ROLE_PATH, ROLE_KIND, ROLE_MANIFEST, ROLE_RUN, ROLE_KEY = 0, 1, 2, 3, 4
 ROLE_FOLDER = 5  # Batch 2: the folder on disk of a subject row (the Open folder button); text, empty when unknown
+ROLE_QC_MARK = 6  # a subgroup row whose bundle task's recorded QC is not passed: "failed|unreadable<TAB>reason"
 
 
 def _text(owner: Any, key: str, fallback: str) -> str:
@@ -2681,7 +2682,7 @@ def _relabel_family(qt_mod: Any, family: Any, zh: bool) -> None:
     for row in _child_items(family):
         row_key = row.data(0, role_key)
         if _is_subgroup_row(qt_mod, row):
-            row.setText(0, f"{_subgroup_caption(row_key, zh)} ({_tree_count(row, 'childCount')})")
+            row.setText(0, _subgroup_text(qt_mod, row, row_key, zh))
             _relabel_morphometry_rows(qt_mod, row, zh)
 
 
@@ -2962,6 +2963,22 @@ def _show_one_overlay_per_surface(slicer: Any, nodes) -> None:
     hide_same_surface_siblings(slicer, nodes)
 
 
+QC_MARK_TEXT = {"failed": ("QC not passed", "QC 未通过"), "unreadable": ("no QC record", "无 QC 记录")}
+
+
+def _subgroup_text(qt_mod: Any, row: Any, key: str, zh: bool) -> str:
+    """Caption (count), then the QC mark of a bundle task whose recorded QC is not passed. The key, the order, the
+    expansion state and the count do not change with the mark."""
+
+    text = f"{_subgroup_caption(key, zh)} ({_tree_count(row, 'childCount')})"
+    state, _, reason = str(row.data(0, _user_role(qt_mod, ROLE_QC_MARK)) or "").partition("\t")
+    if state in QC_MARK_TEXT:
+        mark = QC_MARK_TEXT[state][1 if zh else 0]
+        row.setToolTip(0, f"{mark}{'：' if zh else ': '}{reason}")
+        text += f" · {mark}"
+    return text
+
+
 def _populate_manifest_output_items(
     owner: Any,
     parent: Any,
@@ -3007,6 +3024,7 @@ def _populate_manifest_output_items(
         include_preprocessing=True,
         include_brain_mask=True,
         include_surface_morphometry=True,
+        include_qc_not_passed=True,
     )
     filtered_candidates = [
         item for item in candidates
@@ -3015,6 +3033,8 @@ def _populate_manifest_output_items(
     visual_paths = {item["path"] for item in filtered_candidates
                     if Path(item["path"]).suffix.lower() not in {".csv", ".tsv", ".stats"}}
     morphometry_paths = _morphometry_paths(filtered_candidates)
+    qc_marks = {item["path"]: f"{item['qc_mark']}\t{item.get('qc_reason') or ''}"
+                for item in filtered_candidates if item.get("qc_mark")}
     seg_paths = {item["path"] for item in filtered_candidates
                  if str(item.get("product") or "").startswith("segmentation")}
     from shared.fiber_display import streamline_kind
@@ -3156,6 +3176,11 @@ def _populate_manifest_output_items(
                     sub_existed = False
                 else:
                     sub_existed = True
+                sub_marked = False
+                mark = next((qc_marks[path] for path in paths if path in qc_marks), None)
+                if mark is not None and not target.data(0, _user_role(qt, ROLE_QC_MARK)):
+                    target.setData(0, _user_role(qt, ROLE_QC_MARK), mark)
+                    sub_marked = True
             for path, visual in paths.items():
                 item = qt.QTreeWidgetItem(target, [Path(path).name, "○" if visual else "↗"])
                 item.setData(0, role_path, path)
@@ -3170,8 +3195,8 @@ def _populate_manifest_output_items(
                 if run_index is not None:
                     item.setData(0, role_run, run_index)
                 item.setToolTip(0, _morphometry_tooltip(path, zh) if path in morphometry_paths else path)
-            if subgroup is not None and sub_existed:
-                target.setText(0, f"{_subgroup_caption(key, zh)} ({_tree_count(target, 'childCount')})")
+            if subgroup is not None and (sub_existed or sub_marked):
+                target.setText(0, _subgroup_text(qt, target, key, zh))
         if added_to_existing:
             group.setText(0, f"{caption} ({_file_count(group, role_path)})")
 

@@ -1204,6 +1204,8 @@ class SharedLogicMixin:
                 include_brain_mask=source_path is not None,
                 # Surface post-processing files load only from a click on their own row, never in bulk.
                 include_surface_morphometry=source_path is not None,
+                # A completed bundle task whose recorded QC is not passed: only its one clicked row loads.
+                include_qc_not_passed=source_path is not None,
             )
             if source_path is not None:
                 identity = str(source_path.expanduser().resolve())

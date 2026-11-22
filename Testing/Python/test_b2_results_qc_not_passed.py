@@ -1,0 +1,225 @@
+"""Results: the files of a COMPLETED bundle task whose recorded QC is not passed (failed or unreadable).
+
+The Results tree lists them with a mark on the subgroup row; only the tree and the load of one clicked row see them.
+Bulk loading (load key results, the automatic set) keeps today's filter and skip messages.
+"""
+
+from __future__ import annotations
+
+import importlib
+import json
+import shutil
+import sys
+import tempfile
+import types
+import unittest
+from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
+
+from shared.result_scene import result_candidates as REAL_CANDIDATES  # before any Harness patches the module
+
+WMQL_FILES = ("AF_left.trk", "AF_right.trk", "CST_left.trk")
+
+
+class Run:
+    """A run folder: a WMQL task whose QC record failed, a TractCloud task whose QC record is unreadable and a
+    failed WMQL@csd_act task."""
+
+    def __init__(self, root: Path):
+        self.root = root
+        out = root / "outputs"
+        self.bundles = out / "04_bundles"
+        stage = root / "cache" / "stages" / "04_bundles" / "wmql" / "Test1"
+        stage.mkdir(parents=True)
+        published = self.bundles / "query_bundle_extraction"
+        published.mkdir(parents=True)
+        stage_files, self.wmql_files = [], []  # the QC record names the stage files; Results shows the published copies
+        for name in WMQL_FILES:
+            path = stage / name
+            path.write_text("trk", encoding="utf-8")
+            stage_files.append(path)
+            self.wmql_files.append(Path(shutil.copy2(path, published / name)))
+        self.wmql_qc = stage / "wmql_qc.json"
+        self.wmql_qc.write_text(json.dumps({
+            "kind": "wmql_bundle_segmentation_qc", "status": "completed", "version": 6,
+            "automatic_qc_passed": False, "checks": {},
+            "output_summary": {"bundle_files": [str(path) for path in stage_files], "bundle_count": 3}}),
+            encoding="utf-8")
+        cloud = self.bundles / "bundle_identification" / "AF.vtp"
+        cloud.parent.mkdir(parents=True, exist_ok=True)
+        cloud.write_text("vtp", encoding="utf-8")
+        self.cloud_file = cloud
+        self.cloud_qc = root / "cache" / "stages" / "04_bundles" / "tract_cloud_dl" / "tractcloud_qc.json"
+        self.cloud_qc.parent.mkdir(parents=True)
+        self.cloud_qc.write_text("{not json", encoding="utf-8")
+        failed = self.bundles / "query_bundle_extraction" / "csd_act" / "AF.trk"
+        failed.parent.mkdir(parents=True, exist_ok=True)
+        failed.write_text("trk", encoding="utf-8")
+        self.failed_file = failed
+        self.manifest = {
+            "kind": "slicerddsurfer_product_orchestration", "version": 1, "status": "completed",
+            "subject_id": "sub1", "run_name": "Test1", "ended_at": "2026-11-01T10:00:00Z",
+            "subject_root": str(root), "output_root": str(out),
+            "tasks": [
+                {"name": "bundles.wmql", "status": "completed", "qc_path": str(self.wmql_qc),
+                 "outputs": {"output_dir": str(self.bundles / "query_bundle_extraction"), "qc_path": str(self.wmql_qc)}},
+                {"name": "bundles.tractcloud", "status": "completed", "qc_path": str(self.cloud_qc),
+                 "outputs": {"AF": str(cloud), "output_dir": str(cloud.parent)}},
+                {"name": "bundles.wmql@csd_act", "status": "failed",
+                 "outputs": {"AF": str(failed)}},
+            ]}
+        meta = out / "00_run_metadata"
+        meta.mkdir(parents=True)
+        self.manifest_path = meta / "Test1_orchestration_manifest.json"
+        self.manifest_path.write_text(json.dumps(self.manifest), encoding="utf-8")
+
+
+class TempRootTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self._temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._temp.cleanup)
+        self.root = Path(self._temp.name).resolve()
+        self.run = Run(self.root)
+
+
+class CandidatesTest(TempRootTest):
+    def test_b2_qc_default_result_candidates_still_skip_the_not_passed_tasks_with_the_old_messages(self) -> None:
+        from shared.result_scene import result_candidates
+
+        candidates, skipped = result_candidates(self.run.manifest)
+        self.assertEqual(candidates, [])
+        reasons = {entry["product"]: (entry["reason"], entry.get("reason_category")) for entry in skipped}
+        self.assertEqual(reasons["bundles.wmql"], ("Recorded automatic QC failed", "qc_failed"))
+        self.assertEqual(reasons["bundles.tractcloud"], ("Unreadable bundle QC", "qc_failed"))
+        self.assertEqual(reasons["bundles.wmql@csd_act"][1], "task_failed")
+
+    def test_b2_qc_the_flag_lists_the_files_of_completed_tasks_with_a_mark_and_keeps_failed_tasks_hidden(self) -> None:
+        from shared.result_scene import result_candidates
+
+        candidates, skipped = result_candidates(self.run.manifest, include_qc_not_passed=True,
+                                                allow_bundle_directory_scan=False)
+        by_path = {item["path"]: item for item in candidates}
+        for path in self.run.wmql_files:
+            item = by_path[str(path)]
+            self.assertEqual((item["product"], item["qc_mark"], item["qc_reason"]),
+                             ("bundles.wmql", "failed", "Recorded automatic QC failed"))
+        cloud = by_path[str(self.run.cloud_file)]
+        self.assertEqual((cloud["qc_mark"], cloud["qc_reason"]), ("unreadable", "Unreadable bundle QC"))
+        self.assertNotIn(str(self.run.failed_file), by_path)
+        self.assertEqual([entry["product"] for entry in skipped if entry.get("reason_category")],
+                         ["bundles.wmql@csd_act"])
+
+    def test_b2_qc_a_task_without_any_qc_record_is_marked_as_no_record(self) -> None:
+        from shared.result_scene import result_candidates
+
+        task = dict(self.run.manifest["tasks"][1])
+        task.pop("qc_path")
+        candidates, _ = result_candidates({"tasks": [task]}, include_qc_not_passed=True)
+        self.assertEqual([(item["path"], item["qc_mark"]) for item in candidates],
+                         [(str(self.run.cloud_file), "unreadable")])
+
+    def test_b2_qc_a_passed_task_gets_no_mark(self) -> None:
+        from shared.result_scene import result_candidates
+
+        with mock.patch("shared.result_scene.bundle_record_error", return_value=None):
+            candidates, _ = result_candidates({"tasks": [self.run.manifest["tasks"][0]]}, include_qc_not_passed=True)
+        self.assertEqual(len(candidates), 3)
+        self.assertTrue(all("qc_mark" not in item for item in candidates))
+
+    def test_b2_qc_the_automatic_set_is_unchanged(self) -> None:
+        from shared.auto_results import automatic_result_candidates
+
+        selected, skipped, _ = automatic_result_candidates(self.run.manifest)
+        self.assertEqual(selected, [])
+        self.assertIn("qc_failed", {entry.get("reason_category") for entry in skipped})
+
+
+class LoadGateTest(TempRootTest):
+    def _logic(self):
+        with mock.patch.dict(sys.modules, {"slicer": types.ModuleType("slicer")}):
+            module_logic = importlib.import_module("shared.module_logic")
+
+        class Logic(module_logic.SharedLogicMixin):
+            def log(self, message):
+                pass
+
+        fake = SimpleNamespace(mrmlScene=mock.MagicMock(), util=SimpleNamespace(getNodesByClass=lambda kind: []))
+        patcher = mock.patch.object(module_logic, "slicer", fake)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return Logic()
+
+    def test_b2_qc_only_the_load_of_one_clicked_row_turns_the_flag_on(self) -> None:
+        logic = self._logic()
+        seen = []
+
+        def spy(manifest, **kwargs):
+            seen.append(kwargs)
+            return [], []
+
+        with mock.patch("shared.result_scene.result_candidates", side_effect=spy):
+            logic.loadKeyResultsFromManifest(self.run.manifest_path)
+            logic.loadKeyResultsFromManifest(self.run.manifest_path, source_path=self.run.wmql_files[0])
+        self.assertFalse(seen[0].get("include_qc_not_passed", False))
+        self.assertTrue(seen[1].get("include_qc_not_passed"))
+
+    def test_b2_qc_one_clicked_row_reaches_the_fibre_loader_and_bulk_does_not(self) -> None:
+        logic = self._logic()
+        calls = []
+        logic._load_fiber_bundle_node = lambda path, name, **kwargs: calls.append(Path(path)) or False
+        bulk = logic.loadKeyResultsFromManifest(self.run.manifest_path)
+        self.assertEqual(calls, [])
+        self.assertIn("Recorded automatic QC failed", [entry.get("reason") for entry in bulk["skipped"]])
+        logic.loadKeyResultsFromManifest(self.run.manifest_path, source_path=self.run.wmql_files[1])
+        self.assertEqual(calls, [self.run.wmql_files[1]])
+
+
+class TreeTest(TempRootTest):
+    def _tree(self, language="en"):
+        from shared import ui_run_history
+        from shared.run_history import parse_run_manifest
+        from test_ui_results_tree import USER_ROLE, Harness
+
+        h = Harness(self, language=language)
+        with mock.patch("shared.result_scene.result_candidates", side_effect=REAL_CANDIDATES):
+            h.refresh([parse_run_manifest(self.run.manifest_path)])
+        subject = next(item for item in h.tree.items if item.text(0).startswith("sub1"))
+        role_key = USER_ROLE + ui_run_history.ROLE_KEY
+        bundles = next(subject.child(i) for i in range(subject.childCount())
+                       if subject.child(i).data(0, role_key) == "bundles")
+        rows = {bundles.child(i).data(0, role_key): bundles.child(i) for i in range(bundles.childCount())}
+        return h, bundles, rows, USER_ROLE, ui_run_history
+
+    def test_b2_qc_the_tree_lists_the_subgroups_with_a_mark_and_keeps_key_order_and_count(self) -> None:
+        h, bundles, rows, USER_ROLE, urh = self._tree()
+        self.assertEqual(list(rows), ["bundles::wmql", "bundles::tractcloud"])
+        wmql, cloud = rows["bundles::wmql"], rows["bundles::tractcloud"]
+        self.assertEqual(wmql.text(0), "WMQL (3) · QC not passed")  # the QC JSON row is in the cache: not listed
+        self.assertEqual(cloud.text(0), "TractCloud (1) · no QC record")
+        self.assertIn("Recorded automatic QC failed", wmql.tooltips[0])
+        self.assertIn("Unreadable bundle QC", cloud.tooltips[0])
+        self.assertTrue(bundles.text(0).startswith("Fibre bundles (4)"))
+        leaves = [wmql.child(i) for i in range(wmql.childCount())]
+        trk = [leaf for leaf in leaves if leaf.text(0).endswith(".trk")]
+        self.assertEqual(len(trk), 3)
+        self.assertTrue(all(leaf.text(1) != "↗" and 1 in leaf.icons for leaf in trk))  # normal rows with an eye
+        self.assertEqual(urh._item_key(h.qt, wmql), ("subgroup", "sub1", "bundles", "bundles::wmql"))
+        self.h, self.rows = h, rows
+
+    def test_b2_qc_the_mark_follows_the_language_in_place_and_in_a_rebuild(self) -> None:
+        from shared.ui_onboarding import apply_onboarding_language
+
+        self.test_b2_qc_the_tree_lists_the_subgroups_with_a_mark_and_keeps_key_order_and_count()
+        apply_onboarding_language(self.h.owner, "zh")
+        self.assertEqual(self.rows["bundles::wmql"].text(0), "WMQL (3) · QC 未通过")
+        self.assertEqual(self.rows["bundles::tractcloud"].text(0), "TractCloud (1) · 无 QC 记录")
+        self.assertIn("QC 未通过", self.rows["bundles::wmql"].tooltips[0])
+        apply_onboarding_language(self.h.owner, "en")
+        self.assertEqual(self.rows["bundles::wmql"].text(0), "WMQL (3) · QC not passed")
+        _h, _bundles, rows, _role, _urh = self._tree(language="zh")
+        self.assertEqual(rows["bundles::wmql"].text(0), "WMQL (3) · QC 未通过")
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -40,8 +40,11 @@ def tract_file_coordinate_system(path):
     return "RAS"
 
 
-def bundle_outputs(task, *, allow_directory_scan=True):
-    """Resolve bundles from the successful task's own QC, not shared folders."""
+def bundle_outputs(task, *, allow_directory_scan=True, accept_qc_not_passed=False):
+    """Resolve bundles from the successful task's own QC, not shared folders.
+
+    ``accept_qc_not_passed`` (Results tree and one clicked row only): also resolve the files that a readable record
+    names when its QC verdict is not passed; the caller marks them."""
     task = dict(task, name=str(task.get("name", "")).split("@", 1)[0])
     if task.get("name") not in {"bundles.wmql", "bundles.wma", "bundles.tractcloud"}:
         return {}
@@ -50,7 +53,8 @@ def bundle_outputs(task, *, allow_directory_scan=True):
         if not path or not Path(path).is_absolute():
             return {}
         qc = json.loads(Path(path).read_text(encoding="utf-8"))
-        if qc.get("status") not in {"completed", "passed"} or bundle_record_error(task['name'], qc):
+        if not accept_qc_not_passed and (
+                qc.get("status") not in {"completed", "passed"} or bundle_record_error(task['name'], qc)):
             return {}
         summary = qc.get("output_summary") or {}
         files = summary.get("bundle_files") or summary.get("anatomical_tract_files") or []
@@ -250,10 +254,15 @@ def _resolve_manifest_brain_mask_candidate(manifest: dict) -> Optional[Path]:
 
 
 def result_candidates(manifest, *, allow_bundle_directory_scan=True, include_preprocessing=False, include_brain_mask=False,
-                      include_surface_morphometry=False):
+                      include_surface_morphometry=False, include_qc_not_passed=False):
     """``include_surface_morphometry`` (off by default, so bulk and automatic loads are unchanged): also list the
     published files of ``surface.ddsurfer_postprocess`` (shared.surface_morphometry_display), accepted by product and
-    file name, in the order lh then rh: thickness, curv, sulc, area, aparc, aparc.a2009s, inflated, stats."""
+    file name, in the order lh then rh: thickness, curv, sulc, area, aparc, aparc.a2009s, inflated, stats.
+
+    ``include_qc_not_passed`` (off by default; on only for the Results tree and the load of one clicked row): a
+    completed bundle task whose recorded QC failed or is unreadable is listed, not skipped. Each of its candidates has
+    ``qc_mark`` ("failed" or "unreadable") and ``qc_reason`` (the recorded reason). A task that is not completed stays
+    skipped."""
     from shared.surface_morphometry_display import morphometry_row, row_order
 
     candidates, skipped, seen = [], [], set()
@@ -273,18 +282,23 @@ def result_candidates(manifest, *, allow_bundle_directory_scan=True, include_pre
             continue
         if name.startswith("preprocessing.") and not include_preprocessing:
             continue
+        qc_mark = None
         if name.split('@', 1)[0] in {'bundles.wmql', 'bundles.wma', 'bundles.tractcloud'}:
             value = task.get('qc_path') or (task.get('outputs') or {}).get('qc_path')
+            unreadable = not value
             try:
                 record = json.loads(Path(str(value)).read_text(encoding='utf-8')) if value else {}
                 error = bundle_record_error(name, record)
             except (OSError, ValueError, TypeError):
-                error = 'Unreadable bundle QC'
-            if error:
+                error, unreadable = 'Unreadable bundle QC', True
+            if error and not include_qc_not_passed:
                 skipped.append({'label': name, 'product': name, 'reason': error, 'reason_category': 'qc_failed'})
                 continue
+            if error:
+                qc_mark = ("unreadable" if unreadable else "failed", error)
         outputs = dict(task.get("outputs") or {})
-        outputs.update(bundle_outputs(task, allow_directory_scan=allow_bundle_directory_scan))
+        outputs.update(bundle_outputs(task, allow_directory_scan=allow_bundle_directory_scan,
+                                      accept_qc_not_passed=qc_mark is not None))
         for key, value in outputs.items():
             if not isinstance(value, str) or not value:
                 continue
@@ -312,6 +326,8 @@ def result_candidates(manifest, *, allow_bundle_directory_scan=True, include_pre
             entry = {"path": identity, "label": name + "_" + str(key), "key": str(key), "product": name, "priority": priority}
             if morphometry:
                 entry.update(priority=1, order=row_order(name, path))
+            if qc_mark is not None:
+                entry.update(qc_mark=qc_mark[0], qc_reason=qc_mark[1])
             candidates.append(entry)
     if include_brain_mask and not _has_preprocessing_mask_candidate(candidates):
         mask_path = _resolve_manifest_brain_mask_candidate(manifest)

@@ -363,6 +363,41 @@ def sync_detected_input_format(
     return detected
 
 
+SCREEN_FRAME_MARGIN = 40  # logical px kept free for a dialog's title bar and window frame
+
+
+def available_screen_size(qt_mod: Any, anchor: Any = None) -> "tuple[int, int] | None":
+    """Width and height of the available geometry of the screen under ``anchor`` (else the primary screen).
+
+    The same screen lookup as the help popups. ``None`` when the screen is unknown.
+    """
+
+    try:
+        app_cls = getattr(qt_mod, "QApplication", None)
+        screen = None
+        if anchor is not None and app_cls is not None and hasattr(app_cls, "screenAt"):
+            screen = app_cls.screenAt(anchor.mapToGlobal(qt_mod.QPoint(0, 0)))
+        if screen is None and app_cls is not None and hasattr(app_cls, "primaryScreen"):
+            screen = app_cls.primaryScreen()
+        if screen is None:
+            return None
+        avail = _qt_val(screen, "availableGeometry")
+        width = _qt_int(avail, "width", 0)
+        height = _qt_int(avail, "height", 0)
+        return (width, height) if width > 0 and height > 0 else None
+    except Exception:
+        return None
+
+
+def fit_size_to_screen(qt_mod: Any, width: int, height: int, anchor: Any = None) -> "tuple[int, int]":
+    """``width`` x ``height`` reduced to fit the available screen minus the window frame; unchanged on a big screen."""
+
+    size = available_screen_size(qt_mod, anchor)
+    if size is None:
+        return width, height
+    return min(width, max(1, size[0] - SCREEN_FRAME_MARGIN)), min(height, max(1, size[1] - SCREEN_FRAME_MARGIN))
+
+
 def _position_input_help_card(anchor: Any, card: Any, qt_mod: Any) -> None:
     """Position ``card`` directly below ``anchor`` (right-aligned inside the module dock, screen-clamped)."""
 

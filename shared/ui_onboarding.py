@@ -1477,7 +1477,10 @@ def show_first_run_wizard(owner: Any) -> None:
     dialog = qt.QDialog(slicer.util.mainWindow())
     dialog.setObjectName("firstRunSetupWizardDialog")
     dialog.setWindowTitle(onboarding_text(lang, "wizard"))
-    dialog.setMinimumWidth(760)
+    from shared.ui_compact import SCREEN_FRAME_MARGIN, available_screen_size
+
+    screen_size = available_screen_size(qt, slicer.util.mainWindow())  # None when unknown: today's sizes stay
+    dialog.setMinimumWidth(760 if screen_size is None else min(760, max(1, screen_size[0] - SCREEN_FRAME_MARGIN)))
     layout = qt.QVBoxLayout(dialog)
     is_zh = normalized_language(lang) == "zh"
     copy = {
@@ -1539,7 +1542,10 @@ def show_first_run_wizard(owner: Any) -> None:
     scroll = qt.QScrollArea()
     scroll.setObjectName("firstRunWizardScrollArea")
     scroll.setWidgetResizable(True)
-    scroll.setMinimumHeight(430)
+    # The scroll area gives way on a small screen; the header, the progress line and the buttons (about 190 px) stay.
+    scroll_min_height = 430 if screen_size is None else min(
+        430, max(120, screen_size[1] - SCREEN_FRAME_MARGIN - 190))
+    scroll.setMinimumHeight(scroll_min_height)
     steps_container = qt.QWidget()
     steps_layout = qt.QVBoxLayout(steps_container)
     steps_layout.setContentsMargins(2, 2, 2, 2)

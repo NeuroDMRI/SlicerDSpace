@@ -75,7 +75,9 @@ def show_environment_results_dialog(
 
     dialog = qt.QDialog(slicer.util.mainWindow())
     dialog.setWindowTitle("SlicerDSpace Environment Dependencies")
-    dialog.resize(900, 640)
+    from shared.ui_compact import fit_size_to_screen
+
+    dialog.resize(*fit_size_to_screen(qt, 900, 640, slicer.util.mainWindow()))  # small screens: stay inside it
     dialog.setStyleSheet(environment_results_dialog_style(widget=dialog))
     owner._environmentDialog = dialog
     state = environment_dialog_state(result, python_install_target=python_install_target)

@@ -277,6 +277,28 @@ class ExpansionTest(SubgroupTestBase):
         ui_run_history.show_record(h.owner, records[0], json.loads(records[0].manifest_path.read_text("utf-8")))
         self.assertFalse(find_child(find_child(self.subject(h, "sub2"), "Microstructure"), "DTI").expanded)
 
+    def test_review_codex_p1_a_family_key_with_the_separator_is_still_a_family_row(self) -> None:
+        """Review (Codex P1): a manifest task named ``anatomy::surfaces.output`` gives an unknown, flat family whose
+        key contains ``::`` and equals the key of the Cortical surfaces subgroup. The row kind must come from a tag on
+        the row, not from the text of the key: the family keeps its own remembered expansion."""
+
+        candidates = list(FULL_RUN) + [("anatomy::surfaces.output", "/x/odd.nii.gz")]
+        records = [self.manifest(candidates=candidates)]
+        h = self.harness(records)
+        odd = find_child(self.subject(h), "anatomy::surfaces")
+        self.assertEqual([row.data(0, ROLE_PATH) for row in rows(odd)], ["/x/odd.nii.gz"])  # flat: family > file
+        self.assertEqual(ui_run_history._item_key(h.qt, odd), ("family", "sub1", "anatomy::surfaces"))
+        odd.setExpanded(True)
+        state = h.owner._resultsExpansion
+        self.assertTrue(state["families"][("sub1", "anatomy::surfaces")])
+        self.assertEqual(state["subgroups"], {})
+        h.refresh(records)
+        subject = self.subject(h)
+        self.assertTrue(find_child(subject, "anatomy::surfaces").expanded)
+        surfaces = find_child(find_child(subject, "Anatomical priors"), "Cortical surfaces")
+        self.assertFalse(surfaces.expanded)
+        self.assertEqual(ui_run_history._item_key(h.qt, surfaces), ("subgroup", "sub1", "anatomy", "anatomy::surfaces"))
+
     def test_results_subgroups_a_rebuild_keeps_the_current_file_inside_a_subgroup_and_the_scroll(self) -> None:
         """Results subgroups rule 8: ``_item_key`` / ``_restore_current_item`` / ``_view_snapshot`` one level deeper."""
 

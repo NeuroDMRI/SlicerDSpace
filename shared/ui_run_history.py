@@ -107,9 +107,10 @@ RESULT_SUBGROUP_CAPTIONS = {
     ("connectome", "sift2_weighted"): ("SIFT2", "SIFT2"),
 }
 _SUBGROUP_ALIASES = {("tractography", "act"): "csd_act"}
-# The ROLE_KEY of a subgroup row is "<family>::<subgroup>" (e.g. "anatomy::surfaces"). A family key is a bare product
-# head and a subject key is a subject ID or "batch:<path>", so neither holds "::" and the forms cannot collide.
+# The ROLE_KEY of a subgroup row is "<family>::<subgroup>" (e.g. "anatomy::surfaces"). The row kind does not come from
+# this text (an unknown family from a manifest may hold "::" in its key): a subgroup row carries SUBGROUP_ROW_KIND.
 SUBGROUP_KEY_SEPARATOR = "::"
+SUBGROUP_ROW_KIND = "subgroup"  # ROLE_KIND of a subgroup row; file rows use "segmentation" / FIBER_ROW_KIND
 # Item data roles of the Results tree, as offsets from Qt.UserRole.
 ROLE_PATH, ROLE_KIND, ROLE_MANIFEST, ROLE_RUN, ROLE_KEY = 0, 1, 2, 3, 4
 ROLE_FOLDER = 5  # Batch 2: the folder on disk of a subject row (the Open folder button); text, empty when unknown
@@ -1370,8 +1371,11 @@ def _top_item(item: Any) -> Any:
     return item
 
 
-def _is_subgroup_key(key: Any) -> bool:
-    return isinstance(key, str) and SUBGROUP_KEY_SEPARATOR in key
+def _is_subgroup_row(qt_mod: Any, item: Any) -> bool:
+    """A subgroup row carries the ``SUBGROUP_ROW_KIND`` tag. The text of its key does not decide the row kind: an
+    unknown family (a manifest task such as ``anatomy::surfaces.output``) may hold the separator in its key."""
+
+    return item.data(0, _user_role(qt_mod, ROLE_KIND)) == SUBGROUP_ROW_KIND
 
 
 def _subgroup_key(family: str, subgroup: str) -> str:
@@ -1431,7 +1435,7 @@ def _item_key(qt_mod: Any, item: Any) -> Optional[tuple]:
         return ("file", subject, str(path))
     if not key:
         return None
-    if _is_subgroup_key(key):
+    if _is_subgroup_row(qt_mod, item):
         return ("subgroup", subject, parent.data(0, role_key), key)
     return ("family", subject, key) if parent.parent() is None else None
 
@@ -1508,7 +1512,7 @@ def _apply_family_expansion(owner: Any, subject_item: Any, qt_mod: Any) -> None:
         _set_expanded(family, families.get((subject_key, family_key), False))
         for row in _child_items(family):
             row_key = row.data(0, role_key)
-            if _is_subgroup_key(row_key):
+            if _is_subgroup_row(qt_mod, row):
                 _set_expanded(row, subgroups.get((subject_key, family_key, row_key), False))
 
 
@@ -2376,7 +2380,7 @@ def _relabel_family(qt_mod: Any, family: Any, zh: bool) -> None:
     family.setText(0, f"{_family_caption(family_key, zh)} ({_file_count(family, role_path)})")
     for row in _child_items(family):
         row_key = row.data(0, role_key)
-        if _is_subgroup_key(row_key):
+        if _is_subgroup_row(qt_mod, row):
             row.setText(0, f"{_subgroup_caption(row_key, zh)} ({_tree_count(row, 'childCount')})")
 
 
@@ -2696,7 +2700,7 @@ def _populate_manifest_output_items(
                 seen_paths.add(str(row_path))
                 continue
             row_key = row.data(0, role_key)
-            if _is_subgroup_key(row_key):
+            if _is_subgroup_row(qt, row):
                 existing_subgroups[row_key] = row
             for leaf in _child_items(row):
                 leaf_path = leaf.data(0, role_path)
@@ -2741,6 +2745,7 @@ def _populate_manifest_output_items(
                 if target is None:
                     target = qt.QTreeWidgetItem(group, [f"{_subgroup_caption(key, zh)} ({len(paths)})"])
                     target.setData(0, role_key, key)
+                    target.setData(0, _user_role(qt, ROLE_KIND), SUBGROUP_ROW_KIND)
                     _mark_run(target)
                     existing_subgroups[key] = target
                     sub_existed = False

@@ -30,6 +30,13 @@ from shared.bundled_python import prepend_env_bundled_site_packages
 
 prepend_env_bundled_site_packages()
 
+# Prevent OpenBLAS / MKL / BLIS from spawning internal worker pools inside
+# ThreadPoolExecutor workers (nested multi-threaded BLAS crashes Windows
+# libscipy_openblas64 with 0xC0000005). Leave OMP_NUM_THREADS untouched
+# because _worker_budget() reads it when SLICERDSPACE_STAGE_CPUS is unset.
+for _blas_var in ("OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "BLIS_NUM_THREADS", "NUMEXPR_NUM_THREADS"):
+    os.environ.setdefault(_blas_var, "1")
+
 import nibabel as nib
 import numpy as np
 
@@ -569,19 +576,30 @@ class FastTractographySpatialIndexing:
             min_xyz[t0:t1] = np.minimum.reduceat(pts_c, local_offs, axis=0)
             max_xyz[t0:t1] = np.maximum.reduceat(pts_c, local_offs, axis=0)
 
-            ijk = np.rint(pts_c @ AT + b).astype(np.int64)
+            # Compute the 3x3 affine explicitly without BLAS dgemm so concurrent
+            # ThreadPoolExecutor workers cannot re-enter OpenBLAS's thread pool
+            # (which crashes libscipy_openblas64 on Windows with 0xC0000005 even
+            # when imported in-process after NumPy has already initialized).
+            px = pts_c[:, 0]
+            py = pts_c[:, 1]
+            pz = pts_c[:, 2]
+            i0 = np.rint(px * AT[0, 0] + py * AT[1, 0] + pz * AT[2, 0] + b[0]).astype(np.int64)
+            i1 = np.rint(px * AT[0, 1] + py * AT[1, 1] + pz * AT[2, 1] + b[1]).astype(np.int64)
+            i2 = np.rint(px * AT[0, 2] + py * AT[1, 2] + pz * AT[2, 2] + b[2]).astype(np.int64)
             if (
-                np.any(ijk < 0)
-                or np.any(ijk[:, 0] >= X)
-                or np.any(ijk[:, 1] >= Y)
-                or np.any(ijk[:, 2] >= Z)
+                np.any(i0 < 0)
+                or np.any(i0 >= X)
+                or np.any(i1 < 0)
+                or np.any(i1 >= Y)
+                or np.any(i2 < 0)
+                or np.any(i2 >= Z)
             ):
                 outside_flags[c_idx] = True
-            np.clip(ijk[:, 0], 0, X - 1, out=ijk[:, 0])
-            np.clip(ijk[:, 1], 0, Y - 1, out=ijk[:, 1])
-            np.clip(ijk[:, 2], 0, Z - 1, out=ijk[:, 2])
+            np.clip(i0, 0, X - 1, out=i0)
+            np.clip(i1, 0, Y - 1, out=i1)
+            np.clip(i2, 0, Z - 1, out=i2)
 
-            pt_lbl = img_int[ijk[:, 0], ijk[:, 1], ijk[:, 2]]
+            pt_lbl = img_int[i0, i1, i2]
             start_labels[t0:t1] = pt_lbl[local_offs]
             end_labels[t0:t1] = pt_lbl[local_offs + lens_c - 1]
 

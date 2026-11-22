@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -386,6 +387,112 @@ exit 0
 
         with self.assertRaisesRegex(ValueError, "requires only the wmql config"):
             run_bundle_parcellation(BundleParcellationConfig(backend="wmql"))
+
+    def test_wmql_accel_subprocess_sets_single_thread_blas_env(self) -> None:
+        from tractography import WMQLConfig, run_wmql_bundle_segmentation
+
+        backend = {
+            "available": True,
+            "commands": {
+                "tract_querier_executable": None,
+                "root_script": (self.tract_querier_root / "scripts" / "cli_tract_querier.py").as_posix(),
+                "python": self.python.as_posix(),
+            },
+            "missing_required": [],
+        }
+        captured_env: dict[str, str] = {}
+
+        def _fake_run(cmd, **kwargs):
+            captured_env.update(kwargs.get("env") or {})
+            out_prefix = Path(cmd[cmd.index("-o") + 1])
+            out_prefix.parent.mkdir(parents=True, exist_ok=True)
+            (out_prefix.parent / f"{out_prefix.name}_af.left.vtk").write_bytes(b"fake")
+            return mock.Mock(returncode=0)
+
+        clean_env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "BLIS_NUM_THREADS", "NUMEXPR_NUM_THREADS", "SLICERDSPACE_DISABLE_WMQL_ACCEL")
+        }
+        with (
+            mock.patch.dict(os.environ, clean_env, clear=True),
+            mock.patch("tractography.wmql.inspect_wmql_backend", return_value=backend),
+            mock.patch("tractography.wmql.subprocess.run", side_effect=_fake_run),
+        ):
+            run_wmql_bundle_segmentation(
+                WMQLConfig(
+                    subject_id="100307",
+                    input_tractography=self.tractography,
+                    atlas_path=self.atlas,
+                    output_dir=self.output_dir,
+                    tract_querier_root=self.tract_querier_root,
+                    python_executable=self.python,
+                    execute=True,
+                )
+            )
+
+        for key in ("OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "BLIS_NUM_THREADS", "NUMEXPR_NUM_THREADS"):
+            self.assertEqual(captured_env.get(key), "1")
+
+    def test_wmql_accel_multithreaded_affine_matches_single_thread(self) -> None:
+        import numpy as np
+        from tractography.wmql_accel import FastTractographySpatialIndexing
+
+        rng = np.random.default_rng(42)
+        img = np.zeros((16, 18, 14), dtype=np.int32)
+        img[2:8, 2:10, 2:8] = 1001
+        img[8:14, 6:15, 5:12] = 2002
+        # Non-trivial rotated/scaled/translated affine
+        theta = 0.25
+        affine = np.array(
+            [
+                [1.25 * np.cos(theta), -1.25 * np.sin(theta), 0.0, -10.5],
+                [1.25 * np.sin(theta), 1.25 * np.cos(theta), 0.0, -12.0],
+                [0.0, 0.0, 1.5, -8.25],
+                [0.0, 0.0, 0.0, 1.0],
+            ],
+            dtype=np.float64,
+        )
+        # > 2 * 16384 streamlines so _index_cpu exercises ThreadPoolExecutor across multiple chunks
+        n_tracts = 36000
+        lengths = np.full(n_tracts, 3, dtype=np.int64)
+        offsets = np.arange(0, (n_tracts + 1) * 3, 3, dtype=np.int64)
+        ijk_pts = rng.uniform(-1.0, 17.0, size=(n_tracts * 3, 3))
+        points = (ijk_pts @ affine[:3, :3].T + affine[:3, 3]).astype(np.float32)
+
+        idx_obj = object.__new__(FastTractographySpatialIndexing)
+        idx_obj.affine_ijk_2_ras = affine
+        idx_obj.affine_ras_2_ijk = np.linalg.inv(affine)
+        idx_obj.crossing_threshold = 2.0
+        uniq_labels = np.unique(img)
+        lut = np.zeros(int(uniq_labels.max()) + 1, dtype=np.int32)
+        lut[uniq_labels] = np.arange(uniq_labels.size, dtype=np.int32)
+
+        res_single = idx_obj._index_cpu(
+            points=points,
+            offsets=offsets,
+            lengths=lengths,
+            img_int=img,
+            uniq_labels=uniq_labels,
+            lut=lut,
+            lut_offset=0,
+            workers=1,
+        )
+        res_multi = idx_obj._index_cpu(
+            points=points,
+            offsets=offsets,
+            lengths=lengths,
+            img_int=img,
+            uniq_labels=uniq_labels,
+            lut=lut,
+            lut_offset=0,
+            workers=8,
+        )
+
+        for a, b in zip(res_single[:-1], res_multi[:-1]):
+            np.testing.assert_array_equal(a, b)
+        self.assertEqual(res_single[-1], res_multi[-1])
+        self.assertTrue(res_multi[-1])
 
 
 if __name__ == "__main__":

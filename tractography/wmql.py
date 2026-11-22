@@ -671,6 +671,8 @@ def run_wmql_bundle_segmentation(
                 elif len(runtime_command) >= 2:
                     runtime_command[1] = accel_script
                 runtime_command.extend(["--device", str(getattr(config, "device", "auto"))])
+                for blas_var in ("OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "BLIS_NUM_THREADS", "NUMEXPR_NUM_THREADS"):
+                    env.setdefault(blas_var, "1")
             manifest['executed_command'] = runtime_command
             run_in_process = False
             if (

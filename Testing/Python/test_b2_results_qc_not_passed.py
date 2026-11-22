@@ -239,6 +239,15 @@ class UnreadableQcPublishedTaskTest(unittest.TestCase):
         candidates, _ = self._rows(task.task)
         self.assertEqual(sorted(item["path"] for item in candidates), sorted(map(str, task.published)))
 
+    def test_b2_morph_fix3_M1_a_same_name_file_of_another_variant_is_not_listed(self) -> None:
+        """Third round (Opus and Codex re-review): the manifest route must keep the published-copy check of the QC
+        route. Another tracking variant overwrote one published file in a shared folder; the task's own stage file
+        still exists and differs, so the published file is not this task's file and must not be listed."""
+        task = PublishedTask(self.root)
+        task.published[0].write_text("the bundle of another tracking variant", encoding="utf-8")
+        candidates, _ = self._rows(task.task)
+        self.assertEqual(sorted(item["path"] for item in candidates), sorted(map(str, task.published[1:])))
+
     def test_b2_morph_fix_M1_the_tree_shows_the_rows_with_the_no_record_mark(self) -> None:
         from shared import ui_run_history
         from shared.run_history import parse_run_manifest

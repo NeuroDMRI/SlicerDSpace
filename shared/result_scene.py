@@ -132,6 +132,8 @@ def _bundle_files_from_task_manifest(task) -> dict:
                 continue
             if not published_file.resolve().is_relative_to(root):
                 continue
+            if not _published_copy_of(value, published_file):
+                continue  # a same-name file of another tracking variant or run (as on the QC route)
             resolved_files["bundle_" + name_only] = str(published_file)
         return resolved_files
     except (OSError, ValueError, TypeError, AttributeError):

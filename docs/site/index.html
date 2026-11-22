@@ -137,6 +137,7 @@
         <div class="start-body">
           <h4>Install 3D Slicer 5.10.0</h4>
           <p>Download and install 3D Slicer 5.10.0 for Windows (x86_64), Linux (x86_64) or Apple Silicon macOS (arm64) from <a class="url-link" href="https://download.slicer.org/" target="_blank" rel="noopener">https://download.slicer.org/</a>.</p>
+          <p class="start-note-inline">To view tractography results, also install the SlicerDMRI extension from Slicer’s Extensions Manager. It is recommended for viewing only; the default analysis runs without it.</p>
           <dl class="start-kv-list">
             <dt>Windows</dt>
             <dd><code>%LOCALAPPDATA%\slicer.org\Slicer 5.10.0\Slicer.exe</code> <span class="muted-inline">(or <code>C:\Program Files\Slicer 5.10.0\Slicer.exe</code>)</span></dd>
@@ -150,7 +151,7 @@
       <li class="start-step">
         <div class="start-body">
           <h4>Download the setup installer</h4>
-          <p>Core workflows, bundled runtimes and anatomical prior models are included in the unified base package. Select your operating system below to download the setup archive, then configure optional WMA white-matter atlases, mirror, proxy or offline paths inside 3D Slicer after restarting (universal setup archives and standalone base bundles are also available at <a class="url-link" href="https://github.com/NeuroDMRI/SlicerDSpace/releases" target="_blank" rel="noopener">https://github.com/NeuroDMRI/SlicerDSpace/releases</a>).</p>
+          <p>Core workflows, bundled runtimes and anatomical prior models are included in the unified base package. Select your operating system below to download the setup archive; set mirror, proxy or offline paths inside 3D Slicer after restarting if needed. Optional WMA white-matter atlases are not part of the setup: SlicerDSpace offers them when you select WMA (universal setup archives and standalone base bundles are also available at <a class="url-link" href="https://github.com/NeuroDMRI/SlicerDSpace/releases" target="_blank" rel="noopener">https://github.com/NeuroDMRI/SlicerDSpace/releases</a>).</p>
           <div class="installer-customizer is-embedded" id="installer-customizer"></div>
         </div>
       </li>
@@ -168,7 +169,7 @@
             </li>
             <li class="start-substep">
               <span class="start-substep-num" aria-hidden="true">3</span>
-              <div class="start-substep-body">After restarting, the setup wizard opens automatically — choose any optional WMA atlases or network settings and click <span class="ui-chip">Start Install</span>. Once deployment finishes, restart Slicer and open <span class="ui-chip">Modules › Diffusion › SlicerDSpace</span>.</div>
+              <div class="start-substep-body">After restarting, the setup wizard opens automatically — set network options if needed and click <span class="ui-chip">Start Install</span>. Once deployment finishes, restart Slicer and open <span class="ui-chip">Modules › Diffusion › SlicerDSpace</span>.</div>
             </li>
           </ol>
           <p class="start-note-inline">For offline machines, standalone OS Base bundles (<code class="pkg-pill">SlicerDSpace-v*-Windows-x64.zip</code> <code class="pkg-pill">SlicerDSpace-v*-Linux-x64.tar.gz</code> <code class="pkg-pill">SlicerDSpace-v*-macOS-arm64.tar.gz</code>) can also be loaded from the same file menu <span class="muted-inline">(do not use GitHub’s automatic Source code archive).</span></p>

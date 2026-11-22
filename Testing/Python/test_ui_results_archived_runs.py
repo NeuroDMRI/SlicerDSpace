@@ -144,6 +144,11 @@ class ShapeTest(ArchivedTestBase):
         self.assertEqual([leaf.data(0, ROLE_PATH) for leaf in leaves], ["/x/fa.nii.gz"])
         self.assertEqual(leaves[0].data(0, ROLE_MANIFEST), str(current.manifest_path))
         self.assertEqual(leaves[0].data(0, ROLE_RUN), 0)
+        # Review R5: the archive that also names fa.nii.gz was read (its archive-only file shows), so the single
+        # fa row above is the result of the dedupe and not of an archive that was never found.
+        count = file_rows(find_child(self.subject(h), "Connectome"))
+        self.assertEqual([leaf.data(0, ROLE_PATH) for leaf in count], ["/x/count.csv"])
+        self.assertEqual(Path(count[0].data(0, ROLE_MANIFEST)).parent.name, "20261121T100043181692Z")
 
     def test_archived_runs_a_row_of_an_archive_carries_the_archive_and_the_index_of_its_owning_record(self) -> None:
         """Rule 4: ROLE_MANIFEST is the archived manifest; ROLE_RUN is the index of the owning current record."""
@@ -306,10 +311,26 @@ class RowActionTest(ArchivedTestBase):
         h.owner.logic = SimpleNamespace(loadKeyResultsFromManifest=load)
         h.owner.parent = None
         h.slicer.util.getNodesByClass.side_effect = lambda name: [n for n in self.nodes if n.class_name == name]
-        patch = mock.patch("shared.result_scene.owned_nodes", side_effect=owned)
-        patch.start()
-        self.addCleanup(patch.stop)
+        h.slicer.mrmlScene.RemoveNode.side_effect = lambda node: self.nodes.remove(node)
+        # Both scene readers: ``owned_nodes`` (one manifest) and ``result_nodes`` (every result node of the scene).
+        self.owned_patch = mock.patch("shared.result_scene.owned_nodes", side_effect=owned)
+        self.scan_patch = mock.patch("shared.result_scene.result_nodes", side_effect=lambda _slicer: list(self.nodes))
+        for patch in (self.owned_patch, self.scan_patch):
+            patch.start()
+            self.addCleanup(patch.stop)
         return loads
+
+    def model_node(self, source: str, manifest: Path, class_name: str = "vtkMRMLModelNode", **attributes):
+        """A node that the plugin loaded earlier: owned by ``manifest`` (resolved, as the logic writes it)."""
+
+        class Node(FakeNode):
+            def IsA(self, name):
+                return name == self.class_name
+
+        node = Node(Path(source).name, class_name, attributes={
+            "SlicerDDSurfer.Run": str(Path(manifest).resolve()), "SlicerDDSurfer.SourcePath": source, **attributes})
+        self.nodes.append(node)
+        return node
 
     def test_archived_runs_the_eye_of_an_archived_row_loads_and_hide_everything_hides_it(self) -> None:
         """Rule 4 (f): eye toggle, icon refresh and "hide everything shown" on a row of an archive."""
@@ -366,6 +387,294 @@ class RowActionTest(ArchivedTestBase):
         ui_run_history.show_record(h.owner, current, json.loads(current.manifest_path.read_text("utf-8")))
         self.assertEqual(h.tree.currentItem().data(0, ROLE_PATH), leaf.data(0, ROLE_PATH))
         self.assertEqual(len(file_rows(self.subject(h))), 9)  # the show_record rebuild keeps the archives
+
+
+# --------------------------------------------------------------------------------------- review fix round (R1-R5)
+
+class FixR1NodesTest(RowActionTest):
+    """Review R1: the nodes of a row are the nodes with the row's file that ANY manifest of the row's owning record
+    owns (its current manifest and its archives). A node loaded before a re-run is owned by the current manifest
+    path; after the re-run the row comes from the archive."""
+
+    def rerun_without_tractography(self):
+        record = make_manifest(self.root, "sub1", "Test1", "2026-11-01T10:00:00Z", [
+            ("microstructure.dti", "/x/fa.nii.gz"), ("tractography.ukf", "/x/ukf.vtk")])
+        h = self.harness([record])
+        loads = self.scene(h)
+        ukf = file_rows(find_child(find_child(self.subject(h), "Tractography"), "UKF"))[0]
+        h.tree.itemClicked.emit(ukf, 1)  # run 1: the eye loads the tractogram, owned by the CURRENT manifest path
+        self.assertEqual(loads, [(record.manifest_path, Path("/x/ukf.vtk"))])
+        archive = archive_current(record, "20261102T000000000000Z")
+        rerun = make_manifest(self.root, "sub1", "Test1", "2026-11-02T10:00:00Z", [
+            ("microstructure.dti", "/x/fa.nii.gz")])
+        h.refresh([rerun])
+        ukf = file_rows(find_child(find_child(self.subject(h), "Tractography"), "UKF"))[0]
+        self.assertEqual(ukf.data(0, ROLE_MANIFEST), str(archive))  # settled: the row carries the archive
+        return h, loads, ukf, rerun
+
+    def test_b2_results_fix_R1_the_eye_of_an_archived_row_sees_a_node_loaded_before_the_rerun(self) -> None:
+        h, loads, ukf, _rerun = self.rerun_without_tractography()
+        self.assertEqual(len(self.nodes), 1)
+        self.assertEqual(ukf.tooltips[1], "Hide fiber bundle")  # the eye is on: the node is visible
+        h.tree.itemClicked.emit(ukf, 1)
+        h.slicer.util.errorDisplay.assert_not_called()
+        self.assertEqual(len(loads), 1)  # no second copy
+        self.assertEqual(len(self.nodes), 1)
+        self.assertEqual(self.nodes[0].GetDisplayVisibility(), 0)  # the click hid the node
+        self.assertEqual(ukf.tooltips[1], "Show as fiber bundle")
+
+    def test_b2_results_fix_R1_unload_is_offered_for_a_node_loaded_before_the_rerun(self) -> None:
+        h, _loads, ukf, _rerun = self.rerun_without_tractography()
+        offered = []
+        h.tree.itemAt = lambda _position: ukf
+        h.pick = lambda menu: offered.extend(action.text for action in menu.actions) or next(
+            (action for action in menu.actions if action.text == "Unload from scene"), None)
+        ui_run_history._output_menu(h.owner, (3, 3))
+        self.assertIn("Unload from scene", offered)
+        self.assertEqual(self.nodes, [])  # Unload removed the node
+        self.assertEqual(ukf.tooltips[1], "Show as fiber bundle")
+
+    def test_b2_results_fix_R1_a_node_of_another_record_with_the_same_file_is_not_matched(self) -> None:
+        """Two records must not see each other's nodes: the archive of Test1 is not Other's manifest."""
+
+        current = make_manifest(self.root, "sub1", "Test1", "2026-11-03T10:00:00Z", [("qc.summary", "/x/qc.txt")])
+        archive_manifest(self.root, "sub1", "Test1", "20261102T000000000000Z", "2026-11-02T10:00:00Z",
+                         [("tractography.ukf", "/x/ukf.vtk")])
+        other = make_manifest(self.root, "sub1", "Other", "2026-11-04T10:00:00Z", [("qc.summary", "/x/qc2.txt")])
+        h = self.harness([other, current])
+        loads = self.scene(h)
+        self.model_node("/x/ukf.vtk", other.manifest_path)  # same file, another record
+        ui_run_history._refresh_output_visibility(h.owner)
+        ukf = file_rows(find_child(find_child(self.subject(h), "Tractography"), "UKF"))[0]
+        self.assertEqual(ukf.data(0, ROLE_RUN), 1)  # the row belongs to Test1
+        self.assertEqual(ukf.tooltips[1], "Show as fiber bundle")
+        h.tree.itemClicked.emit(ukf, 1)
+        self.assertEqual(len(loads), 1)  # Test1's archive loads its own copy
+
+    def test_b2_results_fix_R1_one_scene_scan_per_refresh_pass(self) -> None:
+        """Opus P2 (same code): one scene scan grouped by the Run attribute, not one ``owned_nodes`` per manifest."""
+
+        current = self.shape_3167()
+        h = self.harness([current])
+        self.scene(h)
+        self.model_node("/x/ukf.vtk", current.manifest_path)
+        with mock.patch("shared.result_scene.owned_nodes", side_effect=AssertionError("one scan per manifest")), \
+                mock.patch("shared.result_scene.result_nodes", side_effect=lambda _s: list(self.nodes)) as scan:
+            ui_run_history._refresh_output_visibility(h.owner)
+        self.assertEqual(scan.call_count, 1)
+        ukf = file_rows(find_child(find_child(self.subject(h), "Tractography"), "UKF"))[0]
+        self.assertEqual(ukf.tooltips[1], "Hide fiber bundle")
+
+    def test_b2_results_fix_R1_edit_tissue_on_an_archived_row_reads_the_manifest_that_owns_the_loaded_labels(self):
+        """Edit tissue copy: ``_manage_result_scene`` looks for the labels of ONE manifest; for a row of an archive
+        whose label map was loaded before the re-run, that is the current manifest path that owns the node."""
+
+        record = make_manifest(self.root, "sub1", "Test1", "2026-11-01T10:00:00Z", [
+            ("segmentation.ddseg", "/x/tissue.nii.gz")])
+        h = self.harness([record])
+        self.scene(h)
+        self.model_node("/x/tissue.nii.gz", record.manifest_path, "vtkMRMLLabelMapVolumeNode",
+                        **{"SlicerDDSurfer.Product": "segmentation.ddseg"})
+        archive_current(record, "20261102T000000000000Z")
+        rerun = make_manifest(self.root, "sub1", "Test1", "2026-11-02T10:00:00Z", [("qc.summary", "/x/qc.txt")])
+        h.refresh([rerun])
+        seg = file_rows(find_child(find_child(self.subject(h), "Anatomical priors"), "Tissue segmentation"))[0]
+        self.assertNotEqual(seg.data(0, ROLE_MANIFEST), str(rerun.manifest_path))
+        seen = []
+        h.owner._manage_result_scene = lambda mode: seen.append(
+            (mode, ui_run_history.validated_selected_manifest(h.owner)[0]))
+        h.tree.itemAt = lambda _position: seg
+        h.pick = lambda menu: next(action for action in menu.actions if action.text.startswith("Edit tissue"))
+        ui_run_history._output_menu(h.owner, (3, 3))
+        self.assertEqual(seen, [("edit_tissue", rerun.manifest_path)])
+
+
+class FixR2ShowHiddenTest(ArchivedTestBase):
+    """Review R2 (recorded scope change to rule 6): "Show hidden results" also brings back the stamp-filtered
+    archives of records that are shown. They count for the menu entry; the action clears their stamps."""
+
+    def test_b2_results_fix_R2_show_hidden_counts_and_restores_the_hidden_archives_of_a_shown_record(self) -> None:
+        a = make_manifest(self.root, "subA", "Test1", "2026-11-01T10:00:00Z", [("microstructure.dti", "/a/fa.nii")])
+        archive_manifest(self.root, "subA", "Test1", "20261030T000000000000Z", "2026-10-30T10:00:00Z",
+                         [("tractography.ukf", "/a/before_hide.vtk")])
+        b = make_manifest(self.root, "subB", "Run", "2026-11-01T11:00:00Z", [("microstructure.dti", "/b/fa.nii")])
+        h = self.harness([a, b], settings=FakeSettings())
+        ui_run_history._hide_records(h.owner, [a, b])
+        # subA re-runs after the hide; subB stays hidden.
+        archive_current(a, "20261102T000000000000Z")
+        rerun = make_manifest(self.root, "subA", "Test1", "2026-11-02T10:00:00Z", [("qc.summary", "/a/qc.txt")])
+        h.refresh([rerun, b])
+        self.assertEqual(every_file(self.subject(h, "subA")), ["/a/qc.txt"])  # automatic rule: only the newer run
+        self.assertEqual(h.owner._resultsHiddenRecords, (b,))  # an archive is not a run record
+        entry = ui_run_history.results_menu_entries(h.owner)[1]
+        # One hidden record (subB) + two hidden archives of subA (its manifest from before the hide, and the older).
+        self.assertEqual(entry[:2], ("Show hidden results (3)", True))
+        entry[3]()  # the action
+        self.assertEqual(sorted(every_file(self.subject(h, "subA"))),
+                         ["/a/before_hide.vtk", "/a/fa.nii", "/a/qc.txt"])
+        self.assertEqual(every_file(self.subject(h, "subB")), ["/b/fa.nii"])
+        self.assertEqual(ui_run_history.load_hidden_runs(), {})
+        self.assertEqual(ui_run_history.results_menu_entries(h.owner)[1][:2], ("Show hidden results (0)", False))
+
+    def test_b2_results_fix_R2_the_hidden_archives_alone_enable_the_entry(self) -> None:
+        """No record is hidden any more; only the stamp-filtered archives remain: the entry is enabled."""
+
+        a = make_manifest(self.root, "subA", "Test1", "2026-11-01T10:00:00Z", [("microstructure.dti", "/a/fa.nii")])
+        h = self.harness([a], settings=FakeSettings())
+        ui_run_history._hide_records(h.owner, [a])
+        archive_current(a, "20261102T000000000000Z")
+        rerun = make_manifest(self.root, "subA", "Test1", "2026-11-02T10:00:00Z", [("qc.summary", "/a/qc.txt")])
+        h.refresh([rerun])
+        self.assertEqual(h.owner._resultsHiddenRecords, ())
+        self.assertEqual(ui_run_history.results_menu_entries(h.owner)[1][:2], ("Show hidden results (1)", True))
+        ui_run_history.show_hidden_results(h.owner)
+        self.assertEqual(sorted(every_file(self.subject(h, "subA"))), ["/a/fa.nii", "/a/qc.txt"])
+
+
+class FixR3TimeTest(ArchivedTestBase):
+    """Review R3: the time of an archive is its recorded time fields, then the ``<stamp>`` folder name; the file
+    mtime only when both are missing."""
+
+    def test_b2_results_fix_R3_a_touched_old_archive_without_a_recorded_time_does_not_win_a_path(self) -> None:
+        current = make_manifest(self.root, "sub1", "Test1", "2026-11-10T10:00:00Z", [("qc.summary", "/x/qc.txt")])
+        recorded = archive_manifest(self.root, "sub1", "Test1", "20261105T000000000000Z", "2026-11-05T10:00:00Z",
+                                    [("tractography.ukf", "/x/ukf.vtk")])
+        touched = archive_manifest(self.root, "sub1", "Test1", "20261001T000000000000Z", None,
+                                   [("tractography.ukf", "/x/ukf.vtk")])
+        os.utime(touched)  # copied or touched today: the mtime is newer than every recorded time
+        h = self.harness([current])
+        ukf = file_rows(find_child(find_child(self.subject(h), "Tractography"), "UKF"))[0]
+        self.assertEqual(ukf.data(0, ROLE_MANIFEST), str(recorded))
+        entry = next(e for e in run_history.archived_run_manifests(current) if e.path == touched)
+        self.assertEqual(run_history.read_archived_manifest(entry)[1].isoformat(), "2026-10-01T00:00:00+00:00")
+
+    def test_b2_results_fix_R3_the_mtime_is_the_last_fallback(self) -> None:
+        current = make_manifest(self.root, "sub1", "Test1", "2026-11-10T10:00:00Z", [("qc.summary", "/x/qc.txt")])
+        copied = archive_manifest(self.root, "sub1", "Test1", "manual_copy", None, [("tractography.ukf", "/x/u.vtk")])
+        entry = next(e for e in run_history.archived_run_manifests(current) if e.path == copied)
+        when = run_history.read_archived_manifest(entry)[1]
+        self.assertAlmostEqual(when.timestamp(), copied.stat().st_mtime, delta=1.0)
+
+
+class FixR4BrokenArchiveTest(ArchivedTestBase):
+    """Review R4: an archive that parses but has a broken task structure is skipped with one log line; the other
+    results still show."""
+
+    def test_b2_results_fix_R4_a_broken_task_structure_in_an_archive_skips_only_that_archive(self) -> None:
+        files = self.root / "files"
+        files.mkdir()
+        for name in ("fa.nii.gz", "ukf.vtk", "old.vtk"):
+            (files / name).write_text("x", encoding="utf-8")
+        current = make_manifest(self.root, "sub1", "Test1", "2026-11-10T10:00:00Z", [])
+        payload = json.loads(current.manifest_path.read_text(encoding="utf-8"))
+        payload.pop("cands")
+        payload["tasks"] = [{"name": "microstructure.dti", "status": "completed",
+                             "outputs": {"fa": str(files / "fa.nii.gz")}}]
+        current.manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+        good = {"name": "tractography.ukf", "status": "completed", "outputs": {"tractogram": str(files / "ukf.vtk")}}
+        broken = archive_manifest(self.root, "sub1", "Test1", "20261105T000000000000Z", "2026-11-05T10:00:00Z",
+                                  tasks=[good, {"name": "bundles.wmql", "status": "completed", "outputs": 42}])
+        # An older archive with the same good task (and one more file): the broken archive must not have used it up.
+        archive_manifest(self.root, "sub1", "Test1", "20261101T000000000000Z", "2026-11-01T10:00:00Z", tasks=[
+            good, {"name": "tractography.dti_det", "status": "completed",
+                   "outputs": {"tractogram": str(files / "old.vtk")}}])
+        h = Harness(self)
+        h.tree.viewport = lambda: SimpleNamespace(mapToGlobal=lambda position: position)
+        with mock.patch("shared.result_scene.result_candidates", side_effect=REAL_RESULT_CANDIDATES), \
+                self.assertLogs("shared.ui_run_history", level="WARNING") as logs:
+            h.refresh([parse_run_manifest(current.manifest_path)])
+        subject = self.subject(h)
+        self.assertEqual(sorted(Path(path).name for path in every_file(subject)), ["fa.nii.gz", "old.vtk", "ukf.vtk"])
+        ukf = next(leaf for leaf in file_rows(subject) if leaf.data(0, ROLE_PATH).endswith("ukf.vtk"))
+        self.assertEqual(Path(ukf.data(0, ROLE_MANIFEST)).parent.name, "20261101T000000000000Z")
+        self.assertEqual(len(logs.output), 1)
+        self.assertIn(str(broken), logs.output[0])
+        h.slicer.util.errorDisplay.assert_not_called()
+
+
+class FixR5MemoTest(ArchivedTestBase):
+    """Review R5: tests for the skip rule of one subject rebuild (``_without_repeated_tasks`` / ``_task_memo_key``)
+    and for the QC-folder memo with ``metadata_dir``."""
+
+    def test_b2_results_fix_R5_an_identical_task_of_an_older_manifest_is_skipped(self) -> None:
+        memo = {"tasks": set(), "qc_dirs": {}}
+        task = {"name": "tractography.ukf", "status": "completed", "reason": "", "qc_path": "/q.json",
+                "outputs": {"tractogram": "/x/ukf.vtk"}}
+        newer = {"subject_root": "/s", "output_root": "/s/outputs", "tasks": [task]}
+        self.assertIs(ui_run_history._without_repeated_tasks(newer, memo), newer)
+        older = dict(newer, tasks=[dict(task)])
+        self.assertEqual(ui_run_history._without_repeated_tasks(older, memo)["tasks"], [])
+
+    def test_b2_results_fix_R5_a_task_that_differs_in_a_field_the_listing_reads_is_not_skipped(self) -> None:
+        task = {"name": "tractography.ukf", "status": "completed", "reason": "", "qc_path": "/q.json",
+                "outputs": {"tractogram": "/x/ukf.vtk"}}
+        base = {"subject_root": "/s", "output_root": "/s/outputs", "tasks": [task]}
+        changes = {"status": dict(task, status="failed"), "reason": dict(task, reason="qc failed"),
+                   "qc_path": dict(task, qc_path="/other.json"),
+                   "outputs": dict(task, outputs={"tractogram": "/y.vtk"}),
+                   "name": dict(task, name="tractography.csd_act")}
+        for field, changed in changes.items():
+            with self.subTest(field=field):
+                memo = {"tasks": set(), "qc_dirs": {}}
+                ui_run_history._without_repeated_tasks(base, memo)
+                self.assertEqual(ui_run_history._without_repeated_tasks(dict(base, tasks=[changed]), memo)["tasks"],
+                                 [changed])
+        for root in ("subject_root", "output_root"):
+            with self.subTest(root=root):
+                memo = {"tasks": set(), "qc_dirs": {}}
+                ui_run_history._without_repeated_tasks(base, memo)
+                moved = dict(base, **{root: "/elsewhere"})
+                self.assertEqual(ui_run_history._without_repeated_tasks(moved, memo)["tasks"], [task])
+
+    def test_b2_results_fix_R5_a_preprocessing_task_is_never_skipped(self) -> None:
+        memo = {"tasks": set(), "qc_dirs": {}}
+        task = {"name": "preprocessing.dwi", "status": "completed", "outputs": {"dwi": "/x/dwi.nii.gz"}}
+        manifest = {"tasks": [task]}
+        self.assertIsNone(ui_run_history._task_memo_key(manifest, task))
+        ui_run_history._without_repeated_tasks(manifest, memo)
+        self.assertEqual(ui_run_history._without_repeated_tasks(dict(manifest), memo)["tasks"], [task])
+
+    def test_b2_results_fix_R5_an_archive_reads_qc_rows_from_the_owning_records_folder_once(self) -> None:
+        """An archive without ``output_root`` falls back to ``<owning 00_run_metadata>/../06_qc`` (not to a folder
+        under ``history/``), and the folder is scanned once for all manifests of the rebuild."""
+
+        current = make_manifest(self.root, "sub1", "Test1", "2026-11-10T10:00:00Z", [("qc.summary", "/x/q.txt")])
+        # The current manifest names another output root with its own QC folder.
+        elsewhere = self.root / "elsewhere"
+        (elsewhere / "06_qc").mkdir(parents=True)
+        (elsewhere / "06_qc" / "current.txt").write_text("x", encoding="utf-8")
+        payload = json.loads(current.manifest_path.read_text(encoding="utf-8"))
+        payload["output_root"] = str(elsewhere)
+        current.manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+        current = parse_run_manifest(current.manifest_path)
+        # The archives name no output root: their QC folder is the one next to the owning 00_run_metadata.
+        qc_dir = current.manifest_path.parent.parent / "06_qc"
+        qc_dir.mkdir()
+        (qc_dir / "report.txt").write_text("x", encoding="utf-8")
+        newer = archive_manifest(self.root, "sub1", "Test1", "20261102T000000000000Z", "2026-11-02T10:00:00Z",
+                                 [("tractography.ukf", "/x/ukf02.vtk")])
+        archive_manifest(self.root, "sub1", "Test1", "20261101T000000000000Z", "2026-11-01T10:00:00Z",
+                         [("tractography.ukf", "/x/ukf01.vtk")])
+        real_rglob = Path.rglob
+        scanned = []
+
+        def rglob(path, pattern):
+            scanned.append(str(path))
+            return real_rglob(path, pattern)
+
+        h = Harness(self)
+        real_fill = ui_run_history._fill_subject_children
+        with mock.patch.object(Path, "rglob", autospec=True, side_effect=rglob), \
+                mock.patch.object(ui_run_history, "_fill_subject_children", side_effect=real_fill) as fills:
+            h.refresh([current])
+        subject = self.subject(h)
+        report = str((qc_dir / "report.txt").resolve())
+        self.assertEqual([path for path in every_file(subject) if path.endswith(".txt") and "/x/" not in path],
+                         [str((elsewhere / "06_qc" / "current.txt").resolve()), report])
+        # Each folder once per subject rebuild (a refresh rebuilds the subject again when it selects the run).
+        self.assertEqual(scanned, [str(elsewhere / "06_qc"), str(qc_dir)] * fills.call_count)
+        row = next(leaf for leaf in file_rows(subject) if leaf.data(0, ROLE_PATH) == report)
+        self.assertEqual(row.data(0, ROLE_MANIFEST), str(newer))
 
 
 if __name__ == "__main__":

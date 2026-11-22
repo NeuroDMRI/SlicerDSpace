@@ -8,6 +8,7 @@ only builds widgets and moves data between them and the owner widget.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import time
@@ -113,10 +114,21 @@ _SUBGROUP_ALIASES = {("tractography", "act"): "csd_act"}
 # Results sources (batch 2): in the bundles and connectome families a subgroup is one (algorithm, tractography source)
 # pair, id "<algorithm>@<source>" ("<algorithm>" when the source is unknown), caption "WMQL · UKF". The source order
 # after the unknown source, and the captions: the tractography subgroup names above (one name for one thing); the GUI
-# has no name yet for a user's own tractogram file, so "supplied" gets its own caption.
+# has no name yet for a user's own tractogram file, so "supplied" gets its own caption. Review R7: a SAF child
+# publishes to "<product>/saf/" and "05_connectome/saf/" (orchestrator._bundle_publish_backend), caption "CSD + SAF".
 RESULT_SOURCE_FAMILIES = ("bundles", "connectome")
-RESULT_SOURCE_ORDER = ("ukf", "csd_act", "dti_det", "supplied")
-RESULT_TRACKING_SOURCES = ("ukf", "csd_act", "dti_det")  # what an "@<backend>" suffix or tracking_backend may name
+RESULT_SOURCE_ORDER = ("ukf", "csd_act", "saf", "dti_det", "supplied")
+RESULT_TRACKING_SOURCES = ("ukf", "csd_act", "saf", "dti_det")  # what an "@<backend>" suffix or tracking_backend names
+# Review R6: the bundle algorithms that always read the tracking variant's own tractogram. The orchestrator config has
+# a user-file input for WMA and TractCloud only (wma_input_tractography, tractcloud_input_tractography), and the
+# manifest that carries "@<backend>" (multi-tracking parent) records no input file, so only these may take the source
+# from the variant (rule 2 step b), unless the manifest records bundle_tractography_backend (see _task_source).
+RESULT_OWN_TRACTOGRAM_BUNDLES = ("wmql",)
+# Review R8: the published folders of shared/io_layout.py (SubjectLayout.bundles, .connectome, .cache_stages). The
+# names are literals here because io_layout only spells them inside the layout properties; a test pins them.
+RESULT_BUNDLES_FOLDER = "04_bundles"
+RESULT_CONNECTOME_FOLDER = "05_connectome"
+RESULT_STAGE_CACHE_PARTS = ("cache", "stages")
 RESULT_SOURCE_CAPTIONS = {
     **{source: RESULT_SUBGROUP_CAPTIONS[("tractography", source)] for source in RESULT_TRACKING_SOURCES},
     "supplied": ("supplied file", "自备文件"),
@@ -1431,37 +1443,59 @@ def _subgroup_caption(key: str, zh: bool) -> str:
     return RESULT_SUBGROUP_CAPTIONS.get((family, subgroup), (subgroup, subgroup))[int(zh)]
 
 
-def _last_folder(value: Any, *, parent: bool) -> str:
-    """The last folder name of a path text (or of its parent folder), for "/" and "\\" separators."""
+def _path_parts(value: Any) -> list:
+    """The folder names of a path text, for "/" and "\\" separators."""
 
-    parts = [part for part in re.split(r"[\\/]+", str(value or "").strip()) if part]
-    if parent:
-        parts = parts[:-1]
-    return parts[-1] if parts else ""
+    return [part for part in re.split(r"[\\/]+", str(value or "").strip()) if part]
 
 
-def _task_source(family: str, task: dict) -> Optional[str]:
+def _published_source(parts: list, top: str, source_index: int) -> Optional[str]:
+    """Review R8: the source folder of a path in the published layout only: the third name from the end is ``top``
+    (``04_bundles/<product>/<source>``: source ``parts[-1]``; ``05_connectome/<source>/<file>``: source
+    ``parts[-2]``), and the path is not in the stage cache. A legacy or stage folder is named after the RUN (the CLI
+    default run name is ``csd_act``), so it never counts."""
+
+    if len(parts) < 3 or parts[-3] != top or parts[source_index] not in RESULT_SOURCE_ORDER:
+        return None
+    head = tuple(parts[:-3])
+    size = len(RESULT_STAGE_CACHE_PARTS)
+    if any(head[i:i + size] == RESULT_STAGE_CACHE_PARTS for i in range(len(head) - size + 1)):
+        return None
+    return parts[source_index]
+
+
+def _task_source(family: str, task: dict, manifest: Optional[dict] = None) -> Optional[str]:
     """Results sources rule 2: the tractography source of a bundles or connectome task, or None when unknown.
 
     a. The published folder: bundles ``outputs["output_dir"]`` (``04_bundles/<product>/<source>``), connectome the
        parent folder of ``outputs["matrix_path"]`` / ``outputs["matrix"]`` (``05_connectome/<source>/``); only a
-       known source counts. It comes first: a ukf variant that ran on the user's file publishes to ``supplied``.
+       known source in the published layout counts (review R8). It comes first: a ukf variant that ran on the user's
+       file publishes to ``supplied``.
     b. Bundles only: the ``@<backend>`` suffix of the task name (multi-tracking), else the ``tracking_backend``
-       field; only a tracking backend counts. Not for the connectome: an old flat connectome file can hold another
-       variant's matrix.
+       field; only a tracking backend counts, and only when the record shows that the product did not read a
+       user-supplied tractogram (review R6): WMQL always (no user-file input), and every bundle algorithm of a run
+       whose ``manifest`` records ``bundle_tractography_backend`` (the orchestrator refuses that setting together
+       with a WMA or TractCloud input file). Otherwise the manifest cannot tell and the source is unknown. Not for the
+       connectome: an old flat connectome file can hold another variant's matrix.
     """
 
     if family not in RESULT_SOURCE_FAMILIES:
         return None
     outputs = task.get("outputs") if isinstance(task.get("outputs"), dict) else {}
     if family == "bundles":
-        folder = _last_folder(outputs.get("output_dir"), parent=False)
+        found = _published_source(_path_parts(outputs.get("output_dir")), RESULT_BUNDLES_FOLDER, -1)
     else:
-        folder = _last_folder(outputs.get("matrix_path") or outputs.get("matrix"), parent=True)
-    if folder in RESULT_SOURCE_ORDER:
-        return folder
+        found = _published_source(_path_parts(outputs.get("matrix_path") or outputs.get("matrix")),
+                                  RESULT_CONNECTOME_FOLDER, -2)
+    if found is not None:
+        return found
     if family == "bundles":
-        suffix = str(task.get("name") or "").partition("@")[2]
+        name = str(task.get("name") or "")
+        product = str(task.get("product") or name.partition("@")[0])
+        no_supplied_file = bool(str((manifest or {}).get("bundle_tractography_backend") or "").strip())
+        if product.partition(".")[2] not in RESULT_OWN_TRACTOGRAM_BUNDLES and not no_supplied_file:
+            return None
+        suffix = name.partition("@")[2]
         if suffix in RESULT_TRACKING_SOURCES:
             return suffix
         backend = str(task.get("tracking_backend") or "")
@@ -1672,12 +1706,19 @@ def _archive_context(owner: Any, records=None) -> tuple[dict, dict]:
 def _subject_manifests(owner: Any, records, indices, manifests: Optional[dict], context) -> list:
     """The current and the archived manifests of a subject's runs as one newest-first sequence.
 
-    Each entry is ``(manifest, manifest path, owning run index, metadata folder of the owning record)``. An archive
-    is not a run: it carries the index of its owning record. Archives older than the stored hide stamp of their
-    owning record stay hidden (Results hide rules); a broken archive is skipped.
+    Each entry is ``(manifest, manifest path, owning run index, metadata folder of the owning record, archived)``.
+    An archive is not a run: it carries the index of its owning record. Archives older than the stored hide stamp of
+    their owning record stay hidden (Results hide rules); a broken archive is skipped.
+
+    Also kept on ``owner`` for the rows of this rebuild (review R1, R2): ``_resultsRunManifests`` (run index -> the
+    current manifest and every archive of the record; the scene nodes of a row are the nodes that any of them owns;
+    the paths are resolved only when a row looks for its nodes) and ``_resultsHiddenArchives`` (record key ->
+    (record, number of archives that the hide stamp keeps hidden); "Show hidden results" counts and restores them).
     """
 
     hidden, folders = context if context is not None else _archive_context(owner, records)
+    run_manifests = _owner_dict(owner, "_resultsRunManifests")
+    hidden_archives = _owner_dict(owner, "_resultsHiddenArchives")
     entries = []
     for position, index in enumerate(indices):
         record = records[index]
@@ -1689,17 +1730,37 @@ def _subject_manifests(owner: Any, records, indices, manifests: Optional[dict], 
             entries.append((_record_stamp(record), 0, position, manifest, record.manifest_path, index, metadata))
         key = run_record_key(record)
         hide_stamp = (float("-inf") if hidden[key] is None else float(hidden[key])) if key in hidden else None
-        for archive in archived_run_manifests(record, folders.get(str(metadata), ())):
+        archives = archived_run_manifests(record, folders.get(str(metadata), ()))
+        run_manifests[index] = (record.manifest_path, *(archive.path for archive in archives))  # resolved on use
+        _owner_dict(owner, "_resultsRunManifestKeys").pop(index, None)
+        kept_hidden = 0
+        for archive in archives:
             parsed = read_archived_manifest(archive)
             if parsed is None:
                 continue
             payload, when = parsed
             stamp = when.timestamp() if when is not None else float("-inf")
             if hide_stamp is not None and stamp <= hide_stamp:
+                kept_hidden += 1
                 continue
             entries.append((stamp, 1, position, payload, archive.path, index, metadata))
+        if kept_hidden:
+            hidden_archives[key] = (record, kept_hidden)
+        else:
+            hidden_archives.pop(key, None)
     entries.sort(key=lambda entry: (-entry[0], entry[1], entry[2]))
-    return [entry[3:] for entry in entries]
+    return [(*entry[3:], bool(entry[1])) for entry in entries]
+
+
+def _owner_dict(owner: Any, name: str) -> dict:
+    value = getattr(owner, name, None)
+    if not isinstance(value, dict):
+        value = {}
+        setattr(owner, name, value)
+    return value
+
+
+_BROKEN_ARCHIVES_LOGGED: set = set()
 
 
 def _fill_subject_children(owner: Any, subject_item: Any, records, indices, manifests: Optional[dict] = None,
@@ -1707,15 +1768,27 @@ def _fill_subject_children(owner: Any, subject_item: Any, records, indices, mani
     """Add the families and files of every run of a subject, newest manifest first, each family and file once.
 
     The archived manifests of the runs (``history/``) add the files that a re-run of the same run name moved out of
-    the current manifest.
+    the current manifest. Review R4: an archive with a broken task structure is skipped (one log line), and the
+    tasks it put in the memo are taken out again, so an older manifest with the same task still gives its rows.
     """
 
     memo: dict = {"tasks": set(), "qc_dirs": {}}
-    for manifest, manifest_path, index, metadata in _subject_manifests(owner, records, indices, manifests, context):
-        _populate_manifest_output_items(
-            owner, subject_item, manifest, manifest_path=manifest_path, run_index=index,
-            metadata_dir=metadata, memo=memo,
-        )
+    for manifest, manifest_path, index, metadata, archived in _subject_manifests(
+            owner, records, indices, manifests, context):
+        saved = (set(memo["tasks"]), dict(memo["qc_dirs"])) if archived else None
+        try:
+            _populate_manifest_output_items(
+                owner, subject_item, manifest, manifest_path=manifest_path, run_index=index,
+                metadata_dir=metadata, memo=memo,
+            )
+        except Exception as exc:
+            if saved is None:
+                raise
+            memo["tasks"], memo["qc_dirs"] = saved
+            if str(manifest_path) not in _BROKEN_ARCHIVES_LOGGED:
+                _BROKEN_ARCHIVES_LOGGED.add(str(manifest_path))
+                logging.getLogger(__name__).warning(
+                    "Results: skipped the archived manifest %s (%s: %s).", manifest_path, type(exc).__name__, exc)
     _order_families(subject_item)
 
 
@@ -1781,6 +1854,10 @@ def _populate_run_tree(owner, records, current_index):
     import qt
 
     owner._runTreeRecords = tuple(records)  # as scanned; the labels below use the session's end states (FD4)
+    # Filled again by the subjects below (review R1, R2); the empty-state count reads them before the fill.
+    owner._resultsRunManifests = {}
+    owner._resultsRunManifestKeys = {}
+    owner._resultsHiddenArchives = {}
     records = _with_ended_runs(owner, records)
     running = running_subject_id(owner)
     has_content = bool(records) or bool(running)
@@ -1976,11 +2053,64 @@ def save_run_output_folder(owner: Any) -> None:
         save_history_directory(folder)
 
 
-def _output_nodes(slicer, manifest_path, path):
-    from shared.result_scene import owned_nodes
+def _scene_nodes_by_run(slicer) -> dict:
+    """``{Run attribute: {source path: [nodes]}}`` of every result node, from ONE scene scan (review R1)."""
 
-    return [node for node in owned_nodes(slicer, str(manifest_path.resolve()))
-            if node.GetAttribute("SlicerDDSurfer.SourcePath") == str(path)]
+    from shared.result_scene import result_nodes
+
+    grouped: dict = {}
+    for node in result_nodes(slicer):
+        run = node.GetAttribute("SlicerDDSurfer.Run")
+        if run:
+            grouped.setdefault(run, {}).setdefault(node.GetAttribute("SlicerDDSurfer.SourcePath"), []).append(node)
+    return grouped
+
+
+def _row_manifests(owner: Any, item: Any, qt_mod: Any, manifest_path: Any, resolved: Optional[dict] = None):
+    """The manifests whose scene nodes belong to a file row (review R1): every manifest of the row's owning record
+    (its current manifest and its archives, raw and resolved paths), so a node that was loaded before a re-run moved
+    the manifest to ``history/`` still belongs to the row. A row without a known owning record keeps its own
+    manifest. Another record's manifests never count. ``resolved`` caches the resolve of a manifest path."""
+
+    raw = str(manifest_path)
+    cache = resolved if resolved is not None else {}
+    run_idx = item.data(0, _user_role(qt_mod, ROLE_RUN)) if item is not None else None
+    if isinstance(run_idx, int) and not isinstance(run_idx, bool):
+        paths = (getattr(owner, "_resultsRunManifests", None) or {}).get(run_idx)
+        if paths and raw in {str(path) for path in paths}:
+            keys_by_run = _owner_dict(owner, "_resultsRunManifestKeys")
+            keys = keys_by_run.get(run_idx)
+            if keys is None:
+                for path in paths:
+                    if str(path) not in cache:
+                        cache[str(path)] = os.path.realpath(path)
+                keys = keys_by_run[run_idx] = frozenset(
+                    text for path in paths for text in (str(path), cache[str(path)]))
+            return keys
+    if raw not in cache:
+        cache[raw] = os.path.realpath(raw)
+    return frozenset((raw, cache[raw]))
+
+
+def _nodes_of(grouped: dict, manifests, path: Any) -> list:
+    """The nodes of ``path`` that any of ``manifests`` owns, each once."""
+
+    found: list = []
+    seen: set = set()
+    for key, by_path in grouped.items():  # the few Run values of the scene, in scene order
+        if key not in manifests:
+            continue
+        for node in by_path.get(str(path), ()):
+            if id(node) not in seen:
+                seen.add(id(node))
+                found.append(node)
+    return found
+
+
+def _output_nodes(owner, slicer, item, manifest_path, path):
+    import qt
+
+    return _nodes_of(_scene_nodes_by_run(slicer), _row_manifests(owner, item, qt, manifest_path), path)
 
 
 def _slice_connections(slicer, node):
@@ -2039,7 +2169,7 @@ def _toggle_output(owner, item):
         from shared.result_scene import source_stamp
 
         item_kind = item.data(0, _user_role(qt, ROLE_KIND))
-        nodes = _output_nodes(slicer, manifest_path, path)
+        nodes = _output_nodes(owner, slicer, item, manifest_path, path)
         visible = _output_visible(slicer, nodes)
         if not visible and nodes and path.is_file():
             stamp = source_stamp(path)
@@ -2049,7 +2179,7 @@ def _toggle_output(owner, item):
                 nodes = []
         if not nodes:
             result = owner.logic.loadKeyResultsFromManifest(manifest_path, source_path=path)
-            nodes = _output_nodes(slicer, manifest_path, path)
+            nodes = _output_nodes(owner, slicer, item, manifest_path, path)
             if not nodes:
                 error = next((entry["reason"] for entry in result["skipped"] if entry.get("path") == str(path)),
                              "This output is missing or no longer available in the run.")
@@ -2153,12 +2283,19 @@ def _output_menu(owner, position):
     raw_path = item.data(0, _user_role(qt, 0))
     manifest_path = _item_manifest_path(owner, item, qt)
     is_file = isinstance(raw_path, (str, Path)) and bool(raw_path) and manifest_path is not None
-    nodes = _output_nodes(slicer, manifest_path, Path(raw_path)) if is_file else []
+    nodes = _output_nodes(owner, slicer, item, manifest_path, Path(raw_path)) if is_file else []
     is_seg = is_file and item.data(0, _user_role(qt, 1)) == "segmentation"
     # Batch 2 + FD8: take the runs of the whole subject now; no tree item is read after the menu closes.
     remove_records, remove_reason = _removal_for_item(owner, qt, item)
     folder = _top_item(item).data(0, _user_role(qt, ROLE_FOLDER))  # also before exec_ (FD8)
     run_manifest = _owning_manifest_path(owner, item, qt, manifest_path) if is_seg else None  # before exec_ (FD8)
+    # Review R1: Edit tissue reads the label maps of ONE manifest; a label map of this row that was loaded before a
+    # re-run is owned by the manifest path it was loaded from (the current one), not by the archive of the row.
+    edit_manifest = next((node.GetAttribute("SlicerDDSurfer.Run") for node in nodes
+                          if node.IsA("vtkMRMLLabelMapVolumeNode") and str(
+                              node.GetAttribute("SlicerDDSurfer.Product") or "").startswith("segmentation.")),
+                         None) if is_seg else None
+    edit_manifest = Path(edit_manifest) if edit_manifest else manifest_path
     menu = qt.QMenu(tree)
     zh = str(getattr(owner, "_onboardingLanguage", "en")).startswith("zh")
     edit_action = (
@@ -2181,11 +2318,11 @@ def _output_menu(owner, position):
         # so resolve the run from the manifest path taken before the menu opened, never from the item.
         # Archived runs: a row of an archived manifest selects its owning run, and the action reads the archive.
         if _select_manifest_run(owner, run_manifest):
-            if _same_path(run_manifest, manifest_path):
+            if _same_path(run_manifest, edit_manifest):
                 owner._manage_result_scene("edit_tissue")
             else:
                 selected = getattr(owner, "_latestResultManifestPath", None)
-                owner._latestResultManifestPath = manifest_path
+                owner._latestResultManifestPath = edit_manifest
                 try:
                     owner._manage_result_scene("edit_tissue")
                 finally:
@@ -2363,10 +2500,19 @@ def clear_results_list(owner: Any) -> None:
 
 
 def show_hidden_results(owner: Any) -> None:
-    """Show every hidden run that the last scan found again."""
+    """Show every hidden run that the last scan found again, and (review R2) the archives that a hide stamp keeps
+    hidden although their record shows again: the stamps of those records are cleared too."""
 
-    _unhide_records(getattr(owner, "_resultsHiddenRecords", ()) or ())
+    archived = tuple(record for record, _count in (getattr(owner, "_resultsHiddenArchives", None) or {}).values())
+    _unhide_records((*(getattr(owner, "_resultsHiddenRecords", ()) or ()), *archived))
     owner._refresh_run_history()
+
+
+def _hidden_count(owner: Any) -> int:
+    """The number for "Show hidden results": the hidden runs, plus the hidden archives of shown runs (review R2)."""
+
+    archives = getattr(owner, "_resultsHiddenArchives", None) or {}
+    return len(getattr(owner, "_resultsHiddenRecords", ()) or ()) + sum(count for _record, count in archives.values())
 
 
 def _show_hidden_text(owner: Any, count: int) -> str:
@@ -2378,7 +2524,7 @@ def _show_hidden_text(owner: Any, count: int) -> str:
 def results_menu_entries(owner: Any) -> list:
     """(text, enabled, tooltip, action) of the Results list menu, in the current language and state."""
 
-    count = len(getattr(owner, "_resultsHiddenRecords", ()) or ())
+    count = _hidden_count(owner)
     return [
         (_text(owner, "results_clear", "Clear results list"), bool(_clearable_records(owner)),
          _text(owner, "results_clear_tooltip", CLEAR_TOOLTIP), lambda: clear_results_list(owner)),
@@ -2399,7 +2545,7 @@ def _fill_results_menu(owner: Any, menu: Any) -> None:
 def _update_empty_state(owner: Any, has_content: bool) -> None:
     """The empty row: "no runs yet", or after a Clear the cleared text and the show-hidden button."""
 
-    count = len(getattr(owner, "_resultsHiddenRecords", ()) or ())
+    count = _hidden_count(owner)
     cleared = not has_content and count > 0
     label = getattr(owner, "_resultsEmptyLabel", None)
     if label is not None and not has_content:
@@ -2499,7 +2645,7 @@ def refresh_results_language(owner: Any) -> None:
     button = getattr(owner, "_resultsShowHiddenButton", None)
     if button is not None:
         try:
-            button.setText(_show_hidden_text(owner, len(getattr(owner, "_resultsHiddenRecords", ()) or ())))
+            button.setText(_show_hidden_text(owner, _hidden_count(owner)))
         except Exception:
             pass
     _sync_hide_all_text(owner)
@@ -2675,26 +2821,20 @@ def _refresh_output_visibility(owner, *, dark: Optional[bool] = None):
     if tree is None:
         return
     import qt
-    from shared.result_scene import owned_nodes
 
     fallback_manifest = getattr(owner, "_latestResultManifestPath", None)
-    by_path_by_manifest = {}
+    grouped: Optional[dict] = None  # review R1: one scene scan per pass, grouped by the Run attribute
     resolved_manifests: dict = {}  # one resolve (and stat) per manifest path, not one per file row
 
-    def _nodes_for_manifest(mpath: Optional[Path]):
+    def _row_nodes(item: Any, mpath: Optional[Path], raw_path: Any) -> list:
+        nonlocal grouped
         if mpath is None:
-            return {}
-        raw = str(mpath)
-        key = resolved_manifests.get(raw)
-        if key is None:
-            key = resolved_manifests[raw] = str(mpath.resolve())
-        cached = by_path_by_manifest.get(key)
-        if cached is None:
-            cached = {}
-            for node in owned_nodes(slicer, key):
-                cached.setdefault(node.GetAttribute("SlicerDDSurfer.SourcePath"), []).append(node)
-            by_path_by_manifest[key] = cached
-        return cached
+            return []
+        if grouped is None:
+            grouped = _scene_nodes_by_run(slicer)
+        if not grouped:
+            return []
+        return _nodes_of(grouped, _row_manifests(owner, item, qt, mpath, resolved_manifests), raw_path)
 
     zh = str(getattr(owner, "_onboardingLanguage", "en")).startswith("zh")
     try:
@@ -2708,8 +2848,7 @@ def _refresh_output_visibility(owner, *, dark: Optional[bool] = None):
         if item.text(1) == "↗":
             continue
         mpath = _item_manifest_path(owner, item, qt) or (Path(fallback_manifest) if fallback_manifest else None)
-        by_path = _nodes_for_manifest(mpath)
-        visible = _output_visible(slicer, by_path.get(str(raw_path), ()))
+        visible = _output_visible(slicer, _row_nodes(item, mpath, raw_path))
         kind = item.data(0, _user_role(qt, ROLE_KIND))
         item.setIcon(1, _eye_icon(qt, visible, kind=kind, dark=resolved_dark))
         item.setText(1, "")
@@ -2897,7 +3036,7 @@ def _populate_manifest_output_items(
         if family in {"surface", "segmentation", "parcellation", "postprocess"}:
             family = "anatomy"
         subgroup = _result_subgroup(family, product)
-        source = _task_source(family, task_by_name.get(product) or {"name": product}) if subgroup else None
+        source = _task_source(family, task_by_name.get(product) or {"name": product}, manifest) if subgroup else None
         if source is not None:
             subgroup = f"{subgroup}@{source}"
         families.setdefault(family, {}).setdefault(subgroup, {}).update(paths)

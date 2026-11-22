@@ -170,7 +170,9 @@ class LayoutTest(SubgroupTestBase):
             ("tractography.ukf@ukf", "/x/ukf.vtk"), ("connectome.sift2_weighted@csd_act", "/x/sift2.csv")])])
         subject = self.subject(h)
         bundles = find_child(subject, "Fibre bundles")
-        self.assertEqual(child_texts(bundles), ["WMQL (1)", "WMQL · UKF (1)", "WMA · CSD / ACT (1)"])
+        # Review R6 (changed on purpose): "bundles.wma@csd_act" gets no source part; a WMA task of a variant may have
+        # read the user's tractogram, and the manifest cannot tell.
+        self.assertEqual(child_texts(bundles), ["WMQL (1)", "WMQL · UKF (1)", "WMA (1)"])
         self.assertEqual(leaf_names(exact(bundles, "WMQL (1)")), ["wmql_AF.trk"])
         self.assertEqual(exact(bundles, "WMQL · UKF (1)").child(0).data(0, ROLE_PATH), "/x/ukf/wmql_AF.trk")
         self.assertEqual(child_texts(find_child(subject, "Tractography")), ["UKF (1)", "CSD / ACT (1)"])
@@ -473,16 +475,17 @@ BUNDLES = "/d/outputs/04_bundles"
 def task(name: str, files=(), **outputs_and_fields):
     """A manifest task plus the files that ``result_candidates`` gives for it (``product`` = the task name)."""
 
-    fields = {key: outputs_and_fields.pop(key) for key in ("tracking_backend",) if key in outputs_and_fields}
+    fields = {key: outputs_and_fields.pop(key) for key in ("tracking_backend", "product") if key in outputs_and_fields}
     return dict(name=name, status="completed", outputs=dict(outputs_and_fields), **fields), list(files)
 
 
 class SourceTestBase(SubgroupTestBase):
-    def source_manifest(self, tasks, subject="sub1", run="run1", stamp="2026-11-01T10:00:00Z"):
+    def source_manifest(self, tasks, subject="sub1", run="run1", stamp="2026-11-01T10:00:00Z", **fields):
         record = make_manifest(self.root, subject, run, stamp,
                                [(entry["name"], path) for entry, files in tasks for path in files])
         payload = json.loads(record.manifest_path.read_text(encoding="utf-8"))
         payload["tasks"] = [entry for entry, _files in tasks]
+        payload.update(fields)
         record.manifest_path.write_text(json.dumps(payload), encoding="utf-8")
         return record
 
@@ -536,10 +539,12 @@ class SourceTest(SourceTestBase):
             # a. the folder wins over the @ suffix (a ukf variant that ran on the user's file publishes to supplied)
             task("bundles.wmql@ukf", [f"{BUNDLES}/query_bundle_extraction/supplied/AF.trk"],
                  output_dir=f"{BUNDLES}/query_bundle_extraction/supplied"),
-            # a. not a source folder -> b. the @ suffix
+            # a. not a source folder -> b. the @ suffix (WMQL: it reads only the variant's own tractogram)
+            task("bundles.wmql@csd_act", [f"{BUNDLES}/query_bundle_extraction/wmql_out/CST.trk"],
+                 output_dir=f"{BUNDLES}/query_bundle_extraction/wmql_out"),
+            # Review R6: b. names no backend for WMA or TractCloud (they may have read the user's file)
             task("bundles.wma@csd_act", [f"{BUNDLES}/fiber_clustering/wma_out/CST.vtp"],
                  output_dir=f"{BUNDLES}/fiber_clustering/wma_out"),
-            # b. the tracking_backend field when the name has no @ suffix
             task("bundles.tractcloud", [f"{BUNDLES}/bundle_identification/x/AF.vtp"], tracking_backend="dti_det"),
             # c. an old flat folder and no @ suffix -> no source part
             task("bundles.wmql", [f"{BUNDLES}/query_bundle_extraction/CST.trk"],
@@ -549,12 +554,16 @@ class SourceTest(SourceTestBase):
             task("bundles.tractcloud@other", [f"{BUNDLES}/bundle_identification/UF.vtp"]),
         ])])
         bundles = self.bundles(h)
+        # Review R6 (changed on purpose): "WMA · CSD / ACT" and "TractCloud · DTI" are gone; those tasks join the
+        # subgroup without a source. Step b keeps its WMQL cases (the @ suffix here, the tracking_backend field in
+        # test_b2_results_fix_R6_...).
         self.assertEqual(child_texts(bundles), [
-            "WMQL (1)", "WMQL · supplied file (1)", "WMA (1)", "WMA · CSD / ACT (1)", "TractCloud (1)",
-            "TractCloud · DTI (1)"])
+            "WMQL (1)", "WMQL · CSD / ACT (1)", "WMQL · supplied file (1)", "WMA (2)", "TractCloud (2)"])
         self.assertEqual(leaf_names(exact(bundles, "WMQL (1)")), ["CST.trk"])
-        self.assertEqual(leaf_names(exact(bundles, "WMA (1)")), ["AF.vtp"])
-        self.assertEqual(leaf_names(exact(bundles, "TractCloud (1)")), ["UF.vtp"])
+        self.assertEqual(exact(bundles, "WMQL · CSD / ACT (1)").child(0).data(0, ROLE_PATH),
+                         f"{BUNDLES}/query_bundle_extraction/wmql_out/CST.trk")
+        self.assertEqual(leaf_names(exact(bundles, "WMA (2)")), ["CST.vtp", "AF.vtp"])
+        self.assertEqual(leaf_names(exact(bundles, "TractCloud (2)")), ["AF.vtp", "UF.vtp"])
 
     def test_results_sources_connectome_from_the_source_folder_only(self) -> None:
         """Results sources (d): a per-source connectome folder gives the source; an old flat connectome file gives
@@ -594,15 +603,17 @@ class SourceTest(SourceTestBase):
         self.assertEqual(bundles.text(0), "Fibre bundles (3)")
 
     def test_results_sources_order_algorithm_then_source_also_after_an_older_run_adds_one(self) -> None:
-        """Results sources (f): algorithm in table order, then unknown, ukf, csd_act, dti_det, supplied; an unnamed
-        algorithm after the named ones."""
+        """Results sources (f): algorithm in table order, then unknown, ukf, csd_act, (saf, review R7), dti_det,
+        supplied; an unnamed algorithm after the named ones."""
 
         def wmql(source):
             return task(f"bundles.wmql@{source}", [f"{BUNDLES}/query_bundle_extraction/{source}/AF.trk"])
 
         h = self.harness([self.source_manifest([
-            task("bundles.zz@ukf", [f"{BUNDLES}/zz/AF.vtp"]),
-            task("bundles.tractcloud@ukf", [f"{BUNDLES}/bundle_identification/ukf/AF.vtp"]),
+            # (review R6: step b names no backend outside WMQL, so these two carry their published folder)
+            task("bundles.zz@ukf", [f"{BUNDLES}/zz/AF.vtp"], output_dir=f"{BUNDLES}/zz/ukf"),
+            task("bundles.tractcloud@ukf", [f"{BUNDLES}/bundle_identification/ukf/AF.vtp"],
+                 output_dir=f"{BUNDLES}/bundle_identification/ukf"),
             task("bundles.wmql", [f"{BUNDLES}/query_bundle_extraction/AF.trk"]),
             task("bundles.wmql@supplied", [f"{BUNDLES}/query_bundle_extraction/supplied/AF.trk"],
                  output_dir=f"{BUNDLES}/query_bundle_extraction/supplied"),
@@ -667,6 +678,110 @@ class SourceRowTest(SourceTestBase):
         h.tree.setCurrentItem(exact(bundles, "WMQL · CSD / ACT (1)").child(0))
         h.refresh(records)
         self.assertEqual(h.tree.currentItem().data(0, ROLE_PATH), f"{BUNDLES}/query_bundle_extraction/csd_act/AF.trk")
+
+
+# ------------------------------------------------------------------------------------------ review fix round (R6-R8)
+
+class FixSourceTest(SourceTestBase):
+    def test_b2_results_fix_R6_step_b_names_no_backend_for_a_bundle_task_that_may_have_read_a_supplied_file(self):
+        """Review R6: an old multi-tracking run (flat bundle folders) ran WMA / TractCloud on a user-supplied
+        tractogram inside a variant; the parent manifest records the variant (``@ukf``, ``tracking_backend``) but no
+        input file, so it cannot tell: no source part. WMQL has no supplied-file input (the orchestrator config has
+        ``wma_input_tractography`` and ``tractcloud_input_tractography`` only), so its variant is its source."""
+
+        h = self.harness([self.source_manifest([
+            task("bundles.tractcloud@ukf", [f"{BUNDLES}/bundle_identification/AF.vtp"],
+                 output_dir=f"{BUNDLES}/bundle_identification", product="bundles.tractcloud",
+                 tracking_backend="ukf"),
+            task("bundles.wma@csd_act", [f"{BUNDLES}/fiber_clustering/CST.vtp"],
+                 output_dir=f"{BUNDLES}/fiber_clustering", product="bundles.wma", tracking_backend="csd_act"),
+            task("bundles.wmql@ukf", [f"{BUNDLES}/query_bundle_extraction/AF.trk"],
+                 output_dir=f"{BUNDLES}/query_bundle_extraction", product="bundles.wmql", tracking_backend="ukf"),
+        ])])
+        self.assertEqual(child_texts(self.bundles(h)), ["WMQL · UKF (1)", "WMA (1)", "TractCloud (1)"])
+        # The tracking_backend field (no @ suffix) still names the source of a WMQL task.
+        field = self.harness([self.source_manifest([
+            task("bundles.wmql", [f"{BUNDLES}/query_bundle_extraction/AF.trk"],
+                 output_dir=f"{BUNDLES}/query_bundle_extraction", tracking_backend="dti_det")], subject="sub2")])
+        self.assertEqual(child_texts(self.bundles(field, "sub2")), ["WMQL · DTI (1)"])
+
+    def test_b2_results_fix_R6_a_run_that_records_a_bundle_source_shows_no_supplied_file(self) -> None:
+        """Review R6, the other case: a multi-tracking parent with ``bundle_tractography_backend`` shows that no
+        bundle product read a user file (orchestrator._validate_bundle_tractography_source refuses that setting with a
+        WMA or TractCloud input file), so step b names the variant of WMA and TractCloud too. Guard: it passes on
+        4525ef5b and keeps R6 from hiding a source that the record does show."""
+
+        h = self.harness([self.source_manifest([
+            task("bundles.tractcloud@ukf", [f"{BUNDLES}/bundle_identification/AF.vtp"],
+                 output_dir=f"{BUNDLES}/bundle_identification", product="bundles.tractcloud",
+                 tracking_backend="ukf"),
+            task("bundles.wma@csd_act", [f"{BUNDLES}/fiber_clustering/CST.vtp"],
+                 output_dir=f"{BUNDLES}/fiber_clustering", product="bundles.wma", tracking_backend="csd_act"),
+        ], bundle_tractography_backend="csd_act")])
+        self.assertEqual(child_texts(self.bundles(h)), ["WMA · CSD / ACT (1)", "TractCloud · UKF (1)"])
+
+    def test_b2_results_fix_R6_the_published_supplied_folder_still_wins(self) -> None:
+        """Step a is unchanged: a TractCloud task of a ukf variant that published to ``supplied`` is "supplied"."""
+
+        h = self.harness([self.source_manifest([
+            task("bundles.tractcloud@ukf", [f"{BUNDLES}/bundle_identification/supplied/AF.vtp"],
+                 output_dir=f"{BUNDLES}/bundle_identification/supplied", tracking_backend="ukf")])])
+        self.assertEqual(child_texts(self.bundles(h)), ["TractCloud · supplied file (1)"])
+
+    def test_b2_results_fix_R7_saf_is_a_source_after_csd_act(self) -> None:
+        """Review R7: a SAF child publishes to ``<product>/saf/`` and ``05_connectome/saf/``; caption "CSD + SAF"
+        (the GUI's tractography caption, both languages), order after ``csd_act``."""
+
+        connectome = "/d/outputs/05_connectome"
+
+        def wmql(source):
+            return task(f"bundles.wmql@{source}", [f"{BUNDLES}/query_bundle_extraction/{source}/AF.trk"],
+                        output_dir=f"{BUNDLES}/query_bundle_extraction/{source}")
+
+        records = [self.source_manifest([
+            wmql("dti_det"), wmql("saf"), wmql("csd_act"),
+            task("connectome.streamline_count", [f"{connectome}/saf/s_streamline_count.csv"],
+                 matrix_path=f"{connectome}/saf/s_streamline_count.csv"),
+            task("connectome.streamline_count@csd_act", [f"{connectome}/csd_act/s_streamline_count.csv"],
+                 matrix_path=f"{connectome}/csd_act/s_streamline_count.csv"),
+        ])]
+        h = self.harness(records)
+        self.assertEqual(child_texts(self.bundles(h)),
+                         ["WMQL · CSD / ACT (1)", "WMQL · CSD + SAF (1)", "WMQL · DTI (1)"])
+        self.assertEqual(exact(self.bundles(h), "WMQL · CSD + SAF (1)").data(0, ROLE_KEY), "bundles::wmql@saf")
+        self.assertEqual(child_texts(find_child(self.subject(h), "Connectome")),
+                         ["Fiber count · CSD / ACT (1)", "Fiber count · CSD + SAF (1)"])
+        zh = self.harness(records, language="zh")
+        self.assertEqual(child_texts(find_child(self.subject(zh), "纤维束")),
+                         ["WMQL · CSD / ACT (1)", "WMQL · CSD + SAF (1)", "WMQL · DTI (1)"])
+
+    def test_b2_results_fix_R8_a_run_named_folder_outside_the_published_layout_is_not_a_source(self) -> None:
+        """Review R8: legacy and stage folders are named after the RUN (the CLI default run name is ``csd_act``);
+        only ``04_bundles/<product>/<source>`` and ``05_connectome/<source>/<file>`` outside the stage cache count."""
+
+        legacy = "/d/outputs/04_tractography"
+        stages = "/d/cache/stages"
+        h = self.harness([self.source_manifest([
+            task("bundles.wmql", [f"{legacy}/bundles/wmql/csd_act/AF.trk"],
+                 output_dir=f"{legacy}/bundles/wmql/csd_act"),
+            # (a file under the stage cache is never listed, so the listed file lies elsewhere)
+            task("bundles.tractcloud", [f"{BUNDLES}/bundle_identification/AF.vtp"],
+                 output_dir=f"{stages}/04_bundles/tract_cloud_dl/ukf"),
+            task("connectome.streamline_count", [f"{legacy}/connectome/csd_act/s_streamline_count.csv"],
+                 matrix_path=f"{legacy}/connectome/csd_act/s_streamline_count.csv"),
+            task("connectome.sift2_weighted", ["/d/outputs/05_connectome/s_sift2.csv"],
+                 matrix=f"{stages}/05_connectome/ukf/s_sift2.csv"),
+        ])])
+        self.assertEqual(child_texts(self.bundles(h)), ["WMQL (1)", "TractCloud (1)"])
+        self.assertEqual(child_texts(find_child(self.subject(h), "Connectome")), ["Fiber count (1)", "SIFT2 (1)"])
+
+    def test_b2_results_fix_R8_the_folder_names_are_the_layouts_names(self) -> None:
+        from shared.io_layout import subject_layout
+
+        layout = subject_layout(self.root / "s", output_root=self.root / "s" / "outputs")
+        self.assertEqual(ui_run_history.RESULT_BUNDLES_FOLDER, layout.bundles.name)
+        self.assertEqual(ui_run_history.RESULT_CONNECTOME_FOLDER, layout.connectome.name)
+        self.assertEqual(ui_run_history.RESULT_STAGE_CACHE_PARTS, layout.cache_stages.parts[-2:])
 
 
 if __name__ == "__main__":

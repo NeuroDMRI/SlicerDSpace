@@ -831,7 +831,7 @@ class FiberEyeIconTest(unittest.TestCase):
     def _refresh(self, owner, qt, *, visible, dark=None):
         slicer = types.ModuleType("slicer")
         with patch.dict(sys.modules, {"qt": qt, "slicer": slicer}), \
-                patch("shared.result_scene.owned_nodes", return_value=[]), \
+                patch("shared.result_scene.result_nodes", return_value=[]), \
                 patch.object(self.ui, "_output_visible", return_value=visible):
             if dark is None:
                 self.ui._refresh_output_visibility(owner)

@@ -152,6 +152,12 @@ def manifest_timestamp(manifest: dict[str, Any], path: Path) -> Optional[datetim
     started_at, the batch file name, and finally the file modification time.
     """
 
+    return recorded_manifest_timestamp(manifest) or _batch_filename_timestamp(path) or _mtime(path)
+
+
+def recorded_manifest_timestamp(manifest: dict[str, Any]) -> Optional[datetime]:
+    """The time that the manifest itself records (the time fields of :func:`manifest_timestamp`), or None."""
+
     for key in ("ended_at", "cancelled_at", "updated_at"):
         parsed = _parse_iso(manifest.get(key))
         if parsed is not None:
@@ -165,10 +171,7 @@ def manifest_timestamp(manifest: dict[str, Any], path: Path) -> Optional[datetim
     ]
     if task_times:
         return max(task_times)
-    parsed = _parse_iso(manifest.get("started_at"))
-    if parsed is not None:
-        return parsed
-    return _batch_filename_timestamp(path) or _mtime(path)
+    return _parse_iso(manifest.get("started_at"))
 
 
 def _batch_status(manifest: dict[str, Any]) -> str:
@@ -719,8 +722,9 @@ def archived_run_manifests(record: RunRecord, folder_records: Iterable[RunRecord
 def read_archived_manifest(entry: ArchivedManifest) -> Optional[tuple[dict[str, Any], Optional[datetime]]]:
     """``(payload, time)`` of an archived subject manifest, or None when it is unreadable or not a subject manifest.
 
-    Parsed once per (path, mtime, size). The time is the manifest's own time as ``record_from_manifest`` reads it;
-    the ``<stamp>`` folder name is the fallback.
+    Parsed once per (path, mtime, size). The time is the time the manifest records (its time fields), else the
+    ``<stamp>`` folder name, and the file mtime only when both are missing (review R3: a touched or copied old
+    archive must not look new).
     """
 
     key = str(entry.path)
@@ -732,7 +736,8 @@ def read_archived_manifest(entry: ArchivedManifest) -> Optional[tuple[dict[str, 
         payload = load_manifest_json(entry.path)
         parsed = record_from_manifest(payload, entry.path)
         if parsed.kind == "subject":
-            result = (payload, parsed.timestamp or _stamp_folder_time(entry.folder_stamp))
+            result = (payload, recorded_manifest_timestamp(payload) or _stamp_folder_time(entry.folder_stamp)
+                      or parsed.timestamp)
     except (ManifestError, OSError, ValueError, TypeError, AttributeError):
         result = None
     _ARCHIVE_CACHE[key] = (entry.mtime_ns, entry.size, result)

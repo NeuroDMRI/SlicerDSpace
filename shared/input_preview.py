@@ -385,6 +385,20 @@ def _nrrd_announced_bytes(header: Mapping[str, Any]) -> int:
     return count * _NRRD_ITEM_BYTES.get(str(header.get("type", "")).strip().lower(), 8)
 
 
+def non_ascii_data_path_message() -> str:
+    """The plain message for a detached data path that an ASCII NHDR cannot hold (F5; shared with the import)."""
+
+    return "The detached data path contains non-ASCII characters; move the file to an ASCII-only folder."
+
+
+def _is_ascii(text: str) -> bool:
+    try:
+        text.encode("ascii")
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
 def stage_detached_header(header_path: Any, raw: Any, directory: Any) -> Path:
     """C1: write a copy of an NHDR whose single ``data file`` is ``raw`` (the rule ``import_detached_nrrd`` applies)."""
 
@@ -397,13 +411,8 @@ def stage_detached_header(header_path: Any, raw: Any, directory: Any) -> Path:
         raise PreviewError("bad_data", "A single detached data file is required for this header override.")
     staged = Path(directory) / header_path.name
     raw_text = raw.resolve().as_posix()
-    try:
-        raw_text.encode("ascii")
-    except UnicodeEncodeError:
-        raise PreviewError(
-            "bad_data",
-            "The detached data path contains non-ASCII characters; move the file to an ASCII-only folder.",
-        ) from None
+    if not _is_ascii(raw_text):
+        raise PreviewError("bad_data", non_ascii_data_path_message())
     header = re.sub(_DATA_FILE_PATTERN, lambda _: f"data file: {raw_text}", header,
                     count=1, flags=re.IGNORECASE | re.MULTILINE)
     staged.write_text(header, encoding="ascii", errors="replace")

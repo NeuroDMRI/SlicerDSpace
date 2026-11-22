@@ -748,6 +748,13 @@ def import_detached_nrrd(config, raw):
         staged = Path(temporary) / config.source.name
         header = re.sub(pattern, lambda _: f"data file: {raw.as_posix()}", header,
                         count=1, flags=re.IGNORECASE | re.MULTILINE)
+        try:
+            header.encode("ascii")
+        except UnicodeEncodeError:
+            # F5: the same plain message as the preview, and it names the path (an ASCII NHDR cannot hold it).
+            from shared.input_preview import non_ascii_data_path_message
+
+            raise ValueError(f"{non_ascii_data_path_message()} Data file: {raw.as_posix()}") from None
         staged.write_text(header, encoding="ascii")
         manifest = prepare_inputs(replace(config, source=staged, source_signatures=signatures))
     if manifest.get("reused"):

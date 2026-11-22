@@ -116,5 +116,70 @@ class D3SmallScreenTest(unittest.TestCase):
 
 
 
+NHDR_TEXT = "NRRD0004\ntype: short\ndimension: 3\nsizes: 2 2 2\nencoding: raw\ndata file: dwi.raw\n"
+
+
+class D5DetachedNrrdPathTest(unittest.TestCase):
+    """D5 (audit F5): a detached NRRD whose data path is not ASCII gives a clear message, not UnicodeEncodeError."""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.header = self.root / "dwi.nhdr"
+        self.header.write_text(NHDR_TEXT, encoding="ascii")
+
+    def _config(self):
+        from shared.input_import import InputImportConfig
+
+        return InputImportConfig(source=self.header, subject_root=self.root / "subj", subject_id="s1", dry_run=True)
+
+    def test_b2_d5_non_ascii_data_path_gives_the_clear_message_that_names_the_path(self):
+        from shared.ui_prepare_inputs import import_detached_nrrd
+
+        folder = self.root / "数据"
+        folder.mkdir()
+        raw = folder / "dwi.raw"
+        raw.write_bytes(b"\0" * 16)
+        with mock.patch("shared.input_import.prepare_inputs") as prepare:
+            with self.assertRaises(ValueError) as caught:
+                import_detached_nrrd(self._config(), raw)
+        prepare.assert_not_called()
+        message = str(caught.exception)
+        self.assertIn("non-ASCII", message)
+        self.assertIn("ASCII-only folder", message)
+        self.assertIn(raw.as_posix(), message)
+
+    def test_b2_d5_ascii_data_path_writes_the_same_header_bytes_as_before(self):
+        from shared.ui_prepare_inputs import import_detached_nrrd
+
+        raw = self.root / "dwi.raw"
+        raw.write_bytes(b"\0" * 16)
+        staged_bytes = []
+
+        def fake_prepare(config):
+            staged_bytes.append(Path(config.source).read_bytes())
+            return {"plan": {}, "reused": False}
+
+        with mock.patch("shared.input_import.prepare_inputs", side_effect=fake_prepare):
+            import_detached_nrrd(self._config(), raw)
+        expected = ("NRRD0004\ntype: short\ndimension: 3\nsizes: 2 2 2\nencoding: raw\n"
+                    f"data file: {raw.as_posix()}\n").encode("ascii")  # pinned from the base code's output
+        self.assertEqual(staged_bytes, [expected])
+
+    def test_b2_d5_the_preview_staging_keeps_its_message(self):
+        from shared.input_preview import PreviewError, stage_detached_header
+
+        folder = self.root / "数据"
+        folder.mkdir()
+        raw = folder / "dwi.raw"
+        raw.write_bytes(b"\0" * 16)
+        with self.assertRaises(PreviewError) as caught:
+            stage_detached_header(self.header, raw, self.root)
+        self.assertIn("non-ASCII characters; move the file to an ASCII-only folder", caught.exception.detail)
+
+
+
+
 if __name__ == "__main__":
     unittest.main()

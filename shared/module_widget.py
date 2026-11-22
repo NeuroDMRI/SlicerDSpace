@@ -198,6 +198,17 @@ from shared.ui_environment_check import start_environment_check
 ENVIRONMENT_DEPENDENCY_PATHS = UI_DEPENDENCY_PATHS
 
 
+def _close_algorithm_picker(owner) -> None:
+    """popup-mac: an open algorithm picker is discarded and closed, so its macOS wait loop ends with the module."""
+
+    try:
+        from shared.ui_algorithm_picker import close_algorithm_picker
+
+        close_algorithm_picker(owner)
+    except Exception:
+        pass
+
+
 class _SurfaceOsBlock:
     """b2-os F1: why the Run leaves out ``name``: Surface postprocess cannot run on this OS (remedy 'none').
 
@@ -3088,6 +3099,7 @@ class SharedWidgetMixin:
         self._cleanedUp = True
         close_input_format_help_popovers(self, destroy=True)
         close_help_popup(self, destroy=True)
+        _close_algorithm_picker(self)
         try:
             from shared.ui_update_panel import cleanup_update_panel
 
@@ -3171,6 +3183,7 @@ class SharedWidgetMixin:
     def exit(self) -> None:
         close_input_format_help_popovers(self, destroy=False)
         close_help_popup(self)
+        _close_algorithm_picker(self)
         self._set_module_help_section_hidden(False, _retry=False)
         if self._parameterNode:
             if self._parameterNodeGuiTag is not None:

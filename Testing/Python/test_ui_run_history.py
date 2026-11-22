@@ -53,6 +53,10 @@ def fake_qt() -> mock.MagicMock:
     for kind in WIDGET_KINDS:
         getattr(qt, kind).side_effect = factory(kind)
     qt.created = created
+    # popup-mac: without a QEventLoop the algorithm picker takes its exec_() path on every host, so the tests that
+    # play the user inside exec_() run the same on macOS and on Linux/Windows. test_b2_popup_mac.py gives the picker
+    # a fake loop and tests the macOS wait.
+    qt.QEventLoop = None
     return qt
 
 

@@ -1,5 +1,7 @@
 """Multi-select picker buttons beside the product checkboxes."""
 
+import sys
+
 from shared.algorithm_selection import (
     BUNDLES,
     CONNECTOME,
@@ -369,7 +371,7 @@ def _add_algorithm_row(qt, owner, layout, box, family, algorithm, staged, zh, re
     button.toggled.connect(toggle_settings)
 
 
-def _install_outside_close_apply(qt, dialog, popup_state, apply_staged, changed=lambda: True):
+def _install_outside_close_apply(qt, dialog, popup_state, apply_staged, changed=lambda: True, no_replay=False):
     """Make a click outside the popup act like the Apply button (batch 2, popup-apply).
 
     Qt closes a ``Qt.Popup`` on an outside click with ``close()``, and ``QDialog::closeEvent`` turns that into
@@ -380,19 +382,30 @@ def _install_outside_close_apply(qt, dialog, popup_state, apply_staged, changed=
     ``closeEvent`` cannot reject after the accept, and a refused apply leaves the popup open with the error shown, as
     the Apply button does. Cancel, the X and Esc call ``reject()``, which sends no Close event: they still discard.
     After the popup has finished, a late Close event passes through and commits nothing.
+
+    ``no_replay`` (macOS, popup-mac): after a refused apply the popup stays open, but Qt's Cocoa layer has already
+    taken it off its popup stack, so the next outside click goes to Qt's widget popup code. That closes the popup and
+    then replays the press to the control under the mouse (measured: the Run button got "pressed"). Every Close event
+    therefore sets ``Qt.WA_NoMouseReplay`` first; it must be set here, because ``QApplication::notify`` clears it before
+    each mouse event that reaches the dialog.
     Returns the filter; the caller must keep it alive. Returns None if the filter cannot be built.
     """
 
     close_type = getattr(getattr(qt, "QEvent", None), "Close", None)
     if close_type is None or not hasattr(dialog, "installEventFilter"):
         return None
+    replay_attribute = getattr(getattr(qt, "Qt", None), "WA_NoMouseReplay", None) if no_replay else None
     try:
         base = getattr(qt, "QObject")
 
         class OutsideCloseApplyFilter(base):
             def eventFilter(self, _watched, event):
                 try:
-                    if event.type() != close_type or popup_state["finished"] or not changed():
+                    if event.type() != close_type:
+                        return False
+                    if replay_attribute is not None:
+                        dialog.setAttribute(replay_attribute, True)
+                    if popup_state["finished"] or not changed():
                         return False
                     apply_staged()
                     event.ignore()
@@ -407,11 +420,114 @@ def _install_outside_close_apply(qt, dialog, popup_state, apply_staged, changed=
         return None
 
 
+def _host_platform() -> str:
+    return sys.platform
+
+
+def _popup_waits_non_modal(qt, is_popup) -> bool:
+    """macOS only: the picker popup is shown non-modal and a local event loop waits for it (batch 2, popup-mac)."""
+
+    return bool(is_popup) and _host_platform() == "darwin" and getattr(qt, "QEventLoop", None) is not None
+
+
+def _rejected(qt) -> int:
+    value = getattr(getattr(qt, "QDialog", None), "Rejected", 0)
+    return value if isinstance(value, int) else 0
+
+
+def _run_popup(qt, dialog, is_popup):
+    """Show the picker and wait for its result; returns the ``QDialog`` result code.
+
+    Windows and Linux: ``exec_()``, as before. macOS: ``exec_()`` runs a native modal session, and Cocoa then drops
+    every click on the main window (Qt's ``-[QNSPanel worksWhenModal]`` is NO for a parent of the modal window), so Qt
+    never sees an outside click and the popup can neither apply nor close. There the popup is shown non-modal and a
+    local ``QEventLoop`` waits. The loop ends when the dialog finishes (Apply, Cancel, X, Esc, an outside click, the
+    watch timer, ``close_algorithm_picker``), when the dialog is destroyed, or when the application quits
+    (``QCoreApplication::exit`` also ends every nested loop). A dialog that is already finished, or that is not
+    visible after ``show()``, never enters the loop. A result that cannot be read counts as Rejected.
+    """
+
+    if not _popup_waits_non_modal(qt, is_popup):
+        return dialog.exec_()
+    loop = qt.QEventLoop()
+    state = {"done": False}
+
+    def _end(*_args) -> None:
+        state["done"] = True
+        try:
+            loop.quit()
+        except Exception:
+            pass
+
+    connected = []
+    app_getter = getattr(getattr(qt, "QApplication", None), "instance", None)
+    app = app_getter() if callable(app_getter) else None
+    for sender, name in ((dialog, "finished"), (dialog, "destroyed"), (app, "aboutToQuit")):
+        signal = getattr(sender, name, None) if sender is not None else None
+        if signal is None or not hasattr(signal, "connect"):
+            continue
+        try:
+            signal.connect(_end)
+            connected.append(signal)
+        except Exception:
+            pass
+    # Qt's Cocoa dispatcher loses a quit() that runs inside a nested manual processEvents() (its interrupt flag is
+    # reset when that call returns; measured with the ui2 probe), and the loop would then wait forever. A
+    # repeating timer therefore re-sends quit() from the loop's own level once the wait is over.
+    requit = None
+    if hasattr(qt, "QTimer"):
+        try:
+            requit = qt.QTimer()
+            requit.setInterval(100)
+            requit.timeout.connect(lambda: _end() if state["done"] else None)
+        except Exception:
+            requit = None
+    try:
+        dialog.show()
+        visible = dialog.isVisible() if callable(getattr(dialog, "isVisible", None)) else True
+        if not visible and not state["done"]:
+            dialog.reject()
+        if not state["done"]:
+            if requit is not None:
+                requit.start()
+            loop.exec_()
+    finally:
+        if requit is not None:
+            try:
+                requit.stop()
+            except Exception:
+                pass
+        for signal in connected:
+            try:
+                signal.disconnect(_end)
+            except Exception:
+                pass
+    try:
+        result = dialog.result()
+    except Exception:
+        return _rejected(qt)
+    return result if isinstance(result, int) else _rejected(qt)
+
+
+def close_algorithm_picker(owner) -> None:
+    """Discard and close an open algorithm picker (module cleanup or exit); this also ends the macOS wait."""
+
+    closer = getattr(owner, "_algorithmPickerCloser", None)
+    if callable(closer):
+        try:
+            closer()
+        except Exception:
+            pass
+
+
 def choose_algorithms(owner, family):
     import qt
     import slicer
 
     if getattr(owner, "_pipelineActive", False) or getattr(owner, "_selectedSetupActive", False):
+        return False
+    # popup-mac: on macOS the picker no longer runs a modal session, so a second picker must not open while one is open.
+    if getattr(owner, "_algorithmPickerOpen", False) is True:
         return False
     zh = getattr(owner, "_onboardingLanguage", "en").startswith("zh")
     is_anatomical = family == "anatomical_priors"
@@ -680,7 +796,8 @@ def choose_algorithms(owner, family):
         changed_marker = object()  # a value that cannot be read now counts as changed (Apply shows its error)
         return popup_state_now(changed_marker) != opened_state
 
-    outside_filter = (_install_outside_close_apply(qt, dialog, popup_state, validate_and_accept, popup_changed)
+    outside_filter = (_install_outside_close_apply(qt, dialog, popup_state, validate_and_accept, popup_changed,
+                                                   no_replay=_popup_waits_non_modal(qt, popup_flag))
                       if popup_flag else None)
 
     popup_watch = None
@@ -716,9 +833,13 @@ def choose_algorithms(owner, family):
         except Exception:
             popup_watch = None
 
+    owner._algorithmPickerOpen = True
+    owner._algorithmPickerCloser = lambda: None if popup_state["finished"] else _finish_popup(False)
     try:
-        accepted = dialog.exec_() == qt.QDialog.Accepted
+        accepted = _run_popup(qt, dialog, bool(popup_flag)) == qt.QDialog.Accepted
     finally:
+        owner._algorithmPickerOpen = False
+        owner._algorithmPickerCloser = None
         popup_state["finished"] = True
         _stop_popup_watch()
         if outside_filter is not None:
@@ -775,7 +896,10 @@ def choose_algorithms(owner, family):
             from shared.ui_on_demand_resources import maybe_prompt_on_demand_install
 
             qt.QTimer.singleShot(0, lambda: maybe_prompt_on_demand_install(owner))
-    dialog.deleteLater()
+    try:
+        dialog.deleteLater()
+    except Exception:  # popup-mac: the dialog may already be destroyed when the wait ended
+        pass
     return accepted
 
 

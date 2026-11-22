@@ -33,7 +33,12 @@ def _catalog_record(system="Darwin", machine="arm64"):
 
 
 class MacCase(unittest.TestCase):
-    """A temp bundled-runtimes root with a surface runtime whose binaries need macOS 15.0."""
+    """A temp bundled-runtimes root with a surface runtime whose binaries need macOS 15.0.
+
+    ``setUp`` also installs a FIXTURE catalog whose darwin-arm64 record needs macOS 15.0, so the scenarios below do not
+    depend on the ``min_macos`` of the shipped ``models/runtime_bundles.json``. A test that needs another floor calls
+    ``fake_catalog`` again (the later patch wins).
+    """
 
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
@@ -54,6 +59,7 @@ class MacCase(unittest.TestCase):
         self.bundle = make_surface_bundle(self.bundled, minos=(15, 0))
         self.prefix = self.root / "user-cache" / "surface-runtime"  # the default prefix; not installed yet
         self._mac_stack = None
+        self.fake_catalog("15.0")  # the catalog scenario is "the runtime needs macOS 15.0", whatever the shipped value
 
     def mac(self, version="13.4"):
         if self._mac_stack is not None:
@@ -140,7 +146,7 @@ class OnDemandStateTest(MacCase):
         self.assertEqual(surface_runtime_state()["remedy"], "download")  # 15.1 meets the catalog's 15.0
         self.mac("13.4")
         missing = surface_runtime_state()
-        # No runtime here, and the catalog's needs 15.0: the true cause is the OS, not "missing" (audit cell A-3).
+        # No runtime here, and the fixture catalog's needs 15.0: the true cause is the OS, not "missing" (audit cell A-3).
         self.assertEqual((missing["state"], missing["remedy"]), ("os_blocked", "none"))
         self.assertEqual((missing["macos_required"], missing["macos_current"]), ("15.0", "13.4"))
 

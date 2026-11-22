@@ -684,6 +684,23 @@ class SurfaceBlockTest(unittest.TestCase):
 
         self.bundle = make_surface_bundle(self.bundled, minos=(15, 0))
         self.message = "The bundled surface runtime needs macOS 15.0 or later (this Mac: 14.2)"
+        # A FIXTURE catalog whose darwin-arm64 record needs macOS 15.0, so these scenarios do not depend on the
+        # ``min_macos`` of the shipped models/runtime_bundles.json. A test that needs another floor patches again.
+        self._install_catalog("15.0")
+
+    def _install_catalog(self, min_macos):
+        import json
+        from shared import prebuilt_surface
+
+        payload = json.loads(Path(prebuilt_surface.CATALOG).read_text(encoding="utf-8"))
+        for record in payload["surface"]:
+            if record["system"] == "Darwin" and record["machine"] == "arm64":
+                record["min_macos"] = min_macos
+        catalog = self.root / "runtime_bundles.json"
+        catalog.write_text(json.dumps(payload), encoding="utf-8")
+        patcher = mock.patch.object(prebuilt_surface, "CATALOG", catalog)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def mac(self, version="14.2"):
         stack = contextlib_exit_stack()
@@ -774,11 +791,11 @@ class SurfaceBlockTest(unittest.TestCase):
         items = od.detect_missing_task_resources(targets=("surface_postprocess",), bundle_backends=("wmql",),
                                                  backend_paths={})
         self.assertFalse([item for item in items if item["id"] == "surface_postprocess"], items)
-        payload = json.loads(prebuilt_surface.CATALOG.read_text(encoding="utf-8"))
+        payload = json.loads(prebuilt_surface.CATALOG.read_text(encoding="utf-8"))  # the fixture catalog (15.0)
         for record in payload["surface"]:
             if record["system"] == "Darwin" and record["machine"] == "arm64":
                 record["min_macos"] = "13.0"
-        catalog = self.root / "runtime_bundles.json"
+        catalog = self.root / "runtime_bundles_13.json"
         catalog.write_text(json.dumps(payload), encoding="utf-8")
         with mock.patch.object(prebuilt_surface, "CATALOG", catalog):
             items = od.detect_missing_task_resources(targets=("surface_postprocess",), bundle_backends=("wmql",),

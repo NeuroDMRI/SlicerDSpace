@@ -63,7 +63,7 @@ For standalone/offline cache import (`<asset-root>/runtime/surface/`), the archi
 | Windows x86_64 | Bundled in `SlicerDSpace-v0.1.1-Windows-x64.zip` (`surface-runtime-windows-x86_64`) | **Verified native in 3D Slicer 5.10.0** |
 | Linux x86_64 | Bundled in `SlicerDSpace-v0.1.1-Linux-x64.tar.gz` (`surface-runtime-linux-x86_64`) | **Verified native in 3D Slicer 5.10.0** |
 | macOS 15 or later, Intel | `surface-runtime-darwin-x86_64.tar.gz` | Offline candidate; scientific comparison pending |
-| macOS 15 or later, Apple Silicon | `surface-runtime-darwin-arm64.tar.gz` | Offline candidate; scientific comparison pending |
+| macOS 13 or later, Apple Silicon | `surface-runtime-darwin-arm64-macos13.tar.gz` | Offline candidate; scientific comparison pending |
 
 If the archive is missing, the preparation dialog lists the runtime as a
 manual item.
@@ -109,12 +109,16 @@ QC success does not replace anatomical review. Runtime identity is recorded in
 the manifest and cache signature; switching an explicit runtime prevents reuse
 of the previous runtime's completion state.
 
-The Apple Silicon runtime in the `v0.1.1` macOS base package was built from the
-pinned FreeSurfer 7.4.1 source. Its seven binaries are arm64 with a minimum
-macOS of 15.0 and were built without OpenMP. Its `runtime.json` records CMake
+The first Apple Silicon runtime in the `v0.1.1` macOS base package
+(`surface-runtime-darwin-arm64.tar.gz`) was built from the pinned FreeSurfer
+7.4.1 source. Its seven binaries are arm64 with a minimum macOS of 15.0 and
+were built without OpenMP. Its `runtime.json` records CMake
 3.31.10, Apple clang 17.0.0 (clang-1700.0.13.5) and empty `CFLAGS`, `CXXFLAGS`
 and `LDFLAGS`. It records no deployment target, build host or commit, so that
-archive cannot be rebuilt exactly as recorded.
+archive cannot be rebuilt exactly as recorded. The catalog
+`models/runtime_bundles.json` now lists the rebuilt
+`surface-runtime-darwin-arm64-macos13.tar.gz` for Apple Silicon, with a minimum
+macOS of 13.0.
 
 The workflow `.github/workflows/build-surface-runtime.yml` rebuilds this runtime
 for macOS 13.0:

@@ -134,8 +134,9 @@ class SurfaceRuntimeTests(unittest.TestCase):
         for system in ('Darwin', 'Windows'):
             with tempfile.TemporaryDirectory() as tmp, patch('platform.system', return_value=system), \
                     patch('platform.machine', return_value='arm64'), \
-                    patch('platform.mac_ver', return_value=('14.5', (), '')), \
+                    patch('platform.mac_ver', return_value=('12.7', (), '')), \
                     patch('scripts.setup_optional_assets.prepare') as resources:
+                # b2 runtime lane: the arm64 record needs macOS 13.0, so 12.7 has no candidate.
                 prefix = Path(tmp) / 'components'
                 with self.assertRaisesRegex(ValueError, 'No qualified prebuilt surface bundle'):
                     prepare(prefix=prefix)

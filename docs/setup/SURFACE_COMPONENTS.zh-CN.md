@@ -57,7 +57,7 @@
 | Windows x86_64 | 已内置于 `SlicerDSpace-v0.1.1-Windows-x64.zip`（`surface-runtime-windows-x86_64`） | **已通过 3D Slicer 5.10.0 原生验收** |
 | Linux x86_64 | 已内置于 `SlicerDSpace-v0.1.1-Linux-x64.tar.gz`（`surface-runtime-linux-x86_64`） | **已通过 3D Slicer 5.10.0 原生验收** |
 | macOS 15 或更高版本，Intel | `surface-runtime-darwin-x86_64.tar.gz` | 离线候选包，科学结果对照待完成 |
-| macOS 15 或更高版本，Apple Silicon | `surface-runtime-darwin-arm64.tar.gz` | 离线候选包，科学结果对照待完成 |
+| macOS 13 或更高版本，Apple Silicon | `surface-runtime-darwin-arm64-macos13.tar.gz` | 离线候选包，科学结果对照待完成 |
 
 缺少压缩包时，准备窗口会将该运行环境列为手动处理项。
 
@@ -95,11 +95,14 @@ PythonSlicer run_subject_pipeline.py --subject-root /data/sub-01 --subject-id su
 不代替人工解剖审核。清单及缓存签名记录运行环境身份；切换显式组件目录时不会沿用
 上一运行环境的“已完成”状态。
 
-`v0.1.1` macOS 底座包中的 Apple Silicon 组件用固定的 FreeSurfer 7.4.1 源码构建。
+`v0.1.1` macOS 底座包中最初的 Apple Silicon 组件（`surface-runtime-darwin-arm64.tar.gz`）
+用固定的 FreeSurfer 7.4.1 源码构建。
 七个二进制均为 arm64，最低 macOS 版本为 15.0，未链接 OpenMP。
 其 `runtime.json` 记录 CMake 3.31.10、Apple clang 17.0.0（clang-1700.0.13.5），
 `CFLAGS`、`CXXFLAGS` 和 `LDFLAGS` 均为空。
 它没有记录部署目标、构建主机和提交，因此无法按记录原样重建该归档。
+目录 `models/runtime_bundles.json` 现已为 Apple Silicon 列出重建后的
+`surface-runtime-darwin-arm64-macos13.tar.gz`，最低 macOS 版本为 13.0。
 
 工作流 `.github/workflows/build-surface-runtime.yml` 以 macOS 13.0 为目标重建该组件：
 

@@ -176,8 +176,8 @@ class HelpTruthTest(unittest.TestCase):
                 for claim in false_claims:
                     self.assertNotIn(claim, text, (lang, key))
             folder = plain(onboarding_text(lang, "help_batch_folder"))
-            self.assertIn("A subfolder with no readable input is skipped." if lang == "en"
-                          else "没有可读取输入的子文件夹会被跳过。", folder, lang)
+            self.assertIn("A subfolder is skipped when the scan finds no input for it." if lang == "en"
+                          else "扫描找不到输入的子文件夹会被跳过。", folder, lang)
             self.assertNotIn("skipped" if lang == "en" else "跳过", plain(onboarding_text(lang, "help_output_folder")), lang)
             self.assertIn("input/", folder)
             self.assertIn("DICOM", folder)

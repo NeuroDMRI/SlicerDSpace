@@ -682,7 +682,7 @@ HELP_TEXT = {
                 "one NRRD or NHDR file",
                 "DICOM files",
             ),
-            _help_p("A subfolder with no readable input is skipped."),
+            _help_p("A subfolder is skipped when the scan finds no input for it."),
             _help_tree(*_HELP_BATCH_TREE),
         ),
         "help_output_folder": _help_card(
@@ -717,7 +717,7 @@ HELP_TEXT = {
                 "一个 NRRD 或 NHDR 文件",
                 "DICOM 文件",
             ),
-            _help_p("没有可读取输入的子文件夹会被跳过。"),
+            _help_p("扫描找不到输入的子文件夹会被跳过。"),
             _help_tree(*_HELP_BATCH_TREE),
         ),
         "help_output_folder": _help_card(

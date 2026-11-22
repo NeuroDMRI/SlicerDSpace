@@ -111,12 +111,16 @@ def _parse_subject_list(path: Path, batch_root: Path) -> list[Path]:
 BATCH_FOLDER_REASON = "no input in this subfolder; the input found is the Batch Folder itself"
 
 
-def _resolves_to_batch_folder(inspected: dict, candidate: Path, root: Path) -> bool:
+def _resolves_to_batch_folder(inspected: dict, candidate: Path, root: Path, *, from_subject_list: bool) -> bool:
     """Batch scan: a subject never resolves to the Batch Folder itself (except ``legacy_registered``).
 
     A file entry of ``--subject-list`` and a subject-list entry that is the Batch Folder itself keep their behaviour.
+    In scan (glob) mode a candidate that is the Batch Folder itself (a symlink back to it, a recursive glob) gets
+    no such exemption.
     """
-    if inspected["mode"] == "legacy_registered" or candidate.is_file() or candidate.resolve() == root:
+    if inspected["mode"] == "legacy_registered" or candidate.is_file():
+        return False
+    if from_subject_list and candidate.resolve() == root:
         return False
     return Path(inspected["subject_root"] or inspected["subject_dir"]).expanduser().resolve() == root
 
@@ -154,7 +158,9 @@ def discover_subjects(
         if inspected["mode"] == "missing":
             inspected = inspect_subject_directory(root, subject_id)
         reason = "missing required input/data.nii.gz, bvals, or bvecs"
-        if inspected["mode"] != "missing" and _resolves_to_batch_folder(inspected, candidate, root):
+        if inspected["mode"] != "missing" and _resolves_to_batch_folder(
+            inspected, candidate, root, from_subject_list=bool(subject_list)
+        ):
             inspected = {"mode": "missing"}
             reason = BATCH_FOLDER_REASON
         if inspected["mode"] == "missing":

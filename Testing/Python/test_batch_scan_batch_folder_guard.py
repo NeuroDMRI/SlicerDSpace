@@ -132,6 +132,67 @@ class BatchFolderGuardTest(unittest.TestCase):
                          [("batch", self.batch, "subject_root")])
         self.assertEqual(skipped, [])
 
+    def test_review_b1_scanned_alias_of_the_batch_folder_is_not_a_subject(self):
+        """Review B1 (Opus) / P1 (Codex): the "entry is the Batch Folder itself" exemption is for --subject-list only.
+
+        In scan (glob) mode a symlink back to the Batch Folder resolved to the Batch Folder and was exempt, so the
+        Batch Folder became a subject again.
+        """
+        write_direct_nifti(self.batch)
+        (self.batch / "alias").symlink_to(self.batch, target_is_directory=True)
+        subjects, skipped = batch_cli.discover_subjects(self.batch)
+        self.assertEqual(subjects, [])
+        self.assertEqual(self.reasons(skipped), {"batch": NEW_REASON})
+
+    def test_review_b1_scanned_alias_beside_a_dicom_subject(self):
+        """Review B1: the alias must not take the DICOM sibling's files through the Batch Folder."""
+        write_dicom(self.batch / "sub-a")
+        (self.batch / "loop").symlink_to(self.batch, target_is_directory=True)
+        subjects, skipped = batch_cli.discover_subjects(self.batch)
+        self.assertEqual([(s.subject_id, s.subject_root, s.mode) for s in subjects],
+                         [("sub-a", (self.batch / "sub-a").resolve(), "dicom")])
+        self.assertEqual(self.reasons(skipped), {"batch": NEW_REASON})
+
+    def test_review_b1_glob_that_selects_the_batch_folder_itself(self):
+        """Review B1: a recursive glob yields the Batch Folder itself as a candidate; it is not a subject."""
+        write_canonical(self.batch)
+        subjects, skipped = batch_cli.discover_subjects(self.batch, subject_glob="**")
+        self.assertNotIn(self.batch.resolve(), [s.subject_root for s in subjects])
+        self.assertEqual(self.reasons(skipped).get("batch"), NEW_REASON)
+
+    def test_review_help_legacy_files_keep_an_empty_subfolder_in_scan_mode(self):
+        """Review P1 (Codex) / P2-5 (Opus): supported fallbacks keep an empty subfolder as a subject (scan mode)."""
+        (self.batch / "sub-l").mkdir()
+        write_registered(self.batch, "sub-l")
+        subjects, skipped = batch_cli.discover_subjects(self.batch)
+        self.assertEqual([(s.subject_id, s.mode) for s in subjects], [("sub-l", "legacy_registered")])
+        self.assertEqual(skipped, [])
+
+    def test_review_help_input_in_the_output_folder_keeps_an_empty_subfolder(self):
+        """Review P1 (Codex) / P2-5 (Opus): input prepared in the Output Folder keeps an empty subfolder."""
+        (self.batch / "sub-01").mkdir()
+        out = self.root / "out"
+        write_canonical(out / "sub-01")
+        subjects, skipped = batch_cli.discover_subjects(self.batch, output_root=out)
+        self.assertEqual([(s.subject_id, s.subject_root) for s in subjects], [("sub-01", (out / "sub-01").resolve())])
+        self.assertEqual(skipped, [])
+
+    def test_review_help_sentence_is_true_for_the_supported_fallbacks(self):
+        """Review P1 (Codex) / P2-5 (Opus): "a subfolder with no readable input is skipped" was false for the two
+        fallbacks above. The help now says a subfolder is skipped when the scan finds no input for it."""
+        if str(REPO_ROOT) not in sys.path:
+            sys.path.insert(0, str(REPO_ROOT))
+        from shared import ui_onboarding
+
+        for lang, sentence, old in (
+            ("en", "A subfolder is skipped when the scan finds no input for it.",
+             "A subfolder with no readable input is skipped."),
+            ("zh", "扫描找不到输入的子文件夹会被跳过。", "没有可读取输入的子文件夹会被跳过。"),
+        ):
+            text = ui_onboarding.onboarding_text(lang, "help_batch_folder")
+            self.assertIn(sentence, text, lang)
+            self.assertNotIn(old, text, lang)
+
     def test_nested_subject_list_entry_stays_accepted(self):
         write_canonical(self.batch / "group" / "sub-n")
         listing = self.root / "list.txt"

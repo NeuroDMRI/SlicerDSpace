@@ -32,7 +32,7 @@ For developer source staging instead of a release archive, see [the project READ
 A release archive holds the code of its build day. Later fixes are published as an incremental code update for the same release. Apply the update once after the installation, and again when a new update is published.
 
 - **GUI**: in the SlicerDSpace module, click **Check for updates**, confirm **Download and apply now?**, then restart 3D Slicer.
-- **Command line only** (for example a server without a display): run the commands below. `MODULE_ROOT` is the `lib/Slicer-5.10/qt-scripted-modules` folder of the unpacked extension (step 4 above). The example uses the Linux paths.
+- **Command line only** (for example a server without a display): run the commands below. `MODULE_ROOT` is the `lib/Slicer-5.10/qt-scripted-modules` folder of the unpacked extension (step 4 above). The example uses the Linux paths. Run the commands when no SlicerDSpace job and no 3D Slicer session use this installation. Start them again after the update.
 
 ~~~bash
 SLICER_DIR="$HOME/Slicer-5.10.0-linux-amd64"

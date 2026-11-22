@@ -32,7 +32,7 @@
 发布包内是打包当天的代码。之后的修复以同一版本的增量代码更新发布。安装后请应用一次更新；有新的更新发布时再应用一次。
 
 - **界面**：在 SlicerDSpace 模块中点击 **检查更新**，确认下载并应用，然后重启 3D Slicer。
-- **仅命令行**（例如没有显示器的服务器）：运行下面的命令。`MODULE_ROOT` 是扩展解压目录中的 `lib/Slicer-5.10/qt-scripted-modules` 文件夹（见上面第 4 步）。示例使用 Linux 路径。
+- **仅命令行**（例如没有显示器的服务器）：运行下面的命令。`MODULE_ROOT` 是扩展解压目录中的 `lib/Slicer-5.10/qt-scripted-modules` 文件夹（见上面第 4 步）。示例使用 Linux 路径。请在没有 SlicerDSpace 任务和 3D Slicer 会话使用该安装时运行命令，更新后再重新启动它们。
 
 ~~~bash
 SLICER_DIR="$HOME/Slicer-5.10.0-linux-amd64"

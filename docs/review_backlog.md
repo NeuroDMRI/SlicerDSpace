@@ -209,3 +209,26 @@ These items stay open. Decide by 6 December 2026.
 | fan93 pass 3 | P2 | The plan shows `surface \| will_run` although the four surface files and a `surface_manifest.json` with status `completed` exist (also in pass 2). The stage then finishes in about 12 s (pass 2), so it reuses its outputs internally; the plan line is wrong, not the result. Not re-run on the batch-2 code. | Give the planner the same completed-output check that the stage uses. |
 | fan93 pass 3 | P2 | The command-line code update worked on fan93 with no proxy, but a direct request to github.com timed out there a few minutes later; the built-in mirrors answered. The update can depend on the mirror fallback, and the URL that served it was not observed. | Print the URL that served the manifest and the overlay in the update result. |
 | Opus (site) P2-1 | P2 | `docs/site/index.html`, command-line block: the item "Update first" comes after the `--doctor` code block, so a reader who works from top to bottom runs the dependency check on the base code first (nothing breaks: the check is DTI-only). | Move the item above the code block when the block is next edited. |
+
+## 22 November 2026: batch scan guard (a subject never takes the Batch Folder itself as its input)
+
+Decide by 6 December 2026. All four items are behaviour of the code before the guard too (`5f06924f`); the guard did not cause them.
+
+| Source | Label | Item | Proposed fix |
+|---|---|---|---|
+| Opus (scan) P2-1 | P2 | A subfolder that is a symlink to the parent of the Batch Folder (`batch/up -> ..`) becomes a subject whose root is the parent folder; `is_dicom_root` then searches the parent recursively. The guard compares only with the Batch Folder itself. | Reject a scanned candidate that resolves outside the Batch Folder, or to one of its ancestors. |
+| Opus (scan) P2-2 | P2 | With a glob that holds a slash (`--subject-glob "*/*"`), an empty `batch/site1/sub-b` gets the data of `batch/sub-b` through the `<Batch Folder>/<subject ID>` fallback, and `batch/sub-b/input` resolves to `batch/sub-b` too: the same data runs under two IDs. The default glob `*` is not affected. | Apply the `<Batch Folder>/<subject ID>` fallback only to subject-list entries, or reject two subjects with the same resolved root. |
+| Opus (scan) P2-3 | P2 | A `--subject-list` entry with an absolute path outside the Batch Folder that holds no input (`/ext/sub-a`) resolves to `batch/sub-a` through the same-ID lookup. It looks intended; it is not documented. | Document it in the help of `--subject-list`, or print the resolved root per subject. |
+| Opus (scan) P2-4 | P2 | A `--subject-list` entry that is any file (`sub-b/notes.txt`) is exempt from the guard; with DICOM files elsewhere in the Batch Folder the subject `notes.txt` gets the Batch Folder as its DICOM root. | Limit the file exemption to files that are a readable input (NIfTI, NRRD, DICOM). |
+| Opus (scan re-review) P2-1 | P2 | With `--arrange-inputs copy` (command line only; the GUI passes `none`), the arrange step writes before the guard rejects: for data directly in the Batch Folder plus a symlink back to it, `batch/input/` is still created and the subject is then skipped. The skip is right; the copies stay. | Run the guard before `_arrange_subject_input`, or arrange only an accepted subject. |
+| Opus (scan re-review) P2-2 | P2 | The same alias with `--arrange-inputs copy --output-root out` still gives a subject `batch` with root `out/batch`, built from data that sits directly in the Batch Folder (same as before the guard). With `--subject-glob "**"` a nested `sub-1/input` becomes a second subject with root `sub-1` (belongs with Opus (scan) P2-2). | Reject a scanned candidate that resolves to the Batch Folder before any arrange step; reject two subjects with the same resolved root. |
+
+## 22 November 2026: Results subgroups (second-level folders inside the result families)
+
+Decide by 6 December 2026.
+
+| Source | Label | Item | Proposed fix |
+|---|---|---|---|
+| Opus (groups) P2-1 | P2 | After a language switch, the tooltips of the eye column ("Show" / "Hide", "显示" / "隐藏") keep the old language until the next visibility refresh or rebuild. The same before this change; the change renames only family and subgroup captions in place. | Call the visibility refresh at the end of `refresh_results_language`. |
+| Opus (groups) P2-3 | P2 | The Results subgroup says "Brain parcellation" / "脑区分割" (the name of the onboarding text and of the live stage line). The Anatomical priors popup says "Parcellation" / "大脑分区". The GUI has two Chinese names for one thing. | Choose one Chinese name and use it in `ui_algorithm_picker.ANATOMICAL_PRIORS`, `ui_onboarding` and `ui_run_state`. |
+| Author (probe) | P2 | Slicer's log shows `PythonQt: QObject::connect() signal 'contentsCollapsed(bool)' does not exist on QGroupBox` when the module opens: `resultsCollapsibleButton` is a `QGroupBox` in `Resources/UI/SlicerDSpace.ui`, and `install_results_panel` still connects the old signal (`shared/ui_run_history.py`, about line 846). Nothing breaks; the connect does nothing. | Remove the connect, or guard it by the widget class. |

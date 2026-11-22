@@ -717,10 +717,15 @@ class LiveRunProgressPanelTests(unittest.TestCase):
             self.assertEqual([item.text(0) for item in qc_items], ["tract_qc.txt", "summary_qc.txt"])
             self.assertTrue(all(item.text(1) == "↗" for item in qc_items))
 
+            def _paths_under(item):  # Results subgroups: a family holds subgroups, a subgroup holds files
+                rows = [item.child(j) for j in range(item.childCount())]
+                return [p for row in rows for p in ([row.data(0, fake_qt.Qt.UserRole)] if row.data(0, fake_qt.Qt.UserRole)
+                                                     else _paths_under(row))]
+
             all_paths = [
-                owner._runOutputFiles.topLevelItem(i).child(j).data(0, fake_qt.Qt.UserRole)
+                path
                 for i in range(owner._runOutputFiles.topLevelItemCount)
-                for j in range(owner._runOutputFiles.topLevelItem(i).childCount())
+                for path in _paths_under(owner._runOutputFiles.topLevelItem(i))
             ]
             self.assertIn(str(fa_file.resolve()), all_paths)
             self.assertNotIn(str(cache_file.resolve()), all_paths)

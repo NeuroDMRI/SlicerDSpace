@@ -442,6 +442,14 @@ def file_names(item) -> list[str]:
     return [item.child(i).text(0) for i in range(item.childCount())]
 
 
+def file_rows(item) -> list:
+    """Results subgroups: the file rows under a row at any depth (a family holds subgroups, a subgroup files)."""
+    found = []
+    for child in (item.child(i) for i in range(item.childCount())):
+        found.extend([child] if child.data(0, USER_ROLE) else file_rows(child))
+    return found
+
+
 class MergedTreeTest(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
@@ -470,14 +478,15 @@ class MergedTreeTest(unittest.TestCase):
         families = child_texts(subject)
         self.assertEqual(families, ["Preprocessing (1)", "Microstructure (2)", "Tractography (1)"])
         micro = find_child(subject, "Microstructure")
-        self.assertEqual(file_names(micro), ["md.nii.gz", "fa.nii.gz"])  # newest run first, each file once
+        # Results subgroups: microstructure.md / .fa are subgroups "md" and "fa" (rule 2), newest run first.
+        self.assertEqual(file_names(micro), ["md (1)", "fa (1)"])
+        self.assertEqual([leaf.text(0) for leaf in file_rows(micro)], ["md.nii.gz", "fa.nii.gz"])  # each file once
         # A file belongs to the newest run that lists it; the roles stay valid for the existing readers.
         owner_of = {
             "a_dwi.nii.gz": old, "fa.nii.gz": mid, "md.nii.gz": new, "tracts.tck": new,
         }
         index = {str(new.manifest_path): 0, str(mid.manifest_path): 1, str(old.manifest_path): 2}
-        leaves = [leaf for family in (subject.child(i) for i in range(subject.childCount()))
-                  for leaf in (family.child(j) for j in range(family.childCount()))]
+        leaves = file_rows(subject)
         self.assertEqual(len(leaves), 4)
         for leaf in leaves:
             record = owner_of[leaf.text(0)]
@@ -561,7 +570,7 @@ class OutputMenuTest(unittest.TestCase):
             h.refresh([new, old])
             self.assertEqual(h.owner._latestResultManifestPath, new.manifest_path)  # the newest run is selected
             subject = h.tree.topLevelItem(0)
-            seg_leaf = find_child(subject, "Anatomical").child(0)
+            seg_leaf = find_child(subject, "Anatomical").child(0).child(0)  # Results subgroups: family > subgroup > file
             self.assertEqual(seg_leaf.data(0, USER_ROLE + 2), str(old.manifest_path))
             seen = []
             h.owner._manage_result_scene = lambda mode: seen.append(
@@ -595,7 +604,7 @@ class OutputMenuTest(unittest.TestCase):
         new = make_manifest(root, "sub1", "runB", "2026-11-02T10:00:00Z", [("microstructure.fa", "/x/fa.nii.gz")])
         h = Harness(self)
         h.refresh([new, old])
-        seg_leaf = find_child(h.tree.topLevelItem(0), "Anatomical").child(0)
+        seg_leaf = find_child(h.tree.topLevelItem(0), "Anatomical").child(0).child(0)  # family > subgroup > file
         self.assertEqual(seg_leaf.data(0, USER_ROLE + 2), str(old.manifest_path))
         seen = []
         h.owner._manage_result_scene = lambda mode: seen.append(
@@ -709,7 +718,7 @@ class ExpansionTest(unittest.TestCase):
         family.setExpanded(True)
         h.refresh(records)
         family = find_child(h.tree.topLevelItem(0), "Microstructure")
-        leaf = family.child(0)
+        leaf = family.child(0).child(0)  # Results subgroups: family > subgroup "fa" > file
         h.tree.setCurrentItem(leaf)
         h.tree.bar.value = 37
         h.refresh(records)
@@ -727,7 +736,7 @@ class ExpansionTest(unittest.TestCase):
         h.refresh(records)
         family = find_child(h.tree.topLevelItem(0), "Microstructure")
         family.setExpanded(True)
-        h.tree.setCurrentItem(family.child(0))
+        h.tree.setCurrentItem(family.child(0).child(0))  # Results subgroups: family > subgroup > file
         manifest = json.loads(records[0].manifest_path.read_text(encoding="utf-8"))
         ui_run_history.show_record(h.owner, records[0], manifest)  # rebuilds sub2, the selected subject
         current = h.tree.currentItem()
@@ -749,7 +758,7 @@ class ExpansionTest(unittest.TestCase):
         h.refresh(records)
         family = find_child(h.tree.topLevelItem(0), "Microstructure")
         family.setExpanded(True)
-        h.tree.setCurrentItem(family.child(0))
+        h.tree.setCurrentItem(family.child(0).child(0))  # Results subgroups: family > subgroup > file
         family.setExpanded(False)  # the user collapses the family; the file stays current
         h.refresh(records)
         family = find_child(h.tree.topLevelItem(0), "Microstructure")
@@ -768,7 +777,7 @@ class ExpansionTest(unittest.TestCase):
         subject = h.tree.topLevelItem(0)
         family = find_child(subject, "Microstructure")
         family.setExpanded(True)
-        h.tree.setCurrentItem(family.child(0))
+        h.tree.setCurrentItem(family.child(0).child(0))  # Results subgroups: family > subgroup > file
         family.setExpanded(False)
         subject.setExpanded(False)  # both the family and the subject are collapsed now
         h.refresh(records)
@@ -1341,7 +1350,7 @@ class HideAndClearTest(unittest.TestCase):
                 a1, b1, a2 = self.runs()
                 h = self.harness([a2, b1, a1])
                 subject = self.subject_item(h, "sub1")
-                item = find_child(subject, "Microstructure").child(0) if target == "file" else subject
+                item = file_rows(find_child(subject, "Microstructure"))[0] if target == "file" else subject
                 self.remove_via_menu(h, item)
                 self.assertEqual(h.labels(), ["sub2 · completed"])
 
@@ -1547,7 +1556,7 @@ class HideAndClearTest(unittest.TestCase):
         tissue = make_manifest(self.root, "sub1", "runA", "2026-11-01T10:00:00Z",
                                [("segmentation.tissue", "/x/tissue_seg.nii.gz")])
         h = self.harness([tissue])
-        leaf = find_child(h.tree.topLevelItem(0), "Anatomical").child(0)
+        leaf = find_child(h.tree.topLevelItem(0), "Anatomical").child(0).child(0)  # family > subgroup > file
         h.tree.itemAt = lambda _position: leaf
         ui_run_history._output_menu(h.owner, (3, 3))
         self.assertEqual([action.text for action in h.menus[-1].actions],
@@ -1744,8 +1753,9 @@ class OpenFolderTest(unittest.TestCase):
         h = self.harness([record])
         subject = self.subject_item(h, "sub1")
         family = find_child(subject, "Microstructure")
-        leaf = family.child(0)
+        leaf = family.child(0).child(0)  # Results subgroups: family > subgroup > file
         self.assertNotIn(1, family.icons)
+        self.assertNotIn(1, family.child(0).icons)
         self.assertIsNone(family.data(0, USER_ROLE + 5))
         self.assertIsNone(leaf.data(0, USER_ROLE + 5))
         h.tree.itemClicked.emit(subject, 0)  # a click on the text only selects

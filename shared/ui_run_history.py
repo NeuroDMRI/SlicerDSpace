@@ -63,6 +63,53 @@ RESULTS_HEADER_BUTTON_SIZE = (28, 22)  # the module's "..." buttons
 RESULTS_WINDOW_NAME = "resultsWindow"
 MODULE_ROOT_RULE = "qMRMLWidget#DDSurfer {"  # the root rule of ui_styles.ui_stylesheet, in both themes
 RESULT_FAMILY_ORDER = ("preprocessing", "anatomy", "microstructure", "tractography", "bundles", "connectome", "qc")
+RESULT_FAMILY_TITLES = {
+    "anatomy": ("Anatomical priors", "解剖先验"),
+    "preprocessing": ("Preprocessing", "预处理"),
+    "microstructure": ("Microstructure", "微结构"),
+    "tractography": ("Tractography", "纤维追踪"),
+    "bundles": ("Fibre bundles", "纤维束"),
+    "connectome": ("Connectome", "连接组"),
+    "qc": ("Quality control", "质量控制"),
+}
+# Results subgroups (Batch 2): the second level inside these families, in this order. A product of one of these
+# families that is not listed gets its own subgroup after the listed ones, captioned with the part after the first dot.
+# Captions reuse the GUI's names for the same thing (one name for one thing): for anatomy the onboarding labels
+# "segmentation", "parcellation", "surface", "surface_postprocess" (also the live stage names; the anatomical priors
+# popup shows shorter forms), and for the algorithms the "..." popup labels (shared.algorithm_selection.LABELS,
+# shown untranslated in both languages).
+RESULT_SUBGROUP_ORDER = {
+    "anatomy": ("segmentation", "parcellation", "surfaces", "postprocess"),
+    "microstructure": ("dti", "freewater", "ifw", "noddi", "dki", "mkcurve"),
+    "tractography": ("ukf", "csd_act", "dti_det", "saf"),
+    "bundles": ("wmql", "wma", "tractcloud"),
+    "connectome": ("streamline_count", "sift2_weighted"),
+}
+RESULT_SUBGROUP_CAPTIONS = {
+    ("anatomy", "segmentation"): ("Tissue segmentation", "组织分割"),
+    ("anatomy", "parcellation"): ("Brain parcellation", "脑区分割"),
+    ("anatomy", "surfaces"): ("Cortical surfaces", "皮层表面"),
+    ("anatomy", "postprocess"): ("Surface postprocess", "表面后处理"),
+    ("microstructure", "dti"): ("DTI", "DTI"),
+    ("microstructure", "freewater"): ("FW", "FW"),
+    ("microstructure", "ifw"): ("iFW", "iFW"),
+    ("microstructure", "noddi"): ("NODDI", "NODDI"),
+    ("microstructure", "dki"): ("DKI", "DKI"),
+    ("microstructure", "mkcurve"): ("MK-Curve", "MK-Curve"),
+    ("tractography", "ukf"): ("UKF", "UKF"),
+    ("tractography", "csd_act"): ("CSD / ACT", "CSD / ACT"),
+    ("tractography", "dti_det"): ("DTI", "DTI"),
+    ("tractography", "saf"): ("CSD + SAF", "CSD + SAF"),
+    ("bundles", "wmql"): ("WMQL", "WMQL"),
+    ("bundles", "wma"): ("WMA", "WMA"),
+    ("bundles", "tractcloud"): ("TractCloud", "TractCloud"),
+    ("connectome", "streamline_count"): ("Fiber count", "Fiber count"),
+    ("connectome", "sift2_weighted"): ("SIFT2", "SIFT2"),
+}
+_SUBGROUP_ALIASES = {("tractography", "act"): "csd_act"}
+# The ROLE_KEY of a subgroup row is "<family>::<subgroup>" (e.g. "anatomy::surfaces"). A family key is a bare product
+# head and a subject key is a subject ID or "batch:<path>", so neither holds "::" and the forms cannot collide.
+SUBGROUP_KEY_SEPARATOR = "::"
 # Item data roles of the Results tree, as offsets from Qt.UserRole.
 ROLE_PATH, ROLE_KIND, ROLE_MANIFEST, ROLE_RUN, ROLE_KEY = 0, 1, 2, 3, 4
 ROLE_FOLDER = 5  # Batch 2: the folder on disk of a subject row (the Open folder button); text, empty when unknown
@@ -1323,20 +1370,70 @@ def _top_item(item: Any) -> Any:
     return item
 
 
+def _is_subgroup_key(key: Any) -> bool:
+    return isinstance(key, str) and SUBGROUP_KEY_SEPARATOR in key
+
+
+def _subgroup_key(family: str, subgroup: str) -> str:
+    return f"{family}{SUBGROUP_KEY_SEPARATOR}{subgroup}"
+
+
+def _result_subgroup(family: str, product: str) -> Optional[str]:
+    """The subgroup of a product inside its family; None for a flat family (preprocessing, qc, unknown)."""
+
+    if family not in RESULT_SUBGROUP_ORDER:
+        return None
+    # A multi-tracking run names a task "<product>@<tracking backend>" (shared/multi_tracking.py); the files of
+    # every tracking source go to the algorithm's one subgroup (no third level).
+    product = product.split("@", 1)[0]
+    head, _, rest = product.partition(".")
+    if family == "anatomy":
+        if head == "postprocess" or product == "surface.ddsurfer_postprocess":
+            return "postprocess"
+        if head in ("segmentation", "parcellation"):
+            return head
+        if head == "surface":
+            return "surfaces"
+    rest = rest or product
+    return _SUBGROUP_ALIASES.get((family, rest), rest)
+
+
+def _family_caption(family: Any, zh: bool) -> str:
+    return RESULT_FAMILY_TITLES.get(family, (family, family))[int(zh)]
+
+
+def _subgroup_caption(key: str, zh: bool) -> str:
+    family, _, subgroup = key.partition(SUBGROUP_KEY_SEPARATOR)
+    return RESULT_SUBGROUP_CAPTIONS.get((family, subgroup), (subgroup, subgroup))[int(zh)]
+
+
+def _file_count(item: Any, role_path: Any) -> int:
+    """The file rows under a family row, through its subgroups."""
+
+    return sum(1 if child.data(0, role_path) else _file_count(child, role_path) for child in _child_items(item))
+
+
 def _item_key(qt_mod: Any, item: Any) -> Optional[tuple]:
-    """A key that survives a rebuild: subject, (subject, family) or (subject, file path)."""
+    """A key that survives a rebuild: subject, (subject, family), (subject, family, subgroup) or (subject, path).
+
+    Results subgroups: the row kind comes from the row's data, not from its depth (a file row sits under a family
+    or under a subgroup); the subject is always the top item.
+    """
 
     role_key, role_path = _user_role(qt_mod, ROLE_KEY), _user_role(qt_mod, ROLE_PATH)
     parent = item.parent()
+    key = item.data(0, role_key)
     if parent is None:
-        key = item.data(0, role_key)
         return ("subject", key) if key else None
-    grand = parent.parent()
-    if grand is None:
-        key = item.data(0, role_key)
-        return ("family", parent.data(0, role_key), key) if key else None
+    subject = _top_item(item).data(0, role_key)
     path = item.data(0, role_path)
-    return ("file", grand.data(0, role_key), str(path)) if path else None
+    if path:
+        return ("file", subject, str(path))
+    if not key:
+        return None
+    if _is_subgroup_key(key):
+        return ("subgroup", subject, parent.data(0, role_key), key)
+    return ("family", subject, key) if parent.parent() is None else None
 
 
 def _view_snapshot(qt_mod: Any, tree: Any) -> tuple[Optional[tuple], Any]:
@@ -1368,12 +1465,15 @@ def _restore_scroll(tree: Any, scroll: Any) -> None:
 
 
 def _expansion_state(owner: Any) -> dict:
-    """What the user expanded or collapsed in this session: ``subjects[key]`` and ``families[(key, family)]``."""
+    """What the user expanded or collapsed in this session: ``subjects[key]``, ``families[(key, family)]`` and
+    ``subgroups[(key, family, subgroup key)]``."""
 
     state = getattr(owner, "_resultsExpansion", None)
     if not isinstance(state, dict):
         state = {"subjects": {}, "families": {}}
         owner._resultsExpansion = state
+    for name in ("subjects", "families", "subgroups"):
+        state.setdefault(name, {})
     return state
 
 
@@ -1392,14 +1492,24 @@ def _record_expansion(owner: Any, item: Any, expanded: bool) -> None:
         state["subjects"][key[1]] = bool(expanded)
     elif key[0] == "family":
         state["families"][(key[1], key[2])] = bool(expanded)
+    elif key[0] == "subgroup":
+        state["subgroups"][(key[1], key[2], key[3])] = bool(expanded)
 
 
 def _apply_family_expansion(owner: Any, subject_item: Any, qt_mod: Any) -> None:
+    """The remembered state of the families and subgroups of a subject; both start collapsed."""
+
     role_key = _user_role(qt_mod, ROLE_KEY)
     subject_key = subject_item.data(0, role_key)
-    families = _expansion_state(owner)["families"]
+    state = _expansion_state(owner)
+    families, subgroups = state["families"], state["subgroups"]
     for family in _child_items(subject_item):
-        _set_expanded(family, families.get((subject_key, family.data(0, role_key)), False))
+        family_key = family.data(0, role_key)
+        _set_expanded(family, families.get((subject_key, family_key), False))
+        for row in _child_items(family):
+            row_key = row.data(0, role_key)
+            if _is_subgroup_key(row_key):
+                _set_expanded(row, subgroups.get((subject_key, family_key, row_key), False))
 
 
 def running_subject_id(owner: Any) -> str:
@@ -1481,18 +1591,30 @@ def _fill_subject_children(owner: Any, subject_item: Any, records, indices, mani
 
 
 def _order_families(subject_item: Any) -> None:
-    """Keep the families in their usual order, also when an older run adds one that a newer run lacks."""
+    """Keep the families and their subgroups in their usual order, also when an older run adds one that a newer
+    run lacks. Call it before the expansion is applied: a taken and re-added row loses its expansion in Qt."""
 
     import qt as qt_mod
 
     role_key = _user_role(qt_mod, ROLE_KEY)
     rank = {family: position for position, family in enumerate(RESULT_FAMILY_ORDER)}
-    children = _child_items(subject_item)
-    ordered = sorted(children, key=lambda child: rank.get(child.data(0, role_key), len(rank)))
+    _reorder_children(subject_item, lambda child: rank.get(child.data(0, role_key), len(rank)))
+    for family in _child_items(subject_item):
+        family_key = family.data(0, role_key)
+        names = RESULT_SUBGROUP_ORDER.get(family_key)
+        if not names:
+            continue
+        sub_rank = {_subgroup_key(family_key, name): position for position, name in enumerate(names)}
+        _reorder_children(family, lambda child: sub_rank.get(child.data(0, role_key), len(sub_rank)))
+
+
+def _reorder_children(item: Any, rank) -> None:
+    children = _child_items(item)
+    ordered = sorted(children, key=rank)  # stable: rows of one rank keep their order (newest run first)
     if ordered != children:
-        subject_item.takeChildren()
+        item.takeChildren()
         for child in ordered:
-            subject_item.addChild(child)
+            item.addChild(child)
 
 
 def _build_subject_item(owner: Any, qt_mod: Any, tree: Any, records, group: dict) -> Any:
@@ -2215,7 +2337,7 @@ def refresh_results_language(owner: Any) -> None:
     """A language switch: the texts that the generic bindings cannot set (R4). No rescan, no tree rebuild.
 
     The counted Show-hidden button, the accessible name of Hide all, and the tooltip and accessible name of the
-    Open folder button of every subject row.
+    Open folder button of every subject row, and the captions of the family and subgroup rows.
     """
 
     button = getattr(owner, "_resultsShowHiddenButton", None)
@@ -2232,11 +2354,30 @@ def refresh_results_language(owner: Any) -> None:
         import qt
 
         role = _user_role(qt, ROLE_FOLDER)
+        zh = str(getattr(owner, "_onboardingLanguage", "en")).startswith("zh")
         for item in _child_items(tree):
             if item.data(0, role) is not None:
                 _set_folder_button_text(owner, qt, item)
+                for family in _child_items(item):
+                    _relabel_family(qt, family, zh)
+            else:  # the flat fallback tree: the families are the top-level rows
+                _relabel_family(qt, item, zh)
     except Exception:
         pass
+
+
+def _relabel_family(qt_mod: Any, family: Any, zh: bool) -> None:
+    """Results subgroups: the caption of a family row and of its subgroup rows in the current language."""
+
+    role_key, role_path = _user_role(qt_mod, ROLE_KEY), _user_role(qt_mod, ROLE_PATH)
+    family_key = family.data(0, role_key)
+    if not family_key or family.data(0, role_path):
+        return
+    family.setText(0, f"{_family_caption(family_key, zh)} ({_file_count(family, role_path)})")
+    for row in _child_items(family):
+        row_key = row.data(0, role_key)
+        if _is_subgroup_key(row_key):
+            row.setText(0, f"{_subgroup_caption(row_key, zh)} ({_tree_count(row, 'childCount')})")
 
 
 def open_results_folder(owner: Any, folder: Any) -> None:
@@ -2522,32 +2663,26 @@ def _populate_manifest_output_items(
                 groups.setdefault("qc", {})[str(txt_path.resolve())] = False
 
     zh = str(getattr(owner, "_onboardingLanguage", "en")).startswith("zh")
-    titles = {
-        "anatomy": ("Anatomical priors", "解剖先验"),
-        "preprocessing": ("Preprocessing", "预处理"),
-        "microstructure": ("Microstructure", "微结构"),
-        "tractography": ("Tractography", "纤维追踪"),
-        "bundles": ("Fibre bundles", "纤维束"),
-        "connectome": ("Connectome", "连接组"),
-        "qc": ("Quality control", "质量控制"),
-    }
-    families = {}
+    # family -> subgroup (None for a flat family) -> {path: visual}
+    families: dict = {}
     for product, paths in groups.items():
         family = product.split(".", 1)[0]
         if family in {"surface", "segmentation", "parcellation", "postprocess"}:
             family = "anatomy"
-        families.setdefault(family, {}).update(paths)
+        families.setdefault(family, {}).setdefault(_result_subgroup(family, product), {}).update(paths)
     role_manifest = _user_role(qt, ROLE_MANIFEST)
     role_run = _user_role(qt, ROLE_RUN)
     role_key = _user_role(qt, ROLE_KEY)
+    role_path = _user_role(qt, ROLE_PATH)
     manifest_str = str(resolved_manifest) if resolved_manifest is not None else None
     family_order = RESULT_FAMILY_ORDER
     ordered_families = [
         *[family for family in family_order if family in families],
         *[family for family in families if family not in family_order],
     ]
-    # The parent may already hold families and files of a newer run: add to them, skip what is there.
+    # The parent may already hold families, subgroups and files of a newer run: add to them, skip what is there.
     existing: dict = {}
+    existing_subgroups: dict = {}
     seen_paths: set = set()
     for child in _child_items(parent):
         if not callable(getattr(child, "data", None)):
@@ -2555,40 +2690,78 @@ def _populate_manifest_output_items(
         family_key = child.data(0, role_key)
         if family_key:
             existing[family_key] = child
-        for leaf in _child_items(child):
-            seen_paths.add(str(leaf.data(0, _user_role(qt, ROLE_PATH))))
+        for row in _child_items(child):
+            row_path = row.data(0, role_path)
+            if row_path:
+                seen_paths.add(str(row_path))
+                continue
+            row_key = row.data(0, role_key)
+            if _is_subgroup_key(row_key):
+                existing_subgroups[row_key] = row
+            for leaf in _child_items(row):
+                leaf_path = leaf.data(0, role_path)
+                if leaf_path:
+                    seen_paths.add(str(leaf_path))
+
+    def _mark_run(row: Any) -> None:
+        # A family or subgroup row carries the run that made it: a click on it selects that run.
+        if run_index is not None:
+            row.setData(0, role_run, run_index)
+        if manifest_str is not None and run_index is not None:
+            row.setData(0, role_manifest, manifest_str)
+
     for family in ordered_families:
-        paths = {path: visual for path, visual in families[family].items() if path not in seen_paths}
-        if not paths:
+        subgroups = families[family]
+        names = RESULT_SUBGROUP_ORDER.get(family, ())
+        rank = {name: position for position, name in enumerate(names)}
+        fresh: list = []
+        for subgroup in sorted(subgroups, key=lambda name: rank.get(name, len(rank))):
+            paths = {path: visual for path, visual in subgroups[subgroup].items() if path not in seen_paths}
+            if paths:
+                seen_paths.update(paths)
+                fresh.append((subgroup, paths))
+        if not fresh:
             continue
-        seen_paths.update(paths)
-        caption = titles.get(family, (family, family))[int(zh)]
+        caption = _family_caption(family, zh)
         group = existing.get(family)
         if group is None:
-            group = qt.QTreeWidgetItem(parent, [f"{caption} ({len(paths)})"])
+            total = sum(len(paths) for _, paths in fresh)
+            group = qt.QTreeWidgetItem(parent, [f"{caption} ({total})"])
             group.setData(0, role_key, family)
-            if run_index is not None:
-                group.setData(0, role_run, run_index)
-            if manifest_str is not None and run_index is not None:
-                group.setData(0, role_manifest, manifest_str)
+            _mark_run(group)
             existing[family] = group
             added_to_existing = False
         else:
             added_to_existing = True
-        for path, visual in paths.items():
-            item = qt.QTreeWidgetItem(group, [Path(path).name, "○" if visual else "↗"])
-            item.setData(0, _user_role(qt, ROLE_PATH), path)
-            if path in seg_paths:
-                item.setData(0, _user_role(qt, ROLE_KIND), "segmentation")
-            elif path in fiber_paths:
-                item.setData(0, _user_role(qt, ROLE_KIND), FIBER_ROW_KIND)
-            if manifest_str is not None:
-                item.setData(0, role_manifest, manifest_str)
-            if run_index is not None:
-                item.setData(0, role_run, run_index)
-            item.setToolTip(0, path)
+        for subgroup, paths in fresh:
+            target = group
+            if subgroup is not None:
+                key = _subgroup_key(family, subgroup)
+                target = existing_subgroups.get(key)
+                if target is None:
+                    target = qt.QTreeWidgetItem(group, [f"{_subgroup_caption(key, zh)} ({len(paths)})"])
+                    target.setData(0, role_key, key)
+                    _mark_run(target)
+                    existing_subgroups[key] = target
+                    sub_existed = False
+                else:
+                    sub_existed = True
+            for path, visual in paths.items():
+                item = qt.QTreeWidgetItem(target, [Path(path).name, "○" if visual else "↗"])
+                item.setData(0, role_path, path)
+                if path in seg_paths:
+                    item.setData(0, _user_role(qt, ROLE_KIND), "segmentation")
+                elif path in fiber_paths:
+                    item.setData(0, _user_role(qt, ROLE_KIND), FIBER_ROW_KIND)
+                if manifest_str is not None:
+                    item.setData(0, role_manifest, manifest_str)
+                if run_index is not None:
+                    item.setData(0, role_run, run_index)
+                item.setToolTip(0, path)
+            if subgroup is not None and sub_existed:
+                target.setText(0, f"{_subgroup_caption(key, zh)} ({_tree_count(target, 'childCount')})")
         if added_to_existing:
-            group.setText(0, f"{caption} ({_tree_count(group, 'childCount')})")
+            group.setText(0, f"{caption} ({_file_count(group, role_path)})")
 
 
 def _target_run_index(owner: Any, run_items: dict, run_index: Optional[int]) -> Optional[int]:

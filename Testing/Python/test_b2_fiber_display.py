@@ -880,7 +880,9 @@ class FiberEyeIconTest(unittest.TestCase):
             parent = _Item(None, ["run"])
             with patch.dict(sys.modules, {"qt": qt}):
                 self.ui._populate_manifest_output_items(SimpleNamespace(_onboardingLanguage="en"), parent, manifest)
-        kinds = {leaf.text(0): leaf.data(0, 256 + self.ui.ROLE_KIND) for family in parent.children for leaf in family.children}
+        # Results subgroups: every family of this manifest has subgroups (family > subgroup > file).
+        kinds = {leaf.text(0): leaf.data(0, 256 + self.ui.ROLE_KIND)
+                 for family in parent.children for subgroup in family.children for leaf in subgroup.children}
         self.assertEqual(kinds, {"s_act.tck": "fiber_bundle", "AF.trk": "fiber_bundle", "lh.white.stl": None,
                                  "fa.nii.gz": None, "seeds.vtk": None})
 

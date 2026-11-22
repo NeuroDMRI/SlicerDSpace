@@ -68,7 +68,8 @@ def run():
         _show_output_files(widget, json.loads(manifest.read_text()))
         assert not owned_nodes(slicer, str(manifest))
         group = widget._runOutputFiles.topLevelItem(0)
-        item = next(group.child(i) for i in range(group.childCount()) if group.child(i).text(0) == image.name)
+        subgroup = group.child(0)  # Results subgroups: Microstructure > DTI > file
+        item = next(subgroup.child(i) for i in range(subgroup.childCount()) if subgroup.child(i).text(0) == image.name)
         _toggle_output(widget, item)
         nodes = owned_nodes(slicer, str(manifest))
         assert len(nodes) == 1

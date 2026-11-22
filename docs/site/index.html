@@ -206,6 +206,8 @@ export SUBJECT_ROOT="/path/to/sub-01"
   --targets microstructure --microstructure-stages dti --doctor</code></pre>
       </div>
       <dl class="start-kv-list">
+        <dt>Update first</dt>
+        <dd>A release archive holds the code of its build day. Apply the incremental code update once before the first run: in the GUI, click <span class="ui-chip">Check for updates</span>; on a server without a display, run the command in <a href="https://github.com/NeuroDMRI/SlicerDSpace/blob/main/docs/setup/QUICKSTART.md#update-the-code" target="_blank" rel="noopener">Quick Start › Update The Code</a>. With the current v0.1.1 archive on Linux, UKF tractography needs this update.</dd>
         <dt>Workflow</dt>
         <dd>Repeat with <code>--plan</code> to inspect planned tasks, then <code>--execute</code> to run them using identical method flags across all three steps.</dd>
         <dt>Multi-method</dt>

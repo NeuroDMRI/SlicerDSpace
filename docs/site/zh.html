@@ -206,6 +206,8 @@ export SUBJECT_ROOT="/path/to/sub-01"
   --targets microstructure --microstructure-stages dti --doctor</code></pre>
       </div>
       <dl class="start-kv-list">
+        <dt>先更新代码</dt>
+        <dd>发布包内是打包当天的代码。首次运行前请应用一次增量代码更新：在界面中点击 <span class="ui-chip">检查更新</span>；在没有显示器的服务器上，运行 <a href="https://github.com/NeuroDMRI/SlicerDSpace/blob/main/docs/setup/QUICKSTART.md#update-the-code" target="_blank" rel="noopener">快速开始 › 更新代码</a>中的命令。当前 v0.1.1 发布包在 Linux 上需要此更新才能运行 UKF 纤维追踪。</dd>
         <dt>执行三步</dt>
         <dd>改用 <code>--plan</code> 检查执行计划，再用 <code>--execute</code> 正式运行，三步保持一致的方法参数。</dd>
         <dt>多方法组合</dt>

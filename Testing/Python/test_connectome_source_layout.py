@@ -358,6 +358,75 @@ class ArchiveAndMigrationTests(unittest.TestCase):
         self.assertEqual(_flat_files(self.layout), [f"{SID}_streamline_count.csv"])
         self.assertEqual((published_ukf / f"{SID}_sift2_weighted.csv").read_text(encoding="utf-8"), "PUBLISHED UKF")
 
+    def test_b2_conn_fix_f1_legacy_flat_publish_never_replaces_an_existing_flat_file(self) -> None:
+        """Review F1 (rule 7): a legacy tree stays after ``clean_legacy=False``; its old matrices must not replace the
+        flat files that an earlier run already published, and a legacy tree without a flat file still gets one."""
+
+        legacy_root = self.root / "outputs" / "04_tractography" / "connectome"
+        legacy = legacy_root / "csd_act"
+        legacy_fa = legacy_root / "csd_act_mean_fa"
+        legacy.mkdir(parents=True)
+        legacy_fa.mkdir(parents=True)
+        legacy_files = {
+            legacy / f"{SID}-connectome-streamline_count.csv": "LEGACY MATRIX",
+            legacy / f"{SID}-connectome-sift2_weighted.csv": "LEGACY SIFT2",
+            legacy / f"{SID}-connectome-nodes.tsv": "LEGACY NODES",
+            legacy / f"{SID}-connectome-node-parcellation.nii.gz": "LEGACY PARCELLATION",
+            legacy_fa / f"{SID}-connectome-mean_fa.csv": "LEGACY FA",
+        }
+        for path, text in legacy_files.items():
+            path.write_text(text, encoding="utf-8")
+        flat = self.layout.connectome
+        flat.mkdir(parents=True)
+        existing = {
+            flat / f"{SID}_streamline_count.csv": "FLAT MATRIX",
+            flat / f"{SID}_sift2_weighted.csv": "FLAT SIFT2",
+            flat / f"{SID}_nodes.tsv": "FLAT NODES",
+            flat / f"{SID}_node_parcellation.nii.gz": "FLAT PARCELLATION",
+            flat / f"{SID}_mean_fa.csv": "FLAT FA",
+        }
+        for path, text in existing.items():
+            path.write_text(text, encoding="utf-8")
+        before = {path: path.read_bytes() for path in existing}
+
+        for _ in range(2):
+            migrate_subject_output_tree(self.root, clean_legacy=False)
+            for path, data in before.items():
+                self.assertEqual(path.read_bytes(), data, path.name)
+        self.assertEqual(_flat_files(self.layout), sorted(p.name for p in existing))
+        self.assertTrue((legacy / f"{SID}-connectome-streamline_count.csv").is_file())  # the legacy tree stays
+
+        # A legacy tree with no flat file still gets its flat files.
+        for path in existing:
+            path.unlink()
+        migrate_subject_output_tree(self.root, clean_legacy=False)
+        self.assertEqual((flat / f"{SID}_streamline_count.csv").read_text(encoding="utf-8"), "LEGACY MATRIX")
+        self.assertEqual((flat / f"{SID}_sift2_weighted.csv").read_text(encoding="utf-8"), "LEGACY SIFT2")
+        self.assertEqual((flat / f"{SID}_nodes.tsv").read_text(encoding="utf-8"), "LEGACY NODES")
+        self.assertEqual((flat / f"{SID}_node_parcellation.nii.gz").read_text(encoding="utf-8"), "LEGACY PARCELLATION")
+        self.assertEqual((flat / f"{SID}_mean_fa.csv").read_text(encoding="utf-8"), "LEGACY FA")
+
+    def test_b2_conn_fix_f2_flat_publish_uses_only_paths_this_call_wrote(self) -> None:
+        """Review F2: with ``clean_legacy=True`` the child folder moves first, so the hypothetical per-folder target of
+        the tree sync is never written; a current stage file there must not become the flat file."""
+
+        legacy = self.root / "outputs" / "04_tractography" / "connectome" / "r_streamline_count"
+        legacy.mkdir(parents=True)
+        name = f"{SID}-connectome-streamline_count.csv"
+        (legacy / name).write_text("LEGACY", encoding="utf-8")
+        old = time.time() - 1000
+        os.utime(legacy / name, (old, old))
+        hypothetical = self.layout.stage_cache("05_connectome") / "r_streamline_count"
+        hypothetical.mkdir(parents=True)
+        (hypothetical / name).write_text("CURRENT RUN", encoding="utf-8")
+        flat = self.layout.connectome / f"{SID}_streamline_count.csv"
+        self.assertFalse(flat.exists())
+
+        migrate_subject_output_tree(self.root, clean_legacy=True)
+
+        self.assertEqual(flat.read_text(encoding="utf-8"), "LEGACY")
+        self.assertEqual((hypothetical / name).read_text(encoding="utf-8"), "CURRENT RUN")
+
     def test_b2_conn_qc_text_migration_sees_source_folder_files(self) -> None:
         """(h) The migration-time QC text for the connectome also counts files in ``<source>/``."""
 

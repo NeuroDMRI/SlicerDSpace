@@ -671,44 +671,33 @@ def _refresh_microstructure_manifest_flags(layout: SubjectIOLayout, *, roi_csv: 
             manifest_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def _sync_tree_into_cache(src: Path, dest: Path, *, move: bool) -> None:
-    """Safely move or hardlink-copy ``src`` into ``dest`` without propagating broken symlinks."""
+def _sync_tree_into_cache(src: Path, dest: Path, *, move: bool) -> list[Path]:
+    """Safely move or hardlink-copy ``src`` into ``dest`` without propagating broken symlinks.
+
+    Returns the destination files that this call wrote (symlinks are skipped, a missing ``src`` writes nothing).
+    """
 
     if not (src.exists() or src.is_symlink()):
-        return
+        return []
     if src.is_symlink():
         if move:
             src.unlink(missing_ok=True)
-        return
+        return []
     if src.is_file():
         publish_output_file(src, dest, replace=True)
         if move:
             src.unlink(missing_ok=True)
-        return
+        return [dest]
     dest.mkdir(parents=True, exist_ok=True)
+    written: list[Path] = []
     for item in sorted(src.iterdir()):
-        _sync_tree_into_cache(item, dest / item.name, move=move)
+        written.extend(_sync_tree_into_cache(item, dest / item.name, move=move))
     if move:
         try:
             src.rmdir()
         except OSError:
             shutil.rmtree(src, ignore_errors=True)
-
-
-def _sync_file_targets(src: Path, dest: Path) -> list[Path]:
-    """The paths where ``_sync_tree_into_cache(src, dest)`` puts the regular files of ``src`` (symlinks are skipped).
-
-    Call it before the sync: with ``move=True`` the source is gone afterwards.
-    """
-
-    if src.is_symlink() or not src.exists():
-        return []
-    if src.is_file():
-        return [dest]
-    targets: list[Path] = []
-    for item in sorted(src.iterdir()):
-        targets.extend(_sync_file_targets(item, dest / item.name))
-    return targets
+    return written
 
 
 def _newest_matching_file(files: Iterable[Path], patterns: Iterable[str]) -> Optional[Path]:
@@ -1015,25 +1004,11 @@ def migrate_subject_output_tree(
             if any(child.is_file() for child in children):
                 roots.append(stage_cache / "04_bundles" / bundle_sub)
             legacy_bundle_roots[bundle_sub] = roots
-    # Batch 2: the same for the connectome. Only the stage-cache files that this call migrates from a legacy
-    # ``04_tractography/connectome`` tree or ``04_tractography/<run>_<metric>`` folder are published flat below. Current
-    # runs publish ``05_connectome/<source>/`` themselves, so the current stage cache and ``outputs/05_connectome`` are
-    # never a source of a flat file. Collected before the sync, which moves the legacy tree when ``clean_legacy``.
+    # Batch 2: the same for the connectome. Only the stage-cache files that this call writes while it migrates a legacy
+    # ``04_tractography/connectome`` tree or ``04_tractography/<run>_<metric>`` folder are published flat below (the
+    # syncs return them, in the order of the real sync). Current runs publish ``05_connectome/<source>/`` themselves, so
+    # the current stage cache and ``outputs/05_connectome`` are never a source of a flat file.
     legacy_connectome_files: list[Path] = []
-    if tract_dir.is_dir():
-        conn_legacy_tree = tract_dir / "connectome"
-        if conn_legacy_tree.is_dir():
-            for citem in sorted(conn_legacy_tree.iterdir()):
-                cparsed = _parse_legacy_connectome_dir_name(citem.name)
-                if cparsed is not None:
-                    legacy_connectome_files += _sync_file_targets(citem, connectome_stage_cache_dir(
-                        layout.subject_root, cparsed[0], cparsed[1], output_root=layout.output_root))
-            legacy_connectome_files += _sync_file_targets(conn_legacy_tree, stage_cache / "05_connectome")
-        for item in sorted(tract_dir.iterdir()):
-            parsed = _parse_legacy_connectome_dir_name(item.name)
-            if parsed is not None:
-                legacy_connectome_files += _sync_file_targets(item, connectome_stage_cache_dir(
-                    layout.subject_root, parsed[0], parsed[1], output_root=layout.output_root))
     if tract_dir.is_dir():
         for sub in ("act_prep", "csd", "saf", "tract_cloud", "tractograms"):
             cand = tract_dir / sub
@@ -1052,14 +1027,14 @@ def migrate_subject_output_tree(
                 if cparsed is not None:
                     c_run, c_metric = cparsed
                     c_target = connectome_stage_cache_dir(layout.subject_root, c_run, c_metric, output_root=layout.output_root)
-                    _sync_tree_into_cache(citem, c_target, move=clean_legacy)
-            _sync_tree_into_cache(conn_legacy, stage_cache / "05_connectome", move=clean_legacy)
+                    legacy_connectome_files += _sync_tree_into_cache(citem, c_target, move=clean_legacy)
+            legacy_connectome_files += _sync_tree_into_cache(conn_legacy, stage_cache / "05_connectome", move=clean_legacy)
         for item in sorted(tract_dir.iterdir()):
             parsed = _parse_legacy_connectome_dir_name(item.name)
             if parsed is not None:
                 run_n, metric_n = parsed
                 target_c = connectome_stage_cache_dir(layout.subject_root, run_n, metric_n, output_root=layout.output_root)
-                _sync_tree_into_cache(item, target_c, move=clean_legacy)
+                legacy_connectome_files += _sync_tree_into_cache(item, target_c, move=clean_legacy)
         if clean_legacy:
             _sync_tree_into_cache(tract_dir, layout.cache / "legacy_outputs" / "04_tractography", move=True)
 
@@ -1266,7 +1241,9 @@ def migrate_subject_output_tree(
         src = _newest_matching_file(legacy_connectome_files, patterns)
         if src is not None and "_dense" not in src.name.lower():
             dest = layout.connectome / dest_name
-            publish_output_file(src, dest, replace=True)
+            # Rule 7: an existing flat file (published by an earlier run) is never replaced by an older legacy matrix.
+            if not os.path.lexists(dest):
+                publish_output_file(src, dest, replace=False)
             published[f"connectome:{dest_name}"] = dest
     # Also publish any scalar metric connectomes (legacy trees only, as above)
     for cfile in sorted(p for p in legacy_connectome_files if p.is_file() and not p.is_symlink()):
@@ -1278,7 +1255,8 @@ def migrate_subject_output_tree(
         m = re.search(r"-connectome-([a-z0-9_]+)\.csv$", lower)
         if m:
             dest = layout.connectome / f"{subject_id}_{m.group(1)}.csv"
-            publish_output_file(cfile, dest, replace=True)
+            if not os.path.lexists(dest):
+                publish_output_file(cfile, dest, replace=False)
             published[f"connectome:{dest.name}"] = dest
 
     _refresh_microstructure_manifest_flags(layout, roi_csv=published.get("microstructure_roi_csv") if isinstance(published.get("microstructure_roi_csv"), Path) else None)

@@ -5777,3 +5777,6 @@ class SharedWidgetMixin:
             if getattr(self, "_cancelRunButton", None):
                 self._cancelRunButton.enabled = False
                 self._cancelRunButton.visible = False
+        queue_fit = getattr(self, "_queueCompactFit", None)
+        if callable(queue_fit):
+            queue_fit()

@@ -663,6 +663,35 @@ class LiveRunProgressPanelTests(unittest.TestCase):
                 self.assertTrue(owner.ui.statusFrame.visible)
                 self.assertFalse(owner._runStageLabel.visible)
 
+    def test_compact_mode_keeps_legacy_state_badge_hidden_and_refits_on_cancel(self) -> None:
+        fake_qt = _build_fake_qt_module()
+        with patch.dict(sys.modules, {"qt": fake_qt}):
+            from shared import ui_run_history
+
+            owner = _make_run_progress_owner()
+            owner._advancedSettingsPanel = object()
+            fit_calls = []
+            owner._queueCompactFit = lambda: fit_calls.append(owner._runState)
+            ui_run_history.install_run_progress_panel(owner)
+
+            ui_run_history.set_run_state(owner, "running")
+            self.assertFalse(owner._runStateLabel.visible)
+            self.assertTrue(owner._runProgressRowWidget.visible)
+            self.assertFalse(owner.ui.statusFrame.visible)
+            ui_run_history.apply_progress_snapshot(
+                owner,
+                ProgressSnapshot(done=2, total=6, current_stage="02_microstructure", status="running"),
+            )
+            fit_calls.clear()
+
+            ui_run_history.set_run_state(owner, "cancelled")
+            self.assertFalse(owner._runStateLabel.visible)
+            self.assertTrue(owner._runProgressRowWidget.visible)
+            self.assertTrue(owner.ui.statusFrame.visible)
+            self.assertFalse(owner._runStageLabel.visible)
+            self.assertEqual(owner._runStageCountLabel.text(), "2 / 6 stages")
+            self.assertIn("cancelled", fit_calls)
+
     def test_show_output_files_surfaces_06_qc_txt_and_filters_cache(self) -> None:
         fake_qt = _build_fake_qt_module()
         slicer_mod = types.ModuleType("slicer")

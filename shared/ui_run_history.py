@@ -444,6 +444,7 @@ def refresh_run_progress_styles(owner: Any, *, dark: Optional[bool] = None) -> N
     from shared.ui_styles import (
         run_progress_bar_style,
         run_stage_count_label_style,
+        run_stage_indicator_palette,
         set_stylesheet_if_changed,
     )
 
@@ -456,6 +457,14 @@ def refresh_run_progress_styles(owner: Any, *, dark: Optional[bool] = None) -> N
         set_stylesheet_if_changed(
             count_label,
             run_stage_count_label_style(state, dark=resolved_dark, widget=root),
+        )
+    state_label = getattr(owner, "_runStateLabel", None)
+    if state_label is not None and state != "idle":
+        pal = run_stage_indicator_palette(state, dark=resolved_dark, widget=root)
+        set_stylesheet_if_changed(
+            state_label,
+            f"QLabel#runStateLabel {{ background-color: {pal['icon_bg']}; color: white; "
+            "border-radius: 4px; padding: 2px 7px; font-size: 11px; font-weight: 600; }",
         )
     _update_stage_icon_and_count(owner, state=state, dark=resolved_dark)
 
@@ -471,8 +480,14 @@ def install_run_progress_panel(owner: Any) -> None:
     import qt
 
     state_row = qt.QHBoxLayout()
+    if hasattr(state_row, "setContentsMargins"):
+        state_row.setContentsMargins(0, 2, 0, 0)
+    if hasattr(state_row, "setSpacing"):
+        state_row.setSpacing(6)
     state_label = qt.QLabel("Idle")
     state_label.setObjectName("runStateLabel")
+    if hasattr(state_label, "setSizePolicy") and hasattr(qt, "QSizePolicy"):
+        state_label.setSizePolicy(qt.QSizePolicy.Maximum, qt.QSizePolicy.Fixed)
     state_label.setToolTip("Run state: Idle, Importing inputs, Checking environment, Running, Completed, Completed with errors or Cancelled.")
     state_row.addWidget(state_label)
 
@@ -579,18 +594,34 @@ def set_run_state(owner: Any, state: str) -> None:
     if (prev_state == "running") != (normalized_state == "running"):
         _on_running_changed(owner, normalized_state == "running")
 
+    compact_mode = getattr(owner, "_advancedSettingsPanel", None) is not None
     label = getattr(owner, "_runStateLabel", None)
+    label_was_visible = bool(getattr(label, "visible", False)) if label is not None else False
+    label_visible = (normalized_state != "idle") and (not compact_mode)
     if label is not None:
         label.setText(_state_label_text(owner, normalized_state, presentation.label))
+        try:
+            from shared.ui_styles import run_stage_indicator_palette
+
+            pal = run_stage_indicator_palette(
+                normalized_state,
+                dark=_resolve_dark_mode(owner),
+                widget=getattr(owner, "_uiWidget", None),
+            )
+            badge_bg = pal["icon_bg"] if normalized_state != "idle" else presentation.color
+        except Exception:
+            badge_bg = presentation.color
         label.setStyleSheet(
-            f"QLabel#runStateLabel {{ background-color: {presentation.color}; color: white; "
-            "border-radius: 4px; padding: 3px 8px; font-weight: 600; }"
+            f"QLabel#runStateLabel {{ background-color: {badge_bg}; color: white; "
+            "border-radius: 4px; padding: 2px 7px; font-size: 11px; font-weight: 600; }"
         )
-        _set_widget_visible(label, normalized_state != "idle")
+        _set_widget_visible(label, label_visible)
 
     status_frame = getattr(getattr(owner, "ui", None), "statusFrame", None)
+    status_was_visible = bool(getattr(status_frame, "visible", False)) if status_frame is not None else False
+    status_visible = not presentation.busy
     if status_frame is not None:
-        _set_widget_visible(status_frame, not presentation.busy)
+        _set_widget_visible(status_frame, status_visible)
 
     if presentation.busy:
         if prev_state != normalized_state or getattr(owner, "_runBusyStartedAt", None) is None:
@@ -620,6 +651,12 @@ def set_run_state(owner: Any, state: str) -> None:
     was_visible = bool(getattr(stage_strip, "visible", False)) if stage_strip is not None else False
     _set_widget_visible(progress, visible)
     _set_widget_visible(stage_strip, visible)
+    layout_changed = (
+        was_visible != visible
+        or status_was_visible != status_visible
+        or label_was_visible != label_visible
+        or prev_state != normalized_state
+    )
 
     if presentation.busy:
         if not has_data or total <= 0 or done <= 0:
@@ -629,7 +666,7 @@ def set_run_state(owner: Any, state: str) -> None:
             progress.setValue(done)
         refresh_run_progress_styles(owner)
         _start_run_animation(owner)
-        if stage_strip is not None and was_visible != visible:
+        if layout_changed:
             queue_fit = getattr(owner, "_queueCompactFit", None)
             if callable(queue_fit):
                 queue_fit()
@@ -641,6 +678,7 @@ def set_run_state(owner: Any, state: str) -> None:
     owner._lastSnapshotStage = None
     owner._runLiveStageText = ""
     stage = getattr(owner, "_runStageLabel", None)
+    stage_was_visible = bool(getattr(stage, "visible", False)) if stage is not None else False
     if stage is not None:
         if normalized_state == "idle":
             stage.setText("")
@@ -661,7 +699,7 @@ def set_run_state(owner: Any, state: str) -> None:
         progress.setValue(done)
 
     refresh_run_progress_styles(owner)
-    if stage_strip is not None and was_visible != visible:
+    if layout_changed or stage_was_visible:
         queue_fit = getattr(owner, "_queueCompactFit", None)
         if callable(queue_fit):
             queue_fit()

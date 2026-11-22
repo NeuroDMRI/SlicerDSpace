@@ -1286,6 +1286,48 @@ _BOOTSTRAP_BODY = textwrap.dedent(
         parts = [p.strip() for p in text.split(",") if p.strip()]
         return "wma" in parts or "all" in parts
 
+    def _apply_code_update(module_root, mirror="", proxy="", offline_dir="", log=print, language="en"):
+        # Last install step, best effort (b2-setup W4): apply the published code update with the INSTALLED package's own
+        # shared.code_updater (published names and keywords only). Nothing here fails the install or changes its result.
+        hint_en = 'The latest code update was not applied. After the restart, click "Check for updates" in SlicerDSpace.'
+        hint = hint_en
+        if str(language or "").lower().startswith("zh"):
+            hint = "\u6700\u65b0\u7684\u4ee3\u7801\u66f4\u65b0\u672a\u80fd\u5e94\u7528\u3002\u91cd\u542f\u540e\u8bf7\u5728 SlicerDSpace \u4e2d\u70b9\u51fb\u201c\u68c0\u67e5\u66f4\u65b0\u201d\u3002"
+        status = ""
+        try:
+            from shared.code_updater import check_for_code_update, download_and_apply_code_overlay
+
+            root = Path(module_root)
+            # Empty choices go as None: the settings that the installer saved (and the system proxy) then apply.
+            mirror_prefix = str(mirror or "").strip() or None
+            proxy_url = str(proxy or "").strip() or None
+            offline = str(offline_dir or "").strip() or None
+            check = check_for_code_update(module_root=root, timeout=15, offline_dir=offline, mirror_prefix=mirror_prefix,
+                                          proxy_url=proxy_url)
+            status = str(check.get("status") or "")
+            if status == "update_available":
+                result = download_and_apply_code_overlay(module_root=root, manifest=check["remote"], timeout=60,
+                                                         offline_dir=offline, mirror_prefix=mirror_prefix,
+                                                         proxy_url=proxy_url)
+                status = str(result.get("status") or "")
+                if status == "applied":
+                    tag = result.get("release_tag") or result.get("version") or ""
+                    log(f"Applied the latest code update {tag} ({result.get('git_short_commit') or ''}, "
+                        f"{result.get('updated_files')} files). It takes effect after the restart.")
+        except Exception:
+            if status != "applied":
+                status = "failed"
+        if status in ("applied", "up_to_date"):
+            return status
+        try:
+            log(hint)
+        except Exception:
+            try:
+                log(hint_en)
+            except Exception:
+                pass
+        return status or "failed"
+
     def main() -> int:
         slicer_exe = str(os.environ.get("SLICERDSPACE_RESOLVED_SLICER") or CONFIG.get("slicer_path") or "").strip()
         if not slicer_exe or not Path(slicer_exe).exists():
@@ -1440,6 +1482,8 @@ _BOOTSTRAP_BODY = textwrap.dedent(
         except Exception as exc:
             _log(f"Post-install check note: {exc}")
 
+        _apply_code_update(module_root, CONFIG.get("mirror_prefix", ""), CONFIG.get("proxy_url", ""),
+                           CONFIG.get("offline_dir", ""), _log, CONFIG.get("language", "en"))
         _log("Installation completed successfully.")
         return 0
 

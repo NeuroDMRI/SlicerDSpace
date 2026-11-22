@@ -138,7 +138,10 @@ class _Isolated:
 
     def __enter__(self):
         self._stack = []
-        env = {"SLICERDSPACE_USER_CONFIG": str(self.project.config_path)}
+        # b2-setup W4: the installer's last step checks for a code update. A test run never reaches the network: the
+        # manifest URL is a closed local port (a test that needs the step gives an offline folder instead).
+        env = {"SLICERDSPACE_USER_CONFIG": str(self.project.config_path),
+               "SLICERDSPACE_UPDATE_MANIFEST_URL": "http://127.0.0.1:1/update_manifest.json"}
         patches = [
             patch.dict(os.environ, env),
             patch.object(sys, "path", list(sys.path)),
@@ -159,8 +162,10 @@ class _Isolated:
         return False
 
 
-def _run_script_main(ns: dict, project: _Project) -> list:
-    """Run main() of a generated installer script with the Slicer, download and install steps replaced."""
+def _run_script_main(ns: dict, project: _Project, *, network: dict | None = None) -> list:
+    """Run main() of a generated installer script with the Slicer, download and install steps replaced.
+
+    ``network`` (mirror_prefix, proxy_url, offline_dir) overrides the empty network choices of the wizard."""
     logs: list = []
     slicer_exe = project.root / "Slicer"
     slicer_exe.write_text("", encoding="utf-8")
@@ -168,6 +173,7 @@ def _run_script_main(ns: dict, project: _Project) -> list:
     archive.write_bytes(b"PK")
     config = dict(ns["CONFIG"])
     config.update(model_assets_dir=str(project.assets), selected_packs=[], mirror_prefix="", proxy_url="", offline_dir="")
+    config.update(network or {})
     ns["CONFIG"] = config
     ns["_log"] = logs.append
     ns["_pick_supported_slicer"] = lambda exe, explicit: exe
@@ -185,7 +191,7 @@ def _run_script_main(ns: dict, project: _Project) -> list:
     return logs
 
 
-def _run_setup_module(project: _Project) -> list:
+def _run_setup_module(project: _Project, *, network: dict | None = None) -> list:
     """Run the graphical Setup module's phase C (the post-download install and config step)."""
     ns = load_setup_module()
     ns["CONFIG"] = dict(ns["CONFIG"], model_assets_dir=str(project.assets), selected_packs=[])
@@ -193,9 +199,9 @@ def _run_setup_module(project: _Project) -> list:
     info = {
         "mod_root": str(project.module_root),
         "ext_temps": [],
-        "mirror": "",
-        "proxy": "",
-        "offdir": "",
+        "mirror": str((network or {}).get("mirror_prefix") or ""),
+        "proxy": str((network or {}).get("proxy_url") or ""),
+        "offdir": str((network or {}).get("offline_dir") or ""),
         "iit_file": "",
         "pack_archives": [],
         "asset_temps": [],

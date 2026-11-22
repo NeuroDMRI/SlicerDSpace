@@ -386,5 +386,335 @@ class B2SetupW1OnlySlicerDmriTests(unittest.TestCase):
                 self.assertNotIn("SlicerFreeSurfer", path.read_text(encoding="utf-8"))
 
 
+# ---------------------------------------------------------------- W4: the wizard applies the code update last
+W4_HINT_EN = 'The latest code update was not applied. After the restart, click "Check for updates" in SlicerDSpace.'
+W4_HINT_ZH = "最新的代码更新未能应用。重启后请在 SlicerDSpace 中点击“检查更新”。"
+W4_STEP = "_apply_code_update"
+
+_W4_UPDATE_USER_CONFIG = '''
+
+
+def update_user_config(updates, path=None):
+    """Test addition: the published save_network_settings() needs it (the published user_config has it)."""
+    cfg = load_user_config()
+    for key, value in dict(updates or {}).items():
+        if isinstance(value, dict) and isinstance(cfg.get(key), dict):
+            cfg[key].update(value)
+        else:
+            cfg[key] = value
+    write_user_config(cfg)
+    return cfg, _path()
+'''
+
+_W4_RUNTIME_SPEC = {
+    "version": 1,
+    "files": ["SlicerDSpace.py", "scripts/extension_runtime/runtime_resources.py",
+              "scripts/extension_runtime/runtime_resources.json"],
+    "trees": [{"root": "shared", "patterns": ["*.py"]}],
+    "excluded_components": ["__pycache__"],
+    "excluded_prefixes": [],
+    "excluded_globs": [],
+}
+
+# A stand-in for the installed shared.code_updater with the two published signatures. It records each call in the file
+# that W4_STUB_CALLS names and answers as W4_STUB_MODE says.
+_W4_STUB_UPDATER = '''import json, os
+
+
+def _record(name, kwargs):
+    path = os.environ["W4_STUB_CALLS"]
+    calls = []
+    if os.path.isfile(path):
+        with open(path, encoding="utf-8") as fh:
+            calls = json.load(fh)
+    calls.append([name, {k: (str(v) if v is not None and k in ("module_root", "offline_dir") else v)
+                         for k, v in kwargs.items() if k != "manifest"}])
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(calls, fh)
+
+
+def check_for_code_update(*, module_root=None, manifest_url=None, manifest=None, timeout=12, offline_dir=None,
+                          mirror_prefix=None, proxy_url=None, urlopen_fn=None):
+    _record("check", dict(module_root=module_root, timeout=timeout, offline_dir=offline_dir,
+                          mirror_prefix=mirror_prefix, proxy_url=proxy_url))
+    mode = os.environ["W4_STUB_MODE"]
+    if mode == "fail":
+        raise RuntimeError("Failed to fetch update manifest: network is down")
+    status = {"up_to_date": "up_to_date", "abi": "runtime_upgrade_required"}.get(mode, "update_available")
+    return {"status": status, "remote": {"version": "0.1.2", "release_tag": "v0.1.2", "git_short_commit": "abc1234"}}
+
+
+def download_and_apply_code_overlay(*, module_root=None, manifest_url=None, manifest=None, timeout=60, offline_dir=None,
+                                    mirror_prefix=None, proxy_url=None, urlopen_fn=None, progress_callback=None,
+                                    allow_git_checkout=False, _apply_hook=None):
+    _record("apply", dict(module_root=module_root, timeout=timeout, offline_dir=offline_dir,
+                          mirror_prefix=mirror_prefix, proxy_url=proxy_url, has_manifest=manifest is not None))
+    if os.environ["W4_STUB_MODE"] == "apply_fails":
+        raise PermissionError("Extension directory is not writable")
+    return {"status": "applied", "version": "0.1.2", "release_tag": "v0.1.2", "git_short_commit": "abc1234",
+            "updated_files": 3, "removed_files": 0, "restart_required": True}
+'''
+
+
+def _published_text(case: unittest.TestCase, rel: str) -> str:
+    """A file of the commit that the published base packages are built from (skip off CI, fail on CI when missing)."""
+    sha = prune.RELEASE_PACKAGE_SOURCE_COMMIT
+    git = shutil.which("git")
+    out = None
+    if git is not None:
+        out = subprocess.run([git, "show", f"{sha}:{rel}"], cwd=REPO_ROOT, capture_output=True, text=True,
+                             encoding="utf-8")
+    if out is None or out.returncode != 0:
+        why = "git is not installed" if out is None else f"commit {sha} is not in this checkout"
+        if _on_ci():
+            case.fail(f"{why}; the workflow step '{prune.FETCH_STEP_NAME}' must fetch it")
+        case.skipTest(f"{why}; run: git fetch --no-tags --depth=1 origin {sha}")
+    return out.stdout
+
+
+def _w4_tree_sha(root: Path) -> tuple[str, list[str]]:
+    """The code tree hash of the published compute_code_tree_sha256() (same algorithm, read in 2e8f7315)."""
+    import hashlib
+
+    from scripts.extension_runtime.runtime_resources import runtime_files
+
+    digest = hashlib.sha256()
+    files = runtime_files(root)
+    for rel in files:
+        digest.update(f"{rel}\0{hashlib.sha256((root / rel).read_bytes()).hexdigest()}\n".encode("utf-8"))
+    return digest.hexdigest(), files
+
+
+class _W4Modules:
+    """Inside _Isolated: also drop the repo's 'scripts' package, so the installed tree's own copy is imported."""
+
+    def __enter__(self):
+        for name in [n for n in sys.modules if n == "scripts" or n.startswith("scripts.")]:
+            del sys.modules[name]
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+class B2SetupW4CodeUpdateTests(unittest.TestCase):
+    """Fix round W4 (Opus, solved in code; user scope change): the wizard applies the published code update as its last
+    step, best effort, with the installed package's own shared.code_updater and the wizard's network choices."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        prune.PruneFallbackTests.setUpClass.__func__(cls)
+
+    def _copies(self, network=None):
+        yield "python_builder", lambda project: prune._run_script_main(prune._load(self.python_payload), project,
+                                                                      network=network)
+        if self.js_payload is None:
+            yield "js_script", None
+            yield "js_setup_module", None
+            return
+        yield "js_script", lambda project: prune._run_script_main(prune._load(self.js_payload), project, network=network)
+        yield "js_setup_module", lambda project: prune._run_setup_module(project, network=network)
+
+    def _skip_without_node(self, run) -> None:
+        if run is None:
+            if _on_ci():
+                self.fail("node is required on CI for the JS installer copies (node is not in PATH)")
+            self.skipTest("node is not installed in PATH: the JS installer copy is not tested")
+
+    # (a) + (c): the published updater, a local overlay in the wizard's offline folder
+    def _published_project(self, td: Path):
+        project = _Project(td, release_package=True)
+        m = project.module_root
+        (m / "shared" / "code_updater.py").write_text(_published_text(self, "shared/code_updater.py"), encoding="utf-8")
+        (m / "shared" / "network_config.py").write_text(_published_text(self, "shared/network_config.py"),
+                                                       encoding="utf-8")
+        with (m / "shared" / "user_config.py").open("a", encoding="utf-8") as fh:
+            fh.write(_W4_UPDATE_USER_CONFIG)
+        rr = m / "scripts" / "extension_runtime"
+        rr.mkdir(parents=True)
+        (rr / "runtime_resources.py").write_text(
+            _published_text(self, "scripts/extension_runtime/runtime_resources.py"), encoding="utf-8")
+        (rr / "runtime_resources.json").write_text(json.dumps(_W4_RUNTIME_SPEC), encoding="utf-8")
+        (m / "SlicerDSpace.py").write_text("VALUE = 1\n", encoding="utf-8")
+        project.config_path.write_text(json.dumps({"external_dependencies": {}}), encoding="utf-8")
+
+        # The overlay: the same tree with a new entry file and one new module (the marker).
+        v2 = td / "v2"
+        _, files = _w4_tree_sha(m)
+        for rel in files:
+            (v2 / rel).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(m / rel, v2 / rel)
+        (v2 / "SlicerDSpace.py").write_text("VALUE = 2\n", encoding="utf-8")
+        (v2 / "shared" / "w4_overlay_marker.py").write_text("MARKER = 'w4'\n", encoding="utf-8")
+        v2_sha, v2_files = _w4_tree_sha(v2)
+        offline = td / "offline"
+        offline.mkdir()
+        from test_code_updater import _build_tar_gz
+
+        archive = offline / "SlicerDSpace-v0.1.2-code-overlay.tar.gz"
+        size, sha = _build_tar_gz(archive, {rel: (v2 / rel).read_bytes() for rel in v2_files})
+        manifest = {
+            "schema_version": 1, "version": "0.1.2", "runtime_abi_version": 1, "code_sha256": v2_sha,
+            "git_commit": "abc1234def", "summary": "W4 test overlay",
+            "overlay": {"filename": archive.name, "size_bytes": size, "sha256": sha,
+                        "url": f"https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v0.1.2/{archive.name}"},
+        }
+        (offline / "update_manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+        return project, offline, v2_sha
+
+    def test_b2_setup_w4_published_updater_applies_the_offline_overlay(self) -> None:
+        for label, run in self._copies():
+            with self.subTest(copy=label):
+                self._skip_without_node(run)
+                with tempfile.TemporaryDirectory() as td:
+                    project, offline, v2_sha = self._published_project(Path(td))
+                    network = {"offline_dir": str(offline)}
+                    run_with = dict(self._copies(network))[label]
+                    with _Isolated(project, release_package=True), _W4Modules():
+                        logs = run_with(project)
+                    m = project.module_root
+                    self.assertTrue((m / "shared" / "w4_overlay_marker.py").is_file(), logs)
+                    self.assertEqual((m / "SlicerDSpace.py").read_text(encoding="utf-8"), "VALUE = 2\n")
+                    self.assertEqual(_w4_tree_sha(m)[0], v2_sha)
+                    applied = [line for line in logs if line.startswith("Applied the latest code update")]
+                    self.assertEqual(len(applied), 1, logs)
+                    self.assertIn("v0.1.2", applied[0])
+                    self.assertNotIn(W4_HINT_EN, logs)
+                    if label != "js_setup_module":
+                        self.assertEqual(logs[-1], "Installation completed successfully.")
+
+                    # (c) A second run over the updated tree: up to date, no hint, no second apply.
+                    with _Isolated(project, release_package=True), _W4Modules():
+                        logs2 = run_with(project)
+                    self.assertFalse([line for line in logs2 if line.startswith("Applied the latest code update")])
+                    self.assertNotIn(W4_HINT_EN, logs2)
+
+    # (b) + (c) with a stand-in updater: arguments, failures and the hint
+    def _stub_case(self, mode: str, *, stub: bool = True, network=None):
+        results = []
+        for label, run in self._copies(network):
+            with self.subTest(copy=label, mode=mode):
+                self._skip_without_node(run)
+                with tempfile.TemporaryDirectory() as td:
+                    project = _Project(Path(td), release_package=True)
+                    calls_file = Path(td) / "calls.json"
+                    if stub:
+                        (project.module_root / "shared" / "code_updater.py").write_text(_W4_STUB_UPDATER,
+                                                                                         encoding="utf-8")
+                    project.config_path.write_text(json.dumps({"external_dependencies": {}}), encoding="utf-8")
+                    env = {"W4_STUB_MODE": mode, "W4_STUB_CALLS": str(calls_file)}
+                    with patch.dict("os.environ", env), _Isolated(project, release_package=True), _W4Modules():
+                        logs = run(project)
+                    calls = json.loads(calls_file.read_text(encoding="utf-8")) if calls_file.is_file() else []
+                    results.append((label, project, logs, calls))
+        return results
+
+    def test_b2_setup_w4_failed_fetch_keeps_the_install_and_prints_the_hint(self) -> None:
+        for label, project, logs, calls in self._stub_case("fail"):
+            self.assertEqual(logs.count(W4_HINT_EN), 1, logs)  # the runners already assert exit code 0 / all_done
+            self.assertEqual([c[0] for c in calls], ["check"])
+
+    def test_b2_setup_w4_no_updater_in_the_installed_package_prints_the_hint(self) -> None:
+        for label, project, logs, calls in self._stub_case("fail", stub=False):
+            self.assertEqual(logs.count(W4_HINT_EN), 1, logs)
+
+    def test_b2_setup_w4_runtime_upgrade_or_apply_error_prints_the_hint(self) -> None:
+        for mode, expected in (("abi", ["check"]), ("apply_fails", ["check", "apply"])):
+            for label, project, logs, calls in self._stub_case(mode):
+                self.assertEqual(logs.count(W4_HINT_EN), 1, (mode, logs))
+                self.assertEqual([c[0] for c in calls], expected)
+
+    def test_b2_setup_w4_up_to_date_prints_nothing(self) -> None:
+        for label, project, logs, calls in self._stub_case("up_to_date"):
+            self.assertNotIn(W4_HINT_EN, logs)
+            self.assertFalse([line for line in logs if "code update" in line], logs)
+            self.assertEqual([c[0] for c in calls], ["check"])
+
+    def test_b2_setup_w4_passes_the_installed_root_and_the_wizard_network_choices(self) -> None:
+        network = {"mirror_prefix": "https://ghfast.top/", "proxy_url": "http://127.0.0.1:9",
+                   "offline_dir": "/tmp/w4-offline"}
+        for label, project, logs, calls in self._stub_case("update", network=network):
+            self.assertEqual([c[0] for c in calls], ["check", "apply"])
+            for name, kwargs in calls:
+                with self.subTest(copy=label, call=name):
+                    self.assertEqual(Path(kwargs["module_root"]), project.module_root)
+                    self.assertEqual(kwargs["mirror_prefix"], "https://ghfast.top/")
+                    self.assertEqual(kwargs["proxy_url"], "http://127.0.0.1:9")
+                    self.assertEqual(kwargs["offline_dir"], "/tmp/w4-offline")
+            self.assertTrue(calls[1][1]["has_manifest"])
+            self.assertEqual(len([line for line in logs if line.startswith("Applied the latest code update")]), 1)
+            self.assertNotIn(W4_HINT_EN, logs)
+        # Empty choices go as None: the saved settings (and the system proxy) apply, as for the wizard's own downloads.
+        for label, project, logs, calls in self._stub_case("up_to_date"):
+            kwargs = calls[0][1]
+            self.assertEqual((kwargs["mirror_prefix"], kwargs["proxy_url"], kwargs["offline_dir"]), (None, None, None))
+
+    def test_b2_setup_w4_chinese_hint(self) -> None:
+        ns = prune._load(self.python_payload)
+        lines = []
+        ns["_apply_code_update"]("/nonexistent/w4", "", "", "", lines.append, "zh")
+        self.assertEqual(lines, [W4_HINT_ZH])
+
+        def ascii_only(msg):
+            msg.encode("cp1252")  # a console that cannot print Chinese
+            lines.append(msg)
+
+        lines.clear()
+        ns["_apply_code_update"]("/nonexistent/w4", "", "", "", ascii_only, "zh")
+        self.assertEqual(lines, [W4_HINT_EN])
+
+    # (d) text / AST check of the three copies
+    def _sources(self):
+        from test_installer_gui_reinstall_gap import setup_module_source
+
+        yield "python_builder", self.python_payload
+        if self.js_payload is None:
+            if _on_ci():
+                self.fail("node is required on CI for the JS installer copies (node is not in PATH)")
+            return
+        yield "js_script", self.js_payload
+        yield "js_setup_module", setup_module_source()
+
+    def test_b2_setup_w4_three_copies_hold_one_identical_step_with_published_keywords(self) -> None:
+        published = ast.parse(_published_text(self, "shared/code_updater.py"))
+        params = {}
+        for node in published.body:
+            if isinstance(node, ast.FunctionDef) and node.name in ("check_for_code_update",
+                                                                    "download_and_apply_code_overlay"):
+                params[node.name] = {a.arg for a in node.args.args + node.args.kwonlyargs}
+        self.assertEqual(set(params), {"check_for_code_update", "download_and_apply_code_overlay"})
+        dumps = {}
+        for label, source in self._sources():
+            with self.subTest(copy=label):
+                tree = ast.parse(source)
+                steps = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == W4_STEP]
+                self.assertEqual(len(steps), 1)
+                step = steps[0]
+                self.assertTrue(all(ord(ch) < 128 for ch in ast.get_source_segment(source, step)))
+                dumps[label] = ast.dump(step)
+                calls = [n for n in ast.walk(step) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                         and n.func.id in params]
+                self.assertEqual(sorted({c.func.id for c in calls}), sorted(params))
+                for call in calls:
+                    names = [k.arg for k in call.keywords]
+                    self.assertNotIn(None, names, "no **kwargs: every keyword must be checked")
+                    self.assertFalse(call.args, "keywords only")
+                    self.assertLessEqual(set(names), params[call.func.id], call.func.id)
+                imports = [n for n in ast.walk(step) if isinstance(n, ast.ImportFrom)]
+                self.assertEqual([n.module for n in imports], ["shared.code_updater"])
+                # Order: the step is the last action before success.
+                host_name = "_run_phase_c_core" if label == "js_setup_module" else "main"
+                host = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == host_name)
+                text = ast.get_source_segment(source, host)
+                at = text.index(W4_STEP + "(")
+                if label == "js_setup_module":
+                    self.assertLess(text.index("write_user_config(cfg)"), at)
+                    self.assertLess(at, text.index('emit("all_done"'))
+                else:
+                    self.assertLess(text.index("run_environment_doctor("), at)
+                    self.assertLess(at, text.index('_log("Installation completed successfully.")'))
+        self.assertEqual(len(set(dumps.values())), 1, "the three copies of the step differ")
+
+
 if __name__ == "__main__":
     unittest.main()

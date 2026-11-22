@@ -153,7 +153,11 @@ class HelpTruthTest(unittest.TestCase):
         self.assertEqual({item["subject_id"] for item in skipped} - {"group"}, {"sub-05", "sub-06"})
 
     def test_b2fix_dwi_W1_batch_text_states_only_what_the_scan_does(self):
-        """W1: the text claimed deeper folders are not searched and an empty subfolder is skipped; neither is true."""
+        """W1: the text must not claim deeper folders are not searched (false for DICOM).
+
+        The scan rule changed on purpose (finding "batch scan: subject resolves to the Batch Folder"): an empty
+        subfolder is now skipped instead of taking the Batch Folder as its input, and the help text says so.
+        """
         batch = self.root / "batch"
         self.make_subject(batch, "sub-a", "dicom_deeper")  # the DICOM file is one folder deeper
         self.make_subject(batch, "sub-b", "empty")
@@ -162,17 +166,19 @@ class HelpTruthTest(unittest.TestCase):
         by_id = {subject.subject_id: subject for subject in subjects}
         # A DICOM subject may hold its files in a deeper folder, so "deeper folders are not searched" is false.
         self.assertEqual(by_id["sub-a"].mode, "dicom")
-        # An empty subfolder is not skipped here (the scan falls back to the Batch Folder), so "is skipped" is false.
-        self.assertNotIn("sub-b", {item["subject_id"] for item in skipped})
-        for lang, false_claims in (("en", ("Files and deeper folders are not searched",
-                                           "A subfolder with no readable input is skipped")),
-                                   ("zh", ("文件和更深层的文件夹不会被搜索", "没有可读取输入的子文件夹会被跳过"))):
+        # An empty subfolder no longer falls back to the Batch Folder: it is skipped, and "is skipped" is true.
+        self.assertIn("sub-b", {item["subject_id"] for item in skipped})
+        self.assertNotIn("sub-b", by_id)
+        for lang, false_claims in (("en", ("Files and deeper folders are not searched",)),
+                                   ("zh", ("文件和更深层的文件夹不会被搜索",))):
             for key in ("help_batch_folder", "help_output_folder"):
                 text = plain(onboarding_text(lang, key))
                 for claim in false_claims:
                     self.assertNotIn(claim, text, (lang, key))
-                self.assertNotIn("skipped" if lang == "en" else "跳过", text, (lang, key))
             folder = plain(onboarding_text(lang, "help_batch_folder"))
+            self.assertIn("A subfolder with no readable input is skipped." if lang == "en"
+                          else "没有可读取输入的子文件夹会被跳过。", folder, lang)
+            self.assertNotIn("skipped" if lang == "en" else "跳过", plain(onboarding_text(lang, "help_output_folder")), lang)
             self.assertIn("input/", folder)
             self.assertIn("DICOM", folder)
             output = plain(onboarding_text(lang, "help_output_folder"))

@@ -108,6 +108,19 @@ def _parse_subject_list(path: Path, batch_root: Path) -> list[Path]:
     return candidates
 
 
+BATCH_FOLDER_REASON = "no input in this subfolder; the input found is the Batch Folder itself"
+
+
+def _resolves_to_batch_folder(inspected: dict, candidate: Path, root: Path) -> bool:
+    """Batch scan: a subject never resolves to the Batch Folder itself (except ``legacy_registered``).
+
+    A file entry of ``--subject-list`` and a subject-list entry that is the Batch Folder itself keep their behaviour.
+    """
+    if inspected["mode"] == "legacy_registered" or candidate.is_file() or candidate.resolve() == root:
+        return False
+    return Path(inspected["subject_root"] or inspected["subject_dir"]).expanduser().resolve() == root
+
+
 def discover_subjects(
     batch_root: Path,
     *,
@@ -140,14 +153,12 @@ def discover_subjects(
             inspected = inspect_subject_directory(target_subject_root, subject_id)
         if inspected["mode"] == "missing":
             inspected = inspect_subject_directory(root, subject_id)
+        reason = "missing required input/data.nii.gz, bvals, or bvecs"
+        if inspected["mode"] != "missing" and _resolves_to_batch_folder(inspected, candidate, root):
+            inspected = {"mode": "missing"}
+            reason = BATCH_FOLDER_REASON
         if inspected["mode"] == "missing":
-            skipped.append(
-                {
-                    "path": candidate.as_posix(),
-                    "subject_id": subject_id,
-                    "reason": "missing required input/data.nii.gz, bvals, or bvecs",
-                }
-            )
+            skipped.append({"path": candidate.as_posix(), "subject_id": subject_id, "reason": reason})
             if include_missing:
                 subjects.append(BatchSubject(subject_id, candidate, "subject-list" if subject_list else "glob", "missing"))
             continue
@@ -479,6 +490,8 @@ def main(argv: list[str] | None = None) -> int:
         )
     except Exception as exc:
         parser.error(str(exc))
+    for item in skipped:
+        _emit(f"[Batch] Skipped {item['subject_id']}: {item['reason']}")
 
     ids: dict[str, Path] = {}
     for subject in subjects:

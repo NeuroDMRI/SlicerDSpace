@@ -1031,26 +1031,16 @@ class RememberedFoldersTest(unittest.TestCase):
 
 
 class CollapseTest(unittest.TestCase):
-    def test_results_are_expanded_by_default_and_the_button_hides_and_shows_the_body(self) -> None:
+    def test_results_collapse_button_is_removed_and_body_is_expanded_by_default(self) -> None:
         h = Harness(self)
-        button, body = h.widget("resultsCollapseButton"), h.widget("resultsBody")
+        body = h.widget("resultsBody")
+        self.assertIsNone(h.owner._resultsCollapseButton)
+        self.assertNotIn("resultsCollapseButton", {object_name(w) for w in h.qt.created})
         self.assertFalse(h.owner._resultsCollapsed)
         body.setVisible.assert_not_called()
-        self.assertIn(object_name(button), {"resultsCollapseButton"})
-        fits = h.fits
-        h.click("resultsCollapseButton")
-        self.assertTrue(h.owner._resultsCollapsed)
-        self.assertIs(body.setVisible.call_args[0][0], False)
-        self.assertEqual(button.setToolTip.call_args[0][0], "Expand results")
-        self.assertGreater(h.fits, fits)
-        h.click("resultsCollapseButton")
-        self.assertFalse(h.owner._resultsCollapsed)
-        self.assertIs(body.setVisible.call_args[0][0], True)
-        self.assertEqual(button.setToolTip.call_args[0][0], "Collapse results")
 
     def test_the_header_row_stays_and_the_group_box_keeps_its_name_and_class(self) -> None:
         h = Harness(self)
-        h.click("resultsCollapseButton")
         self.assertEqual(h.layout.widgets[0], h.widget("resultsHeaderRow"))
         self.assertIs(h.layout.widgets[-1], h.widget("resultsBody"))
         h.widget("resultsHeaderRow").setVisible.assert_not_called()
@@ -1060,7 +1050,7 @@ class CollapseTest(unittest.TestCase):
         in a header row no higher than the buttons. Only the calls can be tested here."""
 
         h = Harness(self)
-        for name in ("resultsHideAllButton", "resultsMenuButton", "resultsCollapseButton", "resultsPopOutButton"):
+        for name in ("resultsHideAllButton", "resultsMenuButton", "resultsPopOutButton"):
             with self.subTest(button=name):
                 button = h.widget(name)
                 button.setFixedSize.assert_called_with(28, 22)
@@ -1072,16 +1062,13 @@ class CollapseTest(unittest.TestCase):
         header = h.widget("resultsHeaderRow")
         header.setFixedHeight.assert_called_with(22)
         header_layout = next(layout for layout in h.layouts if layout.parent is header)
-        # Batch 2 (Results Clear): the menu button sits before the collapse button; (Hide all) the hide-all button
-        # sits before the menu button.
         self.assertEqual(header_layout.widgets, [h.widget("resultsHideAllButton"), h.widget("resultsMenuButton"),
-                                                 h.widget("resultsCollapseButton"), h.widget("resultsPopOutButton")])
+                                                 h.widget("resultsPopOutButton")])
 
-    def test_a_refresh_does_not_show_the_body_again_while_it_is_collapsed(self) -> None:
+    def test_a_refresh_keeps_the_body_visible(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             record = make_manifest(Path(tmp), "sub1", "run1", "2026-11-01T00:00:00Z", [])
             h = Harness(self)
-            h.click("resultsCollapseButton")
             body = h.widget("resultsBody")
             body.setVisible.reset_mock()
             h.refresh([record])
@@ -1089,10 +1076,8 @@ class CollapseTest(unittest.TestCase):
 
     def test_chinese_texts_follow_the_language(self) -> None:
         h = Harness(self, language="zh")
-        button = h.widget("resultsCollapseButton")
-        self.assertEqual(button.setToolTip.call_args[0][0], onboarding_text("zh", "results_collapse"))
-        self.assertNotEqual(onboarding_text("zh", "results_collapse"), "results_collapse")
-        self.assertNotEqual(onboarding_text("zh", "results_expand"), onboarding_text("en", "results_expand"))
+        button = h.widget("resultsPopOutButton")
+        self.assertEqual(button.setToolTip.call_args[0][0], onboarding_text("zh", "results_pop_out"))
         self.assertNotEqual(onboarding_text("zh", "results_pop_out"), onboarding_text("en", "results_pop_out"))
         self.assertNotEqual(onboarding_text("zh", "results_in_window"), onboarding_text("en", "results_in_window"))
         self.assertNotEqual(onboarding_text("zh", "results_bring_back"), onboarding_text("en", "results_bring_back"))
@@ -1171,9 +1156,9 @@ class PopOutTest(unittest.TestCase):
         self.assert_docked()
         self.assertTrue(self.dialog().hide.called)
 
-    def test_collapsing_while_popped_out_returns_the_body_and_then_collapses(self) -> None:
+    def test_programmatic_collapse_while_popped_out_returns_the_body_without_a_button(self) -> None:
         self.open_window()
-        self.h.click("resultsCollapseButton")
+        ui_run_history.toggle_results_collapsed(self.h.owner)
         self.assertEqual(self.h.layout.widgets.index(self.body), self.body_index)
         self.assertNotIn(self.body, self.window_layout().widgets)
         self.assertFalse(self.h.owner._resultsPoppedOut)
@@ -1477,7 +1462,7 @@ class HideAndClearTest(unittest.TestCase):
         self.assertNotEqual(onboarding_text("zh", "results_remove"), onboarding_text("en", "results_remove"))
         self.assertEqual(onboarding_text("zh", "results_remove"), "从结果列表中移除")
 
-    def test_b2_results_the_show_hidden_button_works_in_the_pop_out_window_and_after_collapse(self) -> None:
+    def test_b2_results_the_show_hidden_button_works_in_the_pop_out_window_and_after_docking_back(self) -> None:
         a1, b1, a2 = self.runs()
         h = self.harness([a2, b1, a1])
         h.click("resultsPopOutButton")
@@ -1490,8 +1475,6 @@ class HideAndClearTest(unittest.TestCase):
         self.assertEqual(len(h.owner._runHistoryRecords), 3)
         h.click("resultsDockBackButton")
         self.clear(h)
-        h.click("resultsCollapseButton")
-        h.click("resultsCollapseButton")
         h.click("resultsShowHiddenButton")
         self.assertEqual(len(h.owner._runHistoryRecords), 3)
 
@@ -1919,6 +1902,7 @@ class HideAllTest(unittest.TestCase):
 
     def scene(self):
         self.model = FakeNode("tracts", "vtkMRMLModelNode")
+        self.fiber_bundle = FakeNode("dmri_tracts", "vtkMRMLFiberBundleNode", displays=3)
         self.two_displays = FakeNode("surf", "vtkMRMLModelNode", displays=2)
         self.already_hidden = FakeNode("old", "vtkMRMLModelNode", shown=False)
         self.slice_models = [
@@ -1933,6 +1917,7 @@ class HideAllTest(unittest.TestCase):
                                  FakeNode("vr2", "x", shown=False, display_class="vtkMRMLVolumeRenderingDisplayNode")]
         self.nodes = {
             "vtkMRMLModelNode": [self.model, self.two_displays, self.already_hidden, *self.slice_models, self.internal],
+            "vtkMRMLFiberBundleNode": [self.fiber_bundle],
             "vtkMRMLSegmentationNode": [self.segmentation],
             "vtkMRMLSliceCompositeNode": self.composites,
             "vtkMRMLVolumeRenderingDisplayNode": [d.displays[0] for d in self.volume_rendering],
@@ -1983,6 +1968,7 @@ class HideAllTest(unittest.TestCase):
         self.scene()
         h.click("resultsHideAllButton")
         self.assertEqual([d.visibility for d in self.model.displays], [0])
+        self.assertEqual([d.visibility for d in self.fiber_bundle.displays], [0, 0, 0])
         self.assertEqual([d.visibility for d in self.two_displays.displays], [0, 0])
         self.assertEqual([d.visibility for d in self.segmentation.displays], [0, 0])
         self.assertEqual([d.visibility for d in self.already_hidden.displays], [0])

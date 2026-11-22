@@ -1,14 +1,17 @@
-"""Native fiber-bundle display for streamline results: one classifier, one direction colour, one style.
+"""Fiber-bundle display for streamline results: SlicerDMRI FiberBundle when available, native DEC fallback otherwise.
 
-Every streamline output (whole-brain tractography and bundles) is shown as a ``vtkMRMLModelNode`` of polylines,
-coloured per point by its direction (DEC). It needs Slicer core only, so the display is the same with and
-without the SlicerDMRI extension.
+Every streamline output (whole-brain tractography and bundles) is classified once by ``streamline_kind``.
+When the SlicerDMRI extension is installed (``vtkMRMLFiberBundleNode`` is registered), streamlines load as real
+``vtkMRMLFiberBundleNode`` objects styled as orientation-coloured lines (with slow Tube/Glyph displays off).
+Without SlicerDMRI, they seamlessly fall back to a core ``vtkMRMLModelNode`` of polylines coloured per point by
+direction (DEC) with direct RGB mapping, so zero extra dependencies are required.
 """
 
 from __future__ import annotations
 
 from typing import Any, Optional
 
+FIBER_BUNDLE_CLASS = "vtkMRMLFiberBundleNode"
 DEC_ARRAY = "SlicerDSpace_DEC"
 KIND_TRACTOGRAPHY = "tractography"
 KIND_BUNDLE = "bundle"
@@ -19,6 +22,139 @@ LINE_WIDTH = {KIND_TRACTOGRAPHY: 1.0, KIND_BUNDLE: 2.0}
 NEUTRAL_COLOR = (0.7, 0.7, 0.7)
 _NOT_STREAMLINE_KEY_WORDS = ("seed", "fod", "mask", "intermediate")
 _PREFIX = "SlicerDDSurfer."
+
+
+def is_fiber_bundle_node(node: Any) -> bool:
+    """Return True when ``node`` is a SlicerDMRI ``vtkMRMLFiberBundleNode``."""
+
+    if node is None:
+        return False
+    is_a = getattr(node, "IsA", None)
+    if callable(is_a):
+        try:
+            if is_a(FIBER_BUNDLE_CLASS):
+                return True
+        except Exception:
+            pass
+    get_class = getattr(node, "GetClassName", None)
+    if callable(get_class):
+        try:
+            return get_class() == FIBER_BUNDLE_CLASS
+        except Exception:
+            pass
+    return False
+
+
+def slicerdmri_fiber_bundle_available(slicer: Any) -> bool:
+    """Return True when SlicerDMRI's ``vtkMRMLFiberBundleNode`` is available (loading TractographyDisplay if needed)."""
+
+    scene = getattr(slicer, "mrmlScene", None)
+    is_registered = getattr(scene, "IsNodeClassRegistered", None)
+    if callable(is_registered):
+        try:
+            if is_registered(FIBER_BUNDLE_CLASS):
+                return True
+        except Exception:
+            pass
+    app = getattr(slicer, "app", None)
+    module_manager = getattr(app, "moduleManager", None)
+    if callable(module_manager):
+        try:
+            factory = module_manager().factoryManager()
+            registered = set(factory.registeredModuleNames() or ())
+        except Exception:
+            factory, registered = None, set()
+        if "TractographyDisplay" in registered:
+            try:
+                if hasattr(factory, "loadModules"):
+                    factory.loadModules(["TractographyDisplay"])
+            except Exception:
+                pass
+            if callable(is_registered):
+                try:
+                    return bool(is_registered(FIBER_BUNDLE_CLASS))
+                except Exception:
+                    return False
+            return True
+    return False
+
+
+def _fiber_display_nodes(node: Any) -> list:
+    displays = []
+    seen = set()
+
+    def add(display: Any) -> None:
+        if display is not None and id(display) not in seen:
+            seen.add(id(display))
+            displays.append(display)
+
+    for getter in ("GetLineDisplayNode", "GetTubeDisplayNode", "GetGlyphDisplayNode"):
+        fn = getattr(node, getter, None)
+        if callable(fn):
+            try:
+                add(fn())
+            except Exception:
+                pass
+    count_fn = getattr(node, "GetNumberOfDisplayNodes", None)
+    nth_fn = getattr(node, "GetNthDisplayNode", None)
+    if callable(count_fn) and callable(nth_fn):
+        try:
+            for index in range(int(count_fn())):
+                add(nth_fn(index))
+        except Exception:
+            pass
+    if not displays:
+        get_display = getattr(node, "GetDisplayNode", None)
+        if callable(get_display):
+            try:
+                add(get_display())
+            except Exception:
+                pass
+    return displays
+
+
+def is_fiber_node_visible(node: Any) -> bool:
+    """Return True when any display node of a ``vtkMRMLFiberBundleNode`` is visible."""
+
+    displays = _fiber_display_nodes(node)
+    if displays:
+        return any(bool(getattr(display, "GetVisibility", lambda: False)()) for display in displays)
+    get_vis = getattr(node, "GetDisplayVisibility", None)
+    return bool(get_vis()) if callable(get_vis) else False
+
+
+def set_fiber_node_visible(node: Any, visible: bool) -> None:
+    """Show or hide a ``vtkMRMLFiberBundleNode`` without activating heavy Tube or Glyph displays."""
+
+    show = bool(visible)
+    if not show:
+        displays = _fiber_display_nodes(node)
+        if displays:
+            for display in displays:
+                if hasattr(display, "SetVisibility"):
+                    display.SetVisibility(False)
+            return
+        if hasattr(node, "SetDisplayVisibility"):
+            node.SetDisplayVisibility(False)
+        return
+    get_line = getattr(node, "GetLineDisplayNode", None)
+    line = get_line() if callable(get_line) else None
+    if line is None and hasattr(node, "CreateDefaultDisplayNodes"):
+        node.CreateDefaultDisplayNodes()
+        line = get_line() if callable(get_line) else None
+    if line is not None:
+        if hasattr(line, "SetVisibility"):
+            line.SetVisibility(True)
+        if hasattr(line, "SetVisibility3D"):
+            line.SetVisibility3D(True)
+        for getter in ("GetTubeDisplayNode", "GetGlyphDisplayNode"):
+            fn = getattr(node, getter, None)
+            other = fn() if callable(fn) else None
+            if other is not None and hasattr(other, "SetVisibility"):
+                other.SetVisibility(False)
+        return
+    if hasattr(node, "SetDisplayVisibility"):
+        node.SetDisplayVisibility(True)
 
 
 def streamline_kind(product: Any, key: Any = None, path: Any = None) -> Optional[str]:
@@ -125,12 +261,60 @@ def detach_result_storage(slicer: Any, node: Any) -> int:
     return removed
 
 
+def _apply_slicerdmri_fiber_display(node: Any, kind: str) -> bool:
+    """Configure a SlicerDMRI ``vtkMRMLFiberBundleNode`` as orientation-coloured lines (Tube/Glyph off)."""
+
+    get_line = getattr(node, "GetLineDisplayNode", None)
+    line = get_line() if callable(get_line) else None
+    if line is None and hasattr(node, "GetDisplayNode"):
+        line = node.GetDisplayNode()
+    if line is None and hasattr(node, "CreateDefaultDisplayNodes"):
+        node.CreateDefaultDisplayNodes()
+        line = get_line() if callable(get_line) else None
+        if line is None and hasattr(node, "GetDisplayNode"):
+            line = node.GetDisplayNode()
+    if line is None:
+        return False
+    if hasattr(line, "SetVisibility"):
+        line.SetVisibility(True)
+    if hasattr(line, "SetVisibility3D"):
+        line.SetVisibility3D(True)
+    if hasattr(line, "SetVisibility2D"):
+        line.SetVisibility2D(True)
+    if hasattr(line, "SetSliceDisplayModeToIntersection"):
+        line.SetSliceDisplayModeToIntersection()
+    if hasattr(line, "SetSliceIntersectionThickness"):
+        line.SetSliceIntersectionThickness(3)
+    if hasattr(line, "SetOpacity"):
+        line.SetOpacity(1.0)
+    if hasattr(line, "SetLineWidth"):
+        line.SetLineWidth(LINE_WIDTH[kind])
+    if hasattr(line, "SetColorModeToPointFiberOrientation"):
+        line.SetColorModeToPointFiberOrientation()
+    elif hasattr(line, "SetColorModeToMeanFiberOrientation"):
+        line.SetColorModeToMeanFiberOrientation()
+    if hasattr(line, "SetScalarVisibility"):
+        line.SetScalarVisibility(True)
+    for getter in ("GetTubeDisplayNode", "GetGlyphDisplayNode"):
+        fn = getattr(node, getter, None)
+        other = fn() if callable(fn) else None
+        if other is not None and hasattr(other, "SetVisibility"):
+            other.SetVisibility(False)
+    node.SetAttribute(_PREFIX + "DisplayKind", DISPLAY_KIND)
+    node.SetAttribute(_PREFIX + "StreamlineKind", kind)
+    node.SetAttribute(_PREFIX + "FiberColorMode", "direction")
+    return True
+
+
 def apply_fiber_display(slicer: Any, node: Any, kind: Optional[str]) -> bool:
-    """The one fiber style: DEC by direct RGB mapping, opaque lines, 2D slice intersections. No tubes."""
+    """Apply fiber-bundle display: orientation lines on vtkMRMLFiberBundleNode, or DEC RGB on vtkMRMLModelNode."""
+
+    kind = kind if kind in LINE_WIDTH else KIND_TRACTOGRAPHY
+    if is_fiber_bundle_node(node):
+        return _apply_slicerdmri_fiber_display(node, kind)
 
     import vtk
 
-    kind = kind if kind in LINE_WIDTH else KIND_TRACTOGRAPHY
     poly_data = node.GetPolyData() if hasattr(node, "GetPolyData") else None
     if poly_data is None:
         return False

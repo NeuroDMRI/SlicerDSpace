@@ -165,12 +165,31 @@ class StreamlineKindTest(unittest.TestCase):
         self.assertTrue(classifier.called)
 
 
+class _DisplayState:
+    def __init__(self, name="display", visible=True):
+        self.name = name
+        self.visible = visible
+        self.mock = Mock(name=name)
+        self.mock.SetVisibility.side_effect = self._set_visibility
+        self.mock.GetVisibility.side_effect = lambda: int(self.visible)
+
+    def _set_visibility(self, value):
+        self.visible = bool(value)
+
+    def __getattr__(self, item):
+        return getattr(self.mock, item)
+
+
 class _Node:
     def __init__(self, identity, kind):
         self.identity, self.kind, self.attributes = identity, kind, {}
-        self.display = Mock(name="display-" + identity)
+        self.display = _DisplayState("display-" + identity, visible=True)
+        self.line_display = _DisplayState("line-" + identity, visible=True) if kind == "vtkMRMLFiberBundleNode" else None
+        self.tube_display = _DisplayState("tube-" + identity, visible=False) if kind == "vtkMRMLFiberBundleNode" else None
+        self.glyph_display = _DisplayState("glyph-" + identity, visible=False) if kind == "vtkMRMLFiberBundleNode" else None
         self.polydata = None
         self.default_display_calls = 0
+        self.set_display_visibility_calls = []
         self.storage = []  # storage nodes (b2fix D1): the file a Save would write
 
     def GetID(self):
@@ -189,10 +208,39 @@ class _Node:
         self.name = name
 
     def IsA(self, name):
+        if self.kind == "vtkMRMLFiberBundleNode" and name in {"vtkMRMLFiberBundleNode", "vtkMRMLModelNode", "vtkMRMLDisplayableNode"}:
+            return True
         return self.kind == name or (name == "vtkMRMLDisplayableNode" and self.kind != "vtkMRMLTableNode")
 
     def GetDisplayNode(self):
+        return self.line_display if self.line_display is not None else self.display
+
+    def GetLineDisplayNode(self):
+        return self.line_display
+
+    def GetTubeDisplayNode(self):
+        return self.tube_display
+
+    def GetGlyphDisplayNode(self):
+        return self.glyph_display
+
+    def GetNumberOfDisplayNodes(self):
+        if self.kind == "vtkMRMLFiberBundleNode":
+            return 3
+        return 1
+
+    def GetNthDisplayNode(self, index):
+        if self.kind == "vtkMRMLFiberBundleNode":
+            return (self.line_display, self.tube_display, self.glyph_display)[index]
         return self.display
+
+    def GetDisplayVisibility(self):
+        return int(self.GetDisplayNode().GetVisibility())
+
+    def SetDisplayVisibility(self, visible):
+        self.set_display_visibility_calls.append(bool(visible))
+        for index in range(self.GetNumberOfDisplayNodes()):
+            self.GetNthDisplayNode(index).SetVisibility(visible)
 
     def CreateDefaultDisplayNodes(self):
         self.default_display_calls += 1
@@ -219,17 +267,20 @@ class _Storage:
 
 
 class _Scene:
-    def __init__(self):
+    def __init__(self, *, fiber_bundle_registered=False):
         self.nodes, self.storage_nodes, self.next_id = [], [], 0
+        self.fiber_bundle_registered = fiber_bundle_registered
 
     def AddNewNodeByClass(self, kind, name=""):
+        if kind == "vtkMRMLFiberBundleNode" and not self.fiber_bundle_registered:
+            return None
         self.next_id += 1
         node = _Node("node" + str(self.next_id), kind)
         self.nodes.append(node)
         return node
 
     def IsNodeClassRegistered(self, kind):
-        return kind == "vtkMRMLFiberBundleNode"  # SlicerDMRI is present: the loader must still make a model
+        return self.fiber_bundle_registered and kind == "vtkMRMLFiberBundleNode"
 
     def RemoveNode(self, node):
         if isinstance(node, _Storage):  # removing a storage node drops every node reference to it
@@ -252,16 +303,20 @@ class _Logic(module_logic.SharedLogicMixin):
 
 @unittest.skipIf(np is None, "numpy/VTK/nibabel required (run with PythonSlicer)")
 class NativeFiberLoaderTest(unittest.TestCase):
+    """Fallback path when SlicerDMRI is NOT installed: core vtkMRMLModelNode + DEC RGB direction colouring."""
+
     def setUp(self):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         self.root = Path(temp.name).resolve()
-        self.scene = _Scene()
-        self.load_fiber_bundle = Mock(side_effect=AssertionError("SlicerDMRI loadFiberBundle must not be called"))
+        self.scene = _Scene(fiber_bundle_registered=False)
+        self.load_fiber_bundle = Mock(side_effect=AssertionError("SlicerDMRI loadFiberBundle must not be called without SlicerDMRI"))
         self.factory = Mock(name="factoryManager")
-        self.factory.registeredModuleNames.return_value = ["TractographyDisplay", "Models"]
+        self.factory.registeredModuleNames.return_value = ["Models"]
 
         def load_model(path, kind, properties=None, **kwargs):
+            if kind == "FiberBundleFile":
+                raise AssertionError("FiberBundleFile loader must not be called without SlicerDMRI")
             reader = vtk.vtkXMLPolyDataReader() if path.endswith(".vtp") else vtk.vtkPolyDataReader()
             reader.SetFileName(path)
             reader.Update()
@@ -458,6 +513,210 @@ class NativeFiberLoaderTest(unittest.TestCase):
                 node.display.SetOpacity.assert_not_called()
                 node.display.SetColor.assert_not_called()
                 self.assertEqual(node.GetAttribute("SlicerDDSurfer.AutomaticLoaded"), "true")
+
+
+@unittest.skipIf(np is None, "numpy/VTK/nibabel required (run with PythonSlicer)")
+class SlicerDMRIFiberLoaderTest(unittest.TestCase):
+    """Dual-mode path when SlicerDMRI IS installed: real vtkMRMLFiberBundleNode styled as fiber lines."""
+
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name).resolve()
+        self.scene = _Scene(fiber_bundle_registered=True)
+        self.factory = Mock(name="factoryManager")
+        self.factory.registeredModuleNames.return_value = ["TractographyDisplay", "Models"]
+        self.fail_fiber_bundle_io = False
+
+        def load_node_from_file(path, kind, properties=None, **kwargs):
+            if kind == "FiberBundleFile" and self.fail_fiber_bundle_io:
+                return False, None
+            reader = vtk.vtkXMLPolyDataReader() if path.endswith(".vtp") else vtk.vtkPolyDataReader()
+            reader.SetFileName(path)
+            reader.Update()
+            node_class = "vtkMRMLFiberBundleNode" if kind == "FiberBundleFile" else "vtkMRMLModelNode"
+            node = self.scene.AddNewNodeByClass(node_class, "loaded")
+            node.SetAndObservePolyData(reader.GetOutput())
+            storage = _Storage(path)
+            self.scene.storage_nodes.append(storage)
+            node.storage.append(storage)
+            return True, node
+
+        self.fake = SimpleNamespace(
+            mrmlScene=self.scene,
+            app=SimpleNamespace(moduleManager=lambda: SimpleNamespace(factoryManager=lambda: self.factory)),
+            vtkMRMLStorageNode=SimpleNamespace(CoordinateSystemRAS=0, CoordinateSystemLPS=1),
+            vtkMRMLDisplayNode=SimpleNamespace(UseDirectMapping=4),
+            util=SimpleNamespace(
+                getNodesByClass=lambda kind: [node for node in self.scene.nodes
+                                              if (node.kind == "vtkMRMLTableNode") == (kind == "vtkMRMLTableNode")],
+                loadNodeFromFile=load_node_from_file,
+                setSliceViewerLayers=Mock(), resetSliceViews=Mock(), resetThreeDViews=Mock(),
+                errorDisplay=Mock(),
+            ),
+        )
+        self.addCleanup(patch.stopall)
+        patch.object(module_logic, "slicer", self.fake).start()
+
+        def register(slicer, node, run, subject, run_name, product, source):
+            node.SetAttribute("SlicerDDSurfer.Run", run)
+            node.SetAttribute("SlicerDDSurfer.Product", product)
+            node.SetAttribute("SlicerDDSurfer.SourcePath", source)
+            node.SetAttribute("SlicerDDSurfer.SourceStamp", source_stamp(source))
+
+        patch("shared.result_scene.register_node", side_effect=register).start()
+        self.logic = _Logic()
+
+    def _write_vtp(self, path, direction):
+        data, _ = _polydata([[tuple(np.asarray(direction) * step) for step in range(4)]], permute=False)
+        writer = vtk.vtkXMLPolyDataWriter()
+        writer.SetFileName(str(path))
+        writer.SetInputData(data)
+        writer.Write()
+
+    def _manifest(self):
+        import nibabel as nib
+
+        tract = self.root / "outputs" / "s_act.tck"
+        bundle = self.root / "outputs" / "AF_left.vtp"
+        tract.parent.mkdir(parents=True)
+        streamlines = [np.array([[0, index, 0], [10, index, 0], [20, index, 0]], dtype=np.float32) for index in range(5)]
+        nib.streamlines.save(nib.streamlines.Tractogram(streamlines, affine_to_rasmm=np.eye(4)), str(tract))
+        self._write_vtp(bundle, (0, 0, 1))
+        path = self.root / "outputs" / "00_run_metadata" / "run_orchestration_manifest.json"
+        path.parent.mkdir()
+        path.write_text(json.dumps({
+            "subject_id": "s", "run_name": "run", "output_root": str(self.root / "outputs"), "tasks": [
+                {"name": "tractography.csd_act", "status": "completed", "outputs": {"tractogram": str(tract)}},
+                {"name": "bundles.unit", "status": "completed", "outputs": {"bundle_AF_left.vtp": str(bundle)}},
+            ]}), encoding="utf-8")
+        return path, tract, bundle
+
+    def _nodes_for(self, path):
+        return [node for node in self.scene.nodes if node.GetAttribute("SlicerDDSurfer.SourcePath") == str(path)]
+
+    def _assert_slicerdmri_fiber(self, node, *, width):
+        self.assertEqual(node.GetClassName(), "vtkMRMLFiberBundleNode")
+        self.assertEqual(node.GetAttribute("SlicerDDSurfer.DisplayKind"), "fiber_bundle")
+        self.assertEqual(node.GetAttribute("SlicerDDSurfer.FiberColorMode"), "direction")
+        # SlicerDMRI computes orientation colours on LineDisplayNode without mutating PolyData.
+        self.assertIsNone(node.GetPolyData().GetPointData().GetArray(DEC))
+        self.assertTrue(node.line_display.visible)
+        self.assertFalse(node.tube_display.visible)
+        self.assertFalse(node.glyph_display.visible)
+        node.line_display.SetColorModeToPointFiberOrientation.assert_called()
+        node.line_display.SetScalarVisibility.assert_called_with(True)
+        node.line_display.SetOpacity.assert_called_with(1.0)
+        node.line_display.SetLineWidth.assert_called_with(width)
+        node.line_display.SetVisibility2D.assert_called_with(True)
+        node.tube_display.SetVisibility.assert_called_with(False)
+        node.glyph_display.SetVisibility.assert_called_with(False)
+
+    def test_slicerdmri_present_every_load_path_creates_styled_fiber_bundle_nodes(self) -> None:
+        manifest, tract, bundle = self._manifest()
+        paths = {
+            "automatic": lambda: self.logic.loadKeyResultsFromManifest(manifest, automatic=True),
+            "eye": lambda: [self.logic.loadKeyResultsFromManifest(manifest, source_path=item) for item in (tract, bundle)],
+            "load": lambda: self.logic.loadKeyResultsFromManifest(manifest, mode="reuse"),
+            "replace": lambda: self.logic.loadKeyResultsFromManifest(manifest, mode="replace"),
+            "append": lambda: self.logic.loadKeyResultsFromManifest(manifest, mode="append"),
+        }
+        for name, load in paths.items():
+            with self.subTest(path=name):
+                self.scene.nodes.clear()
+                load()
+                tract_nodes, bundle_nodes = self._nodes_for(tract), self._nodes_for(bundle)
+                self.assertEqual(len(tract_nodes), 1)
+                self.assertEqual(len(bundle_nodes), 1)
+                self._assert_slicerdmri_fiber(tract_nodes[0], width=1.0)
+                self._assert_slicerdmri_fiber(bundle_nodes[0], width=2.0)
+                self.assertEqual(tract_nodes[0].GetAttribute("SlicerDDSurfer.StreamlineKind"), "tractography")
+                self.assertEqual(bundle_nodes[0].GetAttribute("SlicerDDSurfer.StreamlineKind"), "bundle")
+
+    def test_slicerdmri_eye_toggle_keeps_fiber_bundle_line_style_without_enabling_tubes_or_glyphs(self) -> None:
+        manifest, tract, bundle = self._manifest()
+        qt = SimpleNamespace(Qt=SimpleNamespace(UserRole=256))
+        owner = SimpleNamespace(logic=self.logic, parent=None, _runOutputFiles=None, _latestResultManifestPath=manifest)
+
+        class _Item:
+            def __init__(self, path):
+                self._data = {256: str(path), 257: "fiber_bundle", 258: str(manifest)}
+
+            def data(self, _col, role):
+                return self._data.get(role)
+
+            def text(self, _col):
+                return ""
+
+        with patch.dict(sys.modules, {"qt": qt, "slicer": self.fake}):
+            import importlib
+            ui_run_history = importlib.import_module("shared.ui_run_history")
+            for source, width in ((tract, 1.0), (bundle, 2.0)):
+                with self.subTest(source=source.name):
+                    item = _Item(source)
+                    # First click: load and show in FiberBundle line style (never calling SetDisplayVisibility(True)).
+                    ui_run_history._toggle_output(owner, item)
+                    node = self._nodes_for(source)[0]
+                    self._assert_slicerdmri_fiber(node, width=width)
+                    self.assertEqual(node.set_display_visibility_calls, [])
+                    self.assertTrue(ui_run_history._output_visible(self.fake, [node]))
+
+                    # Even if user enabled TubeDisplayNode manually, hiding turns ALL displays off.
+                    node.tube_display.SetVisibility(True)
+                    ui_run_history._toggle_output(owner, item)
+                    self.assertFalse(node.line_display.visible)
+                    self.assertFalse(node.tube_display.visible)
+                    self.assertFalse(node.glyph_display.visible)
+                    self.assertFalse(ui_run_history._output_visible(self.fake, [node]))
+
+                    # Showing again enables LineDisplayNode only; Tube and Glyph stay off.
+                    ui_run_history._toggle_output(owner, item)
+                    self.assertTrue(node.line_display.visible)
+                    self.assertFalse(node.tube_display.visible)
+                    self.assertFalse(node.glyph_display.visible)
+                    self.assertTrue(ui_run_history._output_visible(self.fake, [node]))
+        self.fake.util.errorDisplay.assert_not_called()
+
+    def test_slicerdmri_plain_vtk_surface_still_loads_as_plain_model(self) -> None:
+        mesh = self.root / "outputs" / "lh.white.vtk"
+        mesh.parent.mkdir(parents=True)
+        data, _ = _polydata([[(0, 0, 0), (3, 0, 0)]], permute=False)
+        writer = vtk.vtkPolyDataWriter()
+        writer.SetFileName(str(mesh))
+        writer.SetInputData(data)
+        writer.Write()
+        manifest = self.root / "outputs" / "manifest.json"
+        manifest.write_text(json.dumps({"subject_id": "s", "tasks": [
+            {"name": "surface.unit", "status": "completed", "outputs": {"white_lh_vtk": str(mesh)}}]}), encoding="utf-8")
+        self.logic.loadKeyResultsFromManifest(manifest, source_path=mesh)
+        node = self._nodes_for(mesh)[0]
+        self.assertEqual(node.GetClassName(), "vtkMRMLModelNode")
+        self.assertEqual(node.GetNumberOfStorageNodes(), 1)
+        self.assertIsNone(node.GetAttribute("SlicerDDSurfer.DisplayKind"))
+
+    def test_slicerdmri_loader_failure_falls_back_to_native_dec_fiber_bundle(self) -> None:
+        manifest, _tract, bundle = self._manifest()
+        self.fail_fiber_bundle_io = True
+        self.logic.loadKeyResultsFromManifest(manifest, source_path=bundle)
+        node = self._nodes_for(bundle)[0]
+        self.assertEqual(node.GetClassName(), "vtkMRMLModelNode")
+        self.assertEqual(node.GetAttribute("SlicerDDSurfer.DisplayKind"), "fiber_bundle")
+        self.assertIsNotNone(node.GetPolyData().GetPointData().GetArray(DEC))
+        self.assertEqual(node.GetNumberOfStorageNodes(), 0)
+
+    def test_slicerdmri_lazy_module_registration_enables_fiber_bundle_node(self) -> None:
+        manifest, tract, _bundle = self._manifest()
+        self.scene.fiber_bundle_registered = False
+
+        def register_on_load(modules):
+            if "TractographyDisplay" in modules:
+                self.scene.fiber_bundle_registered = True
+
+        self.factory.loadModules.side_effect = register_on_load
+        self.logic.loadKeyResultsFromManifest(manifest, source_path=tract)
+        self.factory.loadModules.assert_called_with(["TractographyDisplay"])
+        node = self._nodes_for(tract)[0]
+        self._assert_slicerdmri_fiber(node, width=1.0)
 
 
 class _Pixmap:

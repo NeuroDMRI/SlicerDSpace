@@ -922,11 +922,10 @@ class SharedLogicMixin:
         self, fiber_path: Path, node_name: str, *, preview_dir: Optional[Path] = None,
         kind: Optional[str] = "tractography",
     ) -> bool:
-        """Load a streamline file as a native fiber bundle: a model node of polylines with direction colours.
+        """Load a streamline file as a fiber bundle (SlicerDMRI FiberBundle when installed, native DEC model otherwise).
 
         ``kind`` ("tractography" or "bundle", from ``shared.fiber_display.streamline_kind``) sets the line width.
         ``kind=None`` loads a .vtk/.vtp as a plain model: a mesh outside the tract products is not a fiber bundle.
-        No SlicerDMRI class or module is used, so the display is the same with and without that extension.
         """
         if not fiber_path.is_file():
             return False
@@ -938,14 +937,61 @@ class SharedLogicMixin:
         if suffix not in {".vtk", ".vtp"}:
             self.log(f"[Slicer] No compatible fiber or model loader could read {fiber_path}")
             return False
-        model_node = self._read_tract_model_file(fiber_path, node_name)
-        if model_node is None:
+        from shared.fiber_display import (
+            apply_fiber_display,
+            is_fiber_bundle_node,
+            slicerdmri_fiber_bundle_available,
+        )
+        node = None
+        if kind is not None and slicerdmri_fiber_bundle_available(slicer):
+            node = self._read_tract_fiber_bundle_file(fiber_path, node_name)
+        if node is None:
+            node = self._read_tract_model_file(fiber_path, node_name)
+        if node is None:
             return False
         if kind is not None:
-            from shared.fiber_display import apply_fiber_display
-            apply_fiber_display(slicer, model_node, kind)
-            self.log(f"[Slicer] Loaded {fiber_path} as a native fiber bundle ({kind})")
+            apply_fiber_display(slicer, node, kind)
+            if is_fiber_bundle_node(node):
+                self.log(f"[Slicer] Loaded {fiber_path} as a SlicerDMRI FiberBundle ({kind})")
+            else:
+                self.log(f"[Slicer] Loaded {fiber_path} as a native fiber bundle ({kind})")
         return True
+
+    def _read_tract_fiber_bundle_file(self, fiber_path: Path, node_name: str):
+        """Read a .vtk/.vtp with SlicerDMRI's FiberBundleFile reader when SlicerDMRI is available."""
+        from shared.result_scene import tract_file_coordinate_system
+        coordinates = tract_file_coordinate_system(fiber_path)
+        storage = getattr(slicer, "vtkMRMLStorageNode", None)
+        coordinate_system = getattr(storage, "CoordinateSystem" + coordinates, 0 if coordinates == "RAS" else 1)
+        properties = {"coordinateSystem": coordinate_system}
+        fiber_node = None
+        loader = getattr(slicer.util, "loadNodeFromFile", None)
+        if loader is not None:
+            try:
+                success, candidate = loader(
+                    fiber_path.as_posix(), "FiberBundleFile", properties=properties, returnNode=True,
+                )
+                if success and candidate:
+                    fiber_node = candidate
+            except Exception as exc:  # pragma: no cover - depends on SlicerDMRI IO availability
+                self.log(f"[Slicer] FiberBundleFile loader could not read {fiber_path}: {exc}")
+        if fiber_node is None:
+            fb_loader = getattr(slicer.util, "loadFiberBundle", None)
+            if fb_loader is not None:
+                try:
+                    candidate = fb_loader(fiber_path.as_posix())
+                    if isinstance(candidate, tuple):
+                        candidate = candidate[1] if candidate[0] else None
+                    if candidate:
+                        fiber_node = candidate
+                except Exception as exc:  # pragma: no cover - depends on SlicerDMRI IO availability
+                    self.log(f"[Slicer] Native FiberBundle loader could not read {fiber_path}: {exc}")
+        if fiber_node is None:
+            return None
+        fiber_node.SetName(node_name)
+        fiber_node.SetAttribute("SlicerDDSurfer.SourcePath", fiber_path.as_posix())
+        fiber_node.SetAttribute("SlicerDDSurfer.SourceCoordinateSystem", coordinates)
+        return fiber_node
 
     def _read_tract_model_file(self, model_path: Path, node_name: str):
         """Read a .vtk/.vtp with Slicer's core ModelFile reader in the coordinate system the file declares."""
@@ -983,7 +1029,12 @@ class SharedLogicMixin:
             import vtk
             from vtk.util.numpy_support import numpy_to_vtk, numpy_to_vtkIdTypeArray
             from shared.auto_results import uniform_streamline_indices
-            from shared.fiber_display import apply_fiber_display
+            from shared.fiber_display import (
+                FIBER_BUNDLE_CLASS,
+                apply_fiber_display,
+                is_fiber_bundle_node,
+                slicerdmri_fiber_bundle_available,
+            )
             from shared.result_scene import source_stamp
 
             if max_streamlines < 1:
@@ -1032,7 +1083,7 @@ class SharedLogicMixin:
             space.InsertNextValue("RAS")
             poly_data.GetFieldData().AddArray(space)
             scene = slicer.mrmlScene
-            node_class = "vtkMRMLModelNode"
+            use_fiber_bundle = slicerdmri_fiber_bundle_available(slicer)
             if preview_dir is not None:
                 import hashlib
                 import tempfile
@@ -1064,16 +1115,20 @@ class SharedLogicMixin:
                     staged_json.write_text(json.dumps(provenance, indent=2) + "\n", encoding="utf-8")
                     os.replace(staged, preview_path)
                     os.replace(staged_json, provenance_path)
-                fiber_node = self._read_tract_model_file(preview_path, node_name)
+                fiber_node = self._read_tract_fiber_bundle_file(preview_path, node_name) if use_fiber_bundle else None
+                if fiber_node is None:
+                    fiber_node = self._read_tract_model_file(preview_path, node_name)
                 if fiber_node is None:
                     return False
                 fiber_node.SetAttribute("SlicerDDSurfer.DisplayPreviewPath", str(preview_path))
                 fiber_node.SetAttribute("SlicerDDSurfer.DisplayPreviewProvenancePath", str(provenance_path))
                 fiber_node.SetAttribute("SlicerDDSurfer.PreviewSourceStamp", original_stamp)
             else:
-                fiber_node = scene.AddNewNodeByClass(node_class, node_name)
+                fiber_node = scene.AddNewNodeByClass(FIBER_BUNDLE_CLASS, node_name) if use_fiber_bundle else None
                 if fiber_node is None:
-                    self.log(f"[Slicer] vtkMRMLModelNode is not available for {fiber_path}")
+                    fiber_node = scene.AddNewNodeByClass("vtkMRMLModelNode", node_name)
+                if fiber_node is None:
+                    self.log(f"[Slicer] Neither {FIBER_BUNDLE_CLASS} nor vtkMRMLModelNode is available for {fiber_path}")
                     return False
                 fiber_node.SetAndObservePolyData(poly_data)
             fiber_node.SetAttribute("SlicerDDSurfer.SourcePath", fiber_path.as_posix())
@@ -1088,8 +1143,9 @@ class SharedLogicMixin:
             fiber_node.SetAttribute("SlicerDDSurfer.MeasurementWarning", "Display preview only; quantitative measurements must use the original tractogram")
             fiber_node.CreateDefaultDisplayNodes()
             apply_fiber_display(slicer, fiber_node, kind)
+            display_label = "SlicerDMRI FiberBundle" if is_fiber_bundle_node(fiber_node) else "native fiber bundle"
             self.log(
-                f"[Slicer] Loaded {streamline_count} streamlines from {fiber_path} as a native fiber bundle ({kind})"
+                f"[Slicer] Loaded {streamline_count} streamlines from {fiber_path} as a {display_label} ({kind})"
             )
             return True
         except Exception as exc:  # pragma: no cover - requires a real Slicer runtime

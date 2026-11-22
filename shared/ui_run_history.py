@@ -1045,9 +1045,9 @@ def _style_header_button(qt: Any, button: Any) -> None:
 
 
 def _install_results_header(owner: Any, qt: Any, results_layout: Any) -> Any:
-    """Add the header row (collapse, pop-out), the pop-out placeholder row and the body container.
+    """Add the header row (hide-all, menu, pop-out), the pop-out placeholder row and the body container.
 
-    The body container holds the empty-state row, the tree and the report bar. Collapse and pop-out act
+    The body container holds the empty-state row, the tree and the report bar. Pop-out acts
     on this one widget; the tree code never shows or hides it. Returns the body's layout.
     """
 
@@ -1084,19 +1084,12 @@ def _install_results_header(owner: Any, qt: Any, results_layout: Any) -> Any:
     results_menu.connect("aboutToShow()", lambda: _fill_results_menu(owner, results_menu))
     menu_button.setMenu(results_menu)
     header_layout.addWidget(menu_button)
-    collapse = qt.QToolButton()
-    collapse.setObjectName("resultsCollapseButton")
-    _style_header_button(qt, collapse)
-    collapse.setArrowType(qt.Qt.DownArrow)
-    collapse.setToolTip(_text(owner, "results_collapse", "Collapse results"))
-    _bind(owner, collapse, "tooltip", "results_collapse")
     pop_out = qt.QToolButton()
     pop_out.setObjectName("resultsPopOutButton")
     _style_header_button(qt, pop_out)
     pop_out.setToolButtonStyle(qt.Qt.ToolButtonIconOnly)
     pop_out.setToolTip(_text(owner, "results_pop_out", "Open results in a separate window"))
     _bind(owner, pop_out, "tooltip", "results_pop_out")
-    header_layout.addWidget(collapse)
     header_layout.addWidget(pop_out)
     results_layout.addWidget(header)
 
@@ -1128,7 +1121,7 @@ def _install_results_header(owner: Any, qt: Any, results_layout: Any) -> Any:
     owner._resultsHeaderRow = header
     owner._resultsMenuButton = menu_button
     owner._resultsMenu = results_menu
-    owner._resultsCollapseButton = collapse
+    owner._resultsCollapseButton = None
     owner._resultsPopOutButton = pop_out
     owner._resultsPoppedRow = popped
     owner._resultsBody = body
@@ -1138,7 +1131,6 @@ def _install_results_header(owner: Any, qt: Any, results_layout: Any) -> Any:
     owner._resultsDialogLayout = None
     owner._resultsBodyIndex = None
     owner._resultsWindowSize = RESULTS_WINDOW_SIZE
-    collapse.clicked.connect(lambda *_args: toggle_results_collapsed(owner))
     pop_out.clicked.connect(lambda *_args: pop_out_results(owner))
     dock_back.clicked.connect(lambda *_args: dock_results_body(owner))
     refresh_results_window(owner)
@@ -1743,9 +1735,14 @@ def _slice_connections(slicer, node):
 
 
 def _output_visible(slicer, nodes):
+    from shared.fiber_display import is_fiber_bundle_node, is_fiber_node_visible
+
     for node in nodes:
         if node.IsA("vtkMRMLVolumeNode"):
             if _slice_connections(slicer, node):
+                return True
+        elif is_fiber_bundle_node(node):
+            if is_fiber_node_visible(node):
                 return True
         elif node.GetDisplayVisibility():
             return True
@@ -1777,8 +1774,16 @@ def _toggle_output(owner, item):
         owner._open_local_path(path, missing_message="The result file is missing.")
         return
     try:
+        from shared.fiber_display import (
+            DISPLAY_KIND,
+            KIND_TRACTOGRAPHY,
+            apply_fiber_display,
+            is_fiber_bundle_node,
+            set_fiber_node_visible,
+        )
         from shared.result_scene import source_stamp
 
+        item_kind = item.data(0, _user_role(qt, ROLE_KIND))
         nodes = _output_nodes(slicer, manifest_path, path)
         visible = _output_visible(slicer, nodes)
         if not visible and nodes and path.is_file():
@@ -1803,7 +1808,20 @@ def _toggle_output(owner, item):
                     layer = "label" if node.IsA("vtkMRMLLabelMapVolumeNode") else "background"
                     slicer.util.setSliceViewerLayers(**{layer: node})
             else:
-                node.SetDisplayVisibility(not visible)
+                if (
+                    not visible
+                    and item_kind == FIBER_ROW_KIND
+                    and node.GetAttribute("SlicerDDSurfer.DisplayKind") != DISPLAY_KIND
+                ):
+                    apply_fiber_display(
+                        slicer,
+                        node,
+                        node.GetAttribute("SlicerDDSurfer.StreamlineKind") or KIND_TRACTOGRAPHY,
+                    )
+                if is_fiber_bundle_node(node):
+                    set_fiber_node_visible(node, not visible)
+                else:
+                    node.SetDisplayVisibility(not visible)
         _refresh_output_visibility(owner)
     except Exception as exc:
         slicer.util.errorDisplay(str(exc), parent=owner.parent)
@@ -2308,6 +2326,7 @@ def hide_everything_shown(owner: Any) -> None:
                 getattr(composite, f"Set{layer}VolumeID")(None)
 
     each("vtkMRMLModelNode", hide_model)
+    each("vtkMRMLFiberBundleNode", hide_model)
     each("vtkMRMLSegmentationNode", _hide_node_displays)  # every segmentation, as asked
     each("vtkMRMLSliceCompositeNode", clear_layers)
     each("vtkMRMLVolumeRenderingDisplayNode", lambda display: display.GetVisibility() and display.SetVisibility(0))

@@ -147,6 +147,27 @@ def white_carrier(manifest: dict, hemi: str) -> Optional[Path]:
     return None
 
 
+def published_white_carrier(manifest: dict, hemi: str, row_path: Any) -> Optional[Path]:
+    """Review M4: ``cortical_surface/{hemi}.white.obj`` of the published layout (shared.io_layout) of the run's output
+    root, used when the manifest records no completed surface task with that file (surface excluded from the run, or
+    blocked while post-processing reused its earlier outputs). Only when the row itself lies in the
+    ``surface_morphometry`` folder of that same layout; None otherwise."""
+
+    from shared.io_layout import subject_layout
+
+    subject_root, output_root = manifest.get("subject_root"), manifest.get("output_root")
+    if not subject_root or not row_path:
+        return None
+    try:
+        layout = subject_layout(Path(str(subject_root)), output_root=Path(str(output_root)) if output_root else None)
+        if Path(str(row_path)).expanduser().resolve().parent != layout.surface_morphometry.resolve():
+            return None
+        carrier = layout.cortical_surface / f"{hemi}.white.obj"
+        return carrier if carrier.is_file() else None
+    except (OSError, RuntimeError, ValueError, TypeError):
+        return None
+
+
 def recorded_carrier_sha256(task: dict, hemi: str) -> Optional[str]:
     """``native_sha256["{hemi}.white.obj"]`` of the post-processing ``structural/manifest.json``; None when unreadable."""
 
@@ -176,10 +197,13 @@ def file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def check_carrier(manifest: dict, task: dict, hemi: str) -> Path:
-    """The white ``.obj`` to carry a measure of ``hemi``; a bilingual MorphometryError when there is none or it differs."""
+def check_carrier(manifest: dict, task: dict, hemi: str, row_path: Any = None) -> Path:
+    """The white ``.obj`` to carry a measure of ``hemi``; a bilingual MorphometryError when there is none or it differs.
 
-    carrier = white_carrier(manifest, hemi)
+    The surface task's recorded file comes first; else the published file of the row's layout (review M4). The
+    checksum check is the same for both."""
+
+    carrier = white_carrier(manifest, hemi) or published_white_carrier(manifest, hemi, row_path)
     if carrier is None:
         raise MorphometryError(_bilingual(
             f"This run has no {hemi}.white.obj surface. Older runs publish only the .stl surface, whose vertex order "
@@ -226,17 +250,36 @@ def measure_range(name: str, values) -> tuple[float, float]:
     return (0.0, high)
 
 
-def annotation_colors(raw_ids, ctab, names) -> tuple[Any, list[tuple[str, float, float, float]]]:
-    """Map raw annotation values to colour-table rows: row 0 = unknown (neutral grey), row k+1 = ctab entry k.
+def _text(name) -> str:
+    return name.decode("utf-8", "replace") if isinstance(name, bytes) else str(name)
 
-    The table ids (column 4 of ``ctab``) need not be sequential; a value that is in no entry (FreeSurfer's -1 or 0
-    "no label") goes to row 0.
+
+def annotation_colors(raw_ids, ctab, names, entries: Optional[dict] = None
+                      ) -> tuple[Any, list[tuple[str, float, float, float]]]:
+    """Map raw annotation values to colour-table rows: row 0 = unknown (neutral grey), row j+1 = the j-th used ctab row.
+
+    The table ids (column 4 of ``ctab``) need not be sequential; a value that is in no used entry (FreeSurfer's -1 or
+    0 "no label") goes to row 0.
+
+    Review M2: for a version-2 file with sparse table indices nibabel returns one ``ctab`` row per index up to the
+    maximum (unused rows are zero) and a COMPACT ``names`` list, so ``names[k]`` does not belong to ``ctab[k]``.
+    Used rows and names: ``entries`` ({table index: name}, parsed from the file) when given; else every row with
+    ``names[k]`` when ``len(names) == len(ctab)`` (contiguous table, unchanged); else the rows that are not all zero,
+    named ``label <index>``. An unused row never becomes a label or matches a vertex.
     """
 
     import numpy as np
 
+    table = np.asarray(ctab)
+    rows = len(table)
+    if entries:
+        used = [(index, _text(name)) for index, name in sorted(entries.items()) if 0 <= int(index) < rows]
+    elif len(names) == rows:
+        used = [(index, _text(name)) for index, name in enumerate(names)]
+    else:
+        used = [(index, f"label {index}") for index in range(rows) if np.any(table[index, :4] != 0)]
     raw = np.asarray(raw_ids).astype(np.int64)
-    table_ids = np.asarray(ctab)[:, 4].astype(np.int64) if len(ctab) else np.zeros(0, dtype=np.int64)
+    table_ids = (table[[index for index, _ in used], 4].astype(np.int64) if used else np.zeros(0, dtype=np.int64))
     indices = np.zeros(raw.shape, dtype=np.int32)
     order = np.argsort(table_ids, kind="stable")
     if table_ids.size:
@@ -245,18 +288,57 @@ def annotation_colors(raw_ids, ctab, names) -> tuple[Any, list[tuple[str, float,
         hit = table_ids[order][positions] == raw
         indices[hit] = order[positions[hit]].astype(np.int32) + 1
     colors = [("unknown", *UNKNOWN_GREY)]
-    for index, name in enumerate(names):
-        text = name.decode("utf-8", "replace") if isinstance(name, bytes) else str(name)
-        red, green, blue = (float(value) / 255 for value in np.asarray(ctab)[index, :3])
+    for index, text in used:
+        red, green, blue = (float(value) / 255 for value in table[index, :3])
         if text.strip().lower() == "unknown":  # the table's own "unknown" entry (aparc: dark purple; a2009s: black)
             red, green, blue = UNKNOWN_GREY
         colors.append((text, red, green, blue))
     return indices, colors
 
 
+def annotation_table_entries(path) -> Optional[dict]:
+    """{table index: name} of a version-2 annotation's colour table, read from the file; None for another layout or
+    any read problem (the caller then uses neutral names). Layout (big-endian int32): vertex count, (vertex, value)
+    pairs, table flag, -2, max index, table-name length + name, entry count, then per entry: index, name length +
+    name, R, G, B, T."""
+
+    import numpy as np
+
+    try:
+        data = Path(path).read_bytes()
+
+        def number(offset: int) -> int:
+            if offset < 0 or offset + 4 > len(data):
+                raise ValueError("truncated annotation")
+            return int(np.frombuffer(data, dtype=">i4", count=1, offset=offset)[0])
+
+        offset = 4 + 8 * number(0)
+        if number(offset) != 1 or number(offset + 4) != -2:
+            return None
+        max_index = number(offset + 8)
+        offset += 12
+        offset += 4 + number(offset)
+        count = number(offset)
+        offset += 4
+        if not 0 <= count <= max(0, max_index) or count > len(data) // 24:
+            return None
+        entries = {}
+        for _ in range(count):
+            index, length = number(offset), number(offset + 4)
+            if length < 0 or offset + 8 + length + 16 > len(data):
+                return None
+            name = data[offset + 8:offset + 8 + length].split(b"\x00", 1)[0]
+            entries[index] = name.decode("utf-8", "replace")
+            offset += 8 + length + 16
+        return entries
+    except (OSError, ValueError, TypeError):
+        return None
+
+
 def read_annotation(nibabel_module, path) -> tuple[Any, list[tuple[str, float, float, float]]]:
     raw, ctab, names = nibabel_module.freesurfer.read_annot(str(path), orig_ids=True)
-    return annotation_colors(raw, ctab, names)
+    entries = annotation_table_entries(path) if len(names) != len(ctab) else None
+    return annotation_colors(raw, ctab, names, entries)
 
 
 def annotation_scalar_range(color_count: int) -> tuple[float, float]:
@@ -364,11 +446,60 @@ def remove_owned_color_node(slicer, model_node) -> bool:
     return True
 
 
+OWNED_NODES_ATTRIBUTE = PREFIX + "OwnedNodeIDs"  # on a row's model: its display, legend and colour node ids
+
+
+def own_nodes(model_node, nodes) -> None:
+    """Review M3: record ``nodes`` (display nodes, legend, colour table) as owned by the row's model. Each owned node
+    gets ``OwnerNodeID`` = the model id; the model lists their ids. Ids are kept so that the removal observer does not
+    need the model's references, which may no longer resolve once it has left the scene."""
+
+    owner = model_node.GetID()
+    identities = (model_node.GetAttribute(OWNED_NODES_ATTRIBUTE) or "").split()
+    for node in nodes:
+        if node is None or not hasattr(node, "SetAttribute"):
+            continue
+        identity = node.GetID()
+        if not isinstance(identity, str) or not identity:
+            continue
+        node.SetAttribute(PREFIX + "OwnerNodeID", owner)
+        if identity not in identities:
+            identities.append(identity)
+    model_node.SetAttribute(OWNED_NODES_ATTRIBUTE, " ".join(identities))
+
+
+def _display_nodes(model_node) -> list:
+    count = getattr(model_node, "GetNumberOfDisplayNodes", None)
+    if count is None:
+        return []
+    return [model_node.GetNthDisplayNode(index) for index in range(int(count() or 0))]
+
+
+def remove_owned_nodes(slicer, model_node) -> int:
+    """Remove every node that ``model_node`` owns (only a node whose OwnerNodeID is this model); safe to repeat."""
+
+    if model_node is None:
+        return 0
+    owner = model_node.GetID()
+    identities = (model_node.GetAttribute(OWNED_NODES_ATTRIBUTE) or "").split()
+    color = model_node.GetAttribute(PREFIX + "ColorNodeID")
+    removed = 0
+    for identity in identities + ([color] if color and color not in identities else []):
+        node = slicer.mrmlScene.GetNodeByID(identity)
+        if node is None or not hasattr(node, "GetAttribute") or node.GetAttribute(PREFIX + "OwnerNodeID") != owner:
+            continue
+        slicer.mrmlScene.RemoveNode(node)
+        removed += 1
+    return removed
+
+
 _REMOVAL_OBSERVER: dict = {}
 
 
 def _observe_model_removal(slicer) -> None:
-    """One scene observer: when a row's model leaves the scene (Unload, Clear, Replace), its colour table leaves too."""
+    """One scene observer: when a row's model leaves the scene (Unload, Clear, Replace), the display nodes, legend
+    and colour table it owns leave too. Nothing while the scene closes; a model without owned nodes (a plain result
+    model) removes nothing."""
 
     scene = slicer.mrmlScene
     if _REMOVAL_OBSERVER.get("scene") is scene or not hasattr(scene, "AddObserver"):
@@ -378,8 +509,10 @@ def _observe_model_removal(slicer) -> None:
     @vtk.calldata_type(vtk.VTK_OBJECT)
     def on_removed(_caller, _event, node):
         try:
-            if node is not None and node.GetAttribute(PREFIX + "ColorNodeID") and not scene.IsClosing():
-                remove_owned_color_node(slicer, node)
+            if node is None or scene.IsClosing():
+                return
+            if node.GetAttribute(OWNED_NODES_ATTRIBUTE) or node.GetAttribute(PREFIX + "ColorNodeID"):
+                remove_owned_nodes(slicer, node)
         except Exception:  # an odd node must not break a scene operation
             pass
 
@@ -428,13 +561,14 @@ def _point_array(values, name: str, *, integer: bool):
     return array
 
 
-def _add_legend(slicer, node, title: str) -> None:
+def _add_legend(slicer, node, title: str):
     try:
         legend = slicer.modules.colors.logic().AddDefaultColorLegendDisplayNode(node)
         if legend is not None:
             legend.SetTitleText(title)
+        return legend
     except Exception:  # Item 6: the legend is optional; the click must not fail without it
-        pass
+        return None
 
 
 def _build_model_from_points(slicer, points, faces, name: str):
@@ -488,8 +622,10 @@ def load_morphometry_row(slicer, candidate: dict, manifest: dict) -> bool:
             if display is not None:
                 display.SetColor(0.88, 0.88, 0.82)  # the plain colour of the white surfaces (result_scene)
             node.SetAttribute(PREFIX + "SourceCoordinateSystem", "RAS")
+            own_nodes(node, _display_nodes(node))  # review M3: its display node leaves with it
+            _observe_model_removal(slicer)
             return True
-        carrier = check_carrier(manifest, _postprocess_task(manifest), hemi)
+        carrier = check_carrier(manifest, _postprocess_task(manifest), hemi, path)
         if kind == "measure":
             values = nibabel.freesurfer.read_morph_data(str(path))
             colors = None
@@ -497,6 +633,7 @@ def load_morphometry_row(slicer, candidate: dict, manifest: dict) -> bool:
             values, colors = read_annotation(nibabel, path)
         node = _load_carrier(slicer, carrier)
         created.append(node)
+        own_nodes(node, _display_nodes(node))  # review M3: the reader's display node belongs to this row
         detach_result_storage(slicer, node)  # a scene Save must never rewrite the published white surface
         check_count(len(values), node.GetPolyData().GetNumberOfPoints(), path.name, carrier.name)
         node.SetName(path.name)
@@ -511,6 +648,7 @@ def load_morphometry_row(slicer, candidate: dict, manifest: dict) -> bool:
         if node.GetDisplayNode() is None:
             node.CreateDefaultDisplayNodes()
         display = node.GetDisplayNode()
+        own_nodes(node, _display_nodes(node))
         display.SetActiveScalar(array_name, vtk.vtkAssignAttribute.POINT_DATA)
         if kind == "measure":
             table = _first_existing(slicer, SEQUENTIAL_TABLES if name in {"thickness", "area"} else DIVERGING_TABLES)
@@ -530,16 +668,32 @@ def load_morphometry_row(slicer, candidate: dict, manifest: dict) -> bool:
                 lookup.SetTableRange(low, high)
             color.SetAttribute(PREFIX + "OwnerNodeID", node.GetID())
             node.SetAttribute(PREFIX + "ColorNodeID", color.GetID())
+            own_nodes(node, [color])
             display.SetAndObserveColorNodeID(color.GetID())
-            _observe_model_removal(slicer)
         display.SetScalarRangeFlag(slicer.vtkMRMLDisplayNode.UseManualScalarRange)
         display.SetScalarRange(low, high)
         display.SetScalarVisibility(True)
         if kind == "measure":
-            _add_legend(slicer, node, LEGEND_TITLES[name])
+            legend = _add_legend(slicer, node, LEGEND_TITLES[name])
+            own_nodes(node, [legend] + _display_nodes(node))
+        _observe_model_removal(slicer)
         return True
     except Exception:
+        # Review M3: the rollback removes the model, its display node(s), its legend and its colour table.
         for item in reversed(created):
+            try:
+                extras = [extra for extra in _display_nodes(item) if extra is not None]
+            except Exception:
+                extras = []
+            for extra in extras:
+                try:
+                    slicer.mrmlScene.RemoveNode(extra)
+                except Exception:
+                    pass
+            try:
+                remove_owned_nodes(slicer, item)
+            except Exception:
+                pass
             try:
                 slicer.mrmlScene.RemoveNode(item)
             except Exception:

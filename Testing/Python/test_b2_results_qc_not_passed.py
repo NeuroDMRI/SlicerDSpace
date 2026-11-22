@@ -135,6 +135,141 @@ class CandidatesTest(TempRootTest):
         self.assertIn("qc_failed", {entry.get("reason_category") for entry in skipped})
 
 
+class PublishedTask:
+    """Review M1: a bundle task shaped like a real published one (``_publish_bundles_outputs``): the task records
+    ``output_dir``, ``manifest_path``, ``qc_path`` and ``bundle_count``, not one output per file. The backend's own
+    manifest (``wmql_manifest.json``) names the STAGE files in ``outputs.summary.bundle_files``; the published copies
+    lie in ``output_dir`` under the same names."""
+
+    def __init__(self, root: Path, *, name="bundles.wmql", summary_key="bundle_files", manifest_name="wmql_manifest.json",
+                 qc_name="wmql_qc.json", suffix=".trk"):
+        self.stage = root / "cache" / "stages" / "04_bundles" / name.split(".", 1)[1] / "Test1"
+        self.stage.mkdir(parents=True)
+        self.output_dir = root / "outputs" / "04_bundles" / name.split(".", 1)[1] / "csd_act"
+        self.output_dir.mkdir(parents=True)
+        self.names = [f"Test1_desc-{name}_{bundle}{suffix}" for bundle in ("af_left", "af_right", "cst_left")]
+        stage_files = []
+        self.published = []
+        for file_name in self.names:
+            stage_file = self.stage / file_name
+            stage_file.write_text("bundle", encoding="utf-8")
+            stage_files.append(str(stage_file))
+            self.published.append(Path(shutil.copy2(stage_file, self.output_dir / file_name)))
+        empty = self.stage / f"Test1_desc-{name}_empty{suffix}"
+        empty.write_text("", encoding="utf-8")
+        (self.output_dir / empty.name).write_text("", encoding="utf-8")
+        summary = {summary_key: stage_files + [str(empty)]}
+        if summary_key == "bundle_files":
+            summary["empty_bundle_files"] = [str(empty)]
+        else:
+            summary["anatomical_empty_tracts"] = [empty.name]
+        self.manifest_file = self.stage / manifest_name
+        self.manifest_file.write_text(json.dumps({"kind": "bundle_manifest", "outputs": {
+            "qc": str(self.stage / qc_name), "summary": summary}}), encoding="utf-8")
+        self.qc_file = self.stage / qc_name  # not written: the QC record is missing
+        self.task = {"name": name, "status": "skipped", "reason": "completed outputs found",
+                     "manifest_path": str(self.manifest_file), "qc_path": str(self.qc_file),
+                     "outputs": {"output_dir": str(self.output_dir), "bundle_count": "3"}}
+
+
+class UnreadableQcPublishedTaskTest(unittest.TestCase):
+    """Review M1 (Codex P1): with a missing or invalid QC record, a real published task got no rows and no mark."""
+
+    def setUp(self) -> None:
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name).resolve()
+
+    def _rows(self, task, **kwargs):
+        from shared.result_scene import result_candidates
+
+        kwargs.setdefault("include_qc_not_passed", True)
+        kwargs.setdefault("allow_bundle_directory_scan", False)  # as the Results tree calls it
+        candidates, skipped = result_candidates({"tasks": [task]}, **kwargs)
+        return candidates, skipped
+
+    def test_b2_morph_fix_M1_a_missing_qc_record_lists_the_bundle_manifest_files_with_the_no_record_mark(self) -> None:
+        for name, key, manifest_name, suffix in (
+                ("bundles.wmql", "bundle_files", "wmql_manifest.json", ".trk"),
+                ("bundles.tractcloud", "bundle_files", "tractcloud_manifest.json", ".vtp"),
+                ("bundles.wma", "anatomical_tract_files", "wma_org_atlas_manifest.json", ".vtp")):
+            with self.subTest(task=name):
+                task = PublishedTask(self.root / name, name=name, summary_key=key, manifest_name=manifest_name,
+                                     suffix=suffix)
+                candidates, _ = self._rows(task.task)
+                self.assertEqual(sorted(item["path"] for item in candidates), sorted(map(str, task.published)))
+                self.assertTrue(all(item["qc_mark"] == "unreadable" for item in candidates))
+                self.assertEqual({item["key"] for item in candidates}, {"bundle_" + file for file in task.names})
+
+    def test_b2_morph_fix_M1_an_invalid_qc_record_lists_the_bundle_manifest_files_with_the_no_record_mark(self) -> None:
+        task = PublishedTask(self.root)
+        task.qc_file.write_text("{not json", encoding="utf-8")
+        candidates, _ = self._rows(task.task)
+        self.assertEqual(sorted(item["path"] for item in candidates), sorted(map(str, task.published)))
+        self.assertEqual({(item["qc_mark"], item["qc_reason"]) for item in candidates},
+                         {("unreadable", "Unreadable bundle QC")})
+
+    def test_b2_morph_fix_M1_without_the_bundle_manifest_the_task_stays_unlisted(self) -> None:
+        task = PublishedTask(self.root)
+        task.manifest_file.unlink()
+        self.assertEqual(self._rows(task.task)[0], [])
+        task.manifest_file.write_text("{not json", encoding="utf-8")
+        self.assertEqual(self._rows(task.task)[0], [])
+
+    def test_b2_morph_fix_M1_with_the_flag_off_the_task_is_skipped_as_before(self) -> None:
+        task = PublishedTask(self.root)
+        candidates, skipped = self._rows(task.task, include_qc_not_passed=False)
+        self.assertEqual(candidates, [])
+        self.assertEqual([(entry["product"], entry["reason"], entry["reason_category"]) for entry in skipped],
+                         [("bundles.wmql", "Unreadable bundle QC", "qc_failed")])
+        from shared.result_scene import bundle_outputs
+
+        self.assertEqual(bundle_outputs(task.task), {})  # the default (bulk and automatic) resolution is unchanged
+
+    def test_b2_morph_fix_M1_a_file_outside_the_output_dir_is_not_listed(self) -> None:
+        task = PublishedTask(self.root)
+        outside = self.root / "elsewhere" / "Test1_desc-bundles.wmql_outside.trk"
+        outside.parent.mkdir()
+        outside.write_text("bundle", encoding="utf-8")
+        escape = task.output_dir / "link_out.trk"  # inside by name, outside once resolved
+        escape.symlink_to(outside)
+        record = json.loads(task.manifest_file.read_text(encoding="utf-8"))
+        record["outputs"]["summary"]["bundle_files"] += [str(outside), str(task.stage / "link_out.trk")]
+        task.manifest_file.write_text(json.dumps(record), encoding="utf-8")
+        candidates, _ = self._rows(task.task)
+        self.assertEqual(sorted(item["path"] for item in candidates), sorted(map(str, task.published)))
+
+    def test_b2_morph_fix_M1_the_tree_shows_the_rows_with_the_no_record_mark(self) -> None:
+        from shared import ui_run_history
+        from shared.run_history import parse_run_manifest
+        from test_ui_results_tree import USER_ROLE, Harness
+
+        task = PublishedTask(self.root)
+        out = self.root / "outputs"
+        manifest = {"kind": "slicerddsurfer_product_orchestration", "version": 1, "status": "completed",
+                    "subject_id": "sub1", "run_name": "Test1", "ended_at": "2026-11-01T10:00:00Z",
+                    "subject_root": str(self.root), "output_root": str(out), "tasks": [task.task]}
+        meta = out / "00_run_metadata"
+        meta.mkdir(parents=True)
+        path = meta / "Test1_orchestration_manifest.json"
+        path.write_text(json.dumps(manifest), encoding="utf-8")
+        h = Harness(self)
+        with mock.patch("shared.result_scene.result_candidates", side_effect=REAL_CANDIDATES):
+            h.refresh([parse_run_manifest(path)])
+        subject = next(item for item in h.tree.items if item.text(0).startswith("sub1"))
+        role_key = USER_ROLE + ui_run_history.ROLE_KEY
+        groups = {subject.child(i).data(0, role_key): subject.child(i) for i in range(subject.childCount())}
+        self.assertIn("bundles", groups, "the task's bundle files are not listed")
+        bundles = groups["bundles"]
+        subgroups = [bundles.child(i) for i in range(bundles.childCount())]
+        self.assertEqual(len(subgroups), 1, [row.data(0, role_key) for row in subgroups])
+        wmql = subgroups[0]
+        self.assertTrue(str(wmql.data(0, role_key)).startswith("bundles::wmql"), wmql.data(0, role_key))
+        self.assertTrue(wmql.text(0).startswith("WMQL"), wmql.text(0))
+        self.assertTrue(wmql.text(0).endswith("(3) · no QC record"), wmql.text(0))
+        self.assertIn("Unreadable bundle QC", wmql.tooltips[0])
+
+
 class LoadGateTest(TempRootTest):
     def _logic(self):
         with mock.patch.dict(sys.modules, {"slicer": types.ModuleType("slicer")}):

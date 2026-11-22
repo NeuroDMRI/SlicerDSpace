@@ -289,6 +289,58 @@ class AnnotationTest(TempRootTest):
         self.assertEqual(table[3], ("Unknown", *UNKNOWN_GREY))
         self.assertAlmostEqual(table[2][2], 100 / 255)
 
+    @staticmethod
+    def write_sparse_annot(path: Path, labels, entries, max_index: int) -> None:
+        """A version-2 annotation whose colour table has only the given indices (nibabel's write_annot writes a
+        contiguous table). ``entries``: (index, name, (r, g, b)). Big-endian int32, as FreeSurfer writes it."""
+
+        def i32(*values):
+            return np.asarray(values, dtype=">i4").tobytes()
+
+        data = i32(len(labels))
+        for vertex, value in enumerate(labels):
+            data += i32(vertex, value)
+        table_name = b"sparse_ctab.txt\x00"
+        data += i32(1, -2, max_index, len(table_name)) + table_name + i32(len(entries))
+        for index, name, (red, green, blue) in entries:
+            encoded = name.encode("ascii") + b"\x00"
+            data += i32(index, len(encoded)) + encoded + i32(red, green, blue, 0)
+        path.write_bytes(data)
+
+    def test_b2_morph_fix_M2_a_sparse_colour_table_gives_each_label_its_own_colour_and_name(self) -> None:
+        """Review M2: nibabel returns one ctab row per index up to the maximum (unused rows are zero) and a compact
+        names list; the names and colours must not be paired by position."""
+
+        from shared.surface_morphometry_display import read_annotation
+
+        two, five = (200, 30, 40), (10, 180, 90)
+        packed = {index: red + green * 256 + blue * 65536 for index, (red, green, blue) in ((2, two), (5, five))}
+        labels = [packed[2], packed[5], -1, 0, packed[5], packed[2]]
+        path = self.root / "lh.aparc.annot"
+        self.write_sparse_annot(path, labels, [(2, "two", two), (5, "five", five)], max_index=6)
+        _raw, ctab, names = nib.freesurfer.read_annot(str(path), orig_ids=True)
+        self.assertEqual((len(ctab), len(names)), (6, 2))  # the nibabel shape this item is about
+        indices, colors = read_annotation(nib, path)
+        table = {name: rgb for name, *rgb in colors}
+        self.assertEqual(colors[0], ("unknown", 0.5, 0.5, 0.5))
+        self.assertEqual(sorted(table), ["five", "two", "unknown"])  # no unused all-zero row became a label
+        for name, rgb in (("two", two), ("five", five)):
+            self.assertEqual(table[name], [value / 255 for value in rgb])
+        rows = [colors[index][0] for index in indices.tolist()]
+        self.assertEqual(rows, ["two", "five", "unknown", "unknown", "five", "two"])
+
+    def test_b2_morph_fix_M2_without_the_file_table_a_sparse_table_gets_neutral_names_and_right_colours(self) -> None:
+        from shared.surface_morphometry_display import annotation_colors
+
+        ctab = np.zeros((6, 5), dtype=np.int64)
+        ctab[2, :3], ctab[5, :3] = (200, 30, 40), (10, 180, 90)
+        ctab[:, 4] = ctab[:, 0] + ctab[:, 1] * 256 + ctab[:, 2] * 65536
+        indices, colors = annotation_colors(np.array([ctab[5, 4], ctab[2, 4], 0, -1]), ctab, [b"two", b"five"])
+        self.assertEqual([name for name, *_ in colors], ["unknown", "label 2", "label 5"])
+        self.assertEqual(colors[1][1:], (200 / 255, 30 / 255, 40 / 255))
+        self.assertEqual(colors[2][1:], (10 / 255, 180 / 255, 90 / 255))
+        self.assertEqual(indices.tolist(), [2, 1, 0, 0])  # raw 0 matches no unused zero row
+
     @unittest.skipIf(vtk is None, "VTK required")
     def test_b2_morph_annotation_lookup_with_the_manual_range_returns_each_rows_colour(self) -> None:
         from shared.surface_morphometry_display import annotation_scalar_range
@@ -675,6 +727,233 @@ class BuilderTest(TempRootTest):
         self.color_nodes[0].GetAttribute.side_effect = lambda key: node.GetID() if key == PREFIX + "OwnerNodeID" else None
         remove_owned_color_node(self.fake, node)
         self.assertEqual(self.color_nodes, [])
+
+
+# ------------------------------------------------- review M3/M4: a scene that holds display, legend and colour nodes
+class _SceneNode:
+    """A scene node with an id, attributes, display node ids and storage node ids; other Set*/Get* calls are no-ops."""
+
+    def __init__(self, scene, identity, kind):
+        self.scene, self.identity, self.kind, self.attributes = scene, identity, kind, {}
+        self.display_ids, self.storage_ids, self.polydata, self.name = [], [], None, ""
+
+    def __getattr__(self, name):
+        if name.startswith(("Set", "Get", "Create")):
+            return lambda *args, **kwargs: None
+        raise AttributeError(name)
+
+    def GetID(self):
+        return self.identity
+
+    def GetClassName(self):
+        return self.kind
+
+    def IsA(self, name):
+        return name == self.kind or (name == "vtkMRMLDisplayableNode" and self.kind == "vtkMRMLModelNode")
+
+    def GetAttribute(self, key):
+        return self.attributes.get(key)
+
+    def SetAttribute(self, key, value):
+        self.attributes[key] = value
+
+    def SetName(self, name):
+        self.name = name
+
+    def SetAndObservePolyData(self, data):
+        self.polydata = data
+
+    def GetPolyData(self):
+        return self.polydata
+
+    def GetNumberOfDisplayNodes(self):
+        return len(self.display_ids)
+
+    def GetNthDisplayNode(self, index):
+        return self.scene.GetNodeByID(self.display_ids[index])
+
+    def GetDisplayNode(self):
+        return self.GetNthDisplayNode(0) if self.display_ids else None
+
+    def CreateDefaultDisplayNodes(self):
+        if not self.display_ids:
+            self.display_ids.append(self.scene.AddNewNodeByClass("vtkMRMLModelDisplayNode").GetID())
+
+    def GetNumberOfStorageNodes(self):
+        return len(self.storage_ids)
+
+    def GetNthStorageNode(self, index):
+        return self.scene.GetNodeByID(self.storage_ids[index])
+
+
+class _OwningScene:
+    """Like vtkMRMLScene: RemoveNode removes one node (never its display nodes) and then fires NodeRemovedEvent."""
+
+    NodeRemovedEvent = 66001
+
+    def __init__(self, builtin_ids=()):
+        self.nodes, self.observers, self.closing, self.count = {}, [], False, 0
+        self.builtin = {identity: _SceneNode(self, identity, "vtkMRMLColorTableNode") for identity in builtin_ids}
+
+    def AddNewNodeByClass(self, kind, name=""):
+        self.count += 1
+        node = _SceneNode(self, f"{kind}_{self.count}", kind)
+        node.name = name
+        self.nodes[node.GetID()] = node
+        return node
+
+    def GetNodeByID(self, identity):
+        return self.nodes.get(identity) or self.builtin.get(identity)
+
+    def RemoveNode(self, node):
+        if node is None or self.nodes.pop(node.GetID(), None) is None:
+            return
+        for owner in self.nodes.values():
+            if node.GetID() in owner.storage_ids:
+                owner.storage_ids.remove(node.GetID())
+        for event, callback in list(self.observers):
+            if event == self.NodeRemovedEvent:
+                callback(self, event, node)
+
+    def AddObserver(self, event, callback):
+        self.observers.append((event, callback))
+        return len(self.observers)
+
+    def IsClosing(self):
+        return self.closing
+
+    def kinds(self):
+        return sorted(node.kind for node in self.nodes.values())
+
+
+@unittest.skipIf(np is None or vtk is None, "numpy/VTK/nibabel required (run with PythonSlicer)")
+class OwnedNodesTest(TempRootTest):
+    """Review M3: a row owns its model, its display node(s), its legend and its colour table. Review M4: a run whose
+    manifest has no completed surface task finds the white surface in the published layout of the same output root."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        from shared.surface_morphometry_display import DIVERGING_TABLES, SEQUENTIAL_TABLES
+
+        self.scene = scene = _OwningScene(SEQUENTIAL_TABLES[:1] + DIVERGING_TABLES[:1])
+
+        def load_model(path, kind, properties=None, **kwargs):
+            reader = vtk.vtkOBJReader()
+            reader.SetFileName(path)
+            reader.Update()
+            node = scene.AddNewNodeByClass("vtkMRMLModelNode", "model")
+            node.SetAndObservePolyData(reader.GetOutput())
+            node.CreateDefaultDisplayNodes()
+            node.storage_ids.append(scene.AddNewNodeByClass("vtkMRMLModelStorageNode").GetID())
+            return True, node
+
+        def add_legend(node):  # Slicer adds the legend as one more display node of the model
+            legend = scene.AddNewNodeByClass("vtkMRMLColorLegendDisplayNode")
+            node.display_ids.append(legend.GetID())
+            return legend
+
+        self.fake = SimpleNamespace(
+            mrmlScene=scene,
+            vtkMRMLStorageNode=SimpleNamespace(CoordinateSystemRAS=0, CoordinateSystemLPS=1),
+            vtkMRMLDisplayNode=SimpleNamespace(UseManualScalarRange=1, UseDataScalarRange=0),
+            modules=SimpleNamespace(colors=SimpleNamespace(logic=lambda: SimpleNamespace(
+                AddDefaultColorLegendDisplayNode=add_legend))),
+            util=SimpleNamespace(loadNodeFromFile=load_model, getNodesByClass=lambda kind: [
+                node for node in scene.nodes.values() if node.IsA(kind)]),
+        )
+
+    def _run(self, **kwargs):
+        run = RunFolder(self.root, **kwargs)
+        count = len(VERTICES)
+        nib.freesurfer.write_morph_data(str(run.morph("lh.thickness")), np.linspace(1, 4, count).astype(np.float32))
+        nib.freesurfer.write_morph_data(str(run.morph("lh.sulc")), np.linspace(-2, 2, count - 1).astype(np.float32))
+        nib.freesurfer.write_annot(str(run.morph("lh.aparc.annot")), np.array([0, 1, -1, 0, 1, 1], dtype=np.int32),
+                                   np.array([[220, 20, 10, 0, 0], [20, 220, 10, 0, 0]], dtype=np.int32),
+                                   [b"one", b"two"], fill_ctab=True)
+        nib.freesurfer.write_geometry(str(run.morph("lh.inflated")), np.array(VERTICES, dtype=np.float32),
+                                      np.array(FACES, dtype=np.int32))
+        return run
+
+    def _load(self, run, name, manifest=None):
+        from shared.surface_morphometry_display import load_morphometry_row
+
+        before = set(self.scene.nodes)
+        candidate = {"path": str(run.morph(name)), "product": PRODUCT, "key": name, "label": PRODUCT + "_" + name}
+        self.assertTrue(load_morphometry_row(self.fake, candidate, run.manifest if manifest is None else manifest))
+        new = [self.scene.nodes[identity] for identity in self.scene.nodes if identity not in before]
+        return next(node for node in new if node.kind == "vtkMRMLModelNode"), new
+
+    def test_b2_morph_fix_M3_a_count_mismatch_leaves_no_model_display_legend_or_colour_node(self) -> None:
+        from shared.surface_morphometry_display import MorphometryError, load_morphometry_row
+
+        run = self._run()
+        with self.assertRaises(MorphometryError):
+            load_morphometry_row(self.fake, {"path": str(run.morph("lh.sulc")), "product": PRODUCT, "key": "lh.sulc"},
+                                 run.manifest)
+        self.assertEqual(self.scene.kinds(), [])
+
+    def test_b2_morph_fix_M3_removing_a_row_model_removes_its_display_legend_and_colour_nodes(self) -> None:
+        run = self._run()
+        rows = {name: self._load(run, name) for name in ("lh.thickness", "lh.aparc.annot", "lh.inflated")}
+        thickness_kinds = sorted(node.kind for node in rows["lh.thickness"][1])
+        self.assertEqual(thickness_kinds, ["vtkMRMLColorLegendDisplayNode", "vtkMRMLModelDisplayNode",
+                                           "vtkMRMLModelNode"])
+        self.assertIn("vtkMRMLColorTableNode", [node.kind for node in rows["lh.aparc.annot"][1]])
+        for name in ("lh.thickness", "lh.aparc.annot", "lh.inflated"):
+            model, created = rows.pop(name)
+            self.scene.RemoveNode(model)
+            self.assertEqual([node.GetID() for node in created if node.GetID() in self.scene.nodes], [], name)
+            remaining = {node.GetID() for _model, nodes in rows.values() for node in nodes}
+            self.assertEqual(set(self.scene.nodes), remaining, name)  # never a node of another row
+
+    def test_b2_morph_fix_M3_nothing_is_removed_while_the_scene_is_closing(self) -> None:
+        run = self._run()
+        model, created = self._load(run, "lh.aparc.annot")
+        thickness, created_thickness = self._load(run, "lh.thickness")
+        self.scene.closing = True
+        self.scene.RemoveNode(model)
+        self.scene.RemoveNode(thickness)
+        expected = {node.GetID() for node in created + created_thickness} - {model.GetID(), thickness.GetID()}
+        self.assertEqual(set(self.scene.nodes), expected)
+
+    def test_b2_morph_fix_M3_removing_a_plain_model_removes_nothing_else(self) -> None:
+        run = self._run()
+        _model, created = self._load(run, "lh.thickness")
+        plain = self.scene.AddNewNodeByClass("vtkMRMLModelNode", "lh.white.obj")
+        plain.CreateDefaultDisplayNodes()
+        plain_display = plain.display_ids[0]
+        self.scene.RemoveNode(plain)
+        self.assertEqual(set(self.scene.nodes), {node.GetID() for node in created} | {plain_display})
+
+    def test_b2_morph_fix_M4_without_a_recorded_surface_task_the_published_white_surface_carries_the_row(self) -> None:
+        from shared.surface_morphometry_display import PREFIX
+
+        run = self._run()
+        for surface_task in (None, {"name": "surface.ddsurfer", "status": "blocked", "reason": "missing resources"}):
+            with self.subTest(surface_task=surface_task):
+                manifest = dict(run.manifest, tasks=[task for task in run.manifest["tasks"]
+                                                     if task["name"] != "surface.ddsurfer"])
+                if surface_task is not None:
+                    manifest["tasks"].insert(0, surface_task)
+                model, _created = self._load(run, "lh.thickness", manifest)
+                self.assertEqual(model.GetAttribute(PREFIX + "CarrierPath"),
+                                 str((run.surface_dir / "lh.white.obj").resolve()))
+
+    def test_b2_morph_fix_M4_the_published_white_surface_keeps_the_checksum_and_layout_checks(self) -> None:
+        from shared.surface_morphometry_display import MorphometryError, load_morphometry_row
+
+        run = self._run(sha_override={"lh.white.obj": "f" * 64})
+        manifest = dict(run.manifest, tasks=[run.manifest["tasks"][1]])
+        candidate = {"path": str(run.morph("lh.thickness")), "product": PRODUCT, "key": "lh.thickness"}
+        with self.assertRaises(MorphometryError) as caught:
+            load_morphometry_row(self.fake, candidate, manifest)
+        self.assertIn("checksum", str(caught.exception))
+        # A row that is not in the layout of the manifest's output root gets no fallback carrier.
+        other = dict(manifest, output_root=str(self.root / "elsewhere" / "outputs"))
+        with self.assertRaises(MorphometryError) as caught:
+            load_morphometry_row(self.fake, candidate, other)
+        self.assertIn(".obj", str(caught.exception))
+        self.assertEqual(self.scene.kinds(), [])
 
 
 # ------------------------------------------------------------------------------------ Results tree (items 1, 9, 10)

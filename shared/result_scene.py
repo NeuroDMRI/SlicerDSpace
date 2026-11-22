@@ -49,6 +49,9 @@ def bundle_outputs(task, *, allow_directory_scan=True, accept_qc_not_passed=Fals
     if task.get("name") not in {"bundles.wmql", "bundles.wma", "bundles.tractcloud"}:
         return {}
     path = task.get("qc_path") or (task.get("outputs") or {}).get("qc_path")
+    if accept_qc_not_passed and _unreadable_record(path):
+        # Review M1: no readable QC record. The task's own bundle manifest names the files (no directory scan).
+        return _bundle_files_from_task_manifest(task)
     try:
         if not path or not Path(path).is_absolute():
             return {}
@@ -80,6 +83,56 @@ def bundle_outputs(task, *, allow_directory_scan=True, accept_qc_not_passed=Fals
                 resolved_files["bundle_" + name_only] = str(published_file)
             else:
                 resolved_files["bundle_" + name_only] = value
+        return resolved_files
+    except (OSError, ValueError, TypeError, AttributeError):
+        return {}
+
+
+def _unreadable_record(path) -> bool:
+    """True when ``path`` names no absolute, readable JSON object (missing, invalid JSON or not an object)."""
+
+    try:
+        if not path or not Path(str(path)).is_absolute():
+            return True
+        return not isinstance(json.loads(Path(str(path)).read_text(encoding="utf-8")), dict)
+    except (OSError, ValueError, TypeError):
+        return True
+
+
+def _bundle_files_from_task_manifest(task) -> dict:
+    """Review M1: the files of a bundle task whose QC record cannot be read, from the task's own bundle manifest.
+
+    The backends (WMQL, TractCloud: ``outputs.summary.bundle_files``; WMA: ``outputs.summary.anatomical_tract_files``)
+    name their stage files; each one is looked up by name in the task's recorded ``output_dir``, where the orchestrator
+    published it. A file is accepted only when it exists and, resolved, lies inside that folder. Empty bundles are left
+    out as on the QC route. No directory scan; a missing or unreadable manifest gives nothing.
+    """
+
+    outputs = task.get("outputs") or {}
+    manifest_path, output_dir = task.get("manifest_path") or outputs.get("manifest_path"), outputs.get("output_dir")
+    try:
+        if not manifest_path or not output_dir or not Path(str(manifest_path)).is_absolute():
+            return {}
+        folder = Path(str(output_dir))
+        if not folder.is_absolute() or not folder.is_dir():
+            return {}
+        record = json.loads(Path(str(manifest_path)).read_text(encoding="utf-8"))
+        summary = (record.get("outputs") or {}).get("summary") or {}
+        files = summary.get("bundle_files") or summary.get("anatomical_tract_files") or []
+        empty = set(summary.get("empty_bundle_files") or [])
+        empty_names = set(summary.get("anatomical_empty_tracts") or [])
+        root = folder.resolve()
+        resolved_files: dict[str, str] = {}
+        for value in files:
+            if not isinstance(value, str) or not value or value in empty or Path(value).name in empty_names:
+                continue
+            name_only = Path(value).name
+            published_file = folder / name_only
+            if not name_only or not published_file.is_file():
+                continue
+            if not published_file.resolve().is_relative_to(root):
+                continue
+            resolved_files["bundle_" + name_only] = str(published_file)
         return resolved_files
     except (OSError, ValueError, TypeError, AttributeError):
         return {}

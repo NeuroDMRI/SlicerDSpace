@@ -40,7 +40,7 @@
       query_bundle_extraction/<source>/ # WMQL: *.trk
       fiber_clustering/<source>/        # WMA: T_*.vtp, bundle_measurements.csv
       bundle_identification/<source>/   # TractCloud: *.vtp
-    05_connectome/                      # <sub_id>_{streamline_count,sift2_weighted,<metric>}.csv, <sub_id>_nodes.tsv, <sub_id>_node_parcellation.nii.gz
+    05_connectome/<source>/             # <sub_id>_{streamline_count,sift2_weighted}.csv, <sub_id>_nodes.tsv, <sub_id>_node_parcellation.nii.gz
     06_qc/                              # 仅保存已运行或复用任务的简洁 TXT 质控摘要
 ```
 
@@ -56,6 +56,12 @@
 由该算法的“纤维追踪来源”设置决定（GUI 设置弹窗；CLI `--bundle-source ALG=SOURCE`）；默认行为不变：WMQL 和 TractCloud
 使用每个已选追踪，WMA 使用 UKF。此布局之前的结果在这些文件夹中保留扁平文件，仍可读取；恢复运行时会把已完成阶段的输出重新发布到子文件夹，
 不会重新计算。
+
+连接组文件夹使用相同的 `<source>` 子文件夹：`05_connectome/<source>/` 保存追踪方法 `<source>`（`csd_act`、`ukf`、`dti_det`、
+`saf`）的连接组，只有一种追踪时也一样。连接组总是使用本次运行自己的纤维追踪结果，因此没有 `supplied` 子文件夹。有两种或更多追踪时，
+每个追踪变体写入自己的子文件夹，因此一个变体不会覆盖另一个变体的连接组文件。此布局之前的结果在 `05_connectome/` 中保留扁平文件
+（例如 `<sub_id>_streamline_count.csv`，或来自旧 `04_tractography` 目录的 `<sub_id>_<metric>.csv`），仍可读取；恢复运行时会把已完成的
+连接组阶段输出重新发布到子文件夹，不会重新计算。
 
 ---
 

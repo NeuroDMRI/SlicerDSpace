@@ -1616,8 +1616,9 @@ class ProductOrchestratorTest(unittest.TestCase):
             result = run_subject_products(config)
             payload = json.loads(result.run_manifest_path.read_text(encoding="utf-8"))
             candidates, _ = result_candidates(payload)
-            published_matrix = (layout.connectome / "100307_streamline_count.csv").resolve().as_posix()
-            published_nodes = (layout.connectome / "100307_nodes.tsv").resolve().as_posix()
+            # Batch 2: the connectome is published per tractography source, also with one tracking (dti_det here).
+            published_matrix = (layout.connectome / "dti_det" / "100307_streamline_count.csv").resolve().as_posix()
+            published_nodes = (layout.connectome / "dti_det" / "100307_nodes.tsv").resolve().as_posix()
             self.assertTrue({published_matrix, published_nodes} <= {candidate["path"] for candidate in candidates})
 
             conn_matrix.write_text("source_node,target_node,streamline_count\n", encoding="utf-8")

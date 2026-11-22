@@ -13,6 +13,10 @@ ticked tracking backend. ``saf`` is never a source: SAF is a short-fibre product
 
 ALGORITHMS = ("wmql", "wma", "tractcloud")
 SOURCES = ("csd_act", "ukf", "dti_det")
+# Published per-source subfolder names, one per tracking backend id (``outputs/04_bundles/<product>/<source>/`` and
+# ``outputs/05_connectome/<source>/``). A SAF child keeps ``saf`` (its own CSD/ACT tracking), so ``saf`` is a folder
+# name here although it is never a bundle source above. The end-of-run archive keeps these folders in 05_connectome.
+TRACKING_OUTPUT_FOLDERS = (*SOURCES, "saf")
 # Values each algorithm accepts. "auto" is today's rule. WMA "ukf" is the same as "auto" (UKF is the WMA default).
 CHOICES = {
     "wmql": ("auto", *SOURCES),

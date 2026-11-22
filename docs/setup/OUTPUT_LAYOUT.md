@@ -40,7 +40,7 @@
       query_bundle_extraction/<source>/ # WMQL: *.trk
       fiber_clustering/<source>/        # WMA: T_*.vtp, bundle_measurements.csv
       bundle_identification/<source>/   # TractCloud: *.vtp
-    05_connectome/                      # <sub_id>_{streamline_count,sift2_weighted,<metric>}.csv, <sub_id>_nodes.tsv, <sub_id>_node_parcellation.nii.gz
+    05_connectome/<source>/             # <sub_id>_{streamline_count,sift2_weighted}.csv, <sub_id>_nodes.tsv, <sub_id>_node_parcellation.nii.gz
     06_qc/                              # Concise per-algorithm plain-text QC summaries for tasks that ran/reused
 ```
 
@@ -61,6 +61,14 @@ algorithm uses is the "Tractography source" setting of that algorithm (GUI setti
 `--bundle-source ALG=SOURCE`); the default is unchanged: WMQL and TractCloud use every ticked tracking, WMA uses UKF.
 Results from before this layout keep their flat files in these folders and stay readable; a resumed run publishes the
 finished stage outputs again into the subfolders and does not compute them again.
+
+The connectome folder uses the same `<source>` subfolders: `05_connectome/<source>/` holds the connectome of the
+tracking `<source>` (`csd_act`, `ukf`, `dti_det`, `saf`), also when the run has one tracking only. The connectome always
+uses the run's own tractogram, so it has no `supplied` subfolder. With two or more trackings, each tracking variant
+writes into its own subfolder, so one variant cannot overwrite the connectome files of another. Results from before this
+layout keep their flat files in `05_connectome/` (for example `<sub_id>_streamline_count.csv`, or
+`<sub_id>_<metric>.csv` from an older `04_tractography` tree) and stay readable; a resumed run publishes the finished
+connectome stage outputs again into the subfolder and does not compute them again.
 
 ---
 

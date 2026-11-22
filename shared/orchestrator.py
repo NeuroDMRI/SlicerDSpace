@@ -1368,7 +1368,20 @@ def _publish_connectome_outputs(
     stage_outputs: dict[str, Any],
     layout,
     subject_id: str,
+    *,
+    source: str,
 ) -> dict[str, str | None]:
+    """Publish one connectome metric into ``outputs/05_connectome/<source>/`` (file names unchanged).
+
+    ``source`` is the tracking backend id of this (child) run, the same id the bundle folders use
+    (``_bundle_publish_backend``). Each tracking variant therefore keeps its own matrix, nodes and node parcellation
+    (batch 2: the flat folder let a later variant overwrite them). The connectome has no user-supplied tractogram.
+    """
+
+    folder_name = str(source or "").strip()
+    if not folder_name:
+        raise ValueError("_publish_connectome_outputs needs the tracking source id (for example csd_act).")
+    folder = layout.connectome / folder_name
     short_metric = "sift2_weighted" if metric.startswith("sift2_weighted") else metric
     updated: dict[str, str | None] = {}
     for key, value in stage_outputs.items():
@@ -1377,13 +1390,13 @@ def _publish_connectome_outputs(
             continue
         src = Path(value)
         if key in {"matrix_path", "matrix"}:
-            pub = _publish_optional(src, layout.connectome / f"{subject_id}_{short_metric}.csv")
+            pub = _publish_optional(src, folder / f"{subject_id}_{short_metric}.csv")
             updated[key] = (pub or src).as_posix()
         elif key in {"nodes_path", "nodes"}:
-            pub = _publish_optional(src, layout.connectome / f"{subject_id}_nodes.tsv")
+            pub = _publish_optional(src, folder / f"{subject_id}_nodes.tsv")
             updated[key] = (pub or src).as_posix()
         elif key in {"node_parcellation_path", "node_parcellation"}:
-            pub = _publish_optional(src, layout.connectome / f"{subject_id}_node_parcellation.nii.gz")
+            pub = _publish_optional(src, folder / f"{subject_id}_node_parcellation.nii.gz")
             updated[key] = (pub or src).as_posix()
         else:
             updated[key] = src.as_posix()
@@ -6306,6 +6319,9 @@ def _run_subject_products_impl(
                 tasks.append(tc_rec)
 
     if "connectome" in run_targets:
+        # Batch 2: each tracking variant publishes into outputs/05_connectome/<source>/ (the bundle folder id; a SAF
+        # child keeps "saf"), also with one tracking, so a later variant no longer replaces an earlier variant's files.
+        connectome_publish_source = bundle_publish_backend
         run_fiber_count, run_sift2 = _resolved_connectome_flags(config, primary_tractography_backend)
         explicit_connectome_metrics = config.connectome_metrics is not None and bool(str(config.connectome_metrics).strip())
         if explicit_connectome_metrics and primary_tractography_backend != "csd_act":
@@ -6343,6 +6359,7 @@ def _run_subject_products_impl(
                     },
                     layout,
                     config.subject_id,
+                    source=connectome_publish_source,
                 )
                 tasks.append(ProductTaskRecord(
                     name="connectome.streamline_count", status="skipped", reason="completed outputs found",
@@ -6381,7 +6398,8 @@ def _run_subject_products_impl(
                 _finish_task_timer(f"connectome {run_name}", task_started, log)
                 conn_rec = _task_from_result("connectome.streamline_count", result)
                 if conn_rec.status in {"completed", "skipped"}:
-                    conn_rec = replace(conn_rec, outputs=_publish_connectome_outputs("streamline_count", conn_rec.outputs, layout, config.subject_id))
+                    conn_rec = replace(conn_rec, outputs=_publish_connectome_outputs(
+                        "streamline_count", conn_rec.outputs, layout, config.subject_id, source=connectome_publish_source))
                 tasks.append(conn_rec)
                 if run_sift2 and primary_tractography_backend == 'csd_act' and sift2_weights.is_file():
                     weighted = run_connectome(
@@ -6401,7 +6419,9 @@ def _run_subject_products_impl(
                     )
                     s2_rec = _task_from_result("connectome.sift2_weighted", weighted)
                     if s2_rec.status in {"completed", "skipped"}:
-                        s2_rec = replace(s2_rec, outputs=_publish_connectome_outputs("sift2_weighted_streamline_count", s2_rec.outputs, layout, config.subject_id))
+                        s2_rec = replace(s2_rec, outputs=_publish_connectome_outputs(
+                            "sift2_weighted_streamline_count", s2_rec.outputs, layout, config.subject_id,
+                            source=connectome_publish_source))
                     tasks.append(s2_rec)
                     weighted_connectome_handled = True
 
@@ -6436,6 +6456,7 @@ def _run_subject_products_impl(
                     },
                     layout,
                     config.subject_id,
+                    source=connectome_publish_source,
                 )
                 tasks.append(
                     ProductTaskRecord(
@@ -6480,7 +6501,9 @@ def _run_subject_products_impl(
                     _finish_task_timer(f"connectome {run_name}", task_started, log)
                 s2_rec = _task_from_result("connectome.sift2_weighted", weighted)
                 if s2_rec.status in {"completed", "skipped"}:
-                    s2_rec = replace(s2_rec, outputs=_publish_connectome_outputs("sift2_weighted_streamline_count", s2_rec.outputs, layout, config.subject_id))
+                    s2_rec = replace(s2_rec, outputs=_publish_connectome_outputs(
+                        "sift2_weighted_streamline_count", s2_rec.outputs, layout, config.subject_id,
+                        source=connectome_publish_source))
                 tasks.append(s2_rec)
 
     execution_seconds = time.monotonic() - execution_started

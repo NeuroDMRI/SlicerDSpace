@@ -415,6 +415,8 @@ pipeline connectome_auto --targets validation,segmentation,parcellation,tractogr
   --brain-mask-backend provided --select-streamlines 1000000 --plan
 ```
 
+发布的连接组按追踪来源分子文件夹，只有一种追踪时也一样：`outputs/05_connectome/<source>/`（见[输出目录](OUTPUT_LAYOUT.zh-CN.md)）。
+
 解剖、微结构、UKF、WMQL 与 Python 连接组组合路线：
 
 <!-- cli-template: combined -->

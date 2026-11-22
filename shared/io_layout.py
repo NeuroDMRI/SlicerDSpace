@@ -695,6 +695,36 @@ def _sync_tree_into_cache(src: Path, dest: Path, *, move: bool) -> None:
             shutil.rmtree(src, ignore_errors=True)
 
 
+def _sync_file_targets(src: Path, dest: Path) -> list[Path]:
+    """The paths where ``_sync_tree_into_cache(src, dest)`` puts the regular files of ``src`` (symlinks are skipped).
+
+    Call it before the sync: with ``move=True`` the source is gone afterwards.
+    """
+
+    if src.is_symlink() or not src.exists():
+        return []
+    if src.is_file():
+        return [dest]
+    targets: list[Path] = []
+    for item in sorted(src.iterdir()):
+        targets.extend(_sync_file_targets(item, dest / item.name))
+    return targets
+
+
+def _newest_matching_file(files: Iterable[Path], patterns: Iterable[str]) -> Optional[Path]:
+    """Like ``_find_first_file`` over a fixed file list: the newest file that matches the first matching pattern."""
+
+    import fnmatch
+
+    candidates = [p for p in files if not p.name.startswith("._") and p.is_file() and not p.is_symlink()]
+    for pattern in patterns:
+        matches = [p for p in candidates if fnmatch.fnmatchcase(p.name, pattern)]
+        if matches:
+            matches.sort(key=lambda p: -p.stat().st_mtime)
+            return matches[0]
+    return None
+
+
 def _infer_subject_id_for_migration(layout: SubjectIOLayout) -> str:
     if layout.run_metadata.is_dir():
         for manifest_path in sorted(layout.run_metadata.glob("*_orchestration_manifest.json"), reverse=True):
@@ -750,7 +780,8 @@ def _remove_empty_dirs(root: Path, *, stop_at: Path) -> None:
 
 
 def _bundle_files(folder: Path, pattern: str) -> list[Path]:
-    """Published bundle files: the old flat layout and the batch 2 per-tractography subfolders (``<backend>/``)."""
+    """Published bundle (or connectome) files: the old flat layout and the batch 2 per-tractography subfolders
+    (``<backend>/``)."""
 
     if not folder.is_dir():
         return []
@@ -901,14 +932,15 @@ def _migrate_qc_from_stage_caches(layout: SubjectIOLayout, subject_id: str) -> d
         _bundle_files(layout.bundle_identification, "*.vtp"),
         tuple(sorted((sc / "04_bundles").rglob("*tractcloud_qc.json"))) if (sc / "04_bundles").is_dir() else (),
     )
+    # Connectome: the old flat files and the batch 2 per-source subfolders (``05_connectome/<source>/``).
     maybe_add(
         "connectome.streamline_count",
-        [layout.connectome / f"{subject_id}_streamline_count.csv"],
+        _bundle_files(layout.connectome, f"{subject_id}_streamline_count.csv"),
         tuple(sorted((sc / "05_connectome").rglob("*streamline_count_qc.json"))) if (sc / "05_connectome").is_dir() else (),
     )
     maybe_add(
         "connectome.sift2_weighted",
-        [layout.connectome / f"{subject_id}_sift2_weighted.csv"],
+        _bundle_files(layout.connectome, f"{subject_id}_sift2_weighted.csv"),
         tuple(sorted((sc / "05_connectome").rglob("*sift2*qc.json"))) if (sc / "05_connectome").is_dir() else (),
     )
 
@@ -983,6 +1015,25 @@ def migrate_subject_output_tree(
             if any(child.is_file() for child in children):
                 roots.append(stage_cache / "04_bundles" / bundle_sub)
             legacy_bundle_roots[bundle_sub] = roots
+    # Batch 2: the same for the connectome. Only the stage-cache files that this call migrates from a legacy
+    # ``04_tractography/connectome`` tree or ``04_tractography/<run>_<metric>`` folder are published flat below. Current
+    # runs publish ``05_connectome/<source>/`` themselves, so the current stage cache and ``outputs/05_connectome`` are
+    # never a source of a flat file. Collected before the sync, which moves the legacy tree when ``clean_legacy``.
+    legacy_connectome_files: list[Path] = []
+    if tract_dir.is_dir():
+        conn_legacy_tree = tract_dir / "connectome"
+        if conn_legacy_tree.is_dir():
+            for citem in sorted(conn_legacy_tree.iterdir()):
+                cparsed = _parse_legacy_connectome_dir_name(citem.name)
+                if cparsed is not None:
+                    legacy_connectome_files += _sync_file_targets(citem, connectome_stage_cache_dir(
+                        layout.subject_root, cparsed[0], cparsed[1], output_root=layout.output_root))
+            legacy_connectome_files += _sync_file_targets(conn_legacy_tree, stage_cache / "05_connectome")
+        for item in sorted(tract_dir.iterdir()):
+            parsed = _parse_legacy_connectome_dir_name(item.name)
+            if parsed is not None:
+                legacy_connectome_files += _sync_file_targets(item, connectome_stage_cache_dir(
+                    layout.subject_root, parsed[0], parsed[1], output_root=layout.output_root))
     if tract_dir.is_dir():
         for sub in ("act_prep", "csd", "saf", "tract_cloud", "tractograms"):
             cand = tract_dir / sub
@@ -1205,32 +1256,30 @@ def migrate_subject_output_tree(
         for p in publish_output_directory_flat(tc_src.parent, layout.bundle_identification, suffixes=(".vtp",)):
             published[f"tractcloud:{p.name}"] = p
 
-    # 05_connectome
-    conn_sources = [stage_cache / "05_connectome", layout.connectome]
+    # 05_connectome: flat files only from what this call migrated from a legacy tree (see legacy_connectome_files).
     for patterns, dest_name in (
         ((f"{subject_id}_streamline_count.csv", "*-connectome-streamline_count.csv", "*streamline_count.csv"), f"{subject_id}_streamline_count.csv"),
         ((f"{subject_id}_sift2_weighted.csv", "*-connectome-sift2_weighted*.csv", "*sift2_weighted*.csv"), f"{subject_id}_sift2_weighted.csv"),
         ((f"{subject_id}_nodes.tsv", "*-connectome-nodes.tsv", "*_nodes.tsv"), f"{subject_id}_nodes.tsv"),
         ((f"{subject_id}_node_parcellation.nii.gz", "*-connectome-node-parcellation.nii.gz", "*_node_parcellation.nii.gz"), f"{subject_id}_node_parcellation.nii.gz"),
     ):
-        src = _find_first_file(conn_sources, patterns)
+        src = _newest_matching_file(legacy_connectome_files, patterns)
         if src is not None and "_dense" not in src.name.lower():
             dest = layout.connectome / dest_name
             publish_output_file(src, dest, replace=True)
             published[f"connectome:{dest_name}"] = dest
-    # Also publish any scalar metric connectomes
-    for croot in conn_sources:
-        if not croot.is_dir():
+    # Also publish any scalar metric connectomes (legacy trees only, as above)
+    for cfile in sorted(p for p in legacy_connectome_files if p.is_file() and not p.is_symlink()):
+        lower = cfile.name.lower()
+        if not lower.endswith(".csv") or "-connectome-" not in lower:
             continue
-        for cfile in sorted(croot.rglob("*-connectome-*.csv")):
-            lower = cfile.name.lower()
-            if "dense" in lower or "streamline_count" in lower or "sift2_weighted" in lower:
-                continue
-            m = re.search(r"-connectome-([a-z0-9_]+)\.csv$", lower)
-            if m:
-                dest = layout.connectome / f"{subject_id}_{m.group(1)}.csv"
-                publish_output_file(cfile, dest, replace=True)
-                published[f"connectome:{dest.name}"] = dest
+        if "dense" in lower or "streamline_count" in lower or "sift2_weighted" in lower:
+            continue
+        m = re.search(r"-connectome-([a-z0-9_]+)\.csv$", lower)
+        if m:
+            dest = layout.connectome / f"{subject_id}_{m.group(1)}.csv"
+            publish_output_file(cfile, dest, replace=True)
+            published[f"connectome:{dest.name}"] = dest
 
     _refresh_microstructure_manifest_flags(layout, roi_csv=published.get("microstructure_roi_csv") if isinstance(published.get("microstructure_roi_csv"), Path) else None)
     qc_written = _migrate_qc_from_stage_caches(layout, subject_id)
@@ -1317,7 +1366,12 @@ def archive_development_outputs(
                     if moved is not None:
                         archived[entry.as_posix()] = moved
         if layout.connectome.is_dir():
+            from shared.bundle_sources import TRACKING_OUTPUT_FOLDERS
+
             for entry in sorted(layout.connectome.iterdir()):
+                # Batch 2: ``05_connectome/<source>/`` holds the published results of one tracking variant; keep it.
+                if entry.name in TRACKING_OUTPUT_FOLDERS and entry.is_dir() and not entry.is_symlink():
+                    continue
                 is_metadata_json = entry.is_file() and (
                     entry.name.endswith("_qc.json") or entry.name.endswith("_manifest.json")
                 )

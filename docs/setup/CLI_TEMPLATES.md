@@ -459,6 +459,9 @@ pipeline connectome_auto --targets validation,segmentation,parcellation,tractogr
   --brain-mask-backend provided --select-streamlines 1000000 --plan
 ```
 
+Published connectomes go to one subfolder per tracking source, also with one tracking:
+`outputs/05_connectome/<source>/` (see [Output layout](OUTPUT_LAYOUT.md)).
+
 A combined anatomical priors/microstructure/UKF/WMQL/Python-connectome route:
 
 <!-- cli-template: combined -->

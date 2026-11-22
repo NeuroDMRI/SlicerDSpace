@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -109,6 +110,18 @@ RESULT_SUBGROUP_CAPTIONS = {
     ("connectome", "sift2_weighted"): ("SIFT2", "SIFT2"),
 }
 _SUBGROUP_ALIASES = {("tractography", "act"): "csd_act"}
+# Results sources (batch 2): in the bundles and connectome families a subgroup is one (algorithm, tractography source)
+# pair, id "<algorithm>@<source>" ("<algorithm>" when the source is unknown), caption "WMQL · UKF". The source order
+# after the unknown source, and the captions: the tractography subgroup names above (one name for one thing); the GUI
+# has no name yet for a user's own tractogram file, so "supplied" gets its own caption.
+RESULT_SOURCE_FAMILIES = ("bundles", "connectome")
+RESULT_SOURCE_ORDER = ("ukf", "csd_act", "dti_det", "supplied")
+RESULT_TRACKING_SOURCES = ("ukf", "csd_act", "dti_det")  # what an "@<backend>" suffix or tracking_backend may name
+RESULT_SOURCE_CAPTIONS = {
+    **{source: RESULT_SUBGROUP_CAPTIONS[("tractography", source)] for source in RESULT_TRACKING_SOURCES},
+    "supplied": ("supplied file", "自备文件"),
+}
+RESULT_SOURCE_SEPARATOR = " · "
 # The ROLE_KEY of a subgroup row is "<family>::<subgroup>" (e.g. "anatomy::surfaces"). The row kind does not come from
 # this text (an unknown family from a manifest may hold "::" in its key): a subgroup row carries SUBGROUP_ROW_KIND.
 SUBGROUP_KEY_SEPARATOR = "::"
@@ -1410,7 +1423,70 @@ def _family_caption(family: Any, zh: bool) -> str:
 
 def _subgroup_caption(key: str, zh: bool) -> str:
     family, _, subgroup = key.partition(SUBGROUP_KEY_SEPARATOR)
+    if family in RESULT_SOURCE_FAMILIES:
+        algorithm, _, source = subgroup.partition("@")
+        if source in RESULT_SOURCE_CAPTIONS:
+            base = RESULT_SUBGROUP_CAPTIONS.get((family, algorithm), (algorithm, algorithm))[int(zh)]
+            return f"{base}{RESULT_SOURCE_SEPARATOR}{RESULT_SOURCE_CAPTIONS[source][int(zh)]}"
     return RESULT_SUBGROUP_CAPTIONS.get((family, subgroup), (subgroup, subgroup))[int(zh)]
+
+
+def _last_folder(value: Any, *, parent: bool) -> str:
+    """The last folder name of a path text (or of its parent folder), for "/" and "\\" separators."""
+
+    parts = [part for part in re.split(r"[\\/]+", str(value or "").strip()) if part]
+    if parent:
+        parts = parts[:-1]
+    return parts[-1] if parts else ""
+
+
+def _task_source(family: str, task: dict) -> Optional[str]:
+    """Results sources rule 2: the tractography source of a bundles or connectome task, or None when unknown.
+
+    a. The published folder: bundles ``outputs["output_dir"]`` (``04_bundles/<product>/<source>``), connectome the
+       parent folder of ``outputs["matrix_path"]`` / ``outputs["matrix"]`` (``05_connectome/<source>/``); only a
+       known source counts. It comes first: a ukf variant that ran on the user's file publishes to ``supplied``.
+    b. Bundles only: the ``@<backend>`` suffix of the task name (multi-tracking), else the ``tracking_backend``
+       field; only a tracking backend counts. Not for the connectome: an old flat connectome file can hold another
+       variant's matrix.
+    """
+
+    if family not in RESULT_SOURCE_FAMILIES:
+        return None
+    outputs = task.get("outputs") if isinstance(task.get("outputs"), dict) else {}
+    if family == "bundles":
+        folder = _last_folder(outputs.get("output_dir"), parent=False)
+    else:
+        folder = _last_folder(outputs.get("matrix_path") or outputs.get("matrix"), parent=True)
+    if folder in RESULT_SOURCE_ORDER:
+        return folder
+    if family == "bundles":
+        suffix = str(task.get("name") or "").partition("@")[2]
+        if suffix in RESULT_TRACKING_SOURCES:
+            return suffix
+        backend = str(task.get("tracking_backend") or "")
+        if backend in RESULT_TRACKING_SOURCES:
+            return backend
+    return None
+
+
+def _subgroup_ranks(family: str, subgroups) -> dict:
+    """Sort keys for the subgroups of a family: the algorithm in table order (an unnamed one after the named ones, in
+    the order given), then for a sourced family the source: unknown, ukf, csd_act, dti_det, supplied."""
+
+    names = RESULT_SUBGROUP_ORDER.get(family, ())
+    unnamed: dict = {}
+    ranks = {}
+    for subgroup in subgroups:
+        algorithm, _, source = str(subgroup).partition("@") if family in RESULT_SOURCE_FAMILIES else (subgroup, "", "")
+        if algorithm in names:
+            first = (names.index(algorithm), 0)
+        else:
+            first = (len(names), unnamed.setdefault(algorithm, len(unnamed)))
+        source_rank = 0 if not source else (
+            1 + RESULT_SOURCE_ORDER.index(source) if source in RESULT_SOURCE_ORDER else len(RESULT_SOURCE_ORDER) + 1)
+        ranks[subgroup] = (*first, source_rank)
+    return ranks
 
 
 def _file_count(item: Any, role_path: Any) -> int:
@@ -1654,11 +1730,14 @@ def _order_families(subject_item: Any) -> None:
     _reorder_children(subject_item, lambda child: rank.get(child.data(0, role_key), len(rank)))
     for family in _child_items(subject_item):
         family_key = family.data(0, role_key)
-        names = RESULT_SUBGROUP_ORDER.get(family_key)
-        if not names:
+        if not RESULT_SUBGROUP_ORDER.get(family_key):
             continue
-        sub_rank = {_subgroup_key(family_key, name): position for position, name in enumerate(names)}
-        _reorder_children(family, lambda child: sub_rank.get(child.data(0, role_key), len(sub_rank)))
+        prefix = _subgroup_key(family_key, "")
+        keys = [str(child.data(0, role_key) or "") for child in _child_items(family)]
+        ranks = _subgroup_ranks(family_key, [key[len(prefix):] for key in keys if key.startswith(prefix)])
+        last = (float("inf"),)
+        _reorder_children(family, lambda child: ranks.get(str(child.data(0, role_key) or "")[len(prefix):], last)
+                          if str(child.data(0, role_key) or "").startswith(prefix) else last)
 
 
 def _reorder_children(item: Any, rank) -> None:
@@ -2807,11 +2886,21 @@ def _populate_manifest_output_items(
     zh = str(getattr(owner, "_onboardingLanguage", "en")).startswith("zh")
     # family -> subgroup (None for a flat family) -> {path: visual}
     families: dict = {}
+    # Results sources rule 3: the source belongs to the task, so every row of a task (its files and its QC JSON rows,
+    # both grouped by the task name) goes to the task's one subgroup.
+    task_by_name: dict = {}
+    for entry in manifest.get("tasks") or []:
+        if isinstance(entry, dict) and entry.get("name"):
+            task_by_name.setdefault(str(entry["name"]), entry)
     for product, paths in groups.items():
         family = product.split(".", 1)[0]
         if family in {"surface", "segmentation", "parcellation", "postprocess"}:
             family = "anatomy"
-        families.setdefault(family, {}).setdefault(_result_subgroup(family, product), {}).update(paths)
+        subgroup = _result_subgroup(family, product)
+        source = _task_source(family, task_by_name.get(product) or {"name": product}) if subgroup else None
+        if source is not None:
+            subgroup = f"{subgroup}@{source}"
+        families.setdefault(family, {}).setdefault(subgroup, {}).update(paths)
     role_manifest = _user_role(qt, ROLE_MANIFEST)
     role_run = _user_role(qt, ROLE_RUN)
     role_key = _user_role(qt, ROLE_KEY)
@@ -2854,10 +2943,9 @@ def _populate_manifest_output_items(
 
     for family in ordered_families:
         subgroups = families[family]
-        names = RESULT_SUBGROUP_ORDER.get(family, ())
-        rank = {name: position for position, name in enumerate(names)}
+        ranks = _subgroup_ranks(family, [name for name in subgroups if name is not None])
         fresh: list = []
-        for subgroup in sorted(subgroups, key=lambda name: rank.get(name, len(rank))):
+        for subgroup in sorted(subgroups, key=lambda name: ranks.get(name, (float("inf"),))):
             paths = {path: visual for path, visual in subgroups[subgroup].items() if path not in seen_paths}
             if paths:
                 seen_paths.update(paths)

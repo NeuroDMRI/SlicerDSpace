@@ -73,6 +73,12 @@ def leaf_names(item) -> list[str]:
     return [row.text(0) for row in rows(item)]
 
 
+def exact(item, text: str):
+    """The child with exactly this caption ("WMQL (1)" must not find "WMQL · UKF (1)")."""
+
+    return next(row for row in rows(item) if row.text(0) == text)
+
+
 class SubgroupTestBase(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
@@ -152,9 +158,11 @@ class LayoutTest(SubgroupTestBase):
         self.assertEqual(child_texts(find_child(subject, "Microstructure")), ["DTI (1)", "fa (1)"])
         self.assertEqual(child_texts(find_child(subject, "Tractography")), ["UKF (1)", "regions.v2 (1)"])
 
-    def test_results_subgroups_a_tracking_variant_suffix_joins_the_algorithms_subgroup(self) -> None:
-        """Results subgroups rule 10: a multi-tracking run names tasks ``<product>@<tracking backend>``
-        (shared/multi_tracking.py); the files of several tracking sources land in one subgroup, no third level."""
+    def test_results_subgroups_a_tracking_variant_suffix_gives_a_bundle_subgroup_per_source(self) -> None:
+        """Results subgroups rule 10, changed on purpose by "Results sources" (batch 2): a multi-tracking run names
+        tasks ``<product>@<tracking backend>`` (shared/multi_tracking.py). A bundle subgroup is now one (algorithm,
+        source) pair, so the two equal WMQL file names no longer share one subgroup. Tractography keeps one subgroup
+        per backend, and the connectome takes no source from the ``@`` suffix (Results sources rule 2b)."""
 
         h = self.harness([self.manifest(candidates=[
             ("bundles.wmql", "/x/wmql_AF.trk"), ("bundles.wmql@ukf", "/x/ukf/wmql_AF.trk"),
@@ -162,8 +170,9 @@ class LayoutTest(SubgroupTestBase):
             ("tractography.ukf@ukf", "/x/ukf.vtk"), ("connectome.sift2_weighted@csd_act", "/x/sift2.csv")])])
         subject = self.subject(h)
         bundles = find_child(subject, "Fibre bundles")
-        self.assertEqual(child_texts(bundles), ["WMQL (2)", "WMA (1)"])
-        self.assertEqual(leaf_names(find_child(bundles, "WMQL")), ["wmql_AF.trk", "wmql_AF.trk"])
+        self.assertEqual(child_texts(bundles), ["WMQL (1)", "WMQL · UKF (1)", "WMA · CSD / ACT (1)"])
+        self.assertEqual(leaf_names(exact(bundles, "WMQL (1)")), ["wmql_AF.trk"])
+        self.assertEqual(exact(bundles, "WMQL · UKF (1)").child(0).data(0, ROLE_PATH), "/x/ukf/wmql_AF.trk")
         self.assertEqual(child_texts(find_child(subject, "Tractography")), ["UKF (1)", "CSD / ACT (1)"])
         self.assertEqual(child_texts(find_child(subject, "Connectome")), ["SIFT2 (1)"])
 
@@ -452,6 +461,212 @@ class RowActionTest(SubgroupTestBase):
             ui_run_history._refresh_folder_icons(h.owner, True)
         self.assertNotIn(1, noddi.icons)
         self.assertEqual(self.subject(h).icons[1], "folder-icon")
+
+
+# ------------------------------------------------------------------------------------------------ Results sources
+# Batch 2 "Results sources": a subgroup of the bundles and connectome families is one (algorithm, tractography source)
+# pair. The bundle folders are ``outputs/04_bundles/<product folder>/<source>/`` with equal file names in each source.
+
+BUNDLES = "/d/outputs/04_bundles"
+
+
+def task(name: str, files=(), **outputs_and_fields):
+    """A manifest task plus the files that ``result_candidates`` gives for it (``product`` = the task name)."""
+
+    fields = {key: outputs_and_fields.pop(key) for key in ("tracking_backend",) if key in outputs_and_fields}
+    return dict(name=name, status="completed", outputs=dict(outputs_and_fields), **fields), list(files)
+
+
+class SourceTestBase(SubgroupTestBase):
+    def source_manifest(self, tasks, subject="sub1", run="run1", stamp="2026-11-01T10:00:00Z"):
+        record = make_manifest(self.root, subject, run, stamp,
+                               [(entry["name"], path) for entry, files in tasks for path in files])
+        payload = json.loads(record.manifest_path.read_text(encoding="utf-8"))
+        payload["tasks"] = [entry for entry, _files in tasks]
+        record.manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+        return record
+
+    def bundles(self, h: Harness, subject: str = "sub1"):
+        return find_child(self.subject(h, subject), "Fibre bundles")
+
+
+class SourceTest(SourceTestBase):
+    def test_results_sources_a_multi_tracking_run_gives_one_subgroup_per_source_with_equal_file_names(self) -> None:
+        """Results sources (a): ``bundles.wmql@ukf`` and ``bundles.wmql@csd_act`` publish equal file names into two
+        source folders; each source is its own subgroup. Rule 3: the task's QC JSON row goes to the same subgroup."""
+
+        qc = self.root / "wmql_ukf_qc.json"
+        qc.write_text("{}", encoding="utf-8")
+        h = self.harness([self.source_manifest([
+            task("bundles.wmql@ukf", [f"{BUNDLES}/query_bundle_extraction/ukf/AF.trk"],
+                 output_dir=f"{BUNDLES}/query_bundle_extraction/ukf", qc_path=str(qc)),
+            task("bundles.wmql@csd_act", [f"{BUNDLES}/query_bundle_extraction/csd_act/AF.trk"],
+                 output_dir=f"{BUNDLES}/query_bundle_extraction/csd_act")])])
+        bundles = self.bundles(h)
+        self.assertEqual(child_texts(bundles), ["WMQL · UKF (2)", "WMQL · CSD / ACT (1)"])
+        ukf, act = rows(bundles)
+        self.assertEqual([row.data(0, ROLE_PATH) for row in rows(ukf)],
+                         [f"{BUNDLES}/query_bundle_extraction/ukf/AF.trk", str(qc.resolve())])
+        self.assertEqual([row.data(0, ROLE_PATH) for row in rows(act)],
+                         [f"{BUNDLES}/query_bundle_extraction/csd_act/AF.trk"])
+        self.assertEqual([ukf.data(0, ROLE_KEY), act.data(0, ROLE_KEY)], ["bundles::wmql@ukf", "bundles::wmql@csd_act"])
+        self.assertEqual(ui_run_history._item_key(h.qt, ukf), ("subgroup", "sub1", "bundles", "bundles::wmql@ukf"))
+
+    def test_results_sources_two_single_backend_runs_give_two_subgroups(self) -> None:
+        """Results sources (b): two runs of one subject, plain ``bundles.wmql`` in both, published to ``ukf`` and
+        ``csd_act``: the published folder gives the source."""
+
+        new = self.source_manifest([task("bundles.wmql", [f"{BUNDLES}/query_bundle_extraction/csd_act/AF.trk"],
+                                         output_dir=f"{BUNDLES}/query_bundle_extraction/csd_act")],
+                                   run="runB", stamp="2026-11-02T10:00:00Z")
+        old = self.source_manifest([task("bundles.wmql", [f"{BUNDLES}/query_bundle_extraction/ukf/AF.trk"],
+                                         output_dir=f"{BUNDLES}/query_bundle_extraction/ukf")], run="runA")
+        h = self.harness([new, old])
+        bundles = self.bundles(h)
+        self.assertEqual(child_texts(bundles), ["WMQL · UKF (1)", "WMQL · CSD / ACT (1)"])
+        self.assertEqual(exact(bundles, "WMQL · UKF (1)").child(0).data(0, ROLE_MANIFEST), str(old.manifest_path))
+        self.assertEqual(exact(bundles, "WMQL · CSD / ACT (1)").child(0).data(0, ROLE_MANIFEST),
+                         str(new.manifest_path))
+
+    def test_results_sources_each_step_of_the_source_rule(self) -> None:
+        """Results sources (c): folder before ``@``; ``supplied`` only from the folder; the ``tracking_backend``
+        field; a folder that is not a source; an old flat folder without ``@`` gives no source part."""
+
+        h = self.harness([self.source_manifest([
+            # a. the folder wins over the @ suffix (a ukf variant that ran on the user's file publishes to supplied)
+            task("bundles.wmql@ukf", [f"{BUNDLES}/query_bundle_extraction/supplied/AF.trk"],
+                 output_dir=f"{BUNDLES}/query_bundle_extraction/supplied"),
+            # a. not a source folder -> b. the @ suffix
+            task("bundles.wma@csd_act", [f"{BUNDLES}/fiber_clustering/wma_out/CST.vtp"],
+                 output_dir=f"{BUNDLES}/fiber_clustering/wma_out"),
+            # b. the tracking_backend field when the name has no @ suffix
+            task("bundles.tractcloud", [f"{BUNDLES}/bundle_identification/x/AF.vtp"], tracking_backend="dti_det"),
+            # c. an old flat folder and no @ suffix -> no source part
+            task("bundles.wmql", [f"{BUNDLES}/query_bundle_extraction/CST.trk"],
+                 output_dir=f"{BUNDLES}/query_bundle_extraction"),
+            # b counts only for a tracking backend: "@supplied" and "@other" give no source
+            task("bundles.wma@supplied", [f"{BUNDLES}/fiber_clustering/AF.vtp"]),
+            task("bundles.tractcloud@other", [f"{BUNDLES}/bundle_identification/UF.vtp"]),
+        ])])
+        bundles = self.bundles(h)
+        self.assertEqual(child_texts(bundles), [
+            "WMQL (1)", "WMQL · supplied file (1)", "WMA (1)", "WMA · CSD / ACT (1)", "TractCloud (1)",
+            "TractCloud · DTI (1)"])
+        self.assertEqual(leaf_names(exact(bundles, "WMQL (1)")), ["CST.trk"])
+        self.assertEqual(leaf_names(exact(bundles, "WMA (1)")), ["AF.vtp"])
+        self.assertEqual(leaf_names(exact(bundles, "TractCloud (1)")), ["UF.vtp"])
+
+    def test_results_sources_connectome_from_the_source_folder_only(self) -> None:
+        """Results sources (d): a per-source connectome folder gives the source; an old flat connectome file gives
+        none, also for ``@ukf`` / ``@csd_act`` task names (a flat file can hold another variant's matrix)."""
+
+        connectome = "/d/outputs/05_connectome"
+        h = self.harness([self.source_manifest([
+            task("connectome.streamline_count@ukf",
+                 [f"{connectome}/ukf/s_streamline_count.csv", f"{connectome}/ukf/s_nodes.tsv"],
+                 matrix_path=f"{connectome}/ukf/s_streamline_count.csv", nodes_path=f"{connectome}/ukf/s_nodes.tsv"),
+            task("connectome.streamline_count", [f"{connectome}/csd_act/s_streamline_count.csv"],
+                 matrix=f"{connectome}/csd_act/s_streamline_count.csv"),
+        ])])
+        found = find_child(self.subject(h), "Connectome")
+        self.assertEqual(child_texts(found), ["Fiber count · UKF (2)", "Fiber count · CSD / ACT (1)"])
+        flat = self.harness([self.source_manifest([
+            task("connectome.streamline_count@ukf", [f"{connectome}/s_streamline_count.csv"],
+                 matrix_path=f"{connectome}/s_streamline_count.csv"),
+            task("connectome.streamline_count@csd_act", [f"{connectome}/s_streamline_count.csv"],
+                 matrix_path=f"{connectome}/s_streamline_count.csv"),
+        ], subject="sub2")])
+        self.assertEqual(child_texts(find_child(self.subject(flat, "sub2"), "Connectome")), ["Fiber count (1)"])
+
+    def test_results_sources_a_single_and_a_multi_run_share_one_subgroup(self) -> None:
+        """Results sources (e): ``bundles.wmql`` published to ``ukf`` and ``bundles.wmql@ukf`` are one subgroup;
+        each file shows once."""
+
+        folder = f"{BUNDLES}/query_bundle_extraction/ukf"
+        new = self.source_manifest([task("bundles.wmql@ukf", [f"{folder}/AF.trk", f"{folder}/UF.trk"],
+                                         output_dir=folder)], run="multi", stamp="2026-11-02T10:00:00Z")
+        old = self.source_manifest([task("bundles.wmql", [f"{folder}/AF.trk", f"{folder}/CST.trk"],
+                                         output_dir=folder)], run="single")
+        h = self.harness([new, old])
+        bundles = self.bundles(h)
+        self.assertEqual(child_texts(bundles), ["WMQL · UKF (3)"])
+        self.assertEqual(leaf_names(bundles.child(0)), ["AF.trk", "UF.trk", "CST.trk"])
+        self.assertEqual(bundles.text(0), "Fibre bundles (3)")
+
+    def test_results_sources_order_algorithm_then_source_also_after_an_older_run_adds_one(self) -> None:
+        """Results sources (f): algorithm in table order, then unknown, ukf, csd_act, dti_det, supplied; an unnamed
+        algorithm after the named ones."""
+
+        def wmql(source):
+            return task(f"bundles.wmql@{source}", [f"{BUNDLES}/query_bundle_extraction/{source}/AF.trk"])
+
+        h = self.harness([self.source_manifest([
+            task("bundles.zz@ukf", [f"{BUNDLES}/zz/AF.vtp"]),
+            task("bundles.tractcloud@ukf", [f"{BUNDLES}/bundle_identification/ukf/AF.vtp"]),
+            task("bundles.wmql", [f"{BUNDLES}/query_bundle_extraction/AF.trk"]),
+            task("bundles.wmql@supplied", [f"{BUNDLES}/query_bundle_extraction/supplied/AF.trk"],
+                 output_dir=f"{BUNDLES}/query_bundle_extraction/supplied"),
+            wmql("dti_det"), wmql("csd_act"), wmql("ukf"),
+        ])])
+        self.assertEqual(child_texts(self.bundles(h)), [
+            "WMQL (1)", "WMQL · UKF (1)", "WMQL · CSD / ACT (1)", "WMQL · DTI (1)", "WMQL · supplied file (1)",
+            "TractCloud · UKF (1)", "zz · UKF (1)"])
+        # An older run adds subgroups that sort before the newer run's one.
+        new = self.source_manifest([wmql("csd_act")], subject="sub2", run="runB", stamp="2026-11-02T10:00:00Z")
+        old = self.source_manifest([wmql("ukf"), task("bundles.tractcloud", [f"{BUNDLES}/bundle_identification/x.vtp"]),
+                                    task("bundles.wmql", [f"{BUNDLES}/query_bundle_extraction/CST.trk"])],
+                                   subject="sub2", run="runA")
+        h = self.harness([new, old])
+        self.assertEqual(child_texts(self.bundles(h, "sub2")), [
+            "WMQL (1)", "WMQL · UKF (1)", "WMQL · CSD / ACT (1)", "TractCloud (1)"])
+
+
+class SourceRowTest(SourceTestBase):
+    def two_sources(self):
+        return [self.source_manifest([
+            task("bundles.wmql@ukf", [f"{BUNDLES}/query_bundle_extraction/ukf/AF.trk"]),
+            task("bundles.wmql@csd_act", [f"{BUNDLES}/query_bundle_extraction/csd_act/AF.trk"]),
+            task("bundles.wma", [f"{BUNDLES}/fiber_clustering/supplied/AF.vtp"],
+                 output_dir=f"{BUNDLES}/fiber_clustering/supplied"),
+            task("connectome.streamline_count", ["/d/outputs/05_connectome/ukf/s_streamline_count.csv"],
+                 matrix_path="/d/outputs/05_connectome/ukf/s_streamline_count.csv"),
+        ])]
+
+    def test_results_sources_a_language_switch_relabels_the_source_captions_in_place(self) -> None:
+        """Results sources (g): ``refresh_results_language`` renames the captions with a source part, no rebuild."""
+
+        h = self.harness(self.two_sources())
+        subject = self.subject(h)
+        bundles = self.bundles(h)
+        with mock.patch.object(ui_run_history, "discover_runs", side_effect=AssertionError("rescan")):
+            apply_onboarding_language(h.owner, "zh")
+        self.assertIs(self.subject(h), subject)
+        self.assertEqual(child_texts(bundles), ["WMQL · UKF (1)", "WMQL · CSD / ACT (1)", "WMA · 自备文件 (1)"])
+        self.assertEqual(child_texts(find_child(subject, "连接组")), ["Fiber count · UKF (1)"])
+        apply_onboarding_language(h.owner, "en")
+        self.assertEqual(child_texts(bundles), ["WMQL · UKF (1)", "WMQL · CSD / ACT (1)", "WMA · supplied file (1)"])
+        zh = self.harness(self.two_sources(), language="zh")
+        self.assertEqual(child_texts(find_child(self.subject(zh), "纤维束")),
+                         ["WMQL · UKF (1)", "WMQL · CSD / ACT (1)", "WMA · 自备文件 (1)"])
+
+    def test_results_sources_expansion_is_remembered_per_source(self) -> None:
+        """Results sources (h): the expansion memory keeps "WMQL · UKF" and "WMQL · CSD / ACT" apart."""
+
+        records = self.two_sources()
+        h = self.harness(records)
+        exact(self.bundles(h), "WMQL · UKF (1)").setExpanded(True)
+        h.refresh(records)
+        bundles = self.bundles(h)
+        self.assertTrue(exact(bundles, "WMQL · UKF (1)").expanded)
+        self.assertFalse(exact(bundles, "WMQL · CSD / ACT (1)").expanded)
+        state = h.owner._resultsExpansion["subgroups"]
+        self.assertTrue(state[("sub1", "bundles", "bundles::wmql@ukf")])
+        self.assertNotIn(("sub1", "bundles", "bundles::wmql@csd_act"), state)
+        self.assertNotIn(("sub1", "bundles", "bundles::wmql"), state)
+        # The current item inside a source subgroup survives a rebuild too.
+        h.tree.setCurrentItem(exact(bundles, "WMQL · CSD / ACT (1)").child(0))
+        h.refresh(records)
+        self.assertEqual(h.tree.currentItem().data(0, ROLE_PATH), f"{BUNDLES}/query_bundle_extraction/csd_act/AF.trk")
 
 
 if __name__ == "__main__":

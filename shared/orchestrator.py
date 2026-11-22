@@ -2044,6 +2044,11 @@ def _preprocessing_pe_block(config: ProductOrchestratorConfig, subject_root: Pat
     from shared.pe_resolution import phase_encoding_block_reason
 
     stages = _resolved_preprocessing_stages(config)
+    if stages is not None and "topup" in stages and "eddy" not in stages and config.preprocessing_reverse_phase_b0 is None:
+        return (
+            "Topup requires a reverse phase-encoding b=0 image (--preprocessing-reverse-phase-b0). "
+            "Provide a reverse-PE b=0 image or uncheck Topup."
+        )
     has_reverse_b0 = config.preprocessing_reverse_phase_b0 is not None and (stages is None or "topup" in stages)
     if stages is not None and "eddy" not in stages and not has_reverse_b0:
         return None

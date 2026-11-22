@@ -610,6 +610,35 @@ QProgressBar#runProgressBar::chunk {
   background: #0D9488;
   border-radius: 3px;
 }
+QSlider#inputPreviewComponentSlider::groove:horizontal,
+QSlider#resultsDwiComponentSlider::groove:horizontal {
+  height: 4px;
+  background: #D8DEE3;
+  border-radius: 2px;
+}
+QSlider#inputPreviewComponentSlider::sub-page:horizontal,
+QSlider#resultsDwiComponentSlider::sub-page:horizontal {
+  background: #326A8A;
+  border-radius: 2px;
+}
+QSlider#inputPreviewComponentSlider::handle:horizontal,
+QSlider#resultsDwiComponentSlider::handle:horizontal {
+  width: 12px;
+  height: 14px;
+  margin: -5px 0;
+  background: #FFFFFF;
+  border: 1px solid #94A8B8;
+  border-radius: 3px;
+}
+QSlider#inputPreviewComponentSlider::handle:horizontal:hover,
+QSlider#resultsDwiComponentSlider::handle:horizontal:hover {
+  border-color: #326A8A;
+}
+QSlider#inputPreviewComponentSlider::handle:horizontal:disabled,
+QSlider#resultsDwiComponentSlider::handle:horizontal:disabled {
+  background: #F4F6F8;
+  border-color: #D8DEE3;
+}
 QLabel#runStageCountLabel {
   background: transparent;
   border: none;
@@ -1048,6 +1077,35 @@ QProgressBar#runProgressBar {
 QProgressBar#runProgressBar::chunk {
   background: #14B8A6;
   border-radius: 3px;
+}
+QSlider#inputPreviewComponentSlider::groove:horizontal,
+QSlider#resultsDwiComponentSlider::groove:horizontal {
+  height: 4px;
+  background: #3B424B;
+  border-radius: 2px;
+}
+QSlider#inputPreviewComponentSlider::sub-page:horizontal,
+QSlider#resultsDwiComponentSlider::sub-page:horizontal {
+  background: #58A6FF;
+  border-radius: 2px;
+}
+QSlider#inputPreviewComponentSlider::handle:horizontal,
+QSlider#resultsDwiComponentSlider::handle:horizontal {
+  width: 12px;
+  height: 14px;
+  margin: -5px 0;
+  background: #2D333B;
+  border: 1px solid #6E7A85;
+  border-radius: 3px;
+}
+QSlider#inputPreviewComponentSlider::handle:horizontal:hover,
+QSlider#resultsDwiComponentSlider::handle:horizontal:hover {
+  border-color: #8CD2F5;
+}
+QSlider#inputPreviewComponentSlider::handle:horizontal:disabled,
+QSlider#resultsDwiComponentSlider::handle:horizontal:disabled {
+  background: #22272E;
+  border-color: #3B424B;
 }
 QLabel#runStageCountLabel {
   background: transparent;

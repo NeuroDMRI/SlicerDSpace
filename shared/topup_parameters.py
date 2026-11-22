@@ -47,6 +47,8 @@ READOUT_TIME_TYPICAL_MAX_S = 0.2
 DWIFSLPREPROC_DEFAULT_READOUT_S = 0.1
 
 NIFTI_SUFFIXES = (".nii", ".nii.gz", ".mif", ".mif.gz", ".mgh", ".mgz")
+NRRD_SUFFIXES = (".nrrd", ".nhdr")
+REVERSE_PE_SUFFIXES = NIFTI_SUFFIXES + NRRD_SUFFIXES
 
 CLI_FLAG_PHASE_ENCODING = "--preprocessing-phase-encoding-direction"
 CLI_FLAG_READOUT_TIME = "--preprocessing-readout-time"
@@ -89,7 +91,7 @@ def route_uses_topup(preprocessing_selected: bool = True, preprocessing_stages: 
     if not text:
         return True
     from shared.algorithm_selection import PREPROCESSING, algorithms
-    stages = algorithms(text, PREPROCESSING, "denoise,eddy,topup")
+    stages = algorithms(text, PREPROCESSING, "denoise,eddy")
     return bool({"eddy", "topup"} & set(stages))
 
 
@@ -155,7 +157,131 @@ def parse_readout_time(value: Any) -> Optional[float]:
 
 def _has_image_suffix(path: Path) -> bool:
     name = path.name.lower()
-    return any(name.endswith(suffix) for suffix in NIFTI_SUFFIXES)
+    return any(name.endswith(suffix) for suffix in REVERSE_PE_SUFFIXES)
+
+
+def validate_reverse_phase_b0_path(
+    reverse_phase_b0: Any = "",
+    *,
+    batch_mode: bool = False,
+    zh: bool = False,
+) -> tuple[Optional[Path], Optional[str]]:
+    """Validate an optional reverse-PE b=0 file path.
+
+    Returns ``(path, None)`` when a valid file is given, ``(None, None)`` when unset, or ``(None, error)`` when invalid.
+    """
+
+    reverse_text = str(reverse_phase_b0 or "").strip()
+    if not reverse_text:
+        return None, None
+    candidate = Path(reverse_text).expanduser()
+    if batch_mode:
+        if zh:
+            return None, (
+                "反向相位编码 b=0 图像仅适用于单个受试者，批处理模式会同时运行根目录下所有受试者。"
+                "请清空反向相位 b=0 图像，或关闭批处理模式逐个运行。"
+            )
+        return None, (
+            "A reverse-PE b=0 image applies to one subject, but batch mode runs every subject under the "
+            "batch root. Clear 'Reverse-PE b=0 image' or turn off Batch mode and run subjects one at a time."
+        )
+    if not candidate.exists():
+        if zh:
+            return None, f"找不到反向相位编码 b=0 图像：{candidate}。请选择有效的图像文件。"
+        return None, f"Reverse-PE b=0 image not found: {candidate}. Choose an existing NIfTI/NRRD file."
+    if not candidate.is_file():
+        if zh:
+            return None, f"反向相位编码 b=0 图像必须是文件，不能是文件夹：{candidate}。"
+        return None, f"Reverse-PE b=0 image must be a file, not a folder: {candidate}."
+    if not _has_image_suffix(candidate):
+        if zh:
+            return None, (
+                f"反向相位编码 b=0 图像 {candidate.name} 不是受支持的图像文件"
+                "（.nii、.nii.gz、.nrrd、.nhdr、.mif）。请选择反向相位编码 b=0 图像。"
+            )
+        return None, (
+            f"Reverse-PE b=0 image {candidate.name} is not a NIfTI/NRRD/MRtrix image "
+            "(.nii, .nii.gz, .nrrd, .nhdr, .mif). Choose the reversed phase-encoding b=0 volume."
+        )
+    return candidate, None
+
+
+def topup_unavailable_reason(
+    reverse_phase_b0: Any = "",
+    *,
+    batch_mode: bool = False,
+    zh: bool = False,
+) -> str:
+    """Return why Topup cannot be selected right now, or ``""`` when a valid reverse-PE b=0 file is ready."""
+
+    if batch_mode:
+        if zh:
+            return (
+                "Topup 需要为每个受试者单独提供反向相位编码（例如主 DWI 为 AP 时提供 PA）的 b=0 图像，"
+                "批处理模式下不可用。请切换到单受试者模式后再提供该文件。"
+            )
+        return (
+            "Topup requires a per-subject reverse phase-encoding b=0 image (for example, PA matching an AP DWI) "
+            "and is not available in Batch mode. Switch to single-subject mode to provide one."
+        )
+    reverse_text = str(reverse_phase_b0 or "").strip()
+    if not reverse_text:
+        if zh:
+            return (
+                "运行 Topup 需要提供与主 DWI 相位编码方向相反的 b=0 图像"
+                "（例如主 DWI 为 AP 方向时，提供 PA 方向的 b=0 图像）。"
+                "请在下方选择反向 b=0 文件（支持 .nii、.nii.gz、.nrrd、.nhdr、.mif）后即可勾选 Topup。"
+            )
+        return (
+            "Topup requires a reverse phase-encoding b=0 image (for example, a PA b=0 volume matching an AP main DWI). "
+            "Select a reverse-PE b=0 file (.nii, .nii.gz, .nrrd, .nhdr, .mif) below to enable Topup."
+        )
+    _, error = validate_reverse_phase_b0_path(reverse_text, batch_mode=False, zh=zh)
+    return error or ""
+
+
+def sanitize_unavailable_topup_stage(node: Any, *, batch_mode: Optional[bool] = None) -> bool:
+    """Strip ``topup`` from a multi-stage selection when Topup cannot run (no reverse-PE b=0 or Batch mode).
+
+    Prevents legacy saved settings (``denoise,eddy,topup`` with no reverse-PE b=0) or switching into Batch mode from
+    displaying ``DWI denoising + Eddy`` in the UI while blocking Run on a hidden ``topup`` stage. An explicit
+    ``topup``-only selection is left intact so the UI and validation still explain what is missing.
+    """
+
+    if node is None:
+        return False
+    raw_stages_val = getattr(node, "orchestrationPreprocessingStages", "")
+    raw_stages = raw_stages_val.strip() if isinstance(raw_stages_val, str) else ""
+    if not raw_stages:
+        return False
+    if batch_mode is None:
+        cohort = bool(
+            getattr(node, "experimentsEnabled", False) is True
+            and getattr(node, "experimentScope", "") == "cohort"
+        )
+        is_batch = cohort or bool(getattr(node, "batchMode", False) is True)
+    else:
+        is_batch = bool(batch_mode)
+    reverse_b0_val = getattr(node, "preprocessingReversePhaseB0", "")
+    reverse_b0 = reverse_b0_val.strip() if isinstance(reverse_b0_val, str) else ""
+    if not topup_unavailable_reason(reverse_b0, batch_mode=is_batch):
+        return False
+    from shared.algorithm_selection import PREPROCESSING, algorithms
+
+    try:
+        chosen = algorithms(raw_stages, PREPROCESSING, "denoise,eddy")
+    except ValueError:
+        return False
+    if "topup" not in chosen:
+        return False
+    kept = [stage for stage in chosen if stage != "topup"]
+    if not kept:
+        return False
+    wanted = ",".join(kept)
+    if raw_stages != wanted:
+        node.orchestrationPreprocessingStages = wanted
+        return True
+    return False
 
 
 def validate_topup_parameters(
@@ -200,34 +326,30 @@ def validate_topup_parameters(
     except ValueError as exc:
         errors.append(str(exc))
 
-    reverse_path: Optional[Path] = None
     reverse_text = str(reverse_phase_b0 or "").strip()
-    if reverse_text:
-        candidate = Path(reverse_text).expanduser()
-        if batch_mode:
-            errors.append(
-                "A reverse-PE b=0 image applies to one subject, but batch mode runs every subject under the "
-                "batch root. Clear 'Reverse-PE b=0 image' or turn off Batch mode and run subjects one at a time."
-            )
-        elif not candidate.exists():
-            errors.append(f"Reverse-PE b=0 image not found: {candidate}. Choose an existing NIfTI file.")
-        elif not candidate.is_file():
-            errors.append(f"Reverse-PE b=0 image must be a file, not a folder: {candidate}.")
-        elif not _has_image_suffix(candidate):
-            errors.append(
-                f"Reverse-PE b=0 image {candidate.name} is not a NIfTI/MRtrix image "
-                "(.nii, .nii.gz, .mif). Choose the reversed phase-encoding b=0 volume."
-            )
-        else:
-            reverse_path = candidate
+    reverse_path, reverse_error = validate_reverse_phase_b0_path(reverse_text, batch_mode=batch_mode, zh=False)
+    if reverse_error:
+        errors.append(reverse_error)
 
     stages_text = (preprocessing_stages or "").strip()
     eddy_or_reverse_needed = True
     effective_has_reverse = bool(reverse_text)
     if stages_text:
         from shared.algorithm_selection import PREPROCESSING, algorithms
-        chosen_stages = algorithms(stages_text, PREPROCESSING, "denoise,eddy,topup")
-        effective_has_reverse = bool(reverse_text) and ("topup" in chosen_stages)
+        chosen_stages = algorithms(stages_text, PREPROCESSING, "denoise,eddy")
+        topup_selected = "topup" in chosen_stages
+        if topup_selected and not reverse_text:
+            if batch_mode:
+                errors.append(
+                    "Topup requires a per-subject reverse-PE b=0 image and cannot run in batch mode. "
+                    "Uncheck Topup or turn off Batch mode."
+                )
+            else:
+                errors.append(
+                    "Topup requires a reverse-PE b=0 image (for example, a PA b=0 matching an AP DWI). "
+                    "Select a reverse-PE b=0 file under Preprocessing > … > Topup, or uncheck Topup."
+                )
+        effective_has_reverse = bool(reverse_text) and topup_selected
         eddy_or_reverse_needed = ("eddy" in chosen_stages) or effective_has_reverse
 
     if subject_root is not None and not batch_mode and not errors and eddy_or_reverse_needed:

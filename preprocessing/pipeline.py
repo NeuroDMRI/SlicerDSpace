@@ -572,6 +572,104 @@ def _collect_dwifslpreproc_diagnostics(paths: dict[str, Path], subject: str) -> 
     return records
 
 
+def _prepare_reverse_b0_nrrd(
+    source: Path,
+    dest: Path,
+    *,
+    b0_threshold: float = 50.0,
+    reference_path: Optional[Path] = None,
+) -> None:
+    """Convert a 3D or 4D NRRD/NHDR reverse-PE b=0 image to a single-volume 4D RAS NIfTI.
+
+    When ``reference_path`` (the imported main DWI NIfTI) is provided, the voxel axes are reoriented
+    to match the reference image's exact axis orientation (for example, LAS from ``DWIConvert NrrdToFSL``)
+    while preserving physical RAS coordinates, so downstream ``mrcat`` and FSL ``fslmerge``/``topup`` see
+    identical voxel-to-RAS orientation matrices.
+    """
+    import nibabel as nib
+    import nrrd
+    import numpy as np
+    from shared.input_preview import _nrrd_bvalues, _nrrd_diffusion_axis, _nrrd_ras_affine, _space_signs
+
+    data, header = nrrd.read(str(source))
+    if data.ndim == 3:
+        directions = np.asarray(header.get("space directions"), dtype=float)
+        if directions.shape != (3, 3) or not np.all(np.isfinite(directions)):
+            raise ValueError(f"Reverse phase-encoded b=0 NRRD has invalid space directions: {source}")
+        origin = np.asarray(header.get("space origin", [0.0, 0.0, 0.0]), dtype=float)
+        affine = np.eye(4)
+        affine[:3, :3] = directions.T
+        affine[:3, 3] = origin
+        ras_affine = np.diag(list(_space_signs(header.get("space"))) + [1.0]) @ affine
+        vol3d = np.asarray(data, dtype=np.float32)
+    elif data.ndim == 4:
+        axis = _nrrd_diffusion_axis(header, data.ndim)
+        volumes = np.moveaxis(data, axis, -1)
+        vol_index = 0
+        try:
+            bvals = _nrrd_bvalues(header, volumes.shape[3])
+            vol_index = next((i for i, b in enumerate(bvals) if b <= b0_threshold), 0)
+        except Exception:
+            vol_index = 0
+        ras_affine = _nrrd_ras_affine(header, axis)
+        vol3d = np.asarray(volumes[..., vol_index], dtype=np.float32)
+    else:
+        raise ValueError(f"reverse_phase_b0 NRRD must be 3D or 4D; received {data.ndim}D ({data.shape}).")
+    if reference_path is not None and Path(reference_path).is_file():
+        try:
+            ref_affine = np.asarray(nib.load(str(reference_path)).affine, dtype=float)
+            xform = nib.orientations.ornt_transform(
+                nib.orientations.io_orientation(ras_affine),
+                nib.orientations.io_orientation(ref_affine),
+            )
+            if not np.allclose(xform, [[0, 1], [1, 1], [2, 1]]):
+                orig_shape = vol3d.shape
+                vol3d = np.ascontiguousarray(nib.orientations.apply_orientation(vol3d, xform), dtype=np.float32)
+                ras_affine = ras_affine @ nib.orientations.inv_ornt_aff(xform, orig_shape)
+        except Exception:
+            pass
+    vol = vol3d[..., np.newaxis]
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    nib.save(nib.Nifti1Image(vol, ras_affine), str(dest))
+
+
+def _reverse_b0_nifti_volume_index(image_path: Path, volume_count: int, b0_threshold: float) -> int:
+    """Pick the first b=0 volume index for a 4D reverse-PE NIfTI using a matching sibling ``.bval``/``.bvals`` file.
+
+    Falls back to ``0`` when no matching sibling bval file exists (for example, a pure multi-b0 reverse-PE stack).
+    Raises ``ValueError`` if a matching sibling bval file explicitly confirms there is no volume with ``b <= b0_threshold``.
+    """
+    import math
+
+    name = image_path.name
+    lower = name.lower()
+    if lower.endswith(".nii.gz"):
+        stem = name[:-7]
+    elif lower.endswith(".nii"):
+        stem = name[:-4]
+    else:
+        stem = image_path.stem
+    for suffix in (".bval", ".bvals"):
+        candidate = image_path.parent / f"{stem}{suffix}"
+        if not candidate.is_file():
+            continue
+        try:
+            tokens = candidate.read_text(encoding="utf-8", errors="ignore").split()
+            bvals = [float(token) for token in tokens]
+        except ValueError:
+            continue
+        if len(bvals) != volume_count or not all(math.isfinite(b) for b in bvals):
+            continue
+        match = next((index for index, b in enumerate(bvals) if b <= float(b0_threshold)), None)
+        if match is None:
+            raise ValueError(
+                f"Reverse phase-encoded image {image_path.name} has no b=0 volume "
+                f"(minimum b-value in {candidate.name} is {min(bvals):g}, threshold {float(b0_threshold):g})."
+            )
+        return match
+    return 0
+
+
 def _build_commands(raw: RawInputBundle, config: DwiPreprocessingConfig, paths: dict[str, Path], backend: dict[str, Any],
                     acquisition: Optional[AcquisitionMetadata] = None) -> list[list[str]]:
     if acquisition is None:
@@ -591,37 +689,80 @@ def _build_commands(raw: RawInputBundle, config: DwiPreprocessingConfig, paths: 
     if reverse_phase_b0 is not None:
         if not reverse_phase_b0.is_file():
             raise FileNotFoundError(f"Reverse phase-encoded b=0 image not found: {reverse_phase_b0}")
-        import nibabel as nib
+        reverse_name_lower = reverse_phase_b0.name.lower()
+        normalized_reverse = paths["motion_dir"] / f"{subject}_reverse_phase_b0_4d.nii.gz"
+        if reverse_name_lower.endswith((".nrrd", ".nhdr")):
+            try:
+                import nrrd
 
-        try:
-            reverse_shape = nib.load(str(reverse_phase_b0)).shape
-        except Exception as exc:
-            raise ValueError(f"Unable to read reverse phase-encoded b=0 image: {reverse_phase_b0}") from exc
-        reverse_ndim = len(reverse_shape)
-        if reverse_ndim not in {3, 4}:
-            raise ValueError(
-                "reverse_phase_b0 must be a 3D image or a single-volume 4D image; "
-                f"received shape {reverse_shape}."
+                header = nrrd.read_header(str(reverse_phase_b0))
+                sizes = header.get("sizes") or ()
+                reverse_ndim = len(sizes)
+            except Exception as exc:
+                raise ValueError(f"Unable to read reverse phase-encoded b=0 NRRD image: {reverse_phase_b0}") from exc
+            if reverse_ndim not in {3, 4}:
+                raise ValueError(
+                    "reverse_phase_b0 must be a 3D or 4D image; "
+                    f"received shape {tuple(int(s) for s in sizes)}."
+                )
+            reverse_phase_commands.append(
+                [
+                    "prepare-reverse-b0",
+                    reverse_phase_b0.as_posix(),
+                    normalized_reverse.as_posix(),
+                    raw.dwi_path.as_posix(),
+                ]
             )
-        reverse_volume_count = int(reverse_shape[3]) if reverse_ndim == 4 else 1
-        if reverse_volume_count != 1:
-            raise ValueError(
-                "reverse_phase_b0 must contain exactly one reverse phase-encoded b=0 volume; "
-                f"received shape {reverse_shape}."
-            )
-        if reverse_ndim == 3:
-            normalized_reverse = paths["motion_dir"] / f"{subject}_reverse_phase_b0_4d.nii.gz"
-            normalize_cmd = [
-                backend["commands"]["mrconvert"] or "mrconvert",
-                reverse_phase_b0.as_posix(),
-                normalized_reverse.as_posix(),
-                "-axes",
-                "0,1,2,-1",
-            ]
-            if config.force:
-                normalize_cmd.append("-force")
-            reverse_phase_commands.append(normalize_cmd)
             reverse_phase_b0 = normalized_reverse
+        elif not reverse_name_lower.endswith((".mif", ".mif.gz")):
+            import nibabel as nib
+
+            try:
+                reverse_shape = nib.load(str(reverse_phase_b0)).shape
+            except Exception as exc:
+                raise ValueError(f"Unable to read reverse phase-encoded b=0 image: {reverse_phase_b0}") from exc
+            reverse_ndim = len(reverse_shape)
+            if reverse_ndim not in {3, 4}:
+                raise ValueError(
+                    "reverse_phase_b0 must be a 3D image or a 4D image; "
+                    f"received shape {reverse_shape}."
+                )
+            reverse_volume_count = int(reverse_shape[3]) if reverse_ndim == 4 else 1
+            if reverse_volume_count < 1:
+                raise ValueError(
+                    "reverse_phase_b0 must contain at least one reverse phase-encoded b=0 volume; "
+                    f"received shape {reverse_shape}."
+                )
+            if reverse_ndim == 3:
+                normalize_cmd = [
+                    backend["commands"]["mrconvert"] or "mrconvert",
+                    reverse_phase_b0.as_posix(),
+                    normalized_reverse.as_posix(),
+                    "-axes",
+                    "0,1,2,-1",
+                ]
+                if config.force:
+                    normalize_cmd.append("-force")
+                reverse_phase_commands.append(normalize_cmd)
+                reverse_phase_b0 = normalized_reverse
+            elif reverse_volume_count > 1:
+                b0_index = _reverse_b0_nifti_volume_index(
+                    reverse_phase_b0, reverse_volume_count, config.b0_threshold
+                )
+                normalize_cmd = [
+                    backend["commands"]["mrconvert"] or "mrconvert",
+                    reverse_phase_b0.as_posix(),
+                    normalized_reverse.as_posix(),
+                    "-coord",
+                    "3",
+                    str(b0_index),
+                    "-axes",
+                    "0,1,2,-1",
+                ]
+                if config.force:
+                    normalize_cmd.append("-force")
+                reverse_phase_commands.append(normalize_cmd)
+                reverse_phase_b0 = normalized_reverse
         forward_b0s = paths["motion_dir"] / f"{subject}_forward_b0s.mif"
         forward_b0 = paths["motion_dir"] / f"{subject}_forward_b0_4d.nii.gz"
         se_epi_pair = paths["motion_dir"] / f"{subject}_se_epi_pair.mif"
@@ -658,7 +799,7 @@ def _build_commands(raw: RawInputBundle, config: DwiPreprocessingConfig, paths: 
         )
         if config.force:
             for command in reverse_phase_commands:
-                if "-force" not in command:
+                if command[0] != "prepare-reverse-b0" and "-force" not in command:
                     command.append("-force")
         reverse_phase_b0 = se_epi_pair
 
@@ -1058,6 +1199,16 @@ def _execute_preprocessing_backend(
             shutil.copy2(command[1], command[2])
             idx += 1
             continue
+        if command[0] == "prepare-reverse-b0":
+            ref_path = Path(command[3]) if len(command) > 3 and command[3] else None
+            _prepare_reverse_b0_nrrd(
+                Path(command[1]),
+                Path(command[2]),
+                b0_threshold=config.b0_threshold,
+                reference_path=ref_path,
+            )
+            idx += 1
+            continue
         if command[0] == "optional-output":
             idx += 1
             continue
@@ -1217,6 +1368,11 @@ def run_dwi_preprocessing(
         paths["native_scratch"] = paths["motion_dir"] / "fsl_native_tmp"
     mask_backend = inspect_brain_mask_backend(_brain_mask_config(config))
     acquisition = resolve_acquisition_for(raw, config)
+    if config.execute and not config.skip and config.run_topup and not config.run_eddy and config.reverse_phase_b0 is None:
+        raise ValueError(
+            "Topup was selected without a reverse phase-encoding b=0 image (--preprocessing-reverse-phase-b0). "
+            "Provide a reverse-PE b=0 image or disable Topup."
+        )
     if config.execute and not config.skip and _effective_run_eddy(config):
         # Rule 4 (T1 D1): no direction, no run. Fails before the manifest, the scratch folder or any stage.
         acquisition.require_phase_encoding()

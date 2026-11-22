@@ -503,7 +503,17 @@ class PopupTest(PopupBase):
     def test_b2_with_fsl_offered_no_preprocessing_marker_is_made(self):
         owner = make_owner(stages="dti")
         self.popup(owner, "preprocessing", blocks={}, fsl_offered=True)
-        self.assertEqual(self.markers(), {})
+        markers = self.markers()
+        # With FSL offered and no reverse-PE b=0 file, Eddy has no marker while Topup shows its reverse-PE '?' marker.
+        self.assertEqual(set(markers), {"algorithmUnavailable_topup"})
+        self.assertIn("reverse", markers["algorithmUnavailable_topup"].setToolTip.call_args[0][0].lower())
+        rev = self.root / "rev_b0.nii.gz"
+        rev.write_bytes(b"\x00")
+        owner._parameterNode.preprocessingReversePhaseB0 = str(rev)
+        self.popup(owner, "preprocessing", blocks={}, fsl_offered=True)
+        markers_ready = self.markers()
+        self.assertEqual(set(markers_ready), {"algorithmUnavailable_topup"})
+        markers_ready["algorithmUnavailable_topup"].setVisible.assert_called_with(False)
 
     def test_b2_data_blocks_never_touch_other_families(self):
         owner = make_owner(stages="dti")

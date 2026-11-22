@@ -1061,27 +1061,25 @@ def remove_preview_nodes(slicer: Any) -> None:
     _remove_previous_preview_nodes(slicer)
 
 
-def show_dwi_in_scene(
+def build_dwi_volume_node(
     slicer: Any,
     dwi: FullDwi,
-    mask: Any = None,
+    name: str,
     *,
-    subject_id: str = "",
-    log: Optional[Callable[[str], None]] = None,
     threshold: float = B0_THRESHOLD,
-) -> dict[str, Any]:
-    """GUI thread: wrap a :class:`FullDwi` in a core DWI node, show the first b0 component and the mask overlay.
+    attribute: Optional[tuple[str, str]] = None,
+) -> tuple[Any, dict[str, Any]]:
+    """GUI thread: wrap a :class:`FullDwi` in a core ``vtkMRMLDiffusionWeightedVolumeNode``.
 
-    The node replaces any earlier preview node. Only core Slicer classes are used (no SlicerDMRI).
+    Shared by ``show_dwi_in_scene`` (input preview) and ``shared.result_scene.load_dwi_result``
+    (preprocessed 4D DWI outputs) so every 4D DWI in the scene preserves exact RAS geometry and
+    native Slicer Volumes ``DWI Component`` support without SlicerDMRI.
     """
 
     import numpy as np
 
-    say = log or (lambda _message: None)
-    _remove_previous_preview_nodes(slicer)
-    name = f"{subject_id or 'subject'}_input"
     try:
-        node = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLDiffusionWeightedVolumeNode", f"{name}_dwi")
+        node = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLDiffusionWeightedVolumeNode", name)
     except Exception as exc:
         raise PreviewError("bad_data", f"Slicer could not create the DWI node: {exc}") from exc
     if node is None:
@@ -1089,7 +1087,8 @@ def show_dwi_in_scene(
     count = len(dwi.bvalues)
     component = default_component(dwi.bvalues, threshold)
     try:
-        node.SetAttribute(PREVIEW_ATTRIBUTE, "dwi")
+        if attribute is not None:
+            node.SetAttribute(attribute[0], attribute[1])
         if len(dwi.gradients) != count:
             raise ValueError(f"{len(dwi.gradients)} gradients for {count} volumes")
         node.SetIJKToRASMatrix(slicer.util.vtkMatrixFromArray(np.asarray(dwi.ijk_to_ras, dtype=float)))
@@ -1112,12 +1111,44 @@ def show_dwi_in_scene(
         except Exception:
             pass
         raise PreviewError("bad_data", f"Slicer could not build the DWI node: {exc}") from exc
-    label = _load_preview_mask(slicer, mask, name, say)
-    _fit_slice_views(slicer, node.GetID(), label.GetID() if label is not None else None)
-    return {
+    return node, {
         "volume_id": node.GetID(),
-        "mask_id": label.GetID() if label is not None else None,
         "component": component,
         "count": count,
         "b_value": float(dwi.bvalues[component]) if count else 0.0,
+    }
+
+
+def show_dwi_in_scene(
+    slicer: Any,
+    dwi: FullDwi,
+    mask: Any = None,
+    *,
+    subject_id: str = "",
+    log: Optional[Callable[[str], None]] = None,
+    threshold: float = B0_THRESHOLD,
+) -> dict[str, Any]:
+    """GUI thread: wrap a :class:`FullDwi` in a core DWI node, show the first b0 component and the mask overlay.
+
+    The node replaces any earlier preview node. Only core Slicer classes are used (no SlicerDMRI).
+    """
+
+    say = log or (lambda _message: None)
+    _remove_previous_preview_nodes(slicer)
+    name = f"{subject_id or 'subject'}_input"
+    node, info = build_dwi_volume_node(
+        slicer,
+        dwi,
+        f"{name}_dwi",
+        threshold=threshold,
+        attribute=(PREVIEW_ATTRIBUTE, "dwi"),
+    )
+    label = _load_preview_mask(slicer, mask, name, say)
+    _fit_slice_views(slicer, node.GetID(), label.GetID() if label is not None else None)
+    return {
+        "volume_id": info["volume_id"],
+        "mask_id": label.GetID() if label is not None else None,
+        "component": info["component"],
+        "count": info["count"],
+        "b_value": info["b_value"],
     }

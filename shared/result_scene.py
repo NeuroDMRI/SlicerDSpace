@@ -696,6 +696,163 @@ def load_categorical_result(slicer, path, name, candidate):
     return segmentation
 
 
+_DWI_KEYS = {"dwi", "final_dwi", "preprocessed_dwi"}
+
+
+def is_dwi_result(candidate) -> bool:
+    """True when ``candidate`` names a 4D diffusion-weighted NIfTI output (for example ``preprocessing.dwi``)."""
+    product = str(candidate.get("product") or "")
+    key = str(candidate.get("key") or "").lower().removesuffix("_path")
+    suffix = result_file_suffix(candidate.get("path") or "")
+    if suffix not in {".nii", ".nii.gz"}:
+        return False
+    return product.startswith("preprocessing.") and key in _DWI_KEYS
+
+
+def dwi_gradient_paths(path, candidate, manifest) -> tuple[Optional[Path], Optional[Path]]:
+    """Resolve matching ``(bval, bvec)`` files for a DWI result from the manifest task or adjacent files."""
+    dwi_path = Path(path)
+    product = str(candidate.get("product") or "")
+    bval_path: Optional[Path] = None
+    bvec_path: Optional[Path] = None
+    for task in (manifest or {}).get("tasks") or []:
+        if not isinstance(task, dict) or str(task.get("name") or "") != product:
+            continue
+        outputs = task.get("outputs") or {}
+        for key in ("bval", "final_bval", "bval_path"):
+            raw = outputs.get(key)
+            if isinstance(raw, str) and raw.strip():
+                cand = Path(raw).expanduser()
+                if cand.is_file():
+                    bval_path = cand
+                    break
+        for key in ("bvec", "final_bvec", "bvec_path"):
+            raw = outputs.get(key)
+            if isinstance(raw, str) and raw.strip():
+                cand = Path(raw).expanduser()
+                if cand.is_file():
+                    bvec_path = cand
+                    break
+        if bval_path is not None and bvec_path is not None:
+            return bval_path, bvec_path
+
+    name = dwi_path.name
+    stem = name[:-7] if name.lower().endswith(".nii.gz") else (name[:-4] if name.lower().endswith(".nii") else dwi_path.stem)
+    parent = dwi_path.parent
+    if bval_path is None:
+        for cand_name in (f"{stem}.bval", f"{stem}.bvals", "bvals", "bval"):
+            cand = parent / cand_name
+            if cand.is_file():
+                bval_path = cand
+                break
+    if bvec_path is None:
+        for cand_name in (f"{stem}.bvec", f"{stem}.bvecs", "bvecs", "bvec"):
+            cand = parent / cand_name
+            if cand.is_file():
+                bvec_path = cand
+                break
+    return bval_path, bvec_path
+
+
+def _load_4d_nifti_scalar_fallback(slicer, image, name: str, bval_path: Optional[Path]):
+    """Load a 3D representative volume (mean b0 or volume 0) from a 4D NIfTI while preserving exact RAS geometry.
+
+    Avoids ``slicer.util.loadVolume`` on 4D left-handed (LAS) NIfTI files, where ITK flips the Y direction without
+    adjusting the origin and shifts the volume in RAS space.
+    """
+    import numpy as np
+    import vtk
+    from vtk.util import numpy_support
+    from shared.input_preview import B0_THRESHOLD, read_bvals
+
+    count = int(image.shape[3])
+    indices = [0]
+    if bval_path is not None and bval_path.is_file():
+        try:
+            bvals = read_bvals(bval_path)
+            if len(bvals) == count:
+                b0 = [i for i, val in enumerate(bvals) if val <= B0_THRESHOLD]
+                if b0:
+                    indices = b0
+        except Exception:
+            pass
+    total = None
+    for index in indices:
+        vol = np.asarray(image.dataobj[..., index], dtype=np.float32)
+        total = vol.copy() if total is None else (total + vol)
+    vol3d = np.ascontiguousarray((total / np.float32(len(indices))).transpose(2, 1, 0))
+    nx, ny, nz = (int(size) for size in image.shape[:3])
+    vtk_array = numpy_support.numpy_to_vtk(vol3d.ravel(), deep=True, array_type=vtk.VTK_FLOAT)
+    vtk_array.SetName("ImageScalars")
+    vtk_image = vtk.vtkImageData()
+    vtk_image.SetDimensions(nx, ny, nz)
+    vtk_image.GetPointData().SetScalars(vtk_array)
+    node = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLScalarVolumeNode", name)
+    if node is None:
+        return None
+    try:
+        node.SetIJKToRASMatrix(slicer.util.vtkMatrixFromArray(np.asarray(image.affine, dtype=float)))
+        node.SetAndObserveImageData(vtk_image)
+        node.CreateDefaultDisplayNodes()
+        display = node.GetDisplayNode()
+        if display is not None:
+            display.SetAutoWindowLevel(1)
+    except Exception:
+        slicer.mrmlScene.RemoveNode(node)
+        raise
+    return node
+
+
+def load_dwi_result(slicer, path, name: str, candidate, manifest):
+    """Load a 4D NIfTI DWI result as a ``vtkMRMLDiffusionWeightedVolumeNode`` with exact RAS coordinates.
+
+    Returns the created MRML node, or ``None`` when ``path`` is not a readable 4D NIfTI (so callers can fall back to
+    ``loadVolume`` for 3D files or dummy unit-test placeholders).
+    """
+    from shared.input_preview import (
+        PreviewSource,
+        build_dwi_volume_node,
+        estimate_full_dwi_bytes,
+        full_dwi_limit_bytes,
+        gradient_table_unusable,
+        read_full_dwi,
+    )
+
+    dwi_path = Path(path)
+    try:
+        import nibabel as nib
+
+        image = nib.load(str(dwi_path))
+        shape = tuple(int(size) for size in image.shape)
+    except Exception:
+        return None
+    if len(shape) != 4:
+        return None
+    bval_path, bvec_path = dwi_gradient_paths(dwi_path, candidate, manifest)
+    subject = str((manifest or {}).get("subject_id") or "")
+    source = PreviewSource(
+        kind="nifti",
+        dwi=dwi_path,
+        bval=bval_path,
+        mask=None,
+        subject_id=subject,
+        origin=str(dwi_path.parent),
+        bvec=bvec_path,
+    )
+    if (
+        bval_path is not None
+        and not gradient_table_unusable(source)
+        and estimate_full_dwi_bytes(source) <= full_dwi_limit_bytes()
+    ):
+        try:
+            full_dwi = read_full_dwi(source)
+            node, _info = build_dwi_volume_node(slicer, full_dwi, name)
+            return node
+        except Exception:
+            pass
+    return _load_4d_nifti_scalar_fallback(slicer, image, name, bval_path)
+
+
 def automatic_display_preset(slicer, node, candidate, *, hide_pial=True):
     """Only display properties change; voxel values, label IDs and mesh data do not."""
     annotate_automatic_result(node, candidate)

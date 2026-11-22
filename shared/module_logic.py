@@ -1252,11 +1252,20 @@ class SharedLogicMixin:
                     else:
                         success = morphometry.load_morphometry_row(slicer, candidate, manifest)
                 elif suffix in {".nii", ".nii.gz", ".mgz"}:
-                    from shared.result_scene import categorical_context, categorical_role, load_categorical_result
+                    from shared.result_scene import (
+                        categorical_context,
+                        categorical_role,
+                        is_dwi_result,
+                        load_categorical_result,
+                        load_dwi_result,
+                    )
                     if categorical_role(candidate):
                         # B2: one categorical loader and colour source for the automatic and every manual path.
                         success = bool(load_categorical_result(
                             slicer, path, name, categorical_context(candidate, manifest)))
+                    elif is_dwi_result(candidate):
+                        loaded_dwi = load_dwi_result(slicer, path, name, candidate, manifest)
+                        success = bool(loaded_dwi) if loaded_dwi is not None else self._load_scalar_volume_node(path, name)
                     else:
                         success = self._load_scalar_volume_node(path, name)
                 elif suffix == ".nrrd":
@@ -1289,7 +1298,11 @@ class SharedLogicMixin:
                     register_node(slicer, node, run_id, subject, run_name, candidate["product"], str(path))
                     if automatic:
                         automatic_display_preset(slicer, node, candidate)
-                    elif node.IsA("vtkMRMLScalarVolumeNode") and not node.IsA("vtkMRMLLabelMapVolumeNode"):
+                    elif (
+                        node.IsA("vtkMRMLScalarVolumeNode")
+                        and not node.IsA("vtkMRMLLabelMapVolumeNode")
+                        and not node.IsA("vtkMRMLDiffusionWeightedVolumeNode")
+                    ):
                         scalar_preset(node, label)
                 loaded.append({**candidate, "node_ids": [node.GetID() for node in nodes]})
                 existing.setdefault(candidate["path"], []).extend(nodes)

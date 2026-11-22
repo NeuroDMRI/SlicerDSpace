@@ -98,8 +98,10 @@ def compact_algorithm_labels(node: Any, blocked: Any = ()) -> dict[str, str]:
         val = getattr(node, attr_name, "")
         return val.strip() if isinstance(val, str) else ""
 
-    preprocessing = (_str_attr("orchestrationPreprocessingStages") or "denoise,eddy,topup").lower()
-    preproc_labels = " + ".join(LABELS[name] for name in algorithms(preprocessing, PREPROCESSING, "denoise,eddy,topup"))
+    preprocessing = (_str_attr("orchestrationPreprocessingStages") or "denoise,eddy").lower()
+    preproc_selected = algorithms(preprocessing, PREPROCESSING, "denoise,eddy")
+    preproc_visible = [name for name in preproc_selected if name not in blocked] or list(preproc_selected)
+    preproc_labels = " + ".join(LABELS[name] for name in preproc_visible)
 
     stored = microstructure_models(node)
     models = [label for algorithm, label in stored if algorithm not in blocked] or [label for _, label in stored]
@@ -205,7 +207,28 @@ def refresh_compact_algorithms(owner: Any, language: str | None = None) -> None:
     cleared = getattr(owner, "_clearedAlgorithmFamilies", None)
     box_to_family = {box_name: family for family, (box_name, _, _) in FAMILIES.items()}
     blocks = _summary_data_blocks(owner)
-    for name, algorithms in compact_algorithm_labels(node, blocked=set(blocks)).items():
+    from shared.topup_parameters import topup_unavailable_reason
+
+    batch_check = getattr(owner, "_input_preview_is_batch", None)
+    if callable(batch_check):
+        is_batch = bool(batch_check())
+    else:
+        cohort = bool(
+            node is not None
+            and getattr(node, "experimentsEnabled", False) is True
+            and getattr(node, "experimentScope", "") == "cohort"
+        )
+        is_batch = cohort or bool(node is not None and getattr(node, "batchMode", False) is True)
+    reverse_b0_raw = getattr(node, "preprocessingReversePhaseB0", "") if node is not None else ""
+    topup_reason = topup_unavailable_reason(
+        reverse_b0_raw if isinstance(reverse_b0_raw, str) else "",
+        batch_mode=is_batch,
+        zh=zh,
+    )
+    effective_blocked = set(blocks)
+    if topup_reason:
+        effective_blocked.add("topup")
+    for name, algorithms in compact_algorithm_labels(node, blocked=effective_blocked).items():
         family = box_to_family.get(name)
         none_selected = False
         if family and isinstance(cleared, set) and family in cleared:
@@ -216,6 +239,17 @@ def refresh_compact_algorithms(owner: Any, language: str | None = None) -> None:
                 none_selected = True
         # B3: what the data cannot run is skipped at Run; say so here without touching the stored selection.
         skipped_lines, muted = [], False
+        if family == "preprocessing" and topup_reason and not none_selected:
+            from shared.algorithm_selection import PREPROCESSING, algorithms as _parse_preproc
+
+            raw_preproc = getattr(node, "orchestrationPreprocessingStages", "") if node is not None else ""
+            stored_preproc = _parse_preproc(
+                raw_preproc if isinstance(raw_preproc, str) else "", PREPROCESSING, "denoise,eddy"
+            )
+            if stored_preproc == ("topup",):
+                muted = True
+                algorithms = "Topup · 需要反向相位 b=0 图像" if zh else "Topup · needs reverse-PE b=0"
+                skipped_lines = [f"Topup: {topup_reason}"]
         if family == "microstructure" and blocks and not none_selected:
             stored = microstructure_models(node)
             skipped = [(algorithm, label) for algorithm, label in stored if algorithm in blocks]
@@ -1180,9 +1214,23 @@ def install_input_preview_controls(owner: Any) -> None:
     stepper.setObjectName("inputPreviewStepper")
     stepper_layout = qt.QHBoxLayout(stepper)
     stepper_layout.setContentsMargins(0, 0, 0, 0)
-    stepper_layout.setSpacing(4)
+    stepper_layout.setSpacing(6)
     stepper_label = qt.QLabel()
     stepper_label.setObjectName("inputPreviewStepperLabel")
+    slider = qt.QSlider(qt.Qt.Horizontal)
+    slider.setObjectName("inputPreviewComponentSlider")
+    slider.setRange(1, 1)
+    if hasattr(slider, "setSingleStep"):
+        slider.setSingleStep(1)
+    if hasattr(slider, "setPageStep"):
+        slider.setPageStep(1)
+    if hasattr(slider, "setTracking"):
+        slider.setTracking(True)
+    slider.setMinimumWidth(60)
+    slider.setSizePolicy(qt.QSizePolicy.Expanding, qt.QSizePolicy.Fixed)
+    if pointing is not None and hasattr(slider, "setCursor"):
+        slider.setCursor(pointing)
+    slider.setEnabled(False)
     spin = qt.QSpinBox()
     spin.setObjectName("inputPreviewComponentSpinBox")
     spin.setRange(1, 1)
@@ -1193,10 +1241,11 @@ def install_input_preview_controls(owner: Any) -> None:
     info.setTextFormat(qt.Qt.PlainText)
     info.setMinimumWidth(0)
     # The info text never sets a minimum width, so the panel-fit logic is not widened by it.
-    info.setSizePolicy(qt.QSizePolicy.Ignored, qt.QSizePolicy.Preferred)
+    info.setSizePolicy(qt.QSizePolicy.Maximum, qt.QSizePolicy.Preferred)
     stepper_layout.addWidget(stepper_label)
+    stepper_layout.addWidget(slider, 1)
     stepper_layout.addWidget(spin)
-    stepper_layout.addWidget(info, 1)
+    stepper_layout.addWidget(info)
     stepper.hide()
     row_layout.addWidget(stepper)
     status = qt.QLabel()
@@ -1207,12 +1256,13 @@ def install_input_preview_controls(owner: Any) -> None:
     status.hide()
     row_layout.addWidget(status)
     button.clicked.connect(lambda *_args: owner._on_input_preview_clicked())
+    slider.connect("valueChanged(int)", lambda value: owner._on_input_preview_component_changed(value))
     spin.connect("valueChanged(int)", lambda value: owner._on_input_preview_component_changed(value))
     layout.addWidget(row)
     owner.ui.inputPreviewButton = button
     owner._inputPreviewWidgets = {
         "row": row, "layout": row_layout, "button": button, "status": status,
-        "stepper": stepper, "stepper_label": stepper_label, "spin": spin, "info": info,
+        "stepper": stepper, "stepper_label": stepper_label, "slider": slider, "spin": spin, "info": info,
     }
     from shared.ui_prepare_inputs import place_input_preview_button
     place_input_preview_button(owner)
@@ -1231,15 +1281,18 @@ def refresh_input_preview_controls(owner: Any, language: str | None = None) -> N
     button.setText("预览输入" if zh else "View input")
     if hasattr(button, "setAccessibleName"):
         button.setAccessibleName("预览输入" if zh else "View input")
-    stepper_label, spin = widgets.get("stepper_label"), widgets.get("spin")
+    stepper_label, slider, spin = widgets.get("stepper_label"), widgets.get("slider"), widgets.get("spin")
     if stepper_label is not None:
         stepper_label.setText("体积" if zh else "Volume")
+    stepper_tip = (
+        "拖动滑块或调整编号切换 DWI 体积（从 1 开始计数）。Volumes 模块中的 DWI Component 显示同一体积，但从 0 开始计数。" if zh
+        else "Drag the slider or step through DWI volumes (counted from 1). The Volumes module's DWI Component shows "
+             "the same volume, counted from 0."
+    )
+    if slider is not None:
+        slider.setToolTip(stepper_tip)
     if spin is not None:
-        spin.setToolTip(
-            "逐个查看 DWI 体积（从 1 开始计数）。Volumes 模块中的 DWI Component 显示同一体积，但从 0 开始计数。" if zh
-            else "Step through the DWI volumes (counted from 1). The Volumes module's DWI Component shows the "
-                 "same volume, counted from 0."
-        )
+        spin.setToolTip(stepper_tip)
     refresh = getattr(owner, "_refresh_input_preview_controls", None)
     if callable(refresh):
         refresh()

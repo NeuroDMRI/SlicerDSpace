@@ -146,7 +146,7 @@ class SlicerDSpaceParameterNode:
     microstructureRunNoddi: bool = False
     microstructureForceRecompute: bool = False
     targetPreprocessing: bool = True
-    orchestrationPreprocessingStages: Annotated[str, Choice(selection_choices(PREPROCESSING))] = "denoise,eddy,topup"
+    orchestrationPreprocessingStages: Annotated[str, Choice(selection_choices(PREPROCESSING))] = "denoise,eddy"
     brainMaskBackend: Annotated[str, Choice(["pnl_cnn", "provided"])] = "pnl_cnn"
     brainMaskDevice: Annotated[str, Choice(["auto", "cpu", "cuda", "mps"])] = "auto"
     pnlMaskRoute: Annotated[str, Choice(["auto", "managed", "native"])] = "auto"

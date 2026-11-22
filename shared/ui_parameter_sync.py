@@ -131,6 +131,9 @@ def sync_parameter_node_to_ui(widget) -> None:
         getattr(ui, "targetPreprocessingCheckBox", None), node=node,
         language=getattr(widget, "_onboardingLanguage", "en"),
     )
+    from shared.topup_parameters import sanitize_unavailable_topup_stage
+
+    sanitize_unavailable_topup_stage(node)
     widget._sync_checkbox(getattr(ui, "targetPreprocessingCheckBox", None), bool(node.targetPreprocessing))
     sync_combo_data = getattr(widget, "_sync_combo_data", None)
     if sync_combo_data is not None:

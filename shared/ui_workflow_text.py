@@ -57,7 +57,7 @@ WORKFLOW_TEXT = {
             "• Subject root: Select the input folder (or NRRD/NIfTI file).\n"
             "• Output directory: Optional; defaults to <Subject root>/outputs."
         ),
-        "compact_preprocessing": "Selected: DWI denoising + Eddy + Topup",
+        "compact_preprocessing": "Selected: DWI denoising + Eddy",
         "compact_surface": "DDSurfer white / pial surfaces",
         "compact_postprocess": "Cortical morphometry / parcellation",
         "compact_parcellation": "DDParcel regional labels",
@@ -217,7 +217,7 @@ WORKFLOW_TEXT = {
             "• 受试者根目录：选择上述输入目录（或 NRRD/NIfTI 文件）。\n"
             "• 输出目录：选填，留空默认输出至 <受试者根目录>/outputs。"
         ),
-        "compact_preprocessing": "当前：DWI denoising + Eddy + Topup",
+        "compact_preprocessing": "当前：DWI denoising + Eddy",
         "compact_surface": "DDSurfer 白质 / 软脑膜表面",
         "compact_postprocess": "皮层形态学 / 分区",
         "compact_parcellation": "DDParcel 脑区标签",

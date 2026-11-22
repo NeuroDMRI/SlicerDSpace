@@ -16,7 +16,7 @@ from shared.algorithm_selection import (
 )
 
 DEFAULT_CHOICES = {
-    "preprocessing": "denoise,eddy,topup",
+    "preprocessing": "denoise,eddy",
     "microstructure": "dti",
     "tractography": "csd_act",
     "bundles": "wmql",
@@ -202,10 +202,13 @@ ALGORITHM_SETTINGS = {
         ("brainMaskBackend", "brainMaskBackendComboBox", "brainMaskBackendLabel"),
         ("pnlMaskRoute", "pnlMaskRouteComboBox", "pnlMaskRouteLabel"),
     ),
+    ("preprocessing", "eddy"): (
+        ("preprocessingPhaseEncodingDirection", "preprocessingPhaseEncodingDirectionComboBox", "preprocessingPhaseEncodingDirectionLabel"),
+        ("preprocessingReadoutTime", "preprocessingReadoutTimeSpinBox", "preprocessingReadoutTimeLabel"),
+    ),
     ("preprocessing", "topup"): (
         ("preprocessingPhaseEncodingDirection", "preprocessingPhaseEncodingDirectionComboBox", "preprocessingPhaseEncodingDirectionLabel"),
         ("preprocessingReadoutTime", "preprocessingReadoutTimeSpinBox", "preprocessingReadoutTimeLabel"),
-        ("preprocessingReversePhaseB0", "preprocessingReversePhaseB0Path", "preprocessingReversePhaseB0Label"),
     ),
     ("microstructure", "dki"): (
         ("orchestrationDkiFitMethod", "orchestrationDkiFitMethodComboBox", "orchestrationDkiFitMethodLabel"),
@@ -253,7 +256,7 @@ def _unavailable_marker(qt, owner, algorithm, reason, dark=None):
     return marker
 
 
-def _unavailable_reason(qt, owner, algorithm, reason, marker, resize_popup, dark=None):
+def _unavailable_reason(qt, owner, algorithm, reason, marker, resize_popup, dark=None, *, state=None):
     """b2 ui2: the reason of a blocked row as a word-wrapped line under the row, hidden until the "?" is clicked.
 
     A click on the "?" shows it, a second click hides it, and the popup resizes each time. It is not a second
@@ -281,8 +284,45 @@ def _unavailable_reason(qt, owner, algorithm, reason, marker, resize_popup, dark
         label.setVisible(shown["value"])
         resize_popup()
 
+    def collapse() -> None:
+        if shown["value"]:
+            shown["value"] = False
+            label.setVisible(False)
+
+    if isinstance(state, dict):
+        state["collapse"] = collapse
     marker.clicked.connect(toggle)
     return label
+
+
+def _gear_icon(qt, *, use_dark: bool, disabled: bool):
+    ink = ("#7D8590" if use_dark else "#94A3B8") if disabled else ("#E6EDF3" if use_dark else "#334155")
+    artwork = (
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20">'
+        f'<g fill="none" stroke="{ink}" stroke-width="1.7" stroke-linejoin="round">'
+        '<path d="m10 2-.6 2.6-1.9.8-2.3-1.4-2.2 2.2 1.4 2.3-.8 1.9-2.6.6v3l2.6.6.8 1.9'
+        '-1.4 2.3 2.2 2.2 2.3-1.4 1.9.8.6 2.6h3l.6-2.6 1.9-.8 2.3 1.4 2.2-2.2-1.4-2.3.8-1.9'
+        ' 2.6-.6v-3l-2.6-.6-.8-1.9 1.4-2.3-2.2-2.2-2.3 1.4-1.9-.8-.6-2.6z"/>'
+        '<circle cx="11.5" cy="12.5" r="3.1"/></g></svg>'
+    )
+    pixmap = qt.QPixmap()
+    pixmap.loadFromData(qt.QByteArray(artwork.encode("ascii")), "SVG")
+    return qt.QIcon(pixmap)
+
+
+def _is_batch_mode(owner) -> bool:
+    check = getattr(owner, "_input_preview_is_batch", None)
+    if callable(check):
+        verdict = check()
+        if isinstance(verdict, bool):
+            return verdict
+    node = getattr(owner, "_parameterNode", None)
+    cohort = bool(
+        node is not None
+        and getattr(node, "experimentsEnabled", False) is True
+        and getattr(node, "experimentScope", "") == "cohort"
+    )
+    return cohort or bool(node is not None and getattr(node, "batchMode", False) is True)
 
 
 def _data_block_texts(owner, choices, zh) -> dict:
@@ -296,10 +336,64 @@ def _data_block_texts(owner, choices, zh) -> dict:
         return {}
 
 
+def _sync_shared_editor(attribute, editor, shared_editors, kind):
+    peers = shared_editors.setdefault(attribute, [])
+    peers.append(editor)
+    if len(peers) < 2:
+        return
+
+    def _connect_peer(source):
+        if kind == "combo":
+            def on_changed(index, src=source):
+                for peer in peers:
+                    if peer is src:
+                        continue
+                    try:
+                        was_blocked = peer.blockSignals(True)
+                        try:
+                            peer.setCurrentIndex(index)
+                        finally:
+                            peer.blockSignals(bool(was_blocked))
+                    except Exception:
+                        pass
+            sig = getattr(source, "currentIndexChanged", None)
+            if sig is not None and hasattr(sig, "connect"):
+                try:
+                    sig.connect(on_changed)
+                except Exception:
+                    pass
+        elif kind == "double_spin":
+            def on_changed(value, src=source):
+                for peer in peers:
+                    if peer is src:
+                        continue
+                    try:
+                        was_blocked = peer.blockSignals(True)
+                        try:
+                            peer.setValue(float(value))
+                        finally:
+                            peer.blockSignals(bool(was_blocked))
+                    except Exception:
+                        pass
+            sig = getattr(source, "valueChanged", None)
+            if sig is not None and hasattr(sig, "connect"):
+                try:
+                    sig.connect(on_changed)
+                except Exception:
+                    pass
+
+    if len(peers) == 2:
+        _connect_peer(peers[0])
+    _connect_peer(editor)
+
+
 def _add_algorithm_row(qt, owner, layout, box, family, algorithm, staged, zh, resize_popup, dark=None,
-                       disabled=False, disabled_tooltip=""):
+                       disabled=False, disabled_tooltip="", create_marker=False, shared_editors=None):
     specs = ALGORITHM_SETTINGS.get((family, algorithm), ())
-    marker = _unavailable_marker(qt, owner, algorithm, disabled_tooltip, dark) if disabled else None
+    need_marker = bool(disabled or create_marker)
+    marker = _unavailable_marker(qt, owner, algorithm, disabled_tooltip, dark) if need_marker else None
+    if marker is not None and not disabled:
+        marker.setVisible(False)
     ui_root = getattr(owner, "ui", None)
     fields = [(attribute, getattr(ui_root, control, None), getattr(ui_root, label, None))
               for attribute, control, label in specs] if ui_root is not None else []
@@ -311,13 +405,23 @@ def _add_algorithm_row(qt, owner, layout, box, family, algorithm, staged, zh, re
     if not fields and not ukf and not bundle_source:
         if marker is None:
             layout.addWidget(box)
-            return
+            return {"gear": None, "panel": None, "marker": None, "reason_label": None, "collapse_reason": None}
         row = qt.QHBoxLayout()
         row.addWidget(box, 1)
         row.addWidget(marker)
         layout.addLayout(row)
-        layout.addWidget(_unavailable_reason(qt, owner, algorithm, disabled_tooltip, marker, resize_popup, dark))
-        return
+        reason_state = {}
+        reason_label = _unavailable_reason(
+            qt, owner, algorithm, disabled_tooltip, marker, resize_popup, dark, state=reason_state
+        )
+        layout.addWidget(reason_label)
+        return {
+            "gear": None,
+            "panel": None,
+            "marker": marker,
+            "reason_label": reason_label,
+            "collapse_reason": reason_state.get("collapse"),
+        }
     row = qt.QHBoxLayout()
     row.addWidget(box, 1)
     button = qt.QToolButton()
@@ -332,18 +436,7 @@ def _add_algorithm_row(qt, owner, layout, box, family, algorithm, staged, zh, re
     from shared.ui_styles import is_dark_mode, style_combobox_popup
 
     use_dark = is_dark_mode(getattr(owner, "_uiWidget", None)) if dark is None else bool(dark)
-    ink = ("#7D8590" if use_dark else "#94A3B8") if disabled else ("#E6EDF3" if use_dark else "#334155")
-    artwork = (
-        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20">'
-        f'<g fill="none" stroke="{ink}" stroke-width="1.7" stroke-linejoin="round">'
-        '<path d="m10 2-.6 2.6-1.9.8-2.3-1.4-2.2 2.2 1.4 2.3-.8 1.9-2.6.6v3l2.6.6.8 1.9'
-        '-1.4 2.3 2.2 2.2 2.3-1.4 1.9.8.6 2.6h3l.6-2.6 1.9-.8 2.3 1.4 2.2-2.2-1.4-2.3.8-1.9'
-        ' 2.6-.6v-3l-2.6-.6-.8-1.9 1.4-2.3-2.2-2.2-2.3 1.4-1.9-.8-.6-2.6z"/>'
-        '<circle cx="11.5" cy="12.5" r="3.1"/></g></svg>'
-    )
-    pixmap = qt.QPixmap()
-    pixmap.loadFromData(qt.QByteArray(artwork.encode("ascii")), "SVG")
-    button.setIcon(qt.QIcon(pixmap))
+    button.setIcon(_gear_icon(qt, use_dark=use_dark, disabled=disabled))
     button.setIconSize(qt.QSize(15, 15))
     button.setFixedSize(28, 24)
     button.setCheckable(True)
@@ -351,8 +444,13 @@ def _add_algorithm_row(qt, owner, layout, box, family, algorithm, staged, zh, re
     if marker is not None:
         row.addWidget(marker)
     layout.addLayout(row)
+    reason_label = None
+    reason_state = {}
     if marker is not None:
-        layout.addWidget(_unavailable_reason(qt, owner, algorithm, disabled_tooltip, marker, resize_popup, dark))
+        reason_label = _unavailable_reason(
+            qt, owner, algorithm, disabled_tooltip, marker, resize_popup, dark, state=reason_state
+        )
+        layout.addWidget(reason_label)
     panel = qt.QWidget()
     form = qt.QFormLayout(panel)
     form.setRowWrapPolicy(qt.QFormLayout.WrapLongRows)
@@ -363,6 +461,8 @@ def _add_algorithm_row(qt, owner, layout, box, family, algorithm, staged, zh, re
                 editor.addItem(original.itemText(index), original.itemData(index))
             editor.setCurrentIndex(original.currentIndex)
             style_combobox_popup(editor, dark=use_dark)
+            if isinstance(shared_editors, dict):
+                _sync_shared_editor(attribute, editor, shared_editors, "combo")
             def choice(editor=editor):
                 value = editor.itemData(editor.currentIndex)
                 return str(editor.currentText if value is None else value)
@@ -373,6 +473,8 @@ def _add_algorithm_row(qt, owner, layout, box, family, algorithm, staged, zh, re
             editor.setDecimals(original.decimals)
             editor.setSingleStep(original.singleStep)
             editor.setValue(original.value)
+            if isinstance(shared_editors, dict):
+                _sync_shared_editor(attribute, editor, shared_editors, "double_spin")
             staged[attribute] = lambda editor=editor: float(editor.value)
         elif hasattr(original, "currentPath"):
             import ctk
@@ -411,6 +513,277 @@ def _add_algorithm_row(qt, owner, layout, box, family, algorithm, staged, zh, re
         resize_popup()
 
     button.toggled.connect(toggle_settings)
+    return {
+        "gear": button,
+        "panel": panel,
+        "marker": marker,
+        "reason_label": reason_label,
+        "collapse_reason": reason_state.get("collapse"),
+    }
+
+
+def _add_topup_reverse_b0_controls(
+    qt, owner, dialog, layout, box, row_controls, staged, popup_state, zh, resize_popup, *, dark=None,
+):
+    """Inline reverse-PE b=0 file selector placed directly under Topup; gates the Topup checkbox live."""
+    from pathlib import Path
+    from shared.topup_parameters import topup_unavailable_reason
+    from shared.ui_styles import is_dark_mode
+
+    use_dark = is_dark_mode(getattr(owner, "_uiWidget", None)) if dark is None else bool(dark)
+    pointing = getattr(qt.Qt, "PointingHandCursor", None)
+    initial_path = str(getattr(getattr(owner, "_parameterNode", None), "preprocessingReversePhaseB0", "") or "").strip()
+
+    container = qt.QWidget()
+    container.setObjectName("topupReversePhaseB0Container")
+    container_layout = qt.QVBoxLayout(container)
+    if hasattr(container_layout, "setContentsMargins"):
+        container_layout.setContentsMargins(22, 0, 0, 2)
+    if hasattr(container_layout, "setSpacing"):
+        container_layout.setSpacing(3)
+
+    label_text = "反向相位 b=0 图像" if zh else "Reverse-PE b=0 image"
+    field_label = qt.QLabel(label_text)
+    field_label.setObjectName("topupReversePhaseB0Label")
+    ink = "#9AA4AF" if use_dark else "#55636F"
+    field_label.setStyleSheet(f"QLabel#topupReversePhaseB0Label {{ color: {ink}; font-size: 11px; }}")
+    container_layout.addWidget(field_label)
+
+    input_row = qt.QHBoxLayout()
+    if hasattr(input_row, "setContentsMargins"):
+        input_row.setContentsMargins(0, 0, 0, 0)
+    if hasattr(input_row, "setSpacing"):
+        input_row.setSpacing(4)
+
+    path_edit = qt.QLineEdit()
+    path_edit.setObjectName("topupReversePhaseB0LineEdit")
+    path_edit.setText(initial_path)
+    if hasattr(path_edit, "setPlaceholderText"):
+        path_edit.setPlaceholderText(
+            "选择反向 b=0 (.nii.gz, .nrrd…)" if zh else "Select reverse-PE b=0 (.nii.gz, .nrrd…)"
+        )
+    if hasattr(path_edit, "setMinimumWidth"):
+        path_edit.setMinimumWidth(180)
+    path_tip = (
+        "与主 DWI 相位编码方向相反的 b=0 图像（例如主 DWI 为 AP 时提供 PA b=0）。" if zh
+        else "A b=0 image acquired with the opposite phase-encoding direction (e.g. PA b=0 for an AP main DWI)."
+    )
+    path_edit.setToolTip(path_tip)
+
+    browse_btn = qt.QPushButton("浏览…" if zh else "Browse…")
+    browse_btn.setObjectName("topupReversePhaseB0BrowseButton")
+    if hasattr(browse_btn, "setToolTip"):
+        browse_btn.setToolTip("选择反向相位编码 b=0 图像文件" if zh else "Choose a reverse phase-encoding b=0 image file")
+    if pointing is not None and hasattr(browse_btn, "setCursor"):
+        browse_btn.setCursor(pointing)
+
+    clear_btn = qt.QToolButton()
+    clear_btn.setObjectName("topupReversePhaseB0ClearButton")
+    clear_btn.setText("×")
+    if hasattr(clear_btn, "setFixedSize"):
+        clear_btn.setFixedSize(22, 22)
+    if hasattr(clear_btn, "setToolTip"):
+        clear_btn.setToolTip("清除反向 b=0 图像" if zh else "Clear reverse-PE b=0 image")
+    if pointing is not None and hasattr(clear_btn, "setCursor"):
+        clear_btn.setCursor(pointing)
+    clear_btn.setVisible(bool(initial_path))
+
+    input_row.addWidget(path_edit, 1)
+    input_row.addWidget(browse_btn)
+    input_row.addWidget(clear_btn)
+    container_layout.addLayout(input_row)
+    layout.addWidget(container)
+
+    state = {
+        "text": initial_path,
+        "enabled": not bool(topup_unavailable_reason(initial_path, batch_mode=False, zh=zh)),
+    }
+
+    def _read_text() -> str:
+        raw = getattr(path_edit, "text", None)
+        if callable(raw):
+            raw = raw()
+        if isinstance(raw, str):
+            return raw.strip()
+        return state["text"]
+
+    gear = row_controls.get("gear")
+    panel = row_controls.get("panel")
+    marker = row_controls.get("marker")
+    reason_label = row_controls.get("reason_label")
+    collapse_reason = row_controls.get("collapse_reason")
+    caption = "设置" if zh else "Settings"
+    err_color = "#FF7B72" if use_dark else "#C62828"
+
+    def _apply_topup_gate(new_text=None, *, auto_check: bool = True) -> None:
+        if isinstance(new_text, str):
+            state["text"] = new_text.strip()
+        else:
+            state["text"] = _read_text()
+        raw_path = state["text"]
+        clear_btn.setVisible(bool(raw_path))
+        reason = topup_unavailable_reason(raw_path, batch_mode=False, zh=zh)
+        was_enabled = state["enabled"]
+        now_enabled = not bool(reason)
+        state["enabled"] = now_enabled
+        if now_enabled:
+            box.setEnabled(True)
+            box.setToolTip("")
+            if auto_check and not was_enabled:
+                box.setChecked(True)
+            if gear is not None:
+                gear.setEnabled(True)
+                gear.setToolTip(caption)
+                gear.setIcon(_gear_icon(qt, use_dark=use_dark, disabled=False))
+            if marker is not None:
+                marker.setVisible(False)
+            if reason_label is not None:
+                if callable(collapse_reason):
+                    collapse_reason()
+                else:
+                    reason_label.setVisible(False)
+            path_edit.setStyleSheet("")
+        else:
+            box.setChecked(False)
+            box.setEnabled(False)
+            box.setToolTip(reason)
+            if gear is not None:
+                if hasattr(gear, "setChecked"):
+                    gear.setChecked(False)
+                gear.setEnabled(False)
+                gear.setToolTip(reason)
+                gear.setIcon(_gear_icon(qt, use_dark=use_dark, disabled=True))
+            if panel is not None:
+                panel.hide()
+            if marker is not None:
+                marker.setVisible(True)
+                marker.setToolTip(reason)
+                marker.setAccessibleName(reason)
+            if reason_label is not None:
+                reason_label.setText(reason)
+            path_edit.setStyleSheet(f"QLineEdit#topupReversePhaseB0LineEdit {{ border: 1px solid {err_color}; }}" if raw_path else "")
+        resize_popup()
+
+    def _on_browse(*_args) -> None:
+        file_dialog_cls = getattr(qt, "QFileDialog", None)
+        if file_dialog_cls is None or not hasattr(file_dialog_cls, "getOpenFileName"):
+            return
+        start_dir = ""
+        current_text = _read_text()
+        if current_text:
+            candidate = Path(current_text).expanduser()
+            parent = candidate if candidate.is_dir() else candidate.parent
+            if parent.is_dir():
+                start_dir = str(parent)
+        if not start_dir:
+            input_dir = str(getattr(getattr(owner, "_parameterNode", None), "inputDirectory", "") or "").strip()
+            if input_dir:
+                cand = Path(input_dir).expanduser()
+                parent = cand if cand.is_dir() else cand.parent
+                if parent.is_dir():
+                    start_dir = str(parent)
+        browse_title = "选择反向相位编码 b=0 图像" if zh else "Select reverse-PE b=0 image"
+        file_filter = (
+            "MRI / Diffusion images (*.nii *.nii.gz *.nrrd *.nhdr *.mif *.mif.gz *.mgh *.mgz);;All files (*)"
+        )
+        popup_state["browsing_file"] = True
+        chosen = ""
+        try:
+            result = file_dialog_cls.getOpenFileName(dialog, browse_title, start_dir, file_filter)
+            if isinstance(result, (tuple, list)):
+                chosen = str(result[0] or "")
+            else:
+                chosen = str(result or "")
+        finally:
+            popup_state["browsing_file"] = False
+            if not popup_state.get("finished"):
+                try:
+                    if hasattr(dialog, "isVisible") and not dialog.isVisible():
+                        dialog.show()
+                    if hasattr(dialog, "raise_"):
+                        dialog.raise_()
+                    if hasattr(dialog, "activateWindow"):
+                        dialog.activateWindow()
+                except Exception:
+                    pass
+        if chosen:
+            path_edit.setText(chosen)
+            if state["text"] != chosen.strip():
+                _apply_topup_gate(chosen, auto_check=True)
+
+    def _on_clear(*_args) -> None:
+        path_edit.setText("")
+        if state["text"] != "":
+            _apply_topup_gate("", auto_check=True)
+
+    text_sig = getattr(path_edit, "textChanged", None)
+    if text_sig is not None and hasattr(text_sig, "connect"):
+        text_sig.connect(lambda text: _apply_topup_gate(text, auto_check=True))
+    elif hasattr(path_edit, "connect"):
+        path_edit.connect("textChanged(QString)", lambda text: _apply_topup_gate(text, auto_check=True))
+
+    browse_sig = getattr(browse_btn, "clicked", None)
+    if browse_sig is not None and hasattr(browse_sig, "connect"):
+        browse_sig.connect(_on_browse)
+    elif hasattr(browse_btn, "connect"):
+        browse_btn.connect("clicked()", _on_browse)
+
+    clear_sig = getattr(clear_btn, "clicked", None)
+    if clear_sig is not None and hasattr(clear_sig, "connect"):
+        clear_sig.connect(_on_clear)
+    elif hasattr(clear_btn, "connect"):
+        clear_btn.connect("clicked()", _on_clear)
+
+    if initial_path and not state["enabled"]:
+        path_edit.setStyleSheet(f"QLineEdit#topupReversePhaseB0LineEdit {{ border: 1px solid {err_color}; }}")
+
+    staged["preprocessingReversePhaseB0"] = _read_text
+    return container
+
+
+def _add_batch_clear_reverse_b0_row(qt, owner, layout, initial_path, staged, zh, resize_popup, *, dark=None):
+    """When a stale single-subject reverse-PE path lingers in Batch mode, offer a one-click Clear button."""
+    from pathlib import Path
+    from shared.ui_styles import is_dark_mode
+
+    use_dark = is_dark_mode(getattr(owner, "_uiWidget", None)) if dark is None else bool(dark)
+    state = {"path": str(initial_path or "").strip()}
+    container = qt.QWidget()
+    container.setObjectName("topupBatchClearReverseContainer")
+    row = qt.QHBoxLayout(container)
+    if hasattr(row, "setContentsMargins"):
+        row.setContentsMargins(22, 0, 0, 2)
+    if hasattr(row, "setSpacing"):
+        row.setSpacing(6)
+    ink = "#FF7B72" if use_dark else "#C62828"
+    label = qt.QLabel(
+        f"残留单受试者反向 b=0：{Path(state['path']).name}" if zh
+        else f"Stale single-subject reverse-PE b=0: {Path(state['path']).name}"
+    )
+    label.setObjectName("topupBatchClearReverseLabel")
+    label.setToolTip(state["path"])
+    label.setStyleSheet(f"QLabel#topupBatchClearReverseLabel {{ color: {ink}; font-size: 11px; }}")
+    clear_btn = qt.QPushButton("清除" if zh else "Clear")
+    clear_btn.setObjectName("topupBatchClearReverseButton")
+    pointing = getattr(qt.Qt, "PointingHandCursor", None)
+    if pointing is not None and hasattr(clear_btn, "setCursor"):
+        clear_btn.setCursor(pointing)
+
+    def _clear(*_args) -> None:
+        state["path"] = ""
+        container.setVisible(False)
+        resize_popup()
+
+    sig = getattr(clear_btn, "clicked", None)
+    if sig is not None and hasattr(sig, "connect"):
+        sig.connect(_clear)
+    elif hasattr(clear_btn, "connect"):
+        clear_btn.connect("clicked()", _clear)
+    row.addWidget(label, 1)
+    row.addWidget(clear_btn)
+    layout.addWidget(container)
+    staged["preprocessingReversePhaseB0"] = lambda: state["path"]
+    return container
 
 
 def _install_outside_close_apply(qt, dialog, popup_state, apply_staged, changed=lambda: True, no_replay=False,
@@ -449,6 +822,8 @@ def _install_outside_close_apply(qt, dialog, popup_state, apply_staged, changed=
             def eventFilter(self, _watched, event):
                 try:
                     kind = event.type()
+                    if popup_state.get("browsing_file"):
+                        return False
                     if hide_type is not None and kind == hide_type:
                         if not dialog.isVisible():
                             on_hidden()
@@ -498,7 +873,7 @@ def _dialog_hidden(dialog) -> bool:
         return True
 
 
-def _run_popup(qt, dialog, is_popup, enders=None):
+def _run_popup(qt, dialog, is_popup, enders=None, popup_state=None):
     """Show the picker and wait for its result; returns the ``QDialog`` result code.
 
     Windows and Linux: ``exec_()``, as before. macOS: ``exec_()`` runs a native modal session, and Cocoa then drops
@@ -552,7 +927,11 @@ def _run_popup(qt, dialog, is_popup, enders=None):
         try:
             requit = qt.QTimer()
             requit.setInterval(100)
-            requit.timeout.connect(lambda: _end() if state["done"] or _dialog_hidden(dialog) else None)
+            requit.timeout.connect(
+                lambda: _end()
+                if state["done"] or (not (popup_state and popup_state.get("browsing_file")) and _dialog_hidden(dialog))
+                else None
+            )
         except Exception:
             requit = None
     try:
@@ -664,7 +1043,7 @@ def choose_algorithms(owner, family):
     except Exception:
         dark = None
 
-    popup_state = {"seen_visible": False, "finished": False}
+    popup_state = {"seen_visible": False, "finished": False, "browsing_file": False}
     popup_watch_ref = [None]
 
     def _stop_popup_watch() -> None:
@@ -756,18 +1135,23 @@ def choose_algorithms(owner, family):
 
     def resize_popup():
         anchor_visible = anchor is not None and anchor.isVisible()
-        screen = qt.QApplication.screenAt(anchor.mapToGlobal(qt.QPoint(0, 0))) if anchor_visible else None
-        if screen is None:
-            screen = _qt_val(qt.QApplication, "primaryScreen")
-        available = _qt_val(screen, "availableGeometry")
-        available_height = _qt_int(available, "height", 800)
+        available = None
+        try:
+            screen = qt.QApplication.screenAt(anchor.mapToGlobal(qt.QPoint(0, 0))) if anchor_visible else None
+            if screen is None:
+                screen = _qt_val(qt.QApplication, "primaryScreen")
+            available = _qt_val(screen, "availableGeometry") if screen is not None else None
+        except Exception:
+            available = None
+        available_height = _qt_int(available, "height", 800) if available is not None else 800
+        available_width = _qt_int(available, "width", 800) if available is not None else 800
         body_layout.invalidate()
         content_size = body_layout.sizeHint()
         content_height = _qt_int(content_size, "height", 0)
         max_body_height = min(480, max(80, available_height - 108))
         scroll.setFixedHeight(min(content_height, max_body_height))
         scroll.setMinimumWidth(min(_qt_int(content_size, "width", 0) + 20,
-                                   max(100, _qt_int(available, "width", 800) - 40)))
+                                   max(100, available_width - 40)))
         layout.activate()
         dialog.adjustSize()
         if anchor_visible:
@@ -775,6 +1159,7 @@ def choose_algorithms(owner, family):
 
     boxes = {}
     staged = {}
+    shared_editors = {}
     pointing_cursor = getattr(qt.Qt, "PointingHandCursor", None)
     # G3: where FSL is not offered, Eddy and Topup are disabled and unchecked; Brain mask and DWI denoising stay.
     fsl_missing = family == "preprocessing" and not _fsl_stages_offered()
@@ -783,6 +1168,13 @@ def choose_algorithms(owner, family):
         from shared.selected_setup import fsl_unavailable_text
 
         fsl_tip = fsl_unavailable_text(zh=zh)
+    is_batch = family == "preprocessing" and _is_batch_mode(owner)
+    topup_reverse_tip = ""
+    if family == "preprocessing" and not fsl_missing:
+        from shared.topup_parameters import topup_unavailable_reason
+
+        initial_reverse = str(getattr(owner._parameterNode, "preprocessingReversePhaseB0", "") or "").strip()
+        topup_reverse_tip = topup_unavailable_reason(initial_reverse, batch_mode=is_batch, zh=zh)
     # B2: algorithms that the chosen DATA cannot run. They stay in the stored selection (see Apply below).
     data_tips = {} if is_anatomical else _data_block_texts(owner, choices, zh)
     for value in choices:
@@ -790,8 +1182,9 @@ def choose_algorithms(owner, family):
         box = qt.QCheckBox(label)
         box.objectName = "algorithm_" + value
         fsl_blocked = fsl_missing and value in FSL_STAGES
-        blocked_tip = fsl_tip if fsl_blocked else data_tips.get(value, "")
-        blocked = fsl_blocked or value in data_tips
+        topup_blocked = family == "preprocessing" and value == "topup" and not fsl_blocked and bool(topup_reverse_tip)
+        blocked_tip = fsl_tip if fsl_blocked else (topup_reverse_tip if topup_blocked else data_tips.get(value, ""))
+        blocked = fsl_blocked or topup_blocked or value in data_tips
         box.checked = value in current and not blocked
         if blocked:
             box.setEnabled(False)
@@ -799,10 +1192,20 @@ def choose_algorithms(owner, family):
         if pointing_cursor is not None and hasattr(box, "setCursor"):
             box.setCursor(pointing_cursor)
         boxes[value] = box
-        _add_algorithm_row(
+        inline_topup_picker = family == "preprocessing" and value == "topup" and not fsl_missing and not is_batch
+        row_controls = _add_algorithm_row(
             qt, owner, body_layout, box, family, value, staged, zh, resize_popup,
             dark=dark, disabled=blocked, disabled_tooltip=blocked_tip,
+            create_marker=inline_topup_picker, shared_editors=shared_editors,
         )
+        if inline_topup_picker:
+            _add_topup_reverse_b0_controls(
+                qt, owner, dialog, body_layout, box, row_controls, staged, popup_state, zh, resize_popup, dark=dark,
+            )
+        elif family == "preprocessing" and value == "topup" and not fsl_missing and is_batch and initial_reverse:
+            _add_batch_clear_reverse_b0_row(
+                qt, owner, body_layout, initial_reverse, staged, zh, resize_popup, dark=dark,
+            )
 
     if fsl_missing and fsl_tip:
         avail_note = qt.QLabel(fsl_tip)
@@ -846,6 +1249,14 @@ def choose_algorithms(owner, family):
 
     def validate_and_accept():
         try:
+            if "preprocessingReversePhaseB0" in staged:
+                reverse_value = staged["preprocessingReversePhaseB0"]()
+                if reverse_value:
+                    from shared.topup_parameters import validate_reverse_phase_b0_path
+
+                    _, reverse_error = validate_reverse_phase_b0_path(reverse_value, batch_mode=is_batch, zh=zh)
+                    if reverse_error:
+                        raise ValueError(reverse_error)
             if "orchestrationIfwEchoTimeMs" in staged:
                 echo_time = staged["orchestrationIfwEchoTimeMs"]()
                 if echo_time:
@@ -916,6 +1327,8 @@ def choose_algorithms(owner, family):
                 if popup_state["finished"]:
                     _stop_popup_watch()
                     return
+                if popup_state.get("browsing_file"):
+                    return
                 res_fn = getattr(dialog, "result", None)
                 res = res_fn() if callable(res_fn) else 0
                 if isinstance(res, int) and res != 0:
@@ -941,7 +1354,7 @@ def choose_algorithms(owner, family):
     owner._algorithmPickerOpen = True
     owner._algorithmPickerCloser = lambda: None if popup_state["finished"] else _finish_popup(False)
     try:
-        accepted = _run_popup(qt, dialog, bool(popup_flag), wait_enders) == qt.QDialog.Accepted
+        accepted = _run_popup(qt, dialog, bool(popup_flag), wait_enders, popup_state=popup_state) == qt.QDialog.Accepted
     finally:
         owner._algorithmPickerOpen = False
         owner._algorithmPickerCloser = None

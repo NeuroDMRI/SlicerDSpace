@@ -65,13 +65,13 @@ class CompactUiTest(unittest.TestCase):
 
     def test_default_algorithms_match_run_defaults(self):
         node = SimpleNamespace(
-            orchestrationPreprocessingStages=",".join(RUN_DEFAULTS.get("preprocessing_stages", ("denoise", "eddy", "topup"))),
+            orchestrationPreprocessingStages=",".join(RUN_DEFAULTS.get("preprocessing_stages", ("denoise", "eddy"))),
             orchestrationMicrostructureStages=",".join(RUN_DEFAULTS["microstructure_stages"]),
             orchestrationTractographyBackend=RUN_DEFAULTS["tractography_backend"],
             orchestrationBundleBackend=RUN_DEFAULTS["bundle_backend"],
             orchestrationConnectomeMetrics=",".join(RUN_DEFAULTS.get("connectome_metrics", ("sift2",))),
         )
-        expected = {"targetPreprocessingCheckBox": "DWI denoising + Eddy + Topup",
+        expected = {"targetPreprocessingCheckBox": "DWI denoising + Eddy",
                     "targetMicrostructureCheckBox": "DTI",
                     "targetTractographyCheckBox": "MRtrix3 CSD / ACT",
                     "targetBundlesCheckBox": "WMQL",

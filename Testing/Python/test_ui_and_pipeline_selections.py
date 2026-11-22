@@ -242,9 +242,9 @@ class UiAndPipelineSelectionsTest(unittest.TestCase):
         # Default preprocessing picker selection leaves brain_mask unchecked
         self.assertEqual(PREPROCESSING, ("brain_mask", "denoise", "eddy", "topup"))
         self.assertEqual(FAMILIES["preprocessing"][2], "orchestrationPreprocessingStages")
-        self.assertEqual(DEFAULT_CHOICES["preprocessing"], "denoise,eddy,topup")
-        self.assertEqual(selected_algorithms(None, "preprocessing"), ("denoise", "eddy", "topup"))
-        self.assertEqual(compact_algorithm_labels(None)["targetPreprocessingCheckBox"], "DWI denoising + Eddy + Topup")
+        self.assertEqual(DEFAULT_CHOICES["preprocessing"], "denoise,eddy")
+        self.assertEqual(selected_algorithms(None, "preprocessing"), ("denoise", "eddy"))
+        self.assertEqual(compact_algorithm_labels(None)["targetPreprocessingCheckBox"], "DWI denoising + Eddy")
 
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)

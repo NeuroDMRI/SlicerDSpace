@@ -969,6 +969,63 @@ def install_results_panel(owner: Any) -> None:
     owner._selectingTreeItem = False
     results_box_layout.addWidget(files)
 
+    if hasattr(qt, "QSlider") and hasattr(qt, "QSpinBox"):
+        zh = str(getattr(owner, "_onboardingLanguage", "en") or "en").startswith("zh")
+        dwi_stepper = qt.QWidget()
+        dwi_stepper.setObjectName("resultsDwiStepper")
+        dwi_stepper_layout = qt.QHBoxLayout(dwi_stepper)
+        dwi_stepper_layout.setContentsMargins(0, 2, 0, 0)
+        dwi_stepper_layout.setSpacing(6)
+        dwi_label = qt.QLabel("体积" if zh else "Volume")
+        dwi_label.setObjectName("resultsDwiStepperLabel")
+        dwi_slider = qt.QSlider(qt.Qt.Horizontal)
+        dwi_slider.setObjectName("resultsDwiComponentSlider")
+        dwi_slider.setRange(1, 1)
+        if hasattr(dwi_slider, "setSingleStep"):
+            dwi_slider.setSingleStep(1)
+        if hasattr(dwi_slider, "setPageStep"):
+            dwi_slider.setPageStep(1)
+        if hasattr(dwi_slider, "setTracking"):
+            dwi_slider.setTracking(True)
+        dwi_slider.setMinimumWidth(60)
+        dwi_slider.setSizePolicy(qt.QSizePolicy.Expanding, qt.QSizePolicy.Fixed)
+        pointing = getattr(qt.Qt, "PointingHandCursor", None)
+        if pointing is not None and hasattr(dwi_slider, "setCursor"):
+            dwi_slider.setCursor(pointing)
+        dwi_slider.setEnabled(False)
+        dwi_spin = qt.QSpinBox()
+        dwi_spin.setObjectName("resultsDwiComponentSpinBox")
+        dwi_spin.setRange(1, 1)
+        dwi_spin.setSizePolicy(qt.QSizePolicy.Maximum, qt.QSizePolicy.Fixed)
+        dwi_spin.setEnabled(False)
+        dwi_info = qt.QLabel()
+        dwi_info.setObjectName("resultsDwiStepperInfo")
+        if hasattr(dwi_info, "setTextFormat") and hasattr(qt.Qt, "PlainText"):
+            dwi_info.setTextFormat(qt.Qt.PlainText)
+        dwi_info.setMinimumWidth(0)
+        dwi_info.setSizePolicy(qt.QSizePolicy.Maximum, qt.QSizePolicy.Preferred)
+        dwi_stepper_layout.addWidget(dwi_label)
+        dwi_stepper_layout.addWidget(dwi_slider, 1)
+        dwi_stepper_layout.addWidget(dwi_spin)
+        dwi_stepper_layout.addWidget(dwi_info)
+        dwi_stepper.hide()
+        results_box_layout.addWidget(dwi_stepper)
+
+        def _on_results_dwi_change(value) -> None:
+            handler = getattr(owner, "_on_results_dwi_component_changed", None)
+            if callable(handler):
+                handler(value)
+
+        dwi_slider.connect("valueChanged(int)", _on_results_dwi_change)
+        dwi_spin.connect("valueChanged(int)", _on_results_dwi_change)
+        owner._resultsDwiWidgets = {
+            "stepper": dwi_stepper,
+            "stepper_label": dwi_label,
+            "slider": dwi_slider,
+            "spin": dwi_spin,
+            "info": dwi_info,
+        }
+
     def _on_tree_item_clicked(item, column) -> None:
         if column == 1 and item.parent() is None:  # Batch 2 add-on: the Open folder button of a subject row
             _open_item_folder(owner, item)
@@ -2842,6 +2899,14 @@ def refresh_results_language(owner: Any) -> None:
         except Exception:
             pass
     _sync_hide_all_text(owner)
+    dwi_widgets = getattr(owner, "_resultsDwiWidgets", None) or {}
+    dwi_label = dwi_widgets.get("stepper_label")
+    if dwi_label is not None:
+        try:
+            zh_lang = str(getattr(owner, "_onboardingLanguage", "en") or "en").startswith("zh")
+            dwi_label.setText("体积" if zh_lang else "Volume")
+        except Exception:
+            pass
     tree = getattr(owner, "_runOutputFiles", None)
     if tree is None:
         return
@@ -3064,6 +3129,15 @@ def _refresh_output_visibility(owner, *, dark: Optional[bool] = None):
         else:
             tip = ("隐藏" if zh else "Hide") if visible else ("显示" if zh else "Show")
         item.setToolTip(1, tip)
+    refresh_stepper = getattr(owner, "_refresh_input_preview_stepper", None)
+    refresh_results = getattr(owner, "_refresh_results_dwi_stepper", None)
+    try:
+        if callable(refresh_stepper):
+            refresh_stepper()
+        elif callable(refresh_results):
+            refresh_results()
+    except Exception:
+        pass
 
 
 def _is_internal_cache_path(

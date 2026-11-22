@@ -224,7 +224,13 @@ def install_prepare_inputs_panel(owner: Any, configuration_layout: Any) -> None:
         mode.setCheckable(True)
         mode.setChecked(not batch)
         mode.setCursor(qt.Qt.PointingHandCursor)
-        mode.clicked.connect(lambda _checked=False, batch=batch: owner._update_parameter_node("batchMode", batch))
+        mode.clicked.connect(
+            lambda _checked=False, batch=batch: (
+                owner._set_batch_mode(batch)
+                if callable(getattr(owner, "_set_batch_mode", None))
+                else owner._update_parameter_node("batchMode", batch)
+            )
+        )
         mode_group.addButton(mode)
         mode_layout.addWidget(mode)
         fields["batch_mode" if batch else "single_mode"] = mode

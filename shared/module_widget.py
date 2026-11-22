@@ -441,7 +441,46 @@ class SharedWidgetMixin:
         self._update_parameter_node("preprocessingReadoutTime", float(value or 0.0))
 
     def _onReversePhaseB0Changed(self, value: str) -> None:
-        self._update_parameter_node("preprocessingReversePhaseB0", str(value or "").strip())
+        cleaned = str(value or "").strip()
+        self._update_parameter_node("preprocessingReversePhaseB0", cleaned)
+        node = getattr(self, "_parameterNode", None)
+        if node is None:
+            return
+        from shared.algorithm_selection import PREPROCESSING, algorithms
+        from shared.topup_parameters import topup_unavailable_reason
+
+        is_batch = bool(getattr(node, "batchMode", False))
+        if topup_unavailable_reason(cleaned, batch_mode=is_batch):
+            raw_stages = str(getattr(node, "orchestrationPreprocessingStages", "") or "").strip()
+            if raw_stages:
+                chosen = algorithms(raw_stages, PREPROCESSING, "denoise,eddy")
+                if "topup" in chosen:
+                    kept = [stage for stage in chosen if stage != "topup"]
+                    if kept:
+                        self._update_parameter_node("orchestrationPreprocessingStages", ",".join(kept))
+                    else:
+                        self._update_parameter_node("targetPreprocessing", False)
+
+    def _set_batch_mode(self, batch: bool) -> None:
+        node = getattr(self, "_parameterNode", None)
+        if not node:
+            return
+        is_batch = bool(batch)
+        cleared_reverse = False
+        with slicer.util.NodeModify(node):
+            node.batchMode = is_batch
+            if is_batch:
+                if str(getattr(node, "preprocessingReversePhaseB0", "") or "").strip():
+                    node.preprocessingReversePhaseB0 = ""
+                    cleared_reverse = True
+                from shared.topup_parameters import sanitize_unavailable_topup_stage
+
+                sanitize_unavailable_topup_stage(node, batch_mode=True)
+        if cleared_reverse:
+            self.appendLog(
+                "[Preprocessing] Cleared single-subject reverse-PE b=0 image when switching to Batch mode "
+                "(Topup requires a per-subject reverse-PE b=0 image)."
+            )
 
     def _sync_combo_data(self, widget, desired: str) -> None:
         if not widget:
@@ -688,6 +727,7 @@ class SharedWidgetMixin:
         self.addObserver(slicer.mrmlScene, slicer.mrmlScene.NodeRemovedEvent, self._queue_output_visibility_refresh)
         # b2-dwi: the View input volume stepper resets when its DWI preview node goes away.
         self.addObserver(slicer.mrmlScene, slicer.mrmlScene.NodeRemovedEvent, self._queue_input_preview_stepper_refresh)
+        self._observe_slice_composite_nodes()
 
         progress = getattr(self.ui, "statusProgressBar", None)
         if progress:
@@ -910,7 +950,15 @@ class SharedWidgetMixin:
             from shared.ui_prepare_inputs import restore_input_sources
 
             restore_input_sources(self, recent)
+            from shared.topup_parameters import sanitize_unavailable_topup_stage
+
+            with slicer.util.NodeModify(node):
+                sanitize_unavailable_topup_stage(node)
         else:
+            from shared.topup_parameters import sanitize_unavailable_topup_stage
+
+            with slicer.util.NodeModify(node):
+                sanitize_unavailable_topup_stage(node)
             self._save_common_user_settings()
 
     def _save_common_user_settings(self) -> None:
@@ -2008,10 +2056,196 @@ class SharedWidgetMixin:
             return None
         return node
 
+    def _observe_slice_composite_nodes(self) -> None:
+        """Observe slice viewer layer changes so the Results 4D DWI volume slider tracks the active slice volume."""
+        try:
+            composites = list(slicer.util.getNodesByClass("vtkMRMLSliceCompositeNode"))
+        except Exception:
+            return
+        for composite in composites:
+            if composite is None:
+                continue
+            try:
+                if not self.hasObserver(composite, vtk.vtkCommand.ModifiedEvent, self._queue_input_preview_stepper_refresh):
+                    self.addObserver(composite, vtk.vtkCommand.ModifiedEvent, self._queue_input_preview_stepper_refresh)
+            except Exception:
+                continue
+
+    def _active_results_dwi_node(self):
+        """Return the active Results-loaded 4D DWI node shown in the slice views, or None."""
+        from shared.input_preview import PREVIEW_ATTRIBUTE
+
+        try:
+            composites = list(slicer.util.getNodesByClass("vtkMRMLSliceCompositeNode"))
+        except Exception:
+            return None
+        if not composites:
+            return None
+
+        def _priority(comp) -> int:
+            try:
+                name = str(comp.GetLayoutName() or "") if hasattr(comp, "GetLayoutName") else ""
+            except Exception:
+                name = ""
+            return 0 if name == "Red" else 1
+
+        for composite in sorted(composites, key=_priority):
+            for getter_name in ("GetBackgroundVolumeID", "GetForegroundVolumeID"):
+                getter = getattr(composite, getter_name, None)
+                if not callable(getter):
+                    continue
+                try:
+                    vol_id = getter()
+                except Exception:
+                    vol_id = None
+                if not vol_id:
+                    continue
+                try:
+                    node = slicer.mrmlScene.GetNodeByID(vol_id)
+                except Exception:
+                    node = None
+                if node is None:
+                    continue
+                if node.GetAttribute(PREVIEW_ATTRIBUTE) == "dwi":
+                    continue
+                if not node.GetAttribute("SlicerDDSurfer.Product"):
+                    continue
+                if not hasattr(node, "GetNumberOfGradients"):
+                    continue
+                try:
+                    if int(node.GetNumberOfGradients() or 0) < 1:
+                        continue
+                except Exception:
+                    continue
+                display = node.GetDisplayNode() if hasattr(node, "GetDisplayNode") else None
+                if display is None or not hasattr(display, "GetDiffusionComponent"):
+                    continue
+                return node
+        return None
+
+    def _refresh_results_dwi_stepper(self) -> bool:
+        """Show and sync the Results Volume slider when a Results-loaded 4D DWI is displayed in slice views."""
+        widgets = getattr(self, "_resultsDwiWidgets", None) or {}
+        spin = widgets.get("spin")
+        slider = widgets.get("slider")
+        if spin is None:
+            return False
+        node = self._active_results_dwi_node()
+        display = node.GetDisplayNode() if node is not None else None
+        if display is not None and not hasattr(display, "GetDiffusionComponent"):
+            display = None
+        observed = getattr(self, "_resultsDwiObservedDisplay", None)
+        if observed is not None and observed is not display:
+            try:
+                self.removeObserver(observed, vtk.vtkCommand.ModifiedEvent, self._on_results_dwi_display_modified)
+            except Exception:
+                pass
+            self._resultsDwiObservedDisplay = None
+        stepper = widgets.get("stepper")
+        was_visible = None
+        if stepper is not None:
+            vis = getattr(stepper, "isVisible", None)
+            was_visible = bool(vis()) if callable(vis) else bool(getattr(stepper, "visible", False))
+        if display is None:
+            self._resultsDwiNodeId = None
+            spin.setEnabled(False)
+            if slider is not None:
+                slider.setEnabled(False)
+            if stepper is not None:
+                stepper.setVisible(False)
+            if was_visible is True:
+                fit = getattr(self, "_queueCompactFit", None)
+                if callable(fit):
+                    fit()
+            return False
+        self._resultsDwiNodeId = node.GetID() if hasattr(node, "GetID") else None
+        if getattr(self, "_resultsDwiObservedDisplay", None) is not display:
+            self.addObserver(display, vtk.vtkCommand.ModifiedEvent, self._on_results_dwi_display_modified)
+            self._resultsDwiObservedDisplay = display
+        count = max(int(node.GetNumberOfGradients()), 1)
+        component = min(max(int(display.GetDiffusionComponent()), 0), count - 1)
+        for control in (spin, slider):
+            if control is None:
+                continue
+            blocked = control.blockSignals(True)
+            try:
+                control.setRange(1, count)
+                control.setValue(component + 1)
+            finally:
+                control.blockSignals(blocked)
+        info = widgets.get("info")
+        if info is not None:
+            info.setText(f"/ {count}  (b = {float(node.GetBValue(component)):g})")
+        zh = str(getattr(self, "_onboardingLanguage", "en") or "en").startswith("zh")
+        label = widgets.get("stepper_label")
+        if label is not None:
+            label.setText("体积" if zh else "Volume")
+        node_name = ""
+        if hasattr(node, "GetName"):
+            try:
+                node_name = str(node.GetName() or "").strip()
+            except Exception:
+                node_name = ""
+        base_tip = (
+            "拖动滑块或调整编号切换 DWI 体积（从 1 开始计数）。Volumes 模块中的 DWI Component 显示同一体积，但从 0 开始计数。"
+            if zh
+            else "Drag the slider or step through DWI volumes (counted from 1). The Volumes module's DWI Component "
+                 "shows the same volume, counted from 0."
+        )
+        tip = (f"{node_name}：{base_tip}" if zh else f"{node_name}: {base_tip}") if node_name else base_tip
+        for control in (label, slider, spin):
+            if control is not None and hasattr(control, "setToolTip"):
+                control.setToolTip(tip)
+        spin.setEnabled(True)
+        if slider is not None:
+            slider.setEnabled(True)
+        if stepper is not None:
+            stepper.setVisible(True)
+        if was_visible is False:
+            fit = getattr(self, "_queueCompactFit", None)
+            if callable(fit):
+                fit()
+        return True
+
+    def _on_results_dwi_component_changed(self, value) -> None:
+        node = self._active_results_dwi_node()
+        if node is None:
+            node_id = getattr(self, "_resultsDwiNodeId", None)
+            if node_id:
+                try:
+                    node = slicer.mrmlScene.GetNodeByID(node_id)
+                except Exception:
+                    node = None
+        display = node.GetDisplayNode() if node is not None else None
+        if display is None or not hasattr(display, "SetDiffusionComponent"):
+            return
+        desired = int(value)
+        widgets = getattr(self, "_resultsDwiWidgets", None) or {}
+        for key in ("spin", "slider"):
+            control = widgets.get(key)
+            if control is None:
+                continue
+            current = control.value() if callable(getattr(control, "value", None)) else getattr(control, "value", None)
+            if current != desired:
+                blocked = control.blockSignals(True)
+                try:
+                    control.setValue(desired)
+                finally:
+                    control.blockSignals(blocked)
+        component = desired - 1
+        if int(display.GetDiffusionComponent()) != component:
+            display.SetDiffusionComponent(component)
+
+    def _on_results_dwi_display_modified(self, caller=None, event=None) -> None:
+        self._refresh_results_dwi_stepper()
+
     def _refresh_input_preview_stepper(self) -> None:
         """Show and enable the stepper only while the full-DWI preview exists; follow its display node."""
+        refresh_results = getattr(self, "_refresh_results_dwi_stepper", None)
+        results_active = bool(refresh_results()) if callable(refresh_results) else False
         widgets = getattr(self, "_inputPreviewWidgets", None) or {}
         spin = widgets.get("spin")
+        slider = widgets.get("slider")
         if spin is None:
             return
         node = self._input_preview_dwi_node()
@@ -2029,6 +2263,8 @@ class SharedWidgetMixin:
         if display is None:
             self._inputPreviewDwiNodeId = None
             spin.setEnabled(False)
+            if slider is not None:
+                slider.setEnabled(False)
             if stepper is not None:
                 stepper.setVisible(False)
             return
@@ -2038,18 +2274,24 @@ class SharedWidgetMixin:
             self._inputPreviewObservedDisplay = display
         count = max(int(node.GetNumberOfGradients()), 1)
         component = min(max(int(display.GetDiffusionComponent()), 0), count - 1)
-        blocked = spin.blockSignals(True)
-        try:
-            spin.setRange(1, count)
-            spin.setValue(component + 1)
-        finally:
-            spin.blockSignals(blocked)
+        for control in (spin, slider):
+            if control is None:
+                continue
+            blocked = control.blockSignals(True)
+            try:
+                control.setRange(1, count)
+                control.setValue(component + 1)
+            finally:
+                control.blockSignals(blocked)
         info = widgets.get("info")
         if info is not None:
             info.setText(f"/ {count}  (b = {float(node.GetBValue(component)):g})")
         # b2 inputs-help item 3: Batch mode hides the stepper and keeps it hidden on every refresh.
-        shown = not self._input_preview_is_batch()
+        # Also hide the Inputs stepper while the Results DWI slider is actively controlling a Results 4D DWI.
+        shown = (not self._input_preview_is_batch()) and (not results_active)
         spin.setEnabled(shown)
+        if slider is not None:
+            slider.setEnabled(shown)
         if stepper is not None:
             stepper.setVisible(shown)
 
@@ -2058,7 +2300,20 @@ class SharedWidgetMixin:
         display = node.GetDisplayNode() if node is not None else None
         if display is None or not hasattr(display, "SetDiffusionComponent"):
             return
-        component = int(value) - 1  # the stepper counts from 1; the display node from 0
+        desired = int(value)
+        widgets = getattr(self, "_inputPreviewWidgets", None) or {}
+        for key in ("spin", "slider"):
+            control = widgets.get(key)
+            if control is None:
+                continue
+            current = control.value() if callable(getattr(control, "value", None)) else getattr(control, "value", None)
+            if current != desired:
+                blocked = control.blockSignals(True)
+                try:
+                    control.setValue(desired)
+                finally:
+                    control.blockSignals(blocked)
+        component = desired - 1  # the stepper counts from 1; the display node from 0
         if int(display.GetDiffusionComponent()) != component:
             display.SetDiffusionComponent(component)
 
@@ -3212,6 +3467,7 @@ class SharedWidgetMixin:
         qt.QTimer.singleShot(0, refresh)
 
     def onSceneEndClose(self, caller, event) -> None:
+        self._observe_slice_composite_nodes()
         self._queue_output_visibility_refresh()
         self._queue_input_preview_stepper_refresh()
         if self.parent.isEntered:
@@ -4963,17 +5219,40 @@ class SharedWidgetMixin:
         self._startBackgroundPipeline(common_run_kwargs, external_paths, selected)
 
     def _show_topup_error(self, validation: TopupValidation) -> None:
+        from shared.algorithm_selection import PREPROCESSING, algorithms
+
+        node = getattr(self, "_parameterNode", None)
+        raw_stages = str(getattr(node, "orchestrationPreprocessingStages", "") or "").strip() if node is not None else ""
+        try:
+            chosen = algorithms(raw_stages, PREPROCESSING, "denoise,eddy")
+        except ValueError:
+            chosen = ("denoise", "eddy")
+        has_eddy = "eddy" in chosen
+        has_topup = "topup" in chosen
+        if has_eddy and not has_topup:
+            title = "Eddy / distortion-correction settings need attention"
+            what = "The run was not started because an Eddy preprocessing setting is missing or invalid."
+            next_step = (
+                "Open 2. Analysis > Preprocessing > … > Eddy > Settings, "
+                "and set or correct the invalid value (for example Phase-encoding direction)."
+            )
+            details = "dwifslpreproc options: -pe_dir, -readout_time, -rpe_none"
+        else:
+            title = "Distortion-correction settings need attention"
+            what = "The run was not started because an Eddy / Topup preprocessing setting is missing or invalid."
+            next_step = (
+                "Open 2. Analysis > Preprocessing > … and check the Eddy / Topup settings "
+                "(Phase-encoding direction, Total readout time, and Reverse-PE b=0 image)."
+            )
+            details = "dwifslpreproc options: -pe_dir, -readout_time, -rpe_pair -se_epi"
         show_actionable_error_dialog(
             parent=self.parent,
-            title="Distortion-correction settings need attention",
-            what="The run was not started because a topup setting is invalid.",
+            title=title,
+            what=what,
             why="\n".join(validation.errors),
-            next_step=(
-                "Open Analysis > Preprocessing > … > topup > Settings, "
-                "and correct or clear the invalid value."
-            ),
+            next_step=next_step,
             auto_fix="Not available; nothing was written.",
-            details="dwifslpreproc options: -pe_dir, -readout_time, -rpe_pair -se_epi",
+            details=details,
         )
 
     def _show_partial_run_notice(

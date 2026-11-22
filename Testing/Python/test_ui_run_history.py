@@ -18,7 +18,7 @@ from shared.result_scene import review_state_text
 WIDGET_KINDS = (
     "QLabel", "QPushButton", "QComboBox", "QToolButton", "QTableWidget", "QSplitter", "QTreeWidget", "QWidget",
     "QHBoxLayout", "QVBoxLayout", "QFormLayout", "QGridLayout", "QDialog", "QDialogButtonBox", "QCheckBox",
-    "QSpinBox", "QDoubleSpinBox", "QScrollArea", "QLineEdit",
+    "QSpinBox", "QDoubleSpinBox", "QSlider", "QScrollArea", "QLineEdit",
 )
 
 
@@ -33,9 +33,12 @@ def fake_qt() -> mock.MagicMock:
             widget = mock.MagicMock(name=kind)
             widget.kind = kind
             widget.ctor_args = args
-            if kind in {"QSpinBox", "QDoubleSpinBox"}:
+            if kind in {"QSpinBox", "QDoubleSpinBox", "QSlider"}:
                 widget.value = 0
                 widget.setValue.side_effect = lambda v, w=widget: setattr(w, "value", v)
+            elif kind == "QLineEdit":
+                widget.text = str(args[0]) if args else ""
+                widget.setText.side_effect = lambda v, w=widget: setattr(w, "text", str(v))
             elif kind == "QCheckBox":
                 widget.checked = False
                 widget.setChecked.side_effect = lambda v, w=widget: setattr(w, "checked", bool(v))
@@ -638,8 +641,9 @@ class AlgorithmDialogTest(unittest.TestCase):
 
         style_popup_mock.assert_called()
         combo_editors = [w for w in qt.created if getattr(w, "kind", None) == "QComboBox"]
-        self.assertEqual(len(combo_editors), 1)
-        self.assertIn(mock.call(combo_editors[0], dark=True), style_popup_mock.call_args_list)
+        self.assertEqual(len(combo_editors), 2)
+        for combo_editor in combo_editors:
+            self.assertIn(mock.call(combo_editor, dark=True), style_popup_mock.call_args_list)
         scroll = by_name(qt, "algorithmPickerScrollArea")
         self.assertTrue(any(
             call[0] == "setStyleSheet" and call[1] == ("QScrollArea#algorithmPickerScrollArea { background: transparent; }",)

@@ -375,7 +375,7 @@ class G3SelectionTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 picker._apply_family_selection_to_node(n, "preprocessing", ["eddy", "topup"])
         with mock.patch("shared.selected_setup.fsl_preprocessing_offered", return_value=True):
-            self.assertEqual(picker.selected_algorithms(node(""), "preprocessing"), ("denoise", "eddy", "topup"))
+            self.assertEqual(picker.selected_algorithms(node(""), "preprocessing"), ("denoise", "eddy"))
 
     def _run_popup(self, offered, stages="denoise,eddy,topup", lang="en", ui=None, node_obj=None):
         from Testing.Python.test_ui_run_history import fake_qt
@@ -475,9 +475,21 @@ class G3SelectionTest(unittest.TestCase):
 
     def test_g3_popup_keeps_all_boxes_enabled_where_fsl_is_offered(self):
         boxes = self._run_popup(True)
-        for name in ("algorithm_eddy", "algorithm_topup", "algorithm_denoise"):
+        for name in ("algorithm_eddy", "algorithm_denoise"):
             boxes[name].setEnabled.assert_not_called()
         self.assertTrue(boxes["algorithm_eddy"].checked)
+        # Topup stays disabled until a valid reverse-PE b=0 file is provided.
+        boxes["algorithm_topup"].setEnabled.assert_called_with(False)
+        self.assertFalse(boxes["algorithm_topup"].checked)
+        with tempfile.TemporaryDirectory() as tmp:
+            rev = Path(tmp) / "rev_b0.nii.gz"
+            rev.write_bytes(b"\x00")
+            n = node("denoise,eddy,topup")
+            n.preprocessingReversePhaseB0 = str(rev)
+            boxes_with_rpe = self._run_popup(True, node_obj=n)
+            for name in ("algorithm_eddy", "algorithm_topup", "algorithm_denoise"):
+                boxes_with_rpe[name].setEnabled.assert_not_called()
+            self.assertTrue(boxes_with_rpe["algorithm_topup"].checked)
 
     def test_g3_accept_with_brain_mask_and_denoise_turns_the_main_box_on_without_fsl(self):
         """Accept keeps the main checkbox enabled, so the dark-blue check shows (reads isEnabled of the main box)."""

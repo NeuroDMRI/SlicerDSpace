@@ -224,26 +224,65 @@ ALGORITHM_SETTINGS = {
 
 
 def _unavailable_marker(qt, owner, algorithm, reason, dark=None):
-    """B2: a small "?" at the right end of a row whose algorithm this data or system cannot run; hover shows why."""
+    """B2: a small "?" at the right end of a row whose algorithm this data or system cannot run.
+
+    b2 ui2: a real button with the look of the Prepare Inputs "?" (``help_marker_style``). The keyboard reaches it,
+    a hover shows the reason as a tooltip, and a click shows the same reason under the row (``_unavailable_reason``).
+    It is a sibling of the row's check box, so it works while that box is disabled.
+    """
+    from shared.ui_help_button import BUTTON_SIZE, help_marker_style
     from shared.ui_styles import is_dark_mode
 
     use_dark = is_dark_mode(getattr(owner, "_uiWidget", None)) if dark is None else bool(dark)
-    ink = "#7D8590" if use_dark else "#64748B"
     name = "algorithmUnavailable_" + algorithm
-    marker = qt.QLabel("?")
+    marker = qt.QToolButton()
     marker.setObjectName(name)
+    marker.setText("?")
+    if hasattr(marker, "setAutoRaise"):
+        marker.setAutoRaise(True)
     marker.setToolTip(reason)
     marker.setAccessibleName(reason)
-    marker.setFixedSize(18, 18)
-    if hasattr(qt.Qt, "NoFocus"):
-        marker.setFocusPolicy(qt.Qt.NoFocus)
-    if hasattr(qt.Qt, "AlignCenter") and hasattr(marker, "setAlignment"):
-        marker.setAlignment(qt.Qt.AlignCenter)
-    marker.setStyleSheet(
-        f"QLabel#{name} {{ color: {ink}; border: 1px solid {ink}; border-radius: 9px; "
-        "font-size: 11px; font-weight: 600; background: transparent; }"
-    )
+    marker.setFixedSize(BUTTON_SIZE, BUTTON_SIZE)
+    pointing = getattr(qt.Qt, "PointingHandCursor", None)
+    if pointing is not None and hasattr(marker, "setCursor"):
+        marker.setCursor(pointing)
+    strong = getattr(qt.Qt, "StrongFocus", None)
+    if strong is not None:
+        marker.setFocusPolicy(strong)
+    marker.setStyleSheet(help_marker_style(use_dark, name=name))
     return marker
+
+
+def _unavailable_reason(qt, owner, algorithm, reason, marker, resize_popup, dark=None):
+    """b2 ui2: the reason of a blocked row as a word-wrapped line under the row, hidden until the "?" is clicked.
+
+    A click on the "?" shows it, a second click hides it, and the popup resizes each time. It is not a second
+    ``Qt.Popup``: a nested popup would close the picker's own popup. The reason is not a staged value, so reading it
+    does not count as a change and a look-only outside click still commits nothing.
+    """
+    from shared.ui_styles import is_dark_mode
+
+    use_dark = is_dark_mode(getattr(owner, "_uiWidget", None)) if dark is None else bool(dark)
+    ink = "#9AA4AF" if use_dark else "#55636F"
+    name = "algorithmUnavailableReason_" + algorithm
+    label = qt.QLabel(reason)
+    label.setObjectName(name)
+    label.wordWrap = True
+    if hasattr(label, "setTextFormat") and hasattr(qt.Qt, "PlainText"):
+        label.setTextFormat(qt.Qt.PlainText)
+    if hasattr(label, "setMaximumWidth"):
+        label.setMaximumWidth(360)
+    label.setStyleSheet(f"QLabel#{name} {{ color: {ink}; font-size: 11px; padding: 0px 0px 2px 22px; }}")
+    label.setVisible(False)
+    shown = {"value": False}
+
+    def toggle(*_args) -> None:
+        shown["value"] = not shown["value"]
+        label.setVisible(shown["value"])
+        resize_popup()
+
+    marker.clicked.connect(toggle)
+    return label
 
 
 def _data_block_texts(owner, choices, zh) -> dict:
@@ -277,6 +316,7 @@ def _add_algorithm_row(qt, owner, layout, box, family, algorithm, staged, zh, re
         row.addWidget(box, 1)
         row.addWidget(marker)
         layout.addLayout(row)
+        layout.addWidget(_unavailable_reason(qt, owner, algorithm, disabled_tooltip, marker, resize_popup, dark))
         return
     row = qt.QHBoxLayout()
     row.addWidget(box, 1)
@@ -311,6 +351,8 @@ def _add_algorithm_row(qt, owner, layout, box, family, algorithm, staged, zh, re
     if marker is not None:
         row.addWidget(marker)
     layout.addLayout(row)
+    if marker is not None:
+        layout.addWidget(_unavailable_reason(qt, owner, algorithm, disabled_tooltip, marker, resize_popup, dark))
     panel = qt.QWidget()
     form = qt.QFormLayout(panel)
     form.setRowWrapPolicy(qt.QFormLayout.WrapLongRows)

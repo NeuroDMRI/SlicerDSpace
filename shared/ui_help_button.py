@@ -44,13 +44,15 @@ def help_text(owner: Any, key: str) -> str:
     return onboarding_text(_language(owner), "help_" + key)
 
 
-def help_marker_style(dark: bool) -> str:
-    ink, hover = _INK[dark], _INK_HOVER[dark]
+def help_marker_style(dark: bool, name: str = BUTTON_NAME) -> str:
+    """The "?" look for the ``QToolButton`` whose object name is ``name`` (the algorithm picker keeps its own names)."""
+
+    ink, hover = _INK[bool(dark)], _INK_HOVER[bool(dark)]
     return (
-        f"QToolButton#{BUTTON_NAME} {{ color: {ink}; border: 1px solid {ink}; border-radius: 9px; "
+        f"QToolButton#{name} {{ color: {ink}; border: 1px solid {ink}; border-radius: 9px; "
         "font-size: 11px; font-weight: 600; background: transparent; padding: 0px; }"
-        f"QToolButton#{BUTTON_NAME}:hover {{ color: {hover}; border-color: {hover}; }}"
-        f"QToolButton#{BUTTON_NAME}:focus {{ color: {hover}; border: 2px solid {hover}; }}"
+        f"QToolButton#{name}:hover {{ color: {hover}; border-color: {hover}; }}"
+        f"QToolButton#{name}:focus {{ color: {hover}; border: 2px solid {hover}; }}"
     )
 
 

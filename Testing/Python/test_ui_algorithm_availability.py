@@ -332,7 +332,9 @@ class FormatTabTest(TempCase):
 class PopupBase(TempCase):
     """Run ``choose_algorithms`` with fake Qt. ``chosen`` is the set of enabled boxes the user ticks."""
 
-    def popup(self, owner, family="microstructure", *, chosen=None, blocks=None, fsl_offered=True, ui=None):
+    def popup(self, owner, family="microstructure", *, chosen=None, blocks=None, fsl_offered=True, ui=None,
+              during=None):
+        """``during(qt, dialog)`` runs while the popup is open (inside ``exec_``), as the user would act."""
         qt = fake_qt()
         if ui is not None:
             owner.ui = ui
@@ -344,6 +346,10 @@ class PopupBase(TempCase):
             dialog = dialog_factory(*args, **kwargs)
 
             def fake_exec():
+                if during is not None:
+                    outcome = during(qt, dialog)
+                    if outcome is not None:
+                        return outcome
                 if chosen is None:
                     return 0
                 for widget in qt.created:
@@ -396,7 +402,8 @@ class PopupTest(PopupBase):
         self.assertIn(marker.kind, {"QToolButton", "QLabel"})
         marker.setToolTip.assert_called_with(reason)
         marker.setFixedSize.assert_called_with(18, 18)
-        marker.setFocusPolicy.assert_called_with(self.qt.Qt.NoFocus)
+        # b2 ui2: the marker is a real button the keyboard reaches (it was a NoFocus QLabel).
+        marker.setFocusPolicy.assert_called_with(self.qt.Qt.StrongFocus)
 
     def test_b2_dti_stays_enabled_and_has_no_marker(self):
         self.popup(self.single_shell_owner())
@@ -503,6 +510,164 @@ class PopupTest(PopupBase):
         blocks = {"noddi": availability.Block("noddi", "noddi_needs_two_shells", {"count": 1, "shells": [1000.0]})}
         self.popup(owner, "tractography", blocks=blocks)
         self.assertEqual(self.markers(), {})
+
+
+class ReasonOnClickTest(PopupBase):
+    """b2 ui2: the "?" of a blocked row is a real button; a click shows the reason under the row and hides it again."""
+
+    def single_shell_owner(self, stages="dti,noddi"):
+        subject = write_subject(self.root / "s1", SINGLE_SHELL)
+        return make_owner(subject, stages=stages)
+
+    def reasons(self):
+        return {object_name(w): w for w in self.qt.created
+                if object_name(w).startswith("algorithmUnavailableReason_")}
+
+    @staticmethod
+    def click(marker):
+        marker.clicked.connect.call_args.args[0](False)
+
+    def test_b2_ui2_the_marker_is_a_keyboard_reachable_help_button_with_the_help_marker_look(self):
+        from shared.ui_help_button import help_marker_style
+
+        owner = self.single_shell_owner()
+        self.popup(owner)
+        reason = availability.current_data_blocks(owner)["noddi"].text("en")
+        marker = self.markers()["algorithmUnavailable_noddi"]
+        self.assertEqual(marker.kind, "QToolButton")
+        marker.setText.assert_called_with("?")
+        marker.setToolTip.assert_called_with(reason)
+        marker.setAccessibleName.assert_called_with(reason)
+        marker.setCursor.assert_called_with(self.qt.Qt.PointingHandCursor)
+        marker.setFocusPolicy.assert_called_with(self.qt.Qt.StrongFocus)
+        self.assertIn(marker.setStyleSheet.call_args.args[0],
+                      {help_marker_style(dark, name="algorithmUnavailable_noddi") for dark in (True, False)})
+        self.assertIn("QToolButton#algorithmUnavailable_noddi", marker.setStyleSheet.call_args.args[0])
+        marker.clicked.connect.assert_called_once()
+
+    def test_b2_ui2_the_reason_label_is_built_hidden_word_wrapped_and_placed_under_the_row(self):
+        owner = self.single_shell_owner()
+        self.popup(owner)
+        reason = availability.current_data_blocks(owner)["noddi"].text("en")
+        label = self.reasons()["algorithmUnavailableReason_noddi"]
+        self.assertEqual(label.kind, "QLabel")
+        self.assertEqual(label.ctor_args, (reason,))
+        self.assertIs(label.wordWrap, True)
+        label.setVisible.assert_called_once_with(False)
+        marker = self.markers()["algorithmUnavailable_noddi"]
+        row = next(w for w in self.qt.created if w.kind == "QHBoxLayout"
+                   and any(c[0] == "addWidget" and c[1][0] is marker for c in w.method_calls))
+        body = next(w for w in self.qt.created if w.kind == "QVBoxLayout"
+                    and any(c[0] == "addLayout" and c[1][0] is row for c in w.method_calls))
+        order = [c[1][0] for c in body.method_calls if c[0] in ("addLayout", "addWidget")]
+        self.assertIs(order[order.index(row) + 1], label)
+        self.assertNotIn(self.boxes["algorithm_noddi"], marker.ctor_args)  # not inside the disabled check box
+
+    def test_b2_ui2_a_click_shows_the_reason_a_second_click_hides_it_and_the_popup_resizes(self):
+        owner = self.single_shell_owner()
+        seen = {}
+
+        def user(qt, dialog):
+            marker = self.markers_of(qt)["algorithmUnavailable_noddi"]
+            label = next(w for w in qt.created if object_name(w) == "algorithmUnavailableReason_noddi")
+            sizes = dialog.adjustSize.call_count
+            self.click(marker)
+            seen["first"] = (label.setVisible.call_args, dialog.adjustSize.call_count - sizes)
+            sizes = dialog.adjustSize.call_count
+            self.click(marker)
+            seen["second"] = (label.setVisible.call_args, dialog.adjustSize.call_count - sizes)
+            return 0
+
+        self.popup(owner, during=user)
+        self.assertEqual(seen, {"first": (mock.call(True), 1), "second": (mock.call(False), 1)})
+
+    def test_b2_ui2_a_look_only_outside_click_after_reading_the_reason_commits_nothing(self):
+        owner = self.single_shell_owner("dti,noddi")
+        seen = {}
+
+        class FakeQObject:
+            pass
+
+        def user(qt, dialog):
+            self.click(self.markers_of(qt)["algorithmUnavailable_noddi"])
+            close = SimpleNamespace(type=lambda: 19, ignore=mock.MagicMock())
+            flt = dialog.installEventFilter.call_args.args[0]
+            seen["applied"] = flt.eventFilter(dialog, close)
+            return 0
+
+        def popup_with_close(*args, **kwargs):
+            return self.popup(*args, **kwargs)
+
+        with mock.patch.object(picker, "_apply_family_selection_to_node") as commit:
+            original = fake_qt
+
+            def fake_qt_with_close():
+                qt = original()
+                qt.QObject = FakeQObject
+                qt.QEvent.Close = 19
+                return qt
+
+            with mock.patch(__name__ + ".fake_qt", fake_qt_with_close):
+                self.assertFalse(popup_with_close(owner, during=user))
+        self.assertEqual(seen, {"applied": False})
+        commit.assert_not_called()
+        self.assertEqual(owner._parameterNode.orchestrationMicrostructureStages, "dti,noddi")
+
+    def test_b2_ui2_a_row_with_a_settings_gear_puts_the_reason_between_the_row_and_the_settings_panel(self):
+        dki_ui = SimpleNamespace(
+            orchestrationDkiFitMethodComboBox=SimpleNamespace(toolTip="fit tip"),
+            orchestrationDkiFitMethodLabel=SimpleNamespace(text="Fit method"))
+        owner = make_owner(stages="dti,dki")
+        owner._parameterNode.orchestrationDkiFitMethod = "MKCURVE"
+        block = availability.Block("dki", "dki_acquisition", {"detail": "too few volumes"})
+        seen = {}
+
+        def user(qt, dialog):
+            self.click(self.markers_of(qt)["algorithmUnavailable_dki"])
+            seen["shown"] = next(w for w in qt.created
+                                 if object_name(w) == "algorithmUnavailableReason_dki").setVisible.call_args
+            return 0
+
+        self.popup(owner, blocks={"dki": block}, ui=dki_ui, during=user)
+        self.assertEqual(seen, {"shown": mock.call(True)})
+        label = self.reasons()["algorithmUnavailableReason_dki"]
+        self.assertEqual(label.ctor_args, (block.text("en"),))
+        marker = self.markers()["algorithmUnavailable_dki"]
+        row = next(w for w in self.qt.created if w.kind == "QHBoxLayout"
+                   and any(c[0] == "addWidget" and c[1][0] is marker for c in w.method_calls))
+        body = next(w for w in self.qt.created if w.kind == "QVBoxLayout"
+                    and any(c[0] == "addLayout" and c[1][0] is row for c in w.method_calls))
+        order = [c[1][0] for c in body.method_calls if c[0] in ("addLayout", "addWidget")]
+        after = order[order.index(row) + 1:order.index(row) + 3]
+        self.assertIs(after[0], label)
+        self.assertEqual(after[1].kind, "QWidget")  # the settings panel follows the reason
+
+    def test_b2_ui2_fsl_blocked_rows_show_their_reason_on_a_click_in_both_languages(self):
+        for lang in ("en", "zh"):
+            with self.subTest(lang=lang):
+                owner = make_owner(stages="dti")
+                owner._onboardingLanguage = lang
+                owner._parameterNode.orchestrationPreprocessingStages = "denoise,eddy,topup"
+                seen = {}
+
+                def user(qt, dialog):
+                    marker = self.markers_of(qt)["algorithmUnavailable_eddy"]
+                    self.click(marker)
+                    label = next(w for w in qt.created if object_name(w) == "algorithmUnavailableReason_eddy")
+                    seen["shown"] = label.setVisible.call_args
+                    seen["text"] = label.ctor_args[0]
+                    seen["tip"] = marker.setToolTip.call_args.args[0]
+                    return 0
+
+                self.popup(owner, "preprocessing", blocks={}, fsl_offered=False, during=user)
+                self.assertEqual(seen["shown"], mock.call(True))
+                self.assertEqual(seen["text"], seen["tip"])
+                self.assertIn("Eddy 和 Topup 需要 FSL" if lang == "zh" else "Eddy and Topup need FSL", seen["text"])
+                self.boxes["algorithm_eddy"].setEnabled.assert_called_with(False)
+
+    @staticmethod
+    def markers_of(qt):
+        return {object_name(w): w for w in qt.created if object_name(w).startswith("algorithmUnavailable_")}
 
 
 class FakeText:

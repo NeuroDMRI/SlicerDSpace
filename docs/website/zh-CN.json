@@ -1299,7 +1299,7 @@
   "executable and": "可执行文件，将",
   "directory (or local checkout), then run a DTI-only dependency check:": "目录（或本地源码目录），再执行 DTI 最小环境检查：",
   "Update first": "先更新代码",
-  "A release archive holds the code of its build day. Apply the incremental code update once before the first run: in the GUI, click": "发布包内是打包当天的代码。首次运行前请应用一次增量代码更新：在界面中点击",
+  "A release archive holds the code of its build day. Apply the incremental code update once before you run an analysis: in the GUI, click": "发布包内是打包当天的代码。运行分析前请应用一次增量代码更新：在界面中点击",
   "Check for updates": "检查更新",
   "; on a server without a display, run the command in": "；在没有显示器的服务器上，运行",
   "Quick Start › Update The Code": "快速开始 › 更新代码",

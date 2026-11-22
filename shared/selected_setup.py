@@ -330,13 +330,17 @@ def build_setup_plan(result, *, installed_extensions=(), loaded_extensions=None,
     from scripts.setup_optional_assets import prepare
     optional = missing_optional_profiles(result, brain_mask_backend, wma_atlas, pnl_route="managed" if pnl_managed else "native")
     optional_plan = prepare(optional) if optional else {}
+    # b2-setup C2: the doctor's keys carry a kind prefix ('setting:wma_org_atlas'); compare the bare key.
+    def _bare(key):
+        key = str(key or "")
+        return key.split(":", 1)[1] if key.startswith(("setting:", "path:")) else key
     handled_keys = {item.key for item in missing if
-                    (any(name.startswith("wma") for name in optional) and item.key.startswith("wma_org_atlas")) or
-                    ("tractcloud" in optional and (item.key == "tractcloud_data_dir" or item.key.startswith("tractcloud_data:"))) or
+                    (any(name.startswith("wma") for name in optional) and _bare(item.key).startswith("wma_org_atlas")) or
+                    ("tractcloud" in optional and (_bare(item.key) == "tractcloud_data_dir" or _bare(item.key).startswith("tractcloud_data:"))) or
                     # SC-1c: a native-route mask item whose only gaps are the model files is fixed by the pnl-cnn resources.
                     ("pnl-cnn" in optional and item.key == "brain_mask_backend")}
     for item in missing:
-        if ('wma' in source_profiles and item.install_group == 'wma' and not item.key.startswith('wma_org_atlas')):
+        if ('wma' in source_profiles and item.install_group == 'wma' and not _bare(item.key).startswith('wma_org_atlas')):
             handled_keys.add(item.key)
         if ('wmql' in source_profiles and item.install_group == 'wmql'):
             handled_keys.add(item.key)

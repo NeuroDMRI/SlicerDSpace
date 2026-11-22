@@ -228,8 +228,8 @@ class InstallerScriptBuilderTests(unittest.TestCase):
             "  for (const os of ['macos', 'windows', 'linux']) {\n"
             "    const z = await ic.buildSetupZip({\n"
             "      os,\n"
-            "      wmaEnabled: true,\n"
-            "      wmaAtlases: ['wma_org'],\n"
+            "      wmaEnabled: false,\n"
+            "      wmaAtlases: [],\n"
             "      mirrorPrefix: 'https://ghfast.top/',\n"
             "      proxyUrl: 'http://127.0.0.1:7890',\n"
             "      offlineDir: '/custom/offline',\n"
@@ -237,8 +237,8 @@ class InstallerScriptBuilderTests(unittest.TestCase):
             "    });\n"
             "    const zGeneric = await ic.buildSetupZip({\n"
             "      os,\n"
-            "      wmaEnabled: true,\n"
-            "      wmaAtlases: ['wma_org'],\n"
+            "      wmaEnabled: false,\n"
+            "      wmaAtlases: [],\n"
             "      autoStart: false,\n"
             "    });\n"
             "    const script = ic.buildScript({\n"
@@ -320,7 +320,9 @@ class InstallerScriptBuilderTests(unittest.TestCase):
                     self.assertIn("Core Extension", py_src)
                     self.assertIn("SlicerDSpace Base Features (", py_src)
                     self.assertIn("base_cb.setChecked(True); base_cb.setEnabled(False)", py_src)
-                    self.assertLess(py_src.index("Core Extension"), py_src.index("Optional WMA White-Matter Atlases"))
+                    # b2-setup: no atlas group any more; one short line under the core item points to the plugin.
+                    self.assertNotIn("Optional WMA White-Matter Atlases", py_src)
+                    self.assertLess(py_src.index("Core Extension"), py_src.index("WMA white-matter atlases are optional."))
                     self.assertIn("Network Mirror && Offline Directory", py_src)
                     self.assertTrue(all(ord(ch) < 128 or ch == "·" for ch in py_src))
                     self.assertIn(expected_hashes[os_key], py_src)
@@ -333,7 +335,7 @@ class InstallerScriptBuilderTests(unittest.TestCase):
                     self.assertIsNone(zfg.testzip())
                     generic_py = zfg.read(py_rel).decode("utf-8")
                     self.assertIn('"auto_start":false', generic_py)
-                    self.assertIn('"selected_packs":["wma_org"]', generic_py)
+                    self.assertIn('"selected_packs":[]', generic_py)  # b2-setup: the release zips hold the core only
                     self.assertIn(expected_hashes[os_key], generic_py)
 
                 cli_block = row["script"].split("# __SLICERDSPACE_PY_BEGIN__", 1)[1].split("# __SLICERDSPACE_PY_END__", 1)[0]
@@ -457,8 +459,8 @@ class InstallerScriptBuilderTests(unittest.TestCase):
 
         js_path = REPO_ROOT / "docs" / "site" / "assets" / "js" / "installer-customizer.js"
         for label, node_state_js in (
-            ("website_customizer_defaults", "{ os: 'macos', wmaEnabled: true, wmaAtlases: ['wma_org'], mirrorPrefix: 'https://ghfast.top/' }"),
-            ("release_generic_defaults", "{ os: 'macos', wmaEnabled: true, wmaAtlases: ['wma_org'], autoStart: false }"),
+            ("website_customizer_defaults", "{ os: 'macos', wmaEnabled: false, wmaAtlases: [], mirrorPrefix: 'https://ghfast.top/' }"),
+            ("release_generic_defaults", "{ os: 'macos', wmaEnabled: false, wmaAtlases: [], autoStart: false }"),
         ):
             with self.subTest(mode=label):
                 node_script = (

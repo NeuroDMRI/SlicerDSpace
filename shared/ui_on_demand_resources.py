@@ -46,6 +46,24 @@ _RESOURCE_LABELS = {
     "wma_east_west": ("WMA East-West 白质图谱", "WMA East-West White-Matter Atlas"),
 }
 
+# The optional-resource profiles of scripts/setup_optional_assets.py -> the resource ids above.
+_PROFILE_RESOURCE_IDS = {
+    "wma": "wma_org",
+    "wma-naba": "wma_naba",
+    "wma-east-west": "wma_east_west",
+    "tractcloud": "tractcloud",
+    "pnl-cnn": "pnl_cnn",
+    "surface-postprocess": "surface_postprocess",
+}
+
+
+def optional_profile_title(profile: str, zh: bool) -> str:
+    """The friendly title of one optional-resource profile (b2-setup); an unknown profile keeps its id."""
+    labels = _RESOURCE_LABELS.get(_PROFILE_RESOURCE_IDS.get(str(profile), ""))
+    if not labels:
+        return str(profile)
+    return labels[0] if zh else labels[1]
+
 
 def _text(zh: bool, english: str, chinese: str) -> str:
     return chinese if zh else english

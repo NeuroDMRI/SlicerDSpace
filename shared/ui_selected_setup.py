@@ -134,7 +134,14 @@ def _compact_component_rows(owner, components, pending):
     rows = []
     for item in components:
         size_suffix = f" ({_format_bytes(item['size_bytes'])})" if item.get("size_bytes") else ""
-        row = f"• <b>{html.escape(item['title'])}</b>{size_suffix}"
+        title = item["title"]
+        if item.get("profiles"):
+            # b2-setup: name the atlas (or other resource) as the on-demand dialog does, not by its profile id.
+            from shared.ui_on_demand_resources import optional_profile_title
+            zh = str(getattr(owner, "_onboardingLanguage", "en")).startswith("zh")
+            title = "、".join(optional_profile_title(p, True) for p in item["profiles"]) if zh else \
+                ", ".join(optional_profile_title(p, False) for p in item["profiles"])
+        row = f"• <b>{html.escape(title)}</b>{size_suffix}"
         licence = item.get("licence")
         if licence:
             status_tag = "" if licence["id"] in pending else _text(owner, " (accepted)", "（已接受）")

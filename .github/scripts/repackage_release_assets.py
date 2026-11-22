@@ -606,7 +606,7 @@ def _verify_setup_py(
     cfg = _extract_embedded_setup_config(py_src)
     if cfg.get("auto_start") is not False:
         raise RuntimeError(f"Expected auto_start=False inside {zip_path}, got {cfg.get('auto_start')!r}")
-    if cfg.get("os") != os_key or cfg.get("selected_packs") != ["wma_org"]:
+    if cfg.get("os") != os_key or cfg.get("selected_packs") != []:
         raise RuntimeError(f"Unexpected OS/pack defaults inside {zip_path}")
     expected_bundle_sha = str((bundles.get(bundle_key) or {}).get("sha256") or "")
     actual_bundle_sha = str((((cfg.get("artifacts") or {}).get("bundles") or {}).get(bundle_key) or {}).get("sha256") or "")
@@ -687,8 +687,8 @@ def build_setup_zips(
         "  for (const osKey of ['windows', 'linux', 'macos']) {\n"
         "    const bytes = await ic.buildSetupZip({\n"
         "      os: osKey,\n"
-        "      wmaEnabled: true,\n"
-        "      wmaAtlases: ['wma_org'],\n"
+        "      wmaEnabled: false,\n"
+        "      wmaAtlases: [],\n"
         "      autoStart: false,\n"
         "    });\n"
         "    const outFile = path.join(outDir, ic.OS_DEFAULTS[osKey].setupZipName);\n"

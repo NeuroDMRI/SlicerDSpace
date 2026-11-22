@@ -20,7 +20,7 @@ An already-importable environment skips installation and runs functional checks.
 repair and manual paths live under Environment > More options, not Advanced
 algorithm settings. It prepares required selected items, not every optional backend:
 
-1. Slicer's Extension Manager installs the missing extensions that the ticked products need: PyTorch for the neural models and the native brain mask, UKFTractography for UKF, SlicerDMRI for WMA. The tensor fit needs none (it uses Teem in Slicer core).
+1. Slicer's Extension Manager installs the missing extensions that the ticked products need: PyTorch for the neural models and the native brain mask, UKFTractography for UKF. WMA and the tensor fit need none (they use Slicer core). SlicerDMRI and SlicerFreeSurfer are recommended for viewing results only.
 2. If an extension was installed or enabled, save your work and restart Slicer. Reopening SlicerDSpace offers to continue preparation; extensions are reused.
 3. Background workers prepare pinned WMQL/WMA/TractCloud sources without Git, install missing Python wheels, download selected models, and prepare supported isolated tools.
 4. Paths are saved after verification. A fresh dependency check and synthetic functional tests determine readiness. A failed functional test prevents analysis until preparation passes again.

@@ -121,6 +121,15 @@ def resolve_tractcloud_data_directory(explicit=None, *, asset_root=None):
 PNL_MODEL_GAPS = ("pnl_mask_model_dir", "weights.json", "IITmean_b0_256.nii.gz", ".pt ")
 
 
+def _bare_status_key(key):
+    """The doctor's key without its kind prefix: 'setting:wma_org_atlas' and 'path:wma_org_atlas_X' -> 'wma_org_atlas...'."""
+    key = str(key or "")
+    for prefix in ("setting:", "path:"):
+        if key.startswith(prefix):
+            return key[len(prefix):]
+    return key
+
+
 def missing_optional_profiles(result, brain_mask_backend, wma_atlas="org", pnl_route=None):
     """Infer resource actions from selected required blockers, never all backends.
 
@@ -132,10 +141,12 @@ def missing_optional_profiles(result, brain_mask_backend, wma_atlas="org", pnl_r
     for item in result.statuses:
         if not item.required or item.status != "missing":
             continue
-        if item.key.startswith("wma_org_atlas"):
+        # b2-setup C2: the doctor reports 'setting:wma_org_atlas' / 'setting:tractcloud_data_dir'; match the bare key.
+        key = _bare_status_key(item.key)
+        if key.startswith("wma_org_atlas"):
             from tractography.wma_atlases import atlas_definition
             profiles.append(atlas_definition(wma_atlas)["profile"])
-        elif item.key == "tractcloud_data_dir" or item.key.startswith("tractcloud_data:"):
+        elif key == "tractcloud_data_dir" or key.startswith("tractcloud_data:"):
             profiles.append("tractcloud")
         elif item.key == "brain_mask_backend" and brain_mask_backend == "pnl_cnn" and pnl_route == "native":
             # SC-1c: the native route needs the brain_mask assets; it installs them only when nothing else is missing.

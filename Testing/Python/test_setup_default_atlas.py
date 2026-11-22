@@ -1,7 +1,9 @@
-"""The website's "Download Slicer Setup" button must preselect the ORG atlas (fan93 clean install, 2026-11-22).
+"""The website's "Download Slicer Setup" button and the release's static setup zips must use the same default state.
 
-The page built its setup zip from a state with wmaEnabled false, so the wizard opened with no atlas ticked, while the
-release's static setup zips and the paper's Equipment setup preselect ORG.
+History: on 2026-11-22 (fan93 clean install) the page and the release zips differed, and the page was set to preselect
+ORG. Later on 2026-11-22 (b2-setup, user request) the default became the core only: no atlas pack is preselected,
+and SlicerDSpace offers a WMA atlas inside the plugin when WMA is selected. The page must still build its state from
+defaultSetupState.
 """
 
 from __future__ import annotations
@@ -30,11 +32,11 @@ def _embedded_config(os_key: str) -> dict:
 
 
 class SetupDefaultAtlasTests(unittest.TestCase):
-    def test_page_button_state_preselects_org_on_every_os(self) -> None:
+    def test_page_button_state_selects_no_atlas_pack_on_every_os(self) -> None:
         for os_key in ("linux", "windows", "macos"):
             with self.subTest(os=os_key):
                 cfg = _embedded_config(os_key)
-                self.assertEqual(cfg["selected_packs"], ["wma_org"])
+                self.assertEqual(cfg["selected_packs"], [])  # b2-setup: was ["wma_org"]
                 self.assertIs(cfg["auto_start"], False)
 
     def test_page_button_uses_the_default_state(self) -> None:

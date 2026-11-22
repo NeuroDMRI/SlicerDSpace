@@ -18,7 +18,7 @@
 离线资源、修复和手工路径位于环境区的“更多选项”，不混入算法高级设置。
 只处理本次所需依赖：
 
-1. 通过 Slicer 扩展管理器安装所勾选产品缺少的扩展：神经网络模型和 native 脑掩膜需要 PyTorch，UKF 需要 UKFTractography，WMA 需要 SlicerDMRI。张量拟合不需要扩展（它使用 Slicer 内核中的 Teem）。
+1. 通过 Slicer 扩展管理器安装所勾选产品缺少的扩展：神经网络模型和 native 脑掩膜需要 PyTorch，UKF 需要 UKFTractography。WMA 与张量拟合不需要扩展（它们使用 Slicer 内核）。SlicerDMRI 与 SlicerFreeSurfer 仅建议用于查看结果。
 2. 新安装或启用扩展后，保存工作并重启 Slicer；重新进入 SlicerDSpace 后提示继续准备，复用已有扩展。
 3. 后台准备固定版本的 WMQL/WMA/TractCloud 源码，无需 Git；安装缺少的 Python wheel、下载模型并准备支持的隔离工具。
 4. 校验成功后保存路径，重新检查依赖并执行小型功能测试。自检失败时不能进入分析，须重新准备并通过。

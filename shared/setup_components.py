@@ -187,6 +187,8 @@ def plan_components(plan, root=REPO_ROOT):
     if plan.get("optional_asset_profiles"):
         items.append(_component("optional_resources", "Resources: " + ", ".join(plan["optional_asset_profiles"]),
                                 plan.get("optional_asset_size_bytes") or None, "optional_resources", root))
+        # b2-setup: the GUI dialog shows a friendly title per profile (ui_selected_setup._compact_component_rows).
+        items[-1]["profiles"] = list(plan["optional_asset_profiles"])
     if "pnl-cnn" in plan.get("optional_asset_profiles", ()):
         # F3 (SC-1 fix round): the native route runs the vendored PNL CNN code with these model files, so the PNL
         # licence (clause-(b) preface and terms in shared/pnl_cnn/LICENSE.txt, design A2/B7) is listed and accepted too.

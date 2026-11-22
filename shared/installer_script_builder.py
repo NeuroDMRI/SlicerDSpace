@@ -1404,7 +1404,14 @@ _BOOTSTRAP_BODY = textwrap.dedent(
                 "org" if "wma_org" in selected_packs else ("naba" if "wma_naba" in selected_packs else "east-west")
             )
         else:
-            defaults["bundle_backend"] = "tractcloud,wmql"
+            # No pack in this run: keep a WMA choice that an earlier setup or the user made (reinstall).
+            prev_targets = defaults.get("targets") or []
+            if isinstance(prev_targets, str):
+                prev_targets = [t.strip() for t in prev_targets.split(",")]
+            if "wma" in prev_targets:
+                targets.append("wma")
+            if "wma" not in [b.strip() for b in str(defaults.get("bundle_backend") or "").split(",")]:
+                defaults["bundle_backend"] = "tractcloud,wmql"
         defaults["targets"] = list(dict.fromkeys(targets))
         write_user_config(cfg)
 
@@ -1564,7 +1571,7 @@ def generate_installer_script(
     mode: str = "base",
     slicer_path: str = "",
     model_assets_dir: str = "",
-    selected_packs: Iterable[str] = ("wma_org",),
+    selected_packs: Iterable[str] = (),
     mirror_prefix: str = "",
     proxy_url: str = "",
     offline_dir: str = "",

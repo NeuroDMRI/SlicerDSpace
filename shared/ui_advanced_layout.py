@@ -191,8 +191,8 @@ def apply_advanced_language(owner):
     if hasattr(owner.ui, "wmaAtlasLabel"):
         owner.ui.wmaAtlasLabel.setText("WMA 图谱" if zh else "WMA atlas")
         owner.ui.wmaAtlasComboBox.setToolTip(
-            "org：成人参考图谱；east-west：东西方成人；naba：新生儿与成人。在环境面板按需下载所选图谱。" if zh else
-            "org: adult reference; east-west: Eastern/Western adults; naba: neonates/adults. Prepare only the selected atlas in the Environment panel.")
+            "org：成人参考图谱；east-west：东西方成人；naba：新生儿与成人。勾选 WMA 时，SlicerDSpace 会提示下载所选图谱。" if zh else
+            "org: adult reference; east-west: Eastern/Western adults; naba: neonates/adults. SlicerDSpace offers the download when WMA is selected.")
     previous = selector.currentIndex
     blocked = selector.blockSignals(True)
     selector.clear()

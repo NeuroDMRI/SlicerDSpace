@@ -413,7 +413,8 @@ def _add_algorithm_row(qt, owner, layout, box, family, algorithm, staged, zh, re
     button.toggled.connect(toggle_settings)
 
 
-def _install_outside_close_apply(qt, dialog, popup_state, apply_staged, changed=lambda: True, no_replay=False):
+def _install_outside_close_apply(qt, dialog, popup_state, apply_staged, changed=lambda: True, no_replay=False,
+                                 on_hidden=None):
     """Make a click outside the popup act like the Apply button (batch 2, popup-apply).
 
     Qt closes a ``Qt.Popup`` on an outside click with ``close()``, and ``QDialog::closeEvent`` turns that into
@@ -430,12 +431,15 @@ def _install_outside_close_apply(qt, dialog, popup_state, apply_staged, changed=
     then replays the press to the control under the mouse (measured: the Run button got "pressed"). Every Close event
     therefore sets ``Qt.WA_NoMouseReplay`` first; it must be set here, because ``QApplication::notify`` clears it before
     each mouse event that reaches the dialog.
+    ``on_hidden`` (macOS, review U1): called on a Hide event after which the dialog is no longer visible (a spontaneous
+    Hide from the window system leaves it visible). The event is not consumed.
     Returns the filter; the caller must keep it alive. Returns None if the filter cannot be built.
     """
 
     close_type = getattr(getattr(qt, "QEvent", None), "Close", None)
     if close_type is None or not hasattr(dialog, "installEventFilter"):
         return None
+    hide_type = getattr(getattr(qt, "QEvent", None), "Hide", None) if on_hidden is not None else None
     replay_attribute = getattr(getattr(qt, "Qt", None), "WA_NoMouseReplay", None) if no_replay else None
     try:
         base = getattr(qt, "QObject")
@@ -443,7 +447,12 @@ def _install_outside_close_apply(qt, dialog, popup_state, apply_staged, changed=
         class OutsideCloseApplyFilter(base):
             def eventFilter(self, _watched, event):
                 try:
-                    if event.type() != close_type:
+                    kind = event.type()
+                    if hide_type is not None and kind == hide_type:
+                        if not dialog.isVisible():
+                            on_hidden()
+                        return False
+                    if kind != close_type:
                         return False
                     if replay_attribute is not None:
                         dialog.setAttribute(replay_attribute, True)
@@ -477,7 +486,14 @@ def _rejected(qt) -> int:
     return value if isinstance(value, int) else 0
 
 
-def _run_popup(qt, dialog, is_popup):
+def _dialog_hidden(dialog) -> bool:
+    try:
+        return not dialog.isVisible()
+    except Exception:  # a destroyed dialog
+        return True
+
+
+def _run_popup(qt, dialog, is_popup, enders=None):
     """Show the picker and wait for its result; returns the ``QDialog`` result code.
 
     Windows and Linux: ``exec_()``, as before. macOS: ``exec_()`` runs a native modal session, and Cocoa then drops
@@ -487,6 +503,12 @@ def _run_popup(qt, dialog, is_popup):
     watch timer, ``close_algorithm_picker``), when the dialog is destroyed, or when the application quits
     (``QCoreApplication::exit`` also ends every nested loop). A dialog that is already finished, or that is not
     visible after ``show()``, never enters the loop. A result that cannot be read counts as Rejected.
+
+    Review U1: a hide that is not an accept emits no ``finished`` (``exec_()`` returned Rejected on it). The wait
+    therefore also ends when the shown dialog is no longer visible, whatever the order of events: at once through
+    ``enders`` (a list; the function that ends the wait is put in it while the loop runs, and the caller's Hide event
+    filter calls it), and at the latest at the next tick of the re-quit timer. The result is read after the loop, so
+    a hide inside ``accept()`` still returns Accepted and a bare hide returns Rejected.
     """
 
     if not _popup_waits_non_modal(qt, is_popup):
@@ -500,6 +522,9 @@ def _run_popup(qt, dialog, is_popup):
             loop.quit()
         except Exception:
             pass
+
+    if isinstance(enders, list):
+        enders.append(_end)
 
     connected = []
     app_getter = getattr(getattr(qt, "QApplication", None), "instance", None)
@@ -515,13 +540,14 @@ def _run_popup(qt, dialog, is_popup):
             pass
     # Qt's Cocoa dispatcher loses a quit() that runs inside a nested manual processEvents() (its interrupt flag is
     # reset when that call returns; measured with the ui2 probe), and the loop would then wait forever. A
-    # repeating timer therefore re-sends quit() from the loop's own level once the wait is over.
+    # repeating timer therefore re-sends quit() from the loop's own level once the wait is over. It also ends the
+    # wait once the shown dialog is no longer visible (review U1).
     requit = None
     if hasattr(qt, "QTimer"):
         try:
             requit = qt.QTimer()
             requit.setInterval(100)
-            requit.timeout.connect(lambda: _end() if state["done"] else None)
+            requit.timeout.connect(lambda: _end() if state["done"] or _dialog_hidden(dialog) else None)
         except Exception:
             requit = None
     try:
@@ -534,6 +560,8 @@ def _run_popup(qt, dialog, is_popup):
                 requit.start()
             loop.exec_()
     finally:
+        if isinstance(enders, list) and _end in enders:
+            enders.remove(_end)
         if requit is not None:
             try:
                 requit.stop()
@@ -549,6 +577,27 @@ def _run_popup(qt, dialog, is_popup):
     except Exception:
         return _rejected(qt)
     return result if isinstance(result, int) else _rejected(qt)
+
+
+def _owner_node_live(owner) -> bool:
+    """Review U2: the owner is not torn down and its parameter node exists and is still in a scene.
+
+    On macOS the picker waits non-modally, so File > Close Scene can run while it is open (``onSceneStartClose`` sets
+    the node to None). A commit then must not run.
+    """
+
+    if getattr(owner, "_cleanedUp", False) is True:
+        return False
+    node = getattr(owner, "_parameterNode", None)
+    if node is None:
+        return False
+    get_scene = getattr(getattr(node, "parameterNode", None), "GetScene", None)
+    if callable(get_scene):
+        try:
+            return get_scene() is not None
+        except Exception:
+            return False
+    return True
 
 
 def close_algorithm_picker(owner) -> None:
@@ -838,8 +887,17 @@ def choose_algorithms(owner, family):
         changed_marker = object()  # a value that cannot be read now counts as changed (Apply shows its error)
         return popup_state_now(changed_marker) != opened_state
 
+    # Review U1: on macOS a Hide event after which the popup is not visible ends the non-modal wait (see _run_popup).
+    wait_enders = []
+    waits_non_modal = _popup_waits_non_modal(qt, popup_flag)
+
+    def _popup_hidden() -> None:
+        for end in list(wait_enders):
+            end()
+
     outside_filter = (_install_outside_close_apply(qt, dialog, popup_state, validate_and_accept, popup_changed,
-                                                   no_replay=_popup_waits_non_modal(qt, popup_flag))
+                                                   no_replay=waits_non_modal,
+                                                   on_hidden=_popup_hidden if waits_non_modal else None)
                       if popup_flag else None)
 
     popup_watch = None
@@ -878,7 +936,7 @@ def choose_algorithms(owner, family):
     owner._algorithmPickerOpen = True
     owner._algorithmPickerCloser = lambda: None if popup_state["finished"] else _finish_popup(False)
     try:
-        accepted = _run_popup(qt, dialog, bool(popup_flag)) == qt.QDialog.Accepted
+        accepted = _run_popup(qt, dialog, bool(popup_flag), wait_enders) == qt.QDialog.Accepted
     finally:
         owner._algorithmPickerOpen = False
         owner._algorithmPickerCloser = None
@@ -889,6 +947,8 @@ def choose_algorithms(owner, family):
                 dialog.removeEventFilter(outside_filter)
             except Exception:
                 pass
+    if accepted and not _owner_node_live(owner):
+        accepted = False  # review U2: the scene closed (or the module was torn down) while the popup was open
     if accepted:
         # A data-blocked algorithm that was stored before stays stored (it is skipped at Run, not removed here).
         selection = [value for value, box in boxes.items()

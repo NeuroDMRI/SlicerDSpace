@@ -18,6 +18,7 @@ from shared import ui_algorithm_picker
 from test_ui_run_history import AlgorithmRowTest, by_name, fake_qt
 
 CLOSE = 19
+HIDE = 18
 ACCEPTED = 1
 NO_REPLAY = 54
 REPO = Path(__file__).resolve().parents[2]
@@ -84,6 +85,7 @@ class PopupMacTest(unittest.TestCase):
         self.qt = fake_qt()
         self.qt.QObject = _FakeQObject
         self.qt.QEvent.Close = CLOSE
+        self.qt.QEvent.Hide = HIDE
         self.qt.Qt.WA_NoMouseReplay = NO_REPLAY
         self.qt.QDialog.Rejected = 0
         self.qt.QTimer = _FakeTimer
@@ -356,6 +358,126 @@ class PopupMacTest(unittest.TestCase):
             self.assertTrue(self._choose("tractography"))
         self.assertEqual(seen, {"refused": (True, 1, 0), "attr_after_refused": 1, "attr_after_fixed": 2})
         commit.assert_called_once()
+
+    # ---- fix round U1: a popup hidden before the first watch tick ------------------------------------------------
+    def _pump_until_quit(self, rounds=20):
+        """The real local loop returns only after ``quit()``: tick every running timer until one quits the loop."""
+
+        loop = self.loops[-1]
+        for _ in range(rounds):
+            if loop.quit_calls:
+                return True
+            for timer in list(_FakeTimer.instances):
+                if timer.running:
+                    timer.timeout.emit()
+        return loop.quit_calls > 0
+
+    def test_b2_ui2_fix_u1_a_popup_hidden_before_the_first_watch_tick_ends_the_wait_as_a_reject(self):
+        """Review U1: a queued hide() that runs before the watch timer first sees the popup visible emitted no
+        ``finished``, so nothing ended the macOS wait and every later picker was blocked. ``exec_()`` returned
+        (Rejected) on such a hide; the non-modal wait must end the same way, without a commit."""
+
+        seen = {}
+
+        def hidden_early(dialog):
+            self._tick(["ukf"])
+            dialog.state["visible"] = False  # hide() / setVisible(False): Qt sends a Hide event, no Close, no finished
+            seen["filter_result"] = self._filter(dialog).eventFilter(dialog, _Event(HIDE))
+            seen["quit_on_hide_event"] = self.loops[-1].quit_calls > 0
+            seen["wait_ended"] = self._pump_until_quit()
+
+        self.on_wait = hidden_early
+        with self._spy_commit() as commit:
+            accepted = self._choose("tractography")
+        self.assertTrue(seen["wait_ended"], "the macOS wait never ended after the popup was hidden")
+        self.assertTrue(seen["quit_on_hide_event"], "the Hide event itself did not end the wait")
+        self.assertFalse(seen["filter_result"])  # the Hide event itself is not consumed
+        self.assertFalse(accepted)
+        commit.assert_not_called()
+        self.assertEqual(self.node.orchestrationTractographyBackend, "csd_act")
+        self.assertFalse(self.owner._algorithmPickerOpen)
+        # The next picker opens.
+        self.on_wait = lambda dialog: dialog.reject()
+        self._choose("bundles")
+        self.assertEqual(len(self.dialogs), 2)
+
+    def test_b2_ui2_fix_u1_a_hidden_popup_ends_the_wait_even_without_a_hide_event(self):
+        """Review U1 backstop: the repeating re-quit timer also ends the wait once the shown popup is not visible."""
+
+        seen = {}
+
+        def hidden_silently(dialog):
+            self._tick(["ukf"])
+            dialog.state["visible"] = False
+            seen["wait_ended"] = self._pump_until_quit()
+
+        self.on_wait = hidden_silently
+        with self._spy_commit() as commit:
+            self.assertFalse(self._choose("tractography"))
+        self.assertTrue(seen["wait_ended"], "the macOS wait never ended after the popup became invisible")
+        commit.assert_not_called()
+        self.assertFalse(self.owner._algorithmPickerOpen)
+
+    def test_b2_ui2_fix_u1_a_hide_event_on_a_visible_popup_does_not_end_the_wait(self):
+        """A spontaneous Hide (the window system) leaves the popup visible: the wait goes on, and the Apply applies."""
+
+        seen = {}
+
+        def spontaneous_hide_then_apply(dialog):
+            self._tick(["ukf"])
+            self._filter(dialog).eventFilter(dialog, _Event(HIDE))
+            seen["quit_after_hide"] = self.loops[-1].quit_calls
+            self._filter(dialog).eventFilter(dialog, _Event())
+
+        self.on_wait = spontaneous_hide_then_apply
+        self.assertTrue(self._choose("tractography"))
+        self.assertEqual(seen["quit_after_hide"], 0)
+        self.assertEqual(self.node.orchestrationTractographyBackend, "ukf")
+
+    # ---- fix round U2: the scene closes under the non-modal popup -------------------------------------------------
+    def test_b2_ui2_fix_u2_a_closed_scene_discards_the_popup_on_the_outside_click(self):
+        """Review U2 (measured in real Slicer with the probe's bare host widget, or with only ``onSceneStartClose``:
+        AttributeError 'NoneType' has no 'StartModify' at the commit). With no modal session, File > Close Scene can run
+        while the picker is open; ``onSceneStartClose`` sets the parameter node to None. The later outside click must
+        close the popup and discard, with no traceback."""
+
+        dead = mock.MagicMock(name="removedParameterNodeWrapper")
+        dead.parameterNode.GetScene.return_value = None
+        for case, change in (
+            ("node None", lambda: setattr(self.owner, "_parameterNode", None)),
+            ("node removed from the scene", lambda: setattr(self.owner, "_parameterNode", dead)),
+            ("owner torn down", lambda: setattr(self.owner, "_cleanedUp", True)),
+        ):
+            with self.subTest(case=case):
+                self.dialogs.clear()
+                self.loops.clear()
+                self.owner._parameterNode = self.node
+                self.owner._cleanedUp = False
+                self.node.orchestrationTractographyBackend = "csd_act"
+
+                def close_scene_then_click(dialog, change=change):
+                    self._tick(["ukf"])
+                    change()
+                    self._filter(dialog).eventFilter(dialog, _Event())
+
+                self.on_wait = close_scene_then_click
+                with self._spy_commit() as commit:
+                    accepted = self._choose("tractography")
+                self.assertFalse(accepted)
+                commit.assert_not_called()
+                self.assertEqual(self.node.orchestrationTractographyBackend, "csd_act")
+                self.assertFalse(self.owner._algorithmPickerOpen)
+                self.dialogs[0].deleteLater.assert_called_once_with()
+
+    def test_b2_ui2_fix_u2_a_live_node_still_commits(self):
+        """The same parameter node, still in the scene (measured: Clear(0) keeps it), gets the commit as before."""
+
+        live = mock.MagicMock(name="liveNodeWrapperParameterNode")
+        live.GetScene.return_value = mock.MagicMock(name="scene")
+        self.node.parameterNode = live
+        self.on_wait = lambda dialog: (self._tick(["ukf"]), self._filter(dialog).eventFilter(dialog, _Event()))
+        self.assertTrue(self._choose("tractography"))
+        self.assertEqual(self.node.orchestrationTractographyBackend, "ukf")
 
     def test_b2_popup_mac_click_replay_is_unchanged_on_other_platforms(self):
         self.on_wait = lambda dialog: (self._tick(["ukf"]), self._filter(dialog).eventFilter(dialog, _Event()))

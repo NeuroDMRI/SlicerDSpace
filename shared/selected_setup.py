@@ -326,14 +326,11 @@ def build_setup_plan(result, *, installed_extensions=(), loaded_extensions=None,
                            if (item.details or {}).get('python_executable')), None)
         python_requests.extend(dict(requirement=requirement, python_executable=str(python) if python else None)
                                for requirement in SOURCES[name]['requirements'])
-    from shared.optional_assets import missing_optional_profiles
+    from shared.optional_assets import _bare_status_key as _bare, missing_optional_profiles
     from scripts.setup_optional_assets import prepare
     optional = missing_optional_profiles(result, brain_mask_backend, wma_atlas, pnl_route="managed" if pnl_managed else "native")
     optional_plan = prepare(optional) if optional else {}
     # b2-setup C2: the doctor's keys carry a kind prefix ('setting:wma_org_atlas'); compare the bare key.
-    def _bare(key):
-        key = str(key or "")
-        return key.split(":", 1)[1] if key.startswith(("setting:", "path:")) else key
     handled_keys = {item.key for item in missing if
                     (any(name.startswith("wma") for name in optional) and _bare(item.key).startswith("wma_org_atlas")) or
                     ("tractcloud" in optional and (_bare(item.key) == "tractcloud_data_dir" or _bare(item.key).startswith("tractcloud_data:"))) or

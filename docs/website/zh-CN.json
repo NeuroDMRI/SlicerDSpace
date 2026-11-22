@@ -1261,7 +1261,7 @@
   "CLI & batch": "命令行与批处理",
   "Run reproducible doctor, plan and execute commands or multi-subject cohort schedules.": "执行 doctor / plan / execute 命令流，或启动多受试者队列并行批处理。",
   "Download and install 3D Slicer 5.10.0 for Windows (x86_64), Linux (x86_64) or Apple Silicon macOS (arm64) from": "下载并安装对应系统版本（Windows x86_64、Linux x86_64 或 Apple Silicon macOS arm64）的 3D Slicer 5.10.0，官方地址：",
-  "To view results, also install two Slicer extensions from Slicer’s Extensions Manager: SlicerDMRI (tractography display) and SlicerFreeSurfer (FreeSurfer surfaces and overlays from surface post-processing). They are recommended for viewing only; analysis runs without them.": "查看结果时，建议另外通过 Slicer 的 Extensions Manager 安装两个扩展：SlicerDMRI（纤维束显示）与 SlicerFreeSurfer（FreeSurfer 皮层表面及表面后处理结果叠加显示）。二者仅用于查看结果，分析本身不依赖它们。",
+  "To view tractography results, also install the SlicerDMRI extension from Slicer’s Extensions Manager. It is recommended for viewing only; the default analysis runs without it.": "查看纤维束结果时，建议另外通过 Slicer 的 Extensions Manager 安装 SlicerDMRI 扩展。它仅用于查看结果，默认分析流程不依赖它。",
   "Download": "下载包体",
   "Install": "导入安装",
   "In 3D Slicer 5.10.0, open": "在 3D Slicer 5.10.0 中依次打开",

@@ -141,9 +141,11 @@ to submit an analysis.
    that text changes. Never autoclick checkboxes/Prepare, monkeypatch
    confirmation, inject acceptance or treat hashes as a license grant.
 2. Let Slicer's Extension Manager install/enable the extensions the plan names:
-   PyTorch for the neural models and the native mask, UKFTractography only for UKF,
-   SlicerDMRI only for WMA. The tensor fit needs no extension (Teem in Slicer
-   core). An enabled extension
+   PyTorch for the neural models and the native mask, UKFTractography only for UKF.
+   WMA and the tensor fit need no extension (Slicer core; Teem for the tensor
+   fit); only the optional WMA diffusion-measure export needs the SlicerDMRI
+   FiberTractMeasurements CLI. SlicerDMRI is recommended for viewing tractography
+   results only. An enabled extension
    is not necessarily loaded. If restart is required, stop, ask the user to save
    work and approve restarting, then reopen SlicerDSpace.
 3. Continue with **Continue preparing selected analysis environment** or the

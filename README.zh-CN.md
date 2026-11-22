@@ -80,7 +80,7 @@ SlicerDSpace 将无需 T1 加权影像的解剖重建、微结构定量和白质
 | 可选后端 | PNL CNN/ANTs、原生 FreeSurfer 组件、WMQL、WMA、TractCloud | 掩膜、皮层后处理与束识别 |
 | 自动化 | Python CLI、JSON 运行计划、批量调度器、Agent Skill | 命令执行、参数组合及多被试调度 |
 
-通过官网一键引导包或离线底座包安装时，插件本体已自包含（`depends NA`）Python 3.12 依赖库（含 **PyTorch** 与 `torchvision`）、核心模型权重、`UKFTractography` 及 `MRtrix3`/`FSL`/`FreeSurfer Surface Runtime` 三大原生运行环境，**分析时无需用户单独安装 Slicer 的 PyTorch 扩展或 SlicerDMRI**。查看结果时，建议通过 Slicer 的 Extensions Manager 安装 SlicerDMRI（纤维束显示）与 SlicerFreeSurfer（FreeSurfer 皮层表面及表面后处理结果叠加显示）。仅在源码部署或按需拆分环境下，依赖随所选路线解析：DTI 拟合在 Slicer 内直接完成，默认 CSD/ACT 需要 MRtrix3，提供已有掩膜的 DTI-only 路线无需 PNL、FSL 或 FreeSurfer。详见[能力与平台矩阵](docs/setup/SUPPORT_MATRIX.zh-CN.md)。
+通过官网一键引导包或离线底座包安装时，插件本体已自包含（`depends NA`）Python 3.12 依赖库（含 **PyTorch** 与 `torchvision`）、核心模型权重、`UKFTractography` 及 `MRtrix3`/`FSL`/`FreeSurfer Surface Runtime` 三大原生运行环境，**分析时无需用户单独安装 Slicer 的 PyTorch 扩展或 SlicerDMRI**。查看纤维束结果时，建议通过 Slicer 的 Extensions Manager 安装 SlicerDMRI 扩展。仅在源码部署或按需拆分环境下，依赖随所选路线解析：DTI 拟合在 Slicer 内直接完成，默认 CSD/ACT 需要 MRtrix3，提供已有掩膜的 DTI-only 路线无需 PNL、FSL 或 FreeSurfer。详见[能力与平台矩阵](docs/setup/SUPPORT_MATRIX.zh-CN.md)。
 
 **实现来源：** DDSeg 使用转换后的 Python/PyTorch 模型；SAF、MK-Curve 为作者
 MATLAB 方法的非官方 Python 移植；PNL CNN 掩膜运行作者 PNL 推理代码的修改副本（许可条款见 [PNL 许可页](docs/licenses/pnl_brain_mask.md)）。
@@ -138,7 +138,7 @@ Agent 会检查可用空间和已有资源，等你选择后再下载，并保�
 1. **安装 3D Slicer 5.10.0**：从 [download.slicer.org](https://download.slicer.org/) 下载并安装对应平台（Windows `x86_64`、Linux `x86_64` 或 macOS）的 3D Slicer 5.10.0（支持 5.10 至 5.12.4）。在 Apple Silicon 上请安装 macOS `x86_64` 版 Slicer；它在 Rosetta 2 下运行，并使用原生 `arm64` 命令行运行时。
 2. **定制并下载约 `13 KB` 的一键引导安装包**（`SlicerDSpaceSetup-macOS.zip`、`SlicerDSpaceSetup-Windows.zip` 或 `SlicerDSpaceSetup-Linux.zip`）：在 [SlicerDSpace 官网安装向导](https://neurodmri.github.io/SlicerDSpace/#start) 依次选择操作系统（`macOS arm64`、`Windows x86_64`、`Linux x86_64`），以及可选的 **GitHub 下载加速镜像**（`ghfast.top` / `gh-proxy.com` / 自定义前缀）、**HTTP/HTTPS 代理**、**本地离线包目录** 或 **模型保存目录**；也可直接前往 [GitHub Releases](https://github.com/NeuroDMRI/SlicerDSpace/releases) 下载通用 `.zip` 引导包。
 3. **在 3D Slicer 5.10.0 中安装并启动**：打开 **View > Extensions Manager > 右上角小扳手 > Install Extension from File...**，选中 `SlicerDSpaceSetup-<OS>.zip` 后重启 Slicer。重启后会自动弹出 **SlicerDSpace Setup** 图形安装窗口，核对配置后点击 **`Start Install`**（支持 12 线程 HTTP Range 分片并发加速与断点续传，并自动拉取、校验 NITRC `IITmean_b0_256.nii.gz` 模板）；部署完成后再次重启 Slicer，在顶部打开 **Modules > Diffusion > SlicerDSpace** 即可使用。
-4. **查看结果时建议安装**：通过 Slicer 的 **Extensions Manager** 安装 **SlicerDMRI**（纤维束显示）与 **SlicerFreeSurfer**（FreeSurfer 皮层表面及表面后处理结果叠加显示）。分析本身不依赖这两个扩展。
+4. **查看纤维束结果时建议安装**：通过 Slicer 的 **Extensions Manager** 安装 **SlicerDMRI** 扩展。它仅用于查看结果，默认分析流程不依赖它。
 
 默认自动包含以下完整内容（**分析时无需单独安装 Slicer PyTorch、UKFTractography 或 SlicerDMRI 扩展**）：
 - **Included Base Package（约 `1.4–1.7 GB`，内置自包含，`depends NA`）**：包含 SlicerDSpace 主模块、Python 3.12 依赖库（**内置 PyTorch 与 torchvision**）、全部非 WMA 深度学习权重与模板（`DDSeg`、`DDParcel`、`DDSurfer` + FreeSurfer 表面图谱、`PNL` 脑掩膜权重、`TractCloud`）、锁定版本的算法源码（`WMQL`、`WMA`、`TractCloud`）、`UKFTractography` CLI 以及三大原生二进制运行环境（`MRtrix3 3.0.8`、`FSL 2602.0`、`FreeSurfer Surface Runtime`，其中 `activation_key_included: false`，可选皮层表面后处理仍需用户自备个人 FreeSurfer `license.txt`）。

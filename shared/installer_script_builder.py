@@ -1279,6 +1279,13 @@ _BOOTSTRAP_BODY = textwrap.dedent(
             return slicer_exe
         raise RuntimeError(f"Requires 3D Slicer 5.10 or later (found {own[0]}.{own[1]}). Install 3D Slicer 5.10 or later, then run this installer again.")
 
+    def _backend_keeps_wma(value):
+        # The parsing of shared.algorithm_selection.algorithms() (not imported: the installed package can be older):
+        # case-insensitive, "+" and ";" separate like ",", and "all" selects WMA too.
+        text = str(value or "").strip().lower().replace("+", ",").replace(";", ",")
+        parts = [p.strip() for p in text.split(",") if p.strip()]
+        return "wma" in parts or "all" in parts
+
     def main() -> int:
         slicer_exe = str(os.environ.get("SLICERDSPACE_RESOLVED_SLICER") or CONFIG.get("slicer_path") or "").strip()
         if not slicer_exe or not Path(slicer_exe).exists():
@@ -1410,7 +1417,7 @@ _BOOTSTRAP_BODY = textwrap.dedent(
                 prev_targets = [t.strip() for t in prev_targets.split(",")]
             if "wma" in prev_targets:
                 targets.append("wma")
-            if "wma" not in [b.strip() for b in str(defaults.get("bundle_backend") or "").split(",")]:
+            if not _backend_keeps_wma(defaults.get("bundle_backend")):
                 defaults["bundle_backend"] = "tractcloud,wmql"
         defaults["targets"] = list(dict.fromkeys(targets))
         write_user_config(cfg)

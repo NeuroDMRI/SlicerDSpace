@@ -21,6 +21,8 @@
 2. Open **3D Slicer 5.10.0**, go to **Extensions Manager -> Install Extension from File...**, select the downloaded `.zip` file, and restart Slicer when prompted.
 3. After restarting, the **SlicerDSpace Setup** window opens automatically. Review your options (or optional WMA white-matter atlases: `ORG` checked by default, `NABA` and `East-West` optional) and click **Start Install**. Once installation finishes, restart Slicer and open **Modules -> Diffusion -> SlicerDSpace**.
 
+> **Note (2026-11-22):** The setup published after this release installs the core only (no WMA atlas is preselected); when you select WMA, SlicerDSpace offers the atlas download inside the plugin.
+
 ### Option B: Standalone Offline OS Base Archives + Optional Assets
 
 - **OS Base Packages (`depends NA`, bundled Python 3.12 + PyTorch + core weights + UKF + native MRtrix3 / FSLcpu / FreeSurfer Surface Runtime)**:

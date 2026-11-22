@@ -820,6 +820,17 @@
     '    return ext_root'
   ].join('\n');
 
+  // Post-install helpers shared by the graphical Setup module and the headless script (ASCII only). The Python twin
+  // in shared/installer_script_builder.py holds the same text.
+  var SHARED_POSTINSTALL_PY = [
+    'def _backend_keeps_wma(value):',
+    '    # The parsing of shared.algorithm_selection.algorithms() (not imported: the installed package can be older):',
+    '    # case-insensitive, "+" and ";" separate like ",", and "all" selects WMA too.',
+    '    text = str(value or "").strip().lower().replace("+", ",").replace(";", ",")',
+    '    parts = [p.strip() for p in text.split(",") if p.strip()]',
+    '    return "wma" in parts or "all" in parts'
+  ].join('\n');
+
   // Shared graphical Slicer extension module injected into SlicerDSpaceSetup-<OS>.zip.
   var SETUP_MODULE_PY = [
     'import hashlib, io, json, os, platform, posixpath, queue, re, shutil, signal, socket, ssl, stat, subprocess, sys, tarfile, tempfile, threading, time, traceback, urllib.error, urllib.parse, urllib.request, zipfile',
@@ -831,6 +842,7 @@
     '_ACTIVE_DIALOG = None',
     SHARED_DOWNLOAD_PY,
     SHARED_REMAP_PY,
+    SHARED_POSTINSTALL_PY,
     'def _search_dirs(offline_dir=""):',
     '    dirs = []',
     '    raw = str(offline_dir or "").strip()',
@@ -1032,7 +1044,7 @@
     '            prev_t = defaults.get("targets") or []',
     '            prev_t = [t.strip() for t in prev_t.split(",")] if isinstance(prev_t, str) else list(prev_t)',
     '            if "wma" in prev_t: targets.append("wma")',
-    '            if "wma" not in [b.strip() for b in str(defaults.get("bundle_backend") or "").split(",")]: defaults["bundle_backend"] = "tractcloud,wmql"',
+    '            if not _backend_keeps_wma(defaults.get("bundle_backend")): defaults["bundle_backend"] = "tractcloud,wmql"',
     '        defaults["targets"] = list(dict.fromkeys(targets)); write_user_config(cfg)',
     '        emit("all_done", {"mod_root": str(mod_root), "skipped_cli_subdirs": sorted(_SKIPPED_CLI_SUBDIRS)})',
     '    except Exception as exc: emit("error", f"{exc}\\n{traceback.format_exc()}")',
@@ -1521,6 +1533,7 @@
     'def _log(msg): print(f"[SlicerDSpace Installer] {msg}", flush=True)',
     SHARED_DOWNLOAD_PY,
     SHARED_REMAP_PY,
+    SHARED_POSTINSTALL_PY,
     'def _search_dirs():',
     '    dirs = []',
     '    raw = str(CONFIG.get("offline_dir", "") or "").strip()',
@@ -1838,7 +1851,7 @@
     '        prev_t = defaults.get("targets") or []',
     '        prev_t = [t.strip() for t in prev_t.split(",")] if isinstance(prev_t, str) else list(prev_t)',
     '        if "wma" in prev_t: targets.append("wma")',
-    '        if "wma" not in [b.strip() for b in str(defaults.get("bundle_backend") or "").split(",")]: defaults["bundle_backend"] = "tractcloud,wmql"',
+    '        if not _backend_keeps_wma(defaults.get("bundle_backend")): defaults["bundle_backend"] = "tractcloud,wmql"',
     '    defaults["targets"] = list(dict.fromkeys(targets)); write_user_config(cfg)',
     '    try:',
     '        from shared.environment import EnvironmentDoctorConfig, run_environment_doctor',

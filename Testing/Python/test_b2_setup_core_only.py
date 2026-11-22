@@ -187,6 +187,109 @@ class B2SetupReinstallKeepsAtlasTests(unittest.TestCase):
 
         self._each_copy(before, check)
 
+    def test_b2_setup_w2_reinstall_keeps_every_saved_wma_form(self) -> None:
+        # Fix round W2 (Codex P1): shared.algorithm_selection.algorithms() also accepts 'all', '+' and ';' separators
+        # and mixed case. A saved selection that includes WMA in any of these forms is kept as the user wrote it.
+        # 'wma,future' (an unknown name) is kept too: the installer cannot judge a name, and keeping is not destructive.
+        for value in ("all", "WMA+WMQL", "wma;tractcloud", "Wma, WMQL", "wma,future"):
+            with self.subTest(bundle_backend=value):
+                def check(defaults, value=value):
+                    self.assertEqual(defaults.get("bundle_backend"), value)
+
+                self._each_copy({"bundle_backend": value, "targets": ["microstructure", "bundles"]}, check)
+
+    def test_b2_setup_w2_reinstall_without_wma_in_any_form_gets_the_default(self) -> None:
+        # An empty value means the default 'wmql' in algorithms(): no WMA, so the no-pack default is written.
+        for value in ("", "WMQL+TractCloud", "tractcloud;wmql", "wmql"):
+            with self.subTest(bundle_backend=value):
+                def check(defaults):
+                    self.assertEqual(defaults.get("bundle_backend"), "tractcloud,wmql")
+
+                self._each_copy({"bundle_backend": value, "targets": ["microstructure", "bundles"]}, check)
+
+    def test_b2_setup_w2_inline_check_agrees_with_algorithms(self) -> None:
+        # The inline check in each copy has the meaning of algorithms() for every value that algorithms() accepts.
+        from shared.algorithm_selection import BUNDLES, algorithms
+
+        values = ("all", "ALL", "wma", "WMA+WMQL", "wma;tractcloud", "Wma, WMQL", " wmql ; Tractcloud ", "wmql",
+                  "tractcloud,wmql", "all,wma", "", "wmql+wma+tractcloud")
+        for label, ns in prune_namespaces(self):
+            for value in values:
+                with self.subTest(copy=label, value=value):
+                    self.assertEqual(ns["_backend_keeps_wma"](value), "wma" in algorithms(value, BUNDLES, "wmql"))
+
+
+def prune_namespaces(case: unittest.TestCase):
+    """The loaded Python text of the three installer copies (the JS ones need node)."""
+    from test_b4_w4_platform import _js_payload, _load, _python_payload
+    from test_installer_gui_reinstall_gap import load_setup_module
+
+    yield "python_builder", _load(_python_payload("linux"))
+    if shutil.which("node") is None:
+        if _on_ci():
+            case.fail("node is required on CI for the JS installer copies (node is not in PATH)")
+        return
+    yield "js_script", _load(_js_payload("linux"))
+    yield "js_setup_module", load_setup_module()
+
+
+class B2SetupW3WmaOnlyOfferTests(unittest.TestCase):
+    """Fix round W3 (Codex P1): a WMA-only (or TractCloud-only) selection closes to the target 'wma' ('tractcloud'), not
+    'bundles'; the atlas (data) check ran only under 'bundles', so Apply offered nothing."""
+
+    def _missing(self, closure_targets, assets: Path, *, family="org", bundle_backends=()):
+        from shared.ui_on_demand_resources import detect_missing_task_resources
+
+        return [item["id"] for item in detect_missing_task_resources(
+            targets=closure_targets, bundle_backends=bundle_backends, wma_atlas=family, brain_mask_backend="provided",
+            backend_paths={"model_assets_dir": str(assets)})]
+
+    def test_b2_setup_w3_wma_only_closure_offers_the_atlas(self) -> None:
+        from shared.target_closure import expand_closure
+
+        closure = expand_closure(("bundles",), bundle_backends=("wma",))
+        self.assertIn("wma", closure.targets)
+        self.assertNotIn("bundles", closure.targets)
+        for family, expected in (("org", "wma_org"), ("naba", "wma_naba"), ("east-west", "wma_east_west")):
+            for backends in ((), ("wma",)):  # the check must not depend on the bundle tuple
+                with self.subTest(family=family, bundle_backends=backends), tempfile.TemporaryDirectory() as td:
+                    self.assertEqual(self._missing(closure.targets, Path(td), family=family, bundle_backends=backends),
+                                     [expected])
+
+    def test_b2_setup_w3_wma_only_closure_with_the_atlas_offers_nothing(self) -> None:
+        from shared.target_closure import expand_closure
+
+        closure = expand_closure(("bundles",), bundle_backends=("wma",))
+        with tempfile.TemporaryDirectory() as td:
+            atlas = Path(td) / "bundles" / "wma"
+            for child in ("ORG-800FC-100HCP", "ORG-RegAtlas-100HCP"):
+                (atlas / child).mkdir(parents=True)
+            (atlas / "extracted_resource_index.json").write_text("{}", encoding="utf-8")
+            self.assertEqual(self._missing(closure.targets, Path(td)), [])
+
+    def test_b2_setup_w3_old_bundles_form_still_offers_the_atlas(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            self.assertEqual(self._missing(("bundles", "tractography"), Path(td), bundle_backends=("wma",)), ["wma_org"])
+
+    def test_b2_setup_w3_tractcloud_only_closure_offers_the_data(self) -> None:
+        from shared.target_closure import expand_closure
+
+        closure = expand_closure(("bundles",), bundle_backends=("tractcloud",))
+        self.assertNotIn("bundles", closure.targets)
+        with tempfile.TemporaryDirectory() as td:
+            # The CSD/ACT tracking of this closure also needs the anatomy weights; only the bundle items matter here.
+            found = self._missing(closure.targets, Path(td))
+            self.assertEqual([i for i in found if i == "tractcloud" or i.startswith("wma")], ["tractcloud"])
+
+    def test_b2_setup_w3_selection_without_wma_or_tractcloud_gets_no_bundle_offer(self) -> None:
+        from shared.target_closure import expand_closure
+
+        for targets, backends in ((("bundles",), ("wmql",)), (("microstructure",), ("wmql",))):
+            closure = expand_closure(targets, bundle_backends=backends)
+            with self.subTest(targets=targets), tempfile.TemporaryDirectory() as td:
+                found = self._missing(closure.targets, Path(td), bundle_backends=backends)
+                self.assertFalse([i for i in found if i.startswith("wma") or i == "tractcloud"], found)
+
 
 class B2SetupC2AtlasPlanTests(unittest.TestCase):
     """C2 (real Slicer, 2026-11-22): the doctor reports the missing atlas as 'setting:wma_org_atlas' (and TractCloud
@@ -257,6 +360,30 @@ class B2SetupInPluginWordingTests(unittest.TestCase):
                 tip = combo.setToolTip.call_args[0][0]
                 self.assertIn(expected, tip)
                 self.assertNotIn(banned, tip)
+
+
+class B2SetupW1OnlySlicerDmriTests(unittest.TestCase):
+    """Fix round W1 (user decision 2026-11-22): the website and the documents recommend only SlicerDMRI."""
+
+    EN = ("To view tractography results, also install the SlicerDMRI extension from Slicer’s Extensions Manager. "
+          "It is recommended for viewing only; the default analysis runs without it.")
+    ZH = "查看纤维束结果时，建议另外通过 Slicer 的 Extensions Manager 安装 SlicerDMRI 扩展。它仅用于查看结果，默认分析流程不依赖它。"
+
+    def test_b2_setup_w1_website_recommends_only_slicerdmri(self) -> None:
+        site = REPO_ROOT / "docs" / "site"
+        for page, sentence in (("index.html", self.EN), ("zh.html", self.ZH)):
+            with self.subTest(page=page):
+                text = (site / page).read_text(encoding="utf-8")
+                self.assertEqual(text.count(f'<p class="start-note-inline">{sentence}</p>'), 1)
+                self.assertNotIn("SlicerFreeSurfer", text)
+
+    def test_b2_setup_w1_documents_do_not_recommend_slicerfreesurfer(self) -> None:
+        paths = [REPO_ROOT / "README.md", REPO_ROOT / "README.zh-CN.md", REPO_ROOT / "docs" / "website" / "zh-CN.json",
+                 REPO_ROOT / ".agents" / "skills" / "slicerdspace" / "references" / "setup.md",
+                 *sorted((REPO_ROOT / "docs" / "setup").glob("*.md"))]
+        for path in paths:
+            with self.subTest(path=path.relative_to(REPO_ROOT).as_posix()):
+                self.assertNotIn("SlicerFreeSurfer", path.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

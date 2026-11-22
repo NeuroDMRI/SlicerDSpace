@@ -327,9 +327,12 @@ def detect_missing_task_resources(
                     size = sum(ext_sizes.get(p, 0) for p in pnl_paths) or _DEFAULT_PACK_SIZES_BYTES["pnl_cnn"]
                     add_item("pnl_cnn", size, "brain_mask_pnl")
 
-    # 3. Bundles: TractCloud / WMA
-    if "bundles" in target_set:
-        if "tractcloud" in bundle_tuple:
+    # 3. Bundles: TractCloud / WMA. Fix round W3: the closure turns a selection without WMQL into the target 'wma' or
+    # 'tractcloud' (not 'bundles'), and the bundle tuple can be empty or the 'wmql' default then; either form counts.
+    wants_tractcloud = "tractcloud" in target_set or ("bundles" in target_set and "tractcloud" in bundle_tuple)
+    wants_wma = "wma" in target_set or ("bundles" in target_set and "wma" in bundle_tuple)
+    if wants_tractcloud or wants_wma:
+        if wants_tractcloud:
             explicit_tc = backend_paths.get("tractcloud_data_dir")
             tc_ok = bool(explicit_tc and Path(explicit_tc).expanduser().is_dir() and (Path(explicit_tc).expanduser() / "TrainedModel/best_tract_f1_model.pth").is_file())
             if not tc_ok:
@@ -340,7 +343,7 @@ def detect_missing_task_resources(
                 size = pack_size or sum(ext_sizes.get(p, 0) for p in _ext_profile_paths("tractcloud")) or _DEFAULT_PACK_SIZES_BYTES["tractcloud"]
                 add_item("tractcloud", size, "tractcloud")
 
-        if "wma" in bundle_tuple:
+        if wants_wma:
             explicit_wma = backend_paths.get("wma_atlas_dir")
             if not _wma_atlas_ready(roots, wma_family, explicit_wma_dir=explicit_wma):
                 if wma_family == "naba":

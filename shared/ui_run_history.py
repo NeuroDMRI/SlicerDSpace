@@ -2207,6 +2207,8 @@ def _toggle_output(owner, item):
                     set_fiber_node_visible(node, not visible)
                 else:
                     node.SetDisplayVisibility(not visible)
+        if not visible:
+            _show_one_overlay_per_surface(slicer, nodes)
         _refresh_output_visibility(owner)
     except Exception as exc:
         slicer.util.errorDisplay(str(exc), parent=owner.parent)
@@ -2680,6 +2682,7 @@ def _relabel_family(qt_mod: Any, family: Any, zh: bool) -> None:
         row_key = row.data(0, role_key)
         if _is_subgroup_row(qt_mod, row):
             row.setText(0, f"{_subgroup_caption(row_key, zh)} ({_tree_count(row, 'childCount')})")
+            _relabel_morphometry_rows(qt_mod, row, zh)
 
 
 def open_results_folder(owner: Any, folder: Any) -> None:
@@ -2924,6 +2927,41 @@ def _without_repeated_tasks(manifest: dict, memo: dict) -> dict:
     return manifest if len(kept) == len(tasks) else dict(manifest, tasks=kept)
 
 
+MORPHOMETRY_ROW_KIND = "surface_morphometry"  # ROLE_KIND of a surface post-processing row (plain eye)
+
+
+def _morphometry_paths(candidates) -> set:
+    """The rows of the surface post-processing files (shared.surface_morphometry_display)."""
+
+    from shared.surface_morphometry_display import morphometry_row
+
+    return {item["path"] for item in candidates if morphometry_row(item.get("product"), item["path"]) is not None}
+
+
+def _morphometry_tooltip(path: Any, zh: bool) -> str:
+    """What the row shows, then its file path."""
+
+    from shared.surface_morphometry_display import row_tooltip
+
+    text = row_tooltip(path, zh=zh)
+    return f"{text}\n{path}" if text else str(path)
+
+
+def _relabel_morphometry_rows(qt_mod: Any, row: Any, zh: bool) -> None:
+    for leaf in _child_items(row):
+        path = leaf.data(0, _user_role(qt_mod, ROLE_PATH))
+        if path and leaf.data(0, _user_role(qt_mod, ROLE_KIND)) == MORPHOMETRY_ROW_KIND:
+            leaf.setToolTip(0, _morphometry_tooltip(path, zh))
+
+
+def _show_one_overlay_per_surface(slicer: Any, nodes) -> None:
+    """Surface post-processing: a shown measure or annotation hides the other overlays of its white surface."""
+
+    from shared.surface_morphometry_display import hide_same_surface_siblings
+
+    hide_same_surface_siblings(slicer, nodes)
+
+
 def _populate_manifest_output_items(
     owner: Any,
     parent: Any,
@@ -2968,13 +3006,15 @@ def _populate_manifest_output_items(
         allow_bundle_directory_scan=False,
         include_preprocessing=True,
         include_brain_mask=True,
+        include_surface_morphometry=True,
     )
     filtered_candidates = [
         item for item in candidates
         if not _is_internal_cache_path(Path(item["path"]), subject_root, output_root=output_root)
     ]
     visual_paths = {item["path"] for item in filtered_candidates
-                    if Path(item["path"]).suffix.lower() not in {".csv", ".tsv"}}
+                    if Path(item["path"]).suffix.lower() not in {".csv", ".tsv", ".stats"}}
+    morphometry_paths = _morphometry_paths(filtered_candidates)
     seg_paths = {item["path"] for item in filtered_candidates
                  if str(item.get("product") or "").startswith("segmentation")}
     from shared.fiber_display import streamline_kind
@@ -3123,11 +3163,13 @@ def _populate_manifest_output_items(
                     item.setData(0, _user_role(qt, ROLE_KIND), "segmentation")
                 elif path in fiber_paths:
                     item.setData(0, _user_role(qt, ROLE_KIND), FIBER_ROW_KIND)
+                elif path in morphometry_paths:
+                    item.setData(0, _user_role(qt, ROLE_KIND), MORPHOMETRY_ROW_KIND)
                 if manifest_str is not None:
                     item.setData(0, role_manifest, manifest_str)
                 if run_index is not None:
                     item.setData(0, role_run, run_index)
-                item.setToolTip(0, path)
+                item.setToolTip(0, _morphometry_tooltip(path, zh) if path in morphometry_paths else path)
             if subgroup is not None and sub_existed:
                 target.setText(0, f"{_subgroup_caption(key, zh)} ({_tree_count(target, 'childCount')})")
         if added_to_existing:

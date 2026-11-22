@@ -1202,6 +1202,8 @@ class SharedLogicMixin:
                 manifest,
                 include_preprocessing=source_path is not None,
                 include_brain_mask=source_path is not None,
+                # Surface post-processing files load only from a click on their own row, never in bulk.
+                include_surface_morphometry=source_path is not None,
             )
             if source_path is not None:
                 identity = str(source_path.expanduser().resolve())
@@ -1238,7 +1240,11 @@ class SharedLogicMixin:
             try:
                 suffix = result_file_suffix(path)
                 name = f"{subject}_{label}"
-                if suffix in {".nii", ".nii.gz", ".mgz"}:
+                from shared import surface_morphometry_display as morphometry
+                if morphometry.morphometry_row(candidate["product"], path) is not None:
+                    # Surface post-processing: nibabel reader, white .obj carrier, own colours (no SlicerFreeSurfer).
+                    success = morphometry.load_morphometry_row(slicer, candidate, manifest)
+                elif suffix in {".nii", ".nii.gz", ".mgz"}:
                     from shared.result_scene import categorical_context, categorical_role, load_categorical_result
                     if categorical_role(candidate):
                         # B2: one categorical loader and colour source for the automatic and every manual path.

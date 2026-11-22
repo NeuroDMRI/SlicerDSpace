@@ -249,7 +249,13 @@ def _resolve_manifest_brain_mask_candidate(manifest: dict) -> Optional[Path]:
     return None
 
 
-def result_candidates(manifest, *, allow_bundle_directory_scan=True, include_preprocessing=False, include_brain_mask=False):
+def result_candidates(manifest, *, allow_bundle_directory_scan=True, include_preprocessing=False, include_brain_mask=False,
+                      include_surface_morphometry=False):
+    """``include_surface_morphometry`` (off by default, so bulk and automatic loads are unchanged): also list the
+    published files of ``surface.ddsurfer_postprocess`` (shared.surface_morphometry_display), accepted by product and
+    file name, in the order lh then rh: thickness, curv, sulc, area, aparc, aparc.a2009s, inflated, stats."""
+    from shared.surface_morphometry_display import morphometry_row, row_order
+
     candidates, skipped, seen = [], [], set()
     for task in manifest.get("tasks", []) or []:
         if not isinstance(task, dict):
@@ -286,7 +292,8 @@ def result_candidates(manifest, *, allow_bundle_directory_scan=True, include_pre
             if not path.is_absolute():
                 skipped.append({"path": value, "reason": "Relative output path needs an explicit source root"})
                 continue
-            if not path.name.lower().endswith(SUFFIXES + DEC_SUFFIXES):
+            morphometry = include_surface_morphometry and morphometry_row(name, path) is not None
+            if not morphometry and not path.name.lower().endswith(SUFFIXES + DEC_SUFFIXES):
                 continue
             if _is_internal_cache_path(path, manifest):
                 continue
@@ -302,7 +309,10 @@ def result_candidates(manifest, *, allow_bundle_directory_scan=True, include_pre
             # Prefer small anatomical/scalar products before expensive tractograms.
             suffix_lower = path.suffix.lower()
             priority = 2 if suffix_lower in {".tck", ".trk", ".vtk", ".vtp"} else 1 if suffix_lower in {".stl", ".obj"} else 0
-            candidates.append({"path": identity, "label": name + "_" + str(key), "key": str(key), "product": name, "priority": priority})
+            entry = {"path": identity, "label": name + "_" + str(key), "key": str(key), "product": name, "priority": priority}
+            if morphometry:
+                entry.update(priority=1, order=row_order(name, path))
+            candidates.append(entry)
     if include_brain_mask and not _has_preprocessing_mask_candidate(candidates):
         mask_path = _resolve_manifest_brain_mask_candidate(manifest)
         if mask_path is not None:
@@ -316,7 +326,8 @@ def result_candidates(manifest, *, allow_bundle_directory_scan=True, include_pre
                     "product": "preprocessing.brain_mask",
                     "priority": 0,
                 })
-    return sorted(candidates, key=lambda item: (item["priority"], item["label"])), skipped
+    # A post-processing row sorts by its decided order (a tuple), every other row by its label as before.
+    return sorted(candidates, key=lambda item: (item["priority"], item.get("order", ()), item["label"])), skipped
 
 
 def result_nodes(slicer):

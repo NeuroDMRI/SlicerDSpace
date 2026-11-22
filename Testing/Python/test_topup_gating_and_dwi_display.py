@@ -206,6 +206,346 @@ class TopupGatingPopupTest(unittest.TestCase):
         self.assertIn("batch", marker.setToolTip.call_args[0][0].lower())
         self.assertEqual([w for w in qt.created if object_name(w) == "topupReversePhaseB0LineEdit"], [])
 
+    def test_browse_reverse_b0_uses_main_window_parent_ignores_close_event_and_keeps_popup_alive(self) -> None:
+        from shared import ui_algorithm_picker as picker
+
+        rev_nrrd = self.root / "sub01_PA_b0.nrrd"
+        rev_nrrd.write_bytes(b"NRRD0004\n")
+        owner, _, _ = self._make_ui_and_owner(reverse_b0="", lang="en")
+        qt = fake_qt()
+        qt.QComboBox = type("FakeComboBox", (), {})
+        qt.QDoubleSpinBox = type("FakeDoubleSpinBox", (), {})
+
+        class _FakeQObject:
+            pass
+
+        class _FakeEvent:
+            def __init__(self, kind: int):
+                self._kind = kind
+                self.ignored = 0
+
+            def type(self) -> int:
+                return self._kind
+
+            def ignore(self) -> None:
+                self.ignored += 1
+
+        qt.QObject = _FakeQObject
+        qt.QEvent.Close = 19
+        qt.QEvent.Hide = 18
+        qt.QEvent.ApplicationDeactivate = 122
+
+        slicer = mock.MagicMock(name="slicer")
+        main_win = mock.MagicMock(name="mainWindow")
+        slicer.util.mainWindow.return_value = main_win
+        observed = {}
+
+        orig_dialog = qt.QDialog.side_effect
+
+        def make_dialog(*args, **kwargs):
+            dlg = orig_dialog(*args, **kwargs)
+            filters = []
+            dlg.installEventFilter.side_effect = lambda flt: filters.append(flt)
+            dlg.isVisible.return_value = True
+
+            def fake_get_open(parent, title, start_dir, flt_str):
+                observed["parent"] = parent
+                observed["hid_before_open"] = dlg.hide.called
+                close_ev = _FakeEvent(19)
+                deact_ev = _FakeEvent(122)
+                observed["close_consumed"] = filters[-1].eventFilter(dlg, close_ev)
+                observed["close_ignored"] = close_ev.ignored
+                observed["deact_consumed"] = filters[-1].eventFilter(dlg, deact_ev)
+                return str(rev_nrrd)
+
+            qt.QFileDialog.getOpenFileName.side_effect = fake_get_open
+
+            def on_exec():
+                browse_btn = by_name(qt, "topupReversePhaseB0BrowseButton")
+                browse_btn.clicked.connect.call_args[0][0]()
+                topup_box = next(w for w in qt.created if w.kind == "QCheckBox" and w.objectName == "algorithm_topup")
+                observed["topup_checked"] = topup_box.checked
+                observed["reject_called_during_browse"] = dlg.reject.called
+                return qt.QDialog.Accepted
+
+            dlg.exec_.side_effect = on_exec
+            return dlg
+
+        qt.QDialog.side_effect = make_dialog
+        with (
+            mock.patch.dict(sys.modules, {"qt": qt, "slicer": slicer, "ctk": mock.MagicMock()}),
+            mock.patch("shared.selected_setup.fsl_preprocessing_offered", return_value=True),
+            mock.patch.object(picker, "_host_platform", return_value="linux"),
+        ):
+            accepted = picker.choose_algorithms(owner, "preprocessing")
+
+        self.assertTrue(accepted)
+        self.assertIs(observed["parent"], main_win)
+        self.assertFalse(observed["hid_before_open"])
+        self.assertTrue(observed["close_consumed"])
+        self.assertEqual(observed["close_ignored"], 1)
+        self.assertFalse(observed["deact_consumed"])
+        self.assertFalse(observed["reject_called_during_browse"])
+        self.assertTrue(observed["topup_checked"])
+        self.assertEqual(owner._parameterNode.preprocessingReversePhaseB0, str(rev_nrrd))
+        self.assertIn("topup", owner._parameterNode.orchestrationPreprocessingStages)
+
+    def test_browse_reverse_b0_macos_non_modal_hides_before_file_dialog_and_reshows_without_ending_loop(self) -> None:
+        from shared import ui_algorithm_picker as picker
+
+        rev_nrrd = self.root / "sub01_PA_b0.nrrd"
+        rev_nrrd.write_bytes(b"NRRD0004\n")
+        owner, _, _ = self._make_ui_and_owner(reverse_b0="", lang="en")
+        qt = fake_qt()
+        qt.QComboBox = type("FakeComboBox", (), {})
+        qt.QDoubleSpinBox = type("FakeDoubleSpinBox", (), {})
+
+        class _FakeQObject:
+            pass
+
+        class _FakeEvent:
+            def __init__(self, kind: int):
+                self._kind = kind
+                self.ignored = 0
+
+            def type(self) -> int:
+                return self._kind
+
+            def ignore(self) -> None:
+                self.ignored += 1
+
+        qt.QObject = _FakeQObject
+        qt.QEvent.Close = 19
+        qt.QEvent.Hide = 18
+        qt.QEvent.ApplicationDeactivate = 122
+        qt.QDialog.Accepted = 1
+        qt.QDialog.Rejected = 0
+
+        slicer = mock.MagicMock(name="slicer")
+        main_win = mock.MagicMock(name="mainWindow")
+        slicer.util.mainWindow.return_value = main_win
+        observed = {"events": [], "quit_calls": 0}
+        dialogs = []
+
+        orig_dialog = qt.QDialog.side_effect
+
+        def make_dialog(*args, **kwargs):
+            dlg = orig_dialog(*args, **kwargs)
+            dialogs.append(dlg)
+            vis = {"v": False}
+            res = {"r": 0}
+            filters = []
+            dlg.installEventFilter.side_effect = lambda flt: filters.append(flt)
+            dlg.isVisible.side_effect = lambda: vis["v"]
+            dlg.result.side_effect = lambda: res["r"]
+
+            def do_show():
+                vis["v"] = True
+                observed["events"].append("show")
+
+            def do_hide():
+                vis["v"] = False
+                observed["events"].append("hide")
+                if filters:
+                    filters[-1].eventFilter(dlg, _FakeEvent(18))
+
+            def do_accept():
+                res["r"] = qt.QDialog.Accepted
+                vis["v"] = False
+
+            dlg.show.side_effect = do_show
+            dlg.hide.side_effect = do_hide
+            dlg.accept.side_effect = do_accept
+
+            def fake_get_open(parent, title, start_dir, flt_str):
+                observed["events"].append("file_dialog")
+                observed["parent"] = parent
+                observed["visible_during_file_dialog"] = vis["v"]
+                close_ev = _FakeEvent(19)
+                observed["close_consumed"] = filters[-1].eventFilter(dlg, close_ev)
+                observed["close_ignored"] = close_ev.ignored
+                return str(rev_nrrd)
+
+            qt.QFileDialog.getOpenFileName.side_effect = fake_get_open
+            return dlg
+
+        class _FakeLoop:
+            def exec_(self):
+                browse_btn = by_name(qt, "topupReversePhaseB0BrowseButton")
+                browse_btn.clicked.connect.call_args[0][0]()
+                observed["quit_calls_after_browse"] = observed["quit_calls"]
+                observed["visible_after_browse"] = dialogs[-1].isVisible()
+                dialogs[-1].accept()
+                return 0
+
+            def quit(self):
+                observed["quit_calls"] += 1
+
+        qt.QDialog.side_effect = make_dialog
+        qt.QEventLoop = _FakeLoop
+        with (
+            mock.patch.dict(sys.modules, {"qt": qt, "slicer": slicer, "ctk": mock.MagicMock()}),
+            mock.patch("shared.selected_setup.fsl_preprocessing_offered", return_value=True),
+            mock.patch.object(picker, "_host_platform", return_value="darwin"),
+        ):
+            accepted = picker.choose_algorithms(owner, "preprocessing")
+
+        self.assertTrue(accepted)
+        self.assertIs(observed["parent"], main_win)
+        self.assertEqual(observed["events"], ["show", "hide", "file_dialog", "show"])
+        self.assertFalse(observed["visible_during_file_dialog"])
+        self.assertTrue(observed["close_consumed"])
+        self.assertEqual(observed["close_ignored"], 1)
+        self.assertEqual(observed["quit_calls_after_browse"], 0)
+        self.assertTrue(observed["visible_after_browse"])
+        self.assertEqual(owner._parameterNode.preprocessingReversePhaseB0, str(rev_nrrd))
+        self.assertIn("topup", owner._parameterNode.orchestrationPreprocessingStages)
+
+    def test_drop_box_accepts_dropped_reverse_b0_and_picker_survives_app_deactivate_for_drag_and_drop(self) -> None:
+        from shared import ui_algorithm_picker as picker
+
+        rev_nrrd = self.root / "sub01_PA_b0.nrrd"
+        rev_nrrd.write_bytes(b"NRRD0004\n")
+        owner, _, _ = self._make_ui_and_owner(reverse_b0="", lang="zh")
+        qt = fake_qt()
+        qt.QComboBox = type("FakeComboBox", (), {})
+        qt.QDoubleSpinBox = type("FakeDoubleSpinBox", (), {})
+
+        class _FakeQFrame:
+            NoFrame = 0
+
+            def __init__(self, *args, **kwargs):
+                self._props = {}
+                self._name = ""
+                self._accept_drops = False
+
+            def setObjectName(self, name):
+                self._name = name
+
+            def objectName(self):
+                return self._name
+
+            def setFrameShape(self, _shape):
+                pass
+
+            def setAcceptDrops(self, flag):
+                self._accept_drops = bool(flag)
+
+            def setAttribute(self, *_args):
+                pass
+
+            def setMinimumHeight(self, *_args):
+                pass
+
+            def setMinimumWidth(self, *_args):
+                pass
+
+            def setToolTip(self, *_args):
+                pass
+
+            def property(self, name):
+                return self._props.get(name)
+
+            def setProperty(self, name, value):
+                self._props[name] = value
+
+            def style(self):
+                return None
+
+            def update(self):
+                pass
+
+        class _FakeQObject:
+            pass
+
+        class _FakeEvent:
+            def __init__(self, kind: int):
+                self._kind = kind
+
+            def type(self) -> int:
+                return self._kind
+
+        class _FakeDropEvent:
+            def __init__(self, path: Path):
+                self._url = SimpleNamespace(isLocalFile=lambda: True, toLocalFile=lambda: str(path))
+                self.accepted = False
+
+            def mimeData(self):
+                return SimpleNamespace(hasUrls=lambda: True, urls=lambda: [self._url])
+
+            def acceptProposedAction(self):
+                self.accepted = True
+
+            def ignore(self):
+                self.accepted = False
+
+        created_frames = []
+        orig_init = _FakeQFrame.__init__
+
+        def tracking_init(self, *args, **kwargs):
+            orig_init(self, *args, **kwargs)
+            created_frames.append(self)
+
+        _FakeQFrame.__init__ = tracking_init
+        qt.QFrame = _FakeQFrame
+        qt.QObject = _FakeQObject
+        qt.Qt.Dialog = 3
+        qt.Qt.Popup = 8
+        qt.Qt.FramelessWindowHint = 2048
+        qt.QEvent.Close = 19
+        qt.QEvent.ApplicationDeactivate = 122
+        qt.QEvent.MouseButtonPress = 2
+
+        slicer = mock.MagicMock(name="slicer")
+        observed = {}
+        orig_dialog = qt.QDialog.side_effect
+
+        def make_dialog(*args, **kwargs):
+            dlg = orig_dialog(*args, **kwargs)
+            filters = []
+            dlg.installEventFilter.side_effect = lambda flt: filters.append(flt)
+
+            def on_exec():
+                observed["flags"] = dlg.setWindowFlags.call_args[0][0]
+                filters[-1].eventFilter(dlg, _FakeEvent(122))
+                observed["rejected_on_deactivate"] = dlg.reject.called
+                drop_box = next(f for f in created_frames if f.objectName() == "topupReversePhaseB0DropBox")
+                observed["drop_box_accepts_drops"] = drop_box._accept_drops
+                enter_ev = _FakeDropEvent(rev_nrrd)
+                drop_box.dragEnterEvent(enter_ev)
+                observed["drag_active_on_enter"] = drop_box.property("dragActive")
+                drop_ev = _FakeDropEvent(rev_nrrd)
+                drop_box.dropEvent(drop_ev)
+                observed["drop_accepted"] = drop_ev.accepted
+                observed["drag_active_after_drop"] = drop_box.property("dragActive")
+                observed["has_file_after_drop"] = drop_box.property("hasFile")
+                topup_box = next(w for w in qt.created if w.kind == "QCheckBox" and w.objectName == "algorithm_topup")
+                observed["topup_checked"] = topup_box.checked
+                return qt.QDialog.Accepted
+
+            dlg.exec_.side_effect = on_exec
+            return dlg
+
+        qt.QDialog.side_effect = make_dialog
+        with (
+            mock.patch.dict(sys.modules, {"qt": qt, "slicer": slicer, "ctk": mock.MagicMock()}),
+            mock.patch("shared.selected_setup.fsl_preprocessing_offered", return_value=True),
+            mock.patch.object(picker, "_host_platform", return_value="linux"),
+        ):
+            accepted = picker.choose_algorithms(owner, "preprocessing")
+
+        self.assertTrue(accepted)
+        self.assertEqual(observed["flags"], 3 | 2048)  # Qt.Dialog | Qt.FramelessWindowHint (not Qt.Popup)
+        self.assertFalse(observed["rejected_on_deactivate"])
+        self.assertTrue(observed["drop_box_accepts_drops"])
+        self.assertTrue(observed["drag_active_on_enter"])
+        self.assertTrue(observed["drop_accepted"])
+        self.assertFalse(observed["drag_active_after_drop"])
+        self.assertTrue(observed["has_file_after_drop"])
+        self.assertTrue(observed["topup_checked"])
+        self.assertEqual(owner._parameterNode.preprocessingReversePhaseB0, str(rev_nrrd))
+        self.assertIn("topup", owner._parameterNode.orchestrationPreprocessingStages)
+
 
 class TopupValidationAndEddyErrorTest(unittest.TestCase):
     def setUp(self) -> None:

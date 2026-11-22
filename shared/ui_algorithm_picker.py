@@ -522,10 +522,86 @@ def _add_algorithm_row(qt, owner, layout, box, family, algorithm, staged, zh, re
     }
 
 
+_TOPUP_DROP_BOX_CLASSES: dict[type, type] = {}
+
+
+def _set_drop_box_properties(widget, **props) -> None:
+    if widget is None or not hasattr(widget, "setProperty"):
+        return
+    changed = False
+    for name, value in props.items():
+        if bool(widget.property(name)) != bool(value):
+            widget.setProperty(name, bool(value))
+            changed = True
+    if not changed:
+        return
+    style_fn = getattr(widget, "style", None)
+    style = style_fn() if callable(style_fn) else style_fn
+    if style is not None:
+        if hasattr(style, "unpolish"):
+            style.unpolish(widget)
+        if hasattr(style, "polish"):
+            style.polish(widget)
+    if hasattr(widget, "update"):
+        widget.update()
+
+
+def _make_topup_drop_box(qt, on_drop):
+    """Return a QFrame drop zone for reverse-PE b=0 files (reuses Prepare Inputs path extraction)."""
+    from shared.ui_prepare_inputs import _extract_drop_paths, _set_tile_drag_active
+
+    qframe_cls = getattr(qt, "QFrame", None)
+    if isinstance(qframe_cls, type):
+        box_cls = _TOPUP_DROP_BOX_CLASSES.get(qframe_cls)
+        if box_cls is None:
+            class _TopupReverseB0DropBox(qframe_cls):
+                def dragEnterEvent(self, event):
+                    qt_mod, _callback = getattr(self, "_topupDropCtx", (None, None))
+                    mime = event.mimeData() if hasattr(event, "mimeData") else None
+                    if qt_mod is not None and _extract_drop_paths(qt_mod, mime):
+                        _set_tile_drag_active(self, True)
+                        if hasattr(event, "acceptProposedAction"):
+                            event.acceptProposedAction()
+                        return
+                    if hasattr(event, "ignore"):
+                        event.ignore()
+
+                def dragMoveEvent(self, event):
+                    self.dragEnterEvent(event)
+
+                def dragLeaveEvent(self, event):
+                    _set_tile_drag_active(self, False)
+
+                def dropEvent(self, event):
+                    _set_tile_drag_active(self, False)
+                    qt_mod, callback = getattr(self, "_topupDropCtx", (None, None))
+                    mime = event.mimeData() if hasattr(event, "mimeData") else None
+                    paths = _extract_drop_paths(qt_mod, mime) if qt_mod is not None else []
+                    if paths and callable(callback):
+                        callback(str(paths[0]))
+                        if hasattr(event, "acceptProposedAction"):
+                            event.acceptProposedAction()
+                        return
+                    if hasattr(event, "ignore"):
+                        event.ignore()
+
+            box_cls = _TopupReverseB0DropBox
+            _TOPUP_DROP_BOX_CLASSES[qframe_cls] = box_cls
+
+        frame = box_cls()
+        frame._topupDropCtx = (qt, on_drop)
+        no_frame = getattr(qframe_cls, "NoFrame", None)
+        if no_frame is not None and hasattr(frame, "setFrameShape"):
+            frame.setFrameShape(no_frame)
+        return frame, True
+    frame = qt.QFrame() if hasattr(qt, "QFrame") else qt.QWidget()
+    return frame, False
+
+
 def _add_topup_reverse_b0_controls(
     qt, owner, dialog, layout, box, row_controls, staged, popup_state, zh, resize_popup, *, dark=None,
 ):
-    """Inline reverse-PE b=0 file selector placed directly under Topup; gates the Topup checkbox live."""
+    """Inline reverse-PE b=0 drop zone (left) + Browse button (right) under Topup; gates Topup live."""
     from pathlib import Path
     from shared.topup_parameters import topup_unavailable_reason
     from shared.ui_styles import is_dark_mode
@@ -540,64 +616,116 @@ def _add_topup_reverse_b0_controls(
     if hasattr(container_layout, "setContentsMargins"):
         container_layout.setContentsMargins(22, 0, 0, 2)
     if hasattr(container_layout, "setSpacing"):
-        container_layout.setSpacing(3)
+        container_layout.setSpacing(4)
+
+    muted_ink = "#9AA4AF" if use_dark else "#55636F"
+    ink = "#E6EDF3" if use_dark else "#1F2937"
+    drop_bg = "#161B22" if use_dark else "#F8FAFC"
+    filled_bg = "#1C232B" if use_dark else "#FFFFFF"
+    hover_bg = "#1F2D3D" if use_dark else "#EBF3F7"
+    drop_line = "#4B5563" if use_dark else "#94A3B8"
+    drag_accent = "#7CC4EA" if use_dark else "#335B70"
+    err_color = "#FF7B72" if use_dark else "#C62828"
 
     label_text = "反向相位 b=0 图像" if zh else "Reverse-PE b=0 image"
     field_label = qt.QLabel(label_text)
     field_label.setObjectName("topupReversePhaseB0Label")
-    ink = "#9AA4AF" if use_dark else "#55636F"
-    field_label.setStyleSheet(f"QLabel#topupReversePhaseB0Label {{ color: {ink}; font-size: 11px; }}")
     container_layout.addWidget(field_label)
 
     input_row = qt.QHBoxLayout()
     if hasattr(input_row, "setContentsMargins"):
         input_row.setContentsMargins(0, 0, 0, 0)
     if hasattr(input_row, "setSpacing"):
-        input_row.setSpacing(4)
+        input_row.setSpacing(6)
 
-    path_edit = qt.QLineEdit()
+    dropped_handler = [None]
+    drop_box, handles_drops = _make_topup_drop_box(
+        qt, lambda dropped_path: dropped_handler[0](dropped_path) if callable(dropped_handler[0]) else None
+    )
+    drop_box.setObjectName("topupReversePhaseB0DropBox")
+    if hasattr(drop_box, "setAcceptDrops"):
+        drop_box.setAcceptDrops(True)
+    styled_bg = getattr(qt.Qt, "WA_StyledBackground", None)
+    if styled_bg is not None and hasattr(drop_box, "setAttribute"):
+        drop_box.setAttribute(styled_bg, True)
+    if hasattr(drop_box, "setMinimumHeight"):
+        drop_box.setMinimumHeight(34)
+    if hasattr(drop_box, "setMinimumWidth"):
+        drop_box.setMinimumWidth(195)
+
+    drop_layout = qt.QHBoxLayout(drop_box)
+    if hasattr(drop_layout, "setContentsMargins"):
+        drop_layout.setContentsMargins(8, 4, 6, 4)
+    if hasattr(drop_layout, "setSpacing"):
+        drop_layout.setSpacing(4)
+
+    path_edit = qt.QLineEdit(drop_box)
     path_edit.setObjectName("topupReversePhaseB0LineEdit")
+    if hasattr(path_edit, "setAcceptDrops"):
+        path_edit.setAcceptDrops(not handles_drops)
     path_edit.setText(initial_path)
     if hasattr(path_edit, "setPlaceholderText"):
         path_edit.setPlaceholderText(
-            "选择反向 b=0 (.nii.gz, .nrrd…)" if zh else "Select reverse-PE b=0 (.nii.gz, .nrrd…)"
+            "拖入反向 b=0 文件到此…" if zh else "Drop reverse-PE b=0 file here…"
         )
-    if hasattr(path_edit, "setMinimumWidth"):
-        path_edit.setMinimumWidth(180)
     path_tip = (
-        "与主 DWI 相位编码方向相反的 b=0 图像（例如主 DWI 为 AP 时提供 PA b=0）。" if zh
-        else "A b=0 image acquired with the opposite phase-encoding direction (e.g. PA b=0 for an AP main DWI)."
+        "将与主 DWI 相位编码方向相反的 b=0 图像拖入此处，或点击右侧「浏览…」（例如主 DWI 为 AP 时提供 PA b=0）。" if zh
+        else "Drop a reverse phase-encoding b=0 image here or click Browse… (e.g. PA b=0 for an AP main DWI)."
     )
-    path_edit.setToolTip(path_tip)
+    path_edit.setToolTip(initial_path or path_tip)
+    if hasattr(drop_box, "setToolTip"):
+        drop_box.setToolTip(initial_path or path_tip)
 
-    browse_btn = qt.QPushButton("浏览…" if zh else "Browse…")
-    browse_btn.setObjectName("topupReversePhaseB0BrowseButton")
-    if hasattr(browse_btn, "setToolTip"):
-        browse_btn.setToolTip("选择反向相位编码 b=0 图像文件" if zh else "Choose a reverse phase-encoding b=0 image file")
-    if pointing is not None and hasattr(browse_btn, "setCursor"):
-        browse_btn.setCursor(pointing)
-
-    clear_btn = qt.QToolButton()
+    clear_btn = qt.QToolButton(drop_box)
     clear_btn.setObjectName("topupReversePhaseB0ClearButton")
     clear_btn.setText("×")
+    if hasattr(clear_btn, "setAutoRaise"):
+        clear_btn.setAutoRaise(True)
     if hasattr(clear_btn, "setFixedSize"):
-        clear_btn.setFixedSize(22, 22)
+        clear_btn.setFixedSize(18, 18)
     if hasattr(clear_btn, "setToolTip"):
         clear_btn.setToolTip("清除反向 b=0 图像" if zh else "Clear reverse-PE b=0 image")
     if pointing is not None and hasattr(clear_btn, "setCursor"):
         clear_btn.setCursor(pointing)
     clear_btn.setVisible(bool(initial_path))
 
-    input_row.addWidget(path_edit, 1)
+    drop_layout.addWidget(path_edit, 1)
+    drop_layout.addWidget(clear_btn)
+
+    browse_btn = qt.QPushButton("浏览…" if zh else "Browse…")
+    browse_btn.setObjectName("topupReversePhaseB0BrowseButton")
+    if hasattr(browse_btn, "setMinimumHeight"):
+        browse_btn.setMinimumHeight(34)
+    if hasattr(browse_btn, "setToolTip"):
+        browse_btn.setToolTip("选择反向相位编码 b=0 图像文件" if zh else "Choose a reverse phase-encoding b=0 image file")
+    if pointing is not None and hasattr(browse_btn, "setCursor"):
+        browse_btn.setCursor(pointing)
+
+    input_row.addWidget(drop_box, 1)
     input_row.addWidget(browse_btn)
-    input_row.addWidget(clear_btn)
     container_layout.addLayout(input_row)
+    container.setStyleSheet(
+        f"QLabel#topupReversePhaseB0Label {{ color: {muted_ink}; font-size: 11px; }}"
+        f"QFrame#topupReversePhaseB0DropBox {{ background: {drop_bg}; border: 2px dashed {drop_line}; border-radius: 8px; }}"
+        f"QFrame#topupReversePhaseB0DropBox[hasFile=\"true\"] {{ background: {filled_bg}; border: 1.5px solid #478CB3; }}"
+        f"QFrame#topupReversePhaseB0DropBox[invalid=\"true\"] {{ background: {filled_bg}; border: 1.5px solid {err_color}; }}"
+        f"QFrame#topupReversePhaseB0DropBox[dragActive=\"true\"] {{ background: {hover_bg}; border: 2px dashed {drag_accent}; }}"
+        f"QLineEdit#topupReversePhaseB0LineEdit {{ background: transparent; border: 0; padding: 0; font-size: 11px; color: {ink}; }}"
+        f"QToolButton#topupReversePhaseB0ClearButton {{ background: transparent; border: 0; border-radius: 4px; color: {muted_ink}; }}"
+        f"QToolButton#topupReversePhaseB0ClearButton:hover {{ background: {hover_bg}; color: {ink}; }}"
+    )
     layout.addWidget(container)
 
     state = {
         "text": initial_path,
         "enabled": not bool(topup_unavailable_reason(initial_path, batch_mode=False, zh=zh)),
     }
+    _set_drop_box_properties(
+        drop_box,
+        hasFile=bool(initial_path and state["enabled"]),
+        invalid=bool(initial_path and not state["enabled"]),
+        dragActive=False,
+    )
 
     def _read_text() -> str:
         raw = getattr(path_edit, "text", None)
@@ -613,7 +741,6 @@ def _add_topup_reverse_b0_controls(
     reason_label = row_controls.get("reason_label")
     collapse_reason = row_controls.get("collapse_reason")
     caption = "设置" if zh else "Settings"
-    err_color = "#FF7B72" if use_dark else "#C62828"
 
     def _apply_topup_gate(new_text=None, *, auto_check: bool = True) -> None:
         if isinstance(new_text, str):
@@ -622,6 +749,9 @@ def _add_topup_reverse_b0_controls(
             state["text"] = _read_text()
         raw_path = state["text"]
         clear_btn.setVisible(bool(raw_path))
+        path_edit.setToolTip(raw_path or path_tip)
+        if hasattr(drop_box, "setToolTip"):
+            drop_box.setToolTip(raw_path or path_tip)
         reason = topup_unavailable_reason(raw_path, batch_mode=False, zh=zh)
         was_enabled = state["enabled"]
         now_enabled = not bool(reason)
@@ -642,7 +772,7 @@ def _add_topup_reverse_b0_controls(
                     collapse_reason()
                 else:
                     reason_label.setVisible(False)
-            path_edit.setStyleSheet("")
+            _set_drop_box_properties(drop_box, hasFile=True, invalid=False)
         else:
             box.setChecked(False)
             box.setEnabled(False)
@@ -661,8 +791,18 @@ def _add_topup_reverse_b0_controls(
                 marker.setAccessibleName(reason)
             if reason_label is not None:
                 reason_label.setText(reason)
-            path_edit.setStyleSheet(f"QLineEdit#topupReversePhaseB0LineEdit {{ border: 1px solid {err_color}; }}" if raw_path else "")
+            _set_drop_box_properties(drop_box, hasFile=False, invalid=bool(raw_path))
         resize_popup()
+
+    def _on_dropped_path(dropped_path: str) -> None:
+        cleaned = str(dropped_path or "").strip()
+        if not cleaned:
+            return
+        path_edit.setText(cleaned)
+        if state["text"] != cleaned:
+            _apply_topup_gate(cleaned, auto_check=True)
+
+    dropped_handler[0] = _on_dropped_path
 
     def _on_browse(*_args) -> None:
         file_dialog_cls = getattr(qt, "QFileDialog", None)
@@ -686,26 +826,55 @@ def _add_topup_reverse_b0_controls(
         file_filter = (
             "MRI / Diffusion images (*.nii *.nii.gz *.nrrd *.nhdr *.mif *.mif.gz *.mgh *.mgz);;All files (*)"
         )
+        file_dialog_parent = None
+        try:
+            import slicer
+
+            main_win_fn = getattr(getattr(slicer, "util", None), "mainWindow", None)
+            if callable(main_win_fn):
+                file_dialog_parent = main_win_fn()
+        except Exception:
+            file_dialog_parent = None
+        if file_dialog_parent is None:
+            parent_getter = getattr(dialog, "parentWidget", None)
+            if callable(parent_getter):
+                try:
+                    file_dialog_parent = parent_getter()
+                except Exception:
+                    file_dialog_parent = None
         popup_state["browsing_file"] = True
+        hid_for_browse = False
         chosen = ""
         try:
-            result = file_dialog_cls.getOpenFileName(dialog, browse_title, start_dir, file_filter)
+            # Never parent a native QFileDialog to a Qt.Popup: on macOS Cocoa a popup window is
+            # auto-dismissed (QEvent.Close -> reject()) the moment NSOpenPanel activates, which
+            # immediately aborts the file dialog and closes the picker. On macOS (non-modal
+            # QEventLoop wait) hide the popup cleanly before opening NSOpenPanel and re-show it
+            # afterwards; on Windows/Linux (dialog.exec_()) keep it shown because hide() exits exec_().
+            if popup_state.get("waits_non_modal") and hasattr(dialog, "hide"):
+                try:
+                    dialog.hide()
+                    hid_for_browse = True
+                except Exception:
+                    hid_for_browse = False
+            result = file_dialog_cls.getOpenFileName(file_dialog_parent, browse_title, start_dir, file_filter)
             if isinstance(result, (tuple, list)):
                 chosen = str(result[0] or "")
             else:
                 chosen = str(result or "")
         finally:
-            popup_state["browsing_file"] = False
             if not popup_state.get("finished"):
                 try:
-                    if hasattr(dialog, "isVisible") and not dialog.isVisible():
+                    if hid_for_browse or (hasattr(dialog, "isVisible") and not dialog.isVisible()):
                         dialog.show()
+                        resize_popup()
                     if hasattr(dialog, "raise_"):
                         dialog.raise_()
                     if hasattr(dialog, "activateWindow"):
                         dialog.activateWindow()
                 except Exception:
                     pass
+            popup_state["browsing_file"] = False
         if chosen:
             path_edit.setText(chosen)
             if state["text"] != chosen.strip():
@@ -733,9 +902,6 @@ def _add_topup_reverse_b0_controls(
         clear_sig.connect(_on_clear)
     elif hasattr(clear_btn, "connect"):
         clear_btn.connect("clicked()", _on_clear)
-
-    if initial_path and not state["enabled"]:
-        path_edit.setStyleSheet(f"QLineEdit#topupReversePhaseB0LineEdit {{ border: 1px solid {err_color}; }}")
 
     staged["preprocessingReversePhaseB0"] = _read_text
     return container
@@ -787,7 +953,7 @@ def _add_batch_clear_reverse_b0_row(qt, owner, layout, initial_path, staged, zh,
 
 
 def _install_outside_close_apply(qt, dialog, popup_state, apply_staged, changed=lambda: True, no_replay=False,
-                                 on_hidden=None):
+                                 on_hidden=None, dismiss_on_deactivate=True):
     """Make a click outside the popup act like the Apply button (batch 2, popup-apply).
 
     Qt closes a ``Qt.Popup`` on an outside click with ``close()``, and ``QDialog::closeEvent`` turns that into
@@ -823,12 +989,16 @@ def _install_outside_close_apply(qt, dialog, popup_state, apply_staged, changed=
                 try:
                     kind = event.type()
                     if popup_state.get("browsing_file"):
+                        if kind == close_type:
+                            if hasattr(event, "ignore"):
+                                event.ignore()
+                            return True
                         return False
                     if hide_type is not None and kind == hide_type:
                         if not dialog.isVisible():
                             on_hidden()
                         return False
-                    if deactivate_type is not None and kind == deactivate_type:
+                    if dismiss_on_deactivate and deactivate_type is not None and kind == deactivate_type:
                         if not popup_state["finished"]:
                             dialog.reject()
                         return False
@@ -849,6 +1019,78 @@ def _install_outside_close_apply(qt, dialog, popup_state, apply_staged, changed=
         return flt
     except Exception:
         return None
+
+
+def _install_app_outside_click_close(qt, dialog, popup_state):
+    """For non-Popup frameless pickers (e.g. Preprocessing with file drop), close on clicks elsewhere in Slicer.
+
+    External app clicks (like switching to Finder/Explorer to drag a file) never send MouseButtonPress to Slicer,
+    so the card stays open for drag-and-drop while clicks on Slicer's main window still trigger OutsideCloseApplyFilter.
+    """
+    press_type = getattr(getattr(qt, "QEvent", None), "MouseButtonPress", None)
+    app_getter = getattr(getattr(qt, "QApplication", None), "instance", None)
+    app = app_getter() if callable(app_getter) else None
+    if press_type is None or app is None or not hasattr(app, "installEventFilter"):
+        return None, None
+    popup_flag = int(getattr(getattr(qt, "Qt", None), "Popup", 0) or 0)
+    type_mask = int(getattr(getattr(qt, "Qt", None), "WindowType_Mask", 0xFF) or 0xFF)
+    try:
+        base = getattr(qt, "QObject")
+
+        qwidget_cls = getattr(qt, "QWidget", None)
+        check_widget_type = isinstance(qwidget_cls, type)
+
+        class AppOutsideClickFilter(base):
+            def eventFilter(self, watched, event):
+                try:
+                    if event.type() != press_type:
+                        return False
+                    if popup_state.get("finished") or popup_state.get("browsing_file"):
+                        return False
+                    if hasattr(dialog, "isVisible") and not dialog.isVisible():
+                        return False
+                    if check_widget_type and not isinstance(watched, qwidget_cls):
+                        return False
+                    if watched is dialog:
+                        return False
+                    if hasattr(dialog, "isAncestorOf"):
+                        try:
+                            if dialog.isAncestorOf(watched):
+                                return False
+                        except Exception:
+                            pass
+                    if hasattr(event, "globalPos") and hasattr(dialog, "frameGeometry"):
+                        try:
+                            fg = dialog.frameGeometry
+                            fg_rect = fg() if callable(fg) else fg
+                            if fg_rect is not None and fg_rect.contains(event.globalPos()):
+                                return False
+                        except Exception:
+                            pass
+                    active_popup_fn = getattr(getattr(qt, "QApplication", None), "activePopupWidget", None)
+                    if callable(active_popup_fn) and active_popup_fn() is not None:
+                        return False
+                    win_fn = getattr(watched, "window", None)
+                    if callable(win_fn):
+                        win = win_fn()
+                        if win is dialog:
+                            return False
+                        if win is not None and popup_flag and hasattr(win, "windowFlags"):
+                            try:
+                                if (int(win.windowFlags()) & type_mask) == popup_flag:
+                                    return False
+                            except Exception:
+                                pass
+                    dialog.close()
+                    return True
+                except Exception:
+                    return False
+
+        flt = AppOutsideClickFilter()
+        app.installEventFilter(flt)
+        return app, flt
+    except Exception:
+        return None, None
 
 
 def _host_platform() -> str:
@@ -1019,16 +1261,27 @@ def choose_algorithms(owner, family):
             current = ()
         else:
             current = selected_algorithms(owner._parameterNode, family)
+    # G3: where FSL is not offered, Eddy and Topup are disabled and unchecked; Brain mask and DWI denoising stay.
+    fsl_missing = family == "preprocessing" and not _fsl_stages_offered()
+    is_batch = family == "preprocessing" and _is_batch_mode(owner)
+    supports_file_drop = family == "preprocessing" and not fsl_missing and not is_batch
+
     dialog = qt.QDialog(slicer.util.mainWindow())
     dialog.objectName = "algorithmPicker_" + family
     dialog.windowTitle = title_text
     popup_flag = getattr(qt.Qt, "Popup", 0)
+    dialog_flag = getattr(qt.Qt, "Dialog", 0)
     frameless_flag = getattr(qt.Qt, "FramelessWindowHint", 0)
     if popup_flag and hasattr(dialog, "setWindowFlags"):
+        # When the card embeds an external file drop zone (Preprocessing single-subject), use a frameless
+        # Qt.Dialog instead of Qt.Popup so clicking Finder/Explorer to drag a file in (or opening a native
+        # QFileDialog via Browse) never auto-dismisses the card. Clicks elsewhere in Slicer still dismiss/apply
+        # via the app-level MouseButtonPress filter installed below.
+        base_flag = (dialog_flag or popup_flag) if supports_file_drop else popup_flag
         try:
-            dialog_flags = popup_flag | frameless_flag
+            dialog_flags = base_flag | frameless_flag
         except TypeError:
-            dialog_flags = popup_flag
+            dialog_flags = base_flag
         dialog.setWindowFlags(dialog_flags)
     if hasattr(dialog, "setProperty"):
         dialog.setProperty("popupCard", "true")
@@ -1043,7 +1296,13 @@ def choose_algorithms(owner, family):
     except Exception:
         dark = None
 
-    popup_state = {"seen_visible": False, "finished": False, "browsing_file": False}
+    waits_non_modal = _popup_waits_non_modal(qt, popup_flag)
+    popup_state = {
+        "seen_visible": False,
+        "finished": False,
+        "browsing_file": False,
+        "waits_non_modal": waits_non_modal,
+    }
     popup_watch_ref = [None]
 
     def _stop_popup_watch() -> None:
@@ -1161,14 +1420,11 @@ def choose_algorithms(owner, family):
     staged = {}
     shared_editors = {}
     pointing_cursor = getattr(qt.Qt, "PointingHandCursor", None)
-    # G3: where FSL is not offered, Eddy and Topup are disabled and unchecked; Brain mask and DWI denoising stay.
-    fsl_missing = family == "preprocessing" and not _fsl_stages_offered()
     fsl_tip = ""
     if fsl_missing:
         from shared.selected_setup import fsl_unavailable_text
 
         fsl_tip = fsl_unavailable_text(zh=zh)
-    is_batch = family == "preprocessing" and _is_batch_mode(owner)
     topup_reverse_tip = ""
     if family == "preprocessing" and not fsl_missing:
         from shared.topup_parameters import topup_unavailable_reason
@@ -1305,16 +1561,30 @@ def choose_algorithms(owner, family):
 
     # Review U1: on macOS a Hide event after which the popup is not visible ends the non-modal wait (see _run_popup).
     wait_enders = []
-    waits_non_modal = _popup_waits_non_modal(qt, popup_flag)
 
     def _popup_hidden() -> None:
         for end in list(wait_enders):
             end()
 
-    outside_filter = (_install_outside_close_apply(qt, dialog, popup_state, validate_and_accept, popup_changed,
-                                                   no_replay=waits_non_modal,
-                                                   on_hidden=_popup_hidden if waits_non_modal else None)
-                      if popup_flag else None)
+    outside_filter = (
+        _install_outside_close_apply(
+            qt,
+            dialog,
+            popup_state,
+            validate_and_accept,
+            popup_changed,
+            no_replay=waits_non_modal,
+            on_hidden=_popup_hidden if waits_non_modal else None,
+            dismiss_on_deactivate=not supports_file_drop,
+        )
+        if popup_flag
+        else None
+    )
+    app_click_target, app_click_filter = (
+        _install_app_outside_click_close(qt, dialog, popup_state)
+        if (popup_flag and supports_file_drop)
+        else (None, None)
+    )
 
     popup_watch = None
     if hasattr(qt, "QTimer") and popup_flag:
@@ -1363,6 +1633,11 @@ def choose_algorithms(owner, family):
         if outside_filter is not None:
             try:
                 dialog.removeEventFilter(outside_filter)
+            except Exception:
+                pass
+        if app_click_target is not None and app_click_filter is not None:
+            try:
+                app_click_target.removeEventFilter(app_click_filter)
             except Exception:
                 pass
     if accepted and not _owner_node_live(owner):

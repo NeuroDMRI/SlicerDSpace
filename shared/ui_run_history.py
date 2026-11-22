@@ -18,6 +18,7 @@ from typing import Any, Optional
 from shared.run_history import (
     ManifestError,
     RunRecord,
+    archived_run_manifests,
     candidate_run_roots,
     discover_runs,
     dump_hidden_runs,
@@ -25,6 +26,7 @@ from shared.run_history import (
     parse_hidden_runs,
     parse_run_manifest,
     progress_from_manifest,
+    read_archived_manifest,
     remember_directory,
     run_manifest_key,
     run_record_brief,
@@ -1579,18 +1581,65 @@ def _read_manifest(record: RunRecord) -> Optional[dict]:
     return manifest if isinstance(manifest, dict) and manifest else None
 
 
-def _fill_subject_children(owner: Any, subject_item: Any, records, indices, manifests: Optional[dict] = None) -> None:
-    """Add the families and files of every run of a subject, newest run first, each family and file once."""
+def _archive_context(owner: Any, records=None) -> tuple[dict, dict]:
+    """What the archived manifests of a rebuild need, computed once: the stored hide list (the raw stamps, also for a
+    running job) and the current records of each metadata folder (shown and hidden, for the owner of an archive)."""
 
-    for index in indices:
+    shown = tuple(records) if records is not None else tuple(getattr(owner, "_runTreeRecords", ()) or ())
+    folders: dict = {}
+    for record in (*shown, *(getattr(owner, "_resultsHiddenRecords", ()) or ())):
+        if not record.is_batch:
+            folders.setdefault(str(Path(record.manifest_path).parent), []).append(record)
+    return load_hidden_runs(), folders
+
+
+def _subject_manifests(owner: Any, records, indices, manifests: Optional[dict], context) -> list:
+    """The current and the archived manifests of a subject's runs as one newest-first sequence.
+
+    Each entry is ``(manifest, manifest path, owning run index, metadata folder of the owning record)``. An archive
+    is not a run: it carries the index of its owning record. Archives older than the stored hide stamp of their
+    owning record stay hidden (Results hide rules); a broken archive is skipped.
+    """
+
+    hidden, folders = context if context is not None else _archive_context(owner, records)
+    entries = []
+    for position, index in enumerate(indices):
         record = records[index]
         if record.is_batch:
             continue
+        metadata = Path(record.manifest_path).parent
         manifest = manifests[index] if manifests and index in manifests else _read_manifest(record)
         if isinstance(manifest, dict) and manifest:
-            _populate_manifest_output_items(
-                owner, subject_item, manifest, manifest_path=record.manifest_path, run_index=index
-            )
+            entries.append((_record_stamp(record), 0, position, manifest, record.manifest_path, index, metadata))
+        key = run_record_key(record)
+        hide_stamp = (float("-inf") if hidden[key] is None else float(hidden[key])) if key in hidden else None
+        for archive in archived_run_manifests(record, folders.get(str(metadata), ())):
+            parsed = read_archived_manifest(archive)
+            if parsed is None:
+                continue
+            payload, when = parsed
+            stamp = when.timestamp() if when is not None else float("-inf")
+            if hide_stamp is not None and stamp <= hide_stamp:
+                continue
+            entries.append((stamp, 1, position, payload, archive.path, index, metadata))
+    entries.sort(key=lambda entry: (-entry[0], entry[1], entry[2]))
+    return [entry[3:] for entry in entries]
+
+
+def _fill_subject_children(owner: Any, subject_item: Any, records, indices, manifests: Optional[dict] = None,
+                           context=None) -> None:
+    """Add the families and files of every run of a subject, newest manifest first, each family and file once.
+
+    The archived manifests of the runs (``history/``) add the files that a re-run of the same run name moved out of
+    the current manifest.
+    """
+
+    memo: dict = {"tasks": set(), "qc_dirs": {}}
+    for manifest, manifest_path, index, metadata in _subject_manifests(owner, records, indices, manifests, context):
+        _populate_manifest_output_items(
+            owner, subject_item, manifest, manifest_path=manifest_path, run_index=index,
+            metadata_dir=metadata, memo=memo,
+        )
     _order_families(subject_item)
 
 
@@ -1672,13 +1721,14 @@ def _populate_run_tree(owner, records, current_index):
     run_items: dict = {}
     group_runs: dict = {}
     selected_item = None
+    context = _archive_context(owner, records)
     owner._resultsApplyingState = True
     try:
         tree.clear()
         for position, group in enumerate(_subject_groups(owner, records, running)):
             item = _build_subject_item(owner, qt, tree, records, group)
             if not group["batch"]:
-                _fill_subject_children(owner, item, records, group["indices"])
+                _fill_subject_children(owner, item, records, group["indices"], context=context)
                 _apply_family_expansion(owner, item, qt)
             # Default: only the newest subject is open, and only down to its (collapsed) families.
             _set_expanded(item, state["subjects"].get(group["key"], position == 0))
@@ -2000,6 +2050,19 @@ def _select_manifest_run(owner: Any, manifest_path: Any) -> bool:
     return True
 
 
+def _owning_manifest_path(owner: Any, item: Any, qt_mod: Any, manifest_path: Any) -> Any:
+    """The manifest of the current record that owns a file row: the row's own manifest, or for a row of an archived
+    manifest (``history/``) the record that ROLE_RUN names."""
+
+    records = getattr(owner, "_runHistoryRecords", ()) or ()
+    if manifest_path is None or any(_same_path(record.manifest_path, manifest_path) for record in records):
+        return manifest_path
+    run_idx = item.data(0, _user_role(qt_mod, ROLE_RUN))
+    if isinstance(run_idx, int) and not isinstance(run_idx, bool) and 0 <= run_idx < len(records):
+        return records[run_idx].manifest_path
+    return manifest_path
+
+
 def _output_menu(owner, position):
     import qt
     import slicer
@@ -2016,6 +2079,7 @@ def _output_menu(owner, position):
     # Batch 2 + FD8: take the runs of the whole subject now; no tree item is read after the menu closes.
     remove_records, remove_reason = _removal_for_item(owner, qt, item)
     folder = _top_item(item).data(0, _user_role(qt, ROLE_FOLDER))  # also before exec_ (FD8)
+    run_manifest = _owning_manifest_path(owner, item, qt, manifest_path) if is_seg else None  # before exec_ (FD8)
     menu = qt.QMenu(tree)
     zh = str(getattr(owner, "_onboardingLanguage", "en")).startswith("zh")
     edit_action = (
@@ -2036,8 +2100,17 @@ def _output_menu(owner, position):
         # FD3: _manage_result_scene acts on the selected run; in a merged subject the file may own an older one.
         # FD8: exec_ ran a nested event loop; a refresh may have deleted `item` and reordered the records,
         # so resolve the run from the manifest path taken before the menu opened, never from the item.
-        if _select_manifest_run(owner, manifest_path):
-            owner._manage_result_scene("edit_tissue")
+        # Archived runs: a row of an archived manifest selects its owning run, and the action reads the archive.
+        if _select_manifest_run(owner, run_manifest):
+            if _same_path(run_manifest, manifest_path):
+                owner._manage_result_scene("edit_tissue")
+            else:
+                selected = getattr(owner, "_latestResultManifestPath", None)
+                owner._latestResultManifestPath = manifest_path
+                try:
+                    owner._manage_result_scene("edit_tissue")
+                finally:
+                    owner._latestResultManifestPath = selected
     elif unload is not None and chosen == unload:
         for node in nodes:
             slicer.mrmlScene.RemoveNode(node)
@@ -2527,11 +2600,15 @@ def _refresh_output_visibility(owner, *, dark: Optional[bool] = None):
 
     fallback_manifest = getattr(owner, "_latestResultManifestPath", None)
     by_path_by_manifest = {}
+    resolved_manifests: dict = {}  # one resolve (and stat) per manifest path, not one per file row
 
     def _nodes_for_manifest(mpath: Optional[Path]):
         if mpath is None:
             return {}
-        key = str(mpath.resolve())
+        raw = str(mpath)
+        key = resolved_manifests.get(raw)
+        if key is None:
+            key = resolved_manifests[raw] = str(mpath.resolve())
         cached = by_path_by_manifest.get(key)
         if cached is None:
             cached = {}
@@ -2592,6 +2669,43 @@ def _is_internal_cache_path(
     return "/cache/stages/" in posix or "/cache/reports/" in posix
 
 
+def _task_memo_key(manifest: dict, task: dict) -> Optional[tuple]:
+    """Every field of a task that ``result_candidates`` / ``bundle_outputs`` and the QC-row loop read, plus the roots
+    of its manifest. Preprocessing tasks get no key: their outputs decide the brain-mask fallback of the manifest."""
+
+    name = str(task.get("name") or "")
+    if name.startswith("preprocessing."):
+        return None
+    try:
+        outputs = json.dumps(task.get("outputs"), sort_keys=True, default=str)
+    except (TypeError, ValueError):
+        return None
+    return (str(manifest.get("subject_root") or ""), str(manifest.get("output_root") or ""), name,
+            str(task.get("status") or ""), str(task.get("reason") or ""), str(task.get("qc_path") or ""), outputs)
+
+
+def _without_repeated_tasks(manifest: dict, memo: dict) -> dict:
+    """The manifest without the tasks that a newer manifest of the same rebuild already read unchanged.
+
+    Such a task gives exactly the rows it gave before (same files, same checks), and they are in the tree already, so
+    reading it again only repeats the file checks (a re-run of one run name 60 times names the same files 60 times).
+    """
+
+    tasks = manifest.get("tasks")
+    if not isinstance(tasks, list) or not tasks:
+        return manifest
+    seen = memo["tasks"]
+    kept = []
+    for task in tasks:
+        key = _task_memo_key(manifest, task) if isinstance(task, dict) else None
+        if key is not None and key in seen:
+            continue
+        if key is not None:
+            seen.add(key)
+        kept.append(task)
+    return manifest if len(kept) == len(tasks) else dict(manifest, tasks=kept)
+
+
 def _populate_manifest_output_items(
     owner: Any,
     parent: Any,
@@ -2599,10 +2713,22 @@ def _populate_manifest_output_items(
     *,
     manifest_path: Optional[Path] = None,
     run_index: Optional[int] = None,
+    metadata_dir: Optional[Path] = None,
+    memo: Optional[dict] = None,
 ) -> None:
+    """Add the files of one manifest under ``parent``; a file that a newer manifest already added is skipped.
+
+    ``metadata_dir`` is the ``00_run_metadata`` folder of the owning record (an archived manifest lives deeper, in
+    ``history/<run>/<stamp>/``). ``memo`` is shared by the manifests of one subject rebuild: a task that a newer
+    manifest of the rebuild already read with the same name, state and outputs is not read again, and a QC folder is
+    scanned once. Both only skip work whose rows are already in the tree.
+    """
+
     import qt
     from shared.result_scene import result_candidates
 
+    if memo is not None:
+        manifest = _without_repeated_tasks(manifest, memo)
     subject_root_raw = manifest.get("subject_root")
     subject_root: Optional[Path] = None
     if subject_root_raw:
@@ -2657,11 +2783,23 @@ def _populate_manifest_output_items(
     resolved_manifest = manifest_path if manifest_path is not None else getattr(owner, "_latestResultManifestPath", None)
     qc_base = Path(str(output_root_raw)).expanduser() if output_root_raw else None
     qc_dir = (qc_base / "06_qc") if qc_base is not None else None
-    if (qc_dir is None or not qc_dir.is_dir()) and resolved_manifest is not None:
-        fallback_qc_dir = Path(resolved_manifest).parent.parent / "06_qc"
-        if fallback_qc_dir.is_dir():
-            qc_dir = fallback_qc_dir
-    if qc_dir is not None and qc_dir.is_dir():
+    # memo["qc_dirs"]: folder -> is a folder, for this rebuild. A folder that a newer manifest scanned is not scanned
+    # again (its rows are in the tree), and a missing folder is checked once.
+    checked = memo["qc_dirs"] if memo is not None else {}
+
+    def _check(folder: Path) -> str:
+        key = str(folder)
+        if key in checked:
+            return "done" if checked[key] else "missing"
+        checked[key] = folder.is_dir()
+        return "scan" if checked[key] else "missing"
+
+    state = _check(qc_dir) if qc_dir is not None else "missing"
+    if state == "missing" and resolved_manifest is not None:
+        metadata = Path(metadata_dir) if metadata_dir is not None else Path(resolved_manifest).parent
+        qc_dir = metadata.parent / "06_qc"
+        state = _check(qc_dir)
+    if state == "scan":
         for txt_path in sorted(qc_dir.rglob("*.txt")):
             if txt_path.is_file() and not _is_internal_cache_path(txt_path, subject_root, output_root=output_root):
                 groups.setdefault("qc", {})[str(txt_path.resolve())] = False

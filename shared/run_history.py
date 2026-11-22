@@ -11,6 +11,7 @@ Slicer so it can be unit tested with the plain Python test runner.
 from __future__ import annotations
 
 import json
+import logging
 import math
 import os
 from collections import deque
@@ -630,6 +631,116 @@ def discover_runs(
     records = [item[0] for item in grouped.values()]
     records.sort(key=_sort_key, reverse=True)
     return RunDiscovery(records=tuple(records), skipped=tuple(skipped), truncated=truncated)
+
+
+# Results (batch 2, archived runs): a run that reuses a run name moves the earlier manifest to
+# ``<00_run_metadata>/history/<run name>/<UTC stamp>/<run name>_orchestration_manifest.json``
+# (``orchestrator._archive_existing_run_records``). Such a manifest is not a run of its own: it adds the files it names
+# to the Results tree of its owning record. ``discover_runs`` never lists it.
+ARCHIVE_DIR_NAME = "history"
+ARCHIVES_PER_RUN_LIMIT = 500  # a safety bound per run folder, not a display cap; logged once when it triggers
+_ARCHIVE_LIMIT_LOGGED: set = set()
+_ARCHIVE_CACHE: dict = {}  # path text -> (mtime_ns, size, (payload, timestamp) or None)
+
+
+@dataclass(frozen=True)
+class ArchivedManifest:
+    """One archived manifest of a run record, with the ``stat`` values taken when it was listed."""
+
+    path: Path
+    folder_stamp: str
+    mtime_ns: int
+    size: int
+
+
+def _stamp_folder_time(name: str) -> Optional[datetime]:
+    try:
+        return datetime.strptime(name, "%Y%m%dT%H%M%S%fZ").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def _slot_name(record: RunRecord) -> str:
+    """The run name of a record as its manifest file spells it (the slot base of ``_group_key``)."""
+
+    return _group_key(record.kind, record.manifest_path)[2]
+
+
+def archived_run_manifests(record: RunRecord, folder_records: Iterable[RunRecord] = ()) -> tuple[ArchivedManifest, ...]:
+    """The archived manifests that belong to ``record``, newest folder stamp first.
+
+    ``folder_records`` are the other current records (shown and hidden) that may share the record's metadata folder.
+    An archive of ``history/<name>/`` belongs to the record of that run name; when no record of the folder has that
+    name, it belongs to the newest record of the folder. A broken folder reads as empty.
+    """
+
+    if record.is_batch:
+        return ()
+    metadata = Path(record.manifest_path).parent
+    history = metadata / ARCHIVE_DIR_NAME
+    folder_key = os.path.realpath(metadata)
+    siblings = [item for item in (record, *folder_records)
+                if not item.is_batch and os.path.realpath(Path(item.manifest_path).parent) == folder_key]
+    names = {_slot_name(item) for item in siblings}
+    owns_orphans = os.path.realpath(max(siblings, key=_sort_key).manifest_path) == os.path.realpath(
+        record.manifest_path)
+    own_name = _slot_name(record)
+    try:
+        run_dirs = [entry for entry in os.scandir(history) if entry.is_dir()]
+    except OSError:
+        return ()
+    found: list[ArchivedManifest] = []
+    for run_dir in run_dirs:
+        name = run_dir.name
+        if name != own_name and (name in names or not owns_orphans):
+            continue
+        try:
+            stamps = sorted((entry.name for entry in os.scandir(run_dir.path) if entry.is_dir()), reverse=True)
+        except OSError:
+            continue
+        if len(stamps) > ARCHIVES_PER_RUN_LIMIT:
+            if run_dir.path not in _ARCHIVE_LIMIT_LOGGED:
+                _ARCHIVE_LIMIT_LOGGED.add(run_dir.path)
+                logging.getLogger(__name__).warning(
+                    "Results: %d archived runs in %s; only the newest %d are read.",
+                    len(stamps), run_dir.path, ARCHIVES_PER_RUN_LIMIT)
+            stamps = stamps[:ARCHIVES_PER_RUN_LIMIT]
+        for stamp in stamps:
+            path = Path(run_dir.path) / stamp / f"{name}{SUBJECT_MANIFEST_SUFFIX}"
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            found.append(ArchivedManifest(path, stamp, stat.st_mtime_ns, stat.st_size))
+    found.sort(key=lambda entry: entry.folder_stamp, reverse=True)
+    return tuple(found)
+
+
+def read_archived_manifest(entry: ArchivedManifest) -> Optional[tuple[dict[str, Any], Optional[datetime]]]:
+    """``(payload, time)`` of an archived subject manifest, or None when it is unreadable or not a subject manifest.
+
+    Parsed once per (path, mtime, size). The time is the manifest's own time as ``record_from_manifest`` reads it;
+    the ``<stamp>`` folder name is the fallback.
+    """
+
+    key = str(entry.path)
+    cached = _ARCHIVE_CACHE.get(key)
+    if cached is not None and cached[0] == entry.mtime_ns and cached[1] == entry.size:
+        return cached[2]
+    result: Optional[tuple[dict[str, Any], Optional[datetime]]] = None
+    try:
+        payload = load_manifest_json(entry.path)
+        parsed = record_from_manifest(payload, entry.path)
+        if parsed.kind == "subject":
+            result = (payload, parsed.timestamp or _stamp_folder_time(entry.folder_stamp))
+    except (ManifestError, OSError, ValueError, TypeError, AttributeError):
+        result = None
+    _ARCHIVE_CACHE[key] = (entry.mtime_ns, entry.size, result)
+    return result
+
+
+def clear_archived_manifest_cache() -> None:
+    _ARCHIVE_CACHE.clear()
 
 
 def candidate_run_roots(

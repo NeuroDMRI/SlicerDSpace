@@ -736,6 +736,38 @@ async function runLanguages(browser, origin) {
         await page.locator('html').getAttribute('lang') === 'en' &&
         await page.locator('.lang-btn.is-active').getAttribute('data-lang') === 'en',
       `language ${width}px: English switch restores English and keeps the section`);
+    // Scroll down without a URL hash, switch EN -> ZH -> EN, and confirm the viewport stays on #performance.
+    await page.goto(origin + '/SlicerDSpace/index.html', { waitUntil: 'load' });
+    await page.waitForTimeout(200);
+    await page.evaluate(() => {
+      const el = document.getElementById('performance');
+      const header = document.getElementById('site-header');
+      const offset = (header ? header.getBoundingClientRect().height : 64) + 12;
+      document.documentElement.style.scrollBehavior = 'auto';
+      window.scrollTo(0, Math.round(window.scrollY + el.getBoundingClientRect().top - offset + 180));
+      document.documentElement.style.scrollBehavior = '';
+    });
+    await page.waitForTimeout(100);
+    await page.locator('.lang-btn[data-lang="zh"]').click();
+    await page.waitForURL(url => url.pathname.endsWith('/zh.html'));
+    await page.waitForLoadState('load');
+    await page.waitForTimeout(400);
+    const zhPos = await page.evaluate(() => {
+      const r = document.getElementById('performance').getBoundingClientRect();
+      return { scrollY: Math.round(window.scrollY), top: Math.round(r.top), bottom: Math.round(r.bottom), vh: window.innerHeight };
+    });
+    record(zhPos.scrollY > 500 && zhPos.top < zhPos.vh && zhPos.bottom > 80,
+      `language ${width}px: EN->ZH preserves scroll position without URL hash`, JSON.stringify(zhPos));
+    await page.locator('.lang-btn[data-lang="en"]').click();
+    await page.waitForURL(url => url.pathname.endsWith('/index.html'));
+    await page.waitForLoadState('load');
+    await page.waitForTimeout(400);
+    const enPos = await page.evaluate(() => {
+      const r = document.getElementById('performance').getBoundingClientRect();
+      return { scrollY: Math.round(window.scrollY), top: Math.round(r.top), bottom: Math.round(r.bottom), vh: window.innerHeight };
+    });
+    record(enPos.scrollY > 500 && enPos.top < enPos.vh && enPos.bottom > 80,
+      `language ${width}px: ZH->EN preserves scroll position without URL hash`, JSON.stringify(enPos));
     await page.goto(origin + '/zh.html', { waitUntil: 'load' });
     await page.screenshot({ path: path.join(OUT, `site-zh-${width}.png`) });
     record(!errors.length, `language ${width}px: no JavaScript errors`, errors.join('; '));

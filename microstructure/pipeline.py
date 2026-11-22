@@ -182,6 +182,15 @@ def _file_signature(path: Path) -> dict[str, object]:
     }
 
 
+def _content_signature(path: Path) -> dict[str, object]:
+    """Signature by content for package data (the LUT): a code overlay rewrites the file and changes only its mtime."""
+    return {
+        "path": str(path.resolve()),
+        "size": path.stat().st_size,
+        "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+    }
+
+
 def _read_json(path: Path) -> Optional[dict[str, object]]:
     if not path.is_file():
         return None
@@ -1665,7 +1674,8 @@ def roi_statistics_current(
             return False
         if payload.get('brain_mask') and (sources.get('brain_mask') or {}).get('path') != payload['brain_mask']:
             return False
-        if any(record != _file_signature(Path(record["path"])) for record in sources.values()):
+        if any(record != (_content_signature if key == "lut" else _file_signature)(Path(record["path"]))
+               for key, record in sources.items()):
             return False
         if payload.get("csv_sha256") != hashlib.sha256(csv_path.read_bytes()).hexdigest():
             return False
@@ -1849,7 +1859,7 @@ def _compute_roi_stats(
             **({"brain_mask": _file_signature(brain_mask_path)} if brain_mask_path is not None else {}),
             **{f"metric:{key}": _file_signature(path) for key, path in metric_paths.items()},
             **{f"mask:{key}": _file_signature(path) for key, path in (validity_mask_paths or {}).items()},
-            **({"lut": _file_signature(lut_path)} if lut_path is not None else {}),
+            **({"lut": _content_signature(lut_path)} if lut_path is not None else {}),
         },
         "csv_sha256": hashlib.sha256(csv_path.read_bytes()).hexdigest(),
         "voxel_count_basis": next(iter(metric_paths)),

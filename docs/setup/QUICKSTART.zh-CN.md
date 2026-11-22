@@ -27,6 +27,33 @@
 
 ---
 
+## 更新代码
+
+发布包内是打包当天的代码。之后的修复以同一版本的增量代码更新发布。安装后请应用一次更新；有新的更新发布时再应用一次。
+
+- **界面**：在 SlicerDSpace 模块中点击 **检查更新**，确认下载并应用，然后重启 3D Slicer。
+- **仅命令行**（例如没有显示器的服务器）：运行下面的命令。`MODULE_ROOT` 是扩展解压目录中的 `lib/Slicer-5.10/qt-scripted-modules` 文件夹（见上面第 4 步）。示例使用 Linux 路径。
+
+~~~bash
+SLICER_DIR="$HOME/Slicer-5.10.0-linux-amd64"
+MODULE_ROOT="$SLICER_DIR/slicer.org/Extensions-34045/SlicerDSpace/lib/Slicer-5.10/qt-scripted-modules"
+"$SLICER_DIR/bin/PythonSlicer" - "$MODULE_ROOT" <<'PY'
+import sys
+from pathlib import Path
+root = Path(sys.argv[1])
+sys.path.insert(0, str(root))
+from shared import code_updater
+check = code_updater.check_for_code_update(module_root=root)
+print("status:", check["status"])
+if check["status"] == "update_available":
+    print(code_updater.download_and_apply_code_overlay(module_root=root, manifest=check["remote"]))
+PY
+~~~
+
+第一次运行先输出 `status: update_available`，再输出含 `'status': 'applied'` 的结果。再次运行输出 `status: up_to_date`。更新使用已保存的网络设置（镜像、代理）。更新只改代码文件，不下载模型或运行时。状态 `runtime_upgrade_required` 表示需要安装新的发布包。
+
+---
+
 ## 准备输入
 
 使用获授权、去标识化的 NIfTI（含匹配的 bval/bvec）、NRRD/NHDR 体数据或 DICOM 文件夹（含多序列时可在提示中选择目标序列）。

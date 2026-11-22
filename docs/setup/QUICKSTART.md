@@ -27,6 +27,33 @@ For developer source staging instead of a release archive, see [the project READ
 
 ---
 
+## Update The Code
+
+A release archive holds the code of its build day. Later fixes are published as an incremental code update for the same release. Apply the update once after the installation, and again when a new update is published.
+
+- **GUI**: in the SlicerDSpace module, click **Check for updates**, confirm **Download and apply now?**, then restart 3D Slicer.
+- **Command line only** (for example a server without a display): run the commands below. `MODULE_ROOT` is the `lib/Slicer-5.10/qt-scripted-modules` folder of the unpacked extension (step 4 above). The example uses the Linux paths.
+
+~~~bash
+SLICER_DIR="$HOME/Slicer-5.10.0-linux-amd64"
+MODULE_ROOT="$SLICER_DIR/slicer.org/Extensions-34045/SlicerDSpace/lib/Slicer-5.10/qt-scripted-modules"
+"$SLICER_DIR/bin/PythonSlicer" - "$MODULE_ROOT" <<'PY'
+import sys
+from pathlib import Path
+root = Path(sys.argv[1])
+sys.path.insert(0, str(root))
+from shared import code_updater
+check = code_updater.check_for_code_update(module_root=root)
+print("status:", check["status"])
+if check["status"] == "update_available":
+    print(code_updater.download_and_apply_code_overlay(module_root=root, manifest=check["remote"]))
+PY
+~~~
+
+The first run prints `status: update_available` and then a result with `'status': 'applied'`. A second run prints `status: up_to_date`. The update uses the saved network settings (mirror, proxy). It changes code files only; it does not download models or runtimes. The status `runtime_upgrade_required` means that a new release archive must be installed.
+
+---
+
 ## Prepare A Subject
 
 Use authorized, de-identified DWI in NIfTI (with matching bval/bvec), NRRD/NHDR,

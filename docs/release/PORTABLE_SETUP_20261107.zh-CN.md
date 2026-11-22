@@ -18,8 +18,8 @@
 
 ## 变化：默认方法
 
-- DTI 拟合在 Slicer 内部用 Teem 库完成。张量拟合不再需要 SlicerDMRI。
-  仅当勾选 WMA 时，准备步骤才会要求 SlicerDMRI。
+- DTI 拟合在 Slicer 内部用 Teem 库完成。张量拟合不再需要 SlicerDMRI；
+  SlicerDMRI 为可选扩展，推荐用于查看纤维束追踪结果。
 - DTI 产品新增彩色 FA 图（`<id>-dti-DEC.nrrd`）。
 - DKI 默认使用 Python MK-Curve。
 - 连接组后端为 `auto`：`.tck` 来源且指标为流线计数时用 MRtrix `tck2connectome`，其他来源或指标用 Python。

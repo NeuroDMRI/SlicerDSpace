@@ -3193,6 +3193,9 @@ class SharedWidgetMixin:
                 self.removeObserver(self._parameterNode, vtk.vtkCommand.ModifiedEvent, self._checkCanApply)
 
     def onSceneStartClose(self, caller, event) -> None:
+        from shared.ui_algorithm_picker import close_algorithm_picker
+
+        close_algorithm_picker(self)
         self.setParameterNode(None)
 
     def _queue_output_visibility_refresh(self, caller=None, event=None) -> None:
@@ -4446,12 +4449,40 @@ class SharedWidgetMixin:
         if mode in {"replace", "clear"} and not slicer.util.confirmYesNoDisplay(
                 "Remove scene nodes loaded for this run? Source files will be kept.", parent=self.parent):
             return
+        def _manifest_family_paths(target_manifest: Path) -> list[Path]:
+            resolved = target_manifest.expanduser().resolve()
+            family: list[Path] = [resolved]
+            seen = {str(resolved)}
+            run_manifests = getattr(self, "_resultsRunManifests", None)
+            if isinstance(run_manifests, dict):
+                for paths in run_manifests.values():
+                    resolved_group = []
+                    for item in paths or ():
+                        try:
+                            resolved_group.append(Path(item).expanduser().resolve())
+                        except OSError:
+                            resolved_group.append(Path(item).expanduser())
+                    if any(str(p) == str(resolved) for p in resolved_group):
+                        for p in resolved_group:
+                            if str(p) not in seen:
+                                seen.add(str(p))
+                                family.append(p)
+            return family
+
         if mode == "edit_tissue":
             from shared.result_scene import owned_nodes
             from shared.segmentation_review import editable_tissue_copy
-            sources = [node for node in owned_nodes(slicer, str(Path(manifest).resolve()))
-                       if node.IsA("vtkMRMLLabelMapVolumeNode") and
-                       str(node.GetAttribute("SlicerDDSurfer.Product") or "").startswith("segmentation.")]
+            sources = []
+            seen_ids = set()
+            for mpath in _manifest_family_paths(Path(manifest)):
+                for node in owned_nodes(slicer, str(mpath)):
+                    if (
+                        node.GetID() not in seen_ids
+                        and node.IsA("vtkMRMLLabelMapVolumeNode")
+                        and str(node.GetAttribute("SlicerDDSurfer.Product") or "").startswith("segmentation.")
+                    ):
+                        seen_ids.add(node.GetID())
+                        sources.append(node)
             if not sources:
                 slicer.util.infoDisplay("Load this run's DDSeg tissue labels first.", parent=self.parent)
                 return
@@ -4465,9 +4496,13 @@ class SharedWidgetMixin:
                 slicer.util.errorDisplay(str(exc), parent=self.parent)
             return
         if mode == "clear":
-            count = self.logic.clearResultsFromManifest(Path(manifest))
+            count = sum(self.logic.clearResultsFromManifest(mpath) for mpath in _manifest_family_paths(Path(manifest)))
             self.appendLog(f"[Scene] Removed {count} owned node(s); files unchanged.")
             return
+        if mode == "replace":
+            family_paths = _manifest_family_paths(Path(manifest))
+            for archived_path in family_paths[1:]:
+                self.logic.clearResultsFromManifest(archived_path)
         result = self.logic.loadKeyResultsFromManifest(Path(manifest), mode=mode)
         self._set_run_progress_message(
             f"Loaded {len(result['loaded'])}; reused {len(result['reused'])}; "

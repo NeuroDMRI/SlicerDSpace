@@ -677,5 +677,102 @@ class FixR5MemoTest(ArchivedTestBase):
         self.assertEqual(row.data(0, ROLE_MANIFEST), str(newer))
 
 
+class P2ResultsPolishTest(ArchivedTestBase):
+    """Regression tests for archive cache error/eviction, broken-log reset, QGroupBox guard, display cleanup, and language refresh."""
+
+    def test_archive_cache_never_caches_read_error_and_evicts_past_max(self) -> None:
+        current = make_manifest(self.root, "sub1", "Test1", "2026-11-10T10:00:00Z", [("qc.summary", "/x/q.txt")])
+        broken = archive_manifest(self.root, "sub1", "Test1", "20261102T000000000000Z", "2026-11-02T10:00:00Z", [])
+        valid_text = broken.read_text(encoding="utf-8")
+        broken.write_text("{not-json", encoding="utf-8")
+        entry = next(e for e in run_history.archived_run_manifests(current) if e.path == broken)
+        run_history._ARCHIVE_CACHE.clear()
+        self.assertIsNone(run_history.read_archived_manifest(entry))
+        self.assertEqual(len(run_history._ARCHIVE_CACHE), 0)
+        # Fixing the file in place succeeds immediately because the error was not cached.
+        broken.write_text(valid_text, encoding="utf-8")
+        self.assertIsNotNone(run_history.read_archived_manifest(entry))
+        # Bounded eviction check
+        with mock.patch.object(run_history, "_ARCHIVE_CACHE_MAX", 2):
+            run_history._ARCHIVE_CACHE.clear()
+            for idx in range(4):
+                p = archive_manifest(self.root, "sub1", "Test1", f"2026110{idx+3}T000000000000Z", f"2026-11-0{idx+3}T10:00:00Z", [])
+                e = next(x for x in run_history.archived_run_manifests(current) if x.path == p)
+                run_history.read_archived_manifest(e)
+            self.assertLessEqual(len(run_history._ARCHIVE_CACHE), 2)
+
+    def test_refresh_run_history_clears_broken_archives_logged_and_language_refreshes_visibility(self) -> None:
+        current = make_manifest(self.root, "sub1", "Test1", "2026-11-10T10:00:00Z", [("microstructure.dti", "/x/fa.nii.gz")])
+        h = self.harness([current])
+        ui_run_history._BROKEN_ARCHIVES_LOGGED.add("/fake/broken.json")
+        h.refresh([current])
+        self.assertEqual(ui_run_history._BROKEN_ARCHIVES_LOGGED, set())
+        with mock.patch.object(ui_run_history, "_refresh_output_visibility") as vis:
+            ui_run_history.refresh_results_language(h.owner)
+        vis.assert_called_once_with(h.owner)
+
+    def test_unload_removes_owned_display_nodes_with_model_node(self) -> None:
+        current = make_manifest(self.root, "sub1", "Test1", "2026-11-10T10:00:00Z", [("tractography.ukf", "/x/ukf.vtk")])
+        h = self.harness([current])
+        disp = mock.MagicMock(name="ModelDisplay_1")
+        node = mock.MagicMock(name="ModelNode_1")
+        node.GetNumberOfDisplayNodes.return_value = 1
+        node.GetNthDisplayNode.return_value = disp
+        h.slicer.mrmlScene = mock.MagicMock()
+        item = next(leaf for leaf in file_rows(self.subject(h)) if leaf.data(0, ROLE_PATH) == "/x/ukf.vtk")
+        h.tree.itemAt = lambda _pos: item
+
+        class _PickUnloadMenu:
+            def __init__(self, _parent=None):
+                self.actions = []
+
+            def addAction(self, text):
+                act = SimpleNamespace(text=text, enabled=True, toolTip="")
+                self.actions.append(act)
+                return act
+
+            def addSeparator(self):
+                return None
+
+            def exec_(self, _pos):
+                return next(a for a in self.actions if "Unload" in a.text)
+
+        h.qt.QMenu = _PickUnloadMenu
+        import sys as _sys
+
+        with mock.patch.object(ui_run_history, "_output_nodes", return_value=[node]), \
+                mock.patch.object(ui_run_history, "_refresh_output_visibility"), \
+                mock.patch.dict(_sys.modules, {"qt": h.qt, "slicer": h.slicer}):
+            ui_run_history._output_menu(h.owner, (0, 0))
+        removed = [call.args[0] for call in h.slicer.mrmlScene.RemoveNode.call_args_list]
+        self.assertIn(disp, removed)
+        self.assertIn(node, removed)
+
+    def test_manage_result_scene_clear_covers_archived_manifests_of_same_run(self) -> None:
+        import sys as _sys
+        from test_ui_results_tree import widget_methods
+
+        current = make_manifest(self.root, "sub1", "Test1", "2026-11-10T10:00:00Z", [("qc.summary", "/x/q.txt")])
+        arch = archive_manifest(self.root, "sub1", "Test1", "20261102T000000000000Z", "2026-11-02T10:00:00Z",
+                                [("tractography.ukf", "/x/ukf.vtk")])
+        fake_slicer = mock.MagicMock()
+        fake_slicer.util.confirmYesNoDisplay.return_value = True
+        Widget = widget_methods(
+            "_manage_result_scene",
+            validated_selected_manifest=lambda _owner: (current.manifest_path, None),
+            slicer=fake_slicer,
+        )
+        widget = Widget()
+        widget.parent = None
+        widget._latestResultManifestPath = current.manifest_path
+        widget._resultsRunManifests = {0: (current.manifest_path, arch)}
+        cleared_paths = []
+        widget.logic = SimpleNamespace(clearResultsFromManifest=lambda mp: (cleared_paths.append(Path(mp)), 1)[1])
+        widget.appendLog = lambda _msg: None
+        widget._manage_result_scene("clear")
+        self.assertIn(current.manifest_path.resolve(), cleared_paths)
+        self.assertIn(arch.resolve(), cleared_paths)
+
+
 if __name__ == "__main__":
     unittest.main()

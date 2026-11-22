@@ -1929,8 +1929,20 @@ def _run_independent_models(config, log):
         jobs.append(ComputeJob(stage, (python, str(Path(__file__).with_name('compute_worker.py')),
             '--stage', stage, '--config', str(description)), threads=count, memory_bytes=reserve,
             environment={'OPENBLAS_NUM_THREADS':'1','OMP_NUM_THREADS':'1','MKL_NUM_THREADS':'1'}))
-    schedule = run_independent_jobs(jobs, directory=root,
-                                    max_workers=config.max_parallel_models, cpu_budget=cpu, log=log)
+    try:
+        schedule = run_independent_jobs(jobs, directory=root,
+                                        max_workers=config.max_parallel_models, cpu_budget=cpu, log=log)
+    except (ValueError, RuntimeError) as exc:
+        message = str(exc).lower()
+        if "resource budget" in message or "cannot fit the declared resources" in message:
+            try:
+                description.unlink(missing_ok=True)
+            except OSError:
+                pass
+            if log:
+                log(f"[Compute] {exc}; falling back to sequential model execution.")
+            return replace(config, max_parallel_models=1), None
+        raise
     return replace(adjusted, force_recompute=False), schedule
 
 

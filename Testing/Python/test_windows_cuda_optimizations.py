@@ -155,11 +155,13 @@ class WindowsCudaOptimizationTests(unittest.TestCase):
             ukf_exe.write_bytes(b"")
 
             with patch.object(ukf.sys, "platform", "win32"):
+                from pathlib import PureWindowsPath
+
                 env = ukf.ukf_gpu_process_environment(
                     {"SYSTEMROOT": r"C:\Windows", "CUDA_PATH": str(cuda_root), "PATH": r"C:\Slicer"},
                     ukf_exe,
                 )
-                self.assertIn(str(cuda_bin), env["PATH"].split(";"))
+                self.assertIn(str(PureWindowsPath(str(cuda_bin))), env["PATH"].split(";"))
 
             # Test nvcuda.dll fallback when cudart is not found
             class _FakeFunc:
@@ -215,7 +217,7 @@ class WindowsCudaOptimizationTests(unittest.TestCase):
             )
 
         with (
-            patch("shared.external_process.os.name", "nt"),
+            patch("shared.external_process.sys.platform", "win32"),
             patch.object(environment.subprocess, "CREATE_NO_WINDOW", 0x08000000, create=True),
             patch.object(environment.subprocess, "run", side_effect=fake_run),
         ):

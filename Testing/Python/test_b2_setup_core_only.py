@@ -218,6 +218,52 @@ class B2SetupReinstallKeepsAtlasTests(unittest.TestCase):
                 with self.subTest(copy=label, value=value):
                     self.assertEqual(ns["_backend_keeps_wma"](value), "wma" in algorithms(value, BUNDLES, "wmql"))
 
+    def test_b2_setup_reinstall_preserves_existing_custom_model_and_wma_atlas_dirs(self) -> None:
+        for label, run in self._runners():
+            with self.subTest(copy=label):
+                if run is None:
+                    if _on_ci():
+                        self.fail("node is required on CI for the JS installer copies (node is not in PATH)")
+                    self.skipTest("node is not installed in PATH: the JS installer copy is not tested")
+                with tempfile.TemporaryDirectory() as td:
+                    project = _Project(Path(td), release_package=True)
+                    default_assets = Path(td) / "default-assets"
+                    (project.module_root / "shared" / "model_assets.py").write_text(
+                        "from pathlib import Path\n"
+                        f"def configured_model_assets_root(explicit=None):\n"
+                        f"    return Path(explicit) if explicit else Path({str(default_assets)!r})\n",
+                        encoding="utf-8",
+                    )
+                    custom_models = Path(td) / "user-models"
+                    custom_wma = Path(td) / "user-wma-atlas"
+                    custom_models.mkdir()
+                    custom_wma.mkdir()
+                    project.write_config({
+                        "model_assets_dir": str(custom_models),
+                        "wma_atlas_dir": str(custom_wma),
+                    })
+                    # Simulate wizard run with NO custom model folder selected (model_assets_dir="")
+                    with _Isolated(project, release_package=True):
+                        if label == "js_setup_module":
+                            ns = prune.load_setup_module()
+                            ns["CONFIG"] = dict(ns["CONFIG"], model_assets_dir="", selected_packs=[])
+                            events = []
+                            info = {
+                                "mod_root": str(project.module_root), "ext_temps": [],
+                                "mirror": "", "proxy": "", "offdir": "", "iit_file": "",
+                                "pack_archives": [], "asset_temps": [], "sel_packs": [],
+                            }
+                            ns["_run_phase_c_core"](info, lambda kind, payload: events.append((kind, payload)))
+                            errors = [p for k, p in events if k == "error"]
+                            self.assertEqual(errors, [])
+                        else:
+                            payload = self.python_payload if label == "python_builder" else self.js_payload
+                            ns = prune._load(payload)
+                            prune._run_script_main(ns, project, network={"model_assets_dir": ""})
+                    deps = project.read_deps()
+                    self.assertEqual(deps.get("model_assets_dir"), str(custom_models))
+                    self.assertEqual(deps.get("wma_atlas_dir"), str(custom_wma))
+
 
 def prune_namespaces(case: unittest.TestCase):
     """The loaded Python text of the three installer copies (the JS ones need node)."""
@@ -651,17 +697,22 @@ class B2SetupW4CodeUpdateTests(unittest.TestCase):
 
     def test_b2_setup_w4_chinese_hint(self) -> None:
         ns = prune._load(self.python_payload)
+        stub_updater = SimpleNamespace(
+            check_for_code_update=lambda **_kw: {"status": "error", "error": "stubbed-offline"},
+            download_and_apply_code_overlay=lambda **_kw: {"status": "error", "error": "stubbed-offline"},
+        )
         lines = []
-        ns["_apply_code_update"]("/nonexistent/w4", "", "", "", lines.append, "zh")
-        self.assertEqual(lines, [W4_HINT_ZH])
+        with patch.dict(sys.modules, {"shared.code_updater": stub_updater}):
+            ns["_apply_code_update"]("/nonexistent/w4", "", "", "", lines.append, "zh")
+            self.assertEqual(lines, [W4_HINT_ZH])
 
-        def ascii_only(msg):
-            msg.encode("cp1252")  # a console that cannot print Chinese
-            lines.append(msg)
+            def ascii_only(msg):
+                msg.encode("cp1252")  # a console that cannot print Chinese
+                lines.append(msg)
 
-        lines.clear()
-        ns["_apply_code_update"]("/nonexistent/w4", "", "", "", ascii_only, "zh")
-        self.assertEqual(lines, [W4_HINT_EN])
+            lines.clear()
+            ns["_apply_code_update"]("/nonexistent/w4", "", "", "", ascii_only, "zh")
+            self.assertEqual(lines, [W4_HINT_EN])
 
     # (d) text / AST check of the three copies
     def _sources(self):

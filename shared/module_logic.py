@@ -1158,7 +1158,7 @@ class SharedLogicMixin:
 
     def loadKeyResultsFromManifest(
         self, manifest_path: Path, *, max_items: int = 40, mode: str = "reuse", automatic: bool = False,
-        source_path: Path | None = None,
+        source_path: Path | None = None, morphometry_surfaces: Optional[tuple[str, ...] | list[str]] = None,
     ) -> dict[str, Any]:
         """Load only explicitly successful manifest outputs, grouped by subject/run."""
         from shared.result_scene import result_candidates, result_nodes, owned_nodes, clear_run, register_node, scalar_preset, source_stamp
@@ -1223,7 +1223,7 @@ class SharedLogicMixin:
                 # older manual review is retained alongside the new preview.
                 previous_nodes = automatic_nodes or [node for node in previous_nodes
                     if node.GetAttribute('SlicerDDSurfer.SourceStamp') == source_stamp(path)]
-            if mode == "reuse" and previous_nodes:
+            if mode == "reuse" and previous_nodes and morphometry_surfaces is None:
                 if all(node.GetAttribute("SlicerDDSurfer.SourceStamp") == source_stamp(path) for node in previous_nodes):
                     if automatic:
                         for node in previous_nodes:
@@ -1244,8 +1244,13 @@ class SharedLogicMixin:
                 name = f"{subject}_{label}"
                 from shared import surface_morphometry_display as morphometry
                 if morphometry.morphometry_row(candidate["product"], path) is not None:
-                    # Surface post-processing: nibabel reader, white .obj carrier, own colours (no SlicerFreeSurfer).
-                    success = morphometry.load_morphometry_row(slicer, candidate, manifest)
+                    # Surface post-processing: nibabel reader, active white/pial .obj carrier(s), own colours.
+                    if morphometry_surfaces is not None:
+                        success = morphometry.load_morphometry_row(
+                            slicer, candidate, manifest, surfaces=morphometry_surfaces,
+                        )
+                    else:
+                        success = morphometry.load_morphometry_row(slicer, candidate, manifest)
                 elif suffix in {".nii", ".nii.gz", ".mgz"}:
                     from shared.result_scene import categorical_context, categorical_role, load_categorical_result
                     if categorical_role(candidate):
@@ -1287,7 +1292,7 @@ class SharedLogicMixin:
                     elif node.IsA("vtkMRMLScalarVolumeNode") and not node.IsA("vtkMRMLLabelMapVolumeNode"):
                         scalar_preset(node, label)
                 loaded.append({**candidate, "node_ids": [node.GetID() for node in nodes]})
-                existing[candidate["path"]] = nodes
+                existing.setdefault(candidate["path"], []).extend(nodes)
             except Exception as exc:
                 if automatic:
                     for node in result_nodes(slicer):

@@ -427,7 +427,7 @@ def build_network_and_offline_panel(parent: Any, *, zh: bool) -> tuple[Any, Call
     offline_edit = qt.QLineEdit(offline_row)
     offline_edit.setText(settings["offline_assets_dir"])
     offline_edit.setPlaceholderText(
-        _text(zh, "Optional folder containing Pack-*.zip or model files", "可选：包含 Pack-*.zip 或离线模型文件的目录")
+        _text(zh, "Optional folder containing Pack-*.tar.gz / Pack-*.zip or model files", "可选：包含 Pack-*.tar.gz / Pack-*.zip 或离线模型文件的目录")
     )
     browse_btn = qt.QPushButton(_text(zh, "Browse...", "选择目录..."), offline_row)
 

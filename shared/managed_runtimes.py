@@ -328,6 +328,84 @@ def _safe_extract(archive, destination, top_level):
         tar.extractall(destination, members=members, filter="data")
 
 
+_ORIG_URLLIB_URLOPEN = urllib.request.urlopen
+
+
+def download_verified_with_mirror_fallback(
+    url,
+    part,
+    *,
+    expected_sha256,
+    expected_size=None,
+    max_bytes=None,
+    label="Download",
+    log_prefix="[Runtime setup]",
+    size_error="Archive size mismatch; downloaded file will not be used",
+    checksum_error="Archive checksum mismatch; downloaded file will not be used",
+    bound_error="Download exceeds its bounded size",
+    urlopen_module=urllib.request,
+):
+    """Download ``url`` honoring mirror/proxy/CA settings; verify size & SHA-256 per candidate before accepting.
+
+    A mirror that responds 200 with corrupt or wrong bytes is rejected and the direct URL is tried next.
+    ``max_bytes`` is enforced before writing past the cap (both via Content-Length and streaming count).
+    """
+    from shared.network_config import expand_candidate_urls, open_url
+
+    custom_urlopen = urlopen_module.urlopen is not _ORIG_URLLIB_URLOPEN
+    candidates = expand_candidate_urls(url)
+    last_error = None
+    for index, candidate in enumerate(candidates):
+        part.unlink(missing_ok=True)
+        try:
+            if custom_urlopen:
+                opener = urlopen_module.urlopen(candidate, timeout=60)
+            else:
+                opener = open_url(candidate, timeout=60)
+            with opener as response:
+                headers = getattr(response, "headers", None)
+                raw_len = headers.get("Content-Length") if headers is not None and hasattr(headers, "get") else None
+                if raw_len is not None:
+                    try:
+                        declared = int(raw_len)
+                    except (TypeError, ValueError):
+                        declared = -1
+                    if max_bytes is not None and declared > max_bytes:
+                        raise ValueError(bound_error)
+                    if expected_size is not None and declared >= 0 and declared != expected_size:
+                        raise RuntimeError(size_error)
+                with part.open("wb") as output:
+                    count = 0
+                    for chunk in iter(lambda: response.read(1024 * 1024), b""):
+                        next_count = count + len(chunk)
+                        if max_bytes is not None and next_count > max_bytes:
+                            raise ValueError(bound_error)
+                        if expected_size is not None and next_count > expected_size:
+                            raise RuntimeError(size_error)
+                        output.write(chunk)
+                        count = next_count
+                        print(f"{log_prefix} {label}: {count // (1024 * 1024)} MiB", flush=True)
+            if expected_size is not None and part.stat().st_size != expected_size:
+                part.unlink(missing_ok=True)
+                raise RuntimeError(size_error)
+            if file_hash(part) != expected_sha256:
+                part.unlink(missing_ok=True)
+                raise RuntimeError(checksum_error)
+            return
+        except Exception as exc:
+            part.unlink(missing_ok=True)
+            last_error = exc
+            if index + 1 < len(candidates):
+                print(
+                    f"{log_prefix} {label} failed via {candidate} ({exc}); trying next source",
+                    flush=True,
+                )
+                continue
+            raise
+    if last_error is not None:
+        raise last_error
+
+
 def _download_tarball(info, downloads):
     archive = downloads / info["filename"]
     if archive.is_file() and archive.stat().st_size == info["size"] and file_hash(archive) == info["sha256"]:
@@ -335,18 +413,17 @@ def _download_tarball(info, downloads):
     downloads.mkdir(parents=True, exist_ok=True)
     part = archive.with_name(archive.name + ".part")
     print("[Runtime setup] Downloading MRtrix3 " + info["version"], flush=True)
-    with urllib.request.urlopen(info["url"], timeout=60) as response, part.open("wb") as output:
-        count = 0
-        for chunk in iter(lambda: response.read(1024 * 1024), b""):
-            output.write(chunk)
-            count += len(chunk)
-            print(f"[Runtime setup] MRtrix3 download: {count // (1024 * 1024)} MiB", flush=True)
-    if part.stat().st_size != info["size"]:
-        part.unlink()
-        raise RuntimeError("MRtrix3 archive size mismatch; downloaded file will not be unpacked")
-    if file_hash(part) != info["sha256"]:
-        part.unlink()
-        raise RuntimeError("MRtrix3 archive checksum mismatch; downloaded file will not be unpacked")
+    download_verified_with_mirror_fallback(
+        info["url"],
+        part,
+        expected_sha256=info["sha256"],
+        expected_size=info["size"],
+        label="MRtrix3 download",
+        log_prefix="[Runtime setup]",
+        size_error="MRtrix3 archive size mismatch; downloaded file will not be unpacked",
+        checksum_error="MRtrix3 archive checksum mismatch; downloaded file will not be unpacked",
+        urlopen_module=urllib.request,
+    )
     part.replace(archive)
     return archive
 
@@ -476,14 +553,15 @@ def ensure_conda(root, explicit=None):
     if not installer.is_file() or file_hash(installer) != bootstrap_sha256:
         part = installer.with_suffix(".part")
         print("[Runtime setup] Downloading verified Miniforge bootstrap", flush=True)
-        with urllib.request.urlopen(bootstrap_url, timeout=60) as response, part.open("wb") as output:
-            count = 0
-            for chunk in iter(lambda: response.read(1024 * 1024), b""):
-                output.write(chunk)
-                count += len(chunk)
-                print(f"[Runtime setup] Bootstrap download: {count // (1024 * 1024)} MiB", flush=True)
-        if file_hash(part) != bootstrap_sha256:
-            raise RuntimeError("Miniforge checksum mismatch; downloaded file will not be executed")
+        download_verified_with_mirror_fallback(
+            bootstrap_url,
+            part,
+            expected_sha256=bootstrap_sha256,
+            label="Bootstrap download",
+            log_prefix="[Runtime setup]",
+            checksum_error="Miniforge checksum mismatch; downloaded file will not be executed",
+            urlopen_module=urllib.request,
+        )
         part.replace(installer)
     record = {"kind": "slicerdsurfer_miniforge_bootstrap", "prefix": str(bootstrap), "subdir": subdir,
               "url": bootstrap_url, "sha256": bootstrap_sha256}

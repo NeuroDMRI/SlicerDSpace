@@ -134,7 +134,7 @@ PythonSlicer scripts/stage_slicer_extension.py \
   --install-root ~/SlicerDDSurfer-extension --link-mode copy --clean
 ```
 - Then in Edit > Application Settings > Modules, add `~/SlicerDDSurfer-extension/SlicerDDSurfer/lib/Slicer-5.10/qt-scripted-modules` (expanded to an absolute path) to Additional module paths, then restart Slicer. Set `--slicer-version` to the actual version. Updating the source needs restaging and a restart. (R/README.md:61-67)
-- Install PyTorch from Slicer's Extension Manager; setup adds UKFTractography and SlicerDMRI only for the products that need them. (R/README.md, Installation and Prepare sections)
+- Install PyTorch from Slicer's Extension Manager; SlicerDMRI is optional and recommended for viewing tractography results (default analysis runs without it). (R/README.md, Installation and Prepare sections)
 - Model files live outside the checkout; choose a writable directory in Advanced settings > Environment and models. Review the asset terms first. (R/README.md:69-71)
 ```bash
 PythonSlicer scripts/download_model_assets.py --profile surface \

@@ -719,12 +719,15 @@ def archived_run_manifests(record: RunRecord, folder_records: Iterable[RunRecord
     return tuple(found)
 
 
+_ARCHIVE_CACHE_MAX = 512
+
+
 def read_archived_manifest(entry: ArchivedManifest) -> Optional[tuple[dict[str, Any], Optional[datetime]]]:
     """``(payload, time)`` of an archived subject manifest, or None when it is unreadable or not a subject manifest.
 
     Parsed once per (path, mtime, size). The time is the time the manifest records (its time fields), else the
     ``<stamp>`` folder name, and the file mtime only when both are missing (review R3: a touched or copied old
-    archive must not look new).
+    archive must not look new). Read errors are never cached, and the cache is bounded.
     """
 
     key = str(entry.path)
@@ -740,7 +743,12 @@ def read_archived_manifest(entry: ArchivedManifest) -> Optional[tuple[dict[str, 
                       or parsed.timestamp)
     except (ManifestError, OSError, ValueError, TypeError, AttributeError):
         result = None
-    _ARCHIVE_CACHE[key] = (entry.mtime_ns, entry.size, result)
+    if result is not None:
+        if len(_ARCHIVE_CACHE) >= _ARCHIVE_CACHE_MAX and key not in _ARCHIVE_CACHE:
+            _ARCHIVE_CACHE.pop(next(iter(_ARCHIVE_CACHE)), None)
+        _ARCHIVE_CACHE[key] = (entry.mtime_ns, entry.size, result)
+    else:
+        _ARCHIVE_CACHE.pop(key, None)
     return result
 
 

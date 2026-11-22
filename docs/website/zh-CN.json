@@ -1337,8 +1337,6 @@
   ", ~1.17 GB; includes": "，约 1.17 GB；包含",
   ", and": " 与",
   "; redistributed under the WU-Minn HCP Open Access Data Use Terms included in the archive).": "；按压缩包内附带的 WU-Minn HCP 开放获取数据使用条款再分发）。",
-  "Customize your setup installer": "定制一键安装器",
-  "Core workflows, bundled runtimes and anatomical prior models are included in the unified base package. Select your operating system, optional WMA white-matter atlases, and optional mirror, proxy or offline paths below to generate a tailored setup archive (universal setup archives and standalone base bundles are also available at": "核心工作流、内置运行环境与解剖先验模型均已包含在统一底座套件中。请在下方选择操作系统、按需勾选 WMA 白质图谱以及镜像源/代理/离线路径，生成专属引导安装包（通用引导包与独立离线底座包亦可在以下页面获取：",
   "Install the full extension via the setup archive": "通过一键引导包安装完整插件",
   "Download the setup": "下载上方定制的",
   "archive generated above (": "一键引导包（如",

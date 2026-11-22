@@ -46,7 +46,7 @@ def pnl_python_environment(python, extra_env=None, path_prepend=()):
 
 
 def verified_download(name, cache):
-    from shared.managed_runtimes import file_hash
+    from shared.managed_runtimes import download_verified_with_mirror_fallback, file_hash
     url, expected = ASSETS[name]
     cache.mkdir(parents=True, exist_ok=True)
     target = cache / name
@@ -58,16 +58,17 @@ def verified_download(name, cache):
     if part.is_symlink():
         raise ValueError("Runtime partial download cannot be a symlink")
     print("[PNL setup] Downloading " + name, flush=True)
-    with urllib.request.urlopen(url, timeout=60) as source, part.open("wb") as destination:
-        size = 0
-        for block in iter(lambda: source.read(1024 * 1024), b""):
-            destination.write(block)
-            size += len(block)
-            if size > 512 * 1024 * 1024:
-                raise ValueError("PNL download exceeds its bounded size")
-            print(f"[PNL setup] {name}: {size // (1024 * 1024)} MiB", flush=True)
-    if file_hash(part) != expected:
-        raise RuntimeError("PNL checksum mismatch: " + name)
+    download_verified_with_mirror_fallback(
+        url,
+        part,
+        expected_sha256=expected,
+        max_bytes=512 * 1024 * 1024,
+        label=name,
+        log_prefix="[PNL setup]",
+        checksum_error="PNL checksum mismatch: " + name,
+        bound_error="PNL download exceeds its bounded size",
+        urlopen_module=urllib.request,
+    )
     part.replace(target)
     return target
 

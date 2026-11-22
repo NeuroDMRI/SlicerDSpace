@@ -869,7 +869,7 @@ def install_results_panel(owner: Any) -> None:
     import qt
 
     section_box = getattr(getattr(owner, "ui", None), "resultsCollapsibleButton", None)
-    if section_box is not None and hasattr(section_box, "connect"):
+    if section_box is not None and hasattr(section_box, "connect") and hasattr(section_box, "collapsed"):
         section_box.connect(
             "contentsCollapsed(bool)",
             lambda collapsed: None if collapsed else owner._refresh_run_history(),
@@ -2114,6 +2114,50 @@ def _output_nodes(owner, slicer, item, manifest_path, path):
     return _nodes_of(_scene_nodes_by_run(slicer), _row_manifests(owner, item, qt, manifest_path), path)
 
 
+def _carrier_overlay_nodes(grouped: dict, manifests, surface_path: Any) -> list:
+    """Morphometry overlay model nodes in ``manifests`` whose ``CarrierPath`` matches ``surface_path``."""
+
+    from shared.surface_morphometry_display import _file_key
+
+    target = _file_key(surface_path)
+    if not target or not grouped:
+        return []
+    found: list = []
+    seen: set = set()
+    for key, by_path in grouped.items():
+        if key not in manifests:
+            continue
+        for nodes in by_path.values():
+            for node in nodes:
+                if id(node) in seen:
+                    continue
+                if _file_key(node.GetAttribute("SlicerDDSurfer.CarrierPath")) == target:
+                    seen.add(id(node))
+                    found.append(node)
+    return found
+
+
+def _find_surface_row_manifest(owner: Any, qt_mod: Any, item: Any, surface_path: Path, fallback: Path) -> Path:
+    """Return the manifest path owning the cortical surface row for ``surface_path`` in the same subject subtree."""
+
+    from shared.surface_morphometry_display import _file_key
+
+    target = _file_key(surface_path)
+    root = _top_item(item) if item is not None else None
+    if not target or root is None:
+        return fallback
+    stack = [root]
+    while stack:
+        current = stack.pop()
+        raw = current.data(0, _user_role(qt_mod, ROLE_PATH))
+        if isinstance(raw, (str, Path)) and raw and _file_key(raw) == target:
+            found = _item_manifest_path(owner, current, qt_mod)
+            if found is not None:
+                return found
+        stack.extend(_child_items(current))
+    return fallback
+
+
 def _slice_connections(slicer, node):
     layer = "Label" if node.IsA("vtkMRMLLabelMapVolumeNode") else "Background"
     return [(composite, layer) for composite in slicer.util.getNodesByClass("vtkMRMLSliceCompositeNode")
@@ -2168,16 +2212,148 @@ def _toggle_output(owner, item):
             set_fiber_node_visible,
         )
         from shared.result_scene import source_stamp
+        from shared.surface_morphometry_display import (
+            PRODUCT as MORPHOMETRY_PRODUCT,
+            _file_key,
+            carrier_surface_of_node,
+            desired_carrier_surfaces,
+            morphometry_row,
+            surface_from_obj_path,
+        )
 
         item_kind = item.data(0, _user_role(qt, ROLE_KIND))
+        row_manifests = _row_manifests(owner, item, qt, manifest_path)
         nodes = _output_nodes(owner, slicer, item, manifest_path, path)
-        visible = _output_visible(slicer, nodes)
+        is_surface_obj = surface_from_obj_path(path) is not None
+        surface_overlays = (
+            _carrier_overlay_nodes(_scene_nodes_by_run(slicer), row_manifests, path)
+            if is_surface_obj
+            else []
+        )
+        visible = _output_visible(slicer, nodes) or (bool(surface_overlays) and _output_visible(slicer, surface_overlays))
+        if is_surface_obj and visible:
+            for node in nodes:
+                node.SetDisplayVisibility(False)
+            for overlay in surface_overlays:
+                overlay.SetDisplayVisibility(False)
+            _refresh_output_visibility(owner)
+            return
+
+        morph_info = morphometry_row(MORPHOMETRY_PRODUCT, path) if item_kind == MORPHOMETRY_ROW_KIND else None
+        is_morph_overlay = morph_info is not None and morph_info[0] in {"measure", "annotation"}
+
         if not visible and nodes and path.is_file():
             stamp = source_stamp(path)
             if any(node.GetAttribute("SlicerDDSurfer.SourceStamp") != stamp for node in nodes):
                 for node in nodes:
                     slicer.mrmlScene.RemoveNode(node)
                 nodes = []
+
+        if is_morph_overlay:
+            if visible:
+                reveal_carriers: list[Path] = []
+                seen_carriers: set[str] = set()
+                for node in nodes:
+                    try:
+                        node_visible = bool(node.GetDisplayVisibility())
+                    except Exception:
+                        node_visible = False
+                    if node_visible:
+                        raw_carrier = node.GetAttribute("SlicerDDSurfer.CarrierPath")
+                        if surface_from_obj_path(raw_carrier) is not None:
+                            carrier_path = Path(str(raw_carrier))
+                            key = _file_key(carrier_path)
+                            if key and key not in seen_carriers and carrier_path.is_file():
+                                seen_carriers.add(key)
+                                reveal_carriers.append(carrier_path)
+                    node.SetDisplayVisibility(False)
+                grouped_after = _scene_nodes_by_run(slicer) if reveal_carriers else {}
+                for carrier_path in reveal_carriers:
+                    plain_nodes = _nodes_of(grouped_after, row_manifests, carrier_path)
+                    if not plain_nodes:
+                        surface_manifest = _find_surface_row_manifest(owner, qt, item, carrier_path, manifest_path)
+                        try:
+                            owner.logic.loadKeyResultsFromManifest(surface_manifest, source_path=carrier_path)
+                        except Exception:
+                            pass
+                        plain_nodes = _nodes_of(_scene_nodes_by_run(slicer), row_manifests, carrier_path)
+                    for plain in plain_nodes:
+                        plain.SetDisplayVisibility(True)
+                _refresh_output_visibility(owner)
+                return
+
+            manifest_data: dict[str, Any] = {}
+            try:
+                manifest_data = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+            except Exception:
+                manifest_data = {}
+            desired = (
+                desired_carrier_surfaces(slicer, manifest_data, morph_info[1], path)
+                if manifest_data
+                else ("white",)
+            )
+            if not nodes:
+                result = owner.logic.loadKeyResultsFromManifest(manifest_path, source_path=path)
+                nodes = _output_nodes(owner, slicer, item, manifest_path, path)
+                if not nodes:
+                    error = next((entry["reason"] for entry in result["skipped"] if entry.get("path") == str(path)),
+                                 "This output is missing or no longer available in the run.")
+                    raise RuntimeError(error)
+            elif any(carrier_surface_of_node(node) is not None for node in nodes):
+                loaded_surfaces = {carrier_surface_of_node(node) for node in nodes}
+                missing_surfaces = tuple(surf for surf in desired if surf not in loaded_surfaces)
+                if missing_surfaces:
+                    result = owner.logic.loadKeyResultsFromManifest(
+                        manifest_path,
+                        source_path=path,
+                        morphometry_surfaces=missing_surfaces,
+                    )
+                    nodes = _output_nodes(owner, slicer, item, manifest_path, path)
+                    loaded_surfaces = {carrier_surface_of_node(node) for node in nodes}
+                    if any(surf not in loaded_surfaces for surf in missing_surfaces):
+                        error = next(
+                            (entry["reason"] for entry in result["skipped"] if entry.get("path") == str(path)),
+                            "This output is missing or no longer available in the run.",
+                        )
+                        raise RuntimeError(error)
+
+            if any(carrier_surface_of_node(node) is not None for node in nodes):
+                shown_nodes = []
+                for node in nodes:
+                    show_this = carrier_surface_of_node(node) in desired
+                    node.SetDisplayVisibility(show_this)
+                    if show_this:
+                        shown_nodes.append(node)
+            else:
+                shown_nodes = list(nodes)
+                for node in shown_nodes:
+                    node.SetDisplayVisibility(True)
+
+            _show_one_overlay_per_surface(slicer, shown_nodes)
+            # Also hide plain surface / sibling overlays loaded from archived manifests of the same run family.
+            shown_ids = {node.GetID() for node in shown_nodes}
+            shown_carrier_keys = {
+                _file_key(node.GetAttribute("SlicerDDSurfer.CarrierPath"))
+                for node in shown_nodes
+                if surface_from_obj_path(node.GetAttribute("SlicerDDSurfer.CarrierPath")) is not None
+            }
+            if shown_carrier_keys:
+                for key, by_path in _scene_nodes_by_run(slicer).items():
+                    if key not in row_manifests:
+                        continue
+                    for other_list in by_path.values():
+                        for other in other_list:
+                            if other.GetID() in shown_ids or not other.IsA("vtkMRMLModelNode"):
+                                continue
+                            other_keys = {
+                                _file_key(other.GetAttribute("SlicerDDSurfer.SourcePath")),
+                                _file_key(other.GetAttribute("SlicerDDSurfer.CarrierPath")),
+                            }
+                            if other_keys & shown_carrier_keys and other.GetDisplayVisibility():
+                                other.SetDisplayVisibility(False)
+            _refresh_output_visibility(owner)
+            return
+
         if not nodes:
             result = owner.logic.loadKeyResultsFromManifest(manifest_path, source_path=path)
             nodes = _output_nodes(owner, slicer, item, manifest_path, path)
@@ -2332,7 +2508,21 @@ def _output_menu(owner, position):
                     owner._latestResultManifestPath = selected
     elif unload is not None and chosen == unload:
         for node in nodes:
+            display_nodes = []
+            get_count = getattr(node, "GetNumberOfDisplayNodes", None)
+            get_nth = getattr(node, "GetNthDisplayNode", None)
+            if callable(get_count) and callable(get_nth):
+                try:
+                    display_nodes = [get_nth(index) for index in range(int(get_count() or 0))]
+                except Exception:
+                    display_nodes = []
             slicer.mrmlScene.RemoveNode(node)
+            for display in display_nodes:
+                if display is not None:
+                    try:
+                        slicer.mrmlScene.RemoveNode(display)
+                    except Exception:
+                        pass
         _refresh_output_visibility(owner)
     elif chosen == open_folder:
         open_results_folder(owner, folder)
@@ -2669,6 +2859,10 @@ def refresh_results_language(owner: Any) -> None:
                 _relabel_family(qt, item, zh)
     except Exception:
         pass
+    try:
+        _refresh_output_visibility(owner)
+    except Exception:
+        pass
 
 
 def _relabel_family(qt_mod: Any, family: Any, zh: bool) -> None:
@@ -2838,7 +3032,16 @@ def _refresh_output_visibility(owner, *, dark: Optional[bool] = None):
             grouped = _scene_nodes_by_run(slicer)
         if not grouped:
             return []
-        return _nodes_of(grouped, _row_manifests(owner, item, qt, mpath, resolved_manifests), raw_path)
+        manifests = _row_manifests(owner, item, qt, mpath, resolved_manifests)
+        direct = _nodes_of(grouped, manifests, raw_path)
+        from shared.surface_morphometry_display import surface_from_obj_path
+
+        if surface_from_obj_path(raw_path) is not None:
+            overlays = _carrier_overlay_nodes(grouped, manifests, raw_path)
+            if overlays:
+                seen = {id(n) for n in direct}
+                return direct + [n for n in overlays if id(n) not in seen]
+        return direct
 
     zh = str(getattr(owner, "_onboardingLanguage", "en")).startswith("zh")
     try:
@@ -3194,7 +3397,13 @@ def _populate_manifest_output_items(
                     item.setData(0, role_manifest, manifest_str)
                 if run_index is not None:
                     item.setData(0, role_run, run_index)
-                item.setToolTip(0, _morphometry_tooltip(path, zh) if path in morphometry_paths else path)
+                leaf_tip = _morphometry_tooltip(path, zh) if path in morphometry_paths else path
+                if path in qc_marks:
+                    qc_state, _, qc_reason = qc_marks[path].partition("\t")
+                    if qc_state in QC_MARK_TEXT:
+                        qc_label = QC_MARK_TEXT[qc_state][1 if zh else 0]
+                        leaf_tip = f"{leaf_tip}\n{qc_label}{'：' if zh else ': '}{qc_reason}" if qc_reason else f"{leaf_tip}\n{qc_label}"
+                item.setToolTip(0, leaf_tip)
             if subgroup is not None and (sub_existed or sub_marked):
                 target.setText(0, _subgroup_text(qt, target, key, zh))
         if added_to_existing:
@@ -3342,6 +3551,7 @@ def refresh_run_history(owner: Any, select_path: Optional[Path] = None) -> None:
     combo = getattr(owner, "_runHistoryComboBox", None)
     if combo is None:
         return
+    _BROKEN_ARCHIVES_LOGGED.clear()
     previous = select_path or selected_manifest_path(owner)
     discovery = discover_runs(history_roots(owner))
     # Batch 2: the one place where runs removed from the Results list are filtered out. Every reader below (combo,

@@ -637,11 +637,27 @@ def import_dicom_series(config, series):
         signatures = import_source_signatures(config, dicom_series=series)
     with TemporaryDirectory(prefix="slicerdspace-series-") as temporary:
         staged = Path(temporary)
+        to_copy = []
         for index, original in enumerate(series["paths"]):
             target = staged / f"{index:08d}.dcm"
             try:
                 os.link(original, target)
             except OSError:
+                to_copy.append((original, target))
+        if to_copy:
+            import errno
+            needed = sum(Path(src).stat().st_size for src, _ in to_copy)
+            free = shutil.disk_usage(staged).free
+            if free < needed:
+                need_mib = needed / (1024 * 1024)
+                free_mib = free / (1024 * 1024)
+                raise OSError(
+                    errno.ENOSPC,
+                    f"Not enough free space in temporary staging folder {staged} to copy {len(to_copy)} DICOM file(s) "
+                    f"(needs {need_mib:.1f} MiB, available {free_mib:.1f} MiB). Free space on the temporary drive or "
+                    "move the DICOM folder onto the same volume as the temporary directory.",
+                )
+            for original, target in to_copy:
                 shutil.copyfile(original, target)
         manifest = prepare_inputs(replace(config, source=staged, source_signatures=signatures))
     if manifest.get("reused"):

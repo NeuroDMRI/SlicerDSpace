@@ -179,6 +179,241 @@ class D5DetachedNrrdPathTest(unittest.TestCase):
         self.assertIn("non-ASCII characters; move the file to an ASCII-only folder", caught.exception.detail)
 
 
+class D1ParcellationRamWarningTest(unittest.TestCase):
+    """D1: DDParcel checks real available host RAM against the 7 GiB floor (no 0.7x scheduling budget or 8 GiB fallback)."""
+
+    def _run_ddparcel_with_ram(self, available_ram):
+        from shared.orchestrator import ProductOrchestratorConfig, run_subject_products
+        import test_product_orchestrator as T
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "sub1"
+            T._write_valid_raw_subject(root, shape=(2, 2, 2), affine=T.UNAFFECTED_AFFINE)
+            atlas_t2 = Path(td) / "atlas_t2.nii.gz"
+            atlas_t2.write_bytes(b"fake")
+            logs = []
+            cfg = ProductOrchestratorConfig(
+                subject_id="sub1",
+                subject_root=root,
+                targets=("parcellation",),
+                execute=True,
+                resume=False,
+                atlas_t2=atlas_t2,
+            )
+            reg_manifest = Path(td) / "reg_manifest.json"
+            reg_manifest.write_text("{}", encoding="utf-8")
+            fake_registered = mock.MagicMock(manifest_path=reg_manifest)
+            fake_parcel = mock.MagicMock()
+            fake_parcel.outputs = {}
+            fake_parcel.manifest_path = None
+            fake_parcel.qc_path = None
+            with mock.patch("shared.platform_info.available_host_ram_bytes", return_value=available_ram), \
+                    mock.patch("shared.orchestrator._parcellation_complete", return_value=False), \
+                    mock.patch("shared.pipeline.ensure_registered_dti_bundle", return_value=fake_registered), \
+                    mock.patch("anatomy.parcellation.run_ddparcel_from_registered_bundle", return_value=fake_parcel), \
+                    mock.patch("shared.orchestrator._publish_parcellation_outputs", return_value={}):
+                run_subject_products(cfg, log=logs.append)
+            return logs
+
+    def test_b2_d1_warns_with_real_available_ram_below_7_gib(self):
+        logs = self._run_ddparcel_with_ram(int(5.2 * GIB))
+        warnings = [line for line in logs if "WARNING: Available RAM is" in line]
+        self.assertEqual(len(warnings), 1, logs)
+        self.assertIn("5.2 GiB", warnings[0])
+        self.assertIn("7.0 GiB", warnings[0])
+
+    def test_b2_d1_does_not_false_warn_between_7_and_10_gib_or_when_unknown(self):
+        for available in (8 * GIB, None):
+            with self.subTest(available=available):
+                logs = self._run_ddparcel_with_ram(available)
+                self.assertFalse([line for line in logs if "WARNING: Available RAM" in line], logs)
+
+
+class D2TlsTrustStoreTest(unittest.TestCase):
+    """D2: strict SAN-only TLS context trusting system roots + SLICERDSPACE_CA_BUNDLE + certifi, including HTTPS proxies."""
+
+    def test_b2_d2_ssl_context_disables_common_name_fallback_and_accepts_ca_bundle_env(self):
+        from shared import network_config as nc
+
+        with tempfile.TemporaryDirectory() as td:
+            bundle = Path(td) / "corp-ca.pem"
+            bundle.write_text("placeholder", encoding="utf-8")
+            with mock.patch.dict(os.environ, {nc.CA_BUNDLE_ENV: str(bundle)}, clear=False):
+                self.assertEqual(nc._explicit_cafile(), str(bundle))
+                fake_ctx = ssl.create_default_context()
+                with mock.patch.object(nc.ssl, "create_default_context", return_value=fake_ctx), \
+                        mock.patch.object(fake_ctx, "load_verify_locations") as load_ca:
+                    ctx = nc._ssl_context()
+                self.assertIs(ctx, fake_ctx)
+                self.assertFalse(ctx.hostname_checks_common_name)
+                loaded_files = [call.kwargs.get("cafile") for call in load_ca.call_args_list]
+                self.assertIn(str(bundle), loaded_files)
+
+    def test_b2_d2_http_session_passes_ssl_context_and_proxy_ssl_context_for_https_proxies(self):
+        from shared import network_config as nc
+
+        session = nc._make_http_session("https://127.0.0.1:8443")
+        self.assertIsNotNone(session)
+        self.assertIs(session.verify, True)
+        adapter = session.get_adapter("https://example.com")
+        pool_ctx = adapter.poolmanager.connection_pool_kw.get("ssl_context")
+        self.assertIsInstance(pool_ctx, ssl.SSLContext)
+        self.assertFalse(pool_ctx.hostname_checks_common_name)
+        proxy_mgr = adapter.proxy_manager_for("https://127.0.0.1:8443")
+        self.assertIs(proxy_mgr.connection_pool_kw.get("ssl_context"), pool_ctx)
+        self.assertIs(proxy_mgr.proxy_ssl_context, pool_ctx)
+
+
+class D4DicomCrossVolumeSpaceTest(unittest.TestCase):
+    """D4: cross-volume DICOM staging checks free space only for files that actually failed os.link."""
+
+    def test_b2_d4_partial_link_checks_free_space_only_for_unlinked_files(self):
+        from shared.input_import import InputImportConfig
+        from shared.ui_prepare_inputs import import_dicom_series
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            src = root / "dcm"
+            src.mkdir()
+            f1 = src / "s1.dcm"
+            f2 = src / "s2.dcm"
+            f1.write_bytes(b"a" * 8000)
+            f2.write_bytes(b"b" * 2000)
+            real_link = os.link
+
+            def partial_link(a, b):
+                if Path(a).name == "s1.dcm":
+                    return real_link(a, b)
+                raise OSError(errno.EXDEV, "cross-device link")
+
+            cfg = InputImportConfig(source=src, subject_root=root / "subj", subject_id="sub1", dry_run=True)
+            # Free space is 3000 bytes: smaller than full series (10000), larger than the one unlinked file (2000).
+            usage = shutil._ntuple_diskusage(100000, 97000, 3000)
+            with mock.patch("os.link", side_effect=partial_link), \
+                    mock.patch("shutil.disk_usage", return_value=usage), \
+                    mock.patch("shared.input_import.prepare_inputs", return_value={"plan": {}, "reused": False}) as prep:
+                import_dicom_series(cfg, {"uid": "1.2.3", "paths": [f1, f2]})
+            prep.assert_called_once()
+
+    def test_b2_d4_insufficient_space_for_unlinked_files_raises_enospc_before_copy(self):
+        from shared.input_import import InputImportConfig
+        from shared.ui_prepare_inputs import import_dicom_series
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            src = root / "dcm"
+            src.mkdir()
+            f1 = src / "s1.dcm"
+            f1.write_bytes(b"a" * 4096)
+            cfg = InputImportConfig(source=src, subject_root=root / "subj", subject_id="sub1", dry_run=True)
+            usage = shutil._ntuple_diskusage(10000, 9000, 1000)
+            with mock.patch("os.link", side_effect=OSError(errno.EXDEV, "cross-device")), \
+                    mock.patch("shutil.disk_usage", return_value=usage), \
+                    mock.patch("shutil.copyfile") as copyfile:
+                with self.assertRaises(OSError) as caught:
+                    import_dicom_series(cfg, {"uid": "1.2.3", "paths": [f1]})
+            self.assertEqual(caught.exception.errno, errno.ENOSPC)
+            copyfile.assert_not_called()
+
+
+class D6ManagedRuntimeMirrorFallbackTest(unittest.TestCase):
+    """D6: managed-runtime mirror downloads verify per-candidate SHA-256/size, fall back on corrupt 200, and cap pre-write."""
+
+    def test_b2_d6_corrupt_http_200_mirror_falls_back_to_verified_direct_url(self):
+        import hashlib
+        from shared import managed_runtimes as mr
+
+        good_bytes = b"VALID-RUNTIME-ARCHIVE" * 64
+        bad_bytes = b"HTML-ERROR-PAGE-200-OK"
+        good_sha = hashlib.sha256(good_bytes).hexdigest()
+        seen_urls = []
+
+        class _Resp(io.BytesIO):
+            def __init__(self, data):
+                super().__init__(data)
+                self.headers = {"Content-Length": str(len(data))}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                self.close()
+
+        def fake_open(url, timeout=60):
+            seen_urls.append(url)
+            return _Resp(bad_bytes if "mirror.example" in url else good_bytes)
+
+        with tempfile.TemporaryDirectory() as td:
+            part = Path(td) / "archive.part"
+            candidates = ["https://mirror.example/https://github.com/a/b.tar.gz", "https://github.com/a/b.tar.gz"]
+            with mock.patch("shared.network_config.expand_candidate_urls", return_value=candidates), \
+                    mock.patch("shared.network_config.open_url", side_effect=fake_open):
+                mr.download_verified_with_mirror_fallback(
+                    "https://github.com/a/b.tar.gz",
+                    part,
+                    expected_sha256=good_sha,
+                    expected_size=len(good_bytes),
+                )
+            self.assertEqual(seen_urls, candidates)
+            self.assertEqual(part.read_bytes(), good_bytes)
+
+    def test_b2_d6_max_bytes_aborts_before_writing_past_cap_for_content_length_and_streaming(self):
+        from shared import managed_runtimes as mr
+
+        class _ChunkResp:
+            def __init__(self, chunks, headers=None):
+                self._chunks = list(chunks)
+                self.headers = headers or {}
+
+            def read(self, _n=-1):
+                return self._chunks.pop(0) if self._chunks else b""
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        with tempfile.TemporaryDirectory() as td:
+            part = Path(td) / "capped.part"
+            # Case 1: Content-Length header exceeds cap -> fails before opening/writing file
+            with mock.patch("shared.network_config.expand_candidate_urls", return_value=["https://example.com/a.whl"]), \
+                    mock.patch("shared.network_config.open_url",
+                               return_value=_ChunkResp([b"x" * 200], headers={"Content-Length": "200"})):
+                with self.assertRaisesRegex(ValueError, "bounded size"):
+                    mr.download_verified_with_mirror_fallback(
+                        "https://example.com/a.whl", part, expected_sha256="0" * 64, max_bytes=100,
+                    )
+            self.assertFalse(part.exists())
+
+            # Case 2: No Content-Length -> streaming check stops before writing chunk past cap
+            writes = []
+            real_open = Path.open
+
+            class _TrackFile:
+                def __init__(self, fh):
+                    self._fh = fh
+
+                def write(self, data):
+                    writes.append(len(data))
+                    return self._fh.write(data)
+
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *args):
+                    return self._fh.__exit__(*args)
+
+            with mock.patch("shared.network_config.expand_candidate_urls", return_value=["https://example.com/a.whl"]), \
+                    mock.patch("shared.network_config.open_url",
+                               return_value=_ChunkResp([b"a" * 60, b"b" * 60])), \
+                    mock.patch.object(Path, "open", lambda p, mode="r", *a, **k: _TrackFile(real_open(p, mode, *a, **k)) if p == part and "w" in mode else real_open(p, mode, *a, **k)):
+                with self.assertRaisesRegex(ValueError, "bounded size"):
+                    mr.download_verified_with_mirror_fallback(
+                        "https://example.com/a.whl", part, expected_sha256="0" * 64, max_bytes=100,
+                    )
+            self.assertEqual(sum(writes), 60)
+            self.assertFalse(part.exists())
 
 
 if __name__ == "__main__":

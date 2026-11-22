@@ -484,6 +484,33 @@ class PopupMacTest(unittest.TestCase):
         self.assertTrue(self._choose("tractography", platform="win32"))
         self.assertNotIn(mock.call(NO_REPLAY, True), self.dialogs[0].setAttribute.call_args_list)
 
+    def test_b2_popup_mac_application_deactivate_discards_without_committing(self):
+        APP_DEACTIVATE = 122
+        self.qt.QEvent.ApplicationDeactivate = APP_DEACTIVATE
+
+        def deactivate(dialog):
+            self._tick(["ukf"])
+            self._filter(dialog).eventFilter(dialog, _Event(APP_DEACTIVATE))
+
+        self.on_wait = deactivate
+        with self._spy_commit() as commit:
+            accepted = self._choose("tractography")
+        self.assertFalse(accepted)
+        commit.assert_not_called()
+        self.assertEqual(self.node.orchestrationTractographyBackend, "csd_act")
+
+    def test_b2_popup_mac_scene_start_close_dismisses_open_popup_before_clearing_node(self):
+        from test_ui_results_tree import widget_methods
+
+        Widget = widget_methods("onSceneStartClose")
+        order = []
+        widget = Widget()
+        widget.setParameterNode = lambda val: order.append(("setParameterNode", val))
+        with mock.patch("shared.ui_algorithm_picker.close_algorithm_picker",
+                        side_effect=lambda owner: order.append(("close_algorithm_picker", owner))):
+            widget.onSceneStartClose(None, None)
+        self.assertEqual(order, [("close_algorithm_picker", widget), ("setParameterNode", None)])
+
 
 if __name__ == "__main__":
     unittest.main()

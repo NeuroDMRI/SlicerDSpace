@@ -4613,7 +4613,17 @@ def _parallel_model_products(config, targets, parcellation, log):
         force_recompute=not config.resume,max_parallel_models=config.max_parallel_models),log=log)
     if getattr(result, "roi_stats_csv_path", None) is not None:
         _publish_optional(result.roi_stats_csv_path, layout.microstructure / f"{config.subject_id}_ROIWise-Microstructure.csv")
-    rows = {row['name']:row for row in result.compute_schedule['jobs']}
+    schedule = getattr(result, "compute_schedule", None)
+    if isinstance(schedule, dict) and isinstance(schedule.get("jobs"), list):
+        rows = {row["name"]: row for row in schedule["jobs"]}
+        fallback_reason = None
+    else:
+        rows = {
+            target.removeprefix("microstructure_"): {}
+            for target in targets
+            if target.startswith("microstructure_")
+        }
+        fallback_reason = "Sequential fallback (resource budget insufficient for parallel models)"
     getters = {'freewater':_microstructure_freewater_outputs,'noddi':_microstructure_noddi_outputs}
     publishers = {
         'freewater': _publish_microstructure_freewater_outputs,
@@ -4624,6 +4634,8 @@ def _parallel_model_products(config, targets, parcellation, log):
     for stage,row in rows.items():
         if stage == 'dki':
             product = result.dki_result
+            if product is None:
+                continue
             raw_outputs = dict(product.outputs)
             raw_outputs.update({f'mkcurve_{key}':value for key,value in product.mkcurve_outputs.items()})
             manifest,qc = product.manifest_path,product.qc_path
@@ -4632,10 +4644,10 @@ def _parallel_model_products(config, targets, parcellation, log):
             manifest,qc = raw_outputs['manifest'],raw_outputs['qc']
         published_outputs = publishers[stage](raw_outputs, layout, config.subject_id)
         tasks['microstructure_'+stage] = ProductTaskRecord(name='microstructure.'+stage,status='completed',
-            reason='Independent process; shared ROI statistics published after all model fits',
+            reason=fallback_reason or 'Independent process; shared ROI statistics published after all model fits',
             manifest_path=manifest,qc_path=qc,outputs=published_outputs,
-            started_at=row['started_at'],ended_at=row['ended_at'],runtime_seconds=row['runtime_seconds'],
-            logs=(row['log'],))
+            started_at=row.get('started_at'),ended_at=row.get('ended_at'),runtime_seconds=row.get('runtime_seconds'),
+            logs=(row['log'],) if row.get('log') else ())
     return tasks
 
 
@@ -5031,8 +5043,18 @@ def _run_subject_products_impl(
         else:
             from anatomy.parcellation import DDParcelRegisteredConfig, run_ddparcel_from_registered_bundle
             from shared.pipeline import ensure_registered_dti_bundle
+            from shared.platform_info import available_host_ram_bytes
 
             _emit("[Orchestrator] Running DDParcel", log)
+            free_ram = available_host_ram_bytes()
+            parcellation_ram_floor = 7 * 1024**3
+            if free_ram is not None and free_ram < parcellation_ram_floor:
+                _emit(
+                    f"[Orchestrator] WARNING: Available RAM is {free_ram / (1024**3):.1f} GiB "
+                    f"(below the recommended 7.0 GiB for DDParcel brain parcellation); "
+                    "close other memory-heavy applications if inference slows down or runs out of memory.",
+                    log,
+                )
             task_started = _start_task_timer("DDParcel", log)
             raw_bundle = _anatomy_input_bundle(subject_root, config.subject_id, output_root, selected_mask_config)
             _emit(f"[Orchestrator] DDParcel input DWI: {raw_bundle.dwi_path}", log)
@@ -6398,8 +6420,13 @@ def _run_subject_products_impl(
                 _finish_task_timer(f"connectome {run_name}", task_started, log)
                 conn_rec = _task_from_result("connectome.streamline_count", result)
                 if conn_rec.status in {"completed", "skipped"}:
+                    conn_raw_outputs = dict(conn_rec.outputs)
+                    conn_raw_outputs.setdefault(
+                        "node_parcellation_path",
+                        connectome_dir / f"{config.subject_id}-connectome-node-parcellation.nii.gz",
+                    )
                     conn_rec = replace(conn_rec, outputs=_publish_connectome_outputs(
-                        "streamline_count", conn_rec.outputs, layout, config.subject_id, source=connectome_publish_source))
+                        "streamline_count", conn_raw_outputs, layout, config.subject_id, source=connectome_publish_source))
                 tasks.append(conn_rec)
                 if run_sift2 and primary_tractography_backend == 'csd_act' and sift2_weights.is_file():
                     weighted = run_connectome(
@@ -6419,8 +6446,13 @@ def _run_subject_products_impl(
                     )
                     s2_rec = _task_from_result("connectome.sift2_weighted", weighted)
                     if s2_rec.status in {"completed", "skipped"}:
+                        s2_raw_outputs = dict(s2_rec.outputs)
+                        s2_raw_outputs.setdefault(
+                            "node_parcellation_path",
+                            sift2_connectome_dir / f"{config.subject_id}-connectome-node-parcellation.nii.gz",
+                        )
                         s2_rec = replace(s2_rec, outputs=_publish_connectome_outputs(
-                            "sift2_weighted_streamline_count", s2_rec.outputs, layout, config.subject_id,
+                            "sift2_weighted_streamline_count", s2_raw_outputs, layout, config.subject_id,
                             source=connectome_publish_source))
                     tasks.append(s2_rec)
                     weighted_connectome_handled = True
@@ -6501,8 +6533,13 @@ def _run_subject_products_impl(
                     _finish_task_timer(f"connectome {run_name}", task_started, log)
                 s2_rec = _task_from_result("connectome.sift2_weighted", weighted)
                 if s2_rec.status in {"completed", "skipped"}:
+                    s2_raw_outputs = dict(s2_rec.outputs)
+                    s2_raw_outputs.setdefault(
+                        "node_parcellation_path",
+                        sift2_connectome_dir / f"{config.subject_id}-connectome-node-parcellation.nii.gz",
+                    )
                     s2_rec = replace(s2_rec, outputs=_publish_connectome_outputs(
-                        "sift2_weighted_streamline_count", s2_rec.outputs, layout, config.subject_id,
+                        "sift2_weighted_streamline_count", s2_raw_outputs, layout, config.subject_id,
                         source=connectome_publish_source))
                 tasks.append(s2_rec)
 

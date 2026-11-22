@@ -239,6 +239,8 @@ class SingleTrackingTests(_SubjectCase):
             matrix.write_text(f"computed {config.metric}\n", encoding="utf-8")
             nodes = out / f"{SID}-connectome-nodes.tsv"
             nodes.write_text("node_id\tlabel\tname\n10\t10\tLeft\n", encoding="utf-8")
+            node_parcel = out / f"{SID}-connectome-node-parcellation.nii.gz"
+            node_parcel.write_text(f"parcel {config.metric}\n", encoding="utf-8")
             computed.append(config.metric)
             return SimpleNamespace(subject_id=SID, output_dir=out, matrix_path=matrix, nodes_path=nodes,
                                    manifest_path=out / "m.json", qc_path=out / "q.json")
@@ -260,6 +262,8 @@ class SingleTrackingTests(_SubjectCase):
                                      self.layout.connectome / "csd_act" / f"{SID}_{short}.csv")
                     self.assertEqual(Path(tasks[name]["outputs"]["nodes_path"]),
                                      self.layout.connectome / "csd_act" / f"{SID}_nodes.tsv")
+                    self.assertEqual(Path(tasks[name]["outputs"]["node_parcellation_path"]),
+                                     self.layout.connectome / "csd_act" / f"{SID}_node_parcellation.nii.gz")
                 self.assertEqual(_flat_files(self.layout), [])
 
     def test_b2_conn_old_flat_files_stay_byte_identical(self) -> None:

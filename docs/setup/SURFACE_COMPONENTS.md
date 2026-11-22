@@ -63,7 +63,7 @@ For standalone/offline cache import (`<asset-root>/runtime/surface/`), the archi
 | Windows x86_64 | Bundled in `SlicerDSpace-v0.1.1-Windows-x64.zip` (`surface-runtime-windows-x86_64`) | **Verified native in 3D Slicer 5.10.0** |
 | Linux x86_64 | Bundled in `SlicerDSpace-v0.1.1-Linux-x64.tar.gz` (`surface-runtime-linux-x86_64`) | **Verified native in 3D Slicer 5.10.0** |
 | macOS 15 or later, Intel | `surface-runtime-darwin-x86_64.tar.gz` | Offline candidate; scientific comparison pending |
-| macOS 13 or later, Apple Silicon | `surface-runtime-darwin-arm64-macos13.tar.gz` | Offline candidate; scientific comparison pending |
+| macOS 13 or later, Apple Silicon | `surface-runtime-darwin-arm64-macos13.tar.gz` | Published download; scientific comparison pending |
 
 If the archive is missing, the preparation dialog lists the runtime as a
 manual item.
@@ -134,9 +134,10 @@ for macOS 13.0:
   CMake finds no OpenMP, so the tools run without OpenMP.
 - `runtime.json` records the flags, the compiler, CMake, the SDK, the
   deployment target and the commit that ran the build.
-- `.github/scripts/verify_surface_runtime.py` checks that every binary has a
-  minimum macOS of 13.0 and links only `/usr/lib` system libraries, that `bin/`
-  holds exactly the seven recipe commands, that each command starts with
+- `.github/scripts/verify_surface_runtime.py` checks that every binary is
+  arm64-only with a minimum macOS of 13.0 and links only `/usr/lib` system
+  libraries, that `bin/` contains no symlinks and holds exactly the seven
+  recipe commands (at least one checked), that each command starts with
   `--version`, and that no build log reports an object built for a newer macOS.
 - `scripts/package_surface_runtime.py` packs
   `surface-runtime-darwin-arm64-macos13.tar.gz`. The tarball and its `.sha256`

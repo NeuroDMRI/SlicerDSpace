@@ -1290,6 +1290,13 @@ class FastInstallerOptimizationTests(unittest.TestCase):
             env.update({
                 "PYTHONPATH": str(REPO_ROOT),
                 "SLICERDSPACE_USER_CONFIG": str(user_cfg),
+                "SLICERDSPACE_UPDATE_MANIFEST_URL": "http://127.0.0.1:1/update_manifest.json",
+                "SLICERDSPACE_MIRROR_PREFIX": "",
+                "SLICERDSPACE_PROXY_URL": "",
+                "HTTP_PROXY": "",
+                "HTTPS_PROXY": "",
+                "http_proxy": "",
+                "https_proxy": "",
                 "HOME": str(tdir),
                 "USERPROFILE": str(tdir),
             })

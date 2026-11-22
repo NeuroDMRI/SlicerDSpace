@@ -227,7 +227,8 @@ class RowKindTest(unittest.TestCase):
         self.assertIsNone(morphometry_row("surface.other", "/r/lh.thickness"))
         self.assertIsNone(morphometry_row(PRODUCT + "@x", "/r/x.thickness"))
         self.assertIsNone(morphometry_row(PRODUCT, "/r/lh.white"))
-        self.assertEqual(row_tooltip("/r/lh.thickness", zh=False), "Show thickness on the white surface")
+        self.assertEqual(row_tooltip("/r/lh.thickness", zh=False),
+                         "Show thickness on the open cortical surface (defaults to white)")
         self.assertTrue(row_tooltip("/r/lh.thickness", zh=True))
         self.assertNotEqual(row_tooltip("/r/lh.thickness", zh=True), row_tooltip("/r/lh.thickness", zh=False))
         for name in expected:
@@ -980,7 +981,7 @@ class TreeTest(TempRootTest):
         names = [row.text(0) for row in rows if row.data(0, USER_ROLE + ui_run_history.ROLE_PATH)]
         self.assertEqual(names, DECIDED_ORDER)
         by_name = {row.text(0): row for row in rows}
-        self.assertIn("Show thickness on the white surface", by_name["lh.thickness"].tooltips[0])
+        self.assertIn("Show thickness on the open cortical surface (defaults to white)", by_name["lh.thickness"].tooltips[0])
         self.assertIn(str(run.morph("lh.thickness")), by_name["lh.thickness"].tooltips[0])
         self.assertEqual(by_name["lh.aparc.stats"].text(1), "↗")
         self.assertNotEqual(by_name["lh.thickness"].text(1), "↗")
@@ -991,9 +992,9 @@ class TreeTest(TempRootTest):
 
         self.test_b2_morph_the_tree_lists_the_rows_in_order_with_tooltips_and_stats_open_outside()
         apply_onboarding_language(self.h.owner, "zh")
-        self.assertIn("在白质表面上显示皮层厚度", self.by_name["lh.thickness"].tooltips[0])
+        self.assertIn("在已打开的皮层表面上显示皮层厚度（默认白质表面）", self.by_name["lh.thickness"].tooltips[0])
         apply_onboarding_language(self.h.owner, "en")
-        self.assertIn("Show thickness on the white surface", self.by_name["lh.thickness"].tooltips[0])
+        self.assertIn("Show thickness on the open cortical surface (defaults to white)", self.by_name["lh.thickness"].tooltips[0])
 
     def test_b2_morph_the_eye_that_shows_an_overlay_hides_its_siblings_and_the_eye_that_hides_does_not(self) -> None:
         from shared import ui_run_history
@@ -1017,6 +1018,151 @@ class TreeTest(TempRootTest):
                     hide.assert_not_called()
                 else:
                     hide.assert_called_once_with(self.h.slicer, [node])
+
+
+@unittest.skipIf(np is None or vtk is None, "numpy/VTK/nibabel required (run with PythonSlicer)")
+class AdaptiveSurfaceCarrierTest(OwnedNodesTest):
+    """Post-processing overlays follow whichever cortical surface(s) are open (white, pial, or both), defaulting to white."""
+
+    def _run_with_white_and_pial(self):
+        run = self._run()
+        pial_hashes = {}
+        surface_task = run.manifest["tasks"][0]
+        for hemi in ("lh", "rh"):
+            pial = write_obj(run.surface_dir / f"{hemi}.pial.obj", shift=(0.5, 0.5, 0.5))
+            surface_task["outputs"][f"pial_{hemi}"] = str(pial)
+            pial_hashes[f"{hemi}.pial.obj"] = sha256(pial)
+        struct_manifest = run.structural / "manifest.json"
+        record = json.loads(struct_manifest.read_text(encoding="utf-8"))
+        record["native_sha256"].update(pial_hashes)
+        struct_manifest.write_text(json.dumps(record), encoding="utf-8")
+        run.manifest_path.write_text(json.dumps(run.manifest), encoding="utf-8")
+        return run
+
+    def _add_plain_surface(self, run, filename: str, *, visible: bool = True):
+        from shared.surface_morphometry_display import PREFIX
+
+        node = self.scene.AddNewNodeByClass("vtkMRMLModelNode", filename)
+        node.SetAttribute(PREFIX + "Run", str(run.manifest_path.resolve()))
+        node.SetAttribute(PREFIX + "SourcePath", str((run.surface_dir / filename).resolve()))
+        node.visible = visible
+        node.GetDisplayVisibility = lambda n=node: int(n.visible)
+        node.SetDisplayVisibility = lambda v, n=node: setattr(n, "visible", bool(v))
+        return node
+
+    def test_only_pial_open_loads_overlay_onto_pial_surface(self) -> None:
+        from shared.surface_morphometry_display import PREFIX, load_morphometry_row
+
+        run = self._run_with_white_and_pial()
+        self._add_plain_surface(run, "lh.white.obj", visible=False)
+        self._add_plain_surface(run, "lh.pial.obj", visible=True)
+        before = set(self.scene.nodes)
+        candidate = {"path": str(run.morph("lh.thickness")), "product": PRODUCT, "key": "lh.thickness"}
+        self.assertTrue(load_morphometry_row(self.fake, candidate, run.manifest))
+        new_models = [n for nid, n in self.scene.nodes.items() if nid not in before and n.kind == "vtkMRMLModelNode"]
+        self.assertEqual(len(new_models), 1)
+        self.assertEqual(new_models[0].name, "lh.thickness (pial)")
+        self.assertEqual(new_models[0].GetAttribute(PREFIX + "CarrierSurface"), "pial")
+        self.assertEqual(new_models[0].GetAttribute(PREFIX + "CarrierPath"),
+                         str((run.surface_dir / "lh.pial.obj").resolve()))
+
+    def test_both_white_and_pial_open_loads_overlay_onto_both_surfaces_with_single_legend(self) -> None:
+        from shared.surface_morphometry_display import PREFIX, load_morphometry_row
+
+        run = self._run_with_white_and_pial()
+        self._add_plain_surface(run, "lh.white.obj", visible=True)
+        self._add_plain_surface(run, "lh.pial.obj", visible=True)
+        before = set(self.scene.nodes)
+        candidate = {"path": str(run.morph("lh.thickness")), "product": PRODUCT, "key": "lh.thickness"}
+        self.assertTrue(load_morphometry_row(self.fake, candidate, run.manifest))
+        new_nodes = [n for nid, n in self.scene.nodes.items() if nid not in before]
+        new_models = [n for n in new_nodes if n.kind == "vtkMRMLModelNode"]
+        legends = [n for n in new_nodes if n.kind == "vtkMRMLColorLegendDisplayNode"]
+        self.assertEqual([m.GetAttribute(PREFIX + "CarrierSurface") for m in new_models], ["white", "pial"])
+        self.assertEqual([m.name for m in new_models], ["lh.thickness (white)", "lh.thickness (pial)"])
+        self.assertEqual(len(legends), 1)
+
+    def test_neither_surface_open_defaults_to_white_and_opens_white_eye_and_restores_plain_on_hide(self) -> None:
+        from shared import ui_run_history
+        from shared.result_scene import result_candidates as real_candidates, source_stamp
+        from shared.run_history import SUBJECT_MANIFEST_KIND, parse_run_manifest
+        from shared.surface_morphometry_display import PREFIX, load_morphometry_row
+        from test_ui_results_tree import USER_ROLE, Harness, find_child
+
+        run = self._run_with_white_and_pial()
+        data = json.loads(run.manifest_path.read_text(encoding="utf-8"))
+        data.update({"kind": SUBJECT_MANIFEST_KIND, "version": 1, "status": "completed",
+                     "ended_at": "2026-11-01T10:00:00Z"})
+        run.manifest_path.write_text(json.dumps(data), encoding="utf-8")
+
+        h = Harness(self)
+        h.tree.viewport = lambda: SimpleNamespace(mapToGlobal=lambda position: position)
+        h.slicer = self.fake
+        h.slicer.util.errorDisplay = mock.MagicMock()
+        h.owner.parent = None
+
+        def _stamp_node(node, manifest_path, product, spath):
+            node.SetAttribute(PREFIX + "Run", str(manifest_path.resolve()))
+            node.SetAttribute(PREFIX + "Product", product)
+            node.SetAttribute(PREFIX + "SourcePath", str(spath.resolve()))
+            node.SetAttribute(PREFIX + "SourceStamp", source_stamp(spath))
+
+        def fake_load(manifest_path, *, source_path=None, morphometry_surfaces=None, **_kw):
+            spath = Path(source_path)
+            before = set(self.scene.nodes)
+            if spath.name.endswith(".obj"):
+                node = self._add_plain_surface(run, spath.name, visible=True)
+                _stamp_node(node, manifest_path, "surface.ddsurfer", spath)
+                return {"loaded": [{"path": str(spath)}], "reused": [], "skipped": [], "deferred": []}
+            cand = {"path": str(spath), "product": PRODUCT, "key": spath.name}
+            load_morphometry_row(self.fake, cand, run.manifest, surfaces=morphometry_surfaces)
+            for nid, node in list(self.scene.nodes.items()):
+                if nid not in before and node.kind == "vtkMRMLModelNode":
+                    node.visible = True
+                    node.GetDisplayVisibility = lambda n=node: int(n.visible)
+                    node.SetDisplayVisibility = lambda v, n=node: setattr(n, "visible", bool(v))
+                    _stamp_node(node, manifest_path, PRODUCT, spath)
+            return {"loaded": [{"path": str(spath)}], "reused": [], "skipped": [], "deferred": []}
+
+        h.owner.logic = SimpleNamespace(loadKeyResultsFromManifest=fake_load)
+        with mock.patch("shared.result_scene.result_candidates", side_effect=real_candidates), \
+                mock.patch.dict(sys.modules, {"qt": h.qt, "slicer": h.slicer}):
+            h.refresh([parse_run_manifest(run.manifest_path)])
+            subject = next(item for item in h.tree.items if item.text(0).startswith("s"))
+            anatomy = find_child(subject, "Anatomical priors")
+            surf_grp = find_child(anatomy, "Cortical surface")
+            post_grp = find_child(anatomy, "Surface postprocess")
+            surf_rows = {surf_grp.child(i).text(0): surf_grp.child(i) for i in range(surf_grp.childCount())}
+            post_rows = {post_grp.child(i).text(0): post_grp.child(i) for i in range(post_grp.childCount())}
+
+            # Step 1: Neither white nor pial is open; user clicks lh.aparc.annot -> defaults to white AND opens lh.white.obj eye
+            ui_run_history._toggle_output(h.owner, post_rows["lh.aparc.annot"])
+            self.assertEqual(post_rows["lh.aparc.annot"].tooltips[1], "Hide")
+            self.assertEqual(surf_rows["lh.white.obj"].tooltips[1], "Hide")
+            self.assertEqual(surf_rows["lh.pial.obj"].tooltips[1], "Show")
+
+            # Step 2: User turns OFF lh.aparc.annot -> plain lh.white.obj loads & stays visible (WM surface stays open)
+            ui_run_history._toggle_output(h.owner, post_rows["lh.aparc.annot"])
+            self.assertEqual(post_rows["lh.aparc.annot"].tooltips[1], "Show")
+            self.assertEqual(surf_rows["lh.white.obj"].tooltips[1], "Hide")
+
+            # Step 3: User turns OFF lh.white.obj and turns ON lh.pial.obj, then turns ON lh.aparc.annot -> switches to pial!
+            ui_run_history._toggle_output(h.owner, surf_rows["lh.white.obj"])
+            ui_run_history._toggle_output(h.owner, surf_rows["lh.pial.obj"])
+            ui_run_history._toggle_output(h.owner, post_rows["lh.aparc.annot"])
+            visible_aparc = [
+                n for n in self.scene.nodes.values()
+                if n.kind == "vtkMRMLModelNode" and n.GetAttribute(PREFIX + "SourcePath") == str(run.morph("lh.aparc.annot").resolve())
+                and n.GetDisplayVisibility()
+            ]
+            self.assertEqual([n.GetAttribute(PREFIX + "CarrierSurface") for n in visible_aparc], ["pial"])
+            self.assertEqual(surf_rows["lh.pial.obj"].tooltips[1], "Hide")
+            self.assertEqual(surf_rows["lh.white.obj"].tooltips[1], "Show")
+
+            # Step 4: User turns OFF lh.pial.obj eye while lh.aparc.annot is on it -> hides both pial and aparc!
+            ui_run_history._toggle_output(h.owner, surf_rows["lh.pial.obj"])
+            self.assertEqual(surf_rows["lh.pial.obj"].tooltips[1], "Show")
+            self.assertEqual(post_rows["lh.aparc.annot"].tooltips[1], "Show")
 
 
 if __name__ == "__main__":

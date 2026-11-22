@@ -156,6 +156,48 @@ class ComputeScheduleTest(unittest.TestCase):
         self.assertTrue(all(record.runtime_seconds==2. for record in records.values()))
         self.assertTrue(all(record.status=='completed' for record in records.values()))
 
+    def test_max_parallel_models_falls_back_sequentially_on_resource_budget_error(self):
+        from types import SimpleNamespace
+        from microstructure.pipeline import MicrostructureConfig, _run_independent_models
+        from shared.pipeline import RawInputBundle
+
+        raw = RawInputBundle(self.root, 'fixture', self.root, *[self.root / name for name in ('dwi', 'bval', 'bvec', 'mask')])
+        out = self.root / 'outputs'
+        config = MicrostructureConfig('fixture', raw, None, out,
+            run_free_water=True, run_noddi=True, max_parallel_models=2)
+        with patch('microstructure.pipeline.nib.load', return_value=SimpleNamespace(shape=(2, 2, 2, 8))), \
+             patch('microstructure.pipeline._free_water_outputs_current', return_value=False), \
+             patch('microstructure.pipeline._noddi_outputs_current', return_value=False), \
+             patch('shared.compute_schedule.run_independent_jobs',
+                   side_effect=ValueError('A compute job exceeds the available resource budget')):
+            adjusted, record = _run_independent_models(config, None)
+        self.assertIsNone(record)
+        self.assertEqual(adjusted.max_parallel_models, 1)
+        self.assertFalse((out / 'compute_schedule' / 'microstructure_config.json').exists())
+
+    def test_orchestrator_parallel_model_products_handles_sequential_fallback_schedule_none(self):
+        from types import SimpleNamespace
+        from shared.orchestrator import ProductOrchestratorConfig, _parallel_model_products
+        from shared.pipeline import RawInputBundle
+
+        raw = RawInputBundle(self.root, 'fixture', self.root, *[self.root / name for name in ('dwi', 'bval', 'bvec', 'mask')])
+        result = SimpleNamespace(
+            compute_schedule=None,
+            dki_result=SimpleNamespace(
+                outputs={'mk': self.root / 'mk.nii.gz'}, mkcurve_outputs={},
+                manifest_path=self.root / 'dki_manifest.json', qc_path=self.root / 'dki_qc.json'),
+        )
+        config = ProductOrchestratorConfig('fixture', self.root, ('microstructure',),
+            execute=True, resume=False, max_parallel_models=2)
+        targets = ('microstructure_freewater', 'microstructure_noddi', 'microstructure_dki')
+        with patch('shared.pipeline.find_subject_root', return_value=raw), \
+             patch('shared.pipeline.resolve_preprocessed_input_bundle', return_value=raw), \
+             patch('shared.pipeline.ensure_native_dti_bundle', return_value=None), \
+             patch('microstructure.run_microstructure', return_value=result):
+            records = _parallel_model_products(config, targets, None, None)
+        self.assertEqual(set(records), set(targets))
+        self.assertTrue(all(record.status == 'completed' for record in records.values()))
+
 
 if __name__=='__main__':
     unittest.main()

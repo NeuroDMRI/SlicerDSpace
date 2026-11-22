@@ -32,6 +32,9 @@ PRODUCT = "surface.ddsurfer_postprocess"
 SURFACE_PRODUCT = "surface.ddsurfer"
 MORPHOMETRY_ROW_KIND = "surface_morphometry"  # ROLE_KIND of a Results row of this product (plain eye)
 HEMISPHERES = ("lh", "rh")
+SURFACES = ("white", "pial")
+_SURFACE_TEXT = {"white": ("white", "白质"), "pial": ("pial", "软脑膜")}
+_SURFACE_OBJ = re.compile(r"^(lh|rh)\.(white|pial)\.obj$")
 MEASURES = ("thickness", "curv", "sulc", "area")
 ANNOTATIONS = ("aparc", "aparc.a2009s")
 _KIND_ORDER = ("measure", "annotation", "inflated", "stats")
@@ -115,13 +118,43 @@ def row_tooltip(path: Any, *, zh: bool) -> str:
     kind, _hemi, name = row
     if kind == "measure":
         english, chinese = _MEASURE_TEXT[name]
-        return f"在白质表面上显示{chinese}" if zh else f"Show {english} on the white surface"
+        return (
+            f"在已打开的皮层表面上显示{chinese}（默认白质表面）"
+            if zh
+            else f"Show {english} on the open cortical surface (defaults to white)"
+        )
     if kind == "annotation":
         english, chinese = _ATLAS_TEXT.get(name, (name, name))
-        return f"在白质表面上显示 {chinese} 分区" if zh else f"Show the {english} parcellation on the white surface"
+        return (
+            f"在已打开的皮层表面上显示 {chinese} 分区（默认白质表面）"
+            if zh
+            else f"Show the {english} parcellation on the open cortical surface (defaults to white)"
+        )
     if kind == "inflated":
         return "显示膨胀表面" if zh else "Show the inflated surface"
     return "在 Slicer 外打开统计表" if zh else "Open the statistics table outside Slicer"
+
+
+def surface_from_obj_path(path: Any) -> Optional[tuple[str, str]]:
+    """Return ``(hemisphere, surface)`` for ``{lh,rh}.{white,pial}.obj``, else None."""
+
+    if not path:
+        return None
+    match = _SURFACE_OBJ.match(Path(str(path)).name)
+    return (match.group(1), match.group(2)) if match is not None else None
+
+
+def carrier_surface_of_node(node: Any) -> Optional[str]:
+    """Return ``'white'`` or ``'pial'`` for a morphometry overlay model node, else None."""
+
+    if node is None or not hasattr(node, "GetAttribute"):
+        return None
+    surf = node.GetAttribute(PREFIX + "CarrierSurface")
+    if surf in SURFACES:
+        return surf
+    carrier = node.GetAttribute(PREFIX + "CarrierPath")
+    parsed = surface_from_obj_path(carrier)
+    return parsed[1] if parsed is not None else None
 
 
 # ------------------------------------------------------------------------------------------ carrier checks
@@ -130,9 +163,10 @@ def _completed(task: dict) -> bool:
     return status in {"completed", "reused"} or (status == "skipped" and task.get("reason") == "completed outputs found")
 
 
-def white_carrier(manifest: dict, hemi: str) -> Optional[Path]:
-    """The published ``{hemi}.white.obj`` that the run's surface task records, or None (never the ``.stl``)."""
+def surface_carrier(manifest: dict, hemi: str, surface: str = "white") -> Optional[Path]:
+    """The published ``{hemi}.{surface}.obj`` that the run's surface task records, or None (never the ``.stl``)."""
 
+    target_name = f"{hemi}.{surface}.obj"
     for task in manifest.get("tasks") or []:
         if not isinstance(task, dict) or str(task.get("name") or "").split("@", 1)[0] != SURFACE_PRODUCT:
             continue
@@ -142,15 +176,21 @@ def white_carrier(manifest: dict, hemi: str) -> Optional[Path]:
             if not isinstance(value, str) or not value:
                 continue
             path = Path(value).expanduser()
-            if path.is_absolute() and path.name == f"{hemi}.white.obj" and path.is_file():
+            if path.is_absolute() and path.name == target_name and path.is_file():
                 return path
     return None
 
 
-def published_white_carrier(manifest: dict, hemi: str, row_path: Any) -> Optional[Path]:
-    """Review M4: ``cortical_surface/{hemi}.white.obj`` of the published layout (shared.io_layout) of the run's output
-    root, used when the manifest records no completed surface task with that file (surface excluded from the run, or
-    blocked while post-processing reused its earlier outputs). Only when the row itself lies in the
+def white_carrier(manifest: dict, hemi: str) -> Optional[Path]:
+    """The published ``{hemi}.white.obj`` that the run's surface task records, or None (never the ``.stl``)."""
+
+    return surface_carrier(manifest, hemi, "white")
+
+
+def published_surface_carrier(manifest: dict, hemi: str, row_path: Any, surface: str = "white") -> Optional[Path]:
+    """Review M4: ``cortical_surface/{hemi}.{surface}.obj`` of the published layout (shared.io_layout) of the run's
+    output root, used when the manifest records no completed surface task with that file (surface excluded from the
+    run, or blocked while post-processing reused its earlier outputs). Only when the row itself lies in the
     ``surface_morphometry`` folder of that same layout; None otherwise."""
 
     from shared.io_layout import subject_layout
@@ -162,19 +202,24 @@ def published_white_carrier(manifest: dict, hemi: str, row_path: Any) -> Optiona
         layout = subject_layout(Path(str(subject_root)), output_root=Path(str(output_root)) if output_root else None)
         if Path(str(row_path)).expanduser().resolve().parent != layout.surface_morphometry.resolve():
             return None
-        carrier = layout.cortical_surface / f"{hemi}.white.obj"
+        carrier = layout.cortical_surface / f"{hemi}.{surface}.obj"
         return carrier if carrier.is_file() else None
     except (OSError, RuntimeError, ValueError, TypeError):
         return None
 
 
-def recorded_carrier_sha256(task: dict, hemi: str) -> Optional[str]:
-    """``native_sha256["{hemi}.white.obj"]`` of the post-processing ``structural/manifest.json``; None when unreadable."""
+def published_white_carrier(manifest: dict, hemi: str, row_path: Any) -> Optional[Path]:
+    return published_surface_carrier(manifest, hemi, row_path, "white")
+
+
+def recorded_carrier_sha256(task: dict, hemi: str, surface: str = "white") -> Optional[str]:
+    """``native_sha256["{hemi}.{surface}.obj"]`` of the post-processing ``structural/manifest.json``; None when unreadable."""
 
     outputs = task.get("outputs") or {}
     candidates = [task.get("manifest_path")]
     if outputs.get("structural_root"):
         candidates.append(str(Path(str(outputs["structural_root"])) / "manifest.json"))
+    key = f"{hemi}.{surface}.obj"
     for value in candidates:
         if not value:
             continue
@@ -183,9 +228,9 @@ def recorded_carrier_sha256(task: dict, hemi: str) -> Optional[str]:
         except (OSError, ValueError, TypeError):
             continue
         hashes = record.get("native_sha256") if isinstance(record, dict) else None
-        value = hashes.get(f"{hemi}.white.obj") if isinstance(hashes, dict) else None
-        if isinstance(value, str) and value:
-            return value.lower()
+        digest = hashes.get(key) if isinstance(hashes, dict) else None
+        if isinstance(digest, str) and digest:
+            return digest.lower()
     return None
 
 
@@ -197,34 +242,78 @@ def file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def check_carrier(manifest: dict, task: dict, hemi: str, row_path: Any = None) -> Path:
-    """The white ``.obj`` to carry a measure of ``hemi``; a bilingual MorphometryError when there is none or it differs.
+def check_carrier(manifest: dict, task: dict, hemi: str, row_path: Any = None, surface: str = "white") -> Path:
+    """The white or pial ``.obj`` to carry a measure of ``hemi``; a bilingual MorphometryError when missing or mismatched.
 
     The surface task's recorded file comes first; else the published file of the row's layout (review M4). The
     checksum check is the same for both."""
 
-    carrier = white_carrier(manifest, hemi) or published_white_carrier(manifest, hemi, row_path)
+    en_surf, zh_surf = _SURFACE_TEXT.get(surface, (surface, surface))
+    carrier = surface_carrier(manifest, hemi, surface) or published_surface_carrier(manifest, hemi, row_path, surface)
     if carrier is None:
         raise MorphometryError(_bilingual(
-            f"This run has no {hemi}.white.obj surface. Older runs publish only the .stl surface, whose vertex order "
+            f"This run has no {hemi}.{surface}.obj surface. Older runs publish only the .stl surface, whose vertex order "
             "differs from the post-processing values. Re-run Surface to show this file.",
-            f"此运行没有 {hemi}.white.obj 白质表面。旧的运行只发布 .stl 表面，其顶点顺序与后处理数值不同。"
+            f"此运行没有 {hemi}.{surface}.obj {zh_surf}表面。旧的运行只发布 .stl 表面，其顶点顺序与后处理数值不同。"
             "请重新运行“表面重建”后再显示此文件。"))
-    expected = recorded_carrier_sha256(task, hemi)
+    expected = recorded_carrier_sha256(task, hemi, surface)
     if expected is not None and file_sha256(carrier) != expected:
         raise MorphometryError(_bilingual(
-            f"{carrier.name} is not the white surface that surface post-processing used (its checksum differs from "
+            f"{carrier.name} is not the {en_surf} surface that surface post-processing used (its checksum differs from "
             "the post-processing record). Re-run Surface postprocess.",
-            f"{carrier.name} 不是表面后处理所用的白质表面（校验值与后处理记录不同）。请重新运行“表面后处理”。"))
+            f"{carrier.name} 不是表面后处理所用的{zh_surf}表面（校验值与后处理记录不同）。请重新运行“表面后处理”。"))
     return carrier
 
 
 def check_count(values: int, points: int, file_name: str, carrier_name: str) -> None:
     if int(values) != int(points):
         raise MorphometryError(_bilingual(
-            f"{file_name} has {values} values, but the white surface {carrier_name} has {points} points; "
+            f"{file_name} has {values} values, but the surface {carrier_name} has {points} points; "
             "the file does not belong to this surface.",
-            f"{file_name} 有 {values} 个数值，但白质表面 {carrier_name} 有 {points} 个顶点；此文件不属于该表面。"))
+            f"{file_name} 有 {values} 个数值，但表面 {carrier_name} 有 {points} 个顶点；此文件不属于该表面。"))
+
+
+def active_carrier_surfaces(slicer, manifest: dict, hemi: str, row_path: Any = None) -> tuple[str, ...]:
+    """Return currently visible cortical surface(s) (subset of ``('white', 'pial')``) for ``hemi`` in ``slicer``."""
+
+    carrier_keys: dict[str, str] = {}
+    for surf in SURFACES:
+        path = surface_carrier(manifest, hemi, surf) or published_surface_carrier(manifest, hemi, row_path, surf)
+        key = _file_key(path)
+        if key:
+            carrier_keys[surf] = key
+    if not carrier_keys:
+        return ()
+    from shared.result_scene import result_nodes
+
+    try:
+        scene_nodes = result_nodes(slicer)
+    except Exception:
+        return ()
+    found: set[str] = set()
+    for node in scene_nodes:
+        if node is None or not node.IsA("vtkMRMLModelNode"):
+            continue
+        try:
+            if not node.GetDisplayVisibility():
+                continue
+        except Exception:
+            continue
+        node_files = {
+            _file_key(node.GetAttribute(PREFIX + "SourcePath")),
+            _file_key(node.GetAttribute(PREFIX + "CarrierPath")),
+        }
+        for surf, key in carrier_keys.items():
+            if key in node_files:
+                found.add(surf)
+    return tuple(surf for surf in SURFACES if surf in found)
+
+
+def desired_carrier_surfaces(slicer, manifest: dict, hemi: str, row_path: Any = None) -> tuple[str, ...]:
+    """Target surface(s) for a post-processing overlay: open surface(s) if any, else default to ``('white',)``."""
+
+    active = active_carrier_surfaces(slicer, manifest, hemi, row_path)
+    return active if active else ("white",)
 
 
 # --------------------------------------------------------------------------------------- values and colours
@@ -593,10 +682,18 @@ def _build_model_from_points(slicer, points, faces, name: str):
     return node
 
 
-def load_morphometry_row(slicer, candidate: dict, manifest: dict) -> bool:
-    """Build the node of one clicked post-processing row; on any failure nothing stays in the scene.
+def load_morphometry_row(
+    slicer,
+    candidate: dict,
+    manifest: dict,
+    *,
+    surfaces: Optional[tuple[str, ...] | list[str]] = None,
+) -> bool:
+    """Build node(s) for one clicked post-processing row; on any failure nothing stays in the scene.
 
-    Raises MorphometryError (bilingual) for a reason the user can act on. The caller registers the new model node
+    For measures and annotations, selects the currently open cortical surface(s) of that hemisphere (``white`` and/or
+    ``pial``), defaulting to ``('white',)`` when neither is open. Explicit ``surfaces`` overrides automatic detection.
+    Raises MorphometryError (bilingual) for a reason the user can act on. The caller registers the new model node(s)
     (Run, SourcePath ...) like every other result node.
     """
 
@@ -625,57 +722,66 @@ def load_morphometry_row(slicer, candidate: dict, manifest: dict) -> bool:
             own_nodes(node, _display_nodes(node))  # review M3: its display node leaves with it
             _observe_model_removal(slicer)
             return True
-        carrier = check_carrier(manifest, _postprocess_task(manifest), hemi, path)
+        if surfaces is not None:
+            target_surfaces = tuple(s for s in surfaces if s in SURFACES) or ("white",)
+        else:
+            target_surfaces = desired_carrier_surfaces(slicer, manifest, hemi, path)
+        task = _postprocess_task(manifest)
+        carriers = [(surf, check_carrier(manifest, task, hemi, path, surface=surf)) for surf in target_surfaces]
         if kind == "measure":
             values = nibabel.freesurfer.read_morph_data(str(path))
             colors = None
         else:
             values, colors = read_annotation(nibabel, path)
-        node = _load_carrier(slicer, carrier)
-        created.append(node)
-        own_nodes(node, _display_nodes(node))  # review M3: the reader's display node belongs to this row
-        detach_result_storage(slicer, node)  # a scene Save must never rewrite the published white surface
-        check_count(len(values), node.GetPolyData().GetNumberOfPoints(), path.name, carrier.name)
-        node.SetName(path.name)
-        node.SetAttribute(PREFIX + "CarrierPath", str(carrier.resolve()))
-        node.SetAttribute(PREFIX + "SourceCoordinateSystem", "RAS")
-        node.SetAttribute(PREFIX + "MorphometryKind", kind)
         import vtk
 
         array_name = name if kind == "measure" else name.replace(".", "_")
-        node.GetPolyData().GetPointData().AddArray(_point_array(values, array_name, integer=kind == "annotation"))
-        node.GetPolyData().GetPointData().Modified()
-        if node.GetDisplayNode() is None:
-            node.CreateDefaultDisplayNodes()
-        display = node.GetDisplayNode()
-        own_nodes(node, _display_nodes(node))
-        display.SetActiveScalar(array_name, vtk.vtkAssignAttribute.POINT_DATA)
-        if kind == "measure":
-            table = _first_existing(slicer, SEQUENTIAL_TABLES if name in {"thickness", "area"} else DIVERGING_TABLES)
-            if table is not None:
-                display.SetAndObserveColorNodeID(table)
-            low, high = measure_range(name, values)
-        else:
-            color = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLColorTableNode", f"{path.name} colors")
-            created.append(color)
-            color.SetTypeToUser()
-            color.SetNumberOfColors(len(colors))
-            for index, (label, red, green, blue) in enumerate(colors):
-                color.SetColor(index, label, red, green, blue, 1.0)
-            low, high = annotation_scalar_range(len(colors))
-            lookup = color.GetLookupTable()
-            if lookup is not None:
-                lookup.SetTableRange(low, high)
-            color.SetAttribute(PREFIX + "OwnerNodeID", node.GetID())
-            node.SetAttribute(PREFIX + "ColorNodeID", color.GetID())
-            own_nodes(node, [color])
-            display.SetAndObserveColorNodeID(color.GetID())
-        display.SetScalarRangeFlag(slicer.vtkMRMLDisplayNode.UseManualScalarRange)
-        display.SetScalarRange(low, high)
-        display.SetScalarVisibility(True)
-        if kind == "measure":
-            legend = _add_legend(slicer, node, LEGEND_TITLES[name])
-            own_nodes(node, [legend] + _display_nodes(node))
+        for index, (surf, carrier) in enumerate(carriers):
+            node = _load_carrier(slicer, carrier)
+            created.append(node)
+            own_nodes(node, _display_nodes(node))  # review M3: the reader's display node belongs to this row
+            detach_result_storage(slicer, node)  # a scene Save must never rewrite the published surface
+            check_count(len(values), node.GetPolyData().GetNumberOfPoints(), path.name, carrier.name)
+            node_name = path.name if (len(carriers) == 1 and surf == "white") else f"{path.name} ({surf})"
+            node.SetName(node_name)
+            node.SetAttribute(PREFIX + "CarrierPath", str(carrier.resolve()))
+            node.SetAttribute(PREFIX + "CarrierSurface", surf)
+            node.SetAttribute(PREFIX + "SourceCoordinateSystem", "RAS")
+            node.SetAttribute(PREFIX + "MorphometryKind", kind)
+            node.GetPolyData().GetPointData().AddArray(_point_array(values, array_name, integer=kind == "annotation"))
+            node.GetPolyData().GetPointData().Modified()
+            if node.GetDisplayNode() is None:
+                node.CreateDefaultDisplayNodes()
+            display = node.GetDisplayNode()
+            own_nodes(node, _display_nodes(node))
+            display.SetActiveScalar(array_name, vtk.vtkAssignAttribute.POINT_DATA)
+            if kind == "measure":
+                table = _first_existing(slicer, SEQUENTIAL_TABLES if name in {"thickness", "area"} else DIVERGING_TABLES)
+                if table is not None:
+                    display.SetAndObserveColorNodeID(table)
+                low, high = measure_range(name, values)
+            else:
+                color_name = f"{path.name} colors" if (len(carriers) == 1 and surf == "white") else f"{path.name} ({surf}) colors"
+                color = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLColorTableNode", color_name)
+                created.append(color)
+                color.SetTypeToUser()
+                color.SetNumberOfColors(len(colors))
+                for c_idx, (label, red, green, blue) in enumerate(colors):
+                    color.SetColor(c_idx, label, red, green, blue, 1.0)
+                low, high = annotation_scalar_range(len(colors))
+                lookup = color.GetLookupTable()
+                if lookup is not None:
+                    lookup.SetTableRange(low, high)
+                color.SetAttribute(PREFIX + "OwnerNodeID", node.GetID())
+                node.SetAttribute(PREFIX + "ColorNodeID", color.GetID())
+                own_nodes(node, [color])
+                display.SetAndObserveColorNodeID(color.GetID())
+            display.SetScalarRangeFlag(slicer.vtkMRMLDisplayNode.UseManualScalarRange)
+            display.SetScalarRange(low, high)
+            display.SetScalarVisibility(True)
+            if kind == "measure" and index == 0:
+                legend = _add_legend(slicer, node, LEGEND_TITLES[name])
+                own_nodes(node, [legend] + _display_nodes(node))
         _observe_model_removal(slicer)
         return True
     except Exception:

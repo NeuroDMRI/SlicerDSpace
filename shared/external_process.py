@@ -301,7 +301,7 @@ def subprocess_no_window_kwargs(**overrides: Any) -> dict[str, Any]:
     """Return Windows CREATE_NO_WINDOW subprocess kwargs merged with ``overrides``."""
 
     kwargs = dict(overrides)
-    if os.name == "nt":
+    if sys.platform == "win32" or os.name == "nt":
         flag = int(getattr(subprocess, "CREATE_NO_WINDOW", 0) or 0)
         if flag:
             kwargs["creationflags"] = int(kwargs.get("creationflags", 0) or 0) | flag

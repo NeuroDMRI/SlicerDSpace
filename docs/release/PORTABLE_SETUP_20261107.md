@@ -20,7 +20,7 @@ Plan the compute time for the first run after the update.
 ## What Changed: Default Methods
 
 - The DTI fit runs inside Slicer with the Teem library. SlicerDMRI is no longer
-  needed for the tensor fit. Setup asks for SlicerDMRI only when you tick WMA.
+  needed for the tensor fit; it is optional and recommended for viewing tractography results.
 - The DTI products now include a colour FA map (`<id>-dti-DEC.nrrd`).
 - DKI uses the Python MK-Curve by default.
 - The connectome backend is `auto`: MRtrix `tck2connectome` for a `.tck` source

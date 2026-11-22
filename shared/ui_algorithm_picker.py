@@ -440,6 +440,7 @@ def _install_outside_close_apply(qt, dialog, popup_state, apply_staged, changed=
     if close_type is None or not hasattr(dialog, "installEventFilter"):
         return None
     hide_type = getattr(getattr(qt, "QEvent", None), "Hide", None) if on_hidden is not None else None
+    deactivate_type = getattr(getattr(qt, "QEvent", None), "ApplicationDeactivate", None)
     replay_attribute = getattr(getattr(qt, "Qt", None), "WA_NoMouseReplay", None) if no_replay else None
     try:
         base = getattr(qt, "QObject")
@@ -451,6 +452,10 @@ def _install_outside_close_apply(qt, dialog, popup_state, apply_staged, changed=
                     if hide_type is not None and kind == hide_type:
                         if not dialog.isVisible():
                             on_hidden()
+                        return False
+                    if deactivate_type is not None and kind == deactivate_type:
+                        if not popup_state["finished"]:
+                            dialog.reject()
                         return False
                     if kind != close_type:
                         return False

@@ -31,6 +31,7 @@ RELEASE_PACKS_MANIFEST = REPO_ROOT / "models" / "release_packs_manifest.json"
 MIRROR_PREFIX_ENV = "SLICERDSPACE_MIRROR_PREFIX"
 PROXY_URL_ENV = "SLICERDSPACE_PROXY_URL"
 OFFLINE_DIR_ENV = "SLICERDSPACE_OFFLINE_DIR"
+CA_BUNDLE_ENV = "SLICERDSPACE_CA_BUNDLE"
 
 PRESET_MIRRORS: tuple[tuple[str, str, str, str], ...] = (
     ("direct", "", "GitHub Official (Direct)", "GitHub 官方直连"),
@@ -274,11 +275,18 @@ def _worker_count_for(url: str) -> int:
     return _MIRROR_WORKERS if _is_mirror_host(url) else _PAR_WORKERS
 
 
-def _ssl_cafile() -> str:
-    for env_key in ("SSL_CERT_FILE", "REQUESTS_CA_BUNDLE"):
+def _explicit_cafile() -> str:
+    for env_key in (CA_BUNDLE_ENV, "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE"):
         ca_file = (os.environ.get(env_key) or "").strip()
         if ca_file and Path(ca_file).is_file():
             return ca_file
+    return ""
+
+
+def _ssl_cafile() -> str:
+    explicit = _explicit_cafile()
+    if explicit:
+        return explicit
     try:
         import certifi
 
@@ -291,13 +299,26 @@ def _ssl_cafile() -> str:
 
 
 def _ssl_context() -> ssl.SSLContext:
-    ca_file = _ssl_cafile()
-    if ca_file:
+    """Build a strict TLS context trusting system roots plus SLICERDSPACE_CA_BUNDLE / certifi (no CN fallback)."""
+
+    ctx = ssl.create_default_context()
+    if hasattr(ctx, "hostname_checks_common_name"):
+        ctx.hostname_checks_common_name = False
+    explicit = _explicit_cafile()
+    if explicit:
         try:
-            return ssl.create_default_context(cafile=ca_file)
+            ctx.load_verify_locations(cafile=explicit)
         except Exception:
             pass
-    return ssl.create_default_context()
+    try:
+        import certifi
+
+        certifi_ca = certifi.where()
+        if certifi_ca and Path(certifi_ca).is_file() and certifi_ca != explicit:
+            ctx.load_verify_locations(cafile=certifi_ca)
+    except Exception:
+        pass
+    return ctx
 
 
 def _load_explicit_proxy() -> str:
@@ -603,14 +624,27 @@ def _make_http_session(proxy: str, pool_size: int = 16):
         import requests
         from requests.adapters import HTTPAdapter
 
+        ssl_ctx = _ssl_context()
+
+        class _SSLContextHTTPAdapter(HTTPAdapter):
+            def init_poolmanager(self, *args, **kwargs):
+                kwargs.setdefault("ssl_context", ssl_ctx)
+                return super().init_poolmanager(*args, **kwargs)
+
+            def proxy_manager_for(self, proxy_url, **proxy_kwargs):
+                proxy_kwargs.setdefault("ssl_context", ssl_ctx)
+                if not str(proxy_url or "").lower().startswith("socks"):
+                    proxy_kwargs.setdefault("proxy_ssl_context", ssl_ctx)
+                return super().proxy_manager_for(proxy_url, **proxy_kwargs)
+
         sess = requests.Session()
-        adapter = HTTPAdapter(pool_connections=pool_size, pool_maxsize=pool_size)
+        adapter = _SSLContextHTTPAdapter(pool_connections=pool_size, pool_maxsize=pool_size)
         sess.mount("https://", adapter)
         sess.mount("http://", adapter)
         sess.trust_env = False
         if proxy:
             sess.proxies = {"http": proxy, "https": proxy}
-        sess.verify = _ssl_cafile() or True
+        sess.verify = True
         sess.headers.update({"User-Agent": _DOWNLOAD_UA})
         return sess
     except Exception:

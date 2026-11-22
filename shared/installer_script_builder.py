@@ -1431,8 +1431,12 @@ _BOOTSTRAP_BODY = textwrap.dedent(
         if custom_assets_dir:
             deps["model_assets_dir"] = str(asset_root)
         else:
-            deps.pop("model_assets_dir", None)
-        deps.pop("wma_atlas_dir", None)
+            prev_assets = str(deps.get("model_assets_dir") or "").strip()
+            if not (prev_assets and Path(prev_assets).expanduser().is_dir()):
+                deps.pop("model_assets_dir", None)
+        prev_wma = str(deps.get("wma_atlas_dir") or "").strip()
+        if selected_packs or not (prev_wma and Path(prev_wma).expanduser().is_dir()):
+            deps.pop("wma_atlas_dir", None)
 
         defaults = cfg.setdefault("run_defaults", {})
         targets = [

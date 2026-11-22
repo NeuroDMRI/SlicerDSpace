@@ -57,7 +57,7 @@
 | Windows x86_64 | 已内置于 `SlicerDSpace-v0.1.1-Windows-x64.zip`（`surface-runtime-windows-x86_64`） | **已通过 3D Slicer 5.10.0 原生验收** |
 | Linux x86_64 | 已内置于 `SlicerDSpace-v0.1.1-Linux-x64.tar.gz`（`surface-runtime-linux-x86_64`） | **已通过 3D Slicer 5.10.0 原生验收** |
 | macOS 15 或更高版本，Intel | `surface-runtime-darwin-x86_64.tar.gz` | 离线候选包，科学结果对照待完成 |
-| macOS 13 或更高版本，Apple Silicon | `surface-runtime-darwin-arm64-macos13.tar.gz` | 离线候选包，科学结果对照待完成 |
+| macOS 13 或更高版本，Apple Silicon | `surface-runtime-darwin-arm64-macos13.tar.gz` | 已发布在线下载，科学结果对照待完成 |
 
 缺少压缩包时，准备窗口会将该运行环境列为手动处理项。
 
@@ -116,8 +116,8 @@ PythonSlicer run_subject_pipeline.py --subject-root /data/sub-01 --subject-id su
   加入 `-DARM64`。它不设置 `PNG_ARM_NEON_OPT`。CMake 未找到 OpenMP，
   因此这些命令不使用 OpenMP。
 - `runtime.json` 记录编译选项、编译器、CMake、SDK、部署目标和执行构建的提交。
-- `.github/scripts/verify_surface_runtime.py` 检查：每个二进制的最低 macOS 为 13.0，
-  只链接 `/usr/lib` 系统库；`bin/` 恰好包含七个配方命令；每个命令能以 `--version`
+- `.github/scripts/verify_surface_runtime.py` 检查：每个二进制均为纯 arm64、最低 macOS 为 13.0，
+  只链接 `/usr/lib` 系统库；`bin/` 不含符号链接且恰好包含七个配方命令（至少核验一项）；每个命令能以 `--version`
   启动；构建日志中没有“对象为更新的 macOS 构建”的提示。
 - `scripts/package_surface_runtime.py` 打包 `surface-runtime-darwin-arm64-macos13.tar.gz`。
   压缩包及其 `.sha256` 文件保存为 Actions 构件。只有手动运行并设置 `publish=true`

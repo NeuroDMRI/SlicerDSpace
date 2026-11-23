@@ -87,6 +87,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      actions: read
       pages: write
       id-token: write
     environment:
@@ -99,6 +100,25 @@ jobs:
         uses: actions/upload-pages-artifact@v3
         with:
           path: docs/site
+      - name: Wait for Pages artifact indexing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          for i in $(seq 1 15); do
+            if curl --silent --fail \
+              --header "Authorization: Bearer $GH_TOKEN" \
+              --header 'Accept: application/vnd.github+json' \
+              --header 'X-GitHub-Api-Version: 2022-11-28' \
+              "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts?name=github-pages" \
+              | python -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if any(a.get("name")=="github-pages" and not a.get("expired") for a in d.get("artifacts",[])) else 1)'; then
+              echo "github-pages artifact indexed on attempt $i"
+              sleep 2
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Proceeding after indexing wait"
       - name: Publish
         id: deployment
         uses: actions/deploy-pages@v4

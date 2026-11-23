@@ -102,9 +102,10 @@ class CohortPlanningTests(unittest.TestCase):
                  '/sys/fs/cgroup/memory.max': str(8 * GIB),
                  '/sys/fs/cgroup/memory.current': str(2 * GIB)}
         def read(path, *args, **kwargs):
-            if str(path) not in files:
+            key = path.as_posix() if hasattr(path, 'as_posix') else str(path)
+            if key not in files:
                 raise OSError('absent')
-            return files[str(path)]
+            return files[key]
         with patch('shared.compute_schedule.available_resources', return_value=(64, 100 * GIB)), \
              patch.object(Path, 'read_text', read):
             cpu, memory = available_cohort_resources()

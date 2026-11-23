@@ -117,6 +117,10 @@ class MrtrixCheckTests(ToolFixture):
 
 
 class FslCheckTests(ToolFixture):
+    def setUp(self):
+        super().setUp()
+        (self.fsl / 'eddy').write_text('#!/bin/sh\n')
+
     def good(self):
         return {name: result(1, '', f'{name}\nUsage: {name} [options]') for name in ('eddy', 'eddy_cpu', 'eddy_openmp', 'topup')}
 
@@ -136,7 +140,7 @@ class FslCheckTests(ToolFixture):
         self.assertEqual(checks, ['fsl:eddy_help', 'fsl:eddy_cpu_help', 'fsl:topup_help'])
         for _, args, env in calls:
             self.assertEqual(args, ['--help'])
-            self.assertEqual(env['FSLDIR'], str(self.fsl.parent))
+            self.assertEqual(Path(env['FSLDIR']), self.fsl.parent)
             self.assertEqual(env['FSLOUTPUTTYPE'], 'NIFTI_GZ')
             self.assertIn(str(self.fsl), env['PATH'].split(os.pathsep))
 
@@ -310,6 +314,7 @@ class RunChecksDispatchTests(ToolFixture):
                    **{name: result(1, 'Usage') for name in ('eddy', 'eddy_cpu', 'topup')},
                    'dcm2niix': result(3, 'dcm2niix version v1')}
         patcher, _ = self.runner(answers)
+        (self.fsl / 'eddy').write_text('#!/bin/sh\n')
         (self.fsl / 'eddy_cpu').write_text('#!/bin/sh\n')
         request = {'mrtrix_bin_dir': str(self.mrtrix), 'fsl_bin_dir': str(self.fsl), 'dcm2niix': str(self.root / 'dcm2niix'),
                    'pnl_native_mask': {'model_dir': '/m'}}
@@ -380,8 +385,8 @@ class RequestsForReportToolTests(unittest.TestCase):
         request = requests[0]
         self.assertEqual(request['python'], '/slicer/PythonSlicer')
         self.assertEqual(request['imports'], ['numpy'])
-        self.assertEqual(request['mrtrix_bin_dir'], '/opt/mrtrix3/bin')
-        self.assertEqual(request['fsl_bin_dir'], '/opt/fsl/bin')
+        self.assertEqual(Path(request['mrtrix_bin_dir']).as_posix(), '/opt/mrtrix3/bin')
+        self.assertEqual(Path(request['fsl_bin_dir']).as_posix(), '/opt/fsl/bin')
         self.assertEqual(request['dcm2niix'], '/opt/d2n/dcm2niix')
         self.assertEqual(request['pnl_native_mask'], {'model_dir': '/models/pnl-cnn', 'device': 'cuda'})
 
@@ -389,7 +394,7 @@ class RequestsForReportToolTests(unittest.TestCase):
         requests = selftest.requests_for_report(tool_report(SLICER_NUMPY, MRTRIX, PNL_MANAGED))
         self.assertEqual(len(requests), 1)
         self.assertNotIn('pnl_native_mask', requests[0])
-        self.assertEqual(requests[0]['mrtrix_bin_dir'], '/opt/mrtrix3/bin')
+        self.assertEqual(Path(requests[0]['mrtrix_bin_dir']).as_posix(), '/opt/mrtrix3/bin')
 
     def test_sc1d_a_report_without_a_route_gets_no_native_mask_check(self):
         unrouted = status('brain_mask_backend', 'setting', details={
@@ -402,7 +407,8 @@ class RequestsForReportToolTests(unittest.TestCase):
         requests = selftest.requests_for_report(tool_report(MRTRIX, FSL))
         self.assertEqual(len(requests), 1)
         self.assertIsNone(requests[0]['python'])  # None: the interpreter that ran the environment check
-        self.assertEqual((requests[0]['mrtrix_bin_dir'], requests[0]['fsl_bin_dir']), ('/opt/mrtrix3/bin', '/opt/fsl/bin'))
+        self.assertEqual((Path(requests[0]['mrtrix_bin_dir']).as_posix(), Path(requests[0]['fsl_bin_dir']).as_posix()),
+                         ('/opt/mrtrix3/bin', '/opt/fsl/bin'))
         self.assertNotIn('pnl_native_mask', requests[0])
         self.assertNotIn('dcm2niix', requests[0])
 
@@ -460,9 +466,10 @@ class ScriptTests(ToolFixture):
             code = script.main(['--result', str(out), '--mrtrix-bin-dir', str(self.mrtrix), '--fsl-bin-dir', str(self.fsl),
                                 '--dcm2niix', '/bin/d2n', '--pnl-model-dir', '/m', '--device', 'cpu'])
         self.assertEqual(code, 0)
-        run.assert_called_once_with({'mrtrix_bin_dir': str(self.mrtrix), 'fsl_bin_dir': str(self.fsl), 'dcm2niix': '/bin/d2n',
+        run.assert_called_once_with({'mrtrix_bin_dir': str(self.mrtrix), 'fsl_bin_dir': str(self.fsl),
+                                     'dcm2niix': str(Path('/bin/d2n')),
                                      'dcm2niix_configured': True,  # C1: the option is an explicit user choice
-                                     'pnl_native_mask': {'model_dir': '/m', 'device': 'cpu'}})
+                                     'pnl_native_mask': {'model_dir': str(Path('/m')), 'device': 'cpu'}})
         self.assertEqual(json.loads(out.read_text())['status'], 'passed')
 
     def test_n1_help_text_names_the_calls_the_checks_make(self):

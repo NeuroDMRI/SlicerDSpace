@@ -374,6 +374,11 @@ def open_url(
 ):
     """Open a URL honoring configured/system HTTP(S) proxy and CA bundle without breaking mocked urlopen."""
 
+    if proxy_url is None:
+        if urlopen_fn is not None and urlopen_fn is not _ORIG_URLLIB_URLOPEN:
+            return urlopen_fn(request_or_url, timeout=timeout)
+        if urlopen_fn is None and urllib.request.urlopen is not _ORIG_URLLIB_URLOPEN:
+            return urllib.request.urlopen(request_or_url, timeout=timeout, context=_ssl_context())
     effective_proxy = _resolve_effective_proxy(
         request_or_url,
         proxy_url=proxy_url,

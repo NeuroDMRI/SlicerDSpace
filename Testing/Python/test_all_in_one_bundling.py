@@ -38,18 +38,20 @@ class AllInOneBundlingTests(unittest.TestCase):
             (ext_root / "bundled-python" / "python-runtime.json").write_text(
                 json.dumps({"python_version": cur_ver}), encoding="utf-8"
             )
-            self.assertEqual(bundled_python.bundled_site_packages_dirs(module_root), (sp_dir.resolve(),))
-            env: dict[str, str] = {"PYTHONPATH": "/existing/path", "PATH": "/usr/bin"}
-            bundled_python.inject_bundled_python_env(env, module_root=module_root)
-            self.assertIn(str(sp_dir.resolve()), env["PYTHONPATH"].split(os.pathsep))
-            self.assertEqual(env["PYTHONPATH"].split(os.pathsep)[0], "/existing/path")
-            self.assertIn(str(bin_dir.resolve()), env["PATH"].split(os.pathsep))
+            with patch.dict(os.environ, {}, clear=False):
+                os.environ.pop(bundled_python.BUNDLED_PYTHON_ENV, None)
+                self.assertEqual(bundled_python.bundled_site_packages_dirs(module_root), (sp_dir.resolve(),))
+                env: dict[str, str] = {"PYTHONPATH": "/existing/path", "PATH": "/usr/bin"}
+                bundled_python.inject_bundled_python_env(env, module_root=module_root)
+                self.assertIn(str(sp_dir.resolve()), env["PYTHONPATH"].split(os.pathsep))
+                self.assertEqual(env["PYTHONPATH"].split(os.pathsep)[0], "/existing/path")
+                self.assertIn(str(bin_dir.resolve()), env["PATH"].split(os.pathsep))
 
-            # Mismatched Python version must not activate binary wheels
-            (ext_root / "bundled-python" / "python-runtime.json").write_text(
-                json.dumps({"python_version": "2.7"}), encoding="utf-8"
-            )
-            self.assertEqual(bundled_python.bundled_site_packages_dirs(module_root), ())
+                # Mismatched Python version must not activate binary wheels
+                (ext_root / "bundled-python" / "python-runtime.json").write_text(
+                    json.dumps({"python_version": "2.7"}), encoding="utf-8"
+                )
+                self.assertEqual(bundled_python.bundled_site_packages_dirs(module_root), ())
 
             # Restore matching version and check python_tool_environment Slicer vs external venv isolation
             (ext_root / "bundled-python" / "python-runtime.json").write_text(

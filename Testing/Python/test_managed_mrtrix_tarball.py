@@ -11,6 +11,7 @@ import tarfile
 import tempfile
 from types import SimpleNamespace
 import unittest
+from win_test_helpers import skip_unless_symlinks
 from unittest.mock import patch
 
 from shared import managed_runtimes as runtime
@@ -198,6 +199,7 @@ class InstallTests(MrtrixTarballBase):
             self.assertIn('no tarfile extraction filter', self.provision_failure())
         self.assertFalse(self.prefix.exists())
 
+    @skip_unless_symlinks
     def test_links_inside_the_folder_are_allowed(self):
         archive = Path(self.temp.name) / 'links.tar.gz'
         build_tarball(archive, extra=[link('mrtrix3/bin/mrcat', 'mrconvert'), link('mrtrix3/lib/libx', '../bin/mrconvert')])
@@ -261,6 +263,7 @@ class InstallTests(MrtrixTarballBase):
             runtime.provision(('mrtrix',), root=self.root)
         self.assertEqual((self.prefix / 'keep.txt').read_text(), 'mine')
 
+    @skip_unless_symlinks
     def test_symlink_prefix_is_refused(self):
         target =Path(self.temp.name) / 'elsewhere'
         target.mkdir()

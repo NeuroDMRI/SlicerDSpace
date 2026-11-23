@@ -6,6 +6,7 @@ import json
 import sys
 import tempfile
 import unittest
+from win_test_helpers import skip_unless_symlinks
 from pathlib import Path
 from unittest.mock import patch
 
@@ -18,6 +19,7 @@ from shared.setup_components import LicenceNotAccepted  # noqa: E402
 
 
 class SlicerPythonIdentityTests(unittest.TestCase):
+    @skip_unless_symlinks
     def test_a1_venv_symlink_to_python_real_is_external(self):
         """A1 W-B-CARRY-1: a venv bin/python linked to python-real is not Slicer's Python. Fails before: realpath matched."""
         with tempfile.TemporaryDirectory() as folder:
@@ -32,6 +34,7 @@ class SlicerPythonIdentityTests(unittest.TestCase):
                 self.assertTrue(setup_selected.is_running_slicer_python(real))
                 self.assertFalse(setup_selected.is_running_slicer_python(venv_python))
 
+    @skip_unless_symlinks
     def test_a1_real_bin_layout_matches_python_real_and_pythonslicer(self):
         """A1 (round-3 NB6): the layout bin/python-real + bin/PythonSlicer; an unrelated symlink to either is external."""
         with tempfile.TemporaryDirectory() as folder:

@@ -12,6 +12,7 @@ import struct
 import sys
 import tempfile
 import unittest
+from win_test_helpers import skip_unless_symlinks
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -130,6 +131,7 @@ class G1MachoReaderTest(unittest.TestCase):
         self.assertEqual(format_version(min_macos_for_dir(bundle, "arm64")), "13.0")
         self.assertIsNone(min_macos_for_dir(self.root / "empty-or-missing"))
 
+    @skip_unless_symlinks
     def test_g1_dir_skips_symlinks_so_a_loop_cannot_hang(self):
         from shared.macho_min_os import min_macos_for_dir
         bundle = self.root / "loop"

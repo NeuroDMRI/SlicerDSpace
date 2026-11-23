@@ -170,7 +170,7 @@ class SurfacePostprocessReleaseTest(unittest.TestCase):
     def test_run_returns_canonical_paths(self) -> None:
         from anatomy.surface.postprocess_release import DDSurferPostprocessConfig, run_ddsurfer_postprocess
 
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             root = Path(tmp).resolve()
             native_dir = root / "native"
             mri_dir = root / "mri"
@@ -217,16 +217,27 @@ printf '{"status":"completed"}' > "${structural_root}/qc.json"
             )
             run_sh.chmod(0o755)
 
-            result = run_ddsurfer_postprocess(
-                DDSurferPostprocessConfig(
-                    subject_id="877168",
-                    native_dir=native_dir,
-                    mri_dir=mri_dir,
-                    output_root=output_root,
-                    backend_root=backend_root,
-                    mode="left",
+            def _test_bash(python_bin, *, platform=None):
+                if sys.platform == "win32":
+                    for cand in (
+                        Path(r"C:\Program Files\Git\bin\bash.exe"),
+                        Path(r"C:\Program Files\Git\usr\bin\bash.exe"),
+                    ):
+                        if cand.is_file():
+                            return str(cand)
+                return "bash"
+
+            with mock.patch("anatomy.surface.postprocess_release._resolve_bash_executable", side_effect=_test_bash):
+                result = run_ddsurfer_postprocess(
+                    DDSurferPostprocessConfig(
+                        subject_id="877168",
+                        native_dir=native_dir,
+                        mri_dir=mri_dir,
+                        output_root=output_root,
+                        backend_root=backend_root,
+                        mode="left",
+                    )
                 )
-            )
 
             stage_morph = root / "cache" / "stages" / "01_anatomical_priors" / "surface_morphometry"
             self.assertEqual(result.structural_root, stage_morph / "legacy_outputs" / "01_anatomical_priors" / "ddsurfer" / "postprocess")
@@ -245,7 +256,7 @@ printf '{"status":"completed"}' > "${structural_root}/qc.json"
     def test_run_generates_brain_mgz_from_subject_fa_when_missing(self) -> None:
         from anatomy.surface.postprocess_release import DDSurferPostprocessConfig, run_ddsurfer_postprocess
 
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             root = Path(tmp)
             subject_root = root / "100307"
             output_root = subject_root / "outputs"
@@ -296,10 +307,20 @@ printf '{"status":"completed"}' > "${structural_root}/qc.json"
             )
             run_sh.chmod(0o755)
 
+            def _test_bash(python_bin, *, platform=None):
+                if sys.platform == "win32":
+                    for cand in (
+                        Path(r"C:\Program Files\Git\bin\bash.exe"),
+                        Path(r"C:\Program Files\Git\usr\bin\bash.exe"),
+                    ):
+                        if cand.is_file():
+                            return str(cand)
+                return "bash"
+
             with mock.patch("anatomy.surface.postprocess_release.FS_BRAIN_TEMPLATE_SHAPE", (32, 32, 32)), mock.patch(
                 "anatomy.surface.postprocess_release.FS_BRAIN_TEMPLATE_AFFINE",
                 np.eye(4, dtype=np.float32),
-            ):
+            ), mock.patch("anatomy.surface.postprocess_release._resolve_bash_executable", side_effect=_test_bash):
                 result = run_ddsurfer_postprocess(
                     DDSurferPostprocessConfig(
                         subject_id="100307",
@@ -316,6 +337,21 @@ printf '{"status":"completed"}' > "${structural_root}/qc.json"
             self.assertTrue(staged.exists())
             generated_img = nib.load(str(generated))
             self.assertEqual(generated_img.shape, (32, 32, 32))
+
+    def test_copy_only_canonical_output_survives_source_removal(self) -> None:
+        import shutil
+        from anatomy.surface.postprocess_release import _symlink_canonical_output
+
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            root = Path(tmp)
+            src = root / "temp_runtime" / "surf"
+            src.mkdir(parents=True)
+            (src / "lh.inflated").write_bytes(b"inflated-bytes")
+            dest = root / "structural" / "surf"
+            _symlink_canonical_output(src, dest, copy_only=True)
+            shutil.rmtree(root / "temp_runtime")
+            self.assertFalse(dest.is_symlink())
+            self.assertEqual((dest / "lh.inflated").read_bytes(), b"inflated-bytes")
 
 
 if __name__ == "__main__":

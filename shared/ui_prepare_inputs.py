@@ -777,7 +777,7 @@ def import_detached_nrrd(config, raw):
             from shared.input_preview import non_ascii_data_path_message
 
             raise ValueError(f"{non_ascii_data_path_message()} Data file: {raw.as_posix()}") from None
-        staged.write_text(header, encoding="ascii")
+        staged.write_text(header, encoding="ascii", newline="\n")
         manifest = prepare_inputs(replace(config, source=staged, source_signatures=signatures))
     if manifest.get("reused"):
         return manifest  # unchanged header, data file and staged outputs: the manifest stays as it is

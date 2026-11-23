@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import os
 import sys
 import tempfile
 import threading
@@ -82,7 +83,7 @@ class FakeProcess:
         args = self.args
         request = args[args.index("--request") + 1]
         result = args[args.index("--result") + 1]
-        with contextlib.redirect_stdout(open("/dev/null", "w")), contextlib.redirect_stderr(open("/dev/null", "w")):
+        with open(os.devnull, "w", encoding="utf-8") as devnull, contextlib.redirect_stdout(devnull), contextlib.redirect_stderr(devnull):
             code = main(["--request", request, "--result", result])
         self.signals["finished(int,QProcess::ExitStatus)"](code, 0)
 

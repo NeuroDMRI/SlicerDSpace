@@ -571,7 +571,10 @@ class DipyConsumerGradientFrameTests(unittest.TestCase):
                         mock.patch.object(micro, "_noddi_threads", return_value=1):
                     manifest = micro._expected_noddi_manifest(config)
                 if name == "axial_det_neg_LAS":
-                    self.assertEqual(seen["bvec"].resolve(), case.bvec_path.resolve())  # the user's file, linked
+                    if seen["bvec"].is_symlink():
+                        self.assertEqual(seen["bvec"].resolve(), case.bvec_path.resolve())  # the user's file, linked
+                    else:
+                        self.assertEqual(seen["bvec"].read_bytes(), case.bvec_path.read_bytes())  # Windows copy fallback
                     self.assertNotIn("gradient_frame", manifest)
                 else:
                     self.assertEqual(manifest["gradient_frame"], micro.NODDI_GRADIENT_FRAME)
@@ -796,10 +799,10 @@ class TensorFitGradientFrameTests(unittest.TestCase):
         R = A3 / np.linalg.norm(A3, axis=0)
         F = H if np.linalg.det(A3) > 0 else np.eye(3)
         lines = ["NRRD0005", "type: float", "dimension: 4", "space: right-anterior-superior", "sizes: 4 3 5 %d" % len(bvals),
-                 "space directions: " + " ".join("(%r,%r,%r)" % tuple(c) for c in A3.T) + " none",
+                 "space directions: " + " ".join("(%r,%r,%r)" % tuple(float(v) for v in c) for c in A3.T) + " none",
                  "kinds: space space space list", "endian: little", "encoding: gzip", "space origin: (-10,-12,5)",
                  "byteskip: -1", "data file: %s" % case.dwi_path.name,
-                 "measurement frame: " + " ".join("(%r,%r,%r)" % tuple(c) for c in R.T),
+                 "measurement frame: " + " ".join("(%r,%r,%r)" % tuple(float(v) for v in c) for c in R.T),
                  "modality:=DWMRI", "DWMRI_b-value:=%g" % bvals.max()]
         for index, (b, v) in enumerate(zip(bvals, bvecs)):
             lines.append("DWMRI_gradient_%04d:=%s" % (index, " ".join(repr(float(x)) for x in F @ v * math.sqrt(b / bvals.max()))))

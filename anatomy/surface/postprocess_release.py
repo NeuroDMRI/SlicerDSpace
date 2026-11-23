@@ -8,6 +8,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import json
 import hashlib
 from uuid import uuid4
@@ -93,17 +94,23 @@ def _copy_or_link(src: Path, dest: Path, *, mode: str) -> None:
         shutil.copy2(src, dest)
 
 
-def _symlink_canonical_output(src: Path, dest: Path) -> None:
+def _symlink_canonical_output(src: Path, dest: Path, *, copy_only: bool = False) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
     if dest.is_symlink():
         try:
-            if dest.resolve(strict=True) == src.resolve():
+            if not copy_only and dest.resolve(strict=True) == src.resolve():
                 return
         except (FileNotFoundError, OSError):
             dest.unlink()
         else:
             dest.unlink()
     elif dest.exists():
+        return
+    if copy_only:
+        if src.is_dir():
+            shutil.copytree(src, dest, dirs_exist_ok=True)
+        elif src.is_file():
+            shutil.copy2(src, dest)
         return
     link_target: Path | str = src
     if os.name == "posix":
@@ -567,6 +574,11 @@ def _run_current_postprocess(config, subject_root, native_dir, log):
         cache_key += '-' + uuid4().hex[:12]
     stage_cache_root = layout.stage_cache("01_anatomical_priors/surface_morphometry")
     runtime = stage_cache_root / 'ddsurfer_surface_only' / cache_key
+    temp_runtime: Optional[Path] = None
+    if sys.platform == "win32" and (len(str(runtime)) > 170 or not str(runtime).isascii()):
+        # Avoid Windows MAX_PATH (260 chars) during fsaverage copytree and MSYS2/FreeSurfer non-ASCII path issues.
+        temp_runtime = Path(tempfile.mkdtemp(prefix="sdsp-surf-"))
+        runtime = temp_runtime
     fs_subject = runtime / config.subject_id
     command = [BACKEND_ROOT / 'postprocessing/pipeline.py', '--subject', config.subject_id,
                '--output-root', runtime, '--hemi', 'both' if config.mode == 'whole' else config.mode,
@@ -623,7 +635,7 @@ def _run_current_postprocess(config, subject_root, native_dir, log):
                     if backup.exists():
                         raise FileExistsError(f'Existing postprocess output conflicts with preserved backup: {backup}')
                     rename_with_retry(destination, backup)
-            _symlink_canonical_output(source, destination)
+            _symlink_canonical_output(source, destination, copy_only=temp_runtime is not None)
         # Track the public copies too on platforms without directory symlinks.
         canonical_pairs = [(fs_subject / name, structural / name) for name in
                            ('surf', 'label', 'mri', 'fsaverage', 'logs')] + [(fs_subject / 'stats', stats / 'stats')]
@@ -652,4 +664,6 @@ def _run_current_postprocess(config, subject_root, native_dir, log):
     finally:
         manifest_path.write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
         qc_path.write_text(json.dumps(qc, indent=2) + '\n', encoding='utf-8')
+        if temp_runtime is not None:
+            shutil.rmtree(temp_runtime, ignore_errors=True)
     return DDSurferPostprocessResult(manifest_path, qc_path, structural, stats, native_dir)

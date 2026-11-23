@@ -473,6 +473,14 @@ class UKFAdaptivePerformanceTests(unittest.TestCase):
                 seen_run.append(list(cmd))
                 return mock.Mock(returncode=0, stdout=_schema_xml(), stderr="")
 
+            def _strip_arch_env_flags(cmd: list[str]) -> list[str]:
+                out = list(cmd[:2])
+                idx = 2
+                while idx + 1 < len(cmd) and cmd[idx] == "-e":
+                    idx += 2
+                out.extend(cmd[idx:])
+                return out
+
             with (
                 mock.patch.object(ep, "_ARCH", str(arch)),
                 mock.patch.object(ep.sys, "platform", "darwin"),
@@ -482,7 +490,7 @@ class UKFAdaptivePerformanceTests(unittest.TestCase):
             ):
                 os.environ.pop(ep.ARM64_EXEC_DISABLE_ENV, None)
                 ukf.inspect_schema(ukf_bin, {"PATH": "/usr/bin"})
-            self.assertEqual(seen_run[0], [str(arch), "-arm64", str(ukf_bin), "--xml"])
+            self.assertEqual(_strip_arch_env_flags(seen_run[0]), [str(arch), "-arm64", str(ukf_bin), "--xml"])
 
             # 2. run_ukf wraps both DWIConvert and UKFTractography with native_arm64_argv,
             #    applies adaptive --numThreads to execution without mutating signature().
@@ -558,8 +566,8 @@ class UKFAdaptivePerformanceTests(unittest.TestCase):
             self.assertEqual(res["status"], "completed")
             self.assertEqual(len(popen_cmds), 2)
             # Both DWIConvert and UKFTractography were wrapped with /usr/bin/arch -arm64!
-            self.assertEqual(popen_cmds[0][:3], [str(arch), "-arm64", str(dwi_conv)])
-            self.assertEqual(popen_cmds[1][:3], [str(arch), "-arm64", str(ukf_bin)])
+            self.assertEqual(_strip_arch_env_flags(popen_cmds[0])[:3], [str(arch), "-arm64", str(dwi_conv)])
+            self.assertEqual(_strip_arch_env_flags(popen_cmds[1])[:3], [str(arch), "-arm64", str(ukf_bin)])
             # Execution command received adaptive --numThreads 4 while cache signature kept -1!
             self.assertEqual(popen_cmds[1][popen_cmds[1].index("--numThreads") + 1], "4")
             manifest = json.loads(ukf.paths("sub01", out_dir)["manifest"].read_text(encoding="utf-8"))
@@ -941,7 +949,12 @@ class MppcaAndAuditAdaptationTests(unittest.TestCase):
             ):
                 os.environ.pop(ep.ARM64_EXEC_DISABLE_ENV, None)
                 wrapped = wma.native_arm64_argv((tckconvert.as_posix(), "in.tck", "out.vtk", "-force"), {})
-            self.assertEqual(wrapped[:3], [str(arch), "-arm64", str(tckconvert)])
+            stripped = list(wrapped[:2])
+            idx = 2
+            while idx + 1 < len(wrapped) and wrapped[idx] == "-e":
+                idx += 2
+            stripped.extend(wrapped[idx:])
+            self.assertEqual(stripped[:3], [str(arch), "-arm64", str(tckconvert)])
 
 
 if __name__ == "__main__":

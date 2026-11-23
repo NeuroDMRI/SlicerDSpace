@@ -125,6 +125,10 @@ class F3BundledPythonReasonTests(unittest.TestCase):
         self.bp._LOGGED_PROBLEMS.clear()
         self.addCleanup(self.bp._PROBLEMS.clear)
         self.addCleanup(self.bp._LOGGED_PROBLEMS.clear)
+        env_patch = patch.dict(os.environ, {}, clear=False)
+        env_patch.start()
+        self.addCleanup(env_patch.stop)
+        os.environ.pop(self.bp.BUNDLED_PYTHON_ENV, None)
 
     def _root(self, td: str, meta: dict) -> Path:
         root = Path(td) / "ext" / "bundled-python"

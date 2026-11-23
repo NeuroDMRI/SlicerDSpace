@@ -1064,6 +1064,49 @@ def install_results_panel(owner: Any) -> None:
             "info": dwi_info,
         }
 
+    if hasattr(qt, "QCheckBox"):
+        from shared.surface_morphometry_display import inflated_separation_enabled
+
+        inflated_bar = qt.QWidget()
+        inflated_bar.setObjectName("resultsInflatedBar")
+        inflated_layout = qt.QHBoxLayout(inflated_bar)
+        inflated_layout.setContentsMargins(0, 2, 0, 0)
+        inflated_layout.setSpacing(6)
+        inflated_checkbox = qt.QCheckBox(
+            _text(owner, "results_inflated_separate", "Separate L/R inflated hemispheres (±35 mm)")
+        )
+        inflated_checkbox.setObjectName("resultsInflatedSeparateCheckBox")
+        inflated_checkbox.setChecked(inflated_separation_enabled())
+        inflated_tip = _text(
+            owner,
+            "results_inflated_separate_tooltip",
+            "Display-only X-axis offset (−35 mm left / +35 mm right) so inflated hemispheres do not overlap in 3D view. "
+            "Disk files and vertex coordinates are never modified.",
+        )
+        if hasattr(inflated_checkbox, "setToolTip"):
+            inflated_checkbox.setToolTip(inflated_tip)
+        pointing = getattr(qt.Qt, "PointingHandCursor", None)
+        if pointing is not None and hasattr(inflated_checkbox, "setCursor"):
+            inflated_checkbox.setCursor(pointing)
+        _bind(owner, inflated_checkbox, "text", "results_inflated_separate")
+        _bind(owner, inflated_checkbox, "tooltip", "results_inflated_separate_tooltip")
+        inflated_layout.addWidget(inflated_checkbox)
+        inflated_layout.addStretch(1)
+        inflated_bar.hide()
+        results_box_layout.addWidget(inflated_bar)
+
+        def _on_inflated_separation_toggled(checked) -> None:
+            toggle_inflated_separation(owner, bool(checked))
+
+        if hasattr(inflated_checkbox, "toggled") and hasattr(inflated_checkbox.toggled, "connect"):
+            inflated_checkbox.toggled.connect(_on_inflated_separation_toggled)
+        elif hasattr(inflated_checkbox, "connect"):
+            inflated_checkbox.connect("toggled(bool)", _on_inflated_separation_toggled)
+        owner._resultsInflatedWidgets = {
+            "bar": inflated_bar,
+            "checkbox": inflated_checkbox,
+        }
+
     def _on_tree_item_clicked(item, column) -> None:
         if column == 1 and item.parent() is None:  # Batch 2 add-on: the Open folder button of a subject row
             _open_item_folder(owner, item)
@@ -2149,6 +2192,18 @@ def save_run_output_folder(owner: Any) -> None:
         save_history_directory(folder)
 
 
+def _source_path_key(path: Any) -> str:
+    """Normalize slash direction on Windows so ``/x/a.vtk`` and ``\\x\\a.vtk`` match the same scene node."""
+    if path is None:
+        return ""
+    text = str(path)
+    if not text:
+        return ""
+    if os.name == "nt":
+        return text.replace("\\", "/")
+    return text
+
+
 def _scene_nodes_by_run(slicer) -> dict:
     """``{Run attribute: {source path: [nodes]}}`` of every result node, from ONE scene scan (review R1)."""
 
@@ -2158,7 +2213,9 @@ def _scene_nodes_by_run(slicer) -> dict:
     for node in result_nodes(slicer):
         run = node.GetAttribute("SlicerDDSurfer.Run")
         if run:
-            grouped.setdefault(run, {}).setdefault(node.GetAttribute("SlicerDDSurfer.SourcePath"), []).append(node)
+            grouped.setdefault(run, {}).setdefault(
+                _source_path_key(node.GetAttribute("SlicerDDSurfer.SourcePath")), []
+            ).append(node)
     return grouped
 
 
@@ -2193,10 +2250,11 @@ def _nodes_of(grouped: dict, manifests, path: Any) -> list:
 
     found: list = []
     seen: set = set()
+    path_key = _source_path_key(path)
     for key, by_path in grouped.items():  # the few Run values of the scene, in scene order
         if key not in manifests:
             continue
-        for node in by_path.get(str(path), ()):
+        for node in by_path.get(path_key, ()):
             if id(node) not in seen:
                 seen.add(id(node))
                 found.append(node)
@@ -2578,13 +2636,41 @@ def _output_menu(owner, position):
     edit_manifest = Path(edit_manifest) if edit_manifest else manifest_path
     menu = qt.QMenu(tree)
     zh = str(getattr(owner, "_onboardingLanguage", "en")).startswith("zh")
+    from shared.surface_morphometry_display import (
+        inflated_hemisphere_of_node,
+        inflated_separation_enabled,
+        surface_from_carrier_path,
+    )
+
+    parsed_surface = surface_from_carrier_path(raw_path) if is_file else None
+    is_inflated_item = (
+        (parsed_surface is not None and parsed_surface[1] == "inflated")
+        or any(inflated_hemisphere_of_node(node) is not None for node in nodes)
+    )
     edit_action = (
         menu.addAction("编辑组织分割副本" if zh else "Edit tissue copy in Segment Editor")
         if is_seg
         else None
     )
+    inflated_sep_action = None
+    if is_inflated_item:
+        inflated_sep_action = menu.addAction(
+            _text(owner, "results_inflated_separate", "Separate L/R inflated hemispheres (±35 mm)")
+        )
+        if hasattr(inflated_sep_action, "setCheckable"):
+            inflated_sep_action.setCheckable(True)
+            inflated_sep_action.setChecked(inflated_separation_enabled())
+        else:
+            inflated_sep_action.checkable = True
+            inflated_sep_action.checked = inflated_separation_enabled()
+        inflated_sep_action.toolTip = _text(
+            owner,
+            "results_inflated_separate_tooltip",
+            "Display-only X-axis offset (−35 mm left / +35 mm right) so inflated hemispheres do not overlap in 3D view. "
+            "Disk files and vertex coordinates are never modified.",
+        )
     unload = menu.addAction("从场景卸载" if zh else "Unload from scene") if nodes else None
-    if edit_action is not None or unload is not None:
+    if edit_action is not None or inflated_sep_action is not None or unload is not None:
         menu.addSeparator()
     open_folder = menu.addAction(_text(owner, "results_open_folder", OPEN_FOLDER_TEXT))
     remove = menu.addAction(_text(owner, "results_remove", "Remove from Results list"))
@@ -2592,7 +2678,9 @@ def _output_menu(owner, position):
     remove.toolTip = remove_reason or _text(owner, "results_remove_tooltip", REMOVE_TOOLTIP)
     _show_menu_tooltips(menu)
     chosen = menu.exec_(tree.viewport().mapToGlobal(position))
-    if edit_action is not None and chosen == edit_action:
+    if inflated_sep_action is not None and chosen == inflated_sep_action:
+        toggle_inflated_separation(owner, not inflated_separation_enabled())
+    elif edit_action is not None and chosen == edit_action:
         # FD3: _manage_result_scene acts on the selected run; in a merged subject the file may own an older one.
         # FD8: exec_ ran a nested event loop; a refresh may have deleted `item` and reordered the records,
         # so resolve the run from the manifest path taken before the menu opened, never from the item.
@@ -2951,6 +3039,24 @@ def refresh_results_language(owner: Any) -> None:
             dwi_label.setText("体积" if zh_lang else "Volume")
         except Exception:
             pass
+    inflated_widgets = getattr(owner, "_resultsInflatedWidgets", None) or {}
+    inflated_checkbox = inflated_widgets.get("checkbox")
+    if inflated_checkbox is not None:
+        try:
+            inflated_checkbox.setText(
+                _text(owner, "results_inflated_separate", "Separate L/R inflated hemispheres (±35 mm)")
+            )
+            if hasattr(inflated_checkbox, "setToolTip"):
+                inflated_checkbox.setToolTip(
+                    _text(
+                        owner,
+                        "results_inflated_separate_tooltip",
+                        "Display-only X-axis offset (−35 mm left / +35 mm right) so inflated hemispheres do not overlap in 3D view. "
+                        "Disk files and vertex coordinates are never modified.",
+                    )
+                )
+        except Exception:
+            pass
     tree = getattr(owner, "_runOutputFiles", None)
     if tree is None:
         return
@@ -3182,6 +3288,91 @@ def _refresh_output_visibility(owner, *, dark: Optional[bool] = None):
             refresh_results()
     except Exception:
         pass
+    try:
+        _refresh_inflated_bar(owner, slicer_module=slicer)
+    except Exception:
+        pass
+
+
+def _refresh_inflated_bar(owner: Any, *, slicer_module: Any = None) -> bool:
+    """Show the one-click inflated hemisphere separation toggle while any inflated surface is visible in 3D."""
+
+    widgets = getattr(owner, "_resultsInflatedWidgets", None) or {}
+    bar = widgets.get("bar")
+    checkbox = widgets.get("checkbox")
+    if bar is None:
+        return False
+    if slicer_module is None:
+        try:
+            import slicer as slicer_module
+        except Exception:
+            slicer_module = None
+    from shared.surface_morphometry_display import has_visible_inflated_surface, inflated_separation_enabled
+
+    has_inflated = has_visible_inflated_surface(slicer_module) if slicer_module is not None else False
+    was_visible = None
+    vis = getattr(bar, "isVisible", None)
+    if callable(vis):
+        try:
+            was_visible = bool(vis())
+        except Exception:
+            was_visible = None
+    if checkbox is not None:
+        desired = inflated_separation_enabled()
+        blocked = checkbox.blockSignals(True) if hasattr(checkbox, "blockSignals") else None
+        try:
+            if hasattr(checkbox, "setChecked"):
+                checkbox.setChecked(desired)
+        finally:
+            if blocked is not None and hasattr(checkbox, "blockSignals"):
+                checkbox.blockSignals(blocked)
+    _set_widget_visible(bar, has_inflated)
+    if was_visible is not None and was_visible != has_inflated:
+        _queue_fit(owner)
+    return has_inflated
+
+
+def toggle_inflated_separation(owner: Any, enabled: Optional[bool] = None, *, slicer_module: Any = None) -> bool:
+    """Toggle display-only ±35 mm L/R separation for all loaded inflated surfaces and sync the UI toggle."""
+
+    from shared.surface_morphometry_display import (
+        INFLATED_SEPARATION_OFFSET_MM,
+        inflated_separation_enabled,
+        set_inflated_separation_enabled,
+    )
+
+    target = (not inflated_separation_enabled()) if enabled is None else bool(enabled)
+    if slicer_module is None:
+        try:
+            import slicer as slicer_module
+        except Exception:
+            slicer_module = None
+    set_inflated_separation_enabled(slicer_module, target)
+    widgets = getattr(owner, "_resultsInflatedWidgets", None) or {}
+    checkbox = widgets.get("checkbox")
+    if checkbox is not None:
+        blocked = checkbox.blockSignals(True) if hasattr(checkbox, "blockSignals") else None
+        try:
+            if hasattr(checkbox, "setChecked"):
+                checkbox.setChecked(target)
+        finally:
+            if blocked is not None and hasattr(checkbox, "blockSignals"):
+                checkbox.blockSignals(blocked)
+    zh = str(getattr(owner, "_onboardingLanguage", "en") or "en").startswith("zh")
+    if target:
+        msg = (
+            f"左右膨胀表面已分离显示（±{INFLATED_SEPARATION_OFFSET_MM:g} mm，原始文件未修改）。"
+            if zh
+            else f"Inflated hemispheres separated (±{INFLATED_SEPARATION_OFFSET_MM:g} mm display offset; disk files unchanged)."
+        )
+    else:
+        msg = (
+            "左右膨胀表面已恢复原始重叠位置（0 mm 偏移）。"
+            if zh
+            else "Inflated hemispheres restored to original position (0 mm display offset)."
+        )
+    _status_message(msg)
+    return target
 
 
 def _is_internal_cache_path(

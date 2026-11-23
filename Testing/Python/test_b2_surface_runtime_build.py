@@ -14,6 +14,7 @@ import struct
 import sys
 import tempfile
 import unittest
+from win_test_helpers import skip_unless_symlinks
 from unittest.mock import patch
 
 REPO = Path(__file__).resolve().parents[2]
@@ -263,6 +264,7 @@ class VerifierTests(unittest.TestCase):
         self.assertIn('mris_inflate', joined)
         self.assertIn('mris_extra', joined)
 
+    @skip_unless_symlinks
     def test_b2fix_runtime_T2_verifier_fails_on_a_symlink_in_bin(self):
         """T2 (Codex P1, Opus P2-3): a symlinked tool skipped every check and still passed."""
         (self.root / 'bin/mris_sphere').unlink()
@@ -271,6 +273,7 @@ class VerifierTests(unittest.TestCase):
         self.assertFalse(report['ok'])
         self.assertTrue(any('mris_sphere' in item and 'symlink' in item for item in report['failures']), report['failures'])
 
+    @skip_unless_symlinks
     def test_b2fix_runtime_T2_verifier_fails_when_no_tool_was_checked(self):
         """T2 (Codex P1): all seven tools symlinks gave ok=true with tools=[]."""
         real = self.root / 'real'

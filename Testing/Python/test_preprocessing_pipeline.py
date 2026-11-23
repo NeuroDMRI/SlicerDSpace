@@ -43,16 +43,17 @@ def _write_nifti_subject(root: Path, subject_id: str = "100307") -> Path:
     return subject
 
 
-def _write_fake_command(path: Path, body: str) -> None:
+def _write_fake_command(path: Path, body: str) -> Path:
     from shared.external_process import _default_slicer_python
     python_exec = _default_slicer_python() or Path(sys.executable)
     if sys.platform != "win32":
         py_file = path.with_name(f"._{path.name}_fake.py")
         py_file.write_text(body, encoding="utf-8")
         path.write_text(f'#!/bin/sh\nexec "{python_exec}" "{py_file}" "$@"\n', encoding="utf-8")
-    else:
-        path.write_text(f"#!{python_exec}\n" + body, encoding="utf-8")
-    path.chmod(path.stat().st_mode | stat.S_IXUSR)
+        path.chmod(path.stat().st_mode | stat.S_IXUSR)
+        return path
+    from win_test_helpers import write_fake_python_cli
+    return write_fake_python_cli(path, body, launcher=python_exec)
 
 
 def _write_fake_backend(bin_dir: Path) -> None:
@@ -261,7 +262,10 @@ class DwiPreprocessingPipelineTest(unittest.TestCase):
             mask = nib.load(result.final_mask_path).get_fdata()
             self.assertEqual(int(np.count_nonzero(mask)), 27)
             calls = result.final_mask_path.with_name("mask_calls.txt")
-            self.assertEqual(calls.read_text().splitlines(), [result.final_dwi_path.as_posix()])
+            self.assertEqual(
+                [Path(p).resolve().as_posix() for p in calls.read_text().splitlines()],
+                [result.final_dwi_path.resolve().as_posix()],
+            )
 
             cached = run_dwi_preprocessing(config)
             cached_qc = json.loads(cached.qc_path.read_text(encoding="utf-8"))
@@ -282,7 +286,10 @@ class DwiPreprocessingPipelineTest(unittest.TestCase):
                 "regenerated_from_corrected_dwi",
             )
             np.testing.assert_array_equal(nib.load(refreshed.final_mask_path).get_fdata(), mask)
-            self.assertEqual(calls.read_text().splitlines(), [result.final_dwi_path.as_posix()] * 2)
+            self.assertEqual(
+                [Path(p).resolve().as_posix() for p in calls.read_text().splitlines()],
+                [result.final_dwi_path.resolve().as_posix()] * 2,
+            )
 
             changed_config = DwiPreprocessingConfig(
                 subject_id="100307",
@@ -464,9 +471,9 @@ sys.exit(9)
 
             manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
             commands = [record["argv"] for record in manifest["commands"]]
-            normalize = next(command for command in commands if command[0].endswith("mrconvert"))
-            pair = next(command for command in commands if command[0].endswith("mrcat"))
-            preprocess = next(command for command in commands if command[0].endswith("dwifslpreproc"))
+            normalize = next(command for command in commands if Path(command[0]).stem == "mrconvert")
+            pair = next(command for command in commands if Path(command[0]).stem == "mrcat")
+            preprocess = next(command for command in commands if Path(command[0]).stem == "dwifslpreproc")
             self.assertIn("0,1,2,-1", normalize)
             self.assertTrue(pair[3].endswith("_se_epi_pair.mif"))
             self.assertTrue(preprocess[preprocess.index("-se_epi") + 1].endswith("_se_epi_pair.mif"))
@@ -492,7 +499,7 @@ sys.exit(9)
         with tempfile.TemporaryDirectory() as tmp:
             manifest = self._w2a_plan(Path(tmp))
             argv = [record["argv"] for record in manifest["commands"]]
-            names = [Path(item[0]).name if item[0] != "dipy" else "dipy:" + item[1] for item in argv]
+            names = [Path(item[0]).stem if item[0] != "dipy" else "dipy:" + item[1] for item in argv]
             self.assertEqual(names, ["dipy:mppca", "dipy:gibbs_removal", "dwifslpreproc", "optional-output"])
             flat = " ".join(" ".join(item) for item in argv)
             self.assertNotIn("dwidenoise", flat)
@@ -501,8 +508,11 @@ sys.exit(9)
             self.assertIn("-rpe_none", argv[2])
             # The dwifslpreproc input is the Gibbs-corrected image, with the original FSL gradients.
             self.assertEqual(argv[2][1], argv[1][3])
-            self.assertEqual(argv[2][argv[2].index("-fslgrad") + 1:argv[2].index("-fslgrad") + 3],
-                             [str(Path(tmp).resolve() / "100307" / "input" / "bvecs"), str(Path(tmp).resolve() / "100307" / "input" / "bvals")])
+            self.assertEqual(
+                [Path(p).resolve().as_posix() for p in argv[2][argv[2].index("-fslgrad") + 1:argv[2].index("-fslgrad") + 3]],
+                [(Path(tmp).resolve() / "100307" / "input" / "bvecs").as_posix(),
+                 (Path(tmp).resolve() / "100307" / "input" / "bvals").as_posix()],
+            )
             self.assertNotIn("-eddy_mask", argv[2])
             self.assertEqual(manifest["backend"]["missing_required"], [])
 
@@ -523,7 +533,7 @@ sys.exit(9)
             nib.save(nib.Nifti1Image(np.zeros((5, 5, 5, 1), dtype=np.float32), np.eye(4)), str(reverse))
             manifest = self._w2a_plan(root, reverse_phase_b0=reverse, phase_encoding_direction="AP", readout_time=0.05)
             argv = [record["argv"] for record in manifest["commands"]]
-            names = [Path(item[0]).name if item[0] != "dipy" else "dipy:" + item[1] for item in argv]
+            names = [Path(item[0]).stem if item[0] != "dipy" else "dipy:" + item[1] for item in argv]
             self.assertEqual(names, ["dipy:mppca", "dipy:gibbs_removal", "dwiextract", "mrconvert", "mrcat",
                                      "dwifslpreproc", "optional-output"])
             self.assertIn("-rpe_pair", argv[5])

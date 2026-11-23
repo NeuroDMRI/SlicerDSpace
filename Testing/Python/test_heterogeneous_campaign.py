@@ -6,6 +6,7 @@ import tempfile
 import time
 from types import SimpleNamespace
 import unittest
+from win_test_helpers import skip_unless_symlinks
 from unittest.mock import patch
 
 from scripts.benchmark_heterogeneous_cohort import (build_record, check_plan, idle_devices,
@@ -47,6 +48,7 @@ class HeterogeneousCampaignTests(unittest.TestCase):
         self.assertEqual(idle_devices([['0', '0', '35000', '81559']]), [])
         self.assertEqual(idle_devices([['0', '0', '50', '81559']]), [0])
 
+    @skip_unless_symlinks
     def test_preflight_uses_installed_entry_and_checks_doctor_blockers(self):
         for blocked in ([], ['surface']):
             with self.subTest(blocked=blocked), tempfile.TemporaryDirectory() as directory:
@@ -80,6 +82,7 @@ class HeterogeneousCampaignTests(unittest.TestCase):
             with self.subTest(items=items), self.assertRaisesRegex(RuntimeError, 'Unrunnable'):
                 check_plan(dict(items=items), ['tractography', 'wma'])
 
+    @skip_unless_symlinks
     def test_preflight_retries_only_transient_dependency_timeout_and_keeps_reports(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -110,6 +113,7 @@ class HeterogeneousCampaignTests(unittest.TestCase):
             self.assertTrue((root/'preflight/environment_doctor.json').exists())
             self.assertTrue((root/'preflight-retry-2/environment_doctor.json').exists())
 
+    @skip_unless_symlinks
     def test_dependency_timeout_retries_are_bounded(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

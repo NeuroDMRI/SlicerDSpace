@@ -261,19 +261,29 @@ class CSDActBackendTest(unittest.TestCase):
 
             import subprocess
 
-            with mock.patch("tractography.csd.subprocess.run") as mock_run:
-                mock_run.return_value = subprocess.CompletedProcess(args=(), returncode=0)
+            real_run = subprocess.run
+            mrtrix_calls = []
+
+            def selective_run(cmd, *args, **kwargs):
+                # Do not intercept host system probes (e.g. macOS sysctl/file/arch checks).
+                if isinstance(cmd, (list, tuple)) and cmd:
+                    head = Path(str(cmd[0])).name.lower()
+                    if head in {"sysctl", "file", "lipo", "sw_vers", "uname"}:
+                        return real_run(cmd, *args, **kwargs)
+                mrtrix_calls.append((cmd, kwargs))
+                return subprocess.CompletedProcess(args=cmd, returncode=0)
+
+            with mock.patch("tractography.csd.subprocess.run", side_effect=selective_run):
                 # Validation of the (never-created) outputs fails after the
                 # planned commands run; that is expected here.
                 with self.assertRaises(RuntimeError):
                     run_csd_act(config)
 
-            self.assertTrue(mock_run.call_args_list)
+            self.assertTrue(mrtrix_calls)
             seen_commands = set()
-            for call_args in mock_run.call_args_list:
-                command = call_args.args[0]
+            for command, kwargs in mrtrix_calls:
                 self.assertNotIn("RandomSeed", command)
-                self.assertEqual(call_args.kwargs["env"].get("MRTRIX_RNG_SEED"), "999")
+                self.assertEqual(kwargs["env"].get("MRTRIX_RNG_SEED"), "999")
                 seen_commands.add(command[0])
             tckgen_command = next(cmd for cmd in seen_commands if "tckgen" in cmd)
             tcksift2_command = next(cmd for cmd in seen_commands if "tcksift2" in cmd)
@@ -282,7 +292,7 @@ class CSDActBackendTest(unittest.TestCase):
             manifest = json.loads((config.output_dir / 'csd_act_manifest.json').read_text())
             qc = json.loads((config.output_dir / 'csd_act_qc.json').read_text())
             self.assertEqual(manifest['status'], 'failed')
-            self.assertEqual(len(manifest['phase_timings']), mock_run.call_count + 1)
+            self.assertEqual(len(manifest['phase_timings']), len(mrtrix_calls) + 1)
             self.assertTrue(all(p['status'] == 'completed' for p in manifest['phase_timings'][:-1]))
             self.assertEqual(manifest['phase_timings'][-1]['step'], 'scientific_output_validation')
             self.assertEqual(manifest['phase_timings'][-1]['status'], 'failed')

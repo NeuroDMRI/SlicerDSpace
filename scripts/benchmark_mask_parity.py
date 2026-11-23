@@ -144,18 +144,52 @@ def printed_threads(text: str):
     return int(found[-1]) if found else None
 
 
+def _windows_peak_rss_mb(process_handle: int) -> float:
+    """Read PeakWorkingSetSize (MiB) from a Windows process handle via K32GetProcessMemoryInfo."""
+    import ctypes
+    from ctypes import wintypes
+
+    class PROCESS_MEMORY_COUNTERS(ctypes.Structure):
+        _fields_ = [
+            ("cb", wintypes.DWORD),
+            ("PageFaultCount", wintypes.DWORD),
+            ("PeakWorkingSetSize", ctypes.c_size_t),
+            ("WorkingSetSize", ctypes.c_size_t),
+            ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+            ("QuotaPagedPoolUsage", ctypes.c_size_t),
+            ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+            ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+            ("PagefileUsage", ctypes.c_size_t),
+            ("PeakPagefileUsage", ctypes.c_size_t),
+        ]
+
+    counters = PROCESS_MEMORY_COUNTERS()
+    counters.cb = ctypes.sizeof(PROCESS_MEMORY_COUNTERS)
+    fn = ctypes.windll.kernel32.K32GetProcessMemoryInfo
+    fn.argtypes = [wintypes.HANDLE, ctypes.POINTER(PROCESS_MEMORY_COUNTERS), wintypes.DWORD]
+    fn.restype = wintypes.BOOL
+    if fn(wintypes.HANDLE(int(process_handle)), ctypes.byref(counters), counters.cb):
+        return counters.PeakWorkingSetSize / (1024 * 1024)
+    return 0.0
+
+
 def run_child(command, env, log_path: Path) -> dict:
     """Run one child process; its output goes to ``log_path``. Wall time and the child's peak RSS."""
     log_path.parent.mkdir(parents=True, exist_ok=True)
     started = time.monotonic()
     with log_path.open("w", encoding="utf-8") as stream:
         process = subprocess.Popen([str(part) for part in command], env=env, stdout=stream, stderr=subprocess.STDOUT)
-        _, status, usage = os.wait4(process.pid, 0)
-        process.returncode = os.waitstatus_to_exitcode(status)
-    # ru_maxrss: bytes on macOS, KiB on Linux.
-    scale = 1024 * 1024 if sys.platform == "darwin" else 1024
+        if hasattr(os, "wait4"):
+            _, status, usage = os.wait4(process.pid, 0)
+            process.returncode = os.waitstatus_to_exitcode(status)
+            # ru_maxrss: bytes on macOS, KiB on Linux.
+            scale = 1024 * 1024 if sys.platform == "darwin" else 1024
+            max_rss_mb = usage.ru_maxrss / scale
+        else:
+            process.wait()
+            max_rss_mb = _windows_peak_rss_mb(process._handle) if sys.platform == "win32" else 0.0
     return {"returncode": process.returncode, "seconds": time.monotonic() - started,
-            "max_rss_mb": usage.ru_maxrss / scale, "log": str(log_path)}
+            "max_rss_mb": max_rss_mb, "log": str(log_path)}
 
 
 def set_aside(folder: Path) -> None:

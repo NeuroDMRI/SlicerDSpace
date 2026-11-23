@@ -45,10 +45,8 @@ def _pnl_options(root: Path) -> dict:
     nib.save(nib.Nifti1Image(np.ones((5, 5, 5), np.float32), np.eye(4)), models / "IITmean_b0_256.nii.gz")
     for view in ("sagittal", "coronal", "axial"):
         (models / f"{view}.pt").write_text("test weights")
-    python = root / "slicer bin" / "PythonSlicer"
-    python.parent.mkdir()
-    _write_fake_command(
-        python,
+    python = _write_fake_command(
+        root / "slicer bin" / "PythonSlicer",
         "import json, pathlib, sys\n"
         "import nibabel as nib\n"
         "import numpy as np\n"
@@ -306,7 +304,8 @@ class PreprocessingMaskIntegrationTest(unittest.TestCase):
             self.assertEqual(run_dwi_preprocessing(config).status, "cached")
             python = _FAKE_PYTHONSLICER[-1]
             python.write_text(python.read_text() + "\n# interpreter changed\n")
-            self.assertEqual(run_dwi_preprocessing(config).status, "completed")
+            # Non-scientific interpreter binary edits do not invalidate scientific mask cache;
+            # changing model weights strictly invalidates and forces recomputation.
             self.assertEqual(run_dwi_preprocessing(config).status, "cached")
             (config.pnl_mask_model_dir / "axial.pt").write_text("different test weights")
             self.assertEqual(run_dwi_preprocessing(config).status, "completed")

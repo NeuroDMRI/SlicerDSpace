@@ -28,7 +28,16 @@ from collections import OrderedDict
 
 
 def _fuse_backbone_features(value, backbones, slot):
-    # Elementwise max across fused encoder and per-modality backbones without 5D temporary allocations.
+    # Elementwise max across fused encoder and per-modality backbones.
+    # Inference uses zero-allocation torch.maximum; autograd keeps exact
+    # torch.max tie-breaking parity for gradient tests.
+    if not backbones:
+        return value
+    if torch.is_grad_enabled() and (
+        value.requires_grad or any(result[slot].requires_grad for result in backbones)
+    ):
+        merged = torch.stack((value, *(result[slot] for result in backbones)), dim=4)
+        return torch.max(merged, 4)[0]
     out = value
     for result in backbones:
         out = torch.maximum(out, result[slot])

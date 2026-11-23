@@ -11,6 +11,7 @@ import os
 import sys
 import tempfile
 import unittest
+from win_test_helpers import skip_unless_symlinks
 from pathlib import Path
 from unittest import mock
 
@@ -31,11 +32,13 @@ class VenvLinkCase(unittest.TestCase):
 
 
 class InterpreterPathTests(VenvLinkCase):
+    @skip_unless_symlinks
     def test_setup_keeps_an_external_virtualenv_symlink(self):
         from shared.python_environment import setup_python_command
         self.assertEqual(setup_python_command(self.link, slicer_home=self.tmp / 'Slicer', launcher='Slicer'),
                          (str(self.link), []))
 
+    @skip_unless_symlinks
     def test_setup_uses_slicer_launcher_for_its_raw_interpreter_and_wrapper(self):
         from shared.python_environment import setup_python_command
         home = self.tmp / 'Slicer'
@@ -45,6 +48,7 @@ class InterpreterPathTests(VenvLinkCase):
             self.assertEqual(setup_python_command(home / 'bin' / name, slicer_home=home / 'bin/..', launcher='Slicer'),
                              ('Slicer', ['--launch', 'PythonSlicer']))
 
+    @skip_unless_symlinks
     def test_helper_keeps_symlink_and_expands_user(self) -> None:
         from shared.external_process import interpreter_path
 
@@ -52,12 +56,14 @@ class InterpreterPathTests(VenvLinkCase):
         with mock.patch.dict(os.environ, {"HOME": str(self.tmp)}):
             self.assertEqual(interpreter_path(Path("~/venv/bin/python")), self.link)
 
+    @skip_unless_symlinks
     def test_python_environment_resolver_keeps_symlink(self) -> None:
         from shared.python_environment import resolve_python_executable
 
         self.assertEqual(resolve_python_executable(python_executable=self.link), self.link)
         self.assertEqual(resolve_python_executable(python_environment=str(self.link)), self.link)
 
+    @skip_unless_symlinks
     def test_doctor_specs_keep_symlink(self) -> None:
         from shared.environment import EnvironmentDoctorConfig, build_dependency_specs
 
@@ -71,6 +77,7 @@ class InterpreterPathTests(VenvLinkCase):
         self.assertEqual(specs["python:tractcloud:torch"].python_executable, self.link)
         self.assertEqual(specs["python:tractcloud"].python_executable, self.link)
 
+    @skip_unless_symlinks
     def test_doctor_tractcloud_env_interpreter_keeps_symlink(self) -> None:
         from shared.environment import EnvironmentDoctorConfig, build_dependency_specs
 
@@ -79,6 +86,7 @@ class InterpreterPathTests(VenvLinkCase):
             specs = {spec.key: spec for spec in build_dependency_specs(config)}
         self.assertEqual(specs["python:tractcloud:torch"].python_executable, self.link)
 
+    @skip_unless_symlinks
     def test_postprocess_command_keeps_symlink(self) -> None:
         from anatomy.surface import postprocess_release
         from anatomy.surface.postprocess_release import DDSurferPostprocessConfig, run_ddsurfer_postprocess
@@ -115,6 +123,7 @@ class InterpreterPathTests(VenvLinkCase):
 
 
 class OrchestratorInterpreterPathTests(VenvLinkCase):
+    @skip_unless_symlinks
     def test_run_record_keeps_symlink(self) -> None:
         from shared import ProductOrchestratorConfig, run_subject_products
 
@@ -136,6 +145,7 @@ class OrchestratorInterpreterPathTests(VenvLinkCase):
         for key in ("surface_python_bin", "postprocess_python_bin", "tractcloud_python_executable"):
             self.assertEqual(records[0][key], self.link.as_posix(), key)
 
+    @skip_unless_symlinks
     def test_resume_accepts_recorded_symlink_interpreter(self) -> None:
         import trimesh
         from anatomy.surface.backend_bridge import native_products, sha256, upstream_record

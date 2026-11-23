@@ -14,6 +14,7 @@ import tempfile
 import textwrap
 from types import SimpleNamespace
 import unittest
+from win_test_helpers import skip_unless_symlinks
 from unittest.mock import patch
 
 import nibabel as nib
@@ -149,18 +150,22 @@ FAKE_COMMAND = textwrap.dedent(
 
 
 def write_fake_command(tool: Path, mode: str, *, behavior: str = "valid") -> Path:
-    tool.parent.mkdir(parents=True, exist_ok=True)
-    tool.write_text(
-        f"#!{sys.executable}\nMODE = {mode!r}\nBEHAVIOR = {behavior!r}\n"
-        f"RECORD = {str(command_record(tool))!r}\n" + FAKE_COMMAND,
-        encoding="ascii",
+    body = (
+        f"MODE = {mode!r}\nBEHAVIOR = {behavior!r}\n"
+        f"RECORD = {str(command_record(tool))!r}\n" + FAKE_COMMAND
     )
+    if os.name == "nt":
+        from win_test_helpers import write_fake_python_cli
+        return write_fake_python_cli(tool, body)
+    tool.parent.mkdir(parents=True, exist_ok=True)
+    tool.write_text(f"#!{sys.executable}\n" + body, encoding="ascii")
     tool.chmod(0o755)
     return tool
 
 
 def fake_pythonslicer(root: Path) -> Path:
-    return root / "Slicer with spaces" / "bin" / "PythonSlicer"
+    name = "PythonSlicer.cmd" if os.name == "nt" else "PythonSlicer"
+    return root / "Slicer with spaces" / "bin" / name
 
 
 def fake_pnl_models(root: Path) -> Path:
@@ -388,8 +393,12 @@ class BrainMaskBackendsTest(unittest.TestCase):
 
     def test_pnl_interpreter_must_be_executable(self) -> None:
         config = fake_pnl_config(self.root)
-        self.pythonslicer.chmod(0o644)
-        inspected = inspect_brain_mask_backend(config)
+        if os.name == "nt":
+            with patch("shared.brain_mask.os.access", return_value=False):
+                inspected = inspect_brain_mask_backend(config)
+        else:
+            self.pythonslicer.chmod(0o644)
+            inspected = inspect_brain_mask_backend(config)
         self.assertFalse(inspected["available"])
         self.assertIn(brain_mask.PNL_NATIVE_PYTHON_MISSING, inspected["missing_required"])
 
@@ -590,7 +599,8 @@ class BrainMaskBackendsTest(unittest.TestCase):
             self.assertTrue(inspected["available"], inspected["missing_required"])
             signatures[name] = inspected["settings"]
         self.assertNotEqual(signatures["managed"]["pnl_route"], signatures["native"]["pnl_route"])
-        with patch.object(brain_mask, "_run", side_effect=self.run_fake_managed):
+        with patch.object(brain_mask.platform, "system", return_value="Linux"), \
+                patch.object(brain_mask, "_run", side_effect=self.run_fake_managed):
             first = self.generate(managed)
             self.assertEqual(self.generate(managed)["status"], "reused")
         # A managed mask is never reused for a native request, nor the reverse.
@@ -600,7 +610,8 @@ class BrainMaskBackendsTest(unittest.TestCase):
         self.assertEqual(second["signature"]["settings"]["pnl_route"], "native-sitk")
         self.assertNotEqual(first["signature"], second["signature"])
         self.assertEqual(self.generate(native)["status"], "reused")
-        with patch.object(brain_mask, "_run", side_effect=self.run_fake_managed):
+        with patch.object(brain_mask.platform, "system", return_value="Linux"), \
+                patch.object(brain_mask, "_run", side_effect=self.run_fake_managed):
             third = self.generate(managed)
         self.assertEqual(third["status"], "completed")
         self.assertEqual(len(self.managed_calls), 2)
@@ -637,7 +648,8 @@ class BrainMaskBackendsTest(unittest.TestCase):
     def test_f2_generated_managed_mask_gives_managed_without_a_status(self) -> None:
         models = self.managed_setup()
         managed = fake_managed_pnl_config(self.root, models, pnl_mask_route="managed")
-        with patch.object(brain_mask, "_run", side_effect=self.run_fake_managed):
+        with patch.object(brain_mask.platform, "system", return_value="Linux"), \
+                patch.object(brain_mask, "_run", side_effect=self.run_fake_managed):
             self.generate(managed)
         self.assertEqual(self.consumed_route(), {"route": "managed-ants"})
 
@@ -1041,6 +1053,7 @@ class BrainMaskBackendsTest(unittest.TestCase):
                 generate_brain_mask(self.dwi, self.bvals, self.bvecs, source, config=self.pnl_config)
         self.assert_preserved(before)
 
+    @skip_unless_symlinks
     def test_output_and_manifest_symlinks_are_rejected_without_modifying_targets(self) -> None:
         self.output.symlink_to(self.dwi)
         before = self.snapshot()

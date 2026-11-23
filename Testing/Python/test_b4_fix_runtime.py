@@ -408,6 +408,10 @@ class PgActivationProblemTests(unittest.TestCase):
         self.bp = bundled_python
         self.bp._PROBLEMS.clear()
         self.addCleanup(self.bp._PROBLEMS.clear)
+        env_patch = mock.patch.dict(os.environ, {}, clear=False)
+        env_patch.start()
+        self.addCleanup(env_patch.stop)
+        os.environ.pop(self.bp.BUNDLED_PYTHON_ENV, None)
 
     def _root(self, base: Path, meta: dict) -> Path:
         import json

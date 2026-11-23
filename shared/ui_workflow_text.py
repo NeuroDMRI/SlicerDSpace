@@ -141,6 +141,11 @@ WORKFLOW_TEXT = {
         "results_cleared_empty": "Results list cleared. New runs will appear here.",
         "results_removed_status": "Removed {count} run(s) from the list; files are kept.",
         "results_hide_all": "Hide everything shown",
+        "results_inflated_separate": "Separate L/R inflated hemispheres (±35 mm)",
+        "results_inflated_separate_tooltip": (
+            "Display-only X-axis offset (−35 mm left / +35 mm right) so inflated hemispheres do not overlap in 3D view. "
+            "Disk files and vertex coordinates are never modified."
+        ),
         "results_open_folder": "Open folder",
         "results_folder_missing": "The folder does not exist: {path}",
         "results_folder_unknown": "The folder of this subject is not known yet.",
@@ -296,6 +301,11 @@ WORKFLOW_TEXT = {
         "results_cleared_empty": "结果列表已清空，新的运行结果会显示在这里。",
         "results_removed_status": "已从列表中移除 {count} 个运行；文件保留。",
         "results_hide_all": "关闭所有显示",
+        "results_inflated_separate": "左右膨胀表面分离显示（±35 mm）",
+        "results_inflated_separate_tooltip": (
+            "仅在 3D 显示层施加左右分离偏移（左半球 −35 mm / 右半球 +35 mm），避免左右膨胀表面重叠；"
+            "不会修改磁盘上的任何 FreeSurfer 原始文件或顶点坐标。"
+        ),
         "results_open_folder": "打开文件夹",
         "results_folder_missing": "文件夹不存在：{path}",
         "results_folder_unknown": "尚不知道该受试者的文件夹。",

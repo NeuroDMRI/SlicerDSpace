@@ -16,6 +16,7 @@ import json
 import sys
 import tempfile
 import unittest
+from win_test_helpers import skip_unless_symlinks
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -132,6 +133,7 @@ class BatchFolderGuardTest(unittest.TestCase):
                          [("batch", self.batch, "subject_root")])
         self.assertEqual(skipped, [])
 
+    @skip_unless_symlinks
     def test_review_b1_scanned_alias_of_the_batch_folder_is_not_a_subject(self):
         """Review B1 (Opus) / P1 (Codex): the "entry is the Batch Folder itself" exemption is for --subject-list only.
 
@@ -144,6 +146,7 @@ class BatchFolderGuardTest(unittest.TestCase):
         self.assertEqual(subjects, [])
         self.assertEqual(self.reasons(skipped), {"batch": NEW_REASON})
 
+    @skip_unless_symlinks
     def test_review_b1_scanned_alias_beside_a_dicom_subject(self):
         """Review B1: the alias must not take the DICOM sibling's files through the Batch Folder."""
         write_dicom(self.batch / "sub-a")

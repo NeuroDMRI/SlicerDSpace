@@ -5,6 +5,7 @@ import shutil
 from pathlib import Path
 import tempfile
 import unittest
+from win_test_helpers import skip_unless_symlinks
 from unittest import mock
 import zipfile
 
@@ -80,6 +81,7 @@ class WMAResourceTests(unittest.TestCase):
             extract_indexed_archive(self.root, definition)
         self.assertFalse((self.root.parent / 'escape').exists())
 
+    @skip_unless_symlinks
     def test_f4_symlinked_ancestor_of_the_asset_root_is_allowed(self):
         # F4: a symlink above the asset root (as /var is on macOS) is the user's folder layout.
         definition, _ = self.fixture()
@@ -90,6 +92,7 @@ class WMAResourceTests(unittest.TestCase):
         self.assertEqual((self.root / definition['directory'] / 'NABA-800FC/atlas.p').read_bytes(),
                          b'test atlas, not a pickle')
 
+    @skip_unless_symlinks
     def test_f4_symlink_inside_the_destination_tree_is_still_refused(self):
         definition, _ = self.fixture()
         with tempfile.TemporaryDirectory() as outside:
@@ -98,6 +101,7 @@ class WMAResourceTests(unittest.TestCase):
                 extract_indexed_archive(self.root, definition)
             self.assertEqual(list(Path(outside).iterdir()), [])
 
+    @skip_unless_symlinks
     def test_f4_symlinked_destination_folder_is_still_refused(self):
         definition, _ = self.fixture()
         destination = self.root / definition['directory']

@@ -5,6 +5,7 @@ from pathlib import Path
 import tarfile
 import tempfile
 import unittest
+from win_test_helpers import skip_unless_symlinks
 from unittest.mock import patch
 
 from shared import managed_pnl as pnl, managed_runtimes as runtime
@@ -94,6 +95,7 @@ class ManagedPnlTests(unittest.TestCase):
                 with self.subTest(name=name, kind=kind), self.assertRaises(ValueError):
                     pnl.extract_regular_files(self.archive(root, name, kind), root / "installed")
 
+    @skip_unless_symlinks
     def test_existing_symlink_is_not_followed(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

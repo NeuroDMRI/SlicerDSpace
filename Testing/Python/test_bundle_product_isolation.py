@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from win_test_helpers import skip_unless_symlinks
 from unittest import mock
 
 from shared.output_contracts import polydata_streamline_count
@@ -80,6 +81,7 @@ class BundleIsolationTest(unittest.TestCase):
             self.assertTrue((retained / 'partial.vtp').exists())
             self.assertEqual(summarize_tractcloud_outputs(root)['bundle_count'], 0)
 
+    @skip_unless_symlinks
     def test_virtualenv_symlink_is_preserved(self):
         from tractography.wmql import _resolve_python
         from tractography.tractcloud import resolve_tractcloud_python
@@ -101,7 +103,8 @@ class BundleIsolationTest(unittest.TestCase):
             env = python_tool_environment('/opt/venv/bin/python')
             self.assertNotIn('PYTHONHOME', env)
             self.assertNotIn('Slicer-', env['PATH'])
-            self.assertTrue(env['PATH'].startswith('/opt/venv/bin'))
+            import os
+            self.assertEqual(Path(env['PATH'].split(os.pathsep)[0]).resolve(), Path('/opt/venv/bin').resolve())
 
     def test_tractcloud_model_signature_tracks_changed_weights(self):
         from tractography.tractcloud import model_input_signature

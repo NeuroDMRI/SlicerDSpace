@@ -2,6 +2,7 @@
 
 import os
 from pathlib import Path
+import shlex
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -51,7 +52,7 @@ class ShimTests(ToolEnvironmentBase):
         for name in ('python', 'python3'):
             script = folder / name
             self.assertTrue(os.access(script, os.X_OK))
-            self.assertEqual(script.read_text(), f'#!/bin/sh\n# SlicerDSpace managed shim\nexec {python} "$@"\n')
+            self.assertEqual(script.read_text(), f'#!/bin/sh\n# SlicerDSpace managed shim\nexec {shlex.quote(str(python))} "$@"\n')
 
     def test_linux_without_a_runtime_python_adds_no_shim(self):
         env = self.environment('linux', mrtrix_bin_dir=self.mrtrix)
@@ -64,21 +65,21 @@ class ShimTests(ToolEnvironmentBase):
         slicer.write_text('#!/bin/sh\n')
         env = self.environment('darwin', mrtrix_bin_dir=self.mrtrix, fsl_bin_dir=fsl_python.parent, slicer_python=slicer)
         script = Path(self.path_entries(env)[0]) / 'python'
-        self.assertIn(f'exec {fsl_python} "$@"', script.read_text())
+        self.assertIn(f'exec {shlex.quote(str(fsl_python))} "$@"', script.read_text())
 
     def test_macos_shim_falls_back_to_pythonslicer_without_fsl(self):
         slicer = self.root / 'PythonSlicer'
         slicer.write_text('#!/bin/sh\n')
         env = self.environment('darwin', mrtrix_bin_dir=self.mrtrix, slicer_python=slicer)
         script = Path(self.path_entries(env)[0]) / 'python3'
-        self.assertIn(f'exec {slicer} "$@"', script.read_text())
+        self.assertIn(f'exec {shlex.quote(str(slicer))} "$@"', script.read_text())
         self.assertNotIn('FSLDIR', env)
 
     def test_macos_fsl_prefix_without_python_also_falls_back_to_pythonslicer(self):
         slicer = self.root / 'PythonSlicer'
         slicer.write_text('#!/bin/sh\n')
         env = self.environment('darwin', mrtrix_bin_dir=self.mrtrix, fsl_bin_dir=self.fsl, slicer_python=slicer)
-        self.assertIn(f'exec {slicer} "$@"', (Path(self.path_entries(env)[0]) / 'python').read_text())
+        self.assertIn(f'exec {shlex.quote(str(slicer))} "$@"', (Path(self.path_entries(env)[0]) / 'python').read_text())
 
     def test_a5_n9_macos_shim_uses_the_fsl_python_found_through_fsldir_or_path(self):
         """A5 N9: no fsl_bin_dir passed; FSL found the usual way. Fails before: the shim pointed to PythonSlicer."""
@@ -88,9 +89,10 @@ class ShimTests(ToolEnvironmentBase):
         with patch.object(ep, '_discover_fsl_bin_dir', REAL_DISCOVER):
             with patch.dict(os.environ, {'FSLDIR': str(fsl_python.parent.parent)}):
                 env = self.environment('darwin', mrtrix_bin_dir=self.mrtrix, slicer_python=slicer)
-            self.assertIn(f'exec {fsl_python} "$@"', (Path(self.path_entries(env)[0]) / 'python').read_text())
-            (fsl_python.parent / 'eddy').write_text('#!/bin/sh\n')
-            (fsl_python.parent / 'eddy').chmod(0o755)
+            self.assertIn(f'exec {shlex.quote(str(fsl_python))} "$@"', (Path(self.path_entries(env)[0]) / 'python').read_text())
+            eddy_name = 'eddy.exe' if os.name == 'nt' else 'eddy'
+            (fsl_python.parent / eddy_name).write_text('#!/bin/sh\n')
+            (fsl_python.parent / eddy_name).chmod(0o755)
             with patch.dict(os.environ, {'PATH': str(fsl_python.parent)}):
                 os.environ.pop('FSLDIR', None)
                 self.assertEqual(ep.shim_target_python(system='darwin', slicer_python=slicer), fsl_python)
@@ -145,7 +147,7 @@ class ShimWriterTests(ToolEnvironmentBase):
             folder = ep.python_shim_folder(target, self.shims)
         for name in ('python', 'python3'):
             self.assertTrue(os.access(folder / name, os.X_OK), name)
-            self.assertIn(f'exec {target} "$@"', (folder / name).read_text())
+            self.assertIn(f'exec {shlex.quote(str(target))} "$@"', (folder / name).read_text())
         self.assertEqual(sorted(path.name for path in folder.iterdir()), ['python', 'python3'])
 
     def test_a_failed_write_leaves_no_temporary_file(self):
@@ -203,7 +205,7 @@ class FslEnvironmentTests(ToolEnvironmentBase):
     def test_fsl_keys_are_present_and_output_type_is_fixed(self):
         with patch.dict(os.environ, {'FSLOUTPUTTYPE': 'NIFTI', 'FSLDIR': '/somewhere/else'}):
             env = self.environment('linux', fsl_bin_dir=self.fsl)
-        self.assertEqual(env['FSLDIR'], str(self.fsl.parent))
+        self.assertEqual(Path(env['FSLDIR']), self.fsl.parent)
         self.assertEqual(env['FSLOUTPUTTYPE'], 'NIFTI_GZ')
         self.assertIn(str(self.fsl), self.path_entries(env))
 
@@ -250,7 +252,7 @@ class FslEnvironmentTests(ToolEnvironmentBase):
                                                     commands, log=None)
         self.assertEqual([name for name, _ in seen], ['dwifslpreproc', 'eddy', 'topup'])
         for name, env in seen:
-            self.assertEqual(env['FSLDIR'], str(self.fsl.parent), name)
+            self.assertEqual(Path(env['FSLDIR']), self.fsl.parent, name)
             self.assertEqual(env['FSLOUTPUTTYPE'], 'NIFTI_GZ', name)
             self.assertIn(str(self.fsl), env['PATH'].split(os.pathsep), name)
 

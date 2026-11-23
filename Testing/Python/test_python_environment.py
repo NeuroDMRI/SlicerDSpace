@@ -26,20 +26,32 @@ class PythonEnvironmentTest(unittest.TestCase):
             self.assertEqual(resolve_python_executable(python_environment=python.as_posix()), python)
 
     def test_python_environment_name_resolves_through_conda_run(self) -> None:
+        import sys
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             expected_python = root / "envs" / "slicerdsurfer" / "bin" / "python"
             expected_python.parent.mkdir(parents=True)
             expected_python.write_text("", encoding="utf-8")
-            conda = root / "conda"
-            conda.write_text(
-                "#!/usr/bin/env python3\n"
-                "import sys\n"
-                "assert sys.argv[1:4] == ['run', '-n', 'slicerdsurfer']\n"
-                f"print({expected_python.as_posix()!r})\n",
-                encoding="utf-8",
-            )
-            conda.chmod(0o755)
+            if sys.platform == "win32":
+                conda = root / "conda.cmd"
+                conda.write_text(
+                    "@echo off\r\n"
+                    'if not "%~1"=="run" exit /b 1\r\n'
+                    'if not "%~2"=="-n" exit /b 1\r\n'
+                    'if not "%~3"=="slicerdsurfer" exit /b 1\r\n'
+                    f"echo {expected_python.as_posix()}\r\n",
+                    encoding="utf-8",
+                )
+            else:
+                conda = root / "conda"
+                conda.write_text(
+                    "#!/usr/bin/env python3\n"
+                    "import sys\n"
+                    "assert sys.argv[1:4] == ['run', '-n', 'slicerdsurfer']\n"
+                    f"print({expected_python.as_posix()!r})\n",
+                    encoding="utf-8",
+                )
+                conda.chmod(0o755)
 
             self.assertEqual(
                 resolve_python_executable(python_environment="slicerdsurfer", conda_executable=conda),

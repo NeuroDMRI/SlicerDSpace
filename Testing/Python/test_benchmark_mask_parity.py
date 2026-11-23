@@ -14,6 +14,7 @@ import tempfile
 import textwrap
 from types import SimpleNamespace
 import unittest
+from win_test_helpers import skip_unless_symlinks
 from unittest.mock import patch
 
 import numpy as np
@@ -320,6 +321,7 @@ class InputTest(unittest.TestCase):
                                                 [math.sin(angle), math.cos(angle), 0], [0, 0, 1]], atol=1e-12)
 
 
+    @skip_unless_symlinks
     def test_altered_b2_baseline_is_made_again_on_reuse(self):
         # A-O3 (A-C2): prepare_case checks the rotated baseline against its recorded SHA-256 before it reuses it.
         with tempfile.TemporaryDirectory() as temporary:
@@ -408,6 +410,7 @@ class ReferenceArmTest(unittest.TestCase):
             "--model-dir", str(self.models), "--template", str(self.template),
             "--pnl-python", str(self.python), "--ants-bin", str(self.ants), "--steps", steps])
 
+    @skip_unless_symlinks
     def test_reference_runs_noise_floor_and_t1_with_a_seed_dependent_reference(self):
         (self.ants / "seed2_shift").touch()
         cases = [write_case(self.root, "c1", blob=(2, 7)), write_case(self.root, "c2", blob=(2, 8))]
@@ -474,6 +477,7 @@ class ReferenceArmTest(unittest.TestCase):
         self.assertTrue(json.loads((out / "cases" / "c1" / "result.json").read_text())["t1"]["pass"])
         self.assertEqual(json.loads((out / "summary.json").read_text())["evaluation"]["t1"]["status"], "pass")
 
+    @skip_unless_symlinks
     def test_a_printed_thread_count_that_differs_from_n_makes_the_run_invalid(self):
         (self.ants / "wrong_threads").touch()
         cases = [write_case(self.root, "c1")]
@@ -489,6 +493,7 @@ class ReferenceArmTest(unittest.TestCase):
         self.assertEqual(evaluation["t3"]["status"], "incomplete")
 
 
+    @skip_unless_symlinks
     def test_reference_record_without_the_current_fingerprint_is_repeated(self):
         # A-C2: an older record (no fingerprint) or one made with other settings is set aside and repeated.
         cases = [write_case(self.root, "c1")]
@@ -506,6 +511,7 @@ class ReferenceArmTest(unittest.TestCase):
         b2 = json.loads((runs / "B2" / "reference.json").read_text())["fingerprint"]
         self.assertNotEqual(b2, json.loads((runs / "A" / "reference.json").read_text())["fingerprint"])
 
+    @skip_unless_symlinks
     def test_carried_t1_is_dropped_when_run_a_outputs_change(self):
         (self.ants / "seed2_shift").touch()
         cases = [write_case(self.root, "c1")]
@@ -521,6 +527,7 @@ class ReferenceArmTest(unittest.TestCase):
         summary = json.loads((self.root / "out" / "summary.json").read_text())["evaluation"]
         self.assertEqual(summary["t1"]["status"], "incomplete")
 
+    @skip_unless_symlinks
     def test_zero_noise_writes_the_stop_report_without_bounds_and_skips_later_steps(self):
         # A-C3, M-A 1: every perturbation equals run A on every case.
         cases = [write_case(self.root, "c1"), write_case(self.root, "c2", blob=(2, 8))]

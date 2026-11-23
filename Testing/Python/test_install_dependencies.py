@@ -105,6 +105,7 @@ class InstallDependenciesProfileTest(unittest.TestCase):
             self.assertIn(f"'{worker}' -m pip install 'numpy>=1.26'", helper)
             self.assertNotIn("nibabel>=5.0' 'numpy>=1.26", helper)
 
+    @unittest.skipIf(os.name == "nt", "macOS POSIX bash wrapper test runs on POSIX hosts")
     def test_macos_wrapper_generates_a_darwin_plan(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             output_dir = Path(temporary) / "macos-plan"

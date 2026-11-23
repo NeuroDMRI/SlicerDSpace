@@ -433,7 +433,7 @@ class WindowsCompatHardeningTests(unittest.TestCase):
             flag = int(getattr(subprocess, "CREATE_NO_WINDOW", 0) or 0)
             if flag:
                 self.assertEqual(kw.get("creationflags"), flag)
-        with patch.object(os, "name", "posix"):
+        with patch.object(os, "name", "posix"), patch("shared.external_process.sys.platform", "linux"):
             self.assertEqual(subprocess_no_window_kwargs(), {})
 
         for rel in (

@@ -110,15 +110,19 @@ class D3OpenMpOrderTests(unittest.TestCase):
                     self.assertLess(order.index("torch"), order.index(later))
 
     def test_d3_dipy_tracking_keeps_one_thread_on_macos(self) -> None:
+        from tractography import dti as tract_dti
+
         tree = ast.parse((REPO_ROOT / "tractography" / "dti.py").read_text(encoding="utf-8"))
         found = []
         for node in ast.walk(tree):
             if isinstance(node, ast.keyword) and node.arg == "nbr_threads":
                 found.append(node.value)
         self.assertTrue(found, "D3: the eudx_tracking call must pass nbr_threads")
-        for value in found:
-            code = compile(ast.Expression(value), "<nbr_threads>", "eval")
-            self.assertEqual(eval(code, {"sys": SimpleNamespace(platform="darwin")}), 1)
+        self.assertEqual(tract_dti._resolve_eudx_threads(platform_name="darwin"), 1)
+        self.assertEqual(tract_dti._resolve_eudx_threads(platform_name="darwin", stage_cpus=8), 1)
+        self.assertEqual(tract_dti._resolve_eudx_threads(platform_name="linux", stage_cpus=6), 6)
+        self.assertEqual(tract_dti._resolve_eudx_threads(platform_name="linux", host_cpus=144), 32)
+        self.assertEqual(tract_dti._resolve_eudx_threads(platform_name="win32", host_cpus=24), 0)
 
     def test_d3_no_dipy_nlmeans_call_remains_in_the_run_path(self) -> None:
         offenders = []

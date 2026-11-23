@@ -7,6 +7,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from win_test_helpers import skip_unless_symlinks
 from unittest.mock import MagicMock, patch
 import zipfile
 
@@ -301,6 +302,7 @@ class OptionalAssetsTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'checksum'):
                 import_file(source, target, expected)
 
+    @skip_unless_symlinks
     def test_cli_asset_root_below_a_symlinked_directory_is_accepted(self):
         # macOS keeps /tmp, /var and the default temp folder behind symlinks.
         import contextlib
@@ -340,6 +342,7 @@ class OptionalAssetsTests(unittest.TestCase):
                 extract_org(archive, root / 'unsafe')
             self.assertFalse((root / 'outside').exists())
 
+    @skip_unless_symlinks
     def test_n1_guard_extract_org_refuses_a_symlinked_destination_and_accepts_a_symlink_at_or_above_its_parent(self):
         # Guard test: it keeps the N1 rule as it is; it does not cover a new behaviour.
         with tempfile.TemporaryDirectory() as tmp:

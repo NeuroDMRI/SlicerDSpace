@@ -696,7 +696,11 @@ class EnvironmentDoctorDiscoveryTest(unittest.TestCase):
             if sys.platform == "win32":
                 conda = root / "conda.cmd"
                 conda.write_text(
-                    f'@echo off\n"{sys.executable}" "{conda_py}" %*\n',
+                    "@echo off\r\n"
+                    'if not "%~1"=="run" exit /b 1\r\n'
+                    'if not "%~2"=="-n" exit /b 1\r\n'
+                    'if not "%~3"=="slicerdsurfer" exit /b 1\r\n'
+                    f"echo {expected_python.as_posix()}\r\n",
                     encoding="utf-8",
                 )
             else:

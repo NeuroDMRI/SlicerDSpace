@@ -344,7 +344,7 @@ def run_mkcurve(dwi_path, bval_path, bvec_path, mask_path, output_dir, *,
     _write_json(progress, {"status": "running", "implementation": "python_port", "device": resolved_device})
     _write_json(root / "mkcurve_record.json", {"kind": "mkcurve_python_port", "status": "running", "inputs": inputs})
     try:
-        with tempfile.TemporaryDirectory(prefix=".mkcurve-", dir=root) as temporary, ExitStack() as handles:
+        with tempfile.TemporaryDirectory(prefix=".mkcurve-", dir=root, ignore_cleanup_errors=True) as temporary, ExitStack() as handles:
             prepared, reference, preparation = _prepare_inputs(
                 Path(dwi_path), Path(bval_path), Path(bvec_path), Path(mask_path), Path(temporary), b0_threshold, max_bvalue,
                 allow_nonfinite=True)

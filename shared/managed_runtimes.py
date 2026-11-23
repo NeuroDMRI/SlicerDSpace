@@ -296,17 +296,18 @@ def verify_prefix(profile, prefix):
 def _unsafe_member(member, top_level):
     """Reason a tar member is refused, or None. Absolute names, '..' and links leaving the folder are unsafe."""
     from pathlib import PurePosixPath
+    import posixpath
     name = PurePosixPath(member.name)
     if name.is_absolute() or ".." in name.parts or not name.parts or name.parts[0] != top_level:
         return "path outside " + top_level + "/"
     if member.issym():
         link = PurePosixPath(member.linkname)
-        resolved = os.path.normpath(str(name.parent / link))
+        resolved = posixpath.normpath(str(name.parent / link))
         if link.is_absolute() or resolved.startswith("..") or resolved.split("/")[0] != top_level:
             return "symlink leaves the folder"
     elif member.islnk():
         link = PurePosixPath(member.linkname)
-        resolved = os.path.normpath(str(link))
+        resolved = posixpath.normpath(str(link))
         if link.is_absolute() or resolved.startswith("..") or resolved.split("/")[0] != top_level:
             return "hard link leaves the folder"
     elif not (member.isfile() or member.isdir()):

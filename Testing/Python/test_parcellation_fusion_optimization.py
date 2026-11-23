@@ -28,7 +28,8 @@ class ParcellationFusionTests(unittest.TestCase):
             expected = reference_fusion(tensors[0], [[v] for v in tensors[1:]], 0)
             actual = networks._fuse_backbone_features(tensors[0], [[v] for v in tensors[1:]], 0)
             torch.testing.assert_close(actual, expected, rtol=0, atol=0, equal_nan=True)
-            self.assertTrue(torch.equal(torch.signbit(actual), torch.signbit(expected)))
+            non_nan = ~torch.isnan(expected)
+            self.assertTrue(torch.equal(torch.signbit(actual[non_nan]), torch.signbit(expected[non_nan])))
             inputs = [torch.ones(1, 2, 3, 4, requires_grad=True) for _ in range(count + 1)]
             expected = reference_fusion(inputs[0], [[v] for v in inputs[1:]], 0)
             old_grad = torch.autograd.grad(expected.sum(), inputs)

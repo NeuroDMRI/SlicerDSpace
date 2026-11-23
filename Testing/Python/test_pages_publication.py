@@ -3,6 +3,7 @@
 from pathlib import Path
 import tempfile
 import unittest
+from win_test_helpers import skip_unless_symlinks
 from unittest.mock import patch
 
 from scripts.audit_pages_site import audit
@@ -34,6 +35,7 @@ class PagesPublicationTest(unittest.TestCase):
             self.assertEqual(result["status"], "fail")
             self.assertIn("Unexpected public file: performance.html", result["findings"])
 
+    @skip_unless_symlinks
     def test_private_documents_and_symlinks_are_not_publishable(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

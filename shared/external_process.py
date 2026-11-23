@@ -167,7 +167,7 @@ def normalize_slicer_python_launch(program: str, args: list[str]) -> tuple[str, 
     ``--launch PythonSlicer`` contract: it opens another GUI instead. Keep
     Linux/Windows CTK commands and ordinary application launches unchanged.
     """
-    if list(args[:2]) != ['--launch', 'PythonSlicer'] or os.name == 'nt':
+    if list(args[:2]) != ['--launch', 'PythonSlicer'] or sys.platform == 'win32':
         return program, args
     app = Path(program).expanduser()
     if app.parent.name == 'MacOS' and app.parent.parent.name == 'Contents':

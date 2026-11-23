@@ -165,7 +165,7 @@ class DDSegPipelineOrientationTest(unittest.TestCase):
             (feature_dir / name).write_bytes(b"")  # content is served by the stub nrrd module
         seen: dict[str, np.ndarray] = {}
 
-        def oracle(stacked, cfg):
+        def oracle(stacked, cfg, **_kwargs):
             seen["stacked"] = stacked
             fa = stacked[..., 0]
             # WM (label 1) where the input says "anterior half", GM (2) elsewhere.

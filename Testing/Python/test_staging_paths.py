@@ -6,6 +6,7 @@ from __future__ import annotations
 import sys
 import tempfile
 import unittest
+from win_test_helpers import skip_unless_symlinks
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -91,6 +92,7 @@ class ResolveStagingSubjectDirTest(unittest.TestCase):
             # Nothing outside staging_root was touched.
             self.assertTrue((sibling / "keepme.txt").is_file())
 
+    @skip_unless_symlinks
     def test_rejects_symlink_escape_even_when_name_passes_the_regex(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             staging_root = Path(tmp) / "staging"

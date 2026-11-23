@@ -55,6 +55,16 @@ UNKNOWN_GREY = (0.5, 0.5, 0.5)
 LEGEND_TITLES = {"thickness": "Thickness (mm)", "curv": "Curvature (1/mm)", "sulc": "Sulcal depth (mm)",
                  "area": "Vertex area (mm²)"}
 
+# Display-only lateral separation for FreeSurfer inflated surfaces (never modifies files on disk or polydata points).
+# FreeSurfer lh.inflated and rh.inflated both sit centered around the RAS origin and visually overlap in 3D view;
+# applying -35 mm (lh) / +35 mm (rh) via owned vtkMRMLLinearTransformNode separates them cleanly and can be toggled
+# ON/OFF dynamically in one click.
+INFLATED_SEPARATION_OFFSET_MM = 35.0
+INFLATED_HEMISPHERE_ATTR = PREFIX + "InflatedHemisphere"
+INFLATED_TRANSFORM_ATTR = PREFIX + "InflatedTransformNodeID"
+INFLATED_OFFSET_ATTR = PREFIX + "InflatedOffsetX"
+_INFLATED_SEPARATION_ENABLED: bool = True
+
 _MEASURE_TEXT = {"thickness": ("thickness", "皮层厚度"), "curv": ("curvature", "曲率"),
                  "sulc": ("sulcal depth", "脑沟深度"), "area": ("vertex area", "顶点面积")}
 _ATLAS_TEXT = {"aparc": ("Desikan (aparc)", "Desikan（aparc）"),
@@ -535,6 +545,187 @@ def read_inflated(nibabel_module, path) -> tuple[Any, Any]:
     return points, faces
 
 
+# ------------------------------------------------------------------------ inflated hemisphere display separation
+def inflated_separation_enabled() -> bool:
+    """Return whether display-only L/R lateral separation (±35 mm X) is enabled for inflated surfaces."""
+
+    return bool(_INFLATED_SEPARATION_ENABLED)
+
+
+def inflated_separation_offset_mm(
+    hemi: str,
+    *,
+    enabled: Optional[bool] = None,
+    offset_mm: float = INFLATED_SEPARATION_OFFSET_MM,
+) -> float:
+    """RAS X-axis display shift in mm for an inflated hemisphere (``-offset`` for lh, ``+offset`` for rh, else 0)."""
+
+    if hemi not in HEMISPHERES:
+        raise ValueError(f"Unsupported hemisphere for inflated separation: {hemi!r}")
+    active = _INFLATED_SEPARATION_ENABLED if enabled is None else bool(enabled)
+    if not active:
+        return 0.0
+    magnitude = abs(float(offset_mm))
+    return -magnitude if hemi == "lh" else magnitude
+
+
+def inflated_hemisphere_of_node(node: Any) -> Optional[str]:
+    """Return ``'lh'`` or ``'rh'`` if ``node`` is a loaded inflated surface or an overlay on an inflated surface."""
+
+    if node is None or not hasattr(node, "GetAttribute"):
+        return None
+    try:
+        if hasattr(node, "IsA") and not node.IsA("vtkMRMLModelNode"):
+            return None
+    except Exception:
+        return None
+    tagged = node.GetAttribute(INFLATED_HEMISPHERE_ATTR)
+    if tagged in HEMISPHERES:
+        return tagged
+    carrier_surf = carrier_surface_of_node(node)
+    for attr in (PREFIX + "CarrierPath", PREFIX + "SourcePath"):
+        parsed = surface_from_carrier_path(node.GetAttribute(attr))
+        if parsed is not None and parsed[1] == "inflated":
+            return parsed[0]
+        if carrier_surf == "inflated" and parsed is not None:
+            return parsed[0]
+    if carrier_surf == "inflated":
+        parsed_row = morphometry_row(PRODUCT, node.GetAttribute(PREFIX + "SourcePath") or "")
+        if parsed_row is not None and parsed_row[1] in HEMISPHERES:
+            return parsed_row[1]
+    return None
+
+
+def iter_inflated_model_nodes(slicer, *, visible_only: bool = False) -> list:
+    """Return every inflated model node (plain or morphometry overlay on inflated) currently in the Slicer scene."""
+
+    if slicer is None:
+        return []
+    candidates = []
+    util = getattr(slicer, "util", None)
+    if util is not None and hasattr(util, "getNodesByClass"):
+        try:
+            candidates = list(util.getNodesByClass("vtkMRMLModelNode"))
+        except Exception:
+            candidates = []
+    elif getattr(slicer, "mrmlScene", None) is not None and hasattr(slicer.mrmlScene, "GetNodesByClass"):
+        try:
+            collection = slicer.mrmlScene.GetNodesByClass("vtkMRMLModelNode")
+            if collection is not None:
+                candidates = [collection.GetItemAsObject(i) for i in range(collection.GetNumberOfItems())]
+        except Exception:
+            candidates = []
+    matched = []
+    for node in candidates:
+        if inflated_hemisphere_of_node(node) is None:
+            continue
+        if visible_only:
+            try:
+                if not node.GetDisplayVisibility():
+                    continue
+            except Exception:
+                continue
+        matched.append(node)
+    return matched
+
+
+def has_visible_inflated_surface(slicer) -> bool:
+    """Return True when at least one inflated surface (or overlay on an inflated surface) is currently visible."""
+
+    return bool(iter_inflated_model_nodes(slicer, visible_only=True))
+
+
+def _set_linear_transform_x_offset(transform_node: Any, offset_x: float) -> None:
+    """Set a pure X-axis translation on ``transform_node`` without touching polydata vertices or disk files."""
+
+    if transform_node is None:
+        return
+    try:
+        import vtk
+
+        matrix = vtk.vtkMatrix4x4()
+        matrix.Identity()
+        matrix.SetElement(0, 3, float(offset_x))
+    except Exception:
+        matrix = None
+    setter = getattr(transform_node, "SetMatrixTransformToParent", None)
+    if callable(setter) and matrix is not None:
+        setter(matrix)
+    elif hasattr(transform_node, "SetAndObserveMatrixTransformToParent") and matrix is not None:
+        transform_node.SetAndObserveMatrixTransformToParent(matrix)
+    if hasattr(transform_node, "SetAttribute"):
+        transform_node.SetAttribute(INFLATED_OFFSET_ATTR, f"{float(offset_x):.1f}")
+
+
+def apply_inflated_separation(
+    slicer,
+    node: Any,
+    hemi: str,
+    *,
+    enabled: Optional[bool] = None,
+    offset_mm: float = INFLATED_SEPARATION_OFFSET_MM,
+) -> Any:
+    """Attach/update an owned display-only ``vtkMRMLLinearTransformNode`` for ``node`` without modifying disk files."""
+
+    dx = inflated_separation_offset_mm(hemi, enabled=enabled, offset_mm=offset_mm)
+    node.SetAttribute(INFLATED_HEMISPHERE_ATTR, hemi)
+    node.SetAttribute(INFLATED_OFFSET_ATTR, f"{dx:.1f}")
+    scene = getattr(slicer, "mrmlScene", None)
+    if scene is None:
+        return None
+    transform = None
+    existing_id = node.GetAttribute(INFLATED_TRANSFORM_ATTR)
+    if existing_id and hasattr(scene, "GetNodeByID"):
+        candidate = scene.GetNodeByID(existing_id)
+        if candidate is not None and (not hasattr(candidate, "IsA") or candidate.IsA("vtkMRMLLinearTransformNode")):
+            transform = candidate
+    if transform is None:
+        node_name = ""
+        if hasattr(node, "GetName"):
+            try:
+                node_name = str(node.GetName() or "").strip()
+            except Exception:
+                node_name = ""
+        transform_name = f"{node_name or (hemi + '.inflated')} display offset"
+        transform = scene.AddNewNodeByClass("vtkMRMLLinearTransformNode", transform_name)
+        if transform is None:
+            return None
+        if hasattr(transform, "SetHideFromEditors"):
+            try:
+                transform.SetHideFromEditors(True)
+            except Exception:
+                pass
+        if hasattr(transform, "SetAttribute"):
+            transform.SetAttribute(INFLATED_HEMISPHERE_ATTR, hemi)
+        own_nodes(node, [transform])
+        node.SetAttribute(INFLATED_TRANSFORM_ATTR, transform.GetID())
+    _set_linear_transform_x_offset(transform, dx)
+    if hasattr(node, "SetAndObserveTransformNodeID"):
+        node.SetAndObserveTransformNodeID(transform.GetID())
+    return transform
+
+
+def set_inflated_separation_enabled(
+    slicer,
+    enabled: bool,
+    *,
+    offset_mm: float = INFLATED_SEPARATION_OFFSET_MM,
+) -> int:
+    """Toggle L/R inflated hemisphere separation ON/OFF for all loaded inflated surfaces and future loads."""
+
+    global _INFLATED_SEPARATION_ENABLED
+    _INFLATED_SEPARATION_ENABLED = bool(enabled)
+    updated = 0
+    for node in iter_inflated_model_nodes(slicer):
+        hemi = inflated_hemisphere_of_node(node)
+        if hemi in HEMISPHERES:
+            apply_inflated_separation(slicer, node, hemi, enabled=_INFLATED_SEPARATION_ENABLED, offset_mm=offset_mm)
+            updated += 1
+    if slicer is not None and updated:
+        _observe_model_removal(slicer)
+    return updated
+
+
 # --------------------------------------------------------------------------------------- one visible overlay
 def _file_key(path: Any) -> Optional[str]:
     """One spelling per file: the manifest may name the white surface through a symlink."""
@@ -777,6 +968,9 @@ def load_morphometry_row(
                 display.SetColor(0.88, 0.88, 0.82)  # the plain colour of the white surfaces (result_scene)
             node.SetAttribute(PREFIX + "SourceCoordinateSystem", "RAS")
             own_nodes(node, _display_nodes(node))  # review M3: its display node leaves with it
+            transform = apply_inflated_separation(slicer, node, hemi)
+            if transform is not None:
+                created.append(transform)
             _observe_model_removal(slicer)
             return True
         if surfaces is not None:
@@ -811,6 +1005,10 @@ def load_morphometry_row(
             node.SetAttribute(PREFIX + "CarrierSurface", surf)
             node.SetAttribute(PREFIX + "SourceCoordinateSystem", "RAS")
             node.SetAttribute(PREFIX + "MorphometryKind", kind)
+            if surf == "inflated":
+                transform = apply_inflated_separation(slicer, node, hemi)
+                if transform is not None:
+                    created.append(transform)
             node.GetPolyData().GetPointData().AddArray(_point_array(values, array_name, integer=kind == "annotation"))
             node.GetPolyData().GetPointData().Modified()
             if node.GetDisplayNode() is None:

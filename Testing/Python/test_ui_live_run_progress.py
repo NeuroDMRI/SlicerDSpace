@@ -520,7 +520,7 @@ class PrepareInputsCliEndToEndTests(unittest.TestCase):
 
             proc = subprocess.run(
                 [
-                    "/Applications/Slicer.app/Contents/bin/PythonSlicer",
+                    str((Path(sys.executable).with_name("PythonSlicer.exe") if Path(sys.executable).with_name("PythonSlicer.exe").is_file() else Path(sys.executable))),
                     "-u",
                     str(cli_path),
                     "--request",
@@ -562,7 +562,7 @@ class PrepareInputsCliEndToEndTests(unittest.TestCase):
             )
             proc = subprocess.run(
                 [
-                    "/Applications/Slicer.app/Contents/bin/PythonSlicer",
+                    str((Path(sys.executable).with_name("PythonSlicer.exe") if Path(sys.executable).with_name("PythonSlicer.exe").is_file() else Path(sys.executable))),
                     "-u",
                     str(cli_path),
                     "--request",
@@ -695,7 +695,7 @@ class LiveRunProgressPanelTests(unittest.TestCase):
     def test_show_output_files_surfaces_06_qc_txt_and_filters_cache(self) -> None:
         fake_qt = _build_fake_qt_module()
         slicer_mod = types.ModuleType("slicer")
-        slicer_mod.util = SimpleNamespace()
+        slicer_mod.util = SimpleNamespace(getNodesByClass=lambda _cls: [])
         slicer_mod.mrmlScene = SimpleNamespace()
         with tempfile.TemporaryDirectory() as tmp, patch.dict(
             sys.modules, {"qt": fake_qt, "slicer": slicer_mod}
@@ -1000,7 +1000,8 @@ class EnvironmentAndWidgetFlowTests(unittest.TestCase):
                     macos_launcher.write_text("", encoding="utf-8")
                     python_slicer.write_text("", encoding="utf-8")
                     widget._slicer_launcher_program = lambda: str(macos_launcher)
-                    widget._on_prepare_inputs_clicked(run_after=False)
+                    with patch("sys.platform", "darwin"), patch("shared.external_process.sys.platform", "darwin"):
+                        widget._on_prepare_inputs_clicked(run_after=False)
                     proc3 = created_processes[2]
                     mac_prog, mac_args = _unwrap_grouped(proc3.started_with)
                     self.assertEqual(mac_prog, str(python_slicer))

@@ -85,7 +85,7 @@ def nhdr_write(nifti, bval, bvec, nhdr):
         'float64': 'double'
     }
 
-    f = open(nhdr, 'w', encoding='utf-8')
+    f = open(nhdr, 'w', encoding='utf-8', newline='\n')
     console = sys.stdout
     sys.stdout = f
 

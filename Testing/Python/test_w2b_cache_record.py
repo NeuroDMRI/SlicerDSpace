@@ -90,7 +90,7 @@ class W2bCacheKeyTest(unittest.TestCase):
         self.assertEqual(changed.status, "completed")
         manifest = json.loads(changed.manifest_path.read_text(encoding="utf-8"))
         self.assertTrue(manifest["overwrite_existing"])
-        command = next(record["argv"] for record in manifest["commands"] if Path(record["argv"][0]).name == "dwifslpreproc")
+        command = next(record["argv"] for record in manifest["commands"] if Path(record["argv"][0]).stem == "dwifslpreproc")
         self.assertEqual(command[command.index("-pe_dir") + 1], "PA")
 
     def test_w2b_the_orchestrator_resume_check_sees_a_pe_change(self) -> None:

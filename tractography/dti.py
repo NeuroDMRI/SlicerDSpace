@@ -234,6 +234,30 @@ def _streamline_lengths(streamlines: list[object]) -> list[float]:
     return lengths
 
 
+def _resolve_eudx_threads(
+    *,
+    platform_name: Optional[str] = None,
+    stage_cpus: Optional[int] = None,
+    host_cpus: Optional[int] = None,
+) -> int:
+    """Resolve DIPY ``eudx_tracking(nbr_threads=...)`` safely across platforms.
+
+    macOS keeps 1 thread to avoid OpenMP/Cython lock contention under Rosetta 2;
+    explicit cohort stage reservations are honoured verbatim; high-core servers
+    (>32 logical CPUs) cap at 32 to avoid cross-socket NUMA thrashing.
+    """
+    import os as _os
+    import sys as _sys
+
+    plat = (_sys.platform if platform_name is None else str(platform_name)).lower()
+    if plat == "darwin":
+        return 1
+    if stage_cpus is not None:
+        return max(1, int(stage_cpus))
+    cpus = int(_os.cpu_count() or 1) if host_cpus is None else max(1, int(host_cpus))
+    return min(32, cpus) if cpus > 32 else 0
+
+
 def _eudx_length_limits(
     dipy_version: str,
     step_size_mm: float,
@@ -715,18 +739,9 @@ def _run_dipy_dti_tracking(
     )
     stopping_criterion = ThresholdStoppingCriterion(fa, float(config.min_fa))
     if eudx_tracking is not None:
-        import os as _os
-        import sys
         from shared.numeric_threads import reserved_stage_cpus
 
-        stage_cpus = reserved_stage_cpus()
-        if sys.platform == "darwin":
-            eudx_threads = 1
-        elif stage_cpus is not None:
-            eudx_threads = int(stage_cpus)
-        else:
-            host_cpus = int(_os.cpu_count() or 1)
-            eudx_threads = min(32, host_cpus) if host_cpus > 32 else 0
+        eudx_threads = _resolve_eudx_threads(stage_cpus=reserved_stage_cpus())
         min_length, max_length = _eudx_length_limits(
             dipy_version,
             config.step_size_mm,

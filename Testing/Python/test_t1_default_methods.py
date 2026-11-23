@@ -9,6 +9,7 @@ from __future__ import annotations
 import ast
 import inspect
 import json
+import os
 import re
 import sys
 import tempfile
@@ -259,11 +260,21 @@ class AutoBackendRunTest(unittest.TestCase):
         self.root = Path(self._tmp.name)
         self.bin_dir = self.root / "bin"
         self.bin_dir.mkdir()
-        fake = self.bin_dir / "tck2connectome"
-        fake.write_text("#!/bin/sh\n"
-                        "printf '0,0,0,0,0\\n0,2,0,0,7\\n0,0,0,0,0\\n0,0,0,0,0\\n0,0,0,0,3\\n' > \"$3\"\n"
-                        "exit 0\n", encoding="utf-8")
-        fake.chmod(0o755)
+        if os.name == "nt":
+            from win_test_helpers import write_fake_python_cli
+            self.fake_tck2connectome = write_fake_python_cli(
+                self.bin_dir / "tck2connectome",
+                "import pathlib, sys\n"
+                "pathlib.Path(sys.argv[3]).write_text("
+                "'0,0,0,0,0\\n0,2,0,0,7\\n0,0,0,0,0\\n0,0,0,0,0\\n0,0,0,0,3\\n', encoding='utf-8')\n",
+            )
+        else:
+            fake = self.bin_dir / "tck2connectome"
+            fake.write_text("#!/bin/sh\n"
+                            "printf '0,0,0,0,0\\n0,2,0,0,7\\n0,0,0,0,0\\n0,0,0,0,0\\n0,0,0,0,3\\n' > \"$3\"\n"
+                            "exit 0\n", encoding="utf-8")
+            fake.chmod(0o755)
+            self.fake_tck2connectome = fake
         self.tractography = self.root / "streamlines.tck"
         self.tractography.write_text("tck", encoding="utf-8")
         labels = np.zeros((6, 6, 6), dtype=np.int16)
@@ -277,7 +288,7 @@ class AutoBackendRunTest(unittest.TestCase):
                                   parcellation_path=self.parcellation, output_dir=self.root / name,
                                   mrtrix_bin_dir=self.bin_dir, execute=True, **options)
         with mock.patch("connectome.pipeline.inspect_connectome_backends",
-                        return_value={"tck2connectome": (self.bin_dir / "tck2connectome").as_posix(), "python": {}}):
+                        return_value={"tck2connectome": self.fake_tck2connectome.as_posix(), "python": {}}):
             return run_connectome(config)
 
     def test_auto_with_mrtrix_path_compresses_unless_set(self):

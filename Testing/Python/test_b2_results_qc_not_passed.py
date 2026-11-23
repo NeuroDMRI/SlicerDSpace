@@ -13,6 +13,7 @@ import sys
 import tempfile
 import types
 import unittest
+from win_test_helpers import skip_unless_symlinks
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -226,6 +227,7 @@ class UnreadableQcPublishedTaskTest(unittest.TestCase):
 
         self.assertEqual(bundle_outputs(task.task), {})  # the default (bulk and automatic) resolution is unchanged
 
+    @skip_unless_symlinks
     def test_b2_morph_fix_M1_a_file_outside_the_output_dir_is_not_listed(self) -> None:
         task = PublishedTask(self.root)
         outside = self.root / "elsewhere" / "Test1_desc-bundles.wmql_outside.trk"

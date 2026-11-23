@@ -82,7 +82,7 @@ def bundle_outputs(task, *, allow_directory_scan=True, accept_qc_not_passed=Fals
             name_only = Path(value).name
             published_file = published_dir_path / name_only if published_dir_path is not None else None
             if published_file is not None and published_file.is_file() and _published_copy_of(value, published_file):
-                resolved_files["bundle_" + name_only] = str(published_file)
+                resolved_files["bundle_" + name_only] = published_file.as_posix()
             else:
                 resolved_files["bundle_" + name_only] = value
         return resolved_files

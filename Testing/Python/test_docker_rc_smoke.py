@@ -5,6 +5,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 import unittest
+import os
 from pathlib import Path
 
 
@@ -34,6 +35,7 @@ class DockerRCSmokeContractTest(unittest.TestCase):
 
         self.assertIn('update_user_config({"ui": {"first_run_wizard_shown": True}})', script)
 
+    @unittest.skipIf(os.name == "nt", "POSIX bash syntax check runs on POSIX hosts")
     @unittest.skipUnless(shutil.which("bash"), "bash is required")
     def test_runner_has_valid_bash_syntax(self) -> None:
         completed = subprocess.run(

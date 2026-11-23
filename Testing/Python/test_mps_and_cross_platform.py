@@ -177,7 +177,7 @@ class CrossPlatformReliabilityTests(unittest.TestCase):
         import importlib.util
         from shared.external_process import subprocess_no_window_kwargs
 
-        with patch("shared.external_process.os.name", "posix"):
+        with patch("shared.external_process.os.name", "posix"), patch("shared.external_process.sys.platform", "linux"):
             self.assertEqual(subprocess_no_window_kwargs(), {})
         with patch("shared.external_process.os.name", "nt"), \
                 patch("shared.external_process.subprocess.CREATE_NO_WINDOW", 0x08000000, create=True):

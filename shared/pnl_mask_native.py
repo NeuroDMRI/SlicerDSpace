@@ -28,6 +28,15 @@ if sys.platform == "win32":
 
 
 def _prepend_bundled_site_packages() -> None:
+    if "numpy" not in sys.modules:
+        raw = os.environ.get("SLICERDSPACE_BUNDLED_SITE_PACKAGES", "")
+        dirs = [entry for entry in raw.split(os.pathsep) if entry and os.path.isdir(entry)]
+        if dirs and (sys.platform != "win32" or any((Path(d) / "numpy").is_dir() for d in dirs)):
+            norms = {os.path.normcase(os.path.normpath(d)) for d in dirs}
+            sys.path[:] = [
+                *dirs,
+                *(entry for entry in sys.path if os.path.normcase(os.path.normpath(entry)) not in norms),
+            ]
     if sys.platform == "win32":
         try:
             from shared.bundled_python import register_windows_dll_directories
@@ -35,18 +44,6 @@ def _prepend_bundled_site_packages() -> None:
             register_windows_dll_directories()
         except Exception:
             pass
-    if "numpy" in sys.modules:
-        return
-    raw = os.environ.get("SLICERDSPACE_BUNDLED_SITE_PACKAGES", "")
-    dirs = [entry for entry in raw.split(os.pathsep) if entry and os.path.isdir(entry)]
-    if dirs:
-        if sys.platform == "win32" and not any((Path(d) / "numpy").is_dir() for d in dirs):
-            return
-        norms = {os.path.normcase(os.path.normpath(d)) for d in dirs}
-        sys.path[:] = [
-            *dirs,
-            *(entry for entry in sys.path if os.path.normcase(os.path.normpath(entry)) not in norms),
-        ]
         return
     if (Path(sys.executable).parent.parent / "pyvenv.cfg").is_file():
         return

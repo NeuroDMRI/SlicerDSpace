@@ -10,6 +10,7 @@ import json
 import os
 import tempfile
 import unittest
+from win_test_helpers import skip_unless_symlinks
 from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
@@ -223,6 +224,7 @@ class ChooseSubjectTest(SubjectChoiceCase):
         choice = self.choose(self.config(write_nifti(self.tmp / "a")))
         self.assertEqual((choice.subject_id, choice.decision), ("3167", "new"))
 
+    @skip_unless_symlinks
     def test_d3_2_fe1_only_the_environment_folder_is_ignored_and_a_symlink_there_still_counts(self) -> None:
         cfg = self.config(write_nifti(self.tmp / "a"))
         root = self.out / "3167"

@@ -250,31 +250,53 @@ keys = ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "SLICERDSP
 
     def test_surface_resume_check_ignores_the_recorded_threads_only_inside_a_cohort(self):
         from shared import orchestrator
-        manifest = dict(upstream_commit='c', status='completed', input_mode='registered', version=3,
-                        subject_id='S', subject_root=str(Path('/s').resolve()), precision='fp32',
-                        cpu_threads=2, max_gpu_gib=24.)
+        from anatomy.surface.backend_bridge import sha256
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / 's'
+            input_dir = root / 'input'
+            input_dir.mkdir(parents=True)
+            input_hashes = {}
+            for i in range(15):
+                p = input_dir / f'input_{i}.nii.gz'
+                p.write_bytes(f'data-{i}'.encode('ascii'))
+                input_hashes[str(p.resolve())] = sha256(p)
+            manifest = dict(upstream_commit='c', status='completed', input_mode='registered', version=3,
+                            subject_id='S', subject_root=str(root.resolve()), precision='fp32',
+                            cpu_threads=2, max_gpu_gib=24.,
+                            input_sha256=input_hashes,
+                            output_sha256={f'out_{i}.obj': 'b' * 64 for i in range(8)})
             surface_root = root / 'surface'
             surface_root.mkdir(parents=True)
-            (surface_root / 'surface_manifest.json').write_text(json.dumps(dict(manifest, subject_root=str(root.resolve()))))
+            (surface_root / 'surface_manifest.json').write_text(json.dumps(manifest))
             (surface_root / 'surface_qc.json').write_text(json.dumps(dict(automatic_qc_passed=True)))
-            layout = SimpleNamespace(anatomy_input_dir=lambda name: surface_root)
+            layout = SimpleNamespace(
+                anatomy_input_dir=lambda name: surface_root,
+                preproc=root / 'preproc',
+                cache=root / 'cache',
+            )
             seen = []
 
             def after_threads(*args, **kwargs):
                 seen.append('past-thread-check')
                 return False
-            for cohort, expected in (({}, False), ({ENV: '/x'}, True)):
+            # Non-scientific runtime knobs (cpu_threads) do not invalidate surface cache
+            # either outside or inside a cohort; scientific settings (precision) remain strict.
+            for cohort, precision, expected in (
+                ({}, 'fp32', True),
+                ({ENV: '/x'}, 'fp32', True),
+                ({ENV: '/x'}, 'bf16', False),
+            ):
                 seen.clear()
                 with patch.dict(os.environ, cohort), \
                      patch.object(orchestrator, 'subject_layout', return_value=layout), \
                      patch('anatomy.surface.backend_bridge.upstream_record', return_value=dict(commit='c')), \
-                     patch.object(orchestrator, 'interpreter_path', side_effect=after_threads, create=True):
+                     patch('anatomy.surface.pipeline._surface_outputs_match', side_effect=after_threads):
                     config = orchestrator.ProductOrchestratorConfig(
-                        subject_id='S', subject_root=root, targets=('surface',), surface_python_bin=Path('/py'))
+                        subject_id='S', subject_root=root, targets=('surface',),
+                        surface_python_bin=Path('/py'), surface_cpu_threads=8,
+                        surface_precision=precision)
                     orchestrator._surface_complete(root, 'S', config=config)
-                self.assertEqual(bool(seen), expected, cohort)
+                self.assertEqual(bool(seen), expected, (cohort, precision))
 
 
 class TorchThreadTests(unittest.TestCase):

@@ -253,14 +253,20 @@ def _inspect_pnl_managed(config: BrainMaskConfig, system: str | None, missing: l
         resources.append(script)
     search = os.pathsep.join(str(p) for p in (ants, python.parent if python else None) if p)
     search += os.pathsep + os.environ.get("PATH", "")
+    effective_system = system or platform.system()
     for command in ("antsRegistrationSyNQuick.sh", "antsApplyTransforms", "ImageMath"):
         found = shutil.which(command, path=search)
+        if not found and effective_system != "Windows" and os.name == "nt":
+            for entry in search.split(os.pathsep):
+                if entry and (Path(entry) / command).is_file():
+                    found = str(Path(entry) / command)
+                    break
         if found:
             tools[command] = str(Path(found).resolve())
         else:
             missing.append(command)
     tools["ants_bin_dir"] = str(ants) if ants else ""
-    if (system or platform.system()) == "Windows" or os.name == "nt":
+    if effective_system == "Windows":
         missing.append("PNL CNN requires a POSIX external runtime (use Linux/WSL pipeline execution)")
 
 
@@ -622,7 +628,10 @@ def generate_brain_mask(dwi_path: Path, bval_path: Path, bvec_path: Path, output
         if route == "managed":
             # SC-1a: the pre-W-A conda runner (70fb635^1), ANTs 2.3.0 in the managed pnl_cnn runtime.
             models = work / "models"
-            models.symlink_to(tools["model_dir"], target_is_directory=True)
+            try:
+                models.symlink_to(tools["model_dir"], target_is_directory=True)
+            except OSError:
+                models = Path(tools["model_dir"])
             prepend.append(Path(tools["pnl_mask_python"]).parent)
             if tools.get("ants_bin_dir"):
                 prepend.insert(0, Path(tools["ants_bin_dir"]))

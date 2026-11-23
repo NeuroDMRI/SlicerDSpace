@@ -102,6 +102,7 @@ class FastSurferModifiedNoticesTest(unittest.TestCase):
     def test_files_actually_changed_from_upstream_carry_a_modified_notice(self) -> None:
         for modified_file in (
             "anatomy/parcellation/models/networks.py",
+            "anatomy/parcellation/models/sub_module.py",
             "anatomy/parcellation/data_loader/conform.py",
             "anatomy/parcellation/data_loader/load_neuroimaging_data.py",
         ):
@@ -116,7 +117,6 @@ class FastSurferModifiedNoticesTest(unittest.TestCase):
         # These carry the same Apache header but were not touched, so they
         # must not claim a modification that did not happen.
         for unmodified_file in (
-            "anatomy/parcellation/models/sub_module.py",
             "anatomy/parcellation/data_loader/augmentation.py",
         ):
             text = (REPO_ROOT / unmodified_file).read_text(encoding="utf-8")

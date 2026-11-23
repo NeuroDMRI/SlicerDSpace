@@ -7,6 +7,7 @@ import json
 import sys
 import tempfile
 import unittest
+from win_test_helpers import skip_unless_symlinks
 from pathlib import Path
 
 
@@ -104,6 +105,7 @@ class SubjectReportingTest(unittest.TestCase):
             self.assertIn("planned", qc_summary["summary"]["interpretation"])
             self.assertIn("badge-planned", paths.report_html.read_text(encoding="utf-8"))
 
+    @skip_unless_symlinks
     def test_write_output_tree_report_counts_files_symlinks_and_postprocess_qc(self) -> None:
         from shared import subject_layout, write_output_tree_report
 

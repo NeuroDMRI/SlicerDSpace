@@ -824,7 +824,7 @@ class PreprocessingAndBrainMaskReuseAuditTests(unittest.TestCase):
                 subject_v2 = root / "loc2" / "sub-01"
                 subject_v2.parent.mkdir()
                 shutil.move(str(subject_v1), str(subject_v2))
-                tool_v2 = root / "SlicerMoved" / "bin" / "PythonSlicer"
+                tool_v2 = root / "SlicerMoved" / "bin" / tool_v1.name
                 tool_v2.parent.mkdir(parents=True)
                 shutil.move(str(tool_v1), str(tool_v2))
                 out_v2 = subject_v2 / "preprocessed" / "nodif_brain_mask.nii.gz"

@@ -2,6 +2,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from win_test_helpers import skip_unless_symlinks
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -25,6 +26,7 @@ class AcceptanceIsolationTest(unittest.TestCase):
                    return_value=f"SLICER_HOME={self.source}\n"):
             return private_slicer_home("Slicer", self.root / "private")
 
+    @skip_unless_symlinks
     def test_runtime_links_do_not_share_revision_settings(self):
         settings = self.prepare()
         self.assertEqual((self.root / "private/bin").resolve(), self.source / "bin")
@@ -33,6 +35,7 @@ class AcceptanceIsolationTest(unittest.TestCase):
         self.assertIn(f"SLICER_HOME={self.root / 'private'}", settings.read_text())
         self.assertEqual((self.source / "slicer.org/Slicer-34045.ini").read_text(), "shared-settings")
 
+    @skip_unless_symlinks
     def test_rerun_reuses_only_matching_runtime_links(self):
         self.assertEqual(self.prepare(), self.prepare())
 

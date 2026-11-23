@@ -454,7 +454,11 @@ def _wmql_complete(
             return False
         if atlas_mode != 'native':
             from tractography.wmql_atlas import prepared_atlas_current
-            if not prepared_atlas_current(manifest.get('atlas_preparation') or {}, parcellation):
+            if not prepared_atlas_current(
+                manifest.get('atlas_preparation') or {},
+                parcellation,
+                search_dirs=(qc_path.parent, qc_path.parent.parent),
+            ):
                 return False
         official = query_preset == 'official'
         catalogue = query_preset in CATALOG_PRESETS
@@ -468,12 +472,17 @@ def _wmql_complete(
         if catalogue and (manifest.get('query_preset', 'official') != query_preset
                           or tuple(manifest.get('query_selection', ())) != selected):
             return False
+        bundled_query = bundled_wmql_query_path(query_preset)
+        bundled_sha = hashlib.sha256(bundled_query.read_bytes()).hexdigest()
+        if manifest.get('query_sha256') != bundled_sha:
+            return False
         query = Path(manifest.get('query_path') or '')
-        if not query.is_file() or manifest.get('query_sha256') != hashlib.sha256(query.read_bytes()).hexdigest():
+        if query.is_file():
+            if manifest.get('query_sha256') != hashlib.sha256(query.read_bytes()).hexdigest():
+                return False
+        elif not catalogue:
             return False
-        if manifest.get('query_sha256') != hashlib.sha256(bundled_wmql_query_path(query_preset).read_bytes()).hexdigest():
-            return False
-        if not wmql_query_cache_current(manifest):
+        if not wmql_query_cache_current(manifest, output_dir=qc_path.parent, query_preset=query_preset if catalogue else None):
             return False
         if catalogue and not any(Path(path).name == 'FreeSurfer.qry' and digest == AUTHOR_ALIAS_SHA256
                                 for path, digest in manifest.get('query_dependencies', {}).items()):
@@ -1477,22 +1486,27 @@ def _wma_complete(
         )
         if manifest.get("execution_backend", "legacy") != execution_backend:
             return False
-        expected_dependencies = {
-            key: path
-            for key, path in {
-                "input_tractography": input_tractography,
-                "atlas_dir": atlas_dir,
-            }.items()
-            if path is not None
-        }
-        if expected_dependencies and not _manifest_inputs_match(
+        if input_tractography is not None and not _manifest_inputs_match(
             manifest_path,
-            expected_dependencies,
+            {"input_tractography": input_tractography},
             "dependencies",
         ):
             return False
-        prepared_input = Path(str(manifest.get("prepared_input_tractography") or ""))
-        if not prepared_input.is_file():
+        if atlas_dir is not None:
+            from tractography.wma import inspect_wma_org_atlas
+
+            if not Path(atlas_dir).is_dir() or not inspect_wma_org_atlas(atlas_dir, atlas_family)["available"]:
+                return False
+        from shared.cache_reuse import resolve_relocated_file
+
+        prepared_candidates = [output_dir / "input", output_dir]
+        if input_tractography is not None:
+            prepared_candidates.append(Path(input_tractography).parent)
+        prepared_input = resolve_relocated_file(
+            manifest.get("prepared_input_tractography") or "",
+            prepared_candidates,
+        )
+        if prepared_input is None or not prepared_input.is_file():
             return False
         summary = summarize_wma_outputs(
             output_dir, prepared_input, registration_mode=manifest.get("registration_mode", "rig"),
@@ -1509,6 +1523,25 @@ def _wma_complete(
         return False
     return (_wma_output_contract_error(summary) is None
             and summary.get('tract_sampling', {}).get('all_tract_sampling_passed') is True)
+
+
+def _tractcloud_model_inputs_match(recorded: object, expected: object) -> bool:
+    if not isinstance(recorded, dict) or not isinstance(expected, dict):
+        return False
+    if set(recorded.keys()) != set(expected.keys()):
+        return False
+    for key, exp_info in expected.items():
+        rec_info = recorded.get(key)
+        if not isinstance(rec_info, dict) or not isinstance(exp_info, dict):
+            return False
+        if bool(rec_info.get("exists")) != bool(exp_info.get("exists")):
+            return False
+        if exp_info.get("exists"):
+            if rec_info.get("size") != exp_info.get("size"):
+                return False
+            if rec_info.get("sha256") != exp_info.get("sha256"):
+                return False
+    return True
 
 
 def _tractcloud_complete(
@@ -1539,13 +1572,11 @@ def _tractcloud_complete(
         if manifest.get('adapter_revision') != ADAPTER_REVISION:
             return False
         if config is not None:
-            if manifest.get('batch_size') != config.tractcloud_batch_size:
-                return False
-            if config.tractcloud_device not in {'auto', ''} and manifest.get('device') != config.tractcloud_device:
-                return False
-            if config.tractcloud_root is not None and manifest.get('tractcloud_root') != str(config.tractcloud_root.expanduser().resolve()):
-                return False
-            if manifest.get('dependencies', {}).get('model_inputs') != model_input_signature(config.tractcloud_data_dir):
+            # Exclude execution/install-path knobs (batch_size, device, tractcloud_root);
+            # keep strict content verification of model weights & reference templates.
+            recorded_models = manifest.get('dependencies', {}).get('model_inputs')
+            expected_models = model_input_signature(config.tractcloud_data_dir)
+            if not _tractcloud_model_inputs_match(recorded_models, expected_models):
                 return False
 
         if input_tractography is not None and not _manifest_inputs_match(
@@ -1672,17 +1703,28 @@ def _saf_complete(
             implementation = record.get("implementation")
             if not isinstance(implementation, dict) or implementation.get("revision") != IMPLEMENTATION_REVISION:
                 return False
-        expected_dependencies = {
-            key: path
-            for key, path in {"fod": fod_path, "fs_dir": fs_dir}.items()
-            if path is not None
-        }
-        if expected_dependencies and not _manifest_inputs_match(
+        if fod_path is not None and not _manifest_inputs_match(
             manifest_path,
-            expected_dependencies,
+            {"fod": fod_path},
             "inputs",
         ):
             return False
+        if fs_dir is not None:
+            if not Path(fs_dir).is_dir():
+                return False
+            recorded_inputs = manifest.get("inputs") or {}
+            surface_records = recorded_inputs.get("fs_surface_inputs")
+            if isinstance(surface_records, dict) and surface_records:
+                for rel_path, rec in surface_records.items():
+                    if not _file_record_matches(rec, Path(fs_dir) / rel_path):
+                        return False
+            else:
+                # Legacy SAF manifests only recorded the directory stat (whose mtime_ns
+                # changes on log writes or folder moves); validate required surface files instead.
+                from tractography.saf import SAF_FS_CORE_RELATIVE_PATHS
+
+                if not all(_nonempty_file(Path(fs_dir) / rel) for rel in SAF_FS_CORE_RELATIVE_PATHS):
+                    return False
         if config is not None and not _saf_parameters_current(config, manifest_path):
             return False
         scientific_summary = qc.get("scientific_output_summary")
@@ -1866,17 +1908,9 @@ def _resolve_analysis_inputs(
 
 
 def _file_record_matches(record: object, path: Path) -> bool:
-    if not isinstance(record, dict) or not path.exists():
-        return False
-    try:
-        stat = path.stat()
-        return (
-            Path(str(record.get("path") or "")).resolve() == path.resolve()
-            and int(record.get("size", -1)) == stat.st_size
-            and int(record.get("mtime_ns", -1)) == stat.st_mtime_ns
-        )
-    except (OSError, TypeError, ValueError):
-        return False
+    from shared.cache_reuse import file_record_matches
+
+    return file_record_matches(record, path, allow_relocated=True, require_same_name=True)
 
 
 def _manifest_inputs_match(manifest_path: Path, inputs: dict[str, Path], field: str) -> bool:
@@ -1914,6 +1948,7 @@ def _tensor_bundle_key_current(record_path: Path, nested: bool = False, dwi=None
     """Gradient frame (batch 2, G3): a product of a DTI bundle is reused when the fix leaves its DWI unchanged, else only
     when its recorded bundle key (``record_path``, or a ``nested`` ``native_bundle.manifest``) equals the current key."""
     from types import SimpleNamespace
+    from shared.cache_reuse import resolve_relocated_file
     from shared.pipeline import _native_manifest
 
     if _gradient_frame_no_op(dwi):
@@ -1921,8 +1956,16 @@ def _tensor_bundle_key_current(record_path: Path, nested: bool = False, dwi=None
     try:
         record = _read_json(record_path)
         native = record['native_bundle']['manifest'] if nested else record
-        raw = SimpleNamespace(subject_id=native.get('subject_id'), **{
-            key + '_path': Path(native['source_files'][key]['path']) for key in ('dwi', 'bval', 'bvec', 'mask')})
+        search_dirs = [Path(dwi).parent] if dwi is not None else []
+        source_paths = {}
+        for key in ('dwi', 'bval', 'bvec', 'mask'):
+            if key == 'dwi' and dwi is not None and Path(dwi).is_file():
+                source_paths[key + '_path'] = Path(dwi)
+            else:
+                recorded_src = native['source_files'][key]['path']
+                resolved = resolve_relocated_file(recorded_src, search_dirs)
+                source_paths[key + '_path'] = resolved if resolved is not None else Path(recorded_src)
+        raw = SimpleNamespace(subject_id=native.get('subject_id'), **source_paths)
         expected = _native_manifest(raw, SimpleNamespace(fit_method=native.get('fit_method')))
         if record.get('kind') == 'registered_dti_bundle' and record.get('implementation') != expected['preparation_implementation']:
             return False
@@ -1935,7 +1978,13 @@ def _ddseg_tensor_source_current(subject_root: Path, output_root: Optional[Path]
     """G3b: ``ddseg_source.json`` records the native bundle key the DDSeg run read (orchestrator runs only). A record
     without it (base era, standalone DDSeg) stays reusable only for an input that the fix leaves unchanged."""
     try:
-        dwi = qc.get('source_dwi') or _resolve_raw_inputs(subject_root, output_root)['dwi']
+        recorded_dwi = qc.get('source_dwi')
+        if recorded_dwi and Path(recorded_dwi).is_file():
+            dwi = Path(recorded_dwi)
+        else:
+            dwi = _resolve_analysis_inputs(subject_root, subject_root.name, output_root).get('dwi')
+            if dwi is None or not Path(dwi).is_file():
+                dwi = _resolve_raw_inputs(subject_root, output_root)['dwi']
     except Exception:
         dwi = None
     return _tensor_bundle_key_current(source, dwi=dwi)
@@ -1992,8 +2041,7 @@ def _csd_bundle_parameters_current(config, manifest_path):
                    and params.get('min_length_mm') == csd_opts['min_length_mm']
                    and params.get('max_length_mm') == csd_opts['max_length_mm']
                    and params.get('random_seed') == csd_opts['random_seed']
-                   and params.get('seeding') == csd_opts['seeding']
-                   and params.get('nthreads') == config.mrtrix_nthreads)
+                   and params.get('seeding') == csd_opts['seeding'])
         if not base_ok:
             return False
         if config.csd_act_parameters:
@@ -2152,7 +2200,11 @@ def _preprocessing_complete(
     if config is None:
         return True
     try:
-        from preprocessing.pipeline import _preprocessing_cache_key, inspect_preprocessing_backend
+        from preprocessing.pipeline import (
+            _preprocessing_cache_key,
+            inspect_preprocessing_backend,
+            preprocessing_cache_key_matches,
+        )
         from shared.pipeline import RawInputBundle
 
         expected = _preprocessing_config(config, subject_root, current.preproc_dir)
@@ -2164,7 +2216,10 @@ def _preprocessing_complete(
             dwi_path=raw["dwi"], bval_path=raw["bval"], bvec_path=raw["bvec"], mask_path=raw["mask"],
             cache_root=subject_layout(subject_root, output_root=output_root).cache,
         )
-        return current.cache_key == _preprocessing_cache_key(bundle, expected, inspect_preprocessing_backend(expected))
+        return preprocessing_cache_key_matches(
+            current.cache_key,
+            _preprocessing_cache_key(bundle, expected, inspect_preprocessing_backend(expected)),
+        )
     except (OSError, ValueError, TypeError, AttributeError):
         return False
 
@@ -2262,11 +2317,21 @@ def _anatomy_input_bundle(
 
 
 def _write_anatomy_source(path: Path, bundle, prepared_source=None, tensor_key=None) -> None:
+    from shared.cache_reuse import file_records_equivalent, sha256_file
     from shared.pipeline import _cache_file_signature, _write_manifest
-    sources = {key: _cache_file_signature(getattr(bundle, key + '_path'))
-               for key in ('dwi', 'bval', 'bvec', 'mask')}
-    if prepared_source is not None and sources != prepared_source:
-        raise RuntimeError('Anatomical inputs changed after shared preparation; outputs are not reusable')
+
+    base_sources = {key: _cache_file_signature(getattr(bundle, key + '_path'))
+                    for key in ('dwi', 'bval', 'bvec', 'mask')}
+    if prepared_source is not None:
+        if (not isinstance(prepared_source, dict)
+                or set(prepared_source.keys()) != set(base_sources.keys())
+                or any(not file_records_equivalent(prepared_source.get(key), base_sources[key], allow_relocated=False)
+                       for key in base_sources)):
+            raise RuntimeError('Anatomical inputs changed after shared preparation; outputs are not reusable')
+    sources = {
+        key: {**sig, "sha256": sha256_file(getattr(bundle, key + '_path'))}
+        for key, sig in base_sources.items()
+    }
     record = {
         "kind": "anatomy_source",
         "version": 2,
@@ -2282,13 +2347,21 @@ def _write_anatomy_source(path: Path, bundle, prepared_source=None, tensor_key=N
 
 
 def _anatomy_source_current(path, subject_root, output_root):
-    from shared.pipeline import _cache_file_signature
+    from shared.cache_reuse import file_record_matches
     try:
         record = _read_json(path)
         if record.get('version') != 2 or not record.get('subject_id'):
             return False
+        source_files = record.get('source_files')
+        if not isinstance(source_files, dict):
+            return False
         inputs = _resolve_analysis_inputs(subject_root, record['subject_id'], output_root)
-        return record.get('source_files') == {key: _cache_file_signature(value) for key, value in inputs.items()}
+        if set(source_files.keys()) != set(inputs.keys()):
+            return False
+        return all(
+            file_record_matches(source_files.get(key), value, allow_relocated=True, require_same_name=True)
+            for key, value in inputs.items()
+        )
     except (OSError, ValueError, TypeError, AttributeError):
         return False
 
@@ -2415,7 +2488,14 @@ def _segmentation_complete(subject_root: Path, output_root: Optional[Path] = Non
         schema_version = int(qc.get('schema_version') or 0)
         from shared.pipeline import _artifact_record
         artifacts = {key: _artifact_record(path, verify_content=True) for key, path in outputs.items() if key != 'qc'}
-        if qc.get('output_artifacts') != artifacts:
+        recorded_artifacts = qc.get('output_artifacts')
+        if (not isinstance(recorded_artifacts, dict)
+                or set(recorded_artifacts.keys()) != set(artifacts.keys())
+                or any(
+                    not isinstance(recorded_artifacts.get(key), dict)
+                    or recorded_artifacts[key].get('sha256') != artifacts[key]['sha256']
+                    for key in artifacts
+                )):
             return False
         if not _ddseg_tensor_source_current(subject_root, output_root, qc, outputs['qc'].parent / 'ddseg_source.json'):
             return False
@@ -2456,32 +2536,67 @@ def _parcellation_outputs(subject_root: Path, subject_id: str, output_root: Opti
 
 
 def _parcellation_complete(subject_root: Path, subject_id: str, output_root: Optional[Path] = None) -> bool:
+    from shared.cache_reuse import file_record_matches, resolve_relocated_file
     from shared.scalar_qc import scalar_qc_current
 
     outputs = _parcellation_outputs(subject_root, subject_id, output_root)
     source = outputs['wmparc'].parent / 'ddparcel_source.json'
     if source.exists() and not _anatomy_source_current(source, subject_root, output_root):
         return False
+    inputs = _resolve_analysis_inputs(subject_root, subject_id, output_root)
     receipt = outputs['wmparc'].parent / 'ddparcel_preparation.json'
     if receipt.exists():
-        from shared.pipeline import _artifact_record, _cache_file_signature
+        from shared.pipeline import _artifact_record
         try:
             record = _read_json(receipt)
-            inputs = _resolve_analysis_inputs(subject_root, subject_id, output_root)
-            if record.get('source_inputs') != {key: _cache_file_signature(path) for key, path in inputs.items()}:
+            rec_sources = record.get('source_inputs')
+            if (not isinstance(rec_sources, dict)
+                    or set(rec_sources.keys()) != set(inputs.keys())
+                    or any(not file_record_matches(rec_sources.get(key), path, allow_relocated=True, require_same_name=True)
+                           for key, path in inputs.items())):
                 return False
-            if not record.get('inputs') or any(_artifact_record(Path(path))['sha256'] != digest
-                    for path, digest in record['inputs'].items()):
+            recorded_inputs = record.get('inputs')
+            if not isinstance(recorded_inputs, dict) or not recorded_inputs:
                 return False
+            # Filter out `.py` source files from legacy v1 receipts so CodeOverlay edits
+            # never invalidate verified DDParcel outputs.
+            non_py_inputs = {
+                path: digest for path, digest in recorded_inputs.items()
+                if Path(str(path)).suffix.lower() != '.py'
+            }
+            if not non_py_inputs:
+                return False
+            layout = subject_layout(subject_root, output_root=output_root)
+            from anatomy.parcellation.pipeline import _default_weights_dir
+            default_weights = _default_weights_dir()
+            search_dirs = [
+                subject_root / "input",
+                layout.preproc,
+                layout.cache,
+                default_weights,
+                *(p for p in (default_weights.glob("*") if default_weights.is_dir() else ()) if p.is_dir()),
+            ]
+            resolved_manifests: list[Path] = []
+            for recorded_path, digest in non_py_inputs.items():
+                target = resolve_relocated_file(recorded_path, search_dirs, subject_root=subject_root)
+                if target is None or _artifact_record(target)['sha256'] != digest:
+                    return False
+                if target.name == 'manifest.json':
+                    resolved_manifests.append(target)
             # G3: the receipt holds the sha256 of the registered bundle manifest the product was made from.
-            registered = [Path(path) for path in record['inputs'] if Path(path).name == 'manifest.json']
-            if len(registered) != 1 or not _tensor_bundle_key_current(registered[0], nested=True, dwi=inputs.get('dwi')):
+            if len(resolved_manifests) != 1 or not _tensor_bundle_key_current(
+                resolved_manifests[0], nested=True, dwi=inputs.get('dwi')
+            ):
                 return False
         except (OSError, ValueError, TypeError, AttributeError):
             return False
-    elif not _gradient_frame_no_op(_resolve_analysis_inputs(subject_root, subject_id, output_root).get('dwi')):
+    elif not _gradient_frame_no_op(inputs.get('dwi')):
         return False  # G3: no receipt, so the bundle it was made from is unknown
-    return scalar_qc_current(outputs["wmparc"].parent / "ddparcel_qc.json", list(outputs.values()))
+    return scalar_qc_current(
+        outputs["wmparc"].parent / "ddparcel_qc.json",
+        list(outputs.values()),
+        source_paths={"native_mask": inputs["mask"]} if inputs.get("mask") is not None else None,
+    )
 
 
 def _surface_outputs(subject_root: Path, subject_id: str, output_root: Optional[Path] = None) -> dict[str, Path]:
@@ -2498,7 +2613,16 @@ def _surface_outputs(subject_root: Path, subject_id: str, output_root: Optional[
 def _surface_complete(subject_root: Path, subject_id: str, output_root: Optional[Path] = None,
                       *, config: Optional[ProductOrchestratorConfig] = None) -> bool:
     from anatomy.surface.backend_bridge import sha256, upstream_record
-    surface_root = _ddsurfer_stage_dir(subject_layout(subject_root, output_root=output_root))
+    from anatomy.surface.pipeline import (
+        SURFACE_PIPELINE_CONTRACT_VERSION,
+        SurfaceConfig,
+        _surface_outputs_match,
+        inspect_surface_resources,
+    )
+    from shared.cache_reuse import names_equal, resolve_relocated_file
+
+    layout = subject_layout(subject_root, output_root=output_root)
+    surface_root = _ddsurfer_stage_dir(layout)
     try:
         manifest = json.loads((surface_root / 'surface_manifest.json').read_text(encoding='utf-8'))
         qc = json.loads((surface_root / 'surface_qc.json').read_text(encoding='utf-8'))
@@ -2507,35 +2631,107 @@ def _surface_complete(subject_root: Path, subject_id: str, output_root: Optional
             return False
         # Raw resume must reach upstream preflight, which verifies the complete
         # input/runtime signature and final-result receipt before skipping work.
-        if manifest.get('input_mode') != 'registered' or manifest.get('version', 0) < 3:
+        # Both 'registered' and 'shared_raw' record complete input/output SHA-256 receipts.
+        input_mode = manifest.get('input_mode')
+        if input_mode not in ('registered', 'shared_raw') or manifest.get('version', 0) < 3:
             return False
-        if (manifest.get('subject_id') != subject_id
-                or manifest.get('subject_root') != str(subject_root.resolve())):
+        if manifest.get('pipeline_contract_version', SURFACE_PIPELINE_CONTRACT_VERSION) != SURFACE_PIPELINE_CONTRACT_VERSION:
+            return False
+        if manifest.get('subject_id') != subject_id:
+            return False
+        if manifest.get('predict_mode', 'all') != 'all':
             return False
         expected = config or ProductOrchestratorConfig(subject_id=subject_id, subject_root=subject_root, targets=('surface',))
-        # SPEC-GAP: without an explicit value the thread count follows the stage reservation,
-        # so inside a cohort the recorded count is not compared (outside it, 4 is expected).
-        from shared.cohort_schedule import cohort_active
-        threads_match = (expected.surface_cpu_threads is None and cohort_active()) or (
-            manifest.get('cpu_threads') == (expected.surface_cpu_threads or 4))
-        if (manifest.get('precision') != expected.surface_precision
-                or not threads_match
-                or manifest.get('max_gpu_gib') != expected.surface_max_gpu_gib):
-            return False
-        if expected.surface_python_bin and manifest.get('runtime', {}).get('executable') != str(interpreter_path(expected.surface_python_bin)):
-            return False
-        if expected.surface_atlas_t2 and manifest.get('resources', {}).get('registration_atlas') != str(expected.surface_atlas_t2.resolve()):
+        # Execution/runtime knobs (cpu_threads, max_gpu_gib, device, runtime path, subject_root path)
+        # do not alter scientific validity; precision and explicit atlas content remain strict.
+        if manifest.get('precision') != expected.surface_precision:
             return False
         inputs, outputs = manifest.get('input_sha256', {}), manifest.get('output_sha256', {})
-        if len(inputs) < 15 or len(outputs) != 8:
+        if not isinstance(inputs, dict) or not isinstance(outputs, dict):
             return False
-        for path, digest in {**inputs, **outputs}.items():
-            if Path(path).is_symlink() or sha256(path) != digest:
+        # Ignore `.py` entries from legacy v3 manifests so CodeOverlay edits never trigger reruns.
+        non_py_inputs = {
+            path: digest for path, digest in inputs.items()
+            if Path(str(path)).suffix.lower() != '.py'
+        }
+        if len(non_py_inputs) < 15 or len(outputs) != 8:
+            return False
+
+        search_dirs: list[Path] = [subject_root / 'input', layout.preproc, layout.cache]
+        try:
+            res = inspect_surface_resources(SurfaceConfig(
+                subject_id=subject_id,
+                subject_root=subject_root,
+                output_dir=surface_root,
+                template_dir=expected.surface_template_dir,
+                checkpoint_root=expected.surface_checkpoint_root,
+                registration_atlas=expected.surface_atlas_t2,
+                model_assets_dir=expected.model_assets_dir,
+            ))
+            for key in ('template_dir', 'checkpoint_root'):
+                if res.get(key):
+                    search_dirs.append(Path(res[key]))
+            if res.get('registration_atlas'):
+                search_dirs.append(Path(res['registration_atlas']).parent)
+        except Exception:
+            pass
+
+        if expected.surface_atlas_t2 is not None:
+            atlas_path = expected.surface_atlas_t2.expanduser().resolve()
+            if not atlas_path.is_file():
                 return False
-        required = set(map(str, _surface_outputs(subject_root, subject_id, output_root).values()))
+            expected_atlas_sha = sha256(atlas_path)
+            recorded_atlas_path = (manifest.get('resources') or {}).get('registration_atlas')
+            matched_atlas_sha = None
+            if recorded_atlas_path and recorded_atlas_path in non_py_inputs:
+                matched_atlas_sha = non_py_inputs[recorded_atlas_path]
+            else:
+                for p, d in non_py_inputs.items():
+                    if names_equal(p, atlas_path):
+                        matched_atlas_sha = d
+                        break
+            if matched_atlas_sha is not None:
+                if matched_atlas_sha != expected_atlas_sha:
+                    return False
+            elif recorded_atlas_path and Path(recorded_atlas_path).is_file():
+                if sha256(recorded_atlas_path) != expected_atlas_sha:
+                    return False
+            elif recorded_atlas_path and str(Path(recorded_atlas_path).resolve()) != str(atlas_path):
+                return False
+
+        verified_entries: list[tuple[Path, str]] = []
+        for recorded_path, digest in non_py_inputs.items():
+            raw_p = Path(str(recorded_path))
+            if raw_p.exists() or raw_p.is_symlink():
+                if raw_p.is_symlink() or sha256(raw_p) != digest:
+                    return False
+                verified_entries.append((raw_p, digest))
+            else:
+                relocated = resolve_relocated_file(recorded_path, search_dirs, subject_root=subject_root)
+                if relocated is None or relocated.is_symlink() or sha256(relocated) != digest:
+                    return False
+                verified_entries.append((relocated, digest))
+
+        if input_mode == 'shared_raw':
+            # Ensure the current analysis bundle (raw vs preprocessed, or modified DWI/bval/bvec/mask)
+            # matches the verified inputs recorded in this shared_raw manifest.
+            analysis_inputs = _resolve_analysis_inputs(subject_root, subject_id, output_root)
+            for analysis_path in analysis_inputs.values():
+                if not analysis_path.is_file():
+                    return False
+                current_sha = sha256(analysis_path)
+                if not any(
+                    names_equal(rec_path, analysis_path) and rec_sha == current_sha
+                    for rec_path, rec_sha in verified_entries
+                ):
+                    return False
+
         native = surface_root / 'pred_results_SlicerDSpace/native' / subject_id
-        required.update(str(native / f'{hemi}.{kind}.obj') for hemi in ('lh', 'rh') for kind in ('white', 'pial'))
-        if not required.issubset(outputs):
+        required_paths = [
+            *_surface_outputs(subject_root, subject_id, output_root).values(),
+            *(native / f'{hemi}.{kind}.obj' for hemi in ('lh', 'rh') for kind in ('white', 'pial')),
+        ]
+        if not _surface_outputs_match(outputs, required_paths):
             return False
     except (OSError, ValueError, TypeError, AttributeError):
         return False
@@ -2607,6 +2803,38 @@ def _surface_postprocess_required_files(structural_root: Path, mode: str = "whol
     )
 
 
+def _legacy_postprocess_sizes_match(artifacts: dict, required: list[Path], structural_root: Path) -> bool:
+    """Check 1-to-1 byte-size match for legacy pre-sha256 postprocess artifact records."""
+    from shared.cache_reuse import names_equal, paths_equal
+
+    unused = dict(artifacts)
+    resolved_root = structural_root.resolve()
+    for path in required:
+        if not path.is_file():
+            return False
+        exact = str(path.resolve())
+        key = exact if exact in unused else next((k for k in unused if paths_equal(k, path)), None)
+        if key is None:
+            try:
+                rel = tuple(os.path.normcase(p) for p in path.resolve().relative_to(resolved_root).parts)
+            except ValueError:
+                rel = ()
+            matches = [
+                k for k in unused
+                if rel and tuple(os.path.normcase(p) for p in Path(str(k)).parts[-len(rel):]) == rel
+            ]
+            if len(matches) != 1:
+                matches = [k for k in unused if names_equal(k, path)]
+            if len(matches) == 1:
+                key = matches[0]
+        if key is None:
+            return False
+        entry = unused.pop(key)
+        if not isinstance(entry, dict) or int(entry.get("size", -1)) != path.stat().st_size:
+            return False
+    return not unused
+
+
 def _surface_postprocess_complete(
     subject_root: Path,
     subject_id: str,
@@ -2624,12 +2852,16 @@ def _surface_postprocess_complete(
         manifest = json.loads(outputs['manifest'].read_text(encoding='utf-8'))
     except (OSError, ValueError):
         return False
-    native_dir = native_dir or Path(manifest.get('native_dir') or
-                                    _surface_postprocess_native_dir(subject_root, subject_id, output_root))
+    if native_dir is None:
+        canonical_native = _surface_postprocess_native_dir(subject_root, subject_id, output_root)
+        recorded_native = Path(manifest['native_dir']) if manifest.get('native_dir') else None
+        native_dir = canonical_native if canonical_native.is_dir() else (recorded_native or canonical_native)
     hemis = ('lh',) if mode == 'left' else ('rh',) if mode == 'right' else ('lh', 'rh')
     if (manifest.get('kind') == 'ddsurfer_surface_only_postprocess' or
             any((native_dir / f'{hemi}.{kind}.obj').is_file() for hemi in hemis for kind in ('white', 'pial'))):
-        from anatomy.surface.backend_bridge import native_surface_hashes, upstream_record
+        from anatomy.surface.backend_bridge import native_surface_hashes, sha256, upstream_record
+        from shared.cache_reuse import artifact_map_matches, resolve_relocated_file
+        from shared.surface_runtime import surface_runtime_identity, surface_runtime_matches
         try:
             current = native_surface_hashes(native_dir, mode)
             if (manifest.get('status') != 'completed'
@@ -2637,24 +2869,34 @@ def _surface_postprocess_complete(
                     or any(manifest.get('native_sha256', {}).get(k) != v for k, v in current.items())):
                 return False
             expected_atlases = list(atlases or ('aparc', 'aparc.a2009s'))
-            if manifest.get('cache_signature', {}).get('atlases') != expected_atlases:
-                return False
             signature = manifest.get('cache_signature') or {}
-            if runtime is not None or freesurfer_home is not None:
-                from shared.surface_runtime import surface_runtime_identity
-                if signature.get('surface_runtime') != surface_runtime_identity(runtime, freesurfer_home):
-                    return False
+            if signature.get('atlases') != expected_atlases:
+                return False
             if signature.get('mode') != mode:
                 return False
-            runtime = signature.get('surface_runtime')
-            if runtime is not None:
-                from anatomy.surface.backend_bridge import sha256
-                record = Path(runtime['home']) / ('runtime.json' if runtime['backend'] == 'native' else 'build-stamp.txt')
-                if (sha256(record) if record.is_file() else None) != runtime.get('record_sha256'):
+            recorded_rt = signature.get('surface_runtime')
+            if runtime is not None or freesurfer_home is not None:
+                if not surface_runtime_matches(recorded_rt, surface_runtime_identity(runtime, freesurfer_home)):
                     return False
+            elif recorded_rt is not None:
+                try:
+                    current_rt = surface_runtime_identity(None, None)
+                except Exception:
+                    current_rt = None
+                if current_rt is not None:
+                    if not surface_runtime_matches(recorded_rt, current_rt):
+                        return False
+                else:
+                    record = Path(recorded_rt['home']) / ('runtime.json' if recorded_rt['backend'] == 'native' else 'build-stamp.txt')
+                    if (sha256(record) if record.is_file() else None) != recorded_rt.get('record_sha256'):
+                        return False
             if signature.get('brain_source'):
-                from anatomy.surface.backend_bridge import sha256
-                if sha256(Path(signature['brain_source'])) != signature.get('brain_sha256'):
+                brain_target = resolve_relocated_file(
+                    signature['brain_source'],
+                    (subject_root / 'mri', subject_root / 'reference', subject_root),
+                    subject_root=subject_root,
+                )
+                if brain_target is None or sha256(brain_target) != signature.get('brain_sha256'):
                     return False
             qc = _read_json(outputs['qc'])
             integrity = qc.get('integrity') or {}
@@ -2662,12 +2904,20 @@ def _surface_postprocess_complete(
             if (integrity.get('version') != 1 or integrity.get('automatic_qc_passed') is not True
                     or not isinstance(checks, dict) or not checks or not all(value is True for value in checks.values())):
                 return False
-            from shared.scalar_qc import _signature
-            from anatomy.surface.postprocess_qc import postprocess_output_paths
+            from anatomy.surface.postprocess_qc import postprocess_output_paths, validate_postprocess_outputs
             artifacts = integrity.get('output_artifacts')
             required = postprocess_output_paths(structural_root, hemis, expected_atlases, stats_dir=outputs['stats'])
-            if artifacts != {str(path.resolve()): _signature(path) for path in required}:
-                return False
+            if not artifact_map_matches(artifacts, required, root=structural_root, allow_relocated=True):
+                legacy_no_sha = (
+                    isinstance(artifacts, dict)
+                    and len(artifacts) == len(required)
+                    and all(not (isinstance(entry, dict) and entry.get('sha256')) for entry in artifacts.values())
+                    and _legacy_postprocess_sizes_match(artifacts, required, structural_root)
+                )
+                if not (legacy_no_sha and validate_postprocess_outputs(
+                    structural_root, hemis, expected_atlases, stats_dir=outputs['stats']
+                ).get('automatic_qc_passed') is True):
+                    return False
             if not all(_nonempty_file(structural_root / 'label' / f'{hemi}.{atlas}.annot')
                        and _nonempty_file(outputs['stats'] / f'{hemi}.{atlas}.stats')
                        for hemi in hemis for atlas in expected_atlases):
@@ -2706,8 +2956,16 @@ def _act_prep_outputs(subject_root: Path, subject_id: str, output_root: Optional
     }
 
 
-def _act_anatomy_current(qc: dict, manifest: dict, *, allow_ddseg_only: bool = False) -> bool:
+def _act_anatomy_current(
+    qc: dict,
+    manifest: dict,
+    *,
+    allow_ddseg_only: bool = False,
+    subject_root: Optional[Path] = None,
+    search_dirs: tuple[Path, ...] = (),
+) -> bool:
     """Require anatomical evidence separately from the MRtrix format check."""
+    from shared.cache_reuse import resolve_relocated_file
 
     parcellation = (manifest.get("inputs") or {}).get("parcellation")
     if not isinstance(parcellation, dict) or not parcellation.get("exists"):
@@ -2716,8 +2974,14 @@ def _act_anatomy_current(qc: dict, manifest: dict, *, allow_ddseg_only: bool = F
                     and qc.get("sgm_from_ddparcel") is False)
     try:
         volume = float(qc["five_tt_stats"]["channel_volume_voxel_units"]["sgm"])
+        target = resolve_relocated_file(
+            parcellation.get("path") or "",
+            search_dirs,
+            subject_root=subject_root,
+        )
         return (qc.get("sgm_from_ddparcel") is True and math.isfinite(volume) and volume > 0
-                and _file_record_matches(parcellation, Path(str(parcellation.get("path") or ""))))
+                and target is not None
+                and _file_record_matches(parcellation, target))
     except (KeyError, TypeError, ValueError):
         return False
 
@@ -2730,8 +2994,21 @@ def _act_prep_complete(subject_root: Path, subject_id: str, output_root: Optiona
         return False
     try:
         qc = _read_json(outputs["qc"])
+        layout = subject_layout(subject_root, output_root=output_root)
+        search_dirs = (
+            _ddparcel_stage_dir(layout),
+            layout.brain_parcellation,
+            _ddseg_stage_dir(layout),
+            layout.tissue_segmentation,
+        )
         return (int(qc.get("version") or 0) >= ACT_PREP_VERSION
-                and _act_anatomy_current(qc, _read_json(outputs["manifest"]), allow_ddseg_only=allow_ddseg_only))
+                and _act_anatomy_current(
+                    qc,
+                    _read_json(outputs["manifest"]),
+                    allow_ddseg_only=allow_ddseg_only,
+                    subject_root=subject_root,
+                    search_dirs=search_dirs,
+                ))
     except Exception:
         return False
 
@@ -3033,7 +3310,13 @@ def _microstructure_noddi_complete(subject_root: Path, subject_id: str, output_r
 def _optional_microstructure_options_match(config, manifest_path, stage):
     if config is None:
         return True
-    from microstructure.pipeline import MicrostructureConfig, _expected_free_water_manifest, _expected_noddi_manifest
+    from microstructure.pipeline import (
+        MicrostructureConfig,
+        _expected_free_water_manifest,
+        _expected_noddi_manifest,
+        _free_water_manifest_matches,
+        _noddi_manifest_matches,
+    )
     from shared.pipeline import RawInputBundle
 
     try:
@@ -3046,8 +3329,10 @@ def _optional_microstructure_options_match(config, manifest_path, stage):
             free_water_n_jobs=config.microstructure_free_water_n_jobs,
             free_water_vox_per_chunk=config.microstructure_free_water_vox_per_chunk,
             free_water_max_fraction_for_tissue=config.microstructure_free_water_max_fraction_for_tissue)
-        expected = _expected_free_water_manifest(options) if stage == "freewater" else _expected_noddi_manifest(options)
-        return _read_json(manifest_path) == expected
+        actual = _read_json(manifest_path)
+        if stage == "freewater":
+            return _free_water_manifest_matches(actual, _expected_free_water_manifest(options))
+        return _noddi_manifest_matches(actual, _expected_noddi_manifest(options))
     except (OSError, KeyError, ValueError):
         return False
 
@@ -3055,29 +3340,60 @@ def _optional_microstructure_options_match(config, manifest_path, stage):
 def _act_inputs_current(csd_manifest_path: Path, *, allow_ddseg_only: bool = False) -> bool:
     """True when the CSD manifest's 5TT/GMWMI are unchanged, current-version ACT prep outputs."""
 
+    from shared.cache_reuse import resolve_relocated_file
     from tractography.act_prep import ACT_PREP_VERSION
 
     try:
+        csd_resolved = Path(csd_manifest_path).resolve()
+        inferred_root = next(
+            (ancestor for ancestor in csd_resolved.parents[:7]
+             if (ancestor / "input").is_dir() or (ancestor / "cache").is_dir()),
+            None,
+        )
+        act_search_dirs: list[Path] = []
+        anatomy_search_dirs: list[Path] = []
+        if inferred_root is not None:
+            layout = subject_layout(inferred_root)
+            act_search_dirs.extend([layout.act_prep, layout.outputs / "04_tractography" / "act_prep"])
+            anatomy_search_dirs.extend([
+                _ddseg_stage_dir(layout),
+                layout.tissue_segmentation,
+                _ddparcel_stage_dir(layout),
+                layout.brain_parcellation,
+            ])
+
         dependencies = _read_json(csd_manifest_path).get("dependencies") or {}
-        act_paths = {key: Path(str((dependencies.get(key) or {}).get("path") or "")) for key in ("five_tt", "gmwmi")}
-        if not all(_file_record_matches(dependencies.get(key), path) for key, path in act_paths.items()):
-            return False
+        act_paths: dict[str, Path] = {}
+        for key in ("five_tt", "gmwmi"):
+            rec = dependencies.get(key) or {}
+            resolved = resolve_relocated_file(rec.get("path") or "", act_search_dirs, subject_root=inferred_root)
+            if resolved is None or not _file_record_matches(rec, resolved):
+                return False
+            act_paths[key] = resolved
         act_dir = act_paths["five_tt"].parent
         act_qc = _read_json(act_dir / "act_prep_qc.json")
         act_manifest = _read_json(act_dir / "act_prep_manifest.json")
         if act_qc.get("status") != "completed" or int(act_qc.get("version") or 0) < ACT_PREP_VERSION:
             return False
-        if not _act_anatomy_current(act_qc, act_manifest, allow_ddseg_only=allow_ddseg_only):
+        if not _act_anatomy_current(
+            act_qc,
+            act_manifest,
+            allow_ddseg_only=allow_ddseg_only,
+            subject_root=inferred_root,
+            search_dirs=tuple(anatomy_search_dirs),
+        ):
             return False
         inputs = act_manifest.get("inputs") or {}
         for key in ("segmentation", "parcellation"):
             record = inputs.get(key)
             if isinstance(record, dict) and record.get("exists"):
-                if not _file_record_matches(record, Path(str(record.get("path") or ""))):
+                target = resolve_relocated_file(record.get("path") or "", anatomy_search_dirs, subject_root=inferred_root)
+                if target is None or not _file_record_matches(record, target):
                     return False
         for record in (inputs.get("probabilities") or {}).values():
             if isinstance(record, dict) and record.get("exists"):
-                if not _file_record_matches(record, Path(str(record.get("path") or ""))):
+                target = resolve_relocated_file(record.get("path") or "", anatomy_search_dirs, subject_root=inferred_root)
+                if target is None or not _file_record_matches(record, target):
                     return False
         return True
     except Exception:

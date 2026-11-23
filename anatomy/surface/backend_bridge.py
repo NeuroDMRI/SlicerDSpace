@@ -218,7 +218,7 @@ def runtime_info(python_bin=None):
     return json.loads(completed.stdout.strip().splitlines()[-1])
 
 
-def native_products(native_dir, subject, predict_mode):
+def native_products(native_dir, subject, predict_mode, *, export_stl: bool = True):
     """Keep indexed RAS OBJ masters and generate historical Slicer LPS STL."""
     import numpy as np
     import trimesh
@@ -237,10 +237,13 @@ def native_products(native_dir, subject, predict_mode):
                 raise ValueError(f'White/pial vertex correspondence lost: {path}')
             token = 'wm' if kind == 'white' else 'pial'
             stem = f'{subject}_predicted_{token}_{hemi}'
-            mesh.export(str(native_dir / f'{stem}_orig.stl'))
+            ras_stl = native_dir / f'{stem}_orig.stl'
             lps_stl = native_dir / f'{stem}.stl'
-            trimesh.Trimesh(vertices=vertices * [-1., -1., 1.], faces=faces,
-                            process=False).export(str(lps_stl))
+            if export_stl or not ras_stl.is_file():
+                mesh.export(str(ras_stl))
+            if export_stl or not lps_stl.is_file():
+                trimesh.Trimesh(vertices=vertices * [-1., -1., 1.], faces=faces,
+                                process=False).export(str(lps_stl))
             products.append(lps_stl)
             checks[f'{hemi}.{kind}'] = dict(vertices=len(vertices), faces=len(faces),
                 finite=True, watertight=bool(mesh.is_watertight), euler_number=int(mesh.euler_number),

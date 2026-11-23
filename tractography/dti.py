@@ -62,15 +62,20 @@ def _emit(message: str, log: Optional[Callable[[str], None]] = None) -> None:
 
 
 def _file_info(path: Path) -> dict[str, object]:
+    from shared.cache_reuse import ALWAYS_HASH_MAX_BYTES, sha256_file
+
     if not path.exists():
         return {"path": path.as_posix(), "exists": False}
     stat = path.stat()
-    return {
+    record: dict[str, object] = {
         "path": path.resolve().as_posix(),
         "exists": True,
         "size": stat.st_size,
         "mtime_ns": stat.st_mtime_ns,
     }
+    if path.is_file() and stat.st_size <= ALWAYS_HASH_MAX_BYTES:
+        record["sha256"] = sha256_file(path)
+    return record
 
 
 def _native_bundle_from_expected_cache(

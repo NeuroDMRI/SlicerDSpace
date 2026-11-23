@@ -312,6 +312,22 @@ def surface_runtime_identity(runtime=None, freesurfer_home=None):
     return dict(backend=backend, home=str(home), record_sha256=sha256(record) if record.is_file() else None)
 
 
+def surface_runtime_semantic_key(identity):
+    """Path-independent runtime identity used for scientific cache reuse."""
+    if not isinstance(identity, dict):
+        return None
+    return dict(backend=identity.get('backend'), record_sha256=identity.get('record_sha256'))
+
+
+def surface_runtime_matches(recorded, current) -> bool:
+    """True when two surface-runtime identities share backend and build/runtime record digest."""
+    if recorded is None and current is None:
+        return True
+    if not isinstance(recorded, dict) or not isinstance(current, dict):
+        return False
+    return surface_runtime_semantic_key(recorded) == surface_runtime_semantic_key(current)
+
+
 def inspect_surface_runtime(runtime=None, freesurfer_home=None, license_file=None, *, python_bin=None,
                             hemisphere='both', atlases='aparc,aparc.a2009s', asset_root=None):
     """Verify in a fresh worker; never compile or download from a Check action.

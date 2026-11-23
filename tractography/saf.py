@@ -104,19 +104,43 @@ def _emit(message: str, log: Optional[Callable[[str], None]] = None) -> None:
 
 
 def _file_info(path: Optional[Path]) -> dict[str, object]:
+    from shared.cache_reuse import ALWAYS_HASH_MAX_BYTES, sha256_file
+
     if path is None:
         return {"path": None, "exists": False}
     expanded = path.expanduser()
     if not expanded.exists():
         return {"path": expanded.as_posix(), "exists": False}
     stat = expanded.stat()
-    return {
+    record: dict[str, object] = {
         "path": expanded.resolve().as_posix(),
         "exists": True,
         "is_file": expanded.is_file(),
         "is_dir": expanded.is_dir(),
         "size": stat.st_size,
         "mtime_ns": stat.st_mtime_ns,
+    }
+    if expanded.is_file() and stat.st_size <= ALWAYS_HASH_MAX_BYTES:
+        record["sha256"] = sha256_file(expanded)
+    return record
+
+
+SAF_FS_CORE_RELATIVE_PATHS = (
+    "mri/brain.mgz",
+    *(f"surf/{hemi}.{kind}" for hemi in ("lh", "rh") for kind in ("white", "pial", "inflated", "sphere", "curv")),
+)
+
+
+def _fs_surface_inputs(fs_dir: Optional[Path]) -> dict[str, dict[str, object]]:
+    if fs_dir is None:
+        return {}
+    root = fs_dir.expanduser()
+    if not root.is_dir():
+        return {}
+    return {
+        rel: _file_info(root / rel)
+        for rel in SAF_FS_CORE_RELATIVE_PATHS
+        if (root / rel).is_file()
     }
 
 
@@ -609,6 +633,7 @@ def run_saf(config: SAFConfig, *, log: Optional[Callable[[str], None]] = None) -
         "inputs": {
             "subject_root": raw.subject_root.as_posix(),
             "fs_dir": _file_info(config.fs_dir),
+            "fs_surface_inputs": _fs_surface_inputs(config.fs_dir),
             "fod": _file_info(config.fod_path),
             "fa": _file_info(config.fa_path),
             "pregenerated_tractogram": _file_info(config.pregenerated_tractogram),

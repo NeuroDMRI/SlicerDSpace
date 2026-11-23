@@ -521,6 +521,31 @@ def _run(command, env, log):
     return "\n".join(tail)
 
 
+def _brain_mask_signature_matches(recorded: object, expected: object) -> bool:
+    """Match brain-mask cache signatures while tolerating subject/tool path relocation."""
+    if not isinstance(recorded, dict) or not isinstance(expected, dict):
+        return False
+    if (recorded.get("backend") != expected.get("backend")
+            or recorded.get("settings") != expected.get("settings")
+            or recorded.get("resources") != expected.get("resources")):
+        return False
+    rec_inputs = recorded.get("inputs")
+    exp_inputs = expected.get("inputs")
+    if not isinstance(rec_inputs, list) or not isinstance(exp_inputs, list) or len(rec_inputs) != len(exp_inputs):
+        return False
+    for rec_item, exp_item in zip(rec_inputs, exp_inputs):
+        if not isinstance(rec_item, dict) or not isinstance(exp_item, dict):
+            return False
+        if (rec_item.get("size") != exp_item.get("size")
+                or rec_item.get("sha256") != exp_item.get("sha256")):
+            return False
+        if os.path.normcase(Path(str(rec_item.get("path") or "")).name) != os.path.normcase(
+            Path(str(exp_item.get("path") or "")).name
+        ):
+            return False
+    return True
+
+
 @scheduled_stage('brain_mask', gpu=True)
 def generate_brain_mask(dwi_path: Path, bval_path: Path, bvec_path: Path, output_mask_path: Path,
                         *, config: BrainMaskConfig | None = None, force: bool = False,
@@ -575,7 +600,7 @@ def generate_brain_mask(dwi_path: Path, bval_path: Path, bvec_path: Path, output
     if output.exists() and not force and existing.get("version") == 2:
         if existing.get("output", {}).get("sha256") != _sha256(output):
             raise ValueError("Generated brain mask was edited; select provided after review, or explicitly regenerate")
-        if signature == existing.get("signature"):
+        if _brain_mask_signature_matches(existing.get("signature"), signature):
             return dict(existing, status="reused", qc=validate_brain_mask(paths[0], output))
     output.parent.mkdir(parents=True, exist_ok=True)
     tools = backend["tool_paths"]

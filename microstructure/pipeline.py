@@ -174,12 +174,9 @@ def _ensure_amico_ready() -> None:
 
 
 def _file_signature(path: Path) -> dict[str, object]:
-    stat = path.stat()
-    return {
-        "path": str(path.resolve()),
-        "size": stat.st_size,
-        "mtime_ns": stat.st_mtime_ns,
-    }
+    from shared.cache_reuse import file_signature
+
+    return file_signature(path, include_sha256=True)
 
 
 def _content_signature(path: Path) -> dict[str, object]:
@@ -572,12 +569,114 @@ def _noddi_outputs_complete(paths: dict[str, Path]) -> bool:
     return scalar_qc_current(paths["noddi_qc"], [paths[key] for key in NODDI_KEYS])
 
 
+FREE_WATER_EXECUTION_ONLY_KEYS = frozenset({"chunk_size", "engine", "n_jobs", "vox_per_chunk"})
+NODDI_EXECUTION_ONLY_KEYS = frozenset({"nthreads"})
+
+
+def _bundle_signatures_match(recorded: object, expected: object) -> bool:
+    from shared.cache_reuse import file_records_equivalent
+
+    if not isinstance(recorded, dict) or not isinstance(expected, dict):
+        return False
+    if set(recorded.keys()) != set(expected.keys()):
+        return False
+    return all(
+        file_records_equivalent(recorded.get(key), expected.get(key), allow_relocated=True)
+        for key in expected
+    )
+
+
+def _strip_execution_keys(mapping: object, excluded: frozenset[str]) -> Optional[dict[str, object]]:
+    if not isinstance(mapping, dict):
+        return None
+    return {key: value for key, value in mapping.items() if key not in excluded}
+
+
+def _free_water_manifest_matches(actual: object, expected: object) -> bool:
+    if not isinstance(actual, dict) or not isinstance(expected, dict):
+        return False
+    if any(actual.get(key) != expected.get(key) for key in ("kind", "version", "subject_id")):
+        return False
+    if not _bundle_signatures_match(actual.get("raw_input_bundle"), expected.get("raw_input_bundle")):
+        return False
+    return _strip_execution_keys(actual.get("free_water_model"), FREE_WATER_EXECUTION_ONLY_KEYS) == _strip_execution_keys(
+        expected.get("free_water_model"), FREE_WATER_EXECUTION_ONLY_KEYS
+    )
+
+
+def _noddi_manifest_matches(actual: object, expected: object) -> bool:
+    if not isinstance(actual, dict) or not isinstance(expected, dict):
+        return False
+    if any(actual.get(key) != expected.get(key) for key in ("kind", "version", "subject_id", "gradient_frame")):
+        return False
+    if not _bundle_signatures_match(actual.get("raw_input_bundle"), expected.get("raw_input_bundle")):
+        return False
+    return _strip_execution_keys(actual.get("noddi_model"), NODDI_EXECUTION_ONLY_KEYS) == _strip_execution_keys(
+        expected.get("noddi_model"), NODDI_EXECUTION_ONLY_KEYS
+    )
+
+
+def _native_bundle_manifest_matches(actual: object, expected: object) -> bool:
+    if actual is None and expected is None:
+        return True
+    if not isinstance(actual, dict) or not isinstance(expected, dict):
+        return False
+    for key in (
+        "kind", "version", "subject_id", "fit_method",
+        "conversion_implementation", "preparation_implementation", "tensor_implementation",
+    ):
+        if actual.get(key) != expected.get(key):
+            return False
+    return _bundle_signatures_match(actual.get("source_files"), expected.get("source_files"))
+
+
+def _microstructure_manifest_matches(actual: object, expected: object) -> bool:
+    from shared.cache_reuse import file_records_equivalent
+
+    if not isinstance(actual, dict) or not isinstance(expected, dict):
+        return False
+    for key in ("kind", "version", "roi_statistics_schema", "subject_id", "fit_method", "roi_metrics"):
+        if actual.get(key) != expected.get(key):
+            return False
+    if not _bundle_signatures_match(actual.get("raw_input_bundle"), expected.get("raw_input_bundle")):
+        return False
+    if not file_records_equivalent(actual.get("roi_label_map"), expected.get("roi_label_map"), allow_relocated=True):
+        return False
+    if _strip_execution_keys(actual.get("free_water_model"), FREE_WATER_EXECUTION_ONLY_KEYS) != _strip_execution_keys(
+        expected.get("free_water_model"), FREE_WATER_EXECUTION_ONLY_KEYS
+    ):
+        return False
+    if _strip_execution_keys(actual.get("noddi_model"), NODDI_EXECUTION_ONLY_KEYS) != _strip_execution_keys(
+        expected.get("noddi_model"), NODDI_EXECUTION_ONLY_KEYS
+    ):
+        return False
+    act_native = actual.get("native_bundle") if isinstance(actual.get("native_bundle"), dict) else {}
+    exp_native = expected.get("native_bundle") if isinstance(expected.get("native_bundle"), dict) else {}
+    if not _native_bundle_manifest_matches(act_native.get("manifest"), exp_native.get("manifest")):
+        return False
+    act_dki = actual.get("dki_model")
+    exp_dki = expected.get("dki_model")
+    if act_dki != exp_dki:
+        if not isinstance(act_dki, dict) or not isinstance(exp_dki, dict):
+            return False
+        if act_dki.get("run_enabled") != exp_dki.get("run_enabled"):
+            return False
+        if exp_dki.get("run_enabled"):
+            from microstructure.dki import dki_signature_matches
+
+            act_m = act_dki.get("manifest") if isinstance(act_dki.get("manifest"), dict) else {}
+            exp_m = exp_dki.get("manifest") if isinstance(exp_dki.get("manifest"), dict) else {}
+            if not dki_signature_matches(act_m.get("signature"), exp_m.get("signature")):
+                return False
+    return True
+
+
 def _free_water_outputs_current(config: MicrostructureConfig, paths: dict[str, Path]) -> bool:
     """Return whether reusable Free Water maps match the current input/config."""
 
     return (
         _free_water_outputs_complete(paths)
-        and _read_json(paths["free_water_manifest"]) == _expected_free_water_manifest(config)
+        and _free_water_manifest_matches(_read_json(paths["free_water_manifest"]), _expected_free_water_manifest(config))
     )
 
 
@@ -586,7 +685,7 @@ def _noddi_outputs_current(config: MicrostructureConfig, paths: dict[str, Path])
 
     return (
         _noddi_outputs_complete(paths)
-        and _read_json(paths["noddi_manifest"]) == _expected_noddi_manifest(config)
+        and _noddi_manifest_matches(_read_json(paths["noddi_manifest"]), _expected_noddi_manifest(config))
     )
 
 
@@ -717,11 +816,19 @@ def _dti_source_signature(config: MicrostructureConfig) -> dict[str, object]:
 def _dti_outputs_current(config: MicrostructureConfig, paths: dict[str, Path]) -> bool:
     try:
         qc = _read_json(paths["dti_qc"]) or {}
+        native = config.native_bundle
+        source_paths = {
+            name: Path(getattr(native, name))
+            for name in (
+                "fa_nii_path", "mean_diffusivity_nii_path", "max_eig_nii_path", "mid_eig_nii_path",
+                "min_eig_nii_path", "trace_nii_path", "dec_nrrd_path", "manifest_path",
+            )
+        } | {"mask": Path(config.raw_input_bundle.mask_path)}
         return (
-            scalar_qc_current(paths["dti_qc"], [paths[key] for key in DTI_KEYS])
+            scalar_qc_current(paths["dti_qc"], [paths[key] for key in DTI_KEYS], source_paths=source_paths)
             and paths["dec"].is_file()
             and bool(qc.get("masked_export"))
-            and qc.get("source_signature") == _dti_source_signature(config)
+            and _bundle_signatures_match(qc.get("source_signature"), _dti_source_signature(config))
         )
     except OSError:
         return False
@@ -1643,18 +1750,16 @@ def roi_statistics_current(
     required_metrics: tuple[str, ...] = (),
     brain_mask_path: Path | None = None,
     selected_labels: tuple[int, ...] | None = None,
+    lut_path: Path | None = None,
 ) -> bool:
     """Reject legacy, stale or inconsistent regional tables without refitting maps."""
+    from shared.cache_reuse import file_record_matches, resolve_relocated_file
 
     try:
         payload = _read_json(json_path) or {}
         if payload.get("schema_version") != ROI_STATISTICS_SCHEMA:
             return False
         if payload.get('selected_labels') != (sorted(set(selected_labels)) if selected_labels is not None else None):
-            return False
-        if roi_label_map is not None and payload.get("roi_label_map") != str(roi_label_map.resolve()):
-            return False
-        if brain_mask_path is not None and payload.get("brain_mask") != str(brain_mask_path.resolve()):
             return False
         sources = payload.get("source_signatures") or {}
         metrics = payload.get("feature_maps") or {}
@@ -1675,9 +1780,56 @@ def roi_statistics_current(
             return False
         if payload.get('brain_mask') and (sources.get('brain_mask') or {}).get('path') != payload['brain_mask']:
             return False
-        if any(record != (_content_signature if key == "lut" else _file_signature)(Path(record["path"]))
-               for key, record in sources.items()):
+        if roi_label_map is not None and not file_record_matches(
+            sources.get("atlas"), roi_label_map, allow_relocated=True
+        ):
             return False
+        if brain_mask_path is not None and not file_record_matches(
+            sources.get("brain_mask"), brain_mask_path, allow_relocated=True
+        ):
+            return False
+        stage_root = Path(json_path).resolve().parent.parent
+        search_dirs = (
+            Path(json_path).resolve().parent,
+            stage_root / "dti",
+            stage_root / "freewater",
+            stage_root / "noddi",
+            stage_root / "dki",
+            stage_root / "ifw",
+            stage_root,
+        )
+        subject_root = next(
+            (ancestor for ancestor in (stage_root, *stage_root.parents[:5])
+             if (ancestor / "input").is_dir() or (ancestor / "cache").is_dir()),
+            None,
+        )
+        for key, record in sources.items():
+            if not isinstance(record, dict):
+                return False
+            if key == "lut":
+                target = Path(lut_path) if lut_path is not None else Path(str(record.get("path") or ""))
+                if not target.is_file():
+                    default_lut = _default_lut_path()
+                    target = default_lut if default_lut.is_file() else target
+                if not target.is_file():
+                    return False
+                current_lut = _content_signature(target)
+                if (record.get("size") != current_lut["size"]
+                        or record.get("sha256") != current_lut["sha256"]):
+                    return False
+                continue
+            if key == "atlas" and roi_label_map is not None:
+                target = Path(roi_label_map)
+            elif key == "brain_mask" and brain_mask_path is not None:
+                target = Path(brain_mask_path)
+            else:
+                target = resolve_relocated_file(
+                    record.get("path"),
+                    search_dirs,
+                    subject_root=subject_root,
+                )
+            if target is None or not file_record_matches(record, target, allow_relocated=True):
+                return False
         if payload.get("csv_sha256") != hashlib.sha256(csv_path.read_bytes()).hexdigest():
             return False
         with csv_path.open(encoding="utf-8", newline="") as handle:
@@ -1998,7 +2150,7 @@ def run_microstructure(
     expected_free_water_manifest = _expected_free_water_manifest(config)
     if (
         bool(config.run_free_water) and not config.force_recompute
-        and _read_json(paths["free_water_manifest"]) == expected_free_water_manifest
+        and _free_water_manifest_matches(_read_json(paths["free_water_manifest"]), expected_free_water_manifest)
         and _free_water_maps_complete(paths)
         and not _free_water_outputs_complete(paths)
     ):
@@ -2006,7 +2158,7 @@ def run_microstructure(
         _write_free_water_qc(config, paths)
     if (
         bool(config.run_noddi) and not config.force_recompute
-        and _read_json(paths["noddi_manifest"]) == _expected_noddi_manifest(config)
+        and _noddi_manifest_matches(_read_json(paths["noddi_manifest"]), _expected_noddi_manifest(config))
         and all(paths[key].is_file() for key in NODDI_KEYS)
         and not _noddi_outputs_complete(paths)
     ):
@@ -2032,7 +2184,7 @@ def run_microstructure(
 
     if (
         not force_recompute
-        and actual_manifest == expected_manifest
+        and _microstructure_manifest_matches(actual_manifest, expected_manifest)
         and _dti_outputs_current(config, paths)
         and (not config.run_free_water or _free_water_outputs_current(config, paths))
         and (not config.run_noddi or _noddi_outputs_current(config, paths))
@@ -2085,7 +2237,7 @@ def run_microstructure(
     if bool(config.run_free_water):
         if (
             not force_recompute
-            and actual_free_water_manifest == expected_free_water_manifest
+            and _free_water_manifest_matches(actual_free_water_manifest, expected_free_water_manifest)
             and _free_water_outputs_complete(paths)
         ):
             _emit("[Microstructure] Reusing Free Water stage outputs", log)
@@ -2117,7 +2269,7 @@ def run_microstructure(
     if bool(config.run_noddi):
         if (
             not force_recompute
-            and actual_noddi_manifest == expected_noddi_manifest
+            and _noddi_manifest_matches(actual_noddi_manifest, expected_noddi_manifest)
             and _noddi_outputs_complete(paths)
         ):
             _emit("[Microstructure] Reusing NODDI stage outputs", log)

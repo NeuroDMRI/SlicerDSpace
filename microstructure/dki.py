@@ -427,9 +427,76 @@ def expected_dki_signature(config: DkiConfig) -> dict[str, Any]:
     return signature
 
 
+DKI_EXECUTION_ONLY_PARAMS = frozenset({
+    "voxels_per_chunk",
+    "num_threads",
+    "mkcurve_workers",
+    "mkcurve_voxels_per_chunk",
+    "mkcurve_chunk_schedule",
+})
+
+
+def _mkcurve_backend_matches(recorded: object, expected: object) -> bool:
+    if recorded is None and expected is None:
+        return True
+    if not isinstance(recorded, dict) or not isinstance(expected, dict):
+        return False
+    if (recorded.get("implementation") != expected.get("implementation")
+            or recorded.get("upstream_commit") != expected.get("upstream_commit")):
+        return False
+    if expected.get("implementation") == "python_port":
+        if recorded.get("port_version") != expected.get("port_version"):
+            return False
+        rec_src = recorded.get("source_sha256") or {}
+        exp_src = expected.get("source_sha256") or {}
+        if not isinstance(rec_src, dict) or not isinstance(exp_src, dict):
+            return False
+        # Ignore `.py` source-byte churn; keep semantic data assets (e.g. mkcurve_directions.json).
+        rec_data = {k: v for k, v in rec_src.items() if not str(k).lower().endswith(".py")}
+        exp_data = {k: v for k, v in exp_src.items() if not str(k).lower().endswith(".py")}
+        return rec_data == exp_data
+    # MATLAB backend: ignore install-path churn while preserving algorithm sources.
+    rec_src = recorded.get("source_sha256")
+    exp_src = expected.get("source_sha256")
+    return rec_src == exp_src
+
+
+def dki_signature_matches(recorded: object, expected: object) -> bool:
+    """Compare DKI signatures strictly on scientific inputs/settings while relaxing execution/code churn."""
+    from shared.cache_reuse import file_records_equivalent
+
+    if not isinstance(recorded, dict) or not isinstance(expected, dict):
+        return False
+    for key in ("version", "subject_id", "gradient_frame"):
+        if recorded.get(key) != expected.get(key):
+            return False
+    rec_inputs = recorded.get("inputs")
+    exp_inputs = expected.get("inputs")
+    if not isinstance(rec_inputs, dict) or not isinstance(exp_inputs, dict):
+        return False
+    if set(rec_inputs.keys()) != set(exp_inputs.keys()):
+        return False
+    if not all(
+        file_records_equivalent(rec_inputs.get(k), exp_inputs.get(k), allow_relocated=True)
+        for k in exp_inputs
+    ):
+        return False
+    rec_settings = recorded.get("settings")
+    exp_settings = expected.get("settings")
+    if not isinstance(rec_settings, dict) or not isinstance(exp_settings, dict):
+        return False
+    rec_sci = {k: v for k, v in rec_settings.items() if k not in DKI_EXECUTION_ONLY_PARAMS}
+    exp_sci = {k: v for k, v in exp_settings.items() if k not in DKI_EXECUTION_ONLY_PARAMS}
+    if rec_sci != exp_sci:
+        return False
+    return _mkcurve_backend_matches(recorded.get("mkcurve_backend"), expected.get("mkcurve_backend"))
+
+
 def dki_outputs_current(config: DkiConfig) -> bool:
     if config.force_recompute:
         return False
+    from shared.cache_reuse import file_record_matches, resolve_relocated_file
+
     try:
         paths = dki_output_paths(config.subject_id, config.output_dir)
         manifest, qc = _read_json(paths["manifest"]), _read_json(paths["qc"])
@@ -437,7 +504,7 @@ def dki_outputs_current(config: DkiConfig) -> bool:
             return False
         if int(qc.get("valid_voxels", 0)) <= 0:
             return False
-        if manifest.get("signature") != expected_dki_signature(config):
+        if not dki_signature_matches(manifest.get("signature"), expected_dki_signature(config)):
             return False
         import nibabel as nib
         import numpy as np
@@ -447,7 +514,7 @@ def dki_outputs_current(config: DkiConfig) -> bool:
         for key, path in paths.items():
             if key in {"manifest", "qc", "progress"}:
                 continue
-            if not path.is_file() or records.get(key) != _signature(path):
+            if not path.is_file() or not file_record_matches(records.get(key), path, allow_relocated=True):
                 return False
             image = nib.load(str(path))
             shape = source.shape[:3] + ((27,) if key == "params" else ())
@@ -456,7 +523,9 @@ def dki_outputs_current(config: DkiConfig) -> bool:
         if _method(config).startswith("MKCURVE"):
             external = manifest.get("mkcurve") or {}
             maps = external.get("maps") or {}
-            if not maps or not Path(external.get("record_path", "")).is_file():
+            mkcurve_dirs = (config.output_dir / "mkcurve", config.output_dir)
+            record_path = resolve_relocated_file(external.get("record_path", ""), mkcurve_dirs)
+            if not maps or record_path is None or not record_path.is_file():
                 return False
             if external.get("kind") != "mkcurve_python_port" and not external.get("automatic_qc_passed"):
                 return False
@@ -465,12 +534,20 @@ def dki_outputs_current(config: DkiConfig) -> bool:
             if external.get("kind") == "mkcurve_python_port" and int(external.get("corrected_valid_voxels", 0)) <= 0:
                 return False
             for key, value in (external.get("auxiliary_files") or {}).items():
-                if not Path(value).is_file() or (external.get("auxiliary_artifacts") or {}).get(key) != _signature(Path(value)):
+                aux_path = resolve_relocated_file(value, mkcurve_dirs)
+                if aux_path is None or not file_record_matches(
+                    (external.get("auxiliary_artifacts") or {}).get(key), aux_path, allow_relocated=True
+                ):
                     return False
-            if external.get("kind") == "mkcurve_python_port" and manifest.get("mkcurve_record_artifact") != _signature(Path(external["record_path"])):
+            if external.get("kind") == "mkcurve_python_port" and not file_record_matches(
+                manifest.get("mkcurve_record_artifact"), record_path, allow_relocated=True
+            ):
                 return False
             for key, value in maps.items():
-                if not Path(value).is_file() or (manifest.get("mkcurve_artifacts") or {}).get(key) != _signature(Path(value)):
+                map_path = resolve_relocated_file(value, mkcurve_dirs)
+                if map_path is None or not file_record_matches(
+                    (manifest.get("mkcurve_artifacts") or {}).get(key), map_path, allow_relocated=True
+                ):
                     return False
         return True
     except (OSError, ValueError, ImportError, KeyError):

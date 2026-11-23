@@ -90,16 +90,28 @@ def derive_territories(image):
     return output, counts
 
 
-def prepared_atlas_current(record, source=None):
+IMPLEMENTATION_VERSION = 'ddparcel_adjacent_wm_5mm.v1'
+
+
+def _implementation_id_matches(recorded: object) -> bool:
+    if not isinstance(recorded, str) or not recorded:
+        return False
+    return recorded == IMPLEMENTATION_VERSION or recorded == digest(__file__)
+
+
+def prepared_atlas_current(record, source=None, *, search_dirs=()):
     """Verify provenance and decoded geometry before reusing a derived atlas."""
     import nibabel as nib
     import numpy as np
+    from shared.cache_reuse import resolve_relocated_file
 
     try:
         source = Path(source or record['source_path']).expanduser().resolve()
-        output = Path(record['output_path'])
+        output = resolve_relocated_file(record['output_path'], search_dirs)
+        if output is None:
+            return False
         if (record['method'] != METHOD or record['radius_mm'] != RADIUS_MM
-                or record['implementation_sha256'] != digest(__file__)
+                or not _implementation_id_matches(record.get('implementation_sha256'))
                 or record['source_sha256'] != digest(source)
                 or record['output_sha256'] != digest(output)):
             return False
@@ -120,7 +132,7 @@ def prepare_ddparcel_atlas(source, cache_dir):
 
     start = time.monotonic()
     source = Path(source).expanduser().resolve()
-    source_sha, implementation_sha = digest(source), digest(__file__)
+    source_sha, implementation_sha = digest(source), IMPLEMENTATION_VERSION
     key = hashlib.sha256((METHOD + source_sha + implementation_sha).encode()).hexdigest()
     directory = Path(cache_dir) / key
     directory.mkdir(parents=True, exist_ok=True)

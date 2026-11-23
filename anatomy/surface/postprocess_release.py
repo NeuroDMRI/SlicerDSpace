@@ -105,8 +105,14 @@ def _symlink_canonical_output(src: Path, dest: Path) -> None:
             dest.unlink()
     elif dest.exists():
         return
+    link_target: Path | str = src
+    if os.name == "posix":
+        try:
+            link_target = os.path.relpath(src.resolve(), dest.parent.resolve())
+        except ValueError:
+            link_target = src
     try:
-        dest.symlink_to(src, target_is_directory=True)
+        dest.symlink_to(link_target, target_is_directory=True)
     except OSError:
         if src.is_dir():
             shutil.copytree(src, dest, dirs_exist_ok=True)
@@ -505,7 +511,11 @@ def run_ddsurfer_postprocess(
 def _run_current_postprocess(config, subject_root, native_dir, log):
     from .backend_bridge import BACKEND_ROOT, native_surface_hashes, run_backend, sha256, upstream_record
     layout = subject_layout(subject_root, output_root=config.output_root)
-    from shared.surface_runtime import resolve_surface_runtime, surface_runtime_identity
+    from shared.surface_runtime import (
+        resolve_surface_runtime,
+        surface_runtime_identity,
+        surface_runtime_semantic_key,
+    )
     backend, home = resolve_surface_runtime(config.runtime, config.freesurfer_home)
     from shared.surface_runtime import surface_runtime_block_reason
     blocked = surface_runtime_block_reason(backend, home)  # G-H3: a clear message, not a dyld failure
@@ -514,14 +524,24 @@ def _run_current_postprocess(config, subject_root, native_dir, log):
     brain = config.mri_dir / 'brain.mgz' if config.mri_dir is not None else None
     brain = brain if brain is not None and brain.is_file() else None
     inputs = native_surface_hashes(native_dir, config.mode)
+    runtime_identity = surface_runtime_identity(config.runtime, config.freesurfer_home)
     signature = dict(upstream_commit=upstream_record()['commit'], native_dir=str(native_dir),
                      native_sha256=inputs, mode=config.mode,
                      atlases=list(config.atlases or ('aparc', 'aparc.a2009s')),
                      freesurfer_home=str(home), brain_source=str(brain) if brain else None,
                      brain_sha256=sha256(brain) if brain else None)
-    signature['surface_runtime'] = surface_runtime_identity(config.runtime, config.freesurfer_home)
+    signature['surface_runtime'] = runtime_identity
     signature['sphere_seed'] = config.sphere_seed
-    cache_key = hashlib.sha256(json.dumps(signature, sort_keys=True).encode()).hexdigest()[:20]
+    semantic_signature = dict(
+        upstream_commit=signature['upstream_commit'],
+        native_sha256=inputs,
+        mode=config.mode,
+        atlases=signature['atlases'],
+        brain_sha256=signature['brain_sha256'],
+        surface_runtime=surface_runtime_semantic_key(runtime_identity),
+        sphere_seed=config.sphere_seed,
+    )
+    cache_key = hashlib.sha256(json.dumps(semantic_signature, sort_keys=True).encode()).hexdigest()[:20]
     if config.force:
         cache_key += '-' + uuid4().hex[:12]
     stage_cache_root = layout.stage_cache("01_anatomical_priors/surface_morphometry")

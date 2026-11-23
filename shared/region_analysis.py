@@ -56,9 +56,10 @@ def signatures_current(record):
                     return False
                 if "size_bytes" in record and record["size_bytes"] != stat.st_size:
                     return False
-                if "mtime_ns" in record and record["mtime_ns"] != stat.st_mtime_ns:
-                    return False
-                if "sha256" in record and record["sha256"] != sha256(path):
+                if "sha256" in record:
+                    if record["sha256"] != sha256(path):
+                        return False
+                elif "mtime_ns" in record and record["mtime_ns"] != stat.st_mtime_ns:
                     return False
         # Some stage manifests store an absolute-path -> digest mapping instead.
         for key in ("source_sha256", "artifact_sha256"):

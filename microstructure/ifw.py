@@ -219,20 +219,29 @@ def _write_roi_table(config: IfwConfig, paths: dict[str, Path]) -> Path:
 
 def _roi_table_current(config: IfwConfig, paths: dict[str, Path]) -> bool:
     """T-B3: the regional table fits the cached maps, the label map, the LUT and the mask (as the other maps)."""
-    from microstructure.pipeline import roi_statistics_current
+    from microstructure.pipeline import _content_signature, roi_statistics_current
 
     if not (paths["roi_stats_csv"].is_file() and paths["roi_stats_json"].is_file()):
         return False
     if not roi_statistics_current(paths["roi_stats_json"], paths["roi_stats_csv"],
                                  roi_label_map=Path(config.roi_label_map), required_metrics=IFW_ROI_METRICS,
-                                 brain_mask_path=Path(config.mask_path)):
+                                 brain_mask_path=Path(config.mask_path), lut_path=config.lut_path):
         return False
     try:
-        recorded = json.loads(paths["roi_stats_json"].read_text(encoding="utf-8")).get("lut_path")
+        payload = json.loads(paths["roi_stats_json"].read_text(encoding="utf-8"))
+        recorded_lut = payload.get("lut_path")
+        recorded_sig = (payload.get("source_signatures") or {}).get("lut")
     except (OSError, ValueError, AttributeError):
         return False
-    wanted = str(Path(config.lut_path).resolve()) if config.lut_path is not None else None
-    return recorded == wanted  # the LUT file content is covered by the source signatures
+    if config.lut_path is None:
+        return recorded_lut is None
+    if not isinstance(recorded_sig, dict):
+        return False
+    try:
+        current = _content_signature(Path(config.lut_path))
+    except OSError:
+        return False
+    return recorded_sig.get("size") == current["size"] and recorded_sig.get("sha256") == current["sha256"]
 
 
 @scheduled_stage('microstructure_ifw')

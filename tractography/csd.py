@@ -135,17 +135,22 @@ def _timed_step(records, name, persist, command=None):
 
 
 def _file_info(path: Path) -> dict[str, object]:
+    from shared.cache_reuse import ALWAYS_HASH_MAX_BYTES, sha256_file
+
     expanded = path.expanduser()
     if not expanded.exists():
         return {"path": expanded.as_posix(), "exists": False}
     stat = expanded.stat()
-    return {
+    record: dict[str, object] = {
         "path": expanded.resolve().as_posix(),
         "exists": True,
         "is_file": expanded.is_file(),
         "size": stat.st_size,
         "mtime_ns": stat.st_mtime_ns,
     }
+    if expanded.is_file() and stat.st_size <= ALWAYS_HASH_MAX_BYTES:
+        record["sha256"] = sha256_file(expanded)
+    return record
 
 
 def _resolve_command(name: str, bin_dir: Optional[Path] = None) -> Optional[str]:
@@ -695,7 +700,23 @@ def _fod_preparation_inputs(config: CSDActConfig) -> dict[str, object]:
     }
 
 
+def _fod_inputs_match(recorded: object, expected: object) -> bool:
+    from shared.cache_reuse import file_records_equivalent
+
+    if not isinstance(recorded, dict) or not isinstance(expected, dict):
+        return False
+    if (recorded.get("subject_id") != expected.get("subject_id")
+            or recorded.get("random_seed") != expected.get("random_seed")):
+        return False
+    return all(
+        file_records_equivalent(recorded.get(key), expected.get(key), allow_relocated=True)
+        for key in ("dwi", "bval", "bvec", "mask")
+    )
+
+
 def _prepared_fod_reusable(config: CSDActConfig, output_dir: Path) -> bool:
+    from shared.cache_reuse import file_record_matches
+
     if not config.reuse_prepared_fod:
         return False
     receipt_path = _fod_preparation_receipt_path(output_dir)
@@ -707,7 +728,7 @@ def _prepared_fod_reusable(config: CSDActConfig, output_dir: Path) -> bool:
         return False
     if receipt.get("kind") != "mrtrix_csd_fod_preparation" or receipt.get("version") != 1:
         return False
-    if receipt.get("inputs") != _fod_preparation_inputs(config):
+    if not _fod_inputs_match(receipt.get("inputs"), _fod_preparation_inputs(config)):
         return False
     paths = _fod_preparation_paths(config.subject_id, output_dir)
     recorded_artifacts = receipt.get("artifacts")
@@ -716,7 +737,7 @@ def _prepared_fod_reusable(config: CSDActConfig, output_dir: Path) -> bool:
     for key, path in paths.items():
         if not path.is_file() or path.stat().st_size <= 0:
             return False
-        if recorded_artifacts.get(key) != _file_info(path):
+        if not file_record_matches(recorded_artifacts.get(key), path, allow_relocated=True):
             return False
     return True
 

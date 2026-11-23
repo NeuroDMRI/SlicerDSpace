@@ -77,17 +77,22 @@ class ACTPrepResult:
 
 
 def _file_info(path: Optional[Path]) -> dict[str, object]:
+    from shared.cache_reuse import ALWAYS_HASH_MAX_BYTES, sha256_file
+
     if path is None:
         return {"path": None, "exists": False}
     if not path.exists():
         return {"path": path.as_posix(), "exists": False}
     stat = path.stat()
-    return {
+    record: dict[str, object] = {
         "path": path.resolve().as_posix(),
         "exists": True,
         "size": stat.st_size,
         "mtime_ns": stat.st_mtime_ns,
     }
+    if path.is_file() and stat.st_size <= ALWAYS_HASH_MAX_BYTES:
+        record["sha256"] = sha256_file(path)
+    return record
 
 
 def _resolve_command(name: str, bin_dir: Optional[Path]) -> Optional[str]:

@@ -267,44 +267,91 @@ def prepare_shared_registered_bundle(config, resources, log=None):
     return raw, registered
 
 
+SURFACE_PIPELINE_CONTRACT_VERSION = 1
+
+
+def _normalized_surface_input_hashes(mapping) -> list[tuple[str, str]]:
+    """Compare surface inputs by filename + content hash, ignoring `.py` source files."""
+    if not isinstance(mapping, dict):
+        return []
+    entries = [
+        (os.path.normcase(Path(str(path)).name), str(digest))
+        for path, digest in mapping.items()
+        if Path(str(path)).suffix.lower() != '.py'
+    ]
+    return sorted(entries)
+
+
+def _surface_outputs_match(recorded_outputs, required_paths: list[Path]) -> bool:
+    """Verify every required OBJ/STL surface matches its recorded SHA-256 (relocation-safe)."""
+    if not isinstance(recorded_outputs, dict) or len(recorded_outputs) < len(required_paths):
+        return False
+    unused = dict(recorded_outputs)
+    for path in required_paths:
+        if not path.is_file() or path.is_symlink():
+            return False
+        resolved = str(path.resolve())
+        key = resolved if resolved in unused else next(
+            (k for k in unused if os.path.normcase(Path(str(k)).name) == os.path.normcase(path.name)),
+            None,
+        )
+        if key is None:
+            return False
+        if sha256(path) != unused.pop(key):
+            return False
+    return True
+
+
 def _run_shared_raw(config, resources, output_dir, manifest, previous, log):
     raw, registered = prepare_shared_registered_bundle(config, resources, log)
     paths = [getattr(registered, name) for name in registered.__dataclass_fields__
              if name.endswith('_path')]
     paths += [getattr(raw, name + '_path') for name in ('dwi', 'bval', 'bvec', 'mask')]
-    paths += [Path(__file__), Path(__file__).with_name('preprocessing.py'),
-              Path(__file__).with_name('prediction.py'), Path(__file__).with_name('backend_bridge.py'),
-              Path(resources['checkpoint_root']) / 'manifest.json']
+    paths += [Path(resources['checkpoint_root']) / 'manifest.json']
     paths += [Path(resources['checkpoint_root']) / filename for hemi in ('left', 'right')
               for kind, filename in resources['model_config']['checkpoint_files'][hemi].items()
               if kind == 'white' or config.predict_mode == 'all']
     paths += [Path(resources['template_dir']) / resources['model_config']['templates'][hemi]['file']
               for hemi in ('left', 'right')]
     manifest['input_mode'] = 'shared_raw'
+    manifest['pipeline_contract_version'] = SURFACE_PIPELINE_CONTRACT_VERSION
     manifest['input_dwi'] = str(raw.dwi_path)
     manifest['input_sha256'] = {str(path.resolve()): sha256(path) for path in paths}
     manifest['shared_preprocessing'] = dict(registered_bundle=str(registered.bundle_dir),
         native_bundle=json.loads(registered.manifest_path.read_text(encoding='utf-8'))['native_bundle']['dir'],
         fit_method='wls', scalar_resampling_source='nrrd', atlas=resources['registration_atlas'],
         scope='Shared native tensor/scalars; trained surface atlas and five-channel normalization remain independent')
-    keys = ('input_mode', 'input_sha256', 'subject_id', 'predict_mode', 'device', 'resolved_device',
-            'precision', 'cpu_threads', 'max_gpu_gib', 'upstream_commit', 'runtime')
+    # Only scientifically meaningful contract fields gate reuse; execution knobs
+    # (device, cpu_threads, max_gpu_gib, runtime install path) are recorded as
+    # provenance without forcing recomputation.
+    scientific_keys = ('input_mode', 'subject_id', 'predict_mode', 'precision', 'upstream_commit')
     outputs = previous.get('output_sha256', {})
     native = output_dir / 'pred_results_SlicerDSpace/native' / config.subject_id
-    required = set()
+    required_paths = []
     for hemi in ('lh', 'rh'):
         for kind in ('white', 'pial') if config.predict_mode == 'all' else ('white',):
             token = 'wm' if kind == 'white' else 'pial'
-            required.update((str((native / f'{hemi}.{kind}.obj').resolve()),
-                             str((native / f'{config.subject_id}_predicted_{token}_{hemi}.stl').resolve())))
-    reusable = config.resume and previous.get('status') == 'completed' and required.issubset(outputs)
-    if reusable and all(previous.get(key) == manifest.get(key) for key in keys):
-        try:
-            reusable = all(sha256(path) == digest for path, digest in outputs.items())
-        except OSError:
-            reusable = False
-    else:
-        reusable = False
+            required_paths.extend((
+                native / f'{hemi}.{kind}.obj',
+                native / f'{config.subject_id}_predicted_{token}_{hemi}.stl',
+            ))
+    contract_ok = (
+        previous.get('pipeline_contract_version', SURFACE_PIPELINE_CONTRACT_VERSION)
+        == SURFACE_PIPELINE_CONTRACT_VERSION
+    )
+    inputs_ok = (
+        bool(manifest['input_sha256'])
+        and _normalized_surface_input_hashes(previous.get('input_sha256'))
+        == _normalized_surface_input_hashes(manifest['input_sha256'])
+    )
+    reusable = (
+        config.resume
+        and previous.get('status') == 'completed'
+        and contract_ok
+        and all(previous.get(key) == manifest.get(key) for key in scientific_keys)
+        and inputs_ok
+        and _surface_outputs_match(outputs, required_paths)
+    )
     if reusable:
         if log:
             log('[DDSurfer] Reusing verified native surfaces and shared preprocessing')
@@ -316,6 +363,7 @@ def _run_shared_raw(config, resources, output_dir, manifest, previous, log):
             manifest['execution_devices'] = devices
     if manifest['input_sha256'] != {str(path.resolve()): sha256(path) for path in paths}:
         raise RuntimeError('Shared surface inputs changed during prediction')
+    return reusable
 
 
 def resolved_cpu_threads(config):
@@ -409,9 +457,10 @@ def run_surface(config: SurfaceConfig, *, log: Optional[Callable[[str], None]] =
                         inspected = dict(mode='legacy_registered', subject_dir=str(candidate))
                         break
             native_dir = output_dir / 'pred_results_SlicerDSpace/native' / config.subject_id
+            reused_shared_raw = False
             if (config.reuse_shared_preprocessing and not config.auto_mask
                     and (config.input_bundle is not None or inspected['mode'] == 'subject_root')):
-                _run_shared_raw(config, resources, output_dir, manifest, previous, log)
+                reused_shared_raw = bool(_run_shared_raw(config, resources, output_dir, manifest, previous, log))
             elif config.input_bundle is not None or inspected['mode'] == 'subject_root':
                 manifest['input_mode'] = 'raw'
                 if config.auto_mask:
@@ -462,7 +511,9 @@ def run_surface(config: SurfaceConfig, *, log: Optional[Callable[[str], None]] =
             note = _execution_device_note(manifest['device'], config.device, manifest.get('execution_devices'))
             if note and log:
                 log(note)
-            products, checks = native_products(native_dir, config.subject_id, config.predict_mode)
+            products, checks = native_products(
+                native_dir, config.subject_id, config.predict_mode, export_stl=not reused_shared_raw
+            )
             qc.update(status='completed', executed=True, model_count=len(products), surfaces=checks,
                       automatic_qc_passed=all(c['finite'] and c['watertight'] and c['euler_number'] == 2 for c in checks.values()))
             manifest['outputs']['models'] = list(map(str, products))

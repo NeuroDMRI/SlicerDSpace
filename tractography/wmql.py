@@ -38,17 +38,22 @@ AUTHOR_BUNDLE_QUERY_SHA256 = "554a4eed4b99cdbe497cc5296d49ea8a65961e2b1920c1868e
 
 
 def _file_info(path: Path) -> dict[str, object]:
+    from shared.cache_reuse import ALWAYS_HASH_MAX_BYTES, sha256_file
+
     expanded = path.expanduser()
     if not expanded.exists():
         return {"path": expanded.as_posix(), "exists": False}
     stat = expanded.stat()
-    return {
+    record: dict[str, object] = {
         "path": expanded.resolve().as_posix(),
         "exists": True,
         "is_file": expanded.is_file(),
         "size": stat.st_size,
         "mtime_ns": stat.st_mtime_ns,
     }
+    if expanded.is_file() and stat.st_size <= ALWAYS_HASH_MAX_BYTES:
+        record["sha256"] = sha256_file(expanded)
+    return record
 
 
 @dataclass(frozen=True)
@@ -126,13 +131,60 @@ def wmql_query_dependencies(query_path: Path, include_dirs) -> dict[str, str]:
     return records
 
 
-def wmql_query_cache_current(manifest) -> bool:
+def _normalized_query_deps(deps: dict[str, str]) -> dict[str, str]:
+    return {os.path.normcase(Path(str(k)).name): str(v) for k, v in deps.items()}
+
+
+def wmql_query_cache_current(
+    manifest,
+    *,
+    output_dir: Optional[Path] = None,
+    query_preset: Optional[str] = None,
+) -> bool:
     try:
         sources = manifest.get('query_dependencies')
         snapshot = manifest.get('query_snapshot_dependencies')
-        return (bool(sources) and bool(snapshot)
-                and sources == wmql_query_dependencies(Path(manifest['query_path']), manifest['query_include_dirs'])
-                and snapshot == wmql_query_dependencies(Path(manifest['staged_query']), [Path(manifest['staged_query']).parent]))
+        if not sources or not snapshot:
+            return False
+
+        staged = Path(str(manifest.get('staged_query') or ''))
+        if not staged.is_file() and output_dir is not None and staged.name:
+            # Subject directory may have been moved; locate snapshot under current output_dir/queries/.
+            rel_parent = staged.parent.name
+            candidate = Path(output_dir) / 'queries' / rel_parent / staged.name
+            if candidate.is_file():
+                staged = candidate
+        if not staged.is_file():
+            return False
+        current_snapshot = wmql_query_dependencies(staged, [staged.parent])
+        if _normalized_query_deps(snapshot) != _normalized_query_deps(current_snapshot):
+            return False
+
+        query_path = Path(str(manifest.get('query_path') or ''))
+        if query_path.is_file():
+            include_dirs = list(manifest.get('query_include_dirs') or [])
+            if all(Path(d).is_dir() for d in include_dirs):
+                if sources == wmql_query_dependencies(query_path, include_dirs):
+                    return True
+                return False
+            # Fallback if an include dir moved (e.g. extension directory relocated).
+            preset = query_preset or manifest.get('query_preset')
+            if preset:
+                bundled = bundled_wmql_query_path(preset)
+                data_dir = _default_query_data_dir()
+                fallback_dirs = [query_path.parent, bundled.parent] + ([data_dir] if data_dir else [])
+                current_sources = wmql_query_dependencies(query_path, fallback_dirs)
+                return _normalized_query_deps(sources) == _normalized_query_deps(current_sources)
+            return False
+
+        preset = query_preset or manifest.get('query_preset')
+        if preset:
+            bundled = bundled_wmql_query_path(preset)
+            data_dir = _default_query_data_dir()
+            bundled_dirs = [bundled.parent] + ([data_dir] if data_dir else [])
+            current_sources = wmql_query_dependencies(bundled, bundled_dirs)
+            return _normalized_query_deps(sources) == _normalized_query_deps(current_sources)
+        return False
     except (OSError, ValueError, KeyError, TypeError, AttributeError, SyntaxError):
         return False
 

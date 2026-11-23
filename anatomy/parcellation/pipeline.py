@@ -5,6 +5,7 @@ from __future__ import annotations
 from shared.cohort_schedule import scheduled_stage
 
 import logging
+import os
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -168,20 +169,83 @@ def _default_weights_dir(explicit: Optional[Path] = None) -> Path:
     return model_asset_path("parcellation/weights", repo_root=Path(__file__).resolve().parents[2])
 
 
+DDPARCEL_CONTRACT_VERSION = 1
+
+
+def _normalized_parcellation_inputs(mapping) -> list[tuple[str, str]]:
+    if not isinstance(mapping, dict):
+        return []
+    return sorted(
+        (os.path.normcase(Path(str(path)).name), str(digest))
+        for path, digest in mapping.items()
+        if Path(str(path)).suffix.lower() != '.py'
+    )
+
+
 def _registered_task_signature(config, weights_dir):
     bundle = config.registered_bundle
     sources = [getattr(bundle, name) for name in bundle.__dataclass_fields__ if name.endswith('_path')]
-    sources += [config.native_mask, Path(__file__), Path(__file__).with_name('normalize.py'),
-                Path(__file__).with_name('DDSurfer_Pred.py')]
+    sources += [config.native_mask]
     weights = sorted(path for path in weights_dir.rglob('*') if path.suffix in ('.pkl', '.pt', '.pth'))
     if not weights:
         raise FileNotFoundError(f'No DDParcel checkpoints in {weights_dir}')
     sources += weights
     registered_record = _read_manifest(bundle.manifest_path) or {}
     source_inputs = registered_record.get('native_bundle', {}).get('manifest', {}).get('source_files', {})
-    return dict(version=1, subject_id=config.subject_id, flip=config.flip, device=config.device,
+    return dict(version=1, contract_version=DDPARCEL_CONTRACT_VERSION,
+                subject_id=config.subject_id, flip=config.flip, device=config.device,
                 source_inputs=source_inputs,
                 inputs={str(path.resolve()): _artifact_record(path)['sha256'] for path in sources})
+
+
+def _registered_signature_matches(recorded, expected) -> bool:
+    if not isinstance(recorded, dict) or not isinstance(expected, dict):
+        return False
+    if (recorded.get('version') != expected.get('version')
+            or recorded.get('contract_version', DDPARCEL_CONTRACT_VERSION) != expected.get('contract_version')
+            or recorded.get('subject_id') != expected.get('subject_id')
+            or recorded.get('flip') != expected.get('flip')):
+        return False
+    from shared.cache_reuse import file_records_equivalent
+    rec_sources = recorded.get('source_inputs')
+    exp_sources = expected.get('source_inputs')
+    if not isinstance(rec_sources, dict) or not isinstance(exp_sources, dict):
+        return False
+    if set(rec_sources.keys()) != set(exp_sources.keys()):
+        return False
+    for key, exp_sig in exp_sources.items():
+        if not file_records_equivalent(rec_sources.get(key), exp_sig, allow_relocated=True):
+            return False
+    return (
+        bool(expected.get('inputs'))
+        and _normalized_parcellation_inputs(recorded.get('inputs'))
+        == _normalized_parcellation_inputs(expected.get('inputs'))
+    )
+
+
+def _parcellation_artifacts_current(output_dir: Path, outputs: list[Path]) -> bool:
+    if _artifacts_current(output_dir, outputs):
+        return True
+    try:
+        recorded = _read_manifest(output_dir / 'artifacts.json')
+        if not isinstance(recorded, dict) or len(recorded) != len(outputs):
+            return False
+        unused = dict(recorded)
+        for path in outputs:
+            if not path.is_file():
+                return False
+            key = str(path) if str(path) in unused else next(
+                (k for k in unused if os.path.normcase(Path(str(k)).name) == os.path.normcase(path.name)),
+                None,
+            )
+            if key is None:
+                return False
+            entry = unused.pop(key)
+            if not isinstance(entry, dict) or entry.get('sha256') != _artifact_record(path)['sha256']:
+                return False
+        return not unused
+    except (OSError, ValueError, TypeError):
+        return False
 
 
 @scheduled_stage('parcellation', gpu=True)
@@ -217,8 +281,8 @@ def run_ddparcel_from_registered_bundle(
     receipt = output_dir / 'ddparcel_preparation.json'
     outputs = [nii_fa_reg_norm, nii_trace_reg_norm, nii_min_eig_reg_norm, nii_mid_eig_reg_norm,
                mgz_wmparc_reg, nii_wmparc]
-    if (config.force_recompute or _read_manifest(receipt) != signature
-            or not _artifacts_current(output_dir, outputs)):
+    if (config.force_recompute or not _registered_signature_matches(_read_manifest(receipt), signature)
+            or not _parcellation_artifacts_current(output_dir, outputs)):
         _write_manifest(output_dir / 'ddparcel_qc.json', {'status': 'running', 'automatic_qc_passed': False})
         receipt.unlink(missing_ok=True)
         for path in outputs:

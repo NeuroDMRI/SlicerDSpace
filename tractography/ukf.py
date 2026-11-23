@@ -397,6 +397,58 @@ def signature(raw, options, executable, converter=None):
     return payload
 
 
+UKF_EXECUTION_ONLY_PARAMS = frozenset({"numThreads", "gpuDevice"})
+
+
+def _ukf_executable_matches(recorded, expected) -> bool:
+    if not isinstance(recorded, dict) or not isinstance(expected, dict):
+        return False
+    if recorded.get("sha256") != expected.get("sha256"):
+        return False
+    rec_libs = recorded.get("companion_libraries") or {}
+    exp_libs = expected.get("companion_libraries") or {}
+    if not isinstance(rec_libs, dict) or not isinstance(exp_libs, dict):
+        return False
+    rec_norm = sorted((os.path.normcase(Path(str(k)).name), str(v)) for k, v in rec_libs.items())
+    exp_norm = sorted((os.path.normcase(Path(str(k)).name), str(v)) for k, v in exp_libs.items())
+    return rec_norm == exp_norm
+
+
+def _ukf_signature_matches(recorded, expected) -> bool:
+    if not isinstance(recorded, dict) or not isinstance(expected, dict):
+        return False
+    for key in (
+        "version", "subject_id", "protocol", "shell_policy",
+        "conversion_policy", "mask_policy", "max_excluded_mask_fraction", "gpu",
+    ):
+        if recorded.get(key) != expected.get(key):
+            return False
+    rec_params = recorded.get("parameters")
+    exp_params = expected.get("parameters")
+    if not isinstance(rec_params, dict) or not isinstance(exp_params, dict):
+        return False
+    rec_sci = {k: v for k, v in rec_params.items() if k not in UKF_EXECUTION_ONLY_PARAMS}
+    exp_sci = {k: v for k, v in exp_params.items() if k not in UKF_EXECUTION_ONLY_PARAMS}
+    if rec_sci != exp_sci:
+        return False
+    rec_inputs = recorded.get("inputs")
+    exp_inputs = expected.get("inputs")
+    if not isinstance(rec_inputs, dict) or not isinstance(exp_inputs, dict):
+        return False
+    if set(rec_inputs.keys()) != set(exp_inputs.keys()):
+        return False
+    for key, exp_item in exp_inputs.items():
+        rec_item = rec_inputs.get(key)
+        if not isinstance(rec_item, dict) or not isinstance(exp_item, dict):
+            return False
+        if rec_item.get("sha256") != exp_item.get("sha256"):
+            return False
+    return (
+        _ukf_executable_matches(recorded.get("executable"), expected.get("executable"))
+        and _ukf_executable_matches(recorded.get("converter"), expected.get("converter"))
+    )
+
+
 def current(raw, directory, options=None, executable=None, converter=None, *, _signature=None):
     try:
         products = paths(raw.subject_id, directory)
@@ -406,7 +458,7 @@ def current(raw, directory, options=None, executable=None, converter=None, *, _s
             if _signature is not None
             else signature(raw, options, resolve_executable(executable), resolve_executable(converter, name="DWIConvert"))
         )
-        if record["status"] != "completed" or record["signature"] != expected_signature:
+        if record["status"] != "completed" or not _ukf_signature_matches(record.get("signature"), expected_signature):
             return False
         qc = json.loads(products["qc"].read_text(encoding="utf-8"))
         return qc.get("automatic_qc_passed") is True and all(

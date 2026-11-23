@@ -117,17 +117,22 @@ def _emit(message: str, log: Optional[Callable[[str], None]] = None) -> None:
 
 
 def _file_info(path: Path) -> dict[str, object]:
+    from shared.cache_reuse import ALWAYS_HASH_MAX_BYTES, sha256_file
+
     expanded = path.expanduser()
     if not expanded.exists():
         return {"path": expanded.as_posix(), "exists": False}
     stat = expanded.stat()
-    return {
+    record: dict[str, object] = {
         "path": expanded.resolve().as_posix(),
         "exists": True,
         "is_file": expanded.is_file(),
         "size": stat.st_size,
         "mtime_ns": stat.st_mtime_ns,
     }
+    if expanded.is_file() and stat.st_size <= ALWAYS_HASH_MAX_BYTES:
+        record["sha256"] = sha256_file(expanded)
+    return record
 
 
 def _nonempty_file(path: Path) -> bool:

@@ -334,12 +334,107 @@ def _file_record(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {"path": path.as_posix(), "exists": False}
     stat = path.stat()
-    return {
+    record: dict[str, Any] = {
         "path": path.resolve().as_posix(),
         "exists": True,
         "size": stat.st_size,
         "mtime_ns": stat.st_mtime_ns,
     }
+    if path.is_file():
+        from shared.cache_reuse import sha256_file
+
+        record["sha256"] = sha256_file(path)
+    return record
+
+
+PREPROCESSING_EXECUTION_ONLY_PARAMS = frozenset({"eddy_threads"})
+_BRAIN_MASK_PATH_OPTION_KEYS = frozenset({
+    "pnl_mask_python",
+    "pnl_mask_script",
+    "pnl_mask_model_dir",
+    "pnl_mask_ants_bin_dir",
+    "brain_mask_device",
+})
+
+
+def _brain_mask_cache_key_matches(recorded: object, expected: object) -> bool:
+    from shared.cache_reuse import file_records_equivalent
+
+    if not isinstance(recorded, dict) or not isinstance(expected, dict):
+        return False
+    if recorded.get("backend") != expected.get("backend"):
+        return False
+    rec_insp = recorded.get("inspection") if isinstance(recorded.get("inspection"), dict) else {}
+    exp_insp = expected.get("inspection") if isinstance(expected.get("inspection"), dict) else {}
+    if rec_insp.get("pnl_route_resolved") != exp_insp.get("pnl_route_resolved"):
+        return False
+    native_pnl = (
+        expected.get("backend") == "pnl_cnn"
+        and exp_insp.get("pnl_route_resolved") == "native"
+    )
+    ignored_opts = set(_BRAIN_MASK_PATH_OPTION_KEYS)
+    if native_pnl:
+        ignored_opts.add("threads")
+    rec_opts = {
+        k: v for k, v in (recorded.get("options") or {}).items()
+        if k not in ignored_opts
+    }
+    exp_opts = {
+        k: v for k, v in (expected.get("options") or {}).items()
+        if k not in ignored_opts
+    }
+    if rec_opts != exp_opts:
+        return False
+    rec_models = (recorded.get("assets") or {}).get("model_files")
+    exp_models = (expected.get("assets") or {}).get("model_files")
+    if isinstance(exp_models, list):
+        if not isinstance(rec_models, list) or len(rec_models) != len(exp_models):
+            return False
+        for rec_item, exp_item in zip(rec_models, exp_models):
+            if not file_records_equivalent(rec_item, exp_item, allow_relocated=True):
+                return False
+    return True
+
+
+def preprocessing_cache_key_matches(recorded: object, expected: object) -> bool:
+    """Compare preprocessing v6 cache keys on scientific inputs & settings.
+
+    Tolerates `.py` source edits (`fsl_native.py`, `fsl_runtime.py`,
+    `mrtrix_preproc_runner.py`), `eddy_threads`, `CUDA_VISIBLE_DEVICES`, tool
+    install-path/mtime churn, and subject-directory relocation while preserving
+    strict invalidation for route, execution backend, sidecar hash, PE/readout
+    settings, scientific parameters, brain-mask settings, and raw DWI inputs.
+    """
+    from shared.cache_reuse import file_records_equivalent
+
+    if not isinstance(recorded, dict) or not isinstance(expected, dict):
+        return False
+    for key in ("kind", "version", "execution_backend", "backend", "dwi_sidecar_sha256"):
+        if recorded.get(key) != expected.get(key):
+            return False
+    rec_inputs = recorded.get("inputs")
+    exp_inputs = expected.get("inputs")
+    if not isinstance(rec_inputs, dict) or not isinstance(exp_inputs, dict):
+        return False
+    if set(rec_inputs.keys()) != set(exp_inputs.keys()):
+        return False
+    for key, exp_rec in exp_inputs.items():
+        if not file_records_equivalent(rec_inputs.get(key), exp_rec, allow_relocated=True):
+            return False
+    rec_params = recorded.get("parameters")
+    exp_params = expected.get("parameters")
+    if not isinstance(rec_params, dict) or not isinstance(exp_params, dict):
+        return False
+    rec_sci = {k: v for k, v in rec_params.items() if k not in PREPROCESSING_EXECUTION_ONLY_PARAMS}
+    exp_sci = {k: v for k, v in exp_params.items() if k not in PREPROCESSING_EXECUTION_ONLY_PARAMS}
+    if rec_sci != exp_sci:
+        return False
+    if "topup_config" in expected or "topup_config" in recorded:
+        if not file_records_equivalent(recorded.get("topup_config"), expected.get("topup_config"), allow_relocated=True):
+            return False
+    if not _brain_mask_cache_key_matches(recorded.get("brain_mask"), expected.get("brain_mask")):
+        return False
+    return True
 
 
 def _preprocessing_cache_key(
@@ -1453,7 +1548,7 @@ def run_dwi_preprocessing(
     cached_core_ready = (
         not config.force
         and previous_manifest.get("status") in {"completed", "cached"}
-        and previous_manifest.get("cache_key") == cache_key
+        and preprocessing_cache_key_matches(previous_manifest.get("cache_key"), cache_key)
         and paths["final_dwi"].is_file()
         and paths["final_bval"].is_file()
         and paths["final_bvec"].is_file()

@@ -176,6 +176,50 @@ def _download_model_asset(
     raise RuntimeError(f"Could not download verified asset {filename} from {tag}")
 
 
+def _download_verified_surface_runtime(target: str, work_dir: Path) -> tuple[Path, str] | None:
+    """Download the catalog-pinned OpenMP macOS arm64 surface runtime archive for repacking."""
+    if target != "macos-arm64":
+        return None
+    catalog = json.loads((REPO_ROOT / "models" / "runtime_bundles.json").read_text(encoding="utf-8"))
+    record = next(
+        (
+            item
+            for item in catalog.get("surface", ())
+            if item.get("system") == "Darwin"
+            and item.get("machine") == "arm64"
+            and item.get("published")
+        ),
+        None,
+    )
+    if not record:
+        return None
+    expected_sha = str(record["sha256"]).lower()
+    expected_size = int(record["bytes"])
+    url = str(record["url"])
+    filename = PurePosixPath(str(record["asset"])).name
+    dest = work_dir / filename
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if dest.is_file() and dest.stat().st_size == expected_size and sha256_file(dest) == expected_sha:
+        return dest, "surface-runtime-darwin-arm64"
+    for attempt in range(1, 4):
+        try:
+            print(f"[download] surface runtime {filename} (attempt {attempt}/3)...", flush=True)
+            req = urllib.request.Request(url, headers={"User-Agent": "SlicerDSpace-repackager"})
+            with urllib.request.urlopen(req, timeout=300) as resp, dest.open("wb") as out:
+                shutil.copyfileobj(resp, out, length=8 * 1024 * 1024)
+            if dest.stat().st_size != expected_size:
+                raise RuntimeError(f"Size mismatch for {filename}: {dest.stat().st_size} != {expected_size}")
+            actual_sha = sha256_file(dest)
+            if actual_sha != expected_sha:
+                raise RuntimeError(f"SHA256 mismatch for {filename}: {actual_sha} != {expected_sha}")
+            return dest, "surface-runtime-darwin-arm64"
+        except Exception as exc:
+            dest.unlink(missing_ok=True)
+            print(f"[warn] Surface runtime download retry for {filename}: {exc}", flush=True)
+            time.sleep(3 * attempt)
+    raise RuntimeError(f"Could not download verified surface runtime {filename} from {url}")
+
+
 def _should_skip_member(
     norm_path: str,
     ext_prefix: str,
@@ -183,6 +227,7 @@ def _should_skip_member(
     *,
     replace_macos_ukf: bool = False,
     replace_ukf_runtime_dir: str | None = None,
+    replace_surface_runtime_dir: str | None = None,
     replace_wma_source: bool = False,
     slicer_subdir: str = "Slicer-5.10",
 ) -> bool:
@@ -200,6 +245,10 @@ def _should_skip_member(
     if replace_ukf_runtime_dir:
         ukf_rt = f"{ext_prefix}/bundled-runtimes/{replace_ukf_runtime_dir}"
         if norm_path == ukf_rt or norm_path.startswith(ukf_rt + "/"):
+            return True
+    if replace_surface_runtime_dir:
+        surf_rt = f"{ext_prefix}/bundled-runtimes/{replace_surface_runtime_dir}"
+        if norm_path == surf_rt or norm_path.startswith(surf_rt + "/"):
             return True
     if replace_macos_ukf:
         cli_root = f"{ext_prefix}/lib/{slicer_subdir}/cli-modules"
@@ -357,6 +406,11 @@ def cmd_repack_os_base(args: argparse.Namespace) -> int:
                 print(f"[warn] Standalone UKF asset {arch_name} unavailable ({exc}); keeping existing UKF.", flush=True)
                 standalone_ukf_archive = None
                 standalone_ukf_dir = None
+    surface_rt_archive: Path | None = None
+    surface_rt_dir: str | None = None
+    surf_pair = _download_verified_surface_runtime(target, work_dir)
+    if surf_pair is not None:
+        surface_rt_archive, surface_rt_dir = surf_pair
     new_archive = out_dir / spec["out_name"]
     tmp_new = new_archive.with_name(new_archive.name + ".tmp")
     saw_qt_entry = False
@@ -451,6 +505,7 @@ def cmd_repack_os_base(args: argparse.Namespace) -> int:
                     qt_root,
                     replace_macos_ukf=replace_macos_ukf,
                     replace_ukf_runtime_dir=standalone_ukf_dir if standalone_ukf_archive is not None else None,
+                    replace_surface_runtime_dir=surface_rt_dir if surface_rt_archive is not None else None,
                     replace_wma_source=fresh_wma_source_dir is not None,
                     slicer_subdir=slicer_subdir,
                 ):
@@ -533,6 +588,40 @@ def cmd_repack_os_base(args: argparse.Namespace) -> int:
                             uinfo.gname = "root"
                             with ukf_tf.extractfile(um) as src_fh:
                                 new_tf.addfile(uinfo, src_fh)
+
+            if surface_rt_archive is not None and surface_rt_dir is not None:
+                surf_prefix = f"{ext_prefix}/bundled-runtimes/{surface_rt_dir}"
+                _ensure_tar_dir(f"{ext_prefix}/bundled-runtimes")
+                _ensure_tar_dir(surf_prefix)
+                saw_surface_manifest = False
+                with tarfile.open(surface_rt_archive, "r:gz") as surf_tf:
+                    for sm in surf_tf:
+                        snorm = sm.name.replace("\\", "/").strip("/")
+                        if not snorm or ".." in PurePosixPath(snorm).parts or "\\" in sm.name or ":" in sm.name:
+                            raise RuntimeError(f"Unsafe surface runtime member: {sm.name}")
+                        if sm.issym() or sm.islnk() or sm.isdev():
+                            raise RuntimeError(f"Unsupported link/dev in surface runtime: {sm.name}")
+                        if snorm == "runtime.json":
+                            saw_surface_manifest = True
+                        arcname = f"{surf_prefix}/{snorm}"
+                        if sm.isdir():
+                            _ensure_tar_dir(arcname)
+                        elif sm.isfile():
+                            _ensure_tar_dir(PurePosixPath(arcname).parent.as_posix())
+                            sinfo = tarfile.TarInfo(name=arcname)
+                            sinfo.type = tarfile.REGTYPE
+                            sinfo.size = sm.size
+                            sinfo.mode = 0o755 if (sm.mode & 0o111) else 0o644
+                            sinfo.mtime = sm.mtime or DETERMINISTIC_MTIME
+                            sinfo.uid = 0
+                            sinfo.gid = 0
+                            sinfo.uname = "root"
+                            sinfo.gname = "root"
+                            with surf_tf.extractfile(sm) as src_fh:
+                                new_tf.addfile(sinfo, src_fh)
+                if not saw_surface_manifest:
+                    raise RuntimeError(f"Surface runtime archive missing runtime.json: {surface_rt_archive}")
+                print(f"[repack] Replaced {surf_prefix} from {surface_rt_archive.name}", flush=True)
 
             if fresh_wma_source_dir is not None:
                 wma_arc_root = f"{ext_prefix}/bundled-sources/{fresh_wma_source_dir.name}"

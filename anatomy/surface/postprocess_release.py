@@ -508,6 +508,27 @@ def run_ddsurfer_postprocess(
     )
 
 
+def _resolve_postprocess_threads() -> int:
+    """Resolve total CPU thread budget for surface postprocessing (2 hemis x up to 4 OpenMP threads)."""
+    try:
+        cpus = len(os.sched_getaffinity(0))
+    except (AttributeError, OSError):
+        cpus = os.cpu_count() or 4
+    cpus = max(1, int(cpus))
+    env_stage = os.environ.get("SLICERDSPACE_STAGE_CPUS", "").strip()
+    if env_stage.isdigit() and int(env_stage) > 0:
+        return max(1, min(int(env_stage), cpus))
+    if sys.platform == "darwin" and cpus >= 6:
+        try:
+            from shared.hardware_adapt import is_apple_silicon_host
+
+            if is_apple_silicon_host():
+                return max(4, min(8, cpus - 2))
+        except Exception:
+            pass
+    return max(2, min(8, cpus))
+
+
 def _run_current_postprocess(config, subject_root, native_dir, log):
     from .backend_bridge import BACKEND_ROOT, native_surface_hashes, run_backend, sha256, upstream_record
     layout = subject_layout(subject_root, output_root=config.output_root)
@@ -549,7 +570,8 @@ def _run_current_postprocess(config, subject_root, native_dir, log):
     fs_subject = runtime / config.subject_id
     command = [BACKEND_ROOT / 'postprocessing/pipeline.py', '--subject', config.subject_id,
                '--output-root', runtime, '--hemi', 'both' if config.mode == 'whole' else config.mode,
-               '--atlases', ','.join(config.atlases or ('aparc', 'aparc.a2009s')), '--backend', backend]
+               '--atlases', ','.join(config.atlases or ('aparc', 'aparc.a2009s')), '--backend', backend,
+               '--threads', str(_resolve_postprocess_threads())]
     hemis = ('lh',) if config.mode == 'left' else ('rh',) if config.mode == 'right' else ('lh', 'rh')
     for hemi in hemis:
         for kind in ('white', 'pial'):

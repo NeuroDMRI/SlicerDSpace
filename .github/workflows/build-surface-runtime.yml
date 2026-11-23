@@ -97,8 +97,43 @@ jobs:
           print('atlas.tar.gz', len(data), record['sha256'])
           PY
 
+      - name: Build static libomp.a (macOS 13.0 target)
+        run: |
+          OMP_SRC="$RUNNER_TEMP/llvm-openmp-src"
+          OMP_BUILD="$RUNNER_TEMP/llvm-openmp-build"
+          OMP_PREFIX="$RUNNER_TEMP/llvm-openmp-install"
+          git init "$OMP_SRC"
+          git -C "$OMP_SRC" remote add origin https://github.com/llvm/llvm-project.git
+          git -C "$OMP_SRC" fetch --depth=1 --filter=blob:none origin refs/tags/llvmorg-18.1.8
+          git -C "$OMP_SRC" sparse-checkout set --cone openmp cmake
+          git -C "$OMP_SRC" checkout --detach FETCH_HEAD
+          cmake -S "$OMP_SRC/openmp" -B "$OMP_BUILD" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DLIBOMP_ENABLE_SHARED=OFF \
+            -DLIBOMP_OMPT_SUPPORT=OFF \
+            -DOPENMP_ENABLE_LIBOMPTARGET=OFF \
+            -DOPENMP_ENABLE_OMPT_TOOLS=OFF \
+            -DCMAKE_INSTALL_PREFIX="$OMP_PREFIX"
+          cmake --build "$OMP_BUILD" --target omp --parallel 4
+          cmake --install "$OMP_BUILD/runtime"
+          test -f "$OMP_PREFIX/lib/libomp.a"
+          test -f "$OMP_PREFIX/include/omp.h"
+          cat > "$RUNNER_TEMP/macos-static-openmp.cmake" <<EOF
+          include_directories(SYSTEM "${OMP_PREFIX}/include")
+          set(OpenMP_C_FLAGS "-Xpreprocessor -fopenmp -I${OMP_PREFIX}/include" CACHE STRING "" FORCE)
+          set(OpenMP_CXX_FLAGS "-Xpreprocessor -fopenmp -I${OMP_PREFIX}/include" CACHE STRING "" FORCE)
+          set(OpenMP_C_LIB_NAMES "omp" CACHE STRING "" FORCE)
+          set(OpenMP_CXX_LIB_NAMES "omp" CACHE STRING "" FORCE)
+          set(OpenMP_omp_LIBRARY "${OMP_PREFIX}/lib/libomp.a" CACHE FILEPATH "" FORCE)
+          EOF
+          echo "OMP_TOOLCHAIN_FILE=$RUNNER_TEMP/macos-static-openmp.cmake" >> "$GITHUB_ENV"
+
       - name: Build the surface tools (macOS 13.0 target)
         working-directory: anatomy/surface/ddsurfer_backend
+        env:
+          CMAKE_TOOLCHAIN_FILE: ${{ env.OMP_TOOLCHAIN_FILE }}
         run: |
           python3 -m postprocessing.core.build --jobs 4 \
             --prefix "$RUNTIME" \
@@ -126,10 +161,14 @@ jobs:
             --json "$OUT/verify-darwin-arm64.json"
           (cd anatomy/surface/ddsurfer_backend && python3 -m postprocessing.core.runtime --runtime "$RUNTIME")
           if grep -q "OpenMP not found" "$WORK/surface-configure.log"; then
-            echo "openmp: not found (tools built without OpenMP, like the shipped runtime)" | tee -a "$OUT/toolchain-darwin-arm64.txt"
-          else
-            echo "openmp: found" | tee -a "$OUT/toolchain-darwin-arm64.txt"
+            echo "::error::OpenMP not found during surface runtime configure"
+            exit 1
           fi
+          if ! strings "$RUNTIME/bin/mris_sphere" | grep -q "available threads:"; then
+            echo "::error::mris_sphere was built without HAVE_OPENMP"
+            exit 1
+          fi
+          echo "openmp: found (static libomp.a from llvmorg-18.1.8, macOS 13.0 target)" | tee -a "$OUT/toolchain-darwin-arm64.txt"
 
       - name: Package the runtime
         run: |

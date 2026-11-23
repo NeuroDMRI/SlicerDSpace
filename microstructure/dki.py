@@ -851,21 +851,52 @@ def _resolve_dki_fork_workers(config: DkiConfig) -> int:
     return 1
 
 
-def _dki_fork_chunk_worker(bounds: tuple[int, int]):
-    start, stop = bounds
-    ctx = _DKI_FORK_CTX
-    assert ctx is not None
+def _resolve_dki_spawn_workers(config: DkiConfig) -> int:
+    """Resolve RAM-safe ``spawn`` worker count on Windows/macOS for CPU dense DKI fitting."""
+    if sys.platform not in ("win32", "darwin"):
+        return 1
+    main_file = getattr(sys.modules.get("__main__"), "__file__", None)
+    if (
+        "slicerapp" in Path(sys.executable).stem.lower()
+        or not main_file
+        or not Path(main_file).is_file()
+    ):
+        return 1
+    avail = os.cpu_count() or 1
+    if config.num_threads is not None:
+        req = max(1, min(int(config.num_threads), avail))
+    else:
+        env_stage = os.environ.get("SLICERDSPACE_STAGE_CPUS", "").strip()
+        if env_stage.isdigit() and int(env_stage) > 0:
+            req = max(1, min(int(env_stage), avail))
+        else:
+            req = max(1, min(4, max(1, avail // 2)))
+    if req <= 1:
+        return 1
+    try:
+        from shared.hardware_adapt import adaptive_spawn_workers
+
+        return max(
+            1,
+            int(
+                adaptive_spawn_workers(
+                    req,
+                    per_worker_ram_gib=1.5,
+                    reserve_ram_gib=6.0,
+                    max_workers=4,
+                )
+            ),
+        )
+    except Exception:
+        return min(req, 4)
+
+
+def _eval_dki_chunk_signals(model, fit_method_name: str, start: int, stop: int, chunk_unscaled, slope, inter):
     import numpy as np
     from dipy.reconst.dki import DiffusionKurtosisFit
 
-    masked_unscaled = ctx["masked_unscaled"]
-    slope = ctx["slope"]
-    inter = ctx["inter"]
-    model = ctx["model"]
-    fit_method_name = ctx["fit_method_name"]
-
     t0 = time.monotonic()
-    signals = np.asarray(masked_unscaled[start:stop], dtype=np.float64) * slope + inter
+    signals = np.asarray(chunk_unscaled, dtype=np.float64) * slope + inter
     finite = np.isfinite(signals).all(axis=1)
     positive = (signals > 0).all(axis=1)
     nonfinite_cnt = int(np.count_nonzero(~finite))
@@ -901,6 +932,57 @@ def _dki_fork_chunk_worker(bounds: tuple[int, int]):
     valid &= np.isfinite(rmse) & np.isfinite(nrmse)
     t_met = time.monotonic() - t2
     return (start, stop, nonfinite_cnt, nonpos_cnt, fit_local, params, s0, raw, rmse, nrmse, valid, t_read, t_fit, t_met)
+
+
+def _init_dki_spawn_worker(bvals, bvecs, b0_threshold: float, fit_method_name: str, slope, inter) -> None:
+    _init_dki_fork_worker()
+    from dipy.core.gradients import gradient_table
+    from dipy.reconst.dki import DiffusionKurtosisModel
+
+    gtab = gradient_table(bvals, bvecs=bvecs, b0_threshold=float(b0_threshold), atol=0.01)
+    model = DiffusionKurtosisModel(
+        gtab,
+        fit_method=fit_method_name,
+        return_S0_hat=True,
+        min_signal=1e-6,
+    )
+    global _DKI_FORK_CTX
+    _DKI_FORK_CTX = {
+        "model": model,
+        "fit_method_name": fit_method_name,
+        "slope": slope,
+        "inter": inter,
+    }
+
+
+def _dki_spawn_chunk_worker(payload: tuple[int, int, Any]):
+    start, stop, chunk_unscaled = payload
+    ctx = _DKI_FORK_CTX
+    assert ctx is not None
+    return _eval_dki_chunk_signals(
+        ctx["model"],
+        ctx["fit_method_name"],
+        start,
+        stop,
+        chunk_unscaled,
+        ctx["slope"],
+        ctx["inter"],
+    )
+
+
+def _dki_fork_chunk_worker(bounds: tuple[int, int]):
+    start, stop = bounds
+    ctx = _DKI_FORK_CTX
+    assert ctx is not None
+    return _eval_dki_chunk_signals(
+        ctx["model"],
+        ctx["fit_method_name"],
+        start,
+        stop,
+        ctx["masked_unscaled"][start:stop],
+        ctx["slope"],
+        ctx["inter"],
+    )
 
 
 def _dki_fork_metrics_worker(chunk: tuple[Any, Any]):
@@ -1047,6 +1129,71 @@ def _compute_maps(config: DkiConfig, paths: dict[str, Path], log):
                 if (use_fast_dense_global and not is_cuda_dev and masked_unscaled is not None and len(flat_indices) >= 16384)
                 else 1
             )
+            spawn_workers = (
+                _resolve_dki_spawn_workers(config)
+                if (
+                    fork_workers < 2
+                    and use_fast_dense_global
+                    and not is_cuda_dev
+                    and masked_unscaled is not None
+                    and len(flat_indices) >= 16384
+                )
+                else 1
+            )
+
+            def _apply_parallel_dki_result(result, completed_so_far: int) -> int:
+                nonlocal dense_used, last_progress_time
+                (
+                    start,
+                    stop,
+                    nonfinite_cnt,
+                    nonpos_cnt,
+                    fit_local,
+                    params,
+                    s0,
+                    raw,
+                    rmse,
+                    nrmse,
+                    valid,
+                    _t_read,
+                    _t_fit,
+                    _t_met,
+                ) = result
+                indices = flat_indices[start:stop]
+                counts["nonfinite_signal_voxels"] += nonfinite_cnt
+                counts["nonpositive_signal_voxels"] += nonpos_cnt
+                if params is not None:
+                    dense_used = True
+                    fit_indices = indices[fit_local]
+                    stamp = time.monotonic()
+                    for key, values in raw.items():
+                        upper = 1.0 if key == "kfa" else config.display_max_kurtosis
+                        lower = 0.0 if key == "kfa" else config.display_min_kurtosis
+                        arrays[f"{key}_raw"].ravel()[fit_indices] = values
+                        arrays[key].ravel()[fit_indices] = np.clip(values, lower, upper)
+                        metrics[key]["finite"] += int(np.count_nonzero(np.isfinite(values)))
+                        metrics[key]["negative"] += int(np.count_nonzero(values < 0))
+                        metrics[key]["below_display"] += int(np.count_nonzero(values < lower))
+                        metrics[key]["above_display"] += int(np.count_nonzero(values > upper))
+                        valid &= np.isfinite(values) & (values >= lower) & (values <= upper)
+                    arrays["params"].reshape(-1, 27)[fit_indices] = params
+                    arrays["s0"].ravel()[fit_indices] = s0
+                    arrays["rmse"].ravel()[fit_indices] = rmse
+                    arrays["nrmse"].ravel()[fit_indices] = nrmse
+                    arrays["fit_mask"].ravel()[fit_indices] = 1
+                    arrays["valid_mask"].ravel()[fit_indices] = valid.astype(np.uint8)
+                    counts["fitted_voxels"] += len(fit_indices)
+                    counts["valid_voxels"] += int(np.count_nonzero(valid))
+                    phase_times["map_assignment"] += time.monotonic() - stamp
+                completed_so_far += len(indices)
+                now_prog = time.monotonic()
+                if completed_so_far == len(flat_indices) or (now_prog - last_progress_time >= 1.0):
+                    _progress(paths["progress"], config, "running", completed_voxels=completed_so_far, total_voxels=len(flat_indices), **counts)
+                    last_progress_time = now_prog
+                if log and (completed_so_far == len(flat_indices) or completed_so_far % max(len(indices), 81920) < len(indices)):
+                    log(f"[DKI] Processed {completed_so_far}/{len(flat_indices)} mask voxels ({counts['valid_voxels']} valid)")
+                return completed_so_far
+
             if fork_workers >= 2:
                 import multiprocessing as mp
 
@@ -1072,57 +1219,51 @@ def _compute_maps(config: DkiConfig, paths: dict[str, Path], log):
                     ctx_mp = mp.get_context("fork")
                     with ctx_mp.Pool(processes=eff_workers, initializer=_init_dki_fork_worker) as pool:
                         for result in pool.imap_unordered(_dki_fork_chunk_worker, chunk_ranges, chunksize=1):
-                            (
-                                start,
-                                stop,
-                                nonfinite_cnt,
-                                nonpos_cnt,
-                                fit_local,
-                                params,
-                                s0,
-                                raw,
-                                rmse,
-                                nrmse,
-                                valid,
-                                _t_read,
-                                _t_fit,
-                                _t_met,
-                            ) = result
-                            indices = flat_indices[start:stop]
-                            counts["nonfinite_signal_voxels"] += nonfinite_cnt
-                            counts["nonpositive_signal_voxels"] += nonpos_cnt
-                            if params is not None:
-                                dense_used = True
-                                fit_indices = indices[fit_local]
-                                stamp = time.monotonic()
-                                for key, values in raw.items():
-                                    upper = 1.0 if key == "kfa" else config.display_max_kurtosis
-                                    lower = 0.0 if key == "kfa" else config.display_min_kurtosis
-                                    arrays[f"{key}_raw"].ravel()[fit_indices] = values
-                                    arrays[key].ravel()[fit_indices] = np.clip(values, lower, upper)
-                                    metrics[key]["finite"] += int(np.count_nonzero(np.isfinite(values)))
-                                    metrics[key]["negative"] += int(np.count_nonzero(values < 0))
-                                    metrics[key]["below_display"] += int(np.count_nonzero(values < lower))
-                                    metrics[key]["above_display"] += int(np.count_nonzero(values > upper))
-                                    valid &= np.isfinite(values) & (values >= lower) & (values <= upper)
-                                arrays["params"].reshape(-1, 27)[fit_indices] = params
-                                arrays["s0"].ravel()[fit_indices] = s0
-                                arrays["rmse"].ravel()[fit_indices] = rmse
-                                arrays["nrmse"].ravel()[fit_indices] = nrmse
-                                arrays["fit_mask"].ravel()[fit_indices] = 1
-                                arrays["valid_mask"].ravel()[fit_indices] = valid.astype(np.uint8)
-                                counts["fitted_voxels"] += len(fit_indices)
-                                counts["valid_voxels"] += int(np.count_nonzero(valid))
-                                phase_times["map_assignment"] += time.monotonic() - stamp
-                            completed += len(indices)
-                            now_prog = time.monotonic()
-                            if completed == len(flat_indices) or (now_prog - last_progress_time >= 1.0):
-                                _progress(paths["progress"], config, "running", completed_voxels=completed, total_voxels=len(flat_indices), **counts)
-                                last_progress_time = now_prog
-                            if log and (completed == len(flat_indices) or completed % max(len(indices), 81920) < len(indices)):
-                                log(f"[DKI] Processed {completed}/{len(flat_indices)} mask voxels ({counts['valid_voxels']} valid)")
+                            completed = _apply_parallel_dki_result(result, completed)
                 finally:
                     _DKI_FORK_CTX = None
+                phase_times["tensor_fit"] += max(0.0, (time.monotonic() - wall_fit_start) - phase_times["map_assignment"])
+            elif spawn_workers >= 2:
+                from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
+                import multiprocessing as mp
+
+                spawn_step = min(chunk_step, 4096)
+                chunk_ranges = [
+                    (s, min(s + spawn_step, len(flat_indices)))
+                    for s in range(0, len(flat_indices), spawn_step)
+                ]
+                eff_workers = min(spawn_workers, len(chunk_ranges))
+                max_inflight = eff_workers
+                completed = 0
+                wall_fit_start = time.monotonic()
+                init_args = (
+                    np.asarray(gtab.bvals, dtype=np.float64),
+                    np.asarray(gtab.bvecs, dtype=np.float64),
+                    float(config.b0_threshold),
+                    fit_method_name,
+                    proxy.slope,
+                    proxy.inter,
+                )
+                with ProcessPoolExecutor(
+                    max_workers=eff_workers,
+                    mp_context=mp.get_context("spawn"),
+                    initializer=_init_dki_spawn_worker,
+                    initargs=init_args,
+                ) as pool:
+                    pending = set()
+                    it = iter(chunk_ranges)
+                    while True:
+                        while len(pending) < max_inflight:
+                            try:
+                                s, e = next(it)
+                            except StopIteration:
+                                break
+                            pending.add(pool.submit(_dki_spawn_chunk_worker, (s, e, masked_unscaled[s:e])))
+                        if not pending:
+                            break
+                        done, pending = wait(pending, return_when=FIRST_COMPLETED)
+                        for fut in done:
+                            completed = _apply_parallel_dki_result(fut.result(), completed)
                 phase_times["tensor_fit"] += max(0.0, (time.monotonic() - wall_fit_start) - phase_times["map_assignment"])
             else:
                 for start in range(0, len(flat_indices), chunk_step):

@@ -687,6 +687,7 @@ def _write_filtered_parcellation(
     destination: Path,
     *,
     allowed_labels: Iterable[int],
+    sequential_remap: bool = False,
 ) -> None:
     try:
         import nibabel as nib
@@ -696,11 +697,24 @@ def _write_filtered_parcellation(
 
     image = nib.load(source.as_posix())
     data = np.asarray(image.dataobj)
-    allowed = np.asarray(sorted({int(label) for label in allowed_labels}), dtype=data.dtype)
-    filtered = np.where(np.isin(data, allowed), data, 0)
+    sorted_allowed = sorted({int(label) for label in allowed_labels if int(label) > 0})
+    header = image.header.copy()
+    if sequential_remap and sorted_allowed:
+        max_lbl = int(sorted_allowed[-1])
+        lut = np.zeros(max_lbl + 1, dtype=np.uint16 if len(sorted_allowed) < 65535 else np.int32)
+        for seq_idx, orig_lbl in enumerate(sorted_allowed, start=1):
+            lut[orig_lbl] = seq_idx
+        arr_i32 = np.asarray(data, dtype=np.int32)
+        in_range = (arr_i32 >= 0) & (arr_i32 <= max_lbl)
+        filtered = np.zeros(arr_i32.shape, dtype=lut.dtype)
+        filtered[in_range] = lut[arr_i32[in_range]]
+        header.set_data_dtype(filtered.dtype)
+    else:
+        allowed = np.asarray(sorted_allowed, dtype=data.dtype)
+        filtered = np.where(np.isin(data, allowed), data, 0)
     destination.parent.mkdir(parents=True, exist_ok=True)
     nib.save(
-        nib.Nifti1Image(filtered, image.affine, image.header),
+        nib.Nifti1Image(filtered, image.affine, header),
         destination.as_posix(),
     )
 
@@ -1410,12 +1424,20 @@ def run_connectome(config: ConnectomeConfig, *, log: Optional[Callable[[str], No
                     node_filter=config.node_filter,
                 )
                 command_config = config
-                if node_labels != unique_labels:
-                    filtered_parcellation = output_dir / f"{config.subject_id}-connectome-node-parcellation.nii.gz"
+                use_seq_remap = bool(
+                    compress_dense
+                    and node_labels
+                    and max(node_labels) > 64
+                    and max(node_labels) > len(node_labels) * 2
+                )
+                if node_labels != unique_labels or use_seq_remap:
+                    filtered_ext = ".nii" if use_seq_remap else ".nii.gz"
+                    filtered_parcellation = output_dir / f"{config.subject_id}-connectome-node-parcellation{filtered_ext}"
                     _write_filtered_parcellation(
                         config.parcellation_path.expanduser().resolve(),
                         filtered_parcellation,
                         allowed_labels=node_labels,
+                        sequential_remap=use_seq_remap,
                     )
                     command_config = replace(config, parcellation_path=filtered_parcellation)
                     manifest["outputs"]["filtered_parcellation"] = filtered_parcellation.as_posix()  # type: ignore[index]

@@ -231,6 +231,19 @@ class SharedHardwareAdaptCrossPlatformTests(unittest.TestCase):
                 mock.patch("shared.hardware_adapt.host_total_ram_gib", return_value=32.0),
             ):
                 self.assertEqual(dki._resolve_dki_fork_workers(fake_cfg), 1)
+                fake_main = types.SimpleNamespace(__file__=__file__)
+                with (
+                    mock.patch.dict(sys.modules, {"__main__": fake_main}),
+                    mock.patch.object(dki.sys, "executable", r"C:\Slicer\bin\python-real.exe"),
+                    mock.patch("os.cpu_count", return_value=24),
+                    mock.patch("shared.hardware_adapt.query_host_available_ram_bytes", return_value=24 * 1024**3),
+                ):
+                    self.assertEqual(dki._resolve_dki_spawn_workers(fake_cfg), 4)
+                with (
+                    mock.patch.dict(sys.modules, {"__main__": fake_main}),
+                    mock.patch.object(dki.sys, "executable", r"C:\Slicer\bin\SlicerApp-real.exe"),
+                ):
+                    self.assertEqual(dki._resolve_dki_spawn_workers(fake_cfg), 1)
 
             with (
                 mock.patch.object(noddi_accel.sys, "platform", "linux"),

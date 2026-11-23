@@ -475,7 +475,28 @@ def _fit_dti_fa_and_peaks(
             del w_t, w_pinv_t_gpu, w_outer_t, lo_idx_t, sphere_t
             empty_cuda_cache_safely()
     else:
-        results = [_cpu_chunk(s, min(n_vox, s + 32768)) for s in range(0, n_vox, 32768)] if n_vox > 0 else []
+        if n_vox <= 0:
+            results = []
+        else:
+            from concurrent.futures import ThreadPoolExecutor
+            from contextlib import nullcontext
+            import os as _os
+            from shared.numeric_threads import reserved_stage_cpus
+
+            cpus = reserved_stage_cpus() or max(1, int(_os.cpu_count() or 1))
+            workers = max(1, min(16, cpus))
+            chunks = [(s, min(n_vox, s + 32768)) for s in range(0, n_vox, 32768)]
+            if workers > 1 and len(chunks) >= 2 and n_vox >= 65536:
+                try:
+                    from threadpoolctl import threadpool_limits
+
+                    blas_ctx = threadpool_limits(limits=1)
+                except Exception:
+                    blas_ctx = nullcontext()
+                with blas_ctx, ThreadPoolExecutor(max_workers=min(workers, len(chunks))) as pool:
+                    results = list(pool.map(lambda b: _cpu_chunk(b[0], b[1]), chunks))
+            else:
+                results = [_cpu_chunk(s, e) for s, e in chunks]
 
     fa_vol = np.zeros(mask.shape, dtype=np.float64)
     peak_indices = np.full(mask.shape + (1,), -1, dtype=np.int32)
@@ -544,37 +565,97 @@ def _run_dipy_dti_tracking(
     # Extract masked voxels in exact C-order (`dwi_full[mask]`): use fast single-pass
     # in-memory decode when ample host RAM is available, or bounded-RAM mmap z-slabs
     # on modest 8-16 GiB machines / heavily loaded cohort nodes.
-    from shared.diffusion_io import diffusion_image
+    from shared.diffusion_io import diffusion_image, ensure_cached_uncompressed_nifti
     from shared.hardware_adapt import GIB, adaptive_cpu_slab_z, query_host_available_ram_bytes
 
     n_mask_vox = int(mask.sum())
     data_in_mask = np.empty((n_mask_vox, dwi_shape[3]), dtype=np.float32)
     if n_mask_vox > 0:
-        full_f32_bytes = int(np.prod(dwi_shape)) * 4
-        avail_ram = query_host_available_ram_bytes()
-        can_single_pass_ram = (
-            avail_ram is not None
-            and avail_ram >= max(int(4 * GIB), full_f32_bytes * 3)
-        )
-        if can_single_pass_ram:
-            full_arr = np.asarray(dwi_img.dataobj, dtype=np.float32)
-            data_in_mask[:] = full_arr[mask]
-            del full_arr
-        else:
-            slab_z = adaptive_cpu_slab_z(dwi_shape, 16, min_step_z=4)
-            mask_rank = np.full(mask.shape, -1, dtype=np.int32)
-            mask_rank[mask] = np.arange(n_mask_vox, dtype=np.int32)
-            with diffusion_image(raw.dwi_path, streamlines_path.parent) as mm_img:
-                mm_dataobj = mm_img.dataobj
-                for z0 in range(0, dwi_shape[2], slab_z):
-                    z1 = min(dwi_shape[2], z0 + slab_z)
-                    mask_slab = mask[:, :, z0:z1]
-                    if not np.any(mask_slab):
-                        continue
-                    dest_idx = mask_rank[:, :, z0:z1][mask_slab]
-                    slab_arr = np.asarray(mm_dataobj[:, :, z0:z1, :], dtype=np.float32)
-                    data_in_mask[dest_idx] = slab_arr[mask_slab]
-            del mask_rank
+        loaded_fast = False
+        if raw.dwi_path.name.endswith(".gz"):
+            try:
+                cached_nii = ensure_cached_uncompressed_nifti(raw.dwi_path)
+            except Exception:
+                cached_nii = None
+            if cached_nii is not None and cached_nii.is_file():
+                cached_img = nib.load(cached_nii.as_posix(), mmap="r")
+                try:
+                    c_proxy = cached_img.dataobj
+                    c_unscaled = c_proxy.get_unscaled()
+                    c_slope = float(c_proxy.slope) if np.isfinite(c_proxy.slope) else 1.0
+                    c_inter = float(c_proxy.inter) if np.isfinite(c_proxy.inter) else 0.0
+                    need_scale = (c_slope != 1.0) or (c_inter != 0.0)
+                    for vol_i in range(dwi_shape[3]):
+                        vol_3d = np.asarray(c_unscaled[..., vol_i])[mask].astype(np.float32, copy=False)
+                        if need_scale:
+                            vol_3d = vol_3d * np.float32(c_slope) + np.float32(c_inter)
+                        data_in_mask[:, vol_i] = vol_3d
+                    loaded_fast = True
+                finally:
+                    if isinstance(c_unscaled, np.memmap) and getattr(c_unscaled, "_mmap", None) is not None:
+                        c_unscaled._mmap.close()
+        if not loaded_fast and raw.dwi_path.name.endswith(".gz"):
+            import shutil as _shutil
+            import subprocess as _subprocess
+            import sys as _sys
+
+            decompressor = _shutil.which("pigz") or (_shutil.which("gzip") if _sys.platform != "win32" else None)
+            if decompressor and isinstance(dwi_img, nib.Nifti1Image) and dwi_img.header.endianness == "<":
+                try:
+                    vox_off = int(dwi_img.header.get_data_offset()) or 352
+                    dtype = np.dtype(dwi_img.header.get_data_dtype()).newbyteorder("<")
+                    expected_bytes = vox_off + int(np.prod(dwi_shape, dtype=np.int64)) * dtype.itemsize
+                    if vox_off >= 352:
+                        from shared.external_process import external_python_environment, subprocess_no_window_kwargs
+
+                        proc = _subprocess.run(
+                            [decompressor, "-dc", str(raw.dwi_path)],
+                            check=True,
+                            stdout=_subprocess.PIPE,
+                            stderr=_subprocess.DEVNULL,
+                            env=external_python_environment(),
+                            **subprocess_no_window_kwargs(),
+                        )
+                        buf = proc.stdout
+                        if len(buf) >= expected_bytes:
+                            raw_4d = np.ndarray(shape=dwi_shape, dtype=dtype, buffer=buf, offset=vox_off, order="F")
+                            slope = float(dwi_img.header["scl_slope"]) if np.isfinite(dwi_img.header["scl_slope"]) else 0.0
+                            inter = float(dwi_img.header["scl_inter"]) if np.isfinite(dwi_img.header["scl_inter"]) else 0.0
+                            need_scale = slope != 0.0 and (slope != 1.0 or inter != 0.0)
+                            for vol_i in range(dwi_shape[3]):
+                                vol_3d = raw_4d[..., vol_i][mask].astype(np.float32, copy=False)
+                                if need_scale:
+                                    vol_3d = vol_3d * np.float32(slope) + np.float32(inter)
+                                data_in_mask[:, vol_i] = vol_3d
+                            loaded_fast = True
+                except Exception:
+                    loaded_fast = False
+        if not loaded_fast:
+            full_f32_bytes = int(np.prod(dwi_shape)) * 4
+            avail_ram = query_host_available_ram_bytes()
+            can_single_pass_ram = (
+                avail_ram is not None
+                and avail_ram >= max(int(4 * GIB), full_f32_bytes * 3)
+            )
+            if can_single_pass_ram:
+                full_arr = np.asarray(dwi_img.dataobj, dtype=np.float32)
+                data_in_mask[:] = full_arr[mask]
+                del full_arr
+            else:
+                slab_z = adaptive_cpu_slab_z(dwi_shape, 16, min_step_z=4)
+                mask_rank = np.full(mask.shape, -1, dtype=np.int32)
+                mask_rank[mask] = np.arange(n_mask_vox, dtype=np.int32)
+                with diffusion_image(raw.dwi_path, streamlines_path.parent) as mm_img:
+                    mm_dataobj = mm_img.dataobj
+                    for z0 in range(0, dwi_shape[2], slab_z):
+                        z1 = min(dwi_shape[2], z0 + slab_z)
+                        mask_slab = mask[:, :, z0:z1]
+                        if not np.any(mask_slab):
+                            continue
+                        dest_idx = mask_rank[:, :, z0:z1][mask_slab]
+                        slab_arr = np.asarray(mm_dataobj[:, :, z0:z1, :], dtype=np.float32)
+                        data_in_mask[dest_idx] = slab_arr[mask_slab]
+                del mask_rank
 
     from shared import gradient_frame
 
@@ -615,9 +696,18 @@ def _run_dipy_dti_tracking(
     )
     stopping_criterion = ThresholdStoppingCriterion(fa, float(config.min_fa))
     if eudx_tracking is not None:
+        import os as _os
         import sys
         from shared.numeric_threads import reserved_stage_cpus
 
+        stage_cpus = reserved_stage_cpus()
+        if sys.platform == "darwin":
+            eudx_threads = 1
+        elif stage_cpus is not None:
+            eudx_threads = int(stage_cpus)
+        else:
+            host_cpus = int(_os.cpu_count() or 1)
+            eudx_threads = min(32, host_cpus) if host_cpus > 32 else 0
         min_length, max_length = _eudx_length_limits(
             dipy_version,
             config.step_size_mm,
@@ -633,7 +723,7 @@ def _run_dipy_dti_tracking(
             max_len=max_length,
             min_len=min_length,
             max_angle=float(config.max_angle_deg),
-            nbr_threads=1 if sys.platform == "darwin" else (reserved_stage_cpus() or 0),
+            nbr_threads=eudx_threads,
             random_seed=int(config.random_seed),
             return_all=True,
         )

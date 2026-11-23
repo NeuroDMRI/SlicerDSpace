@@ -75,6 +75,41 @@ WSL 是 Linux 后端，不是 Windows 原生计算；Windows 与 Apple Silicon m
 
 ---
 
+## 各阶段 / 模块硬件内存与显存需求参考
+
+下表中的主机内存峰值综合了 `HCP 100307` 全脑多壳层数据（`145 × 174 × 145 × 288`，`1.25 mm` 各向同性，未压缩 `float64` DWI 信号约 `7.85 GiB`）在个人 Windows PC（`i7-13700K`、32 GB 内存、纯 CPU）与 Linux `x86_64` M1 探针（`shared/cohort_defaults.py`）上的实测峰值，以及批处理规划启发值（`shared/cohort_planning.py`）和显存 / OOM 保护门限（`shared/hardware_adapt.py`、`shared/environment.py`、`anatomy/surface/ddsurfer_backend/inference/predict.py`）。常规临床单壳层采集（`<= 64` 卷）的实际内存占用通常显著更低。
+
+- **主机内存基线**：`16 GiB` 内存可覆盖全部 22 个模块在 HCP `288` 卷全脑数据上的单被试运行（已在 Apple M4 16 GB 统一内存上完成实测）；若运行完整多壳层全流程、`MK-Curve`、`UKF`、`100 万`流线 `CSD/ACT`、`WMA` 或多被试队列批处理，建议配置 `32 GiB` 及以上内存；常规临床（`<= 64` 卷）DTI 及基础路线在 `8 GiB` 内存上即可运行。
+- **消费级 GPU 与 Windows WDDM（`4–8 GiB` 显存）**：在 `auto` 设备模式下，CUDA 算子会先查询可用显存（`torch.cuda.mem_get_info`），按 Windows TDR 上限（`windows_tdr_cap` / `consumer_fp64_tdr_cap`）自适应缩放分块大小，在 Windows WDDM 可用显存低于 `8.0 GiB`（Linux 低于 `6.0 GiB`）时自动禁用 `cudnn.benchmark` 以避免工作区溢出至共享内存，并在显存不足（OOM）时自动将分块减半或回退至 CPU。`--low-memory` 模式会限制单阶段内存预留、并发作业数（`1` 个作业 / `<= 4` 线程）与体素分块，已在 `3.5 GiB` 笔记本显存上限下通过验证（峰值显存 `<= 2.4 GiB`）。
+- **显式上限控制**：可通过环境变量 `SLICERDSPACE_MAX_VRAM_GIB` 与 `SLICERDSPACE_MAX_RAM_GIB` 手动设定保守显存 / 内存上限，或在批处理模式下传入 `--low-memory`。
+
+| 阶段 / 模块 | 典型峰值内存（HCP 288 卷） | 推荐主机内存 | GPU 显存需求（CUDA / MPS） | 说明（OOM 防护 / 自动回退） |
+| --- | --- | --- | --- | --- |
+| **输入与校验**（`DICOM / NIfTI / NRRD`） | `0.2–1.5 GiB`（临床 31 卷实测 `0.20 GiB`） | `8 GiB` | 仅 CPU（`—`） | 单遍流式 gzip 分层校验，避免一次性将完整 4D 数据解压至内存。 |
+| **脑掩膜**（`PNL CNN`） | `2.2 GiB`（PC CPU 实测 `2.15 GiB`） | `8 GiB` | 可选 `>= 2 GiB` CUDA 或 Apple MPS（`16 GB` 统一内存） | 通过 `adaptive_cuda_scaled_batch` / `adaptive_gpu_scaled_batch` 缩放 2D 切片批大小；CUDA/MPS OOM 时自动减半批大小并在 `auto` 下回退 CPU。 |
+| **预处理**（`DIPY MP-PCA / Gibbs`） | 约 `1–8 GiB`（临床 31 卷实测 `0.92 GiB`） | `16 GiB`（临床 `<= 64` 卷 `8 GiB`） | 可选 `>= 2 GiB` CUDA（约 `150 MB` 5 切片环形缓冲区）；Gibbs `float32` FFT 支持 Apple MPS | CPU 端由 `adaptive_cpu_slab_z` 限制轴位分块内存；CUDA/MPS OOM 时自动减半分块并在 `auto` 下回退多线程 CPU。 |
+| **预处理**（`FSL Eddy / Topup`） | 约 `2.2–12 GiB`（临床 31 卷 `eddy_cpu` 实测 `2.17 GiB`） | `16 GiB`（多壳队列推荐 `32 GiB`） | 可选 `>= 4–6 GiB` CUDA（仅外部 Linux FSL `eddy_cuda`）；Windows/macOS 内置版仅 CPU | Windows/macOS 内置原生 FSL 使用多线程 `topup` + `eddy_cpu`，无需独立 GPU。 |
+| **解剖先验**（`DDSeg`） | `2.8 GiB`（Linux M1 实测 `2.79 GiB`） | `8–16 GiB` | 可选 `>= 2–4 GiB` CUDA 或 Apple MPS（`16 GB` 统一内存） | CUDA/MPS OOM 时自动将 2D 切片批大小减半（最低至 `2`）并在 `auto` 下回退 CPU；Windows WDDM 低于 `8.0 GiB` 可用显存时自动关闭 cuDNN benchmark（Linux 为 `6.0 GiB`）。 |
+| **解剖先验**（`DDParcel`） | `10.8 GiB`（Linux M1 实测 `10.82 GiB`） | `16 GiB`（队列推荐 `32 GiB`） | 可选 `>= 4 GiB` CUDA 或 Apple MPS（`16 GB` 统一内存） | CUDA/MPS OOM 时自动退化为单切片重试并在 `auto` 下回退 CPU；Windows WDDM 低于 `8.0 GiB` 可用显存时禁用 cuDNN benchmark。 |
+| **解剖先验**（`DDSurfer`） | `3.6 GiB`（Linux M1 实测 `3.63 GiB`） | `16 GiB` | 可选 CUDA：需 `>= 7.0 GiB` 可用显存（`5.5 GiB` 单表面按需预算 + `1.5 GiB` 余量，峰值约 `4–5 GiB`）；`>= 18.0 GiB` 可用显存启用双表面预载；macOS Rosetta PyTorch `2.2.2` 无 MPS `Conv3d`，走 CPU | 预检门限（`SURFACE_MIN_FREE_GPU_GIB = 7.0`）在 `auto` 模式下将低于 `7.0 GiB` 可用显存的设备（含常见 `< 8 GiB` Windows WDDM 显卡）自动转至 CPU；显式指定 `cuda` 时直接给出清晰报错提示。 |
+| **解剖先验**（`FreeSurfer` 表面形态学后处理） | `3.4 GiB`（PC CPU 实测 `3.42 GiB`） | `8–16 GiB` | 仅 CPU（`—`） | 内置 7 命令原生表面运行包（`mris_inflate`、`mris_sphere`、`mris_register` 等），支持半球内 DAG 并行及 OpenMP（`macOS 13.0+` 静态 `libomp.a`）；需自备 `FS_LICENSE`。 |
+| **微结构**（`Teem DTI`） | 首次全脑 `6.6–9.7 GiB`（PC `6.60 GiB` / Linux M1 `9.75 GiB`；复用已备 DTI 约 `2.4 GiB`） | `16 GiB`（临床 `<= 64` 卷 `8 GiB`） | 仅 CPU（`—`，按设计执行 `fp64` WLS） | 零信号体素跳过与共享准备回执避免重复张量拟合。 |
+| **微结构**（`Free-Water` 自由水） | `2.4–6.9 GiB`（Linux M1 `2.37 GiB` / PC CPU `6.93 GiB`） | `16 GiB` | 可选 `>= 4 GiB` CUDA（`fp64`）；macOS 走 CPU | `adaptive_cuda_scaled_batch` 自动施加 Windows WDDM / 消费级 FP64 TDR 上限，OOM 时减半分块并在 `auto` 下回退 CPU。 |
+| **微结构**（`AMICO NODDI`） | `8.6–17.2 GiB`（PC 有效集 QP 实测 `8.55 GiB` / Linux M1 峰值 `17.22 GiB`） | `16–32 GiB` | 可选 `>= 4 GiB` CUDA（`fp64`）；macOS 走 CPU | CUDA 有效集 QP 应用 `windows_tdr_cap=8192` / `consumer_fp64_tdr_cap=2048`，OOM 时减半分块并在 `auto` 下回退 CPU。 |
+| **微结构**（`DKI`） | `5.9–6.9 GiB`（Linux M1 `5.94 GiB` / PC CPU `6.88 GiB`） | `16 GiB` | 可选 `>= 4 GiB` CUDA（`fp64` WLS）；macOS 走 CPU | `adaptive_spawn_workers` 限制 Windows/macOS 派生工作进程数；`--low-memory` 默认 `--dki-voxels-per-chunk 8192`；CUDA OOM 时减半分块并回退 CPU。 |
+| **微结构**（`MK-Curve`） | `9.8 GiB`（PC CPU 4 进程实测 `9.78 GiB`） | `16–32 GiB`（Windows 下 8 派生进程会超过 32 GB 提交上限） | 可选 `>= 4 GiB` CUDA（`fp64`）；macOS 走 CPU | `adaptive_spawn_workers` 自动限制 Windows/macOS 派生进程数（`<= 12 GiB` 限 `2`、`<= 20 GiB` 限 `3`、`<= 36 GiB` 限 `4`）；`--low-memory` 默认 `--mkcurve-voxels-per-chunk 1024`；CUDA OOM 自动减半分块。 |
+| **纤维追踪**（`DTI` 确定性追踪） | 约 `4–8 GiB`（分块受限；规划启发值 `2 + signal`） | `16 GiB`（临床 `<= 64` 卷 `8 GiB`） | 可选 `>= 4 GiB` CUDA（张量与主方向提取）；macOS 走 CPU | `adaptive_cpu_slab_z` 约束 CPU 峰值内存；CUDA 峰值提取在 OOM 时减半分块并在 `auto` 下回退 CPU。 |
+| **纤维追踪**（`UKF` 双张量追踪） | `10.1 GiB`（PC CPU 实测 `10.09 GiB`，`25 万`条流线） | `16–32 GiB` | 仅 CPU（`—`，多线程 C++ `UKFTractography`） | 内存峰值随流线密度与每体素种子数增长；VTK/TRK 导出采用单缓冲复用以降低峰值。 |
+| **纤维追踪**（`MRtrix3 CSD / ACT`） | `10.6 GiB`（Linux M1 实测 `10.58 GiB`，`100 万`条流线） | `16–32 GiB` | 仅 CPU（`—`，原生 MRtrix3 `3.0.8`） | 峰值随目标流线数（`tckgen` + `tcksift2`）增长；`16 GiB` 内存主机多任务运行时可适当降低目标流线数。 |
+| **纤维追踪**（`SAF` 浅表联合纤维） | `0.6–4 GiB`（对既有 `10 万`条流线与 DDSurfer 网格重筛选实测 `0.63 GiB`） | `16 GiB` | 仅 CPU（`—`，向量化 BVH 射线-三角面求交 CPU 算子） | 全流程在优化后的多线程 CPU 路径运行（`tckgen`/`tckedit` + BVH 几何过滤）。 |
+| **白质纤维束**（`WMQL`） | 约 `4–8 GiB`（`100 万` CSD/ACT 流线；规划启发值 `8 GiB`） | `16 GiB` | 仅 CPU（`—`，多线程扁平 CSR CPU 算子） | 扁平 CSR 体素标签直方图避免逐流线构建稠密 Python 字典。 |
+| **白质纤维束**（`WMA` ORG 图谱聚类） | `5.7–12 GiB`（PC CPU `8 万`条流线 / 8 线程实测 `5.74 GiB`；稠密流线规划启发值 `16 GiB`） | `16–32 GiB` | 可选 `>= 4–6 GiB` CUDA（PyTorch/Triton 算子）；macOS 走 CPU | Windows 下自动配置 `PYTORCH_CUDA_ALLOC_CONF`；`auto` 模式下如遇 CUDA OOM 自动切换 `WMA_GPU=off` 于 CPU 重试。 |
+| **白质纤维束**（`TractCloud`） | `2.7–8 GiB`（PC CPU `5 万`条流线实测 `2.70 GiB`；`100 万`条流线时随数量升至约 `8–12 GiB`） | `16 GiB` | 可选 `>= 2–4 GiB` CUDA 或 Apple MPS（`16 GB` 统一内存） | 根据可用显存自动缩放批大小（`< 2.2 GiB` 限 `256`、`< 4.5 GiB` 限 `512`、Windows `< 7.5 GiB` 限 `1024`；MPS 为 `256/512/1024`）；显式 GPU 报错不静默切回 CPU（必要时手动选择 `CPU`）。 |
+| **结构连接组**（`Streamline Count`） | `0.3–2.6 GiB`（PC Python `100 万`流线实测 `0.27 GiB`；Linux M1 `2.61 GiB`） | `8–16 GiB` | 仅 CPU（`—`，分批 `cKDTree` / `tck2connectome`） | 按 `4,096` 条流线分批端点匹配，即使在 `100 万`条流线上也保持极低内存占用。 |
+| **结构连接组**（`SIFT2-Weighted`） | `0.5–2.6 GiB`（Linux M1 `100 万`流线 `<= 2.61 GiB`） | `8–16 GiB` | 仅 CPU（`—`，原生 MRtrix3 / 向量化 Python） | 需配对流线与 `sift2_weights.txt`，相对端点索引仅增加极少量权重累加内存。 |
+
+---
+
 ## 使用边界与分发说明
 
 - **安装方式**：当前版本从 GitHub Releases 下载平台统一安装包（`SlicerDSpace-v0.1.1-Windows-x64.zip`、`SlicerDSpace-v0.1.1-Linux-x64.tar.gz` 或 `SlicerDSpace-v0.1.1-macOS-arm64.tar.gz`），通过 3D Slicer 5.10.0 `Extensions Manager -> Install Extensions -> Install Extension from File` 本地安装（尚未上架 Slicer 在线扩展商店目录；Intel `x86_64` Mac 真机硬件未验证）。

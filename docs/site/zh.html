@@ -20,7 +20,7 @@
 <link rel="apple-touch-icon" href="assets/img/icon-180.png">
 <link rel="preload" href="assets/fonts/InterTight.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="assets/fonts/Inter.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="assets/css/site.css?v=start-redesign-20261123-7">
+<link rel="stylesheet" href="assets/css/site.css?v=start-redesign-20261123-8">
 <link rel="stylesheet" href="assets/css/performance.css?v=hidden-details-1">
 <link rel="stylesheet" href="assets/css/installer-customizer.css?v=direct-os-1">
 <script>document.documentElement.classList.add('js');</script>
@@ -231,6 +231,30 @@ export SUBJECT_ROOT="/path/to/sub-01"
       </a>
       <figcaption>对比 Apple Silicon Mac（Apple M4、16 GB 统一内存、macOS、自动 CPU/MPS，覆盖全部 22 个模块）、个人 Windows PC（Intel Core i7-13700K、32 GB 内存、纯 CPU，覆盖全部 22 个模块）与共用 Linux 服务器（双路 Intel Xeon Platinum 8360Y CPU 与 NVIDIA H100 PCIe 80 GB GPU，覆盖全部 22 项协议任务及其中 13 条 CUDA 加速路线）的分阶段实测耗时。每种算法占一行，右侧四列对齐给出 Mac M4、PC CPU、服务器 CPU 与服务器 CUDA 耗时；短横线表示仅支持 CPU、无 CUDA 路线的阶段。不同方法的线程配额不同且服务器为共享主机，因此不可直接解读为受控设备加速比；各行耗时不可直接相加。SAF 对既有的 100,000 条流线重过滤；TractCloud 使用 50,000 条流线作为输入。</figcaption>
     </figure>
+    <div class="ram-ref" id="memory-reference">
+      <h3>内存与显存需求参考</h3>
+      <p>多壳层 HCP 100307（145 × 174 × 145 × 288）单受试者峰值主机内存（16 GiB 可覆盖全部 22 个单受试者模块，完整流程或队列批处理推荐 32 GiB）及可选 GPU 显存门限与自动 OOM 回退策略。</p>
+      <div class="table-wrap" tabindex="0" role="region" aria-label="各阶段内存与显存需求表，小屏幕可横向滚动">
+        <table class="int-table ram-table">
+          <caption>基于 Windows PC CPU 与 Linux M1 单受试者实测峰值及运行时显存门限。常规临床采集（64 卷及以下）通常需要更低的主机内存。</caption>
+          <thead><tr><th scope="col">阶段 / 模块</th><th scope="col">典型峰值内存（HCP 288 卷）</th><th scope="col">推荐主机内存</th><th scope="col">GPU 显存（CUDA / MPS）</th><th scope="col">说明（OOM 防护 / 自动回退）</th></tr></thead>
+          <tbody>
+            <tr class="stage-start"><th scope="row">输入与脑掩膜（DICOM/NIfTI、PNL CNN）</th><td>0.2–2.2 GiB</td><td>8 GiB</td><td>可选 &gt;= 2 GiB CUDA 或 Apple MPS</td><td>单遍流式 gzip 校验；CNN 在 GPU OOM 时减半 2D 切片批大小，auto 模式下回退 CPU。</td></tr>
+            <tr class="stage-start"><th scope="row">预处理（DIPY MP-PCA/Gibbs、FSL Topup/Eddy）</th><td>0.9–12 GiB</td><td>16 GiB</td><td>可选 &gt;= 2 GiB CUDA（约 150 MB MP-PCA 环形缓冲）；eddy_cuda &gt;= 4–6 GiB（Linux）；MPS 支持 Gibbs FFT</td><td>CPU 端按分块限制内存；CUDA/MPS 遇 OOM 自动减半分块；Windows/macOS 内置 FSL 使用多线程 eddy_cpu。</td></tr>
+            <tr class="stage-start"><th scope="row">解剖先验（DDSeg、DDParcel）</th><td>2.8–10.8 GiB</td><td>16 GiB</td><td>可选 &gt;= 4 GiB CUDA 或 Apple MPS</td><td>CUDA/MPS OOM 时自动降为小批量或单切片并在 auto 下回退 CPU；Windows WDDM 可用显存低于 8 GiB 时自动关闭 cuDNN benchmark。</td></tr>
+            <tr><th scope="row">皮层表面重建（DDSurfer）</th><td>3.6 GiB</td><td>16 GiB</td><td>可选 CUDA：&gt;= 7.0 GiB 可用显存（5.5 GiB 单表面按需），&gt;= 18 GiB 双表面预载；macOS 走 CPU</td><td>预检在 auto 模式下将低于 7.0 GiB 可用显存的设备（含常见 &lt; 8 GiB Windows WDDM 显卡）自动转至 CPU。</td></tr>
+            <tr><th scope="row">表面形态学后处理（FreeSurfer 7 命令运行包）</th><td>3.4 GiB</td><td>8–16 GiB</td><td>仅 CPU</td><td>原生多线程及 OpenMP 表面运行包（macOS 13.0+ 静态 libomp.a）；需自备个人 FreeSurfer 许可证。</td></tr>
+            <tr class="stage-start"><th scope="row">微结构（Teem DTI、Free-Water、DKI）</th><td>6.6–9.7 GiB</td><td>16 GiB</td><td>可选 &gt;= 4 GiB CUDA（fp64，FW/DKI）；DTI 仅 CPU；macOS 走 CPU</td><td>自适应 CUDA 分块（含 Windows TDR 上限）及 OOM 回退 CPU；--low-memory 限制 DKI 体素分块。</td></tr>
+            <tr><th scope="row">微结构（AMICO NODDI、MK-Curve）</th><td>8.6–17.2 GiB</td><td>16–32 GiB</td><td>可选 &gt;= 4 GiB CUDA（fp64）；macOS 走 CPU</td><td>Windows/macOS 自动限制派生进程数（12/20/36 GiB 主机上限 2/3/4 进程）；CUDA 遇 OOM 自动减半分块。</td></tr>
+            <tr class="stage-start"><th scope="row">纤维追踪（DTI 确定性追踪、SAF）</th><td>0.6–8 GiB</td><td>16 GiB</td><td>可选 &gt;= 4 GiB CUDA（DTI 主方向）；SAF 仅 CPU</td><td>CPU 分块追踪限制峰值内存；CUDA 峰提取遇 OOM 减半分块并回退 CPU。</td></tr>
+            <tr><th scope="row">纤维追踪（UKF、MRtrix3 CSD/ACT + SIFT2）</th><td>10.1–10.6 GiB</td><td>16–32 GiB</td><td>仅 CPU</td><td>内存峰值随流线数增长（UKF 25 万 / CSD-ACT 100 万）；16 GiB 主机多任务时可适当降低目标流线数。</td></tr>
+            <tr class="stage-start"><th scope="row">白质纤维束（WMQL、WMA ORG）</th><td>5.7–12 GiB</td><td>16–32 GiB</td><td>可选 &gt;= 4–6 GiB CUDA（WMA）；WMQL 仅 CPU</td><td>WMA 配置 Windows CUDA 分配上限，auto 模式下遇 CUDA OOM 自动切至 CPU 重试。</td></tr>
+            <tr><th scope="row">白质纤维束（TractCloud）</th><td>2.7–8 GiB</td><td>16 GiB</td><td>可选 &gt;= 2–4 GiB CUDA 或 Apple MPS</td><td>按可用显存自动缩放批大小（256/512/1024）；5 万条流线实测内存 2.7 GiB，随流线数线性增长。</td></tr>
+            <tr class="stage-start"><th scope="row">结构连接组（流线计数、SIFT2 加权）</th><td>0.3–2.6 GiB</td><td>8–16 GiB</td><td>仅 CPU</td><td>按 4,096 条流线分批匹配端点，即使 100 万条流线也保持低峰值内存。</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
   </div>
 </section>
 

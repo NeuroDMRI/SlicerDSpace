@@ -1350,6 +1350,16 @@ figcaption {
 .ref-cell a { display: inline-block; padding: 2px 0; margin-right: 7px; white-space: nowrap; line-height: 1.6; }
 .ref-cell a + a { margin-top: 0; }
 
+/* ---------- Runtime memory & VRAM reference ---------- */
+.ram-ref { margin-top: 44px; }
+.ram-ref > h3 { font-size: clamp(22px, 2.5vw, 30px); margin-bottom: 10px; }
+.ram-ref > p { max-width: 58em; font-size: 15px; color: var(--muted); margin-bottom: 18px; }
+.ram-table tbody th { width: 22%; white-space: normal; }
+.ram-table td:nth-child(2) { font-weight: 500; min-width: 112px; width: 13%; white-space: nowrap; }
+.ram-table td:nth-child(3) { min-width: 104px; width: 12%; white-space: nowrap; }
+.ram-table td:nth-child(4) { min-width: 185px; width: 22%; }
+.ram-table td:nth-child(5) { min-width: 220px; width: 31%; color: var(--muted); }
+
 /* ---------- References ---------- */
 .references { margin-top: 36px; }
 .ref-body { margin-top: 24px; }

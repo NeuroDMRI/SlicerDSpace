@@ -20,7 +20,7 @@
 <link rel="apple-touch-icon" href="assets/img/icon-180.png">
 <link rel="preload" href="assets/fonts/InterTight.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="assets/fonts/Inter.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="assets/css/site.css?v=start-redesign-20261123-7">
+<link rel="stylesheet" href="assets/css/site.css?v=start-redesign-20261123-8">
 <link rel="stylesheet" href="assets/css/performance.css?v=hidden-details-1">
 <link rel="stylesheet" href="assets/css/installer-customizer.css?v=direct-os-1">
 <script>document.documentElement.classList.add('js');</script>
@@ -231,6 +231,30 @@ export SUBJECT_ROOT="/path/to/sub-01"
       </a>
       <figcaption>Recorded stage times comparing an Apple Silicon Mac (Apple M4, 16 GB unified memory, macOS, automatic CPU/MPS; all 22 modules), a personal Windows PC (Intel Core i7-13700K, 32 GB RAM, CPU-only; all 22 modules), and a shared Linux server (dual Intel Xeon Platinum 8360Y CPUs and an NVIDIA H100 PCIe 80 GB GPU across all 22 protocol tasks, including 13 CUDA-accelerated routes). Each algorithm occupies one row, with aligned Mac M4, PC CPU, Server CPU and Server CUDA columns; a dash marks CPU-only stages without a CUDA route. Thread budgets differ by method and the server is shared, so these are not controlled device speed ratios. Rows are not summed. SAF re-filters 100,000 existing tracks; TractCloud uses 50,000 tracks.</figcaption>
     </figure>
+    <div class="ram-ref" id="memory-reference">
+      <h3>Memory and VRAM reference</h3>
+      <p>Single-subject peak host RAM on multi-shell HCP 100307 (145 × 174 × 145 × 288; 16 GiB covers all 22 single-subject modules, 32 GiB is recommended for full pipelines or cohorts) and optional GPU VRAM gates with automatic OOM fallback.</p>
+      <div class="table-wrap" tabindex="0" role="region" aria-label="Memory and VRAM requirements per stage, scroll horizontally on small screens">
+        <table class="int-table ram-table">
+          <caption>Measured Windows PC CPU and Linux M1 single-subject peaks plus runtime VRAM gates. Clinical acquisitions (64 volumes or fewer) typically require less host RAM.</caption>
+          <thead><tr><th scope="col">Stage / Module</th><th scope="col">Typical Peak RAM (HCP 288-vol)</th><th scope="col">Recommended Host RAM</th><th scope="col">GPU VRAM (CUDA / MPS)</th><th scope="col">Notes (OOM / Auto-Fallback)</th></tr></thead>
+          <tbody>
+            <tr class="stage-start"><th scope="row">Input &amp; Brain Mask (DICOM/NIfTI, PNL CNN)</th><td>0.2–2.2 GiB</td><td>8 GiB</td><td>Optional &gt;= 2 GiB CUDA or Apple MPS</td><td>Single-pass gzip streaming; CNN halves 2D slice batch on GPU OOM and falls back to CPU under auto.</td></tr>
+            <tr class="stage-start"><th scope="row">Preprocessing (DIPY MP-PCA/Gibbs, FSL Topup/Eddy)</th><td>0.9–12 GiB</td><td>16 GiB</td><td>Optional &gt;= 2 GiB CUDA (~150 MB MP-PCA ring buffer); eddy_cuda &gt;= 4–6 GiB (Linux); MPS Gibbs FFT</td><td>Slab-bounded CPU streaming; CUDA/MPS halves chunks on OOM; bundled Windows/macOS FSL runs multi-threaded eddy_cpu.</td></tr>
+            <tr class="stage-start"><th scope="row">Anatomical Priors (DDSeg, DDParcel)</th><td>2.8–10.8 GiB</td><td>16 GiB</td><td>Optional &gt;= 4 GiB CUDA or Apple MPS</td><td>Retries smaller or single slices on CUDA/MPS OOM with CPU fallback under auto; cuDNN benchmark disabled below 8 GiB free on Windows WDDM.</td></tr>
+            <tr><th scope="row">Cortical Surfaces (DDSurfer)</th><td>3.6 GiB</td><td>16 GiB</td><td>Optional CUDA: &gt;= 7.0 GiB free (5.5 GiB lazy single-surface), &gt;= 18 GiB eager dual-surface; CPU on macOS</td><td>Preflight routes &lt; 7.0 GiB free CUDA (including typical &lt; 8 GiB Windows WDDM GPUs) to CPU under auto.</td></tr>
+            <tr><th scope="row">Surface Morphometry (FreeSurfer 7-cmd runtime)</th><td>3.4 GiB</td><td>8–16 GiB</td><td>CPU only</td><td>Native multi-threaded and OpenMP surface runtime (macOS 13.0+ static libomp.a); requires a personal FreeSurfer license.</td></tr>
+            <tr class="stage-start"><th scope="row">Microstructure (Teem DTI, Free-Water, DKI)</th><td>6.6–9.7 GiB</td><td>16 GiB</td><td>Optional &gt;= 4 GiB CUDA (fp64, FW/DKI); DTI CPU only; CPU on macOS</td><td>Adaptive CUDA chunking with Windows TDR caps and CPU fallback on OOM; --low-memory caps DKI voxel chunks.</td></tr>
+            <tr><th scope="row">Microstructure (AMICO NODDI, MK-Curve)</th><td>8.6–17.2 GiB</td><td>16–32 GiB</td><td>Optional &gt;= 4 GiB CUDA (fp64); CPU on macOS</td><td>Auto-caps Windows/macOS spawn workers (at most 2, 3 or 4 on 12, 20 or 36 GiB hosts); CUDA halves chunks on OOM.</td></tr>
+            <tr class="stage-start"><th scope="row">Tractography (DTI Det, SAF)</th><td>0.6–8 GiB</td><td>16 GiB</td><td>Optional &gt;= 4 GiB CUDA (DTI peaks); SAF CPU only</td><td>Slab-bounded CPU tracking; CUDA peak extraction halves chunks on OOM with CPU fallback.</td></tr>
+            <tr><th scope="row">Tractography (UKF, MRtrix3 CSD/ACT + SIFT2)</th><td>10.1–10.6 GiB</td><td>16–32 GiB</td><td>CPU only</td><td>Peak scales with streamline count (250k UKF, 1M CSD/ACT); lower target track count on 16 GiB hosts when multitasking.</td></tr>
+            <tr class="stage-start"><th scope="row">Fibre Bundles (WMQL, WMA ORG)</th><td>5.7–12 GiB</td><td>16–32 GiB</td><td>Optional &gt;= 4–6 GiB CUDA (WMA); WMQL CPU only</td><td>WMA sets Windows CUDA allocator caps and retries on CPU if CUDA OOM occurs under auto.</td></tr>
+            <tr><th scope="row">Fibre Bundles (TractCloud)</th><td>2.7–8 GiB</td><td>16 GiB</td><td>Optional &gt;= 2–4 GiB CUDA or Apple MPS</td><td>Auto-scales batch size (256/512/1024) to free memory (2.7 GiB RAM at 50k tracks; scales with track count).</td></tr>
+            <tr class="stage-start"><th scope="row">Connectome (Streamline Count, SIFT2-Weighted)</th><td>0.3–2.6 GiB</td><td>8–16 GiB</td><td>CPU only</td><td>Batched 4,096-streamline endpoint assignment keeps peak RAM low even at 1M tracks.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
   </div>
 </section>
 

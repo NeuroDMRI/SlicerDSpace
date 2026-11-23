@@ -69,6 +69,12 @@ ALLOWED_WINDOWS_DLLS = frozenset({
     "kernel32.dll",
     "advapi32.dll",
     "user32.dll",
+    "gdi32.dll",
+    "comdlg32.dll",
+    "comctl32.dll",
+    "imm32.dll",
+    "winspool.drv",
+    "winmm.dll",
     "ws2_32.dll",
     "rpcrt4.dll",
     "shell32.dll",
@@ -80,6 +86,7 @@ ALLOWED_WINDOWS_DLLS = frozenset({
     "psapi.dll",
     "dbghelp.dll",
     "ntdll.dll",
+    "msvcrt.dll",
     "ucrtbase.dll",
     "ucrtbased.dll",
     "iphlpapi.dll",
@@ -87,6 +94,8 @@ ALLOWED_WINDOWS_DLLS = frozenset({
     "netapi32.dll",
     "secur32.dll",
     "version.dll",
+    "opengl32.dll",
+    "glu32.dll",
 })
 MSVC_REDIST_DLLS = ("vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll")
 

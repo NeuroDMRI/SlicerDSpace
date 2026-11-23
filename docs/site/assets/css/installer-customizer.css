@@ -13,11 +13,11 @@
   --ic-success: #46d38a;
   --ic-btn-bg: #000000;
   --ic-btn-bg-hover: #121316;
-  --ic-btn-border: rgba(255, 255, 255, .18);
-  --ic-btn-border-hover: rgba(255, 255, 255, .48);
+  --ic-btn-border: rgba(255, 255, 255, .26);
+  --ic-btn-border-hover: rgba(255, 255, 255, .68);
   --ic-btn-shadow: none;
   --ic-btn-shadow-hover: 0 8px 20px rgba(0, 0, 0, .42);
-  --ic-detected-border: rgba(255, 255, 255, .38);
+  --ic-detected-border: rgba(255, 255, 255, .52);
   --ic-icon-ink: #ffffff;
   --ic-badge-bg: rgba(255, 255, 255, .10);
   --ic-badge-border: rgba(255, 255, 255, .20);
@@ -109,9 +109,9 @@
 .ic-dl-btn {
   position: relative;
   display: grid;
-  grid-template-columns: 28px minmax(0, 1fr) 22px;
+  grid-template-columns: 36px minmax(0, 1fr) 22px;
   align-items: center;
-  gap: 12px;
+  gap: 14px;
   width: 100%;
   min-width: 0;
   padding: 15px 16px;
@@ -119,7 +119,7 @@
   color: var(--ic-ink);
   background-color: var(--ic-btn-bg);
   background-image: none;
-  border: 1px solid var(--ic-btn-border);
+  border: 2px solid var(--ic-btn-border);
   border-radius: 10px;
   box-shadow: var(--ic-btn-shadow);
   font-family: var(--f-body);
@@ -171,8 +171,8 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: 36px;
+  height: 36px;
   background: transparent;
   border: 0;
   color: var(--ic-icon-ink);
@@ -181,8 +181,8 @@
 
 .ic-dl-icon svg {
   display: block;
-  width: 22px;
-  height: 22px;
+  width: 30px;
+  height: 30px;
 }
 
 /* ---------- OS label, badge & metadata ---------- */

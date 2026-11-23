@@ -958,8 +958,8 @@ figcaption {
   height: 40px;
   display: grid;
   place-items: center;
-  border: 1px solid color-mix(in srgb, var(--route-accent) 50%, transparent);
-  background: color-mix(in srgb, var(--route-accent) 8%, transparent);
+  border: 2px solid color-mix(in srgb, var(--route-accent) 55%, transparent);
+  background: #000000;
   color: var(--route-accent);
   font-family: var(--f-mono);
   font-size: 19px;
@@ -989,19 +989,20 @@ figcaption {
   width: 38px; height: 38px;
   display: grid;
   place-items: center;
-  border: 1px solid var(--line-2);
+  border: 2px solid rgba(255, 255, 255, .34);
   border-radius: 10px;
   font-family: var(--f-mono);
   font-size: 15px;
+  font-weight: 600;
   color: var(--text);
-  background: var(--panel);
+  background: #000000;
 }
 .start-step::after {
   content: "";
   position: absolute;
-  left: 19px; top: 44px; bottom: 6px;
-  width: 1px;
-  background: var(--line);
+  left: 18px; top: 44px; bottom: 6px;
+  width: 2px;
+  background: rgba(255, 255, 255, .28);
 }
 .start-step:last-child::after { display: none; }
 .start-body { min-width: 0; }
@@ -1017,8 +1018,8 @@ figcaption {
   gap: 10px 18px;
   margin: 12px 0 4px;
   padding: 14px 16px;
-  background: rgba(255, 255, 255, .02);
-  border: 1px solid var(--line);
+  background: #000000;
+  border: 1.5px solid rgba(255, 255, 255, .20);
   border-radius: 10px;
 }
 .start-kv-list dt {
@@ -1042,8 +1043,8 @@ figcaption {
   padding: 1px 7px;
   margin: 1px 0;
   border-radius: 5px;
-  background: rgba(255, 255, 255, .06);
-  border: 1px solid var(--line-2);
+  background: #000000;
+  border: 1px solid rgba(255, 255, 255, .24);
   color: var(--ivory);
   font-size: .9em;
   line-height: 1.45;
@@ -1057,8 +1058,8 @@ figcaption {
 .pkg-pill {
   padding: 2px 8px;
   border-radius: 5px;
-  background: #080b10;
-  border: 1px solid var(--line-2);
+  background: #000000;
+  border: 1px solid rgba(255, 255, 255, .24);
   font-size: 13px;
 }
 .muted-inline {
@@ -1068,8 +1069,9 @@ figcaption {
 .start-callout {
   margin: 12px 0 4px;
   padding: 10px 14px;
+  border: 1px solid rgba(255, 255, 255, .18);
   border-left: 2px solid var(--blue);
-  background: rgba(91, 140, 255, .05);
+  background: #000000;
   border-radius: 0 8px 8px 0;
   font-size: 14.5px;
   line-height: 1.55;
@@ -1079,8 +1081,8 @@ figcaption {
   list-style: none;
   margin: 12px 0 10px;
   padding: 6px 16px;
-  background: rgba(255, 255, 255, .02);
-  border: 1px solid var(--line);
+  background: #000000;
+  border: 1.5px solid rgba(255, 255, 255, .20);
   border-radius: 10px;
 }
 .start-substep {
@@ -1089,7 +1091,7 @@ figcaption {
   gap: 12px;
   align-items: start;
   padding: 11px 0;
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid rgba(255, 255, 255, .14);
 }
 .start-substep:last-child { border-bottom: 0; }
 .start-substep-num {
@@ -1099,8 +1101,8 @@ figcaption {
   display: grid;
   place-items: center;
   border-radius: 6px;
-  border: 1px solid rgba(169, 191, 208, .38);
-  background: rgba(169, 191, 208, .08);
+  border: 1.5px solid rgba(169, 191, 208, .48);
+  background: #000000;
   color: #a9bfd0;
   font-family: var(--f-mono);
   font-size: 12.5px;
@@ -1125,9 +1127,13 @@ figcaption {
 .start-advanced {
   max-width: 58em;
   margin: 18px 0 8px;
-  border: 1px solid var(--line-2);
+  border: 1.5px solid rgba(255, 255, 255, .20);
   border-radius: 12px;
-  background: rgba(255, 255, 255, .02);
+  background: #000000;
+}
+#start pre,
+#start .code-block {
+  background: #000000;
 }
 .start-advanced-summary {
   display: flex;

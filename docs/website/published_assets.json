@@ -32,7 +32,7 @@
       "sha256": "400931d034332c54e2557e2b185ca1979fc92c76bcfc54f31be2a312eca34a3a"
     },
     "docs/site/assets/img/fig-runtime-resources.png": {
-      "sha256": "adb2f7a61aff609d4bf3c6e6f9ed828806a5df51e6f23b708f5c570f48d76c45"
+      "sha256": "9d77a3c25a06e9ba4b0c1de637b6c508dc198c0727e3dd3d8cacb1bc3b2ae927"
     },
     "docs/site/assets/img/fig-runtime-optimizations.png": {
       "sha256": "0c91f6b5b17b94f4ff926d5ea07946cc967987faa3637d675ad48226c038bd4a"
@@ -44,13 +44,13 @@
       "query_preset": "official_multibundle"
     },
     "docs/site/assets/img/fig-product-map.webp": {
-      "sha256": "c939ed72a4e7519d56816859aa15f8798e2ce717ba06e095da740f0a329b5838",
+      "sha256": "578e66f508f8b3e798a6169993fdb65eafeb854d0f60be9a63ae669cceb47919",
       "source_sha256": "b0da2ea13bc32b1fb04dfb1ed0472f2427711a1062d3cccf354efdb142326a90",
       "derivative": "Lossless WebP; decoded RGBA pixels and dimensions identical to PNG"
     },
     "docs/site/assets/img/fig-runtime-resources.webp": {
-      "sha256": "1eda11e68c803e4b5f6ed25a38d41f43167479cb2f878aa44ed812864d1d3043",
-      "source_sha256": "adb2f7a61aff609d4bf3c6e6f9ed828806a5df51e6f23b708f5c570f48d76c45",
+      "sha256": "468f08f06c1ef0d5a9086fcce4714d232a0550063315e6b3c892e3598db2c408",
+      "source_sha256": "9d77a3c25a06e9ba4b0c1de637b6c508dc198c0727e3dd3d8cacb1bc3b2ae927",
       "derivative": "Lossless WebP; decoded RGBA pixels and dimensions identical to PNG"
     },
     "docs/site/media/SlicerDSpace_promo_1080p.mp4": {
@@ -130,7 +130,7 @@
       "derivative": "Reference-traced cubic outlines; transparent background; no fonts or embedded raster"
     },
     "docs/site/assets/img/fig-runtime-optimizations.webp": {
-      "sha256": "22438ffc4b193d0efabdf2fe921814ee6f2285032b470e77d0242bfdfd2dc14d",
+      "sha256": "a96986e1df4e3b50bfba0d2577ba57360103770c4569b34e3c0748491a2397f0",
       "source_sha256": "0c91f6b5b17b94f4ff926d5ea07946cc967987faa3637d675ad48226c038bd4a",
       "derivative": "Lossless WebP; decoded RGBA pixels and dimensions identical to PNG"
     },
@@ -138,7 +138,7 @@
       "sha256": "dbd009e5ea723a491461fb34bf8cc5903414cae8ef4f9bac82ee9122edfaaab6"
     },
     "docs/site/assets/img/fig-cohort-scheduling.webp": {
-      "sha256": "e70f3b0ced8e84e638f95fe5fd8dd712272c8c7a21bb1e1bc300de79291f25f3",
+      "sha256": "b19202c81768cff060f51424c10dbec4ee80c1ac89e6de1f673eb4a3b5fe0eda",
       "source_sha256": "dbd009e5ea723a491461fb34bf8cc5903414cae8ef4f9bac82ee9122edfaaab6",
       "derivative": "Lossless WebP; decoded RGBA pixels and dimensions identical to PNG"
     }

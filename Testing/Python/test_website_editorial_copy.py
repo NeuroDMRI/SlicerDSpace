@@ -63,6 +63,31 @@ class WebsiteEditorialCopyTests(unittest.TestCase):
         self.assertIn('[data-theme="light"] .installer-customizer', css)
         self.assertNotIn('From installation to your first result.', self.source)
         self.assertNotIn('从安装到获得第一份结果。', zh_source)
+        # Authentic OS icon vectors (Simple Icons Tux + perspective 4-pane Windows).
+        self.assertIn('M12.504 0c-.155', js)
+        self.assertIn('M1 4.15L10 2.91v8.54H1V4.15z', js)
+        self.assertNotIn('fill-rule="evenodd"', js)
+        # Offline standalone base-bundle sentence & 5 quick-link buttons removed from #start.
+        start_en = self.section('start')
+        start_zh = re.search(r'<section[^>]+id="start"[^>]*>(.*?)</section>', zh_source, re.S).group(1)
+        for removed in (
+            'For offline machines, standalone OS Base bundles',
+            'Source code archive',
+            'SlicerDSpace-v*-Windows-x64.zip',
+            'class="doc-links"',
+            'Support matrix',
+            'Model asset terms',
+        ):
+            self.assertNotIn(removed, start_en)
+        for removed in (
+            '若在离线机器安装',
+            '独立分平台全量底座包',
+            'Source code 源码归档',
+            'class="doc-links"',
+            '平台与功能支持',
+            '模型资源许可',
+        ):
+            self.assertNotIn(removed, start_zh)
 
     def test_removed_sections_leave_no_dangling_navigation(self):
         for name in ("idea", "workflows", "status", "performance-notes", "slicer"):
@@ -134,14 +159,20 @@ class WebsiteEditorialCopyTests(unittest.TestCase):
         subprocess.run([sys.executable, "scripts/build_website_catalog.py", "--check"],
                        cwd=ROOT, check=True, capture_output=True, text=True)
 
-    def test_integration_lists_resources_without_obsolete_status_badges(self):
+    def test_integration_table_omits_runtime_column_and_obsolete_status_badges(self):
         table = re.search(r'<table class="int-table">(.*?)</table>', self.source, re.S).group(1)
-        for old in ("st-partial", "MATLAB", "no recorded run", "synthetic data only", "Partial:"):
+        zh_source = (ROOT / "docs/site/zh.html").read_text(encoding="utf-8")
+        zh_table = re.search(r'<table class="int-table">(.*?)</table>', zh_source, re.S).group(1)
+        for old in ("st-partial", "st-cell", "Runtime / access", "MATLAB", "no recorded run", "synthetic data only", "Partial:"):
             self.assertNotIn(old, table)
-        self.assertIn("Runtime / access", table)
-        self.assertIn("Python API", table)
-        self.assertIn("UKF reference route", table)
-        self.assertIn("full suite optional", table)
+        for old in ("st-partial", "st-cell", "运行环境与资源"):
+            self.assertNotIn(old, zh_table)
+        headers_en = re.findall(r'<th scope="col">(.*?)</th>', table)
+        headers_zh = re.findall(r'<th scope="col">(.*?)</th>', zh_table)
+        self.assertEqual(headers_en, ["Stage", "Method", "How it is integrated", "Papers"])
+        self.assertEqual(headers_zh, ["阶段", "方法", "集成内容", "论文"])
+        for row in re.findall(r'<tr data-method=.*?</tr>', table, re.S):
+            self.assertEqual(len(re.findall(r'<t[hd]\b', row)), 4)
 
     def test_citations_are_direct_links_in_method_rows(self):
         self.assertNotIn('id="cite"', self.source)

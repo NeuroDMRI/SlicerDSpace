@@ -60,7 +60,7 @@ def render_methods(references):
             f'target="_blank" rel="noopener">[{n}]</a>'
             for n in citations)
         group = ' class="stage-start"' if stage != previous else ""
-        lines.append(f'            <tr data-method="{identifier}"{group}><th scope="row">{escape(stage)}</th><td>{escape(method)}</td><td>{escape(summary)}</td><td class="st-cell">{escape(runtime)}</td><td class="ref-cell">{links}</td></tr>')
+        lines.append(f'            <tr data-method="{identifier}"{group}><th scope="row">{escape(stage)}</th><td>{escape(method)}</td><td>{escape(summary)}</td><td class="ref-cell">{links}</td></tr>')
         previous = stage
     return "\n".join(lines)
 

@@ -811,7 +811,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument('--dki-threads', type=int, help='Numerical threads per DKI/MK-Curve worker; automatic reservation if omitted.')
     parser.add_argument('--dki-voxels-per-chunk', type=int, default=1024, help='Bounded standard DKI fit block (default: 1024).')
-    parser.add_argument('--mkcurve-workers', type=int, default=1, help='Independent MK-Curve voxel workers (default: 1).')
+    parser.add_argument('--mkcurve-workers', type=int, default=None, help='Independent MK-Curve voxel workers (default: automatic up to 8 CPU cores).')
     parser.add_argument('--mkcurve-voxels-per-chunk', type=int, default=64, help='MK-Curve voxel block (default: 64).')
     parser.add_argument('--mkcurve-chunk-schedule', choices=('dynamic', 'ordered'), default='dynamic',
                         help='Refill voxel work on completion; ordered is retained for controlled comparisons.')

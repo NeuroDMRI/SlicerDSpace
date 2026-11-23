@@ -1925,7 +1925,7 @@ def _run_independent_models(config, log):
         count = (_noddi_threads(adjusted) if stage == 'noddi' else
                  (1 if adjusted.free_water_engine == 'serial' else adjusted.free_water_n_jobs)
                  if stage == 'freewater' else
-                 ((adjusted.dki_execution or {}).get('mkcurve_workers', 1) if adjusted.dki_fit_method == 'MKCURVE' else 1)
+                 (((adjusted.dki_execution or {}).get('mkcurve_workers') or 1) if adjusted.dki_fit_method == 'MKCURVE' else 1)
                  * ((adjusted.dki_execution or {}).get('num_threads') or 1))
         jobs.append(ComputeJob(stage, (python, str(Path(__file__).with_name('compute_worker.py')),
             '--stage', stage, '--config', str(description)), threads=count, memory_bytes=reserve,

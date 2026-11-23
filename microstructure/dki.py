@@ -52,7 +52,7 @@ class DkiConfig:
     display_max_kurtosis: float = 3.0
     dense_metrics: bool = True
     num_threads: int | None = None
-    mkcurve_workers: int = 1
+    mkcurve_workers: int | None = None
     mkcurve_voxels_per_chunk: int = 64
     mkcurve_chunk_schedule: str = 'dynamic'
     device: str = 'cpu'
@@ -113,9 +113,11 @@ def _validate_options(config: DkiConfig) -> None:
     if not config.subject_id.strip() or config.subject_id != config.raw_input_bundle.subject_id:
         raise ValueError("DKI subject_id must match the input bundle")
     _method(config)
-    for name in ('voxels_per_chunk', 'mkcurve_workers', 'mkcurve_voxels_per_chunk'):
+    for name in ('voxels_per_chunk', 'mkcurve_voxels_per_chunk'):
         if type(getattr(config, name)) is not int or getattr(config, name) < 1:
             raise ValueError('DKI ' + name + ' must be a positive integer')
+    if config.mkcurve_workers is not None and (type(config.mkcurve_workers) is not int or config.mkcurve_workers < 1):
+        raise ValueError('DKI mkcurve_workers must be a positive integer')
     if config.num_threads is not None and (type(config.num_threads) is not int or config.num_threads < 1):
         raise ValueError('DKI num_threads must be a positive integer')
     if config.mkcurve_chunk_schedule not in ('dynamic', 'ordered'):
@@ -881,8 +883,8 @@ def _resolve_dki_spawn_workers(config: DkiConfig) -> int:
             int(
                 adaptive_spawn_workers(
                     req,
-                    per_worker_ram_gib=1.5,
-                    reserve_ram_gib=6.0,
+                    per_worker_ram_gib=1.0,
+                    reserve_ram_gib=4.0,
                     max_workers=4,
                 )
             ),
@@ -1116,7 +1118,8 @@ def _compute_maps(config: DkiConfig, paths: dict[str, Path], log):
             phase_times['preparation'] = time.monotonic()-phase_start
             masked_unscaled = None
             pre_bytes = int(len(flat_indices)) * int(len(selected)) * int(np.dtype(unscaled.dtype).itemsize)
-            if len(flat_indices) > 64 and pre_bytes <= 1024**3 and available_ram_bytes() >= 4 * (1024**3):
+            min_preload_avail = max(2 * (1024**3), pre_bytes * 3)
+            if len(flat_indices) > 64 and pre_bytes <= 1024**3 and available_ram_bytes() >= min_preload_avail:
                 stamp_pre = time.monotonic()
                 masked_unscaled = np.empty((len(flat_indices), len(selected)), dtype=unscaled.dtype)
                 for col_idx, vol_idx in enumerate(selected):

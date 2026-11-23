@@ -244,6 +244,107 @@ class MKCurvePerfAndRamSafetyTests(unittest.TestCase):
             self.assertEqual(rec_low["settings"]["effective_workers"], 4)
             self.assertTrue(any("Low host RAM" in m for m in logs_low))
 
+    def test_mkcurve_single_worker_pins_blas_and_auto_workers_respects_stage_budget(self) -> None:
+        import concurrent.futures
+        from microstructure.dki import DkiConfig
+        from microstructure.mkcurve import run_mkcurve
+        from Testing.Python.test_microstructure_dki import synthetic_case, write_case
+
+        self.assertIsNone(DkiConfig.__dataclass_fields__["mkcurve_workers"].default)
+        case = synthetic_case(noisy=True)
+        grid = np.arange(100.0, 2200.0, 300.0)
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            paths = write_case(root, case)
+            inputs = [paths[k] for k in ("dwi", "bval", "bvec", "mask")]
+
+            # 1) Explicit num_workers=1 with worker_threads=None still pins BLAS to 1 on CPU.
+            with patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("SLICERDSPACE_STAGE_CPUS", None)
+                rec_one = run_mkcurve(
+                    *inputs,
+                    root / "single_worker",
+                    grid=grid,
+                    voxels_per_chunk=64,
+                    num_workers=1,
+                    worker_threads=None,
+                )
+            self.assertEqual(rec_one["settings"]["num_workers"], 1)
+            self.assertEqual(rec_one["settings"]["worker_threads"], 1)
+
+            # 2) Auto num_workers=None respects SLICERDSPACE_STAGE_CPUS and avoids ThreadPool initializer race.
+            thread_init_args: list[object] = []
+            real_thread_pool = concurrent.futures.ThreadPoolExecutor
+
+            def spy_thread_pool(*, max_workers, initializer=None, initargs=()):
+                thread_init_args.append(initializer)
+                return real_thread_pool(max_workers=int(max_workers))
+
+            with (
+                patch.dict(os.environ, {"SLICERDSPACE_STAGE_CPUS": "3"}, clear=False),
+                patch("concurrent.futures.ThreadPoolExecutor", side_effect=spy_thread_pool),
+            ):
+                rec_auto = run_mkcurve(
+                    *inputs,
+                    root / "auto_budget",
+                    grid=grid,
+                    voxels_per_chunk=64,
+                    num_workers=None,
+                    worker_threads=None,
+                )
+            self.assertEqual(rec_auto["settings"]["num_workers"], 3)
+            self.assertEqual(rec_auto["settings"]["worker_threads"], 1)
+            if thread_init_args:
+                self.assertEqual(thread_init_args, [None])
+
+    def test_macos_csd_slab_transpose_bit_exact_and_skips_mrtrix_strides_only_on_darwin(self) -> None:
+        from tractography.csd import _optimize_dwi_mif_volume_strides_in_ram
+
+        # Build a tiny realistic 4D Float32LE .mif in NIfTI layout (-0,+1,+2,+3)
+        dims = (5, 6, 7, 4)  # X=5, Y=6, Z=7, D=4
+        rng = np.random.default_rng(7)
+        arr = rng.standard_normal((dims[3], dims[2], dims[1], dims[0])).astype("<f4")
+        expected_transposed = np.ascontiguousarray(np.moveaxis(arr, 0, -1))
+        header_lines = [
+            "mrtrix image",
+            f"dim: {dims[0]},{dims[1]},{dims[2]},{dims[3]}",
+            "vox: 1.25,1.25,1.25,1",
+            "layout: -0,+1,+2,+3",
+            "datatype: Float32LE",
+            "file: . 128",
+            "END",
+            "",
+        ]
+        hdr = "\n".join(header_lines).encode("utf-8")
+        pad = b"\x00" * (128 - len(hdr))
+        with tempfile.TemporaryDirectory() as td:
+            mif = Path(td) / "test_dwi.mif"
+            mif.write_bytes(hdr + pad + arr.tobytes())
+            with patch("tractography.csd.sys.platform", "darwin"):
+                _optimize_dwi_mif_volume_strides_in_ram(mif)
+            out_bytes = mif.read_bytes()
+            self.assertIn(b"layout: -1,+2,+3,+0\n", out_bytes[:128])
+            self.assertEqual(out_bytes[128:], expected_transposed.tobytes())
+            self.assertFalse(mif.with_suffix(".mif.tmp").exists())
+
+    def test_dki_spawn_workers_enables_three_workers_on_16gib_macos(self) -> None:
+        from microstructure import dki
+
+        fake_cfg = types.SimpleNamespace(num_threads=None)
+        fake_main = types.SimpleNamespace(__file__=__file__)
+        with (
+            patch.object(dki.sys, "platform", "darwin"),
+            patch.object(dki.sys, "executable", "/Applications/Slicer.app/Contents/bin/python-real"),
+            patch.dict(sys.modules, {"__main__": fake_main}),
+            patch.dict(os.environ, {}, clear=False),
+            patch("os.cpu_count", return_value=10),
+            patch("shared.hardware_adapt.host_total_ram_gib", return_value=16.0),
+            patch("shared.hardware_adapt.query_host_available_ram_bytes", return_value=int(3.2 * 1024**3)),
+        ):
+            os.environ.pop("SLICERDSPACE_STAGE_CPUS", None)
+            self.assertEqual(dki._resolve_dki_spawn_workers(fake_cfg), 3)
+
 
 class NoddiAccelPerfTests(unittest.TestCase):
     def _make_noddi_problem(self):

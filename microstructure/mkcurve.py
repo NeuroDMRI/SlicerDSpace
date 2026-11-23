@@ -299,22 +299,33 @@ def run_mkcurve(dwi_path, bval_path, bvec_path, mask_path, output_dir, *,
     from microstructure.mkcurve_inputs import _prepare_inputs
 
     if (type(voxels_per_chunk) is not int or voxels_per_chunk < 1
-            or type(num_workers) is not int or num_workers < 1
+            or (num_workers is not None and (type(num_workers) is not int or num_workers < 1))
             or not np.isfinite(threshold) or not 0 <= threshold <= 1):
         raise ValueError("MK-Curve requires a positive chunk size and finite threshold in [0,1]")
     if worker_threads is not None and (type(worker_threads) is not int or worker_threads < 1):
         raise ValueError('MK-Curve worker_threads must be a positive integer')
-    if num_workers > 1 and worker_threads is None:
-        worker_threads = 1
     if chunk_schedule not in ('dynamic', 'ordered'):
         raise ValueError('MK-Curve chunk schedule must be dynamic or ordered')
+    resolved_device = _resolve_mkcurve_device(device)
+    is_cuda_dev = resolved_device.startswith("cuda")
+    if not is_cuda_dev and worker_threads is None:
+        # Tiny N x 22 LAPACK dgelsy solves suffer severe OpenBLAS thread-barrier spinning
+        # (e.g. 3.5x-10x slowdown on macOS Rosetta/Apple Silicon) if BLAS is left unbounded,
+        # even when num_workers == 1.
+        worker_threads = 1
+    if num_workers is None:
+        if is_cuda_dev:
+            num_workers = 1
+        else:
+            from shared.numeric_threads import effective_cpu_threads
+            budget = effective_cpu_threads(default=8)
+            num_workers = max(1, budget // (worker_threads or 1))
     import os
     reservation = os.environ.get('SLICERDSPACE_STAGE_CPUS')
     if reservation and num_workers * (worker_threads or 1) > int(reservation):
         raise ValueError('MK-Curve workers and threads exceed the stage CPU reservation')
     if solver not in {"reference", "batched"}:
         raise ValueError("MK-Curve solver must be reference or batched")
-    resolved_device = _resolve_mkcurve_device(device)
     if any(value is not None for value in legacy.values()):
         raise ValueError("MATLAB/source paths belong to MKCURVE_MATLAB, not the Python port")
     root = Path(output_dir).resolve()
@@ -388,8 +399,8 @@ def run_mkcurve(dwi_path, bval_path, bvec_path, mask_path, output_dir, *,
                         from shared.hardware_adapt import adaptive_spawn_workers
                         safe_spawn = adaptive_spawn_workers(
                             eff_workers,
-                            per_worker_ram_gib=2.5,
-                            reserve_ram_gib=6.0,
+                            per_worker_ram_gib=1.0,
+                            reserve_ram_gib=4.0,
                             max_workers=max(eff_workers, 8),
                         )
                         if safe_spawn < eff_workers:
@@ -410,8 +421,9 @@ def run_mkcurve(dwi_path, bval_path, bvec_path, mask_path, output_dir, *,
                                 eff_workers = safe_spawn
                     if use_threads:
                         from concurrent.futures import ThreadPoolExecutor
-                        pool = ThreadPoolExecutor(max_workers=eff_workers,
-                            initializer=_initialize_worker, initargs=(worker_threads,))
+                        # Main thread already pinned BLAS via threadpool_limits above; avoid
+                        # concurrent per-thread threadpool_limits() mutation races.
+                        pool = ThreadPoolExecutor(max_workers=eff_workers)
                     else:
                         from concurrent.futures import ProcessPoolExecutor
                         import multiprocessing

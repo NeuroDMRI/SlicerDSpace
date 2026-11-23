@@ -739,19 +739,22 @@ def _write_fod_preparation_receipt(config: CSDActConfig, output_dir: Path) -> bo
 
 
 def _optimize_dwi_mif_volume_strides_in_ram(dwi_mif: Path) -> None:
-    """Transpose 4-D ``.mif`` to volume-innermost strides in anonymous RAM on macOS.
+    """Transpose 4-D ``.mif`` to volume-innermost strides via bounded slab I/O on macOS.
 
-    MRtrix3 memory-maps uncompressed ``.mif`` files on local APFS. When ``dwi2response``
-    (``mrconvert -strides 0,0,0,1``) or ``dwi2fod`` transposes a multi-gigabyte 4-D
-    ``.mif`` from NIfTI volume-outermost layout (``layout: ...,+3``) to volume-innermost
-    layout (``layout: ...,+0``) via ``mmap(MAP_SHARED)``, macOS's ~4 GiB file-backed page
-    cache limit causes >1 TB of page-fault writebacks. Performing the transpose in
-    anonymous RAM completes in ~10 seconds with bit-identical voxel values.
+    MRtrix3 memory-maps uncompressed ``.mif`` files on local APFS. When ``mrconvert
+    -strides 0,0,0,1`` or ``dwi2response`` transposes a multi-gigabyte 4-D ``.mif``
+    from NIfTI volume-outermost layout (``layout: ...,+3``) to volume-innermost
+    layout (``layout: ...,+0``) via ``mmap(MAP_SHARED)``, macOS's ~4 GiB file-backed
+    page-cache limit causes >1 TB of page-fault writebacks (>30 min on HCP 100307).
+    Streaming spatial slabs in bounded anonymous RAM (~350 MiB peak) completes in
+    ~10-20 seconds with bit-identical voxel values even on 8-16 GiB Macs.
     """
 
     if sys.platform != "darwin" or not dwi_mif.is_file():
         return
+    tmp_mif = dwi_mif.with_suffix(".mif.tmp")
     try:
+        import shutil
         import numpy as np
 
         with dwi_mif.open("rb") as handle:
@@ -793,18 +796,14 @@ def _optimize_dwi_mif_volume_strides_in_ram(dwi_mif: Path) -> None:
         if ranks[3] != 3 or sorted(ranks[:3]) != [0, 1, 2]:
             return
         spatial_by_rank = {ranks[axis]: dims[axis] for axis in range(3)}
-        c_shape = (dims[3], spatial_by_rank[2], spatial_by_rank[1], spatial_by_rank[0])
-        expected_bytes = offset + int(np.prod(c_shape)) * 4
-        from shared.hardware_adapt import query_host_available_ram_bytes
-
-        avail_ram = query_host_available_ram_bytes()
-        if avail_ram > 0 and expected_bytes * 2.5 > avail_ram:
+        d_vols = int(dims[3])
+        s2, s1, s0 = int(spatial_by_rank[2]), int(spatial_by_rank[1]), int(spatial_by_rank[0])
+        if d_vols <= 0 or s2 <= 0 or s1 <= 0 or s0 <= 0:
             return
-        raw = dwi_mif.read_bytes()
-        if len(raw) < expected_bytes:
+        expected_bytes = offset + d_vols * s2 * s1 * s0 * 4
+        file_size = dwi_mif.stat().st_size
+        if file_size < expected_bytes:
             return
-        arr = np.frombuffer(raw, dtype="<f4", offset=offset, count=int(np.prod(c_shape))).reshape(c_shape)
-        transposed = np.ascontiguousarray(np.moveaxis(arr, 0, -1))
         new_tokens = [f"{signs[i]}{ranks[i] + 1}" for i in range(3)] + [f"{signs[3]}0"]
         layout_line_new = f"layout: {','.join(new_tokens)}"
         if len(layout_line_new) != len(layout_line_old):
@@ -813,15 +812,63 @@ def _optimize_dwi_mif_volume_strides_in_ram(dwi_mif: Path) -> None:
         new_header_bytes = new_header.encode("utf-8")
         if len(new_header_bytes) != hdr_end:
             return
-        tmp_mif = dwi_mif.with_suffix(".mif.tmp")
-        with tmp_mif.open("wb") as out_f:
+        try:
+            if shutil.disk_usage(dwi_mif.parent).free < expected_bytes + 64 * 1024 * 1024:
+                return
+        except OSError:
+            pass
+
+        # Target <=192 MiB input slab buffer (+ <=192 MiB transposed output slab = <400 MiB peak RAM),
+        # and skip cleanly if available RAM cannot hold even a single input+output spatial slab.
+        slice_bytes = s1 * s0 * 4
+        vol_bytes = s2 * slice_bytes
+        bytes_per_s2_across_vols = max(1, d_vols * slice_bytes)
+        try:
+            from shared.hardware_adapt import query_host_available_ram_bytes
+
+            avail_ram = int(query_host_available_ram_bytes())
+        except Exception:
+            avail_ram = 0
+        min_slab_ram = max(2 * bytes_per_s2_across_vols, 64 * 1024 * 1024)
+        if avail_ram > 0 and avail_ram < min_slab_ram:
+            return
+        slab_budget = (
+            min(192 * 1024 * 1024, max(bytes_per_s2_across_vols, avail_ram // 8))
+            if avail_ram > 0
+            else 192 * 1024 * 1024
+        )
+        slab_s2 = max(1, min(s2, slab_budget // bytes_per_s2_across_vols))
+
+        with dwi_mif.open("rb") as in_f, tmp_mif.open("wb") as out_f:
             out_f.write(new_header_bytes)
-            out_f.write(raw[hdr_end:offset])
-            out_f.write(transposed.tobytes())
-            if len(raw) > expected_bytes:
-                out_f.write(raw[expected_bytes:])
+            if offset > hdr_end:
+                in_f.seek(hdr_end)
+                out_f.write(in_f.read(offset - hdr_end))
+            buf_full = np.empty((d_vols, slab_s2, s1, s0), dtype="<f4")
+            for s2_start in range(0, s2, slab_s2):
+                s2_len = min(slab_s2, s2 - s2_start)
+                buf = buf_full if s2_len == slab_s2 else np.empty((d_vols, s2_len, s1, s0), dtype="<f4")
+                slab_bytes = s2_len * slice_bytes
+                for vol_idx in range(d_vols):
+                    in_f.seek(offset + vol_idx * vol_bytes + s2_start * slice_bytes)
+                    dest = memoryview(buf[vol_idx].reshape(-1)).cast("B")
+                    read_total = 0
+                    while read_total < slab_bytes:
+                        chunk_n = in_f.readinto(dest[read_total:])
+                        if not chunk_n:
+                            raise EOFError("Unexpected EOF while transposing 4D .mif slab")
+                        read_total += chunk_n
+                slab_out = np.ascontiguousarray(np.moveaxis(buf, 0, -1))
+                out_f.write(memoryview(slab_out.reshape(-1)).cast("B"))
+            if file_size > expected_bytes:
+                in_f.seek(expected_bytes)
+                shutil.copyfileobj(in_f, out_f, length=8 * 1024 * 1024)
         tmp_mif.replace(dwi_mif)
     except Exception:
+        try:
+            tmp_mif.unlink(missing_ok=True)
+        except OSError:
+            pass
         return
 
 
@@ -993,6 +1040,7 @@ def run_csd_act(config: CSDActConfig, *, log: Optional[Callable[[str], None]] = 
                 exec_cmd = command
                 if (
                     not disable_csd_accel
+                    and sys.platform != "darwin"
                     and Path(command[0]).stem.lower() == "mrconvert"
                     and len(command) > 2
                     and Path(command[2]) == dwi_mif

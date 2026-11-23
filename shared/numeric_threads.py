@@ -63,7 +63,7 @@ def numerical_threads(threads, *, workers=1):
 def dki_threads(function):
     @wraps(function)
     def wrapped(config, *args, **kwargs):
-        workers = config.mkcurve_workers if config.fit_method.upper() == 'MKCURVE' else 1
+        workers = (config.mkcurve_workers or 1) if config.fit_method.upper() == 'MKCURVE' else 1
         with numerical_threads(config.num_threads, workers=workers):
             return function(config, *args, **kwargs)
     return wrapped

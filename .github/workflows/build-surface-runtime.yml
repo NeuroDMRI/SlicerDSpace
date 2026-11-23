@@ -104,7 +104,7 @@ jobs:
           OMP_PREFIX="$RUNNER_TEMP/llvm-openmp-install"
           git init "$OMP_SRC"
           git -C "$OMP_SRC" remote add origin https://github.com/llvm/llvm-project.git
-          git -C "$OMP_SRC" fetch --depth=1 --filter=blob:none origin refs/tags/llvmorg-18.1.8
+          git -C "$OMP_SRC" fetch --depth=1 --filter=blob:none origin refs/tags/llvmorg-19.1.7
           git -C "$OMP_SRC" sparse-checkout set --cone openmp cmake
           git -C "$OMP_SRC" checkout --detach FETCH_HEAD
           cmake -S "$OMP_SRC/openmp" -B "$OMP_BUILD" \
@@ -168,7 +168,7 @@ jobs:
             echo "::error::mris_sphere was built without HAVE_OPENMP"
             exit 1
           fi
-          echo "openmp: found (static libomp.a from llvmorg-18.1.8, macOS 13.0 target)" | tee -a "$OUT/toolchain-darwin-arm64.txt"
+          echo "openmp: found (static libomp.a from llvmorg-19.1.7, macOS 13.0 target)" | tee -a "$OUT/toolchain-darwin-arm64.txt"
 
       - name: Package the runtime
         run: |

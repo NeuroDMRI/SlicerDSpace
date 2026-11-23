@@ -902,7 +902,7 @@ def _fit_noddi_cuda(
             icvf_t = torch.as_tensor(icvf, dtype=torch.float64, device=dev)
             kappa_t = torch.as_tensor(kappa, dtype=torch.float64, device=dev)
 
-            per_voxel_bytes = max(8192, (n_grad * 4 + P1 * 8) * 8)
+            per_voxel_bytes = max(16384, (n_grad * 4 + P1 * 16) * 8)
             chunk_size = adaptive_cuda_scaled_batch(
                 per_voxel_bytes,
                 65536,
@@ -910,6 +910,8 @@ def _fit_noddi_cuda(
                 max_batch=65536,
                 device=dev,
                 windows_tdr_cap=8192,
+                fp64=True,
+                consumer_fp64_tdr_cap=2048,
             )
 
             def _cuda_chunk_step(start: int, stop: int) -> None:

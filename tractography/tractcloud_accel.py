@@ -291,7 +291,12 @@ def fast_write_polydata(polydata, filepath: str) -> None:
     writer.Write()
 
 
-def install_tractcloud_accelerations(pipeline_mod, resolved_device: str = "cpu") -> None:
+def install_tractcloud_accelerations(
+    pipeline_mod,
+    resolved_device: str = "cpu",
+    *,
+    requested_device: str | None = None,
+) -> None:
     """Monkey-patch real tractcloud modules in-memory without touching source files."""
     global _ACTIVE_DEVICE_STR
     if os.environ.get("SLICERDSPACE_DISABLE_TRACTCLOUD_ACCEL") == "1":
@@ -303,11 +308,16 @@ def install_tractcloud_accelerations(pipeline_mod, resolved_device: str = "cpu")
     import torch.utils.data as data
     import tractcloud.inference as inference_mod
     import tractcloud.vtk_io as vtk_io_mod
+    from shared import hardware_adapt as _ha
 
     def _is_mps_available(torch_mod) -> bool:
         mps_mod = getattr(getattr(torch_mod, "backends", None), "mps", None)
         fn = getattr(mps_mod, "is_available", None)
         return bool(callable(fn) and fn() is True)
+
+    req_norm = str(requested_device or "").strip().lower()
+    explicit_gpu = req_norm in {"cuda", "mps"} or req_norm.startswith("cuda:")
+    allow_oom_cpu_fallback = not explicit_gpu
 
     dev_str = str(resolved_device or "cpu").lower()
     if dev_str.startswith("cuda:"):
@@ -323,7 +333,7 @@ def install_tractcloud_accelerations(pipeline_mod, resolved_device: str = "cpu")
         torch.backends.cuda.matmul.allow_tf32 = False
         torch.backends.cudnn.allow_tf32 = False
         torch.backends.cudnn.enabled = True
-        torch.backends.cudnn.benchmark = True
+        torch.backends.cudnn.benchmark = _ha.should_enable_cudnn_benchmark(_ACTIVE_DEVICE_STR)
 
     fiber_dist_fn = inference_mod._fiber_distance_efficient
 
@@ -356,45 +366,112 @@ def install_tractcloud_accelerations(pipeline_mod, resolved_device: str = "cpu")
             cuda_ok = _ACTIVE_DEVICE_STR.startswith("cuda") and torch.cuda.is_available()
             mps_ok = _ACTIVE_DEVICE_STR.startswith("mps") and _is_mps_available(torch)
             dev = torch.device(_ACTIVE_DEVICE_STR if (cuda_ok or mps_ok) else "cpu")
-            self._compute_device = dev
-            # (N, 3, num_point) contiguous tensor on compute device
-            self._feat_transposed = torch.as_tensor(
-                np.ascontiguousarray(self.feat.transpose(0, 2, 1)),
-                dtype=torch.float32,
-                device=dev,
-            )
+            feat_transposed_np = np.ascontiguousarray(self.feat.transpose(0, 2, 1))
             self._local_feat_np: np.ndarray | None = None
 
-            if self.k == 0:
-                self._knn_global_idx: torch.Tensor | None = None
-            else:
-                knn_idx = torch.empty((num_fiber, self.k), dtype=torch.int64, device=dev)
-                num_iter = max(num_fiber // rough_num_fiber_per_iter, 1)
-                num_per_iter = (num_fiber // num_iter) + 1
-                with torch.no_grad():
-                    for i_iter in range(num_iter):
-                        start = i_iter * num_per_iter
-                        end = min((i_iter + 1) * num_per_iter, num_fiber)
-                        cur_len = end - start
-                        if cur_len <= 0:
-                            continue
-                        cur = self._feat_transposed[start:end]
-                        # Exact upstream RNG calls #2..N: per-chunk random subset
-                        if 0 < k_ds_rate < 1:
-                            num_ds = int(cur_len * k_ds_rate)
-                            ds_indices_np = np.random.choice(cur_len, size=num_ds, replace=False)
-                            ds_idx_t = torch.as_tensor(ds_indices_np, dtype=torch.int64, device=dev)
-                            ds_feat = cur.index_select(0, ds_idx_t)
-                            dist_mat = fiber_dist_fn(cur, ds_feat, num_points=num_point)
-                            topk_local = dist_mat.topk(k=self.k, largest=False, dim=-1)[1]
-                            knn_idx[start:end] = ds_idx_t[topk_local] + start
-                        else:
-                            dist_mat = fiber_dist_fn(cur, cur, num_points=num_point)
-                            topk_local = dist_mat.topk(k=self.k, largest=False, dim=-1)[1]
-                            knn_idx[start:end] = topk_local + start
-                        if progress_callback:
-                            progress_callback((i_iter + 1) / num_iter)
-                self._knn_global_idx = knn_idx
+            def _compute_topk_rows(cur_t: torch.Tensor, ref_t: torch.Tensor, cur_dev: torch.device) -> torch.Tensor:
+                n_rows = cur_t.shape[0]
+                sub_step = n_rows
+                out_parts: list[torch.Tensor] = []
+                r0 = 0
+                while r0 < n_rows:
+                    r1 = min(n_rows, r0 + sub_step)
+                    try:
+                        dist_mat = fiber_dist_fn(cur_t[r0:r1], ref_t, num_points=num_point)
+                        out_parts.append(dist_mat.topk(k=self.k, largest=False, dim=-1)[1])
+                        r0 = r1
+                    except RuntimeError as exc:
+                        if cur_dev.type not in ("cuda", "mps") or not _ha.is_gpu_oom(exc) or sub_step <= 128:
+                            raise
+                        _ha.empty_gpu_cache_safely()
+                        sub_step = max(128, sub_step // 2)
+                return out_parts[0] if len(out_parts) == 1 else torch.cat(out_parts, dim=0)
+
+            try:
+                self._compute_device = dev
+                self._feat_transposed = torch.as_tensor(feat_transposed_np, dtype=torch.float32, device=dev)
+                if self.k == 0:
+                    self._knn_global_idx: torch.Tensor | None = None
+                else:
+                    knn_idx = torch.empty((num_fiber, self.k), dtype=torch.int64, device=dev)
+                    num_iter = max(num_fiber // rough_num_fiber_per_iter, 1)
+                    num_per_iter = (num_fiber // num_iter) + 1
+                    with torch.no_grad():
+                        for i_iter in range(num_iter):
+                            start = i_iter * num_per_iter
+                            end = min((i_iter + 1) * num_per_iter, num_fiber)
+                            cur_len = end - start
+                            if cur_len <= 0:
+                                continue
+                            # Exact upstream RNG calls #2..N: per-chunk random subset
+                            ds_indices_np = (
+                                np.random.choice(cur_len, size=int(cur_len * k_ds_rate), replace=False)
+                                if 0 < k_ds_rate < 1
+                                else None
+                            )
+                            try:
+                                cur = self._feat_transposed[start:end]
+                                if ds_indices_np is not None:
+                                    ds_idx_t = torch.as_tensor(ds_indices_np, dtype=torch.int64, device=dev)
+                                    ds_feat = cur.index_select(0, ds_idx_t)
+                                    topk_local = _compute_topk_rows(cur, ds_feat, dev)
+                                    knn_idx[start:end] = ds_idx_t[topk_local] + start
+                                else:
+                                    topk_local = _compute_topk_rows(cur, cur, dev)
+                                    knn_idx[start:end] = topk_local + start
+                            except RuntimeError as exc:
+                                if not (dev.type in ("cuda", "mps") and allow_oom_cpu_fallback and _ha.is_gpu_oom(exc)):
+                                    raise
+                                _ha.empty_gpu_cache_safely()
+                                dev = torch.device("cpu")
+                                self._compute_device = dev
+                                self._feat_transposed = torch.as_tensor(feat_transposed_np, dtype=torch.float32, device=dev)
+                                knn_idx = knn_idx.to(dev)
+                                cur = self._feat_transposed[start:end]
+                                if ds_indices_np is not None:
+                                    ds_idx_t = torch.as_tensor(ds_indices_np, dtype=torch.int64, device=dev)
+                                    ds_feat = cur.index_select(0, ds_idx_t)
+                                    topk_local = _compute_topk_rows(cur, ds_feat, dev)
+                                    knn_idx[start:end] = ds_idx_t[topk_local] + start
+                                else:
+                                    topk_local = _compute_topk_rows(cur, cur, dev)
+                                    knn_idx[start:end] = topk_local + start
+                            if progress_callback:
+                                progress_callback((i_iter + 1) / num_iter)
+                    self._knn_global_idx = knn_idx
+            except RuntimeError as exc:
+                if not (dev.type in ("cuda", "mps") and allow_oom_cpu_fallback and _ha.is_gpu_oom(exc)):
+                    raise
+                _ha.empty_gpu_cache_safely()
+                dev = torch.device("cpu")
+                self._compute_device = dev
+                self._feat_transposed = torch.as_tensor(feat_transposed_np, dtype=torch.float32, device=dev)
+                if self.k == 0:
+                    self._knn_global_idx = None
+                else:
+                    knn_idx = torch.empty((num_fiber, self.k), dtype=torch.int64, device=dev)
+                    num_iter = max(num_fiber // rough_num_fiber_per_iter, 1)
+                    num_per_iter = (num_fiber // num_iter) + 1
+                    with torch.no_grad():
+                        for i_iter in range(num_iter):
+                            start = i_iter * num_per_iter
+                            end = min((i_iter + 1) * num_per_iter, num_fiber)
+                            cur_len = end - start
+                            if cur_len <= 0:
+                                continue
+                            cur = self._feat_transposed[start:end]
+                            if 0 < k_ds_rate < 1:
+                                ds_indices_np = np.random.choice(cur_len, size=int(cur_len * k_ds_rate), replace=False)
+                                ds_idx_t = torch.as_tensor(ds_indices_np, dtype=torch.int64, device=dev)
+                                ds_feat = cur.index_select(0, ds_idx_t)
+                                topk_local = _compute_topk_rows(cur, ds_feat, dev)
+                                knn_idx[start:end] = ds_idx_t[topk_local] + start
+                            else:
+                                topk_local = _compute_topk_rows(cur, cur, dev)
+                                knn_idx[start:end] = topk_local + start
+                            if progress_callback:
+                                progress_callback((i_iter + 1) / num_iter)
+                    self._knn_global_idx = knn_idx
 
         @property
         def local_feat(self) -> np.ndarray:
@@ -446,9 +523,7 @@ def install_tractcloud_accelerations(pipeline_mod, resolved_device: str = "cpu")
             torch.backends.cudnn.allow_tf32 = False
             torch.backends.cudnn.enabled = True
         elif target_dev.type == "cpu":
-            from shared.hardware_adapt import enable_cpu_flush_denormal
-
-            enable_cpu_flush_denormal(torch)
+            _ha.enable_cpu_flush_denormal(torch)
             if (
                 not os.environ.get("SLICERDSPACE_STAGE_CPUS", "").strip()
                 and not os.environ.get("OMP_NUM_THREADS", "").strip()
@@ -459,18 +534,13 @@ def install_tractcloud_accelerations(pipeline_mod, resolved_device: str = "cpu")
         n_total = len(ds)
         if n_total == 0:
             return []
-        from shared.hardware_adapt import (
-            adaptive_gpu_scaled_batch,
-            empty_gpu_cache_safely,
-            is_gpu_oom,
-        )
 
         batch_size = int(getattr(data_loader, "batch_size", 2048) or 2048)
         if target_dev.type in ("cuda", "mps"):
-            batch_size = adaptive_gpu_scaled_batch(
+            batch_size = _ha.adaptive_gpu_scaled_batch(
                 per_item_bytes=262144,
                 default_batch=batch_size,
-                min_batch=128,
+                min_batch=min(128, batch_size),
                 max_batch=batch_size,
                 device=target_dev,
             )
@@ -483,16 +553,38 @@ def install_tractcloud_accelerations(pipeline_mod, resolved_device: str = "cpu")
         total_batches = max(1, (n_total + batch_size - 1) // batch_size)
 
         non_blocking = target_dev.type == "cuda"
-        feat_t = ds._feat_transposed.to(target_dev, non_blocking=non_blocking)
-        knn_idx = ds._knn_global_idx.to(target_dev, non_blocking=non_blocking) if ds._knn_global_idx is not None else None
-        # global_feat is (1, P, 3, k_global) -> transpose(2, 1) -> (1, 3, P, k_global)
-        global_t = torch.as_tensor(global_feat, dtype=torch.float32, device=target_dev).transpose(2, 1).contiguous()
-
+        feat_t = knn_idx = global_t = None
         preds_gpu: list[torch.Tensor] = []
+
+        def _fallback_inference_to_cpu() -> None:
+            nonlocal target_dev, feat_t, knn_idx, global_t, cur_batch_size
+            _ha.empty_gpu_cache_safely()
+            target_dev = torch.device("cpu")
+            _ha.enable_cpu_flush_denormal(torch)
+            if hasattr(model, "to"):
+                model.to(target_dev)
+            feat_t = ds._feat_transposed.to(target_dev)
+            knn_idx = ds._knn_global_idx.to(target_dev) if ds._knn_global_idx is not None else None
+            global_t = torch.as_tensor(global_feat, dtype=torch.float32, device=target_dev).transpose(2, 1).contiguous()
+            for idx_p in range(len(preds_gpu)):
+                preds_gpu[idx_p] = preds_gpu[idx_p].cpu()
+            n_thr = torch.get_num_threads()
+            cur_batch_size = min(batch_size, 64 if n_thr >= 32 else (128 if n_thr >= 24 else 256))
+
+        cur_batch_size = batch_size
         try:
+            try:
+                feat_t = ds._feat_transposed.to(target_dev, non_blocking=non_blocking)
+                knn_idx = ds._knn_global_idx.to(target_dev, non_blocking=non_blocking) if ds._knn_global_idx is not None else None
+                # global_feat is (1, P, 3, k_global) -> transpose(2, 1) -> (1, 3, P, k_global)
+                global_t = torch.as_tensor(global_feat, dtype=torch.float32, device=target_dev).transpose(2, 1).contiguous()
+            except RuntimeError as exc:
+                if not (target_dev.type in ("cuda", "mps") and allow_oom_cpu_fallback and _ha.is_gpu_oom(exc)):
+                    raise
+                _fallback_inference_to_cpu()
+
             with torch.no_grad():
                 start = 0
-                cur_batch_size = batch_size
                 b_idx = 0
                 while start < n_total:
                     end = min(start + cur_batch_size, n_total)
@@ -517,15 +609,21 @@ def install_tractcloud_accelerations(pipeline_mod, resolved_device: str = "cpu")
                         if progress_callback:
                             progress_callback(min(1.0, b_idx / total_batches))
                     except RuntimeError as exc:
-                        if target_dev.type not in ("cuda", "mps") or not is_gpu_oom(exc) or cur_batch_size <= 64:
+                        if target_dev.type not in ("cuda", "mps") or not _ha.is_gpu_oom(exc):
                             raise
-                        empty_gpu_cache_safely()
-                        cur_batch_size = max(64, cur_batch_size // 2)
+                        if cur_batch_size > 8:
+                            _ha.empty_gpu_cache_safely()
+                            cur_batch_size = max(8, cur_batch_size // 2)
+                            continue
+                        if allow_oom_cpu_fallback:
+                            _fallback_inference_to_cpu()
+                            continue
+                        raise
             out_preds = torch.cat(preds_gpu, dim=0).cpu().numpy().tolist()
         finally:
             del preds_gpu, feat_t, knn_idx, global_t
             if target_dev.type in ("cuda", "mps"):
-                empty_gpu_cache_safely()
+                _ha.empty_gpu_cache_safely()
         return out_preds
 
     inference_mod.extract_ras_features = fast_extract_ras_features

@@ -183,7 +183,7 @@ class Le3SurfaceGpuTest(_Subject):
             self.assertEqual(action, "block")
             self.assertEqual(
                 reason,
-                "DDSurfer needs at least 12 GiB free GPU memory (found 6.5 GiB). "
+                "DDSurfer needs at least 7 GiB free GPU memory (found 6.5 GiB). "
                 "Set the surface device to CPU or free GPU memory.",
             )
             self.assertEqual(environment.surface_gpu_memory_decision("cpu"), ("ok", ""))

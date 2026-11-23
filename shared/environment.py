@@ -2066,6 +2066,36 @@ def _bundled_prepend_paths(python_path: Path) -> list[str]:
     return [str(d) for d in bundled_site_packages_dirs() if (d / "numpy").is_dir()]
 
 
+def _windows_dll_probe_snippet() -> str:
+    if sys.platform != "win32":
+        return ""
+    return (
+        "import os as _os, pathlib as _pl; _dll_h = []; "
+        "_add_dll = getattr(_os, 'add_dll_directory', None)\n"
+        "if callable(_add_dll):\n"
+        "    for _sp in list(sys.path):\n"
+        "        _p = _pl.Path(_sp)\n"
+        "        for _rel in (('torch', 'lib'), ('pywin32_system32',)):\n"
+        "            _d = _p.joinpath(*_rel)\n"
+        "            if _d.is_dir():\n"
+        "                try: _dll_h.append(_add_dll(str(_d)))\n"
+        "                except OSError: pass\n"
+        "        _nv = _p / 'nvidia'\n"
+        "        if _nv.is_dir():\n"
+        "            for _sub in _nv.iterdir():\n"
+        "                for _leaf in ('bin', 'lib'):\n"
+        "                    _d = _sub / _leaf\n"
+        "                    if _d.is_dir():\n"
+        "                        try: _dll_h.append(_add_dll(str(_d)))\n"
+        "                        except OSError: pass\n"
+        "    for _ek in ('CUDA_PATH', 'CUDA_HOME'):\n"
+        "        _ev = _os.environ.get(_ek, '').strip()\n"
+        "        if _ev and (_pl.Path(_ev) / 'bin').is_dir():\n"
+        "            try: _dll_h.append(_add_dll(str(_pl.Path(_ev) / 'bin')))\n"
+        "            except OSError: pass\n"
+    )
+
+
 def _check_cuda_device(
     device: str,
     python_executable: Optional[Path],
@@ -2088,7 +2118,8 @@ def _check_cuda_device(
             f"sys.path[:0] = {prepend_paths!r}; "
             "payload = {'torch_importable': False, 'cuda_available': False, 'device_count': 0, "
             "'mps_available': False, 'torch_version': None, 'torch_cuda_build': None, 'error': None}; "
-            "\ntry:\n"
+            "\n" + _windows_dll_probe_snippet()
+            + "try:\n"
             "    import torch\n"
             "    payload['torch_importable'] = True\n"
             "    payload['torch_version'] = getattr(torch, '__version__', None)\n"
@@ -2183,7 +2214,8 @@ def torch_numpy_abi_probe(
     probe = (
         "import json, sys\n"
         f"sys.path[:0] = {prepend_paths!r}\n"
-        "payload = {'numpy_version': None, 'torch_version': None, 'ok': False, 'abi_mismatch': False, 'error': None}\n"
+        + _windows_dll_probe_snippet()
+        + "payload = {'numpy_version': None, 'torch_version': None, 'ok': False, 'abi_mismatch': False, 'error': None}\n"
         "try:\n"
         "    import numpy\n"
         "    payload['numpy_version'] = numpy.__version__\n"
@@ -2438,7 +2470,7 @@ def resolve_auto_torch_device(
     return normalized
 
 
-SURFACE_MIN_FREE_GPU_GIB = 12.0  # LE-3: 8 GiB for the network plus the 4 GiB margin of ddsurfer_backend predict.py
+SURFACE_MIN_FREE_GPU_GIB = 7.0  # LE-3 / CUDA-7: matches ddsurfer_backend predict.py lazy single-surface CUDA minimum (5.5 + 1.5 GiB)
 _CUDA_FREE_CACHE: dict[tuple[str, str], tuple[float, Optional[float]]] = {}
 _CUDA_FREE_CACHE_SECONDS = 60.0
 
@@ -2472,7 +2504,8 @@ def cuda_free_gib(
     probe = (
         "import json, sys; "
         f"sys.path[:0] = {_bundled_prepend_paths(python_path)!r}; "
-        "\ntry:\n"
+        "\n" + _windows_dll_probe_snippet()
+        + "try:\n"
         "    import torch\n"
         f"    free, _total = torch.cuda.mem_get_info({index})\n"
         "    print(json.dumps({'free_gib': free / 1024**3}))\n"

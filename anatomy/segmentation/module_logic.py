@@ -10,7 +10,7 @@ from typing import Optional
 from shared import ensure_native_dti_bundle, find_subject_root, resolve_pythonslicer_executable
 from shared.bundled_python import inject_bundled_python_env
 from shared.environment import resolve_auto_torch_device
-from shared.external_process import is_slicer_python, text_subprocess_kwargs
+from shared.external_process import is_slicer_python, subprocess_no_window_kwargs, text_subprocess_kwargs
 
 DDSEG_PYTHON_REQUIREMENTS: tuple[tuple[str, str], ...] = (
     ("numpy", "numpy"),
@@ -127,13 +127,13 @@ class SegmentationLogicMixin:
         self.log(f"[DDSeg] Running in PythonSlicer subprocess: {' '.join(cmd)}")
         child_env = os.environ.copy()
         if is_slicer_python(python_slicer):
-            inject_bundled_python_env(child_env)
+            inject_bundled_python_env(child_env, python_executable=python_slicer)
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             env=child_env,
-            **text_subprocess_kwargs(bufsize=1),
+            **subprocess_no_window_kwargs(**text_subprocess_kwargs(bufsize=1)),
         )
         # H8: a surviving grandchild must not keep the stage open after the direct child has exited.
         from shared.line_stream import stream_process_lines

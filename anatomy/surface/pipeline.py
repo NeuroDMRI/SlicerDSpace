@@ -439,8 +439,18 @@ def run_surface(config: SurfaceConfig, *, log: Optional[Callable[[str], None]] =
         if config.execute:
             if not resources['available']:
                 raise FileNotFoundError('DDSurfer resources invalid: ' + ', '.join(resources['missing']))
-            from shared.environment import resolve_auto_torch_device
-            config = replace(config, device=resolve_auto_torch_device(config.device, Path(python_executable(config.python_bin))))
+            from shared.environment import resolve_auto_torch_device, surface_gpu_memory_decision
+            requested_surface_device = str(config.device or 'auto').strip().lower()
+            surface_py = Path(python_executable(config.python_bin))
+            resolved_surface_device = resolve_auto_torch_device(config.device, surface_py)
+            if requested_surface_device in {'', 'auto'} and resolved_surface_device.startswith('cuda'):
+                gpu_action, gpu_note = surface_gpu_memory_decision('auto', surface_py)
+                if gpu_action == 'cpu':
+                    resolved_surface_device = 'cpu'
+                    manifest['gpu_memory_fallback_note'] = gpu_note
+                    if log:
+                        log(f'[DDSurfer] {gpu_note}')
+            config = replace(config, device=resolved_surface_device)
             manifest['resolved_device'] = config.device
             if log:
                 log(f'[DDSurfer] Requested {manifest["device"]}; resolved {config.device} in the surface runtime')

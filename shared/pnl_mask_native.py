@@ -23,14 +23,25 @@ import tempfile
 import time
 
 os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+if sys.platform == "win32":
+    os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "garbage_collection_threshold:0.8,max_split_size_mb:128")
 
 
 def _prepend_bundled_site_packages() -> None:
+    if sys.platform == "win32":
+        try:
+            from shared.bundled_python import register_windows_dll_directories
+
+            register_windows_dll_directories()
+        except Exception:
+            pass
     if "numpy" in sys.modules:
         return
     raw = os.environ.get("SLICERDSPACE_BUNDLED_SITE_PACKAGES", "")
     dirs = [entry for entry in raw.split(os.pathsep) if entry and os.path.isdir(entry)]
     if dirs:
+        if sys.platform == "win32" and not any((Path(d) / "numpy").is_dir() for d in dirs):
+            return
         norms = {os.path.normcase(os.path.normpath(d)) for d in dirs}
         sys.path[:] = [
             *dirs,
@@ -556,7 +567,15 @@ def _enable_cpu_flush_denormal_safely(torch_mod) -> bool:
     return False
 
 
-def _fast_vendored_predict(volume: np.ndarray, resolved_device: str, batch_size: int, preloaded, pnl_inf):
+def _fast_vendored_predict(
+    volume: np.ndarray,
+    resolved_device: str,
+    batch_size: int,
+    preloaded,
+    pnl_inf,
+    *,
+    allow_cpu_fallback: bool = False,
+):
     import torch
 
     if volume.shape != (256, 256, 256) or not np.isfinite(volume).all():
@@ -575,7 +594,24 @@ def _fast_vendored_predict(volume: np.ndarray, resolved_device: str, batch_size:
         eff_bs = ha.adaptive_gpu_scaled_batch(128 * 1024 * 1024, eff_bs, min_batch=1, max_batch=eff_bs, device=resolved_device)
 
     states, model = preloaded
+    active_device = resolved_device
     probabilities = {}
+
+    def _switch_to_cpu() -> None:
+        nonlocal active_device, is_cuda, is_mps, is_gpu, eff_bs
+        if ha is not None:
+            if is_cuda:
+                ha.empty_cuda_cache_safely()
+            else:
+                ha.empty_gpu_cache_safely()
+        active_device = "cpu"
+        is_cuda = False
+        is_mps = False
+        is_gpu = False
+        eff_bs = min(eff_bs, 16)
+        _enable_cpu_flush_denormal_safely(torch)
+        model.to("cpu")
+
     try:
         with torch.inference_mode():
             for view in pnl_inf.VIEWS:
@@ -586,8 +622,16 @@ def _fast_vendored_predict(volume: np.ndarray, resolved_device: str, batch_size:
                 zero_idx = np.flatnonzero(~nonzero_mask)
                 nz_idx = np.flatnonzero(nonzero_mask)
                 if len(zero_idx) > 0:
-                    z_in = torch.zeros((1, 1, 256, 256), dtype=torch.float32, device=resolved_device)
-                    z_res = model(z_in, segmentation_only=True)
+                    try:
+                        z_in = torch.zeros((1, 1, 256, 256), dtype=torch.float32, device=active_device)
+                        z_res = model(z_in, segmentation_only=True)
+                    except RuntimeError as exc:
+                        oom_hit = ha.is_gpu_oom(exc) if ha is not None else ("out of memory" in str(exc).lower())
+                        if not (is_gpu and oom_hit and allow_cpu_fallback):
+                            raise
+                        _switch_to_cpu()
+                        z_in = torch.zeros((1, 1, 256, 256), dtype=torch.float32, device="cpu")
+                        z_res = model(z_in, segmentation_only=True)
                     output[zero_idx] = z_res[0, 0].cpu().numpy()
                 if len(nz_idx) > 0:
                     nz_slices = np.ascontiguousarray(slices[nz_idx, None])
@@ -598,9 +642,9 @@ def _fast_vendored_predict(volume: np.ndarray, resolved_device: str, batch_size:
                         try:
                             t_in = torch.from_numpy(batch_np)
                             if is_cuda and sys.platform != "win32":
-                                t_in = t_in.pin_memory().to(resolved_device, non_blocking=True)
+                                t_in = t_in.pin_memory().to(active_device, non_blocking=True)
                             else:
-                                t_in = t_in.to(resolved_device)
+                                t_in = t_in.to(active_device)
                             res = model(t_in, segmentation_only=True)
                             output[nz_idx[start:start + len(batch_np)]] = res[:, 0].cpu().numpy()
                             start += len(batch_np)
@@ -610,14 +654,21 @@ def _fast_vendored_predict(volume: np.ndarray, resolved_device: str, batch_size:
                                 if ha is not None
                                 else ("out of memory" in str(exc).lower())
                             )
-                            if not is_gpu or not oom_hit or cur_step <= 1:
+                            if not is_gpu or not oom_hit:
                                 raise
-                            if ha is not None:
-                                if is_cuda:
-                                    ha.empty_cuda_cache_safely()
-                                else:
-                                    ha.empty_gpu_cache_safely()
-                            cur_step = max(1, cur_step // 2)
+                            if cur_step > 1:
+                                if ha is not None:
+                                    if is_cuda:
+                                        ha.empty_cuda_cache_safely()
+                                    else:
+                                        ha.empty_gpu_cache_safely()
+                                cur_step = max(1, cur_step // 2)
+                                continue
+                            if allow_cpu_fallback:
+                                _switch_to_cpu()
+                                cur_step = min(eff_bs, 16)
+                                continue
+                            raise
                 if not np.isfinite(output).all():
                     raise RuntimeError("CNN produced nonfinite probabilities")
                 probabilities[view] = pnl_inf.orient(output, view)
@@ -690,6 +741,7 @@ def run(baseline: Path, output: Path, model_dir: Path, template: Path, *, device
     if not disable_fast:
         _install_vendored_pnl_fast_plan(pnl_mod)
 
+    allow_cpu_fallback = str(device or "auto").strip().lower() == "auto"
     started = time.monotonic()
     log("[PNL native] rigid registration to the IIT template")
     if not disable_fast:
@@ -699,7 +751,18 @@ def run(baseline: Path, output: Path, model_dir: Path, template: Path, *, device
             )
             transform, _, _, registration = register(fixed, moving, parameters, log=log)
             warped = warp(moving, fixed, transform)
-            preloaded = preload_fut.result()
+            try:
+                preloaded = preload_fut.result()
+            except RuntimeError as exc:
+                ha = _load_hardware_adapt_module()
+                oom_hit = ha.is_gpu_oom(exc) if ha is not None else ("out of memory" in str(exc).lower())
+                if not (allow_cpu_fallback and str(selection["resolved"]).startswith(("cuda", "mps")) and oom_hit):
+                    raise
+                if ha is not None:
+                    ha.empty_gpu_cache_safely()
+                log(f"[PNL native] GPU OOM during model preload ({exc}); falling back to CPU")
+                selection["resolved"] = "cpu"
+                preloaded = _preload_vendored_models(model_dir, "cpu", inference, pnl_mod, weights)
     else:
         transform, _, _, registration = register(fixed, moving, parameters, log=log)
         warped = warp(moving, fixed, transform)
@@ -710,9 +773,22 @@ def run(baseline: Path, output: Path, model_dir: Path, template: Path, *, device
     data = inference.normalize(to_numpy(warped), percentile)
     eff_bs = 1 if disable_fast else (32 if str(selection["resolved"]).startswith("cuda") else 16)
     if not disable_fast and preloaded is not None:
-        template_mask = _fast_vendored_predict(data, selection["resolved"], eff_bs, preloaded, inference)
+        template_mask = _fast_vendored_predict(
+            data, selection["resolved"], eff_bs, preloaded, inference, allow_cpu_fallback=allow_cpu_fallback
+        )
     else:
-        _, _, template_mask = inference.predict(data, model_dir, device=selection["resolved"], batch_size=eff_bs)
+        try:
+            _, _, template_mask = inference.predict(data, model_dir, device=selection["resolved"], batch_size=eff_bs)
+        except RuntimeError as exc:
+            ha = _load_hardware_adapt_module()
+            oom_hit = ha.is_gpu_oom(exc) if ha is not None else ("out of memory" in str(exc).lower())
+            if not (allow_cpu_fallback and str(selection["resolved"]).startswith(("cuda", "mps")) and oom_hit):
+                raise
+            if ha is not None:
+                ha.empty_gpu_cache_safely()
+            log(f"[PNL native] GPU OOM during inference ({exc}); falling back to CPU")
+            selection["resolved"] = "cpu"
+            _, _, template_mask = inference.predict(data, model_dir, device="cpu", batch_size=16)
     phases["inference"] = time.monotonic() - started
 
     started = time.monotonic()

@@ -816,10 +816,15 @@ class _CudaSyntheticB0Fitter:
             need_refine = (~np.isfinite(curves_safe).all(axis=0)) | (cheb_tail_np > 1e-8) | near_thresh | close_peak
 
             if np.any(need_refine):
+                import os as _os
+                from shared.hardware_adapt import is_consumer_fp64_cuda_gpu
+
                 ref_rel_np = np.flatnonzero(need_refine)
                 # Refine in bounded GPU sub-batches so S * sub * 22 * 22 stays small
-                for r0 in range(0, len(ref_rel_np), 256):
-                    r1 = min(r0 + 256, len(ref_rel_np))
+                # and stays below Windows' 2-second WDDM TDR limit on 1/64-FP64 consumer GPUs.
+                ref_step = 64 if (_os.name == "nt" and is_consumer_fp64_cuda_gpu(self.dev)) else 256
+                for r0 in range(0, len(ref_rel_np), ref_step):
+                    r1 = min(r0 + ref_step, len(ref_rel_np))
                     sub_rel = ref_rel_np[r0:r1]
                     sub_ids_np = s_ids_np[sub_rel]
                     sub_ids_t = torch.as_tensor(sub_ids_np, dtype=torch.long, device=self.dev)

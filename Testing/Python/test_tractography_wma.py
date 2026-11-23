@@ -1016,6 +1016,94 @@ exit 0
         self.assertEqual(summary["anatomical_streamline_count"], 3)
         self.assertEqual(summary["anatomical_empty_tracts"], ["T_AF_right.vtp"])
 
+    def test_adaptive_default_workers_and_cpu_backend_threads(self) -> None:
+        from tractography.wma import (
+            WMAOrgAtlasConfig,
+            _resolve_wma_cpu_backend_threads,
+            _resolve_wma_default_workers,
+            build_wma_org_atlas_command,
+        )
+
+        # Legacy upstream WMA (no whitematteranalysis/gpu) stays at 1 worker by default.
+        self.assertEqual(_resolve_wma_default_workers(self.wma_root, ram_gib=32.0, cpu_count=16), 1)
+
+        # Optimized whitematteranalysis_gpu scales workers safely with RAM and CPU.
+        gpu_init = self.wma_root / "whitematteranalysis" / "gpu" / "__init__.py"
+        gpu_init.parent.mkdir(parents=True, exist_ok=True)
+        gpu_init.write_text("# gpu\n", encoding="utf-8")
+
+        self.assertEqual(
+            _resolve_wma_default_workers(
+                self.wma_root, platform_name="darwin", ram_gib=16.0, cpu_count=10, is_apple_silicon=True
+            ),
+            4,
+        )
+        self.assertEqual(
+            _resolve_wma_default_workers(
+                self.wma_root, platform_name="darwin", ram_gib=24.0, cpu_count=10, is_apple_silicon=True
+            ),
+            8,
+        )
+        self.assertEqual(
+            _resolve_wma_default_workers(
+                self.wma_root, platform_name="win32", ram_gib=32.0, cpu_count=16, is_apple_silicon=False
+            ),
+            8,
+        )
+        self.assertEqual(
+            _resolve_wma_default_workers(
+                self.wma_root, platform_name="linux", ram_gib=8.0, cpu_count=8, is_apple_silicon=False
+            ),
+            2,
+        )
+        # Windows non-ASCII temp fallback keeps auto workers at 1 instead of failing joblib check.
+        with mock.patch.dict(os.environ, {"JOBLIB_TEMP_FOLDER": "C:/Users/测试/tmp"}, clear=False):
+            self.assertEqual(
+                _resolve_wma_default_workers(
+                    self.wma_root,
+                    output_dir=Path("C:/Users/测试/out"),
+                    platform_name="win32",
+                    ram_gib=32.0,
+                    cpu_count=16,
+                    is_apple_silicon=False,
+                ),
+                1,
+            )
+
+        # In-process zero-copy WMA_CPU_THREADS uses P-cores/CPU bandwidth when unconstrained,
+        # and strictly honors explicit num_threads or cohort stage reservations.
+        self.assertEqual(
+            _resolve_wma_cpu_backend_threads(
+                4, explicit_limit=False, platform_name="darwin", cpu_count=10, is_apple_silicon=True
+            ),
+            8,
+        )
+        self.assertEqual(
+            _resolve_wma_cpu_backend_threads(
+                8, explicit_limit=False, platform_name="linux", cpu_count=72, is_apple_silicon=False
+            ),
+            16,
+        )
+        self.assertEqual(
+            _resolve_wma_cpu_backend_threads(
+                2, explicit_limit=True, platform_name="darwin", cpu_count=10, is_apple_silicon=True
+            ),
+            2,
+        )
+
+        # build_wma_org_atlas_command respects SLICERDSPACE_STAGE_CPUS when num_threads is unset.
+        cfg = WMAOrgAtlasConfig(
+            subject_id="100307",
+            input_tractography=self.tractography,
+            atlas_dir=self.atlas_dir,
+            output_dir=self.output_dir,
+            slicer_executable=self.slicer_executable,
+            wma_root=self.wma_root,
+        )
+        with mock.patch.dict(os.environ, {"SLICERDSPACE_STAGE_CPUS": "3"}, clear=False):
+            cmd = build_wma_org_atlas_command(cfg)
+            self.assertEqual(cmd[cmd.index("-n") + 1], "3")
+
 
 if __name__ == "__main__":
     unittest.main()

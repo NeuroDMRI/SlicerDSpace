@@ -185,52 +185,114 @@ def _install_pnl_runtime_accelerations() -> None:
             raise ValueError("Batch size must be positive")
         if volume.shape != (256, 256, 256) or not np.isfinite(volume).all():
             raise ValueError("Expected a finite normalized IIT-grid volume")
-        is_cuda = str(device).startswith("cuda")
+        from shared.hardware_adapt import (
+            adaptive_gpu_scaled_batch,
+            empty_gpu_cache_safely,
+            enable_cpu_flush_denormal,
+            is_gpu_oom,
+            should_enable_cudnn_benchmark,
+        )
+
+        active_dev = str(device)
+        is_cuda = active_dev.startswith("cuda")
+        is_mps = active_dev.startswith("mps")
+        is_gpu = is_cuda or is_mps
+        allow_cpu_fallback = (os.environ.get("SLICERDSPACE_PNL_REQUESTED_DEVICE", "auto").strip().lower() == "auto")
         torch.backends.cudnn.allow_tf32 = False
         torch.backends.cuda.matmul.allow_tf32 = False
         if is_cuda:
-            torch.backends.cudnn.benchmark = True
+            torch.backends.cudnn.benchmark = should_enable_cudnn_benchmark(active_dev)
         eff_bs = max(int(batch_size), 32 if is_cuda else 16)
+        if is_gpu:
+            eff_bs = adaptive_gpu_scaled_batch(
+                96 * 1024 * 1024, eff_bs, min_batch=1, max_batch=eff_bs, device=active_dev
+            )
 
         if _preloaded is not None:
             states, model = _preloaded
         else:
             states = _load_verified_states(Path(model_dir))
-            model = pnl_mod.CompNet().to(device)
+            try:
+                model = pnl_mod.CompNet().to(active_dev)
+            except RuntimeError as exc:
+                if not (is_gpu and allow_cpu_fallback and is_gpu_oom(exc)):
+                    raise
+                empty_gpu_cache_safely()
+                active_dev = "cpu"
+                is_cuda = is_mps = is_gpu = False
+                eff_bs = min(eff_bs, 16)
+                enable_cpu_flush_denormal(torch)
+                model = pnl_mod.CompNet().to("cpu")
             model.eval()
 
+        def _fallback_cpu() -> None:
+            nonlocal active_dev, is_cuda, is_mps, is_gpu, eff_bs
+            empty_gpu_cache_safely()
+            active_dev = "cpu"
+            is_cuda = is_mps = is_gpu = False
+            eff_bs = min(eff_bs, 16)
+            enable_cpu_flush_denormal(torch)
+            model.to("cpu")
+
         probabilities = {}
-        for view in pnl_inf.VIEWS:
-            print("[PNL Torch] Predicting " + view, flush=True)
-            model.load_state_dict(states.pop(view), strict=True)
-            slices = pnl_inf.orient(volume, view)
-            output = np.empty(volume.shape, dtype=np.float32)
-            nonzero_mask = np.any(slices != 0.0, axis=(1, 2))
-            zero_idx = np.flatnonzero(~nonzero_mask)
-            nz_idx = np.flatnonzero(nonzero_mask)
-            if len(zero_idx) > 0:
-                z_in = torch.zeros((1, 1, 256, 256), dtype=torch.float32, device=device)
-                z_res = model(z_in, segmentation_only=not all_outputs)
-                if all_outputs:
-                    z_res = z_res[0]
-                output[zero_idx] = z_res[0, 0].cpu().numpy()
-            if len(nz_idx) > 0:
-                nz_slices = np.ascontiguousarray(slices[nz_idx, None])
-                for start in range(0, len(nz_idx), eff_bs):
-                    batch_np = nz_slices[start:start + eff_bs]
-                    t_in = torch.from_numpy(batch_np)
-                    if is_cuda:
-                        t_in = t_in.pin_memory().to(device, non_blocking=True)
-                    else:
-                        t_in = t_in.to(device)
-                    res = model(t_in, segmentation_only=not all_outputs)
+        try:
+            for view in pnl_inf.VIEWS:
+                print("[PNL Torch] Predicting " + view, flush=True)
+                model.load_state_dict(states.pop(view), strict=True)
+                slices = pnl_inf.orient(volume, view)
+                output = np.empty(volume.shape, dtype=np.float32)
+                nonzero_mask = np.any(slices != 0.0, axis=(1, 2))
+                zero_idx = np.flatnonzero(~nonzero_mask)
+                nz_idx = np.flatnonzero(nonzero_mask)
+                if len(zero_idx) > 0:
+                    try:
+                        z_in = torch.zeros((1, 1, 256, 256), dtype=torch.float32, device=active_dev)
+                        z_res = model(z_in, segmentation_only=not all_outputs)
+                    except RuntimeError as exc:
+                        if not (is_gpu and allow_cpu_fallback and is_gpu_oom(exc)):
+                            raise
+                        _fallback_cpu()
+                        z_in = torch.zeros((1, 1, 256, 256), dtype=torch.float32, device="cpu")
+                        z_res = model(z_in, segmentation_only=not all_outputs)
                     if all_outputs:
-                        res = res[0]
-                    output[nz_idx[start:start + len(batch_np)]] = res[:, 0].cpu().numpy()
-            if not np.isfinite(output).all():
-                raise RuntimeError("CNN produced nonfinite probabilities")
-            probabilities[view] = pnl_inf.orient(output, view)
-        del model
+                        z_res = z_res[0]
+                    output[zero_idx] = z_res[0, 0].cpu().numpy()
+                if len(nz_idx) > 0:
+                    nz_slices = np.ascontiguousarray(slices[nz_idx, None])
+                    start = 0
+                    cur_bs = eff_bs
+                    while start < len(nz_idx):
+                        batch_np = nz_slices[start:start + cur_bs]
+                        try:
+                            t_in = torch.from_numpy(batch_np)
+                            if is_cuda and sys.platform != "win32":
+                                t_in = t_in.pin_memory().to(active_dev, non_blocking=True)
+                            else:
+                                t_in = t_in.to(active_dev)
+                            res = model(t_in, segmentation_only=not all_outputs)
+                            if all_outputs:
+                                res = res[0]
+                            output[nz_idx[start:start + len(batch_np)]] = res[:, 0].cpu().numpy()
+                            start += len(batch_np)
+                        except RuntimeError as exc:
+                            if not (is_gpu and is_gpu_oom(exc)):
+                                raise
+                            if cur_bs > 1:
+                                empty_gpu_cache_safely()
+                                cur_bs = max(1, cur_bs // 2)
+                                continue
+                            if allow_cpu_fallback:
+                                _fallback_cpu()
+                                cur_bs = min(eff_bs, 16)
+                                continue
+                            raise
+                if not np.isfinite(output).all():
+                    raise RuntimeError("CNN produced nonfinite probabilities")
+                probabilities[view] = pnl_inf.orient(output, view)
+        finally:
+            del model
+            if is_gpu:
+                empty_gpu_cache_safely()
         fused, mask = pnl_inf.aggregate(probabilities)
         return probabilities, fused, mask
 
@@ -295,23 +357,45 @@ def _install_pnl_runtime_accelerations() -> None:
 
             @torch.inference_mode()
             def _preload_during_ants():
+                from shared.hardware_adapt import (
+                    adaptive_gpu_scaled_batch,
+                    empty_gpu_cache_safely,
+                    is_gpu_oom,
+                    should_enable_cudnn_benchmark,
+                )
+
                 states = _load_verified_states(Path(model_dir))
-                mdl = pnl_mod.CompNet().to(resolved_dev)
-                mdl.eval()
-                if str(resolved_dev).startswith("cuda"):
-                    torch.backends.cudnn.allow_tf32 = False
-                    torch.backends.cuda.matmul.allow_tf32 = False
-                    torch.backends.cudnn.benchmark = True
-                    dummy = torch.zeros((32, 1, 256, 256), dtype=torch.float32, device=resolved_dev)
-                    _ = mdl(dummy, segmentation_only=True)
-                    torch.cuda.synchronize()
-                elif str(resolved_dev).startswith("mps"):
-                    dummy = torch.zeros((16, 1, 256, 256), dtype=torch.float32, device=resolved_dev)
-                    _ = mdl(dummy, segmentation_only=True)
-                    mps_ns = getattr(torch, "mps", None)
-                    sync_fn = getattr(mps_ns, "synchronize", None)
-                    if callable(sync_fn):
-                        sync_fn()
+                try:
+                    mdl = pnl_mod.CompNet().to(resolved_dev)
+                    mdl.eval()
+                    if str(resolved_dev).startswith("cuda"):
+                        torch.backends.cudnn.allow_tf32 = False
+                        torch.backends.cuda.matmul.allow_tf32 = False
+                        torch.backends.cudnn.benchmark = should_enable_cudnn_benchmark(resolved_dev)
+                        warm_bs = adaptive_gpu_scaled_batch(
+                            96 * 1024 * 1024, 32, min_batch=1, max_batch=32, device=resolved_dev
+                        )
+                        dummy = torch.zeros((warm_bs, 1, 256, 256), dtype=torch.float32, device=resolved_dev)
+                        _ = mdl(dummy, segmentation_only=True)
+                        torch.cuda.synchronize()
+                    elif str(resolved_dev).startswith("mps"):
+                        warm_bs = adaptive_gpu_scaled_batch(
+                            96 * 1024 * 1024, 16, min_batch=1, max_batch=16, device=resolved_dev
+                        )
+                        dummy = torch.zeros((warm_bs, 1, 256, 256), dtype=torch.float32, device=resolved_dev)
+                        _ = mdl(dummy, segmentation_only=True)
+                        mps_ns = getattr(torch, "mps", None)
+                        sync_fn = getattr(mps_ns, "synchronize", None)
+                        if callable(sync_fn):
+                            sync_fn()
+                except RuntimeError as exc:
+                    allow_fb = (os.environ.get("SLICERDSPACE_PNL_REQUESTED_DEVICE", str(device)).strip().lower() == "auto")
+                    if not (allow_fb and str(resolved_dev).startswith(("cuda", "mps")) and is_gpu_oom(exc)):
+                        raise
+                    empty_gpu_cache_safely()
+                    mdl = pnl_mod.CompNet().to("cpu")
+                    mdl.eval()
+                    selection["resolved"] = "cpu"
                 return states, mdl
 
             with ThreadPoolExecutor(max_workers=1) as preload_pool:
@@ -322,7 +406,7 @@ def _install_pnl_runtime_accelerations() -> None:
 
             registered = nib.load(str(prefix) + "Warped.nii.gz")
             data = pnl_inf.normalize(registered.get_fdata(), percentile)
-            _, _, mask = _fast_predict(data, model_dir, device=resolved_dev, batch_size=batch_size, _preloaded=preloaded)
+            _, _, mask = _fast_predict(data, model_dir, device=selection["resolved"], batch_size=batch_size, _preloaded=preloaded)
             candidate = work / "native_mask.nii.gz"
             _fast_finish_native(mask, registered, baseline, str(prefix) + "0GenericAffine.mat", candidate,
                                 ants_bin=private_ants, threads=threads)

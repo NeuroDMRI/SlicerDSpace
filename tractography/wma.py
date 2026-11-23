@@ -158,6 +158,115 @@ def _wma_supports_gpu_flag(root: Path) -> bool:
     return (root / "whitematteranalysis" / "gpu" / "__init__.py").is_file()
 
 
+# NumPy 1.26.x (shipped in 3D Slicer 5.10) exposes a minimal ``numpy._core`` stub
+# without ``multiarray`` once SciPy/scikit-learn imports ``numpy._core``.
+# ``whitematteranalysis._memory`` accesses ``_core.multiarray`` when ``numpy._core``
+# is present, so attach ``numpy.core.multiarray`` before running WMA child scripts.
+_WMA_NUMPY_COMPAT_SNIPPET = (
+    "try:\n"
+    "    import importlib as _imp, numpy as _np\n"
+    "    _c = _imp.import_module('numpy._core')\n"
+    "    if not hasattr(_c, 'multiarray'):\n"
+    "        _l = getattr(_np, 'core', None)\n"
+    "        if _l is not None and hasattr(_l, 'multiarray'):\n"
+    "            _c.multiarray = _l.multiarray\n"
+    "except Exception:\n"
+    "    pass\n"
+)
+
+
+def _resolve_wma_default_workers(
+    wma_root: Path,
+    *,
+    output_dir: Optional[Path] = None,
+    platform_name: Optional[str] = None,
+    ram_gib: Optional[float] = None,
+    cpu_count: Optional[int] = None,
+    is_apple_silicon: Optional[bool] = None,
+) -> int:
+    """Choose a RAM-safe default worker count when ``num_threads`` is unset.
+
+    Legacy upstream WMA duplicates the full input tractogram per joblib worker,
+    so it stays at 1 worker by default. Optimized ``whitematteranalysis_gpu``
+    uses zero-copy CPU threading for clustering and independent per-cluster
+    workers for outlier removal, hardening, and tract assembly.
+    """
+    if not _wma_supports_gpu_flag(wma_root):
+        return 1
+    plat = (sys.platform if platform_name is None else str(platform_name)).lower()
+    if plat == "win32":
+        joblib_temp = os.environ.get("JOBLIB_TEMP_FOLDER") or tempfile.gettempdir()
+        out_ascii = output_dir is not None and str(output_dir).isascii()
+        if not str(joblib_temp).isascii() and not out_ascii:
+            return 1
+    from shared.hardware_adapt import host_total_ram_gib, is_apple_silicon_host
+
+    if cpu_count is None:
+        try:
+            from shared.compute_schedule import available_resources
+
+            cpus = max(1, int(available_resources()[0]))
+        except Exception:
+            cpus = max(1, int(os.cpu_count() or 1))
+    else:
+        cpus = max(1, int(cpu_count))
+    host_ram = host_total_ram_gib() if ram_gib is None else float(ram_gib)
+    apple = is_apple_silicon_host() if is_apple_silicon is None else bool(is_apple_silicon)
+
+    if plat == "darwin" and apple and cpus >= 6:
+        cpu_cap = max(2, min(8, cpus - 2))
+    else:
+        cpu_cap = max(1, min(8, cpus))
+
+    if host_ram is None:
+        ram_cap = 4
+    elif host_ram < 12.0:
+        ram_cap = 2
+    elif host_ram < 20.0:
+        ram_cap = 4
+    else:
+        ram_cap = 8
+    return max(1, min(cpus, cpu_cap, ram_cap))
+
+
+def _resolve_wma_cpu_backend_threads(
+    worker_threads: int,
+    *,
+    explicit_limit: bool,
+    platform_name: Optional[str] = None,
+    cpu_count: Optional[int] = None,
+    is_apple_silicon: Optional[bool] = None,
+) -> int:
+    """Resolve ``WMA_CPU_THREADS`` for in-process zero-copy distance kernels.
+
+    Explicit ``num_threads`` or ``SLICERDSPACE_STAGE_CPUS`` reservations are
+    strictly honored. For unconstrained single-subject runs, allow zero-copy
+    registration/distance threads to use available CPU cores beyond the
+    multi-process worker cap (e.g. 8 threads on 10-core Apple Silicon or up to
+    16 threads on multi-core desktops/servers).
+    """
+    if explicit_limit:
+        return max(1, int(worker_threads))
+    from shared.hardware_adapt import is_apple_silicon_host
+
+    if cpu_count is None:
+        try:
+            from shared.compute_schedule import available_resources
+
+            cpus = max(1, int(available_resources()[0]))
+        except Exception:
+            cpus = max(1, int(os.cpu_count() or 1))
+    else:
+        cpus = max(1, int(cpu_count))
+    plat = (sys.platform if platform_name is None else str(platform_name)).lower()
+    apple = is_apple_silicon_host() if is_apple_silicon is None else bool(is_apple_silicon)
+    if plat == "darwin" and apple and cpus >= 6:
+        target = max(4, min(8, cpus - 2))
+    else:
+        target = min(16, cpus)
+    return max(int(worker_threads), min(cpus, target))
+
+
 def _normalize_wma_gpu_mode(device: str) -> str:
     normalized = (device or "auto").strip().lower()
     if normalized == "auto":
@@ -727,10 +836,16 @@ def _wma_output_contract_error(output_summary: dict[str, Any]) -> Optional[str]:
 
 
 def build_wma_org_atlas_command(config: WMAOrgAtlasConfig) -> tuple[str, ...]:
+    wma_root = resolve_wma_root(config.wma_root)
     if config.num_threads is None:
         from dataclasses import replace
-        config = replace(config, num_threads=1)
-    wma_root = resolve_wma_root(config.wma_root)
+        reservation = os.environ.get("SLICERDSPACE_STAGE_CPUS")
+        default_threads = (
+            int(reservation)
+            if reservation
+            else _resolve_wma_default_workers(wma_root, output_dir=config.output_dir)
+        )
+        config = replace(config, num_threads=default_threads)
     script = _wma_script_path(wma_root)
     if config.registration_mode not in {"rig", "nonrig"}:
         raise ValueError("registration_mode must be 'rig' or 'nonrig'.")
@@ -960,25 +1075,82 @@ def _run_native_org(config, staging, wma_root, slicer, python, env, manifest, st
             stderr.write(f"\n[WMA] {stage}\n")
             stderr.flush()
             stage_output_start = stdout.tell()
+            stage_stderr_start = stderr.tell()
             bsp_dirs = [p for p in env.get("SLICERDSPACE_BUNDLED_SITE_PACKAGES", "").split(os.pathsep) if p and Path(p).is_dir()]
-            exec_command = command
-            if (
-                bsp_dirs
-                and len(command) >= 3
-                and command[0] == str(python)
-                and command[1] == "-u"
-                and str(command[2]).endswith(".py")
-            ):
-                script_file = str(Path(command[2]).resolve())
-                prepend = list(dict.fromkeys([str(Path(script_file).parent), *bsp_dirs]))
-                exec_args = [script_file, *command[3:]]
-                exec_command = [
-                    str(python),
-                    "-u",
-                    "-c",
-                    f"import runpy, sys; sys.path[:0] = {prepend!r}; sys.argv = {exec_args!r}; runpy.run_path(sys.argv[0], run_name='__main__')",
-                ]
+
+            def _wrap_python_stage(cmd_list: list[str]) -> list[str]:
+                if (
+                    len(cmd_list) >= 3
+                    and cmd_list[0] == str(python)
+                    and cmd_list[1] == "-u"
+                    and str(cmd_list[2]).endswith(".py")
+                    and (bsp_dirs or sys.platform == "win32" or _wma_supports_gpu_flag(wma_root))
+                ):
+                    script_file = str(Path(cmd_list[2]).resolve())
+                    prepend_bsp = [p for p in bsp_dirs if sys.platform != "win32" or (Path(p) / "numpy").is_dir()]
+                    append_bsp = [p for p in bsp_dirs if p not in prepend_bsp]
+                    prepend = list(dict.fromkeys([str(Path(script_file).parent), *prepend_bsp]))
+                    exec_args = [script_file, *cmd_list[3:]]
+                    win_dll_setup = (
+                        "try:\n"
+                        "    from shared.bundled_python import register_windows_dll_directories\n"
+                        "    register_windows_dll_directories()\n"
+                        "except Exception:\n"
+                        "    pass\n"
+                        if sys.platform == "win32"
+                        else ""
+                    )
+                    code = (
+                        f"import runpy, sys\n"
+                        f"sys.path[:0] = {prepend!r}\n"
+                        + (f"sys.path.extend([p for p in {append_bsp!r} if p not in sys.path])\n" if append_bsp else "")
+                        + win_dll_setup
+                        + _WMA_NUMPY_COMPAT_SNIPPET
+                        + f"sys.argv = {exec_args!r}\n"
+                        f"runpy.run_path(sys.argv[0], run_name='__main__')"
+                    )
+                    return [str(python), "-u", "-c", code]
+                return cmd_list
+
+            exec_command = _wrap_python_stage(command)
             completed = subprocess.run(exec_command, cwd=staging, env=env, stdout=stdout, stderr=stderr, **subprocess_no_window_kwargs())
+            if completed.returncode != 0 and _normalize_wma_gpu_mode(config.device) == "auto" and "-gpu" in command:
+                stderr.flush()
+                try:
+                    with stderr_log.open("r", encoding="utf-8", errors="replace") as err_stream:
+                        err_stream.seek(stage_stderr_start)
+                        stage_err_text = err_stream.read().lower()
+                except OSError:
+                    stage_err_text = ""
+                if any(
+                    tok in stage_err_text
+                    for tok in (
+                        "out of memory",
+                        "cublas_status_alloc_failed",
+                        "cudnn_status_alloc_failed",
+                        "cusolver_status_alloc_failed",
+                        "cudaerrormemoryallocation",
+                    )
+                ):
+                    if log:
+                        log(f"[WMA] {stage}: GPU out of memory under auto mode; retrying stage on CPU")
+                    stderr.write(f"\n[WMA] {stage}: CUDA OOM under auto mode; retrying on CPU\n")
+                    stderr.flush()
+                    retry_cmd = list(command)
+                    gpu_idx = retry_cmd.index("-gpu")
+                    if gpu_idx + 1 < len(retry_cmd):
+                        retry_cmd[gpu_idx + 1] = "off"
+                    retry_env = dict(env, WMA_GPU="off", CUDA_VISIBLE_DEVICES="-1")
+                    record["gpu_oom_cpu_retry"] = True
+                    record["retry_command"] = retry_cmd
+                    completed = subprocess.run(
+                        _wrap_python_stage(retry_cmd),
+                        cwd=staging,
+                        env=retry_env,
+                        stdout=stdout,
+                        stderr=stderr,
+                        **subprocess_no_window_kwargs(),
+                    )
             record["return_code"] = completed.returncode
             completed.check_returncode()
             if stage == "registration-nonrigid":
@@ -1012,16 +1184,28 @@ def run_wma_org_atlas(
 
     from dataclasses import replace
     import os
-    threads = config.num_threads or int(os.environ.get('SLICERDSPACE_STAGE_CPUS', '1'))
     if config.num_threads is not None and (type(config.num_threads) is not int or config.num_threads < 1):
         raise ValueError('WMA threads must be a positive integer')
     reservation = os.environ.get('SLICERDSPACE_STAGE_CPUS')
-    if reservation and threads > int(reservation):
+    if reservation and config.num_threads is not None and config.num_threads > int(reservation):
         raise ValueError('WMA worker count exceeds the admitted CPU reservation')
     virtual_x_requested = config.use_virtual_x
-    config = replace(config, num_threads=threads, use_virtual_x=_use_virtual_x(virtual_x_requested))
+    explicit_thread_limit = config.num_threads is not None or bool(reservation)
+    config = replace(config, use_virtual_x=_use_virtual_x(virtual_x_requested))
     backend_status, atlas_status = _inspect_wma_run(config)
     wma_root = Path(backend_status["root"])
+    threads = (
+        config.num_threads
+        if config.num_threads is not None
+        else (
+            int(reservation)
+            if reservation
+            else _resolve_wma_default_workers(wma_root, output_dir=config.output_dir)
+        )
+    )
+    if reservation and threads > int(reservation):
+        raise ValueError('WMA worker count exceeds the admitted CPU reservation')
+    config = replace(config, num_threads=threads)
     execution_backend = backend_status["execution_backend"]
     native = execution_backend == "native"
     atlas_contract = atlas_status.get("output_contract", {})
@@ -1133,7 +1317,12 @@ def run_wma_org_atlas(
             env["PYTHONNOUSERSITE"] = "1"
             env["WMA_GPU"] = gpu_mode
             env["WMA_CPU_FAST"] = "1"
-            env["WMA_CPU_THREADS"] = str(config.num_threads)
+            env["WMA_CPU_THREADS"] = str(
+                _resolve_wma_cpu_backend_threads(
+                    config.num_threads,
+                    explicit_limit=explicit_thread_limit,
+                )
+            )
             if gpu_mode == "off":
                 env["CUDA_VISIBLE_DEVICES"] = "-1"
             else:
@@ -1142,6 +1331,13 @@ def run_wma_org_atlas(
                     gpu_idx = raw_dev.split(":", 1)[1].split(",", 1)[0].strip()
                     if gpu_idx.isdigit():
                         env["CUDA_VISIBLE_DEVICES"] = gpu_idx
+                if sys.platform == "win32":
+                    from shared.hardware_adapt import WINDOWS_CUDA_ALLOC_CONF
+
+                    env.setdefault("PYTORCH_CUDA_ALLOC_CONF", WINDOWS_CUDA_ALLOC_CONF)
+                    # Native Windows lacks Triton kernel fusion; bound eager FP64 fiber-distance
+                    # tiles to prevent 2-second WDDM TDR resets and shared-RAM spillover on 8-12 GiB GPUs.
+                    env.setdefault("WMA_GPU_TILE", "512")
         python_path = wma_root.as_posix()
         env["PYTHONPATH"] = (
             python_path if not env.get("PYTHONPATH") else python_path + os.pathsep + env["PYTHONPATH"]
@@ -1169,7 +1365,7 @@ def run_wma_org_atlas(
             if slicer_python is not None or not native_posix:
                 from shared.bundled_python import inject_bundled_python_env
 
-                inject_bundled_python_env(env)
+                inject_bundled_python_env(env, python_executable=slicer_python)
             library_entries = [str(path) for path in _slicer_runtime_library_paths(runtime_executable)] if native_posix else []
             if native_posix and (
                 (config.export_diffusion_measures and config.measurement_backend == "fibertractmeasurements")
@@ -1212,16 +1408,68 @@ def run_wma_org_atlas(
                                 encoding="utf-8",
                             )
                             shim.chmod(0o755)
+                    wma_py_runner: Optional[Path] = None
+                    wma_harden_wrapper: Optional[Path] = None
+                    author_harden = wma_root / "bin" / "harden_transform_with_slicer.py"
+                    harden_runner = Path(__file__).resolve().parents[1] / "scripts" / "run_wma_harden_transform.py"
+                    if _wma_supports_gpu_flag(wma_root):
+                        wma_py_runner = Path(temp_python_dir.name) / "_wma_run_py.py"
+                        wma_py_runner.write_text(
+                            "import os, runpy, sys\n"
+                            + _WMA_NUMPY_COMPAT_SNIPPET
+                            + "target = sys.argv[1]\n"
+                            + "sys.argv = [target, *sys.argv[2:]]\n"
+                            + "script_dir = os.path.dirname(os.path.abspath(target))\n"
+                            + "if script_dir and (not sys.path or sys.path[0] != script_dir):\n"
+                            + "    sys.path.insert(0, script_dir)\n"
+                            + "runpy.run_path(target, run_name='__main__')\n",
+                            encoding="utf-8",
+                        )
+                        if harden_runner.is_file():
+                            wma_harden_wrapper = Path(temp_python_dir.name) / "_wma_run_harden.py"
+                            wma_harden_wrapper.write_text(
+                                "import importlib.util, os, sys\n"
+                                + _WMA_NUMPY_COMPAT_SNIPPET
+                                + f"os.environ['WMA_ROOT'] = {str(wma_root)!r}\n"
+                                + f"os.environ['WMA_AUTHOR_HARDEN_HELPER'] = {str(author_harden)!r}\n"
+                                + "target = sys.argv[1]\n"
+                                + "sys.argv = [target, *sys.argv[2:]]\n"
+                                + "script_dir = os.path.dirname(os.path.abspath(target))\n"
+                                + "if script_dir and (not sys.path or sys.path[0] != script_dir):\n"
+                                + "    sys.path.insert(0, script_dir)\n"
+                                + "spec = importlib.util.spec_from_file_location('wm_harden_transform_mod', target)\n"
+                                + "mod = importlib.util.module_from_spec(spec)\n"
+                                + "spec.loader.exec_module(mod)\n"
+                                + "orig_run_slicer = getattr(mod, '_run_slicer', None)\n"
+                                + "if callable(orig_run_slicer):\n"
+                                + "    def _patched_run_slicer(polydata, transform, inverse, slicer_path, helper, *rest, **kw):\n"
+                                + f"        return orig_run_slicer(polydata, transform, inverse, slicer_path, {str(harden_runner)!r}, *rest, **kw)\n"
+                                + "    mod._run_slicer = _patched_run_slicer\n"
+                                + "mod.main()\n",
+                                encoding="utf-8",
+                            )
                     for cmd_name in (*REQUIRED_WMA_COMMANDS, "wm_diffusion_measurements.py"):
                         if cmd_name == "wm_register_to_atlas_new.py" and config.registration_preprocess_cache:
                             continue
                         cmd_src = wma_root / "bin" / cmd_name
                         if cmd_src.is_file():
                             cmd_shim = Path(temp_python_dir.name) / cmd_name
-                            cmd_shim.write_text(
-                                f"#!/bin/sh\nexec {shlex.quote(str(slicer_python))} -u {shlex.quote(str(cmd_src))} \"$@\"\n",
-                                encoding="utf-8",
-                            )
+                            if cmd_name == "wm_harden_transform.py" and wma_harden_wrapper is not None:
+                                shim_cmd = (
+                                    f"exec {shlex.quote(str(slicer_python))} -u "
+                                    f"{shlex.quote(str(wma_harden_wrapper))} {shlex.quote(str(cmd_src))} \"$@\"\n"
+                                )
+                            elif wma_py_runner is not None:
+                                shim_cmd = (
+                                    f"exec {shlex.quote(str(slicer_python))} -u "
+                                    f"{shlex.quote(str(wma_py_runner))} {shlex.quote(str(cmd_src))} \"$@\"\n"
+                                )
+                            else:
+                                shim_cmd = (
+                                    f"exec {shlex.quote(str(slicer_python))} -u "
+                                    f"{shlex.quote(str(cmd_src))} \"$@\"\n"
+                                )
+                            cmd_shim.write_text("#!/bin/sh\n" + shim_cmd, encoding="utf-8")
                             cmd_shim.chmod(0o755)
                     if config.registration_preprocess_cache:
                         runner = Path(__file__).resolve().parents[1] / "scripts" / "run_wma_registration.py"

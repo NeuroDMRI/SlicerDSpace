@@ -9,6 +9,8 @@ import copy
 import gc
 
 os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+if sys.platform == "win32":
+    os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "garbage_collection_threshold:0.8,max_split_size_mb:128")
 
 from shared.bundled_python import prepend_env_bundled_site_packages
 
@@ -60,6 +62,7 @@ from shared.hardware_adapt import (
     optimal_cpu_torch_threads,
     query_cuda_free_total_bytes,
     query_gpu_free_total_bytes,
+    should_enable_cudnn_benchmark,
     zero_subnormal_module_weights,
 )
 
@@ -174,8 +177,8 @@ def _is_mps_available(torch_mod) -> bool:
     return bool(callable(fn) and fn() is True)
 
 
-def _forward_fused_logits(model, sub_batch, *, use_cuda, device):
-    """Run ``model`` with automatic single-slice CUDA/MPS OOM retry for low-memory GPUs."""
+def _forward_fused_logits(model, sub_batch, *, use_cuda, device, allow_cpu_fallback=False):
+    """Run ``model`` with automatic single-slice CUDA/MPS OOM retry (and CPU fallback when ``allow_cpu_fallback``)."""
     target_device = device if isinstance(device, torch.device) else torch.device(device)
     if target_device.type == "cpu":
         inp = sub_batch.to(memory_format=torch.channels_last) if sub_batch.ndim == 4 else sub_batch
@@ -186,16 +189,34 @@ def _forward_fused_logits(model, sub_batch, *, use_cuda, device):
         _, out_list = model(sub_batch.to(target_device, non_blocking=non_blocking))
         return out_list[0].detach().cpu()
     except Exception as exc:
-        if target_device.type not in ("cuda", "mps") or not is_gpu_oom(exc) or sub_batch.shape[0] <= 1:
+        if target_device.type not in ("cuda", "mps") or not is_gpu_oom(exc):
             raise
         empty_gpu_cache_safely()
-        parts = []
-        for idx in range(sub_batch.shape[0]):
-            _, single_list = model(sub_batch[idx : idx + 1].to(target_device))
-            parts.append(single_list[0].detach().cpu())
-            del single_list
-        empty_gpu_cache_safely()
-        return torch.cat(parts, dim=0)
+        if sub_batch.shape[0] > 1:
+            try:
+                parts = []
+                for idx in range(sub_batch.shape[0]):
+                    _, single_list = model(sub_batch[idx : idx + 1].to(target_device))
+                    parts.append(single_list[0].detach().cpu())
+                    del single_list
+                empty_gpu_cache_safely()
+                return torch.cat(parts, dim=0)
+            except Exception as single_exc:
+                if not (allow_cpu_fallback and is_gpu_oom(single_exc)):
+                    raise
+                empty_gpu_cache_safely()
+        elif not allow_cpu_fallback:
+            raise
+        enable_cpu_flush_denormal(torch)
+        model.to(torch.device("cpu"))
+        zero_subnormal_module_weights(model)
+        try:
+            model.to(memory_format=torch.channels_last)
+        except Exception:
+            pass
+        inp = sub_batch.to(memory_format=torch.channels_last) if sub_batch.ndim == 4 else sub_batch
+        _, out_list = model(inp)
+        return out_list[0].detach().contiguous().cpu()
 
 
 def run_network(img_filename, orig_data, prediction_probability, plane, ckpts, params_model, model, logger):
@@ -226,13 +247,32 @@ def run_network(img_filename, orig_data, prediction_probability, plane, ckpts, p
 
     print('Load backbones!')
     model.FastSurferCNNs = backbones
-    if torch.device(params_model["device"]).type == "cpu":
+    allow_cpu_fallback = bool(params_model.get("allow_cpu_fallback", False))
+    active_device = torch.device(params_model["device"])
+    if active_device.type == "cpu":
         zero_subnormal_module_weights(model)
         try:
             model.to(memory_format=torch.channels_last)
         except Exception:
             pass
-    model.to(params_model["device"])
+    try:
+        model.to(active_device)
+    except Exception as exc:
+        if not (active_device.type in ("cuda", "mps") and allow_cpu_fallback and is_gpu_oom(exc)):
+            raise
+        empty_gpu_cache_safely()
+        logger.warning("  -GPU OOM loading %s model (%s); falling back to CPU", plane, exc)
+        active_device = torch.device("cpu")
+        params_model["device"] = active_device
+        params_model["use_cuda"] = False
+        enable_cpu_flush_denormal(torch)
+        torch.set_num_threads(optimal_cpu_torch_threads(max_conv_threads=16, server_max_threads=36))
+        zero_subnormal_module_weights(model)
+        try:
+            model.to(memory_format=torch.channels_last)
+        except Exception:
+            pass
+        model.to(active_device)
     model.eval()
 
     logger.info("  -{} model loaded.".format(plane))
@@ -281,7 +321,16 @@ def run_network(img_filename, orig_data, prediction_probability, plane, ckpts, p
                     sub_batch,
                     use_cuda=params_model["use_cuda"],
                     device=params_model["device"],
+                    allow_cpu_fallback=allow_cpu_fallback,
                 )
+                if allow_cpu_fallback and torch.device(params_model["device"]).type != "cpu":
+                    try:
+                        first_param = next(model.parameters())
+                        if first_param.device.type == "cpu":
+                            params_model["device"] = torch.device("cpu")
+                            params_model["use_cuda"] = False
+                    except StopIteration:
+                        pass
                 batch_uniform_out = {s_key: sub_out[pos].clone() for s_key, pos in pending_uniform_pos.items()}
                 for s_key, cached_val in batch_uniform_out.items():
                     if len(uniform_slice_cache) < 16:
@@ -360,7 +409,10 @@ def fastsurfercnn(img_filename, save_as, logger, args):
         device = torch.device(f"cuda:{cuda_index}")
         torch.backends.cuda.matmul.allow_tf32 = False
         torch.backends.cudnn.allow_tf32 = False
-        torch.backends.cudnn.benchmark = True
+        if should_enable_cudnn_benchmark(device):
+            torch.backends.cudnn.benchmark = True
+        else:
+            torch.backends.cudnn.benchmark = False
     elif use_mps:
         print("On GPU (Apple MPS)!")
         device = torch.device("mps")
@@ -400,7 +452,13 @@ def fastsurfercnn(img_filename, save_as, logger, args):
         prev_torch_threads = torch.get_num_threads()
         torch.set_num_threads(optimal_cpu_torch_threads(max_conv_threads=16, server_max_threads=36))
 
-    params_model = {'device': device, "use_cuda": use_cuda, "batch_size": effective_batch_size, "model_parallel": model_parallel}
+    params_model = {
+        'device': device,
+        "use_cuda": use_cuda,
+        "batch_size": effective_batch_size,
+        "model_parallel": model_parallel,
+        "allow_cpu_fallback": not bool(getattr(args, "require_cuda", False) or require_mps),
+    }
     logger.info("Cuda available: {}, # Available GPUS: {}, Cuda user disabled (--no_cuda flag): {}, --> Using device: {} (batch_size={})".format(torch.cuda.is_available(), torch.cuda.device_count(),  args.no_cuda, device, effective_batch_size))
 
     # Set up tensor to hold probabilities

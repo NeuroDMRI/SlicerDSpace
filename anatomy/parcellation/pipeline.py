@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
 
-from shared.external_process import text_subprocess_kwargs
+from shared.external_process import subprocess_no_window_kwargs, text_subprocess_kwargs
 from shared.model_assets import model_asset_path
 from shared.pipeline import (RegisteredDTIBundle, build_cli_environment, native_tensor_command,
                              resolve_cli_executable, resolve_pythonslicer_executable,
@@ -58,7 +58,7 @@ def _run_cli(cmd: list[str], log: Optional[Callable[[str], None]] = None) -> Non
         env=build_cli_environment(cmd[0]),
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
-        **text_subprocess_kwargs(bufsize=1),
+        **subprocess_no_window_kwargs(**text_subprocess_kwargs(bufsize=1)),
     )
     # H8: a surviving grandchild must not keep the stage open after the direct child has exited.
     from shared.line_stream import stream_process_lines

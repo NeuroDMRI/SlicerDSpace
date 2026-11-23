@@ -78,10 +78,11 @@ def backend_environment(extra=None, *, python_bin=None):
         environment.pop(key, None)
     if extra:
         environment.update({str(k): str(v) for k, v in extra.items() if v is not None})
-    if is_slicer_python(python_executable(python_bin)):
+    resolved_py = python_executable(python_bin)
+    if is_slicer_python(resolved_py):
         from shared.bundled_python import inject_bundled_python_env
 
-        inject_bundled_python_env(environment)
+        inject_bundled_python_env(environment, python_executable=resolved_py)
         # D1: inject_bundled_python_env appends. Put the bundle (it holds the NumPy that matches its torch) first.
         bundled = _bundled_numpy_site_dirs(python_bin)
         if bundled:

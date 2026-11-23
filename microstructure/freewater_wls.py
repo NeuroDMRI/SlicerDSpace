@@ -130,7 +130,7 @@ def _resolve_fw_device(device: str) -> str:
     return "cuda" if has_cuda else "cpu"
 
 
-def wls_batch_fit(model, signals, *, device: str = "cpu"):
+def wls_batch_fit(model, signals, *, device: str = "cpu", explicit_cuda: bool | None = None):
     """Chunk-vectorized Free-Water WLS fusing protocol reuse, column scaling, and optional CUDA fp64."""
     W = model.design_matrix
     signals = np.asarray(signals)
@@ -187,136 +187,152 @@ def wls_batch_fit(model, signals, *, device: str = "cpu"):
     if len(fast_indices) == 0:
         return fwdti.FreeWaterTensorFit(model, out), resolved_device
 
+    if explicit_cuda is None:
+        req_dev = str(device or "auto").strip().lower()
+        explicit_cuda = req_dev == "cuda" or req_dev.startswith("cuda:")
     if resolved_device.startswith("cuda"):
         import torch
         from shared.hardware_adapt import (
             adaptive_cuda_scaled_batch,
             empty_cuda_cache_safely,
+            is_cuda_oom,
             run_cuda_chunked_with_oom_fallback,
         )
 
         torch_dev = torch.device(resolved_device)
-        W_t = torch.as_tensor(np.ascontiguousarray(W), dtype=torch.float64, device=torch_dev)
-        col_scale = torch.linalg.norm(W_t, dim=0).clamp(min=1e-30)
-        W_eq = W_t / col_scale
-        fwsig_t = torch.as_tensor(np.array(fwsig, dtype=np.float64, copy=True, order="C"), dtype=torch.float64, device=torch_dev)
-        fs0_1d = (
-            torch.as_tensor(np.array(protocol.grid(0, 1, 0.1, 9)[0], dtype=np.float64, copy=True, order="C"), dtype=torch.float64, device=torch_dev)
-            if protocol is not None
-            else None
-        )
-        per_voxel_bytes = max(4096, int(W.shape[0]) * 19 * 64)
-        batch_size = adaptive_cuda_scaled_batch(
-            per_voxel_bytes,
-            8192,
-            min_batch=128,
-            max_batch=16384,
-            device=torch_dev,
-            windows_tdr_cap=4096,
-        )
-
-        def _cuda_fw_step(start: int, stop: int) -> None:
-            ids = fast_indices[start:stop]
-            sig_np = signals[ids]
-            w_np = weights_all[ids]
-            s0_np = S0_all[ids]
-            mean_sig_np = np.mean(sig_np, axis=1)
-
-            sig_t = torch.as_tensor(np.ascontiguousarray(sig_np), dtype=torch.float64, device=torch_dev)
-            w_t = torch.as_tensor(np.ascontiguousarray(w_np), dtype=torch.float64, device=torch_dev)
-            s0_t = torch.as_tensor(np.ascontiguousarray(s0_np), dtype=torch.float64, device=torch_dev)
-            log_s_t = torch.log(torch.clamp(sig_t, min=float(min_signal)))
-
-            w_max = w_t.amax(dim=1, keepdim=True).clamp(min=1e-300)
-            w_norm = w_t / w_max
-            WTS2_eq = W_eq.T.unsqueeze(0) * w_norm.unsqueeze(1)
-            G_eq = torch.matmul(WTS2_eq, W_eq)
-            L_eq, info_eq = torch.linalg.cholesky_ex(G_eq)
-            diag_L = torch.diagonal(L_eq, dim1=-2, dim2=-1)
-            well_cond = (info_eq == 0) & (diag_L.amin(dim=-1) > 1e-6 * diag_L.amax(dim=-1))
-
-            P_t = torch.empty((len(ids), 7, W.shape[0]), dtype=torch.float64, device=torch_dev)
-            if torch.any(well_cond):
-                P_eq = torch.cholesky_solve(WTS2_eq[well_cond], L_eq[well_cond])
-                P_t[well_cond] = P_eq / col_scale.view(1, 7, 1)
-            if not torch.all(well_cond):
-                ill = ~well_cond
-                WTS2_raw = W_t.T.unsqueeze(0) * w_t[ill].unsqueeze(1)
-                G_raw = torch.matmul(WTS2_raw, W_t)
-                inv_G_raw = torch.linalg.pinv(G_raw)
-                P_t[ill] = torch.matmul(inv_G_raw, WTS2_raw)
-
-            params_t = torch.matmul(P_t, log_s_t.unsqueeze(-1)).squeeze(-1)
-            params_cpu = params_t.cpu().numpy()
-            md_cpu = (params_cpu[:, 0] + params_cpu[:, 2] + params_cpu[:, 5]) / 3.0
-            active_mask = (md_cpu < mdreg) & (mean_sig_np > min_signal) & (s0_np > min_signal)
-
-            sub_out = np.zeros((len(ids), 13), dtype=np.float64)
-            sub_out[(~active_mask) & (md_cpu > mdreg), 12] = 1.0
-
-            if np.any(active_mask):
-                act_idx_np = np.flatnonzero(active_mask)
-                act_idx_t = torch.as_tensor(act_idx_np, dtype=torch.long, device=torch_dev)
-                B_a = len(act_idx_np)
-                sig_a = sig_t[act_idx_t]
-                s0_a = s0_t[act_idx_t]
-                P_a = P_t[act_idx_t]
-                params_a = params_t[act_idx_t]
-
-                df = 1.0
-                flow = torch.zeros(B_a, dtype=torch.float64, device=torch_dev)
-                fhig = torch.ones(B_a, dtype=torch.float64, device=torch_dev)
-                ns = 9
-                f_a = torch.zeros(B_a, dtype=torch.float64, device=torch_dev)
-                b_arange = torch.arange(B_a, device=torch_dev)
-
-                for it in range(piterations):
-                    df = df * 0.1
-                    if it == 0 and fs0_1d is not None and ns == 9:
-                        fs = fs0_1d.unsqueeze(0).expand(B_a, ns)
-                    else:
-                        steps = torch.linspace(0.0, 1.0, ns, dtype=torch.float64, device=torch_dev)
-                        lo_b = (flow + df).unsqueeze(1)
-                        hi_b = (fhig - df).unsqueeze(1)
-                        fs = lo_b + steps.unsqueeze(0) * (hi_b - lo_b)
-                    fw_term = (s0_a.unsqueeze(1) * fs).unsqueeze(1) * fwsig_t.view(1, -1, 1)
-                    SA = sig_a.unsqueeze(2) - fw_term
-                    SA = torch.where(SA <= 0.0, torch.tensor(float(min_signal), dtype=torch.float64, device=torch_dev), SA)
-                    y = torch.log(SA / (1.0 - fs.unsqueeze(1)))
-                    all_new_params = torch.matmul(P_a, y)
-                    SIpred = (1.0 - fs.unsqueeze(1)) * torch.exp(torch.matmul(W_t.unsqueeze(0), all_new_params)) + fw_term
-                    F2 = torch.sum(torch.square(sig_a.unsqueeze(2) - SIpred), dim=1)
-                    Mind = torch.argmin(F2, dim=1)
-                    params_a = all_new_params[b_arange, :, Mind]
-                    f_a = fs[b_arange, Mind]
-                    flow = f_a - df
-                    fhig = f_a + df
-                    ns = 19
-
-                params_a_np = params_a.cpu().numpy()
-                f_a_np = f_a.cpu().numpy()
-                evals, evecs = fwdti_mod.decompose_tensor(fwdti_mod.from_lower_triangular(params_a_np))
-                sub_out[act_idx_np] = np.concatenate(
-                    (evals, evecs[:, 0], evecs[:, 1], evecs[:, 2], f_a_np[:, None]), axis=-1
-                )
-
-            out[ids] = sub_out
-
-        def _cpu_fw_fallback(start: int, stop: int) -> None:
-            nonlocal resolved_device
-            ids = fast_indices[start:stop]
-            cpu_fit, _ = wls_batch_fit(model, signals[ids], device="cpu")
-            out[ids] = np.asarray(cpu_fit.model_params)
-            resolved_device = "cpu"
-
+        W_t = W_eq = fwsig_t = fs0_1d = None
         try:
+            W_t = torch.as_tensor(np.ascontiguousarray(W), dtype=torch.float64, device=torch_dev)
+            col_scale = torch.linalg.norm(W_t, dim=0).clamp(min=1e-30)
+            W_eq = W_t / col_scale
+            fwsig_t = torch.as_tensor(np.array(fwsig, dtype=np.float64, copy=True, order="C"), dtype=torch.float64, device=torch_dev)
+            fs0_1d = (
+                torch.as_tensor(np.array(protocol.grid(0, 1, 0.1, 9)[0], dtype=np.float64, copy=True, order="C"), dtype=torch.float64, device=torch_dev)
+                if protocol is not None
+                else None
+            )
+            per_voxel_bytes = max(4096, int(W.shape[0]) * 19 * 64)
+            batch_size = adaptive_cuda_scaled_batch(
+                per_voxel_bytes,
+                8192,
+                min_batch=128,
+                max_batch=16384,
+                device=torch_dev,
+                windows_tdr_cap=4096,
+                fp64=True,
+                consumer_fp64_tdr_cap=2048,
+            )
+
+            def _cuda_fw_step(start: int, stop: int) -> None:
+                ids = fast_indices[start:stop]
+                sig_np = signals[ids]
+                w_np = weights_all[ids]
+                s0_np = S0_all[ids]
+                mean_sig_np = np.mean(sig_np, axis=1)
+
+                sig_t = torch.as_tensor(np.ascontiguousarray(sig_np), dtype=torch.float64, device=torch_dev)
+                w_t = torch.as_tensor(np.ascontiguousarray(w_np), dtype=torch.float64, device=torch_dev)
+                s0_t = torch.as_tensor(np.ascontiguousarray(s0_np), dtype=torch.float64, device=torch_dev)
+                log_s_t = torch.log(torch.clamp(sig_t, min=float(min_signal)))
+
+                w_max = w_t.amax(dim=1, keepdim=True).clamp(min=1e-300)
+                w_norm = w_t / w_max
+                WTS2_eq = W_eq.T.unsqueeze(0) * w_norm.unsqueeze(1)
+                G_eq = torch.matmul(WTS2_eq, W_eq)
+                L_eq, info_eq = torch.linalg.cholesky_ex(G_eq)
+                diag_L = torch.diagonal(L_eq, dim1=-2, dim2=-1)
+                well_cond = (info_eq == 0) & (diag_L.amin(dim=-1) > 1e-6 * diag_L.amax(dim=-1))
+
+                P_t = torch.empty((len(ids), 7, W.shape[0]), dtype=torch.float64, device=torch_dev)
+                if torch.any(well_cond):
+                    P_eq = torch.cholesky_solve(WTS2_eq[well_cond], L_eq[well_cond])
+                    P_t[well_cond] = P_eq / col_scale.view(1, 7, 1)
+                if not torch.all(well_cond):
+                    ill = ~well_cond
+                    WTS2_raw = W_t.T.unsqueeze(0) * w_t[ill].unsqueeze(1)
+                    G_raw = torch.matmul(WTS2_raw, W_t)
+                    inv_G_raw = torch.linalg.pinv(G_raw)
+                    P_t[ill] = torch.matmul(inv_G_raw, WTS2_raw)
+
+                params_t = torch.matmul(P_t, log_s_t.unsqueeze(-1)).squeeze(-1)
+                params_cpu = params_t.cpu().numpy()
+                md_cpu = (params_cpu[:, 0] + params_cpu[:, 2] + params_cpu[:, 5]) / 3.0
+                active_mask = (md_cpu < mdreg) & (mean_sig_np > min_signal) & (s0_np > min_signal)
+
+                sub_out = np.zeros((len(ids), 13), dtype=np.float64)
+                sub_out[(~active_mask) & (md_cpu > mdreg), 12] = 1.0
+
+                if np.any(active_mask):
+                    act_idx_np = np.flatnonzero(active_mask)
+                    act_idx_t = torch.as_tensor(act_idx_np, dtype=torch.long, device=torch_dev)
+                    B_a = len(act_idx_np)
+                    sig_a = sig_t[act_idx_t]
+                    s0_a = s0_t[act_idx_t]
+                    P_a = P_t[act_idx_t]
+                    params_a = params_t[act_idx_t]
+
+                    df = 1.0
+                    flow = torch.zeros(B_a, dtype=torch.float64, device=torch_dev)
+                    fhig = torch.ones(B_a, dtype=torch.float64, device=torch_dev)
+                    ns = 9
+                    f_a = torch.zeros(B_a, dtype=torch.float64, device=torch_dev)
+                    b_arange = torch.arange(B_a, device=torch_dev)
+
+                    for it in range(piterations):
+                        df = df * 0.1
+                        if it == 0 and fs0_1d is not None and ns == 9:
+                            fs = fs0_1d.unsqueeze(0).expand(B_a, ns)
+                        else:
+                            steps = torch.linspace(0.0, 1.0, ns, dtype=torch.float64, device=torch_dev)
+                            lo_b = (flow + df).unsqueeze(1)
+                            hi_b = (fhig - df).unsqueeze(1)
+                            fs = lo_b + steps.unsqueeze(0) * (hi_b - lo_b)
+                        fw_term = (s0_a.unsqueeze(1) * fs).unsqueeze(1) * fwsig_t.view(1, -1, 1)
+                        SA = sig_a.unsqueeze(2) - fw_term
+                        SA = torch.where(SA <= 0.0, torch.tensor(float(min_signal), dtype=torch.float64, device=torch_dev), SA)
+                        y = torch.log(SA / (1.0 - fs.unsqueeze(1)))
+                        all_new_params = torch.matmul(P_a, y)
+                        SIpred = (1.0 - fs.unsqueeze(1)) * torch.exp(torch.matmul(W_t.unsqueeze(0), all_new_params)) + fw_term
+                        F2 = torch.sum(torch.square(sig_a.unsqueeze(2) - SIpred), dim=1)
+                        Mind = torch.argmin(F2, dim=1)
+                        params_a = all_new_params[b_arange, :, Mind]
+                        f_a = fs[b_arange, Mind]
+                        flow = f_a - df
+                        fhig = f_a + df
+                        ns = 19
+
+                    params_a_np = params_a.cpu().numpy()
+                    f_a_np = f_a.cpu().numpy()
+                    evals, evecs = fwdti_mod.decompose_tensor(fwdti_mod.from_lower_triangular(params_a_np))
+                    sub_out[act_idx_np] = np.concatenate(
+                        (evals, evecs[:, 0], evecs[:, 1], evecs[:, 2], f_a_np[:, None]), axis=-1
+                    )
+
+                out[ids] = sub_out
+
+            def _cpu_fw_fallback(start: int, stop: int) -> None:
+                nonlocal resolved_device
+                ids = fast_indices[start:stop]
+                cpu_fit, _ = wls_batch_fit(model, signals[ids], device="cpu")
+                out[ids] = np.asarray(cpu_fit.model_params)
+                resolved_device = "cpu"
+
             run_cuda_chunked_with_oom_fallback(
                 len(fast_indices),
                 batch_size,
                 _cuda_fw_step,
                 min_chunk=128,
-                cpu_fallback_fn=_cpu_fw_fallback,
+                cpu_fallback_fn=None if explicit_cuda else _cpu_fw_fallback,
             )
+        except BaseException as exc:
+            if explicit_cuda or not is_cuda_oom(exc):
+                raise
+            del W_t, W_eq, fwsig_t, fs0_1d
+            W_t = W_eq = fwsig_t = fs0_1d = None
+            empty_cuda_cache_safely()
+            cpu_fit, _ = wls_batch_fit(model, signals[fast_indices], device="cpu")
+            out[fast_indices] = np.asarray(cpu_fit.model_params)
+            resolved_device = "cpu"
         finally:
             del W_t, W_eq, fwsig_t, fs0_1d
             empty_cuda_cache_safely()

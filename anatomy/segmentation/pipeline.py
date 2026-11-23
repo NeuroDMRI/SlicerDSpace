@@ -27,31 +27,50 @@ def _feature_folder(cfg: DDSegConfig) -> Path:
     return dti_out
 
 
-def predict_model_space(stacked: np.ndarray, cfg: DDSegConfig) -> tuple[np.ndarray, np.ndarray]:
+def predict_model_space(
+    stacked: np.ndarray,
+    cfg: DDSegConfig,
+    *,
+    allow_cpu_fallback: bool | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
     """Run the three view models on a padded model-orientation stack."""
 
     import os
     import torch
     from .model_loader import load_models  # lazy: torch is only needed for inference
     from shared.environment import resolve_auto_torch_device
-    from shared.hardware_adapt import empty_gpu_cache_safely, optimal_cpu_torch_threads
+    from shared.hardware_adapt import empty_gpu_cache_safely, is_gpu_oom, optimal_cpu_torch_threads
 
+    if allow_cpu_fallback is None:
+        allow_cpu_fallback = str(cfg.device or "auto").strip().lower() in {"", "auto"}
     cfg = replace(cfg, device=resolve_auto_torch_device(cfg.device))
     views = split_views(stacked)
-    prev_threads = None
-    if str(cfg.device).startswith("cpu") and not os.environ.get("SLICERDSPACE_STAGE_CPUS"):
-        prev_threads = torch.get_num_threads()
-        torch.set_num_threads(optimal_cpu_torch_threads(max_conv_threads=8, server_max_threads=36))
+
+    def _run_on_device(target_device: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        prev_threads = None
+        if str(target_device).startswith("cpu") and not os.environ.get("SLICERDSPACE_STAGE_CPUS"):
+            prev_threads = torch.get_num_threads()
+            torch.set_num_threads(optimal_cpu_torch_threads(max_conv_threads=8, server_max_threads=36))
+        try:
+            models = load_models(cfg.weights_dir, "dti", target_device)
+            pred_axial = predict_view(models.axial, views["axial"], cfg.apply_softmax)
+            pred_sagittal = predict_view(models.sagittal, views["sagittal"], cfg.apply_softmax)
+            pred_coronal = predict_view(models.coronal, views["coronal"], cfg.apply_softmax)
+            return pred_axial, pred_sagittal, pred_coronal
+        finally:
+            if prev_threads is not None:
+                torch.set_num_threads(prev_threads)
+            if str(target_device).startswith(("cuda", "mps")):
+                empty_gpu_cache_safely()
+
     try:
-        models = load_models(cfg.weights_dir, "dti", cfg.device)
-        pred_axial = predict_view(models.axial, views["axial"], cfg.apply_softmax)
-        pred_sagittal = predict_view(models.sagittal, views["sagittal"], cfg.apply_softmax)
-        pred_coronal = predict_view(models.coronal, views["coronal"], cfg.apply_softmax)
-    finally:
-        if prev_threads is not None:
-            torch.set_num_threads(prev_threads)
-        if str(cfg.device).startswith(("cuda", "mps")):
-            empty_gpu_cache_safely()
+        pred_axial, pred_sagittal, pred_coronal = _run_on_device(cfg.device)
+    except RuntimeError as exc:
+        if not (allow_cpu_fallback and str(cfg.device).startswith(("cuda", "mps")) and is_gpu_oom(exc)):
+            raise
+        empty_gpu_cache_safely()
+        print(f"[DDSeg] GPU out of memory on {cfg.device} ({exc}); falling back to CPU", flush=True)
+        pred_axial, pred_sagittal, pred_coronal = _run_on_device("cpu")
     combined = combine_views(pred_axial, pred_sagittal, pred_coronal)
     prob_maps = combined["prob_maps"]
     if not cfg.apply_softmax:
@@ -103,7 +122,8 @@ def run_ddseg(cfg: DDSegConfig) -> None:
     mask = load_mask(cfg.input_mask_nii)
     feature_maps, geometry = masking_and_normalizing(feature_folder, mask, cfg.parameter_type)
     stacked = stack_features(feature_maps, cfg.parameter_type)
-    labels_model, probs_model = predict_model_space(stacked, cfg)
+    allow_cpu_fallback = str(requested_device or "auto").strip().lower() in {"", "auto"}
+    labels_model, probs_model = predict_model_space(stacked, cfg, allow_cpu_fallback=allow_cpu_fallback)
     labels, prob_maps = restore_disk_orientation(labels_model, probs_model, mask)
 
     outputs = {

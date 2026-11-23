@@ -813,6 +813,18 @@ class IntegrationTests(unittest.TestCase):
             self.assertNotIn("PYTHONHOME", env)
             self.assertEqual(env["PATH"], "/usr/bin")
 
+    def test_optimized_standalone_ukf_recognized_via_runtime_json(self) -> None:
+        from tractography.ukf import _is_optimized_standalone_executable
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "custom-ukf"
+            exe = root / "bin" / "UKFTractography"
+            exe.parent.mkdir(parents=True)
+            exe.write_text("#!/bin/sh\n", encoding="utf-8")
+            self.assertFalse(_is_optimized_standalone_executable(exe))
+            (root / "runtime.json").write_text('{"kind": "ukf-standalone"}\n', encoding="utf-8")
+            self.assertTrue(_is_optimized_standalone_executable(exe))
+
 
 if __name__ == "__main__":
     unittest.main()

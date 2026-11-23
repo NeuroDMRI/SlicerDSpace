@@ -16,6 +16,8 @@ from typing import MutableMapping
 BUNDLED_PYTHON_ENV = "SLICERDSPACE_BUNDLED_PYTHON_ROOT"
 WINDOWS_CUDA_ALLOC_CONF = "garbage_collection_threshold:0.8,max_split_size_mb:128"
 _DEQUARANTINED_ROOTS: set[Path] = set()
+_WINDOWS_DLL_DIR_HANDLES: list[object] = []
+_WINDOWS_REGISTERED_DLL_DIRS: set[str] = set()
 
 
 def _clear_macos_quarantine_once(module_root: Path | None = None) -> bool:
@@ -268,6 +270,124 @@ def bundled_script_dirs(module_root: Path | None = None) -> tuple[Path, ...]:
     return tuple(dirs)
 
 
+def _slicer_site_packages_dirs(python_executable: Path | str | None = None) -> tuple[Path, ...]:
+    """Return Slicer's own ``site-packages`` directories (never including ``bundled-python``)."""
+    candidates: list[Path] = []
+    if python_executable is not None:
+        exe = Path(python_executable).expanduser().absolute()
+        for base in (exe.parent, exe.parent.parent, exe.parent.parent.parent):
+            for rel in (
+                Path("lib") / "Python" / "Lib" / "site-packages",
+                Path("Lib") / "site-packages",
+                Path("lib") / "Python" / "lib" / f"python{sys.version_info[0]}.{sys.version_info[1]}" / "site-packages",
+            ):
+                candidates.append(base / rel)
+    try:
+        for sp in site.getsitepackages():
+            candidates.append(Path(sp))
+    except Exception:
+        pass
+    slicer_home = os.environ.get("SLICER_HOME") or os.environ.get("Slicer_HOME")
+    if slicer_home:
+        home = Path(slicer_home).expanduser()
+        candidates.append(home / "lib" / "Python" / "Lib" / "site-packages")
+        candidates.append(
+            home / "lib" / "Python" / "lib" / f"python{sys.version_info[0]}.{sys.version_info[1]}" / "site-packages"
+        )
+    valid: list[Path] = []
+    seen: set[str] = set()
+    for cand in candidates:
+        try:
+            if not cand.is_dir():
+                continue
+            resolved = cand.resolve()
+        except OSError:
+            continue
+        if any(part.lower() == "bundled-python" for part in resolved.parts):
+            continue
+        norm = os.path.normcase(os.path.normpath(str(resolved)))
+        if norm not in seen:
+            seen.add(norm)
+            valid.append(resolved)
+    return tuple(valid)
+
+
+def register_windows_dll_directories(
+    extra_site_dirs: tuple[Path | str, ...] | list[Path | str] = (),
+    *,
+    python_executable: Path | str | None = None,
+    module_root: Path | None = None,
+) -> tuple[str, ...]:
+    """Register PyTorch/CUDA/pywin32 DLL directories via ``os.add_dll_directory`` on Windows Python 3.8+.
+
+    Python 3.8+ on Windows does not search ``PATH`` when loading ``.pyd`` extension DLL
+    dependencies. Handles returned by ``os.add_dll_directory`` are retained for the life
+    of the process so garbage collection never removes them.
+    """
+    if sys.platform != "win32":
+        return ()
+    adder = getattr(os, "add_dll_directory", None)
+    if not callable(adder):
+        return ()
+
+    site_roots: list[Path] = [
+        *_slicer_site_packages_dirs(python_executable),
+        *bundled_site_packages_dirs(module_root),
+    ]
+    for extra in extra_site_dirs:
+        if extra:
+            try:
+                p = Path(extra).expanduser().resolve()
+                if p.is_dir():
+                    site_roots.append(p)
+            except OSError:
+                continue
+
+    dll_candidates: list[Path] = []
+    for site_dir in site_roots:
+        for rel in (Path("torch") / "lib", Path("pywin32_system32")):
+            cand = site_dir / rel
+            if cand.is_dir():
+                dll_candidates.append(cand)
+        nvidia_dir = site_dir / "nvidia"
+        if nvidia_dir.is_dir():
+            try:
+                for sub in sorted(nvidia_dir.iterdir()):
+                    if not sub.is_dir():
+                        continue
+                    for leaf in ("bin", "lib"):
+                        cand = sub / leaf
+                        if cand.is_dir():
+                            dll_candidates.append(cand)
+            except OSError:
+                pass
+
+    for env_key in ("CUDA_PATH", "CUDA_HOME"):
+        val = os.environ.get(env_key, "").strip()
+        if val:
+            cand = Path(val) / "bin"
+            if cand.is_dir():
+                dll_candidates.append(cand)
+
+    registered: list[str] = []
+    for cand in dll_candidates:
+        try:
+            rendered = str(cand.resolve())
+        except OSError:
+            rendered = str(cand)
+        norm = os.path.normcase(os.path.normpath(rendered))
+        if norm in _WINDOWS_REGISTERED_DLL_DIRS:
+            continue
+        try:
+            handle = adder(rendered)
+        except OSError:
+            continue
+        _WINDOWS_DLL_DIR_HANDLES.append(handle)
+        _WINDOWS_REGISTERED_DLL_DIRS.add(norm)
+        registered.append(rendered)
+    return tuple(registered)
+
+
 def _append_env_paths(env: MutableMapping[str, str], key: str, additions: tuple[Path, ...]) -> None:
     if not additions:
         return
@@ -287,6 +407,7 @@ def inject_bundled_python_env(
     *,
     module_root: Path | None = None,
     include_pythonpath: bool = True,
+    python_executable: Path | str | None = None,
 ) -> MutableMapping[str, str]:
     """Append bundled ``site-packages`` and script directories to ``env`` for Slicer Python subprocesses."""
     env.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
@@ -300,8 +421,17 @@ def inject_bundled_python_env(
                 cand = site_dir / sub
                 if cand.is_dir():
                     py_dirs.append(cand.resolve())
-        _append_env_paths(env, "PYTHONPATH", tuple(py_dirs))
-        if any((site_dir / "numpy").is_dir() for site_dir in py_dirs):
+        bundle_has_numpy = any((site_dir / "numpy").is_dir() for site_dir in py_dirs)
+        if sys.platform == "win32" and py_dirs and not bundle_has_numpy:
+            # Windows release packages ship CPU-only torch in bundled-python (without numpy)
+            # while GPU users install CUDA torch into Slicer's own Lib/site-packages.
+            # CPython inserts PYTHONPATH ahead of Lib/site-packages, so place Slicer's
+            # site-packages ahead of bundled-python in PYTHONPATH to prevent shadowing CUDA torch.
+            slicer_sp = _slicer_site_packages_dirs(python_executable)
+            _append_env_paths(env, "PYTHONPATH", (*slicer_sp, *py_dirs))
+        else:
+            _append_env_paths(env, "PYTHONPATH", tuple(py_dirs))
+        if bundle_has_numpy:
             env["SLICERDSPACE_BUNDLED_SITE_PACKAGES"] = os.pathsep.join(str(p) for p in py_dirs)
     _append_env_paths(env, "PATH", bundled_script_dirs(module_root))
     return env
@@ -309,11 +439,15 @@ def inject_bundled_python_env(
 
 def prepend_env_bundled_site_packages() -> tuple[str, ...]:
     """Prepend ``SLICERDSPACE_BUNDLED_SITE_PACKAGES`` entries ahead of ``sys.path`` before ``numpy`` loads."""
+    if sys.platform == "win32":
+        register_windows_dll_directories()
     if "numpy" in sys.modules:
         return ()
     raw = os.environ.get("SLICERDSPACE_BUNDLED_SITE_PACKAGES", "")
     dirs = [entry for entry in raw.split(os.pathsep) if entry and os.path.isdir(entry)]
     if not dirs:
+        return ()
+    if sys.platform == "win32" and not any((Path(entry) / "numpy").is_dir() for entry in dirs):
         return ()
     norms = {os.path.normcase(os.path.normpath(entry)) for entry in dirs}
     sys.path[:] = [
@@ -328,6 +462,7 @@ def activate_bundled_python(module_root: Path | None = None) -> tuple[Path, ...]
     os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
     if sys.platform == "win32":
         os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", WINDOWS_CUDA_ALLOC_CONF)
+        register_windows_dll_directories(module_root=module_root)
     _clear_macos_quarantine_once(module_root)
     site_dirs = bundled_site_packages_dirs(module_root)
     _log_activation_problem()
@@ -335,6 +470,7 @@ def activate_bundled_python(module_root: Path | None = None) -> tuple[Path, ...]
         return ()
     norm_sys_path = {os.path.normcase(os.path.normpath(entry)) for entry in sys.path if entry}
     prepend: list[str] = []
+    demote: list[str] = []
     for site_dir in site_dirs:
         rendered = str(site_dir)
         norm_rendered = os.path.normcase(os.path.normpath(rendered))
@@ -343,11 +479,23 @@ def activate_bundled_python(module_root: Path | None = None) -> tuple[Path, ...]
             norm_sys_path.add(norm_rendered)
         if (site_dir / "numpy").is_dir() and "numpy" not in sys.modules:
             prepend.append(rendered)
+        elif sys.platform == "win32" and not (site_dir / "numpy").is_dir() and "torch" not in sys.modules:
+            demote.append(rendered)
     if prepend:
         prepend_norms = {os.path.normcase(os.path.normpath(p)) for p in prepend}
         sys.path[:] = [
             *prepend,
             *(entry for entry in sys.path if os.path.normcase(os.path.normpath(entry)) not in prepend_norms),
         ]
+    elif demote:
+        # Ensure Slicer's own site-packages (with any user-installed CUDA torch) stays ahead of
+        # a non-numpy Windows bundled-python overlay even if inherited via PYTHONPATH.
+        demote_norms = {os.path.normcase(os.path.normpath(p)) for p in demote}
+        slicer_norms = {os.path.normcase(os.path.normpath(str(p))) for p in _slicer_site_packages_dirs()}
+        if slicer_norms:
+            kept = [entry for entry in sys.path if os.path.normcase(os.path.normpath(entry)) not in demote_norms]
+            sys.path[:] = [*kept, *demote]
+    if sys.platform == "win32":
+        register_windows_dll_directories(site_dirs, module_root=module_root)
     inject_bundled_python_env(os.environ, module_root=module_root, include_pythonpath=True)
     return site_dirs

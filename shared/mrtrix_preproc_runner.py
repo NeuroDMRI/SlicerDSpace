@@ -63,8 +63,15 @@ def main(argv=None):
     gpu_visible = visible not in ("", "-1")
     if gpu_visible:
         try:
-            smi = shutil.which("nvidia-smi") or (
-                "/usr/lib/wsl/lib/nvidia-smi" if Path("/usr/lib/wsl/lib/nvidia-smi").is_file() else "nvidia-smi")
+            smi = shutil.which("nvidia-smi")
+            if not smi and os.name == "nt":
+                win_cands = [
+                    Path(os.environ.get("SystemRoot") or r"C:\Windows") / "System32" / "nvidia-smi.exe",
+                    Path(os.environ.get("ProgramFiles") or r"C:\Program Files") / "NVIDIA Corporation" / "NVSMI" / "nvidia-smi.exe",
+                ]
+                smi = next((str(p) for p in win_cands if p.is_file()), None)
+            if not smi:
+                smi = "/usr/lib/wsl/lib/nvidia-smi" if Path("/usr/lib/wsl/lib/nvidia-smi").is_file() else "nvidia-smi"
             no_win = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
             probe = subprocess.run(
                 [smi, "-L"],

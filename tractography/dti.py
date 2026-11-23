@@ -397,78 +397,84 @@ def _fit_dti_fa_and_peaks(
         return fa_chunk, closest
 
     if resolved_device.startswith("cuda") and n_vox > 0:
+        import os as _os
         import torch
+        from shared.hardware_adapt import is_consumer_fp64_cuda_gpu, is_cuda_oom
 
         dev = torch.device(resolved_device)
-        w_t = torch.as_tensor(w_mat, device=dev, dtype=torch.float64)
-        w_pinv_t_gpu = torch.as_tensor(w_pinv_t, device=dev, dtype=torch.float64)
-        w_outer_t = torch.as_tensor(w_outer, device=dev, dtype=torch.float64)
-        lo_idx_t = torch.as_tensor(lo_tri_idx, device=dev, dtype=torch.long)
-        sphere_t = torch.as_tensor(sphere_verts.T, device=dev, dtype=torch.float64)
-        per_vox_bytes = max(2048, int(w_mat.shape[0]) * 8 * 8)
-        init_chunk = adaptive_cuda_scaled_batch(
-            per_item_bytes=per_vox_bytes,
-            default_batch=16384,
-            min_batch=2048,
-            max_batch=16384,
-            device=dev,
-            windows_tdr_cap=16384,
-        )
-
-        def _cuda_chunk(start: int, end: int):
-            sig_np = np.ascontiguousarray(data_in_mask[start:end], dtype=np.float64)
-            sig_t = torch.clamp(torch.from_numpy(sig_np).to(dev), min=float(MIN_POSITIVE_SIGNAL))
-            log_s = torch.log(sig_t)
-            beta_ols = log_s @ w_pinv_t_gpu
-            if is_wls:
-                w = torch.exp(torch.clamp(beta_ols @ w_t.T, min=-50.0, max=50.0))
-                w2 = w * w
-                lhs = (w2 @ w_outer_t).view(-1, 7, 7)
-                rhs = ((w2 * log_s) @ w_t).unsqueeze(-1)
-                beta, info = torch.linalg.solve_ex(lhs, rhs)
-                beta = beta.squeeze(-1)
-                bad = (info != 0) | (~torch.all(torch.isfinite(beta), dim=1))
-                if bool(torch.any(bad)):
-                    bad_idx = torch.nonzero(bad, as_tuple=False).squeeze(1)
-                    wb = w.index_select(0, bad_idx)
-                    lsb = log_s.index_select(0, bad_idx)
-                    pinv_b = torch.linalg.pinv(w_t.unsqueeze(0) * wb.unsqueeze(-1))
-                    beta_bad = torch.matmul(pinv_b, (wb * lsb).unsqueeze(-1)).squeeze(-1)
-                    beta = beta.clone()
-                    beta.index_copy_(0, bad_idx, beta_bad)
-            else:
-                beta = beta_ols
-            tensors = beta[:, lo_idx_t]
-            n_t = tensors.shape[0]
-            if n_t <= 8192:
-                evals_asc, evecs_asc = torch.linalg.eigh(tensors)
-            else:
-                ev_list = []
-                ec_list = []
-                for sub_s in range(0, n_t, 8192):
-                    ev_s, ec_s = torch.linalg.eigh(tensors[sub_s : sub_s + 8192])
-                    ev_list.append(ev_s)
-                    ec_list.append(ec_s)
-                evals_asc = torch.cat(ev_list, dim=0)
-                evecs_asc = torch.cat(ec_list, dim=0)
-            evals = torch.clamp(torch.flip(evals_asc, dims=[1]), min=min_diff)
-            ev1, ev2, ev3 = evals[:, 0], evals[:, 1], evals[:, 2]
-            denom = ev1 * ev1 + ev2 * ev2 + ev3 * ev3
-            num = 0.5 * ((ev1 - ev2) ** 2 + (ev2 - ev3) ** 2 + (ev3 - ev1) ** 2)
-            fa_t = torch.where(denom > 0, torch.sqrt(num / torch.where(denom > 0, denom, torch.ones_like(denom))), torch.zeros_like(denom))
-            fa_t = torch.nan_to_num(fa_t, nan=0.0, posinf=0.0, neginf=0.0)
-            principal = torch.nan_to_num(evecs_asc[:, :, 2], nan=0.0, posinf=0.0, neginf=0.0)
-            norms = torch.linalg.norm(principal, dim=1)
-            closest_t = torch.full((end - start,), -1, device=dev, dtype=torch.int32)
-            valid_dir = (fa_t >= float(min_fa)) & (norms > 0)
-            if bool(torch.any(valid_dir)):
-                v_idx = torch.nonzero(valid_dir, as_tuple=False).squeeze(1)
-                normed = principal.index_select(0, v_idx) / norms.index_select(0, v_idx).unsqueeze(1)
-                proj = torch.abs(normed @ sphere_t)
-                closest_t.index_copy_(0, v_idx, torch.argmax(proj, dim=1).to(torch.int32))
-            return fa_t.detach().cpu().numpy(), closest_t.detach().cpu().numpy()
-
+        w_t = w_pinv_t_gpu = w_outer_t = lo_idx_t = sphere_t = None
         try:
+            w_t = torch.as_tensor(w_mat, device=dev, dtype=torch.float64)
+            w_pinv_t_gpu = torch.as_tensor(w_pinv_t, device=dev, dtype=torch.float64)
+            w_outer_t = torch.as_tensor(w_outer, device=dev, dtype=torch.float64)
+            lo_idx_t = torch.as_tensor(lo_tri_idx, device=dev, dtype=torch.long)
+            sphere_t = torch.as_tensor(sphere_verts.T, device=dev, dtype=torch.float64)
+            per_vox_bytes = max(2048, int(w_mat.shape[0]) * 8 * 8)
+            init_chunk = adaptive_cuda_scaled_batch(
+                per_item_bytes=per_vox_bytes,
+                default_batch=16384,
+                min_batch=2048,
+                max_batch=16384,
+                device=dev,
+                windows_tdr_cap=16384,
+                fp64=True,
+                consumer_fp64_tdr_cap=4096,
+            )
+            eigh_sub = 2048 if (_os.name == "nt" and is_consumer_fp64_cuda_gpu(dev)) else 8192
+
+            def _cuda_chunk(start: int, end: int):
+                sig_np = np.ascontiguousarray(data_in_mask[start:end], dtype=np.float64)
+                sig_t = torch.clamp(torch.from_numpy(sig_np).to(dev), min=float(MIN_POSITIVE_SIGNAL))
+                log_s = torch.log(sig_t)
+                beta_ols = log_s @ w_pinv_t_gpu
+                if is_wls:
+                    w = torch.exp(torch.clamp(beta_ols @ w_t.T, min=-50.0, max=50.0))
+                    w2 = w * w
+                    lhs = (w2 @ w_outer_t).view(-1, 7, 7)
+                    rhs = ((w2 * log_s) @ w_t).unsqueeze(-1)
+                    beta, info = torch.linalg.solve_ex(lhs, rhs)
+                    beta = beta.squeeze(-1)
+                    bad = (info != 0) | (~torch.all(torch.isfinite(beta), dim=1))
+                    if bool(torch.any(bad)):
+                        bad_idx = torch.nonzero(bad, as_tuple=False).squeeze(1)
+                        wb = w.index_select(0, bad_idx)
+                        lsb = log_s.index_select(0, bad_idx)
+                        pinv_b = torch.linalg.pinv(w_t.unsqueeze(0) * wb.unsqueeze(-1))
+                        beta_bad = torch.matmul(pinv_b, (wb * lsb).unsqueeze(-1)).squeeze(-1)
+                        beta = beta.clone()
+                        beta.index_copy_(0, bad_idx, beta_bad)
+                else:
+                    beta = beta_ols
+                tensors = beta[:, lo_idx_t]
+                n_t = tensors.shape[0]
+                if n_t <= eigh_sub:
+                    evals_asc, evecs_asc = torch.linalg.eigh(tensors)
+                else:
+                    ev_list = []
+                    ec_list = []
+                    for sub_s in range(0, n_t, eigh_sub):
+                        ev_s, ec_s = torch.linalg.eigh(tensors[sub_s : sub_s + eigh_sub])
+                        ev_list.append(ev_s)
+                        ec_list.append(ec_s)
+                    evals_asc = torch.cat(ev_list, dim=0)
+                    evecs_asc = torch.cat(ec_list, dim=0)
+                evals = torch.clamp(torch.flip(evals_asc, dims=[1]), min=min_diff)
+                ev1, ev2, ev3 = evals[:, 0], evals[:, 1], evals[:, 2]
+                denom = ev1 * ev1 + ev2 * ev2 + ev3 * ev3
+                num = 0.5 * ((ev1 - ev2) ** 2 + (ev2 - ev3) ** 2 + (ev3 - ev1) ** 2)
+                fa_t = torch.where(denom > 0, torch.sqrt(num / torch.where(denom > 0, denom, torch.ones_like(denom))), torch.zeros_like(denom))
+                fa_t = torch.nan_to_num(fa_t, nan=0.0, posinf=0.0, neginf=0.0)
+                principal = torch.nan_to_num(evecs_asc[:, :, 2], nan=0.0, posinf=0.0, neginf=0.0)
+                norms = torch.linalg.norm(principal, dim=1)
+                closest_t = torch.full((end - start,), -1, device=dev, dtype=torch.int32)
+                valid_dir = (fa_t >= float(min_fa)) & (norms > 0)
+                if bool(torch.any(valid_dir)):
+                    v_idx = torch.nonzero(valid_dir, as_tuple=False).squeeze(1)
+                    normed = principal.index_select(0, v_idx) / norms.index_select(0, v_idx).unsqueeze(1)
+                    proj = torch.abs(normed @ sphere_t)
+                    closest_t.index_copy_(0, v_idx, torch.argmax(proj, dim=1).to(torch.int32))
+                return fa_t.detach().cpu().numpy(), closest_t.detach().cpu().numpy()
+
             results = run_cuda_chunked_with_oom_fallback(
                 n_vox,
                 initial_chunk_size=init_chunk,
@@ -476,6 +482,14 @@ def _fit_dti_fa_and_peaks(
                 cuda_fn=_cuda_chunk,
                 cpu_fallback_fn=None if explicit_cuda else _cpu_chunk,
             )
+        except BaseException as exc:
+            if explicit_cuda or not is_cuda_oom(exc):
+                raise
+            del w_t, w_pinv_t_gpu, w_outer_t, lo_idx_t, sphere_t
+            w_t = w_pinv_t_gpu = w_outer_t = lo_idx_t = sphere_t = None
+            empty_cuda_cache_safely()
+            results = [_cpu_chunk(0, n_vox)]
+            resolved_device = "cpu"
         finally:
             del w_t, w_pinv_t_gpu, w_outer_t, lo_idx_t, sphere_t
             empty_cuda_cache_safely()

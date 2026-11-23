@@ -35,8 +35,19 @@ VALID_TRACTCLOUD_DEVICES = {"auto", "cpu", "cuda", "mps"}
 TRACTCLOUD_COMPAT_BOOTSTRAP = (
     "import json, logging, os, random, runpy, sys; "
     "os.environ.setdefault('PYTORCH_ENABLE_MPS_FALLBACK', '1'); "
-    "_bsp = os.environ.get('SLICERDSPACE_BUNDLED_SITE_PACKAGES', ''); "
-    "sys.path[:0] = [p for p in _bsp.split(os.pathsep) if p]; "
+    "\nif sys.platform == 'win32':\n"
+    "    os.environ.setdefault('PYTORCH_CUDA_ALLOC_CONF', 'garbage_collection_threshold:0.8,max_split_size_mb:128')\n"
+    "_bsp = [p for p in os.environ.get('SLICERDSPACE_BUNDLED_SITE_PACKAGES', '').split(os.pathsep) if p]\n"
+    "_bsp_pre = [p for p in _bsp if sys.platform != 'win32' or os.path.isdir(os.path.join(p, 'numpy'))]\n"
+    "_bsp_post = [p for p in _bsp if p not in _bsp_pre]\n"
+    "sys.path[:0] = _bsp_pre\n"
+    "sys.path.extend([p for p in _bsp_post if p not in sys.path])\n"
+    "if sys.platform == 'win32':\n"
+    "    try:\n"
+    "        from shared.bundled_python import register_windows_dll_directories\n"
+    "        register_windows_dll_directories()\n"
+    "    except Exception:\n"
+    "        pass\n"
     "import numpy as np; import torch; "
     "seed = int(os.environ.get('SLICERDSPACE_TRACTCLOUD_SEED', '0')); "
     "random.seed(seed); np.random.seed(seed); torch.manual_seed(seed); "
@@ -57,10 +68,16 @@ TRACTCLOUD_COMPAT_BOOTSTRAP = (
     "    try:\n"
     "        free_b, _ = torch.cuda.mem_get_info(0)\n"
     "        bs_flag = '--batch-size' if '--batch-size' in sys.argv else ('--batch_size' if '--batch_size' in sys.argv else '')\n"
-    "        if bs_flag and free_b < int(4.5 * (1024 ** 3)):\n"
+    "        if bs_flag:\n"
     "            bs_i = sys.argv.index(bs_flag) + 1\n"
     "            cur_bs = int(sys.argv[bs_i])\n"
-    "            cap_bs = 256 if free_b < int(2.2 * (1024 ** 3)) else 512\n"
+    "            cap_bs = cur_bs\n"
+    "            if free_b < int(2.2 * (1024 ** 3)):\n"
+    "                cap_bs = 256\n"
+    "            elif free_b < int(4.5 * (1024 ** 3)):\n"
+    "                cap_bs = 512\n"
+    "            elif os.name == 'nt' and free_b < int(7.5 * (1024 ** 3)):\n"
+    "                cap_bs = 1024\n"
     "            if cur_bs > cap_bs:\n"
     "                sys.argv[bs_i] = str(cap_bs)\n"
     "    except Exception:\n"
@@ -97,7 +114,7 @@ TRACTCLOUD_COMPAT_BOOTSTRAP = (
     "        json.dump(record, stream)\n"
     "if getattr(pipeline, '__file__', None):\n"
     "    from tractography.tractcloud_accel import install_tractcloud_accelerations\n"
-    "    install_tractcloud_accelerations(pipeline, resolved)\n"
+    "    install_tractcloud_accelerations(pipeline, resolved, requested_device=requested)\n"
     "if resolved in ('cuda', 'mps') and hasattr(pipeline, 'run_inference'):\n"
     "    original_inference = pipeline.run_inference\n"
     "    def strict_gpu_inference(model, loader, global_feat, num_classes, device, **kwargs):\n"
@@ -329,7 +346,7 @@ def inspect_tractcloud_backend(
             check=True,
             capture_output=True,
             env=env,
-            **text_subprocess_kwargs(),
+            **subprocess_no_window_kwargs(**text_subprocess_kwargs()),
         )
         packages = json.loads(completed.stdout.strip() or "{}")
         status["packages"].update({key: bool(packages.get(key)) for key in status["packages"]})

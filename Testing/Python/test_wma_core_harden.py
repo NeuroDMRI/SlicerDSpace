@@ -154,6 +154,51 @@ class HardenTransformTest(unittest.TestCase):
             module.main([str(self.source_dir / 'not-here'), str(self.transform_path), '0', str(self.output)],
                         slicer_module=self.slicer)
 
+    def test_ensure_numpy_core_multiarray_patches_stub_module(self):
+        import types
+        from unittest import mock
+
+        stub_core = types.ModuleType('numpy._core')
+        fake_multiarray = object()
+        fake_np = types.SimpleNamespace(core=types.SimpleNamespace(multiarray=fake_multiarray))
+        with mock.patch.dict('sys.modules', {'numpy': fake_np}), \
+                mock.patch.object(module.importlib, 'import_module', return_value=stub_core):
+            module._ensure_numpy_core_multiarray()
+        self.assertIs(stub_core.multiarray, fake_multiarray)
+
+    def test_run_falls_back_to_fast_core_harden_when_slicerdmri_is_absent(self):
+        from unittest import mock
+
+        wma_root = Path(self.temp.name) / 'wma_gpu'
+        (wma_root / 'whitematteranalysis' / 'gpu').mkdir(parents=True)
+        (wma_root / 'whitematteranalysis' / 'gpu' / '__init__.py').write_text('# gpu\n', encoding='utf-8')
+        author = wma_root / 'bin' / 'harden_transform_with_slicer.py'
+        author.parent.mkdir(parents=True)
+        author.write_text('raise AssertionError("should not run without SlicerDMRI")\n', encoding='utf-8')
+        fake_slicer = SimpleNamespace()
+        argv = [
+            'run_wma_harden_transform.py',
+            str(self.source_dir),
+            str(self.transform_path),
+            '1',
+            str(self.output),
+            '0',
+            '4',
+            '--split-output-directory',
+            str(self.output / 'split'),
+        ]
+        with mock.patch.dict('sys.modules', {'slicer': fake_slicer}), \
+                mock.patch.object(module, '_has_slicerdmri_fiber_bundle_logic', return_value=False), \
+                mock.patch.object(module, '_run_fast_core_harden', return_value=0) as fast_core, \
+                mock.patch('sys.argv', argv):
+            rc = module.run(str(author))
+        self.assertEqual(rc, 0)
+        fast_core.assert_called_once()
+        called_args, called_kwargs = fast_core.call_args
+        self.assertEqual(called_args[0].partition_count, 4)
+        self.assertEqual(called_args[0].split_output_directory, str(self.output / 'split'))
+        self.assertEqual(called_kwargs['wma_root'], wma_root.resolve())
+
 
 if __name__ == '__main__':
     unittest.main()

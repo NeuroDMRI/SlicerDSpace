@@ -39,8 +39,15 @@ def discover_subject_directories(input_root, subjects=None):
 
 
 def predict_subject(config):
-    from shared.environment import resolve_auto_torch_device
-    config = replace(config, device=resolve_auto_torch_device(config.device, Path(python_executable(config.python_bin))))
+    from shared.environment import resolve_auto_torch_device, surface_gpu_memory_decision
+    requested = str(config.device or 'auto').strip().lower()
+    surface_py = Path(python_executable(config.python_bin))
+    resolved = resolve_auto_torch_device(config.device, surface_py)
+    if requested in {'', 'auto'} and resolved.startswith('cuda'):
+        gpu_action, _ = surface_gpu_memory_decision('auto', surface_py)
+        if gpu_action == 'cpu':
+            resolved = 'cpu'
+    config = replace(config, device=resolved)
     command = [BACKEND_ROOT / 'DDSurfer_predict.py', '--subjects', config.subject_id,
         '--surf_hemi', config.hemisphere, '--predict_mode', config.predict_mode,
         '--device', config.device, '--precision', config.precision,

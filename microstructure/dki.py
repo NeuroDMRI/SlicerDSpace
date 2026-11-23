@@ -1152,12 +1152,15 @@ def _compute_maps(config: DkiConfig, paths: dict[str, Path], log):
         cuda_metric_pool = None
         try:
             resolved_device = _resolve_dki_device(config.device)
+            req_dev_raw = str(config.device or "auto").strip().lower()
+            explicit_cuda = req_dev_raw == "cuda" or req_dev_raw.startswith("cuda:")
             is_cuda_dev = resolved_device.startswith("cuda")
             from shared.hardware_adapt import (
                 adaptive_cuda_scaled_batch,
                 available_ram_bytes,
                 empty_cuda_cache_safely,
                 is_cuda_oom,
+                run_cuda_chunked_with_oom_fallback,
             )
 
             use_fast_dense_global = (
@@ -1187,6 +1190,8 @@ def _compute_maps(config: DkiConfig, paths: dict[str, Path], log):
                     max_batch=65536,
                     device=resolved_device,
                     windows_tdr_cap=8192,
+                    fp64=True,
+                    consumer_fp64_tdr_cap=2048,
                 )
             elif config.dense_metrics and dense_supported and len(flat_indices) > 64 and config.voxels_per_chunk == 1024:
                 chunk_step = 8192
@@ -1367,56 +1372,65 @@ def _compute_maps(config: DkiConfig, paths: dict[str, Path], log):
                         use_fast_dense = use_fast_dense_global
                         if use_fast_dense and resolved_device.startswith("cuda"):
                             from dipy.reconst.dki import DiffusionKurtosisFit
-                            try:
-                                params, s0 = _fit_dki_chunk_cuda(model, observed, fit_method_name, device=resolved_device)
-                                phase_times['tensor_fit'] += time.monotonic()-stamp
-                                stamp = time.monotonic()
-                                fitted = DiffusionKurtosisFit(model, params, model_S0=s0)
-                                dense_used = True
-                                rmse, nrmse, rtk_cuda = _predict_and_rtk_cuda(model, params, s0, observed, device=resolved_device)
-                                if cuda_metric_pool is not None and len(params) >= 4096:
-                                    sub_step = max(1024, (len(params) + cuda_metric_workers - 1) // cuda_metric_workers)
-                                    sub_chunks = [
-                                        (params[s:s + sub_step], s0[s:s + sub_step])
-                                        for s in range(0, len(params), sub_step)
-                                    ]
-                                    parts = cuda_metric_pool.map(_dki_fork_metrics_worker, sub_chunks)
-                                    raw = {
-                                        key: np.concatenate([p[key] for p in parts], axis=0)
-                                        for key in ("mk", "ak", "rk", "mkt", "kfa")
-                                    }
-                                    raw["rtk"] = rtk_cuda
+
+                            def _dki_cuda_sub(s_i: int, e_i: int):
+                                obs_sub = observed[s_i:e_i]
+                                p_sub, s0_sub = _fit_dki_chunk_cuda(model, obs_sub, fit_method_name, device=resolved_device)
+                                r_sub, nr_sub, rtk_sub = _predict_and_rtk_cuda(
+                                    model, p_sub, s0_sub, obs_sub, device=resolved_device
+                                )
+                                return p_sub, s0_sub, r_sub, nr_sub, rtk_sub
+
+                            def _dki_cpu_sub(s_i: int, e_i: int):
+                                obs_sub = observed[s_i:e_i]
+                                p_sub, s0_sub = _fit_dki_chunk(model, obs_sub, fit_method_name)
+                                pred_sub = _predict_dki_chunk(model, p_sub, s0_sub)
+                                r_sub = np.sqrt(np.mean((pred_sub - obs_sub) ** 2, axis=1))
+                                nr_sub = r_sub / s0_sub
+                                if len(p_sub) > 64:
+                                    rtk_sub = _compute_rtk_cpu(p_sub)
                                 else:
+                                    fit_sub = DiffusionKurtosisFit(model, p_sub, model_S0=s0_sub)
                                     with np.errstate(invalid="ignore", divide="ignore", over="ignore"):
-                                        raw = {
-                                            key: np.asarray(getattr(fitted, key)(min_kurtosis=None, max_kurtosis=None)).reshape(-1)
-                                            for key in ("mk", "ak", "rk", "mkt")
-                                        }
-                                        raw["rtk"] = rtk_cuda
-                                        raw["kfa"] = np.asarray(fitted.kfa).reshape(-1)
-                            except BaseException as exc:
-                                if not is_cuda_oom(exc):
-                                    raise
-                                empty_cuda_cache_safely()
-                                params, s0 = _fit_dki_chunk(model, observed, fit_method_name)
-                                phase_times['tensor_fit'] += time.monotonic()-stamp
-                                stamp = time.monotonic()
-                                fitted = DiffusionKurtosisFit(model, params, model_S0=s0)
-                                dense_used = True
-                                predictions = _predict_dki_chunk(model, params, s0)
+                                        rtk_sub = np.asarray(fit_sub.rtk(min_kurtosis=None, max_kurtosis=None)).reshape(-1)
+                                return p_sub, s0_sub, r_sub, nr_sub, rtk_sub
+
+                            sub_parts = run_cuda_chunked_with_oom_fallback(
+                                len(observed),
+                                initial_chunk_size=len(observed),
+                                min_cuda_chunk_size=min(256, len(observed)),
+                                cuda_fn=_dki_cuda_sub,
+                                cpu_fallback_fn=None if explicit_cuda else _dki_cpu_sub,
+                            )
+                            params = np.concatenate([p[0] for p in sub_parts], axis=0)
+                            s0 = np.concatenate([p[1] for p in sub_parts], axis=0)
+                            rmse = np.concatenate([p[2] for p in sub_parts], axis=0)
+                            nrmse = np.concatenate([p[3] for p in sub_parts], axis=0)
+                            rtk_cuda = np.concatenate([p[4] for p in sub_parts], axis=0)
+                            phase_times['tensor_fit'] += time.monotonic()-stamp
+                            stamp = time.monotonic()
+                            fitted = DiffusionKurtosisFit(model, params, model_S0=s0)
+                            dense_used = True
+                            if cuda_metric_pool is not None and len(params) >= 4096:
+                                sub_step = max(1024, (len(params) + cuda_metric_workers - 1) // cuda_metric_workers)
+                                sub_chunks = [
+                                    (params[s:s + sub_step], s0[s:s + sub_step])
+                                    for s in range(0, len(params), sub_step)
+                                ]
+                                parts = cuda_metric_pool.map(_dki_fork_metrics_worker, sub_chunks)
+                                raw = {
+                                    key: np.concatenate([p[key] for p in parts], axis=0)
+                                    for key in ("mk", "ak", "rk", "mkt", "kfa")
+                                }
+                                raw["rtk"] = rtk_cuda
+                            else:
                                 with np.errstate(invalid="ignore", divide="ignore", over="ignore"):
                                     raw = {
                                         key: np.asarray(getattr(fitted, key)(min_kurtosis=None, max_kurtosis=None)).reshape(-1)
                                         for key in ("mk", "ak", "rk", "mkt")
                                     }
-                                    raw["rtk"] = (
-                                        _compute_rtk_cpu(params)
-                                        if len(params) > 64
-                                        else np.asarray(fitted.rtk(min_kurtosis=None, max_kurtosis=None)).reshape(-1)
-                                    )
+                                    raw["rtk"] = rtk_cuda
                                     raw["kfa"] = np.asarray(fitted.kfa).reshape(-1)
-                                    rmse = np.sqrt(np.mean((predictions - observed) ** 2, axis=1))
-                                    nrmse = rmse / s0
                         elif use_fast_dense:
                             from dipy.reconst.dki import DiffusionKurtosisFit
                             params, s0 = _fit_dki_chunk(model, observed, fit_method_name)

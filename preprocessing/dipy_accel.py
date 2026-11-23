@@ -78,6 +78,11 @@ def _load_cusolver_lib():
             candidates.extend(sorted(glob.glob(os.path.join(t_lib, "cusolver64_*.dll"))))
         except Exception:
             pass
+        if sys.platform == "win32":
+            for env_key in ("CUDA_PATH", "CUDA_HOME"):
+                env_dir = os.environ.get(env_key, "").strip()
+                if env_dir:
+                    candidates.extend(sorted(glob.glob(os.path.join(env_dir, "bin", "cusolver64_*.dll"))))
         if sys.platform.startswith("linux") and os.path.exists("/proc/self/maps"):
             try:
                 with open("/proc/self/maps", encoding="utf-8", errors="ignore") as f:
@@ -97,7 +102,16 @@ def _load_cusolver_lib():
         c_int64 = ctypes.c_int64
         c_size_t = ctypes.c_size_t
         for path in candidates:
+            dll_handle = None
             try:
+                if sys.platform == "win32":
+                    adder = getattr(os, "add_dll_directory", None)
+                    parent_dir = os.path.dirname(path)
+                    if callable(adder) and parent_dir and os.path.isdir(parent_dir):
+                        try:
+                            dll_handle = adder(parent_dir)
+                        except OSError:
+                            dll_handle = None
                 lib = ctypes.CDLL(path)
                 if not (hasattr(lib, "cusolverDnXsyevBatched") and hasattr(lib, "cusolverDnXsyevBatched_bufferSize")):
                     continue
@@ -131,9 +145,22 @@ def _load_cusolver_lib():
                 ]
                 lib.cusolverDnXsyevBatched.restype = c_int
                 _CUSOLVER_LIB = lib
+                if dll_handle is not None:
+                    _CUSOLVER_HANDLES[("_dll_dir", path)] = dll_handle
                 break
             except Exception:
+                if dll_handle is not None:
+                    try:
+                        dll_handle.close()
+                    except Exception:
+                        pass
                 continue
+            else:
+                if dll_handle is not None:
+                    try:
+                        dll_handle.close()
+                    except Exception:
+                        pass
         return _CUSOLVER_LIB
 
 
@@ -198,6 +225,13 @@ def _eigh_cuda_batched(sym):
         max_sub = max(64, min(4096, ws_budget // est_ws_per_mat))
     else:
         max_sub = 1024
+    if os.name == "nt" and cuda_dt == 1:
+        from shared.hardware_adapt import is_consumer_fp64_cuda_gpu
+
+        # Consumer GeForce RTX GPUs have 1/64 FP64 throughput; bound batched 125x125 FP64
+        # cuSOLVER launches to stay well below Windows' 2-second WDDM TDR limit.
+        tdr_sub_cap = 256 if is_consumer_fp64_cuda_gpu(dev) else 1024
+        max_sub = min(max_sub, tdr_sub_cap)
     sub_b = min(bsz, max_sub)
 
     c_void_p = ctypes.c_void_p
@@ -724,8 +758,8 @@ def _mppca_cuda(
 
     dev = torch.device(device)
     torch_dtype = torch.float64 if calc_dtype == np.float64 else torch.float32
-    elem_bytes = 8 if torch_dtype == torch.float64 else 4
-    per_patch_bytes = max(4096, num_samples * max(dim, num_samples) * elem_bytes * 6)
+    # _solve_mppca_core_torch_fp64 always promotes patches to float64 (8 bytes) for exact eigendecomposition.
+    per_patch_bytes = max(4096, num_samples * max(dim, num_samples) * 8 * 6)
     patch_batch = adaptive_cuda_scaled_batch(
         per_item_bytes=per_patch_bytes,
         default_batch=4096,
@@ -733,6 +767,8 @@ def _mppca_cuda(
         max_batch=8192,
         device=dev,
         windows_tdr_cap=2048,
+        fp64=True,
+        consumer_fp64_tdr_cap=512,
     )
     ny_step = max(1, min(ny_c, max(1, patch_batch // max(1, nx_c))))
 
@@ -764,32 +800,40 @@ def _mppca_cuda(
             slab_t = torch.from_numpy(slab).to(device=dev, dtype=torch_dtype)
             # Extract patches via zero-copy unfold: (nx_c, ny_c, 1, dim, px, py, pz)
             win_t = slab_t.unfold(0, px, 1).unfold(1, py, 1).unfold(2, pz, 1)
-            for y0 in range(0, ny_c, ny_step):
+            y0 = 0
+            while y0 < ny_c:
                 y1 = min(ny_c, y0 + ny_step)
                 ny_b = y1 - y0
-                # Permute to (nx_c, ny_b, px, py, pz, dim)
-                sub_t = win_t[:, y0:y1, 0, :, :, :, :].permute(0, 1, 3, 4, 5, 2).contiguous()
-                patches_t = sub_t.view(nx_c * ny_b, num_samples, dim)
-                xest, this_theta, this_var = _solve_mppca_batch_torch(
-                    patches_t,
-                    dim=dim,
-                    num_samples=num_samples,
-                    tau_factor_sq=tau_factor_sq,
-                    return_sigma=return_sigma,
-                )
-                w_grid = this_theta.view(nx_c, ny_b)
-                wx_grid = (xest * this_theta[:, None, None]).view(nx_c, ny_b, px, py, pz, dim)
-                wv_grid = (this_var * this_theta).view(nx_c, ny_b) if (return_sigma and this_var is not None) else None
-                for dz in range(pz):
-                    slot = (k - rz + dz) % pz
-                    for dx in range(px):
-                        xs = slice(dx, dx + nx_c)
-                        for dy in range(py):
-                            ys = slice(y0 + dy, y1 + dy)
-                            ring_thetax[xs, ys, slot, :] += wx_grid[:, :, dx, dy, dz, :]
-                            ring_theta[xs, ys, slot, 0] += w_grid
-                            if ring_var is not None and wv_grid is not None:
-                                ring_var[xs, ys, slot] += wv_grid
+                try:
+                    # Permute to (nx_c, ny_b, px, py, pz, dim)
+                    sub_t = win_t[:, y0:y1, 0, :, :, :, :].permute(0, 1, 3, 4, 5, 2).contiguous()
+                    patches_t = sub_t.view(nx_c * ny_b, num_samples, dim)
+                    xest, this_theta, this_var = _solve_mppca_batch_torch(
+                        patches_t,
+                        dim=dim,
+                        num_samples=num_samples,
+                        tau_factor_sq=tau_factor_sq,
+                        return_sigma=return_sigma,
+                    )
+                    w_grid = this_theta.view(nx_c, ny_b)
+                    wx_grid = (xest * this_theta[:, None, None]).view(nx_c, ny_b, px, py, pz, dim)
+                    wv_grid = (this_var * this_theta).view(nx_c, ny_b) if (return_sigma and this_var is not None) else None
+                    for dz in range(pz):
+                        slot = (k - rz + dz) % pz
+                        for dx in range(px):
+                            xs = slice(dx, dx + nx_c)
+                            for dy in range(py):
+                                ys = slice(y0 + dy, y1 + dy)
+                                ring_thetax[xs, ys, slot, :] += wx_grid[:, :, dx, dy, dz, :]
+                                ring_theta[xs, ys, slot, 0] += w_grid
+                                if ring_var is not None and wv_grid is not None:
+                                    ring_var[xs, ys, slot] += wv_grid
+                    y0 = y1
+                except BaseException as exc:
+                    if not is_cuda_oom(exc) or ny_step <= 1:
+                        raise
+                    empty_cuda_cache_safely()
+                    ny_step = max(1, ny_step // 2)
 
             # Once k completes, global z = k - rz will never be touched by future k' > k!
             if k < sz - rz - 1:
@@ -851,7 +895,7 @@ def mppca_accelerated(
                 device=resolved,
             )
         except Exception as exc:
-            if is_cuda_oom(exc) or not explicit_cuda:
+            if not explicit_cuda:
                 empty_cuda_cache_safely()
             else:
                 raise
@@ -1084,42 +1128,56 @@ def gibbs_removal_accelerated(
         torch_dtype = torch.float64 if (is_cuda_dev and flat.dtype == np.float64) else torch.float32
         elem_bytes = 8 if torch_dtype == torch.float64 else 4
         per_slice_bytes = max(4096, h_dim * w_dim * elem_bytes * 24)
-        init_batch = adaptive_gpu_scaled_batch(
-            per_item_bytes=per_slice_bytes,
-            default_batch=512 if is_cuda_dev else 128,
-            min_batch=16 if resolved == "mps" else 32,
-            max_batch=1024 if is_cuda_dev else 256,
-            device=dev,
-        )
-        g0_t = torch.as_tensor(g0, device=dev, dtype=torch_dtype).unsqueeze(0)
-        g1_t = torch.as_tensor(g1, device=dev, dtype=torch_dtype).unsqueeze(0)
-
-        def _gpu_chunk(start: int, end: int) -> np.ndarray:
-            sub_np = np.ascontiguousarray(flat[start:end])
-            x_t = torch.from_numpy(sub_np).to(device=dev, dtype=torch_dtype)
-            img_c1 = _gibbs_1d_batch_torch(x_t, axis=1, n_points=n_points)
-            img_c0 = _gibbs_1d_batch_torch(x_t, axis=0, n_points=n_points)
-            c1 = torch.fft.fft2(img_c1, dim=(-2, -1))
-            c0 = torch.fft.fft2(img_c0, dim=(-2, -1))
-            comb = torch.fft.fftshift(c1, dim=(-2, -1)) * g1_t + torch.fft.fftshift(c0, dim=(-2, -1)) * g0_t
-            res = torch.abs(torch.fft.ifft2(comb, dim=(-2, -1)))
-            return res.detach().cpu().numpy().astype(flat.dtype, copy=False)
-
-        def _cuda_chunk(start: int, end: int) -> np.ndarray:
-            try:
-                return _gpu_chunk(start, end)
-            except Exception as exc:
-                if is_cuda_oom(exc):
-                    # C6/D8: release the CUDA and the MPS allocator cache before the chunk is halved and retried.
-                    empty_gpu_cache_safely()
-                raise
-
-        def _cpu_fallback_chunk(start: int, end: int) -> np.ndarray:
-            if explicit_cuda:
-                raise RuntimeError("Gibbs CUDA chunk failed under explicit CUDA mode.")
-            return _run_cpu_batches(slice(start, end))
-
+        if is_cuda_dev:
+            init_batch = adaptive_cuda_scaled_batch(
+                per_item_bytes=per_slice_bytes,
+                default_batch=512,
+                min_batch=32,
+                max_batch=1024,
+                device=dev,
+                windows_tdr_cap=128,
+                fp64=(torch_dtype == torch.float64),
+                consumer_fp64_tdr_cap=64,
+            )
+        else:
+            init_batch = adaptive_gpu_scaled_batch(
+                per_item_bytes=per_slice_bytes,
+                default_batch=128,
+                min_batch=16,
+                max_batch=256,
+                device=dev,
+            )
+        g0_t = None
+        g1_t = None
         try:
+            g0_t = torch.as_tensor(g0, device=dev, dtype=torch_dtype).unsqueeze(0)
+            g1_t = torch.as_tensor(g1, device=dev, dtype=torch_dtype).unsqueeze(0)
+
+            def _gpu_chunk(start: int, end: int) -> np.ndarray:
+                sub_np = np.ascontiguousarray(flat[start:end])
+                x_t = torch.from_numpy(sub_np).to(device=dev, dtype=torch_dtype)
+                img_c1 = _gibbs_1d_batch_torch(x_t, axis=1, n_points=n_points)
+                img_c0 = _gibbs_1d_batch_torch(x_t, axis=0, n_points=n_points)
+                c1 = torch.fft.fft2(img_c1, dim=(-2, -1))
+                c0 = torch.fft.fft2(img_c0, dim=(-2, -1))
+                comb = torch.fft.fftshift(c1, dim=(-2, -1)) * g1_t + torch.fft.fftshift(c0, dim=(-2, -1)) * g0_t
+                res = torch.abs(torch.fft.ifft2(comb, dim=(-2, -1)))
+                return res.detach().cpu().numpy().astype(flat.dtype, copy=False)
+
+            def _cuda_chunk(start: int, end: int) -> np.ndarray:
+                try:
+                    return _gpu_chunk(start, end)
+                except Exception as exc:
+                    if is_cuda_oom(exc):
+                        # C6/D8: release the CUDA and the MPS allocator cache before the chunk is halved and retried.
+                        empty_gpu_cache_safely()
+                    raise
+
+            def _cpu_fallback_chunk(start: int, end: int) -> np.ndarray:
+                if explicit_cuda:
+                    raise RuntimeError("Gibbs CUDA chunk failed under explicit CUDA mode.")
+                return _run_cpu_batches(slice(start, end))
+
             chunks = run_cuda_chunked_with_oom_fallback(
                 n_slices,
                 initial_chunk_size=init_batch,
@@ -1128,6 +1186,11 @@ def gibbs_removal_accelerated(
                 cpu_fallback_fn=None if explicit_cuda else _cpu_fallback_chunk,
             )
             flat[:, :, :] = np.concatenate(chunks, axis=0) if chunks else flat
+        except Exception as exc:
+            if explicit_cuda or not is_cuda_oom(exc):
+                raise
+            empty_gpu_cache_safely()
+            flat[:, :, :] = _run_cpu_batches(slice(0, n_slices))
         finally:
             del g0_t, g1_t
             empty_gpu_cache_safely()

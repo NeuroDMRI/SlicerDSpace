@@ -524,8 +524,19 @@ def _is_optimized_standalone_executable(executable: Path | str | None) -> bool:
     """True when ``executable`` is the bundled standalone optimized CPU UKF binary."""
     if not executable:
         return False
-    parts = [part.lower() for part in Path(executable).parts]
-    return "bundled-runtimes" in parts and any(part.startswith("ukf-") for part in parts)
+    path = Path(executable)
+    parts = [part.lower() for part in path.parts]
+    if "bundled-runtimes" in parts and any(part.startswith("ukf-") for part in parts):
+        return True
+    try:
+        runtime_json = path.parent.parent / "runtime.json"
+        if runtime_json.is_file():
+            payload = json.loads(runtime_json.read_text(encoding="utf-8"))
+            if isinstance(payload, dict) and str(payload.get("kind", "")).strip().lower() == "ukf-standalone":
+                return True
+    except Exception:
+        pass
+    return False
 
 
 def resolve_adaptive_cpu_num_threads(

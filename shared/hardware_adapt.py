@@ -136,11 +136,78 @@ def query_gpu_free_total_bytes(device: Any = None) -> tuple[int, int] | None:
     return query_mps_free_total_bytes()
 
 
+_DATACENTER_HIGH_FP64_GPU_MARKERS = (
+    "H100",
+    "H200",
+    "H800",
+    "A100",
+    "A800",
+    "A30",
+    "V100",
+    "GV100",
+    "P100",
+    "GP100",
+    "B100",
+    "B200",
+    "GB200",
+    "GH200",
+    "TITAN V",
+    "TESLA K",
+)
+
+
+def is_consumer_fp64_cuda_gpu(device: Any = None) -> bool:
+    """Return True when ``device`` is a consumer/workstation NVIDIA GPU with 1/64 FP64 throughput.
+
+    Datacenter GPUs with 1/2 FP64 units (H100, H200, A100, A30, V100, P100, B100/B200,
+    TITAN V) return False so server FP64 workloads stay at full throughput.
+    """
+    try:
+        import torch
+
+        if not torch.cuda.is_available():
+            return False
+        dev = torch.device("cuda" if device is None else device)
+        if dev.type != "cuda":
+            return False
+        idx = torch.cuda.current_device() if dev.index is None else int(dev.index)
+        name = str(torch.cuda.get_device_name(idx) or "").upper()
+        if not name:
+            return os.name == "nt"
+        if any(marker in name for marker in _DATACENTER_HIGH_FP64_GPU_MARKERS):
+            return False
+        return True
+    except Exception:
+        return False
+
+
+def should_enable_cudnn_benchmark(
+    device: Any = None,
+    *,
+    min_free_gib: float = 6.0,
+    windows_min_free_gib: float = 8.0,
+) -> bool:
+    """Enable cuDNN benchmark only when free VRAM comfortably covers algorithm-search workspaces.
+
+    On 4-8 GiB Windows WDDM GPUs (where DWM + Slicer 3D OpenGL leave only 3.0-6.8 GiB free),
+    ``cudnn.benchmark = True`` can allocate large temporary workspaces that trigger OOM or
+    silent WDDM shared-RAM spillover.
+    """
+    info = query_cuda_free_total_bytes(device)
+    if info is None:
+        return os.name != "nt"
+    free_b, _ = info
+    threshold_gib = float(windows_min_free_gib) if os.name == "nt" else float(min_free_gib)
+    return free_b >= int(threshold_gib * GIB)
+
+
 def is_cuda_oom(exc: BaseException) -> bool:
     """Return True when ``exc`` represents a CUDA or Apple MPS out-of-memory condition."""
     msg = str(exc).lower()
+    if "cudaerrormemoryallocation" in msg:
+        return True
     if ("out of memory" in msg or "alloc_failed" in msg) and (
-        "cuda" in msg or "cublas" in msg or "cudnn" in msg or "alloc" in msg or "mps" in msg
+        "cuda" in msg or "cublas" in msg or "cudnn" in msg or "cusolver" in msg or "alloc" in msg or "mps" in msg
     ):
         return True
     if "mps backend out of memory" in msg or "invalid buffer size" in msg or "mtlbuffer" in msg:
@@ -233,16 +300,36 @@ def adaptive_cuda_scaled_batch(
     safety_fraction: float = 0.30,
     device: Any = None,
     windows_tdr_cap: int | None = None,
+    fp64: bool = False,
+    consumer_fp64_tdr_cap: int | None = None,
 ) -> int:
-    """Scale batch size down on low-VRAM GPUs while keeping ``default_batch`` when VRAM suffices."""
+    """Scale batch size down on low-VRAM GPUs while keeping ``default_batch`` when VRAM suffices.
+
+    On Windows WDDM (``os.name == 'nt'``), bounds batch sizes by ``windows_tdr_cap`` (and further by
+    ``consumer_fp64_tdr_cap`` when ``fp64=True`` on 1/64-FP64 consumer GeForce GPUs) to avoid
+    2-second WDDM TDR driver resets and silent shared-GPU-memory spillover into system RAM.
+    On Linux/POSIX (including H100/A100 servers), TDR caps are never applied.
+    """
     base = max(int(min_batch), min(int(max_batch), int(default_batch)))
-    if os.name == "nt" and windows_tdr_cap is not None:
-        base = max(int(min_batch), min(base, int(windows_tdr_cap)))
+    if os.name == "nt":
+        if windows_tdr_cap is not None:
+            base = max(int(min_batch), min(base, int(windows_tdr_cap)))
+        if fp64 and is_consumer_fp64_cuda_gpu(device):
+            fp64_cap = consumer_fp64_tdr_cap
+            if fp64_cap is None and windows_tdr_cap is not None:
+                fp64_cap = max(int(min_batch), int(windows_tdr_cap) // 4)
+            if fp64_cap is not None:
+                base = max(int(min_batch), min(base, int(fp64_cap)))
     info = query_cuda_free_total_bytes(device)
     if info is None:
         return base
     free_b, _ = info
-    budget = max(int(32 * MIB), int(free_b * float(safety_fraction)))
+    eff_safety = float(safety_fraction)
+    if os.name == "nt" and free_b < 10 * GIB:
+        # Leave extra headroom on 4-8 GiB WDDM GPUs so DWM + Slicer OpenGL never push
+        # PyTorch allocations into WDDM shared system RAM (20x slowdown).
+        eff_safety = min(eff_safety, 0.25)
+    budget = max(int(32 * MIB), int(free_b * eff_safety))
     max_safe = max(int(min_batch), budget // max(1, int(per_item_bytes)))
     return max(int(min_batch), min(base, max_safe))
 

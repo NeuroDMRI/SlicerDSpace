@@ -57,7 +57,12 @@ class WebsiteEditorialCopyTests(unittest.TestCase):
         self.assertIn('background: transparent;', root_rule)
         self.assertIn('border: 0;', root_rule)
         self.assertIn('box-shadow: none;', root_rule)
+        self.assertIn('--ic-btn-bg: #000000;', root_rule)
+        self.assertNotIn('linear-gradient', css)
+        self.assertNotIn('radial-gradient', css)
         self.assertIn('[data-theme="light"] .installer-customizer', css)
+        self.assertNotIn('From installation to your first result.', self.source)
+        self.assertNotIn('从安装到获得第一份结果。', zh_source)
 
     def test_removed_sections_leave_no_dangling_navigation(self):
         for name in ("idea", "workflows", "status", "performance-notes", "slicer"):

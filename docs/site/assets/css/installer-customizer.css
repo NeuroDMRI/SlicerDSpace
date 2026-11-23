@@ -1,36 +1,30 @@
 /* SlicerDSpace direct OS installer download buttons.
- * Borderless surface mount (no outer wrapper box); harmonious dark-editorial palette
- * with full explicit light-mode token parity.
+ * Borderless surface mount (no outer wrapper box); flat solid pure-black buttons
+ * with zero gradients and crisp monochrome hierarchy.
  */
 
 .installer-customizer {
-  --ic-ink: var(--text, #ece8df);
+  --ic-ink: #e4e4e7;
   --ic-ink-strong: #ffffff;
-  --ic-muted: #adb6c2;
-  --ic-subtle: #909ba8;
-  --ic-accent: #7aa7ff;
-  --ic-accent-strong: #5b8cff;
+  --ic-muted: #a1a1aa;
+  --ic-subtle: #71717a;
+  --ic-accent: #ffffff;
+  --ic-accent-strong: #e4e4e7;
   --ic-success: #46d38a;
-  --ic-btn-bg: linear-gradient(180deg, rgba(25, 33, 45, .94) 0%, rgba(15, 20, 29, .97) 100%);
-  --ic-btn-bg-hover: linear-gradient(180deg, rgba(33, 43, 59, .98) 0%, rgba(21, 28, 40, .99) 100%);
-  --ic-btn-border: rgba(236, 232, 223, .17);
-  --ic-btn-border-hover: rgba(122, 167, 255, .68);
-  --ic-btn-shadow: 0 2px 10px rgba(0, 0, 0, .34), inset 0 1px 0 rgba(255, 255, 255, .06);
-  --ic-btn-shadow-hover: 0 12px 28px rgba(0, 0, 0, .50), 0 0 0 1px rgba(91, 140, 255, .22), inset 0 1px 0 rgba(255, 255, 255, .10);
-  --ic-detected-border: rgba(91, 140, 255, .48);
-  --ic-detected-glow: radial-gradient(240px 92px at 14% 0%, rgba(91, 140, 255, .15), transparent 72%);
-  --ic-icon-bg: rgba(236, 232, 223, .07);
-  --ic-icon-border: rgba(236, 232, 223, .12);
-  --ic-icon-bg-hover: rgba(91, 140, 255, .16);
-  --ic-icon-border-hover: rgba(91, 140, 255, .40);
-  --ic-badge-bg: rgba(91, 140, 255, .16);
-  --ic-badge-border: rgba(91, 140, 255, .40);
-  --ic-badge-ink: #b6d0ff;
-  --ic-arrow-ink: #b9c3cf;
-  --ic-arrow-bg: rgba(236, 232, 223, .065);
-  --ic-arrow-bg-hover: rgba(91, 140, 255, .20);
-  --ic-success-bg: rgba(70, 211, 138, .15);
-  --ic-success-border: rgba(70, 211, 138, .48);
+  --ic-btn-bg: #000000;
+  --ic-btn-bg-hover: #121316;
+  --ic-btn-border: rgba(255, 255, 255, .18);
+  --ic-btn-border-hover: rgba(255, 255, 255, .48);
+  --ic-btn-shadow: none;
+  --ic-btn-shadow-hover: 0 8px 20px rgba(0, 0, 0, .42);
+  --ic-detected-border: rgba(255, 255, 255, .38);
+  --ic-icon-ink: #ffffff;
+  --ic-badge-bg: rgba(255, 255, 255, .10);
+  --ic-badge-border: rgba(255, 255, 255, .20);
+  --ic-badge-ink: #e4e4e7;
+  --ic-arrow-ink: #a1a1aa;
+  --ic-arrow-ink-hover: #ffffff;
+  --ic-success-border: rgba(70, 211, 138, .55);
 
   max-width: 58em;
   margin: 0 0 24px;
@@ -47,38 +41,32 @@
   margin: 18px 0 8px;
 }
 
-/* Explicit light-mode parity when mounted on a light theme or light surface. */
+/* Explicit light-mode parity: flat pure-black buttons with zero gradients on light surfaces. */
 [data-theme="light"] .installer-customizer,
 .theme-light .installer-customizer,
 .light-mode .installer-customizer,
 .installer-customizer.is-light {
-  --ic-ink: #0f172a;
-  --ic-ink-strong: #020617;
-  --ic-muted: #475569;
-  --ic-subtle: #64748b;
-  --ic-accent: #2563eb;
-  --ic-accent-strong: #1d4ed8;
-  --ic-success: #15803d;
-  --ic-btn-bg: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
-  --ic-btn-bg-hover: #ffffff;
-  --ic-btn-border: rgba(15, 23, 42, .15);
-  --ic-btn-border-hover: rgba(37, 99, 235, .58);
-  --ic-btn-shadow: 0 1px 3px rgba(15, 23, 42, .06), 0 4px 12px rgba(15, 23, 42, .04);
-  --ic-btn-shadow-hover: 0 10px 24px rgba(15, 23, 42, .10), 0 0 0 1px rgba(37, 99, 235, .18);
-  --ic-detected-border: rgba(37, 99, 235, .44);
-  --ic-detected-glow: radial-gradient(240px 92px at 14% 0%, rgba(37, 99, 235, .08), transparent 72%);
-  --ic-icon-bg: rgba(15, 23, 42, .045);
-  --ic-icon-border: rgba(15, 23, 42, .09);
-  --ic-icon-bg-hover: rgba(37, 99, 235, .10);
-  --ic-icon-border-hover: rgba(37, 99, 235, .28);
-  --ic-badge-bg: rgba(37, 99, 235, .09);
-  --ic-badge-border: rgba(37, 99, 235, .28);
-  --ic-badge-ink: #1d4ed8;
-  --ic-arrow-ink: #475569;
-  --ic-arrow-bg: rgba(15, 23, 42, .05);
-  --ic-arrow-bg-hover: rgba(37, 99, 235, .12);
-  --ic-success-bg: rgba(21, 128, 61, .10);
-  --ic-success-border: rgba(21, 128, 61, .42);
+  --ic-ink: #e4e4e7;
+  --ic-ink-strong: #ffffff;
+  --ic-muted: #a1a1aa;
+  --ic-subtle: #8c8c96;
+  --ic-accent: #ffffff;
+  --ic-accent-strong: #18181b;
+  --ic-success: #46d38a;
+  --ic-btn-bg: #000000;
+  --ic-btn-bg-hover: #18181b;
+  --ic-btn-border: #18181b;
+  --ic-btn-border-hover: #000000;
+  --ic-btn-shadow: none;
+  --ic-btn-shadow-hover: 0 8px 20px rgba(0, 0, 0, .18);
+  --ic-detected-border: #3f3f46;
+  --ic-icon-ink: #ffffff;
+  --ic-badge-bg: rgba(255, 255, 255, .12);
+  --ic-badge-border: rgba(255, 255, 255, .24);
+  --ic-badge-ink: #f4f4f5;
+  --ic-arrow-ink: #a1a1aa;
+  --ic-arrow-ink-hover: #ffffff;
+  --ic-success-border: #15803d;
   color-scheme: light;
 }
 
@@ -121,43 +109,47 @@
 .ic-dl-btn {
   position: relative;
   display: grid;
-  grid-template-columns: 38px minmax(0, 1fr) 28px;
+  grid-template-columns: 28px minmax(0, 1fr) 22px;
   align-items: center;
   gap: 12px;
   width: 100%;
   min-width: 0;
-  padding: 15px 15px 15px 14px;
+  padding: 15px 16px;
   text-align: left;
   color: var(--ic-ink);
-  background: var(--ic-btn-bg);
+  background-color: var(--ic-btn-bg);
+  background-image: none;
   border: 1px solid var(--ic-btn-border);
-  border-radius: 12px;
+  border-radius: 10px;
   box-shadow: var(--ic-btn-shadow);
   font-family: var(--f-body);
   cursor: pointer;
   appearance: none;
   -webkit-appearance: none;
   transition:
-    transform 170ms cubic-bezier(.22, 1, .36, 1),
-    border-color 170ms ease,
-    background 170ms ease,
-    box-shadow 170ms ease;
+    transform 150ms cubic-bezier(.22, 1, .36, 1),
+    border-color 150ms ease,
+    background-color 150ms ease,
+    box-shadow 150ms ease;
 }
 
 .ic-dl-btn.is-detected {
-  background: var(--ic-detected-glow), var(--ic-btn-bg);
+  background-color: var(--ic-btn-bg);
+  background-image: none;
   border-color: var(--ic-detected-border);
 }
 
 .ic-dl-btn:hover:not(:disabled) {
-  transform: translateY(-2px);
-  background: var(--ic-btn-bg-hover);
+  transform: translateY(-1.5px);
+  background-color: var(--ic-btn-bg-hover);
+  background-image: none;
   border-color: var(--ic-btn-border-hover);
   box-shadow: var(--ic-btn-shadow-hover);
 }
 
 .ic-dl-btn.is-detected:hover:not(:disabled) {
-  background: var(--ic-detected-glow), var(--ic-btn-bg-hover);
+  background-color: var(--ic-btn-bg-hover);
+  background-image: none;
 }
 
 .ic-dl-btn:active:not(:disabled) {
@@ -174,35 +166,23 @@
   opacity: .84;
 }
 
-/* ---------- OS glyph tile ---------- */
+/* ---------- OS glyph ---------- */
 .ic-dl-icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 38px;
-  height: 38px;
-  border-radius: 9px;
-  background: var(--ic-icon-bg);
-  border: 1px solid var(--ic-icon-border);
-  color: var(--ic-ink);
+  width: 28px;
+  height: 28px;
+  background: transparent;
+  border: 0;
+  color: var(--ic-icon-ink);
   flex: none;
-  transition: background 170ms ease, border-color 170ms ease, color 170ms ease;
-}
-
-.ic-dl-btn.is-detected .ic-dl-icon {
-  color: var(--ic-ink-strong);
-}
-
-.ic-dl-btn:hover:not(:disabled) .ic-dl-icon {
-  background: var(--ic-icon-bg-hover);
-  border-color: var(--ic-icon-border-hover);
-  color: var(--ic-ink-strong);
 }
 
 .ic-dl-icon svg {
   display: block;
-  width: 20px;
-  height: 20px;
+  width: 22px;
+  height: 22px;
 }
 
 /* ---------- OS label, badge & metadata ---------- */
@@ -217,7 +197,7 @@
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 7px;
   min-width: 0;
 }
 
@@ -271,23 +251,21 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
-  border-radius: 7px;
-  background: var(--ic-arrow-bg);
+  width: 22px;
+  height: 22px;
+  background: transparent;
   color: var(--ic-arrow-ink);
   flex: none;
-  transition: background 170ms ease, color 170ms ease, transform 170ms ease;
+  transition: color 150ms ease, transform 150ms ease;
 }
 
 .ic-dl-btn:hover:not(:disabled) .ic-dl-arrow {
-  background: var(--ic-arrow-bg-hover);
-  color: var(--ic-accent);
+  color: var(--ic-arrow-ink-hover);
   transform: translateY(1.5px);
 }
 
 .ic-dl-btn.is-busy .ic-dl-meta {
-  color: var(--ic-accent);
+  color: var(--ic-ink-strong);
 }
 
 .ic-dl-btn.is-downloaded {
@@ -295,7 +273,6 @@
 }
 
 .ic-dl-btn.is-downloaded .ic-dl-arrow {
-  background: var(--ic-success-bg);
   color: var(--ic-success);
   transform: none;
 }
@@ -333,7 +310,6 @@
 
 @media (prefers-reduced-motion: reduce) {
   .ic-dl-btn,
-  .ic-dl-icon,
   .ic-dl-arrow {
     transition: none;
   }

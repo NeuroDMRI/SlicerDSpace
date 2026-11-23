@@ -121,7 +121,6 @@
   "Open the full-size product map": "查看完整的方法关系图",
   "Product map: the methods in five columns (microstructure, anatomy, tractography, bundles, connectome), each with what it makes, and arrows for the inputs each one reads.": "方法关系图：微结构、解剖、纤维追踪、纤维束和连接组五类方法及其输入与输出。",
   "What each method makes and what it reads. Free water, NODDI and DKI need at least two non-zero shells; DKI counts only shells up to 2500 s/mm².": "各方法的输入与输出。自由水、NODDI 和 DKI 至少需要两个非零壳层；DKI 仅计入不超过 2500 s/mm² 的壳层。",
-  "From installation to your first result.": "从安装到获得第一份结果。",
   "The repository is private during pre-release; you need access to clone it or open its links.": "预发布期间仓库为私有状态，克隆或打开仓库链接需要访问权限。",
   "Install, run and review with your Agent.": "让 Agent 协助安装、分析与结果检查。",
   "(Recommended)": "（推荐）",

@@ -118,8 +118,8 @@
       macos_arm64_base: {
         filename: 'SlicerDSpace-v0.1.1-macOS-arm64.tar.gz',
         url: RELEASE_BASE + '/SlicerDSpace-v0.1.1-macOS-arm64.tar.gz',
-        size_bytes: 1467545241,
-        sha256: '8251b7908310e21d8140c4439e28cb2d8ace55f4f4d6f269996dc349e82156b9',
+        size_bytes: 1468487138,
+        sha256: 'fdfc2a668bb1963fff8bf13d571ad1cfab1c7df1be8440b05b85fa8f50cef917',
         parts: []
       }
     }
@@ -135,7 +135,7 @@
       modelPlaceholder: '~/Library/Application Support/SlicerDSpace/model-assets',
       setupZipName: 'SlicerDSpaceSetup-macOS.zip',
       scriptName: 'Install-SlicerDSpace.command',
-      baseEstimateBytes: 1467545241
+      baseEstimateBytes: 1468487138
     },
     windows: {
       label: 'Windows',

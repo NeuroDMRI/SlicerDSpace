@@ -38,8 +38,8 @@
       "mode": "base",
       "filename": "SlicerDSpace-v0.1.1-macOS-arm64.tar.gz",
       "url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v0.1.1/SlicerDSpace-v0.1.1-macOS-arm64.tar.gz",
-      "size_bytes": 1467545241,
-      "sha256": "8251b7908310e21d8140c4439e28cb2d8ace55f4f4d6f269996dc349e82156b9",
+      "size_bytes": 1468487138,
+      "sha256": "fdfc2a668bb1963fff8bf13d571ad1cfab1c7df1be8440b05b85fa8f50cef917",
       "published": true,
       "parts": []
     }
@@ -49,33 +49,33 @@
       "os": "windows",
       "filename": "SlicerDSpaceSetup-Windows.zip",
       "url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v0.1.1/SlicerDSpaceSetup-Windows.zip",
-      "size_bytes": 121649,
-      "sha256": "ea69a5985449d453212e155dd2646207766e3116f91c99af355eba9cd06c76a1",
+      "size_bytes": 121639,
+      "sha256": "968f64e104e61f40d3eca34836859a9e5d88e33c370dc80c03d15c52e2ec9533",
       "published": true
     },
     "linux": {
       "os": "linux",
       "filename": "SlicerDSpaceSetup-Linux.zip",
       "url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v0.1.1/SlicerDSpaceSetup-Linux.zip",
-      "size_bytes": 121655,
-      "sha256": "9bccd80f54b7ccdae8f9568a918867673d01de780735bec8d4866f2553d948d2",
+      "size_bytes": 121645,
+      "sha256": "6fffba19076863acb0f19ff24d2d8f6b98cb1e42bba2f108fd26ad1d0eb0b4ac",
       "published": true
     },
     "macos": {
       "os": "macos",
       "filename": "SlicerDSpaceSetup-macOS.zip",
       "url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v0.1.1/SlicerDSpaceSetup-macOS.zip",
-      "size_bytes": 149882,
-      "sha256": "476ccdd1dcd6a4f91d7f16d72d711bb65c2d4d0cd91357f11bff37621b75e433",
+      "size_bytes": 149870,
+      "sha256": "7cf7c813ca26f1c5886fc40a50f8340e960ed1b2f261c9c93a0de19486b97261",
       "published": true
     }
   },
   "code_overlay": {
     "filename": "SlicerDSpace-v0.1.1-CodeOverlay.tar.gz",
     "url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v0.1.1/SlicerDSpace-v0.1.1-CodeOverlay.tar.gz",
-    "size_bytes": 3694700,
-    "sha256": "65ff694637070419f2ac4202ec8aa4e6b850af6a2fbe5aff9594824cc20b6ef8",
-    "code_sha256": "1d4f4ccefbdd46531738d3a691c8b7f24af612e24a23d8998e88e67f2c4141fe",
+    "size_bytes": 3694695,
+    "sha256": "43ba615d3054065aed34c2dbe5aac48d85a4138a03f68ccfb3dbc1ac4e1b6623",
+    "code_sha256": "4930ced03c2ab51f62111ad194bed82bdaf9999c58a8be870c59fa9ab4d537af",
     "runtime_abi_version": 1,
     "version": "0.1.1"
   }

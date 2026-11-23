@@ -12,6 +12,11 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+#
+# Modified by the SlicerDSpace project (see THIRD_PARTY_NOTICES.md /
+# licenses/NOTICE-FastSurfer.txt): competitive maxout operations now use
+# elementwise torch.maximum instead of allocating 5D concatenated tensors and
+# discarding argmax indices, preserving bit-identical inference results.
 
 
 # IMPORTS
@@ -95,19 +100,13 @@ class CompetitiveDenseBlock(nn.Module):
         # Convolution block 1
         x0 = self.conv0(x0)
         x1_bn = self.bn1(x0)
-        x0_bn = torch.unsqueeze(x, 4)
-        x1_bn = torch.unsqueeze(x1_bn, 4)
-        x1 = torch.cat((x1_bn, x0_bn), dim=4)  # Concatenate along the 5th dimension NB x C x H x W x F
-        x1_max, _ = torch.max(x1, 4)
+        x1_max = torch.maximum(x1_bn, x)
         x1 = self.prelu(x1_max)
 
         # Convolution block 2
         x1 = self.conv1(x1)
         x2_bn = self.bn2(x1)
-        x2_bn = torch.unsqueeze(x2_bn, 4)
-        x1_max = torch.unsqueeze(x1_max, 4)
-        x2 = torch.cat((x2_bn, x1_max), dim=4)  # Concatenating along the 5th dimension
-        x2_max, _ = torch.max(x2, 4)
+        x2_max = torch.maximum(x2_bn, x1_max)
         x2 = self.prelu(x2_max)
 
         # Convolution block 3 (end with batch-normed output to allow maxout across skip-connections)
@@ -196,10 +195,7 @@ class CompetitiveDenseBlockInput(nn.Module):
         x1 = self.conv1(x1)
         x2_bn = self.bn2(x1)
         # First Maxout
-        x1_bn = torch.unsqueeze(x1_bn, 4)
-        x2_bn = torch.unsqueeze(x2_bn, 4)  # Add Singleton Dimension along 5th
-        x2 = torch.cat((x2_bn, x1_bn), dim=4)  # Concatenating along the 5th dimension
-        x2_max, _ = torch.max(x2, 4)
+        x2_max = torch.maximum(x2_bn, x1_bn)
         x2 = self.prelu(x2_max)
 
         # Convolution block 3
@@ -301,11 +297,7 @@ class CompetitiveDecoderBlock(CompetitiveDenseBlock):
             unpool = unpool.view(n, c, h_out, w_out)
         else:
             unpool = self.unpool(x, indices)
-        unpool = torch.unsqueeze(unpool, 4)
-
-        out_block = torch.unsqueeze(out_block, 4)
-        concat = torch.cat((unpool, out_block), dim=4)  # Competitive Concatenation
-        concat_max, _ = torch.max(concat, 4)
+        concat_max = torch.maximum(unpool, out_block)
         out_block = super(CompetitiveDecoderBlock, self).forward(concat_max)
 
         return out_block

@@ -28,9 +28,11 @@ from collections import OrderedDict
 
 
 def _fuse_backbone_features(value, backbones, slot):
-    # Keep the original operand order and max reduction, but copy each input once.
-    values = [value.unsqueeze(4)] + [result[slot].unsqueeze(4) for result in backbones]
-    return torch.max(torch.cat(values, dim=4), 4)[0]
+    # Elementwise max across fused encoder and per-modality backbones without 5D temporary allocations.
+    out = value
+    for result in backbones:
+        out = torch.maximum(out, result[slot])
+    return out
 
 
 class FastSurferCNN(nn.Module):

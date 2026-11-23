@@ -41,12 +41,19 @@ class ModelBundle:
 def load_torch_model(path: Path, device: str) -> TorchScriptModel:
     if not path.exists():
         raise FileNotFoundError(f"Missing model: {path}")
-    if str(device).startswith("cuda"):
+    from shared.hardware_adapt import enable_cpu_flush_denormal, zero_subnormal_module_weights
+
+    dev_str = str(device).lower()
+    if dev_str.startswith("cuda"):
         torch.backends.cuda.matmul.allow_tf32 = False
         torch.backends.cudnn.allow_tf32 = False
         torch.backends.cudnn.benchmark = True
+    elif dev_str.startswith("cpu"):
+        enable_cpu_flush_denormal(torch)
     module = torch.jit.load(path.as_posix(), map_location=device)
     module.eval()
+    if dev_str.startswith("cpu"):
+        zero_subnormal_module_weights(module)
     return TorchScriptModel(module=module, device=device)
 
 

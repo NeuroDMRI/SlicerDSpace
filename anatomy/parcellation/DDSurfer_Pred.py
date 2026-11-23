@@ -60,6 +60,7 @@ from shared.hardware_adapt import (
     optimal_cpu_torch_threads,
     query_cuda_free_total_bytes,
     query_gpu_free_total_bytes,
+    zero_subnormal_module_weights,
 )
 
 HELPTEXT = """
@@ -224,6 +225,8 @@ def run_network(img_filename, orig_data, prediction_probability, plane, ckpts, p
 
     print('Load backbones!')
     model.FastSurferCNNs = backbones
+    if torch.device(params_model["device"]).type == "cpu":
+        zero_subnormal_module_weights(model)
     model.to(params_model["device"])
     model.eval()
 

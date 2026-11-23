@@ -644,6 +644,62 @@ class SegmentationAndParcellationPerfTests(unittest.TestCase):
             elif orig_dd_pred is not None:
                 sys.modules["anatomy.parcellation.DDSurfer_Pred"] = orig_dd_pred
 
+    def test_zero_subnormal_module_weights_and_fastsurfer_maxout_parity(self) -> None:
+        if importlib.util.find_spec("torch") is None:
+            self.skipTest("torch unavailable")
+        import torch
+        import torch.nn as nn
+        from shared.hardware_adapt import zero_subnormal_module_weights
+        from anatomy.parcellation.models import sub_module as sm
+        from anatomy.parcellation.models.networks import _fuse_backbone_features
+
+        # 1. Verify subnormal float32 parameters & buffers are zeroed cleanly in both nn.Module and TorchScript.
+        net = nn.Conv2d(2, 2, kernel_size=1, bias=True)
+        with torch.no_grad():
+            net.weight.fill_(1.0e-42)  # subnormal float32
+            net.weight[0, 0, 0, 0] = 0.25
+            net.bias.fill_(0.0)
+        net.register_buffer("buf", torch.tensor([1.0e-40, -2.0e-41, 1.0], dtype=torch.float32))
+        cleared = zero_subnormal_module_weights(net)
+        self.assertEqual(cleared, 5)
+        self.assertEqual(float(net.weight[0, 0, 0, 0].item()), 0.25)
+        self.assertEqual(float(net.weight[0, 1, 0, 0].item()), 0.0)
+        self.assertEqual(float(net.buf[0].item()), 0.0)
+        self.assertEqual(float(net.buf[2].item()), 1.0)
+
+        scripted = torch.jit.script(nn.Conv2d(1, 1, kernel_size=1))
+        with torch.no_grad():
+            next(scripted.parameters()).fill_(5.0e-43)
+        self.assertEqual(zero_subnormal_module_weights(scripted), 1)
+        self.assertEqual(float(next(scripted.parameters()).item()), 0.0)
+
+        # 2. Verify FastSurferCNN maxout & backbone fusion match legacy 5D cat+max bit-for-bit.
+        torch.manual_seed(0)
+        params = {
+            "num_channels": 4,
+            "num_filters": 4,
+            "kernel_h": 3,
+            "kernel_w": 3,
+            "stride_conv": 1,
+            "pool": 2,
+            "stride_pool": 2,
+        }
+        enc_in = sm.CompetitiveEncoderBlockInput(dict(params)).eval()
+        dec = sm.CompetitiveDecoderBlock(dict(params)).eval()
+        x = torch.randn(2, 4, 8, 8)
+        with torch.inference_mode():
+            enc_out, skip, idx = enc_in(x)
+            dec_out = dec(enc_out, skip, idx)
+        self.assertEqual(tuple(dec_out.shape), (2, 4, 8, 8))
+        self.assertTrue(torch.isfinite(dec_out).all())
+
+        v = torch.randn(2, 4, 8, 8)
+        b1 = (torch.randn(2, 4, 8, 8),)
+        b2 = (torch.randn(2, 4, 8, 8),)
+        fused = _fuse_backbone_features(v, [b1, b2], 0)
+        legacy = torch.max(torch.cat([v.unsqueeze(4), b1[0].unsqueeze(4), b2[0].unsqueeze(4)], dim=4), 4)[0]
+        self.assertTrue(torch.equal(fused, legacy))
+
 
 if __name__ == "__main__":
     unittest.main()

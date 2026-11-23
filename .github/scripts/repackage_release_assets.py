@@ -46,6 +46,11 @@ from shared.code_updater import EXTENSION_VERSION, RUNTIME_ABI_VERSION, compute_
 GITHUB_REPO = "NeuroDMRI/SlicerDSpace"
 MODEL_ASSETS_TAG = "model-assets-v0.1.1"
 MACOS_UKF_ARCHIVE = "ukf-standalone-darwin-arm64.tar.gz"
+STANDALONE_UKF_ARCHIVES: dict[str, tuple[str, str]] = {
+    "windows-x64": ("ukf-standalone-windows-x64.zip", "ukf-windows-x64"),
+    "linux-x64": ("ukf-standalone-linux-x64.tar.gz", "ukf-linux-x64"),
+    "macos-arm64": ("ukf-standalone-darwin-arm64.tar.gz", "ukf-darwin-arm64"),
+}
 
 SOURCE_BUNDLES: dict[str, dict[str, str]] = {
     "windows-x64": {
@@ -177,6 +182,7 @@ def _should_skip_member(
     qt_root: str,
     *,
     replace_macos_ukf: bool = False,
+    replace_ukf_runtime_dir: str | None = None,
     slicer_subdir: str = "Slicer-5.10",
 ) -> bool:
     wma_root = f"{ext_prefix}/bundled-model-assets/bundles/wma"
@@ -186,6 +192,10 @@ def _should_skip_member(
         return True
     if norm_path == qt_root or norm_path.startswith(qt_root + "/"):
         return True
+    if replace_ukf_runtime_dir:
+        ukf_rt = f"{ext_prefix}/bundled-runtimes/{replace_ukf_runtime_dir}"
+        if norm_path == ukf_rt or norm_path.startswith(ukf_rt + "/"):
+            return True
     if replace_macos_ukf:
         cli_root = f"{ext_prefix}/lib/{slicer_subdir}/cli-modules"
         ukf_rt_root = f"{ext_prefix}/bundled-runtimes/ukf-darwin-arm64"
@@ -307,15 +317,29 @@ def cmd_repack_os_base(args: argparse.Namespace) -> int:
     qt_root = f"{ext_prefix}/lib/{slicer_subdir}/qt-scripted-modules"
     fresh_runtime_files = sorted(runtime_files(REPO_ROOT))
     replace_macos_ukf = (target == "macos-arm64") and (not getattr(args, "skip_macos_ukf", False))
-    macos_ukf_tar: Path | None = None
-    if replace_macos_ukf:
-        explicit_ukf = getattr(args, "macos_ukf_archive", None)
+    standalone_ukf_spec = STANDALONE_UKF_ARCHIVES.get(target)
+    standalone_ukf_archive: Path | None = None
+    standalone_ukf_dir: str | None = None
+    if standalone_ukf_spec is not None and not getattr(args, "skip_standalone_ukf", False):
+        arch_name, rt_dir_name = standalone_ukf_spec
+        standalone_ukf_dir = rt_dir_name
+        explicit_ukf = getattr(args, "macos_ukf_archive", None) if target == "macos-arm64" else getattr(args, "standalone_ukf_archive", None)
         if explicit_ukf is not None:
-            macos_ukf_tar = Path(explicit_ukf).expanduser().resolve()
-            if not macos_ukf_tar.is_file():
-                raise FileNotFoundError(f"--macos-ukf-archive not found: {macos_ukf_tar}")
+            standalone_ukf_archive = Path(explicit_ukf).expanduser().resolve()
+            if not standalone_ukf_archive.is_file():
+                raise FileNotFoundError(f"Standalone UKF archive not found: {standalone_ukf_archive}")
+        elif target == "macos-arm64" and not replace_macos_ukf:
+            standalone_ukf_archive = None
+            standalone_ukf_dir = None
         else:
-            macos_ukf_tar = _download_model_asset(MACOS_UKF_ARCHIVE, work_dir / MACOS_UKF_ARCHIVE)
+            try:
+                standalone_ukf_archive = _download_model_asset(arch_name, work_dir / arch_name)
+            except Exception as exc:
+                if target == "macos-arm64":
+                    raise
+                print(f"[warn] Standalone UKF asset {arch_name} unavailable ({exc}); keeping existing UKF.", flush=True)
+                standalone_ukf_archive = None
+                standalone_ukf_dir = None
     new_archive = out_dir / spec["out_name"]
     tmp_new = new_archive.with_name(new_archive.name + ".tmp")
     saw_qt_entry = False
@@ -333,6 +357,7 @@ def cmd_repack_os_base(args: argparse.Namespace) -> int:
                     ext_prefix,
                     qt_root,
                     replace_macos_ukf=replace_macos_ukf,
+                    replace_ukf_runtime_dir=standalone_ukf_dir if standalone_ukf_archive is not None else None,
                     slicer_subdir=slicer_subdir,
                 ):
                     continue
@@ -356,6 +381,27 @@ def cmd_repack_os_base(args: argparse.Namespace) -> int:
                 out_info.external_attr = (stat.S_IFREG | mode) << 16
                 with src.open("rb") as src_fh, new_zf.open(out_info, "w") as dst_fh:
                     shutil.copyfileobj(src_fh, dst_fh, length=1024 * 1024)
+
+            if standalone_ukf_archive is not None and standalone_ukf_dir is not None:
+                rt_prefix = f"{ext_prefix}/bundled-runtimes"
+                with zipfile.ZipFile(standalone_ukf_archive, "r") as ukf_zf:
+                    for ui in ukf_zf.infolist():
+                        if ui.is_dir():
+                            continue
+                        unorm = ui.filename.replace("\\", "/").strip("/")
+                        if not unorm or ".." in PurePosixPath(unorm).parts:
+                            continue
+                        if not (unorm == standalone_ukf_dir or unorm.startswith(standalone_ukf_dir + "/")):
+                            raise RuntimeError(f"Unexpected member inside standalone UKF archive: {unorm}")
+                        arcname = f"{rt_prefix}/{unorm}"
+                        out_info = zipfile.ZipInfo(filename=arcname, date_time=ui.date_time)
+                        mode = (ui.external_attr >> 16) & 0o777
+                        if not mode:
+                            mode = 0o755 if unorm.lower().endswith((".exe", ".dll")) else 0o644
+                        out_info.external_attr = (stat.S_IFREG | mode) << 16
+                        out_info.compress_type = zipfile.ZIP_DEFLATED
+                        with ukf_zf.open(ui, "r") as src_fh, new_zf.open(out_info, "w") as dst_fh:
+                            shutil.copyfileobj(src_fh, dst_fh, length=1024 * 1024)
     else:
         written_dirs: set[str] = set()
         with tarfile.open(old_archive, "r:*") as old_tf, tarfile.open(
@@ -372,6 +418,7 @@ def cmd_repack_os_base(args: argparse.Namespace) -> int:
                     ext_prefix,
                     qt_root,
                     replace_macos_ukf=replace_macos_ukf,
+                    replace_ukf_runtime_dir=standalone_ukf_dir if standalone_ukf_archive is not None else None,
                     slicer_subdir=slicer_subdir,
                 ):
                     continue
@@ -427,15 +474,15 @@ def cmd_repack_os_base(args: argparse.Namespace) -> int:
                 with src.open("rb") as src_fh:
                     new_tf.addfile(f_info, src_fh)
 
-            if macos_ukf_tar is not None:
+            if standalone_ukf_archive is not None and standalone_ukf_dir is not None:
                 rt_prefix = f"{ext_prefix}/bundled-runtimes"
                 _ensure_tar_dir(rt_prefix)
-                with tarfile.open(macos_ukf_tar, "r:*") as ukf_tf:
+                with tarfile.open(standalone_ukf_archive, "r:*") as ukf_tf:
                     for um in ukf_tf:
                         unorm = um.name.replace("\\", "/").strip("/")
                         if not unorm or ".." in PurePosixPath(unorm).parts:
                             continue
-                        if not (unorm == "ukf-darwin-arm64" or unorm.startswith("ukf-darwin-arm64/")):
+                        if not (unorm == standalone_ukf_dir or unorm.startswith(standalone_ukf_dir + "/")):
                             raise RuntimeError(f"Unexpected member inside standalone UKF archive: {unorm}")
                         arcname = f"{rt_prefix}/{unorm}"
                         if um.isdir():
@@ -998,7 +1045,9 @@ def main(argv: list[str] | None = None) -> int:
     p_base.add_argument("--work-dir", required=True, type=Path)
     p_base.add_argument("--out-dir", required=True, type=Path)
     p_base.add_argument("--macos-ukf-archive", default=None, type=Path, help="Optional local ukf-standalone-darwin-arm64.tar.gz path.")
+    p_base.add_argument("--standalone-ukf-archive", default=None, type=Path, help="Optional local standalone UKF archive path for target OS.")
     p_base.add_argument("--skip-macos-ukf", action="store_true", help="Do not replace macOS UKF binary during repack.")
+    p_base.add_argument("--skip-standalone-ukf", action="store_true", help="Do not inject standalone UKF binary during repack.")
     p_base.add_argument("--dry-run", action="store_true")
 
     p_sync = sub.add_parser(

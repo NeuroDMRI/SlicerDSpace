@@ -4,13 +4,14 @@ on:
   workflow_dispatch:
     inputs:
       phase:
-        description: "Phase to execute: 'os-bases' (repack code into all 3 OS base packages + overlay + website), 'code-overlay' (fast ~20s incremental code update + manifest), 'macos-ukf' (build standalone arm64 macOS UKF binary), 'setup-zips', or 'atlases'"
+        description: "Phase to execute: 'os-bases' (repack code into all 3 OS base packages + overlay + website), 'code-overlay' (fast ~20s incremental code update + manifest), 'standalone-ukf' (build optimized standalone CPU UKF for Windows/Linux/macOS), 'macos-ukf' (legacy macOS arm64 UKF), 'setup-zips', or 'atlases'"
         required: true
         type: choice
         default: "os-bases"
         options:
           - "os-bases"
           - "code-overlay"
+          - "standalone-ukf"
           - "macos-ukf"
           - "setup-zips"
           - "atlases"
@@ -30,6 +31,50 @@ permissions:
   actions: write
 
 jobs:
+  build-standalone-ukf:
+    if: github.event.inputs.phase == 'standalone-ukf'
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: windows-x64
+            os: windows-2022
+            archive: ukf-standalone-windows-x64.zip
+          - target: linux-x64
+            os: ubuntu-22.04
+            archive: ukf-standalone-linux-x64.tar.gz
+          - target: darwin-arm64
+            os: macos-15
+            archive: ukf-standalone-darwin-arm64.tar.gz
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Configure MSVC x64 developer environment (Windows)
+        if: matrix.target == 'windows-x64'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Install CMake 3.31 and Ninja build tool
+        run: |
+          python -m pip install --upgrade "cmake==3.31.6" ninja
+          cmake --version
+
+      - name: Build standalone CPU UKF (${{ matrix.target }}) & upload to model-assets-v0.1.1
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python scripts/build_ukf_standalone.py --target "${{ matrix.target }}" --work-dir "${{ runner.temp }}/ukf-work" --out-dir "${{ runner.temp }}/ukf-out"
+          gh release upload model-assets-v0.1.1 --repo "${{ github.repository }}" --clobber "${{ runner.temp }}/ukf-out/${{ matrix.archive }}" "${{ runner.temp }}/ukf-out/${{ matrix.archive }}.sha256"
+
   build-macos-ukf:
     if: github.event.inputs.phase == 'macos-ukf'
     runs-on: macos-15

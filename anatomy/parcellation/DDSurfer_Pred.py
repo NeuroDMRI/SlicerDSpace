@@ -55,6 +55,7 @@ from .models.networks import FastSurferCNN_Fuse_Unet_v3_extended
 from .device import logical_cuda_index
 from shared.hardware_adapt import (
     empty_gpu_cache_safely,
+    enable_cpu_flush_denormal,
     is_gpu_oom,
     optimal_cpu_torch_threads,
     query_cuda_free_total_bytes,
@@ -182,7 +183,7 @@ def _forward_fused_logits(model, sub_batch, *, use_cuda, device):
     try:
         _, out_list = model(sub_batch.to(target_device, non_blocking=non_blocking))
         return out_list[0].detach().cpu()
-    except RuntimeError as exc:
+    except Exception as exc:
         if target_device.type not in ("cuda", "mps") or not is_gpu_oom(exc) or sub_batch.shape[0] <= 1:
             raise
         empty_gpu_cache_safely()
@@ -190,6 +191,8 @@ def _forward_fused_logits(model, sub_batch, *, use_cuda, device):
         for idx in range(sub_batch.shape[0]):
             _, single_list = model(sub_batch[idx : idx + 1].to(target_device))
             parts.append(single_list[0].detach().cpu())
+            del single_list
+        empty_gpu_cache_safely()
         return torch.cat(parts, dim=0)
 
 
@@ -385,11 +388,7 @@ def fastsurfercnn(img_filename, save_as, logger, args):
 
     prev_torch_threads = None
     if device.type == "cpu":
-        try:
-            torch.set_flush_denormal(True)
-        except Exception:
-            pass
-    if device.type == "cpu" and not os.environ.get("SLICERDSPACE_STAGE_CPUS"):
+        enable_cpu_flush_denormal(torch)
         prev_torch_threads = torch.get_num_threads()
         torch.set_num_threads(optimal_cpu_torch_threads(max_conv_threads=16))
 
@@ -406,52 +405,59 @@ def fastsurfercnn(img_filename, save_as, logger, args):
         logger.info("Reading volume {}".format(img_filename[idx]))
         del orig_data_
 
-    # Axial
-    params_network["num_classes"] = args.num_classes_ax_cor
-    params_network["num_channels"] = args.num_channels
-    params_network["backbone_model"] = args.backbone_axial_path
-    params_network["use_cuda"] = False
-    model = FastSurferCNN_Fuse_Unet_v3_extended(params_network)
-    if model_parallel:
-        model = nn.DataParallel(model)
-    start = time.time()
-    pred_prob = run_network(img_filename, orig_data, pred_prob, "Axial", args.network_axial_path, params_model, model, logger)
-    logger.info("Axial View Tested in {:0.4f} seconds".format(time.time() - start))
-    del model
-    empty_gpu_cache_safely()
-    gc.collect()
-
-    # Coronal
-    params_network["num_classes"] = args.num_classes_ax_cor
-    params_network["num_channels"] = args.num_channels
-    params_network["backbone_model"] = args.backbone_coronal_path
-    model = FastSurferCNN_Fuse_Unet_v3_extended(params_network)
-    if model_parallel:
-        model = nn.DataParallel(model)
-    start = time.time()
-    pred_prob = run_network(img_filename,  orig_data, pred_prob, "Coronal", args.network_coronal_path, params_model, model, logger)
-    logger.info("Coronal View Tested in {:0.4f} seconds".format(time.time() - start))
-    del model
-    empty_gpu_cache_safely()
-    gc.collect()
-
-    # Sagittal
-    params_network["num_classes"] = args.num_classes_sag
-    params_network["num_channels"] = args.num_channels
-    params_network["backbone_model"] = args.backbone_sagittal_path
-    model = FastSurferCNN_Fuse_Unet_v3_extended(params_network)
-    if model_parallel:
-        model = nn.DataParallel(model)
-    start = time.time()
-    pred_prob = run_network(img_filename, orig_data, pred_prob, "Sagittal", args.network_sagittal_path, params_model, model, logger)
-    logger.info("Sagittal View Tested in {:0.4f} seconds".format(time.time() - start))
-    background_mask = orig_data[0] == -4
-    del model, orig_data
-    if prev_torch_threads is not None:
-        torch.set_num_threads(prev_torch_threads)
-    if use_cuda or use_mps:
+    model = None
+    try:
+        # Axial
+        params_network["num_classes"] = args.num_classes_ax_cor
+        params_network["num_channels"] = args.num_channels
+        params_network["backbone_model"] = args.backbone_axial_path
+        params_network["use_cuda"] = False
+        model = FastSurferCNN_Fuse_Unet_v3_extended(params_network)
+        if model_parallel:
+            model = nn.DataParallel(model)
+        start = time.time()
+        pred_prob = run_network(img_filename, orig_data, pred_prob, "Axial", args.network_axial_path, params_model, model, logger)
+        logger.info("Axial View Tested in {:0.4f} seconds".format(time.time() - start))
+        del model
+        model = None
         empty_gpu_cache_safely()
-    gc.collect()
+        gc.collect()
+
+        # Coronal
+        params_network["num_classes"] = args.num_classes_ax_cor
+        params_network["num_channels"] = args.num_channels
+        params_network["backbone_model"] = args.backbone_coronal_path
+        model = FastSurferCNN_Fuse_Unet_v3_extended(params_network)
+        if model_parallel:
+            model = nn.DataParallel(model)
+        start = time.time()
+        pred_prob = run_network(img_filename,  orig_data, pred_prob, "Coronal", args.network_coronal_path, params_model, model, logger)
+        logger.info("Coronal View Tested in {:0.4f} seconds".format(time.time() - start))
+        del model
+        model = None
+        empty_gpu_cache_safely()
+        gc.collect()
+
+        # Sagittal
+        params_network["num_classes"] = args.num_classes_sag
+        params_network["num_channels"] = args.num_channels
+        params_network["backbone_model"] = args.backbone_sagittal_path
+        model = FastSurferCNN_Fuse_Unet_v3_extended(params_network)
+        if model_parallel:
+            model = nn.DataParallel(model)
+        start = time.time()
+        pred_prob = run_network(img_filename, orig_data, pred_prob, "Sagittal", args.network_sagittal_path, params_model, model, logger)
+        logger.info("Sagittal View Tested in {:0.4f} seconds".format(time.time() - start))
+        background_mask = orig_data[0] == -4
+    finally:
+        if model is not None:
+            del model
+        del orig_data
+        if prev_torch_threads is not None:
+            torch.set_num_threads(prev_torch_threads)
+        if use_cuda or use_mps:
+            empty_gpu_cache_safely()
+        gc.collect()
 
 
     # # 保存 pred_prob 为 numpy 数组，文件名包含 subject_id

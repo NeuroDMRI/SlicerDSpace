@@ -125,12 +125,19 @@ class PreflightTests(unittest.TestCase):
                 check_device(args, {'precision': 'fp32'})
             device.assert_called_once_with(1)
         args.precision = 'fp32'
-        for free, cap in ((11, 24), (24, 7)):
+        for free, cap in ((8, 24), (11, 24)):
+            args.max_gpu_gib = cap
+            with patch('torch.cuda.is_available', return_value=True), patch('torch.cuda.device_count', return_value=2), \
+                    patch('torch.cuda.device', return_value=nullcontext()), \
+                    patch('torch.cuda.mem_get_info', return_value=(free * 1024**3, 12 * 1024**3)), \
+                    patch('torch.empty'):
+                self.assertEqual(check_device(args, {'precision': 'fp32'}), 'fp32')
+        for free, cap in ((6, 24), (24, 5)):
             args.max_gpu_gib = cap
             with patch('torch.cuda.is_available', return_value=True), patch('torch.cuda.device_count', return_value=2), \
                     patch('torch.cuda.device', return_value=nullcontext()), \
                     patch('torch.cuda.mem_get_info', return_value=(free * 1024**3, 80 * 1024**3)):
-                with self.assertRaisesRegex(RuntimeError, '8-GiB'):
+                with self.assertRaisesRegex(RuntimeError, '5.5-GiB'):
                     check_device(args, {'precision': 'fp32'})
 
     def test_slicer_layout_and_missing_modules(self):

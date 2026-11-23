@@ -26,6 +26,7 @@ from typing import Any, Callable, Optional
 from shared.external_process import (
     external_python_environment,
     find_pythonslicer,
+    native_arm64_argv,
     subprocess_no_window_kwargs,
     text_subprocess_kwargs,
     slicer_runtime_roots,
@@ -1184,11 +1185,12 @@ def run_wma_org_atlas(
                 if sys.platform == "win32" and not conversion_env.get("HOME"):
                     conversion_env["HOME"] = conversion_env.get("USERPROFILE") or str(Path.home())
                 converted = subprocess.run(
-                    conversion_command,
+                    native_arm64_argv(conversion_command, conversion_env),
                     check=True,
                     env=conversion_env,
                     capture_output=True,
                     **text_subprocess_kwargs(),
+                    **subprocess_no_window_kwargs(),
                 )
                 conversion_stdout_log.write_text(converted.stdout or "", encoding="utf-8")
                 conversion_stderr_log.write_text(converted.stderr or "", encoding="utf-8")
@@ -1279,6 +1281,7 @@ def run_wma_org_atlas(
                     env=env,
                     capture_output=True,
                     **text_subprocess_kwargs(),
+                    **subprocess_no_window_kwargs(),
                 )
                 stdout_log.write_text(completed.stdout or "", encoding="utf-8")
                 stderr_log.write_text(completed.stderr or "", encoding="utf-8")

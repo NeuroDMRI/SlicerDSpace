@@ -272,7 +272,13 @@ def _initialize_worker(threads):
     import os
     from threadpoolctl import threadpool_limits
     global _worker_thread_limit
-    for name in ('OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'MKL_NUM_THREADS'):
+    for name in (
+        'OMP_NUM_THREADS',
+        'OPENBLAS_NUM_THREADS',
+        'MKL_NUM_THREADS',
+        'VECLIB_MAXIMUM_THREADS',
+        'NUMEXPR_NUM_THREADS',
+    ):
         os.environ[name] = str(threads)
     _worker_thread_limit = threadpool_limits(limits=threads)
 
@@ -377,7 +383,32 @@ def run_mkcurve(dwi_path, bval_path, bvec_path, mask_path, output_dir, *,
                         and bool(main_file)
                         and Path(main_file).is_file()
                     )
-                    if not can_spawn or (os.name == "nt" and count < 256):
+                    use_threads = not can_spawn or (sys.platform in ("win32", "darwin") and count < 256)
+                    if not use_threads:
+                        from shared.hardware_adapt import adaptive_spawn_workers
+                        safe_spawn = adaptive_spawn_workers(
+                            eff_workers,
+                            per_worker_ram_gib=2.5,
+                            reserve_ram_gib=6.0,
+                            max_workers=max(eff_workers, 8),
+                        )
+                        if safe_spawn < eff_workers:
+                            if safe_spawn <= 1:
+                                use_threads = True
+                                eff_workers = min(eff_workers, 4)
+                                if log:
+                                    log(
+                                        f"[MK-Curve Python] Low host RAM; using {eff_workers} threads "
+                                        f"instead of {num_workers} spawned processes to avoid memory exhaustion"
+                                    )
+                            else:
+                                if log:
+                                    log(
+                                        f"[MK-Curve Python] Clamping spawned workers from {eff_workers} "
+                                        f"to {safe_spawn} for host RAM safety"
+                                    )
+                                eff_workers = safe_spawn
+                    if use_threads:
                         from concurrent.futures import ThreadPoolExecutor
                         pool = ThreadPoolExecutor(max_workers=eff_workers,
                             initializer=_initialize_worker, initargs=(worker_threads,))
@@ -432,7 +463,8 @@ def run_mkcurve(dwi_path, bval_path, bvec_path, mask_path, output_dir, *,
                 record = {"kind": "mkcurve_python_port", "status": "completed", "backend": backend,
                           "method": "author-style unconstrained WLLS, numerical 256-direction MK, synthetic-b0 correction",
                           "settings": {"threshold": threshold, "solver": solver, "device": resolved_device,
-                                       "num_workers": num_workers, "voxels_per_chunk": eff_chunk,
+                                       "num_workers": num_workers, "effective_workers": eff_workers,
+                                       "voxels_per_chunk": eff_chunk,
                                        "worker_threads": worker_threads,
                                        "chunk_schedule": chunk_schedule, "max_inflight_chunks": eff_workers,
                                        "grid_policy": "adaptive author integer grid, independent of directory name",

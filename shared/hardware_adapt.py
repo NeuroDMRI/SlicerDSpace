@@ -361,8 +361,170 @@ def adaptive_cpu_slab_z(
     return max(eff_min, min(eff_base, int(max_slices)))
 
 
-def optimal_cpu_torch_threads(reserved_cpus: int | None = None, *, max_conv_threads: int = 8) -> int:
-    """Choose PyTorch CPU intra-op thread count avoiding OpenMP contention on small 2D slices."""
+def host_total_ram_gib(*, respect_env_cap: bool = True) -> float | None:
+    """Return physical host RAM in GiB accurately across Linux, Windows, and macOS (incl. Rosetta 2)."""
+    cap_gib: float | None = None
+    if respect_env_cap:
+        cap_env = os.environ.get("SLICERDSPACE_MAX_RAM_GIB", "").strip()
+        if cap_env:
+            try:
+                parsed = float(cap_env)
+                if parsed > 0:
+                    cap_gib = parsed
+            except ValueError:
+                pass
+
+    total_gib: float | None = None
+    if sys.platform == "darwin":
+        try:
+            import subprocess
+
+            sysctl = "/usr/sbin/sysctl" if os.path.exists("/usr/sbin/sysctl") else "sysctl"
+            res = subprocess.run([sysctl, "-n", "hw.memsize"], capture_output=True, text=True, timeout=5)
+            if res.returncode == 0:
+                val = int(res.stdout.strip())
+                if val > 0:
+                    total_gib = float(val) / float(GIB)
+        except Exception:
+            pass
+    if total_gib is None:
+        try:
+            import psutil
+
+            total = int(psutil.virtual_memory().total)
+            if total > 0:
+                total_gib = float(total) / float(GIB)
+        except Exception:
+            pass
+    if total_gib is None and os.name == "nt":
+        try:
+            import ctypes
+
+            class _MemoryStatusEx(ctypes.Structure):
+                _fields_ = [
+                    ("dwLength", ctypes.c_uint32),
+                    ("dwMemoryLoad", ctypes.c_uint32),
+                    ("ullTotalPhys", ctypes.c_uint64),
+                    ("ullAvailPhys", ctypes.c_uint64),
+                    ("ullTotalPageFile", ctypes.c_uint64),
+                    ("ullAvailPageFile", ctypes.c_uint64),
+                    ("ullTotalVirtual", ctypes.c_uint64),
+                    ("ullAvailVirtual", ctypes.c_uint64),
+                    ("ullAvailExtendedVirtual", ctypes.c_uint64),
+                ]
+
+            stat = _MemoryStatusEx()
+            stat.dwLength = ctypes.sizeof(_MemoryStatusEx)
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            if kernel32.GlobalMemoryStatusEx(ctypes.byref(stat)) and stat.ullTotalPhys > 0:
+                total_gib = float(stat.ullTotalPhys) / float(GIB)
+        except Exception:
+            pass
+    if total_gib is None and hasattr(os, "sysconf"):
+        try:
+            pages = int(os.sysconf("SC_PHYS_PAGES"))
+            page_size = int(os.sysconf("SC_PAGE_SIZE"))
+            if pages > 0 and page_size > 0:
+                ratio = 1
+                if sys.platform == "darwin":
+                    try:
+                        from shared.platform_info import rosetta_page_ratio
+
+                        ratio = max(1, int(rosetta_page_ratio()))
+                    except Exception:
+                        ratio = 1
+                total_gib = float(pages * page_size * ratio) / float(GIB)
+        except (OSError, ValueError):
+            pass
+
+    if total_gib is None:
+        return cap_gib
+    return min(total_gib, cap_gib) if cap_gib is not None else total_gib
+
+
+def is_apple_silicon_host() -> bool:
+    """Return True on Apple Silicon macOS (both native arm64 and Rosetta 2)."""
+    if sys.platform != "darwin":
+        return False
+    try:
+        from shared.platform_info import host_machine
+
+        return host_machine().lower() in {"arm64", "aarch64"}
+    except Exception:
+        return False
+
+
+def enable_cpu_flush_denormal(torch_mod: Any = None) -> bool:
+    """Enable flush-to-zero for subnormal floats in PyTorch CPU kernels (prevents x86/Rosetta stalls)."""
+    try:
+        mod = torch_mod
+        if mod is None:
+            import torch as mod
+
+        fn = getattr(mod, "set_flush_denormal", None)
+        if callable(fn):
+            return bool(fn(True))
+    except Exception:
+        pass
+    return False
+
+
+def adaptive_spawn_workers(
+    requested_workers: int,
+    *,
+    per_worker_ram_gib: float = 2.5,
+    reserve_ram_gib: float = 6.0,
+    max_workers: int = 8,
+    platform_name: str | None = None,
+    total_ram_gib: float | None = None,
+    available_ram_gib: float | None = None,
+) -> int:
+    """Cap multiprocessing ``spawn`` worker count on Windows/macOS or low-RAM hosts to prevent OOM.
+
+    High-RAM Linux servers (>48 GiB total RAM) preserve ``requested_workers`` unchanged.
+    """
+    req = max(1, int(requested_workers))
+    if req <= 1:
+        return 1
+    plat = sys.platform if platform_name is None else str(platform_name).lower()
+    tot = host_total_ram_gib() if total_ram_gib is None else float(total_ram_gib)
+    is_spawn = plat in {"win32", "darwin"}
+    if not is_spawn and tot is not None and tot > 48.0:
+        return req
+    if available_ram_gib is None:
+        avail_b = query_host_available_ram_bytes()
+        avail = float(avail_b) / float(GIB) if avail_b > 0 else None
+    else:
+        avail = float(available_ram_gib)
+    # On spawn platforms (Windows/macOS), use conservative usable budget bounded by both total and available RAM.
+    if tot is not None and avail is not None:
+        usable = min(tot, max(avail + 2.0, tot * 0.65))
+    elif tot is not None:
+        usable = tot
+    elif avail is not None:
+        usable = avail
+    else:
+        return min(req, 4 if is_spawn else req)
+    if not is_spawn and usable > 48.0:
+        return req
+    budget_workers = max(1, int((usable - float(reserve_ram_gib)) // max(0.5, float(per_worker_ram_gib))))
+    if tot is not None and tot <= 12.0:
+        budget_workers = min(budget_workers, 2)
+    elif tot is not None and tot <= 20.0 and is_spawn:
+        budget_workers = min(budget_workers, 3)
+    elif tot is not None and tot <= 36.0 and is_spawn:
+        budget_workers = min(budget_workers, 4)
+    return max(1, min(req, int(max_workers), budget_workers))
+
+
+def optimal_cpu_torch_threads(
+    reserved_cpus: int | None = None,
+    *,
+    max_conv_threads: int = 8,
+    platform_name: str | None = None,
+    is_apple_silicon: bool | None = None,
+) -> int:
+    """Choose PyTorch CPU intra-op thread count avoiding OpenMP contention on small 2D slices and E-cores."""
     env_stage = os.environ.get("SLICERDSPACE_STAGE_CPUS", "").strip()
     if reserved_cpus is None and env_stage.isdigit() and int(env_stage) > 0:
         reserved_cpus = int(env_stage)
@@ -372,6 +534,13 @@ def optimal_cpu_torch_threads(reserved_cpus: int | None = None, *, max_conv_thre
         from shared.compute_schedule import available_resources
 
         cpus, _ = available_resources()
-        return max(1, min(int(cpus), int(max_conv_threads)))
+        cpus = max(1, int(cpus))
     except Exception:
-        return max(1, min(os.cpu_count() or 4, int(max_conv_threads)))
+        cpus = max(1, int(os.cpu_count() or 4))
+    plat = sys.platform if platform_name is None else str(platform_name).lower()
+    apple = is_apple_silicon_host() if is_apple_silicon is None else bool(is_apple_silicon)
+    if plat == "darwin" and apple and cpus >= 6:
+        # Leave efficiency cores headroom so OpenMP barriers do not stall behind E-cores.
+        p_cap = max(4, cpus - 2) if cpus <= 10 else max(6, (cpus * 3) // 4)
+        return max(1, min(cpus, p_cap, int(max_conv_threads)))
+    return max(1, min(cpus, int(max_conv_threads)))

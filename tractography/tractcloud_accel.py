@@ -445,15 +445,23 @@ def install_tractcloud_accelerations(pipeline_mod, resolved_device: str = "cpu")
             torch.backends.cuda.matmul.allow_tf32 = False
             torch.backends.cudnn.allow_tf32 = False
             torch.backends.cudnn.enabled = True
+        elif target_dev.type == "cpu":
+            from shared.hardware_adapt import enable_cpu_flush_denormal
+
+            enable_cpu_flush_denormal(torch)
 
         n_total = len(ds)
         if n_total == 0:
             return []
-        from shared.hardware_adapt import adaptive_cuda_scaled_batch, empty_gpu_cache_safely, is_cuda_oom
+        from shared.hardware_adapt import (
+            adaptive_gpu_scaled_batch,
+            empty_gpu_cache_safely,
+            is_gpu_oom,
+        )
 
         batch_size = int(getattr(data_loader, "batch_size", 2048) or 2048)
-        if target_dev.type == "cuda":
-            batch_size = adaptive_cuda_scaled_batch(
+        if target_dev.type in ("cuda", "mps"):
+            batch_size = adaptive_gpu_scaled_batch(
                 per_item_bytes=262144,
                 default_batch=batch_size,
                 min_batch=128,
@@ -497,21 +505,15 @@ def install_tractcloud_accelerations(pipeline_mod, resolved_device: str = "cpu")
                         if progress_callback:
                             progress_callback(min(1.0, b_idx / total_batches))
                     except RuntimeError as exc:
-                        if target_dev.type != "cuda" or not is_cuda_oom(exc) or cur_batch_size <= 64:
+                        if target_dev.type not in ("cuda", "mps") or not is_gpu_oom(exc) or cur_batch_size <= 64:
                             raise
                         empty_gpu_cache_safely()
                         cur_batch_size = max(64, cur_batch_size // 2)
             out_preds = torch.cat(preds_gpu, dim=0).cpu().numpy().tolist()
         finally:
             del preds_gpu, feat_t, knn_idx, global_t
-            if target_dev.type == "mps":
-                mps_ns = getattr(torch, "mps", None)
-                if callable(getattr(mps_ns, "synchronize", None)):
-                    mps_ns.synchronize()
-                if callable(getattr(mps_ns, "empty_cache", None)):
-                    mps_ns.empty_cache()
-            elif target_dev.type == "cuda" and torch.cuda.is_initialized():
-                torch.cuda.empty_cache()
+            if target_dev.type in ("cuda", "mps"):
+                empty_gpu_cache_safely()
         return out_preds
 
     inference_mod.extract_ras_features = fast_extract_ras_features

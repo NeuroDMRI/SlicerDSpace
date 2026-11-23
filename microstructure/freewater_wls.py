@@ -4,10 +4,52 @@
 # BSD-3-Clause; see licenses/DIPY.txt. Not an upstream DIPY release.
 """Author WLS with identical arithmetic after a diagonal-free column scaling."""
 
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
+import sys
+
 from dipy.reconst import fwdti
 import numpy as np
 
 _protocol_context = None
+
+
+def _single_thread_blas():
+    """Avoid BLAS/OpenMP oversubscription inside CPU ThreadPoolExecutor workers."""
+    try:
+        from threadpoolctl import threadpool_limits
+        return threadpool_limits(limits=1)
+    except Exception:
+        return nullcontext()
+
+
+def _resolve_fw_cpu_workers(n_voxels: int, batch_size: int = 512) -> int:
+    """Choose CPU worker count for Free-Water WLS batches respecting stage CPU caps and host RAM."""
+    if n_voxels <= batch_size:
+        return 1
+    n_batches = (int(n_voxels) + int(batch_size) - 1) // int(batch_size)
+    if n_batches <= 1:
+        return 1
+    from shared.hardware_adapt import (
+        host_total_ram_gib,
+        is_apple_silicon_host,
+        optimal_cpu_torch_threads,
+    )
+    from shared.numeric_threads import effective_cpu_threads
+
+    total_ram = host_total_ram_gib()
+    is_darwin = sys.platform == "darwin"
+    is_apple = is_apple_silicon_host()
+    if total_ram is not None and total_ram <= 12.0:
+        ram_cap = 4
+    elif total_ram is not None and total_ram > 48.0 and not is_darwin:
+        ram_cap = 16
+    elif is_apple or (total_ram is not None and total_ram <= 36.0):
+        ram_cap = optimal_cpu_torch_threads(max_conv_threads=8)
+    else:
+        ram_cap = optimal_cpu_torch_threads(max_conv_threads=8)
+    budget = effective_cpu_threads(None, default=ram_cap)
+    return max(1, min(ram_cap, budget, n_batches))
 
 
 def wls_iter(design_matrix, sig, S0, *, Diso=3e-3, mdreg=2.7e-3,
@@ -285,8 +327,9 @@ def wls_batch_fit(model, signals, *, device: str = "cpu"):
     W_c = np.ascontiguousarray(W)
     fs0_cpu = protocol.grid(0, 1, 0.1, 9)[0] if protocol is not None else None
     batch_size = 512
-    with np.errstate(over="ignore", invalid="ignore", under="ignore", divide="ignore"):
-        for start in range(0, len(fast_indices), batch_size):
+
+    def _fit_cpu_batch(start: int) -> tuple[np.ndarray, np.ndarray]:
+        with np.errstate(over="ignore", invalid="ignore", under="ignore", divide="ignore"):
             ids = fast_indices[start : start + batch_size]
             sig = signals[ids]
             w = weights_all[ids]
@@ -346,7 +389,18 @@ def wls_batch_fit(model, signals, *, device: str = "cpu"):
                     (evals, evecs[:, 0], evecs[:, 1], evecs[:, 2], f_a[:, None]), axis=-1
                 )
 
+            return ids, sub_out
+
+    n_workers = _resolve_fw_cpu_workers(len(fast_indices), batch_size)
+    batch_starts = range(0, len(fast_indices), batch_size)
+    if n_workers <= 1:
+        for start in batch_starts:
+            ids, sub_out = _fit_cpu_batch(start)
             out[ids] = sub_out
+    else:
+        with _single_thread_blas(), ThreadPoolExecutor(max_workers=n_workers) as pool:
+            for ids, sub_out in pool.map(_fit_cpu_batch, batch_starts):
+                out[ids] = sub_out
 
     return fwdti.FreeWaterTensorFit(model, out), resolved_device
 

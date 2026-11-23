@@ -120,7 +120,9 @@ def apply_threads(threads: int) -> int:
     import SimpleITK as sitk
     import torch
 
-    torch.set_num_threads(threads)
+    # Cap PyTorch intra-op threads at 16 so 256x256 2D convolutions do not thrash
+    # OpenMP barriers on 32-128 core servers while keeping <=16 thread counts exact.
+    torch.set_num_threads(min(int(threads), 16))
     sitk.ProcessObject.SetGlobalDefaultNumberOfThreads(threads)
     return threads
 
@@ -512,11 +514,11 @@ def _preload_vendored_models(model_dir: Path, resolved_device: str, pnl_inf, pnl
     return states, model
 
 
-def _hardware_adapt_helpers():
+def _load_hardware_adapt_module():
     try:
-        from shared.hardware_adapt import adaptive_cuda_scaled_batch, empty_cuda_cache_safely, is_cuda_oom
+        from shared import hardware_adapt
 
-        return adaptive_cuda_scaled_batch, empty_cuda_cache_safely, is_cuda_oom
+        return hardware_adapt
     except ImportError:
         import importlib.util as _ilu
 
@@ -526,8 +528,28 @@ def _hardware_adapt_helpers():
             if spec and spec.loader:
                 mod = _ilu.module_from_spec(spec)
                 spec.loader.exec_module(mod)
-                return mod.adaptive_cuda_scaled_batch, mod.empty_cuda_cache_safely, mod.is_cuda_oom
+                return mod
+        return None
+
+
+def _hardware_adapt_helpers():
+    mod = _load_hardware_adapt_module()
+    if mod is None:
         return None, None, None
+    return mod.adaptive_cuda_scaled_batch, mod.empty_cuda_cache_safely, mod.is_cuda_oom
+
+
+def _enable_cpu_flush_denormal_safely(torch_mod) -> bool:
+    ha = _load_hardware_adapt_module()
+    if ha is not None and hasattr(ha, "enable_cpu_flush_denormal"):
+        return bool(ha.enable_cpu_flush_denormal(torch_mod))
+    fn = getattr(torch_mod, "set_flush_denormal", None)
+    if callable(fn):
+        try:
+            return bool(fn(True))
+        except Exception:
+            return False
+    return False
 
 
 def _fast_vendored_predict(volume: np.ndarray, resolved_device: str, batch_size: int, preloaded, pnl_inf):
@@ -535,11 +557,18 @@ def _fast_vendored_predict(volume: np.ndarray, resolved_device: str, batch_size:
 
     if volume.shape != (256, 256, 256) or not np.isfinite(volume).all():
         raise ValueError("Expected a finite normalized IIT-grid volume")
-    is_cuda = str(resolved_device).startswith("cuda")
-    adapt_batch, empty_cuda_cache, is_oom = _hardware_adapt_helpers()
+    dev_str = str(resolved_device)
+    is_cuda = dev_str.startswith("cuda")
+    is_mps = dev_str.startswith("mps")
+    is_gpu = is_cuda or is_mps
+    ha = _load_hardware_adapt_module()
+    if not is_gpu:
+        _enable_cpu_flush_denormal_safely(torch)
     eff_bs = max(1, int(batch_size))
-    if is_cuda and adapt_batch is not None:
-        eff_bs = adapt_batch(128 * 1024 * 1024, eff_bs, min_batch=1, max_batch=eff_bs, device=resolved_device)
+    if is_cuda and ha is not None:
+        eff_bs = ha.adaptive_cuda_scaled_batch(128 * 1024 * 1024, eff_bs, min_batch=1, max_batch=eff_bs, device=resolved_device)
+    elif is_mps and ha is not None:
+        eff_bs = ha.adaptive_gpu_scaled_batch(128 * 1024 * 1024, eff_bs, min_batch=1, max_batch=eff_bs, device=resolved_device)
 
     states, model = preloaded
     probabilities = {}
@@ -572,11 +601,18 @@ def _fast_vendored_predict(volume: np.ndarray, resolved_device: str, batch_size:
                             output[nz_idx[start:start + len(batch_np)]] = res[:, 0].cpu().numpy()
                             start += len(batch_np)
                         except RuntimeError as exc:
-                            oom_hit = is_oom(exc) if is_oom is not None else ("out of memory" in str(exc).lower())
-                            if not is_cuda or not oom_hit or cur_step <= 1:
+                            oom_hit = (
+                                ha.is_gpu_oom(exc)
+                                if ha is not None
+                                else ("out of memory" in str(exc).lower())
+                            )
+                            if not is_gpu or not oom_hit or cur_step <= 1:
                                 raise
-                            if empty_cuda_cache is not None:
-                                empty_cuda_cache()
+                            if ha is not None:
+                                if is_cuda:
+                                    ha.empty_cuda_cache_safely()
+                                else:
+                                    ha.empty_gpu_cache_safely()
                             cur_step = max(1, cur_step // 2)
                 if not np.isfinite(output).all():
                     raise RuntimeError("CNN produced nonfinite probabilities")
@@ -584,10 +620,13 @@ def _fast_vendored_predict(volume: np.ndarray, resolved_device: str, batch_size:
     finally:
         del model
         if is_cuda:
-            if empty_cuda_cache is not None:
-                empty_cuda_cache()
+            if ha is not None:
+                ha.empty_cuda_cache_safely()
             elif torch.cuda.is_initialized():
                 torch.cuda.empty_cache()
+        elif is_mps:
+            if ha is not None:
+                ha.empty_gpu_cache_safely()
     return pnl_inf.aggregate(probabilities)[1]
 
 
@@ -624,6 +663,10 @@ def run(baseline: Path, output: Path, model_dir: Path, template: Path, *, device
         raise ValueError("Threads must be positive")
     apply_threads(threads)
     selection = inference.select_device(device)
+    if str(selection["resolved"]) == "cpu":
+        import torch
+
+        _enable_cpu_flush_denormal_safely(torch)
     log(f"[PNL native] device {selection['resolved']}, {threads} threads")
     phases = {}
 

@@ -616,6 +616,7 @@ def _run_dipy_dti_tracking(
     stopping_criterion = ThresholdStoppingCriterion(fa, float(config.min_fa))
     if eudx_tracking is not None:
         import sys
+        from shared.numeric_threads import reserved_stage_cpus
 
         min_length, max_length = _eudx_length_limits(
             dipy_version,
@@ -632,7 +633,7 @@ def _run_dipy_dti_tracking(
             max_len=max_length,
             min_len=min_length,
             max_angle=float(config.max_angle_deg),
-            nbr_threads=1 if sys.platform == "darwin" else 0,
+            nbr_threads=1 if sys.platform == "darwin" else (reserved_stage_cpus() or 0),
             random_seed=int(config.random_seed),
             return_all=True,
         )

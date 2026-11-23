@@ -421,6 +421,12 @@ def current(raw, directory, options=None, executable=None, converter=None, *, _s
 def _host_ram_gib() -> float | None:
     """Return physical host memory in GiB when observable, else None."""
     try:
+        from shared.hardware_adapt import host_total_ram_gib
+
+        return host_total_ram_gib()
+    except Exception:
+        pass
+    try:
         import psutil
         total = int(psutil.virtual_memory().total)
         if total > 0:
@@ -462,6 +468,97 @@ def _host_ram_gib() -> float | None:
     return None
 
 
+def resolve_adaptive_cpu_num_threads(
+    selected: UKFParameters,
+    inputs: dict | None,
+    *,
+    use_gpu: bool,
+    ram_gib: float | None = None,
+    cpu_count: int | None = None,
+    platform_name: str | None = None,
+    is_apple_silicon: bool | None = None,
+) -> int:
+    """Resolve effective CPU ``--numThreads`` at execution time without mutating cache keys.
+
+    Preserves explicit user overrides, GPU runs, cohort-scheduled runs, and high-RAM (>48 GiB)
+    Linux/Windows servers unchanged, while capping memory-heavy CPU UKF runs on modest-RAM
+    workstations and unified-memory macOS hosts to prevent OOM/swap thrashing and E-core stalls.
+    """
+    if use_gpu or int(selected.numThreads) != -1 or os.environ.get("SLICERDSPACE_COHORT_SCHEDULE"):
+        return int(selected.numThreads)
+
+    plat = (sys.platform if platform_name is None else str(platform_name)).lower()
+    host_ram = _host_ram_gib() if ram_gib is None else float(ram_gib)
+    if cpu_count is None:
+        try:
+            cpus = max(1, len(os.sched_getaffinity(0)))
+        except (AttributeError, OSError):
+            cpus = max(1, int(os.cpu_count() or 1))
+    else:
+        cpus = max(1, int(cpu_count))
+
+    stage_budget: int | None = None
+    stage_raw = os.environ.get("SLICERDSPACE_STAGE_CPUS", "").strip()
+    if stage_raw.isdigit() and int(stage_raw) > 0:
+        stage_budget = int(stage_raw)
+
+    if is_apple_silicon is None:
+        if plat == "darwin" and platform_name is None:
+            try:
+                from shared.hardware_adapt import is_apple_silicon_host
+
+                apple_silicon = bool(is_apple_silicon_host())
+            except Exception:
+                apple_silicon = False
+        else:
+            apple_silicon = False
+    else:
+        apple_silicon = bool(is_apple_silicon)
+
+    # High-RAM Linux/Windows servers: zero regression, keep author automatic (-1) unless stage-capped.
+    if plat != "darwin" and (host_ram is None or host_ram > 48.0):
+        return min(cpus, stage_budget) if stage_budget is not None else -1
+
+    inp = inputs or {}
+    volumes = int(inp.get("volumes") or 0)
+    voxels = int(inp.get("effective_brain_voxels") or inp.get("brain_voxels") or 0)
+    heavy = volumes >= 120 or voxels >= 450_000
+
+    cap: int | None = None
+    if heavy and host_ram is not None and host_ram <= 48.0:
+        if host_ram <= 12.0:
+            cap = min(cpus, 2)
+        elif host_ram <= 20.0:
+            cap = min(cpus, 4)
+        elif host_ram <= 36.0:
+            cap = min(cpus, 6)
+        else:
+            cap = min(cpus, 8)
+
+    if plat == "darwin":
+        mac_cap: int | None = None
+        if host_ram is not None:
+            if host_ram <= 12.0:
+                mac_cap = min(cpus, 2)
+            elif host_ram <= 20.0:
+                mac_cap = min(cpus, 4)
+            elif host_ram <= 36.0:
+                mac_cap = min(cpus, 6)
+            elif apple_silicon:
+                mac_cap = min(cpus, max(6, (cpus * 3) // 4), 10)
+        elif apple_silicon:
+            mac_cap = min(cpus, max(6, (cpus * 3) // 4), 10)
+        if mac_cap is not None:
+            cap = mac_cap if cap is None else min(cap, mac_cap)
+
+    if stage_budget is not None:
+        cap = min(cpus, stage_budget) if cap is None else min(cap, stage_budget)
+
+    if cap is None:
+        return -1
+    return max(1, int(cap))
+
+
 def _ukf_cpu_memory_runtime_warning(
     inputs: dict,
     *,
@@ -482,7 +579,8 @@ def _ukf_cpu_memory_runtime_warning(
     return (
         f"High-resolution multi-shell CPU UKF ({volumes} volumes, {len(shells)} shells, "
         f"{voxels:,} mask voxels on {host_ram:.1f} GiB RAM) can take >40 min and >25 GB RAM. "
-        "Consider CSD/ACT, GPU UKF (--useGPU), or capping --numThreads if memory pressure occurs."
+        "Adaptive --numThreads capping is applied automatically when unset (-1); "
+        "consider CSD/ACT, GPU UKF (--useGPU), or capping --numThreads explicitly if memory pressure occurs."
     )
 
 
@@ -927,14 +1025,15 @@ def build_command(
 
 
 def inspect_schema(binary, env):
-    from shared.external_process import text_subprocess_kwargs
+    from shared.external_process import native_arm64_argv, subprocess_no_window_kwargs, text_subprocess_kwargs
 
     description = subprocess.run(
-        [str(binary), "--xml"],
+        native_arm64_argv([str(binary), "--xml"], env),
         capture_output=True,
         timeout=30,
         env=env,
         **text_subprocess_kwargs(),
+        **subprocess_no_window_kwargs(),
     )
     start = description.stdout.find("<?xml")
     if start < 0:
@@ -1250,6 +1349,8 @@ def run_ukf(raw, directory, *, options=None, executable=None, converter=None, de
         gpu_precision=gpu_precision,
     )
     inputs, effective = _validated_inputs(raw)
+    eff_threads = resolve_adaptive_cpu_num_threads(selected, inputs, use_gpu=use_gpu)
+    execution_selected = replace(selected, numThreads=eff_threads) if eff_threads != selected.numThreads else selected
     record = dict(
         status="running",
         signature=before,
@@ -1258,6 +1359,7 @@ def run_ukf(raw, directory, *, options=None, executable=None, converter=None, de
         schema_sha256=hashlib.sha256(xml.encode()).hexdigest(),
         schema_probe_exit_code=probe_code,
         gpu=dict(enabled=use_gpu, device=gpu_device if use_gpu else None, precision=gpu_precision if use_gpu else None),
+        effective_cpu_num_threads=None if use_gpu else eff_threads,
         commands=[],
         started_at=datetime.now(timezone.utc).isoformat(),
     )
@@ -1278,6 +1380,14 @@ def run_ukf(raw, directory, *, options=None, executable=None, converter=None, de
         if cpu_mem_warning:
             inputs["warnings"] = [*inputs["warnings"], cpu_mem_warning]
         if log:
+            if not use_gpu and eff_threads != selected.numThreads:
+                ram_val = _host_ram_gib()
+                ram_note = f" on {ram_val:.1f} GiB host RAM" if ram_val is not None else ""
+                log(
+                    f"[UKF] Adaptive CPU thread cap: --numThreads {eff_threads} "
+                    f"(default -1{ram_note}, {inputs.get('volumes', 0)} volumes, "
+                    f"{inputs.get('effective_brain_voxels', 0):,} mask voxels)"
+                )
             for warning in inputs['warnings']:
                 log('[UKF] '+warning)
         converter_env = merged_startup_environment(build_cli_environment(str(converter)))
@@ -1304,7 +1414,7 @@ def run_ukf(raw, directory, *, options=None, executable=None, converter=None, de
                 dwi,
                 mask,
                 tracts,
-                selected,
+                execution_selected,
                 schema,
                 use_gpu=use_gpu,
                 gpu_device=gpu_device,
@@ -1322,9 +1432,12 @@ def run_ukf(raw, directory, *, options=None, executable=None, converter=None, de
                     else:
                         log("[UKF] Running official UKFTractography")
                 with log_path.open("wb") as stream:
-                    from shared.external_process import subprocess_no_window_kwargs
-                    process = subprocess.Popen(cmd, stdout=stream, stderr=subprocess.STDOUT,
-                                               env=converter_env if index == 0 else env,
+                    from shared.external_process import native_arm64_argv, subprocess_no_window_kwargs
+
+                    stage_env = converter_env if index == 0 else env
+                    exec_cmd = native_arm64_argv(cmd, stage_env)
+                    process = subprocess.Popen(exec_cmd, stdout=stream, stderr=subprocess.STDOUT,
+                                               env=stage_env,
                                                **subprocess_no_window_kwargs())
                     try:
                         if process.wait():

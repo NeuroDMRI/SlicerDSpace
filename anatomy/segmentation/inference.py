@@ -56,11 +56,18 @@ def predict_view(model, slices: List[np.ndarray], apply_softmax: bool) -> np.nda
     inferred_scores: Dict[int, np.ndarray] = {}
     batch_size = 8
     dev_str = str(getattr(model, "device", "cpu")).lower()
+    prev_cpu_threads = None
     if dev_str.startswith("cpu"):
         try:
             import torch
+            from shared.hardware_adapt import enable_cpu_flush_denormal, optimal_cpu_torch_threads
 
-            torch.set_flush_denormal(True)
+            enable_cpu_flush_denormal(torch)
+            target_threads = optimal_cpu_torch_threads(max_conv_threads=8)
+            current_threads = int(torch.get_num_threads())
+            if current_threads > target_threads:
+                prev_cpu_threads = current_threads
+                torch.set_num_threads(target_threads)
         except Exception:
             pass
     if dev_str.startswith(("cuda", "mps")):
@@ -69,7 +76,9 @@ def predict_view(model, slices: List[np.ndarray], apply_softmax: bool) -> np.nda
         mem = query_gpu_free_total_bytes(dev_str)
         if mem is not None:
             min_bytes = int(4.0 * (1024**3)) if dev_str.startswith("mps") else int(2.0 * (1024**3))
-            if mem[0] < min_bytes:
+            if mem[0] < int(1.2 * (1024**3)):
+                batch_size = 1
+            elif mem[0] < min_bytes:
                 batch_size = 2
 
     batch_supported = True
@@ -90,11 +99,14 @@ def predict_view(model, slices: List[np.ndarray], apply_softmax: bool) -> np.nda
                         inferred_scores[orig_i] = decoded[local_i]
                     pos += len(chunk_idx)
                     continue
-                except Exception:
-                    from shared.hardware_adapt import empty_gpu_cache_safely
+                except Exception as exc:
+                    from shared.hardware_adapt import empty_gpu_cache_safely, is_gpu_oom
 
                     empty_gpu_cache_safely()
-                    batch_supported = False
+                    if dev_str.startswith(("cuda", "mps")) and is_gpu_oom(exc) and batch_size > 2:
+                        batch_size = max(1, batch_size // 2)
+                    else:
+                        batch_supported = False
                     continue
 
             y1 = model.forward(np.ascontiguousarray(x))
@@ -102,6 +114,13 @@ def predict_view(model, slices: List[np.ndarray], apply_softmax: bool) -> np.nda
             inferred_scores[chunk_idx[0]] = decoded1[0]
             pos += 1
     finally:
+        if prev_cpu_threads is not None:
+            try:
+                import torch
+
+                torch.set_num_threads(prev_cpu_threads)
+            except Exception:
+                pass
         if dev_str.startswith(("cuda", "mps")):
             from shared.hardware_adapt import empty_gpu_cache_safely
 

@@ -24,6 +24,63 @@ from utils.mesh import taubin_smooth
 ROOT = Path(__file__).resolve().parents[1]
 LOG = logging.getLogger(__name__)
 
+EAGER_CUDA_FREE_GIB = 18.0
+LAZY_CUDA_MIN_BUDGET_GIB = 5.5
+LAZY_CUDA_MARGIN_GIB = 1.5
+EAGER_CUDA_MARGIN_GIB = 4.0
+
+
+def _enable_cpu_flush_denormal() -> bool:
+    """Flush subnormal float32 values to zero on CPU to avoid x86/Rosetta stalls."""
+    try:
+        fn = getattr(torch, 'set_flush_denormal', None)
+        if callable(fn):
+            return bool(fn(True))
+    except Exception:
+        pass
+    return False
+
+
+def _resolve_optimal_cpu_threads(requested_threads: int, device_str: str) -> int:
+    """Resolve PyTorch CPU intra-op threads without altering CLI/manifest cpu_threads signatures."""
+    dev = str(device_str or '').strip().lower()
+    req = max(1, int(requested_threads))
+    if not dev.startswith(('cpu', 'mps')) or os.environ.get('SLICERDSPACE_STAGE_CPUS'):
+        return req
+    if dev.startswith('cpu') and req != 4:
+        return req
+    try:
+        from shared.hardware_adapt import optimal_cpu_torch_threads
+
+        opt = int(optimal_cpu_torch_threads(max_conv_threads=8))
+    except Exception:
+        cpus = max(1, int(os.cpu_count() or 4))
+        if sys.platform == 'darwin' and cpus >= 6:
+            p_cap = max(4, cpus - 2) if cpus <= 10 else max(6, (cpus * 3) // 4)
+            opt = min(cpus, p_cap, 8)
+        else:
+            opt = min(cpus, 8)
+    return max(req, opt)
+
+
+def resolve_cuda_memory_budget(free_bytes: int, max_gpu_gib: float) -> tuple[float, bool]:
+    """Return ``(cap_gib, use_lazy_models)`` or raise RuntimeError if free VRAM is insufficient.
+
+    High-VRAM GPUs (>= 18 GiB free with >= 12 GiB cap) preserve the eager dual-surface route
+    with a 4-GiB margin. Consumer 8-12 GiB GPUs (< 18 GiB free) load one surface model at a time
+    (~4-5 GiB peak) and require at least a 5.5-GiB GPU budget plus a 1.5-GiB margin (>= 7 GiB free).
+    """
+    free_gib = float(free_bytes) / float(1024**3)
+    lazy = free_gib < EAGER_CUDA_FREE_GIB or float(max_gpu_gib) < 12.0
+    margin = LAZY_CUDA_MARGIN_GIB if lazy else EAGER_CUDA_MARGIN_GIB
+    cap = min(float(max_gpu_gib), free_gib - margin)
+    if cap < LAZY_CUDA_MIN_BUDGET_GIB:
+        raise RuntimeError(
+            'Insufficient free GPU memory; inference requires at least a 5.5-GiB GPU budget '
+            'plus a 1.5-GiB free-memory margin (7 GiB free) for lazy single-surface loading'
+        )
+    return cap, lazy
+
 
 def load_json(path):
     import json
@@ -100,17 +157,17 @@ class SurfacePredictor:
             raise ValueError('Invalid transformed template')
         if ((self.vertices < 0) | (self.vertices > np.array(self.geometry.crop_shape)-1)).any():
             raise ValueError('Template is outside the trained crop')
-        free_cuda_bytes = None
-        if self.device.type == 'mps':
+        lazy_cuda = False
+        if self.device.type == 'cpu':
+            _enable_cpu_flush_denormal()
+        elif self.device.type == 'mps':
+            _enable_cpu_flush_denormal()
             torch.empty(1, device=self.device)
         elif self.device.type == 'cuda':
             torch.cuda.set_device(self.device)
             free, total = torch.cuda.mem_get_info(self.device)
-            free_cuda_bytes = free
-            cap = min(args.max_gpu_gib, free/1024**3 - 4)
-            if cap < 8:
-                raise RuntimeError('Insufficient free GPU memory; at least 8 GiB plus a 4-GiB margin is required')
-            torch.cuda.set_per_process_memory_fraction(cap*1024**3/total, self.device)
+            cap, lazy_cuda = resolve_cuda_memory_budget(free, args.max_gpu_gib)
+            torch.cuda.set_per_process_memory_fraction(min(1.0, cap * 1024**3 / total), self.device)
             torch.backends.cudnn.benchmark = False
             torch.backends.cuda.matmul.allow_tf32 = False
             torch.backends.cudnn.allow_tf32 = False
@@ -118,11 +175,7 @@ class SurfacePredictor:
         self.architecture = architecture
         self._lazy_models = (
             self.device.type == 'mps'
-            or (
-                self.device.type == 'cuda'
-                and free_cuda_bytes is not None
-                and free_cuda_bytes < 18 * 1024**3
-            )
+            or (self.device.type == 'cuda' and lazy_cuda)
         ) and len(self.entries) > 1
         self._lazy_mps_models = self._lazy_models
         self.models = {} if self._lazy_models else {
@@ -155,7 +208,11 @@ class SurfacePredictor:
     @torch.inference_mode()
     def predict(self, folder, volume_cache=None):
         started = time.perf_counter()
-        volumes = self.load_volumes(folder, volume_cache=volume_cache)
+        volumes = (
+            self.load_volumes(folder, volume_cache=volume_cache)
+            if volume_cache is not None
+            else self.load_volumes(folder)
+        )
         vertices = torch.from_numpy(self.vertices.copy())[None].to(self.device)
         faces = torch.from_numpy(self.faces.copy())[None].to(self.device)
         laplacian_matrix = None
@@ -169,7 +226,7 @@ class SurfacePredictor:
             if model is None:
                 entry = self.entries[surface]
                 model = load_model(self.checkpoint_dir / entry['checkpoint_file'], entry['sha256'], self.architecture, self.device)
-            execution_devices = dict(model.execution_devices)  # read before a lazy GPU/MPS model is released
+            execution_devices = dict(getattr(model, 'execution_devices', None) or {})  # read before a lazy GPU/MPS model is released
             with precision_context(self.precision, self.device):
                 raw = model(vertices, volumes)
             if lazy_models:
@@ -249,9 +306,9 @@ def main(default_hemisphere, argv=None):
     if args.cpu_threads < 1 or args.max_gpu_gib <= 0:
         parser.error('Resource limits must be positive')
     logging.basicConfig(level=getattr(logging,args.log_level), format='[%(levelname)s] %(message)s')
-    torch_threads = args.cpu_threads
-    if str(args.device).startswith('mps') and not os.environ.get('SLICERDSPACE_STAGE_CPUS'):
-        torch_threads = max(args.cpu_threads, min(8, os.cpu_count() or 4))
+    if str(args.device).startswith(('cpu', 'mps')):
+        _enable_cpu_flush_denormal()
+    torch_threads = _resolve_optimal_cpu_threads(args.cpu_threads, args.device)
     torch.set_num_threads(torch_threads)
     if args.subjects:
         if len(args.subjects) != len(set(args.subjects)) or any(Path(s).name != s or s in ('.','..') for s in args.subjects):
@@ -268,6 +325,11 @@ def main(default_hemisphere, argv=None):
         settings.surf_hemi = hemisphere
         predictor = SurfacePredictor(settings)
         for folder in folders:
-            subject_cache = volume_cache if volume_cache is not None else None
-            predictor.predict(folder, volume_cache=subject_cache)
+            if volume_cache is not None:
+                try:
+                    predictor.predict(folder, volume_cache=volume_cache)
+                except TypeError:
+                    predictor.predict(folder)
+            else:
+                predictor.predict(folder)
         del predictor

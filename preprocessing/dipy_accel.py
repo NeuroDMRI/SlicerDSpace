@@ -29,17 +29,21 @@ import numpy as np
 from numpy.lib.stride_tricks import sliding_window_view
 
 from shared.hardware_adapt import (
+    GIB,
     MIB,
     adaptive_cuda_scaled_batch,
     adaptive_gpu_scaled_batch,
     empty_cuda_cache_safely,
     empty_gpu_cache_safely,
+    is_apple_silicon_host,
     is_cuda_oom,
     is_mps_available,
+    optimal_cpu_torch_threads,
     query_cuda_free_total_bytes,
+    query_host_available_ram_bytes,
     run_cuda_chunked_with_oom_fallback,
 )
-from shared.numeric_threads import effective_cpu_threads
+from shared.numeric_threads import effective_cpu_threads, reserved_stage_cpus
 
 
 _CUSOLVER_LIB = None
@@ -531,11 +535,54 @@ _MPPCA_CPU_MIN_PATCH_BATCH = 64
 _MPPCA_CPU_MAX_PATCH_BATCH = 2048  # the former fixed batch; no input gets a larger batch than before
 
 
-def _mppca_cpu_patch_batch(dim: int, num_samples: int) -> int:
+def _mppca_cpu_batch_bytes(avail_ram_bytes: Optional[int] = None) -> int:
+    """Return per-worker CPU MP-PCA byte budget, scaling down only when available host RAM < 10 GiB."""
+    avail = query_host_available_ram_bytes() if avail_ram_bytes is None else int(avail_ram_bytes)
+    if avail > 0:
+        if avail < 6 * GIB:
+            return 64 * MIB
+        if avail < 10 * GIB:
+            return 96 * MIB
+    return MPPCA_CPU_BATCH_BYTES
+
+
+def _mppca_cpu_patch_batch(dim: int, num_samples: int, *, batch_bytes: Optional[int] = None) -> int:
     """Patches per CPU solver call for ``dim`` volumes and ``num_samples`` voxels per patch."""
     per_patch_bytes = max(1, int(num_samples)) * max(int(dim), int(num_samples), 1) * 8 * 6
-    batch = MPPCA_CPU_BATCH_BYTES // per_patch_bytes
-    return int(max(_MPPCA_CPU_MIN_PATCH_BATCH, min(_MPPCA_CPU_MAX_PATCH_BATCH, batch)))
+    budget = MPPCA_CPU_BATCH_BYTES if batch_bytes is None else max(1, int(batch_bytes))
+    min_batch = (
+        _MPPCA_CPU_MIN_PATCH_BATCH
+        if budget >= MPPCA_CPU_BATCH_BYTES
+        else max(16, min(_MPPCA_CPU_MIN_PATCH_BATCH, (_MPPCA_CPU_MIN_PATCH_BATCH * budget) // MPPCA_CPU_BATCH_BYTES))
+    )
+    batch = budget // per_patch_bytes
+    return int(max(min_batch, min(_MPPCA_CPU_MAX_PATCH_BATCH, batch)))
+
+
+def _resolve_dipy_cpu_workers(
+    max_workers: Optional[int],
+    *,
+    avail_ram_bytes: Optional[int] = None,
+    apply_low_ram_cap: bool = False,
+) -> int:
+    """Resolve CPU worker count with low-RAM protection and Apple Silicon P-core cap, zero server regression."""
+    if max_workers is not None:
+        return max(1, int(max_workers))
+    stage_reserved = reserved_stage_cpus()
+    if stage_reserved is not None:
+        n_workers = max(1, int(stage_reserved))
+    elif is_apple_silicon_host():
+        n_workers = optimal_cpu_torch_threads(None, max_conv_threads=8)
+    else:
+        n_workers = effective_cpu_threads(None, default=8)
+    if apply_low_ram_cap:
+        avail = query_host_available_ram_bytes() if avail_ram_bytes is None else int(avail_ram_bytes)
+        if avail > 0:
+            if avail < 6 * GIB:
+                n_workers = min(n_workers, 4)
+            elif avail < 10 * GIB:
+                n_workers = min(n_workers, 6)
+    return max(1, int(n_workers))
 
 
 def _mppca_cpu(
@@ -560,11 +607,12 @@ def _mppca_cpu(
     ny_c = sy - 2 * ry
     nz_c = sz - 2 * rz
 
-    n_workers = max(1, int(max_workers if max_workers is not None else effective_cpu_threads(None, default=8)))
+    avail_ram = query_host_available_ram_bytes()
+    n_workers = _resolve_dipy_cpu_workers(max_workers, avail_ram_bytes=avail_ram, apply_low_ram_cap=True)
     n_workers = min(n_workers, nz_c, 16)
-    # Per-worker patch batch from the byte budget (MPPCA_CPU_BATCH_BYTES), in whole x-rows.
+    # Per-worker patch batch from the byte budget (MPPCA_CPU_BATCH_BYTES, scaled down under tight RAM), in whole x-rows.
     if patch_batch is None:
-        patch_batch = _mppca_cpu_patch_batch(dim, num_samples)
+        patch_batch = _mppca_cpu_patch_batch(dim, num_samples, batch_bytes=_mppca_cpu_batch_bytes(avail_ram))
     ny_step = max(1, min(ny_c, max(1, int(patch_batch) // max(1, nx_c))))
 
     try:
@@ -999,7 +1047,7 @@ def gibbs_removal_accelerated(
     def _run_cpu_batches(indices_slice: slice) -> np.ndarray:
         sub = np.ascontiguousarray(flat[indices_slice])
         n_sub = sub.shape[0]
-        n_workers = max(1, int(max_workers if max_workers is not None else effective_cpu_threads(None, default=8)))
+        n_workers = _resolve_dipy_cpu_workers(max_workers, apply_low_ram_cap=False)
         n_workers = min(n_workers, max(1, (n_sub + 31) // 32), 16)
         batch_sz = 32
         batches = [(s, min(n_sub, s + batch_sz)) for s in range(0, n_sub, batch_sz)]

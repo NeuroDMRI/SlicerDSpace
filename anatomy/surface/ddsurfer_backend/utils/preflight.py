@@ -199,7 +199,7 @@ def _is_mps_available(torch_mod) -> bool:
 
 def check_device(args, config):
     import torch
-    from inference.predict import resolve_precision
+    from inference.predict import resolve_cuda_memory_budget, resolve_precision
 
     device = torch.device(args.device)
     if (device.type not in ('cpu', 'cuda', 'mps')
@@ -215,8 +215,7 @@ def check_device(args, config):
         with torch.cuda.device(index):
             precision = resolve_precision(args.precision, device, config['precision'])
             free, _ = torch.cuda.mem_get_info(index)
-            if min(args.max_gpu_gib, free / 1024**3 - 4) < 8:
-                raise RuntimeError('Inference requires an 8-GiB GPU budget plus 4 GiB of free-memory margin')
+            resolve_cuda_memory_budget(free, args.max_gpu_gib)
             torch.empty(1, device=device)
     elif device.type == 'mps':
         if not _is_mps_available(torch):

@@ -761,8 +761,13 @@ def _optimize_dwi_mif_volume_strides_in_ram(dwi_mif: Path) -> None:
             return
         spatial_by_rank = {ranks[axis]: dims[axis] for axis in range(3)}
         c_shape = (dims[3], spatial_by_rank[2], spatial_by_rank[1], spatial_by_rank[0])
-        raw = dwi_mif.read_bytes()
         expected_bytes = offset + int(np.prod(c_shape)) * 4
+        from shared.hardware_adapt import query_host_available_ram_bytes
+
+        avail_ram = query_host_available_ram_bytes()
+        if avail_ram > 0 and expected_bytes * 2.5 > avail_ram:
+            return
+        raw = dwi_mif.read_bytes()
         if len(raw) < expected_bytes:
             return
         arr = np.frombuffer(raw, dtype="<f4", offset=offset, count=int(np.prod(c_shape))).reshape(c_shape)
@@ -987,8 +992,16 @@ def run_csd_act(config: CSDActConfig, *, log: Optional[Callable[[str], None]] = 
                         export_tck_to_trk(tractogram, config.dwi_path, tractogram_trk)
                     return 0
 
+                from shared.hardware_adapt import GIB, host_total_ram_gib, query_host_available_ram_bytes
+
                 n_jobs = len(parallel_mrtrix_commands) + (1 if (config.export_trk and tractogram_trk is not None) else 0)
-                with ThreadPoolExecutor(max_workers=max(1, n_jobs)) as post_pool:
+                total_ram_gib = host_total_ram_gib()
+                avail_ram_b = query_host_available_ram_bytes()
+                tight_ram = (total_ram_gib is not None and total_ram_gib <= 16.0) or (
+                    avail_ram_b > 0 and avail_ram_b < 10 * GIB
+                )
+                post_workers = 1 if tight_ram else max(1, n_jobs)
+                with ThreadPoolExecutor(max_workers=post_workers) as post_pool:
                     post_futs = [post_pool.submit(_run_parallel_mrtrix, cmd_t) for cmd_t in parallel_mrtrix_commands]
                     if config.export_trk and tractogram_trk is not None:
                         post_futs.append(post_pool.submit(_run_parallel_trk))

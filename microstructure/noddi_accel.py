@@ -83,7 +83,7 @@ def _try_fast_gunzip_nifti1_4d(dwi_path: Path) -> tuple[nib.Nifti1Image, np.ndar
         if cached_nii is not None and cached_nii.is_file():
             hdr_img = nib.load(str(cached_nii), mmap="r", keep_file_open=False)
             if isinstance(hdr_img, nib.Nifti1Image) and hdr_img.header.endianness == "<" and len(hdr_img.shape) == 4:
-                vox_offset = int(hdr_img.header["vox_offset"])
+                vox_offset = int(hdr_img.header.get_data_offset()) or 352
                 dtype = np.dtype(hdr_img.header.get_data_dtype()).newbyteorder("<")
                 expected_voxels = int(np.prod(hdr_img.shape, dtype=np.int64))
                 expected_bytes = vox_offset + expected_voxels * dtype.itemsize
@@ -109,7 +109,7 @@ def _try_fast_gunzip_nifti1_4d(dwi_path: Path) -> tuple[nib.Nifti1Image, np.ndar
         hdr = hdr_img.header
         if hdr.endianness != "<" or len(hdr_img.shape) != 4:
             return None
-        vox_offset = int(hdr["vox_offset"])
+        vox_offset = int(hdr.get_data_offset()) or 352
         if vox_offset < 352:
             return None
         dtype = np.dtype(hdr.get_data_dtype()).newbyteorder("<")
@@ -156,15 +156,27 @@ def _load_masked_normalized_dwi(
     fast_loaded = _try_fast_gunzip_nifti1_4d(dwi_path)
     if fast_loaded is not None:
         dwi_img, raw_4d = fast_loaded
-        hdr = dwi_img.header
-        slope = float(hdr["scl_slope"]) if np.isfinite(hdr["scl_slope"]) else 0.0
-        inter = float(hdr["scl_inter"]) if np.isfinite(hdr["scl_inter"]) else 0.0
-        need_scale = slope != 0.0 and (slope != 1.0 or inter != 0.0)
-        if np.issubdtype(raw_4d.dtype, np.floating) and not np.isfinite(raw_4d).all():
-            raise ValueError("NaN or Inf values detected in raw DWI signal.")
-        y_f32 = np.asarray(raw_4d[mask_bool], dtype=np.float32)
-        if need_scale:
-            y_f32 = y_f32 * np.float32(slope) + np.float32(inter)
+        try:
+            if dwi_img.shape[:3] != mask_img.shape[:3]:
+                raise ValueError("MASK geometry does not match with DWI data")
+            hdr = dwi_img.header
+            slope = float(hdr["scl_slope"]) if np.isfinite(hdr["scl_slope"]) else 0.0
+            inter = float(hdr["scl_inter"]) if np.isfinite(hdr["scl_inter"]) else 0.0
+            need_scale = slope != 0.0 and (slope != 1.0 or inter != 0.0)
+            n_vols = int(raw_4d.shape[3])
+            n_masked = int(np.count_nonzero(mask_bool))
+            y_f32 = np.empty((n_masked, n_vols), dtype=np.float32)
+            check_finite = np.issubdtype(raw_4d.dtype, np.floating)
+            for vol_i in range(n_vols):
+                vol_3d = raw_4d[..., vol_i]
+                if check_finite and not np.isfinite(vol_3d).all():
+                    raise ValueError("NaN or Inf values detected in raw DWI signal.")
+                y_f32[:, vol_i] = vol_3d[mask_bool]
+            if need_scale:
+                y_f32 = y_f32 * np.float32(slope) + np.float32(inter)
+        finally:
+            if isinstance(raw_4d, np.memmap) and getattr(raw_4d, "_mmap", None) is not None:
+                raw_4d._mmap.close()
     else:
         dwi_img = nib.load(str(dwi_path))
         if dwi_img.ndim != 4:
@@ -566,7 +578,11 @@ def _fit_noddi_cpu(
     K_iso_64 = K_iso.astype(np.float64)
     K_iso_dwi = K_iso_64[dwi_idx]
     eye_wm = np.eye(n_wm, dtype=np.float64)
-    nonempty_dirs = [d for d in range(ndirs) if boundaries[d + 1] > boundaries[d]]
+    nonempty_dirs = sorted(
+        (d for d in range(ndirs) if boundaries[d + 1] > boundaries[d]),
+        key=lambda d: int(boundaries[d + 1] - boundaries[d]),
+        reverse=True,
+    )
 
     def _solve_direction_bucket(d: int) -> None:
         s, e = int(boundaries[d]), int(boundaries[d + 1])
@@ -657,6 +673,7 @@ def _fit_noddi_cuda(
     from shared.hardware_adapt import (
         adaptive_cuda_scaled_batch,
         empty_cuda_cache_safely,
+        is_cuda_oom,
         run_cuda_chunked_with_oom_fallback,
     )
 
@@ -678,6 +695,8 @@ def _fit_noddi_cuda(
             iso_t = torch.as_tensor(K_iso, dtype=torch.float64, device=dev)
             A1_all = torch.empty((ndirs, n_grad, P1), dtype=torch.float64, device=dev)
             A1_all[:, :, :n_wm] = wm_t
+            del wm_t
+            wm_t = None
             A1_all[:, :, n_wm] = iso_t.unsqueeze(0)
             G1_all = torch.bmm(A1_all.transpose(1, 2), A1_all)
 
@@ -788,6 +807,26 @@ def _fit_noddi_cuda(
         estimates[order] = est_sorted
         rmse[order] = rmse_sorted
         nrmse[order] = nrmse_sorted
+    except BaseException as exc:
+        if explicit_cuda or not is_cuda_oom(exc):
+            raise
+        del wm_t, iso_t, A1_all, G1_all, dwi_idx_t, norms_t, A2_all, eye_wm, G2_all, iso_dwi_t, icvf_t, kappa_t
+        wm_t = iso_t = A1_all = G1_all = dwi_idx_t = norms_t = A2_all = eye_wm = G2_all = iso_dwi_t = icvf_t = kappa_t = None
+        empty_cuda_cache_safely()
+        return _fit_noddi_cpu(
+            y=y,
+            dir_idx=dir_idx,
+            K_wm=K_wm,
+            K_iso=K_iso,
+            K_norms=K_norms,
+            icvf=icvf,
+            kappa=kappa,
+            dwi_idx=dwi_idx,
+            lambda1=lambda1,
+            lambda2=lambda2,
+            ndirs=ndirs,
+            nthreads=max(1, int(nthreads)),
+        )
     finally:
         del wm_t, iso_t, A1_all, G1_all, dwi_idx_t, norms_t, A2_all, eye_wm, G2_all, iso_dwi_t, icvf_t, kappa_t
         empty_cuda_cache_safely()

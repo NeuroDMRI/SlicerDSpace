@@ -645,14 +645,32 @@ async function runStartRoutes(browser, origin) {
     record(await page.locator('#cli').evaluate(el => !el.closest('details')) &&
       await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
       `start ${width}px: CLI instructions expanded without horizontal overflow`);
-    const removedWebOptionsCount = await page.locator('#ic-more, #ic-wma-toggle, [data-atlas], #ic-mirror, #ic-proxy, #ic-offline-dir, #ic-model-dir, #ic-slicer-path, #ic-check-script-dir, #ic-download-cli-btn, #ic-toggle-preview, .ic-band-readonly, .ic-ro-panel, .ic-total, .ic-bar').count();
-    const dlVisible = await page.locator('#ic-download-btn').isVisible();
-    record(removedWebOptionsCount === 0 && dlVisible,
-      `start ${width}px: simplified website installer shows OS selection and direct download only`);
+    const removedWebOptionsCount = await page.locator('#ic-more, #ic-wma-toggle, [data-atlas], #ic-mirror, #ic-proxy, #ic-offline-dir, #ic-model-dir, #ic-slicer-path, #ic-check-script-dir, #ic-download-cli-btn, #ic-toggle-preview, .ic-band-readonly, .ic-ro-panel, .ic-total, .ic-bar, #ic-download-btn, .ic-seg-btn').count();
+    const dlButtons = await page.locator('#installer-customizer button.ic-dl-btn[data-os]').evaluateAll(buttons => buttons.map(b => ({
+      os: b.getAttribute('data-os'),
+      visible: b.offsetWidth > 0 && b.offsetHeight > 0,
+      sub: (b.querySelector('.ic-dl-sub')?.textContent || '').trim(),
+    })));
+    const borderless = await page.locator('#installer-customizer').evaluate(el => {
+      const s = getComputedStyle(el);
+      return parseFloat(s.borderTopWidth) === 0 && parseFloat(s.borderRightWidth) === 0 &&
+        parseFloat(s.borderBottomWidth) === 0 && parseFloat(s.borderLeftWidth) === 0 &&
+        s.backgroundColor === 'rgba(0, 0, 0, 0)' && s.boxShadow === 'none';
+    });
+    const startAfterFilm = await page.locator('#film + #start').count() === 1;
+    record(removedWebOptionsCount === 0 &&
+        dlButtons.length === 3 && dlButtons.every(b => b.visible) &&
+        JSON.stringify(dlButtons.map(b => b.os)) === JSON.stringify(['macos', 'linux', 'windows']) &&
+        borderless && startAfterFilm,
+      `start ${width}px: borderless direct 3-OS download buttons appear directly below #film`,
+      JSON.stringify({ removedWebOptionsCount, dlButtons, borderless, startAfterFilm }));
     const removedUiCount = await page.locator('.start-jump-bar, #ic-preview-btn, #ic-preview-modal').count();
-    const archLabels = await page.locator('#installer-customizer [data-os] .ic-seg-arch').allTextContents();
-    record(removedUiCount === 0 && JSON.stringify(archLabels) === JSON.stringify(['arm64', 'x86_64', 'x86_64']),
-      `start ${width}px: OS arch labels shown and jump-bar / script preview removed`, JSON.stringify(archLabels));
+    const archOk = dlButtons.length === 3 &&
+      dlButtons[0].sub.includes('arm64') &&
+      dlButtons[1].sub.includes('x86_64') &&
+      dlButtons[2].sub.includes('x86_64');
+    record(removedUiCount === 0 && archOk,
+      `start ${width}px: OS arch labels shown and jump-bar / script preview removed`, JSON.stringify(dlButtons.map(b => b.sub)));
     await context.close();
   }
 }

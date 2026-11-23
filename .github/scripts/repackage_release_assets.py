@@ -183,6 +183,7 @@ def _should_skip_member(
     *,
     replace_macos_ukf: bool = False,
     replace_ukf_runtime_dir: str | None = None,
+    replace_wma_source: bool = False,
     slicer_subdir: str = "Slicer-5.10",
 ) -> bool:
     wma_root = f"{ext_prefix}/bundled-model-assets/bundles/wma"
@@ -192,6 +193,10 @@ def _should_skip_member(
         return True
     if norm_path == qt_root or norm_path.startswith(qt_root + "/"):
         return True
+    if replace_wma_source:
+        wma_src_prefix = f"{ext_prefix}/bundled-sources/wma-"
+        if norm_path.startswith(wma_src_prefix):
+            return True
     if replace_ukf_runtime_dir:
         ukf_rt = f"{ext_prefix}/bundled-runtimes/{replace_ukf_runtime_dir}"
         if norm_path == ukf_rt or norm_path.startswith(ukf_rt + "/"):
@@ -316,6 +321,18 @@ def cmd_repack_os_base(args: argparse.Namespace) -> int:
     slicer_subdir = spec["slicer_subdir"]
     qt_root = f"{ext_prefix}/lib/{slicer_subdir}/qt-scripted-modules"
     fresh_runtime_files = sorted(runtime_files(REPO_ROOT))
+    fresh_wma_source_dir: Path | None = None
+    try:
+        from shared.backend_sources import prepare_sources
+
+        wma_prep_root = work_dir / "fresh-wma-source"
+        wma_res = prepare_sources(("wma",), root=wma_prep_root, execute=True, accept_terms=True)
+        cand_wma = Path(wma_res["external_dependencies"]["wma_root"])
+        if cand_wma.is_dir():
+            fresh_wma_source_dir = cand_wma
+            print(f"[repack] Prepared fresh WMA source: {fresh_wma_source_dir.name}", flush=True)
+    except Exception as exc:
+        print(f"[warn] Could not prepare fresh WMA source ({exc}); keeping existing bundled WMA.", flush=True)
     replace_macos_ukf = (target == "macos-arm64") and (not getattr(args, "skip_macos_ukf", False))
     standalone_ukf_spec = STANDALONE_UKF_ARCHIVES.get(target)
     standalone_ukf_archive: Path | None = None
@@ -358,6 +375,7 @@ def cmd_repack_os_base(args: argparse.Namespace) -> int:
                     qt_root,
                     replace_macos_ukf=replace_macos_ukf,
                     replace_ukf_runtime_dir=standalone_ukf_dir if standalone_ukf_archive is not None else None,
+                    replace_wma_source=fresh_wma_source_dir is not None,
                     slicer_subdir=slicer_subdir,
                 ):
                     continue
@@ -402,6 +420,20 @@ def cmd_repack_os_base(args: argparse.Namespace) -> int:
                         out_info.compress_type = zipfile.ZIP_DEFLATED
                         with ukf_zf.open(ui, "r") as src_fh, new_zf.open(out_info, "w") as dst_fh:
                             shutil.copyfileobj(src_fh, dst_fh, length=1024 * 1024)
+
+            if fresh_wma_source_dir is not None:
+                wma_arc_root = f"{ext_prefix}/bundled-sources/{fresh_wma_source_dir.name}"
+                for src in sorted(fresh_wma_source_dir.rglob("*")):
+                    if not src.is_file() or "__pycache__" in src.parts or src.suffix == ".pyc":
+                        continue
+                    rel_posix = src.relative_to(fresh_wma_source_dir).as_posix()
+                    arcname = f"{wma_arc_root}/{rel_posix}"
+                    out_info = zipfile.ZipInfo.from_file(src, arcname=arcname, strict_timestamps=False)
+                    out_info.compress_type = zipfile.ZIP_DEFLATED
+                    mode = 0o755 if (rel_posix.startswith("bin/") or os.access(src, os.X_OK)) else 0o644
+                    out_info.external_attr = (stat.S_IFREG | mode) << 16
+                    with src.open("rb") as src_fh, new_zf.open(out_info, "w") as dst_fh:
+                        shutil.copyfileobj(src_fh, dst_fh, length=1024 * 1024)
     else:
         written_dirs: set[str] = set()
         with tarfile.open(old_archive, "r:*") as old_tf, tarfile.open(
@@ -419,6 +451,7 @@ def cmd_repack_os_base(args: argparse.Namespace) -> int:
                     qt_root,
                     replace_macos_ukf=replace_macos_ukf,
                     replace_ukf_runtime_dir=standalone_ukf_dir if standalone_ukf_archive is not None else None,
+                    replace_wma_source=fresh_wma_source_dir is not None,
                     slicer_subdir=slicer_subdir,
                 ):
                     continue
@@ -500,6 +533,25 @@ def cmd_repack_os_base(args: argparse.Namespace) -> int:
                             uinfo.gname = "root"
                             with ukf_tf.extractfile(um) as src_fh:
                                 new_tf.addfile(uinfo, src_fh)
+
+            if fresh_wma_source_dir is not None:
+                wma_arc_root = f"{ext_prefix}/bundled-sources/{fresh_wma_source_dir.name}"
+                _ensure_tar_dir(f"{ext_prefix}/bundled-sources")
+                _ensure_tar_dir(wma_arc_root)
+                for src in sorted(fresh_wma_source_dir.rglob("*")):
+                    if not src.is_file() or "__pycache__" in src.parts or src.suffix == ".pyc":
+                        continue
+                    rel_posix = src.relative_to(fresh_wma_source_dir).as_posix()
+                    arcname = f"{wma_arc_root}/{rel_posix}"
+                    _ensure_tar_dir(PurePosixPath(arcname).parent.as_posix())
+                    f_info = new_tf.gettarinfo(src.as_posix(), arcname=arcname)
+                    f_info.mode = 0o755 if (rel_posix.startswith("bin/") or os.access(src, os.X_OK)) else 0o644
+                    f_info.uid = 0
+                    f_info.gid = 0
+                    f_info.uname = "root"
+                    f_info.gname = "root"
+                    with src.open("rb") as src_fh:
+                        new_tf.addfile(f_info, src_fh)
 
     if not saw_qt_entry:
         tmp_new.unlink(missing_ok=True)

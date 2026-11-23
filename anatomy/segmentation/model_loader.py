@@ -23,12 +23,16 @@ class TorchScriptModel:
     output_layout: str = "NCHW"
 
     def forward(self, x: np.ndarray) -> np.ndarray:
-        tensor = torch.from_numpy(x).to(self.device)
+        tensor = torch.from_numpy(x)
+        if str(self.device).lower().startswith("cpu") and tensor.ndim == 4:
+            tensor = tensor.to(device=self.device, memory_format=torch.channels_last)
+        else:
+            tensor = tensor.to(self.device)
         with torch.inference_mode():
             out = self.module(tensor)
         if isinstance(out, (tuple, list)):
             out = out[0]
-        return out.cpu().numpy()
+        return out.contiguous().cpu().numpy()
 
 
 @dataclass
@@ -54,6 +58,10 @@ def load_torch_model(path: Path, device: str) -> TorchScriptModel:
     module.eval()
     if dev_str.startswith("cpu"):
         zero_subnormal_module_weights(module)
+        try:
+            module = module.to(memory_format=torch.channels_last)
+        except Exception:
+            pass
     return TorchScriptModel(module=module, device=device)
 
 

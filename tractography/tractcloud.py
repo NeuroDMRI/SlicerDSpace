@@ -280,6 +280,11 @@ def _tractcloud_env(config: "TractCloudConfig", backend_status: Optional[dict[st
         env["TRACTCLOUD_DATA_DIR"] = config.data_dir.expanduser().resolve().as_posix()
     env['SLICERDSPACE_TRACTCLOUD_SEED'] = str(config.random_seed)
     env['SLICERDSPACE_TRACTCLOUD_DEVICE_RECORD'] = str(config.output_dir.expanduser().resolve() / 'tractcloud_device.json')
+    if sys.platform.startswith("linux") and str(config.device or "auto").strip().lower() != "cuda":
+        if "OMP_PROC_BIND" not in os.environ:
+            env["OMP_PROC_BIND"] = "close"
+        if "OMP_PLACES" not in os.environ:
+            env["OMP_PLACES"] = "cores"
     return env
 
 

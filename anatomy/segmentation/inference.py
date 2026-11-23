@@ -63,11 +63,13 @@ def predict_view(model, slices: List[np.ndarray], apply_softmax: bool) -> np.nda
             from shared.hardware_adapt import enable_cpu_flush_denormal, optimal_cpu_torch_threads
 
             enable_cpu_flush_denormal(torch)
-            target_threads = optimal_cpu_torch_threads(max_conv_threads=8)
+            target_threads = optimal_cpu_torch_threads(max_conv_threads=8, server_max_threads=36)
             current_threads = int(torch.get_num_threads())
             if current_threads > target_threads:
                 prev_cpu_threads = current_threads
                 torch.set_num_threads(target_threads)
+            if target_threads >= 24:
+                batch_size = 16
         except Exception:
             pass
     if dev_str.startswith(("cuda", "mps")):

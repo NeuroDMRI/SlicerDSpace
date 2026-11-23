@@ -1499,6 +1499,7 @@ def _compute_noddi_maps(
                 amico_output_dir=amico_output_dir.as_posix(),
             ),
             log=log,
+            auto_nthreads=(config.noddi_nthreads is None),
         )
     else:
         amico.set_verbose(2)

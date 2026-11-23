@@ -18,10 +18,11 @@ SOURCES = {
                  bytes=34202710, setting="tract_querier_root", entry="scripts/cli_tract_querier.py",
                  paths=("tract_querier", "scripts", "pyproject.toml", "setup.py", "setup.cfg", "license.rst", "README.md"),
                  requirements=("numpy>=1.26", "nibabel>=4", "vtk>8.1")),
-    "wma": dict(repository="SlicerDMRI/whitematteranalysis", revision="4532b911386d2d1bc7ebba63fdd13e65b1660623",
-                sha256="51ce595ac4f0f8ae761a532e8893484bee3bb1b7810dbc937cb127c2228d4c19",
-                bytes=2477247, setting="wma_root", entry="bin/wm_apply_ORG_atlas_to_subject.sh",
-                paths=("whitematteranalysis", "bin", "utilities", "setup.py", "setup.cfg", "pyproject.toml", "requirements.txt", "License.txt", "README.md"),
+    "wma": dict(repository="NeuroDMRI/whitematteranalysis_gpu", revision="0495c3a942e3a9355c13a4a8334ce47d068fa8ce",
+                sha256="66171d5cc29da875567dcf2a06a657cdd9ecf4f7dfdee61be40aca6763f04a64",
+                bytes=3276783, setting="wma_root", entry="bin/wm_apply_ORG_atlas_to_subject.sh",
+                paths=("whitematteranalysis", "bin", "utilities", "setup.py", "setup.cfg", "pyproject.toml",
+                       "requirements.txt", "requirements_cpu.txt", "requirements_gpu.txt", "License.txt", "README.md"),
                 requirements=("numpy", "scipy", "nibabel", "vtk", "joblib", "xlrd", "matplotlib", "pandas", "Pillow", "statsmodels")),
     "tractcloud": dict(repository="SlicerDMRI/TractCloud", revision="94de6275d07d7b5eeb50e4cd4d6e85fde29d5fb0",
                        sha256="55d111c96945dee36b9aa1ff07508d0d2aa67b62656613365a3dacb474a76cda",
@@ -70,7 +71,21 @@ def profile_path(name, root=None):
     return Path(root or source_root()) / (name + "-" + SOURCES[name]["revision"][:12])
 
 
-def verify_source(name, directory):
+# Backward-compatible bundled source revisions accepted by available_source() for
+# existing OS Base installs that have only received an incremental code overlay.
+LEGACY_SOURCES = {
+    "wma": (
+        dict(
+            revision="4532b911386d2d1bc7ebba63fdd13e65b1660623",
+            sha256="51ce595ac4f0f8ae761a532e8893484bee3bb1b7810dbc937cb127c2228d4c19",
+            entry="bin/wm_apply_ORG_atlas_to_subject.sh",
+        ),
+    ),
+}
+
+
+def verify_source(name, directory, *, spec=None):
+    spec = SOURCES[name] if spec is None else spec
     directory = Path(directory)
     if directory.is_symlink():
         raise ValueError("Algorithm source directory must not be a symlink")
@@ -78,9 +93,9 @@ def verify_source(name, directory):
     if receipt.is_symlink():
         raise ValueError("Algorithm source receipt must not be a symlink")
     record = json.loads(receipt.read_text(encoding="utf-8"))
-    if record.get("profile") != name or record.get("archive_sha256") != SOURCES[name]["sha256"]:
+    if record.get("profile") != name or record.get("archive_sha256") != spec["sha256"]:
         raise ValueError("Unrecognized algorithm source receipt")
-    if not record.get("files") or SOURCES[name]["entry"] not in record["files"]:
+    if not record.get("files") or spec["entry"] not in record["files"]:
         raise ValueError("Algorithm entry point is missing")
     for relative, digest in record["files"].items():
         path = PurePosixPath(relative)
@@ -113,6 +128,15 @@ def available_source(name, root=None):
                     return verify_source(name, bundled_dir)
                 except (OSError, ValueError, KeyError, TypeError):
                     continue
+        for legacy_spec in LEGACY_SOURCES.get(name, ()):
+            legacy_name = name + "-" + legacy_spec["revision"][:12]
+            for base_root in (source_root(), *bundled_source_roots()):
+                legacy_dir = Path(base_root) / legacy_name
+                if legacy_dir.exists():
+                    try:
+                        return verify_source(name, legacy_dir, spec=legacy_spec)
+                    except (OSError, ValueError, KeyError, TypeError):
+                        continue
     return None
 
 

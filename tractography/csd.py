@@ -401,8 +401,12 @@ def build_csd_act_commands(config: CSDActConfig) -> tuple[tuple[str, ...], ...]:
             sift2_mu_path(tractogram).as_posix(),
             "-force",
         ]
-        if effective_nthreads(config) is not None:
-            tcksift2.extend(["-nthreads", str(effective_nthreads(config))])
+        sift2_threads = effective_nthreads(config)
+        if sift2_threads is None and (os.cpu_count() or 1) > 36:
+            # Avoid dual-socket NUMA contention in tcksift2 on >36-CPU servers while keeping <=36 unchanged.
+            sift2_threads = 36
+        if sift2_threads is not None:
+            tcksift2.extend(["-nthreads", str(sift2_threads)])
         commands.append(tuple(tcksift2))
     if config.export_vtk:
         commands.append(
@@ -531,12 +535,41 @@ def _sift2_mu_summary(path: Path) -> dict[str, object]:
 def _vtk_streamline_summary(path: Path) -> dict[str, object]:
     import re
 
+    pattern = re.compile(rb"(?im)^[ \t]*LINES[ \t]+(\d+)[ \t]+")
+    chunk_size = 8 * 1024 * 1024
+    overlap = 64
+    tail = b""
     match = None
     with path.open("rb") as stream:
-        for line in stream:
-            match = re.match(rb"(?i)^\s*LINES\s+(\d+)\s+", line)
+        while True:
+            buf = stream.read(chunk_size)
+            if not buf:
+                break
+            window = tail + buf
+            search_pos = 0
+            while True:
+                idx_upper = window.find(b"LINES", search_pos)
+                idx_lower = window.find(b"lines", search_pos)
+                if idx_upper == -1 and idx_lower == -1:
+                    break
+                pos = idx_upper if idx_lower == -1 else (idx_lower if idx_upper == -1 else min(idx_upper, idx_lower))
+                line_start = window.rfind(b"\n", 0, pos)
+                line_start = 0 if line_start == -1 else line_start + 1
+                m = pattern.match(window, line_start)
+                if m is not None:
+                    match = m
+                    break
+                search_pos = pos + 5
             if match is not None:
                 break
+            tail = window[-overlap:]
+    if match is None:
+        # Rare mixed-case fallback (e.g., "Lines") without penalizing the common uppercase/lowercase path.
+        with path.open("rb") as stream:
+            for line in stream:
+                match = re.match(rb"(?i)^\s*LINES\s+(\d+)\s+", line)
+                if match is not None:
+                    break
     if match is None:
         raise ValueError("VTK LINES count was not found")
     return {

@@ -178,8 +178,9 @@ def _forward_fused_logits(model, sub_batch, *, use_cuda, device):
     """Run ``model`` with automatic single-slice CUDA/MPS OOM retry for low-memory GPUs."""
     target_device = device if isinstance(device, torch.device) else torch.device(device)
     if target_device.type == "cpu":
-        _, out_list = model(sub_batch)
-        return out_list[0].detach().cpu()
+        inp = sub_batch.to(memory_format=torch.channels_last) if sub_batch.ndim == 4 else sub_batch
+        _, out_list = model(inp)
+        return out_list[0].detach().contiguous().cpu()
     non_blocking = target_device.type == "cuda" and bool(getattr(sub_batch, "is_pinned", lambda: False)())
     try:
         _, out_list = model(sub_batch.to(target_device, non_blocking=non_blocking))
@@ -227,6 +228,10 @@ def run_network(img_filename, orig_data, prediction_probability, plane, ckpts, p
     model.FastSurferCNNs = backbones
     if torch.device(params_model["device"]).type == "cpu":
         zero_subnormal_module_weights(model)
+        try:
+            model.to(memory_format=torch.channels_last)
+        except Exception:
+            pass
     model.to(params_model["device"])
     model.eval()
 
@@ -393,7 +398,7 @@ def fastsurfercnn(img_filename, save_as, logger, args):
     if device.type == "cpu":
         enable_cpu_flush_denormal(torch)
         prev_torch_threads = torch.get_num_threads()
-        torch.set_num_threads(optimal_cpu_torch_threads(max_conv_threads=16))
+        torch.set_num_threads(optimal_cpu_torch_threads(max_conv_threads=16, server_max_threads=36))
 
     params_model = {'device': device, "use_cuda": use_cuda, "batch_size": effective_batch_size, "model_parallel": model_parallel}
     logger.info("Cuda available: {}, # Available GPUS: {}, Cuda user disabled (--no_cuda flag): {}, --> Using device: {} (batch_size={})".format(torch.cuda.is_available(), torch.cuda.device_count(),  args.no_cuda, device, effective_batch_size))

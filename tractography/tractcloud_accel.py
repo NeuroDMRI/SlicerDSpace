@@ -449,6 +449,12 @@ def install_tractcloud_accelerations(pipeline_mod, resolved_device: str = "cpu")
             from shared.hardware_adapt import enable_cpu_flush_denormal
 
             enable_cpu_flush_denormal(torch)
+            if (
+                not os.environ.get("SLICERDSPACE_STAGE_CPUS", "").strip()
+                and not os.environ.get("OMP_NUM_THREADS", "").strip()
+                and torch.get_num_threads() > 36
+            ):
+                torch.set_num_threads(36)
 
         n_total = len(ds)
         if n_total == 0:
@@ -468,6 +474,12 @@ def install_tractcloud_accelerations(pipeline_mod, resolved_device: str = "cpu")
                 max_batch=batch_size,
                 device=target_dev,
             )
+        elif target_dev.type == "cpu":
+            # Keep DGCNN conv1..4 activations inside L3 cache on CPU instead of
+            # materializing 786 MB batches at batch_size=2048 (0 pred diffs).
+            n_thr = torch.get_num_threads()
+            cpu_cap = 64 if n_thr >= 32 else (128 if n_thr >= 24 else 256)
+            batch_size = min(batch_size, cpu_cap)
         total_batches = max(1, (n_total + batch_size - 1) // batch_size)
 
         non_blocking = target_dev.type == "cuda"

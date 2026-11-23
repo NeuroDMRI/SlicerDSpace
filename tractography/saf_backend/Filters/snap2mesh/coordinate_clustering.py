@@ -15,17 +15,33 @@ except Exception:  # pragma: no cover - optional sklearn dependency helper
 
 def _parallel_exact_kmeans_labels(p, k: int, n_init: int = 10, random_state: int = 0):
     """Run sklearn's exact 1-thread KMeans initializations concurrently across workers."""
+    from contextlib import nullcontext
     import sklearn.cluster._kmeans as km_mod
 
     est = KMeans(n_clusters=k, n_init=n_init, random_state=random_state)
-    X = est._validate_data(
-        p,
-        accept_sparse="csr",
-        dtype=[np.float64, np.float32],
-        order="C",
-        copy=est.copy_x,
-        accept_large_sparse=False,
-    )
+    try:
+        from sklearn.utils.validation import validate_data as _sk_validate_data
+    except ImportError:
+        _sk_validate_data = None
+    if _sk_validate_data is not None:
+        X = _sk_validate_data(
+            est,
+            p,
+            accept_sparse="csr",
+            dtype=[np.float64, np.float32],
+            order="C",
+            copy=est.copy_x,
+            accept_large_sparse=False,
+        )
+    else:
+        X = est._validate_data(
+            p,
+            accept_sparse="csr",
+            dtype=[np.float64, np.float32],
+            order="C",
+            copy=est.copy_x,
+            accept_large_sparse=False,
+        )
     est._check_params_vs_input(X)
     rng = check_random_state(est.random_state)
     sample_weight = np.ones(X.shape[0], dtype=X.dtype)
@@ -35,37 +51,36 @@ def _parallel_exact_kmeans_labels(p, k: int, n_init: int = 10, random_state: int
     x_squared_norms = row_norms(X_centered, squared=True)
 
     kmeans_single = km_mod._kmeans_single_elkan if est._algorithm == "elkan" else km_mod._kmeans_single_lloyd
-    seeds = rng.randint(np.iinfo(np.int32).max, size=est._n_init)
+
+    # Generate initial centers sequentially from the single RNG to guarantee bit-exact parity with KMeans.fit.
+    inits = [
+        est._init_centroids(
+            X_centered,
+            x_squared_norms=x_squared_norms,
+            init="k-means++",
+            random_state=rng,
+            sample_weight=sample_weight,
+        )
+        for _ in range(est._n_init)
+    ]
 
     env_cpus = os.environ.get("SLICERDSPACE_STAGE_CPUS", "").strip()
-    avail = int(env_cpus) if env_cpus.isdigit() and int(env_cpus) > 0 else min(8, os.cpu_count() or 1)
-    max_workers = max(1, min(int(n_init), avail))
+    avail = int(env_cpus) if env_cpus.isdigit() and int(env_cpus) > 0 else max(1, os.cpu_count() or 1)
+    max_workers = max(1, min(int(est._n_init), avail))
 
-    def _run_seed(seed_val):
-        if threadpool_limits is None:
-            centers_init = est._init_centroids(
-                X_centered, x_squared_norms=x_squared_norms, init="k-means++",
-                random_state=check_random_state(int(seed_val)), sample_weight=sample_weight,
-            )
-            return kmeans_single(
-                X_centered, sample_weight, centers_init, max_iter=est.max_iter,
-                verbose=est.verbose, tol=est._tol, n_threads=1,
-            )
-        with threadpool_limits(limits=1):
-            centers_init = est._init_centroids(
-                X_centered, x_squared_norms=x_squared_norms, init="k-means++",
-                random_state=check_random_state(int(seed_val)), sample_weight=sample_weight,
-            )
-            return kmeans_single(
-                X_centered, sample_weight, centers_init, max_iter=est.max_iter,
-                verbose=est.verbose, tol=est._tol, n_threads=1,
-            )
+    def _run_init(centers_init):
+        return kmeans_single(
+            X_centered, sample_weight, centers_init, max_iter=est.max_iter,
+            verbose=est.verbose, tol=est._tol, n_threads=1,
+        )
 
-    if max_workers <= 1:
-        results = [_run_seed(s) for s in seeds]
-    else:
-        with ThreadPoolExecutor(max_workers=max_workers) as pool:
-            results = list(pool.map(_run_seed, seeds))
+    blas_ctx = threadpool_limits(limits=1) if threadpool_limits is not None else nullcontext()
+    with blas_ctx:
+        if max_workers <= 1:
+            results = [_run_init(c) for c in inits]
+        else:
+            with ThreadPoolExecutor(max_workers=max_workers) as pool:
+                results = list(pool.map(_run_init, inits))
 
     best_labels = None
     best_inertia = None

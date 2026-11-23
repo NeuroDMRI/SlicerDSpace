@@ -505,7 +505,8 @@ def _preload_vendored_models(model_dir: Path, resolved_device: str, pnl_inf, pnl
     model = pnl_mod.CompNet().to(resolved_device)
     model.eval()
     if str(resolved_device).startswith("cuda"):
-        torch.backends.cudnn.benchmark = True
+        # Avoid multi-second cuDNN autotune sweeps across the 3 small batch shapes (~6 batches/view).
+        torch.backends.cudnn.benchmark = False
         with torch.inference_mode():
             model(torch.zeros((1, 1, 256, 256), dtype=torch.float32, device=resolved_device), segmentation_only=True)
             torch.cuda.synchronize()

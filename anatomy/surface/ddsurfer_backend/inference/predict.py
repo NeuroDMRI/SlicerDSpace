@@ -52,7 +52,7 @@ def _resolve_optimal_cpu_threads(requested_threads: int, device_str: str) -> int
     try:
         from shared.hardware_adapt import optimal_cpu_torch_threads
 
-        opt = int(optimal_cpu_torch_threads(max_conv_threads=8))
+        opt = int(optimal_cpu_torch_threads(max_conv_threads=8, server_max_threads=36))
     except Exception:
         cpus = max(1, int(os.cpu_count() or 4))
         if sys.platform == 'darwin' and cpus >= 6:

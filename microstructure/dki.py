@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import gzip
 import hashlib
 import importlib.metadata
 import json
+import os
 from pathlib import Path
 import shutil
 import tempfile
@@ -795,6 +797,144 @@ def _predict_and_rtk_cuda(model, params, s0, observed, device: str = "cuda"):
     return rmse, nrmse, rtk
 
 
+_DKI_FORK_CTX: dict[str, Any] | None = None
+_DKI_FORK_THREAD_LIMIT: Any = None
+
+
+def _init_dki_fork_worker() -> None:
+    global _DKI_FORK_THREAD_LIMIT
+    for key in (
+        "OMP_NUM_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "MKL_NUM_THREADS",
+        "BLIS_NUM_THREADS",
+        "VECLIB_MAXIMUM_THREADS",
+        "NUMEXPR_NUM_THREADS",
+    ):
+        os.environ[key] = "1"
+    try:
+        from threadpoolctl import threadpool_limits
+
+        _DKI_FORK_THREAD_LIMIT = threadpool_limits(limits=1)
+    except Exception:
+        _DKI_FORK_THREAD_LIMIT = None
+
+
+def _resolve_dki_fork_workers(config: DkiConfig) -> int:
+    """Resolve Linux fork worker count for CPU dense DKI fitting (bit-exact with serial path)."""
+    if not sys.platform.startswith("linux"):
+        return 1
+    torch_mod = sys.modules.get("torch")
+    if torch_mod is not None:
+        try:
+            if torch_mod.cuda.is_initialized():
+                return 1
+        except Exception:
+            pass
+    try:
+        avail = len(os.sched_getaffinity(0))
+    except (AttributeError, OSError):
+        avail = os.cpu_count() or 1
+    if config.num_threads is not None:
+        return max(1, min(int(config.num_threads), avail))
+    env_stage = os.environ.get("SLICERDSPACE_STAGE_CPUS", "").strip()
+    if env_stage.isdigit() and int(env_stage) > 0:
+        return max(1, min(int(env_stage), avail))
+    try:
+        from shared.hardware_adapt import host_total_ram_gib
+
+        tot_gib = host_total_ram_gib()
+    except Exception:
+        tot_gib = None
+    if tot_gib is not None and tot_gib > 48.0 and avail >= 8:
+        return max(1, min(72, max(1, avail // 2)))
+    return 1
+
+
+def _dki_fork_chunk_worker(bounds: tuple[int, int]):
+    start, stop = bounds
+    ctx = _DKI_FORK_CTX
+    assert ctx is not None
+    import numpy as np
+    from dipy.reconst.dki import DiffusionKurtosisFit
+
+    masked_unscaled = ctx["masked_unscaled"]
+    slope = ctx["slope"]
+    inter = ctx["inter"]
+    model = ctx["model"]
+    fit_method_name = ctx["fit_method_name"]
+
+    t0 = time.monotonic()
+    signals = np.asarray(masked_unscaled[start:stop], dtype=np.float64) * slope + inter
+    finite = np.isfinite(signals).all(axis=1)
+    positive = (signals > 0).all(axis=1)
+    nonfinite_cnt = int(np.count_nonzero(~finite))
+    nonpos_cnt = int(np.count_nonzero(finite & ~positive))
+    fit_local = finite & positive
+    t_read = time.monotonic() - t0
+    if not np.any(fit_local):
+        return (start, stop, nonfinite_cnt, nonpos_cnt, fit_local, None, None, None, None, None, None, t_read, 0.0, 0.0)
+
+    observed = signals[fit_local]
+    t1 = time.monotonic()
+    params, s0 = _fit_dki_chunk(model, observed, fit_method_name)
+    t_fit = time.monotonic() - t1
+
+    t2 = time.monotonic()
+    fitted = DiffusionKurtosisFit(model, params, model_S0=s0)
+    predictions = _predict_dki_chunk(model, params, s0)
+    with np.errstate(invalid="ignore", divide="ignore", over="ignore"):
+        raw = {
+            key: np.asarray(getattr(fitted, key)(min_kurtosis=None, max_kurtosis=None)).reshape(-1)
+            for key in ("mk", "ak", "rk", "mkt")
+        }
+        raw["rtk"] = (
+            _compute_rtk_cpu(params)
+            if len(params) > 64
+            else np.asarray(fitted.rtk(min_kurtosis=None, max_kurtosis=None)).reshape(-1)
+        )
+        raw["kfa"] = np.asarray(fitted.kfa).reshape(-1)
+        rmse = np.sqrt(np.mean((predictions - observed) ** 2, axis=1))
+        nrmse = rmse / s0
+    valid = np.isfinite(params).all(axis=1) & np.isfinite(s0) & (s0 > 0)
+    valid &= (np.asarray(fitted.evals) > model.min_diffusivity).all(axis=1)
+    valid &= np.isfinite(rmse) & np.isfinite(nrmse)
+    t_met = time.monotonic() - t2
+    return (start, stop, nonfinite_cnt, nonpos_cnt, fit_local, params, s0, raw, rmse, nrmse, valid, t_read, t_fit, t_met)
+
+
+def _dki_fork_metrics_worker(chunk: tuple[Any, Any]):
+    """Evaluate DIPY array-level kurtosis metrics in a pre-forked CPU worker (bit-exact)."""
+    params, s0 = chunk
+    ctx = _DKI_FORK_CTX
+    assert ctx is not None
+    import numpy as np
+    from dipy.reconst.dki import DiffusionKurtosisFit
+
+    model = ctx["model"]
+    fitted = DiffusionKurtosisFit(model, params, model_S0=s0)
+    with np.errstate(invalid="ignore", divide="ignore", over="ignore"):
+        raw = {
+            key: np.asarray(getattr(fitted, key)(min_kurtosis=None, max_kurtosis=None)).reshape(-1)
+            for key in ("mk", "ak", "rk", "mkt")
+        }
+        raw["kfa"] = np.asarray(fitted.kfa).reshape(-1)
+    return raw
+
+
+def _save_dki_nifti_fast(array, affine, header, staged_path: Path, final_path: Path) -> None:
+    import nibabel as nib
+
+    img = nib.Nifti1Image(array, affine, header)
+    if str(staged_path).endswith(".nii.gz"):
+        with open(staged_path, "wb", buffering=2 * 1024 * 1024) as raw_fh:
+            with gzip.GzipFile(filename="", mode="wb", fileobj=raw_fh, compresslevel=1, mtime=0) as gz_fh:
+                img.to_file_map({"image": nib.FileHolder(fileobj=gz_fh)})
+    else:
+        nib.save(img, str(staged_path))
+    staged_path.replace(final_path)
+
+
 def _compute_maps(config: DkiConfig, paths: dict[str, Path], log):
     phase_start = time.monotonic()
     phase_times = {key:0.0 for key in ('preparation','signal_read','tensor_fit','metrics_prediction','map_assignment','file_export')}
@@ -848,6 +988,7 @@ def _compute_maps(config: DkiConfig, paths: dict[str, Path], log):
             if dtype != np.uint8:
                 array.reshape((-1, 27) if key == "params" else (-1,))[flat_indices] = np.nan
             arrays[key] = array
+        cuda_metric_pool = None
         try:
             resolved_device = _resolve_dki_device(config.device)
             is_cuda_dev = resolved_device.startswith("cuda")
@@ -857,6 +998,24 @@ def _compute_maps(config: DkiConfig, paths: dict[str, Path], log):
                 empty_cuda_cache_safely,
                 is_cuda_oom,
             )
+
+            use_fast_dense_global = (
+                config.dense_metrics
+                and dense_supported
+                and getattr(type(model), "fit", None) is _ORIG_DKI_FIT
+                and "fit" not in model.__dict__
+            )
+            if is_cuda_dev and use_fast_dense_global and len(flat_indices) >= 16384:
+                cuda_metric_workers = min(32, _resolve_dki_fork_workers(config))
+                if cuda_metric_workers >= 2:
+                    import multiprocessing as mp
+
+                    global _DKI_FORK_CTX
+                    _DKI_FORK_CTX = {"model": model}
+                    cuda_metric_pool = mp.get_context("fork").Pool(
+                        processes=cuda_metric_workers,
+                        initializer=_init_dki_fork_worker,
+                    )
 
             if is_cuda_dev and config.dense_metrics and dense_supported:
                 per_voxel_bytes = max(8192, int(len(selected)) * 22 * 32)
@@ -883,50 +1042,162 @@ def _compute_maps(config: DkiConfig, paths: dict[str, Path], log):
                     masked_unscaled[:, col_idx] = vol_arr.ravel()[flat_indices]
                 phase_times['signal_read'] += time.monotonic() - stamp_pre
             last_progress_time = 0.0
-            for start in range(0, len(flat_indices), chunk_step):
-                stamp = time.monotonic()
-                indices = flat_indices[start:start + chunk_step]
-                if masked_unscaled is not None:
-                    signals = np.asarray(masked_unscaled[start:start + chunk_step], dtype=np.float64)
-                else:
-                    coordinates = np.unravel_index(indices, mask.shape)
-                    signals = np.asarray(unscaled[coordinates[0], coordinates[1], coordinates[2], :][:, selected], dtype=np.float64)
-                signals = signals * proxy.slope + proxy.inter
-                finite = np.isfinite(signals).all(axis=1)
-                positive = (signals > 0).all(axis=1)
-                counts["nonfinite_signal_voxels"] += int(np.count_nonzero(~finite))
-                counts["nonpositive_signal_voxels"] += int(np.count_nonzero(finite & ~positive))
-                fit_indices = indices[finite & positive]
-                phase_times['signal_read'] += time.monotonic()-stamp
-                if len(fit_indices):
+            fork_workers = (
+                _resolve_dki_fork_workers(config)
+                if (use_fast_dense_global and not is_cuda_dev and masked_unscaled is not None and len(flat_indices) >= 16384)
+                else 1
+            )
+            if fork_workers >= 2:
+                import multiprocessing as mp
+
+                fork_step = min(
+                    chunk_step,
+                    max(2048, (len(flat_indices) + fork_workers * 3 - 1) // (fork_workers * 3)),
+                )
+                chunk_ranges = [
+                    (s, min(s + fork_step, len(flat_indices)))
+                    for s in range(0, len(flat_indices), fork_step)
+                ]
+                eff_workers = min(fork_workers, len(chunk_ranges))
+                _DKI_FORK_CTX = {
+                    "masked_unscaled": masked_unscaled,
+                    "slope": proxy.slope,
+                    "inter": proxy.inter,
+                    "model": model,
+                    "fit_method_name": fit_method_name,
+                }
+                completed = 0
+                wall_fit_start = time.monotonic()
+                try:
+                    ctx_mp = mp.get_context("fork")
+                    with ctx_mp.Pool(processes=eff_workers, initializer=_init_dki_fork_worker) as pool:
+                        for result in pool.imap_unordered(_dki_fork_chunk_worker, chunk_ranges, chunksize=1):
+                            (
+                                start,
+                                stop,
+                                nonfinite_cnt,
+                                nonpos_cnt,
+                                fit_local,
+                                params,
+                                s0,
+                                raw,
+                                rmse,
+                                nrmse,
+                                valid,
+                                _t_read,
+                                _t_fit,
+                                _t_met,
+                            ) = result
+                            indices = flat_indices[start:stop]
+                            counts["nonfinite_signal_voxels"] += nonfinite_cnt
+                            counts["nonpositive_signal_voxels"] += nonpos_cnt
+                            if params is not None:
+                                dense_used = True
+                                fit_indices = indices[fit_local]
+                                stamp = time.monotonic()
+                                for key, values in raw.items():
+                                    upper = 1.0 if key == "kfa" else config.display_max_kurtosis
+                                    lower = 0.0 if key == "kfa" else config.display_min_kurtosis
+                                    arrays[f"{key}_raw"].ravel()[fit_indices] = values
+                                    arrays[key].ravel()[fit_indices] = np.clip(values, lower, upper)
+                                    metrics[key]["finite"] += int(np.count_nonzero(np.isfinite(values)))
+                                    metrics[key]["negative"] += int(np.count_nonzero(values < 0))
+                                    metrics[key]["below_display"] += int(np.count_nonzero(values < lower))
+                                    metrics[key]["above_display"] += int(np.count_nonzero(values > upper))
+                                    valid &= np.isfinite(values) & (values >= lower) & (values <= upper)
+                                arrays["params"].reshape(-1, 27)[fit_indices] = params
+                                arrays["s0"].ravel()[fit_indices] = s0
+                                arrays["rmse"].ravel()[fit_indices] = rmse
+                                arrays["nrmse"].ravel()[fit_indices] = nrmse
+                                arrays["fit_mask"].ravel()[fit_indices] = 1
+                                arrays["valid_mask"].ravel()[fit_indices] = valid.astype(np.uint8)
+                                counts["fitted_voxels"] += len(fit_indices)
+                                counts["valid_voxels"] += int(np.count_nonzero(valid))
+                                phase_times["map_assignment"] += time.monotonic() - stamp
+                            completed += len(indices)
+                            now_prog = time.monotonic()
+                            if completed == len(flat_indices) or (now_prog - last_progress_time >= 1.0):
+                                _progress(paths["progress"], config, "running", completed_voxels=completed, total_voxels=len(flat_indices), **counts)
+                                last_progress_time = now_prog
+                            if log and (completed == len(flat_indices) or completed % max(len(indices), 81920) < len(indices)):
+                                log(f"[DKI] Processed {completed}/{len(flat_indices)} mask voxels ({counts['valid_voxels']} valid)")
+                finally:
+                    _DKI_FORK_CTX = None
+                phase_times["tensor_fit"] += max(0.0, (time.monotonic() - wall_fit_start) - phase_times["map_assignment"])
+            else:
+                for start in range(0, len(flat_indices), chunk_step):
                     stamp = time.monotonic()
-                    observed = signals[finite & positive]
-                    use_fast_dense = (
-                        config.dense_metrics
-                        and dense_supported
-                        and getattr(type(model), "fit", None) is _ORIG_DKI_FIT
-                        and "fit" not in model.__dict__
-                    )
-                    if use_fast_dense and resolved_device.startswith("cuda"):
-                        from dipy.reconst.dki import DiffusionKurtosisFit
-                        try:
-                            params, s0 = _fit_dki_chunk_cuda(model, observed, fit_method_name, device=resolved_device)
-                            phase_times['tensor_fit'] += time.monotonic()-stamp
-                            stamp = time.monotonic()
-                            fitted = DiffusionKurtosisFit(model, params, model_S0=s0)
-                            dense_used = True
-                            rmse, nrmse, rtk_cuda = _predict_and_rtk_cuda(model, params, s0, observed, device=resolved_device)
-                            with np.errstate(invalid="ignore", divide="ignore", over="ignore"):
-                                raw = {
-                                    key: np.asarray(getattr(fitted, key)(min_kurtosis=None, max_kurtosis=None)).reshape(-1)
-                                    for key in ("mk", "ak", "rk", "mkt")
-                                }
-                                raw["rtk"] = rtk_cuda
-                                raw["kfa"] = np.asarray(fitted.kfa).reshape(-1)
-                        except BaseException as exc:
-                            if not is_cuda_oom(exc):
-                                raise
-                            empty_cuda_cache_safely()
+                    indices = flat_indices[start:start + chunk_step]
+                    if masked_unscaled is not None:
+                        signals = np.asarray(masked_unscaled[start:start + chunk_step], dtype=np.float64)
+                    else:
+                        coordinates = np.unravel_index(indices, mask.shape)
+                        signals = np.asarray(unscaled[coordinates[0], coordinates[1], coordinates[2], :][:, selected], dtype=np.float64)
+                    signals = signals * proxy.slope + proxy.inter
+                    finite = np.isfinite(signals).all(axis=1)
+                    positive = (signals > 0).all(axis=1)
+                    counts["nonfinite_signal_voxels"] += int(np.count_nonzero(~finite))
+                    counts["nonpositive_signal_voxels"] += int(np.count_nonzero(finite & ~positive))
+                    fit_indices = indices[finite & positive]
+                    phase_times['signal_read'] += time.monotonic()-stamp
+                    if len(fit_indices):
+                        stamp = time.monotonic()
+                        observed = signals[finite & positive]
+                        use_fast_dense = use_fast_dense_global
+                        if use_fast_dense and resolved_device.startswith("cuda"):
+                            from dipy.reconst.dki import DiffusionKurtosisFit
+                            try:
+                                params, s0 = _fit_dki_chunk_cuda(model, observed, fit_method_name, device=resolved_device)
+                                phase_times['tensor_fit'] += time.monotonic()-stamp
+                                stamp = time.monotonic()
+                                fitted = DiffusionKurtosisFit(model, params, model_S0=s0)
+                                dense_used = True
+                                rmse, nrmse, rtk_cuda = _predict_and_rtk_cuda(model, params, s0, observed, device=resolved_device)
+                                if cuda_metric_pool is not None and len(params) >= 4096:
+                                    sub_step = max(1024, (len(params) + cuda_metric_workers - 1) // cuda_metric_workers)
+                                    sub_chunks = [
+                                        (params[s:s + sub_step], s0[s:s + sub_step])
+                                        for s in range(0, len(params), sub_step)
+                                    ]
+                                    parts = cuda_metric_pool.map(_dki_fork_metrics_worker, sub_chunks)
+                                    raw = {
+                                        key: np.concatenate([p[key] for p in parts], axis=0)
+                                        for key in ("mk", "ak", "rk", "mkt", "kfa")
+                                    }
+                                    raw["rtk"] = rtk_cuda
+                                else:
+                                    with np.errstate(invalid="ignore", divide="ignore", over="ignore"):
+                                        raw = {
+                                            key: np.asarray(getattr(fitted, key)(min_kurtosis=None, max_kurtosis=None)).reshape(-1)
+                                            for key in ("mk", "ak", "rk", "mkt")
+                                        }
+                                        raw["rtk"] = rtk_cuda
+                                        raw["kfa"] = np.asarray(fitted.kfa).reshape(-1)
+                            except BaseException as exc:
+                                if not is_cuda_oom(exc):
+                                    raise
+                                empty_cuda_cache_safely()
+                                params, s0 = _fit_dki_chunk(model, observed, fit_method_name)
+                                phase_times['tensor_fit'] += time.monotonic()-stamp
+                                stamp = time.monotonic()
+                                fitted = DiffusionKurtosisFit(model, params, model_S0=s0)
+                                dense_used = True
+                                predictions = _predict_dki_chunk(model, params, s0)
+                                with np.errstate(invalid="ignore", divide="ignore", over="ignore"):
+                                    raw = {
+                                        key: np.asarray(getattr(fitted, key)(min_kurtosis=None, max_kurtosis=None)).reshape(-1)
+                                        for key in ("mk", "ak", "rk", "mkt")
+                                    }
+                                    raw["rtk"] = (
+                                        _compute_rtk_cpu(params)
+                                        if len(params) > 64
+                                        else np.asarray(fitted.rtk(min_kurtosis=None, max_kurtosis=None)).reshape(-1)
+                                    )
+                                    raw["kfa"] = np.asarray(fitted.kfa).reshape(-1)
+                                    rmse = np.sqrt(np.mean((predictions - observed) ** 2, axis=1))
+                                    nrmse = rmse / s0
+                        elif use_fast_dense:
+                            from dipy.reconst.dki import DiffusionKurtosisFit
                             params, s0 = _fit_dki_chunk(model, observed, fit_method_name)
                             phase_times['tensor_fit'] += time.monotonic()-stamp
                             stamp = time.monotonic()
@@ -946,95 +1217,87 @@ def _compute_maps(config: DkiConfig, paths: dict[str, Path], log):
                                 raw["kfa"] = np.asarray(fitted.kfa).reshape(-1)
                                 rmse = np.sqrt(np.mean((predictions - observed) ** 2, axis=1))
                                 nrmse = rmse / s0
-                    elif use_fast_dense:
-                        from dipy.reconst.dki import DiffusionKurtosisFit
-                        params, s0 = _fit_dki_chunk(model, observed, fit_method_name)
-                        phase_times['tensor_fit'] += time.monotonic()-stamp
+                        else:
+                            fitted = model.fit(observed)
+                            params = np.asarray(fitted.model_params)
+                            s0 = np.asarray(fitted.model_S0).reshape(-1)
+                            phase_times['tensor_fit'] += time.monotonic()-stamp
+                            stamp = time.monotonic()
+                            if config.dense_metrics and dense_supported:
+                                # Keep the author fit/parameters. Evaluate its existing
+                                # array-capable metrics without per-voxel Python wrappers.
+                                from dipy.reconst.multi_voxel import MultiVoxelFit
+                                from dipy.reconst.dki import DiffusionKurtosisFit
+                                if isinstance(fitted, MultiVoxelFit):
+                                    fitted = DiffusionKurtosisFit(model, params, model_S0=s0)
+                                    dense_used = True
+                            predictions = np.asarray(fitted.predict(gtab, S0=s0))
+                            with np.errstate(invalid="ignore", divide="ignore", over="ignore"):
+                                raw = {
+                                    key: np.asarray(getattr(fitted, key)(min_kurtosis=None, max_kurtosis=None)).reshape(-1)
+                                    for key in DKI_METRICS if key != "kfa"
+                                }
+                                raw["kfa"] = np.asarray(fitted.kfa).reshape(-1)
+                                rmse = np.sqrt(np.mean((predictions - observed) ** 2, axis=1))
+                                nrmse = rmse / s0
+                        phase_times['metrics_prediction'] += time.monotonic()-stamp
                         stamp = time.monotonic()
-                        fitted = DiffusionKurtosisFit(model, params, model_S0=s0)
-                        dense_used = True
-                        predictions = _predict_dki_chunk(model, params, s0)
-                        with np.errstate(invalid="ignore", divide="ignore", over="ignore"):
-                            raw = {
-                                key: np.asarray(getattr(fitted, key)(min_kurtosis=None, max_kurtosis=None)).reshape(-1)
-                                for key in ("mk", "ak", "rk", "mkt")
-                            }
-                            raw["rtk"] = (
-                                _compute_rtk_cpu(params)
-                                if len(params) > 64
-                                else np.asarray(fitted.rtk(min_kurtosis=None, max_kurtosis=None)).reshape(-1)
-                            )
-                            raw["kfa"] = np.asarray(fitted.kfa).reshape(-1)
-                            rmse = np.sqrt(np.mean((predictions - observed) ** 2, axis=1))
-                            nrmse = rmse / s0
-                    else:
-                        fitted = model.fit(observed)
-                        params = np.asarray(fitted.model_params)
-                        s0 = np.asarray(fitted.model_S0).reshape(-1)
-                        phase_times['tensor_fit'] += time.monotonic()-stamp
-                        stamp = time.monotonic()
-                        if config.dense_metrics and dense_supported:
-                            # Keep the author fit/parameters. Evaluate its existing
-                            # array-capable metrics without per-voxel Python wrappers.
-                            from dipy.reconst.multi_voxel import MultiVoxelFit
-                            from dipy.reconst.dki import DiffusionKurtosisFit
-                            if isinstance(fitted, MultiVoxelFit):
-                                fitted = DiffusionKurtosisFit(model, params, model_S0=s0)
-                                dense_used = True
-                        predictions = np.asarray(fitted.predict(gtab, S0=s0))
-                        with np.errstate(invalid="ignore", divide="ignore", over="ignore"):
-                            raw = {
-                                key: np.asarray(getattr(fitted, key)(min_kurtosis=None, max_kurtosis=None)).reshape(-1)
-                                for key in DKI_METRICS if key != "kfa"
-                            }
-                            raw["kfa"] = np.asarray(fitted.kfa).reshape(-1)
-                            rmse = np.sqrt(np.mean((predictions - observed) ** 2, axis=1))
-                            nrmse = rmse / s0
-                    phase_times['metrics_prediction'] += time.monotonic()-stamp
-                    stamp = time.monotonic()
-                    valid = np.isfinite(params).all(axis=1) & np.isfinite(s0) & (s0 > 0)
-                    valid &= (np.asarray(fitted.evals) > model.min_diffusivity).all(axis=1)
-                    valid &= np.isfinite(rmse) & np.isfinite(nrmse)
-                    for key, values in raw.items():
-                        upper = 1.0 if key == "kfa" else config.display_max_kurtosis
-                        lower = 0.0 if key == "kfa" else config.display_min_kurtosis
-                        arrays[f"{key}_raw"].ravel()[fit_indices] = values
-                        arrays[key].ravel()[fit_indices] = np.clip(values, lower, upper)
-                        metrics[key]["finite"] += int(np.count_nonzero(np.isfinite(values)))
-                        metrics[key]["negative"] += int(np.count_nonzero(values < 0))
-                        metrics[key]["below_display"] += int(np.count_nonzero(values < lower))
-                        metrics[key]["above_display"] += int(np.count_nonzero(values > upper))
-                        valid &= np.isfinite(values) & (values >= lower) & (values <= upper)
-                    arrays["params"].reshape(-1, 27)[fit_indices] = params
-                    arrays["s0"].ravel()[fit_indices] = s0
-                    arrays["rmse"].ravel()[fit_indices] = rmse
-                    arrays["nrmse"].ravel()[fit_indices] = nrmse
-                    arrays["fit_mask"].ravel()[fit_indices] = 1
-                    arrays["valid_mask"].ravel()[fit_indices] = valid.astype(np.uint8)
-                    counts["fitted_voxels"] += len(fit_indices)
-                    counts["valid_voxels"] += int(np.count_nonzero(valid))
-                    phase_times['map_assignment'] += time.monotonic()-stamp
-                completed = min(start + len(indices), len(flat_indices))
-                now_prog = time.monotonic()
-                if start == 0 or completed == len(flat_indices) or (now_prog - last_progress_time >= 1.0):
-                    _progress(paths["progress"], config, "running", completed_voxels=completed, total_voxels=len(flat_indices), **counts)
-                    last_progress_time = now_prog
-                if log:
-                    log(f"[DKI] Processed {completed}/{len(flat_indices)} mask voxels ({counts['valid_voxels']} valid)")
+                        valid = np.isfinite(params).all(axis=1) & np.isfinite(s0) & (s0 > 0)
+                        valid &= (np.asarray(fitted.evals) > model.min_diffusivity).all(axis=1)
+                        valid &= np.isfinite(rmse) & np.isfinite(nrmse)
+                        for key, values in raw.items():
+                            upper = 1.0 if key == "kfa" else config.display_max_kurtosis
+                            lower = 0.0 if key == "kfa" else config.display_min_kurtosis
+                            arrays[f"{key}_raw"].ravel()[fit_indices] = values
+                            arrays[key].ravel()[fit_indices] = np.clip(values, lower, upper)
+                            metrics[key]["finite"] += int(np.count_nonzero(np.isfinite(values)))
+                            metrics[key]["negative"] += int(np.count_nonzero(values < 0))
+                            metrics[key]["below_display"] += int(np.count_nonzero(values < lower))
+                            metrics[key]["above_display"] += int(np.count_nonzero(values > upper))
+                            valid &= np.isfinite(values) & (values >= lower) & (values <= upper)
+                        arrays["params"].reshape(-1, 27)[fit_indices] = params
+                        arrays["s0"].ravel()[fit_indices] = s0
+                        arrays["rmse"].ravel()[fit_indices] = rmse
+                        arrays["nrmse"].ravel()[fit_indices] = nrmse
+                        arrays["fit_mask"].ravel()[fit_indices] = 1
+                        arrays["valid_mask"].ravel()[fit_indices] = valid.astype(np.uint8)
+                        counts["fitted_voxels"] += len(fit_indices)
+                        counts["valid_voxels"] += int(np.count_nonzero(valid))
+                        phase_times['map_assignment'] += time.monotonic()-stamp
+                    completed = min(start + len(indices), len(flat_indices))
+                    now_prog = time.monotonic()
+                    if start == 0 or completed == len(flat_indices) or (now_prog - last_progress_time >= 1.0):
+                        _progress(paths["progress"], config, "running", completed_voxels=completed, total_voxels=len(flat_indices), **counts)
+                        last_progress_time = now_prog
+                    if log:
+                        log(f"[DKI] Processed {completed}/{len(flat_indices)} mask voxels ({counts['valid_voxels']} valid)")
             if not counts["fitted_voxels"]:
                 raise ValueError("DKI has no masked voxels with finite, strictly positive selected measurements")
             if not counts["valid_voxels"]:
                 raise ValueError("DKI has no valid quantitative voxels; inspect acquisition and raw fit quality")
             stamp = time.monotonic()
+            export_jobs = []
             for key, array in arrays.items():
                 array.flush()
                 header = image.header.copy()
                 header.set_data_dtype(array.dtype)
                 staged = work / paths[key].name
-                nib.save(nib.Nifti1Image(array, image.affine, header), str(staged))
-                staged.replace(paths[key])
+                export_jobs.append((array, image.affine, header, staged, paths[key]))
+            export_workers = min(8, max(1, os.cpu_count() or 1), len(export_jobs))
+            if export_workers > 1 and len(flat_indices) >= 1024:
+                with ThreadPoolExecutor(max_workers=export_workers) as export_pool:
+                    futs = [export_pool.submit(_save_dki_nifti_fast, *job) for job in export_jobs]
+                    for fut in futs:
+                        fut.result()
+            else:
+                for job in export_jobs:
+                    _save_dki_nifti_fast(*job)
             phase_times['file_export'] = time.monotonic()-stamp
         finally:
+            if cuda_metric_pool is not None:
+                cuda_metric_pool.close()
+                cuda_metric_pool.join()
+                _DKI_FORK_CTX = None
             if resolved_device.startswith("cuda"):
                 empty_cuda_cache_safely()
             for array in arrays.values():

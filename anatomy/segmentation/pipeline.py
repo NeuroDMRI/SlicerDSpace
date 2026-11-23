@@ -41,7 +41,7 @@ def predict_model_space(stacked: np.ndarray, cfg: DDSegConfig) -> tuple[np.ndarr
     prev_threads = None
     if str(cfg.device).startswith("cpu") and not os.environ.get("SLICERDSPACE_STAGE_CPUS"):
         prev_threads = torch.get_num_threads()
-        torch.set_num_threads(optimal_cpu_torch_threads(max_conv_threads=8))
+        torch.set_num_threads(optimal_cpu_torch_threads(max_conv_threads=8, server_max_threads=36))
     try:
         models = load_models(cfg.weights_dir, "dti", cfg.device)
         pred_axial = predict_view(models.axial, views["axial"], cfg.apply_softmax)

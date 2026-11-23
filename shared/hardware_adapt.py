@@ -517,24 +517,81 @@ def adaptive_spawn_workers(
     return max(1, min(req, int(max_workers), budget_workers))
 
 
+def _parse_linux_cpulist(spec: str) -> list[int]:
+    """Parse Linux sysfs cpulist strings such as ``'0-35,72-107'`` into sorted CPU IDs."""
+    cpus: list[int] = []
+    for part in spec.strip().split(","):
+        token = part.strip()
+        if not token:
+            continue
+        if "-" in token:
+            lo_s, hi_s = token.split("-", 1)
+            if lo_s.isdigit() and hi_s.isdigit():
+                lo, hi = int(lo_s), int(hi_s)
+                if hi >= lo:
+                    cpus.extend(range(lo, hi + 1))
+        elif token.isdigit():
+            cpus.append(int(token))
+    return sorted(set(cpus))
+
+
+def linux_single_socket_physical_cores(logical_cpus: int | None = None) -> int:
+    """Return physical core count of NUMA node 0 on Linux (fallback: ``logical_cpus // 2``).
+
+    Keeping PyTorch CPU conv2d/conv3d OpenMP threads within a single NUMA socket avoids
+    cross-socket UPI/QPI synchronization overhead on dual-socket Xeon/EPYC servers while
+    still scaling past the 8-16 thread consumer desktop cap.
+    """
+    fallback = max(1, int(logical_cpus or os.cpu_count() or 4))
+    node0_path = Path("/sys/devices/system/node/node0/cpulist")
+    try:
+        if node0_path.is_file():
+            node0_cpus = _parse_linux_cpulist(node0_path.read_text(encoding="utf-8"))
+            if node0_cpus:
+                phys_pairs: set[tuple[str, str]] = set()
+                for cpu_id in node0_cpus:
+                    topo = Path(f"/sys/devices/system/cpu/cpu{cpu_id}/topology")
+                    core_p = topo / "core_id"
+                    pkg_p = topo / "physical_package_id"
+                    if core_p.is_file():
+                        core_id = core_p.read_text(encoding="utf-8").strip()
+                        pkg_id = pkg_p.read_text(encoding="utf-8").strip() if pkg_p.is_file() else "0"
+                        phys_pairs.add((pkg_id, core_id))
+                if phys_pairs:
+                    return max(1, len(phys_pairs))
+                return max(1, len(node0_cpus) // 2 if len(node0_cpus) >= 16 else len(node0_cpus))
+    except OSError:
+        pass
+    return max(1, fallback // 2 if fallback >= 32 else fallback)
+
+
 def optimal_cpu_torch_threads(
     reserved_cpus: int | None = None,
     *,
     max_conv_threads: int = 8,
+    server_max_threads: int | None = None,
     platform_name: str | None = None,
     is_apple_silicon: bool | None = None,
 ) -> int:
-    """Choose PyTorch CPU intra-op thread count avoiding OpenMP contention on small 2D slices and E-cores."""
+    """Choose PyTorch CPU intra-op thread count avoiding OpenMP contention on small 2D slices and E-cores.
+
+    When ``server_max_threads`` is supplied on high-core, high-RAM (>48 GiB) Linux servers without an
+    explicit stage reservation, scales up to single-socket physical cores (capped by ``server_max_threads``)
+    so dual-socket Xeon/EPYC hosts are not artificially throttled to desktop thread counts.
+    """
+    eff_cap = max(int(max_conv_threads), int(server_max_threads)) if server_max_threads is not None else int(max_conv_threads)
     env_stage = os.environ.get("SLICERDSPACE_STAGE_CPUS", "").strip()
     if reserved_cpus is None and env_stage.isdigit() and int(env_stage) > 0:
         reserved_cpus = int(env_stage)
     if reserved_cpus is not None and int(reserved_cpus) > 0:
-        return max(1, min(int(reserved_cpus), int(max_conv_threads)))
+        return max(1, min(int(reserved_cpus), eff_cap))
+    mem_b = 0
     try:
         from shared.compute_schedule import available_resources
 
-        cpus, _ = available_resources()
+        cpus, mem_b = available_resources()
         cpus = max(1, int(cpus))
+        mem_b = int(mem_b)
     except Exception:
         cpus = max(1, int(os.cpu_count() or 4))
     plat = sys.platform if platform_name is None else str(platform_name).lower()
@@ -543,6 +600,12 @@ def optimal_cpu_torch_threads(
         # Leave efficiency cores headroom so OpenMP barriers do not stall behind E-cores.
         p_cap = max(4, cpus - 2) if cpus <= 10 else max(6, (cpus * 3) // 4)
         return max(1, min(cpus, p_cap, int(max_conv_threads)))
+    if server_max_threads is not None and plat.startswith("linux") and cpus >= 32:
+        tot_gib = (float(mem_b) / float(GIB)) if mem_b > 0 else host_total_ram_gib()
+        if tot_gib is not None and tot_gib > 48.0:
+            socket_phys = linux_single_socket_physical_cores(cpus)
+            target = min(cpus, socket_phys, int(server_max_threads))
+            return max(int(max_conv_threads), target)
     return max(1, min(cpus, int(max_conv_threads)))
 
 

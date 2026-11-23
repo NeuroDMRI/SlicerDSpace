@@ -468,11 +468,20 @@ def _host_ram_gib() -> float | None:
     return None
 
 
+def _is_optimized_standalone_executable(executable: Path | str | None) -> bool:
+    """True when ``executable`` is the bundled standalone optimized CPU UKF binary."""
+    if not executable:
+        return False
+    parts = [part.lower() for part in Path(executable).parts]
+    return "bundled-runtimes" in parts and any(part.startswith("ukf-") for part in parts)
+
+
 def resolve_adaptive_cpu_num_threads(
     selected: UKFParameters,
     inputs: dict | None,
     *,
     use_gpu: bool,
+    executable: Path | str | None = None,
     ram_gib: float | None = None,
     cpu_count: int | None = None,
     platform_name: str | None = None,
@@ -483,6 +492,8 @@ def resolve_adaptive_cpu_num_threads(
     Preserves explicit user overrides, GPU runs, cohort-scheduled runs, and high-RAM (>48 GiB)
     Linux/Windows servers unchanged, while capping memory-heavy CPU UKF runs on modest-RAM
     workstations and unified-memory macOS hosts to prevent OOM/swap thrashing and E-core stalls.
+    Bundled standalone optimized UKF binaries eliminate per-step heap allocations and flat-line
+    peak RSS across thread counts, so Windows/Linux hosts with >12 GiB RAM can use all cores.
     """
     if use_gpu or int(selected.numThreads) != -1 or os.environ.get("SLICERDSPACE_COHORT_SCHEDULE"):
         return int(selected.numThreads)
@@ -523,31 +534,38 @@ def resolve_adaptive_cpu_num_threads(
     volumes = int(inp.get("volumes") or 0)
     voxels = int(inp.get("effective_brain_voxels") or inp.get("brain_voxels") or 0)
     heavy = volumes >= 120 or voxels >= 450_000
+    optimized_standalone = _is_optimized_standalone_executable(executable)
 
     cap: int | None = None
     if heavy and host_ram is not None and host_ram <= 48.0:
-        if host_ram <= 12.0:
-            cap = min(cpus, 2)
-        elif host_ram <= 20.0:
-            cap = min(cpus, 4)
-        elif host_ram <= 36.0:
-            cap = min(cpus, 6)
+        if optimized_standalone:
+            # Optimized standalone UKF keeps flat RSS (~7.5 GiB on 288-vol HCP) and
+            # zero per-step allocator lock contention across threads; only guard <=12 GiB RAM.
+            if host_ram <= 12.0:
+                cap = min(cpus, 4)
         else:
-            cap = min(cpus, 8)
+            if host_ram <= 12.0:
+                cap = min(cpus, 2)
+            elif host_ram <= 20.0:
+                cap = min(cpus, 4)
+            elif host_ram <= 36.0:
+                cap = min(cpus, 6)
+            else:
+                cap = min(cpus, 8)
 
     if plat == "darwin":
         mac_cap: int | None = None
         if host_ram is not None:
             if host_ram <= 12.0:
-                mac_cap = min(cpus, 2)
+                mac_cap = min(cpus, 4 if optimized_standalone else 2)
             elif host_ram <= 20.0:
-                mac_cap = min(cpus, 4)
+                mac_cap = min(cpus, 8 if optimized_standalone else 4)
             elif host_ram <= 36.0:
-                mac_cap = min(cpus, 6)
+                mac_cap = min(cpus, max(6, (cpus * 3) // 4), 12) if (optimized_standalone and apple_silicon) else min(cpus, 10 if optimized_standalone else 6)
             elif apple_silicon:
-                mac_cap = min(cpus, max(6, (cpus * 3) // 4), 10)
+                mac_cap = min(cpus, max(6, (cpus * 3) // 4), 12 if optimized_standalone else 10)
         elif apple_silicon:
-            mac_cap = min(cpus, max(6, (cpus * 3) // 4), 10)
+            mac_cap = min(cpus, max(6, (cpus * 3) // 4), 12 if optimized_standalone else 10)
         if mac_cap is not None:
             cap = mac_cap if cap is None else min(cap, mac_cap)
 
@@ -563,9 +581,10 @@ def _ukf_cpu_memory_runtime_warning(
     inputs: dict,
     *,
     use_gpu: bool,
+    executable: Path | str | None = None,
     ram_gib: float | None = None,
 ) -> str | None:
-    """Warn when multi-shell high-resolution UKF runs on CPU with <=36 GiB RAM."""
+    """Warn when multi-shell high-resolution UKF runs on CPU under tight RAM."""
     if use_gpu:
         return None
     volumes = int(inputs.get("volumes") or 0)
@@ -574,7 +593,17 @@ def _ukf_cpu_memory_runtime_warning(
     if volumes < 150 or len(shells) < 2 or voxels < 500_000:
         return None
     host_ram = _host_ram_gib() if ram_gib is None else ram_gib
-    if host_ram is None or host_ram > 36.0:
+    if host_ram is None:
+        return None
+    if _is_optimized_standalone_executable(executable):
+        if host_ram > 16.0:
+            return None
+        return (
+            f"High-resolution multi-shell CPU UKF ({volumes} volumes, {len(shells)} shells, "
+            f"{voxels:,} mask voxels on {host_ram:.1f} GiB RAM) uses ~8 GB peak RAM during loading; "
+            "close large applications or consider CSD/ACT or GPU UKF (--useGPU) if memory pressure occurs."
+        )
+    if host_ram > 36.0:
         return None
     return (
         f"High-resolution multi-shell CPU UKF ({volumes} volumes, {len(shells)} shells, "
@@ -1349,7 +1378,7 @@ def run_ukf(raw, directory, *, options=None, executable=None, converter=None, de
         gpu_precision=gpu_precision,
     )
     inputs, effective = _validated_inputs(raw)
-    eff_threads = resolve_adaptive_cpu_num_threads(selected, inputs, use_gpu=use_gpu)
+    eff_threads = resolve_adaptive_cpu_num_threads(selected, inputs, use_gpu=use_gpu, executable=binary)
     execution_selected = replace(selected, numThreads=eff_threads) if eff_threads != selected.numThreads else selected
     record = dict(
         status="running",
@@ -1376,7 +1405,7 @@ def run_ukf(raw, directory, *, options=None, executable=None, converter=None, de
         record["effective_mask"] = dict(path=str(products["effective_mask"]),
                                         sha256=digest(products["effective_mask"]))
         save()
-        cpu_mem_warning = _ukf_cpu_memory_runtime_warning(inputs, use_gpu=use_gpu)
+        cpu_mem_warning = _ukf_cpu_memory_runtime_warning(inputs, use_gpu=use_gpu, executable=binary)
         if cpu_mem_warning:
             inputs["warnings"] = [*inputs["warnings"], cpu_mem_warning]
         if log:
@@ -1460,6 +1489,10 @@ def run_ukf(raw, directory, *, options=None, executable=None, converter=None, de
                         and "tractography done on device" not in gpu_log
                     ):
                         raise RuntimeError("UKF GPU execution was not confirmed or fell back to CPU; see " + str(log_path))
+            # Release multi-GB intermediate NRRD buffers immediately after UKF completes so
+            # TRK export does not require double scratch disk space on modest system drives.
+            dwi.unlink(missing_ok=True)
+            mask.unlink(missing_ok=True)
             polydata_bundle = _load_validated_vtk_polydata(tracts)
             qc = output_qc(tracts, tracking_raw, selected, _polydata_bundle=polydata_bundle)
             qc['input_validation'] = inputs

@@ -26,10 +26,26 @@ from typing import Callable, Optional
 import nibabel as nib
 import numpy as np
 
-try:
-    import torch
-except ImportError:  # pragma: no cover - optional runtime dependency
-    torch = None  # type: ignore[assignment]
+_TORCH_UNSET = object()
+_TORCH_MOD: object = _TORCH_UNSET
+
+
+def _get_torch():
+    """Lazily import PyTorch only when CUDA is checked or used, keeping CPU runs fork-safe."""
+    global _TORCH_MOD
+    if _TORCH_MOD is _TORCH_UNSET:
+        try:
+            import torch as _torch_mod
+            _TORCH_MOD = _torch_mod
+        except ImportError:  # pragma: no cover - optional runtime dependency
+            _TORCH_MOD = None
+    return _TORCH_MOD
+
+
+def __getattr__(name: str):
+    if name == "torch":
+        return _get_torch()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def _single_thread_blas():
@@ -53,7 +69,8 @@ def resolve_noddi_device(requested: str | None = "auto") -> str:
         raise ValueError(f"noddi_device must be one of {sorted(VALID_NODDI_DEVICES)}, got {requested!r}")
     if req in {"cpu", "mps"}:
         return "cpu"
-    cuda_ok = bool(torch is not None and torch.cuda.is_available())
+    torch_mod = _get_torch()
+    cuda_ok = bool(torch_mod is not None and torch_mod.cuda.is_available())
     if (req == "cuda" or req.startswith("cuda:")) and not cuda_ok:
         raise RuntimeError("NODDI CUDA requested, but torch.cuda.is_available() is False.")
     if cuda_ok and req.startswith("cuda:") and req != "cuda:0":
@@ -430,6 +447,8 @@ def _solve_qp_batched_torch(
     tol: float = 1e-11,
 ) -> "torch.Tensor":
     """Batched Lawson-Hanson active-set non-negative QP across direction buckets on GPU in FP64."""
+    torch = _get_torch()
+    assert torch is not None
     B, P = rhs.shape
     device = rhs.device
     x_full = torch.zeros((B, P), dtype=torch.float64, device=device)
@@ -547,6 +566,140 @@ def _solve_qp_batched_torch(
     return x_full
 
 
+_NODDI_FORK_CTX: dict[str, object] | None = None
+_NODDI_FORK_THREAD_LIMIT: object = None
+
+
+def _init_noddi_fork_worker() -> None:
+    global _NODDI_FORK_THREAD_LIMIT
+    for key in (
+        "OMP_NUM_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "MKL_NUM_THREADS",
+        "BLIS_NUM_THREADS",
+        "VECLIB_MAXIMUM_THREADS",
+        "NUMEXPR_NUM_THREADS",
+    ):
+        os.environ[key] = "1"
+    try:
+        from threadpoolctl import threadpool_limits
+
+        _NODDI_FORK_THREAD_LIMIT = threadpool_limits(limits=1)
+    except Exception:
+        _NODDI_FORK_THREAD_LIMIT = None
+
+
+def _noddi_fork_bucket_worker(d: int):
+    ctx = _NODDI_FORK_CTX
+    assert ctx is not None
+    boundaries = ctx["boundaries"]
+    order = ctx["order"]
+    y = ctx["y"]
+    K_wm = ctx["K_wm"]
+    K_iso_64 = ctx["K_iso_64"]
+    K_iso_dwi = ctx["K_iso_dwi"]
+    K_norms = ctx["K_norms"]
+    icvf = ctx["icvf"]
+    kappa = ctx["kappa"]
+    dwi_idx = ctx["dwi_idx"]
+    eye_wm = ctx["eye_wm"]
+    lambda1 = float(ctx["lambda1"])
+    lambda2 = float(ctx["lambda2"])
+    n_grad = int(ctx["n_grad"])
+    n_wm = int(ctx["n_wm"])
+    P1 = n_wm + 1
+
+    s, e = int(boundaries[d]), int(boundaries[d + 1])
+    rows = order[s:e]
+    Y_d = y[rows]
+
+    A1 = np.empty((n_grad, P1), dtype=np.float64)
+    A1[:, :n_wm] = K_wm[:, d, :].T
+    A1[:, n_wm] = K_iso_64
+    G1 = A1.T @ A1
+
+    rhs1 = Y_d @ A1
+    c1 = _solve_qp_bucket_numpy(G1, rhs1)
+
+    y2 = Y_d[:, dwi_idx] - c1[:, n_wm : n_wm + 1] * K_iso_dwi[None, :]
+    np.maximum(y2, 0.0, out=y2)
+
+    A2 = A1[dwi_idx, :n_wm] * K_norms
+    G2 = A2.T @ A2 + lambda2 * eye_wm
+    rhs2 = y2 @ A2 - lambda1
+    x2 = _solve_qp_bucket_numpy(G2, rhs2)
+
+    supp = np.empty((e - s, P1), dtype=bool)
+    supp[:, :n_wm] = x2 > 0.0
+    supp[:, n_wm] = True
+    c3 = _solve_qp_bucket_numpy(G1, rhs1, allowed_mask=supp)
+
+    w_wm = c3[:, :n_wm]
+    s_wm = np.sum(w_wm, axis=1) + 1e-16
+    s_tot = np.sum(c3, axis=1) + 1e-16
+    f_iso = c3[:, n_wm] / s_tot
+    f_ic = (w_wm @ icvf) / s_wm
+    f_od = (2.0 / np.pi) * np.arctan2(1.0, (w_wm @ kappa) / s_wm)
+
+    est_d = np.empty((e - s, 3), dtype=np.float32)
+    est_d[:, 0] = f_ic
+    est_d[:, 1] = f_od
+    est_d[:, 2] = f_iso
+
+    res = Y_d - (c3 @ A1.T)
+    ss_res = np.sum(res * res, axis=1)
+    rmse_d = np.sqrt(ss_res / float(n_grad)).astype(np.float32)
+    ss_y = np.sum(Y_d * Y_d, axis=1)
+    nrmse_d = np.zeros(e - s, dtype=np.float64)
+    pos_y = ss_y > 1e-16
+    nrmse_d[pos_y] = np.sqrt(ss_res[pos_y] / ss_y[pos_y])
+    return rows, est_d, rmse_d, nrmse_d.astype(np.float32)
+
+
+def _is_linux_fork_safe() -> bool:
+    if not sys.platform.startswith("linux"):
+        return False
+    torch_mod = sys.modules.get("torch")
+    if torch_mod is not None:
+        try:
+            if torch_mod.cuda.is_initialized():
+                return False
+        except Exception:
+            pass
+    return True
+
+
+def _resolve_noddi_cpu_workers(nthreads: int, *, auto_nthreads: bool, n_vox: int, n_dirs: int) -> tuple[int, bool]:
+    """Return ``(workers, use_fork_pool)`` for CPU NODDI fitting.
+
+    On high-RAM (>48 GiB) multi-core Linux servers, multiprocessing ``fork`` eliminates Python GIL
+    contention across direction buckets and scales past the 8-thread ThreadPool ceiling with bit-exact
+    numerical parity. Windows, macOS, small volumes, and low-RAM hosts keep ThreadPoolExecutor.
+    """
+    req = max(1, int(nthreads))
+    fork_ok = _is_linux_fork_safe() and n_vox >= 4096 and n_dirs >= 2
+    if not fork_ok:
+        return max(1, min(req, n_dirs)), False
+
+    workers = req
+    if auto_nthreads and not os.environ.get("SLICERDSPACE_STAGE_CPUS"):
+        try:
+            avail = len(os.sched_getaffinity(0))
+        except (AttributeError, OSError):
+            avail = os.cpu_count() or 1
+        try:
+            from shared.hardware_adapt import host_total_ram_gib
+
+            tot_gib = host_total_ram_gib()
+        except Exception:
+            tot_gib = None
+        if tot_gib is not None and tot_gib > 48.0 and avail >= 16:
+            workers = max(workers, min(72, max(8, avail // 2)))
+
+    workers = max(1, min(workers, n_dirs))
+    return workers, workers > 8
+
+
 def _fit_noddi_cpu(
     *,
     y: np.ndarray,
@@ -561,6 +714,7 @@ def _fit_noddi_cpu(
     lambda2: float,
     ndirs: int,
     nthreads: int,
+    auto_nthreads: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     n_vox, n_grad = y.shape
     n_wm = K_wm.shape[0]
@@ -632,10 +786,47 @@ def _fit_noddi_cpu(
         nrmse_d[pos_y] = np.sqrt(ss_res[pos_y] / ss_y[pos_y])
         nrmse[rows] = nrmse_d.astype(np.float32)
 
-    workers = max(1, min(int(nthreads), len(nonempty_dirs)))
+    workers, use_fork_pool = _resolve_noddi_cpu_workers(
+        nthreads,
+        auto_nthreads=auto_nthreads,
+        n_vox=n_vox,
+        n_dirs=len(nonempty_dirs),
+    )
     if workers == 1:
         for d in nonempty_dirs:
             _solve_direction_bucket(d)
+    elif use_fork_pool:
+        import multiprocessing as mp
+
+        global _NODDI_FORK_CTX
+        _NODDI_FORK_CTX = {
+            "boundaries": boundaries,
+            "order": order,
+            "y": y,
+            "K_wm": K_wm,
+            "K_iso_64": K_iso_64,
+            "K_iso_dwi": K_iso_dwi,
+            "K_norms": K_norms,
+            "icvf": icvf,
+            "kappa": kappa,
+            "dwi_idx": dwi_idx,
+            "eye_wm": eye_wm,
+            "lambda1": lambda1,
+            "lambda2": lambda2,
+            "n_grad": n_grad,
+            "n_wm": n_wm,
+        }
+        try:
+            ctx_mp = mp.get_context("fork")
+            with ctx_mp.Pool(processes=workers, initializer=_init_noddi_fork_worker) as pool:
+                for rows, est_d, rmse_d, nrmse_d in pool.imap_unordered(
+                    _noddi_fork_bucket_worker, nonempty_dirs, chunksize=1
+                ):
+                    estimates[rows] = est_d
+                    rmse[rows] = rmse_d
+                    nrmse[rows] = nrmse_d
+        finally:
+            _NODDI_FORK_CTX = None
     else:
         with _single_thread_blas(), ThreadPoolExecutor(max_workers=workers) as pool:
             list(pool.map(_solve_direction_bucket, nonempty_dirs))
@@ -660,6 +851,7 @@ def _fit_noddi_cuda(
     explicit_cuda: bool = False,
     nthreads: int = 1,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    torch = _get_torch()
     assert torch is not None
     n_vox, n_grad = y.shape
     n_wm = K_wm.shape[0]
@@ -943,6 +1135,7 @@ def run_accelerated_noddi_fit(
     ensure_rotations_fn: Callable[[int, int, Optional[Callable[[str], None]]], None],
     progress_cb: Optional[Callable[[str, str], None]] = None,
     log: Optional[Callable[[str], None]] = None,
+    auto_nthreads: bool = False,
 ) -> tuple[nib.Nifti1Image, np.ndarray, dict[str, Path], dict[str, np.ndarray], dict[str, object]]:
     """Run accelerated NODDI fitting and write AMICO-compatible raw output NIfTIs."""
     t0 = time.monotonic()
@@ -1022,6 +1215,7 @@ def run_accelerated_noddi_fit(
             lambda2=float(config.noddi_solver_lambda2),
             ndirs=int(config.noddi_ndirs),
             nthreads=int(nthreads),
+            auto_nthreads=bool(auto_nthreads),
         )
     t_fit = time.monotonic() - t2
 

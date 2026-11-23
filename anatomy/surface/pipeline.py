@@ -202,17 +202,41 @@ def _run_registered(config, resources, output_dir, subject_dir):
         subject_dir / f'{config.subject_id}-b0ToAtlasT2.tfm', output_dir,
         Path(resources['registration_atlas']), python_bin=config.python_bin))
     records = []
-    for hemi in ('left', 'right'):
+    hemi_threads = config.cpu_threads
+    parallel_hemis = False
+    if str(config.device).strip().lower().startswith('cpu') and not os.environ.get('SLICERDSPACE_STAGE_CPUS'):
+        import sys as _sys
+        if _sys.platform.startswith('linux') and config.cpu_threads == 4:
+            cpus = os.cpu_count() or 1
+            if cpus >= 32:
+                from shared.hardware_adapt import host_total_ram_gib
+                tot_gib = host_total_ram_gib()
+                if tot_gib is not None and tot_gib > 48.0:
+                    parallel_hemis = True
+                    hemi_threads = min(36, max(8, cpus // 4))
+
+    def _run_hemi(hemi):
         predicted = predict_subject(PredictionStageConfig(config.subject_id, hemi, config.predict_mode,
             config.device, 0.02, 2, 3, Path(resources['template_dir']), Path(resources['checkpoint_root']),
             prepared.preprocessed_dir.parent, output_dir / 'pred_results_SlicerDSpace',
             precision=config.precision, python_bin=config.python_bin,
-            cpu_threads=config.cpu_threads, max_gpu_gib=config.max_gpu_gib))
+            cpu_threads=hemi_threads, max_gpu_gib=config.max_gpu_gib))
+        hemi_recs = []
         for mesh in (predicted.wm_mesh_path, predicted.pial_mesh_path):  # read before cleanup deletes them (F1)
             try:
-                records.append(json.loads(Path(mesh).with_suffix('.json').read_text(encoding='utf-8')))
+                hemi_recs.append(json.loads(Path(mesh).with_suffix('.json').read_text(encoding='utf-8')))
             except (OSError, ValueError, TypeError):
                 pass
+        return hemi_recs
+
+    if parallel_hemis:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            for hemi_recs in pool.map(_run_hemi, ('left', 'right')):
+                records.extend(hemi_recs)
+    else:
+        for hemi in ('left', 'right'):
+            records.extend(_run_hemi(hemi))
     run_backend([BACKEND_ROOT / 'inference/native.py', '--subject', config.subject_id,
         '--data-root', prepared.preprocessed_dir.parent, '--pred-root', output_dir / 'pred_results_SlicerDSpace',
         '--predict-mode', config.predict_mode, '--output-dir',

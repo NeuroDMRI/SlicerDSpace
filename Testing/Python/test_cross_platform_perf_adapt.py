@@ -179,6 +179,81 @@ class SharedHardwareAdaptCrossPlatformTests(unittest.TestCase):
                 4,
             )
 
+        # High-RAM Linux server opt-in (server_max_threads=36) scales to single-socket physical cores,
+        # while Windows PC / macOS / stage-reserved runs keep their conservative caps.
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("SLICERDSPACE_STAGE_CPUS", None)
+            with (
+                mock.patch("shared.compute_schedule.available_resources", return_value=(144, 500 * 1024**3)),
+                mock.patch("shared.hardware_adapt.linux_single_socket_physical_cores", return_value=36),
+            ):
+                self.assertEqual(
+                    optimal_cpu_torch_threads(
+                        None, max_conv_threads=8, server_max_threads=36, platform_name="linux", is_apple_silicon=False
+                    ),
+                    36,
+                )
+            with mock.patch("shared.compute_schedule.available_resources", return_value=(24, 32 * 1024**3)):
+                self.assertEqual(
+                    optimal_cpu_torch_threads(
+                        None, max_conv_threads=8, server_max_threads=36, platform_name="win32", is_apple_silicon=False
+                    ),
+                    8,
+                )
+                self.assertEqual(
+                    optimal_cpu_torch_threads(
+                        None, max_conv_threads=16, server_max_threads=36, platform_name="win32", is_apple_silicon=False
+                    ),
+                    16,
+                )
+        with mock.patch.dict(os.environ, {"SLICERDSPACE_STAGE_CPUS": "12"}, clear=False):
+            self.assertEqual(
+                optimal_cpu_torch_threads(
+                    None, max_conv_threads=8, server_max_threads=36, platform_name="linux", is_apple_silicon=False
+                ),
+                12,
+            )
+
+    def test_dki_and_noddi_linux_fork_worker_resolution(self) -> None:
+        from microstructure import dki, noddi_accel
+
+        fake_cfg = types.SimpleNamespace(num_threads=None)
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("SLICERDSPACE_STAGE_CPUS", None)
+            with (
+                mock.patch.object(dki.sys, "platform", "linux"),
+                mock.patch("microstructure.dki.os.sched_getaffinity", return_value=set(range(144)), create=True),
+                mock.patch("shared.hardware_adapt.host_total_ram_gib", return_value=500.0),
+            ):
+                self.assertEqual(dki._resolve_dki_fork_workers(fake_cfg), 72)
+            with (
+                mock.patch.object(dki.sys, "platform", "win32"),
+                mock.patch("shared.hardware_adapt.host_total_ram_gib", return_value=32.0),
+            ):
+                self.assertEqual(dki._resolve_dki_fork_workers(fake_cfg), 1)
+
+            with (
+                mock.patch.object(noddi_accel.sys, "platform", "linux"),
+                mock.patch.object(noddi_accel, "_is_linux_fork_safe", return_value=True),
+                mock.patch("microstructure.noddi_accel.os.sched_getaffinity", return_value=set(range(144)), create=True),
+                mock.patch("shared.hardware_adapt.host_total_ram_gib", return_value=500.0),
+            ):
+                self.assertEqual(
+                    noddi_accel._resolve_noddi_cpu_workers(8, auto_nthreads=True, n_vox=100_000, n_dirs=500),
+                    (72, True),
+                )
+                # Explicit manual nthreads=4 stays on ThreadPoolExecutor (not ForkPool)
+                self.assertEqual(
+                    noddi_accel._resolve_noddi_cpu_workers(4, auto_nthreads=False, n_vox=100_000, n_dirs=500),
+                    (4, False),
+                )
+            with mock.patch.object(noddi_accel.sys, "platform", "win32"):
+                self.assertEqual(
+                    noddi_accel._resolve_noddi_cpu_workers(8, auto_nthreads=True, n_vox=100_000, n_dirs=500),
+                    (8, False),
+                )
+            self.assertEqual(noddi_accel.resolve_noddi_device("cpu"), "cpu")
+
 
 class UKFAdaptivePerformanceTests(unittest.TestCase):
     def test_host_ram_gib_delegates_to_hardware_adapt(self) -> None:
@@ -245,6 +320,31 @@ class UKFAdaptivePerformanceTests(unittest.TestCase):
                         default_params, medium, use_gpu=False, ram_gib=16.0, cpu_count=16, platform_name=plat
                     ),
                     -1,
+                )
+                # Optimized standalone UKF binary unlocks full threads on >12 GiB Windows/Linux,
+                # while keeping <=12 GiB guarded at 4 threads.
+                standalone_exe = Path(f"/opt/SlicerDSpace/bundled-runtimes/ukf-{plat}/bin/UKFTractography")
+                self.assertTrue(ukf._is_optimized_standalone_executable(standalone_exe))
+                self.assertEqual(
+                    ukf.resolve_adaptive_cpu_num_threads(
+                        default_params, heavy, use_gpu=False, executable=standalone_exe,
+                        ram_gib=32.0, cpu_count=24, platform_name=plat,
+                    ),
+                    -1,
+                )
+                self.assertEqual(
+                    ukf.resolve_adaptive_cpu_num_threads(
+                        default_params, heavy, use_gpu=False, executable=standalone_exe,
+                        ram_gib=16.0, cpu_count=16, platform_name=plat,
+                    ),
+                    -1,
+                )
+                self.assertEqual(
+                    ukf.resolve_adaptive_cpu_num_threads(
+                        default_params, heavy, use_gpu=False, executable=standalone_exe,
+                        ram_gib=8.0, cpu_count=16, platform_name=plat,
+                    ),
+                    4,
                 )
 
             # 3. macOS unified-memory & Apple Silicon P+E core protection (even for medium datasets).

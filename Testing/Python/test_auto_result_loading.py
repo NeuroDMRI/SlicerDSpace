@@ -354,6 +354,61 @@ class AutoResultLoadingTest(unittest.TestCase):
         ndi.display.SetAndObserveColorNodeID.assert_called_with("vtkMRMLColorTableNodeRainbow")
         self.assertEqual(ndi.GetAttribute("SlicerDDSurfer.HumanReviewState"), "reviewed")
 
+    def test_ukf_manifest_loads_only_vtk_and_skips_trk_in_manual_and_automatic_modes(self):
+        ukf_vtk = self.root / "100307_ukf.vtk"
+        ukf_trk = self.root / "100307_ukf.trk"
+        try:
+            import vtk
+            poly = vtk.vtkPolyData()
+            pts = vtk.vtkPoints()
+            pts.InsertNextPoint(0, 0, 0)
+            pts.InsertNextPoint(1, 0, 0)
+            poly.SetPoints(pts)
+            writer = vtk.vtkPolyDataWriter()
+            writer.SetFileName(str(ukf_vtk))
+            writer.SetInputData(poly)
+            writer.Write()
+        except ImportError:
+            ukf_vtk.write_bytes(b"vtk-data")
+        ukf_trk.write_bytes(b"trk-data")
+        manifest_path = self.root / "00_run_metadata" / "ukf_orchestration_manifest.json"
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        manifest_path.write_text(json.dumps({
+            "subject_id": "100307",
+            "run_name": "ukf",
+            "output_root": str(self.root),
+            "tasks": [{
+                "name": "tractography.ukf",
+                "status": "completed",
+                "outputs": {
+                    "tractogram": str(ukf_vtk),
+                    "tractogram_trk": str(ukf_trk),
+                },
+            }],
+        }), encoding="utf-8")
+
+        loaded_files = []
+
+        def fake_load_node(path, kind, properties=None, **kwargs):
+            loaded_files.append((Path(path), kind))
+            node_class = "vtkMRMLFiberBundleNode" if kind == "FiberBundleFile" else "vtkMRMLModelNode"
+            return True, self.scene.AddNewNodeByClass(node_class, "ukf")
+
+        self.fake.util.loadNodeFromFile = fake_load_node
+        for automatic in (False, True):
+            with self.subTest(automatic=automatic):
+                self.scene.nodes.clear()
+                loaded_files.clear()
+                with patch.object(
+                    self.logic,
+                    "_load_streamline_file_as_fiber_bundle",
+                    side_effect=AssertionError("UKF .trk must not be visualized when .vtk exists"),
+                ):
+                    result = self.logic.loadKeyResultsFromManifest(manifest_path, automatic=automatic)
+                self.assertEqual([item["path"] for item in result["loaded"]], [str(ukf_vtk)])
+                self.assertEqual([path for path, _ in loaded_files], [ukf_vtk])
+                self.assertTrue(ukf_trk.is_file())
+
 
 if __name__ == "__main__":
     unittest.main()

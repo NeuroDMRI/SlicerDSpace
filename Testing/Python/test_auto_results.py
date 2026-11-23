@@ -154,6 +154,32 @@ class AutoResultsTest(unittest.TestCase):
         self.assertFalse(selected)
         self.assertIn("Large VTK", deferred[0]["reason"])
 
+    def test_ukf_auto_results_selects_vtk_and_never_visualizes_trk(self):
+        task = self.task("tractography.ukf", {"tractogram": "vtk", "tractogram_trk": "trk"})
+        selected, skipped, deferred = automatic_result_candidates({"tasks": [task]})
+        self.assertEqual([item["key"] for item in selected], ["tractogram"])
+        self.assertTrue(selected[0]["path"].endswith(".vtk"))
+        self.assertFalse(skipped)
+        self.assertFalse(deferred)
+        # Even when UKF .vtk exceeds AUTOMATIC_VTK_MAX_BYTES, .trk must not be auto-loaded instead.
+        with patch("shared.auto_results.AUTOMATIC_VTK_MAX_BYTES", 0):
+            large_selected, large_skipped, large_deferred = automatic_result_candidates({"tasks": [task]})
+        self.assertEqual(large_selected, [])
+        self.assertEqual(large_skipped, [])
+        self.assertEqual([item["key"] for item in large_deferred], ["tractogram"])
+
+    def test_csd_act_and_dti_det_with_vtk_exclude_trk_from_auto_results(self):
+        tasks = [
+            self.task("tractography.csd_act", {"tractogram": "tck", "tractogram_trk": "trk", "tractogram_vtk": "vtk"}),
+            self.task("tractography.dti_det", {"tractogram_trk": "trk", "tractogram_vtk": "vtk"}),
+            self.task("tractography.saf", {"tractogram": "tck", "tractogram_vtk": "vtk"}),
+        ]
+        selected, skipped, deferred = automatic_result_candidates({"tasks": tasks})
+        all_paths = [item["path"] for item in selected + skipped + deferred]
+        self.assertFalse(any(path.endswith(".trk") for path in all_paths), all_paths)
+        dti = next(item for item in selected if item["product"] == "tractography.dti_det")
+        self.assertTrue(dti["path"].endswith(".vtk"))
+
     def test_uniform_sample_includes_endpoints_and_respects_limit(self):
         indices = uniform_streamline_indices(1_000_000)
         self.assertEqual(len(indices), 30_000)

@@ -2,12 +2,14 @@
 
 from pathlib import Path
 import json
+import os
 from typing import Optional
 from shared.bundle_qc import bundle_record_error
 
 PREFIX = "SlicerDDSurfer."
 FREESURFER_LUT = Path(__file__).resolve().parents[1] / "anatomy/parcellation/conversion/data/FreeSurferColorLUT.txt"
 SUFFIXES = (".nii.gz", ".nii", ".mgz", ".csv", ".tsv", ".stl", ".obj", ".vtk", ".vtp", ".trk", ".tck")
+_NATIVE_TRACT_SUFFIXES = (".vtk", ".vtp")
 # D6: the DEC colour FA map is the only NRRD result; other .nrrd files in the tree stay intermediates.
 DEC_SUFFIX = "-dti-dec.nrrd"
 DEC_SUFFIXES = ("-dti-dec.nrrd", "_dec.nrrd")
@@ -308,6 +310,44 @@ def _resolve_manifest_brain_mask_candidate(manifest: dict) -> Optional[Path]:
     return None
 
 
+def native_tract_stem_key(path) -> tuple[str, str]:
+    """Case-normalized ``(parent_dir, stem)`` key for matching a ``.trk`` file to a sibling ``.vtk``/``.vtp``."""
+    resolved = Path(path)
+    return (os.path.normcase(str(resolved.parent)), resolved.stem.lower())
+
+
+def _filter_redundant_trk_candidates(task_candidates: list[dict]) -> list[dict]:
+    """Omit ``.trk`` candidates when Slicer-native ``.vtk``/``.vtp`` is available for the same task or stem.
+
+    ``.trk`` files remain generated on disk and recorded in manifests/QC for downstream consumers
+    (e.g. WMQL, connectome), while Slicer Results visualization uses native ``.vtk``/``.vtp`` directly.
+    Tasks that only emit ``.trk`` (such as WMQL bundles or standalone DTI-det) retain ``.trk`` as fallback.
+    """
+    from shared.fiber_display import KIND_TRACTOGRAPHY, streamline_kind
+
+    has_native_tractography = any(
+        Path(entry["path"]).suffix.lower() in _NATIVE_TRACT_SUFFIXES
+        and streamline_kind(entry) == KIND_TRACTOGRAPHY
+        for entry in task_candidates
+    )
+    native_stems = {
+        native_tract_stem_key(entry["path"])
+        for entry in task_candidates
+        if Path(entry["path"]).suffix.lower() in _NATIVE_TRACT_SUFFIXES
+    }
+    if not has_native_tractography and not native_stems:
+        return task_candidates
+    kept: list[dict] = []
+    for entry in task_candidates:
+        if Path(entry["path"]).suffix.lower() == ".trk":
+            if (has_native_tractography and streamline_kind(entry) == KIND_TRACTOGRAPHY) or (
+                native_tract_stem_key(entry["path"]) in native_stems
+            ):
+                continue
+        kept.append(entry)
+    return kept
+
+
 def result_candidates(manifest, *, allow_bundle_directory_scan=True, include_preprocessing=False, include_brain_mask=False,
                       include_surface_morphometry=False, include_qc_not_passed=False):
     """``include_surface_morphometry`` (off by default, so bulk and automatic loads are unchanged): also list the
@@ -354,6 +394,7 @@ def result_candidates(manifest, *, allow_bundle_directory_scan=True, include_pre
         outputs = dict(task.get("outputs") or {})
         outputs.update(bundle_outputs(task, allow_directory_scan=allow_bundle_directory_scan,
                                       accept_qc_not_passed=qc_mark is not None))
+        task_candidates: list[dict] = []
         for key, value in outputs.items():
             if not isinstance(value, str) or not value:
                 continue
@@ -383,7 +424,8 @@ def result_candidates(manifest, *, allow_bundle_directory_scan=True, include_pre
                 entry.update(priority=1, order=row_order(name, path))
             if qc_mark is not None:
                 entry.update(qc_mark=qc_mark[0], qc_reason=qc_mark[1])
-            candidates.append(entry)
+            task_candidates.append(entry)
+        candidates.extend(_filter_redundant_trk_candidates(task_candidates))
     if include_brain_mask and not _has_preprocessing_mask_candidate(candidates):
         mask_path = _resolve_manifest_brain_mask_candidate(manifest)
         if mask_path is not None:

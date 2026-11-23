@@ -268,9 +268,9 @@ def automatic_result_candidates(manifest: dict, *, per_product_caps: dict | None
             continue
         path = Path(candidate["path"])
         if path.suffix.lower() in {".vtk", ".vtp"} and path.stat().st_size > AUTOMATIC_VTK_MAX_BYTES:
-            deferred.append({**candidate, "reason": "Large VTK/VTP display deferred; use manual loading or a TRK/TCK preview"})
+            deferred.append({**candidate, "reason": "Large VTK/VTP display deferred; use manual loading from Results"})
             continue
-        format_rank = {".tck": 0, ".trk": 1, ".vtp": 2, ".vtk": 3}.get(path.suffix.lower(), 0)
+        format_rank = {".tck": 0, ".vtp": 1, ".vtk": 2, ".trk": 3}.get(path.suffix.lower(), 0)
         ranked.append((candidate["product"], role, format_rank, candidate["label"], candidate))
     selected, counts, role_counts = [], {}, {}
     named_bundle_products = {item[4]["product"] for item in ranked

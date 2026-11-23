@@ -3323,7 +3323,7 @@ def _populate_manifest_output_items(
     """
 
     import qt
-    from shared.result_scene import result_candidates
+    from shared.result_scene import native_tract_stem_key, result_candidates
 
     if memo is not None:
         manifest = _without_repeated_tasks(manifest, memo)
@@ -3466,6 +3466,12 @@ def _populate_manifest_output_items(
                 if leaf_path:
                     seen_paths.add(str(leaf_path))
 
+    seen_native_stems: set = {
+        native_tract_stem_key(path)
+        for path in seen_paths
+        if Path(path).suffix.lower() in {".vtk", ".vtp"}
+    }
+
     def _mark_run(row: Any) -> None:
         # A family or subgroup row carries the run that made it: a click on it selects that run.
         if run_index is not None:
@@ -3478,9 +3484,27 @@ def _populate_manifest_output_items(
         ranks = _subgroup_ranks(family, [name for name in subgroups if name is not None])
         fresh: list = []
         for subgroup in sorted(subgroups, key=lambda name: ranks.get(name, (float("inf"),))):
-            paths = {path: visual for path, visual in subgroups[subgroup].items() if path not in seen_paths}
+            subgroup_native_stems = seen_native_stems | {
+                native_tract_stem_key(path)
+                for path in subgroups[subgroup]
+                if Path(path).suffix.lower() in {".vtk", ".vtp"}
+            }
+            paths = {
+                path: visual
+                for path, visual in subgroups[subgroup].items()
+                if path not in seen_paths
+                and not (
+                    Path(path).suffix.lower() == ".trk"
+                    and native_tract_stem_key(path) in subgroup_native_stems
+                )
+            }
             if paths:
                 seen_paths.update(paths)
+                seen_native_stems.update(
+                    native_tract_stem_key(path)
+                    for path in paths
+                    if Path(path).suffix.lower() in {".vtk", ".vtp"}
+                )
                 fresh.append((subgroup, paths))
         if not fresh:
             continue

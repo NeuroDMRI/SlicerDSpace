@@ -351,6 +351,18 @@ class WmaOnSelectedSourceTests(unittest.TestCase):
             self.assertEqual(tasks["bundles.wma"].status, "completed", tasks["bundles.wma"].reason)
             self.assertTrue(received["wma"].name.endswith("dti-deterministic.vtk"))
             self.assertEqual(received["converted"][1], received["wma"])
+            dti_outputs = tasks["tractography.dti_det"].outputs
+            self.assertTrue(Path(dti_outputs["tractogram_trk"]).is_file())
+            self.assertTrue(Path(dti_outputs["tractogram_vtk"]).is_file())
+            self.assertTrue(dti_outputs["tractogram_vtk"].endswith("s_dti.vtk"))
+            from shared.result_scene import result_candidates
+
+            dti_cands, _ = result_candidates({"tasks": [{
+                "name": "tractography.dti_det",
+                "status": "completed",
+                "outputs": dti_outputs,
+            }]})
+            self.assertEqual([item["path"] for item in dti_cands], [str(Path(dti_outputs["tractogram_vtk"]).resolve())])
 
     def test_b2_default_wma_on_csd_still_refuses_without_ukf(self) -> None:
         """The refusal stays for the default: WMA never reads CSD/ACT unless the user chose it."""

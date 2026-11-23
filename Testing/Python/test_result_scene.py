@@ -316,3 +316,122 @@ class FreeSurferColorNodeTest(unittest.TestCase):
         slicer, loaded = self._slicer({"vtkMRMLColorTableNodeFileFreeSurferColorLUT.txt"})
         self.assertEqual(freesurfer_color_node(slicer).GetID(), "vtkMRMLColorTableNodeFileFreeSurferColorLUT.txt")
         self.assertEqual(loaded, [])
+
+
+class TrkVisualizationSuppressionTest(unittest.TestCase):
+    """Native .vtk/.vtp is visualized in Results; redundant .trk stays on disk only."""
+
+    def test_ukf_suppresses_trk_when_vtk_exists_regardless_of_key_order(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            vtk_path = root / "100307_ukf.vtk"
+            trk_path = root / "100307_ukf.trk"
+            vtk_path.write_bytes(b"vtk")
+            trk_path.write_bytes(b"trk")
+            for outputs in (
+                {"tractogram": str(vtk_path), "tractogram_trk": str(trk_path)},
+                {"tractogram_trk": str(trk_path), "tractogram": str(vtk_path)},
+            ):
+                with self.subTest(order=list(outputs)):
+                    candidates, skipped = result_candidates({"tasks": [
+                        {"name": "tractography.ukf", "status": "completed", "outputs": outputs},
+                    ]})
+                    self.assertEqual([item["path"] for item in candidates], [str(vtk_path)])
+                    self.assertEqual(skipped, [])
+                    self.assertTrue(trk_path.is_file())
+
+    def test_csd_act_suppresses_trk_and_keeps_vtk_and_tck(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            tck_path = root / "100307_act.tck"
+            trk_path = root / "100307_act.trk"
+            vtk_path = root / "100307_act.vtk"
+            for path in (tck_path, trk_path, vtk_path):
+                path.write_bytes(b"data")
+            candidates, skipped = result_candidates({"tasks": [{
+                "name": "tractography.csd_act",
+                "status": "completed",
+                "outputs": {
+                    "tractogram": str(tck_path),
+                    "tractogram_trk": str(trk_path),
+                    "tractogram_vtk": str(vtk_path),
+                },
+            }]})
+            self.assertEqual({item["path"] for item in candidates}, {str(tck_path), str(vtk_path)})
+            self.assertEqual(skipped, [])
+
+    def test_dti_det_prefers_vtk_when_present_and_keeps_trk_fallback_when_standalone(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            trk_path = root / "100307_dti.trk"
+            vtk_path = root / "100307_dti.vtk"
+            seeds_vtk = root / "seeds.vtk"
+            trk_path.write_bytes(b"trk")
+            seeds_vtk.write_bytes(b"seeds")
+            # Standalone DTI-det (even with a non-streamline seed mesh): .trk stays viewable.
+            standalone, _ = result_candidates({"tasks": [{
+                "name": "tractography.dti_det",
+                "status": "completed",
+                "outputs": {"tractogram_trk": str(trk_path), "seed_mask": str(seeds_vtk)},
+            }]})
+            self.assertEqual({item["path"] for item in standalone}, {str(trk_path), str(seeds_vtk)})
+            # Once native DTI VTK exists: .vtk is listed and .trk is omitted.
+            vtk_path.write_bytes(b"vtk")
+            with_vtk, skipped = result_candidates({"tasks": [{
+                "name": "tractography.dti_det",
+                "status": "completed",
+                "outputs": {"tractogram_trk": str(trk_path), "tractogram_vtk": str(vtk_path)},
+            }]})
+            self.assertEqual([item["path"] for item in with_vtk], [str(vtk_path)])
+            self.assertEqual(skipped, [])
+
+    def test_wmql_keeps_trk_only_bundles_and_suppresses_trk_only_when_same_stem_vtk_exists(self):
+        from tractography.wmql import WMQL_QC_VERSION
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            af_trk = root / "sub_desc-wmql_af.left.trk"
+            af_vtk = root / "sub_desc-wmql_af.left.vtk"
+            cst_trk = root / "sub_desc-wmql_cst.left.trk"
+            af_trk.write_bytes(b"trk")
+            cst_trk.write_bytes(b"trk")
+            qc = root / "wmql_qc.json"
+            qc.write_text(json.dumps({
+                "status": "completed",
+                "version": WMQL_QC_VERSION,
+                "automatic_qc_passed": True,
+                "output_summary": {
+                    "bundle_files": [str(af_trk), str(cst_trk)],
+                    "bundle_count": 2,
+                    "bundle_readable_count": 2,
+                    "bundle_nonempty_count": 2,
+                    "bundles": [
+                        {"query_name": "af.left", "streamline_count": 20},
+                        {"query_name": "cst.left", "streamline_count": 20},
+                    ],
+                },
+            }))
+            task = {"name": "bundles.wmql", "status": "completed", "qc_path": str(qc), "outputs": {"output_dir": str(root)}}
+            only_trk, _ = result_candidates({"tasks": [task]})
+            self.assertEqual({item["path"] for item in only_trk}, {str(af_trk), str(cst_trk)})
+            # If a matching same-stem .vtk exists for one bundle, only that bundle's .trk is suppressed.
+            af_vtk.write_bytes(b"vtk")
+            qc_data = json.loads(qc.read_text())
+            qc_data["output_summary"]["bundle_files"] = [str(af_trk), str(af_vtk), str(cst_trk)]
+            qc.write_text(json.dumps(qc_data))
+            mixed, _ = result_candidates({"tasks": [task]})
+            self.assertEqual({item["path"] for item in mixed}, {str(af_vtk), str(cst_trk)})
+
+    def test_ukf_falls_back_to_trk_if_vtk_file_is_missing_on_disk(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            missing_vtk = root / "100307_ukf.vtk"
+            trk_path = root / "100307_ukf.trk"
+            trk_path.write_bytes(b"trk")
+            candidates, skipped = result_candidates({"tasks": [{
+                "name": "tractography.ukf",
+                "status": "completed",
+                "outputs": {"tractogram": str(missing_vtk), "tractogram_trk": str(trk_path)},
+            }]})
+            self.assertEqual([item["path"] for item in candidates], [str(trk_path)])
+            self.assertEqual([item["path"] for item in skipped], [str(missing_vtk)])

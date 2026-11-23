@@ -773,6 +773,56 @@ class P2ResultsPolishTest(ArchivedTestBase):
         self.assertIn(current.manifest_path.resolve(), cleared_paths)
         self.assertIn(arch.resolve(), cleared_paths)
 
+    def test_results_tree_omits_ukf_trk_and_cross_archive_dti_trk_when_vtk_is_present(self) -> None:
+        files = self.root / "files"
+        files.mkdir()
+        ukf_vtk = files / "sub1_ukf.vtk"
+        ukf_trk = files / "sub1_ukf.trk"
+        dti_vtk = files / "sub1_dti.vtk"
+        dti_trk = files / "sub1_dti.trk"
+        for path in (ukf_vtk, ukf_trk, dti_vtk, dti_trk):
+            path.write_text("x", encoding="utf-8")
+        current = make_manifest(self.root, "sub1", "Test1", "2026-11-10T10:00:00Z", [])
+        payload = json.loads(current.manifest_path.read_text(encoding="utf-8"))
+        payload.pop("cands")
+        payload["tasks"] = [
+            {
+                "name": "tractography.ukf",
+                "status": "completed",
+                "outputs": {"tractogram": str(ukf_vtk), "tractogram_trk": str(ukf_trk)},
+            },
+            {
+                "name": "tractography.dti_det",
+                "status": "completed",
+                "outputs": {"tractogram_vtk": str(dti_vtk), "tractogram_trk": str(dti_trk)},
+            },
+        ]
+        current.manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+        # An older archive had only the standalone DTI .trk before VTK conversion existed.
+        archive_manifest(
+            self.root,
+            "sub1",
+            "Test1",
+            "20261102T000000000000Z",
+            "2026-11-02T10:00:00Z",
+            tasks=[{
+                "name": "tractography.dti_det",
+                "status": "completed",
+                "outputs": {"tractogram_trk": str(dti_trk)},
+            }],
+        )
+        h = Harness(self)
+        h.tree.viewport = lambda: SimpleNamespace(mapToGlobal=lambda position: position)
+        with mock.patch("shared.result_scene.result_candidates", side_effect=REAL_RESULT_CANDIDATES):
+            h.refresh([parse_run_manifest(current.manifest_path)])
+        tractography = find_child(self.subject(h), "Tractography")
+        self.assertEqual(
+            sorted(every_file(tractography)),
+            sorted([str(ukf_vtk.resolve()), str(dti_vtk.resolve())]),
+        )
+        self.assertTrue(ukf_trk.is_file())
+        self.assertTrue(dti_trk.is_file())
+
 
 if __name__ == "__main__":
     unittest.main()

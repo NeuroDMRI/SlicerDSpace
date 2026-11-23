@@ -1306,6 +1306,26 @@ def _publish_tractography_outputs(
     return published
 
 
+def _publish_dti_vtk_to_task(
+    tasks: list[ProductTaskRecord],
+    vtk_path: Path,
+    layout,
+    subject_id: str,
+) -> None:
+    """Publish a newly converted DTI-det VTK tractogram and attach it to the DTI task record."""
+    if not vtk_path.is_file():
+        return
+    published = _publish_tractography_outputs("dti_det", {"tractogram_vtk": vtk_path}, layout, subject_id)
+    published_vtk = published.get("tractogram_vtk")
+    if not published_vtk:
+        return
+    for index, task in enumerate(tasks):
+        if task.name == "tractography.dti_det" and task.status in {"completed", "skipped"}:
+            updated_outputs = dict(task.outputs or {})
+            updated_outputs["tractogram_vtk"] = published_vtk
+            tasks[index] = replace(task, outputs=updated_outputs)
+
+
 # Batch 2 item 5: the subfolder of a bundle product for a user-supplied tractogram file.
 SUPPLIED_BUNDLE_SOURCE = "supplied"
 
@@ -6253,6 +6273,7 @@ def _run_subject_products_impl(
         from tractography.conversion import ensure_vtk_tractogram
         try:
             ensure_vtk_tractogram(tractogram_trk, current_vtk)
+            _publish_dti_vtk_to_task(tasks, current_vtk, layout, config.subject_id)
         except (OSError, ValueError, RuntimeError) as exc:
             bundle_conversion_error = 'Automatic DTI-to-VTK conversion failed: ' + str(exc)
 
@@ -6269,6 +6290,7 @@ def _run_subject_products_impl(
                 from tractography.conversion import ensure_vtk_tractogram
                 try:
                     ensure_vtk_tractogram(tractogram_trk, current_vtk)
+                    _publish_dti_vtk_to_task(tasks, current_vtk, layout, config.subject_id)
                 except (OSError, ValueError, RuntimeError) as exc:
                     wma_source_error = 'Automatic DTI-to-VTK conversion failed: ' + str(exc)
 
@@ -6428,6 +6450,7 @@ def _run_subject_products_impl(
                 from tractography.conversion import ensure_vtk_tractogram
                 try:
                     ensure_vtk_tractogram(tractogram_trk, current_vtk)
+                    _publish_dti_vtk_to_task(tasks, current_vtk, layout, config.subject_id)
                 except (OSError, ValueError, RuntimeError) as exc:
                     conversion_error = 'Automatic DTI-to-VTK conversion failed: ' + str(exc)
         tractcloud_input_tractography = _resolve_bundle_input_tractography(

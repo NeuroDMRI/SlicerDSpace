@@ -73,9 +73,9 @@
   "code_overlay": {
     "filename": "SlicerDSpace-v0.1.1-CodeOverlay.tar.gz",
     "url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v0.1.1/SlicerDSpace-v0.1.1-CodeOverlay.tar.gz",
-    "size_bytes": 3664813,
-    "sha256": "955f1be733688fa8363d55ddb1ddf0178399516219fcd853bd590d14473881f6",
-    "code_sha256": "a9ae2753f68bcc3b35d54dcb5398d6b073bc3bdc035f4bde597f06fb465ac6a8",
+    "size_bytes": 3667263,
+    "sha256": "4d8afa26822e8328926afb2451fd40168feb4fc6c8a1fc8dece35b0620b3325b",
+    "code_sha256": "1667cf881e05a777071dcceb19c18a5727895d9ce3bdb26ee3c4b0e060e61e51",
     "runtime_abi_version": 1,
     "version": "0.1.1"
   }

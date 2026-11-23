@@ -591,8 +591,9 @@ def generate_brain_mask(dwi_path: Path, bval_path: Path, bvec_path: Path, output
         prepend = []
         # A-O4: for pnl_cnn the effective child count (backend settings), else config.threads.
         threads = backend["settings"]["threads"]
-        env_extra = {"OMP_NUM_THREADS": str(threads), "MKL_NUM_THREADS": str(threads),
-                     "OPENBLAS_NUM_THREADS": str(threads), "PYTHONUNBUFFERED": "1"}
+        env_threads = min(max(1, int(threads)), 32)
+        env_extra = {"OMP_NUM_THREADS": str(env_threads), "MKL_NUM_THREADS": str(env_threads),
+                     "OPENBLAS_NUM_THREADS": str(env_threads), "PYTHONUNBUFFERED": "1"}
         if route == "managed":
             # SC-1a: the pre-W-A conda runner (70fb635^1), ANTs 2.3.0 in the managed pnl_cnn runtime.
             models = work / "models"

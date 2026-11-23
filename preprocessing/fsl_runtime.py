@@ -169,7 +169,12 @@ def native_fsl_environment(
 ) -> dict[str, str]:
     """Use the resolved native binaries without creating interpreter shims."""
     paths = tuple(dict.fromkeys(Path(command).parent for command in commands.values() if command))
-    extra = {"FSLOUTPUTTYPE": FSL_OUTPUT_TYPE}
+    extra = {
+        "FSLOUTPUTTYPE": FSL_OUTPUT_TYPE,
+        "OPENBLAS_NUM_THREADS": "1",
+        "MKL_NUM_THREADS": "1",
+        "BLIS_NUM_THREADS": "1",
+    }
     if fsl_root is not None:
         extra["FSLDIR"] = str(fsl_root)
     env = external_python_environment(extra, path_prepend=paths)

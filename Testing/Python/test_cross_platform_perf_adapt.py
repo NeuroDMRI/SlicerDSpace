@@ -636,7 +636,8 @@ class TractCloudAndPnlCrossPlatformTests(unittest.TestCase):
         self.assertGreaterEqual(mps_cache.call_count, 2)
         self.assertEqual(mask_mps.shape, (256, 256, 256))
 
-        # 3. apply_threads caps torch threads at 16 for huge servers while keeping <=16 exact.
+        # 3. apply_threads caps torch threads (32 on >=64-CPU servers, 16 otherwise)
+        #    and SimpleITK threads at 16 while keeping <=16 exact.
         fake_sitk = types.SimpleNamespace(
             ProcessObject=types.SimpleNamespace(SetGlobalDefaultNumberOfThreads=mock.Mock())
         )
@@ -648,9 +649,13 @@ class TractCloudAndPnlCrossPlatformTests(unittest.TestCase):
             set_torch_threads.assert_called_with(4)
             fake_sitk.ProcessObject.SetGlobalDefaultNumberOfThreads.assert_called_with(4)
 
-            self.assertEqual(pnl_mask_native.apply_threads(64), 64)
+            self.assertEqual(pnl_mask_native.apply_threads(24), 24)
             set_torch_threads.assert_called_with(16)
-            fake_sitk.ProcessObject.SetGlobalDefaultNumberOfThreads.assert_called_with(64)
+            fake_sitk.ProcessObject.SetGlobalDefaultNumberOfThreads.assert_called_with(16)
+
+            self.assertEqual(pnl_mask_native.apply_threads(64), 64)
+            set_torch_threads.assert_called_with(32)
+            fake_sitk.ProcessObject.SetGlobalDefaultNumberOfThreads.assert_called_with(16)
 
 
 class MppcaAndAuditAdaptationTests(unittest.TestCase):
@@ -722,6 +727,57 @@ class MppcaAndAuditAdaptationTests(unittest.TestCase):
 
         self.assertLess(max(seen_low), max(seen_high))
         np.testing.assert_allclose(out_low, out_high, rtol=1e-5, atol=1e-4)
+
+    def test_mppca_threadpool_limits_scoped_once_outside_worker_pool_and_fsl_openblas_capped(self) -> None:
+        from contextlib import contextmanager
+        from preprocessing import dipy_accel as da, fsl_runtime, pipeline as preproc_pipeline
+        from shared import external_process as ep
+
+        # Verify _mppca_cpu enters threadpool_limits(limits=1) exactly ONCE for multi-worker execution,
+        # never concurrently inside worker threads.
+        entries: list[int] = []
+
+        @contextmanager
+        def _fake_limits(limits=None, **_kw):
+            entries.append(int(limits))
+            yield
+
+        fake_tpctl = types.SimpleNamespace(threadpool_limits=_fake_limits)
+        rng = np.random.default_rng(7)
+        vol = (80.0 + 5.0 * rng.standard_normal((12, 12, 10, 12))).astype(np.float32)
+        with mock.patch.dict(sys.modules, {"threadpoolctl": fake_tpctl}):
+            out = da.mppca_accelerated(vol, patch_radius=1, device="cpu", max_workers=4)
+        self.assertEqual(out.shape, vol.shape)
+        self.assertEqual(entries, [1])
+
+        # Verify server (>=32 CPUs) scales default workers/eddy threads to 16 while <=24 CPUs stays at 8.
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("SLICERDSPACE_STAGE_CPUS", None)
+            with (
+                mock.patch.object(da, "is_apple_silicon_host", return_value=False),
+                mock.patch("os.cpu_count", return_value=144),
+            ):
+                self.assertEqual(da._resolve_dipy_cpu_workers(None, avail_ram_bytes=128 * 1024**3), 16)
+            with (
+                mock.patch.object(da, "is_apple_silicon_host", return_value=False),
+                mock.patch("os.cpu_count", return_value=24),
+            ):
+                self.assertEqual(da._resolve_dipy_cpu_workers(None, avail_ram_bytes=32 * 1024**3), 8)
+            with mock.patch("os.process_cpu_count", return_value=144, create=True):
+                self.assertEqual(preproc_pipeline._default_eddy_threads(), 16)
+            with mock.patch("os.process_cpu_count", return_value=24, create=True):
+                self.assertEqual(preproc_pipeline._default_eddy_threads(), 8)
+
+        # Verify FSL environments default OpenBLAS/MKL/BLIS to 1 thread so topup/eddy don't oversubscribe.
+        with tempfile.TemporaryDirectory() as td:
+            fsl_bin = Path(td) / "fsl" / "bin"
+            fsl_bin.mkdir(parents=True)
+            env_managed = ep.managed_tool_environment(fsl_bin_dir=fsl_bin, system="linux")
+            self.assertEqual(env_managed["OPENBLAS_NUM_THREADS"], "1")
+            self.assertEqual(env_managed["MKL_NUM_THREADS"], "1")
+            env_native = fsl_runtime.native_fsl_environment({}, fsl_bin.parent)
+            self.assertEqual(env_native["OPENBLAS_NUM_THREADS"], "1")
+            self.assertEqual(env_native["MKL_NUM_THREADS"], "1")
 
     def test_csd_macos_mif_transpose_skips_when_ram_is_too_tight(self) -> None:
         from tractography import csd

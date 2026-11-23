@@ -574,7 +574,8 @@ def _resolve_dipy_cpu_workers(
     elif is_apple_silicon_host():
         n_workers = optimal_cpu_torch_threads(None, max_conv_threads=8)
     else:
-        n_workers = effective_cpu_threads(None, default=8)
+        default_workers = 16 if (os.cpu_count() or 1) >= 32 else 8
+        n_workers = effective_cpu_threads(None, default=default_workers)
     if apply_low_ram_cap:
         avail = query_host_available_ram_bytes() if avail_ram_bytes is None else int(avail_ram_bytes)
         if avail > 0:
@@ -661,11 +662,7 @@ def _mppca_cpu(
                                 if local_var is not None and wv_grid is not None:
                                     local_var[xs, ys, z_dst] += wv_grid
 
-        if threadpool_limits is not None and n_workers > 1:
-            with threadpool_limits(limits=1):
-                _inner()
-        else:
-            _inner()
+        _inner()
         return kz0, local_thetax, local_theta, local_var
 
     z_starts = np.linspace(rz, sz - rz, num=n_workers + 1, dtype=int)
@@ -683,7 +680,12 @@ def _mppca_cpu(
         if var_acc is not None and l_v is not None:
             var_acc[:, :, z_slice] += l_v
     else:
-        with ThreadPoolExecutor(max_workers=len(ranges)) as pool:
+        # Scope BLAS/OpenMP single-threading ONCE outside the thread pool; calling
+        # threadpool_limits inside worker threads races on process-global OpenBLAS state.
+        from contextlib import nullcontext
+
+        blas_ctx = threadpool_limits(limits=1) if threadpool_limits is not None else nullcontext()
+        with blas_ctx, ThreadPoolExecutor(max_workers=len(ranges)) as pool:
             for kz0, l_tx, l_th, l_v in pool.map(_process_z_range, ranges):
                 z_slice = slice(kz0 - rz, kz0 - rz + l_tx.shape[2])
                 thetax[:, :, z_slice, :] += l_tx
@@ -1062,7 +1064,14 @@ def gibbs_removal_accelerated(
                 b0, b1, res = _worker(b)
                 out_sub[b0:b1] = res
         else:
-            with ThreadPoolExecutor(max_workers=n_workers) as pool:
+            from contextlib import nullcontext
+
+            try:
+                from threadpoolctl import threadpool_limits as _tp_limits
+            except ImportError:
+                _tp_limits = None
+            blas_ctx = _tp_limits(limits=1) if _tp_limits is not None else nullcontext()
+            with blas_ctx, ThreadPoolExecutor(max_workers=n_workers) as pool:
                 for b0, b1, res in pool.map(_worker, batches):
                     out_sub[b0:b1] = res
         return out_sub

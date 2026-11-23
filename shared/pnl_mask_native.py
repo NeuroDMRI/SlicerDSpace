@@ -120,11 +120,14 @@ def apply_threads(threads: int) -> int:
     import SimpleITK as sitk
     import torch
 
-    # Cap PyTorch intra-op threads at 16 so 256x256 2D convolutions do not thrash
-    # OpenMP barriers on 32-128 core servers while keeping <=16 thread counts exact.
-    torch.set_num_threads(min(int(threads), 16))
-    sitk.ProcessObject.SetGlobalDefaultNumberOfThreads(threads)
-    return threads
+    requested = max(1, int(threads))
+    # Cap PyTorch intra-op threads (32 on >=64-CPU servers, 16 otherwise) and
+    # SimpleITK global threads (16) so 256x256 2D convolutions and ITK filters do
+    # not thrash OpenMP/ITK thread pools on 64-144 thread servers.
+    torch_cap = 32 if requested >= 64 else 16
+    torch.set_num_threads(min(requested, torch_cap))
+    sitk.ProcessObject.SetGlobalDefaultNumberOfThreads(min(requested, 16))
+    return requested
 
 
 # --------------------------------------------------------------------------- arrays (A3 image input)

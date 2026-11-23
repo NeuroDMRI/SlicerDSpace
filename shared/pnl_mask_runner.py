@@ -276,7 +276,12 @@ def _install_pnl_runtime_accelerations() -> None:
             raise ValueError("Record must be separate from input, model resources, and output")
         pnl_weights.check(template, pnl_weights.TEMPLATE_SHA256)
         selection = pnl_inf.select_device(device)
-        torch.set_num_threads(threads)
+        torch.set_num_threads(min(max(1, int(threads)), 32))
+        if not str(selection["resolved"]).startswith(("cuda", "mps")):
+            try:
+                torch.set_flush_denormal(True)
+            except Exception:
+                pass
         output_path.parent.mkdir(parents=True, exist_ok=True)
         image = nib.load(input_path, keep_file_open=True)
         baseline_data = pnl_pipe.mean_b0(image, bvals, threshold)

@@ -86,7 +86,9 @@ def _default_eddy_threads() -> int:
         count = len(os.sched_getaffinity(0))
     else:
         count = os.cpu_count()
-    return max(1, min(8, int(count or 1)))
+    n_cpus = int(count or 1)
+    cap = 16 if n_cpus >= 32 else 8
+    return max(1, min(cap, n_cpus))
 
 
 @dataclass(frozen=True)

@@ -527,6 +527,10 @@ def managed_tool_environment(
     if fsl_bin_dir is not None:
         extra["FSLDIR"] = fsl_root_from_bin_dir(fsl_bin_dir).as_posix()
         extra["FSLOUTPUTTYPE"] = FSL_OUTPUT_TYPE
+        # FSL binaries (topup/eddy_cpu) link pthreaded OpenBLAS and manage their own
+        # worker pool via --nthr; prevent nested 64-144 thread BLAS oversubscription.
+        for blas_key in ("OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "BLIS_NUM_THREADS"):
+            extra.setdefault(blas_key, "1")
     extra.update({str(key): str(value) for key, value in (extra_env or {}).items() if value is not None})
     env = external_python_environment(extra, path_prepend=prepend)
     if sys.platform == "win32" and not env.get("HOME"):

@@ -387,6 +387,25 @@ def _sync_shared_editor(attribute, editor, shared_editors, kind):
     _connect_peer(editor)
 
 
+def _qt_supports_panel_widgets(qt, *, needs_spin: bool = False, needs_double_spin: bool = False,
+                               needs_combo: bool = False) -> bool:
+    """True when ``qt`` provides callable form and control factories (real Qt or full fake_qt doubles)."""
+
+    if not callable(getattr(qt, "QFormLayout", None)) or not callable(getattr(qt, "QPixmap", None)):
+        return False
+    for needed, name, method in (
+        (needs_spin, "QSpinBox", "setRange"),
+        (needs_double_spin, "QDoubleSpinBox", "setRange"),
+        (needs_combo, "QComboBox", "addItem"),
+    ):
+        if not needed:
+            continue
+        cls = getattr(qt, name, None)
+        if not callable(cls) or (isinstance(cls, type) and not hasattr(cls, method)):
+            return False
+    return True
+
+
 def _add_algorithm_row(qt, owner, layout, box, family, algorithm, staged, zh, resize_popup, dark=None,
                        disabled=False, disabled_tooltip="", create_marker=False, shared_editors=None):
     specs = ALGORITHM_SETTINGS.get((family, algorithm), ())
@@ -400,9 +419,29 @@ def _add_algorithm_row(qt, owner, layout, box, family, algorithm, staged, zh, re
     fields = [(attribute, control, label) for attribute, control, label in fields
               if control is not None and label is not None]
     ukf = (family, algorithm) == ("tractography", "ukf")
+    csd_act = (family, algorithm) == ("tractography", "csd_act") and _qt_supports_panel_widgets(
+        qt, needs_spin=True, needs_double_spin=True, needs_combo=True)
+    dti_det = (family, algorithm) == ("tractography", "dti_det") and _qt_supports_panel_widgets(
+        qt, needs_spin=True, needs_double_spin=True, needs_combo=True)
+    saf = (family, algorithm) == ("tractography", "saf") and _qt_supports_panel_widgets(
+        qt, needs_spin=True, needs_double_spin=True)
+    denoise_panel = (family, algorithm) == ("preprocessing", "denoise") and _qt_supports_panel_widgets(qt)
+    micro_dti_panel = (family, algorithm) == ("microstructure", "dti") and _qt_supports_panel_widgets(
+        qt, needs_combo=True)
+    freewater_panel = (family, algorithm) == ("microstructure", "freewater") and _qt_supports_panel_widgets(
+        qt, needs_double_spin=True)
+    ifw_t2_panel = (family, algorithm) == ("microstructure", "ifw") and _qt_supports_panel_widgets(
+        qt, needs_double_spin=True)
+    tractcloud_panel = (family, algorithm) == ("bundles", "tractcloud") and _qt_supports_panel_widgets(
+        qt, needs_spin=True)
     # Batch 2 item 5: every bundle algorithm gets a "Tractography source" combo built in code.
     bundle_source = family == "bundles" and algorithm in ("wmql", "wma", "tractcloud")
-    if not fields and not ukf and not bundle_source:
+    has_code_panel = any((
+        ukf, csd_act, dti_det, saf,
+        denoise_panel, micro_dti_panel, freewater_panel, ifw_t2_panel, tractcloud_panel,
+        bundle_source,
+    ))
+    if not fields and not has_code_panel:
         if marker is None:
             layout.addWidget(box)
             return {"gear": None, "panel": None, "marker": None, "reason_label": None, "collapse_reason": None}
@@ -500,12 +539,40 @@ def _add_algorithm_row(qt, owner, layout, box, family, algorithm, staged, zh, re
     if ukf:
         from shared.ui_ukf import add_staged_ukf_fields
         staged["ukfParameters"] = add_staged_ukf_fields(form, owner._parameterNode, zh)
+    if csd_act:
+        from shared.ui_tractography_params import add_staged_csd_act_fields
+        csd_staged, streamlines_staged = add_staged_csd_act_fields(form, owner._parameterNode, zh, dark=use_dark)
+        staged["csdActParameters"] = csd_staged
+        if streamlines_staged is not None:
+            staged["orchestrationSelectStreamlines"] = streamlines_staged
+    if dti_det:
+        from shared.ui_tractography_params import add_staged_dti_det_fields
+        staged["dtiParameters"] = add_staged_dti_det_fields(form, owner._parameterNode, zh, dark=use_dark)
+    if saf:
+        from shared.ui_tractography_params import add_staged_saf_fields
+        staged["safParameters"] = add_staged_saf_fields(form, owner._parameterNode, zh)
+    if denoise_panel:
+        from shared.ui_tractography_params import add_staged_denoise_fields
+        staged["preprocessingRunGibbs"] = add_staged_denoise_fields(form, owner._parameterNode, zh)
+    if micro_dti_panel:
+        from shared.ui_tractography_params import add_staged_microstructure_dti_fields
+        staged["microstructureFitMethod"] = add_staged_microstructure_dti_fields(
+            form, owner._parameterNode, zh, dark=use_dark)
+    if freewater_panel:
+        from shared.ui_tractography_params import add_staged_freewater_fields
+        staged["freeWaterParameters"] = add_staged_freewater_fields(form, owner._parameterNode, zh)
+    if ifw_t2_panel:
+        from shared.ui_tractography_params import add_staged_ifw_t2_fields
+        staged["ifwParameters"] = add_staged_ifw_t2_fields(form, owner._parameterNode, zh)
     if bundle_source:
         from shared.ui_bundle_source import add_staged_source_field
         source_attribute, source_value = add_staged_source_field(
             qt, form, owner._parameterNode, algorithm, zh, selected_algorithms(owner._parameterNode, "tractography"),
             dark=use_dark)
         staged[source_attribute] = source_value
+    if tractcloud_panel:
+        from shared.ui_tractography_params import add_staged_tractcloud_fields
+        staged["tractcloudParameters"] = add_staged_tractcloud_fields(form, owner._parameterNode, zh)
     layout.addWidget(panel)
     panel.hide()
     def toggle_settings(visible):
@@ -1520,8 +1587,18 @@ def choose_algorithms(owner, family):
                     number = float(echo_time)
                     if not isfinite(number) or number <= 0:
                         raise ValueError("Echo time must be a positive number in milliseconds.")
-            if "ukfParameters" in staged:
-                staged["ukfParameters"]()
+            for param_attr in (
+                "ukfParameters",
+                "csdActParameters",
+                "dtiParameters",
+                "safParameters",
+                "microstructureFitMethod",
+                "freeWaterParameters",
+                "ifwParameters",
+                "tractcloudParameters",
+            ):
+                if param_attr in staged:
+                    staged[param_attr]()
             if "orchestrationWmqlSelection" in staged:
                 from tractography.wmql_protocol import canonical_wmql_selection
                 canonical_wmql_selection(staged["orchestrationWmqlSelection"](), staged["orchestrationWmqlPreset"]())
@@ -1658,9 +1735,11 @@ def choose_algorithms(owner, family):
                 enabled_val = enabled_attr() if callable(enabled_attr) else getattr(ui_box, "enabled", True)
                 if isinstance(enabled_val, bool):
                     can_enable = enabled_val
+            from shared.ui_tractography_params import set_node_parameter
+
             with slicer.util.NodeModify(owner._parameterNode):
                 for attribute, value in staged.items():
-                    setattr(owner._parameterNode, attribute, value())
+                    set_node_parameter(owner._parameterNode, attribute, value())
                 if selection:
                     _cleared_algorithm_families(owner).discard(family)
                     if target_attr and can_enable:

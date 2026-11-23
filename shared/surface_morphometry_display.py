@@ -4,25 +4,27 @@ The task ``surface.ddsurfer_postprocess`` publishes FreeSurfer-format files in
 ``outputs/01_anatomical_priors/surface_morphometry/``: ``{lh,rh}.thickness/.curv/.sulc/.area`` (one value per white-surface
 vertex), ``{lh,rh}.aparc.annot`` / ``.aparc.a2009s.annot`` (one label per vertex), ``{lh,rh}.inflated`` (a surface) and
 ``{lh,rh}.<atlas>.stats`` (text tables). Slicer core has no reader for them; this module reads them with
-``nibabel.freesurfer``.
+``nibabel.freesurfer`` (and parses ``.stats`` tables natively).
 
-- A measure or an annotation is shown on the WHITE surface of the same hemisphere of the same run: the published
-  ``cortical_surface/{hemi}.white.obj`` that the run's surface task records. Post-processing read exactly that file, so
-  its vertex order is the order of the values. The LPS ``.stl`` has the same point count but another vertex order, so
-  it is never a carrier. Each row gets its own model node (white geometry + this row's scalar).
+- A measure or an annotation is shown on whichever cortical surface(s) of the same hemisphere are currently open
+  (``white``, ``pial``, or ``inflated``), defaulting to ``white`` when none is open: the published
+  ``cortical_surface/{hemi}.{white,pial}.obj`` (never the LPS ``.stl``, whose vertex order differs) or
+  ``surface_morphometry/{hemi}.inflated``. Each row gets its own model node (carrier geometry + this row's scalar).
 - Before the scalar is attached: the value count must equal the point count, and the carrier's sha256 must equal the
   ``native_sha256`` that post-processing recorded in ``structural/manifest.json`` (when that record is readable).
 - ``{hemi}.inflated`` becomes its own model, moved from the FreeSurfer surface space to scanner space with the
   volume geometry of the file footer (the transform SlicerFreeSurfer's reader applies).
+- ``{hemi}.<atlas>.stats`` opens in an in-Slicer table dialog (with optional ``vtkMRMLTableNode`` export and TSV copy).
 
-The pure functions (rows, carrier, checks, ranges, label mapping, footer transform, sibling rule) run without the
-application; :func:`load_morphometry_row` is the one thin function that builds nodes.
+The pure functions (rows, carrier, checks, ranges, label mapping, footer transform, sibling rule, stats parsing) run
+without the application; :func:`load_morphometry_row` builds scene nodes and :func:`show_stats_dialog` displays tables.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 from pathlib import Path
 from typing import Any, Optional
@@ -32,9 +34,10 @@ PRODUCT = "surface.ddsurfer_postprocess"
 SURFACE_PRODUCT = "surface.ddsurfer"
 MORPHOMETRY_ROW_KIND = "surface_morphometry"  # ROLE_KIND of a Results row of this product (plain eye)
 HEMISPHERES = ("lh", "rh")
-SURFACES = ("white", "pial")
-_SURFACE_TEXT = {"white": ("white", "白质"), "pial": ("pial", "软脑膜")}
+SURFACES = ("white", "pial", "inflated")
+_SURFACE_TEXT = {"white": ("white", "白质"), "pial": ("pial", "软脑膜"), "inflated": ("inflated", "膨胀")}
 _SURFACE_OBJ = re.compile(r"^(lh|rh)\.(white|pial)\.obj$")
+_SURFACE_CARRIER = re.compile(r"^(lh|rh)\.(?:(white|pial)\.obj|(inflated))$")
 MEASURES = ("thickness", "curv", "sulc", "area")
 ANNOTATIONS = ("aparc", "aparc.a2009s")
 _KIND_ORDER = ("measure", "annotation", "inflated", "stats")
@@ -119,20 +122,20 @@ def row_tooltip(path: Any, *, zh: bool) -> str:
     if kind == "measure":
         english, chinese = _MEASURE_TEXT[name]
         return (
-            f"在已打开的皮层表面上显示{chinese}（默认白质表面）"
+            f"在已打开的皮层表面（白质/软脑膜/膨胀）上显示{chinese}（默认白质表面）"
             if zh
-            else f"Show {english} on the open cortical surface (defaults to white)"
+            else f"Show {english} on the open cortical surface (white, pial, or inflated; defaults to white)"
         )
     if kind == "annotation":
         english, chinese = _ATLAS_TEXT.get(name, (name, name))
         return (
-            f"在已打开的皮层表面上显示 {chinese} 分区（默认白质表面）"
+            f"在已打开的皮层表面（白质/软脑膜/膨胀）上显示 {chinese} 分区（默认白质表面）"
             if zh
-            else f"Show the {english} parcellation on the open cortical surface (defaults to white)"
+            else f"Show the {english} parcellation on the open cortical surface (white, pial, or inflated; defaults to white)"
         )
     if kind == "inflated":
         return "显示膨胀表面" if zh else "Show the inflated surface"
-    return "在 Slicer 外打开统计表" if zh else "Open the statistics table outside Slicer"
+    return "在 Slicer 中查看统计表" if zh else "View the statistics table in Slicer"
 
 
 def surface_from_obj_path(path: Any) -> Optional[tuple[str, str]]:
@@ -144,8 +147,23 @@ def surface_from_obj_path(path: Any) -> Optional[tuple[str, str]]:
     return (match.group(1), match.group(2)) if match is not None else None
 
 
+def surface_from_carrier_path(path: Any) -> Optional[tuple[str, str]]:
+    """Return ``(hemisphere, surface)`` for ``{lh,rh}.{white,pial}.obj`` or ``{lh,rh}.inflated``, else None."""
+
+    if not path:
+        return None
+    match = _SURFACE_CARRIER.match(Path(str(path)).name)
+    if match is None:
+        return None
+    hemi, obj_surf, inflated_surf = match.groups()
+    return (hemi, obj_surf or inflated_surf)
+
+
+surface_from_path = surface_from_carrier_path
+
+
 def carrier_surface_of_node(node: Any) -> Optional[str]:
-    """Return ``'white'`` or ``'pial'`` for a morphometry overlay model node, else None."""
+    """Return ``'white'``, ``'pial'``, or ``'inflated'`` for a morphometry overlay model node, else None."""
 
     if node is None or not hasattr(node, "GetAttribute"):
         return None
@@ -153,7 +171,7 @@ def carrier_surface_of_node(node: Any) -> Optional[str]:
     if surf in SURFACES:
         return surf
     carrier = node.GetAttribute(PREFIX + "CarrierPath")
-    parsed = surface_from_obj_path(carrier)
+    parsed = surface_from_carrier_path(carrier)
     return parsed[1] if parsed is not None else None
 
 
@@ -164,11 +182,16 @@ def _completed(task: dict) -> bool:
 
 
 def surface_carrier(manifest: dict, hemi: str, surface: str = "white") -> Optional[Path]:
-    """The published ``{hemi}.{surface}.obj`` that the run's surface task records, or None (never the ``.stl``)."""
+    """The published ``{hemi}.{surface}.obj`` (or ``{hemi}.inflated``) that the run records, or None (never ``.stl``)."""
 
-    target_name = f"{hemi}.{surface}.obj"
+    if surface == "inflated":
+        target_product = PRODUCT
+        target_name = f"{hemi}.inflated"
+    else:
+        target_product = SURFACE_PRODUCT
+        target_name = f"{hemi}.{surface}.obj"
     for task in manifest.get("tasks") or []:
-        if not isinstance(task, dict) or str(task.get("name") or "").split("@", 1)[0] != SURFACE_PRODUCT:
+        if not isinstance(task, dict) or str(task.get("name") or "").split("@", 1)[0] != target_product:
             continue
         if not _completed(task):
             continue
@@ -187,11 +210,31 @@ def white_carrier(manifest: dict, hemi: str) -> Optional[Path]:
     return surface_carrier(manifest, hemi, "white")
 
 
+def inflated_carrier(manifest: dict, hemi: str, row_path: Any = None) -> Optional[Path]:
+    """The published ``{hemi}.inflated`` from ``surface.ddsurfer_postprocess`` outputs or the published layout."""
+
+    found = surface_carrier(manifest, hemi, "inflated")
+    if found is not None:
+        return found
+    if row_path is not None:
+        return published_surface_carrier(manifest, hemi, row_path, "inflated")
+    from shared.io_layout import subject_layout
+
+    subject_root, output_root = manifest.get("subject_root"), manifest.get("output_root")
+    if not subject_root:
+        return None
+    try:
+        layout = subject_layout(Path(str(subject_root)), output_root=Path(str(output_root)) if output_root else None)
+        carrier = layout.surface_morphometry / f"{hemi}.inflated"
+        return carrier if carrier.is_file() else None
+    except (OSError, RuntimeError, ValueError, TypeError):
+        return None
+
+
 def published_surface_carrier(manifest: dict, hemi: str, row_path: Any, surface: str = "white") -> Optional[Path]:
-    """Review M4: ``cortical_surface/{hemi}.{surface}.obj`` of the published layout (shared.io_layout) of the run's
-    output root, used when the manifest records no completed surface task with that file (surface excluded from the
-    run, or blocked while post-processing reused its earlier outputs). Only when the row itself lies in the
-    ``surface_morphometry`` folder of that same layout; None otherwise."""
+    """Review M4: ``cortical_surface/{hemi}.{surface}.obj`` (or ``surface_morphometry/{hemi}.inflated``) of the
+    published layout (shared.io_layout) of the run's output root, used when the manifest records no completed task
+    with that file. Only when the row itself lies in the ``surface_morphometry`` folder of that same layout."""
 
     from shared.io_layout import subject_layout
 
@@ -202,7 +245,11 @@ def published_surface_carrier(manifest: dict, hemi: str, row_path: Any, surface:
         layout = subject_layout(Path(str(subject_root)), output_root=Path(str(output_root)) if output_root else None)
         if Path(str(row_path)).expanduser().resolve().parent != layout.surface_morphometry.resolve():
             return None
-        carrier = layout.cortical_surface / f"{hemi}.{surface}.obj"
+        carrier = (
+            layout.surface_morphometry / f"{hemi}.inflated"
+            if surface == "inflated"
+            else layout.cortical_surface / f"{hemi}.{surface}.obj"
+        )
         return carrier if carrier.is_file() else None
     except (OSError, RuntimeError, ValueError, TypeError):
         return None
@@ -219,7 +266,7 @@ def recorded_carrier_sha256(task: dict, hemi: str, surface: str = "white") -> Op
     candidates = [task.get("manifest_path")]
     if outputs.get("structural_root"):
         candidates.append(str(Path(str(outputs["structural_root"])) / "manifest.json"))
-    key = f"{hemi}.{surface}.obj"
+    key = f"{hemi}.inflated" if surface == "inflated" else f"{hemi}.{surface}.obj"
     for value in candidates:
         if not value:
             continue
@@ -243,19 +290,26 @@ def file_sha256(path: Path) -> str:
 
 
 def check_carrier(manifest: dict, task: dict, hemi: str, row_path: Any = None, surface: str = "white") -> Path:
-    """The white or pial ``.obj`` to carry a measure of ``hemi``; a bilingual MorphometryError when missing or mismatched.
+    """The white, pial, or inflated surface to carry a measure of ``hemi``; a bilingual MorphometryError on error.
 
-    The surface task's recorded file comes first; else the published file of the row's layout (review M4). The
+    The task's recorded file comes first; else the published file of the row's layout (review M4). The
     checksum check is the same for both."""
 
     en_surf, zh_surf = _SURFACE_TEXT.get(surface, (surface, surface))
-    carrier = surface_carrier(manifest, hemi, surface) or published_surface_carrier(manifest, hemi, row_path, surface)
-    if carrier is None:
-        raise MorphometryError(_bilingual(
-            f"This run has no {hemi}.{surface}.obj surface. Older runs publish only the .stl surface, whose vertex order "
-            "differs from the post-processing values. Re-run Surface to show this file.",
-            f"此运行没有 {hemi}.{surface}.obj {zh_surf}表面。旧的运行只发布 .stl 表面，其顶点顺序与后处理数值不同。"
-            "请重新运行“表面重建”后再显示此文件。"))
+    if surface == "inflated":
+        carrier = inflated_carrier(manifest, hemi, row_path)
+        if carrier is None:
+            raise MorphometryError(_bilingual(
+                f"This run has no {hemi}.inflated surface. Re-run Surface postprocess to show this file on the inflated surface.",
+                f"此运行没有 {hemi}.inflated {zh_surf}表面。请重新运行“表面后处理”后再在{zh_surf}表面上显示此文件。"))
+    else:
+        carrier = surface_carrier(manifest, hemi, surface) or published_surface_carrier(manifest, hemi, row_path, surface)
+        if carrier is None:
+            raise MorphometryError(_bilingual(
+                f"This run has no {hemi}.{surface}.obj surface. Older runs publish only the .stl surface, whose vertex order "
+                "differs from the post-processing values. Re-run Surface to show this file.",
+                f"此运行没有 {hemi}.{surface}.obj {zh_surf}表面。旧的运行只发布 .stl 表面，其顶点顺序与后处理数值不同。"
+                "请重新运行“表面重建”后再显示此文件。"))
     expected = recorded_carrier_sha256(task, hemi, surface)
     if expected is not None and file_sha256(carrier) != expected:
         raise MorphometryError(_bilingual(
@@ -274,11 +328,14 @@ def check_count(values: int, points: int, file_name: str, carrier_name: str) -> 
 
 
 def active_carrier_surfaces(slicer, manifest: dict, hemi: str, row_path: Any = None) -> tuple[str, ...]:
-    """Return currently visible cortical surface(s) (subset of ``('white', 'pial')``) for ``hemi`` in ``slicer``."""
+    """Return currently visible cortical surface(s) (subset of ``('white', 'pial', 'inflated')``) for ``hemi``."""
 
     carrier_keys: dict[str, str] = {}
     for surf in SURFACES:
-        path = surface_carrier(manifest, hemi, surf) or published_surface_carrier(manifest, hemi, row_path, surf)
+        if surf == "inflated":
+            path = inflated_carrier(manifest, hemi, row_path)
+        else:
+            path = surface_carrier(manifest, hemi, surf) or published_surface_carrier(manifest, hemi, row_path, surf)
         key = _file_key(path)
         if key:
             carrier_keys[surf] = key
@@ -691,10 +748,10 @@ def load_morphometry_row(
 ) -> bool:
     """Build node(s) for one clicked post-processing row; on any failure nothing stays in the scene.
 
-    For measures and annotations, selects the currently open cortical surface(s) of that hemisphere (``white`` and/or
-    ``pial``), defaulting to ``('white',)`` when neither is open. Explicit ``surfaces`` overrides automatic detection.
-    Raises MorphometryError (bilingual) for a reason the user can act on. The caller registers the new model node(s)
-    (Run, SourcePath ...) like every other result node.
+    For measures and annotations, selects the currently open cortical surface(s) of that hemisphere (``white``,
+    ``pial``, and/or ``inflated``), defaulting to ``('white',)`` when none is open. Explicit ``surfaces`` overrides
+    automatic detection. Raises MorphometryError (bilingual) for a reason the user can act on. The caller registers
+    the new model node(s) (Run, SourcePath ...) like every other result node.
     """
 
     path = Path(candidate["path"])
@@ -704,8 +761,8 @@ def load_morphometry_row(
                                           f"{path.name} 不是表面后处理结果。"))
     kind, hemi, name = row
     if kind == "stats":
-        raise MorphometryError(_bilingual(f"{path.name} is a text table; open it outside Slicer.",
-                                          f"{path.name} 是文本表格；请在 Slicer 外打开。"))
+        raise MorphometryError(_bilingual(f"{path.name} is a statistics table; open it in the statistics viewer.",
+                                          f"{path.name} 是统计表；请在统计表查看器中打开。"))
     nibabel = _import_nibabel()
     from shared.fiber_display import detach_result_storage
 
@@ -737,13 +794,19 @@ def load_morphometry_row(
 
         array_name = name if kind == "measure" else name.replace(".", "_")
         for index, (surf, carrier) in enumerate(carriers):
-            node = _load_carrier(slicer, carrier)
-            created.append(node)
-            own_nodes(node, _display_nodes(node))  # review M3: the reader's display node belongs to this row
-            detach_result_storage(slicer, node)  # a scene Save must never rewrite the published surface
-            check_count(len(values), node.GetPolyData().GetNumberOfPoints(), path.name, carrier.name)
             node_name = path.name if (len(carriers) == 1 and surf == "white") else f"{path.name} ({surf})"
-            node.SetName(node_name)
+            if surf == "inflated":
+                points, faces = read_inflated(nibabel, carrier)
+                node = _build_model_from_points(slicer, points, faces, node_name)
+                created.append(node)
+                own_nodes(node, _display_nodes(node))
+            else:
+                node = _load_carrier(slicer, carrier)
+                created.append(node)
+                own_nodes(node, _display_nodes(node))  # review M3: the reader's display node belongs to this row
+                detach_result_storage(slicer, node)  # a scene Save must never rewrite the published surface
+                node.SetName(node_name)
+            check_count(len(values), node.GetPolyData().GetNumberOfPoints(), path.name, carrier.name)
             node.SetAttribute(PREFIX + "CarrierPath", str(carrier.resolve()))
             node.SetAttribute(PREFIX + "CarrierSurface", surf)
             node.SetAttribute(PREFIX + "SourceCoordinateSystem", "RAS")
@@ -805,3 +868,508 @@ def load_morphometry_row(
             except Exception:
                 pass
         raise
+
+
+# ------------------------------------------------------------------------------------------- .stats tables
+_MEASURE_LINE = re.compile(r"^#\s*Measure\s+(.+)$")
+_COLHEADERS_LINE = re.compile(r"^#\s*ColHeaders\s+(.+)$")
+_TABLECOL_LINE = re.compile(r"^#\s*TableCol\s+(\d+)\s+(ColHeader|Units|FieldName)\s+(.+)$")
+_META_LINE = re.compile(r"^#\s*(subjectname|hemi|annotation|NRows|NTableCols|CreationTime)\s+(.+)$")
+_INT_PATTERN = re.compile(r"^[+-]?\d+$")
+
+
+def parse_freesurfer_stats(path: Any) -> dict[str, Any]:
+    """Parse a FreeSurfer / DDSurfer ``.stats`` table into measures, columns, rows, units, metadata and raw text."""
+
+    raw_text = Path(path).read_text(encoding="utf-8", errors="replace")
+    measures: list[tuple[str, str, str, str]] = []
+    columns: list[str] = []
+    table_col_headers: dict[int, str] = {}
+    table_col_units: dict[int, str] = {}
+    metadata: dict[str, str] = {}
+    data_lines: list[str] = []
+
+    for line in raw_text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("#"):
+            m_measure = _MEASURE_LINE.match(stripped)
+            if m_measure:
+                parts = [part.strip() for part in m_measure.group(1).split(",")]
+                if len(parts) >= 5:
+                    measures.append((parts[1] or parts[0], parts[2], parts[3], ", ".join(parts[4:])))
+                elif len(parts) == 4:
+                    measures.append((parts[0], parts[1], parts[2], parts[3]))
+                elif len(parts) == 3:
+                    measures.append((parts[0], parts[0], parts[1], parts[2]))
+                elif len(parts) == 2:
+                    measures.append((parts[0], parts[0], parts[1], ""))
+                continue
+            m_cols = _COLHEADERS_LINE.match(stripped)
+            if m_cols:
+                columns = m_cols.group(1).split()
+                continue
+            m_tcol = _TABLECOL_LINE.match(stripped)
+            if m_tcol:
+                col_index = int(m_tcol.group(1))
+                field = m_tcol.group(2)
+                value = m_tcol.group(3).strip()
+                if field == "ColHeader":
+                    table_col_headers[col_index] = value
+                elif field == "Units":
+                    table_col_units[col_index] = value
+                continue
+            m_meta = _META_LINE.match(stripped)
+            if m_meta:
+                metadata[m_meta.group(1)] = m_meta.group(2).strip()
+            continue
+        data_lines.append(stripped)
+
+    if not columns and table_col_headers:
+        columns = [table_col_headers[idx] for idx in sorted(table_col_headers)]
+
+    units: dict[str, str] = {}
+    for idx, col_name in table_col_headers.items():
+        if idx in table_col_units:
+            units[col_name] = table_col_units[idx]
+    for pos, col_name in enumerate(columns, 1):
+        if col_name not in units and pos in table_col_units:
+            units[col_name] = table_col_units[pos]
+
+    rows: list[tuple[str, ...]] = []
+    if columns:
+        col_count = len(columns)
+        for line in data_lines:
+            parts = line.split()
+            if len(parts) == col_count:
+                rows.append(tuple(parts))
+            elif len(parts) < col_count:
+                rows.append(tuple(parts + [""] * (col_count - len(parts))))
+            else:
+                rows.append(tuple(parts[: col_count - 1] + [" ".join(parts[col_count - 1 :])]))
+
+    return {
+        "measures": measures,
+        "columns": columns,
+        "rows": rows,
+        "units": units,
+        "metadata": metadata,
+        "raw_text": raw_text,
+    }
+
+
+def stats_to_tsv(parsed: dict[str, Any]) -> str:
+    """Format parsed ``.stats`` data as TSV (or raw text when no table columns were parsed)."""
+
+    columns = parsed.get("columns") or []
+    rows = parsed.get("rows") or []
+    if not columns:
+        return str(parsed.get("raw_text") or "")
+    lines = ["\t".join(str(col) for col in columns)]
+    lines.extend("\t".join(str(cell) for cell in row) for row in rows)
+    return "\n".join(lines)
+
+
+def _parse_numeric_cell(text: str) -> Optional[int | float]:
+    stripped = str(text or "").strip()
+    if not stripped:
+        return None
+    if _INT_PATTERN.match(stripped):
+        try:
+            return int(stripped)
+        except ValueError:
+            return None
+    try:
+        value = float(stripped)
+    except ValueError:
+        return None
+    return value if math.isfinite(value) else None
+
+
+def load_stats_table_node(slicer, path: Any) -> Any:
+    """Create or update a ``vtkMRMLTableNode`` from a FreeSurfer/DDSurfer ``.stats`` file; None if not tabular."""
+
+    stats_path = Path(path).expanduser()
+    parsed = parse_freesurfer_stats(stats_path)
+    columns = parsed["columns"]
+    rows = parsed["rows"]
+    if not columns:
+        return None
+
+    import vtk
+
+    source_key = _file_key(stats_path)
+    table_node = None
+    try:
+        existing = slicer.util.getNodesByClass("vtkMRMLTableNode")
+    except Exception:
+        existing = []
+    for candidate in existing or []:
+        if candidate is not None and _file_key(candidate.GetAttribute(PREFIX + "StatsSourcePath")) == source_key:
+            table_node = candidate
+            break
+    if table_node is None:
+        table_node = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLTableNode", stats_path.name)
+
+    vtk_table = vtk.vtkTable()
+    row_count = len(rows)
+    for col_idx, col_name in enumerate(columns):
+        col_values = [row[col_idx] if col_idx < len(row) else "" for row in rows]
+        non_empty = [val for val in col_values if str(val).strip()]
+        parsed_nums = [_parse_numeric_cell(val) for val in non_empty]
+        if non_empty and all(isinstance(val, int) for val in parsed_nums):
+            int_vals = [val for val in parsed_nums if isinstance(val, int)]
+            if all(-(2**31) <= val < 2**31 for val in int_vals):
+                array = vtk.vtkIntArray()
+            else:
+                array = vtk.vtkLongLongArray()
+            array.SetName(col_name)
+            array.SetNumberOfValues(row_count)
+            for row_idx, raw in enumerate(col_values):
+                val = _parse_numeric_cell(raw)
+                array.SetValue(row_idx, int(val) if isinstance(val, int) else 0)
+        elif non_empty and all(val is not None for val in parsed_nums):
+            array = vtk.vtkDoubleArray()
+            array.SetName(col_name)
+            array.SetNumberOfValues(row_count)
+            for row_idx, raw in enumerate(col_values):
+                val = _parse_numeric_cell(raw)
+                array.SetValue(row_idx, float(val) if val is not None else float("nan"))
+        else:
+            array = vtk.vtkStringArray()
+            array.SetName(col_name)
+            array.SetNumberOfValues(row_count)
+            for row_idx, raw in enumerate(col_values):
+                array.SetValue(row_idx, str(raw))
+        vtk_table.AddColumn(array)
+
+    if hasattr(table_node, "SetAndObserveTable"):
+        table_node.SetAndObserveTable(vtk_table)
+    if hasattr(table_node, "SetUseColumnNameAsColumnHeader"):
+        try:
+            table_node.SetUseColumnNameAsColumnHeader(True)
+        except Exception:
+            pass
+    if hasattr(table_node, "SetLocked"):
+        try:
+            table_node.SetLocked(True)
+        except Exception:
+            pass
+    units = parsed.get("units") or {}
+    if hasattr(table_node, "SetColumnUnitLabel"):
+        for col_name in columns:
+            unit = str(units.get(col_name) or "").strip()
+            if unit and unit.lower() not in {"na", "unitless"}:
+                try:
+                    table_node.SetColumnUnitLabel(col_name, unit)
+                except Exception:
+                    pass
+    table_node.SetAttribute(PREFIX + "StatsSourcePath", str(stats_path.resolve()))
+    table_node.SetAttribute(PREFIX + "MorphometryKind", "stats")
+    return table_node
+
+
+def _activate_table_node_in_slicer(slicer, table_node: Any) -> None:
+    """Best-effort display of ``table_node`` in Slicer's Table View."""
+
+    if table_node is None:
+        return
+    try:
+        app = getattr(slicer, "app", None)
+        app_logic = app.applicationLogic() if (app is not None and hasattr(app, "applicationLogic")) else None
+        if app_logic is not None:
+            selection = app_logic.GetSelectionNode()
+            if selection is not None and hasattr(selection, "SetActiveTableID"):
+                selection.SetActiveTableID(table_node.GetID())
+            if hasattr(app_logic, "PropagateTableSelection"):
+                app_logic.PropagateTableSelection()
+        layout_mgr = app.layoutManager() if (app is not None and hasattr(app, "layoutManager")) else None
+        if layout_mgr is not None and hasattr(layout_mgr, "setLayout"):
+            table_views = getattr(layout_mgr, "tableViewCount", 0)
+            if callable(table_views):
+                table_views = table_views()
+            if not table_views:
+                layout_node_cls = getattr(slicer, "vtkMRMLLayoutNode", None)
+                table_layout = getattr(layout_node_cls, "SlicerLayoutFourUpTableView", None)
+                if table_layout is not None:
+                    layout_mgr.setLayout(table_layout)
+    except Exception:
+        pass
+
+
+def _connect_qt_signal(widget: Any, signature: str, attr_name: str, callback) -> None:
+    connect_fn = getattr(widget, "connect", None)
+    if callable(connect_fn):
+        try:
+            connect_fn(signature, callback)
+            return
+        except Exception:
+            pass
+    signal = getattr(widget, attr_name, None)
+    if signal is not None and hasattr(signal, "connect"):
+        signal.connect(callback)
+
+
+def _format_stats_summary(parsed: dict[str, Any], *, zh: bool) -> str:
+    measures = parsed.get("measures") or []
+    if measures:
+        parts = []
+        for name, description, value, unit in measures:
+            label = description or name
+            unit_suffix = f" {unit}" if unit and unit.lower() not in {"na", "unitless"} else ""
+            parts.append(f"{label}: {value}{unit_suffix}")
+        return "\n".join(parts)
+    metadata = parsed.get("metadata") or {}
+    meta_parts = []
+    labels = (
+        ("subjectname", "受试者" if zh else "Subject"),
+        ("hemi", "半球" if zh else "Hemisphere"),
+        ("annotation", "图谱" if zh else "Atlas"),
+        ("NRows", "区域数" if zh else "Regions"),
+    )
+    for key, label in labels:
+        if metadata.get(key):
+            meta_parts.append(f"{label}: {metadata[key]}")
+    return "  ·  ".join(meta_parts)
+
+
+def show_stats_dialog(owner: Any, path: Any, *, zh: bool = False) -> bool:
+    """Display a FreeSurfer/DDSurfer ``.stats`` file inside Slicer in a sortable, read-only Qt dialog."""
+
+    import qt
+    import slicer
+
+    stats_path = Path(path).expanduser()
+    parent = getattr(owner, "parent", None)
+    if parent is None:
+        main_win = getattr(getattr(slicer, "util", None), "mainWindow", None)
+        if callable(main_win):
+            try:
+                parent = main_win()
+            except Exception:
+                parent = None
+    if not stats_path.is_file():
+        slicer.util.infoDisplay("统计表文件不存在。" if zh else "The statistics file is missing.", parent=parent)
+        return False
+    try:
+        parsed = parse_freesurfer_stats(stats_path)
+    except OSError as exc:
+        slicer.util.errorDisplay(
+            f"无法读取统计表文件：\n{exc}" if zh else f"Failed to read statistics file:\n{exc}",
+            parent=parent,
+        )
+        return False
+
+    dialog = qt.QDialog(parent)
+    dialog.setWindowTitle(stats_path.name)
+    if hasattr(dialog, "resize"):
+        dialog.resize(880, 580)
+    if hasattr(dialog, "setMinimumSize"):
+        try:
+            dialog.setMinimumSize(620, 400)
+        except Exception:
+            pass
+
+    layout = qt.QVBoxLayout(dialog)
+
+    path_label = qt.QLabel(str(stats_path.resolve()))
+    if hasattr(path_label, "setWordWrap"):
+        path_label.setWordWrap(True)
+    layout.addWidget(path_label)
+
+    summary_text = _format_stats_summary(parsed, zh=zh)
+    if summary_text:
+        if parsed["measures"] and hasattr(qt, "QGroupBox"):
+            summary_box = qt.QGroupBox("汇总指标" if zh else "Summary Measures")
+            summary_layout = qt.QVBoxLayout(summary_box)
+            summary_label = qt.QLabel(summary_text)
+            if hasattr(summary_label, "setWordWrap"):
+                summary_label.setWordWrap(True)
+            summary_layout.addWidget(summary_label)
+            layout.addWidget(summary_box)
+        else:
+            summary_label = qt.QLabel(summary_text)
+            if hasattr(summary_label, "setWordWrap"):
+                summary_label.setWordWrap(True)
+            layout.addWidget(summary_label)
+
+    columns = parsed["columns"]
+    rows = parsed["rows"]
+    units = parsed.get("units") or {}
+    has_table = bool(columns)
+
+    if has_table:
+        filter_bar = qt.QHBoxLayout()
+        filter_input = qt.QLineEdit()
+        if hasattr(filter_input, "setPlaceholderText"):
+            filter_input.setPlaceholderText("筛选区域或数值..." if zh else "Filter regions or values...")
+        if hasattr(filter_input, "setClearButtonEnabled"):
+            filter_input.setClearButtonEnabled(True)
+        count_label = qt.QLabel(f"{len(rows)} 行" if zh else f"{len(rows)} rows")
+        filter_bar.addWidget(filter_input, 1)
+        filter_bar.addWidget(count_label)
+        layout.addLayout(filter_bar)
+
+        table = qt.QTableWidget(len(rows), len(columns), dialog)
+        headers = []
+        for col in columns:
+            unit = str(units.get(col) or "").strip()
+            headers.append(f"{col} ({unit})" if (unit and unit.lower() not in {"na", "unitless"}) else col)
+        if hasattr(table, "setHorizontalHeaderLabels"):
+            table.setHorizontalHeaderLabels(headers)
+        if hasattr(table, "setEditTriggers") and hasattr(qt, "QAbstractItemView"):
+            no_edit = getattr(qt.QAbstractItemView, "NoEditTriggers", None)
+            if no_edit is not None:
+                table.setEditTriggers(no_edit)
+        if hasattr(table, "setAlternatingRowColors"):
+            table.setAlternatingRowColors(True)
+        if hasattr(table, "setSelectionBehavior") and hasattr(qt, "QAbstractItemView"):
+            select_rows = getattr(qt.QAbstractItemView, "SelectRows", None)
+            if select_rows is not None:
+                table.setSelectionBehavior(select_rows)
+        if hasattr(table, "setSortingEnabled"):
+            table.setSortingEnabled(False)
+
+        edit_role = getattr(getattr(qt, "Qt", None), "EditRole", 2)
+        align_right = getattr(getattr(qt, "Qt", None), "AlignRight", 0x0002)
+        align_vcenter = getattr(getattr(qt, "Qt", None), "AlignVCenter", 0x0080)
+        for row_idx, row_values in enumerate(rows):
+            for col_idx, cell_text in enumerate(row_values):
+                cell_item = qt.QTableWidgetItem(str(cell_text))
+                numeric = _parse_numeric_cell(cell_text)
+                if numeric is not None:
+                    try:
+                        cell_item.setData(edit_role, numeric)
+                    except Exception:
+                        pass
+                    try:
+                        cell_item.setTextAlignment(align_right | align_vcenter)
+                    except Exception:
+                        pass
+                table.setItem(row_idx, col_idx, cell_item)
+
+        if hasattr(table, "resizeColumnsToContents"):
+            try:
+                table.resizeColumnsToContents()
+            except Exception:
+                pass
+        if hasattr(table, "setSortingEnabled"):
+            table.setSortingEnabled(True)
+
+        def _apply_filter(query_text: str) -> None:
+            needle = str(query_text or "").strip().lower()
+            shown = 0
+            row_total = table.rowCount() if callable(getattr(table, "rowCount", None)) else getattr(table, "rowCount", len(rows))
+            col_total = table.columnCount() if callable(getattr(table, "columnCount", None)) else getattr(table, "columnCount", len(columns))
+            for r_idx in range(int(row_total)):
+                if not needle:
+                    matched = True
+                else:
+                    matched = False
+                    for c_idx in range(int(col_total)):
+                        cell = table.item(r_idx, c_idx)
+                        text_attr = getattr(cell, "text", "") if cell is not None else ""
+                        cell_str = str(text_attr() if callable(text_attr) else text_attr).lower()
+                        if needle in cell_str:
+                            matched = True
+                            break
+                if hasattr(table, "setRowHidden"):
+                    table.setRowHidden(r_idx, not matched)
+                if matched:
+                    shown += 1
+            if needle:
+                count_label.setText(f"{shown} / {row_total} 行" if zh else f"{shown} / {row_total} rows")
+            else:
+                count_label.setText(f"{row_total} 行" if zh else f"{row_total} rows")
+
+        _connect_qt_signal(filter_input, "textChanged(QString)", "textChanged", _apply_filter)
+        layout.addWidget(table, 1)
+    else:
+        raw_view = qt.QPlainTextEdit(dialog)
+        if hasattr(raw_view, "setReadOnly"):
+            raw_view.setReadOnly(True)
+        if hasattr(raw_view, "setPlainText"):
+            raw_view.setPlainText(parsed["raw_text"])
+        layout.addWidget(raw_view, 1)
+
+    buttons = qt.QHBoxLayout()
+
+    if has_table:
+        slicer_table_btn = qt.QPushButton("在 Slicer 表格视图打开" if zh else "Open in Slicer Table View")
+
+        def _open_in_slicer_table() -> None:
+            try:
+                node = load_stats_table_node(slicer, stats_path)
+                _activate_table_node_in_slicer(slicer, node)
+            except Exception as exc:
+                slicer.util.errorDisplay(str(exc), parent=dialog)
+
+        _connect_qt_signal(slicer_table_btn, "clicked()", "clicked", _open_in_slicer_table)
+        buttons.addWidget(slicer_table_btn)
+
+    copy_btn = qt.QPushButton(
+        ("复制表格" if has_table else "复制文本") if zh else ("Copy Table (TSV)" if has_table else "Copy Text")
+    )
+
+    def _copy_tsv() -> None:
+        try:
+            qt.QApplication.clipboard().setText(stats_to_tsv(parsed))
+        except Exception:
+            pass
+
+    _connect_qt_signal(copy_btn, "clicked()", "clicked", _copy_tsv)
+    buttons.addWidget(copy_btn)
+
+    external_btn = qt.QPushButton("外部打开" if zh else "Open Externally")
+
+    def _open_externally() -> None:
+        open_fn = getattr(owner, "_open_local_path", None)
+        if callable(open_fn):
+            open_fn(stats_path, missing_message="统计表文件不存在。" if zh else "The statistics file is missing.")
+            return
+        try:
+            qt.QDesktopServices.openUrl(qt.QUrl.fromLocalFile(str(stats_path.resolve())))
+        except Exception:
+            pass
+
+    _connect_qt_signal(external_btn, "clicked()", "clicked", _open_externally)
+    buttons.addWidget(external_btn)
+
+    if hasattr(buttons, "addStretch"):
+        buttons.addStretch(1)
+
+    close_btn = qt.QPushButton("关闭" if zh else "Close")
+    _connect_qt_signal(close_btn, "clicked()", "clicked", getattr(dialog, "close", getattr(dialog, "accept", lambda: None)))
+    buttons.addWidget(close_btn)
+    layout.addLayout(buttons)
+
+    key = _file_key(stats_path) or str(stats_path)
+    try:
+        dialogs = getattr(owner, "_statsDialogs", None)
+        if not isinstance(dialogs, dict):
+            dialogs = {}
+            setattr(owner, "_statsDialogs", dialogs)
+        previous = dialogs.get(key)
+        if previous is not None and previous is not dialog and hasattr(previous, "close"):
+            try:
+                previous.close()
+            except Exception:
+                pass
+        dialogs[key] = dialog
+    except Exception:
+        pass
+
+    if hasattr(dialog, "show"):
+        dialog.show()
+    if hasattr(dialog, "raise_"):
+        try:
+            dialog.raise_()
+        except Exception:
+            pass
+    if hasattr(dialog, "activateWindow"):
+        try:
+            dialog.activateWindow()
+        except Exception:
+            pass
+    return True

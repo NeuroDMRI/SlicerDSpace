@@ -274,6 +274,10 @@ class SharedWidgetMixin:
             self.ui.orchestrationBundleBackendComboBox.currentTextChanged.connect(
                 self._onBundleBackendChanged
             )
+        if hasattr(self.ui, "orchestrationSelectStreamlinesSpinBox"):
+            self.ui.orchestrationSelectStreamlinesSpinBox.valueChanged.connect(
+                self._onSelectStreamlinesChanged
+            )
         if hasattr(self.ui, "batchRootPath"):
             try:
                 self.ui.batchRootPath.currentPathChanged.connect(self._onBatchRootPathChanged)
@@ -860,6 +864,8 @@ class SharedWidgetMixin:
             self.appendLog(f"[Settings] Shared user config could not be restored: {exc}")
         if not consume_user_defaults_request(node):
             return
+        from shared.ui_tractography_params import set_node_parameter
+
         with slicer.util.NodeModify(node):
             for attribute, value_type in self._common_user_setting_specs():
                 key = self._user_settings_key(attribute)
@@ -877,7 +883,7 @@ class SharedWidgetMixin:
                         # W5 / SC-2: a saved removed backend loads as pnl_cnn with one note; the clinician is not blocked.
                         self.appendLog(f"[Settings] Saved brain mask backend {value!r} was removed. Brain masking now uses pnl_cnn.")
                         value = 'pnl_cnn'
-                    setattr(node, attribute, value)
+                    set_node_parameter(node, attribute, value)
                 except Exception:
                     continue
         if config is not None:
@@ -965,10 +971,22 @@ class SharedWidgetMixin:
         node = self._parameterNode
         if not node:
             return
+        from shared.ui_tractography_params import get_node_bool_parameter, get_node_parameter
+
         settings = slicer.app.userSettings()
-        for attribute, _value_type in self._common_user_setting_specs():
+        for attribute, value_type in self._common_user_setting_specs():
             try:
-                value = getattr(node, attribute)
+                if value_type is bool:
+                    sentinel = object()
+                    raw_value = get_node_parameter(node, attribute, sentinel)
+                    if raw_value is sentinel:
+                        continue
+                    value = get_node_bool_parameter(node, attribute, True)
+                else:
+                    sentinel = object()
+                    value = get_node_parameter(node, attribute, sentinel)
+                    if value is sentinel:
+                        continue
             except Exception:
                 continue
             settings.setValue(self._user_settings_key(attribute), value)
@@ -3678,6 +3696,39 @@ class SharedWidgetMixin:
         self._lastEnvironmentSignature = None
         self._checkCanApply()
 
+    def _onSelectStreamlinesChanged(self, value: int) -> None:
+        node = getattr(self, "_parameterNode", None)
+        if node is None:
+            return
+        from shared.ui_tractography_params import (
+            CSD_ACT_DEFAULTS,
+            get_node_parameter,
+            parse_csd_act_overrides,
+            set_node_parameter,
+        )
+
+        raw = str(get_node_parameter(node, "csdActParameters", "{}") or "{}").strip() or "{}"
+        if raw == "{}":
+            return
+        try:
+            overrides = parse_csd_act_overrides(raw)
+        except Exception:
+            return
+        if "select_streamlines" not in overrides:
+            return
+        count = int(value)
+        if count == CSD_ACT_DEFAULTS["select_streamlines"]:
+            overrides.pop("select_streamlines", None)
+        elif 1000 <= count <= 10_000_000:
+            overrides["select_streamlines"] = count
+        else:
+            return
+        updated = json.dumps(overrides, sort_keys=True) if overrides else "{}"
+        if updated != raw:
+            with slicer.util.NodeModify(node):
+                set_node_parameter(node, "csdActParameters", updated)
+            self._schedule_common_user_settings_save()
+
     def _onTractographyBackendChanged(self, value: str) -> None:
         self._refresh_advanced_run_settings(backend=(value or "").strip() or None)
 
@@ -5078,6 +5129,7 @@ class SharedWidgetMixin:
         external_paths = self._environment_dependency_path_kwargs()
         run_name = (self._parameterNode.orchestrationRunName or "Test1").strip() or "Test1"
         from shared.ui_bundle_source import node_bundle_sources
+        from shared.ui_tractography_params import get_node_bool_parameter, get_node_parameter
         selection = RunSelection(
             subject_id=subject_id,
             subject_root_text=subject_root_text,
@@ -5094,6 +5146,17 @@ class SharedWidgetMixin:
             wmql_query_selection=getattr(self._parameterNode, 'orchestrationWmqlSelection', '') or '',
             max_parallel_models=int(getattr(self._parameterNode, 'maxParallelModels', 1)),
             ukf_parameters_text=getattr(self._parameterNode, 'ukfParameters', '{}'),
+            csd_act_parameters_text=str(get_node_parameter(self._parameterNode, 'csdActParameters', '{}') or '{}'),
+            dti_parameters_text=str(get_node_parameter(self._parameterNode, 'dtiParameters', '{}') or '{}'),
+            saf_parameters_text=str(get_node_parameter(self._parameterNode, 'safParameters', '{}') or '{}'),
+            preprocessing_dipy_run_gibbs=get_node_bool_parameter(self._parameterNode, 'preprocessingRunGibbs', True),
+            microstructure_fit_method=(
+                str(get_node_parameter(self._parameterNode, 'microstructureFitMethod', 'wls') or 'wls').strip().lower()
+                or 'wls'
+            ),
+            freewater_parameters_text=str(get_node_parameter(self._parameterNode, 'freeWaterParameters', '{}') or '{}'),
+            ifw_parameters_text=str(get_node_parameter(self._parameterNode, 'ifwParameters', '{}') or '{}'),
+            tractcloud_parameters_text=str(get_node_parameter(self._parameterNode, 'tractcloudParameters', '{}') or '{}'),
             microstructure_noddi=run_noddi,
             microstructure_dki=run_dki,
             microstructure_ifw=run_ifw,

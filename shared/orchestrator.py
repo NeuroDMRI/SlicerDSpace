@@ -75,6 +75,9 @@ class ProductOrchestratorConfig:
     run_name: str = "csd_act"
     tractography_backend: str = "csd_act"
     ukf_parameters: dict[str, Any] = field(default_factory=dict)
+    csd_act_parameters: dict[str, Any] = field(default_factory=dict)
+    dti_parameters: dict[str, Any] = field(default_factory=dict)
+    saf_parameters: dict[str, Any] = field(default_factory=dict)
     ukf_executable: Optional[Path] = None
     dwiconvert_executable: Optional[Path] = None
     bundle_backend: str = "wmql"
@@ -1543,11 +1546,96 @@ def _tractcloud_complete(
         return False
 
 
+def _effective_csd_act_options(config: ProductOrchestratorConfig) -> dict[str, Any]:
+    """Resolve effective CSD/ACT config options; empty ``csd_act_parameters`` keeps exact defaults."""
+
+    from shared.ui_tractography_params import parse_csd_act_overrides
+
+    overrides = parse_csd_act_overrides(config.csd_act_parameters) if config.csd_act_parameters else {}
+    return {
+        "algorithm": overrides.get("algorithm", "iFOD2"),
+        "select_streamlines": overrides.get("select_streamlines", config.select_streamlines),
+        "seeding": overrides.get("seeding", config.tractography_seeding),
+        "min_length_mm": overrides.get("min_length_mm", config.dti_min_length_mm),
+        "max_length_mm": overrides.get("max_length_mm", config.dti_max_length_mm),
+        "step_size_mm": overrides.get("step_size_mm", None),
+        "cutoff": overrides.get("cutoff", None),
+        "use_sift2": overrides.get("use_sift2", True),
+        "random_seed": overrides["random_seed"] if "random_seed" in overrides else config.mrtrix_random_seed,
+    }
+
+
+def _effective_dti_tracking_options(config: ProductOrchestratorConfig) -> dict[str, Any]:
+    """Resolve effective DTI tracking options; empty ``dti_parameters`` keeps exact defaults."""
+
+    from shared.ui_tractography_params import dti_backend_fit_method, parse_dti_overrides
+
+    overrides = parse_dti_overrides(config.dti_parameters) if config.dti_parameters else {}
+    fit_method = (
+        dti_backend_fit_method(overrides["fit_method"])
+        if "fit_method" in overrides
+        else config.microstructure_fit_method
+    )
+    return {
+        "fit_method": fit_method,
+        "step_size_mm": overrides.get("step_size_mm", 0.5),
+        "max_angle_deg": overrides.get("max_angle_deg", 30.0),
+        "seed_density": overrides.get("seed_density", 1),
+        "min_fa": overrides.get("min_fa", 0.2),
+        "min_length_mm": overrides.get("min_length_mm", config.dti_min_length_mm),
+        "max_length_mm": overrides.get("max_length_mm", config.dti_max_length_mm),
+        "random_seed": overrides.get("random_seed", 12345),
+    }
+
+
+def _effective_saf_options(config: ProductOrchestratorConfig) -> dict[str, Any]:
+    """Resolve effective SAF options; empty ``saf_parameters`` keeps exact legacy orchestrator defaults."""
+
+    from shared.ui_tractography_params import parse_saf_overrides
+
+    overrides = parse_saf_overrides(config.saf_parameters) if config.saf_parameters else {}
+    return {
+        "select_streamlines": overrides.get("select_streamlines", 1_000_000),
+        "maxlen": overrides.get("maxlen", 40.0),
+        "notrunc": overrides.get("notrunc", False),
+        "fast_intersection": overrides.get("fast_intersection", True),
+        "gwg_hard": overrides.get("gwg_hard", False),
+        "pialfilter": overrides.get("pialfilter", False),
+        "random_seed": overrides.get("random_seed", 12345),
+    }
+
+
+def _saf_parameters_current(config: ProductOrchestratorConfig, manifest_path: Path) -> bool:
+    if not config.saf_parameters:
+        return True
+    try:
+        params = _read_json(manifest_path).get("parameters") or {}
+        saf_opts = _effective_saf_options(config)
+        tckgen_opts = str(params.get("tckgen_options") or "")
+        select_ok = (
+            config.saf_pregenerated_tractogram is not None
+            or bool(config.saf_tckgen_options.strip())
+            or f"-select {saf_opts['select_streamlines']}" in tckgen_opts
+        )
+        return (
+            select_ok
+            and params.get("maxlen") == saf_opts["maxlen"]
+            and bool(params.get("notrunc", False)) == bool(saf_opts["notrunc"])
+            and bool(params.get("fast_intersection", True)) == bool(saf_opts["fast_intersection"])
+            and bool(params.get("gwg_hard", False)) == bool(saf_opts["gwg_hard"])
+            and bool(params.get("pialfilter", False)) == bool(saf_opts["pialfilter"])
+            and params.get("random_seed", 12345) == saf_opts["random_seed"]
+        )
+    except (OSError, ValueError, TypeError, KeyError, AttributeError):
+        return False
+
+
 def _saf_complete(
     output_dir: Path,
     *,
     fod_path: Optional[Path] = None,
     fs_dir: Optional[Path] = None,
+    config: Optional[ProductOrchestratorConfig] = None,
 ) -> bool:
     qc_path = output_dir / "saf_qc.json"
     manifest_path = output_dir / "saf_manifest.json"
@@ -1574,6 +1662,8 @@ def _saf_complete(
             expected_dependencies,
             "inputs",
         ):
+            return False
+        if config is not None and not _saf_parameters_current(config, manifest_path):
             return False
         scientific_summary = qc.get("scientific_output_summary")
         if not isinstance(scientific_summary, dict):
@@ -1839,13 +1929,23 @@ def _dti_bundle_source_current(config, manifest_path, inputs):
     try:
         manifest = _read_json(manifest_path)
         params = manifest['parameters']
-        return (manifest.get('status') == 'completed'
-                and params.get('fit_method', '').lower() == config.microstructure_fit_method.lower()
-                and params.get('tracking_method') == 'deterministic'
-                and params.get('output_format') == 'trk'
-                and params.get('max_seed_voxels') == config.select_streamlines
-                and params.get('min_length_mm') == config.dti_min_length_mm
-                and params.get('max_length_mm') == config.dti_max_length_mm)
+        dti_opts = _effective_dti_tracking_options(config)
+        base_ok = (manifest.get('status') == 'completed'
+                   and params.get('fit_method', '').lower() == dti_opts['fit_method'].lower()
+                   and params.get('tracking_method') == 'deterministic'
+                   and params.get('output_format') == 'trk'
+                   and params.get('max_seed_voxels') == config.select_streamlines
+                   and params.get('min_length_mm') == dti_opts['min_length_mm']
+                   and params.get('max_length_mm') == dti_opts['max_length_mm'])
+        if not base_ok:
+            return False
+        if config.dti_parameters:
+            return (params.get('step_size_mm') == dti_opts['step_size_mm']
+                    and params.get('max_angle_deg') == dti_opts['max_angle_deg']
+                    and params.get('seed_density') == dti_opts['seed_density']
+                    and params.get('min_fa') == dti_opts['min_fa']
+                    and params.get('random_seed') == dti_opts['random_seed'])
+        return True
     except (OSError, ValueError, TypeError, KeyError, AttributeError):
         return False
 
@@ -1855,10 +1955,11 @@ def _dti_bundle_qc_acceptable(config, qc_path, tractogram):
         return False
     try:
         qc = _read_json(qc_path)
+        dti_opts = _effective_dti_tracking_options(config)
         return (int(qc.get('streamline_count') or 0) > 0
                 and bool(qc.get('streamlines_exists'))
-                and float(qc['length_min_mm']) + 1e-3 >= config.dti_min_length_mm
-                and float(qc['length_max_mm']) - 1e-3 <= config.dti_max_length_mm)
+                and float(qc['length_min_mm']) + 1e-3 >= dti_opts['min_length_mm']
+                and float(qc['length_max_mm']) - 1e-3 <= dti_opts['max_length_mm'])
     except (OSError, ValueError, TypeError, KeyError):
         return False
 
@@ -1866,12 +1967,21 @@ def _dti_bundle_qc_acceptable(config, qc_path, tractogram):
 def _csd_bundle_parameters_current(config, manifest_path):
     try:
         params = _read_json(manifest_path)['parameters']
-        return (params.get('select_streamlines') == config.select_streamlines
-                and params.get('min_length_mm') == config.dti_min_length_mm
-                and params.get('max_length_mm') == config.dti_max_length_mm
-                and params.get('random_seed') == config.mrtrix_random_seed
-                and params.get('seeding') == config.tractography_seeding
-                and params.get('nthreads') == config.mrtrix_nthreads)
+        csd_opts = _effective_csd_act_options(config)
+        base_ok = (params.get('select_streamlines') == csd_opts['select_streamlines']
+                   and params.get('min_length_mm') == csd_opts['min_length_mm']
+                   and params.get('max_length_mm') == csd_opts['max_length_mm']
+                   and params.get('random_seed') == csd_opts['random_seed']
+                   and params.get('seeding') == csd_opts['seeding']
+                   and params.get('nthreads') == config.mrtrix_nthreads)
+        if not base_ok:
+            return False
+        if config.csd_act_parameters:
+            return (params.get('algorithm', 'iFOD2') == csd_opts['algorithm']
+                    and params.get('step_size_mm') == csd_opts['step_size_mm']
+                    and params.get('cutoff') == csd_opts['cutoff']
+                    and bool(params.get('use_sift2', True)) == bool(csd_opts['use_sift2']))
+        return True
     except (OSError, ValueError, TypeError, KeyError):
         return False
 
@@ -2964,6 +3074,7 @@ def _csd_act_complete(
     analysis_inputs: dict[str, Path],
     *,
     allow_ddseg_only: bool = False,
+    use_sift2: bool = True,
 ) -> bool:
     """Require current inputs and decoded output evidence before CSD/ACT reuse.
 
@@ -2993,7 +3104,8 @@ def _csd_act_complete(
         trk = summary.get("trk")
         vtk = summary.get("vtk")
         sift2 = summary.get("sift2")
-        if not all(isinstance(item, dict) for item in (tck, trk, vtk, sift2)):
+        required_items = (tck, trk, vtk, sift2) if use_sift2 else (tck, trk, vtk)
+        if not all(isinstance(item, dict) for item in required_items):
             return False
         if int(manifest.get("version") or 0) < CSD_ACT_MANIFEST_VERSION:
             return False
@@ -3001,16 +3113,24 @@ def _csd_act_complete(
         length_summary = tck.get("length_mm")
         if not isinstance(length_summary, dict):
             return False
+        sift2_ok = (
+            (
+                int(sift2.get("weight_count", 0) or 0) == expected_count
+                and bool(sift2.get("all_finite"))
+                and bool(sift2.get("all_nonnegative"))
+                and _file_record_matches(sift2.get("file"), weights)
+            )
+            if use_sift2
+            else (bool(parameters.get("use_sift2", True)) is False)
+        )
         return (
             expected_count > 0
             and int(tck.get("streamline_count", 0) or 0) == expected_count
             and int(trk.get("streamline_count", 0) or 0) == expected_count
             and int(vtk.get("streamline_count", 0) or 0) == expected_count
-            and int(sift2.get("weight_count", 0) or 0) == expected_count
+            and sift2_ok
             and bool(tck.get("all_points_finite"))
             and bool(trk.get("all_points_finite"))
-            and bool(sift2.get("all_finite"))
-            and bool(sift2.get("all_nonnegative"))
             and float(length_summary.get("min", -1.0)) + 1e-3
             >= float(parameters.get("min_length_mm", 0.0))
             and float(length_summary.get("max", float("inf"))) - 1e-3
@@ -3018,7 +3138,6 @@ def _csd_act_complete(
             and _file_record_matches(tck.get("file"), tractogram)
             and _file_record_matches(trk.get("file"), tractogram_trk)
             and _file_record_matches(vtk.get("file"), tractogram_vtk)
-            and _file_record_matches(sift2.get("file"), weights)
         )
     except (OSError, TypeError, ValueError):
         return False
@@ -3133,6 +3252,16 @@ def _validate_tractography_settings(config: ProductOrchestratorConfig) -> None:
     if config.tractography_backend == 'ukf':
         from tractography.ukf import parameters
         parameters(config.ukf_parameters)
+    if config.csd_act_parameters:
+        csd_opts = _effective_csd_act_options(config)
+        if csd_opts["min_length_mm"] >= csd_opts["max_length_mm"]:
+            raise ValueError("CSD/ACT requires min_length_mm < max_length_mm.")
+    if config.dti_parameters:
+        dti_opts = _effective_dti_tracking_options(config)
+        if dti_opts["min_length_mm"] >= dti_opts["max_length_mm"]:
+            raise ValueError("DTI requires min_length_mm < max_length_mm.")
+    if config.saf_parameters:
+        _effective_saf_options(config)
     from tractography.csd import SEEDING_MODES
 
     if config.mrtrix_random_seed is not None and config.mrtrix_random_seed < 0:
@@ -3293,7 +3422,8 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
     dti_stem = f"{config.subject_id}-dti-deterministic"
     dti_qc = dti_tractogram_dir / f"{dti_stem}_qc.json"
     dti_manifest = dti_tractogram_dir / f"{dti_stem}_manifest.json"
-    csd_tractogram = tractogram_dir / f"{config.subject_id}_csd_act_ifod2.tck"
+    csd_opts = _effective_csd_act_options(config)
+    csd_tractogram = tractogram_dir / f"{config.subject_id}_csd_act_{csd_opts['algorithm'].lower()}.tck"
     csd_tractogram_trk = csd_tractogram.with_suffix(".trk")
     csd_tractogram_vtk = csd_tractogram.with_suffix(".vtk")
     sift2_weights = csd_tractogram.with_name(f"{csd_tractogram.stem}_sift2_weights.txt")
@@ -3380,18 +3510,23 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
             if primary_tractography_backend == 'ukf':
                 return ukf_cached
             if primary_tractography_backend == "csd_act":
-                return _csd_act_complete(
-                    csd_qc,
-                    csd_dir / "csd_act_manifest.json",
-                    csd_tractogram,
-                    csd_tractogram_trk,
-                    csd_tractogram_vtk,
-                    sift2_weights,
-                    analysis_inputs,
-                    allow_ddseg_only=config.allow_act_ddseg_only,
+                return (
+                    _csd_act_complete(
+                        csd_qc,
+                        csd_dir / "csd_act_manifest.json",
+                        csd_tractogram,
+                        csd_tractogram_trk,
+                        csd_tractogram_vtk,
+                        sift2_weights,
+                        analysis_inputs,
+                        allow_ddseg_only=config.allow_act_ddseg_only,
+                        use_sift2=bool(csd_opts["use_sift2"]),
+                    )
+                    and (not config.csd_act_parameters or _csd_bundle_parameters_current(config, csd_dir / "csd_act_manifest.json"))
                 )
             return (_qc_completed(dti_qc) and tractogram_trk.is_file()
-                    and _dti_tracking_frame_current(dti_manifest, analysis_inputs))
+                    and _dti_tracking_frame_current(dti_manifest, analysis_inputs)
+                    and (not config.dti_parameters or _dti_bundle_source_current(config, dti_manifest, analysis_inputs)))
         if target == "bundles":
             return _wmql_complete(
                 wmql_dir / "wmql_qc.json",
@@ -3409,7 +3544,7 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
                 config.subject_id,
                 output_root,
             )
-            return _saf_complete(saf_dir, fod_path=fod_path, fs_dir=fs_dir)
+            return _saf_complete(saf_dir, fod_path=fod_path, fs_dir=fs_dir, config=config)
         if target == "wma":
             return _wma_complete(
                 wma_dir,
@@ -3778,13 +3913,16 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
                     sift2_weights,
                     analysis_inputs,
                     allow_ddseg_only=config.allow_act_ddseg_only,
+                    use_sift2=bool(csd_opts["use_sift2"]),
                 )
-                and (not config.bundle_tractography_backend or _csd_bundle_parameters_current(config, csd_dir / 'csd_act_manifest.json'))
+                and (not (config.bundle_tractography_backend or config.csd_act_parameters)
+                     or _csd_bundle_parameters_current(config, csd_dir / 'csd_act_manifest.json'))
                 if primary_tractography_backend == "csd_act"
                 else _qc_completed(tractography_qc) and tractogram_trk.is_file()
                 and _dti_tracking_frame_current(dti_manifest, analysis_inputs)
-                and (not config.bundle_tractography_backend or (_dti_bundle_source_current(config, dti_manifest, analysis_inputs)
-                     and _dti_bundle_qc_acceptable(config, dti_qc, tractogram_trk)))
+                and (not (config.bundle_tractography_backend or config.dti_parameters)
+                     or (_dti_bundle_source_current(config, dti_manifest, analysis_inputs)
+                         and _dti_bundle_qc_acceptable(config, dti_qc, tractogram_trk)))
             )
             segmentation_ready = segmentation is not None or available.get("segmentation", False)
             if complete:
@@ -3831,7 +3969,7 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
             fod_candidate = csd_dir / f"{config.subject_id}_wmfod_norm.mif"
             fod_path = fod_candidate if fod_candidate.is_file() else (csd_dir / f"{config.subject_id}_wmfod.mif")
             fs_dir = _resolve_optional_path(config.saf_fs_dir) or _surface_postprocess_saf_fs_dir(subject_root, config.subject_id, output_root)
-            if config.resume and _saf_complete(saf_dir, fod_path=fod_path, fs_dir=fs_dir):
+            if config.resume and _saf_complete(saf_dir, fod_path=fod_path, fs_dir=fs_dir, config=config):
                 add(target, "skipped", "completed outputs found", "reuse", outputs=saf_outputs)
             else:
                 fod_will_run = (
@@ -4916,7 +5054,8 @@ def _run_subject_products_impl(
     dti_stem = f"{config.subject_id}-dti-deterministic"
     dti_qc = dti_tractogram_dir / f"{dti_stem}_qc.json"
     dti_manifest = dti_tractogram_dir / f"{dti_stem}_manifest.json"
-    csd_tractogram = tractogram_dir / f"{config.subject_id}_csd_act_ifod2.tck"
+    csd_opts = _effective_csd_act_options(config)
+    csd_tractogram = tractogram_dir / f"{config.subject_id}_csd_act_{csd_opts['algorithm'].lower()}.tck"
     csd_tractogram_trk = csd_tractogram.with_suffix(".trk")
     csd_tractogram_vtk = csd_tractogram.with_suffix(".vtk")
     sift2_weights = csd_tractogram.with_name(f"{csd_tractogram.stem}_sift2_weights.txt")
@@ -5714,13 +5853,16 @@ def _run_subject_products_impl(
                 sift2_weights,
                 analysis_inputs,
                 allow_ddseg_only=config.allow_act_ddseg_only,
+                use_sift2=bool(csd_opts["use_sift2"]),
             )
-            and (not config.bundle_tractography_backend or _csd_bundle_parameters_current(config, csd_dir / 'csd_act_manifest.json'))
+            and (not (config.bundle_tractography_backend or config.csd_act_parameters)
+                 or _csd_bundle_parameters_current(config, csd_dir / 'csd_act_manifest.json'))
             if primary_tractography_backend == "csd_act"
             else _qc_completed(tractography_qc) and tractogram_trk.is_file()
             and _dti_tracking_frame_current(dti_manifest, analysis_inputs)
-            and (not config.bundle_tractography_backend or (_dti_bundle_source_current(config, dti_manifest, analysis_inputs)
-                 and _dti_bundle_qc_acceptable(config, dti_qc, tractogram_trk)))
+            and (not (config.bundle_tractography_backend or config.dti_parameters)
+                 or (_dti_bundle_source_current(config, dti_manifest, analysis_inputs)
+                     and _dti_bundle_qc_acceptable(config, dti_qc, tractogram_trk)))
         )
         if config.resume and tractography_complete:
             published_tract = _publish_tractography_outputs(
@@ -5799,16 +5941,19 @@ def _run_subject_products_impl(
                         gmwmi_path=act_prep.gmwmi_path,
                         output_dir=csd_dir,
                         tractogram_dir=tractogram_dir,
-                        select_streamlines=config.select_streamlines,
-                        min_length_mm=config.dti_min_length_mm,
-                        max_length_mm=config.dti_max_length_mm,
-                        use_sift2=True,
+                        algorithm=csd_opts["algorithm"],
+                        select_streamlines=csd_opts["select_streamlines"],
+                        min_length_mm=csd_opts["min_length_mm"],
+                        max_length_mm=csd_opts["max_length_mm"],
+                        step_size_mm=csd_opts["step_size_mm"],
+                        cutoff=csd_opts["cutoff"],
+                        use_sift2=csd_opts["use_sift2"],
                         export_trk=True,
                         export_vtk=True,
                         mrtrix_bin_dir=config.mrtrix_bin_dir,
                         nthreads=config.mrtrix_nthreads,
-                        random_seed=config.mrtrix_random_seed,
-                        seeding=config.tractography_seeding,
+                        random_seed=csd_opts["random_seed"],
+                        seeding=csd_opts["seeding"],
                         anatomy_source_dwi=_anatomy_dwi_for_check(anatomy_sources),
                         allow_anatomy_space_mismatch=config.allow_anatomy_space_mismatch,
                         act_prep_qc_path=act_prep.qc_path,
@@ -5841,6 +5986,7 @@ def _run_subject_products_impl(
                 from tractography.dti import DTITrackingConfig, run_dti_tracking
                 from shared.pipeline import RawInputBundle
 
+                dti_opts = _effective_dti_tracking_options(config)
                 _emit(f"[Orchestrator] Running DTI tractography {run_name}", log)
                 task_started = _start_task_timer(f"DTI tractography {run_name}", log)
                 result = run_dti_tracking(
@@ -5857,16 +6003,21 @@ def _run_subject_products_impl(
                             mask_path=analysis_inputs["mask"],
                         ),
                         output_dir=dti_tractogram_dir,
-                        fit_method=config.microstructure_fit_method,
+                        fit_method=dti_opts["fit_method"],
                         tracking_method="deterministic",
                         output_format="trk",
+                        step_size_mm=dti_opts["step_size_mm"],
+                        max_angle_deg=dti_opts["max_angle_deg"],
+                        seed_density=dti_opts["seed_density"],
                         # DTI produces at most one seed per selected voxel at
                         # the default density.  Honor the unified CLI's
                         # streamline budget so whole-brain runs do not seed
                         # every eligible voxel and exhaust memory on Windows.
                         max_seed_voxels=config.select_streamlines,
-                        min_length_mm=config.dti_min_length_mm,
-                        max_length_mm=config.dti_max_length_mm,
+                        random_seed=dti_opts["random_seed"],
+                        min_fa=dti_opts["min_fa"],
+                        min_length_mm=dti_opts["min_length_mm"],
+                        max_length_mm=dti_opts["max_length_mm"],
                         device=_stage_compute_device(config),
                         execute=True,
                     ),
@@ -5902,7 +6053,8 @@ def _run_subject_products_impl(
             bundle_source_invalid = bundle_source_invalid or not _csd_act_complete(
                 csd_qc, csd_dir / 'csd_act_manifest.json', csd_tractogram,
                 csd_tractogram_trk, csd_tractogram_vtk, sift2_weights, analysis_inputs,
-                allow_ddseg_only=config.allow_act_ddseg_only)
+                allow_ddseg_only=config.allow_act_ddseg_only,
+                use_sift2=bool(csd_opts["use_sift2"]))
             bundle_source_invalid = bundle_source_invalid or not _csd_bundle_parameters_current(config, csd_dir / 'csd_act_manifest.json')
 
     # Batch 2 item 5: each tracking variant publishes its bundles into its own subfolder.
@@ -5988,7 +6140,7 @@ def _run_subject_products_impl(
         fod_candidate = csd_dir / f"{config.subject_id}_wmfod_norm.mif"
         fod_path = fod_candidate if fod_candidate.is_file() else (csd_dir / f"{config.subject_id}_wmfod.mif")
         fs_dir = _resolve_optional_path(config.saf_fs_dir) or _surface_postprocess_saf_fs_dir(subject_root, config.subject_id, output_root)
-        if config.resume and _saf_complete(saf_dir, fod_path=fod_path, fs_dir=fs_dir):
+        if config.resume and _saf_complete(saf_dir, fod_path=fod_path, fs_dir=fs_dir, config=config):
             saf_qc_data = _read_json(saf_qc)
             saf_vtk = saf_dir / "SAF.vtk"
             streamline_count = saf_qc_data.get("streamline_count")
@@ -6017,7 +6169,9 @@ def _run_subject_products_impl(
         else:
             pregenerated_tractogram = _resolve_optional_path(config.saf_pregenerated_tractogram)
             saf_tckgen_options = config.saf_tckgen_options
-            saf_maxlen = 40.0
+            saf_opts = _effective_saf_options(config)
+            saf_maxlen = saf_opts["maxlen"]
+            saf_select = saf_opts["select_streamlines"]
             if pregenerated_tractogram is None:
                 preproc_outputs = _preprocessing_outputs(subject_root, config.subject_id, output_root)
                 seed_mask = preproc_outputs["mask"] if preproc_outputs["mask"].is_file() else raw["mask"]
@@ -6033,7 +6187,7 @@ def _run_subject_products_impl(
                 elif not saf_tckgen_options.strip():
                     saf_tckgen_options = (
                         f"-seed_image {seed_mask.expanduser().resolve().as_posix()} "
-                        "-cutoff 0.05 -select 1000000 -maxlength 40"
+                        f"-cutoff 0.05 -select {saf_select} -maxlength {saf_maxlen:g}"
                     )
             if fs_dir is None:
                 tasks.append(
@@ -6062,7 +6216,12 @@ def _run_subject_products_impl(
                         tckgen_options=saf_tckgen_options,
                         mrtrix_bin_dir=config.mrtrix_bin_dir,
                         mrtrix_prefix=config.saf_mrtrix_prefix,
+                        notrunc=saf_opts["notrunc"],
+                        fast_intersection=saf_opts["fast_intersection"],
+                        gwg_hard=saf_opts["gwg_hard"],
+                        pialfilter=saf_opts["pialfilter"],
                         maxlen=saf_maxlen,
+                        random_seed=saf_opts["random_seed"],
                         force_recompute=not config.resume,
                         execute=True,
                     ),
@@ -6662,6 +6821,9 @@ def _run_subject_products_impl(
         "bundle_tractography_backend": config.bundle_tractography_backend,
         "bundle_sources": _recorded_bundle_sources(config),
         "ukf_parameters": config.ukf_parameters,
+        "csd_act_parameters": config.csd_act_parameters,
+        "dti_parameters": config.dti_parameters,
+        "saf_parameters": config.saf_parameters,
         "ukf_executable": str(config.ukf_executable) if config.ukf_executable else None,
         "dwiconvert_executable": str(config.dwiconvert_executable) if config.dwiconvert_executable else None,
         "primary_tractography_backend": primary_tractography_backend,

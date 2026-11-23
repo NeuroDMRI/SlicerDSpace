@@ -155,12 +155,17 @@ class SlicerDSpaceParameterNode:
     preprocessingPhaseEncodingDirection: str = ""
     preprocessingReadoutTime: float = 0.0
     preprocessingReversePhaseB0: str = ""
+    preprocessingRunGibbs: bool = True
     orchestrationRunName: str = "Test1"
     orchestrationTractographyBackend: Annotated[str, Choice(selection_choices(TRACKING))] = "csd_act"
     ukfParameters: str = "{}"
+    csdActParameters: str = "{}"
+    dtiParameters: str = "{}"
+    safParameters: str = "{}"
     orchestrationBundleBackend: Annotated[str, Choice([*selection_choices(BUNDLES), "all"]) ] = "wmql"
     orchestrationWmqlPreset: Annotated[str, Choice(["official", "official_cerebellar", "cerebellar"])] = "official"
     orchestrationWmqlSelection: str = ""
+    tractcloudParameters: str = "{}"
     maxParallelModels: Annotated[int, WithinRange(1, 3)] = 1
     wmaInputTractography: str = ""
     wmaAtlas: Annotated[str, Choice(["org", "east-west", "naba"])] = "org"
@@ -172,6 +177,8 @@ class SlicerDSpaceParameterNode:
     orchestrationMicrostructureStages: Annotated[str, Choice(selection_choices(MICROSTRUCTURE))] = "dti"
     # Echo time (ms) for iFW as text; empty = not set (the stage then reads EchoTime from the DWI sidecar).
     orchestrationIfwEchoTimeMs: str = ""
+    freeWaterParameters: str = "{}"
+    ifwParameters: str = "{}"
     orchestrationDkiFitMethod: Annotated[str, Choice(["WLS", "OLS", "MKCURVE", "MKCURVE_MATLAB"])] = "MKCURVE"
     orchestrationRunFreeWater: bool = False
     orchestrationRunNoddi: bool = False

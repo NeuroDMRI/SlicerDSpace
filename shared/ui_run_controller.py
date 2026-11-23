@@ -76,6 +76,14 @@ class RunSelection:
     wma_atlas: str = "org"
     max_parallel_models: int = 1
     ukf_parameters_text: str = '{}'
+    csd_act_parameters_text: str = '{}'
+    dti_parameters_text: str = '{}'
+    saf_parameters_text: str = '{}'
+    preprocessing_dipy_run_gibbs: bool = True
+    microstructure_fit_method: str = "wls"
+    freewater_parameters_text: str = '{}'
+    ifw_parameters_text: str = '{}'
+    tractcloud_parameters_text: str = '{}'
     # Targets the user ticked, before the prerequisite closure; the CLI recomputes the closure
     # from these so the run manifest can record which targets were added automatically.
     requested_targets: tuple[str, ...] = ()
@@ -664,6 +672,8 @@ def build_single_subject_run_kwargs(
     subject_root = resolve_subject_root_dir(Path(selection.subject_root_text).expanduser(), selection.subject_id)
     return {
         **_ukf_run_options(selection),
+        **_tractography_param_run_options(selection),
+        **_extra_algorithm_run_options(selection),
         "subject_id": selection.subject_id,
         "subject_root": subject_root,
         "output_root": resolve_single_subject_output_root(selection.output_root_text, selection.subject_id),
@@ -734,6 +744,8 @@ def build_batch_run_kwargs(selection: RunSelection, *, batch_root: Path) -> dict
 
     return {
         **_ukf_run_options(selection),
+        **_tractography_param_run_options(selection),
+        **_extra_algorithm_run_options(selection),
         "subject_id": "batch",
         "subject_root": batch_root,
         "output_root": Path(selection.output_root_text).expanduser() if selection.output_root_text else None,
@@ -1105,10 +1117,12 @@ def build_background_cli_args(
     if output_root is not None:
         args.extend(["--output-root", _path_text(output_root)])
     _append_ukf_args(args, common_run_kwargs)
+    _append_tractography_param_args(args, common_run_kwargs)
     args.extend(["--microstructure-stages", microstructure_stages_arg(common_run_kwargs)])
     args.extend(["--dki-fit-method", str(common_run_kwargs.get("microstructure_dki_fit_method", "MKCURVE") or "MKCURVE")])
     _append_compress_arg(args, common_run_kwargs)
     _append_ifw_args(args, common_run_kwargs)
+    _append_extra_algorithm_args(args, common_run_kwargs)
     if common_run_kwargs.get("preprocessing_execution_backend"):
         args.extend(["--preprocessing-execution-backend", str(common_run_kwargs["preprocessing_execution_backend"])])
     if common_run_kwargs.get("preprocessing_stages"):
@@ -1187,10 +1201,12 @@ def build_batch_background_cli_args(
     if progress_file is not None:
         args.extend(["--progress-file", _path_text(progress_file)])
     _append_ukf_args(args, common_run_kwargs)
+    _append_tractography_param_args(args, common_run_kwargs)
     args.extend(["--microstructure-stages", microstructure_stages_arg(common_run_kwargs)])
     args.extend(["--dki-fit-method", str(common_run_kwargs.get("microstructure_dki_fit_method", "MKCURVE") or "MKCURVE")])
     _append_compress_arg(args, common_run_kwargs)
     _append_ifw_args(args, common_run_kwargs)
+    _append_extra_algorithm_args(args, common_run_kwargs)
     if common_run_kwargs.get("preprocessing_execution_backend"):
         args.extend(["--preprocessing-execution-backend", str(common_run_kwargs["preprocessing_execution_backend"])])
     if common_run_kwargs.get("preprocessing_stages"):
@@ -1246,6 +1262,89 @@ def _append_ukf_args(args, kwargs):
             args.extend(('--ukf-executable', str(kwargs['ukf_executable'])))
         if kwargs.get('dwiconvert_executable'):
             args.extend(('--dwiconvert-executable', str(kwargs['dwiconvert_executable'])))
+
+
+def _tractography_param_run_options(selection: RunSelection) -> dict[str, Any]:
+    """Return validated non-empty tractography override dicts for CSD/ACT, DTI, and SAF."""
+
+    from shared.algorithm_selection import contains_tracking
+    from shared.ui_tractography_params import (
+        parse_csd_act_overrides,
+        parse_dti_overrides,
+        parse_saf_overrides,
+    )
+
+    tracking = selection.closure_tractography_backend or selection.tractography_backend
+    options: dict[str, Any] = {}
+    csd_overrides = parse_csd_act_overrides(selection.csd_act_parameters_text or "{}")
+    if csd_overrides and (contains_tracking(tracking, "csd_act") or contains_tracking(tracking, "saf")):
+        options["csd_act_parameters"] = csd_overrides
+    dti_overrides = parse_dti_overrides(selection.dti_parameters_text or "{}")
+    if dti_overrides and contains_tracking(tracking, "dti_det"):
+        options["dti_parameters"] = dti_overrides
+    saf_overrides = parse_saf_overrides(selection.saf_parameters_text or "{}")
+    if saf_overrides and contains_tracking(tracking, "saf"):
+        options["saf_parameters"] = saf_overrides
+    return options
+
+
+def _extra_algorithm_run_options(selection: RunSelection) -> dict[str, Any]:
+    """Return validated non-default overrides for audited preprocessing/microstructure/bundle algorithms."""
+
+    from shared.ui_tractography_params import (
+        parse_freewater_overrides,
+        parse_ifw_overrides,
+        parse_tractcloud_overrides,
+        validate_microstructure_dti_fit_method,
+    )
+
+    options: dict[str, Any] = {}
+    if selection.preprocessing_dipy_run_gibbs is False:
+        options["preprocessing_dipy_run_gibbs"] = False
+    fit_method = validate_microstructure_dti_fit_method(selection.microstructure_fit_method or "wls")
+    if fit_method != "wls":
+        options["microstructure_fit_method"] = fit_method
+    fw_overrides = parse_freewater_overrides(selection.freewater_parameters_text or "{}")
+    if "max_fraction_for_tissue" in fw_overrides and fw_overrides["max_fraction_for_tissue"] != 0.7:
+        options["microstructure_free_water_max_fraction_for_tissue"] = fw_overrides["max_fraction_for_tissue"]
+    ifw_overrides = parse_ifw_overrides(selection.ifw_parameters_text or "{}")
+    if "t2_gm_ms" in ifw_overrides and ifw_overrides["t2_gm_ms"] != 95.0:
+        options["microstructure_ifw_t2_gm_ms"] = ifw_overrides["t2_gm_ms"]
+    if "t2_csf_ms" in ifw_overrides and ifw_overrides["t2_csf_ms"] != 1500.0:
+        options["microstructure_ifw_t2_csf_ms"] = ifw_overrides["t2_csf_ms"]
+    tc_overrides = parse_tractcloud_overrides(selection.tractcloud_parameters_text or "{}")
+    if "batch_size" in tc_overrides and tc_overrides["batch_size"] != 2048:
+        options["tractcloud_batch_size"] = tc_overrides["batch_size"]
+    return options
+
+
+def _append_tractography_param_args(args: list[str], kwargs: dict[str, Any]) -> None:
+    """Append --csd-act-parameters / --dti-parameters / --saf-parameters only when non-empty."""
+
+    for key, flag in (
+        ("csd_act_parameters", "--csd-act-parameters"),
+        ("dti_parameters", "--dti-parameters"),
+        ("saf_parameters", "--saf-parameters"),
+    ):
+        value = kwargs.get(key)
+        if isinstance(value, dict) and value:
+            args.extend((flag, json.dumps(value, sort_keys=True)))
+
+
+def _append_extra_algorithm_args(args: list[str], kwargs: dict[str, Any]) -> None:
+    """Append non-default audited algorithm flags without altering default CLI invocations."""
+
+    if kwargs.get("preprocessing_dipy_run_gibbs") is False:
+        args.append("--preprocessing-skip-gibbs")
+    fit_method = kwargs.get("microstructure_fit_method")
+    if fit_method and str(fit_method).strip().lower() != "wls":
+        args.extend(("--micro-fit-method", str(fit_method).strip().lower()))
+    fw_max = kwargs.get("microstructure_free_water_max_fraction_for_tissue")
+    if fw_max is not None and float(fw_max) != 0.7:
+        args.extend(("--microstructure-free-water-max-fraction-for-tissue", str(float(fw_max))))
+    tc_batch = kwargs.get("tractcloud_batch_size")
+    if tc_batch is not None and int(tc_batch) != 2048:
+        args.extend(("--tractcloud-batch-size", str(int(tc_batch))))
 
 
 def parse_manifest_line(line: str) -> Optional[str]:

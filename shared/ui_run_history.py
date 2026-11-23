@@ -2296,6 +2296,12 @@ def _toggle_output(owner, item):
         return
     path = Path(raw_path)
     if item.text(1) == "↗":
+        if path.suffix.lower() == ".stats":
+            from shared.surface_morphometry_display import show_stats_dialog
+
+            zh = str(getattr(owner, "_onboardingLanguage", "en")).startswith("zh")
+            show_stats_dialog(owner, path, zh=zh)
+            return
         owner._open_local_path(path, missing_message="The result file is missing.")
         return
     try:
@@ -2313,20 +2319,20 @@ def _toggle_output(owner, item):
             carrier_surface_of_node,
             desired_carrier_surfaces,
             morphometry_row,
-            surface_from_obj_path,
+            surface_from_carrier_path,
         )
 
         item_kind = item.data(0, _user_role(qt, ROLE_KIND))
         row_manifests = _row_manifests(owner, item, qt, manifest_path)
         nodes = _output_nodes(owner, slicer, item, manifest_path, path)
-        is_surface_obj = surface_from_obj_path(path) is not None
+        is_surface_carrier = surface_from_carrier_path(path) is not None
         surface_overlays = (
             _carrier_overlay_nodes(_scene_nodes_by_run(slicer), row_manifests, path)
-            if is_surface_obj
+            if is_surface_carrier
             else []
         )
         visible = _output_visible(slicer, nodes) or (bool(surface_overlays) and _output_visible(slicer, surface_overlays))
-        if is_surface_obj and visible:
+        if is_surface_carrier and visible:
             for node in nodes:
                 node.SetDisplayVisibility(False)
             for overlay in surface_overlays:
@@ -2355,7 +2361,7 @@ def _toggle_output(owner, item):
                         node_visible = False
                     if node_visible:
                         raw_carrier = node.GetAttribute("SlicerDDSurfer.CarrierPath")
-                        if surface_from_obj_path(raw_carrier) is not None:
+                        if surface_from_carrier_path(raw_carrier) is not None:
                             carrier_path = Path(str(raw_carrier))
                             key = _file_key(carrier_path)
                             if key and key not in seen_carriers and carrier_path.is_file():
@@ -2430,7 +2436,7 @@ def _toggle_output(owner, item):
             shown_carrier_keys = {
                 _file_key(node.GetAttribute("SlicerDDSurfer.CarrierPath"))
                 for node in shown_nodes
-                if surface_from_obj_path(node.GetAttribute("SlicerDDSurfer.CarrierPath")) is not None
+                if surface_from_carrier_path(node.GetAttribute("SlicerDDSurfer.CarrierPath")) is not None
             }
             if shown_carrier_keys:
                 for key, by_path in _scene_nodes_by_run(slicer).items():
@@ -3137,9 +3143,9 @@ def _refresh_output_visibility(owner, *, dark: Optional[bool] = None):
             return []
         manifests = _row_manifests(owner, item, qt, mpath, resolved_manifests)
         direct = _nodes_of(grouped, manifests, raw_path)
-        from shared.surface_morphometry_display import surface_from_obj_path
+        from shared.surface_morphometry_display import surface_from_carrier_path
 
-        if surface_from_obj_path(raw_path) is not None:
+        if surface_from_carrier_path(raw_path) is not None:
             overlays = _carrier_overlay_nodes(grouped, manifests, raw_path)
             if overlays:
                 seen = {id(n) for n in direct}
@@ -3264,10 +3270,14 @@ def _morphometry_tooltip(path: Any, zh: bool) -> str:
 
 
 def _relabel_morphometry_rows(qt_mod: Any, row: Any, zh: bool) -> None:
+    from shared.surface_morphometry_display import row_tooltip
+
     for leaf in _child_items(row):
         path = leaf.data(0, _user_role(qt_mod, ROLE_PATH))
         if path and leaf.data(0, _user_role(qt_mod, ROLE_KIND)) == MORPHOMETRY_ROW_KIND:
             leaf.setToolTip(0, _morphometry_tooltip(path, zh))
+            if Path(str(path)).suffix.lower() == ".stats":
+                leaf.setToolTip(1, row_tooltip(path, zh=zh))
 
 
 def _show_one_overlay_per_surface(slicer: Any, nodes) -> None:
@@ -3414,7 +3424,15 @@ def _populate_manifest_output_items(
         source = _task_source(family, task_by_name.get(product) or {"name": product}, manifest) if subgroup else None
         if source is not None:
             subgroup = f"{subgroup}@{source}"
-        families.setdefault(family, {}).setdefault(subgroup, {}).update(paths)
+        if family == "anatomy" and subgroup == "postprocess":
+            from shared.surface_morphometry_display import morphometry_row
+
+            for path, visual in paths.items():
+                row = morphometry_row(product, path)
+                target_subgroup = "surfaces" if (row is not None and row[0] == "inflated") else subgroup
+                families.setdefault(family, {}).setdefault(target_subgroup, {})[path] = visual
+        else:
+            families.setdefault(family, {}).setdefault(subgroup, {}).update(paths)
     role_manifest = _user_role(qt, ROLE_MANIFEST)
     role_run = _user_role(qt, ROLE_RUN)
     role_key = _user_role(qt, ROLE_KEY)
@@ -3516,6 +3534,10 @@ def _populate_manifest_output_items(
                         qc_label = QC_MARK_TEXT[qc_state][1 if zh else 0]
                         leaf_tip = f"{leaf_tip}\n{qc_label}{'：' if zh else ': '}{qc_reason}" if qc_reason else f"{leaf_tip}\n{qc_label}"
                 item.setToolTip(0, leaf_tip)
+                if not visual and Path(path).suffix.lower() == ".stats":
+                    from shared.surface_morphometry_display import row_tooltip
+
+                    item.setToolTip(1, row_tooltip(path, zh=zh) or ("在 Slicer 中查看统计表" if zh else "View the statistics table in Slicer"))
             if subgroup is not None and (sub_existed or sub_marked):
                 target.setText(0, _subgroup_text(qt, target, key, zh))
         if added_to_existing:

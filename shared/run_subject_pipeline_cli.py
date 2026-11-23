@@ -287,7 +287,15 @@ def resolve_analysis_options(args, *, explicit_dests=()):
         args.tractography_backend = ','.join(tracking)
     from tractography.ukf import parameters
     from tractography.wmql_protocol import CATALOG_PRESETS, canonical_wmql_selection
+    from shared.ui_tractography_params import (
+        parse_csd_act_overrides,
+        parse_dti_overrides,
+        parse_saf_overrides,
+    )
     parameters(json.loads(args.ukf_parameters))
+    parse_csd_act_overrides(getattr(args, 'csd_act_parameters', '{}'))
+    parse_dti_overrides(getattr(args, 'dti_parameters', '{}'))
+    parse_saf_overrides(getattr(args, 'saf_parameters', '{}'))
     if args.wmql_query_preset in CATALOG_PRESETS:
         canonical_wmql_selection(args.wmql_query_selection, args.wmql_query_preset)
     closure, exclude = _resolve_closure(args)
@@ -646,6 +654,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument('--ukf-parameters', default='{}',
                         help='JSON overrides of official UKF defaults; never applies CSD streamline budgets.')
+    parser.add_argument('--csd-act-parameters', default='{}',
+                        help='JSON overrides of CSD/ACT tractography parameters.')
+    parser.add_argument('--dti-parameters', default='{}',
+                        help='JSON overrides of DTI deterministic tractography parameters.')
+    parser.add_argument('--saf-parameters', default='{}',
+                        help='JSON overrides of SAF short association fibre parameters.')
     parser.add_argument('--ukf-executable', type=Path,
                         help='Optional installed UKFTractography CLI; GUI discovers the extension automatically.')
     parser.add_argument('--dwiconvert-executable', type=Path,
@@ -1058,6 +1072,11 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
 
+    from shared.ui_tractography_params import (
+        parse_csd_act_overrides,
+        parse_dti_overrides,
+        parse_saf_overrides,
+    )
     environment_seconds = time.monotonic() - environment_started
     config = ProductOrchestratorConfig(
         subject_id=subject_id,
@@ -1070,6 +1089,9 @@ def main(argv: list[str] | None = None) -> int:
         bundle_tractography_backend=args.bundle_tractography_backend,
         bundle_sources=_bundle_sources_arg(args),
         ukf_parameters=json.loads(args.ukf_parameters),
+        csd_act_parameters=parse_csd_act_overrides(getattr(args, 'csd_act_parameters', '{}')),
+        dti_parameters=parse_dti_overrides(getattr(args, 'dti_parameters', '{}')),
+        saf_parameters=parse_saf_overrides(getattr(args, 'saf_parameters', '{}')),
         ukf_executable=args.ukf_executable,
         dwiconvert_executable=args.dwiconvert_executable,
         execute=bool(args.execute),

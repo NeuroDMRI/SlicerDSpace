@@ -228,7 +228,11 @@ class RowKindTest(unittest.TestCase):
         self.assertIsNone(morphometry_row(PRODUCT + "@x", "/r/x.thickness"))
         self.assertIsNone(morphometry_row(PRODUCT, "/r/lh.white"))
         self.assertEqual(row_tooltip("/r/lh.thickness", zh=False),
-                         "Show thickness on the open cortical surface (defaults to white)")
+                         "Show thickness on the open cortical surface (white, pial, or inflated; defaults to white)")
+        self.assertEqual(row_tooltip("/r/rh.aparc.stats", zh=False),
+                         "View the statistics table in Slicer")
+        self.assertEqual(row_tooltip("/r/rh.aparc.stats", zh=True),
+                         "在 Slicer 中查看统计表")
         self.assertTrue(row_tooltip("/r/lh.thickness", zh=True))
         self.assertNotEqual(row_tooltip("/r/lh.thickness", zh=True), row_tooltip("/r/lh.thickness", zh=False))
         for name in expected:
@@ -547,7 +551,10 @@ class SiblingHideTest(unittest.TestCase):
             (real / "cortical_surface").mkdir(parents=True)
             (real / "cortical_surface" / "lh.white.obj").write_text("v 0 0 0\n", encoding="utf-8")
             link = Path(tmp) / "link"
-            link.symlink_to(real, target_is_directory=True)
+            try:
+                link.symlink_to(real, target_is_directory=True)
+            except OSError as exc:
+                self.skipTest(f"symlinks unavailable on this platform: {exc}")
             run = "/run.json"
             thickness = _Node("t", {PREFIX + "Run": run, PREFIX + "SourcePath": str(real / "lh.thickness"),
                                     PREFIX + "CarrierPath": str((real / "cortical_surface" / "lh.white.obj").resolve())})
@@ -976,15 +983,23 @@ class TreeTest(TempRootTest):
             h.refresh([parse_run_manifest(run.manifest_path)])
         subject = next(item for item in h.tree.items if item.text(0).startswith("s"))
         anatomy = find_child(subject, "Anatomical priors")
+        surfaces = find_child(anatomy, "Cortical surfaces")
+        surface_rows = [surfaces.child(i) for i in range(surfaces.childCount())]
+        surface_names = [row.text(0) for row in surface_rows if row.data(0, USER_ROLE + ui_run_history.ROLE_PATH)]
+        self.assertIn("lh.inflated", surface_names)
+        self.assertIn("rh.inflated", surface_names)
         post = find_child(anatomy, "Surface postprocess")
         rows = [post.child(i) for i in range(post.childCount())]
         names = [row.text(0) for row in rows if row.data(0, USER_ROLE + ui_run_history.ROLE_PATH)]
-        self.assertEqual(names, DECIDED_ORDER)
-        by_name = {row.text(0): row for row in rows}
-        self.assertIn("Show thickness on the open cortical surface (defaults to white)", by_name["lh.thickness"].tooltips[0])
+        self.assertEqual(names, [name for name in DECIDED_ORDER if not name.endswith(".inflated")])
+        by_name = {row.text(0): row for row in rows + surface_rows}
+        self.assertIn("Show thickness on the open cortical surface (white, pial, or inflated; defaults to white)",
+                      by_name["lh.thickness"].tooltips[0])
         self.assertIn(str(run.morph("lh.thickness")), by_name["lh.thickness"].tooltips[0])
+        self.assertIn("View the statistics table in Slicer", by_name["lh.aparc.stats"].tooltips[0])
         self.assertEqual(by_name["lh.aparc.stats"].text(1), "↗")
         self.assertNotEqual(by_name["lh.thickness"].text(1), "↗")
+        self.assertNotEqual(by_name["lh.inflated"].text(1), "↗")
         self.h, self.by_name = h, by_name
 
     def test_b2_morph_a_language_switch_retitles_the_row_tooltips(self) -> None:
@@ -992,9 +1007,15 @@ class TreeTest(TempRootTest):
 
         self.test_b2_morph_the_tree_lists_the_rows_in_order_with_tooltips_and_stats_open_outside()
         apply_onboarding_language(self.h.owner, "zh")
-        self.assertIn("在已打开的皮层表面上显示皮层厚度（默认白质表面）", self.by_name["lh.thickness"].tooltips[0])
+        self.assertIn("在已打开的皮层表面（白质/软脑膜/膨胀）上显示皮层厚度（默认白质表面）",
+                      self.by_name["lh.thickness"].tooltips[0])
+        self.assertIn("显示膨胀表面", self.by_name["lh.inflated"].tooltips[0])
+        self.assertIn("在 Slicer 中查看统计表", self.by_name["lh.aparc.stats"].tooltips[0])
         apply_onboarding_language(self.h.owner, "en")
-        self.assertIn("Show thickness on the open cortical surface (defaults to white)", self.by_name["lh.thickness"].tooltips[0])
+        self.assertIn("Show thickness on the open cortical surface (white, pial, or inflated; defaults to white)",
+                      self.by_name["lh.thickness"].tooltips[0])
+        self.assertIn("Show the inflated surface", self.by_name["lh.inflated"].tooltips[0])
+        self.assertIn("View the statistics table in Slicer", self.by_name["lh.aparc.stats"].tooltips[0])
 
     def test_b2_morph_the_eye_that_shows_an_overlay_hides_its_siblings_and_the_eye_that_hides_does_not(self) -> None:
         from shared import ui_run_history

@@ -153,6 +153,7 @@ def sync(owner):
 
 def snapshot_selection(owner):
     from shared.ui_run_controller import RunSelection, compress_mrtrix_dense_value
+    from shared.ui_tractography_params import get_node_bool_parameter, get_node_parameter
     node = owner._parameterNode
     freewater, noddi = owner._microstructure_stage_flags()
     topup = owner._topup_validation(batch_mode=node.experimentScope == 'cohort')
@@ -175,7 +176,16 @@ def snapshot_selection(owner):
         dki_fit_method=node.orchestrationDkiFitMethod, wmql_query_preset=node.orchestrationWmqlPreset,
         wma_atlas=getattr(node, "wmaAtlas", "org"),
         wmql_query_selection=node.orchestrationWmqlSelection, max_parallel_models=node.maxParallelModels,
-        ukf_parameters_text=node.ukfParameters, wma_input_tractography_text=node.wmaInputTractography.strip(), topup=topup.parameters,
+        ukf_parameters_text=node.ukfParameters,
+        csd_act_parameters_text=str(get_node_parameter(node, "csdActParameters", "{}") or "{}"),
+        dti_parameters_text=str(get_node_parameter(node, "dtiParameters", "{}") or "{}"),
+        saf_parameters_text=str(get_node_parameter(node, "safParameters", "{}") or "{}"),
+        preprocessing_dipy_run_gibbs=get_node_bool_parameter(node, "preprocessingRunGibbs", True),
+        microstructure_fit_method=(str(get_node_parameter(node, "microstructureFitMethod", "wls") or "wls").strip().lower() or "wls"),
+        freewater_parameters_text=str(get_node_parameter(node, "freeWaterParameters", "{}") or "{}"),
+        ifw_parameters_text=str(get_node_parameter(node, "ifwParameters", "{}") or "{}"),
+        tractcloud_parameters_text=str(get_node_parameter(node, "tractcloudParameters", "{}") or "{}"),
+        wma_input_tractography_text=node.wmaInputTractography.strip(), topup=topup.parameters,
         bundle_sources=_bundle_sources(owner))
 
 

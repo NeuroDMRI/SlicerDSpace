@@ -187,7 +187,18 @@ def sync_parameter_node_to_ui(widget) -> None:
     widget._sync_line_edit(getattr(ui, 'wmqlQuerySelectionLineEdit', None),
                            getattr(node, 'orchestrationWmqlSelection', '') or '')
     widget._sync_spinbox(getattr(ui, 'parallelModelsSpinBox', None), int(getattr(node, 'maxParallelModels', 1)))
-    widget._sync_spinbox(getattr(ui, "orchestrationSelectStreamlinesSpinBox", None), int(node.orchestrationSelectStreamlines))
+    effective_streamlines = int(node.orchestrationSelectStreamlines)
+    csd_raw = getattr(node, "csdActParameters", None)
+    if isinstance(csd_raw, str) and csd_raw.strip() not in {"", "{}"}:
+        try:
+            from shared.ui_tractography_params import parse_csd_act_overrides
+
+            csd_overrides = parse_csd_act_overrides(csd_raw)
+            if "select_streamlines" in csd_overrides:
+                effective_streamlines = int(csd_overrides["select_streamlines"])
+        except Exception:
+            pass
+    widget._sync_spinbox(getattr(ui, "orchestrationSelectStreamlinesSpinBox", None), effective_streamlines)
     widget._sync_combo_text(
         getattr(ui, "orchestrationMicrostructureStagesComboBox", None),
         widget._microstructure_stages_text(),

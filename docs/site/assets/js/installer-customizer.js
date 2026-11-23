@@ -2266,6 +2266,33 @@
     if (!root) { return; }
 
     var state = defaultSetupState(detectOS());
+    var detectedOs = state.os;
+    var OS_ORDER = ['macos', 'linux', 'windows'];
+
+    var OS_ICONS = {
+      macos:
+        '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false">' +
+        '<path fill="currentColor" d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.81-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M15.97 6.33c.64-.78 1.08-1.86.96-2.94-.93.04-2.06.62-2.72 1.4-.58.68-1.1 1.78-.96 2.84 1.04.08 2.09-.52 2.72-1.3z"/>' +
+        '</svg>',
+      linux:
+        '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false">' +
+        '<path fill="currentColor" fill-rule="evenodd" d="M12 2c-2.55 0-4.25 1.82-4.25 4.62 0 1.38.18 2.55-.32 3.66-.72 1.54-2.12 2.96-2.7 4.74-.38 1.18-.1 2.18.68 2.48.56.22 1.18-.08 1.58-.58.12.92.42 1.82 1.02 2.5-.58.28-1.38.42-1.88.9-.42.4-.32 1.1.22 1.38.82.42 2.38.3 3.62.18.82-.08 1.38-.28 2.03-.28s1.21.2 2.03.28c1.24.12 2.8.24 3.62-.18.54-.28.64-.98.22-1.38-.5-.48-1.3-.62-1.88-.9.6-.68.9-1.58 1.02-2.5.4.5 1.02.8 1.58.58.78-.3 1.06-1.3.68-2.48-.58-1.78-1.98-3.2-2.7-4.74-.5-1.11-.32-2.28-.32-3.66C16.25 3.82 14.55 2 12 2zm-1.42 3.35a.82.82 0 1 1 0 1.64.82.82 0 0 1 0-1.64zm2.84 0a.82.82 0 1 1 0 1.64.82.82 0 0 1 0-1.64zM12 7.45c.94 0 1.72.46 1.72.98s-.78.92-1.72.92-1.72-.4-1.72-.92.78-.98 1.72-.98zm0 2.85c2.02 0 3.42 2.08 3.42 4.68 0 2.32-1.42 3.92-3.42 3.92s-3.42-1.6-3.42-3.92c0-2.6 1.4-4.68 3.42-4.68z"/>' +
+        '</svg>',
+      windows:
+        '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false">' +
+        '<path fill="currentColor" d="M3 3h8.4v8.4H3V3zm9.6 0H21v8.4h-8.4V3zM3 12.6h8.4V21H3v-8.4zm9.6 0H21V21h-8.4v-8.4z"/>' +
+        '</svg>'
+    };
+
+    var ICON_DOWNLOAD =
+      '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">' +
+      '<path d="M8 2.5v7.5m0 0-3-3m3 3 3-3M3 12.75h10"/>' +
+      '</svg>';
+
+    var ICON_CHECK =
+      '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">' +
+      '<path d="M3.25 8.5 6.5 11.75 12.75 4.5"/>' +
+      '</svg>';
 
     function t(en, cn) { return zh ? cn : en; }
 
@@ -2273,61 +2300,141 @@
       return String(v || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     }
 
+    function formatGb(bytes) {
+      var n = Number(bytes || 0);
+      if (!n || n <= 0) { return ''; }
+      return (n / 1073741824).toFixed(2) + ' GB';
+    }
+
+    function baseSizeGb(osKey) {
+      var def = OS_DEFAULTS[osKey] || OS_DEFAULTS.macos;
+      var bundle = (ARTIFACTS.bundles && ARTIFACTS.bundles[def.bundleKey]) || null;
+      var bBytes = Number((bundle && bundle.size_bytes) || def.baseEstimateBytes || 0);
+      var iitBytes = Number((ARTIFACTS.iit_template && ARTIFACTS.iit_template.size_bytes) || 0);
+      return formatGb(bBytes + iitBytes);
+    }
+
+    function osSubtitle(osKey) {
+      if (osKey === 'macos') { return 'Apple Silicon · arm64'; }
+      return t('x86_64 · 64-bit', 'x86_64 · 64 位');
+    }
+
+    function osMeta(osKey) {
+      var gb = baseSizeGb(osKey);
+      if (gb) {
+        return t('.zip · ~' + gb + ' base', '.zip · 约 ' + gb + ' 底座');
+      }
+      return '.zip · ' + (ARTIFACTS.release_tag || RELEASE_TAG);
+    }
+
     function render() {
       var embedded = root.classList.contains('is-embedded');
       var html = [];
       if (!embedded) {
         html.push('<div class="ic-top">');
-        html.push('<div class="ic-top-copy">');
-        html.push('<h3 class="ic-heading">' + t('One-Click Graphical Setup', '一键图形化安装器') + '</h3>');
-        html.push('<p class="ic-sub">' + t('Select your operating system and download the universal setup archive (recommended: 3D Slicer 5.10.0; compatible with 5.10–5.12.4).', '选择操作系统并下载通用一键安装引导包（推荐 3D Slicer 5.10.0，同时兼容 5.10–5.12.4）。') + '</p>');
-        html.push('</div></div>');
+        html.push('<h3 class="ic-heading">' + t('Download SlicerDSpace Setup', '下载 SlicerDSpace 安装器') + '</h3>');
+        html.push('<p class="ic-sub">' + t('One-click universal setup archive (recommended: 3D Slicer 5.10.0; compatible with 5.10–5.12.4).', '一键下载通用引导安装包（推荐 3D Slicer 5.10.0，同时兼容 5.10–5.12.4）。') + '</p>');
+        html.push('</div>');
       }
 
-      html.push('<div class="ic-band ic-band-choose ic-band-os">');
-      html.push('<div class="ic-band-head">');
-      html.push('<span class="ic-band-title">' + t('Operating System', '操作系统') + '</span>');
-      html.push('</div>');
-      html.push('<div class="ic-os-row">');
-      html.push('<div class="ic-seg" role="group" aria-label="' + escapeAttr(t('Operating System', '操作系统')) + '">');
-      var OS_ARCH = { macos: 'arm64', windows: 'x86_64', linux: 'x86_64' };
-      ['macos', 'windows', 'linux'].forEach(function (osKey) {
-        html.push('<button type="button" class="ic-seg-btn" data-os="' + osKey + '" aria-pressed="' + (state.os === osKey ? 'true' : 'false') + '"><span>' + OS_DEFAULTS[osKey].label + '</span><span class="ic-seg-arch">' + OS_ARCH[osKey] + '</span></button>');
+      html.push('<div class="ic-dl-grid" role="group" aria-label="' + escapeAttr(t('Download SlicerDSpace setup archive by operating system', '按操作系统直接下载 SlicerDSpace 安装包')) + '">');
+      OS_ORDER.forEach(function (osKey) {
+        var def = OS_DEFAULTS[osKey];
+        var isDetected = osKey === detectedOs;
+        var sub = osSubtitle(osKey);
+        var meta = osMeta(osKey);
+        var gb = baseSizeGb(osKey);
+        var btnTitle = t(
+          'Download ' + def.setupZipName + (gb ? ' (installs ~' + gb + ' base package inside 3D Slicer)' : ''),
+          '点击下载 ' + def.setupZipName + (gb ? '（在 3D Slicer 内下载约 ' + gb + ' 底座套件）' : '')
+        );
+        var btnAria = t(
+          'Download SlicerDSpace setup archive for ' + def.label + ' (' + sub + ', ' + def.setupZipName + ')',
+          '直接下载 ' + def.label + ' 版 SlicerDSpace 安装包（' + sub + '，' + def.setupZipName + '）'
+        );
+        html.push(
+          '<button type="button" class="ic-dl-btn' + (isDetected ? ' is-detected' : '') + '"' +
+          ' data-os="' + osKey + '"' +
+          ' title="' + escapeAttr(btnTitle) + '"' +
+          ' aria-label="' + escapeAttr(btnAria) + '">'
+        );
+        html.push('<span class="ic-dl-icon" aria-hidden="true">' + OS_ICONS[osKey] + '</span>');
+        html.push('<span class="ic-dl-copy">');
+        html.push('<span class="ic-dl-head">');
+        html.push('<span class="ic-dl-name">' + def.label + '</span>');
+        if (isDetected) {
+          html.push('<span class="ic-dl-badge">' + t('Detected', '当前系统') + '</span>');
+        }
+        html.push('</span>');
+        html.push('<span class="ic-dl-sub">' + sub + '</span>');
+        html.push('<span class="ic-dl-meta">' + meta + '</span>');
+        html.push('</span>');
+        html.push('<span class="ic-dl-arrow" aria-hidden="true">' + ICON_DOWNLOAD + '</span>');
+        html.push('</button>');
       });
       html.push('</div>');
-      html.push('<div class="ic-actions">');
-      html.push('<button type="button" class="ic-btn-primary" id="ic-download-btn">' + t('Download Slicer Setup', '下载 Slicer 一键安装包') + '</button>');
-      html.push('</div>');
-      html.push('</div>');
-      html.push('</div>');
+
+      html.push(
+        '<p class="ic-dl-footnote">' +
+        t(
+          'One-click download · 3D Slicer 5.10.0 recommended (compatible with 5.10–5.12.4) · SHA-256 verified inside Slicer',
+          '点击即下载 · 推荐 3D Slicer 5.10.0（兼容 5.10–5.12.4）· 在 Slicer 内自动执行 SHA-256 校验'
+        ) +
+        '</p>'
+      );
+      html.push('<span class="sr-only" id="ic-dl-status" aria-live="polite"></span>');
 
       root.innerHTML = html.join('');
       bindEvents();
     }
 
     function bindEvents() {
-      Array.prototype.forEach.call(root.querySelectorAll('[data-os]'), function (btn) {
-        btn.addEventListener('click', function () { state.os = btn.getAttribute('data-os'); render(); });
-      });
+      var statusEl = document.getElementById('ic-dl-status');
+      Array.prototype.forEach.call(root.querySelectorAll('.ic-dl-btn[data-os]'), function (btn) {
+        var resetTimer = null;
+        btn.addEventListener('click', function () {
+          var osKey = btn.getAttribute('data-os');
+          var def = OS_DEFAULTS[osKey];
+          if (!def || btn.disabled) { return; }
 
-      var dlBtn = document.getElementById('ic-download-btn');
-      if (dlBtn) {
-        dlBtn.addEventListener('click', function () {
-          var filename = OS_DEFAULTS[state.os].setupZipName;
-          var orig = dlBtn.textContent;
-          dlBtn.disabled = true;
-          dlBtn.textContent = zh ? '正在打包...' : 'Packaging...';
-          buildSetupZip(state).then(function (zipBytes) {
-            triggerBlobDownload(zipBytes, 'application/zip', filename);
-            dlBtn.disabled = false;
-            dlBtn.textContent = orig;
+          if (resetTimer) { clearTimeout(resetTimer); resetTimer = null; }
+          var metaEl = btn.querySelector('.ic-dl-meta');
+          var arrowEl = btn.querySelector('.ic-dl-arrow');
+          var defaultMeta = osMeta(osKey);
+
+          var clickState = defaultSetupState(osKey);
+          state = clickState;
+          btn.disabled = true;
+          btn.classList.remove('is-downloaded');
+          btn.classList.add('is-busy');
+          if (metaEl) { metaEl.textContent = t('Packaging .zip...', '正在打包 .zip...'); }
+
+          var finish = function (downloadedName) {
+            btn.disabled = false;
+            btn.classList.remove('is-busy');
+            btn.classList.add('is-downloaded');
+            if (arrowEl) { arrowEl.innerHTML = ICON_CHECK; }
+            if (metaEl) { metaEl.textContent = t('Download started · .zip', '已开始下载 · .zip'); }
+            if (statusEl) {
+              statusEl.textContent = t('Download started: ' + downloadedName, '已开始下载：' + downloadedName);
+            }
+            resetTimer = setTimeout(function () {
+              btn.classList.remove('is-downloaded');
+              if (arrowEl) { arrowEl.innerHTML = ICON_DOWNLOAD; }
+              if (metaEl) { metaEl.textContent = defaultMeta; }
+              resetTimer = null;
+            }, 2400);
+          };
+
+          buildSetupZip(clickState).then(function (zipBytes) {
+            triggerBlobDownload(zipBytes, 'application/zip', def.setupZipName);
+            finish(def.setupZipName);
           }).catch(function () {
-            dlBtn.disabled = false;
-            dlBtn.textContent = orig;
-            triggerBlobDownload(encodeUtf8(buildScript(state)), 'text/plain;charset=utf-8', OS_DEFAULTS[state.os].scriptName);
+            triggerBlobDownload(encodeUtf8(buildScript(clickState)), 'text/plain;charset=utf-8', def.scriptName);
+            finish(def.scriptName);
           });
         });
-      }
+      });
     }
 
     render();

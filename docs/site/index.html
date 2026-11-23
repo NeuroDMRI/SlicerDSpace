@@ -22,11 +22,11 @@
 <link rel="preload" href="assets/fonts/Inter.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="assets/css/site.css?v=start-redesign-20261119-6">
 <link rel="stylesheet" href="assets/css/performance.css?v=hidden-details-1">
-<link rel="stylesheet" href="assets/css/installer-customizer.css?v=slicer-setup-18">
+<link rel="stylesheet" href="assets/css/installer-customizer.css?v=direct-os-1">
 <script>document.documentElement.classList.add('js');</script>
 <script src="assets/js/site.js?v=lang-scroll-1" defer></script>
 <script src="assets/js/performance.js?v=hidden-details-1" defer></script>
-<script src="assets/js/installer-customizer.js?v=slicer-setup-27" defer></script>
+<script src="assets/js/installer-customizer.js?v=direct-os-1" defer></script>
 </head>
 <body>
 <a class="skip-link" href="#main">Skip to content</a>
@@ -44,8 +44,8 @@
     <nav class="site-nav" id="site-nav" aria-label="Sections">
       <ul>
         <li><a href="#film">Film</a></li>
-        <li><a href="#outputs">Outputs</a></li>
         <li><a href="#start">Get started</a></li>
+        <li><a href="#outputs">Outputs</a></li>
         <li><a href="#performance">Performance</a></li>
         <li><a href="#integrated">Methods</a></li>
       </ul>
@@ -97,35 +97,6 @@
   </div>
 </section>
 
-<section class="section section-alt reveal" id="outputs">
-  <div class="container">
-    <p class="eyebrow">Native diffusion space</p>
-    <h2>Outputs from SlicerDSpace.</h2>
-    <p class="intro">Representative maps, surfaces, pathways and networks from the available analysis routes. Each view highlights a different product in native diffusion space.</p>
-    <figure class="results-overview">
-      <div class="results-scroll" role="region" tabindex="0" aria-label="Complete results overview; scroll horizontally on small screens">
-        <a href="assets/img/results-overview.svg?v=results-20261112" target="_blank" rel="noopener" aria-label="Open the full-size results overview SVG">
-          <img src="assets/img/results-overview.svg?v=results-20261112" width="1830" height="2080" loading="lazy" decoding="async" fetchpriority="low" alt="Complete result overview: anatomical priors, microstructure maps, four tractography methods, WMQL, TractCloud and WMA fiber bundles, and structural connectomes">
-        </a>
-      </div>
-      <figcaption>Maps, cortical surfaces, fiber bundles and connectomes from the available analysis routes. <a href="assets/img/results-overview.svg?v=results-20261112" target="_blank" rel="noopener">Open full-size SVG</a></figcaption>
-    </figure>
-  </div>
-</section>
-
-<section class="section reveal" id="choose">
-  <div class="container">
-    <p class="eyebrow">Choosing routes</p>
-    <h2>Workflow overview.</h2>
-    <figure class="shot fig">
-      <a href="assets/img/workflow-overview.svg?v=workflow-r9a-20261112" target="_blank" rel="noopener" aria-label="Open the full-size workflow overview">
-        <img src="assets/img/workflow-overview.svg?v=workflow-r9a-20261112" width="1660" height="1118" loading="lazy" decoding="async" fetchpriority="low" alt="Workflow overview: dMRI preparation, anatomical priors, microstructure, tractography, fibre bundles and connectomes.">
-      </a>
-      <figcaption>From dMRI preparation to anatomical priors and downstream analyses.</figcaption>
-    </figure>
-  </div>
-</section>
-
 <section class="section section-alt reveal" id="start">
   <div class="container">
     <p class="eyebrow">Get started</p>
@@ -151,7 +122,7 @@
       <li class="start-step">
         <div class="start-body">
           <h4>Download the setup installer</h4>
-          <p>Core workflows, bundled runtimes and anatomical prior models are included in the unified base package. Select your operating system below to download the setup archive; set mirror, proxy or offline paths inside 3D Slicer after restarting if needed. Optional WMA white-matter atlases are not part of the setup: SlicerDSpace offers them when you select WMA (universal setup archives and standalone base bundles are also available at <a class="url-link" href="https://github.com/NeuroDMRI/SlicerDSpace/releases" target="_blank" rel="noopener">https://github.com/NeuroDMRI/SlicerDSpace/releases</a>).</p>
+          <p>Core workflows, bundled runtimes and anatomical prior models are included in the unified base package. Click your operating system below to download the setup archive; set mirror, proxy or offline paths inside 3D Slicer after restarting if needed. Optional WMA white-matter atlases are not part of the setup: SlicerDSpace offers them when you select WMA (universal setup archives and standalone base bundles are also available at <a class="url-link" href="https://github.com/NeuroDMRI/SlicerDSpace/releases" target="_blank" rel="noopener">https://github.com/NeuroDMRI/SlicerDSpace/releases</a>).</p>
           <div class="installer-customizer is-embedded" id="installer-customizer"></div>
         </div>
       </li>
@@ -161,7 +132,7 @@
           <ol class="start-substeps">
             <li class="start-substep">
               <span class="start-substep-num" aria-hidden="true">1</span>
-              <div class="start-substep-body">Download the setup <code>.zip</code> archive generated above (<span class="pkg-list"><code class="pkg-pill">SlicerDSpaceSetup-macOS.zip</code> <code class="pkg-pill">SlicerDSpaceSetup-Windows.zip</code> <code class="pkg-pill">SlicerDSpaceSetup-Linux.zip</code></span>).</div>
+              <div class="start-substep-body">Download the setup <code>.zip</code> archive above (<span class="pkg-list"><code class="pkg-pill">SlicerDSpaceSetup-macOS.zip</code> <code class="pkg-pill">SlicerDSpaceSetup-Linux.zip</code> <code class="pkg-pill">SlicerDSpaceSetup-Windows.zip</code></span>).</div>
             </li>
             <li class="start-substep">
               <span class="start-substep-num" aria-hidden="true">2</span>
@@ -228,6 +199,35 @@ export SUBJECT_ROOT="/path/to/sub-01"
   </div>
 </section>
 
+<section class="section reveal" id="outputs">
+  <div class="container">
+    <p class="eyebrow">Native diffusion space</p>
+    <h2>Outputs from SlicerDSpace.</h2>
+    <p class="intro">Representative maps, surfaces, pathways and networks from the available analysis routes. Each view highlights a different product in native diffusion space.</p>
+    <figure class="results-overview">
+      <div class="results-scroll" role="region" tabindex="0" aria-label="Complete results overview; scroll horizontally on small screens">
+        <a href="assets/img/results-overview.svg?v=results-20261112" target="_blank" rel="noopener" aria-label="Open the full-size results overview SVG">
+          <img src="assets/img/results-overview.svg?v=results-20261112" width="1830" height="2080" loading="lazy" decoding="async" fetchpriority="low" alt="Complete result overview: anatomical priors, microstructure maps, four tractography methods, WMQL, TractCloud and WMA fiber bundles, and structural connectomes">
+        </a>
+      </div>
+      <figcaption>Maps, cortical surfaces, fiber bundles and connectomes from the available analysis routes. <a href="assets/img/results-overview.svg?v=results-20261112" target="_blank" rel="noopener">Open full-size SVG</a></figcaption>
+    </figure>
+  </div>
+</section>
+
+<section class="section reveal" id="choose">
+  <div class="container">
+    <p class="eyebrow">Choosing routes</p>
+    <h2>Workflow overview.</h2>
+    <figure class="shot fig">
+      <a href="assets/img/workflow-overview.svg?v=workflow-r9a-20261112" target="_blank" rel="noopener" aria-label="Open the full-size workflow overview">
+        <img src="assets/img/workflow-overview.svg?v=workflow-r9a-20261112" width="1660" height="1118" loading="lazy" decoding="async" fetchpriority="low" alt="Workflow overview: dMRI preparation, anatomical priors, microstructure, tractography, fibre bundles and connectomes.">
+      </a>
+      <figcaption>From dMRI preparation to anatomical priors and downstream analyses.</figcaption>
+    </figure>
+  </div>
+</section>
+
 <section class="section section-alt reveal" id="runtime">
   <div class="container">
     <p class="eyebrow">Run times</p>
@@ -236,10 +236,10 @@ export SUBJECT_ROOT="/path/to/sub-01"
       <a href="assets/img/fig-runtime-resources.png" target="_blank" rel="noopener" aria-label="Open the full-size run-time figure">
         <picture>
           <source type="image/webp" srcset="assets/img/fig-runtime-resources.webp">
-          <img src="assets/img/fig-runtime-resources.png" width="2400" height="1458" loading="lazy" decoding="async" fetchpriority="low" alt="One row per algorithm, with CPU circles and open CUDA diamonds on a shared log-time axis. Aligned CPU and CUDA columns give both recorded times; the title identifies the shared hardware.">
+          <img src="assets/img/fig-runtime-resources.png" width="2400" height="1458" loading="lazy" decoding="async" fetchpriority="low" alt="One row per algorithm, with personal PC CPU framed squares, server CPU circles and open server CUDA diamonds on a shared log-time axis. Aligned PC CPU, Server CPU and Server CUDA columns give all recorded times.">
         </picture>
       </a>
-      <figcaption>Recorded stage times on a shared Linux host (dual Intel Xeon Platinum 8360Y CPUs and an NVIDIA H100 PCIe 80 GB GPU) across all 22 protocol tasks, including 13 CUDA-accelerated routes. Each algorithm occupies one row, with aligned CPU/CUDA time columns; a dash means no measurement for that device. Thread budgets differ by method and the devices are shared, so these are not controlled device speed ratios. Rows are not summed. SAF re-filters 100,000 existing tracks; TractCloud uses 50,000 tracks.</figcaption>
+      <figcaption>Recorded stage times comparing a personal Windows PC (Intel Core i7-13700K, 32 GB RAM, CPU-only; 20 of 22 modules) against a shared Linux server (dual Intel Xeon Platinum 8360Y CPUs and an NVIDIA H100 PCIe 80 GB GPU across all 22 protocol tasks, including 13 CUDA-accelerated routes). Each algorithm occupies one row, with aligned PC CPU, Server CPU and Server CUDA columns; a dash means no measurement for that device or an unavailable Windows/optional component. Thread budgets differ by method and the server is shared, so these are not controlled device speed ratios. Rows are not summed. SAF re-filters 100,000 existing tracks; TractCloud uses 50,000 tracks.</figcaption>
     </figure>
   </div>
 </section>

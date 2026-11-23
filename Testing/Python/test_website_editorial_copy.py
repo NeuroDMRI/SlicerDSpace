@@ -33,7 +33,31 @@ class WebsiteEditorialCopyTests(unittest.TestCase):
             self.assertNotIn(removed, top)
         self.assertEqual(re.findall(r'<a\b[^>]*href="([^"]+)"', top), ['#film', '#start'])
         main = self.source.split('<main id="main">', 1)[1].split('</main>', 1)[0]
-        self.assertEqual(re.findall(r'<section\b[^>]*\bid="([^"]+)"', main)[:2], ['top', 'film'])
+        self.assertEqual(re.findall(r'<section\b[^>]*\bid="([^"]+)"', main)[:3], ['top', 'film', 'start'])
+
+    def test_get_started_sits_below_film_with_direct_three_os_download_buttons(self):
+        zh_source = (ROOT / "docs/site/zh.html").read_text(encoding="utf-8")
+        for label, doc in (("en", self.source), ("zh", zh_source)):
+            with self.subTest(locale=label):
+                main = doc.split('<main id="main">', 1)[1].split('</main>', 1)[0]
+                sections = re.findall(r'<section\b[^>]*\bid="([^"]+)"', main)
+                self.assertEqual(sections[:4], ['top', 'film', 'start', 'outputs'])
+                nav = re.search(r'<nav class="site-nav"[^>]*>(.*?)</nav>', doc, re.S).group(1)
+                self.assertEqual(
+                    re.findall(r'href="(#[^"]+)"', nav),
+                    ['#film', '#start', '#outputs', '#performance', '#integrated'],
+                )
+        js = (ROOT / "docs/site/assets/js/installer-customizer.js").read_text(encoding="utf-8")
+        self.assertIn("OS_ORDER = ['macos', 'linux', 'windows']", js)
+        self.assertIn('class="ic-dl-btn', js)
+        self.assertNotIn('ic-seg-btn', js)
+        self.assertNotIn('ic-download-btn', js)
+        css = (ROOT / "docs/site/assets/css/installer-customizer.css").read_text(encoding="utf-8")
+        root_rule = re.search(r'\.installer-customizer\s*\{([^}]+)\}', css).group(1)
+        self.assertIn('background: transparent;', root_rule)
+        self.assertIn('border: 0;', root_rule)
+        self.assertIn('box-shadow: none;', root_rule)
+        self.assertIn('[data-theme="light"] .installer-customizer', css)
 
     def test_removed_sections_leave_no_dangling_navigation(self):
         for name in ("idea", "workflows", "status", "performance-notes", "slicer"):

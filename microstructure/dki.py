@@ -987,13 +987,13 @@ def _save_dki_nifti_fast(array, affine, header, staged_path: Path, final_path: P
 
 
 def _compute_maps(config: DkiConfig, paths: dict[str, Path], log):
+    global _ORIG_DKI_FIT, _DKI_FORK_CTX
     phase_start = time.monotonic()
     phase_times = {key:0.0 for key in ('preparation','signal_read','tensor_fit','metrics_prediction','map_assignment','file_export')}
     import nibabel as nib
     import numpy as np
     from dipy.reconst.dki import DiffusionKurtosisModel
     import dipy
-    global _ORIG_DKI_FIT
     if _ORIG_DKI_FIT is None:
         _ORIG_DKI_FIT = DiffusionKurtosisModel.fit
     dense_supported = dipy.__version__.split('.')[:2] in (['1','11'], ['1','12'])

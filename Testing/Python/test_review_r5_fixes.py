@@ -797,6 +797,7 @@ class FreeWaterDeviceAttrTests(unittest.TestCase):
         noddi_src = Path(noddi_accel.__file__).read_text(encoding="utf-8")
         self.assertIn("with _single_thread_blas_for_fork(), ctx_mp.Pool(", dki_src)
         self.assertIn("with _single_thread_blas(), ctx_mp.Pool(", noddi_src)
+        self.assertIn("global _ORIG_DKI_FIT, _DKI_FORK_CTX", dki_src)
 
 
 if __name__ == "__main__":

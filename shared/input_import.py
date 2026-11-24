@@ -9,6 +9,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 from collections.abc import Callable, Mapping
@@ -151,6 +152,62 @@ def _copy_file(source: Path, target: Path, *, force: bool) -> None:
             raise FileExistsError(f"Refusing to overwrite existing file: {target}")
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source, target)
+
+
+def _try_cow_clone(source: Path, target: Path) -> bool:
+    """Try filesystem copy-on-write clone (APFS clonefile / Linux FICLONE) without sharing mutable inodes."""
+    if sys.platform == "darwin":
+        try:
+            import ctypes
+
+            libc = ctypes.CDLL(None, use_errno=True)
+            clonefile = libc.clonefile
+            clonefile.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint32]
+            clonefile.restype = ctypes.c_int
+            target.unlink(missing_ok=True)
+            if clonefile(os.fsencode(source), os.fsencode(target), 0) == 0:
+                return True
+        except Exception:
+            pass
+        target.unlink(missing_ok=True)
+        return False
+    if sys.platform.startswith("linux"):
+        try:
+            import fcntl
+
+            ficlone = 0x40049409  # Linux UAPI FICLONE = _IOW(0x94, 9, int)
+            with source.open("rb") as src_fh, target.open("wb") as dst_fh:
+                fcntl.ioctl(dst_fh.fileno(), ficlone, src_fh.fileno())
+            return True
+        except Exception:
+            target.unlink(missing_ok=True)
+            return False
+    return False
+
+
+def _clone_or_copy_file(source: Path, target: Path, *, force: bool) -> str:
+    """Stage ``source`` at ``target`` via CoW reflink when available, falling back to isolated copy."""
+    if target.exists():
+        try:
+            if source.expanduser().resolve() == target.expanduser().resolve():
+                return "same_path"
+        except OSError:
+            pass
+        if not force:
+            raise FileExistsError(f"Refusing to overwrite existing file: {target}")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=".stage-", suffix=target.suffix or ".tmp", dir=target.parent)
+    os.close(fd)
+    temporary = Path(tmp_name)
+    try:
+        if _try_cow_clone(source, temporary):
+            os.replace(temporary, target)
+            return "reflink"
+        shutil.copy2(source, temporary)
+        os.replace(temporary, target)
+        return "copy"
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _write_text_file(content: str, target: Path, *, force: bool) -> None:
@@ -928,19 +985,15 @@ def prepare_inputs(config: InputImportConfig) -> dict[str, Any]:
 
 def _copy_canonical_source(source: Path, targets: dict[str, Path], *, force: bool, dry_run: bool) -> None:
     input_dir = source / "input" if (source / "input").is_dir() else source
-    mapping = {
-        input_dir / "data.nii.gz": targets["dwi"],
-        input_dir / "bvals": targets["bvals"],
-        input_dir / "bvecs": targets["bvecs"],
-    }
     optional = {
         input_dir / "dwi.json": targets["metadata"],
         input_dir / "nodif_brain_mask.nii.gz": targets["mask"],
     }
     if dry_run:
         return
-    for src, dst in mapping.items():
-        _copy_file(src, dst, force=force)
+    _clone_or_copy_file(input_dir / "data.nii.gz", targets["dwi"], force=force)
+    _copy_file(input_dir / "bvals", targets["bvals"], force=force)
+    _copy_file(input_dir / "bvecs", targets["bvecs"], force=force)
     for src, dst in optional.items():
         if src.is_file():
             _copy_file(src, dst, force=force)
@@ -1073,23 +1126,31 @@ def _copy_nifti_source(
             if not np.isfinite(np.asanyarray(image.dataobj[..., index])).all():
                 raise ValueError("DWI contains non-finite values")
     target.parent.mkdir(parents=True, exist_ok=True)
-    fd, name = tempfile.mkstemp(suffix=".nii.gz", dir=target.parent)
-    os.close(fd)
-    temporary = Path(name)
-    try:
-        if source.name.lower().endswith(".nii.gz"):
-            shutil.copyfile(source, temporary)
-        else:
-            with source.open("rb") as src, gzip.open(temporary, "wb", compresslevel=1) as dst:
-                shutil.copyfileobj(src, dst, length=4 * 1024 * 1024)
-        nib.load(str(temporary))
-        os.replace(temporary, target)
-    except Exception:
-        if staged_cache_nii is not None:
-            staged_cache_nii.unlink(missing_ok=True)
-        raise
-    finally:
-        temporary.unlink(missing_ok=True)
+    already_same = False
+    if target.exists():
+        try:
+            already_same = os.path.samefile(source, target)
+        except OSError:
+            already_same = False
+    if not already_same:
+        fd, name = tempfile.mkstemp(suffix=".nii.gz", dir=target.parent)
+        os.close(fd)
+        temporary = Path(name)
+        try:
+            if source.name.lower().endswith(".nii.gz"):
+                if not _try_cow_clone(source, temporary):
+                    shutil.copyfile(source, temporary)
+            else:
+                with source.open("rb") as src, gzip.open(temporary, "wb", compresslevel=1) as dst:
+                    shutil.copyfileobj(src, dst, length=4 * 1024 * 1024)
+            nib.load(str(temporary))
+            os.replace(temporary, target)
+        except Exception:
+            if staged_cache_nii is not None:
+                staged_cache_nii.unlink(missing_ok=True)
+            raise
+        finally:
+            temporary.unlink(missing_ok=True)
     if staged_cache_nii is not None:
         commit_predecoded_nifti_cache(target, staged_cache_nii, expected_cache_bytes)
     if bval_has_bom:

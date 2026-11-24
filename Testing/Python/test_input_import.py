@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -259,6 +260,39 @@ class InputImportTest(unittest.TestCase):
             third = prepare_inputs(cfg)
             self.assertFalse(third.get("reused", False))
             np.testing.assert_array_equal(np.asarray(nib.load(str(target_dwi)).dataobj), data2)
+
+    def test_nifti_gz_prefers_cow_reflink_and_preserves_archive_isolation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "dwi.nii.gz"
+            data1 = np.arange(16, dtype=np.float32).reshape(2, 2, 2, 2)
+            data2 = np.full((2, 2, 2, 2), 99.0, dtype=np.float32)
+            nib.save(nib.Nifti1Image(data1, np.eye(4)), str(source))
+            (root / "dwi.bval").write_text("0 1000\n", encoding="utf-8")
+            (root / "dwi.bvec").write_text("0 1\n0 0\n0 0\n", encoding="utf-8")
+
+            # Fallback copy path must isolate staged input from later in-place edits to source.
+            copied_root = root / "copied" / "sub-01"
+            with patch("shared.input_import._try_cow_clone", return_value=False):
+                prepare_inputs(InputImportConfig(source=source, subject_root=copied_root, subject_id="sub-01", source_kind="nifti"))
+            nib.save(nib.Nifti1Image(data2, np.eye(4)), str(source))
+            np.testing.assert_array_equal(np.asarray(nib.load(str(copied_root / "input" / "data.nii.gz")).dataobj), data1)
+
+            # When CoW reflink succeeds, shutil.copyfile must not be called for data.nii.gz.
+            def fake_clone(src: Path, dst: Path) -> bool:
+                dst.write_bytes(src.read_bytes())
+                return True
+
+            cloned_root = root / "cloned" / "sub-01"
+            with (
+                patch("shared.input_import._try_cow_clone", side_effect=fake_clone) as mock_clone,
+                patch("shared.input_import.shutil.copyfile", wraps=shutil.copyfile) as mock_copyfile,
+            ):
+                prepare_inputs(InputImportConfig(source=source, subject_root=cloned_root, subject_id="sub-01", source_kind="nifti"))
+            self.assertEqual(mock_clone.call_count, 1)
+            copied_sources = [Path(call.args[0]).resolve() for call in mock_copyfile.call_args_list]
+            self.assertNotIn(source.resolve(), copied_sources)
+            np.testing.assert_array_equal(np.asarray(nib.load(str(cloned_root / "input" / "data.nii.gz")).dataobj), data2)
 
 
 if __name__ == "__main__":

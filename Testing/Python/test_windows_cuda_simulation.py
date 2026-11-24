@@ -394,9 +394,10 @@ class DeepLearningWddmRoutesSimulationTests(unittest.TestCase):
         import torch
         from anatomy.parcellation import DDSurfer_Pred as dd_pred
 
-        # Verify probability accumulation tensor is explicitly allocated on CPU (0 bytes GPU VRAM)
+        # Verify probability accumulation buffer is allocated on CPU host RAM or disk-backed memmap (0 bytes GPU VRAM)
         src = Path(dd_pred.__file__).read_text(encoding="utf-8")
-        self.assertIn("pred_prob = torch.zeros((1, 256, 256, 256, args.num_classes_ax_cor), dtype=torch.float)", src)
+        self.assertIn("prob_buffer = _allocate_prediction_probability(", src)
+        self.assertIn("torch.zeros(tuple(shape), dtype=torch.float16)", src)
         self.assertNotIn("pred_prob = torch.zeros((1, 256, 256, 256", src.split("device=")[1] if "device=" in src else "")
 
         class FlakyCudaModel(torch.nn.Module):

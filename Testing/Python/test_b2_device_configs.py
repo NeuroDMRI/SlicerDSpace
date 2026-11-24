@@ -217,16 +217,19 @@ class D1ParcellationRamWarningTest(unittest.TestCase):
 
     def test_b2_d1_warns_with_real_available_ram_below_7_gib(self):
         logs = self._run_ddparcel_with_ram(int(5.2 * GIB))
-        warnings = [line for line in logs if "WARNING: Available RAM is" in line]
-        self.assertEqual(len(warnings), 1, logs)
+        warnings = [line for line in logs if "WARNING: Available host memory for DDParcel is" in line]
+        self.assertGreaterEqual(len(warnings), 1, logs)
         self.assertIn("5.2 GiB", warnings[0])
-        self.assertIn("7.0 GiB", warnings[0])
+        self.assertIn("5.5 GiB", warnings[0])
 
     def test_b2_d1_does_not_false_warn_between_7_and_10_gib_or_when_unknown(self):
         for available in (8 * GIB, None):
             with self.subTest(available=available):
                 logs = self._run_ddparcel_with_ram(available)
-                self.assertFalse([line for line in logs if "WARNING: Available RAM" in line], logs)
+                self.assertFalse(
+                    [line for line in logs if "Available host memory for DDParcel" in line or "WARNING: Available RAM" in line],
+                    logs,
+                )
 
 
 class D2TlsTrustStoreTest(unittest.TestCase):

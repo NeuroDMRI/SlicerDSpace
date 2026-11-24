@@ -53,7 +53,7 @@ class BrainMaskModuleLogicWiringTest(unittest.TestCase):
             with self.subTest(method=name), patch.object(logic_module, callee, return_value=value) as call:
                 inspect.signature(getattr(logic, name)).bind(**options)
                 getattr(logic, name)(**options)
-                self.assertEqual(call.call_args.args[0].tractcloud_device, 'cuda')
+                self.assertEqual(call.call_args.args[0].tractcloud_device, 'cuda:0')
 
     def test_all_entrypoints_have_consistent_typed_defaults(self) -> None:
         for name in METHODS:

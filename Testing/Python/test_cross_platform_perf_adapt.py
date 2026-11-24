@@ -810,8 +810,14 @@ class MppcaAndAuditAdaptationTests(unittest.TestCase):
                 self.assertEqual(da._resolve_dipy_cpu_workers(None, avail_ram_bytes=4 * GIB, apply_low_ram_cap=True), 4)
                 self.assertEqual(da._resolve_dipy_cpu_workers(None, avail_ram_bytes=8 * GIB, apply_low_ram_cap=True), 6)
                 self.assertEqual(da._resolve_dipy_cpu_workers(None, avail_ram_bytes=20 * GIB, apply_low_ram_cap=True), 8)
-                # Explicit max_workers is never reduced.
-                self.assertEqual(da._resolve_dipy_cpu_workers(8, avail_ram_bytes=4 * GIB, apply_low_ram_cap=True), 8)
+                # Caller-supplied max_workers is still bounded by available RAM unless unsafe override is requested.
+                self.assertEqual(da._resolve_dipy_cpu_workers(8, avail_ram_bytes=4 * GIB, apply_low_ram_cap=True), 4)
+                self.assertEqual(
+                    da._resolve_dipy_cpu_workers(
+                        8, avail_ram_bytes=4 * GIB, apply_low_ram_cap=True, allow_unsafe_ram_override=True
+                    ),
+                    8,
+                )
 
             # Apple Silicon E-core cap when max_workers is None and SLICERDSPACE_STAGE_CPUS is unset.
             with (

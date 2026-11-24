@@ -1,33 +1,85 @@
 """Conservative header-only estimates for optional cohort stage admission."""
 
+import json
 import math
 from pathlib import Path
 
 
-def available_cohort_resources(fraction=.7):
+GPU_CAPABLE_STAGES = frozenset({
+    'brain_mask',
+    'preprocessing',
+    'segmentation',
+    'parcellation',
+    'surface',
+    'tractcloud',
+    'microstructure_freewater',
+    'microstructure_noddi',
+    'microstructure_mkcurve',
+})
+
+
+def available_cohort_resources(
+    fraction=.7,
+    *,
+    proc_cgroup_path=Path('/proc/self/cgroup'),
+    cgroup_root=Path('/sys/fs/cgroup'),
+):
     from shared.compute_schedule import available_resources
+    from shared.hardware_adapt import linux_cgroup_limits
+
     cpus, memory = available_resources()
     memory = int(memory / .7 * fraction)
-    # Respect common container limits in addition to CPU affinity and host RAM.
-    for quota, period in ((Path('/sys/fs/cgroup/cpu.max'), None),
-                          (Path('/sys/fs/cgroup/cpu/cpu.cfs_quota_us'),
-                           Path('/sys/fs/cgroup/cpu/cpu.cfs_period_us'))):
-        try:
-            q, p = quota.read_text(encoding='utf-8').split() if period is None else (quota.read_text(encoding='utf-8'), period.read_text(encoding='utf-8'))
-            if q.strip() != 'max' and int(q) > 0:
-                cpus = min(cpus, max(1, int(q) // int(p)))
-        except (OSError, ValueError, ZeroDivisionError):
-            pass
-    for limit, usage in (('memory.max', 'memory.current'),
-                         ('memory/memory.limit_in_bytes', 'memory/memory.usage_in_bytes')):
-        try:
-            ceiling = int((Path('/sys/fs/cgroup') / limit).read_text(encoding='utf-8'))
-            used = int((Path('/sys/fs/cgroup') / usage).read_text(encoding='utf-8'))
-            free = int(max(0, ceiling - used) * fraction)
-            memory = min(memory, free) if memory else free
-        except (OSError, ValueError):
-            pass
+    # Respect nested Linux cgroup v1/v2 container limits in addition to CPU affinity and host RAM.
+    limits = linux_cgroup_limits(proc_cgroup_path=proc_cgroup_path, cgroup_root=cgroup_root)
+    if limits['cpu_limit'] is not None:
+        cpus = min(cpus, limits['cpu_limit'])
+    if limits['memory_available_bytes'] is not None:
+        free = int(limits['memory_available_bytes'] * fraction)
+        memory = min(memory, free) if memory else free
     return cpus, memory
+
+
+def _stage_uses_gpu_in_plan(stage, arguments):
+    """Return True when ``stage`` is GPU-capable under the supplied CLI ``arguments``."""
+    if stage not in GPU_CAPABLE_STAGES:
+        return False
+    if stage == 'microstructure_mkcurve':
+        fit_method = _option(arguments, '--dki-fit-method', '').strip().upper()
+        if fit_method == 'MKCURVE_MATLAB':
+            return False
+    if stage == 'microstructure_noddi' and '--noddi-directional-average' in arguments:
+        return False
+
+    def _effective_device(flags):
+        for flag in flags:
+            val = _option(arguments, flag, '').strip().lower()
+            if val and val != 'auto':
+                return val
+        return 'auto'
+
+    if stage == 'brain_mask':
+        dev = _effective_device(('--brain-mask-device',))
+    elif stage == 'preprocessing':
+        preproc_stages = _option(arguments, '--preprocessing-stages', '').strip().lower()
+        if preproc_stages:
+            stage_tokens = {tok.strip() for tok in preproc_stages.split(',') if tok.strip()}
+            if 'denoise' not in stage_tokens and 'all' not in stage_tokens:
+                return False
+        dev = _effective_device(('--brain-mask-device', '--ddseg-device', '--surface-device'))
+    elif stage in {'segmentation', 'parcellation'}:
+        dev = _effective_device(('--ddseg-device',))
+    elif stage == 'surface':
+        dev = _effective_device(('--surface-device',))
+    elif stage == 'tractcloud':
+        dev = _effective_device(('--tractcloud-device',))
+    elif stage in {'microstructure_freewater', 'microstructure_noddi', 'microstructure_mkcurve'}:
+        dev = _effective_device(('--ddseg-device', '--surface-device', '--brain-mask-device'))
+        if dev in {'cpu', 'mps'}:
+            return False
+        return True
+    else:
+        dev = 'auto'
+    return dev != 'cpu'
 
 
 def _option(arguments, flag, default=''):
@@ -205,6 +257,7 @@ def plan_cohort(subjects, arguments, *, jobs=None, cpu_budget=None, memory_gb=No
     tuned_profiles = read_profile(tuning_profile) if adaptive else {}
     history = read_history(history_path) if adaptive else {}
     profiles, inputs, selected_peaks, subject_arguments = {}, {}, [], {}
+    plan_warnings, low_memory_mitigations = [], {}
     simple_dti = (_option(arguments, '--microstructure-stages') == 'dti' and
                   not any(flag in arguments for flag in ('--run-free-water', '--run-noddi', '--run-dki')))
     for subject in subjects:
@@ -267,10 +320,11 @@ def plan_cohort(subjects, arguments, *, jobs=None, cpu_budget=None, memory_gb=No
                     tuned_arguments += runtime_arguments(stage, settings)
             if adaptive:
                 request = profile[stage]
-                key = workload_key(stage, image['shape'], [*arguments, *tuned_arguments], request['cpu'],
-                                   stage in {'brain_mask', 'segmentation', 'parcellation', 'surface', 'tractcloud'})
+                stage_gpu = _stage_uses_gpu_in_plan(stage, [*arguments, *tuned_arguments])
+                key = workload_key(stage, image['shape'], [*arguments, *tuned_arguments], request['cpu'], stage_gpu)
                 feedback = history_estimate(history, key)
-                request.update(io=int(stage in {'registered_dti', 'preprocessing', 'wmql', 'connectome'}),
+                request.update(gpu=int(stage_gpu),
+                               io=int(stage in {'registered_dti', 'preprocessing', 'wmql', 'connectome'}),
                                profile_key=key, duration_seconds=feedback['duration_seconds'] if feedback else 0,
                                estimate_source='header heuristic' if feedback is None else 'header + measured high-water mark')
                 if feedback and stage_memory_gb is None:
@@ -292,14 +346,70 @@ def plan_cohort(subjects, arguments, *, jobs=None, cpu_budget=None, memory_gb=No
                     f'{subject.subject_id}: estimated stage RAM {peak:g} GiB exceeds budget {ram:.1f} GiB. '
                     'Review available memory, pass --low-memory on modest-RAM hosts, or override reservations after a pilot.'
                 )
+            orig_stage_mem = {stage: profile[stage]['memory_gb'] for stage in selected if stage in profile}
+            sub_mitigations = []
             for stage in selected:
                 if stage in profile and profile[stage]['memory_gb'] > ram:
                     profile[stage]['memory_gb'] = ram
                     profile[stage]['cpu'] = max(1, min(profile[stage]['cpu'], 4, cpu))
             if 'microstructure_dki' in selected and not _option([*arguments, *tuned_arguments], '--dki-voxels-per-chunk'):
                 tuned_arguments += ['--dki-voxels-per-chunk', '8192']
+                sub_mitigations.append(dict(stage='microstructure_dki', applied_args=['--dki-voxels-per-chunk', '8192']))
             if 'microstructure_mkcurve' in selected and not _option([*arguments, *tuned_arguments], '--mkcurve-voxels-per-chunk'):
                 tuned_arguments += ['--mkcurve-voxels-per-chunk', '1024']
+                sub_mitigations.append(dict(stage='microstructure_mkcurve', applied_args=['--mkcurve-voxels-per-chunk', '1024']))
+            if 'ukf' in selected and 'ukf' in profile and orig_stage_mem.get('ukf', 0) > ram:
+                ukf_orig = orig_stage_mem['ukf']
+                ukf_cpu = max(1, min(profile['ukf']['cpu'], 2, cpu))
+                profile['ukf']['cpu'] = ukf_cpu
+                raw_ukf_opts = _option([*arguments, *tuned_arguments], '--ukf-parameters', '')
+                try:
+                    ukf_opts = json.loads(raw_ukf_opts) if raw_ukf_opts else {}
+                    if not isinstance(ukf_opts, dict):
+                        ukf_opts = {}
+                except ValueError:
+                    ukf_opts = {}
+                merged_ukf = dict(ukf_opts)
+                prev_threads = merged_ukf.get('numThreads')
+                if prev_threads is None or prev_threads == -1 or (isinstance(prev_threads, int) and prev_threads > ukf_cpu):
+                    merged_ukf['numThreads'] = ukf_cpu
+                explicit_high_seeds = isinstance(merged_ukf.get('seedsPerVoxel'), int) and merged_ukf['seedsPerVoxel'] > 1
+                if 'seedsPerVoxel' not in merged_ukf:
+                    merged_ukf['seedsPerVoxel'] = 1
+                ukf_json = json.dumps(merged_ukf, separators=(',', ':'))
+                tuned_arguments += ['--ukf-parameters', ukf_json]
+                seed_note = (
+                    f" Note: explicit seedsPerVoxel={merged_ukf['seedsPerVoxel']} increases VTK polydata RAM."
+                    if explicit_high_seeds
+                    else ""
+                )
+                ukf_warning = (
+                    f"{subject.subject_id}: UKF estimated RAM ({ukf_orig:g} GiB) exceeds low-memory budget "
+                    f"({ram:.1f} GiB); clamped reservation to {ram:.1f} GiB and {ukf_cpu} thread(s) with "
+                    f"--ukf-parameters={ukf_json}.{seed_note} Native UKF C++ memory is not hard-capped by cohort "
+                    "reservations and may still exceed the budget on multi-shell high-resolution DWI; "
+                    "consider GPU UKF (--useGPU) or CSD/ACT if memory pressure occurs."
+                )
+                plan_warnings.append(ukf_warning)
+                sub_mitigations.append(dict(
+                    stage='ukf',
+                    estimated_memory_gb=ukf_orig,
+                    budget_memory_gb=ram,
+                    clamped_cpu=ukf_cpu,
+                    applied_ukf_parameters=merged_ukf,
+                    applied_args=['--ukf-parameters', ukf_json],
+                    warning=ukf_warning,
+                ))
+            for stage, orig_mem in orig_stage_mem.items():
+                if orig_mem > ram and stage not in {'ukf', 'microstructure_dki', 'microstructure_mkcurve'}:
+                    sub_mitigations.append(dict(
+                        stage=stage,
+                        estimated_memory_gb=orig_mem,
+                        budget_memory_gb=ram,
+                        clamped_cpu=profile[stage]['cpu'],
+                    ))
+            if sub_mitigations:
+                low_memory_mitigations[subject.subject_id] = sub_mitigations
             peak = min(peak, ram)
         selected_peaks.append(peak)
         profiles[subject.subject_id] = profile
@@ -317,6 +427,8 @@ def plan_cohort(subjects, arguments, *, jobs=None, cpu_budget=None, memory_gb=No
     return dict(cpu_budget=cpu, memory_gb=ram, stage_cpus=threads, stage_memory_gb=peak,
                 memory_reservations_fixed=stage_memory_gb is not None,
                 low_memory_mode=bool(allow_low_memory),
+                low_memory_mitigations=low_memory_mitigations,
+                warnings=plan_warnings,
                 gpu_slots=gpu_slots, jobs=count, jobs_automatic=jobs is None,
                 subject_profiles=profiles, input_headers=inputs, selected_stages=sorted(selected),
                 subject_arguments=subject_arguments, tuning_profile=str(tuning_profile) if tuning_profile else None,

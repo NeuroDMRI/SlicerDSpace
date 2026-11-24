@@ -3,6 +3,7 @@ from __future__ import annotations
 from shared.cohort_schedule import scheduled_stage
 
 from dataclasses import replace
+import json
 from pathlib import Path
 
 import numpy as np
@@ -27,11 +28,26 @@ def _feature_folder(cfg: DDSegConfig) -> Path:
     return dti_out
 
 
+def _is_cuda_tdr_or_launch_timeout(exc: BaseException) -> bool:
+    msg = str(exc).lower()
+    markers = (
+        "cudaerrorlaunchtimeout",
+        "the launch timed out and was terminated",
+        "launch timed out",
+        "unspecified launch failure",
+        "cudaerrorlaunchfailure",
+        "cudaerrordevicelost",
+        "device lost",
+    )
+    return any(tok in msg for tok in markers)
+
+
 def predict_model_space(
     stacked: np.ndarray,
     cfg: DDSegConfig,
     *,
     allow_cpu_fallback: bool | None = None,
+    execution_info: dict[str, object] | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Run the three view models on a padded model-orientation stack."""
 
@@ -43,7 +59,11 @@ def predict_model_space(
 
     if allow_cpu_fallback is None:
         allow_cpu_fallback = str(cfg.device or "auto").strip().lower() in {"", "auto"}
-    cfg = replace(cfg, device=resolve_auto_torch_device(cfg.device))
+    resolved_device = resolve_auto_torch_device(cfg.device)
+    cfg = replace(cfg, device=resolved_device)
+    actual_device = cfg.device
+    fallback_from: str | None = None
+    fallback_reason: str | None = None
     views = split_views(stacked)
 
     def _run_on_device(target_device: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -66,11 +86,25 @@ def predict_model_space(
     try:
         pred_axial, pred_sagittal, pred_coronal = _run_on_device(cfg.device)
     except RuntimeError as exc:
-        if not (allow_cpu_fallback and str(cfg.device).startswith(("cuda", "mps")) and is_gpu_oom(exc)):
+        if not (
+            allow_cpu_fallback
+            and str(cfg.device).startswith(("cuda", "mps"))
+            and (is_gpu_oom(exc) or _is_cuda_tdr_or_launch_timeout(exc))
+        ):
             raise
         empty_gpu_cache_safely()
-        print(f"[DDSeg] GPU out of memory on {cfg.device} ({exc}); falling back to CPU", flush=True)
+        fallback_from = cfg.device
+        fallback_reason = str(exc)
+        actual_device = "cpu"
+        print(f"[DDSeg] GPU error/OOM on {cfg.device} ({exc}); falling back to CPU", flush=True)
         pred_axial, pred_sagittal, pred_coronal = _run_on_device("cpu")
+    if execution_info is not None:
+        execution_info["device"] = actual_device
+        execution_info["resolved_device"] = resolved_device
+        if fallback_from is not None:
+            execution_info["device_fallback"] = True
+            execution_info["fallback_from"] = fallback_from
+            execution_info["fallback_reason"] = fallback_reason
     combined = combine_views(pred_axial, pred_sagittal, pred_coronal)
     prob_maps = combined["prob_maps"]
     if not cfg.apply_softmax:
@@ -113,7 +147,8 @@ def _save_like_mask(data: np.ndarray, mask: OrientedMask, path: Path) -> None:
 def run_ddseg(cfg: DDSegConfig) -> None:
     from shared.environment import resolve_auto_torch_device
     requested_device = cfg.device
-    cfg = replace(cfg, device=resolve_auto_torch_device(cfg.device))
+    resolved_device = resolve_auto_torch_device(cfg.device)
+    cfg = replace(cfg, device=resolved_device)
     print(f"[DDSeg] Requested {requested_device}; resolved {cfg.device} in the inference runtime", flush=True)
     cfg.output_folder.mkdir(parents=True, exist_ok=True)
     (cfg.output_folder / "ddseg_qc.json").unlink(missing_ok=True)
@@ -123,7 +158,19 @@ def run_ddseg(cfg: DDSegConfig) -> None:
     feature_maps, geometry = masking_and_normalizing(feature_folder, mask, cfg.parameter_type)
     stacked = stack_features(feature_maps, cfg.parameter_type)
     allow_cpu_fallback = str(requested_device or "auto").strip().lower() in {"", "auto"}
-    labels_model, probs_model = predict_model_space(stacked, cfg, allow_cpu_fallback=allow_cpu_fallback)
+    execution_info: dict[str, object] = {
+        "requested_device": requested_device,
+        "resolved_device": resolved_device,
+        "device": resolved_device,
+    }
+    labels_model, probs_model = predict_model_space(
+        stacked,
+        cfg,
+        allow_cpu_fallback=allow_cpu_fallback,
+        execution_info=execution_info,
+    )
+    executed_device = str(execution_info.get("device") or cfg.device)
+    cfg_for_qc = replace(cfg, device=executed_device)
     labels, prob_maps = restore_disk_orientation(labels_model, probs_model, mask)
 
     outputs = {
@@ -136,10 +183,24 @@ def run_ddseg(cfg: DDSegConfig) -> None:
     _save_like_mask(prob_maps[..., 2], mask, outputs["gm_probability"])
     _save_like_mask(prob_maps[..., 1], mask, outputs["wm_probability"])
     _save_like_mask(prob_maps[..., 3], mask, outputs["csf_probability"])
+    qc_geometry = {**geometry, "feature_dir": Path(feature_folder).resolve().as_posix()}
     write_ddseg_qc_record(
-        cfg,
+        cfg_for_qc,
         labels=labels,
         probability_maps=prob_maps,
         outputs=outputs,
-        geometry={**geometry, "feature_dir": Path(feature_folder).resolve().as_posix()},
+        geometry=qc_geometry,
     )
+    qc_path = cfg.output_folder / "ddseg_qc.json"
+    if qc_path.is_file():
+        record = json.loads(qc_path.read_text(encoding="utf-8"))
+        record["device"] = executed_device
+        record["requested_device"] = requested_device
+        record["resolved_device"] = resolved_device
+        if execution_info.get("fallback_from"):
+            record["device_fallback"] = True
+            record["fallback_from"] = execution_info["fallback_from"]
+            record["fallback_reason"] = execution_info.get("fallback_reason")
+        tmp_path = qc_path.with_suffix(".json.tmp")
+        tmp_path.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        tmp_path.replace(qc_path)

@@ -468,9 +468,67 @@ def _fsl_gradient_table(raw):
     return bvals, bvecs
 
 
-def signature(raw, options, executable, converter=None):
+def _normalize_ukf_device_request(device: str | None) -> str:
+    req = str(device or "auto").strip().lower() or "auto"
+    if req.startswith("auto"):
+        return "auto"
+    if req.startswith("cuda"):
+        return req.split()[0]
+    return req
+
+
+def _ukf_binary_has_compiled_cuda(binary: Path | str | None) -> bool | None:
+    """Return False when ``binary`` is demonstrably a CPU-only UKF build despite declaring --useGPU XML.
+
+    Returns True when metadata explicitly confirms CUDA support, False when metadata or
+    native binary markers prove a CPU-only build, and None when unknown (e.g. test scripts).
+    """
+    if not binary:
+        return None
+    try:
+        path = Path(binary).expanduser().resolve()
+    except OSError:
+        path = Path(binary)
+    for meta_path in (path.parent / "runtime.json", path.parent.parent / "runtime.json"):
+        try:
+            if meta_path.is_file():
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                if isinstance(meta, dict):
+                    for key in ("cuda", "cuda_enabled", "gpu_enabled", "use_cuda"):
+                        if key in meta and isinstance(meta[key], bool):
+                            return bool(meta[key])
+                    backend = str(meta.get("backend") or meta.get("compute_backend") or "").strip().lower()
+                    if backend == "cpu":
+                        return False
+                    if backend in {"cuda", "gpu"}:
+                        return True
+        except Exception:
+            pass
+    try:
+        if not path.is_file():
+            return None
+        with path.open("rb") as fh:
+            magic = fh.read(4)
+        is_native_binary = (
+            magic[:2] == b"MZ"
+            or magic == b"\x7fELF"
+            or magic in (b"\xfe\xed\xfa\xce", b"\xce\xfa\xed\xfe", b"\xfe\xed\xfa\xcf", b"\xcf\xfa\xed\xfe", b"\xca\xfe\xba\xbe")
+        )
+        if not is_native_binary:
+            return None
+        # Upstream ukftractography_gpu compiles this literal only in the `#else` branch of `#ifdef UKF_USE_CUDA`.
+        data = path.read_bytes()
+        if b"this build has no CUDA support" in data or b"built without CUDA" in data:
+            return False
+    except OSError:
+        return None
+    return None
+
+
+def signature(raw, options, executable, converter=None, *, device="auto"):
     converter = converter or resolve_executable(name="DWIConvert")
     gpu_opts = parse_gpu_options(options)
+    req = _normalize_ukf_device_request(device)
     payload = dict(
         version=5,
         subject_id=raw.subject_id,
@@ -488,7 +546,9 @@ def signature(raw, options, executable, converter=None):
         max_excluded_mask_fraction=MAX_EXCLUDED_MASK_FRACTION,
     )
     gpu_sig = {}
-    if "useGPU" in gpu_opts and gpu_opts["useGPU"] is False:
+    if gpu_opts.get("useGPU") is True or req.startswith("cuda"):
+        gpu_sig["useGPU"] = True
+    elif "useGPU" in gpu_opts and gpu_opts["useGPU"] is False:
         gpu_sig["useGPU"] = False
     if gpu_opts.get("gpuPrecision", 0) != 0:
         gpu_sig["gpuPrecision"] = gpu_opts["gpuPrecision"]
@@ -549,16 +609,29 @@ def _ukf_signature_matches(recorded, expected) -> bool:
     )
 
 
-def current(raw, directory, options=None, executable=None, converter=None, *, _signature=None):
+def current(raw, directory, options=None, executable=None, converter=None, *, device="auto", _signature=None):
     try:
         products = paths(raw.subject_id, directory)
         record = json.loads(products["manifest"].read_text(encoding="utf-8"))
         expected_signature = (
             _signature
             if _signature is not None
-            else signature(raw, options, resolve_executable(executable), resolve_executable(converter, name="DWIConvert"))
+            else signature(
+                raw,
+                options,
+                resolve_executable(executable),
+                resolve_executable(converter, name="DWIConvert"),
+                device=device,
+            )
         )
         if record["status"] != "completed" or not _ukf_signature_matches(record.get("signature"), expected_signature):
+            return False
+        gpu_opts = parse_gpu_options(options)
+        req = _normalize_ukf_device_request(device)
+        rec_gpu_enabled = bool((record.get("gpu") or {}).get("enabled"))
+        if (req.startswith("cuda") or gpu_opts.get("useGPU") is True) and not rec_gpu_enabled:
+            return False
+        if (req in {"cpu", "mps"} or gpu_opts.get("useGPU") is False) and rec_gpu_enabled:
             return False
         qc = json.loads(products["qc"].read_text(encoding="utf-8"))
         return qc.get("automatic_qc_passed") is True and all(
@@ -639,6 +712,71 @@ def _is_optimized_standalone_executable(executable: Path | str | None) -> bool:
     return False
 
 
+def _host_memory_snapshot() -> dict[str, float | None]:
+    """Return cross-OS host memory snapshot (total, available, Windows commit headroom) in GiB."""
+    try:
+        from shared.hardware_adapt import query_host_memory_snapshot
+
+        return query_host_memory_snapshot()
+    except Exception:
+        total = _host_ram_gib()
+        return {
+            "total_ram_gib": total,
+            "available_ram_gib": None,
+            "commit_limit_gib": None,
+            "commit_total_gib": None,
+            "commit_available_gib": None,
+            "swap_total_gib": None,
+            "swap_free_gib": None,
+            "effective_available_ram_gib": None,
+        }
+
+
+def _estimate_ukf_peak_ram_gib(
+    inputs: dict | None,
+    *,
+    executable: Path | str | None = None,
+    selected: UKFParameters | None = None,
+) -> float:
+    """Estimate peak host RAM/commit working set (GiB) for CPU UKF loading + VTK output."""
+    inp = inputs or {}
+    volumes = int(inp.get("volumes") or 0)
+    voxels = int(inp.get("effective_brain_voxels") or inp.get("brain_voxels") or 0)
+    if volumes <= 0 or voxels <= 0:
+        return 0.0
+    seeds = max(1, int(getattr(selected, "seedsPerVoxel", 1) or 1))
+    dwi_scale = (volumes / 288.0) * (voxels / 950_000.0)
+    vox_scale = voxels / 950_000.0
+    if _is_optimized_standalone_executable(executable):
+        base = 0.5 if voxels >= 50_000 else 0.1
+        return max(base, base + 6.5 * dwi_scale + 2.0 * vox_scale * seeds)
+    base = 1.0 if voxels >= 50_000 else 0.1
+    return max(base, base + 19.0 * dwi_scale + 5.0 * vox_scale * seeds)
+
+
+def _resolve_ukf_memory_inputs(
+    *,
+    ram_gib: float | None,
+    available_ram_gib: float | None,
+    commit_available_gib: float | None,
+) -> tuple[float | None, float | None, float | None, float | None]:
+    """Resolve ``(host_ram, available_ram, commit_available, effective_available)`` in GiB."""
+    if ram_gib is None and available_ram_gib is None and commit_available_gib is None:
+        snap = _host_memory_snapshot()
+        host_ram = snap.get("total_ram_gib")
+        if host_ram is None:
+            host_ram = _host_ram_gib()
+        avail_ram = snap.get("available_ram_gib")
+        commit_avail = snap.get("commit_available_gib")
+    else:
+        host_ram = float(ram_gib) if ram_gib is not None else _host_ram_gib()
+        avail_ram = float(available_ram_gib) if available_ram_gib is not None else None
+        commit_avail = float(commit_available_gib) if commit_available_gib is not None else None
+    avail_parts = [v for v in (avail_ram, commit_avail) if v is not None]
+    effective_avail = min(avail_parts) if avail_parts else None
+    return host_ram, avail_ram, commit_avail, effective_avail
+
+
 def resolve_adaptive_cpu_num_threads(
     selected: UKFParameters,
     inputs: dict | None,
@@ -646,23 +784,31 @@ def resolve_adaptive_cpu_num_threads(
     use_gpu: bool,
     executable: Path | str | None = None,
     ram_gib: float | None = None,
+    available_ram_gib: float | None = None,
+    commit_available_gib: float | None = None,
     cpu_count: int | None = None,
     platform_name: str | None = None,
     is_apple_silicon: bool | None = None,
 ) -> int:
     """Resolve effective CPU ``--numThreads`` at execution time without mutating cache keys.
 
-    Preserves explicit user overrides, GPU runs, cohort-scheduled runs, and high-RAM (>48 GiB)
-    Linux/Windows servers unchanged, while capping memory-heavy CPU UKF runs on modest-RAM
-    workstations and unified-memory macOS hosts to prevent OOM/swap thrashing and E-core stalls.
+    Preserves explicit user overrides, GPU runs, cohort-scheduled runs, and high-RAM (>48 GiB
+    total and >32 GiB available/commit headroom) Linux/Windows servers unchanged, while capping
+    memory-heavy CPU UKF runs on modest-RAM workstations, commit/RAM-pressured hosts, and
+    unified-memory macOS hosts to prevent OOM/swap thrashing and E-core stalls.
     Bundled standalone optimized UKF binaries eliminate per-step heap allocations and flat-line
-    peak RSS across thread counts, so Windows/Linux hosts with >12 GiB RAM can use all cores.
+    peak RSS across thread counts, so idle Windows/Linux hosts with >12 GiB RAM and comfortable
+    available/commit headroom can use all cores.
     """
     if use_gpu or int(selected.numThreads) != -1 or os.environ.get("SLICERDSPACE_COHORT_SCHEDULE"):
         return int(selected.numThreads)
 
     plat = (sys.platform if platform_name is None else str(platform_name)).lower()
-    host_ram = _host_ram_gib() if ram_gib is None else float(ram_gib)
+    host_ram, _avail_ram, _commit_avail, effective_avail = _resolve_ukf_memory_inputs(
+        ram_gib=ram_gib,
+        available_ram_gib=available_ram_gib,
+        commit_available_gib=commit_available_gib,
+    )
     if cpu_count is None:
         try:
             cpus = max(1, len(os.sched_getaffinity(0)))
@@ -689,8 +835,12 @@ def resolve_adaptive_cpu_num_threads(
     else:
         apple_silicon = bool(is_apple_silicon)
 
-    # High-RAM Linux/Windows servers: zero regression, keep author automatic (-1) unless stage-capped.
-    if plat != "darwin" and (host_ram is None or host_ram > 48.0):
+    # High-RAM Linux/Windows servers with ample available/commit headroom: zero regression.
+    if (
+        plat != "darwin"
+        and (host_ram is None or host_ram > 48.0)
+        and (effective_avail is None or effective_avail > 32.0)
+    ):
         return min(cpus, stage_budget) if stage_budget is not None else -1
 
     inp = inputs or {}
@@ -698,6 +848,7 @@ def resolve_adaptive_cpu_num_threads(
     voxels = int(inp.get("effective_brain_voxels") or inp.get("brain_voxels") or 0)
     heavy = volumes >= 120 or voxels >= 450_000
     optimized_standalone = _is_optimized_standalone_executable(executable)
+    est_peak = _estimate_ukf_peak_ram_gib(inputs, executable=executable, selected=selected)
 
     cap: int | None = None
     if heavy and host_ram is not None and host_ram <= 48.0:
@@ -715,6 +866,25 @@ def resolve_adaptive_cpu_num_threads(
                 cap = min(cpus, 6)
             else:
                 cap = min(cpus, 8)
+
+    # Factor in current available physical RAM and Windows commit headroom so hosts whose
+    # memory is already consumed by other applications throttle conservatively instead of
+    # spawning unbounded threads into swap thrashing or VTK allocation failure.
+    if effective_avail is not None and (heavy or (est_peak >= 1.0 and effective_avail < est_peak * 1.5)):
+        headroom_ratio = effective_avail / max(est_peak, 1.0)
+        avail_cap: int | None = None
+        if effective_avail <= 6.0 or headroom_ratio < 0.75:
+            avail_cap = min(cpus, 2 if optimized_standalone else 1)
+        elif effective_avail <= 10.0 or headroom_ratio < 1.15:
+            avail_cap = min(cpus, 4 if optimized_standalone else 2)
+        elif effective_avail <= 16.0 and (not optimized_standalone or headroom_ratio < 1.5):
+            avail_cap = min(cpus, 6 if optimized_standalone else 4)
+        elif not optimized_standalone and effective_avail <= 24.0:
+            avail_cap = min(cpus, 4)
+        elif not optimized_standalone and effective_avail <= 36.0:
+            avail_cap = min(cpus, 6)
+        if avail_cap is not None:
+            cap = avail_cap if cap is None else min(cap, avail_cap)
 
     if plat == "darwin":
         mac_cap: int | None = None
@@ -745,20 +915,64 @@ def _ukf_cpu_memory_runtime_warning(
     *,
     use_gpu: bool,
     executable: Path | str | None = None,
+    selected: UKFParameters | None = None,
     ram_gib: float | None = None,
+    available_ram_gib: float | None = None,
+    commit_available_gib: float | None = None,
 ) -> str | None:
-    """Warn when multi-shell high-resolution UKF runs on CPU under tight RAM."""
+    """Warn when CPU UKF runs under tight installed RAM, available RAM, or Windows commit headroom."""
     if use_gpu:
         return None
     volumes = int(inputs.get("volumes") or 0)
     shells = inputs.get("approximate_shells") or ()
     voxels = int(inputs.get("effective_brain_voxels") or inputs.get("brain_voxels") or 0)
+    host_ram, avail_ram, commit_avail, effective_avail = _resolve_ukf_memory_inputs(
+        ram_gib=ram_gib,
+        available_ram_gib=available_ram_gib,
+        commit_available_gib=commit_available_gib,
+    )
+    est_peak = _estimate_ukf_peak_ram_gib(inputs, executable=executable, selected=selected)
+    optimized_standalone = _is_optimized_standalone_executable(executable)
+
+    # Dynamic available RAM / Windows commit headroom guard (triggers even on 32-64 GiB hosts
+    # when other apps have consumed most physical RAM or Windows commit charge).
+    if effective_avail is not None and est_peak >= 1.0 and effective_avail < est_peak * 1.25:
+        mem_parts: list[str] = []
+        if host_ram is not None:
+            mem_parts.append(f"{host_ram:.1f} GiB installed RAM")
+        if avail_ram is not None:
+            mem_parts.append(f"{avail_ram:.1f} GiB available RAM")
+        if commit_avail is not None:
+            mem_parts.append(f"{commit_avail:.1f} GiB Windows commit headroom")
+        mem_summary = ", ".join(mem_parts) if mem_parts else f"{effective_avail:.1f} GiB effective headroom"
+        commit_tight = commit_avail is not None and commit_avail < est_peak * 1.15
+        if commit_tight:
+            risk = (
+                "Windows commit headroom is critically tight relative to UKF's working set; "
+                "VTK tractogram output allocation may fail (std::bad_alloc) or trigger severe pagefile/swap thrashing."
+            )
+            action = (
+                "Close memory-heavy applications, increase the Windows paging file / commit limit, "
+                "use GPU UKF (--useGPU) or CSD/ACT, or cap UKF output density/threads via "
+                '--ukf-parameters \'{"numThreads": 2, "recordLength": 1.8}\'.'
+            )
+        else:
+            risk = "Host available memory is tight relative to UKF's working set and may trigger swap thrashing or OOM."
+            action = (
+                "Close memory-heavy applications, use GPU UKF (--useGPU) or CSD/ACT, or pass conservative "
+                '--ukf-parameters (e.g. \'{"numThreads": 2}\' or a larger "recordLength").'
+            )
+        return (
+            f"CPU UKF memory headroom warning ({volumes} volumes, {voxels:,} mask voxels; "
+            f"estimated peak ~{est_peak:.1f} GiB vs {mem_summary}): {risk} "
+            f"Adaptive --numThreads throttling is applied automatically when unset (-1). {action}"
+        )
+
     if volumes < 150 or len(shells) < 2 or voxels < 500_000:
         return None
-    host_ram = _host_ram_gib() if ram_gib is None else ram_gib
     if host_ram is None:
         return None
-    if _is_optimized_standalone_executable(executable):
+    if optimized_standalone:
         if host_ram > 16.0:
             return None
         return (
@@ -1155,13 +1369,16 @@ def _cuda_runtime_available_for_ukf(binary: Path) -> bool:
 
 def resolve_ukf_gpu_dispatch(device: str, gpu_opts: dict, schema, binary: Path) -> tuple[bool, int, int]:
     """Decide whether to pass ``--useGPU --gpuDevice ... --gpuPrecision ...`` to UKF CLI."""
-    req = str(device or "auto").strip().lower() or "auto"
-    if req.startswith("auto"):
-        req = "auto"
-    elif req.startswith("cuda"):
-        req = req.split()[0]
-    supports_gpu = schema_supports_gpu(schema)
-    if gpu_opts.get("useGPU") is True and not supports_gpu:
+    req = _normalize_ukf_device_request(device)
+    compiled_cuda = _ukf_binary_has_compiled_cuda(binary)
+    supports_gpu = schema_supports_gpu(schema) and (compiled_cuda is not False)
+    explicit_gpu = gpu_opts.get("useGPU") is True or req.startswith("cuda")
+    if explicit_gpu and not supports_gpu:
+        if compiled_cuda is False:
+            raise RuntimeError(
+                f"Installed UKF CLI ({binary}) is a CPU-only build without CUDA support (-DUKF_USE_CUDA=ON); "
+                "install a CUDA-enabled UKF build or run with device='cpu'/'auto'."
+            )
         raise RuntimeError(
             "Installed UKF CLI lacks --useGPU; install NeuroDMRI/ukftractography_gpu or omit useGPU."
         )
@@ -1528,8 +1745,8 @@ def run_ukf(raw, directory, *, options=None, executable=None, converter=None, de
     converter = resolve_executable(converter, name="DWIConvert")
     products = paths(raw.subject_id, Path(directory).expanduser().resolve())
     products["manifest"].parent.mkdir(parents=True, exist_ok=True)
-    before = signature(raw, options, binary, converter)
-    if not force and current(raw, directory, options, binary, converter, _signature=before):
+    before = signature(raw, options, binary, converter, device=device)
+    if not force and current(raw, directory, options, binary, converter, device=device, _signature=before):
         return dict(status="cached", outputs=products)
     started = time.monotonic()
     env = ukf_gpu_process_environment(merged_startup_environment(build_cli_environment(str(binary))), binary)
@@ -1547,6 +1764,7 @@ def run_ukf(raw, directory, *, options=None, executable=None, converter=None, de
         gpu_precision=gpu_precision,
     )
     inputs, effective = _validated_inputs(raw)
+    mem_snapshot = _host_memory_snapshot()
     eff_threads = resolve_adaptive_cpu_num_threads(selected, inputs, use_gpu=use_gpu, executable=binary)
     execution_selected = replace(selected, numThreads=eff_threads) if eff_threads != selected.numThreads else selected
     record = dict(
@@ -1558,6 +1776,10 @@ def run_ukf(raw, directory, *, options=None, executable=None, converter=None, de
         schema_probe_exit_code=probe_code,
         gpu=dict(enabled=use_gpu, device=gpu_device if use_gpu else None, precision=gpu_precision if use_gpu else None),
         effective_cpu_num_threads=None if use_gpu else eff_threads,
+        resource_preflight=dict(
+            estimated_peak_ram_gib=round(_estimate_ukf_peak_ram_gib(inputs, executable=binary, selected=execution_selected), 2),
+            host_memory_snapshot=mem_snapshot,
+        ),
         commands=[],
         started_at=datetime.now(timezone.utc).isoformat(),
     )
@@ -1574,16 +1796,26 @@ def run_ukf(raw, directory, *, options=None, executable=None, converter=None, de
         record["effective_mask"] = dict(path=str(products["effective_mask"]),
                                         sha256=digest(products["effective_mask"]))
         save()
-        cpu_mem_warning = _ukf_cpu_memory_runtime_warning(inputs, use_gpu=use_gpu, executable=binary)
+        cpu_mem_warning = _ukf_cpu_memory_runtime_warning(
+            inputs, use_gpu=use_gpu, executable=binary, selected=execution_selected
+        )
         if cpu_mem_warning:
             inputs["warnings"] = [*inputs["warnings"], cpu_mem_warning]
         if log:
             if not use_gpu and eff_threads != selected.numThreads:
                 ram_val = _host_ram_gib()
                 ram_note = f" on {ram_val:.1f} GiB host RAM" if ram_val is not None else ""
+                avail_val = mem_snapshot.get("available_ram_gib")
+                commit_val = mem_snapshot.get("commit_available_gib")
+                headroom_bits = []
+                if avail_val is not None:
+                    headroom_bits.append(f"{avail_val:.1f} GiB avail")
+                if commit_val is not None:
+                    headroom_bits.append(f"{commit_val:.1f} GiB commit avail")
+                headroom_note = f" ({', '.join(headroom_bits)})" if headroom_bits else ""
                 log(
                     f"[UKF] Adaptive CPU thread cap: --numThreads {eff_threads} "
-                    f"(default -1{ram_note}, {inputs.get('volumes', 0)} volumes, "
+                    f"(default -1{ram_note}{headroom_note}, {inputs.get('volumes', 0)} volumes, "
                     f"{inputs.get('effective_brain_voxels', 0):,} mask voxels)"
                 )
             for warning in inputs['warnings']:
@@ -1677,10 +1909,18 @@ def run_ukf(raw, directory, *, options=None, executable=None, converter=None, de
                     save()
                 elif use_gpu:
                     gpu_log = log_path.read_text(encoding="utf-8", errors="replace").lower()
-                    if "falling back" in gpu_log or (
+                    cpu_fallback_markers = (
+                        "falling back",
+                        "this build has no cuda support",
+                        "built without cuda",
+                        "using cpu",
+                    )
+                    if any(marker in gpu_log for marker in cpu_fallback_markers) or (
                         binary.name.lower().startswith(("ukf-gpu", "ukftractography_gpu"))
                         and "tractography done on device" not in gpu_log
                     ):
+                        record["gpu"] = dict(enabled=False, device=None, precision=None, fallback_to_cpu=True)
+                        save()
                         raise RuntimeError("UKF GPU execution was not confirmed or fell back to CPU; see " + str(log_path))
             # Release multi-GB intermediate NRRD buffers immediately after UKF completes so
             # TRK export does not require double scratch disk space on modest system drives.
@@ -1698,7 +1938,7 @@ def run_ukf(raw, directory, *, options=None, executable=None, converter=None, de
                 raise RuntimeError("UKF geometry/native-mask QC failed; see " + str(failed))
             export_trk(tracts, raw.dwi_path, work / "tracts.trk", _polydata_bundle=polydata_bundle)
             qc["vtk_trk_verified_streamlines"] = verify_trk(tracts, work / "tracts.trk", _polydata_bundle=polydata_bundle)
-            if signature(raw, options, binary, converter) != before:
+            if signature(raw, options, binary, converter, device=device) != before:
                 raise RuntimeError("UKF inputs or executable changed during execution")
             if use_ascii_work:
                 copy_file_atomic(tracts, products["tractogram"])

@@ -1339,7 +1339,32 @@ def _compute_maps(config: DkiConfig, paths: dict[str, Path], log):
     }
 
 
-@scheduled_stage(lambda config: 'microstructure_mkcurve' if _method(config).startswith('MKCURVE') else 'microstructure_dki')
+def _dki_uses_gpu(*args, **kwargs) -> bool:
+    """Return True when MK-Curve Python resolves to a CUDA device; plain DKI WLS is CPU-only."""
+    config = kwargs.get("config") or (args[0] if args else None)
+    if config is None:
+        return False
+    try:
+        method = _method(config)
+    except Exception:
+        return False
+    if not method.startswith("MKCURVE") or method == "MKCURVE_MATLAB":
+        return False
+    requested = str(getattr(config, "device", "cpu") or "cpu").strip().lower()
+    if requested in {"cpu", "mps"}:
+        return False
+    try:
+        from microstructure.mkcurve import _resolve_mkcurve_device
+
+        return _resolve_mkcurve_device(requested).startswith("cuda")
+    except Exception:
+        return False
+
+
+@scheduled_stage(
+    lambda config: 'microstructure_mkcurve' if _method(config).startswith('MKCURVE') else 'microstructure_dki',
+    gpu=_dki_uses_gpu,
+)
 @dki_threads
 def run_dki(config: DkiConfig, log: Optional[Callable[[str], None]] = None) -> DkiResult:
     """Fit only eligible acquisitions, with bounded signal chunks and disk-backed maps."""

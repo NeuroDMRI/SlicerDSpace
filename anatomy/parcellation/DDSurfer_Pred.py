@@ -7,6 +7,8 @@ import logging
 import os
 import copy
 import gc
+import shutil
+import tempfile
 
 os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 if sys.platform == "win32":
@@ -56,12 +58,14 @@ from .data_loader.load_neuroimaging_data import (
 from .models.networks import FastSurferCNN_Fuse_Unet_v3_extended
 from .device import logical_cuda_index
 from shared.hardware_adapt import (
+    GIB,
     empty_gpu_cache_safely,
     enable_cpu_flush_denormal,
     is_gpu_oom,
     optimal_cpu_torch_threads,
     query_cuda_free_total_bytes,
     query_gpu_free_total_bytes,
+    query_host_available_ram_bytes,
     should_enable_cudnn_benchmark,
     zero_subnormal_module_weights,
 )
@@ -219,7 +223,128 @@ def _forward_fused_logits(model, sub_batch, *, use_cuda, device, allow_cpu_fallb
         return out_list[0].detach().contiguous().cpu()
 
 
-def run_network(img_filename, orig_data, prediction_probability, plane, ckpts, params_model, model, logger):
+_DDPARCEL_PROB_MEMMAP_RAM_THRESHOLD_BYTES = 8 * GIB
+_FP16_SAFE_LIMIT = 65504.0
+
+
+class _PredictionProbabilityBuffer:
+    """Host probability accumulation volume using float16 RAM (~2.56 GiB) or disk-backed memmap under tight RAM."""
+
+    def __init__(self, tensor, *, mode: str, memmap_array=None, backing_dir=None):
+        self.tensor = tensor
+        self.mode = mode
+        self._memmap_array = memmap_array
+        self._backing_dir = backing_dir
+
+    @property
+    def nbytes(self) -> int:
+        if self.tensor is None:
+            return 0
+        return int(self.tensor.element_size()) * int(self.tensor.numel())
+
+    def close(self) -> None:
+        self.tensor = None
+        if self._memmap_array is not None:
+            mm = getattr(self._memmap_array, "_mmap", None)
+            self._memmap_array = None
+            if mm is not None:
+                try:
+                    mm.close()
+                except Exception:
+                    pass
+        gc.collect()
+        if self._backing_dir:
+            shutil.rmtree(self._backing_dir, ignore_errors=True)
+            self._backing_dir = None
+
+
+def _allocate_prediction_probability(
+    shape,
+    *,
+    avail_ram_bytes=None,
+    temp_root=None,
+    logger=None,
+) -> _PredictionProbabilityBuffer:
+    """Allocate CPU probability buffer in float16 (~2.56 GiB vs ~5.13 GiB float32), using disk-backed memmap under tight host RAM."""
+    avail = query_host_available_ram_bytes() if avail_ram_bytes is None else int(avail_ram_bytes)
+    fp16_bytes = int(np.prod(shape, dtype=np.int64)) * 2
+    use_memmap = avail > 0 and (
+        avail < _DDPARCEL_PROB_MEMMAP_RAM_THRESHOLD_BYTES
+        or fp16_bytes > int(avail * 0.40)
+    )
+    if use_memmap:
+        backing_dir = None
+        mm = None
+        try:
+            base_dir = temp_root if (temp_root and os.path.isdir(temp_root)) else None
+            backing_dir = tempfile.mkdtemp(prefix=".ddparcel_prob_", dir=base_dir)
+            backing_path = os.path.join(backing_dir, "pred_prob_fp16.npy")
+            mm = np.lib.format.open_memmap(backing_path, mode="w+", dtype=np.float16, shape=tuple(shape))
+            tensor = torch.from_numpy(mm)
+            if logger is not None:
+                logger.info(
+                    "  -Allocated disk-backed float16 probability buffer (%0.2f GiB on disk, avail host RAM=%0.2f GiB)",
+                    fp16_bytes / float(GIB),
+                    avail / float(GIB),
+                )
+            return _PredictionProbabilityBuffer(tensor, mode="memmap_fp16", memmap_array=mm, backing_dir=backing_dir)
+        except Exception as exc:
+            if mm is not None:
+                try:
+                    mm._mmap.close()
+                except Exception:
+                    pass
+            if backing_dir:
+                shutil.rmtree(backing_dir, ignore_errors=True)
+            if logger is not None:
+                logger.warning("  -Memmap probability buffer unavailable (%s); falling back to host float16 tensor", exc)
+    tensor = torch.zeros(tuple(shape), dtype=torch.float16)
+    if logger is not None:
+        logger.info(
+            "  -Allocated host float16 probability buffer (%0.2f GiB RAM vs %0.2f GiB float32)",
+            fp16_bytes / float(GIB),
+            (fp16_bytes * 2) / float(GIB),
+        )
+    return _PredictionProbabilityBuffer(tensor, mode="ram_fp16")
+
+
+def _accumulate_prob_slice(dst_slice: torch.Tensor, contrib: torch.Tensor, *, overwrite: bool = False) -> None:
+    """Accumulate float32 view logits into a float16 or float32 probability slice."""
+    if dst_slice.dtype == torch.float16:
+        val = contrib.float() if overwrite else (dst_slice.float() + contrib.float())
+        dst_slice.copy_(val.clamp_(-_FP16_SAFE_LIMIT, _FP16_SAFE_LIMIT).to(torch.float16))
+    elif overwrite:
+        dst_slice.copy_(contrib)
+    else:
+        dst_slice.add_(contrib)
+
+
+def _argmax_prediction_probability(prediction_probability: torch.Tensor, *, chunk_slices: int = 16) -> np.ndarray:
+    """Compute class argmax along axis 3 in bounded slices along axis 0 without duplicating the 4D volume."""
+    vol = prediction_probability[0] if prediction_probability.ndim == 5 else prediction_probability
+    nx, ny, nz = int(vol.shape[0]), int(vol.shape[1]), int(vol.shape[2])
+    out = np.empty((nx, ny, nz), dtype=np.int16)
+    step = max(1, int(chunk_slices))
+    for x0 in range(0, nx, step):
+        x1 = min(nx, x0 + step)
+        _, idx = torch.max(vol[x0:x1], 3)
+        out[x0:x1] = idx.numpy()
+    return out
+
+
+def run_network(
+    img_filename,
+    orig_data,
+    prediction_probability,
+    plane,
+    ckpts,
+    params_model,
+    model,
+    logger,
+    *,
+    overwrite: bool = False,
+    argmax_out=None,
+):
 
     # Set up DataLoader
     test_dataset = OrigDataThickSlices_Fused_Input(img_filename, orig_data, plane=plane, transforms=transforms.Compose([ToTensorTest()]))
@@ -357,18 +482,28 @@ def run_network(img_filename, orig_data, prediction_probability, plane, ckpts, p
                 start_index_tmp = start_index
                 if plane == "Axial":
                     temp = temp.permute(3, 0, 2, 1)
-                    prediction_probability[t_idx, :, start_index_tmp:start_index_tmp + temp.shape[1], :, :] += torch.mul(temp.cpu(), 0.4)
+                    dst = prediction_probability[t_idx, :, start_index_tmp:start_index_tmp + temp.shape[1], :, :]
+                    _accumulate_prob_slice(dst, torch.mul(temp.cpu(), 0.4), overwrite=overwrite)
                     start_index_tmp += temp.shape[1]
 
                 elif plane == "Coronal":
                     temp = temp.permute(2, 3, 0, 1)
-                    prediction_probability[t_idx, :, :, start_index_tmp:start_index_tmp + temp.shape[2], :] += torch.mul(temp.cpu(), 0.4)
+                    dst = prediction_probability[t_idx, :, :, start_index_tmp:start_index_tmp + temp.shape[2], :]
+                    _accumulate_prob_slice(dst, torch.mul(temp.cpu(), 0.4), overwrite=overwrite)
                     start_index_tmp += temp.shape[2]
 
                 else:
                     temp = map_prediction_sagittal2full(temp).permute(0, 3, 2, 1)
-                    prediction_probability[t_idx, start_index_tmp:start_index_tmp + temp.shape[0], :, :, :] += torch.mul(temp.cpu(), 0.2)
-                    start_index_tmp += temp.shape[0]
+                    s0, s1 = start_index_tmp, start_index_tmp + temp.shape[0]
+                    dst = prediction_probability[t_idx, s0:s1, :, :, :]
+                    contrib = torch.mul(temp.cpu(), 0.2)
+                    if argmax_out is not None and t_idx == 0:
+                        combined = contrib.float() if overwrite else (dst.float() + contrib.float())
+                        _, slice_idx = torch.max(combined, 3)
+                        argmax_out[s0:s1] = slice_idx.numpy()
+                    else:
+                        _accumulate_prob_slice(dst, contrib, overwrite=overwrite)
+                    start_index_tmp = s1
 
             start_index = start_index_tmp
 
@@ -461,8 +596,16 @@ def fastsurfercnn(img_filename, save_as, logger, args):
     }
     logger.info("Cuda available: {}, # Available GPUS: {}, Cuda user disabled (--no_cuda flag): {}, --> Using device: {} (batch_size={})".format(torch.cuda.is_available(), torch.cuda.device_count(),  args.no_cuda, device, effective_batch_size))
 
-    # Set up tensor to hold probabilities
-    pred_prob = torch.zeros((1, 256, 256, 256, args.num_classes_ax_cor), dtype=torch.float)
+    # Set up host probability buffer in float16 (~2.56 GiB vs ~5.13 GiB float32), automatically
+    # switching to disk-backed memmap when available host RAM is tight (< 8 GiB).
+    save_parent = os.path.dirname(os.path.abspath(save_as)) if save_as else None
+    prob_buffer = _allocate_prediction_probability(
+        (1, 256, 256, 256, args.num_classes_ax_cor),
+        temp_root=save_parent,
+        logger=logger,
+    )
+    pred_prob = prob_buffer.tensor
+    pred_labels = np.empty((256, 256, 256), dtype=np.int16)
 
     orig_data = []
     for idx in range(len(img_filename)):
@@ -473,7 +616,7 @@ def fastsurfercnn(img_filename, save_as, logger, args):
 
     model = None
     try:
-        # Axial
+        # Axial (first view: overwrite directly instead of read-modify-write)
         params_network["num_classes"] = args.num_classes_ax_cor
         params_network["num_channels"] = args.num_channels
         params_network["backbone_model"] = args.backbone_axial_path
@@ -482,7 +625,17 @@ def fastsurfercnn(img_filename, save_as, logger, args):
         if model_parallel:
             model = nn.DataParallel(model)
         start = time.time()
-        pred_prob = run_network(img_filename, orig_data, pred_prob, "Axial", args.network_axial_path, params_model, model, logger)
+        pred_prob = run_network(
+            img_filename,
+            orig_data,
+            pred_prob,
+            "Axial",
+            args.network_axial_path,
+            params_model,
+            model,
+            logger,
+            overwrite=True,
+        )
         logger.info("Axial View Tested in {:0.4f} seconds".format(time.time() - start))
         del model
         model = None
@@ -497,14 +650,14 @@ def fastsurfercnn(img_filename, save_as, logger, args):
         if model_parallel:
             model = nn.DataParallel(model)
         start = time.time()
-        pred_prob = run_network(img_filename,  orig_data, pred_prob, "Coronal", args.network_coronal_path, params_model, model, logger)
+        pred_prob = run_network(img_filename, orig_data, pred_prob, "Coronal", args.network_coronal_path, params_model, model, logger)
         logger.info("Coronal View Tested in {:0.4f} seconds".format(time.time() - start))
         del model
         model = None
         empty_gpu_cache_safely()
         gc.collect()
 
-        # Sagittal
+        # Sagittal (final view: fuse in FP32 and stream argmax directly into pred_labels)
         params_network["num_classes"] = args.num_classes_sag
         params_network["num_channels"] = args.num_channels
         params_network["backbone_model"] = args.backbone_sagittal_path
@@ -512,13 +665,25 @@ def fastsurfercnn(img_filename, save_as, logger, args):
         if model_parallel:
             model = nn.DataParallel(model)
         start = time.time()
-        pred_prob = run_network(img_filename, orig_data, pred_prob, "Sagittal", args.network_sagittal_path, params_model, model, logger)
+        pred_prob = run_network(
+            img_filename,
+            orig_data,
+            pred_prob,
+            "Sagittal",
+            args.network_sagittal_path,
+            params_model,
+            model,
+            logger,
+            argmax_out=pred_labels,
+        )
         logger.info("Sagittal View Tested in {:0.4f} seconds".format(time.time() - start))
         background_mask = orig_data[0] == -4
     finally:
         if model is not None:
             del model
         del orig_data
+        pred_prob = None
+        prob_buffer.close()
         if prev_torch_threads is not None:
             torch.set_num_threads(prev_torch_threads)
         if use_cuda or use_mps:
@@ -526,23 +691,11 @@ def fastsurfercnn(img_filename, save_as, logger, args):
         gc.collect()
 
 
-    # # 保存 pred_prob 为 numpy 数组，文件名包含 subject_id
-    # subject_id = args.subject_id  # 获取命令行传入的 subject_id
-    # file_name = f"/data05/chengjin/DDsurfer/DDSurfer-pre-release/draft/pred_prob_{subject_id}.npy"
-    # np.save(file_name, pred_prob.cpu().numpy())
-
-    # # 修改日志信息
-    # logger.info(f"Saved pred_prob to '{file_name}'")
-
-
-
     # Postprocessing
     # Get predictions and map to freesurfer label space
     logger.info("Starting DDSurfer postprocessing and label remapping.")
-    pred_prob = pred_prob[0]
-    _, pred_prob = torch.max(pred_prob, 3)
-    pred_prob = pred_prob.numpy()
-    pred_prob = map_label2aparc_aseg(pred_prob)
+    pred_prob = map_label2aparc_aseg(pred_labels)
+    del pred_labels
 
     print(f" pred_prob 1 : {pred_prob.shape}")
 

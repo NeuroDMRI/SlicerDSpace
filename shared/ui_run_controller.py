@@ -700,7 +700,7 @@ def build_single_subject_run_kwargs(
         "select_streamlines": max(1, int(selection.select_streamlines)),
         "ddseg_device": selection.ddseg_device,
         "surface_device": selection.surface_device,
-        "tractcloud_device": "cuda" if selection.ddseg_device.startswith("cuda") else selection.ddseg_device,
+        "tractcloud_device": selection.ddseg_device,
         "model_assets_dir": external_paths.get("model_assets_dir"),
         "mrtrix_bin_dir": external_paths.get("mrtrix_bin_dir"),
         "preprocessing_mrtrix_bin_dir": external_paths.get("mrtrix_bin_dir"),
@@ -771,7 +771,7 @@ def build_batch_run_kwargs(selection: RunSelection, *, batch_root: Path) -> dict
         "select_streamlines": max(1, int(selection.select_streamlines)),
         "ddseg_device": selection.ddseg_device,
         "surface_device": selection.surface_device,
-        "tractcloud_device": "cuda" if selection.ddseg_device.startswith("cuda") else selection.ddseg_device,
+        "tractcloud_device": selection.ddseg_device,
         "model_assets_dir": None,
         "preprocessing_execution_backend": os.environ.get("SLICERDSPACE_PREPROCESSING_EXECUTION_BACKEND")
         or ("native" if sys.platform == "win32" else None),

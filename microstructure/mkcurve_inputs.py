@@ -5,6 +5,20 @@ import gzip
 from pathlib import Path
 import shutil
 
+_IN_RAM_STAGE_MAX_BYTES = 64 * 1024 * 1024  # 64 MiB: small scans stage in RAM and write once sequentially
+_TRANSPOSE_BLOCK_BYTES = 32 * 1024 * 1024   # 32 MiB bounded row strip for sequential block transpose
+
+
+def _close_memmap(array):
+    if array is None:
+        return
+    mm = getattr(array, "_mmap", None)
+    if mm is not None:
+        try:
+            mm.close()
+        except Exception:
+            pass
+
 
 def _repair_nonpositive_volume(image, mask):
     """Upstream sequential 26-neighbour positive-signal mean on one 3D volume (MATLAB Fortran order)."""
@@ -98,10 +112,13 @@ def _validate_and_select_inputs(dwi_path, bval_path, bvec_path, mask_path, b0_th
 
 
 def _prepare_masked_signals(dwi_path, bval_path, bvec_path, mask_path, directory, b0_threshold, max_bvalue=3000.0, *, allow_nonfinite=True):
-    """Single-pass streaming staging, 26-neighbour repair, and mask extraction (bit-exact to _prepare_inputs + repair_nonpositive).
+    """Single-pass streaming staging, 26-neighbour repair, and sequential block-transposed mask extraction.
 
-    Avoids materialising two full-volume float64 copies (~10.5 GiB on HCP 100307) on disk by repairing
-    each 3D volume in RAM (~29 MiB) and writing only masked voxels into ``masked_signals.npy``.
+    Bit-exact to ``_prepare_inputs + repair_nonpositive``. Writes each repaired 3D volume sequentially
+    as a contiguous row into a ``(n_vols, n_masked)`` buffer (in RAM when <= 64 MiB, else a temporary
+    disk-backed memmap), then transposes in bounded contiguous voxel strips (~32 MiB) into the final
+    C-contiguous ``(n_masked, n_vols)`` ``masked_signals.npy`` memmap. This avoids column-by-column
+    random page writes across the full ~1.67 GiB file on every diffusion volume.
     """
     import nibabel as nib
     import numpy as np
@@ -114,11 +131,30 @@ def _prepare_masked_signals(dwi_path, bval_path, bvec_path, mask_path, directory
     count = len(coords[0])
     n_vols = len(weighted) + 1
 
+    total_bytes = int(count) * int(n_vols) * 8
+    avail_ram = 0
+    try:
+        from shared.hardware_adapt import query_host_available_ram_bytes
+
+        avail_ram = int(query_host_available_ram_bytes())
+    except Exception:
+        avail_ram = 0
+    use_in_ram = total_bytes <= _IN_RAM_STAGE_MAX_BYTES and (avail_ram <= 0 or total_bytes <= avail_ram // 8)
+
     source_image, close_img, temp_uncomp = _open_uncompressed_dwi(dwi_path, directory)
     masked_path = Path(directory) / "masked_signals.npy"
-    masked_signals = np.lib.format.open_memmap(masked_path, mode="w+", dtype=np.float64, shape=(count, n_vols))
+    vol_major_path = None if use_in_ram else (Path(directory) / "_masked_signals_vol_major.npy")
+    vol_major = None
+    masked_signals = None
     repaired_total, unresolved_total = 0, 0
     try:
+        if use_in_ram:
+            vol_major = np.empty((n_vols, count), dtype=np.float64)
+        else:
+            vol_major = np.lib.format.open_memmap(
+                vol_major_path, mode="w+", dtype=np.float64, shape=(n_vols, count)
+            )
+
         total_b0 = np.zeros(source_image.shape[:3], dtype=np.float64)
         for index in baseline:
             volume = np.asarray(source_image.dataobj[..., int(index)], dtype=np.float64)
@@ -129,7 +165,7 @@ def _prepare_masked_signals(dwi_path, bval_path, bvec_path, mask_path, directory
         rep, unres = _repair_nonpositive_volume(vol0, mask)
         repaired_total += rep
         unresolved_total += unres
-        masked_signals[:, 0] = vol0[coords]
+        vol_major[0, :] = vol0[coords]
         del total_b0, vol0
 
         for destination, source_idx in enumerate(weighted, start=1):
@@ -139,22 +175,61 @@ def _prepare_masked_signals(dwi_path, bval_path, bvec_path, mask_path, directory
             rep, unres = _repair_nonpositive_volume(volume, mask)
             repaired_total += rep
             unresolved_total += unres
-            masked_signals[:, destination] = volume[coords]
+            vol_major[destination, :] = volume[coords]
 
         header = source_image.header.copy()
         header.set_data_dtype(np.float64)
         affine = source_image.affine.copy()
         reference = nib.Nifti1Image(np.empty((0,), dtype=np.float32), affine, header)
+
+        # Release source NIfTI (and temporary decompressed .nii) before materialising the transposed memmap.
+        _close_nib_handles(close_img)
+        close_img = None
+        source_image = None
+        gc.collect()
+        if temp_uncomp is not None and temp_uncomp.is_file():
+            try:
+                temp_uncomp.unlink()
+            except OSError:
+                pass
+            temp_uncomp = None
+
+        masked_signals = np.lib.format.open_memmap(masked_path, mode="w+", dtype=np.float64, shape=(count, n_vols))
+        if count > 0 and n_vols > 0:
+            row_bytes = max(1, int(n_vols) * 8)
+            block_rows = max(1, min(int(count), max(1, int(_TRANSPOSE_BLOCK_BYTES) // row_bytes)))
+            if use_in_ram and block_rows >= count:
+                masked_signals[:, :] = np.ascontiguousarray(vol_major.T)
+            else:
+                block = np.empty((min(block_rows, count), n_vols), dtype=np.float64)
+                for r0 in range(0, count, block_rows):
+                    r1 = min(count, r0 + block_rows)
+                    cur = block[: r1 - r0]
+                    for v in range(n_vols):
+                        cur[:, v] = vol_major[v, r0:r1]
+                    masked_signals[r0:r1, :] = cur
+                del block
+        masked_signals.flush()
     except Exception:
-        masked_signals._mmap.close()
-        del masked_signals
+        _close_memmap(masked_signals)
+        masked_signals = None
         if masked_path.is_file():
-            masked_path.unlink()
+            try:
+                masked_path.unlink()
+            except OSError:
+                pass
         raise
     finally:
+        _close_memmap(vol_major)
+        vol_major = None
         _close_nib_handles(close_img)
         del close_img, source_image
         gc.collect()
+        if vol_major_path is not None and vol_major_path.is_file():
+            try:
+                vol_major_path.unlink()
+            except OSError:
+                pass
         if temp_uncomp is not None and temp_uncomp.is_file():
             try:
                 temp_uncomp.unlink()

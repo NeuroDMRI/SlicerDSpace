@@ -906,7 +906,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--tractcloud-root", type=Path, help="Optional TractCloud source checkout root.")
     parser.add_argument("--tractcloud-python-executable", type=Path, help="Optional Python executable for TractCloud.")
     parser.add_argument("--tractcloud-data-dir", type=Path, help="Optional model/data directory for TractCloud.")
-    parser.add_argument("--tractcloud-device", default="auto", choices=("auto", "cpu", "cuda", "mps"), help="TractCloud device.")
+    def _tractcloud_device_arg(value: str) -> str:
+        norm = (value or "").strip().lower()
+        if norm in {"auto", "cpu", "cuda", "mps"}:
+            return norm
+        if norm.startswith("cuda:") and norm[5:].isdigit():
+            return norm
+        raise argparse.ArgumentTypeError(
+            f"invalid --tractcloud-device {value!r} (expected 'auto', 'cpu', 'cuda', 'cuda:<index>', or 'mps')"
+        )
+
+    parser.add_argument("--tractcloud-device", default="auto", type=_tractcloud_device_arg,
+                        help="TractCloud device (auto, cpu, cuda, cuda:<index>, or mps).")
     parser.add_argument("--tractcloud-batch-size", type=int, default=2048, help="TractCloud batch size.")
     add_dependency_config_arguments(
         parser,

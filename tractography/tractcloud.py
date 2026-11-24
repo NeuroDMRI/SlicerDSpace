@@ -32,6 +32,17 @@ ADAPTER_REVISION = 'seeded-gpu-preferred-strict-runtime-20261013'
 TRACTCLOUD_QC_VERSION = 4
 MIN_BUNDLE_SAMPLING_SCREEN = 20  # Local sanity screen, not an author accuracy guarantee.
 VALID_TRACTCLOUD_DEVICES = {"auto", "cpu", "cuda", "mps"}
+_TRACTCLOUD_CUDA_INDEX_RE = re.compile(r"^cuda:(\d+)$")
+
+
+def is_valid_tractcloud_device(device: Any) -> bool:
+    """Return True for auto, cpu, mps, cuda, or explicit cuda:<nonneg_int>."""
+    if not isinstance(device, str):
+        return False
+    normalized = device.strip().lower()
+    return normalized in VALID_TRACTCLOUD_DEVICES or bool(_TRACTCLOUD_CUDA_INDEX_RE.fullmatch(normalized))
+
+
 TRACTCLOUD_COMPAT_BOOTSTRAP = (
     "import json, logging, os, random, runpy, sys; "
     "os.environ.setdefault('PYTORCH_ENABLE_MPS_FALLBACK', '1'); "
@@ -53,20 +64,38 @@ TRACTCLOUD_COMPAT_BOOTSTRAP = (
     "random.seed(seed); np.random.seed(seed); torch.manual_seed(seed); "
     "torch.cuda.manual_seed_all(seed); import tractcloud.pipeline as pipeline; "
     "pipeline.__dict__.setdefault('logging', logging); "
-    "\nrequested = sys.argv[sys.argv.index('--device') + 1] if '--device' in sys.argv else 'auto'\n"
+    "\nrequested = (sys.argv[sys.argv.index('--device') + 1] if '--device' in sys.argv else 'auto').strip().lower()\n"
+    "_req_cuda_idx = None\n"
+    "if requested.startswith('cuda:'):\n"
+    "    _idx_txt = requested.split(':', 1)[1]\n"
+    "    if not _idx_txt.isdigit():\n"
+    "        raise ValueError(f'Invalid TractCloud CUDA device: {requested!r}')\n"
+    "    _req_cuda_idx = int(_idx_txt)\n"
+    "_req_is_cuda = (requested == 'cuda') or (_req_cuda_idx is not None)\n"
     "cuda_ok = bool(torch.cuda.is_available()) if requested not in ('cpu', 'mps') else False\n"
     "_mps_mod = getattr(getattr(torch, 'backends', None), 'mps', None)\n"
     "_mps_fn = getattr(_mps_mod, 'is_available', None)\n"
     "mps_ok = bool(callable(_mps_fn) and _mps_fn() is True) if (requested in ('auto', 'mps') and not cuda_ok) else False\n"
-    "if requested == 'cuda' and not cuda_ok:\n"
+    "if _req_is_cuda and not cuda_ok:\n"
     "    raise RuntimeError('TractCloud CUDA requested but unavailable in its selected Python')\n"
+    "if _req_cuda_idx is not None:\n"
+    "    _dev_count = torch.cuda.device_count() if hasattr(torch.cuda, 'device_count') else None\n"
+    "    if isinstance(_dev_count, int) and not isinstance(_dev_count, bool) and _req_cuda_idx >= _dev_count:\n"
+    "        raise RuntimeError(f'TractCloud CUDA device {requested} requested, but only {_dev_count} CUDA device(s) visible')\n"
     "if requested == 'mps' and not mps_ok:\n"
     "    raise RuntimeError('TractCloud MPS requested but unavailable in its selected Python')\n"
-    "resolved = 'cuda' if cuda_ok else ('mps' if mps_ok else 'cpu')\n"
-    "if resolved == 'cuda':\n"
-    "    torch.empty(1, device='cuda:0')\n"
+    "if cuda_ok:\n"
+    "    _cuda_idx = _req_cuda_idx if _req_cuda_idx is not None else 0\n"
+    "    resolved = f'cuda:{_cuda_idx}' if _req_cuda_idx is not None else 'cuda'\n"
+    "else:\n"
+    "    _cuda_idx = 0\n"
+    "    resolved = 'mps' if mps_ok else 'cpu'\n"
+    "if resolved == 'cuda' or resolved.startswith('cuda:'):\n"
+    "    if _cuda_idx > 0 and hasattr(torch.cuda, 'set_device'):\n"
+    "        torch.cuda.set_device(_cuda_idx)\n"
+    "    torch.empty(1, device=f'cuda:{_cuda_idx}')\n"
     "    try:\n"
-    "        free_b, _ = torch.cuda.mem_get_info(0)\n"
+    "        free_b, _ = torch.cuda.mem_get_info(_cuda_idx)\n"
     "        bs_flag = '--batch-size' if '--batch-size' in sys.argv else ('--batch_size' if '--batch_size' in sys.argv else '')\n"
     "        if bs_flag:\n"
     "            bs_i = sys.argv.index(bs_flag) + 1\n"
@@ -98,14 +127,17 @@ TRACTCLOUD_COMPAT_BOOTSTRAP = (
     "    except Exception:\n"
     "        pass\n"
     "if '--device' in sys.argv:\n"
-    "    sys.argv[sys.argv.index('--device') + 1] = 'auto' if resolved == 'mps' else resolved\n"
-    "if resolved == 'mps' and hasattr(pipeline, 'TractCloudPipeline'):\n"
+    "    sys.argv[sys.argv.index('--device') + 1] = 'auto' if resolved == 'mps' else ('cuda' if resolved.startswith('cuda:') else resolved)\n"
+    "if (resolved == 'mps' or resolved.startswith('cuda:')) and hasattr(pipeline, 'TractCloudPipeline'):\n"
     "    _orig_tc_init = pipeline.TractCloudPipeline.__init__\n"
-    "    def _mps_tc_init(self, reporter=None, device=None, *a, **kw):\n"
-    "        if device is None:\n"
-    "            device = 'mps'\n"
+    "    def _pinned_tc_init(self, reporter=None, device=None, *a, **kw):\n"
+    "        if resolved == 'mps':\n"
+    "            if device is None:\n"
+    "                device = 'mps'\n"
+    "        elif device is None or str(device) in ('cuda', 'cuda:0'):\n"
+    "            device = resolved\n"
     "        return _orig_tc_init(self, reporter=reporter, device=device, *a, **kw)\n"
-    "    pipeline.TractCloudPipeline.__init__ = _mps_tc_init\n"
+    "    pipeline.TractCloudPipeline.__init__ = _pinned_tc_init\n"
     "record = {'requested': requested, 'resolved': resolved, 'torch_version': str(torch.__version__)}\n"
     "print('TractCloud device: ' + json.dumps(record), flush=True)\n"
     "record_path = os.environ.get('SLICERDSPACE_TRACTCLOUD_DEVICE_RECORD')\n"
@@ -115,7 +147,7 @@ TRACTCLOUD_COMPAT_BOOTSTRAP = (
     "if getattr(pipeline, '__file__', None):\n"
     "    from tractography.tractcloud_accel import install_tractcloud_accelerations\n"
     "    install_tractcloud_accelerations(pipeline, resolved, requested_device=requested)\n"
-    "if resolved in ('cuda', 'mps') and hasattr(pipeline, 'run_inference'):\n"
+    "if (resolved in ('cuda', 'mps') or resolved.startswith('cuda:')) and hasattr(pipeline, 'run_inference'):\n"
     "    original_inference = pipeline.run_inference\n"
     "    def strict_gpu_inference(model, loader, global_feat, num_classes, device, **kwargs):\n"
     "        if str(device).startswith('cpu'):\n"
@@ -302,7 +334,7 @@ def _tractcloud_env(config: "TractCloudConfig", backend_status: Optional[dict[st
         env["TRACTCLOUD_DATA_DIR"] = config.data_dir.expanduser().resolve().as_posix()
     env['SLICERDSPACE_TRACTCLOUD_SEED'] = str(config.random_seed)
     env['SLICERDSPACE_TRACTCLOUD_DEVICE_RECORD'] = str(config.output_dir.expanduser().resolve() / 'tractcloud_device.json')
-    if sys.platform.startswith("linux") and str(config.device or "auto").strip().lower() != "cuda":
+    if sys.platform.startswith("linux") and not str(config.device or "auto").strip().lower().startswith("cuda"):
         if "OMP_PROC_BIND" not in os.environ:
             env["OMP_PROC_BIND"] = "close"
         if "OMP_PLACES" not in os.environ:
@@ -363,8 +395,8 @@ def validate_tractcloud_inputs(config: TractCloudConfig) -> None:
         raise ValueError("TractCloud input must be a VTK/VTP tractography file.")
     if not config.input_tractography.expanduser().is_file():
         raise FileNotFoundError(f"Input tractography not found: {config.input_tractography}")
-    if config.device not in VALID_TRACTCLOUD_DEVICES:
-        raise ValueError("device must be one of: auto, cpu, cuda, mps.")
+    if not is_valid_tractcloud_device(config.device):
+        raise ValueError("device must be one of: auto, cpu, cuda, cuda:<index>, mps.")
     if config.batch_size < 64:
         raise ValueError("batch_size must be >= 64.")
     if isinstance(config.random_seed, bool) or not isinstance(config.random_seed, int) or not 0 <= config.random_seed < 2**32:
@@ -389,7 +421,7 @@ def build_tractcloud_command(config: TractCloudConfig) -> tuple[str, ...]:
         "--output-dir",
         output_dir.as_posix(),
         "--device",
-        config.device,
+        str(config.device or "auto").strip().lower(),
         "--batch-size",
         str(config.batch_size),
     ]

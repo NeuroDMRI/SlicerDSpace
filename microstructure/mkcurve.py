@@ -128,6 +128,7 @@ def _fit_chunk(payload, *, reuse_signal_logs=None):
     from microstructure.mkcurve_tensor import fit_wlls, mean_kurtosis, parameter_maps
 
     signals, design, grid, threshold, solver = payload
+    signals = np.asarray(signals, dtype=np.float64)
     if reuse_signal_logs is None:
         reuse_signal_logs = True
     b0 = signals[:, 0].copy()
@@ -150,13 +151,14 @@ def _fit_chunk(payload, *, reuse_signal_logs=None):
     else:
         original = fitter.fit(b0) if fitter else fit_wlls(signals, design, solver=solver)
         curves = np.empty((len(grid), len(signals)))
+        work = signals.copy()
         for step, value in enumerate(grid):
-            signals[:, 0] = value
-            coefficients = fitter.fit(signals[:, 0]) if fitter else fit_wlls(signals, design, solver=solver)
+            work[:, 0] = value
+            coefficients = fitter.fit(work[:, 0]) if fitter else fit_wlls(work, design, solver=solver)
             curves[step] = mean_kurtosis(coefficients)
         detection = detect_abnormal(curves, b0, grid, threshold)
-        signals[:, 0] = detection["corrected_b0"]
-        corrected = fitter.fit(signals[:, 0]) if fitter else fit_wlls(signals, design, solver=solver)
+        work[:, 0] = detection["corrected_b0"]
+        corrected = fitter.fit(work[:, 0]) if fitter else fit_wlls(work, design, solver=solver)
 
     orig_maps = parameter_maps(original)
     orig_finite = np.isfinite(original).all(axis=1)
@@ -233,7 +235,10 @@ def _fit_chunk_cuda(payload):
         _parameter_maps_cuda,
     )
 
-    if len(payload) >= 7:
+    exec_tracker = None
+    if len(payload) >= 8:
+        signals, design, grid, threshold, solver, device_str, explicit_cuda, exec_tracker = payload[:8]
+    elif len(payload) >= 7:
         signals, design, grid, threshold, solver, device_str, explicit_cuda = payload[:7]
     elif len(payload) >= 6:
         signals, design, grid, threshold, solver, device_str = payload[:6]
@@ -242,12 +247,31 @@ def _fit_chunk_cuda(payload):
         signals, design, grid, threshold, solver = payload
         device_str = "cuda"
         explicit_cuda = False
-    try:
-        fitter = _CudaSyntheticB0Fitter(signals, design, grid, solver=solver, device=device_str)
-        if fitter.ops is None:
-            return _fit_chunk((signals, design, grid, threshold, solver))
 
-        b0 = signals[:, 0].copy()
+    # Keep the original chunk signals strictly immutable so late CUDA OOM retries
+    # (chunk halving or CPU fallback) ALWAYS recompute from untouched original b0.
+    orig_signals = np.array(signals, dtype=np.float64, copy=True)
+    orig_signals.setflags(write=False)
+
+    def _record_cpu_fallback(reason: str) -> None:
+        if exec_tracker is None:
+            return
+        exec_tracker["cpu_fallback_voxels"] = int(exec_tracker.get("cpu_fallback_voxels", 0)) + len(orig_signals)
+        reasons = exec_tracker.setdefault("fallback_reasons", [])
+        if reason and reason not in reasons:
+            reasons.append(reason)
+        log_fn = exec_tracker.get("log")
+        if callable(log_fn) and not exec_tracker.get("logged_fallback"):
+            exec_tracker["logged_fallback"] = True
+            log_fn(f"[MK-Curve Python] Falling back to CPU from {device_str} ({reason})")
+
+    try:
+        fitter = _CudaSyntheticB0Fitter(orig_signals, design, grid, solver=solver, device=device_str)
+        if fitter.ops is None:
+            _record_cpu_fallback("cuda_ops_unavailable")
+            return _fit_chunk((orig_signals.copy(), design, grid, threshold, solver))
+
+        b0 = orig_signals[:, 0].copy()
         original = fitter.fit(b0)
         curves = fitter.fit_grid()
         detection = detect_abnormal(curves, b0, grid, threshold)
@@ -258,8 +282,8 @@ def _fit_chunk_cuda(payload):
             mk_at_max = _mean_kurtosis_cuda(mk_coeff_t, fitter.ops["diff_basis"], fitter.ops["kurt_basis"]).cpu().numpy()
             detection["max_mk"][pos_max] = np.clip(mk_at_max[pos_max], 0.0, None)
 
-        signals[:, 0] = detection["corrected_b0"]
-        corrected = fitter.fit(signals[:, 0])
+        corrected_b0 = detection["corrected_b0"]
+        corrected = fitter.fit(corrected_b0)
         design_t = torch.as_tensor(np.ascontiguousarray(design), dtype=torch.float64, device=fitter.dev)
         for kind, coefficients in (("original", original), ("corrected", corrected)):
             maps = _parameter_maps_cuda(coefficients, fitter.ops, device_str=device_str)
@@ -268,9 +292,9 @@ def _fit_chunk_cuda(payload):
                 lower, upper = (0, 1) if key == "fa" else ((0, 3) if key in {"mk", "ak", "rk"} else (0, .005))
                 valid &= np.isfinite(values) & (values >= lower) & (values <= upper)
                 detection[f"{kind}_{key}"] = values
-            observed = signals.copy()
-            if kind == "original":
-                observed[:, 0] = b0
+            observed = orig_signals.copy()
+            if kind == "corrected":
+                observed[:, 0] = corrected_b0
             obs_t = torch.as_tensor(np.ascontiguousarray(observed), dtype=torch.float64, device=fitter.dev)
             coeff_t = torch.as_tensor(np.ascontiguousarray(coefficients), dtype=torch.float64, device=fitter.dev)
             pred_t = torch.exp(torch.matmul(coeff_t, design_t.T))
@@ -281,18 +305,22 @@ def _fit_chunk_cuda(payload):
             for key, mask in metric_validity(maps, np.isfinite(coefficients).all(axis=1),
                                             detection["curve_valid_mask"], detection[f"{kind}_nrmse"]).items():
                 detection[f"{kind}_{key}_valid_mask"] = mask
+        if exec_tracker is not None:
+            exec_tracker["cuda_voxels"] = int(exec_tracker.get("cuda_voxels", 0)) + len(orig_signals)
         return original, corrected, curves, detection
     except BaseException as exc:
         if not is_cuda_oom(exc):
             raise
         empty_cuda_cache_safely()
-        if len(signals) > 128:
-            mid = len(signals) // 2
+        if exec_tracker is not None:
+            exec_tracker["oom_retries"] = int(exec_tracker.get("oom_retries", 0)) + 1
+        if len(orig_signals) > 128:
+            mid = len(orig_signals) // 2
             orig_a, corr_a, cur_a, det_a = _fit_chunk_cuda(
-                (signals[:mid].copy(), design, grid, threshold, solver, device_str, explicit_cuda)
+                (orig_signals[:mid].copy(), design, grid, threshold, solver, device_str, explicit_cuda, exec_tracker)
             )
             orig_b, corr_b, cur_b, det_b = _fit_chunk_cuda(
-                (signals[mid:].copy(), design, grid, threshold, solver, device_str, explicit_cuda)
+                (orig_signals[mid:].copy(), design, grid, threshold, solver, device_str, explicit_cuda, exec_tracker)
             )
             merged = {k: np.concatenate([det_a[k], det_b[k]], axis=0) for k in det_a}
             return (
@@ -303,7 +331,8 @@ def _fit_chunk_cuda(payload):
             )
         if explicit_cuda:
             raise
-        return _fit_chunk((signals.copy(), design, grid, threshold, solver))
+        _record_cpu_fallback(f"CUDA OOM: {exc}")
+        return _fit_chunk((orig_signals.copy(), design, grid, threshold, solver))
 
 
 def _initialize_worker(threads):
@@ -486,11 +515,19 @@ def run_mkcurve(dwi_path, bval_path, bvec_path, mask_path, output_dir, *,
                     handles.callback(pool.shutdown, wait=True, cancel_futures=True)
                 else:
                     pool = None
+                exec_tracker = {
+                    "cuda_voxels": 0,
+                    "cpu_fallback_voxels": 0,
+                    "oom_retries": 0,
+                    "fallback_reasons": [],
+                    "log": log,
+                    "logged_fallback": False,
+                }
                 def payload(start):
                     stop = min(start + eff_chunk, count)
                     sig = np.asarray(masked_signals[start:stop], dtype=np.float64).copy()
                     if is_cuda_dev:
-                        return sig, design, grid, threshold, solver, resolved_device, explicit_cuda
+                        return sig, design, grid, threshold, solver, resolved_device, explicit_cuda, exec_tracker
                     return sig, design, grid, threshold, solver
                 from microstructure.chunk_dispatch import chunk_results
                 completed = 0
@@ -512,9 +549,19 @@ def run_mkcurve(dwi_path, bval_path, bvec_path, mask_path, output_dir, *,
                         log(f"[MK-Curve Python] {completed}/{count} voxels; {len(grid)} synthetic b0 samples")
                     now = time.monotonic()
                     if start == 0 or completed >= count or (now - last_progress) >= 1.0:
+                        progress_device = "cpu" if (is_cuda_dev and exec_tracker["cpu_fallback_voxels"] > 0) else resolved_device
                         _write_json(progress, {"status": "running", "completed_voxels": completed, "total_voxels": count,
-                                               "num_workers": eff_workers, "solver": solver, "device": resolved_device})
+                                               "num_workers": eff_workers, "solver": solver, "device": progress_device})
                         last_progress = now
+                cpu_fb_voxels = int(exec_tracker["cpu_fallback_voxels"])
+                cuda_voxels = int(exec_tracker["cuda_voxels"])
+                executed_device = "cpu" if (is_cuda_dev and cpu_fb_voxels > 0) else resolved_device
+                if is_cuda_dev and cpu_fb_voxels > 0 and log:
+                    reasons_text = "; ".join(exec_tracker["fallback_reasons"]) or "CUDA fallback"
+                    log(
+                        f"[MK-Curve Python] Completed with CPU fallback from {resolved_device}: "
+                        f"{cpu_fb_voxels}/{count} voxels on CPU ({reasons_text})"
+                    )
                 paths, summaries = {}, {}
                 def _export_map(item):
                     key, values = item
@@ -541,15 +588,27 @@ def run_mkcurve(dwi_path, bval_path, bvec_path, mask_path, output_dir, *,
                         key, out_path, summary = _export_map(item)
                         paths[key] = out_path
                         summaries[key] = summary
+                settings_record = {
+                    "threshold": threshold, "solver": solver, "device": executed_device,
+                    "requested_device": str(device or "cpu"), "resolved_device": resolved_device,
+                    "num_workers": num_workers, "effective_workers": eff_workers,
+                    "voxels_per_chunk": eff_chunk,
+                    "worker_threads": worker_threads,
+                    "chunk_schedule": chunk_schedule, "max_inflight_chunks": eff_workers,
+                    "grid_policy": "adaptive author integer grid, independent of directory name",
+                    "grid_samples": len(grid), "b0_threshold": b0_threshold, "max_bvalue": max_bvalue,
+                }
+                if is_cuda_dev and cpu_fb_voxels > 0:
+                    settings_record["device_fallback"] = True
+                    settings_record["fallback_from"] = resolved_device
+                    settings_record["fallback_reason"] = "; ".join(exec_tracker["fallback_reasons"])
+                    settings_record["cpu_fallback_voxels"] = cpu_fb_voxels
+                    settings_record["cuda_voxels"] = cuda_voxels
+                    settings_record["oom_retries"] = int(exec_tracker["oom_retries"])
                 record = {"kind": "mkcurve_python_port", "status": "completed", "backend": backend,
+                          "device": executed_device,
                           "method": "author-style unconstrained WLLS, numerical 256-direction MK, synthetic-b0 correction",
-                          "settings": {"threshold": threshold, "solver": solver, "device": resolved_device,
-                                       "num_workers": num_workers, "effective_workers": eff_workers,
-                                       "voxels_per_chunk": eff_chunk,
-                                       "worker_threads": worker_threads,
-                                       "chunk_schedule": chunk_schedule, "max_inflight_chunks": eff_workers,
-                                       "grid_policy": "adaptive author integer grid, independent of directory name",
-                                       "grid_samples": len(grid), "b0_threshold": b0_threshold, "max_bvalue": max_bvalue},
+                          "settings": settings_record,
                           "maps": paths, "inputs": inputs, "preparation": preparation, "signal_repair": repair,
                           "mask_voxels": count, "corrected_voxels": summaries["abnormal_mask"]["nonzero"],
                           "corrected_valid_voxels": summaries["corrected_valid_mask"]["nonzero"], "summaries": summaries,
@@ -580,7 +639,7 @@ def run_mkcurve(dwi_path, bval_path, bvec_path, mask_path, output_dir, *,
                 if backend != inspect_mkcurve_backend():
                     raise RuntimeError("MK-Curve backend changed during fitting")
                 _write_json(Path(record["record_path"]), record)
-                _write_json(progress, {"status": "completed", "completed_voxels": count, "total_voxels": count})
+                _write_json(progress, {"status": "completed", "completed_voxels": count, "total_voxels": count, "device": executed_device})
                 return record
             finally:
                 if resolved_device.startswith("cuda"):

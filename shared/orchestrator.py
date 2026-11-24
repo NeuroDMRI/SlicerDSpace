@@ -3182,35 +3182,205 @@ _DISK_FACTOR_BY_TARGET = {
 }
 _STREAMLINE_EXPORT_BYTES = 2048  # one streamline of about 150 points in one export format
 _STREAMLINE_EXPORTS = 3  # tck, trk and vtk
+_DDPARCEL_RECOMMENDED_RAM_GIB = 5.5
+_DDPARCEL_CRITICAL_RAM_GIB = 2.5
 
 
-def estimate_run_disk_bytes(dwi_bytes: int, targets: Iterable[str], select_streamlines: int) -> int:
-    """LE-4: DWI file size times a per-product factor, plus streamlines x bytes x exports for tractography."""
+def _probe_dwi_uncompressed_bytes_and_odd_axes(dwi: Path) -> tuple[Optional[int], int]:
+    """Header-only probe of uncompressed 4D float32 DWI byte footprint and odd spatial axes."""
+    path = Path(dwi)
+    if not path.is_file():
+        return None, 0
+    name = path.name.lower()
+    try:
+        if name.endswith((".nhdr", ".nrrd")):
+            import nrrd
+
+            header = nrrd.read_header(str(path))
+            sizes = [int(v) for v in header.get("sizes", ())]
+            if len(sizes) == 4 and all(s > 0 for s in sizes):
+                list_axis = next(
+                    (i for i, kind in enumerate(header.get("kinds", ())) if kind in ("list", "vector")),
+                    3,
+                )
+                spatial = [s for i, s in enumerate(sizes) if i != list_axis]
+                odd_axes = sum(1 for s in spatial[:3] if s % 2 == 1)
+                return int(math.prod(sizes) * 4), odd_axes
+        elif name.endswith((".nii.gz", ".nii")):
+            import nibabel as nib
+
+            img = nib.load(str(path))
+            shape = tuple(int(v) for v in img.shape)
+            if len(shape) == 4 and all(s > 0 for s in shape):
+                itemsize = max(4, int(img.get_data_dtype().itemsize))
+                odd_axes = sum(1 for s in shape[:3] if s % 2 == 1)
+                return int(math.prod(shape) * itemsize), odd_axes
+    except Exception:
+        pass
+    return None, 0
+
+
+def estimate_run_disk_bytes(
+    dwi_bytes: int,
+    targets: Iterable[str],
+    select_streamlines: int,
+    *,
+    uncompressed_dwi_bytes: Optional[int] = None,
+    preprocessing_eddy: bool = True,
+    preprocessing_topup: bool = False,
+    preprocessing_odd_axes: int = 0,
+) -> int:
+    """LE-4: DWI file size times a per-product factor, plus streamlines x bytes x exports for tractography.
+
+    When ``preprocessing`` runs Eddy/Topup (MRtrix ``dwifslpreproc`` or ``preprocessing/fsl_native.py``),
+    several uncompressed 4D NIfTI/MIF scratch volumes coexist on disk (``dwi.mif``, ``eddy_in.nii``,
+    ``dwi_post_eddy``, ``result.mif``, plus ``applytopup_in.nii`` / ``applytopup_corrected.mif`` and
+    odd-axis padded ``.mif`` intermediates when Topup runs), totaling ~5x-9x the uncompressed 4D DWI size.
+    """
     chosen = set(targets)
-    total = sum(_DISK_FACTOR_BY_TARGET.get(target, 0.0) for target in chosen) * max(int(dwi_bytes), 0)
+    dwi_sz = max(int(dwi_bytes), 0)
+    total = sum(_DISK_FACTOR_BY_TARGET.get(target, 0.0) for target in chosen if target != "preprocessing") * dwi_sz
+    if "preprocessing" in chosen:
+        if uncompressed_dwi_bytes is not None and int(uncompressed_dwi_bytes) > 0:
+            uncomp = int(uncompressed_dwi_bytes)
+        else:
+            # Compressed .nii.gz DWI is typically ~3x smaller than uncompressed float32 4D scratch.
+            uncomp = dwi_sz * 3
+        if preprocessing_eddy or preprocessing_topup:
+            copies = 5.0
+            if preprocessing_topup:
+                copies += 2.0 + float(max(0, min(3, int(preprocessing_odd_axes))))
+            total += max(3.0 * dwi_sz, copies * uncomp)
+        else:
+            total += max(3.0 * dwi_sz, 2.0 * uncomp)
     if "tractography" in chosen:
         total += max(int(select_streamlines), 0) * _STREAMLINE_EXPORT_BYTES * _STREAMLINE_EXPORTS
     return int(total)
 
 
-def _disk_space_warning(dwi: Path, targets: Iterable[str], select_streamlines: int, output_root: Path) -> str:
+def _disk_space_warning(
+    dwi: Path,
+    targets: Iterable[str],
+    select_streamlines: int,
+    output_root: Path,
+    *,
+    config: Optional["ProductOrchestratorConfig"] = None,
+) -> str:
     """LE-4: a warning when the free space on ``output_root`` is below the estimate, else an empty string."""
     try:
-        dwi_bytes = Path(dwi).stat().st_size
+        dwi_path = Path(dwi)
+        dwi_bytes = dwi_path.stat().st_size
         probe = Path(output_root)
         while not probe.exists() and probe != probe.parent:
             probe = probe.parent
         free = shutil.disk_usage(probe).free
     except OSError:
         return ""
-    needed = estimate_run_disk_bytes(dwi_bytes, targets, select_streamlines)
+    chosen = set(targets)
+    preproc_eddy = True
+    preproc_topup = False
+    uncomp_bytes: Optional[int] = None
+    odd_axes = 0
+    if "preprocessing" in chosen:
+        if config is not None:
+            stages = _resolved_preprocessing_stages(config)
+            preproc_eddy = True if stages is None else ("eddy" in stages)
+            run_topup = True if stages is None else ("topup" in stages)
+            preproc_topup = bool(run_topup and config.preprocessing_reverse_phase_b0 is not None)
+        uncomp_bytes, odd_axes = _probe_dwi_uncompressed_bytes_and_odd_axes(dwi_path)
+        if uncomp_bytes is None and dwi_path.name.lower().endswith(".nii"):
+            uncomp_bytes = dwi_bytes
+    needed = estimate_run_disk_bytes(
+        dwi_bytes,
+        chosen,
+        select_streamlines,
+        uncompressed_dwi_bytes=uncomp_bytes,
+        preprocessing_eddy=preproc_eddy,
+        preprocessing_topup=preproc_topup,
+        preprocessing_odd_axes=odd_axes,
+    )
     if needed <= 0 or free >= needed:
         return ""
     gib = 1024 ** 3
+    scratch_note = (
+        " (includes uncompressed 4D Eddy/Topup scratch files)"
+        if "preprocessing" in chosen and (preproc_eddy or preproc_topup)
+        else ""
+    )
     return (
-        f"Disk space: the selected products need about {needed / gib:.1f} GB (estimate) but {probe.as_posix()} has "
+        f"Disk space: the selected products need about {needed / gib:.1f} GB (estimate){scratch_note} but {probe.as_posix()} has "
         f"{free / gib:.1f} GB free. Free space or choose another output folder; the run is not blocked."
     )
+
+
+def _ddparcel_host_memory_preflight(
+    memory_snapshot: Optional[dict[str, Optional[float]]] = None,
+    *,
+    strict: bool = False,
+) -> tuple[str, str]:
+    """Check available host RAM and Windows commit headroom before DDParcel parcellation.
+
+    Coordinates with DDParcel's reduced/streamed host probability-tensor working set while catching
+    both physical RAM exhaustion and Windows commit-limit exhaustion. Returns ``(level, message)``
+    where ``level`` is one of ``'ok'``, ``'warn'``, ``'critical'``, or ``'block'``.
+    """
+    snap = memory_snapshot
+    if snap is None:
+        snap = {}
+        try:
+            from shared.hardware_adapt import query_host_memory_snapshot
+
+            snap = dict(query_host_memory_snapshot() or {})
+        except Exception:
+            snap = {}
+        try:
+            from shared.platform_info import available_host_ram_bytes
+
+            platform_avail = available_host_ram_bytes()
+            if platform_avail is None:
+                snap["available_ram_gib"] = None
+            else:
+                snap["available_ram_gib"] = float(platform_avail) / float(1024 ** 3)
+            snap["effective_available_ram_gib"] = None
+        except Exception:
+            pass
+    avail = snap.get("available_ram_gib")
+    commit_avail = snap.get("commit_available_gib")
+    effective = snap.get("effective_available_ram_gib")
+    if effective is None:
+        parts = [v for v in (avail, commit_avail) if v is not None]
+        effective = min(parts) if parts else None
+    if effective is None:
+        return "ok", ""
+
+    details: list[str] = []
+    if avail is not None:
+        details.append(f"{avail:.1f} GiB available RAM")
+    if commit_avail is not None:
+        details.append(f"{commit_avail:.1f} GiB Windows commit headroom")
+    summary = ", ".join(details) if details else f"{effective:.1f} GiB effective headroom"
+
+    if effective < _DDPARCEL_CRITICAL_RAM_GIB:
+        commit_note = (
+            " Windows commit headroom is critically tight and host allocation may fail with MemoryError/bad_alloc."
+            if commit_avail is not None and commit_avail < _DDPARCEL_CRITICAL_RAM_GIB
+            else " Running DDParcel under this memory deficit risks OOM crash or severe swap thrashing."
+        )
+        msg = (
+            f"DDParcel host memory critically low ({summary}; minimum working set "
+            f"~{_DDPARCEL_CRITICAL_RAM_GIB:.1f} GiB, recommended {_DDPARCEL_RECOMMENDED_RAM_GIB:.1f} GiB)."
+            f"{commit_note} Close memory-heavy applications or increase the Windows paging file before running DDParcel."
+        )
+        return ("block" if strict else "critical"), msg
+
+    if effective < _DDPARCEL_RECOMMENDED_RAM_GIB:
+        msg = (
+            f"Available host memory for DDParcel is {summary} "
+            f"(below the recommended {_DDPARCEL_RECOMMENDED_RAM_GIB:.1f} GiB); "
+            "close other memory-heavy applications if inference slows down or runs out of memory."
+        )
+        return "warn", msg
+    return "ok", ""
 
 
 def _incomplete_weights_reason(relative: str, model_assets_dir: Optional[Path]) -> str:
@@ -4593,10 +4763,15 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
             continue
 
     plan_warnings: list[str] = []
+    will_run_targets = [item.target for item in items if item.will_run]
     disk_warning = _disk_space_warning(  # LE-4
-        analysis_inputs["dwi"], [item.target for item in items if item.will_run], config.select_streamlines, layout.outputs)
+        analysis_inputs["dwi"], will_run_targets, config.select_streamlines, layout.outputs, config=config)
     if disk_warning:
         plan_warnings.append(disk_warning)
+    if "parcellation" in will_run_targets:
+        _parcel_mem_level, parcel_mem_warning = _ddparcel_host_memory_preflight()
+        if parcel_mem_warning:
+            plan_warnings.append(parcel_mem_warning)
     plan = RunPlanResult(
         subject_id=config.subject_id,
         subject_root=subject_root,
@@ -5648,6 +5823,11 @@ def _run_subject_products_locked(
         else:
             from preprocessing import run_dwi_preprocessing
 
+            preproc_disk_warn = _disk_space_warning(
+                raw["dwi"], ("preprocessing",), config.select_streamlines, layout.outputs, config=config
+            )
+            if preproc_disk_warn:
+                _emit("[Orchestrator] WARNING: " + preproc_disk_warn, log)
             _emit("[Orchestrator] Running DWI preprocessing", log)
             result = run_dwi_preprocessing(
                 _preprocessing_config(config, subject_root, layout.stage_cache("00_preprocessing"), mask_supplied=had_user_mask),
@@ -5839,59 +6019,65 @@ def _run_subject_products_locked(
         else:
             from anatomy.parcellation import DDParcelRegisteredConfig, run_ddparcel_from_registered_bundle
             from shared.pipeline import ensure_registered_dti_bundle
-            from shared.platform_info import available_host_ram_bytes
 
-            _emit("[Orchestrator] Running DDParcel", log)
-            free_ram = available_host_ram_bytes()
-            parcellation_ram_floor = 7 * 1024**3
-            if free_ram is not None and free_ram < parcellation_ram_floor:
-                _emit(
-                    f"[Orchestrator] WARNING: Available RAM is {free_ram / (1024**3):.1f} GiB "
-                    f"(below the recommended 7.0 GiB for DDParcel brain parcellation); "
-                    "close other memory-heavy applications if inference slows down or runs out of memory.",
-                    log,
+            strict_mem = os.environ.get("SLICERDSPACE_STRICT_MEMORY_PREFLIGHT", "").strip().lower() in {"1", "true", "yes"}
+            parcel_mem_level, parcel_mem_msg = _ddparcel_host_memory_preflight(strict=strict_mem)
+            if parcel_mem_level == "block":
+                _emit("[Orchestrator] BLOCKED: " + parcel_mem_msg, log)
+                tasks.append(
+                    ProductTaskRecord(
+                        name="parcellation.ddparcel",
+                        status="blocked",
+                        reason=parcel_mem_msg,
+                    )
                 )
-            task_started = _start_task_timer("DDParcel", log)
-            raw_bundle = _anatomy_input_bundle(subject_root, config.subject_id, output_root, selected_mask_config)
-            _emit(f"[Orchestrator] DDParcel input DWI: {raw_bundle.dwi_path}", log)
-            registered = ensure_registered_dti_bundle(
-                raw_bundle,
-                atlas_t2=atlas_t2,
-                fit_method="wls",
-                reuse=True,
-                log=log,
-            )
-            parcel_stage_dir = layout.stage_cache("01_anatomical_priors/brain_parcellation")
-            run_ddparcel_from_registered_bundle(
-                DDParcelRegisteredConfig(
-                    subject_id=config.subject_id,
-                    registered_bundle=registered,
-                    output_dir=parcel_stage_dir,
-                    native_mask=raw_bundle.mask_path,
-                    weights_dir=model_asset_path(
-                        "parcellation/weights",
-                        repo_root=_repo_root(),
-                        explicit_root=model_assets_dir,
+            else:
+                _emit("[Orchestrator] Running DDParcel", log)
+                if parcel_mem_level == "critical":
+                    _emit("[Orchestrator] CRITICAL MEMORY WARNING: " + parcel_mem_msg, log)
+                elif parcel_mem_level == "warn":
+                    _emit("[Orchestrator] WARNING: " + parcel_mem_msg, log)
+                task_started = _start_task_timer("DDParcel", log)
+                raw_bundle = _anatomy_input_bundle(subject_root, config.subject_id, output_root, selected_mask_config)
+                _emit(f"[Orchestrator] DDParcel input DWI: {raw_bundle.dwi_path}", log)
+                registered = ensure_registered_dti_bundle(
+                    raw_bundle,
+                    atlas_t2=atlas_t2,
+                    fit_method="wls",
+                    reuse=True,
+                    log=log,
+                )
+                parcel_stage_dir = layout.stage_cache("01_anatomical_priors/brain_parcellation")
+                run_ddparcel_from_registered_bundle(
+                    DDParcelRegisteredConfig(
+                        subject_id=config.subject_id,
+                        registered_bundle=registered,
+                        output_dir=parcel_stage_dir,
+                        native_mask=raw_bundle.mask_path,
+                        weights_dir=model_asset_path(
+                            "parcellation/weights",
+                            repo_root=_repo_root(),
+                            explicit_root=model_assets_dir,
+                        ),
+                        device=ddseg_device,
+                        force_recompute=not config.resume,
                     ),
-                    device=ddseg_device,
-                    force_recompute=not config.resume,
-                ),
-                log=log,
-            )
-            _write_anatomy_source(parcel_stage_dir / "ddparcel_source.json", raw_bundle,
-                _read_json(registered.manifest_path).get('native_bundle', {}).get('manifest', {}).get('source_files'))
-            _finish_task_timer("DDParcel", task_started, log)
-            parcellation_outputs = _parcellation_outputs(subject_root, config.subject_id, output_root)
-            published_parcel = _publish_parcellation_outputs(parcellation_outputs, layout, config.subject_id)
-            tasks.append(
-                ProductTaskRecord(
-                    name="parcellation.ddparcel",
-                    status="completed",
-                    qc_path=parcel_stage_dir / "ddparcel_qc.json",
-                    outputs=published_parcel,
+                    log=log,
                 )
-            )
-            parcellation = _resolve_parcellation(subject_root, config.subject_id, output_root)
+                _write_anatomy_source(parcel_stage_dir / "ddparcel_source.json", raw_bundle,
+                    _read_json(registered.manifest_path).get('native_bundle', {}).get('manifest', {}).get('source_files'))
+                _finish_task_timer("DDParcel", task_started, log)
+                parcellation_outputs = _parcellation_outputs(subject_root, config.subject_id, output_root)
+                published_parcel = _publish_parcellation_outputs(parcellation_outputs, layout, config.subject_id)
+                tasks.append(
+                    ProductTaskRecord(
+                        name="parcellation.ddparcel",
+                        status="completed",
+                        qc_path=parcel_stage_dir / "ddparcel_qc.json",
+                        outputs=published_parcel,
+                    )
+                )
+                parcellation = _resolve_parcellation(subject_root, config.subject_id, output_root)
 
     ddseg_world_qc_state: dict[str, Optional[str]] = {}
 

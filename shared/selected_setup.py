@@ -129,12 +129,57 @@ def build_setup_plan(result, *, installed_extensions=(), loaded_extensions=None,
         if getattr(item, "key", "") in {"python:torch", "python:tractcloud:torch"}
         or (getattr(item, "kind", "") == "python" and (getattr(item, "details", None) or {}).get("import") == "torch")
     ]
+
+    def _is_cuda_device_status(item):
+        if getattr(item, "kind", "") != "device":
+            return False
+        details = getattr(item, "details", None) or {}
+        req = str(details.get("requested_device") or "").strip().lower()
+        if req == "cuda" or req.startswith("cuda:"):
+            return True
+        key = str(getattr(item, "key", "") or "").strip().lower()
+        parts = key.split(":")
+        return len(parts) >= 3 and parts[0] == "device" and parts[2] == "cuda"
+
+    def _cuda_status_is_cpu_only_torch(item):
+        details = getattr(item, "details", None) or {}
+        if details.get("cpu_only_torch"):
+            return True
+        torch_ver = str(details.get("torch_version") or "").strip().lower()
+        if "+cpu" in torch_ver:
+            return True
+        return bool(details.get("torch_importable")) and not details.get("torch_cuda_build")
+
+    cuda_device_statuses = [
+        item for item in getattr(result, "statuses", ())
+        if _is_cuda_device_status(item) and getattr(item, "required", True)
+    ]
+    cuda_device_missing = [
+        item for item in cuda_device_statuses
+        if getattr(item, "status", "") != "available"
+    ]
+    torch_statuses_cpu_only = any(
+        "+cpu" in str(((getattr(item, "details", None) or {}).get("installed_version") or "")).lower()
+        or (
+            "torch_cuda_build" in (getattr(item, "details", None) or {})
+            and not (getattr(item, "details", None) or {}).get("torch_cuda_build")
+        )
+        for item in torch_statuses
+    )
+    cuda_torch_cpu_only = bool(cuda_device_statuses) and (
+        any(_cuda_status_is_cpu_only_torch(item) for item in cuda_device_missing)
+        or (bool(cuda_device_missing) and torch_statuses_cpu_only)
+        or (bool(cuda_device_statuses) and torch_statuses_cpu_only)
+    )
+    cuda_torch_unsatisfied = bool(cuda_device_missing) or cuda_torch_cpu_only
+
     checked_targets = set(getattr(result, "targets", ()) or ())
     closure_covered = not closure_targets or set(closure_targets) <= checked_targets
     torch_already_ready = (
         closure_covered
         and bool(torch_statuses)
         and all(getattr(item, "status", "") == "available" for item in torch_statuses)
+        and not cuda_torch_unsatisfied
         and not repair
     )
     native_mask_statuses = [
@@ -145,14 +190,16 @@ def build_setup_plan(result, *, installed_extensions=(), loaded_extensions=None,
         closure_covered
         and bool(native_mask_statuses)
         and all(getattr(item, "status", "") == "available" for item in native_mask_statuses)
+        and not cuda_torch_unsatisfied
         and not repair
     )
     torch_ready = (
         (torch_already_ready if need_torch else True)
         and ((native_mask_ready or torch_already_ready) if native_mask_torch else True)
+        and not cuda_torch_unsatisfied
         and (bool(torch_statuses) or bool(native_mask_statuses))
     )
-    required_extensions = (["PyTorch"] if (need_torch or native_mask_torch) and not torch_ready else [])
+    required_extensions = (["PyTorch"] if (need_torch or native_mask_torch or cuda_torch_unsatisfied) and not torch_ready else [])
     ukf_statuses = [
         item for item in getattr(result, "statuses", ())
         if getattr(item, "key", "") == "command:UKFTractography"
@@ -348,6 +395,51 @@ def build_setup_plan(result, *, installed_extensions=(), loaded_extensions=None,
     from shared.ui_environment_panel import os_blocked_statuses
     os_blocked = [item for item in os_blocked_statuses(result) if item in missing]
     handled_keys.update(item.key for item in os_blocked)
+    def _manual_item_hint(item):
+        if native_windows and not native_wma and item.install_group == 'wma' and 'atlas' not in item.key:
+            return 'Windows WMA needs a configured WSL executable bridge; an author Bash checkout alone is not runnable. See docs/setup/WINDOWS.md.'
+        if item.key == 'brain_mask_backend' and "pnl_cnn" in unsupported_notes:
+            return PNL_UNSUPPORTED_TEXT
+        if item.install_group in {'mrtrix', 'fsl'} and fsl_unsupported:
+            return PREPROCESSING_UNSUPPORTED_TEXT
+        if _is_cuda_device_status(item) and (_cuda_status_is_cpu_only_torch(item) or cuda_torch_cpu_only):
+            base_hint = str(getattr(item, "install_hint", "") or "").strip()
+            if "cpu-only" in base_hint.lower():
+                return base_hint
+            details = getattr(item, "details", None) or {}
+            ver = details.get("torch_version") or next(
+                (
+                    (getattr(t, "details", None) or {}).get("installed_version")
+                    for t in torch_statuses
+                    if (getattr(t, "details", None) or {}).get("installed_version")
+                ),
+                None,
+            )
+            ver_text = f" ({ver})" if ver else ""
+            return (
+                f"CPU-only PyTorch{ver_text} is installed (torch.version.cuda is None); "
+                "install/configure a CUDA-enabled PyTorch build (for example via the Slicer PyTorch extension "
+                "or matching CUDA wheel index), or select CPU."
+            )
+        return item.install_hint
+
+    manual_items = [
+        {"key": item.key, "label": item.label, "hint": _manual_item_hint(item)}
+        for item in missing
+        if item.install_group not in covered and item.key not in handled_keys
+    ]
+    if cuda_torch_cpu_only and not any(entry["key"].startswith("device:") for entry in manual_items):
+        manual_items.append({
+            "key": "cuda_torch_cpu_only",
+            "label": "CUDA-enabled PyTorch required",
+            "hint": (
+                "CPU-only PyTorch is installed (torch.version.cuda is None); "
+                "install/configure a CUDA-enabled PyTorch build, or select CPU."
+            ),
+        })
+    if windows_runtime and windows_runtime["needed"] and not windows_runtime["distribution"]:
+        manual_items.append({"key": "wsl2_ubuntu", "label": WSL_MISSING_LABEL, "hint": WSL_INSTALL_COMMAND})
+
     return {"kind": "slicerdsurfer_selected_setup_plan", "extensions": list(dict.fromkeys(
                 name for name in required_extensions if name not in installed)),
             "restart_extensions": list(dict.fromkeys(name for name in required_extensions
@@ -371,15 +463,9 @@ def build_setup_plan(result, *, installed_extensions=(), loaded_extensions=None,
             "surface_bundle_unavailable": bool(surface_needed and surface_prebuilt and not surface_bundle_available),
             "unsupported_profiles": unsupported_managed,
             "unsupported_notes": unsupported_notes,
-            "manual_items": [{"key": item.key, "label": item.label, "hint":
-                              'Windows WMA needs a configured WSL executable bridge; an author Bash checkout alone is not runnable. See docs/setup/WINDOWS.md.'
-                              if native_windows and not native_wma and item.install_group == 'wma' and 'atlas' not in item.key
-                              else PNL_UNSUPPORTED_TEXT if item.key == 'brain_mask_backend' and "pnl_cnn" in unsupported_notes
-                              else PREPROCESSING_UNSUPPORTED_TEXT if item.install_group in {'mrtrix', 'fsl'} and fsl_unsupported
-                              else item.install_hint}
-                             for item in missing if item.install_group not in covered and item.key not in handled_keys]
-                            + ([{"key": "wsl2_ubuntu", "label": WSL_MISSING_LABEL, "hint": WSL_INSTALL_COMMAND}]
-                               if windows_runtime and windows_runtime["needed"] and not windows_runtime["distribution"] else []),
+            "manual_items": manual_items,
+            "cuda_torch_ready": not cuda_torch_unsatisfied,
+            "cuda_torch_cpu_only": bool(cuda_torch_cpu_only),
             "os_blocked_items": [{"key": item.key, "label": item.label,
                                   "reason": (item.details or {}).get("notes") or "", "hint": item.install_hint}
                                  for item in os_blocked],

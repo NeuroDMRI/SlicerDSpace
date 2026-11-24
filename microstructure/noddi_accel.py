@@ -824,6 +824,30 @@ def _fit_noddi_cpu(
     return estimates, rmse, nrmse
 
 
+def _is_cuda_tdr_or_launch_timeout(exc: BaseException) -> bool:
+    """Return True when ``exc`` indicates a Windows WDDM TDR reset or CUDA launch timeout / device loss."""
+    msg = str(exc).lower()
+    markers = (
+        "cudaerrorlaunchtimeout",
+        "the launch timed out and was terminated",
+        "launch timed out",
+        "unspecified launch failure",
+        "cudaerrorlaunchfailure",
+        "cudaerrordevicelost",
+        "cuda error: device-lost",
+        "device lost",
+        "cudaerrordrivershuttingdown",
+        "driver shutting down",
+    )
+    if any(tok in msg for tok in markers):
+        return True
+    if "wddm" in msg and ("tdr" in msg or "timeout" in msg or "reset" in msg):
+        return True
+    if "tdr" in msg and ("cuda" in msg or "timeout" in msg or "gpu" in msg):
+        return True
+    return False
+
+
 def _fit_noddi_cuda(
     *,
     y: np.ndarray,
@@ -840,6 +864,9 @@ def _fit_noddi_cuda(
     device: str = "cuda:0",
     explicit_cuda: bool = False,
     nthreads: int = 1,
+    execution_info: Optional[dict[str, object]] = None,
+    log: Optional[Callable[[str], None]] = None,
+    auto_nthreads: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     torch = _get_torch()
     assert torch is not None
@@ -849,6 +876,9 @@ def _fit_noddi_cuda(
     estimates = np.zeros((n_vox, 3), dtype=np.float32)
     rmse = np.zeros(n_vox, dtype=np.float32)
     nrmse = np.zeros(n_vox, dtype=np.float32)
+    dev_str = str(device or "cuda:0")
+    if execution_info is not None:
+        execution_info["device"] = dev_str
     if n_vox == 0:
         return estimates, rmse, nrmse
 
@@ -859,7 +889,6 @@ def _fit_noddi_cuda(
         run_cuda_chunked_with_oom_fallback,
     )
 
-    dev_str = str(device or "cuda:0")
     dev = torch.device(dev_str if ":" in dev_str else "cuda:0")
     order = np.argsort(dir_idx, kind="stable")
     sorted_d = dir_idx[order]
@@ -870,6 +899,7 @@ def _fit_noddi_cuda(
     nrmse_sorted = np.empty(n_vox, dtype=np.float32)
 
     wm_t = iso_t = A1_all = G1_all = dwi_idx_t = norms_t = A2_all = eye_wm = G2_all = iso_dwi_t = icvf_t = kappa_t = None
+    chunk_fallback_logged = False
     try:
         with torch.no_grad():
             # Build (ndirs, n_grad, P1) and Gram matrices on GPU in FP64
@@ -962,6 +992,14 @@ def _fit_noddi_cuda(
                 nrmse_sorted[start:stop] = nrmse_c.cpu().numpy()
 
             def _cpu_chunk_fallback(start: int, stop: int) -> None:
+                nonlocal chunk_fallback_logged
+                if not chunk_fallback_logged:
+                    chunk_fallback_logged = True
+                    msg = f"[NODDI] CUDA out of memory during chunked fit on {dev_str}; falling back to CPU for remaining {stop - start} voxels"
+                    if log is not None:
+                        log(msg)
+                    else:
+                        print(msg, flush=True)
                 est_fb, rmse_fb, nrmse_fb = _fit_noddi_cpu(
                     y=Y_sorted[start:stop],
                     dir_idx=sorted_d[start:stop],
@@ -975,12 +1013,13 @@ def _fit_noddi_cuda(
                     lambda2=lambda2,
                     ndirs=ndirs,
                     nthreads=max(1, int(nthreads)),
+                    auto_nthreads=bool(auto_nthreads),
                 )
                 est_sorted[start:stop] = est_fb
                 rmse_sorted[start:stop] = rmse_fb
                 nrmse_sorted[start:stop] = nrmse_fb
 
-            run_cuda_chunked_with_oom_fallback(
+            chunk_stats = run_cuda_chunked_with_oom_fallback(
                 n_vox,
                 chunk_size,
                 _cuda_chunk_step,
@@ -988,15 +1027,59 @@ def _fit_noddi_cuda(
                 cpu_fallback_fn=None if explicit_cuda else _cpu_chunk_fallback,
             )
 
+        if execution_info is not None and isinstance(chunk_stats, dict):
+            fb_items = int(chunk_stats.get("cpu_fallback_items", 0))
+            execution_info["oom_retries"] = int(chunk_stats.get("oom_retries", 0))
+            execution_info["cpu_fallback_voxels"] = fb_items
+            if fb_items > 0:
+                execution_info["device"] = "cpu"
+                execution_info["device_fallback"] = True
+                execution_info["fallback_from"] = dev_str
+                execution_info["fallback_kind"] = "cuda_oom"
+                execution_info["fallback_reason"] = f"CUDA OOM during chunked fit ({fb_items}/{n_vox} voxels computed on CPU)"
+
         estimates[order] = est_sorted
         rmse[order] = rmse_sorted
         nrmse[order] = nrmse_sorted
     except BaseException as exc:
-        if explicit_cuda or not is_cuda_oom(exc):
+        is_oom = is_cuda_oom(exc)
+        is_tdr = _is_cuda_tdr_or_launch_timeout(exc)
+        if not (is_oom or is_tdr):
+            raise
+        if explicit_cuda:
+            if is_tdr:
+                raise RuntimeError(
+                    f"NODDI CUDA kernel launch timed out / device reset on {dev_str} "
+                    f"(Windows WDDM TDR or GPU launch timeout: {exc}). "
+                    "Reduce display GPU contention, lower SLICERDSPACE_MAX_VRAM_GIB or batch workload, "
+                    "adjust Windows WDDM TdrDelay, or select device='cpu' / 'auto'."
+                ) from exc
             raise
         del wm_t, iso_t, A1_all, G1_all, dwi_idx_t, norms_t, A2_all, eye_wm, G2_all, iso_dwi_t, icvf_t, kappa_t
         wm_t = iso_t = A1_all = G1_all = dwi_idx_t = norms_t = A2_all = eye_wm = G2_all = iso_dwi_t = icvf_t = kappa_t = None
         empty_cuda_cache_safely()
+        if is_tdr:
+            fallback_msg = (
+                f"[NODDI] CUDA kernel launch timeout / WDDM TDR detected on {dev_str} "
+                f"(not OOM: {exc}); falling back to CPU"
+            )
+            fallback_kind = "wddm_tdr"
+            fallback_reason = f"WDDM TDR / CUDA launch timeout: {exc}"
+        else:
+            fallback_msg = f"[NODDI] CUDA out of memory on {dev_str} ({exc}); falling back to CPU"
+            fallback_kind = "cuda_oom"
+            fallback_reason = f"CUDA OOM: {exc}"
+        if log is not None:
+            log(fallback_msg)
+        else:
+            print(fallback_msg, flush=True)
+        if execution_info is not None:
+            execution_info["device"] = "cpu"
+            execution_info["device_fallback"] = True
+            execution_info["fallback_from"] = dev_str
+            execution_info["fallback_kind"] = fallback_kind
+            execution_info["fallback_reason"] = fallback_reason
+            execution_info["cpu_fallback_voxels"] = n_vox
         return _fit_noddi_cpu(
             y=y,
             dir_idx=dir_idx,
@@ -1010,6 +1093,7 @@ def _fit_noddi_cuda(
             lambda2=lambda2,
             ndirs=ndirs,
             nthreads=max(1, int(nthreads)),
+            auto_nthreads=bool(auto_nthreads),
         )
     finally:
         del wm_t, iso_t, A1_all, G1_all, dwi_idx_t, norms_t, A2_all, eye_wm, G2_all, iso_dwi_t, icvf_t, kappa_t
@@ -1176,6 +1260,7 @@ def run_accelerated_noddi_fit(
     dwi_idx = np.asarray(scheme.dwi_idx, dtype=np.int64)
 
     requested_norm = str(getattr(config, "noddi_device", "") or "").strip().lower()
+    exec_info: dict[str, object] = {"device": resolved_device}
     if resolved_device.startswith("cuda"):
         estimates, rmse_v, nrmse_v = _fit_noddi_cuda(
             y=y,
@@ -1192,6 +1277,9 @@ def run_accelerated_noddi_fit(
             device=resolved_device,
             explicit_cuda=requested_norm == "cuda" or requested_norm.startswith("cuda:"),
             nthreads=int(nthreads),
+            execution_info=exec_info,
+            log=log,
+            auto_nthreads=bool(auto_nthreads),
         )
     else:
         estimates, rmse_v, nrmse_v = _fit_noddi_cpu(
@@ -1209,6 +1297,7 @@ def run_accelerated_noddi_fit(
             nthreads=int(nthreads),
             auto_nthreads=bool(auto_nthreads),
         )
+    actual_device = str(exec_info.get("device") or resolved_device)
     t_fit = time.monotonic() - t2
 
     if progress_cb is not None:
@@ -1237,7 +1326,7 @@ def run_accelerated_noddi_fit(
             stale.unlink(missing_ok=True)
 
     amico_ver = str(getattr(amico_mod, "__version__", "2.0"))
-    cfg_record = {
+    cfg_record: dict[str, object] = {
         "version": amico_ver,
         "study_path": str(cache_root),
         "subject": config.subject_id,
@@ -1246,13 +1335,21 @@ def run_accelerated_noddi_fit(
         "lmax": int(config.noddi_lmax),
         "ndirs": int(config.noddi_ndirs),
         "nthreads": int(nthreads),
-        "device": resolved_device,
+        "device": actual_device,
+        "requested_device": requested_norm or "auto",
+        "resolved_device": resolved_device,
         "fit_time": t_fit,
         "solver_params": {
             "lambda1": float(config.noddi_solver_lambda1),
             "lambda2": float(config.noddi_solver_lambda2),
         },
     }
+    if exec_info.get("fallback_from"):
+        cfg_record["device_fallback"] = True
+        cfg_record["fallback_from"] = exec_info["fallback_from"]
+        cfg_record["fallback_reason"] = exec_info.get("fallback_reason")
+        if exec_info.get("fallback_kind"):
+            cfg_record["fallback_kind"] = exec_info["fallback_kind"]
     with (amico_output_dir / "config.pickle").open("wb") as fh:
         pickle.dump(cfg_record, fh, protocol=2)
 
@@ -1313,13 +1410,23 @@ def run_accelerated_noddi_fit(
         "noddi_rmse": rmse_map,
         "noddi_nrmse": nrmse_map,
     }
-    exec_meta = {
-        "engine": f"batched_lawson_hanson_fp64_{'cuda' if resolved_device.startswith('cuda') else resolved_device}",
-        "device": resolved_device,
+    exec_meta: dict[str, object] = {
+        "engine": f"batched_lawson_hanson_fp64_{'cuda' if actual_device.startswith('cuda') else actual_device}",
+        "device": actual_device,
+        "requested_device": requested_norm or "auto",
+        "resolved_device": resolved_device,
         "nthreads": int(nthreads),
         "load_seconds": round(t_load, 4),
         "kernel_seconds": round(t_kern, 4),
         "fit_seconds": round(t_fit, 4),
         "save_seconds": round(t_save, 4),
     }
+    if exec_info.get("fallback_from"):
+        exec_meta["device_fallback"] = True
+        exec_meta["fallback_from"] = exec_info["fallback_from"]
+        exec_meta["fallback_reason"] = exec_info.get("fallback_reason")
+        if exec_info.get("fallback_kind"):
+            exec_meta["fallback_kind"] = exec_info["fallback_kind"]
+        if "cpu_fallback_voxels" in exec_info:
+            exec_meta["cpu_fallback_voxels"] = exec_info["cpu_fallback_voxels"]
     return mask_img, mask_bool, noddi_sources, source_arrays, exec_meta

@@ -413,7 +413,12 @@ def query_host_available_ram_bytes() -> int:
 
         _, mem_b = available_resources()
         if int(mem_b) > 0:
-            return min(int(mem_b), cap_b) if cap_b is not None else int(mem_b)
+            eff_b = int(mem_b)
+            if sys.platform.startswith("linux"):
+                cg_avail = linux_cgroup_limits().get("memory_available_bytes")
+                if cg_avail is not None:
+                    eff_b = min(eff_b, int(cg_avail * 0.7))
+            return min(eff_b, cap_b) if cap_b is not None else eff_b
     except Exception:
         pass
     return min(8 * GIB, cap_b) if cap_b is not None else 8 * GIB
@@ -524,6 +529,12 @@ def host_total_ram_gib(*, respect_env_cap: bool = True) -> float | None:
         except (OSError, ValueError):
             pass
 
+    if sys.platform.startswith("linux"):
+        cg_limit = linux_cgroup_limits().get("memory_limit_bytes")
+        if cg_limit is not None and cg_limit > 0:
+            cg_gib = float(cg_limit) / float(GIB)
+            total_gib = cg_gib if total_gib is None else min(total_gib, cg_gib)
+
     if total_gib is None:
         return cap_gib
     return min(total_gib, cap_gib) if cap_gib is not None else total_gib
@@ -622,6 +633,421 @@ def _parse_linux_cpulist(spec: str) -> list[int]:
         elif token.isdigit():
             cpus.append(int(token))
     return sorted(set(cpus))
+
+
+_CGROUP_UNLIMITED_BYTES = 1 << 60
+
+
+def _cgroup_ancestor_dirs(base: Path, rel_path: str) -> list[Path]:
+    """Return ancestor directories from leaf ``base / rel_path`` up to ``base`` (inclusive)."""
+    parts = [part for part in rel_path.strip().strip("/").split("/") if part and part not in (".", "..")]
+    chain = [base]
+    cur = base
+    for part in parts:
+        cur = cur / part
+        chain.append(cur)
+    out: list[Path] = []
+    for item in reversed(chain):
+        if item not in out:
+            out.append(item)
+    return out
+
+
+def linux_cgroup_limits(
+    *,
+    proc_cgroup_path: Path | str = Path("/proc/self/cgroup"),
+    cgroup_root: Path | str = Path("/sys/fs/cgroup"),
+) -> dict[str, int | None]:
+    """Resolve the tightest effective Linux cgroup v1/v2 CPU and memory limits across all ancestors.
+
+    Reads ``proc_cgroup_path`` (default ``/proc/self/cgroup``) to locate the current process's
+    nested cgroup v2 unified path and/or cgroup v1 ``cpu``/``cpuset``/``memory`` controller paths,
+    then walks every ancestor from leaf up to ``cgroup_root`` taking the minimum effective quota
+    and memory headroom. Also checks root cgroup files as a fallback when ``/proc/self/cgroup``
+    is absent or container cgroup namespaces bind-mount the leaf at root.
+    """
+    root = Path(cgroup_root)
+    v2_rel_paths: list[str] = []
+    v1_mounts: dict[str, list[tuple[str, str]]] = {"cpu": [], "cpuset": [], "memory": []}
+
+    try:
+        raw_cgroup = Path(proc_cgroup_path).read_text(encoding="utf-8")
+    except OSError:
+        raw_cgroup = ""
+
+    for line in raw_cgroup.splitlines():
+        parts = line.strip().split(":", 2)
+        if len(parts) != 3:
+            continue
+        hier_id, controllers_raw, cg_path = parts
+        cg_path = cg_path.strip()
+        if hier_id == "0" and controllers_raw == "":
+            if cg_path not in v2_rel_paths:
+                v2_rel_paths.append(cg_path)
+            continue
+        controllers = [c.strip() for c in controllers_raw.split(",") if c.strip()]
+        for key in ("cpu", "cpuset", "memory"):
+            if key in controllers:
+                # Check both combined mount dir (e.g. cpu,cpuacct) and single controller dir (cpu).
+                for mount_name in (controllers_raw.strip(), key):
+                    if mount_name and (mount_name, cg_path) not in v1_mounts[key]:
+                        v1_mounts[key].append((mount_name, cg_path))
+
+    # Always include root mount fallback so host-bind-mounted containers and root-only stubs work.
+    if "" not in v2_rel_paths:
+        v2_rel_paths.append("")
+    for key in ("cpu", "cpuset", "memory"):
+        if (key, "") not in v1_mounts[key]:
+            v1_mounts[key].append((key, ""))
+
+    cpu_limit: int | None = None
+    memory_limit_bytes: int | None = None
+    memory_available_bytes: int | None = None
+
+    def _min_opt(cur: int | None, val: int) -> int:
+        return val if cur is None else min(cur, val)
+
+    # 1. cgroup v2 unified hierarchy walk
+    seen_v2: set[Path] = set()
+    for rel in v2_rel_paths:
+        for directory in _cgroup_ancestor_dirs(root, rel):
+            if directory in seen_v2:
+                continue
+            seen_v2.add(directory)
+            # CPU quota (cpu.max -> "<quota> <period>")
+            try:
+                tokens = (directory / "cpu.max").read_text(encoding="utf-8").split()
+                if len(tokens) >= 2 and tokens[0] != "max":
+                    quota_us, period_us = int(tokens[0]), int(tokens[1])
+                    if quota_us > 0 and period_us > 0:
+                        cpu_limit = _min_opt(cpu_limit, max(1, quota_us // period_us))
+            except (OSError, ValueError, ZeroDivisionError):
+                pass
+            # Effective cpuset
+            for cpuset_file in ("cpuset.cpus.effective", "cpuset.cpus"):
+                try:
+                    cpulist = _parse_linux_cpulist((directory / cpuset_file).read_text(encoding="utf-8"))
+                    if cpulist:
+                        cpu_limit = _min_opt(cpu_limit, len(cpulist))
+                        break
+                except OSError:
+                    pass
+            # Memory limit & remaining headroom
+            try:
+                raw_max = (directory / "memory.max").read_text(encoding="utf-8").strip()
+                if raw_max and raw_max != "max":
+                    ceiling = int(raw_max)
+                    if 0 < ceiling < _CGROUP_UNLIMITED_BYTES:
+                        memory_limit_bytes = _min_opt(memory_limit_bytes, ceiling)
+                        try:
+                            used = int((directory / "memory.current").read_text(encoding="utf-8").strip())
+                            if used >= 0:
+                                memory_available_bytes = _min_opt(memory_available_bytes, max(0, ceiling - used))
+                        except (OSError, ValueError):
+                            pass
+            except (OSError, ValueError):
+                pass
+
+    # 2. cgroup v1 CPU quota walk
+    seen_v1_cpu: set[Path] = set()
+    for mount_name, rel in v1_mounts["cpu"]:
+        for directory in _cgroup_ancestor_dirs(root / mount_name, rel):
+            if directory in seen_v1_cpu:
+                continue
+            seen_v1_cpu.add(directory)
+            try:
+                quota_us = int((directory / "cpu.cfs_quota_us").read_text(encoding="utf-8").strip())
+                period_us = int((directory / "cpu.cfs_period_us").read_text(encoding="utf-8").strip())
+                if quota_us > 0 and period_us > 0:
+                    cpu_limit = _min_opt(cpu_limit, max(1, quota_us // period_us))
+            except (OSError, ValueError, ZeroDivisionError):
+                pass
+
+    # 3. cgroup v1 cpuset walk
+    seen_v1_cpuset: set[Path] = set()
+    for mount_name, rel in v1_mounts["cpuset"]:
+        for directory in _cgroup_ancestor_dirs(root / mount_name, rel):
+            if directory in seen_v1_cpuset:
+                continue
+            seen_v1_cpuset.add(directory)
+            for cpuset_file in ("cpuset.effective_cpus", "cpuset.cpus.effective", "cpuset.cpus"):
+                try:
+                    cpulist = _parse_linux_cpulist((directory / cpuset_file).read_text(encoding="utf-8"))
+                    if cpulist:
+                        cpu_limit = _min_opt(cpu_limit, len(cpulist))
+                        break
+                except OSError:
+                    pass
+
+    # 4. cgroup v1 memory walk
+    seen_v1_mem: set[Path] = set()
+    for mount_name, rel in v1_mounts["memory"]:
+        for directory in _cgroup_ancestor_dirs(root / mount_name, rel):
+            if directory in seen_v1_mem:
+                continue
+            seen_v1_mem.add(directory)
+            try:
+                ceiling = int((directory / "memory.limit_in_bytes").read_text(encoding="utf-8").strip())
+                if 0 < ceiling < _CGROUP_UNLIMITED_BYTES:
+                    memory_limit_bytes = _min_opt(memory_limit_bytes, ceiling)
+                    try:
+                        used = int((directory / "memory.usage_in_bytes").read_text(encoding="utf-8").strip())
+                        if used >= 0:
+                            memory_available_bytes = _min_opt(memory_available_bytes, max(0, ceiling - used))
+                    except (OSError, ValueError):
+                        pass
+            except (OSError, ValueError):
+                pass
+
+    return {
+        "cpu_limit": cpu_limit,
+        "memory_limit_bytes": memory_limit_bytes,
+        "memory_available_bytes": memory_available_bytes,
+    }
+
+
+def _read_windows_memory_counters() -> dict[str, int | None]:
+    """Query Windows physical RAM and system commit charge via Win32 ctypes (zero extra deps)."""
+    result: dict[str, int | None] = {
+        "total_phys_bytes": None,
+        "avail_phys_bytes": None,
+        "commit_limit_bytes": None,
+        "commit_total_bytes": None,
+        "commit_avail_bytes": None,
+    }
+    if os.name != "nt":
+        return result
+    try:
+        import ctypes
+
+        class _PerformanceInformation(ctypes.Structure):
+            _fields_ = [
+                ("cb", ctypes.c_uint32),
+                ("CommitTotal", ctypes.c_size_t),
+                ("CommitLimit", ctypes.c_size_t),
+                ("CommitPeak", ctypes.c_size_t),
+                ("PhysicalTotal", ctypes.c_size_t),
+                ("PhysicalAvailable", ctypes.c_size_t),
+                ("SystemCache", ctypes.c_size_t),
+                ("KernelTotal", ctypes.c_size_t),
+                ("KernelPaged", ctypes.c_size_t),
+                ("KernelNonpaged", ctypes.c_size_t),
+                ("PageSize", ctypes.c_size_t),
+                ("HandleCount", ctypes.c_uint32),
+                ("ProcessCount", ctypes.c_uint32),
+                ("ThreadCount", ctypes.c_uint32),
+            ]
+
+        info = _PerformanceInformation()
+        info.cb = ctypes.sizeof(_PerformanceInformation)
+        perf_fn = None
+        for dll_name, fn_name in (("kernel32", "K32GetPerformanceInfo"), ("psapi", "GetPerformanceInfo")):
+            try:
+                dll = ctypes.WinDLL(dll_name, use_last_error=True)
+                cand = getattr(dll, fn_name, None)
+                if cand is not None:
+                    perf_fn = cand
+                    break
+            except OSError:
+                continue
+        if perf_fn is not None:
+            perf_fn.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+            perf_fn.restype = ctypes.c_int
+            if perf_fn(ctypes.byref(info), info.cb) and info.PageSize > 0:
+                page = int(info.PageSize)
+                if info.PhysicalTotal > 0:
+                    result["total_phys_bytes"] = int(info.PhysicalTotal) * page
+                    result["avail_phys_bytes"] = int(info.PhysicalAvailable) * page
+                if info.CommitLimit > 0:
+                    result["commit_limit_bytes"] = int(info.CommitLimit) * page
+                    result["commit_total_bytes"] = int(info.CommitTotal) * page
+                    result["commit_avail_bytes"] = max(0, int(info.CommitLimit) - int(info.CommitTotal)) * page
+    except Exception:
+        pass
+
+    if result["total_phys_bytes"] is None or result["commit_avail_bytes"] is None:
+        try:
+            import ctypes
+
+            class _MemoryStatusEx(ctypes.Structure):
+                _fields_ = [
+                    ("dwLength", ctypes.c_uint32),
+                    ("dwMemoryLoad", ctypes.c_uint32),
+                    ("ullTotalPhys", ctypes.c_uint64),
+                    ("ullAvailPhys", ctypes.c_uint64),
+                    ("ullTotalPageFile", ctypes.c_uint64),
+                    ("ullAvailPageFile", ctypes.c_uint64),
+                    ("ullTotalVirtual", ctypes.c_uint64),
+                    ("ullAvailVirtual", ctypes.c_uint64),
+                    ("ullAvailExtendedVirtual", ctypes.c_uint64),
+                ]
+
+            stat = _MemoryStatusEx()
+            stat.dwLength = ctypes.sizeof(_MemoryStatusEx)
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            if kernel32.GlobalMemoryStatusEx(ctypes.byref(stat)):
+                if stat.ullTotalPhys > 0:
+                    if result["total_phys_bytes"] is None:
+                        result["total_phys_bytes"] = int(stat.ullTotalPhys)
+                    if result["avail_phys_bytes"] is None:
+                        result["avail_phys_bytes"] = int(stat.ullAvailPhys)
+                if stat.ullTotalPageFile > 0:
+                    if result["commit_limit_bytes"] is None:
+                        result["commit_limit_bytes"] = int(stat.ullTotalPageFile)
+                    if result["commit_avail_bytes"] is None:
+                        result["commit_avail_bytes"] = int(stat.ullAvailPageFile)
+                    if result["commit_total_bytes"] is None:
+                        result["commit_total_bytes"] = max(0, int(stat.ullTotalPageFile) - int(stat.ullAvailPageFile))
+        except Exception:
+            pass
+    return result
+
+
+def _parse_linux_meminfo(meminfo_path: Path | str = Path("/proc/meminfo")) -> dict[str, int]:
+    """Parse Linux ``/proc/meminfo`` fields into bytes."""
+    parsed: dict[str, int] = {}
+    try:
+        text = Path(meminfo_path).read_text(encoding="utf-8")
+    except OSError:
+        return parsed
+    for line in text.splitlines():
+        if ":" not in line:
+            continue
+        key, rest = line.split(":", 1)
+        tokens = rest.strip().split()
+        if not tokens:
+            continue
+        try:
+            val = int(tokens[0])
+        except ValueError:
+            continue
+        unit = tokens[1].lower() if len(tokens) > 1 else ""
+        scale = 1024 if unit == "kb" else (1024 * 1024 if unit == "mb" else 1)
+        parsed[key.strip()] = val * scale
+    return parsed
+
+
+def query_host_memory_snapshot(
+    *,
+    respect_env_cap: bool = True,
+    meminfo_path: Path | str = Path("/proc/meminfo"),
+    proc_cgroup_path: Path | str = Path("/proc/self/cgroup"),
+    cgroup_root: Path | str = Path("/sys/fs/cgroup"),
+) -> dict[str, float | None]:
+    """Return a cross-OS snapshot of host physical RAM, available RAM, and commit/swap headroom (GiB).
+
+    Keys:
+      - ``total_ram_gib``: installed physical RAM (or cgroup memory ceiling on Linux when tighter)
+      - ``available_ram_gib``: currently available physical RAM (Rosetta-corrected on macOS)
+      - ``commit_limit_gib``, ``commit_total_gib``, ``commit_available_gib``: Windows commit charge
+      - ``swap_total_gib``, ``swap_free_gib``: swap capacity/headroom on Linux/macOS
+      - ``effective_available_ram_gib``: ``min(available_ram_gib, commit_available_gib)`` when both
+        are known, otherwise whichever is observable
+    """
+    cap_gib: float | None = None
+    if respect_env_cap:
+        cap_env = os.environ.get("SLICERDSPACE_MAX_RAM_GIB", "").strip()
+        if cap_env:
+            try:
+                parsed_cap = float(cap_env)
+                if parsed_cap > 0:
+                    cap_gib = parsed_cap
+            except ValueError:
+                pass
+
+    total_gib: float | None = None
+    avail_gib: float | None = None
+    commit_limit_gib: float | None = None
+    commit_total_gib: float | None = None
+    commit_avail_gib: float | None = None
+    swap_total_gib: float | None = None
+    swap_free_gib: float | None = None
+
+    if sys.platform == "win32":
+        win = _read_windows_memory_counters()
+        if win["total_phys_bytes"] is not None:
+            total_gib = float(win["total_phys_bytes"]) / float(GIB)
+        if win["avail_phys_bytes"] is not None:
+            avail_gib = float(win["avail_phys_bytes"]) / float(GIB)
+        if win["commit_limit_bytes"] is not None:
+            commit_limit_gib = float(win["commit_limit_bytes"]) / float(GIB)
+        if win["commit_total_bytes"] is not None:
+            commit_total_gib = float(win["commit_total_bytes"]) / float(GIB)
+        if win["commit_avail_bytes"] is not None:
+            commit_avail_gib = float(win["commit_avail_bytes"]) / float(GIB)
+    elif sys.platform.startswith("linux"):
+        info = _parse_linux_meminfo(meminfo_path)
+        if info.get("MemTotal", 0) > 0:
+            total_gib = float(info["MemTotal"]) / float(GIB)
+        if "MemAvailable" in info:
+            avail_gib = float(info["MemAvailable"]) / float(GIB)
+        elif "MemFree" in info:
+            approx = info["MemFree"] + info.get("Buffers", 0) + info.get("Cached", 0)
+            avail_gib = float(approx) / float(GIB)
+        if "SwapTotal" in info:
+            swap_total_gib = float(info["SwapTotal"]) / float(GIB)
+        if "SwapFree" in info:
+            swap_free_gib = float(info["SwapFree"]) / float(GIB)
+        cg = linux_cgroup_limits(proc_cgroup_path=proc_cgroup_path, cgroup_root=cgroup_root)
+        if cg["memory_limit_bytes"] is not None:
+            cg_tot = float(cg["memory_limit_bytes"]) / float(GIB)
+            total_gib = cg_tot if total_gib is None else min(total_gib, cg_tot)
+        if cg["memory_available_bytes"] is not None:
+            cg_avail = float(cg["memory_available_bytes"]) / float(GIB)
+            avail_gib = cg_avail if avail_gib is None else min(avail_gib, cg_avail)
+    elif sys.platform == "darwin":
+        total_gib = host_total_ram_gib(respect_env_cap=False)
+        try:
+            from shared.platform_info import available_host_ram_bytes
+
+            avail_b = available_host_ram_bytes()
+            if avail_b is not None and avail_b >= 0:
+                avail_gib = float(avail_b) / float(GIB)
+        except Exception:
+            pass
+        try:
+            import psutil
+
+            sw = psutil.swap_memory()
+            swap_total_gib = float(sw.total) / float(GIB)
+            swap_free_gib = float(sw.free) / float(GIB)
+        except Exception:
+            pass
+
+    if total_gib is None or avail_gib is None:
+        try:
+            import psutil
+
+            vm = psutil.virtual_memory()
+            if total_gib is None and int(vm.total) > 0:
+                total_gib = float(vm.total) / float(GIB)
+            if avail_gib is None and int(vm.available) >= 0:
+                avail_gib = float(vm.available) / float(GIB)
+        except Exception:
+            pass
+    if total_gib is None:
+        total_gib = host_total_ram_gib(respect_env_cap=False)
+
+    if cap_gib is not None:
+        total_gib = cap_gib if total_gib is None else min(total_gib, cap_gib)
+        if avail_gib is not None:
+            avail_gib = min(avail_gib, cap_gib)
+        if commit_avail_gib is not None:
+            commit_avail_gib = min(commit_avail_gib, cap_gib)
+
+    eff_candidates = [v for v in (avail_gib, commit_avail_gib) if v is not None]
+    effective_avail_gib = min(eff_candidates) if eff_candidates else None
+
+    return {
+        "total_ram_gib": total_gib,
+        "available_ram_gib": avail_gib,
+        "commit_limit_gib": commit_limit_gib,
+        "commit_total_gib": commit_total_gib,
+        "commit_available_gib": commit_avail_gib,
+        "swap_total_gib": swap_total_gib,
+        "swap_free_gib": swap_free_gib,
+        "effective_available_ram_gib": effective_avail_gib,
+    }
 
 
 def linux_single_socket_physical_cores(logical_cpus: int | None = None) -> int:

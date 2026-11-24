@@ -15,6 +15,7 @@ this module adds no new discovery rule.
 from __future__ import annotations
 
 import contextlib
+import gzip
 import hashlib
 import importlib.util
 import os
@@ -30,8 +31,9 @@ MAX_CACHED_PREVIEWS = 6
 _CACHE_VERSION = "v2"
 # O1: a NIfTI whose voxel data is smaller than this is read in one pass; a larger one is read volume by volume.
 _ONE_PASS_BYTES = 1 << 30
-# O2: a NRRD is read whole, so a header that announces more voxel data than this is refused.
+# O2: a single 3D NRRD volume (or whole NRRD for non-streamable encodings / full DWI) above this limit is refused.
 MAX_NRRD_BYTES = 4 << 30
+_NRRD_STREAM_CHUNK_BYTES = 8 << 20
 _MAX_PAYLOAD_FILES = 4096
 # b2-dwi: the full DWI is built when its voxel data is at most min(FULL_DWI_MAX_BYTES, FULL_DWI_RAM_FRACTION * RAM).
 FULL_DWI_MAX_BYTES = 4 << 30
@@ -465,6 +467,170 @@ def nrrd_payload_files(path: Any, raw: Any = None) -> list:
     return [path.parent / name for name in names[:_MAX_PAYLOAD_FILES]]
 
 
+_NRRD_TYPEMAP_FALLBACK = {
+    "signed char": "i1", "int8": "i1", "int8_t": "i1",
+    "uchar": "u1", "unsigned char": "u1", "uint8": "u1", "uint8_t": "u1",
+    "short": "i2", "short int": "i2", "signed short": "i2", "signed short int": "i2", "int16": "i2", "int16_t": "i2",
+    "ushort": "u2", "unsigned short": "u2", "unsigned short int": "u2", "uint16": "u2", "uint16_t": "u2",
+    "int": "i4", "signed int": "i4", "int32": "i4", "int32_t": "i4",
+    "uint": "u4", "unsigned int": "u4", "uint32": "u4", "uint32_t": "u4",
+    "longlong": "i8", "long long": "i8", "long long int": "i8", "signed long long": "i8",
+    "signed long long int": "i8", "int64": "i8", "int64_t": "i8",
+    "ulonglong": "u8", "unsigned long long": "u8", "unsigned long long int": "u8", "uint64": "u8", "uint64_t": "u8",
+    "float": "f4",
+    "double": "f8",
+}
+
+
+def _nrrd_numpy_dtype(header: Mapping[str, Any], nrrd_mod: Any):
+    import numpy as np
+
+    reader = getattr(nrrd_mod, "reader", None)
+    determine = getattr(reader, "_determine_datatype", None)
+    if callable(determine):
+        return determine(header)
+    type_key = str(header.get("type", "")).strip().lower()
+    if type_key not in _NRRD_TYPEMAP_FALLBACK:
+        raise PreviewError("bad_data", f"Unsupported NRRD data type: {header.get('type')!r}")
+    code = _NRRD_TYPEMAP_FALLBACK[type_key]
+    if np.dtype(code).itemsize > 1:
+        endian = str(header.get("endian", "")).strip().lower()
+        if endian == "big":
+            code = ">" + code
+        elif endian == "little":
+            code = "<" + code
+        else:
+            raise PreviewError("bad_data", f"Unsupported or missing NRRD endianness: {header.get('endian')!r}")
+    return np.dtype(code)
+
+
+def _read_exact_bytes(stream: Any, n_bytes: int) -> bytes:
+    if n_bytes <= 0:
+        return b""
+    chunks: list[bytes] = []
+    remaining = int(n_bytes)
+    while remaining > 0:
+        part = stream.read(remaining)
+        if not part:
+            raise PreviewError("bad_data", "The NRRD data stream ended before all voxels were read.")
+        chunks.append(part)
+        remaining -= len(part)
+    return chunks[0] if len(chunks) == 1 else b"".join(chunks)
+
+
+def _skip_exact_bytes(stream: Any, n_bytes: int, chunk_bytes: int = 4 << 20) -> None:
+    remaining = int(n_bytes)
+    while remaining > 0:
+        part = stream.read(min(remaining, chunk_bytes))
+        if not part:
+            raise PreviewError("bad_data", "The NRRD data stream ended before all voxels were read.")
+        remaining -= len(part)
+
+
+def _stream_mean_b0_nrrd_payload(
+    header: Mapping[str, Any],
+    target: str,
+    attached_fh: Any,
+    axis: int,
+    indices: list[int],
+    nrrd_mod: Any,
+):
+    """Stream-decode only the requested b0 volume(s) from raw or gzip NRRD/NHDR without allocating the 4D array.
+
+    Returns the float32 3D mean-b0 array on success, or ``None`` when the header uses an encoding or
+    multi-file layout that requires falling back to ``nrrd.read``.
+    """
+    import numpy as np
+
+    encoding = str(header.get("encoding", "")).strip().lower()
+    if encoding not in {"raw", "gzip", "gz"}:
+        return None
+    data_filename = header.get("datafile", header.get("data file", None))
+    if data_filename is not None:
+        if not isinstance(data_filename, str):
+            return None
+        stripped = data_filename.strip()
+        if not stripped or stripped.upper().startswith("LIST") or "%" in stripped:
+            return None
+        data_filename = stripped
+    line_skip = int(header.get("lineskip", header.get("line skip", 0)))
+    byte_skip = int(header.get("byteskip", header.get("byte skip", 0)))
+    if line_skip < 0 or byte_skip < -1:
+        raise PreviewError("bad_data", "The NRRD header has an invalid line skip or byte skip.")
+    if encoding != "raw" and byte_skip != 0:
+        return None
+
+    sizes = tuple(int(s) for s in header.get("sizes", []))
+    spatial_shape = tuple(s for i, s in enumerate(sizes) if i != axis)
+    ng = int(sizes[axis])
+    inner = int(np.prod(sizes[:axis], dtype=np.int64))
+    outer = int(np.prod(sizes[axis + 1 :], dtype=np.int64))
+    dtype = _nrrd_numpy_dtype(header, nrrd_mod)
+    itemsize = int(dtype.itemsize)
+    total_voxels = int(np.prod(sizes, dtype=np.int64))
+
+    with contextlib.ExitStack() as stack:
+        if data_filename is not None:
+            data_path = (
+                data_filename
+                if os.path.isabs(data_filename)
+                else os.path.join(os.path.dirname(target), data_filename)
+            )
+            data_fh = stack.enter_context(open(data_path, "rb"))
+        else:
+            data_fh = attached_fh
+
+        for _ in range(line_skip):
+            data_fh.readline()
+        if byte_skip > 0:
+            data_fh.seek(byte_skip, os.SEEK_CUR)
+        elif byte_skip == -1:
+            data_fh.seek(-total_voxels * itemsize, os.SEEK_END)
+
+        if outer == 1:
+            # Gradient axis is last (sizes = X, Y, Z, G): each 3D volume is one contiguous block in Fortran order.
+            vol_bytes = inner * itemsize
+            total = np.zeros(spatial_shape, dtype=np.float32)
+            if encoding == "raw":
+                base_offset = data_fh.tell()
+                data_fh.seek(0, os.SEEK_END)
+                if data_fh.tell() < base_offset + ng * vol_bytes:
+                    raise PreviewError("bad_data", "The NRRD data file is shorter than the header dimensions.")
+                for g in indices:
+                    data_fh.seek(base_offset + int(g) * vol_bytes, os.SEEK_SET)
+                    raw_bytes = _read_exact_bytes(data_fh, vol_bytes)
+                    vol = np.frombuffer(raw_bytes, dtype=dtype).reshape(spatial_shape, order="F")
+                    total += vol.astype(np.float32, copy=False)
+            else:
+                gz = stack.enter_context(gzip.GzipFile(fileobj=data_fh, mode="rb"))
+                last_idx = max(indices)
+                wanted = set(indices)
+                for g in range(last_idx + 1):
+                    if g in wanted:
+                        raw_bytes = _read_exact_bytes(gz, vol_bytes)
+                        vol = np.frombuffer(raw_bytes, dtype=dtype).reshape(spatial_shape, order="F")
+                        total += vol.astype(np.float32, copy=False)
+                    else:
+                        _skip_exact_bytes(gz, vol_bytes)
+            return total / np.float32(len(indices))
+
+        # Interleaved gradient axis (e.g. axis == 0, sizes = G, X, Y, Z): stream bounded outer slabs.
+        stream = data_fh if encoding == "raw" else stack.enter_context(gzip.GzipFile(fileobj=data_fh, mode="rb"))
+        slab_bytes = inner * ng * itemsize
+        chunk_outer = max(1, min(outer, _NRRD_STREAM_CHUNK_BYTES // max(1, slab_bytes)))
+        total_flat = np.zeros((inner, outer), dtype=np.float32, order="F")
+        o0 = 0
+        while o0 < outer:
+            o1 = min(outer, o0 + chunk_outer)
+            cur_outer = o1 - o0
+            raw_bytes = _read_exact_bytes(stream, cur_outer * slab_bytes)
+            chunk = np.frombuffer(raw_bytes, dtype=dtype).reshape((inner, ng, cur_outer), order="F")
+            for g in indices:
+                total_flat[:, o0:o1] += chunk[:, int(g), :].astype(np.float32, copy=False)
+            o0 = o1
+        return (total_flat / np.float32(len(indices))).reshape(spatial_shape, order="F")
+
+
 def _mean_b0_nrrd(source: PreviewSource, threshold: float):
     import nibabel as nib
     import numpy as np
@@ -475,26 +641,42 @@ def _mean_b0_nrrd(source: PreviewSource, threshold: float):
         raise PreviewError("bad_data", "Reading NRRD needs pynrrd, which is not installed.") from exc
     try:
         with _nrrd_read_target(source) as target:
-            # O2: read the header first; the whole 4D array is loaded below, so refuse a huge one.
-            announced = _nrrd_announced_bytes(nrrd.read_header(target))
-            if announced > MAX_NRRD_BYTES:
-                raise PreviewError(
-                    "bad_data",
-                    "The NRRD holds about %.1f GiB of voxel data; the preview reads at most %d GiB. "
-                    "Convert the input to NIfTI first." % (announced / (1 << 30), MAX_NRRD_BYTES >> 30),
-                )
-            data, header = nrrd.read(target)
+            with open(target, "rb") as attached_fh:
+                header = nrrd.read_header(attached_fh)
+                sizes = tuple(int(s) for s in header.get("sizes", []))
+                if len(sizes) != 4:
+                    raise PreviewError("bad_data", f"The NRRD is {len(sizes)}D; a 4D diffusion series is required.")
+                axis = _nrrd_diffusion_axis(header, len(sizes))
+                ng = int(sizes[axis])
+                spatial_shape = tuple(s for i, s in enumerate(sizes) if i != axis)
+                item_bytes = _NRRD_ITEM_BYTES.get(str(header.get("type", "")).strip().lower(), 8)
+                single_vol_bytes = int(np.prod(spatial_shape, dtype=np.int64)) * item_bytes
+                announced = _nrrd_announced_bytes(header)
+                if single_vol_bytes > MAX_NRRD_BYTES:
+                    raise PreviewError(
+                        "bad_data",
+                        "The NRRD holds about %.1f GiB of voxel data; the preview reads at most %d GiB. "
+                        "Convert the input to NIfTI first." % (announced / (1 << 30), MAX_NRRD_BYTES >> 30),
+                    )
+                bvals = _nrrd_bvalues(header, ng)
+                indices = [index for index, value in enumerate(bvals) if value <= threshold]
+                if not indices:
+                    raise PreviewError("no_b0", f"{threshold:g}")
+                mean = _stream_mean_b0_nrrd_payload(header, target, attached_fh, axis, indices, nrrd)
+            if mean is None:
+                if announced > MAX_NRRD_BYTES:
+                    raise PreviewError(
+                        "bad_data",
+                        "The NRRD holds about %.1f GiB of voxel data; the preview reads at most %d GiB. "
+                        "Convert the input to NIfTI first." % (announced / (1 << 30), MAX_NRRD_BYTES >> 30),
+                    )
+                data, header = nrrd.read(target)
+                volumes = np.moveaxis(data, axis, -1)
+                mean = _mean_of(lambda i: volumes[..., i], indices, threshold)
     except PreviewError:
         raise
     except Exception as exc:
         raise PreviewError("bad_data", f"Could not read the NRRD file: {exc}") from exc
-    if data.ndim != 4:
-        raise PreviewError("bad_data", f"The NRRD is {data.ndim}D; a 4D diffusion series is required.")
-    axis = _nrrd_diffusion_axis(header, data.ndim)
-    bvals = _nrrd_bvalues(header, data.shape[axis])
-    indices = [index for index, value in enumerate(bvals) if value <= threshold]
-    volumes = np.moveaxis(data, axis, -1)
-    mean = _mean_of(lambda i: volumes[..., i], indices, threshold)
     return nib.Nifti1Image(mean, _nrrd_ras_affine(header, axis)), len(indices)
 
 
@@ -648,11 +830,84 @@ def physical_memory_bytes() -> Optional[int]:
     return None
 
 
+def available_memory_bytes() -> Optional[int]:
+    """Currently available host RAM in bytes, or None when the platform does not say."""
+
+    cap_bytes: Optional[int] = None
+    cap_env = os.environ.get("SLICERDSPACE_MAX_RAM_GIB", "").strip()
+    if cap_env:
+        try:
+            parsed = int(float(cap_env) * (1 << 30))
+            if parsed > 0:
+                cap_bytes = parsed
+        except ValueError:
+            pass
+
+    avail: Optional[int] = None
+    try:
+        from shared.platform_info import available_host_ram_bytes
+
+        reported = available_host_ram_bytes()
+        if reported is not None and int(reported) > 0:
+            avail = int(reported)
+    except Exception:
+        pass
+
+    if avail is None and os.name == "nt":
+        try:
+            import ctypes
+
+            class _AvailMemoryStatus(ctypes.Structure):
+                _fields_ = [("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
+                            ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
+                            ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
+                            ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
+                            ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+
+            status = _AvailMemoryStatus()
+            status.dwLength = ctypes.sizeof(_AvailMemoryStatus)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)) and status.ullAvailPhys > 0:
+                avail = int(status.ullAvailPhys)
+        except Exception:
+            pass
+
+    if avail is None and os.path.isfile("/proc/meminfo"):
+        try:
+            with open("/proc/meminfo", encoding="utf-8", errors="ignore") as handle:
+                for line in handle:
+                    if line.startswith("MemAvailable:"):
+                        parts = line.split()
+                        if len(parts) >= 2:
+                            kib = int(parts[1])
+                            if kib > 0:
+                                avail = kib * 1024
+                        break
+        except Exception:
+            pass
+
+    total = physical_memory_bytes()
+    if avail is not None and total is not None and total > 0:
+        avail = min(avail, total)
+    elif avail is None:
+        avail = total
+    if avail is not None and cap_bytes is not None:
+        avail = min(avail, cap_bytes)
+    return avail
+
+
 def full_dwi_limit_bytes(physical: Any = "auto") -> int:
-    """Largest voxel data that View input loads as a full DWI: min(4 GiB, 25 % of RAM); 4 GiB when RAM is unknown."""
+    """Largest voxel data that View input loads as a full DWI: min(4 GiB, 25 % of available RAM); 4 GiB if unknown."""
 
     if physical == "auto":
-        physical = physical_memory_bytes()
+        avail = available_memory_bytes()
+        total = physical_memory_bytes()
+        if avail and total:
+            effective = min(int(avail), int(total))
+        else:
+            effective = avail or total
+        if not effective:
+            return FULL_DWI_MAX_BYTES
+        return int(min(FULL_DWI_MAX_BYTES, int(effective) * FULL_DWI_RAM_FRACTION))
     if not physical:
         return FULL_DWI_MAX_BYTES
     return int(min(FULL_DWI_MAX_BYTES, int(physical) * FULL_DWI_RAM_FRACTION))

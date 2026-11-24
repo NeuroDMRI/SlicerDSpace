@@ -569,10 +569,27 @@ _MPPCA_CPU_MIN_PATCH_BATCH = 64
 _MPPCA_CPU_MAX_PATCH_BATCH = 2048  # the former fixed batch; no input gets a larger batch than before
 
 
+def _low_ram_worker_cap(avail_ram_bytes: int) -> Optional[int]:
+    """Return a conservative CPU worker ceiling for tight available host RAM, or None when ample."""
+    if avail_ram_bytes <= 0:
+        return None
+    if avail_ram_bytes < 2 * GIB:
+        return 1
+    if avail_ram_bytes < 3 * GIB:
+        return 2
+    if avail_ram_bytes < 6 * GIB:
+        return 4
+    if avail_ram_bytes < 10 * GIB:
+        return 6
+    return None
+
+
 def _mppca_cpu_batch_bytes(avail_ram_bytes: Optional[int] = None) -> int:
     """Return per-worker CPU MP-PCA byte budget, scaling down only when available host RAM < 10 GiB."""
     avail = query_host_available_ram_bytes() if avail_ram_bytes is None else int(avail_ram_bytes)
     if avail > 0:
+        if avail < 2 * GIB:
+            return 32 * MIB
         if avail < 6 * GIB:
             return 64 * MIB
         if avail < 10 * GIB:
@@ -598,25 +615,25 @@ def _resolve_dipy_cpu_workers(
     *,
     avail_ram_bytes: Optional[int] = None,
     apply_low_ram_cap: bool = False,
+    allow_unsafe_ram_override: bool = False,
 ) -> int:
     """Resolve CPU worker count with low-RAM protection and Apple Silicon P-core cap, zero server regression."""
     if max_workers is not None:
-        return max(1, int(max_workers))
-    stage_reserved = reserved_stage_cpus()
-    if stage_reserved is not None:
-        n_workers = max(1, int(stage_reserved))
-    elif is_apple_silicon_host():
-        n_workers = optimal_cpu_torch_threads(None, max_conv_threads=8)
+        n_workers = max(1, int(max_workers))
     else:
-        default_workers = 16 if (os.cpu_count() or 1) >= 32 else 8
-        n_workers = effective_cpu_threads(None, default=default_workers)
-    if apply_low_ram_cap:
+        stage_reserved = reserved_stage_cpus()
+        if stage_reserved is not None:
+            n_workers = max(1, int(stage_reserved))
+        elif is_apple_silicon_host():
+            n_workers = optimal_cpu_torch_threads(None, max_conv_threads=8)
+        else:
+            default_workers = 16 if (os.cpu_count() or 1) >= 32 else 8
+            n_workers = effective_cpu_threads(None, default=default_workers)
+    if apply_low_ram_cap and not allow_unsafe_ram_override:
         avail = query_host_available_ram_bytes() if avail_ram_bytes is None else int(avail_ram_bytes)
-        if avail > 0:
-            if avail < 6 * GIB:
-                n_workers = min(n_workers, 4)
-            elif avail < 10 * GIB:
-                n_workers = min(n_workers, 6)
+        ram_cap = _low_ram_worker_cap(avail)
+        if ram_cap is not None:
+            n_workers = min(n_workers, ram_cap)
     return max(1, int(n_workers))
 
 
@@ -854,6 +871,46 @@ def _mppca_cuda(
     return denoised_out
 
 
+def _classify_cuda_fallback_error(exc: BaseException) -> Optional[str]:
+    """Classify recoverable CUDA/GPU execution failures for ``auto`` CPU fallback.
+
+    Returns ``"oom"``, ``"tdr_timeout"``, or ``"cuda_runtime"`` for genuine GPU/CUDA failures,
+    and ``None`` for non-CUDA errors (which should propagate instead of silently restarting on CPU).
+    """
+    if is_cuda_oom(exc):
+        return "oom"
+    msg = str(exc or "").lower()
+    tdr_markers = (
+        "launch timed out",
+        "cudaerrorlaunchtimeout",
+        "unspecified launch failure",
+        "the launch timed out and was terminated",
+        "context is destroyed",
+        "device lost",
+    )
+    if any(marker in msg for marker in tdr_markers):
+        return "tdr_timeout"
+    cls_name = type(exc).__name__.lower()
+    if "accelerator" in cls_name or "cuda" in cls_name:
+        return "cuda_runtime"
+    if isinstance(exc, RuntimeError):
+        cuda_markers = (
+            "cuda",
+            "cublas",
+            "cusolver",
+            "cufft",
+            "cudnn",
+            "no kernel image",
+            "illegal memory access",
+            "nvrtc",
+            "hip error",
+            "mps",
+        )
+        if any(marker in msg for marker in cuda_markers):
+            return "cuda_runtime"
+    return None
+
+
 def mppca_accelerated(
     arr: np.ndarray,
     *,
@@ -895,10 +952,27 @@ def mppca_accelerated(
                 device=resolved,
             )
         except Exception as exc:
-            if not explicit_cuda:
-                empty_cuda_cache_safely()
-            else:
+            category = _classify_cuda_fallback_error(exc)
+            if explicit_cuda:
+                if category == "tdr_timeout":
+                    print(
+                        f"[DIPY MP-PCA] CUDA launch timeout / WDDM TDR on {resolved} ({exc}). "
+                        "Explicit CUDA mode does not fall back to CPU; switch to auto/cpu or reduce display GPU load.",
+                        file=sys.stderr,
+                    )
                 raise
+            if category is None:
+                raise
+            label = {
+                "oom": "CUDA out of memory",
+                "tdr_timeout": "CUDA launch timeout / WDDM TDR",
+                "cuda_runtime": "CUDA runtime error",
+            }.get(category, "CUDA error")
+            print(
+                f"[DIPY MP-PCA] {label} on {resolved} ({type(exc).__name__}: {exc}); falling back to CPU.",
+                file=sys.stderr,
+            )
+            empty_cuda_cache_safely()
 
     return _mppca_cpu(
         arr_np,
@@ -986,10 +1060,16 @@ def _gibbs_2d_batch_numpy(batch: np.ndarray, *, n_points: int, g0: np.ndarray, g
     work = np.asarray(batch, dtype=dtype_float)
     img_c1 = _gibbs_1d_batch_numpy(work, axis=1, n_points=n_points, dtype_float=dtype_float)
     img_c0 = _gibbs_1d_batch_numpy(work, axis=0, n_points=n_points, dtype_float=dtype_float)
+    g0_f = g0.astype(dtype_float, copy=False)
+    g1_f = g1.astype(dtype_float, copy=False)
     c1 = sfft.fft2(img_c1, axes=(-2, -1))
+    del img_c1
     c0 = sfft.fft2(img_c0, axes=(-2, -1))
-    combined = sfft.fftshift(c1, axes=(-2, -1)) * g1[None, :, :] + sfft.fftshift(c0, axes=(-2, -1)) * g0[None, :, :]
+    del img_c0
+    combined = sfft.fftshift(c1, axes=(-2, -1)) * g1_f[None, :, :] + sfft.fftshift(c0, axes=(-2, -1)) * g0_f[None, :, :]
+    del c1, c0
     out = np.abs(sfft.ifft2(combined, axes=(-2, -1)))
+    del combined
     return out.astype(batch.dtype, copy=False)
 
 
@@ -1060,54 +1140,107 @@ def gibbs_removal_accelerated(
     device: Optional[str] = None,
     max_workers: Optional[int] = None,
 ) -> np.ndarray:
-    """Hardware-adaptive CPU/CUDA drop-in replacement for ``dipy.denoise.gibbs.gibbs_removal``."""
-    arr = vol if inplace else np.array(vol, copy=True)
-    nd = arr.ndim
+    """Hardware-adaptive CPU/CUDA drop-in replacement for ``dipy.denoise.gibbs.gibbs_removal``.
+
+    Streams bounded 2D slice chunks directly into a single preallocated output buffer (or in-place
+    into ``vol`` when ``inplace=True``) via zero-copy stride views so 4D DWI volumes never allocate
+    redundant full-volume reshapes, intermediate output arrays, or concatenated chunk lists.
+    """
+    vol_arr = vol if isinstance(vol, np.ndarray) else np.asarray(vol)
+    nd = vol_arr.ndim
     if nd < 2 or nd > 4:
-        raise ValueError(f"Data have to be a 4D, 3D or 2D matrix, got shape {arr.shape}")
+        raise ValueError(f"Data have to be a 4D, 3D or 2D matrix, got shape {vol_arr.shape}")
     if slice_axis > 2:
         raise ValueError("slice_axis must be 0, 1, or 2")
 
+    out = vol_arr if inplace else np.empty_like(vol_arr)
     if nd == 2:
-        g0, g1 = _gibbs_weights_numpy(arr.shape)
-        arr[:, :] = _gibbs_2d_batch_numpy(arr[None, :, :], n_points=n_points, g0=g0, g1=g1)[0]
-        return arr
+        g0, g1 = _gibbs_weights_numpy(vol_arr.shape)
+        out[:, :] = _gibbs_2d_batch_numpy(vol_arr[None, :, :], n_points=n_points, g0=g0, g1=g1)[0]
+        return out
 
     if nd == 3:
-        work = np.moveaxis(arr, slice_axis, 0)
-        inishap = work.shape
-        flat = work
+        src_view = np.moveaxis(vol_arr, slice_axis, 0)
+        dst_view = np.moveaxis(out, slice_axis, 0)
+        n_s = int(src_view.shape[0])
+        n_v = 1
+        h_dim, w_dim = int(src_view.shape[1]), int(src_view.shape[2])
     else:
-        work = np.moveaxis(arr, (slice_axis, 3), (0, 1))
-        inishap = work.shape
-        flat = work.reshape((inishap[0] * inishap[1], inishap[2], inishap[3]))
+        src_view = np.moveaxis(vol_arr, (slice_axis, 3), (0, 1))
+        dst_view = np.moveaxis(out, (slice_axis, 3), (0, 1))
+        n_s = int(src_view.shape[0])
+        n_v = int(src_view.shape[1])
+        h_dim, w_dim = int(src_view.shape[2]), int(src_view.shape[3])
 
-    h_dim, w_dim = int(flat.shape[1]), int(flat.shape[2])
-    n_slices = int(flat.shape[0])
+    n_slices = n_s * n_v
+    if n_slices == 0:
+        return out
+
     g0, g1 = _gibbs_weights_numpy((h_dim, w_dim))
+
+    def _gather_slices(start: int, end: int) -> np.ndarray:
+        if nd == 3:
+            return np.ascontiguousarray(src_view[start:end])
+        count = end - start
+        v0, s0 = divmod(start, n_s)
+        if s0 + count <= n_s:
+            return np.ascontiguousarray(src_view[s0 : s0 + count, v0])
+        buf = np.empty((count, h_dim, w_dim), dtype=vol_arr.dtype)
+        pos = 0
+        cur = start
+        while cur < end:
+            v, s = divmod(cur, n_s)
+            take = min(end - cur, n_s - s)
+            buf[pos : pos + take] = src_view[s : s + take, v]
+            pos += take
+            cur += take
+        return buf
+
+    def _scatter_slices(start: int, end: int, result: np.ndarray) -> None:
+        if nd == 3:
+            dst_view[start:end] = result
+            return
+        count = end - start
+        v0, s0 = divmod(start, n_s)
+        if s0 + count <= n_s:
+            dst_view[s0 : s0 + count, v0] = result
+            return
+        pos = 0
+        cur = start
+        while cur < end:
+            v, s = divmod(cur, n_s)
+            take = min(end - cur, n_s - s)
+            dst_view[s : s + take, v] = result[pos : pos + take]
+            pos += take
+            cur += take
 
     resolved = resolve_dipy_accel_device(device, for_gibbs=True)
     req_raw = str(device or os.environ.get("SLICERDSPACE_DIPY_DEVICE", "auto")).strip().lower()
     explicit_cuda = req_raw == "cuda" or req_raw.startswith("cuda:")
 
-    def _run_cpu_batches(indices_slice: slice) -> np.ndarray:
-        sub = np.ascontiguousarray(flat[indices_slice])
-        n_sub = sub.shape[0]
-        n_workers = _resolve_dipy_cpu_workers(max_workers, apply_low_ram_cap=False)
-        n_workers = min(n_workers, max(1, (n_sub + 31) // 32), 16)
-        batch_sz = 32
-        batches = [(s, min(n_sub, s + batch_sz)) for s in range(0, n_sub, batch_sz)]
-        out_sub = np.empty_like(sub)
+    def _run_cpu_range(start: int, end: int) -> None:
+        n_sub = end - start
+        if n_sub <= 0:
+            return
+        avail_ram = query_host_available_ram_bytes()
+        batch_sz = 16 if (0 < avail_ram < 4 * GIB) else 32
+        n_workers = _resolve_dipy_cpu_workers(max_workers, avail_ram_bytes=avail_ram, apply_low_ram_cap=True)
+        n_workers = min(n_workers, max(1, (n_sub + batch_sz - 1) // batch_sz), 16)
+        batches = [(s, min(end, s + batch_sz)) for s in range(start, end, batch_sz)]
 
         def _worker(bounds: Tuple[int, int]):
             b0, b1 = bounds
-            return b0, b1, _gibbs_2d_batch_numpy(sub[b0:b1], n_points=n_points, g0=g0, g1=g1)
+            sub = _gather_slices(b0, b1)
+            res = _gibbs_2d_batch_numpy(sub, n_points=n_points, g0=g0, g1=g1)
+            return b0, b1, res
 
         if n_workers == 1 or len(batches) == 1:
             for b in batches:
                 b0, b1, res = _worker(b)
-                out_sub[b0:b1] = res
+                _scatter_slices(b0, b1, res)
+                del res
         else:
+            from collections import deque
             from contextlib import nullcontext
 
             try:
@@ -1115,17 +1248,30 @@ def gibbs_removal_accelerated(
             except ImportError:
                 _tp_limits = None
             blas_ctx = _tp_limits(limits=1) if _tp_limits is not None else nullcontext()
+            max_inflight = max(n_workers, min(len(batches), n_workers * 2))
             with blas_ctx, ThreadPoolExecutor(max_workers=n_workers) as pool:
-                for b0, b1, res in pool.map(_worker, batches):
-                    out_sub[b0:b1] = res
-        return out_sub
+                pending: deque = deque()
+                batch_iter = iter(batches)
+                for _ in range(max_inflight):
+                    b = next(batch_iter, None)
+                    if b is None:
+                        break
+                    pending.append(pool.submit(_worker, b))
+                while pending:
+                    fut = pending.popleft()
+                    b0, b1, res = fut.result()
+                    _scatter_slices(b0, b1, res)
+                    del res
+                    nxt = next(batch_iter, None)
+                    if nxt is not None:
+                        pending.append(pool.submit(_worker, nxt))
 
     is_cuda_dev = resolved.startswith("cuda")
     if is_cuda_dev or resolved == "mps":
         import torch
 
         dev = torch.device(resolved)
-        torch_dtype = torch.float64 if (is_cuda_dev and flat.dtype == np.float64) else torch.float32
+        torch_dtype = torch.float64 if (is_cuda_dev and vol_arr.dtype == np.float64) else torch.float32
         elem_bytes = 8 if torch_dtype == torch.float64 else 4
         per_slice_bytes = max(4096, h_dim * w_dim * elem_bytes * 24)
         if is_cuda_dev:
@@ -1153,8 +1299,8 @@ def gibbs_removal_accelerated(
             g0_t = torch.as_tensor(g0, device=dev, dtype=torch_dtype).unsqueeze(0)
             g1_t = torch.as_tensor(g1, device=dev, dtype=torch_dtype).unsqueeze(0)
 
-            def _gpu_chunk(start: int, end: int) -> np.ndarray:
-                sub_np = np.ascontiguousarray(flat[start:end])
+            def _gpu_step(start: int, end: int) -> None:
+                sub_np = _gather_slices(start, end)
                 x_t = torch.from_numpy(sub_np).to(device=dev, dtype=torch_dtype)
                 img_c1 = _gibbs_1d_batch_torch(x_t, axis=1, n_points=n_points)
                 img_c0 = _gibbs_1d_batch_torch(x_t, axis=0, n_points=n_points)
@@ -1162,46 +1308,55 @@ def gibbs_removal_accelerated(
                 c0 = torch.fft.fft2(img_c0, dim=(-2, -1))
                 comb = torch.fft.fftshift(c1, dim=(-2, -1)) * g1_t + torch.fft.fftshift(c0, dim=(-2, -1)) * g0_t
                 res = torch.abs(torch.fft.ifft2(comb, dim=(-2, -1)))
-                return res.detach().cpu().numpy().astype(flat.dtype, copy=False)
+                res_np = res.detach().cpu().numpy().astype(vol_arr.dtype, copy=False)
+                _scatter_slices(start, end, res_np)
 
-            def _cuda_chunk(start: int, end: int) -> np.ndarray:
+            def _cuda_step(start: int, end: int) -> None:
                 try:
-                    return _gpu_chunk(start, end)
+                    _gpu_step(start, end)
                 except Exception as exc:
                     if is_cuda_oom(exc):
                         # C6/D8: release the CUDA and the MPS allocator cache before the chunk is halved and retried.
                         empty_gpu_cache_safely()
                     raise
 
-            def _cpu_fallback_chunk(start: int, end: int) -> np.ndarray:
+            def _cpu_fallback_step(start: int, end: int) -> None:
                 if explicit_cuda:
                     raise RuntimeError("Gibbs CUDA chunk failed under explicit CUDA mode.")
-                return _run_cpu_batches(slice(start, end))
+                _run_cpu_range(start, end)
 
-            chunks = run_cuda_chunked_with_oom_fallback(
+            run_cuda_chunked_with_oom_fallback(
                 n_slices,
                 initial_chunk_size=init_batch,
                 min_cuda_chunk_size=16,
-                cuda_fn=_cuda_chunk,
-                cpu_fallback_fn=None if explicit_cuda else _cpu_fallback_chunk,
+                cuda_step_fn=_cuda_step,
+                cpu_fallback_fn=None if explicit_cuda else _cpu_fallback_step,
             )
-            flat[:, :, :] = np.concatenate(chunks, axis=0) if chunks else flat
         except Exception as exc:
-            if explicit_cuda or not is_cuda_oom(exc):
+            category = _classify_cuda_fallback_error(exc)
+            if explicit_cuda or category is None:
+                if explicit_cuda and category == "tdr_timeout":
+                    print(
+                        f"[DIPY Gibbs] CUDA launch timeout / WDDM TDR on {resolved} ({exc}). "
+                        "Explicit CUDA mode does not fall back to CPU; switch to auto/cpu or reduce display GPU load.",
+                        file=sys.stderr,
+                    )
                 raise
+            label = {
+                "oom": "GPU out of memory",
+                "tdr_timeout": "CUDA launch timeout / WDDM TDR",
+                "cuda_runtime": "GPU runtime error",
+            }.get(category, "GPU error")
+            print(
+                f"[DIPY Gibbs] {label} on {resolved} ({type(exc).__name__}: {exc}); falling back to CPU.",
+                file=sys.stderr,
+            )
             empty_gpu_cache_safely()
-            flat[:, :, :] = _run_cpu_batches(slice(0, n_slices))
+            _run_cpu_range(0, n_slices)
         finally:
             del g0_t, g1_t
             empty_gpu_cache_safely()
     else:
-        flat[:, :, :] = _run_cpu_batches(slice(0, n_slices))
+        _run_cpu_range(0, n_slices)
 
-    if nd == 3:
-        out_vol = np.moveaxis(flat, 0, slice_axis)
-    else:
-        out_vol = np.moveaxis(flat.reshape(inishap), (0, 1), (slice_axis, 3))
-    if inplace:
-        vol[...] = out_vol
-        return vol
-    return out_vol
+    return out

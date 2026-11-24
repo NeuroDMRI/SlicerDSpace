@@ -1174,7 +1174,38 @@ def _run_native_org(config, staging, wma_root, slicer, python, env, manifest, st
         )
 
 
-@scheduled_stage('wma')
+def _wma_uses_gpu(*args, **kwargs) -> bool:
+    """Return True when WMA execution resolves to CUDA so cohort admission reserves a GPU slot."""
+    config = kwargs.get("config") or (args[0] if args else None)
+    if config is None or not getattr(config, "execute", False):
+        return False
+    try:
+        gpu_mode = _normalize_wma_gpu_mode(getattr(config, "device", "auto"))
+    except Exception:
+        return False
+    if gpu_mode == "off":
+        return False
+    wma_root = getattr(config, "wma_root", None)
+    if wma_root is None:
+        try:
+            wma_root = resolve_configured_wma_root()
+        except Exception:
+            wma_root = None
+    if wma_root is not None:
+        root_path = Path(wma_root).expanduser()
+        if root_path.is_dir() and not _wma_supports_gpu_flag(root_path):
+            return False
+    if gpu_mode == "on":
+        return True
+    try:
+        import torch
+
+        return bool(torch.cuda.is_available())
+    except Exception:
+        return False
+
+
+@scheduled_stage('wma', gpu=_wma_uses_gpu)
 def run_wma_org_atlas(
     config: WMAOrgAtlasConfig,
     *,

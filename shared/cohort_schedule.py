@@ -297,7 +297,7 @@ def stage_admission(name, *, gpu=False):
         reservation_token = _reservation.set(row)
         if config['policy'] == 'fair_backfill':
             from shared.cohort_profile import StageMonitor
-            monitor = StageMonitor().start()
+            monitor = StageMonitor(stage=name).start()
         os.environ[LEASE] = row['id']
         os.environ.update({key: str(row['cpu']) for key in thread_keys})
         try:
@@ -349,25 +349,37 @@ def stage_admission(name, *, gpu=False):
 
 
 def scheduled_stage(name, *, gpu=False):
-    """No-op outside the opt-in cohort mode; preserve arguments and return values."""
+    """No-op outside the opt-in cohort mode; preserve arguments and return values.
+
+    ``gpu`` may be a bool or a callable ``(*args, **kwargs) -> bool`` evaluated safely at
+    invocation time so CUDA-capable stages reserve a GPU slot only when GPU execution is resolved.
+    """
     def decorate(function):
         @wraps(function)
         def wrapped(*args, **kwargs):
-            requested = gpu
             config = kwargs.get('config') or kwargs.get('cfg') or (args[0] if args else None)
             stage = name(config) if callable(name) else name
-            dev_attrs = {
-                'brain_mask': ('brain_mask_device', 'device'),
-                'preprocessing': ('dipy_device', 'brain_mask_device', 'device'),
-                'microstructure_freewater': ('free_water_device', 'device'),
-                'microstructure_noddi': ('noddi_device', 'device'),
-            }.get(stage, ('device',))
-            resolved_dev = next(
-                (str(getattr(config, attr)).strip().lower() for attr in dev_attrs if getattr(config, attr, None) is not None),
-                'auto',
-            )
-            if resolved_dev == 'cpu':
-                requested = False
+            if callable(gpu):
+                try:
+                    requested = bool(gpu(*args, **kwargs))
+                except Exception:
+                    requested = False
+            else:
+                requested = bool(gpu)
+            if requested:
+                dev_attrs = {
+                    'brain_mask': ('brain_mask_device', 'device'),
+                    'preprocessing': ('dipy_device', 'brain_mask_device', 'device'),
+                    'microstructure_freewater': ('free_water_device', 'device'),
+                    'microstructure_noddi': ('noddi_device', 'device'),
+                    'microstructure_mkcurve': ('device',),
+                }.get(stage, ('device',))
+                resolved_dev = next(
+                    (str(getattr(config, attr)).strip().lower() for attr in dev_attrs if getattr(config, attr, None) is not None),
+                    'auto',
+                )
+                if resolved_dev == 'cpu':
+                    requested = False
             from shared.cohort_io import gpu_admission
             ctx_token = _call_context.set((function, args, kwargs))
             try:

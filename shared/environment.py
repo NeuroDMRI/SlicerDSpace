@@ -6,6 +6,7 @@ import contextvars
 import importlib.metadata
 import importlib.util
 import json
+import math
 import os
 import platform
 import shutil
@@ -15,7 +16,16 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
-from shared.external_process import SLICER_PYTHON_NAMES, find_pythonslicer, interpreter_path, slicer_runtime_roots, subprocess_no_window_kwargs, text_subprocess_kwargs, python_tool_environment
+from shared.external_process import (
+    SLICER_PYTHON_NAMES,
+    find_pythonslicer,
+    interpreter_path,
+    normalize_slicer_python_launch,
+    python_tool_environment,
+    slicer_runtime_roots,
+    subprocess_no_window_kwargs,
+    text_subprocess_kwargs,
+)
 from shared.model_assets import model_asset_candidates, model_asset_path_or_none
 
 
@@ -2096,6 +2106,12 @@ def _windows_dll_probe_snippet() -> str:
     )
 
 
+def _python_probe_command(python_path: Path, probe: str) -> list[str]:
+    """Build a subprocess argv for ``python_path -c probe`` safe for Windows non-ASCII paths."""
+    program, args = normalize_slicer_python_launch(python_path.as_posix(), ["-c", probe])
+    return [program, *args]
+
+
 def _check_cuda_device(
     device: str,
     python_executable: Optional[Path],
@@ -2103,41 +2119,71 @@ def _check_cuda_device(
 ) -> tuple[bool, dict[str, Any]]:
     python_path = python_executable or Path(sys.executable)
     resolved_python_paths = tuple(path.expanduser().resolve() for path in python_path_entries if path)
-    prepend_paths = [*_bundled_prepend_paths(python_path), *(path.as_posix() for path in resolved_python_paths)]
+    # Explicit caller python_path_entries MUST precede bundled site-packages so user/configured
+    # CUDA torch installs are never shadowed by bundled CPU-only torch.
+    prepend_paths = [*(path.as_posix() for path in resolved_python_paths), *_bundled_prepend_paths(python_path)]
     probe_cache = _ACTIVE_CUDA_PROBE_CACHE.get()
     cache_key = (
         "cuda_runtime_probe",
         python_path.as_posix(),
         tuple(path.as_posix() for path in resolved_python_paths),
+        os.environ.get("CUDA_VISIBLE_DEVICES"),
     )
     if probe_cache is not None and cache_key in probe_cache:
         details = dict(probe_cache[cache_key])
     else:
+        # Use ascii(prepend_paths) so non-ASCII Windows paths (e.g. Chinese directories) stay
+        # 7-bit ASCII across PythonSlicer.exe's CTKAppLauncher ANSI argv boundary.
         probe = (
             "import json, sys; "
-            f"sys.path[:0] = {prepend_paths!r}; "
+            f"sys.path[:0] = {ascii(prepend_paths)}; "
             "payload = {'torch_importable': False, 'cuda_available': False, 'device_count': 0, "
-            "'mps_available': False, 'torch_version': None, 'torch_cuda_build': None, 'error': None}; "
+            "'mps_available': False, 'torch_version': None, 'torch_cuda_build': None, "
+            "'per_device_ok': {}, 'usable_indices': [], 'per_device_error': {}, "
+            "'per_device_name': {}, 'per_device_capability': {}, 'error': None}; "
             "\n" + _windows_dll_probe_snippet()
             + "try:\n"
             "    import torch\n"
             "    payload['torch_importable'] = True\n"
             "    payload['torch_version'] = getattr(torch, '__version__', None)\n"
             "    payload['torch_cuda_build'] = getattr(getattr(torch, 'version', None), 'cuda', None)\n"
-            "    payload['cuda_available'] = bool(torch.cuda.is_available())\n"
-            "    payload['device_count'] = int(torch.cuda.device_count()) if payload['cuda_available'] else 0\n"
-            "    if payload['cuda_available']:\n"
-            "        try:\n"
-            "            payload['device_name'] = torch.cuda.get_device_name(0)\n"
-            "            payload['compute_capability'] = list(torch.cuda.get_device_capability(0))\n"
-            "        except Exception:\n"
-            "            pass\n"
-            "        try:\n"
-            "            payload['cuda_kernel_ok'] = bool((torch.zeros(1, device='cuda:0') + 1).item() == 1.0)\n"
-            "        except Exception as cuda_exc:\n"
-            "            payload['cuda_available'] = False\n"
-            "            payload['cuda_kernel_ok'] = False\n"
-            "            payload['cuda_kernel_error'] = str(cuda_exc)\n"
+            "    raw_cuda = bool(torch.cuda.is_available())\n"
+            "    count = int(torch.cuda.device_count()) if raw_cuda else 0\n"
+            "    payload['device_count'] = count\n"
+            "    if raw_cuda and count > 0:\n"
+            "        for _idx in range(count):\n"
+            "            _k = str(_idx)\n"
+            "            try:\n"
+            "                payload['per_device_name'][_k] = torch.cuda.get_device_name(_idx)\n"
+            "                payload['per_device_capability'][_k] = list(torch.cuda.get_device_capability(_idx))\n"
+            "            except Exception:\n"
+            "                pass\n"
+            "            try:\n"
+            "                _t = torch.zeros(1, device=f'cuda:{_idx}') + 1\n"
+            "                _sync = getattr(torch.cuda, 'synchronize', None)\n"
+            "                if callable(_sync):\n"
+            "                    try:\n"
+            "                        _sync(_idx)\n"
+            "                    except TypeError:\n"
+            "                        _sync()\n"
+            "                _ok = bool(_t.item() == 1.0)\n"
+            "                payload['per_device_ok'][_k] = _ok\n"
+            "                if _ok:\n"
+            "                    payload['usable_indices'].append(_idx)\n"
+            "                else:\n"
+            "                    payload['per_device_error'][_k] = f'CUDA kernel returned unexpected value on cuda:{_idx}'\n"
+            "            except Exception as cuda_exc:\n"
+            "                payload['per_device_ok'][_k] = False\n"
+            "                payload['per_device_error'][_k] = str(cuda_exc)\n"
+            "        payload['cuda_available'] = bool(payload['usable_indices'])\n"
+            "        payload['cuda_kernel_ok'] = bool(payload['usable_indices'])\n"
+            "        _primary = str(payload['usable_indices'][0]) if payload['usable_indices'] else '0'\n"
+            "        if _primary in payload['per_device_name']:\n"
+            "            payload['device_name'] = payload['per_device_name'][_primary]\n"
+            "        if _primary in payload['per_device_capability']:\n"
+            "            payload['compute_capability'] = payload['per_device_capability'][_primary]\n"
+            "        if not payload['usable_indices'] and payload['per_device_error']:\n"
+            "            payload['cuda_kernel_error'] = payload['per_device_error'].get('0') or next(iter(payload['per_device_error'].values()))\n"
             "    mps_mod = getattr(getattr(torch, 'backends', None), 'mps', None)\n"
             "    mps_fn = getattr(mps_mod, 'is_available', None)\n"
             "    payload['mps_available'] = bool(callable(mps_fn) and mps_fn() is True)\n"
@@ -2147,7 +2193,7 @@ def _check_cuda_device(
         )
         try:
             completed = subprocess.run(
-                [python_path.as_posix(), "-c", probe],
+                _python_probe_command(python_path, probe),
                 check=True,
                 capture_output=True,
                 timeout=DEPENDENCY_PROBE_TIMEOUT_SECONDS,
@@ -2184,9 +2230,38 @@ def _check_cuda_device(
             requested_index = int(device.split(":", 1)[1])
         except ValueError:
             requested_index = None
-    available = bool(details.get("cuda_available"))
-    if requested_index is not None:
-        available = available and int(details.get("device_count") or 0) > requested_index
+
+    device_count = int(details.get("device_count") or 0)
+    per_device_ok = details.get("per_device_ok")
+    per_device_error = details.get("per_device_error") if isinstance(details.get("per_device_error"), dict) else {}
+    usable_indices = details.get("usable_indices")
+
+    if isinstance(per_device_ok, dict) and per_device_ok:
+        if requested_index is not None:
+            if requested_index < 0 or requested_index >= device_count:
+                available = False
+                details["cuda_kernel_ok"] = False
+            else:
+                k = str(requested_index)
+                available = bool(per_device_ok.get(k, False))
+                details["cuda_kernel_ok"] = available
+                per_names = details.get("per_device_name") if isinstance(details.get("per_device_name"), dict) else {}
+                per_caps = details.get("per_device_capability") if isinstance(details.get("per_device_capability"), dict) else {}
+                if k in per_names:
+                    details["device_name"] = per_names[k]
+                if k in per_caps:
+                    details["compute_capability"] = per_caps[k]
+                if not available and k in per_device_error:
+                    details["cuda_kernel_error"] = per_device_error[k]
+                elif available:
+                    details.pop("cuda_kernel_error", None)
+        else:
+            available = bool(usable_indices) if isinstance(usable_indices, list) else any(per_device_ok.values())
+    else:
+        available = bool(details.get("cuda_available"))
+        if requested_index is not None:
+            available = available and 0 <= requested_index < device_count
+
     details["requested_device"] = device
     details["requested_index"] = requested_index
     details["python_executable"] = python_path.as_posix()
@@ -2210,10 +2285,10 @@ def torch_numpy_abi_probe(
     cached = _TORCH_ABI_CACHE.get(cache_key)
     if cached is not None:
         return dict(cached)
-    prepend_paths = [*_bundled_prepend_paths(python_path), *(path.as_posix() for path in entries)]
+    prepend_paths = [*(path.as_posix() for path in entries), *_bundled_prepend_paths(python_path)]
     probe = (
         "import json, sys\n"
-        f"sys.path[:0] = {prepend_paths!r}\n"
+        f"sys.path[:0] = {ascii(prepend_paths)}\n"
         + _windows_dll_probe_snippet()
         + "payload = {'numpy_version': None, 'torch_version': None, 'ok': False, 'abi_mismatch': False, 'error': None}\n"
         "try:\n"
@@ -2237,7 +2312,7 @@ def torch_numpy_abi_probe(
     )
     try:
         completed = subprocess.run(
-            [python_path.as_posix(), "-c", probe],
+            _python_probe_command(python_path, probe),
             check=True,
             capture_output=True,
             timeout=TORCH_ABI_PROBE_TIMEOUT_SECONDS,
@@ -2458,7 +2533,11 @@ def resolve_auto_torch_device(
         if details.get("error"):
             raise RuntimeError("Cannot determine PyTorch GPU availability in the selected runtime: " + str(details["error"]) +
                                ". Fix that runtime or explicitly choose CPU; no silent CPU fallback.")
-        if available and int(details.get("device_count") or 0) > 0:
+        usable = details.get("usable_indices")
+        if isinstance(usable, list):
+            if usable:
+                return f"cuda:{int(usable[0])}"
+        elif available and int(details.get("device_count") or 0) > 0:
             return "cuda:0"
         if details.get("mps_available") is True:
             return "mps"
@@ -2471,8 +2550,32 @@ def resolve_auto_torch_device(
 
 
 SURFACE_MIN_FREE_GPU_GIB = 7.0  # LE-3 / CUDA-7: matches ddsurfer_backend predict.py lazy single-surface CUDA minimum (5.5 + 1.5 GiB)
-_CUDA_FREE_CACHE: dict[tuple[str, str], tuple[float, Optional[float]]] = {}
+_CUDA_FREE_CACHE: dict[tuple[Any, ...], tuple[float, Optional[float]]] = {}
 _CUDA_FREE_CACHE_SECONDS = 60.0
+
+
+def _global_vram_cap_gib() -> Optional[float]:
+    """Read optional global VRAM cap in GiB from ``SLICERDSPACE_MAX_VRAM_GIB`` (or alias ``SLICERDSPACE_MAX_VRAM_GB``)."""
+    for env_name in ("SLICERDSPACE_MAX_VRAM_GIB", "SLICERDSPACE_MAX_VRAM_GB"):
+        raw = os.environ.get(env_name, "").strip()
+        if not raw:
+            continue
+        try:
+            val = float(raw)
+        except ValueError:
+            continue
+        if math.isfinite(val) and val > 0.0:
+            return val
+    return None
+
+
+def _clamp_cuda_free_gib(value: Optional[float]) -> Optional[float]:
+    if value is None:
+        return None
+    cap = _global_vram_cap_gib()
+    if cap is not None:
+        return min(float(value), cap)
+    return float(value)
 
 
 def cuda_free_gib(
@@ -2480,19 +2583,20 @@ def cuda_free_gib(
 ) -> Optional[float]:
     """LE-3: free GPU memory in GiB from ``torch.cuda.mem_get_info`` in the selected runtime, or None if unknown.
 
-    The torch import runs in a child process (the selected interpreter may not be this one) and the answer is
-    cached for one minute, so a plan and the run that follows it ask the GPU once. ``cached_only`` (plan time, GUI
-    thread) never starts the probe: it returns the cached value or None.
+    Honors any global VRAM cap (``SLICERDSPACE_MAX_VRAM_GIB``) by clamping the effective budget to
+    ``min(free_gib, cap_gib)``. The torch import runs in a child process (the selected interpreter may not be
+    this one) and the raw probe answer is cached for one minute, so a plan and the run that follows it ask the
+    GPU once. ``cached_only`` (plan time, GUI thread) never starts the probe: it returns the cached value or None.
     """
 
     import time
 
     python_path = python_executable or Path(sys.executable)
-    key = (python_path.as_posix(), device)
+    key = (python_path.as_posix(), device, os.environ.get("CUDA_VISIBLE_DEVICES"))
     now = time.monotonic()
     cached = _CUDA_FREE_CACHE.get(key)
     if cached is not None and now - cached[0] < _CUDA_FREE_CACHE_SECONDS:
-        return cached[1]
+        return _clamp_cuda_free_gib(cached[1])
     if cached_only:
         return None
     index = 0
@@ -2503,11 +2607,13 @@ def cuda_free_gib(
             index = 0
     probe = (
         "import json, sys; "
-        f"sys.path[:0] = {_bundled_prepend_paths(python_path)!r}; "
+        f"sys.path[:0] = {ascii(_bundled_prepend_paths(python_path))}; "
         "\n" + _windows_dll_probe_snippet()
         + "try:\n"
         "    import torch\n"
-        f"    free, _total = torch.cuda.mem_get_info({index})\n"
+        f"    free, total = torch.cuda.mem_get_info({index})\n"
+        "    if isinstance(total, (int, float)) and total > 0:\n"
+        "        free = min(free, total)\n"
         "    print(json.dumps({'free_gib': free / 1024**3}))\n"
         "except Exception as exc:\n"
         "    print(json.dumps({'free_gib': None, 'error': str(exc)}))\n"
@@ -2515,7 +2621,7 @@ def cuda_free_gib(
     value: Optional[float] = None
     try:
         completed = subprocess.run(
-            [python_path.as_posix(), "-c", probe],
+            _python_probe_command(python_path, probe),
             check=True,
             capture_output=True,
             timeout=DEPENDENCY_PROBE_TIMEOUT_SECONDS,
@@ -2528,7 +2634,7 @@ def cuda_free_gib(
     except Exception:
         value = None
     _CUDA_FREE_CACHE[key] = (now, value)
-    return value
+    return _clamp_cuda_free_gib(value)
 
 
 def _is_macos() -> bool:
@@ -2553,14 +2659,29 @@ def surface_gpu_memory_decision(
         normalized = "cuda:0"  # one cached probe: it returns None without CUDA, which means "ok"
     elif not explicit:
         return "ok", ""
-    free = cuda_free_gib("cuda:0" if normalized == "cuda" else normalized, python_executable, cached_only=cached_only)
+    raw_free = cuda_free_gib("cuda:0" if normalized == "cuda" else normalized, python_executable, cached_only=cached_only)
+    cap = _global_vram_cap_gib()
+    free = min(float(raw_free), cap) if (raw_free is not None and cap is not None) else raw_free
     if free is None or free >= SURFACE_MIN_FREE_GPU_GIB:
         return "ok", ""
     found = f"{free:.1f}"
+    capped = cap is not None and free <= cap + 1e-9
     if explicit:
+        if capped:
+            return "block", (
+                f"DDSurfer needs at least {SURFACE_MIN_FREE_GPU_GIB:g} GiB free GPU memory "
+                f"(effective budget {found} GiB under SLICERDSPACE_MAX_VRAM_GIB={cap:g} GiB). "
+                "Set the surface device to CPU or raise SLICERDSPACE_MAX_VRAM_GIB."
+            )
         return "block", (
             f"DDSurfer needs at least {SURFACE_MIN_FREE_GPU_GIB:g} GiB free GPU memory (found {found} GiB). "
             "Set the surface device to CPU or free GPU memory."
+        )
+    if capped:
+        return "cpu", (
+            f"DDSurfer needs at least {SURFACE_MIN_FREE_GPU_GIB:g} GiB free GPU memory "
+            f"but effective budget is {found} GiB (capped by SLICERDSPACE_MAX_VRAM_GIB={cap:g} GiB); "
+            "the surface stage runs on CPU."
         )
     return "cpu", (
         f"DDSurfer needs at least {SURFACE_MIN_FREE_GPU_GIB:g} GiB free GPU memory but only {found} GiB is free; "
@@ -2629,10 +2750,10 @@ def _check_spec(spec: DependencySpec, platform_name: str) -> DependencyStatus:
                 env = python_tool_environment(python_path)
                 if python_path_entries:
                     env["PYTHONPATH"] = os.pathsep.join(python_path_strs) + os.pathsep + env.get("PYTHONPATH", "")
-                prepend_paths = [*_bundled_prepend_paths(python_path), *python_path_strs]
+                prepend_paths = [*python_path_strs, *_bundled_prepend_paths(python_path)]
                 probe = (
                     "import importlib.metadata, importlib.util, json, sys\n"
-                    f"sys.path[:0] = {prepend_paths!r}\n"
+                    f"sys.path[:0] = {ascii(prepend_paths)}\n"
                     f"available = importlib.util.find_spec({spec.python_import!r}) is not None\n"
                     f"distribution = {dist_for_req!r}\n"
                     "version = importlib.metadata.version(distribution) if available and distribution else None\n"
@@ -2640,7 +2761,7 @@ def _check_spec(spec: DependencySpec, platform_name: str) -> DependencyStatus:
                 )
                 try:
                     completed = subprocess.run(
-                        [python_path.as_posix(), "-c", probe],
+                        _python_probe_command(python_path, probe),
                         check=True,
                         capture_output=True,
                         env=env,
@@ -2754,7 +2875,29 @@ def _check_spec(spec: DependencySpec, platform_name: str) -> DependencyStatus:
                 spec.python_executable,
                 spec.python_path_entries,
             )
-            details["detected_source"] = "CUDA runtime" if available else "not found"
+            torch_ver_str = str(details.get("torch_version") or "")
+            is_cpu_only_torch = bool(
+                not available
+                and details.get("torch_importable")
+                and (not details.get("torch_cuda_build") or "+cpu" in torch_ver_str.lower())
+            )
+            if available:
+                details["detected_source"] = "CUDA runtime"
+            elif is_cpu_only_torch:
+                details["cpu_only_torch"] = True
+                details["detected_source"] = "CPU-only PyTorch"
+                details["notes"] = (
+                    f"CPU-only PyTorch ({torch_ver_str or 'unknown'}) is installed (torch.version.cuda is None); "
+                    "CUDA-enabled PyTorch installation/configuration is required."
+                )
+            elif details.get("cuda_kernel_error"):
+                details["detected_source"] = "CUDA kernel probe failed"
+                details["notes"] = (
+                    f"CUDA device {requested_device} failed kernel execution probe: "
+                    f"{details['cuda_kernel_error']}"
+                )
+            else:
+                details["detected_source"] = "not found"
         else:
             available = False
             details = {
@@ -2808,6 +2951,25 @@ def _check_spec(spec: DependencySpec, platform_name: str) -> DependencyStatus:
 
     if spec.kind == "device" and platform_name == "Windows":
         details["windows_gpu_note"] = WINDOWS_GPU_NOTE  # D8
+    install_hint = ""
+    if not available:
+        if spec.kind == "device" and details.get("cpu_only_torch"):
+            ver = details.get("torch_version") or "unknown"
+            base_hint = (
+                f"Installed PyTorch ({ver}) is CPU-only (torch.version.cuda is None). "
+                "Install/configure a CUDA-enabled PyTorch build (e.g. via the Slicer PyTorch extension "
+                "or matching CUDA wheel index), or select CPU."
+            )
+            install_hint = base_hint + " " + WINDOWS_GPU_NOTE if platform_name == "Windows" else base_hint
+        elif spec.kind == "device" and details.get("cuda_kernel_error"):
+            base_hint = (
+                f"CUDA kernel execution failed on {details.get('requested_device') or spec.device} "
+                f"({details['cuda_kernel_error']}). Install a CUDA-enabled PyTorch build compatible with "
+                "this GPU architecture, choose a usable GPU index, or select CPU."
+            )
+            install_hint = base_hint + " " + WINDOWS_GPU_NOTE if platform_name == "Windows" else base_hint
+        else:
+            install_hint = _install_hint(spec, platform_name)
     return DependencyStatus(
         key=spec.key,
         kind=spec.kind,
@@ -2816,7 +2978,7 @@ def _check_spec(spec: DependencySpec, platform_name: str) -> DependencyStatus:
         required=spec.required,
         targets=spec.targets,
         details=details,
-        install_hint="" if available else _install_hint(spec, platform_name),
+        install_hint=install_hint,
         install_group=spec.install_group,
     )
 
@@ -2848,12 +3010,12 @@ def _batch_probe_python_specs(specs: Iterable[DependencySpec]) -> dict[tuple[Any
         env = python_tool_environment(python_path)
         if python_path_entries:
             env["PYTHONPATH"] = os.pathsep.join(python_path_strs) + os.pathsep + env.get("PYTHONPATH", "")
-        prepend_paths = [*_bundled_prepend_paths(python_path), *python_path_strs]
+        prepend_paths = [*python_path_strs, *_bundled_prepend_paths(python_path)]
         probe = (
             "import importlib.metadata, importlib.util, json, sys\n"
-            f"sys.path[:0] = {prepend_paths!r}\n"
+            f"sys.path[:0] = {ascii(prepend_paths)}\n"
             "out = {}\n"
-            f"for mod_name, dist_name in {queries!r}:\n"
+            f"for mod_name, dist_name in {ascii(queries)}:\n"
             "    try:\n"
             "        avail = importlib.util.find_spec(mod_name) is not None\n"
             "        ver = importlib.metadata.version(dist_name) if avail and dist_name else None\n"
@@ -2864,7 +3026,7 @@ def _batch_probe_python_specs(specs: Iterable[DependencySpec]) -> dict[tuple[Any
         )
         try:
             completed = subprocess.run(
-                [python_path.as_posix(), "-c", probe],
+                _python_probe_command(python_path, probe),
                 check=True,
                 capture_output=True,
                 env=env,
@@ -2899,7 +3061,7 @@ def _teem_info_in_interpreter(python_path: Path) -> dict[str, str]:
     """Run the Teem check in the selected interpreter (C2), so it answers for that runtime."""
     probe = (
         "import json, sys\n"
-        f"sys.path.insert(0, {Path(__file__).resolve().parents[1].as_posix()!r})\n"
+        f"sys.path.insert(0, {ascii(Path(__file__).resolve().parents[1].as_posix())})\n"
         "try:\n"
         "    from shared import teem_dti\n"
         "    lib = teem_dti.load_teem()\n"
@@ -2910,7 +3072,7 @@ def _teem_info_in_interpreter(python_path: Path) -> dict[str, str]:
     )
     try:
         completed = subprocess.run(
-            [python_path.as_posix(), "-c", probe],
+            _python_probe_command(python_path, probe),
             check=True, capture_output=True, env=python_tool_environment(python_path),
             timeout=DEPENDENCY_PROBE_TIMEOUT_SECONDS, **subprocess_no_window_kwargs(**text_subprocess_kwargs()),
         )

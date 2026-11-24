@@ -229,6 +229,24 @@ def _resolved_eddy_threads(config: DwiPreprocessingConfig) -> int:
     return int(eddy_threads)
 
 
+def _resolved_dipy_workers(
+    config: DwiPreprocessingConfig,
+    *,
+    avail_ram_bytes: Optional[int] = None,
+) -> int:
+    """Resolve RAM-aware CPU worker count for in-process DIPY MP-PCA and Gibbs stages."""
+    from preprocessing.dipy_accel import _resolve_dipy_cpu_workers
+
+    eddy_threads = getattr(config, "eddy_threads", None)
+    if eddy_threads is not None and int(eddy_threads) < 1:
+        raise ValueError("eddy_threads must be >= 1.")
+    return _resolve_dipy_cpu_workers(
+        int(eddy_threads) if eddy_threads is not None else None,
+        avail_ram_bytes=avail_ram_bytes,
+        apply_low_ram_cap=True,
+    )
+
+
 def _resolved_eddy_options(config: DwiPreprocessingConfig) -> str:
     options = ["--cnr_maps", "--residuals", f"--nthr={_resolved_eddy_threads(config)}"]
     if config.eddy_second_level_model is not None:
@@ -1504,19 +1522,27 @@ def _run_fused_mppca_gibbs(
         max_workers=max_workers,
     )
     del data
+    from shared.hardware_adapt import GIB, query_host_available_ram_bytes
+
+    avail_ram = query_host_available_ram_bytes()
+    gibbs_inplace = avail_ram > 0 and avail_ram < max(3 * int(denoised.nbytes), 10 * GIB)
     with ThreadPoolExecutor(max_workers=3) as io_pool:
         fut_noise = io_pool.submit(_save_float32, sigma, source_img, Path(mppca_cmd[4]))
         fut_denoised = io_pool.submit(_save_float32, denoised, source_img, Path(mppca_cmd[3]))
+        if gibbs_inplace:
+            # Tight host RAM: finish saving denoised first so Gibbs runs in-place without a second 4D copy.
+            fut_denoised.result()
         corrected = gibbs_removal_accelerated(
             denoised,
             slice_axis=2,
-            inplace=False,
+            inplace=gibbs_inplace,
             device=device,
             max_workers=max_workers,
         )
         fut_degibbs = io_pool.submit(_save_float32, corrected, source_img, Path(gibbs_cmd[3]))
         fut_noise.result()
-        fut_denoised.result()
+        if not gibbs_inplace:
+            fut_denoised.result()
         fut_degibbs.result()
 
 
@@ -1588,7 +1614,7 @@ def _run_dipy_step(
             corrected = gibbs_removal_accelerated(
                 data,
                 slice_axis=2,
-                inplace=False,
+                inplace=True,
                 device=device,
                 max_workers=max_workers,
             )
@@ -1672,6 +1698,7 @@ def _execute_preprocessing_backend(
 
     disable_accel = os.environ.get("SLICERDSPACE_DISABLE_DIPY_ACCEL", "").strip().lower() in {"1", "true", "yes"}
     effective_threads = _resolved_eddy_threads(config)
+    dipy_workers = _resolved_dipy_workers(config)
     idx = 0
     while idx < len(commands):
         command = commands[idx]
@@ -1690,7 +1717,7 @@ def _execute_preprocessing_backend(
                     commands[idx + 1],
                     log=log,
                     device=config.dipy_device,
-                    max_workers=effective_threads,
+                    max_workers=dipy_workers,
                 )
                 idx += 2
                 continue
@@ -1700,7 +1727,7 @@ def _execute_preprocessing_backend(
                 command,
                 log=log,
                 device=config.dipy_device,
-                max_workers=effective_threads,
+                max_workers=dipy_workers,
             )
             idx += 1
             continue
@@ -1886,7 +1913,48 @@ def _detach_linked_backend_outputs(paths: dict[str, Path]) -> None:
             path.unlink()
 
 
-@scheduled_stage('preprocessing', gpu=True)
+def _preprocessing_uses_gpu(
+    config: Optional[DwiPreprocessingConfig] = None,
+    *args: Any,
+    **kwargs: Any,
+) -> bool:
+    """Return True only when this preprocessing invocation will actually run a GPU-accelerated step."""
+    if config is None or getattr(config, "skip", False) or not getattr(config, "execute", False):
+        return False
+    # 1. DIPY denoising / Gibbs on CUDA (only when run_denoise is enabled and DIPY accel is active)
+    if bool(getattr(config, "run_denoise", True)):
+        disable_accel = os.environ.get("SLICERDSPACE_DISABLE_DIPY_ACCEL", "").strip().lower() in {"1", "true", "yes"}
+        if not disable_accel:
+            try:
+                from preprocessing.dipy_accel import resolve_dipy_accel_device
+
+                dipy_dev = getattr(config, "dipy_device", "auto")
+                resolved = resolve_dipy_accel_device(dipy_dev)
+                if str(resolved or "").lower().startswith("cuda"):
+                    return True
+            except Exception:
+                pass
+    # 2. Eddy: bundled/native FSL uses eddy_cpu (CPU-only). Only external Linux/WSL dwifslpreproc
+    # with an eddy_cuda binary and visible CUDA device reserves a GPU slot.
+    if _effective_run_eddy(config):
+        try:
+            backend = inspect_preprocessing_backend(config)
+            if backend.get("execution_backend") == "native":
+                return False
+        except Exception:
+            if sys.platform in {"win32", "darwin"}:
+                return False
+        cuda_vis = os.environ.get("CUDA_VISIBLE_DEVICES")
+        if cuda_vis is not None and cuda_vis.strip() in {"", "-1", "none", "None"}:
+            return False
+        search_path = _command_search_path(config)
+        for cand in ("eddy_cuda", "eddy_cuda10.2", "eddy_cuda11.0", "eddy_cuda12.0"):
+            if shutil.which(cand, path=search_path):
+                return True
+    return False
+
+
+@scheduled_stage('preprocessing', gpu=_preprocessing_uses_gpu)
 def run_dwi_preprocessing(
     config: DwiPreprocessingConfig,
     *,

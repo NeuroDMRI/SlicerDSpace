@@ -1111,7 +1111,27 @@ def _write_noddi_qc(config, paths, *, source_maps=None, validity=None):
     })
 
 
-@scheduled_stage('microstructure_freewater')
+def _freewater_uses_gpu(*args, **kwargs) -> bool:
+    """Return True when Free-Water WLS resolves to a CUDA device for cohort GPU slot reservation."""
+    config = kwargs.get("config") or (args[0] if args else None)
+    if config is None:
+        return False
+    fit_method = str(getattr(config, "free_water_fit_method", "WLS") or "WLS").strip().upper()
+    engine = str(getattr(config, "free_water_engine", "serial") or "serial").strip().lower()
+    if fit_method != "WLS" or engine != "serial":
+        return False
+    requested = str(getattr(config, "free_water_device", "auto") or "auto").strip().lower()
+    if requested in {"cpu", "mps"}:
+        return False
+    try:
+        from microstructure.freewater_wls import _resolve_fw_device
+
+        return _resolve_fw_device(requested).startswith("cuda")
+    except Exception:
+        return False
+
+
+@scheduled_stage('microstructure_freewater', gpu=_freewater_uses_gpu)
 def _compute_free_water_maps(
     *,
     config: MicrostructureConfig,
@@ -1521,7 +1541,27 @@ def _scalar_summary(data: np.ndarray, mask: np.ndarray) -> dict[str, float | int
     }
 
 
-@scheduled_stage('microstructure_noddi')
+def _noddi_uses_gpu(*args, **kwargs) -> bool:
+    """Return True when accelerated NODDI resolves to a CUDA device for cohort GPU slot reservation."""
+    config = kwargs.get("config") or (args[0] if args else None)
+    if config is None:
+        return False
+    if bool(getattr(config, "noddi_directional_average", False)):
+        return False
+    if os.environ.get("SLICERDSPACE_DISABLE_NODDI_ACCEL") == "1":
+        return False
+    requested = str(getattr(config, "noddi_device", "auto") or "auto").strip().lower()
+    if requested in {"cpu", "mps"}:
+        return False
+    try:
+        from microstructure.noddi_accel import resolve_noddi_device
+
+        return resolve_noddi_device(requested).startswith("cuda")
+    except Exception:
+        return False
+
+
+@scheduled_stage('microstructure_noddi', gpu=_noddi_uses_gpu)
 def _compute_noddi_maps(
     *,
     config: MicrostructureConfig,

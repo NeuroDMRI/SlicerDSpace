@@ -545,6 +545,43 @@ class MissingFileHintTest(PanelCase):
         self.assertEqual(self.hint("bval").setText.call_args[0][0], "File not found")
         self.assertEqual(self.owner._prepare_inputs_widget_text("bval"), str(late))  # the text is never changed
 
+    def test_c1_5_missing_hint_moves_below_filename_to_prevent_overlap(self) -> None:
+        class _FakeLayout:
+            def __init__(self, initial=()):
+                self.items = list(initial)
+                self.current = None
+
+            def indexOf(self, widget) -> int:
+                return self.items.index(widget) if widget in self.items else -1
+
+            def removeWidget(self, widget) -> None:
+                if widget in self.items:
+                    self.items.remove(widget)
+
+            def addWidget(self, widget) -> None:
+                if widget not in self.items:
+                    self.items.append(widget)
+
+            def setCurrentWidget(self, widget) -> None:
+                self.current = widget
+
+        fields = self.install()
+        hint = fields["nifti_source_hint"]
+        file_layout = _FakeLayout([fields["nifti_source"], hint])
+        tile_layout = _FakeLayout()
+        fields["nifti_source_file_layout"] = file_layout
+        fields["nifti_source_tile_layout"] = tile_layout
+
+        missing = self.root / "gone" / "sub-01_dwi.nii.gz"
+        self.owner._set_prepare_inputs_widget_text("nifti_source", str(missing))
+        self.assertNotIn(hint, file_layout.items)
+        self.assertIn(hint, tile_layout.items)
+
+        # Clearing returns the placeholder hint to file_row.
+        fields["nifti_source"].clear()
+        self.assertIn(hint, file_layout.items)
+        self.assertNotIn(hint, tile_layout.items)
+
 
 # ----- C2: Refresh button -----------------------------------------------------------------------------------------
 

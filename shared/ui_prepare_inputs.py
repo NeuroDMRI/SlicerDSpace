@@ -346,6 +346,8 @@ def install_prepare_inputs_panel(owner: Any, configuration_layout: Any) -> None:
         fields[key + "_tile"] = tile
         fields[key + "_label"] = label
         fields[key + "_hint"] = hint
+        fields[key + "_file_layout"] = file_layout
+        fields[key + "_tile_layout"] = tile_layout
 
         def text_changed():
             text = edit.toPlainText()
@@ -611,9 +613,9 @@ def refresh_prepare_inputs_styles(owner: Any, *, dark: bool | None = None) -> No
         " QToolButton#dspaceFolderBrowse:hover, QToolButton#dspaceFolderBrowse:focus,"
         " QToolButton#inputsRefreshButton:hover, QToolButton#inputsRefreshButton:focus"
         f" {{ background: {hover}; border-color: #478CB3; }}"
-        # C1.5: a saved file that no longer exists keeps its name and shows "File not found" on the right.
+        # C1.5: a saved file that no longer exists keeps its full name and shows "File not found" on a row below.
+        f"QWidget#dspaceInputTile[missing=\"true\"] {{ border-color: {missing_ink}; }}"
         f"QWidget#dspaceInputTile[missing=\"true\"] QLabel#dspaceInputHint {{ color: {missing_ink}; }}"
-        "QWidget#dspaceInputTile[missing=\"true\"] QPlainTextEdit { padding-right: 96px; }"
     )
     from shared.ui_help_button import refresh_help_styles
 
@@ -854,6 +856,38 @@ def apply_pending_input_sources(owner: Any) -> bool:
     return True
 
 
+def _place_input_hint(fields: dict[str, Any], key: str, *, missing: bool) -> None:
+    """Keep empty placeholders inside ``file_row``, and move missing-file notices below the filename so they never overlap."""
+    hint = fields.get(key + "_hint")
+    file_layout = fields.get(key + "_file_layout")
+    tile_layout = fields.get(key + "_tile_layout")
+    if hint is None or file_layout is None or tile_layout is None:
+        return
+    try:
+        in_file = file_layout.indexOf(hint)
+        in_tile = tile_layout.indexOf(hint)
+        if not (isinstance(in_file, int) and isinstance(in_tile, int)):
+            return
+        if missing:
+            if in_file >= 0:
+                file_layout.removeWidget(hint)
+            if in_tile < 0:
+                tile_layout.addWidget(hint)
+            if hasattr(hint, "setFixedHeight"):
+                hint.setFixedHeight(16)
+        else:
+            if in_tile >= 0:
+                tile_layout.removeWidget(hint)
+            if in_file < 0:
+                file_layout.addWidget(hint)
+            if hasattr(file_layout, "setCurrentWidget"):
+                file_layout.setCurrentWidget(hint)
+            if hasattr(hint, "setFixedHeight"):
+                hint.setFixedHeight(20)
+    except Exception:
+        pass
+
+
 def update_input_hint(owner: Any, key: str) -> None:
     """Show the normal hint of an empty tile, or "File not found" when the saved path no longer exists.
 
@@ -876,13 +910,13 @@ def update_input_hint(owner: Any, key: str) -> None:
         text = onboarding_text("zh" if zh else "en", "input_file_missing")
     else:
         text = next((cn if zh else en for name, en, cn in INPUT_TILE_HINTS if name == key), "")
+    _place_input_hint(fields, key, missing=missing)
     hint.setText(text)
     hint.setVisible(bool(missing or not path))
     try:
         import qt
 
-        side = qt.Qt.AlignRight if missing else qt.Qt.AlignLeft
-        hint.setAlignment(side | qt.Qt.AlignVCenter)
+        hint.setAlignment(qt.Qt.AlignLeft | qt.Qt.AlignVCenter)
     except Exception:
         pass
     tile = fields.get(key + "_tile")
@@ -894,6 +928,17 @@ def update_input_hint(owner: Any, key: str) -> None:
             # hint and the edit are selected by the tile's property.
             for widget in (tile, hint, fields.get(key)):
                 _repolish(widget)
+            if hasattr(tile, "updateGeometry"):
+                tile.updateGeometry()
+            pages = fields.get("format_pages")
+            if pages is not None and hasattr(pages, "updateGeometry"):
+                pages.updateGeometry()
+            fit = getattr(owner, "_fitCompactHeight", None)
+            if callable(fit):
+                try:
+                    fit()
+                except Exception:
+                    pass
 
 
 def _repolish(widget: Any) -> None:

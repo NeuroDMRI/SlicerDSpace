@@ -58,7 +58,35 @@ def _wait_for_input_status(status_path: str) -> None:
         raise RuntimeError("Input preparation failed; no files were processed.")
 
 
+def _activate_bundled_site_packages() -> None:
+    """Expose bundled Python dependencies (e.g. joblib) when Slicer runs with --disable-modules."""
+    raw_entries: list[str] = []
+    bsp = os.environ.get("SLICERDSPACE_BUNDLED_SITE_PACKAGES", "")
+    if bsp:
+        raw_entries.extend(p for p in bsp.split(os.pathsep) if p)
+    broot = os.environ.get("SLICERDSPACE_BUNDLED_PYTHON_ROOT", "")
+    if broot:
+        root_p = Path(broot)
+        for cand in (root_p / "site-packages", root_p / "Lib" / "site-packages", root_p):
+            if cand.is_dir():
+                raw_entries.append(str(cand))
+    try:
+        repo_root = Path(__file__).resolve().parents[1]
+        if str(repo_root) not in sys.path:
+            sys.path.append(str(repo_root))
+        from shared.bundled_python import bundled_site_packages
+
+        for entry in bundled_site_packages():
+            raw_entries.append(str(entry))
+    except Exception:
+        pass
+    for entry in raw_entries:
+        if entry and os.path.isdir(entry) and entry not in sys.path:
+            sys.path.append(entry)
+
+
 def _prepare_wma_split_modules(wma_root: Path):
+    _activate_bundled_site_packages()
     _ensure_numpy_core_multiarray()
     for path in (str(wma_root), str(wma_root / "bin")):
         if path not in sys.path:

@@ -808,6 +808,20 @@ class FreeWaterDeviceAttrTests(unittest.TestCase):
             self.assertEqual(dki._resolve_dki_fork_workers(cfg), 1)
             self.assertFalse(noddi_accel._is_linux_fork_safe())
 
+    def test_wma_harden_transform_activates_bundled_site_packages(self) -> None:
+        from scripts import run_wma_harden_transform as rwht
+
+        with tempfile.TemporaryDirectory() as td:
+            sp = Path(td) / "site-packages"
+            sp.mkdir()
+            orig_path = list(sys.path)
+            try:
+                with patch.dict(os.environ, {"SLICERDSPACE_BUNDLED_PYTHON_ROOT": td}, clear=False):
+                    rwht._activate_bundled_site_packages()
+                self.assertIn(str(sp), sys.path)
+            finally:
+                sys.path[:] = orig_path
+
 
 if __name__ == "__main__":
     unittest.main()

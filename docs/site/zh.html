@@ -226,7 +226,7 @@ export SUBJECT_ROOT="/path/to/sub-01"
       <a href="assets/img/fig-runtime-resources.png" target="_blank" rel="noopener" aria-label="查看完整的运行时间图">
         <picture>
           <source type="image/webp" srcset="assets/img/fig-runtime-resources.webp">
-          <img src="assets/img/fig-runtime-resources.png" width="2160" height="2058" loading="lazy" decoding="async" fetchpriority="low" alt="单列长图布局，每种算法占一行，同一对数时间轴上对比 macOS 笔记本（Apple M4，三角标记）、Windows 台式机 CPU（方框标记）、Linux 服务器 CPU（实心圆点）与 Linux 服务器 CUDA（空心菱形）；右侧四列按操作系统与硬件层级对齐给出全部实测耗时。">
+          <img src="assets/img/fig-runtime-resources.png" width="2160" height="1994" loading="lazy" decoding="async" fetchpriority="low" alt="单列长图布局，每种算法占一行，同一对数时间轴上对比 macOS 笔记本（Apple M4，三角标记）、Windows 台式机 CPU（方框标记）、Linux 服务器 CPU（实心圆点）与 Linux 服务器 CUDA（空心菱形）；右侧四列按操作系统与硬件层级对齐给出全部实测耗时。">
         </picture>
       </a>
       <figcaption>跨操作系统与硬件层级的分阶段实测耗时：macOS 便携笔记本（Apple M4 10 核、16 GB 统一内存、自动 CPU/MPS，覆盖全部 22 个模块）、Windows 个人台式机（Intel Core i7-13700K 16 核、32 GB 内存、纯 CPU，覆盖全部 22 个模块）与共用 Linux 计算服务器（双路 Intel Xeon Platinum 8360Y CPU 与 NVIDIA H100 PCIe 80 GB GPU，覆盖全部 22 项协议任务及其中 13 条 CUDA 加速路线）。每种算法占一行，右侧四列对齐给出 macOS Laptop (M4)、Windows Desktop (CPU)、Linux Server (CPU) 与 Linux Server (CUDA) 耗时；短横线表示仅支持 CPU、无 CUDA 路线的阶段。不同方法的线程配额不同且服务器为共享主机，因此不可直接解读为受控设备加速比；各行耗时不可直接相加。SAF 对既有的 100,000 条流线重过滤；TractCloud 使用 50,000 条流线作为输入。</figcaption>

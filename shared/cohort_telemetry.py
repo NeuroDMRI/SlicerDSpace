@@ -16,7 +16,14 @@ from shared.hardware_adapt import find_nvidia_smi
 
 def _parse_smi_float(value: object) -> float | None:
     text = str(value or "").strip()
-    if not text or text.lower() in {"[n/a]", "n/a", "[not supported]", "not supported"}:
+    if not text or text.lower() in {
+        "[n/a]",
+        "n/a",
+        "[not supported]",
+        "not supported",
+        "[insufficient permissions]",
+        "insufficient permissions",
+    }:
         return None
     try:
         return float(text)
@@ -39,46 +46,80 @@ def gpu_sample(pids, executable=None):
             **subprocess_no_window_kwargs(**text_subprocess_kwargs()),
         )
         return list(csv.reader(io.StringIO(result.stdout), skipinitialspace=True))
+
+    scope = 'Whole device including unrelated users; not study-attributable GPU utilization'
     try:
-        devices = [dict(uuid=row[0], utilization_percent=_parse_smi_float(row[1]), used_mib=_parse_smi_float(row[2]))
-                   for row in query('gpu', 'uuid,utilization.gpu,memory.used')]
-        apps = query('compute-apps', 'pid,used_gpu_memory,gpu_uuid')
-        matched_rows = []
-        for row in apps:
-            try:
-                app_pid = int(row[0])
-            except (ValueError, IndexError):
-                continue
-            if app_pid in pids:
-                matched_rows.append(row)
-        numeric_owned = [val for val in (_parse_smi_float(row[1]) for row in matched_rows) if val is not None]
-        if not matched_rows:
-            owned = 0.0
-            payload = dict(
-                available=True,
-                owned_vram_mib=owned,
-                devices=devices,
-                utilization_scope='Whole device including unrelated users; not study-attributable GPU utilization',
+        gpu_rows = query('gpu', 'uuid,utilization.gpu,memory.used')
+        devices = [
+            dict(
+                uuid=row[0],
+                utilization_percent=_parse_smi_float(row[1]),
+                used_mib=_parse_smi_float(row[2]),
             )
-        elif numeric_owned:
-            owned = sum(numeric_owned)
-            payload = dict(
-                available=True,
-                owned_vram_mib=owned,
-                devices=devices,
-                utilization_scope='Whole device including unrelated users; not study-attributable GPU utilization',
-            )
-        else:
-            payload = dict(
-                available=True,
-                owned_vram_mib=None,
-                owned_vram_note='Windows WDDM nvidia-smi reports [N/A] for per-process compute VRAM',
-                devices=devices,
-                utilization_scope='Whole device including unrelated users; not study-attributable GPU utilization',
-            )
-        return payload
+            for row in gpu_rows
+            if any(cell.strip() for cell in row)
+        ]
     except (OSError, ValueError, IndexError, subprocess.SubprocessError) as exc:
         return dict(available=False, reason=str(exc), owned_vram_mib=None, devices=[])
+
+    # Isolate per-process compute-apps query from whole-GPU stats so Windows WDDM failures or
+    # unsupported compute-apps queries preserve whole-GPU utilization and VRAM telemetry.
+    try:
+        apps = query('compute-apps', 'pid,used_gpu_memory,gpu_uuid')
+    except (OSError, ValueError, IndexError, subprocess.SubprocessError) as exc:
+        return dict(
+            available=True,
+            owned_vram_mib=None,
+            owned_vram_note=f'Per-process compute-apps query unavailable ({exc}); whole-GPU telemetry preserved',
+            devices=devices,
+            utilization_scope=scope,
+        )
+
+    non_empty_rows = [row for row in apps if any(cell.strip() for cell in row)]
+    parsed_pid_rows = 0
+    matched_rows = []
+    for row in non_empty_rows:
+        try:
+            app_pid = int(row[0])
+        except (ValueError, IndexError):
+            continue
+        parsed_pid_rows += 1
+        if app_pid in pids:
+            matched_rows.append(row)
+    numeric_owned = [
+        val
+        for val in (_parse_smi_float(row[1]) if len(row) > 1 else None for row in matched_rows)
+        if val is not None
+    ]
+    if non_empty_rows and parsed_pid_rows == 0:
+        return dict(
+            available=True,
+            owned_vram_mib=None,
+            owned_vram_note='Windows WDDM nvidia-smi compute-apps output is non-numeric/unsupported; whole-GPU telemetry preserved',
+            devices=devices,
+            utilization_scope=scope,
+        )
+    if not matched_rows:
+        return dict(
+            available=True,
+            owned_vram_mib=0.0,
+            devices=devices,
+            utilization_scope=scope,
+        )
+    if numeric_owned:
+        return dict(
+            available=True,
+            owned_vram_mib=sum(numeric_owned),
+            devices=devices,
+            utilization_scope=scope,
+        )
+    return dict(
+        available=True,
+        owned_vram_mib=None,
+        owned_vram_note='Windows WDDM nvidia-smi reports [N/A] for per-process compute VRAM',
+        devices=devices,
+        utilization_scope=scope,
+    )
 
 
 class CohortTelemetry:

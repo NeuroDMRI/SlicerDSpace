@@ -1218,6 +1218,8 @@ def gibbs_removal_accelerated(
     req_raw = str(device or os.environ.get("SLICERDSPACE_DIPY_DEVICE", "auto")).strip().lower()
     explicit_cuda = req_raw == "cuda" or req_raw.startswith("cuda:")
 
+    done = np.zeros(n_slices, dtype=bool)
+
     def _run_cpu_range(start: int, end: int) -> None:
         n_sub = end - start
         if n_sub <= 0:
@@ -1238,6 +1240,7 @@ def gibbs_removal_accelerated(
             for b in batches:
                 b0, b1, res = _worker(b)
                 _scatter_slices(b0, b1, res)
+                done[b0:b1] = True
                 del res
         else:
             from collections import deque
@@ -1261,10 +1264,21 @@ def gibbs_removal_accelerated(
                     fut = pending.popleft()
                     b0, b1, res = fut.result()
                     _scatter_slices(b0, b1, res)
+                    done[b0:b1] = True
                     del res
                     nxt = next(batch_iter, None)
                     if nxt is not None:
                         pending.append(pool.submit(_worker, nxt))
+
+    def _run_cpu_uncompleted(start: int, end: int) -> None:
+        if end <= start:
+            return
+        pending = np.flatnonzero(~done[start:end])
+        if pending.size == 0:
+            return
+        splits = np.flatnonzero(np.diff(pending) > 1) + 1
+        for group in np.split(pending, splits):
+            _run_cpu_range(start + int(group[0]), start + int(group[-1]) + 1)
 
     is_cuda_dev = resolved.startswith("cuda")
     if is_cuda_dev or resolved == "mps":
@@ -1310,6 +1324,7 @@ def gibbs_removal_accelerated(
                 res = torch.abs(torch.fft.ifft2(comb, dim=(-2, -1)))
                 res_np = res.detach().cpu().numpy().astype(vol_arr.dtype, copy=False)
                 _scatter_slices(start, end, res_np)
+                done[start:end] = True
 
             def _cuda_step(start: int, end: int) -> None:
                 try:
@@ -1323,7 +1338,7 @@ def gibbs_removal_accelerated(
             def _cpu_fallback_step(start: int, end: int) -> None:
                 if explicit_cuda:
                     raise RuntimeError("Gibbs CUDA chunk failed under explicit CUDA mode.")
-                _run_cpu_range(start, end)
+                _run_cpu_uncompleted(start, end)
 
             run_cuda_chunked_with_oom_fallback(
                 n_slices,
@@ -1352,7 +1367,7 @@ def gibbs_removal_accelerated(
                 file=sys.stderr,
             )
             empty_gpu_cache_safely()
-            _run_cpu_range(0, n_slices)
+            _run_cpu_uncompleted(0, n_slices)
         finally:
             del g0_t, g1_t
             empty_gpu_cache_safely()

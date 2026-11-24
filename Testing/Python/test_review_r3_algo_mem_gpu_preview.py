@@ -1,6 +1,6 @@
 """Round-3 regression tests for Group B:
 1. MP-PCA low-RAM worker cap + CPU Gibbs single-buffer memory footprint & parity.
-2. DDParcel float16 / tight-RAM memmap host probability buffer & exact argmax parity.
+2. DDParcel float32 RAM / tight-RAM float32 memmap host probability buffer & exact argmax parity.
 3. NRRD/NHDR preview available-RAM threshold & streaming mean-b0 decode (raw/gzip, axis-first/last).
 4. MK-Curve sequential volume-major + bounded block-transpose staging (zero column thrashing).
 5. TractCloud multi-GPU `cuda:<index>` preservation end-to-end from UI controller to bootstrap.
@@ -198,25 +198,23 @@ class DDParcelHostProbabilityBufferTests(unittest.TestCase):
         dd_pred = self._import_ddsurfer_pred()
         shape = (1, 32, 32, 32, 82)
         fp32_bytes = int(np.prod(shape)) * 4
-        fp16_bytes = int(np.prod(shape)) * 2
 
-        # 1. Roomy host (>= 8 GiB): in-RAM float16 cuts host RAM by exactly 50%.
+        # 1. Roomy host (>= 8 GiB and fp32_bytes <= 60% avail): in-RAM full float32 preserves exact tie-breaking.
         buf_ram = dd_pred._allocate_prediction_probability(shape, avail_ram_bytes=32 * GIB)
         try:
-            self.assertEqual(buf_ram.mode, "ram_fp16")
-            self.assertEqual(buf_ram.tensor.dtype, torch.float16)
-            self.assertEqual(buf_ram.nbytes, fp16_bytes)
-            self.assertEqual(buf_ram.nbytes * 2, fp32_bytes)
+            self.assertEqual(buf_ram.mode, "ram_fp32")
+            self.assertEqual(buf_ram.tensor.dtype, torch.float32)
+            self.assertEqual(buf_ram.nbytes, fp32_bytes)
         finally:
             buf_ram.close()
 
-        # 2. Tight host RAM (< 8 GiB): automatically switches to disk-backed float16 memmap & cleans up cleanly.
+        # 2. Tight host RAM (< 8 GiB): automatically switches to disk-backed float32 memmap & cleans up cleanly.
         with tempfile.TemporaryDirectory() as td:
             buf_mm = dd_pred._allocate_prediction_probability(shape, avail_ram_bytes=4 * GIB, temp_root=td)
             backing_dir = buf_mm._backing_dir
-            self.assertEqual(buf_mm.mode, "memmap_fp16")
-            self.assertEqual(buf_mm.tensor.dtype, torch.float16)
-            self.assertEqual(buf_mm.nbytes, fp16_bytes)
+            self.assertEqual(buf_mm.mode, "memmap_fp32")
+            self.assertEqual(buf_mm.tensor.dtype, torch.float32)
+            self.assertEqual(buf_mm.nbytes, fp32_bytes)
             self.assertIsNotNone(backing_dir)
             self.assertTrue(Path(backing_dir).is_dir())
             buf_mm.close()
@@ -250,7 +248,7 @@ class DDParcelHostProbabilityBufferTests(unittest.TestCase):
         ref_labels_np = ref_labels.numpy().astype(np.int16)
 
         with tempfile.TemporaryDirectory() as td:
-            for avail_ram, expected_mode in ((32 * GIB, "ram_fp16"), (4 * GIB, "memmap_fp16")):
+            for avail_ram, expected_mode in ((32 * GIB, "ram_fp32"), (4 * GIB, "memmap_fp32")):
                 buf = dd_pred._allocate_prediction_probability(
                     (1, nx, ny, nz, nc), avail_ram_bytes=avail_ram, temp_root=td
                 )

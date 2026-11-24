@@ -38,7 +38,9 @@ def main():
         result = install_requirements(request["requirements"], protected=request.get("protect_bundled", True),
                                       loaded=request.get("loaded_packages", ()),
                                       torch_minimum=request.get("torch_minimum"),
-                                      torchvision_required=request.get("torchvision_required", False))
+                                      torchvision_required=request.get("torchvision_required", False),
+                                      require_cuda_torch=request.get("require_cuda_torch", False),
+                                      replace_cpu_torch=request.get("replace_cpu_torch", False))
     except Exception as exc:
         result = {"kind": "slicerdsurfer_python_setup", "status": "failed",
                   "error": f"{type(exc).__name__}: {exc}"}

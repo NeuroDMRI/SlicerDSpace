@@ -812,6 +812,7 @@ class DdsurferGlobalVramCapTests(unittest.TestCase):
         completed_8g = SimpleNamespace(stdout='{"free_gib": 8.0}')
         with (
             patch.object(environment, "_is_macos", return_value=False),
+            patch.object(environment, "resolve_auto_torch_device", return_value="cuda:0"),
             patch.object(environment.subprocess, "run", return_value=completed_8g) as mock_run,
         ):
             # Without global cap: 8.0 GiB free -> CUDA allowed

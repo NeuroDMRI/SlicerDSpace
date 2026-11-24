@@ -44,6 +44,39 @@ def find_nvidia_smi() -> str | None:
     return None
 
 
+def global_vram_cap_bytes() -> int | None:
+    """Read optional global VRAM cap in bytes from ``SLICERDSPACE_MAX_VRAM_GIB`` (or alias ``SLICERDSPACE_MAX_VRAM_GB``)."""
+    import math
+
+    for env_name in ("SLICERDSPACE_MAX_VRAM_GIB", "SLICERDSPACE_MAX_VRAM_GB"):
+        raw = os.environ.get(env_name, "").strip()
+        if not raw:
+            continue
+        try:
+            val_gib = float(raw)
+        except ValueError:
+            continue
+        if math.isfinite(val_gib) and val_gib > 0.0:
+            cap_b = int(val_gib * GIB)
+            if cap_b > 0:
+                return cap_b
+    return None
+
+
+def _apply_vram_cap(free_b: int, total_b: int, *, used_b: int = 0) -> tuple[int, int]:
+    """Clamp ``(free_bytes, total_bytes)`` to any global VRAM cap while keeping ``0 <= free <= total``."""
+    free_i = max(0, int(free_b))
+    total_i = max(0, int(total_b))
+    cap_b = global_vram_cap_bytes()
+    if cap_b is not None:
+        total_i = min(total_i, cap_b)
+        remaining_cap = max(0, cap_b - max(0, int(used_b)))
+        free_i = min(free_i, cap_b, remaining_cap)
+    if total_i > 0:
+        free_i = min(free_i, total_i)
+    return int(free_i), int(total_i)
+
+
 def query_cuda_free_total_bytes(device: Any = None) -> tuple[int, int] | None:
     """Return ``(free_bytes, total_bytes)`` for ``device``, or ``None`` if unavailable."""
     try:
@@ -56,17 +89,14 @@ def query_cuda_free_total_bytes(device: Any = None) -> tuple[int, int] | None:
             return None
         idx = torch.cuda.current_device() if dev.index is None else int(dev.index)
         free_b, total_b = torch.cuda.mem_get_info(idx)
-        cap_env = os.environ.get("SLICERDSPACE_MAX_VRAM_GIB", "").strip()
-        if cap_env:
-            try:
-                cap_b = int(float(cap_env) * GIB)
-                if cap_b > 0:
-                    used_b = max(0, int(torch.cuda.memory_allocated(idx)))
-                    total_b = min(int(total_b), cap_b)
-                    free_b = min(int(free_b), max(int(64 * MIB), cap_b - used_b))
-            except ValueError:
-                pass
-        return int(free_b), int(total_b)
+        used_b = 0
+        try:
+            mem_alloc_fn = getattr(torch.cuda, "memory_allocated", None)
+            if callable(mem_alloc_fn):
+                used_b = max(0, int(mem_alloc_fn(idx)))
+        except Exception:
+            used_b = 0
+        return _apply_vram_cap(int(free_b), int(total_b), used_b=used_b)
     except Exception:
         return None
 
@@ -102,15 +132,9 @@ def query_mps_free_total_bytes() -> tuple[int, int] | None:
         used_cur = int(cur_fn()) if callable(cur_fn) else 0
         used_drv = int(drv_fn()) if callable(drv_fn) else 0
         used_b = max(0, used_cur, used_drv)
-        cap_env = os.environ.get("SLICERDSPACE_MAX_VRAM_GIB", "").strip()
-        if cap_env:
-            try:
-                cap_b = int(float(cap_env) * GIB)
-                if cap_b > 0:
-                    total_b = min(total_b, cap_b)
-            except ValueError:
-                pass
-        free_b = max(int(64 * MIB), total_b - used_b)
+        if global_vram_cap_bytes() is not None:
+            return _apply_vram_cap(max(0, total_b - used_b), total_b, used_b=used_b)
+        free_b = min(total_b, max(int(64 * MIB), total_b - used_b))
         return int(free_b), int(total_b)
     except Exception:
         return None
@@ -118,22 +142,25 @@ def query_mps_free_total_bytes() -> tuple[int, int] | None:
 
 def query_gpu_free_total_bytes(device: Any = None) -> tuple[int, int] | None:
     """Return ``(free_bytes, total_bytes)`` for CUDA or MPS ``device``."""
+    info: tuple[int, int] | None = None
     try:
         import torch
 
         if device is not None:
             dev = device if isinstance(device, torch.device) else torch.device(str(device))
             if dev.type == "mps":
-                return query_mps_free_total_bytes()
-            if dev.type == "cuda":
-                return query_cuda_free_total_bytes(dev)
-            return None
+                info = query_mps_free_total_bytes()
+            elif dev.type == "cuda":
+                info = query_cuda_free_total_bytes(dev)
+            else:
+                return None
+            return _apply_vram_cap(info[0], info[1]) if info is not None else None
     except Exception:
         pass
     info = query_cuda_free_total_bytes(device)
-    if info is not None:
-        return info
-    return query_mps_free_total_bytes()
+    if info is None:
+        info = query_mps_free_total_bytes()
+    return _apply_vram_cap(info[0], info[1]) if info is not None else None
 
 
 _DATACENTER_HIGH_FP64_GPU_MARKERS = (

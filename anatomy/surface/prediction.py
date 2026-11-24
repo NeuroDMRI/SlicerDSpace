@@ -44,7 +44,7 @@ def predict_subject(config):
     surface_py = Path(python_executable(config.python_bin))
     resolved = resolve_auto_torch_device(config.device, surface_py)
     if requested in {'', 'auto'} and resolved.startswith('cuda'):
-        gpu_action, _ = surface_gpu_memory_decision('auto', surface_py)
+        gpu_action, _ = surface_gpu_memory_decision('auto', surface_py, resolved_device=resolved)
         if gpu_action == 'cpu':
             resolved = 'cpu'
     config = replace(config, device=resolved)

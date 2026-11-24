@@ -2526,6 +2526,7 @@ def resolve_auto_torch_device(
     python_path_entries: Iterable[Path] = (),
 ) -> str:
     """Resolve ``auto`` to one concrete torch device without running both CPU and GPU paths."""
+    import time
 
     normalized = (device or "auto").strip().lower()
     if normalized in {"", "auto"}:
@@ -2534,14 +2535,23 @@ def resolve_auto_torch_device(
             raise RuntimeError("Cannot determine PyTorch GPU availability in the selected runtime: " + str(details["error"]) +
                                ". Fix that runtime or explicitly choose CPU; no silent CPU fallback.")
         usable = details.get("usable_indices")
+        resolved = "cpu"
         if isinstance(usable, list):
             if usable:
-                return f"cuda:{int(usable[0])}"
+                resolved = f"cuda:{int(usable[0])}"
+            elif details.get("mps_available") is True:
+                resolved = "mps"
         elif available and int(details.get("device_count") or 0) > 0:
-            return "cuda:0"
-        if details.get("mps_available") is True:
-            return "mps"
-        return "cpu"
+            resolved = "cuda:0"
+        elif details.get("mps_available") is True:
+            resolved = "mps"
+        if not tuple(python_path_entries):
+            python_path = python_executable or Path(sys.executable)
+            _AUTO_TORCH_DEVICE_CACHE[(python_path.as_posix(), os.environ.get("CUDA_VISIBLE_DEVICES"))] = (
+                time.monotonic(),
+                resolved,
+            )
+        return resolved
     if normalized == "cuda":
         return "cuda:0"
     if normalized in {"mps", "mps:0"}:
@@ -2551,6 +2561,7 @@ def resolve_auto_torch_device(
 
 SURFACE_MIN_FREE_GPU_GIB = 7.0  # LE-3 / CUDA-7: matches ddsurfer_backend predict.py lazy single-surface CUDA minimum (5.5 + 1.5 GiB)
 _CUDA_FREE_CACHE: dict[tuple[Any, ...], tuple[float, Optional[float]]] = {}
+_AUTO_TORCH_DEVICE_CACHE: dict[tuple[Any, ...], tuple[float, str]] = {}
 _CUDA_FREE_CACHE_SECONDS = 60.0
 
 
@@ -2641,8 +2652,46 @@ def _is_macos() -> bool:
     return sys.platform == "darwin"
 
 
+def _resolve_surface_auto_cuda_device(
+    python_executable: Optional[Path] = None,
+    *,
+    cached_only: bool = False,
+) -> str:
+    """Resolve the concrete CUDA device selected by ``auto`` for DDSurfer VRAM preflight."""
+    import time
+
+    python_path = python_executable or Path(sys.executable)
+    key = (python_path.as_posix(), os.environ.get("CUDA_VISIBLE_DEVICES"))
+    now = time.monotonic()
+    if cached_only:
+        cached = _AUTO_TORCH_DEVICE_CACHE.get(key)
+        if cached is not None and now - cached[0] < _CUDA_FREE_CACHE_SECONDS:
+            target = str(cached[1] or "").strip().lower()
+            if target == "cuda":
+                return "cuda:0"
+            if target.startswith("cuda:"):
+                return target
+        return "cuda:0"
+    try:
+        resolved = str(resolve_auto_torch_device("auto", python_executable) or "").strip().lower()
+    except Exception:
+        return "cuda:0"
+    if resolved == "cuda":
+        resolved = "cuda:0"
+    if resolved.startswith("cuda:"):
+        _AUTO_TORCH_DEVICE_CACHE[key] = (now, resolved)
+        return resolved
+    # When auto does not resolve to CUDA (e.g. CPU-only host or a unit test patching only cuda_free_gib),
+    # probe cuda:0 (which returns None -> "ok" on real CPU-only hosts and honors cuda_free_gib mocks).
+    return "cuda:0"
+
+
 def surface_gpu_memory_decision(
-    device: str, python_executable: Optional[Path] = None, *, cached_only: bool = False
+    device: str,
+    python_executable: Optional[Path] = None,
+    *,
+    cached_only: bool = False,
+    resolved_device: Optional[str] = None,
 ) -> tuple[str, str]:
     """LE-3: decide before the run whether DDSurfer has the GPU memory it needs.
 
@@ -2653,13 +2702,22 @@ def surface_gpu_memory_decision(
 
     normalized = (device or "auto").strip().lower()
     explicit = normalized == "cuda" or normalized.startswith("cuda:")
-    if normalized == "auto":
+    if normalized in {"", "auto"}:
         if _is_macos():
             return "ok", ""  # no CUDA on macOS
-        normalized = "cuda:0"  # one cached probe: it returns None without CUDA, which means "ok"
+        target_dev = str(resolved_device or "").strip().lower()
+        if not target_dev:
+            target_dev = _resolve_surface_auto_cuda_device(python_executable, cached_only=cached_only)
+        if target_dev == "cuda":
+            target_dev = "cuda:0"
+        if not target_dev.startswith("cuda:"):
+            return "ok", ""
+        normalized = target_dev
     elif not explicit:
         return "ok", ""
-    raw_free = cuda_free_gib("cuda:0" if normalized == "cuda" else normalized, python_executable, cached_only=cached_only)
+    else:
+        normalized = "cuda:0" if normalized == "cuda" else normalized
+    raw_free = cuda_free_gib(normalized, python_executable, cached_only=cached_only)
     cap = _global_vram_cap_gib()
     free = min(float(raw_free), cap) if (raw_free is not None and cap is not None) else raw_free
     if free is None or free >= SURFACE_MIN_FREE_GPU_GIB:

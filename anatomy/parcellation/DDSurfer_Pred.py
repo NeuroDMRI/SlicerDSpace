@@ -228,7 +228,7 @@ _FP16_SAFE_LIMIT = 65504.0
 
 
 class _PredictionProbabilityBuffer:
-    """Host probability accumulation volume using float16 RAM (~2.56 GiB) or disk-backed memmap under tight RAM."""
+    """Host probability accumulation volume using exact float32 RAM or disk-backed float32 memmap under tight RAM."""
 
     def __init__(self, tensor, *, mode: str, memmap_array=None, backing_dir=None):
         self.tensor = tensor
@@ -265,12 +265,12 @@ def _allocate_prediction_probability(
     temp_root=None,
     logger=None,
 ) -> _PredictionProbabilityBuffer:
-    """Allocate CPU probability buffer in float16 (~2.56 GiB vs ~5.13 GiB float32), using disk-backed memmap under tight host RAM."""
+    """Allocate CPU probability buffer in full float32 precision, using disk-backed memmap under tight host RAM."""
     avail = query_host_available_ram_bytes() if avail_ram_bytes is None else int(avail_ram_bytes)
-    fp16_bytes = int(np.prod(shape, dtype=np.int64)) * 2
+    fp32_bytes = int(np.prod(shape, dtype=np.int64)) * 4
     use_memmap = avail > 0 and (
         avail < _DDPARCEL_PROB_MEMMAP_RAM_THRESHOLD_BYTES
-        or fp16_bytes > int(avail * 0.40)
+        or fp32_bytes > int(avail * 0.60)
     )
     if use_memmap:
         backing_dir = None
@@ -278,16 +278,16 @@ def _allocate_prediction_probability(
         try:
             base_dir = temp_root if (temp_root and os.path.isdir(temp_root)) else None
             backing_dir = tempfile.mkdtemp(prefix=".ddparcel_prob_", dir=base_dir)
-            backing_path = os.path.join(backing_dir, "pred_prob_fp16.npy")
-            mm = np.lib.format.open_memmap(backing_path, mode="w+", dtype=np.float16, shape=tuple(shape))
+            backing_path = os.path.join(backing_dir, "pred_prob_fp32.npy")
+            mm = np.lib.format.open_memmap(backing_path, mode="w+", dtype=np.float32, shape=tuple(shape))
             tensor = torch.from_numpy(mm)
             if logger is not None:
                 logger.info(
-                    "  -Allocated disk-backed float16 probability buffer (%0.2f GiB on disk, avail host RAM=%0.2f GiB)",
-                    fp16_bytes / float(GIB),
+                    "  -Allocated disk-backed float32 probability buffer (%0.2f GiB on disk, avail host RAM=%0.2f GiB)",
+                    fp32_bytes / float(GIB),
                     avail / float(GIB),
                 )
-            return _PredictionProbabilityBuffer(tensor, mode="memmap_fp16", memmap_array=mm, backing_dir=backing_dir)
+            return _PredictionProbabilityBuffer(tensor, mode="memmap_fp32", memmap_array=mm, backing_dir=backing_dir)
         except Exception as exc:
             if mm is not None:
                 try:
@@ -297,19 +297,18 @@ def _allocate_prediction_probability(
             if backing_dir:
                 shutil.rmtree(backing_dir, ignore_errors=True)
             if logger is not None:
-                logger.warning("  -Memmap probability buffer unavailable (%s); falling back to host float16 tensor", exc)
-    tensor = torch.zeros(tuple(shape), dtype=torch.float16)
+                logger.warning("  -Memmap probability buffer unavailable (%s); falling back to host float32 tensor", exc)
+    tensor = torch.zeros(tuple(shape), dtype=torch.float32)
     if logger is not None:
         logger.info(
-            "  -Allocated host float16 probability buffer (%0.2f GiB RAM vs %0.2f GiB float32)",
-            fp16_bytes / float(GIB),
-            (fp16_bytes * 2) / float(GIB),
+            "  -Allocated host float32 probability buffer (%0.2f GiB RAM)",
+            fp32_bytes / float(GIB),
         )
-    return _PredictionProbabilityBuffer(tensor, mode="ram_fp16")
+    return _PredictionProbabilityBuffer(tensor, mode="ram_fp32")
 
 
 def _accumulate_prob_slice(dst_slice: torch.Tensor, contrib: torch.Tensor, *, overwrite: bool = False) -> None:
-    """Accumulate float32 view logits into a float16 or float32 probability slice."""
+    """Accumulate float32 view logits into a float32 (or legacy float16) probability slice."""
     if dst_slice.dtype == torch.float16:
         val = contrib.float() if overwrite else (dst_slice.float() + contrib.float())
         dst_slice.copy_(val.clamp_(-_FP16_SAFE_LIMIT, _FP16_SAFE_LIMIT).to(torch.float16))
@@ -596,8 +595,8 @@ def fastsurfercnn(img_filename, save_as, logger, args):
     }
     logger.info("Cuda available: {}, # Available GPUS: {}, Cuda user disabled (--no_cuda flag): {}, --> Using device: {} (batch_size={})".format(torch.cuda.is_available(), torch.cuda.device_count(),  args.no_cuda, device, effective_batch_size))
 
-    # Set up host probability buffer in float16 (~2.56 GiB vs ~5.13 GiB float32), automatically
-    # switching to disk-backed memmap when available host RAM is tight (< 8 GiB).
+    # Set up host probability buffer in full float32 precision, automatically switching to
+    # disk-backed float32 memmap when available host RAM is tight (< 8 GiB or > 60% of avail RAM).
     save_parent = os.path.dirname(os.path.abspath(save_as)) if save_as else None
     prob_buffer = _allocate_prediction_probability(
         (1, 256, 256, 256, args.num_classes_ax_cor),

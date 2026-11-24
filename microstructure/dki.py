@@ -504,7 +504,8 @@ def dki_outputs_current(config: DkiConfig) -> bool:
             return False
         if int(qc.get("valid_voxels", 0)) <= 0:
             return False
-        if not dki_signature_matches(manifest.get("signature"), expected_dki_signature(config)):
+        expected_sig = expected_dki_signature(config)
+        if not dki_signature_matches(manifest.get("signature"), expected_sig):
             return False
         import nibabel as nib
         import numpy as np
@@ -530,6 +531,12 @@ def dki_outputs_current(config: DkiConfig) -> bool:
             if external.get("kind") != "mkcurve_python_port" and not external.get("automatic_qc_passed"):
                 return False
             if external.get("kind") == "mkcurve_python_port" and external.get("status") != "completed":
+                return False
+            if (
+                external.get("kind") == "mkcurve_python_port"
+                and isinstance(external.get("backend"), dict)
+                and not _mkcurve_backend_matches(external.get("backend"), expected_sig.get("mkcurve_backend"))
+            ):
                 return False
             if external.get("kind") == "mkcurve_python_port" and int(external.get("corrected_valid_voxels", 0)) <= 0:
                 return False

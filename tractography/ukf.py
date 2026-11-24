@@ -1734,7 +1734,40 @@ def _set_world_gradients(raw, affine, header):
                 dwiconvert_max_error_deg=float(before.max()))
 
 
-@scheduled_stage('ukf')
+def _ukf_uses_gpu(*args, **kwargs) -> bool:
+    """Return True when UKF execution resolves to CUDA so cohort admission reserves a GPU slot."""
+    try:
+        gpu_opts = parse_gpu_options(kwargs.get("options"))
+    except Exception:
+        return False
+    req = _normalize_ukf_device_request(kwargs.get("device", "auto"))
+    if gpu_opts.get("useGPU") is False or req in {"cpu", "mps"}:
+        return False
+    try:
+        binary = resolve_executable(kwargs.get("executable"))
+    except Exception:
+        return False
+    if _ukf_binary_has_compiled_cuda(binary) is False:
+        return False
+    explicit_gpu = req.startswith("cuda") or gpu_opts.get("useGPU") is True
+    if not explicit_gpu and not _cuda_runtime_available_for_ukf(binary):
+        return False
+    try:
+        from shared.external_process import merged_startup_environment
+        from shared.pipeline import build_cli_environment
+
+        env = ukf_gpu_process_environment(
+            merged_startup_environment(build_cli_environment(str(binary))),
+            binary,
+        )
+        schema, _, _ = inspect_schema(binary, env)
+        use_gpu, _, _ = resolve_ukf_gpu_dispatch(req, gpu_opts, schema, binary)
+        return bool(use_gpu)
+    except Exception:
+        return False
+
+
+@scheduled_stage('ukf', gpu=_ukf_uses_gpu)
 def run_ukf(raw, directory, *, options=None, executable=None, converter=None, device="auto", force=False, log=None):
     from shared.external_process import merged_startup_environment
     from shared.pipeline import build_cli_environment

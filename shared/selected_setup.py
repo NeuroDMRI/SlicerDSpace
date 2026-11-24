@@ -172,6 +172,23 @@ def build_setup_plan(result, *, installed_extensions=(), loaded_extensions=None,
         or (bool(cuda_device_statuses) and torch_statuses_cpu_only)
     )
     cuda_torch_unsatisfied = bool(cuda_device_missing) or cuda_torch_cpu_only
+    cuda_torch_already_cuda_build = (
+        not cuda_torch_cpu_only
+        and (
+            any(
+                bool((getattr(item, "details", None) or {}).get("torch_cuda_build"))
+                for item in cuda_device_missing
+            )
+            or any(
+                "+cu" in str(((getattr(item, "details", None) or {}).get("installed_version") or "")).lower()
+                or bool((getattr(item, "details", None) or {}).get("torch_cuda_build"))
+                for item in torch_statuses
+            )
+        )
+    )
+    cuda_torch_wheel_required = bool(cuda_torch_cpu_only) or (
+        bool(cuda_torch_unsatisfied) and not cuda_torch_already_cuda_build
+    )
 
     checked_targets = set(getattr(result, "targets", ()) or ())
     closure_covered = not closure_targets or set(closure_targets) <= checked_targets
@@ -348,6 +365,46 @@ def build_setup_plan(result, *, installed_extensions=(), loaded_extensions=None,
         requirement = details.get('install_requirement') or details.get('package')
         if item.kind == 'python' and requirement in packages:
             python_requests.append(dict(requirement=requirement, python_executable=details.get('python_executable')))
+    if cuda_torch_wheel_required:
+        def _is_torch_requirement(value):
+            text = str(value or "").strip().lower()
+            return text == "torch" or text.startswith(("torch>", "torch=", "torch<"))
+
+        for req_item in python_requests:
+            if _is_torch_requirement(req_item.get("requirement")):
+                req_item["require_cuda"] = True
+                if cuda_torch_cpu_only:
+                    req_item["replace_cpu_torch"] = True
+
+        torch_targets = []
+        for item in torch_statuses:
+            details = getattr(item, "details", None) or {}
+            req = details.get("install_requirement") or details.get("package") or "torch>=2.0.0"
+            torch_targets.append((req, details.get("python_executable")))
+        if not torch_targets:
+            for item in cuda_device_missing:
+                details = getattr(item, "details", None) or {}
+                torch_targets.append(("torch>=2.0.0", details.get("python_executable")))
+        if not torch_targets:
+            torch_targets.append(("torch>=2.0.0", None))
+
+        for req, py_exe in dict.fromkeys(torch_targets):
+            if req not in packages:
+                packages.append(req)
+            already = any(
+                _is_torch_requirement(existing.get("requirement"))
+                and existing.get("python_executable") == py_exe
+                for existing in python_requests
+            )
+            if not already:
+                python_requests.append(
+                    dict(
+                        requirement=req,
+                        python_executable=py_exe,
+                        require_cuda=True,
+                        replace_cpu_torch=bool(cuda_torch_cpu_only),
+                    )
+                )
     if dcm2niix_missing:
         # S-B3: the pinned dcm2niix wheel always goes into Slicer's own Python, never into an external
         # interpreter chosen for TractCloud; it is pending even when nothing else is missing.
@@ -466,6 +523,7 @@ def build_setup_plan(result, *, installed_extensions=(), loaded_extensions=None,
             "manual_items": manual_items,
             "cuda_torch_ready": not cuda_torch_unsatisfied,
             "cuda_torch_cpu_only": bool(cuda_torch_cpu_only),
+            "install_pytorch_cuda": bool(cuda_torch_wheel_required),
             "os_blocked_items": [{"key": item.key, "label": item.label,
                                   "reason": (item.details or {}).get("notes") or "", "hint": item.install_hint}
                                  for item in os_blocked],
@@ -558,7 +616,14 @@ def python_package_commands(packages, *, requests=None, python_command, folder, 
                 program, prefix = slicer_command
             else:
                 program, prefix = python_command(details.get("python_executable"))
-            group = groups.setdefault((str(program), tuple(prefix)), {"requirements": [], "environment": {}})
+            group = groups.setdefault(
+                (str(program), tuple(prefix)),
+                {"requirements": [], "environment": {}, "require_cuda_torch": False, "replace_cpu_torch": False},
+            )
+            if details.get("require_cuda") or details.get("replace_cpu_torch"):
+                group["require_cuda_torch"] = True
+            if details.get("replace_cpu_torch"):
+                group["replace_cpu_torch"] = True
             requirement = details.get("install_requirement") or package
             try:
                 if Requirement(package).specifier:
@@ -592,9 +657,15 @@ def python_package_commands(packages, *, requests=None, python_command, folder, 
             overrides.update(data["environment"])
             data["environment"] = overrides
         torch_minimum = None
+        require_cuda_torch = bool(data.get("require_cuda_torch"))
+        replace_cpu_torch = bool(data.get("replace_cpu_torch"))
         torchvision_required = any(item == "torchvision" or item.startswith(("torchvision>", "torchvision=", "torchvision<"))
                                    for item in requirements)
-        if slicer_python and (torchvision_required or any(item == "torch" or item.startswith(("torch>", "torch=", "torch<")) for item in requirements)):
+        if slicer_python and (
+            require_cuda_torch
+            or torchvision_required
+            or any(item == "torch" or item.startswith(("torch>", "torch=", "torch<")) for item in requirements)
+        ):
             from packaging.requirements import Requirement
             from packaging.version import Version
             minimums = ["2.0.0"]
@@ -604,10 +675,19 @@ def python_package_commands(packages, *, requests=None, python_command, folder, 
             torch_minimum = str(max(map(Version, minimums)))
             requirements = [item for item in requirements if not (item == "torch" or item.startswith(("torch>", "torch=", "torch<")))]
         request, receipt = (folder / f"python-{stamp}-{index}-{suffix}.json" for suffix in ("request", "result"))
-        write_json(request, {"requirements": requirements, "torch_minimum": torch_minimum,
-                            "torchvision_required": torchvision_required and slicer_python,
-                            "protect_bundled": slicer_python, "loaded_packages": sorted(loaded) if slicer_python else [],
-                            "python_path_entries": [path for path in sys.path if path] if slicer_python else []})
+        payload = {
+            "requirements": requirements,
+            "torch_minimum": torch_minimum,
+            "torchvision_required": torchvision_required and slicer_python,
+            "protect_bundled": slicer_python,
+            "loaded_packages": sorted(loaded) if slicer_python else [],
+            "python_path_entries": [path for path in sys.path if path] if slicer_python else [],
+        }
+        if require_cuda_torch:
+            payload["require_cuda_torch"] = True
+        if replace_cpu_torch:
+            payload["replace_cpu_torch"] = True
+        write_json(request, payload)
         commands.append((program, [*prefix, "-u", str(script), "--request", str(request), "--result", str(receipt)], data["environment"]))
         receipts.append(receipt)
     return commands, receipts

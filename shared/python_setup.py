@@ -164,14 +164,43 @@ def _import_pytorch_utils():
     return PyTorchUtils
 
 
-def install_requirements(requirements, *, protected=True, loaded=(), torch_minimum=None, torchvision_required=False):
+def _torch_cuda_build_satisfied() -> bool:
+    """Return True when the installed torch distribution is a CUDA-enabled build."""
+    try:
+        version = str(importlib.metadata.version("torch") or "").strip().lower()
+    except importlib.metadata.PackageNotFoundError:
+        return False
+    if not version or "+cpu" in version:
+        return False
+    if "+cu" in version:
+        return True
+    try:
+        import torch
+
+        return bool(getattr(getattr(torch, "version", None), "cuda", None))
+    except Exception:
+        return False
+
+
+def install_requirements(
+    requirements,
+    *,
+    protected=True,
+    loaded=(),
+    torch_minimum=None,
+    torchvision_required=False,
+    require_cuda_torch=False,
+    replace_cpu_torch=False,
+):
     """Called only by the explicitly authorized, cancellable setup worker."""
     requirements = tuple(dict.fromkeys(requirements))
     before = installed_versions()
     backend = "already_satisfied"
+    need_cuda_torch = bool(require_cuda_torch or replace_cpu_torch) and not _torch_cuda_build_satisfied()
     if torch_minimum and (
         not requirement_satisfied("torch>=" + torch_minimum)
         or (torchvision_required and not requirement_satisfied("torchvision"))
+        or need_cuda_torch
     ):
         _refuse_bundled_shortfalls(["torch>=" + torch_minimum])  # D5: the PyTorch extension installs outside the bundle
         try:
@@ -180,23 +209,69 @@ def install_requirements(requirements, *, protected=True, loaded=(), torch_minim
             PyTorchUtils = None
         if PyTorchUtils is not None:
             logic = PyTorchUtils.PyTorchUtilsLogic()
-            torch = logic.installTorch(askConfirmation=False, torchVersionRequirement=">=" + torch_minimum)
-            if (torch is None or not requirement_satisfied("torch>=" + torch_minimum)
-                    or (torchvision_required and not requirement_satisfied("torchvision"))):
-                raise RuntimeError("PyTorch extension could not prepare a compatible torch build")
+            install_kwargs = {"askConfirmation": False, "torchVersionRequirement": ">=" + torch_minimum}
+            if need_cuda_torch:
+                import inspect
+
+                try:
+                    params = inspect.signature(logic.installTorch).parameters
+                except (TypeError, ValueError):
+                    params = {}
+                if "forceComputationBackend" in params:
+                    backend_choice = "cu"
+                    compat_fn = getattr(logic, "getCompatibleComputationBackend", None)
+                    if callable(compat_fn):
+                        try:
+                            compat = compat_fn()
+                            if isinstance(compat, str) and compat.strip().lower().startswith("cu"):
+                                backend_choice = compat.strip()
+                        except Exception:
+                            pass
+                    install_kwargs["forceComputationBackend"] = backend_choice
+                if "forceReinstall" in params:
+                    install_kwargs["forceReinstall"] = True
+                elif "force" in params:
+                    install_kwargs["force"] = True
+            torch = logic.installTorch(**install_kwargs)
+            importlib.invalidate_caches()
+            if (
+                torch is None
+                or not requirement_satisfied("torch>=" + torch_minimum)
+                or (torchvision_required and not requirement_satisfied("torchvision"))
+                or (need_cuda_torch and not _torch_cuda_build_satisfied())
+            ):
+                raise RuntimeError(
+                    "PyTorch extension could not prepare a compatible CUDA torch build"
+                    if need_cuda_torch
+                    else "PyTorch extension could not prepare a compatible torch build"
+                )
             backend = "PyTorch_extension"
-    missing = [item for item in requirements if not requirement_satisfied(item)]
+        elif need_cuda_torch:
+            raise RuntimeError(
+                "CPU-only PyTorch is installed and the Slicer PyTorch extension helper (PyTorchUtils) is unavailable; "
+                "install a CUDA-enabled PyTorch wheel matching your NVIDIA driver."
+            )
+    missing = [
+        item
+        for item in requirements
+        if (not requirement_satisfied(item))
+        or (
+            need_cuda_torch
+            and (str(item).strip().lower() == "torch" or str(item).strip().lower().startswith(("torch>", "torch=", "torch<")))
+        )
+    ]
     if missing:
         _refuse_bundled_shortfalls(missing)  # D5: before pip, so no long download ends in a failed post-check
         with tempfile.TemporaryDirectory(prefix="sdds-pip-") as temporary:
             constraints = Path(temporary) / "constraints.txt"
             pinned = installed_versions() if protected else {}
             _, _, canonicalize_name = _packaging_api()
+            unpinned = {"torch", "torchvision"} if need_cuda_torch else set()
             constraints.write_text(
                 "".join(
                     f"{name}=={pinned[canonicalize_name(name)]}\n"
                     for name in PROTECTED_PACKAGES
-                    if canonicalize_name(name) in pinned
+                    if canonicalize_name(name) in pinned and canonicalize_name(name) not in unpinned
                 ),
                 encoding="utf-8",
             )

@@ -444,7 +444,9 @@ def run_surface(config: SurfaceConfig, *, log: Optional[Callable[[str], None]] =
             surface_py = Path(python_executable(config.python_bin))
             resolved_surface_device = resolve_auto_torch_device(config.device, surface_py)
             if requested_surface_device in {'', 'auto'} and resolved_surface_device.startswith('cuda'):
-                gpu_action, gpu_note = surface_gpu_memory_decision('auto', surface_py)
+                gpu_action, gpu_note = surface_gpu_memory_decision(
+                    'auto', surface_py, resolved_device=resolved_surface_device
+                )
                 if gpu_action == 'cpu':
                     resolved_surface_device = 'cpu'
                     manifest['gpu_memory_fallback_note'] = gpu_note

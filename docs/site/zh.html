@@ -101,7 +101,7 @@
   <div class="container">
     <h2 class="eyebrow">开始使用</h2>
 
-    <h3 class="start-route-title" id="manual-title"><span class="start-route-marker" aria-hidden="true">A</span><span class="start-route-label start-route-text">图形界面安装与运行</span></h3>
+    <h3 class="start-route-title" id="manual-title"><span class="start-route-marker" aria-hidden="true">A</span><span class="start-route-label start-route-text">安装与运行</span></h3>
     <ol class="start-steps">
       <li class="start-step">
         <div class="start-body">
@@ -164,27 +164,129 @@
     </ol>
 
     <div class="start-cli" id="cli" aria-labelledby="cli-title">
-      <h3 class="start-route-title" id="cli-title"><span class="start-route-marker" aria-hidden="true">B</span><span class="start-route-label start-route-text">命令行运行与队列批处理</span></h3>
-      <p>将 <code>SLICER_LAUNCHER</code> 指向本机 3D Slicer 5.10.0 可执行文件，将 <code>DSPACE_REPO</code> 指向已安装扩展的 <code>lib/Slicer-5.10/qt-scripted-modules</code> 目录（或本地源码目录），再执行 DTI 最小环境检查：</p>
-      <div class="code" data-code>
-        <div class="code-head"><span>bash</span><button class="copy" type="button" hidden>复制</button></div>
-        <pre><code>export SLICER_LAUNCHER="/path/to/Slicer"
-export DSPACE_REPO="/path/to/Extensions-34045/SlicerDSpace/lib/Slicer-5.10/qt-scripted-modules"
-export SUBJECT_ROOT="/path/to/sub-01"
+      <h3 class="start-route-title" id="cli-title"><span class="start-route-marker" aria-hidden="true">B</span><span class="start-route-label start-route-text">命令行安装与运行</span></h3>
+      <ol class="start-steps">
+        <li class="start-step">
+          <div class="start-body">
+            <h4>安装 3D Slicer 5.10.0 与 SlicerDSpace</h4>
+            <p>安装 3D Slicer 5.10.0（Linux 服务器无需图形界面；各系统启动器路径见路线 A）。随后下载并解压对应操作系统的自包含底座包（下方为 Linux 示例；Windows 与 Apple Silicon macOS 版本见 <a class="url-link" href="https://github.com/NeuroDMRI/SlicerDSpace/releases" target="_blank" rel="noopener">https://github.com/NeuroDMRI/SlicerDSpace/releases</a>），或直接复用路线 A 已安装的扩展目录。</p>
+            <div class="code" data-code>
+              <div class="code-head"><span>bash</span><button class="copy" type="button" hidden>复制</button></div>
+              <pre><code>export SLICER_LAUNCHER="$HOME/Slicer-5.10.0-linux-amd64/Slicer"
+curl -fL -o SlicerDSpace-v0.1.1-Linux-x64.tar.gz \
+  https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v0.1.1/SlicerDSpace-v0.1.1-Linux-x64.tar.gz
+mkdir -p "$HOME/SlicerDSpace-ext"
+tar -xzf SlicerDSpace-v0.1.1-Linux-x64.tar.gz -C "$HOME/SlicerDSpace-ext"
+export DSPACE_REPO="$HOME/SlicerDSpace-ext/SlicerDSpace/lib/Slicer-5.10/qt-scripted-modules"</code></pre>
+            </div>
+            <dl class="start-kv-list">
+              <dt>复用路线 A</dt>
+              <dd>若已通过路线 A 安装 SlicerDSpace，可跳过解压，直接将 <code>DSPACE_REPO</code> 指向 Slicer 已解压的 <code>Extensions-34045/SlicerDSpace/lib/Slicer-5.10/qt-scripted-modules</code> 目录。</dd>
+              <dt>Windows / macOS</dt>
+              <dd>解压 <code>SlicerDSpace-v0.1.1-Windows-x64.zip</code> （在 PowerShell 中通过 <code>&amp; $Slicer --launch PythonSlicer ...</code> 运行）或 <code>SlicerDSpace-v0.1.1-macOS-arm64.tar.gz</code>，随后将 <code>DSPACE_REPO</code> 指向解压后的 <code>SlicerDSpace/Slicer.app/Contents/Extensions-34045/SlicerDSpace/lib/Slicer-5.10/qt-scripted-modules</code> 目录（macOS）或 <code>SlicerDSpace\lib\Slicer-5.10\qt-scripted-modules</code> （Windows）。</dd>
+              <dt>从源码部署</dt>
+              <dd>开发者从源码安装时，使用稀疏检出（<code>scripts/extension_runtime/runtime_checkout.txt</code>）克隆仓库，执行 <code>"$SLICER_LAUNCHER" --launch PythonSlicer scripts/stage_slicer_extension.py --install-root ~/SlicerDSpace-extension --slicer-version Slicer-5.10 --link-mode copy</code> 部署扩展，再通过 <code>scripts/setup_selected.py --targets microstructure,tractography --execute --accept-licences</code> 准备所选依赖；详见 <a href="https://github.com/NeuroDMRI/SlicerDSpace/blob/main/docs/setup/DOWNLOADS.md" target="_blank" rel="noopener">下载与源码安装指南</a> 。</dd>
+            </dl>
+          </div>
+        </li>
+        <li class="start-step">
+          <div class="start-body">
+            <h4>应用代码更新与可选资源</h4>
+            <p>发布包内是打包当天的代码。运行分析前，请在无 SlicerDSpace 任务和 3D Slicer 会话占用该安装时应用一次增量代码更新（当前 v0.1.1 发布包在 Linux 上运行 UKF 纤维追踪需要此更新）：</p>
+            <div class="code" data-code>
+              <div class="code-head"><span>bash</span><button class="copy" type="button" hidden>复制</button></div>
+              <pre><code>"$SLICER_LAUNCHER" --launch PythonSlicer - "$DSPACE_REPO" &lt;&lt;'PY'
+import sys
+from pathlib import Path
+root = Path(sys.argv[1])
+sys.path.insert(0, str(root))
+from shared import code_updater
+check = code_updater.check_for_code_update(module_root=root)
+print("status:", check["status"])
+if check["status"] == "update_available":
+    print(code_updater.download_and_apply_code_overlay(module_root=root, manifest=check["remote"]))
+PY</code></pre>
+            </div>
+            <dl class="start-kv-list">
+              <dt>可选资源</dt>
+              <dd>底座包已内置 Python 依赖、核心深度学习权重与原生运行时；如需 PNL CNN 脑掩膜所用的 NITRC <code>IITmean_b0_256.nii.gz</code> 模板或可选 WMA 白质图谱（<code>wma</code>, <code>wma-naba</code>, <code>wma-east-west</code>），可先运行 <code>"$SLICER_LAUNCHER" --launch PythonSlicer "$DSPACE_REPO/scripts/setup_optional_assets.py" --profiles pnl-cnn</code> 预览计划，再附加 <code>--execute --accept-terms</code> 执行下载与安装。</dd>
+              <dt>FreeSurfer</dt>
+              <dd>可选皮层表面后处理（<code>surface_postprocess</code>）需通过 <code>--postprocess-license-file /path/to/license.txt</code> 或 <code>FS_LICENSE</code> 环境变量提供个人 FreeSurfer 许可证。</dd>
+            </dl>
+          </div>
+        </li>
+        <li class="start-step">
+          <div class="start-body">
+            <h4>准备扩散输入数据</h4>
+            <p>将 DICOM、NIfTI 或 NRRD/NHDR 数据整理为标准受试者目录结构（<code>&lt;subject&gt;/input/data.nii.gz</code>, <code>bvals</code>, <code>bvecs</code> 及可选的 <code>nodif_brain_mask.nii.gz</code>）。先使用 <code>--dry-run</code> 预览，确认后移除 <code>--dry-run</code> 写入文件（若受试者目录已符合该结构，可跳过此步）：</p>
+            <div class="code" data-code>
+              <div class="code-head"><span>bash</span><button class="copy" type="button" hidden>复制</button></div>
+              <pre><code>export SUBJECT_ROOT="/path/to/sub-01"
+"$SLICER_LAUNCHER" --launch PythonSlicer "$DSPACE_REPO/scripts/prepare_inputs.py" \
+  --source "/path/to/dwi.nii.gz" --source-kind nifti \
+  --bval "/path/to/dwi.bval" --bvec "/path/to/dwi.bvec" \
+  --mask "/path/to/reviewed_mask.nii.gz" \
+  --subject-root "$SUBJECT_ROOT" --subject-id sub-01 --dry-run</code></pre>
+            </div>
+            <dl class="start-kv-list">
+              <dt>DICOM / NRRD</dt>
+              <dd>使用 <code>--source-kind dicom</code> （将 <code>--source</code> 指向单序列 DICOM 文件夹）或 <code>--source-kind nrrd --backend dwiconvert</code> 导入 NRRD/NHDR 数据。</dd>
+              <dt>脑掩膜</dt>
+              <dd>提供 <code>--mask</code> 以复用已审核掩膜（运行时传入 <code>--brain-mask-backend provided</code> ），或留空由默认 PNL CNN 后端自动生成。</dd>
+            </dl>
+          </div>
+        </li>
+        <li class="start-step">
+          <div class="start-body">
+            <h4>单受试者检查、规划与执行</h4>
+            <p>通过 <code>--doctor</code>, <code>--plan</code> 与 <code>--execute</code> 三步调用 <code>shared/run_subject_pipeline_cli.py</code>，三步保持相同的方法参数（下方为最小 DTI 示例）：</p>
+            <div class="code" data-code>
+              <div class="code-head"><span>bash</span><button class="copy" type="button" hidden>复制</button></div>
+              <pre><code># 1) Verify dependencies for the selected route
 "$SLICER_LAUNCHER" --launch PythonSlicer "$DSPACE_REPO/shared/run_subject_pipeline_cli.py" \
-  --subject-root "$SUBJECT_ROOT" --subject-id sub-01 --no-user-config \
-  --targets microstructure --microstructure-stages dti --doctor</code></pre>
-      </div>
-      <dl class="start-kv-list">
-        <dt>先更新代码</dt>
-        <dd>发布包内是打包当天的代码。运行分析前请应用一次增量代码更新：在界面中点击 <span class="ui-chip">检查更新</span>；在没有显示器的服务器上，运行 <a href="https://github.com/NeuroDMRI/SlicerDSpace/blob/main/docs/setup/QUICKSTART.md" target="_blank" rel="noopener">快速开始 › 更新代码</a>中的命令。当前 v0.1.1 发布包在 Linux 上需要此更新才能运行 UKF 纤维追踪。</dd>
-        <dt>执行三步</dt>
-        <dd>改用 <code>--plan</code> 检查执行计划，再用 <code>--execute</code> 正式运行，三步保持一致的方法参数。</dd>
-        <dt>多方法组合</dt>
-        <dd>支持逗号分隔多种算法，例如 <code>--microstructure-stages dti,noddi</code>, <code>--tractography-backend csd_act,ukf</code> 与 <code>--bundle-backend wmql,wma</code>.</dd>
-        <dt>队列批处理</dt>
-        <dd>多受试者并行批处理可调用 <code>scripts/run_batch_pipeline.py --batch-root /path/to/study --jobs 2</code> 并附带所选分析参数。</dd>
-      </dl>
+  --subject-root "$SUBJECT_ROOT" --subject-id sub-01 \
+  --no-user-config --strict-environment \
+  --targets validation,microstructure --microstructure-stages dti --doctor
+
+# 2) Inspect the run plan (--plan), then execute (--execute)
+"$SLICER_LAUNCHER" --launch PythonSlicer "$DSPACE_REPO/shared/run_subject_pipeline_cli.py" \
+  --subject-root "$SUBJECT_ROOT" --subject-id sub-01 \
+  --no-user-config --strict-environment \
+  --targets validation,microstructure --microstructure-stages dti --execute</code></pre>
+            </div>
+            <dl class="start-kv-list">
+              <dt>多方法组合</dt>
+              <dd>通过 <code>--targets</code> （或 <code>--all</code>）组合分析阶段，并以逗号分隔多种算法，例如 <code>--microstructure-stages dti,noddi</code>, <code>--tractography-backend csd_act,ukf</code> 与 <code>--bundle-backend wmql,wma</code> 以同时运行多方法路线。</dd>
+              <dt>预处理</dt>
+              <dd>将 <code>preprocessing</code> 加入 <code>--targets</code> 并设置 <code>--preprocessing-phase-encoding-direction</code> （例如 <code>AP</code> 或 <code>j-</code>），或提供 <code>input/dwi.json</code> 并在其中设置 <code>PhaseEncodingDirection</code> 字段。</dd>
+              <dt>报告与帮助</dt>
+              <dd>结果与 QC 汇总默认写入 <code>&lt;subject&gt;/outputs/</code> （或 <code>--output-root</code>）。可使用 <code>scripts/generate_subject_report.py</code> 生成 HTML 质控报告，或运行 <code>shared/run_subject_pipeline_cli.py --help</code> 查看全部参数。</dd>
+            </dl>
+          </div>
+        </li>
+        <li class="start-step">
+          <div class="start-body">
+            <h4>运行多受试者队列批处理</h4>
+            <p>当研究目录下按受试者存放已准备子目录时，使用 <code>scripts/run_batch_pipeline.py</code> 批量处理。省略 <code>--execute</code> 仅生成演练计划，附加 <code>--execute</code> 即正式执行队列：</p>
+            <div class="code" data-code>
+              <div class="code-head"><span>bash</span><button class="copy" type="button" hidden>复制</button></div>
+              <pre><code>"$SLICER_LAUNCHER" --launch PythonSlicer "$DSPACE_REPO/scripts/run_batch_pipeline.py" \
+  --batch-root "/path/to/study" --output-root "/path/to/cohort_results" \
+  --run-name cohort_dti --jobs 2 --scheduler adaptive \
+  --no-user-config --strict-environment \
+  --targets validation,microstructure --microstructure-stages dti --execute</code></pre>
+            </div>
+            <dl class="start-kv-list">
+              <dt>调度策略</dt>
+              <dd>使用 <code>--scheduler subjects</code> 可同时运行最多 <code>--jobs</code> 名受试者，或改用 <code>--scheduler adaptive</code> 在共享 CPU/RAM/GPU 预算下启用阶段级回填调度（8–16 GiB 内存主机可加 <code>--low-memory</code> ）。</dd>
+              <dt>原始子目录</dt>
+              <dd>若各受试者目录直接存放 <code>data.nii.gz</code>, <code>bvals</code> 与 <code>bvecs</code> 而无 <code>input/</code> 子文件夹，可传入 <code>--arrange-inputs copy</code> 或 <code>--arrange-inputs symlink</code> 将其整理为标准目录结构。</dd>
+              <dt>完整参考</dt>
+              <dd>参阅 <a href="https://github.com/NeuroDMRI/SlicerDSpace/blob/main/docs/setup/CLI_TEMPLATES.md" target="_blank" rel="noopener">命令行模板</a> 获取全部算法命令、PowerShell 封装、脑区分析（<code>scripts/analyze_regions.py</code>）与参数实验（<code>scripts/run_experiments.py</code>），并参阅 <a href="https://github.com/NeuroDMRI/SlicerDSpace/blob/main/docs/setup/QUICKSTART.md" target="_blank" rel="noopener">快速开始</a> 了解更新与排障说明。</dd>
+            </dl>
+          </div>
+        </li>
+      </ol>
     </div>
   </div>
 </section>
@@ -221,7 +323,7 @@ export SUBJECT_ROOT="/path/to/sub-01"
 <section class="section section-alt reveal" id="runtime">
   <div class="container">
     <p class="eyebrow">运行时间</p>
-    <h2>各模块实测运行时间。</h2>
+    <h2>实测运行时间。</h2>
     <figure class="shot fig">
       <a href="assets/img/fig-runtime-resources.png" target="_blank" rel="noopener" aria-label="查看完整的运行时间图">
         <picture>
@@ -274,10 +376,10 @@ export SUBJECT_ROOT="/path/to/sub-01"
   <a href="assets/img/fig-runtime-optimizations.png" target="_blank" rel="noopener" aria-label="打开完整尺寸的运行时间优化图">
     <picture>
       <source type="image/webp" srcset="assets/img/fig-runtime-optimizations.webp">
-      <img src="assets/img/fig-runtime-optimizations.png" width="2400" height="2428" loading="lazy" decoding="async" fetchpriority="low" alt="覆盖全部 22 项协议任务的 39 组单受试者运行时间配对基准，在共享对数时间轴上展示初始参考空心圆与优化后实心圆，并在右侧对齐列出参考耗时、优化耗时与加速比列。">
+      <img src="assets/img/fig-runtime-optimizations.png" width="1830" height="1785" loading="lazy" decoding="async" fetchpriority="low" alt="覆盖全部 22 项协议任务的 37 组单受试者运行时间配对基准，在共享对数时间轴上展示初始参考空心圆与优化后实心圆，并在右侧对齐列出参考耗时、优化耗时与加速比列。">
     </picture>
   </a>
-  <figcaption>覆盖全部六个工作流阶段的单受试者运行时间对比（第 01–39 行）。空心圆标记同一输入采集上的初始或参考基线，实心圆标记优化路径；比值为参考耗时除以优化耗时。</figcaption>
+  <figcaption>覆盖全部六个工作流阶段的单受试者运行时间对比（第 01–37 行）。空心圆标记同一输入采集上的初始或参考基线，实心圆标记优化路径；比值为参考耗时除以优化耗时。</figcaption>
 </figure>
 <figure class="shot fig">
   <a href="assets/img/fig-cohort-scheduling.png" target="_blank" rel="noopener" aria-label="打开完整尺寸的并行与队列调度优化图">
@@ -354,7 +456,6 @@ export SUBJECT_ROOT="/path/to/sub-01"
     <div class="foot-grid">
       <div class="foot-identity">
         <a class="foot-brand" href="#top"><img src="assets/img/slicerdspace-wordmark-light.svg" alt="SlicerDSpace" width="1324" height="239" loading="lazy" decoding="async"></a>
-        <p>3D Slicer 中的扩散 MRI 分析工作流。</p>
       </div>
       <nav class="foot-nav" aria-label="资源">
         <div>

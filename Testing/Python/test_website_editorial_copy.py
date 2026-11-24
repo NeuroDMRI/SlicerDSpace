@@ -244,9 +244,14 @@ class WebsiteEditorialCopyTests(unittest.TestCase):
             self.assertIn(shared, footer)
         markup = self.source.split('<footer class="site-footer">', 1)[1].split('</footer>', 1)[0]
         self.assertIn('<a class="foot-brand" href="#top">', markup)
+        self.assertNotIn('Diffusion MRI workflows in 3D Slicer', markup)
         self.assertIn('<nav class="foot-links" aria-label="Legal information">', markup)
         self.assertIn('<a class="foot-top-link" href="#top">', markup)
         self.assertEqual(markup.count('<ul>'), 2)
+        zh_footer = (ROOT / 'docs/site/zh.html').read_text(encoding='utf-8').split('<footer class="site-footer">', 1)[1].split('</footer>', 1)[0]
+        self.assertNotIn('3D Slicer 中的扩散 MRI 分析工作流', zh_footer)
+        zh_catalog = json.loads((ROOT / 'docs/website/zh-CN.json').read_text(encoding='utf-8'))
+        self.assertNotIn('Diffusion MRI workflows in 3D Slicer.', zh_catalog)
 
     def test_setup_describes_current_gui_and_first_execution(self):
         start = self.section("start")
@@ -283,8 +288,29 @@ class WebsiteEditorialCopyTests(unittest.TestCase):
         for heading, marker in zip(headings, 'AB'):
             self.assertIn(f'class="start-route-marker" aria-hidden="true">{marker}</span>', heading)
             self.assertIn('start-route-text', heading)
-        self.assertIn('Graphical setup and execution', headings[0])
-        self.assertIn('Command-line execution and cohort processing', headings[1])
+        self.assertIn('>Setup and execution</span>', headings[0])
+        self.assertNotIn('Graphical', headings[0])
+        self.assertIn('>Command-line setup and execution</span>', headings[1])
+        zh_source = (ROOT / 'docs/site/zh.html').read_text(encoding='utf-8')
+        zh_start = re.search(r'<section\b[^>]*\bid="start"[^>]*>(.*?)</section>', zh_source, re.S).group(1)
+        zh_headings = re.findall(r'<h3 class="start-route-title[^\"]*"[^>]*>(.*?)</h3>', zh_start)
+        self.assertEqual(len(zh_headings), 2)
+        self.assertIn('>安装与运行</span>', zh_headings[0])
+        self.assertNotIn('图形界面', zh_headings[0])
+        self.assertNotIn('图形化', zh_headings[0])
+        self.assertIn('>命令行安装与运行</span>', zh_headings[1])
+        cli_block = start.split('<div class="start-cli" id="cli"', 1)[1]
+        self.assertIn('<ol class="start-steps">', cli_block)
+        for cli_marker in ('SlicerDSpace-v0.1.1-Linux-x64.tar.gz', 'code_updater',
+                           'scripts/prepare_inputs.py', 'shared/run_subject_pipeline_cli.py',
+                           'scripts/run_batch_pipeline.py'):
+            self.assertIn(cli_marker, cli_block)
+        runtime_en = self.section('runtime')
+        runtime_zh = re.search(r'<section\b[^>]*\bid="runtime"[^>]*>(.*?)</section>', zh_source, re.S).group(1)
+        self.assertIn('<h2>Recorded run times.</h2>', runtime_en)
+        self.assertNotIn('Recorded run times, per module.', runtime_en)
+        self.assertIn('<h2>实测运行时间。</h2>', runtime_zh)
+        self.assertNotIn('各模块实测运行时间。', runtime_zh)
         self.assertNotIn('start-recommended', self.source)
         self.assertNotIn('(Recommended)', self.source)
         self.assertLess(start.index('id="manual-title"'), start.index('id="cli"'))

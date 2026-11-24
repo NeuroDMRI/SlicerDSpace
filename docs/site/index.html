@@ -101,7 +101,7 @@
   <div class="container">
     <h2 class="eyebrow">Get started</h2>
 
-    <h3 class="start-route-title" id="manual-title"><span class="start-route-marker" aria-hidden="true">A</span><span class="start-route-label start-route-text">Graphical setup and execution</span></h3>
+    <h3 class="start-route-title" id="manual-title"><span class="start-route-marker" aria-hidden="true">A</span><span class="start-route-label start-route-text">Setup and execution</span></h3>
     <ol class="start-steps">
       <li class="start-step">
         <div class="start-body">
@@ -164,27 +164,129 @@
     </ol>
 
     <div class="start-cli" id="cli" aria-labelledby="cli-title">
-      <h3 class="start-route-title" id="cli-title"><span class="start-route-marker" aria-hidden="true">B</span><span class="start-route-label start-route-text">Command-line execution and cohort processing</span></h3>
-      <p>Point <code>SLICER_LAUNCHER</code> to your 3D Slicer 5.10.0 executable and <code>DSPACE_REPO</code> to the installed extension’s <code>lib/Slicer-5.10/qt-scripted-modules</code> directory (or local checkout), then run a DTI-only dependency check:</p>
-      <div class="code" data-code>
-        <div class="code-head"><span>bash</span><button class="copy" type="button" hidden>Copy</button></div>
-        <pre><code>export SLICER_LAUNCHER="/path/to/Slicer"
-export DSPACE_REPO="/path/to/Extensions-34045/SlicerDSpace/lib/Slicer-5.10/qt-scripted-modules"
-export SUBJECT_ROOT="/path/to/sub-01"
+      <h3 class="start-route-title" id="cli-title"><span class="start-route-marker" aria-hidden="true">B</span><span class="start-route-label start-route-text">Command-line setup and execution</span></h3>
+      <ol class="start-steps">
+        <li class="start-step">
+          <div class="start-body">
+            <h4>Install 3D Slicer 5.10.0 and SlicerDSpace</h4>
+            <p>Install 3D Slicer 5.10.0 (no display is needed on Linux servers; see launcher paths in Route A). Then download and unpack the self-contained base archive for your operating system (Linux example below; archives for Windows and Apple Silicon macOS are available at <a class="url-link" href="https://github.com/NeuroDMRI/SlicerDSpace/releases" target="_blank" rel="noopener">https://github.com/NeuroDMRI/SlicerDSpace/releases</a>), or reuse the extension directory already installed via Route A.</p>
+            <div class="code" data-code>
+              <div class="code-head"><span>bash</span><button class="copy" type="button" hidden>Copy</button></div>
+              <pre><code>export SLICER_LAUNCHER="$HOME/Slicer-5.10.0-linux-amd64/Slicer"
+curl -fL -o SlicerDSpace-v0.1.1-Linux-x64.tar.gz \
+  https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v0.1.1/SlicerDSpace-v0.1.1-Linux-x64.tar.gz
+mkdir -p "$HOME/SlicerDSpace-ext"
+tar -xzf SlicerDSpace-v0.1.1-Linux-x64.tar.gz -C "$HOME/SlicerDSpace-ext"
+export DSPACE_REPO="$HOME/SlicerDSpace-ext/SlicerDSpace/lib/Slicer-5.10/qt-scripted-modules"</code></pre>
+            </div>
+            <dl class="start-kv-list">
+              <dt>From Route A</dt>
+              <dd>If SlicerDSpace is already installed through Route A, skip unpacking and point <code>DSPACE_REPO</code> to Slicer’s unpacked <code>Extensions-34045/SlicerDSpace/lib/Slicer-5.10/qt-scripted-modules</code> directory.</dd>
+              <dt>Windows / macOS</dt>
+              <dd>Unpack <code>SlicerDSpace-v0.1.1-Windows-x64.zip</code> (in PowerShell, run via <code>&amp; $Slicer --launch PythonSlicer ...</code>) or <code>SlicerDSpace-v0.1.1-macOS-arm64.tar.gz</code>, then point <code>DSPACE_REPO</code> to the unpacked <code>SlicerDSpace/Slicer.app/Contents/Extensions-34045/SlicerDSpace/lib/Slicer-5.10/qt-scripted-modules</code> folder on macOS (or <code>SlicerDSpace\lib\Slicer-5.10\qt-scripted-modules</code> on Windows).</dd>
+              <dt>From source</dt>
+              <dd>For developer checkouts, clone with sparse checkout (<code>scripts/extension_runtime/runtime_checkout.txt</code>), stage with <code>"$SLICER_LAUNCHER" --launch PythonSlicer scripts/stage_slicer_extension.py --install-root ~/SlicerDSpace-extension --slicer-version Slicer-5.10 --link-mode copy</code>, and prepare selected dependencies via <code>scripts/setup_selected.py --targets microstructure,tractography --execute --accept-licences</code>; see the <a href="https://github.com/NeuroDMRI/SlicerDSpace/blob/main/docs/setup/DOWNLOADS.md" target="_blank" rel="noopener">Download and source guide</a> for details.</dd>
+            </dl>
+          </div>
+        </li>
+        <li class="start-step">
+          <div class="start-body">
+            <h4>Apply the code update and optional resources</h4>
+            <p>A release archive holds the code of its build day. Apply the incremental code update once before running an analysis while no SlicerDSpace job or 3D Slicer session uses this installation (with the v0.1.1 archive on Linux, UKF tractography requires this update):</p>
+            <div class="code" data-code>
+              <div class="code-head"><span>bash</span><button class="copy" type="button" hidden>Copy</button></div>
+              <pre><code>"$SLICER_LAUNCHER" --launch PythonSlicer - "$DSPACE_REPO" &lt;&lt;'PY'
+import sys
+from pathlib import Path
+root = Path(sys.argv[1])
+sys.path.insert(0, str(root))
+from shared import code_updater
+check = code_updater.check_for_code_update(module_root=root)
+print("status:", check["status"])
+if check["status"] == "update_available":
+    print(code_updater.download_and_apply_code_overlay(module_root=root, manifest=check["remote"]))
+PY</code></pre>
+            </div>
+            <dl class="start-kv-list">
+              <dt>Optional assets</dt>
+              <dd>Base archives bundle Python packages, core deep-learning weights and native runtimes; fetch the NITRC <code>IITmean_b0_256.nii.gz</code> template for PNL CNN masking or optional WMA atlases (<code>wma</code>, <code>wma-naba</code>, <code>wma-east-west</code>) by previewing with <code>"$SLICER_LAUNCHER" --launch PythonSlicer "$DSPACE_REPO/scripts/setup_optional_assets.py" --profiles pnl-cnn</code> and then adding <code>--execute --accept-terms</code> to install.</dd>
+              <dt>FreeSurfer</dt>
+              <dd>Optional cortical surface post-processing (<code>surface_postprocess</code>) requires your personal FreeSurfer license via <code>--postprocess-license-file /path/to/license.txt</code> or the <code>FS_LICENSE</code> environment variable.</dd>
+            </dl>
+          </div>
+        </li>
+        <li class="start-step">
+          <div class="start-body">
+            <h4>Prepare diffusion inputs</h4>
+            <p>Normalize DICOM, NIfTI or NRRD/NHDR data into the canonical subject layout (<code>&lt;subject&gt;/input/data.nii.gz</code>, <code>bvals</code>, <code>bvecs</code> and optional <code>nodif_brain_mask.nii.gz</code>). Preview with <code>--dry-run</code>, then omit <code>--dry-run</code> to write the files (skip this step if your subject folder already uses this layout):</p>
+            <div class="code" data-code>
+              <div class="code-head"><span>bash</span><button class="copy" type="button" hidden>Copy</button></div>
+              <pre><code>export SUBJECT_ROOT="/path/to/sub-01"
+"$SLICER_LAUNCHER" --launch PythonSlicer "$DSPACE_REPO/scripts/prepare_inputs.py" \
+  --source "/path/to/dwi.nii.gz" --source-kind nifti \
+  --bval "/path/to/dwi.bval" --bvec "/path/to/dwi.bvec" \
+  --mask "/path/to/reviewed_mask.nii.gz" \
+  --subject-root "$SUBJECT_ROOT" --subject-id sub-01 --dry-run</code></pre>
+            </div>
+            <dl class="start-kv-list">
+              <dt>DICOM / NRRD</dt>
+              <dd>Use <code>--source-kind dicom</code> (pointing <code>--source</code> to a single-series DICOM folder) or <code>--source-kind nrrd --backend dwiconvert</code> for NRRD/NHDR inputs.</dd>
+              <dt>Brain mask</dt>
+              <dd>Supply <code>--mask</code> for an existing reviewed mask (then pass <code>--brain-mask-backend provided</code> at run time), or omit it so the default PNL CNN backend generates one.</dd>
+            </dl>
+          </div>
+        </li>
+        <li class="start-step">
+          <div class="start-body">
+            <h4>Check, plan and execute a subject</h4>
+            <p>Use the three-step <code>--doctor</code>, <code>--plan</code> and <code>--execute</code> workflow with <code>shared/run_subject_pipeline_cli.py</code>, keeping identical method flags across all three commands (minimal DTI example below):</p>
+            <div class="code" data-code>
+              <div class="code-head"><span>bash</span><button class="copy" type="button" hidden>Copy</button></div>
+              <pre><code># 1) Verify dependencies for the selected route
 "$SLICER_LAUNCHER" --launch PythonSlicer "$DSPACE_REPO/shared/run_subject_pipeline_cli.py" \
-  --subject-root "$SUBJECT_ROOT" --subject-id sub-01 --no-user-config \
-  --targets microstructure --microstructure-stages dti --doctor</code></pre>
-      </div>
-      <dl class="start-kv-list">
-        <dt>Update first</dt>
-        <dd>A release archive holds the code of its build day. Apply the incremental code update once before you run an analysis: in the GUI, click <span class="ui-chip">Check for updates</span>; on a server without a display, run the command in <a href="https://github.com/NeuroDMRI/SlicerDSpace/blob/main/docs/setup/QUICKSTART.md" target="_blank" rel="noopener">Quick Start › Update The Code</a>. With the current v0.1.1 archive on Linux, UKF tractography needs this update.</dd>
-        <dt>Workflow</dt>
-        <dd>Repeat with <code>--plan</code> to inspect planned tasks, then <code>--execute</code> to run them using identical method flags across all three steps.</dd>
-        <dt>Multi-method</dt>
-        <dd>Pass comma-separated selections such as <code>--microstructure-stages dti,noddi</code>, <code>--tractography-backend csd_act,ukf</code> and <code>--bundle-backend wmql,wma</code>.</dd>
-        <dt>Cohort batch</dt>
-        <dd>Run independent subjects in parallel with <code>scripts/run_batch_pipeline.py --batch-root /path/to/study --jobs 2</code> using your chosen analysis flags.</dd>
-      </dl>
+  --subject-root "$SUBJECT_ROOT" --subject-id sub-01 \
+  --no-user-config --strict-environment \
+  --targets validation,microstructure --microstructure-stages dti --doctor
+
+# 2) Inspect the run plan (--plan), then execute (--execute)
+"$SLICER_LAUNCHER" --launch PythonSlicer "$DSPACE_REPO/shared/run_subject_pipeline_cli.py" \
+  --subject-root "$SUBJECT_ROOT" --subject-id sub-01 \
+  --no-user-config --strict-environment \
+  --targets validation,microstructure --microstructure-stages dti --execute</code></pre>
+            </div>
+            <dl class="start-kv-list">
+              <dt>Multi-method</dt>
+              <dd>Combine stages via <code>--targets</code> (or <code>--all</code>) and pass comma-separated selections such as <code>--microstructure-stages dti,noddi</code>, <code>--tractography-backend csd_act,ukf</code> and <code>--bundle-backend wmql,wma</code> for multi-method runs.</dd>
+              <dt>Preprocessing</dt>
+              <dd>Add <code>preprocessing</code> to <code>--targets</code> and set <code>--preprocessing-phase-encoding-direction</code> (for example <code>AP</code> or <code>j-</code>), or supply <code>input/dwi.json</code> with <code>PhaseEncodingDirection</code> set.</dd>
+              <dt>Reports &amp; help</dt>
+              <dd>Outputs and QC summaries write under <code>&lt;subject&gt;/outputs/</code> (or <code>--output-root</code>). Build an HTML QC report via <code>scripts/generate_subject_report.py</code>, or run <code>shared/run_subject_pipeline_cli.py --help</code> to list all flags.</dd>
+            </dl>
+          </div>
+        </li>
+        <li class="start-step">
+          <div class="start-body">
+            <h4>Run multi-subject cohorts</h4>
+            <p>Process a study folder containing one prepared subdirectory per subject with <code>scripts/run_batch_pipeline.py</code>. Omitting <code>--execute</code> writes dry-run plans only; add <code>--execute</code> to run the cohort:</p>
+            <div class="code" data-code>
+              <div class="code-head"><span>bash</span><button class="copy" type="button" hidden>Copy</button></div>
+              <pre><code>"$SLICER_LAUNCHER" --launch PythonSlicer "$DSPACE_REPO/scripts/run_batch_pipeline.py" \
+  --batch-root "/path/to/study" --output-root "/path/to/cohort_results" \
+  --run-name cohort_dti --jobs 2 --scheduler adaptive \
+  --no-user-config --strict-environment \
+  --targets validation,microstructure --microstructure-stages dti --execute</code></pre>
+            </div>
+            <dl class="start-kv-list">
+              <dt>Schedulers</dt>
+              <dd>Use <code>--scheduler subjects</code> to run up to <code>--jobs</code> subjects concurrently, or <code>--scheduler adaptive</code> for stage-level backfilling under shared CPU/RAM/GPU budgets (add <code>--low-memory</code> on 8–16 GiB hosts).</dd>
+              <dt>Raw folders</dt>
+              <dd>If each subject directory stores <code>data.nii.gz</code>, <code>bvals</code> and <code>bvecs</code> directly at the top level without an <code>input/</code> subfolder, pass <code>--arrange-inputs copy</code> or <code>--arrange-inputs symlink</code> to arrange them into the canonical layout.</dd>
+              <dt>Full reference</dt>
+              <dd>See <a href="https://github.com/NeuroDMRI/SlicerDSpace/blob/main/docs/setup/CLI_TEMPLATES.md" target="_blank" rel="noopener">Command-Line Templates</a> for all algorithm recipes, PowerShell wrappers, regional analysis (<code>scripts/analyze_regions.py</code>) and parameter experiments (<code>scripts/run_experiments.py</code>), and <a href="https://github.com/NeuroDMRI/SlicerDSpace/blob/main/docs/setup/QUICKSTART.md" target="_blank" rel="noopener">Quick Start</a> for update and troubleshooting notes.</dd>
+            </dl>
+          </div>
+        </li>
+      </ol>
     </div>
   </div>
 </section>
@@ -221,7 +323,7 @@ export SUBJECT_ROOT="/path/to/sub-01"
 <section class="section section-alt reveal" id="runtime">
   <div class="container">
     <p class="eyebrow">Run times</p>
-    <h2>Recorded run times, per module.</h2>
+    <h2>Recorded run times.</h2>
     <figure class="shot fig">
       <a href="assets/img/fig-runtime-resources.png" target="_blank" rel="noopener" aria-label="Open the full-size run-time figure">
         <picture>
@@ -274,10 +376,10 @@ export SUBJECT_ROOT="/path/to/sub-01"
   <a href="assets/img/fig-runtime-optimizations.png" target="_blank" rel="noopener" aria-label="Open the full-size runtime optimizations figure">
     <picture>
       <source type="image/webp" srcset="assets/img/fig-runtime-optimizations.webp">
-      <img src="assets/img/fig-runtime-optimizations.png" width="2400" height="2428" loading="lazy" decoding="async" fetchpriority="low" alt="Thirty-nine paired single-subject runtime benchmarks across all twenty-two protocol tasks, showing initial reference open circles and optimized filled circles on a shared log-time axis with aligned Reference, Optimized and Ratio columns.">
+      <img src="assets/img/fig-runtime-optimizations.png" width="1830" height="1785" loading="lazy" decoding="async" fetchpriority="low" alt="Thirty-seven paired single-subject runtime benchmarks across all twenty-two protocol tasks, showing initial reference open circles and optimized filled circles on a shared log-time axis with aligned Reference, Optimized and Ratio columns.">
     </picture>
   </a>
-  <figcaption>Single-subject runtime comparisons across all six workflow stages (rows 01–39). Open circles mark initial or reference baselines and filled circles mark optimized paths on the same input acquisition; ratios give reference time divided by optimized time.</figcaption>
+  <figcaption>Single-subject runtime comparisons across all six workflow stages (rows 01–37). Open circles mark initial or reference baselines and filled circles mark optimized paths on the same input acquisition; ratios give reference time divided by optimized time.</figcaption>
 </figure>
 <figure class="shot fig">
   <a href="assets/img/fig-cohort-scheduling.png" target="_blank" rel="noopener" aria-label="Open the full-size parallel and cohort scheduling figure">
@@ -354,7 +456,6 @@ export SUBJECT_ROOT="/path/to/sub-01"
     <div class="foot-grid">
       <div class="foot-identity">
         <a class="foot-brand" href="#top"><img src="assets/img/slicerdspace-wordmark-light.svg" alt="SlicerDSpace" width="1324" height="239" loading="lazy" decoding="async"></a>
-        <p>Diffusion MRI workflows in 3D Slicer.</p>
       </div>
       <nav class="foot-nav" aria-label="Resources">
         <div>

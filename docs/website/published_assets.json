@@ -32,10 +32,10 @@
       "sha256": "400931d034332c54e2557e2b185ca1979fc92c76bcfc54f31be2a312eca34a3a"
     },
     "docs/site/assets/img/fig-runtime-resources.png": {
-      "sha256": "f9b0b079d0ce8922718b71f158429c5fce950030082c10e77f1ef378a9c7df3b"
+      "sha256": "6b28f73d3b5f28061d2189133c256efaca9a169c2af9d3a4d69ad6f7d85e1e47"
     },
     "docs/site/assets/img/fig-runtime-optimizations.png": {
-      "sha256": "5705d6f6505ba123bed03710ba76682f63c1db2be5e392dee90d32842b9fd301"
+      "sha256": "ccada88f8c654ce9b66df7345f02198546650b8e761b64a35088be6cf472d2c4"
     },
     "docs/site/assets/img/results-overview.svg": {
       "sha256": "28bb8eeef209cbc5c99877417d27a42e7a9e0ccb811dae9f289dd95df455ec94",
@@ -49,8 +49,8 @@
       "derivative": "Lossless WebP; decoded RGBA pixels and dimensions identical to PNG"
     },
     "docs/site/assets/img/fig-runtime-resources.webp": {
-      "sha256": "588de848258b03409ff710b4e309dbaf725cfa177908130263e8a62ddc89d779",
-      "source_sha256": "f9b0b079d0ce8922718b71f158429c5fce950030082c10e77f1ef378a9c7df3b",
+      "sha256": "e2926de9c8fb071989d39b6002e8b920f1aeffc2428d9204436524928bbd64df",
+      "source_sha256": "6b28f73d3b5f28061d2189133c256efaca9a169c2af9d3a4d69ad6f7d85e1e47",
       "derivative": "Lossless WebP; decoded RGBA pixels and dimensions identical to PNG"
     },
     "docs/site/media/SlicerDSpace_promo_1080p.mp4": {
@@ -130,8 +130,8 @@
       "derivative": "Reference-traced cubic outlines; transparent background; no fonts or embedded raster"
     },
     "docs/site/assets/img/fig-runtime-optimizations.webp": {
-      "sha256": "cb0ded947ce1fb18ce74da8e6bffaa09ea05ca8d4492535bfa47c8acf3f269e1",
-      "source_sha256": "5705d6f6505ba123bed03710ba76682f63c1db2be5e392dee90d32842b9fd301",
+      "sha256": "d20ed2e62848d763964f08e423976fed7883d93991acb47c3bbfde4e1744947b",
+      "source_sha256": "ccada88f8c654ce9b66df7345f02198546650b8e761b64a35088be6cf472d2c4",
       "derivative": "Lossless WebP; decoded RGBA pixels and dimensions identical to PNG"
     },
     "docs/site/assets/img/fig-cohort-scheduling.png": {
